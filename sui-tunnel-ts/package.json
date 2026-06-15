@@ -1,0 +1,54 @@
+{
+  "name": "sui-tunnel-ts",
+  "version": "0.1.0",
+  "description": "TypeScript SDK for the Sui Tunnel Framework — off-chain state channels anchored on Sui",
+  "license": "Apache-2.0",
+  "author": "Mysten Labs <info@mystenlabs.com>",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/MystenLabs/sui-tunnel",
+    "directory": "sui-tunnel-ts"
+  },
+  "keywords": [
+    "sui",
+    "blockchain",
+    "state-channels",
+    "payment-channels",
+    "escrow",
+    "atomic-swap",
+    "move",
+    "web3"
+  ],
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "npx tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test --test-isolation=none \"src/**/*.test.ts\"",
+    "init": "node dist/init.js",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@mysten/sui": "1.28.1",
+    "@noble/curves": "^2.2.0",
+    "@noble/hashes": "^1.8.0",
+    "dotenv": "^16.6.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.43",
+    "env-cmd": "^10.1.0",
+    "prettier": "2.8.8",
+    "tsx": "^4.22.4",
+    "typescript": "^5.9.3"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  }
+}
