@@ -100,8 +100,22 @@ phases:
     distributionConfigurationArn: distribution.arn,
   });
 
+  const initialBuild = new aws.imagebuilder.Image(`${args.name}-benchmark-initial-image`, {
+    imageRecipeArn: imageRecipe.arn,
+    infrastructureConfigurationArn: infraConfig.arn,
+    distributionConfigurationArn: distribution.arn,
+  });
+
+  const builtAmiId = initialBuild.outputResources.apply((resources) => {
+    const ami = resources[0]?.amis?.[0]?.image;
+    if (!ami) {
+      throw new Error("Image Builder did not produce an AMI for the benchmark fleet");
+    }
+    return ami;
+  });
+
   const launchTemplate = new aws.ec2.LaunchTemplate(`${args.name}-benchmark-lt`, {
-    imageId: baseAmi.id,
+    imageId: builtAmiId,
     instanceType: args.instanceType,
     vpcSecurityGroupIds: [args.securityGroupId],
     iamInstanceProfile: { arn: args.benchmarkInstanceProfileArn },
