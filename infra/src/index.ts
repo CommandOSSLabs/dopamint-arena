@@ -4,6 +4,7 @@ import { createNetwork } from "./components/Network.js";
 import { createDns } from "./components/Dns.js";
 import { createSecurityGroups } from "./resources/security-groups.js";
 import { createAlb } from "./resources/alb.js";
+import { createIam } from "./resources/iam.js";
 
 const cfg = getConfig();
 const network = createNetwork(`dopamint-${cfg.environment}`);
@@ -21,9 +22,15 @@ const alb = createAlb(`dopamint-${cfg.environment}`, {
   certificateArn: dns.certificateArn,
 });
 
+const iam = createIam(`dopamint-${cfg.environment}`, {
+  githubOrg: "CommandOSSLabs",
+  githubRepo: "dopamint-arena",
+});
+
 export const vpcId = network.vpcId;
 export const privateSubnetIds = network.privateSubnetIds;
 export const publicSubnetIds = network.publicSubnetIds;
 export const certificateArn = dns.certificateArn;
 export const albDnsName = alb.alb.dnsName;
 export const albArnSuffix = alb.alb.arnSuffix;
+export const githubDeployRoleArn = iam.githubDeployRoleArn;
