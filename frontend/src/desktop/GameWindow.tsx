@@ -1,29 +1,24 @@
 import type { ReactNode } from "react";
 
 /**
- * Static (non-draggable) window chrome. Windows cascade by `index` so multiple
- * stay visible. Drag/resize is a deliberate later addition.
+ * Static (non-draggable) window chrome. Sized to fill its grid cell so the
+ * default lineup tiles uniformly; the body scrolls. Drag/resize is a deliberate
+ * later addition.
  */
 export function GameWindow({
   title,
   icon,
-  index,
   onClose,
   children,
 }: {
   title: string;
   icon: string;
-  index: number;
   onClose: () => void;
   children: ReactNode;
 }) {
-  const offset = index * 28;
   return (
-    <div
-      className="absolute flex w-[380px] flex-col rounded-lg border border-arena-edge bg-arena-panel shadow-xl"
-      style={{ left: 24 + offset, top: 24 + offset }}
-    >
-      <header className="flex items-center justify-between rounded-t-lg border-b border-arena-edge bg-arena-bg/60 px-3 py-2">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-arena-edge bg-arena-panel shadow-xl">
+      <header className="flex shrink-0 items-center justify-between border-b border-arena-edge bg-arena-bg/60 px-3 py-2">
         <span className="flex items-center gap-2 text-xs font-medium text-arena-text">
           <span>{icon}</span>
           {title}
@@ -36,7 +31,7 @@ export function GameWindow({
           ✕
         </button>
       </header>
-      <div className="min-h-0">{children}</div>
+      <div className="min-h-0 flex-1 overflow-auto">{children}</div>
     </div>
   );
 }

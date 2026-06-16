@@ -19,21 +19,9 @@ function Clock() {
   );
 }
 
-export function Taskbar({
-  openWindows,
-  onToggleCatalog,
-}: {
-  openWindows: TaskbarWindow[];
-  onToggleCatalog: () => void;
-}) {
+export function Taskbar({ openWindows }: { openWindows: TaskbarWindow[] }) {
   return (
     <footer className="flex h-11 shrink-0 items-center gap-2 border-t border-arena-edge bg-arena-panel px-2">
-      <button
-        onClick={onToggleCatalog}
-        className="rounded bg-arena-accent/90 px-3 py-1.5 text-xs font-semibold text-arena-bg"
-      >
-        ▦ Games
-      </button>
       <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
         {openWindows.map((w) => (
           <span

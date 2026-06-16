@@ -1,9 +1,8 @@
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { ConnectButton } from "@mysten/dapp-kit";
 import "../games"; // register all game modules (side-effect import)
 import { get, list } from "../games/registry";
 import { PLACEHOLDER_SNAPSHOT } from "../placeholders";
-import { Catalog } from "../catalog/Catalog";
 import { SystemDashboard } from "../panels/SystemDashboard";
 import { TpsChart } from "../panels/TpsChart";
 import { LiveTransactionsFeed } from "../panels/LiveTransactionsFeed";
@@ -17,17 +16,15 @@ interface OpenWindow {
   gameId: string;
 }
 
+/** Every registered game opens in its own window on load, tiled in a grid. */
+function defaultWindows(): OpenWindow[] {
+  return list().map((g) => ({ windowId: g.id, gameId: g.id }));
+}
+
 export function Desktop() {
-  const [open, setOpen] = useState<OpenWindow[]>([]);
-  const [catalogOpen, setCatalogOpen] = useState(true);
-  const seq = useRef(0);
+  const [open, setOpen] = useState<OpenWindow[]>(defaultWindows);
   const snapshot = PLACEHOLDER_SNAPSHOT;
 
-  function launch(gameId: string) {
-    seq.current += 1;
-    setOpen((cur) => [...cur, { windowId: `w${seq.current}`, gameId }]);
-    setCatalogOpen(false);
-  }
   function close(windowId: string) {
     setOpen((cur) => cur.filter((w) => w.windowId !== windowId));
   }
@@ -42,36 +39,31 @@ export function Desktop() {
       </header>
 
       <div className="flex min-h-0 flex-1">
-        <main className="relative min-w-0 flex-1 overflow-hidden">
-          {open.map((w, i) => {
-            const mod = get(w.gameId);
-            if (!mod) return null;
-            const Content = mod.Window;
-            return (
-              <GameWindow
-                key={w.windowId}
-                title={mod.name}
-                icon={mod.icon}
-                index={i}
-                onClose={() => close(w.windowId)}
-              >
-                <Content
-                  windowId={w.windowId}
-                  onClose={() => close(w.windowId)}
-                />
-              </GameWindow>
-            );
-          })}
-          {catalogOpen && (
-            <Catalog
-              games={list()}
-              onLaunch={launch}
-              onClose={() => setCatalogOpen(false)}
-            />
-          )}
-          {open.length === 0 && !catalogOpen && (
+        <main className="min-w-0 flex-1 overflow-auto p-2">
+          {open.length === 0 ? (
             <div className="flex h-full items-center justify-center text-sm text-arena-muted">
-              Open the catalog from the taskbar to launch a game.
+              All windows closed — reload to restore the lineup.
+            </div>
+          ) : (
+            <div className="grid auto-rows-[16rem] grid-cols-2 gap-2 xl:grid-cols-4">
+              {open.map((w) => {
+                const mod = get(w.gameId);
+                if (!mod) return null;
+                const Content = mod.Window;
+                return (
+                  <GameWindow
+                    key={w.windowId}
+                    title={mod.name}
+                    icon={mod.icon}
+                    onClose={() => close(w.windowId)}
+                  >
+                    <Content
+                      windowId={w.windowId}
+                      onClose={() => close(w.windowId)}
+                    />
+                  </GameWindow>
+                );
+              })}
             </div>
           )}
         </main>
@@ -97,7 +89,6 @@ export function Desktop() {
             icon: mod?.icon ?? "▢",
           };
         })}
-        onToggleCatalog={() => setCatalogOpen((v) => !v)}
       />
     </div>
   );
