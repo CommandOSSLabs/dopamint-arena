@@ -19,6 +19,20 @@ function suiOf(mist: bigint): string {
 
 const SUISCAN_TX = "https://suiscan.xyz/testnet/tx/";
 
+// Per-round outcome -> text/label styling for the running log and flash badge.
+const OUTCOME_STYLE: Record<
+  "win" | "lose" | "push",
+  { text: string; label: string }
+> = {
+  win: { text: "text-emerald-400", label: "WIN" },
+  lose: { text: "text-rose-400", label: "LOSE" },
+  push: { text: "text-zinc-400", label: "PUSH" },
+};
+
+function signed(delta: number): string {
+  return delta > 0 ? `+${delta}` : String(delta);
+}
+
 function DigestLink({ label, digest }: { label: string; digest?: string }) {
   if (!digest) return null;
   return (
@@ -40,7 +54,9 @@ function DigestLink({ label, digest }: { label: string; digest?: string }) {
 export default function PlayerBot() {
   const navigate = useNavigate();
   const game = useBlackjackBot();
-  const { view, result, phase, error, fundNote, digests, balances } = game;
+  const { view, result, rounds, phase, error, fundNote, digests, balances } =
+    game;
+  const latestRound = rounds.length > 0 ? rounds[rounds.length - 1] : null;
 
   // Wallet funding: send FUND_PER_BOT_MIST to each bot from the connected wallet's gas
   // coin. Persistent bot keys mean one top-up covers many games (deposits are refunded).
@@ -248,6 +264,37 @@ export default function PlayerBot() {
           </span>
         </div>
 
+        {/* Per-round running log (top-right): newest at the bottom, auto-scrolls into view */}
+        {rounds.length > 0 && (
+          <div className="absolute top-16 right-3 md:top-4 md:right-4 z-20 w-44 md:w-52 max-h-[40vh] flex flex-col bg-black/70 backdrop-blur-sm border border-amber-950 rounded-lg shadow-lg overflow-hidden">
+            <div className="px-3 py-1.5 text-[10px] font-extrabold uppercase tracking-widest text-[#d4af37] font-serif border-b border-amber-950/70">
+              Rounds
+            </div>
+            <div className="flex-1 overflow-y-auto px-2 py-1.5 flex flex-col gap-0.5">
+              {rounds.map((r, i) => {
+                const style = OUTCOME_STYLE[r.outcome];
+                return (
+                  <div
+                    key={`${r.round}-${i}`}
+                    className={`flex items-center justify-between gap-2 font-mono text-[11px] tabular-nums ${style.text}`}
+                  >
+                    <span className="text-zinc-500">R{r.round + 1}</span>
+                    <span className="text-zinc-300">
+                      P:{r.playerSum} D:{r.dealerSum}
+                    </span>
+                    <span className="font-bold">
+                      {style.label}
+                      {r.outcome !== "push" && (
+                        <span className="ml-1">{signed(r.delta)}</span>
+                      )}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {/* Dealer hand (top) */}
         <div className="absolute top-[20%] md:top-[16%] left-1/2 -translate-x-1/2 z-20 w-full max-w-xs flex flex-col items-center">
           <CardDisplay
@@ -256,6 +303,29 @@ export default function PlayerBot() {
             isWinning={result === "lose"}
           />
         </div>
+
+        {/* Latest-round flash (center): re-keyed each round so it re-animates as rounds resolve. */}
+        {!terminal && latestRound && (
+          <div
+            key={`flash-${latestRound.round}`}
+            className="absolute top-[42%] left-1/2 -translate-x-1/2 -translate-y-1/2 z-20 flex items-center justify-center pointer-events-none fade-in-up"
+          >
+            <div className="px-5 py-1.5 bg-black/75 border-2 border-amber-950 rounded-full shadow-xl backdrop-blur-sm flex items-center gap-2 font-mono text-xs md:text-sm">
+              <span className="text-zinc-500">R{latestRound.round + 1}</span>
+              <span className="text-zinc-300">
+                P:{latestRound.playerSum} D:{latestRound.dealerSum}
+              </span>
+              <span
+                className={`font-extrabold ${OUTCOME_STYLE[latestRound.outcome].text}`}
+              >
+                {OUTCOME_STYLE[latestRound.outcome].label}
+                {latestRound.outcome !== "push" && (
+                  <span className="ml-1">{signed(latestRound.delta)}</span>
+                )}
+              </span>
+            </div>
+          </div>
+        )}
 
         {/* Result banner (center) */}
         <div className="absolute top-[50%] left-1/2 -translate-x-1/2 -translate-y-1/2 z-20 flex items-center justify-center">

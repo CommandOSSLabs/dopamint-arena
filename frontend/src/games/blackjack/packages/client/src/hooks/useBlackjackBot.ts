@@ -48,9 +48,23 @@ export interface BlackjackBotView {
 
 export type BlackjackResult = "win" | "lose" | "push";
 
+// One settled round within a single tunnel session. The bots play many rounds before the
+// tunnel terminates; this records each so the UI can show a running per-round log.
+export interface RoundResult {
+  round: number;
+  playerSum: number;
+  dealerSum: number;
+  outcome: BlackjackResult;
+  delta: number; // balanceA change in stake units (>0 win, <0 lose, 0 push)
+}
+
+// Keep the running log bounded so a long auto-play session can't grow it without limit.
+const MAX_ROUNDS_LOGGED = 20;
+
 export interface BlackjackBotGame {
   view: BlackjackBotView;
   result: BlackjackResult | null;
+  rounds: RoundResult[];
   phase: BotPhase;
   error: string | null;
   fundNote: string | null;
@@ -114,6 +128,7 @@ export function useBlackjackBot(): BlackjackBotGame {
 
   const [view, setView] = useState<BlackjackBotView>(EMPTY_VIEW);
   const [result, setResult] = useState<BlackjackResult | null>(null);
+  const [rounds, setRounds] = useState<RoundResult[]>([]);
   const [phase, setPhase] = useState<BotPhase>("idle");
   const [error, setError] = useState<string | null>(null);
   const [fundNote, setFundNote] = useState<string | null>(null);
@@ -241,6 +256,7 @@ export function useBlackjackBot(): BlackjackBotGame {
     setError(null);
     setView(EMPTY_VIEW);
     setResult(null);
+    setRounds([]);
     setDigests({});
 
     void (async () => {
@@ -315,9 +331,29 @@ export function useBlackjackBot(): BlackjackBotGame {
                 resolve();
                 return;
               }
+              // Snapshot before stepping so we can detect a round resolving: the step
+              // that first lands on `round_over` is when this round's outcome is known.
+              const prevPhase = tunnel.state.phase;
+              const prevBalanceA = tunnel.state.balanceA;
               const r = tunnel.step(move, by, { mode: "full" });
               if (!r.verified)
                 throw new Error(`state ${r.nonce} failed dual-verify`);
+              const s = tunnel.state;
+              if (s.phase === "round_over" && prevPhase !== "round_over") {
+                const delta = Number(s.balanceA - prevBalanceA);
+                const outcome: BlackjackResult =
+                  delta > 0 ? "win" : delta < 0 ? "lose" : "push";
+                const settled: RoundResult = {
+                  round: Number(s.round),
+                  playerSum: handValue(s.playerHand),
+                  dealerSum: handValue(s.dealerHand),
+                  outcome,
+                  delta,
+                };
+                setRounds((prev) =>
+                  [...prev, settled].slice(-MAX_ROUNDS_LOGGED),
+                );
+              }
               setView(viewFromState(tunnel.state));
               if (proto.isTerminal(tunnel.state)) {
                 stopTimer();
@@ -411,6 +447,7 @@ export function useBlackjackBot(): BlackjackBotGame {
   return {
     view,
     result,
+    rounds,
     phase,
     error,
     fundNote,
