@@ -12,6 +12,7 @@ export interface GithubEnvInputs {
   githubDeployRoleArn: pulumi.Input<string>;
   privateSubnetIds: pulumi.Input<string[]>;
   backendSecurityGroupId: pulumi.Input<string>;
+  benchmarkAsgName: pulumi.Input<string>;
 }
 
 export function githubEnvOutputs(
@@ -29,5 +30,6 @@ export function githubEnvOutputs(
     AWS_DEPLOY_ROLE_ARN: inputs.githubDeployRoleArn,
     PRIVATE_SUBNET_IDS: pulumi.output(inputs.privateSubnetIds).apply((ids) => ids.join(",")),
     BACKEND_SECURITY_GROUP_ID: inputs.backendSecurityGroupId,
+    BENCHMARK_ASG_NAME: inputs.benchmarkAsgName,
   };
 }

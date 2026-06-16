@@ -137,6 +137,18 @@ export const backendUrl = dns.zoneId
   ? pulumi.interpolate`https://${backendApiDomain}`
   : undefined;
 
+const benchmarkFleet = createBenchmarkFleet({
+  name: `dopamint-${cfg.environment}`,
+  subnetIds: network.privateSubnetIds,
+  securityGroupId: sgs.benchmark.id,
+  instanceType: cfg.benchmarkInstanceType,
+  minSize: cfg.benchmarkMinSize,
+  maxSize: cfg.benchmarkMaxSize,
+  imageBuilderProfileName: iam.imageBuilderProfile.name,
+  benchmarkInstanceProfileArn: iam.benchmarkInstanceProfile.arn,
+  version: cfg.benchmarkImageVersion,
+});
+
 export const githubEnv = dns.zoneId
   ? githubEnvOutputs({
       backendUrl: backendApiDomain,
@@ -150,20 +162,9 @@ export const githubEnv = dns.zoneId
       githubDeployRoleArn: iam.githubDeployRoleArn,
       privateSubnetIds: network.privateSubnetIds,
       backendSecurityGroupId: sgs.backend.id,
+      benchmarkAsgName: benchmarkFleet.asgName,
     })
   : undefined;
-
-const benchmarkFleet = createBenchmarkFleet({
-  name: `dopamint-${cfg.environment}`,
-  subnetIds: network.privateSubnetIds,
-  securityGroupId: sgs.benchmark.id,
-  instanceType: cfg.benchmarkInstanceType,
-  minSize: cfg.benchmarkMinSize,
-  maxSize: cfg.benchmarkMaxSize,
-  imageBuilderProfileName: iam.imageBuilderProfile.name,
-  benchmarkInstanceProfileArn: iam.benchmarkInstanceProfile.arn,
-  version: cfg.benchmarkImageVersion,
-});
 
 export const benchmarkAsgName = benchmarkFleet.asgName;
 export const benchmarkComponentArn = benchmarkFleet.componentArn;
