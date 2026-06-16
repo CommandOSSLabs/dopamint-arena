@@ -15,16 +15,20 @@ export function PaymentsWindow(_props: GameWindowProps) {
       <label className="flex flex-col gap-1">
         <span className="text-[11px] uppercase text-arena-muted">To Account</span>
         <input
+          id="to-account"
+          name="toAccount"
           disabled
-          value="user_84219"
+          defaultValue="user_84219"
           className="rounded border border-arena-edge bg-arena-bg px-2 py-1.5 text-arena-text"
         />
       </label>
       <label className="flex flex-col gap-1">
         <span className="text-[11px] uppercase text-arena-muted">Amount</span>
         <input
+          id="amount"
+          name="amount"
           disabled
-          value="75.00 USD"
+          defaultValue="75.00 USD"
           className="rounded border border-arena-edge bg-arena-bg px-2 py-1.5 text-arena-text"
         />
       </label>
