@@ -5,6 +5,7 @@ import { createDns } from "./components/Dns.js";
 import { createSecurityGroups } from "./resources/security-groups.js";
 import { createAlb } from "./resources/alb.js";
 import { createIam } from "./resources/iam.js";
+import { createFrontend } from "./components/Frontend.js";
 
 const cfg = getConfig();
 const network = createNetwork(`dopamint-${cfg.environment}`);
@@ -27,6 +28,12 @@ const iam = createIam(`dopamint-${cfg.environment}`, {
   githubRepo: "dopamint-arena",
 });
 
+const frontend = createFrontend(`dopamint-${cfg.environment}`, {
+  domain: cfg.domain,
+  certificateArn: dns.certificateArn,
+  zoneId: dns.zoneId,
+});
+
 export const vpcId = network.vpcId;
 export const privateSubnetIds = network.privateSubnetIds;
 export const publicSubnetIds = network.publicSubnetIds;
@@ -34,3 +41,6 @@ export const certificateArn = dns.certificateArn;
 export const albDnsName = alb.alb.dnsName;
 export const albArnSuffix = alb.alb.arnSuffix;
 export const githubDeployRoleArn = iam.githubDeployRoleArn;
+export const frontendBucket = frontend.bucketName;
+export const frontendDomain = frontend.distributionDomain;
+export const cloudfrontId = frontend.distributionId;
