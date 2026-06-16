@@ -2,7 +2,7 @@ import { useState } from "react";
 import { ConnectButton } from "@mysten/dapp-kit";
 import "../games"; // register all game modules (side-effect import)
 import { get, list } from "../games/registry";
-import { PLACEHOLDER_SNAPSHOT } from "../placeholders";
+import { useTelemetry } from "../telemetry/TelemetryProvider";
 import { SystemDashboard } from "../panels/SystemDashboard";
 import { TpsChart } from "../panels/TpsChart";
 import { LiveTransactionsFeed } from "../panels/LiveTransactionsFeed";
@@ -23,7 +23,7 @@ function defaultWindows(): OpenWindow[] {
 
 export function Desktop() {
   const [open, setOpen] = useState<OpenWindow[]>(defaultWindows);
-  const snapshot = PLACEHOLDER_SNAPSHOT;
+  const { snapshot } = useTelemetry();
 
   function close(windowId: string) {
     setOpen((cur) => cur.filter((w) => w.windowId !== windowId));
