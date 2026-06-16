@@ -1,0 +1,25 @@
+@import "tailwindcss";
+
+/* Desktop-OS theme tokens. Exposed as Tailwind colors (bg-arena-*, text-arena-*). */
+@theme {
+  --color-arena-bg: #0a0e14;
+  --color-arena-panel: #111722;
+  --color-arena-edge: #1e2735;
+  --color-arena-accent: #1fd6a0;
+  --color-arena-text: #cdd6e4;
+  --color-arena-muted: #6b7689;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-arena-bg);
+  color: var(--color-arena-text);
+  font-family:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
