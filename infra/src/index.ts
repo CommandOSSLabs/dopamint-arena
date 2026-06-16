@@ -14,6 +14,7 @@ import { createCache } from "./components/Cache.js";
 import { createBackend } from "./components/Backend.js";
 import { createBackendService } from "./components/BackendService.js";
 import { createBackendAlias } from "./components/BackendAlias.js";
+import { createMonitoring } from "./components/Monitoring.js";
 
 const cfg = getConfig();
 const network = createNetwork(`dopamint-${cfg.environment}`);
@@ -97,6 +98,16 @@ createBackendAlias({
   zoneId: dns.zoneId,
   albDnsName: alb.alb.dnsName,
   albHostedZoneId: alb.alb.zoneId,
+});
+
+createMonitoring({
+  name: `dopamint-${cfg.environment}`,
+  albArnSuffix: alb.alb.arnSuffix,
+  targetGroupArnSuffix: alb.targetGroup.arnSuffix,
+  clusterName: ecs.clusterName,
+  serviceName: backendService.serviceName,
+  dbClusterIdentifier: database.clusterIdentifier,
+  logGroupName: ecs.logGroupName,
 });
 
 export const vpcId = network.vpcId;
