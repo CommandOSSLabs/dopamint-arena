@@ -14,6 +14,7 @@ interface ImportMetaEnv {
   readonly VITE_COIN_SYMBOL: string;
   readonly VITE_BLS_PUBLIC_KEY: string;
   readonly VITE_API_URL: string;
+  readonly VITE_TUNNEL_PACKAGE_ID: string;
 }
 interface ImportMeta {
   readonly env: ImportMetaEnv;
