@@ -10,10 +10,13 @@ export interface IamOutputs {
   benchmarkInstanceProfile: aws.iam.InstanceProfile;
 }
 
-export function createIam(
-  name: string,
-  args: { githubOrg: string; githubRepo: string }
-): IamOutputs {
+export interface IamInputs {
+  githubOrg: string;
+  githubRepo: string;
+  dbSecretArn?: pulumi.Input<string>;
+}
+
+export function createIam(name: string, args: IamInputs): IamOutputs {
   const taskExecutionRole = new aws.iam.Role(`${name}-task-exec-role`, {
     assumeRolePolicy: JSON.stringify({
       Version: "2012-10-17",
@@ -27,6 +30,24 @@ export function createIam(
     }),
     managedPolicyArns: ["arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"],
   });
+
+  if (args.dbSecretArn) {
+    new aws.iam.RolePolicy(`${name}-task-exec-secrets-policy`, {
+      role: taskExecutionRole.id,
+      policy: pulumi.output(args.dbSecretArn).apply((secretArn) =>
+        JSON.stringify({
+          Version: "2012-10-17",
+          Statement: [
+            {
+              Effect: "Allow",
+              Action: ["secretsmanager:GetSecretValue"],
+              Resource: secretArn,
+            },
+          ],
+        })
+      ),
+    });
+  }
 
   const taskRole = new aws.iam.Role(`${name}-task-role`, {
     assumeRolePolicy: JSON.stringify({

@@ -26,11 +26,6 @@ const alb = createAlb(`dopamint-${cfg.environment}`, {
   certificateArn: dns.certificateArn,
 });
 
-const iam = createIam(`dopamint-${cfg.environment}`, {
-  githubOrg: "CommandOSSLabs",
-  githubRepo: "dopamint-arena",
-});
-
 const frontend = createFrontend(`dopamint-${cfg.environment}`, {
   domain: cfg.domain,
   certificateArn: dns.certificateArn,
@@ -44,6 +39,12 @@ const database = createDatabase(`dopamint-${cfg.environment}`, {
   serverless: cfg.dbServerless,
   minCapacity: cfg.dbMinCapacity,
   maxCapacity: cfg.dbMaxCapacity,
+});
+
+const iam = createIam(`dopamint-${cfg.environment}`, {
+  githubOrg: "CommandOSSLabs",
+  githubRepo: "dopamint-arena",
+  dbSecretArn: database.dbPasswordSecretArn,
 });
 
 const dbProxy = createDatabaseProxy(`dopamint-${cfg.environment}`, {
