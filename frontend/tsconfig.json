@@ -21,6 +21,5 @@
       "sui-tunnel-ts/*": ["../sui-tunnel-ts/src/*"]
     }
   },
-  "include": ["src"],
-  "exclude": ["src/games/blackjack/packages"]
+  "include": ["src"]
 }
