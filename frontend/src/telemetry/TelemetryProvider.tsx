@@ -81,9 +81,15 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
     };
   }, [hasActivity, txns, tpsSeries, botsRunning]);
 
+  // Keep `report` stable across snapshot updates so consumers' callbacks that
+  // depend on it (e.g. a game's start/reset) don't churn on every counter bump.
+  const report = useMemo<TelemetryWriter>(
+    () => ({ pushTxn, bumpCounters, setActive }),
+    [pushTxn, bumpCounters, setActive],
+  );
   const value = useMemo<TelemetryContextValue>(
-    () => ({ snapshot, report: { pushTxn, bumpCounters, setActive } }),
-    [snapshot, pushTxn, bumpCounters, setActive],
+    () => ({ snapshot, report }),
+    [snapshot, report],
   );
 
   return <TelemetryContext.Provider value={value}>{children}</TelemetryContext.Provider>;
