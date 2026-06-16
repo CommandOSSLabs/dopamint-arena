@@ -1,0 +1,6 @@
+name: dopamint-arena
+runtime:
+  name: nodejs
+  options:
+    packagemanager: pnpm
+description: Dopamint Arena AWS infrastructure
