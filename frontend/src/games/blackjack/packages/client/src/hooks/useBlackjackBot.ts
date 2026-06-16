@@ -53,6 +53,7 @@ export interface BlackjackBotGame {
   result: BlackjackResult | null;
   phase: BotPhase;
   error: string | null;
+  fundNote: string | null;
   digests: BotDigests;
   balances: { a: bigint; b: bigint };
   auto: boolean;
@@ -61,6 +62,7 @@ export interface BlackjackBotGame {
   stopAuto: () => void;
   newGame: () => void;
   refresh: () => Promise<{ a: bigint; b: bigint } | null>;
+  pollBalances: (prev?: { a: bigint; b: bigint }) => Promise<void>;
 }
 
 // Each bot stakes this much into the tunnel per game.
@@ -73,6 +75,10 @@ const STEP_MS = 700;
 const MIN_PLAY_MIST = 20_000_000n;
 // Pause between auto-played games.
 const NEXT_GAME_MS = 1200;
+// Funding-refresh poll: the fullnode lags the funding tx, so re-read balances a few times
+// before giving up rather than reading the stale pre-fund value once.
+const POLL_BALANCES_MS = 1500;
+const POLL_BALANCES_TRIES = 8;
 // Safety bound: the protocol caps rounds, but never spin forever on a logic bug.
 const MAX_STEPS = 5000;
 
@@ -110,6 +116,7 @@ export function useBlackjackBot(): BlackjackBotGame {
   const [result, setResult] = useState<BlackjackResult | null>(null);
   const [phase, setPhase] = useState<BotPhase>("idle");
   const [error, setError] = useState<string | null>(null);
+  const [fundNote, setFundNote] = useState<string | null>(null);
   const [digests, setDigests] = useState<BotDigests>({});
   const [balances, setBalances] = useState<{ a: bigint; b: bigint }>({
     a: 0n,
@@ -140,6 +147,26 @@ export function useBlackjackBot(): BlackjackBotGame {
       return null;
     }
   }, [client, bots]);
+
+  // Re-read balances repeatedly after a funding tx: the fullnode lags the tx, so a single
+  // read sees the stale pre-fund value. Stops early once both bots show funds above `prev`
+  // (or above zero when `prev` is omitted), otherwise after a bounded number of tries.
+  const pollBalances = useCallback(
+    async (prev?: { a: bigint; b: bigint }) => {
+      for (let i = 0; i < POLL_BALANCES_TRIES; i++) {
+        const b = await refreshBalances();
+        if (
+          b &&
+          (prev ? b.a > prev.a : b.a > 0n) &&
+          (prev ? b.b > prev.b : b.b > 0n)
+        ) {
+          return;
+        }
+        await new Promise<void>((r) => setTimeout(r, POLL_BALANCES_MS));
+      }
+    },
+    [refreshBalances],
+  );
 
   // Load balances on mount; tear down timers on unmount.
   useEffect(() => {
@@ -173,16 +200,29 @@ export function useBlackjackBot(): BlackjackBotGame {
     void (async () => {
       setPhase("funding");
       setError(null);
+      setFundNote(null);
+      const prev = balancesRef.current;
       try {
-        await fundBots(client, bots);
-        await refreshBalances();
+        const status = await fundBots(client, bots);
+        // Surface per-bot faucet status (rate limit / error) so the UI explains why nothing
+        // may have arrived, rather than silently leaving balances at zero.
+        const failed = [
+          status.a !== "ok" ? `Player bot: ${status.a}` : null,
+          status.b !== "ok" ? `Dealer bot: ${status.b}` : null,
+        ].filter(Boolean);
+        if (failed.length > 0) {
+          setFundNote(
+            `Faucet did not fully deliver (${failed.join("; ")}). Try wallet funding or wait and refresh.`,
+          );
+        }
+        await pollBalances(prev);
         setPhase("idle");
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
         setPhase("error");
       }
     })();
-  }, [client, bots, refreshBalances]);
+  }, [client, bots, pollBalances]);
 
   // Run exactly one game: create -> 2 deposits -> animated self-play -> cooperative close.
   // When auto-play is on, schedules the next game (or stops if a bot is low on gas).
@@ -373,6 +413,7 @@ export function useBlackjackBot(): BlackjackBotGame {
     result,
     phase,
     error,
+    fundNote,
     digests,
     balances,
     auto,
@@ -381,6 +422,7 @@ export function useBlackjackBot(): BlackjackBotGame {
     stopAuto,
     newGame,
     refresh: refreshBalances,
+    pollBalances,
   };
 }
 

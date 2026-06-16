@@ -40,7 +40,7 @@ function DigestLink({ label, digest }: { label: string; digest?: string }) {
 export default function PlayerBot() {
   const navigate = useNavigate();
   const game = useBlackjackBot();
-  const { view, result, phase, error, digests, balances } = game;
+  const { view, result, phase, error, fundNote, digests, balances } = game;
 
   // Wallet funding: send FUND_PER_BOT_MIST to each bot from the connected wallet's gas
   // coin. Persistent bot keys mean one top-up covers many games (deposits are refunded).
@@ -53,9 +53,12 @@ export default function PlayerBot() {
   const fundFromWallet = async () => {
     setWalletFunding(true);
     setWalletError(null);
+    const prev = balances;
     try {
       await signAndExecute({ transaction: buildFundTx(loadOrCreateBots()) });
-      await game.refresh();
+      // The fullnode lags the funding tx — poll until balances climb above their pre-fund
+      // value (or time out) instead of reading the stale value once.
+      await game.pollBalances(prev);
     } catch (e) {
       setWalletError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -95,6 +98,16 @@ export default function PlayerBot() {
       className="border-2 border-amber-500 text-[#d4af37] bg-amber-950/20 hover:bg-amber-500 hover:text-black px-6 py-3 rounded-lg text-sm font-black tracking-widest uppercase transition-all hover:scale-105 active:scale-95 cursor-pointer disabled:opacity-50 disabled:pointer-events-none"
     >
       Fund Bots
+    </button>
+  );
+
+  const refreshBtn = (
+    <button
+      onClick={() => void game.pollBalances()}
+      className="text-[11px] text-zinc-400 hover:text-[#d4af37] underline underline-offset-2 transition-colors cursor-pointer"
+      title="Re-check bot wallet balances (faucet can deliver late)"
+    >
+      Refresh balances
     </button>
   );
 
@@ -148,6 +161,7 @@ export default function PlayerBot() {
             <span>
               Dealer Bot: <span className="text-white">{suiOf(balances.b)} SUI</span>
             </span>
+            {refreshBtn}
           </div>
 
           <div className="flex flex-col items-center gap-2 w-full">
@@ -167,6 +181,11 @@ export default function PlayerBot() {
           {phase === "funding" && (
             <div className="text-xs text-[#d4af37] animate-pulse uppercase tracking-widest">
               Funding bots from faucet…
+            </div>
+          )}
+          {fundNote && (
+            <div className="text-xs text-amber-400 text-center max-w-full break-words">
+              {fundNote}
             </div>
           )}
           {error && (
@@ -296,6 +315,7 @@ export default function PlayerBot() {
                 <span>Dealer wallet:</span>
                 <span className="text-white font-mono font-black">{suiOf(balances.b)} SUI</span>
               </div>
+              <div className="mt-0.5">{refreshBtn}</div>
             </div>
           </div>
 
@@ -313,6 +333,8 @@ export default function PlayerBot() {
           <div className="text-[11px] uppercase tracking-widest font-bold">
             {phase === "error" || error || walletError ? (
               <span className="text-rose-400 normal-case tracking-normal font-mono break-words">{error ?? walletError ?? "Error"}</span>
+            ) : fundNote ? (
+              <span className="text-amber-400 normal-case tracking-normal break-words">{fundNote}</span>
             ) : (
               <span className={running ? "text-[#d4af37] animate-pulse" : "text-zinc-500"}>
                 {phaseLabel[phase]}
