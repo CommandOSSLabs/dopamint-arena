@@ -37,6 +37,7 @@ export function createSecurityGroups(
     description: "Aurora PostgreSQL",
     ingress: [
       { protocol: "tcp", fromPort: 5432, toPort: 5432, securityGroups: [backend.id] },
+      { protocol: "tcp", fromPort: 5432, toPort: 5432, self: true },
     ],
   });
 
