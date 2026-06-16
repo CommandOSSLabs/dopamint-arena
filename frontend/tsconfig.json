@@ -14,6 +14,8 @@
     "isolatedModules": true,
     "skipLibCheck": true,
     "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "types": ["node"],
     "paths": {
       "sui-tunnel-ts": ["../sui-tunnel-ts/src/index.ts"],
       "sui-tunnel-ts/*": ["../sui-tunnel-ts/src/*"]
