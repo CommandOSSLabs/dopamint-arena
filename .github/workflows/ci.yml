@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  ts-sdk:
+    name: TypeScript SDK
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sui-tunnel-ts
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          # The committed `test` script uses the stable `--test-isolation`
+          # flag, which graduated from experimental in Node 24.
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: sui-tunnel-ts/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
+
+  move:
+    name: Move contracts
+    runs-on: ubuntu-latest
+    # Bump to an existing release tag if the download 404s.
+    env:
+      SUI_VERSION: testnet-v1.39.3
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Sui CLI
+        run: |
+          set -euo pipefail
+          url="https://github.com/MystenLabs/sui/releases/download/${SUI_VERSION}/sui-${SUI_VERSION}-ubuntu-x86_64.tgz"
+          curl -fsSL "$url" -o sui.tgz
+          mkdir -p sui-bin && tar -xzf sui.tgz -C sui-bin
+          sudo mv "$(find sui-bin -type f -name sui | head -1)" /usr/local/bin/sui
+          sui --version
+      - name: Build & test
+        working-directory: sui_tunnel
+        run: |
+          sui move build
+          sui move test
