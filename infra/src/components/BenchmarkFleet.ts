@@ -2,6 +2,7 @@ import * as aws from "@pulumi/aws";
 import * as pulumi from "@pulumi/pulumi";
 
 export interface BenchmarkFleetOutputs {
+  asgName: pulumi.Output<string>;
   componentArn: pulumi.Output<string>;
   imageRecipeArn: pulumi.Output<string>;
   pipelineArn: pulumi.Output<string>;
@@ -9,8 +10,11 @@ export interface BenchmarkFleetOutputs {
 
 export interface BenchmarkFleetArgs {
   name: string;
+  benchmarkInstanceProfileArn: pulumi.Input<string>;
   imageBuilderProfileName: pulumi.Input<string>;
   instanceType: pulumi.Input<string>;
+  maxSize: number;
+  minSize: number;
   securityGroupId: pulumi.Input<string>;
   subnetIds: pulumi.Input<string[]>;
   /**
@@ -96,7 +100,32 @@ phases:
     distributionConfigurationArn: distribution.arn,
   });
 
+  const launchTemplate = new aws.ec2.LaunchTemplate(`${args.name}-benchmark-lt`, {
+    imageId: baseAmi.id,
+    instanceType: args.instanceType,
+    vpcSecurityGroupIds: [args.securityGroupId],
+    iamInstanceProfile: { arn: args.benchmarkInstanceProfileArn },
+    userData: pulumi.interpolate`#!/bin/bash
+set -euo pipefail
+cd /opt/dopamint/repo/sui-tunnel-ts || true
+`.apply((data) => Buffer.from(data).toString("base64")),
+    metadataOptions: {
+      httpEndpoint: "enabled",
+      httpTokens: "required",
+    },
+  });
+
+  const asg = new aws.autoscaling.Group(`${args.name}-benchmark`, {
+    vpcZoneIdentifiers: args.subnetIds,
+    minSize: args.minSize,
+    maxSize: args.maxSize,
+    desiredCapacity: args.minSize,
+    launchTemplate: { id: launchTemplate.id, version: "$Latest" },
+    tags: [{ key: "Name", value: `${args.name}-benchmark`, propagateAtLaunch: true }],
+  });
+
   return {
+    asgName: asg.name,
     componentArn: component.arn,
     imageRecipeArn: imageRecipe.arn,
     pipelineArn: pipeline.arn,

@@ -155,12 +155,16 @@ export const githubEnv = dns.zoneId
 
 const benchmarkFleet = createBenchmarkFleet({
   name: `dopamint-${cfg.environment}`,
-  imageBuilderProfileName: iam.imageBuilderProfile.name,
-  instanceType: cfg.benchmarkInstanceType,
-  securityGroupId: sgs.benchmark.id,
   subnetIds: network.privateSubnetIds,
-  version: "1.0.0",
+  securityGroupId: sgs.benchmark.id,
+  instanceType: cfg.benchmarkInstanceType,
+  minSize: cfg.benchmarkMinSize,
+  maxSize: cfg.benchmarkMaxSize,
+  imageBuilderProfileName: iam.imageBuilderProfile.name,
+  benchmarkInstanceProfileArn: iam.benchmarkInstanceProfile.arn,
+  version: cfg.benchmarkImageVersion,
 });
 
+export const benchmarkAsgName = benchmarkFleet.asgName;
 export const benchmarkComponentArn = benchmarkFleet.componentArn;
 export const benchmarkPipelineArn = benchmarkFleet.pipelineArn;
