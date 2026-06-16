@@ -61,7 +61,11 @@ test("deriveView and sessionResult report the bankroll outcome", () => {
   const stake = 500n;
   const { protocol, tunnel } = newTunnel(stake);
   while (stepSession(protocol, tunnel, Math.random)) {}
-  const view = deriveView(tunnel.state, stake);
+  const view = deriveView(tunnel.state);
   assert.equal(view.playerCards.length, view.playerCardCount);
+  assert.equal(typeof view.playerSum, "number");
+  assert.equal(typeof view.playerBalance, "number");
+  assert.equal(typeof view.round, "number");
+  assert.equal(view.dealerCards.length, view.dealerCardCount);
   assert.ok(["win", "lose", "push"].includes(sessionResult(tunnel.state, stake)));
 });

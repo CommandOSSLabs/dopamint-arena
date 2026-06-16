@@ -58,10 +58,9 @@ export interface BlackjackView {
   dealerBalance: number;
   round: number;
   phase: BlackjackPhase;
-  isTerminal: boolean;
 }
 
-export function deriveView(state: BlackjackState, stake: bigint): BlackjackView {
+export function deriveView(state: BlackjackState): BlackjackView {
   const round = Number(state.round);
   return {
     playerCards: handToCardIndices(state.playerHand, round * 2),
@@ -74,8 +73,5 @@ export function deriveView(state: BlackjackState, stake: bigint): BlackjackView 
     dealerBalance: Number(state.balanceB),
     round,
     phase: state.phase,
-    isTerminal:
-      state.phase === "round_over" &&
-      (state.balanceA < stake || state.balanceB < stake || Number(state.round) >= 1000),
   };
 }

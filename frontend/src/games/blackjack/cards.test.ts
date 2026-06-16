@@ -12,6 +12,7 @@ test("handValue sums with soft-ace reduction", () => {
   assert.equal(handValue([11, 11]), 12); // one ace reduced 11->1
   assert.equal(handValue([11, 5, 10]), 16); // ace reduced once
   assert.equal(handValue([5, 6]), 11);
+  assert.equal(handValue([11, 11, 11]), 13); // multi-ace cascade: two reduced 11->1
 });
 
 test("valueToCardIndex yields a 0..51 index whose rank value matches", () => {
