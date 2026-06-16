@@ -6,6 +6,8 @@ import { createSecurityGroups } from "./resources/security-groups.js";
 import { createAlb } from "./resources/alb.js";
 import { createIam } from "./resources/iam.js";
 import { createFrontend } from "./components/Frontend.js";
+import { createDatabase } from "./components/Database.js";
+import { createDatabaseProxy } from "./components/DatabaseProxy.js";
 
 const cfg = getConfig();
 const network = createNetwork(`dopamint-${cfg.environment}`);
@@ -34,6 +36,24 @@ const frontend = createFrontend(`dopamint-${cfg.environment}`, {
   zoneId: dns.zoneId,
 });
 
+const database = createDatabase(`dopamint-${cfg.environment}`, {
+  vpcId: network.vpcId,
+  subnetIds: network.privateSubnetIds,
+  securityGroupId: sgs.db.id,
+  instanceClass: cfg.dbInstanceClass,
+  serverless: cfg.dbServerless,
+  minCapacity: cfg.dbMinCapacity,
+  maxCapacity: cfg.dbMaxCapacity,
+});
+
+const dbProxy = createDatabaseProxy(`dopamint-${cfg.environment}`, {
+  vpcId: network.vpcId,
+  subnetIds: network.privateSubnetIds,
+  securityGroupId: sgs.db.id,
+  dbClusterIdentifier: database.clusterIdentifier,
+  secretArn: database.dbPasswordSecretArn,
+});
+
 export const vpcId = network.vpcId;
 export const privateSubnetIds = network.privateSubnetIds;
 export const publicSubnetIds = network.publicSubnetIds;
@@ -44,3 +64,4 @@ export const githubDeployRoleArn = iam.githubDeployRoleArn;
 export const frontendBucket = frontend.bucketName;
 export const frontendDomain = frontend.distributionDomain;
 export const cloudfrontId = frontend.distributionId;
+export const dbProxyEndpoint = dbProxy.proxyEndpoint;
