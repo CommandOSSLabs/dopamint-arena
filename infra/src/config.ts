@@ -21,7 +21,7 @@ export function getConfig(): InfraConfig {
   return {
     environment: config.require("environment"),
     domain: config.require("domain"),
-    route53ZoneId: config.get("route53-zone-id"),
+    route53ZoneId: config.get("route53-zone-id") || undefined,
     dbInstanceClass: config.require("db-instance-class"),
     dbServerless: config.requireBoolean("db-serverless"),
     dbMinCapacity: config.getNumber("db-min-capacity"),
