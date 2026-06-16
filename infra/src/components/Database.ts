@@ -5,7 +5,8 @@ import * as pulumi from "@pulumi/pulumi";
 export interface DatabaseOutputs {
   clusterIdentifier: pulumi.Output<string>;
   clusterEndpoint: pulumi.Output<string>;
-  dbPasswordSecretArn: pulumi.Output<string>;
+  dbSecretArn: pulumi.Output<string>; // JSON credentials for RDS Proxy
+  dbPasswordSecretArn: pulumi.Output<string>; // Plaintext password for ECS
 }
 
 export function createDatabase(
@@ -24,18 +25,31 @@ export function createDatabase(
     special: false,
   });
 
-  const secret = new aws.secretsmanager.Secret(`${name}-db-secret`, {
+  const dbSecret = new aws.secretsmanager.Secret(`${name}-db-secret`, {
     description: `Database credentials for ${name}`,
   });
 
   new aws.secretsmanager.SecretVersion(`${name}-db-secret-version`, {
-    secretId: secret.id,
+    secretId: dbSecret.id,
+    secretString: pulumi.all([dbPassword.result]).apply(([pwd]) =>
+      JSON.stringify({ username: "dopamint", password: pwd })
+    ),
+  });
+
+  const dbPasswordSecret = new aws.secretsmanager.Secret(`${name}-db-password-secret`, {
+    description: `Database password for ${name}`,
+  });
+
+  new aws.secretsmanager.SecretVersion(`${name}-db-password-secret-version`, {
+    secretId: dbPasswordSecret.id,
     secretString: dbPassword.result,
   });
 
   const subnetGroup = new aws.rds.SubnetGroup(`${name}-db-subnets`, {
     subnetIds: args.subnetIds,
   });
+
+  const snapshotSuffix = new random.RandomPet(`${name}-snapshot-suffix`, { length: 2 });
 
   const cluster = new aws.rds.Cluster(`${name}-aurora`, {
     engine: "aurora-postgresql",
@@ -46,7 +60,7 @@ export function createDatabase(
     dbSubnetGroupName: subnetGroup.name,
     vpcSecurityGroupIds: [args.securityGroupId],
     skipFinalSnapshot: false,
-    finalSnapshotIdentifier: `${name}-final-snapshot`,
+    finalSnapshotIdentifier: pulumi.interpolate`${name}-final-${snapshotSuffix.id}`.apply((s) => s.slice(0, 63)),
     backupRetentionPeriod: 7,
     preferredBackupWindow: "03:00-04:00",
     storageEncrypted: true,
@@ -66,6 +80,7 @@ export function createDatabase(
   return {
     clusterIdentifier: cluster.id,
     clusterEndpoint: cluster.endpoint,
-    dbPasswordSecretArn: secret.arn,
+    dbSecretArn: dbSecret.arn,
+    dbPasswordSecretArn: dbPasswordSecret.arn,
   };
 }

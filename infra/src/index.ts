@@ -49,7 +49,7 @@ const dbProxy = createDatabaseProxy(`dopamint-${cfg.environment}`, {
   subnetIds: network.privateSubnetIds,
   securityGroupId: sgs.db.id,
   dbClusterIdentifier: database.clusterIdentifier,
-  secretArn: database.dbPasswordSecretArn,
+  secretArn: database.dbSecretArn,
 });
 
 export const vpcId = network.vpcId;
