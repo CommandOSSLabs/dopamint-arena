@@ -13,6 +13,7 @@ import { createDatabaseProxy } from "./components/DatabaseProxy.js";
 import { createCache } from "./components/Cache.js";
 import { createBackend } from "./components/Backend.js";
 import { createBackendService } from "./components/BackendService.js";
+import { createBackendAlias } from "./components/BackendAlias.js";
 
 const cfg = getConfig();
 const network = createNetwork(`dopamint-${cfg.environment}`);
@@ -90,6 +91,14 @@ const backendService = createBackendService({
   listener: alb.httpsListener,
 });
 
+createBackendAlias({
+  name: `dopamint-${cfg.environment}`,
+  domain: cfg.domain,
+  zoneId: dns.zoneId,
+  albDnsName: alb.alb.dnsName,
+  albHostedZoneId: alb.alb.zoneId,
+});
+
 export const vpcId = network.vpcId;
 export const privateSubnetIds = network.privateSubnetIds;
 export const publicSubnetIds = network.publicSubnetIds;
@@ -109,3 +118,6 @@ export const backendLogGroup = ecs.logGroupName;
 export const backendTaskDefinitionArn = backend.taskDefinitionArn;
 export const migrationTaskDefinitionArn = backend.migrationTaskDefinitionArn;
 export const backendServiceName = backendService.serviceName;
+export const backendUrl = dns.zoneId
+  ? pulumi.interpolate`https://api.${cfg.domain}`
+  : undefined;
