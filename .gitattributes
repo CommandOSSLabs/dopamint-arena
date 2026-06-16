@@ -1,0 +1,6 @@
+# Normalize line endings; let git decide text vs binary.
+* text=auto eol=lf
+
+# Lockfiles are generated — collapse in diffs and exclude from language stats.
+pnpm-lock.yaml linguist-generated=true -diff
+Move.lock      linguist-generated=true -diff
