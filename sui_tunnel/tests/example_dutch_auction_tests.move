@@ -1,7 +1,8 @@
 #[test_only]
 module sui_tunnel::example_dutch_auction_tests;
 
-use std::unit_test::{assert_eq, destroy};
+use std::unit_test::assert_eq;
+use sui::test_utils::destroy;
 use sui::clock;
 use sui::coin;
 use sui::sui::SUI;
