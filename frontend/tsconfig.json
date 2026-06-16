@@ -21,5 +21,6 @@
       "sui-tunnel-ts/*": ["../sui-tunnel-ts/src/*"]
     }
   },
-  "include": ["src"]
+  "include": ["src"],
+  "exclude": ["src/games/*/packages"]
 }
