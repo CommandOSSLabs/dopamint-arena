@@ -130,6 +130,14 @@ export default function Home() {
               <LoginForm />
             </div>
           )}
+
+          {/* Bot Arena: bot-vs-bot demo, no login required. */}
+          <button
+            onClick={() => navigate("/bot")}
+            className="mt-4 text-xs text-zinc-500 hover:text-gold transition-colors font-semibold uppercase tracking-wider"
+          >
+            Watch Bot Arena →
+          </button>
         </div>
       </GameCardScale>
 

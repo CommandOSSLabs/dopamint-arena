@@ -25,6 +25,7 @@ import Dealer from "@/pages/Dealer";
 import DealerUtils from "@/pages/DealerUtils";
 import Player from "@/pages/Player";
 import PlayerGame from "@/pages/PlayerGame";
+import PlayerBot from "@/pages/PlayerBot";
 import PlayerHex from "@/pages/PlayerHex";
 import PlayerPoc from "@/pages/PlayerPoc";
 import Transfer from "@/pages/Transfer";
@@ -183,23 +184,33 @@ export default function App() {
   });
 
   return (
-    <QueryClientProvider client={queryClient}>
-      <SuiClientProvider
-        networks={networkConfig}
-        defaultNetwork={clientConfig.SUI_NETWORK_NAME}
-      >
-        <WalletProvider autoConnect storage={sessionStorageAdapter}>
-          <EnokiFlowProvider apiKey={clientConfig.ENOKI_API_KEY}>
-            <AuthenticationProvider>
-              <CustomWalletProvider>
-                <BalanceProvider>
-                  <AppShell />
-                </BalanceProvider>
-              </CustomWalletProvider>
-            </AuthenticationProvider>
-          </EnokiFlowProvider>
-        </WalletProvider>
-      </SuiClientProvider>
-    </QueryClientProvider>
+    <Routes>
+      {/* Bot Arena is self-contained (its own bot keypairs + SuiClient): no enoki/wallet/
+          auth, so it mounts bare, outside the gated provider stack and layouts. */}
+      <Route path="/bot" element={<PlayerBot />} />
+      <Route
+        path="*"
+        element={
+          <QueryClientProvider client={queryClient}>
+            <SuiClientProvider
+              networks={networkConfig}
+              defaultNetwork={clientConfig.SUI_NETWORK_NAME}
+            >
+              <WalletProvider autoConnect storage={sessionStorageAdapter}>
+                <EnokiFlowProvider apiKey={clientConfig.ENOKI_API_KEY}>
+                  <AuthenticationProvider>
+                    <CustomWalletProvider>
+                      <BalanceProvider>
+                        <AppShell />
+                      </BalanceProvider>
+                    </CustomWalletProvider>
+                  </AuthenticationProvider>
+                </EnokiFlowProvider>
+              </WalletProvider>
+            </SuiClientProvider>
+          </QueryClientProvider>
+        }
+      />
+    </Routes>
   );
 }

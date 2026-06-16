@@ -1,0 +1,283 @@
+import { useNavigate } from "react-router-dom";
+import { CardDisplay } from "@/components/app/CardDisplay";
+import { useBlackjackBot, type BotPhase } from "@/hooks/useBlackjackBot";
+
+// Render MIST (bigint) as a short SUI string. 1 SUI = 1e9 MIST.
+function suiOf(mist: bigint): string {
+  return (Number(mist) / 1e9).toLocaleString(undefined, {
+    minimumFractionDigits: 3,
+    maximumFractionDigits: 3,
+  });
+}
+
+const SUISCAN_TX = "https://suiscan.xyz/testnet/tx/";
+
+function DigestLink({ label, digest }: { label: string; digest?: string }) {
+  if (!digest) return null;
+  return (
+    <a
+      href={`${SUISCAN_TX}${digest}`}
+      target="_blank"
+      rel="noreferrer"
+      className="inline-flex items-center gap-1 text-[11px] font-mono text-[#d4af37] hover:text-amber-300 underline underline-offset-2 transition-colors"
+    >
+      {label}
+      <span className="text-zinc-500">{digest.slice(0, 6)}…</span>
+    </a>
+  );
+}
+
+// Autonomous bot-vs-bot blackjack. Reuses the casino table layout from PlayerGame,
+// but fed by useBlackjackBot() (off-chain state channel, no wallet/login). Bot A is
+// the player, bot B the dealer; there are no Hit/Stand controls — the bots self-play.
+export default function PlayerBot() {
+  const navigate = useNavigate();
+  const game = useBlackjackBot();
+  const { view, result, phase, error, digests, balances } = game;
+
+  const running =
+    phase === "funding" ||
+    phase === "opening" ||
+    phase === "playing" ||
+    phase === "settling";
+  // A game is mid-flight (tunnel opening through settling) — distinct from funding, which
+  // can run on the start screen before any game exists.
+  const inGame = phase === "opening" || phase === "playing" || phase === "settling";
+  const terminal = phase === "done" || result !== null;
+  const unfunded = balances.a === 0n || balances.b === 0n;
+  // The hook seeds an empty view; treat "no cards yet, no game in flight" as the start screen.
+  const started = view.playerCards.length > 0 || view.dealerCards.length > 0 || inGame;
+
+  const fundBtn = (
+    <button
+      onClick={game.fund}
+      disabled={phase === "funding"}
+      className="border-2 border-amber-500 text-[#d4af37] bg-amber-950/20 hover:bg-amber-500 hover:text-black px-6 py-3 rounded-lg text-sm font-black tracking-widest uppercase transition-all hover:scale-105 active:scale-95 cursor-pointer disabled:opacity-50 disabled:pointer-events-none"
+    >
+      Fund Bots
+    </button>
+  );
+
+  const playBtn = (
+    <button
+      onClick={game.newGame}
+      disabled={running || unfunded}
+      className="border-2 border-emerald-500 text-white bg-[#032a14]/65 hover:bg-emerald-500 hover:text-black px-6 py-3 rounded-lg text-sm font-black tracking-widest uppercase transition-all hover:scale-105 active:scale-95 cursor-pointer disabled:opacity-50 disabled:pointer-events-none"
+    >
+      Play
+    </button>
+  );
+
+  const autoBtn = game.auto ? (
+    <button
+      onClick={game.stopAuto}
+      className="border-2 border-rose-500 text-white bg-[#2d090c]/65 hover:bg-rose-500/20 px-6 py-3 rounded-lg text-sm font-black tracking-widest uppercase transition-all hover:scale-105 active:scale-95 cursor-pointer"
+    >
+      Stop
+    </button>
+  ) : (
+    <button
+      onClick={game.startAuto}
+      disabled={running || unfunded}
+      className="border-2 border-zinc-650 text-white bg-zinc-900/60 hover:bg-zinc-650/20 px-6 py-3 rounded-lg text-sm font-black tracking-widest uppercase transition-all hover:scale-105 active:scale-95 cursor-pointer disabled:opacity-50 disabled:pointer-events-none"
+    >
+      Auto
+    </button>
+  );
+
+  // Idle start screen: no game has run yet.
+  if (!started) {
+    return (
+      <div className="h-screen w-screen flex flex-col items-center justify-center relative text-white overflow-hidden select-none bg-zinc-950 bg-cover bg-center fade-in-up"
+        style={{ backgroundImage: "url('/dealer-desk.png')" }}
+      >
+        <div className="absolute inset-0 bg-black/60" />
+        <div className="relative z-10 flex flex-col items-center gap-6 bg-zinc-950/85 border border-zinc-800 rounded-2xl p-8 max-w-md w-full mx-4 shadow-2xl">
+          <h1 className="text-3xl font-extrabold text-[#d4af37] font-serif tracking-widest uppercase text-center">
+            Bot Arena
+          </h1>
+          <p className="text-sm text-zinc-400 text-center">
+            Watch two bots play blackjack autonomously on an off-chain state
+            channel, settled on Sui testnet. No wallet or login required.
+          </p>
+
+          <div className="flex flex-col items-center gap-1.5 text-xs font-mono text-zinc-400">
+            <span>
+              Player Bot: <span className="text-white">{suiOf(balances.a)} SUI</span>
+            </span>
+            <span>
+              Dealer Bot: <span className="text-white">{suiOf(balances.b)} SUI</span>
+            </span>
+          </div>
+
+          <div className="flex items-center gap-3">
+            {fundBtn}
+            {playBtn}
+            {autoBtn}
+          </div>
+
+          {phase === "funding" && (
+            <div className="text-xs text-[#d4af37] animate-pulse uppercase tracking-widest">
+              Funding bots from faucet…
+            </div>
+          )}
+          {error && (
+            <div className="text-xs text-rose-400 text-center max-w-full break-words">
+              {error}
+            </div>
+          )}
+          {unfunded && phase !== "funding" && !error && (
+            <div className="text-[11px] text-zinc-500 text-center">
+              Fund the bots from the testnet faucet to begin.
+            </div>
+          )}
+
+          <button
+            onClick={() => navigate("/")}
+            className="text-xs text-zinc-500 hover:text-white transition-colors font-semibold"
+          >
+            ← Back to menu
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const phaseLabel: Record<BotPhase, string> = {
+    idle: "Idle",
+    funding: "Funding bots…",
+    opening: "Opening tunnel…",
+    playing: "Playing…",
+    settling: "Settling on-chain…",
+    done: "Round complete",
+    error: "Error",
+  };
+
+  return (
+    <div className="h-screen w-screen flex flex-col relative text-white overflow-hidden select-none bg-zinc-950 fade-in-up">
+      {/* Play area: dealer-desk felt with dealer (top) and player (bottom) hands */}
+      <div
+        className="flex-1 w-full relative bg-cover bg-center"
+        style={{ backgroundImage: "url('/dealer-desk.png')" }}
+      >
+        {/* Back button */}
+        <button
+          onClick={() => navigate("/")}
+          className="absolute top-4 left-4 z-30 p-2.5 text-zinc-400 hover:text-white bg-black/60 hover:bg-black/85 rounded-full border border-zinc-800/85 transition-all shadow-md active:scale-95 flex items-center justify-center cursor-pointer"
+          title="Exit to menu"
+        >
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+          </svg>
+        </button>
+
+        {/* Round / phase badge */}
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 px-4 py-1.5 bg-black/70 backdrop-blur-sm border border-amber-950 rounded-full shadow-lg z-10 flex items-center gap-2">
+          <span className="text-[10px] md:text-xs text-[#d4af37] font-extrabold uppercase tracking-widest font-serif">
+            Round {view.round + 1}
+          </span>
+          <span className="text-[10px] text-zinc-400 uppercase tracking-widest">
+            · {phaseLabel[phase]}
+          </span>
+        </div>
+
+        {/* Dealer hand (top) */}
+        <div className="absolute top-[20%] md:top-[16%] left-1/2 -translate-x-1/2 z-20 w-full max-w-xs flex flex-col items-center">
+          <CardDisplay
+            title="Dealer Bot"
+            cards={view.dealerCards}
+            isWinning={result === "lose"}
+          />
+        </div>
+
+        {/* Result banner (center) */}
+        <div className="absolute top-[50%] left-1/2 -translate-x-1/2 -translate-y-1/2 z-20 flex items-center justify-center">
+          {terminal && result && (
+            <div className="select-none">
+              {result === "win" ? (
+                <div className="px-6 py-2 bg-emerald-950/90 border-2 border-emerald-500/80 text-emerald-400 font-bold rounded-full text-xs md:text-sm shadow-xl backdrop-blur-sm animate-bounce">
+                  Player Bot wins
+                </div>
+              ) : result === "lose" ? (
+                <div className="px-6 py-2 bg-rose-950/90 border-2 border-rose-500/80 text-rose-400 font-bold rounded-full text-xs md:text-sm shadow-xl backdrop-blur-sm">
+                  Dealer Bot wins
+                </div>
+              ) : (
+                <div className="px-6 py-2 bg-amber-950/90 border-2 border-amber-500/80 text-amber-400 font-bold rounded-full text-xs md:text-sm shadow-xl backdrop-blur-sm">
+                  Push
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Player hand (bottom) */}
+        <div className="absolute top-[70%] left-1/2 -translate-x-1/2 z-20 w-full max-w-xs flex flex-col items-center">
+          <CardDisplay
+            title="Player Bot"
+            cards={view.playerCards}
+            isPlayer
+            isWinning={result === "win"}
+          />
+        </div>
+      </div>
+
+      {/* Bottom HUD */}
+      <div className="w-full bg-zinc-950/95 backdrop-blur-md border-t border-zinc-800 shadow-[0_-10px_30px_rgba(0,0,0,0.95)] z-30 select-none px-4 md:px-8 py-3">
+        <div className="w-full flex flex-col md:flex-row items-center justify-between gap-3">
+          {/* Stakes + bot wallet balances */}
+          <div className="flex flex-row flex-wrap items-center justify-center gap-x-5 gap-y-1">
+            <div className="flex flex-col items-start gap-0.5">
+              <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-zinc-500">
+                <span>Player stake:</span>
+                <span className="text-white font-mono font-black">{view.playerBalance}</span>
+                <span className="text-zinc-600">({view.playerSum})</span>
+              </div>
+              <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-zinc-500">
+                <span>Dealer stake:</span>
+                <span className="text-white font-mono font-black">{view.dealerBalance}</span>
+                <span className="text-zinc-600">({view.dealerSum})</span>
+              </div>
+            </div>
+            <div className="flex flex-col items-start gap-0.5">
+              <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-zinc-500">
+                <span>Player wallet:</span>
+                <span className="text-white font-mono font-black">{suiOf(balances.a)} SUI</span>
+              </div>
+              <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-zinc-500">
+                <span>Dealer wallet:</span>
+                <span className="text-white font-mono font-black">{suiOf(balances.b)} SUI</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Controls */}
+          <div className="flex items-center gap-3">
+            {fundBtn}
+            {playBtn}
+            {autoBtn}
+          </div>
+        </div>
+
+        {/* Status + on-chain digests */}
+        <div className="w-full flex flex-col md:flex-row items-center justify-between gap-2 mt-2 pt-2 border-t border-zinc-850">
+          <div className="text-[11px] uppercase tracking-widest font-bold">
+            {phase === "error" || error ? (
+              <span className="text-rose-400 normal-case tracking-normal font-mono break-words">{error ?? "Error"}</span>
+            ) : (
+              <span className={running ? "text-[#d4af37] animate-pulse" : "text-zinc-500"}>
+                {phaseLabel[phase]}
+              </span>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center justify-end gap-x-4 gap-y-1">
+            <DigestLink label="create" digest={digests.create} />
+            <DigestLink label="depositA" digest={digests.depositA} />
+            <DigestLink label="depositB" digest={digests.depositB} />
+            <DigestLink label="close" digest={digests.close} />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
