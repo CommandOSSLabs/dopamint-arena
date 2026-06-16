@@ -134,3 +134,148 @@ fun one_funder_opens_and_activates_five_tunnels() {
     clock.destroy_for_testing();
     scenario.end();
 }
+
+// ---- Negative paths: create_and_fund must be wired to the same validators as `create`. ----
+// Each pins one failure mode of the shared param/deposit checks. The trailing cleanup never
+// runs (the call aborts) but is required to type-check the function.
+
+// A zero timeout would let funds be trapped forever, so it is rejected up front.
+#[
+    test,
+    expected_failure(
+        abort_code = sui_tunnel::tunnel::EInvalidTimeout,
+        location = sui_tunnel::tunnel,
+    ),
+]
+fun create_and_fund_rejects_zero_timeout() {
+    let mut scenario = test_scenario::begin(@0xF);
+    let mut clock = clock::create_for_testing(scenario.ctx());
+    clock.set_for_testing(1000);
+
+    let coin_a = coin::mint_for_testing<SUI>(1000, scenario.ctx());
+    let coin_b = coin::mint_for_testing<SUI>(250, scenario.ctx());
+
+    tunnel::create_and_fund<SUI>(
+        @0xA,
+        PK_A,
+        signature::ed25519(),
+        @0xB,
+        PK_B,
+        signature::ed25519(),
+        coin_a,
+        coin_b,
+        0, // zero timeout
+        0,
+        &clock,
+        scenario.ctx(),
+    );
+
+    clock.destroy_for_testing();
+    scenario.end();
+}
+
+// Both parties sharing one address is meaningless for a two-party channel.
+#[
+    test,
+    expected_failure(
+        abort_code = sui_tunnel::tunnel::EInvalidParties,
+        location = sui_tunnel::tunnel,
+    ),
+]
+fun create_and_fund_rejects_same_party() {
+    let mut scenario = test_scenario::begin(@0xF);
+    let mut clock = clock::create_for_testing(scenario.ctx());
+    clock.set_for_testing(1000);
+
+    let coin_a = coin::mint_for_testing<SUI>(1000, scenario.ctx());
+    let coin_b = coin::mint_for_testing<SUI>(250, scenario.ctx());
+
+    tunnel::create_and_fund<SUI>(
+        @0xA,
+        PK_A,
+        signature::ed25519(),
+        @0xA, // party_b == party_a
+        PK_B,
+        signature::ed25519(),
+        coin_a,
+        coin_b,
+        60000,
+        0,
+        &clock,
+        scenario.ctx(),
+    );
+
+    clock.destroy_for_testing();
+    scenario.end();
+}
+
+// A public key whose length does not match its scheme (ed25519 wants 32 bytes) is rejected.
+#[
+    test,
+    expected_failure(
+        abort_code = sui_tunnel::tunnel::EInvalidPublicKey,
+        location = sui_tunnel::tunnel,
+    ),
+]
+fun create_and_fund_rejects_bad_pubkey_length() {
+    let mut scenario = test_scenario::begin(@0xF);
+    let mut clock = clock::create_for_testing(scenario.ctx());
+    clock.set_for_testing(1000);
+
+    let coin_a = coin::mint_for_testing<SUI>(1000, scenario.ctx());
+    let coin_b = coin::mint_for_testing<SUI>(250, scenario.ctx());
+
+    tunnel::create_and_fund<SUI>(
+        @0xA,
+        x"AABB", // 2 bytes != 32 for ed25519
+        signature::ed25519(),
+        @0xB,
+        PK_B,
+        signature::ed25519(),
+        coin_a,
+        coin_b,
+        60000,
+        0,
+        &clock,
+        scenario.ctx(),
+    );
+
+    clock.destroy_for_testing();
+    scenario.end();
+}
+
+// A zero-value stake is below MIN_DEPOSIT, so the first deposit_internal aborts — the new
+// entry inherits the deposit-path guard rather than skipping it.
+#[
+    test,
+    expected_failure(
+        abort_code = sui_tunnel::tunnel::EMinimumDepositNotMet,
+        location = sui_tunnel::tunnel,
+    ),
+]
+fun create_and_fund_rejects_zero_value_coin() {
+    let mut scenario = test_scenario::begin(@0xF);
+    let mut clock = clock::create_for_testing(scenario.ctx());
+    clock.set_for_testing(1000);
+
+    let coin_a = coin::mint_for_testing<SUI>(0, scenario.ctx()); // below MIN_DEPOSIT
+    let coin_b = coin::mint_for_testing<SUI>(250, scenario.ctx());
+
+    tunnel::create_and_fund<SUI>(
+        @0xA,
+        PK_A,
+        signature::ed25519(),
+        @0xB,
+        PK_B,
+        signature::ed25519(),
+        coin_a,
+        coin_b,
+        60000,
+        0,
+        &clock,
+        scenario.ctx(),
+    );
+
+    clock.destroy_for_testing();
+    scenario.end();
+}

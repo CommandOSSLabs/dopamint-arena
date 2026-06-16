@@ -34,7 +34,7 @@ export function buildCreateAndFund(
     coinB: TransactionObjectArgument;
     timeoutMs: bigint;
     penaltyAmount?: bigint;
-  } & WithCoinType
+  } & WithCoinType,
 ): void {
   tx.moveCall({
     target: buildTarget(TUNNEL, "create_and_fund"),
@@ -55,7 +55,7 @@ export function buildCreateAndFund(
   });
 }
 
-/** One tunnel's open spec: both parties plus each side's stake (SUI MIST by default). */
+/** One tunnel's open spec: both parties plus each side's stake (coin's smallest unit). */
 export interface TunnelOpenSpec {
   partyA: PartyArgs;
   partyB: PartyArgs;
@@ -65,20 +65,50 @@ export interface TunnelOpenSpec {
   penaltyAmount?: bigint;
 }
 
+/** Coin selection for a batch open: which coin type, and which coin to split stakes from. */
+export interface BatchFundOptions {
+  /** Move type argument `T` for every tunnel; defaults to SUI. */
+  coinType?: string;
+  /**
+   * The `Coin<T>` to split all 2N stakes from. Omit only for SUI, where it defaults to the gas
+   * coin. Required for any non-SUI `coinType` — the gas coin is always `Coin<SUI>`, so non-SUI
+   * stakes must come from a coin the caller supplies (e.g. `tx.object(coinId)` or a split result).
+   */
+  sourceCoin?: TransactionObjectArgument;
+}
+
 /**
  * Assemble "open + fund + activate N tunnels in ONE PTB" into `tx`: a single `splitCoins`
- * of all 2N stakes off the gas coin, then one `create_and_fund` per spec. The whole batch
- * settles under one signature from the gas-paying wallet. SUI-only (funds come from gas).
+ * of all 2N stakes off one source coin, then one `create_and_fund` per spec. The whole batch
+ * settles under one signature from the funding wallet.
+ *
+ * Works with any coin type `T` (the contract's `create_and_fund<T>` is generic):
+ * - SUI (default): omit `opts`; stakes are split off the gas coin (`Coin<SUI>`).
+ * - Non-SUI: pass `opts.coinType` AND `opts.sourceCoin` (a `Coin<T>` to split from). The gas
+ *   coin can't fund a non-SUI batch, so a non-SUI `coinType` without a `sourceCoin` throws rather
+ *   than building a tx whose `Coin<SUI>` arguments are typed `<T>` and abort on-chain.
+ *
+ * Scale note: each spec adds one `splitCoins` output and one `moveCall`, so a very large
+ * `specs.length` approaches the PTB command/argument ceilings — keep batches modest.
  */
 export function buildOpenAndFundMany(
   tx: Transaction,
   specs: TunnelOpenSpec[],
-  coinType?: string
+  opts: BatchFundOptions = {},
 ): void {
+  const coinType = opts.coinType ?? SUI_COIN_TYPE;
+  if (coinType !== SUI_COIN_TYPE && !opts.sourceCoin) {
+    throw new Error(
+      `buildOpenAndFundMany: coinType ${coinType} is not SUI, so opts.sourceCoin (a Coin<${coinType}> ` +
+        `to split stakes from) is required — non-SUI stakes cannot come from the gas coin.`,
+    );
+  }
+  // SUI defaults to the gas coin; any other type splits from the caller-supplied coin.
+  const source = opts.sourceCoin ?? tx.gas;
   const amounts = specs.flatMap((s) => [s.aAmount, s.bAmount]);
   const coins = tx.splitCoins(
-    tx.gas,
-    amounts.map((a) => tx.pure.u64(a))
+    source,
+    amounts.map((a) => tx.pure.u64(a)),
   );
   specs.forEach((s, i) => {
     buildCreateAndFund(tx, {
