@@ -133,18 +133,23 @@ export default function Home() {
 
           {/* On-chain tunnel demos, no login required: play the dealer yourself, or watch
               two bots self-play. */}
-          <div className="mt-4 flex flex-col items-center gap-2">
+          <div className="mt-6 w-full space-y-3">
+            <div className="flex items-center gap-3 text-[10px] text-zinc-500 font-bold uppercase tracking-wider">
+              <span className="h-px flex-1 bg-zinc-800" />
+              On-chain · no login
+              <span className="h-px flex-1 bg-zinc-800" />
+            </div>
             <button
               onClick={() => navigate("/play")}
-              className="text-sm text-gold hover:text-amber-300 transition-colors font-bold uppercase tracking-wider"
+              className="w-full bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-zinc-950 font-black py-4 rounded-xl text-base uppercase tracking-widest shadow-lg transition-all gold-glow-hover active:scale-95"
             >
-              Play vs Dealer →
+              🃏 Play vs Dealer
             </button>
             <button
               onClick={() => navigate("/bot")}
-              className="text-xs text-zinc-500 hover:text-gold transition-colors font-semibold uppercase tracking-wider"
+              className="w-full bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white border border-zinc-800 font-bold py-3 rounded-xl text-sm uppercase tracking-wider transition-all active:scale-95"
             >
-              Watch Bot Arena →
+              👀 Watch Bot Arena
             </button>
           </div>
         </div>
