@@ -159,6 +159,7 @@ export const githubEnv = dns.zoneId
       ecsCluster: ecs.clusterName,
       ecsService: backendService.serviceName,
       migrationTaskDef: backend.migrationTaskDefinitionArn,
+      backendTaskDefArn: backend.taskDefinitionArn,
       githubDeployRoleArn: iam.githubDeployRoleArn,
       privateSubnetIds: network.privateSubnetIds,
       backendSecurityGroupId: sgs.backend.id,
