@@ -1,4 +1,5 @@
-import { describe, expect, it } from "bun:test";
+import { describe, it } from "node:test";
+import assert from "node:assert/strict";
 import { createRouter, json } from "./router";
 
 const ORIGIN = "http://localhost:5173";
@@ -10,21 +11,21 @@ describe("router", () => {
 
   it("routes a matching request", async () => {
     const res = await router(new Request("http://x/api/ping"));
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true });
-    expect(res.headers.get("Access-Control-Allow-Origin")).toBe(ORIGIN);
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), { ok: true });
+    assert.equal(res.headers.get("Access-Control-Allow-Origin"), ORIGIN);
   });
 
   it("returns 404 for unknown path", async () => {
     const res = await router(new Request("http://x/api/nope"));
-    expect(res.status).toBe(404);
+    assert.equal(res.status, 404);
   });
 
   it("answers CORS preflight with 204", async () => {
     const res = await router(
       new Request("http://x/api/ping", { method: "OPTIONS" })
     );
-    expect(res.status).toBe(204);
-    expect(res.headers.get("Access-Control-Allow-Methods")).toContain("POST");
+    assert.equal(res.status, 204);
+    assert.ok(res.headers.get("Access-Control-Allow-Methods")?.includes("POST"));
   });
 });
