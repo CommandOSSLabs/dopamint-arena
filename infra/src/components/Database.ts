@@ -31,7 +31,7 @@ export function createDatabase(
 
   new aws.secretsmanager.SecretVersion(`${name}-db-secret-version`, {
     secretId: dbSecret.id,
-    secretString: pulumi.all([dbPassword.result]).apply(([pwd]) =>
+    secretString: dbPassword.result.apply((pwd) =>
       JSON.stringify({ username: "dopamint", password: pwd })
     ),
   });

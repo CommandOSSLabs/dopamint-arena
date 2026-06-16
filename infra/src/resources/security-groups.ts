@@ -39,6 +39,7 @@ export function createSecurityGroups(
       { protocol: "tcp", fromPort: 5432, toPort: 5432, securityGroups: [backend.id] },
       { protocol: "tcp", fromPort: 5432, toPort: 5432, self: true },
     ],
+    egress: [{ protocol: "-1", fromPort: 0, toPort: 0, cidrBlocks: ["0.0.0.0/0"] }],
   });
 
   const benchmark = new aws.ec2.SecurityGroup(`${name}-benchmark-sg`, {
