@@ -6,6 +6,7 @@ import { createSecurityGroups } from "./resources/security-groups.js";
 import { createAlb } from "./resources/alb.js";
 import { createIam } from "./resources/iam.js";
 import { createEcr } from "./resources/ecr.js";
+import { createEcs } from "./resources/ecs.js";
 import { createFrontend } from "./components/Frontend.js";
 import { createDatabase } from "./components/Database.js";
 import { createDatabaseProxy } from "./components/DatabaseProxy.js";
@@ -49,6 +50,7 @@ const iam = createIam(`dopamint-${cfg.environment}`, {
 });
 
 const ecr = createEcr(`dopamint-${cfg.environment}`);
+const ecs = createEcs(`dopamint-${cfg.environment}`);
 
 const dbProxy = createDatabaseProxy(`dopamint-${cfg.environment}`, {
   subnetIds: network.privateSubnetIds,
@@ -77,3 +79,5 @@ export const dbProxyEndpoint = dbProxy.proxyEndpoint;
 export const pubSubEndpoint = cache.pubSubEndpoint;
 export const cacheEndpoint = cache.cacheEndpoint;
 export const backendRepositoryUrl = ecr.repositoryUrl;
+export const clusterName = ecs.clusterName;
+export const backendLogGroup = ecs.logGroupName;
