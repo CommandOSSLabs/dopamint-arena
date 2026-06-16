@@ -11,6 +11,7 @@ import { createFrontend } from "./components/Frontend.js";
 import { createDatabase } from "./components/Database.js";
 import { createDatabaseProxy } from "./components/DatabaseProxy.js";
 import { createCache } from "./components/Cache.js";
+import { createBackend } from "./components/Backend.js";
 
 const cfg = getConfig();
 const network = createNetwork(`dopamint-${cfg.environment}`);
@@ -65,6 +66,19 @@ const cache = createCache(`dopamint-${cfg.environment}`, {
   nodeType: cfg.cacheNodeType,
 });
 
+const backend = createBackend({
+  name: `dopamint-${cfg.environment}`,
+  repositoryUrl: ecr.repositoryUrl,
+  imageTag: cfg.backendImageTag,
+  dbProxyEndpoint: dbProxy.proxyEndpoint,
+  dbSecretArn: database.dbPasswordSecretArn,
+  pubSubEndpoint: cache.pubSubEndpoint,
+  cacheEndpoint: cache.cacheEndpoint,
+  taskExecutionRoleArn: iam.taskExecutionRole.arn,
+  taskRoleArn: iam.taskRole.arn,
+  logGroupName: ecs.logGroupName,
+});
+
 export const vpcId = network.vpcId;
 export const privateSubnetIds = network.privateSubnetIds;
 export const publicSubnetIds = network.publicSubnetIds;
@@ -81,3 +95,5 @@ export const cacheEndpoint = cache.cacheEndpoint;
 export const backendRepositoryUrl = ecr.repositoryUrl;
 export const clusterName = ecs.clusterName;
 export const backendLogGroup = ecs.logGroupName;
+export const backendTaskDefinitionArn = backend.taskDefinitionArn;
+export const migrationTaskDefinitionArn = backend.migrationTaskDefinitionArn;
