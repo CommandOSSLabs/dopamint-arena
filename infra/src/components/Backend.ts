@@ -2,7 +2,9 @@ import * as aws from "@pulumi/aws";
 import * as pulumi from "@pulumi/pulumi";
 
 export interface BackendOutputs {
+  taskDefinition: aws.ecs.TaskDefinition;
   taskDefinitionArn: pulumi.Output<string>;
+  migrationTaskDefinition: aws.ecs.TaskDefinition;
   migrationTaskDefinitionArn: pulumi.Output<string>;
 }
 
@@ -141,7 +143,9 @@ export function createBackend(args: BackendArgs): BackendOutputs {
   });
 
   return {
+    taskDefinition,
     taskDefinitionArn: taskDefinition.arn,
+    migrationTaskDefinition,
     migrationTaskDefinitionArn: migrationTaskDefinition.arn,
   };
 }
