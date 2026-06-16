@@ -1,6 +1,13 @@
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import {
+  ConnectButton,
+  useCurrentAccount,
+  useSignAndExecuteTransaction,
+} from "@mysten/dapp-kit";
 import { CardDisplay } from "@/components/app/CardDisplay";
 import { useBlackjackBot, type BotPhase } from "@/hooks/useBlackjackBot";
+import { loadOrCreateBots, buildFundTx, FUND_PER_BOT_MIST } from "@/lib/bjBots";
 
 // Render MIST (bigint) as a short SUI string. 1 SUI = 1e9 MIST.
 function suiOf(mist: bigint): string {
@@ -34,6 +41,39 @@ export default function PlayerBot() {
   const navigate = useNavigate();
   const game = useBlackjackBot();
   const { view, result, phase, error, digests, balances } = game;
+
+  // Wallet funding: send FUND_PER_BOT_MIST to each bot from the connected wallet's gas
+  // coin. Persistent bot keys mean one top-up covers many games (deposits are refunded).
+  const account = useCurrentAccount();
+  const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
+  const [walletFunding, setWalletFunding] = useState(false);
+  const [walletError, setWalletError] = useState<string | null>(null);
+  const fundTotalSui = ((FUND_PER_BOT_MIST * 2) / 1e9).toLocaleString();
+
+  const fundFromWallet = async () => {
+    setWalletFunding(true);
+    setWalletError(null);
+    try {
+      await signAndExecute({ transaction: buildFundTx(loadOrCreateBots()) });
+      await game.refresh();
+    } catch (e) {
+      setWalletError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setWalletFunding(false);
+    }
+  };
+
+  const walletFundEl = account ? (
+    <button
+      onClick={fundFromWallet}
+      disabled={walletFunding}
+      className="border-2 border-amber-500 text-black bg-[#d4af37] hover:bg-amber-400 px-6 py-3 rounded-lg text-sm font-black tracking-widest uppercase transition-all hover:scale-105 active:scale-95 cursor-pointer disabled:opacity-50 disabled:pointer-events-none"
+    >
+      {walletFunding ? "Funding…" : `Fund bots from wallet (${fundTotalSui} SUI)`}
+    </button>
+  ) : (
+    <ConnectButton connectText="Connect wallet" />
+  );
 
   const running =
     phase === "funding" ||
@@ -110,12 +150,20 @@ export default function PlayerBot() {
             </span>
           </div>
 
-          <div className="flex items-center gap-3">
-            {fundBtn}
-            {playBtn}
-            {autoBtn}
+          <div className="flex flex-col items-center gap-2 w-full">
+            {walletFundEl}
+            <div className="flex items-center gap-3">
+              {fundBtn}
+              {playBtn}
+              {autoBtn}
+            </div>
           </div>
 
+          {walletError && (
+            <div className="text-xs text-rose-400 text-center max-w-full break-words">
+              {walletError}
+            </div>
+          )}
           {phase === "funding" && (
             <div className="text-xs text-[#d4af37] animate-pulse uppercase tracking-widest">
               Funding bots from faucet…
@@ -252,7 +300,8 @@ export default function PlayerBot() {
           </div>
 
           {/* Controls */}
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center justify-center gap-3">
+            {walletFundEl}
             {fundBtn}
             {playBtn}
             {autoBtn}
@@ -262,8 +311,8 @@ export default function PlayerBot() {
         {/* Status + on-chain digests */}
         <div className="w-full flex flex-col md:flex-row items-center justify-between gap-2 mt-2 pt-2 border-t border-zinc-850">
           <div className="text-[11px] uppercase tracking-widest font-bold">
-            {phase === "error" || error ? (
-              <span className="text-rose-400 normal-case tracking-normal font-mono break-words">{error ?? "Error"}</span>
+            {phase === "error" || error || walletError ? (
+              <span className="text-rose-400 normal-case tracking-normal font-mono break-words">{error ?? walletError ?? "Error"}</span>
             ) : (
               <span className={running ? "text-[#d4af37] animate-pulse" : "text-zinc-500"}>
                 {phaseLabel[phase]}

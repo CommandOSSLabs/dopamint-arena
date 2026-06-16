@@ -185,9 +185,25 @@ export default function App() {
 
   return (
     <Routes>
-      {/* Bot Arena is self-contained (its own bot keypairs + SuiClient): no enoki/wallet/
-          auth, so it mounts bare, outside the gated provider stack and layouts. */}
-      <Route path="/bot" element={<PlayerBot />} />
+      {/* Bot Arena runs its own bot keypairs + SuiClient (no enoki/auth gate), but the
+          "fund bots from wallet" action needs a connected wallet. Mount it under the
+          minimal dapp-kit stack — query + SuiClient + WalletProvider — without enoki,
+          AuthenticationProvider, or the app layouts. */}
+      <Route
+        path="/bot"
+        element={
+          <QueryClientProvider client={queryClient}>
+            <SuiClientProvider
+              networks={networkConfig}
+              defaultNetwork={clientConfig.SUI_NETWORK_NAME}
+            >
+              <WalletProvider autoConnect storage={sessionStorageAdapter}>
+                <PlayerBot />
+              </WalletProvider>
+            </SuiClientProvider>
+          </QueryClientProvider>
+        }
+      />
       <Route
         path="*"
         element={
