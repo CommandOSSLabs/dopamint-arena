@@ -12,6 +12,7 @@ import { createDatabase } from "./components/Database.js";
 import { createDatabaseProxy } from "./components/DatabaseProxy.js";
 import { createCache } from "./components/Cache.js";
 import { createBackend } from "./components/Backend.js";
+import { createBackendService } from "./components/BackendService.js";
 
 const cfg = getConfig();
 const network = createNetwork(`dopamint-${cfg.environment}`);
@@ -79,6 +80,16 @@ const backend = createBackend({
   logGroupName: ecs.logGroupName,
 });
 
+const backendService = createBackendService({
+  name: `dopamint-${cfg.environment}`,
+  clusterId: ecs.clusterArn,
+  taskDefinitionArn: backend.taskDefinitionArn,
+  targetGroupArn: alb.targetGroup.arn,
+  securityGroupId: sgs.backend.id,
+  subnetIds: network.privateSubnetIds,
+  listener: alb.httpsListener,
+});
+
 export const vpcId = network.vpcId;
 export const privateSubnetIds = network.privateSubnetIds;
 export const publicSubnetIds = network.publicSubnetIds;
@@ -97,3 +108,4 @@ export const clusterName = ecs.clusterName;
 export const backendLogGroup = ecs.logGroupName;
 export const backendTaskDefinitionArn = backend.taskDefinitionArn;
 export const migrationTaskDefinitionArn = backend.migrationTaskDefinitionArn;
+export const backendServiceName = backendService.serviceName;
