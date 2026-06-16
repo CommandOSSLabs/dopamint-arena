@@ -15,6 +15,7 @@ import { createBackend } from "./components/Backend.js";
 import { createBackendService } from "./components/BackendService.js";
 import { createBackendAlias } from "./components/BackendAlias.js";
 import { createMonitoring } from "./components/Monitoring.js";
+import { githubEnvOutputs } from "./github.js";
 
 const cfg = getConfig();
 const network = createNetwork(`dopamint-${cfg.environment}`);
@@ -129,6 +130,24 @@ export const backendLogGroup = ecs.logGroupName;
 export const backendTaskDefinitionArn = backend.taskDefinitionArn;
 export const migrationTaskDefinitionArn = backend.migrationTaskDefinitionArn;
 export const backendServiceName = backendService.serviceName;
+
+const backendApiDomain = pulumi.interpolate`api.${cfg.domain}`;
 export const backendUrl = dns.zoneId
-  ? pulumi.interpolate`https://api.${cfg.domain}`
+  ? pulumi.interpolate`https://${backendApiDomain}`
+  : undefined;
+
+export const githubEnv = dns.zoneId
+  ? githubEnvOutputs({
+      backendUrl: backendApiDomain,
+      frontendDomain: cfg.domain,
+      frontendBucket: frontend.bucketName,
+      cloudfrontId: frontend.distributionId,
+      ecrUrl: ecr.repositoryUrl,
+      ecsCluster: ecs.clusterName,
+      ecsService: backendService.serviceName,
+      migrationTaskDef: backend.migrationTaskDefinitionArn,
+      githubDeployRoleArn: iam.githubDeployRoleArn,
+      privateSubnetIds: network.privateSubnetIds,
+      backendSecurityGroupId: sgs.backend.id,
+    })
   : undefined;
