@@ -15,6 +15,7 @@ import { createBackend } from "./components/Backend.js";
 import { createBackendService } from "./components/BackendService.js";
 import { createBackendAlias } from "./components/BackendAlias.js";
 import { createMonitoring } from "./components/Monitoring.js";
+import { createBenchmarkFleet } from "./components/BenchmarkFleet.js";
 import { githubEnvOutputs } from "./github.js";
 
 const cfg = getConfig();
@@ -151,3 +152,11 @@ export const githubEnv = dns.zoneId
       backendSecurityGroupId: sgs.backend.id,
     })
   : undefined;
+
+const benchmarkFleet = createBenchmarkFleet({
+  name: `dopamint-${cfg.environment}`,
+  imageBuilderRoleArn: iam.imageBuilderRole.arn,
+  imageBuilderProfileName: iam.imageBuilderProfile.name,
+});
+
+export const benchmarkComponentArn = benchmarkFleet.componentArn;
