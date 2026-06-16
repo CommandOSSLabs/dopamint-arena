@@ -3,6 +3,7 @@ import * as pulumi from "@pulumi/pulumi";
 
 export interface DatabaseProxyOutputs {
   proxyEndpoint: pulumi.Output<string>;
+  proxyName: pulumi.Output<string>;
 }
 
 export function createDatabaseProxy(
@@ -63,5 +64,5 @@ export function createDatabaseProxy(
     targetGroupName: "default",
   });
 
-  return { proxyEndpoint: proxy.endpoint };
+  return { proxyEndpoint: proxy.endpoint, proxyName: proxy.name };
 }

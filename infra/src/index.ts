@@ -131,6 +131,12 @@ export const backendLogGroup = ecs.logGroupName;
 export const backendTaskDefinitionArn = backend.taskDefinitionArn;
 export const migrationTaskDefinitionArn = backend.migrationTaskDefinitionArn;
 export const backendServiceName = backendService.serviceName;
+export const backendTargetGroupArn = alb.targetGroup.arn;
+export const backendSecurityGroupId = sgs.backend.id;
+export const dbClusterIdentifier = database.clusterIdentifier;
+export const dbSubnetGroupName = database.dbSubnetGroupName;
+export const dbSecurityGroupId = sgs.db.id;
+export const dbProxyName = dbProxy.proxyName;
 
 const backendApiDomain = pulumi.interpolate`api.${cfg.domain}`;
 export const backendUrl = dns.zoneId
@@ -168,5 +174,6 @@ export const githubEnv = dns.zoneId
   : undefined;
 
 export const benchmarkAsgName = benchmarkFleet.asgName;
+export const benchmarkMinSize = cfg.benchmarkMinSize;
 export const benchmarkComponentArn = benchmarkFleet.componentArn;
 export const benchmarkPipelineArn = benchmarkFleet.pipelineArn;

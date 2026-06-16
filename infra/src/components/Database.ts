@@ -7,6 +7,7 @@ export interface DatabaseOutputs {
   clusterEndpoint: pulumi.Output<string>;
   dbSecretArn: pulumi.Output<string>; // JSON credentials for RDS Proxy
   dbPasswordSecretArn: pulumi.Output<string>; // Plaintext password for ECS
+  dbSubnetGroupName: pulumi.Output<string>;
 }
 
 export function createDatabase(
@@ -82,5 +83,6 @@ export function createDatabase(
     clusterEndpoint: cluster.endpoint,
     dbSecretArn: dbSecret.arn,
     dbPasswordSecretArn: dbPasswordSecret.arn,
+    dbSubnetGroupName: subnetGroup.name,
   };
 }
