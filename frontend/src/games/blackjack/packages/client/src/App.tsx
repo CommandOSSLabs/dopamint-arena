@@ -26,6 +26,7 @@ import DealerUtils from "@/pages/DealerUtils";
 import Player from "@/pages/Player";
 import PlayerGame from "@/pages/PlayerGame";
 import PlayerBot from "@/pages/PlayerBot";
+import PlayerVsDealer from "@/pages/PlayerVsDealer";
 import PlayerHex from "@/pages/PlayerHex";
 import PlayerPoc from "@/pages/PlayerPoc";
 import Transfer from "@/pages/Transfer";
@@ -199,6 +200,23 @@ export default function App() {
             >
               <WalletProvider autoConnect storage={sessionStorageAdapter}>
                 <PlayerBot />
+              </WalletProvider>
+            </SuiClientProvider>
+          </QueryClientProvider>
+        }
+      />
+      {/* Play vs Dealer: same minimal dapp-kit stack as /bot (no enoki/auth gate). The
+          human plays party A's Hit/Stand against an auto-resolving dealer over the tunnel. */}
+      <Route
+        path="/play"
+        element={
+          <QueryClientProvider client={queryClient}>
+            <SuiClientProvider
+              networks={networkConfig}
+              defaultNetwork={clientConfig.SUI_NETWORK_NAME}
+            >
+              <WalletProvider autoConnect storage={sessionStorageAdapter}>
+                <PlayerVsDealer />
               </WalletProvider>
             </SuiClientProvider>
           </QueryClientProvider>

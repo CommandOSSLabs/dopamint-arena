@@ -131,13 +131,22 @@ export default function Home() {
             </div>
           )}
 
-          {/* Bot Arena: bot-vs-bot demo, no login required. */}
-          <button
-            onClick={() => navigate("/bot")}
-            className="mt-4 text-xs text-zinc-500 hover:text-gold transition-colors font-semibold uppercase tracking-wider"
-          >
-            Watch Bot Arena →
-          </button>
+          {/* On-chain tunnel demos, no login required: play the dealer yourself, or watch
+              two bots self-play. */}
+          <div className="mt-4 flex flex-col items-center gap-2">
+            <button
+              onClick={() => navigate("/play")}
+              className="text-sm text-gold hover:text-amber-300 transition-colors font-bold uppercase tracking-wider"
+            >
+              Play vs Dealer →
+            </button>
+            <button
+              onClick={() => navigate("/bot")}
+              className="text-xs text-zinc-500 hover:text-gold transition-colors font-semibold uppercase tracking-wider"
+            >
+              Watch Bot Arena →
+            </button>
+          </div>
         </div>
       </GameCardScale>
 
