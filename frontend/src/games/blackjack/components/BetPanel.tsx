@@ -32,7 +32,7 @@ export function BetPanel({ onDeal }: { onDeal: (stake: number) => void }) {
             min={100}
             step={100}
             value={stake}
-            onChange={(e) => setStake(Number(e.target.value))}
+            onChange={(e) => setStake(Number(e.target.value) || 0)}
             className="w-40 rounded border border-arena-edge bg-arena-bg px-2 py-1.5 text-center font-mono text-arena-text"
           />
         </label>

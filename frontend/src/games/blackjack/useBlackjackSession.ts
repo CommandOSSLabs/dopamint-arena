@@ -64,7 +64,11 @@ export function useBlackjackSession(): BlackjackSession {
     (nextStake: number) => {
       stopTimer();
       // Stake must cover at least one wager; clamp to a whole, fundable amount.
-      const stakeBig = BigInt(Math.max(Number(WAGER), Math.floor(nextStake)));
+      // Guard against NaN/Infinity (e.g. a cleared input) so BigInt never throws.
+      const floored = Math.floor(nextStake);
+      const stakeBig = BigInt(
+        Math.max(Number(WAGER), Number.isFinite(floored) ? floored : 0),
+      );
       stakeRef.current = stakeBig;
       setStake(Number(stakeBig));
 
