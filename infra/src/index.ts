@@ -155,8 +155,12 @@ export const githubEnv = dns.zoneId
 
 const benchmarkFleet = createBenchmarkFleet({
   name: `dopamint-${cfg.environment}`,
-  imageBuilderRoleArn: iam.imageBuilderRole.arn,
   imageBuilderProfileName: iam.imageBuilderProfile.name,
+  instanceType: cfg.benchmarkInstanceType,
+  securityGroupId: sgs.benchmark.id,
+  subnetIds: network.privateSubnetIds,
+  version: "1.0.0",
 });
 
 export const benchmarkComponentArn = benchmarkFleet.componentArn;
+export const benchmarkPipelineArn = benchmarkFleet.pipelineArn;
