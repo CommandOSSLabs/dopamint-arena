@@ -6,8 +6,16 @@ import {
   useSignAndExecuteTransaction,
 } from "@mysten/dapp-kit";
 import { CardDisplay } from "@/components/app/CardDisplay";
-import { useBlackjackBot, type BotPhase } from "@/hooks/useBlackjackBot";
+import {
+  useBlackjackBot,
+  type BotPhase,
+  MIN_ROUNDS_PER_TUNNEL,
+  MAX_ROUNDS_PER_TUNNEL,
+} from "@/hooks/useBlackjackBot";
 import { loadOrCreateBots, buildFundTx, FUND_PER_BOT_MIST } from "@/lib/bjBots";
+
+// Quick-pick targets for rounds played off-chain per tunnel before it settles once.
+const ROUND_PRESETS = [5, 10, 25, 50, 100];
 
 // Render MIST (bigint) as a short SUI string. 1 SUI = 1e9 MIST.
 function suiOf(mist: bigint): string {
@@ -54,8 +62,18 @@ function DigestLink({ label, digest }: { label: string; digest?: string }) {
 export default function PlayerBot() {
   const navigate = useNavigate();
   const game = useBlackjackBot();
-  const { view, result, rounds, phase, error, fundNote, digests, balances } =
-    game;
+  const {
+    view,
+    result,
+    rounds,
+    phase,
+    error,
+    fundNote,
+    digests,
+    balances,
+    maxRounds,
+    setMaxRounds,
+  } = game;
   const latestRound = rounds.length > 0 ? rounds[rounds.length - 1] : null;
 
   // Wallet funding: send FUND_PER_BOT_MIST to each bot from the connected wallet's gas
@@ -154,6 +172,49 @@ export default function PlayerBot() {
     </button>
   );
 
+  // Rounds-per-tunnel selector: presets plus a clamped custom value. Disabled while a game is
+  // in flight — the running tunnel already captured its target, so edits apply to the next run.
+  const isPreset = ROUND_PRESETS.includes(maxRounds);
+  const roundsSelector = (
+    <div className="flex items-center gap-2">
+      <label
+        htmlFor="rounds-per-tunnel"
+        className="text-[11px] font-bold uppercase tracking-wider text-zinc-500"
+      >
+        Rounds per tunnel
+      </label>
+      <select
+        id="rounds-per-tunnel"
+        name="rounds-per-tunnel"
+        value={isPreset ? String(maxRounds) : "custom"}
+        onChange={(e) => {
+          if (e.target.value !== "custom") setMaxRounds(Number(e.target.value));
+        }}
+        disabled={inGame}
+        className="bg-zinc-900 border border-zinc-700 text-white text-xs font-mono rounded-md px-2 py-1.5 focus:outline-none focus:border-[#d4af37] disabled:opacity-50 disabled:pointer-events-none cursor-pointer"
+      >
+        {ROUND_PRESETS.map((n) => (
+          <option key={n} value={n}>
+            {n}
+          </option>
+        ))}
+        <option value="custom">Custom…</option>
+      </select>
+      <input
+        id="rounds-per-tunnel-custom"
+        name="rounds-per-tunnel-custom"
+        type="number"
+        min={MIN_ROUNDS_PER_TUNNEL}
+        max={MAX_ROUNDS_PER_TUNNEL}
+        value={maxRounds}
+        onChange={(e) => setMaxRounds(Number(e.target.value))}
+        disabled={inGame}
+        title={`Custom rounds (${MIN_ROUNDS_PER_TUNNEL}–${MAX_ROUNDS_PER_TUNNEL})`}
+        className="w-16 bg-zinc-900 border border-zinc-700 text-white text-xs font-mono tabular-nums rounded-md px-2 py-1.5 focus:outline-none focus:border-[#d4af37] disabled:opacity-50 disabled:pointer-events-none"
+      />
+    </div>
+  );
+
   // Idle start screen: no game has run yet.
   if (!started) {
     return (
@@ -182,6 +243,7 @@ export default function PlayerBot() {
 
           <div className="flex flex-col items-center gap-2 w-full">
             {walletFundEl}
+            {roundsSelector}
             <div className="flex items-center gap-3">
               {fundBtn}
               {playBtn}
@@ -257,7 +319,7 @@ export default function PlayerBot() {
         {/* Round / phase badge */}
         <div className="absolute top-4 left-1/2 -translate-x-1/2 px-4 py-1.5 bg-black/70 backdrop-blur-sm border border-amber-950 rounded-full shadow-lg z-10 flex items-center gap-2">
           <span className="text-[10px] md:text-xs text-[#d4af37] font-extrabold uppercase tracking-widest font-serif">
-            Round {view.round + 1}
+            Round {Math.min(rounds.length + (terminal ? 0 : 1), maxRounds)} / {maxRounds}
           </span>
           <span className="text-[10px] text-zinc-400 uppercase tracking-widest">
             · {phaseLabel[phase]}
@@ -391,6 +453,7 @@ export default function PlayerBot() {
 
           {/* Controls */}
           <div className="flex flex-wrap items-center justify-center gap-3">
+            {roundsSelector}
             {walletFundEl}
             {fundBtn}
             {playBtn}

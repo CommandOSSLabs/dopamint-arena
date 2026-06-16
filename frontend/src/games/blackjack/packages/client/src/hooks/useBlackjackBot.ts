@@ -71,6 +71,8 @@ export interface BlackjackBotGame {
   digests: BotDigests;
   balances: { a: bigint; b: bigint };
   auto: boolean;
+  maxRounds: number;
+  setMaxRounds: (n: number) => void;
   fund: () => void;
   startAuto: () => void;
   stopAuto: () => void;
@@ -95,6 +97,11 @@ const POLL_BALANCES_MS = 1500;
 const POLL_BALANCES_TRIES = 8;
 // Safety bound: the protocol caps rounds, but never spin forever on a logic bug.
 const MAX_STEPS = 5000;
+// Default number of rounds to play off-chain in one tunnel before auto-settling.
+const DEFAULT_MAX_ROUNDS = 10;
+// User-selectable range for the "rounds per tunnel" control.
+export const MIN_ROUNDS_PER_TUNNEL = 1;
+export const MAX_ROUNDS_PER_TUNNEL = 500;
 
 function viewFromState(state: State): BlackjackBotView {
   const round = Number(state.round);
@@ -138,12 +145,26 @@ export function useBlackjackBot(): BlackjackBotGame {
     b: 0n,
   });
   const [auto, setAuto] = useState(false);
+  const [maxRounds, setMaxRoundsState] = useState(DEFAULT_MAX_ROUNDS);
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const nextRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoRef = useRef(false); // mirror of `auto` readable inside async flows
   const balancesRef = useRef<{ a: bigint; b: bigint }>({ a: 0n, b: 0n });
   const runRef = useRef<() => void>(() => {});
+  // Mirror of `maxRounds` so the play loop reads the live target without rebuilding runGame.
+  const maxRoundsRef = useRef(DEFAULT_MAX_ROUNDS);
+
+  // Clamp the rounds-per-tunnel target to a sane range so a custom input can't request 0 or
+  // an unbounded number of rounds in a single tunnel.
+  const setMaxRounds = useCallback((n: number) => {
+    const clamped = Math.max(
+      MIN_ROUNDS_PER_TUNNEL,
+      Math.min(MAX_ROUNDS_PER_TUNNEL, Math.floor(Number.isFinite(n) ? n : DEFAULT_MAX_ROUNDS)),
+    );
+    maxRoundsRef.current = clamped;
+    setMaxRoundsState(clamped);
+  }, []);
 
   const stopTimer = useCallback(() => {
     if (timerRef.current !== null) {
@@ -311,8 +332,11 @@ export function useBlackjackBot(): BlackjackBotGame {
         // The dealer ('dealer' phase) moves as B, everyone else as A.
         setPhase("playing");
         setView(viewFromState(tunnel.state));
+        // Stop after this many completed rounds in the single tunnel, then settle once.
+        const roundsTarget = maxRoundsRef.current;
         await new Promise<void>((resolve, reject) => {
           let steps = 0;
+          let completedRounds = 0;
           timerRef.current = setInterval(() => {
             try {
               if (proto.isTerminal(tunnel.state)) {
@@ -353,9 +377,16 @@ export function useBlackjackBot(): BlackjackBotGame {
                 setRounds((prev) =>
                   [...prev, settled].slice(-MAX_ROUNDS_LOGGED),
                 );
+                completedRounds++;
               }
               setView(viewFromState(tunnel.state));
-              if (proto.isTerminal(tunnel.state)) {
+              // Stop once a bot is bankrupt (terminal) or we've played the requested number
+              // of rounds — whichever comes first. Stopping on `round_over` keeps the cut on a
+              // clean round boundary, then the existing settle path runs once.
+              if (
+                proto.isTerminal(tunnel.state) ||
+                (s.phase === "round_over" && completedRounds >= roundsTarget)
+              ) {
                 stopTimer();
                 resolve();
               }
@@ -454,6 +485,8 @@ export function useBlackjackBot(): BlackjackBotGame {
     digests,
     balances,
     auto,
+    maxRounds,
+    setMaxRounds,
     fund,
     startAuto,
     stopAuto,
