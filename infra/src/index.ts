@@ -8,6 +8,7 @@ import { createIam } from "./resources/iam.js";
 import { createFrontend } from "./components/Frontend.js";
 import { createDatabase } from "./components/Database.js";
 import { createDatabaseProxy } from "./components/DatabaseProxy.js";
+import { createCache } from "./components/Cache.js";
 
 const cfg = getConfig();
 const network = createNetwork(`dopamint-${cfg.environment}`);
@@ -52,6 +53,12 @@ const dbProxy = createDatabaseProxy(`dopamint-${cfg.environment}`, {
   secretArn: database.dbSecretArn,
 });
 
+const cache = createCache(`dopamint-${cfg.environment}`, {
+  subnetIds: network.privateSubnetIds,
+  securityGroupId: sgs.cache.id,
+  nodeType: cfg.cacheNodeType,
+});
+
 export const vpcId = network.vpcId;
 export const privateSubnetIds = network.privateSubnetIds;
 export const publicSubnetIds = network.publicSubnetIds;
@@ -63,3 +70,5 @@ export const frontendBucket = frontend.bucketName;
 export const frontendDomain = frontend.distributionDomain;
 export const cloudfrontId = frontend.distributionId;
 export const dbProxyEndpoint = dbProxy.proxyEndpoint;
+export const pubSubEndpoint = cache.pubSubEndpoint;
+export const cacheEndpoint = cache.cacheEndpoint;
