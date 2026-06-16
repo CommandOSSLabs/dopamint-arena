@@ -61,10 +61,25 @@ export interface RoundResult {
 // Keep the running log bounded so a long auto-play session can't grow it without limit.
 const MAX_ROUNDS_LOGGED = 20;
 
+// One completed tunnel in the auto-play session. Recorded once a tunnel settles so the user
+// can review each settlement (which the fast inter-tunnel transition otherwise hides).
+export interface TunnelRecord {
+  tunnelId: string;
+  createDigest?: string;
+  closeDigest?: string;
+  rounds: number; // rounds played in this tunnel
+  result: BlackjackResult;
+  finalBalanceA: number; // off-chain final balanceA (stake units)
+}
+
+// Cap the persistent tunnel history so a long auto-play session can't grow it without bound.
+const MAX_TUNNELS_LOGGED = 30;
+
 export interface BlackjackBotGame {
   view: BlackjackBotView;
   result: BlackjackResult | null;
   rounds: RoundResult[];
+  tunnels: TunnelRecord[];
   phase: BotPhase;
   error: string | null;
   fundNote: string | null;
@@ -89,8 +104,9 @@ const STEP_MS = 700;
 // another game; below it, auto-play stops rather than risk a mid-game tx running out of gas
 // and leaving a tunnel open. ~0.02 SUI (a game costs the busier bot ~0.01 SUI of gas).
 const MIN_PLAY_MIST = 20_000_000n;
-// Pause between auto-played games.
-const NEXT_GAME_MS = 1200;
+// Pause between auto-played games. Long enough that the "settling…"/done state for the just-
+// finished tunnel stays briefly visible before the next tunnel opens.
+const NEXT_GAME_MS = 2500;
 // Funding-refresh poll: the fullnode lags the funding tx, so re-read balances a few times
 // before giving up rather than reading the stale pre-fund value once.
 const POLL_BALANCES_MS = 1500;
@@ -136,6 +152,7 @@ export function useBlackjackBot(): BlackjackBotGame {
   const [view, setView] = useState<BlackjackBotView>(EMPTY_VIEW);
   const [result, setResult] = useState<BlackjackResult | null>(null);
   const [rounds, setRounds] = useState<RoundResult[]>([]);
+  const [tunnels, setTunnels] = useState<TunnelRecord[]>([]);
   const [phase, setPhase] = useState<BotPhase>("idle");
   const [error, setError] = useState<string | null>(null);
   const [fundNote, setFundNote] = useState<string | null>(null);
@@ -334,6 +351,7 @@ export function useBlackjackBot(): BlackjackBotGame {
         setView(viewFromState(tunnel.state));
         // Stop after this many completed rounds in the single tunnel, then settle once.
         const roundsTarget = maxRoundsRef.current;
+        let roundsThisTunnel = 0;
         await new Promise<void>((resolve, reject) => {
           let steps = 0;
           let completedRounds = 0;
@@ -378,6 +396,7 @@ export function useBlackjackBot(): BlackjackBotGame {
                   [...prev, settled].slice(-MAX_ROUNDS_LOGGED),
                 );
                 completedRounds++;
+                roundsThisTunnel = completedRounds;
               }
               setView(viewFromState(tunnel.state));
               // Stop once a bot is bankrupt (terminal) or we've played the requested number
@@ -413,6 +432,19 @@ export function useBlackjackBot(): BlackjackBotGame {
           bots.a.keypair,
         );
         setDigests((d) => ({ ...d, close: closeRes.digest }));
+
+        // Record this settled tunnel into the persistent history (newest first). Survives the
+        // auto loop so the user can review each settlement the fast transition would otherwise
+        // hide; cleared only on stopAuto/reset, not per tunnel.
+        const tunnelRecord: TunnelRecord = {
+          tunnelId,
+          createDigest: createRes.digest,
+          closeDigest: closeRes.digest,
+          rounds: roundsThisTunnel,
+          result: finalResult,
+          finalBalanceA: Number(finalA),
+        };
+        setTunnels((prev) => [tunnelRecord, ...prev].slice(0, MAX_TUNNELS_LOGGED));
 
         const b = await refreshBalances();
         setPhase("done");
@@ -473,12 +505,16 @@ export function useBlackjackBot(): BlackjackBotGame {
       clearTimeout(nextRef.current);
       nextRef.current = null;
     }
+    // A full stop ends the session — clear the persistent tunnel history so the next
+    // auto/play run starts with a fresh review list.
+    setTunnels([]);
   }, []);
 
   return {
     view,
     result,
     rounds,
+    tunnels,
     phase,
     error,
     fundNote,

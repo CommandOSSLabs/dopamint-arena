@@ -26,6 +26,12 @@ function suiOf(mist: bigint): string {
 }
 
 const SUISCAN_TX = "https://suiscan.xyz/testnet/tx/";
+const SUISCAN_OBJECT = "https://suiscan.xyz/testnet/object/";
+
+// Abbreviate a 0x… id/digest as 0x1234…abcd for compact display.
+function shortId(id: string): string {
+  return id.length > 12 ? `${id.slice(0, 6)}…${id.slice(-4)}` : id;
+}
 
 // Per-round outcome -> text/label styling for the running log and flash badge.
 const OUTCOME_STYLE: Record<
@@ -66,6 +72,7 @@ export default function PlayerBot() {
     view,
     result,
     rounds,
+    tunnels,
     phase,
     error,
     fundNote,
@@ -326,34 +333,84 @@ export default function PlayerBot() {
           </span>
         </div>
 
-        {/* Per-round running log (top-right): newest at the bottom, auto-scrolls into view */}
-        {rounds.length > 0 && (
-          <div className="absolute top-16 right-3 md:top-4 md:right-4 z-20 w-44 md:w-52 max-h-[40vh] flex flex-col bg-black/70 backdrop-blur-sm border border-amber-950 rounded-lg shadow-lg overflow-hidden">
-            <div className="px-3 py-1.5 text-[10px] font-extrabold uppercase tracking-widest text-[#d4af37] font-serif border-b border-amber-950/70">
-              Rounds
-            </div>
-            <div className="flex-1 overflow-y-auto px-2 py-1.5 flex flex-col gap-0.5">
-              {rounds.map((r, i) => {
-                const style = OUTCOME_STYLE[r.outcome];
-                return (
-                  <div
-                    key={`${r.round}-${i}`}
-                    className={`flex items-center justify-between gap-2 font-mono text-[11px] tabular-nums ${style.text}`}
-                  >
-                    <span className="text-zinc-500">R{r.round + 1}</span>
-                    <span className="text-zinc-300">
-                      P:{r.playerSum} D:{r.dealerSum}
-                    </span>
-                    <span className="font-bold">
-                      {style.label}
-                      {r.outcome !== "push" && (
-                        <span className="ml-1">{signed(r.delta)}</span>
-                      )}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
+        {/* Top-right side panels: per-round log, then persistent tunnel history below it. */}
+        {(rounds.length > 0 || tunnels.length > 0) && (
+          <div className="absolute top-16 right-3 md:top-4 md:right-4 z-20 w-44 md:w-52 max-h-[80vh] flex flex-col gap-2">
+            {/* Per-round running log: newest at the bottom, auto-scrolls into view */}
+            {rounds.length > 0 && (
+              <div className="max-h-[38vh] flex flex-col bg-black/70 backdrop-blur-sm border border-amber-950 rounded-lg shadow-lg overflow-hidden">
+                <div className="px-3 py-1.5 text-[10px] font-extrabold uppercase tracking-widest text-[#d4af37] font-serif border-b border-amber-950/70">
+                  Rounds
+                </div>
+                <div className="flex-1 overflow-y-auto px-2 py-1.5 flex flex-col gap-0.5">
+                  {rounds.map((r, i) => {
+                    const style = OUTCOME_STYLE[r.outcome];
+                    return (
+                      <div
+                        key={`${r.round}-${i}`}
+                        className={`flex items-center justify-between gap-2 font-mono text-[11px] tabular-nums ${style.text}`}
+                      >
+                        <span className="text-zinc-500">R{r.round + 1}</span>
+                        <span className="text-zinc-300">
+                          P:{r.playerSum} D:{r.dealerSum}
+                        </span>
+                        <span className="font-bold">
+                          {style.label}
+                          {r.outcome !== "push" && (
+                            <span className="ml-1">{signed(r.delta)}</span>
+                          )}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Persistent tunnel history (newest first): one row per settled tunnel with its
+                id, outcome, rounds played, and suiscan links for create/settle and the tunnel. */}
+            {tunnels.length > 0 && (
+              <div className="max-h-[40vh] flex flex-col bg-black/70 backdrop-blur-sm border border-amber-950 rounded-lg shadow-lg overflow-hidden">
+                <div className="px-3 py-1.5 text-[10px] font-extrabold uppercase tracking-widest text-[#d4af37] font-serif border-b border-amber-950/70">
+                  Tunnels
+                </div>
+                <div className="flex-1 overflow-y-auto px-2 py-1.5 flex flex-col gap-1.5">
+                  {tunnels.map((t) => {
+                    const style = OUTCOME_STYLE[t.result];
+                    return (
+                      <div
+                        key={t.tunnelId}
+                        className="flex flex-col gap-0.5 pb-1.5 border-b border-zinc-850 last:border-b-0 last:pb-0"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <a
+                            href={`${SUISCAN_OBJECT}${t.tunnelId}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="font-mono text-[11px] text-[#d4af37] hover:text-amber-300 underline underline-offset-2 transition-colors"
+                            title={t.tunnelId}
+                          >
+                            {shortId(t.tunnelId)}
+                          </a>
+                          <span
+                            className={`text-[10px] font-bold uppercase tracking-wider ${style.text}`}
+                          >
+                            {style.label}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between gap-2 font-mono text-[10px] text-zinc-500 tabular-nums">
+                          <span>{t.rounds} rounds</span>
+                          <span className="flex items-center gap-2">
+                            <DigestLink label="create" digest={t.createDigest} />
+                            <DigestLink label="settle" digest={t.closeDigest} />
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
