@@ -8,7 +8,6 @@ export interface DatabaseProxyOutputs {
 export function createDatabaseProxy(
   name: string,
   args: {
-    vpcId: pulumi.Input<string>;
     subnetIds: pulumi.Input<string[]>;
     securityGroupId: pulumi.Input<string>;
     dbClusterIdentifier: pulumi.Input<string>;

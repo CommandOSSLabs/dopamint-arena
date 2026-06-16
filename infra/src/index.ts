@@ -37,7 +37,6 @@ const frontend = createFrontend(`dopamint-${cfg.environment}`, {
 });
 
 const database = createDatabase(`dopamint-${cfg.environment}`, {
-  vpcId: network.vpcId,
   subnetIds: network.privateSubnetIds,
   securityGroupId: sgs.db.id,
   instanceClass: cfg.dbInstanceClass,
@@ -47,7 +46,6 @@ const database = createDatabase(`dopamint-${cfg.environment}`, {
 });
 
 const dbProxy = createDatabaseProxy(`dopamint-${cfg.environment}`, {
-  vpcId: network.vpcId,
   subnetIds: network.privateSubnetIds,
   securityGroupId: sgs.db.id,
   dbClusterIdentifier: database.clusterIdentifier,

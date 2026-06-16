@@ -11,7 +11,6 @@ export interface DatabaseOutputs {
 export function createDatabase(
   name: string,
   args: {
-    vpcId: pulumi.Input<string>;
     subnetIds: pulumi.Input<string[]>;
     securityGroupId: pulumi.Input<string>;
     instanceClass: string;
@@ -31,9 +30,7 @@ export function createDatabase(
 
   new aws.secretsmanager.SecretVersion(`${name}-db-secret-version`, {
     secretId: secret.id,
-    secretString: pulumi.all([dbPassword.result]).apply(([pwd]) =>
-      JSON.stringify({ username: "dopamint", password: pwd })
-    ),
+    secretString: dbPassword.result,
   });
 
   const subnetGroup = new aws.rds.SubnetGroup(`${name}-db-subnets`, {
@@ -49,7 +46,7 @@ export function createDatabase(
     dbSubnetGroupName: subnetGroup.name,
     vpcSecurityGroupIds: [args.securityGroupId],
     skipFinalSnapshot: false,
-    finalSnapshotIdentifier: pulumi.interpolate`${name}-final-${Date.now()}`.apply((s) => s.slice(0, 63)),
+    finalSnapshotIdentifier: `${name}-final-snapshot`,
     backupRetentionPeriod: 7,
     preferredBackupWindow: "03:00-04:00",
     storageEncrypted: true,
