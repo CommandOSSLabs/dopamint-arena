@@ -484,23 +484,13 @@ public fun status_destroyed(): u8 { STATUS_DESTROYED }
 // CONSTRUCTOR FUNCTIONS
 // ============================================
 
-/// Creates a new tunnel between two parties.
+/// Validates parameters, constructs a fresh `Tunnel<T>`, and emits `TunnelCreated`.
 ///
-/// ## Parameters
-/// - `party_a_address`: Address of party A
-/// - `party_a_pk`: Public key of party A
-/// - `party_a_sig_type`: Signature type for party A
-/// - `party_b_address`: Address of party B
-/// - `party_b_pk`: Public key of party B
-/// - `party_b_sig_type`: Signature type for party B
-/// - `timeout_ms`: Timeout duration in milliseconds (0 for no timeout)
-/// - `penalty_amount`: Penalty for uncooperative behavior (0 for no penalty)
-/// - `clock`: Clock for timestamp
-/// - `ctx`: Transaction context
-///
-/// ## Returns
-/// A new shared Tunnel object
-public fun create<T>(
+/// Single source of truth for the tunnel's initial layout/state and the creation event,
+/// shared by every constructor (`create`, `create_and_share`, `create_and_fund`). Keeping
+/// the struct literal in one place means a changed default (initial status, nonce, or
+/// timestamp semantics) cannot drift silently between constructors.
+fun build_tunnel<T>(
     party_a_address: address,
     party_a_pk: vector<u8>,
     party_a_sig_type: u8,
@@ -522,7 +512,7 @@ public fun create<T>(
     );
     // State channels require a timeout for dispute resolution safety.
     // Without a timeout, funds can be permanently trapped if a party becomes unresponsive.
-    assert!(timeout_ms > 0, EInvalidParameter);
+    assert!(timeout_ms > 0, EInvalidTimeout);
 
     let now = clock.timestamp_ms();
     let tunnel_id = object::new(ctx);
@@ -569,9 +559,56 @@ public fun create<T>(
     tunnel
 }
 
+/// Creates a new tunnel between two parties and returns it (the caller decides how to
+/// store/share it; see `create_and_share` for the share-in-one-call variant).
+///
+/// ## Parameters
+/// - `party_a_address`: Address of party A
+/// - `party_a_pk`: Public key of party A
+/// - `party_a_sig_type`: Signature type for party A
+/// - `party_b_address`: Address of party B
+/// - `party_b_pk`: Public key of party B
+/// - `party_b_sig_type`: Signature type for party B
+/// - `timeout_ms`: Dispute timeout in milliseconds; must be `> 0` (a tunnel with no
+///   timeout could trap funds forever, so `0` is rejected with `EInvalidTimeout`)
+/// - `penalty_amount`: Penalty for uncooperative behavior (0 for no penalty)
+/// - `clock`: Clock for timestamp
+/// - `ctx`: Transaction context
+///
+/// ## Returns
+/// A new Tunnel object (owned by the caller, not yet shared)
+public fun create<T>(
+    party_a_address: address,
+    party_a_pk: vector<u8>,
+    party_a_sig_type: u8,
+    party_b_address: address,
+    party_b_pk: vector<u8>,
+    party_b_sig_type: u8,
+    timeout_ms: u64,
+    penalty_amount: u64,
+    clock: &Clock,
+    ctx: &mut TxContext,
+): Tunnel<T> {
+    build_tunnel<T>(
+        party_a_address,
+        party_a_pk,
+        party_a_sig_type,
+        party_b_address,
+        party_b_pk,
+        party_b_sig_type,
+        timeout_ms,
+        penalty_amount,
+        clock,
+        ctx,
+    )
+}
+
 /// Creates a tunnel and shares it immediately.
-/// The tunnel is constructed and shared within this function,
-/// ensuring the linter can verify it is freshly created.
+///
+/// `build_tunnel` returns a freshly-constructed object that is shared without escaping this
+/// function, so the `share_owned` lint (which flags sharing an object received from elsewhere)
+/// is a false positive here and is suppressed.
+#[allow(lint(share_owned))]
 public fun create_and_share<T>(
     party_a_address: address,
     party_a_pk: vector<u8>,
@@ -584,60 +621,80 @@ public fun create_and_share<T>(
     clock: &Clock,
     ctx: &mut TxContext,
 ) {
-    validate_create_params(
+    let tunnel = build_tunnel<T>(
         party_a_address,
-        party_b_address,
+        party_a_pk,
         party_a_sig_type,
+        party_b_address,
+        party_b_pk,
         party_b_sig_type,
-        &party_a_pk,
-        &party_b_pk,
-    );
-    assert!(timeout_ms > 0, EInvalidParameter);
-
-    let now = clock.timestamp_ms();
-    let tunnel_id = object::new(ctx);
-    let id_copy = tunnel_id.to_inner();
-
-    let tunnel = Tunnel<T> {
-        id: tunnel_id,
-        version: CURRENT_VERSION,
-        party_a: PartyConfig {
-            address: party_a_address,
-            public_key: party_a_pk,
-            signature_type: party_a_sig_type,
-        },
-        party_b: PartyConfig {
-            address: party_b_address,
-            public_key: party_b_pk,
-            signature_type: party_b_sig_type,
-        },
-        balance: balance::zero<T>(),
-        party_a_deposit: 0,
-        party_b_deposit: 0,
-        status: STATUS_CREATED,
-        state: StateCommitment {
-            state_hash: vector[],
-            nonce: 0,
-            timestamp: now,
-            party_a_balance: 0,
-            party_b_balance: 0,
-        },
-        created_at: now,
-        last_activity: now,
         timeout_ms,
         penalty_amount,
-        dispute_raiser: option::none(),
-    };
+        clock,
+        ctx,
+    );
+    transfer::share_object(tunnel);
+}
 
-    event::emit(TunnelCreated {
-        tunnel_id: id_copy,
-        party_a: party_a_address,
-        party_b: party_b_address,
-        created_at: now,
-    });
+// ===== Dopamint extension (not upstream sui-tunnel) =====
+// Added downstream for the Dopamint arena demo; keep isolated in this banner so
+// an upstream re-sync produces an obvious conflict here rather than silent drift.
+
+/// Creates a tunnel and funds BOTH parties from the transaction sender, then shares it.
+///
+/// Unlike `deposit_party_a`/`deposit_party_b`, this does NOT require the sender to be a
+/// party: the funder need not be party A or party B. This exists for the demo's self-play
+/// model, where a single user wallet opens and funds multiple 2-party tunnels in one PTB,
+/// and the parties are the user's own ephemeral keys that hold no funds. Both stakes are
+/// supplied as `Coin<T>` arguments (typically SplitCoins results), so the wallet can fund
+/// both sides of all its tunnels under a single signature.
+///
+/// This is `public fun` (not `entry`) so it composes with PTB command results.
+///
+/// Funding reuses `deposit_internal` for both sides, so `TunnelDeposit` fires twice and
+/// `maybe_activate` emits `TunnelActivated` once both deposits land — the backend indexer
+/// relies on those events, so they must fire exactly as in the normal deposit path. Note this
+/// emits `TunnelCreated` and `TunnelActivated` in the SAME transaction/checkpoint (the normal
+/// flow spreads them across separate txs), so the indexer must handle atomic create+activate.
+///
+/// `share_owned` is suppressed for the same reason as `create_and_share`: `build_tunnel`
+/// returns a freshly-created object that never escapes this function before being shared.
+#[allow(lint(share_owned))]
+public fun create_and_fund<T>(
+    party_a_address: address,
+    party_a_pk: vector<u8>,
+    party_a_sig_type: u8,
+    party_b_address: address,
+    party_b_pk: vector<u8>,
+    party_b_sig_type: u8,
+    party_a_coin: Coin<T>,
+    party_b_coin: Coin<T>,
+    timeout_ms: u64,
+    penalty_amount: u64,
+    clock: &Clock,
+    ctx: &mut TxContext,
+) {
+    let mut tunnel = build_tunnel<T>(
+        party_a_address,
+        party_a_pk,
+        party_a_sig_type,
+        party_b_address,
+        party_b_pk,
+        party_b_sig_type,
+        timeout_ms,
+        penalty_amount,
+        clock,
+        ctx,
+    );
+
+    // Fund both sides; the second deposit triggers maybe_activate once both are > 0.
+    deposit_internal(&mut tunnel, party_a_coin, true, clock);
+    deposit_internal(&mut tunnel, party_b_coin, false, clock);
 
     transfer::share_object(tunnel);
 }
+
+// ===== end Dopamint extension =====
 
 /// Validates parameters for tunnel creation
 fun validate_create_params(
