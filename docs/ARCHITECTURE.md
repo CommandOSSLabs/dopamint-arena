@@ -66,7 +66,7 @@ system scale to many concurrent high-rate channels.
 |---|---|---|
 | **Browser client** | Wallet connect; mint ephemeral session key; per-game UI; run the off-chain engine; render the activity wall | — |
 | **Agent fleet** | Headless parties (own wallet + ephemeral key) that matchmake, fund, play at machine speed, and settle — identical path to a human | Hold a privileged role; bypass the protocol |
-| **Off-chain engine** | Drive the per-move loop: `propose` a move, `receive` + re-derive + co-sign, advance state on confirmation; emit transcript + Merkle root | — |
+| **Off-chain engine** | Drive the per-move loop: `propose` a move; on `receive`, re-derive then co-sign; advance state on confirmation; emit the transcript and its Merkle root | — |
 | **Per-game `Protocol`** | Domain logic only: `initialState`, `applyMove`, `encodeState`, `balances`, `isTerminal` | Re-implement signing / settlement / replay protection |
 | **tunnel-manager** (control plane) | Matchmaking + presence, opaque-frame relay, watchtower, event-indexed tunnel registry, cooperative settlement, Walrus archival, stats aggregation → SSE | Sign a move · mediate gameplay · hold a bankroll · act as counterparty |
 | **Sui chain** | Custody and settlement: open+fund, cooperative/forced close, payouts | See a single in-game move |
@@ -129,9 +129,10 @@ sequenceDiagram
     alt cooperative finish
         A->>BE: final co-signed state + transcript
         BE->>S: close_cooperative_with_root → payouts to both wallets
-        BE->>W: archive transcript; anchor 32-byte root on-chain
+        BE->>W: archive transcript, anchor 32-byte root on-chain
     else opponent abandons
-        A->>S: raise_dispute_current_state → force_close_after_timeout
+        A->>S: raise_dispute_current_state
+        A->>S: force_close_after_timeout
         Note over S: penalty = stake → pot forfeits to the staying party
     end
 ```
