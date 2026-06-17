@@ -12,8 +12,9 @@ type BlackjackState = protocols.BlackjackState;
 type BlackjackMove = protocols.BlackjackMove;
 
 const MP_URL = import.meta.env.VITE_MP_URL ?? "ws://127.0.0.1:8080";
-/** Per-seat bankroll deposited on-chain (MIST). The protocol stakes WAGER per round. */
-const STAKE = 10_000_000n; // 0.01 SUI
+/** Per-seat bankroll deposited on-chain (MIST). The protocol stakes WAGER (100) per round, so a
+ *  small bankroll keeps the 2D chip stacks meaningful while still allowing ~50 rounds. */
+const STAKE = 5000n;
 const BOT_MOVE_MS = 700; // player auto-bot move cadence
 const DEALER_MS = 600; // dealer reveal pause before auto-drawing
 const NEXT_MS = 900; // pause before auto-dealing the next round
