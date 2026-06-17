@@ -14,6 +14,7 @@ import {
   buildCreateAndShareTx,
   buildDepositTx,
   buildSettleWithRootTx,
+  buildUpdateStateTx,
   parseTunnelId,
 } from "@/lib/tunnel";
 import {
@@ -50,6 +51,8 @@ export interface BotDigests {
   create?: string;
   depositX?: string;
   depositO?: string;
+  /** Checkpoint of the final co-signed state (update_state), submitted before close. */
+  update?: string;
   close?: string;
   /** Hex of the transcript Merkle root anchored on-chain at close (0x-prefixed). */
   root?: string;
@@ -375,7 +378,13 @@ export function useBotGame(difficulty: Difficulty = "even"): BotGameView {
               const cell = isAdvance
                 ? 0
                 : pickCell(inner, by, difficultyRef.current);
-              const r = tunnel.step({ cell }, by, { mode: "full" });
+              // Sign each update with the on-chain created_at (a validator timestamp,
+              // always >= created_at and <= now) so the final co-signed state passes
+              // update_state's timestamp check regardless of local clock skew.
+              const r = tunnel.step({ cell }, by, {
+                mode: "full",
+                timestamp: createdAt,
+              });
               if (!r.verified)
                 throw new Error(`state ${r.nonce} failed dual-verify`);
 
@@ -406,13 +415,27 @@ export function useBotGame(difficulty: Difficulty = "even"): BotGameView {
         setBoard([...finalInner.board]);
         setWinner(finalInner.winner);
 
-        // 6) settle: anchor the transcript root AND distribute funds in one cooperative close.
-        // The root commits to EVERY co-signed update; we never touched on-chain state.nonce
-        // (no update_state), so it stays 0 and close_cooperative_with_root derives finalNonce
-        // = 1 — pass onchainNonce 0n so the signed settlement matches.
+        // 6) checkpoint the FINAL co-signed state on-chain (update_state) so the tunnel
+        // object's state field shows the played-out state_hash + balances + nonce, then
+        // close with the transcript root. Steps are signed with created_at, so the latest
+        // update passes the timestamp check.
         setPhase("settling");
+        const latest = tunnel.latest;
+        if (latest) {
+          const ures = await submit(
+            buildUpdateStateTx(tunnelId, latest),
+            bots.x.keypair,
+          );
+          setDigests((d) => ({ ...d, update: ures.digest }));
+        }
+
+        // 7) settle: anchor the transcript root AND distribute funds in one cooperative close.
+        // The root commits to EVERY co-signed update. After update_state the on-chain
+        // state.nonce is latest.nonce (N), so close_cooperative_with_root derives finalNonce
+        // = N + 1 — pass onchainNonce N so the signed settlement matches.
         const root = transcript.root();
-        const s = tunnel.buildSettlementWithRoot(createdAt, root, 0n);
+        const onchainNonce = latest ? latest.update.nonce : 0n;
+        const s = tunnel.buildSettlementWithRoot(createdAt, root, onchainNonce);
         const closeRes = await submit(
           buildSettleWithRootTx(tunnelId, s),
           bots.x.keypair,
@@ -426,7 +449,7 @@ export function useBotGame(difficulty: Difficulty = "even"): BotGameView {
         const b = await refreshBalances();
         setPhase("done");
 
-        // 7) auto-play: continue with the next tunnel until a bot is low on gas.
+        // 8) auto-play: continue with the next tunnel until a bot is low on gas.
         if (autoRef.current) {
           if (b && b.x >= MIN_PLAY_MIST && b.o >= MIN_PLAY_MIST) {
             nextRef.current = setTimeout(() => {
