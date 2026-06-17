@@ -119,7 +119,10 @@ async function main() {
     const by = partyForPhase(tunnel.state);
     const move = proto.randomMove(tunnel.state, by, Math.random);
     if (!move) break;
-    const r = tunnel.step(move, by, { mode: "full" });
+    // Sign each update with the tunnel's on-chain created_at (a validator timestamp,
+    // always <= now and >= created_at) so the latest co-signed state passes
+    // update_state's timestamp checks regardless of local/validator clock skew.
+    const r = tunnel.step(move, by, { mode: "full", timestamp: createdAt });
     if (!r.verified) throw new Error(`state ${r.nonce} failed dual-verify`);
     steps++;
   }
@@ -129,12 +132,35 @@ async function main() {
       `final off-chain balances A=${fin.balanceA} B=${fin.balanceB}`,
   );
 
-  // 4) settle on-chain with the transcript ROOT (close_cooperative_with_root): one tx
-  // distributes the final balances AND anchors a Merkle root committing to the FULL
-  // off-chain history. onchainNonce=0 (we never checkpointed update_state).
+  // 4) checkpoint the FINAL co-signed state on-chain so the tunnel's StateCommitment
+  // field shows the played-out state (nonce, state_hash, final balances) — not the
+  // empty opening. Requires the update's timestamp >= created_at (set per-step above).
+  const latest = tunnel.latest!;
+  const utx = new Transaction();
+  onchain.buildUpdateState(utx, {
+    tunnelId,
+    stateHash: latest.update.stateHash,
+    nonce: latest.update.nonce,
+    partyABalance: latest.update.partyABalance,
+    partyBBalance: latest.update.partyBBalance,
+    timestamp: latest.update.timestamp,
+    sigA: latest.sigA,
+    sigB: latest.sigB,
+  });
+  const ures = await client.signAndExecuteTransaction({
+    signer: botA.keypair,
+    transaction: utx,
+    options: { showEffects: true },
+  });
+  await client.waitForTransaction({ digest: ures.digest });
+  console.log("update_state:", ures.digest, "(on-chain nonce ->", latest.update.nonce + ")");
+
+  // 5) settle with the transcript ROOT (close_cooperative_with_root): one tx distributes
+  // final balances AND anchors a Merkle root committing to the FULL history. After
+  // update_state the on-chain nonce is `latest.nonce`, so finalNonce = latest.nonce + 1.
   const root = transcript.root();
   console.log("transcript root:", "0x" + Buffer.from(root).toString("hex"), `(${steps} states)`);
-  const settlement = tunnel.buildSettlementWithRoot(createdAt, root, 0n);
+  const settlement = tunnel.buildSettlementWithRoot(createdAt, root, latest.update.nonce);
   const ctx = new Transaction();
   onchain.buildCloseWithRootFromSettlement(ctx, tunnelId, settlement);
   const cres = await client.signAndExecuteTransaction({
@@ -153,6 +179,11 @@ async function main() {
     client.getBalance({ owner: botB.address }),
   ]);
   console.log(`on-chain bot balances now: A=${ba.totalBalance} MIST  B=${bb.totalBalance} MIST`);
+
+  // Show the on-chain StateCommitment field now reflects the played-out final state.
+  const finalObj = await client.getObject({ id: tunnelId, options: { showContent: true } });
+  const sf = (finalObj.data?.content as { fields?: { state?: { fields?: Record<string, unknown> } } } | undefined)?.fields?.state?.fields;
+  console.log("on-chain state field:", JSON.stringify(sf));
   console.log("\nBLACKJACK BOT-VS-BOT ON-CHAIN OK");
 }
 
