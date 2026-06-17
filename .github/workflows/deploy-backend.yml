@@ -24,7 +24,7 @@ concurrency:
 jobs:
   build-push:
     name: Build and push backend image
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     environment: ${{ github.event.inputs.environment || 'dev' }}
     timeout-minutes: 30
     steps:
@@ -45,9 +45,8 @@ jobs:
           IMAGE_TAG: ${{ github.sha }}
         run: |
           set -euo pipefail
-          cd backend
           aws ecr get-login-password | docker login --username AWS --password-stdin "${ECR_URL}"
-          docker build -t "${ECR_URL}:${IMAGE_TAG}" .
+          docker build -f backend/tunnel-manager/Dockerfile -t "${ECR_URL}:${IMAGE_TAG}" .
           docker push "${ECR_URL}:${IMAGE_TAG}"
 
   update-pulumi:
