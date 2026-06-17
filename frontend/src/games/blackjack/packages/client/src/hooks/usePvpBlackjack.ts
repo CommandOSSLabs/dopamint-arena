@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { core, bytesToHex } from "sui-tunnel-ts";
+import { core, bytesToHex, hexToBytes } from "sui-tunnel-ts";
 import { useCurrentAccount, useSignAndExecuteTransaction, useSignPersonalMessage } from "@mysten/dapp-kit";
 import { SuiClient } from "@mysten/sui/client";
 import { getSuiClient } from "@/lib/bjBots";
@@ -131,7 +131,7 @@ export function usePvpBlackjack(): PvpView {
       relay.onApp(m.matchId, (mm) => {
         if (mm.t === "opened") openedResolveRef.current?.(String(mm.tunnelId));
         else if (mm.t === "settle") {
-          const sig = Uint8Array.from(Buffer.from(String(mm.sig), "hex"));
+          const sig = hexToBytes(String(mm.sig));
           if (settleResolveRef.current) settleResolveRef.current(sig);
           else bufferedSettleRef.current = sig;
         } else if (mm.t === "closed") setDigests((d) => ({ ...d, close: String(mm.digest) }));
@@ -153,7 +153,7 @@ export function usePvpBlackjack(): PvpView {
       if (!(await verifyAttestation(m.matchId, oppHello.ephemeralPubkey, oppHello.walletSig, m.opponentWallet))) {
         throw new Error("opponent attestation failed");
       }
-      const oppEphPubkey = Uint8Array.from(Buffer.from(oppHello.ephemeralPubkey, "hex"));
+      const oppEphPubkey = hexToBytes(oppHello.ephemeralPubkey);
 
       // Open (A) or wait for tunnel.opened (B).
       let tunnelId: string;
