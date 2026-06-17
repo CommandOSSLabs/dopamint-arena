@@ -286,16 +286,14 @@ export function GameScene({
               </li>
 
               <li className="flex justify-between items-center py-1 border-b border-primary/5">
-                <span className="flex items-center gap-1.5"><span className="text-secondary font-bold">4</span> Checkpoint State</span>
-                {g.digests.update ? (
-                  <a
-                    href={`https://suiscan.xyz/testnet/tx/${g.digests.update}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="font-mono text-primary underline hover:text-secondary"
+                <span className="flex items-center gap-1.5"><span className="text-secondary font-bold">4</span> Transcript Root</span>
+                {g.digests.root ? (
+                  <span
+                    title={g.digests.root}
+                    className="font-mono text-primary"
                   >
-                    {g.digests.update.slice(0, 6)}…{g.digests.update.slice(-4)}
-                  </a>
+                    {g.digests.root.slice(0, 8)}…{g.digests.root.slice(-4)}
+                  </span>
                 ) : (
                   <span className="text-outline/40">—</span>
                 )}

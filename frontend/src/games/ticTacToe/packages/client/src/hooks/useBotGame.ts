@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { core, protocols } from "sui-tunnel-ts";
+import { core, proof, protocols, bytesToHex } from "sui-tunnel-ts";
 import type { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import type { Transaction } from "@mysten/sui/transactions";
 import {
@@ -13,8 +13,7 @@ import {
 import {
   buildCreateAndShareTx,
   buildDepositTx,
-  buildSettleTx,
-  buildUpdateStateTx,
+  buildSettleWithRootTx,
   parseTunnelId,
 } from "@/lib/tunnel";
 import {
@@ -51,8 +50,9 @@ export interface BotDigests {
   create?: string;
   depositX?: string;
   depositO?: string;
-  update?: string;
   close?: string;
+  /** Hex of the transcript Merkle root anchored on-chain at close (0x-prefixed). */
+  root?: string;
 }
 
 export interface BotScore {
@@ -329,6 +329,11 @@ export function useBotGame(difficulty: Difficulty = "even"): BotGameView {
           { a: 1n, b: 1n },
         );
 
+        // Accumulate every co-signed update into a transcript; its Merkle root is anchored
+        // on-chain at close. Wire the observer BEFORE any step so no update is missed.
+        const transcript = new proof.Transcript(tunnelId);
+        tunnel.onUpdate = (u) => transcript.append(u);
+
         // 5) animate moves across all N games; each .step co-signs AND verifies both
         //    sigs (mode "full"). A move either advances the live inner game or, when
         //    the inner game has just finished, resets to the next game's board. We
@@ -401,34 +406,22 @@ export function useBotGame(difficulty: Difficulty = "even"): BotGameView {
         setBoard([...finalInner.board]);
         setWinner(finalInner.winner);
 
-        // 6) checkpoint the final co-signed state on-chain, THEN close cooperatively.
-        // update_state writes the played-out final state_hash/nonce (and balances, which stay
-        // 1/1 for this near-zero-stake game) onto the on-chain StateCommitment — otherwise it
-        // stays at the empty nonce-0 opening. After it lands, on-chain state.nonce ==
-        // latest.update.nonce, so close_cooperative derives finalNonce = nonce + 1; build the
-        // settlement with that same onchainNonce so its signature matches.
+        // 6) settle: anchor the transcript root AND distribute funds in one cooperative close.
+        // The root commits to EVERY co-signed update; we never touched on-chain state.nonce
+        // (no update_state), so it stays 0 and close_cooperative_with_root derives finalNonce
+        // = 1 — pass onchainNonce 0n so the signed settlement matches.
         setPhase("settling");
-        const latest = tunnel.latest;
-        if (latest) {
-          const updateRes = await submit(
-            buildUpdateStateTx(tunnelId, latest),
-            bots.x.keypair,
-          );
-          setDigests((d) => ({ ...d, update: updateRes.digest }));
-        }
-        const onchainNonce = latest ? latest.update.nonce : 0n;
-        const s = tunnel.buildSettlement(createdAt, onchainNonce);
+        const root = transcript.root();
+        const s = tunnel.buildSettlementWithRoot(createdAt, root, 0n);
         const closeRes = await submit(
-          buildSettleTx(
-            tunnelId,
-            s.sigA,
-            s.sigB,
-            s.settlement.finalNonce,
-            s.settlement.timestamp,
-          ),
+          buildSettleWithRootTx(tunnelId, s),
           bots.x.keypair,
         );
-        setDigests((d) => ({ ...d, close: closeRes.digest }));
+        setDigests((d) => ({
+          ...d,
+          close: closeRes.digest,
+          root: `0x${bytesToHex(root)}`,
+        }));
 
         const b = await refreshBalances();
         setPhase("done");

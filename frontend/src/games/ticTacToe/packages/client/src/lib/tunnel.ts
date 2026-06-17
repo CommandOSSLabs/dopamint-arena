@@ -37,55 +37,17 @@ export function buildDepositTx(tunnelId: string): Transaction {
   return tx;
 }
 
-// Checkpoint a co-signed off-chain state onto the on-chain StateCommitment via
-// `entry_update_state`. Submitted just before the cooperative close so the on-chain `state`
-// reflects the played-out final state (final state_hash/balances/nonce) instead of the empty
-// opening. The dual signatures are the SAME ones the off-chain engine produced for this update.
-export function buildUpdateStateTx(
+// Close cooperatively AND anchor the off-chain transcript Merkle root in one tx
+// (`entry_close_cooperative_with_root`): distributes funds by the co-signed final balances and
+// commits the 32-byte root over EVERY co-signed update, compressing the full play history to a
+// single on-chain commitment. The dual signatures are over the settlement-with-root message.
+// Replaces the old `update_state` checkpoint, which committed only the final state and aborted.
+export function buildSettleWithRootTx(
   tunnelId: string,
-  u: {
-    update: {
-      stateHash: Uint8Array;
-      nonce: bigint;
-      partyABalance: bigint;
-      partyBBalance: bigint;
-      timestamp: bigint;
-    };
-    sigA: Uint8Array;
-    sigB: Uint8Array;
-  },
+  s: core.CoSignedSettlementWithRoot,
 ): Transaction {
   const tx = new Transaction();
-  onchain.buildUpdateState(tx as unknown as SdkTx, {
-    tunnelId,
-    stateHash: u.update.stateHash,
-    nonce: u.update.nonce,
-    partyABalance: u.update.partyABalance,
-    partyBBalance: u.update.partyBBalance,
-    timestamp: u.update.timestamp,
-    sigA: u.sigA,
-    sigB: u.sigB,
-    coinType: "0x2::sui::SUI",
-  });
-  return tx;
-}
-
-export function buildSettleTx(
-  tunnelId: string,
-  sigA: Uint8Array,
-  sigB: Uint8Array,
-  _finalNonce: bigint,
-  timestamp: bigint,
-): Transaction {
-  const tx = new Transaction();
-  onchain.buildCloseCooperative(tx as unknown as SdkTx, {
-    tunnelId,
-    partyABalance: 1n,
-    partyBBalance: 1n,
-    sigA,
-    sigB,
-    timestamp,
-  });
+  onchain.buildCloseWithRootFromSettlement(tx as unknown as SdkTx, tunnelId, s, "0x2::sui::SUI");
   return tx;
 }
 
