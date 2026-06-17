@@ -42,6 +42,12 @@ export default function Home() {
             >
               👀 Watch Bot Arena
             </button>
+            <button
+              onClick={() => navigate("/pvp")}
+              className="w-full bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white border border-zinc-800 font-bold py-3 rounded-xl text-sm uppercase tracking-wider transition-all active:scale-95"
+            >
+              🌐 Play vs Player (online)
+            </button>
           </div>
         </div>
       </GameCardScale>
