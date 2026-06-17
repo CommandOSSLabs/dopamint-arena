@@ -73,6 +73,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/sessions/:id/heartbeat", post(routes::heartbeat))
         .route("/v1/sessions/:id/settle", post(routes::settle))
         .route("/v1/stats/live", get(routes::stats_live))
+        .route("/v1/mp", get(crate::mp::ws::mp_upgrade))
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
