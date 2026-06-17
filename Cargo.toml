@@ -21,7 +21,10 @@ anyhow = "1.0"
 dotenvy = "0.15"
 uuid = { version = "1", features = ["v4", "serde"] }
 async-trait = "0.1"
-fred = { version = "9", features = ["i-scripts", "subscriber-client"] }
+# `enable-rustls-ring` (not `enable-rustls`) so fred's TLS reuses the `ring` provider
+# reqwest already pulls — a single rustls CryptoProvider avoids the 0.23 multi-provider
+# panic, and ring needs no cmake (aws-lc does). Lets `rediss://` ElastiCache URLs connect.
+fred = { version = "9", features = ["i-scripts", "subscriber-client", "enable-rustls-ring"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 hex = "0.4"
 # Lightweight crates.io Sui SDK (write path: PTB build + Ed25519 sign + BCS).

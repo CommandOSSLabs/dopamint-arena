@@ -575,6 +575,21 @@ mod tests {
         std::env::var("TEST_REDIS_URL").ok()
     }
 
+    // ElastiCache uses `rediss://` (TLS in transit). With `enable-rustls-ring`, `from_url` must
+    // build a TLS connector for the rediss scheme and leave plain `redis://` untls'd. Building
+    // the rustls config selects the crypto provider, so this test would PANIC if the provider
+    // were ambiguous (the rustls 0.23 multi-provider footgun) — it guards the feature choice.
+    // Pure config construction: no Redis or network needed.
+    #[test]
+    fn rediss_url_configures_tls_and_redis_does_not() {
+        let secure =
+            RedisConfig::from_url("rediss://cache.example.com:6379").expect("rediss:// parses");
+        assert!(secure.uses_tls(), "rediss:// must configure TLS");
+        let plain =
+            RedisConfig::from_url("redis://cache.example.com:6379").expect("redis:// parses");
+        assert!(!plain.uses_tls(), "redis:// must stay plaintext");
+    }
+
     #[tokio::test]
     #[ignore = "requires TEST_REDIS_URL"]
     async fn deliver_crosses_instances() {
