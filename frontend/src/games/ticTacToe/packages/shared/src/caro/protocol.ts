@@ -86,6 +86,8 @@ export class CaroProtocol implements Protocol<CaroState, CaroMove> {
   }
 
   encodeState(state: CaroState): Uint8Array {
+    // movesCount is intentionally NOT encoded: it is derivable from the board (count of
+    // non-empty cells), so two states with the same board are already canonically distinct.
     return core.concatBytes([
       DOMAIN,
       protocols.lengthPrefixedConcat([

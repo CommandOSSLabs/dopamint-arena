@@ -4,15 +4,8 @@
  * scored by the best run it makes for the mover plus the best it denies the opponent.
  */
 
-import { inBounds } from "./board";
+import { inBounds, DIRS } from "./board";
 import type { CaroState } from "./protocol";
-
-const DIRS: ReadonlyArray<readonly [number, number]> = [
-  [0, 1],
-  [1, 0],
-  [1, 1],
-  [1, -1],
-];
 
 export type BotStrength = "strong" | "weak";
 
@@ -110,6 +103,7 @@ export function pickCaroMove(
   const defenseWeight = strength === "strong" ? 0.95 : 0.85;
   let cells = candidates(board, size, radius);
   if (cells.length === 0) cells = board.map((_, i) => i).filter((i) => board[i] === 0);
+  if (cells.length === 0) throw new Error("pickCaroMove called with no legal move (full board)");
 
   let bestCell = cells[0];
   let bestScore = -Infinity;

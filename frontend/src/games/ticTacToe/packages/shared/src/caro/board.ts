@@ -7,7 +7,7 @@
 export type CaroBoard = number[]; // length size*size, values 0|1|2
 
 // The four axes to test for a run: horizontal, vertical, and both diagonals.
-const DIRS: ReadonlyArray<readonly [number, number]> = [
+export const DIRS: ReadonlyArray<readonly [number, number]> = [
   [0, 1],
   [1, 0],
   [1, 1],
