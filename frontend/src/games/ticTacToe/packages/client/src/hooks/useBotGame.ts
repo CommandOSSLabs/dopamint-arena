@@ -62,6 +62,19 @@ export interface BotScore {
   draws: number;
 }
 
+// One settled tunnel in the session history: the per-tunnel X/O/draw tally plus the on-chain
+// close digest + transcript root. Recorded at close (newest first); cleared on a full stop.
+// Shared by both arenas (TicTacToe and Caro).
+export interface TunnelRecord {
+  tunnelId: string;
+  closeDigest?: string;
+  rootHex?: string;
+  games: number;
+  x: number;
+  o: number;
+  draws: number;
+}
+
 export interface BotGameView {
   board: number[];
   turn: "A" | "B";
@@ -71,6 +84,8 @@ export interface BotGameView {
   digests: BotDigests;
   balances: { x: bigint; o: bigint };
   score: BotScore;
+  /** Settled tunnels this session, newest first (one per on-chain close). */
+  tunnels: TunnelRecord[];
   auto: boolean;
   rebalancing: boolean;
   /** Games to play within one tunnel before the single settle. */
@@ -89,6 +104,8 @@ export interface BotGameView {
 
 const SCORE_KEY = "ttt_bot_score.v1";
 const EMPTY_BOARD = Array(9).fill(0) as number[];
+// Cap the in-session settle history so a long auto-play run can't grow it without bound.
+const MAX_TUNNELS_LOGGED = 30;
 const STEP_MS = 600;
 // A bot must hold at least this much (gas for its txs + the 1-MIST deposit) to safely play
 // another game; below it, auto-play stops rather than risk a mid-game tx running out of gas
@@ -175,6 +192,7 @@ export function useBotGame(difficulty: Difficulty = "even"): BotGameView {
     o: 0n,
   });
   const [score, setScore] = useState<BotScore>(loadScore);
+  const [tunnels, setTunnels] = useState<TunnelRecord[]>([]);
   const [auto, setAuto] = useState(false);
   const [rebalancing, setRebalancing] = useState(false);
   const [maxGames, setMaxGamesState] = useState<number>(DEFAULT_MAX_GAMES);
@@ -280,6 +298,9 @@ export function useBotGame(difficulty: Difficulty = "even"): BotGameView {
     setWinner(0);
     setDigests({});
     setCurrentGame(1);
+    // The scoreboard shows the CURRENT tunnel's tally and resets each tunnel; the settled tally
+    // is preserved in the tunnel history.
+    setScore({ x: 0, o: 0, draws: 0 });
 
     // One multi-game protocol instance per tunnel, sized by the current control.
     const proto = new MultiGameTicTacToeProtocol(maxGamesRef.current, 0n);
@@ -336,24 +357,18 @@ export function useBotGame(difficulty: Difficulty = "even"): BotGameView {
         //    the inner game has just finished, resets to the next game's board. We
         //    record each finished game's winner exactly once into the running score.
         setPhase("playing");
-        // Track the inner game we last counted so we score each game once. -1 = none.
+        // This tunnel's running tally. Tracked locally (not via the score state) so the close
+        // handler can read the final tally without a stale-state read; mirrored into `score`
+        // for the live scoreboard. Track the inner game we last counted so we score each once.
+        const tally: BotScore = { x: 0, o: 0, draws: 0 };
         let lastScoredGame = -1;
         const recordGame = (gameIndex: number, gameWinner: number) => {
           if (gameIndex === lastScoredGame) return;
           lastScoredGame = gameIndex;
-          setScore((prev) => {
-            const next: BotScore = {
-              x: prev.x + (gameWinner === 1 ? 1 : 0),
-              o: prev.o + (gameWinner === 2 ? 1 : 0),
-              draws: prev.draws + (gameWinner === 3 ? 1 : 0),
-            };
-            try {
-              localStorage.setItem(SCORE_KEY, JSON.stringify(next));
-            } catch {
-              /* ignore */
-            }
-            return next;
-          });
+          if (gameWinner === 1) tally.x += 1;
+          else if (gameWinner === 2) tally.o += 1;
+          else if (gameWinner === 3) tally.draws += 1;
+          setScore({ ...tally });
         };
 
         await new Promise<void>((resolve, reject) => {
@@ -440,6 +455,25 @@ export function useBotGame(difficulty: Difficulty = "even"): BotGameView {
           root: `0x${bytesToHex(root)}`,
         }));
 
+        // Record the settled tunnel into the history (newest first), then reset the running
+        // score so the next tunnel starts fresh — each settle resets the player tally.
+        const record: TunnelRecord = {
+          tunnelId,
+          closeDigest: closeRes.digest,
+          rootHex: `0x${bytesToHex(root)}`,
+          games: tally.x + tally.o + tally.draws,
+          x: tally.x,
+          o: tally.o,
+          draws: tally.draws,
+        };
+        setTunnels((prev) => [record, ...prev].slice(0, MAX_TUNNELS_LOGGED));
+        setScore({ x: 0, o: 0, draws: 0 });
+        try {
+          localStorage.setItem(SCORE_KEY, JSON.stringify({ x: 0, o: 0, draws: 0 }));
+        } catch {
+          /* ignore */
+        }
+
         const b = await refreshBalances();
         setPhase("done");
 
@@ -506,6 +540,8 @@ export function useBotGame(difficulty: Difficulty = "even"): BotGameView {
       clearTimeout(nextRef.current);
       nextRef.current = null;
     }
+    // A full stop ends the session — clear the settle history so the next run starts fresh.
+    setTunnels([]);
   }, []);
 
   // Move half the balance difference from the richer bot to the poorer one (richer bot signs).
@@ -542,6 +578,7 @@ export function useBotGame(difficulty: Difficulty = "even"): BotGameView {
     digests,
     balances,
     score,
+    tunnels,
     auto,
     rebalancing,
     maxGames,

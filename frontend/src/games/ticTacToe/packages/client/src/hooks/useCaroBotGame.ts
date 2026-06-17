@@ -23,7 +23,7 @@ import {
   type BotIdentity,
 } from "@/lib/bots";
 import type { Difficulty } from "@/hooks/useBotGame";
-import type { BotPhase, BotScore, BotDigests } from "@/hooks/useBotGame";
+import type { BotPhase, BotScore, BotDigests, TunnelRecord } from "@/hooks/useBotGame";
 
 const DEFAULT_MAX_GAMES = 5;
 const MIN_MAX_GAMES = 1;
@@ -39,18 +39,6 @@ const NEXT_GAME_MS = 1200;
 // Cap the in-session settle history so a long auto-play run can't grow it without bound.
 const MAX_TUNNELS_LOGGED = 30;
 
-// One settled tunnel in the session history: the per-tunnel X/O/draw tally plus the on-chain
-// close digest + transcript root. Recorded at close (newest first); cleared on a full stop.
-export interface CaroTunnelRecord {
-  tunnelId: string;
-  closeDigest?: string;
-  rootHex?: string;
-  games: number;
-  x: number;
-  o: number;
-  draws: number;
-}
-
 export interface CaroBotGameView {
   board: number[];
   boardSize: number;
@@ -63,7 +51,7 @@ export interface CaroBotGameView {
   balances: { x: bigint; o: bigint };
   score: BotScore;
   /** Settled tunnels this session, newest first (one per on-chain close). */
-  tunnels: CaroTunnelRecord[];
+  tunnels: TunnelRecord[];
   auto: boolean;
   rebalancing: boolean;
   maxGames: number;
@@ -113,7 +101,7 @@ export function useCaroBotGame(
   const [digests, setDigests] = useState<BotDigests>({});
   const [balances, setBalances] = useState<{ x: bigint; o: bigint }>({ x: 0n, o: 0n });
   const [score, setScore] = useState<BotScore>(loadScore);
-  const [tunnels, setTunnels] = useState<CaroTunnelRecord[]>([]);
+  const [tunnels, setTunnels] = useState<TunnelRecord[]>([]);
   const [auto, setAuto] = useState(false);
   const [rebalancing, setRebalancing] = useState(false);
   const [maxGames, setMaxGamesState] = useState<number>(DEFAULT_MAX_GAMES);
@@ -337,7 +325,7 @@ export function useCaroBotGame(
 
         // Record the settled tunnel into the history (newest first), then reset the running
         // score so the next tunnel starts fresh — each settle resets the player tally.
-        const record: CaroTunnelRecord = {
+        const record: TunnelRecord = {
           tunnelId,
           closeDigest: closeRes.digest,
           rootHex: `0x${bytesToHex(root)}`,

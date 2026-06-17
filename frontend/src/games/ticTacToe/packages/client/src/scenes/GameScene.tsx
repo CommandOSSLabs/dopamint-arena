@@ -1,7 +1,6 @@
 import { Board } from "@/components/Board";
 import { CaroBoard } from "@/components/CaroBoard";
-import type { BotGameView, BotPhase } from "@/hooks/useBotGame";
-import type { CaroTunnelRecord } from "@/hooks/useCaroBotGame";
+import type { BotGameView, BotPhase, TunnelRecord } from "@/hooks/useBotGame";
 import type { PlayMode, GameType } from "@/scenes/SetupScene";
 
 // Protocol marks (1 = botX/X, 2 = botO/O) -> Cell UI vocabulary (CELL_SERVER=2 renders "X",
@@ -110,7 +109,7 @@ export function GameScene({
   g: BotGameView & {
     boardSize?: number;
     lastMove?: number;
-    tunnels?: CaroTunnelRecord[];
+    tunnels?: TunnelRecord[];
   };
   mode: PlayMode;
   gameType: GameType;
