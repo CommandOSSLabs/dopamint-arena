@@ -341,6 +341,7 @@ export default function PlayerVsDealer() {
           <CardDisplay
             title="Dealer"
             cards={view.dealerCards}
+            sum={view.dealerSum}
             isWinning={result === "lose"}
           />
         </div>
@@ -391,6 +392,7 @@ export default function PlayerVsDealer() {
           <CardDisplay
             title="You"
             cards={view.playerCards}
+            sum={view.playerSum}
             isPlayer
             isWinning={result === "win"}
           />

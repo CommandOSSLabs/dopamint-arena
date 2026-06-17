@@ -1,9 +1,9 @@
 import React from "react";
-import { getCardSum } from "@poc/shared";
 
 interface CardDisplayProps {
   title: string;
   cards: number[];
+  sum: number;
   className?: string;
   isWinning?: boolean;
   isPlayer?: boolean;
@@ -12,6 +12,7 @@ interface CardDisplayProps {
 export const CardDisplay: React.FC<CardDisplayProps> = ({
   title,
   cards,
+  sum,
   className,
   isWinning,
   isPlayer = false,
@@ -76,7 +77,7 @@ export const CardDisplay: React.FC<CardDisplayProps> = ({
             <div 
               className="absolute -right-4 top-1/2 -translate-y-1/2 flex items-center justify-center w-8 h-8 rounded-full border-2 border-[#d4af37] bg-[#2a1708] text-[#d4af37] font-bold text-sm shadow-lg z-10"
             >
-              {getCardSum(cards)}
+              {sum}
             </div>
           )}
         </div>
@@ -110,7 +111,7 @@ export const CardDisplay: React.FC<CardDisplayProps> = ({
             <div 
               className="absolute -right-5 top-1/2 -translate-y-1/2 flex items-center justify-center w-9 h-9 rounded-full border-2 border-[#d4af37] bg-[#2a1708] text-[#d4af37] font-bold text-base shadow-lg z-10"
             >
-              {getCardSum(cards)}
+              {sum}
             </div>
           )}
         </div>

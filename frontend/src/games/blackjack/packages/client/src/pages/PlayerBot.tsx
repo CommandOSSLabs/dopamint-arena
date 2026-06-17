@@ -419,6 +419,7 @@ export default function PlayerBot() {
           <CardDisplay
             title="Dealer Bot"
             cards={view.dealerCards}
+            sum={view.dealerSum}
             isWinning={result === "lose"}
           />
         </div>
@@ -472,6 +473,7 @@ export default function PlayerBot() {
           <CardDisplay
             title="Player Bot"
             cards={view.playerCards}
+            sum={view.playerSum}
             isPlayer
             isWinning={result === "win"}
           />
