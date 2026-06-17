@@ -11,8 +11,7 @@ import {
   type MultiGameTicTacToeState,
 } from "@ttt/shared";
 import {
-  buildCreateAndShareTx,
-  buildDepositTx,
+  buildCreateAndFundTx,
   buildSettleWithRootTx,
   buildUpdateStateTx,
   parseTunnelId,
@@ -48,9 +47,8 @@ export type BotPhase =
   | "error";
 
 export interface BotDigests {
+  /** The single open+fund+activate tx (create_and_fund), signed by bot X. */
   create?: string;
-  depositX?: string;
-  depositO?: string;
   /** Checkpoint of the final co-signed state (update_state), submitted before close. */
   update?: string;
   close?: string;
@@ -263,7 +261,7 @@ export function useBotGame(difficulty: Difficulty = "even"): BotGameView {
   }, [client, bots, refreshBalances]);
 
   // Run ONE tunnel that plays `maxGames` TTT games back-to-back and settles ONCE:
-  // create -> 2 deposits -> animated multi-game self-play -> a single cooperative
+  // open+fund (one tx) -> animated multi-game self-play -> a single cooperative
   // close carrying the net balances. Per-game results update the running score as
   // each game finishes inside the tunnel. When auto-play is on, schedules the next
   // *tunnel* (or stops if a bot is low on gas).
@@ -291,10 +289,12 @@ export function useBotGame(difficulty: Difficulty = "even"): BotGameView {
         const partyX = { address: bots.x.address, publicKey: bots.x.publicKey };
         const partyO = { address: bots.o.address, publicKey: bots.o.publicKey };
 
-        // 1) botX create + share.
+        // 1) open + fund (both 1-MIST stakes) + activate in ONE tx: bot X signs a single
+        // create_and_fund that funds both parties from its own gas coin. Bot O signs nothing
+        // on-chain; the tunnel is active the moment this lands.
         setPhase("opening");
         const createRes = await submit(
-          buildCreateAndShareTx(partyX, partyO),
+          buildCreateAndFundTx(partyX, partyO, 1n),
           bots.x.keypair,
         );
         const tunnelId = parseTunnelId(createRes.objectChanges);
@@ -311,13 +311,7 @@ export function useBotGame(difficulty: Difficulty = "even"): BotGameView {
         )?.fields;
         const createdAt = BigInt((fields?.created_at as string | undefined) ?? 0);
 
-        // 3) both bots deposit 1 MIST.
-        const depXRes = await submit(buildDepositTx(tunnelId), bots.x.keypair);
-        setDigests((d) => ({ ...d, depositX: depXRes.digest }));
-        const depORes = await submit(buildDepositTx(tunnelId), bots.o.keypair);
-        setDigests((d) => ({ ...d, depositO: depORes.digest }));
-
-        // 4) off-chain self-play tunnel (both keys held locally), driving the
+        // 3) off-chain self-play tunnel (both keys held locally), driving the
         //    multi-game protocol so ALL games share this single tunnel.
         const tunnel = core.OffchainTunnel.selfPlay<
           MultiGameTicTacToeState,
@@ -337,7 +331,7 @@ export function useBotGame(difficulty: Difficulty = "even"): BotGameView {
         const transcript = new proof.Transcript(tunnelId);
         tunnel.onUpdate = (u) => transcript.append(u);
 
-        // 5) animate moves across all N games; each .step co-signs AND verifies both
+        // 4) animate moves across all N games; each .step co-signs AND verifies both
         //    sigs (mode "full"). A move either advances the live inner game or, when
         //    the inner game has just finished, resets to the next game's board. We
         //    record each finished game's winner exactly once into the running score.
@@ -415,7 +409,7 @@ export function useBotGame(difficulty: Difficulty = "even"): BotGameView {
         setBoard([...finalInner.board]);
         setWinner(finalInner.winner);
 
-        // 6) checkpoint the FINAL co-signed state on-chain (update_state) so the tunnel
+        // 5) checkpoint the FINAL co-signed state on-chain (update_state) so the tunnel
         // object's state field shows the played-out state_hash + balances + nonce, then
         // close with the transcript root. Steps are signed with created_at, so the latest
         // update passes the timestamp check.
@@ -429,7 +423,7 @@ export function useBotGame(difficulty: Difficulty = "even"): BotGameView {
           setDigests((d) => ({ ...d, update: ures.digest }));
         }
 
-        // 7) settle: anchor the transcript root AND distribute funds in one cooperative close.
+        // 6) settle: anchor the transcript root AND distribute funds in one cooperative close.
         // The root commits to EVERY co-signed update. After update_state the on-chain
         // state.nonce is latest.nonce (N), so close_cooperative_with_root derives finalNonce
         // = N + 1 — pass onchainNonce N so the signed settlement matches.
@@ -449,7 +443,7 @@ export function useBotGame(difficulty: Difficulty = "even"): BotGameView {
         const b = await refreshBalances();
         setPhase("done");
 
-        // 8) auto-play: continue with the next tunnel until a bot is low on gas.
+        // 7) auto-play: continue with the next tunnel until a bot is low on gas.
         if (autoRef.current) {
           if (b && b.x >= MIN_PLAY_MIST && b.o >= MIN_PLAY_MIST) {
             nextRef.current = setTimeout(() => {

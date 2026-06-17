@@ -238,7 +238,7 @@ export function GameScene({
               </li>
               
               <li className="flex justify-between items-center py-1 border-b border-primary/5">
-                <span className="flex items-center gap-1.5"><span className="text-secondary font-bold">1</span> Create Tunnel</span>
+                <span className="flex items-center gap-1.5"><span className="text-secondary font-bold">1</span> Open &amp; Fund</span>
                 {g.digests.create ? (
                   <a
                     href={`https://suiscan.xyz/testnet/tx/${g.digests.create}`}
@@ -254,39 +254,7 @@ export function GameScene({
               </li>
 
               <li className="flex justify-between items-center py-1 border-b border-primary/5">
-                <span className="flex items-center gap-1.5"><span className="text-secondary font-bold">2</span> Deposit Bot X</span>
-                {g.digests.depositX ? (
-                  <a
-                    href={`https://suiscan.xyz/testnet/tx/${g.digests.depositX}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="font-mono text-primary underline hover:text-secondary"
-                  >
-                    {g.digests.depositX.slice(0, 6)}…{g.digests.depositX.slice(-4)}
-                  </a>
-                ) : (
-                  <span className="text-outline/40">—</span>
-                )}
-              </li>
-
-              <li className="flex justify-between items-center py-1 border-b border-primary/5">
-                <span className="flex items-center gap-1.5"><span className="text-secondary font-bold">3</span> Deposit Bot O</span>
-                {g.digests.depositO ? (
-                  <a
-                    href={`https://suiscan.xyz/testnet/tx/${g.digests.depositO}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="font-mono text-primary underline hover:text-secondary"
-                  >
-                    {g.digests.depositO.slice(0, 6)}…{g.digests.depositO.slice(-4)}
-                  </a>
-                ) : (
-                  <span className="text-outline/40">—</span>
-                )}
-              </li>
-
-              <li className="flex justify-between items-center py-1 border-b border-primary/5">
-                <span className="flex items-center gap-1.5"><span className="text-secondary font-bold">4</span> Transcript Root</span>
+                <span className="flex items-center gap-1.5"><span className="text-secondary font-bold">2</span> Transcript Root</span>
                 {g.digests.root ? (
                   <span
                     title={g.digests.root}
@@ -300,7 +268,7 @@ export function GameScene({
               </li>
 
               <li className="flex justify-between items-center py-1 border-b border-primary/5">
-                <span className="flex items-center gap-1.5"><span className="text-secondary font-bold">5</span> State Checkpoint</span>
+                <span className="flex items-center gap-1.5"><span className="text-secondary font-bold">3</span> State Checkpoint</span>
                 {g.digests.update ? (
                   <a
                     href={`https://suiscan.xyz/testnet/tx/${g.digests.update}`}
@@ -316,7 +284,7 @@ export function GameScene({
               </li>
 
               <li className="flex justify-between items-center py-1 border-b border-primary/5">
-                <span className="flex items-center gap-1.5"><span className="text-secondary font-bold">6</span> Settle & Close</span>
+                <span className="flex items-center gap-1.5"><span className="text-secondary font-bold">4</span> Settle & Close</span>
                 {g.digests.close ? (
                   <a
                     href={`https://suiscan.xyz/testnet/tx/${g.digests.close}`}

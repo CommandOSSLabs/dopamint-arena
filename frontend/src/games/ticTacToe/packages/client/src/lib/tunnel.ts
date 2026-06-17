@@ -1,4 +1,5 @@
 import { Transaction } from "@mysten/sui/transactions";
+import { SUI_CLOCK_OBJECT_ID } from "@mysten/sui/utils";
 import { core, onchain, protocols } from "sui-tunnel-ts";
 import { encodeStateHash, buildStateUpdateMsg, buildSettlementMsg } from "@ttt/shared";
 
@@ -18,22 +19,42 @@ export interface PartyInput {
 // the client uses @mysten/sui@1.45.2. The two Transaction classes are structurally
 // incompatible (private fields), so cast ONLY at this builder boundary. The built bytes are
 // identical — the cast is type-only. (Same pattern as CustomWallet's sign/build calls.)
-type SdkTx = Parameters<typeof onchain.buildCreateAndShare>[0];
+type SdkTx = Parameters<typeof onchain.buildUpdateState>[0];
 
-export function buildCreateAndShareTx(partyA: PartyInput, partyB: PartyInput): Transaction {
+const PACKAGE_ID = import.meta.env.VITE_TTT_PACKAGE_ID as string;
+
+// Open + fund (both stakes) + activate the tunnel in ONE PTB via the framework's
+// `tunnel::create_and_fund` extension. The single signer (bot X) supplies BOTH 1-MIST stakes
+// from its own gas coin, so bot O signs nothing on-chain and the old 3-tx open (create_and_share
+// + deposit X + deposit O) collapses to one signature. At cooperative close both stakes return
+// to their parties by the co-signed final balances.
+//
+// Built as a raw moveCall (mirroring the SDK's onchain.buildCreateAndFund) rather than via the
+// SDK helper, so it works regardless of whether this client's pinned SDK build exports it.
+export function buildCreateAndFundTx(
+  partyA: PartyInput,
+  partyB: PartyInput,
+  stake: bigint,
+): Transaction {
   const tx = new Transaction();
-  onchain.buildCreateAndShare(tx as unknown as SdkTx, {
-    partyA: { address: partyA.address, publicKey: partyA.publicKey, signatureType: core.SignatureScheme.ED25519 },
-    partyB: { address: partyB.address, publicKey: partyB.publicKey, signatureType: core.SignatureScheme.ED25519 },
-    timeoutMs: 86400000n,
-    penaltyAmount: 0n,
+  const [coinA, coinB] = tx.splitCoins(tx.gas, [stake, stake]);
+  tx.moveCall({
+    target: `${PACKAGE_ID}::tunnel::create_and_fund`,
+    typeArguments: ["0x2::sui::SUI"],
+    arguments: [
+      tx.pure.address(partyA.address),
+      tx.pure.vector("u8", Array.from(partyA.publicKey)),
+      tx.pure.u8(core.SignatureScheme.ED25519),
+      tx.pure.address(partyB.address),
+      tx.pure.vector("u8", Array.from(partyB.publicKey)),
+      tx.pure.u8(core.SignatureScheme.ED25519),
+      coinA,
+      coinB,
+      tx.pure.u64(86400000n),
+      tx.pure.u64(0n),
+      tx.object(SUI_CLOCK_OBJECT_ID),
+    ],
   });
-  return tx;
-}
-
-export function buildDepositTx(tunnelId: string): Transaction {
-  const tx = new Transaction();
-  onchain.buildDepositFromGas(tx as unknown as SdkTx, { tunnelId, amount: 1n });
   return tx;
 }
 
