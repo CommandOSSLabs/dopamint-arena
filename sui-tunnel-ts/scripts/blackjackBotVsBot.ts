@@ -6,24 +6,30 @@
  * Run:  SUI_FUNDER_KEY=<suiprivkey…> node --import tsx scripts/blackjackBotVsBot.ts
  * (SUI_FUNDER_KEY is any funded testnet key; it seeds the two fresh bot keypairs.)
  *
- * Flow: two fresh bot keypairs funded from SUI_FUNDER_KEY ->
- *   botA create_and_share -> both deposit STAKE -> selfPlay (every state dual-signed +
- *   verified, basic-strategy bots) -> botA close_cooperative -> coins paid out on-chain.
+ * Flow: player-bot A funded from SUI_FUNDER_KEY (dealer-bot B holds no SUI) ->
+ *   botA create_and_fund (ONE PTB: open + fund both stakes + activate) -> selfPlay (every
+ *   state dual-signed + verified, basic-strategy bots) -> botA update_state(final) ->
+ *   botA close_cooperative_with_root -> coins paid out on-chain.
  */
 import { core, protocols, createSuiClient, onchain, proof } from "../src/index.ts";
+// create_and_fund lives in its own module (a Dopamint extension); the SDK's own example imports
+// it the same way rather than via the onchain barrel, keeping that upstream file conflict-free.
+import { buildOpenAndFundMany } from "../src/onchain/createAndFund.ts";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import { decodeSuiPrivateKey } from "@mysten/sui/cryptography";
 import { Transaction } from "@mysten/sui/transactions";
 
 // Deployed sui_tunnel framework on testnet (see memory: sui-tunnel-testnet-deployment).
+// This build carries the `create_and_fund` extension used below.
 const PACKAGE_ID =
-  "0x8b6cc035bc3d8c4defc27e80a398db428dde98bfdc669e5012bd80adb38af2d4";
+  "0x0b89fe86e42cdbfd1e614757a83d014b455d12923d0dded58842ab18f8a5a22b";
 process.env.PACKAGE_ID ??= PACKAGE_ID;
 
 /** Per-party locked stake (MIST). Must be >= the protocol WAGER (100) to play. */
 const STAKE = 500n;
-/** Gas top-up sent to each bot (MIST) = 0.05 SUI. */
-const FUND_PER_BOT = 50_000_000;
+/** Gas top-up sent to the player bot (MIST) = 0.1 SUI. It signs every on-chain tx; the
+ *  dealer bot signs nothing (create_and_fund covers both stakes), so it needs no SUI. */
+const FUND_PLAYER_BOT = 100_000_000;
 
 const proto = new protocols.BlackjackProtocol();
 type State = protocols.BlackjackState;
@@ -58,18 +64,18 @@ async function main() {
   const botB = makeBot(); // dealer-bot
   console.log("player-bot A:", botA.address, "\ndealer-bot B:", botB.address);
 
-  // Fund both bots for gas (one tx from the funder).
+  // Fund ONLY the player bot for gas (one tx from the funder). It signs every on-chain tx and
+  // funds both stakes via create_and_fund; the dealer bot signs nothing, so it gets no SUI.
   const fund = new Transaction();
-  const [ca, cb] = fund.splitCoins(fund.gas, [FUND_PER_BOT, FUND_PER_BOT]);
+  const [ca] = fund.splitCoins(fund.gas, [FUND_PLAYER_BOT]);
   fund.transferObjects([ca], botA.address);
-  fund.transferObjects([cb], botB.address);
   const fres = await client.signAndExecuteTransaction({
     signer: funder,
     transaction: fund,
     options: { showEffects: true },
   });
   await client.waitForTransaction({ digest: fres.digest });
-  console.log("funded bots:", fres.digest);
+  console.log("funded player-bot A:", fres.digest);
 
   const partyArgs = (b: typeof botA) => ({
     address: b.address,
@@ -77,28 +83,36 @@ async function main() {
     signatureType: core.SignatureScheme.ED25519,
   });
 
-  // 1) create + share the tunnel on-chain (botA pays gas).
-  const { tunnelId, digest: createDigest } = await onchain.createTunnel(
-    client,
-    botA.keypair,
+  // 1) open + fund (both stakes) + activate in ONE PTB via create_and_fund. botA splits both
+  // stakes off its gas coin and signs once; no separate deposits, and the tunnel is active the
+  // moment this lands (TunnelCreated + TunnelActivated fire in the same checkpoint).
+  const openTx = new Transaction();
+  buildOpenAndFundMany(openTx, [
     {
       partyA: partyArgs(botA),
       partyB: partyArgs(botB),
+      aAmount: STAKE,
+      bAmount: STAKE,
       timeoutMs: 86_400_000n,
       penaltyAmount: 0n,
     },
-    { waitForFinality: true },
-  );
-  console.log("create:", createDigest, "tunnel:", tunnelId);
+  ]);
+  const openRes = await client.signAndExecuteTransaction({
+    signer: botA.keypair,
+    transaction: openTx,
+    options: { showObjectChanges: true, showEffects: true },
+  });
+  if (openRes.effects?.status?.status !== "success")
+    throw new Error(`create_and_fund failed: ${openRes.effects?.status?.error ?? "unknown"}`);
+  await client.waitForTransaction({ digest: openRes.digest });
+  const tunnelId = onchain.parseTunnelId(openRes.objectChanges);
+  if (!tunnelId) throw new Error("could not find created Tunnel id");
+  console.log("create_and_fund:", openRes.digest, "tunnel:", tunnelId);
 
   // Read the on-chain created_at — the settlement message is signed with it.
   const obj = await client.getObject({ id: tunnelId, options: { showContent: true } });
   const fields = (obj.data?.content as { fields?: Record<string, unknown> } | undefined)?.fields;
   const createdAt = BigInt((fields?.created_at as string) ?? 0);
-
-  // 2) both parties deposit their stake (auto-activates on the 2nd deposit).
-  console.log("deposit A:", await onchain.depositAs(client, botA.keypair, tunnelId, STAKE, { waitForFinality: true }));
-  console.log("deposit B:", await onchain.depositAs(client, botB.keypair, tunnelId, STAKE, { waitForFinality: true }));
 
   // 3) off-chain self-play: bots co-sign every state update until the game is terminal.
   const tunnel = core.OffchainTunnel.selfPlay(
