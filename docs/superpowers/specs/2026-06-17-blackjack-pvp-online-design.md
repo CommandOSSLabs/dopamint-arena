@@ -32,10 +32,18 @@ online mode:
 PvP shares only the underlying tunnel/SDK primitives with self-play; nothing in PvP touches
 the self-play path.
 
+> **Revision (2026-06-18):** the on-chain identity changed from a faucet-funded local keypair
+> to the **connected Sui wallet** (dapp-kit). The main menu now shows a **Connect Wallet**
+> login that gates the game options; PvP funds the stake / receives winnings / signs the
+> `party.hello` attestation with that connected wallet (via `useSignAndExecuteTransaction` /
+> `useSignPersonalMessage`). The ephemeral move-key is unchanged. (Implemented in
+> `Home.tsx`, `usePvpBlackjack.ts`, `bjPvpIdentity.ts` `attestationMessage`, `PvpBlackjack.tsx`.)
+
 ### Decisions locked (brainstorming)
 - **Game model:** symmetric duel, shared auto-dealer, head-to-head pot (option 1A).
-- **On-chain identity:** faucet-funded **local wallet keypair per browser** (option 2A); no
-  wallet extension required for the first cut (dapp-kit is wired and remains a later upgrade).
+- **On-chain identity:** the **connected Sui wallet** via dapp-kit (option 2B; see the
+  Revision above), connected through a main-menu login before playing. The wallet funds the
+  stake, receives winnings, and signs the attestation; the ephemeral key still signs moves.
 - **Settle:** **client-side cooperative close** (`buildCloseFromSettlement`) — no
   backend-`/settle` + Walrus archival in the first cut.
 - **Match granularity:** **one hand per match** (rematch by re-queue). Multi-round is a later
