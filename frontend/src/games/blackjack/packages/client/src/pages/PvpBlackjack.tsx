@@ -56,7 +56,10 @@ function statusText(g: ReturnType<typeof usePvpBlackjack>): string {
   if (g.phase === "settling") return "Settling on-chain…";
   if (g.gamePhase === "player") return g.isDealer ? "Player is deciding…" : "Your turn — Hit or Stand";
   if (g.gamePhase === "dealer") return "Dealer drawing…";
-  if (g.gamePhase === "round_over") return g.terminal ? "Session over — Stop to cash out" : `Round ${g.round} over`;
+  if (g.gamePhase === "round_over") {
+    if (g.terminal) return g.outOfChips ? `${g.outOfChips === "player" ? "Player" : "Dealer"} is out of chips — settling…` : "Round cap reached — settling…";
+    return `Round ${g.round} over`;
+  }
   return "";
 }
 

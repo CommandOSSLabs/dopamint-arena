@@ -44,7 +44,8 @@ export interface PvpView {
   gamePhase: "player" | "dealer" | "round_over" | null;
   myTurn: boolean; // I'm the player and it's the player's turn (Hit/Stand)
   inRoundOver: boolean; // round resolved — can Next / Stop
-  terminal: boolean; // round cap or a side can't fund — only Stop
+  terminal: boolean; // round cap or a side can't fund — forces an auto-settle
+  outOfChips: "player" | "dealer" | null; // a side can't cover the next wager → forced settle
   rounds: RoundResult[];
   auto: boolean;
   walletAddress: string;
@@ -312,6 +313,10 @@ export function usePvpBlackjack(): PvpView {
   const terminal = s ? proto.isTerminal(s) : false;
   const myTurn = !!s && s.phase === "player" && roleRef.current === "A";
   const inRoundOver = !!s && s.phase === "round_over";
+  // Which side (if any) can no longer cover the per-round wager — this forces the auto-settle.
+  const outOfChips: "player" | "dealer" | null = s
+    ? s.balanceA < s.wager ? "player" : s.balanceB < s.wager ? "dealer" : null
+    : null;
 
   return {
     phase, error, role, isDealer,
@@ -321,7 +326,7 @@ export function usePvpBlackjack(): PvpView {
     balancePlayer: s ? s.balanceA : 0n,
     balanceDealer: s ? s.balanceB : 0n,
     round: s ? Number(s.round) : 0,
-    gamePhase, myTurn, inRoundOver, terminal, rounds, auto,
+    gamePhase, myTurn, inRoundOver, terminal, outOfChips, rounds, auto,
     walletAddress, walletBalance, digests,
     fund, queue, hit, stand, next, stop, setAuto, leave,
   };
