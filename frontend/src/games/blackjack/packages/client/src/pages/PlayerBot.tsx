@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   ConnectButton,
@@ -13,6 +13,36 @@ import {
   MAX_ROUNDS_PER_TUNNEL,
 } from "@/hooks/useBlackjackBot";
 import { loadOrCreateBots, buildFundTx, FUND_PER_BOT_MIST } from "@/lib/bjBots";
+
+const chip25 = "/chip-25.svg";
+const chip100 = "/chip-100.svg";
+const chip500 = "/chip-500.svg";
+const chip1000 = "/chip-1000.svg";
+
+function getChipStack(balance: number): string[] {
+  const stack: string[] = [];
+  let remaining = balance;
+  
+  const chipTypes = [
+    { value: 1000, asset: chip1000 },
+    { value: 500, asset: chip500 },
+    { value: 100, asset: chip100 },
+    { value: 25, asset: chip25 },
+  ];
+
+  for (const chip of chipTypes) {
+    while (remaining >= chip.value && stack.length < 6) {
+      stack.push(chip.asset);
+      remaining -= chip.value;
+    }
+  }
+  
+  if (stack.length === 0 && balance > 0) {
+    stack.push(chip25);
+  }
+  
+  return stack;
+}
 
 // Quick-pick targets for rounds played off-chain per tunnel before it settles once.
 const ROUND_PRESETS = [5, 10, 25, 50, 100];
@@ -82,6 +112,115 @@ export default function PlayerBot() {
     setMaxRounds,
   } = game;
   const latestRound = rounds.length > 0 ? rounds[rounds.length - 1] : null;
+
+  const [animState, setAnimState] = useState<"idle" | "deal" | "win" | "lose" | "push">("idle");
+  const prevRoundRef = useRef<number>(-1);
+  const prevPhaseRef = useRef<string>("");
+  const prevBalanceRef = useRef<number>(-1);
+  const roundsEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    roundsEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [rounds.length]);
+
+  useEffect(() => {
+    const hasCards = view.playerCards.length > 0 || view.dealerCards.length > 0;
+    if (!hasCards) {
+      setAnimState("idle");
+      prevRoundRef.current = -1;
+      return;
+    }
+
+    if (prevRoundRef.current === -1) {
+      prevRoundRef.current = view.round;
+      prevPhaseRef.current = view.phase;
+      prevBalanceRef.current = view.playerBalance;
+      if (view.phase === "player") {
+        setAnimState("deal");
+      }
+      return;
+    }
+
+    const roundChanged = view.round !== prevRoundRef.current;
+    const phaseChanged = view.phase !== prevPhaseRef.current;
+
+    if (roundChanged || (phaseChanged && view.phase === "player")) {
+      setAnimState("deal");
+    } else if (phaseChanged && view.phase === "round_over") {
+      const balanceDiff = view.playerBalance - prevBalanceRef.current;
+      if (balanceDiff > 0) {
+        setAnimState("win");
+      } else if (balanceDiff < 0) {
+        setAnimState("lose");
+      } else {
+        setAnimState("push");
+      }
+    }
+
+    prevRoundRef.current = view.round;
+    prevPhaseRef.current = view.phase;
+    prevBalanceRef.current = view.playerBalance;
+  }, [view.round, view.phase, view.playerBalance]);
+
+  type ToastMsg = { id: number; msg: string; type: "info" | "win" | "lose" | "push" };
+  const [toasts, setToasts] = useState<ToastMsg[]>([]);
+  const toastIdRef = useRef(0);
+
+  const addToast = (msg: string, type: ToastMsg["type"] = "info") => {
+    setToasts((prev) => {
+      const newToasts = [...prev, { id: toastIdRef.current++, msg, type }];
+      if (newToasts.length > 5) return newToasts.slice(newToasts.length - 5);
+      return newToasts;
+    });
+  };
+
+  const prevViewRef = useRef(view);
+  const prevRoundsLenRef = useRef(rounds.length);
+
+  useEffect(() => {
+    const prev = prevViewRef.current;
+    
+    // Player Hit
+    if (view.playerCards.length > prev.playerCards.length && prev.playerCards.length > 0) {
+      addToast(`Player Bot Hits (${view.playerSum})`);
+    }
+    // Player Stand
+    if (prev.phase === "player" && view.phase === "dealer") {
+      addToast(`Player Bot Stands (${prev.playerSum})`);
+    }
+    // Dealer Hit
+    if (view.dealerCards.length > prev.dealerCards.length && prev.dealerCards.length > 0) {
+      addToast(`Dealer Bot Hits (${view.dealerSum})`);
+    }
+    // Dealer Stand
+    if (prev.phase === "dealer" && view.phase === "round_over") {
+      addToast(`Dealer Bot Stands (${prev.dealerSum})`);
+    }
+    
+    prevViewRef.current = view;
+  }, [view]);
+
+  useEffect(() => {
+    if (rounds.length > prevRoundsLenRef.current) {
+      const newRound = rounds[rounds.length - 1];
+      if (newRound) {
+        if (newRound.outcome === "win") addToast(`Player Bot Wins!`, "win");
+        else if (newRound.outcome === "lose") addToast(`Dealer Bot Wins!`, "lose");
+        else addToast(`Round Push`, "push");
+      }
+    }
+    prevRoundsLenRef.current = rounds.length;
+  }, [rounds]);
+
+  // Reset animation state to idle after win/lose/push completes
+  useEffect(() => {
+    if (animState === "win" || animState === "lose" || animState === "push") {
+      const timer = setTimeout(() => {
+        setAnimState("idle");
+      }, 850);
+      return () => clearTimeout(timer);
+    }
+  }, [animState]);
 
   // Wallet funding: send FUND_PER_BOT_MIST to each bot from the connected wallet's gas
   // coin. Persistent bot keys mean one top-up covers many games (deposits are refunded).
@@ -226,7 +365,7 @@ export default function PlayerBot() {
   if (!started) {
     return (
       <div className="h-screen w-screen flex flex-col items-center justify-center relative text-white overflow-hidden select-none bg-zinc-950 bg-cover bg-center fade-in-up"
-        style={{ backgroundImage: "url('/dealer-desk.png')" }}
+        style={{ backgroundImage: "url('/dealer-desk-plain-rotated.png')" }}
       >
         <div className="absolute inset-0 bg-black/60" />
         <div className="relative z-10 flex flex-col items-center gap-6 bg-zinc-950/85 border border-zinc-800 rounded-2xl p-8 max-w-md w-full mx-4 shadow-2xl">
@@ -310,7 +449,7 @@ export default function PlayerBot() {
       {/* Play area: dealer-desk felt with dealer (top) and player (bottom) hands */}
       <div
         className="flex-1 w-full relative bg-cover bg-center"
-        style={{ backgroundImage: "url('/dealer-desk.png')" }}
+        style={{ backgroundImage: "url('/dealer-desk-plain-rotated.png')" }}
       >
         {/* Back button */}
         <button
@@ -334,96 +473,158 @@ export default function PlayerBot() {
         </div>
 
         {/* Top-right side panels: per-round log, then persistent tunnel history below it. */}
-        {(rounds.length > 0 || tunnels.length > 0) && (
-          <div className="absolute top-16 right-3 md:top-4 md:right-4 z-20 w-44 md:w-52 max-h-[80vh] flex flex-col gap-2">
-            {/* Per-round running log: newest at the bottom, auto-scrolls into view */}
-            {rounds.length > 0 && (
-              <div className="max-h-[38vh] flex flex-col bg-black/70 backdrop-blur-sm border border-amber-950 rounded-lg shadow-lg overflow-hidden">
-                <div className="px-3 py-1.5 text-[10px] font-extrabold uppercase tracking-widest text-[#d4af37] font-serif border-b border-amber-950/70">
-                  Rounds
-                </div>
-                <div className="flex-1 overflow-y-auto px-2 py-1.5 flex flex-col gap-0.5">
-                  {rounds.map((r, i) => {
-                    const style = OUTCOME_STYLE[r.outcome];
-                    return (
-                      <div
-                        key={`${r.round}-${i}`}
-                        className={`flex items-center justify-between gap-2 font-mono text-[11px] tabular-nums ${style.text}`}
-                      >
-                        <span className="text-zinc-500">R{r.round + 1}</span>
-                        <span className="text-zinc-300">
-                          P:{r.playerSum} D:{r.dealerSum}
-                        </span>
-                        <span className="font-bold">
-                          {style.label}
-                          {r.outcome !== "push" && (
-                            <span className="ml-1">{signed(r.delta)}</span>
-                          )}
-                        </span>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
+        {/* Rounds running log: top-right corner, fixed height for ~3 rows, scrollable */}
+        {rounds.length > 0 && (
+          <div className="absolute top-16 right-3 md:top-4 md:right-4 z-20 w-44 md:w-52 flex flex-col bg-black/70 backdrop-blur-sm border border-amber-950 rounded-lg shadow-lg overflow-hidden">
+            <div className="px-3 py-1.5 text-[10px] font-extrabold uppercase tracking-widest text-[#d4af37] font-serif border-b border-amber-950/70">
+              Rounds
+            </div>
+            <div className="max-h-[250px] overflow-y-auto px-2 py-1.5 flex flex-col gap-0.5 scrollbar-thin">
+              {rounds.map((r, i) => {
+                const style = OUTCOME_STYLE[r.outcome];
+                return (
+                  <div
+                    key={`${r.round}-${i}`}
+                    className={`flex items-center justify-between gap-2 font-mono text-[11px] tabular-nums ${style.text}`}
+                  >
+                    <span className="text-zinc-500">R{r.round + 1}</span>
+                    <span className="text-zinc-300">
+                      P:{r.playerSum} D:{r.dealerSum}
+                    </span>
+                    <span className="font-bold">
+                      {style.label}
+                      {r.outcome !== "push" && (
+                        <span className="ml-1">{signed(r.delta)}</span>
+                      )}
+                    </span>
+                  </div>
+                );
+              })}
+              <div ref={roundsEndRef} />
+            </div>
+          </div>
+        )}
 
-            {/* Persistent tunnel history (newest first): one row per settled tunnel with its
-                id, outcome, rounds played, and suiscan links for create/settle and the tunnel. */}
-            {tunnels.length > 0 && (
-              <div className="max-h-[40vh] flex flex-col bg-black/70 backdrop-blur-sm border border-amber-950 rounded-lg shadow-lg overflow-hidden">
-                <div className="px-3 py-1.5 text-[10px] font-extrabold uppercase tracking-widest text-[#d4af37] font-serif border-b border-amber-950/70">
-                  Tunnels
-                </div>
-                <div className="flex-1 overflow-y-auto px-2 py-1.5 flex flex-col gap-1.5">
-                  {tunnels.map((t) => {
-                    const style = OUTCOME_STYLE[t.result];
-                    return (
-                      <div
-                        key={t.tunnelId}
-                        className="flex flex-col gap-0.5 pb-1.5 border-b border-zinc-850 last:border-b-0 last:pb-0"
+        {/* Toasts overlay: left of Rounds panel */}
+        <div className="absolute top-16 right-48 md:top-4 md:right-60 z-30 flex flex-col items-end gap-2 pointer-events-none">
+          {toasts.map((t) => (
+            <div
+              key={t.id}
+              className={`px-3 py-1.5 rounded-md shadow-lg text-xs font-mono font-bold fade-in-up
+              ${
+                t.type === "win"
+                  ? "bg-emerald-900/90 text-emerald-400 border border-emerald-500/50"
+                  : t.type === "lose"
+                  ? "bg-rose-900/90 text-rose-400 border border-rose-500/50"
+                  : t.type === "push"
+                  ? "bg-amber-900/90 text-amber-400 border border-amber-500/50"
+                  : "bg-zinc-900/90 text-zinc-300 border border-zinc-700/50"
+              }`}
+            >
+              {t.msg}
+            </div>
+          ))}
+        </div>
+
+        {/* Tunnels history: bottom-right corner, wider to fit links, max 3 rows, scrollable */}
+        <div className="absolute bottom-[96px] right-3 md:right-4 z-20 w-[450px] flex flex-col bg-black/70 backdrop-blur-sm border border-amber-950 rounded-lg shadow-lg overflow-hidden">
+          <div className="px-3 py-1.5 text-[10px] font-extrabold uppercase tracking-widest text-[#d4af37] font-serif border-b border-amber-950/70">
+            Tunnels
+          </div>
+          <div className="max-h-[135px] overflow-y-auto px-2 py-1.5 flex flex-col gap-1.5 scrollbar-thin">
+            {tunnels.length === 0 ? (
+              <div className="text-[10px] text-zinc-500 italic p-2">Waiting for tunnel data...</div>
+            ) : (
+              tunnels.map((t) => {
+                const style = OUTCOME_STYLE[t.result];
+                return (
+                  <div
+                    key={t.tunnelId}
+                    className="flex flex-col gap-0.5 pb-1.5 border-b border-zinc-850 last:border-b-0 last:pb-0"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <a
+                        href={`${SUISCAN_OBJECT}${t.tunnelId}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="font-mono text-[11px] text-[#d4af37] hover:text-amber-300 underline underline-offset-2 transition-colors"
+                        title={t.tunnelId}
                       >
-                        <div className="flex items-center justify-between gap-2">
-                          <a
-                            href={`${SUISCAN_OBJECT}${t.tunnelId}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="font-mono text-[11px] text-[#d4af37] hover:text-amber-300 underline underline-offset-2 transition-colors"
-                            title={t.tunnelId}
-                          >
-                            {shortId(t.tunnelId)}
-                          </a>
+                        {shortId(t.tunnelId)}
+                      </a>
+                      <span
+                        className={`text-[10px] font-bold uppercase tracking-wider ${style.text}`}
+                      >
+                        {style.label}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-2 font-mono text-[10px] text-zinc-500 tabular-nums">
+                      <span>{t.rounds} rounds</span>
+                      <span className="flex items-center gap-2">
+                        <DigestLink label="create" digest={t.createDigest} />
+                        <DigestLink label="settle" digest={t.closeDigest} />
+                        {t.rootHex ? (
                           <span
-                            className={`text-[10px] font-bold uppercase tracking-wider ${style.text}`}
+                            title={`transcript root ${t.rootHex}`}
+                            className="text-zinc-600"
                           >
-                            {style.label}
+                            root {t.rootHex.slice(0, 8)}…
                           </span>
-                        </div>
-                        <div className="flex items-center justify-between gap-2 font-mono text-[10px] text-zinc-500 tabular-nums">
-                          <span>{t.rounds} rounds</span>
-                          <span className="flex items-center gap-2">
-                            <DigestLink label="create" digest={t.createDigest} />
-                            <DigestLink label="settle" digest={t.closeDigest} />
-                            {t.rootHex ? (
-                              <span
-                                title={`transcript root ${t.rootHex}`}
-                                className="text-zinc-600"
-                              >
-                                root {t.rootHex.slice(0, 8)}…
-                              </span>
-                            ) : null}
-                          </span>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
+                        ) : null}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+
+        {/* Betting Spot (Desk Layout) */}
+        <div className={`betting-spot ${animState !== "idle" ? "active" : ""}`}>
+          <div className="betting-label">PAYS 3 TO 2</div>
+          <div className="text-[8px] text-[#d4af37]/60 font-mono tracking-wider font-extrabold uppercase mt-1">WAGER $100</div>
+        </div>
+
+        {/* Active Animated Chips Layer */}
+        {animState !== "idle" && (
+          <div className="table-chips-layer">
+            {animState === "deal" && (
+              <img src={chip100} className="animated-chip chip-deal" alt="bet chip" />
+            )}
+            {animState === "win" && (
+              <>
+                <img src={chip100} className="animated-chip chip-win-collect-1" alt="bet chip 1" />
+                <img src={chip100} className="animated-chip chip-win-collect-2" alt="bet chip 2" />
+              </>
+            )}
+            {animState === "lose" && (
+              <img src={chip100} className="animated-chip chip-lose" alt="bet chip" />
+            )}
+            {animState === "push" && (
+              <img src={chip100} className="animated-chip chip-push" alt="bet chip" />
             )}
           </div>
         )}
 
         {/* Dealer hand (top) */}
         <div className="absolute top-[20%] md:top-[16%] left-1/2 -translate-x-1/2 z-20 w-full max-w-xs flex flex-col items-center">
+          {/* Dealer Stack Display */}
+          <div className="absolute -left-8 md:-left-14 top-[40px] flex flex-col items-center">
+            <span className="text-[7px] text-emerald-200/50 uppercase tracking-widest mb-1 font-bold">Stacks</span>
+            <div className="profile-chip-stack">
+              {getChipStack(view.dealerBalance).map((chip, idx) => (
+                <img
+                  key={idx}
+                  src={chip}
+                  className="stacked-chip"
+                  style={{ bottom: `${idx * 8}px`, transform: `rotate(${idx * 4 - 8}deg)` }}
+                  alt="chip"
+                />
+              ))}
+            </div>
+          </div>
+
           <CardDisplay
             title="Dealer Bot"
             cards={view.dealerCards}
@@ -432,11 +633,11 @@ export default function PlayerBot() {
           />
         </div>
 
-        {/* Latest-round flash (center): re-keyed each round so it re-animates as rounds resolve. */}
+        {/* Latest-round flash: below center circle. */}
         {!terminal && latestRound && (
           <div
             key={`flash-${latestRound.round}`}
-            className="absolute top-[42%] left-1/2 -translate-x-1/2 -translate-y-1/2 z-20 flex items-center justify-center pointer-events-none fade-in-up"
+            className="absolute top-[55%] left-1/2 -translate-x-1/2 z-20 flex items-center justify-center pointer-events-none fade-in-up"
           >
             <div className="px-5 py-1.5 bg-black/75 border-2 border-amber-950 rounded-full shadow-xl backdrop-blur-sm flex items-center gap-2 font-mono text-xs md:text-sm">
               <span className="text-zinc-500">R{latestRound.round + 1}</span>
@@ -478,6 +679,22 @@ export default function PlayerBot() {
 
         {/* Player hand (bottom) */}
         <div className="absolute top-[70%] left-1/2 -translate-x-1/2 z-20 w-full max-w-xs flex flex-col items-center">
+          {/* Player Stack Display */}
+          <div className="absolute -left-8 md:-left-14 top-[40px] flex flex-col items-center">
+            <span className="text-[7px] text-emerald-200/50 uppercase tracking-widest mb-1 font-bold">Stacks</span>
+            <div className="profile-chip-stack">
+              {getChipStack(view.playerBalance).map((chip, idx) => (
+                <img
+                  key={idx}
+                  src={chip}
+                  className="stacked-chip"
+                  style={{ bottom: `${idx * 8}px`, transform: `rotate(${idx * 4 - 8}deg)` }}
+                  alt="chip"
+                />
+              ))}
+            </div>
+          </div>
+
           <CardDisplay
             title="Player Bot"
             cards={view.playerCards}

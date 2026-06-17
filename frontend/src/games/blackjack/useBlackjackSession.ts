@@ -15,7 +15,7 @@ import {
 } from "./session-core";
 
 /** Milliseconds between bot moves (animation pacing). */
-const STEP_MS = 600;
+const STEP_MS = 900;
 
 export type SessionStatus = "idle" | "playing" | "settled";
 

@@ -106,7 +106,7 @@ export interface BlackjackBotGame {
 // Each bot stakes this much into the tunnel per game.
 const STAKE = 500n;
 // Animation cadence: one move surfaced to the view per tick.
-const STEP_MS = 700;
+const STEP_MS = 900;
 // A bot must hold at least this much (gas for its txs + the STAKE deposit) to safely play
 // another game; below it, auto-play stops rather than risk a mid-game tx running out of gas
 // and leaving a tunnel open. ~0.02 SUI (a game costs the busier bot ~0.01 SUI of gas).

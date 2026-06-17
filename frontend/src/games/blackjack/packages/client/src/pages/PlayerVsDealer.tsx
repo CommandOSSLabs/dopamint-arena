@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   ConnectButton,
@@ -8,6 +8,36 @@ import {
 import { CardDisplay } from "@/components/app/CardDisplay";
 import { usePlayerVsDealer, type TablePhase } from "@/hooks/usePlayerVsDealer";
 import { loadOrCreateBots, buildFundTx, FUND_PER_BOT_MIST } from "@/lib/bjBots";
+
+const chip25 = "/chip-25.svg";
+const chip100 = "/chip-100.svg";
+const chip500 = "/chip-500.svg";
+const chip1000 = "/chip-1000.svg";
+
+function getChipStack(balance: number): string[] {
+  const stack: string[] = [];
+  let remaining = balance;
+  
+  const chipTypes = [
+    { value: 1000, asset: chip1000 },
+    { value: 500, asset: chip500 },
+    { value: 100, asset: chip100 },
+    { value: 25, asset: chip25 },
+  ];
+
+  for (const chip of chipTypes) {
+    while (remaining >= chip.value && stack.length < 6) {
+      stack.push(chip.asset);
+      remaining -= chip.value;
+    }
+  }
+  
+  if (stack.length === 0 && balance > 0) {
+    stack.push(chip25);
+  }
+  
+  return stack;
+}
 
 // Render MIST (bigint) as a short SUI string. 1 SUI = 1e9 MIST.
 function suiOf(mist: bigint): string {
@@ -66,6 +96,115 @@ export default function PlayerVsDealer() {
     isTerminal,
   } = game;
   const latestRound = rounds.length > 0 ? rounds[rounds.length - 1] : null;
+
+  const [animState, setAnimState] = useState<"idle" | "deal" | "win" | "lose" | "push">("idle");
+  const prevRoundRef = useRef<number>(-1);
+  const prevPhaseRef = useRef<string>("");
+  const prevBalanceRef = useRef<number>(-1);
+  const roundsEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    roundsEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [rounds.length]);
+
+  useEffect(() => {
+    const hasCards = view.playerCards.length > 0 || view.dealerCards.length > 0;
+    if (!hasCards) {
+      setAnimState("idle");
+      prevRoundRef.current = -1;
+      return;
+    }
+
+    if (prevRoundRef.current === -1) {
+      prevRoundRef.current = view.round;
+      prevPhaseRef.current = view.phase;
+      prevBalanceRef.current = view.playerBalance;
+      if (view.phase === "player") {
+        setAnimState("deal");
+      }
+      return;
+    }
+
+    const roundChanged = view.round !== prevRoundRef.current;
+    const phaseChanged = view.phase !== prevPhaseRef.current;
+
+    if (roundChanged || (phaseChanged && view.phase === "player")) {
+      setAnimState("deal");
+    } else if (phaseChanged && view.phase === "round_over") {
+      const balanceDiff = view.playerBalance - prevBalanceRef.current;
+      if (balanceDiff > 0) {
+        setAnimState("win");
+      } else if (balanceDiff < 0) {
+        setAnimState("lose");
+      } else {
+        setAnimState("push");
+      }
+    }
+
+    prevRoundRef.current = view.round;
+    prevPhaseRef.current = view.phase;
+    prevBalanceRef.current = view.playerBalance;
+  }, [view.round, view.phase, view.playerBalance]);
+
+  type ToastMsg = { id: number; msg: string; type: "info" | "win" | "lose" | "push" };
+  const [toasts, setToasts] = useState<ToastMsg[]>([]);
+  const toastIdRef = useRef(0);
+
+  const addToast = (msg: string, type: ToastMsg["type"] = "info") => {
+    setToasts((prev) => {
+      const newToasts = [...prev, { id: toastIdRef.current++, msg, type }];
+      if (newToasts.length > 5) return newToasts.slice(newToasts.length - 5);
+      return newToasts;
+    });
+  };
+
+  const prevViewRef = useRef(view);
+  const prevRoundsLenRef = useRef(rounds.length);
+
+  useEffect(() => {
+    const prev = prevViewRef.current;
+    
+    // Player Hit
+    if (view.playerCards.length > prev.playerCards.length && prev.playerCards.length > 0) {
+      addToast(`Player Hits (${view.playerSum})`);
+    }
+    // Player Stand
+    if (prev.phase === "player" && view.phase === "dealer") {
+      addToast(`Player Stands (${prev.playerSum})`);
+    }
+    // Dealer Hit
+    if (view.dealerCards.length > prev.dealerCards.length && prev.dealerCards.length > 0) {
+      addToast(`Dealer Hits (${view.dealerSum})`);
+    }
+    // Dealer Stand
+    if (prev.phase === "dealer" && view.phase === "round_over") {
+      addToast(`Dealer Stands (${prev.dealerSum})`);
+    }
+    
+    prevViewRef.current = view;
+  }, [view]);
+
+  useEffect(() => {
+    if (rounds.length > prevRoundsLenRef.current) {
+      const newRound = rounds[rounds.length - 1];
+      if (newRound) {
+        if (newRound.outcome === "win") addToast(`Player Wins!`, "win");
+        else if (newRound.outcome === "lose") addToast(`Dealer Wins!`, "lose");
+        else addToast(`Round Push`, "push");
+      }
+    }
+    prevRoundsLenRef.current = rounds.length;
+  }, [rounds]);
+
+  // Reset animation state to idle after win/lose/push completes
+  useEffect(() => {
+    if (animState === "win" || animState === "lose" || animState === "push") {
+      const timer = setTimeout(() => {
+        setAnimState("idle");
+      }, 850);
+      return () => clearTimeout(timer);
+    }
+  }, [animState]);
 
   // Wallet funding: send FUND_PER_BOT_MIST to each local player key from the connected
   // wallet's gas coin. Persistent keys mean one top-up covers many tables.
@@ -190,7 +329,7 @@ export default function PlayerVsDealer() {
     return (
       <div
         className="h-screen w-screen flex flex-col items-center justify-center relative text-white overflow-hidden select-none bg-zinc-950 bg-cover bg-center fade-in-up"
-        style={{ backgroundImage: "url('/dealer-desk.png')" }}
+        style={{ backgroundImage: "url('/dealer-desk-plain-rotated.png')" }}
       >
         <div className="absolute inset-0 bg-black/60" />
         <div className="relative z-10 flex flex-col items-center gap-6 bg-zinc-950/85 border border-zinc-800 rounded-2xl p-8 max-w-md w-full mx-4 shadow-2xl">
@@ -275,7 +414,7 @@ export default function PlayerVsDealer() {
     <div className="h-screen w-screen flex flex-col relative text-white overflow-hidden select-none bg-zinc-950 fade-in-up">
       <div
         className="flex-1 w-full relative bg-cover bg-center"
-        style={{ backgroundImage: "url('/dealer-desk.png')" }}
+        style={{ backgroundImage: "url('/dealer-desk-plain-rotated.png')" }}
       >
         <button
           onClick={() => navigate("/")}
@@ -307,12 +446,13 @@ export default function PlayerVsDealer() {
           </span>
         </div>
 
+        {/* Rounds running log: top-right corner, fixed height for ~3 rows, scrollable */}
         {rounds.length > 0 && (
-          <div className="absolute top-16 right-3 md:top-4 md:right-4 z-20 w-44 md:w-52 max-h-[40vh] flex flex-col bg-black/70 backdrop-blur-sm border border-amber-950 rounded-lg shadow-lg overflow-hidden">
+          <div className="absolute top-16 right-3 md:top-4 md:right-4 z-20 w-44 md:w-52 flex flex-col bg-black/70 backdrop-blur-sm border border-amber-950 rounded-lg shadow-lg overflow-hidden">
             <div className="px-3 py-1.5 text-[10px] font-extrabold uppercase tracking-widest text-[#d4af37] font-serif border-b border-amber-950/70">
               Rounds
             </div>
-            <div className="flex-1 overflow-y-auto px-2 py-1.5 flex flex-col gap-0.5">
+            <div className="max-h-[250px] overflow-y-auto px-2 py-1.5 flex flex-col gap-0.5 scrollbar-thin">
               {rounds.map((r, i) => {
                 const style = OUTCOME_STYLE[r.outcome];
                 return (
@@ -333,23 +473,87 @@ export default function PlayerVsDealer() {
                   </div>
                 );
               })}
+              <div ref={roundsEndRef} />
             </div>
           </div>
         )}
 
-        <div className="absolute top-[20%] md:top-[16%] left-1/2 -translate-x-1/2 z-20 w-full max-w-xs flex flex-col items-center">
-          <CardDisplay
-            title="Dealer"
-            cards={view.dealerCards}
-            sum={view.dealerSum}
-            isWinning={result === "lose"}
-          />
+        {/* Toasts overlay: left of Rounds panel */}
+        <div className="absolute top-16 right-48 md:top-4 md:right-60 z-30 flex flex-col items-end gap-2 pointer-events-none">
+          {toasts.map((t) => (
+            <div
+              key={t.id}
+              className={`px-3 py-1.5 rounded-md shadow-lg text-xs font-mono font-bold fade-in-up
+              ${
+                t.type === "win"
+                  ? "bg-emerald-900/90 text-emerald-400 border border-emerald-500/50"
+                  : t.type === "lose"
+                  ? "bg-rose-900/90 text-rose-400 border border-rose-500/50"
+                  : t.type === "push"
+                  ? "bg-amber-900/90 text-amber-400 border border-amber-500/50"
+                  : "bg-zinc-900/90 text-zinc-300 border border-zinc-700/50"
+              }`}
+            >
+              {t.msg}
+            </div>
+          ))}
+        </div>
+
+        {/* Betting Spot (Desk Layout) */}
+        <div className={`betting-spot ${animState !== "idle" ? "active" : ""}`}>
+          <div className="betting-label">PAYS 3 TO 2</div>
+          <div className="text-[8px] text-[#d4af37]/60 font-mono tracking-wider font-extrabold uppercase mt-1">WAGER $100</div>
+        </div>
+
+        {/* Active Animated Chips Layer */}
+        {animState !== "idle" && (
+          <div className="table-chips-layer">
+            {animState === "deal" && (
+              <img src={chip100} className="animated-chip chip-deal" alt="bet chip" />
+            )}
+            {animState === "win" && (
+              <>
+                <img src={chip100} className="animated-chip chip-win-collect-1" alt="bet chip 1" />
+                <img src={chip100} className="animated-chip chip-win-collect-2" alt="bet chip 2" />
+              </>
+            )}
+            {animState === "lose" && (
+              <img src={chip100} className="animated-chip chip-lose" alt="bet chip" />
+            )}
+            {animState === "push" && (
+              <img src={chip100} className="animated-chip chip-push" alt="bet chip" />
+            )}
+          </div>
+        )}
+
+        <div className="absolute top-[20%] md:top-[16%] left-1/2 -translate-x-1/2 z-20 w-full max-w-2xl flex items-center justify-center gap-4 md:gap-12">
+          <div className="flex-1 flex flex-col items-center relative pl-8 md:pl-24">
+            <CardDisplay
+              title="Dealer"
+              cards={view.dealerCards}
+              sum={view.dealerSum}
+              isWinning={result === "lose"}
+            />
+          </div>
+          <div className="w-16 md:w-24 shrink-0 flex items-end justify-center mb-4 md:mb-8">
+            <div className="profile-chip-stack">
+              {getChipStack(view.dealerBalance).map((chip, idx) => (
+                <img
+                  key={idx}
+                  src={chip}
+                  className="stacked-chip"
+                  style={{ bottom: `${idx * 8}px`, transform: `rotate(${idx * 4 - 8}deg)` }}
+                  alt="chip"
+                />
+              ))}
+            </div>
+          </div>
         </div>
 
         {!terminal && latestRound && roundOver && (
           <div
             key={`flash-${latestRound.round}`}
-            className="absolute top-[42%] left-1/2 -translate-x-1/2 -translate-y-1/2 z-20 flex items-center justify-center pointer-events-none fade-in-up"
+            className="absolute top-[55%] left-1/2 -translate-x-1/2 z-20 flex items-center justify-center pointer-events-none fade-in-up"
           >
             <div className="px-5 py-1.5 bg-black/75 border-2 border-amber-950 rounded-full shadow-xl backdrop-blur-sm flex items-center gap-2 font-mono text-xs md:text-sm">
               <span className="text-zinc-500">R{latestRound.round + 1}</span>
@@ -388,14 +592,29 @@ export default function PlayerVsDealer() {
           )}
         </div>
 
-        <div className="absolute top-[70%] left-1/2 -translate-x-1/2 z-20 w-full max-w-xs flex flex-col items-center">
-          <CardDisplay
-            title="You"
-            cards={view.playerCards}
-            sum={view.playerSum}
-            isPlayer
-            isWinning={result === "win"}
-          />
+        <div className="absolute top-[70%] left-1/2 -translate-x-1/2 z-20 w-full max-w-2xl flex items-center justify-center gap-4 md:gap-12">
+          <div className="flex-1 flex flex-col items-center relative pl-8 md:pl-24">
+            <CardDisplay
+              title="You"
+              cards={view.playerCards}
+              sum={view.playerSum}
+              isPlayer
+              isWinning={result === "win"}
+            />
+          </div>
+          <div className="w-16 md:w-24 shrink-0 flex items-end justify-center mb-4 md:mb-8">
+            <div className="profile-chip-stack">
+              {getChipStack(view.playerBalance).map((chip, idx) => (
+                <img
+                  key={idx}
+                  src={chip}
+                  className="stacked-chip"
+                  style={{ bottom: `${idx * 8}px`, transform: `rotate(${idx * 4 - 8}deg)` }}
+                  alt="chip"
+                />
+              ))}
+            </div>
+          </div>
         </div>
       </div>
 

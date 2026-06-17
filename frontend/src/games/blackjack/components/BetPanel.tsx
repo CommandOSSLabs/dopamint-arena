@@ -1,6 +1,6 @@
 import { useState } from "react";
 import "../blackjack.css";
-import dealerDesk from "../assets/dealer-desk.png";
+import dealerDesk from "../assets/dealer-desk-2d.png";
 
 /** Idle-state control: the player only sets a stake; the bots play it out. */
 export function BetPanel({ onDeal }: { onDeal: (stake: number) => void }) {

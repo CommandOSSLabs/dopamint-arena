@@ -315,3 +315,204 @@
   }
 }
 
+/* Betting Spot Desk Area */
+.betting-spot {
+  position: absolute;
+  left: 50%;
+  top: 48%;
+  transform: translate(-50%, -50%);
+  width: 120px;
+  height: 120px;
+  border: 2px dashed rgba(212, 175, 55, 0.35);
+  border-radius: 50%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 10;
+  background: radial-gradient(circle, rgba(20, 80, 45, 0.4) 0%, transparent 80%);
+  transition: all 0.3s ease;
+}
+
+.betting-spot.active {
+  border-color: rgba(212, 175, 55, 0.75);
+  box-shadow: 0 0 15px rgba(212, 175, 55, 0.2), inset 0 0 15px rgba(212, 175, 55, 0.1);
+}
+
+.betting-label {
+  font-family: "Outfit", "Inter", sans-serif;
+  font-size: 8px;
+  font-weight: 800;
+  color: rgba(212, 175, 55, 0.7);
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  margin-top: 4px;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+  pointer-events: none;
+}
+
+/* Chip stack styles next to player profiles */
+.profile-chip-stack {
+  display: flex;
+  flex-direction: column-reverse;
+  align-items: center;
+  position: relative;
+  width: 50px;
+  height: 35px;
+  margin-bottom: 2px;
+}
+
+.stacked-chip {
+  position: absolute;
+  width: 28px;
+  height: 28px;
+  filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.4));
+  transition: all 0.3s ease;
+}
+
+/* Table chips layer for active round animations */
+.table-chips-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 25;
+}
+
+.animated-chip {
+  position: absolute;
+  width: 44px;
+  height: 44px;
+  pointer-events: none;
+  filter: drop-shadow(0 4px 6px rgba(0, 0, 0, 0.5));
+}
+
+/* Animation triggers */
+.chip-deal {
+  animation: chipFromPlayer 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.2) forwards;
+}
+
+.chip-lose {
+  animation: chipToDealer 0.5s cubic-bezier(0.55, 0.055, 0.675, 0.19) forwards;
+}
+
+.chip-push {
+  animation: chipToPlayer 0.5s cubic-bezier(0.55, 0.055, 0.675, 0.19) forwards;
+}
+
+.chip-win-collect-1 {
+  animation: chipCenterToPlayer 0.9s cubic-bezier(0.25, 1, 0.5, 1) forwards;
+}
+
+.chip-win-collect-2 {
+  animation: chipFromDealerToPlayer 0.9s cubic-bezier(0.25, 1, 0.5, 1) forwards;
+}
+
+@keyframes chipFromPlayer {
+  0% {
+    top: 80%;
+    left: 50%;
+    transform: translate(-50%, -50%) scale(0.6) rotate(-45deg);
+    opacity: 0;
+  }
+  100% {
+    top: 48%;
+    left: 50%;
+    transform: translate(-50%, -50%) scale(1) rotate(0deg);
+    opacity: 1;
+  }
+}
+
+@keyframes chipFromDealer {
+  0% {
+    top: 15%;
+    left: 50%;
+    transform: translate(-50%, -50%) scale(0.6) rotate(45deg);
+    opacity: 0;
+  }
+  100% {
+    top: 48%;
+    left: 50%;
+    transform: translate(-50%, -50%) scale(1) rotate(15deg);
+    opacity: 1;
+  }
+}
+
+@keyframes chipToDealer {
+  0% {
+    top: 48%;
+    left: 50%;
+    transform: translate(-50%, -50%) scale(1) rotate(0deg);
+    opacity: 1;
+  }
+  100% {
+    top: 15%;
+    left: 50%;
+    transform: translate(-50%, -50%) scale(0.6) rotate(-45deg);
+    opacity: 0;
+  }
+}
+
+@keyframes chipToPlayer {
+  0% {
+    top: 48%;
+    left: 50%;
+    transform: translate(-50%, -50%) scale(1) rotate(0deg);
+    opacity: 1;
+  }
+  100% {
+    top: 80%;
+    left: 50%;
+    transform: translate(-50%, -50%) scale(0.6) rotate(45deg);
+    opacity: 0;
+  }
+}
+
+@keyframes chipFromDealerToPlayer {
+  0% {
+    top: 15%;
+    left: 50%;
+    transform: translate(-50%, -50%) scale(0.6) rotate(45deg);
+    opacity: 0;
+  }
+  40% {
+    top: 46%;
+    left: 52%;
+    transform: translate(-50%, -50%) scale(1) rotate(15deg);
+    opacity: 1;
+  }
+  45% {
+    top: 46%;
+    left: 52%;
+    transform: translate(-50%, -50%) scale(1) rotate(15deg);
+    opacity: 1;
+  }
+  100% {
+    top: 80%;
+    left: 50%;
+    transform: translate(-50%, -50%) scale(0.6) rotate(60deg);
+    opacity: 0;
+  }
+}
+
+@keyframes chipCenterToPlayer {
+  0% {
+    top: 48%;
+    left: 50%;
+    transform: translate(-50%, -50%) scale(1) rotate(0deg);
+    opacity: 1;
+  }
+  45% {
+    top: 48%;
+    left: 50%;
+    transform: translate(-50%, -50%) scale(1) rotate(0deg);
+    opacity: 1;
+  }
+  100% {
+    top: 80%;
+    left: 50%;
+    transform: translate(-50%, -50%) scale(0.6) rotate(45deg);
+    opacity: 0;
+  }
+}
+
