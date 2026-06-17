@@ -1,6 +1,8 @@
 import { Board } from "@/components/Board";
+import { CaroBoard } from "@/components/CaroBoard";
 import type { BotGameView, BotPhase } from "@/hooks/useBotGame";
 import type { PlayMode } from "@/scenes/SetupScene";
+import type { GameType } from "@/scenes/SetupScene";
 
 // Protocol marks (1 = botX/X, 2 = botO/O) -> Cell UI vocabulary (CELL_SERVER=2 renders "X",
 // CELL_PLAYER=1 renders "O"). Map X->2, O->1 so botX shows as X.
@@ -28,9 +30,10 @@ function renderTallies(count: number): string {
   return res.trim();
 }
 
-function statusText(phase: BotPhase, turn: "A" | "B", winner: number): string {
-  if (winner === 1) return "Bot X wins! ❌";
-  if (winner === 2) return "Bot O wins! ⭕";
+function statusText(phase: BotPhase, turn: "A" | "B", winner: number, gameType: "ttt" | "caro"): string {
+  const fiveOrLine = gameType === "caro" ? " (5 in a row)" : "";
+  if (winner === 1) return `Bot X wins!${fiveOrLine} ❌`;
+  if (winner === 2) return `Bot O wins!${fiveOrLine} ⭕`;
   if (winner === 3) return "Draw match.";
   switch (phase) {
     case "opening":
@@ -100,11 +103,13 @@ function GamesPerTunnel({
 export function GameScene({
   g,
   mode,
+  gameType,
   onBack,
   isPortrait = false,
 }: {
-  g: BotGameView;
+  g: BotGameView & { boardSize?: number; lastMove?: number };
   mode: PlayMode;
+  gameType: GameType;
   onBack: () => void;
   isPortrait?: boolean;
 }) {
@@ -115,7 +120,7 @@ export function GameScene({
       {/* Header */}
       <header className="flex justify-between items-center border-b-2 border-primary/20 pb-3">
         <h1 className="font-headline-xl text-3xl text-primary underline decoration-secondary decoration-2 truncate tracking-tight">
-          Tic-Tac-Toe Journal
+          {gameType === "caro" ? "Caro Journal" : "Tic-Tac-Toe Journal"}
         </h1>
         <button
           onClick={onBack}
@@ -158,14 +163,18 @@ export function GameScene({
             </div>
           </div>
 
-          {/* Grid board */}
+          {/* Board: 3×3 grid for TTT, N×N grid for caro */}
           <div className="flex justify-center my-4">
-            <Board board={uiBoard(g.board)} onPlay={() => {}} disabled />
+            {gameType === "caro" ? (
+              <CaroBoard board={g.board} size={g.boardSize ?? 15} lastMove={g.lastMove ?? -1} />
+            ) : (
+              <Board board={uiBoard(g.board)} onPlay={() => {}} disabled />
+            )}
           </div>
 
           {/* Status text */}
           <div className="text-center font-body-lg text-2xl text-primary font-bold my-4 min-h-[28px] ink-bleed">
-            {statusText(g.phase, g.turn, g.winner)}
+            {statusText(g.phase, g.turn, g.winner, gameType)}
           </div>
 
           {/* Per-tunnel progress: game k / N */}
