@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { useBotGame, type Difficulty } from "@/hooks/useBotGame";
+import { useCaroBotGame } from "@/hooks/useCaroBotGame";
 import { useCustomWallet } from "@/contexts/CustomWallet";
 import { LoginScene } from "@/scenes/LoginScene";
-import { SetupScene, type PlayMode } from "@/scenes/SetupScene";
+import { SetupScene, type PlayMode, type GameType } from "@/scenes/SetupScene";
 import { GameScene } from "@/scenes/GameScene";
 import { GameCardScale } from "@/components/GameCardScale";
 
@@ -12,11 +13,17 @@ export default function App() {
   const [scene, setScene] = useState<Scene>("login");
   const [mode, setMode] = useState<PlayMode>("auto");
   const [difficulty, setDifficulty] = useState<Difficulty>("even");
+  const [gameType, setGameType] = useState<GameType>("ttt");
+  const [boardSize, setBoardSize] = useState<number>(15);
   const [windowWidth, setWindowWidth] = useState(typeof window !== "undefined" ? window.innerWidth : 1024);
   const [windowHeight, setWindowHeight] = useState(typeof window !== "undefined" ? window.innerHeight : 768);
 
   const { isConnected } = useCustomWallet();
-  const g = useBotGame(difficulty);
+  // Both hooks are always called (rules of hooks); only the active one is driven. They share
+  // the same bot identities and SuiClient, so the idle hook costs only one extra balance read.
+  const tttGame = useBotGame(difficulty);
+  const caroGame = useCaroBotGame(difficulty, boardSize);
+  const g = gameType === "caro" ? caroGame : tttGame;
 
   const funded = g.balances.x > 0n && g.balances.o > 0n;
 
@@ -33,10 +40,11 @@ export default function App() {
   // If the wallet disconnects, fall back to the login scene (and stop any loop).
   useEffect(() => {
     if (!isConnected && scene !== "login") {
-      g.stopAuto();
+      tttGame.stopAuto();
+      caroGame.stopAuto();
       setScene("login");
     }
-  }, [isConnected, scene, g]);
+  }, [isConnected, scene, tttGame, caroGame]);
 
   const start = () => {
     setScene("game");
@@ -45,7 +53,8 @@ export default function App() {
   };
 
   const backToSetup = () => {
-    g.stopAuto();
+    tttGame.stopAuto();
+    caroGame.stopAuto();
     setScene("setup");
   };
 
@@ -86,12 +95,16 @@ export default function App() {
               setMode={setMode}
               difficulty={difficulty}
               setDifficulty={setDifficulty}
+              gameType={gameType}
+              setGameType={setGameType}
+              boardSize={boardSize}
+              setBoardSize={setBoardSize}
               onStart={start}
               onBack={() => setScene("login")}
             />
           )}
 
-          {scene === "game" && <GameScene g={g} mode={mode} onBack={backToSetup} isPortrait={isPortrait} />}
+          {scene === "game" && <GameScene g={g} mode={mode} gameType={gameType} onBack={backToSetup} isPortrait={isPortrait} />}
         </GameCardScale>
       </div>
     </div>
