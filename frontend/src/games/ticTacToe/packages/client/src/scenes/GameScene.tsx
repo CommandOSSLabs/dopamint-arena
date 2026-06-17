@@ -1,8 +1,7 @@
 import { Board } from "@/components/Board";
 import { CaroBoard } from "@/components/CaroBoard";
 import type { BotGameView, BotPhase } from "@/hooks/useBotGame";
-import type { PlayMode } from "@/scenes/SetupScene";
-import type { GameType } from "@/scenes/SetupScene";
+import type { PlayMode, GameType } from "@/scenes/SetupScene";
 
 // Protocol marks (1 = botX/X, 2 = botO/O) -> Cell UI vocabulary (CELL_SERVER=2 renders "X",
 // CELL_PLAYER=1 renders "O"). Map X->2, O->1 so botX shows as X.

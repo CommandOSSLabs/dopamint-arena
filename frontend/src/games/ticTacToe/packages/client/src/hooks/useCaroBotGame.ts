@@ -36,8 +36,6 @@ const SCORE_KEY = "caro_bot_score.v1";
 const STEP_MS = 350;
 const MIN_PLAY_MIST = 20_000_000n;
 const NEXT_GAME_MS = 1200;
-// Caro games are long; cap steps so a logic bug can't spin forever (size^2 + advances).
-const MAX_STEPS = 2000;
 
 export interface CaroBotGameView {
   board: number[];
@@ -192,6 +190,10 @@ export function useCaroBotGame(
       return;
     }
     const N = boardSizeRef.current;
+    // Safety bound on the self-play loop, scaled to the worst case (every cell filled in
+    // every game + one advance between games) with 2× headroom — large enough never to fire
+    // in legitimate play, small enough to stop a protocol bug from spinning forever.
+    const maxSteps = maxGamesRef.current * (N * N + 1) * 2;
     setError(null);
     setBoard(new Array(N * N).fill(0));
     setSize(N);
@@ -265,7 +267,7 @@ export function useCaroBotGame(
                 resolve();
                 return;
               }
-              if (steps++ >= MAX_STEPS) throw new Error("caro self-play exceeded step bound");
+              if (steps++ >= maxSteps) throw new Error("caro self-play exceeded step bound");
               const inner = tunnel.state.inner;
               const innerOver = inner.winner !== 0;
               // Between games, A drives the advance with any cell; mid-game, the heuristic picks.

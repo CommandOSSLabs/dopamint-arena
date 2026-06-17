@@ -71,7 +71,10 @@ function BoardSizeChoice({
           min={9}
           max={29}
           value={value}
-          onChange={(e) => onChange(Number(e.target.value))}
+          onChange={(e) => {
+            const n = parseInt(e.target.value, 10);
+            if (Number.isFinite(n)) onChange(n);
+          }}
           aria-label="Custom board size"
           className="w-20 px-2 py-1 border-2 border-primary rounded-sm bg-surface text-primary font-label-sm text-sm tabular-nums text-center"
         />
