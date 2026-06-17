@@ -19,4 +19,5 @@ export * from "./crypto-native";
 export * from "./commitment";
 export * from "./randomness";
 export * from "./tunnel";
+export * from "./distributedTunnel";
 export * from "./keys";
