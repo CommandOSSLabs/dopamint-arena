@@ -19,6 +19,9 @@ pub struct Config {
     pub settler_key: Option<String>, // base64 ed25519 secret of the gas/settler account
     pub walrus_publisher_url: Option<String>,
     pub walrus_aggregator_url: Option<String>,
+    pub redis_cache_url: Option<String>,
+    pub redis_pubsub_url: Option<String>,
+    pub instance_id: Option<String>,
 }
 
 impl Config {
@@ -35,6 +38,9 @@ impl Config {
             settler_key: opt("SUI_SETTLER_KEY"),
             walrus_publisher_url: opt("WALRUS_PUBLISHER_URL"),
             walrus_aggregator_url: opt("WALRUS_AGGREGATOR_URL"),
+            redis_cache_url: opt("REDIS_CACHE_URL"),
+            redis_pubsub_url: opt("REDIS_PUBSUB_URL"),
+            instance_id: opt("INSTANCE_ID"),
         })
     }
 
@@ -53,8 +59,7 @@ mod tests {
     use super::*;
 
     // Phase 0 consumes no on-chain/Walrus config, so it must boot without it:
-    // defaults apply and the optional vars stay unset. (Single env-touching test
-    // in this binary — no other test mutates these vars, so no cross-test race.)
+    // defaults apply and the optional vars stay unset.
     #[test]
     fn from_env_boots_without_onchain_vars() {
         for k in [
@@ -71,6 +76,14 @@ mod tests {
         assert_eq!(c.bind_addr, "0.0.0.0:8080");
         assert_eq!(c.coin_type, "0x2::sui::SUI");
         assert!(c.sui_rpc_url.is_none());
+    }
+
+    #[test]
+    fn from_env_reads_redis_and_instance() {
+        std::env::set_var("REDIS_CACHE_URL", "rediss://cache:6379");
+        let c = Config::from_env().unwrap();
+        assert_eq!(c.redis_cache_url.as_deref(), Some("rediss://cache:6379"));
+        std::env::remove_var("REDIS_CACHE_URL");
     }
 
     // The fail-loud guarantee lives at the consuming boundary: `require` must name

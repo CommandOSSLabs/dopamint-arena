@@ -5,12 +5,12 @@
 //! (tunnel.move:1062). It derives NO nonce — `final_nonce` is reconstructed on-chain
 //! as `tunnel.state.nonce + 1`; `sig_a`/`sig_b` are passed verbatim. See ADR-0002.
 //!
-//! Verification: unit-tested (build_close_tx, key load, signature format) AND e2e-verified
-//! on localnet — `POST /settle` submitted `close_cooperative_with_root`, the node executed
-//! it (effects success + `TunnelClosedWithRoot` event). Publishing the 134 KB framework
-//! required raising the localnet cap (`SUI_PROTOCOL_CONFIG_OVERRIDE_max_move_package_size`).
-//! The e2e caught two bugs since fixed: signature serialization (`UserSignature::to_base64`,
-//! not `bcs::to_bytes`) and `vector<u8>` arg encoding (`pure`, not `pure_bytes`).
+//! Gas: SIP-58 address-balance gas (empty `gas_payment.objects`). The node charges gas as a
+//! FundsWithdrawal from the settler's address balance — no owned coin to lock, so concurrent
+//! closes never equivocate. Node acceptance (protocol-v125+) is e2e-deferred (no live node).
+//!
+//! Earlier e2e (localnet, single-close with owned gas) verified the PTB arg order, signature
+//! serialization (`UserSignature::to_base64`, not `bcs::to_bytes`), and `pure` encoding.
 
 use std::str::FromStr;
 
@@ -20,7 +20,6 @@ use sui_crypto::ed25519::Ed25519PrivateKey;
 use sui_crypto::SuiSigner;
 use sui_sdk_types::{Address, Digest, Identifier, Transaction, TypeTag, UserSignature};
 use sui_transaction_builder::{Function, ObjectInput, TransactionBuilder};
-use tokio::sync::Mutex;
 
 /// 0x6 system Clock — shared, first shared at version 1.
 const CLOCK_ADDRESS: &str = "0x0000000000000000000000000000000000000000000000000000000000000006";
@@ -47,22 +46,6 @@ struct SharedRef {
     initial_shared_version: u64,
 }
 
-/// An owned object's full ref (used for the gas coin).
-#[derive(Clone)]
-struct OwnedRef {
-    id: Address,
-    version: u64,
-    digest: Digest,
-}
-
-/// On-chain refs + gas price resolved (over JSON-RPC) just before building the tx.
-struct ResolvedRefs {
-    tunnel: SharedRef,
-    clock: SharedRef,
-    gas: OwnedRef,
-    gas_price: u64,
-}
-
 pub struct SuiSettler {
     http: reqwest::Client,
     rpc_url: String,
@@ -70,9 +53,6 @@ pub struct SuiSettler {
     coin_type: TypeTag,
     signer: Ed25519PrivateKey,
     sender: Address,
-    // One gas key serving all settles: serialize gas-select + sign + execute so
-    // concurrent /settle requests don't grab the same gas coin version and equivocate.
-    gas_lock: Mutex<()>,
 }
 
 impl SuiSettler {
@@ -91,31 +71,22 @@ impl SuiSettler {
             coin_type: TypeTag::from_str(coin_type).context("bad TUNNEL_COIN_TYPE")?,
             signer,
             sender,
-            gas_lock: Mutex::new(()),
         })
     }
 
     /// Build, sign, and execute `close_cooperative_with_root`; returns the tx digest.
-    /// Resolves shared/gas object refs over JSON-RPC, then builds + signs offline.
+    /// Resolves the tunnel shared ref + reference gas price over JSON-RPC, builds offline.
+    /// Concurrent calls are safe: no shared gas coin means no equivocation risk.
     pub async fn submit_close(&self, args: CloseArgs) -> anyhow::Result<String> {
-        let _gas = self.gas_lock.lock().await;
-
-        let refs = ResolvedRefs {
-            tunnel: self.resolve_shared(&args.tunnel_id).await?,
-            clock: SharedRef {
-                id: Address::from_str(CLOCK_ADDRESS).expect("static clock id"),
-                initial_shared_version: 1,
-            },
-            gas: self.pick_gas_coin().await?,
-            gas_price: self.reference_gas_price().await?,
-        };
-
+        let tunnel = self.resolve_shared(&args.tunnel_id).await?;
+        let gas_price = self.reference_gas_price().await?;
         let tx = build_close_tx(
             self.package_id,
             self.coin_type.clone(),
             self.sender,
             &args,
-            &refs,
+            &tunnel,
+            gas_price,
         )?;
         let sig = self
             .signer
@@ -164,35 +135,6 @@ impl SuiSettler {
         Ok(SharedRef {
             id: Address::from_str(object_id).context("tunnel id")?,
             initial_shared_version: isv,
-        })
-    }
-
-    async fn pick_gas_coin(&self) -> anyhow::Result<OwnedRef> {
-        let r = self
-            .rpc(
-                "suix_getCoins",
-                serde_json::json!([self.sender.to_string(), "0x2::sui::SUI", null, 1]),
-            )
-            .await?;
-        let c = r
-            .pointer("/data/0")
-            .ok_or_else(|| anyhow!("settler {} has no SUI gas coins", self.sender))?;
-        Ok(OwnedRef {
-            id: Address::from_str(
-                c.get("coinObjectId")
-                    .and_then(|v| v.as_str())
-                    .context("coinObjectId")?,
-            )?,
-            version: c
-                .get("version")
-                .and_then(|v| v.as_str())
-                .and_then(|s| s.parse().ok())
-                .context("gas version")?,
-            digest: Digest::from_str(
-                c.get("digest")
-                    .and_then(|v| v.as_str())
-                    .context("gas digest")?,
-            )?,
         })
     }
 
@@ -269,61 +211,26 @@ impl SuiSettler {
     }
 }
 
-/// Fold one tunnel event into the registry, maintaining the active/settled counts at
-/// write time. Idempotent under cursor replay: re-applying a terminal event is a no-op
-/// on the counts. The indexer is the single writer, so the stats tick reads O(1).
-pub fn apply_event(
-    map: &mut std::collections::HashMap<String, crate::state::TunnelStatus>,
-    active: &std::sync::atomic::AtomicU64,
-    settled: &std::sync::atomic::AtomicU64,
-    event_type: &str,
-    tunnel_id: String,
-) {
-    use crate::state::TunnelStatus::{Active, Closed, Created};
-    use std::sync::atomic::Ordering::Relaxed;
-    let new = match event_type.rsplit("::").next() {
-        Some("TunnelCreated") => Created,
-        Some("TunnelActivated") => Active,
-        Some("TunnelClosed" | "TunnelClosedWithRoot") => Closed,
-        _ => return,
-    };
-    let prev = map.insert(tunnel_id, new);
-    let was_active = matches!(prev, Some(Active));
-    match new {
-        // Created is funded-but-not-active → not counted as active until TunnelActivated.
-        Active if !was_active => {
-            active.fetch_add(1, Relaxed);
-        }
-        Closed if !matches!(prev, Some(Closed)) => {
-            if was_active {
-                active.fetch_sub(1, Relaxed);
-            }
-            settled.fetch_add(1, Relaxed);
-        }
-        _ => {}
-    }
-}
-
-/// Poll the chain for this package's tunnel events and fold them into the registry — the
-/// authoritative source for active/settled counts (ADR-0002; `POST /sessions` is advisory).
-/// Reuses `state.settler`'s client. Replays from cursor=None on restart; `apply_event` is
-/// idempotent so counts don't double. e2e-deferred (needs a live node + published package).
+/// Poll the chain for this package's tunnel events and fold them into the registry via
+/// `ControlStore::set_tunnel_status` — the transition logic (idempotency, count maintenance)
+/// now lives in the store impl. e2e-deferred (needs a live node + published package).
 pub fn spawn_event_indexer(state: crate::state::SharedState) {
     tokio::spawn(async move {
         let mut cursor = None;
         loop {
             match state.settler.query_tunnel_events(cursor.clone()).await {
                 Ok((events, next)) => {
-                    {
-                        let mut map = state.tunnels.write().expect("tunnels lock");
-                        for (etype, tid) in events {
-                            apply_event(
-                                &mut map,
-                                &state.active_tunnels,
-                                &state.settled_tunnels,
-                                &etype,
-                                tid,
-                            );
+                    for (etype, tid) in events {
+                        let status = match etype.rsplit("::").next() {
+                            Some("TunnelCreated") => Some(crate::state::TunnelStatus::Created),
+                            Some("TunnelActivated") => Some(crate::state::TunnelStatus::Active),
+                            Some("TunnelClosed" | "TunnelClosedWithRoot") => {
+                                Some(crate::state::TunnelStatus::Closed)
+                            }
+                            _ => None,
+                        };
+                        if let Some(s) = status {
+                            state.control.set_tunnel_status(&tid, s).await;
                         }
                     }
                     if next.is_some() {
@@ -337,15 +244,21 @@ pub fn spawn_event_indexer(state: crate::state::SharedState) {
     });
 }
 
-/// PURE core: build the `close_cooperative_with_root` PTB from resolved refs. Arg order
-/// matches the Move signature exactly: tunnel, a_balance, b_balance, sig_a, sig_b,
-/// timestamp, transcript_root, clock. Unit-tested.
+/// PURE core: build the `close_cooperative_with_root` PTB. Arg order matches the Move
+/// signature exactly: tunnel, a_balance, b_balance, sig_a, sig_b, timestamp, transcript_root,
+/// clock. The clock SharedRef is constructed internally from the well-known 0x6 address.
+///
+/// Uses SIP-58 address-balance gas: `try_build` requires ≥1 gas object, so a zero-value
+/// placeholder is added to pass that check, then cleared before returning. The caller must
+/// sign the returned tx before use — clearing before signing is required since the sig covers
+/// `gas_payment`. Unit-tested.
 fn build_close_tx(
     package_id: Address,
     coin_type: TypeTag,
     sender: Address,
     args: &CloseArgs,
-    refs: &ResolvedRefs,
+    tunnel: &SharedRef,
+    gas_price: u64,
 ) -> anyhow::Result<Transaction> {
     anyhow::ensure!(
         args.transcript_root.len() == 32,
@@ -354,8 +267,8 @@ fn build_close_tx(
     );
     let mut tb = TransactionBuilder::new();
     let tunnel_arg = tb.object(ObjectInput::shared(
-        refs.tunnel.id,
-        refs.tunnel.initial_shared_version,
+        tunnel.id,
+        tunnel.initial_shared_version,
         true,
     ));
     // Move params sig_a/sig_b/transcript_root are `vector<u8>`: use `pure(&Vec<u8>)`, which
@@ -369,8 +282,8 @@ fn build_close_tx(
     let ts = tb.pure(&args.timestamp);
     let root = tb.pure(&args.transcript_root);
     let clock_arg = tb.object(ObjectInput::shared(
-        refs.clock.id,
-        refs.clock.initial_shared_version,
+        Address::from_str(CLOCK_ADDRESS).expect("static clock id"),
+        1,
         false,
     ));
 
@@ -382,15 +295,15 @@ fn build_close_tx(
     .with_type_args(vec![coin_type]);
     tb.move_call(func, vec![tunnel_arg, a, b, sa, sb, ts, root, clock_arg]);
 
-    tb.add_gas_objects([ObjectInput::owned(
-        refs.gas.id,
-        refs.gas.version,
-        refs.gas.digest,
-    )]);
+    // Placeholder satisfies try_build's non-empty-gas check (builder.rs:676).
+    tb.add_gas_objects([ObjectInput::owned(Address::ZERO, 1, Digest::ZERO)]);
     tb.set_sender(sender);
     tb.set_gas_budget(GAS_BUDGET);
-    tb.set_gas_price(refs.gas_price.max(1));
-    tb.try_build().map_err(|e| anyhow!("build close tx: {e}"))
+    tb.set_gas_price(gas_price.max(1));
+    let mut tx = tb.try_build().map_err(|e| anyhow!("build close tx: {e}"))?;
+    // Empty objects => FundsWithdrawal from sender's address balance (SIP-58).
+    tx.gas_payment.objects.clear();
+    Ok(tx)
 }
 
 /// Decode the settler's ed25519 secret: 32 raw bytes, or 33 with the Sui ed25519 flag
@@ -427,22 +340,10 @@ mod tests {
         }
     }
 
-    fn refs() -> ResolvedRefs {
-        ResolvedRefs {
-            tunnel: SharedRef {
-                id: Address::from_str("0x2").unwrap(),
-                initial_shared_version: 3,
-            },
-            clock: SharedRef {
-                id: Address::from_str(CLOCK_ADDRESS).unwrap(),
-                initial_shared_version: 1,
-            },
-            gas: OwnedRef {
-                id: Address::from_str("0x3").unwrap(),
-                version: 5,
-                digest: Digest::ZERO,
-            },
-            gas_price: 1000,
+    fn tunnel_ref() -> SharedRef {
+        SharedRef {
+            id: Address::from_str("0x2").unwrap(),
+            initial_shared_version: 3,
         }
     }
 
@@ -455,7 +356,8 @@ mod tests {
             "0x2::sui::SUI".parse().unwrap(),
             Address::ZERO,
             &args_with_root(32),
-            &refs(),
+            &tunnel_ref(),
+            1000,
         );
         assert!(tx.is_ok(), "valid settlement should build: {:?}", tx.err());
     }
@@ -469,71 +371,35 @@ mod tests {
             "0x2::sui::SUI".parse().unwrap(),
             Address::ZERO,
             &args_with_root(31),
-            &refs(),
+            &tunnel_ref(),
+            1000,
         )
         .unwrap_err()
         .to_string();
         assert!(err.contains("32 bytes"), "got: {err}");
     }
 
-    // The registry is event-derived: Created→Active→Closed reduces to Closed with
-    // active=0/settled=1, and re-delivery of the close (cursor replay on restart) must
-    // NOT move the counts again. This is the authoritative-registry invariant.
+    // Address-balance gas (SIP-58): the built close tx must carry an EMPTY gas payment so
+    // the node charges gas as a FundsWithdrawal from the settler's SUI balance — no owned
+    // gas coin to lock, so concurrent closes never equivocate.
     #[test]
-    fn events_reduce_to_terminal_status_and_maintain_counts() {
-        use crate::state::TunnelStatus;
-        use std::collections::HashMap;
-        use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
-
-        let (active, settled) = (AtomicU64::new(0), AtomicU64::new(0));
-        let mut m = HashMap::new();
-        apply_event(
-            &mut m,
-            &active,
-            &settled,
-            "0xp::tunnel::TunnelCreated",
-            "0xt".into(),
+    fn build_close_tx_uses_address_balance_gas() {
+        let sender = Address::from_str("0x9").unwrap();
+        let tx = build_close_tx(
+            Address::from_str("0xabc").unwrap(),
+            "0x2::sui::SUI".parse().unwrap(),
+            sender,
+            &args_with_root(32),
+            &tunnel_ref(),
+            1000,
+        )
+        .expect("builds");
+        assert!(
+            tx.gas_payment.objects.is_empty(),
+            "gas payment must be empty (address-balance)"
         );
-        assert_eq!(m["0xt"], TunnelStatus::Created);
-        apply_event(
-            &mut m,
-            &active,
-            &settled,
-            "0xp::tunnel::TunnelActivated",
-            "0xt".into(),
-        );
-        assert_eq!((m["0xt"], active.load(Relaxed)), (TunnelStatus::Active, 1));
-        apply_event(
-            &mut m,
-            &active,
-            &settled,
-            "0xp::tunnel::TunnelClosedWithRoot",
-            "0xt".into(),
-        );
-        assert_eq!(
-            (m["0xt"], active.load(Relaxed), settled.load(Relaxed)),
-            (TunnelStatus::Closed, 0, 1)
-        );
-
-        // Cursor replay re-delivers the same close: counts stay put.
-        apply_event(
-            &mut m,
-            &active,
-            &settled,
-            "0xp::tunnel::TunnelClosedWithRoot",
-            "0xt".into(),
-        );
-        assert_eq!((active.load(Relaxed), settled.load(Relaxed)), (0, 1));
-
-        // Unknown events are ignored (status unchanged).
-        apply_event(
-            &mut m,
-            &active,
-            &settled,
-            "0xp::tunnel::DisputeRaised",
-            "0xt".into(),
-        );
-        assert_eq!(m["0xt"], TunnelStatus::Closed);
+        assert_eq!(tx.gas_payment.owner, sender);
+        assert_eq!(tx.gas_payment.budget, GAS_BUDGET);
     }
 
     // The settler key loader must accept both the 32-byte raw secret and the 33-byte
@@ -562,7 +428,8 @@ mod tests {
             "0x2::sui::SUI".parse().unwrap(),
             Address::ZERO,
             &args_with_root(32),
-            &refs(),
+            &tunnel_ref(),
+            1000,
         )
         .unwrap();
         let sig = sk.sign_transaction(&tx).unwrap();

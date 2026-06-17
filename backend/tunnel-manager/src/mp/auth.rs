@@ -49,6 +49,9 @@ mod tests {
         let sig_hex = hex::encode(sk.sign(nonce).to_bytes());
         assert!(verify_ed25519(&pk_hex, nonce, &sig_hex));
         assert!(!verify_ed25519(&pk_hex, b"different-nonce", &sig_hex));
-        assert!(!verify_ed25519("zz", nonce, &sig_hex), "garbage pubkey -> false");
+        assert!(
+            !verify_ed25519("zz", nonce, &sig_hex),
+            "garbage pubkey -> false"
+        );
     }
 }

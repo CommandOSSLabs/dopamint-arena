@@ -7,6 +7,7 @@ mod mp;
 mod routes;
 mod state;
 mod stats;
+mod store;
 mod sui;
 mod walrus;
 
@@ -16,6 +17,7 @@ use axum::routing::{get, post};
 use axum::Router;
 use tokio::sync::broadcast;
 use tower_http::trace::TraceLayer;
+use uuid::Uuid;
 
 use crate::config::Config;
 use crate::state::{AppState, SharedState};
@@ -33,8 +35,6 @@ async fn main() -> anyhow::Result<()> {
     let config = Config::from_env()?;
     let bind_addr = config.bind_addr.clone();
 
-    // Phase 1: the settler is required to serve /settle — fail loud at startup naming
-    // any missing var, rather than 500ing on the first settlement.
     let settler = sui::SuiSettler::new(
         Config::require("SUI_RPC_URL", &config.sui_rpc_url)?.to_string(),
         Config::require("TUNNEL_PACKAGE_ID", &config.package_id)?,
@@ -46,28 +46,48 @@ async fn main() -> anyhow::Result<()> {
         Config::require("WALRUS_AGGREGATOR_URL", &config.walrus_aggregator_url)?.to_string(),
     );
 
+    let instance_id = config
+        .instance_id
+        .clone()
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
     let (stats_tx, _) = broadcast::channel::<String>(16);
+
+    let (control, mp, bus): (
+        Arc<dyn store::ControlStore>,
+        Arc<dyn store::MpStore>,
+        Arc<dyn store::Bus>,
+    ) = if let Some(cache_url) = config.redis_cache_url.clone() {
+        let pubsub_url = Config::require("REDIS_PUBSUB_URL", &config.redis_pubsub_url)?.to_string();
+        let cache = store::redis::connect(&cache_url).await?;
+        let pubsub = store::redis::connect(&pubsub_url).await?;
+        (
+            Arc::new(store::redis::RedisControlStore::new(cache.clone())),
+            Arc::new(store::redis::RedisMpStore::new(cache)),
+            Arc::new(store::redis::RedisBus::new(instance_id.clone(), pubsub).await?),
+        )
+    } else {
+        (
+            Arc::new(store::memory::InMemoryControlStore::default()),
+            Arc::new(store::memory::InMemoryMpStore::default()),
+            Arc::new(store::memory::LocalBus::new(instance_id.clone())),
+        )
+    };
+
     let state: SharedState = Arc::new(AppState {
-        sessions: std::sync::RwLock::new(std::collections::HashMap::new()),
-        total_actions: std::sync::atomic::AtomicU64::new(0),
-        active_tunnels: std::sync::atomic::AtomicU64::new(0),
-        settled_tunnels: std::sync::atomic::AtomicU64::new(0),
-        tunnels: std::sync::RwLock::new(std::collections::HashMap::new()),
-        per_game_actions: std::sync::RwLock::new(std::collections::HashMap::new()),
+        control,
+        mp,
+        bus,
         settler,
         walrus,
         stats_tx,
-        presence: std::sync::RwLock::new(std::collections::HashMap::new()),
-        queues: std::sync::RwLock::new(std::collections::HashMap::new()),
-        invites: std::sync::RwLock::new(std::collections::HashMap::new()),
-        matches: std::sync::RwLock::new(std::collections::HashMap::new()),
-        conns: std::sync::RwLock::new(std::collections::HashMap::new()),
     });
     stats::spawn_stats_broadcaster(state.clone());
     sui::spawn_event_indexer(state.clone());
 
     let app = Router::new()
         .route("/healthz", get(routes::health))
+        .route("/health/live", get(routes::live))
+        .route("/health/ready", get(routes::ready))
         .route("/metrics", get(routes::metrics))
         .route("/v1/sessions", post(routes::register_session))
         .route("/v1/sessions/:id/heartbeat", post(routes::heartbeat))

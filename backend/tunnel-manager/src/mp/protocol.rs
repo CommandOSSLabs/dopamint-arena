@@ -7,11 +7,20 @@ use serde::{Deserialize, Serialize};
 
 /// Messages the client sends to the server.
 #[derive(Debug, Deserialize, PartialEq)]
-#[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum ClientMsg {
     /// Authenticate: prove control of `pubkey` (which the client claims is `wallet`)
     /// by signing the server-issued `nonce`. See `auth.rs` for verification.
-    Connect { wallet: String, pubkey: String, sig: String, nonce: String },
+    Connect {
+        wallet: String,
+        pubkey: String,
+        sig: String,
+        nonce: String,
+    },
     #[serde(rename = "queue.join")]
     QueueJoin { game: String },
     #[serde(rename = "queue.leave")]
@@ -23,7 +32,11 @@ pub enum ClientMsg {
     #[serde(rename = "challenge.decline")]
     ChallengeDecline { match_id: String },
     #[serde(rename = "party.hello")]
-    PartyHello { match_id: String, ephemeral_pubkey: String, wallet_sig: String },
+    PartyHello {
+        match_id: String,
+        ephemeral_pubkey: String,
+        wallet_sig: String,
+    },
     #[serde(rename = "tunnel.opened")]
     TunnelOpened { match_id: String, tunnel_id: String },
     /// OPAQUE move/ack frame to forward to the other seat. `payload` is never parsed.
@@ -42,25 +55,57 @@ pub enum ClientMsg {
 
 /// Messages the server sends to the client.
 #[derive(Debug, Serialize, PartialEq)]
-#[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum ServerMsg {
     /// One-time nonce the client must sign in `connect`.
-    Challenge { nonce: String },
+    Challenge {
+        nonce: String,
+    },
     #[serde(rename = "match.found")]
-    MatchFound { match_id: String, role: String, opponent_wallet: String, game: String },
+    MatchFound {
+        match_id: String,
+        role: String,
+        opponent_wallet: String,
+        game: String,
+    },
+    // emitted in a later phase; part of the FE wire contract
+    #[allow(dead_code)]
     #[serde(rename = "queue.timeout")]
-    QueueTimeout { match_id: String },
+    QueueTimeout {
+        match_id: String,
+    },
     #[serde(rename = "challenge.incoming")]
-    ChallengeIncoming { match_id: String, from_wallet: String, game: String },
+    ChallengeIncoming {
+        match_id: String,
+        from_wallet: String,
+        game: String,
+    },
+    // emitted in a later phase; part of the FE wire contract
+    #[allow(dead_code)]
     #[serde(rename = "match.active")]
-    MatchActive { match_id: String },
-    Relay { match_id: String, payload: String },
-    Error { code: String, message: String },
+    MatchActive {
+        match_id: String,
+    },
+    Relay {
+        match_id: String,
+        payload: String,
+    },
+    Error {
+        code: String,
+        message: String,
+    },
 }
 
 impl ServerMsg {
     pub fn error(code: &str, message: &str) -> Self {
-        ServerMsg::Error { code: code.to_owned(), message: message.to_owned() }
+        ServerMsg::Error {
+            code: code.to_owned(),
+            message: message.to_owned(),
+        }
     }
     /// JSON text for a `Message::Text` frame (infallible for these owned types).
     pub fn to_text(&self) -> String {

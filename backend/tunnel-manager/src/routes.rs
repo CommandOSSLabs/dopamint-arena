@@ -2,7 +2,6 @@
 //! reaches here (ADR-0001): only register / heartbeat / settle / live-stats.
 
 use std::convert::Infallible;
-use std::sync::atomic::Ordering;
 
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -15,39 +14,32 @@ use tokio_stream::{Stream, StreamExt};
 use uuid::Uuid;
 
 use crate::error::ApiError;
-use crate::state::{AppState, SessionRecord, SharedState};
+use crate::state::{SessionRecord, SharedState, StatsSnapshot};
 
 #[cfg(test)]
 pub(crate) mod test_support {
     use crate::state::{AppState, SharedState};
 
-    /// Shared `AppState` builder for unit tests across modules. Mirrors `main.rs`.
+    /// Shared `AppState` builder for unit tests across modules.
     pub(crate) fn test_state() -> SharedState {
         use base64::Engine;
-        use std::collections::HashMap;
-        use std::sync::atomic::AtomicU64;
-        use std::sync::RwLock;
         let key = base64::engine::general_purpose::STANDARD.encode([1u8; 32]);
-        let settler =
-            crate::sui::SuiSettler::new("http://127.0.0.1:9999".into(), "0x2", "0x2::sui::SUI", &key)
-                .expect("test settler");
+        let settler = crate::sui::SuiSettler::new(
+            "http://127.0.0.1:9999".into(),
+            "0x2",
+            "0x2::sui::SUI",
+            &key,
+        )
+        .expect("test settler");
         let walrus = crate::walrus::WalrusClient::new("http://pub".into(), "http://agg".into());
         let (stats_tx, _) = tokio::sync::broadcast::channel(4);
         std::sync::Arc::new(AppState {
-            sessions: RwLock::new(HashMap::new()),
-            total_actions: AtomicU64::new(0),
-            active_tunnels: AtomicU64::new(0),
-            settled_tunnels: AtomicU64::new(0),
-            tunnels: RwLock::new(HashMap::new()),
-            per_game_actions: RwLock::new(HashMap::new()),
+            control: std::sync::Arc::new(crate::store::memory::InMemoryControlStore::default()),
+            mp: std::sync::Arc::new(crate::store::memory::InMemoryMpStore::default()),
+            bus: std::sync::Arc::new(crate::store::memory::LocalBus::new("test-instance".into())),
             settler,
             walrus,
             stats_tx,
-            presence: RwLock::new(HashMap::new()),
-            queues: RwLock::new(HashMap::new()),
-            invites: RwLock::new(HashMap::new()),
-            matches: RwLock::new(HashMap::new()),
-            conns: RwLock::new(HashMap::new()),
         })
     }
 }
@@ -63,12 +55,12 @@ pub(crate) struct RegisterSessionRequest {
     tunnels: Vec<TunnelRef>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct TunnelRef {
-    tunnel_id: String,
-    party_a: String,
-    party_b: String,
+pub struct TunnelRef {
+    pub tunnel_id: String,
+    pub party_a: String,
+    pub party_b: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -113,6 +105,20 @@ pub(crate) async fn health() -> &'static str {
     "ok"
 }
 
+pub(crate) async fn live() -> StatusCode {
+    StatusCode::OK
+}
+
+/// 200 iff the CACHE cluster answers. Pubsub is a WS-path soft dependency and is intentionally
+/// NOT pinged here (else a pubsub blip would 503 stats/settle and the ALB would drop all targets).
+pub(crate) async fn ready(State(state): State<SharedState>) -> StatusCode {
+    if state.control.ready().await {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    }
+}
+
 /// Register the tunnels a client just opened+funded (via the wallet PTB) under a
 /// session, so their stats and settlement can be tracked. Not trusted for funds —
 /// on-chain events remain authoritative.
@@ -126,16 +132,17 @@ pub(crate) async fn register_session(
     }
     let session_id = format!("sess_{}", Uuid::new_v4().simple());
     let stats_token = Uuid::new_v4().to_string();
-    // Store the same token we return — every write on this session is bearer-checked
-    // against it (Phase 4.2). The field and its writer must land together.
-    state.sessions.write().expect("sessions lock").insert(
-        session_id.clone(),
-        SessionRecord {
-            game: req.game,
-            tunnels: req.tunnels,
-            stats_token: stats_token.clone(),
-        },
-    );
+    state
+        .control
+        .put_session(
+            &session_id,
+            SessionRecord {
+                game: req.game,
+                tunnels: req.tunnels,
+                stats_token: stats_token.clone(),
+            },
+        )
+        .await;
     Json(RegisterSessionResponse {
         session_id,
         stats_token,
@@ -149,21 +156,14 @@ pub(crate) async fn heartbeat(
     headers: HeaderMap,
     Json(req): Json<HeartbeatRequest>,
 ) -> Result<StatusCode, (StatusCode, Json<ApiError>)> {
-    // Resolve the session's game + token (404 if unknown), then bearer-auth.
-    let (game, token) = {
-        let sessions = state.sessions.read().expect("sessions lock");
-        match sessions.get(&session_id) {
-            Some(rec) => (rec.game.clone(), rec.stats_token.clone()),
-            None => {
-                return Err(ApiError::resp(
-                    StatusCode::NOT_FOUND,
-                    "unknown_session",
-                    "no such session",
-                ))
-            }
-        }
+    let Some(rec) = state.control.get_session(&session_id).await else {
+        return Err(ApiError::resp(
+            StatusCode::NOT_FOUND,
+            "unknown_session",
+            "no such session",
+        ));
     };
-    if !bearer_matches(&headers, &token) {
+    if !bearer_matches(&headers, &rec.stats_token) {
         return Err(ApiError::resp(
             StatusCode::UNAUTHORIZED,
             "unauthorized",
@@ -172,16 +172,13 @@ pub(crate) async fn heartbeat(
     }
     tracing::debug!(%session_id, tunnel = %req.tunnel_id, nonce = %req.nonce, window_ms = req.window_ms, "heartbeat");
     state
-        .total_actions
-        .fetch_add(req.actions_delta, Ordering::Relaxed);
-    attribute_actions(&state, &game, req.actions_delta);
+        .control
+        .add_actions(&rec.game, req.actions_delta)
+        .await;
     Ok(StatusCode::NO_CONTENT)
 }
 
 /// Validate the settlement and submit `close_cooperative_with_root` on-chain.
-/// (Walrus archival lands in Phase 2; the Walrus response fields stay empty until then.)
-/// Every malformed field is a `422` — nothing is silently coerced, so a bad signature
-/// never becomes empty bytes that fail on-chain with an opaque error.
 pub(crate) async fn settle(
     State(state): State<SharedState>,
     Path(session_id): Path<String>,
@@ -198,32 +195,23 @@ pub(crate) async fn settle(
         "settle requested"
     );
 
-    // Existence/ownership (ADR-0002): 404 for an unknown session or a tunnel not in it,
-    // then bearer-auth. Scoped so the RwLock read guard drops before the later `.await`.
-    let token = {
-        let sessions = state.sessions.read().expect("sessions lock");
-        match sessions.get(&session_id) {
-            None => {
-                return ApiError::resp(StatusCode::NOT_FOUND, "unknown_session", "no such session")
-                    .into_response()
-            }
-            Some(rec)
-                if !rec
-                    .tunnels
-                    .iter()
-                    .any(|t| t.tunnel_id == req.settlement.tunnel_id) =>
-            {
-                return ApiError::resp(
-                    StatusCode::NOT_FOUND,
-                    "unknown_tunnel",
-                    "tunnel not registered in session",
-                )
-                .into_response()
-            }
-            Some(rec) => rec.stats_token.clone(),
-        }
+    let Some(rec) = state.control.get_session(&session_id).await else {
+        return ApiError::resp(StatusCode::NOT_FOUND, "unknown_session", "no such session")
+            .into_response();
     };
-    if !bearer_matches(&headers, &token) {
+    if !rec
+        .tunnels
+        .iter()
+        .any(|t| t.tunnel_id == req.settlement.tunnel_id)
+    {
+        return ApiError::resp(
+            StatusCode::NOT_FOUND,
+            "unknown_tunnel",
+            "tunnel not registered in session",
+        )
+        .into_response();
+    }
+    if !bearer_matches(&headers, &rec.stats_token) {
         return ApiError::resp(
             StatusCode::UNAUTHORIZED,
             "unauthorized",
@@ -232,20 +220,19 @@ pub(crate) async fn settle(
         .into_response();
     }
 
-    // 409 if the event-derived registry already shows this tunnel closed. Best-effort:
-    // the indexer lags the chain by up to one poll, so a racing duplicate still falls
-    // through to the on-chain `ETunnelClosed` → 422. Scoped so the guard drops before await.
-    // (Keys are the node's canonical 0x object id; the SDK emits the same canonical form.)
+    // 409 if the event-derived registry already shows this tunnel closed.
+    if state
+        .control
+        .get_tunnel_status(&req.settlement.tunnel_id)
+        .await
+        == Some(crate::state::TunnelStatus::Closed)
     {
-        let tunnels = state.tunnels.read().expect("tunnels lock");
-        if tunnels.get(&req.settlement.tunnel_id) == Some(&crate::state::TunnelStatus::Closed) {
-            return ApiError::resp(
-                StatusCode::CONFLICT,
-                "already_settled",
-                "tunnel already closed on-chain",
-            )
-            .into_response();
-        }
+        return ApiError::resp(
+            StatusCode::CONFLICT,
+            "already_settled",
+            "tunnel already closed on-chain",
+        )
+        .into_response();
     }
 
     let a = match parse_u64(&req.settlement.party_a_balance, "partyABalance") {
@@ -284,10 +271,6 @@ pub(crate) async fn settle(
     };
     match state.settler.submit_close(close).await {
         Ok(digest) => {
-            // The settled count is now event-derived (the indexer maintains it); no manual
-            // increment here, or it would double-count once the indexer also sees the close.
-            // Archive the transcript to Walrus. The on-chain close already succeeded, so
-            // an archival failure is reported (empty fields) but does NOT fail the settle.
             let blob = serde_json::to_vec(&req.transcript).unwrap_or_default();
             let (blob_id, proof_url) = match state.walrus.upload_transcript(blob).await {
                 Ok(v) => v,
@@ -308,8 +291,7 @@ pub(crate) async fn settle(
     }
 }
 
-/// Parse a decimal-string `u64` field (ADR-0002 sends balances/timestamp as strings),
-/// mapping a bad value to `422` rather than panicking.
+/// Parse a decimal-string `u64` field, mapping a bad value to `422`.
 pub(crate) fn parse_u64(s: &str, field: &str) -> Result<u64, (StatusCode, Json<ApiError>)> {
     s.parse::<u64>().map_err(|_| {
         ApiError::resp(
@@ -320,7 +302,7 @@ pub(crate) fn parse_u64(s: &str, field: &str) -> Result<u64, (StatusCode, Json<A
     })
 }
 
-/// Decode a `0x`-prefixed hex field (sigs, transcript root), mapping bad hex to `422`.
+/// Decode a `0x`-prefixed hex field, mapping bad hex to `422`.
 fn decode_hex(s: &str, field: &str) -> Result<Vec<u8>, (StatusCode, Json<ApiError>)> {
     hex::decode(s.trim_start_matches("0x")).map_err(|_| {
         ApiError::resp(
@@ -341,21 +323,7 @@ fn bearer_matches(headers: &HeaderMap, expected: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Attribute `delta` off-chain actions to `game`, maintained at heartbeat write time
-/// (the broadcaster turns the per-tick delta into per-game TPS).
-fn attribute_actions(state: &AppState, game: &str, delta: u64) {
-    *state
-        .per_game_actions
-        .write()
-        .expect("per_game lock")
-        .entry(game.to_owned())
-        .or_insert(0) += delta;
-}
-
 /// SSE feed for the catalog activity panel (ADR-0002 `GET /v1/stats/live`).
-/// Each viewer subscribes to the broadcast channel; the snapshot is computed ONCE
-/// per tick by `spawn_stats_broadcaster` and fanned out to all of them — so cost
-/// scales with the audience, never with TPS.
 pub(crate) async fn stats_live(
     State(state): State<SharedState>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
@@ -366,40 +334,35 @@ pub(crate) async fn stats_live(
     Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
-/// Prometheus text exposition of the live counters (hand-rolled to avoid a metrics-crate
-/// dependency for three counters). Same atomics the SSE snapshot reads.
+/// Prometheus text exposition of the live counters.
 pub(crate) async fn metrics(State(state): State<SharedState>) -> impl IntoResponse {
+    let snap = state.control.snapshot().await;
     (
         [(
             axum::http::header::CONTENT_TYPE,
             "text/plain; version=0.0.4",
         )],
-        render_metrics(&state),
+        render_metrics(&snap),
     )
 }
 
-fn render_metrics(state: &AppState) -> String {
-    use std::sync::atomic::Ordering::Relaxed;
+fn render_metrics(snap: &StatsSnapshot) -> String {
     format!(
         "# TYPE tunnel_actions_total counter\ntunnel_actions_total {}\n\
          # TYPE tunnel_settled_total counter\ntunnel_settled_total {}\n\
          # TYPE tunnel_active gauge\ntunnel_active {}\n",
-        state.total_actions.load(Relaxed),
-        state.settled_tunnels.load(Relaxed),
-        state.active_tunnels.load(Relaxed),
+        snap.total_actions, snap.settled_tunnels, snap.active_tunnels,
     )
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::test_support::test_state;
+    use super::*;
 
     // The settle payload MUST deserialize from the exact camelCase JSON the SDK
     // emits (buildSettlementWithRoot + transcript). A rename here is an
     // integration break with the 4 game clients — this test pins the contract.
-    // `finalNonce` is the SDK's signed value = onchainNonce + 1 (= "1" in self-play),
-    // NOT the off-chain move count (see ADR-0002 finalNonce note).
     #[test]
     fn settle_request_matches_sdk_camelcase_json() {
         let json = r#"{
@@ -417,8 +380,6 @@ mod tests {
         assert!(req.transcript.is_empty());
     }
 
-    // The wire contract sends u64s as decimal strings and sigs/root as hex; garbage in
-    // either must be a clean 422, never a panic.
     #[test]
     fn parse_helpers_reject_garbage() {
         assert!(parse_u64("not-a-number", "partyABalance").is_err());
@@ -427,8 +388,6 @@ mod tests {
         assert_eq!(decode_hex("0x00ff", "sigA").unwrap(), vec![0, 255]);
     }
 
-    // Only an exact `Bearer <token>` authorizes a write; missing header, wrong token, and
-    // a non-Bearer value all fail. This is the auth contract for heartbeat/settle.
     #[test]
     fn bearer_matches_only_exact_token() {
         let mut h = HeaderMap::new();
@@ -450,42 +409,22 @@ mod tests {
         assert!(bearer_matches(&h, "tok"), "exact token must pass");
     }
 
-    // Heartbeat deltas must accrue to the session's game; the snapshot reports per-game
-    // cumulative totals (the basis for per-game TPS).
-    #[test]
-    fn heartbeats_attribute_actions_per_game() {
+    // /health/ready reflects ControlStore::ready(); in-memory is always ready.
+    #[tokio::test]
+    async fn health_ready_reflects_control_store() {
         let state = test_state();
-        register(&state, "s_bj", "blackjack");
-        register(&state, "s_pay", "payments");
-        attribute_actions(&state, "blackjack", 1000);
-        attribute_actions(&state, "payments", 250);
-        attribute_actions(&state, "blackjack", 200);
-        let snap = crate::stats::build_snapshot(&state, 0);
-        assert_eq!(snap.per_game["blackjack"].total_actions, 1200);
-        assert_eq!(snap.per_game["payments"].total_actions, 250);
+        let code = ready(axum::extract::State(state)).await;
+        assert_eq!(code, axum::http::StatusCode::OK);
     }
 
-    // /metrics must expose the live counters in Prometheus text format with their values.
-    #[test]
-    fn metrics_render_exposes_counters() {
+    // /metrics must expose the live counters in Prometheus text format.
+    #[tokio::test]
+    async fn metrics_render_exposes_counters() {
         let state = test_state();
-        state
-            .total_actions
-            .fetch_add(42, std::sync::atomic::Ordering::Relaxed);
-        let body = render_metrics(&state);
+        state.control.add_actions("blackjack", 42).await;
+        let snap = state.control.snapshot().await;
+        let body = render_metrics(&snap);
         assert!(body.contains("tunnel_actions_total 42"), "got: {body}");
         assert!(body.contains("# TYPE tunnel_active gauge"));
     }
-
-    fn register(state: &AppState, id: &str, game: &str) {
-        state.sessions.write().unwrap().insert(
-            id.to_string(),
-            SessionRecord {
-                game: game.into(),
-                tunnels: vec![],
-                stats_token: "tok".into(),
-            },
-        );
-    }
-
 }
