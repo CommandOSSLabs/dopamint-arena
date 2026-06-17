@@ -22,8 +22,11 @@ process.env.PACKAGE_ID ??= PACKAGE_ID;
 
 /** Per-party locked stake (MIST). Must be >= the protocol WAGER (100) to play. */
 const STAKE = 500n;
-/** Gas top-up sent to each bot (MIST) = 0.05 SUI. */
-const FUND_PER_BOT = 50_000_000;
+/** Gas for bot A (does create + deposit + the big update_state PTB + close). Generous
+ * because checkpointing EVERY state = many signature verifies in one tx. */
+const FUND_A = 1_500_000_000;
+/** Gas for bot B (only its single deposit tx). */
+const FUND_B = 50_000_000;
 
 const proto = new protocols.BlackjackProtocol();
 type State = protocols.BlackjackState;
@@ -60,7 +63,7 @@ async function main() {
 
   // Fund both bots for gas (one tx from the funder).
   const fund = new Transaction();
-  const [ca, cb] = fund.splitCoins(fund.gas, [FUND_PER_BOT, FUND_PER_BOT]);
+  const [ca, cb] = fund.splitCoins(fund.gas, [FUND_A, FUND_B]);
   fund.transferObjects([ca], botA.address);
   fund.transferObjects([cb], botB.address);
   const fres = await client.signAndExecuteTransaction({
@@ -110,10 +113,14 @@ async function main() {
     botB.address,
     { a: STAKE, b: STAKE },
   );
-  // Accumulate EVERY co-signed update into a transcript; its Merkle root commits to
-  // the full play history and is anchored on-chain at close.
+  // Accumulate EVERY co-signed update: a transcript (for the Merkle root) AND the full
+  // list (so we can checkpoint each state on-chain via update_state).
   const transcript = new proof.Transcript(tunnelId);
-  tunnel.onUpdate = (u) => transcript.append(u);
+  const allUpdates: core.CoSignedUpdate[] = [];
+  tunnel.onUpdate = (u) => {
+    transcript.append(u);
+    allUpdates.push(u);
+  };
   let steps = 0;
   while (!proto.isTerminal(tunnel.state) && steps < 5000) {
     const by = partyForPhase(tunnel.state);
@@ -132,28 +139,38 @@ async function main() {
       `final off-chain balances A=${fin.balanceA} B=${fin.balanceB}`,
   );
 
-  // 4) checkpoint the FINAL co-signed state on-chain so the tunnel's StateCommitment
-  // field shows the played-out state (nonce, state_hash, final balances) — not the
-  // empty opening. Requires the update's timestamp >= created_at (set per-step above).
-  const latest = tunnel.latest!;
+  // 4) checkpoint EVERY co-signed state on-chain, in ONE programmable tx (PTB): one
+  // update_state per move. Each emits a StateUpdated event, so the FULL play history
+  // lands on-chain (the StateCommitment field ends at the last state). Commands in a
+  // PTB run sequentially and thread the object mutation, so the nonce strictly
+  // increases 0->1->...->N within the single tx.
   const utx = new Transaction();
-  onchain.buildUpdateState(utx, {
-    tunnelId,
-    stateHash: latest.update.stateHash,
-    nonce: latest.update.nonce,
-    partyABalance: latest.update.partyABalance,
-    partyBBalance: latest.update.partyBBalance,
-    timestamp: latest.update.timestamp,
-    sigA: latest.sigA,
-    sigB: latest.sigB,
-  });
+  for (const u of allUpdates) {
+    onchain.buildUpdateState(utx, {
+      tunnelId,
+      stateHash: u.update.stateHash,
+      nonce: u.update.nonce,
+      partyABalance: u.update.partyABalance,
+      partyBBalance: u.update.partyBBalance,
+      timestamp: u.update.timestamp,
+      sigA: u.sigA,
+      sigB: u.sigB,
+    });
+  }
   const ures = await client.signAndExecuteTransaction({
     signer: botA.keypair,
     transaction: utx,
-    options: { showEffects: true },
+    options: { showEffects: true, showEvents: true },
   });
   await client.waitForTransaction({ digest: ures.digest });
-  console.log("update_state:", ures.digest, "(on-chain nonce ->", latest.update.nonce + ")");
+  const stateEvents = (ures.events ?? []).filter((e) => e.type.endsWith("::StateUpdated")).length;
+  const latest = allUpdates[allUpdates.length - 1];
+  console.log(
+    `update_state x${allUpdates.length}:`,
+    ures.digest,
+    `| ${stateEvents} StateUpdated events on-chain | on-chain nonce ->`,
+    latest.update.nonce + "",
+  );
 
   // 5) settle with the transcript ROOT (close_cooperative_with_root): one tx distributes
   // final balances AND anchors a Merkle root committing to the FULL history. After
