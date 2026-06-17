@@ -12,7 +12,7 @@ const MP_URL = import.meta.env.VITE_MP_URL ?? "ws://127.0.0.1:8080";
 const BOT_MOVE_MS = 700;
 
 export type PvpPhase =
-  | "idle" | "connecting" | "queuing" | "opening" | "funding" | "playing" | "settling" | "done" | "error" | "interrupted";
+  | "idle" | "connecting" | "queuing" | "opening" | "funding" | "playing" | "settling" | "done" | "error";
 
 export interface PvpView {
   phase: PvpPhase;
@@ -55,8 +55,10 @@ export function usePvpBlackjack(): PvpView {
   const roleRef = useRef<"A" | "B" | null>(null);
   const autoRef = useRef(false);
   const createdAtRef = useRef<bigint>(0n);
-  const matchIdRef = useRef<string>("");
   const settledRef = useRef(false);
+  // Stable ref to the latest onMatch so the (once-registered) match.found handler never
+  // captures a stale closure — avoids the exhaustive-deps suppression on `queue`.
+  const onMatchRef = useRef<(relay: RelayClient, m: { matchId: string; role: "A" | "B"; opponentWallet: string }) => Promise<void>>();
   // App-channel resolvers (the backend forwards `relay` payloads but NOT tunnel.opened, so the
   // opener delivers the tunnelId to B over the app channel; settle halves arrive the same way).
   const openedResolveRef = useRef<((id: string) => void) | null>(null);
@@ -109,15 +111,15 @@ export function usePvpBlackjack(): PvpView {
       relayRef.current = relay;
       await relay.ready;
       setPhase("queuing");
-      relay.on("error", (m) => { setError(`${m.code}: ${m.message}`); });
-      relay.on("match.found", (m) => { void onMatch(relay, m as any); });
+      relay.on("error", (m) => { setError(`${m.code}: ${m.message}`); setPhase("error"); });
+      relay.on("match.found", (m) => { void onMatchRef.current?.(relay, m as any); });
       relay.queueJoin("blackjack");
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); setPhase("error"); }
-  })(); }, [walletAddress]); // eslint-disable-line react-hooks/exhaustive-deps
+  })(); }, [walletAddress]);
 
   const onMatch = useCallback(async (relay: RelayClient, m: { matchId: string; role: "A" | "B"; opponentWallet: string }) => {
     try {
-      matchIdRef.current = m.matchId; roleRef.current = m.role; setRole(m.role);
+      roleRef.current = m.role; setRole(m.role);
       // One persistent app-channel dispatcher per match: opened tunnelId, settle half, closed digest.
       relay.onApp(m.matchId, (mm) => {
         if (mm.t === "opened") openedResolveRef.current?.(String(mm.tunnelId));
@@ -173,12 +175,14 @@ export function usePvpBlackjack(): PvpView {
       setPhase("funding");
       const dep = await submit(buildDepositTx(tunnelId, STAKE));
       setDigests((d) => ({ ...d, deposit: dep.digest }));
+      let activated = false;
       for (let i = 0; i < 40; i++) {
         const o = await client.getObject({ id: tunnelId, options: { showContent: true } });
         const f = (o.data?.content as { fields?: Record<string, unknown> } | undefined)?.fields;
-        if (Number(f?.status ?? 0) >= 1 && BigInt((f?.party_a_deposit as string) ?? 0) > 0n && BigInt((f?.party_b_deposit as string) ?? 0) > 0n) break;
+        if (Number(f?.status ?? 0) >= 1 && BigInt((f?.party_a_deposit as string) ?? 0) > 0n && BigInt((f?.party_b_deposit as string) ?? 0) > 0n) { activated = true; break; }
         await new Promise((r) => setTimeout(r, 1500));
       }
+      if (!activated) throw new Error("tunnel did not activate (opponent may not have funded)");
 
       // Build the engine over the relay transport and start playing.
       const backend = core.defaultBackend();
@@ -205,6 +209,7 @@ export function usePvpBlackjack(): PvpView {
       onAdvance(); // if it's my turn and auto, kick off
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); setPhase("error"); }
   }, [client, proto, submit, wallet, walletAddress, finishSettle]);
+  onMatchRef.current = onMatch; // keep the match.found handler pointed at the latest onMatch
 
   const propose = useCallback((action: "hit" | "stand") => {
     const t = tunnelRef.current; if (!t) return;
@@ -222,7 +227,12 @@ export function usePvpBlackjack(): PvpView {
       if (turn === roleRef.current) { const mv = proto.randomMove(t.state, roleRef.current!, Math.random); if (mv) setTimeout(() => { try { t.propose(mv, BigInt(Date.now())); } catch { /* ignore */ } }, BOT_MOVE_MS); }
     }
   }, [proto]);
-  const leave = useCallback(() => { relayRef.current?.close(); relayRef.current = null; tunnelRef.current = null; setPhase("idle"); setState(null); setRole(null); setDigests({}); settledRef.current = false; }, []);
+  const leave = useCallback(() => {
+    relayRef.current?.close(); relayRef.current = null; tunnelRef.current = null;
+    setPhase("idle"); setState(null); setRole(null); setDigests({});
+    settledRef.current = false;
+    openedResolveRef.current = null; settleResolveRef.current = null; bufferedSettleRef.current = null;
+  }, []);
 
   useEffect(() => () => relayRef.current?.close(), []);
 
