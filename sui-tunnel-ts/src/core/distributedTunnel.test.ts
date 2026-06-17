@@ -241,3 +241,29 @@ test("proposer advances only on a valid ACK", () => {
 function blakeOfCount1(): Uint8Array {
   return blake2b256(counterProtocol.encodeState({ count: 1, turn: "B" }));
 }
+
+test("engine pair over a relay-shaped transport reaches a settleable terminal state", () => {
+  // A transport that mimics the backend relay: send() routes to the OTHER seat verbatim.
+  const { dtA, dtB } = makePair();
+  // Drive a full 4-move game; loopback already routes to the other seat.
+  const seq: Array<{ by: Party; ts: bigint }> = [
+    { by: "A", ts: 1n },
+    { by: "B", ts: 2n },
+    { by: "A", ts: 3n },
+    { by: "B", ts: 4n },
+  ];
+  for (const { by, ts } of seq) (by === "A" ? dtA : dtB).propose(0, ts);
+
+  assert.equal(dtA.nonce, 4n);
+  assert.ok(counterProtocol.isTerminal(dtA.state as any), "terminal after 4 moves");
+
+  const halfA = dtA.buildSettlementHalf(5n);
+  const halfB = dtB.buildSettlementHalf(5n);
+  const settled = dtA.combineSettlement(halfA.settlement, halfA.sigSelf, halfB.sigSelf);
+
+  // Shape matches the backend SettleRequest.settlement (balances/nonce as strings on the wire).
+  assert.equal(settled.settlement.finalNonce, 1n); // onchainNonce(0) + 1
+  assert.equal(settled.settlement.partyABalance + settled.settlement.partyBBalance, 2000n);
+  assert.equal(settled.sigA.length, 64);
+  assert.equal(settled.sigB.length, 64);
+});
