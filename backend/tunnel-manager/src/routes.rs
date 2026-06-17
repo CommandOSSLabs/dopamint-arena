@@ -17,6 +17,41 @@ use uuid::Uuid;
 use crate::error::ApiError;
 use crate::state::{AppState, SessionRecord, SharedState};
 
+#[cfg(test)]
+pub(crate) mod test_support {
+    use crate::state::{AppState, SharedState};
+
+    /// Shared `AppState` builder for unit tests across modules. Mirrors `main.rs`.
+    pub(crate) fn test_state() -> SharedState {
+        use base64::Engine;
+        use std::collections::HashMap;
+        use std::sync::atomic::AtomicU64;
+        use std::sync::RwLock;
+        let key = base64::engine::general_purpose::STANDARD.encode([1u8; 32]);
+        let settler =
+            crate::sui::SuiSettler::new("http://127.0.0.1:9999".into(), "0x2", "0x2::sui::SUI", &key)
+                .expect("test settler");
+        let walrus = crate::walrus::WalrusClient::new("http://pub".into(), "http://agg".into());
+        let (stats_tx, _) = tokio::sync::broadcast::channel(4);
+        std::sync::Arc::new(AppState {
+            sessions: RwLock::new(HashMap::new()),
+            total_actions: AtomicU64::new(0),
+            active_tunnels: AtomicU64::new(0),
+            settled_tunnels: AtomicU64::new(0),
+            tunnels: RwLock::new(HashMap::new()),
+            per_game_actions: RwLock::new(HashMap::new()),
+            settler,
+            walrus,
+            stats_tx,
+            presence: RwLock::new(HashMap::new()),
+            queues: RwLock::new(HashMap::new()),
+            invites: RwLock::new(HashMap::new()),
+            matches: RwLock::new(HashMap::new()),
+            conns: RwLock::new(HashMap::new()),
+        })
+    }
+}
+
 // ===== Wire types — JSON is camelCase to match the SDK (see ADR-0002). =====
 // `u64` fields that exceed JS precision (balances, nonce, timestamp) are strings.
 
@@ -358,6 +393,7 @@ fn render_metrics(state: &AppState) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::test_support::test_state;
 
     // The settle payload MUST deserialize from the exact camelCase JSON the SDK
     // emits (buildSettlementWithRoot + transcript). A rename here is an
@@ -452,36 +488,4 @@ mod tests {
         );
     }
 
-    fn test_state() -> SharedState {
-        use base64::Engine;
-        use std::collections::HashMap;
-        use std::sync::atomic::AtomicU64;
-        use std::sync::RwLock;
-        let key = base64::engine::general_purpose::STANDARD.encode([1u8; 32]);
-        let settler = crate::sui::SuiSettler::new(
-            "http://127.0.0.1:9999".into(),
-            "0x2",
-            "0x2::sui::SUI",
-            &key,
-        )
-        .expect("test settler");
-        let walrus = crate::walrus::WalrusClient::new("http://pub".into(), "http://agg".into());
-        let (stats_tx, _) = tokio::sync::broadcast::channel(4);
-        std::sync::Arc::new(AppState {
-            sessions: RwLock::new(HashMap::new()),
-            total_actions: AtomicU64::new(0),
-            active_tunnels: AtomicU64::new(0),
-            settled_tunnels: AtomicU64::new(0),
-            tunnels: RwLock::new(HashMap::new()),
-            per_game_actions: RwLock::new(HashMap::new()),
-            settler,
-            walrus,
-            stats_tx,
-            presence: RwLock::new(HashMap::new()),
-            queues: RwLock::new(HashMap::new()),
-            invites: RwLock::new(HashMap::new()),
-            matches: RwLock::new(HashMap::new()),
-            conns: RwLock::new(HashMap::new()),
-        })
-    }
 }
