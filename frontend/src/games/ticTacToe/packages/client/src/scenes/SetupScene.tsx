@@ -4,6 +4,82 @@ import type { Difficulty } from "@/hooks/useBotGame";
 
 export type PlayMode = "single" | "auto";
 
+export type GameType = "ttt" | "caro";
+
+const BOARD_PRESETS = [15, 19, 25] as const;
+
+function GameTypeChoice({
+  value,
+  onChange,
+}: {
+  value: GameType;
+  onChange: (v: GameType) => void;
+}) {
+  const opts: { id: GameType; label: string }[] = [
+    { id: "ttt", label: "Tic-Tac-Toe (3×3)" },
+    { id: "caro", label: "Caro (5-in-a-row)" },
+  ];
+  return (
+    <div className="flex flex-wrap gap-3 ml-4">
+      {opts.map((o) => (
+        <button
+          key={o.id}
+          type="button"
+          onClick={() => onChange(o.id)}
+          className={`px-4 py-2 border-2 border-primary rounded-sm font-body-lg text-lg transition-all ${
+            value === o.id
+              ? "bg-primary text-on-primary shadow-[2px_2px_0px_#001e40]"
+              : "bg-surface text-primary hover:bg-primary/5"
+          }`}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function BoardSizeChoice({
+  value,
+  onChange,
+}: {
+  value: number;
+  onChange: (n: number) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-2 ml-4 mt-4">
+      <span className="font-label-sm text-xs uppercase tracking-wide text-outline">
+        Board size (9–29)
+      </span>
+      <div className="flex flex-wrap items-center gap-2">
+        {BOARD_PRESETS.map((n) => (
+          <button
+            key={n}
+            type="button"
+            onClick={() => onChange(n)}
+            className={`px-3 py-1 border-2 border-primary rounded-sm font-label-sm text-sm transition-all ${
+              value === n
+                ? "bg-primary text-on-primary shadow-[1px_1px_0px_#001e40]"
+                : "bg-surface text-primary hover:bg-primary/5"
+            }`}
+          >
+            {n}×{n}
+          </button>
+        ))}
+        <input
+          type="number"
+          min={9}
+          max={29}
+          value={value}
+          onChange={(e) => onChange(Number(e.target.value))}
+          aria-label="Custom board size"
+          className="w-20 px-2 py-1 border-2 border-primary rounded-sm bg-surface text-primary font-label-sm text-sm tabular-nums text-center"
+        />
+      </div>
+    </div>
+  );
+}
+
 const MODES: { id: PlayMode; label: string; desc: string }[] = [
   { id: "single", label: "Single game", desc: "Play one game, then stop." },
   { id: "auto", label: "Auto-play", desc: "Loop games until a bot is low on gas, or you stop." },
@@ -117,6 +193,10 @@ export function SetupScene({
   setMode,
   difficulty,
   setDifficulty,
+  gameType,
+  setGameType,
+  boardSize,
+  setBoardSize,
   onStart,
   onBack,
 }: {
@@ -131,6 +211,10 @@ export function SetupScene({
   setMode: (m: PlayMode) => void;
   difficulty: Difficulty;
   setDifficulty: (d: Difficulty) => void;
+  gameType: GameType;
+  setGameType: (g: GameType) => void;
+  boardSize: number;
+  setBoardSize: (n: number) => void;
   onStart: () => void;
   onBack: () => void;
 }) {
@@ -218,7 +302,14 @@ export function SetupScene({
 
           {activeTab === "mode" && (
             <div className="space-y-3">
-              <h2 className="font-headline-lg-mobile text-base text-primary">Select Play Mode</h2>
+              <h2 className="font-headline-lg-mobile text-base text-primary">Select Game</h2>
+              <div className="py-1">
+                <GameTypeChoice value={gameType} onChange={setGameType} />
+              </div>
+              {gameType === "caro" && (
+                <BoardSizeChoice value={boardSize} onChange={setBoardSize} />
+              )}
+              <h2 className="font-headline-lg-mobile text-base text-primary pt-2">Play Mode</h2>
               <p className="text-xs text-outline -mt-1.5">Choose how the bot matches are run.</p>
               <div className="py-2">
                 <PlayModeChoice value={mode} onChange={setMode} />
