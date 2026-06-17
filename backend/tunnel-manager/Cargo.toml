@@ -1,0 +1,36 @@
+[package]
+name = "tunnel-manager"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+tokio.workspace = true
+tokio-stream.workspace = true
+axum = { workspace = true, features = ["ws"] }
+tower-http.workspace = true
+futures = "0.3"
+ed25519-dalek = "2"
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+dotenvy.workspace = true
+uuid.workspace = true
+async-trait.workspace = true
+fred.workspace = true
+reqwest.workspace = true
+hex.workspace = true
+sui-sdk-types.workspace = true
+sui-transaction-builder.workspace = true
+sui-crypto.workspace = true
+bcs.workspace = true
+base64.workspace = true
+
+[dev-dependencies]
+wiremock = "0.6"
+testcontainers = "0.23"
+testcontainers-modules = { version = "0.11", features = ["redis"] }

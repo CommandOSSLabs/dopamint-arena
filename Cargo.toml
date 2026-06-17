@@ -1,0 +1,42 @@
+[workspace]
+resolver = "2"
+members = ["backend/tunnel-manager"]
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.80"
+license = "Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+tokio = { version = "1.40", features = ["full"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+axum = "0.7"
+tower-http = { version = "0.6", features = ["trace"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1.0"
+dotenvy = "0.15"
+uuid = { version = "1", features = ["v4", "serde"] }
+async-trait = "0.1"
+# `enable-rustls-ring` (not `enable-rustls`) so fred's TLS reuses the `ring` provider
+# reqwest already pulls — a single rustls CryptoProvider avoids the 0.23 multi-provider
+# panic, and ring needs no cmake (aws-lc does). Lets `rediss://` ElastiCache URLs connect.
+fred = { version = "9", features = ["i-scripts", "subscriber-client", "enable-rustls-ring"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+hex = "0.4"
+# Lightweight crates.io Sui SDK (write path: PTB build + Ed25519 sign + BCS).
+# Replaces the monorepo `sui-sdk` git dep, which does not compile on rustc 1.95
+# (starlark_map/allocative skew). Reads/execution go via JSON-RPC over reqwest.
+# NOTE: this supersedes ADR-0002's "sui-sdk (git, MystenLabs)" Tech-Stack line.
+sui-sdk-types = "0.3"
+sui-transaction-builder = "0.3"
+sui-crypto = { version = "0.3", features = ["ed25519"] }
+bcs = "0.2"
+base64 = "0.22"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
