@@ -39,8 +39,20 @@ the self-play path.
 > `useSignPersonalMessage`). The ephemeral move-key is unchanged. (Implemented in
 > `Home.tsx`, `usePvpBlackjack.ts`, `bjPvpIdentity.ts` `attestationMessage`, `PvpBlackjack.tsx`.)
 
+> **Revision 2 (2026-06-18):** the game model changed from the symmetric duel to classic
+> **player-vs-dealer** for simplicity. One seat is the **dealer** (the tunnel opener — auto /
+> deterministic, draws to 17, the house); the other is the **player** (Hit/Stand, human or
+> auto-bot). This **reuses the SDK's existing `BlackjackProtocol`** (no new protocol; the
+> `BlackjackDuelProtocol` from this spec is left unused, removable later). It is **multi-round
+> in one tunnel**: rounds keep going (auto-advance when Auto is on) until **either player hits
+> Stop** at a round boundary, which co-signs a settlement and the dealer submits the
+> cooperative close — settle once per tunnel (also on round-cap / bankruptcy). The PvP page now
+> mirrors the self-play "Play vs Dealer" UI (hands, balances, round log, on-chain step links).
+> (Implemented in `usePvpBlackjack.ts`, `PvpBlackjack.tsx`.)
+
 ### Decisions locked (brainstorming)
-- **Game model:** symmetric duel, shared auto-dealer, head-to-head pot (option 1A).
+- **Game model:** ~~symmetric duel, shared auto-dealer, head-to-head pot (option 1A)~~ →
+  superseded by Revision 2: classic player-vs-dealer, multi-round, settle-on-stop.
 - **On-chain identity:** the **connected Sui wallet** via dapp-kit (option 2B; see the
   Revision above), connected through a main-menu login before playing. The wallet funds the
   stake, receives winnings, and signs the attestation; the ephemeral key still signs moves.
