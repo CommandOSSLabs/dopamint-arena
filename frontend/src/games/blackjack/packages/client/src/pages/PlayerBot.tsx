@@ -545,6 +545,7 @@ export default function PlayerBot() {
             <DigestLink label="create" digest={digests.create} />
             <DigestLink label="depositA" digest={digests.depositA} />
             <DigestLink label="depositB" digest={digests.depositB} />
+            <DigestLink label="state checkpoint" digest={digests.update} />
             <DigestLink label="close" digest={digests.close} />
             {digests.root ? (
               <span

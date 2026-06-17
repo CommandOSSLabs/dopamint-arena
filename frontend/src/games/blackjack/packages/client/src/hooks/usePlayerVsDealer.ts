@@ -6,6 +6,7 @@ import {
   buildCreateAndShareTx,
   buildDepositTx,
   buildSettleWithRootTx,
+  buildUpdateStateTx,
   parseTunnelId,
 } from "@/lib/bjTunnel";
 import { handToCardIndices, handValue } from "@/lib/bjCards";
@@ -35,6 +36,8 @@ export interface TableDigests {
   create?: string;
   depositA?: string;
   depositB?: string;
+  /** Checkpoint of the final co-signed state (update_state), submitted before close. */
+  update?: string;
   close?: string;
   /** Hex of the transcript Merkle root anchored on-chain at close (0x-prefixed). */
   root?: string;
@@ -338,7 +341,12 @@ export function usePlayerVsDealer(): PlayerVsDealerGame {
   // on an unverified state.
   const stepBy = useCallback(
     (tunnel: Tunnel, by: protocols.Party) => {
-      const r = tunnel.step({ action: "stand" }, by, { mode: "full" });
+      // Sign with the on-chain created_at so the final co-signed state passes
+      // update_state's timestamp check at cashOut (see hit/nextRound for the same).
+      const r = tunnel.step({ action: "stand" }, by, {
+        mode: "full",
+        timestamp: createdAtRef.current,
+      });
       if (!r.verified) throw new Error(`state ${r.nonce} failed dual-verify`);
       return tunnel.state;
     },
@@ -354,7 +362,10 @@ export function usePlayerVsDealer(): PlayerVsDealerGame {
     busyRef.current = true;
     try {
       const prevBalanceA = tunnel.state.balanceA;
-      const r = tunnel.step({ action: "hit" }, "A", { mode: "full" });
+      const r = tunnel.step({ action: "hit" }, "A", {
+        mode: "full",
+        timestamp: createdAtRef.current,
+      });
       if (!r.verified) throw new Error(`state ${r.nonce} failed dual-verify`);
       const s = tunnel.state;
       setView(viewFromState(s));
@@ -412,7 +423,10 @@ export function usePlayerVsDealer(): PlayerVsDealerGame {
       return;
     busyRef.current = true;
     try {
-      const r = tunnel.step({ action: "hit" }, "A", { mode: "full" });
+      const r = tunnel.step({ action: "hit" }, "A", {
+        mode: "full",
+        timestamp: createdAtRef.current,
+      });
       if (!r.verified) throw new Error(`state ${r.nonce} failed dual-verify`);
       setView(viewFromState(tunnel.state));
       setIsTerminal(proto.isTerminal(tunnel.state));
@@ -439,12 +453,29 @@ export function usePlayerVsDealer(): PlayerVsDealerGame {
         const finalA = tunnel.state.balanceA;
         setResult(finalA > STAKE ? "win" : finalA < STAKE ? "lose" : "push");
 
+        // Checkpoint the FINAL co-signed state on-chain (update_state) so the tunnel object's
+        // state field shows the played-out state_hash + balances + nonce. Steps are signed
+        // with created_at, so the latest update passes the timestamp check.
+        const latest = tunnel.latest;
+        if (latest) {
+          const ures = await submit(
+            buildUpdateStateTx(tunnelId, latest),
+            bots.a.keypair,
+          );
+          setDigests((d) => ({ ...d, update: ures.digest }));
+        }
+
         // Anchor the transcript root AND distribute funds in one cooperative close. The root
-        // commits to EVERY co-signed update; we never called update_state, so on-chain
-        // state.nonce stays 0 and close_cooperative_with_root derives finalNonce = 1 — pass
-        // onchainNonce 0n so the signed settlement matches.
+        // commits to EVERY co-signed update. After update_state the on-chain state.nonce is
+        // latest.nonce (N), so close_cooperative_with_root derives finalNonce = N + 1 — pass
+        // onchainNonce N so the signed settlement matches.
         const root = transcript.root();
-        const settlement = tunnel.buildSettlementWithRoot(createdAtRef.current, root, 0n);
+        const onchainNonce = latest ? latest.update.nonce : 0n;
+        const settlement = tunnel.buildSettlementWithRoot(
+          createdAtRef.current,
+          root,
+          onchainNonce,
+        );
         const closeRes = await submit(
           buildSettleWithRootTx(tunnelId, settlement),
           bots.a.keypair,
