@@ -36,6 +36,20 @@ const SCORE_KEY = "caro_bot_score.v1";
 const STEP_MS = 350;
 const MIN_PLAY_MIST = 20_000_000n;
 const NEXT_GAME_MS = 1200;
+// Cap the in-session settle history so a long auto-play run can't grow it without bound.
+const MAX_TUNNELS_LOGGED = 30;
+
+// One settled tunnel in the session history: the per-tunnel X/O/draw tally plus the on-chain
+// close digest + transcript root. Recorded at close (newest first); cleared on a full stop.
+export interface CaroTunnelRecord {
+  tunnelId: string;
+  closeDigest?: string;
+  rootHex?: string;
+  games: number;
+  x: number;
+  o: number;
+  draws: number;
+}
 
 export interface CaroBotGameView {
   board: number[];
@@ -48,6 +62,8 @@ export interface CaroBotGameView {
   digests: BotDigests;
   balances: { x: bigint; o: bigint };
   score: BotScore;
+  /** Settled tunnels this session, newest first (one per on-chain close). */
+  tunnels: CaroTunnelRecord[];
   auto: boolean;
   rebalancing: boolean;
   maxGames: number;
@@ -97,6 +113,7 @@ export function useCaroBotGame(
   const [digests, setDigests] = useState<BotDigests>({});
   const [balances, setBalances] = useState<{ x: bigint; o: bigint }>({ x: 0n, o: 0n });
   const [score, setScore] = useState<BotScore>(loadScore);
+  const [tunnels, setTunnels] = useState<CaroTunnelRecord[]>([]);
   const [auto, setAuto] = useState(false);
   const [rebalancing, setRebalancing] = useState(false);
   const [maxGames, setMaxGamesState] = useState<number>(DEFAULT_MAX_GAMES);
@@ -202,6 +219,9 @@ export function useCaroBotGame(
     setWinner(0);
     setDigests({});
     setCurrentGame(1);
+    // The scoreboard shows the CURRENT tunnel's tally and resets each tunnel; the settled tally
+    // is preserved in the tunnel history.
+    setScore({ x: 0, o: 0, draws: 0 });
 
     const proto = new MultiGameCaroProtocol(maxGamesRef.current, N);
 
@@ -239,23 +259,18 @@ export function useCaroBotGame(
 
         // 4) animate moves across all N games; each .step co-signs + verifies (mode "full").
         setPhase("playing");
+        // This tunnel's running tally. Tracked locally (not via the score state) so the close
+        // handler can read the final tally without a stale-state read; mirrored into `score`
+        // for the live scoreboard.
+        const tally: BotScore = { x: 0, o: 0, draws: 0 };
         let lastScoredGame = -1;
         const recordGame = (gameIndex: number, gameWinner: number) => {
           if (gameIndex === lastScoredGame) return;
           lastScoredGame = gameIndex;
-          setScore((prev) => {
-            const next: BotScore = {
-              x: prev.x + (gameWinner === 1 ? 1 : 0),
-              o: prev.o + (gameWinner === 2 ? 1 : 0),
-              draws: prev.draws + (gameWinner === 3 ? 1 : 0),
-            };
-            try {
-              localStorage.setItem(SCORE_KEY, JSON.stringify(next));
-            } catch {
-              /* ignore */
-            }
-            return next;
-          });
+          if (gameWinner === 1) tally.x += 1;
+          else if (gameWinner === 2) tally.o += 1;
+          else if (gameWinner === 3) tally.draws += 1;
+          setScore({ ...tally });
         };
 
         await new Promise<void>((resolve, reject) => {
@@ -320,6 +335,25 @@ export function useCaroBotGame(
         const closeRes = await submit(buildSettleWithRootTx(tunnelId, s), bots.x.keypair);
         setDigests((d) => ({ ...d, close: closeRes.digest, root: `0x${bytesToHex(root)}` }));
 
+        // Record the settled tunnel into the history (newest first), then reset the running
+        // score so the next tunnel starts fresh — each settle resets the player tally.
+        const record: CaroTunnelRecord = {
+          tunnelId,
+          closeDigest: closeRes.digest,
+          rootHex: `0x${bytesToHex(root)}`,
+          games: tally.x + tally.o + tally.draws,
+          x: tally.x,
+          o: tally.o,
+          draws: tally.draws,
+        };
+        setTunnels((prev) => [record, ...prev].slice(0, MAX_TUNNELS_LOGGED));
+        setScore({ x: 0, o: 0, draws: 0 });
+        try {
+          localStorage.setItem(SCORE_KEY, JSON.stringify({ x: 0, o: 0, draws: 0 }));
+        } catch {
+          /* ignore */
+        }
+
         const b = await refreshBalances();
         setPhase("done");
 
@@ -383,6 +417,8 @@ export function useCaroBotGame(
       clearTimeout(nextRef.current);
       nextRef.current = null;
     }
+    // A full stop ends the session — clear the settle history so the next run starts fresh.
+    setTunnels([]);
   }, []);
 
   const rebalance = useCallback(() => {
@@ -420,6 +456,7 @@ export function useCaroBotGame(
     digests,
     balances,
     score,
+    tunnels,
     auto,
     rebalancing,
     maxGames,

@@ -1,6 +1,7 @@
 import { Board } from "@/components/Board";
 import { CaroBoard } from "@/components/CaroBoard";
 import type { BotGameView, BotPhase } from "@/hooks/useBotGame";
+import type { CaroTunnelRecord } from "@/hooks/useCaroBotGame";
 import type { PlayMode, GameType } from "@/scenes/SetupScene";
 
 // Protocol marks (1 = botX/X, 2 = botO/O) -> Cell UI vocabulary (CELL_SERVER=2 renders "X",
@@ -106,7 +107,11 @@ export function GameScene({
   onBack,
   isPortrait = false,
 }: {
-  g: BotGameView & { boardSize?: number; lastMove?: number };
+  g: BotGameView & {
+    boardSize?: number;
+    lastMove?: number;
+    tunnels?: CaroTunnelRecord[];
+  };
   mode: PlayMode;
   gameType: GameType;
   onBack: () => void;
@@ -325,6 +330,45 @@ export function GameScene({
               Watch out for the diagonal trick!
             </div>
           </div>
+
+          {/* Settled-tunnel history (caro): one row per on-chain close, newest first. The
+              scoreboard resets each settle; this is the running record of past tunnels. */}
+          {g.tunnels && g.tunnels.length > 0 && (
+            <div className="bg-surface-container-low border-[2px] border-primary p-4 relative rounded-sm shadow-[4px_4px_0px_#00336610] w-full">
+              <h3 className="font-headline-lg text-base text-primary mb-2 flex items-center gap-2">
+                <span className="material-symbols-outlined text-base">history</span>
+                Settled Tunnels
+              </h3>
+              <ul className="space-y-2 font-label-sm text-xs text-primary max-h-[220px] overflow-auto">
+                {g.tunnels.map((t, i) => (
+                  <li
+                    key={`${t.tunnelId}-${i}`}
+                    className="flex justify-between items-center border-b border-primary/10 pb-1.5"
+                  >
+                    <span className="flex items-center gap-2 tabular-nums">
+                      <span className="text-outline">{t.games}g</span>
+                      <span className="font-bold text-primary">✕{t.x}</span>
+                      <span className="font-bold text-secondary">◯{t.o}</span>
+                      <span className="text-outline/75">={t.draws}</span>
+                    </span>
+                    {t.closeDigest ? (
+                      <a
+                        href={`https://suiscan.xyz/testnet/tx/${t.closeDigest}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        title={t.rootHex ? `transcript root ${t.rootHex}` : undefined}
+                        className="font-mono text-primary underline hover:text-secondary"
+                      >
+                        {t.closeDigest.slice(0, 6)}…{t.closeDigest.slice(-4)}
+                      </a>
+                    ) : (
+                      <span className="text-outline/40">—</span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </aside>
       </div>
     </div>
