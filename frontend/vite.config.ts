@@ -19,17 +19,21 @@ export default defineConfig(({ mode }) => {
     resolve: {
       // The vendored SDK pins an older @mysten/sui in its own node_modules. Force the bundled
       // SDK source to use THIS app's single @mysten/sui (2.18) so its tx builders produce the
-      // same Transaction class dapp-kit signs — letting us reuse them instead of duplicating.
+      // same Transaction class dapp-kit signs, letting us reuse them instead of duplicating.
       dedupe: ["@mysten/sui", "@mysten/bcs"],
       alias: {
         "@": fileURLToPath(new URL("./src", import.meta.url)),
         // The off-chain engine statically imports node:crypto in crypto-native.ts but
         // falls back to @noble at runtime in the browser. Map node:crypto to a stub so
         // the bundle resolves; the native path is never taken here.
-        "node:crypto": fileURLToPath(new URL("./src/shims/node-crypto.ts", import.meta.url)),
+        "node:crypto": fileURLToPath(
+          new URL("./src/shims/node-crypto.ts", import.meta.url),
+        ),
         // config.ts calls dotenv.config() at import time; stub it (env via `define`).
         dotenv: fileURLToPath(new URL("./src/shims/dotenv.ts", import.meta.url)),
-        "sui-tunnel-ts": fileURLToPath(new URL("../sui-tunnel-ts/src", import.meta.url)),
+        "sui-tunnel-ts": fileURLToPath(
+          new URL("../sui-tunnel-ts/src", import.meta.url),
+        ),
       },
     },
   };

@@ -18,3 +18,6 @@ that depends on them. An ADR captures the decision and the reasoning so the
   control-plane backend, client self-play hot path, per-game `Protocol`.
 - [0002](0002-grid-layout-engine.md) — Owned grid-layout engine over a
   drag-and-drop library (React 19 + shadcn-style ownership).
+- [0006](0006-quantum-poker-protocol-zk.md) — Quantum Poker: protocol-first
+  tunnel model, per-slot asymmetric commit-reveal, n-deck/burn/Five-of-a-Kind
+  rules, and optional ZK dispute adapter.
