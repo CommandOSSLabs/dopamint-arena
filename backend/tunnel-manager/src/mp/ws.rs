@@ -58,6 +58,13 @@ async fn handle_socket(socket: WebSocket, state: SharedState) {
     }
 
     // Cleanup on disconnect.
+    // KNOWN v1 cuts (accepted; not yet handled — see ADR-0004 deferrals):
+    //  - `presence` is removed unconditionally; a reconnect (new conn for the same
+    //    wallet) followed by the OLD socket closing can evict the newer entry. A guard
+    //    (`remove only if stored conn_id == this one`) is the fix when reconnect ships.
+    //  - we do NOT drain `queues`/`invites` here, so a player who disconnects while
+    //    queued leaves a ghost `Waiting` that the next joiner pairs into a dead match.
+    // Neither risks funds (on-chain protected); both must be fixed before the FE lobby.
     if let Some(w) = wallet {
         state.presence.write().expect("presence lock").remove(&w);
     }
