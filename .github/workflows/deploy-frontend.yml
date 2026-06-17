@@ -2,7 +2,7 @@ name: Deploy Frontend
 
 on:
   push:
-    branches: [main]
+    branches: [dev]
     paths: ["frontend/**"]
   workflow_dispatch:
     inputs:
@@ -28,7 +28,7 @@ jobs:
       id-token: write
       contents: read
     runs-on: ubuntu-latest
-    # Pushes to main auto-deploy to dev; use workflow_dispatch for staging/production.
+    # Pushes to dev auto-deploy to dev; use workflow_dispatch for staging/production.
     environment: ${{ github.event.inputs.environment || 'dev' }}
     timeout-minutes: 25
     defaults:

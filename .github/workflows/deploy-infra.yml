@@ -2,7 +2,7 @@ name: Deploy Infra
 
 on:
   push:
-    branches: [main]
+    branches: [dev]
     paths: ["infra/**"]
   workflow_dispatch:
     inputs:

@@ -6,7 +6,7 @@ on:
       environment:
         description: "Environment"
         required: true
-        default: "staging"
+        default: "dev"
         type: choice
         options: [dev, staging, production]
 
