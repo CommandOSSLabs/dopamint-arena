@@ -6,8 +6,9 @@ use std::sync::atomic::AtomicU64;
 use std::sync::RwLock;
 
 use serde::Serialize;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 
+use crate::mp::{ConnId, DirectedInvite, GameId, GameQueue, MatchId, MatchRecord, Wallet};
 use crate::routes::TunnelRef;
 
 pub struct SessionRecord {
@@ -46,6 +47,18 @@ pub struct AppState {
     /// Latest aggregate snapshot is computed once per tick and fanned out here to
     /// every SSE subscriber — so cost scales with the audience, not with TPS.
     pub stats_tx: broadcast::Sender<String>,
+
+    // ===== Multiplayer (ADR-0004). In-memory; bounded by concurrent players, not moves. =====
+    /// Who is online, by wallet → their live connection.
+    pub presence: RwLock<HashMap<Wallet, ConnId>>,
+    /// Quick-Match waiters, per game.
+    pub queues: RwLock<HashMap<GameId, GameQueue>>,
+    /// Outstanding directed invites, by match id.
+    pub invites: RwLock<HashMap<MatchId, DirectedInvite>>,
+    /// Live/forming matches: seats, tunnel id, latest co-signed checkpoint (watchtower).
+    pub matches: RwLock<HashMap<MatchId, MatchRecord>>,
+    /// Per-connection outbound channel so matchmaking/relay can push JSON to a socket.
+    pub conns: RwLock<HashMap<ConnId, mpsc::UnboundedSender<String>>>,
 }
 
 pub type SharedState = std::sync::Arc<AppState>;

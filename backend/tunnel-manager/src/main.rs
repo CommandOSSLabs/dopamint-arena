@@ -3,6 +3,7 @@
 
 mod config;
 mod error;
+mod mp;
 mod routes;
 mod state;
 mod stats;
@@ -56,6 +57,11 @@ async fn main() -> anyhow::Result<()> {
         settler,
         walrus,
         stats_tx,
+        presence: std::sync::RwLock::new(std::collections::HashMap::new()),
+        queues: std::sync::RwLock::new(std::collections::HashMap::new()),
+        invites: std::sync::RwLock::new(std::collections::HashMap::new()),
+        matches: std::sync::RwLock::new(std::collections::HashMap::new()),
+        conns: std::sync::RwLock::new(std::collections::HashMap::new()),
     });
     stats::spawn_stats_broadcaster(state.clone());
     sui::spawn_event_indexer(state.clone());

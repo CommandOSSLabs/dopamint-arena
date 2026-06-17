@@ -477,6 +477,11 @@ mod tests {
             settler,
             walrus,
             stats_tx,
+            presence: RwLock::new(HashMap::new()),
+            queues: RwLock::new(HashMap::new()),
+            invites: RwLock::new(HashMap::new()),
+            matches: RwLock::new(HashMap::new()),
+            conns: RwLock::new(HashMap::new()),
         })
     }
 }
