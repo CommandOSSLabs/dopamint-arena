@@ -148,10 +148,16 @@ export function usePvpBlackjack(): PvpView {
       const { signature: walletSig } = await signPersonalMessage({ message: attestationMessage(m.matchId, myEph.pubkeyHex) });
       relay.partyHello(m.matchId, myEph.pubkeyHex, walletSig);
 
-      // Exchange + verify wallet-attested ephemeral pubkeys.
+      // Exchange wallet-attested ephemeral pubkeys. This is a SECOND line of defense — the
+      // v1 lobby identity is self-asserted and the on-chain seat is the real security — and
+      // some wallets (e.g. zkLogin/social accounts) don't round-trip through
+      // verifyPersonalMessageSignature, so a failed attestation only WARNS; it does not block.
       const oppHello = await oppHelloMsg;
-      if (!(await verifyAttestation(m.matchId, oppHello.ephemeralPubkey, oppHello.walletSig, m.opponentWallet))) {
-        throw new Error("opponent attestation failed");
+      const attestOk = await verifyAttestation(
+        m.matchId, oppHello.ephemeralPubkey, oppHello.walletSig, m.opponentWallet,
+      );
+      if (!attestOk) {
+        console.warn("[pvp] opponent attestation did not verify; proceeding (lobby identity is self-asserted in v1)");
       }
       const oppEphPubkey = hexToBytes(oppHello.ephemeralPubkey);
 
