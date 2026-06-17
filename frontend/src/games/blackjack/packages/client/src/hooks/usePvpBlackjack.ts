@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { core, protocols, bytesToHex, hexToBytes } from "sui-tunnel-ts";
+import { core, bytesToHex, hexToBytes } from "sui-tunnel-ts";
 import { useCurrentAccount, useSignAndExecuteTransaction, useSignPersonalMessage } from "@mysten/dapp-kit";
 import { SuiClient } from "@mysten/sui/client";
 import { getSuiClient } from "@/lib/bjBots";
@@ -7,13 +7,17 @@ import { getOrCreateEphemeral, attestationMessage, verifyAttestation } from "@/l
 import { buildCreateAndShareTx, buildDepositTx, buildCloseTx, parseTunnelId } from "@/lib/bjPvpOnchain";
 import { RelayClient } from "@/lib/bjRelay";
 import { handValue } from "@/lib/bjCards";
+import {
+  BlackjackBetProtocol, maxBet as tableMaxBet, BET_OPTIONS, MIN_BET,
+  type BetBlackjackState, type BetBlackjackMove,
+} from "@/lib/bjBetProtocol";
 
-type BlackjackState = protocols.BlackjackState;
-type BlackjackMove = protocols.BlackjackMove;
+type BlackjackState = BetBlackjackState;
+type BlackjackMove = BetBlackjackMove;
 
 const MP_URL = import.meta.env.VITE_MP_URL ?? "ws://127.0.0.1:8080";
-/** Per-seat bankroll deposited on-chain (MIST). The protocol stakes WAGER (100) per round, so a
- *  small bankroll keeps the 2D chip stacks meaningful while still allowing ~50 rounds. */
+/** Per-seat bankroll deposited on-chain (MIST). The player picks the bet each round (25..1000),
+ *  so 5000 keeps the 2D chip stacks meaningful while allowing many rounds at the default bet. */
 const STAKE = 5000n;
 const BOT_MOVE_MS = 700; // player auto-bot move cadence
 const DEALER_MS = 600; // dealer reveal pause before auto-drawing
@@ -45,7 +49,10 @@ export interface PvpView {
   myTurn: boolean; // I'm the player and it's the player's turn (Hit/Stand)
   inRoundOver: boolean; // round resolved — can Next / Stop
   terminal: boolean; // round cap or a side can't fund — forces an auto-settle
-  outOfChips: "player" | "dealer" | null; // a side can't cover the next wager → forced settle
+  outOfChips: "player" | "dealer" | null; // a side can't cover the minimum bet → forced settle
+  currentBet: bigint; // the bet locked for the round in progress (0 between rounds before betting)
+  tableMax: bigint; // largest bet both sides can cover this round
+  betOptions: number[]; // chip denominations the player may bet now (filtered to ≤ tableMax)
   rounds: RoundResult[];
   auto: boolean;
   walletAddress: string;
@@ -55,7 +62,7 @@ export interface PvpView {
   queue: () => void;
   hit: () => void;
   stand: () => void;
-  next: () => void;
+  bet: (amount: number) => void; // player places the next round's bet (deals the round)
   stop: () => void;
   setAuto: (on: boolean) => void;
   leave: () => void;
@@ -67,7 +74,7 @@ export function usePvpBlackjack(): PvpView {
   const walletAddress = account?.address ?? "";
   const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
   const { mutateAsync: signPersonalMessage } = useSignPersonalMessage();
-  const proto = useMemo(() => new protocols.BlackjackProtocol(), []);
+  const proto = useMemo(() => new BlackjackBetProtocol(), []);
 
   const [phase, setPhase] = useState<PvpPhase>("idle");
   const [error, setError] = useState<string | null>(null);
@@ -244,8 +251,10 @@ export function usePvpBlackjack(): PvpView {
         } else if (st.phase === "dealer" && m.role === "B") {
           // The dealer is deterministic — always auto-stand (triggers draw-to-17), regardless of the toggle.
           setTimeout(() => { try { t.propose({ action: "stand" }, BigInt(Date.now())); } catch { /* in flight */ } }, DEALER_MS);
-        } else if (st.phase === "round_over" && autoRef.current) {
-          setTimeout(() => { try { t.propose({ action: "hit" }, BigInt(Date.now())); } catch { /* raced / in flight */ } }, NEXT_MS);
+        } else if (st.phase === "round_over" && m.role === "A" && autoRef.current) {
+          // Only the player bets (the bet deals the next round); auto picks the default bet.
+          const mv = proto.randomMove(st, "A", Math.random);
+          if (mv) setTimeout(() => { try { t.propose(mv, BigInt(Date.now())); } catch { /* raced / in flight */ } }, NEXT_MS);
         }
       };
       t.onConfirmed = () => onAdvance();
@@ -265,11 +274,11 @@ export function usePvpBlackjack(): PvpView {
   const hit = useCallback(() => proposePlayer("hit"), [proposePlayer]);
   const stand = useCallback(() => proposePlayer("stand"), [proposePlayer]);
 
-  // Deal the next round (either seat, only at round_over and not terminal).
-  const next = useCallback(() => {
+  // Place the bet for the next round (player only; the bet deals the round). round_over, not terminal.
+  const bet = useCallback((amount: number) => {
     const t = tunnelRef.current; if (!t) return;
-    if (t.state.phase !== "round_over" || proto.isTerminal(t.state)) return;
-    try { t.propose({ action: "hit" }, BigInt(Date.now())); } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+    if (roleRef.current !== "A" || t.state.phase !== "round_over" || proto.isTerminal(t.state)) return;
+    try { t.propose({ action: "bet", amount }, BigInt(Date.now())); } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
   }, [proto]);
 
   // Stop & settle the tunnel from a round boundary (either seat). Co-signed; the dealer closes.
@@ -290,8 +299,9 @@ export function usePvpBlackjack(): PvpView {
     if (st.phase === "player" && roleRef.current === "A") {
       const mv = proto.randomMove(st, "A", Math.random);
       if (mv) setTimeout(() => { try { t.propose(mv, BigInt(Date.now())); } catch { /* ignore */ } }, BOT_MOVE_MS);
-    } else if (st.phase === "round_over") {
-      setTimeout(() => { try { t.propose({ action: "hit" }, BigInt(Date.now())); } catch { /* ignore */ } }, NEXT_MS);
+    } else if (st.phase === "round_over" && roleRef.current === "A") {
+      const mv = proto.randomMove(st, "A", Math.random);
+      if (mv) setTimeout(() => { try { t.propose(mv, BigInt(Date.now())); } catch { /* ignore */ } }, NEXT_MS);
     }
   }, [proto]);
 
@@ -313,10 +323,14 @@ export function usePvpBlackjack(): PvpView {
   const terminal = s ? proto.isTerminal(s) : false;
   const myTurn = !!s && s.phase === "player" && roleRef.current === "A";
   const inRoundOver = !!s && s.phase === "round_over";
-  // Which side (if any) can no longer cover the per-round wager — this forces the auto-settle.
+  // Which side (if any) can no longer cover even the minimum bet — this forces the auto-settle.
   const outOfChips: "player" | "dealer" | null = s
-    ? s.balanceA < s.wager ? "player" : s.balanceB < s.wager ? "dealer" : null
+    ? s.balanceA < MIN_BET ? "player" : s.balanceB < MIN_BET ? "dealer" : null
     : null;
+  // Bet controls: the table max is the poorer side's balance; offer chip buttons that fit.
+  const tableMax = s ? tableMaxBet(s) : 0n;
+  const betOptions = BET_OPTIONS.filter((v) => BigInt(v) <= tableMax);
+  const currentBet = s ? s.bet : 0n;
 
   return {
     phase, error, role, isDealer,
@@ -326,8 +340,9 @@ export function usePvpBlackjack(): PvpView {
     balancePlayer: s ? s.balanceA : 0n,
     balanceDealer: s ? s.balanceB : 0n,
     round: s ? Number(s.round) : 0,
-    gamePhase, myTurn, inRoundOver, terminal, outOfChips, rounds, auto,
+    gamePhase, myTurn, inRoundOver, terminal, outOfChips,
+    currentBet, tableMax, betOptions, rounds, auto,
     walletAddress, walletBalance, digests,
-    fund, queue, hit, stand, next, stop, setAuto, leave,
+    fund, queue, hit, stand, bet, stop, setAuto, leave,
   };
 }

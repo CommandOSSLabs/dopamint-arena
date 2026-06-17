@@ -58,7 +58,7 @@ function statusText(g: ReturnType<typeof usePvpBlackjack>): string {
   if (g.gamePhase === "dealer") return "Dealer drawing…";
   if (g.gamePhase === "round_over") {
     if (g.terminal) return g.outOfChips ? `${g.outOfChips === "player" ? "Player" : "Dealer"} is out of chips — settling…` : "Round cap reached — settling…";
-    return `Round ${g.round} over`;
+    return g.isDealer ? "Waiting for the player's bet…" : "Place your bet for the next round";
   }
   return "";
 }
@@ -181,10 +181,10 @@ export default function PvpBlackjack() {
       {playing && (
         <div className="w-full bg-zinc-950/95 backdrop-blur-md border-t border-zinc-800 z-30 px-4 md:px-8 py-3 flex flex-col md:flex-row items-center justify-between gap-3">
           <div className="flex items-center gap-5 text-xs">
-            {/* In-game chip balances (wager units, $100/round) — not the SUI wallet balance. */}
+            {/* In-game chip balances (bet units, player-chosen each round) — not the SUI wallet balance. */}
             <span>Player <span className="font-mono text-emerald-300">${Number(g.balancePlayer).toLocaleString()}</span></span>
             <span>Dealer <span className="font-mono text-rose-300">${Number(g.balanceDealer).toLocaleString()}</span></span>
-            <span className="text-zinc-500">· $100/round</span>
+            {g.currentBet > 0n && <span className="text-zinc-500">· bet <span className="font-mono text-amber-300">${Number(g.currentBet).toLocaleString()}</span></span>}
           </div>
 
           <div className="flex flex-wrap items-center gap-2 justify-center">
@@ -196,7 +196,20 @@ export default function PvpBlackjack() {
             )}
             {g.phase === "playing" && g.inRoundOver && (
               <>
-                {!g.terminal && <button onClick={g.next} disabled={g.auto} className="px-5 py-2.5 bg-amber-600 disabled:opacity-30 text-zinc-950 font-black rounded-xl">Next round</button>}
+                {!g.terminal && !g.isDealer && (
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[11px] text-zinc-400 uppercase tracking-wide mr-0.5">Bet</span>
+                    {g.betOptions.map((amt) => (
+                      <button key={amt} onClick={() => g.bet(amt)} disabled={g.auto}
+                        className="px-3.5 py-2.5 bg-amber-600 hover:bg-amber-500 disabled:opacity-30 text-zinc-950 font-black rounded-xl">
+                        ${amt}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {!g.terminal && g.isDealer && (
+                  <span className="px-4 py-2.5 text-xs text-amber-200/80 font-bold">Player is betting…</span>
+                )}
                 <button onClick={g.stop} className="px-5 py-2.5 bg-rose-700 hover:bg-rose-600 font-black rounded-xl">Stop &amp; settle</button>
               </>
             )}
