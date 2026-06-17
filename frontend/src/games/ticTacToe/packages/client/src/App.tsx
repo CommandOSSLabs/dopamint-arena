@@ -71,6 +71,9 @@ export default function App() {
   } else if (scene === "game") {
     targetWidth = isPortrait ? 450 : 880;
     targetHeight = isPortrait ? 780 : 620;
+    // Caro's board is taller than the 3×3 grid, so the column needs a taller card; the card
+    // scales down to the window, keeping the board AND the action buttons below it on screen.
+    if (gameType === "caro") targetHeight = isPortrait ? 940 : 760;
   }
 
   return (

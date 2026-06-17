@@ -12,13 +12,14 @@ export function CaroBoard({
   size: number;
   lastMove: number;
 }) {
-  // Cell size shrinks as the board grows so a 25×25 still fits ~460px; min 14px keeps marks
-  // legible (a frame scrolls if the grid exceeds the frame).
-  const cell = Math.max(14, Math.floor(460 / size));
+  // Keep the board's footprint close to the 3×3 board so the action buttons below it stay on
+  // screen inside the fixed-height game card. Cells shrink as the board grows (min 14px keeps
+  // marks legible); a board larger than the frame scrolls inside it rather than growing the card.
+  const cell = Math.max(14, Math.floor(320 / size));
   const dim = cell * size;
   const win = new Set(winningLine(board, size, lastMove));
   return (
-    <div className="max-w-full max-h-[480px] overflow-auto border-[2px] border-primary rounded-sm bg-surface p-1">
+    <div className="max-w-full max-h-[340px] overflow-auto border-[2px] border-primary rounded-sm bg-surface p-1">
       <div
         className="grid"
         style={{
