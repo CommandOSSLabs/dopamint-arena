@@ -181,8 +181,10 @@ export default function PvpBlackjack() {
       {playing && (
         <div className="w-full bg-zinc-950/95 backdrop-blur-md border-t border-zinc-800 z-30 px-4 md:px-8 py-3 flex flex-col md:flex-row items-center justify-between gap-3">
           <div className="flex items-center gap-5 text-xs">
-            <span>Player <span className="font-mono text-emerald-300">{fmtSui(g.balancePlayer)} SUI</span></span>
-            <span>Dealer <span className="font-mono text-rose-300">{fmtSui(g.balanceDealer)} SUI</span></span>
+            {/* In-game chip balances (wager units, $100/round) — not the SUI wallet balance. */}
+            <span>Player <span className="font-mono text-emerald-300">${Number(g.balancePlayer).toLocaleString()}</span></span>
+            <span>Dealer <span className="font-mono text-rose-300">${Number(g.balanceDealer).toLocaleString()}</span></span>
+            <span className="text-zinc-500">· $100/round</span>
           </div>
 
           <div className="flex flex-wrap items-center gap-2 justify-center">
