@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { bytesEqual } from "./bytes";
 import { generateKeyPair, KeyPair } from "./crypto";
 import { defaultBackend } from "./crypto-native";
-import { makeEndpoint, PartyEndpoint } from "./tunnel";
+import { makeEndpoint, OffchainTunnel, PartyEndpoint } from "./tunnel";
 import { Balances, otherParty, Party, Protocol } from "../protocol/Protocol";
 import { u64ToBeBytes } from "./wire";
 import { Transport } from "./distributedTunnel";
@@ -101,4 +101,59 @@ test("a second proposal before ACK is rejected", () => {
   );
   dtA.propose(1, 100n);
   assert.throws(() => dtA.propose(1, 100n), /already awaiting ACK/);
+});
+
+test("DistributedTunnel pair matches OffchainTunnel.selfPlay byte-for-byte", () => {
+  const { dtA, dtB, keyA, keyB, addrA, addrB } = makePair();
+  const self = OffchainTunnel.selfPlay(
+    counterProtocol,
+    "0x7",
+    keyA,
+    keyB,
+    addrA,
+    addrB,
+    BAL,
+  );
+
+  // Alternate A,B,A,B with matching timestamps on both engines.
+  const seq: Array<{ by: Party; ts: bigint }> = [
+    { by: "A", ts: 11n },
+    { by: "B", ts: 22n },
+    { by: "A", ts: 33n },
+    { by: "B", ts: 44n },
+  ];
+  for (const { by, ts } of seq) {
+    self.step(0, by, { timestamp: ts, mode: "full" });
+    if (by === "A") dtA.propose(0, ts);
+    else dtB.propose(0, ts);
+  }
+
+  for (const dt of [dtA, dtB]) {
+    assert.equal(dt.latest!.update.nonce, self.latest!.update.nonce);
+    assert.ok(bytesEqual(dt.latest!.sigA, self.latest!.sigA), "sigA parity");
+    assert.ok(bytesEqual(dt.latest!.sigB, self.latest!.sigB), "sigB parity");
+  }
+
+  // Settlement parity: each seat signs its half; combine; compare to self-play.
+  const selfSettle = self.buildSettlement(99n);
+  const halfA = dtA.buildSettlementHalf(99n);
+  const halfB = dtB.buildSettlementHalf(99n);
+  const combined = dtA.combineSettlement(halfA.settlement, halfA.sigSelf, halfB.sigSelf);
+  assert.ok(bytesEqual(combined.sigA, selfSettle.sigA), "settlement sigA parity");
+  assert.ok(bytesEqual(combined.sigB, selfSettle.sigB), "settlement sigB parity");
+  assert.equal(combined.settlement.finalNonce, selfSettle.settlement.finalNonce);
+});
+
+// The ADR's load-bearing claim: address is NEVER in the signed bytes. Same keys +
+// different addresses MUST yield byte-identical signatures. If a future edit folds
+// address into the signed message, this is the test that breaks.
+test("co-signed sigs are independent of party address", () => {
+  const keyA = generateKeyPair();
+  const keyB = generateKeyPair();
+  const t1 = OffchainTunnel.selfPlay(counterProtocol, "0x7", keyA, keyB, "0xAAAA", "0xBBBB", BAL);
+  const t2 = OffchainTunnel.selfPlay(counterProtocol, "0x7", keyA, keyB, "0xdead", "0xbeef", BAL);
+  t1.step(0, "A", { timestamp: 1n, mode: "full" });
+  t2.step(0, "A", { timestamp: 1n, mode: "full" });
+  assert.ok(bytesEqual(t1.latest!.sigA, t2.latest!.sigA), "sigA independent of address");
+  assert.ok(bytesEqual(t1.latest!.sigB, t2.latest!.sigB), "sigB independent of address");
 });
