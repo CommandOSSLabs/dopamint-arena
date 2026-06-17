@@ -405,8 +405,7 @@ export function useCaroBotGame(
       clearTimeout(nextRef.current);
       nextRef.current = null;
     }
-    // A full stop ends the session — clear the settle history so the next run starts fresh.
-    setTunnels([]);
+    // Keep the settle history visible after stopping — it's the record of what was played.
   }, []);
 
   const rebalance = useCallback(() => {
