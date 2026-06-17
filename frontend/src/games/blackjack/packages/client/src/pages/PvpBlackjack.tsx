@@ -278,10 +278,13 @@ export default function PvpBlackjack() {
             {g.phase === "done" && (
               <button onClick={() => { g.leave(); g.queue(); }} className="px-5 py-2.5 bg-amber-600 text-zinc-950 font-black rounded-xl">Rematch</button>
             )}
-            <label className="flex items-center gap-1.5 text-xs text-zinc-300 ml-1">
-              <input type="checkbox" checked={g.auto} onChange={(e) => g.setAuto(e.target.checked)} />
-              Auto
-            </label>
+            {/* Auto governs the player only (hit/stand + re-bet); the dealer always draws deterministically. */}
+            {!g.isDealer && (
+              <label className="flex items-center gap-1.5 text-xs text-zinc-300 ml-1">
+                <input type="checkbox" checked={g.auto} onChange={(e) => g.setAuto(e.target.checked)} />
+                Auto
+              </label>
+            )}
           </div>
 
           <div className="flex items-center gap-3">

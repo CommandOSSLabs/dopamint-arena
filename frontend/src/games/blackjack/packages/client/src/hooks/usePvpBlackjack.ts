@@ -22,6 +22,16 @@ const STAKE = 5000n;
 const BOT_MOVE_MS = 700; // player auto-bot move cadence
 const DEALER_MS = 600; // dealer reveal pause before auto-drawing
 const NEXT_MS = 900; // pause before auto-dealing the next round
+const DEFAULT_BET = 100; // auto's starting bet until the player picks one
+
+// Auto re-bet: reuse the player's last chosen bet, clamped to what both sides can still cover.
+// Returns null if the table can no longer fund the minimum bet (the round is terminal).
+function autoBetMove(lastBet: number, s: BetBlackjackState): BetBlackjackMove | null {
+  if (s.phase !== "round_over") return null;
+  const cap = Number(tableMaxBet(s));
+  if (cap < Number(MIN_BET)) return null;
+  return { action: "bet", amount: Math.max(Number(MIN_BET), Math.min(lastBet, cap)) };
+}
 
 export type PvpPhase =
   | "idle" | "connecting" | "queuing" | "opening" | "funding" | "playing" | "settling" | "done" | "error";
@@ -89,6 +99,7 @@ export function usePvpBlackjack(): PvpView {
   const tunnelRef = useRef<core.DistributedTunnel<BlackjackState, BlackjackMove> | null>(null);
   const roleRef = useRef<"A" | "B" | null>(null);
   const autoRef = useRef(false);
+  const lastBetRef = useRef<number>(DEFAULT_BET); // remembered bet for auto rounds; set on every player bet
   const createdAtRef = useRef<bigint>(0n);
   const matchIdRef = useRef<string>("");
   const settledRef = useRef(false);
@@ -252,8 +263,8 @@ export function usePvpBlackjack(): PvpView {
           // The dealer is deterministic — always auto-stand (triggers draw-to-17), regardless of the toggle.
           setTimeout(() => { try { t.propose({ action: "stand" }, BigInt(Date.now())); } catch { /* in flight */ } }, DEALER_MS);
         } else if (st.phase === "round_over" && m.role === "A" && autoRef.current) {
-          // Only the player bets (the bet deals the next round); auto picks the default bet.
-          const mv = proto.randomMove(st, "A", Math.random);
+          // Only the player bets (the bet deals the next round); auto reuses the last bet.
+          const mv = autoBetMove(lastBetRef.current, st);
           if (mv) setTimeout(() => { try { t.propose(mv, BigInt(Date.now())); } catch { /* raced / in flight */ } }, NEXT_MS);
         }
       };
@@ -278,6 +289,7 @@ export function usePvpBlackjack(): PvpView {
   const bet = useCallback((amount: number) => {
     const t = tunnelRef.current; if (!t) return;
     if (roleRef.current !== "A" || t.state.phase !== "round_over" || proto.isTerminal(t.state)) return;
+    lastBetRef.current = amount; // remember it so auto reuses this stake next round
     try { t.propose({ action: "bet", amount }, BigInt(Date.now())); } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
   }, [proto]);
 
@@ -300,7 +312,7 @@ export function usePvpBlackjack(): PvpView {
       const mv = proto.randomMove(st, "A", Math.random);
       if (mv) setTimeout(() => { try { t.propose(mv, BigInt(Date.now())); } catch { /* ignore */ } }, BOT_MOVE_MS);
     } else if (st.phase === "round_over" && roleRef.current === "A") {
-      const mv = proto.randomMove(st, "A", Math.random);
+      const mv = autoBetMove(lastBetRef.current, st);
       if (mv) setTimeout(() => { try { t.propose(mv, BigInt(Date.now())); } catch { /* ignore */ } }, NEXT_MS);
     }
   }, [proto]);
