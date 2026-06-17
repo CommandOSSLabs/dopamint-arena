@@ -10,7 +10,7 @@
  *   botA create_and_share -> both deposit STAKE -> selfPlay (every state dual-signed +
  *   verified, basic-strategy bots) -> botA close_cooperative -> coins paid out on-chain.
  */
-import { core, protocols, createSuiClient, onchain } from "../src/index.ts";
+import { core, protocols, createSuiClient, onchain, proof } from "../src/index.ts";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import { decodeSuiPrivateKey } from "@mysten/sui/cryptography";
 import { Transaction } from "@mysten/sui/transactions";
@@ -110,6 +110,10 @@ async function main() {
     botB.address,
     { a: STAKE, b: STAKE },
   );
+  // Accumulate EVERY co-signed update into a transcript; its Merkle root commits to
+  // the full play history and is anchored on-chain at close.
+  const transcript = new proof.Transcript(tunnelId);
+  tunnel.onUpdate = (u) => transcript.append(u);
   let steps = 0;
   while (!proto.isTerminal(tunnel.state) && steps < 5000) {
     const by = partyForPhase(tunnel.state);
@@ -125,16 +129,23 @@ async function main() {
       `final off-chain balances A=${fin.balanceA} B=${fin.balanceB}`,
   );
 
-  // 4) settle on-chain: pays the final balances to each bot address.
-  const settlement = tunnel.buildSettlement(createdAt, 0n);
-  const closeDigest = await onchain.closeCooperative(
-    client,
-    botA.keypair,
-    tunnelId,
-    settlement,
-    { waitForFinality: true },
-  );
-  console.log("close:", closeDigest);
+  // 4) settle on-chain with the transcript ROOT (close_cooperative_with_root): one tx
+  // distributes the final balances AND anchors a Merkle root committing to the FULL
+  // off-chain history. onchainNonce=0 (we never checkpointed update_state).
+  const root = transcript.root();
+  console.log("transcript root:", "0x" + Buffer.from(root).toString("hex"), `(${steps} states)`);
+  const settlement = tunnel.buildSettlementWithRoot(createdAt, root, 0n);
+  const ctx = new Transaction();
+  onchain.buildCloseWithRootFromSettlement(ctx, tunnelId, settlement);
+  const cres = await client.signAndExecuteTransaction({
+    signer: botA.keypair,
+    transaction: ctx,
+    options: { showEffects: true, showEvents: true },
+  });
+  await client.waitForTransaction({ digest: cres.digest });
+  console.log("close_with_root:", cres.digest);
+  const rootEvent = cres.events?.find((e) => e.type.endsWith("::TunnelClosedWithRoot"));
+  console.log("on-chain TunnelClosedWithRoot event:", rootEvent ? JSON.stringify(rootEvent.parsedJson) : "(not found)");
 
   // Show coins actually moved on-chain.
   const [ba, bb] = await Promise.all([
