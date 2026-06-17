@@ -18,13 +18,12 @@ export function createCache(
     subnetIds: args.subnetIds,
   });
 
-  const pubSubCluster = new aws.elasticache.ReplicationGroup(`${name}-pubsub`, {
+  const pubSubCluster = new aws.elasticache.ReplicationGroup(`${name}-pubsub-cmd`, {
     description: "Pub/Sub Redis for TPS stream",
     engine: "redis",
     engineVersion: "7.1",
     nodeType: args.nodeType,
-    numNodeGroups: 2,
-    replicasPerNodeGroup: 1,
+    numCacheClusters: 2,
     automaticFailoverEnabled: true,
     subnetGroupName: subnetGroup.name,
     securityGroupIds: [args.securityGroupId],
@@ -32,13 +31,12 @@ export function createCache(
     transitEncryptionEnabled: true,
   });
 
-  const cacheCluster = new aws.elasticache.ReplicationGroup(`${name}-cache`, {
+  const cacheCluster = new aws.elasticache.ReplicationGroup(`${name}-cache-cmd`, {
     description: "Cache Redis for sessions and counters",
     engine: "redis",
     engineVersion: "7.1",
     nodeType: args.nodeType,
-    numNodeGroups: 2,
-    replicasPerNodeGroup: 1,
+    numCacheClusters: 2,
     automaticFailoverEnabled: true,
     subnetGroupName: subnetGroup.name,
     securityGroupIds: [args.securityGroupId],
@@ -47,7 +45,7 @@ export function createCache(
   });
 
   return {
-    pubSubEndpoint: pubSubCluster.configurationEndpointAddress,
-    cacheEndpoint: cacheCluster.configurationEndpointAddress,
+    pubSubEndpoint: pubSubCluster.primaryEndpointAddress,
+    cacheEndpoint: cacheCluster.primaryEndpointAddress,
   };
 }

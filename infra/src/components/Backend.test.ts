@@ -12,8 +12,6 @@ function makeBackendArgs(overrides: Partial<BackendArgs> = {}): BackendArgs {
     name: "test",
     repositoryUrl: "123456789012.dkr.ecr.us-east-1.amazonaws.com/test",
     imageTag: "abc123",
-    dbProxyEndpoint: "proxy.host",
-    dbSecretArn: "arn:aws:secretsmanager:us-east-1:123:secret:test",
     pubSubEndpoint: "pubsub.host",
     cacheEndpoint: "cache.host",
     taskExecutionRoleArn: "arn:aws:iam::123:role/exec",
@@ -37,8 +35,12 @@ describe("backend component", () => {
     );
     assert.strictEqual(container.stopTimeout, 30);
     assert.ok(
-      container.secrets.some((s: { name: string }) => s.name === "DATABASE_PASSWORD"),
-      "must inject DATABASE_PASSWORD from Secrets Manager",
+      container.environment.some((e: { name: string }) => e.name === "REDIS_PUBSUB_URL"),
+      "must receive REDIS_PUBSUB_URL",
+    );
+    assert.ok(
+      container.environment.some((e: { name: string }) => e.name === "REDIS_CACHE_URL"),
+      "must receive REDIS_CACHE_URL",
     );
 
     assert.strictEqual(await awaitOutput(backend.taskDefinition.family), "test-backend");
@@ -48,24 +50,19 @@ describe("backend component", () => {
     assert.strictEqual(await awaitOutput(backend.taskDefinition.memory), "2048");
   });
 
-  it("runs the migration container with only the database environment", async () => {
+  it("runs a no-op migration container", async () => {
     const backend = createBackend(makeBackendArgs());
 
     const defs = JSON.parse(await awaitOutput(backend.migrationTaskDefinition.containerDefinitions));
     const container = defs[0];
 
-    assert.deepStrictEqual(container.command, ["./scripts/migrate.sh"]);
     assert.ok(
-      container.environment.some((e: { name: string }) => e.name === "DATABASE_URL"),
-      "migration must receive DATABASE_URL",
+      container.command.some((c: string) => c.includes("no migration required")),
+      "migration must be a no-op",
     );
     assert.ok(
-      !container.environment.some((e: { name: string }) => e.name === "REDIS_PUBSUB_URL"),
-      "migration must not receive REDIS_PUBSUB_URL",
-    );
-    assert.ok(
-      !container.environment.some((e: { name: string }) => e.name === "REDIS_CACHE_URL"),
-      "migration must not receive REDIS_CACHE_URL",
+      !container.environment?.some((e: { name: string }) => e.name === "DATABASE_URL"),
+      "migration must not receive DATABASE_URL",
     );
   });
 });

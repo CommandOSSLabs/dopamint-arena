@@ -75,8 +75,6 @@ const backend = createBackend({
   name: `dopamint-${cfg.environment}`,
   repositoryUrl: ecr.repositoryUrl,
   imageTag: cfg.backendImageTag,
-  dbProxyEndpoint: dbProxy.proxyEndpoint,
-  dbSecretArn: database.dbPasswordSecretArn,
   pubSubEndpoint: cache.pubSubEndpoint,
   cacheEndpoint: cache.cacheEndpoint,
   taskExecutionRoleArn: iam.taskExecutionRole.arn,

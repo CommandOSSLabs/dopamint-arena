@@ -12,8 +12,6 @@ export interface BackendArgs {
   name: string;
   repositoryUrl: pulumi.Input<string>;
   imageTag: pulumi.Input<string>;
-  dbProxyEndpoint: pulumi.Input<string>;
-  dbSecretArn: pulumi.Input<string>;
   pubSubEndpoint: pulumi.Input<string>;
   cacheEndpoint: pulumi.Input<string>;
   taskExecutionRoleArn: pulumi.Input<string>;
@@ -26,8 +24,6 @@ function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
     .all([
       args.repositoryUrl,
       args.imageTag,
-      args.dbProxyEndpoint,
-      args.dbSecretArn,
       args.pubSubEndpoint,
       args.cacheEndpoint,
       args.logGroupName,
@@ -36,8 +32,6 @@ function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
       ([
         repositoryUrl,
         imageTag,
-        dbProxyEndpoint,
-        dbSecretArn,
         pubSubEndpoint,
         cacheEndpoint,
         logGroupName,
@@ -49,11 +43,14 @@ function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
             essential: true,
             portMappings: [{ containerPort: 8080, protocol: "tcp" }],
             environment: [
-              { name: "DATABASE_URL", value: `postgres://dopamint@${dbProxyEndpoint}:5432/dopamint` },
               { name: "REDIS_PUBSUB_URL", value: `rediss://${pubSubEndpoint}:6379` },
               { name: "REDIS_CACHE_URL", value: `rediss://${cacheEndpoint}:6379` },
+              { name: "SUI_RPC_URL", value: "https://fullnode.testnet.sui.io:443" },
+              { name: "TUNNEL_PACKAGE_ID", value: "0x0000000000000000000000000000000000000000000000000000000000000001" },
+              { name: "WALRUS_PUBLISHER_URL", value: "https://publisher.walrus-testnet.walrus.space" },
+              { name: "WALRUS_AGGREGATOR_URL", value: "https://aggregator.walrus-testnet.walrus.space" },
+              { name: "SUI_SETTLER_KEY", value: "KCdADv4l+T2B43FW9veqZZ8WStmBA3qpEHP5N1F5Xw8=" },
             ],
-            secrets: [{ name: "DATABASE_PASSWORD", valueFrom: dbSecretArn }],
             logConfiguration: {
               logDriver: "awslogs",
               options: {
@@ -77,41 +74,24 @@ function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
 
 function makeMigrationContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
   return pulumi
-    .all([
-      args.repositoryUrl,
-      args.imageTag,
-      args.dbProxyEndpoint,
-      args.dbSecretArn,
-      args.logGroupName,
-    ])
-    .apply(
-      ([
-        repositoryUrl,
-        imageTag,
-        dbProxyEndpoint,
-        dbSecretArn,
-        logGroupName,
-      ]) =>
-        JSON.stringify([
-          {
-            name: "migrate",
-            image: `${repositoryUrl}:${imageTag}`,
-            essential: true,
-            command: ["./scripts/migrate.sh"],
-            environment: [
-              { name: "DATABASE_URL", value: `postgres://dopamint@${dbProxyEndpoint}:5432/dopamint` },
-            ],
-            secrets: [{ name: "DATABASE_PASSWORD", valueFrom: dbSecretArn }],
-            logConfiguration: {
-              logDriver: "awslogs",
-              options: {
-                "awslogs-group": logGroupName,
-                "awslogs-region": aws.config.region ?? "us-east-1",
-                "awslogs-stream-prefix": "migrate",
-              },
+    .all([args.repositoryUrl, args.imageTag, args.logGroupName])
+    .apply(([repositoryUrl, imageTag, logGroupName]) =>
+      JSON.stringify([
+        {
+          name: "migrate",
+          image: `${repositoryUrl}:${imageTag}`,
+          essential: true,
+          command: ["sh", "-c", "echo 'no migration required'"],
+          logConfiguration: {
+            logDriver: "awslogs",
+            options: {
+              "awslogs-group": logGroupName,
+              "awslogs-region": aws.config.region ?? "us-east-1",
+              "awslogs-stream-prefix": "migrate",
             },
           },
-        ])
+        },
+      ])
     );
 }
 
@@ -126,6 +106,7 @@ export function createBackend(args: BackendArgs): BackendOutputs {
     requiresCompatibilities: ["FARGATE"],
     cpu: "1024",
     memory: "2048",
+    runtimePlatform: { cpuArchitecture: "ARM64", operatingSystemFamily: "LINUX" },
     executionRoleArn: args.taskExecutionRoleArn,
     taskRoleArn: args.taskRoleArn,
     containerDefinitions,
@@ -137,6 +118,7 @@ export function createBackend(args: BackendArgs): BackendOutputs {
     requiresCompatibilities: ["FARGATE"],
     cpu: "1024",
     memory: "2048",
+    runtimePlatform: { cpuArchitecture: "ARM64", operatingSystemFamily: "LINUX" },
     executionRoleArn: args.taskExecutionRoleArn,
     taskRoleArn: args.taskRoleArn,
     containerDefinitions: migrationContainerDefinitions,
