@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { core, protocols } from "sui-tunnel-ts";
+import { core, proof, protocols, bytesToHex } from "sui-tunnel-ts";
 import type { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import type { Transaction } from "@mysten/sui/transactions";
 import {
   buildCreateAndShareTx,
   buildDepositTx,
-  buildSettleTx,
-  buildUpdateStateTx,
+  buildSettleWithRootTx,
   parseTunnelId,
 } from "@/lib/bjTunnel";
 import { handToCardIndices, handValue } from "@/lib/bjCards";
@@ -36,8 +35,9 @@ export interface TableDigests {
   create?: string;
   depositA?: string;
   depositB?: string;
-  update?: string;
   close?: string;
+  /** Hex of the transcript Merkle root anchored on-chain at close (0x-prefixed). */
+  root?: string;
 }
 
 export interface PlayerVsDealerView {
@@ -136,6 +136,9 @@ export function usePlayerVsDealer(): PlayerVsDealerGame {
   const tunnelRef = useRef<Tunnel | null>(null);
   const tunnelIdRef = useRef<string | null>(null);
   const createdAtRef = useRef<bigint>(0n);
+  // Transcript of every co-signed update for the live tunnel; its Merkle root is anchored
+  // on-chain at cashOut. Lives in a ref so the settle callback reads the same instance.
+  const transcriptRef = useRef<proof.Transcript | null>(null);
   const balancesRef = useRef<{ a: bigint; b: bigint }>({ a: 0n, b: 0n });
   const dealerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const busyRef = useRef(false);
@@ -311,8 +314,13 @@ export function usePlayerVsDealer(): PlayerVsDealerGame {
           { a: STAKE, b: STAKE },
         );
 
+        // Capture every co-signed update before any step so the anchored root is complete.
+        const transcript = new proof.Transcript(tunnelId);
+        tunnel.onUpdate = (u) => transcript.append(u);
+
         tunnelRef.current = tunnel;
         tunnelIdRef.current = tunnelId;
+        transcriptRef.current = transcript;
         createdAtRef.current = createdAt;
         setView(viewFromState(tunnel.state));
         setIsTerminal(proto.isTerminal(tunnel.state));
@@ -421,7 +429,8 @@ export function usePlayerVsDealer(): PlayerVsDealerGame {
   const cashOut = useCallback(() => {
     const tunnel = tunnelRef.current;
     const tunnelId = tunnelIdRef.current;
-    if (!tunnel || !tunnelId || busyRef.current) return;
+    const transcript = transcriptRef.current;
+    if (!tunnel || !tunnelId || !transcript || busyRef.current) return;
     clearDealerTimer();
     busyRef.current = true;
     void (async () => {
@@ -430,29 +439,26 @@ export function usePlayerVsDealer(): PlayerVsDealerGame {
         const finalA = tunnel.state.balanceA;
         setResult(finalA > STAKE ? "win" : finalA < STAKE ? "lose" : "push");
 
-        // Checkpoint the final co-signed state on-chain BEFORE the cooperative close so the
-        // on-chain StateCommitment reflects the played-out final state, not the empty opening.
-        // update_state sets on-chain state.nonce == latest.update.nonce; close_cooperative then
-        // derives finalNonce = nonce + 1, so build the settlement with that same onchainNonce.
-        const latest = tunnel.latest;
-        if (latest) {
-          const updateRes = await submit(
-            buildUpdateStateTx(tunnelId, latest),
-            bots.a.keypair,
-          );
-          setDigests((d) => ({ ...d, update: updateRes.digest }));
-        }
-        const onchainNonce = latest ? latest.update.nonce : 0n;
-        const settlement = tunnel.buildSettlement(createdAtRef.current, onchainNonce);
+        // Anchor the transcript root AND distribute funds in one cooperative close. The root
+        // commits to EVERY co-signed update; we never called update_state, so on-chain
+        // state.nonce stays 0 and close_cooperative_with_root derives finalNonce = 1 — pass
+        // onchainNonce 0n so the signed settlement matches.
+        const root = transcript.root();
+        const settlement = tunnel.buildSettlementWithRoot(createdAtRef.current, root, 0n);
         const closeRes = await submit(
-          buildSettleTx(tunnelId, settlement),
+          buildSettleWithRootTx(tunnelId, settlement),
           bots.a.keypair,
         );
-        setDigests((d) => ({ ...d, close: closeRes.digest }));
+        setDigests((d) => ({
+          ...d,
+          close: closeRes.digest,
+          root: `0x${bytesToHex(root)}`,
+        }));
 
-        // Tunnel is closed; clear the live handle so actions no-op.
+        // Tunnel is closed; clear the live handles so actions no-op.
         tunnelRef.current = null;
         tunnelIdRef.current = null;
+        transcriptRef.current = null;
         await refreshBalances();
         setPhase("done");
       } catch (e) {

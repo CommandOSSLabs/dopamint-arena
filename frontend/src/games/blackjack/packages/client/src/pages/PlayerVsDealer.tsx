@@ -480,8 +480,15 @@ export default function PlayerVsDealer() {
             <DigestLink label="create" digest={digests.create} />
             <DigestLink label="depositA" digest={digests.depositA} />
             <DigestLink label="depositB" digest={digests.depositB} />
-            <DigestLink label="update" digest={digests.update} />
             <DigestLink label="close" digest={digests.close} />
+            {digests.root ? (
+              <span
+                title={`transcript root ${digests.root}`}
+                className="text-[11px] font-mono text-zinc-500"
+              >
+                root {digests.root.slice(0, 8)}…
+              </span>
+            ) : null}
           </div>
         </div>
       </div>

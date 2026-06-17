@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { core, protocols } from "sui-tunnel-ts";
+import { core, proof, protocols, bytesToHex } from "sui-tunnel-ts";
 import type { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import type { Transaction } from "@mysten/sui/transactions";
 import {
   buildCreateAndShareTx,
   buildDepositTx,
-  buildSettleTx,
-  buildUpdateStateTx,
+  buildSettleWithRootTx,
   parseTunnelId,
 } from "@/lib/bjTunnel";
 import { handToCardIndices, handValue } from "@/lib/bjCards";
@@ -33,8 +32,9 @@ export interface BotDigests {
   create?: string;
   depositA?: string;
   depositB?: string;
-  update?: string;
   close?: string;
+  /** Hex of the transcript Merkle root anchored on-chain at close (0x-prefixed). */
+  root?: string;
 }
 
 export interface BlackjackBotView {
@@ -68,8 +68,9 @@ const MAX_ROUNDS_LOGGED = 20;
 export interface TunnelRecord {
   tunnelId: string;
   createDigest?: string;
-  updateDigest?: string;
   closeDigest?: string;
+  /** Hex of the transcript Merkle root anchored at close (0x-prefixed). */
+  rootHex?: string;
   rounds: number; // rounds played in this tunnel
   result: BlackjackResult;
   finalBalanceA: number; // off-chain final balanceA (stake units)
@@ -348,6 +349,11 @@ export function useBlackjackBot(): BlackjackBotGame {
           { a: STAKE, b: STAKE },
         );
 
+        // Accumulate every co-signed update into a transcript; its Merkle root is anchored
+        // on-chain at close. Wire the observer BEFORE any step so no update is missed.
+        const transcript = new proof.Transcript(tunnelId);
+        tunnel.onUpdate = (u) => transcript.append(u);
+
         // 5) animate moves; each .step co-signs AND verifies both sigs (mode "full").
         // The dealer ('dealer' phase) moves as B, everyone else as A.
         setPhase("playing");
@@ -427,30 +433,19 @@ export function useBlackjackBot(): BlackjackBotGame {
           finalA > STAKE ? "win" : finalA < STAKE ? "lose" : "push";
         setResult(finalResult);
 
-        // 6) checkpoint the final co-signed state on-chain, THEN close cooperatively.
-        // update_state writes the played-out final state_hash/balances/nonce onto the
-        // on-chain StateCommitment (it would otherwise stay at the empty nonce-0 opening).
-        // After it lands, on-chain state.nonce == latest.update.nonce, so close_cooperative
-        // derives finalNonce = nonce + 1; build the settlement with that same onchainNonce
-        // so its signature is over the matching finalNonce.
+        // 6) settle: anchor the transcript root AND distribute funds in one cooperative close.
+        // The root commits to EVERY co-signed update; we never touched on-chain state.nonce
+        // (no update_state), so it stays 0 and close_cooperative_with_root derives finalNonce
+        // = 1 — pass onchainNonce 0n so the signed settlement matches.
         setPhase("settling");
-        let updateDigest: string | undefined;
-        const latest = tunnel.latest;
-        if (latest) {
-          const updateRes = await submit(
-            buildUpdateStateTx(tunnelId, latest),
-            bots.a.keypair,
-          );
-          updateDigest = updateRes.digest;
-          setDigests((d) => ({ ...d, update: updateRes.digest }));
-        }
-        const onchainNonce = latest ? latest.update.nonce : 0n;
-        const s = tunnel.buildSettlement(createdAt, onchainNonce);
+        const root = transcript.root();
+        const s = tunnel.buildSettlementWithRoot(createdAt, root, 0n);
         const closeRes = await submit(
-          buildSettleTx(tunnelId, s),
+          buildSettleWithRootTx(tunnelId, s),
           bots.a.keypair,
         );
-        setDigests((d) => ({ ...d, close: closeRes.digest }));
+        const rootHex = `0x${bytesToHex(root)}`;
+        setDigests((d) => ({ ...d, close: closeRes.digest, root: rootHex }));
 
         // Record this settled tunnel into the persistent history (newest first). Survives the
         // auto loop so the user can review each settlement the fast transition would otherwise
@@ -458,8 +453,8 @@ export function useBlackjackBot(): BlackjackBotGame {
         const tunnelRecord: TunnelRecord = {
           tunnelId,
           createDigest: createRes.digest,
-          updateDigest,
           closeDigest: closeRes.digest,
+          rootHex,
           rounds: roundsThisTunnel,
           result: finalResult,
           finalBalanceA: Number(finalA),

@@ -402,8 +402,15 @@ export default function PlayerBot() {
                           <span>{t.rounds} rounds</span>
                           <span className="flex items-center gap-2">
                             <DigestLink label="create" digest={t.createDigest} />
-                            <DigestLink label="update" digest={t.updateDigest} />
                             <DigestLink label="settle" digest={t.closeDigest} />
+                            {t.rootHex ? (
+                              <span
+                                title={`transcript root ${t.rootHex}`}
+                                className="text-zinc-600"
+                              >
+                                root {t.rootHex.slice(0, 8)}…
+                              </span>
+                            ) : null}
                           </span>
                         </div>
                       </div>
@@ -538,8 +545,15 @@ export default function PlayerBot() {
             <DigestLink label="create" digest={digests.create} />
             <DigestLink label="depositA" digest={digests.depositA} />
             <DigestLink label="depositB" digest={digests.depositB} />
-            <DigestLink label="update" digest={digests.update} />
             <DigestLink label="close" digest={digests.close} />
+            {digests.root ? (
+              <span
+                title={`transcript root ${digests.root}`}
+                className="text-[11px] font-mono text-zinc-500"
+              >
+                root {digests.root.slice(0, 8)}…
+              </span>
+            ) : null}
           </div>
         </div>
       </div>
