@@ -1,9 +1,11 @@
 import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
+import { ConnectButton, useCurrentAccount } from "@mysten/dapp-kit";
 import { GameCardScale } from "@/components/general/GameCardScale";
 
 export default function Home() {
   const navigate = useNavigate();
+  const account = useCurrentAccount();
 
   useEffect(() => {
     document.title = "Blackjack";
@@ -22,32 +24,45 @@ export default function Home() {
             BLACKJACK
           </h1>
 
-          {/* On-chain tunnel demos, no login required: play the dealer yourself, or watch
-              two bots self-play. */}
+          {/* Connect a Sui wallet first; the game options unlock once connected (the wallet
+              funds PvP stakes + receives winnings). */}
           <div className="w-full space-y-3">
             <div className="flex items-center gap-3 text-[10px] text-zinc-500 font-bold uppercase tracking-wider">
               <span className="h-px flex-1 bg-zinc-800" />
-              On-chain · no login
+              {account ? "On-chain · connected" : "Connect wallet to play"}
               <span className="h-px flex-1 bg-zinc-800" />
             </div>
-            <button
-              onClick={() => navigate("/play")}
-              className="w-full bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-zinc-950 font-black py-4 rounded-xl text-base uppercase tracking-widest shadow-lg transition-all gold-glow-hover active:scale-95"
-            >
-              🃏 Play vs Dealer
-            </button>
-            <button
-              onClick={() => navigate("/bot")}
-              className="w-full bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white border border-zinc-800 font-bold py-3 rounded-xl text-sm uppercase tracking-wider transition-all active:scale-95"
-            >
-              👀 Watch Bot Arena
-            </button>
-            <button
-              onClick={() => navigate("/pvp")}
-              className="w-full bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white border border-zinc-800 font-bold py-3 rounded-xl text-sm uppercase tracking-wider transition-all active:scale-95"
-            >
-              🌐 Play vs Player (online)
-            </button>
+
+            <div className="flex justify-center pb-1">
+              <ConnectButton />
+            </div>
+
+            {account ? (
+              <>
+                <button
+                  onClick={() => navigate("/play")}
+                  className="w-full bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-zinc-950 font-black py-4 rounded-xl text-base uppercase tracking-widest shadow-lg transition-all gold-glow-hover active:scale-95"
+                >
+                  🃏 Play vs Dealer
+                </button>
+                <button
+                  onClick={() => navigate("/bot")}
+                  className="w-full bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white border border-zinc-800 font-bold py-3 rounded-xl text-sm uppercase tracking-wider transition-all active:scale-95"
+                >
+                  👀 Watch Bot Arena
+                </button>
+                <button
+                  onClick={() => navigate("/pvp")}
+                  className="w-full bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white border border-zinc-800 font-bold py-3 rounded-xl text-sm uppercase tracking-wider transition-all active:scale-95"
+                >
+                  🌐 Play vs Player (online)
+                </button>
+              </>
+            ) : (
+              <p className="text-center text-xs text-zinc-500 pt-1">
+                Connect a Sui wallet to enter.
+              </p>
+            )}
           </div>
         </div>
       </GameCardScale>

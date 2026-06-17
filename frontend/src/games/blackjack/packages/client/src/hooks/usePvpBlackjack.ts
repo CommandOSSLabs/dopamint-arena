@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { core, bytesToHex } from "sui-tunnel-ts";
-import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
+import { useCurrentAccount, useSignAndExecuteTransaction, useSignPersonalMessage } from "@mysten/dapp-kit";
 import { SuiClient } from "@mysten/sui/client";
 import { getSuiClient } from "@/lib/bjBots";
-import { loadOrCreateWallet, getOrCreateEphemeral, attestEphemeral, verifyAttestation } from "@/lib/bjPvpIdentity";
+import { getOrCreateEphemeral, attestationMessage, verifyAttestation } from "@/lib/bjPvpIdentity";
 import { buildCreateAndShareTx, buildDepositTx, buildCloseTx, parseTunnelId } from "@/lib/bjPvpOnchain";
 import { RelayClient } from "@/lib/bjRelay";
 import { BlackjackDuelProtocol, STAKE, type DuelState, type DuelMove } from "@/lib/bjDuelProtocol";
@@ -38,8 +38,12 @@ export interface PvpView {
 
 export function usePvpBlackjack(): PvpView {
   const client = useMemo<SuiClient>(() => getSuiClient(), []);
-  const wallet = useMemo<Ed25519Keypair>(() => loadOrCreateWallet(), []);
-  const walletAddress = useMemo(() => wallet.getPublicKey().toSuiAddress(), [wallet]);
+  // On-chain identity = the wallet connected on the main menu (dapp-kit). It funds the stake,
+  // receives winnings, and signs the party.hello attestation. The ephemeral key still signs moves.
+  const account = useCurrentAccount();
+  const walletAddress = account?.address ?? "";
+  const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
+  const { mutateAsync: signPersonalMessage } = useSignPersonalMessage();
   const proto = useMemo(() => new BlackjackDuelProtocol(), []);
 
   const [phase, setPhase] = useState<PvpPhase>("idle");
@@ -71,13 +75,15 @@ export function usePvpBlackjack(): PvpView {
   useEffect(() => { void refreshBalance(); }, [refreshBalance]);
 
   const submit = useCallback(async (tx: any) => {
-    const res = await client.signAndExecuteTransaction({ signer: wallet, transaction: tx, options: { showObjectChanges: true, showEffects: true } });
+    // The connected wallet signs + executes (popup); then fetch the full response (objectChanges).
+    const { digest } = await signAndExecute({ transaction: tx });
+    const res = await client.waitForTransaction({ digest, options: { showObjectChanges: true, showEffects: true } });
     if (res.effects?.status?.status !== "success") throw new Error(res.effects?.status?.error ?? "tx failed");
-    await client.waitForTransaction({ digest: res.digest });
     return res;
-  }, [client, wallet]);
+  }, [client, signAndExecute]);
 
   const fund = useCallback(() => { void (async () => {
+    if (!walletAddress) { setError("Connect a wallet on the menu first"); return; }
     try {
       const { requestSuiFromFaucetV2, getFaucetHost } = await import("@mysten/sui/faucet");
       await requestSuiFromFaucetV2({ host: getFaucetHost("testnet"), recipient: walletAddress });
@@ -103,6 +109,7 @@ export function usePvpBlackjack(): PvpView {
   }, [submit, refreshBalance]);
 
   const queue = useCallback(() => { void (async () => {
+    if (!walletAddress) { setError("Connect a wallet on the menu first"); setPhase("error"); return; }
     setError(null); setPhase("connecting"); settledRef.current = false;
     try {
       // Per-connection ephemeral key is bound at match time; use a temporary one for connect auth.
@@ -138,7 +145,7 @@ export function usePvpBlackjack(): PvpView {
       });
 
       const myEph = await getOrCreateEphemeral(m.matchId);
-      const walletSig = await attestEphemeral(wallet, m.matchId, myEph.pubkeyHex);
+      const { signature: walletSig } = await signPersonalMessage({ message: attestationMessage(m.matchId, myEph.pubkeyHex) });
       relay.partyHello(m.matchId, myEph.pubkeyHex, walletSig);
 
       // Exchange + verify wallet-attested ephemeral pubkeys.
@@ -208,7 +215,7 @@ export function usePvpBlackjack(): PvpView {
       setState({ ...t.state });
       onAdvance(); // if it's my turn and auto, kick off
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); setPhase("error"); }
-  }, [client, proto, submit, wallet, walletAddress, finishSettle]);
+  }, [client, proto, submit, signPersonalMessage, walletAddress, finishSettle]);
   onMatchRef.current = onMatch; // keep the match.found handler pointed at the latest onMatch
 
   const propose = useCallback((action: "hit" | "stand") => {

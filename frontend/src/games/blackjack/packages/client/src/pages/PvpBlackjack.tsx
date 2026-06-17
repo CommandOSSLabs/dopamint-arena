@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
+import { ConnectButton, useCurrentAccount } from "@mysten/dapp-kit";
 import { usePvpBlackjack } from "@/hooks/usePvpBlackjack";
 import { CardDisplay } from "@/components/app/CardDisplay";
 import { handToCardIndices, handValue } from "@/lib/bjCards";
@@ -9,8 +10,24 @@ const fmt = (mist: bigint) => (Number(mist) / 1e9).toFixed(3);
 export default function PvpBlackjack() {
   const g = usePvpBlackjack();
   const navigate = useNavigate();
+  const account = useCurrentAccount();
   useEffect(() => { document.title = "Blackjack — PvP"; }, []);
   const funded = g.walletBalance > 20_000_000n;
+
+  // PvP needs a connected wallet (it funds + receives winnings). Normally you arrive here
+  // already connected via the menu; guard direct navigation.
+  if (!account) {
+    return (
+      <div className="w-screen h-screen flex flex-col items-center justify-center menu-background text-white p-4 select-none">
+        <div className="bg-zinc-950/90 border border-zinc-800 rounded-2xl p-6 w-full max-w-md shadow-2xl flex flex-col items-center gap-4">
+          <h1 className="text-2xl font-black text-gold uppercase tracking-widest">Blackjack · PvP</h1>
+          <p className="text-sm text-zinc-400">Connect your Sui wallet to play.</p>
+          <ConnectButton />
+          <button onClick={() => navigate("/")} className="text-xs text-zinc-400 hover:text-white">← menu</button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="w-screen h-screen flex flex-col items-center justify-center menu-background text-white p-4 overflow-auto select-none">

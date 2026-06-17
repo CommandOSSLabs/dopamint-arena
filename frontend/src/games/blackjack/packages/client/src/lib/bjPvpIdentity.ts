@@ -59,8 +59,11 @@ export async function getOrCreateEphemeral(matchId: string): Promise<EphemeralKe
   return { coreKey, pubkeyHex: toHEX(coreKey.publicKey) };
 }
 
-const attMessage = (matchId: string, ephPubHex: string) =>
-  new TextEncoder().encode(`${matchId}:${ephPubHex}`);
+/** The bytes a wallet signs to attest its ephemeral key for a match (shared by sign + verify,
+ *  and by the dapp-kit signing path in the PvP hook). */
+export function attestationMessage(matchId: string, ephPubHex: string): Uint8Array {
+  return new TextEncoder().encode(`${matchId}:${ephPubHex}`);
+}
 
 /** Wallet signs the attestation (Sui personal-message, base64). */
 export async function attestEphemeral(
@@ -68,7 +71,7 @@ export async function attestEphemeral(
   matchId: string,
   ephPubHex: string,
 ): Promise<string> {
-  const { signature } = await wallet.signPersonalMessage(attMessage(matchId, ephPubHex));
+  const { signature } = await wallet.signPersonalMessage(attestationMessage(matchId, ephPubHex));
   return signature;
 }
 
@@ -80,7 +83,7 @@ export async function verifyAttestation(
   walletAddr: string,
 ): Promise<boolean> {
   try {
-    const pk = await verifyPersonalMessageSignature(attMessage(matchId, ephPubHex), walletSig);
+    const pk = await verifyPersonalMessageSignature(attestationMessage(matchId, ephPubHex), walletSig);
     return pk.toSuiAddress() === walletAddr;
   } catch {
     return false;
