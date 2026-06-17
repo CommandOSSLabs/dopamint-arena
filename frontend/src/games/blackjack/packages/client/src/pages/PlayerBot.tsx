@@ -402,6 +402,7 @@ export default function PlayerBot() {
                           <span>{t.rounds} rounds</span>
                           <span className="flex items-center gap-2">
                             <DigestLink label="create" digest={t.createDigest} />
+                            <DigestLink label="update" digest={t.updateDigest} />
                             <DigestLink label="settle" digest={t.closeDigest} />
                           </span>
                         </div>
@@ -537,6 +538,7 @@ export default function PlayerBot() {
             <DigestLink label="create" digest={digests.create} />
             <DigestLink label="depositA" digest={digests.depositA} />
             <DigestLink label="depositB" digest={digests.depositB} />
+            <DigestLink label="update" digest={digests.update} />
             <DigestLink label="close" digest={digests.close} />
           </div>
         </div>

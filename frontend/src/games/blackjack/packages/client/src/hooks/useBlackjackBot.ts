@@ -6,6 +6,7 @@ import {
   buildCreateAndShareTx,
   buildDepositTx,
   buildSettleTx,
+  buildUpdateStateTx,
   parseTunnelId,
 } from "@/lib/bjTunnel";
 import { handToCardIndices, handValue } from "@/lib/bjCards";
@@ -32,6 +33,7 @@ export interface BotDigests {
   create?: string;
   depositA?: string;
   depositB?: string;
+  update?: string;
   close?: string;
 }
 
@@ -66,6 +68,7 @@ const MAX_ROUNDS_LOGGED = 20;
 export interface TunnelRecord {
   tunnelId: string;
   createDigest?: string;
+  updateDigest?: string;
   closeDigest?: string;
   rounds: number; // rounds played in this tunnel
   result: BlackjackResult;
@@ -424,9 +427,25 @@ export function useBlackjackBot(): BlackjackBotGame {
           finalA > STAKE ? "win" : finalA < STAKE ? "lose" : "push";
         setResult(finalResult);
 
-        // 6) bot A closes cooperatively from the co-signed settlement.
+        // 6) checkpoint the final co-signed state on-chain, THEN close cooperatively.
+        // update_state writes the played-out final state_hash/balances/nonce onto the
+        // on-chain StateCommitment (it would otherwise stay at the empty nonce-0 opening).
+        // After it lands, on-chain state.nonce == latest.update.nonce, so close_cooperative
+        // derives finalNonce = nonce + 1; build the settlement with that same onchainNonce
+        // so its signature is over the matching finalNonce.
         setPhase("settling");
-        const s = tunnel.buildSettlement(createdAt, 0n);
+        let updateDigest: string | undefined;
+        const latest = tunnel.latest;
+        if (latest) {
+          const updateRes = await submit(
+            buildUpdateStateTx(tunnelId, latest),
+            bots.a.keypair,
+          );
+          updateDigest = updateRes.digest;
+          setDigests((d) => ({ ...d, update: updateRes.digest }));
+        }
+        const onchainNonce = latest ? latest.update.nonce : 0n;
+        const s = tunnel.buildSettlement(createdAt, onchainNonce);
         const closeRes = await submit(
           buildSettleTx(tunnelId, s),
           bots.a.keypair,
@@ -439,6 +458,7 @@ export function useBlackjackBot(): BlackjackBotGame {
         const tunnelRecord: TunnelRecord = {
           tunnelId,
           createDigest: createRes.digest,
+          updateDigest,
           closeDigest: closeRes.digest,
           rounds: roundsThisTunnel,
           result: finalResult,

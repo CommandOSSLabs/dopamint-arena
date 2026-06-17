@@ -35,6 +35,39 @@ export function buildDepositTx(tunnelId: string, amount: bigint): Transaction {
   return tx;
 }
 
+// Checkpoint a co-signed off-chain state onto the on-chain StateCommitment via
+// `entry_update_state`. Submitted just before the cooperative close so the on-chain `state`
+// reflects the played-out final state (final state_hash/balances/nonce) instead of the empty
+// opening. The dual signatures are the SAME ones the off-chain engine produced for this update.
+export function buildUpdateStateTx(
+  tunnelId: string,
+  u: {
+    update: {
+      stateHash: Uint8Array;
+      nonce: bigint;
+      partyABalance: bigint;
+      partyBBalance: bigint;
+      timestamp: bigint;
+    };
+    sigA: Uint8Array;
+    sigB: Uint8Array;
+  },
+): Transaction {
+  const tx = new Transaction();
+  onchain.buildUpdateState(tx as unknown as SdkTx, {
+    tunnelId,
+    stateHash: u.update.stateHash,
+    nonce: u.update.nonce,
+    partyABalance: u.update.partyABalance,
+    partyBBalance: u.update.partyBBalance,
+    timestamp: u.update.timestamp,
+    sigA: u.sigA,
+    sigB: u.sigB,
+    coinType: "0x2::sui::SUI",
+  });
+  return tx;
+}
+
 // Blackjack balances VARY round to round, so close directly from the actual co-signed
 // settlement (built by OffchainTunnel.buildSettlement) rather than hardcoded balances.
 export function buildSettleTx(tunnelId: string, settlement: core.CoSignedSettlement): Transaction {

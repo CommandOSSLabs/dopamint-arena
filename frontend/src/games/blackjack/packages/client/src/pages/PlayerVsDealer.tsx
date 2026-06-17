@@ -480,6 +480,7 @@ export default function PlayerVsDealer() {
             <DigestLink label="create" digest={digests.create} />
             <DigestLink label="depositA" digest={digests.depositA} />
             <DigestLink label="depositB" digest={digests.depositB} />
+            <DigestLink label="update" digest={digests.update} />
             <DigestLink label="close" digest={digests.close} />
           </div>
         </div>

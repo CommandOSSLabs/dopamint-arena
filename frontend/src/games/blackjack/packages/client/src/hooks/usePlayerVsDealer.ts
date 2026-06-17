@@ -6,6 +6,7 @@ import {
   buildCreateAndShareTx,
   buildDepositTx,
   buildSettleTx,
+  buildUpdateStateTx,
   parseTunnelId,
 } from "@/lib/bjTunnel";
 import { handToCardIndices, handValue } from "@/lib/bjCards";
@@ -35,6 +36,7 @@ export interface TableDigests {
   create?: string;
   depositA?: string;
   depositB?: string;
+  update?: string;
   close?: string;
 }
 
@@ -428,7 +430,20 @@ export function usePlayerVsDealer(): PlayerVsDealerGame {
         const finalA = tunnel.state.balanceA;
         setResult(finalA > STAKE ? "win" : finalA < STAKE ? "lose" : "push");
 
-        const settlement = tunnel.buildSettlement(createdAtRef.current, 0n);
+        // Checkpoint the final co-signed state on-chain BEFORE the cooperative close so the
+        // on-chain StateCommitment reflects the played-out final state, not the empty opening.
+        // update_state sets on-chain state.nonce == latest.update.nonce; close_cooperative then
+        // derives finalNonce = nonce + 1, so build the settlement with that same onchainNonce.
+        const latest = tunnel.latest;
+        if (latest) {
+          const updateRes = await submit(
+            buildUpdateStateTx(tunnelId, latest),
+            bots.a.keypair,
+          );
+          setDigests((d) => ({ ...d, update: updateRes.digest }));
+        }
+        const onchainNonce = latest ? latest.update.nonce : 0n;
+        const settlement = tunnel.buildSettlement(createdAtRef.current, onchainNonce);
         const closeRes = await submit(
           buildSettleTx(tunnelId, settlement),
           bots.a.keypair,
