@@ -3,8 +3,7 @@ import { core, proof, protocols, bytesToHex } from "sui-tunnel-ts";
 import type { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import type { Transaction } from "@mysten/sui/transactions";
 import {
-  buildCreateAndShareTx,
-  buildDepositTx,
+  buildCreateAndFundTx,
   buildSettleWithRootTx,
   buildUpdateStateTx,
   parseTunnelId,
@@ -30,9 +29,8 @@ export type BotPhase =
   | "error";
 
 export interface BotDigests {
+  /** The single open+fund+activate tx (create_and_fund), signed by the player bot. */
   create?: string;
-  depositA?: string;
-  depositB?: string;
   /** Checkpoint of the final co-signed state (update_state), submitted before close. */
   update?: string;
   close?: string;
@@ -284,7 +282,7 @@ export function useBlackjackBot(): BlackjackBotGame {
     })();
   }, [client, bots, pollBalances]);
 
-  // Run exactly one game: create -> 2 deposits -> animated self-play -> cooperative close.
+  // Run exactly one game: open+fund (one tx) -> animated self-play -> cooperative close.
   // When auto-play is on, schedules the next game (or stops if a bot is low on gas).
   const runGame = useCallback(() => {
     stopTimer();
@@ -309,10 +307,12 @@ export function useBlackjackBot(): BlackjackBotGame {
         const partyA = { address: bots.a.address, publicKey: bots.a.publicKey };
         const partyB = { address: bots.b.address, publicKey: bots.b.publicKey };
 
-        // 1) bot A create + share.
+        // 1) open + fund (both stakes) + activate in ONE tx: the player bot signs a single
+        // create_and_fund that funds both parties from its own gas coin. The dealer bot signs
+        // nothing on-chain (needs no SUI); the tunnel is active the moment this lands.
         setPhase("opening");
         const createRes = await submit(
-          buildCreateAndShareTx(partyA, partyB),
+          buildCreateAndFundTx(partyA, partyB, STAKE),
           bots.a.keypair,
         );
         const tunnelId = parseTunnelId(createRes.objectChanges);
@@ -329,19 +329,7 @@ export function useBlackjackBot(): BlackjackBotGame {
         )?.fields;
         const createdAt = BigInt((fields?.created_at as string | undefined) ?? 0);
 
-        // 3) both bots deposit STAKE.
-        const depARes = await submit(
-          buildDepositTx(tunnelId, STAKE),
-          bots.a.keypair,
-        );
-        setDigests((d) => ({ ...d, depositA: depARes.digest }));
-        const depBRes = await submit(
-          buildDepositTx(tunnelId, STAKE),
-          bots.b.keypair,
-        );
-        setDigests((d) => ({ ...d, depositB: depBRes.digest }));
-
-        // 4) off-chain self-play tunnel (both keys held locally).
+        // 3) off-chain self-play tunnel (both keys held locally).
         const tunnel = core.OffchainTunnel.selfPlay(
           proto,
           tunnelId,
@@ -357,7 +345,7 @@ export function useBlackjackBot(): BlackjackBotGame {
         const transcript = new proof.Transcript(tunnelId);
         tunnel.onUpdate = (u) => transcript.append(u);
 
-        // 5) animate moves; each .step co-signs AND verifies both sigs (mode "full").
+        // 4) animate moves; each .step co-signs AND verifies both sigs (mode "full").
         // The dealer ('dealer' phase) moves as B, everyone else as A.
         setPhase("playing");
         setView(viewFromState(tunnel.state));
@@ -439,7 +427,7 @@ export function useBlackjackBot(): BlackjackBotGame {
           finalA > STAKE ? "win" : finalA < STAKE ? "lose" : "push";
         setResult(finalResult);
 
-        // 6) checkpoint the FINAL co-signed state on-chain (update_state) so the tunnel
+        // 5) checkpoint the FINAL co-signed state on-chain (update_state) so the tunnel
         // object's state field shows the played-out state_hash + balances + nonce, then
         // close with the transcript root. Steps are signed with created_at, so the latest
         // update passes the timestamp check.
@@ -453,7 +441,7 @@ export function useBlackjackBot(): BlackjackBotGame {
           setDigests((d) => ({ ...d, update: ures.digest }));
         }
 
-        // 7) settle: anchor the transcript root AND distribute funds in one cooperative close.
+        // 6) settle: anchor the transcript root AND distribute funds in one cooperative close.
         // The root commits to EVERY co-signed update. After update_state the on-chain
         // state.nonce is latest.nonce (N), so close_cooperative_with_root derives finalNonce
         // = N + 1 — pass onchainNonce N so the signed settlement matches.
@@ -484,7 +472,7 @@ export function useBlackjackBot(): BlackjackBotGame {
         const b = await refreshBalances();
         setPhase("done");
 
-        // 8) auto-play: continue until a bot is low on gas, or the user stopped.
+        // 7) auto-play: continue until a bot is low on gas, or the user stopped.
         if (autoRef.current) {
           if (b && b.a >= MIN_PLAY_MIST && b.b >= MIN_PLAY_MIST) {
             nextRef.current = setTimeout(() => {

@@ -696,9 +696,7 @@ export default function PlayerVsDealer() {
             )}
           </div>
           <div className="flex flex-wrap items-center justify-end gap-x-4 gap-y-1">
-            <DigestLink label="create" digest={digests.create} />
-            <DigestLink label="depositA" digest={digests.depositA} />
-            <DigestLink label="depositB" digest={digests.depositB} />
+            <DigestLink label="open & fund" digest={digests.create} />
             <DigestLink label="state checkpoint" digest={digests.update} />
             <DigestLink label="close" digest={digests.close} />
             {digests.root ? (

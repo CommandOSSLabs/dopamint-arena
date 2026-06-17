@@ -3,8 +3,7 @@ import { core, proof, protocols, bytesToHex } from "sui-tunnel-ts";
 import type { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import type { Transaction } from "@mysten/sui/transactions";
 import {
-  buildCreateAndShareTx,
-  buildDepositTx,
+  buildCreateAndFundTx,
   buildSettleWithRootTx,
   buildUpdateStateTx,
   parseTunnelId,
@@ -33,9 +32,8 @@ export type TablePhase =
   | "error";
 
 export interface TableDigests {
+  /** The single open+fund+activate tx (create_and_fund), signed by the player bot. */
   create?: string;
-  depositA?: string;
-  depositB?: string;
   /** Checkpoint of the final co-signed state (update_state), submitted before close. */
   update?: string;
   close?: string;
@@ -246,9 +244,10 @@ export function usePlayerVsDealer(): PlayerVsDealerGame {
     setRounds((prev) => [...prev, settled].slice(-MAX_ROUNDS_LOGGED));
   }, []);
 
-  // Open the table on-chain: create+share -> read created_at -> both deposits -> build the
-  // off-chain self-play tunnel (both keys local). The protocol deals round 1 immediately
-  // (phase "player"), so the human can act as soon as we surface the state.
+  // Open the table on-chain: one create_and_fund (the player bot funds both stakes from its
+  // gas, dealer bot signs nothing) -> read created_at -> build the off-chain self-play tunnel
+  // (both keys local). The protocol deals round 1 immediately (phase "player"), so the human
+  // can act as soon as we surface the state.
   const openTable = useCallback(() => {
     clearDealerTimer();
     if (
@@ -275,7 +274,7 @@ export function usePlayerVsDealer(): PlayerVsDealerGame {
 
         setPhase("opening");
         const createRes = await submit(
-          buildCreateAndShareTx(partyA, partyB),
+          buildCreateAndFundTx(partyA, partyB, STAKE),
           bots.a.keypair,
         );
         const tunnelId = parseTunnelId(createRes.objectChanges);
@@ -292,17 +291,6 @@ export function usePlayerVsDealer(): PlayerVsDealerGame {
         const createdAt = BigInt(
           (fields?.created_at as string | undefined) ?? 0,
         );
-
-        const depARes = await submit(
-          buildDepositTx(tunnelId, STAKE),
-          bots.a.keypair,
-        );
-        setDigests((d) => ({ ...d, depositA: depARes.digest }));
-        const depBRes = await submit(
-          buildDepositTx(tunnelId, STAKE),
-          bots.b.keypair,
-        );
-        setDigests((d) => ({ ...d, depositB: depBRes.digest }));
 
         const tunnel = core.OffchainTunnel.selfPlay<
           State,
