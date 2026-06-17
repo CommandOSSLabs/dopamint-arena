@@ -15,7 +15,7 @@ on:
       backendImageTag:
         description: "Backend image tag"
         required: true
-        default: "latest"
+        type: string
 
 permissions:
   id-token: write
@@ -28,6 +28,10 @@ concurrency:
 jobs:
   deploy-infra:
     name: Deploy infrastructure
+    permissions:
+      id-token: write
+      contents: read
+      actions: write
     runs-on: ubuntu-latest
     environment: ${{ github.event.inputs.environment || 'dev' }}
     timeout-minutes: 30
@@ -49,6 +53,8 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: .nvmrc
+          cache: pnpm
+          cache-dependency-path: infra/pnpm-lock.yaml
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -59,13 +65,13 @@ jobs:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: us-east-1
 
-      - name: Set backend image tag
-        run: |
-          pulumi config set dopamint:backend-image-tag ${{ github.event.inputs.backendImageTag || 'latest' }} --stack ${{ github.event.inputs.environment || 'dev' }}
-
       - name: Deploy infrastructure with Pulumi
         uses: pulumi/actions@cd99a7f8865434dd3532b586a26f9ebea596894f # v5.5.1
         with:
           command: up
           stack-name: ${{ github.event.inputs.environment || 'dev' }}
           work-dir: infra
+          pulumi-version: 3.243.0
+          config-map: |
+            dopamint:backend-image-tag:
+              value: ${{ github.event.inputs.backendImageTag || 'latest' }}

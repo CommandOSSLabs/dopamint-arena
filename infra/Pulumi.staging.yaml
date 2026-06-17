@@ -1,0 +1,11 @@
+config:
+  aws:region: us-east-1
+  dopamint:environment: staging
+  dopamint:domain: staging.dopamint.example.com
+  dopamint:db-instance-class: db.r6g.2xlarge
+  dopamint:db-serverless: "false"
+  dopamint:cache-node-type: cache.r6g.large
+  dopamint:benchmark-instance-type: c7i.48xlarge
+  dopamint:benchmark-min-size: 0
+  dopamint:benchmark-max-size: 2
+  dopamint:route53-zone-id: "ZXXXXXXXXXXXXX"
