@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ConnectButton, useCurrentAccount } from "@mysten/dapp-kit";
 import { CardDisplay } from "@/components/app/CardDisplay";
@@ -24,6 +24,15 @@ function getChipStack(balance: number): string[] {
   }
   if (stack.length === 0 && balance > 0) stack.push(chip25);
   return stack;
+}
+
+// The single chip image that best represents a wager (so the deal animation shows the bet size).
+function betChip(amount: bigint): string {
+  const n = Number(amount);
+  if (n >= 1000) return chip1000;
+  if (n >= 500) return chip500;
+  if (n >= 100) return chip100;
+  return chip25;
 }
 
 const SUISCAN_TX = "https://suiscan.xyz/testnet/tx/";
@@ -77,6 +86,41 @@ export default function PvpBlackjack() {
   const oppBal = g.isDealer ? g.balancePlayer : g.balanceDealer;
   const finalResult = myBal > oppBal ? "win" : myBal < oppBal ? "lose" : "push";
 
+  // Bet/payout chip animation, driven off the player's (party A) seat — matching the fixed
+  // player-bottom / dealer-top layout (same felt motion as the bot-vs-bot self-play table).
+  const [animState, setAnimState] = useState<"idle" | "deal" | "win" | "lose" | "push">("idle");
+  const prevRoundRef = useRef(-1);
+  const prevPhaseRef = useRef("");
+  const prevBalanceRef = useRef(-1);
+  useEffect(() => {
+    const hasCards = g.playerHand.length > 0 || g.dealerHand.length > 0;
+    if (!hasCards) { setAnimState("idle"); prevRoundRef.current = -1; return; }
+    const balance = Number(g.balancePlayer);
+    if (prevRoundRef.current === -1) {
+      if (g.gamePhase === "player") setAnimState("deal");
+    } else {
+      const roundChanged = g.round !== prevRoundRef.current;
+      const phaseChanged = g.gamePhase !== prevPhaseRef.current;
+      if (roundChanged || (phaseChanged && g.gamePhase === "player")) {
+        setAnimState("deal"); // a fresh round was dealt → chip slides from the player to the spot
+      } else if (phaseChanged && g.gamePhase === "round_over") {
+        const diff = balance - prevBalanceRef.current;
+        setAnimState(diff > 0 ? "win" : diff < 0 ? "lose" : "push");
+      }
+    }
+    prevRoundRef.current = g.round;
+    prevPhaseRef.current = g.gamePhase ?? "";
+    prevBalanceRef.current = balance;
+  }, [g.round, g.gamePhase, g.balancePlayer, g.playerHand.length, g.dealerHand.length]);
+  // Settle animations are one-shot — return to the resting spot once they finish.
+  useEffect(() => {
+    if (animState === "win" || animState === "lose" || animState === "push") {
+      const timer = setTimeout(() => setAnimState("idle"), 850);
+      return () => clearTimeout(timer);
+    }
+  }, [animState]);
+  const dealChip = betChip(g.currentBet);
+
   return (
     <div className="h-screen w-screen flex flex-col relative text-white overflow-hidden select-none bg-zinc-950">
       {/* Casino felt (same background as the bot-vs-bot table) */}
@@ -117,6 +161,24 @@ export default function PvpBlackjack() {
 
         {playing && (
           <>
+            {/* Resting bet spot + animated chip (slides on deal, collects/pays out on settle) */}
+            <div className={`betting-spot ${animState !== "idle" ? "active" : ""}`}>
+              <div className="betting-label">{g.currentBet > 0n ? `$${Number(g.currentBet).toLocaleString()}` : "PLACE BET"}</div>
+            </div>
+            {animState !== "idle" && (
+              <div className="table-chips-layer">
+                {animState === "deal" && <img src={dealChip} className="animated-chip chip-deal" alt="bet chip" />}
+                {animState === "win" && (
+                  <>
+                    <img src={dealChip} className="animated-chip chip-win-collect-1" alt="bet chip" />
+                    <img src={dealChip} className="animated-chip chip-win-collect-2" alt="bet chip" />
+                  </>
+                )}
+                {animState === "lose" && <img src={dealChip} className="animated-chip chip-lose" alt="bet chip" />}
+                {animState === "push" && <img src={dealChip} className="animated-chip chip-push" alt="bet chip" />}
+              </div>
+            )}
+
             {/* Dealer hand (top) + chip stack */}
             <div className="absolute top-[18%] md:top-[15%] left-1/2 -translate-x-1/2 z-20 w-full max-w-xs flex flex-col items-center">
               <div className="absolute -left-10 md:-left-16 top-[40px] flex flex-col items-center">
