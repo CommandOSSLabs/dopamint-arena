@@ -1,13 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { bytesEqual } from "./bytes";
-import { generateKeyPair, KeyPair } from "./crypto";
+import { blake2b256, generateKeyPair, KeyPair, sign as edSign } from "./crypto";
 import { defaultBackend } from "./crypto-native";
 import { makeEndpoint, OffchainTunnel, PartyEndpoint } from "./tunnel";
 import { Balances, otherParty, Party, Protocol } from "../protocol/Protocol";
-import { u64ToBeBytes } from "./wire";
+import { serializeStateUpdate, u64ToBeBytes } from "./wire";
 import { Transport } from "./distributedTunnel";
 import { DistributedTunnel } from "./distributedTunnel";
+import { encodeFrame, identityMoveCodec, MoveFrame } from "./distributedFrame";
 
 // ---- shared test fixtures ----
 
@@ -36,6 +37,16 @@ export function makeLoopback(): { a: Transport; b: Transport } {
   return {
     a: { send: (f) => bCb?.(f), onFrame: (cb) => { aCb = cb; } },
     b: { send: (f) => aCb?.(f), onFrame: (cb) => { bCb = cb; } },
+  };
+}
+
+function makeManual(): { transport: Transport; deliver: (b: Uint8Array) => void; sent: Uint8Array[] } {
+  const sent: Uint8Array[] = [];
+  let cb: ((f: Uint8Array) => void) | null = null;
+  return {
+    transport: { send: (f) => { sent.push(f); }, onFrame: (c) => { cb = c; } },
+    deliver: (b) => cb?.(b),
+    sent,
   };
 }
 
@@ -157,3 +168,76 @@ test("co-signed sigs are independent of party address", () => {
   assert.ok(bytesEqual(t1.latest!.sigA, t2.latest!.sigA), "sigA independent of address");
   assert.ok(bytesEqual(t1.latest!.sigB, t2.latest!.sigB), "sigB independent of address");
 });
+
+test("receiver rejects a MOVE whose stateHash != re-derived hash", () => {
+  const keyA = generateKeyPair();
+  const keyB = generateKeyPair();
+  const e = endpoints(keyA, keyB, "0xa11ce", "0xb0b");
+  const m = makeManual();
+  const dtB = new DistributedTunnel(
+    counterProtocol,
+    { tunnelId: "0x7", self: e.bSelf, opponent: e.bOpp, selfParty: "B" as Party },
+    m.transport,
+    BAL,
+  );
+  // Craft a MOVE A would send, but tamper the stateHash. A signs the (tampered) bytes
+  // so the signature is valid — only the re-apply check catches it.
+  const badHash = new Uint8Array(32).fill(0xff);
+  const update = {
+    tunnelId: "0x7",
+    stateHash: badHash,
+    nonce: 1n,
+    timestamp: 100n,
+    partyABalance: 1000n,
+    partyBBalance: 1000n,
+  };
+  const msg = serializeStateUpdate(update);
+  const frame: MoveFrame<number> = {
+    kind: "move",
+    nonce: 1n,
+    by: "A",
+    move: 0,
+    timestamp: 100n,
+    stateHash: badHash,
+    partyABalance: 1000n,
+    partyBBalance: 1000n,
+    sigProposer: edSign(msg, keyA.secretKey),
+  };
+  assert.throws(() => m.deliver(encodeFrame(frame, identityMoveCodec)), /stateHash/);
+  assert.equal(dtB.nonce, 0n, "rejected MOVE must not advance state");
+});
+
+test("proposer advances only on a valid ACK", () => {
+  const keyA = generateKeyPair();
+  const keyB = generateKeyPair();
+  const e = endpoints(keyA, keyB, "0xa11ce", "0xb0b");
+  const m = makeManual();
+  const dtA = new DistributedTunnel(
+    counterProtocol,
+    { tunnelId: "0x7", self: e.aSelf, opponent: e.aOpp, selfParty: "A" as Party },
+    m.transport,
+    BAL,
+  );
+  dtA.propose(0, 100n);
+  assert.equal(dtA.nonce, 0n, "no advance before ACK");
+  assert.equal(dtA.latest, null);
+
+  // Reconstruct the exact signed message A produced, sign B's half, deliver the ACK.
+  const update = {
+    tunnelId: "0x7",
+    stateHash: blakeOfCount1(),
+    nonce: 1n,
+    timestamp: 100n,
+    partyABalance: 1000n,
+    partyBBalance: 1000n,
+  };
+  const sigB = edSign(serializeStateUpdate(update), keyB.secretKey);
+  m.deliver(encodeFrame({ kind: "ack", nonce: 1n, sigResponder: sigB }, identityMoveCodec));
+  assert.equal(dtA.nonce, 1n, "valid ACK advances");
+  assert.ok(bytesEqual(dtA.latest!.sigB, sigB));
+});
+
+// Helper: blake2b256 of the count=1 encodeState, matching counterProtocol.
+function blakeOfCount1(): Uint8Array {
+  return blake2b256(counterProtocol.encodeState({ count: 1, turn: "B" }));
+}
