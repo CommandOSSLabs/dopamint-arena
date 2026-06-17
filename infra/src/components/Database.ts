@@ -54,7 +54,7 @@ export function createDatabase(
 
   const cluster = new aws.rds.Cluster(`${name}-aurora`, {
     engine: "aurora-postgresql",
-    engineVersion: "16.1",
+    engineVersion: "16.6",
     databaseName: "dopamint",
     masterUsername: "dopamint",
     masterPassword: dbPassword.result,

@@ -31,7 +31,7 @@ export function getConfig(): InfraConfig {
     benchmarkInstanceType: config.require("benchmark-instance-type"),
     benchmarkMinSize: config.requireNumber("benchmark-min-size"),
     benchmarkMaxSize: config.requireNumber("benchmark-max-size"),
-    benchmarkImageVersion: config.get("benchmark-image-version") ?? "1.0.0",
+    benchmarkImageVersion: config.get("benchmark-image-version") ?? "1.0.1",
     backendImageTag: config.get("backend-image-tag") ?? "latest",
   };
 }

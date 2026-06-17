@@ -71,6 +71,16 @@ phases:
     parentImage: baseAmi.id,
     version,
     components: [{ componentArn: component.arn }],
+    blockDeviceMappings: [
+      {
+        deviceName: "/dev/xvda",
+        ebs: {
+          volumeSize: 20,
+          volumeType: "gp3",
+          deleteOnTermination: "true",
+        },
+      },
+    ],
   });
 
   const distribution = new aws.imagebuilder.DistributionConfiguration(`${args.name}-benchmark-dist`, {

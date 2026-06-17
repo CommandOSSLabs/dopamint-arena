@@ -11,7 +11,7 @@ export function createFrontend(
   name: string,
   args: {
     domain: string;
-    certificateArn: pulumi.Input<string>;
+    certificateArn?: pulumi.Input<string>;
     zoneId?: pulumi.Input<string>;
   }
 ): FrontendOutputs {
@@ -56,7 +56,7 @@ export function createFrontend(
 
   const distribution = new aws.cloudfront.Distribution(`${name}-cdn`, {
     enabled: true,
-    aliases: [args.domain],
+    aliases: args.certificateArn ? [args.domain] : undefined,
     origins: [
       {
         domainName: bucket.bucketRegionalDomainName,
@@ -76,11 +76,15 @@ export function createFrontend(
       maxTtl: 86400,
     },
     restrictions: { geoRestriction: { restrictionType: "none" } },
-    viewerCertificate: {
-      acmCertificateArn: args.certificateArn,
-      sslSupportMethod: "sni-only",
-      minimumProtocolVersion: "TLSv1.2_2021",
-    },
+    viewerCertificate: args.certificateArn
+      ? {
+          acmCertificateArn: args.certificateArn,
+          sslSupportMethod: "sni-only",
+          minimumProtocolVersion: "TLSv1.2_2021",
+        }
+      : {
+          cloudfrontDefaultCertificate: true,
+        },
     customErrorResponses: [
       { errorCode: 403, responseCode: 200, responsePagePath: "/index.html" },
       { errorCode: 404, responseCode: 200, responsePagePath: "/index.html" },

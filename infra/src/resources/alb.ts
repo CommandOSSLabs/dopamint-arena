@@ -3,7 +3,7 @@ import * as pulumi from "@pulumi/pulumi";
 
 export interface AlbOutputs {
   alb: aws.lb.LoadBalancer;
-  httpsListener: aws.lb.Listener;
+  listener: aws.lb.Listener;
   targetGroup: aws.lb.TargetGroup;
 }
 
@@ -13,7 +13,7 @@ export function createAlb(
     vpcId: pulumi.Input<string>;
     subnetIds: pulumi.Input<string[]>;
     securityGroupId: pulumi.Input<string>;
-    certificateArn: pulumi.Input<string>;
+    certificateArn?: pulumi.Input<string>;
   }
 ): AlbOutputs {
   const alb = new aws.lb.LoadBalancer(`${name}-alb`, {
@@ -39,25 +39,36 @@ export function createAlb(
     },
   });
 
-  const httpsListener = new aws.lb.Listener(`${name}-https`, {
-    loadBalancerArn: alb.arn,
-    port: 443,
-    protocol: "HTTPS",
-    certificateArn: args.certificateArn,
-    defaultActions: [{ type: "forward", targetGroupArn: targetGroup.arn }],
-  });
+  if (args.certificateArn) {
+    const httpsListener = new aws.lb.Listener(`${name}-https`, {
+      loadBalancerArn: alb.arn,
+      port: 443,
+      protocol: "HTTPS",
+      certificateArn: args.certificateArn,
+      defaultActions: [{ type: "forward", targetGroupArn: targetGroup.arn }],
+    });
 
-  new aws.lb.Listener(`${name}-http-redirect`, {
+    new aws.lb.Listener(`${name}-http-redirect`, {
+      loadBalancerArn: alb.arn,
+      port: 80,
+      protocol: "HTTP",
+      defaultActions: [
+        {
+          type: "redirect",
+          redirect: { protocol: "HTTPS", port: "443", statusCode: "HTTP_301" },
+        },
+      ],
+    });
+
+    return { alb, listener: httpsListener, targetGroup };
+  }
+
+  const httpListener = new aws.lb.Listener(`${name}-http`, {
     loadBalancerArn: alb.arn,
     port: 80,
     protocol: "HTTP",
-    defaultActions: [
-      {
-        type: "redirect",
-        redirect: { protocol: "HTTPS", port: "443", statusCode: "HTTP_301" },
-      },
-    ],
+    defaultActions: [{ type: "forward", targetGroupArn: targetGroup.arn }],
   });
 
-  return { alb, httpsListener, targetGroup };
+  return { alb, listener: httpListener, targetGroup };
 }

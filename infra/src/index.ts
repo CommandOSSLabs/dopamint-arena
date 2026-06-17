@@ -91,7 +91,7 @@ const backendService = createBackendService({
   targetGroupArn: alb.targetGroup.arn,
   securityGroupId: sgs.backend.id,
   subnetIds: network.privateSubnetIds,
-  listener: alb.httpsListener,
+  listener: alb.listener,
 });
 
 createBackendAlias({
@@ -139,9 +139,9 @@ export const dbSecurityGroupId = sgs.db.id;
 export const dbProxyName = dbProxy.proxyName;
 
 const backendApiDomain = pulumi.interpolate`api.${cfg.domain}`;
-export const backendUrl = dns.zoneId
+export const backendUrl = dns.certificateArn
   ? pulumi.interpolate`https://${backendApiDomain}`
-  : undefined;
+  : pulumi.interpolate`http://${alb.alb.dnsName}`;
 
 const benchmarkFleet = createBenchmarkFleet({
   name: `dopamint-${cfg.environment}`,
@@ -155,23 +155,21 @@ const benchmarkFleet = createBenchmarkFleet({
   version: cfg.benchmarkImageVersion,
 });
 
-export const githubEnv = dns.zoneId
-  ? githubEnvOutputs({
-      backendUrl: backendApiDomain,
-      frontendDomain: cfg.domain,
-      frontendBucket: frontend.bucketName,
-      cloudfrontId: frontend.distributionId,
-      ecrUrl: ecr.repositoryUrl,
-      ecsCluster: ecs.clusterName,
-      ecsService: backendService.serviceName,
-      migrationTaskDef: backend.migrationTaskDefinitionArn,
-      backendTaskDefArn: backend.taskDefinitionArn,
-      githubDeployRoleArn: iam.githubDeployRoleArn,
-      privateSubnetIds: network.privateSubnetIds,
-      backendSecurityGroupId: sgs.backend.id,
-      benchmarkAsgName: benchmarkFleet.asgName,
-    })
-  : undefined;
+export const githubEnv = githubEnvOutputs({
+  backendUrl,
+  frontendDomain: frontend.distributionDomain,
+  frontendBucket: frontend.bucketName,
+  cloudfrontId: frontend.distributionId,
+  ecrUrl: ecr.repositoryUrl,
+  ecsCluster: ecs.clusterName,
+  ecsService: backendService.serviceName,
+  migrationTaskDef: backend.migrationTaskDefinitionArn,
+  backendTaskDefArn: backend.taskDefinitionArn,
+  githubDeployRoleArn: iam.githubDeployRoleArn,
+  privateSubnetIds: network.privateSubnetIds,
+  backendSecurityGroupId: sgs.backend.id,
+  benchmarkAsgName: benchmarkFleet.asgName,
+});
 
 export const benchmarkAsgName = benchmarkFleet.asgName;
 export const benchmarkMinSize = cfg.benchmarkMinSize;

@@ -3,4 +3,5 @@ runtime:
   name: nodejs
   options:
     packagemanager: pnpm
+    nodeargs: "--import tsx"
 description: Dopamint Arena AWS infrastructure

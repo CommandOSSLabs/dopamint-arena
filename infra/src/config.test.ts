@@ -37,6 +37,6 @@ describe("config", () => {
     const cfg = getConfig();
 
     assert.strictEqual(cfg.backendImageTag, "latest");
-    assert.strictEqual(cfg.benchmarkImageVersion, "1.0.0");
+    assert.strictEqual(cfg.benchmarkImageVersion, "1.0.1");
   });
 });

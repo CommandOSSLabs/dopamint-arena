@@ -20,7 +20,7 @@ export function githubEnvOutputs(
   inputs: GithubEnvInputs
 ): Record<string, pulumi.Input<string>> {
   return {
-    BACKEND_URL: pulumi.interpolate`https://${inputs.backendUrl}`,
+    BACKEND_URL: inputs.backendUrl,
     FRONTEND_DOMAIN: inputs.frontendDomain,
     FRONTEND_BUCKET: inputs.frontendBucket,
     CLOUDFRONT_ID: inputs.cloudfrontId,
