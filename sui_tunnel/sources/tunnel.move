@@ -412,6 +412,14 @@ public struct DisputeResolvedByReferee has copy, drop {
     timestamp: u64,
 }
 
+/// Emitted when a package-local verifier resolves a dispute after proof validation
+public struct DisputeResolvedByVerifiedProof has copy, drop {
+    tunnel_id: ID,
+    party_a_balance: u64,
+    party_b_balance: u64,
+    timestamp: u64,
+}
+
 // ============================================
 // DYNAMIC FIELD TYPES
 // ============================================
@@ -673,7 +681,7 @@ public fun create_and_fund<T>(
     penalty_amount: u64,
     clock: &Clock,
     ctx: &mut TxContext,
-) {
+): ID {
     let mut tunnel = build_tunnel<T>(
         party_a_address,
         party_a_pk,
@@ -686,14 +694,15 @@ public fun create_and_fund<T>(
         clock,
         ctx,
     );
+    let id_copy = object::id(&tunnel);
 
     // Fund both sides; the second deposit triggers maybe_activate once both are > 0.
     deposit_internal(&mut tunnel, party_a_coin, true, clock);
     deposit_internal(&mut tunnel, party_b_coin, false, clock);
 
     transfer::share_object(tunnel);
+    id_copy
 }
-
 // ===== end Dopamint extension =====
 
 /// Validates parameters for tunnel creation
@@ -1833,6 +1842,45 @@ public fun resolve_dispute_external<T>(
     event::emit(DisputeResolvedByReferee {
         tunnel_id: object::id(tunnel),
         referee,
+        party_a_balance,
+        party_b_balance,
+        timestamp: now,
+    });
+}
+
+/// Resolve a dispute after package-local proof verification.
+///
+/// This intentionally bypasses the trusted-address referee path. It is package
+/// visible so only a verifier module in `sui_tunnel` can call it after checking a
+/// native Groth16 proof and binding the proof inputs to the disputed tunnel state.
+public(package) fun resolve_dispute_verified<T>(
+    tunnel: &mut Tunnel<T>,
+    party_a_balance: u64,
+    party_b_balance: u64,
+    clock: &Clock,
+    ctx: &mut TxContext,
+) {
+    assert!(tunnel.version == CURRENT_VERSION, EInvalidVersion);
+    assert!(tunnel.status == STATUS_DISPUTED, ENoActiveDispute);
+
+    // `tunnel.balance` is already net of HTLC-locked funds (split into separate
+    // dynamic fields at lock time), so the verifier distributes the full
+    // remaining balance. Outstanding HTLCs settle independently.
+    let total = tunnel.balance.value();
+    assert_balance_split(party_a_balance, party_b_balance, total);
+
+    let now = clock.timestamp_ms();
+    tunnel.status = STATUS_CLOSED;
+    tunnel.last_activity = now;
+
+    let coin_a = coin::from_balance(tunnel.balance.split(party_a_balance), ctx);
+    let coin_b = coin::from_balance(tunnel.balance.split(party_b_balance), ctx);
+
+    transfer::public_transfer(coin_a, tunnel.party_a.address);
+    transfer::public_transfer(coin_b, tunnel.party_b.address);
+
+    event::emit(DisputeResolvedByVerifiedProof {
+        tunnel_id: object::id(tunnel),
         party_a_balance,
         party_b_balance,
         timestamp: now,
