@@ -14,6 +14,7 @@ import {
   buildCreateAndShareTx,
   buildDepositTx,
   buildSettleTx,
+  buildUpdateStateTx,
   parseTunnelId,
 } from "@/lib/tunnel";
 import {
@@ -50,6 +51,7 @@ export interface BotDigests {
   create?: string;
   depositX?: string;
   depositO?: string;
+  update?: string;
   close?: string;
 }
 
@@ -399,10 +401,23 @@ export function useBotGame(difficulty: Difficulty = "even"): BotGameView {
         setBoard([...finalInner.board]);
         setWinner(finalInner.winner);
 
-        // 6) ONE cooperative close from the co-signed settlement, paying out the net
-        //    balances accumulated across all games.
+        // 6) checkpoint the final co-signed state on-chain, THEN close cooperatively.
+        // update_state writes the played-out final state_hash/nonce (and balances, which stay
+        // 1/1 for this near-zero-stake game) onto the on-chain StateCommitment — otherwise it
+        // stays at the empty nonce-0 opening. After it lands, on-chain state.nonce ==
+        // latest.update.nonce, so close_cooperative derives finalNonce = nonce + 1; build the
+        // settlement with that same onchainNonce so its signature matches.
         setPhase("settling");
-        const s = tunnel.buildSettlement(createdAt, 0n);
+        const latest = tunnel.latest;
+        if (latest) {
+          const updateRes = await submit(
+            buildUpdateStateTx(tunnelId, latest),
+            bots.x.keypair,
+          );
+          setDigests((d) => ({ ...d, update: updateRes.digest }));
+        }
+        const onchainNonce = latest ? latest.update.nonce : 0n;
+        const s = tunnel.buildSettlement(createdAt, onchainNonce);
         const closeRes = await submit(
           buildSettleTx(
             tunnelId,
