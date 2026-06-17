@@ -1,0 +1,113 @@
+name: Deploy Frontend
+
+on:
+  push:
+    branches: [dev]
+    paths: ["frontend/**"]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment"
+        required: true
+        default: "dev"
+        type: choice
+        options: [dev, staging, production]
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy-frontend-${{ github.event.inputs.environment || 'dev' }}
+  cancel-in-progress: true
+
+jobs:
+  deploy-frontend:
+    name: Deploy frontend
+    permissions:
+      id-token: write
+      contents: read
+    runs-on: ubuntu-latest
+    # Pushes to dev auto-deploy to dev; use workflow_dispatch for staging/production.
+    environment: ${{ github.event.inputs.environment || 'dev' }}
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871 # v4.2.1
+        with:
+          persist-credentials: false
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@a15d269cd4658e1107c09f1fabf4cbd7bd1f308a # v4.4.0
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@ececac1a45f3b08a01d2dd070d28d111c5fe6722 # v4.1.0
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Build frontend
+        env:
+          VITE_BACKEND_URL: ${{ vars.BACKEND_URL }}
+        run: pnpm build
+
+      - name: Deploy to S3
+        env:
+          FRONTEND_BUCKET: ${{ vars.FRONTEND_BUCKET }}
+        run: |
+          aws s3 sync dist/assets "s3://${FRONTEND_BUCKET}/assets" --delete --no-progress --only-show-errors \
+            --cache-control "public,max-age=31536000,immutable"
+          aws s3 cp dist/index.html "s3://${FRONTEND_BUCKET}/index.html" --no-progress --only-show-errors \
+            --cache-control "public,no-cache,no-store,must-revalidate"
+
+      - name: Create CloudFront invalidation
+        id: invalidate
+        env:
+          CLOUDFRONT_ID: ${{ vars.CLOUDFRONT_ID }}
+        run: |
+          INVALIDATION_ID=$(aws cloudfront create-invalidation --distribution-id "${CLOUDFRONT_ID}" --paths "/*" --query 'Invalidation.Id' --output text)
+          echo "invalidation-id=${INVALIDATION_ID}" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for CloudFront invalidation
+        env:
+          CLOUDFRONT_ID: ${{ vars.CLOUDFRONT_ID }}
+          INVALIDATION_ID: ${{ steps.invalidate.outputs.invalidation-id }}
+        run: |
+          for i in $(seq 1 90); do
+            STATUS=$(aws cloudfront get-invalidation --distribution-id "${CLOUDFRONT_ID}" --id "${INVALIDATION_ID}" --query 'Invalidation.Status' --output text)
+            echo "Invalidation ${INVALIDATION_ID} status: ${STATUS}"
+            [ "${STATUS}" = "Completed" ] && exit 0
+            sleep 10
+          done
+          echo "CloudFront invalidation did not complete within 15 minutes" >&2
+          exit 1
+
+      - name: Smoke test
+        env:
+          BACKEND_URL: ${{ vars.BACKEND_URL }}
+          FRONTEND_DOMAIN: ${{ vars.FRONTEND_DOMAIN }}
+        run: |
+          for i in 1 2 3 4 5 6; do
+            if curl -fsS "${BACKEND_URL}/health/live"; then
+              break
+            fi
+            if [ "$i" -eq 6 ]; then
+              echo "Backend health check failed" >&2
+              exit 1
+            fi
+            sleep 10
+          done
+          curl -fsS "https://${FRONTEND_DOMAIN}" | grep -q "<html"

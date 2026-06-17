@@ -1,0 +1,11 @@
+config:
+  aws:region: us-east-1
+  dopamint:environment: production
+  dopamint:domain: dopamint.example.com
+  dopamint:db-instance-class: db.r6g.2xlarge
+  dopamint:db-serverless: "false"
+  dopamint:cache-node-type: cache.r6g.large
+  dopamint:benchmark-instance-type: c7i.48xlarge
+  dopamint:benchmark-min-size: 0
+  dopamint:benchmark-max-size: 4
+  dopamint:route53-zone-id: "ZYYYYYYYYYYYYY"
