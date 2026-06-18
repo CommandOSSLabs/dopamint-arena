@@ -15,7 +15,7 @@ export function LocalTransactionsFeed({
 }) {
   return (
     <TransactionsFeed
-      title="Local Activity"
+      title="My Activity"
       rows={snapshot.localTxns}
       className={className}
     />
