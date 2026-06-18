@@ -21,6 +21,10 @@ export function createAlb(
     internal: false,
     securityGroups: [args.securityGroupId],
     subnets: args.subnetIds,
+    // Defense-in-depth for the /v1/mp WebSocket: the 60s default reaps quiet
+    // matches between turns. The server-side keepalive ping is the real fix;
+    // this just widens the window. In-place attribute update, no recreation.
+    idleTimeout: 300,
   });
 
   const targetGroup = new aws.lb.TargetGroup(`${name}-backend-tg`, {
