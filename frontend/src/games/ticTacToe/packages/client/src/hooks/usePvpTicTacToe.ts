@@ -2,13 +2,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { core, bytesToHex, hexToBytes, type protocols } from "sui-tunnel-ts";
 import { SuiClient } from "@mysten/sui/client";
-import { Ed25519PublicKey } from "@mysten/sui/keypairs/ed25519";
 import {
   MultiGameTicTacToeProtocol, MultiGameCaroProtocol,
   optimalMoves, CELL_EMPTY, CELL_SERVER, CELL_PLAYER, pickCaroMove,
 } from "@ttt/shared";
 import { getSuiClient } from "@/lib/bots";
-import { loadOrCreateMe, balanceOf, faucet, type PvpIdentity } from "@/lib/pvpIdentity";
+import { getOrCreateEphemeral, balanceOf, type PvpEphemeral } from "@/lib/pvpIdentity";
+import { useCustomWallet } from "@/contexts/CustomWallet";
 import { buildCreateAndShareTx, buildDepositTx, buildCloseTx, parseTunnelId } from "@/lib/pvpOnchain";
 import { RelayClient } from "@/lib/pvpRelay";
 
@@ -49,10 +49,9 @@ export interface PvpTttView {
   games: GameResult[];
   currentGame: number;        // gamesPlayed + 1
   auto: boolean;
-  address: string;
-  balance: bigint;            // me's SUI balance (MIST)
+  address: string;            // the connected zkLogin wallet (this seat's on-chain party)
+  balance: bigint;            // the connected wallet's SUI balance (MIST)
   digests: { create?: string; deposit?: string; close?: string };
-  fund: () => void;
   queue: () => void;
   play: (cell: number) => void;
   next: () => void;
@@ -70,7 +69,10 @@ function tttBestCell(inner: InnerState, by: "A" | "B"): number {
 
 export function usePvpTicTacToe(variant: Variant, boardSize: number): PvpTttView {
   const client = useMemo<SuiClient>(() => getSuiClient(), []);
-  const me = useMemo<PvpIdentity>(() => loadOrCreateMe(), []);
+  const eph = useMemo<PvpEphemeral>(() => getOrCreateEphemeral(), []);
+  const wallet = useCustomWallet();
+  const walletRef = useRef(wallet);
+  walletRef.current = wallet; // read the latest wallet inside stable callbacks without re-creating them
   const proto = useMemo(
     () => (variant === "caro"
       ? new MultiGameCaroProtocol(MAX_GAMES, boardSize)
@@ -105,22 +107,20 @@ export function usePvpTicTacToe(variant: Variant, boardSize: number): PvpTttView
   const helloResolveRef = useRef<((pub: string) => void) | null>(null);
   const bufferedHelloRef = useRef<string | null>(null);
 
-  const refreshBalance = useCallback(async () => { setBalance(await balanceOf(client, me.address)); }, [client, me]);
-  useEffect(() => { void refreshBalance(); }, [refreshBalance]);
+  const refreshBalance = useCallback(async () => {
+    const addr = walletRef.current.address;
+    setBalance(addr ? await balanceOf(client, addr) : 0n);
+  }, [client]);
+  useEffect(() => { void refreshBalance(); }, [refreshBalance, wallet.address]);
 
+  // The connected zkLogin wallet signs + pays gas (sender-pays, no Enoki sponsorship) so the
+  // deposit splits from the wallet's own coin. We then fetch the tx for objectChanges/effects.
   const submit = useCallback(async (tx: any) => {
-    const res = await client.signAndExecuteTransaction({ signer: me.keypair, transaction: tx, options: { showObjectChanges: true, showEffects: true } });
-    await client.waitForTransaction({ digest: res.digest });
+    const digest = await walletRef.current.executeTransaction({ tx });
+    const res = await client.getTransactionBlock({ digest, options: { showObjectChanges: true, showEffects: true } });
     if (res.effects?.status?.status !== "success") throw new Error(res.effects?.status?.error ?? "tx failed");
     return res;
-  }, [client, me]);
-
-  const fund = useCallback(() => { void (async () => {
-    try {
-      await faucet(me.address);
-      for (let i = 0; i < 8; i++) { await refreshBalance(); await new Promise((r) => setTimeout(r, 1500)); }
-    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
-  })(); }, [me, refreshBalance]);
+  }, [client]);
 
   const finishSettle = useCallback(async (t: core.DistributedTunnel<AnyState, CellMove>, relay: RelayClient, matchId: string) => {
     if (settledRef.current) return; settledRef.current = true;
@@ -139,12 +139,14 @@ export function usePvpTicTacToe(variant: Variant, boardSize: number): PvpTttView
   }, [submit, refreshBalance]);
 
   const queue = useCallback(() => { void (async () => {
+    const w = walletRef.current;
+    if (!w.isConnected || !w.address) { setError("Connect your wallet on the main menu first"); setPhase("error"); return; }
     setError(null); setPhase("connecting"); settledRef.current = false; stoppingRef.current = false; setGames([]); setScore({ x: 0, o: 0, draws: 0 });
     autoRef.current = false; setAutoState(false); // fresh game (incl. rematch) starts in manual mode
     bufferedSettleRef.current = null; bufferedHelloRef.current = null;
     openedResolveRef.current = null; settleResolveRef.current = null; helloResolveRef.current = null;
     try {
-      const relay = new RelayClient(MP_URL, me.address, me.coreKey);
+      const relay = new RelayClient(MP_URL, w.address, eph.coreKey);
       relayRef.current = relay;
       await relay.ready;
       setPhase("queuing");
@@ -152,10 +154,12 @@ export function usePvpTicTacToe(variant: Variant, boardSize: number): PvpTttView
       relay.on("match.found", (m) => { void onMatchRef.current?.(relay, m as any); });
       relay.queueJoin("tictactoe");
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); setPhase("error"); }
-  })(); }, [me]);
+  })(); }, [eph]);
 
   const onMatch = useCallback(async (relay: RelayClient, m: { matchId: string; role: "A" | "B"; opponentWallet: string }) => {
     try {
+      const w = walletRef.current;
+      if (!w.address) throw new Error("wallet disconnected");
       matchIdRef.current = m.matchId; roleRef.current = m.role; setRole(m.role);
       // App-channel dispatcher: opened tunnelId, settle half, closed digest, stop request.
       relay.onApp(m.matchId, (mm) => {
@@ -175,22 +179,20 @@ export function usePvpTicTacToe(variant: Variant, boardSize: number): PvpTttView
         const pub = String(h.ephemeralPubkey);
         if (helloResolveRef.current) helloResolveRef.current(pub); else bufferedHelloRef.current = pub;
       });
-      relay.partyHello(m.matchId, me.pubkeyHex, ""); // single-key identity; walletSig unused in v1
+      relay.partyHello(m.matchId, eph.pubkeyHex, ""); // ephemeral move-signer pubkey; walletSig unused in v1
 
       const oppPubHex = bufferedHelloRef.current ?? await new Promise<string>((res) => { helloResolveRef.current = res; });
+      // Opponent's move-signer pubkey. Their on-chain party is m.opponentWallet (matchmaker-reported,
+      // self-asserted in v1); the two are deliberately unrelated keys, so there's no address derivation.
       const oppPubkey = hexToBytes(oppPubHex);
-      try {
-        if (new Ed25519PublicKey(oppPubkey).toSuiAddress() !== m.opponentWallet) {
-          console.warn("[pvp] opponent pubkey does not derive its reported address; proceeding (v1 self-asserted)");
-        }
-      } catch { console.warn("[pvp] could not verify opponent pubkey; proceeding"); }
 
       // Roles: A = X (opener), B = O. X opens the tunnel registering partyA = self, partyB = opponent.
+      // Party address = the zkLogin wallet (receives funds); party public_key = the ephemeral signer.
       let tunnelId: string;
       if (m.role === "A") {
         setPhase("opening");
         const res = await submit(buildCreateAndShareTx(
-          { walletAddress: me.address, publicKey: me.coreKey.publicKey },     // partyA = X (self)
+          { walletAddress: w.address, publicKey: eph.coreKey.publicKey },     // partyA = X (self)
           { walletAddress: m.opponentWallet, publicKey: oppPubkey },          // partyB = O (opponent)
           0n,
         ));
@@ -222,7 +224,7 @@ export function usePvpTicTacToe(variant: Variant, boardSize: number): PvpTttView
       const backend = core.defaultBackend();
       const t = new core.DistributedTunnel<AnyState, CellMove>(proto, {
         tunnelId,
-        self: core.makeEndpoint(backend, me.address, { publicKey: me.coreKey.publicKey, scheme: 0, secretKey: me.coreKey.secretKey }, true),
+        self: core.makeEndpoint(backend, w.address, { publicKey: eph.coreKey.publicKey, scheme: 0, secretKey: eph.coreKey.secretKey }, true),
         opponent: core.makeEndpoint(backend, m.opponentWallet, { publicKey: oppPubkey, scheme: 0 }, false),
         selfParty: m.role,
       }, relay.transport(m.matchId), { a: BANKROLL, b: BANKROLL });
@@ -255,7 +257,7 @@ export function usePvpTicTacToe(variant: Variant, boardSize: number): PvpTttView
       setState({ ...t.state, inner: { ...t.state.inner } });
       onAdvance();
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); setPhase("error"); }
-  }, [client, proto, submit, me, variant, finishSettle]);
+  }, [client, proto, submit, eph, variant, finishSettle]);
   onMatchRef.current = onMatch;
 
   const play = useCallback((cell: number) => {
@@ -317,7 +319,7 @@ export function usePvpTicTacToe(variant: Variant, boardSize: number): PvpTttView
     innerOver: !!inner && inner.winner !== 0,
     terminal: s ? proto.isTerminal(s) : false,
     score, games, currentGame: s ? s.gamesPlayed + 1 : 0, auto,
-    address: me.address, balance, digests,
-    fund, queue, play, next, stop, setAuto, leave,
+    address: wallet.address ?? "", balance, digests,
+    queue, play, next, stop, setAuto, leave,
   };
 }

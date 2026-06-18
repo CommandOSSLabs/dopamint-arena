@@ -36,7 +36,8 @@ export function PvpScene({ onBack }: { onBack: () => void }) {
   const g = usePvpTicTacToe(variant, boardSize);
 
   const playing = g.phase === "playing" || g.phase === "settling" || g.phase === "done";
-  const funded = g.balance > 20_000_000n;
+  // The connected zkLogin wallet pays gas + the (tiny) deposit; need a little testnet SUI.
+  const funded = g.balance > 10_000_000n;
   const locked = g.phase !== "idle" && g.phase !== "error";
 
   return (
@@ -49,7 +50,7 @@ export function PvpScene({ onBack }: { onBack: () => void }) {
 
       {!playing ? (
         <div className="flex-1 flex flex-col items-center justify-center gap-4">
-          <div className="text-[11px] font-mono text-on-surface/60">{fmtSui(g.balance)} SUI</div>
+          <div className="text-[11px] font-mono text-on-surface/60">Wallet {g.address.slice(0, 8)}… · {fmtSui(g.balance)} SUI</div>
           <div className="flex flex-col items-center gap-2">
             <span className="text-[11px] uppercase tracking-widest text-on-surface/60">Variant</span>
             <div className="flex gap-2">
@@ -71,7 +72,7 @@ export function PvpScene({ onBack }: { onBack: () => void }) {
               </div>
             )}
           </div>
-          {!funded && <button onClick={g.fund} className="px-4 py-2 rounded-lg bg-surface border border-primary/30 text-sm font-bold">Fund (faucet)</button>}
+          {!funded && <div className="text-xs text-amber-600 text-center max-w-xs">Your connected wallet needs a little testnet SUI to play (gas + deposit).</div>}
           <button onClick={g.queue} disabled={!funded || g.phase === "queuing" || g.phase === "connecting"}
             className="px-6 py-3 rounded-xl bg-tertiary text-on-tertiary font-black uppercase tracking-widest disabled:opacity-40">
             {g.phase === "queuing" ? "Finding an opponent…" : g.phase === "connecting" ? "Connecting…" : "Find match"}

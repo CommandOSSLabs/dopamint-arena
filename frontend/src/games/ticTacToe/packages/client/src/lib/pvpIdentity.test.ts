@@ -1,18 +1,18 @@
 import { test, expect, describe } from "bun:test";
-import { deriveMe } from "./pvpIdentity";
+import { deriveEphemeral } from "./pvpIdentity";
 import { core } from "sui-tunnel-ts";
 
-describe("deriveMe", () => {
-  test("on-chain and off-chain public keys agree for the same seed", () => {
+describe("deriveEphemeral", () => {
+  test("derives a 32-byte ed25519 signer + hex pubkey from a seed", () => {
     const seed = core.generateKeyPair().secretKey;
-    const me = deriveMe(seed);
-    expect(me.coreKey.publicKey).toEqual(me.keypair.getPublicKey().toRawBytes());
-    expect(me.address).toBe(me.keypair.getPublicKey().toSuiAddress());
-    expect(me.pubkeyHex.length).toBe(64); // 32 bytes hex
+    const eph = deriveEphemeral(seed);
+    expect(eph.coreKey.publicKey.length).toBe(32);
+    expect(eph.coreKey.secretKey.length).toBeGreaterThanOrEqual(32);
+    expect(eph.pubkeyHex.length).toBe(64); // 32 bytes hex
   });
 
-  test("the same seed derives a stable identity", () => {
+  test("the same seed derives the same signer", () => {
     const seed = core.generateKeyPair().secretKey;
-    expect(deriveMe(seed).address).toBe(deriveMe(seed).address);
+    expect(deriveEphemeral(seed).pubkeyHex).toBe(deriveEphemeral(seed).pubkeyHex);
   });
 });
