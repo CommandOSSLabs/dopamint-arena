@@ -35,6 +35,8 @@ export interface BenchConfig {
   batchSize?: number;
   /** Tunnels to settle in-process for the success-rate measure. Default 50. */
   settlementSample?: number;
+  /** Progress sampling interval in milliseconds. Smaller values give finer peak-TPS resolution. Default 500. */
+  progressEveryMs?: number;
   /** Inject a clock for tests (default Date.now). */
   now?: () => number;
 }
@@ -85,7 +87,7 @@ export async function runBenchmark(cfg: BenchConfig): Promise<BenchReport> {
     maxSteps,
     batchSize: cfg.batchSize,
     seed: cfg.seed,
-    progressEveryMs: 500,
+    progressEveryMs: cfg.progressEveryMs ?? 500,
     onProgress: (agg) => {
       const t = now() - start;
       const dt = (t - lastT) / 1000;

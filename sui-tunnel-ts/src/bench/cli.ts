@@ -8,7 +8,7 @@
  *
  * Flags: --agents N --tunnels N --workers N --duration MS --updates-per-tunnel N
  *        --sign-mode full|sign-only|none --behaviors a,b,c --seed N --batch N
- *        --settlement-sample N --json [file] --csv [file]
+ *        --settlement-sample N --progress-every-ms MS --json [file] --csv [file]
  */
 
 import { parseBehaviors } from "../agents/behaviors";
@@ -101,6 +101,7 @@ export async function main(argv: string[]): Promise<void> {
     seed: num("seed"),
     batchSize: num("batch"),
     settlementSample: num("settlement-sample"),
+    progressEveryMs: num("progress-every-ms"),
   });
 
   console.log(formatReport(rep));
