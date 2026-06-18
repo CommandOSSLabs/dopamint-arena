@@ -149,6 +149,7 @@ export function usePvpBlackjack(): PvpView {
   const queue = useCallback(() => { void (async () => {
     if (!walletAddress) { setError("Connect a wallet on the menu first"); setPhase("error"); return; }
     setError(null); setPhase("connecting"); settledRef.current = false; stoppingRef.current = false; setRounds([]);
+    autoRef.current = false; setAutoState(false); // a fresh game (incl. rematch) starts in manual mode
     try {
       const connEph = core.generateKeyPair();
       const relay = new RelayClient(MP_URL, walletAddress, core.keyPairFromSecret(connEph.secretKey));
@@ -320,7 +321,7 @@ export function usePvpBlackjack(): PvpView {
   const leave = useCallback(() => {
     relayRef.current?.close(); relayRef.current = null; tunnelRef.current = null;
     setPhase("idle"); setState(null); setRole(null); setDigests({}); setRounds([]);
-    settledRef.current = false; stoppingRef.current = false;
+    settledRef.current = false; stoppingRef.current = false; autoRef.current = false; setAutoState(false);
     openedResolveRef.current = null; settleResolveRef.current = null; bufferedSettleRef.current = null;
   }, []);
 
