@@ -43,6 +43,39 @@ export interface TunnelEvent {
   proofUrl: string | null;
 }
 
+/** One JSON-serializable transcript entry (a `Transcript.toRecord().entries` element). */
+export interface SettleTranscriptEntry {
+  nonce: string;
+  message: string;
+  sigA: string;
+  sigB: string;
+}
+
+/** Backend /settle `settlement` object (ADR-0002 camelCase; u64 -> decimal string, 32-byte -> hex). */
+export interface SettleSettlement {
+  tunnelId: string;
+  partyABalance: string;
+  partyBBalance: string;
+  finalNonce: string;
+  timestamp: string;
+  transcriptRoot: string;
+}
+
+/** Full /settle request body: the co-signed settlement + raw sigs + the Walrus-bound transcript. */
+export interface SettleRequestBody {
+  settlement: SettleSettlement;
+  sigA: string;
+  sigB: string;
+  transcript: SettleTranscriptEntry[];
+}
+
+/** Proof links returned after the settler submits close_cooperative_with_root + Walrus archive. */
+export interface SettleResult {
+  txDigest: string;
+  walrusBlobId: string;
+  proofUrl: string;
+}
+
 /** Per-game slice of the live aggregate feed. Field names match the backend's serde. */
 export interface GameStats {
   tps: number;
@@ -72,6 +105,14 @@ export interface ControlPlaneClient {
     statsToken: string,
     heartbeat: Heartbeat,
   ): Promise<void>;
+  /** Route a cooperative close through the backend: the settler submits
+   *  close_cooperative_with_root (anchoring the transcript root), archives the transcript to
+   *  Walrus, and returns the proof links. Requires the session's stats token. */
+  settle(
+    sessionId: string,
+    statsToken: string,
+    body: SettleRequestBody,
+  ): Promise<SettleResult>;
   /** Subscribe to the live aggregate SSE feed; returns an unsubscribe fn. */
   openStatsStream(onSnapshot: (snapshot: StatsSnapshot) => void): () => void;
 }
@@ -123,6 +164,19 @@ export function createControlPlaneClient(baseUrl: string): ControlPlaneClient {
         body: JSON.stringify(heartbeat),
       });
       await failIfNotOk(res, "sendHeartbeat");
+    },
+
+    async settle(sessionId, statsToken, body) {
+      const res = await fetch(`${root}/v1/sessions/${sessionId}/settle`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${statsToken}`,
+        },
+        body: JSON.stringify(body),
+      });
+      await failIfNotOk(res, "settle");
+      return (await res.json()) as SettleResult;
     },
 
     openStatsStream(onSnapshot) {
