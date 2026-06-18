@@ -13,7 +13,9 @@ export interface IamOutputs {
 export interface IamInputs {
   githubOrg: string;
   githubRepo: string;
-  dbSecretArn?: pulumi.Input<string>;
+  // Secret ARNs the ECS task-execution role may read to inject `secrets` at launch
+  // (e.g. DB password, settler key). Scoped to exactly these resources.
+  taskExecSecretArns?: pulumi.Input<string>[];
 }
 
 export function createIam(name: string, args: IamInputs): IamOutputs {
@@ -31,17 +33,17 @@ export function createIam(name: string, args: IamInputs): IamOutputs {
     managedPolicyArns: ["arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"],
   });
 
-  if (args.dbSecretArn) {
+  if (args.taskExecSecretArns && args.taskExecSecretArns.length > 0) {
     new aws.iam.RolePolicy(`${name}-task-exec-secrets-policy`, {
       role: taskExecutionRole.id,
-      policy: pulumi.output(args.dbSecretArn).apply((secretArn) =>
+      policy: pulumi.all(args.taskExecSecretArns).apply((secretArns) =>
         JSON.stringify({
           Version: "2012-10-17",
           Statement: [
             {
               Effect: "Allow",
               Action: ["secretsmanager:GetSecretValue"],
-              Resource: secretArn,
+              Resource: secretArns,
             },
           ],
         })

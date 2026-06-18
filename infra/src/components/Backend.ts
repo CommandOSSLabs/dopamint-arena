@@ -17,6 +17,9 @@ export interface BackendArgs {
   taskExecutionRoleArn: pulumi.Input<string>;
   taskRoleArn: pulumi.Input<string>;
   logGroupName: pulumi.Input<string>;
+  // Secrets Manager ARN holding the base64 ed25519 settler key, injected as
+  // SUI_SETTLER_KEY via ECS `secrets`. Omitted => the env var is simply absent.
+  settlerKeySecretArn?: pulumi.Input<string>;
 }
 
 function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
@@ -27,6 +30,7 @@ function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
       args.pubSubEndpoint,
       args.cacheEndpoint,
       args.logGroupName,
+      args.settlerKeySecretArn ?? pulumi.output(undefined),
     ])
     .apply(
       ([
@@ -35,6 +39,7 @@ function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
         pubSubEndpoint,
         cacheEndpoint,
         logGroupName,
+        settlerKeySecretArn,
       ]) =>
         JSON.stringify([
           {
@@ -49,8 +54,11 @@ function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
               { name: "TUNNEL_PACKAGE_ID", value: "0x0000000000000000000000000000000000000000000000000000000000000001" },
               { name: "WALRUS_PUBLISHER_URL", value: "https://publisher.walrus-testnet.walrus.space" },
               { name: "WALRUS_AGGREGATOR_URL", value: "https://aggregator.walrus-testnet.walrus.space" },
-              { name: "SUI_SETTLER_KEY", value: "KCdADv4l+T2B43FW9veqZZ8WStmBA3qpEHP5N1F5Xw8=" },
             ],
+            // Private key: injected from Secrets Manager, never inlined as plaintext env.
+            ...(settlerKeySecretArn
+              ? { secrets: [{ name: "SUI_SETTLER_KEY", valueFrom: settlerKeySecretArn }] }
+              : {}),
             logConfiguration: {
               logDriver: "awslogs",
               options: {

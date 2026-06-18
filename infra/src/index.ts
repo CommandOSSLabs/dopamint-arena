@@ -1,3 +1,4 @@
+import * as aws from "@pulumi/aws";
 import * as pulumi from "@pulumi/pulumi";
 import { getConfig } from "./config.js";
 import { createNetwork } from "./components/Network.js";
@@ -49,10 +50,27 @@ const database = createDatabase(`dopamint-${cfg.environment}`, {
   maxCapacity: cfg.dbMaxCapacity,
 });
 
+// Settler signing key: stored in Secrets Manager (sourced from secret config), never
+// inlined into the task definition. Created only when the stack configures it.
+let settlerKeySecretArn: pulumi.Output<string> | undefined;
+if (cfg.settlerKey) {
+  const settlerKeySecret = new aws.secretsmanager.Secret(`dopamint-${cfg.environment}-settler-key`, {
+    description: `Sui settler signing key for dopamint-${cfg.environment}`,
+  });
+  new aws.secretsmanager.SecretVersion(`dopamint-${cfg.environment}-settler-key-version`, {
+    secretId: settlerKeySecret.id,
+    secretString: cfg.settlerKey,
+  });
+  settlerKeySecretArn = settlerKeySecret.arn;
+}
+
 const iam = createIam(`dopamint-${cfg.environment}`, {
   githubOrg: "CommandOSSLabs",
   githubRepo: "dopamint-arena",
-  dbSecretArn: database.dbPasswordSecretArn,
+  taskExecSecretArns: [
+    database.dbPasswordSecretArn,
+    ...(settlerKeySecretArn ? [settlerKeySecretArn] : []),
+  ],
 });
 
 const ecr = createEcr(`dopamint-${cfg.environment}`);
@@ -80,6 +98,7 @@ const backend = createBackend({
   taskExecutionRoleArn: iam.taskExecutionRole.arn,
   taskRoleArn: iam.taskRole.arn,
   logGroupName: ecs.logGroupName,
+  settlerKeySecretArn,
 });
 
 const backendService = createBackendService({

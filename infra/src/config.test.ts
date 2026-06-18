@@ -13,11 +13,14 @@ describe("config", () => {
       "dopamint:benchmark-instance-type": "t3.micro",
       "dopamint:benchmark-min-size": "0",
       "dopamint:benchmark-max-size": "1",
+      "dopamint:settler-key": "test-settler-key",
     });
+    process.env.PULUMI_CONFIG_SECRET_KEYS = JSON.stringify(["dopamint:settler-key"]);
   });
 
   after(() => {
     delete process.env.PULUMI_CONFIG;
+    delete process.env.PULUMI_CONFIG_SECRET_KEYS;
   });
 
   it("reads required environment config", () => {
@@ -38,5 +41,15 @@ describe("config", () => {
 
     assert.strictEqual(cfg.backendImageTag, "latest");
     assert.strictEqual(cfg.benchmarkImageVersion, "1.0.1");
+  });
+
+  // The settler key is sourced from secret config (never hardcoded), so it can be
+  // wired into Secrets Manager instead of the task definition.
+  it("exposes the settler key from secret config", async () => {
+    const cfg = getConfig();
+
+    assert.ok(cfg.settlerKey, "settler key must be read from secret config");
+    const value = await (cfg.settlerKey as unknown as { promise(): Promise<string> }).promise();
+    assert.strictEqual(value, "test-settler-key");
   });
 });
