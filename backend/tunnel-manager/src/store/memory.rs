@@ -82,7 +82,7 @@ impl ControlStore for InMemoryControlStore {
             per_game
                 .entry(game.clone())
                 .or_insert(GameStat {
-                    tps: 0,
+                    tps: 0.0,
                     tunnels: 0,
                     total_actions: 0,
                 })
@@ -92,14 +92,14 @@ impl ControlStore for InMemoryControlStore {
             per_game
                 .entry(game.clone())
                 .or_insert(GameStat {
-                    tps: 0,
+                    tps: 0.0,
                     tunnels: 0,
                     total_actions: 0,
                 })
                 .tunnels = *n;
         }
         StatsSnapshot {
-            tps: 0, // filled by the broadcaster from its per-tick diff
+            tps: 0.0, // filled by the broadcaster from its per-tick diff
             total_actions: self.total_actions.load(Ordering::Relaxed),
             active_tunnels: self.active_tunnels.load(Ordering::Relaxed),
             settled_tunnels: self.settled_tunnels.load(Ordering::Relaxed),

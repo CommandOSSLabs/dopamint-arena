@@ -146,7 +146,7 @@ impl ControlStore for RedisControlStore {
                 let v: i64 = self.pool.get(&key).await.ok().flatten().unwrap_or(0);
                 let game = key.trim_start_matches(prefix).to_owned();
                 let entry = per_game.entry(game).or_insert(GameStat {
-                    tps: 0,
+                    tps: 0.0,
                     tunnels: 0,
                     total_actions: 0,
                 });
@@ -159,7 +159,7 @@ impl ControlStore for RedisControlStore {
         }
 
         StatsSnapshot {
-            tps: 0, // filled by the broadcaster from its per-tick diff
+            tps: 0.0, // filled by the broadcaster from its per-tick diff
             total_actions: total as u64,
             active_tunnels: active as u64,
             settled_tunnels: settled as u64,
