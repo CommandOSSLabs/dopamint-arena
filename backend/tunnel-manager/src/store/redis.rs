@@ -172,13 +172,14 @@ impl ControlStore for RedisControlStore {
             }
         }
 
+        let recent_events = self.recent_events().await;
         StatsSnapshot {
             tps: 0.0, // filled by the broadcaster from its per-tick diff
             total_actions: total as u64,
             active_tunnels: active as u64,
             settled_tunnels: settled as u64,
             per_game,
-            recent_events: Vec::new(),
+            recent_events,
         }
     }
 

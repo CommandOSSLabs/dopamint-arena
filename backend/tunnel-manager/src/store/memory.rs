@@ -106,7 +106,7 @@ impl ControlStore for InMemoryControlStore {
             active_tunnels: self.active_tunnels.load(Ordering::Relaxed),
             settled_tunnels: self.settled_tunnels.load(Ordering::Relaxed),
             per_game,
-            recent_events: Vec::new(),
+            recent_events: self.recent_ring.read().unwrap().iter().cloned().collect(),
         }
     }
 
@@ -277,6 +277,17 @@ mod tests {
             timestamp_ms: 1,
             proof_url: None,
         }
+    }
+
+    // A pushed event must appear in the broadcast snapshot — that is how the dashboard receives
+    // the feed (it rides the existing /v1/stats/live SSE; no new endpoint).
+    #[tokio::test]
+    async fn snapshot_includes_recent_events() {
+        let s = InMemoryControlStore::default();
+        s.push_recent_event(settled("0xt", "dig1")).await;
+        let snap = s.snapshot().await;
+        assert_eq!(snap.recent_events.len(), 1);
+        assert_eq!(snap.recent_events[0].tx_digest, "dig1");
     }
 
     // Newest-first, capped, and idempotent by tx_digest: a re-polled event (cursor restart /
