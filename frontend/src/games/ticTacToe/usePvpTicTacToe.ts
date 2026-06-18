@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from "react";
+import { useTelemetry } from "../../telemetry/TelemetryProvider";
 import { useCurrentAccount, useSignAndExecuteTransaction, useSuiClient } from "@mysten/dapp-kit";
 import { generateKeyPair, type KeyPair } from "sui-tunnel-ts/core/crypto";
 import { defaultBackend } from "sui-tunnel-ts/core/crypto-native";
@@ -72,6 +73,8 @@ export function usePvpTicTacToe(): PvpTicTacToe {
   const account = useCurrentAccount();
   const client = useSuiClient();
   const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
+  const { report } = useTelemetry();
+  const moveIdRef = useRef(0);
 
   const [status, setStatus] = useState<PvpStatus>("idle");
   const [role, setRole] = useState<Role | null>(null);
@@ -183,6 +186,15 @@ export function usePvpTicTacToe(): PvpTicTacToe {
         let settling = false;
         dt.onConfirmed = () => {
           sync();
+          report.pushLocalTxn({
+            id: moveIdRef.current++,
+            game: "tic-tac-toe",
+            time: new Date().toLocaleTimeString("en-GB"),
+            bot: "You",
+            type: dt.displayState.winner !== 0 ? "Win/Loss" : "Move",
+            status: "Success",
+            amount: "",
+          });
           if (proto.isTerminal(dt.state) && !settling) {
             settling = true;
             void settle(dt, match.role, channel, waitPeer, reads, signExec, tunnelId).then(
@@ -207,7 +219,7 @@ export function usePvpTicTacToe(): PvpTicTacToe {
         setStatus("error");
       }
     })();
-  }, [account, client, signAndExecute, sync]);
+  }, [account, client, signAndExecute, sync, report]);
 
   const play = useCallback((cell: number) => {
     const dt = dtRef.current;

@@ -11,6 +11,8 @@ import { newCounters, rateReport } from "sui-tunnel-ts/telemetry/metrics";
 import type { Counters } from "sui-tunnel-ts/telemetry/metrics";
 import type { TelemetrySnapshot, TxnRow } from "../panels/types";
 import { PLACEHOLDER_SNAPSHOT } from "../placeholders";
+import { useBackendStats } from "../backend/useBackendStats";
+import { liveOnchainTxns, displayUpdatesPerSec } from "../backend/liveMerge";
 
 const MAX_TXNS = 12;
 const MAX_SERIES = 20;
@@ -19,6 +21,8 @@ const MAX_SERIES = 20;
 export interface TelemetryWriter {
   /** Prepend a transaction row (capped to the most recent MAX_TXNS). */
   pushTxn: (row: TxnRow) => void;
+  /** Prepend a My-Activity row (local off-chain move, capped to MAX_TXNS). */
+  pushLocalTxn: (row: TxnRow) => void;
   /** Accumulate engine counters from one or more co-signed updates. */
   bumpCounters: (delta: Partial<Counters>) => void;
   /** Set the number of bots currently running. */
@@ -35,9 +39,11 @@ const TelemetryContext = createContext<TelemetryContextValue | null>(null);
 export function TelemetryProvider({ children }: { children: ReactNode }) {
   // Seed from the placeholder so the shell looks populated before any play.
   const [txns, setTxns] = useState<TxnRow[]>(PLACEHOLDER_SNAPSHOT.txns);
+  const [localTxns, setLocalTxns] = useState<TxnRow[]>(PLACEHOLDER_SNAPSHOT.localTxns);
   const [tpsSeries, setTpsSeries] = useState<number[]>(PLACEHOLDER_SNAPSHOT.tpsSeries);
   const [botsRunning, setBotsRunning] = useState<number>(PLACEHOLDER_SNAPSHOT.botsRunning);
   const [hasActivity, setHasActivity] = useState(false);
+  const backend = useBackendStats();
 
   const counters = useRef<Counters>(newCounters());
   const startMs = useRef<number>(Date.now());
@@ -45,6 +51,11 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
   const pushTxn = useCallback((row: TxnRow) => {
     setHasActivity(true);
     setTxns((cur) => [row, ...cur].slice(0, MAX_TXNS));
+  }, []);
+
+  const pushLocalTxn = useCallback((row: TxnRow) => {
+    setHasActivity(true);
+    setLocalTxns((cur) => [row, ...cur].slice(0, MAX_TXNS));
   }, []);
 
   const bumpCounters = useCallback((delta: Partial<Counters>) => {
@@ -67,26 +78,26 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
   const setActive = useCallback((n: number) => setBotsRunning(n), []);
 
   const snapshot = useMemo<TelemetrySnapshot>(() => {
-    if (!hasActivity) return PLACEHOLDER_SNAPSHOT;
     const elapsed = Math.max(1, Date.now() - startMs.current);
-    const rate = rateReport(counters.current, elapsed);
+    const localRate = hasActivity ? rateReport(counters.current, elapsed) : PLACEHOLDER_SNAPSHOT.rate;
+    if (!hasActivity && !backend) return PLACEHOLDER_SNAPSHOT;
     return {
-      rate,
-      txns,
-      localTxns: PLACEHOLDER_SNAPSHOT.localTxns,
+      rate: { ...localRate, updatesPerSec: displayUpdatesPerSec(backend, localRate.updatesPerSec) },
+      txns: liveOnchainTxns(backend, hasActivity ? txns : PLACEHOLDER_SNAPSHOT.txns),
+      localTxns: hasActivity ? localTxns : PLACEHOLDER_SNAPSHOT.localTxns,
       deposits: PLACEHOLDER_SNAPSHOT.deposits,
       tpsSeries,
       botsRunning,
       totalBalance: PLACEHOLDER_SNAPSHOT.totalBalance,
-      successRate: rate.errors === 0 ? 100 : (rate.updates / (rate.updates + rate.errors)) * 100,
+      successRate: localRate.errors === 0 ? 100 : (localRate.updates / (localRate.updates + localRate.errors)) * 100,
     };
-  }, [hasActivity, txns, tpsSeries, botsRunning]);
+  }, [hasActivity, txns, localTxns, tpsSeries, botsRunning, backend]);
 
   // Keep `report` stable across snapshot updates so consumers' callbacks that
   // depend on it (e.g. a game's start/reset) don't churn on every counter bump.
   const report = useMemo<TelemetryWriter>(
-    () => ({ pushTxn, bumpCounters, setActive }),
-    [pushTxn, bumpCounters, setActive],
+    () => ({ pushTxn, pushLocalTxn, bumpCounters, setActive }),
+    [pushTxn, pushLocalTxn, bumpCounters, setActive],
   );
   const value = useMemo<TelemetryContextValue>(
     () => ({ snapshot, report }),
