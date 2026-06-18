@@ -2853,6 +2853,7 @@ dependencies = [
  "testcontainers-modules",
  "tokio",
  "tokio-stream",
+ "tokio-tungstenite",
  "tower-http",
  "tracing",
  "tracing-subscriber",

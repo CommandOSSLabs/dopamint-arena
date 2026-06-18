@@ -1,6 +1,7 @@
 //! `GET /v1/mp` WebSocket. Upgrade → challenge → connect-auth → register presence + a local
 //! outbound channel via Bus → drive matchmaking/relay through MpStore + Bus::deliver.
 use std::collections::HashSet;
+use std::time::Duration;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
@@ -65,17 +66,18 @@ fn build_challenge_match(
     }
 }
 
+/// Server-driven keepalive cadence (RFC 6455 control frames). Browsers can't
+/// originate Ping frames and auto-answer Pong below the app layer, so liveness
+/// has to be server-side. A tick that finds the previous ping still unanswered
+/// means the peer vanished (a half-open socket the browser/ALB can't surface),
+/// so we drop the connection and run the cleanup below. Kept well under the ALB
+/// idle timeout so the proxy never reaps a live-but-quiet match.
+const KEEPALIVE_PING_INTERVAL: Duration = Duration::from_secs(30);
+
 async fn handle_socket(socket: WebSocket, state: SharedState) {
     let conn_id: ConnId = Uuid::new_v4();
     let (mut sink, mut stream) = socket.split();
     let (tx, mut rx) = mpsc::unbounded_channel::<String>();
-    let writer = tokio::spawn(async move {
-        while let Some(text) = rx.recv().await {
-            if sink.send(Message::Text(text)).await.is_err() {
-                break;
-            }
-        }
-    });
     let nonce = conn_id.to_string();
     let _ = tx.send(
         ServerMsg::Challenge {
@@ -87,32 +89,69 @@ async fn handle_socket(socket: WebSocket, state: SharedState) {
     let mut wallet: Option<String> = None;
     let mut joined_games: HashSet<String> = HashSet::new();
 
-    while let Some(Ok(msg)) = stream.next().await {
-        let text = match msg {
-            Message::Text(t) => t,
-            Message::Close(_) => break,
-            _ => continue,
-        };
-        let client_msg = match serde_json::from_str::<ClientMsg>(&text) {
-            Ok(m) => m,
-            Err(_) => {
-                let _ = tx
-                    .send(ServerMsg::error("bad_message", "unparseable control message").to_text());
-                continue;
+    let mut keepalive = tokio::time::interval(KEEPALIVE_PING_INTERVAL);
+    // A stall in `handle_message` must not burst-fire catch-up ticks and trip the
+    // unanswered-ping check on a connection that is actually alive.
+    keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut ping_unanswered = false;
+
+    // Single loop owns the sink, so reads, queued outbound, and keepalive pings
+    // never contend; pong replies arrive on the read half and clear the flag.
+    loop {
+        tokio::select! {
+            _ = keepalive.tick() => {
+                if ping_unanswered {
+                    break; // last ping never got a pong → peer is gone
+                }
+                ping_unanswered = true;
+                if sink.send(Message::Ping(Vec::new())).await.is_err() {
+                    break;
+                }
             }
-        };
-        if let Err(code) = handle_message(
-            &state,
-            &tx,
-            conn_id,
-            &nonce,
-            &mut wallet,
-            &mut joined_games,
-            client_msg,
-        )
-        .await
-        {
-            let _ = tx.send(ServerMsg::error(code, code).to_text());
+            outbound = rx.recv() => {
+                match outbound {
+                    Some(text) => {
+                        if sink.send(Message::Text(text)).await.is_err() {
+                            break;
+                        }
+                    }
+                    None => break,
+                }
+            }
+            inbound = stream.next() => {
+                let text = match inbound {
+                    Some(Ok(Message::Text(t))) => t,
+                    Some(Ok(Message::Pong(_))) => {
+                        ping_unanswered = false;
+                        continue;
+                    }
+                    Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                    Some(Ok(_)) => continue,
+                };
+                let client_msg = match serde_json::from_str::<ClientMsg>(&text) {
+                    Ok(m) => m,
+                    Err(_) => {
+                        let _ = tx.send(
+                            ServerMsg::error("bad_message", "unparseable control message")
+                                .to_text(),
+                        );
+                        continue;
+                    }
+                };
+                if let Err(code) = handle_message(
+                    &state,
+                    &tx,
+                    conn_id,
+                    &nonce,
+                    &mut wallet,
+                    &mut joined_games,
+                    client_msg,
+                )
+                .await
+                {
+                    let _ = tx.send(ServerMsg::error(code, code).to_text());
+                }
+            }
         }
     }
 
@@ -124,7 +163,6 @@ async fn handle_socket(socket: WebSocket, state: SharedState) {
         }
     }
     state.bus.unregister(conn_id);
-    writer.abort();
 }
 
 async fn handle_message(
@@ -364,6 +402,42 @@ mod tests {
     use crate::mp::MatchRecord;
     use crate::routes::test_support::test_state;
     use crate::store::ConnRef;
+
+    // Keepalive is server-driven (RFC 6455): a browser can't originate pings, so
+    // without this the ALB reaps a quiet-but-live match. The immediate first
+    // interval tick lets us assert it in milliseconds instead of a full period —
+    // a regression that drops the server ping fails here, not in production.
+    #[tokio::test]
+    async fn server_originates_keepalive_ping_frame() {
+        use axum::routing::get;
+        use axum::Router;
+        use tokio_tungstenite::tungstenite::Message as WsMessage;
+
+        let app = Router::new()
+            .route("/v1/mp", get(mp_upgrade))
+            .with_state(test_state());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/mp"))
+            .await
+            .expect("ws connect");
+
+        // Ignore the app-level challenge text; require a Ping control frame promptly.
+        let saw_ping = tokio::time::timeout(Duration::from_secs(5), async {
+            while let Some(Ok(frame)) = ws.next().await {
+                if matches!(frame, WsMessage::Ping(_)) {
+                    return true;
+                }
+            }
+            false
+        })
+        .await
+        .expect("server must send a ping before the timeout");
+
+        assert!(saw_ping, "server must originate a WS Ping for keepalive");
+    }
 
     fn make_conn_ref(state: &SharedState) -> (ConnId, mpsc::UnboundedReceiver<String>) {
         let conn_id = Uuid::new_v4();
