@@ -3,6 +3,7 @@ import { ConnectButton } from "@mysten/dapp-kit";
 import "../games"; // register all game modules (side-effect import)
 import { get, list } from "../games/registry";
 import { useTelemetry } from "../telemetry/TelemetryProvider";
+import { useBackendStats } from "../backend/useBackendStats";
 import { SystemDashboard } from "../panels/SystemDashboard";
 import { TpsChart } from "../panels/TpsChart";
 import { LiveTransactionsFeed } from "../panels/LiveTransactionsFeed";
@@ -24,6 +25,7 @@ function defaultWindows(): OpenWindow[] {
 export function Desktop() {
   const [open, setOpen] = useState<OpenWindow[]>(defaultWindows);
   const { snapshot } = useTelemetry();
+  const backendStats = useBackendStats();
 
   function close(windowId: string) {
     setOpen((cur) => cur.filter((w) => w.windowId !== windowId));
@@ -70,7 +72,7 @@ export function Desktop() {
 
         <aside className="flex w-80 shrink-0 flex-col gap-2 border-l border-arena-edge p-2">
           <LiveTransactionsFeed snapshot={snapshot} />
-          <SystemDashboard snapshot={snapshot} />
+          <SystemDashboard snapshot={snapshot} backend={backendStats} />
           <TpsChart snapshot={snapshot} />
         </aside>
       </div>
