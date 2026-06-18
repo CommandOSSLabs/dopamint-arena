@@ -1,7 +1,7 @@
 import type { GameWindowProps } from "../types";
+import { ScaleToFit } from "../ScaleToFit";
 import { usePvpTicTacToe } from "./usePvpTicTacToe";
-
-const CELL = (v: number) => (v === 1 ? "X" : v === 2 ? "O" : "");
+import { TttBoard } from "./components/TttBoard";
 
 /** Real two-player tic-tac-toe over a Sui tunnel: matchmaking + relay co-sign + on-chain stakes. */
 export function TicTacToePvpWindow(_props: GameWindowProps) {
@@ -58,30 +58,22 @@ export function TicTacToePvpWindow(_props: GameWindowProps) {
           : "Opponent's turn";
 
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-3 p-3">
-      <div className="text-xs text-arena-muted">
-        You are <span className="text-arena-accent font-semibold">{g.mark}</span>
-        {g.status === "settling" && " · settling on-chain…"}
-        {g.status === "settled" && " · settled ✓"}
-      </div>
-      <div className="grid grid-cols-3 gap-1">
-        {g.board.map((v, i) => (
-          <button
-            key={i}
-            disabled={!g.myTurn || v !== 0}
-            onClick={() => g.play(i)}
-            className="flex h-16 w-16 items-center justify-center rounded bg-arena-panel text-2xl font-bold text-arena-text enabled:hover:bg-arena-edge disabled:cursor-default"
-          >
-            {CELL(v)}
+    <ScaleToFit designWidth={300} designHeight={372}>
+      <div className="flex h-full w-full flex-col items-center justify-center gap-3">
+        <div className="text-xs text-arena-muted">
+          You are{" "}
+          <span style={{ color: g.mark === "X" ? "#001e40" : "#bc0000", fontWeight: 700 }}>{g.mark}</span>
+          {g.status === "settling" && " · settling on-chain…"}
+          {g.status === "settled" && " · settled ✓"}
+        </div>
+        <TttBoard board={g.board} disabled={!g.myTurn} onPlay={g.play} />
+        <div className="text-sm font-semibold text-arena-text">{banner}</div>
+        {(g.status === "settled" || g.winner !== 0) && (
+          <button onClick={g.reset} className="rounded border border-arena-edge px-3 py-1.5 text-sm">
+            Play Again
           </button>
-        ))}
+        )}
       </div>
-      <div className="text-sm font-semibold text-arena-text">{banner}</div>
-      {(g.status === "settled" || g.winner !== 0) && (
-        <button onClick={g.reset} className="rounded border border-arena-edge px-3 py-1.5 text-sm">
-          Play Again
-        </button>
-      )}
-    </div>
+    </ScaleToFit>
   );
 }

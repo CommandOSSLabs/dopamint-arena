@@ -1,4 +1,5 @@
 import type { GameWindowProps } from "../types";
+import { ScaleToFit } from "../ScaleToFit";
 import { useBlackjackSession } from "./useBlackjackSession";
 import { BetPanel } from "./components/BetPanel";
 import { BlackjackTable } from "./components/BlackjackTable";
@@ -31,12 +32,16 @@ export function BlackjackWindow(_props: GameWindowProps) {
     return <BetPanel onDeal={start} />;
   }
 
+  // The casino table is laid out at a roomy fixed size, then uniformly scaled into the small
+  // platform window so the felt, chip stacks and HUD keep the original proportions.
   return (
-    <BlackjackTable
-      view={view}
-      result={result}
-      settled={status === "settled"}
-      onPlayAgain={reset}
-    />
+    <ScaleToFit designWidth={560} designHeight={380}>
+      <BlackjackTable
+        view={view}
+        result={result}
+        settled={status === "settled"}
+        onPlayAgain={reset}
+      />
+    </ScaleToFit>
   );
 }
