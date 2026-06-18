@@ -10,6 +10,9 @@ import {
   isBorder,
   isPillar,
   buildGrid,
+  BombItProtocol,
+  BOMB_IT_TICK_CAP,
+  BOMB_IT_MIN_STAKE,
 } from "./bombIt.ts";
 
 test("border ring and interior even-even cells are walls", () => {
@@ -132,4 +135,44 @@ test("resolveExplosions leaves un-fused bombs untouched", () => {
   const { cells, remaining } = resolveExplosions(g, bombs);
   assert.equal(remaining.length, 1);
   assert.equal(cells.size, 0);
+});
+
+const CTX = { tunnelId: "0xabc123", initialBalances: { a: BOMB_IT_MIN_STAKE, b: BOMB_IT_MIN_STAKE } };
+
+test("initialState locks the total, spawns two living players, no bombs/winner", () => {
+  const p = new BombItProtocol();
+  const s = p.initialState(CTX);
+  assert.equal(s.tick, 0n);
+  assert.equal(s.total, BOMB_IT_MIN_STAKE * 2n);
+  assert.equal(s.balanceA + s.balanceB, s.total);
+  assert.equal(s.players[0].alive, true);
+  assert.equal(s.players[1].alive, true);
+  assert.equal(s.bombs.length, 0);
+  assert.equal(s.winner, null);
+  assert.equal(s.grid.length, 81);
+});
+
+test("encodeState is canonical and starts with the domain tag", () => {
+  const p = new BombItProtocol();
+  const a = p.initialState(CTX);
+  const b = p.initialState(CTX);
+  assert.deepEqual(Array.from(p.encodeState(a)), Array.from(p.encodeState(b)));
+  const tag = new TextEncoder().encode("sui_tunnel::proto::bomb_it.v1");
+  assert.deepEqual(Array.from(p.encodeState(a).slice(0, tag.length)), Array.from(tag));
+});
+
+test("encodeState differs when a player position differs", () => {
+  const p = new BombItProtocol();
+  const s = p.initialState(CTX);
+  const moved = { ...s, players: [{ ...s.players[0], col: 2 }, s.players[1]] as typeof s.players };
+  assert.notDeepEqual(Array.from(p.encodeState(s)), Array.from(p.encodeState(moved)));
+});
+
+test("balances return the stored split; isTerminal tracks winner", () => {
+  const p = new BombItProtocol();
+  const s = p.initialState(CTX);
+  assert.deepEqual(p.balances(s), { a: BOMB_IT_MIN_STAKE, b: BOMB_IT_MIN_STAKE });
+  assert.equal(p.isTerminal(s), false);
+  assert.equal(p.isTerminal({ ...s, winner: "A" }), true);
+  assert.equal(p.isTerminal({ ...s, winner: "draw" }), true);
 });
