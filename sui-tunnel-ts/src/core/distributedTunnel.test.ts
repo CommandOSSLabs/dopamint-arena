@@ -9,6 +9,7 @@ import { serializeStateUpdate, u64ToBeBytes } from "./wire";
 import { Transport } from "./distributedTunnel";
 import { DistributedTunnel } from "./distributedTunnel";
 import { encodeFrame, identityMoveCodec, MoveFrame } from "./distributedFrame";
+import { Transcript } from "../proof/transcript";
 
 // ---- shared test fixtures ----
 
@@ -346,4 +347,29 @@ test("combineSettlementWithRoot rejects a bad opponent signature", () => {
     () => dtA.combineSettlementWithRoot(halfA.settlement, halfA.sigSelf, bogus),
     /signature failed verification/,
   );
+});
+
+// PvP /settle depends on this: both seats independently build a transcript from their own
+// onConfirmed stream and MUST arrive at the same root, since both must sign it into the
+// root-anchored settlement. (Per-move sigA/sigB parity across seats is already proven above;
+// this asserts it composes up to an identical Merkle root.)
+test("both seats derive an identical transcript root from the same confirmed updates", () => {
+  const { dtA, dtB } = makePair();
+  const tA = new Transcript("0x7");
+  const tB = new Transcript("0x7");
+  dtA.onConfirmed = (u) => tA.append(u);
+  dtB.onConfirmed = (u) => tB.append(u);
+  const seq: Array<{ by: Party; ts: bigint }> = [
+    { by: "A", ts: 1n },
+    { by: "B", ts: 2n },
+    { by: "A", ts: 3n },
+    { by: "B", ts: 4n },
+  ];
+  for (const { by, ts } of seq) (by === "A" ? dtA : dtB).propose(0, ts);
+  assert.equal(tA.length, 4);
+  assert.equal(tB.length, 4);
+  const rootA = tA.root();
+  const rootB = tB.root();
+  assert.ok(bytesEqual(rootA, rootB), "both parties anchor the same root");
+  assert.ok(!bytesEqual(rootA, new Uint8Array(32)), "root is non-trivial (not the empty-zero root)");
 });
