@@ -306,6 +306,16 @@ async fn handle_authed(
             Ok(())
         }
         ClientMsg::Relay { match_id, payload } => {
+            // PvP throughput: the relay is the one point that sees every move, so count
+            // each co-signed MOVE here — one action per move, the off-chain nonce step,
+            // parity with self-play's per-update heartbeat. The ACK half is a separate
+            // frame and is skipped (else every move double-counts). Only the transport
+            // envelope (`t`/`kind`) is read; the game-specific move payload stays opaque.
+            if relay_payload_is_move(&payload) {
+                if let Some(m) = state.mp.get_match(&match_id).await {
+                    state.control.add_actions(&m.game, 1).await;
+                }
+            }
             let envelope = ServerMsg::Relay {
                 match_id: match_id.clone(),
                 payload,
@@ -353,6 +363,31 @@ async fn forward_to_other(state: &SharedState, match_id: &str, from: ConnId, tex
     if let Some(t) = target {
         state.bus.deliver(&t, text).await;
     }
+}
+
+/// True iff a relayed payload carries a co-signed MOVE frame (not an ACK or a peer
+/// message). Drives PvP throughput counting: one MOVE = one action = the off-chain nonce
+/// step. Reads only the transport envelope (`t`) and the frame discriminator (`kind`) —
+/// the game-specific move payload is never inspected. Any malformed/foreign payload
+/// counts as "not a move" so the relay stays best-effort and game-agnostic.
+fn relay_payload_is_move(payload: &str) -> bool {
+    let Ok(envelope) = serde_json::from_str::<serde_json::Value>(payload) else {
+        return false;
+    };
+    if envelope.get("t").and_then(serde_json::Value::as_str) != Some("frame") {
+        return false;
+    }
+    let Some(frame_json) = envelope.get("data").and_then(serde_json::Value::as_str) else {
+        return false;
+    };
+    serde_json::from_str::<serde_json::Value>(frame_json)
+        .ok()
+        .and_then(|f| {
+            f.get("kind")
+                .and_then(serde_json::Value::as_str)
+                .map(|k| k == "move")
+        })
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -473,6 +508,87 @@ mod tests {
         assert_eq!(
             rec.conn_b, conn_accepter,
             "conn_b must be the accepter's ConnRef"
+        );
+    }
+
+    /// Build the relay envelope the SPA sends: an opaque `data` string wrapping a frame.
+    fn relay_frame(kind: &str) -> String {
+        let frame = serde_json::json!({ "kind": kind, "nonce": "1" }).to_string();
+        serde_json::json!({ "t": "frame", "data": frame }).to_string()
+    }
+
+    // Throughput counting hinges on this discriminator: a MOVE is one action, an ACK is
+    // the co-sign of that same move (not a new action), and peer/control messages aren't
+    // game actions at all. Miscount any of these and PvP TPS is wrong.
+    #[test]
+    fn only_move_frames_count_as_actions() {
+        assert!(relay_payload_is_move(&relay_frame("move")), "MOVE is an action");
+        assert!(!relay_payload_is_move(&relay_frame("ack")), "ACK is not");
+        let hello = serde_json::json!({ "t": "hello", "ephemeralPubkey": "0xaa" }).to_string();
+        assert!(!relay_payload_is_move(&hello), "peer messages are not actions");
+        assert!(!relay_payload_is_move("not json"), "malformed payload is not a move");
+    }
+
+    // The behavior that was missing in PvP: a relayed MOVE must feed the actions counter
+    // (so it shows up as TPS), while its ACK half must not double-count.
+    #[tokio::test]
+    async fn relayed_move_records_one_action_and_ack_does_not() {
+        let state = test_state();
+        let (conn_a, _rx_a) = make_conn_ref(&state);
+        let (conn_b, _rx_b) = make_conn_ref(&state);
+        let inst = state.bus.instance_id().to_owned();
+        let rec = MatchRecord {
+            game: "tictactoe".into(),
+            seat_a: "0xa".into(),
+            seat_b: "0xb".into(),
+            conn_a: ConnRef {
+                instance_id: inst.clone(),
+                conn_id: conn_a,
+            },
+            conn_b: ConnRef {
+                instance_id: inst,
+                conn_id: conn_b,
+            },
+            tunnel_id: None,
+            latest_checkpoint: None,
+        };
+        state.mp.put_match("m1", rec).await;
+        let mut joined = HashSet::new();
+
+        handle_authed(
+            &state,
+            conn_a,
+            "0xa",
+            &mut joined,
+            ClientMsg::Relay {
+                match_id: "m1".into(),
+                payload: relay_frame("move"),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            state.control.snapshot().await.total_actions,
+            1,
+            "a relayed MOVE must record one action"
+        );
+
+        handle_authed(
+            &state,
+            conn_b,
+            "0xb",
+            &mut joined,
+            ClientMsg::Relay {
+                match_id: "m1".into(),
+                payload: relay_frame("ack"),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            state.control.snapshot().await.total_actions,
+            1,
+            "the ACK half must not add a second action"
         );
     }
 }
