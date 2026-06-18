@@ -279,6 +279,21 @@ pub(crate) async fn settle(
                     (String::new(), String::new())
                 }
             };
+            // Push the proof-linked settled row now; the indexer's later explorer-only row for
+            // this same tx_digest is deduped. `a`/`b`/`ts` are the u64s parsed above;
+            // `req.settlement.transcript_root` is the hex the client sent.
+            state
+                .control
+                .push_recent_event(settled_event(
+                    &req.settlement.tunnel_id,
+                    a,
+                    b,
+                    &req.settlement.transcript_root,
+                    &digest,
+                    ts,
+                    &proof_url,
+                ))
+                .await;
             Json(serde_json::json!({ "txDigest": digest, "walrusBlobId": blob_id, "proofUrl": proof_url }))
                 .into_response()
         }
@@ -288,6 +303,32 @@ pub(crate) async fn settle(
             &e.to_string(),
         )
         .into_response(),
+    }
+}
+
+/// Build the settled Transaction-Log row for a successful close. The settle handler owns the
+/// full proof (close digest + Walrus URL), so it pushes the enriched row directly; the
+/// indexer's later explorer-only row for the same `tx_digest` is deduped. Empty strings
+/// (Walrus archival failed) degrade to `None`, never a broken link.
+fn settled_event(
+    tunnel_id: &str,
+    party_a_balance: u64,
+    party_b_balance: u64,
+    transcript_root_hex: &str,
+    tx_digest: &str,
+    timestamp_ms: u64,
+    proof_url: &str,
+) -> crate::state::TunnelEvent {
+    let non_empty = |s: &str| (!s.is_empty()).then(|| s.to_string());
+    crate::state::TunnelEvent {
+        tunnel_id: tunnel_id.to_string(),
+        kind: crate::state::TunnelEventKind::Settled,
+        party_a_balance: Some(party_a_balance),
+        party_b_balance: Some(party_b_balance),
+        transcript_root: non_empty(transcript_root_hex),
+        tx_digest: tx_digest.to_string(),
+        timestamp_ms,
+        proof_url: non_empty(proof_url),
     }
 }
 
@@ -407,6 +448,27 @@ mod tests {
             "Bearer tok".parse().unwrap(),
         );
         assert!(bearer_matches(&h, "tok"), "exact token must pass");
+    }
+
+    // A successful settle becomes a `settled` row carrying payout + transcript root + the Walrus
+    // proof URL — what makes a global-log row clickable to its proof (spec §6).
+    #[test]
+    fn settled_event_carries_proof_and_payout() {
+        let ev = settled_event("0xT", 1500, 500, "deadbeef", "DiG", 1_750_000_000_000, "https://agg/v1/blobs/abc");
+        assert_eq!(ev.kind, crate::state::TunnelEventKind::Settled);
+        assert_eq!(ev.party_a_balance, Some(1500));
+        assert_eq!(ev.transcript_root.as_deref(), Some("deadbeef"));
+        assert_eq!(ev.tx_digest, "DiG");
+        assert_eq!(ev.proof_url.as_deref(), Some("https://agg/v1/blobs/abc"));
+    }
+
+    // Walrus archival failure (empty url/root) must degrade to an explorer-only row, never a
+    // broken link or anchor.
+    #[test]
+    fn settled_event_omits_proof_on_walrus_failure() {
+        let ev = settled_event("0xT", 1, 1, "", "DiG", 1, "");
+        assert!(ev.proof_url.is_none(), "empty url → no link");
+        assert!(ev.transcript_root.is_none(), "empty root → no anchor");
     }
 
     // /health/ready reflects ControlStore::ready(); in-memory is always ready.
