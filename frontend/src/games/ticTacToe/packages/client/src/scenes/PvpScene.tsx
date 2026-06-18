@@ -30,7 +30,7 @@ function statusText(g: ReturnType<typeof usePvpTicTacToe>): string {
   return "Opponent's turn…";
 }
 
-export function PvpScene({ onBack }: { onBack: () => void }) {
+export function PvpScene({ onBack, isPortrait = false }: { onBack: () => void; isPortrait?: boolean }) {
   const [variant, setVariant] = useState<Variant>("ttt");
   const [boardSize, setBoardSize] = useState(15);
   const g = usePvpTicTacToe(variant, boardSize);
@@ -94,51 +94,87 @@ export function PvpScene({ onBack }: { onBack: () => void }) {
           {g.error && <div className="text-base font-bold text-red-500 text-center max-w-sm bg-red-50 p-3 rounded-lg border border-red-200">{g.error}</div>}
         </div>
       ) : (
-        <div className="flex-1 flex flex-col items-center gap-4 mt-2">
-          <div className="flex flex-col items-center gap-1">
-            <span className="text-lg font-bold text-primary">You are: <span className="font-black text-2xl">{g.myMark === 1 ? "✕ (X)" : "◯ (O)"}</span></span>
-            <div className="flex items-center gap-4 text-sm font-mono text-on-surface/70 bg-surface px-4 py-1.5 rounded-lg border border-primary/20 shadow-sm mt-1">
-              <span>Game {g.currentGame}</span>
-              <span className="border-l-2 border-primary/20 pl-4">X: {g.score.x} &nbsp; O: {g.score.o} &nbsp; D: {g.score.draws}</span>
+        <div className={`flex ${isPortrait ? "flex-col items-center gap-6" : "flex-row gap-8 items-start justify-between"} mt-2 w-full`}>
+          {/* Left Column: Game Area */}
+          <section className={`${isPortrait ? "w-full max-w-[480px]" : "flex-1 min-w-[560px]"} flex flex-col items-center`}>
+            <div className="flex flex-col items-center gap-1 mb-6">
+              <span className="text-lg font-bold text-primary">You are: <span className="font-black text-2xl">{g.myMark === 1 ? "✕ (X)" : "◯ (O)"}</span></span>
+              <div className="flex items-center gap-4 text-sm font-mono text-on-surface/70 bg-surface px-4 py-1.5 rounded-lg border border-primary/20 shadow-sm mt-1">
+                <span>Game {g.currentGame}</span>
+                <span className="border-l-2 border-primary/20 pl-4">X: {g.score.x} &nbsp; O: {g.score.o} &nbsp; D: {g.score.draws}</span>
+              </div>
             </div>
-          </div>
-          
-          <div className="px-6 py-2 rounded-sm bg-tertiary/10 border-2 border-tertiary text-tertiary text-base font-bold uppercase tracking-wider">{statusText(g)}</div>
 
-          {g.variant === "caro"
-            ? <CaroBoard board={g.board} size={g.size} lastMove={g.lastMove} disabled={!g.isMyTurn || g.auto} onPlay={g.play} />
-            : <Board board={g.board} disabled={!g.isMyTurn || g.auto} onPlay={g.play} />}
+            <div className="flex justify-center my-4">
+              {g.variant === "caro"
+                ? <CaroBoard board={g.board} size={g.size} lastMove={g.lastMove} disabled={!g.isMyTurn || g.auto} onPlay={g.play} />
+                : <Board board={g.board} disabled={!g.isMyTurn || g.auto} onPlay={g.play} />}
+            </div>
 
-          <div className="flex flex-wrap items-center justify-center gap-3 mt-4">
-            {g.phase === "playing" && g.innerOver && !g.terminal && g.role === "A" && (
-              <button onClick={g.next} disabled={g.auto} className="px-6 py-3 rounded-sm border-[3px] border-primary bg-primary text-surface font-bold disabled:opacity-40 uppercase tracking-wider hover:-translate-y-1 hover:shadow-[4px_4px_0px_#001e40] transition-all">Next Game →</button>
-            )}
-            {g.innerOver && g.phase === "playing" && <button onClick={g.stop} className="px-6 py-3 rounded-sm border-[3px] border-secondary bg-surface text-secondary font-bold uppercase tracking-wider hover:bg-secondary hover:text-on-secondary transition-all shadow-[3px_3px_0px_#bc0000]">Stop &amp; Settle</button>}
-            {g.phase === "done" && <button onClick={() => { g.leave(); g.queue(); }} className="px-6 py-3 rounded-sm border-[3px] border-primary bg-surface text-primary font-bold uppercase tracking-wider hover:bg-primary/10 transition-all shadow-[3px_3px_0px_#001e40]">Rematch</button>}
-            <label className="flex items-center gap-2 text-base font-bold text-outline cursor-pointer bg-surface px-4 py-3 rounded-sm border-[2px] border-outline hover:border-primary hover:text-primary transition-colors">
-              <input type="checkbox" className="w-5 h-5 accent-primary cursor-pointer" checked={g.auto} onChange={(e) => g.setAuto(e.target.checked)} /> Auto-Play
-            </label>
-          </div>
+            <div className="px-6 py-2 rounded-sm bg-tertiary/10 border-2 border-tertiary text-tertiary text-base font-bold uppercase tracking-wider mt-4">
+              {statusText(g)}
+            </div>
+          </section>
 
-          {g.games.length > 0 && (
-            <div className="w-full max-w-sm max-h-32 overflow-y-auto flex flex-col gap-1 text-sm font-mono mt-4 bg-surface-container-lowest p-3 rounded-lg border border-primary/10 shadow-inner">
-              {[...g.games].reverse().map((r) => (
-                <div key={r.game} className="flex justify-between text-on-surface/80 px-2 py-1 hover:bg-primary/5 rounded">
-                  <span className="font-bold">Game {r.game}</span>
-                  <span className={`font-bold ${r.winner === 1 ? "text-primary" : r.winner === 2 ? "text-secondary" : "text-outline"}`}>
-                    {r.winner === 1 ? "X WON" : r.winner === 2 ? "O WON" : "DRAW"}
-                  </span>
+          {/* Right Column: Game Log / Info */}
+          <aside className={`${isPortrait ? "w-full max-w-[480px] mt-4" : "w-[340px] shrink-0"} flex flex-col gap-4`}>
+            {/* Controls */}
+            <div className="bg-surface-container-low border-[2px] border-primary p-4 relative rounded-sm shadow-[4px_4px_0px_#00336610] w-full flex flex-col items-center">
+              <h2 className="font-headline-lg text-lg text-primary mb-4 self-start flex items-center gap-2">
+                <span className="material-symbols-outlined">settings</span>
+                Controls
+              </h2>
+
+              <div className="flex flex-col items-stretch w-full gap-3">
+                {g.phase === "playing" && g.innerOver && !g.terminal && g.role === "A" && (
+                  <button onClick={g.next} disabled={g.auto} className="w-full px-4 py-3 rounded-sm border-[3px] border-primary bg-primary text-surface font-bold disabled:opacity-40 uppercase tracking-wider hover:-translate-y-1 hover:shadow-[4px_4px_0px_#001e40] transition-all">Next Game →</button>
+                )}
+                {g.innerOver && g.phase === "playing" && (
+                  <button onClick={g.stop} className="w-full px-4 py-3 rounded-sm border-[3px] border-secondary bg-surface text-secondary font-bold uppercase tracking-wider hover:bg-secondary hover:text-on-secondary transition-all shadow-[3px_3px_0px_#bc0000]">Stop &amp; Settle</button>
+                )}
+                {g.phase === "done" && (
+                  <button onClick={() => { g.leave(); g.queue(); }} className="w-full px-4 py-3 rounded-sm border-[3px] border-primary bg-surface text-primary font-bold uppercase tracking-wider hover:bg-primary/10 transition-all shadow-[3px_3px_0px_#001e40]">Rematch</button>
+                )}
+                <label className="flex items-center justify-center gap-2 text-base font-bold text-outline cursor-pointer bg-surface px-4 py-3 rounded-sm border-[2px] border-outline hover:border-primary hover:text-primary transition-colors">
+                  <input type="checkbox" className="w-5 h-5 accent-primary cursor-pointer" checked={g.auto} onChange={(e) => g.setAuto(e.target.checked)} /> Auto-Play
+                </label>
+              </div>
+            </div>
+
+            {/* Game Log */}
+            <div className="bg-surface-container-low border-[2px] border-primary p-6 relative rounded-sm shadow-[4px_4px_0px_#00336610] w-full mt-2">
+              <div className="tape-top"></div>
+              <h2 className="font-headline-lg text-xl text-primary mb-4 flex items-center gap-2">
+                <span className="material-symbols-outlined">edit_note</span>
+                Game Log
+              </h2>
+
+              {g.games.length > 0 && (
+                <div className="w-full max-h-40 overflow-y-auto flex flex-col gap-1 text-sm font-mono mb-4 bg-surface-container-lowest p-3 rounded-lg border border-primary/10 shadow-inner">
+                  {[...g.games].reverse().map((r) => (
+                    <div key={r.game} className="flex justify-between text-on-surface/80 px-2 py-1 hover:bg-primary/5 rounded">
+                      <span className="font-bold">Game {r.game}</span>
+                      <span className={`font-bold ${r.winner === 1 ? "text-primary" : r.winner === 2 ? "text-secondary" : "text-outline"}`}>
+                        {r.winner === 1 ? "X WON" : r.winner === 2 ? "O WON" : "DRAW"}
+                      </span>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-          )}
+              )}
 
-          <div className="flex items-center gap-4 mt-2">
-            <Digest label="OPEN:" digest={g.digests.create} />
-            <Digest label="DEPOSIT:" digest={g.digests.deposit} />
-            <Digest label="CLOSE:" digest={g.digests.close} />
-          </div>
-          {g.error && <div className="text-base font-bold text-red-500 text-center bg-red-50 p-3 rounded-lg border border-red-200 w-full max-w-sm">{g.error}</div>}
+              <div className="flex flex-col gap-2 mt-4 text-xs font-mono border-t border-primary/20 pt-4">
+                <Digest label="OPEN:" digest={g.digests.create} />
+                <Digest label="DEPOSIT:" digest={g.digests.deposit} />
+                <Digest label="CLOSE:" digest={g.digests.close} />
+              </div>
+
+              {g.error && (
+                <div className="mt-4 text-xs font-bold text-red-500 bg-red-50 p-3 rounded-lg border border-red-200 w-full break-words">
+                  {g.error}
+                </div>
+              )}
+            </div>
+          </aside>
         </div>
       )}
     </div>
