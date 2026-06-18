@@ -165,6 +165,12 @@ export function QuantumPokerPvpWindow(_props: GameWindowProps) {
   const oppBalance = self === "A" ? s.balanceB : s.balanceA;
   const myStreet = self === "A" ? s.streetBetA : s.streetBetB;
   const oppStreet = self === "A" ? s.streetBetB : s.streetBetA;
+  const myTotalBet = self === "A" ? s.totalBetA : s.totalBetB;
+  const oppTotalBet = self === "A" ? s.totalBetB : s.totalBetA;
+  // Remaining stack = balance minus chips committed this hand. Once the hand resolves
+  // (`lastResult` set), the pot is already folded back into `balance`, so show it raw.
+  const myStack = s.lastResult ? myBalance : myBalance - myTotalBet;
+  const oppStack = s.lastResult ? oppBalance : oppBalance - oppTotalBet;
   const pot = s.totalBetA + s.totalBetB;
   const oppShown = self === "A" ? s.shownHoleB : s.shownHoleA;
   const oppCards: (number | null)[] = oppShown ?? [null, null];
@@ -219,7 +225,7 @@ export function QuantumPokerPvpWindow(_props: GameWindowProps) {
       {/* Opponent (top) — holes hidden until showdown */}
       <Seat
         label={`Opponent (${opp})`}
-        balance={oppBalance}
+        balance={oppStack}
         streetBet={oppStreet}
         active={!terminal && s.toAct === opp}
         cards={oppCards}
@@ -241,7 +247,7 @@ export function QuantumPokerPvpWindow(_props: GameWindowProps) {
       {/* You (bottom) — your hole cards, always visible */}
       <Seat
         label={`You (${self})`}
-        balance={myBalance}
+        balance={myStack}
         streetBet={myStreet}
         active={!terminal && s.toAct === self}
         cards={myCards}
