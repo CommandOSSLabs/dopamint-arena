@@ -38,6 +38,10 @@ function betChip(amount: bigint): string {
 const SUISCAN_TX = "https://suiscan.xyz/testnet/tx/";
 const fmtSui = (mist: bigint) => (Number(mist) / 1e9).toFixed(4);
 
+const MIN_BUYIN = 1000; // need at least the top bet ($1,000) coverable for a meaningful game
+// Chips are denominated 1:1 with MIST (1 SUI = 1,000,000,000 chips). Render a chip amount as SUI.
+const chipsToSui = (chips: bigint) => (Number(chips) / 1e9).toLocaleString("en-US", { maximumFractionDigits: 9 });
+
 function DigestLink({ label, digest }: { label: string; digest?: string }) {
   if (!digest) return null;
   return (
@@ -88,6 +92,7 @@ export default function PvpBlackjack() {
 
   // Bet/payout chip animation, driven off the player's (party A) seat — matching the fixed
   // player-bottom / dealer-top layout (same felt motion as the bot-vs-bot self-play table).
+  const [customStake, setCustomStake] = useState(""); // free-typed buy-in (empty → a preset is active)
   const [animState, setAnimState] = useState<"idle" | "deal" | "win" | "lose" | "push">("idle");
   const prevRoundRef = useRef(-1);
   const prevPhaseRef = useRef("");
@@ -226,13 +231,13 @@ export default function PvpBlackjack() {
                 <div className="w-full flex flex-col gap-3">
                   <div className="text-[11px] text-zinc-500 font-mono break-all text-center">{g.walletAddress.slice(0, 12)}… · {fmtSui(g.walletBalance)} SUI</div>
                   {/* Buy-in: each player brings their own bankroll; the table caps bets at min(both). */}
-                  <div className="flex flex-col gap-1.5">
+                  <div className="flex flex-col gap-2">
                     <span className="text-[11px] text-zinc-400 uppercase tracking-widest text-center">Your buy-in</span>
                     <div className="grid grid-cols-4 gap-2">
                       {g.fundOptions.map((amt) => {
-                        const selected = g.stake === BigInt(amt);
+                        const selected = customStake === "" && g.stake === BigInt(amt);
                         return (
-                          <button key={amt} onClick={() => g.setStake(BigInt(amt))}
+                          <button key={amt} onClick={() => { g.setStake(BigInt(amt)); setCustomStake(""); }}
                             disabled={g.phase === "queuing" || g.phase === "connecting"}
                             className={`py-2 rounded-lg text-xs font-black tabular-nums transition-colors disabled:opacity-40 ${selected ? "bg-amber-500 text-zinc-950" : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"}`}>
                             ${amt.toLocaleString()}
@@ -240,9 +245,31 @@ export default function PvpBlackjack() {
                         );
                       })}
                     </div>
+                    {/* Custom buy-in */}
+                    <div className="flex items-center gap-2">
+                      <span className="text-zinc-500 text-sm font-bold">$</span>
+                      <input type="number" inputMode="numeric" min={MIN_BUYIN} placeholder="Custom amount"
+                        value={customStake}
+                        disabled={g.phase === "queuing" || g.phase === "connecting"}
+                        onChange={(e) => {
+                          const v = e.target.value.replace(/[^0-9]/g, "");
+                          setCustomStake(v);
+                          if (v) g.setStake(BigInt(v));
+                        }}
+                        className="flex-1 min-w-0 bg-zinc-900 border border-zinc-700 focus:border-amber-500 rounded-lg px-3 py-2 text-sm font-mono tabular-nums outline-none disabled:opacity-40" />
+                    </div>
+                    {/* SUI explanation — chips are 1:1 with MIST */}
+                    <div className="text-[11px] text-zinc-400 text-center leading-relaxed">
+                      ${Number(g.stake).toLocaleString()} buy-in ≈ <span className="font-mono text-emerald-300">{chipsToSui(g.stake)} SUI</span> on-chain
+                      <br />
+                      <span className="text-zinc-500">1 SUI = 1,000,000,000 chips · e.g. $500 = {chipsToSui(500n)} SUI</span>
+                    </div>
+                    {g.stake < BigInt(MIN_BUYIN) && (
+                      <div className="text-rose-400 text-[11px] text-center">minimum buy-in is ${MIN_BUYIN.toLocaleString()}</div>
+                    )}
                   </div>
                   {!funded && <button onClick={g.fund} className="w-full bg-zinc-800 hover:bg-zinc-700 py-3 rounded-xl font-bold">Fund wallet (faucet)</button>}
-                  <button onClick={g.queue} disabled={!funded || g.phase === "queuing" || g.phase === "connecting"}
+                  <button onClick={g.queue} disabled={!funded || g.stake < BigInt(MIN_BUYIN) || g.phase === "queuing" || g.phase === "connecting"}
                     className="w-full bg-gradient-to-r from-amber-500 to-amber-600 text-zinc-950 font-black py-4 rounded-xl uppercase tracking-widest disabled:opacity-40">
                     {g.phase === "queuing" ? "Finding an opponent…" : g.phase === "connecting" ? "Connecting…" : "Find match"}
                   </button>
