@@ -37,10 +37,12 @@
     "@mysten/sui": "1.28.1",
     "@noble/curves": "^2.2.0",
     "@noble/hashes": "^1.8.0",
-    "dotenv": "^16.6.1"
+    "dotenv": "^16.6.1",
+    "ws": "^8.21.0"
   },
   "devDependencies": {
     "@types/node": "^20.19.43",
+    "@types/ws": "^8.18.1",
     "env-cmd": "^10.1.0",
     "prettier": "2.8.8",
     "tsx": "^4.22.4",
