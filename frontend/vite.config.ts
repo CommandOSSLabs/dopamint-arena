@@ -22,6 +22,7 @@ export default defineConfig(({ mode }) => {
       // same Transaction class dapp-kit signs — letting us reuse them instead of duplicating.
       dedupe: ["@mysten/sui", "@mysten/bcs"],
       alias: {
+        "@": fileURLToPath(new URL("./src", import.meta.url)),
         // The off-chain engine statically imports node:crypto in crypto-native.ts but
         // falls back to @noble at runtime in the browser. Map node:crypto to a stub so
         // the bundle resolves; the native path is never taken here.

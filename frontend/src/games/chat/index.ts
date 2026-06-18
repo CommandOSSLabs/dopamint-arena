@@ -5,5 +5,6 @@ register({
   id: "chat",
   name: "Chat",
   icon: "💬",
+  image: "/games/chat-app.png",
   Window: makePlaceholder("Chat"),
 });

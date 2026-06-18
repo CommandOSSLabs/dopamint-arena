@@ -5,5 +5,6 @@ register({
   id: "quantum-poker",
   name: "Quantum Poker",
   icon: "🎴",
+  image: "/games/poker.png",
   Window: makePlaceholder("Quantum Poker"),
 });

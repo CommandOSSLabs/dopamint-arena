@@ -208,6 +208,8 @@ export function useBlackjackSession(): BlackjackSession {
             if (moved && t.state.phase === "round_over" && t.state.balanceA !== prevBalanceA) {
               const delta = t.state.balanceA - prevBalanceA;
               report.pushTxn({
+                id: actionsRef.current,
+                game: "blackjack",
                 time: new Date().toLocaleTimeString("en-GB"),
                 bot: "Player Bot",
                 type: delta > 0n ? "Blackjack Win" : "Blackjack Loss",
