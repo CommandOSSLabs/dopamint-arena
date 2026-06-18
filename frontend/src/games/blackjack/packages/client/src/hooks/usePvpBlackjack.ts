@@ -16,9 +16,11 @@ type BlackjackState = BetBlackjackState;
 type BlackjackMove = BetBlackjackMove;
 
 const MP_URL = import.meta.env.VITE_MP_URL ?? "ws://127.0.0.1:8080";
-/** Per-seat bankroll deposited on-chain (MIST). The player picks the bet each round (25..1000),
- *  so 5000 keeps the 2D chip stacks meaningful while allowing many rounds at the default bet. */
-const STAKE = 5000n;
+/** Default buy-in (bankroll) deposited on-chain per seat (MIST). Each player chooses their own
+ *  before matchmaking; the bet protocol caps each round at min(both balances). */
+const DEFAULT_STAKE = 5000n;
+/** Buy-in options offered before "Find match" (MIST units, shown 1:1 as chips). */
+const FUND_OPTIONS = [2500, 5000, 10000, 25000] as const;
 const BOT_MOVE_MS = 700; // player auto-bot move cadence
 const DEALER_MS = 600; // dealer reveal pause before auto-drawing
 const NEXT_MS = 900; // pause before auto-dealing the next round
@@ -65,10 +67,13 @@ export interface PvpView {
   betOptions: number[]; // chip denominations the player may bet now (filtered to ≤ tableMax)
   rounds: RoundResult[];
   auto: boolean;
+  stake: bigint; // this seat's chosen buy-in (locked once a match starts)
+  fundOptions: number[]; // buy-in choices offered before matchmaking
   walletAddress: string;
   walletBalance: bigint;
   digests: { create?: string; deposit?: string; close?: string };
   fund: () => void;
+  setStake: (amount: bigint) => void;
   queue: () => void;
   hit: () => void;
   stand: () => void;
@@ -92,6 +97,7 @@ export function usePvpBlackjack(): PvpView {
   const [state, setState] = useState<BlackjackState | null>(null);
   const [rounds, setRounds] = useState<RoundResult[]>([]);
   const [auto, setAutoState] = useState(false);
+  const [stake, setStakeState] = useState<bigint>(DEFAULT_STAKE);
   const [walletBalance, setWalletBalance] = useState<bigint>(0n);
   const [digests, setDigests] = useState<{ create?: string; deposit?: string; close?: string }>({});
 
@@ -100,6 +106,7 @@ export function usePvpBlackjack(): PvpView {
   const roleRef = useRef<"A" | "B" | null>(null);
   const autoRef = useRef(false);
   const lastBetRef = useRef<number>(DEFAULT_BET); // remembered bet for auto rounds; set on every player bet
+  const stakeRef = useRef<bigint>(DEFAULT_STAKE); // chosen buy-in, read inside onMatch without stale closures
   const createdAtRef = useRef<bigint>(0n);
   const matchIdRef = useRef<string>("");
   const settledRef = useRef(false);
@@ -108,6 +115,8 @@ export function usePvpBlackjack(): PvpView {
   const openedResolveRef = useRef<((id: string) => void) | null>(null);
   const settleResolveRef = useRef<((sig: Uint8Array) => void) | null>(null);
   const bufferedSettleRef = useRef<Uint8Array | null>(null);
+  const stakeResolveRef = useRef<((amount: bigint) => void) | null>(null);
+  const bufferedStakeRef = useRef<bigint | null>(null);
 
   const refreshBalance = useCallback(async () => {
     try { const b = await client.getBalance({ owner: walletAddress }); setWalletBalance(BigInt(b.totalBalance)); } catch { /* ignore */ }
@@ -129,6 +138,9 @@ export function usePvpBlackjack(): PvpView {
       for (let i = 0; i < 8; i++) { await refreshBalance(); await new Promise((r) => setTimeout(r, 1500)); }
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
   })(); }, [walletAddress, refreshBalance]);
+
+  // Pick this seat's buy-in (only meaningful before a match; locked once playing).
+  const setStake = useCallback((amount: bigint) => { stakeRef.current = amount; setStakeState(amount); }, []);
 
   const finishSettle = useCallback(async (t: core.DistributedTunnel<BlackjackState, BlackjackMove>, relay: RelayClient, matchId: string) => {
     if (settledRef.current) return; settledRef.current = true;
@@ -172,6 +184,10 @@ export function usePvpBlackjack(): PvpView {
           const sig = hexToBytes(String(mm.sig));
           if (settleResolveRef.current) settleResolveRef.current(sig);
           else bufferedSettleRef.current = sig;
+        } else if (mm.t === "stake") {
+          const amt = BigInt(Math.floor(Number(mm.amount)));
+          if (stakeResolveRef.current) stakeResolveRef.current(amt);
+          else bufferedStakeRef.current = amt;
         } else if (mm.t === "closed") setDigests((d) => ({ ...d, close: String(mm.digest) }));
         else if (mm.t === "stop") {
           stoppingRef.current = true;
@@ -194,6 +210,15 @@ export function usePvpBlackjack(): PvpView {
       if (!attestOk) console.warn("[pvp] opponent attestation did not verify; proceeding (lobby identity is self-asserted in v1)");
       const oppEphPubkey = hexToBytes(oppHello.ephemeralPubkey);
 
+      // Exchange chosen buy-ins so both seats agree on the (possibly asymmetric) starting balances.
+      const myStake = stakeRef.current;
+      relay.sendApp(m.matchId, { t: "stake", amount: Number(myStake) });
+      const oppStake = bufferedStakeRef.current ?? await new Promise<bigint>((res) => { stakeResolveRef.current = res; });
+      // Party A is always the player, party B the dealer — independent of who deposits which buy-in.
+      const stakeA = m.role === "A" ? myStake : oppStake; // player's buy-in
+      const stakeB = m.role === "B" ? myStake : oppStake; // dealer's buy-in
+      const penalty = stakeA < stakeB ? stakeA : stakeB; // unused on cooperative close; keep ≤ both deposits
+
       // Roles: A = player (party A), B = dealer (party B). The DEALER (role B) opens the tunnel
       // and registers partyA = the player (the opponent), partyB = the dealer (self).
       let tunnelId: string;
@@ -202,7 +227,7 @@ export function usePvpBlackjack(): PvpView {
         const res = await submit(buildCreateAndShareTx(
           { walletAddress: m.opponentWallet, ephemeralPubkey: oppEphPubkey }, // partyA = player
           { walletAddress, ephemeralPubkey: myEph.coreKey.publicKey },        // partyB = dealer (self)
-          STAKE,
+          penalty,
         ));
         const id = parseTunnelId(res.objectChanges); if (!id) throw new Error("no tunnelId");
         tunnelId = id; setDigests((d) => ({ ...d, create: res.digest }));
@@ -218,7 +243,7 @@ export function usePvpBlackjack(): PvpView {
       createdAtRef.current = BigInt((fields?.created_at as string | undefined) ?? 0);
 
       setPhase("funding");
-      const dep = await submit(buildDepositTx(tunnelId, STAKE));
+      const dep = await submit(buildDepositTx(tunnelId, myStake));
       setDigests((d) => ({ ...d, deposit: dep.digest }));
       let activated = false;
       for (let i = 0; i < 40; i++) {
@@ -235,12 +260,12 @@ export function usePvpBlackjack(): PvpView {
         self: core.makeEndpoint(backend, walletAddress, { publicKey: myEph.coreKey.publicKey, scheme: 0, secretKey: myEph.coreKey.secretKey }, true),
         opponent: core.makeEndpoint(backend, m.opponentWallet, { publicKey: oppEphPubkey, scheme: 0 }, false),
         selfParty: m.role, // A = player, B = dealer
-      }, relay.transport(m.matchId), { a: STAKE, b: STAKE });
+      }, relay.transport(m.matchId), { a: stakeA, b: stakeB });
       tunnelRef.current = t;
 
       // Per-round log: record the player's (party A) result whenever a new round resolves.
       let lastLoggedRound = 0;
-      let lastBalanceA = Number(STAKE);
+      let lastBalanceA = Number(stakeA);
       const onAdvance = () => {
         const st = t.state;
         setState({ ...st });
@@ -323,6 +348,7 @@ export function usePvpBlackjack(): PvpView {
     setPhase("idle"); setState(null); setRole(null); setDigests({}); setRounds([]);
     settledRef.current = false; stoppingRef.current = false; autoRef.current = false; setAutoState(false);
     openedResolveRef.current = null; settleResolveRef.current = null; bufferedSettleRef.current = null;
+    stakeResolveRef.current = null; bufferedStakeRef.current = null;
   }, []);
 
   useEffect(() => () => relayRef.current?.close(), []);
@@ -355,7 +381,8 @@ export function usePvpBlackjack(): PvpView {
     round: s ? Number(s.round) : 0,
     gamePhase, myTurn, inRoundOver, terminal, outOfChips,
     currentBet, tableMax, betOptions, rounds, auto,
+    stake, fundOptions: [...FUND_OPTIONS],
     walletAddress, walletBalance, digests,
-    fund, queue, hit, stand, bet, stop, setAuto, leave,
+    fund, setStake, queue, hit, stand, bet, stop, setAuto, leave,
   };
 }

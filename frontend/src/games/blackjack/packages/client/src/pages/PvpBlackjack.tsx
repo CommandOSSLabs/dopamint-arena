@@ -225,6 +225,22 @@ export default function PvpBlackjack() {
               ) : (
                 <div className="w-full flex flex-col gap-3">
                   <div className="text-[11px] text-zinc-500 font-mono break-all text-center">{g.walletAddress.slice(0, 12)}… · {fmtSui(g.walletBalance)} SUI</div>
+                  {/* Buy-in: each player brings their own bankroll; the table caps bets at min(both). */}
+                  <div className="flex flex-col gap-1.5">
+                    <span className="text-[11px] text-zinc-400 uppercase tracking-widest text-center">Your buy-in</span>
+                    <div className="grid grid-cols-4 gap-2">
+                      {g.fundOptions.map((amt) => {
+                        const selected = g.stake === BigInt(amt);
+                        return (
+                          <button key={amt} onClick={() => g.setStake(BigInt(amt))}
+                            disabled={g.phase === "queuing" || g.phase === "connecting"}
+                            className={`py-2 rounded-lg text-xs font-black tabular-nums transition-colors disabled:opacity-40 ${selected ? "bg-amber-500 text-zinc-950" : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"}`}>
+                            ${amt.toLocaleString()}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
                   {!funded && <button onClick={g.fund} className="w-full bg-zinc-800 hover:bg-zinc-700 py-3 rounded-xl font-bold">Fund wallet (faucet)</button>}
                   <button onClick={g.queue} disabled={!funded || g.phase === "queuing" || g.phase === "connecting"}
                     className="w-full bg-gradient-to-r from-amber-500 to-amber-600 text-zinc-950 font-black py-4 rounded-xl uppercase tracking-widest disabled:opacity-40">
