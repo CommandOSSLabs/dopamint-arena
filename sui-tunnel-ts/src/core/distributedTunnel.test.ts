@@ -295,3 +295,55 @@ test("engine pair over a relay-shaped transport reaches a settleable terminal st
   assert.equal(settled.sigA.length, 64);
   assert.equal(settled.sigB.length, 64);
 });
+
+test("with-root settlement: both halves combine and preserve the anchored root", () => {
+  const { dtA, dtB } = makePair();
+  // advance two moves so state/balances are non-trivial
+  dtA.propose(0, 1n);
+  dtB.propose(0, 2n);
+  const root = new Uint8Array(32).fill(7);
+  const halfA = dtA.buildSettlementHalfWithRoot(9n, root, 0n);
+  const halfB = dtB.buildSettlementHalfWithRoot(9n, root, 0n);
+  const co = dtA.combineSettlementWithRoot(halfA.settlement, halfA.sigSelf, halfB.sigSelf);
+  assert.ok(bytesEqual(co.settlement.transcriptRoot, root), "anchored root preserved");
+  assert.equal(co.settlement.finalNonce, 1n); // onchainNonce(0) + 1
+  assert.equal(co.sigA.length, 64);
+  assert.equal(co.sigB.length, 64);
+});
+
+// The load-bearing parity: a distributed with-root settlement must be byte-identical to the
+// self-play one the contract already accepts. If these signatures diverge, the PvP close
+// verifies off-chain but FAILS at close_cooperative_with_root — a money-at-stake bug.
+test("with-root halves match OffchainTunnel.buildSettlementWithRoot byte-for-byte", () => {
+  const { dtA, dtB, keyA, keyB, addrA, addrB } = makePair();
+  const self = OffchainTunnel.selfPlay(counterProtocol, "0x7", keyA, keyB, addrA, addrB, BAL);
+  const seq: Array<{ by: Party; ts: bigint }> = [
+    { by: "A", ts: 11n },
+    { by: "B", ts: 22n },
+  ];
+  for (const { by, ts } of seq) {
+    self.step(0, by, { timestamp: ts, mode: "full" });
+    (by === "A" ? dtA : dtB).propose(0, ts);
+  }
+  const root = new Uint8Array(32).fill(3);
+  const selfSettle = self.buildSettlementWithRoot(99n, root);
+  const halfA = dtA.buildSettlementHalfWithRoot(99n, root);
+  const halfB = dtB.buildSettlementHalfWithRoot(99n, root);
+  const combined = dtA.combineSettlementWithRoot(halfA.settlement, halfA.sigSelf, halfB.sigSelf);
+  assert.ok(bytesEqual(combined.sigA, selfSettle.sigA), "with-root sigA parity");
+  assert.ok(bytesEqual(combined.sigB, selfSettle.sigB), "with-root sigB parity");
+  assert.ok(bytesEqual(combined.settlement.transcriptRoot, selfSettle.settlement.transcriptRoot));
+});
+
+test("combineSettlementWithRoot rejects a bad opponent signature", () => {
+  const { dtA, dtB } = makePair();
+  dtA.propose(0, 1n);
+  const root = new Uint8Array(32).fill(5);
+  const halfA = dtA.buildSettlementHalfWithRoot(9n, root);
+  void dtB.buildSettlementHalfWithRoot(9n, root);
+  const bogus = new Uint8Array(64).fill(9);
+  assert.throws(
+    () => dtA.combineSettlementWithRoot(halfA.settlement, halfA.sigSelf, bogus),
+    /signature failed verification/,
+  );
+});
