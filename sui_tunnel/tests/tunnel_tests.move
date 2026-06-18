@@ -840,6 +840,80 @@ fun htlc_resolve_dispute_external_distributes_full_remaining_balance() {
     scenario.end();
 }
 
+// A party must not be able to `raise_dispute` with a stale,
+// self-favorable (but validly co-signed) state and immediately settle it with a
+// proof before the counterparty can override it via `resolve_dispute`.
+#[
+    test,
+    expected_failure(
+        abort_code = sui_tunnel::tunnel::ETimeoutNotReached,
+        location = sui_tunnel::tunnel,
+    ),
+]
+fun resolve_dispute_verified_rejects_before_challenge_window() {
+    let mut ctx = sui::tx_context::dummy();
+    let mut clock = clock::create_for_testing(&mut ctx);
+    clock.set_for_testing(1000);
+
+    // The dummy sender @0x0 is party_a so it can open the dispute.
+    let mut tunnel = tunnel::create_active_for_testing<SUI>(
+        @0x0,
+        @0xBBBB,
+        1000,
+        500,
+        60000,
+        0,
+        &clock,
+        &mut ctx,
+    );
+    tunnel::raise_dispute_current_state(&mut tunnel, &clock, &ctx);
+
+    // Window has NOT elapsed (clock 1000, timeout 60000): settlement must abort.
+    tunnel::resolve_dispute_verified(&mut tunnel, 900, 600, &clock, &mut ctx);
+
+    abort
+}
+
+#[test]
+fun resolve_dispute_verified_settles_after_challenge_window() {
+    let party_a = @0xAAAA;
+    let party_b = @0xBBBB;
+    let mut scenario = test_scenario::begin(party_a);
+    let mut clock = clock::create_for_testing(scenario.ctx());
+    clock.set_for_testing(1000);
+
+    // deposits a=1000, b=500 -> combined balance 1500
+    let mut tunnel = tunnel::create_active_for_testing<SUI>(
+        party_a,
+        party_b,
+        1000,
+        500,
+        60000,
+        0,
+        &clock,
+        scenario.ctx(),
+    );
+
+    tunnel::raise_dispute_current_state(&mut tunnel, &clock, scenario.ctx());
+
+    // Wait out the challenge window, then settle on a proof-verified split.
+    clock.set_for_testing(1000 + 60000 + 1);
+    tunnel::resolve_dispute_verified(&mut tunnel, 900, 600, &clock, scenario.ctx());
+    assert_eq!(tunnel::status(&tunnel), tunnel::status_closed());
+
+    scenario.next_tx(party_a);
+    let coin_a = scenario.take_from_address<coin::Coin<SUI>>(party_a);
+    let coin_b = scenario.take_from_address<coin::Coin<SUI>>(party_b);
+    assert_eq!(coin_a.value(), 900);
+    assert_eq!(coin_b.value(), 600);
+    coin_a.burn_for_testing();
+    coin_b.burn_for_testing();
+
+    tunnel::destroy_for_testing(tunnel);
+    clock.destroy_for_testing();
+    scenario.end();
+}
+
 // ============================================
 // CLOSE COOPERATIVE TESTS
 // ============================================
