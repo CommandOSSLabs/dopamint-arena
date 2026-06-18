@@ -164,6 +164,7 @@ impl ControlStore for RedisControlStore {
             active_tunnels: active as u64,
             settled_tunnels: settled as u64,
             per_game,
+            recent_events: Vec::new(),
         }
     }
 

@@ -104,6 +104,7 @@ impl ControlStore for InMemoryControlStore {
             active_tunnels: self.active_tunnels.load(Ordering::Relaxed),
             settled_tunnels: self.settled_tunnels.load(Ordering::Relaxed),
             per_game,
+            recent_events: Vec::new(),
         }
     }
 
