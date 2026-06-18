@@ -168,6 +168,11 @@ impl ControlStore for RedisControlStore {
         }
     }
 
+    // TEMPORARY stub so the trait is satisfied and the crate compiles; Task 3 replaces these
+    // with the real Lua-backed implementation.
+    async fn push_recent_event(&self, _ev: crate::state::TunnelEvent) {}
+    async fn recent_events(&self) -> Vec<crate::state::TunnelEvent> { Vec::new() }
+
     // fred 9.4.0: ping takes no argument (cheat-sheet erroneously shows `ping::<String>(None)`).
     async fn ready(&self) -> bool {
         self.pool.ping::<String>().await.is_ok()
