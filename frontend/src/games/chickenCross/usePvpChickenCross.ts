@@ -93,8 +93,7 @@ export function usePvpChickenCross(): PvpChickenCross {
     const dt = dtRef.current;
     const myRole = roleRef.current;
     if (!dt || !myRole) return;
-    const proto = dt.protocol as CrossProtocol;
-    if (proto.isTerminal(dt.state)) return;
+    if (dt.protocol.isTerminal(dt.state)) return;
     if (turn(dt.nonce) !== myRole) return;
 
     // Clear any pending timer so we don't double-schedule.
@@ -108,8 +107,7 @@ export function usePvpChickenCross(): PvpChickenCross {
       const dtNow = dtRef.current;
       const myRoleNow = roleRef.current;
       if (!dtNow || !myRoleNow) return;
-      const protoNow = dtNow.protocol as CrossProtocol;
-      if (protoNow.isTerminal(dtNow.state)) return;
+      if (dtNow.protocol.isTerminal(dtNow.state)) return;
       if (turn(dtNow.nonce) !== myRoleNow) return;
 
       const dir = myDirRef.current;
@@ -142,12 +140,16 @@ export function usePvpChickenCross(): PvpChickenCross {
     setError(null);
   }, []);
 
-  // Cleanup on unmount.
+  // Cleanup on unmount — tear down timer, relay connection, and engine.
   useEffect(() => {
     return () => {
       if (proposeTimerRef.current !== null) {
         clearTimeout(proposeTimerRef.current);
+        proposeTimerRef.current = null;
       }
+      mpRef.current?.close();
+      mpRef.current = null;
+      dtRef.current = null;
     };
   }, []);
 

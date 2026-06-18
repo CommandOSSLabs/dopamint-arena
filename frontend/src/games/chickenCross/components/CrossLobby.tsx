@@ -24,6 +24,8 @@ export function CrossLobby({
     const code = input.trim().toUpperCase() || randomCode();
     setActiveCode(code);
     setInput(code);
+    // Seat role (A/B) is assigned by relay arrival order (earlier waiter = A),
+    // NOT by which button was clicked — the create-first UX makes the creator A in practice.
     onCreate(code);
   };
 
