@@ -624,9 +624,11 @@ Create `frontend/src/games/chickenCross/session-core.test.ts`:
 ```ts
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { CrossProtocol, MIN_STAKE } from "sui-tunnel-ts/protocol/cross";
-import { OffchainTunnel } from "sui-tunnel-ts/core/tunnel";
-import { createParticipant } from "sui-tunnel-ts/core/keys";
+// Runtime SDK imports use RELATIVE .ts paths (tsx ignores the vite alias / tsconfig paths at
+// runtime). This mirrors frontend/src/games/blackjack/session-core.test.ts exactly.
+import { CrossProtocol, MIN_STAKE } from "../../../../sui-tunnel-ts/src/protocol/cross.ts";
+import { OffchainTunnel } from "../../../../sui-tunnel-ts/src/core/tunnel.ts";
+import { createParticipant } from "../../../../sui-tunnel-ts/src/core/keys.ts";
 import { stepSession, deriveView, sessionResult } from "./session-core.ts";
 
 function freshTunnel() {
@@ -675,7 +677,7 @@ test("sessionResult maps a terminal state to A | B | push", () => {
 Run: `cd frontend && node --import tsx --test "src/games/chickenCross/session-core.test.ts"`
 Expected: FAIL — `Cannot find module './session-core.ts'`.
 
-> Note: these imports resolve under tsx because `sui-tunnel-ts` is a real on-disk path the SDK self-references; `session-core.test.ts` deliberately imports only the runtime-safe SDK engine (`OffchainTunnel`, `CrossProtocol`, `createParticipant`) — never Vite-only modules.
+> Note: the test imports the runtime-safe SDK engine (`OffchainTunnel`, `CrossProtocol`, `createParticipant`) via **relative `.ts` paths** — exactly like `frontend/src/games/blackjack/session-core.test.ts` does (`../../../../sui-tunnel-ts/src/...`). tsx does NOT honor the vite alias or tsconfig `paths` at runtime, so the bare `sui-tunnel-ts/...` specifier only works for `import type` (erased at runtime, resolved by tsconfig `paths` during `tsc`). Never import a Vite-only module here.
 
 - [ ] **Step 3: Write the session-core**
 
