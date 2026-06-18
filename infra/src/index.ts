@@ -99,6 +99,8 @@ const backend = createBackend({
   taskRoleArn: iam.taskRole.arn,
   logGroupName: ecs.logGroupName,
   settlerKeySecretArn,
+  cpu: cfg.backendTaskCpu,
+  memory: cfg.backendTaskMemory,
 });
 
 const backendService = createBackendService({

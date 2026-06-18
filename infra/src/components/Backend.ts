@@ -20,6 +20,8 @@ export interface BackendArgs {
   // Secrets Manager ARN holding the base64 ed25519 settler key, injected as
   // SUI_SETTLER_KEY via ECS `secrets`. Omitted => the env var is simply absent.
   settlerKeySecretArn?: pulumi.Input<string>;
+  cpu?: pulumi.Input<string>;
+  memory?: pulumi.Input<string>;
 }
 
 function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
@@ -112,8 +114,8 @@ export function createBackend(args: BackendArgs): BackendOutputs {
     family: `${name}-backend`,
     networkMode: "awsvpc",
     requiresCompatibilities: ["FARGATE"],
-    cpu: "1024",
-    memory: "2048",
+    cpu: args.cpu ?? "1024",
+    memory: args.memory ?? "2048",
     runtimePlatform: { cpuArchitecture: "ARM64", operatingSystemFamily: "LINUX" },
     executionRoleArn: args.taskExecutionRoleArn,
     taskRoleArn: args.taskRoleArn,
