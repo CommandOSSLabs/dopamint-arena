@@ -1,0 +1,2 @@
+# Agent wallet secrets + any local artifacts — never commit.
+keys.json

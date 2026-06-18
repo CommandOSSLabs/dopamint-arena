@@ -199,8 +199,11 @@ export async function runAgent(
   shouldStop: () => boolean,
 ): Promise<void> {
   const connectKey = generateKeyPair(); // authenticates the one shared WS
-  const mp = new MpClient(resolveMpWsUrl(resolveBackendUrl()), deps.wallet, connectKey);
+  const wsUrl = resolveMpWsUrl(resolveBackendUrl());
+  deps.onStatus?.(`ws:connecting:${wsUrl}`);
+  const mp = new MpClient(wsUrl, deps.wallet, connectKey);
   await mp.connect();
+  deps.onStatus?.("ws:connected");
 
   // Serialize this wallet's on-chain txs (one gas coin -> no Sui equivocation).
   let chain: Promise<unknown> = Promise.resolve();

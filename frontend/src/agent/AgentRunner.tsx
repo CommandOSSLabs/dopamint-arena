@@ -17,25 +17,31 @@ export function AgentRunner() {
   useEffect(() => {
     if (!account || started.current) return;
     started.current = true;
-    const stop = { v: false };
     const signExec = async (tx: Parameters<typeof mutateAsync>[0]["transaction"]) => {
       const r = await mutateAsync({ transaction: tx });
       return { digest: r.digest };
     };
     const { concurrency } = parseAgentConfig(window.location.href);
-    void runAgent(
+    // No cleanup-stop: under React.StrictMode the dev double-invoke (mount→cleanup→mount)
+    // would cancel the still-connecting first run. The agent runs for the page's lifetime;
+    // the Playwright/real browser context closing is what ends it.
+    runAgent(
       {
         wallet: account.address,
         signExec,
         reads: client as unknown as SuiReads,
-        onStatus: setStatus,
+        onStatus: (s) => {
+          console.log("[agentstatus]", s);
+          setStatus(s);
+        },
       },
       concurrency,
-      () => stop.v,
-    );
-    return () => {
-      stop.v = true;
-    };
+      () => false,
+    ).catch((e) => {
+      // A rejected runAgent isn't a pageerror — surface it so the proof/console can see it.
+      console.error("[agent] runAgent failed:", e);
+      setStatus(`fatal:${String((e as Error)?.message ?? e)}`);
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [account]);
 
