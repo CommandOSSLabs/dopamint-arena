@@ -24,6 +24,25 @@ export interface Heartbeat {
   windowMs: number;
 }
 
+/** Mirrors the backend `TunnelEventKind` (serde lowercase). */
+export type TunnelEventKind = "opened" | "settled";
+
+/**
+ * One settlement-projection row from the backend (ADR-0005). camelCase per ADR-0002; u64 balances
+ * arrive as JSON numbers, `Option<_>` as nullable. `proofUrl`/`transcriptRoot` are present only
+ * once a close is archived (the /settle plan); explorer-only rows omit them.
+ */
+export interface TunnelEvent {
+  tunnelId: string;
+  kind: TunnelEventKind;
+  partyABalance: number | null;
+  partyBBalance: number | null;
+  transcriptRoot: string | null;
+  txDigest: string;
+  timestampMs: number;
+  proofUrl: string | null;
+}
+
 /** Per-game slice of the live aggregate feed. Field names match the backend's serde. */
 export interface GameStats {
   tps: number;
@@ -38,6 +57,8 @@ export interface StatsSnapshot {
   activeTunnels: number;
   settledTunnels: number;
   perGame: Record<string, GameStats>;
+  /** Newest-first ring of recent lifecycle rows; absent on frames before the backend emits any. */
+  recentEvents?: TunnelEvent[];
 }
 
 export interface ControlPlaneClient {
@@ -119,10 +140,10 @@ export function createControlPlaneClient(baseUrl: string): ControlPlaneClient {
 }
 
 /**
- * Resolve the backend base URL from VITE_BACKEND_URL. Set it to the ALB for the usual
- * cross-origin case — the backend serves CORS headers (main.rs). Leave it empty ONLY for
- * a same-origin deploy (frontend behind the same host as the backend); there is no dev
- * proxy fallback anymore, so an empty value in dev resolves to the dev server itself.
+ * Resolve the backend base URL. Empty (the default) means same-origin: dev proxies /v1 to
+ * the ALB via vite.config.ts, and prod routes /v1 to the ALB via the CloudFront `/v1/*`
+ * behavior — so the browser only ever issues same-origin requests. Set VITE_BACKEND_URL to
+ * an absolute URL only for a split-origin backend on its own https host (then CORS applies).
  */
 export function resolveBackendUrl(): string {
   return import.meta.env.VITE_BACKEND_URL ?? "";
