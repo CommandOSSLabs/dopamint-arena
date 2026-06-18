@@ -22,10 +22,55 @@ pub async fn mp_upgrade(State(state): State<SharedState>, ws: WebSocketUpgrade) 
 fn new_match_id() -> String {
     format!("match_{}", Uuid::new_v4().simple())
 }
+
+/// Cached routing decision for a single connection after matchmaking.
+/// Lets the relay path avoid a Redis lookup on every move.
+#[derive(Clone, Debug)]
+struct MatchRouting {
+    match_id: String,
+    game: String,
+    opponent: ConnRef,
+}
+
+/// Mutable per-connection state carried across WebSocket messages.
+struct ConnState {
+    wallet: Option<String>,
+    joined_games: HashSet<String>,
+    match_routing: Option<MatchRouting>,
+}
+
 fn here(state: &SharedState, conn: ConnId) -> ConnRef {
     ConnRef {
         instance_id: state.bus.instance_id().to_owned(),
         conn_id: conn,
+    }
+}
+
+/// Returns the ConnRef of the other seat in `rec`, or `None` if `conn_id` is not a seat.
+fn other_seat(rec: &MatchRecord, conn_id: ConnId) -> Option<ConnRef> {
+    if rec.conn_a.conn_id == conn_id {
+        Some(rec.conn_b.clone())
+    } else if rec.conn_b.conn_id == conn_id {
+        Some(rec.conn_a.clone())
+    } else {
+        None
+    }
+}
+
+/// Seeds `conn_state.match_routing` from a freshly created match record.
+fn seed_match_routing(
+    conn_state: &mut ConnState,
+    conn_id: ConnId,
+    match_id: String,
+    game: String,
+    rec: &MatchRecord,
+) {
+    if let Some(opponent) = other_seat(rec, conn_id) {
+        conn_state.match_routing = Some(MatchRouting {
+            match_id,
+            game,
+            opponent,
+        });
     }
 }
 
@@ -86,8 +131,11 @@ async fn handle_socket(socket: WebSocket, state: SharedState) {
         .to_text(),
     );
 
-    let mut wallet: Option<String> = None;
-    let mut joined_games: HashSet<String> = HashSet::new();
+    let mut conn_state = ConnState {
+        wallet: None,
+        joined_games: HashSet::new(),
+        match_routing: None,
+    };
 
     let mut keepalive = tokio::time::interval(KEEPALIVE_PING_INTERVAL);
     // A stall in `handle_message` must not burst-fire catch-up ticks and trip the
@@ -143,8 +191,7 @@ async fn handle_socket(socket: WebSocket, state: SharedState) {
                     &tx,
                     conn_id,
                     &nonce,
-                    &mut wallet,
-                    &mut joined_games,
+                    &mut conn_state,
                     client_msg,
                 )
                 .await
@@ -156,9 +203,9 @@ async fn handle_socket(socket: WebSocket, state: SharedState) {
     }
 
     // Disconnect cleanup: conditional presence clear + leave every joined queue.
-    if let Some(w) = wallet {
+    if let Some(w) = conn_state.wallet {
         state.mp.clear_presence_if(&w, conn_id).await;
-        for g in joined_games {
+        for g in conn_state.joined_games {
             state.mp.leave_queue(&g, &w).await;
         }
     }
@@ -170,8 +217,7 @@ async fn handle_message(
     tx: &mpsc::UnboundedSender<String>,
     conn_id: ConnId,
     nonce: &str,
-    wallet: &mut Option<String>,
-    joined: &mut HashSet<String>,
+    conn_state: &mut ConnState,
     msg: ClientMsg,
 ) -> Result<(), &'static str> {
     match msg {
@@ -189,12 +235,16 @@ async fn handle_message(
             }
             state.bus.register(conn_id, tx.clone());
             state.mp.set_presence(&w, here(state, conn_id)).await;
-            *wallet = Some(w);
+            conn_state.wallet = Some(w);
             Ok(())
         }
         other => {
-            let w = wallet.as_ref().ok_or("not_authenticated")?.clone();
-            handle_authed(state, conn_id, &w, joined, other).await
+            let w = conn_state
+                .wallet
+                .as_ref()
+                .ok_or("not_authenticated")?
+                .clone();
+            handle_authed(state, conn_id, &w, conn_state, other).await
         }
     }
 }
@@ -203,12 +253,12 @@ async fn handle_authed(
     state: &SharedState,
     conn_id: ConnId,
     wallet: &str,
-    joined: &mut HashSet<String>,
+    conn_state: &mut ConnState,
     msg: ClientMsg,
 ) -> Result<(), &'static str> {
     match msg {
         ClientMsg::QueueJoin { game } => {
-            joined.insert(game.clone());
+            conn_state.joined_games.insert(game.clone());
             let me = Waiting {
                 wallet: wallet.to_owned(),
                 conn: here(state, conn_id),
@@ -216,6 +266,7 @@ async fn handle_authed(
             if let Some(opp) = state.mp.join_or_pair(&game, me).await {
                 let (match_id, rec) = build_quick_match(&game, opp, wallet, here(state, conn_id));
                 state.mp.put_match(&match_id, rec.clone()).await;
+                seed_match_routing(conn_state, conn_id, match_id.clone(), game.clone(), &rec);
                 state
                     .bus
                     .deliver(
@@ -246,7 +297,7 @@ async fn handle_authed(
             Ok(())
         }
         ClientMsg::QueueLeave => {
-            for g in joined.drain() {
+            for g in conn_state.joined_games.drain() {
                 state.mp.leave_queue(&g, wallet).await;
             }
             Ok(())
@@ -291,6 +342,13 @@ async fn handle_authed(
             };
             let rec = build_challenge_match(&inv, wallet, here(state, conn_id));
             state.mp.put_match(&match_id, rec.clone()).await;
+            seed_match_routing(
+                conn_state,
+                conn_id,
+                match_id.clone(),
+                rec.game.clone(),
+                &rec,
+            );
             state
                 .bus
                 .deliver(
@@ -349,17 +407,35 @@ async fn handle_authed(
             // parity with self-play's per-update heartbeat. The ACK half is a separate
             // frame and is skipped (else every move double-counts). Only the transport
             // envelope (`t`/`kind`) is read; the game-specific move payload stays opaque.
-            if relay_payload_is_move(&payload) {
-                if let Some(m) = state.mp.get_match(&match_id).await {
-                    state.control.add_actions(&m.game, 1).await;
+            let routing = if let Some(r) = conn_state
+                .match_routing
+                .as_ref()
+                .filter(|r| r.match_id == match_id)
+            {
+                r.clone()
+            } else if let Some(m) = state.mp.get_match(&match_id).await {
+                let Some(opponent) = other_seat(&m, conn_id) else {
+                    return Ok(());
+                };
+                MatchRouting {
+                    match_id: match_id.clone(),
+                    game: m.game.clone(),
+                    opponent,
                 }
+            } else {
+                return Ok(());
+            };
+            conn_state.match_routing = Some(routing.clone());
+
+            if relay_payload_is_move(&payload) {
+                state.control.add_actions(&routing.game, 1).await;
             }
             let envelope = ServerMsg::Relay {
                 match_id: match_id.clone(),
                 payload,
             }
             .to_text();
-            forward_to_other(state, &match_id, conn_id, envelope).await;
+            state.bus.deliver(&routing.opponent, envelope).await;
             Ok(())
         }
         ClientMsg::WatchtowerCheckpoint {
@@ -391,14 +467,7 @@ async fn forward_to_other(state: &SharedState, match_id: &str, from: ConnId, tex
     let Some(m) = state.mp.get_match(match_id).await else {
         return;
     };
-    let target = if m.conn_a.conn_id == from {
-        Some(m.conn_b)
-    } else if m.conn_b.conn_id == from {
-        Some(m.conn_a)
-    } else {
-        None
-    };
-    if let Some(t) = target {
+    if let Some(t) = other_seat(&m, from) {
         state.bus.deliver(&t, text).await;
     }
 }
@@ -596,20 +665,30 @@ mod tests {
     // game actions at all. Miscount any of these and PvP TPS is wrong.
     #[test]
     fn only_move_frames_count_as_actions() {
-        assert!(relay_payload_is_move(&relay_frame("move")), "MOVE is an action");
+        assert!(
+            relay_payload_is_move(&relay_frame("move")),
+            "MOVE is an action"
+        );
         assert!(!relay_payload_is_move(&relay_frame("ack")), "ACK is not");
         let hello = serde_json::json!({ "t": "hello", "ephemeralPubkey": "0xaa" }).to_string();
-        assert!(!relay_payload_is_move(&hello), "peer messages are not actions");
-        assert!(!relay_payload_is_move("not json"), "malformed payload is not a move");
+        assert!(
+            !relay_payload_is_move(&hello),
+            "peer messages are not actions"
+        );
+        assert!(
+            !relay_payload_is_move("not json"),
+            "malformed payload is not a move"
+        );
     }
 
     // The behavior that was missing in PvP: a relayed MOVE must feed the actions counter
-    // (so it shows up as TPS), while its ACK half must not double-count.
+    // (so it shows up as TPS), while its ACK half must not double-count. Each connection
+    // must carry its own routing cache so the relay actually reaches the opposite seat.
     #[tokio::test]
     async fn relayed_move_records_one_action_and_ack_does_not() {
         let state = test_state();
-        let (conn_a, _rx_a) = make_conn_ref(&state);
-        let (conn_b, _rx_b) = make_conn_ref(&state);
+        let (conn_a, mut rx_a) = make_conn_ref(&state);
+        let (conn_b, mut rx_b) = make_conn_ref(&state);
         let inst = state.bus.instance_id().to_owned();
         let rec = MatchRecord {
             game: "tictactoe".into(),
@@ -627,13 +706,17 @@ mod tests {
             latest_checkpoint: None,
         };
         state.mp.put_match("m1", rec).await;
-        let mut joined = HashSet::new();
 
+        let mut conn_state_a = ConnState {
+            wallet: None,
+            joined_games: HashSet::new(),
+            match_routing: None,
+        };
         handle_authed(
             &state,
             conn_a,
             "0xa",
-            &mut joined,
+            &mut conn_state_a,
             ClientMsg::Relay {
                 match_id: "m1".into(),
                 payload: relay_frame("move"),
@@ -646,12 +729,26 @@ mod tests {
             1,
             "a relayed MOVE must record one action"
         );
+        assert!(rx_b.try_recv().is_ok(), "MOVE must be delivered to seat B");
+        assert!(rx_a.try_recv().is_err(), "MOVE must not echo to seat A");
+        let a_routing = conn_state_a
+            .match_routing
+            .as_ref()
+            .expect("A's cache must be populated by fallback");
+        assert_eq!(a_routing.match_id, "m1");
+        assert_eq!(a_routing.game, "tictactoe");
+        assert_eq!(a_routing.opponent.conn_id, conn_b);
 
+        let mut conn_state_b = ConnState {
+            wallet: None,
+            joined_games: HashSet::new(),
+            match_routing: None,
+        };
         handle_authed(
             &state,
             conn_b,
             "0xb",
-            &mut joined,
+            &mut conn_state_b,
             ClientMsg::Relay {
                 match_id: "m1".into(),
                 payload: relay_frame("ack"),
@@ -664,5 +761,286 @@ mod tests {
             1,
             "the ACK half must not add a second action"
         );
+        assert!(rx_a.try_recv().is_ok(), "ACK must be delivered to seat A");
+        assert!(rx_b.try_recv().is_err(), "ACK must not echo to seat B");
+        let b_routing = conn_state_b
+            .match_routing
+            .as_ref()
+            .expect("B's cache must be populated by fallback");
+        assert_eq!(b_routing.match_id, "m1");
+        assert_eq!(b_routing.game, "tictactoe");
+        assert_eq!(b_routing.opponent.conn_id, conn_a);
+    }
+
+    // Cache-hit path: a Relay whose ConnState already holds the routing must reach the
+    // cached opponent and count the action without touching the store.
+    #[tokio::test]
+    async fn cache_hit_relay_routes_without_fallback() {
+        let state = test_state();
+        let (conn_a, mut rx_a) = make_conn_ref(&state);
+        let (conn_b, mut rx_b) = make_conn_ref(&state);
+        let inst = state.bus.instance_id().to_owned();
+
+        // Intentionally no MatchRecord in the store: the only path is the cache.
+        let mut conn_state_a = ConnState {
+            wallet: None,
+            joined_games: HashSet::new(),
+            match_routing: Some(MatchRouting {
+                match_id: "m1".into(),
+                game: "tictactoe".into(),
+                opponent: ConnRef {
+                    instance_id: inst,
+                    conn_id: conn_b,
+                },
+            }),
+        };
+
+        handle_authed(
+            &state,
+            conn_a,
+            "0xa",
+            &mut conn_state_a,
+            ClientMsg::Relay {
+                match_id: "m1".into(),
+                payload: relay_frame("move"),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            state.control.snapshot().await.total_actions,
+            1,
+            "cache-hit MOVE must record one action"
+        );
+        assert!(
+            rx_b.try_recv().is_ok(),
+            "cache-hit MOVE must reach cached opponent"
+        );
+        assert!(
+            rx_a.try_recv().is_err(),
+            "cache-hit MOVE must not echo to sender"
+        );
+    }
+
+    // A stale or mismatched cache must not prevent a Relay for a different match from
+    // falling back to the store and updating the cache to the correct route.
+    #[tokio::test]
+    async fn relay_cache_miss_falls_back_and_updates_cache() {
+        let state = test_state();
+        let (conn_a, mut rx_a) = make_conn_ref(&state);
+        let (conn_b, mut rx_b) = make_conn_ref(&state);
+        let (conn_c, mut rx_c) = make_conn_ref(&state);
+        let inst = state.bus.instance_id().to_owned();
+
+        state
+            .mp
+            .put_match(
+                "m1",
+                MatchRecord {
+                    game: "tictactoe".into(),
+                    seat_a: "0xa".into(),
+                    seat_b: "0xb".into(),
+                    conn_a: ConnRef {
+                        instance_id: inst.clone(),
+                        conn_id: conn_a,
+                    },
+                    conn_b: ConnRef {
+                        instance_id: inst.clone(),
+                        conn_id: conn_b,
+                    },
+                    tunnel_id: None,
+                    latest_checkpoint: None,
+                },
+            )
+            .await;
+
+        state
+            .mp
+            .put_match(
+                "m2",
+                MatchRecord {
+                    game: "chess".into(),
+                    seat_a: "0xa".into(),
+                    seat_b: "0xc".into(),
+                    conn_a: ConnRef {
+                        instance_id: inst.clone(),
+                        conn_id: conn_a,
+                    },
+                    conn_b: ConnRef {
+                        instance_id: inst,
+                        conn_id: conn_c,
+                    },
+                    tunnel_id: None,
+                    latest_checkpoint: None,
+                },
+            )
+            .await;
+
+        // A's cache points to B from m1, but it relays a move for m2.
+        let mut conn_state_a = ConnState {
+            wallet: None,
+            joined_games: HashSet::new(),
+            match_routing: Some(MatchRouting {
+                match_id: "m1".into(),
+                game: "tictactoe".into(),
+                opponent: ConnRef {
+                    instance_id: "other-instance".into(),
+                    conn_id: conn_b,
+                },
+            }),
+        };
+
+        handle_authed(
+            &state,
+            conn_a,
+            "0xa",
+            &mut conn_state_a,
+            ClientMsg::Relay {
+                match_id: "m2".into(),
+                payload: relay_frame("move"),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            rx_c.try_recv().is_ok(),
+            "m2 MOVE must reach m2 opponent (C)"
+        );
+        assert!(
+            rx_a.try_recv().is_err(),
+            "sender must not receive its own relay"
+        );
+        assert!(
+            rx_b.try_recv().is_err(),
+            "cached m1 opponent must not receive m2 relay"
+        );
+
+        let routing = conn_state_a
+            .match_routing
+            .as_ref()
+            .expect("cache must be updated to m2");
+        assert_eq!(routing.match_id, "m2");
+        assert_eq!(routing.game, "chess");
+        assert_eq!(routing.opponent.conn_id, conn_c);
+    }
+
+    // QueueJoin populates the local connection's cache immediately. The opponent lazily
+    // populates its own cache on its first Relay fallback.
+    #[tokio::test]
+    async fn queue_join_populates_local_routing() {
+        let state = test_state();
+        let (conn_a, mut _rx_a) = make_conn_ref(&state);
+        let (conn_b, mut _rx_b) = make_conn_ref(&state);
+
+        let mut conn_state_a = ConnState {
+            wallet: None,
+            joined_games: HashSet::new(),
+            match_routing: None,
+        };
+        handle_authed(
+            &state,
+            conn_a,
+            "0xa",
+            &mut conn_state_a,
+            ClientMsg::QueueJoin { game: "ttt".into() },
+        )
+        .await
+        .unwrap();
+        assert!(
+            conn_state_a.match_routing.is_none(),
+            "waiter has no routing yet"
+        );
+
+        let mut conn_state_b = ConnState {
+            wallet: None,
+            joined_games: HashSet::new(),
+            match_routing: None,
+        };
+        handle_authed(
+            &state,
+            conn_b,
+            "0xb",
+            &mut conn_state_b,
+            ClientMsg::QueueJoin { game: "ttt".into() },
+        )
+        .await
+        .unwrap();
+
+        let b_routing = conn_state_b
+            .match_routing
+            .as_ref()
+            .expect("joiner must have routing after pairing");
+        assert_eq!(b_routing.game, "ttt");
+        assert_eq!(b_routing.opponent.conn_id, conn_a);
+    }
+
+    // ChallengeAccept populates the accepter's local cache immediately. The inviter
+    // lazily populates its own cache on its first Relay fallback.
+    #[tokio::test]
+    async fn challenge_accept_populates_local_routing() {
+        let state = test_state();
+        let (conn_inviter, mut _rx_inviter) = make_conn_ref(&state);
+        let (conn_accepter, mut rx_accepter) = make_conn_ref(&state);
+
+        state
+            .mp
+            .set_presence("0xinviter", here(&state, conn_inviter))
+            .await;
+        state
+            .mp
+            .set_presence("0xaccepter", here(&state, conn_accepter))
+            .await;
+
+        let mut conn_state_inviter = ConnState {
+            wallet: None,
+            joined_games: HashSet::new(),
+            match_routing: None,
+        };
+        handle_authed(
+            &state,
+            conn_inviter,
+            "0xinviter",
+            &mut conn_state_inviter,
+            ClientMsg::ChallengeCreate {
+                target_wallet: "0xaccepter".into(),
+                game: "ttt".into(),
+            },
+        )
+        .await
+        .unwrap();
+
+        let incoming = rx_accepter.try_recv().expect("accepter receives challenge");
+        let incoming_json: serde_json::Value = serde_json::from_str(&incoming).unwrap();
+        let match_id = incoming_json["matchId"]
+            .as_str()
+            .expect("challenge has matchId")
+            .to_owned();
+
+        let mut conn_state_accepter = ConnState {
+            wallet: None,
+            joined_games: HashSet::new(),
+            match_routing: None,
+        };
+        handle_authed(
+            &state,
+            conn_accepter,
+            "0xaccepter",
+            &mut conn_state_accepter,
+            ClientMsg::ChallengeAccept {
+                match_id: match_id.clone(),
+            },
+        )
+        .await
+        .unwrap();
+
+        let acc_routing = conn_state_accepter
+            .match_routing
+            .as_ref()
+            .expect("accepter must have routing after accept");
+        assert_eq!(acc_routing.match_id, match_id);
+        assert_eq!(acc_routing.game, "ttt");
+        assert_eq!(acc_routing.opponent.conn_id, conn_inviter);
     }
 }
