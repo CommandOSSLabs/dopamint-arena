@@ -13,6 +13,7 @@ describe("config", () => {
       "dopamint:benchmark-instance-type": "t3.micro",
       "dopamint:benchmark-min-size": "0",
       "dopamint:benchmark-max-size": "1",
+      "dopamint:backend-desired-count": "3",
       "dopamint:settler-key": "test-settler-key",
     });
     process.env.PULUMI_CONFIG_SECRET_KEYS = JSON.stringify(["dopamint:settler-key"]);
@@ -34,6 +35,7 @@ describe("config", () => {
     assert.strictEqual(cfg.benchmarkInstanceType, "t3.micro");
     assert.strictEqual(cfg.benchmarkMinSize, 0);
     assert.strictEqual(cfg.benchmarkMaxSize, 1);
+    assert.strictEqual(cfg.backendDesiredCount, 3);
   });
 
   it("applies default optional values", () => {

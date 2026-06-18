@@ -16,6 +16,7 @@ export interface InfraConfig {
   benchmarkMaxSize: number;
   benchmarkImageVersion: string;
   backendImageTag: string;
+  backendDesiredCount?: number;
   // base64 ed25519 settler signing key. Optional: the backend boots without it
   // (Phase 0) and fails loud at settler construction if absent. Sourced from secret
   // config so it lands in Secrets Manager, never in the task definition.
@@ -37,6 +38,7 @@ export function getConfig(): InfraConfig {
     benchmarkMaxSize: config.requireNumber("benchmark-max-size"),
     benchmarkImageVersion: config.get("benchmark-image-version") ?? "1.0.1",
     backendImageTag: config.get("backend-image-tag") ?? "latest",
+    backendDesiredCount: config.getNumber("backend-desired-count") ?? undefined,
     settlerKey: config.getSecret("settler-key"),
   };
 }

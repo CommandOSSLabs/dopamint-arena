@@ -108,6 +108,7 @@ const backendService = createBackendService({
   targetGroupArn: alb.targetGroup.arn,
   securityGroupId: sgs.backend.id,
   subnetIds: network.privateSubnetIds,
+  desiredCount: cfg.backendDesiredCount,
   listener: alb.listener,
 });
 

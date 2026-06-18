@@ -10,6 +10,7 @@ config:
   dopamint:benchmark-instance-type: c7i.2xlarge
   dopamint:benchmark-min-size: "0"
   dopamint:benchmark-max-size: "2"
+  dopamint:backend-desired-count: "1"
   dopamint:route53-zone-id: ""
   dopamint-arena:backend-image-tag: 044a796
   dopamint:backend-image-tag: 044a796

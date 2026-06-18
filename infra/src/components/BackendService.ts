@@ -18,12 +18,16 @@ export interface BackendServiceArgs {
 }
 
 export function createBackendService(args: BackendServiceArgs): BackendServiceOutputs {
+  // For the PvP load test, a single large task keeps relay traffic local.
+  // Increase desiredCount only after profiling shows single-task limits,
+  // because additional tasks split match peers across instances and increase cross-instance relay traffic.
+  const desiredCount = args.desiredCount ?? 2;
   const service = new aws.ecs.Service(
     `${args.name}-backend-service`,
     {
       cluster: args.clusterId,
       taskDefinition: args.taskDefinitionArn,
-      desiredCount: args.desiredCount ?? 2,
+      desiredCount,
       launchType: "FARGATE",
       schedulingStrategy: "REPLICA",
       deploymentMaximumPercent: 200,
