@@ -116,6 +116,22 @@ fn parse_event_row(ev: &serde_json::Value) -> Option<RawTunnelEvent> {
     })
 }
 
+/// Read a `sui_dryRunTransactionBlock` result: `Ok` iff `effects.status.status == "success"`,
+/// else `Err(<status json>)`. Mirrors the `execute()` status check; lets the settler reject a
+/// settlement that will not land BEFORE sponsoring gas (ADR-0007). Unit-tested against sample JSON.
+fn dryrun_effects_ok(resp: &serde_json::Value) -> Result<(), String> {
+    match resp
+        .pointer("/effects/status/status")
+        .and_then(|v| v.as_str())
+    {
+        Some("success") => Ok(()),
+        _ => Err(resp
+            .pointer("/effects/status")
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "dry-run result missing effects.status".to_string())),
+    }
+}
+
 impl SuiSettler {
     pub fn new(
         rpc_url: String,
@@ -149,11 +165,27 @@ impl SuiSettler {
             &tunnel,
             gas_price,
         )?;
+        // Verify-before-gas: reject a settlement that won't land before sponsoring it (ADR-0007).
+        self.dry_run(&tx).await?;
         let sig = self
             .signer
             .sign_transaction(&tx)
             .map_err(|e| anyhow!("sign close tx: {e}"))?;
         self.execute(&tx, &sig).await
+    }
+
+    /// Dry-run the built close tx so the real `close_cooperative_with_root` runs (re-verifying
+    /// both seat sigs against the on-chain pubkeys and the balance sum) WITHOUT executing — an
+    /// invalid settlement is rejected here, before any gas is sponsored (ADR-0007). The seat sigs
+    /// are PTB `vector<u8>` arguments, so an unsigned tx is sufficient to exercise them.
+    /// e2e-deferred (needs a live node); the status parse is unit-tested (`dryrun_effects_ok`).
+    async fn dry_run(&self, tx: &Transaction) -> anyhow::Result<()> {
+        let tx_b64 = base64::engine::general_purpose::STANDARD
+            .encode(bcs::to_bytes(tx).context("bcs tx")?);
+        let r = self
+            .rpc("sui_dryRunTransactionBlock", serde_json::json!([tx_b64]))
+            .await?;
+        dryrun_effects_ok(&r).map_err(|e| anyhow!("close dry-run failed: {e}"))
     }
 
     // ---- JSON-RPC reads/execute (compile-verified; e2e-deferred, see module docs) ----
@@ -407,6 +439,31 @@ fn load_ed25519(b64: &str) -> anyhow::Result<Ed25519PrivateKey> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // A dry-run that succeeds means the close WILL land — proceed to execute.
+    #[test]
+    fn dryrun_ok_on_success_effects() {
+        let r = serde_json::json!({ "effects": { "status": { "status": "success" } } });
+        assert!(dryrun_effects_ok(&r).is_ok());
+    }
+
+    // A dry-run failure (e.g. a bad seat signature the Move rejects) must error so the settler
+    // refuses to sponsor gas — the error carries the on-chain status for the client log.
+    #[test]
+    fn dryrun_err_on_failure_effects() {
+        let r = serde_json::json!({
+            "effects": { "status": { "status": "failure", "error": "InvalidSignature" } }
+        });
+        let e = dryrun_effects_ok(&r).unwrap_err();
+        assert!(e.contains("failure") || e.contains("InvalidSignature"), "got: {e}");
+    }
+
+    // A malformed result with no effects is treated as a failure, never a silent pass.
+    #[test]
+    fn dryrun_err_when_effects_missing() {
+        let r = serde_json::json!({ "nope": true });
+        assert!(dryrun_effects_ok(&r).is_err());
+    }
 
     fn args_with_root(len: usize) -> CloseArgs {
         CloseArgs {
