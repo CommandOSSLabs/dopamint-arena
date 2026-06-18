@@ -31,6 +31,7 @@ bcs.workspace = true
 base64.workspace = true
 
 [dev-dependencies]
+tokio-tungstenite = "0.24"
 wiremock = "0.6"
 testcontainers = "0.23"
 testcontainers-modules = { version = "0.11", features = ["redis"] }
