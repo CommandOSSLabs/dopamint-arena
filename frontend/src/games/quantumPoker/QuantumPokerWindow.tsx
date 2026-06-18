@@ -1,29 +1,23 @@
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type CSSProperties,
-} from "react";
+import { useCurrentAccount } from "@mysten/dapp-kit";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { toHex } from "sui-tunnel-ts/core/bytes";
 import {
-  blake2b256,
-  keyPairFromRng,
-  nobleBackend,
-  type KeyPair,
-} from "sui-tunnel-ts/core/crypto";
-import {
-  serializeStateUpdate,
-  type StateUpdate,
-} from "sui-tunnel-ts/core/wire";
-import {
-  QuantumPokerProtocol,
   type PokerMove,
   type PokerPhase,
-  type PokerState,
 } from "sui-tunnel-ts/protocol/quantumPoker";
 import type { Party } from "sui-tunnel-ts/protocol/Protocol";
 import type { GameWindowProps } from "../types";
+import {
+  createLocalQuantumPokerRuntime,
+  type LocalQuantumPokerRuntime,
+  type QuantumPokerRuntimeSnapshot,
+  type QuantumPokerRuntimeStep,
+} from "./runtime";
+import {
+  createServerQuantumPokerRuntime,
+  type ServerQuantumPokerRuntime,
+  type ServerQuantumPokerRuntimeSnapshot,
+} from "./serverRuntime";
 
 const PHASE_LABEL: Record<PokerPhase, string> = {
   commit: "Commit",
@@ -49,81 +43,10 @@ interface QuantumLogEntry {
   label: string;
 }
 
-interface DemoStepResult {
-  nonce: bigint;
-  signed: {
-    update: StateUpdate;
-    sigA: Uint8Array;
-    sigB: Uint8Array;
-  };
-  verified: boolean;
-  messageBytes: number;
-}
-
-class DemoQuantumTunnel {
-  readonly protocol: QuantumPokerProtocol;
-  readonly tunnelId: string;
-  readonly total: bigint;
-
-  state: PokerState;
-  nonce = 0n;
-
-  private readonly signA: (message: Uint8Array) => Uint8Array;
-  private readonly signB: (message: Uint8Array) => Uint8Array;
-  private readonly verifyA: (
-    message: Uint8Array,
-    signature: Uint8Array,
-  ) => boolean;
-  private readonly verifyB: (
-    message: Uint8Array,
-    signature: Uint8Array,
-  ) => boolean;
-
-  constructor(
-    protocol: QuantumPokerProtocol,
-    tunnelId: string,
-    keyA: KeyPair,
-    keyB: KeyPair,
-    initialBalances: { a: bigint; b: bigint },
-  ) {
-    this.protocol = protocol;
-    this.tunnelId = tunnelId;
-    this.total = initialBalances.a + initialBalances.b;
-    this.state = protocol.initialState({ tunnelId, initialBalances });
-    this.signA = nobleBackend.makeSigner(keyA.secretKey);
-    this.signB = nobleBackend.makeSigner(keyB.secretKey);
-    this.verifyA = nobleBackend.makeVerifier(keyA.publicKey);
-    this.verifyB = nobleBackend.makeVerifier(keyB.publicKey);
-  }
-
-  step(move: PokerMove, by: Party, timestamp: bigint): DemoStepResult {
-    const nextState = this.protocol.applyMove(this.state, move, by);
-    const { a, b } = this.protocol.balances(nextState);
-    if (a + b !== this.total) {
-      throw new Error(`balance sum ${a + b} != locked total ${this.total}`);
-    }
-    const update: StateUpdate = {
-      tunnelId: this.tunnelId,
-      stateHash: blake2b256(this.protocol.encodeState(nextState)),
-      nonce: this.nonce + 1n,
-      timestamp,
-      partyABalance: a,
-      partyBBalance: b,
-    };
-    const message = serializeStateUpdate(update);
-    const sigA = this.signA(message);
-    const sigB = this.signB(message);
-    const verified = this.verifyA(message, sigA) && this.verifyB(message, sigB);
-    this.state = nextState;
-    this.nonce = update.nonce;
-    return {
-      nonce: update.nonce,
-      signed: { update, sigA, sigB },
-      verified,
-      messageBytes: message.length,
-    };
-  }
-}
+type RuntimeLike = LocalQuantumPokerRuntime | ServerQuantumPokerRuntime;
+type RuntimeSnapshot =
+  | QuantumPokerRuntimeSnapshot
+  | ServerQuantumPokerRuntimeSnapshot;
 
 const HEADS_UP_STYLE: CSSProperties & Record<`--${string}`, string> = {
   "--qp-felt": "#0f6b52",
@@ -132,17 +55,6 @@ const HEADS_UP_STYLE: CSSProperties & Record<`--${string}`, string> = {
   "--qp-gold": "#f4c45d",
   "--qp-cyan": "#67e8f9",
 };
-
-function mulberry32(seed: number): () => number {
-  let value = seed;
-  return () => {
-    value |= 0;
-    value = (value + 0x6d2b79f5) | 0;
-    let t = Math.imul(value ^ (value >>> 15), 1 | value);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
 
 function cardText(card: number): string {
   return `${RANKS[card % 13]}${SUITS[Math.floor(card / 13)]}`;
@@ -167,21 +79,23 @@ function moveLabel(move: PokerMove): string {
   }
 }
 
-function createDemoTunnel(seed: number): DemoQuantumTunnel {
-  const keyRng = mulberry32(seed);
-  const keyA = keyPairFromRng(keyRng);
-  const keyB = keyPairFromRng(keyRng);
-  return new DemoQuantumTunnel(
-    new QuantumPokerProtocol(8n),
-    "0x" + "51".repeat(32),
-    keyA,
-    keyB,
-    { a: 5_000n, b: 5_000n },
-  );
-}
-
 function shortHash(bytes: Uint8Array): string {
   return toHex(bytes).slice(0, 8);
+}
+
+function shortDigest(digest: string | null | undefined): string | null {
+  if (!digest) return null;
+  return digest.length > 12 ? `${digest.slice(0, 6)}...${digest.slice(-4)}` : digest;
+}
+
+function isServerRuntime(runtime: RuntimeLike): runtime is ServerQuantumPokerRuntime {
+  return "settle" in runtime;
+}
+
+function isServerSnapshot(
+  snapshot: RuntimeSnapshot,
+): snapshot is ServerQuantumPokerRuntimeSnapshot {
+  return "mode" in snapshot;
 }
 
 function Card({ card, hidden }: { card: number | null; hidden?: boolean }) {
@@ -236,6 +150,8 @@ function ChipStack({ value }: { value: bigint }) {
 
 function PlayerSeat({
   party,
+  name,
+  persona,
   balance,
   bet,
   holes,
@@ -244,6 +160,8 @@ function PlayerSeat({
   side,
 }: {
   party: Party;
+  name: string;
+  persona: string;
   balance: bigint;
   bet: bigint;
   holes: number[];
@@ -279,7 +197,7 @@ function PlayerSeat({
         </div>
         <div className="min-w-0">
           <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-200">
-            <span>{party === "A" ? "Hero" : "Rival"}</span>
+            <span>{name}</span>
             {winner && (
               <span className="rounded-sm bg-emerald-300 px-1 text-[8px] text-slate-950">
                 WIN
@@ -288,7 +206,7 @@ function PlayerSeat({
           </div>
           <ChipStack value={balance} />
           <div className="text-[9px] tabular-nums text-slate-500">
-            street {bet.toString()}
+            {persona} · street {bet.toString()}
           </div>
         </div>
       </div>
@@ -300,33 +218,32 @@ function PlayerSeat({
 }
 
 export function QuantumPokerWindow(_props: GameWindowProps) {
-  const tunnelRef = useRef(createDemoTunnel(1802));
-  const rngRef = useRef(mulberry32(1802));
-  const nextPartyRef = useRef<Party>("A");
+  const account = useCurrentAccount();
+  const runtimeRef = useRef<RuntimeLike>(createLocalQuantumPokerRuntime(1802));
   const logIdRef = useRef(1);
-  const [paused, setPaused] = useState(false);
-  const [state, setState] = useState(() => tunnelRef.current.state);
-  const [nonce, setNonce] = useState(() => tunnelRef.current.nonce);
-  const [latestHash, setLatestHash] = useState<string | null>(null);
-  const [verified, setVerified] = useState(false);
+  const settlingRef = useRef(false);
+  const [paused, setPaused] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [snapshot, setSnapshot] = useState<RuntimeSnapshot>(() =>
+    runtimeRef.current.snapshot(),
+  );
   const [logs, setLogs] = useState<QuantumLogEntry[]>([
-    { id: 0, party: "SYS", label: "off-chain tunnel ready" },
+    { id: 0, party: "SYS", label: "local preview ready" },
   ]);
 
+  const state = snapshot.state;
+  const nonce = snapshot.nonce;
   const board = state.board;
   const pot = state.totalBetA + state.totalBetB;
   const result = state.lastResult;
   const shownA = state.shownHoleA ?? [];
   const shownB = state.shownHoleB ?? [];
-  const liveHoleA = state.shownA ? shownA : [];
+  const liveHoleA = state.shownA ? shownA : (snapshot.userHoles ?? []);
   const liveHoleB = state.shownB ? shownB : [];
-  const terminal = tunnelRef.current.protocol.isTerminal(state);
-
-  const stateHash = useMemo(
-    () =>
-      latestHash ??
-      shortHash(blake2b256(tunnelRef.current.protocol.encodeState(state))),
-    [latestHash, state],
+  const serverSnapshot = isServerSnapshot(snapshot) ? snapshot : null;
+  const terminal = state.phase === "done";
+  const stateHash = shortHash(
+    snapshot.latest?.update.stateHash ?? snapshot.stateHash,
   );
 
   function appendLog(entry: Omit<QuantumLogEntry, "id">) {
@@ -335,57 +252,127 @@ export function QuantumPokerWindow(_props: GameWindowProps) {
     );
   }
 
-  function step() {
-    if (state.phase === "done") {
-      setPaused(true);
-      appendLog({ party: "SYS", label: "settlement ready" });
-      return;
+  async function settleIfReady() {
+    const runtime = runtimeRef.current;
+    if (
+      !isServerRuntime(runtime) ||
+      state.phase !== "done" ||
+      settlingRef.current
+    ) {
+      return false;
     }
-    const tunnel = tunnelRef.current;
-    const protocol = tunnel.protocol;
-    const order: Party[] = [
-      nextPartyRef.current,
-      nextPartyRef.current === "A" ? "B" : "A",
-    ];
-    for (const party of order) {
-      const move = protocol.randomMove?.(tunnel.state, party, rngRef.current);
-      if (!move) continue;
-      const result = tunnel.step(move, party, BigInt(logIdRef.current));
-      nextPartyRef.current = party === "A" ? "B" : "A";
-      setState(tunnel.state);
-      setNonce(tunnel.nonce);
-      setLatestHash(
-        result.signed ? shortHash(result.signed.update.stateHash) : null,
-      );
-      setVerified(result.verified);
+    settlingRef.current = true;
+    setBusy(true);
+    setPaused(true);
+    appendLog({ party: "SYS", label: "settling root close" });
+    try {
+      const closed = await runtime.settle();
+      setSnapshot(runtime.snapshot());
       appendLog({
-        party,
-        label: `${moveLabel(move)} · n${result.nonce.toString()}`,
+        party: "SYS",
+        label: `closed ${shortDigest(closed?.txDigest) ?? "on-chain"}`,
       });
+    } catch (error) {
+      appendLog({
+        party: "SYS",
+        label: error instanceof Error ? error.message : String(error),
+      });
+      setSnapshot(runtime.snapshot());
+    } finally {
+      setBusy(false);
+    }
+    return true;
+  }
+
+  async function step() {
+    if (busy) return;
+    if (state.phase === "done") {
+      const settled = await settleIfReady();
+      if (!settled) {
+        setPaused(true);
+        appendLog({ party: "SYS", label: "settlement ready" });
+      }
       return;
     }
-    appendLog({ party: "SYS", label: "waiting for legal move" });
+    setBusy(true);
+    try {
+      const result = (await runtimeRef.current.step()) as
+        | QuantumPokerRuntimeStep
+        | null;
+      if (result) {
+        setSnapshot(runtimeRef.current.snapshot());
+        appendLog({
+          party: result.by,
+          label: `${moveLabel(result.move)} · n${result.nonce.toString()}`,
+        });
+        return;
+      }
+      appendLog({ party: "SYS", label: "waiting for legal move" });
+    } catch (error) {
+      setPaused(true);
+      appendLog({
+        party: "SYS",
+        label: error instanceof Error ? error.message : String(error),
+      });
+      setSnapshot(runtimeRef.current.snapshot());
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function openServerTunnel() {
+    if (busy) return;
+    if (!account) {
+      appendLog({ party: "SYS", label: "connect wallet first" });
+      return;
+    }
+    setBusy(true);
+    setPaused(true);
+    appendLog({ party: "SYS", label: "opening BUCK tunnel" });
+    try {
+      const runtime = await createServerQuantumPokerRuntime(account.address);
+      runtimeRef.current = runtime;
+      const nextSnapshot = runtime.snapshot();
+      setSnapshot(nextSnapshot);
+      appendLog({
+        party: "SYS",
+        label: `opened ${shortDigest(nextSnapshot.openTxDigest) ?? "tunnel"}`,
+      });
+      setPaused(false);
+      settlingRef.current = false;
+    } catch (error) {
+      appendLog({
+        party: "SYS",
+        label: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setBusy(false);
+    }
   }
 
   function reset() {
-    tunnelRef.current = createDemoTunnel(1802 + logIdRef.current);
-    rngRef.current = mulberry32(1802 + logIdRef.current);
-    nextPartyRef.current = "A";
-    setState(tunnelRef.current.state);
-    setNonce(tunnelRef.current.nonce);
-    setLatestHash(null);
-    setVerified(false);
+    runtimeRef.current = createLocalQuantumPokerRuntime(
+      1802 + logIdRef.current,
+    );
+    setSnapshot(runtimeRef.current.snapshot());
+    settlingRef.current = false;
     setLogs([
-      { id: logIdRef.current++, party: "SYS", label: "new off-chain tunnel" },
+      {
+        id: logIdRef.current++,
+        party: "SYS",
+        label: "local preview reset",
+      },
     ]);
-    setPaused(false);
+    setPaused(true);
   }
 
   useEffect(() => {
-    if (paused) return;
-    const timer = window.setTimeout(step, 900);
+    if (paused || busy) return;
+    const timer = window.setTimeout(() => {
+      void step();
+    }, isServerSnapshot(snapshot) ? 650 : 900);
     return () => window.clearTimeout(timer);
-  }, [paused, state]);
+  }, [busy, paused, snapshot, state]);
 
   const resultLabel =
     result?.winner === "tie"
@@ -393,11 +380,13 @@ export function QuantumPokerWindow(_props: GameWindowProps) {
       : result?.winner
         ? `${result.winner} WINS`
         : PHASE_LABEL[state.phase].toUpperCase();
-  const tunnelStatus = terminal
-    ? "close ready"
-    : verified
-      ? "signed"
-      : "syncing";
+  const tunnelStatus = serverSnapshot
+    ? serverSnapshot.status
+    : terminal
+      ? "close ready"
+      : snapshot.latest
+        ? "signed"
+        : "preview";
 
   return (
     <div
@@ -419,15 +408,24 @@ export function QuantumPokerWindow(_props: GameWindowProps) {
         <div className="flex items-center gap-1">
           <button
             type="button"
+            onClick={() => void openServerTunnel()}
+            disabled={busy || !!serverSnapshot}
+            className="h-5 rounded-sm border border-amber-200/30 px-2 text-[10px] text-amber-100 hover:border-amber-200/70 disabled:opacity-35"
+          >
+            {busy && !serverSnapshot ? "..." : "Open"}
+          </button>
+          <button
+            type="button"
             onClick={() => setPaused((value) => !value)}
-            className="h-5 rounded-sm border border-white/10 px-2 text-[10px] text-slate-200 hover:border-cyan-300/50"
+            disabled={busy}
+            className="h-5 rounded-sm border border-white/10 px-2 text-[10px] text-slate-200 hover:border-cyan-300/50 disabled:opacity-35"
           >
             {paused ? "Run" : "Pause"}
           </button>
           <button
             type="button"
-            onClick={step}
-            disabled={!paused}
+            onClick={() => void step()}
+            disabled={!paused || busy}
             className="h-5 rounded-sm border border-white/10 px-2 text-[10px] text-slate-200 disabled:opacity-35"
           >
             Step
@@ -435,6 +433,7 @@ export function QuantumPokerWindow(_props: GameWindowProps) {
           <button
             type="button"
             onClick={reset}
+            disabled={busy}
             className="h-5 rounded-sm border border-white/10 px-2 text-[10px] text-slate-200 hover:border-rose-300/50"
           >
             Reset
@@ -446,6 +445,8 @@ export function QuantumPokerWindow(_props: GameWindowProps) {
         <section className="relative flex min-h-0 flex-1 flex-col justify-between gap-2 rounded-lg border border-emerald-200/20 bg-[linear-gradient(145deg,rgba(255,255,255,.06),transparent_28%),radial-gradient(ellipse_at_center,var(--qp-felt)_0%,var(--qp-felt-dark)_68%,#031615_100%)] p-2 shadow-[inset_0_0_0_5px_rgba(0,0,0,.2)]">
           <PlayerSeat
             party="B"
+            name={snapshot.seatB.name}
+            persona={snapshot.seatB.persona}
             balance={state.balanceB}
             bet={state.totalBetB}
             holes={liveHoleB}
@@ -469,6 +470,8 @@ export function QuantumPokerWindow(_props: GameWindowProps) {
 
           <PlayerSeat
             party="A"
+            name={snapshot.seatA.name}
+            persona={snapshot.seatA.persona}
             balance={state.balanceA}
             bet={state.totalBetA}
             holes={liveHoleA}
@@ -503,10 +506,14 @@ export function QuantumPokerWindow(_props: GameWindowProps) {
           </div>
           <div className="flex w-[5.2rem] flex-col items-end justify-center border-l border-white/10 pl-2 text-right">
             <div className="text-[9px] uppercase text-slate-500">
-              {tunnelStatus}
+              {busy ? "busy" : tunnelStatus}
             </div>
             <div className="max-w-full truncate text-[10px] font-medium tabular-nums text-[var(--qp-cyan)]">
-              h:{stateHash}
+              {serverSnapshot?.transcriptRoot
+                ? `r:${shortDigest(serverSnapshot.transcriptRoot)}`
+                : serverSnapshot?.openTxDigest
+                  ? `tx:${shortDigest(serverSnapshot.openTxDigest)}`
+                  : `h:${stateHash}`}
             </div>
           </div>
         </section>

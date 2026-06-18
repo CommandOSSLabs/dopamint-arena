@@ -73,6 +73,7 @@ export function createSessionHandler(deps: SessionDeps): Handler {
       state,
       nonce: 0n,
       latestUpdate: null,
+      transcriptUpdates: [],
       pendingMove: null,
       pendingSettlement: null,
       latestSettlement: null,
@@ -94,7 +95,7 @@ export function createSessionHandler(deps: SessionDeps): Handler {
       status: session.status,
       suiRandomness: null,
       botWalletsAvailable: deps.botWalletPool.availableCount(),
-      note: "mock tunnel id until real open/deposit is wired",
+      note: "draft session; call /api/quantum-poker/open to create and fund the real Sui tunnel",
     });
   };
 }

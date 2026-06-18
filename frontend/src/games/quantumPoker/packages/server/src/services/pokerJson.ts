@@ -1,26 +1,28 @@
-import { fromHex, toHex } from "sui-tunnel-ts/core/bytes";
-import type { Settlement, StateUpdate } from "sui-tunnel-ts/core/wire";
+import { toHex } from "sui-tunnel-ts/core/bytes";
+import type {
+  Settlement,
+  SettlementWithRoot,
+  StateUpdate,
+} from "sui-tunnel-ts/core/wire";
 import type {
   PokerHandResult,
-  PokerMove,
   PokerState,
   SlotReveal,
 } from "sui-tunnel-ts/protocol/quantumPoker";
-import type { CoSignedSettlement, CoSignedUpdate } from "./tunnelTypes";
+import {
+  pokerMoveFromJson,
+  pokerMoveToJson,
+  type PokerMoveJson,
+  type SlotRevealJson,
+} from "sui-tunnel-ts/protocol/quantumPokerCodec";
+import type {
+  CoSignedSettlement,
+  CoSignedSettlementWithRoot,
+  CoSignedUpdate,
+} from "./tunnelTypes";
 
-export type PokerMoveJson =
-  | { kind: "commit_slots"; commitments: string[] }
-  | { kind: "reveal_slots"; slots: number[]; reveals: SlotRevealJson[] }
-  | { kind: "bet"; amount: string }
-  | { kind: "check" }
-  | { kind: "call" }
-  | { kind: "fold" }
-  | { kind: "next_hand" };
-
-export interface SlotRevealJson {
-  value: string;
-  salt: string;
-}
+export { pokerMoveFromJson, pokerMoveToJson };
+export type { PokerMoveJson, SlotRevealJson };
 
 export interface StateUpdateJson {
   tunnelId: string;
@@ -43,6 +45,7 @@ export interface SettlementJson {
   partyBBalance: string;
   finalNonce: string;
   timestamp: string;
+  transcriptRoot?: string;
 }
 
 export interface CoSignedSettlementJson {
@@ -92,116 +95,6 @@ export interface PokerHandResultJson {
   burnedB: number[];
 }
 
-function expectRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`${label} must be an object`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function expectString(value: unknown, label: string): string {
-  if (typeof value !== "string") throw new Error(`${label} must be a string`);
-  return value;
-}
-
-function expectNumber(value: unknown, label: string): number {
-  if (typeof value !== "number" || !Number.isInteger(value)) {
-    throw new Error(`${label} must be an integer`);
-  }
-  return value;
-}
-
-function expectArray(value: unknown, label: string): unknown[] {
-  if (!Array.isArray(value)) throw new Error(`${label} must be an array`);
-  return value;
-}
-
-function bytesFromHex(
-  value: unknown,
-  label: string,
-  length?: number,
-): Uint8Array {
-  const bytes = fromHex(expectString(value, label));
-  if (length !== undefined && bytes.length !== length) {
-    throw new Error(`${label} must be ${length} bytes`);
-  }
-  return bytes;
-}
-
-function revealFromJson(value: unknown, label: string): SlotReveal {
-  const reveal = expectRecord(value, label);
-  return {
-    value: bytesFromHex(reveal.value, `${label}.value`, 32),
-    salt: bytesFromHex(reveal.salt, `${label}.salt`, 16),
-  };
-}
-
-function revealToJson(reveal: SlotReveal): SlotRevealJson {
-  return {
-    value: "0x" + toHex(reveal.value),
-    salt: "0x" + toHex(reveal.salt),
-  };
-}
-
-export function pokerMoveFromJson(value: unknown): PokerMove {
-  const move = expectRecord(value, "move");
-  const kind = expectString(move.kind, "move.kind");
-  switch (kind) {
-    case "commit_slots":
-      return {
-        kind,
-        commitments: expectArray(move.commitments, "move.commitments").map(
-          (commitment, index) =>
-            bytesFromHex(commitment, `move.commitments[${index}]`, 32),
-        ),
-      };
-    case "reveal_slots":
-      return {
-        kind,
-        slots: expectArray(move.slots, "move.slots").map((slot, index) =>
-          expectNumber(slot, `move.slots[${index}]`),
-        ),
-        reveals: expectArray(move.reveals, "move.reveals").map(
-          (reveal, index) => revealFromJson(reveal, `move.reveals[${index}]`),
-        ),
-      };
-    case "bet":
-      return { kind, amount: BigInt(expectString(move.amount, "move.amount")) };
-    case "check":
-    case "call":
-    case "fold":
-    case "next_hand":
-      return { kind };
-    default:
-      throw new Error(`unsupported move kind ${kind}`);
-  }
-}
-
-export function pokerMoveToJson(move: PokerMove): PokerMoveJson {
-  switch (move.kind) {
-    case "commit_slots":
-      return {
-        kind: move.kind,
-        commitments: move.commitments.map(
-          (commitment) => "0x" + toHex(commitment),
-        ),
-      };
-    case "reveal_slots":
-      return {
-        kind: move.kind,
-        slots: move.slots.slice(),
-        reveals: move.reveals.map(revealToJson),
-      };
-    case "bet":
-      return { kind: move.kind, amount: move.amount.toString() };
-    case "check":
-    case "call":
-    case "fold":
-    case "next_hand":
-      return { kind: move.kind };
-  }
-}
-
 export function stateUpdateToJson(update: StateUpdate): StateUpdateJson {
   return {
     tunnelId: update.tunnelId,
@@ -223,18 +116,24 @@ export function coSignedUpdateToJson(
   };
 }
 
-export function settlementToJson(settlement: Settlement): SettlementJson {
-  return {
+export function settlementToJson(
+  settlement: Settlement | SettlementWithRoot,
+): SettlementJson {
+  const json: SettlementJson = {
     tunnelId: settlement.tunnelId,
     partyABalance: settlement.partyABalance.toString(),
     partyBBalance: settlement.partyBBalance.toString(),
     finalNonce: settlement.finalNonce.toString(),
     timestamp: settlement.timestamp.toString(),
   };
+  if ("transcriptRoot" in settlement) {
+    json.transcriptRoot = "0x" + toHex(settlement.transcriptRoot);
+  }
+  return json;
 }
 
 export function coSignedSettlementToJson(
-  settlement: CoSignedSettlement,
+  settlement: CoSignedSettlement | CoSignedSettlementWithRoot,
 ): CoSignedSettlementJson {
   return {
     settlement: settlementToJson(settlement.settlement),

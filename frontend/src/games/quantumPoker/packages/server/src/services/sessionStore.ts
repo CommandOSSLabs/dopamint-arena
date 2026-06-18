@@ -1,4 +1,4 @@
-import type { Settlement } from "sui-tunnel-ts/core/wire";
+import type { SettlementWithRoot } from "sui-tunnel-ts/core/wire";
 import type { Party } from "sui-tunnel-ts/protocol/Protocol";
 import type {
   PokerMove,
@@ -6,7 +6,10 @@ import type {
 } from "sui-tunnel-ts/protocol/quantumPoker";
 import type { BotPartyConfig } from "./botWalletPool";
 import type { PreparedProtocolStep } from "./tunnelSigning";
-import type { CoSignedSettlement, CoSignedUpdate } from "./tunnelTypes";
+import type {
+  CoSignedSettlementWithRoot,
+  CoSignedUpdate,
+} from "./tunnelTypes";
 
 export interface PartyConfigJson {
   address: string;
@@ -32,7 +35,7 @@ export interface SuiSessionRandomness {
 
 export interface PendingSettlement {
   id: string;
-  settlement: Settlement;
+  settlement: SettlementWithRoot;
   message: Uint8Array;
   createdAt: string;
 }
@@ -49,9 +52,10 @@ export interface QuantumPokerSession {
   state: PokerState;
   nonce: bigint;
   latestUpdate: CoSignedUpdate | null;
+  transcriptUpdates: CoSignedUpdate[];
   pendingMove: PendingPokerMove | null;
   pendingSettlement: PendingSettlement | null;
-  latestSettlement: CoSignedSettlement | null;
+  latestSettlement: CoSignedSettlementWithRoot | null;
   suiRandomness: SuiSessionRandomness | null;
   status: "created" | "funding" | "active" | "settling" | "closed";
   createdAt: string;
