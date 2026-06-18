@@ -65,9 +65,9 @@ export function TttBotWindow(_props: GameWindowProps) {
         </div>
         <TttBoard board={g.board} />
         <div className="text-sm font-semibold text-arena-text">{banner}</div>
-        {(g.status === "settled" || g.winner !== 0) && (
+        {g.looping && (
           <button onClick={g.reset} className="rounded border border-arena-edge px-3 py-1.5 text-sm">
-            Run Again
+            Stop
           </button>
         )}
       </div>
