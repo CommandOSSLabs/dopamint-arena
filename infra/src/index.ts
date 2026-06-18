@@ -168,9 +168,13 @@ export const backendUrl = dns.certificateArn
   ? pulumi.interpolate`https://${backendApiDomain}`
   : pulumi.interpolate`http://${alb.alb.dnsName}`;
 
+const benchmarkBackendUrl = pulumi.interpolate`ws://${albDnsName}/v1/mp`;
+
 const benchmarkFleet = createBenchmarkFleet({
   name: `dopamint-${cfg.environment}`,
-  subnetIds: network.privateSubnetIds,
+  // Public subnets let the generators reach the internet-facing ALB without a
+  // NAT Gateway and give SSM Session Manager a public endpoint to connect to.
+  subnetIds: network.publicSubnetIds,
   securityGroupId: sgs.benchmark.id,
   instanceType: cfg.benchmarkInstanceType,
   minSize: cfg.benchmarkMinSize,
@@ -178,6 +182,11 @@ const benchmarkFleet = createBenchmarkFleet({
   imageBuilderProfileName: iam.imageBuilderProfile.name,
   benchmarkInstanceProfileArn: iam.benchmarkInstanceProfile.arn,
   version: cfg.benchmarkImageVersion,
+  backendUrl: benchmarkBackendUrl,
+  reportsBucketName,
+  pairsPerInstance: cfg.benchmarkPairsPerInstance,
+  durationMs: cfg.benchmarkDurationMs,
+  region: aws.getRegionOutput().name,
 });
 
 export const githubEnv = githubEnvOutputs({

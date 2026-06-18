@@ -10,6 +10,8 @@ config:
   dopamint:benchmark-instance-type: c7i.48xlarge
   dopamint:benchmark-min-size: "0"
   dopamint:benchmark-max-size: "10"
+  dopamint:benchmark-pairs-per-instance: "100"
+  dopamint:benchmark-duration-ms: "30000"
   dopamint:backend-desired-count: "10"
   dopamint:backend-task-cpu: "4096"
   dopamint:backend-task-memory: "8192"

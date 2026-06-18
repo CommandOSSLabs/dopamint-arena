@@ -9,6 +9,18 @@
  *   node --import tsx src/bench/pvpCli.ts --pairs 10 --duration 60000 \
  *     --waitForStart --bucket <reports-bucket> --instanceId <id>
  */
+import { webcrypto } from "node:crypto";
+
+// Node 18 ships a global `crypto` without `getRandomValues`, which breaks
+// @noble/curves key generation. Polyfill with the webcrypto module when needed.
+if (
+  typeof globalThis.crypto === "undefined" ||
+  typeof globalThis.crypto.getRandomValues !== "function"
+) {
+  // @ts-expect-error globalThis.crypto is typed narrowly in older Node types.
+  globalThis.crypto = webcrypto;
+}
+
 import { runLoadTest, LoadTestConfig } from "./pvpTicTacToeLoadTest";
 import {
   createS3Client,

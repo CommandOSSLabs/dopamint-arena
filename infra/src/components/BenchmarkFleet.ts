@@ -23,6 +23,18 @@ export interface BenchmarkFleetArgs {
    * Image Builder components and recipes are immutable by semantic version.
    */
   version: pulumi.Input<string>;
+  /** WebSocket URL the generators connect to, e.g. ws://alb/v1/mp. */
+  backendUrl: pulumi.Input<string>;
+  /** S3 bucket used for the start signal and per-instance reports. */
+  reportsBucketName: pulumi.Input<string>;
+  /** S3 key for the sui-tunnel-ts code artifact (default: artifact/sui-tunnel-ts.zip). */
+  artifactKey?: pulumi.Input<string>;
+  /** Number of tic-tac-toe pairs each instance plays (default: 100). */
+  pairsPerInstance?: pulumi.Input<number>;
+  /** Duration of each instance's test run in milliseconds (default: 30000). */
+  durationMs?: pulumi.Input<number>;
+  /** AWS region for S3/SSM (default: us-east-1). */
+  region?: pulumi.Input<string>;
 }
 
 export function createBenchmarkFleet(args: BenchmarkFleetArgs): BenchmarkFleetOutputs {
@@ -133,10 +145,76 @@ phases:
     instanceType: args.instanceType,
     vpcSecurityGroupIds: [args.securityGroupId],
     iamInstanceProfile: { arn: args.benchmarkInstanceProfileArn },
-    userData: pulumi.interpolate`#!/bin/bash
+    userData: pulumi
+      .all([
+        args.backendUrl,
+        args.reportsBucketName,
+        args.artifactKey ?? "artifact/sui-tunnel-ts.zip",
+        args.pairsPerInstance ?? 100,
+        args.durationMs ?? 30000,
+        args.region ?? "us-east-1",
+      ])
+      .apply(
+        ([backendUrl, bucket, artifactKey, pairs, durationMs, region]) =>
+          Buffer.from(
+            `#!/bin/bash
 set -euo pipefail
-cd /opt/dopamint/repo/sui-tunnel-ts || true
-`.apply((data) => Buffer.from(data).toString("base64")),
+exec > >(tee /var/log/dopamint-bench.log) 2>&1
+
+# The AL2023 minimal AMI omits the SSM agent, but we want SSM access for debugging.
+if ! command -v amazon-ssm-agent >/dev/null 2>&1; then
+  dnf install -y amazon-ssm-agent || true
+fi
+systemctl enable --now amazon-ssm-agent || true
+
+# Make sure the AWS CLI and unzip are present for the code artifact download.
+dnf install -y awscli2 unzip || dnf install -y awscli unzip || true
+
+BUCKET="${bucket}"
+ARTIFACT_KEY="${artifactKey}"
+RUN_DIR="/opt/dopamint/bench"
+mkdir -p "$RUN_DIR"
+cd "$RUN_DIR"
+
+# Wait for the deployer to publish the code artifact.
+for i in $(seq 1 120); do
+  if aws s3 cp "s3://$BUCKET/$ARTIFACT_KEY" ./sui-tunnel-ts.zip 2>/dev/null; then
+    echo "downloaded code artifact s3://$BUCKET/$ARTIFACT_KEY"
+    break
+  fi
+  echo "waiting for code artifact s3://$BUCKET/$ARTIFACT_KEY"
+  sleep 5
+done
+
+unzip -o sui-tunnel-ts.zip -d sui-tunnel-ts
+cd sui-tunnel-ts
+
+# Install runtime dependencies (the artifact excludes node_modules).
+pnpm install --frozen-lockfile
+
+export BACKEND_URL="${backendUrl}"
+export REPORTS_BUCKET="$BUCKET"
+export AWS_REGION="${region}"
+# The launch template requires IMDSv2, so fetch a token before reading metadata.
+IMDS_TOKEN=$(curl -sf -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+INSTANCE_ID=$(curl -sf -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" http://169.254.169.254/latest/meta-data/instance-id)
+export INSTANCE_ID
+
+echo "starting load generator: instance=$INSTANCE_ID pairs=${pairs} duration=${durationMs}ms"
+nohup pnpm tsx src/bench/pvpCli.ts \
+  --pairs "${pairs}" \
+  --duration "${durationMs}" \
+  --waitForStart \
+  --bucket "$REPORTS_BUCKET" \
+  --instanceId "$INSTANCE_ID" \
+  --region "$AWS_REGION" \
+  >> /var/log/dopamint-bench.log 2>&1 &
+
+echo "generator started as pid $!"
+`,
+            "utf8"
+          ).toString("base64")
+      ),
     metadataOptions: {
       httpEndpoint: "enabled",
       httpTokens: "required",

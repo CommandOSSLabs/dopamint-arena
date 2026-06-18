@@ -15,6 +15,8 @@ export interface InfraConfig {
   benchmarkMinSize: number;
   benchmarkMaxSize: number;
   benchmarkImageVersion: string;
+  benchmarkPairsPerInstance?: number;
+  benchmarkDurationMs?: number;
   backendImageTag: string;
   backendDesiredCount?: number;
   backendTaskCpu?: string;
@@ -39,6 +41,8 @@ export function getConfig(): InfraConfig {
     benchmarkMinSize: config.requireNumber("benchmark-min-size"),
     benchmarkMaxSize: config.requireNumber("benchmark-max-size"),
     benchmarkImageVersion: config.get("benchmark-image-version") ?? "1.0.1",
+    benchmarkPairsPerInstance: config.getNumber("benchmark-pairs-per-instance") ?? undefined,
+    benchmarkDurationMs: config.getNumber("benchmark-duration-ms") ?? undefined,
     backendImageTag: config.get("backend-image-tag") ?? "latest",
     backendDesiredCount: config.getNumber("backend-desired-count") ?? undefined,
     backendTaskCpu: config.get("backend-task-cpu") ?? undefined,
