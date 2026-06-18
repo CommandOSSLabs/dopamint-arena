@@ -565,6 +565,16 @@ export class QuantumPokerProtocol implements Protocol<PokerState, PokerMove> {
       s.boardCounters.push(counter);
       used.add(card);
     }
+    if (this.bettingClosed(s)) {
+      // All-in already matched this hand — no more betting; run the board out to showdown.
+      s.phase =
+        nextPhase === "flop_bet"
+          ? "reveal_turn"
+          : nextPhase === "turn_bet"
+            ? "reveal_river"
+            : "showdown";
+      return;
+    }
     this.beginStreet(s, nextPhase);
   }
 
@@ -666,6 +676,15 @@ export class QuantumPokerProtocol implements Protocol<PokerState, PokerMove> {
 
   private balance(s: PokerState, by: Party): bigint {
     return by === "A" ? s.balanceA : s.balanceB;
+  }
+
+  private availableFor(s: PokerState, by: Party): bigint {
+    return this.balance(s, by) - this.totalBet(s, by);
+  }
+
+  /** True once either seat is all-in: no further betting is possible this hand. */
+  private bettingClosed(s: PokerState): boolean {
+    return this.availableFor(s, "A") === 0n || this.availableFor(s, "B") === 0n;
   }
 
   private markActed(s: PokerState, by: Party, acted: boolean): void {

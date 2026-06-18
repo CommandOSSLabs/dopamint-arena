@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   useCurrentAccount,
   useSignAndExecuteTransaction,
@@ -38,8 +38,12 @@ const STAKE_BALANCE = 500n;
 const HAND_CAP = 1n;
 /** Pacing for the auto-driven commit/reveal "plumbing" moves so phases are readable. */
 const PLUMBING_DELAY_MS = 300;
+/** Once all-in (betting closed), reveal the rest of the board + holes back-to-back. */
+const RUNOUT_DELAY_MS = 0;
 /** Matchmaking queue id — both seats must request the same game. */
 const GAME_ID = "quantum-poker";
+/** Auto check (else fold) if a seat doesn't act within this many seconds. */
+const TURN_SECONDS = 10;
 
 export type PvpPokerStatus =
   | "idle"
@@ -70,6 +74,8 @@ export interface PvpQuantumPoker {
   /** This seat's two hole cards (local-only; the opponent's stays null until showdown). */
   myHole: number[] | null;
   myTurnToBet: boolean;
+  /** Seconds left on this seat's turn timer (null when it isn't our turn to act). */
+  secondsLeft: number | null;
   legal: PvpPokerLegal | null;
   opponentWallet: string | null;
   error: string | null;
@@ -189,6 +195,7 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
   const [state, setState] = useState<PokerState | null>(null);
   const [opponentWallet, setOpponentWallet] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [secondsLeft, setSecondsLeft] = useState<number | null>(null);
 
   const mpRef = useRef<MpClient | null>(null);
   const dtRef = useRef<PokerTunnel | null>(null);
@@ -232,6 +239,11 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
     const move = driver.chooseMove(dt.state, secureRng); // commit secrets minted here, once
     if (!move) return;
     autoNonceRef.current = targetNonce;
+    // All-in run-out: betting is closed, so flip the remaining board + holes
+    // back-to-back ("show down luôn") instead of the readable per-street pacing.
+    const allInRunout =
+      dt.state.balanceA - dt.state.totalBetA === 0n ||
+      dt.state.balanceB - dt.state.totalBetB === 0n;
     window.setTimeout(() => {
       const live = dtRef.current;
       if (!live || live.nonce + 1n !== targetNonce) return;
@@ -241,7 +253,7 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       }
-    }, PLUMBING_DELAY_MS);
+    }, allInRunout ? RUNOUT_DELAY_MS : PLUMBING_DELAY_MS);
   }, [sync]);
 
   const propose = useCallback(
@@ -403,6 +415,38 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
     state.toAct === self;
   const legal = myTurnToBet && state && self ? legalFor(state, self) : null;
 
+  // Per-turn countdown: if this seat doesn't act within TURN_SECONDS, auto check (else fold)
+  // so an idle/away player can't stall the hand. Each seat times only its own decision.
+  useEffect(() => {
+    if (!myTurnToBet) {
+      setSecondsLeft(null);
+      return;
+    }
+    let left = TURN_SECONDS;
+    setSecondsLeft(left);
+    const id = window.setInterval(() => {
+      left -= 1;
+      if (left > 0) {
+        setSecondsLeft(left);
+        return;
+      }
+      window.clearInterval(id);
+      setSecondsLeft(null);
+      const dt = dtRef.current;
+      const me = selfPartyRef.current;
+      if (dt && me && BET_PHASES.has(dt.state.phase) && dt.state.toAct === me) {
+        const lg = legalFor(dt.state, me);
+        try {
+          dt.propose(lg.canCheck ? { kind: "check" } : { kind: "fold" }, 0n);
+          sync();
+        } catch (e) {
+          setError(e instanceof Error ? e.message : String(e));
+        }
+      }
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [myTurnToBet, state, sync]);
+
   return {
     status,
     role,
@@ -410,6 +454,7 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
     state,
     myHole,
     myTurnToBet,
+    secondsLeft,
     legal,
     opponentWallet,
     error,
