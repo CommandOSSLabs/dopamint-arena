@@ -36,10 +36,9 @@ import {
 const STAKE_BALANCE = 500n;
 /** One hand per match for the first cut; the loop settles on-chain as soon as it ends. */
 const HAND_CAP = 1n;
-/** Pacing for the auto-driven commit/reveal "plumbing" moves so phases are readable. */
+/** Pacing for the auto-driven commit/reveal "plumbing" moves so phases (and the showdown) are
+ *  readable — cards flip one street at a time instead of flashing to the result instantly. */
 const PLUMBING_DELAY_MS = 300;
-/** Once all-in (betting closed), reveal the rest of the board + holes back-to-back. */
-const RUNOUT_DELAY_MS = 0;
 /** Matchmaking queue id — both seats must request the same game. */
 const GAME_ID = "quantum-poker";
 /** Auto check (else fold) if a seat doesn't act within this many seconds. */
@@ -239,11 +238,6 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
     const move = driver.chooseMove(dt.state, secureRng); // commit secrets minted here, once
     if (!move) return;
     autoNonceRef.current = targetNonce;
-    // All-in run-out: betting is closed, so flip the remaining board + holes
-    // back-to-back ("show down luôn") instead of the readable per-street pacing.
-    const allInRunout =
-      dt.state.balanceA - dt.state.totalBetA === 0n ||
-      dt.state.balanceB - dt.state.totalBetB === 0n;
     window.setTimeout(() => {
       const live = dtRef.current;
       if (!live || live.nonce + 1n !== targetNonce) return;
@@ -253,7 +247,7 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       }
-    }, allInRunout ? RUNOUT_DELAY_MS : PLUMBING_DELAY_MS);
+    }, PLUMBING_DELAY_MS);
   }, [sync]);
 
   const propose = useCallback(
