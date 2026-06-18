@@ -16,11 +16,12 @@ import {
   type RegisterSessionResult,
 } from "../../backend/controlPlane";
 import {
-  closeCooperative,
+  closeCooperativeWithRoot,
   depositStake,
   openAndFundSharedTunnel,
   readCreatedAt,
 } from "../../onchain/tunnelTx";
+import { coSignedToSettleRequest } from "../../backend/settleRequest";
 
 const STAKE_BALANCE = 500n; // locked per seat (MIST)
 const STAKE_SHIFT = 100n; // moves loser→winner on a decisive result
@@ -225,7 +226,18 @@ export function usePvpTicTacToe(): PvpTicTacToe {
           });
           if (proto.isTerminal(dt.state) && !settling) {
             settling = true;
-            void settle(dt, match.role, channel, waitPeer, reads, signExec, tunnelId).then(
+            void settle(
+              dt,
+              match.role,
+              channel,
+              waitPeer,
+              reads,
+              signExec,
+              tunnelId,
+              transcript,
+              sessionRef.current,
+              getControlPlaneClient(),
+            ).then(
               () => setStatus("settled"),
               (e) => {
                 setError(String(e?.message ?? e));
@@ -279,29 +291,53 @@ export function usePvpTicTacToe(): PvpTicTacToe {
   };
 }
 
-/** Exchange settlement halves over the relay; seat A submits the cooperative close. */
+/** Exchange root-anchored settlement halves over the relay, then seat A submits the close via the
+ *  backend /settle (the settler anchors the transcript root + archives to Walrus). Both seats must
+ *  anchor the SAME root or close_cooperative_with_root rebuilds different bytes and on-chain verify
+ *  fails — so the root is exchanged and asserted equal before either side trusts the combine.
+ *  Fallback: wallet-submitted close_cooperative_with_root (no session / backend down). */
 async function settle(
   dt: DistributedTunnel<TicTacToeState, { cell: number }>,
   role: Role,
   channel: PvpChannel,
   waitPeer: <T>(t: string) => Promise<T>,
   reads: Parameters<typeof readCreatedAt>[0],
-  signExec: Parameters<typeof closeCooperative>[0]["signExec"],
+  signExec: Parameters<typeof closeCooperativeWithRoot>[0]["signExec"],
   tunnelId: string,
+  transcript: Transcript,
+  session: RegisterSessionResult | null,
+  cp: ReturnType<typeof getControlPlaneClient>,
 ): Promise<void> {
   const createdAt = await readCreatedAt(reads, tunnelId);
-  const half = dt.buildSettlementHalf(createdAt, 0n);
+  const root = transcript.root();
+  const half = dt.buildSettlementHalfWithRoot(createdAt, root, 0n);
   channel.sendPeer({
     t: "settleHalf",
     partyABalance: half.settlement.partyABalance.toString(),
     partyBBalance: half.settlement.partyBBalance.toString(),
     finalNonce: half.settlement.finalNonce.toString(),
     timestamp: half.settlement.timestamp.toString(),
+    transcriptRoot: toHex(root),
     sig: toHex(half.sigSelf),
   });
-  const other = await waitPeer<{ sig: string }>("settleHalf");
-  const co = dt.combineSettlement(half.settlement, half.sigSelf, fromHex(other.sig));
-  if (role === "A") {
-    await closeCooperative({ signExec, tunnelId, settlement: co });
+  const other = await waitPeer<{ sig: string; transcriptRoot: string }>("settleHalf");
+  if (other.transcriptRoot !== toHex(root)) {
+    throw new Error("settlement transcript-root mismatch between parties");
+  }
+  const co = dt.combineSettlementWithRoot(half.settlement, half.sigSelf, fromHex(other.sig));
+  if (role !== "A") return; // single submitter, mirrors the cooperative-close pattern
+  try {
+    if (session) {
+      await cp.settle(
+        session.sessionId,
+        session.statsToken,
+        coSignedToSettleRequest(co, transcript.toRecord().entries),
+      );
+    } else {
+      await closeCooperativeWithRoot({ signExec, tunnelId, settlement: co });
+    }
+  } catch (e) {
+    console.error("[tictactoe] backend settle failed; falling back to wallet close:", e);
+    await closeCooperativeWithRoot({ signExec, tunnelId, settlement: co });
   }
 }

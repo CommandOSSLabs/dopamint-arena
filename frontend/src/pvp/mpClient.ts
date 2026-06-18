@@ -24,7 +24,7 @@ export type PeerMessage =
   | { t: "hello"; ephemeralPubkey: string }
   | { t: "open"; tunnelId: string }
   | { t: "ready" }
-  | { t: "settleHalf"; partyABalance: string; partyBBalance: string; finalNonce: string; timestamp: string; sig: string }
+  | { t: "settleHalf"; partyABalance: string; partyBBalance: string; finalNonce: string; timestamp: string; transcriptRoot: string; sig: string }
   | { t: "frame"; data: string };
 
 /** Engine transport + a peer-message side channel, both over one match's relay. */
