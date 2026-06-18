@@ -71,11 +71,11 @@ export default function App() {
     targetHeight = 580;
   } else if (scene === "game") {
     targetWidth = isPortrait ? 500 : 1060;
-    targetHeight = isPortrait ? 860 : 780;
-    if (gameType === "caro") targetHeight = isPortrait ? 1020 : 920;
+    targetHeight = isPortrait ? 1200 : 860;
+    if (gameType === "caro") targetHeight = isPortrait ? 1300 : 960;
   } else if (scene === "pvp") {
     targetWidth = isPortrait ? 500 : 1060;
-    targetHeight = isPortrait ? 860 : 780;
+    targetHeight = isPortrait ? 1200 : 860;
   }
 
   return (

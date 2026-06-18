@@ -41,7 +41,7 @@ export function PvpScene({ onBack, isPortrait = false }: { onBack: () => void; i
   const locked = g.phase !== "idle" && g.phase !== "error";
 
   return (
-    <div className="w-full h-full flex flex-col gap-4 p-6 text-on-surface">
+    <div className="w-full h-full overflow-y-auto hide-scrollbar flex flex-col gap-4 p-6 text-on-surface">
       <div className="flex items-center justify-between border-b-2 border-primary/20 pb-4">
         <button onClick={() => { g.leave(); onBack(); }} className="text-base font-bold text-secondary hover:text-primary transition-colors flex items-center gap-1">
           <span className="material-symbols-outlined text-lg">arrow_back</span> Back

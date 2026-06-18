@@ -119,7 +119,7 @@ export function GameScene({
   const busy = g.phase === "opening" || g.phase === "playing" || g.phase === "settling";
 
   return (
-    <div className="w-full flex flex-col gap-6 pt-8 pb-4">
+    <div className="w-full h-full overflow-y-auto hide-scrollbar flex flex-col gap-6 pt-8 pb-4 px-4">
       {/* Header */}
       <header className="flex justify-between items-center border-b-2 border-primary/20 pb-3">
         <h1 className="font-headline-xl text-3xl text-primary underline decoration-secondary decoration-2 truncate tracking-tight">

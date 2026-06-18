@@ -43,12 +43,13 @@ export const GameCardScale: React.FC<GameCardScaleProps> = ({
 
   return (
     <div 
-      className={`origin-center flex items-center justify-center ${className}`}
+      className={`origin-center flex items-center justify-center overflow-hidden ${className}`}
       style={{
         transform: `scale(${scale})`,
         transformOrigin: "center center",
         transition: "transform 0.05s ease-out",
         width: `${targetWidth}px`,
+        height: `${targetHeight}px`,
         flexShrink: 0,
       }}
     >
