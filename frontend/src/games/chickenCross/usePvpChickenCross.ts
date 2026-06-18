@@ -111,8 +111,6 @@ export function usePvpChickenCross(): PvpChickenCross {
       const protoNow = dtNow.protocol as CrossProtocol;
       if (protoNow.isTerminal(dtNow.state)) return;
       if (turn(dtNow.nonce) !== myRoleNow) return;
-      // Guard: don't propose if a proposal is already pending.
-      if ((dtNow as unknown as { pending: unknown }).pending) return;
 
       const dir = myDirRef.current;
       myDirRef.current = "north"; // reset to auto-forward default
