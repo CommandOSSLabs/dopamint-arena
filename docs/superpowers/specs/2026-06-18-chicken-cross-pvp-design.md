@@ -34,7 +34,8 @@ carrying only its own dir; the world advances each propose.**
 
 ```
 turn(nonce) = (nonce % 2 == 0) ? "A" : "B"      // A proposes nonce 0→1, B 1→2, A 2→3, ...
-each seat keeps `myDir` (current arrow/button input; undefined = stay)
+each seat keeps `myDir`, default "north" (auto-forward); a key/D-pad press overrides
+  the NEXT hop, then it reverts to "north" so a player who stops steering keeps racing
 on my turn (after each onConfirmed, if turn(nonce) == selfParty and not terminal):
     after STEP_MS pacing:
       A: dt.propose({ dirA: myDir }, 0n)         // B stays this tick
