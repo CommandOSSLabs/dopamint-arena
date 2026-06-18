@@ -1,8 +1,7 @@
 #[test_only]
 module sui_tunnel::example_rock_paper_scissors_tests;
 
-use std::unit_test::assert_eq;
-use sui::test_utils::destroy;
+use std::unit_test::{assert_eq, destroy};
 use sui::clock;
 use sui::coin::{Self, Coin};
 use sui::hash;

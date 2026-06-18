@@ -53,7 +53,7 @@ fun cancel_escrow_after_completion() {
     // Now status is COMPLETED, cancel should fail with invalid_state
     example_escrow::cancel_escrow<SUI>(&mut escrow, &mut ctx);
 
-    sui::test_utils::destroy(escrow);
+    std::unit_test::destroy(escrow);
     clock.destroy_for_testing();
 }
 
@@ -83,7 +83,7 @@ fun wrong_party_marks_delivered() {
     // sender is @0x0 (buyer), but mark_delivered requires seller (@0xBBBB) -> not_authorized
     example_escrow::mark_delivered<SUI>(&mut escrow, &clock, &ctx);
 
-    sui::test_utils::destroy(escrow);
+    std::unit_test::destroy(escrow);
     clock.destroy_for_testing();
 }
 
@@ -103,7 +103,7 @@ fun escrow_zero_amount() {
     let payment = sui::coin::mint_for_testing<SUI>(0, &mut ctx);
     let escrow = example_escrow::create_escrow<SUI>(@0xBBBB, b"test", payment, 0, &clock, &mut ctx);
 
-    sui::test_utils::destroy(escrow);
+    std::unit_test::destroy(escrow);
     clock.destroy_for_testing();
 }
 
@@ -124,7 +124,7 @@ fun escrow_same_buyer_seller() {
     // sender is @0x0 and seller is also @0x0 -> invalid_parties
     let escrow = example_escrow::create_escrow<SUI>(@0x0, b"test", payment, 0, &clock, &mut ctx);
 
-    sui::test_utils::destroy(escrow);
+    std::unit_test::destroy(escrow);
     clock.destroy_for_testing();
 }
 
@@ -156,7 +156,7 @@ fun buyer_cannot_refund() {
     // but sender is @0x0 (buyer) -> not_authorized
     example_escrow::refund_buyer<SUI>(&mut escrow, &mut ctx);
 
-    sui::test_utils::destroy(escrow);
+    std::unit_test::destroy(escrow);
     clock.destroy_for_testing();
 }
 
@@ -186,6 +186,6 @@ fun dispute_before_delivery() {
     // Escrow is FUNDED, not DELIVERED -> raise_dispute requires DELIVERED -> invalid_state
     example_escrow::raise_dispute<SUI>(&mut escrow, b"dispute reason", &clock, &ctx);
 
-    sui::test_utils::destroy(escrow);
+    std::unit_test::destroy(escrow);
     clock.destroy_for_testing();
 }

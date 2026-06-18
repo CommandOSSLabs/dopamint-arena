@@ -103,6 +103,15 @@ export class DistributedTunnel<State, Move> {
   get state(): State {
     return this._state;
   }
+  /**
+   * State to render NOW. While a proposal awaits its ACK this is the locally-applied,
+   * already-signed `pending.next`; otherwise the last confirmed state. Lets the UI show
+   * the proposer's own move instantly instead of waiting for the co-sign round-trip.
+   * Never use this for settlement or security decisions — use `state` (confirmed) for those.
+   */
+  get displayState(): State {
+    return this.pending ? this.pending.next : this._state;
+  }
   get nonce(): bigint {
     return this._nonce;
   }

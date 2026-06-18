@@ -55,6 +55,53 @@ export function buildCreateAndFund(
   });
 }
 
+/**
+ * PvP one-signature setup: open a shared tunnel AND fund seat A's stake in ONE PTB, so the
+ * creator (party A) approves a single wallet tx instead of create + deposit separately.
+ * Composes `create` (returns the owned object) → `deposit_party_a` (gated to the sender =
+ * party A's address) → `public_share_object` (valid because `Tunnel` has the `store` ability).
+ * Party B funds its own seat separately (`buildDepositFromGas`). `aAmount` is split off the gas
+ * coin, so SUI only — a non-SUI `coinType` would need a supplied source coin (not exposed here).
+ */
+export function buildOpenAndFundSeatA(
+  tx: Transaction,
+  p: {
+    partyA: PartyArgs;
+    partyB: PartyArgs;
+    aAmount: bigint;
+    timeoutMs: bigint;
+    penaltyAmount?: bigint;
+  } & WithCoinType,
+): void {
+  const coinType = p.coinType ?? SUI_COIN_TYPE;
+  const tunnel = tx.moveCall({
+    target: buildTarget(TUNNEL, "create"),
+    typeArguments: [coinType],
+    arguments: [
+      tx.pure.address(p.partyA.address),
+      vecU8(tx, p.partyA.publicKey),
+      tx.pure.u8(p.partyA.signatureType),
+      tx.pure.address(p.partyB.address),
+      vecU8(tx, p.partyB.publicKey),
+      tx.pure.u8(p.partyB.signatureType),
+      tx.pure.u64(p.timeoutMs),
+      tx.pure.u64(p.penaltyAmount ?? 0n),
+      tx.object(CLOCK),
+    ],
+  });
+  const [coin] = tx.splitCoins(tx.gas, [tx.pure.u64(p.aAmount)]);
+  tx.moveCall({
+    target: buildTarget(TUNNEL, "deposit_party_a"),
+    typeArguments: [coinType],
+    arguments: [tunnel, coin, tx.object(CLOCK)],
+  });
+  tx.moveCall({
+    target: "0x2::transfer::public_share_object",
+    typeArguments: [`${buildTarget(TUNNEL, "Tunnel")}<${coinType}>`],
+    arguments: [tunnel],
+  });
+}
+
 /** One tunnel's open spec: both parties plus each side's stake (coin's smallest unit). */
 export interface TunnelOpenSpec {
   partyA: PartyArgs;
