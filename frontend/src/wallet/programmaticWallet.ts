@@ -3,7 +3,6 @@
 // dapp-kit's useSignAndExecuteTransaction route through here unchanged — the agent signs the
 // gated deposit / cooperative close with zero UI. Feature shapes match @mysten/wallet-standard
 // 0.21 (sui:signTransaction / sui:signAndExecuteTransaction, both v2.0.0).
-import type { SuiClient } from "@mysten/sui/client";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import { Transaction } from "@mysten/sui/transactions";
 import { toBase64 } from "@mysten/sui/utils";
@@ -13,6 +12,17 @@ import {
   type SuiSignAndExecuteTransactionInput,
   type SuiSignTransactionInput,
 } from "@mysten/wallet-standard";
+
+// Structural client surface the wallet needs (avoids importing a named client type — the
+// app's own pattern, cf. tunnelTx `SuiReads`). The dapp-kit `useSuiClient()` value satisfies it.
+interface ExecClient {
+  executeTransactionBlock(input: {
+    transactionBlock: Uint8Array;
+    signature: string;
+    options?: { showRawEffects?: boolean };
+  }): Promise<{ digest: string; rawEffects?: number[] | null }>;
+  waitForTransaction(input: { digest: string }): Promise<unknown>;
+}
 
 // 1×1 transparent svg; the catalog/connect UI never shows for an agent.
 const ICON =
@@ -26,7 +36,7 @@ export class ProgrammaticWallet {
   readonly accounts: ReadonlyWalletAccount[];
   readonly features: Record<string, unknown>;
 
-  constructor(keypair: Ed25519Keypair, client: SuiClient) {
+  constructor(keypair: Ed25519Keypair, client: ExecClient) {
     const account = new ReadonlyWalletAccount({
       address: keypair.getPublicKey().toSuiAddress(),
       publicKey: keypair.getPublicKey().toRawBytes(),
@@ -37,7 +47,7 @@ export class ProgrammaticWallet {
 
     const sign = async (input: SuiSignTransactionInput) => {
       const tx = Transaction.from(await input.transaction.toJSON());
-      const bytes = await tx.build({ client });
+      const bytes = await tx.build({ client: client as never });
       const { signature } = await keypair.signTransaction(bytes);
       return { tx, bytes, signature };
     };
@@ -78,6 +88,6 @@ export class ProgrammaticWallet {
 }
 
 /** Build a wallet from a Bech32 `suiprivkey1…` secret (what `keypair.getSecretKey()` emits). */
-export function programmaticWalletFromSecret(secretKey: string, client: SuiClient) {
+export function programmaticWalletFromSecret(secretKey: string, client: ExecClient) {
   return new ProgrammaticWallet(Ed25519Keypair.fromSecretKey(secretKey), client);
 }

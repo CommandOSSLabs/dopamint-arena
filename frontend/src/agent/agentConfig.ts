@@ -35,3 +35,9 @@ export function parseAgentConfig(href: string): AgentConfig {
     concurrency: Math.max(1, Number(p.get("m") ?? "1")),
   };
 }
+
+/** Round-robin index into AGENT_GAMES; wraps. Lives here (not the engine) so it's testable
+ *  without pulling the engine's browser/SDK import graph into a node test. */
+export function nextGameIndex(i: number, len: number): number {
+  return len <= 1 ? 0 : (i + 1) % len;
+}
