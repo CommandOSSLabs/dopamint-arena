@@ -14,6 +14,7 @@ export interface GithubEnvInputs {
   privateSubnetIds: pulumi.Input<string[]>;
   backendSecurityGroupId: pulumi.Input<string>;
   benchmarkAsgName: pulumi.Input<string>;
+  reportsBucketName?: pulumi.Input<string>;
 }
 
 export function githubEnvOutputs(
@@ -33,5 +34,6 @@ export function githubEnvOutputs(
     PRIVATE_SUBNET_IDS: pulumi.output(inputs.privateSubnetIds).apply((ids) => ids.join(",")),
     BACKEND_SECURITY_GROUP_ID: inputs.backendSecurityGroupId,
     BENCHMARK_ASG_NAME: inputs.benchmarkAsgName,
+    REPORTS_BUCKET_NAME: inputs.reportsBucketName ?? "",
   };
 }

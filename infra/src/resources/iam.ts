@@ -16,6 +16,8 @@ export interface IamInputs {
   // Secret ARNs the ECS task-execution role may read to inject `secrets` at launch
   // (e.g. DB password, settler key). Scoped to exactly these resources.
   taskExecSecretArns?: pulumi.Input<string>[];
+  // S3 bucket ARN where benchmark instances upload load-test reports.
+  reportsBucketArn?: pulumi.Input<string>;
 }
 
 export function createIam(name: string, args: IamInputs): IamOutputs {
@@ -151,6 +153,24 @@ export function createIam(name: string, args: IamInputs): IamOutputs {
       "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy",
     ],
   });
+
+  if (args.reportsBucketArn) {
+    new aws.iam.RolePolicy(`${name}-benchmark-reports-policy`, {
+      role: benchmarkRole.id,
+      policy: pulumi.all([args.reportsBucketArn]).apply(([bucketArn]) =>
+        JSON.stringify({
+          Version: "2012-10-17",
+          Statement: [
+            {
+              Effect: "Allow",
+              Action: ["s3:PutObject", "s3:GetObject", "s3:ListBucket"],
+              Resource: [bucketArn, `${bucketArn}/*`],
+            },
+          ],
+        })
+      ),
+    });
+  }
 
   const benchmarkInstanceProfile = new aws.iam.InstanceProfile(`${name}-benchmark-profile`, {
     role: benchmarkRole.name,

@@ -17,6 +17,7 @@ import { createBackendService } from "./components/BackendService.js";
 import { createBackendAlias } from "./components/BackendAlias.js";
 import { createMonitoring } from "./components/Monitoring.js";
 import { createBenchmarkFleet } from "./components/BenchmarkFleet.js";
+import { createReportsBucket } from "./components/ReportsBucket.js";
 import { githubEnvOutputs } from "./github.js";
 
 const cfg = getConfig();
@@ -64,6 +65,8 @@ if (cfg.settlerKey) {
   settlerKeySecretArn = settlerKeySecret.arn;
 }
 
+const reportsBucket = createReportsBucket(`dopamint-${cfg.environment}-reports`);
+
 const iam = createIam(`dopamint-${cfg.environment}`, {
   githubOrg: "CommandOSSLabs",
   githubRepo: "dopamint-arena",
@@ -71,6 +74,7 @@ const iam = createIam(`dopamint-${cfg.environment}`, {
     database.dbPasswordSecretArn,
     ...(settlerKeySecretArn ? [settlerKeySecretArn] : []),
   ],
+  reportsBucketArn: reportsBucket.arn,
 });
 
 const ecr = createEcr(`dopamint-${cfg.environment}`);
@@ -152,6 +156,7 @@ export const backendTaskDefinitionArn = backend.taskDefinitionArn;
 export const migrationTaskDefinitionArn = backend.migrationTaskDefinitionArn;
 export const backendServiceName = backendService.serviceName;
 export const backendTargetGroupArn = alb.targetGroup.arn;
+export const reportsBucketName = reportsBucket.bucket;
 export const backendSecurityGroupId = sgs.backend.id;
 export const dbClusterIdentifier = database.clusterIdentifier;
 export const dbSubnetGroupName = database.dbSubnetGroupName;
@@ -189,6 +194,7 @@ export const githubEnv = githubEnvOutputs({
   privateSubnetIds: network.privateSubnetIds,
   backendSecurityGroupId: sgs.backend.id,
   benchmarkAsgName: benchmarkFleet.asgName,
+  reportsBucketName,
 });
 
 export const benchmarkAsgName = benchmarkFleet.asgName;
