@@ -14,7 +14,10 @@ import { DistributedTunnel } from "sui-tunnel-ts/core/distributedTunnel";
 import { Transcript } from "sui-tunnel-ts/proof/transcript";
 import { createBehaviorProtocol } from "sui-tunnel-ts/agents/behaviors";
 import { MpClient, resolveMpWsUrl, type PvpChannel } from "../pvp/mpClient";
-import { getControlPlaneClient, resolveBackendUrl } from "../backend/controlPlane";
+import {
+  getControlPlaneClient,
+  resolveBackendUrl,
+} from "../backend/controlPlane";
 import {
   closeCooperativeWithRoot,
   depositStake,
@@ -64,80 +67,102 @@ function makeInbox(channel: PvpChannel) {
     });
 }
 
-async function playOneMatch(mp: MpClient, deps: AgentDeps, spec: GameSpec): Promise<void> {
+async function playOneMatch(
+  mp: MpClient,
+  deps: AgentDeps,
+  spec: GameSpec,
+): Promise<void> {
   const eph: KeyPair = generateKeyPair(); // per-slot move-signing key
   const match = await mp.quickMatch(spec.id);
-  const channel = mp.channel(match.matchId);
-  const waitPeer = makeInbox(channel);
+  try {
+    const channel = mp.channel(match.matchId);
+    const waitPeer = makeInbox(channel);
 
-  channel.sendPeer({ t: "hello", ephemeralPubkey: toHex(eph.publicKey) });
-  const oppPub = fromHex((await waitPeer<{ ephemeralPubkey: string }>("hello")).ephemeralPubkey);
+    channel.sendPeer({ t: "hello", ephemeralPubkey: toHex(eph.publicKey) });
+    const oppPub = fromHex(
+      (await waitPeer<{ ephemeralPubkey: string }>("hello")).ephemeralPubkey,
+    );
 
-  // Fund: seat A opens + funds its seat in one tx then announces; seat B gated-deposits.
-  let tunnelId: string;
-  if (match.role === "A") {
-    tunnelId = await openAndFundSharedTunnel({
-      reads: deps.reads,
-      signExec: deps.signExec,
-      partyA: { address: deps.wallet, publicKey: eph.publicKey },
-      partyB: { address: match.opponentWallet, publicKey: oppPub },
-      amount: spec.stake,
-    });
-    mp.announceTunnel(match.matchId, tunnelId);
-    channel.sendPeer({ t: "open", tunnelId });
-  } else {
-    tunnelId = (await waitPeer<{ tunnelId: string }>("open")).tunnelId;
-    await depositStake({ signExec: deps.signExec, tunnelId, amount: spec.stake });
-  }
-
-  // Build the distributed engine over the relay transport; protocol chosen by game.
-  const proto = createBehaviorProtocol(spec.behavior) as unknown as Proto;
-  const backend = defaultBackend();
-  const self = makeEndpoint(backend, deps.wallet, eph, true);
-  const opp = makeEndpoint(
-    backend,
-    match.opponentWallet,
-    { publicKey: oppPub, scheme: eph.scheme },
-    false,
-  );
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- generic protocol bridge
-  const dt = new DistributedTunnel(
-    proto as never,
-    { tunnelId, self, opponent: opp, selfParty: match.role },
-    channel.transport,
-    { a: spec.stake, b: spec.stake },
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  ) as any;
-  const transcript = new Transcript(tunnelId);
-
-  // Auto-play: propose a random legal move whenever it is our turn (pvpTttBot's loop).
-  const move = () => {
-    if (proto.isTerminal(dt.state)) return;
-    if (dt.state.turn === match.role) {
-      const m = proto.randomMove?.(dt.state, match.role, Math.random);
-      if (m) dt.propose(m, 0n);
+    // Fund: seat A opens + funds its seat in one tx then announces; seat B gated-deposits.
+    let tunnelId: string;
+    if (match.role === "A") {
+      tunnelId = await openAndFundSharedTunnel({
+        reads: deps.reads,
+        signExec: deps.signExec,
+        partyA: { address: deps.wallet, publicKey: eph.publicKey },
+        partyB: { address: match.opponentWallet, publicKey: oppPub },
+        amount: spec.stake,
+      });
+      mp.announceTunnel(match.matchId, tunnelId);
+      channel.sendPeer({ t: "open", tunnelId });
+    } else {
+      tunnelId = (await waitPeer<{ tunnelId: string }>("open")).tunnelId;
+      await depositStake({
+        signExec: deps.signExec,
+        tunnelId,
+        amount: spec.stake,
+      });
     }
-  };
 
-  await new Promise<void>((resolve, reject) => {
-    let settling = false;
-    dt.onConfirmed = (u: CoSignedUpdate) => {
-      transcript.append(u);
-      if (proto.isTerminal(dt.state)) {
-        if (settling) return;
-        settling = true;
-        settle(dt, match.role, channel, waitPeer, deps, tunnelId, transcript).then(resolve, reject);
-      } else {
-        move();
+    // Build the distributed engine over the relay transport; protocol chosen by game.
+    const proto = createBehaviorProtocol(spec.behavior) as unknown as Proto;
+    const backend = defaultBackend();
+    const self = makeEndpoint(backend, deps.wallet, eph, true);
+    const opp = makeEndpoint(
+      backend,
+      match.opponentWallet,
+      { publicKey: oppPub, scheme: eph.scheme },
+      false,
+    );
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- generic protocol bridge
+    const dt = new DistributedTunnel(
+      proto as never,
+      { tunnelId, self, opponent: opp, selfParty: match.role },
+      channel.transport,
+      { a: spec.stake, b: spec.stake },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ) as any;
+    const transcript = new Transcript(tunnelId);
+
+    // Auto-play: propose a random legal move whenever it is our turn (pvpTttBot's loop).
+    const move = () => {
+      if (proto.isTerminal(dt.state)) return;
+      if (dt.state.turn === match.role) {
+        const m = proto.randomMove?.(dt.state, match.role, Math.random);
+        if (m) dt.propose(m, 0n);
       }
     };
-    // Readiness handshake only after onConfirmed is wired, then kick off if we move first.
-    if (match.role === "A") void waitPeer("ready").then(() => move());
-    else {
-      channel.sendPeer({ t: "ready" });
-      move();
-    }
-  });
+
+    await new Promise<void>((resolve, reject) => {
+      let settling = false;
+      dt.onConfirmed = (u: CoSignedUpdate) => {
+        transcript.append(u);
+        if (proto.isTerminal(dt.state)) {
+          if (settling) return;
+          settling = true;
+          settle(
+            dt,
+            match.role,
+            channel,
+            waitPeer,
+            deps,
+            tunnelId,
+            transcript,
+          ).then(resolve, reject);
+        } else {
+          move();
+        }
+      };
+      // Readiness handshake only after onConfirmed is wired, then kick off if we move first.
+      if (match.role === "A") void waitPeer("ready").then(() => move());
+      else {
+        channel.sendPeer({ t: "ready" });
+        move();
+      }
+    });
+  } finally {
+    mp.releaseMatch(match.matchId);
+  }
 }
 
 /** Exchange root-anchored settlement halves, then seat A submits via backend /settle (Walrus),
@@ -149,7 +174,11 @@ async function settle(
       root: Uint8Array,
       n: bigint,
     ) => { settlement: SettlementHalf; sigSelf: Uint8Array };
-    combineSettlementWithRoot: (s: SettlementHalf, a: Uint8Array, b: Uint8Array) => unknown;
+    combineSettlementWithRoot: (
+      s: SettlementHalf,
+      a: Uint8Array,
+      b: Uint8Array,
+    ) => unknown;
   },
   role: "A" | "B",
   channel: PvpChannel,
@@ -170,18 +199,31 @@ async function settle(
     transcriptRoot: toHex(root),
     sig: toHex(half.sigSelf),
   });
-  const other = await waitPeer<{ sig: string; transcriptRoot: string }>("settleHalf");
+  const other = await waitPeer<{ sig: string; transcriptRoot: string }>(
+    "settleHalf",
+  );
   if (other.transcriptRoot !== toHex(root)) {
     throw new Error("settlement transcript-root mismatch between parties");
   }
-  const co = dt.combineSettlementWithRoot(half.settlement, half.sigSelf, fromHex(other.sig));
+  const co = dt.combineSettlementWithRoot(
+    half.settlement,
+    half.sigSelf,
+    fromHex(other.sig),
+  );
   if (role !== "A") return; // single submitter
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await getControlPlaneClient().settle(tunnelId, coSignedToSettleRequest(co as any, transcript.toRecord().entries));
+    await getControlPlaneClient().settle(
+      tunnelId,
+      coSignedToSettleRequest(co as any, transcript.toRecord().entries),
+    );
   } catch {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await closeCooperativeWithRoot({ signExec: deps.signExec, tunnelId, settlement: co as any });
+    await closeCooperativeWithRoot({
+      signExec: deps.signExec,
+      tunnelId,
+      settlement: co as any,
+    });
   }
 }
 
@@ -225,11 +267,15 @@ export async function runAgent(
         await playOneMatch(mp, slotDeps, spec);
         deps.onStatus?.(`slot${i}:settled:${spec.id}`);
       } catch (e) {
-        deps.onStatus?.(`slot${i}:error:${spec.id}:${String((e as Error)?.message ?? e)}`);
+        deps.onStatus?.(
+          `slot${i}:error:${spec.id}:${String((e as Error)?.message ?? e)}`,
+        );
       }
       gi = nextGameIndex(gi, AGENT_GAMES.length);
     }
   };
-  await Promise.all(Array.from({ length: Math.max(1, concurrency) }, (_, i) => slot(i)));
+  await Promise.all(
+    Array.from({ length: Math.max(1, concurrency) }, (_, i) => slot(i)),
+  );
   mp.close();
 }

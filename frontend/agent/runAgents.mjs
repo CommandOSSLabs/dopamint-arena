@@ -8,6 +8,7 @@ import { chromium } from "playwright";
 const BASE = process.env.BASE_URL ?? "http://localhost:5074";
 const keys = JSON.parse(readFileSync(new URL("./keys.json", import.meta.url)));
 const K = Number(process.env.K ?? 2);
+const M = Number(process.env.M ?? 1); // concurrent tunnel slots per agent (multiplexed)
 const DURATION = Number(process.env.TIMEOUT_MS ?? 60_000);
 
 const browser = await chromium.launch({
@@ -33,7 +34,7 @@ for (let i = 0; i < K; i++) {
     }
   });
   page.on("pageerror", (e) => console.log(`[agent ${i}] PAGEERROR ${e.message}`));
-  await page.goto(`${BASE}/?agent&key=${encodeURIComponent(keys[i % keys.length].secretKey)}`);
+  await page.goto(`${BASE}/?agent&m=${M}&key=${encodeURIComponent(keys[i % keys.length].secretKey)}`);
 }
 
 const start = Date.now();
