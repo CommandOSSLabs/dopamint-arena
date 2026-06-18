@@ -17,7 +17,7 @@
         "jwt-decode": "^4.0.0",
         "react": "18.3.1",
         "react-dom": "18.3.1",
-        "sui-tunnel-ts": "file:../../../reference/sui-tunnel-ts",
+        "sui-tunnel-ts": "file:../../../../../../sui-tunnel-ts",
         "zod": "^3.23.8",
       },
       "devDependencies": {
@@ -39,7 +39,7 @@
         "@mysten/sui": "^1.2.1",
         "@noble/bls12-381": "^1.4.0",
         "@noble/hashes": "^1.4.0",
-        "sui-tunnel-ts": "file:../../../reference/sui-tunnel-ts",
+        "sui-tunnel-ts": "file:../../../../../../sui-tunnel-ts",
       },
       "devDependencies": {
         "@types/bun": "latest",
@@ -660,9 +660,9 @@
 
     "@mysten/zksend/valibot": ["valibot@0.36.0", "", {}, "sha512-CjF1XN4sUce8sBK9TixrDqFM7RwNkuXdJu174/AwmQUB62QbCQADg5lLe8ldBalFgtj1uKj+pKwDJiNo4Mn+eQ=="],
 
-    "@ttt/client/sui-tunnel-ts": ["sui-tunnel-ts@file:../reference/sui-tunnel-ts", { "dependencies": { "@mysten/sui": "1.28.1", "@noble/curves": "^2.2.0", "@noble/hashes": "^1.8.0", "dotenv": "^16.6.1" }, "devDependencies": { "@types/node": "^20.19.43", "env-cmd": "^10.1.0", "prettier": "2.8.8", "tsx": "^4.22.4", "typescript": "^5.9.3" } }],
+    "@ttt/client/sui-tunnel-ts": ["sui-tunnel-ts@file:../../../../sui-tunnel-ts", { "dependencies": { "@mysten/sui": "1.28.1", "@noble/curves": "^2.2.0", "@noble/hashes": "^1.8.0", "dotenv": "^16.6.1" }, "devDependencies": { "@types/node": "^20.19.43", "env-cmd": "^10.1.0", "prettier": "2.8.8", "tsx": "^4.22.4", "typescript": "^5.9.3" } }],
 
-    "@ttt/shared/sui-tunnel-ts": ["sui-tunnel-ts@file:../reference/sui-tunnel-ts", { "dependencies": { "@mysten/sui": "1.28.1", "@noble/curves": "^2.2.0", "@noble/hashes": "^1.8.0", "dotenv": "^16.6.1" }, "devDependencies": { "@types/node": "^20.19.43", "env-cmd": "^10.1.0", "prettier": "2.8.8", "tsx": "^4.22.4", "typescript": "^5.9.3" } }],
+    "@ttt/shared/sui-tunnel-ts": ["sui-tunnel-ts@file:../../../../sui-tunnel-ts", { "dependencies": { "@mysten/sui": "1.28.1", "@noble/curves": "^2.2.0", "@noble/hashes": "^1.8.0", "dotenv": "^16.6.1" }, "devDependencies": { "@types/node": "^20.19.43", "env-cmd": "^10.1.0", "prettier": "2.8.8", "tsx": "^4.22.4", "typescript": "^5.9.3" } }],
 
     "@wallet-standard/errors/commander": ["commander@13.1.0", "", {}, "sha512-/rFeCpNJQbhSZjGVwO9RFV3xPqbnERS8MmIQzCtD/zl6gpJuV/bMLuN92oG3F7d8oDEHHRrujSXNUr8fpjntKw=="],
 
