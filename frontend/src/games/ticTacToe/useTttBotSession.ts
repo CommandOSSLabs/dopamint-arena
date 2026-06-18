@@ -14,7 +14,7 @@ type Move = { cell: number };
 
 const STAKE_BALANCE = 500n; // locked per bot seat (MIST)
 const STAKE_SHIFT = 100n; // moves loser→winner on a decisive result
-const STEP_MS = 700; // pacing between bot moves
+const STEP_MS = 50; // pacing between bot moves — low = faster play, more co-signed updates/sec
 
 export type TttBotStatus = "idle" | "funding" | "playing" | "settling" | "settled" | "error";
 
