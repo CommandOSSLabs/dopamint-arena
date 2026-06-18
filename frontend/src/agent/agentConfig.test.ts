@@ -24,9 +24,9 @@ test("?m sets concurrency (min 1)", () => {
   assert.equal(parseAgentConfig("https://x/?agent&m=0").concurrency, 1);
 });
 
-test("rotation set is the five tunnel games", () => {
+test("rotation set is tic-tac-toe only until the move-trigger fix", () => {
   assert.deepEqual(
     AGENT_GAMES.map((g) => g.id),
-    ["tictactoe", "blackjack", "payments", "chat", "quantumpoker"],
+    ["tictactoe"],
   );
 });

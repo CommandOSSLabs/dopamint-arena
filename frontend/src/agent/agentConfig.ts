@@ -12,13 +12,16 @@ export interface GameSpec {
   stake: bigint;
 }
 
-// The full rotation set; the engine cycles this to keep every queue populated.
+// The rotation set the engine cycles. Only tic-tac-toe is move-trigger-ready today; the
+// others use a phase-based turn model the generic move-trigger doesn't yet drive (deferred
+// follow-up), and rotating into them would open tunnels that stall and strand stakes. Re-add
+// them once the move-trigger is protocol-driven.
 export const AGENT_GAMES: GameSpec[] = [
   { id: "tictactoe", behavior: "tictactoe", stake: 500n },
-  { id: "blackjack", behavior: "blackjack", stake: 500n },
-  { id: "payments", behavior: "payment", stake: 500n },
-  { id: "chat", behavior: "chat", stake: 500n },
-  { id: "quantumpoker", behavior: "poker", stake: 500n },
+  // { id: "blackjack", behavior: "blackjack", stake: 500n },
+  // { id: "payments", behavior: "payment", stake: 500n },
+  // { id: "chat", behavior: "chat", stake: 500n },
+  // { id: "quantumpoker", behavior: "poker", stake: 500n },
 ];
 
 export interface AgentConfig {

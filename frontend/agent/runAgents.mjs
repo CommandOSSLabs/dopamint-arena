@@ -1,14 +1,14 @@
-// Launch K agent contexts against the dev page with bare ?agent (all-games rotation).
-// Anti-throttle flags are REQUIRED or background contexts idle (spec §5).
-// Run: BASE_URL=http://localhost:5074 K=2 node agent/runAgents.mjs
-// The 2-context proof: both agents start their rotation at game[0] (tic-tac-toe), so they
-// share a queue and match each other; assert both reach a "settled" status.
+// Launch K agent contexts against the dev page with bare ?agent (rotation = tic-tac-toe only
+// for now, §AGENT_GAMES), run for a duration, and count completed (settled) tunnels — a ramp /
+// throughput observation. Anti-throttle flags are REQUIRED or background contexts idle (spec §5).
+// Run: BASE_URL=http://localhost:5074 K=10 TIMEOUT_MS=60000 node agent/runAgents.mjs
 import { readFileSync } from "node:fs";
 import { chromium } from "playwright";
 
 const BASE = process.env.BASE_URL ?? "http://localhost:5074";
 const keys = JSON.parse(readFileSync(new URL("./keys.json", import.meta.url)));
 const K = Number(process.env.K ?? 2);
+const DURATION = Number(process.env.TIMEOUT_MS ?? 60_000);
 
 const browser = await chromium.launch({
   headless: true,
@@ -19,31 +19,32 @@ const browser = await chromium.launch({
   ],
 });
 
-const settledAgents = new Set(); // tracked from console events (no DOM-poll race)
-const pages = [];
+let settleCount = 0;
+const settledAgents = new Set();
 for (let i = 0; i < K; i++) {
-  const ctx = await browser.newContext();
-  const page = await ctx.newPage();
+  const page = await (await browser.newContext()).newPage();
   page.on("console", (m) => {
     const t = m.text();
-    console.log(`[agent ${i}] ${t}`);
-    if (t.includes("[agentstatus]") && t.includes(":settled:")) settledAgents.add(i);
+    if (t.includes("[agentstatus]") && t.includes(":settled:")) {
+      settleCount++;
+      settledAgents.add(i);
+    } else if (/fatal|PAGEERROR|HTTP [45]\d\d/i.test(t)) {
+      console.log(`[agent ${i}] ${t}`);
+    }
   });
   page.on("pageerror", (e) => console.log(`[agent ${i}] PAGEERROR ${e.message}`));
-  page.on("response", (r) => {
-    if (r.status() >= 400) console.log(`[agent ${i}] HTTP ${r.status()} ${r.request().method()} ${r.url()}`);
-  });
-  await page.goto(`${BASE}/?agent&key=${encodeURIComponent(keys[i].secretKey)}`);
-  pages.push(page);
+  await page.goto(`${BASE}/?agent&key=${encodeURIComponent(keys[i % keys.length].secretKey)}`);
 }
 
-const TIMEOUT = Number(process.env.TIMEOUT_MS ?? 90_000);
-const need = Math.min(2, K);
-const deadline = Date.now() + TIMEOUT;
-while (Date.now() < deadline && settledAgents.size < need) {
-  await new Promise((r) => setTimeout(r, 500));
+const start = Date.now();
+while (Date.now() - start < DURATION) {
+  await new Promise((r) => setTimeout(r, 5000));
+  const s = Math.round((Date.now() - start) / 1000);
+  console.log(`[t+${s}s] settled tunnels: ${settleCount} | distinct agents settled: ${settledAgents.size}/${K}`);
 }
-const ok = settledAgents.size >= need;
-console.log(`settled agents: ${settledAgents.size}/${need} -> ${ok ? "PASS" : "FAIL"}`);
+const secs = (Date.now() - start) / 1000;
+console.log(
+  `DONE: ${K} agents | ${settleCount} tunnels settled in ${secs.toFixed(0)}s | ~${(settleCount / secs).toFixed(2)} tunnels/s | distinct ${settledAgents.size}/${K}`,
+);
 await browser.close();
-process.exit(ok ? 0 : 1);
+process.exit(settledAgents.size >= Math.min(2, K) ? 0 : 1);
