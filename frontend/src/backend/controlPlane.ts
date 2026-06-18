@@ -111,7 +111,15 @@ export interface ControlPlaneClient {
    *  (ADR-0007) — no session token. */
   settle(tunnelId: string, body: SettleRequestBody): Promise<SettleResult>;
   /** Subscribe to the live aggregate SSE feed; returns an unsubscribe fn. */
-  openStatsStream(onSnapshot: (snapshot: StatsSnapshot) => void): () => void;
+  openStatsStream(handlers: StatsStreamHandlers): () => void;
+}
+
+/** Callbacks for {@link ControlPlaneClient.openStatsStream}. `onError` fires when the SSE
+ *  connection fails (e.g. backend unreachable), letting the UI tell "connecting" apart from
+ *  "offline" instead of treating both as a null snapshot. */
+export interface StatsStreamHandlers {
+  onSnapshot: (snapshot: StatsSnapshot) => void;
+  onError?: () => void;
 }
 
 class ControlPlaneError extends Error {
@@ -173,15 +181,16 @@ export function createControlPlaneClient(baseUrl: string): ControlPlaneClient {
       return (await res.json()) as SettleResult;
     },
 
-    openStatsStream(onSnapshot) {
+    openStatsStream(handlers) {
       const source = new EventSource(`${root}/v1/stats/live`);
       source.onmessage = (ev) => {
         try {
-          onSnapshot(JSON.parse(ev.data) as StatsSnapshot);
+          handlers.onSnapshot(JSON.parse(ev.data) as StatsSnapshot);
         } catch {
           // ignore malformed frames; the feed is best-effort
         }
       };
+      source.onerror = () => handlers.onError?.();
       return () => source.close();
     },
   };

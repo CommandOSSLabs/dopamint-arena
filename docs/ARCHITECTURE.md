@@ -1,15 +1,16 @@
 # Dopamint Arena — System Design
 
 Dopamint Arena is a Walrus-published page where visitors connect a Sui wallet and
-are automatically paired — with another visitor or with a simulation agent — into
-a **two-party Sui tunnel**. The pair locks stakes on-chain, exchanges thousands of
+are automatically paired — with another visitor or with an **independent agent**
+(its own wallet + ephemeral key) — into a **two-party Sui tunnel**. The pair locks stakes on-chain, exchanges thousands of
 dual-signed, mutually-verified state updates **off-chain** (a hand of blackjack, a
 payment stream, a chat, …) for a few minutes, closes the tunnel on-chain, and
 optionally archives the full transcript to Walrus as a proof of existence.
 
 Hundreds to thousands of these channels run concurrently. An on-screen activity
-wall sums them into a live **effective-TPS** figure that peaks in the millions for
-the duration of the event.
+wall sums them into a live **effective-TPS** figure; the event targets **millions**
+of effective TPS, sourced entirely from genuine two-party play and bounded by real
+scale (the achievable figure is measured, never manufactured — see Throughput model).
 
 - **Status**: design of record — July-4 live demo.
 
@@ -24,7 +25,7 @@ graph TB
         A[Agent fleet<br/>headless, machine-speed]
     end
 
-    subgraph Hot["Per-move hot path — client-local, co-signed"]
+    subgraph Hot["Per-move hot path — co-signed between two parties"]
         E[Off-chain engine + per-game Protocol]
     end
 
@@ -48,7 +49,7 @@ graph TB
     ST -->|cooperative close| Chain
     ST --> WAL
     IDX -.->|reads lifecycle events| Chain
-    ST -->|activity wall (SSE)| H
+    ST -->|"activity wall (SSE)"| H
     MM <-->|presence · queues · matches| Redis
     RL <-->|deliver across instances| Redis
     ST <-->|stats counters · registry| Redis
@@ -57,10 +58,12 @@ graph TB
     style RL fill:#ffcc99
 ```
 
-The **green box is the hot path**: the per-move loop lives entirely between the
-two parties' engines. The relay forwards opaque frames but cannot read or forge
-them; no control-plane component sits inside the loop, which is what lets the
-system scale to many concurrent high-rate channels.
+The **green box is the hot path**: the per-move *logic* lives entirely in the two
+parties' engines. The relay is a **dumb opaque pipe** on the path — it forwards
+frames between the two seats but does no per-move computation, holds no game state,
+and cannot read or forge a frame — so it is never a counterparty or a signer, and it
+scales horizontally rather than capping the rate. (A swappable P2P transport can drop
+the relay from the path entirely; see [Identity, custody & trust](#identity-custody--trust).)
 
 ---
 
@@ -181,37 +184,25 @@ addition, not part of this design.
 
 ---
 
-## Play topologies — relayed PvP vs. client-local self-play
+## Play topology — genuine two-party only
 
-The flow above is the **relayed-PvP** path: two distinct parties exchange opaque
-co-signed frames through the relay. But not every game has a second party. A game
-whose "opponent" carries no independent human will runs **entirely inside one
-client** as **self-play**, and for it the relay and matchmaking drop out completely.
+Every tunnel is **two independent parties**, each holding only its *own* ephemeral
+key and neither able to forge the other; they exchange opaque co-signed frames
+through the relay (or a swappable P2P transport). There is **no self-play** — one
+process holding both keys and signing to itself proves volume, not tunnels, and the
+volume it produces is fakeable (see [Live event & provenance](#live-event--provenance)
+and [ADR-0006](decisions/0006-genuine-two-party-only-drop-self-play.md)). A party is
+a **real human** (browser + wallet) or an **independent agent** (own wallet + key,
+playing at machine speed) — both take the identical path: gated deposit per seat,
+ephemeral key signs each move, payout directed to the wallet.
 
-**Self-play (one client holds both seats).** A single client (today, the browser
-running blackjack) mints *two* ephemeral keys — one per seat — and funds *both*
-seats in a **single wallet signature** (`create_and_fund`). The off-chain engine
-then runs both endpoints in-process (`OffchainTunnel.selfPlay`): every move is
-co-signed and verified by both keys exactly as in PvP, so the wire bytes stay
-**byte-identical to the on-chain verifier** and the chain sees an ordinary two-party
-tunnel lifecycle — the same explorer trace, the same settlement. What disappears is
-the network in the middle: **no relay, no matchmaking, no cross-instance delivery**,
-and the per-move loop never leaves the tab. The control plane is even further off the
-path than in PvP — it sees only the best-effort stats stream (one `registerSession`,
-then coarse ~1/s heartbeats), never a frame. Cooperative close has both seat keys
-sign the final balances and the wallet submits; payouts land on the **ephemeral seat
-addresses**, not back on the wallet.
-
-**Why blackjack and poker are self-play-only.** *Blackjack* is a house game: the
-dealer follows a fixed, deterministic policy — there is no second human to relay to,
-so the player and dealer seats both run locally. *Quantum poker*'s hidden-information
-commit-reveal shuffle isn't carried over the relay either, so it is **designed for**
-the same client-local model — its window is a placeholder today; blackjack is the
-shipped example. The contrast is **tic-tac-toe**: symmetric, perfect-information, two
-genuine humans — so it is the relayed-PvP game, matchmade and relayed through
-tunnel-manager. This is also why the "ephemeral session key" the browser mints (see
-Components) is really *one per seat*: a PvP client holds one, a self-play client holds
-both.
+**A game's "house" role is a real counterparty, not a self seat.** Blackjack's dealer
+follows a fixed policy and quantum poker's shuffle is dealerless — neither implies a
+second *human*, but each is run by an **independent counterparty agent** with its own
+key, so the tunnel still has two parties who genuinely co-sign. Tic-tac-toe is the
+symmetric case: two parties, perfect information. Across all of them the engine, wire
+format, and on-chain lifecycle are identical — only *who holds the second key* differs.
+Each client or agent therefore mints exactly **one** ephemeral key, for its own seat.
 
 ---
 
@@ -236,12 +227,20 @@ framework supplies signing, settlement, and replay protection.
 effective TPS  =  (concurrent channels)  ×  (moves/sec per channel)
 ```
 
-- A channel is **sequential** — one tunnel's moves are strictly ordered by a
-  per-tunnel nonce — and its per-move rate is bounded by the **round-trip between
-  the two co-signers**. So the headline volume comes from running **many channels
-  in parallel** across the agent fleet, not from any single fast channel. Human
-  channels are a handful of slow lanes; they prove the system is open to anyone and
-  carry the experience, not the number.
+- Every channel is **two independent parties** — agent-vs-agent, or a human against
+  either — never one process self-signing, which is what makes the volume genuine
+  (see [ADR-0006](decisions/0006-genuine-two-party-only-drop-self-play.md)). A channel
+  is **sequential** — one tunnel's moves are strictly ordered by a per-tunnel nonce —
+  and its per-move rate is bounded by the real **network round-trip between the two
+  co-signers**, not an in-process call. So the headline volume comes from running
+  **many genuine two-party channels in parallel** across the agent fleet, not from any
+  single fast channel. Human channels are a handful of slower lanes and the ideal
+  source; the fleet supplies the bulk, each lane still two distinct keys.
+- **≥1M effective TPS is the aspiration, set by *real* scale — not asserted.** It is
+  reached only by enough genuine two-party lanes running at once, and the achievable
+  figure is **measured, never manufactured** (concrete rates are bench-gated; see
+  DEMO-STRATEGY "Numbers — TBD"). A real round-trip per move makes each lane slower
+  than an in-process loop would — that is the price of *not fakeable*, and the point.
 - Capacity therefore scales **linearly with fleet cores** — each added lane adds
   its full rate to the aggregate.
 - **Aggregate at the edge, sum at the center.** Each party counts its own moves and
@@ -275,8 +274,10 @@ Two notions of "real," with very different costs:
 - **Cryptographic realism** is free and *verifiable*: ed25519 signatures are
   byte-identical whether produced by a browser or a headless agent, and every move
   verifies through the same on-chain path. A block explorer shows thousands of
-  independent wallets running genuine tunnel lifecycles; any transaction pulled
-  checks out.
+  independent wallets running genuine tunnel lifecycles — **two independent parties
+  per tunnel, never one operator signing to itself** — so any transaction pulled
+  checks out. This is the realism that "not fakeable" buys: not that a human typed
+  it, but that two keys that cannot forge each other genuinely co-signed.
 - **Human provenance** — proof a real person generated the traffic — is *not*
   recoverable from the bytes. So it is supplied off-band: small **airdrop prizes**
   for participants who **record their screen on a phone and post it to social**.

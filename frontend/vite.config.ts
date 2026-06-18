@@ -18,8 +18,6 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react(), tailwindcss()],
     server: {
-      port: 5074,
-      strictPort: true,
       proxy: {
         "/v1": { target: BACKEND_ALB, changeOrigin: true, ws: true },
       },

@@ -37,13 +37,14 @@ interface TelemetryContextValue {
 const TelemetryContext = createContext<TelemetryContextValue | null>(null);
 
 export function TelemetryProvider({ children }: { children: ReactNode }) {
-  // Seed from the placeholder so the shell looks populated before any play.
-  const [txns, setTxns] = useState<TxnRow[]>(PLACEHOLDER_SNAPSHOT.txns);
-  const [localTxns, setLocalTxns] = useState<TxnRow[]>(PLACEHOLDER_SNAPSHOT.localTxns);
+  // Feeds start empty (honest "no activity yet") and fill from real play / backend events;
+  // the placeholder is only used as the offline-demo fallback (see the snapshot memo below).
+  const [txns, setTxns] = useState<TxnRow[]>([]);
+  const [localTxns, setLocalTxns] = useState<TxnRow[]>([]);
   const [tpsSeries, setTpsSeries] = useState<number[]>(PLACEHOLDER_SNAPSHOT.tpsSeries);
   const [botsRunning, setBotsRunning] = useState<number>(PLACEHOLDER_SNAPSHOT.botsRunning);
   const [hasActivity, setHasActivity] = useState(false);
-  const backend = useBackendStats();
+  const { snapshot: backend, status } = useBackendStats();
 
   const counters = useRef<Counters>(newCounters());
   const startMs = useRef<number>(Date.now());
@@ -78,20 +79,23 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
   const setActive = useCallback((n: number) => setBotsRunning(n), []);
 
   const snapshot = useMemo<TelemetrySnapshot>(() => {
+    // Reserve the demo placeholder for a genuinely-offline backend with no local play. While
+    // connecting or live, show real-or-empty so a refresh never flashes fake data first.
+    if (status === "offline" && !hasActivity) return PLACEHOLDER_SNAPSHOT;
+
     const elapsed = Math.max(1, Date.now() - startMs.current);
-    const localRate = hasActivity ? rateReport(counters.current, elapsed) : PLACEHOLDER_SNAPSHOT.rate;
-    if (!hasActivity && !backend) return PLACEHOLDER_SNAPSHOT;
+    const localRate = rateReport(hasActivity ? counters.current : newCounters(), elapsed);
     return {
       rate: { ...localRate, updatesPerSec: displayUpdatesPerSec(backend, localRate.updatesPerSec) },
-      txns: liveOnchainTxns(backend, hasActivity ? txns : PLACEHOLDER_SNAPSHOT.txns),
-      localTxns: hasActivity ? localTxns : PLACEHOLDER_SNAPSHOT.localTxns,
+      txns: liveOnchainTxns(backend, hasActivity ? txns : []),
+      localTxns: hasActivity ? localTxns : [],
       deposits: PLACEHOLDER_SNAPSHOT.deposits,
       tpsSeries,
       botsRunning,
       totalBalance: PLACEHOLDER_SNAPSHOT.totalBalance,
       successRate: localRate.errors === 0 ? 100 : (localRate.updates / (localRate.updates + localRate.errors)) * 100,
     };
-  }, [hasActivity, txns, localTxns, tpsSeries, botsRunning, backend]);
+  }, [hasActivity, txns, localTxns, tpsSeries, botsRunning, backend, status]);
 
   // Keep `report` stable across snapshot updates so consumers' callbacks that
   // depend on it (e.g. a game's start/reset) don't churn on every counter bump.
