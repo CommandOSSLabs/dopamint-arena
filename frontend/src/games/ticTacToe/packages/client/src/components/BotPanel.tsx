@@ -71,32 +71,32 @@ export function BotPanel({
     color: string;
     marker: string;
   }) => (
-    <div className="flex flex-col sm:flex-row sm:items-center justify-between py-2 border-b border-primary/10">
-      <div className="flex items-center gap-2">
-        <span className={`font-headline-lg text-lg ${color}`}>{label}</span>
-        <span className="font-body-lg text-xl border border-primary/20 rounded-full px-2 py-0.5 leading-none bg-surface-container-low">{marker}</span>
+    <div className="flex flex-col sm:flex-row sm:items-center justify-between py-4 border-b-2 border-primary/10">
+      <div className="flex items-center gap-4">
+        <span className={`font-headline-lg text-3xl ${color}`}>{label}</span>
+        <span className="font-body-lg text-3xl border-2 border-primary/20 rounded-full px-4 py-1 leading-none bg-surface-container-low">{marker}</span>
       </div>
-      <div className="flex items-center gap-4 mt-1 sm:mt-0 font-label-sm text-sm">
-        <span className="text-outline border-b border-dashed border-outline/35 pb-0.5" title={address}>{short(address)}</span>
-        <span className="text-primary font-bold tabular-nums bg-tertiary-container/20 px-2 py-0.5 rounded-sm">{fmtSui(balance)} SUI</span>
+      <div className="flex items-center gap-6 mt-2 sm:mt-0 font-label-sm text-2xl">
+        <span className="text-outline border-b-2 border-dashed border-outline/35 pb-1" title={address}>{short(address)}</span>
+        <span className="text-primary font-bold tabular-nums bg-tertiary-container/20 px-4 py-2 rounded-lg">{fmtSui(balance)} SUI</span>
       </div>
     </div>
   );
 
   return (
-    <div className="w-full max-w-md bg-surface-container-lowest border-[2px] border-primary p-4 shadow-[4px_4px_0px_#00336615] flex flex-col gap-4 rounded-sm relative z-10">
-      <div className="flex flex-col gap-1">
+    <div className="w-full h-full flex-1 justify-center bg-surface-container-lowest border-4 border-primary p-12 shadow-[8px_8px_0px_#00336615] flex flex-col gap-8 rounded-xl relative z-10">
+      <div className="flex flex-col gap-6">
         <Row label="Bot X" address={ids.x.address} balance={bots.x} color="text-primary" marker="X" />
         <Row label="Bot O" address={ids.o.address} balance={bots.o} color="text-secondary" marker="O" />
       </div>
 
-      <div className="flex flex-col gap-2 mt-2">
+      <div className="flex flex-col gap-6 mt-6">
         {(bots.x > 0n || bots.o > 0n) && (
           <button
             onClick={onRebalance}
             disabled={rebalancing || locked}
             title="Move half the difference from the richer bot to the poorer one"
-            className="w-full py-2 border-2 border-primary bg-surface font-headline-lg-mobile text-sm hover:bg-primary/5 active:translate-y-[1px] disabled:opacity-40 disabled:cursor-not-allowed transition-all text-primary rounded-sm shadow-[2px_2px_0px_#001e40]"
+            className="w-full py-6 border-[6px] border-primary bg-surface font-headline-lg-mobile text-3xl hover:bg-primary/5 active:translate-y-[2px] disabled:opacity-40 disabled:cursor-not-allowed transition-all text-primary rounded-xl shadow-[4px_4px_0px_#001e40]"
           >
             {rebalancing ? "Balancing…" : "⇄ Even out bots"}
           </button>
@@ -106,25 +106,25 @@ export function BotPanel({
           <button
             onClick={fundFromWallet}
             disabled={walletFunding}
-            className="w-full py-2 bg-primary text-on-primary font-headline-lg-mobile text-sm hover:bg-primary-container active:translate-y-[1px] disabled:opacity-40 disabled:cursor-not-allowed transition-all rounded-sm shadow-[2px_2px_0px_#bc0000]"
+            className="w-full py-6 bg-primary text-on-primary font-headline-lg-mobile text-3xl hover:bg-primary-container active:translate-y-[2px] disabled:opacity-40 disabled:cursor-not-allowed transition-all rounded-xl shadow-[4px_4px_0px_#bc0000]"
           >
             {walletFunding ? "Funding…" : `Fund bots from wallet (${totalSui} SUI)`}
           </button>
         ) : (
-          <div className="flex flex-col sm:flex-row gap-2 mt-1 [&_button]:w-full [&_button]:py-2 [&_button]:px-4 [&_button]:border-2 [&_button]:border-primary [&_button]:rounded-sm [&_button]:font-headline-lg-mobile [&_button]:text-primary [&_button]:bg-surface [&_button]:hover:bg-primary/5 [&_button]:transition-all [&_button]:text-xs [&_button]:shadow-[2px_2px_0px_#001e40]">
+          <div className="flex flex-col sm:flex-row gap-6 mt-4 [&_button]:w-full [&_button]:py-6 [&_button]:px-8 [&_button]:border-[6px] [&_button]:border-primary [&_button]:rounded-xl [&_button]:font-headline-lg-mobile [&_button]:text-primary [&_button]:bg-surface [&_button]:hover:bg-primary/5 [&_button]:transition-all [&_button]:text-3xl [&_button]:shadow-[4px_4px_0px_#001e40]">
             <ConnectButton connectText="Connect wallet" />
             <button
               onClick={login}
-              className="w-full py-2 px-4 border-2 border-primary bg-surface text-primary font-headline-lg-mobile text-xs hover:bg-primary/5 transition-all rounded-sm flex items-center justify-center gap-1 shadow-[2px_2px_0px_#001e40]"
+              className="w-full py-6 px-8 border-[6px] border-primary bg-surface text-primary font-headline-lg-mobile text-3xl hover:bg-primary/5 transition-all rounded-xl flex items-center justify-center gap-4 shadow-[4px_4px_0px_#001e40]"
             >
-              <span className="material-symbols-outlined text-sm">login</span>
+              <span className="material-symbols-outlined text-4xl">login</span>
               Google
             </button>
           </div>
         )}
       </div>
 
-      <div className="flex items-center justify-between text-xs font-label-sm border-t border-dashed border-primary/20 pt-2">
+      <div className="flex items-center justify-between text-2xl font-label-sm border-t-4 border-dashed border-primary/20 pt-6 mt-4">
         <button
           onClick={onFund}
           disabled={funding}
@@ -140,7 +140,7 @@ export function BotPanel({
       </div>
 
       {err && (
-        <div className="text-secondary font-label-sm text-xs break-words border border-secondary/20 bg-secondary/5 p-2 rounded-sm italic">
+        <div className="text-secondary font-label-sm text-2xl break-words border-4 border-secondary/20 bg-secondary/5 p-6 rounded-xl italic">
           * Error: {err}
         </div>
       )}

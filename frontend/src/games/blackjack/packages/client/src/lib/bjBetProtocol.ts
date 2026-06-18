@@ -13,6 +13,14 @@ type Party = protocols.Party;
 type Balances = protocols.Balances;
 type ProtocolContext = protocols.ProtocolContext;
 
+export function getPlayerParty(round: bigint): Party {
+  const r = Number(round) - 1;
+  return Math.floor(r / 2) % 2 === 0 ? "A" : "B";
+}
+export function getDealerParty(round: bigint): Party {
+  return getPlayerParty(round) === "A" ? "B" : "A";
+}
+
 export const MIN_BET = 25n;
 /** Chip denominations offered as bet buttons (filtered to <= the table max each round). */
 export const BET_OPTIONS = [25, 100, 500, 1000] as const;
@@ -66,7 +74,8 @@ export class BlackjackBetProtocol implements protocols.Protocol<BetBlackjackStat
   applyMove(s: BetBlackjackState, move: BetBlackjackMove, by: Party): BetBlackjackState {
     if (s.phase === "round_over") {
       if (move.action !== "bet") throw new Error("place a bet to start the round");
-      if (by !== "A") throw new Error("only the player sets the bet");
+      const nextPlayer = getPlayerParty(s.round + 1n);
+      if (by !== nextPlayer) throw new Error(`only the player (${nextPlayer}) sets the bet`);
       if (this.isTerminal(s)) throw new Error("game over: a side cannot fund another bet");
       const amount = BigInt(Math.floor(move.amount));
       const cap = maxBet(s);
@@ -74,17 +83,19 @@ export class BlackjackBetProtocol implements protocols.Protocol<BetBlackjackStat
       return dealRound(s, amount);
     }
     if (s.phase === "player") {
-      if (by !== "A") throw new Error("it is the player's turn");
+      const playerParty = getPlayerParty(s.round);
+      if (by !== playerParty) throw new Error(`it is the player's (${playerParty}) turn`);
       if (move.action === "hit") {
         const { hand, drawIndex } = drawTo(s.playerHand, s.round, s.drawIndex);
         const next: BetBlackjackState = { ...s, playerHand: hand, drawIndex };
-        return isBust(hand) ? settle(next, "B") : next;
+        return isBust(hand) ? settle(next, getDealerParty(s.round)) : next;
       }
       if (move.action === "stand") return { ...s, phase: "dealer" };
       throw new Error("invalid player action");
     }
     if (s.phase === "dealer") {
-      if (by !== "B") throw new Error("it is the dealer's turn");
+      const dealerParty = getDealerParty(s.round);
+      if (by !== dealerParty) throw new Error(`it is the dealer's (${dealerParty}) turn`);
       if (move.action !== "stand") throw new Error("the dealer only stands (auto-play)");
       return resolveDealer(s);
     }
@@ -112,15 +123,15 @@ export class BlackjackBetProtocol implements protocols.Protocol<BetBlackjackStat
   randomMove(s: BetBlackjackState, by: Party, _rng: () => number): BetBlackjackMove | null {
     if (this.isTerminal(s)) return null;
     if (s.phase === "round_over") {
-      if (by !== "A") return null;
+      if (by !== getPlayerParty(s.round + 1n)) return null;
       const cap = Number(maxBet(s));
       return { action: "bet", amount: Math.max(Number(MIN_BET), Math.min(100, cap)) };
     }
     if (s.phase === "player") {
-      if (by !== "A") return null;
+      if (by !== getPlayerParty(s.round)) return null;
       return { action: handValue(s.playerHand) < DEALER_STANDS_AT ? "hit" : "stand" };
     }
-    if (s.phase === "dealer") return by === "B" ? { action: "stand" } : null;
+    if (s.phase === "dealer") return by === getDealerParty(s.round) ? { action: "stand" } : null;
     return null;
   }
 }
@@ -140,7 +151,7 @@ function resolveDealer(s: BetBlackjackState): BetBlackjackState {
   while (handValue(hand) < DEALER_STANDS_AT) { const d = drawTo(hand, s.round, drawIndex); hand = d.hand; drawIndex = d.drawIndex; }
   const resolved: BetBlackjackState = { ...s, dealerHand: hand, drawIndex };
   const pv = handValue(resolved.playerHand); const dv = handValue(resolved.dealerHand);
-  const winner: Party | null = isBust(resolved.dealerHand) ? "A" : pv > dv ? "A" : dv > pv ? "B" : null;
+  const winner: Party | null = isBust(resolved.dealerHand) ? getPlayerParty(s.round) : pv > dv ? getPlayerParty(s.round) : dv > pv ? getDealerParty(s.round) : null;
   return settle(resolved, winner);
 }
 function settle(s: BetBlackjackState, winner: Party | null): BetBlackjackState {

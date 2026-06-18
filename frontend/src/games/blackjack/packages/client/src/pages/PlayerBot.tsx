@@ -250,7 +250,7 @@ export default function PlayerBot() {
     <button
       onClick={fundFromWallet}
       disabled={walletFunding}
-      className="border-2 border-amber-500 text-black bg-[#d4af37] hover:bg-amber-400 px-3 py-1.5 md:px-6 md:py-3 rounded md:rounded-lg text-[10px] md:text-sm font-black tracking-widest uppercase transition-all hover:scale-105 active:scale-95 cursor-pointer disabled:opacity-50 disabled:pointer-events-none"
+      className="border-2 border-amber-500 text-black bg-[#d4af37] hover:bg-amber-400 px-5 py-2.5 md:px-8 md:py-4 rounded-lg md:rounded-xl text-xs md:text-base font-black tracking-widest uppercase transition-all hover:scale-105 active:scale-95 cursor-pointer disabled:opacity-50 disabled:pointer-events-none"
     >
       {walletFunding ? "Funding…" : `Top Up SUI`}
     </button>
@@ -275,7 +275,7 @@ export default function PlayerBot() {
     <button
       onClick={game.fund}
       disabled={phase === "funding"}
-      className="border-2 border-amber-500 text-[#d4af37] bg-amber-950/20 hover:bg-amber-500 hover:text-black px-3 py-1.5 md:px-6 md:py-3 rounded md:rounded-lg text-[10px] md:text-sm font-black tracking-widest uppercase transition-all hover:scale-105 active:scale-95 cursor-pointer disabled:opacity-50 disabled:pointer-events-none"
+      className="border-2 border-amber-500 text-[#d4af37] bg-amber-950/20 hover:bg-amber-500 hover:text-black px-5 py-2.5 md:px-8 md:py-4 rounded-lg md:rounded-xl text-xs md:text-base font-black tracking-widest uppercase transition-all hover:scale-105 active:scale-95 cursor-pointer disabled:opacity-50 disabled:pointer-events-none"
     >
       Fund Stake
     </button>
@@ -295,7 +295,7 @@ export default function PlayerBot() {
     <button
       onClick={game.newGame}
       disabled={running || unfunded}
-      className="border-2 border-emerald-500 text-white bg-[#032a14]/65 hover:bg-emerald-500 hover:text-black px-4 py-1.5 md:px-6 md:py-3 rounded md:rounded-lg text-[10px] md:text-sm font-black tracking-widest uppercase transition-all hover:scale-105 active:scale-95 cursor-pointer disabled:opacity-50 disabled:pointer-events-none"
+      className="border-2 border-emerald-500 text-white bg-[#032a14]/65 hover:bg-emerald-500 hover:text-black px-6 py-2.5 md:px-10 md:py-4 rounded-lg md:rounded-xl text-xs md:text-base font-black tracking-widest uppercase transition-all hover:scale-105 active:scale-95 cursor-pointer disabled:opacity-50 disabled:pointer-events-none"
     >
       Play
     </button>
@@ -304,7 +304,7 @@ export default function PlayerBot() {
   const autoBtn = game.auto ? (
     <button
       onClick={game.stopAuto}
-      className="border-2 border-rose-500 text-white bg-[#2d090c]/65 hover:bg-rose-500/20 px-4 py-1.5 md:px-6 md:py-3 rounded md:rounded-lg text-[10px] md:text-sm font-black tracking-widest uppercase transition-all hover:scale-105 active:scale-95 cursor-pointer"
+      className="border-2 border-rose-500 text-white bg-[#2d090c]/65 hover:bg-rose-500/20 px-6 py-2.5 md:px-10 md:py-4 rounded-lg md:rounded-xl text-xs md:text-base font-black tracking-widest uppercase transition-all hover:scale-105 active:scale-95 cursor-pointer"
     >
       Stop
     </button>
@@ -312,7 +312,7 @@ export default function PlayerBot() {
     <button
       onClick={game.startAuto}
       disabled={running || unfunded}
-      className="border-2 border-zinc-650 text-white bg-zinc-900/60 hover:bg-zinc-650/20 px-4 py-1.5 md:px-6 md:py-3 rounded md:rounded-lg text-[10px] md:text-sm font-black tracking-widest uppercase transition-all hover:scale-105 active:scale-95 cursor-pointer disabled:opacity-50 disabled:pointer-events-none"
+      className="border-2 border-zinc-650 text-white bg-zinc-900/60 hover:bg-zinc-650/20 px-6 py-2.5 md:px-10 md:py-4 rounded-lg md:rounded-xl text-xs md:text-base font-black tracking-widest uppercase transition-all hover:scale-105 active:scale-95 cursor-pointer disabled:opacity-50 disabled:pointer-events-none"
     >
       Auto
     </button>
@@ -364,15 +364,16 @@ export default function PlayerBot() {
   // Idle start screen: no game has run yet.
   if (!started) {
     return (
-      <div className="h-full w-full flex flex-col items-center justify-center relative text-white overflow-hidden select-none bg-zinc-950 bg-cover bg-center fade-in-up"
-        style={{ backgroundImage: "url('/dealer-desk-plain-rotated.png')" }}
-      >
-        <div className="absolute inset-0 bg-black/60" />
-        <div className="relative z-10 flex flex-col items-center gap-6 bg-zinc-950/85 border border-zinc-800 rounded-2xl p-8 max-w-md w-full mx-4 shadow-2xl">
-          <h1 className="text-3xl font-extrabold text-[#d4af37] font-serif tracking-widest uppercase text-center">
+      <div className="fixed inset-0 z-50 flex flex-col items-center justify-center text-white overflow-hidden select-none fade-in-up">
+        {/* Background Layer with blur and transparent felt */}
+        <div className="absolute inset-0 bg-black/40 backdrop-blur-md" />
+        <div className="absolute inset-0 bg-cover bg-center opacity-60" style={{ backgroundImage: "url('/dealer-desk-plain-rotated.png')" }} />
+        
+        <div className="relative z-10 flex flex-col items-center justify-center gap-8 bg-zinc-950/40 backdrop-blur-sm w-full h-full p-8 md:p-12">
+          <h1 className="text-5xl md:text-6xl font-extrabold text-[#d4af37] font-serif tracking-widest uppercase text-center mb-2 drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]">
             Bot Arena
           </h1>
-          <p className="text-sm text-zinc-400 text-center">
+          <p className="text-base md:text-lg max-w-2xl text-zinc-300 text-center drop-shadow-md">
             Watch two bots play blackjack autonomously on an off-chain state
             channel, settled on Sui testnet. No wallet or login required.
           </p>
@@ -445,12 +446,13 @@ export default function PlayerBot() {
   };
 
   return (
-    <div className="h-full w-full flex flex-col relative text-white overflow-hidden select-none bg-zinc-950 fade-in-up">
+    <div className="fixed inset-0 z-50 flex flex-col text-white overflow-hidden select-none fade-in-up">
+      {/* Background Layer with blur and transparent felt */}
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-md" />
+      <div className="absolute inset-0 bg-cover bg-center opacity-60" style={{ backgroundImage: "url('/dealer-desk-plain-rotated.png')" }} />
+      
       {/* Play area: dealer-desk felt with dealer (top) and player (bottom) hands */}
-      <div
-        className="flex-1 w-full relative bg-cover bg-center"
-        style={{ backgroundImage: "url('/dealer-desk-plain-rotated.png')" }}
-      >
+      <div className="relative z-10 flex-1 w-full">
         {/* Back button */}
         <button
           onClick={() => navigate("/")}

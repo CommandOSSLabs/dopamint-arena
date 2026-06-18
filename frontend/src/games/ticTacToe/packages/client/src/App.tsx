@@ -64,18 +64,19 @@ export default function App() {
   let targetHeight = 750;
 
   if (scene === "login") {
-    targetWidth = 576;
-    targetHeight = 650;
+    targetWidth = isPortrait ? 500 : 800;
+    targetHeight = isPortrait ? 800 : 500;
   } else if (scene === "setup") {
-    targetWidth = 576;
-    targetHeight = 580;
+    targetWidth = isPortrait ? 500 : 1000;
+    targetHeight = isPortrait ? 1100 : 900;
   } else if (scene === "game") {
-    targetWidth = isPortrait ? 500 : 1060;
-    targetHeight = isPortrait ? 1200 : 860;
-    if (gameType === "caro") targetHeight = isPortrait ? 1300 : 960;
+    targetWidth = isPortrait ? 500 : 980;
+    targetHeight = isPortrait ? 1300 : 700;
+    if (gameType === "caro") targetHeight = isPortrait ? 1400 : 750;
   } else if (scene === "pvp") {
     targetWidth = isPortrait ? 500 : 1060;
-    targetHeight = isPortrait ? 1200 : 860;
+    targetHeight = isPortrait ? 1300 : 900;
+    if (gameType === "caro") targetHeight = isPortrait ? 1400 : 950;
   }
 
   return (

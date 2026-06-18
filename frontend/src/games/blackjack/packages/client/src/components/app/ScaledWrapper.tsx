@@ -9,14 +9,20 @@ export function ScaledWrapper({ children }: { children: ReactNode }) {
       const w = window.innerWidth;
       const h = window.innerHeight;
       
-      const MIN_W = 400; // Minimum acceptable width for the UI
-      const MIN_H = 650; // Minimum acceptable height for the UI
+      const MIN_W = 400; // Below this, scale down
+      const MIN_H = 650; 
+      const MAX_W = 1000; // Above this, scale up
+      const MAX_H = 800;
       
       let s = 1;
       if (w < MIN_W || h < MIN_H) {
         const scaleW = w / MIN_W;
         const scaleH = h / MIN_H;
         s = Math.min(scaleW, scaleH);
+      } else if (w > MAX_W && h > MAX_H) {
+        const scaleW = w / MAX_W;
+        const scaleH = h / MAX_H;
+        s = Math.min(scaleW, scaleH, 2); // Scale up to 2x max
       }
       
       setScale(s);

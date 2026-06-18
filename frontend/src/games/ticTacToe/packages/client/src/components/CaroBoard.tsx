@@ -17,7 +17,7 @@ export function CaroBoard({
   onPlay?: (cell: number) => void;
   disabled?: boolean;
 }) {
-  const cell = Math.max(14, Math.floor(600 / size));
+  const cell = Math.max(14, Math.floor(540 / size));
   const dim = cell * size;
   const win = new Set(winningLine(board, size, lastMove));
   return (

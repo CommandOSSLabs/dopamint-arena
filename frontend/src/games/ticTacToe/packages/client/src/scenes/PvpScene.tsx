@@ -41,36 +41,36 @@ export function PvpScene({ onBack, isPortrait = false }: { onBack: () => void; i
   const locked = g.phase !== "idle" && g.phase !== "error";
 
   return (
-    <div className="w-full h-full overflow-y-auto hide-scrollbar flex flex-col gap-4 p-6 text-on-surface">
-      <div className="flex items-center justify-between border-b-2 border-primary/20 pb-4">
-        <button onClick={() => { g.leave(); onBack(); }} className="text-base font-bold text-secondary hover:text-primary transition-colors flex items-center gap-1">
-          <span className="material-symbols-outlined text-lg">arrow_back</span> Back
+    <div className="w-[95%] max-w-5xl mx-auto h-full flex flex-col gap-4 pt-0 pb-0 px-6 text-on-surface relative">
+      <div className="flex items-center justify-between border-b-[6px] border-primary/20 pb-4 mt-2 shrink-0">
+        <button onClick={() => { g.leave(); onBack(); }} className="text-2xl font-bold text-secondary hover:text-primary transition-colors flex items-center gap-2">
+          <span className="material-symbols-outlined text-3xl">arrow_back</span> Back
         </button>
-        <span className="text-lg font-headline-sm uppercase tracking-widest text-primary font-bold">PvP Matchmaking</span>
-        <span className="text-sm font-mono text-on-surface/60 bg-surface px-2 py-1 rounded border border-primary/10 shadow-sm">{g.address.slice(0, 8)}…</span>
+        <span className="text-3xl md:text-4xl font-headline-xl uppercase tracking-widest text-primary font-bold">PvP Matchmaking</span>
+        <span className="text-xl font-mono text-on-surface/60 bg-surface px-4 py-2 rounded-lg border-2 border-primary/10 shadow-sm">{g.address.slice(0, 8)}…</span>
       </div>
 
       {!playing ? (
-        <div className="flex-1 flex flex-col items-center justify-center gap-6">
-          <div className="text-sm font-mono text-on-surface/80 bg-surface px-4 py-2 rounded-lg shadow-sm border border-primary/20">
+        <div className="flex-1 flex flex-col items-center gap-6 pb-4 pt-4">
+          <div className="text-2xl md:text-3xl font-mono text-on-surface/80 bg-surface px-8 py-6 rounded-2xl shadow-sm border-[4px] border-primary/20">
             Wallet: <span className="font-bold">{g.address.slice(0, 8)}…</span> &nbsp;·&nbsp; Balance: <span className="font-bold text-primary">{fmtSui(g.balance)} SUI</span>
           </div>
           
-          <div className="flex flex-col items-center gap-4 bg-surface-container-low p-6 rounded-xl border-2 border-dashed border-primary/30 w-full max-w-sm">
-            <span className="text-base font-bold uppercase tracking-widest text-primary">Game Variant</span>
-            <div className="flex gap-3 w-full">
+          <div className="flex flex-col items-center gap-8 bg-surface-container-low p-10 md:p-14 rounded-3xl border-4 border-dashed border-primary/30 w-[90%] max-w-4xl mt-2">
+            <span className="text-2xl md:text-3xl font-bold uppercase tracking-widest text-primary">Game Variant</span>
+            <div className="flex gap-4 w-full">
               {(["ttt", "caro"] as const).map((v) => (
                 <button key={v} disabled={locked} onClick={() => setVariant(v)}
-                  className={`flex-1 py-3 rounded-lg text-base font-bold shadow-sm disabled:opacity-40 transition-all ${variant === v ? "bg-tertiary text-on-tertiary scale-[1.02]" : "bg-surface border-[2px] border-primary/30 hover:border-primary/60"}`}>
+                  className={`flex-1 py-8 rounded-2xl text-3xl font-bold shadow-sm disabled:opacity-40 transition-all ${variant === v ? "bg-tertiary text-on-tertiary shadow-[6px_6px_0px_#bc0000]" : "bg-surface border-[4px] border-primary/30 hover:border-primary/60"}`}>
                   {v === "ttt" ? "3×3 Classic" : "Caro"}
                 </button>
               ))}
             </div>
             {variant === "caro" && (
-              <div className="flex gap-2 mt-2">
+              <div className="flex gap-6 mt-4">
                 {CARO_SIZES.map((sz) => (
                   <button key={sz} disabled={locked} onClick={() => setBoardSize(sz)}
-                    className={`px-4 py-2 rounded-lg text-sm font-bold shadow-sm disabled:opacity-40 transition-all ${boardSize === sz ? "bg-secondary text-on-secondary scale-[1.02]" : "bg-surface border-[2px] border-primary/30 hover:border-primary/60"}`}>
+                    className={`px-10 py-5 rounded-2xl text-2xl font-bold shadow-sm disabled:opacity-40 transition-all ${boardSize === sz ? "bg-secondary text-on-secondary shadow-[4px_4px_0px_#bc0000]" : "bg-surface border-[4px] border-primary/30 hover:border-primary/60"}`}>
                     {sz}×{sz}
                   </button>
                 ))}
@@ -78,20 +78,22 @@ export function PvpScene({ onBack, isPortrait = false }: { onBack: () => void; i
             )}
           </div>
           
-          {!funded && <div className="text-base text-secondary font-bold text-center max-w-sm bg-secondary/10 p-3 rounded-lg">Your connected wallet needs a little testnet SUI to play (gas + deposit).</div>}
+          {!funded && <div className="text-2xl text-secondary font-bold text-center w-[90%] max-w-4xl bg-secondary/10 p-6 rounded-2xl mt-4">Your connected wallet needs a little testnet SUI to play (gas + deposit).</div>}
           
-          <button onClick={g.queue} disabled={!funded || locked}
-            className="w-full max-w-xs mt-2 px-6 py-4 rounded-sm border-[3px] border-primary bg-surface text-primary font-headline-lg-mobile text-xl uppercase tracking-widest disabled:opacity-40 shadow-[4px_4px_0px_#001e40] hover:-translate-y-1 hover:translate-x-1 hover:shadow-[6px_6px_0px_#001e40] active:translate-y-0 active:translate-x-0 active:shadow-[2px_2px_0px_#001e40] transition-all flex items-center justify-center gap-2">
-            <span className="material-symbols-outlined text-2xl">{g.phase === "queuing" ? "search" : g.phase === "connecting" ? "sync" : "sports_esports"}</span>
-            {g.phase === "connecting" ? "Connecting…"
-              : g.phase === "queuing" ? "Finding Opponent…"
-              : g.phase === "opening" ? "Opening tunnel…"
-              : g.phase === "funding" ? "Funding seat…"
-              : "Find Match"}
-          </button>
-          
-          {(g.phase === "queuing" || g.phase === "connecting") && <button onClick={g.leave} className="text-base text-outline font-bold underline mt-2 hover:text-secondary transition-colors">Cancel Search</button>}
-          {g.error && <div className="text-base font-bold text-red-500 text-center max-w-sm bg-red-50 p-3 rounded-lg border border-red-200">{g.error}</div>}
+          <div className="mt-auto w-full flex flex-col items-center gap-4">
+            <button onClick={g.queue} disabled={!funded || locked}
+              className="w-[80%] max-w-3xl px-12 py-8 rounded-xl border-[6px] border-primary bg-surface text-primary font-headline-lg-mobile text-4xl uppercase tracking-widest disabled:opacity-40 shadow-[8px_8px_0px_#001e40] hover:-translate-y-1 hover:translate-x-1 hover:shadow-[10px_10px_0px_#001e40] active:translate-y-0 active:translate-x-0 active:shadow-[4px_4px_0px_#001e40] transition-all flex items-center justify-center gap-4">
+              <span className="material-symbols-outlined text-5xl">{g.phase === "queuing" ? "search" : g.phase === "connecting" ? "sync" : "sports_esports"}</span>
+              {g.phase === "connecting" ? "Connecting…"
+                : g.phase === "queuing" ? "Finding Opponent…"
+                : g.phase === "opening" ? "Opening tunnel…"
+                : g.phase === "funding" ? "Funding seat…"
+                : "Find Match"}
+            </button>
+            
+            {(g.phase === "queuing" || g.phase === "connecting") && <button onClick={g.leave} className="text-2xl text-outline font-bold underline hover:text-secondary transition-colors pb-2">Cancel Search</button>}
+            {g.error && <div className="text-2xl font-bold text-red-500 text-center w-[90%] max-w-4xl bg-red-50 p-6 rounded-2xl border-4 border-red-200 pb-2">{g.error}</div>}
+          </div>
         </div>
       ) : (
         <div className={`flex ${isPortrait ? "flex-col items-center gap-6" : "flex-row gap-8 items-start justify-between"} mt-2 w-full`}>

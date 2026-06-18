@@ -24,8 +24,8 @@ export const GameCardScale: React.FC<GameCardScaleProps> = ({
       const scaleW = (parentW - 40) / targetWidth;
       const scaleH = (parentH - 48) / targetHeight;
       
-      // We scale down only, never scaling up beyond 1 to maintain crispness on larger screens
-      const factor = Math.min(scaleW, scaleH, 1);
+      // We scale down to fit small screens, and allow scaling up to 2x to utilize large monitors
+      const factor = Math.min(scaleW, scaleH, 2);
       setScale(factor);
     };
 

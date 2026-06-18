@@ -9,6 +9,7 @@ import { RelayClient } from "@/lib/bjRelay";
 import { handValue } from "@/lib/bjCards";
 import {
   BlackjackBetProtocol, maxBet as tableMaxBet, BET_OPTIONS, MIN_BET,
+  getPlayerParty, getDealerParty,
   type BetBlackjackState, type BetBlackjackMove,
 } from "@/lib/bjBetProtocol";
 
@@ -54,8 +55,10 @@ export interface PvpView {
   dealerHand: number[]; // dealer hole card hidden until the dealer's turn / round over
   playerSum: number;
   dealerSum: number;
-  balancePlayer: bigint;
-  balanceDealer: bigint;
+  balancePlayer: bigint; // balance of the seat currently playing the "Player" role
+  balanceDealer: bigint; // balance of the seat currently playing the "Dealer" role
+  myBalance: bigint; // my persistent balance
+  oppBalance: bigint; // opponent's persistent balance
   round: number;
   gamePhase: "player" | "dealer" | "round_over" | null;
   myTurn: boolean; // I'm the player and it's the player's turn (Hit/Stand)
@@ -280,15 +283,15 @@ export function usePvpBlackjack(): PvpView {
         }
         if (stoppingRef.current) return; // a stop/settle is in progress
         if (proto.isTerminal(st)) { void finishSettle(t, relay, m.matchId); return; }
-        if (st.phase === "player" && m.role === "A") {
+        if (st.phase === "player" && m.role === getPlayerParty(st.round)) {
           if (autoRef.current) {
-            const mv = proto.randomMove(st, "A", Math.random);
+            const mv = proto.randomMove(st, m.role, Math.random);
             if (mv) setTimeout(() => { try { t.propose(mv, BigInt(Date.now())); } catch { /* not my turn / in flight */ } }, BOT_MOVE_MS);
           }
-        } else if (st.phase === "dealer" && m.role === "B") {
+        } else if (st.phase === "dealer" && m.role === getDealerParty(st.round)) {
           // The dealer is deterministic — always auto-stand (triggers draw-to-17), regardless of the toggle.
           setTimeout(() => { try { t.propose({ action: "stand" }, BigInt(Date.now())); } catch { /* in flight */ } }, DEALER_MS);
-        } else if (st.phase === "round_over" && m.role === "A" && autoRef.current) {
+        } else if (st.phase === "round_over" && m.role === getPlayerParty(st.round + 1n) && autoRef.current) {
           // Only the player bets (the bet deals the next round); auto reuses the last bet.
           const mv = autoBetMove(lastBetRef.current, st);
           if (mv) setTimeout(() => { try { t.propose(mv, BigInt(Date.now())); } catch { /* raced / in flight */ } }, NEXT_MS);
@@ -305,7 +308,7 @@ export function usePvpBlackjack(): PvpView {
   // Player Hit/Stand (only the player, only on the player's turn).
   const proposePlayer = useCallback((action: "hit" | "stand") => {
     const t = tunnelRef.current; if (!t) return;
-    if (roleRef.current !== "A" || t.state.phase !== "player") return;
+    if (roleRef.current !== getPlayerParty(t.state.round) || t.state.phase !== "player") return;
     try { t.propose({ action }, BigInt(Date.now())); } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
   }, []);
   const hit = useCallback(() => proposePlayer("hit"), [proposePlayer]);
@@ -314,7 +317,7 @@ export function usePvpBlackjack(): PvpView {
   // Place the bet for the next round (player only; the bet deals the round). round_over, not terminal.
   const bet = useCallback((amount: number) => {
     const t = tunnelRef.current; if (!t) return;
-    if (roleRef.current !== "A" || t.state.phase !== "round_over" || proto.isTerminal(t.state)) return;
+    if (roleRef.current !== getPlayerParty(t.state.round + 1n) || t.state.phase !== "round_over" || proto.isTerminal(t.state)) return;
     lastBetRef.current = amount; // remember it so auto reuses this stake next round
     try { t.propose({ action: "bet", amount }, BigInt(Date.now())); } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
   }, [proto]);
@@ -334,10 +337,10 @@ export function usePvpBlackjack(): PvpView {
     if (!on || !t || stoppingRef.current || proto.isTerminal(t.state)) return;
     // Resume auto from the current state.
     const st = t.state;
-    if (st.phase === "player" && roleRef.current === "A") {
-      const mv = proto.randomMove(st, "A", Math.random);
+    if (st.phase === "player" && roleRef.current === getPlayerParty(st.round)) {
+      const mv = proto.randomMove(st, roleRef.current, Math.random);
       if (mv) setTimeout(() => { try { t.propose(mv, BigInt(Date.now())); } catch { /* ignore */ } }, BOT_MOVE_MS);
-    } else if (st.phase === "round_over" && roleRef.current === "A") {
+    } else if (st.phase === "round_over" && roleRef.current === getPlayerParty(st.round + 1n)) {
       const mv = autoBetMove(lastBetRef.current, st);
       if (mv) setTimeout(() => { try { t.propose(mv, BigInt(Date.now())); } catch { /* ignore */ } }, NEXT_MS);
     }
@@ -354,13 +357,13 @@ export function usePvpBlackjack(): PvpView {
   useEffect(() => () => relayRef.current?.close(), []);
 
   const s = state;
-  const isDealer = roleRef.current === "B";
+  const isDealer = s ? roleRef.current === getDealerParty(s.phase === "round_over" ? s.round + 1n : s.round) : roleRef.current === "B";
   const gamePhase = s ? s.phase : null;
   const playerHand = s ? s.playerHand : [];
   // Hide the dealer's hole card during the player's turn (revealed once the dealer acts / round ends).
   const dealerHand = s ? (s.phase === "player" ? s.dealerHand.slice(0, 1) : s.dealerHand) : [];
   const terminal = s ? proto.isTerminal(s) : false;
-  const myTurn = !!s && s.phase === "player" && roleRef.current === "A";
+  const myTurn = !!s && s.phase === "player" && roleRef.current === getPlayerParty(s.round);
   const inRoundOver = !!s && s.phase === "round_over";
   // Which side (if any) can no longer cover even the minimum bet — this forces the auto-settle.
   const outOfChips: "player" | "dealer" | null = s
@@ -376,8 +379,10 @@ export function usePvpBlackjack(): PvpView {
     playerHand, dealerHand,
     playerSum: handValue(playerHand),
     dealerSum: s && s.phase !== "player" ? handValue(s.dealerHand) : handValue(dealerHand),
-    balancePlayer: s ? s.balanceA : 0n,
-    balanceDealer: s ? s.balanceB : 0n,
+    balancePlayer: s ? (getPlayerParty(s.round || 1n) === "A" ? s.balanceA : s.balanceB) : 0n,
+    balanceDealer: s ? (getDealerParty(s.round || 1n) === "A" ? s.balanceA : s.balanceB) : 0n,
+    myBalance: s ? (roleRef.current === "A" ? s.balanceA : s.balanceB) : 0n,
+    oppBalance: s ? (roleRef.current === "A" ? s.balanceB : s.balanceA) : 0n,
     round: s ? Number(s.round) : 0,
     gamePhase, myTurn, inRoundOver, terminal, outOfChips,
     currentBet, tableMax, betOptions, rounds, auto,

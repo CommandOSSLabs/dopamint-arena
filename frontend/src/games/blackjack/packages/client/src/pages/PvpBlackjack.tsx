@@ -86,8 +86,8 @@ export default function PvpBlackjack() {
   const playing = g.phase === "playing" || g.phase === "settling" || g.phase === "done";
   const wins = g.rounds.filter((r) => r.outcome === "win").length;
   const losses = g.rounds.filter((r) => r.outcome === "lose").length;
-  const myBal = g.isDealer ? g.balanceDealer : g.balancePlayer;
-  const oppBal = g.isDealer ? g.balancePlayer : g.balanceDealer;
+  const myBal = g.myBalance;
+  const oppBal = g.oppBalance;
   const finalResult = myBal > oppBal ? "win" : myBal < oppBal ? "lose" : "push";
 
   // Bet/payout chip animation, driven off the player's (party A) seat — matching the fixed
@@ -190,7 +190,7 @@ export default function PvpBlackjack() {
                 <span className="text-[7px] text-emerald-200/50 uppercase tracking-widest mb-1 font-bold">Dealer</span>
                 <ChipStack balance={g.balanceDealer} />
               </div>
-              <CardDisplay title="Dealer" cards={handToCardIndices(g.dealerHand, g.round * 2 + 1)} sum={g.dealerSum} isWinning={finalResult === "lose" && g.phase === "done"} />
+              <CardDisplay title={`Dealer${g.isDealer ? " (you)" : ""}`} cards={handToCardIndices(g.dealerHand, g.round * 2 + 1)} sum={g.dealerSum} isWinning={(g.isDealer ? finalResult === "win" : finalResult === "lose") && g.phase === "done"} />
             </div>
 
             {/* Center status */}
@@ -210,7 +210,7 @@ export default function PvpBlackjack() {
                 <span className="text-[7px] text-emerald-200/50 uppercase tracking-widest mb-1 font-bold">Player</span>
                 <ChipStack balance={g.balancePlayer} />
               </div>
-              <CardDisplay title={`Player${g.isDealer ? "" : " (you)"}`} cards={handToCardIndices(g.playerHand, g.round * 2)} sum={g.playerSum} isPlayer isWinning={finalResult === "win" && g.phase === "done"} />
+              <CardDisplay title={`Player${g.isDealer ? "" : " (you)"}`} cards={handToCardIndices(g.playerHand, g.round * 2)} sum={g.playerSum} isPlayer isWinning={(g.isDealer ? finalResult === "lose" : finalResult === "win") && g.phase === "done"} />
             </div>
           </>
         )}
@@ -218,7 +218,7 @@ export default function PvpBlackjack() {
         {/* Pre-game / connect overlay */}
         {!playing && (
           <div className="absolute inset-0 z-20 flex items-center justify-center p-4">
-            <div className="bg-zinc-950/90 border border-zinc-800 rounded-2xl p-6 w-full max-w-md shadow-2xl flex flex-col items-center gap-4">
+            <div className="bg-zinc-950/90 border border-zinc-800 rounded-3xl p-8 md:p-12 w-[85%] max-w-4xl shadow-2xl flex flex-col items-center gap-4">
               <h1 className="text-2xl font-black text-gold uppercase tracking-widest">Blackjack · PvP</h1>
               {!account ? (
                 <>

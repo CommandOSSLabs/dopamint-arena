@@ -9,7 +9,7 @@ export function LoginScene({ onContinue, onPlayOnline }: { onContinue: () => voi
   const { isConnected, address, login, logout } = useCustomWallet();
 
   return (
-    <section className="relative w-full max-w-xl bg-surface-container-lowest border-[3px] border-primary rounded-[4px] p-6 md:p-12 shadow-[6px_6px_0px_#00336620] rotate-[-1deg] flex flex-col items-center gap-6 group">
+    <section className="relative w-[85%] max-w-4xl bg-surface-container-lowest border-[3px] border-primary rounded-[4px] p-6 md:p-12 shadow-[6px_6px_0px_#00336620] rotate-[-1deg] flex flex-col items-center gap-6 group">
       {/* Tape overlay top */}
       <div className="tape-top"></div>
       

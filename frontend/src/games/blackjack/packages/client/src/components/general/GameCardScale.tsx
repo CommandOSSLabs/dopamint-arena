@@ -11,7 +11,7 @@ export const GameCardScale: React.FC<GameCardScaleProps> = ({
   children,
   className = "",
   targetWidth = 450,
-  targetHeight = 670,
+  targetHeight = 500,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1);
@@ -25,8 +25,8 @@ export const GameCardScale: React.FC<GameCardScaleProps> = ({
       const scaleW = (parentW - 24) / targetWidth; // subtract margin
       const scaleH = (parentH - 24) / targetHeight; // subtract margin
       
-      // Scale down only (limit max scale to 1 to preserve desktop quality, scale down on smaller viewports)
-      const factor = Math.min(scaleW, scaleH, 1);
+      // Scale down to fit small screens, and allow scaling up to 2x to utilize large monitors
+      const factor = Math.min(scaleW, scaleH, 2);
       setScale(factor);
     };
 
