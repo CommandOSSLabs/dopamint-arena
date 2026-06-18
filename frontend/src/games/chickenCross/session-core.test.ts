@@ -36,6 +36,7 @@ test("deriveView flattens players and balances to numbers", () => {
   assert.equal(v.players.length, 2);
   assert.equal(typeof v.players[0].lane, "number");
   assert.equal(typeof v.balanceA, "number");
+  assert.equal(typeof v.seed, "number");
 });
 
 test("sessionResult maps a terminal state to A | B | push", () => {
