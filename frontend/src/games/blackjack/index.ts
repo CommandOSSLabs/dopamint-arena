@@ -1,9 +1,9 @@
 import { register } from "../registry";
-import { makePlaceholder } from "../GamePlaceholder";
+import { BlackjackWindow } from "./BlackjackWindow";
 
 register({
   id: "blackjack",
   name: "Blackjack",
   icon: "🃏",
-  Window: makePlaceholder("Blackjack"),
+  Window: BlackjackWindow,
 });

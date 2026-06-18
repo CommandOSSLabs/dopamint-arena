@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ttt-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ttt
+      POSTGRES_PASSWORD: ttt
+      POSTGRES_DB: ttt
+    ports:
+      - "5435:5432"
+    volumes:
+      - ttt-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ttt -d ttt"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+volumes:
+  ttt-db-data:

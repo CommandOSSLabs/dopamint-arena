@@ -10,14 +10,17 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
-    "verbatimModuleSyntax": true,
+    "verbatimModuleSyntax": false,
     "isolatedModules": true,
     "skipLibCheck": true,
     "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "types": ["node"],
     "paths": {
       "sui-tunnel-ts": ["../sui-tunnel-ts/src/index.ts"],
       "sui-tunnel-ts/*": ["../sui-tunnel-ts/src/*"]
     }
   },
-  "include": ["src"]
+  "include": ["src"],
+  "exclude": ["src/games/*/packages"]
 }

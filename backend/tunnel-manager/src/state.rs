@@ -41,7 +41,7 @@ pub enum TunnelStatus {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StatsSnapshot {
-    pub tps: u64,
+    pub tps: f64,
     pub total_actions: u64,
     pub active_tunnels: u64,
     pub settled_tunnels: u64,
@@ -50,7 +50,7 @@ pub struct StatsSnapshot {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct GameStat {
-    pub tps: u64,
+    pub tps: f64,
     pub tunnels: u64,
     /// Cumulative actions attributed to this game (basis for `tps`'s per-tick delta).
     pub total_actions: u64,

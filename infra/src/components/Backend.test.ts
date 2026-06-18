@@ -17,6 +17,7 @@ function makeBackendArgs(overrides: Partial<BackendArgs> = {}): BackendArgs {
     taskExecutionRoleArn: "arn:aws:iam::123:role/exec",
     taskRoleArn: "arn:aws:iam::123:role/task",
     logGroupName: "/ecs/test",
+    settlerKeySecretArn: "arn:aws:secretsmanager:us-east-1:123:secret:test-settler-AbCdEf",
     ...overrides,
   };
 }
@@ -43,6 +44,23 @@ describe("backend component", () => {
       "must receive REDIS_CACHE_URL",
     );
 
+    // The settler signing key is a private key: it must be injected from Secrets
+    // Manager, never baked into the task definition as plaintext (readable via
+    // ecs:DescribeTaskDefinition and committed to git if hardcoded).
+    assert.ok(
+      !container.environment.some((e: { name: string }) => e.name === "SUI_SETTLER_KEY"),
+      "settler key must never be a plaintext environment variable",
+    );
+    const settlerSecret = container.secrets?.find(
+      (s: { name: string }) => s.name === "SUI_SETTLER_KEY",
+    );
+    assert.ok(settlerSecret, "settler key must be injected via secrets[] from Secrets Manager");
+    assert.strictEqual(
+      settlerSecret.valueFrom,
+      "arn:aws:secretsmanager:us-east-1:123:secret:test-settler-AbCdEf",
+      "settler key valueFrom must reference the secret ARN",
+    );
+
     assert.strictEqual(await awaitOutput(backend.taskDefinition.family), "test-backend");
     assert.strictEqual(await awaitOutput(backend.taskDefinition.networkMode), "awsvpc");
     assert.deepStrictEqual(await awaitOutput(backend.taskDefinition.requiresCompatibilities), ["FARGATE"]);
@@ -63,6 +81,22 @@ describe("backend component", () => {
     assert.ok(
       !container.environment?.some((e: { name: string }) => e.name === "DATABASE_URL"),
       "migration must not receive DATABASE_URL",
+    );
+  });
+
+  it("omits the settler secret when no ARN is configured, never falling back to plaintext", async () => {
+    const backend = createBackend(makeBackendArgs({ settlerKeySecretArn: undefined }));
+
+    const defs = JSON.parse(await awaitOutput(backend.taskDefinition.containerDefinitions));
+    const container = defs[0];
+
+    assert.ok(
+      !container.environment.some((e: { name: string }) => e.name === "SUI_SETTLER_KEY"),
+      "settler key must never appear as plaintext env, even when the secret is unset",
+    );
+    assert.ok(
+      !container.secrets?.some((s: { name: string }) => s.name === "SUI_SETTLER_KEY"),
+      "no settler secret entry when the ARN is absent",
     );
   });
 });
