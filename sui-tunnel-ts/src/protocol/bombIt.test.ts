@@ -61,6 +61,8 @@ import {
   resolveExplosions,
   type BombItBomb,
   type BombItPlayer,
+  type BombItMove,
+  type BombItState,
 } from "./bombIt.ts";
 
 const deadFar: BombItPlayer = { row: 8, col: 8, alive: false };
@@ -176,3 +178,123 @@ test("balances return the stored split; isTerminal tracks winner", () => {
   assert.equal(p.isTerminal({ ...s, winner: "A" }), true);
   assert.equal(p.isTerminal({ ...s, winner: "draw" }), true);
 });
+
+/** Run the world forward applying the SAME move object both seats would (only one field set). */
+function advance(p: BombItProtocol, s: BombItState, m: BombItMove): BombItState {
+  const by = m.a !== undefined ? "A" : "B";
+  return p.applyMove(s, m, by);
+}
+
+test("a move into a wall is a deterministic no-op (stay)", () => {
+  const p = new BombItProtocol();
+  const s = p.initialState(CTX); // A at (1,1); north -> (0,1) is wall
+  const n = advance(p, s, { a: "north" });
+  assert.equal(n.players[0].row, 1);
+  assert.equal(n.players[0].col, 1);
+  assert.equal(n.tick, 1n);
+});
+
+test("dropping a bomb places one fused bomb; a second drop is capped", () => {
+  const p = new BombItProtocol();
+  let s = p.initialState(CTX);
+  s = advance(p, s, { a: "bomb" });
+  assert.equal(s.bombs.length, 1);
+  assert.equal(s.bombs[0].owner, "A");
+  assert.equal(s.bombs[0].fuse, FUSE_TICKS - 1); // one world advance has elapsed
+  s = advance(p, s, { b: "stay" }); // B's tick
+  s = advance(p, s, { a: "bomb" }); // A still has a live bomb -> capped, no new bomb
+  assert.equal(s.bombs.filter((b) => b.owner === "A").length, 1);
+});
+
+test("a bomb kills a player standing in its blast and pays the other the full pot", () => {
+  const p = new BombItProtocol();
+  // Build a controlled state: A and B adjacent, A drops, fuse runs out.
+  const base = p.initialState(CTX);
+  let s: BombItState = {
+    ...base,
+    players: [spawnAt(1, 1), spawnAt(1, 2)], // B one cell east of A (radius 2 reaches it)
+    grid: clearInterior(base.grid),
+  };
+  s = advance(p, s, { a: "bomb" }); // A drops at (1,1), now standing on it
+  // Let the fuse burn down with both seats staying; A should also die (self-blast).
+  for (let i = 0; i < FUSE_TICKS; i++) {
+    s = advance(p, s, s.tick % 2n === 0n ? { a: "stay" } : { b: "stay" });
+    if (p.isTerminal(s)) break;
+  }
+  assert.equal(p.isTerminal(s), true);
+  // A stood on the bomb -> A dies; B at (1,2) is within radius 2 -> B dies too -> draw.
+  assert.equal(s.winner, "draw");
+  assert.equal(s.balanceA + s.balanceB, s.total);
+});
+
+test("only the opponent dying yields a decisive winner + flipped balances", () => {
+  const p = new BombItProtocol();
+  const base = p.initialState(CTX);
+  let s: BombItState = {
+    ...base,
+    players: [spawnAt(1, 1), spawnAt(1, 2)],
+    grid: clearInterior(base.grid),
+  };
+  // A drops then runs out of the blast (west is wall, so go nowhere useful — instead place,
+  // then move A away on its next turns). A at (1,1): east blocked later by bomb; move south.
+  s = advance(p, s, { a: "bomb" }); // bomb at (1,1); fuse FUSE_TICKS-1
+  s = advance(p, s, { b: "stay" });
+  s = advance(p, s, { a: "south" }); // A -> (2,1), out of a radius-2 horizontal/vertical? (2,1) is 1 south of bomb -> still in blast!
+  // (2,1) is within the bomb's south arm (radius 2). Move A further south next turn.
+  s = advance(p, s, { b: "stay" });
+  s = advance(p, s, { a: "south" }); // A -> (3,1): 2 south of bomb, still within radius 2.
+  s = advance(p, s, { b: "stay" });
+  s = advance(p, s, { a: "south" }); // A -> (4,1): 3 south, OUT of blast.
+  // burn the remaining fuse with stays
+  while (!p.isTerminal(s)) {
+    s = advance(p, s, s.tick % 2n === 0n ? { a: "stay" } : { b: "stay" });
+  }
+  assert.equal(s.winner, "A"); // B died at (1,2); A escaped
+  assert.deepEqual(p.balances(s), { a: s.total, b: 0n });
+});
+
+test("applyMove throws on a terminal state and on a forged opponent field", () => {
+  const p = new BombItProtocol();
+  const s = p.initialState(CTX);
+  assert.throws(() => p.applyMove({ ...s, winner: "A" }, { a: "stay" }, "A"));
+  assert.throws(() => p.applyMove(s, { b: "bomb" }, "A")); // A may not submit B's action
+  assert.throws(() => p.applyMove(s, { a: "north" }, "B")); // B may not submit A's action
+});
+
+test("the tick cap forces a draw and conserves balances across a full playout", () => {
+  const p = new BombItProtocol();
+  let s = p.initialState(CTX);
+  const rng = mulberry32ForTest(5);
+  let guard = 0;
+  while (!p.isTerminal(s) && guard < Number(BOMB_IT_TICK_CAP) + 5) {
+    const by = s.tick % 2n === 0n ? "A" : "B";
+    const m = p.randomMove(s, by, rng) as BombItMove;
+    s = p.applyMove(s, m, by);
+    assert.equal(s.balanceA + s.balanceB, s.total, `tick ${s.tick}`);
+    guard++;
+  }
+  assert.equal(p.isTerminal(s), true);
+  const { a, b } = p.balances(s);
+  assert.equal(a + b, s.total);
+});
+
+// --- local test helpers ---
+function spawnAt(row: number, col: number) {
+  return { row, col, alive: true };
+}
+/** A board with the same walls/pillars as a built grid but no crates (clearer scenarios). */
+function clearInterior(grid: Uint8Array): Uint8Array {
+  const g = Uint8Array.from(grid);
+  for (let i = 0; i < g.length; i++) if (g[i] === CELL_CRATE) g[i] = CELL_FLOOR;
+  return g;
+}
+function mulberry32ForTest(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}

@@ -227,6 +227,33 @@ export function resolveExplosions(
 // ============================================
 // PROTOCOL
 // ============================================
+
+/** Apply one seat's action in place: move (if enterable) or drop a bomb (if under cap). */
+function applyAction(
+  grid: Uint8Array,
+  players: [BombItPlayer, BombItPlayer],
+  bombs: BombItBomb[],
+  i: number,
+  action: BombItAction,
+): void {
+  const p = players[i];
+  if (!p.alive || action === "stay") return;
+  const owner: Party = i === 0 ? "A" : "B";
+  if (action === "bomb") {
+    const live = bombs.filter((b) => b.owner === owner).length;
+    const here = bombs.some((b) => b.row === p.row && b.col === p.col);
+    if (live < MAX_BOMBS_PER_PLAYER && !here) {
+      bombs.push({ row: p.row, col: p.col, fuse: FUSE_TICKS, owner });
+    }
+    return;
+  }
+  const [nr, nc] = dest(p.row, p.col, action);
+  if (canMoveTo(grid, bombs, players[i === 0 ? 1 : 0], nr, nc)) {
+    p.row = nr;
+    p.col = nc;
+  }
+}
+
 function spawn(row: number, col: number): BombItPlayer {
   return { row, col, alive: true };
 }
@@ -249,8 +276,51 @@ export class BombItProtocol implements Protocol<BombItState, BombItMove> {
     };
   }
 
-  applyMove(_state: BombItState, _move: BombItMove, _by: Party): BombItState {
-    throw new Error("applyMove not implemented yet"); // Task 4
+  applyMove(state: BombItState, move: BombItMove, by: Party): BombItState {
+    if (this.isTerminal(state)) {
+      throw new Error("game over: bomb-it is already decided");
+    }
+    // Integrity: a seat may only carry its OWN action (hardens vs a forged opponent move).
+    if (by === "A" && move.b !== undefined) throw new Error("A cannot submit B's action");
+    if (by === "B" && move.a !== undefined) throw new Error("B cannot submit A's action");
+
+    const grid = Uint8Array.from(state.grid);
+    const players: [BombItPlayer, BombItPlayer] = [
+      { ...state.players[0] },
+      { ...state.players[1] },
+    ];
+    let bombs: BombItBomb[] = state.bombs.map((b) => ({ ...b }));
+
+    applyAction(grid, players, bombs, 0, move.a ?? "stay");
+    applyAction(grid, players, bombs, 1, move.b ?? "stay");
+
+    for (const b of bombs) b.fuse -= 1;
+    const { cells, remaining } = resolveExplosions(grid, bombs);
+    bombs = remaining;
+    for (const p of players) {
+      if (p.alive && cells.has(idx(p.row, p.col))) p.alive = false;
+    }
+
+    const tick = state.tick + 1n;
+    let winner: Party | "draw" | null = null;
+    const aAlive = players[0].alive;
+    const bAlive = players[1].alive;
+    if (!aAlive && !bAlive) winner = "draw";
+    else if (!bAlive) winner = "A";
+    else if (!aAlive) winner = "B";
+    else if (tick >= BOMB_IT_TICK_CAP) winner = "draw";
+
+    let balanceA = state.balanceA;
+    let balanceB = state.balanceB;
+    if (winner === "A") {
+      balanceA = state.total;
+      balanceB = 0n;
+    } else if (winner === "B") {
+      balanceA = 0n;
+      balanceB = state.total;
+    }
+
+    return { tick, seed: state.seed, grid, players, bombs, winner, balanceA, balanceB, total: state.total };
   }
 
   encodeState(s: BombItState): Uint8Array {
@@ -289,5 +359,22 @@ export class BombItProtocol implements Protocol<BombItState, BombItMove> {
 
   isTerminal(s: BombItState): boolean {
     return s.winner !== null;
+  }
+
+  randomMove(s: BombItState, by: Party, rng: () => number): BombItMove | null {
+    if (this.isTerminal(s)) return null;
+    const i = by === "A" ? 0 : 1;
+    const p = s.players[i];
+    const field = (action: BombItAction): BombItMove => (by === "A" ? { a: action } : { b: action });
+    if (!p.alive) return field("stay");
+    const choices: BombItAction[] = ["stay"];
+    for (const d of ["north", "south", "east", "west"] as BombItAction[]) {
+      const [nr, nc] = dest(p.row, p.col, d);
+      if (canMoveTo(s.grid, s.bombs, s.players[i === 0 ? 1 : 0], nr, nc)) choices.push(d);
+    }
+    const liveOwn = s.bombs.filter((b) => b.owner === by).length;
+    const hereBomb = s.bombs.some((b) => b.row === p.row && b.col === p.col);
+    if (liveOwn < MAX_BOMBS_PER_PLAYER && !hereBomb) choices.push("bomb");
+    return field(choices[Math.floor(rng() * choices.length)]);
   }
 }
