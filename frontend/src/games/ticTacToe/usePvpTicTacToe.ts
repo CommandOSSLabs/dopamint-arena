@@ -6,10 +6,15 @@ import { defaultBackend } from "sui-tunnel-ts/core/crypto-native";
 import { makeEndpoint } from "sui-tunnel-ts/core/tunnel";
 import { fromHex, toHex } from "sui-tunnel-ts/core/bytes";
 import { DistributedTunnel } from "sui-tunnel-ts/core/distributedTunnel";
+import { Transcript } from "sui-tunnel-ts/proof/transcript";
 import { TicTacToeProtocol, type TicTacToeState, type Winner } from "sui-tunnel-ts/protocol/ticTacToe";
 import type { Party } from "sui-tunnel-ts/protocol/Protocol";
 import { MpClient, resolveMpWsUrl, type PvpChannel, type Role } from "../../pvp/mpClient";
-import { resolveBackendUrl } from "../../backend/controlPlane";
+import {
+  getControlPlaneClient,
+  resolveBackendUrl,
+  type RegisterSessionResult,
+} from "../../backend/controlPlane";
 import {
   closeCooperative,
   depositStake,
@@ -87,6 +92,8 @@ export function usePvpTicTacToe(): PvpTicTacToe {
   const mpRef = useRef<MpClient | null>(null);
   const dtRef = useRef<DistributedTunnel<TicTacToeState, { cell: number }> | null>(null);
   const roleRef = useRef<Role | null>(null);
+  const transcriptRef = useRef<Transcript | null>(null);
+  const sessionRef = useRef<RegisterSessionResult | null>(null);
 
   // Render the engine's display state: the proposer's own move shows immediately
   // (pending, locally-signed) and reconciles to the confirmed state on co-sign.
@@ -103,6 +110,8 @@ export function usePvpTicTacToe(): PvpTicTacToe {
     mpRef.current = null;
     dtRef.current = null;
     roleRef.current = null;
+    transcriptRef.current = null;
+    sessionRef.current = null;
     setStatus("idle");
     setRole(null);
     setBoard(Array(9).fill(0));
@@ -165,6 +174,22 @@ export function usePvpTicTacToe(): PvpTicTacToe {
           await depositStake({ signExec, tunnelId, amount: STAKE_BALANCE });
         }
 
+        // Register the funded tunnel under a control-plane session so seat A can authorize the
+        // backend /settle close (bearer = statsToken). Best-effort — failure falls back to a
+        // wallet-submitted close at settle time. Only seat A registers (it submits the close).
+        if (match.role === "A") {
+          getControlPlaneClient()
+            .registerSession({
+              userAddress: wallet,
+              game: "tictactoe",
+              tunnels: [{ tunnelId, partyA: wallet, partyB: match.opponentWallet }],
+            })
+            .then((s) => {
+              sessionRef.current = s;
+            })
+            .catch((e) => console.error("[tictactoe] registerSession failed:", e));
+        }
+
         // 3) build the distributed engine over the relay transport.
         const proto = new TicTacToeProtocol(STAKE_SHIFT);
         const backend = defaultBackend();
@@ -182,9 +207,12 @@ export function usePvpTicTacToe(): PvpTicTacToe {
           { a: STAKE_BALANCE, b: STAKE_BALANCE },
         );
         dtRef.current = dt;
+        const transcript = new Transcript(tunnelId);
+        transcriptRef.current = transcript;
 
         let settling = false;
-        dt.onConfirmed = () => {
+        dt.onConfirmed = (u) => {
+          transcript.append(u);
           sync();
           report.pushLocalTxn({
             id: moveIdRef.current++,
