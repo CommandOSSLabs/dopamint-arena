@@ -178,16 +178,17 @@ pub(crate) async fn heartbeat(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Validate the settlement and submit `close_cooperative_with_root` on-chain.
+/// Submit `close_cooperative_with_root` for a tunnel. Authorization is the co-signed settlement
+/// itself — the chain re-verifies both seat signatures — so there is NO session/bearer gate
+/// (ADR-0007). The settler dry-runs the close before sponsoring gas, so a bad settlement is
+/// rejected (422) at no cost.
 pub(crate) async fn settle(
     State(state): State<SharedState>,
-    Path(session_id): Path<String>,
-    headers: HeaderMap,
+    Path(tunnel_id): Path<String>,
     Json(req): Json<SettleRequest>,
 ) -> Response {
     tracing::info!(
-        %session_id,
-        tunnel = %req.settlement.tunnel_id,
+        %tunnel_id,
         final_nonce = %req.settlement.final_nonce,
         balance_a = %req.settlement.party_a_balance,
         balance_b = %req.settlement.party_b_balance,
@@ -195,37 +196,19 @@ pub(crate) async fn settle(
         "settle requested"
     );
 
-    let Some(rec) = state.control.get_session(&session_id).await else {
-        return ApiError::resp(StatusCode::NOT_FOUND, "unknown_session", "no such session")
-            .into_response();
-    };
-    if !rec
-        .tunnels
-        .iter()
-        .any(|t| t.tunnel_id == req.settlement.tunnel_id)
-    {
+    // The signed settlement commits to its own tunnelId; a path/body mismatch is a client bug
+    // or a misroute, never a thing to sponsor gas for.
+    if req.settlement.tunnel_id != tunnel_id {
         return ApiError::resp(
-            StatusCode::NOT_FOUND,
-            "unknown_tunnel",
-            "tunnel not registered in session",
-        )
-        .into_response();
-    }
-    if !bearer_matches(&headers, &rec.stats_token) {
-        return ApiError::resp(
-            StatusCode::UNAUTHORIZED,
-            "unauthorized",
-            "missing or invalid bearer token",
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "tunnel_mismatch",
+            "settlement tunnelId does not match the path",
         )
         .into_response();
     }
 
-    // 409 if the event-derived registry already shows this tunnel closed.
-    if state
-        .control
-        .get_tunnel_status(&req.settlement.tunnel_id)
-        .await
-        == Some(crate::state::TunnelStatus::Closed)
+    // 409 if the event-derived registry already shows this tunnel closed (free reject, no RPC).
+    if state.control.get_tunnel_status(&tunnel_id).await == Some(crate::state::TunnelStatus::Closed)
     {
         return ApiError::resp(
             StatusCode::CONFLICT,
@@ -261,7 +244,7 @@ pub(crate) async fn settle(
     };
 
     let close = crate::sui::CloseArgs {
-        tunnel_id: req.settlement.tunnel_id.clone(),
+        tunnel_id: tunnel_id.clone(),
         party_a_balance: a,
         party_b_balance: b,
         sig_a,
@@ -279,13 +262,10 @@ pub(crate) async fn settle(
                     (String::new(), String::new())
                 }
             };
-            // Push the proof-linked settled row now; the indexer's later explorer-only row for
-            // this same tx_digest is deduped. `a`/`b`/`ts` are the u64s parsed above;
-            // `req.settlement.transcript_root` is the hex the client sent.
             state
                 .control
                 .push_recent_event(settled_event(
-                    &req.settlement.tunnel_id,
+                    &tunnel_id,
                     a,
                     b,
                     &req.settlement.transcript_root,
@@ -469,6 +449,49 @@ mod tests {
         let ev = settled_event("0xT", 1, 1, "", "DiG", 1, "");
         assert!(ev.proof_url.is_none(), "empty url → no link");
         assert!(ev.transcript_root.is_none(), "empty root → no anchor");
+    }
+
+    // The exact camelCase settle JSON the SDK emits (tunnelId "0x1"), reused by the guard tests.
+    const SAMPLE_SETTLE_JSON: &str = r#"{
+        "settlement": {
+            "tunnelId": "0x1", "partyABalance": "1500", "partyBBalance": "500",
+            "finalNonce": "1", "timestamp": "1750000000000", "transcriptRoot": "0xabc"
+        },
+        "sigA": "0xaa", "sigB": "0xbb", "transcript": []
+    }"#;
+
+    // ADR-0007: the signed settlement commits to its tunnelId, so a path/body mismatch is a
+    // client bug or a misroute — reject before any RPC, never sponsor gas for it.
+    #[tokio::test]
+    async fn settle_rejects_path_tunnel_mismatch() {
+        let state = test_state();
+        let req: SettleRequest = serde_json::from_str(SAMPLE_SETTLE_JSON).unwrap();
+        let resp = settle(
+            axum::extract::State(state),
+            axum::extract::Path("0xDIFFERENT".to_string()),
+            axum::Json(req),
+        )
+        .await;
+        assert_eq!(resp.status(), axum::http::StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    // 409 when the event-derived registry already shows this tunnel closed — a free reject that
+    // never reaches the settler (idempotency; ADR-0007 keeps this guard).
+    #[tokio::test]
+    async fn settle_conflicts_when_already_closed() {
+        let state = test_state();
+        state
+            .control
+            .set_tunnel_status("0x1", crate::state::TunnelStatus::Closed)
+            .await;
+        let req: SettleRequest = serde_json::from_str(SAMPLE_SETTLE_JSON).unwrap();
+        let resp = settle(
+            axum::extract::State(state),
+            axum::extract::Path("0x1".to_string()),
+            axum::Json(req),
+        )
+        .await;
+        assert_eq!(resp.status(), axum::http::StatusCode::CONFLICT);
     }
 
     // /health/ready reflects ControlStore::ready(); in-memory is always ready.
