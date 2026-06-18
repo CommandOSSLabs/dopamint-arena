@@ -186,7 +186,7 @@ fun wrong_player_joins_game() {
     // sender is @0x0 (player_1), but join_game requires sender == player_2 (@0xBBBB) -> not_authorized
     example_coin_flip::join_game<SUI>(&mut game, commitment2, stake2, &ctx);
 
-    sui::test_utils::destroy(game);
+    std::unit_test::destroy(game);
     clock.destroy_for_testing();
 }
 

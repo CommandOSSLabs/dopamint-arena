@@ -1592,7 +1592,7 @@ fun withdraw_before_active() {
     assert_eq!(tunnel::party_a_deposit(&t), 0);
     assert_eq!(tunnel::status(&t), tunnel::status_closed());
 
-    sui::test_utils::destroy(withdrawn);
+    std::unit_test::destroy(withdrawn);
     t.destroy_for_testing();
     clock.destroy_for_testing();
 }
@@ -1637,7 +1637,7 @@ fun withdraw_before_active_wrong_status() {
     let coin = sui::coin::mint_for_testing<sui::sui::SUI>(1000, &mut ctx);
     tunnel::deposit_party_a(&mut t, coin, &clock, &ctx);
     let withdrawn = tunnel::withdraw_before_active(&mut t, &clock, &mut ctx);
-    sui::test_utils::destroy(withdrawn);
+    std::unit_test::destroy(withdrawn);
 
     // Tunnel is now CLOSED. Try withdraw again -> invalid_state
     let _withdrawn2 = tunnel::withdraw_before_active(&mut t, &clock, &mut ctx);
@@ -1682,7 +1682,7 @@ fun withdraw_timeout() {
     assert_eq!(withdrawn.value(), 1000);
     assert_eq!(tunnel::status(&t), tunnel::status_closed());
 
-    sui::test_utils::destroy(withdrawn);
+    std::unit_test::destroy(withdrawn);
     t.destroy_for_testing();
     clock.destroy_for_testing();
 }
@@ -1726,7 +1726,7 @@ fun withdraw_timeout_not_reached() {
     // Don't advance clock - timeout not reached
     let _withdrawn = tunnel::withdraw_timeout(&mut t, &clock, &mut ctx);
 
-    sui::test_utils::destroy(_withdrawn);
+    std::unit_test::destroy(_withdrawn);
     t.destroy_for_testing();
     clock.destroy_for_testing();
 }
@@ -1762,7 +1762,7 @@ fun destroy_tunnel() {
     let coin = sui::coin::mint_for_testing<sui::sui::SUI>(1000, &mut ctx);
     tunnel::deposit_party_a(&mut t, coin, &clock, &ctx);
     let withdrawn = tunnel::withdraw_before_active(&mut t, &clock, &mut ctx);
-    sui::test_utils::destroy(withdrawn);
+    std::unit_test::destroy(withdrawn);
 
     assert_eq!(tunnel::status(&t), tunnel::status_closed());
 

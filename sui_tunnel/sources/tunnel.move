@@ -1595,7 +1595,7 @@ fun lock_htlc_internal<T>(
 
     // Ensure no duplicate HTLC
     let key = HTLCKey { payment_hash };
-    assert!(!df::exists_(&tunnel.id, key), EAlreadyExists);
+    assert!(!df::exists(&tunnel.id, key), EAlreadyExists);
 
     // Split funds from the tunnel balance into the HTLC
     let htlc_balance = tunnel.balance.split(amount);
@@ -1649,7 +1649,7 @@ public fun claim_htlc_in_tunnel<T>(
     assert!(tunnel.status != STATUS_DESTROYED, EInvalidState);
 
     let key = HTLCKey { payment_hash };
-    assert!(df::exists_(&tunnel.id, key), ENotFound);
+    assert!(df::exists(&tunnel.id, key), ENotFound);
 
     let htlc: TunnelHTLC<T> = df::remove(&mut tunnel.id, key);
 
@@ -1697,7 +1697,7 @@ public fun expire_htlc_in_tunnel<T>(
     assert!(tunnel.status != STATUS_DESTROYED, EInvalidState);
 
     let key = HTLCKey { payment_hash };
-    assert!(df::exists_(&tunnel.id, key), ENotFound);
+    assert!(df::exists(&tunnel.id, key), ENotFound);
 
     let htlc: TunnelHTLC<T> = df::remove(&mut tunnel.id, key);
 
@@ -1731,7 +1731,7 @@ public fun expire_htlc_in_tunnel<T>(
 /// Internal: get total HTLC-locked amount for a party
 fun get_party_htlc_locked<T>(tunnel: &Tunnel<T>, party: address): u64 {
     let key = HTLCPartyCounterKey { party };
-    if (df::exists_(&tunnel.id, key)) {
+    if (df::exists(&tunnel.id, key)) {
         let counter: &HTLCPartyCounter = df::borrow(&tunnel.id, key);
         counter.total_locked
     } else {
@@ -1747,7 +1747,7 @@ fun update_party_htlc_counter<T>(
     amount: u64,
 ) {
     let key = HTLCPartyCounterKey { party };
-    if (!df::exists_(&tunnel.id, key)) {
+    if (!df::exists(&tunnel.id, key)) {
         df::add(&mut tunnel.id, key, HTLCPartyCounter { count: 0, total_locked: 0 });
     };
     let counter: &mut HTLCPartyCounter = df::borrow_mut(&mut tunnel.id, key);
@@ -1780,7 +1780,7 @@ public fun set_referee<T>(tunnel: &mut Tunnel<T>, referee: address, ctx: &TxCont
     assert!(sender == tunnel.party_a.address || sender == tunnel.party_b.address, ENotAuthorized);
 
     let key = RefereeKey {};
-    if (df::exists_(&tunnel.id, key)) {
+    if (df::exists(&tunnel.id, key)) {
         *df::borrow_mut<RefereeKey, address>(&mut tunnel.id, key) = referee;
     } else {
         df::add(&mut tunnel.id, key, referee);
@@ -1809,7 +1809,7 @@ public fun resolve_dispute_external<T>(
     assert!(tunnel.status == STATUS_DISPUTED, ENoActiveDispute);
 
     let key = RefereeKey {};
-    assert!(df::exists_(&tunnel.id, key), ENotSupported);
+    assert!(df::exists(&tunnel.id, key), ENotSupported);
     let referee: address = *df::borrow(&tunnel.id, key);
     assert!(ctx.sender() == referee, ERefereeNotAuthorized);
 
@@ -2405,12 +2405,12 @@ public fun can_claim_timeout<T>(tunnel: &Tunnel<T>, clock: &Clock): bool {
 
 /// Check if a referee is assigned to the tunnel
 public fun has_referee<T>(tunnel: &Tunnel<T>): bool {
-    df::exists_(&tunnel.id, RefereeKey {})
+    df::exists(&tunnel.id, RefereeKey {})
 }
 
 /// Get the referee address (aborts if no referee assigned)
 public fun get_referee<T>(tunnel: &Tunnel<T>): address {
-    assert!(df::exists_(&tunnel.id, RefereeKey {}), ENotFound);
+    assert!(df::exists(&tunnel.id, RefereeKey {}), ENotFound);
     *df::borrow(&tunnel.id, RefereeKey {})
 }
 
@@ -2422,7 +2422,7 @@ public fun party_htlc_locked<T>(tunnel: &Tunnel<T>, party: address): u64 {
 /// Get the total number of active HTLCs for a specific party
 public fun party_htlc_count<T>(tunnel: &Tunnel<T>, party: address): u64 {
     let key = HTLCPartyCounterKey { party };
-    if (df::exists_(&tunnel.id, key)) {
+    if (df::exists(&tunnel.id, key)) {
         let counter: &HTLCPartyCounter = df::borrow(&tunnel.id, key);
         counter.count
     } else {
@@ -2432,7 +2432,7 @@ public fun party_htlc_count<T>(tunnel: &Tunnel<T>, party: address): u64 {
 
 /// Check if a specific HTLC exists in the tunnel
 public fun has_htlc<T>(tunnel: &Tunnel<T>, payment_hash: vector<u8>): bool {
-    df::exists_(&tunnel.id, HTLCKey { payment_hash })
+    df::exists(&tunnel.id, HTLCKey { payment_hash })
 }
 
 // ============================================
@@ -2534,7 +2534,7 @@ public fun create_htlc_lock_data_for_testing(
 /// Remove referee dynamic field before destroying tunnel in tests
 public fun remove_referee_for_testing<T>(tunnel: &mut Tunnel<T>) {
     let key = RefereeKey {};
-    if (df::exists_(&tunnel.id, key)) {
+    if (df::exists(&tunnel.id, key)) {
         let _: address = df::remove(&mut tunnel.id, key);
     };
 }
@@ -2543,11 +2543,11 @@ public fun remove_referee_for_testing<T>(tunnel: &mut Tunnel<T>) {
 /// Remove per-party HTLC counter dynamic fields before destroying tunnel in tests
 public fun remove_htlc_counters_for_testing<T>(tunnel: &mut Tunnel<T>) {
     let key_a = HTLCPartyCounterKey { party: tunnel.party_a.address };
-    if (df::exists_(&tunnel.id, key_a)) {
+    if (df::exists(&tunnel.id, key_a)) {
         let _: HTLCPartyCounter = df::remove(&mut tunnel.id, key_a);
     };
     let key_b = HTLCPartyCounterKey { party: tunnel.party_b.address };
-    if (df::exists_(&tunnel.id, key_b)) {
+    if (df::exists(&tunnel.id, key_b)) {
         let _: HTLCPartyCounter = df::remove(&mut tunnel.id, key_b);
     };
 }
@@ -2623,7 +2623,7 @@ public fun lock_htlc_no_sig_for_testing<T>(
 /// `set_referee` requires STATUS_CREATED).
 public fun set_referee_for_testing<T>(tunnel: &mut Tunnel<T>, referee: address) {
     let key = RefereeKey {};
-    if (df::exists_(&tunnel.id, key)) {
+    if (df::exists(&tunnel.id, key)) {
         *df::borrow_mut<RefereeKey, address>(&mut tunnel.id, key) = referee;
     } else {
         df::add(&mut tunnel.id, key, referee);
