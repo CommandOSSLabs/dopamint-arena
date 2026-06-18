@@ -126,7 +126,7 @@ export function hazardsAt(seed: bigint, lane: number, tick: bigint): HazardSpan[
 }
 
 /** Strict-exclusive overlap test (chicken center = col + 0.5), accounting for wrap. */
-function spanCoversCol(span: HazardSpan, col: number): boolean {
+export function spanCoversCol(span: HazardSpan, col: number): boolean {
   const c = col + 0.5;
   for (const cc of [c, c - COLUMN_COUNT, c + COLUMN_COUNT]) {
     if (cc > span.center - span.half && cc < span.center + span.half) return true;

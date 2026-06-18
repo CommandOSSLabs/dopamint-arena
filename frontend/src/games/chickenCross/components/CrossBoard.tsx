@@ -1,4 +1,4 @@
-import { laneKind, hazardsAt, COLUMN_COUNT, WIN_LANE } from "sui-tunnel-ts/protocol/cross";
+import { laneKind, hazardsAt, spanCoversCol, COLUMN_COUNT, WIN_LANE } from "sui-tunnel-ts/protocol/cross";
 import "../cross.css";
 import type { CrossView, SessionResult } from "../session-core";
 
@@ -48,12 +48,7 @@ export function CrossBoard({
           return (
             <div key={L} className="cross-lane" style={{ background: LANE_BG[kind] }}>
               {Array.from({ length: COLUMN_COUNT }).map((_, col) => {
-                const onHaz = hazards.some((s) => {
-                  const c = col + 0.5;
-                  return [c, c - COLUMN_COUNT, c + COLUMN_COUNT].some(
-                    (cc) => cc > s.center - s.half && cc < s.center + s.half,
-                  );
-                });
+                const onHaz = hazards.some((s) => spanCoversCol(s, col));
                 const aHere = view.players[0]?.lane === L && view.players[0]?.col === col;
                 const bHere = view.players[1]?.lane === L && view.players[1]?.col === col;
                 const haz = onHaz ? (kind === "road" ? "🚗" : kind === "rails" ? "🚆" : "🪵") : "";

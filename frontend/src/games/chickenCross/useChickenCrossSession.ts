@@ -45,8 +45,6 @@ export function useChickenCrossSession(): ChickenCrossSession {
   const protocolRef = useRef<CrossProtocol | null>(null);
   const tunnelRef = useRef<OffchainTunnel<CrossState, CrossMove> | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const stakeRef = useRef<bigint>(0n);
-
   // Control-plane session (ADR-0002): best-effort, off the per-move loop.
   const sessionRef = useRef<RegisterSessionResult | null>(null);
   const moveCountRef = useRef(0);
@@ -81,7 +79,6 @@ export function useChickenCrossSession(): ChickenCrossSession {
       stopTimer();
       const floored = Math.floor(nextStake);
       const stakeBig = BigInt(Math.max(Number(MIN_STAKE), Number.isFinite(floored) ? floored : 0));
-      stakeRef.current = stakeBig;
       setStake(Number(stakeBig));
       setResult(null);
       setError(null);
