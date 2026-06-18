@@ -186,16 +186,21 @@ export function QuantumPokerPvpWindow(_props: GameWindowProps) {
       : `${PHASE_LABEL[s.phase]} · opponent's turn`;
 
   const legal = g.legal;
-  const facing = !!legal && legal.callAmount > 0n;
-  const betAmount = legal
-    ? (() => {
-        let a = 50n;
-        if (a < legal.minBet) a = legal.minBet;
-        if (a > legal.maxBet) a = legal.maxBet;
-        return a;
-      })()
-    : 0n;
-  const canBet = !!legal && legal.canBet && betAmount >= legal.minBet;
+  // Pot-relative bet sizing. The protocol's `bet` amount is the increment to THIS seat's
+  // street bet; a pot-sized raise = call + pot-after-call = pot + 2·diff (diff = amount to
+  // call, 0 when first to act). Each size clamps to a legal min-raise and the stack (all-in).
+  const diff = legal?.callAmount ?? 0n;
+  const clampBet = (raw: bigint): bigint => {
+    if (!legal) return 0n;
+    return raw < legal.minBet ? legal.minBet : raw > legal.maxBet ? legal.maxBet : raw;
+  };
+  const halfPot = clampBet(diff > 0n ? diff + (pot + diff) / 2n : pot / 2n);
+  const fullPot = clampBet(diff > 0n ? pot + 2n * diff : pot);
+  const allIn = legal?.maxBet ?? 0n;
+  // Surface only distinct, legal sizes — collapse to all-in when the stack is short.
+  const showHalf = !!legal && legal.canBet && halfPot < fullPot && halfPot < allIn;
+  const showPot = !!legal && legal.canBet && fullPot < allIn;
+  const showAllIn = !!legal && legal.canBet;
 
   return (
     <div
@@ -245,13 +250,23 @@ export function QuantumPokerPvpWindow(_props: GameWindowProps) {
       />
 
       {/* Action bar — pinned, always visible so the hand can advance */}
-      <div className="flex min-h-[2.25rem] shrink-0 items-center justify-center gap-1.5">
+      <div className="flex min-h-[2.25rem] shrink-0 flex-wrap items-center justify-center gap-1">
         {g.myTurnToBet && legal ? (
           <>
+            {g.secondsLeft != null && (
+              <span
+                className={[
+                  "min-w-[2rem] rounded px-1.5 py-1 text-center text-[11px] font-semibold tabular-nums",
+                  g.secondsLeft <= 3 ? "bg-rose-500/20 text-rose-300" : "text-amber-200",
+                ].join(" ")}
+              >
+                {g.secondsLeft}s
+              </span>
+            )}
             <button
               type="button"
               onClick={g.fold}
-              className="rounded bg-rose-500/80 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-rose-500"
+              className="min-w-[3.75rem] max-w-[9rem] flex-1 whitespace-nowrap rounded bg-rose-500/80 px-2 py-1 text-[11px] font-semibold text-white hover:bg-rose-500"
             >
               Fold
             </button>
@@ -259,7 +274,7 @@ export function QuantumPokerPvpWindow(_props: GameWindowProps) {
               <button
                 type="button"
                 onClick={g.check}
-                className="rounded bg-arena-panel px-2.5 py-1.5 text-xs font-semibold hover:bg-arena-edge"
+                className="min-w-[3.75rem] max-w-[9rem] flex-1 whitespace-nowrap rounded bg-arena-panel px-2 py-1 text-[11px] font-semibold hover:bg-arena-edge"
               >
                 Check
               </button>
@@ -268,18 +283,36 @@ export function QuantumPokerPvpWindow(_props: GameWindowProps) {
               <button
                 type="button"
                 onClick={g.call}
-                className="rounded bg-arena-panel px-2.5 py-1.5 text-xs font-semibold hover:bg-arena-edge"
+                className="min-w-[3.75rem] max-w-[9rem] flex-1 whitespace-nowrap rounded bg-arena-panel px-2 py-1 text-[11px] font-semibold hover:bg-arena-edge"
               >
                 Call {legal.callAmount.toString()}
               </button>
             )}
-            {canBet && (
+            {showHalf && (
               <button
                 type="button"
-                onClick={() => g.bet(betAmount)}
-                className="rounded bg-arena-accent px-2.5 py-1.5 text-xs font-semibold text-black"
+                onClick={() => g.bet(halfPot)}
+                className="min-w-[3.75rem] max-w-[9rem] flex-1 whitespace-nowrap rounded bg-arena-accent/75 px-2 py-1 text-[11px] font-semibold text-black hover:bg-arena-accent"
               >
-                {facing ? "Raise" : "Bet"} {betAmount.toString()}
+                ½ Pot · {halfPot.toString()}
+              </button>
+            )}
+            {showPot && (
+              <button
+                type="button"
+                onClick={() => g.bet(fullPot)}
+                className="min-w-[3.75rem] max-w-[9rem] flex-1 whitespace-nowrap rounded bg-arena-accent px-2 py-1 text-[11px] font-semibold text-black"
+              >
+                Pot · {fullPot.toString()}
+              </button>
+            )}
+            {showAllIn && (
+              <button
+                type="button"
+                onClick={() => g.bet(allIn)}
+                className="min-w-[3.75rem] max-w-[9rem] flex-1 whitespace-nowrap rounded bg-amber-400 px-2 py-1 text-[11px] font-semibold text-black hover:bg-amber-300"
+              >
+                All-in · {allIn.toString()}
               </button>
             )}
           </>
