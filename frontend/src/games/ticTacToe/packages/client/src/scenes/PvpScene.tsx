@@ -73,11 +73,17 @@ export function PvpScene({ onBack }: { onBack: () => void }) {
             )}
           </div>
           {!funded && <div className="text-xs text-amber-600 text-center max-w-xs">Your connected wallet needs a little testnet SUI to play (gas + deposit).</div>}
-          <button onClick={g.queue} disabled={!funded || g.phase === "queuing" || g.phase === "connecting"}
+          {/* Disabled for every in-progress phase (connecting → funding), with a status label, so the
+              button can't be re-fired while a match is being set up. */}
+          <button onClick={g.queue} disabled={!funded || locked}
             className="px-6 py-3 rounded-xl bg-tertiary text-on-tertiary font-black uppercase tracking-widest disabled:opacity-40">
-            {g.phase === "queuing" ? "Finding an opponent…" : g.phase === "connecting" ? "Connecting…" : "Find match"}
+            {g.phase === "connecting" ? "Connecting…"
+              : g.phase === "queuing" ? "Finding an opponent…"
+              : g.phase === "opening" ? "Opening tunnel…"
+              : g.phase === "funding" ? "Funding your seat…"
+              : "Find match"}
           </button>
-          {g.phase === "queuing" && <button onClick={g.leave} className="text-xs text-on-surface/60 underline">cancel</button>}
+          {(g.phase === "queuing" || g.phase === "connecting") && <button onClick={g.leave} className="text-xs text-on-surface/60 underline">cancel</button>}
           {g.error && <div className="text-sm text-red-500 text-center max-w-xs">{g.error}</div>}
         </div>
       ) : (
