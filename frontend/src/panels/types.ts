@@ -36,7 +36,13 @@ export interface DepositRow {
  */
 export interface TelemetrySnapshot {
   rate: RateReport;
+  /** Settled on-chain transactions — each carries a digest/address. */
   txns: TxnRow[];
+  /**
+   * Off-chain activity co-signed inside tunnels but not yet anchored on-chain.
+   * These have no digest/address until they settle; the Local feed shows them.
+   */
+  localTxns: TxnRow[];
   deposits: DepositRow[];
   /** Recent updates/sec samples for the live sparkline. */
   tpsSeries: number[];

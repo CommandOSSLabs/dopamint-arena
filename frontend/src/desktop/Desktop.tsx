@@ -78,6 +78,7 @@ import { WalletButton } from "@/wallet/WalletButton";
 import type { TelemetrySnapshot } from "../panels/types";
 import { ChatPanel } from "../panels/ChatPanel";
 import { LiveTransactionsFeed } from "../panels/LiveTransactionsFeed";
+import { LocalTransactionsFeed } from "../panels/LocalTransactionsFeed";
 import { SystemDashboard } from "../panels/SystemDashboard";
 import { TpsChart } from "../panels/TpsChart";
 import { GameWindow } from "./GameWindow";
@@ -187,6 +188,10 @@ function Dock({
         <SystemDashboard snapshot={snapshot} />
         <TpsChart snapshot={snapshot} />
         <LiveTransactionsFeed snapshot={snapshot} className="min-h-72 flex-1" />
+        <LocalTransactionsFeed
+          snapshot={snapshot}
+          className="min-h-72 flex-1"
+        />
         {SHOW_CHAT && <ChatPanel className="h-72 shrink-0" />}
       </div>
     );
@@ -206,11 +211,19 @@ function Dock({
       </ResizablePanel>
       <ResizableHandle className="w-2 bg-transparent transition-colors hover:bg-border" />
       <ResizablePanel
-        defaultSize={SHOW_CHAT ? "50%" : "68%"}
-        minSize="24%"
+        defaultSize={SHOW_CHAT ? "26%" : "34%"}
+        minSize="16%"
         className="min-w-0"
       >
         <LiveTransactionsFeed snapshot={snapshot} className="h-full" />
+      </ResizablePanel>
+      <ResizableHandle className="w-2 bg-transparent transition-colors hover:bg-border" />
+      <ResizablePanel
+        defaultSize={SHOW_CHAT ? "24%" : "34%"}
+        minSize="16%"
+        className="min-w-0"
+      >
+        <LocalTransactionsFeed snapshot={snapshot} className="h-full" />
       </ResizablePanel>
       {SHOW_CHAT && (
         <>
@@ -952,8 +965,15 @@ export function Desktop() {
               </div>
             )}
             {mobileTab === "activity" && (
-              <div className="h-full p-2">
-                <LiveTransactionsFeed snapshot={snapshot} className="h-full" />
+              <div className="flex h-full flex-col gap-2 p-2">
+                <LiveTransactionsFeed
+                  snapshot={snapshot}
+                  className="min-h-0 flex-1"
+                />
+                <LocalTransactionsFeed
+                  snapshot={snapshot}
+                  className="min-h-0 flex-1"
+                />
               </div>
             )}
             {SHOW_CHAT && mobileTab === "chat" && (

@@ -62,6 +62,34 @@ function makeTxn(id: number): { row: TxnRow; delta: number } {
   };
 }
 
+// Off-chain action verbs per game — the Local feed shows pre-settlement moves.
+const LOCAL_FEED: { game: string; type: string }[] = [
+  { game: "blackjack", type: "Blackjack Hit" },
+  { game: "quantum-poker", type: "Poker Raise" },
+  { game: "tic-tac-toe", type: "TicTacToe Move" },
+  { game: "coin-flip", type: "Coin Flip" },
+  { game: "dice", type: "Dice Roll" },
+  { game: "slots", type: "Slots Spin" },
+  { game: "regular-payments", type: "Transfer" },
+  { game: "chat", type: "Tip" },
+];
+
+// A local move: a co-signed tunnel action with no on-chain anchor (no digest) yet.
+function makeLocalTxn(id: number): TxnRow {
+  const failed = Math.random() < 0.05;
+  const magnitude = round2(rnd(0.25, 8));
+  const event = LOCAL_FEED[rndInt(0, LOCAL_FEED.length - 1)];
+  return {
+    id,
+    game: event.game,
+    time: nowStr(),
+    bot: `Bot #${rndInt(1, 16)}`,
+    type: event.type,
+    status: failed ? "Failed" : "Success",
+    amount: `${failed ? "-" : "+"}$${magnitude.toFixed(2)}`,
+  };
+}
+
 function advance(
   prev: TelemetrySnapshot,
   nextId: () => number,
@@ -72,6 +100,10 @@ function advance(
 
   const fresh = Array.from({ length: rndInt(1, 3) }, () => makeTxn(nextId()));
   const netDelta = fresh.reduce((sum, t) => sum + t.delta, 0);
+  // Off-chain moves arrive faster than on-chain settlements.
+  const freshLocal = Array.from({ length: rndInt(2, 5) }, () =>
+    makeLocalTxn(nextId()),
+  );
 
   const lastTps = prev.tpsSeries[prev.tpsSeries.length - 1] ?? 24;
   const nextTps = clamp(lastTps + rnd(-3, 3), 12, 30);
@@ -111,6 +143,7 @@ function advance(
     ),
     tpsSeries: [...prev.tpsSeries.slice(1), round2(nextTps)],
     txns: [...fresh.map((t) => t.row), ...prev.txns].slice(0, 30),
+    localTxns: [...freshLocal, ...prev.localTxns].slice(0, 30),
     deposits: addDeposit
       ? [
           {
