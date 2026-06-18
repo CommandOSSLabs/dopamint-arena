@@ -106,6 +106,8 @@ export function createIam(name: string, args: IamInputs): IamOutputs {
             "elasticache:*",
             "rds:*",
             "ec2:*",
+            "elasticloadbalancing:*",
+            "imagebuilder:*",
             "secretsmanager:GetSecretValue",
             "iam:PassRole",
           ],

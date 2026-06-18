@@ -67,21 +67,25 @@ phases:
     ],
   });
 
-  const imageRecipe = new aws.imagebuilder.ImageRecipe(`${args.name}-benchmark-recipe`, {
-    parentImage: baseAmi.id,
-    version,
-    components: [{ componentArn: component.arn }],
-    blockDeviceMappings: [
-      {
-        deviceName: "/dev/xvda",
-        ebs: {
-          volumeSize: 20,
-          volumeType: "gp3",
-          deleteOnTermination: "true",
+  const imageRecipe = new aws.imagebuilder.ImageRecipe(
+    `${args.name}-benchmark-recipe`,
+    {
+      parentImage: baseAmi.id,
+      version,
+      components: [{ componentArn: component.arn }],
+      blockDeviceMappings: [
+        {
+          deviceName: "/dev/xvda",
+          ebs: {
+            volumeSize: 20,
+            volumeType: "gp3",
+            deleteOnTermination: "true",
+          },
         },
-      },
-    ],
-  });
+      ],
+    },
+    { ignoreChanges: ["parentImage"] }
+  );
 
   const distribution = new aws.imagebuilder.DistributionConfiguration(`${args.name}-benchmark-dist`, {
     distributions: [
