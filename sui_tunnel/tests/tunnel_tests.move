@@ -41,7 +41,7 @@ fun serialize_settlement() {
         1234567890,
     );
 
-    let serialized = tunnel::serialize_settlement(&data);
+    let serialized = data.serialize_settlement();
 
     // Should start with domain prefix
     let prefix = b"sui_tunnel::settlement";
@@ -64,7 +64,7 @@ fun serialize_state_update() {
         500,
     );
 
-    let serialized = tunnel::serialize_state_update(&data);
+    let serialized = data.serialize_state_update();
 
     // Should start with domain prefix
     let prefix = b"sui_tunnel::state_update";
@@ -87,7 +87,7 @@ fun serialize_htlc_lock() {
         5000,
     );
 
-    let serialized = tunnel::serialize_htlc_lock(&data);
+    let serialized = data.serialize_htlc_lock();
 
     // Should start with domain prefix
     let prefix = b"sui_tunnel::htlc_lock";
@@ -129,9 +129,9 @@ fun serialize_htlc_lock_deterministic() {
         5000,
     );
 
-    let s1 = tunnel::serialize_htlc_lock(&data1);
-    let s2 = tunnel::serialize_htlc_lock(&data2);
-    let s3 = tunnel::serialize_htlc_lock(&data3);
+    let s1 = data1.serialize_htlc_lock();
+    let s2 = data2.serialize_htlc_lock();
+    let s3 = data3.serialize_htlc_lock();
 
     // Same input -> same output
     assert_eq!(s1, s2);
@@ -171,9 +171,9 @@ fun party_config_accessors() {
         0,
     );
 
-    assert_eq!(tunnel::party_address(&config), @0xABCD);
-    assert_eq!(*tunnel::party_public_key(&config), vector[1u8, 2, 3]);
-    assert_eq!(tunnel::party_signature_type(&config), 0);
+    assert_eq!(config.party_address(), @0xABCD);
+    assert_eq!(*config.party_public_key(), vector[1u8, 2, 3]);
+    assert_eq!(config.party_signature_type(), 0);
 }
 
 #[test]
@@ -186,9 +186,9 @@ fun state_commitment_accessors() {
         500,
     );
 
-    assert_eq!(*tunnel::state_hash(&commitment), vector[1u8, 2, 3, 4]);
-    assert_eq!(tunnel::state_nonce(&commitment), 42);
-    assert_eq!(tunnel::state_timestamp(&commitment), 1234567890);
+    assert_eq!(*commitment.state_hash(), vector[1u8, 2, 3, 4]);
+    assert_eq!(commitment.state_nonce(), 42);
+    assert_eq!(commitment.state_timestamp(), 1234567890);
 }
 
 // ============================================
@@ -217,9 +217,9 @@ fun timeout_value_after_creation() {
         &mut ctx,
     );
 
-    assert_eq!(tunnel::timeout_ms(&tunnel), 60000);
+    assert_eq!(tunnel.timeout_ms(), 60000);
 
-    tunnel::destroy_for_testing(tunnel);
+    tunnel.destroy_for_testing();
     clock.destroy_for_testing();
 }
 
@@ -252,9 +252,9 @@ fun extend_timeout_wrong_status() {
     );
 
     // Tunnel is CREATED, extend_timeout requires ACTIVE or DISPUTED -> invalid_state(1)
-    tunnel::extend_timeout(&mut tunnel, 30000, &clock, &ctx);
+    tunnel.extend_timeout(30000, &clock, &ctx);
 
-    tunnel::destroy_for_testing(tunnel);
+    tunnel.destroy_for_testing();
     clock.destroy_for_testing();
 }
 
@@ -285,9 +285,9 @@ fun penalty_amount_stored() {
         &mut ctx,
     );
 
-    assert_eq!(tunnel::penalty_amount(&tunnel), 500);
+    assert_eq!(tunnel.penalty_amount(), 500);
 
-    tunnel::destroy_for_testing(tunnel);
+    tunnel.destroy_for_testing();
     clock.destroy_for_testing();
 }
 
@@ -318,17 +318,17 @@ fun set_referee() {
     );
 
     // Initially no referee
-    assert!(!tunnel::has_referee(&tunnel));
+    assert!(!tunnel.has_referee());
 
     // Set referee (sender is @0x0 = party_a)
-    tunnel::set_referee(&mut tunnel, @0xCCCC, &ctx);
+    tunnel.set_referee(@0xCCCC, &ctx);
 
-    assert!(tunnel::has_referee(&tunnel));
-    assert_eq!(tunnel::get_referee(&tunnel), @0xCCCC);
+    assert!(tunnel.has_referee());
+    assert_eq!(tunnel.referee(), @0xCCCC);
 
     // Clean up dynamic field before destroying
-    tunnel::remove_referee_for_testing(&mut tunnel);
-    tunnel::destroy_for_testing(tunnel);
+    tunnel.remove_referee_for_testing();
+    tunnel.destroy_for_testing();
     clock.destroy_for_testing();
 }
 
@@ -355,15 +355,15 @@ fun set_referee_update() {
     );
 
     // Set referee
-    tunnel::set_referee(&mut tunnel, @0xCCCC, &ctx);
-    assert_eq!(tunnel::get_referee(&tunnel), @0xCCCC);
+    tunnel.set_referee(@0xCCCC, &ctx);
+    assert_eq!(tunnel.referee(), @0xCCCC);
 
     // Update referee
-    tunnel::set_referee(&mut tunnel, @0xDDDD, &ctx);
-    assert_eq!(tunnel::get_referee(&tunnel), @0xDDDD);
+    tunnel.set_referee(@0xDDDD, &ctx);
+    assert_eq!(tunnel.referee(), @0xDDDD);
 
-    tunnel::remove_referee_for_testing(&mut tunnel);
-    tunnel::destroy_for_testing(tunnel);
+    tunnel.remove_referee_for_testing();
+    tunnel.destroy_for_testing();
     clock.destroy_for_testing();
 }
 
@@ -397,7 +397,7 @@ fun set_referee_not_authorized() {
     );
 
     // Sender is @0x0, not a party -> not_authorized(0)
-    tunnel::set_referee(&mut tunnel, @0xCCCC, &ctx);
+    tunnel.set_referee(@0xCCCC, &ctx);
 
     abort
 }
@@ -431,10 +431,10 @@ fun resolve_dispute_external_not_disputed() {
     );
 
     // Set referee
-    tunnel::set_referee(&mut tunnel, @0x0, &ctx);
+    tunnel.set_referee(@0x0, &ctx);
 
     // Try to resolve when not disputed (still CREATED) -> no_active_dispute(503)
-    tunnel::resolve_dispute_external(&mut tunnel, 0, 0, &clock, &mut ctx);
+    tunnel.resolve_dispute_external(0, 0, &clock, &mut ctx);
 
     abort
 }
@@ -462,19 +462,19 @@ fun referee_survives_deposit() {
     );
 
     // Set referee while CREATED
-    tunnel::set_referee(&mut tunnel, @0xCCCC, &ctx);
-    assert!(tunnel::has_referee(&tunnel));
+    tunnel.set_referee(@0xCCCC, &ctx);
+    assert!(tunnel.has_referee());
 
     // Deposit (tunnel still CREATED after single deposit)
     let coin_a = coin::mint_for_testing<SUI>(500, &mut ctx);
-    tunnel::deposit_party_a(&mut tunnel, coin_a, &clock, &ctx);
+    tunnel.deposit_party_a(coin_a, &clock, &ctx);
 
     // Referee persists across state changes
-    assert!(tunnel::has_referee(&tunnel));
-    assert_eq!(tunnel::get_referee(&tunnel), @0xCCCC);
+    assert!(tunnel.has_referee());
+    assert_eq!(tunnel.referee(), @0xCCCC);
 
-    tunnel::remove_referee_for_testing(&mut tunnel);
-    tunnel::destroy_for_testing(tunnel);
+    tunnel.remove_referee_for_testing();
+    tunnel.destroy_for_testing();
     clock.destroy_for_testing();
 }
 
@@ -505,15 +505,15 @@ fun htlc_accessors_no_htlcs() {
     );
 
     // No HTLCs initially
-    assert_eq!(tunnel::party_htlc_locked(&tunnel, @0x0), 0);
-    assert_eq!(tunnel::party_htlc_locked(&tunnel, @0xBBBB), 0);
-    assert_eq!(tunnel::party_htlc_count(&tunnel, @0x0), 0);
-    assert_eq!(tunnel::party_htlc_count(&tunnel, @0xBBBB), 0);
+    assert_eq!(tunnel.party_htlc_locked(@0x0), 0);
+    assert_eq!(tunnel.party_htlc_locked(@0xBBBB), 0);
+    assert_eq!(tunnel.party_htlc_count(@0x0), 0);
+    assert_eq!(tunnel.party_htlc_count(@0xBBBB), 0);
 
     let ph = x"0000000000000000000000000000000000000000000000000000000000000001";
-    assert!(!tunnel::has_htlc(&tunnel, ph));
+    assert!(!tunnel.has_htlc(ph));
 
-    tunnel::destroy_for_testing(tunnel);
+    tunnel.destroy_for_testing();
     clock.destroy_for_testing();
 }
 
@@ -548,8 +548,7 @@ fun lock_htlc_wrong_status() {
     let payment_hash = x"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
     // Tunnel is CREATED, lock_htlc requires ACTIVE -> invalid_state(1)
-    tunnel::lock_htlc(
-        &mut tunnel,
+    tunnel.lock_htlc(
         payment_hash,
         100,
         @0xBBBB,
@@ -559,7 +558,7 @@ fun lock_htlc_wrong_status() {
         &ctx,
     );
 
-    tunnel::destroy_for_testing(tunnel);
+    tunnel.destroy_for_testing();
     clock.destroy_for_testing();
 }
 
@@ -588,15 +587,14 @@ fun claim_htlc_not_found() {
     let payment_hash = x"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
     // No HTLC exists -> not_found(4)
-    tunnel::claim_htlc_in_tunnel(
-        &mut tunnel,
+    tunnel.claim_htlc_in_tunnel(
         payment_hash,
         b"preimage",
         &clock,
         &mut ctx,
     );
 
-    tunnel::destroy_for_testing(tunnel);
+    tunnel.destroy_for_testing();
     clock.destroy_for_testing();
 }
 
@@ -625,14 +623,13 @@ fun expire_htlc_not_found() {
     let payment_hash = x"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
     // No HTLC exists -> not_found(4)
-    tunnel::expire_htlc_in_tunnel(
-        &mut tunnel,
+    tunnel.expire_htlc_in_tunnel(
         payment_hash,
         &clock,
         &mut ctx,
     );
 
-    tunnel::destroy_for_testing(tunnel);
+    tunnel.destroy_for_testing();
     clock.destroy_for_testing();
 }
 
@@ -662,10 +659,10 @@ fun force_close_no_htlcs_backward_compat() {
     );
 
     // With no HTLCs, locked amounts are zero
-    assert_eq!(tunnel::party_htlc_locked(&tunnel, @0x0), 0);
-    assert_eq!(tunnel::party_htlc_locked(&tunnel, @0xBBBB), 0);
+    assert_eq!(tunnel.party_htlc_locked(@0x0), 0);
+    assert_eq!(tunnel.party_htlc_locked(@0xBBBB), 0);
 
-    tunnel::destroy_for_testing(tunnel);
+    tunnel.destroy_for_testing();
     clock.destroy_for_testing();
 }
 
@@ -702,8 +699,7 @@ fun htlc_force_close_distributes_full_remaining_balance() {
     );
 
     // party_a locks a 200-unit HTLC -> balance 1300, state.a 800, state.b 500
-    tunnel::lock_htlc_no_sig_for_testing(
-        &mut tunnel,
+    tunnel.lock_htlc_no_sig_for_testing(
         HTLC_HASH,
         200,
         @0xDDDD,
@@ -711,13 +707,13 @@ fun htlc_force_close_distributes_full_remaining_balance() {
         &clock,
         scenario.ctx(),
     );
-    assert_eq!(tunnel::party_htlc_locked(&tunnel, party_a), 200);
+    assert_eq!(tunnel.party_htlc_locked(party_a), 200);
 
     // party_a disputes the current state and waits out the timeout
-    tunnel::raise_dispute_current_state(&mut tunnel, &clock, scenario.ctx());
+    tunnel.raise_dispute_current_state(&clock, scenario.ctx());
     clock.set_for_testing(1000 + 60000 + 1);
-    tunnel::force_close_after_timeout(&mut tunnel, &clock, scenario.ctx());
-    assert_eq!(tunnel::status(&tunnel), tunnel::status_closed());
+    tunnel.force_close_after_timeout(&clock, scenario.ctx());
+    assert_eq!(tunnel.status(), tunnel::status_closed());
 
     // Both parties received their full net balances (800 / 500).
     scenario.next_tx(party_a);
@@ -730,11 +726,11 @@ fun htlc_force_close_distributes_full_remaining_balance() {
 
     // The locked 200 remained separate and is still expirable by its sender
     // (its 5000ms expiry has long passed by the dispute-timeout point).
-    tunnel::expire_htlc_in_tunnel(&mut tunnel, HTLC_HASH, &clock, scenario.ctx());
-    assert_eq!(tunnel::party_htlc_locked(&tunnel, party_a), 0);
+    tunnel.expire_htlc_in_tunnel(HTLC_HASH, &clock, scenario.ctx());
+    assert_eq!(tunnel.party_htlc_locked(party_a), 0);
 
-    tunnel::remove_htlc_counters_for_testing(&mut tunnel);
-    tunnel::destroy_for_testing(tunnel);
+    tunnel.remove_htlc_counters_for_testing();
+    tunnel.destroy_for_testing();
     clock.destroy_for_testing();
     scenario.end();
 }
@@ -758,8 +754,7 @@ fun htlc_agree_to_dispute_distributes_full_remaining_balance() {
         scenario.ctx(),
     );
 
-    tunnel::lock_htlc_no_sig_for_testing(
-        &mut tunnel,
+    tunnel.lock_htlc_no_sig_for_testing(
         HTLC_HASH,
         200,
         @0xDDDD,
@@ -767,12 +762,12 @@ fun htlc_agree_to_dispute_distributes_full_remaining_balance() {
         &clock,
         scenario.ctx(),
     );
-    tunnel::raise_dispute_current_state(&mut tunnel, &clock, scenario.ctx());
+    tunnel.raise_dispute_current_state(&clock, scenario.ctx());
 
     // The non-raiser (party_b) agrees, closing immediately without a timeout.
     scenario.next_tx(party_b);
-    tunnel::agree_to_dispute(&mut tunnel, &clock, scenario.ctx());
-    assert_eq!(tunnel::status(&tunnel), tunnel::status_closed());
+    tunnel.agree_to_dispute(&clock, scenario.ctx());
+    assert_eq!(tunnel.status(), tunnel::status_closed());
 
     scenario.next_tx(party_a);
     let coin_a = scenario.take_from_address<coin::Coin<SUI>>(party_a);
@@ -782,8 +777,8 @@ fun htlc_agree_to_dispute_distributes_full_remaining_balance() {
     coin_a.burn_for_testing();
     coin_b.burn_for_testing();
 
-    tunnel::remove_htlc_counters_for_testing(&mut tunnel);
-    tunnel::destroy_for_testing(tunnel);
+    tunnel.remove_htlc_counters_for_testing();
+    tunnel.destroy_for_testing();
     clock.destroy_for_testing();
     scenario.end();
 }
@@ -807,10 +802,9 @@ fun htlc_resolve_dispute_external_distributes_full_remaining_balance() {
         &clock,
         scenario.ctx(),
     );
-    tunnel::set_referee_for_testing(&mut tunnel, referee);
+    tunnel.set_referee_for_testing(referee);
 
-    tunnel::lock_htlc_no_sig_for_testing(
-        &mut tunnel,
+    tunnel.lock_htlc_no_sig_for_testing(
         HTLC_HASH,
         200,
         @0xDDDD,
@@ -818,12 +812,12 @@ fun htlc_resolve_dispute_external_distributes_full_remaining_balance() {
         &clock,
         scenario.ctx(),
     );
-    tunnel::raise_dispute_current_state(&mut tunnel, &clock, scenario.ctx());
+    tunnel.raise_dispute_current_state(&clock, scenario.ctx());
 
     // The referee resolves, distributing the full remaining balance (1300).
     scenario.next_tx(referee);
-    tunnel::resolve_dispute_external(&mut tunnel, 900, 400, &clock, scenario.ctx());
-    assert_eq!(tunnel::status(&tunnel), tunnel::status_closed());
+    tunnel.resolve_dispute_external(900, 400, &clock, scenario.ctx());
+    assert_eq!(tunnel.status(), tunnel::status_closed());
 
     scenario.next_tx(party_a);
     let coin_a = scenario.take_from_address<coin::Coin<SUI>>(party_a);
@@ -833,9 +827,9 @@ fun htlc_resolve_dispute_external_distributes_full_remaining_balance() {
     coin_a.burn_for_testing();
     coin_b.burn_for_testing();
 
-    tunnel::remove_referee_for_testing(&mut tunnel);
-    tunnel::remove_htlc_counters_for_testing(&mut tunnel);
-    tunnel::destroy_for_testing(tunnel);
+    tunnel.remove_referee_for_testing();
+    tunnel.remove_htlc_counters_for_testing();
+    tunnel.destroy_for_testing();
     clock.destroy_for_testing();
     scenario.end();
 }
@@ -875,8 +869,7 @@ fun close_cooperative_requires_signatures() {
     );
 
     // Try close_cooperative with empty sigs -> invalid_signature(100)
-    tunnel::close_cooperative(
-        &mut tunnel,
+    tunnel.close_cooperative(
         0,
         0,
         vector[],
@@ -886,6 +879,249 @@ fun close_cooperative_requires_signatures() {
         &mut ctx,
     );
 
-    tunnel::destroy_for_testing(tunnel);
+    tunnel.destroy_for_testing();
     clock.destroy_for_testing();
+}
+
+// ============================================
+// SIGNED-FUNCTION HAPPY PATHS (no-sig wrappers)
+// ============================================
+// The signed core functions previously had only failure-path coverage. The
+// `*_no_sig_for_testing` wrappers run the REAL invariant asserts + state
+// mutation + events + fund transfer, skipping only signature verification, so
+// these exercise the success paths end to end.
+
+// A new mutually-agreed state moves balances and bumps the nonce while the
+// tunnel stays ACTIVE.
+#[test]
+fun update_state_succeeds() {
+    let party_a = @0xAAAA;
+    let party_b = @0xBBBB;
+    let mut ctx = sui::tx_context::dummy();
+    let mut clock = clock::create_for_testing(&mut ctx);
+    clock.set_for_testing(1000);
+
+    // deposits 1000 / 500 -> total 1500
+    let mut tunnel = tunnel::create_active_for_testing<SUI>(
+        party_a,
+        party_b,
+        1000,
+        500,
+        60000,
+        0,
+        &clock,
+        &mut ctx,
+    );
+
+    let new_hash = x"1111111111111111111111111111111111111111111111111111111111111111";
+    // Shift 300 from a to b; balances still sum to the frozen total (1500).
+    tunnel.update_state_no_sig_for_testing(
+        new_hash,
+        7,
+        700,
+        800,
+        1000,
+        &clock,
+    );
+
+    // State mutated and recorded; tunnel remains ACTIVE.
+    assert_eq!(tunnel.status(), tunnel::status_active());
+    let state = tunnel.state();
+    assert_eq!(state.state_nonce(), 7);
+    assert_eq!(*state.state_hash(), new_hash);
+    assert_eq!(state.state_party_a_balance(), 700);
+    assert_eq!(state.state_party_b_balance(), 800);
+
+    tunnel.destroy_for_testing();
+    clock.destroy_for_testing();
+}
+
+// Cooperative close transitions to CLOSED and pays each party exactly its
+// agreed balance.
+#[test]
+fun close_cooperative_distributes_funds() {
+    let party_a = @0xAAAA;
+    let party_b = @0xBBBB;
+    let mut scenario = test_scenario::begin(party_a);
+    let mut clock = clock::create_for_testing(scenario.ctx());
+    clock.set_for_testing(1000);
+
+    let mut tunnel = tunnel::create_active_for_testing<SUI>(
+        party_a,
+        party_b,
+        1000,
+        500,
+        60000,
+        0,
+        &clock,
+        scenario.ctx(),
+    );
+
+    // Agreed final split 900 / 600 (sums to the frozen total 1500).
+    tunnel.close_cooperative_no_sig_for_testing(
+        900,
+        600,
+        1000,
+        &clock,
+        scenario.ctx(),
+    );
+    assert_eq!(tunnel.status(), tunnel::status_closed());
+
+    scenario.next_tx(party_a);
+    let coin_a = scenario.take_from_address<coin::Coin<SUI>>(party_a);
+    let coin_b = scenario.take_from_address<coin::Coin<SUI>>(party_b);
+    assert_eq!(coin_a.value(), 900);
+    assert_eq!(coin_b.value(), 600);
+    coin_a.burn_for_testing();
+    coin_b.burn_for_testing();
+
+    tunnel.destroy_for_testing();
+    clock.destroy_for_testing();
+    scenario.end();
+}
+
+// Root-anchored cooperative close behaves like the plain path and additionally
+// commits a transcript root.
+#[test]
+fun close_cooperative_with_root_distributes_funds() {
+    let party_a = @0xAAAA;
+    let party_b = @0xBBBB;
+    let mut scenario = test_scenario::begin(party_a);
+    let mut clock = clock::create_for_testing(scenario.ctx());
+    clock.set_for_testing(1000);
+
+    let mut tunnel = tunnel::create_active_for_testing<SUI>(
+        party_a,
+        party_b,
+        1000,
+        500,
+        60000,
+        0,
+        &clock,
+        scenario.ctx(),
+    );
+
+    let transcript_root = x"2222222222222222222222222222222222222222222222222222222222222222";
+    tunnel.close_cooperative_with_root_no_sig_for_testing(
+        900,
+        600,
+        1000,
+        transcript_root,
+        &clock,
+        scenario.ctx(),
+    );
+    assert_eq!(tunnel.status(), tunnel::status_closed());
+
+    scenario.next_tx(party_a);
+    let coin_a = scenario.take_from_address<coin::Coin<SUI>>(party_a);
+    let coin_b = scenario.take_from_address<coin::Coin<SUI>>(party_b);
+    assert_eq!(coin_a.value(), 900);
+    assert_eq!(coin_b.value(), 600);
+    coin_a.burn_for_testing();
+    coin_b.burn_for_testing();
+
+    tunnel.destroy_for_testing();
+    clock.destroy_for_testing();
+    scenario.end();
+}
+
+// Raising a dispute on a newer signed state moves the tunnel to DISPUTED and
+// records the raiser.
+#[test]
+fun raise_dispute_succeeds() {
+    let party_a = @0xAAAA;
+    let party_b = @0xBBBB;
+    let mut scenario = test_scenario::begin(party_a);
+    let mut clock = clock::create_for_testing(scenario.ctx());
+    clock.set_for_testing(1000);
+
+    let mut tunnel = tunnel::create_active_for_testing<SUI>(
+        party_a,
+        party_b,
+        1000,
+        500,
+        60000,
+        0,
+        &clock,
+        scenario.ctx(),
+    );
+
+    let state_hash = x"3333333333333333333333333333333333333333333333333333333333333333";
+    // sender is party_a (scenario began with party_a); nonce 5 > current 0.
+    tunnel.raise_dispute_no_sig_for_testing(
+        state_hash,
+        5,
+        700,
+        800,
+        1000,
+        &clock,
+        scenario.ctx(),
+    );
+
+    assert_eq!(tunnel.status(), tunnel::status_disputed());
+    let raiser = tunnel.dispute_raiser();
+    assert!(raiser.is_some());
+    assert_eq!(*raiser.borrow(), party_a);
+
+    tunnel.destroy_for_testing();
+    clock.destroy_for_testing();
+    scenario.end();
+}
+
+// Resolving a dispute with a higher-nonce mutually-signed state returns the
+// tunnel to ACTIVE and updates the recorded state.
+#[test]
+fun resolve_dispute_succeeds() {
+    let party_a = @0xAAAA;
+    let party_b = @0xBBBB;
+    let mut scenario = test_scenario::begin(party_a);
+    let mut clock = clock::create_for_testing(scenario.ctx());
+    clock.set_for_testing(1000);
+
+    let mut tunnel = tunnel::create_active_for_testing<SUI>(
+        party_a,
+        party_b,
+        1000,
+        500,
+        60000,
+        0,
+        &clock,
+        scenario.ctx(),
+    );
+
+    // Reach DISPUTED first (raiser = party_a, disputed nonce 5).
+    let disputed_hash = x"3333333333333333333333333333333333333333333333333333333333333333";
+    tunnel.raise_dispute_no_sig_for_testing(
+        disputed_hash,
+        5,
+        700,
+        800,
+        1000,
+        &clock,
+        scenario.ctx(),
+    );
+    assert_eq!(tunnel.status(), tunnel::status_disputed());
+
+    // Resolve with a strictly higher nonce (6 > 5) and a fresh split.
+    let resolved_hash = x"4444444444444444444444444444444444444444444444444444444444444444";
+    tunnel.resolve_dispute_no_sig_for_testing(
+        resolved_hash,
+        6,
+        900,
+        600,
+        1000,
+        &clock,
+    );
+
+    // Back to ACTIVE with the resolved state recorded.
+    assert_eq!(tunnel.status(), tunnel::status_active());
+    let state = tunnel.state();
+    assert_eq!(state.state_nonce(), 6);
+    assert_eq!(*state.state_hash(), resolved_hash);
+    assert_eq!(state.state_party_a_balance(), 900);
+    assert_eq!(state.state_party_b_balance(), 600);
+
+    tunnel.destroy_for_testing();
+    clock.destroy_for_testing();
+    scenario.end();
 }

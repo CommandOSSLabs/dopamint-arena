@@ -325,7 +325,7 @@ public fun close_session<T>(
     assert!(session.status == SESSION_ACTIVE, EInvalidState);
 
     // Ensure cooperative close balances match the calculated settlement
-    let (expected_client_refund, expected_provider_earned) = calculate_settlement(session);
+    let (expected_client_refund, expected_provider_earned) = session.calculate_settlement();
     assert!(client_balance == expected_client_refund, EBalanceMismatch);
     assert!(provider_balance == expected_provider_earned, EBalanceMismatch);
 

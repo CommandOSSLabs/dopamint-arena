@@ -46,23 +46,20 @@ fun create_payment_state() {
         3000,
     );
 
-    assert_eq!(*example_payment_channel::state_channel_id(&state), b"channel_123");
-    assert_eq!(example_payment_channel::state_nonce(&state), 10);
-    assert_eq!(example_payment_channel::state_balance_a(&state), 5000);
-    assert_eq!(example_payment_channel::state_balance_b(&state), 3000);
+    assert_eq!(*state.state_channel_id(), b"channel_123");
+    assert_eq!(state.state_nonce(), 10);
+    assert_eq!(state.state_balance_a(), 5000);
+    assert_eq!(state.state_balance_b(), 3000);
 }
 
 #[test]
 fun create_signed_state() {
     let state = example_payment_channel::create_payment_state(b"channel", 1, 100, 200);
-    let signed = example_payment_channel::create_signed_state(state, b"sig_a", b"sig_b");
+    let signed = state.create_signed_state(b"sig_a", b"sig_b");
 
-    assert_eq!(
-        example_payment_channel::state_nonce(example_payment_channel::signed_state(&signed)),
-        1,
-    );
-    assert_eq!(*example_payment_channel::signed_sig_a(&signed), b"sig_a");
-    assert_eq!(*example_payment_channel::signed_sig_b(&signed), b"sig_b");
+    assert_eq!(signed.signed_state().state_nonce(), 1);
+    assert_eq!(*signed.signed_sig_a(), b"sig_a");
+    assert_eq!(*signed.signed_sig_b(), b"sig_b");
 }
 
 #[test]

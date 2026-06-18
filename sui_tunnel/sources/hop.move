@@ -69,6 +69,12 @@ const ENotAuthorized: vector<u8> = b"The caller is not authorized to perform thi
 const EInvalidParameter: vector<u8> = b"A required parameter is missing or invalid.";
 
 #[error]
+const EOverflow: vector<u8> = b"An arithmetic operation overflowed.";
+
+#[error]
+const ENotFound: vector<u8> = b"The requested item was not found.";
+
+#[error]
 const EInvalidVersion: vector<u8> = b"The object version does not match the current module version.";
 
 #[error]
@@ -130,9 +136,6 @@ const ROUTE_STATUS_COMPLETED: u8 = 2;
 
 /// Route status: Failed (timeout or cancellation)
 const ROUTE_STATUS_FAILED: u8 = 3;
-
-// One hour in milliseconds
-// const ONE_HOUR_MS: u64 = 3600000;
 
 // ============================================
 // STRUCTS
@@ -283,6 +286,13 @@ public struct HTLCExpired has copy, drop {
     receiver: address,
 }
 
+/// Emitted when an HTLC is cancelled by mutual agreement
+public struct HTLCCancelled has copy, drop {
+    amount: u64,
+    sender: address,
+    receiver: address,
+}
+
 // ============================================
 // PUBLIC GETTER FUNCTIONS FOR CONSTANTS
 // ============================================
@@ -344,19 +354,19 @@ public fun create_hop(
     }
 }
 
-/// Gets the tunnel ID from a hop
+/// Returns the tunnel ID for this hop.
 public fun hop_tunnel_id(hop: &Hop): &vector<u8> { &hop.tunnel_id }
 
-/// Gets the node address from a hop
+/// Returns the address of the node receiving at this hop.
 public fun hop_node_address(hop: &Hop): address { hop.node_address }
 
-/// Gets the fee from a hop
+/// Returns the fee charged by this hop's node.
 public fun hop_fee(hop: &Hop): u64 { hop.fee }
 
-/// Gets the timeout from a hop
+/// Returns the absolute timeout (ms) for this hop's HTLC.
 public fun hop_timeout_ms(hop: &Hop): u64 { hop.timeout_ms }
 
-/// Gets the index from a hop
+/// Returns the hop's position in the route (0 = first).
 public fun hop_index(hop: &Hop): u64 { hop.index }
 
 // ============================================
@@ -406,6 +416,12 @@ public fun add_hop(
     let hop = create_hop(tunnel_id, node_address, fee, timeout_ms, index);
 
     route.hops.push_back(hop);
+    // Guard the accumulation in u128 so an overflow surfaces an attributable
+    // EOverflow rather than a raw arithmetic abort (consistent with validate_route).
+    assert!(
+        (route.total_fees as u128) + (fee as u128) <= (std::u64::max_value!() as u128),
+        EOverflow,
+    );
     route.total_fees = route.total_fees + fee;
 }
 
@@ -535,26 +551,36 @@ public fun fail_route(route: &mut Route) {
 }
 
 // Route accessors
+
+/// Returns the route's unique identifier.
 public fun route_id(route: &Route): &vector<u8> { &route.id }
 
+/// Returns the route's sender address.
 public fun route_sender(route: &Route): address { route.sender }
 
+/// Returns the route's final receiver address.
 public fun route_receiver(route: &Route): address { route.receiver }
 
+/// Returns the amount to be transferred (before fees).
 public fun route_amount(route: &Route): u64 { route.amount }
 
+/// Returns the route's ordered list of hops.
 public fun route_hops(route: &Route): &vector<Hop> { &route.hops }
 
+/// Returns the number of hops in the route.
 public fun route_hop_count(route: &Route): u64 { route.hops.length() }
 
+/// Returns the total fees accumulated across all hops.
 public fun route_total_fees(route: &Route): u64 { route.total_fees }
 
+/// Returns the route's current status.
 public fun route_status(route: &Route): u8 { route.status }
 
+/// Returns the route's creation timestamp.
 public fun route_created_at(route: &Route): u64 { route.created_at }
 
 /// Gets a specific hop from a route
-public fun route_get_hop(route: &Route, index: u64): &Hop {
+public fun route_hop(route: &Route, index: u64): &Hop {
     assert!(index < route.hops.length(), EInvalidHop);
     &route.hops[index]
 }
@@ -596,6 +622,7 @@ public fun create_htlc(
     receiver: address,
     expiry_ms: u64,
 ): HTLC {
+    assert!(payment_hash.length() == 32, EInvalidParameter);
     HTLC {
         id: create_htlc_id(&payment_hash, sender, receiver, amount),
         payment_hash,
@@ -620,7 +647,7 @@ public fun verify_preimage(htlc: &HTLC, preimage: &vector<u8>): bool {
 public fun claim_htlc(htlc: &mut HTLC, preimage: vector<u8>, ctx: &TxContext): bool {
     // Only the designated receiver can claim
     assert!(ctx.sender() == htlc.receiver, ENotAuthorized);
-    claim_htlc_internal(htlc, preimage)
+    htlc.claim_htlc_internal(preimage)
 }
 
 /// Claims an HTLC with the preimage, without receiver authorization.
@@ -634,7 +661,7 @@ public(package) fun claim_htlc_internal(htlc: &mut HTLC, preimage: vector<u8>): 
     };
 
     // Verify preimage
-    if (!verify_preimage(htlc, &preimage)) {
+    if (!htlc.verify_preimage(&preimage)) {
         return false
     };
 
@@ -709,6 +736,11 @@ public fun cancel_htlc(htlc: &mut HTLC, ctx: &TxContext): bool {
     };
 
     htlc.status = HTLC_STATUS_CANCELLED;
+    event::emit(HTLCCancelled {
+        amount: htlc.amount,
+        sender: htlc.sender,
+        receiver: htlc.receiver,
+    });
     true
 }
 
@@ -723,20 +755,29 @@ public fun is_htlc_expired(htlc: &HTLC, current_time_ms: u64): bool {
 }
 
 // HTLC accessors
+
+/// Returns the HTLC's unique identifier.
 public fun htlc_id(htlc: &HTLC): &vector<u8> { &htlc.id }
 
+/// Returns the HTLC's payment hash (hash of the preimage).
 public fun htlc_payment_hash(htlc: &HTLC): &vector<u8> { &htlc.payment_hash }
 
+/// Returns the amount locked in the HTLC.
 public fun htlc_amount(htlc: &HTLC): u64 { htlc.amount }
 
+/// Returns the address that locked the funds.
 public fun htlc_sender(htlc: &HTLC): address { htlc.sender }
 
+/// Returns the address that can claim with the preimage.
 public fun htlc_receiver(htlc: &HTLC): address { htlc.receiver }
 
+/// Returns the HTLC's expiry timestamp (ms).
 public fun htlc_expiry_ms(htlc: &HTLC): u64 { htlc.expiry_ms }
 
+/// Returns the HTLC's current status.
 public fun htlc_status(htlc: &HTLC): u8 { htlc.status }
 
+/// Returns the revealed preimage (empty until claimed).
 public fun htlc_preimage(htlc: &HTLC): &vector<u8> { &htlc.preimage }
 
 // ============================================
@@ -776,12 +817,14 @@ public fun create_fee_policy(
 
 /// Calculates fee for a given amount
 public fun calculate_fee(policy: &FeePolicy, amount: u64): u64 {
-    // Compute the proportional fee fully in u128 (avoids overflow on the
-    // multiply) with a single outer cast back to u64; the u128 literal divisor
-    // keeps `/` unambiguous relative to `as` operator precedence.
-    let proportional_fee =
-        (((amount as u128) * (policy.fee_rate_ppm as u128)) / 1_000_000u128) as u64;
-    policy.base_fee + proportional_fee
+    // Compute the full fee (proportional + base) in u128 so neither the multiply
+    // nor the final add can overflow u64 mid-computation; the u128 literal divisor
+    // keeps `/` unambiguous relative to `as` operator precedence. A single guarded
+    // cast back to u64 surfaces an attributable EOverflow.
+    let fee =
+        (amount as u128) * (policy.fee_rate_ppm as u128) / 1_000_000u128 + (policy.base_fee as u128);
+    assert!(fee <= (std::u64::max_value!() as u128), EOverflow);
+    fee as u64
 }
 
 /// Checks if an amount is within policy limits
@@ -790,14 +833,20 @@ public fun is_amount_acceptable(policy: &FeePolicy, amount: u64): bool {
 }
 
 // Fee policy accessors
+
+/// Returns the policy's base fee charged per transaction.
 public fun policy_base_fee(policy: &FeePolicy): u64 { policy.base_fee }
 
+/// Returns the policy's fee rate in parts per million.
 public fun policy_fee_rate_ppm(policy: &FeePolicy): u64 { policy.fee_rate_ppm }
 
+/// Returns the minimum HTLC amount the policy accepts.
 public fun policy_min_htlc(policy: &FeePolicy): u64 { policy.min_htlc }
 
+/// Returns the maximum HTLC amount the policy accepts.
 public fun policy_max_htlc(policy: &FeePolicy): u64 { policy.max_htlc }
 
+/// Returns the minimum timeout delta (ms) the policy requires.
 public fun policy_min_timeout_delta_ms(policy: &FeePolicy): u64 { policy.min_timeout_delta_ms }
 
 // ============================================
@@ -824,37 +873,49 @@ public fun current_version(): u64 { CURRENT_VERSION }
 /// Get a node's version
 public fun node_version(node: &RoutingNode): u64 { node.version }
 
-/// Assert that a node is at the current version
-public fun assert_current_version(node: &RoutingNode) {
+/// Returns true if the node is at the current module version.
+public fun is_current_version(node: &RoutingNode): bool {
+    node.version == CURRENT_VERSION
+}
+
+/// Asserts that a node is at the current version.
+fun assert_current_version(node: &RoutingNode) {
     assert!(node.version == CURRENT_VERSION, EInvalidVersion);
 }
 
 /// Adds a tunnel to a routing node
 public fun add_tunnel_to_node(node: &mut RoutingNode, tunnel_id: vector<u8>, ctx: &TxContext) {
+    node.assert_current_version();
     assert!(ctx.sender() == node.address, ENotAuthorized);
     node.tunnel_ids.push_back(tunnel_id);
 }
 
-/// Removes a tunnel from a routing node
+/// Removes a tunnel from a routing node. Aborts with `ENotFound` if the tunnel
+/// id is not connected to the node.
 public fun remove_tunnel_from_node(
     node: &mut RoutingNode,
     tunnel_id: &vector<u8>,
     ctx: &TxContext,
 ) {
+    node.assert_current_version();
     assert!(ctx.sender() == node.address, ENotAuthorized);
     let len = node.tunnel_ids.length();
     let mut i = 0;
+    let mut found = false;
     while (i < len) {
         if (&node.tunnel_ids[i] == tunnel_id) {
             node.tunnel_ids.swap_remove(i);
-            return
+            found = true;
+            break
         };
         i = i + 1;
     };
+    assert!(found, ENotFound);
 }
 
 /// Records a successful route
 public fun record_successful_route(node: &mut RoutingNode, amount: u64, ctx: &TxContext) {
+    node.assert_current_version();
     assert!(ctx.sender() == node.address, ENotAuthorized);
     node.total_routed = node.total_routed + amount;
     node.successful_routes = node.successful_routes + 1;
@@ -862,43 +923,56 @@ public fun record_successful_route(node: &mut RoutingNode, amount: u64, ctx: &Tx
 
 /// Records a failed route
 public fun record_failed_route(node: &mut RoutingNode, ctx: &TxContext) {
+    node.assert_current_version();
     assert!(ctx.sender() == node.address, ENotAuthorized);
     node.failed_routes = node.failed_routes + 1;
 }
 
 /// Activates a routing node
 public fun activate_node(node: &mut RoutingNode, ctx: &TxContext) {
+    node.assert_current_version();
     assert!(ctx.sender() == node.address, ENotAuthorized);
     node.active = true;
 }
 
 /// Deactivates a routing node
 public fun deactivate_node(node: &mut RoutingNode, ctx: &TxContext) {
+    node.assert_current_version();
     assert!(ctx.sender() == node.address, ENotAuthorized);
     node.active = false;
 }
 
 /// Updates a node's fee policy
 public fun update_node_fee_policy(node: &mut RoutingNode, new_policy: FeePolicy, ctx: &TxContext) {
+    node.assert_current_version();
     assert!(ctx.sender() == node.address, ENotAuthorized);
     node.fee_policy = new_policy;
 }
 
 // Routing node accessors
+
+/// Returns the node's address.
 public fun node_address(node: &RoutingNode): address { node.address }
 
+/// Returns the tunnel IDs connected to this node.
 public fun node_tunnel_ids(node: &RoutingNode): &vector<vector<u8>> { &node.tunnel_ids }
 
+/// Returns the number of tunnels connected to this node.
 public fun node_tunnel_count(node: &RoutingNode): u64 { node.tunnel_ids.length() }
 
+/// Returns the node's fee policy.
 public fun node_fee_policy(node: &RoutingNode): &FeePolicy { &node.fee_policy }
 
+/// Returns whether the node is currently active.
 public fun node_is_active(node: &RoutingNode): bool { node.active }
 
+/// Returns the total volume routed through this node.
 public fun node_total_routed(node: &RoutingNode): u64 { node.total_routed }
 
+/// Returns the count of successful routes through this node.
 public fun node_successful_routes(node: &RoutingNode): u64 { node.successful_routes }
 
+/// Returns the count of failed routes through this node.
 public fun node_failed_routes(node: &RoutingNode): u64 { node.failed_routes }
 
 /// Calculates success rate (as percentage * 100, e.g., 9500 = 95.00%)
@@ -914,12 +988,16 @@ public fun node_success_rate(node: &RoutingNode): u64 {
 // ROUTE VALIDATION ACCESSORS
 // ============================================
 
+/// Returns whether the validated route is valid.
 public fun validation_valid(v: &RouteValidation): bool { v.valid }
 
+/// Returns the soft validation error code (0 if valid).
 public fun validation_error_code(v: &RouteValidation): u64 { v.error_code }
 
+/// Returns the human-readable validation error message.
 public fun validation_error_message(v: &RouteValidation): &vector<u8> { &v.error_message }
 
+/// Returns the total amount needed including all fees.
 public fun validation_total_amount(v: &RouteValidation): u64 { v.total_amount_needed }
 
 // ============================================
@@ -928,6 +1006,12 @@ public fun validation_total_amount(v: &RouteValidation): u64 { v.total_amount_ne
 
 /// Calculates the total amount needed to send through a route
 public fun calculate_total_with_fees(amount: u64, route: &Route): u64 {
+    // Guard the sum in u128 so an overflow surfaces an attributable EOverflow
+    // rather than a raw arithmetic abort.
+    assert!(
+        (amount as u128) + (route.total_fees as u128) <= (std::u64::max_value!() as u128),
+        EOverflow,
+    );
     amount + route.total_fees
 }
 
@@ -947,17 +1031,9 @@ public fun create_cascading_timeouts(
     // returning a centralized error instead of a raw arithmetic abort mid-loop.
     assert!((base_timeout_ms as u128) >= (delta_ms as u128) * (num_hops as u128), EInvalidTimeout);
 
-    let mut timeouts = vector<u64>[];
-    let mut current = base_timeout_ms;
-
-    let mut i = 0;
-    while (i < num_hops) {
-        timeouts.push_back(current);
-        current = current - delta_ms;
-        i = i + 1;
-    };
-
-    timeouts
+    // The range assert above guarantees base_timeout_ms >= delta_ms * num_hops, so
+    // every `base_timeout_ms - delta_ms * i` (i < num_hops) is well above zero.
+    vector::tabulate!(num_hops, |i| base_timeout_ms - delta_ms * i)
 }
 
 /// Estimates the total fee for a route given hop count and average fee
@@ -967,12 +1043,14 @@ public fun estimate_route_fee(
     avg_base_fee: u64,
     avg_fee_rate_ppm: u64,
 ): u64 {
-    let total_base = avg_base_fee * hop_count;
-    // Compute fully in u128 (the triple product can overflow u64) with a single
-    // outer cast; the u128 literal divisor keeps `/` unambiguous vs `as`.
+    // Compute the whole estimate in u128 — both the base term (avg_base_fee *
+    // hop_count) and the proportional term (a triple product) can overflow u64 —
+    // then cast once at the end. The u128 literal divisor keeps `/` unambiguous
+    // vs the `as` operator.
+    let total_base = (avg_base_fee as u128) * (hop_count as u128);
     let total_proportional =
-        (
-            ((amount as u128) * (avg_fee_rate_ppm as u128) * (hop_count as u128)) / 1_000_000u128,
-        ) as u64;
-    total_base + total_proportional
+        (amount as u128) * (avg_fee_rate_ppm as u128) * (hop_count as u128) / 1_000_000u128;
+    let total = total_base + total_proportional;
+    assert!(total <= (std::u64::max_value!() as u128), EOverflow);
+    total as u64
 }

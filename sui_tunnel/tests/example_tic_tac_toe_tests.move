@@ -40,12 +40,12 @@ fun create_game() {
         &mut ctx,
     );
 
-    assert_eq!(example_tic_tac_toe::game_status<SUI>(&game), 0);
-    assert_eq!(example_tic_tac_toe::game_moves_count<SUI>(&game), 0);
-    assert_eq!(example_tic_tac_toe::game_stake_amount<SUI>(&game), 1000);
-    assert_eq!(example_tic_tac_toe::game_nonce<SUI>(&game), 0);
+    assert_eq!(game.game_status<SUI>(), 0);
+    assert_eq!(game.game_moves_count<SUI>(), 0);
+    assert_eq!(game.game_stake_amount<SUI>(), 1000);
+    assert_eq!(game.game_nonce<SUI>(), 0);
 
-    let board = example_tic_tac_toe::game_board<SUI>(&game);
+    let board = game.game_board<SUI>();
     assert_eq!(board.length(), 9);
     let mut i = 0u64;
     while (i < 9) {
@@ -53,7 +53,7 @@ fun create_game() {
         i = i + 1;
     };
 
-    example_tic_tac_toe::destroy_game_for_testing<SUI>(game);
+    game.destroy_game_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -76,9 +76,9 @@ fun game_pot_after_create() {
     );
 
     // Player A's stake is in the pot
-    assert_eq!(example_tic_tac_toe::game_total_pot<SUI>(&game), 1000);
+    assert_eq!(game.game_total_pot<SUI>(), 1000);
 
-    example_tic_tac_toe::destroy_game_for_testing<SUI>(game);
+    game.destroy_game_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -102,8 +102,7 @@ fun record_move() {
 
     // X plays center
     let board1 = vector[0, 0, 0, 0, 1, 0, 0, 0, 0];
-    example_tic_tac_toe::record_move<SUI>(
-        &mut game,
+    game.record_move<SUI>(
         board1,
         1,
         1,
@@ -114,12 +113,11 @@ fun record_move() {
         vector[],
         &clock,
     );
-    assert_eq!(example_tic_tac_toe::game_moves_count<SUI>(&game), 1);
+    assert_eq!(game.game_moves_count<SUI>(), 1);
 
     // O plays top-left
     let board2 = vector[2, 0, 0, 0, 1, 0, 0, 0, 0];
-    example_tic_tac_toe::record_move<SUI>(
-        &mut game,
+    game.record_move<SUI>(
         board2,
         2,
         2,
@@ -130,10 +128,10 @@ fun record_move() {
         vector[],
         &clock,
     );
-    assert_eq!(example_tic_tac_toe::game_moves_count<SUI>(&game), 2);
-    assert_eq!(example_tic_tac_toe::game_nonce<SUI>(&game), 2);
+    assert_eq!(game.game_moves_count<SUI>(), 2);
+    assert_eq!(game.game_nonce<SUI>(), 2);
 
-    example_tic_tac_toe::destroy_game_for_testing<SUI>(game);
+    game.destroy_game_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -163,8 +161,7 @@ fun record_move_invalid_board_size() {
 
     // Board with wrong size (8 cells instead of 9)
     let bad_board = vector[0, 0, 0, 0, 1, 0, 0, 0];
-    example_tic_tac_toe::record_move<SUI>(
-        &mut game,
+    game.record_move<SUI>(
         bad_board,
         1,
         1,
@@ -176,7 +173,7 @@ fun record_move_invalid_board_size() {
         &clock,
     );
 
-    example_tic_tac_toe::destroy_game_for_testing<SUI>(game);
+    game.destroy_game_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -206,8 +203,7 @@ fun record_move_invalid_cell_value() {
 
     // Board with invalid cell value (3)
     let bad_board = vector[3, 0, 0, 0, 0, 0, 0, 0, 0];
-    example_tic_tac_toe::record_move<SUI>(
-        &mut game,
+    game.record_move<SUI>(
         bad_board,
         1,
         1,
@@ -219,7 +215,7 @@ fun record_move_invalid_cell_value() {
         &clock,
     );
 
-    example_tic_tac_toe::destroy_game_for_testing<SUI>(game);
+    game.destroy_game_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -340,17 +336,17 @@ fun compute_board_hash_deterministic() {
     );
 
     let board = vector[1, 0, 0, 0, 2, 0, 0, 0, 0];
-    let h1 = example_tic_tac_toe::compute_board_hash<SUI>(&game, &board, 2, 1);
-    let h2 = example_tic_tac_toe::compute_board_hash<SUI>(&game, &board, 2, 1);
+    let h1 = game.compute_board_hash<SUI>(&board, 2, 1);
+    let h2 = game.compute_board_hash<SUI>(&board, 2, 1);
     assert_eq!(h1, h2);
     assert_eq!(h1.length(), 32);
 
     // Different board produces different hash
     let board2 = vector[1, 2, 0, 0, 0, 0, 0, 0, 0];
-    let h3 = example_tic_tac_toe::compute_board_hash<SUI>(&game, &board2, 2, 1);
+    let h3 = game.compute_board_hash<SUI>(&board2, 2, 1);
     assert!(h1 != h3);
 
-    example_tic_tac_toe::destroy_game_for_testing<SUI>(game);
+    game.destroy_game_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -362,11 +358,11 @@ fun game_state_accessors() {
         5,
     );
 
-    let board = example_tic_tac_toe::state_board(&state);
+    let board = state.state_board();
     assert_eq!(board[0], 1);
     assert_eq!(board[1], 2);
-    assert_eq!(example_tic_tac_toe::state_moves_count(&state), 3);
-    assert_eq!(example_tic_tac_toe::state_nonce(&state), 5);
+    assert_eq!(state.state_moves_count(), 3);
+    assert_eq!(state.state_nonce(), 5);
 }
 
 #[
@@ -394,8 +390,7 @@ fun record_move_stale_nonce() {
     );
 
     let board1 = vector[0, 0, 0, 0, 1, 0, 0, 0, 0];
-    example_tic_tac_toe::record_move<SUI>(
-        &mut game,
+    game.record_move<SUI>(
         board1,
         1,
         1,
@@ -408,8 +403,7 @@ fun record_move_stale_nonce() {
     );
 
     let board2 = vector[2, 0, 0, 0, 1, 0, 0, 0, 0];
-    example_tic_tac_toe::record_move<SUI>(
-        &mut game,
+    game.record_move<SUI>(
         board2,
         2,
         0,
@@ -421,7 +415,7 @@ fun record_move_stale_nonce() {
         &clock, // nonce 0 is stale
     );
 
-    example_tic_tac_toe::destroy_game_for_testing<SUI>(game);
+    game.destroy_game_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -449,14 +443,12 @@ fun cannot_record_move_when_settled() {
         &mut ctx,
     );
 
-    example_tic_tac_toe::set_status_for_testing<SUI>(
-        &mut game,
+    game.set_status_for_testing<SUI>(
         example_tic_tac_toe::game_settled(),
     );
 
     let board = vector[0, 0, 0, 0, 1, 0, 0, 0, 0];
-    example_tic_tac_toe::record_move<SUI>(
-        &mut game,
+    game.record_move<SUI>(
         board,
         1,
         1,
@@ -468,6 +460,6 @@ fun cannot_record_move_when_settled() {
         &clock,
     );
 
-    example_tic_tac_toe::destroy_game_for_testing<SUI>(game);
+    game.destroy_game_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }

@@ -11,41 +11,77 @@ fun from_bytes() {
     let seed3 = randomness::from_bytes(b"test seed 2");
 
     // Same input should produce same seed
-    assert_eq!(*randomness::seed_bytes(&seed1), *randomness::seed_bytes(&seed2));
+    assert_eq!(*seed1.seed_bytes(), *seed2.seed_bytes());
 
     // Different input should produce different seed
-    assert!(*randomness::seed_bytes(&seed1) != *randomness::seed_bytes(&seed3));
+    assert!(*seed1.seed_bytes() != *seed3.seed_bytes());
 
     // Seed should be 32 bytes
-    assert_eq!(randomness::seed_bytes(&seed1).length(), 32);
+    assert_eq!(seed1.seed_bytes().length(), 32);
 
     // Counter should start at 0
-    assert_eq!(randomness::seed_counter(&seed1), 0);
+    assert_eq!(seed1.seed_counter(), 0);
 }
 
 #[test]
 fun next_seed_deterministic() {
     let seed = randomness::from_bytes(b"initial seed");
 
-    let next1 = randomness::next_seed(&seed);
-    let next2 = randomness::next_seed(&seed);
+    let next1 = seed.next_seed();
+    let next2 = seed.next_seed();
 
     // Same seed should produce same next seed
-    assert_eq!(*randomness::seed_bytes(&next1), *randomness::seed_bytes(&next2));
+    assert_eq!(*next1.seed_bytes(), *next2.seed_bytes());
 }
 
 #[test]
 fun next_u64() {
     let seed = randomness::from_bytes(b"test seed");
 
-    let (value1, seed1) = randomness::next_u64(&seed);
-    let (value2, seed2) = randomness::next_u64(&seed);
+    let (value1, seed1) = seed.next_u64();
+    let (value2, seed2) = seed.next_u64();
 
     // Same seed should produce same value
     assert_eq!(value1, value2);
 
     // But the returned seeds should be same too (deterministic)
-    assert_eq!(*randomness::seed_bytes(&seed1), *randomness::seed_bytes(&seed2));
+    assert_eq!(*seed1.seed_bytes(), *seed2.seed_bytes());
+}
+
+#[test]
+fun next_u128_deterministic_and_distinct() {
+    let seed = randomness::from_bytes(b"u128 seed");
+
+    // Determinism: same seed -> same value and same returned-seed bytes.
+    let (value1, seed1) = seed.next_u128();
+    let (value2, seed2) = seed.next_u128();
+    assert_eq!(value1, value2);
+    assert_eq!(*seed1.seed_bytes(), *seed2.seed_bytes());
+    // The draw advances the seed exactly one step.
+    assert_eq!(seed1.seed_counter(), 1);
+
+    // Distinct seeds -> distinct values.
+    let other = randomness::from_bytes(b"u128 seed other");
+    let (value_other, _) = other.next_u128();
+    assert!(value1 != value_other);
+}
+
+#[test]
+fun next_u256_deterministic_and_distinct() {
+    let seed = randomness::from_bytes(b"u256 seed");
+
+    // Determinism: same seed -> same value and same returned-seed bytes.
+    let (value1, seed1) = seed.next_u256();
+    let (value2, seed2) = seed.next_u256();
+    assert_eq!(value1, value2);
+    assert_eq!(*seed1.seed_bytes(), *seed2.seed_bytes());
+    // The draw advances the seed exactly one step.
+    assert_eq!(seed1.seed_counter(), 1);
+
+    // Distinct seeds -> distinct values.
+    let other = randomness::from_bytes(b"u256 seed other");
+    let (value_other, _) = other.next_u256();
+    assert!(value1 != value_other);
 }
 
 /// Strengthened: prove the seed actually ADVANCES across consecutive draws.
@@ -55,21 +91,21 @@ fun next_u64_advances() {
     let seed = randomness::from_bytes(b"advance seed");
 
     // The input seed starts at counter 0.
-    assert_eq!(randomness::seed_counter(&seed), 0);
+    assert_eq!(seed.seed_counter(), 0);
 
     // Each draw derives a fresh chained seed via `next_seed` (which rehashes
     // and resets the counter), so the returned seed always carries counter == 1.
-    let (value1, seed1) = randomness::next_u64(&seed);
-    assert_eq!(randomness::seed_counter(&seed1), 1);
+    let (value1, seed1) = seed.next_u64();
+    assert_eq!(seed1.seed_counter(), 1);
 
     // Second CONSECUTIVE draw (feeding the returned seed back in).
-    let (value2, seed2) = randomness::next_u64(&seed1);
-    assert_eq!(randomness::seed_counter(&seed2), 1);
+    let (value2, seed2) = seed1.next_u64();
+    assert_eq!(seed2.seed_counter(), 1);
 
     // The genuine advancement is in the seed BYTES: each draw rehashes the
     // prior seed, so the bytes move forward and never repeat the previous state.
-    assert!(*randomness::seed_bytes(&seed1) != *randomness::seed_bytes(&seed));
-    assert!(*randomness::seed_bytes(&seed2) != *randomness::seed_bytes(&seed1));
+    assert!(*seed1.seed_bytes() != *seed.seed_bytes());
+    assert!(*seed2.seed_bytes() != *seed1.seed_bytes());
 
     // Consequently a second consecutive draw yields a DIFFERENT value than the
     // first; otherwise the seed would not really be advancing between draws.
@@ -81,11 +117,11 @@ fun next_u8_in_range() {
     let seed = randomness::from_bytes(b"test seed");
 
     // Test range [0, 52) for card game
-    let (value, _) = randomness::next_u8_in_range(&seed, 0, 52);
+    let (value, _) = seed.next_u8_in_range(0, 52);
     assert!(value < 52);
 
     // Test range [1, 7) for dice
-    let (value2, _) = randomness::next_u8_in_range(&seed, 1, 7);
+    let (value2, _) = seed.next_u8_in_range(1, 7);
     assert!(value2 >= 1 && value2 < 7);
 }
 
@@ -93,10 +129,10 @@ fun next_u8_in_range() {
 fun next_u64_in_range() {
     let seed = randomness::from_bytes(b"test seed");
 
-    let (value, _) = randomness::next_u64_in_range(&seed, 100, 200);
+    let (value, _) = seed.next_u64_in_range(100, 200);
     assert!(value >= 100 && value < 200);
 
-    let (value2, _) = randomness::next_u64_in_range(&seed, 0, 1);
+    let (value2, _) = seed.next_u64_in_range(0, 1);
     assert_eq!(value2, 0);
 }
 
@@ -108,30 +144,30 @@ fun next_u64_in_range_properties() {
     let seed = randomness::from_bytes(b"range props");
 
     // --- Always within [min, max) ---
-    let (v, _) = randomness::next_u64_in_range(&seed, 100, 200);
+    let (v, _) = seed.next_u64_in_range(100, 200);
     assert!(v >= 100 && v < 200);
 
     // --- Determinism: same seed + same range -> same value AND same seed bytes ---
-    let (v_a, s_a) = randomness::next_u64_in_range(&seed, 100, 200);
-    let (v_b, s_b) = randomness::next_u64_in_range(&seed, 100, 200);
+    let (v_a, s_a) = seed.next_u64_in_range(100, 200);
+    let (v_b, s_b) = seed.next_u64_in_range(100, 200);
     assert_eq!(v_a, v_b);
-    assert_eq!(*randomness::seed_bytes(&s_a), *randomness::seed_bytes(&s_b));
+    assert_eq!(*s_a.seed_bytes(), *s_b.seed_bytes());
     // Seed advances exactly one step (counter back to 1 after the internal draw).
-    assert_eq!(randomness::seed_counter(&s_a), 1);
+    assert_eq!(s_a.seed_counter(), 1);
 
     // --- Boundary: range of 1 ([min, min+1)) always returns min ---
-    let (one, one_seed) = randomness::next_u64_in_range(&seed, 42, 43);
+    let (one, one_seed) = seed.next_u64_in_range(42, 43);
     assert_eq!(one, 42);
     // Even the trivial range still advances the seed.
-    assert_eq!(randomness::seed_counter(&one_seed), 1);
+    assert_eq!(one_seed.seed_counter(), 1);
 
     // Range of 1 at a different min.
-    let (one2, _) = randomness::next_u64_in_range(&seed, 0, 1);
+    let (one2, _) = seed.next_u64_in_range(0, 1);
     assert_eq!(one2, 0);
 
     // --- Full u64 range [0, MAX_U64): power-of-2-ish span; must stay in range ---
     let max_u64 = 18446744073709551615u64;
-    let (full, _) = randomness::next_u64_in_range(&seed, 0, max_u64);
+    let (full, _) = seed.next_u64_in_range(0, max_u64);
     assert!(full < max_u64);
 
     // --- Non-power-of-2 range: threshold != 0, so the rejection branch is
@@ -143,7 +179,7 @@ fun next_u64_in_range_properties() {
     let mut i = 0u64;
     while (i < 32) {
         let s = randomness::from_bytes(i_to_bytes(i));
-        let (rv, _) = randomness::next_u64_in_range(&s, r_min, r_max);
+        let (rv, _) = s.next_u64_in_range(r_min, r_max);
         assert!(rv >= r_min && rv < r_max);
         i = i + 1;
     };
@@ -152,11 +188,11 @@ fun next_u64_in_range_properties() {
     let mut chain_seed = seed;
     let mut k = 0u64;
     while (k < 16) {
-        let (cv, ns) = randomness::next_u64_in_range(&chain_seed, 10, 1234);
+        let (cv, ns) = chain_seed.next_u64_in_range(10, 1234);
         assert!(cv >= 10 && cv < 1234);
         // The returned seed's bytes must differ from the input each step, so
         // the chain genuinely advances rather than restating the same state.
-        assert!(*randomness::seed_bytes(&ns) != *randomness::seed_bytes(&chain_seed));
+        assert!(*ns.seed_bytes() != *chain_seed.seed_bytes());
         chain_seed = ns;
         k = k + 1;
     };
@@ -172,17 +208,17 @@ fun next_u64_in_range_properties() {
 fun next_u8_in_range_invalid() {
     let seed = randomness::from_bytes(b"test seed");
     // min >= max should fail
-    let (_, _) = randomness::next_u8_in_range(&seed, 10, 5);
+    let (_, _) = seed.next_u8_in_range(10, 5);
 }
 
 #[test]
 fun select_index() {
     let seed = randomness::from_bytes(b"test seed");
 
-    let (index, _) = randomness::select_index(&seed, 10);
+    let (index, _) = seed.select_index(10);
     assert!(index < 10);
 
-    let (index2, _) = randomness::select_index(&seed, 1);
+    let (index2, _) = seed.select_index(1);
     assert_eq!(index2, 0);
 }
 
@@ -192,13 +228,13 @@ fun draw_from_vector() {
     let mut vec = vector[1u8, 2, 3, 4, 5];
 
     let original_len = vec.length();
-    let (_, new_seed) = randomness::draw_from_vector(&seed, &mut vec);
+    let (_, new_seed) = seed.draw_from_vector(&mut vec);
 
     // Vector should be one element shorter
     assert_eq!(vec.length(), original_len - 1);
 
     // New seed should be different
-    assert!(randomness::seed_counter(&new_seed) > randomness::seed_counter(&seed));
+    assert!(new_seed.seed_counter() > seed.seed_counter());
 }
 
 /// Insertion-sort a copy of a u8 vector, ascending. Used to compare two
@@ -236,7 +272,7 @@ fun shuffle() {
     let mut vec = vector[1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 
     let original_vec = vec; // Copy
-    let _ = randomness::shuffle(&seed, &mut vec);
+    let _ = seed.shuffle(&mut vec);
 
     // Length should be preserved.
     assert_eq!(vec.length(), original_vec.length());
@@ -257,7 +293,7 @@ fun shuffle() {
     while (s < 16) {
         let seed_s = randomness::from_bytes(i_to_bytes(s));
         let mut v = original_vec; // fresh copy each iteration
-        let _ = randomness::shuffle(&seed_s, &mut v);
+        let _ = seed_s.shuffle(&mut v);
         // Always a true permutation regardless of the seed.
         assert_eq!(sorted_u8(&v), sorted_u8(&original_vec));
         if (v != original_vec) {
@@ -278,8 +314,8 @@ fun shuffle_multiset_and_deterministic() {
     let mut b = a; // identical copy
     let original = a;
 
-    let _ = randomness::shuffle(&seed, &mut a);
-    let _ = randomness::shuffle(&seed, &mut b);
+    let _ = seed.shuffle(&mut a);
+    let _ = seed.shuffle(&mut b);
 
     // True permutation: sorted equal to the original.
     assert_eq!(sorted_u8(&a), sorted_u8(&original));
@@ -298,16 +334,16 @@ fun shuffle_short_vectors() {
 
     // Empty vector: unchanged, returned seed bytes equal the input seed bytes.
     let mut empty = vector<u8>[];
-    let s_empty = randomness::shuffle(&seed, &mut empty);
+    let s_empty = seed.shuffle(&mut empty);
     assert_eq!(empty.length(), 0);
-    assert_eq!(*randomness::seed_bytes(&s_empty), *randomness::seed_bytes(&seed));
-    assert_eq!(randomness::seed_counter(&s_empty), randomness::seed_counter(&seed));
+    assert_eq!(*s_empty.seed_bytes(), *seed.seed_bytes());
+    assert_eq!(s_empty.seed_counter(), seed.seed_counter());
 
     // Single-element vector: unchanged.
     let mut one = vector[99u8];
-    let s_one = randomness::shuffle(&seed, &mut one);
+    let s_one = seed.shuffle(&mut one);
     assert_eq!(one, vector[99u8]);
-    assert_eq!(*randomness::seed_bytes(&s_one), *randomness::seed_bytes(&seed));
+    assert_eq!(*s_one.seed_bytes(), *seed.seed_bytes());
 }
 
 #[test]
@@ -319,15 +355,15 @@ fun commitment_and_reveal() {
     let reveal = randomness::create_reveal(value, salt);
 
     // Correct reveal should verify
-    assert!(randomness::verify_commitment(&commitment, &reveal));
+    assert!(commitment.verify_commitment(&reveal));
 
     // Wrong value should not verify
     let wrong_reveal = randomness::create_reveal(b"wrong value", salt);
-    assert!(!randomness::verify_commitment(&commitment, &wrong_reveal));
+    assert!(!commitment.verify_commitment(&wrong_reveal));
 
     // Wrong salt should not verify
     let wrong_salt_reveal = randomness::create_reveal(value, b"wrong_salt_wrong_salt_wrong");
-    assert!(!randomness::verify_commitment(&commitment, &wrong_salt_reveal));
+    assert!(!commitment.verify_commitment(&wrong_salt_reveal));
 }
 
 #[test]
@@ -335,19 +371,19 @@ fun combine_reveals() {
     let reveal_a = randomness::create_reveal(b"value_a", b"salt_a_at_least_16chars");
     let reveal_b = randomness::create_reveal(b"value_b", b"salt_b_at_least_16chars");
 
-    let seed = randomness::combine_reveals(&reveal_a, &reveal_b);
+    let seed = reveal_a.combine_reveals(&reveal_b);
 
     // Should produce valid seed
-    assert_eq!(randomness::seed_bytes(&seed).length(), 32);
-    assert_eq!(randomness::seed_counter(&seed), 0);
+    assert_eq!(seed.seed_bytes().length(), 32);
+    assert_eq!(seed.seed_counter(), 0);
 
     // Same reveals should produce same seed
-    let seed2 = randomness::combine_reveals(&reveal_a, &reveal_b);
-    assert_eq!(*randomness::seed_bytes(&seed), *randomness::seed_bytes(&seed2));
+    let seed2 = reveal_a.combine_reveals(&reveal_b);
+    assert_eq!(*seed.seed_bytes(), *seed2.seed_bytes());
 
     // Different order should produce different seed
-    let seed3 = randomness::combine_reveals(&reveal_b, &reveal_a);
-    assert!(*randomness::seed_bytes(&seed) != *randomness::seed_bytes(&seed3));
+    let seed3 = reveal_b.combine_reveals(&reveal_a);
+    assert!(*seed.seed_bytes() != *seed3.seed_bytes());
 }
 
 #[test]
@@ -363,18 +399,18 @@ fun combined_randomness_flow() {
 
     // Create combined randomness
     let mut combined = randomness::create_combined_randomness(commitment_a, commitment_b);
-    assert!(!randomness::is_finalized(&combined));
+    assert!(!combined.is_finalized());
 
     // Phase 2: Reveal
     let reveal_a = randomness::create_reveal(value_a, salt_a);
     let reveal_b = randomness::create_reveal(value_b, salt_b);
 
-    randomness::finalize_combined_randomness(&mut combined, &reveal_a, &reveal_b);
-    assert!(randomness::is_finalized(&combined));
+    combined.finalize_combined_randomness(&reveal_a, &reveal_b);
+    assert!(combined.is_finalized());
 
     // Can now use the seed
-    let seed = randomness::combined_seed(&combined);
-    assert_eq!(randomness::seed_bytes(seed).length(), 32);
+    let seed = combined.combined_seed();
+    assert_eq!(seed.seed_bytes().length(), 32);
 }
 
 #[test]
@@ -458,11 +494,11 @@ fun bytes_to_u64() {
 fun seed_accessors() {
     let seed = randomness::from_bytes(b"test");
 
-    assert_eq!(randomness::seed_bytes(&seed).length(), 32);
-    assert_eq!(randomness::seed_counter(&seed), 0);
+    assert_eq!(seed.seed_bytes().length(), 32);
+    assert_eq!(seed.seed_counter(), 0);
 
-    let (_, new_seed) = randomness::next_u64(&seed);
-    assert_eq!(randomness::seed_counter(&new_seed), 1);
+    let (_, new_seed) = seed.next_u64();
+    assert_eq!(new_seed.seed_counter(), 1);
 }
 
 #[test]
@@ -474,17 +510,17 @@ fun commitment_accessors() {
         5000,
     );
 
-    assert_eq!(randomness::commitment_hash(&commitment).length(), 32);
-    assert_eq!(randomness::commitment_committer(&commitment), @0x1234);
-    assert_eq!(randomness::commitment_timestamp(&commitment), 5000);
+    assert_eq!(commitment.commitment_hash().length(), 32);
+    assert_eq!(commitment.commitment_committer(), @0x1234);
+    assert_eq!(commitment.commitment_timestamp(), 5000);
 }
 
 #[test]
 fun reveal_accessors() {
     let reveal = randomness::create_reveal(b"my value", b"my salt");
 
-    assert_eq!(*randomness::reveal_value(&reveal), b"my value");
-    assert_eq!(*randomness::reveal_salt(&reveal), b"my salt");
+    assert_eq!(*reveal.reveal_value(), b"my value");
+    assert_eq!(*reveal.reveal_salt(), b"my salt");
 }
 
 #[test]
@@ -492,9 +528,9 @@ fun chained_randomness() {
     // Simulate drawing multiple cards
     let initial_seed = randomness::from_bytes(b"game_seed");
 
-    let (card1, seed1) = randomness::next_u8_in_range(&initial_seed, 0, 52);
-    let (card2, seed2) = randomness::next_u8_in_range(&seed1, 0, 52);
-    let (card3, _seed3) = randomness::next_u8_in_range(&seed2, 0, 52);
+    let (card1, seed1) = initial_seed.next_u8_in_range(0, 52);
+    let (card2, seed2) = seed1.next_u8_in_range(0, 52);
+    let (card3, _seed3) = seed2.next_u8_in_range(0, 52);
 
     // All cards should be in valid range
     assert!(card1 < 52);
@@ -502,8 +538,8 @@ fun chained_randomness() {
     assert!(card3 < 52);
 
     // Verify determinism - same sequence from same seed
-    let (card1_again, seed1_again) = randomness::next_u8_in_range(&initial_seed, 0, 52);
-    let (card2_again, _) = randomness::next_u8_in_range(&seed1_again, 0, 52);
+    let (card1_again, seed1_again) = initial_seed.next_u8_in_range(0, 52);
+    let (card2_again, _) = seed1_again.next_u8_in_range(0, 52);
 
     assert_eq!(card1, card1_again);
     assert_eq!(card2, card2_again);
@@ -523,7 +559,7 @@ fun chained_randomness() {
 ]
 fun select_index_empty() {
     let seed = randomness::from_bytes(b"test seed");
-    let (_, _) = randomness::select_index(&seed, 0);
+    let (_, _) = seed.select_index(0);
 }
 
 /// draw_from_vector on an empty vector must abort with empty_input().
@@ -537,7 +573,7 @@ fun select_index_empty() {
 fun draw_from_empty_vector() {
     let seed = randomness::from_bytes(b"test seed");
     let mut empty = vector<u8>[];
-    let (_, _) = randomness::draw_from_vector(&seed, &mut empty);
+    let (_, _) = seed.draw_from_vector(&mut empty);
 }
 
 /// create_commitment with a salt shorter than 16 bytes must abort with
@@ -561,7 +597,7 @@ fun create_commitment_min_salt_ok() {
     let salt = b"0123456789abcdef";
     assert_eq!(salt.length(), 16);
     let c = randomness::create_commitment(&b"value", &salt, @0x1, 0);
-    assert_eq!(randomness::commitment_hash(&c).length(), 32);
+    assert_eq!(c.commitment_hash().length(), 32);
 }
 
 /// Different commitment inputs must yield different commitment hashes; identical
@@ -577,13 +613,13 @@ fun commitment_distinct_and_deterministic() {
     let c_diff_salt = randomness::create_commitment(&b"value1", &salt_b, @0x1, 0);
 
     // Determinism: identical (value, salt) -> identical hash.
-    assert_eq!(*randomness::commitment_hash(&c1), *randomness::commitment_hash(&c1_again));
+    assert_eq!(*c1.commitment_hash(), *c1_again.commitment_hash());
 
     // Different value -> different hash.
-    assert!(*randomness::commitment_hash(&c1) != *randomness::commitment_hash(&c_diff_value));
+    assert!(*c1.commitment_hash() != *c_diff_value.commitment_hash());
 
     // Different salt -> different hash.
-    assert!(*randomness::commitment_hash(&c1) != *randomness::commitment_hash(&c_diff_salt));
+    assert!(*c1.commitment_hash() != *c_diff_salt.commitment_hash());
 }
 
 /// combine_reveals is deterministic for identical inputs and order-sensitive,
@@ -594,14 +630,14 @@ fun combine_reveals_distinct_and_deterministic() {
     let b = randomness::create_reveal(b"value_b", b"salt_b_at_least_16chars");
     let c = randomness::create_reveal(b"value_c", b"salt_c_at_least_16chars");
 
-    let s_ab = randomness::combine_reveals(&a, &b);
-    let s_ab2 = randomness::combine_reveals(&a, &b);
-    let s_ac = randomness::combine_reveals(&a, &c);
+    let s_ab = a.combine_reveals(&b);
+    let s_ab2 = a.combine_reveals(&b);
+    let s_ac = a.combine_reveals(&c);
 
     // Determinism.
-    assert_eq!(*randomness::seed_bytes(&s_ab), *randomness::seed_bytes(&s_ab2));
+    assert_eq!(*s_ab.seed_bytes(), *s_ab2.seed_bytes());
     // Different second reveal -> different combined seed.
-    assert!(*randomness::seed_bytes(&s_ab) != *randomness::seed_bytes(&s_ac));
+    assert!(*s_ab.seed_bytes() != *s_ac.seed_bytes());
 }
 
 /// from_bls_signature does NOT verify on-chain, so we can test its determinism
@@ -616,17 +652,49 @@ fun from_bls_signature_deterministic() {
     let s2 = randomness::from_bls_signature(&msg, &sig);
 
     // Determinism: identical inputs -> identical seed bytes, counter at 0.
-    assert_eq!(*randomness::seed_bytes(&s1), *randomness::seed_bytes(&s2));
-    assert_eq!(randomness::seed_bytes(&s1).length(), 32);
-    assert_eq!(randomness::seed_counter(&s1), 0);
+    assert_eq!(*s1.seed_bytes(), *s2.seed_bytes());
+    assert_eq!(s1.seed_bytes().length(), 32);
+    assert_eq!(s1.seed_counter(), 0);
 
     // Different message -> different seed.
     let s_msg = randomness::from_bls_signature(&b"different message", &sig);
-    assert!(*randomness::seed_bytes(&s1) != *randomness::seed_bytes(&s_msg));
+    assert!(*s1.seed_bytes() != *s_msg.seed_bytes());
 
     // Different signature bytes -> different seed.
     let s_sig = randomness::from_bls_signature(&msg, &b"another_distinct_signature_byte_string!!");
-    assert!(*randomness::seed_bytes(&s1) != *randomness::seed_bytes(&s_sig));
+    assert!(*s1.seed_bytes() != *s_sig.seed_bytes());
+}
+
+/// H5 security property: from_bls_signature length-prefixes the message and the
+/// signature before hashing, so two (message, signature) pairs whose naive
+/// concatenations are identical no longer collide. Under the OLD layout
+/// (DOMAIN || message || signature) the two pairs below both hash
+/// DOMAIN || [0x01, 0x02, 0x03] and would produce the SAME seed; the new
+/// length-prefixed layout (DOMAIN || be(len(msg)) || msg || be(len(sig)) || sig)
+/// disambiguates the split, so the seeds must now DIFFER.
+#[test]
+fun from_bls_signature_no_concat_collision() {
+    // Pair 1: 1-byte message, 2-byte signature.
+    let msg1 = vector[0x01u8];
+    let sig1 = vector[0x02u8, 0x03u8];
+
+    // Pair 2: 2-byte message, 1-byte signature. Same concatenation as pair 1.
+    let msg2 = vector[0x01u8, 0x02u8];
+    let sig2 = vector[0x03u8];
+
+    let s1 = randomness::from_bls_signature(&msg1, &sig1);
+    let s2 = randomness::from_bls_signature(&msg2, &sig2);
+
+    // Sanity: the two naive concatenations are indeed equal, which is exactly
+    // the boundary the old layout could not distinguish.
+    let mut cat1 = msg1;
+    cat1.append(sig1);
+    let mut cat2 = msg2;
+    cat2.append(sig2);
+    assert_eq!(cat1, cat2);
+
+    // The length-prefixed layout must produce distinct seeds for these inputs.
+    assert!(*s1.seed_bytes() != *s2.seed_bytes());
 }
 
 /// bytes_to_u64 reads exactly the first 8 bytes (big-endian) and ignores the
@@ -645,11 +713,15 @@ fun bytes_to_u64_ignores_trailing() {
     assert_eq!(randomness::bytes_to_u64(&max), 18446744073709551615u64);
 }
 
-/// bytes_to_u64 indexes the first 8 bytes directly; a vector shorter than 8
-/// bytes is out of the public guard's surface and aborts on a native vector
-/// bounds check. This documents that short input is rejected (by abort), even
-/// though the abort is a native runtime check, not a framework #[error].
-#[test, expected_failure]
+/// bytes_to_u64 requires at least 8 bytes; a shorter vector is rejected with the
+/// attributable EInvalidParameter code rather than a native vector bounds abort.
+#[
+    test,
+    expected_failure(
+        abort_code = sui_tunnel::randomness::EInvalidParameter,
+        location = sui_tunnel::randomness,
+    ),
+]
 fun bytes_to_u64_short_input_aborts() {
     let short = vector[0u8, 1, 2]; // only 3 bytes; bytes_to_u64 needs 8
     let _ = randomness::bytes_to_u64(&short);

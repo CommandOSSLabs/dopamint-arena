@@ -36,17 +36,14 @@ fun open_negotiation() {
         &mut ctx,
     );
 
-    assert_eq!(example_private_negotiation::channel_status<SUI>(&channel), 0);
-    assert_eq!(example_private_negotiation::channel_rounds<SUI>(&channel), 0);
-    assert_eq!(example_private_negotiation::channel_latest_price<SUI>(&channel), 0);
-    assert_eq!(example_private_negotiation::channel_deal_reached<SUI>(&channel), false);
-    assert_eq!(example_private_negotiation::channel_asking_price<SUI>(&channel), 10000);
-    assert_eq!(
-        *example_private_negotiation::channel_item_description<SUI>(&channel),
-        b"Rare NFT collection",
-    );
+    assert_eq!(channel.channel_status<SUI>(), 0);
+    assert_eq!(channel.channel_rounds<SUI>(), 0);
+    assert_eq!(channel.channel_latest_price<SUI>(), 0);
+    assert_eq!(channel.channel_deal_reached<SUI>(), false);
+    assert_eq!(channel.channel_asking_price<SUI>(), 10000);
+    assert_eq!(*channel.channel_item_description<SUI>(), b"Rare NFT collection");
 
-    example_private_negotiation::destroy_channel_for_testing<SUI>(channel);
+    channel.destroy_channel_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -70,9 +67,9 @@ fun channel_balance_after_open() {
         &mut ctx,
     );
 
-    assert_eq!(example_private_negotiation::channel_total_balance<SUI>(&channel), 5000);
+    assert_eq!(channel.channel_total_balance<SUI>(), 5000);
 
-    example_private_negotiation::destroy_channel_for_testing<SUI>(channel);
+    channel.destroy_channel_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -98,8 +95,7 @@ fun record_negotiation_rounds() {
 
     // Round 1: Buyer offers 6000 (private off-chain)
     // party_a_balance = 5000, party_b_balance = 0 (only buyer deposited)
-    example_private_negotiation::record_round<SUI>(
-        &mut channel,
+    channel.record_round<SUI>(
         1,
         6000,
         false,
@@ -111,13 +107,12 @@ fun record_negotiation_rounds() {
         vector[],
         &clock,
     );
-    assert_eq!(example_private_negotiation::channel_rounds<SUI>(&channel), 1);
-    assert_eq!(example_private_negotiation::channel_latest_price<SUI>(&channel), 6000);
-    assert_eq!(example_private_negotiation::channel_deal_reached<SUI>(&channel), false);
+    assert_eq!(channel.channel_rounds<SUI>(), 1);
+    assert_eq!(channel.channel_latest_price<SUI>(), 6000);
+    assert_eq!(channel.channel_deal_reached<SUI>(), false);
 
     // Round 2: Seller counters with 9000 (private off-chain)
-    example_private_negotiation::record_round<SUI>(
-        &mut channel,
+    channel.record_round<SUI>(
         2,
         9000,
         false,
@@ -129,12 +124,11 @@ fun record_negotiation_rounds() {
         vector[],
         &clock,
     );
-    assert_eq!(example_private_negotiation::channel_rounds<SUI>(&channel), 2);
-    assert_eq!(example_private_negotiation::channel_latest_price<SUI>(&channel), 9000);
+    assert_eq!(channel.channel_rounds<SUI>(), 2);
+    assert_eq!(channel.channel_latest_price<SUI>(), 9000);
 
     // Round 3: Buyer counters 7500 (private off-chain)
-    example_private_negotiation::record_round<SUI>(
-        &mut channel,
+    channel.record_round<SUI>(
         3,
         7500,
         false,
@@ -148,8 +142,7 @@ fun record_negotiation_rounds() {
     );
 
     // Round 4: Both agree on 8000 (deal reached!)
-    example_private_negotiation::record_round<SUI>(
-        &mut channel,
+    channel.record_round<SUI>(
         4,
         8000,
         true,
@@ -161,11 +154,11 @@ fun record_negotiation_rounds() {
         vector[],
         &clock,
     );
-    assert_eq!(example_private_negotiation::channel_rounds<SUI>(&channel), 4);
-    assert_eq!(example_private_negotiation::channel_latest_price<SUI>(&channel), 8000);
-    assert_eq!(example_private_negotiation::channel_deal_reached<SUI>(&channel), true);
+    assert_eq!(channel.channel_rounds<SUI>(), 4);
+    assert_eq!(channel.channel_latest_price<SUI>(), 8000);
+    assert_eq!(channel.channel_deal_reached<SUI>(), true);
 
-    example_private_negotiation::destroy_channel_for_testing<SUI>(channel);
+    channel.destroy_channel_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -195,8 +188,7 @@ fun record_round_stale_nonce() {
         &mut ctx,
     );
 
-    example_private_negotiation::record_round<SUI>(
-        &mut channel,
+    channel.record_round<SUI>(
         1,
         5000,
         false,
@@ -210,8 +202,7 @@ fun record_round_stale_nonce() {
     );
 
     // Stale nonce
-    example_private_negotiation::record_round<SUI>(
-        &mut channel,
+    channel.record_round<SUI>(
         2,
         6000,
         false,
@@ -224,7 +215,7 @@ fun record_round_stale_nonce() {
         &clock,
     );
 
-    example_private_negotiation::destroy_channel_for_testing<SUI>(channel);
+    channel.destroy_channel_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -254,13 +245,11 @@ fun cannot_record_round_when_settled() {
         &mut ctx,
     );
 
-    example_private_negotiation::set_status_for_testing<SUI>(
-        &mut channel,
+    channel.set_status_for_testing<SUI>(
         example_private_negotiation::negotiation_settled(),
     );
 
-    example_private_negotiation::record_round<SUI>(
-        &mut channel,
+    channel.record_round<SUI>(
         1,
         5000,
         false,
@@ -273,7 +262,7 @@ fun cannot_record_round_when_settled() {
         &clock,
     );
 
-    example_private_negotiation::destroy_channel_for_testing<SUI>(channel);
+    channel.destroy_channel_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -297,19 +286,19 @@ fun compute_round_hash_deterministic() {
         &mut ctx,
     );
 
-    let h1 = example_private_negotiation::compute_round_hash<SUI>(&channel, 1, 5000, false, 1);
-    let h2 = example_private_negotiation::compute_round_hash<SUI>(&channel, 1, 5000, false, 1);
+    let h1 = channel.compute_round_hash<SUI>(1, 5000, false, 1);
+    let h2 = channel.compute_round_hash<SUI>(1, 5000, false, 1);
     assert_eq!(h1, h2);
     assert_eq!(h1.length(), 32);
 
-    let h3 = example_private_negotiation::compute_round_hash<SUI>(&channel, 2, 6000, false, 2);
+    let h3 = channel.compute_round_hash<SUI>(2, 6000, false, 2);
     assert!(h1 != h3);
 
     // Same params but deal_reached differs
-    let h4 = example_private_negotiation::compute_round_hash<SUI>(&channel, 1, 5000, true, 1);
+    let h4 = channel.compute_round_hash<SUI>(1, 5000, true, 1);
     assert!(h1 != h4);
 
-    example_private_negotiation::destroy_channel_for_testing<SUI>(channel);
+    channel.destroy_channel_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -322,10 +311,10 @@ fun negotiation_state_accessors() {
         10,
     );
 
-    assert_eq!(example_private_negotiation::negotiation_rounds(&state), 5);
-    assert_eq!(example_private_negotiation::negotiation_latest_price(&state), 8000);
-    assert_eq!(example_private_negotiation::negotiation_deal_reached(&state), true);
-    assert_eq!(example_private_negotiation::negotiation_nonce(&state), 10);
+    assert_eq!(state.negotiation_rounds(), 5);
+    assert_eq!(state.negotiation_latest_price(), 8000);
+    assert_eq!(state.negotiation_deal_reached(), true);
+    assert_eq!(state.negotiation_nonce(), 10);
 }
 
 #[
@@ -354,6 +343,6 @@ fun open_negotiation_zero_asking_price() {
         &mut ctx,
     );
 
-    example_private_negotiation::destroy_channel_for_testing<SUI>(channel);
+    channel.destroy_channel_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }

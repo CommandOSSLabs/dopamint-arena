@@ -224,7 +224,7 @@ public fun withdraw<T>(
 
     let now = clock.timestamp_ms();
 
-    let unlocked = calculate_unlocked(stream, now);
+    let unlocked = stream.calculate_unlocked(now);
     let available = unlocked - stream.withdrawn_amount;
     assert!(available > 0, EInsufficientBalance);
 
@@ -275,7 +275,7 @@ public fun withdraw_amount<T>(
 
     let now = clock.timestamp_ms();
 
-    let unlocked = calculate_unlocked(stream, now);
+    let unlocked = stream.calculate_unlocked(now);
     let available = unlocked - stream.withdrawn_amount;
     assert!(amount > 0 && amount <= available, EInsufficientBalance);
 
@@ -327,7 +327,7 @@ public fun cancel_stream<T>(
     let now = clock.timestamp_ms();
 
     // Calculate what recipient has earned
-    let unlocked = calculate_unlocked(stream, now);
+    let unlocked = stream.calculate_unlocked(now);
     let recipient_owed = unlocked - stream.withdrawn_amount;
     let refund_amount = stream.funds.value() - recipient_owed;
 
@@ -387,13 +387,13 @@ public fun top_up<T>(
     // Checking against withdrawn_amount alone is insufficient: if the recipient
     // has 500 vested but only 100 withdrawn, a malicious top_up could reduce
     // unlocked to 101 (>= withdrawn) while stealing 399 of vested funds.
-    let prev_unlocked = calculate_unlocked(stream, now);
+    let prev_unlocked = stream.calculate_unlocked(now);
 
     stream.total_amount = stream.total_amount + additional_amount;
     stream.funds.join(additional.into_balance());
     stream.end_time_ms = stream.end_time_ms + additional_duration_ms;
 
-    let new_unlocked = calculate_unlocked(stream, now);
+    let new_unlocked = stream.calculate_unlocked(now);
     assert!(new_unlocked >= prev_unlocked, EInvalidParameter);
 
     event::emit(StreamTopUp { sender: ctx.sender(), amount: additional_amount });
@@ -418,7 +418,7 @@ public fun calculate_unlocked<T>(stream: &PaymentStream<T>, current_time_ms: u64
 
 /// Get available (unlocked but not withdrawn) amount
 public fun available_balance<T>(stream: &PaymentStream<T>, current_time_ms: u64): u64 {
-    let unlocked = calculate_unlocked(stream, current_time_ms);
+    let unlocked = stream.calculate_unlocked(current_time_ms);
     if (unlocked > stream.withdrawn_amount) {
         unlocked - stream.withdrawn_amount
     } else {
@@ -428,7 +428,7 @@ public fun available_balance<T>(stream: &PaymentStream<T>, current_time_ms: u64)
 
 /// Get remaining (locked) amount
 public fun remaining_balance<T>(stream: &PaymentStream<T>, current_time_ms: u64): u64 {
-    let unlocked = calculate_unlocked(stream, current_time_ms);
+    let unlocked = stream.calculate_unlocked(current_time_ms);
     stream.total_amount - unlocked
 }
 

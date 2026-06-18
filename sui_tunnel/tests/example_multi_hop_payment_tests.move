@@ -4,7 +4,6 @@ module sui_tunnel::example_multi_hop_payment_tests;
 use std::unit_test::assert_eq;
 use sui::clock;
 use sui_tunnel::example_multi_hop_payment;
-use sui_tunnel::hop;
 
 #[test]
 fun status_constants() {
@@ -25,13 +24,13 @@ fun create_invoice() {
         b"Payment for goods",
     );
 
-    assert_eq!(example_multi_hop_payment::invoice_amount(&invoice), 10000);
-    assert_eq!(example_multi_hop_payment::invoice_receiver(&invoice), @0xBEEF);
-    assert_eq!(example_multi_hop_payment::invoice_expiry_ms(&invoice), 3600000);
-    assert_eq!(*example_multi_hop_payment::invoice_memo(&invoice), b"Payment for goods");
+    assert_eq!(invoice.invoice_amount(), 10000);
+    assert_eq!(invoice.invoice_receiver(), @0xBEEF);
+    assert_eq!(invoice.invoice_expiry_ms(), 3600000);
+    assert_eq!(*invoice.invoice_memo(), b"Payment for goods");
 
     // Payment hash should be 32 bytes
-    assert_eq!(example_multi_hop_payment::invoice_payment_hash(&invoice).length(), 32);
+    assert_eq!(invoice.invoice_payment_hash().length(), 32);
 }
 
 #[test]
@@ -47,17 +46,16 @@ fun create_payment() {
         b"Test",
     );
 
-    let payment = example_multi_hop_payment::create_payment(
-        &invoice,
+    let payment = invoice.create_payment(
         &clock,
         &mut ctx,
     );
 
-    assert_eq!(example_multi_hop_payment::payment_amount(&payment), 5000);
-    assert_eq!(example_multi_hop_payment::payment_status(&payment), 0);
-    assert_eq!(example_multi_hop_payment::payment_total_fees(&payment), 0);
+    assert_eq!(payment.payment_amount(), 5000);
+    assert_eq!(payment.payment_status(), 0);
+    assert_eq!(payment.payment_total_fees(), 0);
 
-    example_multi_hop_payment::destroy_for_testing(payment);
+    payment.destroy_for_testing();
     clock::destroy_for_testing(clock);
 }
 
@@ -74,28 +72,26 @@ fun add_payment_hops() {
         b"Test",
     );
 
-    let mut payment = example_multi_hop_payment::create_payment(
-        &invoice,
+    let mut payment = invoice.create_payment(
         &clock,
         &mut ctx,
     );
 
     // Add hops: A -> B -> C -> D
-    example_multi_hop_payment::add_payment_hop(
-        &mut payment,
+    payment.add_payment_hop(
         b"tunnel_ab",
         @0xB,
         100,
         3600000,
         &ctx,
     );
-    example_multi_hop_payment::add_payment_hop(&mut payment, b"tunnel_bc", @0xC, 80, 3480000, &ctx);
-    example_multi_hop_payment::add_payment_hop(&mut payment, b"tunnel_cd", @0xD, 60, 3360000, &ctx);
+    payment.add_payment_hop(b"tunnel_bc", @0xC, 80, 3480000, &ctx);
+    payment.add_payment_hop(b"tunnel_cd", @0xD, 60, 3360000, &ctx);
 
-    assert_eq!(example_multi_hop_payment::payment_total_fees(&payment), 240);
-    assert_eq!(hop::route_hop_count(example_multi_hop_payment::payment_route(&payment)), 3);
+    assert_eq!(payment.payment_total_fees(), 240);
+    assert_eq!(payment.payment_route().route_hop_count(), 3);
 
-    example_multi_hop_payment::destroy_for_testing(payment);
+    payment.destroy_for_testing();
     clock::destroy_for_testing(clock);
 }
 
@@ -116,23 +112,20 @@ fun complete_payment_flow() {
     );
 
     // Sender creates payment (sender = @0x0 from dummy ctx)
-    let mut payment = example_multi_hop_payment::create_payment(
-        &invoice,
+    let mut payment = invoice.create_payment(
         &clock,
         &mut ctx,
     );
 
     // Add route (last hop must be receiver @0x0)
-    example_multi_hop_payment::add_payment_hop(
-        &mut payment,
+    payment.add_payment_hop(
         b"sender_relay",
         @0xB,
         100,
         3600000,
         &ctx,
     );
-    example_multi_hop_payment::add_payment_hop(
-        &mut payment,
+    payment.add_payment_hop(
         b"relay_receiver",
         @0x0,
         50,
@@ -141,25 +134,25 @@ fun complete_payment_flow() {
     );
 
     // Validate route
-    assert!(example_multi_hop_payment::validate_payment(&payment));
+    assert!(payment.validate_payment());
 
     // Setup HTLCs
-    example_multi_hop_payment::setup_htlcs(&mut payment, 3600000, &ctx);
-    assert_eq!(example_multi_hop_payment::payment_status(&payment), 1);
-    assert_eq!(example_multi_hop_payment::payment_htlc_count(&payment), 2);
+    payment.setup_htlcs(3600000, &ctx);
+    assert_eq!(payment.payment_status(), 1);
+    assert_eq!(payment.payment_htlc_count(), 2);
 
     // Carol claims with preimage
-    let claimed = example_multi_hop_payment::claim_payment(&mut payment, preimage, &ctx);
+    let claimed = payment.claim_payment(preimage, &ctx);
     assert!(claimed);
-    assert_eq!(example_multi_hop_payment::payment_status(&payment), 2);
+    assert_eq!(payment.payment_status(), 2);
 
     // Create receipt
-    let receipt = example_multi_hop_payment::create_receipt(&payment, 1234567900);
-    assert_eq!(example_multi_hop_payment::receipt_amount(&receipt), 10000);
-    assert_eq!(example_multi_hop_payment::receipt_fees(&receipt), 150);
-    assert_eq!(*example_multi_hop_payment::receipt_preimage(&receipt), preimage);
+    let receipt = payment.create_receipt(1234567900);
+    assert_eq!(receipt.receipt_amount(), 10000);
+    assert_eq!(receipt.receipt_fees(), 150);
+    assert_eq!(*receipt.receipt_preimage(), preimage);
 
-    example_multi_hop_payment::destroy_for_testing(payment);
+    payment.destroy_for_testing();
     clock::destroy_for_testing(clock);
 }
 
@@ -170,12 +163,12 @@ fun calculate_total_needed() {
     let preimage = b"test";
     let invoice = example_multi_hop_payment::create_invoice(&preimage, 10000, @0xB, 3600000, b"");
 
-    let mut payment = example_multi_hop_payment::create_payment(&invoice, &clock, &mut ctx);
-    example_multi_hop_payment::add_payment_hop(&mut payment, b"tunnel", @0xB, 500, 3600000, &ctx);
+    let mut payment = invoice.create_payment(&clock, &mut ctx);
+    payment.add_payment_hop(b"tunnel", @0xB, 500, 3600000, &ctx);
 
-    assert_eq!(example_multi_hop_payment::calculate_total_needed(&payment), 10500);
+    assert_eq!(payment.calculate_total_needed(), 10500);
 
-    example_multi_hop_payment::destroy_for_testing(payment);
+    payment.destroy_for_testing();
     clock::destroy_for_testing(clock);
 }
 
@@ -187,16 +180,16 @@ fun payment_with_wrong_preimage() {
     // Receiver = @0x0 to match dummy ctx sender for claim_payment auth
     let invoice = example_multi_hop_payment::create_invoice(&preimage, 1000, @0x0, 3600000, b"");
 
-    let mut payment = example_multi_hop_payment::create_payment(&invoice, &clock, &mut ctx);
-    example_multi_hop_payment::add_payment_hop(&mut payment, b"tunnel", @0x0, 100, 3600000, &ctx);
+    let mut payment = invoice.create_payment(&clock, &mut ctx);
+    payment.add_payment_hop(b"tunnel", @0x0, 100, 3600000, &ctx);
 
-    example_multi_hop_payment::setup_htlcs(&mut payment, 3600000, &ctx);
+    payment.setup_htlcs(3600000, &ctx);
 
     // Try claiming with wrong preimage
-    let claimed = example_multi_hop_payment::claim_payment(&mut payment, b"wrong_preimage", &ctx);
+    let claimed = payment.claim_payment(b"wrong_preimage", &ctx);
     assert!(!claimed);
-    assert_eq!(example_multi_hop_payment::payment_status(&payment), 1);
+    assert_eq!(payment.payment_status(), 1);
 
-    example_multi_hop_payment::destroy_for_testing(payment);
+    payment.destroy_for_testing();
     clock::destroy_for_testing(clock);
 }

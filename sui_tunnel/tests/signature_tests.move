@@ -2,7 +2,33 @@
 module sui_tunnel::signature_tests;
 
 use std::unit_test::assert_eq;
+use sui_tunnel::sig_vectors;
 use sui_tunnel::signature;
+use sui_tunnel::tunnel;
+
+const STATE_HASH: vector<u8> = x"0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
+
+// Canonical state_update message that the fixed-secret ED25519/secp256k1 vectors in
+// `sig_vectors` were produced over (matches signature_vectors_tests / wire_format_tests).
+fun state_update_msg(): vector<u8> {
+    let id = sui::object::id_from_address(@0xab);
+    let data = tunnel::create_state_update_data_for_testing(
+        id,
+        STATE_HASH,
+        42,
+        1234567890,
+        1000,
+        2000,
+    );
+    data.serialize_state_update()
+}
+
+// A vector of `len` zero bytes, for length-validation fixtures.
+fun zeros(len: u64): vector<u8> {
+    let mut v = vector<u8>[];
+    len.do!(|_| v.push_back(0));
+    v
+}
 
 #[test]
 fun signature_type_constants() {
@@ -229,4 +255,228 @@ fun hash_message() {
 
     // Blake2b-256 produces 32-byte output
     assert_eq!(hash_result.length(), 32);
+}
+
+// ============================================
+// is_valid_signature_length — per-scheme accept/reject
+// ============================================
+
+#[test]
+fun signature_length_accepts_correct_and_rejects_wrong() {
+    // ED25519: 64 bytes.
+    assert!(signature::is_valid_signature_length(signature::ed25519(), &zeros(64)));
+    assert!(!signature::is_valid_signature_length(signature::ed25519(), &zeros(63)));
+    assert!(!signature::is_valid_signature_length(signature::ed25519(), &zeros(65)));
+
+    // BLS12381_MIN_SIG: 48-byte G1 signature.
+    assert!(signature::is_valid_signature_length(signature::bls12381_min_sig(), &zeros(48)));
+    assert!(!signature::is_valid_signature_length(signature::bls12381_min_sig(), &zeros(96)));
+
+    // BLS12381_MIN_PK: 96-byte G2 signature.
+    assert!(signature::is_valid_signature_length(signature::bls12381_min_pk(), &zeros(96)));
+    assert!(!signature::is_valid_signature_length(signature::bls12381_min_pk(), &zeros(48)));
+
+    // Secp256k1: only the 64-byte (r, s) form; the 65-byte recoverable form is rejected.
+    assert!(signature::is_valid_signature_length(signature::secp256k1(), &zeros(64)));
+    assert!(!signature::is_valid_signature_length(signature::secp256k1(), &zeros(65)));
+
+    // Unknown scheme is never a valid length.
+    assert!(!signature::is_valid_signature_length(255, &zeros(64)));
+}
+
+// ============================================
+// verify — abort paths (mutate one field of a real ED25519 vector)
+// ============================================
+
+#[
+    test,
+    expected_failure(
+        abort_code = sui_tunnel::signature::EInvalidPublicKey,
+        location = sui_tunnel::signature,
+    ),
+]
+fun verify_aborts_on_short_public_key() {
+    let msg = state_update_msg();
+    // Valid ED25519 type + signature, but a 1-byte public key.
+    signature::verify(
+        signature::ed25519(),
+        &vector[0u8],
+        &msg,
+        &sig_vectors::ed25519_state_update_sig_a(),
+    );
+}
+
+#[
+    test,
+    expected_failure(
+        abort_code = sui_tunnel::signature::EInvalidSignature,
+        location = sui_tunnel::signature,
+    ),
+]
+fun verify_aborts_on_wrong_length_signature() {
+    let msg = state_update_msg();
+    // Valid ED25519 type + public key, but a 63-byte (truncated) signature.
+    let mut sig = sig_vectors::ed25519_state_update_sig_a();
+    sig.pop_back();
+    signature::verify(signature::ed25519(), &sig_vectors::ed25519_pk_a(), &msg, &sig);
+}
+
+#[
+    test,
+    expected_failure(
+        abort_code = sui_tunnel::signature::EUnsupportedSignatureType,
+        location = sui_tunnel::signature,
+    ),
+]
+fun verify_aborts_on_out_of_range_sig_type() {
+    let msg = state_update_msg();
+    // sig_type 255 is outside the supported set; type is validated before lengths.
+    signature::verify(
+        255,
+        &sig_vectors::ed25519_pk_a(),
+        &msg,
+        &sig_vectors::ed25519_state_update_sig_a(),
+    );
+}
+
+// ============================================
+// Type-specific verifiers — positive real vectors
+// ============================================
+
+#[test]
+fun verify_ed25519_accepts_real_vector() {
+    let msg = state_update_msg();
+    assert!(
+        signature::verify_ed25519(
+            &sig_vectors::ed25519_pk_a(),
+            &msg,
+            &sig_vectors::ed25519_state_update_sig_a(),
+        ),
+    );
+    assert!(
+        signature::verify_ed25519(
+            &sig_vectors::ed25519_pk_b(),
+            &msg,
+            &sig_vectors::ed25519_state_update_sig_b(),
+        ),
+    );
+}
+
+#[test]
+fun verify_secp256k1_accepts_real_vector() {
+    // The secp256k1 vector is a low-s (r, s) signature over SHA256(state_update).
+    let msg = state_update_msg();
+    assert!(
+        signature::verify_secp256k1(
+            &sig_vectors::secp256k1_pk(),
+            &msg,
+            &sig_vectors::secp256k1_state_update_sig(),
+            signature::hash_sha256(),
+        ),
+    );
+}
+
+// ============================================
+// verify_with_hash — positive + wrong-length abort
+// ============================================
+
+#[test]
+fun verify_with_hash_accepts_ed25519_and_secp256k1() {
+    let msg = state_update_msg();
+    // Non-secp256k1 schemes ignore hash_type and delegate to `verify`.
+    assert!(
+        signature::verify_with_hash(
+            signature::ed25519(),
+            &sig_vectors::ed25519_pk_a(),
+            &msg,
+            &sig_vectors::ed25519_state_update_sig_a(),
+            signature::hash_keccak256(),
+        ),
+    );
+    // Secp256k1 with the SHA256 hash the vector was produced under.
+    assert!(
+        signature::verify_with_hash(
+            signature::secp256k1(),
+            &sig_vectors::secp256k1_pk(),
+            &msg,
+            &sig_vectors::secp256k1_state_update_sig(),
+            signature::hash_sha256(),
+        ),
+    );
+}
+
+#[
+    test,
+    expected_failure(
+        abort_code = sui_tunnel::signature::EInvalidSignature,
+        location = sui_tunnel::signature,
+    ),
+]
+fun verify_with_hash_aborts_on_wrong_length_signature() {
+    let msg = state_update_msg();
+    // 63-byte signature is rejected on the length check before any ECDSA work.
+    let mut sig = sig_vectors::secp256k1_state_update_sig();
+    sig.pop_back();
+    signature::verify_with_hash(
+        signature::secp256k1(),
+        &sig_vectors::secp256k1_pk(),
+        &msg,
+        &sig,
+        signature::hash_sha256(),
+    );
+}
+
+// ============================================
+// BLS12381 verifiers — length-rejection abort paths
+//
+// Positive BLS real-signature vectors require signing off-chain (no Move-test
+// keypair), so only the input-length guards are exercised here.
+// ============================================
+
+#[
+    test,
+    expected_failure(
+        abort_code = sui_tunnel::signature::EInvalidPublicKey,
+        location = sui_tunnel::signature,
+    ),
+]
+fun verify_bls12381_min_sig_rejects_wrong_length_public_key() {
+    // min_sig expects a 96-byte G2 public key; pass 48 bytes.
+    signature::verify_bls12381_min_sig(&zeros(48), &b"msg", &zeros(48));
+}
+
+#[
+    test,
+    expected_failure(
+        abort_code = sui_tunnel::signature::EInvalidSignature,
+        location = sui_tunnel::signature,
+    ),
+]
+fun verify_bls12381_min_sig_rejects_wrong_length_signature() {
+    // min_sig expects a 48-byte G1 signature; pass 96 bytes.
+    signature::verify_bls12381_min_sig(&zeros(96), &b"msg", &zeros(96));
+}
+
+#[
+    test,
+    expected_failure(
+        abort_code = sui_tunnel::signature::EInvalidPublicKey,
+        location = sui_tunnel::signature,
+    ),
+]
+fun verify_bls12381_min_pk_rejects_wrong_length_public_key() {
+    // min_pk expects a 48-byte G1 public key; pass 96 bytes.
+    signature::verify_bls12381_min_pk(&zeros(96), &b"msg", &zeros(96));
+}
+
+#[
+    test,
+    expected_failure(
+        abort_code = sui_tunnel::signature::EInvalidSignature,
+        location = sui_tunnel::signature,
+    ),
+]
+fun verify_bls12381_min_pk_rejects_wrong_length_signature() {
+    // min_pk expects a 96-byte G2 signature; pass 48 bytes.
+    signature::verify_bls12381_min_pk(&zeros(48), &b"msg", &zeros(48));
 }

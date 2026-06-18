@@ -134,14 +134,14 @@ fun randomness_module_accessible() {
     let seed = randomness::from_bytes(b"test seed");
 
     // Verify we can derive random values
-    let (value, new_seed) = randomness::next_u64(&seed);
+    let (value, new_seed) = seed.next_u64();
 
     // Values should be deterministic
-    let (value2, _) = randomness::next_u64(&seed);
+    let (value2, _) = seed.next_u64();
     assert_eq!(value, value2);
 
     // New seed should have incremented counter
-    assert_eq!(randomness::seed_counter(&new_seed), 1);
+    assert_eq!(new_seed.seed_counter(), 1);
 }
 
 /// Test integration: randomness with tunnel context
@@ -155,10 +155,10 @@ fun randomness_tunnel_integration() {
     let seed = randomness::from_tunnel_context(tunnel_id, nonce, extra_entropy);
 
     // Should produce valid 32-byte seed
-    assert_eq!(randomness::seed_bytes(&seed).length(), 32);
+    assert_eq!(seed.seed_bytes().length(), 32);
 
     // Can use for game mechanics
-    let (card, _) = randomness::next_u8_in_range(&seed, 0, 52);
+    let (card, _) = seed.next_u8_in_range(0, 52);
     assert!(card < 52);
 }
 
@@ -177,19 +177,19 @@ fun randomness_commit_reveal_integration() {
 
     // Create combined randomness
     let mut combined = randomness::create_combined_randomness(commitment_a, commitment_b);
-    assert!(!randomness::is_finalized(&combined));
+    assert!(!combined.is_finalized());
 
     // Reveal phase
     let reveal_a = randomness::create_reveal(value_a, salt_a);
     let reveal_b = randomness::create_reveal(value_b, salt_b);
 
     // Finalize
-    randomness::finalize_combined_randomness(&mut combined, &reveal_a, &reveal_b);
-    assert!(randomness::is_finalized(&combined));
+    combined.finalize_combined_randomness(&reveal_a, &reveal_b);
+    assert!(combined.is_finalized());
 
     // Can now use the combined seed
-    let seed = randomness::combined_seed(&combined);
-    let (_, _) = randomness::next_u64(seed);
+    let seed = combined.combined_seed();
+    let (_, _) = seed.next_u64();
 }
 
 /// Test integration: game simulation using randomness
@@ -207,14 +207,14 @@ fun game_simulation() {
     };
 
     // Shuffle the deck
-    let shuffled_seed = randomness::shuffle(&seed, &mut deck);
+    let shuffled_seed = seed.shuffle(&mut deck);
 
     // Draw 5 cards
-    let (card1, seed1) = randomness::draw_from_vector(&shuffled_seed, &mut deck);
-    let (card2, seed2) = randomness::draw_from_vector(&seed1, &mut deck);
-    let (card3, seed3) = randomness::draw_from_vector(&seed2, &mut deck);
-    let (card4, seed4) = randomness::draw_from_vector(&seed3, &mut deck);
-    let (card5, _) = randomness::draw_from_vector(&seed4, &mut deck);
+    let (card1, seed1) = shuffled_seed.draw_from_vector(&mut deck);
+    let (card2, seed2) = seed1.draw_from_vector(&mut deck);
+    let (card3, seed3) = seed2.draw_from_vector(&mut deck);
+    let (card4, seed4) = seed3.draw_from_vector(&mut deck);
+    let (card5, _) = seed4.draw_from_vector(&mut deck);
 
     // All cards should be valid (0-51)
     assert!(card1 < 52);
@@ -246,12 +246,12 @@ fun referee_module_accessible() {
 fun referee_config_creation() {
     // Default config
     let default = referee::default_config();
-    assert_eq!(referee::config_timeout_ms(&default), 3600000); // 1 hour
-    assert!(!referee::config_penalties_enabled(&default));
+    assert_eq!(default.config_timeout_ms(), 3600000); // 1 hour
+    assert!(!default.config_penalties_enabled());
 
     // Timeout-only config
     let timeout_config = referee::create_timeout_config(7200000); // 2 hours
-    assert_eq!(referee::config_timeout_ms(&timeout_config), 7200000);
+    assert_eq!(timeout_config.config_timeout_ms(), 7200000);
 
     // Penalty config
     let penalty_config = referee::create_penalty_config(
@@ -260,9 +260,9 @@ fun referee_config_creation() {
         500, // per hour
         5000, // max
     );
-    assert_eq!(referee::config_base_penalty(&penalty_config), 1000);
-    assert_eq!(referee::config_max_penalty(&penalty_config), 5000);
-    assert!(referee::config_penalties_enabled(&penalty_config));
+    assert_eq!(penalty_config.config_base_penalty(), 1000);
+    assert_eq!(penalty_config.config_max_penalty(), 5000);
+    assert!(penalty_config.config_penalties_enabled());
 }
 
 /// Test dispute history tracking
@@ -271,24 +271,24 @@ fun referee_dispute_history() {
     let mut history = referee::new_dispute_history();
 
     // Initial state
-    assert_eq!(referee::history_disputes_raised(&history), 0);
-    assert_eq!(referee::history_consecutive_timeouts(&history), 0);
+    assert_eq!(history.history_disputes_raised(), 0);
+    assert_eq!(history.history_consecutive_timeouts(), 0);
 
     // Record some events
-    referee::record_dispute_raised(&mut history);
-    referee::record_dispute_won(&mut history);
-    assert_eq!(referee::history_disputes_raised(&history), 1);
-    assert_eq!(referee::history_disputes_won(&history), 1);
+    history.record_dispute_raised();
+    history.record_dispute_won();
+    assert_eq!(history.history_disputes_raised(), 1);
+    assert_eq!(history.history_disputes_won(), 1);
 
     // Record timeouts
-    referee::record_timeout(&mut history, 100);
-    referee::record_timeout(&mut history, 200);
-    assert_eq!(referee::history_consecutive_timeouts(&history), 2);
-    assert_eq!(referee::history_total_penalties_paid(&history), 300);
+    history.record_timeout(100);
+    history.record_timeout(200);
+    assert_eq!(history.history_consecutive_timeouts(), 2);
+    assert_eq!(history.history_total_penalties_paid(), 300);
 
     // Good behavior resets consecutive timeouts
-    referee::reset_consecutive_timeouts(&mut history);
-    assert_eq!(referee::history_consecutive_timeouts(&history), 0);
+    history.reset_consecutive_timeouts();
+    assert_eq!(history.history_consecutive_timeouts(), 0);
 }
 
 /// Test penalty calculations
@@ -310,16 +310,16 @@ fun referee_committee_voting() {
     let mut committee = referee::create_committee(50);
 
     // Add members with different weights
-    referee::add_committee_member(&mut committee, @0x1, 30);
-    referee::add_committee_member(&mut committee, @0x2, 30);
-    referee::add_committee_member(&mut committee, @0x3, 40);
+    committee.add_committee_member(@0x1, 30);
+    committee.add_committee_member(@0x2, 30);
+    committee.add_committee_member(@0x3, 40);
 
-    assert_eq!(referee::committee_total_weight(&committee), 100);
-    assert_eq!(referee::committee_member_count(&committee), 3);
+    assert_eq!(committee.committee_total_weight(), 100);
+    assert_eq!(committee.committee_member_count(), 3);
 
     // Remove a member
-    referee::remove_committee_member(&mut committee, @0x2);
-    assert_eq!(referee::committee_total_weight(&committee), 70);
+    committee.remove_committee_member(@0x2);
+    assert_eq!(committee.committee_total_weight(), 70);
 }
 
 /// Test integration: referee with tunnel status
@@ -431,9 +431,9 @@ fun zk_verifier_state_proof() {
     );
 
     // Verify accessors
-    assert_eq!(*zk_verifier::zk_proof_circuit_id(&state_proof), circuit_id);
-    assert_eq!(zk_verifier::zk_proof_state_version(&state_proof), 42);
-    assert_eq!(zk_verifier::state_proof_version(&state_proof), 42);
+    assert_eq!(*state_proof.zk_proof_circuit_id(), circuit_id);
+    assert_eq!(state_proof.zk_proof_state_version(), 42);
+    assert_eq!(state_proof.state_proof_version(), 42);
 }
 
 /// Test verification result creation
@@ -447,12 +447,12 @@ fun zk_verifier_verification_result() {
         1234567890,
     );
 
-    assert!(zk_verifier::result_valid(&result));
-    assert_eq!(*zk_verifier::result_circuit_id(&result), b"my_circuit");
-    assert_eq!(zk_verifier::result_timestamp(&result), 1234567890);
+    assert!(result.result_valid());
+    assert_eq!(*result.result_circuit_id(), b"my_circuit");
+    assert_eq!(result.result_timestamp(), 1234567890);
 
     // Hash should be 32 bytes
-    assert_eq!(zk_verifier::result_inputs_hash(&result).length(), 32);
+    assert_eq!(result.result_inputs_hash().length(), 32);
 }
 
 /// Test integration: hash_to_scalar produces valid public input
@@ -511,7 +511,7 @@ fun zk_tunnel_state_integration() {
         nonce,
     );
 
-    assert_eq!(zk_verifier::state_proof_version(&zk_proof), nonce);
+    assert_eq!(zk_proof.state_proof_version(), nonce);
 }
 
 /// Test integration: ZK verifier with randomness for gaming
@@ -523,7 +523,7 @@ fun zk_verifier_randomness_integration() {
     let seed = randomness::from_bytes(b"game_session_seed");
 
     // Get a random value
-    let (card, _) = randomness::next_u8_in_range(&seed, 0, 52);
+    let (card, _) = seed.next_u8_in_range(0, 52);
 
     // Commit the card value as a public input for ZK proof
     let card_scalar = zk_verifier::u64_to_scalar(card as u64);
@@ -531,7 +531,7 @@ fun zk_verifier_randomness_integration() {
 
     // The ZK circuit could prove knowledge of the shuffle/deal
     // without revealing all cards
-    let seed_bytes = randomness::seed_bytes(&seed);
+    let seed_bytes = seed.seed_bytes();
     let seed_commitment = zk_verifier::hash_to_scalar(seed_bytes);
 
     let public_inputs = zk_verifier::concat_scalars(vector[seed_commitment, card_scalar]);
@@ -596,21 +596,21 @@ fun hop_route_creation() {
     let mut route = hop::create_route(sender, receiver, amount, 1234567890);
 
     // Add hops: A -> B -> C -> D
-    hop::add_hop(&mut route, b"tunnel_ab", @0xB, 100, 3600000);
-    hop::add_hop(&mut route, b"tunnel_bc", @0xC, 80, 3480000);
-    hop::add_hop(&mut route, b"tunnel_cd", @0xD, 60, 3360000);
+    route.add_hop(b"tunnel_ab", @0xB, 100, 3600000);
+    route.add_hop(b"tunnel_bc", @0xC, 80, 3480000);
+    route.add_hop(b"tunnel_cd", @0xD, 60, 3360000);
 
     // Verify route structure
-    assert_eq!(hop::route_sender(&route), @0xA);
-    assert_eq!(hop::route_receiver(&route), @0xD);
-    assert_eq!(hop::route_amount(&route), 100000);
-    assert_eq!(hop::route_hop_count(&route), 3);
-    assert_eq!(hop::route_total_fees(&route), 240);
+    assert_eq!(route.route_sender(), @0xA);
+    assert_eq!(route.route_receiver(), @0xD);
+    assert_eq!(route.route_amount(), 100000);
+    assert_eq!(route.route_hop_count(), 3);
+    assert_eq!(route.route_total_fees(), 240);
 
     // Validate the route
-    let validation = hop::validate_route(&route);
-    assert!(hop::validation_valid(&validation));
-    assert_eq!(hop::validation_total_amount(&validation), 100240);
+    let validation = route.validate_route();
+    assert!(validation.validation_valid());
+    assert_eq!(validation.validation_total_amount(), 100240);
 }
 
 /// Test HTLC lifecycle with preimage
@@ -631,18 +631,18 @@ fun hop_htlc_lifecycle() {
     );
 
     // Verify initial state
-    assert_eq!(hop::htlc_status(&htlc), hop::htlc_status_pending());
-    assert_eq!(hop::htlc_amount(&htlc), 5000);
-    assert!(hop::is_htlc_claimable(&htlc, 3599999));
+    assert_eq!(htlc.htlc_status(), hop::htlc_status_pending());
+    assert_eq!(htlc.htlc_amount(), 5000);
+    assert!(htlc.is_htlc_claimable(3599999));
 
     // Verify preimage works
-    assert!(hop::verify_preimage(&htlc, &preimage));
-    assert!(!hop::verify_preimage(&htlc, &b"wrong_preimage"));
+    assert!(htlc.verify_preimage(&preimage));
+    assert!(!htlc.verify_preimage(&b"wrong_preimage"));
 
     // Claim with preimage
-    let claimed = hop::claim_htlc(&mut htlc, preimage, &ctx);
+    let claimed = htlc.claim_htlc(preimage, &ctx);
     assert!(claimed);
-    assert_eq!(hop::htlc_status(&htlc), hop::htlc_status_claimed());
+    assert_eq!(htlc.htlc_status(), hop::htlc_status_claimed());
 }
 
 /// Test HTLC expiration
@@ -654,13 +654,13 @@ fun hop_htlc_expiration() {
     let mut htlc = hop::create_htlc(payment_hash, 5000, @0x0, @0xB, 3600000);
 
     // Not expired before timeout
-    assert!(!hop::is_htlc_expired(&htlc, 3599999));
-    assert!(!hop::expire_htlc(&mut htlc, 3599999, &ctx));
+    assert!(!htlc.is_htlc_expired(3599999));
+    assert!(!htlc.expire_htlc(3599999, &ctx));
 
     // Expired after timeout
-    assert!(hop::is_htlc_expired(&htlc, 3600001));
-    assert!(hop::expire_htlc(&mut htlc, 3600001, &ctx));
-    assert_eq!(hop::htlc_status(&htlc), hop::htlc_status_expired());
+    assert!(htlc.is_htlc_expired(3600001));
+    assert!(htlc.expire_htlc(3600001, &ctx));
+    assert_eq!(htlc.htlc_status(), hop::htlc_status_expired());
 }
 
 /// Test fee policy calculations
@@ -671,13 +671,13 @@ fun hop_fee_policy() {
 
     // Calculate fee for 100000
     // base(500) + proportional(100000 * 200 / 1000000 = 20) = 520
-    let fee = hop::calculate_fee(&policy, 100000);
+    let fee = policy.calculate_fee(100000);
     assert_eq!(fee, 520);
 
     // Check amount acceptability
-    assert!(hop::is_amount_acceptable(&policy, 10000)); // Within range
-    assert!(!hop::is_amount_acceptable(&policy, 500)); // Below min
-    assert!(!hop::is_amount_acceptable(&policy, 2000000)); // Above max
+    assert!(policy.is_amount_acceptable(10000)); // Within range
+    assert!(!policy.is_amount_acceptable(500)); // Below min
+    assert!(!policy.is_amount_acceptable(2000000)); // Above max
 }
 
 /// Test routing node management
@@ -688,22 +688,22 @@ fun hop_routing_node() {
     let mut node = hop::create_routing_node(@0x0, policy);
 
     // Add tunnels
-    hop::add_tunnel_to_node(&mut node, b"tunnel_1", &ctx);
-    hop::add_tunnel_to_node(&mut node, b"tunnel_2", &ctx);
-    assert_eq!(hop::node_tunnel_count(&node), 2);
+    node.add_tunnel_to_node(b"tunnel_1", &ctx);
+    node.add_tunnel_to_node(b"tunnel_2", &ctx);
+    assert_eq!(node.node_tunnel_count(), 2);
 
     // Record successful routes
-    hop::record_successful_route(&mut node, 10000, &ctx);
-    hop::record_successful_route(&mut node, 20000, &ctx);
-    hop::record_successful_route(&mut node, 30000, &ctx);
-    hop::record_failed_route(&mut node, &ctx);
+    node.record_successful_route(10000, &ctx);
+    node.record_successful_route(20000, &ctx);
+    node.record_successful_route(30000, &ctx);
+    node.record_failed_route(&ctx);
 
-    assert_eq!(hop::node_total_routed(&node), 60000);
-    assert_eq!(hop::node_successful_routes(&node), 3);
-    assert_eq!(hop::node_failed_routes(&node), 1);
+    assert_eq!(node.node_total_routed(), 60000);
+    assert_eq!(node.node_successful_routes(), 3);
+    assert_eq!(node.node_failed_routes(), 1);
 
     // Success rate: 3/4 = 75% = 7500
-    assert_eq!(hop::node_success_rate(&node), 7500);
+    assert_eq!(node.node_success_rate(), 7500);
 }
 
 /// Test integration: multi-hop with tunnel state
@@ -717,21 +717,21 @@ fun hop_tunnel_integration() {
     let amount = 50000u64;
 
     let mut route = hop::create_route(sender, receiver, amount, 1234567890);
-    hop::add_hop(&mut route, b"tunnel_1", @0xB, 100, 3600000);
-    hop::add_hop(&mut route, b"tunnel_2", @0xC, 50, 3480000);
+    route.add_hop(b"tunnel_1", @0xB, 100, 3600000);
+    route.add_hop(b"tunnel_2", @0xC, 50, 3480000);
 
     // Each hop would create state update data for the tunnel
-    let hop_0 = hop::route_get_hop(&route, 0);
-    let hop_1 = hop::route_get_hop(&route, 1);
+    let hop_0 = route.route_hop(0);
+    let hop_1 = route.route_hop(1);
 
     // Create state data for each tunnel hop
     let state_0 = signature::create_tunnel_message(
-        *hop::hop_tunnel_id(hop_0),
+        *hop_0.hop_tunnel_id(),
         1,
         b"htlc_offer",
     );
     let state_1 = signature::create_tunnel_message(
-        *hop::hop_tunnel_id(hop_1),
+        *hop_1.hop_tunnel_id(),
         1,
         b"htlc_offer",
     );
@@ -827,16 +827,16 @@ fun hop_complete_payment_flow() {
 
     // Step 1: Create route
     let mut route = hop::create_route(@0xA, @0xC, 10000, 1234567890);
-    hop::add_hop(&mut route, b"alice_bob_tunnel", @0xB, 100, 3600000);
-    hop::add_hop(&mut route, b"bob_carol_tunnel", @0xC, 50, 3480000);
+    route.add_hop(b"alice_bob_tunnel", @0xB, 100, 3600000);
+    route.add_hop(b"bob_carol_tunnel", @0xC, 50, 3480000);
 
     // Validate route
-    let validation = hop::validate_route(&route);
-    assert!(hop::validation_valid(&validation));
+    let validation = route.validate_route();
+    assert!(validation.validation_valid());
 
     // Step 2: Activate route (HTLCs would be created)
-    hop::activate_route(&mut route);
-    assert_eq!(hop::route_status(&route), hop::route_status_active());
+    route.activate_route();
+    assert_eq!(route.route_status(), hop::route_status_active());
 
     // Step 3: Create HTLCs for each hop
     let preimage = b"payment_secret";
@@ -863,15 +863,15 @@ fun hop_complete_payment_flow() {
     );
 
     // Step 4: Carol claims with preimage (backward settlement)
-    assert!(hop::claim_htlc(&mut htlc_bc, preimage, &ctx));
+    assert!(htlc_bc.claim_htlc(preimage, &ctx));
 
     // Step 5: Bob now has preimage, claims from Alice
-    let revealed_preimage = hop::htlc_preimage(&htlc_bc);
-    assert!(hop::claim_htlc(&mut htlc_ab, *revealed_preimage, &ctx));
+    let revealed_preimage = htlc_bc.htlc_preimage();
+    assert!(htlc_ab.claim_htlc(*revealed_preimage, &ctx));
 
     // Step 6: Complete route
-    hop::complete_route(&mut route);
-    assert_eq!(hop::route_status(&route), hop::route_status_completed());
+    route.complete_route();
+    assert_eq!(route.route_status(), hop::route_status_completed());
 }
 
 // ============================================
@@ -914,7 +914,7 @@ fun deposit_wrong_party() {
 
     let coin = sui::coin::mint_for_testing<sui::sui::SUI>(1000, &mut ctx);
     // Try to deposit as party_b but sender is party_a -> not_authorized
-    tunnel::deposit_party_b(&mut t, coin, &clock, &ctx);
+    t.deposit_party_b(coin, &clock, &ctx);
 
     t.destroy_for_testing();
     clock.destroy_for_testing();
@@ -1114,7 +1114,7 @@ fun randomness_equal_range() {
 fun draw_from_empty_vector() {
     let seed = randomness::from_bytes(b"test_seed");
     let mut empty_vec = vector<u8>[];
-    let (_val, _seed) = randomness::draw_from_vector(&seed, &mut empty_vec);
+    let (_val, _seed) = seed.draw_from_vector(&mut empty_vec);
 }
 
 /// Test: HTLC cannot be claimed after expiry (returns false, does not abort)
@@ -1128,11 +1128,11 @@ fun htlc_claim_after_expiry() {
     let mut htlc = hop::create_htlc(payment_hash, 5000, @0x0, @0x0, 3600000);
 
     // Expire the HTLC first
-    assert!(hop::expire_htlc(&mut htlc, 3600001, &ctx));
-    assert_eq!(hop::htlc_status(&htlc), hop::htlc_status_expired());
+    assert!(htlc.expire_htlc(3600001, &ctx));
+    assert_eq!(htlc.htlc_status(), hop::htlc_status_expired());
 
     // Try to claim after expiry - should return false (not abort)
-    let claimed = hop::claim_htlc(&mut htlc, preimage, &ctx);
+    let claimed = htlc.claim_htlc(preimage, &ctx);
     assert!(!claimed);
 }
 
@@ -1147,10 +1147,10 @@ fun htlc_wrong_preimage() {
     let mut htlc = hop::create_htlc(payment_hash, 5000, @0xA, @0x0, 3600000);
 
     // Try claiming with wrong preimage
-    let claimed = hop::claim_htlc(&mut htlc, b"wrong_preimage", &ctx);
+    let claimed = htlc.claim_htlc(b"wrong_preimage", &ctx);
     assert!(!claimed);
     // Should still be pending
-    assert_eq!(hop::htlc_status(&htlc), hop::htlc_status_pending());
+    assert_eq!(htlc.htlc_status(), hop::htlc_status_pending());
 }
 
 /// Test: HTLC cannot be double-claimed (second claim returns false)
@@ -1164,10 +1164,10 @@ fun htlc_double_claim() {
     let mut htlc = hop::create_htlc(payment_hash, 5000, @0xA, @0x0, 3600000);
 
     // First claim succeeds
-    assert!(hop::claim_htlc(&mut htlc, preimage, &ctx));
+    assert!(htlc.claim_htlc(preimage, &ctx));
 
     // Second claim fails (returns false)
-    assert!(!hop::claim_htlc(&mut htlc, preimage, &ctx));
+    assert!(!htlc.claim_htlc(preimage, &ctx));
 }
 
 /// Test: HTLC cannot be claimed by non-receiver (aborts with not_authorized)
@@ -1181,7 +1181,7 @@ fun htlc_claim_not_authorized() {
     let mut htlc = hop::create_htlc(payment_hash, 5000, @0xA, @0xB, 3600000);
 
     // Should abort with not_authorized (error code 0)
-    hop::claim_htlc(&mut htlc, preimage, &ctx);
+    htlc.claim_htlc(preimage, &ctx);
 }
 
 /// Test: Route exceeds maximum hops
@@ -1198,7 +1198,7 @@ fun route_exceeds_max_hops() {
     // Add 21 hops (max is 20) -> max_hops_exceeded
     let mut i = 0u64;
     while (i < 21) {
-        hop::add_hop(&mut route, b"tunnel", @0x1, 10, 3600000 - i * 60000);
+        route.add_hop(b"tunnel", @0x1, 10, 3600000 - i * 60000);
         i = i + 1u64;
     };
 }
@@ -1319,32 +1319,32 @@ fun create_tunnel_wrong_pk_length() {
 #[test, expected_failure(abort_code = sui_tunnel::hop::EInvalidHop, location = sui_tunnel::hop)]
 fun activate_already_active_route() {
     let mut route = hop::create_route(@0xA, @0xB, 10000, 1000);
-    hop::add_hop(&mut route, b"tunnel_1", @0xB, 100, 3600000);
+    route.add_hop(b"tunnel_1", @0xB, 100, 3600000);
 
-    hop::activate_route(&mut route);
+    route.activate_route();
     // Second activation should fail -> invalid_hop
-    hop::activate_route(&mut route);
+    route.activate_route();
 }
 
 /// Test: Cannot complete a route that's still in planning
 #[test, expected_failure(abort_code = sui_tunnel::hop::EInvalidHop, location = sui_tunnel::hop)]
 fun complete_planning_route() {
     let mut route = hop::create_route(@0xA, @0xB, 10000, 1000);
-    hop::add_hop(&mut route, b"tunnel_1", @0xB, 100, 3600000);
+    route.add_hop(b"tunnel_1", @0xB, 100, 3600000);
 
     // Route is still PLANNING, complete requires ACTIVE -> invalid_hop
-    hop::complete_route(&mut route);
+    route.complete_route();
 }
 
 /// Test: Cannot add hop to an active route
 #[test, expected_failure(abort_code = sui_tunnel::hop::EInvalidHop, location = sui_tunnel::hop)]
 fun add_hop_to_active_route() {
     let mut route = hop::create_route(@0xA, @0xB, 10000, 1000);
-    hop::add_hop(&mut route, b"tunnel_1", @0xB, 100, 3600000);
+    route.add_hop(b"tunnel_1", @0xB, 100, 3600000);
 
-    hop::activate_route(&mut route);
+    route.activate_route();
     // Cannot add hop after activation -> invalid_hop
-    hop::add_hop(&mut route, b"tunnel_2", @0xC, 50, 3540000);
+    route.add_hop(b"tunnel_2", @0xC, 50, 3540000);
 }
 
 /// Test: Commitment with too-short salt is rejected
@@ -1383,10 +1383,10 @@ fun combined_randomness_double_finalize() {
     let reveal_b = randomness::create_reveal(value_b, salt_b);
 
     // First finalize succeeds
-    randomness::finalize_combined_randomness(&mut combined, &reveal_a, &reveal_b);
+    combined.finalize_combined_randomness(&reveal_a, &reveal_b);
 
     // Second finalize should fail -> randomness_already_revealed
-    randomness::finalize_combined_randomness(&mut combined, &reveal_a, &reveal_b);
+    combined.finalize_combined_randomness(&reveal_a, &reveal_b);
 }
 
 /// Test: Combined randomness finalize with wrong reveal fails
@@ -1413,7 +1413,7 @@ fun combined_randomness_wrong_reveal() {
     let reveal_b = randomness::create_reveal(value_b, salt_b);
 
     // Should fail -> randomness_commitment_mismatch
-    randomness::finalize_combined_randomness(&mut combined, &wrong_reveal_a, &reveal_b);
+    combined.finalize_combined_randomness(&wrong_reveal_a, &reveal_b);
 }
 
 /// Test: Cannot access seed of unfinalized combined randomness
@@ -1436,7 +1436,7 @@ fun combined_randomness_seed_before_finalize() {
     let combined = randomness::create_combined_randomness(commitment_a, commitment_b);
 
     // Not finalized yet -> randomness_not_available
-    let _seed = randomness::combined_seed(&combined);
+    let _seed = combined.combined_seed();
 }
 
 // ============================================
@@ -1470,9 +1470,9 @@ fun tunnel_version() {
         &mut ctx,
     );
 
-    assert_eq!(tunnel::version(&t), tunnel::current_version());
-    assert_eq!(tunnel::version(&t), 1);
-    tunnel::assert_current_version(&t);
+    assert_eq!(t.version(), tunnel::current_version());
+    assert_eq!(t.version(), 1);
+    assert!(t.is_current_version());
 
     t.destroy_for_testing();
     clock.destroy_for_testing();
@@ -1507,9 +1507,9 @@ fun deposit_unified_party_a() {
 
     let coin = sui::coin::mint_for_testing<sui::sui::SUI>(1000, &mut ctx);
     // sender is @0x0 which is party_a
-    tunnel::deposit(&mut t, coin, &clock, &ctx);
-    assert_eq!(tunnel::party_a_deposit(&t), 1000);
-    assert_eq!(tunnel::party_b_deposit(&t), 0);
+    t.deposit(coin, &clock, &ctx);
+    assert_eq!(t.party_a_deposit(), 1000);
+    assert_eq!(t.party_b_deposit(), 0);
 
     t.destroy_for_testing();
     clock.destroy_for_testing();
@@ -1550,7 +1550,7 @@ fun deposit_unified_unauthorized() {
     );
 
     let coin = sui::coin::mint_for_testing<sui::sui::SUI>(1000, &mut ctx);
-    tunnel::deposit(&mut t, coin, &clock, &ctx);
+    t.deposit(coin, &clock, &ctx);
 
     t.destroy_for_testing();
     clock.destroy_for_testing();
@@ -1584,13 +1584,13 @@ fun withdraw_before_active() {
     );
 
     let coin = sui::coin::mint_for_testing<sui::sui::SUI>(1000, &mut ctx);
-    tunnel::deposit_party_a(&mut t, coin, &clock, &ctx);
-    assert_eq!(tunnel::party_a_deposit(&t), 1000);
+    t.deposit_party_a(coin, &clock, &ctx);
+    assert_eq!(t.party_a_deposit(), 1000);
 
-    let withdrawn = tunnel::withdraw_before_active(&mut t, &clock, &mut ctx);
+    let withdrawn = t.withdraw_before_active(&clock, &mut ctx);
     assert_eq!(withdrawn.value(), 1000);
-    assert_eq!(tunnel::party_a_deposit(&t), 0);
-    assert_eq!(tunnel::status(&t), tunnel::status_closed());
+    assert_eq!(t.party_a_deposit(), 0);
+    assert_eq!(t.status(), tunnel::status_closed());
 
     std::unit_test::destroy(withdrawn);
     t.destroy_for_testing();
@@ -1635,12 +1635,12 @@ fun withdraw_before_active_wrong_status() {
 
     // Deposit as party A, then withdraw to close
     let coin = sui::coin::mint_for_testing<sui::sui::SUI>(1000, &mut ctx);
-    tunnel::deposit_party_a(&mut t, coin, &clock, &ctx);
-    let withdrawn = tunnel::withdraw_before_active(&mut t, &clock, &mut ctx);
+    t.deposit_party_a(coin, &clock, &ctx);
+    let withdrawn = t.withdraw_before_active(&clock, &mut ctx);
     std::unit_test::destroy(withdrawn);
 
     // Tunnel is now CLOSED. Try withdraw again -> invalid_state
-    let _withdrawn2 = tunnel::withdraw_before_active(&mut t, &clock, &mut ctx);
+    let _withdrawn2 = t.withdraw_before_active(&clock, &mut ctx);
 
     abort
 }
@@ -1673,14 +1673,14 @@ fun withdraw_timeout() {
     );
 
     let coin = sui::coin::mint_for_testing<sui::sui::SUI>(1000, &mut ctx);
-    tunnel::deposit_party_a(&mut t, coin, &clock, &ctx);
+    t.deposit_party_a(coin, &clock, &ctx);
 
     // Advance clock past timeout
     clock.set_for_testing(1000 + 3600000);
 
-    let withdrawn = tunnel::withdraw_timeout(&mut t, &clock, &mut ctx);
+    let withdrawn = t.withdraw_timeout(&clock, &mut ctx);
     assert_eq!(withdrawn.value(), 1000);
-    assert_eq!(tunnel::status(&t), tunnel::status_closed());
+    assert_eq!(t.status(), tunnel::status_closed());
 
     std::unit_test::destroy(withdrawn);
     t.destroy_for_testing();
@@ -1721,10 +1721,10 @@ fun withdraw_timeout_not_reached() {
     );
 
     let coin = sui::coin::mint_for_testing<sui::sui::SUI>(1000, &mut ctx);
-    tunnel::deposit_party_a(&mut t, coin, &clock, &ctx);
+    t.deposit_party_a(coin, &clock, &ctx);
 
     // Don't advance clock - timeout not reached
-    let _withdrawn = tunnel::withdraw_timeout(&mut t, &clock, &mut ctx);
+    let _withdrawn = t.withdraw_timeout(&clock, &mut ctx);
 
     std::unit_test::destroy(_withdrawn);
     t.destroy_for_testing();
@@ -1760,15 +1760,15 @@ fun destroy_tunnel() {
 
     // Deposit and withdraw to get to CLOSED status
     let coin = sui::coin::mint_for_testing<sui::sui::SUI>(1000, &mut ctx);
-    tunnel::deposit_party_a(&mut t, coin, &clock, &ctx);
-    let withdrawn = tunnel::withdraw_before_active(&mut t, &clock, &mut ctx);
+    t.deposit_party_a(coin, &clock, &ctx);
+    let withdrawn = t.withdraw_before_active(&clock, &mut ctx);
     std::unit_test::destroy(withdrawn);
 
-    assert_eq!(tunnel::status(&t), tunnel::status_closed());
+    assert_eq!(t.status(), tunnel::status_closed());
 
     // Destroy the closed tunnel
-    tunnel::destroy_tunnel(&mut t, &clock, &ctx);
-    assert_eq!(tunnel::status(&t), tunnel::status_destroyed());
+    t.destroy_tunnel(&clock, &ctx);
+    assert_eq!(t.status(), tunnel::status_destroyed());
 
     t.destroy_for_testing();
     clock.destroy_for_testing();
@@ -1808,7 +1808,7 @@ fun destroy_tunnel_not_closed() {
     );
 
     // Tunnel is in CREATED status, not CLOSED -> invalid_state
-    tunnel::destroy_tunnel(&mut t, &clock, &ctx);
+    t.destroy_tunnel(&clock, &ctx);
 
     t.destroy_for_testing();
     clock.destroy_for_testing();
@@ -1819,9 +1819,9 @@ fun destroy_tunnel_not_closed() {
 fun routing_node_version() {
     let policy = hop::default_fee_policy();
     let node = hop::create_routing_node(@0x0, policy);
-    assert_eq!(hop::node_version(&node), hop::current_version());
-    assert_eq!(hop::node_version(&node), 1);
-    hop::assert_current_version(&node);
+    assert_eq!(node.node_version(), hop::current_version());
+    assert_eq!(node.node_version(), 1);
+    assert!(node.is_current_version());
 }
 
 /// Test: RoutingNode authorization - wrong sender aborts
@@ -1831,7 +1831,7 @@ fun routing_node_unauthorized() {
     let policy = hop::default_fee_policy();
     // Node address is @0xAAAA but dummy ctx sender is @0x0
     let mut node = hop::create_routing_node(@0xAAAA, policy);
-    hop::add_tunnel_to_node(&mut node, b"tunnel_1", &ctx);
+    node.add_tunnel_to_node(b"tunnel_1", &ctx);
 }
 
 /// Test: CircuitRegistry version field
@@ -1839,8 +1839,8 @@ fun routing_node_unauthorized() {
 fun registry_version() {
     let mut ctx = sui::tx_context::dummy();
     let registry = zk_verifier::create_registry(@0x1234, &mut ctx);
-    assert_eq!(zk_verifier::registry_version(&registry), zk_verifier::current_version());
-    assert_eq!(zk_verifier::registry_version(&registry), 1);
-    zk_verifier::assert_current_version(&registry);
-    zk_verifier::destroy_registry_for_testing(registry);
+    assert_eq!(registry.registry_version(), zk_verifier::current_version());
+    assert_eq!(registry.registry_version(), 1);
+    assert!(registry.is_current_version());
+    registry.destroy_registry_for_testing();
 }

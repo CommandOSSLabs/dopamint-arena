@@ -267,26 +267,26 @@ public fun add_payment_hop(
     timeout_ms: u64,
     ctx: &TxContext,
 ) {
-    assert!(ctx.sender() == hop::route_sender(&payment.route), ENotAuthorized);
+    assert!(ctx.sender() == payment.route.route_sender(), ENotAuthorized);
     assert!(payment.status == PAYMENT_CREATED, EInvalidState);
-    hop::add_hop(&mut payment.route, tunnel_id, node, fee, timeout_ms);
+    payment.route.add_hop(tunnel_id, node, fee, timeout_ms);
     payment.total_fees = payment.total_fees + fee;
 }
 
 /// Validates the payment route
 public fun validate_payment(payment: &MultiHopPayment): bool {
-    let validation = hop::validate_route(&payment.route);
-    hop::validation_valid(&validation)
+    let validation = payment.route.validate_route();
+    validation.validation_valid()
 }
 
 /// Sets up HTLCs along the route (makes payment "in flight").
 /// Only the route sender can set up HTLCs.
 public fun setup_htlcs(payment: &mut MultiHopPayment, base_timeout_ms: u64, ctx: &TxContext) {
-    assert!(ctx.sender() == hop::route_sender(&payment.route), ENotAuthorized);
+    assert!(ctx.sender() == payment.route.route_sender(), ENotAuthorized);
     assert!(payment.status == PAYMENT_CREATED, EInvalidState);
 
     let route = &payment.route;
-    let hop_count = hop::route_hop_count(route);
+    let hop_count = route.route_hop_count();
     assert!(hop_count > 0, EInvalidHop);
 
     // Create cascading timeouts
@@ -304,8 +304,8 @@ public fun setup_htlcs(payment: &mut MultiHopPayment, base_timeout_ms: u64, ctx:
     // Each hop adds its fee
     while (i > 0) {
         i = i - 1;
-        let hop_ref = hop::route_get_hop(route, i);
-        let fee = hop::hop_fee(hop_ref);
+        let hop_ref = route.route_hop(i);
+        let fee = hop_ref.hop_fee();
 
         // Amount at this hop includes fees for subsequent hops
         let htlc_amount = if (i == hop_count - 1) {
@@ -317,17 +317,17 @@ public fun setup_htlcs(payment: &mut MultiHopPayment, base_timeout_ms: u64, ctx:
         current_amount = htlc_amount;
 
         let sender_addr = if (i == 0) {
-            hop::route_sender(route)
+            route.route_sender()
         } else {
-            let prev_hop = hop::route_get_hop(route, i - 1);
-            hop::hop_node_address(prev_hop)
+            let prev_hop = route.route_hop(i - 1);
+            prev_hop.hop_node_address()
         };
 
         let htlc = hop::create_htlc(
             payment.payment_hash,
             htlc_amount,
             sender_addr,
-            hop::hop_node_address(hop_ref),
+            hop_ref.hop_node_address(),
             timeouts[i],
         );
 
@@ -337,12 +337,12 @@ public fun setup_htlcs(payment: &mut MultiHopPayment, base_timeout_ms: u64, ctx:
     // Reverse HTLCs to be in forward order
     payment.htlcs.reverse();
 
-    hop::activate_route(&mut payment.route);
+    payment.route.activate_route();
     payment.status = PAYMENT_IN_FLIGHT;
 
     event::emit(PaymentInitiated {
-        sender: hop::route_sender(&payment.route),
-        receiver: hop::route_receiver(&payment.route),
+        sender: payment.route.route_sender(),
+        receiver: payment.route.route_receiver(),
         amount: payment.amount,
         hop_count,
     });
@@ -355,7 +355,7 @@ public fun claim_payment(
     preimage: vector<u8>,
     ctx: &TxContext,
 ): bool {
-    assert!(ctx.sender() == hop::route_receiver(&payment.route), ENotAuthorized);
+    assert!(ctx.sender() == payment.route.route_receiver(), ENotAuthorized);
     assert!(payment.status == PAYMENT_IN_FLIGHT, EInvalidState);
 
     // Verify preimage matches payment hash
@@ -372,18 +372,18 @@ public fun claim_payment(
     while (i > 0) {
         i = i - 1;
         let htlc = &mut payment.htlcs[i];
-        let claimed = hop::claim_htlc_internal(htlc, preimage);
+        let claimed = htlc.claim_htlc_internal(preimage);
         assert!(claimed, EInvalidState);
     };
 
     payment.preimage = preimage;
     payment.settled_count = htlc_count;
     payment.status = PAYMENT_COMPLETED;
-    hop::complete_route(&mut payment.route);
+    payment.route.complete_route();
 
     event::emit(PaymentCompleted {
-        sender: hop::route_sender(&payment.route),
-        receiver: hop::route_receiver(&payment.route),
+        sender: payment.route.route_sender(),
+        receiver: payment.route.route_receiver(),
         amount: payment.amount,
         fees: payment.total_fees,
     });
@@ -393,7 +393,7 @@ public fun claim_payment(
 
 /// Fails the payment (timeout or error). Only the route sender can fail.
 public fun fail_payment(payment: &mut MultiHopPayment, clock: &Clock, ctx: &TxContext) {
-    assert!(ctx.sender() == hop::route_sender(&payment.route), ENotAuthorized);
+    assert!(ctx.sender() == payment.route.route_sender(), ENotAuthorized);
     assert!(
         payment.status == PAYMENT_CREATED || payment.status == PAYMENT_IN_FLIGHT,
         EInvalidState,
@@ -408,17 +408,17 @@ public fun fail_payment(payment: &mut MultiHopPayment, clock: &Clock, ctx: &TxCo
     // check — authorization is already established by the route-sender gate
     // above — and simply no-ops on HTLCs that are not yet expired.
     payment.htlcs.do_mut!(|htlc| {
-        if (hop::htlc_status(htlc) == hop::htlc_status_pending()) {
-            hop::expire_htlc_internal(htlc, current_time_ms);
+        if (htlc.htlc_status() == hop::htlc_status_pending()) {
+            htlc.expire_htlc_internal(current_time_ms);
         };
     });
 
     payment.status = PAYMENT_FAILED;
-    hop::fail_route(&mut payment.route);
+    payment.route.fail_route();
 
     event::emit(PaymentFailed {
-        sender: hop::route_sender(&payment.route),
-        receiver: hop::route_receiver(&payment.route),
+        sender: payment.route.route_sender(),
+        receiver: payment.route.route_receiver(),
         amount: payment.amount,
     });
 }
@@ -432,8 +432,8 @@ public fun create_receipt(payment: &MultiHopPayment, completed_at: u64): Payment
         preimage: payment.preimage,
         amount: payment.amount,
         fees: payment.total_fees,
-        sender: hop::route_sender(&payment.route),
-        receiver: hop::route_receiver(&payment.route),
+        sender: payment.route.route_sender(),
+        receiver: payment.route.route_receiver(),
         completed_at,
     }
 }

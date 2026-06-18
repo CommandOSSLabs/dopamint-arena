@@ -16,7 +16,7 @@ use sui_tunnel::randomness;
 fun shuffle_matches_sdk_golden() {
     let reveal_a = randomness::create_reveal(x"07", x"0102030405060708090a0b0c0d0e0f10");
     let reveal_b = randomness::create_reveal(x"2a", x"1112131415161718191a1b1c1d1e1f20");
-    let seed = randomness::combine_reveals(&reveal_a, &reveal_b);
+    let seed = reveal_a.combine_reveals(&reveal_b);
 
     let mut deck = vector<u8>[];
     let mut i = 0u8;
@@ -25,7 +25,7 @@ fun shuffle_matches_sdk_golden() {
         i = i + 1;
     };
 
-    let _final = randomness::shuffle(&seed, &mut deck);
+    let _final = seed.shuffle(&mut deck);
     assert_eq!(
         deck,
         x"1d283225010b1219072c0c29302a170a0f002b1513082d312602112e101c1405221f0e1a1e0d33092003182723161b04212f0624",

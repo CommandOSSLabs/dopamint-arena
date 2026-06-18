@@ -236,7 +236,7 @@ public fun buy<T>(
     let now = clock.timestamp_ms();
     assert!(now < auction.end_time_ms, ETimeoutReached);
 
-    let current_price = calculate_price(auction, now);
+    let current_price = auction.calculate_price(now);
     let payment_amount = payment.value();
     assert!(payment_amount >= current_price, EInsufficientBalance);
 
@@ -277,7 +277,7 @@ public fun buy_exact<T>(
     let now = clock.timestamp_ms();
     assert!(now < auction.end_time_ms, ETimeoutReached);
 
-    let current_price = calculate_price(auction, now);
+    let current_price = auction.calculate_price(now);
     let payment_amount = payment.value();
     assert!(payment_amount == current_price, EBalanceMismatch);
 

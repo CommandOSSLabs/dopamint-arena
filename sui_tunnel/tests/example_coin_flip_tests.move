@@ -61,10 +61,10 @@ fun fair_randomness_simulation() {
     let reveal_1 = randomness::create_reveal(value_1, salt_1);
     let reveal_2 = randomness::create_reveal(value_2, salt_2);
 
-    let seed = randomness::combine_reveals(&reveal_1, &reveal_2);
+    let seed = reveal_1.combine_reveals(&reveal_2);
 
     // Get flip result
-    let (result, _) = randomness::next_u8_in_range(&seed, 0, 2);
+    let (result, _) = seed.next_u8_in_range(0, 2);
 
     // Result should be 0 or 1
     assert!(result < 2);
@@ -72,8 +72,8 @@ fun fair_randomness_simulation() {
     // Same inputs should give same result (deterministic)
     let reveal_1b = randomness::create_reveal(value_1, salt_1);
     let reveal_2b = randomness::create_reveal(value_2, salt_2);
-    let seed2 = randomness::combine_reveals(&reveal_1b, &reveal_2b);
-    let (result2, _) = randomness::next_u8_in_range(&seed2, 0, 2);
+    let seed2 = reveal_1b.combine_reveals(&reveal_2b);
+    let (result2, _) = seed2.next_u8_in_range(0, 2);
 
     assert_eq!(result, result2);
 }
@@ -184,7 +184,7 @@ fun wrong_player_joins_game() {
 
     let stake2 = sui::coin::mint_for_testing<SUI>(1000, &mut ctx);
     // sender is @0x0 (player_1), but join_game requires sender == player_2 (@0xBBBB) -> not_authorized
-    example_coin_flip::join_game<SUI>(&mut game, commitment2, stake2, &ctx);
+    game.join_game<SUI>(commitment2, stake2, &ctx);
 
     std::unit_test::destroy(game);
     clock.destroy_for_testing();

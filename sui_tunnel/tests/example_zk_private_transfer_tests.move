@@ -23,42 +23,39 @@ fun transfer_status_constants() {
 #[test]
 fun balance_transfer_config() {
     let config = example_zk_private_transfer::balance_transfer_config();
-    assert_eq!(*example_zk_private_transfer::config_name(&config), b"balance_transfer");
-    assert_eq!(example_zk_private_transfer::config_circuit_type(&config), 0);
-    assert_eq!(example_zk_private_transfer::config_num_inputs(&config), 3);
-    assert_eq!(example_zk_private_transfer::config_curve_type(&config), zk_verifier::curve_bn254());
+    assert_eq!(*config.config_name(), b"balance_transfer");
+    assert_eq!(config.config_circuit_type(), 0);
+    assert_eq!(config.config_num_inputs(), 3);
+    assert_eq!(config.config_curve_type(), zk_verifier::curve_bn254());
 }
 
 #[test]
 fun range_proof_config() {
     let config = example_zk_private_transfer::range_proof_config();
-    assert_eq!(*example_zk_private_transfer::config_name(&config), b"range_proof");
-    assert_eq!(example_zk_private_transfer::config_circuit_type(&config), 1);
-    assert_eq!(example_zk_private_transfer::config_num_inputs(&config), 2);
+    assert_eq!(*config.config_name(), b"range_proof");
+    assert_eq!(config.config_circuit_type(), 1);
+    assert_eq!(config.config_num_inputs(), 2);
 }
 
 #[test]
 fun ownership_proof_config() {
     let config = example_zk_private_transfer::ownership_proof_config();
-    assert_eq!(*example_zk_private_transfer::config_name(&config), b"ownership_proof");
-    assert_eq!(example_zk_private_transfer::config_circuit_type(&config), 2);
-    assert_eq!(example_zk_private_transfer::config_num_inputs(&config), 1);
-    assert_eq!(
-        example_zk_private_transfer::config_curve_type(&config),
-        zk_verifier::curve_bls12381(),
-    );
+    assert_eq!(*config.config_name(), b"ownership_proof");
+    assert_eq!(config.config_circuit_type(), 2);
+    assert_eq!(config.config_num_inputs(), 1);
+    assert_eq!(config.config_curve_type(), zk_verifier::curve_bls12381());
 }
 
 #[test]
 fun get_circuit_config() {
     let bt = example_zk_private_transfer::get_circuit_config(0);
-    assert_eq!(example_zk_private_transfer::config_circuit_type(&bt), 0);
+    assert_eq!(bt.config_circuit_type(), 0);
 
     let rp = example_zk_private_transfer::get_circuit_config(1);
-    assert_eq!(example_zk_private_transfer::config_circuit_type(&rp), 1);
+    assert_eq!(rp.config_circuit_type(), 1);
 
     let op = example_zk_private_transfer::get_circuit_config(2);
-    assert_eq!(example_zk_private_transfer::config_circuit_type(&op), 2);
+    assert_eq!(op.config_circuit_type(), 2);
 }
 
 #[
@@ -154,11 +151,11 @@ fun commit_amount() {
 fun setup_registry() {
     let mut ctx = sui::tx_context::dummy();
     let registry = example_zk_private_transfer::setup_registry(@0x1234, &mut ctx);
-    assert_eq!(zk_verifier::registry_owner(&registry), @0x1234);
-    assert_eq!(zk_verifier::registry_circuit_count(&registry), 0);
+    assert_eq!(registry.registry_owner(), @0x1234);
+    assert_eq!(registry.registry_circuit_count(), 0);
 
     // Clean up
-    zk_verifier::destroy_registry_for_testing(registry);
+    registry.destroy_registry_for_testing();
 }
 
 #[test]
@@ -192,15 +189,15 @@ fun submit_transfer() {
         &mut ctx,
     );
 
-    assert_eq!(example_zk_private_transfer::transfer_sender(&transfer), @0x0);
-    assert_eq!(example_zk_private_transfer::transfer_receiver(&transfer), @0x2);
-    assert_eq!(example_zk_private_transfer::transfer_status(&transfer), 0); // TRANSFER_PENDING
-    assert_eq!(example_zk_private_transfer::transfer_created_at(&transfer), 0);
-    assert_eq!(example_zk_private_transfer::transfer_verified_at(&transfer), 0);
-    assert_eq!(*example_zk_private_transfer::transfer_circuit_id(&transfer), circuit_id);
-    assert_eq!(*example_zk_private_transfer::transfer_public_inputs(&transfer), inputs);
+    assert_eq!(transfer.transfer_sender(), @0x0);
+    assert_eq!(transfer.transfer_receiver(), @0x2);
+    assert_eq!(transfer.transfer_status(), 0); // TRANSFER_PENDING
+    assert_eq!(transfer.transfer_created_at(), 0);
+    assert_eq!(transfer.transfer_verified_at(), 0);
+    assert_eq!(*transfer.transfer_circuit_id(), circuit_id);
+    assert_eq!(*transfer.transfer_public_inputs(), inputs);
 
-    example_zk_private_transfer::destroy_transfer_for_testing(transfer);
+    transfer.destroy_transfer_for_testing();
     clock::destroy_for_testing(clock);
 }
 
@@ -224,7 +221,7 @@ fun submit_transfer_same_sender_receiver() {
         &clock,
         &mut ctx,
     );
-    example_zk_private_transfer::destroy_transfer_for_testing(transfer);
+    transfer.destroy_transfer_for_testing();
 
     clock::destroy_for_testing(clock);
 }
@@ -248,7 +245,7 @@ fun submit_transfer_empty_proof() {
         &clock,
         &mut ctx,
     );
-    example_zk_private_transfer::destroy_transfer_for_testing(transfer);
+    transfer.destroy_transfer_for_testing();
 
     clock::destroy_for_testing(clock);
 }
@@ -267,15 +264,15 @@ fun log_verification() {
         &mut ctx,
     );
 
-    let log = example_zk_private_transfer::log_verification(&transfer, &clock, &mut ctx);
+    let log = transfer.log_verification(&clock, &mut ctx);
 
-    assert_eq!(example_zk_private_transfer::log_transfer_id(&log), object::id(&transfer));
-    assert_eq!(*example_zk_private_transfer::log_circuit_id(&log), b"circuit_id");
-    assert_eq!(example_zk_private_transfer::log_success(&log), false); // pending transfer = not verified
-    assert_eq!(example_zk_private_transfer::log_inputs_hash(&log).length(), 32);
+    assert_eq!(log.log_transfer_id(), object::id(&transfer));
+    assert_eq!(*log.log_circuit_id(), b"circuit_id");
+    assert_eq!(log.log_success(), false); // pending transfer = not verified
+    assert_eq!(log.log_inputs_hash().length(), 32);
 
-    example_zk_private_transfer::destroy_transfer_for_testing(transfer);
-    example_zk_private_transfer::destroy_log_for_testing(log);
+    transfer.destroy_transfer_for_testing();
+    log.destroy_log_for_testing();
     clock::destroy_for_testing(clock);
 }
 
@@ -293,11 +290,11 @@ fun create_transfer_verification_result() {
         &mut ctx,
     );
 
-    let result = example_zk_private_transfer::create_transfer_verification_result(&transfer);
-    assert_eq!(zk_verifier::result_valid(&result), false); // pending
-    assert_eq!(*zk_verifier::result_circuit_id(&result), b"circuit_id");
+    let result = transfer.create_transfer_verification_result();
+    assert_eq!(result.result_valid(), false); // pending
+    assert_eq!(*result.result_circuit_id(), b"circuit_id");
 
-    example_zk_private_transfer::destroy_transfer_for_testing(transfer);
+    transfer.destroy_transfer_for_testing();
     clock::destroy_for_testing(clock);
 }
 
@@ -337,11 +334,11 @@ fun hash_to_scalar_for_inputs() {
 fun transfer_circuit_config_accessors() {
     let config = example_zk_private_transfer::balance_transfer_config();
 
-    assert_eq!(*example_zk_private_transfer::config_name(&config), b"balance_transfer");
-    assert_eq!(example_zk_private_transfer::config_circuit_type(&config), 0);
-    assert_eq!(example_zk_private_transfer::config_num_inputs(&config), 3);
-    assert_eq!(example_zk_private_transfer::config_curve_type(&config), zk_verifier::curve_bn254());
-    assert!(example_zk_private_transfer::config_description(&config).length() > 0);
+    assert_eq!(*config.config_name(), b"balance_transfer");
+    assert_eq!(config.config_circuit_type(), 0);
+    assert_eq!(config.config_num_inputs(), 3);
+    assert_eq!(config.config_curve_type(), zk_verifier::curve_bn254());
+    assert!(config.config_description().length() > 0);
 }
 
 #[test]

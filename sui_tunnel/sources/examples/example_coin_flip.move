@@ -253,7 +253,7 @@ public fun reveal_player_1<T>(
 
     // Verify commitment
     let commitment = randomness::create_commitment(&value, &salt, game.player_1, 0);
-    let computed_hash = randomness::commitment_hash(&commitment);
+    let computed_hash = commitment.commitment_hash();
     assert!(*computed_hash == game.commitment_1, ERandomnessCommitmentMismatch);
 
     let reveal = randomness::create_reveal(value, salt);
@@ -263,7 +263,7 @@ public fun reveal_player_1<T>(
 
     // If both revealed, determine winner
     if (game.reveal_2.is_some()) {
-        determine_winner(game);
+        game.determine_winner();
     };
 }
 
@@ -280,7 +280,7 @@ public fun reveal_player_2<T>(
 
     // Verify commitment
     let commitment = randomness::create_commitment(&value, &salt, game.player_2, 0);
-    let computed_hash = randomness::commitment_hash(&commitment);
+    let computed_hash = commitment.commitment_hash();
     assert!(*computed_hash == game.commitment_2, ERandomnessCommitmentMismatch);
 
     let reveal = randomness::create_reveal(value, salt);
@@ -290,7 +290,7 @@ public fun reveal_player_2<T>(
 
     // If both revealed, determine winner
     if (game.reveal_1.is_some()) {
-        determine_winner(game);
+        game.determine_winner();
     };
 }
 
@@ -299,10 +299,10 @@ fun determine_winner<T>(game: &mut CoinFlipGame<T>) {
     // Combine both reveals to get fair randomness
     let reveal_1 = game.reveal_1.borrow();
     let reveal_2 = game.reveal_2.borrow();
-    let seed = randomness::combine_reveals(reveal_1, reveal_2);
+    let seed = reveal_1.combine_reveals(reveal_2);
 
     // Get a random bit (0 or 1) for heads/tails
-    let (flip_result, _) = randomness::next_u8_in_range(&seed, 0, 2);
+    let (flip_result, _) = seed.next_u8_in_range(0, 2);
 
     game.result.fill(flip_result);
 
@@ -438,7 +438,7 @@ public fun create_player_commitment(
     player: address,
 ): vector<u8> {
     let commitment = randomness::create_commitment(value, salt, player, 0);
-    *randomness::commitment_hash(&commitment)
+    *commitment.commitment_hash()
 }
 
 // ============================================

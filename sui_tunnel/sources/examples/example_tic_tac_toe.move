@@ -218,7 +218,7 @@ public fun compute_board_hash<T>(
     moves_count: u8,
     nonce: u64,
 ): vector<u8> {
-    compute_board_hash_with_id(tunnel::id(&game.tunnel), board, moves_count, nonce)
+    compute_board_hash_with_id(game.tunnel.id(), board, moves_count, nonce)
 }
 
 /// Compute board hash from tunnel ID (avoids double-borrow).
@@ -259,7 +259,7 @@ public fun record_move<T>(
     validate_board(&board);
 
     let state_hash = compute_board_hash_with_id(
-        tunnel::id(&game.tunnel),
+        game.tunnel.id(),
         &board,
         moves_count,
         nonce,
@@ -465,7 +465,7 @@ public fun game_stake_amount<T>(g: &TicTacToeGame<T>): u64 { g.stake_amount }
 public fun game_tunnel<T>(g: &TicTacToeGame<T>): &Tunnel<T> { &g.tunnel }
 
 public fun game_total_pot<T>(g: &TicTacToeGame<T>): u64 {
-    tunnel::total_balance(&g.tunnel)
+    g.tunnel.total_balance()
 }
 
 public fun game_latest_state<T>(g: &TicTacToeGame<T>): &GameState { &g.latest_state }

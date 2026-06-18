@@ -96,6 +96,9 @@ const SECP256K1_COMPRESSED_PK_SIZE: u64 = 33;
 /// Secp256k1 uncompressed public key size
 const SECP256K1_UNCOMPRESSED_PK_SIZE: u64 = 65;
 
+/// Maximum domain length encodable in the single length prefix byte
+const MAX_DOMAIN_LEN: u64 = 255;
+
 // ============================================
 // HASH TYPE CONSTANTS (for Secp256k1)
 // ============================================
@@ -233,6 +236,11 @@ public fun is_valid_signature_length(sig_type: u8, signature: &vector<u8>): bool
 /// ## Aborts
 /// - If the signature type is not supported
 /// - If the public key or signature length is invalid
+///
+/// ## Hashing
+/// For Secp256k1, the message is hashed with SHA256 before ECDSA verification
+/// (matching the SDK's signing). Signers that hash with Keccak256 must use
+/// `verify_with_hash` with HASH_KECCAK256 instead.
 public fun verify(
     sig_type: u8,
     public_key: &vector<u8>,
@@ -257,11 +265,16 @@ public fun verify(
         // Default to SHA256 hash for secp256k1
         verify_secp256k1_internal(public_key, message, signature, HASH_SHA256)
     } else {
+        // unreachable: sig_type validated above
         false
     }
 }
 
-/// Unified verification with hash type specification (for Secp256k1)
+/// Unified verification with an explicit hash type, for Secp256k1 callers that
+/// hash with Keccak256 (e.g. Ethereum) rather than the SHA256 default of `verify`.
+/// For non-Secp256k1 schemes `hash_type` is ignored and this delegates to `verify`.
+/// Returns false on a bad signature; aborts on an unsupported type or invalid
+/// public-key/signature length.
 public fun verify_with_hash(
     sig_type: u8,
     public_key: &vector<u8>,
@@ -416,7 +429,7 @@ fun verify_secp256k1_internal(
 /// A new vector containing: domain_length (1 byte) || domain || message
 public fun create_domain_separated_message(domain: vector<u8>, message: vector<u8>): vector<u8> {
     let domain_len = domain.length();
-    assert!(domain_len <= 255, EInvalidParameter);
+    assert!(domain_len <= MAX_DOMAIN_LEN, EInvalidParameter);
 
     let mut result = vector<u8>[];
     result.push_back((domain_len as u8));
@@ -425,8 +438,10 @@ public fun create_domain_separated_message(domain: vector<u8>, message: vector<u
     result
 }
 
-/// Creates a tunnel-specific message for signing.
-/// Includes the tunnel ID for replay protection across tunnels.
+/// Generic domain-separated message helper.
+/// NOTE: not used by the tunnel protocol's signed messages, which are
+/// constructed in the `tunnel` module (with the `state_update` / `settlement` /
+/// `settlement_v2` / `htlc_lock` separators); provided as a standalone utility.
 ///
 /// ## Parameters
 /// - `tunnel_id`: The tunnel's object ID bytes
@@ -434,7 +449,9 @@ public fun create_domain_separated_message(domain: vector<u8>, message: vector<u
 /// - `data`: The actual data to sign
 ///
 /// ## Returns
-/// A new vector containing: "sui_tunnel::signature::message" || tunnel_id || nonce (8 bytes BE) || data
+/// A new vector containing: the literal `b"sui_tunnel::signature::message"` prefix
+/// (this helper's own separator, distinct from the protocol's live separators) ||
+/// tunnel_id || nonce (8 bytes BE) || data
 public fun create_tunnel_message(tunnel_id: vector<u8>, nonce: u64, data: vector<u8>): vector<u8> {
     let mut result = b"sui_tunnel::signature::message";
     result.append(tunnel_id);
@@ -488,24 +505,9 @@ public fun be_bytes_to_u64(bytes: &vector<u8>): u64 {
     (b4 << 24) | (b5 << 16) | (b6 << 8) | b7
 }
 
-/// Concatenates multiple byte vectors into one
+/// Concatenates multiple byte vectors into one, in order.
 public fun concat_bytes(vectors: vector<vector<u8>>): vector<u8> {
     let mut result = vector<u8>[];
-    let len = vectors.length();
-    let mut i = 0;
-
-    while (i < len) {
-        let vec = &vectors[i];
-        let vec_len = vec.length();
-        let mut j = 0;
-
-        while (j < vec_len) {
-            result.push_back(vec[j]);
-            j = j + 1;
-        };
-
-        i = i + 1;
-    };
-
+    vectors.do!(|v| result.append(v));
     result
 }

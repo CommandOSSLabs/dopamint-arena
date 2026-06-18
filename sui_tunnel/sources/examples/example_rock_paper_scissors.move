@@ -320,7 +320,7 @@ public fun settle_game<T>(game: &mut RPSGame<T>, ctx: &mut TxContext): GameResul
     assert!(game.status == STATUS_WAITING_REVEALS, EInvalidState);
     assert!(game.player1_revealed && game.player2_revealed, ENotRevealed);
 
-    let (winner, was_tiebreaker) = determine_winner(game);
+    let (winner, was_tiebreaker) = game.determine_winner();
 
     game.status = STATUS_COMPLETE;
 
@@ -413,7 +413,7 @@ public fun contribute_tiebreak_entropy<T>(
 ) {
     let sender = ctx.sender();
     assert!(sender == game.player1 || sender == game.player2, ENotAuthorized);
-    assert!(option::is_none(&game.tiebreak_seed), EAlreadyCommitted);
+    assert!(game.tiebreak_seed.is_none(), EAlreadyCommitted);
     assert!(!entropy.is_empty(), EEmptyInput);
 
     if (sender == game.player1) {
@@ -443,9 +443,9 @@ fun determine_winner<T>(game: &RPSGame<T>): (address, bool) {
 
     if (p1 == p2) {
         // Tie - use randomness if available
-        if (option::is_some(&game.tiebreak_seed)) {
-            let seed = option::borrow(&game.tiebreak_seed);
-            let random_byte = randomness::seed_bytes(seed)[0];
+        if (game.tiebreak_seed.is_some()) {
+            let seed = game.tiebreak_seed.borrow();
+            let random_byte = seed.seed_bytes()[0];
             if (random_byte % 2 == 0) {
                 (game.player1, true)
             } else {

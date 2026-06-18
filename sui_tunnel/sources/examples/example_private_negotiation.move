@@ -213,7 +213,7 @@ public fun compute_round_hash<T>(
     nonce: u64,
 ): vector<u8> {
     compute_round_hash_with_id(
-        tunnel::id(&channel.tunnel),
+        channel.tunnel.id(),
         rounds,
         latest_price,
         deal_reached,
@@ -262,7 +262,7 @@ public fun record_round<T>(
     assert!(rounds >= channel.latest_state.rounds, EInvalidParameter);
 
     let state_hash = compute_round_hash_with_id(
-        tunnel::id(&channel.tunnel),
+        channel.tunnel.id(),
         rounds,
         latest_price,
         deal_reached,
@@ -438,7 +438,7 @@ public fun channel_asking_price<T>(c: &NegotiationChannel<T>): u64 { c.asking_pr
 public fun channel_tunnel<T>(c: &NegotiationChannel<T>): &Tunnel<T> { &c.tunnel }
 
 public fun channel_total_balance<T>(c: &NegotiationChannel<T>): u64 {
-    tunnel::total_balance(&c.tunnel)
+    c.tunnel.total_balance()
 }
 
 public fun channel_latest_state<T>(c: &NegotiationChannel<T>): &NegotiationState {

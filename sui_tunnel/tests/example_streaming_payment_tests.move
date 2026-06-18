@@ -74,33 +74,33 @@ fun unlocked_curve_zero_partial_full() {
     );
 
     // Stream metadata recorded as expected.
-    assert_eq!(stream::stream_sender(&s), SENDER);
-    assert_eq!(stream::stream_recipient(&s), RECIPIENT);
-    assert_eq!(stream::stream_total_amount(&s), TOTAL);
-    assert_eq!(stream::stream_withdrawn_amount(&s), 0);
-    assert_eq!(stream::stream_start_time(&s), START_MS);
-    assert_eq!(stream::stream_end_time(&s), end_ms());
-    assert_eq!(stream::stream_status(&s), stream::status_active());
-    assert!(stream::stream_is_active(&s));
+    assert_eq!(s.stream_sender(), SENDER);
+    assert_eq!(s.stream_recipient(), RECIPIENT);
+    assert_eq!(s.stream_total_amount(), TOTAL);
+    assert_eq!(s.stream_withdrawn_amount(), 0);
+    assert_eq!(s.stream_start_time(), START_MS);
+    assert_eq!(s.stream_end_time(), end_ms());
+    assert_eq!(s.stream_status(), stream::status_active());
+    assert!(s.stream_is_active());
 
     // At start (current_time <= start) -> 0 unlocked, full amount remaining.
-    assert_eq!(stream::calculate_unlocked(&s, START_MS), 0);
-    assert_eq!(stream::available_balance(&s, START_MS), 0);
-    assert_eq!(stream::remaining_balance(&s, START_MS), TOTAL);
+    assert_eq!(s.calculate_unlocked(START_MS), 0);
+    assert_eq!(s.available_balance(START_MS), 0);
+    assert_eq!(s.remaining_balance(START_MS), TOTAL);
     // A time strictly before start also yields 0.
-    assert_eq!(stream::calculate_unlocked(&s, 0), 0);
+    assert_eq!(s.calculate_unlocked(0), 0);
 
     // Mid-stream (50% elapsed): 1000 * 1_800_000 / 3_600_000 == 500.
-    assert_eq!(stream::calculate_unlocked(&s, mid_ms()), 500);
-    assert_eq!(stream::available_balance(&s, mid_ms()), 500);
-    assert_eq!(stream::remaining_balance(&s, mid_ms()), 500);
+    assert_eq!(s.calculate_unlocked(mid_ms()), 500);
+    assert_eq!(s.available_balance(mid_ms()), 500);
+    assert_eq!(s.remaining_balance(mid_ms()), 500);
 
     // At end (current_time >= end) -> full amount unlocked, nothing remaining.
-    assert_eq!(stream::calculate_unlocked(&s, end_ms()), TOTAL);
-    assert_eq!(stream::available_balance(&s, end_ms()), TOTAL);
-    assert_eq!(stream::remaining_balance(&s, end_ms()), 0);
+    assert_eq!(s.calculate_unlocked(end_ms()), TOTAL);
+    assert_eq!(s.available_balance(end_ms()), TOTAL);
+    assert_eq!(s.remaining_balance(end_ms()), 0);
     // Well past end stays clamped at full.
-    assert_eq!(stream::calculate_unlocked(&s, end_ms() + 5_000_000), TOTAL);
+    assert_eq!(s.calculate_unlocked(end_ms() + 5_000_000), TOTAL);
 
     destroy(s);
     c.destroy_for_testing();
@@ -132,20 +132,20 @@ fun withdraw_mid_stream_transfers_exact_vested_amount() {
 
     // Advance clock to the halfway point and withdraw as the recipient.
     c.set_for_testing(mid_ms());
-    let expected = stream::available_balance(&s, mid_ms());
+    let expected = s.available_balance(mid_ms());
     assert_eq!(expected, 500);
 
     scenario.next_tx(RECIPIENT);
-    let receipt = stream::withdraw<SUI>(&mut s, &c, scenario.ctx());
+    let receipt = s.withdraw<SUI>(&c, scenario.ctx());
 
     // Receipt reflects the exact amount the module unlocked.
-    assert_eq!(stream::withdrawal_amount(&receipt), 500);
-    assert_eq!(stream::withdrawal_timestamp(&receipt), mid_ms());
+    assert_eq!(receipt.withdrawal_amount(), 500);
+    assert_eq!(receipt.withdrawal_timestamp(), mid_ms());
     // Stream state advanced; still active (not yet fully withdrawn).
-    assert_eq!(stream::stream_withdrawn_amount(&s), 500);
-    assert_eq!(stream::stream_status(&s), stream::status_active());
+    assert_eq!(s.stream_withdrawn_amount(), 500);
+    assert_eq!(s.stream_status(), stream::status_active());
     // Available drops to 0 right after withdrawing the unlocked slice.
-    assert_eq!(stream::available_balance(&s, mid_ms()), 0);
+    assert_eq!(s.available_balance(mid_ms()), 0);
 
     // The withdrawn funds were public_transfer-ed straight to the recipient.
     scenario.next_tx(RECIPIENT);
@@ -178,11 +178,11 @@ fun withdraw_after_end_completes_stream() {
 
     c.set_for_testing(end_ms());
     scenario.next_tx(RECIPIENT);
-    let receipt = stream::withdraw<SUI>(&mut s, &c, scenario.ctx());
+    let receipt = s.withdraw<SUI>(&c, scenario.ctx());
 
-    assert_eq!(stream::withdrawal_amount(&receipt), TOTAL);
-    assert_eq!(stream::stream_withdrawn_amount(&s), TOTAL);
-    assert_eq!(stream::stream_status(&s), stream::status_completed());
+    assert_eq!(receipt.withdrawal_amount(), TOTAL);
+    assert_eq!(s.stream_withdrawn_amount(), TOTAL);
+    assert_eq!(s.stream_status(), stream::status_completed());
 
     scenario.next_tx(RECIPIENT);
     let withdrawn = scenario.take_from_address<coin::Coin<SUI>>(RECIPIENT);
@@ -219,12 +219,12 @@ fun cancel_mid_stream_refunds_unvested_remainder() {
 
     // Cancel halfway, as the sender (the default scenario sender).
     c.set_for_testing(mid_ms());
-    let receipt = stream::cancel_stream<SUI>(&mut s, &c, scenario.ctx());
+    let receipt = s.cancel_stream<SUI>(&c, scenario.ctx());
 
     // unlocked = 500, withdrawn = 0 -> recipient earns 500, refund = 1000 - 500.
-    assert_eq!(stream::cancellation_refunded(&receipt), 500);
-    assert_eq!(stream::cancellation_recipient_received(&receipt), 500);
-    assert_eq!(stream::stream_status(&s), stream::status_cancelled());
+    assert_eq!(receipt.cancellation_refunded(), 500);
+    assert_eq!(receipt.cancellation_recipient_received(), 500);
+    assert_eq!(s.stream_status(), stream::status_cancelled());
 
     // Recipient received its earned 500; sender was refunded the unvested 500.
     scenario.next_tx(SENDER);
@@ -271,7 +271,7 @@ fun withdraw_before_anything_vested_aborts() {
     // Clock still at start -> unlocked == 0, available == 0 -> abort.
     // The abort happens inside withdraw(); the receipt (has drop) is never bound.
     scenario.next_tx(RECIPIENT);
-    let _ = stream::withdraw<SUI>(&mut s, &c, scenario.ctx());
+    let _ = s.withdraw<SUI>(&c, scenario.ctx());
 
     destroy(s);
     c.destroy_for_testing();
@@ -305,7 +305,7 @@ fun non_recipient_withdraw_aborts() {
     // Sender (the default scenario sender) is not the recipient -> not_authorized.
     // The abort happens inside withdraw(); the receipt (has drop) is never bound.
     c.set_for_testing(mid_ms());
-    let _ = stream::withdraw<SUI>(&mut s, &c, scenario.ctx());
+    let _ = s.withdraw<SUI>(&c, scenario.ctx());
 
     destroy(s);
     c.destroy_for_testing();

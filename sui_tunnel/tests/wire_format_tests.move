@@ -34,7 +34,7 @@ fun state_update_matches_sdk_golden() {
         1000,
         2000,
     );
-    let bytes = tunnel::serialize_state_update(&data);
+    let bytes = data.serialize_state_update();
     assert_eq!(
         bytes,
         x"7375695f74756e6e656c3a3a73746174655f75706461746500000000000000000000000000000000000000000000000000000000000000ab0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20000000000000002a00000000499602d200000000000003e800000000000007d0",
@@ -45,7 +45,7 @@ fun state_update_matches_sdk_golden() {
 fun settlement_matches_sdk_golden() {
     let id = sui::object::id_from_address(@0xab);
     let data = tunnel::create_settlement_data_for_testing(id, 1000, 2000, 43, 1234567890);
-    let bytes = tunnel::serialize_settlement(&data);
+    let bytes = data.serialize_settlement();
     assert_eq!(
         bytes,
         x"7375695f74756e6e656c3a3a736574746c656d656e7400000000000000000000000000000000000000000000000000000000000000ab00000000000003e800000000000007d0000000000000002b00000000499602d2",
@@ -64,7 +64,7 @@ fun settlement_with_root_matches_sdk_golden() {
         1234567890,
         STATE_HASH,
     );
-    let bytes = tunnel::serialize_settlement_with_root(&data);
+    let bytes = data.serialize_settlement_with_root();
     assert_eq!(
         bytes,
         x"7375695f74756e6e656c3a3a736574746c656d656e745f763200000000000000000000000000000000000000000000000000000000000000ab00000000000003e800000000000007d0000000000000002b00000000499602d20102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
@@ -82,7 +82,7 @@ fun htlc_lock_matches_sdk_golden() {
         @0xbb,
         9999999,
     );
-    let bytes = tunnel::serialize_htlc_lock(&data);
+    let bytes = data.serialize_htlc_lock();
     assert_eq!(
         bytes,
         x"7375695f74756e6e656c3a3a68746c635f6c6f636b00000000000000000000000000000000000000000000000000000000000000ab0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f2000000000000001f400000000000000000000000000000000000000000000000000000000000000aa00000000000000000000000000000000000000000000000000000000000000bb000000000098967f",
@@ -99,7 +99,7 @@ fun commitment_matches_sdk_golden() {
         0,
     );
     assert_eq!(
-        *randomness::commitment_hash(&commitment),
+        *commitment.commitment_hash(),
         x"9c5d7de7c93e176f232424794b460112bbc1e3edad6af9da200a121e7033f9f9",
     );
 }
@@ -108,9 +108,9 @@ fun commitment_matches_sdk_golden() {
 fun combined_seed_matches_sdk_golden() {
     let reveal_a = randomness::create_reveal(x"07", x"0102030405060708090a0b0c0d0e0f10");
     let reveal_b = randomness::create_reveal(x"2a", x"1112131415161718191a1b1c1d1e1f20");
-    let seed = randomness::combine_reveals(&reveal_a, &reveal_b);
+    let seed = reveal_a.combine_reveals(&reveal_b);
     assert_eq!(
-        *randomness::seed_bytes(&seed),
+        *seed.seed_bytes(),
         x"3783060fbc9a59b74485cbd081355de0b78609fb6db3b76d0c97f937dac4b795",
     );
 }
@@ -138,7 +138,7 @@ fun sdk_signed_state_update_verifies_onchain() {
         1000,
         2000,
     );
-    let msg = tunnel::serialize_state_update(&data);
+    let msg = data.serialize_state_update();
 
     let pk_a = x"79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664";
     let pk_b = x"e7f162a10bec559afea195e4dce84b69568d5d2cb0963eb446c0685e2b17f2f0";

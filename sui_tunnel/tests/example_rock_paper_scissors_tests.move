@@ -94,9 +94,9 @@ fun full_round_player1_wins() {
     {
         let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
         let stake = coin::mint_for_testing<SUI>(STAKE, scenario.ctx());
-        rps::join_game<SUI>(&mut game, stake, scenario.ctx());
-        assert_eq!(rps::game_status(&game), rps::status_waiting_commits());
-        assert_eq!(rps::game_stake_amount(&game), STAKE);
+        game.join_game<SUI>(stake, scenario.ctx());
+        assert_eq!(game.game_status(), rps::status_waiting_commits());
+        assert_eq!(game.game_stake_amount(), STAKE);
         test_scenario::return_shared(game);
     };
 
@@ -104,9 +104,9 @@ fun full_round_player1_wins() {
     scenario.next_tx(PLAYER1);
     {
         let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
-        rps::commit_move<SUI>(&mut game, make_commitment(rock, salt_a()), &clock, scenario.ctx());
+        game.commit_move<SUI>(make_commitment(rock, salt_a()), &clock, scenario.ctx());
         // Only one commit so far: still waiting for commits.
-        assert_eq!(rps::game_status(&game), rps::status_waiting_commits());
+        assert_eq!(game.game_status(), rps::status_waiting_commits());
         test_scenario::return_shared(game);
     };
 
@@ -114,13 +114,12 @@ fun full_round_player1_wins() {
     scenario.next_tx(PLAYER2);
     {
         let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
-        rps::commit_move<SUI>(
-            &mut game,
+        game.commit_move<SUI>(
             make_commitment(scissors, salt_b()),
             &clock,
             scenario.ctx(),
         );
-        assert_eq!(rps::game_status(&game), rps::status_waiting_reveals());
+        assert_eq!(game.game_status(), rps::status_waiting_reveals());
         test_scenario::return_shared(game);
     };
 
@@ -128,9 +127,9 @@ fun full_round_player1_wins() {
     scenario.next_tx(PLAYER1);
     {
         let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
-        rps::reveal_move<SUI>(&mut game, rock, salt_a(), scenario.ctx());
-        assert!(rps::game_player1_revealed(&game));
-        assert!(!rps::game_player2_revealed(&game));
+        game.reveal_move<SUI>(rock, salt_a(), scenario.ctx());
+        assert!(game.game_player1_revealed());
+        assert!(!game.game_player2_revealed());
         test_scenario::return_shared(game);
     };
 
@@ -138,8 +137,8 @@ fun full_round_player1_wins() {
     scenario.next_tx(PLAYER2);
     {
         let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
-        rps::reveal_move<SUI>(&mut game, scissors, salt_b(), scenario.ctx());
-        assert!(rps::game_player2_revealed(&game));
+        game.reveal_move<SUI>(scissors, salt_b(), scenario.ctx());
+        assert!(game.game_player2_revealed());
         test_scenario::return_shared(game);
     };
 
@@ -147,12 +146,12 @@ fun full_round_player1_wins() {
     scenario.next_tx(PLAYER1);
     {
         let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
-        let result = rps::settle_game<SUI>(&mut game, scenario.ctx());
-        assert_eq!(rps::result_winner(&result), PLAYER1);
-        assert_eq!(rps::result_player1_move(&result), rock);
-        assert_eq!(rps::result_player2_move(&result), scissors);
-        assert!(!rps::result_was_tiebreaker(&result));
-        assert_eq!(rps::game_status(&game), rps::status_complete());
+        let result = game.settle_game<SUI>(scenario.ctx());
+        assert_eq!(result.result_winner(), PLAYER1);
+        assert_eq!(result.result_player1_move(), rock);
+        assert_eq!(result.result_player2_move(), scissors);
+        assert!(!result.result_was_tiebreaker());
+        assert_eq!(game.game_status(), rps::status_complete());
         test_scenario::return_shared(game);
     };
 
@@ -160,7 +159,7 @@ fun full_round_player1_wins() {
     scenario.next_tx(PLAYER1);
     {
         let prize = scenario.take_from_address<Coin<SUI>>(PLAYER1);
-        assert_eq!(coin::value(&prize), 2 * STAKE);
+        assert_eq!(prize.value(), 2 * STAKE);
         coin::burn_for_testing(prize);
     };
     // Player2 must have received nothing.
@@ -193,15 +192,14 @@ fun full_round_player2_wins() {
     {
         let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
         let stake = coin::mint_for_testing<SUI>(STAKE, scenario.ctx());
-        rps::join_game<SUI>(&mut game, stake, scenario.ctx());
+        game.join_game<SUI>(stake, scenario.ctx());
         test_scenario::return_shared(game);
     };
 
     scenario.next_tx(PLAYER1);
     {
         let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
-        rps::commit_move<SUI>(
-            &mut game,
+        game.commit_move<SUI>(
             make_commitment(scissors, salt_a()),
             &clock,
             scenario.ctx(),
@@ -212,21 +210,21 @@ fun full_round_player2_wins() {
     scenario.next_tx(PLAYER2);
     {
         let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
-        rps::commit_move<SUI>(&mut game, make_commitment(rock, salt_b()), &clock, scenario.ctx());
+        game.commit_move<SUI>(make_commitment(rock, salt_b()), &clock, scenario.ctx());
         test_scenario::return_shared(game);
     };
 
     scenario.next_tx(PLAYER1);
     {
         let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
-        rps::reveal_move<SUI>(&mut game, scissors, salt_a(), scenario.ctx());
+        game.reveal_move<SUI>(scissors, salt_a(), scenario.ctx());
         test_scenario::return_shared(game);
     };
 
     scenario.next_tx(PLAYER2);
     {
         let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
-        rps::reveal_move<SUI>(&mut game, rock, salt_b(), scenario.ctx());
+        game.reveal_move<SUI>(rock, salt_b(), scenario.ctx());
         test_scenario::return_shared(game);
     };
 
@@ -234,16 +232,16 @@ fun full_round_player2_wins() {
     scenario.next_tx(PLAYER2);
     {
         let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
-        let result = rps::settle_game<SUI>(&mut game, scenario.ctx());
-        assert_eq!(rps::result_winner(&result), PLAYER2);
-        assert!(!rps::result_was_tiebreaker(&result));
+        let result = game.settle_game<SUI>(scenario.ctx());
+        assert_eq!(result.result_winner(), PLAYER2);
+        assert!(!result.result_was_tiebreaker());
         test_scenario::return_shared(game);
     };
 
     scenario.next_tx(PLAYER2);
     {
         let prize = scenario.take_from_address<Coin<SUI>>(PLAYER2);
-        assert_eq!(coin::value(&prize), 2 * STAKE);
+        assert_eq!(prize.value(), 2 * STAKE);
         coin::burn_for_testing(prize);
     };
     assert!(!test_scenario::has_most_recent_for_address<Coin<SUI>>(PLAYER1));
@@ -276,7 +274,7 @@ fun tie_resolved_by_tiebreak_entropy() {
     {
         let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
         let stake = coin::mint_for_testing<SUI>(STAKE, scenario.ctx());
-        rps::join_game<SUI>(&mut game, stake, scenario.ctx());
+        game.join_game<SUI>(stake, scenario.ctx());
         test_scenario::return_shared(game);
     };
 
@@ -284,13 +282,13 @@ fun tie_resolved_by_tiebreak_entropy() {
     scenario.next_tx(PLAYER1);
     {
         let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
-        rps::commit_move<SUI>(&mut game, make_commitment(rock, salt_a()), &clock, scenario.ctx());
+        game.commit_move<SUI>(make_commitment(rock, salt_a()), &clock, scenario.ctx());
         test_scenario::return_shared(game);
     };
     scenario.next_tx(PLAYER2);
     {
         let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
-        rps::commit_move<SUI>(&mut game, make_commitment(rock, salt_b()), &clock, scenario.ctx());
+        game.commit_move<SUI>(make_commitment(rock, salt_b()), &clock, scenario.ctx());
         test_scenario::return_shared(game);
     };
 
@@ -298,13 +296,13 @@ fun tie_resolved_by_tiebreak_entropy() {
     scenario.next_tx(PLAYER1);
     {
         let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
-        rps::reveal_move<SUI>(&mut game, rock, salt_a(), scenario.ctx());
+        game.reveal_move<SUI>(rock, salt_a(), scenario.ctx());
         test_scenario::return_shared(game);
     };
     scenario.next_tx(PLAYER2);
     {
         let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
-        rps::reveal_move<SUI>(&mut game, rock, salt_b(), scenario.ctx());
+        game.reveal_move<SUI>(rock, salt_b(), scenario.ctx());
         test_scenario::return_shared(game);
     };
 
@@ -312,8 +310,7 @@ fun tie_resolved_by_tiebreak_entropy() {
     scenario.next_tx(PLAYER1);
     {
         let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
-        rps::contribute_tiebreak_entropy<SUI>(
-            &mut game,
+        game.contribute_tiebreak_entropy<SUI>(
             b"entropy-from-player-one",
             scenario.ctx(),
         );
@@ -322,8 +319,7 @@ fun tie_resolved_by_tiebreak_entropy() {
     scenario.next_tx(PLAYER2);
     {
         let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
-        rps::contribute_tiebreak_entropy<SUI>(
-            &mut game,
+        game.contribute_tiebreak_entropy<SUI>(
             b"entropy-from-player-two",
             scenario.ctx(),
         );
@@ -334,13 +330,13 @@ fun tie_resolved_by_tiebreak_entropy() {
     scenario.next_tx(PLAYER1);
     let winner = {
         let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
-        let result = rps::settle_game<SUI>(&mut game, scenario.ctx());
-        let w = rps::result_winner(&result);
+        let result = game.settle_game<SUI>(scenario.ctx());
+        let w = result.result_winner();
         assert!(w == PLAYER1 || w == PLAYER2);
-        assert!(rps::result_was_tiebreaker(&result));
-        assert_eq!(rps::result_player1_move(&result), rock);
-        assert_eq!(rps::result_player2_move(&result), rock);
-        assert_eq!(rps::game_status(&game), rps::status_complete());
+        assert!(result.result_was_tiebreaker());
+        assert_eq!(result.result_player1_move(), rock);
+        assert_eq!(result.result_player2_move(), rock);
+        assert_eq!(game.game_status(), rps::status_complete());
         test_scenario::return_shared(game);
         w
     };
@@ -349,7 +345,7 @@ fun tie_resolved_by_tiebreak_entropy() {
     scenario.next_tx(winner);
     {
         let prize = scenario.take_from_address<Coin<SUI>>(winner);
-        assert_eq!(coin::value(&prize), 2 * STAKE);
+        assert_eq!(prize.value(), 2 * STAKE);
         coin::burn_for_testing(prize);
     };
 
@@ -378,7 +374,7 @@ fun cancel_commit_timeout_refunds_both() {
     {
         let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
         let stake = coin::mint_for_testing<SUI>(STAKE, scenario.ctx());
-        rps::join_game<SUI>(&mut game, stake, scenario.ctx());
+        game.join_game<SUI>(stake, scenario.ctx());
         test_scenario::return_shared(game);
     };
 
@@ -388,8 +384,8 @@ fun cancel_commit_timeout_refunds_both() {
     scenario.next_tx(PLAYER1);
     {
         let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
-        rps::cancel_commit_timeout<SUI>(&mut game, &clock, scenario.ctx());
-        assert_eq!(rps::game_status(&game), rps::status_cancelled());
+        game.cancel_commit_timeout<SUI>(&clock, scenario.ctx());
+        assert_eq!(game.game_status(), rps::status_cancelled());
         test_scenario::return_shared(game);
     };
 
@@ -397,11 +393,11 @@ fun cancel_commit_timeout_refunds_both() {
     scenario.next_tx(PLAYER1);
     {
         let refund1 = scenario.take_from_address<Coin<SUI>>(PLAYER1);
-        assert_eq!(coin::value(&refund1), STAKE);
+        assert_eq!(refund1.value(), STAKE);
         coin::burn_for_testing(refund1);
 
         let refund2 = scenario.take_from_address<Coin<SUI>>(PLAYER2);
-        assert_eq!(coin::value(&refund2), STAKE);
+        assert_eq!(refund2.value(), STAKE);
         coin::burn_for_testing(refund2);
     };
 
@@ -430,15 +426,15 @@ fun cancel_commit_timeout_refunds_creator_only() {
     scenario.next_tx(PLAYER1);
     {
         let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
-        rps::cancel_commit_timeout<SUI>(&mut game, &clock, scenario.ctx());
-        assert_eq!(rps::game_status(&game), rps::status_cancelled());
+        game.cancel_commit_timeout<SUI>(&clock, scenario.ctx());
+        assert_eq!(game.game_status(), rps::status_cancelled());
         test_scenario::return_shared(game);
     };
 
     scenario.next_tx(PLAYER1);
     {
         let refund = scenario.take_from_address<Coin<SUI>>(PLAYER1);
-        assert_eq!(coin::value(&refund), STAKE);
+        assert_eq!(refund.value(), STAKE);
         coin::burn_for_testing(refund);
     };
     // Player2 never deposited, so it must receive nothing.
@@ -471,7 +467,7 @@ fun claim_reveal_timeout_revealer_wins() {
     {
         let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
         let stake = coin::mint_for_testing<SUI>(STAKE, scenario.ctx());
-        rps::join_game<SUI>(&mut game, stake, scenario.ctx());
+        game.join_game<SUI>(stake, scenario.ctx());
         test_scenario::return_shared(game);
     };
 
@@ -479,13 +475,13 @@ fun claim_reveal_timeout_revealer_wins() {
     scenario.next_tx(PLAYER1);
     {
         let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
-        rps::commit_move<SUI>(&mut game, make_commitment(rock, salt_a()), &clock, scenario.ctx());
+        game.commit_move<SUI>(make_commitment(rock, salt_a()), &clock, scenario.ctx());
         test_scenario::return_shared(game);
     };
     scenario.next_tx(PLAYER2);
     {
         let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
-        rps::commit_move<SUI>(&mut game, make_commitment(paper, salt_b()), &clock, scenario.ctx());
+        game.commit_move<SUI>(make_commitment(paper, salt_b()), &clock, scenario.ctx());
         test_scenario::return_shared(game);
     };
 
@@ -493,7 +489,7 @@ fun claim_reveal_timeout_revealer_wins() {
     scenario.next_tx(PLAYER1);
     {
         let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
-        rps::reveal_move<SUI>(&mut game, rock, salt_a(), scenario.ctx());
+        game.reveal_move<SUI>(rock, salt_a(), scenario.ctx());
         test_scenario::return_shared(game);
     };
 
@@ -503,8 +499,8 @@ fun claim_reveal_timeout_revealer_wins() {
     scenario.next_tx(PLAYER1);
     {
         let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
-        rps::claim_reveal_timeout<SUI>(&mut game, &clock, scenario.ctx());
-        assert_eq!(rps::game_status(&game), rps::status_complete());
+        game.claim_reveal_timeout<SUI>(&clock, scenario.ctx());
+        assert_eq!(game.game_status(), rps::status_complete());
         test_scenario::return_shared(game);
     };
 
@@ -512,7 +508,7 @@ fun claim_reveal_timeout_revealer_wins() {
     scenario.next_tx(PLAYER1);
     {
         let prize = scenario.take_from_address<Coin<SUI>>(PLAYER1);
-        assert_eq!(coin::value(&prize), 2 * STAKE);
+        assert_eq!(prize.value(), 2 * STAKE);
         coin::burn_for_testing(prize);
     };
     assert!(!test_scenario::has_most_recent_for_address<Coin<SUI>>(PLAYER2));
@@ -548,20 +544,19 @@ fun reveal_commitment_mismatch_aborts() {
     {
         let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
         let stake = coin::mint_for_testing<SUI>(STAKE, scenario.ctx());
-        rps::join_game<SUI>(&mut game, stake, scenario.ctx());
+        game.join_game<SUI>(stake, scenario.ctx());
         test_scenario::return_shared(game);
     };
     scenario.next_tx(PLAYER1);
     {
         let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
-        rps::commit_move<SUI>(&mut game, make_commitment(rock, salt_a()), &clock, scenario.ctx());
+        game.commit_move<SUI>(make_commitment(rock, salt_a()), &clock, scenario.ctx());
         test_scenario::return_shared(game);
     };
     scenario.next_tx(PLAYER2);
     {
         let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
-        rps::commit_move<SUI>(
-            &mut game,
+        game.commit_move<SUI>(
             make_commitment(scissors, salt_b()),
             &clock,
             scenario.ctx(),
@@ -573,7 +568,7 @@ fun reveal_commitment_mismatch_aborts() {
     scenario.next_tx(PLAYER1);
     {
         let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
-        rps::reveal_move<SUI>(&mut game, scissors, salt_a(), scenario.ctx());
+        game.reveal_move<SUI>(scissors, salt_a(), scenario.ctx());
         test_scenario::return_shared(game);
     };
 
@@ -604,16 +599,16 @@ fun double_commit_aborts() {
     {
         let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
         let stake = coin::mint_for_testing<SUI>(STAKE, scenario.ctx());
-        rps::join_game<SUI>(&mut game, stake, scenario.ctx());
+        game.join_game<SUI>(stake, scenario.ctx());
         test_scenario::return_shared(game);
     };
 
     scenario.next_tx(PLAYER1);
     {
         let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
-        rps::commit_move<SUI>(&mut game, make_commitment(rock, salt_a()), &clock, scenario.ctx());
+        game.commit_move<SUI>(make_commitment(rock, salt_a()), &clock, scenario.ctx());
         // Same player commits a second time -> already_committed.
-        rps::commit_move<SUI>(&mut game, make_commitment(paper, salt_a()), &clock, scenario.ctx());
+        game.commit_move<SUI>(make_commitment(paper, salt_a()), &clock, scenario.ctx());
         test_scenario::return_shared(game);
     };
 
@@ -643,7 +638,7 @@ fun unauthorized_commit_aborts() {
     scenario.next_tx(OUTSIDER);
     {
         let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
-        rps::commit_move<SUI>(&mut game, make_commitment(rock, salt_a()), &clock, scenario.ctx());
+        game.commit_move<SUI>(make_commitment(rock, salt_a()), &clock, scenario.ctx());
         test_scenario::return_shared(game);
     };
 
@@ -672,7 +667,7 @@ fun join_wrong_stake_aborts() {
     {
         let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
         let stake = coin::mint_for_testing<SUI>(STAKE + 1, scenario.ctx());
-        rps::join_game<SUI>(&mut game, stake, scenario.ctx());
+        game.join_game<SUI>(stake, scenario.ctx());
         test_scenario::return_shared(game);
     };
 
@@ -703,20 +698,19 @@ fun settle_before_reveal_aborts() {
     {
         let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
         let stake = coin::mint_for_testing<SUI>(STAKE, scenario.ctx());
-        rps::join_game<SUI>(&mut game, stake, scenario.ctx());
+        game.join_game<SUI>(stake, scenario.ctx());
         test_scenario::return_shared(game);
     };
     scenario.next_tx(PLAYER1);
     {
         let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
-        rps::commit_move<SUI>(&mut game, make_commitment(rock, salt_a()), &clock, scenario.ctx());
+        game.commit_move<SUI>(make_commitment(rock, salt_a()), &clock, scenario.ctx());
         test_scenario::return_shared(game);
     };
     scenario.next_tx(PLAYER2);
     {
         let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
-        rps::commit_move<SUI>(
-            &mut game,
+        game.commit_move<SUI>(
             make_commitment(scissors, salt_b()),
             &clock,
             scenario.ctx(),
@@ -728,8 +722,8 @@ fun settle_before_reveal_aborts() {
     scenario.next_tx(PLAYER1);
     {
         let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
-        rps::reveal_move<SUI>(&mut game, rock, salt_a(), scenario.ctx());
-        let result = rps::settle_game<SUI>(&mut game, scenario.ctx());
+        game.reveal_move<SUI>(rock, salt_a(), scenario.ctx());
+        let result = game.settle_game<SUI>(scenario.ctx());
         destroy(result);
         test_scenario::return_shared(game);
     };
@@ -759,7 +753,7 @@ fun cancel_commit_timeout_too_early_aborts() {
     scenario.next_tx(PLAYER1);
     {
         let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
-        rps::cancel_commit_timeout<SUI>(&mut game, &clock, scenario.ctx());
+        game.cancel_commit_timeout<SUI>(&clock, scenario.ctx());
         test_scenario::return_shared(game);
     };
 
@@ -789,31 +783,31 @@ fun tie_without_entropy_aborts() {
     {
         let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
         let stake = coin::mint_for_testing<SUI>(STAKE, scenario.ctx());
-        rps::join_game<SUI>(&mut game, stake, scenario.ctx());
+        game.join_game<SUI>(stake, scenario.ctx());
         test_scenario::return_shared(game);
     };
     scenario.next_tx(PLAYER1);
     {
         let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
-        rps::commit_move<SUI>(&mut game, make_commitment(rock, salt_a()), &clock, scenario.ctx());
+        game.commit_move<SUI>(make_commitment(rock, salt_a()), &clock, scenario.ctx());
         test_scenario::return_shared(game);
     };
     scenario.next_tx(PLAYER2);
     {
         let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
-        rps::commit_move<SUI>(&mut game, make_commitment(rock, salt_b()), &clock, scenario.ctx());
+        game.commit_move<SUI>(make_commitment(rock, salt_b()), &clock, scenario.ctx());
         test_scenario::return_shared(game);
     };
     scenario.next_tx(PLAYER1);
     {
         let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
-        rps::reveal_move<SUI>(&mut game, rock, salt_a(), scenario.ctx());
+        game.reveal_move<SUI>(rock, salt_a(), scenario.ctx());
         test_scenario::return_shared(game);
     };
     scenario.next_tx(PLAYER2);
     {
         let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
-        rps::reveal_move<SUI>(&mut game, rock, salt_b(), scenario.ctx());
+        game.reveal_move<SUI>(rock, salt_b(), scenario.ctx());
         test_scenario::return_shared(game);
     };
 
@@ -821,7 +815,7 @@ fun tie_without_entropy_aborts() {
     scenario.next_tx(PLAYER1);
     {
         let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
-        let result = rps::settle_game<SUI>(&mut game, scenario.ctx());
+        let result = game.settle_game<SUI>(scenario.ctx());
         destroy(result);
         test_scenario::return_shared(game);
     };

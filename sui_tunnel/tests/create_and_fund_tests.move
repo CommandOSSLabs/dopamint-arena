@@ -50,10 +50,10 @@ fun create_and_fund_opens_active_from_non_party_funder() {
     let t = scenario.take_shared<Tunnel<SUI>>();
 
     // Funding both sides activates the tunnel even though the funder is not a party.
-    assert_eq!(tunnel::is_active(&t), true);
-    assert_eq!(tunnel::total_balance(&t), a_amount + b_amount);
-    assert_eq!(tunnel::party_a_deposit(&t), a_amount);
-    assert_eq!(tunnel::party_b_deposit(&t), b_amount);
+    assert_eq!(t.is_active(), true);
+    assert_eq!(t.total_balance(), a_amount + b_amount);
+    assert_eq!(t.party_a_deposit(), a_amount);
+    assert_eq!(t.party_b_deposit(), b_amount);
 
     test_scenario::return_shared(t);
     clock.destroy_for_testing();
@@ -112,11 +112,11 @@ fun one_funder_opens_and_activates_five_tunnels() {
     let mut j = 0;
     while (j < n) {
         let t = scenario.take_shared_by_id<Tunnel<SUI>>(*tunnel_ids.borrow(j));
-        assert_eq!(tunnel::is_active(&t), true);
-        let a = tunnel::party_a_deposit(&t);
-        let b = tunnel::party_b_deposit(&t);
+        assert_eq!(t.is_active(), true);
+        let a = t.party_a_deposit();
+        let b = t.party_b_deposit();
         assert_eq!(a, b * 4);
-        assert_eq!(tunnel::total_balance(&t), a + b);
+        assert_eq!(t.total_balance(), a + b);
         totals.push_back(a + b);
         test_scenario::return_shared(t);
         j = j + 1;
