@@ -207,6 +207,34 @@ test("receiver rejects a MOVE whose stateHash != re-derived hash", () => {
   assert.equal(dtB.nonce, 0n, "rejected MOVE must not advance state");
 });
 
+// `displayState` is what the UI renders: the locally-applied, already-signed pending move
+// shown immediately, so the proposer's own move never waits a co-sign round-trip to appear.
+// Confirmed `state` (the settlement/security source of truth) must stay put until the ACK.
+test("displayState reflects a proposed move before the ACK; confirmed state does not", () => {
+  const keyA = generateKeyPair();
+  const keyB = generateKeyPair();
+  const e = endpoints(keyA, keyB, "0xa11ce", "0xb0b");
+  const m = makeManual();
+  const dtA = new DistributedTunnel(
+    counterProtocol,
+    { tunnelId: "0x7", self: e.aSelf, opponent: e.aOpp, selfParty: "A" as Party },
+    m.transport,
+    BAL,
+  );
+  dtA.propose(0, 100n);
+  assert.equal(dtA.nonce, 0n, "confirmed state must not advance before ACK");
+  assert.equal((dtA.state as CounterState).count, 0, "confirmed state unchanged");
+  assert.equal((dtA.displayState as CounterState).count, 1, "display state shows the pending move");
+  assert.equal((dtA.displayState as CounterState).turn, "B", "display state flips the turn");
+});
+
+test("displayState collapses to confirmed state once the ACK lands", () => {
+  const { dtA } = makePair(); // synchronous loopback completes MOVE->ACK
+  dtA.propose(1, 100n);
+  assert.equal(dtA.nonce, 1n, "confirmed after ACK");
+  assert.strictEqual(dtA.displayState, dtA.state, "no pending → displayState === confirmed state");
+});
+
 test("proposer advances only on a valid ACK", () => {
   const keyA = generateKeyPair();
   const keyB = generateKeyPair();
