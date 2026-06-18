@@ -3,6 +3,13 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { fileURLToPath, URL } from "node:url";
 
+// Same-origin in dev, mirroring the prod CloudFront `/v1/*` behavior: route /v1 (HTTP +
+// the /v1/mp WebSocket) to the ALB so the browser issues same-origin requests. With this,
+// VITE_BACKEND_URL stays empty everywhere (prod is same-origin via CloudFront), which also
+// sidesteps the https-page→http-ALB mixed-content block on the deployed frontend.
+const BACKEND_ALB =
+  "http://dopamint-dev-alb-0fac7e0-1152788681.us-east-1.elb.amazonaws.com";
+
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
   const pkgId =
@@ -10,6 +17,13 @@ export default defineConfig(({ mode }) => {
     "0x0b89fe86e42cdbfd1e614757a83d014b455d12923d0dded58842ab18f8a5a22b";
   return {
     plugins: [react(), tailwindcss()],
+    server: {
+      port: 5074,
+      strictPort: true,
+      proxy: {
+        "/v1": { target: BACKEND_ALB, changeOrigin: true, ws: true },
+      },
+    },
     // The SDK's onchain config.ts reads these at import time (Node-isms). Inject build-time
     // literals so the tx builders resolve the package id in the browser bundle.
     define: {
