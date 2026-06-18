@@ -10,11 +10,7 @@ import { Transcript } from "sui-tunnel-ts/proof/transcript";
 import { TicTacToeProtocol, type TicTacToeState, type Winner } from "sui-tunnel-ts/protocol/ticTacToe";
 import type { Party } from "sui-tunnel-ts/protocol/Protocol";
 import { MpClient, resolveMpWsUrl, type PvpChannel, type Role } from "../../pvp/mpClient";
-import {
-  getControlPlaneClient,
-  resolveBackendUrl,
-  type RegisterSessionResult,
-} from "../../backend/controlPlane";
+import { getControlPlaneClient, resolveBackendUrl } from "../../backend/controlPlane";
 import {
   closeCooperativeWithRoot,
   depositStake,
@@ -94,7 +90,6 @@ export function usePvpTicTacToe(): PvpTicTacToe {
   const dtRef = useRef<DistributedTunnel<TicTacToeState, { cell: number }> | null>(null);
   const roleRef = useRef<Role | null>(null);
   const transcriptRef = useRef<Transcript | null>(null);
-  const sessionRef = useRef<RegisterSessionResult | null>(null);
 
   // Render the engine's display state: the proposer's own move shows immediately
   // (pending, locally-signed) and reconciles to the confirmed state on co-sign.
@@ -112,7 +107,6 @@ export function usePvpTicTacToe(): PvpTicTacToe {
     dtRef.current = null;
     roleRef.current = null;
     transcriptRef.current = null;
-    sessionRef.current = null;
     setStatus("idle");
     setRole(null);
     setBoard(Array(9).fill(0));
@@ -175,22 +169,6 @@ export function usePvpTicTacToe(): PvpTicTacToe {
           await depositStake({ signExec, tunnelId, amount: STAKE_BALANCE });
         }
 
-        // Register the funded tunnel under a control-plane session so seat A can authorize the
-        // backend /settle close (bearer = statsToken). Best-effort — failure falls back to a
-        // wallet-submitted close at settle time. Only seat A registers (it submits the close).
-        if (match.role === "A") {
-          getControlPlaneClient()
-            .registerSession({
-              userAddress: wallet,
-              game: "tictactoe",
-              tunnels: [{ tunnelId, partyA: wallet, partyB: match.opponentWallet }],
-            })
-            .then((s) => {
-              sessionRef.current = s;
-            })
-            .catch((e) => console.error("[tictactoe] registerSession failed:", e));
-        }
-
         // 3) build the distributed engine over the relay transport.
         const proto = new TicTacToeProtocol(STAKE_SHIFT);
         const backend = defaultBackend();
@@ -235,7 +213,6 @@ export function usePvpTicTacToe(): PvpTicTacToe {
               signExec,
               tunnelId,
               transcript,
-              sessionRef.current,
               getControlPlaneClient(),
             ).then(
               () => setStatus("settled"),
@@ -295,7 +272,7 @@ export function usePvpTicTacToe(): PvpTicTacToe {
  *  backend /settle (the settler anchors the transcript root + archives to Walrus). Both seats must
  *  anchor the SAME root or close_cooperative_with_root rebuilds different bytes and on-chain verify
  *  fails — so the root is exchanged and asserted equal before either side trusts the combine.
- *  Fallback: wallet-submitted close_cooperative_with_root (no session / backend down). */
+ *  Fallback: wallet-submitted close_cooperative_with_root (backend down). */
 async function settle(
   dt: DistributedTunnel<TicTacToeState, { cell: number }>,
   role: Role,
@@ -305,7 +282,6 @@ async function settle(
   signExec: Parameters<typeof closeCooperativeWithRoot>[0]["signExec"],
   tunnelId: string,
   transcript: Transcript,
-  session: RegisterSessionResult | null,
   cp: ReturnType<typeof getControlPlaneClient>,
 ): Promise<void> {
   const createdAt = await readCreatedAt(reads, tunnelId);
@@ -327,15 +303,7 @@ async function settle(
   const co = dt.combineSettlementWithRoot(half.settlement, half.sigSelf, fromHex(other.sig));
   if (role !== "A") return; // single submitter, mirrors the cooperative-close pattern
   try {
-    if (session) {
-      await cp.settle(
-        session.sessionId,
-        session.statsToken,
-        coSignedToSettleRequest(co, transcript.toRecord().entries),
-      );
-    } else {
-      await closeCooperativeWithRoot({ signExec, tunnelId, settlement: co });
-    }
+    await cp.settle(tunnelId, coSignedToSettleRequest(co, transcript.toRecord().entries));
   } catch (e) {
     console.error("[tictactoe] backend settle failed; falling back to wallet close:", e);
     await closeCooperativeWithRoot({ signExec, tunnelId, settlement: co });
