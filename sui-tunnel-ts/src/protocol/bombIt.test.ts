@@ -48,3 +48,88 @@ test("buildGrid is 180°-rotationally symmetric and seed-deterministic", () => {
   }
   assert.deepEqual(Array.from(buildGrid(42n)), Array.from(buildGrid(42n)));
 });
+
+import {
+  BLAST_RADIUS,
+  FUSE_TICKS,
+  dest,
+  canMoveTo,
+  blastCellsFor,
+  resolveExplosions,
+  type BombItBomb,
+  type BombItPlayer,
+} from "./bombIt.ts";
+
+const deadFar: BombItPlayer = { row: 8, col: 8, alive: false };
+
+test("dest steps north/south/east/west; bomb/stay do not move", () => {
+  assert.deepEqual(dest(3, 4, "north"), [2, 4]);
+  assert.deepEqual(dest(3, 4, "south"), [4, 4]);
+  assert.deepEqual(dest(3, 4, "east"), [3, 5]);
+  assert.deepEqual(dest(3, 4, "west"), [3, 3]);
+  assert.deepEqual(dest(3, 4, "bomb"), [3, 4]);
+  assert.deepEqual(dest(3, 4, "stay"), [3, 4]);
+});
+
+test("canMoveTo blocks walls, crates, bombs, the other player, and off-board", () => {
+  const g = buildGrid(7n);
+  // (0,*) is a wall border.
+  assert.equal(canMoveTo(g, [], deadFar, 0, 1), false);
+  assert.equal(canMoveTo(g, [], deadFar, -1, 1), false);
+  // floor cell (1,1) is open.
+  assert.equal(canMoveTo(g, [], deadFar, 1, 1), true);
+  // a bomb blocks entry.
+  const bomb: BombItBomb = { row: 1, col: 1, fuse: FUSE_TICKS, owner: "A" };
+  assert.equal(canMoveTo(g, [bomb], deadFar, 1, 1), false);
+  // the other LIVING player blocks entry.
+  const other: BombItPlayer = { row: 1, col: 1, alive: true };
+  assert.equal(canMoveTo(g, [], other, 1, 1), false);
+});
+
+test("blastCellsFor: + cross, stops at walls, includes-and-stops at first crate", () => {
+  const g = new Uint8Array(GRID_W * GRID_H); // all floor
+  g[idx(3, 5)] = CELL_WALL; // wall east of the bomb at (3,3)
+  g[idx(1, 3)] = CELL_CRATE; // crate north of the bomb
+  const cells = blastCellsFor(g, { row: 3, col: 3, fuse: 0, owner: "A" });
+  assert.ok(cells.includes(idx(3, 3))); // center
+  assert.ok(cells.includes(idx(3, 4))); // east radius 1
+  assert.ok(!cells.includes(idx(3, 5))); // wall blocks east radius 2 (and is not destroyed)
+  assert.ok(cells.includes(idx(2, 3))); // north radius 1
+  assert.ok(cells.includes(idx(1, 3))); // crate is included...
+  assert.ok(!cells.includes(idx(0, 3))); // ...but stops propagation past it
+});
+
+test("resolveExplosions detonates fuse<=0, destroys crates, chains bombs in a clear line", () => {
+  const g = new Uint8Array(GRID_W * GRID_H); // all floor
+  g[idx(1, 3)] = CELL_CRATE; // crate in A's NORTH arm (distance 2), NOT between the bombs
+  const bombs: BombItBomb[] = [
+    { row: 3, col: 3, fuse: 0, owner: "A" }, // detonates now
+    { row: 3, col: 5, fuse: FUSE_TICKS, owner: "B" }, // 2 east on a clear line -> chains
+  ];
+  const { cells, remaining } = resolveExplosions(g, bombs);
+  assert.equal(remaining.length, 0); // both gone (B chained via the clear east arm)
+  assert.equal(g[idx(1, 3)], CELL_FLOOR); // crate destroyed (north arm)
+  assert.ok(cells.has(idx(3, 5))); // B's bomb cell is in A's blast
+});
+
+test("a crate shields a bomb behind it: blast stops at the crate, no chain", () => {
+  const g = new Uint8Array(GRID_W * GRID_H);
+  g[idx(3, 4)] = CELL_CRATE; // between A(3,3) and B(3,5)
+  const bombs: BombItBomb[] = [
+    { row: 3, col: 3, fuse: 0, owner: "A" },
+    { row: 3, col: 5, fuse: FUSE_TICKS, owner: "B" }, // shielded behind the crate
+  ];
+  const { cells, remaining } = resolveExplosions(g, bombs);
+  assert.equal(g[idx(3, 4)], CELL_FLOOR); // crate destroyed
+  assert.ok(!cells.has(idx(3, 5))); // blast stopped at the crate
+  assert.equal(remaining.length, 1); // B survives
+  assert.equal(remaining[0].owner, "B");
+});
+
+test("resolveExplosions leaves un-fused bombs untouched", () => {
+  const g = new Uint8Array(GRID_W * GRID_H);
+  const bombs: BombItBomb[] = [{ row: 3, col: 3, fuse: 3, owner: "A" }];
+  const { cells, remaining } = resolveExplosions(g, bombs);
+  assert.equal(remaining.length, 1);
+  assert.equal(cells.size, 0);
+});
