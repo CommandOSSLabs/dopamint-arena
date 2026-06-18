@@ -135,11 +135,11 @@ export function GameScene({
       </header>
 
       {/* Main Body Grid - switch from side-by-side to stacked dynamically in portrait */}
-      <div className={`flex ${isPortrait ? "flex-col items-center gap-6" : "flex-row gap-8 items-start justify-center"} mt-2 w-full`}>
+      <div className={`flex ${isPortrait ? "flex-col items-center gap-6" : "flex-row gap-8 items-start justify-between"} mt-2 w-full`}>
         {/* Left Column: Game Area */}
-        <section className={`${isPortrait ? "w-full max-w-[480px]" : "w-[480px]"} flex flex-col items-center`}>
+        <section className={`${isPortrait ? "w-full max-w-[480px]" : "flex-1 min-w-[560px]"} flex flex-col items-center`}>
           {/* Scoreboard */}
-          <div className="w-full max-w-md flex justify-between items-end mb-8 px-4 border-b-2 border-primary/20 pb-4">
+          <div className="w-full max-w-[540px] flex justify-between items-end mb-6 px-4 border-b-2 border-primary/20 pb-4">
             <div className="text-center">
               <div className="font-headline-lg text-lg text-primary">Bot X (X)</div>
               <div className="font-body-lg text-3xl text-primary mt-1 min-h-[30px] flex items-center justify-center font-bold">
@@ -180,61 +180,71 @@ export function GameScene({
             {statusText(g.phase, g.turn, g.winner, gameType)}
           </div>
 
-          {/* Per-tunnel progress: game k / N */}
-          <div className="text-center font-label-sm text-xs text-outline -mt-2 mb-2 min-h-[16px]">
-            {g.phase === "playing" || g.phase === "settling"
-              ? `Game ${Math.min(g.currentGame, g.maxGames)} / ${g.maxGames} in this tunnel`
-              : `${g.maxGames} game${g.maxGames === 1 ? "" : "s"} per tunnel, one settle`}
-          </div>
-
-          {/* Games-per-tunnel control (presets + custom), disabled while playing */}
-          <GamesPerTunnel
-            value={g.maxGames}
-            onChange={g.setMaxGames}
-            disabled={busy || g.auto}
-          />
-
-          {/* Actions */}
-          <div className="mt-6 flex flex-wrap gap-4 justify-center">
-            {mode === "auto" ? (
-              g.auto ? (
-                <button
-                  onClick={g.stopAuto}
-                  className="bg-secondary text-on-secondary font-headline-lg-mobile text-base px-6 py-2.5 rounded-sm shadow-[2px_2px_0px_#410000] hover:translate-y-[2px] hover:shadow-none transition-all transform -rotate-1 border-[2px] border-primary"
-                >
-                  ⏹ Stop Playing
-                </button>
-              ) : (
-                <button
-                  onClick={onBack}
-                  className="bg-primary text-on-primary font-headline-lg-mobile text-base px-6 py-2.5 rounded-sm shadow-[2px_2px_0px_#bc0000] hover:translate-y-[2px] hover:shadow-none transition-all transform rotate-1 border-[2px] border-primary"
-                >
-                  ← Back to setup
-                </button>
-              )
-            ) : (
-              <>
-                <button
-                  onClick={onBack}
-                  className="border-2 border-primary text-primary font-headline-lg-mobile text-base px-6 py-2.5 rounded-sm hover:bg-primary/5 transition-all transform -rotate-1 shadow-[2px_2px_0px_#001e40]"
-                >
-                  ← Setup
-                </button>
-                <button
-                  onClick={g.newGame}
-                  disabled={busy}
-                  className="bg-primary text-on-primary font-headline-lg-mobile text-base px-6 py-2.5 rounded-sm shadow-[2px_2px_0px_#bc0000] hover:translate-y-[2px] hover:shadow-none transition-all transform rotate-1 border-[2px] border-primary disabled:opacity-40 disabled:cursor-not-allowed"
-                >
-                  New Game
-                </button>
-              </>
-            )}
-          </div>
         </section>
 
         {/* Right Column: Game Log / Info */}
-        <aside className={`${isPortrait ? "w-full max-w-[480px] mt-4" : "w-[400px]"} flex flex-col gap-4`}>
-          <h2 className="font-headline-lg text-xl text-primary mb-1 flex items-center gap-2">
+        <aside className={`${isPortrait ? "w-full max-w-[480px] mt-4" : "w-[340px] shrink-0"} flex flex-col gap-4`}>
+          
+          {/* Setup and Actions block */}
+          <div className="bg-surface-container-low border-[2px] border-primary p-4 relative rounded-sm shadow-[4px_4px_0px_#00336610] w-full flex flex-col items-center">
+            <h2 className="font-headline-lg text-lg text-primary mb-2 self-start flex items-center gap-2">
+              <span className="material-symbols-outlined">settings</span>
+              Controls
+            </h2>
+
+            {/* Per-tunnel progress: game k / N */}
+            <div className="text-center font-label-sm text-xs text-outline mb-2 min-h-[16px]">
+              {g.phase === "playing" || g.phase === "settling"
+                ? `Game ${Math.min(g.currentGame, g.maxGames)} / ${g.maxGames} in this tunnel`
+                : `${g.maxGames} game${g.maxGames === 1 ? "" : "s"} per tunnel, one settle`}
+            </div>
+
+            {/* Games-per-tunnel control (presets + custom), disabled while playing */}
+            <GamesPerTunnel
+              value={g.maxGames}
+              onChange={g.setMaxGames}
+              disabled={busy || g.auto}
+            />
+
+            {/* Actions */}
+            <div className="mt-4 flex flex-wrap gap-4 justify-center w-full">
+              {mode === "auto" ? (
+                g.auto ? (
+                  <button
+                    onClick={g.stopAuto}
+                    className="w-full bg-secondary text-on-secondary font-headline-lg-mobile text-base px-6 py-2.5 rounded-sm shadow-[2px_2px_0px_#410000] hover:translate-y-[2px] hover:shadow-none transition-all transform -rotate-1 border-[2px] border-primary"
+                  >
+                    ⏹ Stop Playing
+                  </button>
+                ) : (
+                  <button
+                    onClick={onBack}
+                    className="w-full bg-primary text-on-primary font-headline-lg-mobile text-base px-6 py-2.5 rounded-sm shadow-[2px_2px_0px_#bc0000] hover:translate-y-[2px] hover:shadow-none transition-all transform rotate-1 border-[2px] border-primary"
+                  >
+                    ← Back to setup
+                  </button>
+                )
+              ) : (
+                <>
+                  <button
+                    onClick={onBack}
+                    className="flex-1 border-2 border-primary text-primary font-headline-lg-mobile text-sm px-2 py-2.5 rounded-sm hover:bg-primary/5 transition-all transform -rotate-1 shadow-[2px_2px_0px_#001e40]"
+                  >
+                    ← Setup
+                  </button>
+                  <button
+                    onClick={g.newGame}
+                    disabled={busy}
+                    className="flex-1 bg-primary text-on-primary font-headline-lg-mobile text-sm px-2 py-2.5 rounded-sm shadow-[2px_2px_0px_#bc0000] hover:translate-y-[2px] hover:shadow-none transition-all transform rotate-1 border-[2px] border-primary disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    New Game
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+
+          <h2 className="font-headline-lg text-xl text-primary mt-2 mb-1 flex items-center gap-2">
             <span className="material-symbols-outlined">edit_note</span>
             Game Log
           </h2>

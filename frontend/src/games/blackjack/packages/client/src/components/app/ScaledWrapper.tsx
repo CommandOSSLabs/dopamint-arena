@@ -28,10 +28,6 @@ export function ScaledWrapper({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("resize", update);
   }, []);
 
-  if (scale === 1) {
-    return <div className="w-screen h-screen overflow-hidden bg-zinc-950">{children}</div>;
-  }
-
   const innerW = size.w / scale;
   const innerH = size.h / scale;
 

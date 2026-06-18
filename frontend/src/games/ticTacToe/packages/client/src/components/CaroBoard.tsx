@@ -17,11 +17,11 @@ export function CaroBoard({
   onPlay?: (cell: number) => void;
   disabled?: boolean;
 }) {
-  const cell = Math.max(14, Math.floor(320 / size));
+  const cell = Math.max(14, Math.floor(600 / size));
   const dim = cell * size;
   const win = new Set(winningLine(board, size, lastMove));
   return (
-    <div className="max-w-full max-h-[340px] overflow-auto border-[2px] border-primary rounded-sm bg-surface p-1">
+    <div className="max-w-full max-h-[620px] overflow-auto border-[2px] border-primary rounded-sm bg-surface p-1">
       <div
         className="grid"
         style={{ gridTemplateColumns: `repeat(${size}, ${cell}px)`, gridTemplateRows: `repeat(${size}, ${cell}px)`, width: dim, height: dim }}

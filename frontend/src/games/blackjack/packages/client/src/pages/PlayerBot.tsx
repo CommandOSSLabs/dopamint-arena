@@ -250,12 +250,12 @@ export default function PlayerBot() {
     <button
       onClick={fundFromWallet}
       disabled={walletFunding}
-      className="border-2 border-amber-500 text-black bg-[#d4af37] hover:bg-amber-400 px-6 py-3 rounded-lg text-sm font-black tracking-widest uppercase transition-all hover:scale-105 active:scale-95 cursor-pointer disabled:opacity-50 disabled:pointer-events-none"
+      className="border-2 border-amber-500 text-black bg-[#d4af37] hover:bg-amber-400 px-3 py-1.5 md:px-6 md:py-3 rounded md:rounded-lg text-[10px] md:text-sm font-black tracking-widest uppercase transition-all hover:scale-105 active:scale-95 cursor-pointer disabled:opacity-50 disabled:pointer-events-none"
     >
-      {walletFunding ? "Funding…" : `Fund bots from wallet (${fundTotalSui} SUI)`}
+      {walletFunding ? "Funding…" : `Top Up SUI`}
     </button>
   ) : (
-    <ConnectButton connectText="Connect wallet" />
+    <div className="scale-75 md:scale-100 origin-center"><ConnectButton connectText="Connect wallet" /></div>
   );
 
   const running =
@@ -275,9 +275,9 @@ export default function PlayerBot() {
     <button
       onClick={game.fund}
       disabled={phase === "funding"}
-      className="border-2 border-amber-500 text-[#d4af37] bg-amber-950/20 hover:bg-amber-500 hover:text-black px-6 py-3 rounded-lg text-sm font-black tracking-widest uppercase transition-all hover:scale-105 active:scale-95 cursor-pointer disabled:opacity-50 disabled:pointer-events-none"
+      className="border-2 border-amber-500 text-[#d4af37] bg-amber-950/20 hover:bg-amber-500 hover:text-black px-3 py-1.5 md:px-6 md:py-3 rounded md:rounded-lg text-[10px] md:text-sm font-black tracking-widest uppercase transition-all hover:scale-105 active:scale-95 cursor-pointer disabled:opacity-50 disabled:pointer-events-none"
     >
-      Fund Bots
+      Fund Stake
     </button>
   );
 
@@ -295,7 +295,7 @@ export default function PlayerBot() {
     <button
       onClick={game.newGame}
       disabled={running || unfunded}
-      className="border-2 border-emerald-500 text-white bg-[#032a14]/65 hover:bg-emerald-500 hover:text-black px-6 py-3 rounded-lg text-sm font-black tracking-widest uppercase transition-all hover:scale-105 active:scale-95 cursor-pointer disabled:opacity-50 disabled:pointer-events-none"
+      className="border-2 border-emerald-500 text-white bg-[#032a14]/65 hover:bg-emerald-500 hover:text-black px-4 py-1.5 md:px-6 md:py-3 rounded md:rounded-lg text-[10px] md:text-sm font-black tracking-widest uppercase transition-all hover:scale-105 active:scale-95 cursor-pointer disabled:opacity-50 disabled:pointer-events-none"
     >
       Play
     </button>
@@ -304,7 +304,7 @@ export default function PlayerBot() {
   const autoBtn = game.auto ? (
     <button
       onClick={game.stopAuto}
-      className="border-2 border-rose-500 text-white bg-[#2d090c]/65 hover:bg-rose-500/20 px-6 py-3 rounded-lg text-sm font-black tracking-widest uppercase transition-all hover:scale-105 active:scale-95 cursor-pointer"
+      className="border-2 border-rose-500 text-white bg-[#2d090c]/65 hover:bg-rose-500/20 px-4 py-1.5 md:px-6 md:py-3 rounded md:rounded-lg text-[10px] md:text-sm font-black tracking-widest uppercase transition-all hover:scale-105 active:scale-95 cursor-pointer"
     >
       Stop
     </button>
@@ -312,7 +312,7 @@ export default function PlayerBot() {
     <button
       onClick={game.startAuto}
       disabled={running || unfunded}
-      className="border-2 border-zinc-650 text-white bg-zinc-900/60 hover:bg-zinc-650/20 px-6 py-3 rounded-lg text-sm font-black tracking-widest uppercase transition-all hover:scale-105 active:scale-95 cursor-pointer disabled:opacity-50 disabled:pointer-events-none"
+      className="border-2 border-zinc-650 text-white bg-zinc-900/60 hover:bg-zinc-650/20 px-4 py-1.5 md:px-6 md:py-3 rounded md:rounded-lg text-[10px] md:text-sm font-black tracking-widest uppercase transition-all hover:scale-105 active:scale-95 cursor-pointer disabled:opacity-50 disabled:pointer-events-none"
     >
       Auto
     </button>
@@ -506,7 +506,7 @@ export default function PlayerBot() {
         )}
 
         {/* Toasts overlay: left of Rounds panel */}
-        <div className="absolute top-[120px] right-3 md:top-4 md:right-60 z-30 flex flex-col items-end gap-2 pointer-events-none">
+        <div className="absolute top-16 right-[170px] md:top-4 md:right-60 z-30 flex flex-col items-end gap-2 pointer-events-none">
           {toasts.map((t) => (
             <div
               key={t.id}
@@ -707,22 +707,24 @@ export default function PlayerBot() {
 
       {/* Bottom HUD */}
       <div className="w-full bg-zinc-950/95 backdrop-blur-md border-t border-zinc-800 shadow-[0_-10px_30px_rgba(0,0,0,0.95)] z-30 select-none px-2 py-2 md:px-8 md:py-3">
-        <div className="w-full flex flex-col md:flex-row items-center justify-between gap-3">
+        <div className="w-full flex flex-row items-center justify-between gap-3">
           {/* Stakes + bot wallet balances */}
-          <div className="flex flex-row flex-wrap items-center justify-center gap-x-5 gap-y-1">
+          <div className="flex flex-row items-center gap-x-5 gap-y-1">
             <div className="flex flex-col items-start gap-0.5">
-              <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-zinc-500">
+              <div className="flex items-center gap-1.5 text-[9px] md:text-[11px] font-bold uppercase tracking-wider text-zinc-500">
                 <span>Player stake:</span>
                 <span className="text-white font-mono font-black">{view.playerBalance}</span>
                 <span className="text-zinc-600">({view.playerSum})</span>
               </div>
-              <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-zinc-500">
+              <div className="flex items-center gap-1.5 text-[9px] md:text-[11px] font-bold uppercase tracking-wider text-zinc-500">
                 <span>Dealer stake:</span>
                 <span className="text-white font-mono font-black">{view.dealerBalance}</span>
                 <span className="text-zinc-600">({view.dealerSum})</span>
               </div>
             </div>
-            <div className="flex flex-col items-start gap-0.5">
+            
+            {/* Hidden on mobile to save space */}
+            <div className="hidden lg:flex flex-col items-start gap-0.5">
               <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-zinc-500">
                 <span>Player wallet:</span>
                 <span className="text-white font-mono font-black">{suiOf(balances.a)} SUI</span>
@@ -736,9 +738,9 @@ export default function PlayerBot() {
           </div>
 
           {/* Controls */}
-          <div className="flex flex-wrap items-center justify-center gap-3">
-            {roundsSelector}
-            {walletFundEl}
+          <div className="flex flex-row items-center justify-end gap-1.5 md:gap-3 flex-1">
+            <div className="hidden lg:block">{roundsSelector}</div>
+            <div className="hidden md:block">{walletFundEl}</div>
             {fundBtn}
             {playBtn}
             {autoBtn}
@@ -746,8 +748,8 @@ export default function PlayerBot() {
         </div>
 
         {/* Status + on-chain digests */}
-        <div className="w-full flex flex-col md:flex-row items-center justify-between gap-2 mt-2 pt-2 border-t border-zinc-850">
-          <div className="text-[11px] uppercase tracking-widest font-bold">
+        <div className="w-full flex flex-col md:flex-row items-center justify-between gap-1 md:gap-2 mt-1 md:mt-2 pt-1 md:pt-2 border-t border-zinc-850">
+          <div className="text-[9px] md:text-[11px] uppercase tracking-widest font-bold">
             {phase === "error" || error || walletError ? (
               <span className="text-rose-400 normal-case tracking-normal font-mono break-words">{error ?? walletError ?? "Error"}</span>
             ) : fundNote ? (
@@ -758,7 +760,7 @@ export default function PlayerBot() {
               </span>
             )}
           </div>
-          <div className="flex flex-wrap items-center justify-end gap-x-4 gap-y-1">
+          <div className="hidden md:flex flex-wrap items-center justify-end gap-x-4 gap-y-1">
             <DigestLink label="open & fund" digest={digests.create} />
             <DigestLink label="state checkpoint" digest={digests.update} />
             <DigestLink label="close" digest={digests.close} />
