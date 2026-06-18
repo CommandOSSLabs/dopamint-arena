@@ -1,0 +1,16 @@
+.bomb-grid {
+  display: grid;
+  gap: 1px;
+  background: rgba(255, 255, 255, 0.05);
+  aspect-ratio: 1 / 1;
+  max-height: 100%;
+  margin: 0 auto;
+}
+.bomb-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  line-height: 1;
+  transition: background 100ms linear;
+}
