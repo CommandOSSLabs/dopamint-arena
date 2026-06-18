@@ -152,9 +152,11 @@ export function usePvpTicTacToe(variant: Variant, boardSize: number): PvpTttView
       setPhase("queuing");
       relay.on("error", (m) => { setError(`${m.code}: ${m.message}`); setPhase("error"); });
       relay.on("match.found", (m) => { void onMatchRef.current?.(relay, m as any); });
-      relay.queueJoin("tictactoe");
+      // The queue key encodes the variant (+ board size for caro) so only players who chose the
+      // SAME setup match — otherwise the two seats would run incompatible protocols and diverge.
+      relay.queueJoin(variant === "caro" ? `tictactoe:caro:${boardSize}` : "tictactoe:ttt");
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); setPhase("error"); }
-  })(); }, [eph]);
+  })(); }, [eph, variant, boardSize]);
 
   const onMatch = useCallback(async (relay: RelayClient, m: { matchId: string; role: "A" | "B"; opponentWallet: string }) => {
     try {
