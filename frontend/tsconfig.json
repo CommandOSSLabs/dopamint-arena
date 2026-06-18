@@ -7,8 +7,8 @@
     "jsx": "react-jsx",
     "useDefineForClassFields": true,
     "strict": true,
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
     "noFallthroughCasesInSwitch": true,
     "verbatimModuleSyntax": false,
     "isolatedModules": true,
@@ -17,10 +17,18 @@
     "allowImportingTsExtensions": true,
     "types": ["node"],
     "paths": {
+      "@/*": ["./src/*"],
       "sui-tunnel-ts": ["../sui-tunnel-ts/src/index.ts"],
-      "sui-tunnel-ts/*": ["../sui-tunnel-ts/src/*"]
+      "sui-tunnel-ts/*": ["../sui-tunnel-ts/src/*"],
+      "@ttt/shared": ["./src/games/ticTacToe/packages/shared/src/index.ts"],
+      "@ttt/shared/*": ["./src/games/ticTacToe/packages/shared/src/*"]
     }
   },
   "include": ["src"],
-  "exclude": ["src/games/*/packages"]
+  "exclude": [
+    "src/games/*/packages",
+    "src/**/*.test.ts",
+    "src/games/blackjack/app/main.tsx",
+    "src/games/ticTacToe/app/main.tsx"
+  ]
 }

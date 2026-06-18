@@ -74,11 +74,20 @@ export function BotPanel({
     <div className="flex flex-col sm:flex-row sm:items-center justify-between py-4 border-b-2 border-primary/10">
       <div className="flex items-center gap-4">
         <span className={`font-headline-lg text-3xl ${color}`}>{label}</span>
-        <span className="font-body-lg text-3xl border-2 border-primary/20 rounded-full px-4 py-1 leading-none bg-surface-container-low">{marker}</span>
+        <span className="font-body-lg text-3xl border-2 border-primary/20 rounded-full px-4 py-1 leading-none bg-surface-container-low">
+          {marker}
+        </span>
       </div>
       <div className="flex items-center gap-6 mt-2 sm:mt-0 font-label-sm text-2xl">
-        <span className="text-outline border-b-2 border-dashed border-outline/35 pb-1" title={address}>{short(address)}</span>
-        <span className="text-primary font-bold tabular-nums bg-tertiary-container/20 px-4 py-2 rounded-lg">{fmtSui(balance)} SUI</span>
+        <span
+          className="text-outline border-b-2 border-dashed border-outline/35 pb-1"
+          title={address}
+        >
+          {short(address)}
+        </span>
+        <span className="text-primary font-bold tabular-nums bg-tertiary-container/20 px-4 py-2 rounded-lg">
+          {fmtSui(balance)} SUI
+        </span>
       </div>
     </div>
   );
@@ -86,8 +95,20 @@ export function BotPanel({
   return (
     <div className="w-full h-full flex-1 justify-center bg-surface-container-lowest border-4 border-primary p-12 shadow-[8px_8px_0px_#00336615] flex flex-col gap-8 rounded-xl relative z-10">
       <div className="flex flex-col gap-6">
-        <Row label="Bot X" address={ids.x.address} balance={bots.x} color="text-primary" marker="X" />
-        <Row label="Bot O" address={ids.o.address} balance={bots.o} color="text-secondary" marker="O" />
+        <Row
+          label="Bot X"
+          address={ids.x.address}
+          balance={bots.x}
+          color="text-primary"
+          marker="X"
+        />
+        <Row
+          label="Bot O"
+          address={ids.o.address}
+          balance={bots.o}
+          color="text-secondary"
+          marker="O"
+        />
       </div>
 
       <div className="flex flex-col gap-6 mt-6">
@@ -108,7 +129,9 @@ export function BotPanel({
             disabled={walletFunding}
             className="w-full py-6 bg-primary text-on-primary font-headline-lg-mobile text-3xl hover:bg-primary-container active:translate-y-[2px] disabled:opacity-40 disabled:cursor-not-allowed transition-all rounded-xl shadow-[4px_4px_0px_#bc0000]"
           >
-            {walletFunding ? "Funding…" : `Fund bots from wallet (${totalSui} SUI)`}
+            {walletFunding
+              ? "Funding…"
+              : `Fund bots from wallet (${totalSui} SUI)`}
           </button>
         ) : (
           <div className="flex flex-col sm:flex-row gap-6 mt-4 [&_button]:w-full [&_button]:py-6 [&_button]:px-8 [&_button]:border-[6px] [&_button]:border-primary [&_button]:rounded-xl [&_button]:font-headline-lg-mobile [&_button]:text-primary [&_button]:bg-surface [&_button]:hover:bg-primary/5 [&_button]:transition-all [&_button]:text-3xl [&_button]:shadow-[4px_4px_0px_#001e40]">
@@ -133,7 +156,10 @@ export function BotPanel({
           {funding ? "Requesting faucet…" : "or try testnet faucet"}
         </button>
         {isConnected && (
-          <button onClick={logout} className="text-outline hover:text-secondary underline transition-colors">
+          <button
+            onClick={logout}
+            className="text-outline hover:text-secondary underline transition-colors"
+          >
             disconnect
           </button>
         )}

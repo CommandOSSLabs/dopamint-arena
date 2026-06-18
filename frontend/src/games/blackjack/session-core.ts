@@ -10,7 +10,10 @@ import type {
   BlackjackMove,
   BlackjackPhase,
 } from "sui-tunnel-ts/protocol/blackjack";
-import { getPlayerParty, getDealerParty } from "sui-tunnel-ts/protocol/blackjack";
+import {
+  getPlayerParty,
+  getDealerParty,
+} from "sui-tunnel-ts/protocol/blackjack";
 import type { OffchainTunnel } from "sui-tunnel-ts/core/tunnel";
 
 import { handValue, handToCardIndices } from "./cards.ts";
@@ -42,7 +45,10 @@ export function stepSession(
 /** Player-bankroll outcome relative to the starting stake. */
 export type SessionResult = "win" | "lose" | "push";
 
-export function sessionResult(state: BlackjackState, stake: bigint): SessionResult {
+export function sessionResult(
+  state: BlackjackState,
+  stake: bigint,
+): SessionResult {
   if (state.balanceA > stake) return "win";
   if (state.balanceA < stake) return "lose";
   return "push";

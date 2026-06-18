@@ -32,7 +32,10 @@ export function ScaleToFit({
   }, [designWidth, designHeight]);
 
   return (
-    <div ref={ref} className="flex h-full w-full items-center justify-center overflow-hidden">
+    <div
+      ref={ref}
+      className="flex h-full w-full items-center justify-center overflow-hidden"
+    >
       <div
         style={{
           width: designWidth,

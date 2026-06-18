@@ -36,7 +36,10 @@ export function loadOrCreateWallet(): Ed25519Keypair {
 }
 
 const dbReq = () => indexedDB.open("bj_pvp", 1);
-function withStore<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest): Promise<T> {
+function withStore<T>(
+  mode: IDBTransactionMode,
+  fn: (s: IDBObjectStore) => IDBRequest,
+): Promise<T> {
   return new Promise((resolve, reject) => {
     const req = dbReq();
     req.onupgradeneeded = () => req.result.createObjectStore("eph");
@@ -51,17 +54,25 @@ function withStore<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRe
 }
 
 /** Get the persisted ephemeral key for `matchId`, or mint+persist a fresh one. */
-export async function getOrCreateEphemeral(matchId: string): Promise<EphemeralKey> {
-  const existing = await withStore<string | undefined>("readonly", (s) => s.get(matchId));
+export async function getOrCreateEphemeral(
+  matchId: string,
+): Promise<EphemeralKey> {
+  const existing = await withStore<string | undefined>("readonly", (s) =>
+    s.get(matchId),
+  );
   const seed = existing ? fromHEX(existing) : core.generateKeyPair().secretKey;
-  if (!existing) await withStore("readwrite", (s) => s.put(toHEX(seed), matchId));
+  if (!existing)
+    await withStore("readwrite", (s) => s.put(toHEX(seed), matchId));
   const coreKey = core.keyPairFromSecret(seed);
   return { coreKey, pubkeyHex: toHEX(coreKey.publicKey) };
 }
 
 /** The bytes a wallet signs to attest its ephemeral key for a match (shared by sign + verify,
  *  and by the dapp-kit signing path in the PvP hook). */
-export function attestationMessage(matchId: string, ephPubHex: string): Uint8Array {
+export function attestationMessage(
+  matchId: string,
+  ephPubHex: string,
+): Uint8Array {
   return new TextEncoder().encode(`${matchId}:${ephPubHex}`);
 }
 
@@ -71,7 +82,9 @@ export async function attestEphemeral(
   matchId: string,
   ephPubHex: string,
 ): Promise<string> {
-  const { signature } = await wallet.signPersonalMessage(attestationMessage(matchId, ephPubHex));
+  const { signature } = await wallet.signPersonalMessage(
+    attestationMessage(matchId, ephPubHex),
+  );
   return signature;
 }
 
@@ -83,7 +96,10 @@ export async function verifyAttestation(
   walletAddr: string,
 ): Promise<boolean> {
   try {
-    const pk = await verifyPersonalMessageSignature(attestationMessage(matchId, ephPubHex), walletSig);
+    const pk = await verifyPersonalMessageSignature(
+      attestationMessage(matchId, ephPubHex),
+      walletSig,
+    );
     return pk.toSuiAddress() === walletAddr;
   } catch {
     return false;

@@ -101,7 +101,10 @@ export async function openAndFundSharedTunnel(opts: {
   });
   const { digest } = await opts.signExec(tx);
   await opts.reads.waitForTransaction({ digest });
-  const txb = await opts.reads.getTransactionBlock({ digest, options: { showObjectChanges: true } });
+  const txb = await opts.reads.getTransactionBlock({
+    digest,
+    options: { showObjectChanges: true },
+  });
   const tunnelId = findTunnelId(txb.objectChanges);
   if (!tunnelId) throw new Error("could not find created tunnel id");
   return tunnelId;
@@ -135,7 +138,10 @@ export async function openAndFundSelfPlay(opts: {
   ]);
   const { digest } = await opts.signExec(tx);
   await opts.reads.waitForTransaction({ digest });
-  const txb = await opts.reads.getTransactionBlock({ digest, options: { showObjectChanges: true } });
+  const txb = await opts.reads.getTransactionBlock({
+    digest,
+    options: { showObjectChanges: true },
+  });
   const tunnelId = findTunnelId(txb.objectChanges);
   if (!tunnelId) throw new Error("could not find created tunnel id");
   return tunnelId;
@@ -153,8 +159,14 @@ export async function depositStake(opts: {
 }
 
 /** Read the on-chain created_at (ms) — the settlement timestamp must be >= this. */
-export async function readCreatedAt(reads: SuiReads, tunnelId: string): Promise<bigint> {
-  const obj = await reads.getObject({ id: tunnelId, options: { showContent: true } });
+export async function readCreatedAt(
+  reads: SuiReads,
+  tunnelId: string,
+): Promise<bigint> {
+  const obj = await reads.getObject({
+    id: tunnelId,
+    options: { showContent: true },
+  });
   return BigInt((obj.data?.content?.fields?.created_at as string) ?? 0);
 }
 

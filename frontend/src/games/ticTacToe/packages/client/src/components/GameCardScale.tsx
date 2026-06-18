@@ -23,7 +23,7 @@ export const GameCardScale: React.FC<GameCardScaleProps> = ({
       // Calculate scale factors to fit within the viewport (with a larger safety margin to prevent edge touching)
       const scaleW = (parentW - 40) / targetWidth;
       const scaleH = (parentH - 48) / targetHeight;
-      
+
       // We scale down to fit small screens, and allow scaling up to 2x to utilize large monitors
       const factor = Math.min(scaleW, scaleH, 2);
       setScale(factor);
@@ -42,7 +42,7 @@ export const GameCardScale: React.FC<GameCardScaleProps> = ({
   }, [targetWidth, targetHeight]);
 
   return (
-    <div 
+    <div
       className={`origin-center flex items-center justify-center overflow-hidden ${className}`}
       style={{
         transform: `scale(${scale})`,

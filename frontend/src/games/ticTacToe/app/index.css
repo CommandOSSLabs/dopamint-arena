@@ -1,0 +1,335 @@
+@import "tailwindcss" reference;
+
+@theme {
+  --color-on-secondary-container: #fffbff;
+  --color-surface-container-highest: #e5e2db;
+  --color-on-error-container: #93000a;
+  --color-on-primary-container: #799dd6;
+  --color-surface-variant: #e5e2db;
+  --color-outline-variant: #c3c6d1;
+  --color-surface-container-low: #f6f3ec;
+  --color-tertiary: #695f00;
+  --color-primary-fixed: #d5e3ff;
+  --color-on-background: #1c1c18;
+  --color-inverse-primary: #a7c8ff;
+  --color-error-container: #ffdad6;
+  --color-inverse-on-surface: #f3f0ea;
+  --color-on-tertiary-container: #474000;
+  --color-primary-container: #003366;
+  --color-tertiary-fixed: #f9e534;
+  --color-tertiary-container: #bead00;
+  --color-outline: #737780;
+  --color-secondary-fixed: #ffdad4;
+  --color-on-surface: #1c1c18;
+  --color-secondary-container: #e41f13;
+  --color-on-tertiary-fixed-variant: #4f4800;
+  --color-secondary-fixed-dim: #ffb4a8;
+  --color-error: #ba1a1a;
+  --color-surface-tint: #3a5f94;
+  --color-on-surface-variant: #43474f;
+  --color-tertiary-fixed-dim: #dbc90a;
+  --color-on-error: #ffffff;
+  --color-on-primary-fixed-variant: #1f477b;
+  --color-on-tertiary: #ffffff;
+  --color-surface: #fcf9f2;
+  --color-surface-bright: #fcf9f2;
+  --color-background: #fcf9f2;
+  --color-surface-container: #f0eee7;
+  --color-on-secondary-fixed: #410000;
+  --color-surface-container-lowest: #ffffff;
+  --color-on-primary-fixed: #001b3c;
+  --color-on-secondary: #ffffff;
+  --color-on-secondary-fixed-variant: #930000;
+  --color-surface-container-high: #ebe8e1;
+  --color-inverse-surface: #31312c;
+  --color-on-tertiary-fixed: #201c00;
+  --color-on-primary: #ffffff;
+  --color-surface-dim: #dcdad3;
+  --color-primary-fixed-dim: #a7c8ff;
+
+  --font-body-lg: "Gochi Hand", sans-serif;
+  --font-body-md: "Gochi Hand", sans-serif;
+  --font-headline-lg: "Bricolage Grotesque", sans-serif;
+  --font-headline-lg-mobile: "Bricolage Grotesque", sans-serif;
+  --font-headline-xl: "Bricolage Grotesque", sans-serif;
+  --font-label-sm: "Space Mono", monospace;
+
+  --font-size-body-lg: 20px;
+  --font-size-body-md: 18px;
+  --font-size-headline-lg: 32px;
+  --font-size-headline-lg-mobile: 28px;
+  --font-size-headline-xl: 48px;
+  --font-size-label-sm: 12px;
+}
+
+.notebook-grid-bg,
+.notebook-paper {
+  --primary: #001e40 !important;
+  --secondary: #bc0000 !important;
+  --foreground: #1c1c18 !important;
+  --background: #fcf9f2 !important;
+
+  --color-primary: #001e40 !important;
+  --color-secondary: #bc0000 !important;
+  --color-foreground: #1c1c18 !important;
+  --color-background: #fcf9f2 !important;
+
+  /* Standard aliases with and without --color- prefix for Tailwind v4 compatibility */
+  --on-primary: #ffffff !important;
+  --color-on-primary: #ffffff !important;
+  --on-secondary: #ffffff !important;
+  --color-on-secondary: #ffffff !important;
+  --on-background: #1c1c18 !important;
+  --color-on-background: #1c1c18 !important;
+  --on-surface: #1c1c18 !important;
+  --color-on-surface: #1c1c18 !important;
+  --on-error: #ffffff !important;
+  --color-on-error: #ffffff !important;
+  --on-secondary-container: #fffbff !important;
+  --color-on-secondary-container: #fffbff !important;
+  --on-primary-container: #799dd6 !important;
+  --color-on-primary-container: #799dd6 !important;
+  --on-tertiary-container: #474000 !important;
+  --color-on-tertiary-container: #474000 !important;
+  --surface-container-lowest: #ffffff !important;
+  --color-surface-container-lowest: #ffffff !important;
+  --surface: #fcf9f2 !important;
+  --color-surface: #fcf9f2 !important;
+  --outline: #737780 !important;
+  --color-outline: #737780 !important;
+  --tertiary: #695f00 !important;
+  --color-tertiary: #695f00 !important;
+  --primary-container: #003366 !important;
+  --color-primary-container: #003366 !important;
+  --secondary-container: #e41f13 !important;
+  --color-secondary-container: #e41f13 !important;
+  --on-tertiary: #ffffff !important;
+  --color-on-tertiary: #ffffff !important;
+  --surface-tint: #3a5f94 !important;
+  --color-surface-tint: #3a5f94 !important;
+  --surface-container-low: #f6f3ec !important;
+  --color-surface-container-low: #f6f3ec !important;
+  --surface-container-high: #ebe8e1 !important;
+  --color-surface-container-high: #ebe8e1 !important;
+  --surface-container-highest: #e5e2db !important;
+  --color-surface-container-highest: #e5e2db !important;
+  --surface-container: #f0eee7 !important;
+  --color-surface-container: #f0eee7 !important;
+  --surface-variant: #e5e2db !important;
+  --color-surface-variant: #e5e2db !important;
+  --surface-bright: #fcf9f2 !important;
+  --color-surface-bright: #fcf9f2 !important;
+  --surface-dim: #dcdad3 !important;
+  --color-surface-dim: #dcdad3 !important;
+}
+
+/* Custom Notebook Styling */
+
+.notebook-paper {
+  background-color: #fcf9f2; /* surface */
+  background-image:
+    linear-gradient(
+      90deg,
+      transparent 79px,
+      #bc0000 79px,
+      #bc0000 81px,
+      transparent 81px
+    ),
+    linear-gradient(
+      90deg,
+      transparent 85px,
+      #bc0000 85px,
+      #bc0000 87px,
+      transparent 87px
+    ),
+    linear-gradient(#001e40 1px, transparent 1px);
+  background-size:
+    100% 100%,
+    100% 100%,
+    100% 24px;
+  background-position: 0 0;
+  position: relative;
+}
+
+.notebook-paper::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-image: linear-gradient(#001e40 1px, transparent 1px);
+  background-size: 100% 24px;
+  opacity: 0.1;
+  pointer-events: none;
+  z-index: 0;
+}
+
+@media (max-width: 768px) {
+  .notebook-paper {
+    background-image:
+      linear-gradient(
+        90deg,
+        transparent 39px,
+        #bc0000 39px,
+        #bc0000 41px,
+        transparent 41px
+      ),
+      linear-gradient(
+        90deg,
+        transparent 45px,
+        #bc0000 45px,
+        #bc0000 47px,
+        transparent 47px
+      );
+  }
+}
+
+/* Main Grid paper background for gameplay/layout */
+.notebook-grid-bg {
+  background-color: #fcf9f2; /* surface */
+  background-image:
+    linear-gradient(to right, #e5e2db 1.5px, transparent 1.5px),
+    linear-gradient(to bottom, #e5e2db 1.5px, transparent 1.5px);
+  background-size: 24px 24px;
+}
+
+/* Hand-drawn Grid Lines */
+.hand-drawn-grid {
+  position: relative;
+}
+.hand-drawn-grid::before {
+  content: "";
+  position: absolute;
+  top: 33.33%;
+  left: 0;
+  width: 100%;
+  height: 3px;
+  background-color: #001e40; /* primary */
+  transform: rotate(-0.5deg);
+  border-radius: 50% 50% 50% 50% / 10% 10% 90% 90%;
+  pointer-events: none;
+}
+.hand-drawn-grid::after {
+  content: "";
+  position: absolute;
+  top: 66.66%;
+  left: 0;
+  width: 100%;
+  height: 3px;
+  background-color: #001e40;
+  transform: rotate(0.3deg);
+  border-radius: 50% 50% 50% 50% / 90% 90% 10% 10%;
+  pointer-events: none;
+}
+.hand-drawn-grid .v-line-1,
+.hand-drawn-grid .v-line-2 {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background-color: #001e40;
+  pointer-events: none;
+}
+.hand-drawn-grid .v-line-1 {
+  left: 33.33%;
+  transform: rotate(0.2deg);
+}
+.hand-drawn-grid .v-line-2 {
+  left: 66.66%;
+  transform: rotate(-0.4deg);
+}
+
+/* Hand-drawn Xs and Os */
+.mark-x {
+  color: #001e40; /* primary */
+  font-family: "Gochi Hand", cursive;
+  line-height: 1;
+}
+.mark-o {
+  color: #bc0000; /* secondary */
+  font-family: "Gochi Hand", cursive;
+  line-height: 1;
+}
+
+/* Tally Marks */
+.tally {
+  font-family: "Gochi Hand", cursive;
+  font-size: 2rem;
+  letter-spacing: -4px;
+}
+
+/* Hand-drawn Border */
+.hand-drawn-border {
+  border: 3px solid #001e40;
+  border-radius: 2px 255px 3px 25px / 255px 5px 225px 3px;
+}
+
+/* ink bleed for text */
+.ink-bleed {
+  text-shadow: 0px 0px 1px rgba(0, 30, 64, 0.2);
+}
+
+/* Highlighter effect */
+@keyframes highlight-pulse {
+  0% {
+    transform: scale(1) rotate(-1.5deg);
+    opacity: 0.8;
+  }
+  50% {
+    transform: scale(1.01) rotate(-0.5deg);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1) rotate(-1.5deg);
+    opacity: 0.8;
+  }
+}
+.highlight-bg {
+  animation: highlight-pulse 4s infinite ease-in-out;
+}
+
+/* Custom indicator states */
+.red-circle {
+  transition: all 0.3s ease-in-out;
+  transform: scale(0.9);
+}
+
+.custom-radio:checked + div .red-circle {
+  opacity: 1 !important;
+  transform: scale(1) rotate(-3deg);
+}
+
+.custom-checkbox:checked + div .red-cross {
+  opacity: 1 !important;
+  transform: scale(1) rotate(6deg);
+}
+
+/* Tape styling */
+.tape-top {
+  position: absolute;
+  top: -12px;
+  left: 50%;
+  transform: translateX(-50%) rotate(2deg);
+  width: 96px;
+  height: 24px;
+  background-color: #e5e2db;
+  opacity: 0.75;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+.tape-bottom-right {
+  position: absolute;
+  bottom: -12px;
+  right: 32px;
+  transform: rotate(-4deg);
+  width: 64px;
+  height: 24px;
+  background-color: #e5e2db;
+  opacity: 0.7;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  border-radius: 2px;
+  pointer-events: none;
+}

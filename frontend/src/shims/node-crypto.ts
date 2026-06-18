@@ -8,7 +8,9 @@
  * loud rather than silently wrong. Keeps the SDK itself untouched (upstream re-sync).
  */
 function unavailable(): never {
-  throw new Error("node:crypto is not available in the browser (sui-tunnel-ts falls back to @noble)");
+  throw new Error(
+    "node:crypto is not available in the browser (sui-tunnel-ts falls back to @noble)",
+  );
 }
 export const createPrivateKey = unavailable;
 export const createPublicKey = unavailable;

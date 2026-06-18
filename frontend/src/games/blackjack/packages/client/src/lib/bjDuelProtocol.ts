@@ -77,7 +77,10 @@ export function settleOutcome(
   return "push";
 }
 
-export class BlackjackDuelProtocol implements protocols.Protocol<DuelState, DuelMove> {
+export class BlackjackDuelProtocol implements protocols.Protocol<
+  DuelState,
+  DuelMove
+> {
   readonly name = "blackjack.duel.v1";
 
   initialState(ctx: ProtocolContext): DuelState {
@@ -88,7 +91,8 @@ export class BlackjackDuelProtocol implements protocols.Protocol<DuelState, Duel
     let drawIndex = 0;
     const dealTwo = () => {
       const h: number[] = [];
-      for (let i = 0; i < 2; i++) h.push(rankValue(drawRank(seed, drawIndex++)));
+      for (let i = 0; i < 2; i++)
+        h.push(rankValue(drawRank(seed, drawIndex++)));
       return h;
     };
     const dealerHand = dealTwo();
@@ -126,7 +130,9 @@ export class BlackjackDuelProtocol implements protocols.Protocol<DuelState, Duel
       turnEnded = true;
     }
     const next: DuelState =
-      seat === "A" ? { ...state, handA: hand, drawIndex } : { ...state, handB: hand, drawIndex };
+      seat === "A"
+        ? { ...state, handA: hand, drawIndex }
+        : { ...state, handB: hand, drawIndex };
     if (!turnEnded) return next;
     if (seat === "A") return { ...next, phase: "b_turn" };
     return resolveAndSettle(next); // B finished -> dealer resolves, settle, terminal

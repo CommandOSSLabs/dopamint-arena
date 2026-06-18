@@ -35,8 +35,12 @@ const TelemetryContext = createContext<TelemetryContextValue | null>(null);
 export function TelemetryProvider({ children }: { children: ReactNode }) {
   // Seed from the placeholder so the shell looks populated before any play.
   const [txns, setTxns] = useState<TxnRow[]>(PLACEHOLDER_SNAPSHOT.txns);
-  const [tpsSeries, setTpsSeries] = useState<number[]>(PLACEHOLDER_SNAPSHOT.tpsSeries);
-  const [botsRunning, setBotsRunning] = useState<number>(PLACEHOLDER_SNAPSHOT.botsRunning);
+  const [tpsSeries, setTpsSeries] = useState<number[]>(
+    PLACEHOLDER_SNAPSHOT.tpsSeries,
+  );
+  const [botsRunning, setBotsRunning] = useState<number>(
+    PLACEHOLDER_SNAPSHOT.botsRunning,
+  );
   const [hasActivity, setHasActivity] = useState(false);
 
   const counters = useRef<Counters>(newCounters());
@@ -73,11 +77,15 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
     return {
       rate,
       txns,
+      localTxns: PLACEHOLDER_SNAPSHOT.localTxns,
       deposits: PLACEHOLDER_SNAPSHOT.deposits,
       tpsSeries,
       botsRunning,
       totalBalance: PLACEHOLDER_SNAPSHOT.totalBalance,
-      successRate: rate.errors === 0 ? 100 : (rate.updates / (rate.updates + rate.errors)) * 100,
+      successRate:
+        rate.errors === 0
+          ? 100
+          : (rate.updates / (rate.updates + rate.errors)) * 100,
     };
   }, [hasActivity, txns, tpsSeries, botsRunning]);
 
@@ -92,11 +100,16 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
     [snapshot, report],
   );
 
-  return <TelemetryContext.Provider value={value}>{children}</TelemetryContext.Provider>;
+  return (
+    <TelemetryContext.Provider value={value}>
+      {children}
+    </TelemetryContext.Provider>
+  );
 }
 
 export function useTelemetry(): TelemetryContextValue {
   const ctx = useContext(TelemetryContext);
-  if (!ctx) throw new Error("useTelemetry must be used within a TelemetryProvider");
+  if (!ctx)
+    throw new Error("useTelemetry must be used within a TelemetryProvider");
   return ctx;
 }

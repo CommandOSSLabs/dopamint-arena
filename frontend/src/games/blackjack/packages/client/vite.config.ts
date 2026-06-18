@@ -10,10 +10,14 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
   return {
     define: {
-      "process.env.PACKAGE_ID": JSON.stringify(env.VITE_TUNNEL_PACKAGE_ID ?? ""),
+      "process.env.PACKAGE_ID": JSON.stringify(
+        env.VITE_TUNNEL_PACKAGE_ID ?? "",
+      ),
       // The SDK also reads process.env.SUI_NETWORK; give it a value so the reference doesn't
       // crash in the browser bundle.
-      "process.env.SUI_NETWORK": JSON.stringify(env.VITE_SUI_NETWORK_NAME ?? "testnet"),
+      "process.env.SUI_NETWORK": JSON.stringify(
+        env.VITE_SUI_NETWORK_NAME ?? "testnet",
+      ),
     },
     plugins: [
       react(),

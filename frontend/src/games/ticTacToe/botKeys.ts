@@ -11,7 +11,9 @@ import { generateKeyPair, keyPairFromSecret } from "sui-tunnel-ts/core/crypto";
 import { fromHex, toHex } from "sui-tunnel-ts/core/bytes";
 
 /** Just the balance read we need — avoids depending on a specific @mysten/sui client type. */
-type BalanceReader = { getBalance: (args: { owner: string }) => Promise<{ totalBalance: string }> };
+type BalanceReader = {
+  getBalance: (args: { owner: string }) => Promise<{ totalBalance: string }>;
+};
 
 export interface TttBot {
   coreKey: ReturnType<typeof keyPairFromSecret>; // off-chain move co-signer
@@ -42,7 +44,11 @@ export function loadTttBots(): { x: TttBot; o: TttBot } {
 }
 
 /** Ensure seat X holds enough SUI to fund a game (gas + both stakes); faucet + poll if low. */
-export async function ensureFunded(client: BalanceReader, address: string, minMist: bigint): Promise<void> {
+export async function ensureFunded(
+  client: BalanceReader,
+  address: string,
+  minMist: bigint,
+): Promise<void> {
   const balance = async () => {
     try {
       return BigInt((await client.getBalance({ owner: address })).totalBalance);
@@ -51,7 +57,10 @@ export async function ensureFunded(client: BalanceReader, address: string, minMi
     }
   };
   if ((await balance()) >= minMist) return;
-  await requestSuiFromFaucetV2({ host: getFaucetHost("testnet"), recipient: address });
+  await requestSuiFromFaucetV2({
+    host: getFaucetHost("testnet"),
+    recipient: address,
+  });
   for (let i = 0; i < 12; i++) {
     if ((await balance()) >= minMist) return;
     await new Promise((r) => setTimeout(r, 1500));

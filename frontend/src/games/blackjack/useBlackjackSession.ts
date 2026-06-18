@@ -1,15 +1,26 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useCurrentAccount, useSignAndExecuteTransaction, useSuiClient } from "@mysten/dapp-kit";
+import {
+  useCurrentAccount,
+  useSignAndExecuteTransaction,
+  useSuiClient,
+} from "@mysten/dapp-kit";
 import { createParticipant } from "sui-tunnel-ts/core/keys";
 import { OffchainTunnel } from "sui-tunnel-ts/core/tunnel";
 import { BlackjackProtocol, WAGER } from "sui-tunnel-ts/protocol/blackjack";
-import type { BlackjackState, BlackjackMove } from "sui-tunnel-ts/protocol/blackjack";
+import type {
+  BlackjackState,
+  BlackjackMove,
+} from "sui-tunnel-ts/protocol/blackjack";
 import { useTelemetry } from "../../telemetry/TelemetryProvider";
 import {
   getControlPlaneClient,
   type RegisterSessionResult,
 } from "../../backend/controlPlane";
-import { closeCooperative, openAndFundSelfPlay, readCreatedAt } from "../../onchain/tunnelTx";
+import {
+  closeCooperative,
+  openAndFundSelfPlay,
+  readCreatedAt,
+} from "../../onchain/tunnelTx";
 import {
   deriveView,
   sessionResult,
@@ -21,7 +32,13 @@ import {
 /** Milliseconds between bot moves (animation pacing). */
 const STEP_MS = 900;
 
-export type SessionStatus = "idle" | "funding" | "playing" | "settling" | "settled" | "error";
+export type SessionStatus =
+  | "idle"
+  | "funding"
+  | "playing"
+  | "settling"
+  | "settled"
+  | "error";
 
 export interface BlackjackSession {
   status: SessionStatus;
@@ -46,7 +63,10 @@ export function useBlackjackSession(): BlackjackSession {
   const [error, setError] = useState<string | null>(null);
 
   const protocolRef = useRef<BlackjackProtocol | null>(null);
-  const tunnelRef = useRef<OffchainTunnel<BlackjackState, BlackjackMove> | null>(null);
+  const tunnelRef = useRef<OffchainTunnel<
+    BlackjackState,
+    BlackjackMove
+  > | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const stakeRef = useRef<bigint>(0n);
 
@@ -85,7 +105,9 @@ export function useBlackjackSession(): BlackjackSession {
       stopTimer();
       // Stake must cover at least one wager; clamp to a whole, fundable amount. Guard NaN/Inf.
       const floored = Math.floor(nextStake);
-      const stakeBig = BigInt(Math.max(Number(WAGER), Number.isFinite(floored) ? floored : 0));
+      const stakeBig = BigInt(
+        Math.max(Number(WAGER), Number.isFinite(floored) ? floored : 0),
+      );
       stakeRef.current = stakeBig;
       setStake(Number(stakeBig));
       setResult(null);
@@ -96,11 +118,15 @@ export function useBlackjackSession(): BlackjackSession {
         setStatus("error");
         return;
       }
-      const signExec = async (tx: Parameters<typeof signAndExecute>[0]["transaction"]) => {
+      const signExec = async (
+        tx: Parameters<typeof signAndExecute>[0]["transaction"],
+      ) => {
         const r = await signAndExecute({ transaction: tx });
         return { digest: r.digest };
       };
-      const reads = client as unknown as Parameters<typeof openAndFundSelfPlay>[0]["reads"];
+      const reads = client as unknown as Parameters<
+        typeof openAndFundSelfPlay
+      >[0]["reads"];
 
       (async () => {
         try {
@@ -131,7 +157,12 @@ export function useBlackjackSession(): BlackjackSession {
             { a: stakeBig, b: stakeBig },
           );
           tunnel.onUpdate = (_u, bytes) =>
-            report.bumpCounters({ updates: 1, signatures: 2, verifications: 2, bytes });
+            report.bumpCounters({
+              updates: 1,
+              signatures: 2,
+              verifications: 2,
+              bytes,
+            });
 
           protocolRef.current = protocol;
           tunnelRef.current = tunnel;
@@ -154,7 +185,9 @@ export function useBlackjackSession(): BlackjackSession {
             .then((s) => {
               sessionRef.current = s;
             })
-            .catch((e) => console.error("[blackjack] registerSession failed:", e));
+            .catch((e) =>
+              console.error("[blackjack] registerSession failed:", e),
+            );
 
           // Coarse, aggregated throughput report (~1/s) — never one call per move (ADR-0002).
           const flushHeartbeat = (force: boolean) => {
@@ -205,9 +238,15 @@ export function useBlackjackSession(): BlackjackSession {
             setView(deriveView(t.state));
 
             // A settled round (round_over with a balance change) => a panel txn.
-            if (moved && t.state.phase === "round_over" && t.state.balanceA !== prevBalanceA) {
+            if (
+              moved &&
+              t.state.phase === "round_over" &&
+              t.state.balanceA !== prevBalanceA
+            ) {
               const delta = t.state.balanceA - prevBalanceA;
               report.pushTxn({
+                id: actionsRef.current,
+                game: "blackjack",
                 time: new Date().toLocaleTimeString("en-GB"),
                 bot: "Player Bot",
                 type: delta > 0n ? "Blackjack Win" : "Blackjack Loss",

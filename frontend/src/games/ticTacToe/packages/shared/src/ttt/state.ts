@@ -17,9 +17,9 @@ export const GameStateStruct = bcs.struct("GameState", {
 });
 
 export interface GameState {
-  game_id: string;           // 32-byte hex
+  game_id: string; // 32-byte hex
   player_public_key: string; // hex
-  board: number[];           // length 9
+  board: number[]; // length 9
   move_index: number;
   player: number;
   turn: number;

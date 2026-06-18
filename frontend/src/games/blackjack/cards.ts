@@ -41,7 +41,7 @@ function valueToRankIndex(value: number, seq: number): number {
 
 /** Map a protocol value to a display card index 0..51 (suit rotates with seq). */
 export function valueToCardIndex(value: number, seq: number): number {
-  const suit = (((seq % 4) + 4) % 4);
+  const suit = ((seq % 4) + 4) % 4;
   return suit * 13 + valueToRankIndex(value, seq);
 }
 

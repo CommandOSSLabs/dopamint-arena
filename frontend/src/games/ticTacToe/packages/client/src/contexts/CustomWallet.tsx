@@ -1,8 +1,17 @@
-import { createContext, useContext, useEffect, useMemo, ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  ReactNode,
+} from "react";
 import { useEnokiFlow, useZkLogin } from "@mysten/enoki/react";
 import {
-  useCurrentWallet, useCurrentAccount, useSignTransaction,
-  useDisconnectWallet, useSuiClient,
+  useCurrentWallet,
+  useCurrentAccount,
+  useSignTransaction,
+  useDisconnectWallet,
+  useSuiClient,
 } from "@mysten/dapp-kit";
 import { Transaction } from "@mysten/sui/transactions";
 import { fromB64, toB64 } from "@mysten/sui/utils";
@@ -65,7 +74,9 @@ export const CustomWalletProvider = ({ children }: { children: ReactNode }) => {
       enokiFlow
         .handleAuthCallback()
         .catch((e) => console.error("enoki auth callback failed", e))
-        .finally(() => history.replaceState(null, "", window.location.pathname));
+        .finally(() =>
+          history.replaceState(null, "", window.location.pathname),
+        );
     }
   }, [enokiFlow]);
 
@@ -78,19 +89,28 @@ export const CustomWalletProvider = ({ children }: { children: ReactNode }) => {
         redirectUrl: `${window.location.origin}/auth`,
         extraParams: { scope: ["openid", "email", "profile"] },
       })
-      .then((url) => { window.location.href = url; })
+      .then((url) => {
+        window.location.href = url;
+      })
       .catch((e) => console.error("failed to create auth url", e));
   };
 
   const logout = () => {
     if (isUsingEnoki) enokiFlow.logout();
-    else { disconnect(); sessionStorage.clear(); }
+    else {
+      disconnect();
+      sessionStorage.clear();
+    }
   };
 
   const signTransaction = async (bytes: Uint8Array): Promise<string> => {
     if (isUsingEnoki) {
       // Enoki only accepts "mainnet" | "testnet"; cast from the wider union that includes "devnet".
-      const signer = await enokiFlow.getKeypair({ network: clientConfig.SUI_NETWORK_NAME as unknown as "mainnet" | "testnet" });
+      const signer = await enokiFlow.getKeypair({
+        network: clientConfig.SUI_NETWORK_NAME as unknown as
+          | "mainnet"
+          | "testnet",
+      });
       const sig = await signer.signTransaction(bytes);
       return sig.signature;
     }
@@ -98,35 +118,54 @@ export const CustomWalletProvider = ({ children }: { children: ReactNode }) => {
     // dapp-kit vendors @mysten/sui@1.24.0; our Transaction comes from @mysten/sui@1.45.2.
     // The two Transaction classes are structurally incompatible due to #private fields.
     const resp = await signTransactionBlock({
-      transaction: tx as unknown as Parameters<typeof signTransactionBlock>[0]["transaction"],
+      transaction: tx as unknown as Parameters<
+        typeof signTransactionBlock
+      >[0]["transaction"],
       chain: `sui:${clientConfig.SUI_NETWORK_NAME}`,
     });
     return resp.signature;
   };
 
   // Backend-sponsored execution (works for both Enoki and wallet). Returns the tx digest.
-  const sponsorAndExecute = async ({ tx, allowedAddresses = [] }: SponsorAndExecuteProps): Promise<string> => {
+  const sponsorAndExecute = async ({
+    tx,
+    allowedAddresses = [],
+  }: SponsorAndExecuteProps): Promise<string> => {
     if (!isConnected || !address) throw new Error("wallet not connected");
     // suiClient comes from dapp-kit (@mysten/sui@1.24.0); tx.build expects ClientWithCoreApi from @mysten/sui@1.45.2.
     // Cast through unknown to bridge the structural incompatibility.
-    const txBytes = await tx.build({ client: suiClient as unknown as Parameters<typeof tx.build>[0] extends { client?: infer C } ? NonNullable<C> : never, onlyTransactionKind: true });
+    const txBytes = await tx.build({
+      client: suiClient as unknown as Parameters<typeof tx.build>[0] extends {
+        client?: infer C;
+      }
+        ? NonNullable<C>
+        : never,
+      onlyTransactionKind: true,
+    });
     const sponsorRes = await fetch(`${API}/sponsor`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        network: clientConfig.SUI_NETWORK_NAME, txBytes: toB64(txBytes),
-        sender: address, allowedAddresses,
+        network: clientConfig.SUI_NETWORK_NAME,
+        txBytes: toB64(txBytes),
+        sender: address,
+        allowedAddresses,
       }),
     });
     const sponsorData = await sponsorRes.json();
     if (!sponsorRes.ok) throw new Error(sponsorData.error ?? "sponsor failed");
     const signature = await signTransaction(fromB64(sponsorData.bytes));
     const execRes = await fetch(`${API}/execute`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ digest: sponsorData.digest, signature }),
     });
     const execData = await execRes.json();
     if (!execRes.ok) throw new Error(execData.error ?? "execute failed");
-    await suiClient.waitForTransaction({ digest: execData.digest, timeout: 8000 });
+    await suiClient.waitForTransaction({
+      digest: execData.digest,
+      timeout: 8000,
+    });
     return execData.digest;
   };
 
@@ -137,7 +176,11 @@ export const CustomWalletProvider = ({ children }: { children: ReactNode }) => {
     if (!isConnected || !address) throw new Error("wallet not connected");
     tx.setSender(address);
     const txBytes = await tx.build({
-      client: suiClient as unknown as Parameters<typeof tx.build>[0] extends { client?: infer C } ? NonNullable<C> : never,
+      client: suiClient as unknown as Parameters<typeof tx.build>[0] extends {
+        client?: infer C;
+      }
+        ? NonNullable<C>
+        : never,
     });
     const signature = await signTransaction(txBytes);
     const res = await suiClient.executeTransactionBlock({
@@ -151,7 +194,15 @@ export const CustomWalletProvider = ({ children }: { children: ReactNode }) => {
 
   return (
     <CustomWalletContext.Provider
-      value={{ isConnected, isUsingEnoki, address, login, logout, sponsorAndExecute, executeTransaction }}
+      value={{
+        isConnected,
+        isUsingEnoki,
+        address,
+        login,
+        logout,
+        sponsorAndExecute,
+        executeTransaction,
+      }}
     >
       {children}
     </CustomWalletContext.Provider>

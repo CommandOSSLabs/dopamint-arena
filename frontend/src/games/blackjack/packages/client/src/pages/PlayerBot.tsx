@@ -22,7 +22,7 @@ const chip1000 = "/chip-1000.svg";
 function getChipStack(balance: number): string[] {
   const stack: string[] = [];
   let remaining = balance;
-  
+
   const chipTypes = [
     { value: 1000, asset: chip1000 },
     { value: 500, asset: chip500 },
@@ -36,11 +36,11 @@ function getChipStack(balance: number): string[] {
       remaining -= chip.value;
     }
   }
-  
+
   if (stack.length === 0 && balance > 0) {
     stack.push(chip25);
   }
-  
+
   return stack;
 }
 
@@ -113,7 +113,9 @@ export default function PlayerBot() {
   } = game;
   const latestRound = rounds.length > 0 ? rounds[rounds.length - 1] : null;
 
-  const [animState, setAnimState] = useState<"idle" | "deal" | "win" | "lose" | "push">("idle");
+  const [animState, setAnimState] = useState<
+    "idle" | "deal" | "win" | "lose" | "push"
+  >("idle");
   const prevRoundRef = useRef<number>(-1);
   const prevPhaseRef = useRef<string>("");
   const prevBalanceRef = useRef<number>(-1);
@@ -162,7 +164,11 @@ export default function PlayerBot() {
     prevBalanceRef.current = view.playerBalance;
   }, [view.round, view.phase, view.playerBalance]);
 
-  type ToastMsg = { id: number; msg: string; type: "info" | "win" | "lose" | "push" };
+  type ToastMsg = {
+    id: number;
+    msg: string;
+    type: "info" | "win" | "lose" | "push";
+  };
   const [toasts, setToasts] = useState<ToastMsg[]>([]);
   const toastIdRef = useRef(0);
 
@@ -179,9 +185,12 @@ export default function PlayerBot() {
 
   useEffect(() => {
     const prev = prevViewRef.current;
-    
+
     // Player Hit
-    if (view.playerCards.length > prev.playerCards.length && prev.playerCards.length > 0) {
+    if (
+      view.playerCards.length > prev.playerCards.length &&
+      prev.playerCards.length > 0
+    ) {
       addToast(`Player Bot Hits (${view.playerSum})`);
     }
     // Player Stand
@@ -189,14 +198,17 @@ export default function PlayerBot() {
       addToast(`Player Bot Stands (${prev.playerSum})`);
     }
     // Dealer Hit
-    if (view.dealerCards.length > prev.dealerCards.length && prev.dealerCards.length > 0) {
+    if (
+      view.dealerCards.length > prev.dealerCards.length &&
+      prev.dealerCards.length > 0
+    ) {
       addToast(`Dealer Bot Hits (${view.dealerSum})`);
     }
     // Dealer Stand
     if (prev.phase === "dealer" && view.phase === "round_over") {
       addToast(`Dealer Bot Stands (${prev.dealerSum})`);
     }
-    
+
     prevViewRef.current = view;
   }, [view]);
 
@@ -205,7 +217,8 @@ export default function PlayerBot() {
       const newRound = rounds[rounds.length - 1];
       if (newRound) {
         if (newRound.outcome === "win") addToast(`Player Bot Wins!`, "win");
-        else if (newRound.outcome === "lose") addToast(`Dealer Bot Wins!`, "lose");
+        else if (newRound.outcome === "lose")
+          addToast(`Dealer Bot Wins!`, "lose");
         else addToast(`Round Push`, "push");
       }
     }
@@ -255,7 +268,9 @@ export default function PlayerBot() {
       {walletFunding ? "Funding…" : `Top Up SUI`}
     </button>
   ) : (
-    <div className="scale-75 md:scale-100 origin-center"><ConnectButton connectText="Connect wallet" /></div>
+    <div className="scale-75 md:scale-100 origin-center">
+      <ConnectButton connectText="Connect wallet" />
+    </div>
   );
 
   const running =
@@ -265,11 +280,13 @@ export default function PlayerBot() {
     phase === "settling";
   // A game is mid-flight (tunnel opening through settling) — distinct from funding, which
   // can run on the start screen before any game exists.
-  const inGame = phase === "opening" || phase === "playing" || phase === "settling";
+  const inGame =
+    phase === "opening" || phase === "playing" || phase === "settling";
   const terminal = phase === "done" || result !== null;
   const unfunded = balances.a === 0n || balances.b === 0n;
   // The hook seeds an empty view; treat "no cards yet, no game in flight" as the start screen.
-  const started = view.playerCards.length > 0 || view.dealerCards.length > 0 || inGame;
+  const started =
+    view.playerCards.length > 0 || view.dealerCards.length > 0 || inGame;
 
   const fundBtn = (
     <button
@@ -367,8 +384,11 @@ export default function PlayerBot() {
       <div className="fixed inset-0 z-50 flex flex-col items-center justify-center text-white overflow-hidden select-none fade-in-up">
         {/* Background Layer with blur and transparent felt */}
         <div className="absolute inset-0 bg-black/40 backdrop-blur-md" />
-        <div className="absolute inset-0 bg-cover bg-center opacity-60" style={{ backgroundImage: "url('/dealer-desk-plain-rotated.png')" }} />
-        
+        <div
+          className="absolute inset-0 bg-cover bg-center opacity-60"
+          style={{ backgroundImage: "url('/dealer-desk-plain-rotated.png')" }}
+        />
+
         <div className="relative z-10 flex flex-col items-center justify-center gap-8 bg-zinc-950/40 backdrop-blur-sm w-full h-full p-8 md:p-12">
           <h1 className="text-5xl md:text-6xl font-extrabold text-[#d4af37] font-serif tracking-widest uppercase text-center mb-2 drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]">
             Bot Arena
@@ -380,10 +400,12 @@ export default function PlayerBot() {
 
           <div className="flex flex-col items-center gap-1.5 text-xs font-mono text-zinc-400">
             <span>
-              Player Bot: <span className="text-white">{suiOf(balances.a)} SUI</span>
+              Player Bot:{" "}
+              <span className="text-white">{suiOf(balances.a)} SUI</span>
             </span>
             <span>
-              Dealer Bot: <span className="text-white">{suiOf(balances.b)} SUI</span>
+              Dealer Bot:{" "}
+              <span className="text-white">{suiOf(balances.b)} SUI</span>
             </span>
             {refreshBtn}
           </div>
@@ -449,8 +471,11 @@ export default function PlayerBot() {
     <div className="fixed inset-0 z-50 flex flex-col text-white overflow-hidden select-none fade-in-up">
       {/* Background Layer with blur and transparent felt */}
       <div className="absolute inset-0 bg-black/40 backdrop-blur-md" />
-      <div className="absolute inset-0 bg-cover bg-center opacity-60" style={{ backgroundImage: "url('/dealer-desk-plain-rotated.png')" }} />
-      
+      <div
+        className="absolute inset-0 bg-cover bg-center opacity-60"
+        style={{ backgroundImage: "url('/dealer-desk-plain-rotated.png')" }}
+      />
+
       {/* Play area: dealer-desk felt with dealer (top) and player (bottom) hands */}
       <div className="relative z-10 flex-1 w-full">
         {/* Back button */}
@@ -459,15 +484,27 @@ export default function PlayerBot() {
           className="absolute top-4 left-4 z-30 p-2.5 text-zinc-400 hover:text-white bg-black/60 hover:bg-black/85 rounded-full border border-zinc-800/85 transition-all shadow-md active:scale-95 flex items-center justify-center cursor-pointer"
           title="Exit to menu"
         >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+          <svg
+            className="w-4 h-4"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.5"
+            viewBox="0 0 24 24"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M10 19l-7-7m0 0l7-7m-7 7h18"
+            />
           </svg>
         </button>
 
         {/* Round / phase badge */}
         <div className="absolute top-4 left-1/2 -translate-x-1/2 px-4 py-1.5 bg-black/70 backdrop-blur-sm border border-amber-950 rounded-full shadow-lg z-10 flex items-center gap-2">
           <span className="text-[10px] md:text-xs text-[#d4af37] font-extrabold uppercase tracking-widest font-serif">
-            Round {Math.min(rounds.length + (terminal ? 0 : 1), maxRounds)} / {maxRounds}
+            Round {Math.min(rounds.length + (terminal ? 0 : 1), maxRounds)} /{" "}
+            {maxRounds}
           </span>
           <span className="text-[10px] text-zinc-400 uppercase tracking-widest">
             · {phaseLabel[phase]}
@@ -517,10 +554,10 @@ export default function PlayerBot() {
                 t.type === "win"
                   ? "bg-emerald-900/90 text-emerald-400 border border-emerald-500/50"
                   : t.type === "lose"
-                  ? "bg-rose-900/90 text-rose-400 border border-rose-500/50"
-                  : t.type === "push"
-                  ? "bg-amber-900/90 text-amber-400 border border-amber-500/50"
-                  : "bg-zinc-900/90 text-zinc-300 border border-zinc-700/50"
+                    ? "bg-rose-900/90 text-rose-400 border border-rose-500/50"
+                    : t.type === "push"
+                      ? "bg-amber-900/90 text-amber-400 border border-amber-500/50"
+                      : "bg-zinc-900/90 text-zinc-300 border border-zinc-700/50"
               }`}
             >
               {t.msg}
@@ -535,7 +572,9 @@ export default function PlayerBot() {
           </div>
           <div className="max-h-[135px] overflow-y-auto px-2 py-1.5 flex flex-col gap-1.5 scrollbar-thin">
             {tunnels.length === 0 ? (
-              <div className="text-[10px] text-zinc-500 italic p-2">Waiting for tunnel data...</div>
+              <div className="text-[10px] text-zinc-500 italic p-2">
+                Waiting for tunnel data...
+              </div>
             ) : (
               tunnels.map((t) => {
                 const style = OUTCOME_STYLE[t.result];
@@ -585,26 +624,48 @@ export default function PlayerBot() {
         {/* Betting Spot (Desk Layout) */}
         <div className={`betting-spot ${animState !== "idle" ? "active" : ""}`}>
           <div className="betting-label">PAYS 3 TO 2</div>
-          <div className="text-[8px] text-[#d4af37]/60 font-mono tracking-wider font-extrabold uppercase mt-1">WAGER $100</div>
+          <div className="text-[8px] text-[#d4af37]/60 font-mono tracking-wider font-extrabold uppercase mt-1">
+            WAGER $100
+          </div>
         </div>
 
         {/* Active Animated Chips Layer */}
         {animState !== "idle" && (
           <div className="table-chips-layer">
             {animState === "deal" && (
-              <img src={chip100} className="animated-chip chip-deal" alt="bet chip" />
+              <img
+                src={chip100}
+                className="animated-chip chip-deal"
+                alt="bet chip"
+              />
             )}
             {animState === "win" && (
               <>
-                <img src={chip100} className="animated-chip chip-win-collect-1" alt="bet chip 1" />
-                <img src={chip100} className="animated-chip chip-win-collect-2" alt="bet chip 2" />
+                <img
+                  src={chip100}
+                  className="animated-chip chip-win-collect-1"
+                  alt="bet chip 1"
+                />
+                <img
+                  src={chip100}
+                  className="animated-chip chip-win-collect-2"
+                  alt="bet chip 2"
+                />
               </>
             )}
             {animState === "lose" && (
-              <img src={chip100} className="animated-chip chip-lose" alt="bet chip" />
+              <img
+                src={chip100}
+                className="animated-chip chip-lose"
+                alt="bet chip"
+              />
             )}
             {animState === "push" && (
-              <img src={chip100} className="animated-chip chip-push" alt="bet chip" />
+              <img
+                src={chip100}
+                className="animated-chip chip-push"
+                alt="bet chip"
+              />
             )}
           </div>
         )}
@@ -613,14 +674,19 @@ export default function PlayerBot() {
         <div className="absolute top-[20%] md:top-[16%] left-1/2 -translate-x-1/2 z-20 w-full max-w-xs flex flex-col items-center">
           {/* Dealer Stack Display */}
           <div className="absolute -left-8 md:-left-14 top-[40px] flex flex-col items-center">
-            <span className="text-[7px] text-emerald-200/50 uppercase tracking-widest mb-1 font-bold">Stacks</span>
+            <span className="text-[7px] text-emerald-200/50 uppercase tracking-widest mb-1 font-bold">
+              Stacks
+            </span>
             <div className="profile-chip-stack">
               {getChipStack(view.dealerBalance).map((chip, idx) => (
                 <img
                   key={idx}
                   src={chip}
                   className="stacked-chip"
-                  style={{ bottom: `calc(var(--chip-spacing, 8px) * ${idx})`, transform: `rotate(${idx * 4 - 8}deg)` }}
+                  style={{
+                    bottom: `calc(var(--chip-spacing, 8px) * ${idx})`,
+                    transform: `rotate(${idx * 4 - 8}deg)`,
+                  }}
                   alt="chip"
                 />
               ))}
@@ -683,14 +749,19 @@ export default function PlayerBot() {
         <div className="absolute top-[70%] left-1/2 -translate-x-1/2 z-20 w-full max-w-xs flex flex-col items-center">
           {/* Player Stack Display */}
           <div className="absolute -left-8 md:-left-14 top-[40px] flex flex-col items-center">
-            <span className="text-[7px] text-emerald-200/50 uppercase tracking-widest mb-1 font-bold">Stacks</span>
+            <span className="text-[7px] text-emerald-200/50 uppercase tracking-widest mb-1 font-bold">
+              Stacks
+            </span>
             <div className="profile-chip-stack">
               {getChipStack(view.playerBalance).map((chip, idx) => (
                 <img
                   key={idx}
                   src={chip}
                   className="stacked-chip"
-                  style={{ bottom: `calc(var(--chip-spacing, 8px) * ${idx})`, transform: `rotate(${idx * 4 - 8}deg)` }}
+                  style={{
+                    bottom: `calc(var(--chip-spacing, 8px) * ${idx})`,
+                    transform: `rotate(${idx * 4 - 8}deg)`,
+                  }}
                   alt="chip"
                 />
               ))}
@@ -715,25 +786,33 @@ export default function PlayerBot() {
             <div className="flex flex-col items-start gap-0.5">
               <div className="flex items-center gap-1.5 text-[9px] md:text-[11px] font-bold uppercase tracking-wider text-zinc-500">
                 <span>Player stake:</span>
-                <span className="text-white font-mono font-black">{view.playerBalance}</span>
+                <span className="text-white font-mono font-black">
+                  {view.playerBalance}
+                </span>
                 <span className="text-zinc-600">({view.playerSum})</span>
               </div>
               <div className="flex items-center gap-1.5 text-[9px] md:text-[11px] font-bold uppercase tracking-wider text-zinc-500">
                 <span>Dealer stake:</span>
-                <span className="text-white font-mono font-black">{view.dealerBalance}</span>
+                <span className="text-white font-mono font-black">
+                  {view.dealerBalance}
+                </span>
                 <span className="text-zinc-600">({view.dealerSum})</span>
               </div>
             </div>
-            
+
             {/* Hidden on mobile to save space */}
             <div className="hidden lg:flex flex-col items-start gap-0.5">
               <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-zinc-500">
                 <span>Player wallet:</span>
-                <span className="text-white font-mono font-black">{suiOf(balances.a)} SUI</span>
+                <span className="text-white font-mono font-black">
+                  {suiOf(balances.a)} SUI
+                </span>
               </div>
               <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-zinc-500">
                 <span>Dealer wallet:</span>
-                <span className="text-white font-mono font-black">{suiOf(balances.b)} SUI</span>
+                <span className="text-white font-mono font-black">
+                  {suiOf(balances.b)} SUI
+                </span>
               </div>
               <div className="mt-0.5">{refreshBtn}</div>
             </div>
@@ -753,11 +832,19 @@ export default function PlayerBot() {
         <div className="w-full flex flex-col md:flex-row items-center justify-between gap-1 md:gap-2 mt-1 md:mt-2 pt-1 md:pt-2 border-t border-zinc-850">
           <div className="text-[9px] md:text-[11px] uppercase tracking-widest font-bold">
             {phase === "error" || error || walletError ? (
-              <span className="text-rose-400 normal-case tracking-normal font-mono break-words">{error ?? walletError ?? "Error"}</span>
+              <span className="text-rose-400 normal-case tracking-normal font-mono break-words">
+                {error ?? walletError ?? "Error"}
+              </span>
             ) : fundNote ? (
-              <span className="text-amber-400 normal-case tracking-normal break-words">{fundNote}</span>
+              <span className="text-amber-400 normal-case tracking-normal break-words">
+                {fundNote}
+              </span>
             ) : (
-              <span className={running ? "text-[#d4af37] animate-pulse" : "text-zinc-500"}>
+              <span
+                className={
+                  running ? "text-[#d4af37] animate-pulse" : "text-zinc-500"
+                }
+              >
                 {phaseLabel[phase]}
               </span>
             )}

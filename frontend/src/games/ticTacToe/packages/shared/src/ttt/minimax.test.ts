@@ -2,7 +2,9 @@ import { describe, expect, it } from "bun:test";
 import { optimalMoves } from "./minimax";
 import { CELL_EMPTY, CELL_PLAYER, CELL_SERVER } from "../constants";
 
-const E = CELL_EMPTY, X = CELL_PLAYER, O = CELL_SERVER;
+const E = CELL_EMPTY,
+  X = CELL_PLAYER,
+  O = CELL_SERVER;
 
 describe("minimax optimalMoves", () => {
   it("takes the immediate winning move", () => {

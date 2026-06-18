@@ -28,7 +28,10 @@ export function getOrCreateEphemeral(): PvpEphemeral {
   try {
     const stored = localStorage.getItem(EPH_KEY);
     if (stored) seed = fromHEX(stored);
-    else { seed = core.generateKeyPair().secretKey; localStorage.setItem(EPH_KEY, toHEX(seed)); }
+    else {
+      seed = core.generateKeyPair().secretKey;
+      localStorage.setItem(EPH_KEY, toHEX(seed));
+    }
   } catch {
     seed = core.generateKeyPair().secretKey;
   }
@@ -36,6 +39,13 @@ export function getOrCreateEphemeral(): PvpEphemeral {
 }
 
 /** Fetch an address's SUI balance (MIST). */
-export async function balanceOf(client: SuiClient, address: string): Promise<bigint> {
-  try { return BigInt((await client.getBalance({ owner: address })).totalBalance); } catch { return 0n; }
+export async function balanceOf(
+  client: SuiClient,
+  address: string,
+): Promise<bigint> {
+  try {
+    return BigInt((await client.getBalance({ owner: address })).totalBalance);
+  } catch {
+    return 0n;
+  }
 }

@@ -17,7 +17,7 @@ const chip1000 = "/chip-1000.svg";
 function getChipStack(balance: number): string[] {
   const stack: string[] = [];
   let remaining = balance;
-  
+
   const chipTypes = [
     { value: 1000, asset: chip1000 },
     { value: 500, asset: chip500 },
@@ -31,11 +31,11 @@ function getChipStack(balance: number): string[] {
       remaining -= chip.value;
     }
   }
-  
+
   if (stack.length === 0 && balance > 0) {
     stack.push(chip25);
   }
-  
+
   return stack;
 }
 
@@ -97,7 +97,9 @@ export default function PlayerVsDealer() {
   } = game;
   const latestRound = rounds.length > 0 ? rounds[rounds.length - 1] : null;
 
-  const [animState, setAnimState] = useState<"idle" | "deal" | "win" | "lose" | "push">("idle");
+  const [animState, setAnimState] = useState<
+    "idle" | "deal" | "win" | "lose" | "push"
+  >("idle");
   const prevRoundRef = useRef<number>(-1);
   const prevPhaseRef = useRef<string>("");
   const prevBalanceRef = useRef<number>(-1);
@@ -146,7 +148,11 @@ export default function PlayerVsDealer() {
     prevBalanceRef.current = view.playerBalance;
   }, [view.round, view.phase, view.playerBalance]);
 
-  type ToastMsg = { id: number; msg: string; type: "info" | "win" | "lose" | "push" };
+  type ToastMsg = {
+    id: number;
+    msg: string;
+    type: "info" | "win" | "lose" | "push";
+  };
   const [toasts, setToasts] = useState<ToastMsg[]>([]);
   const toastIdRef = useRef(0);
 
@@ -163,9 +169,12 @@ export default function PlayerVsDealer() {
 
   useEffect(() => {
     const prev = prevViewRef.current;
-    
+
     // Player Hit
-    if (view.playerCards.length > prev.playerCards.length && prev.playerCards.length > 0) {
+    if (
+      view.playerCards.length > prev.playerCards.length &&
+      prev.playerCards.length > 0
+    ) {
       addToast(`Player Hits (${view.playerSum})`);
     }
     // Player Stand
@@ -173,14 +182,17 @@ export default function PlayerVsDealer() {
       addToast(`Player Stands (${prev.playerSum})`);
     }
     // Dealer Hit
-    if (view.dealerCards.length > prev.dealerCards.length && prev.dealerCards.length > 0) {
+    if (
+      view.dealerCards.length > prev.dealerCards.length &&
+      prev.dealerCards.length > 0
+    ) {
       addToast(`Dealer Hits (${view.dealerSum})`);
     }
     // Dealer Stand
     if (prev.phase === "dealer" && view.phase === "round_over") {
       addToast(`Dealer Stands (${prev.dealerSum})`);
     }
-    
+
     prevViewRef.current = view;
   }, [view]);
 
@@ -241,9 +253,7 @@ export default function PlayerVsDealer() {
   );
 
   const running =
-    phase === "funding" ||
-    phase === "opening" ||
-    phase === "settling";
+    phase === "funding" || phase === "opening" || phase === "settling";
   const inGame =
     phase === "opening" || phase === "playing" || phase === "settling";
   const terminal = phase === "done" || result !== null;
@@ -343,10 +353,12 @@ export default function PlayerVsDealer() {
 
           <div className="flex flex-col items-center gap-1.5 text-xs font-mono text-zinc-400">
             <span>
-              Player: <span className="text-white">{suiOf(balances.a)} SUI</span>
+              Player:{" "}
+              <span className="text-white">{suiOf(balances.a)} SUI</span>
             </span>
             <span>
-              Dealer: <span className="text-white">{suiOf(balances.b)} SUI</span>
+              Dealer:{" "}
+              <span className="text-white">{suiOf(balances.b)} SUI</span>
             </span>
             {refreshBtn}
           </div>
@@ -488,10 +500,10 @@ export default function PlayerVsDealer() {
                 t.type === "win"
                   ? "bg-emerald-900/90 text-emerald-400 border border-emerald-500/50"
                   : t.type === "lose"
-                  ? "bg-rose-900/90 text-rose-400 border border-rose-500/50"
-                  : t.type === "push"
-                  ? "bg-amber-900/90 text-amber-400 border border-amber-500/50"
-                  : "bg-zinc-900/90 text-zinc-300 border border-zinc-700/50"
+                    ? "bg-rose-900/90 text-rose-400 border border-rose-500/50"
+                    : t.type === "push"
+                      ? "bg-amber-900/90 text-amber-400 border border-amber-500/50"
+                      : "bg-zinc-900/90 text-zinc-300 border border-zinc-700/50"
               }`}
             >
               {t.msg}
@@ -502,40 +514,67 @@ export default function PlayerVsDealer() {
         {/* Betting Spot (Desk Layout) */}
         <div className={`betting-spot ${animState !== "idle" ? "active" : ""}`}>
           <div className="betting-label">PAYS 3 TO 2</div>
-          <div className="text-[8px] text-[#d4af37]/60 font-mono tracking-wider font-extrabold uppercase mt-1">WAGER $100</div>
+          <div className="text-[8px] text-[#d4af37]/60 font-mono tracking-wider font-extrabold uppercase mt-1">
+            WAGER $100
+          </div>
         </div>
 
         {/* Active Animated Chips Layer */}
         {animState !== "idle" && (
           <div className="table-chips-layer">
             {animState === "deal" && (
-              <img src={chip100} className="animated-chip chip-deal" alt="bet chip" />
+              <img
+                src={chip100}
+                className="animated-chip chip-deal"
+                alt="bet chip"
+              />
             )}
             {animState === "win" && (
               <>
-                <img src={chip100} className="animated-chip chip-win-collect-1" alt="bet chip 1" />
-                <img src={chip100} className="animated-chip chip-win-collect-2" alt="bet chip 2" />
+                <img
+                  src={chip100}
+                  className="animated-chip chip-win-collect-1"
+                  alt="bet chip 1"
+                />
+                <img
+                  src={chip100}
+                  className="animated-chip chip-win-collect-2"
+                  alt="bet chip 2"
+                />
               </>
             )}
             {animState === "lose" && (
-              <img src={chip100} className="animated-chip chip-lose" alt="bet chip" />
+              <img
+                src={chip100}
+                className="animated-chip chip-lose"
+                alt="bet chip"
+              />
             )}
             {animState === "push" && (
-              <img src={chip100} className="animated-chip chip-push" alt="bet chip" />
+              <img
+                src={chip100}
+                className="animated-chip chip-push"
+                alt="bet chip"
+              />
             )}
           </div>
         )}
 
         <div className="absolute top-[20%] md:top-[16%] left-1/2 -translate-x-1/2 z-20 w-full max-w-xs md:max-w-md flex flex-col items-center">
           <div className="absolute -left-8 md:-left-14 top-[40px] flex flex-col items-center">
-            <span className="text-[7px] text-emerald-200/50 uppercase tracking-widest mb-1 font-bold">Stacks</span>
+            <span className="text-[7px] text-emerald-200/50 uppercase tracking-widest mb-1 font-bold">
+              Stacks
+            </span>
             <div className="profile-chip-stack">
               {getChipStack(view.dealerBalance).map((chip, idx) => (
                 <img
                   key={idx}
                   src={chip}
                   className="stacked-chip"
-                  style={{ bottom: `calc(var(--chip-spacing, 8px) * ${idx})`, transform: `rotate(${idx * 4 - 8}deg)` }}
+                  style={{
+                    bottom: `calc(var(--chip-spacing, 8px) * ${idx})`,
+                    transform: `rotate(${idx * 4 - 8}deg)`,
+                  }}
                   alt="chip"
                 />
               ))}
@@ -593,14 +632,19 @@ export default function PlayerVsDealer() {
 
         <div className="absolute top-[70%] left-1/2 -translate-x-1/2 z-20 w-full max-w-xs md:max-w-md flex flex-col items-center">
           <div className="absolute -left-8 md:-left-14 top-[40px] flex flex-col items-center">
-            <span className="text-[7px] text-emerald-200/50 uppercase tracking-widest mb-1 font-bold">Stacks</span>
+            <span className="text-[7px] text-emerald-200/50 uppercase tracking-widest mb-1 font-bold">
+              Stacks
+            </span>
             <div className="profile-chip-stack">
               {getChipStack(view.playerBalance).map((chip, idx) => (
                 <img
                   key={idx}
                   src={chip}
                   className="stacked-chip"
-                  style={{ bottom: `calc(var(--chip-spacing, 8px) * ${idx})`, transform: `rotate(${idx * 4 - 8}deg)` }}
+                  style={{
+                    bottom: `calc(var(--chip-spacing, 8px) * ${idx})`,
+                    transform: `rotate(${idx * 4 - 8}deg)`,
+                  }}
                   alt="chip"
                 />
               ))}

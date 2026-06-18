@@ -3,10 +3,18 @@ import assert from "node:assert/strict";
 
 // Relative SDK imports (runtime): tsx needs no path-alias config this way.
 import { createParticipant } from "../../../../sui-tunnel-ts/src/core/keys.ts";
-import { OffchainTunnel, verifyCoSignedUpdate } from "../../../../sui-tunnel-ts/src/core/tunnel.ts";
+import {
+  OffchainTunnel,
+  verifyCoSignedUpdate,
+} from "../../../../sui-tunnel-ts/src/core/tunnel.ts";
 import { BlackjackProtocol } from "../../../../sui-tunnel-ts/src/protocol/blackjack.ts";
 
-import { partyForPhase, stepSession, deriveView, sessionResult } from "./session-core.ts";
+import {
+  partyForPhase,
+  stepSession,
+  deriveView,
+  sessionResult,
+} from "./session-core.ts";
 
 function newTunnel(stake: bigint) {
   const a = createParticipant("player-bot");
@@ -71,5 +79,7 @@ test("deriveView and sessionResult report the bankroll outcome", () => {
   assert.equal(typeof view.playerBalance, "number");
   assert.equal(typeof view.round, "number");
   assert.equal(view.dealerCards.length, view.dealerCardCount);
-  assert.ok(["win", "lose", "push"].includes(sessionResult(tunnel.state, stake)));
+  assert.ok(
+    ["win", "lose", "push"].includes(sessionResult(tunnel.state, stake)),
+  );
 });

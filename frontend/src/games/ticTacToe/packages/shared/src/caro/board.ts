@@ -19,7 +19,11 @@ export function inBounds(size: number, r: number, c: number): boolean {
 }
 
 /** Pure: a copy of `board` with `idx` set to `mark`. */
-export function applyMark(board: CaroBoard, idx: number, mark: number): CaroBoard {
+export function applyMark(
+  board: CaroBoard,
+  idx: number,
+  mark: number,
+): CaroBoard {
   const next = board.slice();
   next[idx] = mark;
   return next;
@@ -34,7 +38,11 @@ export function isFull(board: CaroBoard): boolean {
  * return that mark; otherwise 0. Only scans around `idx`, so cost is O(1) per move.
  * Returns 0 if `idx` is out of range or empty.
  */
-export function winnerAround(board: CaroBoard, size: number, idx: number): number {
+export function winnerAround(
+  board: CaroBoard,
+  size: number,
+  idx: number,
+): number {
   if (idx < 0 || idx >= size * size) return 0;
   const mark = board[idx];
   if (mark === 0) return 0;
@@ -66,7 +74,11 @@ export function winnerAround(board: CaroBoard, size: number, idx: number): numbe
  * `idx` does not complete a five. Naturally empty mid-game (a non-winning last move has no
  * 5-run), so the UI can call it every render and only highlights once a game is won.
  */
-export function winningLine(board: CaroBoard, size: number, idx: number): number[] {
+export function winningLine(
+  board: CaroBoard,
+  size: number,
+  idx: number,
+): number[] {
   if (idx < 0 || idx >= size * size) return [];
   const mark = board[idx];
   if (mark === 0) return [];

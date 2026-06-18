@@ -24,7 +24,14 @@ export type PeerMessage =
   | { t: "hello"; ephemeralPubkey: string }
   | { t: "open"; tunnelId: string }
   | { t: "ready" }
-  | { t: "settleHalf"; partyABalance: string; partyBBalance: string; finalNonce: string; timestamp: string; sig: string }
+  | {
+      t: "settleHalf";
+      partyABalance: string;
+      partyBBalance: string;
+      finalNonce: string;
+      timestamp: string;
+      sig: string;
+    }
   | { t: "frame"; data: string };
 
 /** Engine transport + a peer-message side channel, both over one match's relay. */
@@ -38,7 +45,8 @@ const te = new TextEncoder();
 
 /** Derive the /v1/mp WS URL from the backend base (empty => same-origin dev proxy). */
 export function resolveMpWsUrl(backendUrl: string): string {
-  const base = backendUrl || (typeof location !== "undefined" ? location.origin : "");
+  const base =
+    backendUrl || (typeof location !== "undefined" ? location.origin : "");
   return base.replace(/^http/, "ws").replace(/\/+$/, "") + "/v1/mp";
 }
 
@@ -120,7 +128,8 @@ export class MpClient {
   /** Build the engine transport + peer side-channel for a paired match. */
   channel(matchId: string): PvpChannel {
     let engineOnFrame: ((bytes: Uint8Array) => void) | null = null;
-    let peerCb: ((msg: Exclude<PeerMessage, { t: "frame" }>) => void) | null = null;
+    let peerCb: ((msg: Exclude<PeerMessage, { t: "frame" }>) => void) | null =
+      null;
     this.#onRelay = (payload) => {
       const o = JSON.parse(payload) as PeerMessage;
       if (o.t === "frame") engineOnFrame?.(te.encode(o.data));
@@ -130,7 +139,8 @@ export class MpClient {
       this.#send({ type: "relay", matchId, payload: JSON.stringify(obj) });
     return {
       transport: {
-        send: (frame: Uint8Array) => relaySend({ t: "frame", data: new TextDecoder().decode(frame) }),
+        send: (frame: Uint8Array) =>
+          relaySend({ t: "frame", data: new TextDecoder().decode(frame) }),
         onFrame: (cb) => {
           engineOnFrame = cb;
         },

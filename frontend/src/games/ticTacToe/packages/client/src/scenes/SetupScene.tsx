@@ -85,13 +85,29 @@ function BoardSizeChoice({
 
 const MODES: { id: PlayMode; label: string; desc: string }[] = [
   { id: "single", label: "Single game", desc: "Play one game, then stop." },
-  { id: "auto", label: "Auto-play", desc: "Loop games until a bot is low on gas, or you stop." },
+  {
+    id: "auto",
+    label: "Auto-play",
+    desc: "Loop games until a bot is low on gas, or you stop.",
+  },
 ];
 
 const DIFFICULTIES: { id: Difficulty; label: string; desc: string }[] = [
-  { id: "perfect", label: "Both perfect", desc: "Both bots play minimax → almost always a draw." },
-  { id: "even", label: "Even (varied)", desc: "Both competent + random → mixed wins/losses/draws." },
-  { id: "uneven", label: "Uneven", desc: "Bot X plays perfectly, Bot O is weaker → X wins more." },
+  {
+    id: "perfect",
+    label: "Both perfect",
+    desc: "Both bots play minimax → almost always a draw.",
+  },
+  {
+    id: "even",
+    label: "Even (varied)",
+    desc: "Both competent + random → mixed wins/losses/draws.",
+  },
+  {
+    id: "uneven",
+    label: "Uneven",
+    desc: "Bot X plays perfectly, Bot O is weaker → X wins more.",
+  },
 ];
 
 function PlayModeChoice({
@@ -106,7 +122,10 @@ function PlayModeChoice({
       {MODES.map((o) => {
         const active = o.id === value;
         return (
-          <label key={o.id} className="relative cursor-pointer flex items-center justify-center p-4">
+          <label
+            key={o.id}
+            className="relative cursor-pointer flex items-center justify-center p-4"
+          >
             <input
               type="radio"
               name="play_mode"
@@ -118,7 +137,9 @@ function PlayModeChoice({
               {o.label}
               <svg
                 className={`red-circle absolute -inset-4 w-[calc(100%+32px)] h-[calc(100%+32px)] transition-all duration-300 pointer-events-none ${
-                  active ? "opacity-100 scale-100 rotate-[-2deg]" : "opacity-0 scale-95"
+                  active
+                    ? "opacity-100 scale-100 rotate-[-2deg]"
+                    : "opacity-0 scale-95"
                 }`}
                 preserveAspectRatio="none"
                 viewBox="0 0 100 40"
@@ -151,7 +172,8 @@ function DifficultyChoice({
     <div className="flex flex-col gap-4 ml-4">
       {DIFFICULTIES.map((o, idx) => {
         const active = o.id === value;
-        const rotation = idx === 0 ? "rotate-3" : idx === 1 ? "-rotate-6" : "rotate-12";
+        const rotation =
+          idx === 0 ? "rotate-3" : idx === 1 ? "-rotate-6" : "rotate-12";
         return (
           <label
             key={o.id}
@@ -174,7 +196,9 @@ function DifficultyChoice({
               </span>
             </div>
             <div className="flex flex-col ml-2">
-              <span className="font-body-lg text-4xl text-primary leading-tight">{o.label}</span>
+              <span className="font-body-lg text-4xl text-primary leading-tight">
+                {o.label}
+              </span>
               <span className="text-2xl text-outline mt-1">{o.desc}</span>
             </div>
           </label>
@@ -221,7 +245,9 @@ export function SetupScene({
   onStart: () => void;
   onBack: () => void;
 }) {
-  const [activeTab, setActiveTab] = useState<"fund" | "mode" | "difficulty">("fund");
+  const [activeTab, setActiveTab] = useState<"fund" | "mode" | "difficulty">(
+    "fund",
+  );
 
   return (
     <div className="w-[95%] max-w-5xl h-full flex flex-col gap-6 pt-0 pb-0 relative">
@@ -235,7 +261,9 @@ export function SetupScene({
             onClick={onBack}
             className="text-2xl font-label-sm text-outline hover:text-secondary flex items-center gap-2 transition-colors mt-2"
           >
-            <span className="material-symbols-outlined text-3xl">arrow_back</span>
+            <span className="material-symbols-outlined text-3xl">
+              arrow_back
+            </span>
             back
           </button>
         </div>
@@ -252,7 +280,12 @@ export function SetupScene({
             className="btn-scribble relative px-10 py-4 bg-primary text-on-primary font-headline-xl text-3xl hand-drawn-border overflow-hidden transition-all duration-200 hover:-translate-y-2 hover:shadow-[6px_6px_0px_#bc0000] active:translate-y-0 active:shadow-none disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:translate-y-0 disabled:hover:shadow-none flex items-center gap-4 justify-center"
           >
             <span>Start playing</span>
-            <span className="material-symbols-outlined text-4xl mt-1" style={{ fontVariationSettings: "'FILL' 1" }}>play_arrow</span>
+            <span
+              className="material-symbols-outlined text-4xl mt-1"
+              style={{ fontVariationSettings: "'FILL' 1" }}
+            >
+              play_arrow
+            </span>
           </button>
         </div>
       </header>
@@ -309,7 +342,9 @@ export function SetupScene({
         <div className="flex-1 mt-2 flex flex-col justify-start pb-4">
           {activeTab === "fund" && (
             <div className="space-y-4">
-              <h2 className="font-headline-lg-mobile text-2xl text-primary mb-2">Fund the AI Opponents</h2>
+              <h2 className="font-headline-lg-mobile text-2xl text-primary mb-2">
+                Fund the AI Opponents
+              </h2>
               <BotPanel
                 bots={balances}
                 onFund={onFund}
@@ -325,7 +360,9 @@ export function SetupScene({
           {activeTab === "mode" && (
             <div className="space-y-10 flex-1 flex flex-col justify-start">
               <div>
-                <h2 className="font-headline-lg-mobile text-4xl text-primary">Select Game</h2>
+                <h2 className="font-headline-lg-mobile text-4xl text-primary">
+                  Select Game
+                </h2>
                 <div className="py-4">
                   <GameTypeChoice value={gameType} onChange={setGameType} />
                 </div>
@@ -334,8 +371,12 @@ export function SetupScene({
                 )}
               </div>
               <div className="mt-8">
-                <h2 className="font-headline-lg-mobile text-4xl text-primary pt-2">Play Mode</h2>
-                <p className="text-2xl text-outline mt-1 mb-6">Choose how the bot matches are run.</p>
+                <h2 className="font-headline-lg-mobile text-4xl text-primary pt-2">
+                  Play Mode
+                </h2>
+                <p className="text-2xl text-outline mt-1 mb-6">
+                  Choose how the bot matches are run.
+                </p>
                 <div className="py-2">
                   <PlayModeChoice value={mode} onChange={setMode} />
                 </div>
@@ -345,8 +386,12 @@ export function SetupScene({
 
           {activeTab === "difficulty" && (
             <div className="space-y-8 flex-1 flex flex-col justify-start">
-              <h2 className="font-headline-lg-mobile text-4xl text-primary">Set Bot Difficulty</h2>
-              <p className="text-2xl text-outline mt-1 mb-6">Adjust the intelligence level of the bots.</p>
+              <h2 className="font-headline-lg-mobile text-4xl text-primary">
+                Set Bot Difficulty
+              </h2>
+              <p className="text-2xl text-outline mt-1 mb-6">
+                Adjust the intelligence level of the bots.
+              </p>
               <div className="py-4">
                 <DifficultyChoice value={difficulty} onChange={setDifficulty} />
               </div>
@@ -357,4 +402,3 @@ export function SetupScene({
     </div>
   );
 }
-

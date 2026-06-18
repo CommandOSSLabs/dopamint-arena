@@ -1,19 +1,11 @@
 import { register } from "../registry";
-import { TicTacToePvpWindow } from "./TicTacToePvpWindow";
-import { TttBotWindow } from "./TttBotWindow";
+import { TicTacToeWindow } from "./TicTacToeWindow";
 
-// Real two-player PvP: matchmaking + relay co-sign + on-chain stakes.
+// Unified Tic-Tac-Toe & Caro (3x3 and 15x15) with Bot, Auto-play, and PvP Online modes.
 register({
   id: "tic-tac-toe",
-  name: "Tic Tac Toe PvP",
+  name: "Tic Tac Toe & Caro",
   icon: "⭕",
-  Window: TicTacToePvpWindow,
-});
-
-// Bot-vs-bot self-play over a real tunnel; reports activity to the control-plane + live panels.
-register({
-  id: "tic-tac-toe-bots",
-  name: "Tic Tac Toe Bots",
-  icon: "🤖",
-  Window: TttBotWindow,
+  image: "/games/caro.png",
+  Window: TicTacToeWindow,
 });

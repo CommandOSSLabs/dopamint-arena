@@ -11,7 +11,10 @@ function uiBoard(board: number[]): number[] {
 
 function fmtSui(mist: bigint): string {
   const whole = mist / 1_000_000_000n;
-  const frac = (mist % 1_000_000_000n).toString().padStart(9, "0").replace(/0+$/, "");
+  const frac = (mist % 1_000_000_000n)
+    .toString()
+    .padStart(9, "0")
+    .replace(/0+$/, "");
   return frac ? `${whole}.${frac.slice(0, 4)}` : `${whole}`;
 }
 
@@ -29,7 +32,12 @@ function renderTallies(count: number): string {
   return res.trim();
 }
 
-function statusText(phase: BotPhase, turn: "A" | "B", winner: number, gameType: "ttt" | "caro"): string {
+function statusText(
+  phase: BotPhase,
+  turn: "A" | "B",
+  winner: number,
+  gameType: "ttt" | "caro",
+): string {
   const fiveOrLine = gameType === "caro" ? " (5 in a row)" : "";
   if (winner === 1) return `Bot X wins!${fiveOrLine} ❌`;
   if (winner === 2) return `Bot O wins!${fiveOrLine} ⭕`;
@@ -116,7 +124,8 @@ export function GameScene({
   onBack: () => void;
   isPortrait?: boolean;
 }) {
-  const busy = g.phase === "opening" || g.phase === "playing" || g.phase === "settling";
+  const busy =
+    g.phase === "opening" || g.phase === "playing" || g.phase === "settling";
 
   return (
     <div className="w-full h-full overflow-y-auto hide-scrollbar flex flex-col gap-6 pt-8 pb-4 px-4">
@@ -135,17 +144,25 @@ export function GameScene({
       </header>
 
       {/* Main Body Grid - switch from side-by-side to stacked dynamically in portrait */}
-      <div className={`flex ${isPortrait ? "flex-col items-center gap-6" : "flex-row gap-8 items-start justify-between"} mt-2 w-full`}>
+      <div
+        className={`flex ${isPortrait ? "flex-col items-center gap-6" : "flex-row gap-8 items-start justify-between"} mt-2 w-full`}
+      >
         {/* Left Column: Game Area */}
-        <section className={`${isPortrait ? "w-full max-w-[480px]" : "flex-1 min-w-[560px]"} flex flex-col items-center`}>
+        <section
+          className={`${isPortrait ? "w-full max-w-[480px]" : "flex-1 min-w-[560px]"} flex flex-col items-center`}
+        >
           {/* Scoreboard */}
           <div className="w-full max-w-[540px] flex justify-between items-end mb-6 px-4 border-b-2 border-primary/20 pb-4">
             <div className="text-center">
-              <div className="font-headline-lg text-lg text-primary">Bot X (X)</div>
+              <div className="font-headline-lg text-lg text-primary">
+                Bot X (X)
+              </div>
               <div className="font-body-lg text-3xl text-primary mt-1 min-h-[30px] flex items-center justify-center font-bold">
                 {g.score.x}
               </div>
-              <div className="font-label-sm text-[10px] text-outline mt-1">{fmtSui(g.balances.x)} SUI</div>
+              <div className="font-label-sm text-[10px] text-outline mt-1">
+                {fmtSui(g.balances.x)} SUI
+              </div>
             </div>
             <div className="text-center">
               <button
@@ -153,23 +170,35 @@ export function GameScene({
                 title="Reset scores"
                 className="hover:bg-primary/5 p-1 rounded-full text-outline hover:text-primary transition-colors mb-2"
               >
-                <span className="material-symbols-outlined text-lg">autorenew</span>
+                <span className="material-symbols-outlined text-lg">
+                  autorenew
+                </span>
               </button>
-              <div className="font-body-lg text-outline/75 text-base">Draws: {g.score.draws}</div>
+              <div className="font-body-lg text-outline/75 text-base">
+                Draws: {g.score.draws}
+              </div>
             </div>
             <div className="text-center">
-              <div className="font-headline-lg text-lg text-secondary">Bot O (O)</div>
+              <div className="font-headline-lg text-lg text-secondary">
+                Bot O (O)
+              </div>
               <div className="font-body-lg text-3xl text-secondary mt-1 min-h-[30px] flex items-center justify-center font-bold">
                 {g.score.o}
               </div>
-              <div className="font-label-sm text-[10px] text-outline mt-1">{fmtSui(g.balances.o)} SUI</div>
+              <div className="font-label-sm text-[10px] text-outline mt-1">
+                {fmtSui(g.balances.o)} SUI
+              </div>
             </div>
           </div>
 
           {/* Board: 3×3 grid for TTT, N×N grid for caro */}
           <div className="flex justify-center my-4">
             {gameType === "caro" ? (
-              <CaroBoard board={g.board} size={g.boardSize ?? 15} lastMove={g.lastMove ?? -1} />
+              <CaroBoard
+                board={g.board}
+                size={g.boardSize ?? 15}
+                lastMove={g.lastMove ?? -1}
+              />
             ) : (
               <Board board={uiBoard(g.board)} onPlay={() => {}} disabled />
             )}
@@ -179,12 +208,12 @@ export function GameScene({
           <div className="text-center font-body-lg text-2xl text-primary font-bold my-4 min-h-[28px] ink-bleed">
             {statusText(g.phase, g.turn, g.winner, gameType)}
           </div>
-
         </section>
 
         {/* Right Column: Game Log / Info */}
-        <aside className={`${isPortrait ? "w-full max-w-[480px] mt-4" : "w-[340px] shrink-0"} flex flex-col gap-4`}>
-          
+        <aside
+          className={`${isPortrait ? "w-full max-w-[480px] mt-4" : "w-[340px] shrink-0"} flex flex-col gap-4`}
+        >
           {/* Setup and Actions block */}
           <div className="bg-surface-container-low border-[2px] border-primary p-4 relative rounded-sm shadow-[4px_4px_0px_#00336610] w-full flex flex-col items-center">
             <h2 className="font-headline-lg text-lg text-primary mb-2 self-start flex items-center gap-2">
@@ -248,19 +277,26 @@ export function GameScene({
             <span className="material-symbols-outlined">edit_note</span>
             Game Log
           </h2>
-          
+
           <div className="bg-surface-container-low border-[2px] border-primary p-6 relative rounded-sm shadow-[4px_4px_0px_#00336610] w-full">
             {/* Taped effect */}
             <div className="tape-top"></div>
 
             <ul className="space-y-4 pt-2 font-label-sm text-xs text-primary">
               <li className="flex justify-between items-center border-b border-primary/10 pb-2">
-                <span className="font-bold text-outline uppercase text-[10px]">Step</span>
-                <span className="font-bold text-outline uppercase text-[10px]">Tx Digest</span>
+                <span className="font-bold text-outline uppercase text-[10px]">
+                  Step
+                </span>
+                <span className="font-bold text-outline uppercase text-[10px]">
+                  Tx Digest
+                </span>
               </li>
-              
+
               <li className="flex justify-between items-center py-1 border-b border-primary/5">
-                <span className="flex items-center gap-1.5"><span className="text-secondary font-bold">1</span> Open &amp; Fund</span>
+                <span className="flex items-center gap-1.5">
+                  <span className="text-secondary font-bold">1</span> Open &amp;
+                  Fund
+                </span>
                 {g.digests.create ? (
                   <a
                     href={`https://suiscan.xyz/testnet/tx/${g.digests.create}`}
@@ -276,7 +312,10 @@ export function GameScene({
               </li>
 
               <li className="flex justify-between items-center py-1 border-b border-primary/5">
-                <span className="flex items-center gap-1.5"><span className="text-secondary font-bold">2</span> Transcript Root</span>
+                <span className="flex items-center gap-1.5">
+                  <span className="text-secondary font-bold">2</span> Transcript
+                  Root
+                </span>
                 {g.digests.root ? (
                   <span
                     title={g.digests.root}
@@ -290,7 +329,10 @@ export function GameScene({
               </li>
 
               <li className="flex justify-between items-center py-1 border-b border-primary/5">
-                <span className="flex items-center gap-1.5"><span className="text-secondary font-bold">3</span> State Checkpoint</span>
+                <span className="flex items-center gap-1.5">
+                  <span className="text-secondary font-bold">3</span> State
+                  Checkpoint
+                </span>
                 {g.digests.update ? (
                   <a
                     href={`https://suiscan.xyz/testnet/tx/${g.digests.update}`}
@@ -306,7 +348,10 @@ export function GameScene({
               </li>
 
               <li className="flex justify-between items-center py-1 border-b border-primary/5">
-                <span className="flex items-center gap-1.5"><span className="text-secondary font-bold">4</span> Settle & Close</span>
+                <span className="flex items-center gap-1.5">
+                  <span className="text-secondary font-bold">4</span> Settle &
+                  Close
+                </span>
                 {g.digests.close ? (
                   <a
                     href={`https://suiscan.xyz/testnet/tx/${g.digests.close}`}
@@ -345,7 +390,9 @@ export function GameScene({
           {g.tunnels && g.tunnels.length > 0 && (
             <div className="bg-surface-container-low border-[2px] border-primary p-4 relative rounded-sm shadow-[4px_4px_0px_#00336610] w-full">
               <h3 className="font-headline-lg text-base text-primary mb-2 flex items-center gap-2">
-                <span className="material-symbols-outlined text-base">history</span>
+                <span className="material-symbols-outlined text-base">
+                  history
+                </span>
                 Settled Tunnels
               </h3>
               <ul className="space-y-2 font-label-sm text-xs text-primary max-h-[220px] overflow-auto">
@@ -365,7 +412,9 @@ export function GameScene({
                         href={`https://suiscan.xyz/testnet/tx/${t.closeDigest}`}
                         target="_blank"
                         rel="noreferrer"
-                        title={t.rootHex ? `transcript root ${t.rootHex}` : undefined}
+                        title={
+                          t.rootHex ? `transcript root ${t.rootHex}` : undefined
+                        }
                         className="font-mono text-primary underline hover:text-secondary"
                       >
                         {t.closeDigest.slice(0, 6)}…{t.closeDigest.slice(-4)}
