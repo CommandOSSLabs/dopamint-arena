@@ -34,9 +34,9 @@ export const FUSE_TICKS = 8;
 export const BLAST_RADIUS = 2;
 export const MAX_BOMBS_PER_PLAYER = 1;
 export const CRATE_DENSITY = 0.75;
-export const TICK_CAP = 400n;
+export const BOMB_IT_TICK_CAP = 400n;
 /** Minimum fundable stake per seat (hook clamps to this). */
-export const MIN_STAKE = 100n;
+export const BOMB_IT_MIN_STAKE = 100n;
 
 export const SPAWN_A = { row: 1, col: 1 };
 export const SPAWN_B = { row: 7, col: 7 };
@@ -222,4 +222,72 @@ export function resolveExplosions(
   for (const ci of cells) if (grid[ci] === CELL_CRATE) grid[ci] = CELL_FLOOR;
   const remaining = bombs.filter((_, i) => !detonating.has(i));
   return { cells, remaining };
+}
+
+// ============================================
+// PROTOCOL
+// ============================================
+function spawn(row: number, col: number): BombItPlayer {
+  return { row, col, alive: true };
+}
+
+export class BombItProtocol implements Protocol<BombItState, BombItMove> {
+  readonly name = "bomb_it.v1";
+
+  initialState(ctx: ProtocolContext): BombItState {
+    const seed = seedFromTunnelId(ctx.tunnelId);
+    return {
+      tick: 0n,
+      seed,
+      grid: buildGrid(seed),
+      players: [spawn(SPAWN_A.row, SPAWN_A.col), spawn(SPAWN_B.row, SPAWN_B.col)],
+      bombs: [],
+      winner: null,
+      balanceA: ctx.initialBalances.a,
+      balanceB: ctx.initialBalances.b,
+      total: ctx.initialBalances.a + ctx.initialBalances.b,
+    };
+  }
+
+  applyMove(_state: BombItState, _move: BombItMove, _by: Party): BombItState {
+    throw new Error("applyMove not implemented yet"); // Task 4
+  }
+
+  encodeState(s: BombItState): Uint8Array {
+    const parts: Uint8Array[] = [
+      DOMAIN,
+      u64ToBeBytes(s.tick),
+      u64ToBeBytes(s.seed),
+      u64ToBeBytes(s.balanceA),
+      u64ToBeBytes(s.balanceB),
+      s.grid,
+    ];
+    for (const p of s.players) {
+      parts.push(u64ToBeBytes(p.row), u64ToBeBytes(p.col), new Uint8Array([p.alive ? 1 : 0]));
+    }
+    // Two slots indexed by owner (slot 0 = A's live bomb or empty, slot 1 = B's).
+    for (let slot = 0; slot < 2; slot++) {
+      const owner: Party = slot === 0 ? "A" : "B";
+      const b = s.bombs.find((x) => x.owner === owner);
+      parts.push(
+        new Uint8Array([b ? 1 : 0]),
+        u64ToBeBytes(b ? b.row : 0),
+        u64ToBeBytes(b ? b.col : 0),
+        u64ToBeBytes(b ? b.fuse : 0),
+        new Uint8Array([slot]),
+      );
+    }
+    parts.push(
+      new Uint8Array([s.winner === "A" ? 1 : s.winner === "B" ? 2 : s.winner === "draw" ? 3 : 0]),
+    );
+    return concatBytes(parts);
+  }
+
+  balances(s: BombItState): Balances {
+    return { a: s.balanceA, b: s.balanceB };
+  }
+
+  isTerminal(s: BombItState): boolean {
+    return s.winner !== null;
+  }
 }
