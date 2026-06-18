@@ -163,3 +163,6 @@ vite.config.ts.timestamp-*
 
 # Rust
 /target
+
+# Playwright MCP scratch output
+.playwright-mcp/
