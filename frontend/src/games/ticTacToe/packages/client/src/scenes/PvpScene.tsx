@@ -96,12 +96,25 @@ export function PvpScene({ onBack }: { onBack: () => void }) {
             {g.innerOver && !g.terminal && g.role === "A" && (
               <button onClick={g.next} disabled={g.auto} className="px-4 py-2 rounded-lg bg-tertiary text-on-tertiary font-bold disabled:opacity-40">Next game</button>
             )}
-            {g.innerOver && <button onClick={g.stop} className="px-4 py-2 rounded-lg bg-red-700 text-white font-bold">Stop &amp; settle</button>}
+            {g.innerOver && g.phase === "playing" && <button onClick={g.stop} className="px-4 py-2 rounded-lg bg-red-700 text-white font-bold">Stop &amp; settle</button>}
             {g.phase === "done" && <button onClick={() => { g.leave(); g.queue(); }} className="px-4 py-2 rounded-lg bg-tertiary text-on-tertiary font-bold">Rematch</button>}
             <label className="flex items-center gap-1.5 text-sm">
               <input type="checkbox" checked={g.auto} onChange={(e) => g.setAuto(e.target.checked)} /> Auto
             </label>
           </div>
+
+          {g.games.length > 0 && (
+            <div className="w-full max-w-xs max-h-28 overflow-y-auto flex flex-col gap-0.5 text-[11px] font-mono">
+              {[...g.games].reverse().map((r) => (
+                <div key={r.game} className="flex justify-between text-on-surface/70">
+                  <span>Game {r.game}</span>
+                  <span className={r.winner === 1 ? "text-primary" : r.winner === 2 ? "text-secondary" : "text-on-surface/50"}>
+                    {r.winner === 1 ? "X won" : r.winner === 2 ? "O won" : "Draw"}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
 
           <div className="flex items-center gap-3">
             <Digest label="open" digest={g.digests.create} />

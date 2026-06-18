@@ -83,6 +83,8 @@ export function usePvpTicTacToe(variant: Variant, boardSize: number): PvpTttView
   const [role, setRole] = useState<"A" | "B" | null>(null);
   const [state, setState] = useState<AnyState | null>(null);
   const [games, setGames] = useState<GameResult[]>([]);
+  // `score` is the authoritative cumulative tally; `games` below is capped at the last 50 entries
+  // for display, so after 50 games the two intentionally diverge — do NOT re-derive score from games.
   const [score, setScore] = useState({ x: 0, o: 0, draws: 0 });
   const [auto, setAutoState] = useState(false);
   const [balance, setBalance] = useState<bigint>(0n);
