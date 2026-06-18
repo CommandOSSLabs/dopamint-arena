@@ -74,8 +74,8 @@ export default function App() {
     targetHeight = isPortrait ? 860 : 700;
     if (gameType === "caro") targetHeight = isPortrait ? 1020 : 840;
   } else if (scene === "pvp") {
-    targetWidth = isPortrait ? 460 : 720;
-    targetHeight = 820;
+    targetWidth = isPortrait ? 500 : 900;
+    targetHeight = isPortrait ? 980 : 820;
   }
 
   return (
@@ -85,7 +85,7 @@ export default function App() {
 
       <div className="w-full h-full flex items-center justify-center z-10 pl-[40px] md:pl-[80px]">
         <GameCardScale targetWidth={targetWidth} targetHeight={targetHeight}>
-          {scene === "login" && <LoginScene onContinue={() => setScene("setup")} />}
+          {scene === "login" && <LoginScene onContinue={() => setScene("setup")} onPlayOnline={() => setScene("pvp")} />}
 
           {scene === "setup" && (
             <SetupScene
@@ -106,12 +106,11 @@ export default function App() {
               setBoardSize={setBoardSize}
               onStart={start}
               onBack={() => setScene("login")}
-              onPlayOnline={() => setScene("pvp")}
             />
           )}
 
           {scene === "game" && <GameScene g={g} mode={mode} gameType={gameType} onBack={backToSetup} isPortrait={isPortrait} />}
-          {scene === "pvp" && <PvpScene onBack={() => setScene("setup")} />}
+          {scene === "pvp" && <PvpScene onBack={() => setScene("login")} />}
         </GameCardScale>
       </div>
     </div>

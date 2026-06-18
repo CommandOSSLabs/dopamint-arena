@@ -5,7 +5,7 @@ function short(a?: string) {
   return a ? `${a.slice(0, 6)}…${a.slice(-4)}` : "";
 }
 
-export function LoginScene({ onContinue }: { onContinue: () => void }) {
+export function LoginScene({ onContinue, onPlayOnline }: { onContinue: () => void; onPlayOnline?: () => void }) {
   const { isConnected, address, login, logout } = useCustomWallet();
 
   return (
@@ -91,6 +91,16 @@ export function LoginScene({ onContinue }: { onContinue: () => void }) {
                 Continue →
               </button>
             </div>
+
+            {onPlayOnline && (
+              <button
+                onClick={onPlayOnline}
+                className="w-full max-w-xs py-3 px-5 border-[3px] border-secondary bg-surface text-secondary font-headline-lg-mobile text-base uppercase tracking-widest hover:bg-secondary hover:text-on-secondary active:translate-y-[2px] transition-all rounded-sm flex items-center justify-center gap-2 shadow-[3px_3px_0px_#001e40]"
+              >
+                <span className="material-symbols-outlined text-lg">group</span>
+                Play Online (PvP)
+              </button>
+            )}
 
             <button 
               onClick={logout} 

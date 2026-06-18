@@ -202,7 +202,6 @@ export function SetupScene({
   setBoardSize,
   onStart,
   onBack,
-  onPlayOnline,
 }: {
   balances: { x: bigint; o: bigint };
   onFund: () => void;
@@ -221,7 +220,6 @@ export function SetupScene({
   setBoardSize: (n: number) => void;
   onStart: () => void;
   onBack: () => void;
-  onPlayOnline?: () => void;
 }) {
   const [activeTab, setActiveTab] = useState<"fund" | "mode" | "difficulty">("fund");
 
@@ -349,14 +347,6 @@ export function SetupScene({
           <span>Start playing</span>
           <span className="material-symbols-outlined text-sm" style={{ fontVariationSettings: "'FILL' 1" }}>play_arrow</span>
         </button>
-        {onPlayOnline && (
-          <button
-            onClick={onPlayOnline}
-            className="w-full mt-2 px-4 py-2 rounded-lg border border-tertiary text-tertiary font-bold text-sm uppercase tracking-widest hover:bg-tertiary hover:text-on-tertiary transition-colors"
-          >
-            Play online (PvP)
-          </button>
-        )}
       </div>
     </div>
   );
