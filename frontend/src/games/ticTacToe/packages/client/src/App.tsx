@@ -5,9 +5,10 @@ import { useCustomWallet } from "@/contexts/CustomWallet";
 import { LoginScene } from "@/scenes/LoginScene";
 import { SetupScene, type PlayMode, type GameType } from "@/scenes/SetupScene";
 import { GameScene } from "@/scenes/GameScene";
+import { PvpScene } from "@/scenes/PvpScene";
 import { GameCardScale } from "@/components/GameCardScale";
 
-type Scene = "login" | "setup" | "game";
+type Scene = "login" | "setup" | "game" | "pvp";
 
 export default function App() {
   const [scene, setScene] = useState<Scene>("login");
@@ -72,6 +73,9 @@ export default function App() {
     targetWidth = isPortrait ? 500 : 920;
     targetHeight = isPortrait ? 860 : 700;
     if (gameType === "caro") targetHeight = isPortrait ? 1020 : 840;
+  } else if (scene === "pvp") {
+    targetWidth = isPortrait ? 460 : 720;
+    targetHeight = 820;
   }
 
   return (
@@ -102,10 +106,12 @@ export default function App() {
               setBoardSize={setBoardSize}
               onStart={start}
               onBack={() => setScene("login")}
+              onPlayOnline={() => setScene("pvp")}
             />
           )}
 
           {scene === "game" && <GameScene g={g} mode={mode} gameType={gameType} onBack={backToSetup} isPortrait={isPortrait} />}
+          {scene === "pvp" && <PvpScene onBack={() => setScene("setup")} />}
         </GameCardScale>
       </div>
     </div>
