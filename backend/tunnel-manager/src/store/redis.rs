@@ -125,6 +125,12 @@ impl ControlStore for RedisControlStore {
         }
     }
 
+    async fn add_actions_batch(&self, game: &str, count: i64) {
+        if count > 0 {
+            self.add_actions(game, count as u64).await;
+        }
+    }
+
     async fn snapshot(&self) -> StatsSnapshot {
         let total: i64 = self
             .pool
@@ -638,6 +644,32 @@ mod tests {
                 .is_some_and(|g| g.total_actions >= 150),
             "per-game actions must accumulate"
         );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires TEST_REDIS_URL"]
+    async fn actions_batch_count_accumulates_per_game() {
+        let Some(url) = test_url() else { return };
+        let s = RedisControlStore::new(connect(&url).await.unwrap());
+        s.add_actions_batch("blackjack", 100).await;
+        s.add_actions_batch("blackjack", 50).await;
+        s.add_actions_batch("blackjack", 0).await; // no-op
+        s.add_actions_batch("blackjack", -5).await; // no-op
+        s.add_actions_batch("poker", 25).await;
+        let snap = s.snapshot().await;
+        assert!(
+            snap.per_game
+                .get("blackjack")
+                .is_some_and(|g| g.total_actions >= 150),
+            "batch increments for the same game must accumulate"
+        );
+        assert!(
+            snap.per_game
+                .get("poker")
+                .is_some_and(|g| g.total_actions >= 25),
+            "batch increments must be per-game"
+        );
+        assert!(snap.total_actions >= 175, "batch total must accumulate");
     }
 
     #[tokio::test]

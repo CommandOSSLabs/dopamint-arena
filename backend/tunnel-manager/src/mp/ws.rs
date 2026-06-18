@@ -1,6 +1,6 @@
 //! `GET /v1/mp` WebSocket. Upgrade → challenge → connect-auth → register presence + a local
 //! outbound channel via Bus → drive matchmaking/relay through MpStore + Bus::deliver.
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -33,10 +33,14 @@ struct MatchRouting {
 }
 
 /// Mutable per-connection state carried across WebSocket messages.
+#[derive(Default)]
 struct ConnState {
     wallet: Option<String>,
     joined_games: HashSet<String>,
     match_routing: Option<MatchRouting>,
+    /// Batched action-counter increments for this connection, flushed to `ControlStore` every
+    /// 100 ms and on disconnect so the hot-path MOVE relay never blocks on a store write.
+    pending_actions: HashMap<String, u64>,
 }
 
 fn here(state: &SharedState, conn: ConnId) -> ConnRef {
@@ -135,16 +139,19 @@ async fn handle_socket(socket: WebSocket, state: SharedState) {
         wallet: None,
         joined_games: HashSet::new(),
         match_routing: None,
+        pending_actions: HashMap::new(),
     };
 
     let mut keepalive = tokio::time::interval(KEEPALIVE_PING_INTERVAL);
+    let mut flush_interval = tokio::time::interval(Duration::from_millis(100));
+    flush_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     // A stall in `handle_message` must not burst-fire catch-up ticks and trip the
     // unanswered-ping check on a connection that is actually alive.
     keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut ping_unanswered = false;
 
-    // Single loop owns the sink, so reads, queued outbound, and keepalive pings
-    // never contend; pong replies arrive on the read half and clear the flag.
+    // Single loop owns the sink, so reads, queued outbound, keepalive pings,
+    // and batched action-counter flushes never contend.
     loop {
         tokio::select! {
             _ = keepalive.tick() => {
@@ -154,6 +161,11 @@ async fn handle_socket(socket: WebSocket, state: SharedState) {
                 ping_unanswered = true;
                 if sink.send(Message::Ping(Vec::new())).await.is_err() {
                     break;
+                }
+            }
+            _ = flush_interval.tick() => {
+                for (game, count) in conn_state.pending_actions.drain() {
+                    state.control.add_actions_batch(&game, count as i64).await;
                 }
             }
             outbound = rx.recv() => {
@@ -200,6 +212,11 @@ async fn handle_socket(socket: WebSocket, state: SharedState) {
                 }
             }
         }
+    }
+
+    // Flush any remaining batched actions before cleanup so moves are not lost.
+    for (game, count) in conn_state.pending_actions.drain() {
+        state.control.add_actions_batch(&game, count as i64).await;
     }
 
     // Disconnect cleanup: conditional presence clear + leave every joined queue.
@@ -428,7 +445,10 @@ async fn handle_authed(
             conn_state.match_routing = Some(routing.clone());
 
             if relay_payload_is_move(&payload) {
-                state.control.add_actions(&routing.game, 1).await;
+                *conn_state
+                    .pending_actions
+                    .entry(routing.game.clone())
+                    .or_insert(0) += 1;
             }
             let envelope = ServerMsg::Relay {
                 match_id: match_id.clone(),
@@ -545,6 +565,15 @@ mod tests {
         let (tx, rx) = mpsc::unbounded_channel();
         state.bus.register(conn_id, tx);
         (conn_id, rx)
+    }
+
+    async fn flush_pending_actions(
+        control: &std::sync::Arc<dyn crate::store::ControlStore>,
+        conn_state: &mut ConnState,
+    ) {
+        for (game, count) in conn_state.pending_actions.drain() {
+            control.add_actions_batch(&game, count as i64).await;
+        }
     }
 
     // Seat A → B, seat B → A, stranger → neither. Covers relay_target_is_the_other_seat.
@@ -704,11 +733,7 @@ mod tests {
         };
         state.mp.put_match("m1", rec).await;
 
-        let mut conn_state_a = ConnState {
-            wallet: None,
-            joined_games: HashSet::new(),
-            match_routing: None,
-        };
+        let mut conn_state_a = ConnState::default();
         handle_authed(
             &state,
             conn_a,
@@ -721,6 +746,7 @@ mod tests {
         )
         .await
         .unwrap();
+        flush_pending_actions(&state.control, &mut conn_state_a).await;
         assert_eq!(
             state.control.snapshot().await.total_actions,
             1,
@@ -736,11 +762,7 @@ mod tests {
         assert_eq!(a_routing.game, "tictactoe");
         assert_eq!(a_routing.opponent.conn_id, conn_b);
 
-        let mut conn_state_b = ConnState {
-            wallet: None,
-            joined_games: HashSet::new(),
-            match_routing: None,
-        };
+        let mut conn_state_b = ConnState::default();
         handle_authed(
             &state,
             conn_b,
@@ -753,6 +775,7 @@ mod tests {
         )
         .await
         .unwrap();
+        flush_pending_actions(&state.control, &mut conn_state_b).await;
         assert_eq!(
             state.control.snapshot().await.total_actions,
             1,
@@ -790,6 +813,7 @@ mod tests {
                     conn_id: conn_b,
                 },
             }),
+            pending_actions: HashMap::new(),
         };
 
         handle_authed(
@@ -804,6 +828,7 @@ mod tests {
         )
         .await
         .unwrap();
+        flush_pending_actions(&state.control, &mut conn_state_a).await;
 
         assert_eq!(
             state.control.snapshot().await.total_actions,
@@ -886,6 +911,7 @@ mod tests {
                     conn_id: conn_b,
                 },
             }),
+            pending_actions: HashMap::new(),
         };
 
         handle_authed(
@@ -931,11 +957,7 @@ mod tests {
         let (conn_a, mut _rx_a) = make_conn_ref(&state);
         let (conn_b, mut _rx_b) = make_conn_ref(&state);
 
-        let mut conn_state_a = ConnState {
-            wallet: None,
-            joined_games: HashSet::new(),
-            match_routing: None,
-        };
+        let mut conn_state_a = ConnState::default();
         handle_authed(
             &state,
             conn_a,
@@ -950,11 +972,7 @@ mod tests {
             "waiter has no routing yet"
         );
 
-        let mut conn_state_b = ConnState {
-            wallet: None,
-            joined_games: HashSet::new(),
-            match_routing: None,
-        };
+        let mut conn_state_b = ConnState::default();
         handle_authed(
             &state,
             conn_b,
@@ -990,11 +1008,7 @@ mod tests {
             .set_presence("0xaccepter", here(&state, conn_accepter))
             .await;
 
-        let mut conn_state_inviter = ConnState {
-            wallet: None,
-            joined_games: HashSet::new(),
-            match_routing: None,
-        };
+        let mut conn_state_inviter = ConnState::default();
         handle_authed(
             &state,
             conn_inviter,
@@ -1015,11 +1029,7 @@ mod tests {
             .expect("challenge has matchId")
             .to_owned();
 
-        let mut conn_state_accepter = ConnState {
-            wallet: None,
-            joined_games: HashSet::new(),
-            match_routing: None,
-        };
+        let mut conn_state_accepter = ConnState::default();
         handle_authed(
             &state,
             conn_accepter,

@@ -19,6 +19,8 @@ pub trait ControlStore: Send + Sync {
     async fn set_tunnel_status(&self, id: &str, s: crate::state::TunnelStatus);
     async fn get_tunnel_status(&self, id: &str) -> Option<crate::state::TunnelStatus>;
     async fn add_actions(&self, game: &str, delta: u64);
+    /// Batched increment for hot-path action counting. Negative or zero counts are ignored.
+    async fn add_actions_batch(&self, game: &str, count: i64);
     /// Cumulative snapshot; `tps` is filled by the broadcaster from its per-tick diff.
     async fn snapshot(&self) -> crate::state::StatsSnapshot;
     /// PING the cache cluster (for /health/ready). In-memory is always ready.

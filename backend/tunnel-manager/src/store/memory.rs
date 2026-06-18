@@ -74,6 +74,12 @@ impl ControlStore for InMemoryControlStore {
             .or_insert(0) += delta;
     }
 
+    async fn add_actions_batch(&self, game: &str, count: i64) {
+        if count > 0 {
+            self.add_actions(game, count as u64).await;
+        }
+    }
+
     async fn snapshot(&self) -> StatsSnapshot {
         let actions = self.per_game_actions.read().unwrap();
         let tunnels = self.per_game_tunnels.read().unwrap();
