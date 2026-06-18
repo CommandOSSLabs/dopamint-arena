@@ -23,9 +23,9 @@ function vecU8(tx: Transaction, b: Uint8Array) {
 }
 
 /**
- * Append one `create_and_fund` call, funding both parties from two caller-supplied coins.
- * Targets the `public fun` (not `entry`) so it composes with PTB results; the funder need
- * not be a party.
+ * Append one `create_and_fund_with_id` call, funding both parties from two caller-supplied
+ * coins. Targets the ID-returning `public fun` so its result, the shared
+ * tunnel's `ID` composes with later PTB commands; the funder need not be a party.
  */
 export function buildCreateAndFund(
   tx: Transaction,
@@ -39,7 +39,7 @@ export function buildCreateAndFund(
   } & WithCoinType,
 ): TransactionResult {
   return tx.moveCall({
-    target: buildTarget(TUNNEL, "create_and_fund"),
+    target: buildTarget(TUNNEL, "create_and_fund_with_id"),
     typeArguments: [p.coinType ?? SUI_COIN_TYPE],
     arguments: [
       tx.pure.address(p.partyA.address),
@@ -127,7 +127,7 @@ export interface BatchFundOptions {
 
 /**
  * Assemble "open + fund + activate N tunnels in ONE PTB" into `tx`: one split for
- * all 2N stakes, then one `create_and_fund` per spec. The whole batch settles under
+ * all 2N stakes, then one `create_and_fund_with_id` per spec. The whole batch settles under
  * one signature from the funding wallet.
  */
 export function buildOpenAndFundMany(

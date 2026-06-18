@@ -99,7 +99,11 @@ export async function buildOpenFundAndSeedTx(
     stake: session.stake,
   });
   const tunnelId = tx.moveCall({
-    target: target(config.suiTunnelPackageId, MODULE_TUNNEL, "create_and_fund"),
+    target: target(
+      config.suiTunnelPackageId,
+      MODULE_TUNNEL,
+      "create_and_fund_with_id",
+    ),
     typeArguments: [config.gameCoinType],
     arguments: [
       tx.pure.address(session.user.address),

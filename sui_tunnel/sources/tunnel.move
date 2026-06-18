@@ -665,10 +665,13 @@ public fun create_and_share<T>(
 /// emits `TunnelCreated` and `TunnelActivated` in the SAME transaction/checkpoint (the normal
 /// flow spreads them across separate txs), so the indexer must handle atomic create+activate.
 ///
+/// Returns the shared tunnel's `ID` so a PTB can chain it.
+/// `create_and_fund` is the same operation without the return value.
+///
 /// `share_owned` is suppressed for the same reason as `create_and_share`: `build_tunnel`
 /// returns a freshly-created object that never escapes this function before being shared.
 #[allow(lint(share_owned))]
-public fun create_and_fund<T>(
+public fun create_and_fund_with_id<T>(
     party_a_address: address,
     party_a_pk: vector<u8>,
     party_a_sig_type: u8,
@@ -702,6 +705,36 @@ public fun create_and_fund<T>(
 
     transfer::share_object(tunnel);
     id_copy
+}
+
+public fun create_and_fund<T>(
+    party_a_address: address,
+    party_a_pk: vector<u8>,
+    party_a_sig_type: u8,
+    party_b_address: address,
+    party_b_pk: vector<u8>,
+    party_b_sig_type: u8,
+    party_a_coin: Coin<T>,
+    party_b_coin: Coin<T>,
+    timeout_ms: u64,
+    penalty_amount: u64,
+    clock: &Clock,
+    ctx: &mut TxContext,
+) {
+    create_and_fund_with_id<T>(
+        party_a_address,
+        party_a_pk,
+        party_a_sig_type,
+        party_b_address,
+        party_b_pk,
+        party_b_sig_type,
+        party_a_coin,
+        party_b_coin,
+        timeout_ms,
+        penalty_amount,
+        clock,
+        ctx,
+    );
 }
 // ===== end Dopamint extension =====
 
@@ -1853,6 +1886,10 @@ public fun resolve_dispute_external<T>(
 /// This intentionally bypasses the trusted-address referee path. It is package
 /// visible so only a verifier module in `sui_tunnel` can call it after checking a
 /// native Groth16 proof and binding the proof inputs to the disputed tunnel state.
+///
+/// Like `force_close_after_timeout`, this can only settle once the dispute
+/// timeout has elapsed: the proof attests the OUTCOME for a given state, not that
+/// the state is the latest one both parties agreed to.
 public(package) fun resolve_dispute_verified<T>(
     tunnel: &mut Tunnel<T>,
     party_a_balance: u64,
@@ -1862,6 +1899,11 @@ public(package) fun resolve_dispute_verified<T>(
 ) {
     assert!(tunnel.version == CURRENT_VERSION, EInvalidVersion);
     assert!(tunnel.status == STATUS_DISPUTED, ENoActiveDispute);
+    assert!(tunnel.timeout_ms > 0, ENotSupported);
+
+    // Enforce the dispute challenge window before forcing settlement.
+    let now = clock.timestamp_ms();
+    assert!(now >= tunnel.state.timestamp + tunnel.timeout_ms, ETimeoutNotReached);
 
     // `tunnel.balance` is already net of HTLC-locked funds (split into separate
     // dynamic fields at lock time), so the verifier distributes the full
@@ -1869,7 +1911,6 @@ public(package) fun resolve_dispute_verified<T>(
     let total = tunnel.balance.value();
     assert_balance_split(party_a_balance, party_b_balance, total);
 
-    let now = clock.timestamp_ms();
     tunnel.status = STATUS_CLOSED;
     tunnel.last_activity = now;
 
