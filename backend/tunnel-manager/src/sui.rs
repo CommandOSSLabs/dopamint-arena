@@ -55,6 +55,67 @@ pub struct SuiSettler {
     sender: Address,
 }
 
+/// A parsed tunnel lifecycle event: the type suffix drives status folding; the rest feeds the
+/// recent-events ring. `transcript_root` is hex; balances are `None` on non-close events.
+#[derive(Debug, Clone)]
+pub struct RawTunnelEvent {
+    pub type_suffix: String,
+    pub tunnel_id: String,
+    pub party_a_balance: Option<u64>,
+    pub party_b_balance: Option<u64>,
+    pub transcript_root: Option<String>,
+    pub tx_digest: String,
+    pub timestamp_ms: u64,
+}
+
+/// u64 fields arrive over JSON-RPC as strings; accept a number too, for robustness.
+fn parsed_u64(v: &serde_json::Value, field: &str) -> Option<u64> {
+    let f = v.pointer(&format!("/parsedJson/{field}"))?;
+    f.as_str().and_then(|s| s.parse().ok()).or_else(|| f.as_u64())
+}
+
+/// `vector<u8>` arrives as an array of byte numbers; render to lowercase hex.
+/// NOTE: the exact `vector<u8>` JSON encoding is confirmed against a live event during the
+/// e2e milestone (see spec "Dependencies & readiness"); array-of-bytes is the documented shape.
+fn parsed_bytes_hex(v: &serde_json::Value, field: &str) -> Option<String> {
+    let arr = v.pointer(&format!("/parsedJson/{field}"))?.as_array()?;
+    let mut out = String::with_capacity(arr.len() * 2);
+    for b in arr {
+        out.push_str(&format!("{:02x}", b.as_u64()? as u8));
+    }
+    Some(out)
+}
+
+/// Parse one `suix_queryEvents` data row into a `RawTunnelEvent`, or `None` if it is not a
+/// tunnel lifecycle event (no `parsedJson.tunnel_id`).
+fn parse_event_row(ev: &serde_json::Value) -> Option<RawTunnelEvent> {
+    let tunnel_id = ev.pointer("/parsedJson/tunnel_id")?.as_str()?.to_string();
+    let type_suffix = ev
+        .get("type")
+        .and_then(|v| v.as_str())
+        .and_then(|t| t.rsplit("::").next())
+        .unwrap_or_default()
+        .to_string();
+    let tx_digest = ev
+        .pointer("/id/txDigest")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let timestamp_ms = ev
+        .get("timestampMs")
+        .and_then(|v| v.as_str().and_then(|s| s.parse().ok()).or_else(|| v.as_u64()))
+        .unwrap_or(0);
+    Some(RawTunnelEvent {
+        type_suffix,
+        tunnel_id,
+        party_a_balance: parsed_u64(ev, "party_a_balance"),
+        party_b_balance: parsed_u64(ev, "party_b_balance"),
+        transcript_root: parsed_bytes_hex(ev, "transcript_root"),
+        tx_digest,
+        timestamp_ms,
+    })
+}
+
 impl SuiSettler {
     pub fn new(
         rpc_url: String,
@@ -179,28 +240,23 @@ impl SuiSettler {
     }
 
     /// Poll this package's `tunnel` module events, cursor-paginated (ascending). Returns
-    /// `(events, next_cursor)` where each event is `(type_string, tunnel_id)`; the cursor
-    /// is opaque (passed straight back). e2e-deferred (needs a live node + package).
+    /// `(events, next_cursor)`; the cursor is opaque (passed straight back).
+    /// e2e-deferred (needs a live node + package).
     pub async fn query_tunnel_events(
         &self,
         cursor: Option<serde_json::Value>,
-    ) -> anyhow::Result<(Vec<(String, String)>, Option<serde_json::Value>)> {
+    ) -> anyhow::Result<(Vec<RawTunnelEvent>, Option<serde_json::Value>)> {
         let filter = serde_json::json!({
             "MoveModule": { "package": self.package_id.to_string(), "module": "tunnel" }
         });
         let r = self
-            .rpc(
-                "suix_queryEvents",
-                serde_json::json!([filter, cursor, 50, false]),
-            )
+            .rpc("suix_queryEvents", serde_json::json!([filter, cursor, 50, false]))
             .await?;
         let mut events = Vec::new();
         if let Some(data) = r.get("data").and_then(|v| v.as_array()) {
             for ev in data {
-                let etype = ev.get("type").and_then(|v| v.as_str()).unwrap_or_default();
-                // tunnel lifecycle events carry the object id under parsedJson.tunnel_id.
-                if let Some(tid) = ev.pointer("/parsedJson/tunnel_id").and_then(|v| v.as_str()) {
-                    events.push((etype.to_string(), tid.to_string()));
+                if let Some(raw) = parse_event_row(ev) {
+                    events.push(raw);
                 }
             }
         }
@@ -209,6 +265,27 @@ impl SuiSettler {
         let next = r.get("nextCursor").cloned().filter(|v| !v.is_null());
         Ok((events, next))
     }
+}
+
+/// Project a raw event to a displayable Transaction-Log row, or `None` if it is not one
+/// (only activations and closes are shown). `game` is left `None` for v1 — the event carries
+/// no game tag; joining `tunnel_id → game` via the session registry is a deferred follow-up.
+fn to_tunnel_event(raw: &RawTunnelEvent) -> Option<crate::state::TunnelEvent> {
+    let kind = match raw.type_suffix.as_str() {
+        "TunnelActivated" => crate::state::TunnelEventKind::Opened,
+        "TunnelClosed" | "TunnelClosedWithRoot" => crate::state::TunnelEventKind::Settled,
+        _ => return None,
+    };
+    Some(crate::state::TunnelEvent {
+        tunnel_id: raw.tunnel_id.clone(),
+        kind,
+        party_a_balance: raw.party_a_balance,
+        party_b_balance: raw.party_b_balance,
+        transcript_root: raw.transcript_root.clone(),
+        tx_digest: raw.tx_digest.clone(),
+        timestamp_ms: raw.timestamp_ms,
+        proof_url: None, // indexer rows are explorer-only; the /settle handler sets this (Task 7)
+    })
 }
 
 /// Poll the chain for this package's tunnel events and fold them into the registry via
@@ -220,17 +297,20 @@ pub fn spawn_event_indexer(state: crate::state::SharedState) {
         loop {
             match state.settler.query_tunnel_events(cursor.clone()).await {
                 Ok((events, next)) => {
-                    for (etype, tid) in events {
-                        let status = match etype.rsplit("::").next() {
-                            Some("TunnelCreated") => Some(crate::state::TunnelStatus::Created),
-                            Some("TunnelActivated") => Some(crate::state::TunnelStatus::Active),
-                            Some("TunnelClosed" | "TunnelClosedWithRoot") => {
+                    for raw in events {
+                        let status = match raw.type_suffix.as_str() {
+                            "TunnelCreated" => Some(crate::state::TunnelStatus::Created),
+                            "TunnelActivated" => Some(crate::state::TunnelStatus::Active),
+                            "TunnelClosed" | "TunnelClosedWithRoot" => {
                                 Some(crate::state::TunnelStatus::Closed)
                             }
                             _ => None,
                         };
                         if let Some(s) = status {
-                            state.control.set_tunnel_status(&tid, s).await;
+                            state.control.set_tunnel_status(&raw.tunnel_id, s).await;
+                        }
+                        if let Some(row) = to_tunnel_event(&raw) {
+                            state.control.push_recent_event(row).await;
                         }
                     }
                     if next.is_some() {
@@ -400,6 +480,65 @@ mod tests {
         );
         assert_eq!(tx.gas_payment.owner, sender);
         assert_eq!(tx.gas_payment.budget, GAS_BUDGET);
+    }
+
+    // The indexer must lift payout + transcript root + tx digest out of a real suix_queryEvents
+    // row, not just the tunnel id. Pins parsedJson field paths (u64 as string; vector<u8> as bytes).
+    #[test]
+    fn parses_closed_with_root_event_into_raw() {
+        let row = serde_json::json!({
+            "id": { "txDigest": "9xDigest", "eventSeq": "0" },
+            "type": "0xPKG::tunnel::TunnelClosedWithRoot",
+            "parsedJson": {
+                "tunnel_id": "0xfeed",
+                "party_a_balance": "1500",
+                "party_b_balance": "500",
+                "final_nonce": "7",
+                "transcript_root": [222, 173, 190, 239],
+                "closed_at": "1750000000000"
+            },
+            "timestampMs": "1750000000123"
+        });
+        let raw = parse_event_row(&row).expect("a lifecycle event parses");
+        assert_eq!(raw.type_suffix, "TunnelClosedWithRoot");
+        assert_eq!(raw.tunnel_id, "0xfeed");
+        assert_eq!(raw.party_a_balance, Some(1500));
+        assert_eq!(raw.party_b_balance, Some(500));
+        assert_eq!(raw.transcript_root.as_deref(), Some("deadbeef"));
+        assert_eq!(raw.tx_digest, "9xDigest");
+        assert_eq!(raw.timestamp_ms, 1_750_000_000_123);
+    }
+
+    #[test]
+    fn skips_non_tunnel_event_rows() {
+        let row = serde_json::json!({ "id": { "txDigest": "x" }, "type": "0x::other::Thing" });
+        assert!(parse_event_row(&row).is_none());
+    }
+
+    // A close maps to a `settled` row carrying payout + root; an activation maps to `opened`;
+    // anything else (created / deposit) is not a displayable row.
+    #[test]
+    fn maps_raw_events_to_displayable_rows() {
+        use crate::state::TunnelEventKind;
+        let mut closed = RawTunnelEvent {
+            type_suffix: "TunnelClosedWithRoot".into(),
+            tunnel_id: "0xt".into(),
+            party_a_balance: Some(1500),
+            party_b_balance: Some(500),
+            transcript_root: Some("deadbeef".into()),
+            tx_digest: "d1".into(),
+            timestamp_ms: 9,
+        };
+        let row = to_tunnel_event(&closed).expect("close is displayable");
+        assert_eq!(row.kind, TunnelEventKind::Settled);
+        assert_eq!(row.party_a_balance, Some(1500));
+        assert_eq!(row.transcript_root.as_deref(), Some("deadbeef"));
+
+        closed.type_suffix = "TunnelActivated".into();
+        assert_eq!(to_tunnel_event(&closed).expect("activation").kind, TunnelEventKind::Opened);
+
+        closed.type_suffix = "TunnelCreated".into();
+        assert!(to_tunnel_event(&closed).is_none(), "created is not a row");
     }
 
     // The settler key loader must accept both the 32-byte raw secret and the 33-byte
