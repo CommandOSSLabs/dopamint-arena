@@ -284,6 +284,9 @@ export class CrossProtocol implements Protocol<CrossState, CrossMove> {
     let winner: Party | null = null;
     const aWon = players[0].lane >= WIN_LANE;
     const bWon = players[1].lane >= WIN_LANE;
+    // Simultaneous double-arrival is broken deterministically by higher score, ties to A.
+    // Deterministic (replay-stable) is required so both parties agree; the A-bias is harmless
+    // in self-play (both seats are the same funding wallet). Revisit for PvP fairness.
     if (aWon && bWon) winner = players[0].score >= players[1].score ? "A" : "B";
     else if (aWon) winner = "A";
     else if (bWon) winner = "B";
