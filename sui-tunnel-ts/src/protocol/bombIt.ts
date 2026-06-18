@@ -146,3 +146,80 @@ export function buildGrid(seed: bigint): Uint8Array {
   }
   return grid;
 }
+
+// ============================================
+// MOVEMENT + BLAST (pure)
+// ============================================
+export function dest(row: number, col: number, action: BombItAction): [number, number] {
+  if (action === "north") return [row - 1, col];
+  if (action === "south") return [row + 1, col];
+  if (action === "east") return [row, col + 1];
+  if (action === "west") return [row, col - 1];
+  return [row, col]; // bomb / stay
+}
+
+/** A cell is enterable if it is on-board floor with no bomb and no living opponent. */
+export function canMoveTo(
+  grid: Uint8Array,
+  bombs: BombItBomb[],
+  other: BombItPlayer,
+  nr: number,
+  nc: number,
+): boolean {
+  if (nr < 0 || nr >= GRID_H || nc < 0 || nc >= GRID_W) return false;
+  const cell = grid[idx(nr, nc)];
+  if (cell === CELL_WALL || cell === CELL_CRATE) return false;
+  if (bombs.some((b) => b.row === nr && b.col === nc)) return false;
+  if (other.alive && other.row === nr && other.col === nc) return false;
+  return true;
+}
+
+/** Cells one bomb's `+` blast covers: stops at walls; includes and stops at the first crate. */
+export function blastCellsFor(grid: Uint8Array, bomb: BombItBomb): number[] {
+  const out: number[] = [idx(bomb.row, bomb.col)];
+  const dirs: Array<[number, number]> = [[-1, 0], [1, 0], [0, 1], [0, -1]];
+  for (const [dr, dc] of dirs) {
+    for (let step = 1; step <= BLAST_RADIUS; step++) {
+      const r = bomb.row + dr * step;
+      const c = bomb.col + dc * step;
+      if (r < 0 || r >= GRID_H || c < 0 || c >= GRID_W) break;
+      const cell = grid[idx(r, c)];
+      if (cell === CELL_WALL) break;
+      out.push(idx(r, c));
+      if (cell === CELL_CRATE) break;
+    }
+  }
+  return out;
+}
+
+/**
+ * Detonate every fuse<=0 bomb, growing the set to a fixpoint (a bomb inside any blast cell
+ * detonates too), then destroy crated blast cells. Propagation reads the pre-blast grid so
+ * crates STOP the blast (a bomb shielded behind a crate does not chain) before any crate is
+ * cleared. Mutates `grid` (crate→floor); returns the blast-cell union and surviving bombs.
+ */
+export function resolveExplosions(
+  grid: Uint8Array,
+  bombs: BombItBomb[],
+): { cells: Set<number>; remaining: BombItBomb[] } {
+  const detonating = new Set<number>();
+  for (let i = 0; i < bombs.length; i++) if (bombs[i].fuse <= 0) detonating.add(i);
+
+  const cells = new Set<number>();
+  let changed = true;
+  while (changed) {
+    changed = false;
+    cells.clear();
+    for (const di of detonating) for (const ci of blastCellsFor(grid, bombs[di])) cells.add(ci);
+    for (let i = 0; i < bombs.length; i++) {
+      if (!detonating.has(i) && cells.has(idx(bombs[i].row, bombs[i].col))) {
+        detonating.add(i);
+        changed = true;
+      }
+    }
+  }
+
+  for (const ci of cells) if (grid[ci] === CELL_CRATE) grid[ci] = CELL_FLOOR;
+  const remaining = bombs.filter((_, i) => !detonating.has(i));
+  return { cells, remaining };
+}
