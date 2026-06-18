@@ -28,7 +28,7 @@ graph TB
         E[Off-chain engine + per-game Protocol]
     end
 
-    subgraph CP["tunnel-manager — control plane · never signs, never a counterparty"]
+    subgraph CP["tunnel-manager — control plane (≥2 instances, Redis-backed) · never signs a move, never a counterparty"]
         MM[Matchmaking + presence]
         RL[Relay<br/>opaque co-signed frames]
         WT[Watchtower]
@@ -38,6 +38,7 @@ graph TB
 
     Chain[(Sui chain<br/>sui_tunnel)]
     WAL[(Walrus<br/>page + transcript proofs)]
+    Redis[(Redis<br/>shared state · cross-instance pub/sub bus)]
 
     H --> E
     A --> E
@@ -48,6 +49,9 @@ graph TB
     ST --> WAL
     IDX -.->|reads lifecycle events| Chain
     ST -->|activity wall (SSE)| H
+    MM <-->|presence · queues · matches| Redis
+    RL <-->|deliver across instances| Redis
+    ST <-->|stats counters · registry| Redis
 
     style E fill:#99ff99
     style RL fill:#ffcc99
@@ -77,6 +81,34 @@ backend is game-agnostic, keyed only on a `game` id.
 
 ---
 
+## Deployment & shared state
+
+The control plane runs as **two or more identical instances behind a load balancer**;
+any instance can serve any request. Round-robin routing means a session can register on
+one instance and settle on another, and two paired players can land on different
+instances — so **all cross-instance state lives in Redis**, never in process memory:
+
+- A **cache cluster** holds the ephemeral key-value state: sessions, presence,
+  matchmaking queues, invites, live matches, and the stats counters. Pairing is an
+  atomic server-side (Lua) script, so two instances never pair the same waiter.
+- A **pub/sub cluster** carries server→client delivery *across* instances: when a
+  relayed frame (or a `match.found`) must reach a socket owned by another instance, it
+  is published to that instance's channel and delivered locally there. Frames stay
+  opaque end to end.
+- Each instance keeps only what must be local — its live socket map and its own chain
+  indexer (the chain is the source of truth; idempotent folds keep N indexers correct).
+
+There is **no relational database**: every durable fact already lives on-chain
+(settlements) or on Walrus (transcripts), and the registry is re-derived from chain
+events — the state that remains is non-relational and ephemeral, which is why Redis
+alone suffices. Liveness and readiness are split: **`/health/live`** is always 200 while
+the process runs; **`/health/ready`** is 200 only when the cache cluster is reachable, so
+a pub/sub blip degrades cross-instance PvP delivery but never blacks out stats or
+settlement. On-chain settlement pays gas from the settler's **address balance**, so many
+cooperative closes submit concurrently without contending on a single gas coin.
+
+---
+
 ## Identity, custody & trust
 
 A party is `{ address = real wallet, public_key = ephemeral session key }`, and the
@@ -89,16 +121,20 @@ unilateral withdrawals are sender-gated to `address`, and payouts are *directed 
 
 The relay is **untrusted**. Because every update is dual-signed and verified by
 both parties against the counterparty's `public_key`, a faulty or malicious relay
-can only **censor or delay** frames — never forge or alter them. Ephemeral pubkeys
-are **wallet-attested**, so the relay cannot MITM the key exchange. Transport is
-swappable (WebSocket first; WebRTC / libp2p later) behind one interface; security
-does not depend on it.
+can only **censor or delay** frames — never forge or alter them. The connect handshake
+proves a client controls its ephemeral key (it signs a server-issued nonce); *binding
+that key to the claimed wallet — the **wallet attestation** that closes the relay's
+key-exchange MITM window — is planned and not yet in v1*. Transport is swappable
+(WebSocket first; WebRTC / libp2p later) behind one interface; security does not depend
+on it.
 
 Abandonment and stale-state attacks are absorbed by the **dispute + timeout** path,
-not by trust. The relay captures **both signature halves** of every frame, so the
-**watchtower** can respond to a dispute or force-close on behalf of a party that
-has gone offline — finalizing the latest co-signed state instead of an opponent's
-stale one. The signed wire format is **byte-identical to the on-chain verifier**:
+not by trust. The relay captures **both signature halves** of every frame and retains
+the latest co-signed checkpoint — the material a **watchtower** needs to finalize the
+true latest state instead of an opponent's stale one. *In v1 the backend captures these
+checkpoints; submitting the dispute / force-close on an offline party's behalf is a
+follow-up* — today the staying player drives the one-tap claim themselves. The signed
+wire format is **byte-identical to the on-chain verifier**:
 any update could be submitted and would verify exactly as the chain expects — it
 simply isn't, until close.
 
@@ -142,6 +178,40 @@ abandoning opponent), or **genuine-refund** (a true tie or no moves played). The
 is no player-facing dispute/draw UI. A trusted on-chain referee — which would make
 winner-take-all robust against a spiteful loser who forces a refund — is a later
 addition, not part of this design.
+
+---
+
+## Play topologies — relayed PvP vs. client-local self-play
+
+The flow above is the **relayed-PvP** path: two distinct parties exchange opaque
+co-signed frames through the relay. But not every game has a second party. A game
+whose "opponent" carries no independent human will runs **entirely inside one
+client** as **self-play**, and for it the relay and matchmaking drop out completely.
+
+**Self-play (one client holds both seats).** A single client (today, the browser
+running blackjack) mints *two* ephemeral keys — one per seat — and funds *both*
+seats in a **single wallet signature** (`create_and_fund`). The off-chain engine
+then runs both endpoints in-process (`OffchainTunnel.selfPlay`): every move is
+co-signed and verified by both keys exactly as in PvP, so the wire bytes stay
+**byte-identical to the on-chain verifier** and the chain sees an ordinary two-party
+tunnel lifecycle — the same explorer trace, the same settlement. What disappears is
+the network in the middle: **no relay, no matchmaking, no cross-instance delivery**,
+and the per-move loop never leaves the tab. The control plane is even further off the
+path than in PvP — it sees only the best-effort stats stream (one `registerSession`,
+then coarse ~1/s heartbeats), never a frame. Cooperative close has both seat keys
+sign the final balances and the wallet submits; payouts land on the **ephemeral seat
+addresses**, not back on the wallet.
+
+**Why blackjack and poker are self-play-only.** *Blackjack* is a house game: the
+dealer follows a fixed, deterministic policy — there is no second human to relay to,
+so the player and dealer seats both run locally. *Quantum poker*'s hidden-information
+commit-reveal shuffle isn't carried over the relay either, so it is **designed for**
+the same client-local model — its window is a placeholder today; blackjack is the
+shipped example. The contrast is **tic-tac-toe**: symmetric, perfect-information, two
+genuine humans — so it is the relayed-PvP game, matchmade and relayed through
+tunnel-manager. This is also why the "ephemeral session key" the browser mints (see
+Components) is really *one per seat*: a PvP client holds one, a self-play client holds
+both.
 
 ---
 
