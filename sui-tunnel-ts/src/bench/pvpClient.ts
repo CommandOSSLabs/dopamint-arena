@@ -138,7 +138,11 @@ export class PvpClient {
         }
         const data = (envelope as Record<string, unknown>).data;
         if (this.frameCallback && typeof data === "string") {
-          this.frameCallback(this.textEncoder.encode(data));
+          try {
+            this.frameCallback(this.textEncoder.encode(data));
+          } catch {
+            this.cfg.onError?.("frame_processing_error");
+          }
         }
         break;
       }
