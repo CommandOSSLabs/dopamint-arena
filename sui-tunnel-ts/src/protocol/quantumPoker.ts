@@ -21,12 +21,7 @@ import { blake2b256 } from "../core/crypto";
 import { seedFromBytes, shuffle } from "../core/randomness";
 import { u64ToBeBytes } from "../core/wire";
 import { otherParty, protocolDomain } from "./Protocol";
-import type {
-  Balances,
-  Party,
-  Protocol,
-  ProtocolContext,
-} from "./Protocol";
+import type { Balances, Party, Protocol, ProtocolContext } from "./Protocol";
 
 const DOMAIN = protocolDomain("quantum_poker.v2");
 const ANTE = 50n;
@@ -120,7 +115,15 @@ export interface PokerState {
 }
 
 export type PokerMove =
-  | { kind: "commit_slots"; commitments: Uint8Array[] }
+  | {
+      kind: "commit_slots";
+      commitments: Uint8Array[];
+      /**
+       * Local-only seat secrets. A real relay codec MUST omit this field so the
+       * counterparty receives only commitments.
+       */
+      localSecrets?: SlotSecret[];
+    }
   | { kind: "reveal_slots"; slots: number[]; reveals: SlotReveal[] }
   | { kind: "bet"; amount: bigint }
   | { kind: "check" }
@@ -155,14 +158,12 @@ function emptyRevealSlots(): (SlotReveal | null)[] {
   return Array.from({ length: SLOT_COUNT }, () => null);
 }
 
-function cloneRevealSlots(
-  slots: (SlotReveal | null)[],
-): (SlotReveal | null)[] {
+function cloneRevealSlots(slots: (SlotReveal | null)[]): (SlotReveal | null)[] {
   return slots.map((r) => (r ? copyReveal(r) : null));
 }
 
 function cloneSecretSlots(
-  slots: (SlotSecret | null)[] | null,
+  slots: (SlotSecret | null)[] | null
 ): (SlotSecret | null)[] | null {
   return slots ? slots.map((r) => (r ? copyReveal(r) : null)) : null;
 }
@@ -224,7 +225,7 @@ function revealArrayFor(s: PokerState, party: Party): (SlotReveal | null)[] {
 
 function localSecretArrayFor(
   s: PokerState,
-  party: Party,
+  party: Party
 ): (SlotSecret | null)[] | null {
   return party === "A" ? s.localSecretsA : s.localSecretsB;
 }
@@ -236,10 +237,32 @@ function commitArrayFor(s: PokerState, party: Party): Uint8Array[] | null {
 function hasRevealed(
   s: PokerState,
   party: Party,
-  slots: readonly number[],
+  slots: readonly number[]
 ): boolean {
   const reveals = revealArrayFor(s, party);
   return slots.every((slot) => reveals[slot] !== null);
+}
+
+export function expectedQuantumPokerRevealSlots(
+  s: PokerState,
+  by: Party
+): number[] {
+  const revealIfMissing = (slots: readonly number[]) =>
+    slots.filter((slot) => !revealArrayFor(s, by)[slot]);
+  switch (s.phase) {
+    case "open_private_holes":
+      return revealIfMissing(by === "A" ? B_HOLE_SLOTS : A_HOLE_SLOTS);
+    case "reveal_flop":
+      return revealIfMissing(FLOP_SLOTS);
+    case "reveal_turn":
+      return revealIfMissing(TURN_SLOTS);
+    case "reveal_river":
+      return revealIfMissing(RIVER_SLOTS);
+    case "showdown":
+      return revealIfMissing(by === "A" ? A_HOLE_SLOTS : B_HOLE_SLOTS);
+    default:
+      throw new Error(`no slot reveal legal in phase ${s.phase}`);
+  }
 }
 
 function u64(value: bigint | number): Uint8Array {
@@ -293,11 +316,29 @@ function scoreToU64(score: number | null): Uint8Array {
 }
 
 /** Compute the nine public commitments for a party's private slot secrets. */
-export function commitSlotSecrets(secrets: readonly SlotSecret[]): Uint8Array[] {
+export function commitSlotSecrets(
+  secrets: readonly SlotSecret[]
+): Uint8Array[] {
   if (secrets.length !== SLOT_COUNT) {
     throw new Error(`expected ${SLOT_COUNT} slot secrets`);
   }
   return secrets.map((secret) => computeCommitment(secret.value, secret.salt));
+}
+
+function validateLocalSecretsForCommit(
+  commitments: readonly Uint8Array[],
+  secrets: readonly SlotSecret[]
+): SlotSecret[] {
+  if (secrets.length !== SLOT_COUNT) {
+    throw new Error(`expected ${SLOT_COUNT} local slot secrets`);
+  }
+  const expected = commitSlotSecrets(secrets);
+  for (let i = 0; i < SLOT_COUNT; i++) {
+    if (!bytesEqual(expected[i], commitments[i])) {
+      throw new Error("local secrets do not match commitments");
+    }
+  }
+  return secrets.map(copyReveal);
 }
 
 /**
@@ -307,7 +348,7 @@ export function commitSlotSecrets(secrets: readonly SlotSecret[]): Uint8Array[] 
 export function deriveQuantumCard(
   revealA: SlotReveal,
   revealB: SlotReveal,
-  counter = 0,
+  counter = 0
 ): number {
   if (!Number.isInteger(counter) || counter < 0) {
     throw new Error(`invalid card derivation counter ${counter}`);
@@ -316,7 +357,7 @@ export function deriveQuantumCard(
     revealA.value,
     revealA.salt,
     revealB.value,
-    revealB.salt,
+    revealB.salt
   );
   const seedBytes =
     counter === 0
@@ -329,7 +370,7 @@ export function deriveQuantumCard(
 
 export class QuantumPokerProtocol implements Protocol<PokerState, PokerMove> {
   readonly name = "quantum_poker.v2";
-  private readonly pendingSecrets = new Map<string, SlotSecret[]>();
+  private readonly randomDrivers = new Map<Party, QuantumPokerSeatDriver>();
 
   constructor(private readonly handCap: bigint = DEFAULT_HAND_CAP) {}
 
@@ -396,32 +437,21 @@ export class QuantumPokerProtocol implements Protocol<PokerState, PokerMove> {
     }
   }
 
-  private pendingKey(handNo: bigint, by: Party): string {
-    return `${handNo}:${by}`;
-  }
-
   private applyCommit(s: PokerState, move: PokerMove, by: Party): PokerState {
     if (move.kind !== "commit_slots") throw new Error("expected commit_slots");
     const commitments = validateCommitments(move.commitments);
-    const pending = this.pendingSecrets.get(this.pendingKey(s.handNo, by));
-    if (pending) {
-      const expected = commitSlotSecrets(pending);
-      for (let i = 0; i < SLOT_COUNT; i++) {
-        if (!bytesEqual(expected[i], commitments[i])) {
-          throw new Error("pending secrets do not match commitments");
-        }
-      }
-      this.pendingSecrets.delete(this.pendingKey(s.handNo, by));
-    }
+    const localSecrets = move.localSecrets
+      ? validateLocalSecretsForCommit(commitments, move.localSecrets)
+      : null;
 
     if (by === "A") {
       if (s.commitA) throw new Error("A already committed");
       s.commitA = commitments;
-      if (pending) s.localSecretsA = cloneSecretSlots(pending)!;
+      if (localSecrets) s.localSecretsA = localSecrets;
     } else {
       if (s.commitB) throw new Error("B already committed");
       s.commitB = commitments;
-      if (pending) s.localSecretsB = cloneSecretSlots(pending)!;
+      if (localSecrets) s.localSecretsB = localSecrets;
     }
     if (s.commitA && s.commitB) s.phase = "open_private_holes";
     return s;
@@ -430,13 +460,15 @@ export class QuantumPokerProtocol implements Protocol<PokerState, PokerMove> {
   private applyRevealSlots(
     s: PokerState,
     move: PokerMove,
-    by: Party,
+    by: Party
   ): PokerState {
     if (move.kind !== "reveal_slots") throw new Error("expected reveal_slots");
     const expected = this.expectedRevealSlots(s, by);
     if (!sameNumberSet(move.slots, expected)) {
       throw new Error(
-        `expected ${by} to reveal slots ${expected.join(",")}, got ${move.slots.join(",")}`,
+        `expected ${by} to reveal slots ${expected.join(
+          ","
+        )}, got ${move.slots.join(",")}`
       );
     }
     if (move.reveals.length !== move.slots.length) {
@@ -494,28 +526,10 @@ export class QuantumPokerProtocol implements Protocol<PokerState, PokerMove> {
   }
 
   private expectedRevealSlots(s: PokerState, by: Party): number[] {
-    const revealIfMissing = (slots: readonly number[]) =>
-      slots.filter((slot) => !revealArrayFor(s, by)[slot]);
-    switch (s.phase) {
-      case "open_private_holes":
-        return revealIfMissing(by === "A" ? B_HOLE_SLOTS : A_HOLE_SLOTS);
-      case "reveal_flop":
-        return revealIfMissing(FLOP_SLOTS);
-      case "reveal_turn":
-        return revealIfMissing(TURN_SLOTS);
-      case "reveal_river":
-        return revealIfMissing(RIVER_SLOTS);
-      case "showdown":
-        return revealIfMissing(by === "A" ? A_HOLE_SLOTS : B_HOLE_SLOTS);
-      default:
-        throw new Error(`no slot reveal legal in phase ${s.phase}`);
-    }
+    return expectedQuantumPokerRevealSlots(s, by);
   }
 
-  private postAntesAndBeginStreet(
-    s: PokerState,
-    phase: "preflop_bet",
-  ): void {
+  private postAntesAndBeginStreet(s: PokerState, phase: "preflop_bet"): void {
     if (s.balanceA < ANTE || s.balanceB < ANTE) {
       throw new Error("insufficient balance for ante");
     }
@@ -526,7 +540,7 @@ export class QuantumPokerProtocol implements Protocol<PokerState, PokerMove> {
 
   private beginStreet(
     s: PokerState,
-    phase: "preflop_bet" | "flop_bet" | "turn_bet" | "river_bet",
+    phase: "preflop_bet" | "flop_bet" | "turn_bet" | "river_bet"
   ): void {
     s.phase = phase;
     s.streetBetA = 0n;
@@ -539,7 +553,7 @@ export class QuantumPokerProtocol implements Protocol<PokerState, PokerMove> {
   private tryRevealBoardThenBet(
     s: PokerState,
     slots: readonly number[],
-    nextPhase: "flop_bet" | "turn_bet" | "river_bet",
+    nextPhase: "flop_bet" | "turn_bet" | "river_bet"
   ): void {
     if (!hasRevealed(s, "A", slots) || !hasRevealed(s, "B", slots)) return;
     const used = new Set(s.board);
@@ -558,7 +572,7 @@ export class QuantumPokerProtocol implements Protocol<PokerState, PokerMove> {
     s: PokerState,
     party: Party,
     slot: number,
-    allowLocal: boolean,
+    allowLocal: boolean
   ): SlotReveal | null {
     const publicReveal = revealArrayFor(s, party)[slot];
     if (publicReveal) return publicReveal;
@@ -569,7 +583,7 @@ export class QuantumPokerProtocol implements Protocol<PokerState, PokerMove> {
     s: PokerState,
     slot: number,
     counter: number,
-    allowLocal: boolean,
+    allowLocal: boolean
   ): number | null {
     const revealA = this.revealForDerivation(s, "A", slot, allowLocal);
     const revealB = this.revealForDerivation(s, "B", slot, allowLocal);
@@ -580,7 +594,7 @@ export class QuantumPokerProtocol implements Protocol<PokerState, PokerMove> {
   private deriveUniqueBoardCard(
     s: PokerState,
     slot: number,
-    used: Set<number>,
+    used: Set<number>
   ): { card: number; counter: number } {
     for (let counter = 0; counter < 10_000; counter++) {
       const card = this.deriveSlotCard(s, slot, counter, false);
@@ -660,7 +674,8 @@ export class QuantumPokerProtocol implements Protocol<PokerState, PokerMove> {
   }
 
   private applyCheck(s: PokerState, by: Party): void {
-    const currentMax = s.streetBetA > s.streetBetB ? s.streetBetA : s.streetBetB;
+    const currentMax =
+      s.streetBetA > s.streetBetB ? s.streetBetA : s.streetBetB;
     if (this.streetBet(s, by) !== currentMax) {
       throw new Error("cannot check facing a bet");
     }
@@ -839,8 +854,8 @@ export class QuantumPokerProtocol implements Protocol<PokerState, PokerMove> {
       s.lastResult?.reason === "fold"
         ? 1
         : s.lastResult?.reason === "showdown"
-          ? 2
-          : 0,
+        ? 2
+        : 0
     );
 
     return concatBytes([
@@ -882,53 +897,134 @@ export class QuantumPokerProtocol implements Protocol<PokerState, PokerMove> {
   }
 
   randomMove(s: PokerState, by: Party, rng: () => number): PokerMove | null {
-    const rndBytes = (n: number) => {
-      const out = new Uint8Array(n);
-      for (let i = 0; i < n; i++) out[i] = (rng() * 256) | 0;
-      return out;
+    let driver = this.randomDrivers.get(by);
+    if (!driver) {
+      driver = new QuantumPokerSeatDriver(by);
+      this.randomDrivers.set(by, driver);
+    }
+    return driver.chooseMove(s, rng);
+  }
+}
+
+function randomBytes(n: number, rng: () => number): Uint8Array {
+  const out = new Uint8Array(n);
+  for (let i = 0; i < n; i++) out[i] = (rng() * 256) | 0;
+  return out;
+}
+
+function randomSlotSecrets(rng: () => number): SlotSecret[] {
+  return Array.from({ length: SLOT_COUNT }, () => ({
+    value: randomBytes(32, rng),
+    salt: randomBytes(16, rng),
+  }));
+}
+
+function streetBetValue(s: PokerState, by: Party): bigint {
+  return by === "A" ? s.streetBetA : s.streetBetB;
+}
+
+function totalBetValue(s: PokerState, by: Party): bigint {
+  return by === "A" ? s.totalBetA : s.totalBetB;
+}
+
+function balanceValue(s: PokerState, by: Party): bigint {
+  return by === "A" ? s.balanceA : s.balanceB;
+}
+
+function ownHoleSlots(by: Party): readonly number[] {
+  return by === "A" ? A_HOLE_SLOTS : B_HOLE_SLOTS;
+}
+
+function secretMapKey(handNo: bigint): string {
+  return handNo.toString();
+}
+
+export class QuantumPokerSeatDriver {
+  private readonly secretsByHand = new Map<string, SlotSecret[]>();
+
+  constructor(readonly party: Party) {}
+
+  private secretsFor(state: PokerState): SlotSecret[] | null {
+    const key = secretMapKey(state.handNo);
+    const cached = this.secretsByHand.get(key);
+    if (cached) return cached;
+
+    const localSecrets = localSecretArrayFor(state, this.party);
+    if (!localSecrets || localSecrets.some((secret) => !secret)) return null;
+
+    const secrets = localSecrets.map((secret) => copyReveal(secret!));
+    this.secretsByHand.set(key, secrets.map(copyReveal));
+    return secrets;
+  }
+
+  makeCommitMove(state: PokerState, rng: () => number): PokerMove | null {
+    const committed = this.party === "A" ? state.commitA : state.commitB;
+    if (state.phase !== "commit" || committed) return null;
+    const secrets = randomSlotSecrets(rng);
+    this.secretsByHand.set(secretMapKey(state.handNo), secrets.map(copyReveal));
+    return {
+      kind: "commit_slots",
+      commitments: commitSlotSecrets(secrets),
+      localSecrets: secrets.map(copyReveal),
     };
-    const rndSecrets = () =>
-      Array.from({ length: SLOT_COUNT }, () => ({
-        value: rndBytes(32),
-        salt: rndBytes(16),
-      }));
+  }
+
+  makeRevealMove(state: PokerState): PokerMove | null {
+    const slots = expectedQuantumPokerRevealSlots(state, this.party);
+    if (slots.length === 0) return null;
+    const secrets = this.secretsFor(state);
+    if (!secrets) return null;
+    return {
+      kind: "reveal_slots",
+      slots,
+      reveals: slots.map((slot) => {
+        const secret = secrets[slot];
+        if (!secret) throw new Error(`missing local secret for slot ${slot}`);
+        return copyReveal(secret);
+      }),
+    };
+  }
+
+  knownHoleCards(state: PokerState): number[] | null {
+    const secrets = this.secretsFor(state);
+    if (!secrets) return null;
+    const cards: number[] = [];
+    for (const slot of ownHoleSlots(this.party)) {
+      const own = secrets[slot];
+      const other = revealArrayFor(state, otherParty(this.party))[slot];
+      if (!own || !other) return null;
+      cards.push(
+        this.party === "A"
+          ? deriveQuantumCard(own, other)
+          : deriveQuantumCard(other, own)
+      );
+    }
+    return cards;
+  }
+
+  chooseMove(s: PokerState, rng: () => number): PokerMove | null {
     switch (s.phase) {
-      case "commit": {
-        const committed = by === "A" ? s.commitA : s.commitB;
-        if (committed) return null;
-        const secrets = rndSecrets();
-        this.pendingSecrets.set(this.pendingKey(s.handNo, by), secrets);
-        return { kind: "commit_slots", commitments: commitSlotSecrets(secrets) };
-      }
+      case "commit":
+        return this.makeCommitMove(s, rng);
       case "open_private_holes":
       case "reveal_flop":
       case "reveal_turn":
       case "reveal_river":
-      case "showdown": {
-        const slots = this.expectedRevealSlots(s, by);
-        if (slots.length === 0) return null;
-        const secrets = localSecretArrayFor(s, by);
-        if (!secrets) return null;
-        return {
-          kind: "reveal_slots",
-          slots,
-          reveals: slots.map((slot) => {
-            const secret = secrets[slot];
-            if (!secret) throw new Error(`missing local secret for slot ${slot}`);
-            return copyReveal(secret);
-          }),
-        };
-      }
+      case "showdown":
+        return this.makeRevealMove(s);
       case "preflop_bet":
       case "flop_bet":
       case "turn_bet":
       case "river_bet": {
-        if (s.toAct !== by) return null;
-        const diff = this.streetBet(s, otherParty(by)) - this.streetBet(s, by);
+        if (s.toAct !== this.party) return null;
+        const diff =
+          streetBetValue(s, otherParty(this.party)) -
+          streetBetValue(s, this.party);
         if (diff > 0n) {
           return rng() < 0.85 ? { kind: "call" } : { kind: "fold" };
         }
-        const available = this.balance(s, by) - this.totalBet(s, by);
+        const available =
+          balanceValue(s, this.party) - totalBetValue(s, this.party);
         if (available > 0n && rng() < 0.35) {
           const cap = available < 200n ? available : 200n;
           const amount = BigInt(1 + Math.floor(rng() * Number(cap)));
@@ -937,7 +1033,7 @@ export class QuantumPokerProtocol implements Protocol<PokerState, PokerMove> {
         return { kind: "check" };
       }
       case "hand_over":
-        return by === "A" ? { kind: "next_hand" } : null;
+        return this.party === "A" ? { kind: "next_hand" } : null;
       default:
         return null;
     }
@@ -973,7 +1069,8 @@ function combinations5(cards: number[]): number[][] {
 /** Return the best 5-card poker hand from a 5-7-card duplicate-aware pool. */
 export function bestPokerHand(cards: number[]): BestHand {
   if (cards.length < 5) throw new Error("bestPokerHand needs at least 5 cards");
-  if (cards.length > 7) throw new Error("bestPokerHand supports at most 7 cards");
+  if (cards.length > 7)
+    throw new Error("bestPokerHand supports at most 7 cards");
   validateCards(cards);
   let best: BestHand | null = null;
   for (const hand of combinations5(cards)) {

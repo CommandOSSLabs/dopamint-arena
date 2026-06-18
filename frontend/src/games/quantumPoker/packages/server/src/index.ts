@@ -4,6 +4,7 @@ import { createSessionHandler } from "./routes/session";
 import { createOpenHandler } from "./routes/open";
 import { createMoveHandler } from "./routes/move";
 import { createSettleHandler } from "./routes/settle";
+import { createPersonaE2EHandler } from "./routes/personaE2E";
 import { loadServerConfig } from "./serverConfig";
 import { BotWalletPool } from "./services/botWalletPool";
 import { InMemorySessionStore } from "./services/sessionStore";
@@ -48,6 +49,15 @@ const router = createRouter(config.clientOrigin, [
     method: "POST",
     path: "/api/quantum-poker/settle",
     handler: createSettleHandler({
+      botWalletPool,
+      sessionStore,
+      config,
+    }),
+  },
+  {
+    method: "POST",
+    path: "/api/quantum-poker/demo/persona-e2e",
+    handler: createPersonaE2EHandler({
       botWalletPool,
       sessionStore,
       config,

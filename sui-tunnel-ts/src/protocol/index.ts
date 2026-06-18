@@ -8,3 +8,5 @@ export * from "./blackjack";
 export * from "./ticTacToe";
 export * from "./chat";
 export * from "./quantumPoker";
+export * from "./quantumPokerCodec";
+export * from "./quantumPokerPersona";

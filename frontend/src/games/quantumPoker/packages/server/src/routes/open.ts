@@ -81,7 +81,7 @@ function packageConfigured(packageId: string): boolean {
   return packageId !== "" && packageId !== "0x0";
 }
 
-async function buildOpenFundAndSeedTx(
+export async function buildOpenFundAndSeedTx(
   session: QuantumPokerSession,
   config: ServerConfig,
   client: SuiJsonRpcClient,
@@ -131,7 +131,10 @@ async function buildOpenFundAndSeedTx(
   return tx;
 }
 
-function extractTunnelId(result: ExecutionLike, packageId: string): string | null {
+export function extractTunnelId(
+  result: ExecutionLike,
+  packageId: string,
+): string | null {
   if (Array.isArray(result.objectChanges)) {
     for (const change of result.objectChanges as ObjectChangeLike[]) {
       const objectType = asString(change.objectType);
@@ -167,7 +170,7 @@ function bytesFromParsed(value: unknown): Uint8Array | null {
   }
 }
 
-function extractRandomnessEvent(
+export function extractRandomnessEvent(
   result: ExecutionLike,
   packageId: string,
 ): { tunnelId: string | null; seed: Uint8Array } | null {
@@ -281,6 +284,7 @@ export function createOpenHandler(deps: OpenDeps): Handler {
     });
     session.nonce = 0n;
     session.latestUpdate = null;
+    session.transcriptUpdates = [];
     session.pendingMove = null;
     session.pendingSettlement = null;
     session.latestSettlement = null;

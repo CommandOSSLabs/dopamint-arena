@@ -269,6 +269,7 @@ function commitMove(
     session.state = pending.prepared.nextState;
     session.nonce = pending.prepared.update.nonce;
     session.latestUpdate = completed.signed;
+    session.transcriptUpdates.push(completed.signed);
     session.pendingMove = null;
     session.status = session.status === "created" ? "active" : session.status;
     deps.sessionStore.update(session);

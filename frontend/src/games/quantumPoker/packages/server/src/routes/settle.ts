@@ -4,7 +4,10 @@ import { Transaction } from "@mysten/sui/transactions";
 import { SUI_CLOCK_OBJECT_ID } from "@mysten/sui/utils";
 import { fromHex, toHex } from "sui-tunnel-ts/core/bytes";
 import { nobleBackend, verify } from "sui-tunnel-ts/core/crypto";
-import { serializeSettlement, type Settlement } from "sui-tunnel-ts/core/wire";
+import {
+  serializeSettlementWithRoot,
+  type SettlementWithRoot,
+} from "sui-tunnel-ts/core/wire";
 import { createQuantumPokerProtocol } from "../services/quantumPokerBot";
 import { gameCoinConfigured } from "../services/gameCoin";
 import {
@@ -12,12 +15,16 @@ import {
   settlementToJson,
   stateSummaryToJson,
 } from "../services/pokerJson";
+import { transcriptRootFor } from "../services/transcript";
 import type { BotWallet, BotWalletPool } from "../services/botWalletPool";
 import type {
   InMemorySessionStore,
   QuantumPokerSession,
 } from "../services/sessionStore";
-import type { CoSignedSettlement } from "../services/tunnelTypes";
+import type {
+  CoSignedSettlementWithRoot,
+  CoSignedUpdate,
+} from "../services/tunnelTypes";
 import { json, type Handler } from "../router";
 import type { ServerConfig } from "../serverConfig";
 
@@ -97,16 +104,34 @@ function botKeypair(wallet: BotWallet): Ed25519Keypair {
   return Ed25519Keypair.fromSecretKey(wallet.keyPair.secretKey);
 }
 
-function buildCloseTx(
+export function buildCloseTx(
   config: ServerConfig,
-  settlement: CoSignedSettlement,
+  settlement: CoSignedSettlementWithRoot,
+  latestUpdate: CoSignedUpdate | null,
 ): Transaction {
   const tx = new Transaction();
+  if (latestUpdate) {
+    tx.moveCall({
+      target: target(config.suiTunnelPackageId, MODULE_TUNNEL, "entry_update_state"),
+      typeArguments: [config.gameCoinType],
+      arguments: [
+        tx.object(latestUpdate.update.tunnelId),
+        vecU8(tx, latestUpdate.update.stateHash),
+        tx.pure.u64(latestUpdate.update.nonce),
+        tx.pure.u64(latestUpdate.update.partyABalance),
+        tx.pure.u64(latestUpdate.update.partyBBalance),
+        tx.pure.u64(latestUpdate.update.timestamp),
+        vecU8(tx, latestUpdate.sigA),
+        vecU8(tx, latestUpdate.sigB),
+        tx.object(SUI_CLOCK_OBJECT_ID),
+      ],
+    });
+  }
   tx.moveCall({
     target: target(
       config.suiTunnelPackageId,
       MODULE_TUNNEL,
-      "entry_close_cooperative",
+      "entry_close_cooperative_with_root",
     ),
     typeArguments: [config.gameCoinType],
     arguments: [
@@ -116,6 +141,7 @@ function buildCloseTx(
       vecU8(tx, settlement.sigA),
       vecU8(tx, settlement.sigB),
       tx.pure.u64(settlement.settlement.timestamp),
+      vecU8(tx, settlement.settlement.transcriptRoot),
       tx.object(SUI_CLOCK_OBJECT_ID),
     ],
   });
@@ -125,7 +151,7 @@ function buildCloseTx(
 function createSettlement(
   session: QuantumPokerSession,
   body: SettleBody,
-): Settlement {
+): SettlementWithRoot {
   const protocol = createQuantumPokerProtocol();
   const balances = protocol.balances(session.state);
   const onchainNonce = parseBigInt(body.onchainNonce, 0n);
@@ -135,6 +161,7 @@ function createSettlement(
     partyBBalance: balances.b,
     finalNonce: onchainNonce + 1n,
     timestamp: parseBigInt(body.timestamp, BigInt(Date.now())),
+    transcriptRoot: transcriptRootFor(session.tunnelId, session.transcriptUpdates),
   };
 }
 
@@ -157,7 +184,7 @@ function prepareSettlement(
   }
 
   const settlement = createSettlement(session, body);
-  const message = serializeSettlement(settlement);
+  const message = serializeSettlementWithRoot(settlement);
   const proposal = {
     id: randomId("qps"),
     settlement,
@@ -175,6 +202,8 @@ function prepareSettlement(
     message: "0x" + toHex(message),
     messageBytes: message.length,
     state: stateSummaryToJson(session.state),
+    transcriptRoot: "0x" + toHex(settlement.transcriptRoot),
+    transcriptUpdates: session.transcriptUpdates.length,
   });
 }
 
@@ -212,7 +241,7 @@ async function commitSettlement(
   const botSignature = nobleBackend.makeSigner(wallet.keyPair.secretKey)(
     pending.message,
   );
-  const signed: CoSignedSettlement = {
+  const signed: CoSignedSettlementWithRoot = {
     settlement: pending.settlement,
     sigA: session.userParty === "A" ? userSignature : botSignature,
     sigB: session.userParty === "B" ? userSignature : botSignature,
@@ -222,9 +251,14 @@ async function commitSettlement(
     url: deps.config.suiNetwork,
     network: deps.config.suiNetworkName,
   });
+  const checkpointNonce = parseBigInt(body.onchainNonce, 0n);
+  const checkpointUpdate =
+    checkpointNonce > 0n && session.latestUpdate?.update.nonce === checkpointNonce
+      ? session.latestUpdate
+      : null;
   const result = (await client.signAndExecuteTransaction({
     signer: botKeypair(wallet),
-    transaction: buildCloseTx(deps.config, signed),
+    transaction: buildCloseTx(deps.config, signed, checkpointUpdate),
     options: {
       showEffects: true,
     },
@@ -254,6 +288,8 @@ async function commitSettlement(
     coinSymbol: deps.config.gameCoinSymbol,
     txDigest: asString(result.digest),
     settlement: coSignedSettlementToJson(signed),
+    transcriptRoot: "0x" + toHex(signed.settlement.transcriptRoot),
+    transcriptUpdates: session.transcriptUpdates.length,
   });
 }
 

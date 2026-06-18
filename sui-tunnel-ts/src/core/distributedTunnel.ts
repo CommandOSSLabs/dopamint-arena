@@ -13,22 +13,45 @@
  */
 import { bytesEqual } from "./bytes";
 import { blake2b256 } from "./crypto";
-import { Balances, Party, Protocol } from "../protocol/Protocol";
-import { CoSignedSettlement, CoSignedUpdate, PartyEndpoint } from "./tunnel";
 import {
   serializeSettlement,
+  serializeSettlementWithRoot,
   serializeStateUpdate,
-  Settlement,
-  StateUpdate,
 } from "./wire";
 import {
-  AckFrame,
   decodeFrame,
   encodeFrame,
   identityMoveCodec,
-  MoveCodec,
-  MoveFrame,
 } from "./distributedFrame";
+import type { Balances, Party, Protocol } from "../protocol/Protocol";
+import type { AckFrame, MoveCodec, MoveFrame } from "./distributedFrame";
+import type { Settlement, SettlementWithRoot, StateUpdate } from "./wire";
+
+export interface PartyEndpoint {
+  address: string;
+  publicKey: Uint8Array;
+  scheme: number;
+  sign?: (message: Uint8Array) => Uint8Array;
+  verify: (message: Uint8Array, signature: Uint8Array) => boolean;
+}
+
+export interface CoSignedUpdate {
+  update: StateUpdate;
+  sigA: Uint8Array;
+  sigB: Uint8Array;
+}
+
+export interface CoSignedSettlement {
+  settlement: Settlement;
+  sigA: Uint8Array;
+  sigB: Uint8Array;
+}
+
+export interface CoSignedSettlementWithRoot {
+  settlement: SettlementWithRoot;
+  sigA: Uint8Array;
+  sigB: Uint8Array;
+}
 
 /** Opaque byte transport between the two seats. The relay forwards frames blindly. */
 export interface Transport {
@@ -76,7 +99,7 @@ export class DistributedTunnel<State, Move> {
     protocol: Protocol<State, Move>,
     cfg: DistributedConfig<Move>,
     transport: Transport,
-    initialBalances: Balances,
+    initialBalances: Balances
   ) {
     if (!cfg.self.sign) {
       throw new Error("DistributedTunnel: self endpoint must carry a signer");
@@ -87,10 +110,15 @@ export class DistributedTunnel<State, Move> {
     this.opponent = cfg.opponent;
     this.selfParty = cfg.selfParty;
     this.total = initialBalances.a + initialBalances.b;
-    this._state = protocol.initialState({ tunnelId: cfg.tunnelId, initialBalances });
+    this._state = protocol.initialState({
+      tunnelId: cfg.tunnelId,
+      initialBalances,
+    });
     const { a, b } = protocol.balances(this._state);
     if (a + b !== this.total) {
-      throw new Error(`protocol initial balances ${a + b} != locked total ${this.total}`);
+      throw new Error(
+        `protocol initial balances ${a + b} != locked total ${this.total}`
+      );
     }
     this._nonce = 0n;
     this._latest = null;
@@ -124,7 +152,11 @@ export class DistributedTunnel<State, Move> {
   }
 
   /** Place self/other signatures into A/B slots according to which side we are. */
-  private coSign(update: StateUpdate, sigSelf: Uint8Array, sigOther: Uint8Array): CoSignedUpdate {
+  private coSign(
+    update: StateUpdate,
+    sigSelf: Uint8Array,
+    sigOther: Uint8Array
+  ): CoSignedUpdate {
     return this.selfIsA()
       ? { update, sigA: sigSelf, sigB: sigOther }
       : { update, sigA: sigOther, sigB: sigSelf };
@@ -139,7 +171,8 @@ export class DistributedTunnel<State, Move> {
     if (this.pending) throw new Error("a proposal is already awaiting ACK");
     const next = this.protocol.applyMove(this._state, move, this.selfParty);
     const { a, b } = this.protocol.balances(next);
-    if (a + b !== this.total) throw new Error(`balance sum ${a + b} != locked total ${this.total}`);
+    if (a + b !== this.total)
+      throw new Error(`balance sum ${a + b} != locked total ${this.total}`);
     const nonce = this._nonce + 1n;
     const stateHash = blake2b256(this.protocol.encodeState(next));
     const update: StateUpdate = {
@@ -174,13 +207,17 @@ export class DistributedTunnel<State, Move> {
   }
 
   private onMove(frame: MoveFrame<Move>): void {
-    if (frame.by === this.selfParty) throw new Error("received a MOVE attributed to self");
+    if (frame.by === this.selfParty)
+      throw new Error("received a MOVE attributed to self");
     if (frame.nonce !== this._nonce + 1n) {
-      throw new Error(`nonce gap: got ${frame.nonce}, expected ${this._nonce + 1n}`);
+      throw new Error(
+        `nonce gap: got ${frame.nonce}, expected ${this._nonce + 1n}`
+      );
     }
     const next = this.protocol.applyMove(this._state, frame.move, frame.by);
     const { a, b } = this.protocol.balances(next);
-    if (a + b !== this.total) throw new Error(`balance sum ${a + b} != locked total ${this.total}`);
+    if (a + b !== this.total)
+      throw new Error(`balance sum ${a + b} != locked total ${this.total}`);
     if (a !== frame.partyABalance || b !== frame.partyBBalance) {
       throw new Error("frame balances != re-derived balances");
     }
@@ -232,7 +269,7 @@ export class DistributedTunnel<State, Move> {
    */
   buildSettlementHalf(
     timestamp: bigint,
-    onchainNonce: bigint = 0n,
+    onchainNonce: bigint = 0n
   ): { settlement: Settlement; sigSelf: Uint8Array } {
     const { a, b } = this.protocol.balances(this._state);
     const settlement: Settlement = {
@@ -250,11 +287,53 @@ export class DistributedTunnel<State, Move> {
   combineSettlement(
     settlement: Settlement,
     sigSelf: Uint8Array,
-    sigOther: Uint8Array,
+    sigOther: Uint8Array
   ): CoSignedSettlement {
     const msg = serializeSettlement(settlement);
     if (!this.opponent.verify(msg, sigOther)) {
       throw new Error("opponent settlement signature failed verification");
+    }
+    return this.selfIsA()
+      ? { settlement, sigA: sigSelf, sigB: sigOther }
+      : { settlement, sigA: sigOther, sigB: sigSelf };
+  }
+
+  /**
+   * Sign THIS seat's half of the root-anchored settlement. This is the distributed
+   * equivalent of `OffchainTunnel.buildSettlementWithRoot`.
+   */
+  buildSettlementWithRootHalf(
+    timestamp: bigint,
+    transcriptRoot: Uint8Array,
+    onchainNonce: bigint = 0n
+  ): { settlement: SettlementWithRoot; sigSelf: Uint8Array } {
+    if (transcriptRoot.length !== 32) {
+      throw new Error("transcriptRoot must be 32 bytes");
+    }
+    const { a, b } = this.protocol.balances(this._state);
+    const settlement: SettlementWithRoot = {
+      tunnelId: this.tunnelId,
+      partyABalance: a,
+      partyBBalance: b,
+      finalNonce: onchainNonce + 1n,
+      timestamp,
+      transcriptRoot,
+    };
+    const sigSelf = this.self.sign!(serializeSettlementWithRoot(settlement));
+    return { settlement, sigSelf };
+  }
+
+  /** Combine root-anchored settlement halves, verifying the opponent's signature. */
+  combineSettlementWithRoot(
+    settlement: SettlementWithRoot,
+    sigSelf: Uint8Array,
+    sigOther: Uint8Array
+  ): CoSignedSettlementWithRoot {
+    const msg = serializeSettlementWithRoot(settlement);
+    if (!this.opponent.verify(msg, sigOther)) {
+      throw new Error(
+        "opponent settlement-with-root signature failed verification"
+      );
     }
     return this.selfIsA()
       ? { settlement, sigA: sigSelf, sigB: sigOther }

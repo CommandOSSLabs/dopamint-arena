@@ -12,15 +12,17 @@ import {
   PokerMove,
   PokerState,
   QuantumPokerProtocol,
+  QuantumPokerSeatDriver,
   SlotSecret,
 } from "./quantumPoker";
+import { pokerMoveFromJson, pokerMoveToJson } from "./quantumPokerCodec";
 
 function secrets(base: number): SlotSecret[] {
   return Array.from({ length: 9 }, (_, slot) => ({
     value: Uint8Array.from({ length: 32 }, (_, i) => (base + slot + i) & 0xff),
     salt: Uint8Array.from(
       { length: 16 },
-      (_, i) => (base * 3 + slot + i) & 0xff,
+      (_, i) => (base * 3 + slot + i) & 0xff
     ),
   }));
 }
@@ -45,7 +47,7 @@ test("evaluate5 allows duplicates and ranks Five of a Kind above Straight Flush"
   assert.throws(() => evaluate5([0, 1, 2, 3, 52]), /out of range/);
 });
 
-test("commit move carries commitments only, not slot values or salts", () => {
+test("commit move keeps local secrets local and serializes commitments only", () => {
   const rng = mulberry32(1);
   const p = new QuantumPokerProtocol();
   const s = p.initialState({
@@ -56,9 +58,18 @@ test("commit move carries commitments only, not slot values or salts", () => {
   assert.ok(move);
   assert.equal(move.kind, "commit_slots");
   assert.equal(move.commitments.length, 9);
-  assert.equal(move.commitments.every((c) => c.length === 32), true);
-  assert.equal(Object.hasOwn(move, "value"), false);
-  assert.equal(Object.hasOwn(move, "salt"), false);
+  assert.equal(
+    move.commitments.every((c) => c.length === 32),
+    true
+  );
+  assert.ok(move.localSecrets, "local engine keeps secrets for later reveals");
+
+  const json = pokerMoveToJson(move);
+  assert.equal(Object.hasOwn(json, "localSecrets"), false);
+  assert.deepEqual(pokerMoveFromJson(json), {
+    kind: "commit_slots",
+    commitments: move.commitments,
+  });
 });
 
 test("slot reveal mismatch is rejected against commitment", () => {
@@ -69,8 +80,16 @@ test("slot reveal mismatch is rejected against commitment", () => {
     tunnelId: "0xab",
     initialBalances: { a: 1000n, b: 1000n },
   });
-  s = p.applyMove(s, { kind: "commit_slots", commitments: commitSlotSecrets(a) }, "A");
-  s = p.applyMove(s, { kind: "commit_slots", commitments: commitSlotSecrets(b) }, "B");
+  s = p.applyMove(
+    s,
+    { kind: "commit_slots", commitments: commitSlotSecrets(a) },
+    "A"
+  );
+  s = p.applyMove(
+    s,
+    { kind: "commit_slots", commitments: commitSlotSecrets(b) },
+    "B"
+  );
   assert.equal(s.phase, "open_private_holes");
 
   const bad = reveal(a, [2, 3]);
@@ -82,6 +101,42 @@ test("slot reveal mismatch is rejected against commitment", () => {
   assert.ok(s2.revealsA[2]);
 });
 
+test("seat driver can reveal from persisted local secrets after request boundary", () => {
+  const p = new QuantumPokerProtocol();
+  const a = secrets(30);
+  const b = secrets(130);
+  let s = p.initialState({
+    tunnelId: "0xad",
+    initialBalances: { a: 1000n, b: 1000n },
+  });
+  s = p.applyMove(
+    s,
+    { kind: "commit_slots", commitments: commitSlotSecrets(a) },
+    "A"
+  );
+  s = p.applyMove(
+    s,
+    {
+      kind: "commit_slots",
+      commitments: commitSlotSecrets(b),
+      localSecrets: b,
+    },
+    "B"
+  );
+  s = p.applyMove(s, reveal(a, [2, 3]), "A");
+
+  const statelessBot = new QuantumPokerSeatDriver("B");
+  const move = statelessBot.makeRevealMove(s);
+  assert.ok(move);
+  assert.equal(move.kind, "reveal_slots");
+  assert.deepEqual(move.slots, [0, 1]);
+  assert.deepEqual(move.reveals, [b[0], b[1]]);
+
+  s = p.applyMove(s, move, "B");
+  assert.equal(s.phase, "preflop_bet");
+  assert.ok(statelessBot.knownHoleCards(s));
+});
+
 test("manual hand reaches flop with private holes hidden from encoding", () => {
   const p = new QuantumPokerProtocol();
   const a = secrets(20);
@@ -90,17 +145,34 @@ test("manual hand reaches flop with private holes hidden from encoding", () => {
     tunnelId: "0xac",
     initialBalances: { a: 1000n, b: 1000n },
   });
-  s.localSecretsA = a;
-  s.localSecretsB = b;
-  s = p.applyMove(s, { kind: "commit_slots", commitments: commitSlotSecrets(a) }, "A");
-  s = p.applyMove(s, { kind: "commit_slots", commitments: commitSlotSecrets(b) }, "B");
+  s = p.applyMove(
+    s,
+    {
+      kind: "commit_slots",
+      commitments: commitSlotSecrets(a),
+      localSecrets: a,
+    },
+    "A"
+  );
+  s = p.applyMove(
+    s,
+    {
+      kind: "commit_slots",
+      commitments: commitSlotSecrets(b),
+      localSecrets: b,
+    },
+    "B"
+  );
   s = p.applyMove(s, reveal(a, [2, 3]), "A");
   s = p.applyMove(s, reveal(b, [0, 1]), "B");
   assert.equal(s.phase, "preflop_bet");
   assert.ok(s.holeA && s.holeA.length === 2);
   assert.ok(s.holeB && s.holeB.length === 2);
   assert.equal(s.shownHoleA, null);
-  assert.equal(toHex(p.encodeState(s)).includes(toHex(Uint8Array.from(s.holeA))), false);
+  assert.equal(
+    toHex(p.encodeState(s)).includes(toHex(Uint8Array.from(s.holeA))),
+    false
+  );
 
   s = p.applyMove(s, { kind: "check" }, "A");
   s = p.applyMove(s, { kind: "check" }, "B");
@@ -130,7 +202,7 @@ test("full self-play game: balances conserved, five-card board, updates settle",
     b,
     ed25519Address(a.publicKey),
     ed25519Address(b.publicKey),
-    { a: 10_000n, b: 10_000n },
+    { a: 10_000n, b: 10_000n }
   );
   const total = t.total;
   let completedShowdownOrFold = false;
@@ -164,7 +236,7 @@ test("full self-play game: balances conserved, five-card board, updates settle",
     verifyCoSignedUpdate(
       t.latest!,
       { publicKey: t.partyA.publicKey, scheme: t.partyA.scheme },
-      { publicKey: t.partyB.publicKey, scheme: t.partyB.scheme },
-    ),
+      { publicKey: t.partyB.publicKey, scheme: t.partyB.scheme }
+    )
   );
 });
