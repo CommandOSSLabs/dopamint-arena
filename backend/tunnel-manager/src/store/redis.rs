@@ -13,9 +13,23 @@ use tokio::sync::mpsc;
 
 use super::{Bus, ConnRef, ControlStore, MpStore};
 use crate::mp::ConnId;
-use crate::state::{GameStat, SessionRecord, StatsSnapshot, TunnelStatus};
+use crate::state::{GameStat, SessionRecord, StatsSnapshot, TunnelEvent, TunnelStatus};
 
 const SESSION_TTL: i64 = 24 * 3600;
+
+// Atomic dedup-then-push for the recent-events ring. SADD returns 1 only for a new digest,
+// so a re-polled event (cursor restart / second indexer) never double-inserts. Newest-first
+// via LPUSH; LTRIM bounds the list. `events:seen` is unbounded but tiny for a demo window
+// (same accepted trade-off as stats:tunnels:active).
+// KEYS[1]=events:recent KEYS[2]=events:seen  ARGV[1]=json ARGV[2]=digest ARGV[3]=cap
+const PUSH_RECENT_EVENT: &str = r#"
+if redis.call('SADD', KEYS[2], ARGV[2]) == 1 then
+  redis.call('LPUSH', KEYS[1], ARGV[1])
+  redis.call('LTRIM', KEYS[1], 0, tonumber(ARGV[3]) - 1)
+  return 1
+end
+return 0
+"#;
 
 pub async fn connect(url: &str) -> anyhow::Result<RedisPool> {
     let config = RedisConfig::from_url(url)?;
@@ -168,10 +182,29 @@ impl ControlStore for RedisControlStore {
         }
     }
 
-    // TEMPORARY stub so the trait is satisfied and the crate compiles; Task 3 replaces these
-    // with the real Lua-backed implementation.
-    async fn push_recent_event(&self, _ev: crate::state::TunnelEvent) {}
-    async fn recent_events(&self) -> Vec<crate::state::TunnelEvent> { Vec::new() }
+    async fn push_recent_event(&self, ev: TunnelEvent) {
+        let json = serde_json::to_string(&ev).unwrap();
+        let res: Result<i64, _> = self
+            .pool
+            .eval::<i64, _, _, _>(
+                PUSH_RECENT_EVENT,
+                vec!["events:recent".to_string(), "events:seen".to_string()],
+                vec![json, ev.tx_digest.clone(), crate::store::RECENT_EVENTS_CAP.to_string()],
+            )
+            .await;
+        if let Err(e) = res {
+            tracing::warn!(error = %e, "redis push_recent_event eval failed");
+        }
+    }
+
+    async fn recent_events(&self) -> Vec<TunnelEvent> {
+        let raws: Vec<String> = self
+            .pool
+            .lrange("events:recent", 0, (crate::store::RECENT_EVENTS_CAP - 1) as i64)
+            .await
+            .unwrap_or_default();
+        raws.iter().filter_map(|j| serde_json::from_str(j).ok()).collect()
+    }
 
     // fred 9.4.0: ping takes no argument (cheat-sheet erroneously shows `ping::<String>(None)`).
     async fn ready(&self) -> bool {
@@ -707,6 +740,33 @@ mod tests {
         // atomicity, so there can never be a double-pair.
         assert_eq!(pairs, 25, "expected 25 pair events");
         assert_eq!(parked, 25, "expected 25 parked waiters");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires TEST_REDIS_URL"]
+    async fn recent_events_ring_dedupes_and_caps() {
+        use crate::state::{TunnelEvent, TunnelEventKind};
+        let Some(url) = test_url() else { return };
+        let s = RedisControlStore::new(connect(&url).await.unwrap());
+        let ev = |digest: &str| TunnelEvent {
+            tunnel_id: "0xt".into(),
+            kind: TunnelEventKind::Settled,
+            party_a_balance: Some(1),
+            party_b_balance: Some(1),
+            transcript_root: None,
+            tx_digest: digest.into(),
+            timestamp_ms: 1,
+            proof_url: None,
+        };
+        let tag = uuid::Uuid::new_v4().simple().to_string();
+        s.push_recent_event(ev(&format!("{tag}-a"))).await;
+        s.push_recent_event(ev(&format!("{tag}-a"))).await; // replay — no-op
+        s.push_recent_event(ev(&format!("{tag}-b"))).await;
+        let got = s.recent_events().await;
+        // newest-first; our two unique digests are at the front (other tests may share the ring).
+        assert_eq!(got[0].tx_digest, format!("{tag}-b"));
+        assert_eq!(got[1].tx_digest, format!("{tag}-a"));
+        assert!(got.len() <= crate::store::RECENT_EVENTS_CAP);
     }
 
     #[tokio::test]
