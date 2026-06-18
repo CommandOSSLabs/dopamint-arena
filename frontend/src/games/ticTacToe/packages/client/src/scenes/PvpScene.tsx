@@ -100,7 +100,7 @@ export function PvpScene({ onBack }: { onBack: () => void }) {
             : <Board board={g.board} disabled={!g.isMyTurn || g.auto} onPlay={g.play} />}
 
           <div className="flex flex-wrap items-center justify-center gap-2">
-            {g.innerOver && !g.terminal && g.role === "A" && (
+            {g.phase === "playing" && g.innerOver && !g.terminal && g.role === "A" && (
               <button onClick={g.next} disabled={g.auto} className="px-4 py-2 rounded-lg bg-tertiary text-on-tertiary font-bold disabled:opacity-40">Next game</button>
             )}
             {g.innerOver && g.phase === "playing" && <button onClick={g.stop} className="px-4 py-2 rounded-lg bg-red-700 text-white font-bold">Stop &amp; settle</button>}
