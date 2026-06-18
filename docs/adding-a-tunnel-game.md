@@ -22,6 +22,8 @@ A new game is almost entirely a frontend package plus ONE SDK protocol class. Th
 
 ## Pick the wiring pattern
 
+> **Default: PvP** for any game two humans can play (race, board, shooter). Self-play is for games with no real two-human form (Blackjack vs a dealer, single-player Poker) or pure bot/stats showcases. Solo policy for PvP games is **invite / 2-tabs** (a private match code), not a bot fallback — see [superpowers/specs/2026-06-18-chicken-cross-pvp-design.md](superpowers/specs/2026-06-18-chicken-cross-pvp-design.md) § 3–4.
+
 The pattern is fixed by **which signing keys the browser holds**, which selects the engine class. Copy the matching reference game wholesale, then swap the protocol.
 
 | | Self-play (bot vs bot) | PvP (human vs human) |
