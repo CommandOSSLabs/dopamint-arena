@@ -38,11 +38,10 @@ test("StatsSnapshot carries optional recentEvents", () => {
   assert.equal(without.recentEvents, undefined);
 });
 
-// settle() must POST to the exact session path WITH the stats-token bearer (the backend's
-// bearer_matches gate) and round-trip the proof JSON. The body shape is the contract with
-// routes.rs::settle — this pins the path, auth header, and body so a refactor can't silently
-// break the on-chain close route.
-test("settle posts to the session settle path with bearer auth and returns the proof", async () => {
+// ADR-0007: settle posts to the TUNNEL resource with NO Authorization — the co-signed settlement
+// is the authorization, not a bearer token. This pins the path + the absence of the header so a
+// regression can't silently re-introduce the session gate.
+test("settle posts to the tunnel settle path with no auth and returns the proof", async () => {
   const calls: { url: string; init: RequestInit }[] = [];
   const orig = globalThis.fetch;
   globalThis.fetch = (async (url: string | URL, init: RequestInit) => {
@@ -67,15 +66,15 @@ test("settle posts to the session settle path with bearer auth and returns the p
       sigB: "bb",
       transcript: [],
     };
-    const res = await cp.settle("sess_1", "tok_1", body);
+    const res = await cp.settle("0x1", body);
     assert.equal(res.txDigest, "DiG");
     assert.equal(res.walrusBlobId, "blob1");
     assert.equal(res.proofUrl, "https://agg/v1/blobs/blob1");
     assert.equal(calls.length, 1);
-    assert.equal(calls[0].url, "https://backend.example/v1/sessions/sess_1/settle");
+    assert.equal(calls[0].url, "https://backend.example/v1/tunnels/0x1/settle");
     assert.equal(String(calls[0].init.method).toUpperCase(), "POST");
     const headers = new Headers(calls[0].init.headers);
-    assert.equal(headers.get("authorization"), "Bearer tok_1");
+    assert.equal(headers.get("authorization"), null);
     assert.equal(headers.get("content-type"), "application/json");
     assert.deepEqual(JSON.parse(String(calls[0].init.body)), body);
   } finally {

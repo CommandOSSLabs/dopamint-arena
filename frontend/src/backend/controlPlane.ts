@@ -105,14 +105,11 @@ export interface ControlPlaneClient {
     statsToken: string,
     heartbeat: Heartbeat,
   ): Promise<void>;
-  /** Route a cooperative close through the backend: the settler submits
+  /** Route a cooperative close through the backend: the settler dry-runs + submits
    *  close_cooperative_with_root (anchoring the transcript root), archives the transcript to
-   *  Walrus, and returns the proof links. Requires the session's stats token. */
-  settle(
-    sessionId: string,
-    statsToken: string,
-    body: SettleRequestBody,
-  ): Promise<SettleResult>;
+   *  Walrus, and returns the proof links. Authorization is the co-signed settlement in `body`
+   *  (ADR-0007) — no session token. */
+  settle(tunnelId: string, body: SettleRequestBody): Promise<SettleResult>;
   /** Subscribe to the live aggregate SSE feed; returns an unsubscribe fn. */
   openStatsStream(onSnapshot: (snapshot: StatsSnapshot) => void): () => void;
 }
@@ -166,13 +163,10 @@ export function createControlPlaneClient(baseUrl: string): ControlPlaneClient {
       await failIfNotOk(res, "sendHeartbeat");
     },
 
-    async settle(sessionId, statsToken, body) {
-      const res = await fetch(`${root}/v1/sessions/${sessionId}/settle`, {
+    async settle(tunnelId, body) {
+      const res = await fetch(`${root}/v1/tunnels/${tunnelId}/settle`, {
         method: "POST",
-        headers: {
-          "content-type": "application/json",
-          authorization: `Bearer ${statsToken}`,
-        },
+        headers: { "content-type": "application/json" },
         body: JSON.stringify(body),
       });
       await failIfNotOk(res, "settle");
