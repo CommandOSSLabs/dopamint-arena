@@ -83,6 +83,7 @@ export function usePvpTicTacToe(variant: Variant, boardSize: number): PvpTttView
   const [role, setRole] = useState<"A" | "B" | null>(null);
   const [state, setState] = useState<AnyState | null>(null);
   const [games, setGames] = useState<GameResult[]>([]);
+  const [score, setScore] = useState({ x: 0, o: 0, draws: 0 });
   const [auto, setAutoState] = useState(false);
   const [balance, setBalance] = useState<bigint>(0n);
   const [digests, setDigests] = useState<{ create?: string; deposit?: string; close?: string }>({});
@@ -136,9 +137,10 @@ export function usePvpTicTacToe(variant: Variant, boardSize: number): PvpTttView
   }, [submit, refreshBalance]);
 
   const queue = useCallback(() => { void (async () => {
-    setError(null); setPhase("connecting"); settledRef.current = false; stoppingRef.current = false; setGames([]);
+    setError(null); setPhase("connecting"); settledRef.current = false; stoppingRef.current = false; setGames([]); setScore({ x: 0, o: 0, draws: 0 });
     autoRef.current = false; setAutoState(false); // fresh game (incl. rematch) starts in manual mode
     bufferedSettleRef.current = null; bufferedHelloRef.current = null;
+    openedResolveRef.current = null; settleResolveRef.current = null; helloResolveRef.current = null;
     try {
       const relay = new RelayClient(MP_URL, me.address, me.coreKey);
       relayRef.current = relay;
@@ -231,7 +233,9 @@ export function usePvpTicTacToe(variant: Variant, boardSize: number): PvpTttView
         // Log each completed game once (winner is set on the inner game just before the advance).
         const gameNo = st.gamesPlayed + 1;
         if (st.inner.winner !== 0 && gameNo > lastLoggedGame) {
-          setGames((prev) => [...prev, { game: gameNo, winner: st.inner.winner as 1 | 2 | 3 }].slice(-50));
+          const w = st.inner.winner as 1 | 2 | 3;
+          setGames((prev) => [...prev, { game: gameNo, winner: w }].slice(-50));
+          setScore((prev) => ({ x: prev.x + (w === 1 ? 1 : 0), o: prev.o + (w === 2 ? 1 : 0), draws: prev.draws + (w === 3 ? 1 : 0) }));
           lastLoggedGame = gameNo;
         }
         if (stoppingRef.current) return;
@@ -288,7 +292,7 @@ export function usePvpTicTacToe(variant: Variant, boardSize: number): PvpTttView
 
   const leave = useCallback(() => {
     relayRef.current?.close(); relayRef.current = null; tunnelRef.current = null;
-    setPhase("idle"); setState(null); setRole(null); setDigests({}); setGames([]);
+    setPhase("idle"); setState(null); setRole(null); setDigests({}); setGames([]); setScore({ x: 0, o: 0, draws: 0 });
     settledRef.current = false; stoppingRef.current = false; autoRef.current = false; setAutoState(false);
     openedResolveRef.current = null; settleResolveRef.current = null; bufferedSettleRef.current = null;
     helloResolveRef.current = null; bufferedHelloRef.current = null;
@@ -301,11 +305,6 @@ export function usePvpTicTacToe(variant: Variant, boardSize: number): PvpTttView
   const winner = inner ? inner.winner : 0;
   const myMark: 0 | 1 | 2 = roleRef.current === "A" ? 1 : roleRef.current === "B" ? 2 : 0;
   const isMyTurn = !!inner && inner.winner === 0 && inner.turn === roleRef.current && phase === "playing";
-  const score = games.reduce((acc, g) => {
-    if (g.winner === 1) acc.x++; else if (g.winner === 2) acc.o++; else acc.draws++;
-    return acc;
-  }, { x: 0, o: 0, draws: 0 });
-
   return {
     phase, error, role: roleRef.current, variant,
     board: inner ? inner.board : [],
