@@ -161,3 +161,6 @@ vite.config.ts.timestamp-*
 
 # Rust
 /target
+
+# Temp files
+temp/

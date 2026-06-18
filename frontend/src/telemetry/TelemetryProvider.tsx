@@ -73,6 +73,7 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
     return {
       rate,
       txns,
+      localTxns: PLACEHOLDER_SNAPSHOT.localTxns,
       deposits: PLACEHOLDER_SNAPSHOT.deposits,
       tpsSeries,
       botsRunning,

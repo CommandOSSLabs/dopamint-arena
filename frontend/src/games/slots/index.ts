@@ -5,5 +5,6 @@ register({
   id: "slots",
   name: "Slots",
   icon: "🎰",
+  image: "/games/slots.png",
   Window: makePlaceholder("Slots"),
 });

@@ -6,5 +6,6 @@ register({
   id: "tic-tac-toe",
   name: "Tic Tac Toe",
   icon: "⭕",
+  image: "/games/caro.png",
   Window: TicTacToePvpWindow,
 });

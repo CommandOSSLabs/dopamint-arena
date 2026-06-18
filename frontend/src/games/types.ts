@@ -1,5 +1,6 @@
 import type { ComponentType } from "react";
 
+/** Props a game's `Window` component receives (distinct from the GameWindow chrome). */
 export interface GameWindowProps {
   windowId: string;
   onClose: () => void;
@@ -15,8 +16,10 @@ export interface GameModule {
   /** Stable kebab-case id, unique across the registry. */
   id: string;
   name: string;
-  /** Short glyph/emoji shown in the catalog and taskbar. */
+  /** Short glyph/emoji — fallback when the logo image is unavailable. */
   icon: string;
+  /** Logo image path (served from public/, e.g. `/games/blackjack.png`). */
+  image: string;
   Window: ComponentType<GameWindowProps>;
   // Deferred until games drive the engine:
   //   protocolFactory?: () => Protocol<unknown, unknown>;  // from sui-tunnel-ts

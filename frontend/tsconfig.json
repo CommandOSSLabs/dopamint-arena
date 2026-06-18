@@ -17,10 +17,11 @@
     "allowImportingTsExtensions": true,
     "types": ["node"],
     "paths": {
+      "@/*": ["./src/*"],
       "sui-tunnel-ts": ["../sui-tunnel-ts/src/index.ts"],
       "sui-tunnel-ts/*": ["../sui-tunnel-ts/src/*"]
     }
   },
   "include": ["src"],
-  "exclude": ["src/games/*/packages"]
+  "exclude": ["src/games/*/packages", "src/**/*.test.ts"]
 }

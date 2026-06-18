@@ -16,3 +16,5 @@ that depends on them. An ADR captures the decision and the reasoning so the
 
 - [0001](0001-arena-baseline-architecture.md) — Baseline architecture: Rust
   control-plane backend, client self-play hot path, per-game `Protocol`.
+- [0002](0002-grid-layout-engine.md) — Owned grid-layout engine over a
+  drag-and-drop library (React 19 + shadcn-style ownership).
