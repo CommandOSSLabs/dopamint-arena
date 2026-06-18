@@ -487,14 +487,11 @@ fn relay_payload_is_move(payload: &str) -> bool {
     let Some(frame_json) = envelope.get("data").and_then(serde_json::Value::as_str) else {
         return false;
     };
-    serde_json::from_str::<serde_json::Value>(frame_json)
-        .ok()
-        .and_then(|f| {
-            f.get("kind")
-                .and_then(serde_json::Value::as_str)
-                .map(|k| k == "move")
-        })
-        .unwrap_or(false)
+    // The inner frame is a JSON string produced by the SDK without extra whitespace.
+    // This is a deliberate hot-path heuristic: it avoids a second full parse by checking
+    // for the exact `"kind":"move"` substring. Payloads that do not follow this
+    // serialization are treated best-effort as "not a move".
+    frame_json.starts_with(r#"{"kind":"move""#) || frame_json.contains(r#""kind":"move""#)
 }
 
 #[cfg(test)]
