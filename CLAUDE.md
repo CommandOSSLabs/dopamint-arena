@@ -21,6 +21,10 @@ framework can be re-synced from upstream later. Do **not** convert them to
 bun/biome. The conventions below apply to all code; the *tooling* choices
 match whatever package the file lives in.
 
+**Adding a new arena game** (self-play or PvP over a tunnel): follow
+[docs/adding-a-tunnel-game.md](docs/adding-a-tunnel-game.md) — the per-layer
+checklist, wiring patterns, and gate.
+
 ## Git
 
 - **Rebase over merge; squash on integration.** Keep history linear.
