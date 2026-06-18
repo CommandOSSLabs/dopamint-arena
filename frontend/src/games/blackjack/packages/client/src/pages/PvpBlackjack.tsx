@@ -127,7 +127,7 @@ export default function PvpBlackjack() {
   const dealChip = betChip(g.currentBet);
 
   return (
-    <div className="h-screen w-screen flex flex-col relative text-white overflow-hidden select-none bg-zinc-950">
+    <div className="h-full w-full flex flex-col relative text-white overflow-hidden select-none bg-zinc-950">
       {/* Casino felt (same background as the bot-vs-bot table) */}
       <div className="flex-1 w-full relative bg-cover bg-center" style={{ backgroundImage: "url('/dealer-desk-plain-rotated.png')" }}>
         <button onClick={() => { g.leave(); navigate("/"); }}

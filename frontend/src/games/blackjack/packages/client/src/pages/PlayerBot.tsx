@@ -364,7 +364,7 @@ export default function PlayerBot() {
   // Idle start screen: no game has run yet.
   if (!started) {
     return (
-      <div className="h-screen w-screen flex flex-col items-center justify-center relative text-white overflow-hidden select-none bg-zinc-950 bg-cover bg-center fade-in-up"
+      <div className="h-full w-full flex flex-col items-center justify-center relative text-white overflow-hidden select-none bg-zinc-950 bg-cover bg-center fade-in-up"
         style={{ backgroundImage: "url('/dealer-desk-plain-rotated.png')" }}
       >
         <div className="absolute inset-0 bg-black/60" />
@@ -445,7 +445,7 @@ export default function PlayerBot() {
   };
 
   return (
-    <div className="h-screen w-screen flex flex-col relative text-white overflow-hidden select-none bg-zinc-950 fade-in-up">
+    <div className="h-full w-full flex flex-col relative text-white overflow-hidden select-none bg-zinc-950 fade-in-up">
       {/* Play area: dealer-desk felt with dealer (top) and player (bottom) hands */}
       <div
         className="flex-1 w-full relative bg-cover bg-center"
@@ -475,7 +475,7 @@ export default function PlayerBot() {
         {/* Top-right side panels: per-round log, then persistent tunnel history below it. */}
         {/* Rounds running log: top-right corner, fixed height for ~3 rows, scrollable */}
         {rounds.length > 0 && (
-          <div className="absolute top-16 right-3 md:top-4 md:right-4 z-20 w-44 md:w-52 flex flex-col bg-black/70 backdrop-blur-sm border border-amber-950 rounded-lg shadow-lg overflow-hidden">
+          <div className="absolute top-16 right-2 md:top-4 md:right-4 z-20 w-40 md:w-52 flex flex-col bg-black/70 backdrop-blur-sm border border-amber-950 rounded-lg shadow-lg overflow-hidden">
             <div className="px-3 py-1.5 text-[10px] font-extrabold uppercase tracking-widest text-[#d4af37] font-serif border-b border-amber-950/70">
               Rounds
             </div>
@@ -485,7 +485,7 @@ export default function PlayerBot() {
                 return (
                   <div
                     key={`${r.round}-${i}`}
-                    className={`flex items-center justify-between gap-2 font-mono text-[11px] tabular-nums ${style.text}`}
+                    className={`flex items-center justify-between gap-2 font-mono text-[9px] md:text-[11px] tabular-nums ${style.text}`}
                   >
                     <span className="text-zinc-500">R{r.round + 1}</span>
                     <span className="text-zinc-300">
@@ -506,7 +506,7 @@ export default function PlayerBot() {
         )}
 
         {/* Toasts overlay: left of Rounds panel */}
-        <div className="absolute top-16 right-48 md:top-4 md:right-60 z-30 flex flex-col items-end gap-2 pointer-events-none">
+        <div className="absolute top-[120px] right-3 md:top-4 md:right-60 z-30 flex flex-col items-end gap-2 pointer-events-none">
           {toasts.map((t) => (
             <div
               key={t.id}
@@ -527,7 +527,7 @@ export default function PlayerBot() {
         </div>
 
         {/* Tunnels history: bottom-right corner, wider to fit links, max 3 rows, scrollable */}
-        <div className="absolute bottom-[96px] right-3 md:right-4 z-20 w-[450px] flex flex-col bg-black/70 backdrop-blur-sm border border-amber-950 rounded-lg shadow-lg overflow-hidden">
+        <div className="absolute bottom-[10px] right-2 md:bottom-4 md:right-4 z-20 w-[280px] md:w-[450px] flex flex-col bg-black/70 backdrop-blur-sm border border-amber-950 rounded-lg shadow-lg overflow-hidden">
           <div className="px-3 py-1.5 text-[10px] font-extrabold uppercase tracking-widest text-[#d4af37] font-serif border-b border-amber-950/70">
             Tunnels
           </div>
@@ -547,18 +547,18 @@ export default function PlayerBot() {
                         href={`${SUISCAN_OBJECT}${t.tunnelId}`}
                         target="_blank"
                         rel="noreferrer"
-                        className="font-mono text-[11px] text-[#d4af37] hover:text-amber-300 underline underline-offset-2 transition-colors"
+                        className="font-mono text-[9px] md:text-[11px] text-[#d4af37] hover:text-amber-300 underline underline-offset-2 transition-colors"
                         title={t.tunnelId}
                       >
                         {shortId(t.tunnelId)}
                       </a>
                       <span
-                        className={`text-[10px] font-bold uppercase tracking-wider ${style.text}`}
+                        className={`text-[8px] md:text-[10px] font-bold uppercase tracking-wider ${style.text}`}
                       >
                         {style.label}
                       </span>
                     </div>
-                    <div className="flex items-center justify-between gap-2 font-mono text-[10px] text-zinc-500 tabular-nums">
+                    <div className="flex items-center justify-between gap-2 font-mono text-[8px] md:text-[10px] text-zinc-500 tabular-nums">
                       <span>{t.rounds} rounds</span>
                       <span className="flex items-center gap-2">
                         <DigestLink label="create" digest={t.createDigest} />
@@ -618,7 +618,7 @@ export default function PlayerBot() {
                   key={idx}
                   src={chip}
                   className="stacked-chip"
-                  style={{ bottom: `${idx * 8}px`, transform: `rotate(${idx * 4 - 8}deg)` }}
+                  style={{ bottom: `calc(var(--chip-spacing, 8px) * ${idx})`, transform: `rotate(${idx * 4 - 8}deg)` }}
                   alt="chip"
                 />
               ))}
@@ -688,7 +688,7 @@ export default function PlayerBot() {
                   key={idx}
                   src={chip}
                   className="stacked-chip"
-                  style={{ bottom: `${idx * 8}px`, transform: `rotate(${idx * 4 - 8}deg)` }}
+                  style={{ bottom: `calc(var(--chip-spacing, 8px) * ${idx})`, transform: `rotate(${idx * 4 - 8}deg)` }}
                   alt="chip"
                 />
               ))}
@@ -706,7 +706,7 @@ export default function PlayerBot() {
       </div>
 
       {/* Bottom HUD */}
-      <div className="w-full bg-zinc-950/95 backdrop-blur-md border-t border-zinc-800 shadow-[0_-10px_30px_rgba(0,0,0,0.95)] z-30 select-none px-4 md:px-8 py-3">
+      <div className="w-full bg-zinc-950/95 backdrop-blur-md border-t border-zinc-800 shadow-[0_-10px_30px_rgba(0,0,0,0.95)] z-30 select-none px-2 py-2 md:px-8 md:py-3">
         <div className="w-full flex flex-col md:flex-row items-center justify-between gap-3">
           {/* Stakes + bot wallet balances */}
           <div className="flex flex-row flex-wrap items-center justify-center gap-x-5 gap-y-1">

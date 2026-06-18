@@ -43,34 +43,7 @@ export function LoginScene({ onContinue, onPlayOnline }: { onContinue: () => voi
         </div>
       </div>
 
-      {/* Sub-Title */}
-      <div className="relative inline-block mt-2">
-        <span className="absolute -inset-1 bg-tertiary-container/30 -rotate-2 -z-10 rounded-sm"></span>
-        <h2 className="font-headline-lg-mobile text-lg text-primary text-center leading-tight tracking-wide uppercase font-bold ink-bleed">
-          Bot vs Bot Arena
-        </h2>
-      </div>
 
-      {/* The "Arena" Sketch Area */}
-      <div className="w-full h-36 border-2 border-dashed border-primary/30 bg-surface-container-low relative flex flex-col items-center justify-center overflow-hidden rotate-[1deg] rounded-sm p-4">
-        {/* Decorative Elements indicating AI */}
-        <div className="absolute top-2 left-4 text-primary opacity-60 transform -rotate-12 select-none">
-          <span className="material-symbols-outlined text-2xl block text-center" style={{ fontVariationSettings: "'FILL' 1" }}>smart_toy</span>
-          <span className="font-label-sm text-[9px] block mt-0.5">AI_X</span>
-        </div>
-        <div className="absolute bottom-2 right-4 text-secondary opacity-60 transform rotate-12 flex flex-col items-end select-none">
-          <span className="material-symbols-outlined text-2xl block text-center" style={{ fontVariationSettings: "'FILL' 1" }}>smart_toy</span>
-          <span className="font-label-sm text-[9px] block mt-0.5">AI_O</span>
-        </div>
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-5">
-          <span className="font-headline-xl text-[64px] text-primary select-none">VS</span>
-        </div>
-        
-        {/* Description inside Arena */}
-        <div className="font-body-md text-base text-on-surface-variant italic relative z-10 text-center max-w-[250px] leading-snug">
-          Connect wallet to fund AI opponents and run state-channel logic battles.
-        </div>
-      </div>
 
       {/* Connection Status / Form Actions */}
       <div className="flex flex-col items-center gap-4 w-full mt-2">
@@ -81,14 +54,15 @@ export function LoginScene({ onContinue, onPlayOnline }: { onContinue: () => voi
               <span>Connected: <span className="font-label-sm text-sm border-b border-primary/20 pb-0.5">{short(address)}</span></span>
             </div>
 
-            {/* Continue Button (Highlighter Style) */}
+            {/* Play vs Bot Button (Highlighter Style) */}
             <div className="relative group cursor-pointer w-full max-w-xs flex justify-center mt-2">
               <div className="absolute inset-y-[-4px] inset-x-2 bg-tertiary/20 highlight-bg -z-10 rounded-sm"></div>
               <button
                 onClick={onContinue}
-                className="relative block w-full px-6 py-3 border-[3px] border-primary bg-surface font-headline-lg-mobile text-xl text-primary uppercase tracking-widest hover:-translate-y-0.5 hover:translate-x-0.5 hover:shadow-[2px_2px_0px_#001e40] active:translate-y-0 active:translate-x-0 transition-all duration-150 rounded-sm"
+                className="relative flex items-center justify-center gap-2 w-full px-6 py-3 border-[3px] border-primary bg-surface font-headline-lg-mobile text-base text-primary uppercase tracking-widest hover:-translate-y-0.5 hover:translate-x-0.5 hover:shadow-[2px_2px_0px_#001e40] active:translate-y-0 active:translate-x-0 transition-all duration-150 rounded-sm"
               >
-                Continue →
+                <span className="material-symbols-outlined text-lg">smart_toy</span>
+                Play vs Bot
               </button>
             </div>
 
@@ -128,12 +102,7 @@ export function LoginScene({ onContinue, onPlayOnline }: { onContinue: () => voi
         )}
       </div>
 
-      {/* Margin Note style decoration */}
-      <aside className="absolute -right-24 top-16 w-36 font-body-md text-sm text-primary/70 italic transform rotate-6 hidden lg:block pointer-events-none">
-        <span className="material-symbols-outlined text-xs inline-block -translate-y-0.5">push_pin</span>
-        <br />
-        No wallet popups during bot-to-bot play!
-      </aside>
+
     </section>
   );
 }

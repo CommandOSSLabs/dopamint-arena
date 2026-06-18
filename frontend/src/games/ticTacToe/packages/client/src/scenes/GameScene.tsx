@@ -137,7 +137,7 @@ export function GameScene({
       {/* Main Body Grid - switch from side-by-side to stacked dynamically in portrait */}
       <div className={`flex ${isPortrait ? "flex-col items-center gap-6" : "flex-row gap-8 items-start justify-center"} mt-2 w-full`}>
         {/* Left Column: Game Area */}
-        <section className={`${isPortrait ? "w-full max-w-[400px]" : "w-[440px]"} flex flex-col items-center`}>
+        <section className={`${isPortrait ? "w-full max-w-[480px]" : "w-[480px]"} flex flex-col items-center`}>
           {/* Scoreboard */}
           <div className="w-full max-w-md flex justify-between items-end mb-8 px-4 border-b-2 border-primary/20 pb-4">
             <div className="text-center">
@@ -233,7 +233,7 @@ export function GameScene({
         </section>
 
         {/* Right Column: Game Log / Info */}
-        <aside className={`${isPortrait ? "w-full max-w-[400px] mt-4" : "w-[400px]"} flex flex-col gap-4`}>
+        <aside className={`${isPortrait ? "w-full max-w-[480px] mt-4" : "w-[400px]"} flex flex-col gap-4`}>
           <h2 className="font-headline-lg text-xl text-primary mb-1 flex items-center gap-2">
             <span className="material-symbols-outlined">edit_note</span>
             Game Log

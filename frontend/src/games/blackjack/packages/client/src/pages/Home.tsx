@@ -12,7 +12,7 @@ export default function Home() {
   }, []);
 
   return (
-    <div className="w-screen h-screen flex flex-col items-center justify-center menu-background relative text-white overflow-hidden select-none">
+    <div className="w-full h-full flex flex-col items-center justify-center menu-background relative text-white overflow-hidden select-none">
       <GameCardScale>
         <div className="bg-zinc-950/90 border border-zinc-800 rounded-2xl p-6 md:p-8 w-full max-w-md shadow-2xl z-10 flex flex-col items-center fade-in-up">
           <img
