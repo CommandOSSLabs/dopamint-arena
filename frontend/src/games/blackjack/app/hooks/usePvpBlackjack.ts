@@ -37,7 +37,15 @@ import {
 type BlackjackState = BetBlackjackState;
 type BlackjackMove = BetBlackjackMove;
 
-const MP_URL = import.meta.env.VITE_MP_URL ?? "ws://127.0.0.1:8080";
+// MP relay base (RelayClient appends /v1/mp). Prefer an explicit VITE_MP_URL; otherwise derive
+// from the backend base, and when that's empty (same-origin production build) from the page
+// origin. Never hardcode localhost — a deployed https site would try ws://127.0.0.1 and fail.
+const MP_URL =
+  import.meta.env.VITE_MP_URL ||
+  (
+    import.meta.env.VITE_BACKEND_URL ||
+    (typeof location !== "undefined" ? location.origin : "http://127.0.0.1:8080")
+  ).replace(/^http/, "ws");
 /** Default buy-in (bankroll) deposited on-chain per seat (MIST). Each player chooses their own
  *  before matchmaking; the bet protocol caps each round at min(both balances). */
 const DEFAULT_STAKE = 5000n;
