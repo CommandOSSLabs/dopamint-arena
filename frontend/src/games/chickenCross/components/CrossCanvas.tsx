@@ -32,6 +32,8 @@ export function CrossCanvas({ view, role, winner, onDir }: CrossCanvasProps) {
   const emitRef = useRef<((d: CrossDirection) => void) | null>(null);
   const onDirRef = useRef(onDir);
   onDirRef.current = onDir;
+  const winnerRef = useRef<"A" | "B" | null>(null);
+  winnerRef.current = winner;
 
   // Mount once: scene, sounds, input, resize observer, render loop.
   useEffect(() => {
@@ -47,6 +49,7 @@ export function CrossCanvas({ view, role, winner, onDir }: CrossCanvasProps) {
 
     // screen dir -> world dir (iso-aware) -> setDir
     const emit = (screenDir: CrossDirection) => {
+      if (winnerRef.current !== null) return;
       const world = scene.worldDirectionFromScreenInput(screenDir);
       onDirRef.current(world as CrossDir);
     };
@@ -110,6 +113,7 @@ export function CrossCanvas({ view, role, winner, onDir }: CrossCanvasProps) {
   }, [winner]);
 
   const press = (dir: CrossDirection) => {
+    if (winnerRef.current !== null) return;
     soundsRef.current?.play("click");
     emitRef.current?.(dir);
   };
@@ -126,6 +130,7 @@ export function CrossCanvas({ view, role, winner, onDir }: CrossCanvasProps) {
             style={{ gridColumn: b.col, gridRow: b.row }}
             aria-label={b.dir}
             onClick={() => press(b.dir)}
+            disabled={winner !== null}
           >
             {b.glyph}
           </button>
