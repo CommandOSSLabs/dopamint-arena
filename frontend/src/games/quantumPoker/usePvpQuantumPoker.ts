@@ -39,9 +39,10 @@ import {
 import { coSignedToSettleRequest } from "../../backend/settleRequest";
 
 /** Locked per seat (MIST, split off the wallet's SUI gas coin — same lane as Tic-Tac-Toe). */
-const STAKE_BALANCE = 500n;
-/** One hand per match for the first cut; the loop settles on-chain as soon as it ends. */
-const HAND_CAP = 1n;
+const STAKE_BALANCE = 10_000n;
+/** Hands played per match before the on-chain settle; chips move off-chain in the tunnel
+ *  between hands, and the loop ends early (→ "done") if a seat can't cover the next ante. */
+const HAND_CAP = 50n;
 /** Pacing for the auto-driven commit/reveal "plumbing" moves so phases (and the showdown) are
  *  readable — cards flip one street at a time instead of flashing to the result instantly. */
 const PLUMBING_DELAY_MS = 300;
