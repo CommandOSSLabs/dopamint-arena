@@ -571,8 +571,8 @@ export class QuantumPokerProtocol implements Protocol<PokerState, PokerMove> {
         nextPhase === "flop_bet"
           ? "reveal_turn"
           : nextPhase === "turn_bet"
-            ? "reveal_river"
-            : "showdown";
+          ? "reveal_river"
+          : "showdown";
       return;
     }
     this.beginStreet(s, nextPhase);
@@ -678,8 +678,16 @@ export class QuantumPokerProtocol implements Protocol<PokerState, PokerMove> {
     return by === "A" ? s.balanceA : s.balanceB;
   }
 
+  // Heads-up effective stack: neither seat can wager more than the SHORTER stack this hand, so the
+  // bigger stack's surplus is unbettable and the shorter stack's all-in stays fully callable (the
+  // surplus simply never enters the pot). Clamped at 0 for safety.
   private availableFor(s: PokerState, by: Party): bigint {
-    return this.balance(s, by) - this.totalBet(s, by);
+    const effectiveStack =
+      this.balance(s, "A") < this.balance(s, "B")
+        ? this.balance(s, "A")
+        : this.balance(s, "B");
+    const remaining = effectiveStack - this.totalBet(s, by);
+    return remaining > 0n ? remaining : 0n;
   }
 
   /** True once either seat is all-in: no further betting is possible this hand. */
@@ -708,8 +716,8 @@ export class QuantumPokerProtocol implements Protocol<PokerState, PokerMove> {
     const other = this.streetBet(s, otherParty(by));
     const next = current + amount;
     if (next <= other) throw new Error("bet must raise above opponent");
-    if (this.totalBet(s, by) + amount > this.balance(s, by)) {
-      throw new Error("bet exceeds balance");
+    if (amount > this.availableFor(s, by)) {
+      throw new Error("bet exceeds the effective stack");
     }
     this.setStreetBet(s, by, next);
     this.addTotalBet(s, by, amount);
@@ -721,8 +729,8 @@ export class QuantumPokerProtocol implements Protocol<PokerState, PokerMove> {
   private applyCall(s: PokerState, by: Party): void {
     const diff = this.streetBet(s, otherParty(by)) - this.streetBet(s, by);
     if (diff <= 0n) throw new Error("nothing to call");
-    if (this.totalBet(s, by) + diff > this.balance(s, by)) {
-      throw new Error("call exceeds balance");
+    if (diff > this.availableFor(s, by)) {
+      throw new Error("call exceeds the effective stack");
     }
     this.setStreetBet(s, by, this.streetBet(s, by) + diff);
     this.addTotalBet(s, by, diff);
