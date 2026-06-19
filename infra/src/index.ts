@@ -37,6 +37,7 @@ const alb = createAlb(`dopamint-${cfg.environment}`, {
 
 const frontend = createFrontend(`dopamint-${cfg.environment}`, {
   domain: cfg.domain,
+  albDnsName: alb.alb.dnsName,
   certificateArn: dns.certificateArn,
   zoneId: dns.zoneId,
 });

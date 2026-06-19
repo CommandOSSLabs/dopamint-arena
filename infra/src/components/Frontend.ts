@@ -11,6 +11,7 @@ export function createFrontend(
   name: string,
   args: {
     domain: string;
+    albDnsName: pulumi.Input<string>;
     certificateArn?: pulumi.Input<string>;
     zoneId?: pulumi.Input<string>;
   }
@@ -54,6 +55,21 @@ export function createFrontend(
     ),
   });
 
+  // Same-origin backend: CloudFront proxies /v1/* to the ALB so the SPA, its SSE feed
+  // (/v1/stats/live) and the PvP WebSocket (/v1/mp) all share one HTTPS origin
+  // (ADR-0002/0004). Without this the SPA 403->/index.html fallback answers every
+  // /v1/* request with text/html, which breaks the SSE MIME type and the WS upgrade.
+  // Cert present (staging/prod): target the api.<domain> alias over HTTPS — the cert's
+  // *.<domain> SAN covers it, so CloudFront's origin-cert hostname check passes.
+  // No cert (dev): the ALB only has an HTTP:80 listener, so connect over http.
+  // The HTTPS branch is unverified in dev (no cert exists there).
+  const albOriginDomain = args.certificateArn ? `api.${args.domain}` : args.albDnsName;
+
+  // Managed policies: disable caching (required for SSE streaming and WS) and forward the
+  // full viewer request (Authorization + Sec-WebSocket-* headers, cookies, query string).
+  const cachingDisabled = aws.cloudfront.getCachePolicyOutput({ name: "Managed-CachingDisabled" });
+  const allViewer = aws.cloudfront.getOriginRequestPolicyOutput({ name: "Managed-AllViewer" });
+
   const distribution = new aws.cloudfront.Distribution(`${name}-cdn`, {
     enabled: true,
     aliases: args.certificateArn ? [args.domain] : undefined,
@@ -62,6 +78,28 @@ export function createFrontend(
         domainName: bucket.bucketRegionalDomainName,
         originId: "s3-origin",
         s3OriginConfig: { originAccessIdentity: originAccessIdentity.cloudfrontAccessIdentityPath },
+      },
+      {
+        domainName: albOriginDomain,
+        originId: "alb-origin",
+        customOriginConfig: {
+          httpPort: 80,
+          httpsPort: 443,
+          originProtocolPolicy: args.certificateArn ? "https-only" : "http-only",
+          originSslProtocols: ["TLSv1.2"],
+        },
+      },
+    ],
+    orderedCacheBehaviors: [
+      {
+        pathPattern: "/v1/*",
+        targetOriginId: "alb-origin",
+        viewerProtocolPolicy: "redirect-to-https",
+        allowedMethods: ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"],
+        cachedMethods: ["GET", "HEAD"],
+        compress: false,
+        cachePolicyId: cachingDisabled.id,
+        originRequestPolicyId: allViewer.id,
       },
     ],
     defaultRootObject: "index.html",
