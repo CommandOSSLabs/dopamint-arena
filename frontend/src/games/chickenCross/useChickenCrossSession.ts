@@ -29,6 +29,8 @@ export interface ChickenCrossSession {
   start: (stake: number) => void;
   /** Start a multi-game loop that replays until durationMs elapses. stepMs defaults to 15ms. */
   startLoop: (stake: number, durationMs: number, stepMs?: number) => void;
+  /** Cancel an active loop, restore defaults, and reset per-game state. */
+  stopLoop: () => void;
   reset: () => void;
 }
 
@@ -66,6 +68,9 @@ export function useChickenCrossSession(): ChickenCrossSession {
     }
   }, []);
 
+  // Clears per-game state only. Loop refs (loopDeadlineRef, loopStakeRef) and
+  // stepMsRef are intentionally left alone so the settle chain can read the live
+  // "should-continue" signal after the async closeCooperative resolves.
   const reset = useCallback(() => {
     stopTimer();
     protocolRef.current = null;
@@ -74,9 +79,6 @@ export function useChickenCrossSession(): ChickenCrossSession {
     moveCountRef.current = 0;
     actionsRef.current = 0;
     lastHeartbeatRef.current = 0;
-    stepMsRef.current = STEP_MS;
-    loopDeadlineRef.current = null;
-    loopStakeRef.current = 0;
     report.setActive(0);
     setStatus("idle");
     setView(null);
@@ -185,19 +187,15 @@ export function useChickenCrossSession(): ChickenCrossSession {
               await closeCooperative({ signExec, tunnelId, settlement });
               setStatus("settled");
 
-              // Chain the next game if a loop is active and the deadline hasn't passed.
-              const deadline = loopDeadlineRef.current;
-              const loopStake = loopStakeRef.current;
-              const nextStepMs = stepMsRef.current;
-              if (deadline !== null && Date.now() < deadline) {
-                // Reset state for the next round, then restore loop config before starting.
-                reset();
-                stepMsRef.current = nextStepMs;
-                loopDeadlineRef.current = deadline;
-                loopStakeRef.current = loopStake;
-                start(loopStake);
+              // JS is single-threaded: Stop can only interleave at the await above.
+              // By reading the live ref here (not a pre-captured local) we see any
+              // null written by stopLoop() during closeCooperative.
+              if (loopDeadlineRef.current !== null && Date.now() < loopDeadlineRef.current) {
+                reset(); // reset() no longer clobbers loop refs or stepMsRef
+                start(loopStakeRef.current); // stepMsRef still holds the fast value
               } else {
                 loopDeadlineRef.current = null;
+                stepMsRef.current = STEP_MS; // restore default after natural finish
               }
             } catch (e) {
               console.error("[chicken-cross] on-chain close failed:", e);
@@ -260,7 +258,15 @@ export function useChickenCrossSession(): ChickenCrossSession {
     [start],
   );
 
+  // Nulls the deadline so the settle chain sees "stop" even if it fires after
+  // closeCooperative resolves, then restores defaults and clears per-game state.
+  const stopLoop = useCallback(() => {
+    loopDeadlineRef.current = null;
+    stepMsRef.current = STEP_MS;
+    reset();
+  }, [reset]);
+
   useEffect(() => stopTimer, [stopTimer]);
 
-  return { status, view, result, stake, error, start, startLoop, reset };
+  return { status, view, result, stake, error, start, startLoop, stopLoop, reset };
 }

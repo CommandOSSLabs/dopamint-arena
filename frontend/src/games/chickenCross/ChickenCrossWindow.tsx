@@ -19,7 +19,7 @@ export function ChickenCrossWindow(_props: GameWindowProps) {
     return (
       <div className="relative flex h-full w-full flex-col">
         <button
-          onClick={() => { session.reset(); setMode("pvp"); }}
+          onClick={() => { session.stopLoop(); setMode("pvp"); }}
           className="absolute right-2 top-2 z-10 rounded border border-arena-edge px-3 py-1 text-xs text-arena-muted hover:text-arena-text"
         >
           Stop
