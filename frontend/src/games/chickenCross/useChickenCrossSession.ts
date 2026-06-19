@@ -195,6 +195,8 @@ export function useChickenCrossSession(): ChickenCrossSession {
             // On the deciding tick, push a panel txn for the winner.
             if (moved && !wasTerminal && p.isTerminal(t.state) && t.state.winner) {
               report.pushTxn({
+                id: moveCountRef.current,
+                game: "chicken-cross",
                 time: new Date().toLocaleTimeString("en-GB"),
                 bot: t.state.winner === "A" ? "Chicken A" : "Chicken B",
                 type: "Chicken Cross Win",
