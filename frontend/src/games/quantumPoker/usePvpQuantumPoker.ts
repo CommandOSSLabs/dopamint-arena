@@ -46,8 +46,8 @@ const HAND_CAP = 50n;
 /** Pacing for the auto-driven commit/reveal "plumbing" moves so phases (and the showdown) are
  *  readable — cards flip one street at a time instead of flashing to the result instantly. */
 const PLUMBING_DELAY_MS = 300;
-/** The showdown (hole-card reveal that decides the hand) is paced 2x slower than the other
- *  plumbing reveals so the climactic reveal lands instead of flashing past. */
+/** The climactic beats — the showdown hole-card reveal and the hand-over result — are paced 2x
+ *  slower than the other plumbing reveals so they land instead of flashing past. */
 const SHOWDOWN_DELAY_MS = PLUMBING_DELAY_MS * 2;
 /** Matchmaking queue id — both seats must request the same game. */
 const GAME_ID = "quantum-poker";
@@ -253,7 +253,9 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
     if (!move) return;
     autoNonceRef.current = targetNonce;
     const delay =
-      dt.state.phase === "showdown" ? SHOWDOWN_DELAY_MS : PLUMBING_DELAY_MS;
+      dt.state.phase === "showdown" || dt.state.phase === "hand_over"
+        ? SHOWDOWN_DELAY_MS
+        : PLUMBING_DELAY_MS;
     window.setTimeout(() => {
       const live = dtRef.current;
       if (!live || live.nonce + 1n !== targetNonce) return;
