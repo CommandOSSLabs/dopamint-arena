@@ -7,6 +7,7 @@ import "./ticTacToe";
 import "./battleship";
 import "./chat";
 import "./regularPayments";
-import "./coinFlip";
-import "./dice";
-import "./slots";
+// Hidden for now — re-enable by uncommenting.
+// import "./coinFlip";
+// import "./dice";
+// import "./slots";

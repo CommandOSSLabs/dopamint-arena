@@ -38,14 +38,27 @@ export function BattleshipWindow({ windowId }: GameWindowProps) {
   // width AND height (container queries + cqh units), not the viewport — correct
   // in a small floating window on a big screen, or full-width on mobile.
   return (
-    <div className="h-full min-h-0 [container-type:size]">
-      {mode === "bot" ? (
-        <BotGame windowId={windowId} onExit={() => setMode(null)} />
-      ) : mode === "pvp" ? (
-        <PvpGame windowId={windowId} onExit={() => setMode(null)} />
-      ) : (
-        <ModeChooser onPick={setMode} />
-      )}
+    <div
+      className="h-full min-h-0 [container-type:size] bg-cover bg-center bg-no-repeat relative overflow-hidden text-arena-text"
+      style={{ backgroundImage: "url('/games/battleship-bg.png')" }}
+    >
+      {/* Dark overlay & blur to ensure readability */}
+      <div className="absolute inset-0 bg-slate-950/85 backdrop-blur-[2px] pointer-events-none z-0" />
+      {/* Scanline pattern for radar effect */}
+      <div className="absolute inset-0 pointer-events-none z-0 opacity-[0.04] bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.25)_50%),linear-gradient(90deg,rgba(255,0,0,0.06),rgba(0,255,0,0.02),rgba(0,0,255,0.06))] bg-[size:100%_4px,6px_100%]" />
+      {/* Top ambient glow line */}
+      <div className="absolute top-0 left-0 right-0 h-[1.5px] bg-gradient-to-r from-transparent via-cyan-500/50 to-transparent pointer-events-none z-10" />
+
+      {/* Actual game layout sits on top */}
+      <div className="relative z-20 h-full w-full">
+        {mode === "bot" ? (
+          <BotGame windowId={windowId} onExit={() => setMode(null)} />
+        ) : mode === "pvp" ? (
+          <PvpGame windowId={windowId} onExit={() => setMode(null)} />
+        ) : (
+          <ModeChooser onPick={setMode} />
+        )}
+      </div>
     </div>
   );
 }
@@ -61,13 +74,13 @@ function ModeChooser({ onPick }: { onPick: (m: Mode) => void }) {
       <div className="flex flex-wrap justify-center gap-2">
         <button
           onClick={() => onPick("bot")}
-          className="rounded bg-arena-accent px-4 py-2 text-sm font-semibold text-black"
+          className="rounded-full bg-cyan-400 px-4 py-2 text-sm font-semibold text-black shadow-[0_0_12px_rgba(34,211,238,0.3)] transition-colors hover:bg-cyan-300"
         >
           Play vs Bot
         </button>
         <button
           onClick={() => onPick("pvp")}
-          className="rounded border border-arena-edge px-4 py-2 text-sm font-semibold text-arena-text hover:bg-arena-edge"
+          className="rounded-full border border-cyan-500/40 bg-cyan-950/40 px-4 py-2 text-sm font-semibold text-cyan-300 transition-colors hover:border-cyan-400 hover:bg-cyan-500/10"
         >
           Find Match (PvP)
         </button>

@@ -57,6 +57,7 @@ export function BattleView({
           title="Your fleet"
           cells={view.ownCells}
           lastShot={view.lastEnemyShot}
+          placements={view.placements}
         />
       </div>
 

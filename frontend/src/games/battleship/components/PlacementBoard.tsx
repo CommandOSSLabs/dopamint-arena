@@ -10,6 +10,7 @@ import {
   placementCells,
 } from "../engine/fleet";
 import { GridFrame } from "./GridFrame";
+import { ShipSprite } from "./ShipSprite";
 
 /**
  * Fleet placement: starts from a random legal layout (so the start button works
@@ -56,15 +57,32 @@ export function PlacementBoard({
     };
   }, [selected, hover, orient, placements]);
 
+  // Pick up a ship for moving, syncing the orientation toggle to that ship's
+  // CURRENT orientation — otherwise the stale global toggle would flip it.
+  const pickUp = (id: string) => {
+    const p = placements.find((pl) => pl.id === id);
+    if (p) setOrient(p.orient);
+    setSelected(id);
+  };
+
   const placeAt = (cell: number) => {
     if (!selected) {
+      // No ship picked up: clicking a placed ship picks it up.
       const owner = ownerByCell.get(cell);
-      if (owner) setSelected(owner);
+      if (owner) pickUp(owner);
       return;
     }
-    setPlacements((cur) =>
-      cur.map((p) => (p.id === selected ? { id: selected, cell, orient } : p)),
+    // A ship is picked up: only drop on a legal spot; an illegal click is ignored
+    // (the red preview already signals it) so the ship stays in hand.
+    const candidate = placements.map((p) =>
+      p.id === selected ? { id: selected, cell, orient } : p,
     );
+    if (placementCells({ id: selected, cell, orient }) === null) return;
+    if (!fleetIsLegal(candidate)) return;
+    setPlacements(candidate);
+    // Drop complete → back to the normal, nothing-selected state.
+    setSelected(null);
+    setHover(null);
   };
 
   const rotate = () => setOrient((o) => (o === "H" ? "V" : "H"));
@@ -77,18 +95,22 @@ export function PlacementBoard({
         if (e.key === "r" || e.key === "R") {
           e.preventDefault();
           rotate();
+        } else if (e.key === "Escape" && selected) {
+          e.preventDefault();
+          setSelected(null); // drop the picked-up ship without moving it
+          setHover(null);
         }
       }}
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="text-sm font-semibold text-arena-text">
+        <span className="text-sm font-semibold text-cyan-400">
           Place your fleet
         </span>
         <div className="flex gap-1.5">
           <button
             type="button"
             onClick={rotate}
-            className="rounded border border-arena-edge px-2 py-1 text-xs text-arena-text hover:bg-arena-edge"
+            className="rounded-full border border-cyan-500/20 bg-cyan-950/20 px-3 py-1 text-xs text-cyan-400 hover:bg-cyan-500/10 hover:border-cyan-400 transition-colors"
           >
             Rotate (R) · {orient === "H" ? "→" : "↓"}
           </button>
@@ -98,7 +120,7 @@ export function PlacementBoard({
               setPlacements(placeFleetRandom(Math.random));
               setSelected(null);
             }}
-            className="rounded border border-arena-edge px-2 py-1 text-xs text-arena-text hover:bg-arena-edge"
+            className="rounded-full border border-cyan-500/20 bg-cyan-950/20 px-3 py-1 text-xs text-cyan-400 hover:bg-cyan-500/10 hover:border-cyan-400 transition-colors"
           >
             Randomize
           </button>
@@ -110,12 +132,12 @@ export function PlacementBoard({
           <button
             key={ship.id}
             type="button"
-            onClick={() => setSelected(ship.id)}
+            onClick={() => pickUp(ship.id)}
             className={cn(
-              "flex items-center gap-1 rounded border px-2 py-1 text-[11px]",
+              "flex items-center gap-1 rounded-full border px-3 py-1 text-[11px] transition-all duration-150",
               selected === ship.id
-                ? "border-arena-accent text-arena-accent"
-                : "border-arena-edge text-arena-muted hover:text-arena-text",
+                ? "border-cyan-400 bg-cyan-400/10 text-cyan-400 shadow-[0_0_8px_rgba(34,211,238,0.2)]"
+                : "border-cyan-500/10 text-cyan-500/60 hover:text-cyan-400 hover:border-cyan-500/30",
             )}
           >
             <Check className="size-3 text-emerald-400" />
@@ -125,14 +147,20 @@ export function PlacementBoard({
       </div>
 
       <div
-        className="mx-auto w-full max-w-[18rem] rounded-md bg-sky-950/30 p-1 ring-1 ring-sky-500/10"
+        className="mx-auto w-full max-w-[18rem] rounded-lg bg-slate-950/40 p-1.5 ring-1 ring-cyan-500/20 shadow-lg backdrop-blur-md"
         onPointerLeave={() => setHover(null)}
       >
         <GridFrame
           renderCell={(cell) => {
             const owner = ownerByCell.get(cell);
-            const isSelected = owner != null && owner === selected;
+            const isOwnerSelected = owner != null && owner === selected;
+            // A ship is "lifted" if it is selected and we are hovering somewhere on the board to preview it
+            const isLifted = isOwnerSelected && hover !== null;
+
+            const showAsOccupied = owner != null && !isLifted;
+            const isSelected = owner != null && owner === selected && !isLifted;
             const inPreview = preview?.cells.has(cell) ?? false;
+
             return (
               <button
                 key={cell}
@@ -140,26 +168,112 @@ export function PlacementBoard({
                 onClick={() => placeAt(cell)}
                 onPointerEnter={() => setHover(cell)}
                 className={cn(
-                  "aspect-square rounded-[3px] border",
+                  "aspect-square rounded-[4px] border relative transition-all duration-150 overflow-hidden z-20",
                   inPreview
                     ? preview!.valid
-                      ? "border-arena-accent bg-arena-accent/70"
-                      : "border-red-500 bg-red-500/60"
-                    : owner == null
-                      ? "border-sky-400/15 bg-sky-900/40"
+                      ? "border-cyan-400 bg-cyan-500/20"
+                      : "border-red-500 bg-red-500/20"
+                    : !showAsOccupied
+                      ? "border-cyan-500/10 bg-cyan-950/20 hover:border-cyan-500/30"
                       : isSelected
-                        ? "border-arena-accent bg-arena-accent"
-                        : "border-slate-500/60 bg-gradient-to-b from-slate-300 to-slate-500 shadow-inner",
-                  selected && owner == null && !inPreview && "cursor-pointer",
+                        ? "border-cyan-400 bg-cyan-950/50 shadow-[0_0_8px_rgba(34,211,238,0.3)]"
+                        : "border-transparent bg-transparent", // Placed ship is transparent
+                  selected && !showAsOccupied && !inPreview && "cursor-pointer",
                 )}
               />
             );
           }}
-        />
+        >
+          {/* Continuous Ship Overlays */}
+          <>
+            {/* Placed ships (hide selected ship if it's currently floating in preview) */}
+            {placements
+              .filter((p) => p.id !== selected || hover === null)
+              .map((p) => {
+                const row = Math.floor(p.cell / 10);
+                const col = p.cell % 10;
+                const spec = FLEET.find((s) => s.id === p.id);
+                if (!spec) return null;
+                const size = spec.size;
+
+                const gridStyle = {
+                  gridRowStart: row + 2,
+                  gridColumnStart: col + 2,
+                  gridRowEnd: p.orient === "V" ? row + 2 + size : row + 2 + 1,
+                  gridColumnEnd:
+                    p.orient === "H" ? col + 2 + size : col + 2 + 1,
+                };
+
+                const isSelected = p.id === selected;
+
+                return (
+                  <div
+                    key={p.id}
+                    className={cn(
+                      "pointer-events-none relative overflow-hidden transition-all duration-150",
+                      isSelected
+                        ? "opacity-60 shadow-[0_0_8px_rgba(34,211,238,0.2)]"
+                        : "opacity-95",
+                    )}
+                    style={gridStyle}
+                  >
+                    <ShipSprite
+                      id={p.id}
+                      size={size}
+                      horizontal={p.orient === "H"}
+                    />
+                  </div>
+                );
+              })}
+
+            {/* Hover preview ship */}
+            {selected &&
+              hover !== null &&
+              preview &&
+              (() => {
+                const row = Math.floor(hover / 10);
+                const col = hover % 10;
+                const spec = FLEET.find((s) => s.id === selected);
+                if (!spec) return null;
+                const size = spec.size;
+
+                const inBounds =
+                  placementCells({ id: selected, cell: hover, orient }) !==
+                  null;
+                if (!inBounds) return null; // do not render overlay if it overflows board edge
+
+                const gridStyle = {
+                  gridRowStart: row + 2,
+                  gridColumnStart: col + 2,
+                  gridRowEnd: orient === "V" ? row + 2 + size : row + 2 + 1,
+                  gridColumnEnd: orient === "H" ? col + 2 + size : col + 2 + 1,
+                };
+
+                return (
+                  <div
+                    key="preview-ship"
+                    className={cn(
+                      "pointer-events-none relative overflow-hidden transition-all duration-75",
+                      preview.valid
+                        ? "opacity-75 animate-pulse shadow-[0_0_12px_rgba(34,211,238,0.4)]"
+                        : "opacity-45 grayscale brightness-50",
+                    )}
+                    style={gridStyle}
+                  >
+                    <ShipSprite
+                      id={selected}
+                      size={size}
+                      horizontal={orient === "H"}
+                    />
+                  </div>
+                );
+              })()}
+          </>
+        </GridFrame>
       </div>
 
       <div className="mt-auto flex flex-wrap items-center justify-between gap-2">
-        <span className="text-[11px] text-arena-muted">
+        <span className="text-[11px] text-cyan-500/60">
           {legal
             ? selected
               ? "Click to drop the ship; R rotates."
@@ -170,7 +284,7 @@ export function PlacementBoard({
           type="button"
           disabled={!legal}
           onClick={() => onReady(placements)}
-          className="rounded bg-arena-accent px-3 py-1.5 text-sm font-semibold text-black disabled:opacity-40"
+          className="rounded-full bg-cyan-400 px-4 py-1.5 text-sm font-semibold text-black disabled:opacity-40 hover:bg-cyan-300 transition-colors shadow-[0_0_12px_rgba(34,211,238,0.3)]"
         >
           {ctaLabel}
         </button>

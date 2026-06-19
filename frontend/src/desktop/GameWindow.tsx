@@ -80,7 +80,7 @@ export function GameWindow({
     <div
       data-window={domId}
       className={cn(
-        "group/window flex h-full min-h-0 w-full flex-col overflow-hidden rounded-xl border bg-card shadow-lg transition-shadow",
+        "group/window flex h-full min-h-0 w-full flex-col overflow-hidden rounded-none border bg-card shadow-lg transition-shadow",
         isActive
           ? "border-primary shadow-2xl ring-1 ring-primary/30"
           : "border-border",
@@ -92,7 +92,7 @@ export function GameWindow({
         className={cn(
           "relative flex h-9 shrink-0 items-center justify-center border-b border-border bg-secondary/40 px-2 text-xs font-semibold text-foreground",
           dragHandleProps &&
-            "cursor-grab touch-none select-none outline-none focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing",
+          "cursor-grab touch-none select-none outline-none focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing",
         )}
       >
         <span className="flex max-w-[60%] items-center gap-1.5">
