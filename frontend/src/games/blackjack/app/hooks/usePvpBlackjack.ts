@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { core, bytesToHex, hexToBytes } from "sui-tunnel-ts";
+import { core, proof, bytesToHex, hexToBytes } from "sui-tunnel-ts";
 import { getControlPlaneClient, type RegisterSessionResult } from "@/backend/controlPlane";
+import { coSignedToSettleRequest } from "@/backend/settleRequest";
 import {
   useCurrentAccount,
   useSignAndExecuteTransaction,
@@ -17,6 +18,7 @@ import {
   buildCreateAndShareTx,
   buildDepositTx,
   buildCloseTx,
+  buildCloseWithRootTx,
   parseTunnelId,
 } from "@/games/blackjack/app/lib/bjPvpOnchain";
 import { RelayClient } from "@/games/blackjack/app/lib/bjRelay";
@@ -162,8 +164,8 @@ export function usePvpBlackjack(): PvpView {
       ) => Promise<void>
     >(undefined);
   const openedResolveRef = useRef<((id: string) => void) | null>(null);
-  const settleResolveRef = useRef<((sig: Uint8Array) => void) | null>(null);
-  const bufferedSettleRef = useRef<Uint8Array | null>(null);
+  const settleResolveRef = useRef<((val: { sig: Uint8Array; root: Uint8Array }) => void) | null>(null);
+  const bufferedSettleRef = useRef<{ sig: Uint8Array; root: Uint8Array } | null>(null);
   const stakeResolveRef = useRef<((amount: bigint) => void) | null>(null);
   const bufferedStakeRef = useRef<bigint | null>(null);
 
@@ -171,6 +173,7 @@ export function usePvpBlackjack(): PvpView {
   const moveCountRef = useRef(0);
   const actionsRef = useRef(0);
   const lastHeartbeatRef = useRef(Date.now());
+  const transcriptRef = useRef<proof.Transcript | null>(null);
 
   const flushHeartbeat = useCallback((tunnelId: string, force: boolean) => {
     const s = sessionRef.current;
@@ -256,23 +259,41 @@ export function usePvpBlackjack(): PvpView {
       settledRef.current = true;
       setPhase("settling");
       flushHeartbeat(t.tunnelId, true);
-      const half = t.buildSettlementHalf(createdAtRef.current); // both sign with the on-chain created_at
-      relay.sendApp(matchId, { t: "settle", sig: bytesToHex(half.sigSelf) });
-      const otherSig =
+      const root = transcriptRef.current ? transcriptRef.current.root() : new Uint8Array(32);
+      const half = t.buildSettlementHalfWithRoot(createdAtRef.current, root, 0n);
+      relay.sendApp(matchId, {
+        t: "settle",
+        sig: bytesToHex(half.sigSelf),
+        root: bytesToHex(root),
+      });
+      const other =
         bufferedSettleRef.current ??
-        (await new Promise<Uint8Array>((res) => {
+        (await new Promise<{ sig: Uint8Array; root: Uint8Array }>((res) => {
           settleResolveRef.current = res;
         }));
-      const coSigned = t.combineSettlement(
+      if (bytesToHex(other.root) !== bytesToHex(root)) {
+        throw new Error("Transcript root mismatch between players");
+      }
+      const coSigned = t.combineSettlementWithRoot(
         half.settlement,
         half.sigSelf,
-        otherSig,
+        other.sig,
       );
       if (roleRef.current === "B") {
         // the dealer (the opener) submits the cooperative close
-        const res = await submit(buildCloseTx(t.tunnelId, coSigned));
-        setDigests((d) => ({ ...d, close: res.digest }));
-        relay.sendApp(matchId, { t: "closed", digest: res.digest });
+        try {
+          const result = await getControlPlaneClient().settle(
+            t.tunnelId,
+            coSignedToSettleRequest(coSigned as any, transcriptRef.current ? transcriptRef.current.toRecord().entries : []),
+          );
+          setDigests((d) => ({ ...d, close: result.txDigest }));
+          relay.sendApp(matchId, { t: "closed", digest: result.txDigest });
+        } catch (e) {
+          console.warn("[settle] Server-side settle failed, falling back to wallet submission:", e);
+          const res = await submit(buildCloseWithRootTx(t.tunnelId, coSigned));
+          setDigests((d) => ({ ...d, close: res.digest }));
+          relay.sendApp(matchId, { t: "closed", digest: res.digest });
+        }
       }
       await refreshBalance();
       setPhase("done");
@@ -334,8 +355,9 @@ export function usePvpBlackjack(): PvpView {
             openedResolveRef.current?.(String(mm.tunnelId));
           else if (mm.t === "settle") {
             const sig = hexToBytes(String(mm.sig));
-            if (settleResolveRef.current) settleResolveRef.current(sig);
-            else bufferedSettleRef.current = sig;
+            const rt = hexToBytes(String(mm.root));
+            if (settleResolveRef.current) settleResolveRef.current({ sig, root: rt });
+            else bufferedSettleRef.current = { sig, root: rt };
           } else if (mm.t === "stake") {
             const amt = BigInt(Math.floor(Number(mm.amount)));
             if (stakeResolveRef.current) stakeResolveRef.current(amt);
@@ -492,6 +514,7 @@ export function usePvpBlackjack(): PvpView {
           { a: stakeA, b: stakeB },
         );
         tunnelRef.current = t;
+        transcriptRef.current = new proof.Transcript(tunnelId);
 
         // Register the (real, on-chain) tunnel for stats tracking. Best-effort.
         sessionRef.current = null;
@@ -551,7 +574,7 @@ export function usePvpBlackjack(): PvpView {
                   } catch {
                     /* not my turn / in flight */
                   }
-                }, BOT_MOVE_MS);
+                }, autoRef.current ? 50 : BOT_MOVE_MS);
             }
           } else if (
             st.phase === "dealer" &&
@@ -564,7 +587,7 @@ export function usePvpBlackjack(): PvpView {
               } catch {
                 /* in flight */
               }
-            }, DEALER_MS);
+            }, autoRef.current ? 50 : DEALER_MS);
           } else if (
             st.phase === "round_over" &&
             m.role === getPlayerParty(st.round + 1n) &&
@@ -579,12 +602,13 @@ export function usePvpBlackjack(): PvpView {
                 } catch {
                   /* raced / in flight */
                 }
-              }, NEXT_MS);
+              }, autoRef.current ? 100 : NEXT_MS);
           }
         };
-        t.onConfirmed = () => {
+        t.onConfirmed = (u) => {
           moveCountRef.current += 1;
           actionsRef.current += 1;
+          transcriptRef.current?.append(u);
           onAdvance();
           flushHeartbeat(tunnelId, false);
         };
@@ -670,7 +694,7 @@ export function usePvpBlackjack(): PvpView {
             } catch {
               /* ignore */
             }
-          }, BOT_MOVE_MS);
+          }, autoRef.current ? 50 : BOT_MOVE_MS);
       } else if (
         st.phase === "round_over" &&
         roleRef.current === getPlayerParty(st.round + 1n)
@@ -683,7 +707,7 @@ export function usePvpBlackjack(): PvpView {
             } catch {
               /* ignore */
             }
-          }, NEXT_MS);
+          }, autoRef.current ? 100 : NEXT_MS);
       }
     },
     [proto],

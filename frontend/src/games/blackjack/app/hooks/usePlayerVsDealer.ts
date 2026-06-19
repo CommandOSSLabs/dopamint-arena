@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { core, proof, protocols, bytesToHex } from "sui-tunnel-ts";
 import type { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import type { Transaction } from "@mysten/sui/transactions";
+import { getControlPlaneClient, type RegisterSessionResult } from "@/backend/controlPlane";
+import { coSignedToSettleRequest } from "@/backend/settleRequest";
 import {
   buildCreateAndFundTx,
   buildSettleWithRootTx,
@@ -149,6 +151,30 @@ export function usePlayerVsDealer(): PlayerVsDealerGame {
   const balancesRef = useRef<{ a: bigint; b: bigint }>({ a: 0n, b: 0n });
   const dealerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const busyRef = useRef(false);
+
+  const sessionRef = useRef<RegisterSessionResult | null>(null);
+  const moveCountRef = useRef(0);
+  const actionsRef = useRef(0);
+  const lastHeartbeatRef = useRef(Date.now());
+
+  const flushHeartbeat = useCallback((tunnelId: string, force: boolean) => {
+    const s = sessionRef.current;
+    if (!s || actionsRef.current === 0) return;
+    const now = Date.now();
+    const windowMs = now - lastHeartbeatRef.current;
+    if (!force && windowMs < 1000) return;
+    const actionsDelta = actionsRef.current;
+    actionsRef.current = 0;
+    lastHeartbeatRef.current = now;
+    getControlPlaneClient()
+      .sendHeartbeat(s.sessionId, s.statsToken, {
+        tunnelId,
+        nonce: String(moveCountRef.current),
+        actionsDelta,
+        windowMs: Math.max(1, windowMs),
+      })
+      .catch((e) => console.error("[blackjack table] heartbeat failed:", e));
+  }, []);
 
   const clearDealerTimer = useCallback(() => {
     if (dealerTimerRef.current !== null) {
@@ -315,6 +341,22 @@ export function usePlayerVsDealer(): PlayerVsDealerGame {
         const transcript = new proof.Transcript(tunnelId);
         tunnel.onUpdate = (u) => transcript.append(u);
 
+        // Register the (real, on-chain) tunnel for stats tracking. Best-effort.
+        sessionRef.current = null;
+        moveCountRef.current = 0;
+        actionsRef.current = 0;
+        lastHeartbeatRef.current = Date.now();
+        getControlPlaneClient()
+          .registerSession({
+            userAddress: bots.a.address,
+            game: "blackjack",
+            tunnels: [{ tunnelId, partyA: bots.a.address, partyB: bots.b.address }],
+          })
+          .then((s) => {
+            sessionRef.current = s;
+          })
+          .catch((e) => console.error("[blackjack table] registerSession failed:", e));
+
         tunnelRef.current = tunnel;
         tunnelIdRef.current = tunnelId;
         transcriptRef.current = transcript;
@@ -358,10 +400,13 @@ export function usePlayerVsDealer(): PlayerVsDealerGame {
         timestamp: createdAtRef.current,
       });
       if (!r.verified) throw new Error(`state ${r.nonce} failed dual-verify`);
+      moveCountRef.current += 1;
+      actionsRef.current += 1;
       const s = tunnel.state;
       setView(viewFromState(s));
       if (s.phase === "round_over") recordRound(prevBalanceA, s);
       setIsTerminal(proto.isTerminal(s));
+      flushHeartbeat(tunnelIdRef.current!, false);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setPhase("error");
@@ -381,16 +426,22 @@ export function usePlayerVsDealer(): PlayerVsDealerGame {
     try {
       const prevBalanceA = tunnel.state.balanceA;
       const afterStand = stepBy(tunnel, "A"); // phase -> "dealer"
+      moveCountRef.current += 1;
+      actionsRef.current += 1;
       setView(viewFromState(afterStand));
+      flushHeartbeat(tunnelIdRef.current!, false);
 
       clearDealerTimer();
       dealerTimerRef.current = setTimeout(() => {
         dealerTimerRef.current = null;
         try {
           const s = stepBy(tunnel, "B"); // dealer auto-draws + settles
+          moveCountRef.current += 1;
+          actionsRef.current += 1;
           setView(viewFromState(s));
           if (s.phase === "round_over") recordRound(prevBalanceA, s);
           setIsTerminal(proto.isTerminal(s));
+          flushHeartbeat(tunnelIdRef.current!, false);
         } catch (e) {
           setError(e instanceof Error ? e.message : String(e));
           setPhase("error");
@@ -419,8 +470,11 @@ export function usePlayerVsDealer(): PlayerVsDealerGame {
         timestamp: createdAtRef.current,
       });
       if (!r.verified) throw new Error(`state ${r.nonce} failed dual-verify`);
+      moveCountRef.current += 1;
+      actionsRef.current += 1;
       setView(viewFromState(tunnel.state));
       setIsTerminal(proto.isTerminal(tunnel.state));
+      flushHeartbeat(tunnelIdRef.current!, false);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setPhase("error");
@@ -443,37 +497,34 @@ export function usePlayerVsDealer(): PlayerVsDealerGame {
         setPhase("settling");
         const finalA = tunnel.state.balanceA;
         setResult(finalA > STAKE ? "win" : finalA < STAKE ? "lose" : "push");
+        flushHeartbeat(tunnelId, true);
 
-        // Checkpoint the FINAL co-signed state on-chain (update_state) so the tunnel object's
-        // state field shows the played-out state_hash + balances + nonce. Steps are signed
-        // with created_at, so the latest update passes the timestamp check.
-        const latest = tunnel.latest;
-        if (latest) {
-          const ures = await submit(
-            buildUpdateStateTx(tunnelId, latest),
-            bots.a.keypair,
-          );
-          setDigests((d) => ({ ...d, update: ures.digest }));
-        }
-
-        // Anchor the transcript root AND distribute funds in one cooperative close. The root
-        // commits to EVERY co-signed update. After update_state the on-chain state.nonce is
-        // latest.nonce (N), so close_cooperative_with_root derives finalNonce = N + 1 — pass
-        // onchainNonce N so the signed settlement matches.
         const root = transcript.root();
-        const onchainNonce = latest ? latest.update.nonce : 0n;
         const settlement = tunnel.buildSettlementWithRoot(
           createdAtRef.current,
           root,
-          onchainNonce,
+          0n,
         );
-        const closeRes = await submit(
-          buildSettleWithRootTx(tunnelId, settlement),
-          bots.a.keypair,
-        );
+
+        let closeDigest = "";
+        try {
+          const result = await getControlPlaneClient().settle(
+            tunnelId,
+            coSignedToSettleRequest(settlement, transcript.toRecord().entries),
+          );
+          closeDigest = result.txDigest;
+        } catch (e) {
+          console.warn("[settle] Server-side settle failed, falling back to bot keypair submission:", e);
+          const closeRes = await submit(
+            buildSettleWithRootTx(tunnelId, settlement),
+            bots.a.keypair,
+          );
+          closeDigest = closeRes.digest;
+        }
+
         setDigests((d) => ({
           ...d,
-          close: closeRes.digest,
+          close: closeDigest,
           root: `0x${bytesToHex(root)}`,
         }));
 

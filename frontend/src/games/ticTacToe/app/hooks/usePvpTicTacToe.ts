@@ -1,8 +1,9 @@
 // frontend/src/games/ticTacToe/packages/client/src/hooks/usePvpTicTacToe.ts
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { core, bytesToHex, hexToBytes, type protocols } from "sui-tunnel-ts";
+import { core, proof, bytesToHex, hexToBytes, type protocols } from "sui-tunnel-ts";
 import { SuiJsonRpcClient } from "@mysten/sui/jsonRpc";
 import { getControlPlaneClient, type RegisterSessionResult } from "@/backend/controlPlane";
+import { coSignedToSettleRequest } from "@/backend/settleRequest";
 import {
   MultiGameTicTacToeProtocol,
   MultiGameCaroProtocol,
@@ -22,7 +23,7 @@ import { useCustomWallet } from "@/games/ticTacToe/app/contexts/CustomWallet";
 import {
   buildCreateAndShareTx,
   buildDepositTx,
-  buildCloseTx,
+  buildCloseWithRootTx,
   parseTunnelId,
 } from "@/games/ticTacToe/app/lib/pvpOnchain";
 import { RelayClient } from "@/games/ticTacToe/app/lib/pvpRelay";
@@ -157,10 +158,11 @@ export function usePvpTicTacToe(
     | undefined
   >(undefined);
   const openedResolveRef = useRef<((id: string) => void) | null>(null);
-  const settleResolveRef = useRef<((sig: Uint8Array) => void) | null>(null);
-  const bufferedSettleRef = useRef<Uint8Array | null>(null);
+  const settleResolveRef = useRef<((val: { sig: Uint8Array; root: Uint8Array }) => void) | null>(null);
+  const bufferedSettleRef = useRef<{ sig: Uint8Array; root: Uint8Array } | null>(null);
   const helloResolveRef = useRef<((pub: string) => void) | null>(null);
   const bufferedHelloRef = useRef<string | null>(null);
+  const transcriptRef = useRef<proof.Transcript | null>(null);
 
   const sessionRef = useRef<RegisterSessionResult | null>(null);
   const moveCountRef = useRef(0);
@@ -220,23 +222,41 @@ export function usePvpTicTacToe(
       settledRef.current = true;
       setPhase("settling");
       flushHeartbeat(t.tunnelId, true);
-      const half = t.buildSettlementHalf(createdAtRef.current);
-      relay.sendApp(matchId, { t: "settle", sig: bytesToHex(half.sigSelf) });
-      const otherSig =
+      const root = transcriptRef.current ? transcriptRef.current.root() : new Uint8Array(32);
+      const half = t.buildSettlementHalfWithRoot(createdAtRef.current, root, 0n);
+      relay.sendApp(matchId, {
+        t: "settle",
+        sig: bytesToHex(half.sigSelf),
+        root: bytesToHex(root),
+      });
+      const other =
         bufferedSettleRef.current ??
-        (await new Promise<Uint8Array>((res) => {
+        (await new Promise<{ sig: Uint8Array; root: Uint8Array }>((res) => {
           settleResolveRef.current = res;
         }));
-      const coSigned = t.combineSettlement(
+      if (bytesToHex(other.root) !== bytesToHex(root)) {
+        throw new Error("Transcript root mismatch between players");
+      }
+      const coSigned = t.combineSettlementWithRoot(
         half.settlement,
         half.sigSelf,
-        otherSig,
+        other.sig,
       );
       if (roleRef.current === "A") {
         // X (the opener) submits the cooperative close
-        const res = await submit(buildCloseTx(t.tunnelId, coSigned));
-        setDigests((d) => ({ ...d, close: res.digest }));
-        relay.sendApp(matchId, { t: "closed", digest: res.digest });
+        try {
+          const result = await getControlPlaneClient().settle(
+            t.tunnelId,
+            coSignedToSettleRequest(coSigned as any, transcriptRef.current ? transcriptRef.current.toRecord().entries : []),
+          );
+          setDigests((d) => ({ ...d, close: result.txDigest }));
+          relay.sendApp(matchId, { t: "closed", digest: result.txDigest });
+        } catch (e) {
+          console.warn("[settle] Server-side settle failed, falling back to wallet submission:", e);
+          const res = await submit(buildCloseWithRootTx(t.tunnelId, coSigned));
+          setDigests((d) => ({ ...d, close: res.digest }));
+          relay.sendApp(matchId, { t: "closed", digest: res.digest });
+        }
       }
       await refreshBalance();
       setPhase("done");
@@ -306,8 +326,9 @@ export function usePvpTicTacToe(
             openedResolveRef.current?.(String(mm.tunnelId));
           else if (mm.t === "settle") {
             const sig = hexToBytes(String(mm.sig));
-            if (settleResolveRef.current) settleResolveRef.current(sig);
-            else bufferedSettleRef.current = sig;
+            const rt = hexToBytes(String(mm.root));
+            if (settleResolveRef.current) settleResolveRef.current({ sig, root: rt });
+            else bufferedSettleRef.current = { sig, root: rt };
           } else if (mm.t === "closed")
             setDigests((d) => ({ ...d, close: String(mm.digest) }));
           else if (mm.t === "stop") {
@@ -424,6 +445,7 @@ export function usePvpTicTacToe(
           { a: BANKROLL, b: BANKROLL },
         );
         tunnelRef.current = t;
+        transcriptRef.current = new proof.Transcript(tunnelId);
 
         // Register the (real, on-chain) tunnel for stats tracking. Best-effort.
         sessionRef.current = null;
@@ -479,24 +501,27 @@ export function usePvpTicTacToe(
                 } catch {
                   /* raced */
                 }
-              }, NEXT_MS);
+              }, 100);
           } else if (st.inner.turn === m.role && autoRef.current) {
-            const cell =
-              variant === "caro"
-                ? pickCaroMove(st.inner as any, m.role, Math.random, "strong")
-                : tttBestCell(st.inner, m.role);
+            const cell = (() => {
+              const empties = st.inner.board
+                .map((v, i) => (v === 0 ? i : -1))
+                .filter((i) => i >= 0);
+              return empties[Math.floor(Math.random() * empties.length)];
+            })();
             setTimeout(() => {
               try {
                 t.propose({ cell }, BigInt(Date.now()));
               } catch {
                 /* not my turn / in flight */
               }
-            }, MOVE_MS);
+            }, 50);
           }
         };
-        t.onConfirmed = () => {
+        t.onConfirmed = (u) => {
           moveCountRef.current += 1;
           actionsRef.current += 1;
+          transcriptRef.current?.append(u);
           onAdvance();
           flushHeartbeat(tunnelId, false);
         };
@@ -565,24 +590,21 @@ export function usePvpTicTacToe(
             } catch {
               /* ignore */
             }
-          }, NEXT_MS);
+          }, 100);
       } else if (st.inner.turn === roleRef.current) {
-        const cell =
-          variant === "caro"
-            ? pickCaroMove(
-                st.inner as any,
-                roleRef.current,
-                Math.random,
-                "strong",
-              )
-            : tttBestCell(st.inner, roleRef.current);
+        const cell = (() => {
+          const empties = st.inner.board
+            .map((v, i) => (v === 0 ? i : -1))
+            .filter((i) => i >= 0);
+          return empties[Math.floor(Math.random() * empties.length)];
+        })();
         setTimeout(() => {
           try {
             t.propose({ cell }, BigInt(Date.now()));
           } catch {
             /* ignore */
           }
-        }, MOVE_MS);
+        }, 50);
       }
     },
     [proto, variant],

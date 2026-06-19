@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { core, proof, bytesToHex } from "sui-tunnel-ts";
 import type { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import { getControlPlaneClient, type RegisterSessionResult } from "@/backend/controlPlane";
+import { coSignedToSettleRequest } from "@/backend/settleRequest";
 import type { Transaction } from "@mysten/sui/transactions";
 import {
   MultiGameCaroProtocol,
@@ -335,6 +336,7 @@ export function useCaroBotGame(
 
         await new Promise<void>((resolve, reject) => {
           let steps = 0;
+          const delay = difficultyRef.current === "fast" ? 30 : STEP_MS;
           timerRef.current = setInterval(() => {
             try {
               if (proto.isTerminal(tunnel.state)) {
@@ -350,12 +352,19 @@ export function useCaroBotGame(
               const by: "A" | "B" = innerOver ? "A" : (inner.turn as "A" | "B");
               const cell = innerOver
                 ? 0
-                : pickCaroMove(
-                    inner,
-                    by,
-                    Math.random,
-                    strengthFor(difficultyRef.current, by),
-                  );
+                : difficultyRef.current === "fast"
+                  ? (() => {
+                      const empties = inner.board
+                        .map((v, i) => (v === 0 ? i : -1))
+                        .filter((i) => i >= 0);
+                      return empties[Math.floor(Math.random() * empties.length)];
+                    })()
+                  : pickCaroMove(
+                      inner,
+                      by,
+                      Math.random,
+                      strengthFor(difficultyRef.current, by),
+                    );
               // Sign each update with the on-chain created_at so update_state's timestamp
               // check passes regardless of local clock skew.
               const r = tunnel.step({ cell }, by, {
@@ -388,7 +397,7 @@ export function useCaroBotGame(
               stopTimer();
               reject(err);
             }
-          }, STEP_MS);
+          }, delay);
         });
 
         const finalInner = tunnel.state.inner;
@@ -396,29 +405,31 @@ export function useCaroBotGame(
         setLastMove(finalInner.lastMove);
         setWinner(finalInner.winner);
 
-        // 5) checkpoint the FINAL co-signed state (update_state) before the root close.
         setPhase("settling");
         flushHeartbeat(tunnelId, true);
-        const latest = tunnel.latest;
-        if (latest) {
-          const ures = await submit(
-            buildUpdateStateTx(tunnelId, latest),
+
+        const root = transcript.root();
+        const s = tunnel.buildSettlementWithRoot(createdAt, root, 0n);
+
+        let closeDigest = "";
+        try {
+          const result = await getControlPlaneClient().settle(
+            tunnelId,
+            coSignedToSettleRequest(s, transcript.toRecord().entries),
+          );
+          closeDigest = result.txDigest;
+        } catch (e) {
+          console.warn("[settle] Server-side settle failed, falling back to bot keypair submission:", e);
+          const closeRes = await submit(
+            buildSettleWithRootTx(tunnelId, s),
             bots.x.keypair,
           );
-          setDigests((d) => ({ ...d, update: ures.digest }));
+          closeDigest = closeRes.digest;
         }
 
-        // 6) settle: anchor the transcript root AND distribute funds in one cooperative close.
-        const root = transcript.root();
-        const onchainNonce = latest ? latest.update.nonce : 0n;
-        const s = tunnel.buildSettlementWithRoot(createdAt, root, onchainNonce);
-        const closeRes = await submit(
-          buildSettleWithRootTx(tunnelId, s),
-          bots.x.keypair,
-        );
         setDigests((d) => ({
           ...d,
-          close: closeRes.digest,
+          close: closeDigest,
           root: `0x${bytesToHex(root)}`,
         }));
 
@@ -426,7 +437,7 @@ export function useCaroBotGame(
         // score so the next tunnel starts fresh — each settle resets the player tally.
         const record: TunnelRecord = {
           tunnelId,
-          closeDigest: closeRes.digest,
+          closeDigest,
           rootHex: `0x${bytesToHex(root)}`,
           games: tally.x + tally.o + tally.draws,
           x: tally.x,

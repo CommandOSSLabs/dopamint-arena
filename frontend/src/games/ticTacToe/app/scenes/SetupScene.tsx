@@ -108,6 +108,11 @@ const DIFFICULTIES: { id: Difficulty; label: string; desc: string }[] = [
     label: "Uneven",
     desc: "Bot X plays perfectly, Bot O is weaker → X wins more.",
   },
+  {
+    id: "fast",
+    label: "Super Fast",
+    desc: "Bots play instantly on random empty cells to maximize actions/sec.",
+  },
 ];
 
 function PlayModeChoice({

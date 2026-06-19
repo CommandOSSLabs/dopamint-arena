@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { core, proof, protocols, bytesToHex } from "sui-tunnel-ts";
 import type { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import type { Transaction } from "@mysten/sui/transactions";
+import { getControlPlaneClient, type RegisterSessionResult } from "@/backend/controlPlane";
+import { coSignedToSettleRequest } from "@/backend/settleRequest";
 import {
   buildCreateAndFundTx,
   buildSettleWithRootTx,
@@ -179,6 +181,30 @@ export function useBlackjackBot(): BlackjackBotGame {
   const runRef = useRef<() => void>(() => {});
   // Mirror of `maxRounds` so the play loop reads the live target without rebuilding runGame.
   const maxRoundsRef = useRef(DEFAULT_MAX_ROUNDS);
+  
+  const sessionRef = useRef<RegisterSessionResult | null>(null);
+  const moveCountRef = useRef(0);
+  const actionsRef = useRef(0);
+  const lastHeartbeatRef = useRef(Date.now());
+
+  const flushHeartbeat = useCallback((tunnelId: string, force: boolean) => {
+    const s = sessionRef.current;
+    if (!s || actionsRef.current === 0) return;
+    const now = Date.now();
+    const windowMs = now - lastHeartbeatRef.current;
+    if (!force && windowMs < 1000) return;
+    const actionsDelta = actionsRef.current;
+    actionsRef.current = 0;
+    lastHeartbeatRef.current = now;
+    getControlPlaneClient()
+      .sendHeartbeat(s.sessionId, s.statsToken, {
+        tunnelId,
+        nonce: String(moveCountRef.current),
+        actionsDelta,
+        windowMs: Math.max(1, windowMs),
+      })
+      .catch((e) => console.error("[blackjack bot] heartbeat failed:", e));
+  }, []);
 
   // Clamp the rounds-per-tunnel target to a sane range so a custom input can't request 0 or
   // an unbounded number of rounds in a single tunnel.
@@ -353,6 +379,22 @@ export function useBlackjackBot(): BlackjackBotGame {
         const transcript = new proof.Transcript(tunnelId);
         tunnel.onUpdate = (u) => transcript.append(u);
 
+        // Register the (real, on-chain) tunnel for stats tracking. Best-effort.
+        sessionRef.current = null;
+        moveCountRef.current = 0;
+        actionsRef.current = 0;
+        lastHeartbeatRef.current = Date.now();
+        getControlPlaneClient()
+          .registerSession({
+            userAddress: bots.a.address,
+            game: "blackjack",
+            tunnels: [{ tunnelId, partyA: bots.a.address, partyB: bots.b.address }],
+          })
+          .then((s) => {
+            sessionRef.current = s;
+          })
+          .catch((e) => console.error("[blackjack bot] registerSession failed:", e));
+
         // 4) animate moves; each .step co-signs AND verifies both sigs (mode "full").
         // The dealer ('dealer' phase) moves as B, everyone else as A.
         setPhase("playing");
@@ -363,6 +405,7 @@ export function useBlackjackBot(): BlackjackBotGame {
         await new Promise<void>((resolve, reject) => {
           let steps = 0;
           let completedRounds = 0;
+          const delay = autoRef.current ? 30 : STEP_MS;
           timerRef.current = setInterval(() => {
             try {
               if (proto.isTerminal(tunnel.state)) {
@@ -394,6 +437,8 @@ export function useBlackjackBot(): BlackjackBotGame {
               });
               if (!r.verified)
                 throw new Error(`state ${r.nonce} failed dual-verify`);
+              moveCountRef.current += 1;
+              actionsRef.current += 1;
               const s = tunnel.state;
               if (s.phase === "round_over" && prevPhase !== "round_over") {
                 const delta = Number(s.balanceA - prevBalanceA);
@@ -423,11 +468,12 @@ export function useBlackjackBot(): BlackjackBotGame {
                 stopTimer();
                 resolve();
               }
+              flushHeartbeat(tunnelId, false);
             } catch (err) {
               stopTimer();
               reject(err);
             }
-          }, STEP_MS);
+          }, delay);
         });
 
         setView(viewFromState(tunnel.state));
@@ -438,33 +484,31 @@ export function useBlackjackBot(): BlackjackBotGame {
           finalA > STAKE ? "win" : finalA < STAKE ? "lose" : "push";
         setResult(finalResult);
 
-        // 5) checkpoint the FINAL co-signed state on-chain (update_state) so the tunnel
-        // object's state field shows the played-out state_hash + balances + nonce, then
-        // close with the transcript root. Steps are signed with created_at, so the latest
-        // update passes the timestamp check.
+        // 5) settle: anchor the transcript root AND distribute funds via sponsored close, or fallback.
         setPhase("settling");
-        const latest = tunnel.latest;
-        if (latest) {
-          const ures = await submit(
-            buildUpdateStateTx(tunnelId, latest),
+        flushHeartbeat(tunnelId, true);
+
+        const root = transcript.root();
+        const s = tunnel.buildSettlementWithRoot(createdAt, root, 0n);
+
+        let closeDigest = "";
+        try {
+          const result = await getControlPlaneClient().settle(
+            tunnelId,
+            coSignedToSettleRequest(s, transcript.toRecord().entries),
+          );
+          closeDigest = result.txDigest;
+        } catch (e) {
+          console.warn("[settle] Server-side settle failed, falling back to bot keypair submission:", e);
+          const closeRes = await submit(
+            buildSettleWithRootTx(tunnelId, s),
             bots.a.keypair,
           );
-          setDigests((d) => ({ ...d, update: ures.digest }));
+          closeDigest = closeRes.digest;
         }
 
-        // 6) settle: anchor the transcript root AND distribute funds in one cooperative close.
-        // The root commits to EVERY co-signed update. After update_state the on-chain
-        // state.nonce is latest.nonce (N), so close_cooperative_with_root derives finalNonce
-        // = N + 1 — pass onchainNonce N so the signed settlement matches.
-        const root = transcript.root();
-        const onchainNonce = latest ? latest.update.nonce : 0n;
-        const s = tunnel.buildSettlementWithRoot(createdAt, root, onchainNonce);
-        const closeRes = await submit(
-          buildSettleWithRootTx(tunnelId, s),
-          bots.a.keypair,
-        );
         const rootHex = `0x${bytesToHex(root)}`;
-        setDigests((d) => ({ ...d, close: closeRes.digest, root: rootHex }));
+        setDigests((d) => ({ ...d, close: closeDigest, root: rootHex }));
 
         // Record this settled tunnel into the persistent history (newest first). Survives the
         // auto loop so the user can review each settlement the fast transition would otherwise
@@ -472,7 +516,7 @@ export function useBlackjackBot(): BlackjackBotGame {
         const tunnelRecord: TunnelRecord = {
           tunnelId,
           createDigest: createRes.digest,
-          closeDigest: closeRes.digest,
+          closeDigest,
           rootHex,
           rounds: roundsThisTunnel,
           result: finalResult,
@@ -490,7 +534,7 @@ export function useBlackjackBot(): BlackjackBotGame {
           if (b && b.a >= MIN_PLAY_MIST && b.b >= MIN_PLAY_MIST) {
             nextRef.current = setTimeout(() => {
               if (autoRef.current) runRef.current();
-            }, NEXT_GAME_MS);
+            }, autoRef.current ? 100 : NEXT_GAME_MS);
           } else {
             autoRef.current = false;
             setAuto(false);

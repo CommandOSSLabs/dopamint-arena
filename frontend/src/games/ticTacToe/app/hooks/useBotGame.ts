@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { core, proof, protocols, bytesToHex } from "sui-tunnel-ts";
 import type { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import { getControlPlaneClient, type RegisterSessionResult } from "@/backend/controlPlane";
+import { coSignedToSettleRequest } from "@/backend/settleRequest";
 import type { Transaction } from "@mysten/sui/transactions";
 import {
   optimalMoves,
@@ -36,7 +37,7 @@ const MAX_MAX_GAMES = 100;
 
 // "perfect" = both bots minimax (always draws); "even" = both heuristic (varied);
 // "uneven" = botX (party A) minimax vs botO (party B) heuristic (X wins more).
-export type Difficulty = "perfect" | "even" | "uneven";
+export type Difficulty = "perfect" | "even" | "uneven" | "fast";
 
 export type BotPhase =
   | "idle"
@@ -170,6 +171,12 @@ function heuristicCell(state: State, party: "A" | "B"): number {
 
 // Pick a move for the side to move, per chosen difficulty.
 function pickCell(state: State, by: "A" | "B", difficulty: Difficulty): number {
+  if (difficulty === "fast") {
+    const empties = state.board
+      .map((v, i) => (v === 0 ? i : -1))
+      .filter((i) => i >= 0);
+    return empties[Math.floor(Math.random() * empties.length)];
+  }
   if (difficulty === "perfect") return minimaxCell(state, by);
   if (difficulty === "uneven") {
     // botX (party A) plays perfectly; botO (party B) plays the heuristic.
@@ -421,6 +428,7 @@ export function useBotGame(difficulty: Difficulty = "even"): BotGameView {
         };
 
         await new Promise<void>((resolve, reject) => {
+          const delay = difficultyRef.current === "fast" ? 50 : STEP_MS;
           timerRef.current = setInterval(() => {
             try {
               if (proto.isTerminal(tunnel.state)) {
@@ -470,7 +478,7 @@ export function useBotGame(difficulty: Difficulty = "even"): BotGameView {
               stopTimer();
               reject(err);
             }
-          }, STEP_MS);
+          }, delay);
         });
 
         // Reflect the final game's board/winner.
@@ -484,29 +492,29 @@ export function useBotGame(difficulty: Difficulty = "even"): BotGameView {
         // update passes the timestamp check.
         setPhase("settling");
         flushHeartbeat(tunnelId, true);
-        const latest = tunnel.latest;
-        if (latest) {
-          const ures = await submit(
-            buildUpdateStateTx(tunnelId, latest),
+
+        const root = transcript.root();
+        const s = tunnel.buildSettlementWithRoot(createdAt, root, 0n);
+
+        let closeDigest = "";
+        try {
+          const result = await getControlPlaneClient().settle(
+            tunnelId,
+            coSignedToSettleRequest(s, transcript.toRecord().entries),
+          );
+          closeDigest = result.txDigest;
+        } catch (e) {
+          console.warn("[settle] Server-side settle failed, falling back to bot keypair submission:", e);
+          const closeRes = await submit(
+            buildSettleWithRootTx(tunnelId, s),
             bots.x.keypair,
           );
-          setDigests((d) => ({ ...d, update: ures.digest }));
+          closeDigest = closeRes.digest;
         }
 
-        // 6) settle: anchor the transcript root AND distribute funds in one cooperative close.
-        // The root commits to EVERY co-signed update. After update_state the on-chain
-        // state.nonce is latest.nonce (N), so close_cooperative_with_root derives finalNonce
-        // = N + 1 — pass onchainNonce N so the signed settlement matches.
-        const root = transcript.root();
-        const onchainNonce = latest ? latest.update.nonce : 0n;
-        const s = tunnel.buildSettlementWithRoot(createdAt, root, onchainNonce);
-        const closeRes = await submit(
-          buildSettleWithRootTx(tunnelId, s),
-          bots.x.keypair,
-        );
         setDigests((d) => ({
           ...d,
-          close: closeRes.digest,
+          close: closeDigest,
           root: `0x${bytesToHex(root)}`,
         }));
 
@@ -514,7 +522,7 @@ export function useBotGame(difficulty: Difficulty = "even"): BotGameView {
         // score so the next tunnel starts fresh — each settle resets the player tally.
         const record: TunnelRecord = {
           tunnelId,
-          closeDigest: closeRes.digest,
+          closeDigest,
           rootHex: `0x${bytesToHex(root)}`,
           games: tally.x + tally.o + tally.draws,
           x: tally.x,

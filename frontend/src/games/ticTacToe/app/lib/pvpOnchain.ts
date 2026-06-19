@@ -58,4 +58,19 @@ export function buildCloseTx(
   return tx;
 }
 
+/** Root-anchored cooperative close from the dual-signed settlement with root. */
+export function buildCloseWithRootTx(
+  tunnelId: string,
+  settlement: core.CoSignedSettlementWithRoot,
+): Transaction {
+  const tx = new Transaction();
+  onchain.buildCloseWithRootFromSettlement(
+    tx as unknown as SdkTx,
+    tunnelId,
+    settlement,
+    SUI,
+  );
+  return tx;
+}
+
 export const parseTunnelId = onchain.parseTunnelId;
