@@ -34,5 +34,6 @@ export function deriveView(state: BombItState): BombItView {
 export function sessionResult(state: BombItState): BombItResult {
   if (state.winner === "A") return "A";
   if (state.winner === "B") return "B";
+  // winner === "draw" OR null (in-progress): both map to the neutral "draw" result.
   return "draw";
 }

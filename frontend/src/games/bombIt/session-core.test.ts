@@ -20,5 +20,7 @@ test("sessionResult reports the winning seat (and draws as draw)", () => {
   const p = new BombItProtocol();
   const s = p.initialState(CTX);
   assert.equal(sessionResult({ ...s, winner: "A" }), "A");
+  assert.equal(sessionResult({ ...s, winner: "B" }), "B");
   assert.equal(sessionResult({ ...s, winner: "draw" }), "draw");
+  assert.equal(sessionResult(s), "draw"); // in-progress (winner null) -> neutral draw
 });
