@@ -166,3 +166,6 @@ vite.config.ts.timestamp-*
 
 # Playwright MCP scratch output
 .playwright-mcp/
+
+# Temp files
+temp/

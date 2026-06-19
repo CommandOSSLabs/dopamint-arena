@@ -1,39 +1,149 @@
-import type { TelemetrySnapshot } from "./types";
-import { Panel } from "./atoms";
+import { useEffect, useRef } from "react";
 
-/** Headline updates/sec plus a dependency-free SVG sparkline of recent samples. */
-export function TpsChart({ snapshot }: { snapshot: TelemetrySnapshot }) {
-  const series = snapshot.tpsSeries;
-  const max = Math.max(1, ...series);
-  const n = series.length;
-  const points = series
-    .map((v, i) => {
-      const x = n > 1 ? (i / (n - 1)) * 100 : 0;
-      const y = 30 - (v / max) * 28 - 1;
-      return `${x.toFixed(2)},${y.toFixed(2)}`;
-    })
-    .join(" ");
+import {
+  Panel,
+  PanelAction,
+  PanelContent,
+  PanelHeader,
+  PanelTitle,
+} from "@/components/ui/panel";
+import type { TelemetrySnapshot } from "./types";
+
+const BARS = 36; // one bar per second → ~36s of history across the chart
+
+const clamp01 = (n: number) => Math.max(0, Math.min(1, n));
+// Log scale: ~1 tps → near 0, ~1e6 tps → near 1. Works across the whole live range
+// (in-browser single digits today → fleet millions at the peak), unlike a fixed linear band.
+const normalize = (tps: number) => clamp01(Math.log10(Math.max(1, tps)) / 6);
+
+/** Reads the bar color off the canvas's cascade so the chart re-themes. */
+function barColor(el: HTMLElement) {
+  return getComputedStyle(el).getPropertyValue("--primary").trim() || "#613dff";
+}
+
+/**
+ * Live transactions/sec as a scrolling bar histogram — one bar committed each
+ * second, the live (rightmost) bar easing toward the current rate. Adapted from
+ * nullframe's NetworkCard, drawn with our Panel + design tokens; one rAF, capped
+ * at ~30fps, paused while offscreen or the tab is hidden.
+ */
+export function TpsChart({
+  snapshot,
+  className,
+}: {
+  snapshot: TelemetrySnapshot;
+  className?: string;
+}) {
+  const tps = Math.round(snapshot.rate.updatesPerSec);
+  // Latest normalized value for the animation loop, which mounts once (deps []).
+  const valueRef = useRef(0);
+  valueRef.current = normalize(tps);
+
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    const cv = canvasRef.current;
+    const ctx = cv?.getContext("2d");
+    if (!cv || !ctx) return;
+
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    let w = 0;
+    let h = 0;
+    const ro = new ResizeObserver(() => {
+      w = cv.clientWidth;
+      h = cv.clientHeight;
+      cv.width = Math.max(1, Math.round(w * dpr));
+      cv.height = Math.max(1, Math.round(h * dpr));
+    });
+    ro.observe(cv);
+
+    let visible = true;
+    const io = new IntersectionObserver((e) => {
+      visible = e[0]?.isIntersecting ?? true;
+    });
+    io.observe(cv);
+
+    let color = barColor(cv);
+    const themeWatch = new MutationObserver(() => {
+      color = barColor(cv);
+    });
+    themeWatch.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["class"],
+    });
+
+    // Start empty (all 0) so the chart visibly builds up from zero; BARS-1
+    // committed seconds + 1 live bar easing toward the current value.
+    const committed = new Array<number>(BARS - 1).fill(0);
+    let live = 0;
+    let last = performance.now();
+    let acc = 0;
+    let raf = 0;
+
+    const tick = (now: number) => {
+      raf = requestAnimationFrame(tick);
+      const dt = (now - last) / 1000;
+      last = now;
+      if (!visible || document.hidden || !w || !h) return;
+
+      // Ease the live (rightmost) bar toward the current rate every frame…
+      live += (valueRef.current - live) * Math.min(1, dt * 6);
+      // …and commit it as a new bar once per second (scrolling left).
+      acc += dt;
+      if (acc >= 1) {
+        acc -= 1;
+        committed.push(live);
+        committed.shift();
+      }
+
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, w, h);
+      const gap = 2;
+      const bw = (w - (BARS - 1) * gap) / BARS;
+      const bars = [...committed, live];
+      for (let i = 0; i < BARS; i++) {
+        const bh = Math.max(0, bars[i] * (h - 2));
+        // Newest bar full strength; history fades toward the left.
+        ctx.globalAlpha = i === BARS - 1 ? 1 : 0.3 + (i / (BARS - 1)) * 0.45;
+        ctx.fillStyle = color;
+        ctx.fillRect(i * (bw + gap), h - bh, bw, bh);
+      }
+      ctx.globalAlpha = 1;
+    };
+    raf = requestAnimationFrame(tick);
+
+    return () => {
+      cancelAnimationFrame(raf);
+      ro.disconnect();
+      io.disconnect();
+      themeWatch.disconnect();
+    };
+  }, []);
 
   return (
-    <Panel title="Transactions / sec (Live)">
-      <div className="p-3">
-        <div className="text-2xl font-semibold text-arena-accent">
-          {Math.round(snapshot.rate.updatesPerSec).toLocaleString("en-US")}
+    <Panel className={className}>
+      <PanelHeader>
+        <PanelTitle>Transactions / sec</PanelTitle>
+        <PanelAction>
+          <span className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-success">
+            <span className="size-1.5 animate-pulse rounded-full bg-success" />
+            LIVE
+          </span>
+        </PanelAction>
+      </PanelHeader>
+      <PanelContent className="flex flex-col gap-1 overflow-hidden p-3">
+        <div className="flex items-baseline gap-2">
+          <span className="wal-doto text-4xl text-primary">
+            {tps.toLocaleString("en-US")}
+          </span>
+          <span className="wal-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+            tx/sec · live
+          </span>
         </div>
-        <svg
-          viewBox="0 0 100 30"
-          preserveAspectRatio="none"
-          className="mt-2 h-24 w-full text-arena-accent"
-        >
-          <polyline
-            points={points}
-            fill="none"
-            stroke="currentColor"
-            strokeWidth={1}
-            vectorEffect="non-scaling-stroke"
-          />
-        </svg>
-      </div>
+        <div className="mt-1 h-24 w-full">
+          <canvas ref={canvasRef} className="block h-full w-full" />
+        </div>
+      </PanelContent>
     </Panel>
   );
 }

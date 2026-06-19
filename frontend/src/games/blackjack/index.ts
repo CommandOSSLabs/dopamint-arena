@@ -5,5 +5,6 @@ register({
   id: "blackjack",
   name: "Blackjack",
   icon: "🃏",
+  image: "/games/blackjack.png",
   Window: BlackjackWindow,
 });

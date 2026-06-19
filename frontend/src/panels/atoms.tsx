@@ -1,46 +1,102 @@
-import type { ReactNode } from "react";
+/** Small shared bits used across the telemetry panels. */
+import { Check, Copy, X } from "lucide-react";
+import { toast } from "sonner";
 
-/** Shared panel chrome: bordered card with an uppercase title bar. */
-export function Panel({
-  title,
-  children,
-  className = "",
-}: {
-  title: string;
-  children: ReactNode;
-  className?: string;
-}) {
+import { cn } from "@/lib/utils";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { truncateMiddle } from "@/lib/suivision";
+
+/**
+ * Transaction status as a filled badge: a solid green ✓ on success, a solid red
+ * ✗ on failure. The glyph uses `text-background` so it stays legible on both the
+ * light (dark-green/red) and dark (mint/salmon) success/destructive fills.
+ */
+export function StatusIcon({ status }: { status: "Success" | "Failed" }) {
+  const ok = status === "Success";
   return (
-    <section
-      className={`flex min-h-0 flex-col rounded-md border border-arena-edge bg-arena-panel ${className}`}
-    >
-      <header className="shrink-0 border-b border-arena-edge px-3 py-2 text-[11px] font-semibold uppercase tracking-wider text-arena-muted">
-        {title}
-      </header>
-      <div className="min-h-0 flex-1 overflow-auto">{children}</div>
-    </section>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          role="img"
+          aria-label={status}
+          className={cn(
+            "grid size-4 place-items-center rounded-full text-background",
+            ok ? "bg-success" : "bg-destructive",
+          )}
+        >
+          {ok ? (
+            <Check className="size-2.5" strokeWidth={3.5} />
+          ) : (
+            <X className="size-2.5" strokeWidth={3.5} />
+          )}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>{status}</TooltipContent>
+    </Tooltip>
   );
 }
 
-export function StatusPill({ status }: { status: "Success" | "Failed" }) {
-  const ok = status === "Success";
+/**
+ * A truncated hash/address that links to its SuiVision page, with a copy button.
+ * The link opens the explorer; the copy button (separate) yanks the full value.
+ */
+export function HashLink({
+  value,
+  href,
+  label,
+}: {
+  value: string;
+  href: string;
+  label: string;
+}) {
   return (
-    <span
-      className={`inline-flex items-center gap-1 text-[11px] ${ok ? "text-arena-accent" : "text-red-400"}`}
-    >
-      <span
-        className={`h-1.5 w-1.5 rounded-full ${ok ? "bg-arena-accent" : "bg-red-400"}`}
-      />
-      {status}
+    <span className="inline-flex items-center gap-1">
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <a
+            href={href}
+            target="_blank"
+            rel="noreferrer noopener"
+            className="wal-mono text-[11px] text-foreground/80 transition-colors hover:text-primary hover:underline"
+          >
+            {truncateMiddle(value)}
+          </a>
+        </TooltipTrigger>
+        <TooltipContent>Open {label} in SuiVision</TooltipContent>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            aria-label={`Copy ${label}`}
+            onClick={() => {
+              navigator.clipboard
+                ?.writeText(value)
+                .then(() =>
+                  toast(`${label[0].toUpperCase()}${label.slice(1)} copied`),
+                )
+                .catch(() => toast.error("Copy failed"));
+            }}
+            className="grid size-5 shrink-0 place-items-center rounded text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+          >
+            <Copy className="size-3" />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent>Copy {label}</TooltipContent>
+      </Tooltip>
     </span>
   );
 }
 
-/** Signed currency string, green for credits and red for debits. */
+/** Signed currency string: success for credits, destructive for debits. */
 export function Amount({ value }: { value: string }) {
   const negative = value.trim().startsWith("-");
   return (
-    <span className={negative ? "text-red-400" : "text-arena-accent"}>
+    <span className={negative ? "text-destructive" : "text-success"}>
       {value}
     </span>
   );

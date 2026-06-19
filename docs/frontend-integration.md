@@ -1,7 +1,8 @@
 # Frontend Integration Guide
 
 How `dopamint-web` integrates with the backend (`tunnel-manager`) and the
-`sui-tunnel-ts` SDK across **both lanes**. Grounded in the merged code:
+`sui-tunnel-ts` SDK across its **two FE roles** (watching the live number, and
+playing a match). Grounded in the merged code:
 - WS protocol → `backend/tunnel-manager/src/mp/protocol.rs`
 - Control-plane HTTP → `backend/tunnel-manager/src/routes.rs` (ADR-0002)
 - PvP engine → `sui-tunnel-ts/src/core/distributedTunnel.ts`
@@ -13,18 +14,22 @@ How `dopamint-web` integrates with the backend (`tunnel-manager`) and the
 
 ---
 
-## 1. Two lanes, two responsibilities
+## 1. Two FE roles, one model
 
-| Lane | What the FE does |
+Every tunnel is **genuine two-party** (ADR-0006); the self-play *mode* is gone. The FE plays
+one of two roles over that single model:
+
+| Role | What the FE does |
 |---|---|
-| **Self-play** (1M-TPS dashboard) | The FE only **displays stats** — subscribe to the SSE feed. The self-play fleet (headless) produces the moves and pushes heartbeats; the FE does **not** drive moves or call heartbeat. |
-| **PvP** (human vs human) | The FE is the **player client**: generate an ephemeral key, connect the matchmaking/relay WebSocket, run the `DistributedTunnel` engine, drive the wallet for open/fund/settle. |
+| **Stats dashboard** (the live number) | Read-only: the FE only **displays stats** — subscribe to the SSE feed. The headless **agent fleet** (each agent an independent party playing another) produces the moves and pushes heartbeats; the FE does **not** drive moves or call heartbeat. |
+| **Player client** (human in a match) | The FE is one **party**: generate an ephemeral key, connect the matchmaking/relay WebSocket, run the `DistributedTunnel` engine, drive the wallet for open/fund/settle. |
 
-The two are decoupled. Nothing in PvP touches the throughput path.
+Both are the same two-party path; they differ only in whether the FE watches the
+aggregate or plays a single match.
 
 ---
 
-## 2. Stats dashboard (self-play lane) — read-only
+## 2. Stats dashboard — read-only
 
 Subscribe to Server-Sent Events; render each snapshot.
 
@@ -49,10 +54,11 @@ const es = new EventSource(`${BACKEND}/v1/stats/live`);
 es.onmessage = (e) => renderDashboard(JSON.parse(e.data));
 ```
 
-That is the entire FE contract for self-play. `POST /v1/sessions`,
+That is the entire FE contract for the dashboard. `POST /v1/sessions`,
 `POST /v1/sessions/{id}/heartbeat`, and `POST /v1/sessions/{id}/settle` are called by the
-self-play **fleet**, not the browser. (If the FE ever runs a self-play tunnel itself, it
-would use those three — see §6 for the settle shape, which PvP shares.)
+**agent fleet**, not the browser — the fleet registers each genuine two-party session,
+heartbeats its move deltas, and settles. (The browser uses the same settle shape when it
+plays a match — see §6.)
 
 ---
 
@@ -70,9 +76,9 @@ would use those three — see §6 for the settle shape, which PvP shares.)
 
 **Identity rule (the one trap — do not get this wrong):**
 a party is `{ address: walletAddress, publicKey: ephemeralPubkey }`. These are
-**independent**. Do **not** derive the party address from the ephemeral key (the SDK's
-self-play helpers do `ed25519Address(pubkey)` — the PvP client must NOT). Pass them
-separately everywhere.
+**independent**. Do **not** derive the party address from the ephemeral key (some SDK
+convenience helpers derive it as `ed25519Address(pubkey)` — the player client must NOT).
+Pass them separately everywhere.
 
 ---
 
@@ -256,7 +262,7 @@ mismatch from §5 doesn't apply.)
 ### Settle — win by play / genuine tie (both co-sign)
 Terminal state → both ephemeral keys co-sign the settlement (collect the other half over the
 relay), then `POST` it. The backend submits `close_cooperative_with_root` + archives the
-transcript to Walrus. Same endpoint self-play uses:
+transcript to Walrus. Same settle endpoint the fleet uses:
 ```
 POST /v1/sessions/{sessionId}/settle      Authorization: Bearer <statsToken>
 {
@@ -306,7 +312,7 @@ opener: buildCreateAndShare(walletA+ephA, walletB+ephB, timeout, penalty=stake)
         → read tunnelId from effects → tunnel.opened{tunnelId}
 each player: verify own on-chain seat (own wallet + own ephemeral pubkey, status CREATED)
 p1 wallet: deposit(stake)   p2 wallet: deposit(stake)  → TunnelActivated (detect on-chain)
-loop (human-paced):
+loop (human-paced; the agent fleet runs the same loop at machine speed):
    mover: tunnel.propose(move, ts) ─relay MOVE► opponent re-applies+co-signs ─relay ACK► onConfirmed
 win by play:  both buildSettlementHalf → combine → POST /settle → close + Walrus → winner paid to wallet
 genuine tie:  both co-sign the tie state → POST /settle → both refunded

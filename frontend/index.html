@@ -1,9 +1,23 @@
 <!doctype html>
-<html lang="en" class="dark">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Dopamint Arena</title>
+    <script>
+      // Set the theme class before first paint to avoid a flash. Mirrors the
+      // logic in src/theme/useTheme.tsx (override "light"|"dark", else system).
+      (function () {
+        try {
+          var t = localStorage.getItem("dopamint.theme");
+          var dark =
+            t === "dark" ||
+            ((!t || t === "system") &&
+              matchMedia("(prefers-color-scheme: dark)").matches);
+          document.documentElement.classList.toggle("dark", dark);
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
