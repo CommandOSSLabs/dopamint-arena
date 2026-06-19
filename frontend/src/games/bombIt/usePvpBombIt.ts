@@ -6,9 +6,11 @@ import { makeEndpoint } from "sui-tunnel-ts/core/tunnel";
 import { fromHex, toHex } from "sui-tunnel-ts/core/bytes";
 import { DistributedTunnel } from "sui-tunnel-ts/core/distributedTunnel";
 import { BombItProtocol, type BombItState, type BombItMove, type BombItAction } from "sui-tunnel-ts/protocol/bombIt";
+import { Transcript } from "sui-tunnel-ts/proof/transcript";
 import { MpClient, resolveMpWsUrl, type PvpChannel, type Role } from "../../pvp/mpClient";
-import { resolveBackendUrl } from "../../backend/controlPlane";
-import { closeCooperative, depositStake, openAndFundSharedTunnel, readCreatedAt } from "../../onchain/tunnelTx";
+import { getControlPlaneClient, resolveBackendUrl } from "../../backend/controlPlane";
+import { closeCooperativeWithRoot, depositStake, openAndFundSharedTunnel, readCreatedAt } from "../../onchain/tunnelTx";
+import { coSignedToSettleRequest } from "../../backend/settleRequest";
 import { deriveView, type BombItView } from "./session-core";
 
 const STAKE = 500n; // per-seat MIST
@@ -75,6 +77,7 @@ export function usePvpBombIt(): PvpBombIt {
   const nextActionRef = useRef<BombItAction>("stay");
   const proposeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const settlingRef = useRef(false);
+  const transcriptRef = useRef<Transcript | null>(null);
 
   /** Schedule a propose for this seat if it's our turn. Clears any existing timer first. */
   const maybePropose = useCallback(() => {
@@ -119,6 +122,7 @@ export function usePvpBombIt(): PvpBombIt {
     roleRef.current = null;
     nextActionRef.current = "stay";
     settlingRef.current = false;
+    transcriptRef.current = null;
     setStatus("idle");
     setRole(null);
     setView(null);
@@ -211,15 +215,18 @@ export function usePvpBombIt(): PvpBombIt {
             { a: STAKE, b: STAKE },
           );
           dtRef.current = dt;
+          const transcript = new Transcript(tunnelId);
+          transcriptRef.current = transcript;
 
-          dt.onConfirmed = () => {
+          dt.onConfirmed = (u) => {
+            transcript.append(u);
             setView(deriveView(dt.displayState));
             const currentWinner = dt.state.winner;
             if (currentWinner !== null) setWinner(currentWinner);
 
             if (proto.isTerminal(dt.state) && !settlingRef.current) {
               settlingRef.current = true;
-              void settle(dt, match.role, channel, waitPeer, reads, signExec, tunnelId).then(
+              void settle(dt, match.role, channel, waitPeer, reads, signExec, tunnelId, transcript, getControlPlaneClient()).then(
                 () => setStatus("settled"),
                 (e) => {
                   setError(String((e as Error)?.message ?? e));
@@ -258,29 +265,44 @@ export function usePvpBombIt(): PvpBombIt {
   return { status, role, view, winner, error, create, join, queueAction, reset };
 }
 
-/** Exchange settlement halves over the relay; seat A submits the cooperative close. */
+/** Exchange root-anchored settlement halves over the relay, then seat A submits the close via the
+ *  backend /settle (the settler anchors the transcript root + archives to Walrus). Both seats must
+ *  anchor the SAME root or close_cooperative_with_root rebuilds different bytes and on-chain verify
+ *  fails — so the root is exchanged and asserted equal before either side trusts the combine.
+ *  Fallback: wallet-submitted close_cooperative_with_root (backend down). */
 async function settle(
   dt: DistributedTunnel<BombItState, BombItMove>,
   role: Role,
   channel: PvpChannel,
   waitPeer: <T>(t: string) => Promise<T>,
   reads: Parameters<typeof readCreatedAt>[0],
-  signExec: Parameters<typeof closeCooperative>[0]["signExec"],
+  signExec: Parameters<typeof closeCooperativeWithRoot>[0]["signExec"],
   tunnelId: string,
+  transcript: Transcript,
+  cp: ReturnType<typeof getControlPlaneClient>,
 ): Promise<void> {
   const createdAt = await readCreatedAt(reads, tunnelId);
-  const half = dt.buildSettlementHalf(createdAt, 0n);
+  const root = transcript.root();
+  const half = dt.buildSettlementHalfWithRoot(createdAt, root, 0n);
   channel.sendPeer({
     t: "settleHalf",
     partyABalance: half.settlement.partyABalance.toString(),
     partyBBalance: half.settlement.partyBBalance.toString(),
     finalNonce: half.settlement.finalNonce.toString(),
     timestamp: half.settlement.timestamp.toString(),
+    transcriptRoot: toHex(root),
     sig: toHex(half.sigSelf),
   });
-  const other = await waitPeer<{ sig: string }>("settleHalf");
-  const co = dt.combineSettlement(half.settlement, half.sigSelf, fromHex(other.sig));
-  if (role === "A") {
-    await closeCooperative({ signExec, tunnelId, settlement: co });
+  const other = await waitPeer<{ sig: string; transcriptRoot: string }>("settleHalf");
+  if (other.transcriptRoot !== toHex(root)) {
+    throw new Error("settlement transcript-root mismatch between parties");
+  }
+  const co = dt.combineSettlementWithRoot(half.settlement, half.sigSelf, fromHex(other.sig));
+  if (role !== "A") return;
+  try {
+    await cp.settle(tunnelId, coSignedToSettleRequest(co, transcript.toRecord().entries));
+  } catch (e) {
+    console.error("[bomb-it] backend settle failed; falling back to wallet close:", e);
+    await closeCooperativeWithRoot({ signExec, tunnelId, settlement: co });
   }
 }
