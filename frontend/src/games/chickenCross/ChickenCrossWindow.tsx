@@ -5,7 +5,7 @@ import { CrossBoard } from "./components/CrossBoard";
 
 /** PvP Chicken Cross: two players race their chickens over a shared Sui tunnel. */
 export function ChickenCrossWindow(_props: GameWindowProps) {
-  const { status, role, code, view, winner, error, create, join, setDir, reset } =
+  const { status, role, code, view, winner, error, create, join, findMatch, setDir, reset } =
     usePvpChickenCross();
 
   if (status === "error") {
@@ -23,7 +23,7 @@ export function ChickenCrossWindow(_props: GameWindowProps) {
   }
 
   if (status === "idle") {
-    return <CrossLobby onCreate={create} onJoin={join} />;
+    return <CrossLobby onCreate={create} onJoin={join} onFindMatch={findMatch} />;
   }
 
   if (status === "matching") {

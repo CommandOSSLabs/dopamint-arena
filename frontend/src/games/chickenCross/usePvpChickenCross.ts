@@ -40,6 +40,7 @@ export interface PvpChickenCross {
   error: string | null;
   create: (code: string) => void;
   join: (code: string) => void;
+  findMatch: () => void;
   setDir: (dir: CrossDir) => void;
   reset: () => void;
 }
@@ -163,7 +164,7 @@ export function usePvpChickenCross(): PvpChickenCross {
 
   /** Shared matchmaking + lifecycle for both create and join. */
   const startMatch = useCallback(
-    (code: string) => {
+    (code: string | null) => {
       if (!account) {
         setError("connect a wallet first");
         return;
@@ -182,7 +183,7 @@ export function usePvpChickenCross(): PvpChickenCross {
       (async () => {
         try {
           setError(null);
-          setCode(code.trim().toUpperCase());
+          if (code) setCode(code.toUpperCase());
           setStatus("matching");
           const ephemeral: KeyPair = generateKeyPair();
           const mp = new MpClient(
@@ -193,7 +194,7 @@ export function usePvpChickenCross(): PvpChickenCross {
           mpRef.current = mp;
           await mp.connect();
 
-          const gameKey = "chicken-cross:" + code.trim().toUpperCase();
+          const gameKey = code ? "chicken-cross:" + code.trim().toUpperCase() : "chicken-cross";
           const match = await mp.quickMatch(gameKey);
           roleRef.current = match.role;
           setRole(match.role);
@@ -317,6 +318,8 @@ export function usePvpChickenCross(): PvpChickenCross {
     [startMatch],
   );
 
+  const findMatch = useCallback(() => startMatch(null), [startMatch]);
+
   const setDir = useCallback((dir: CrossDir) => {
     myDirRef.current = dir;
   }, []);
@@ -330,6 +333,7 @@ export function usePvpChickenCross(): PvpChickenCross {
     error,
     create,
     join,
+    findMatch,
     setDir,
     reset,
   };
