@@ -11,9 +11,11 @@ function randomCode(): string {
 export function BombLobby({
   onCreate,
   onJoin,
+  onFindMatch,
 }: {
   onCreate: (code: string) => void;
   onJoin: (code: string) => void;
+  onFindMatch: () => void;
 }) {
   const [input, setInput] = useState("");
   const [activeCode, setActiveCode] = useState<string | null>(null);
@@ -71,6 +73,12 @@ export function BombLobby({
           className="rounded border border-arena-edge px-5 py-2 font-bold uppercase tracking-widest text-arena-text transition-all hover:opacity-90 disabled:opacity-40"
         >
           Join Match
+        </button>
+        <button
+          onClick={onFindMatch}
+          className="gold-glow-hover rounded border border-amber-500 bg-arena-accent px-5 py-2 font-bold uppercase tracking-widest text-arena-bg transition-all hover:opacity-90"
+        >
+          Find Match
         </button>
       </div>
     </div>

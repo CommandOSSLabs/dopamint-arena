@@ -5,7 +5,7 @@ import { BombBoard } from "./components/BombBoard";
 
 /** PvP Bomb It: two players bomb each other on a shared grid over a Sui tunnel. */
 export function BombItWindow(_props: GameWindowProps) {
-  const { status, role, code, view, winner, error, create, join, queueAction, reset } =
+  const { status, role, code, view, winner, error, create, join, findMatch, queueAction, reset } =
     usePvpBombIt();
 
   if (status === "error") {
@@ -20,7 +20,7 @@ export function BombItWindow(_props: GameWindowProps) {
   }
 
   if (status === "idle") {
-    return <BombLobby onCreate={create} onJoin={join} />;
+    return <BombLobby onCreate={create} onJoin={join} onFindMatch={findMatch} />;
   }
 
   if (status === "matching") {

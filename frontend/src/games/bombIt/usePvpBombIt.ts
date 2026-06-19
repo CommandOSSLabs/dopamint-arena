@@ -28,6 +28,7 @@ export interface PvpBombIt {
   error: string | null;
   create: (code: string) => void;
   join: (code: string) => void;
+  findMatch: () => void;
   queueAction: (a: BombItAction) => void;
   reset: () => void;
 }
@@ -149,7 +150,7 @@ export function usePvpBombIt(): PvpBombIt {
 
   /** Shared matchmaking + lifecycle for both create and join. */
   const startMatch = useCallback(
-    (code: string) => {
+    (code: string | null) => {
       if (!account) {
         setError("connect a wallet first");
         return;
@@ -164,14 +165,14 @@ export function usePvpBombIt(): PvpBombIt {
       (async () => {
         try {
           setError(null);
-          setCode(code.trim().toUpperCase());
+          if (code) setCode(code.toUpperCase());
           setStatus("matching");
           const ephemeral: KeyPair = generateKeyPair();
           const mp = new MpClient(resolveMpWsUrl(resolveBackendUrl()), wallet, ephemeral);
           mpRef.current = mp;
           await mp.connect();
 
-          const gameKey = "bomb-it:" + code.trim().toUpperCase();
+          const gameKey = code ? "bomb-it:" + code.trim().toUpperCase() : "bomb-it";
           const match = await mp.quickMatch(gameKey);
           roleRef.current = match.role;
           setRole(match.role);
@@ -263,11 +264,12 @@ export function usePvpBombIt(): PvpBombIt {
 
   const create = useCallback((code: string) => startMatch(code), [startMatch]);
   const join = useCallback((code: string) => startMatch(code), [startMatch]);
+  const findMatch = useCallback(() => startMatch(null), [startMatch]);
   const queueAction = useCallback((a: BombItAction) => {
     nextActionRef.current = a;
   }, []);
 
-  return { status, role, code, view, winner, error, create, join, queueAction, reset };
+  return { status, role, code, view, winner, error, create, join, findMatch, queueAction, reset };
 }
 
 /** Exchange root-anchored settlement halves over the relay, then seat A submits the close via the
