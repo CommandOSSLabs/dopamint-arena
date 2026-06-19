@@ -4,6 +4,7 @@
 import "./blackjack";
 import "./quantumPoker";
 import "./ticTacToe";
+import "./battleship";
 import "./chat";
 import "./regularPayments";
 import "./coinFlip";
