@@ -249,7 +249,15 @@ function estimateStrengthProfile(
   const own = ownStreetBet(state, party);
   const other = ownStreetBet(state, otherParty(party));
   const callAmount = other > own ? other - own : 0n;
-  const available = ownBalance(state, party) - ownTotalBet(state, party);
+  // Cap by the EFFECTIVE stack (min of both balances), mirroring the protocol's `availableFor`:
+  // in heads-up the larger stack can only wager up to the shorter one, so sizing off our own
+  // balance would propose a bet the protocol rejects ("bet exceeds the effective stack").
+  const effectiveStack =
+    ownBalance(state, party) < ownBalance(state, otherParty(party))
+      ? ownBalance(state, party)
+      : ownBalance(state, otherParty(party));
+  const availableRaw = effectiveStack - ownTotalBet(state, party);
+  const available = availableRaw > 0n ? availableRaw : 0n;
   const pot = state.totalBetA + state.totalBetB;
   const safeHoles = holes ?? [];
   const preflop = state.board.length < 3;
