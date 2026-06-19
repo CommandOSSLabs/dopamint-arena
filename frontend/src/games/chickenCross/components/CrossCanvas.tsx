@@ -29,6 +29,7 @@ export function CrossCanvas({ view, role, winner, onDir }: CrossCanvasProps) {
   const prevViewRef = useRef<CrossView | null>(null);
   const feederRef = useRef<FeederState>(initialFeeder());
   const prevWinnerRef = useRef<"A" | "B" | null>(null);
+  const emitRef = useRef<((d: CrossDirection) => void) | null>(null);
   const onDirRef = useRef(onDir);
   onDirRef.current = onDir;
 
@@ -50,7 +51,7 @@ export function CrossCanvas({ view, role, winner, onDir }: CrossCanvasProps) {
       onDirRef.current(world as CrossDir);
     };
     const unbindInput = bindCrossInput(canvas, emit);
-    (canvas as HTMLCanvasElement & { __emit?: typeof emit }).__emit = emit; // used by D-pad buttons
+    emitRef.current = emit;
 
     const ro = new ResizeObserver((entries) => {
       const box = entries[0].contentRect;
@@ -75,6 +76,7 @@ export function CrossCanvas({ view, role, winner, onDir }: CrossCanvasProps) {
       scene.dispose();
       sceneRef.current = null;
       soundsRef.current = null;
+      emitRef.current = null;
       prevViewRef.current = null;
       feederRef.current = initialFeeder();
       prevWinnerRef.current = null;
@@ -108,9 +110,8 @@ export function CrossCanvas({ view, role, winner, onDir }: CrossCanvasProps) {
   }, [winner]);
 
   const press = (dir: CrossDirection) => {
-    const canvas = canvasRef.current as (HTMLCanvasElement & { __emit?: (d: CrossDirection) => void }) | null;
     soundsRef.current?.play("click");
-    canvas?.__emit?.(dir);
+    emitRef.current?.(dir);
   };
 
   return (
