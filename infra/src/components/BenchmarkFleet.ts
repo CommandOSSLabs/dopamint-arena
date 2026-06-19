@@ -135,6 +135,10 @@ phases:
     iamInstanceProfile: { arn: args.benchmarkInstanceProfileArn },
     userData: pulumi.interpolate`#!/bin/bash
 set -euo pipefail
+# Ensure SSM agent is present and running so the fleet can be managed remotely.
+dnf install -y amazon-ssm-agent || yum install -y amazon-ssm-agent || true
+systemctl enable amazon-ssm-agent || true
+systemctl restart amazon-ssm-agent || true
 cd /opt/dopamint/repo/sui-tunnel-ts || true
 `.apply((data) => Buffer.from(data).toString("base64")),
     metadataOptions: {
