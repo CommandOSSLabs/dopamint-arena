@@ -5,5 +5,6 @@ register({
   id: "chicken-cross",
   name: "Chicken Cross",
   icon: "🐔",
+  image: "/games/chicken-cross.png",
   Window: ChickenCrossWindow,
 });
