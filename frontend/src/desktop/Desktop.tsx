@@ -71,7 +71,7 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { flyFromDock, flyToDock } from "@/lib/dockFlight";
-import { useLiveTelemetry } from "@/lib/useLiveTelemetry";
+import { useTelemetry } from "@/telemetry/TelemetryProvider";
 import { useLocalStorageState } from "@/lib/useLocalStorageState";
 import { useMediaQuery } from "@/lib/useMediaQuery";
 import { WalletButton } from "@/wallet/WalletButton";
@@ -508,7 +508,7 @@ export function Desktop() {
     "dopamint.desktop.dockSide.v1",
     "bottom",
   );
-  const snapshot = useLiveTelemetry();
+  const { snapshot } = useTelemetry();
   const isDesktop = useMediaQuery("(min-width: 1024px)");
   // Dock collapse — a no-drag alternative to the resize handle.
   const bottomRef = useRef<PanelImperativeHandle>(null);

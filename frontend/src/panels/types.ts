@@ -12,6 +12,8 @@ export interface TxnRow {
    */
   digest?: string;
   address?: string;
+  /** Walrus transcript URL, present once a settlement is archived (see the /settle plan). */
+  proofUrl?: string;
   time: string;
   bot: string;
   type: string;

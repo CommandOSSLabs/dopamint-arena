@@ -12,9 +12,9 @@ import type { TelemetrySnapshot } from "./types";
 const BARS = 36; // one bar per second → ~36s of history across the chart
 
 const clamp01 = (n: number) => Math.max(0, Math.min(1, n));
-// Map the live updates/sec band (~16k–30k) into the chart's 0..1 bar height.
-// No floor — bars can sit at 0 when there's no throughput.
-const normalize = (tps: number) => clamp01((tps - 16000) / 14000);
+// Log scale: ~1 tps → near 0, ~1e6 tps → near 1. Works across the whole live range
+// (in-browser single digits today → fleet millions at the peak), unlike a fixed linear band.
+const normalize = (tps: number) => clamp01(Math.log10(Math.max(1, tps)) / 6);
 
 /** Reads the bar color off the canvas's cascade so the chart re-themes. */
 function barColor(el: HTMLElement) {

@@ -46,6 +46,8 @@ pub struct StatsSnapshot {
     pub active_tunnels: u64,
     pub settled_tunnels: u64,
     pub per_game: HashMap<String, GameStat>,
+    /// Newest-first ring of recent lifecycle rows (bounded; see store::RECENT_EVENTS_CAP).
+    pub recent_events: Vec<TunnelEvent>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -54,4 +56,59 @@ pub struct GameStat {
     pub tunnels: u64,
     /// Cumulative actions attributed to this game (basis for `tps`'s per-tick delta).
     pub total_actions: u64,
+}
+
+/// One displayable tunnel lifecycle row for the global Transaction Log — a settlement
+/// projection (ADR-0005), sourced from the chain events the indexer already folds. The
+/// durable record stays on-chain + Walrus; this is an ephemeral display projection.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TunnelEvent {
+    pub tunnel_id: String,
+    pub kind: TunnelEventKind,
+    /// Payout balances — present on `settled` rows.
+    pub party_a_balance: Option<u64>,
+    pub party_b_balance: Option<u64>,
+    /// 32-byte transcript root, hex — present only on a with-root cooperative close.
+    pub transcript_root: Option<String>,
+    /// The lifecycle tx digest — the block-explorer link.
+    pub tx_digest: String,
+    pub timestamp_ms: u64,
+    /// Walrus transcript URL — present only on a backend-settled row (the `/settle` handler
+    /// supplies it; indexer-sourced rows are explorer-only). Set in Task 7; see spec §6.
+    pub proof_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TunnelEventKind {
+    Opened,
+    Settled,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The wire JSON must be camelCase to match the SDK/frontend (ADR-0002): a settled
+    // event carries payout + root + digest; the kind is a lowercase tag.
+    #[test]
+    fn tunnel_event_serializes_camelcase() {
+        let ev = TunnelEvent {
+            tunnel_id: "0xabc".into(),
+            kind: TunnelEventKind::Settled,
+            party_a_balance: Some(1500),
+            party_b_balance: Some(500),
+            transcript_root: Some("deadbeef".into()),
+            tx_digest: "DiGeStXyZ".into(),
+            timestamp_ms: 1_750_000_000_000,
+            proof_url: Some("https://agg/v1/blobs/abc".into()),
+        };
+        let j = serde_json::to_value(&ev).unwrap();
+        assert_eq!(j["tunnelId"], "0xabc");
+        assert_eq!(j["kind"], "settled");
+        assert_eq!(j["partyABalance"], 1500);
+        assert_eq!(j["txDigest"], "DiGeStXyZ");
+        assert_eq!(j["proofUrl"], "https://agg/v1/blobs/abc");
+    }
 }

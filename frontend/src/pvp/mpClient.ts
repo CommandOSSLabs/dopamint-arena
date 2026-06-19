@@ -30,6 +30,7 @@ export type PeerMessage =
       partyBBalance: string;
       finalNonce: string;
       timestamp: string;
+      transcriptRoot: string;
       sig: string;
     }
   | { t: "frame"; data: string };
@@ -56,7 +57,17 @@ export class MpClient {
   readonly #wallet: string;
   readonly #ephemeral: KeyPair;
   readonly #sign: (msg: Uint8Array) => Uint8Array;
-  #onRelay: ((payload: string) => void) | null = null;
+  #connected = false;
+
+  // Multiplexing (spec decision #6): route inbound relay frames by matchId, and hand each
+  // match.found to the next waiting quickMatch (FIFO). This lets ONE socket run MANY concurrent
+  // tunnels — the single-match path is just the degenerate case (one handler, one waiter).
+  readonly #relayHandlers = new Map<string, (payload: string) => void>();
+  #matchQueue: MatchInfo[] = [];
+  #matchWaiters: {
+    resolve: (m: MatchInfo) => void;
+    reject: (e: Error) => void;
+  }[] = [];
 
   constructor(url: string, wallet: string, ephemeral: KeyPair) {
     this.#url = url;
@@ -83,58 +94,64 @@ export class MpClient {
               nonce: m.nonce,
             }),
           );
+          this.#connected = true;
           resolve();
-        } else if (m.type === "error") {
-          reject(new Error(`mp ${m.code}: ${m.message}`));
+        } else if (m.type === "match.found") {
+          this.#deliverMatch({
+            matchId: m.matchId as string,
+            role: m.role as Role,
+            opponentWallet: m.opponentWallet as string,
+            game: m.game as string,
+          });
         } else if (m.type === "relay") {
-          this.#onRelay?.(m.payload);
-        } else {
-          this.#dispatch(m);
+          this.#relayHandlers.get(m.matchId as string)?.(m.payload as string);
+        } else if (m.type === "queue.timeout") {
+          this.#failNextMatch(new Error("queue.timeout"));
+        } else if (m.type === "error") {
+          if (!this.#connected) reject(new Error(`mp ${m.code}: ${m.message}`));
+          else this.#failNextMatch(new Error(`mp ${m.code}: ${m.message}`));
         }
       };
-      ws.onerror = () => reject(new Error("mp websocket error"));
+      ws.onerror = () => {
+        if (!this.#connected) reject(new Error("mp websocket error"));
+      };
       ws.onclose = () => {
         this.#ws = null;
       };
     });
   }
 
-  #serverHandlers = new Map<string, (m: Record<string, unknown>) => void>();
-  #dispatch(m: Record<string, unknown>) {
-    const h = this.#serverHandlers.get(m.type as string);
-    if (h) h(m);
+  #deliverMatch(m: MatchInfo) {
+    const w = this.#matchWaiters.shift();
+    if (w) w.resolve(m);
+    else this.#matchQueue.push(m); // arrived before a waiter; next quickMatch claims it
   }
-  #once(type: string): Promise<Record<string, unknown>> {
-    return new Promise((resolve) => {
-      this.#serverHandlers.set(type, (m) => {
-        this.#serverHandlers.delete(type);
-        resolve(m);
-      });
-    });
+  #failNextMatch(e: Error) {
+    this.#matchWaiters.shift()?.reject(e);
   }
 
-  /** Join a per-game quick-match queue and resolve when paired. */
-  async quickMatch(game: string): Promise<MatchInfo> {
+  /** Join a per-game queue; resolves when paired. Safe to call CONCURRENTLY (FIFO-matched) —
+   *  this is what lets one agent run many tunnels over one socket. */
+  quickMatch(game: string): Promise<MatchInfo> {
     this.#send({ type: "queue.join", game });
-    const m = await this.#once("match.found");
-    return {
-      matchId: m.matchId as string,
-      role: m.role as Role,
-      opponentWallet: m.opponentWallet as string,
-      game: m.game as string,
-    };
+    const buffered = this.#matchQueue.shift();
+    if (buffered) return Promise.resolve(buffered);
+    return new Promise((resolve, reject) =>
+      this.#matchWaiters.push({ resolve, reject }),
+    );
   }
 
-  /** Build the engine transport + peer side-channel for a paired match. */
+  /** Build the engine transport + peer side-channel for a paired match; inbound frames route
+   *  by matchId so concurrent matches never clobber each other. */
   channel(matchId: string): PvpChannel {
     let engineOnFrame: ((bytes: Uint8Array) => void) | null = null;
     let peerCb: ((msg: Exclude<PeerMessage, { t: "frame" }>) => void) | null =
       null;
-    this.#onRelay = (payload) => {
+    this.#relayHandlers.set(matchId, (payload) => {
       const o = JSON.parse(payload) as PeerMessage;
       if (o.t === "frame") engineOnFrame?.(te.encode(o.data));
       else peerCb?.(o);
-    };
+    });
     const relaySend = (obj: PeerMessage) =>
       this.#send({ type: "relay", matchId, payload: JSON.stringify(obj) });
     return {
@@ -150,6 +167,11 @@ export class MpClient {
         peerCb = cb;
       },
     };
+  }
+
+  /** Stop routing frames for a finished match (free its handler). */
+  releaseMatch(matchId: string) {
+    this.#relayHandlers.delete(matchId);
   }
 
   /** Announce the opened on-chain tunnel id to the backend registry (watchtower). */

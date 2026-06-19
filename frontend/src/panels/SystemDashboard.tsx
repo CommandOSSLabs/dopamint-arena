@@ -25,6 +25,16 @@ function LiveBadge() {
   );
 }
 
+/** Muted indicator shown while the SSE feed is connecting, before the first frame arrives. */
+function ConnectingBadge() {
+  return (
+    <span className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+      <span className="size-1.5 animate-pulse rounded-full bg-muted-foreground" />
+      Connecting
+    </span>
+  );
+}
+
 /** One labelled mono metric, optionally with a mini-visual beneath it. */
 function Stat({
   label,
@@ -49,12 +59,11 @@ function Stat({
 }
 
 /**
- * Key telemetry stats. When the backend SSE feed (GET /v1/stats/live) is
- * configured and live, this surfaces the real global aggregates summed across
- * every client; otherwise it shows this client's local demo telemetry as a
- * radial success gauge + segmented bots bar (patterns from nullframe's
- * Render/Battery cards). The backend is unconfigured in the demo, so the feed
- * is null and the radial/segbar view is what renders.
+ * Key telemetry stats sourced from the backend SSE feed (GET /v1/stats/live): the real global
+ * aggregates summed across every client. While the feed is connecting the values render dashed
+ * (no fake data); only a genuinely-offline backend falls back to this client's local demo
+ * telemetry as a radial success gauge + segmented bots bar (patterns from nullframe's
+ * Render/Battery cards).
  */
 export function SystemDashboard({
   snapshot,
@@ -63,33 +72,23 @@ export function SystemDashboard({
   snapshot: TelemetrySnapshot;
   className?: string;
 }) {
-  const backend = useBackendStats();
+  const { snapshot: backend, status } = useBackendStats();
 
-  if (backend) {
+  if (status !== "offline") {
+    const fmt = (n: number | undefined) =>
+      backend && n !== undefined ? Math.round(n).toLocaleString("en-US") : "—";
     const items = [
-      {
-        label: "Network TPS",
-        value: Math.round(backend.tps).toLocaleString("en-US"),
-      },
-      {
-        label: "Total Actions",
-        value: backend.totalActions.toLocaleString("en-US"),
-      },
-      {
-        label: "Active Tunnels",
-        value: backend.activeTunnels.toLocaleString("en-US"),
-      },
-      {
-        label: "Settled Tunnels",
-        value: backend.settledTunnels.toLocaleString("en-US"),
-      },
+      { label: "Network TPS", value: fmt(backend?.tps) },
+      { label: "Total Actions", value: fmt(backend?.totalActions) },
+      { label: "Active Tunnels", value: fmt(backend?.activeTunnels) },
+      { label: "Settled Tunnels", value: fmt(backend?.settledTunnels) },
     ];
     return (
       <Panel className={className}>
         <PanelHeader>
-          <PanelTitle>Network (live)</PanelTitle>
+          <PanelTitle>Network{status === "live" ? " (live)" : ""}</PanelTitle>
           <PanelAction>
-            <LiveBadge />
+            {status === "live" ? <LiveBadge /> : <ConnectingBadge />}
           </PanelAction>
         </PanelHeader>
         <PanelContent className="grid grid-cols-2 gap-3 p-3">

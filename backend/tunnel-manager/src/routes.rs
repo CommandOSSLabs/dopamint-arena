@@ -178,16 +178,17 @@ pub(crate) async fn heartbeat(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Validate the settlement and submit `close_cooperative_with_root` on-chain.
+/// Submit `close_cooperative_with_root` for a tunnel. Authorization is the co-signed settlement
+/// itself — the chain re-verifies both seat signatures — so there is NO session/bearer gate
+/// (ADR-0007). The settler dry-runs the close before sponsoring gas, so a bad settlement is
+/// rejected (422) at no cost.
 pub(crate) async fn settle(
     State(state): State<SharedState>,
-    Path(session_id): Path<String>,
-    headers: HeaderMap,
+    Path(tunnel_id): Path<String>,
     Json(req): Json<SettleRequest>,
 ) -> Response {
     tracing::info!(
-        %session_id,
-        tunnel = %req.settlement.tunnel_id,
+        %tunnel_id,
         final_nonce = %req.settlement.final_nonce,
         balance_a = %req.settlement.party_a_balance,
         balance_b = %req.settlement.party_b_balance,
@@ -195,37 +196,19 @@ pub(crate) async fn settle(
         "settle requested"
     );
 
-    let Some(rec) = state.control.get_session(&session_id).await else {
-        return ApiError::resp(StatusCode::NOT_FOUND, "unknown_session", "no such session")
-            .into_response();
-    };
-    if !rec
-        .tunnels
-        .iter()
-        .any(|t| t.tunnel_id == req.settlement.tunnel_id)
-    {
+    // The signed settlement commits to its own tunnelId; a path/body mismatch is a client bug
+    // or a misroute, never a thing to sponsor gas for.
+    if req.settlement.tunnel_id != tunnel_id {
         return ApiError::resp(
-            StatusCode::NOT_FOUND,
-            "unknown_tunnel",
-            "tunnel not registered in session",
-        )
-        .into_response();
-    }
-    if !bearer_matches(&headers, &rec.stats_token) {
-        return ApiError::resp(
-            StatusCode::UNAUTHORIZED,
-            "unauthorized",
-            "missing or invalid bearer token",
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "tunnel_mismatch",
+            "settlement tunnelId does not match the path",
         )
         .into_response();
     }
 
-    // 409 if the event-derived registry already shows this tunnel closed.
-    if state
-        .control
-        .get_tunnel_status(&req.settlement.tunnel_id)
-        .await
-        == Some(crate::state::TunnelStatus::Closed)
+    // 409 if the event-derived registry already shows this tunnel closed (free reject, no RPC).
+    if state.control.get_tunnel_status(&tunnel_id).await == Some(crate::state::TunnelStatus::Closed)
     {
         return ApiError::resp(
             StatusCode::CONFLICT,
@@ -261,7 +244,7 @@ pub(crate) async fn settle(
     };
 
     let close = crate::sui::CloseArgs {
-        tunnel_id: req.settlement.tunnel_id.clone(),
+        tunnel_id: tunnel_id.clone(),
         party_a_balance: a,
         party_b_balance: b,
         sig_a,
@@ -279,6 +262,18 @@ pub(crate) async fn settle(
                     (String::new(), String::new())
                 }
             };
+            state
+                .control
+                .push_recent_event(settled_event(
+                    &tunnel_id,
+                    a,
+                    b,
+                    &req.settlement.transcript_root,
+                    &digest,
+                    ts,
+                    &proof_url,
+                ))
+                .await;
             Json(serde_json::json!({ "txDigest": digest, "walrusBlobId": blob_id, "proofUrl": proof_url }))
                 .into_response()
         }
@@ -288,6 +283,32 @@ pub(crate) async fn settle(
             &e.to_string(),
         )
         .into_response(),
+    }
+}
+
+/// Build the settled Transaction-Log row for a successful close. The settle handler owns the
+/// full proof (close digest + Walrus URL), so it pushes the enriched row directly; the
+/// indexer's later explorer-only row for the same `tx_digest` is deduped. Empty strings
+/// (Walrus archival failed) degrade to `None`, never a broken link.
+fn settled_event(
+    tunnel_id: &str,
+    party_a_balance: u64,
+    party_b_balance: u64,
+    transcript_root_hex: &str,
+    tx_digest: &str,
+    timestamp_ms: u64,
+    proof_url: &str,
+) -> crate::state::TunnelEvent {
+    let non_empty = |s: &str| (!s.is_empty()).then(|| s.to_string());
+    crate::state::TunnelEvent {
+        tunnel_id: tunnel_id.to_string(),
+        kind: crate::state::TunnelEventKind::Settled,
+        party_a_balance: Some(party_a_balance),
+        party_b_balance: Some(party_b_balance),
+        transcript_root: non_empty(transcript_root_hex),
+        tx_digest: tx_digest.to_string(),
+        timestamp_ms,
+        proof_url: non_empty(proof_url),
     }
 }
 
@@ -407,6 +428,70 @@ mod tests {
             "Bearer tok".parse().unwrap(),
         );
         assert!(bearer_matches(&h, "tok"), "exact token must pass");
+    }
+
+    // A successful settle becomes a `settled` row carrying payout + transcript root + the Walrus
+    // proof URL — what makes a global-log row clickable to its proof (spec §6).
+    #[test]
+    fn settled_event_carries_proof_and_payout() {
+        let ev = settled_event("0xT", 1500, 500, "deadbeef", "DiG", 1_750_000_000_000, "https://agg/v1/blobs/abc");
+        assert_eq!(ev.kind, crate::state::TunnelEventKind::Settled);
+        assert_eq!(ev.party_a_balance, Some(1500));
+        assert_eq!(ev.transcript_root.as_deref(), Some("deadbeef"));
+        assert_eq!(ev.tx_digest, "DiG");
+        assert_eq!(ev.proof_url.as_deref(), Some("https://agg/v1/blobs/abc"));
+    }
+
+    // Walrus archival failure (empty url/root) must degrade to an explorer-only row, never a
+    // broken link or anchor.
+    #[test]
+    fn settled_event_omits_proof_on_walrus_failure() {
+        let ev = settled_event("0xT", 1, 1, "", "DiG", 1, "");
+        assert!(ev.proof_url.is_none(), "empty url → no link");
+        assert!(ev.transcript_root.is_none(), "empty root → no anchor");
+    }
+
+    // The exact camelCase settle JSON the SDK emits (tunnelId "0x1"), reused by the guard tests.
+    const SAMPLE_SETTLE_JSON: &str = r#"{
+        "settlement": {
+            "tunnelId": "0x1", "partyABalance": "1500", "partyBBalance": "500",
+            "finalNonce": "1", "timestamp": "1750000000000", "transcriptRoot": "0xabc"
+        },
+        "sigA": "0xaa", "sigB": "0xbb", "transcript": []
+    }"#;
+
+    // ADR-0007: the signed settlement commits to its tunnelId, so a path/body mismatch is a
+    // client bug or a misroute — reject before any RPC, never sponsor gas for it.
+    #[tokio::test]
+    async fn settle_rejects_path_tunnel_mismatch() {
+        let state = test_state();
+        let req: SettleRequest = serde_json::from_str(SAMPLE_SETTLE_JSON).unwrap();
+        let resp = settle(
+            axum::extract::State(state),
+            axum::extract::Path("0xDIFFERENT".to_string()),
+            axum::Json(req),
+        )
+        .await;
+        assert_eq!(resp.status(), axum::http::StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    // 409 when the event-derived registry already shows this tunnel closed — a free reject that
+    // never reaches the settler (idempotency; ADR-0007 keeps this guard).
+    #[tokio::test]
+    async fn settle_conflicts_when_already_closed() {
+        let state = test_state();
+        state
+            .control
+            .set_tunnel_status("0x1", crate::state::TunnelStatus::Closed)
+            .await;
+        let req: SettleRequest = serde_json::from_str(SAMPLE_SETTLE_JSON).unwrap();
+        let resp = settle(
+            axum::extract::State(state),
+            axum::extract::Path("0x1".to_string()),
+            axum::Json(req),
+        )
+        .await;
+        assert_eq!(resp.status(), axum::http::StatusCode::CONFLICT);
     }
 
     // /health/ready reflects ControlStore::ready(); in-memory is always ready.

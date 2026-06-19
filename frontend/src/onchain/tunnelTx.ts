@@ -16,9 +16,10 @@ import {
 import {
   buildDepositFromGas as sdkDepositFromGas,
   buildCloseFromSettlement as sdkCloseFromSettlement,
+  buildCloseWithRootFromSettlement as sdkCloseWithRootFromSettlement,
 } from "sui-tunnel-ts/onchain/txbuilders";
 import { SignatureScheme } from "sui-tunnel-ts/core/crypto";
-import type { CoSignedSettlement } from "sui-tunnel-ts/core/tunnel";
+import type { CoSignedSettlement, CoSignedSettlementWithRoot } from "sui-tunnel-ts/core/tunnel";
 
 // The SDK tx builders are the single source of truth for the Move ABI. The SDK pins an older
 // @mysten/sui, but vite `dedupe` makes these run against THIS app's Transaction at runtime; the
@@ -36,6 +37,11 @@ const buildCloseFromSettlement = sdkCloseFromSettlement as unknown as (
   tx: Transaction,
   tunnelId: string,
   settlement: Parameters<typeof sdkCloseFromSettlement>[2],
+) => void;
+const buildCloseWithRootFromSettlement = sdkCloseWithRootFromSettlement as unknown as (
+  tx: Transaction,
+  tunnelId: string,
+  settlement: Parameters<typeof sdkCloseWithRootFromSettlement>[2],
 ) => void;
 const buildOpenAndFundMany = sdkOpenAndFundMany as unknown as (
   tx: Transaction,
@@ -178,6 +184,20 @@ export async function closeCooperative(opts: {
 }): Promise<string> {
   const tx = new Transaction();
   buildCloseFromSettlement(tx, opts.tunnelId, opts.settlement);
+  const { digest } = await opts.signExec(tx);
+  return digest;
+}
+
+/** Root-anchored cooperative close from a dual-signed CoSignedSettlementWithRoot. Anchors the
+ *  transcript root on-chain (close_cooperative_with_root). Used as the wallet-submitted fallback
+ *  when the backend /settle route is unavailable. */
+export async function closeCooperativeWithRoot(opts: {
+  signExec: SignExec;
+  tunnelId: string;
+  settlement: CoSignedSettlementWithRoot;
+}): Promise<string> {
+  const tx = new Transaction();
+  buildCloseWithRootFromSettlement(tx, opts.tunnelId, opts.settlement);
   const { digest } = await opts.signExec(tx);
   return digest;
 }

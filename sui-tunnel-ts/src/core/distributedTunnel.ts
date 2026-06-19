@@ -14,11 +14,13 @@
 import { bytesEqual } from "./bytes";
 import { blake2b256 } from "./crypto";
 import { Balances, Party, Protocol } from "../protocol/Protocol";
-import { CoSignedSettlement, CoSignedUpdate, PartyEndpoint } from "./tunnel";
+import { CoSignedSettlement, CoSignedSettlementWithRoot, CoSignedUpdate, PartyEndpoint } from "./tunnel";
 import {
   serializeSettlement,
+  serializeSettlementWithRoot,
   serializeStateUpdate,
   Settlement,
+  SettlementWithRoot,
   StateUpdate,
 } from "./wire";
 import {
@@ -253,6 +255,50 @@ export class DistributedTunnel<State, Move> {
     sigOther: Uint8Array,
   ): CoSignedSettlement {
     const msg = serializeSettlement(settlement);
+    if (!this.opponent.verify(msg, sigOther)) {
+      throw new Error("opponent settlement signature failed verification");
+    }
+    return this.selfIsA()
+      ? { settlement, sigA: sigSelf, sigB: sigOther }
+      : { settlement, sigA: sigOther, sigB: sigSelf };
+  }
+
+  /**
+   * Sign THIS seat's half of a root-anchored cooperative settlement for the current state.
+   * `finalNonce = onchainNonce + 1`; bytes are byte-identical to
+   * `OffchainTunnel.buildSettlementWithRoot`. Both seats MUST pass the SAME `transcriptRoot`
+   * (each derives it from its own transcript and they agree out-of-band), or the combined
+   * signatures verify off-chain but fail at close_cooperative_with_root.
+   */
+  buildSettlementHalfWithRoot(
+    timestamp: bigint,
+    transcriptRoot: Uint8Array,
+    onchainNonce: bigint = 0n,
+  ): { settlement: SettlementWithRoot; sigSelf: Uint8Array } {
+    if (transcriptRoot.length !== 32) {
+      throw new Error("transcriptRoot must be 32 bytes");
+    }
+    const { a, b } = this.protocol.balances(this._state);
+    const settlement: SettlementWithRoot = {
+      tunnelId: this.tunnelId,
+      partyABalance: a,
+      partyBBalance: b,
+      finalNonce: onchainNonce + 1n,
+      timestamp,
+      transcriptRoot,
+    };
+    const sigSelf = this.self.sign!(serializeSettlementWithRoot(settlement));
+    return { settlement, sigSelf };
+  }
+
+  /** Combine our root-anchored half with the opponent's into a dual-signed settlement,
+   *  verifying theirs over the with-root bytes. */
+  combineSettlementWithRoot(
+    settlement: SettlementWithRoot,
+    sigSelf: Uint8Array,
+    sigOther: Uint8Array,
+  ): CoSignedSettlementWithRoot {
+    const msg = serializeSettlementWithRoot(settlement);
     if (!this.opponent.verify(msg, sigOther)) {
       throw new Error("opponent settlement signature failed verification");
     }
