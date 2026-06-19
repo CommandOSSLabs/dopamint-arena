@@ -18,7 +18,7 @@ Spec: `docs/superpowers/specs/2026-06-19-bomb-it-pvp-design.md`.
 - **Protocol invariants:** `applyMove` pure (no input mutation) + throws on a terminal state; `balances(s).a + .b === total` for EVERY reachable state; `encodeState` canonical (same state → byte-identical) with all multi-byte ints 8-byte big-endian via `u64ToBeBytes`; state a pure function of `(seed-from-tunnelId, ordered moves)`.
 - **Import discipline (tsx ignores the Vite alias at runtime):** `session-core.ts` → `import type … from "sui-tunnel-ts/…"` (type-only, React-free); `*.test.ts` runtime SDK imports → relative `.ts` paths; hooks/components/window (Vite-bundled) → bare specifier `from "sui-tunnel-ts/…"`.
 - **Commits:** Conventional Commits, subject ≤ 50 chars, imperative, lowercase after type, no trailing period, **no AI attribution**. One logical change per commit.
-- **Constants (verbatim):** `GRID_W=9 GRID_H=9 CELL_COUNT=81`; `CELL_FLOOR=0 CELL_WALL=1 CELL_CRATE=2`; `FUSE_TICKS=8 BLAST_RADIUS=2 MAX_BOMBS_PER_PLAYER=1 CRATE_DENSITY=0.75 TICK_CAP=400n MIN_STAKE=100n`; `SPAWN_A={row:1,col:1} SPAWN_B={row:7,col:7}`; hook `STAKE=500n STEP_MS=250`.
+- **Constants (verbatim):** `GRID_W=9 GRID_H=9 CELL_COUNT=81`; `CELL_FLOOR=0 CELL_WALL=1 CELL_CRATE=2`; `FUSE_TICKS=8 BLAST_RADIUS=2 MAX_BOMBS_PER_PLAYER=1 CRATE_DENSITY=0.75 BOMB_IT_TICK_CAP=400n BOMB_IT_MIN_STAKE=100n`; `SPAWN_A={row:1,col:1} SPAWN_B={row:7,col:7}`; hook `STAKE=500n STEP_MS=250`.
 
 ---
 
@@ -49,7 +49,7 @@ Spec: `docs/superpowers/specs/2026-06-19-bomb-it-pvp-design.md`.
 
 **Interfaces:**
 - Consumes: `protocolDomain`, `Party`, `Balances`, `ProtocolContext` from `./Protocol`; `concatBytes` from `../core/bytes`; `u64ToBeBytes` from `../core/wire`.
-- Produces: constants (`GRID_W`, `GRID_H`, `CELL_COUNT`, `CELL_FLOOR`, `CELL_WALL`, `CELL_CRATE`, `FUSE_TICKS`, `BLAST_RADIUS`, `MAX_BOMBS_PER_PLAYER`, `CRATE_DENSITY`, `TICK_CAP`, `MIN_STAKE`, `SPAWN_A`, `SPAWN_B`); types (`BombItAction`, `BombItPlayer`, `BombItBomb`, `BombItState`, `BombItMove`); functions `idx(row,col)`, `isBorder(row,col)`, `isPillar(row,col)`, `inSpawnSafe(row,col)`, `buildGrid(seed: bigint): Uint8Array`.
+- Produces: constants (`GRID_W`, `GRID_H`, `CELL_COUNT`, `CELL_FLOOR`, `CELL_WALL`, `CELL_CRATE`, `FUSE_TICKS`, `BLAST_RADIUS`, `MAX_BOMBS_PER_PLAYER`, `CRATE_DENSITY`, `BOMB_IT_TICK_CAP`, `BOMB_IT_MIN_STAKE`, `SPAWN_A`, `SPAWN_B`); types (`BombItAction`, `BombItPlayer`, `BombItBomb`, `BombItState`, `BombItMove`); functions `idx(row,col)`, `isBorder(row,col)`, `isPillar(row,col)`, `inSpawnSafe(row,col)`, `buildGrid(seed: bigint): Uint8Array`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -154,9 +154,9 @@ export const FUSE_TICKS = 8;
 export const BLAST_RADIUS = 2;
 export const MAX_BOMBS_PER_PLAYER = 1;
 export const CRATE_DENSITY = 0.75;
-export const TICK_CAP = 400n;
+export const BOMB_IT_TICK_CAP = 400n;
 /** Minimum fundable stake per seat (hook clamps to this). */
-export const MIN_STAKE = 100n;
+export const BOMB_IT_MIN_STAKE = 100n;
 
 export const SPAWN_A = { row: 1, col: 1 };
 export const SPAWN_B = { row: 7, col: 7 };
@@ -349,17 +349,31 @@ test("blastCellsFor: + cross, stops at walls, includes-and-stops at first crate"
   assert.ok(!cells.includes(idx(0, 3))); // ...but stops propagation past it
 });
 
-test("resolveExplosions detonates fuse<=0, destroys crates, chains adjacent bombs", () => {
-  const g = new Uint8Array(GRID_W * GRID_H);
-  g[idx(3, 4)] = CELL_CRATE;
+test("resolveExplosions detonates fuse<=0, destroys crates, chains bombs in a clear line", () => {
+  const g = new Uint8Array(GRID_W * GRID_H); // all floor
+  g[idx(1, 3)] = CELL_CRATE; // crate in A's NORTH arm (distance 2), NOT between the bombs
   const bombs: BombItBomb[] = [
     { row: 3, col: 3, fuse: 0, owner: "A" }, // detonates now
-    { row: 3, col: 5, fuse: FUSE_TICKS, owner: "B" }, // within radius 2 -> chains
+    { row: 3, col: 5, fuse: FUSE_TICKS, owner: "B" }, // 2 east on a clear line -> chains
   ];
   const { cells, remaining } = resolveExplosions(g, bombs);
-  assert.equal(remaining.length, 0); // both gone (chain)
+  assert.equal(remaining.length, 0); // both gone (B chained via the clear east arm)
+  assert.equal(g[idx(1, 3)], CELL_FLOOR); // crate destroyed (north arm)
+  assert.ok(cells.has(idx(3, 5))); // B's bomb cell is in A's blast
+});
+
+test("a crate shields a bomb behind it: blast stops at the crate, no chain", () => {
+  const g = new Uint8Array(GRID_W * GRID_H);
+  g[idx(3, 4)] = CELL_CRATE; // between A(3,3) and B(3,5)
+  const bombs: BombItBomb[] = [
+    { row: 3, col: 3, fuse: 0, owner: "A" },
+    { row: 3, col: 5, fuse: FUSE_TICKS, owner: "B" }, // shielded behind the crate
+  ];
+  const { cells, remaining } = resolveExplosions(g, bombs);
   assert.equal(g[idx(3, 4)], CELL_FLOOR); // crate destroyed
-  assert.ok(cells.has(idx(3, 5))); // B's bomb cell was in A's blast
+  assert.ok(!cells.has(idx(3, 5))); // blast stopped at the crate
+  assert.equal(remaining.length, 1); // B survives
+  assert.equal(remaining[0].owner, "B");
 });
 
 test("resolveExplosions leaves un-fused bombs untouched", () => {
@@ -488,17 +502,17 @@ git commit -m "feat(sdk): bomb-it movement + blast helpers"
 Append to `sui-tunnel-ts/src/protocol/bombIt.test.ts`:
 
 ```ts
-import { BombItProtocol, TICK_CAP } from "./bombIt.ts";
+import { BombItProtocol, BOMB_IT_TICK_CAP } from "./bombIt.ts";
 
-const CTX = { tunnelId: "0xabc123", initialBalances: { a: MIN_STAKE, b: MIN_STAKE } };
-// MIN_STAKE is imported in the next line if not already:
-import { MIN_STAKE } from "./bombIt.ts";
+const CTX = { tunnelId: "0xabc123", initialBalances: { a: BOMB_IT_MIN_STAKE, b: BOMB_IT_MIN_STAKE } };
+// BOMB_IT_MIN_STAKE is imported in the next line if not already:
+import { BOMB_IT_MIN_STAKE } from "./bombIt.ts";
 
 test("initialState locks the total, spawns two living players, no bombs/winner", () => {
   const p = new BombItProtocol();
   const s = p.initialState(CTX);
   assert.equal(s.tick, 0n);
-  assert.equal(s.total, MIN_STAKE * 2n);
+  assert.equal(s.total, BOMB_IT_MIN_STAKE * 2n);
   assert.equal(s.balanceA + s.balanceB, s.total);
   assert.equal(s.players[0].alive, true);
   assert.equal(s.players[1].alive, true);
@@ -526,14 +540,14 @@ test("encodeState differs when a player position differs", () => {
 test("balances return the stored split; isTerminal tracks winner", () => {
   const p = new BombItProtocol();
   const s = p.initialState(CTX);
-  assert.deepEqual(p.balances(s), { a: MIN_STAKE, b: MIN_STAKE });
+  assert.deepEqual(p.balances(s), { a: BOMB_IT_MIN_STAKE, b: BOMB_IT_MIN_STAKE });
   assert.equal(p.isTerminal(s), false);
   assert.equal(p.isTerminal({ ...s, winner: "A" }), true);
   assert.equal(p.isTerminal({ ...s, winner: "draw" }), true);
 });
 ```
 
-> If your runner rejects duplicate `import { MIN_STAKE }`, merge it into the Task 1 import block instead — `MIN_STAKE` must be imported exactly once.
+> If your runner rejects duplicate `import { BOMB_IT_MIN_STAKE }`, merge it into the Task 1 import block instead — `BOMB_IT_MIN_STAKE` must be imported exactly once.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -743,7 +757,7 @@ test("the tick cap forces a draw and conserves balances across a full playout", 
   let s = p.initialState(CTX);
   const rng = mulberry32ForTest(5);
   let guard = 0;
-  while (!p.isTerminal(s) && guard < Number(TICK_CAP) + 5) {
+  while (!p.isTerminal(s) && guard < Number(BOMB_IT_TICK_CAP) + 5) {
     const by = s.tick % 2n === 0n ? "A" : "B";
     const m = p.randomMove(s, by, rng) as BombItMove;
     s = p.applyMove(s, m, by);
@@ -849,7 +863,7 @@ Replace the `applyMove` stub body with:
     if (!aAlive && !bAlive) winner = "draw";
     else if (!bAlive) winner = "A";
     else if (!aAlive) winner = "B";
-    else if (tick >= TICK_CAP) winner = "draw";
+    else if (tick >= BOMB_IT_TICK_CAP) winner = "draw";
 
     let balanceA = state.balanceA;
     let balanceB = state.balanceB;
@@ -909,7 +923,7 @@ git commit -m "feat(sdk): bomb-it applyMove + random agent"
 - Test: `frontend/src/games/bombIt/session-core.test.ts`
 
 **Interfaces:**
-- Consumes: `BombItState` (type-only) from `sui-tunnel-ts/protocol/bombIt`; in the test, `BombItProtocol`, `MIN_STAKE` via relative `.ts` path.
+- Consumes: `BombItState` (type-only) from `sui-tunnel-ts/protocol/bombIt`; in the test, `BombItProtocol`, `BOMB_IT_MIN_STAKE` via relative `.ts` path.
 - Produces: `interface BombItView`; `type BombItResult = "A" | "B" | "draw"`; `deriveView(state): BombItView`; `sessionResult(state): BombItResult`. The board and hook consume `BombItView`.
 
 - [ ] **Step 1: Write the failing test**
@@ -920,10 +934,10 @@ Create `frontend/src/games/bombIt/session-core.test.ts`:
 import { test } from "node:test";
 import assert from "node:assert/strict";
 // Runtime SDK imports use RELATIVE .ts paths (tsx ignores the vite alias / tsconfig paths).
-import { BombItProtocol, MIN_STAKE } from "../../../../sui-tunnel-ts/src/protocol/bombIt.ts";
+import { BombItProtocol, BOMB_IT_MIN_STAKE } from "../../../../sui-tunnel-ts/src/protocol/bombIt.ts";
 import { deriveView, sessionResult } from "./session-core.ts";
 
-const CTX = { tunnelId: "0xfeed", initialBalances: { a: MIN_STAKE, b: MIN_STAKE } };
+const CTX = { tunnelId: "0xfeed", initialBalances: { a: BOMB_IT_MIN_STAKE, b: BOMB_IT_MIN_STAKE } };
 
 test("deriveView flattens grid, players, bombs, and balances to plain values", () => {
   const p = new BombItProtocol();

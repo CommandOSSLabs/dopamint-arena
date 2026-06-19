@@ -1,7 +1,7 @@
 # Bomb It — PvP mode (design)
 
 **Date:** 2026-06-19
-**Status:** Draft — pending user review
+**Status:** Approved (design); implementation pending
 **Branch:** `feat/bomb-it-pvp` (off `feat/chicken-cross`; `main` lacks the PvP framework)
 
 ## 1. Goal & scope
@@ -30,8 +30,8 @@ deterministic, winner-take-all — so the counterparty and an on-chain disputer 
 GRID_W = 9   GRID_H = 9   CELL_COUNT = 81
 SPAWN_A = (row 1, col 1)   SPAWN_B = (row 7, col 7)
 FUSE_TICKS = 8   BLAST_RADIUS = 2   MAX_BOMBS_PER_PLAYER = 1
-CRATE_DENSITY = 0.75   TICK_CAP = 400n
-STAKE = 500n (per seat; total 1000n)   MIN_STAKE = 100n
+CRATE_DENSITY = 0.75   BOMB_IT_TICK_CAP = 400n
+STAKE = 500n (per seat; total 1000n)   BOMB_IT_MIN_STAKE = 100n
 ```
 
 ### State & Move
@@ -88,7 +88,7 @@ The proposer's field (`a` for A, `b` for B) carries the action; the opposite sea
    blast cell, remove detonated bombs.
 3. `tick += 1n`.
 4. **Terminal & balances.** With `aliveA/aliveB` after the blast: both dead → `winner="draw"`; only
-   B dead → `"A"`; only A dead → `"B"`; else `tick ≥ TICK_CAP` → `"draw"`; else `null`. On a decisive
+   B dead → `"A"`; only A dead → `"B"`; else `tick ≥ BOMB_IT_TICK_CAP` → `"draw"`; else `null`. On a decisive
    winner, write `balanceA/balanceB` to `(total,0)` / `(0,total)`; a draw leaves `(STAKE,STAKE)`.
 
 `balances(state)` returns `{a: balanceA, b: balanceB}` — `(STAKE,STAKE)` for the whole game, flipping
@@ -207,7 +207,7 @@ so no stake-shift parameter is needed (unlike tic-tac-toe).
 
 - **Protocol unit tests** (`tsx`, the highest-value tier — the protocol is the authority):
   movement/collision rules, bomb placement caps, fuse countdown, `+` blast with wall/crate stops,
-  chain detonation, self-kill, mutual-death draw, `TICK_CAP` push, and **encodeState determinism +
+  chain detonation, self-kill, mutual-death draw, `BOMB_IT_TICK_CAP` push, and **encodeState determinism +
   180° map symmetry** (same seed → byte-identical state both seats; mirrored layout).
 - **`deriveView`** unit test (`tsx`).
 - **Gate:** `cd sui-tunnel-ts && npx tsx --test src/protocol/bombIt.test.ts` green; `cd frontend &&
