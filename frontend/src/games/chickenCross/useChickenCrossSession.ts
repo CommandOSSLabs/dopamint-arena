@@ -16,7 +16,7 @@ import {
 } from "./session-core";
 
 /** Milliseconds between world ticks (animation pacing). Faster than blackjack — hops are quick. */
-const STEP_MS = 300;
+const STEP_MS = Number(import.meta.env.VITE_BOT_STEP_MS) || 300;
 
 export type SessionStatus = "idle" | "funding" | "playing" | "settling" | "settled" | "error";
 
@@ -27,6 +27,8 @@ export interface ChickenCrossSession {
   stake: number;
   error: string | null;
   start: (stake: number) => void;
+  /** Start a multi-game loop that replays until durationMs elapses. stepMs defaults to 15ms. */
+  startLoop: (stake: number, durationMs: number, stepMs?: number) => void;
   reset: () => void;
 }
 
@@ -51,6 +53,12 @@ export function useChickenCrossSession(): ChickenCrossSession {
   const actionsRef = useRef(0);
   const lastHeartbeatRef = useRef(0);
 
+  // Fast-tick knob: overridden by startLoop to accelerate bot games.
+  const stepMsRef = useRef(STEP_MS);
+  // Loop state: non-null deadline means a multi-game loop is active.
+  const loopDeadlineRef = useRef<number | null>(null);
+  const loopStakeRef = useRef(0);
+
   const stopTimer = useCallback(() => {
     if (timerRef.current !== null) {
       clearInterval(timerRef.current);
@@ -66,6 +74,9 @@ export function useChickenCrossSession(): ChickenCrossSession {
     moveCountRef.current = 0;
     actionsRef.current = 0;
     lastHeartbeatRef.current = 0;
+    stepMsRef.current = STEP_MS;
+    loopDeadlineRef.current = null;
+    loopStakeRef.current = 0;
     report.setActive(0);
     setStatus("idle");
     setView(null);
@@ -173,6 +184,21 @@ export function useChickenCrossSession(): ChickenCrossSession {
               const settlement = tunnel.buildSettlement(createdAt);
               await closeCooperative({ signExec, tunnelId, settlement });
               setStatus("settled");
+
+              // Chain the next game if a loop is active and the deadline hasn't passed.
+              const deadline = loopDeadlineRef.current;
+              const loopStake = loopStakeRef.current;
+              const nextStepMs = stepMsRef.current;
+              if (deadline !== null && Date.now() < deadline) {
+                // Reset state for the next round, then restore loop config before starting.
+                reset();
+                stepMsRef.current = nextStepMs;
+                loopDeadlineRef.current = deadline;
+                loopStakeRef.current = loopStake;
+                start(loopStake);
+              } else {
+                loopDeadlineRef.current = null;
+              }
             } catch (e) {
               console.error("[chicken-cross] on-chain close failed:", e);
               setError(String((e as Error)?.message ?? e));
@@ -212,7 +238,7 @@ export function useChickenCrossSession(): ChickenCrossSession {
               flushHeartbeat(true);
               void settleOnChain();
             }
-          }, STEP_MS);
+          }, stepMsRef.current);
         } catch (e) {
           stopTimer();
           report.setActive(0);
@@ -221,10 +247,20 @@ export function useChickenCrossSession(): ChickenCrossSession {
         }
       })();
     },
-    [account, client, signAndExecute, report, stopTimer],
+    [account, client, signAndExecute, report, stopTimer, reset],
+  );
+
+  const startLoop = useCallback(
+    (loopStake: number, durationMs: number, stepMs?: number) => {
+      stepMsRef.current = stepMs ?? 15;
+      loopDeadlineRef.current = Date.now() + durationMs;
+      loopStakeRef.current = loopStake;
+      start(loopStake);
+    },
+    [start],
   );
 
   useEffect(() => stopTimer, [stopTimer]);
 
-  return { status, view, result, stake, error, start, reset };
+  return { status, view, result, stake, error, start, startLoop, reset };
 }

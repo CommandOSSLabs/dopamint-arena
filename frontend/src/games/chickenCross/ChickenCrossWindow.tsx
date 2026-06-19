@@ -1,12 +1,48 @@
+import { useState } from "react";
 import type { GameWindowProps } from "../types";
 import { usePvpChickenCross } from "./usePvpChickenCross";
+import { useChickenCrossSession } from "./useChickenCrossSession";
 import { CrossLobby } from "./components/CrossLobby";
 import { CrossBoard } from "./components/CrossBoard";
+import { MIN_STAKE } from "sui-tunnel-ts/protocol/cross";
 
 /** PvP Chicken Cross: two players race their chickens over a shared Sui tunnel. */
 export function ChickenCrossWindow(_props: GameWindowProps) {
   const { status, role, code, view, winner, error, create, join, findMatch, setDir, reset } =
     usePvpChickenCross();
+  const session = useChickenCrossSession();
+
+  const [mode, setMode] = useState<"pvp" | "solo">("pvp");
+
+  // Solo (self-play bot demo) rendering path.
+  if (mode === "solo") {
+    return (
+      <div className="relative flex h-full w-full flex-col">
+        <button
+          onClick={() => { session.reset(); setMode("pvp"); }}
+          className="absolute right-2 top-2 z-10 rounded border border-arena-edge px-3 py-1 text-xs text-arena-muted hover:text-arena-text"
+        >
+          Stop
+        </button>
+        {session.view === null ? (
+          <div className="flex h-full items-center justify-center text-sm text-arena-muted">
+            Starting bots…
+          </div>
+        ) : (
+          <CrossBoard
+            view={session.view}
+            winner={null}
+            role={null}
+            onDir={() => {}}
+            onPlayAgain={() => {}}
+            seed={session.view.seed}
+          />
+        )}
+      </div>
+    );
+  }
+
+  // PvP path — entirely unchanged below this point.
 
   if (status === "error") {
     return (
@@ -23,7 +59,22 @@ export function ChickenCrossWindow(_props: GameWindowProps) {
   }
 
   if (status === "idle") {
-    return <CrossLobby onCreate={create} onJoin={join} onFindMatch={findMatch} />;
+    return (
+      <div className="flex h-full w-full flex-col">
+        <CrossLobby onCreate={create} onJoin={join} onFindMatch={findMatch} />
+        <div className="flex justify-center pb-4">
+          <button
+            onClick={() => {
+              setMode("solo");
+              session.startLoop(Number(MIN_STAKE), 5 * 60 * 1000, 15);
+            }}
+            className="rounded border border-arena-edge px-4 py-1.5 text-sm text-arena-muted hover:text-arena-text"
+          >
+            Self-play (bots)
+          </button>
+        </div>
+      </div>
+    );
   }
 
   if (status === "matching") {
