@@ -1,5 +1,5 @@
-import { fromHEX } from "@mysten/bcs";
-import { blake2b } from "@noble/hashes/blake2b";
+import { fromHex as fromHEX } from "@mysten/bcs";
+import { blake2b } from "@noble/hashes/blake2.js";
 
 // Deterministically pick one cell from `optimalCells` using a verifiable seed
 // (the server's previous BLS signature, which the player already holds).

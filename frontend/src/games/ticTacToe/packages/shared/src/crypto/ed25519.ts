@@ -1,6 +1,6 @@
 import { Ed25519Keypair, Ed25519PublicKey } from "@mysten/sui/keypairs/ed25519";
 import { decodeSuiPrivateKey } from "@mysten/sui/cryptography";
-import { fromHEX, toHEX } from "@mysten/bcs";
+import { fromHex as fromHEX, toHex as toHEX } from "@mysten/bcs";
 
 export function generateKeypair(): {
   privateKeyHex: string;

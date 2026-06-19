@@ -1,4 +1,4 @@
-import { bcs, fromHEX, toHEX } from "@mysten/bcs";
+import { bcs, fromHex as fromHEX, toHex as toHEX } from "@mysten/bcs";
 
 export const ID32 = bcs.fixedArray(32, bcs.u8()).transform({
   input: (id: string) => fromHEX(id),
