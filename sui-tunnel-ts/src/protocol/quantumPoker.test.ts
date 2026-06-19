@@ -191,6 +191,55 @@ test("deriveQuantumCard is deterministic and counter-sensitive", () => {
   assert.notEqual(deriveQuantumCard(a, b, 0), deriveQuantumCard(a, b, 1));
 });
 
+test("uneven all-in caps the big stack at the effective stack and stays callable", () => {
+  const p = new QuantumPokerProtocol();
+  const a = secrets(40);
+  const b = secrets(140);
+  // Seat B is the short stack (200) vs seat A (1000) — the effective stack is 200.
+  let s = p.initialState({
+    tunnelId: "0xae",
+    initialBalances: { a: 1000n, b: 200n },
+  });
+  s = p.applyMove(
+    s,
+    {
+      kind: "commit_slots",
+      commitments: commitSlotSecrets(a),
+      localSecrets: a,
+    },
+    "A"
+  );
+  s = p.applyMove(
+    s,
+    {
+      kind: "commit_slots",
+      commitments: commitSlotSecrets(b),
+      localSecrets: b,
+    },
+    "B"
+  );
+  s = p.applyMove(s, reveal(a, [2, 3]), "A");
+  s = p.applyMove(s, reveal(b, [0, 1]), "B");
+  assert.equal(s.phase, "preflop_bet");
+  assert.equal(s.toAct, "A");
+
+  // Effective stack 200 − ante 50 = 150 wagerable. The big stack cannot put in more than the
+  // short stack can ever match.
+  assert.throws(
+    () => p.applyMove(s, { kind: "bet", amount: 151n }, "A"),
+    /effective stack/
+  );
+
+  // A goes all-in for the effective stack; the short stack can still CALL it — never forced to fold.
+  s = p.applyMove(s, { kind: "bet", amount: 150n }, "A");
+  assert.equal(s.totalBetA, 200n);
+  s = p.applyMove(s, { kind: "call" }, "B");
+  assert.equal(s.totalBetB, 200n);
+  assert.equal(s.foldedBy, null);
+  // The surplus (A's other 800) never entered the pot; the stacks stay conserved.
+  assert.equal(s.balanceA + s.balanceB, 1200n);
+});
+
 test("full self-play game: balances conserved, five-card board, updates settle", () => {
   const rng = mulberry32(123);
   const a = generateKeyPair();

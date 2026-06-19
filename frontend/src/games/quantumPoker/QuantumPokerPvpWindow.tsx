@@ -2,104 +2,169 @@ import type { CSSProperties } from "react";
 import type { Party } from "sui-tunnel-ts/protocol/Protocol";
 import type { PokerState } from "sui-tunnel-ts/protocol/quantumPoker";
 import type { GameWindowProps } from "../types";
-import { usePvpQuantumPoker } from "./usePvpQuantumPoker";
+import {
+  HAND_CAP,
+  STAKE_BALANCE,
+  usePvpQuantumPoker,
+} from "./usePvpQuantumPoker";
 
 const SUITS = ["♠", "♥", "♦", "♣"] as const;
 const RANKS = ["2", "3", "4", "5", "6", "7", "8", "9", "T", "J", "Q", "K", "A"];
 
 const PHASE_LABEL: Record<PokerState["phase"], string> = {
-  commit: "Shuffling…",
-  open_private_holes: "Dealing holes…",
+  commit: "Shuffling",
+  open_private_holes: "Dealing holes",
   preflop_bet: "Preflop",
-  reveal_flop: "Dealing flop…",
+  reveal_flop: "Dealing flop",
   flop_bet: "Flop",
-  reveal_turn: "Dealing turn…",
+  reveal_turn: "Dealing turn",
   turn_bet: "Turn",
-  reveal_river: "Dealing river…",
+  reveal_river: "Dealing river",
   river_bet: "River",
   showdown: "Showdown",
   hand_over: "Hand over",
   done: "Settled",
 };
 
-const FELT: CSSProperties & Record<`--${string}`, string> = {
-  "--qp-felt": "#0f6b52",
-  "--qp-felt-dark": "#08372f",
-  "--qp-gold": "#f4c45d",
+/**
+ * Quantum Poker is its own always-dark table, but skinned in the app's violet/aurora identity
+ * (not casino green): the board is a faint "quantum field", the pot is a Doto LED readout, and a
+ * face-down card is a violet "superposed" tile — the dealerless two-party commit-reveal — that
+ * resolves to a face the moment both seats open it. Sizing is kept tight so the whole table fits
+ * the smallest (≈400×400) window without clipping.
+ */
+const QP: CSSProperties & Record<`--${string}`, string> = {
+  "--qp-ink": "#0a0c16",
+  "--qp-violet": "#613dff",
+  "--qp-lilac": "#cab1ff",
+  "--qp-gold": "#fbbf24",
+  "--qp-mint": "#9cefcf",
+  "--qp-coral": "#fb7185",
 };
+
+/** Mono uppercase label used for eyebrows/state — the utility face, never the headline. */
+const EYEBROW = "wal-mono uppercase tracking-[0.14em]";
+const BTN =
+  "min-w-[3.25rem] max-w-[8rem] flex-1 whitespace-nowrap rounded-md px-2 py-1 text-[11px] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--qp-lilac)]/60";
+
+const fmt = (n: bigint): string => n.toLocaleString("en-US");
 
 function cardText(card: number): string {
   return `${RANKS[card % 13]}${SUITS[Math.floor(card / 13)]}`;
 }
 
 function Card({ card, small }: { card: number | null; small?: boolean }) {
-  const suit = card === null ? "" : SUITS[Math.floor(card / 13)];
+  const dims = small ? "h-8 w-6 text-[10px]" : "h-9 w-7 text-[11px]";
+  if (card === null) {
+    // Superposed: the card is committed cryptographically but hasn't collapsed to a face yet.
+    return (
+      <span
+        className={[
+          dims,
+          "grid shrink-0 place-items-center rounded border border-[var(--qp-lilac)]/25",
+          "bg-[repeating-linear-gradient(125deg,rgba(202,177,255,.15)_0_3px,rgba(13,15,24,.94)_3px_8px)]",
+          "text-[var(--qp-lilac)]/35 shadow-[inset_0_0_9px_rgba(97,61,255,.3)]",
+        ].join(" ")}
+      >
+        ◇
+      </span>
+    );
+  }
+  const suit = SUITS[Math.floor(card / 13)];
   const red = suit === "♥" || suit === "♦";
   return (
     <span
       className={[
-        small ? "h-8 w-6 text-[10px]" : "h-9 w-7 text-xs",
-        "grid shrink-0 place-items-center rounded border font-bold shadow-[0_2px_6px_rgba(0,0,0,.3)]",
-        card === null
-          ? "border-cyan-200/25 bg-[repeating-linear-gradient(135deg,rgba(103,232,249,.16)_0_3px,rgba(8,20,24,.9)_3px_7px)]"
-          : red
-            ? "border-rose-200/50 bg-[#f1eadc] text-rose-700"
-            : "border-slate-200/50 bg-[#f1eadc] text-slate-950",
+        dims,
+        "grid shrink-0 place-items-center rounded border bg-[#f6f3ec] font-bold tabular-nums",
+        "shadow-[0_2px_7px_rgba(0,0,0,.45)]",
+        "motion-safe:animate-in motion-safe:fade-in motion-safe:zoom-in-90 motion-safe:duration-300",
+        red
+          ? "border-[var(--qp-coral)]/40 text-[#c4314e]"
+          : "border-black/15 text-[#16181f]",
       ].join(" ")}
     >
-      {card === null ? "" : cardText(card)}
+      {cardText(card)}
     </span>
   );
 }
 
-function CardRow({ cards, size, small }: { cards: (number | null)[]; size: number; small?: boolean }) {
+function CardRow({
+  cards,
+  size,
+  small,
+}: {
+  cards: (number | null)[];
+  size: number;
+  small?: boolean;
+}) {
   return (
     <div className="flex items-center justify-center gap-1">
-      {Array.from({ length: size }, (_, i) => (
-        <Card key={i} card={cards[i] ?? null} small={small} />
-      ))}
+      {Array.from({ length: size }, (_, i) => {
+        const c = cards[i] ?? null;
+        // Key by slot+value so a card animates in only when that slot newly resolves (back → face).
+        return <Card key={`${i}-${c ?? "x"}`} card={c} small={small} />;
+      })}
     </div>
   );
 }
 
 function Seat({
   label,
-  balance,
+  stack,
   streetBet,
   active,
   cards,
   won,
-  highlight,
+  you,
 }: {
   label: string;
-  balance: bigint;
+  stack: bigint;
   streetBet: bigint;
   active: boolean;
   cards: (number | null)[];
   won: boolean;
-  highlight?: boolean;
+  you?: boolean;
 }) {
   return (
     <div
       className={[
-        "flex shrink-0 items-center justify-between gap-2 rounded-md border px-2 py-1.5",
+        "flex shrink-0 items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5 transition-colors",
         active
-          ? "border-cyan-200/60 bg-cyan-200/10"
-          : highlight
-            ? "border-arena-accent/40 bg-black/30"
-            : "border-white/10 bg-black/30",
+          ? "border-[var(--qp-lilac)]/55 bg-[var(--qp-violet)]/12 shadow-[0_0_18px_-8px_var(--qp-violet)]"
+          : won
+            ? "border-[var(--qp-mint)]/45 bg-[var(--qp-mint)]/[.07]"
+            : you
+              ? "border-[var(--qp-violet)]/30 bg-white/[.03]"
+              : "border-white/10 bg-white/[.03]",
       ].join(" ")}
     >
       <div className="min-w-0 leading-tight">
-        <div className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-200">
-          {label}
-          {active && <span className="text-[9px] text-cyan-300">• to act</span>}
-          {won && <span className="rounded-sm bg-emerald-300 px-1 text-[9px] text-slate-950">WIN</span>}
+        <div className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-100">
+          <span className="truncate">{label}</span>
+          {active && (
+            <span
+              className={`${EYEBROW} shrink-0 text-[9px] text-[var(--qp-lilac)] motion-safe:animate-pulse`}
+            >
+              to act
+            </span>
+          )}
+          {won && (
+            <span className="shrink-0 rounded-sm bg-[var(--qp-mint)] px-1 text-[9px] font-bold uppercase tracking-wide text-[#06281c]">
+              win
+            </span>
+          )}
         </div>
-        <div className="text-[10px] tabular-nums">
-          <span className="text-[var(--qp-gold)]">{balance.toString()}</span>
-          <span className="text-slate-500"> stack · bet </span>
-          <span className="text-slate-300">{streetBet.toString()}</span>
+        <div className="mt-0.5 flex items-baseline gap-1 wal-mono text-[10px]">
+          <span className="text-[var(--qp-gold)]">{fmt(stack)}</span>
+          <span className="text-[8px] uppercase tracking-wide text-slate-500">
+            stack
+          </span>
+          {streetBet > 0n && (
+            <span className="rounded-sm bg-black/45 px-1 text-[9px] text-slate-300">
+              bet {fmt(streetBet)}
+            </span>
+          )}
         </div>
       </div>
       <CardRow cards={cards} size={2} small />
@@ -113,18 +178,32 @@ export function QuantumPokerPvpWindow(_props: GameWindowProps) {
 
   if (g.status === "idle") {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-3 p-4 text-center">
-        <p className="text-sm text-arena-muted">
-          Heads-up poker vs a real opponent. Each seat stakes{" "}
-          <span className="text-arena-accent">500</span> on-chain; cards are dealt by a
-          two-party commit-reveal (no dealer). Winner is paid at cooperative close.
+      <div
+        style={QP}
+        className="flex h-full flex-col items-center justify-center gap-3 bg-[var(--qp-ink)] p-5 text-center"
+      >
+        <div className="flex flex-col items-center gap-1">
+          <span className={`${EYEBROW} text-[10px] text-[var(--qp-lilac)]`}>
+            heads-up · no dealer
+          </span>
+          <h2 className="wal-doto text-lg text-slate-50">QUANTUM POKER</h2>
+        </div>
+        <p className="max-w-[18rem] text-[12px] leading-relaxed text-slate-400">
+          Each seat stakes{" "}
+          <span className="wal-mono text-[var(--qp-gold)]">
+            {fmt(STAKE_BALANCE)}
+          </span>{" "}
+          on-chain. The deck is dealt by a two-party commit-reveal — no dealer —
+          and chips move off-chain over a Sui tunnel for up to{" "}
+          <span className="wal-mono text-slate-200">{HAND_CAP.toString()}</span>{" "}
+          hands, paid out at cooperative close.
         </p>
         <button
           type="button"
           onClick={g.findMatch}
-          className="rounded bg-arena-accent px-4 py-2 text-sm font-semibold text-black"
+          className="rounded-lg bg-[var(--qp-violet)] px-5 py-2 text-sm font-semibold text-white shadow-[0_0_24px_-6px_var(--qp-violet)] transition hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--qp-lilac)]/60"
         >
-          Find Match
+          Find match
         </button>
       </div>
     );
@@ -132,14 +211,31 @@ export function QuantumPokerPvpWindow(_props: GameWindowProps) {
 
   if (g.status === "matching" || g.status === "funding") {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-2 text-sm text-arena-muted">
-        <div>
+      <div
+        style={QP}
+        className="flex h-full flex-col items-center justify-center gap-3 bg-[var(--qp-ink)] text-center"
+      >
+        <div className="flex gap-1.5">
+          {[
+            "[animation-delay:0ms]",
+            "[animation-delay:160ms]",
+            "[animation-delay:320ms]",
+          ].map((delay, i) => (
+            <span
+              key={i}
+              className={`h-2 w-2 rounded-full bg-[var(--qp-lilac)] motion-safe:animate-pulse ${delay}`}
+            />
+          ))}
+        </div>
+        <div className="text-sm text-slate-300">
           {g.status === "matching"
             ? "Finding an opponent…"
             : "Opening + funding the tunnel on-chain…"}
         </div>
         {g.opponentWallet && (
-          <div className="text-[11px]">vs {g.opponentWallet.slice(0, 10)}…</div>
+          <div className="wal-mono text-[11px] text-slate-500">
+            vs {g.opponentWallet.slice(0, 10)}…
+          </div>
         )}
       </div>
     );
@@ -147,9 +243,18 @@ export function QuantumPokerPvpWindow(_props: GameWindowProps) {
 
   if (g.status === "error") {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-3 p-4 text-center">
-        <p className="text-sm text-red-400">{g.error}</p>
-        <button type="button" onClick={g.reset} className="rounded border border-arena-edge px-3 py-1.5 text-sm">
+      <div
+        style={QP}
+        className="flex h-full flex-col items-center justify-center gap-3 bg-[var(--qp-ink)] p-5 text-center"
+      >
+        <p className="max-w-[18rem] text-sm text-[var(--qp-coral)]">
+          {g.error}
+        </p>
+        <button
+          type="button"
+          onClick={g.reset}
+          className="rounded-lg border border-white/15 px-4 py-1.5 text-sm text-slate-200 transition hover:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--qp-lilac)]/60"
+        >
           Back
         </button>
       </div>
@@ -183,9 +288,9 @@ export function QuantumPokerPvpWindow(_props: GameWindowProps) {
     ? s.winner === "tie"
       ? "Split pot — stakes returned"
       : won
-        ? `You win${s.lastResult?.reason === "fold" ? " (opponent folded)" : ""}`
+        ? `You win${s.lastResult?.reason === "fold" ? " — opponent folded" : ""}`
         : lost
-          ? `You lose${s.lastResult?.reason === "fold" ? " (you folded)" : ""}`
+          ? `You lose${s.lastResult?.reason === "fold" ? " — you folded" : ""}`
           : "Hand over"
     : g.myTurnToBet
       ? "Your turn"
@@ -198,61 +303,103 @@ export function QuantumPokerPvpWindow(_props: GameWindowProps) {
   const diff = legal?.callAmount ?? 0n;
   const clampBet = (raw: bigint): bigint => {
     if (!legal) return 0n;
-    return raw < legal.minBet ? legal.minBet : raw > legal.maxBet ? legal.maxBet : raw;
+    return raw < legal.minBet
+      ? legal.minBet
+      : raw > legal.maxBet
+        ? legal.maxBet
+        : raw;
   };
   const halfPot = clampBet(diff > 0n ? diff + (pot + diff) / 2n : pot / 2n);
   const fullPot = clampBet(diff > 0n ? pot + 2n * diff : pot);
   const allIn = legal?.maxBet ?? 0n;
   // Surface only distinct, legal sizes — collapse to all-in when the stack is short.
-  const showHalf = !!legal && legal.canBet && halfPot < fullPot && halfPot < allIn;
+  const showHalf =
+    !!legal && legal.canBet && halfPot < fullPot && halfPot < allIn;
   const showPot = !!legal && legal.canBet && fullPot < allIn;
   const showAllIn = !!legal && legal.canBet;
 
   return (
     <div
-      style={FELT}
-      className="flex h-full min-h-0 flex-col gap-1.5 overflow-hidden bg-[#080b0d] p-2 text-slate-100"
+      style={QP}
+      className="flex h-full min-h-0 flex-col gap-1.5 overflow-hidden bg-[var(--qp-ink)] p-2 text-slate-100"
     >
-      <div className="flex shrink-0 items-center justify-between text-[10px] text-slate-400">
-        <span>
-          You are <span className="font-semibold text-arena-accent">{self}</span>
-          {g.status === "settling" && " · settling…"}
-          {g.status === "settled" && " · settled ✓"}
+      <div className="flex shrink-0 items-center justify-between text-[10px]">
+        <span className="text-slate-400">
+          You are{" "}
+          <span className="font-semibold text-[var(--qp-lilac)]">{self}</span>
+          {g.status === "settling" && (
+            <span className="text-[var(--qp-gold)]"> · settling…</span>
+          )}
+          {g.status === "settled" && (
+            <span className="text-[var(--qp-mint)]"> · settled ✓</span>
+          )}
         </span>
-        <span className="tabular-nums">hand {s.handNo.toString()}</span>
+        <div className="flex items-center gap-2">
+          <span className={`${EYEBROW} text-[9px] text-slate-500`}>
+            hand{" "}
+            <span className="text-slate-300">{(s.handNo + 1n).toString()}</span>
+            /{HAND_CAP.toString()}
+          </span>
+          {g.status === "playing" &&
+            !terminal &&
+            (g.endRequested ? (
+              <span
+                className={`${EYEBROW} whitespace-nowrap text-[9px] text-[var(--qp-gold)]`}
+              >
+                ends after this hand
+              </span>
+            ) : (
+              <button
+                type="button"
+                onClick={g.requestSettle}
+                title="End the match after this hand and settle on-chain at the current stacks"
+                className="rounded border border-[var(--qp-gold)]/40 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.12em] text-[var(--qp-gold)] transition hover:bg-[var(--qp-gold)]/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--qp-lilac)]/60"
+              >
+                settle
+              </button>
+            ))}
+        </div>
       </div>
 
-      {/* Opponent (top) — holes hidden until showdown */}
+      {/* Opponent (top) — holes stay superposed until showdown */}
       <Seat
         label={`Opponent (${opp})`}
-        balance={oppStack}
+        stack={oppStack}
         streetBet={oppStreet}
         active={!terminal && s.toAct === opp}
         cards={oppCards}
         won={lost}
       />
 
-      {/* Board + pot — this is the part that shrinks if the window is short */}
-      <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-1.5 rounded-lg border border-emerald-200/20 bg-[radial-gradient(ellipse_at_center,var(--qp-felt)_0%,var(--qp-felt-dark)_72%,#031615_100%)] p-1.5">
-        <div className="flex items-center gap-1.5 rounded-full border border-amber-100/25 bg-black/35 px-2 py-0.5 text-[10px] font-semibold tabular-nums text-amber-100">
-          <span className="h-2 w-2 rounded-full bg-[var(--qp-gold)]" />
-          pot {pot.toString()}
+      {/* The quantum field: board + pot. Flex-1 + min-h-0 so it absorbs/yields spare height. */}
+      <div className="relative flex min-h-0 flex-1 flex-col items-center justify-center gap-1.5 overflow-hidden rounded-xl border border-[var(--qp-violet)]/20 bg-[radial-gradient(ellipse_at_center,rgba(97,61,255,.18)_0%,rgba(20,16,45,.55)_46%,var(--qp-ink)_100%)] p-2">
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-x-6 top-0 h-px bg-gradient-to-r from-transparent via-[var(--qp-lilac)]/40 to-transparent"
+        />
+        <div className="flex flex-col items-center gap-0.5">
+          <span className={`${EYEBROW} text-[8px] text-[var(--qp-gold)]/70`}>
+            pot
+          </span>
+          <span className="wal-doto text-lg leading-none text-[var(--qp-gold)] [text-shadow:0_0_12px_rgba(251,191,36,.45)]">
+            {fmt(pot)}
+          </span>
         </div>
         <CardRow cards={s.board} size={5} />
-        <div className="text-[10px] uppercase tracking-wide text-emerald-50/70">
+        <span className={`${EYEBROW} text-[9px] text-[var(--qp-lilac)]/80`}>
           {PHASE_LABEL[s.phase]}
-        </div>
+        </span>
       </div>
 
-      {/* You (bottom) — your hole cards, always visible */}
+      {/* You (bottom) — your hole cards, always face-up */}
       <Seat
         label={`You (${self})`}
-        balance={myStack}
+        stack={myStack}
         streetBet={myStreet}
         active={!terminal && s.toAct === self}
         cards={myCards}
         won={won}
-        highlight
+        you
       />
 
       {/* Action bar — pinned, always visible so the hand can advance */}
@@ -262,8 +409,10 @@ export function QuantumPokerPvpWindow(_props: GameWindowProps) {
             {g.secondsLeft != null && (
               <span
                 className={[
-                  "min-w-[2rem] rounded px-1.5 py-1 text-center text-[11px] font-semibold tabular-nums",
-                  g.secondsLeft <= 3 ? "bg-rose-500/20 text-rose-300" : "text-amber-200",
+                  "wal-mono min-w-[2rem] rounded-md px-1.5 py-1 text-center text-[11px] font-semibold tabular-nums",
+                  g.secondsLeft <= 3
+                    ? "bg-[var(--qp-coral)]/20 text-[var(--qp-coral)] motion-safe:animate-pulse"
+                    : "bg-white/5 text-[var(--qp-gold)]",
                 ].join(" ")}
               >
                 {g.secondsLeft}s
@@ -272,7 +421,7 @@ export function QuantumPokerPvpWindow(_props: GameWindowProps) {
             <button
               type="button"
               onClick={g.fold}
-              className="min-w-[3.75rem] max-w-[9rem] flex-1 whitespace-nowrap rounded bg-rose-500/80 px-2 py-1 text-[11px] font-semibold text-white hover:bg-rose-500"
+              className={`${BTN} border border-[var(--qp-coral)]/40 bg-[var(--qp-coral)]/15 text-[var(--qp-coral)] hover:bg-[var(--qp-coral)]/25`}
             >
               Fold
             </button>
@@ -280,7 +429,7 @@ export function QuantumPokerPvpWindow(_props: GameWindowProps) {
               <button
                 type="button"
                 onClick={g.check}
-                className="min-w-[3.75rem] max-w-[9rem] flex-1 whitespace-nowrap rounded bg-arena-panel px-2 py-1 text-[11px] font-semibold hover:bg-arena-edge"
+                className={`${BTN} border border-white/12 bg-white/[.06] text-slate-100 hover:bg-white/[.12]`}
               >
                 Check
               </button>
@@ -289,49 +438,62 @@ export function QuantumPokerPvpWindow(_props: GameWindowProps) {
               <button
                 type="button"
                 onClick={g.call}
-                className="min-w-[3.75rem] max-w-[9rem] flex-1 whitespace-nowrap rounded bg-arena-panel px-2 py-1 text-[11px] font-semibold hover:bg-arena-edge"
+                className={`${BTN} border border-white/12 bg-white/[.06] text-slate-100 hover:bg-white/[.12]`}
               >
-                Call {legal.callAmount.toString()}
+                Call {fmt(legal.callAmount)}
               </button>
             )}
             {showHalf && (
               <button
                 type="button"
                 onClick={() => g.bet(halfPot)}
-                className="min-w-[3.75rem] max-w-[9rem] flex-1 whitespace-nowrap rounded bg-arena-accent/75 px-2 py-1 text-[11px] font-semibold text-black hover:bg-arena-accent"
+                className={`${BTN} bg-[var(--qp-violet)]/80 text-white hover:bg-[var(--qp-violet)]`}
               >
-                ½ Pot · {halfPot.toString()}
+                ½ Pot · {fmt(halfPot)}
               </button>
             )}
             {showPot && (
               <button
                 type="button"
                 onClick={() => g.bet(fullPot)}
-                className="min-w-[3.75rem] max-w-[9rem] flex-1 whitespace-nowrap rounded bg-arena-accent px-2 py-1 text-[11px] font-semibold text-black"
+                className={`${BTN} bg-[var(--qp-violet)] text-white hover:brightness-110`}
               >
-                Pot · {fullPot.toString()}
+                Pot · {fmt(fullPot)}
               </button>
             )}
             {showAllIn && (
               <button
                 type="button"
                 onClick={() => g.bet(allIn)}
-                className="min-w-[3.75rem] max-w-[9rem] flex-1 whitespace-nowrap rounded bg-amber-400 px-2 py-1 text-[11px] font-semibold text-black hover:bg-amber-300"
+                className={`${BTN} bg-[var(--qp-gold)] text-[#231a02] hover:brightness-105`}
               >
-                All-in · {allIn.toString()}
+                All-in · {fmt(allIn)}
               </button>
             )}
           </>
         ) : (
-          <div className="text-xs font-semibold text-slate-200">{banner}</div>
+          <div
+            className={[
+              "text-center text-[12px] font-semibold",
+              terminal
+                ? won
+                  ? "text-[var(--qp-mint)]"
+                  : lost
+                    ? "text-[var(--qp-coral)]"
+                    : "text-slate-200"
+                : "text-slate-300",
+            ].join(" ")}
+          >
+            {banner}
+          </div>
         )}
         {g.status === "settled" && (
           <button
             type="button"
             onClick={g.reset}
-            className="rounded border border-arena-edge px-2.5 py-1.5 text-xs"
+            className="rounded-md border border-white/15 px-2.5 py-1 text-[11px] text-slate-200 transition hover:bg-white/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--qp-lilac)]/60"
           >
-            Play Again
+            Play again
           </button>
         )}
       </div>
