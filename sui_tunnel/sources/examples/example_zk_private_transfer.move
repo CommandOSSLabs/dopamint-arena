@@ -355,7 +355,7 @@ public fun verify_transfer(
     assert!(transfer.status == TRANSFER_PENDING, EInvalidState);
 
     // Verify the circuit is registered and active
-    let is_active = zk_verifier::is_circuit_active(registry, &transfer.circuit_id);
+    let is_active = registry.is_circuit_active(&transfer.circuit_id);
 
     if (!is_active) {
         transfer.status = TRANSFER_FAILED;
@@ -372,8 +372,7 @@ public fun verify_transfer(
     };
 
     // Verify the proof using the real ZK verifier
-    let proof_valid = zk_verifier::verify_circuit_proof(
-        registry,
+    let proof_valid = registry.verify_circuit_proof(
         &transfer.circuit_id,
         &transfer.public_inputs,
         &transfer.proof_bytes,

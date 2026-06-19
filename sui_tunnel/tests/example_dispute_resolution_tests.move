@@ -28,43 +28,43 @@ fun case_status_constants() {
 #[test]
 fun create_basic_config() {
     let config = example_dispute_resolution::create_basic_config();
-    assert_eq!(referee::config_timeout_ms(&config), TWENTY_FOUR_HOURS_MS);
-    assert_eq!(referee::config_penalties_enabled(&config), false);
-    assert_eq!(referee::config_referee_type(&config), referee::referee_type_automated());
+    assert_eq!(config.config_timeout_ms(), TWENTY_FOUR_HOURS_MS);
+    assert_eq!(config.config_penalties_enabled(), false);
+    assert_eq!(config.config_referee_type(), referee::referee_type_automated());
 }
 
 #[test]
 fun create_standard_config() {
     let config = example_dispute_resolution::create_standard_config();
-    assert_eq!(referee::config_timeout_ms(&config), FOUR_HOURS_MS);
-    assert_eq!(referee::config_penalties_enabled(&config), true);
-    assert_eq!(referee::config_base_penalty(&config), 500);
-    assert_eq!(referee::config_penalty_per_hour(&config), 200);
-    assert_eq!(referee::config_max_penalty(&config), 5000);
-    assert_eq!(referee::config_grace_period_ms(&config), GRACE_PERIOD_MS);
+    assert_eq!(config.config_timeout_ms(), FOUR_HOURS_MS);
+    assert_eq!(config.config_penalties_enabled(), true);
+    assert_eq!(config.config_base_penalty(), 500);
+    assert_eq!(config.config_penalty_per_hour(), 200);
+    assert_eq!(config.config_max_penalty(), 5000);
+    assert_eq!(config.config_grace_period_ms(), GRACE_PERIOD_MS);
 }
 
 #[test]
 fun create_premium_config() {
     let config = example_dispute_resolution::create_premium_config();
-    assert_eq!(referee::config_timeout_ms(&config), ONE_HOUR_MS);
-    assert_eq!(referee::config_penalties_enabled(&config), true);
-    assert_eq!(referee::config_base_penalty(&config), 2000);
-    assert_eq!(referee::config_penalty_per_hour(&config), 1000);
-    assert_eq!(referee::config_max_penalty(&config), 20000);
-    assert_eq!(referee::config_referee_type(&config), referee::referee_type_committee());
+    assert_eq!(config.config_timeout_ms(), ONE_HOUR_MS);
+    assert_eq!(config.config_penalties_enabled(), true);
+    assert_eq!(config.config_base_penalty(), 2000);
+    assert_eq!(config.config_penalty_per_hour(), 1000);
+    assert_eq!(config.config_max_penalty(), 20000);
+    assert_eq!(config.config_referee_type(), referee::referee_type_committee());
 }
 
 #[test]
 fun get_config_for_level() {
     let basic = example_dispute_resolution::get_config_for_level(0);
-    assert_eq!(referee::config_timeout_ms(&basic), TWENTY_FOUR_HOURS_MS);
+    assert_eq!(basic.config_timeout_ms(), TWENTY_FOUR_HOURS_MS);
 
     let standard = example_dispute_resolution::get_config_for_level(1);
-    assert_eq!(referee::config_timeout_ms(&standard), FOUR_HOURS_MS);
+    assert_eq!(standard.config_timeout_ms(), FOUR_HOURS_MS);
 
     let premium = example_dispute_resolution::get_config_for_level(2);
-    assert_eq!(referee::config_timeout_ms(&premium), ONE_HOUR_MS);
+    assert_eq!(premium.config_timeout_ms(), ONE_HOUR_MS);
 }
 
 #[
@@ -97,14 +97,14 @@ fun open_case_basic() {
         &mut ctx,
     );
 
-    assert_eq!(example_dispute_resolution::case_status(&case), 0);
-    assert_eq!(example_dispute_resolution::case_service_level(&case), 0);
-    assert_eq!(*example_dispute_resolution::case_description(&case), b"Party B stopped responding");
-    assert_eq!(referee::dispute_id(example_dispute_resolution::case_dispute(&case)), 1);
-    assert_eq!(referee::dispute_raised_by(example_dispute_resolution::case_dispute(&case)), @0x0);
-    assert_eq!(referee::dispute_against(example_dispute_resolution::case_dispute(&case)), @0xB);
+    assert_eq!(case.case_status(), 0);
+    assert_eq!(case.case_service_level(), 0);
+    assert_eq!(*case.case_description(), b"Party B stopped responding");
+    assert_eq!(case.case_dispute().dispute_id(), 1);
+    assert_eq!(case.case_dispute().dispute_raised_by(), @0x0);
+    assert_eq!(case.case_dispute().dispute_against(), @0xB);
 
-    example_dispute_resolution::destroy_case_for_testing(case);
+    case.destroy_case_for_testing();
     clock::destroy_for_testing(clock);
 }
 
@@ -127,10 +127,10 @@ fun open_case_standard() {
         &mut ctx,
     );
 
-    assert_eq!(example_dispute_resolution::case_service_level(&case), 1);
-    assert!(referee::config_penalties_enabled(example_dispute_resolution::case_config(&case)));
+    assert_eq!(case.case_service_level(), 1);
+    assert!(case.case_config().config_penalties_enabled());
 
-    example_dispute_resolution::destroy_case_for_testing(case);
+    case.destroy_case_for_testing();
     clock::destroy_for_testing(clock);
 }
 
@@ -153,16 +153,16 @@ fun resolve_for_raiser() {
         &mut ctx,
     );
 
-    let result = example_dispute_resolution::resolve_for_raiser(&mut case, 800, 200, 0, &clock);
+    let result = case.resolve_for_raiser(800, 200, 0, &clock);
 
-    assert_eq!(example_dispute_resolution::case_status(&case), 1); // CASE_RESOLVED
-    assert_eq!(example_dispute_resolution::result_winner(&result), option::some(@0x0));
-    assert_eq!(example_dispute_resolution::result_party_a_amount(&result), 800);
-    assert_eq!(example_dispute_resolution::result_party_b_amount(&result), 200);
-    assert_eq!(example_dispute_resolution::result_penalty_amount(&result), 0);
-    assert_eq!(example_dispute_resolution::result_resolution_method(&result), 1);
+    assert_eq!(case.case_status(), 1); // CASE_RESOLVED
+    assert_eq!(result.result_winner(), option::some(@0x0));
+    assert_eq!(result.result_party_a_amount(), 800);
+    assert_eq!(result.result_party_b_amount(), 200);
+    assert_eq!(result.result_penalty_amount(), 0);
+    assert_eq!(result.result_resolution_method(), 1);
 
-    example_dispute_resolution::destroy_case_for_testing(case);
+    case.destroy_case_for_testing();
     clock::destroy_for_testing(clock);
 }
 
@@ -185,15 +185,15 @@ fun resolve_for_respondent() {
         &mut ctx,
     );
 
-    let result = example_dispute_resolution::resolve_for_respondent(&mut case, 200, 800, 0, &clock);
+    let result = case.resolve_for_respondent(200, 800, 0, &clock);
 
-    assert_eq!(example_dispute_resolution::case_status(&case), 1); // CASE_RESOLVED
-    assert_eq!(example_dispute_resolution::result_winner(&result), option::some(@0xB));
-    assert_eq!(example_dispute_resolution::result_party_a_amount(&result), 200);
-    assert_eq!(example_dispute_resolution::result_party_b_amount(&result), 800);
-    assert_eq!(example_dispute_resolution::result_resolution_method(&result), 2);
+    assert_eq!(case.case_status(), 1); // CASE_RESOLVED
+    assert_eq!(result.result_winner(), option::some(@0xB));
+    assert_eq!(result.result_party_a_amount(), 200);
+    assert_eq!(result.result_party_b_amount(), 800);
+    assert_eq!(result.result_resolution_method(), 2);
 
-    example_dispute_resolution::destroy_case_for_testing(case);
+    case.destroy_case_for_testing();
     clock::destroy_for_testing(clock);
 }
 
@@ -216,15 +216,15 @@ fun resolve_split() {
         &mut ctx,
     );
 
-    let result = example_dispute_resolution::resolve_split(&mut case, 500, 500, 0, &clock);
+    let result = case.resolve_split(500, 500, 0, &clock);
 
-    assert_eq!(example_dispute_resolution::case_status(&case), 1); // CASE_RESOLVED
-    assert_eq!(example_dispute_resolution::result_winner(&result), option::none());
-    assert_eq!(example_dispute_resolution::result_party_a_amount(&result), 500);
-    assert_eq!(example_dispute_resolution::result_party_b_amount(&result), 500);
-    assert_eq!(example_dispute_resolution::result_resolution_method(&result), 3);
+    assert_eq!(case.case_status(), 1); // CASE_RESOLVED
+    assert_eq!(result.result_winner(), option::none());
+    assert_eq!(result.result_party_a_amount(), 500);
+    assert_eq!(result.result_party_b_amount(), 500);
+    assert_eq!(result.result_resolution_method(), 3);
 
-    example_dispute_resolution::destroy_case_for_testing(case);
+    case.destroy_case_for_testing();
     clock::destroy_for_testing(clock);
 }
 
@@ -253,11 +253,11 @@ fun cannot_resolve_already_resolved() {
         &mut ctx,
     );
 
-    let _ = example_dispute_resolution::resolve_for_raiser(&mut case, 800, 200, 0, &clock);
+    let _ = case.resolve_for_raiser(800, 200, 0, &clock);
     // Try to resolve again - should fail
-    let _ = example_dispute_resolution::resolve_for_respondent(&mut case, 200, 800, 0, &clock);
+    let _ = case.resolve_for_respondent(200, 800, 0, &clock);
 
-    example_dispute_resolution::destroy_case_for_testing(case);
+    case.destroy_case_for_testing();
     clock::destroy_for_testing(clock);
 }
 
@@ -283,19 +283,19 @@ fun auto_resolve_timeout_basic() {
     // Advance past 24h timeout
     clock::increment_for_testing(&mut clock, TWENTY_FOUR_HOURS_MS + 1);
 
-    assert!(example_dispute_resolution::can_auto_resolve(&case, &clock));
+    assert!(case.can_auto_resolve(&clock));
 
     // party_a = @0x0 (the raiser from dummy ctx)
-    let result = example_dispute_resolution::auto_resolve_timeout(&mut case, 1000, @0x0, &clock);
+    let result = case.auto_resolve_timeout(1000, @0x0, &clock);
 
-    assert_eq!(example_dispute_resolution::case_status(&case), 2); // CASE_TIMED_OUT
-    assert_eq!(example_dispute_resolution::result_winner(&result), option::some(@0x0));
-    assert_eq!(example_dispute_resolution::result_party_a_amount(&result), 1000);
-    assert_eq!(example_dispute_resolution::result_party_b_amount(&result), 0);
-    assert_eq!(example_dispute_resolution::result_penalty_amount(&result), 0);
-    assert_eq!(example_dispute_resolution::result_resolution_method(&result), 4);
+    assert_eq!(case.case_status(), 2); // CASE_TIMED_OUT
+    assert_eq!(result.result_winner(), option::some(@0x0));
+    assert_eq!(result.result_party_a_amount(), 1000);
+    assert_eq!(result.result_party_b_amount(), 0);
+    assert_eq!(result.result_penalty_amount(), 0);
+    assert_eq!(result.result_resolution_method(), 4);
 
-    example_dispute_resolution::destroy_case_for_testing(case);
+    case.destroy_case_for_testing();
     clock::destroy_for_testing(clock);
 }
 
@@ -321,14 +321,14 @@ fun auto_resolve_timeout_standard_with_penalty() {
     // Advance past 4h timeout + 2 hours
     clock::increment_for_testing(&mut clock, FOUR_HOURS_MS + 2 * ONE_HOUR_MS);
 
-    let result = example_dispute_resolution::auto_resolve_timeout(&mut case, 10000, @0x0, &clock);
+    let result = case.auto_resolve_timeout(10000, @0x0, &clock);
 
-    assert_eq!(example_dispute_resolution::case_status(&case), 2); // CASE_TIMED_OUT
+    assert_eq!(case.case_status(), 2); // CASE_TIMED_OUT
     // Standard config: base_penalty=500, penalty_per_hour=200, 2 hours elapsed
     // penalty = 500 + 2*200 = 900
-    assert_eq!(example_dispute_resolution::result_penalty_amount(&result), 900);
+    assert_eq!(result.result_penalty_amount(), 900);
 
-    example_dispute_resolution::destroy_case_for_testing(case);
+    case.destroy_case_for_testing();
     clock::destroy_for_testing(clock);
 }
 
@@ -339,9 +339,9 @@ fun graduated_penalty_repeat_offender() {
 
     // Build history with 2 consecutive timeouts
     let mut history = referee::new_dispute_history();
-    referee::record_timeout(&mut history, 500);
-    referee::record_timeout(&mut history, 500);
-    assert_eq!(referee::history_consecutive_timeouts(&history), 2);
+    history.record_timeout(500);
+    history.record_timeout(500);
+    assert_eq!(history.history_consecutive_timeouts(), 2);
 
     let mut case = example_dispute_resolution::open_case(
         3,
@@ -362,21 +362,16 @@ fun graduated_penalty_repeat_offender() {
     // Calculate penalty manually:
     // base penalty = 500, 1 hour elapsed after timeout -> penalty = 500 + 200 = 700
     // graduated: 700 * (2 consecutive + 1) = 700 * 3 = 2100
-    let penalty = example_dispute_resolution::calculate_penalty(&case, &clock);
+    let penalty = case.calculate_penalty(&clock);
     assert_eq!(penalty, 2100);
 
-    let result = example_dispute_resolution::auto_resolve_timeout(&mut case, 10000, @0x0, &clock);
-    assert_eq!(example_dispute_resolution::result_penalty_amount(&result), 2100);
+    let result = case.auto_resolve_timeout(10000, @0x0, &clock);
+    assert_eq!(result.result_penalty_amount(), 2100);
 
     // After this timeout, consecutive count should be 3
-    assert_eq!(
-        referee::history_consecutive_timeouts(
-            example_dispute_resolution::case_respondent_history(&case),
-        ),
-        3,
-    );
+    assert_eq!(case.case_respondent_history().history_consecutive_timeouts(), 3);
 
-    example_dispute_resolution::destroy_case_for_testing(case);
+    case.destroy_case_for_testing();
     clock::destroy_for_testing(clock);
 }
 
@@ -389,7 +384,7 @@ fun penalty_capped_at_max() {
     let mut history = referee::new_dispute_history();
     let mut i = 0u64;
     while (i < 10) {
-        referee::record_timeout(&mut history, 1000);
+        history.record_timeout(1000);
         i = i + 1u64;
     };
 
@@ -409,14 +404,14 @@ fun penalty_capped_at_max() {
     // Advance way past timeout
     clock::increment_for_testing(&mut clock, FOUR_HOURS_MS + 100 * ONE_HOUR_MS);
 
-    let penalty = example_dispute_resolution::calculate_penalty(&case, &clock);
+    let penalty = case.calculate_penalty(&clock);
     // Should be capped at max_penalty = 5000
     assert_eq!(penalty, 5000);
 
-    let result = example_dispute_resolution::auto_resolve_timeout(&mut case, 10000, @0x0, &clock);
-    assert_eq!(example_dispute_resolution::result_penalty_amount(&result), 5000);
+    let result = case.auto_resolve_timeout(10000, @0x0, &clock);
+    assert_eq!(result.result_penalty_amount(), 5000);
 
-    example_dispute_resolution::destroy_case_for_testing(case);
+    case.destroy_case_for_testing();
     clock::destroy_for_testing(clock);
 }
 
@@ -426,9 +421,9 @@ fun create_arbitration_committee() {
     let weights = vector[30u64, 30, 40];
     let committee = example_dispute_resolution::create_arbitration_committee(members, weights, 51);
 
-    assert_eq!(referee::committee_threshold(&committee), 51);
-    assert_eq!(referee::committee_total_weight(&committee), 100);
-    assert_eq!(referee::committee_member_count(&committee), 3);
+    assert_eq!(committee.committee_threshold(), 51);
+    assert_eq!(committee.committee_total_weight(), 100);
+    assert_eq!(committee.committee_member_count(), 3);
 }
 
 #[test]
@@ -505,9 +500,9 @@ fun case_deadline() {
     );
 
     // Deadline should be now + 4 hours
-    assert_eq!(example_dispute_resolution::case_deadline(&case), FOUR_HOURS_MS);
+    assert_eq!(case.case_deadline(), FOUR_HOURS_MS);
 
-    example_dispute_resolution::destroy_case_for_testing(case);
+    case.destroy_case_for_testing();
     clock::destroy_for_testing(clock);
 }
 
@@ -532,9 +527,9 @@ fun cannot_auto_resolve_before_timeout() {
 
     // Only advance 1 hour (24h timeout)
     clock::increment_for_testing(&mut clock, ONE_HOUR_MS);
-    assert!(!example_dispute_resolution::can_auto_resolve(&case, &clock));
+    assert!(!case.can_auto_resolve(&clock));
 
-    example_dispute_resolution::destroy_case_for_testing(case);
+    case.destroy_case_for_testing();
     clock::destroy_for_testing(clock);
 }
 
@@ -549,10 +544,10 @@ fun arbitration_result_accessors() {
         1,
     );
 
-    assert_eq!(example_dispute_resolution::result_case_number(&result), 42);
-    assert_eq!(example_dispute_resolution::result_winner(&result), option::some(@0xABCD));
-    assert_eq!(example_dispute_resolution::result_party_a_amount(&result), 700);
-    assert_eq!(example_dispute_resolution::result_party_b_amount(&result), 300);
-    assert_eq!(example_dispute_resolution::result_penalty_amount(&result), 100);
-    assert_eq!(example_dispute_resolution::result_resolution_method(&result), 1);
+    assert_eq!(result.result_case_number(), 42);
+    assert_eq!(result.result_winner(), option::some(@0xABCD));
+    assert_eq!(result.result_party_a_amount(), 700);
+    assert_eq!(result.result_party_b_amount(), 300);
+    assert_eq!(result.result_penalty_amount(), 100);
+    assert_eq!(result.result_resolution_method(), 1);
 }

@@ -477,13 +477,14 @@ public fun add_routing_hop(
     let link = &network.links[link_index];
     assert!(link.status == LINK_ACTIVE, EInvalidState);
 
-    hop::add_hop(
-        &mut payment.route,
-        link.tunnel_id,
-        node_address,
-        fee,
-        timeout_ms,
-    );
+    payment
+        .route
+        .add_hop(
+            link.tunnel_id,
+            node_address,
+            fee,
+            timeout_ms,
+        );
     payment.total_fees = payment.total_fees + fee;
 }
 
@@ -496,12 +497,12 @@ public fun activate_payment(
     assert!(payment.status == PAYMENT_PENDING, EInvalidState);
 
     let route = &payment.route;
-    let hop_count = hop::route_hop_count(route);
+    let hop_count = route.route_hop_count();
     assert!(hop_count > 0, EInvalidHop);
 
     // Validate route
-    let validation = hop::validate_route(route);
-    assert!(hop::validation_valid(&validation), EInvalidHop);
+    let validation = route.validate_route();
+    assert!(validation.validation_valid(), EInvalidHop);
 
     // Create cascading timeouts
     let timeouts = hop::create_cascading_timeouts(
@@ -515,8 +516,8 @@ public fun activate_payment(
     let mut i = hop_count;
     while (i > 0) {
         i = i - 1;
-        let hop_ref = hop::route_get_hop(route, i);
-        let fee = hop::hop_fee(hop_ref);
+        let hop_ref = route.route_hop(i);
+        let fee = hop_ref.hop_fee();
 
         let htlc_amount = if (i == hop_count - 1) {
             payment.amount
@@ -526,17 +527,17 @@ public fun activate_payment(
         current_amount = htlc_amount;
 
         let sender_addr = if (i == 0) {
-            hop::route_sender(route)
+            route.route_sender()
         } else {
-            let prev_hop = hop::route_get_hop(route, i - 1);
-            hop::hop_node_address(prev_hop)
+            let prev_hop = route.route_hop(i - 1);
+            prev_hop.hop_node_address()
         };
 
         let htlc = hop::create_htlc(
             payment.payment_hash,
             htlc_amount,
             sender_addr,
-            hop::hop_node_address(hop_ref),
+            hop_ref.hop_node_address(),
             timeouts[i],
         );
         payment.htlcs.push_back(htlc);
@@ -545,7 +546,7 @@ public fun activate_payment(
     // Reverse to forward order
     payment.htlcs.reverse();
 
-    hop::activate_route(&mut payment.route);
+    payment.route.activate_route();
 
     // Update network stats
     network.total_payments = network.total_payments + 1;
@@ -575,14 +576,14 @@ public fun claim_routed_payment(payment: &mut RoutedPayment, preimage: vector<u8
     while (i > 0) {
         i = i - 1;
         let htlc = &mut payment.htlcs[i];
-        let claimed = hop::claim_htlc_internal(htlc, preimage);
+        let claimed = htlc.claim_htlc_internal(preimage);
         assert!(claimed, EInvalidState);
     };
 
     payment.preimage = preimage;
     payment.settled_count = htlc_count;
     payment.status = PAYMENT_COMPLETED;
-    hop::complete_route(&mut payment.route);
+    payment.route.complete_route();
 
     event::emit(PaymentSettled {
         source: payment.source,
@@ -606,13 +607,13 @@ public fun fail_routed_payment(payment: &mut RoutedPayment, clock: &Clock, ctx: 
     // already authorized above, so use the package-internal variant (mirrors
     // example_multi_hop_payment::fail_payment).
     payment.htlcs.do_mut!(|htlc| {
-        if (hop::htlc_status(htlc) == hop::htlc_status_pending()) {
-            hop::expire_htlc_internal(htlc, current_time_ms);
+        if (htlc.htlc_status() == hop::htlc_status_pending()) {
+            htlc.expire_htlc_internal(current_time_ms);
         };
     });
 
     payment.status = PAYMENT_FAILED;
-    hop::fail_route(&mut payment.route);
+    payment.route.fail_route();
 }
 
 // ============================================
@@ -864,12 +865,12 @@ public fun create_payment_receipt(
     assert!(payment.status == PAYMENT_COMPLETED, EInvalidState);
 
     NetworkPaymentReceipt {
-        route_id: *hop::route_id(&payment.route),
+        route_id: *payment.route.route_id(),
         source: payment.source,
         destination: payment.destination,
         amount: payment.amount,
         fees: payment.total_fees,
-        hop_count: hop::route_hop_count(&payment.route),
+        hop_count: payment.route.route_hop_count(),
         completed_at,
     }
 }

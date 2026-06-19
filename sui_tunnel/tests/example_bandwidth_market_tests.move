@@ -35,14 +35,14 @@ fun open_session() {
         &mut ctx,
     );
 
-    assert_eq!(example_bandwidth_market::session_status<SUI>(&session), 0);
-    assert_eq!(example_bandwidth_market::session_total_bytes<SUI>(&session), 0);
-    assert_eq!(example_bandwidth_market::session_total_cost<SUI>(&session), 0);
-    assert_eq!(example_bandwidth_market::session_rate_per_mb<SUI>(&session), 1000);
-    assert_eq!(example_bandwidth_market::session_readings_count<SUI>(&session), 0);
-    assert_eq!(example_bandwidth_market::session_nonce<SUI>(&session), 0);
+    assert_eq!(session.session_status<SUI>(), 0);
+    assert_eq!(session.session_total_bytes<SUI>(), 0);
+    assert_eq!(session.session_total_cost<SUI>(), 0);
+    assert_eq!(session.session_rate_per_mb<SUI>(), 1000);
+    assert_eq!(session.session_readings_count<SUI>(), 0);
+    assert_eq!(session.session_nonce<SUI>(), 0);
 
-    example_bandwidth_market::destroy_session_for_testing<SUI>(session);
+    session.destroy_session_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -65,9 +65,9 @@ fun session_balance_after_open() {
         &mut ctx,
     );
 
-    assert_eq!(example_bandwidth_market::session_total_balance<SUI>(&session), 100000);
+    assert_eq!(session.session_total_balance<SUI>(), 100000);
 
-    example_bandwidth_market::destroy_session_for_testing<SUI>(session);
+    session.destroy_session_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -110,8 +110,7 @@ fun record_reading() {
     );
 
     // 1 MB consumed, cost = 1000
-    example_bandwidth_market::record_reading<SUI>(
-        &mut session,
+    session.record_reading<SUI>(
         1048576, // 1 MB
         1000, // cost
         1, // readings_count
@@ -124,13 +123,12 @@ fun record_reading() {
         &clock,
     );
 
-    assert_eq!(example_bandwidth_market::session_total_bytes<SUI>(&session), 1048576);
-    assert_eq!(example_bandwidth_market::session_total_cost<SUI>(&session), 1000);
-    assert_eq!(example_bandwidth_market::session_readings_count<SUI>(&session), 1);
+    assert_eq!(session.session_total_bytes<SUI>(), 1048576);
+    assert_eq!(session.session_total_cost<SUI>(), 1000);
+    assert_eq!(session.session_readings_count<SUI>(), 1);
 
     // 5 MB total consumed, cost = 5000
-    example_bandwidth_market::record_reading<SUI>(
-        &mut session,
+    session.record_reading<SUI>(
         5242880, // 5 MB
         5000, // cost
         5, // readings_count (5 readings total)
@@ -143,11 +141,11 @@ fun record_reading() {
         &clock,
     );
 
-    assert_eq!(example_bandwidth_market::session_total_bytes<SUI>(&session), 5242880);
-    assert_eq!(example_bandwidth_market::session_total_cost<SUI>(&session), 5000);
-    assert_eq!(example_bandwidth_market::session_readings_count<SUI>(&session), 5);
+    assert_eq!(session.session_total_bytes<SUI>(), 5242880);
+    assert_eq!(session.session_total_cost<SUI>(), 5000);
+    assert_eq!(session.session_readings_count<SUI>(), 5);
 
-    example_bandwidth_market::destroy_session_for_testing<SUI>(session);
+    session.destroy_session_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -177,8 +175,7 @@ fun record_reading_wrong_cost() {
     );
 
     // 1 MB at 1000/MB should cost 1000, not 2000
-    example_bandwidth_market::record_reading<SUI>(
-        &mut session,
+    session.record_reading<SUI>(
         1048576,
         2000,
         1,
@@ -191,7 +188,7 @@ fun record_reading_wrong_cost() {
         &clock,
     );
 
-    example_bandwidth_market::destroy_session_for_testing<SUI>(session);
+    session.destroy_session_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -221,8 +218,7 @@ fun record_reading_exceeds_budget() {
     );
 
     // 1 MB costs 1000 but budget is only 500
-    example_bandwidth_market::record_reading<SUI>(
-        &mut session,
+    session.record_reading<SUI>(
         1048576,
         1000,
         1,
@@ -235,7 +231,7 @@ fun record_reading_exceeds_budget() {
         &clock,
     );
 
-    example_bandwidth_market::destroy_session_for_testing<SUI>(session);
+    session.destroy_session_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -264,8 +260,7 @@ fun record_reading_stale_nonce() {
         &mut ctx,
     );
 
-    example_bandwidth_market::record_reading<SUI>(
-        &mut session,
+    session.record_reading<SUI>(
         1048576,
         1000,
         1,
@@ -279,8 +274,7 @@ fun record_reading_stale_nonce() {
     );
 
     // Stale nonce (0 <= 1)
-    example_bandwidth_market::record_reading<SUI>(
-        &mut session,
+    session.record_reading<SUI>(
         2097152,
         2000,
         2,
@@ -293,7 +287,7 @@ fun record_reading_stale_nonce() {
         &clock,
     );
 
-    example_bandwidth_market::destroy_session_for_testing<SUI>(session);
+    session.destroy_session_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -322,8 +316,7 @@ fun record_reading_decreasing_bytes() {
         &mut ctx,
     );
 
-    example_bandwidth_market::record_reading<SUI>(
-        &mut session,
+    session.record_reading<SUI>(
         2097152,
         2000,
         1,
@@ -337,8 +330,7 @@ fun record_reading_decreasing_bytes() {
     );
 
     // Bytes decreased (1MB < 2MB) - shouldn't be possible
-    example_bandwidth_market::record_reading<SUI>(
-        &mut session,
+    session.record_reading<SUI>(
         1048576,
         1000,
         2,
@@ -351,7 +343,7 @@ fun record_reading_decreasing_bytes() {
         &clock,
     );
 
-    example_bandwidth_market::destroy_session_for_testing<SUI>(session);
+    session.destroy_session_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -375,8 +367,7 @@ fun calculate_settlement() {
     );
 
     // Used 10 MB = 10000 cost
-    example_bandwidth_market::record_reading<SUI>(
-        &mut session,
+    session.record_reading<SUI>(
         10485760,
         10000,
         10,
@@ -389,13 +380,11 @@ fun calculate_settlement() {
         &clock,
     );
 
-    let (consumer_refund, provider_earned) = example_bandwidth_market::calculate_settlement<SUI>(
-        &session,
-    );
+    let (consumer_refund, provider_earned) = session.calculate_settlement<SUI>();
     assert_eq!(consumer_refund, 90000);
     assert_eq!(provider_earned, 10000);
 
-    example_bandwidth_market::destroy_session_for_testing<SUI>(session);
+    session.destroy_session_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -418,15 +407,15 @@ fun compute_meter_hash_deterministic() {
         &mut ctx,
     );
 
-    let h1 = example_bandwidth_market::compute_meter_hash<SUI>(&session, 1048576, 1000, 1, 1);
-    let h2 = example_bandwidth_market::compute_meter_hash<SUI>(&session, 1048576, 1000, 1, 1);
+    let h1 = session.compute_meter_hash<SUI>(1048576, 1000, 1, 1);
+    let h2 = session.compute_meter_hash<SUI>(1048576, 1000, 1, 1);
     assert_eq!(h1, h2);
     assert_eq!(h1.length(), 32);
 
-    let h3 = example_bandwidth_market::compute_meter_hash<SUI>(&session, 2097152, 2000, 2, 2);
+    let h3 = session.compute_meter_hash<SUI>(2097152, 2000, 2, 2);
     assert!(h1 != h3);
 
-    example_bandwidth_market::destroy_session_for_testing<SUI>(session);
+    session.destroy_session_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -439,10 +428,10 @@ fun meter_state_accessors() {
         42,
     );
 
-    assert_eq!(example_bandwidth_market::meter_total_bytes(&state), 5242880);
-    assert_eq!(example_bandwidth_market::meter_total_cost(&state), 5000);
-    assert_eq!(example_bandwidth_market::meter_readings_count(&state), 100);
-    assert_eq!(example_bandwidth_market::meter_nonce(&state), 42);
+    assert_eq!(state.meter_total_bytes(), 5242880);
+    assert_eq!(state.meter_total_cost(), 5000);
+    assert_eq!(state.meter_readings_count(), 100);
+    assert_eq!(state.meter_nonce(), 42);
 }
 
 #[
@@ -470,7 +459,7 @@ fun open_session_zero_rate() {
         &mut ctx,
     );
 
-    example_bandwidth_market::destroy_session_for_testing<SUI>(session);
+    session.destroy_session_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -499,13 +488,11 @@ fun cannot_record_reading_when_closed() {
         &mut ctx,
     );
 
-    example_bandwidth_market::set_status_for_testing<SUI>(
-        &mut session,
+    session.set_status_for_testing<SUI>(
         example_bandwidth_market::session_closed(),
     );
 
-    example_bandwidth_market::record_reading<SUI>(
-        &mut session,
+    session.record_reading<SUI>(
         1048576,
         1000,
         1,
@@ -518,6 +505,6 @@ fun cannot_record_reading_when_closed() {
         &clock,
     );
 
-    example_bandwidth_market::destroy_session_for_testing<SUI>(session);
+    session.destroy_session_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }

@@ -323,7 +323,7 @@ public fun compute_session_hash<T>(
     balance_b: u64,
 ): vector<u8> {
     compute_session_hash_with_id(
-        tunnel::id(&session.tunnel),
+        session.tunnel.id(),
         board,
         moves_count,
         games_played,
@@ -436,7 +436,7 @@ public fun record_move<T>(
     };
 
     let state_hash = compute_session_hash_with_id(
-        tunnel::id(&session.tunnel),
+        session.tunnel.id(),
         &board,
         mc,
         games_played,
@@ -732,7 +732,7 @@ public fun session_tunnel<T>(s: &MultiGameTicTacToe<T>): &Tunnel<T> { &s.tunnel 
 public fun session_state<T>(s: &MultiGameTicTacToe<T>): &SessionState { &s.state }
 
 public fun session_total_pot<T>(s: &MultiGameTicTacToe<T>): u64 {
-    tunnel::total_balance(&s.tunnel)
+    s.tunnel.total_balance()
 }
 
 public fun stake_per_player<T>(s: &MultiGameTicTacToe<T>): u64 { s.stake_per_player }

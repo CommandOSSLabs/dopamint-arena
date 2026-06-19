@@ -73,15 +73,15 @@ fun build_state_commitment_deterministic() {
         &mut ctx,
     );
 
-    let hash1 = example_tunnel_lifecycle::build_state_commitment<SUI>(&session, 100, 50, 1);
-    let hash2 = example_tunnel_lifecycle::build_state_commitment<SUI>(&session, 100, 50, 1);
+    let hash1 = session.build_state_commitment<SUI>(100, 50, 1);
+    let hash2 = session.build_state_commitment<SUI>(100, 50, 1);
     assert_eq!(hash1, hash2);
 
-    let hash3 = example_tunnel_lifecycle::build_state_commitment<SUI>(&session, 200, 50, 1);
+    let hash3 = session.build_state_commitment<SUI>(200, 50, 1);
     assert!(hash1 != hash3);
     assert_eq!(hash1.length(), 32);
 
-    example_tunnel_lifecycle::destroy_session_for_testing<SUI>(session);
+    session.destroy_session_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -105,28 +105,13 @@ fun create_session_and_accessors() {
         &mut ctx,
     );
 
-    assert_eq!(example_tunnel_lifecycle::session_status<SUI>(&session), 0);
-    assert_eq!(example_tunnel_lifecycle::session_nonce<SUI>(&session), 0);
-    assert_eq!(
-        example_tunnel_lifecycle::state_total_a_to_b(
-            example_tunnel_lifecycle::session_latest_state<SUI>(&session),
-        ),
-        0,
-    );
-    assert_eq!(
-        example_tunnel_lifecycle::state_total_b_to_a(
-            example_tunnel_lifecycle::session_latest_state<SUI>(&session),
-        ),
-        0,
-    );
-    assert_eq!(
-        *example_tunnel_lifecycle::state_memo(
-            example_tunnel_lifecycle::session_latest_state<SUI>(&session),
-        ),
-        b"test session",
-    );
+    assert_eq!(session.session_status<SUI>(), 0);
+    assert_eq!(session.session_nonce<SUI>(), 0);
+    assert_eq!(session.session_latest_state<SUI>().state_total_a_to_b(), 0);
+    assert_eq!(session.session_latest_state<SUI>().state_total_b_to_a(), 0);
+    assert_eq!(*session.session_latest_state<SUI>().state_memo(), b"test session");
 
-    example_tunnel_lifecycle::destroy_session_for_testing<SUI>(session);
+    session.destroy_session_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -151,8 +136,7 @@ fun record_state_update() {
     );
 
     clock::increment_for_testing(&mut clock, 1000);
-    example_tunnel_lifecycle::record_state_update<SUI>(
-        &mut session,
+    session.record_state_update<SUI>(
         100,
         0,
         1,
@@ -163,17 +147,11 @@ fun record_state_update() {
         vector[],
         &clock,
     );
-    assert_eq!(example_tunnel_lifecycle::session_nonce<SUI>(&session), 1);
-    assert_eq!(
-        example_tunnel_lifecycle::state_total_a_to_b(
-            example_tunnel_lifecycle::session_latest_state<SUI>(&session),
-        ),
-        100,
-    );
+    assert_eq!(session.session_nonce<SUI>(), 1);
+    assert_eq!(session.session_latest_state<SUI>().state_total_a_to_b(), 100);
 
     clock::increment_for_testing(&mut clock, 1000);
-    example_tunnel_lifecycle::record_state_update<SUI>(
-        &mut session,
+    session.record_state_update<SUI>(
         200,
         50,
         2,
@@ -184,21 +162,11 @@ fun record_state_update() {
         vector[],
         &clock,
     );
-    assert_eq!(example_tunnel_lifecycle::session_nonce<SUI>(&session), 2);
-    assert_eq!(
-        example_tunnel_lifecycle::state_total_a_to_b(
-            example_tunnel_lifecycle::session_latest_state<SUI>(&session),
-        ),
-        200,
-    );
-    assert_eq!(
-        example_tunnel_lifecycle::state_total_b_to_a(
-            example_tunnel_lifecycle::session_latest_state<SUI>(&session),
-        ),
-        50,
-    );
+    assert_eq!(session.session_nonce<SUI>(), 2);
+    assert_eq!(session.session_latest_state<SUI>().state_total_a_to_b(), 200);
+    assert_eq!(session.session_latest_state<SUI>().state_total_b_to_a(), 50);
 
-    example_tunnel_lifecycle::destroy_session_for_testing<SUI>(session);
+    session.destroy_session_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -228,8 +196,7 @@ fun record_state_update_stale_nonce() {
         &mut ctx,
     );
 
-    example_tunnel_lifecycle::record_state_update<SUI>(
-        &mut session,
+    session.record_state_update<SUI>(
         100,
         0,
         1,
@@ -241,8 +208,7 @@ fun record_state_update_stale_nonce() {
         &clock,
     );
     // Try to record with nonce 0 (stale) - should fail
-    example_tunnel_lifecycle::record_state_update<SUI>(
-        &mut session,
+    session.record_state_update<SUI>(
         200,
         0,
         0,
@@ -254,7 +220,7 @@ fun record_state_update_stale_nonce() {
         &clock,
     );
 
-    example_tunnel_lifecycle::destroy_session_for_testing<SUI>(session);
+    session.destroy_session_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -279,8 +245,7 @@ fun multiple_state_updates_preserve_memo() {
     );
 
     clock::increment_for_testing(&mut clock, 1000);
-    example_tunnel_lifecycle::record_state_update<SUI>(
-        &mut session,
+    session.record_state_update<SUI>(
         100,
         0,
         1,
@@ -291,16 +256,10 @@ fun multiple_state_updates_preserve_memo() {
         vector[],
         &clock,
     );
-    assert_eq!(
-        *example_tunnel_lifecycle::state_memo(
-            example_tunnel_lifecycle::session_latest_state<SUI>(&session),
-        ),
-        b"original memo",
-    );
+    assert_eq!(*session.session_latest_state<SUI>().state_memo(), b"original memo");
 
     clock::increment_for_testing(&mut clock, 1000);
-    example_tunnel_lifecycle::record_state_update<SUI>(
-        &mut session,
+    session.record_state_update<SUI>(
         200,
         50,
         2,
@@ -311,14 +270,9 @@ fun multiple_state_updates_preserve_memo() {
         vector[],
         &clock,
     );
-    assert_eq!(
-        *example_tunnel_lifecycle::state_memo(
-            example_tunnel_lifecycle::session_latest_state<SUI>(&session),
-        ),
-        b"original memo",
-    );
+    assert_eq!(*session.session_latest_state<SUI>().state_memo(), b"original memo");
 
-    example_tunnel_lifecycle::destroy_session_for_testing<SUI>(session);
+    session.destroy_session_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -331,10 +285,10 @@ fun micropayment_state_accessors() {
         b"payment for service",
     );
 
-    assert_eq!(example_tunnel_lifecycle::state_total_a_to_b(&state), 500);
-    assert_eq!(example_tunnel_lifecycle::state_total_b_to_a(&state), 200);
-    assert_eq!(example_tunnel_lifecycle::state_nonce(&state), 42);
-    assert_eq!(*example_tunnel_lifecycle::state_memo(&state), b"payment for service");
+    assert_eq!(state.state_total_a_to_b(), 500);
+    assert_eq!(state.state_total_b_to_a(), 200);
+    assert_eq!(state.state_nonce(), 42);
+    assert_eq!(*state.state_memo(), b"payment for service");
 }
 
 #[test]
@@ -348,15 +302,12 @@ fun session_receipt_accessors() {
         &mut ctx,
     );
 
-    assert_eq!(example_tunnel_lifecycle::receipt_party_a_received(&receipt), 800);
-    assert_eq!(example_tunnel_lifecycle::receipt_party_b_received(&receipt), 1200);
-    assert_eq!(example_tunnel_lifecycle::receipt_final_nonce(&receipt), 10);
-    assert_eq!(
-        example_tunnel_lifecycle::receipt_close_method(&receipt),
-        example_tunnel_lifecycle::session_closed(),
-    );
+    assert_eq!(receipt.receipt_party_a_received(), 800);
+    assert_eq!(receipt.receipt_party_b_received(), 1200);
+    assert_eq!(receipt.receipt_final_nonce(), 10);
+    assert_eq!(receipt.receipt_close_method(), example_tunnel_lifecycle::session_closed());
 
-    example_tunnel_lifecycle::destroy_receipt_for_testing(receipt);
+    receipt.destroy_receipt_for_testing();
 }
 
 #[test]
@@ -383,8 +334,7 @@ fun rate_limited_updates() {
 
     // First update should succeed
     clock::increment_for_testing(&mut clock, 5000);
-    example_tunnel_lifecycle::record_state_update<SUI>(
-        &mut session,
+    session.record_state_update<SUI>(
         100,
         0,
         1,
@@ -398,8 +348,7 @@ fun rate_limited_updates() {
 
     // After 5 more seconds, should succeed again
     clock::increment_for_testing(&mut clock, 5000);
-    example_tunnel_lifecycle::record_state_update<SUI>(
-        &mut session,
+    session.record_state_update<SUI>(
         200,
         0,
         2,
@@ -411,7 +360,7 @@ fun rate_limited_updates() {
         &clock,
     );
 
-    example_tunnel_lifecycle::destroy_session_for_testing<SUI>(session);
+    session.destroy_session_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -445,8 +394,7 @@ fun rate_limit_too_fast() {
 
     // First update at 5s
     clock::increment_for_testing(&mut clock, 5000);
-    example_tunnel_lifecycle::record_state_update<SUI>(
-        &mut session,
+    session.record_state_update<SUI>(
         100,
         0,
         1,
@@ -460,8 +408,7 @@ fun rate_limit_too_fast() {
 
     // Try to update again too quickly (only 1s later, need 5s)
     clock::increment_for_testing(&mut clock, 1000);
-    example_tunnel_lifecycle::record_state_update<SUI>(
-        &mut session,
+    session.record_state_update<SUI>(
         200,
         0,
         2,
@@ -473,7 +420,7 @@ fun rate_limit_too_fast() {
         &clock,
     );
 
-    example_tunnel_lifecycle::destroy_session_for_testing<SUI>(session);
+    session.destroy_session_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -505,14 +452,12 @@ fun cannot_update_closed_session() {
     );
 
     // Manually close the session
-    example_tunnel_lifecycle::set_status_for_testing<SUI>(
-        &mut session,
+    session.set_status_for_testing<SUI>(
         example_tunnel_lifecycle::session_closed(),
     );
 
     // Try to record update - should fail
-    example_tunnel_lifecycle::record_state_update<SUI>(
-        &mut session,
+    session.record_state_update<SUI>(
         100,
         0,
         1,
@@ -524,6 +469,6 @@ fun cannot_update_closed_session() {
         &clock,
     );
 
-    example_tunnel_lifecycle::destroy_session_for_testing<SUI>(session);
+    session.destroy_session_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }

@@ -38,18 +38,15 @@ fun create_contract() {
         &mut ctx,
     );
 
-    assert_eq!(example_freelance_milestone::contract_status<SUI>(&contract), 0);
-    assert_eq!(example_freelance_milestone::contract_total_milestones<SUI>(&contract), 5);
-    assert_eq!(example_freelance_milestone::contract_completed_milestones<SUI>(&contract), 0);
-    assert_eq!(example_freelance_milestone::contract_amount_per_milestone<SUI>(&contract), 2000);
-    assert_eq!(example_freelance_milestone::contract_total_earned<SUI>(&contract), 0);
-    assert_eq!(example_freelance_milestone::contract_nonce<SUI>(&contract), 0);
-    assert_eq!(
-        *example_freelance_milestone::contract_project_description<SUI>(&contract),
-        b"Build a website",
-    );
+    assert_eq!(contract.contract_status<SUI>(), 0);
+    assert_eq!(contract.contract_total_milestones<SUI>(), 5);
+    assert_eq!(contract.contract_completed_milestones<SUI>(), 0);
+    assert_eq!(contract.contract_amount_per_milestone<SUI>(), 2000);
+    assert_eq!(contract.contract_total_earned<SUI>(), 0);
+    assert_eq!(contract.contract_nonce<SUI>(), 0);
+    assert_eq!(*contract.contract_project_description<SUI>(), b"Build a website");
 
-    example_freelance_milestone::destroy_contract_for_testing<SUI>(contract);
+    contract.destroy_contract_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -74,9 +71,9 @@ fun contract_balance_after_create() {
         &mut ctx,
     );
 
-    assert_eq!(example_freelance_milestone::contract_total_balance<SUI>(&contract), 10000);
+    assert_eq!(contract.contract_total_balance<SUI>(), 10000);
 
-    example_freelance_milestone::destroy_contract_for_testing<SUI>(contract);
+    contract.destroy_contract_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -103,8 +100,7 @@ fun record_milestones() {
 
     // Complete milestone 1
     // party_a_balance = 10000 - 1*2000 = 8000, party_b_balance = 1*2000 = 2000
-    example_freelance_milestone::record_milestone<SUI>(
-        &mut contract,
+    contract.record_milestone<SUI>(
         1,
         1,
         8000,
@@ -114,13 +110,12 @@ fun record_milestones() {
         vector[],
         &clock,
     );
-    assert_eq!(example_freelance_milestone::contract_completed_milestones<SUI>(&contract), 1);
-    assert_eq!(example_freelance_milestone::contract_total_earned<SUI>(&contract), 2000);
+    assert_eq!(contract.contract_completed_milestones<SUI>(), 1);
+    assert_eq!(contract.contract_total_earned<SUI>(), 2000);
 
     // Complete milestones 2 and 3 in one update
     // party_a_balance = 10000 - 3*2000 = 4000, party_b_balance = 3*2000 = 6000
-    example_freelance_milestone::record_milestone<SUI>(
-        &mut contract,
+    contract.record_milestone<SUI>(
         3,
         2,
         4000,
@@ -130,13 +125,12 @@ fun record_milestones() {
         vector[],
         &clock,
     );
-    assert_eq!(example_freelance_milestone::contract_completed_milestones<SUI>(&contract), 3);
-    assert_eq!(example_freelance_milestone::contract_total_earned<SUI>(&contract), 6000);
+    assert_eq!(contract.contract_completed_milestones<SUI>(), 3);
+    assert_eq!(contract.contract_total_earned<SUI>(), 6000);
 
     // Complete all 5 milestones
     // party_a_balance = 10000 - 5*2000 = 0, party_b_balance = 5*2000 = 10000
-    example_freelance_milestone::record_milestone<SUI>(
-        &mut contract,
+    contract.record_milestone<SUI>(
         5,
         3,
         0,
@@ -146,10 +140,10 @@ fun record_milestones() {
         vector[],
         &clock,
     );
-    assert_eq!(example_freelance_milestone::contract_completed_milestones<SUI>(&contract), 5);
-    assert_eq!(example_freelance_milestone::contract_total_earned<SUI>(&contract), 10000);
+    assert_eq!(contract.contract_completed_milestones<SUI>(), 5);
+    assert_eq!(contract.contract_total_earned<SUI>(), 10000);
 
-    example_freelance_milestone::destroy_contract_for_testing<SUI>(contract);
+    contract.destroy_contract_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -182,8 +176,7 @@ fun record_milestone_exceeds_total() {
 
     // Try to claim 6 milestones out of 5
     // party_a_balance = 10000 - 6*2000 would underflow, but validation catches it first
-    example_freelance_milestone::record_milestone<SUI>(
-        &mut contract,
+    contract.record_milestone<SUI>(
         6,
         1,
         0,
@@ -194,7 +187,7 @@ fun record_milestone_exceeds_total() {
         &clock,
     );
 
-    example_freelance_milestone::destroy_contract_for_testing<SUI>(contract);
+    contract.destroy_contract_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -226,8 +219,7 @@ fun record_milestone_not_increasing() {
     );
 
     // party_a_balance = 10000 - 3*2000 = 4000, party_b_balance = 3*2000 = 6000
-    example_freelance_milestone::record_milestone<SUI>(
-        &mut contract,
+    contract.record_milestone<SUI>(
         3,
         1,
         4000,
@@ -240,8 +232,7 @@ fun record_milestone_not_increasing() {
 
     // Trying to go back to 2 milestones
     // party_a_balance = 10000 - 2*2000 = 6000, party_b_balance = 2*2000 = 4000
-    example_freelance_milestone::record_milestone<SUI>(
-        &mut contract,
+    contract.record_milestone<SUI>(
         2,
         2,
         6000,
@@ -252,7 +243,7 @@ fun record_milestone_not_increasing() {
         &clock,
     );
 
-    example_freelance_milestone::destroy_contract_for_testing<SUI>(contract);
+    contract.destroy_contract_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -284,8 +275,7 @@ fun record_milestone_stale_nonce() {
     );
 
     // party_a_balance = 10000 - 1*2000 = 8000, party_b_balance = 1*2000 = 2000
-    example_freelance_milestone::record_milestone<SUI>(
-        &mut contract,
+    contract.record_milestone<SUI>(
         1,
         1,
         8000,
@@ -298,8 +288,7 @@ fun record_milestone_stale_nonce() {
 
     // Stale nonce
     // party_a_balance = 10000 - 2*2000 = 6000, party_b_balance = 2*2000 = 4000
-    example_freelance_milestone::record_milestone<SUI>(
-        &mut contract,
+    contract.record_milestone<SUI>(
         2,
         0,
         6000,
@@ -310,7 +299,7 @@ fun record_milestone_stale_nonce() {
         &clock,
     );
 
-    example_freelance_milestone::destroy_contract_for_testing<SUI>(contract);
+    contract.destroy_contract_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -344,8 +333,7 @@ fun record_milestone_exceeds_balance() {
 
     // 3 milestones * 2000 = 6000 > 5000 budget
     // party_a_balance = 5000 - 6000 would underflow; use 0/5000 since it aborts before checking
-    example_freelance_milestone::record_milestone<SUI>(
-        &mut contract,
+    contract.record_milestone<SUI>(
         3,
         1,
         0,
@@ -356,7 +344,7 @@ fun record_milestone_exceeds_balance() {
         &clock,
     );
 
-    example_freelance_milestone::destroy_contract_for_testing<SUI>(contract);
+    contract.destroy_contract_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -383,8 +371,7 @@ fun calculate_settlement() {
 
     // Complete 3 of 5 milestones
     // party_a_balance = 10000 - 3*2000 = 4000, party_b_balance = 3*2000 = 6000
-    example_freelance_milestone::record_milestone<SUI>(
-        &mut contract,
+    contract.record_milestone<SUI>(
         3,
         1,
         4000,
@@ -395,13 +382,11 @@ fun calculate_settlement() {
         &clock,
     );
 
-    let (client_refund, freelancer_earned) = example_freelance_milestone::calculate_settlement<SUI>(
-        &contract,
-    );
+    let (client_refund, freelancer_earned) = contract.calculate_settlement<SUI>();
     assert_eq!(client_refund, 4000); // 10000 - 6000
     assert_eq!(freelancer_earned, 6000); // 3 * 2000
 
-    example_freelance_milestone::destroy_contract_for_testing<SUI>(contract);
+    contract.destroy_contract_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -426,13 +411,11 @@ fun calculate_settlement_no_milestones() {
         &mut ctx,
     );
 
-    let (client_refund, freelancer_earned) = example_freelance_milestone::calculate_settlement<SUI>(
-        &contract,
-    );
+    let (client_refund, freelancer_earned) = contract.calculate_settlement<SUI>();
     assert_eq!(client_refund, 10000); // full refund
     assert_eq!(freelancer_earned, 0);
 
-    example_freelance_milestone::destroy_contract_for_testing<SUI>(contract);
+    contract.destroy_contract_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -458,8 +441,7 @@ fun calculate_settlement_all_milestones() {
     );
 
     // party_a_balance = 10000 - 5*2000 = 0, party_b_balance = 5*2000 = 10000
-    example_freelance_milestone::record_milestone<SUI>(
-        &mut contract,
+    contract.record_milestone<SUI>(
         5,
         1,
         0,
@@ -470,13 +452,11 @@ fun calculate_settlement_all_milestones() {
         &clock,
     );
 
-    let (client_refund, freelancer_earned) = example_freelance_milestone::calculate_settlement<SUI>(
-        &contract,
-    );
+    let (client_refund, freelancer_earned) = contract.calculate_settlement<SUI>();
     assert_eq!(client_refund, 0);
     assert_eq!(freelancer_earned, 10000);
 
-    example_freelance_milestone::destroy_contract_for_testing<SUI>(contract);
+    contract.destroy_contract_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -501,15 +481,15 @@ fun compute_milestone_hash_deterministic() {
         &mut ctx,
     );
 
-    let h1 = example_freelance_milestone::compute_milestone_hash<SUI>(&contract, 3, 6000, 1);
-    let h2 = example_freelance_milestone::compute_milestone_hash<SUI>(&contract, 3, 6000, 1);
+    let h1 = contract.compute_milestone_hash<SUI>(3, 6000, 1);
+    let h2 = contract.compute_milestone_hash<SUI>(3, 6000, 1);
     assert_eq!(h1, h2);
     assert_eq!(h1.length(), 32);
 
-    let h3 = example_freelance_milestone::compute_milestone_hash<SUI>(&contract, 4, 8000, 2);
+    let h3 = contract.compute_milestone_hash<SUI>(4, 8000, 2);
     assert!(h1 != h3);
 
-    example_freelance_milestone::destroy_contract_for_testing<SUI>(contract);
+    contract.destroy_contract_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -523,11 +503,11 @@ fun milestone_state_accessors() {
         42,
     );
 
-    assert_eq!(example_freelance_milestone::milestone_total(&state), 10);
-    assert_eq!(example_freelance_milestone::milestone_completed(&state), 7);
-    assert_eq!(example_freelance_milestone::milestone_amount_per(&state), 500);
-    assert_eq!(example_freelance_milestone::milestone_total_earned(&state), 3500);
-    assert_eq!(example_freelance_milestone::milestone_nonce(&state), 42);
+    assert_eq!(state.milestone_total(), 10);
+    assert_eq!(state.milestone_completed(), 7);
+    assert_eq!(state.milestone_amount_per(), 500);
+    assert_eq!(state.milestone_total_earned(), 3500);
+    assert_eq!(state.milestone_nonce(), 42);
 }
 
 #[
@@ -557,7 +537,7 @@ fun create_contract_zero_milestones() {
         &mut ctx,
     );
 
-    example_freelance_milestone::destroy_contract_for_testing<SUI>(contract);
+    contract.destroy_contract_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -588,7 +568,7 @@ fun create_contract_zero_amount() {
         &mut ctx,
     );
 
-    example_freelance_milestone::destroy_contract_for_testing<SUI>(contract);
+    contract.destroy_contract_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -620,7 +600,7 @@ fun create_contract_insufficient_budget() {
         &mut ctx,
     );
 
-    example_freelance_milestone::destroy_contract_for_testing<SUI>(contract);
+    contract.destroy_contract_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -651,14 +631,12 @@ fun cannot_record_milestone_when_completed() {
         &mut ctx,
     );
 
-    example_freelance_milestone::set_status_for_testing<SUI>(
-        &mut contract,
+    contract.set_status_for_testing<SUI>(
         example_freelance_milestone::contract_completed(),
     );
 
     // party_a_balance = 10000 - 1*2000 = 8000, party_b_balance = 1*2000 = 2000
-    example_freelance_milestone::record_milestone<SUI>(
-        &mut contract,
+    contract.record_milestone<SUI>(
         1,
         1,
         8000,
@@ -669,6 +647,6 @@ fun cannot_record_milestone_when_completed() {
         &clock,
     );
 
-    example_freelance_milestone::destroy_contract_for_testing<SUI>(contract);
+    contract.destroy_contract_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }

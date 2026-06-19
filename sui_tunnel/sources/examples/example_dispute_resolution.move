@@ -264,17 +264,18 @@ public fun resolve_for_raiser(
 ): ArbitrationResult {
     assert!(case.status == CASE_OPEN, EInvalidState);
 
-    referee::resolve_for_a(
-        &mut case.dispute,
-        party_a_amount,
-        party_b_amount,
-        penalty,
-        clock,
-    );
+    case
+        .dispute
+        .resolve_for_a(
+            party_a_amount,
+            party_b_amount,
+            penalty,
+            clock,
+        );
 
     case.status = CASE_RESOLVED;
 
-    let case_number = referee::dispute_id(&case.dispute);
+    let case_number = case.dispute.dispute_id();
 
     event::emit(CaseResolved {
         case_number,
@@ -286,7 +287,7 @@ public fun resolve_for_raiser(
 
     ArbitrationResult {
         case_number,
-        winner: option::some(referee::dispute_raised_by(&case.dispute)),
+        winner: option::some(case.dispute.dispute_raised_by()),
         party_a_amount,
         party_b_amount,
         penalty_amount: penalty,
@@ -304,17 +305,18 @@ public fun resolve_for_respondent(
 ): ArbitrationResult {
     assert!(case.status == CASE_OPEN, EInvalidState);
 
-    referee::resolve_for_b(
-        &mut case.dispute,
-        party_a_amount,
-        party_b_amount,
-        penalty,
-        clock,
-    );
+    case
+        .dispute
+        .resolve_for_b(
+            party_a_amount,
+            party_b_amount,
+            penalty,
+            clock,
+        );
 
     case.status = CASE_RESOLVED;
 
-    let case_number = referee::dispute_id(&case.dispute);
+    let case_number = case.dispute.dispute_id();
 
     event::emit(CaseResolved {
         case_number,
@@ -326,7 +328,7 @@ public fun resolve_for_respondent(
 
     ArbitrationResult {
         case_number,
-        winner: option::some(referee::dispute_against(&case.dispute)),
+        winner: option::some(case.dispute.dispute_against()),
         party_a_amount,
         party_b_amount,
         penalty_amount: penalty,
@@ -344,17 +346,18 @@ public fun resolve_split(
 ): ArbitrationResult {
     assert!(case.status == CASE_OPEN, EInvalidState);
 
-    referee::resolve_split(
-        &mut case.dispute,
-        party_a_amount,
-        party_b_amount,
-        penalty,
-        clock,
-    );
+    case
+        .dispute
+        .resolve_split(
+            party_a_amount,
+            party_b_amount,
+            penalty,
+            clock,
+        );
 
     case.status = CASE_RESOLVED;
 
-    let case_number = referee::dispute_id(&case.dispute);
+    let case_number = case.dispute.dispute_id();
 
     event::emit(CaseResolved {
         case_number,
@@ -386,31 +389,33 @@ public fun auto_resolve_timeout(
     assert!(case.status == CASE_OPEN, EInvalidState);
 
     // Calculate graduated penalty based on respondent's history
-    let penalty = referee::calculate_graduated_penalty(
-        &case.config,
-        &case.respondent_history,
-        referee::dispute_raised_at(&case.dispute),
-        clock,
-    );
+    let penalty = case
+        .config
+        .calculate_graduated_penalty(
+            &case.respondent_history,
+            case.dispute.dispute_raised_at(),
+            clock,
+        );
 
-    referee::auto_resolve_timeout(
-        &mut case.dispute,
-        total_balance,
-        penalty,
-        party_a,
-        clock,
-    );
+    case
+        .dispute
+        .auto_resolve_timeout(
+            total_balance,
+            penalty,
+            party_a,
+            clock,
+        );
 
     case.status = CASE_TIMED_OUT;
 
     // Update respondent history
-    referee::record_timeout(&mut case.respondent_history, penalty);
+    case.respondent_history.record_timeout(penalty);
 
-    let case_number = referee::dispute_id(&case.dispute);
-    let resolution = referee::dispute_resolution(&case.dispute);
-    let party_a_amount = referee::resolution_party_a_amount(resolution);
-    let party_b_amount = referee::resolution_party_b_amount(resolution);
-    let penalty_deducted = referee::resolution_penalty_deducted(resolution);
+    let case_number = case.dispute.dispute_id();
+    let resolution = case.dispute.dispute_resolution();
+    let party_a_amount = resolution.resolution_party_a_amount();
+    let party_b_amount = resolution.resolution_party_b_amount();
+    let penalty_deducted = resolution.resolution_penalty_deducted();
 
     event::emit(CaseResolved {
         case_number,
@@ -422,7 +427,7 @@ public fun auto_resolve_timeout(
 
     ArbitrationResult {
         case_number,
-        winner: option::some(referee::dispute_raised_by(&case.dispute)),
+        winner: option::some(case.dispute.dispute_raised_by()),
         party_a_amount,
         party_b_amount,
         penalty_amount: penalty_deducted,
@@ -433,12 +438,13 @@ public fun auto_resolve_timeout(
 /// Calculates the penalty for the respondent based on their history
 /// and how long they've been unresponsive.
 public fun calculate_penalty(case: &DisputeCase, clock: &Clock): u64 {
-    referee::calculate_graduated_penalty(
-        &case.config,
-        &case.respondent_history,
-        referee::dispute_raised_at(&case.dispute),
-        clock,
-    )
+    case
+        .config
+        .calculate_graduated_penalty(
+            &case.respondent_history,
+            case.dispute.dispute_raised_at(),
+            clock,
+        )
 }
 
 // ============================================
@@ -462,8 +468,7 @@ public fun create_arbitration_committee(
     let mut committee = referee::create_committee(threshold);
 
     members.length().do!(|i| {
-        referee::add_committee_member(
-            &mut committee,
+        committee.add_committee_member(
             members[i],
             weights[i],
         );
@@ -484,12 +489,12 @@ public fun committee_vote(
 
 /// Checks if the votes meet the committee threshold for the raiser.
 public fun has_quorum_for_raiser(committee: &Committee, votes: &vector<Vote>): bool {
-    referee::votes_meet_threshold(committee, votes, true)
+    committee.votes_meet_threshold(votes, true)
 }
 
 /// Checks if the votes meet the committee threshold for the respondent.
 public fun has_quorum_for_respondent(committee: &Committee, votes: &vector<Vote>): bool {
-    referee::votes_meet_threshold(committee, votes, false)
+    committee.votes_meet_threshold(votes, false)
 }
 
 // ============================================
@@ -528,12 +533,12 @@ public fun case_respondent_history(case: &DisputeCase): &DisputeHistory {
 
 /// Get the dispute deadline
 public fun case_deadline(case: &DisputeCase): u64 {
-    referee::dispute_response_deadline(&case.dispute)
+    case.dispute.dispute_response_deadline()
 }
 
 /// Check if the case can be auto-resolved
 public fun can_auto_resolve(case: &DisputeCase, clock: &Clock): bool {
-    case.status == CASE_OPEN && referee::can_auto_resolve(&case.dispute, clock)
+    case.status == CASE_OPEN && case.dispute.can_auto_resolve(clock)
 }
 
 /// ArbitrationResult accessors

@@ -78,31 +78,30 @@ fun claim_with_correct_secret_pays_full_amount() {
     );
 
     // Freshly locked swap is in LOCKED status with the expected metadata.
-    assert_eq!(example_atomic_swap::swap_status(&swap), example_atomic_swap::status_locked());
-    assert_eq!(example_atomic_swap::swap_locker(&swap), LOCKER);
-    assert_eq!(example_atomic_swap::swap_claimer(&swap), CLAIMER);
-    assert_eq!(example_atomic_swap::swap_amount(&swap), LOCK_AMOUNT);
-    assert_eq!(example_atomic_swap::swap_expires_at(&swap), START_TIME + LOCK_DURATION);
-    assert!(example_atomic_swap::is_claimable(&swap, START_TIME));
+    assert_eq!(swap.swap_status(), example_atomic_swap::status_locked());
+    assert_eq!(swap.swap_locker(), LOCKER);
+    assert_eq!(swap.swap_claimer(), CLAIMER);
+    assert_eq!(swap.swap_amount(), LOCK_AMOUNT);
+    assert_eq!(swap.swap_expires_at(), START_TIME + LOCK_DURATION);
+    assert!(swap.is_claimable(START_TIME));
 
     // CLAIMER reveals the secret before expiry and claims.
     scenario.next_tx(CLAIMER);
-    let receipt = example_atomic_swap::claim_swap<SUI>(
-        &mut swap,
+    let receipt = swap.claim_swap<SUI>(
         secret,
         &clock,
         scenario.ctx(),
     );
 
     // Status flipped to CLAIMED and the swap is no longer claimable.
-    assert_eq!(example_atomic_swap::swap_status(&swap), example_atomic_swap::status_claimed());
-    assert!(!example_atomic_swap::is_claimable(&swap, START_TIME));
+    assert_eq!(swap.swap_status(), example_atomic_swap::status_claimed());
+    assert!(!swap.is_claimable(START_TIME));
 
     // Receipt records the agreed amount, parties, and the revealed secret.
-    assert_eq!(example_atomic_swap::receipt_amount(&receipt), LOCK_AMOUNT);
-    assert_eq!(example_atomic_swap::receipt_locker(&receipt), LOCKER);
-    assert_eq!(example_atomic_swap::receipt_claimer(&receipt), CLAIMER);
-    assert_eq!(*example_atomic_swap::receipt_secret(&receipt), secret);
+    assert_eq!(receipt.receipt_amount(), LOCK_AMOUNT);
+    assert_eq!(receipt.receipt_locker(), LOCKER);
+    assert_eq!(receipt.receipt_claimer(), CLAIMER);
+    assert_eq!(*receipt.receipt_secret(), secret);
 
     // The full locked amount was transferred directly to the claimer.
     scenario.next_tx(CLAIMER);
@@ -146,8 +145,7 @@ fun claim_with_receipt_completes_matching_leg() {
     scenario.next_tx(CLAIMER);
     let resp_amount = 750;
     let resp_payment = coin::mint_for_testing<SUI>(resp_amount, scenario.ctx());
-    let mut resp_swap = example_atomic_swap::create_matching_swap<SUI>(
-        &init_swap,
+    let mut resp_swap = init_swap.create_matching_swap<SUI>(
         resp_payment,
         &clock,
         scenario.ctx(),
@@ -155,15 +153,14 @@ fun claim_with_receipt_completes_matching_leg() {
 
     // Responder swap expires BUFFER earlier than the initiator's, and pays LOCKER.
     assert_eq!(
-        example_atomic_swap::swap_expires_at(&resp_swap),
+        resp_swap.swap_expires_at(),
         START_TIME + LOCK_DURATION - example_atomic_swap::swap_time_buffer_ms(),
     );
-    assert_eq!(example_atomic_swap::swap_claimer(&resp_swap), LOCKER);
-    assert_eq!(example_atomic_swap::swap_amount(&resp_swap), resp_amount);
+    assert_eq!(resp_swap.swap_claimer(), LOCKER);
+    assert_eq!(resp_swap.swap_amount(), resp_amount);
 
     // CLAIMER claims the initiator swap, revealing the secret in a receipt.
-    let receipt = example_atomic_swap::claim_swap<SUI>(
-        &mut init_swap,
+    let receipt = init_swap.claim_swap<SUI>(
         secret,
         &clock,
         scenario.ctx(),
@@ -172,13 +169,12 @@ fun claim_with_receipt_completes_matching_leg() {
     // LOCKER uses that receipt to claim the responder swap (no need to know the
     // secret directly — it is carried by the receipt).
     scenario.next_tx(LOCKER);
-    example_atomic_swap::claim_with_receipt<SUI>(
-        &mut resp_swap,
+    resp_swap.claim_with_receipt<SUI>(
         &receipt,
         &clock,
         scenario.ctx(),
     );
-    assert_eq!(example_atomic_swap::swap_status(&resp_swap), example_atomic_swap::status_claimed());
+    assert_eq!(resp_swap.swap_status(), example_atomic_swap::status_claimed());
 
     // CLAIMER received the initiator's funds; LOCKER received the responder's.
     scenario.next_tx(CLAIMER);
@@ -220,16 +216,16 @@ fun refund_after_expiry_returns_full_amount() {
         scenario.ctx(),
     );
 
-    let expiry = example_atomic_swap::swap_expires_at(&swap);
+    let expiry = swap.swap_expires_at();
 
     // Advance the clock to exactly the expiry (refund requires now >= expires_at).
     clock.set_for_testing(expiry);
-    assert!(!example_atomic_swap::is_claimable(&swap, expiry));
-    assert!(example_atomic_swap::is_refundable(&swap, expiry));
+    assert!(!swap.is_claimable(expiry));
+    assert!(swap.is_refundable(expiry));
 
     // LOCKER refunds (sender is already LOCKER from begin()).
-    example_atomic_swap::refund_expired<SUI>(&mut swap, &clock, scenario.ctx());
-    assert_eq!(example_atomic_swap::swap_status(&swap), example_atomic_swap::status_refunded());
+    swap.refund_expired<SUI>(&clock, scenario.ctx());
+    assert_eq!(swap.swap_status(), example_atomic_swap::status_refunded());
 
     // The full original amount was returned to the locker.
     scenario.next_tx(LOCKER);
@@ -275,8 +271,7 @@ fun claim_with_wrong_secret_aborts() {
 
     // CLAIMER tries to claim with a different preimage -> commitment_mismatch.
     scenario.next_tx(CLAIMER);
-    let receipt = example_atomic_swap::claim_swap<SUI>(
-        &mut swap,
+    let receipt = swap.claim_swap<SUI>(
         b"a_completely_wrong_secret",
         &clock,
         scenario.ctx(),
@@ -319,8 +314,7 @@ fun claim_after_expiry_aborts() {
     // Move past expiry, then claim with the correct secret -> timeout_reached.
     clock.set_for_testing(START_TIME + LOCK_DURATION);
     scenario.next_tx(CLAIMER);
-    let receipt = example_atomic_swap::claim_swap<SUI>(
-        &mut swap,
+    let receipt = swap.claim_swap<SUI>(
         secret,
         &clock,
         scenario.ctx(),
@@ -360,7 +354,7 @@ fun refund_before_expiry_aborts() {
     );
 
     // now (START_TIME) < expires_at -> timeout_not_reached.
-    example_atomic_swap::refund_expired<SUI>(&mut swap, &clock, scenario.ctx());
+    swap.refund_expired<SUI>(&clock, scenario.ctx());
 
     destroy(swap);
     clock.destroy_for_testing();
@@ -396,8 +390,7 @@ fun non_claimer_cannot_claim() {
     );
 
     // Sender is still LOCKER (not CLAIMER) -> not_authorized.
-    let receipt = example_atomic_swap::claim_swap<SUI>(
-        &mut swap,
+    let receipt = swap.claim_swap<SUI>(
         secret,
         &clock,
         scenario.ctx(),

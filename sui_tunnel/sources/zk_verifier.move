@@ -87,11 +87,12 @@ const EInvalidPublicInputs: vector<u8> = b"The public inputs to the proof are in
 const ECircuitNotRegistered: vector<u8> = b"The circuit id is not registered.";
 
 #[error]
+const ECircuitInactive: vector<u8> = b"The circuit is registered but currently inactive.";
+
+#[error]
 const ECircuitAlreadyRegistered: vector<u8> = b"A circuit with this id is already registered.";
 
-// ============================================
-// CONSTANTS
-// ============================================
+// === Constants ===
 
 /// Current struct version for upgrade compatibility
 const CURRENT_VERSION: u64 = 1;
@@ -108,9 +109,7 @@ const CURVE_BLS12381: u8 = 0;
 /// Curve type: BN254
 const CURVE_BN254: u8 = 1;
 
-// ============================================
-// STRUCTS
-// ============================================
+// === Structs ===
 
 /// Registered circuit with its verification key
 public struct Circuit has copy, drop, store {
@@ -176,9 +175,7 @@ public struct PreparedProof has copy, drop, store {
     proof_points: ProofPoints,
 }
 
-// ============================================
-// EVENTS
-// ============================================
+// === Events ===
 
 /// Emitted when a new circuit is registered
 public struct CircuitRegistered has copy, drop {
@@ -198,9 +195,7 @@ public struct ProofVerified has copy, drop {
     success: bool,
 }
 
-// ============================================
-// PUBLIC GETTER FUNCTIONS FOR CONSTANTS
-// ============================================
+// === Constant getters ===
 
 /// Returns the BLS12-381 curve constant
 public fun curve_bls12381(): u8 { CURVE_BLS12381 }
@@ -214,12 +209,11 @@ public fun max_public_inputs(): u64 { MAX_PUBLIC_INPUTS }
 /// Returns the size of each scalar in bytes
 public fun scalar_size(): u64 { SCALAR_SIZE }
 
-// ============================================
-// CURVE FUNCTIONS
-// ============================================
+// === Curve functions ===
 
-/// Gets the Sui Curve object for a curve type
-public fun get_curve(curve_type: u8): Curve {
+/// Constructs the Sui `Curve` object for a curve-type constant.
+/// Aborts with `EInvalidParameter` if `curve_type` is neither BLS12-381 nor BN254.
+public fun curve_from_type(curve_type: u8): Curve {
     if (curve_type == CURVE_BLS12381) {
         groth16::bls12381()
     } else if (curve_type == CURVE_BN254) {
@@ -234,9 +228,7 @@ public fun is_valid_curve(curve_type: u8): bool {
     curve_type == CURVE_BLS12381 || curve_type == CURVE_BN254
 }
 
-// ============================================
-// CIRCUIT CREATION FUNCTIONS
-// ============================================
+// === Circuit creation functions ===
 
 /// Creates a circuit ID from a name
 public fun create_circuit_id(name: &vector<u8>): vector<u8> {
@@ -262,7 +254,7 @@ public fun create_circuit(
     assert!(num_public_inputs <= MAX_PUBLIC_INPUTS, EInvalidPublicInputs);
     assert!(name.length() > 0, EEmptyInput);
 
-    let curve = get_curve(curve_type);
+    let curve = curve_from_type(curve_type);
     let pvk = groth16::prepare_verifying_key(&curve, verifying_key);
 
     Circuit {
@@ -276,7 +268,11 @@ public fun create_circuit(
     }
 }
 
-/// Creates a circuit with a pre-prepared verification key
+/// Creates a circuit from an already-prepared verifying key, skipping the
+/// `prepare_verifying_key` step `create_circuit` performs. Aborts with
+/// `EInvalidParameter` on an unknown curve, `EInvalidPublicInputs` if
+/// `num_public_inputs` exceeds `MAX_PUBLIC_INPUTS`, or `EEmptyInput` on an empty name.
+/// The circuit starts `active`.
 public fun create_circuit_with_pvk(
     name: vector<u8>,
     curve_type: u8,
@@ -299,9 +295,7 @@ public fun create_circuit_with_pvk(
     }
 }
 
-// ============================================
-// REGISTRY FUNCTIONS
-// ============================================
+// === Registry functions ===
 
 /// Creates a new circuit registry
 public fun create_registry(owner: address, ctx: &mut TxContext): CircuitRegistry {
@@ -319,23 +313,26 @@ public fun current_version(): u64 { CURRENT_VERSION }
 /// Get a registry's version
 public fun registry_version(registry: &CircuitRegistry): u64 { registry.version }
 
-/// Assert that a registry is at the current version
-public fun assert_current_version(registry: &CircuitRegistry) {
-    assert!(registry.version == CURRENT_VERSION, EInvalidVersion);
+/// Returns true when the registry's stored version matches the current module version.
+public fun is_current_version(registry: &CircuitRegistry): bool {
+    registry.version == CURRENT_VERSION
 }
 
-/// Registers a circuit in the registry
+/// Asserts that a registry is at the current version; gates every registry mutator.
+fun assert_current_version(registry: &CircuitRegistry) {
+    assert!(registry.is_current_version(), EInvalidVersion);
+}
+
+/// Registers a circuit in the registry. Only the registry owner may call this.
+/// Aborts with `ENotAuthorized` if the sender is not the owner,
+/// `ECircuitAlreadyRegistered` if a circuit with the same id already exists, or
+/// `EInvalidVersion` if the registry is not at the current version.
 public fun register_circuit(registry: &mut CircuitRegistry, circuit: Circuit, ctx: &TxContext) {
+    registry.assert_current_version();
     assert!(ctx.sender() == registry.owner, ENotAuthorized);
 
     // Check for duplicate IDs
-    let len = registry.circuits.length();
-    let mut i = 0;
-    while (i < len) {
-        let existing = &registry.circuits[i];
-        assert!(existing.id != circuit.id, ECircuitAlreadyRegistered);
-        i = i + 1;
-    };
+    assert!(!registry.circuits.any!(|c| c.id == circuit.id), ECircuitAlreadyRegistered);
 
     registry.circuits.push_back(circuit);
 
@@ -347,84 +344,55 @@ public fun register_circuit(registry: &mut CircuitRegistry, circuit: Circuit, ct
     });
 }
 
-/// Deactivates a circuit (soft delete)
+/// Deactivates a circuit (soft delete), the kill-switch for a registered circuit.
+/// Only the registry owner may call this. Aborts with `ENotAuthorized` if the
+/// sender is not the owner, `ECircuitNotRegistered` if no circuit matches
+/// `circuit_id`, or `EInvalidVersion` if the registry is not at the current version.
 public fun deactivate_circuit(
     registry: &mut CircuitRegistry,
     circuit_id: &vector<u8>,
     ctx: &TxContext,
 ) {
+    registry.assert_current_version();
     assert!(ctx.sender() == registry.owner, ENotAuthorized);
 
-    let len = registry.circuits.length();
-    let mut i = 0;
-    while (i < len) {
-        let circuit = &mut registry.circuits[i];
-        if (&circuit.id == circuit_id) {
-            circuit.active = false;
-            event::emit(CircuitDeactivated { circuit_id: *circuit_id });
-            return
-        };
-        i = i + 1;
-    };
-
-    abort ECircuitNotRegistered
+    let idx = registry.circuits.find_index!(|c| &c.id == circuit_id);
+    let i = idx.destroy_or!(abort ECircuitNotRegistered);
+    registry.circuits[i].active = false;
+    event::emit(CircuitDeactivated { circuit_id: *circuit_id });
 }
 
-/// Reactivates a previously deactivated circuit
+/// Reactivates a previously deactivated circuit. Only the registry owner may call
+/// this. Aborts with `ENotAuthorized` if the sender is not the owner,
+/// `ECircuitNotRegistered` if no circuit matches `circuit_id`, or `EInvalidVersion`
+/// if the registry is not at the current version.
 public fun reactivate_circuit(
     registry: &mut CircuitRegistry,
     circuit_id: &vector<u8>,
     ctx: &TxContext,
 ) {
+    registry.assert_current_version();
     assert!(ctx.sender() == registry.owner, ENotAuthorized);
 
-    let len = registry.circuits.length();
-    let mut i = 0;
-    while (i < len) {
-        let circuit = &mut registry.circuits[i];
-        if (&circuit.id == circuit_id) {
-            circuit.active = true;
-            return
-        };
-        i = i + 1;
-    };
-
-    abort ECircuitNotRegistered
+    let idx = registry.circuits.find_index!(|c| &c.id == circuit_id);
+    let i = idx.destroy_or!(abort ECircuitNotRegistered);
+    registry.circuits[i].active = true;
 }
 
-/// Gets a circuit from the registry by ID
+/// Gets a circuit from the registry by ID. Aborts with `ECircuitNotRegistered`
+/// if no circuit matches `circuit_id`.
 public fun get_circuit(registry: &CircuitRegistry, circuit_id: &vector<u8>): &Circuit {
-    let len = registry.circuits.length();
-    let mut i = 0;
-    while (i < len) {
-        let circuit = &registry.circuits[i];
-        if (&circuit.id == circuit_id) {
-            return circuit
-        };
-        i = i + 1;
-    };
-
-    abort ECircuitNotRegistered
+    let idx = registry.circuits.find_index!(|c| &c.id == circuit_id);
+    &registry.circuits[idx.destroy_or!(abort ECircuitNotRegistered)]
 }
 
-/// Checks if a circuit is registered and active
+/// Checks if a circuit is registered and currently active. Returns `false` for an
+/// unregistered id (does not abort).
 public fun is_circuit_active(registry: &CircuitRegistry, circuit_id: &vector<u8>): bool {
-    let len = registry.circuits.length();
-    let mut i = 0;
-    while (i < len) {
-        let circuit = &registry.circuits[i];
-        if (&circuit.id == circuit_id) {
-            return circuit.active
-        };
-        i = i + 1;
-    };
-
-    false
+    registry.circuits.any!(|c| &c.id == circuit_id && c.active)
 }
 
-// ============================================
-// VERIFICATION FUNCTIONS
-// ============================================
+// === Verification functions ===
 
 /// Verifies a Groth16 proof against a registered circuit
 ///
@@ -442,63 +410,78 @@ public fun verify_circuit_proof(
     public_inputs: &vector<u8>,
     proof_bytes: &vector<u8>,
 ): bool {
-    let circuit = get_circuit(registry, circuit_id);
-    assert!(circuit.active, ECircuitNotRegistered);
+    let circuit = registry.get_circuit(circuit_id);
+    assert!(circuit.active, ECircuitInactive);
 
     // Validate input length
     let expected_input_bytes = circuit.num_public_inputs * SCALAR_SIZE;
     assert!(public_inputs.length() == expected_input_bytes, EInvalidPublicInputs);
 
-    let result = verify_with_circuit(circuit, public_inputs, proof_bytes);
+    let result = circuit.verify_with_circuit(public_inputs, proof_bytes);
     event::emit(ProofVerified { circuit_id: *circuit_id, success: result });
     result
 }
 
-/// Verifies a proof directly against a circuit (without registry)
+/// Verifies a proof directly against a `Circuit` value, bypassing the registry.
+/// Enforces the circuit-level kill-switch itself, so a deactivated circuit cannot
+/// be verified through this path. Aborts with `ECircuitInactive` if the circuit is
+/// inactive, or `EInvalidPublicInputs` if `public_inputs` has an unexpected length.
+/// Returns `false` for a valid-but-unsatisfied proof; the underlying native call
+/// aborts on malformed proof or input bytes.
 public fun verify_with_circuit(
     circuit: &Circuit,
     public_inputs: &vector<u8>,
     proof_bytes: &vector<u8>,
 ): bool {
+    assert!(circuit.active, ECircuitInactive);
+
     // Validate input length (parity with verify_circuit_proof)
     let expected_input_bytes = circuit.num_public_inputs * SCALAR_SIZE;
     assert!(public_inputs.length() == expected_input_bytes, EInvalidPublicInputs);
 
-    let curve = get_curve(circuit.curve);
+    let curve = curve_from_type(circuit.curve);
     let inputs = groth16::public_proof_inputs_from_bytes(*public_inputs);
     let proof = groth16::proof_points_from_bytes(*proof_bytes);
 
     groth16::verify_groth16_proof(&curve, &circuit.pvk, &inputs, &proof)
 }
 
-/// Verifies a proof with raw components (no circuit struct needed)
+/// Verifies a Groth16 proof from raw components, with no `Circuit` or registry and
+/// therefore no active/length checks. Returns `true` if the proof satisfies the
+/// statement, `false` otherwise. Aborts with `EInvalidParameter` on an unknown
+/// curve; the underlying native call aborts on malformed proof or input bytes.
 public fun verify_raw(
     curve_type: u8,
     pvk: &PreparedVerifyingKey,
     public_inputs: &vector<u8>,
     proof_bytes: &vector<u8>,
 ): bool {
-    let curve = get_curve(curve_type);
+    let curve = curve_from_type(curve_type);
     let inputs = groth16::public_proof_inputs_from_bytes(*public_inputs);
     let proof = groth16::proof_points_from_bytes(*proof_bytes);
 
     groth16::verify_groth16_proof(&curve, pvk, &inputs, &proof)
 }
 
-/// Prepares inputs and proof for verification
+/// Wraps a curve, public inputs, and proof bytes into a `PreparedProof` so the same
+/// inputs can be verified repeatedly via `verify_prepared`. Aborts with
+/// `EInvalidParameter` on an unknown curve; the native parsers abort on malformed
+/// proof or input bytes.
 public fun prepare_proof(
     curve_type: u8,
     public_inputs: &vector<u8>,
     proof_bytes: &vector<u8>,
 ): PreparedProof {
     PreparedProof {
-        curve: get_curve(curve_type),
+        curve: curve_from_type(curve_type),
         inputs: groth16::public_proof_inputs_from_bytes(*public_inputs),
         proof_points: groth16::proof_points_from_bytes(*proof_bytes),
     }
 }
 
-/// Verifies a prepared proof against a PVK
+/// Verifies a `PreparedProof` against a prepared verifying key. Returns `true` if
+/// the proof satisfies the statement, `false` otherwise (the native call aborts only
+/// on internal inconsistency, never on an unsatisfied proof).
 public fun verify_prepared(pvk: &PreparedVerifyingKey, prepared: &PreparedProof): bool {
     groth16::verify_groth16_proof(
         &prepared.curve,
@@ -508,9 +491,7 @@ public fun verify_prepared(pvk: &PreparedVerifyingKey, prepared: &PreparedProof)
     )
 }
 
-// ============================================
-// ZKTUNNEL STATE VERIFICATION
-// ============================================
+// === zkTunnel state verification ===
 
 /// Creates a zkTunnel state proof
 public fun create_zk_state_proof(
@@ -529,8 +510,7 @@ public fun create_zk_state_proof(
 
 /// Verifies a zkTunnel state proof
 public fun verify_zk_state_proof(registry: &CircuitRegistry, state_proof: &ZkStateProof): bool {
-    verify_circuit_proof(
-        registry,
+    registry.verify_circuit_proof(
         &state_proof.circuit_id,
         &state_proof.public_inputs,
         &state_proof.proof,
@@ -542,9 +522,7 @@ public fun state_proof_version(proof: &ZkStateProof): u64 {
     proof.state_version
 }
 
-// ============================================
-// VERIFICATION RESULT FUNCTIONS
-// ============================================
+// === Verification result functions ===
 
 /// Creates a verification result
 public fun create_verification_result(
@@ -561,9 +539,7 @@ public fun create_verification_result(
     }
 }
 
-// ============================================
-// PUBLIC INPUT HELPERS
-// ============================================
+// === Public input helpers ===
 
 /// Converts a u64 to a 32-byte scalar (little-endian, padded)
 public fun u64_to_scalar(value: u64): vector<u8> {
@@ -580,9 +556,7 @@ public fun u64_to_scalar(value: u64): vector<u8> {
     bytes.push_back(((value >> 56) & 0xFF) as u8);
 
     // Pad to 32 bytes
-    while (bytes.length() < 32) {
-        bytes.push_back(0);
-    };
+    (32 - bytes.length()).do!(|_| bytes.push_back(0));
 
     bytes
 }
@@ -641,46 +615,66 @@ public fun hash_to_scalar(data: &vector<u8>): vector<u8> {
     hash::blake2b256(data)
 }
 
-// ============================================
-// ACCESSOR FUNCTIONS
-// ============================================
+// === Accessor functions ===
 
 // Circuit accessors
+
+/// The circuit's unique id (blake2b256 hash of its name).
 public fun circuit_id(circuit: &Circuit): &vector<u8> { &circuit.id }
 
+/// The circuit's human-readable name.
 public fun circuit_name(circuit: &Circuit): &vector<u8> { &circuit.name }
 
+/// The circuit's curve-type constant (BLS12-381 or BN254).
 public fun circuit_curve(circuit: &Circuit): u8 { circuit.curve }
 
+/// The number of public inputs the circuit expects.
 public fun circuit_num_inputs(circuit: &Circuit): u64 { circuit.num_public_inputs }
 
+/// The hash of the circuit's input schema, used for off-chain input validation.
 public fun circuit_input_schema_hash(circuit: &Circuit): &vector<u8> { &circuit.input_schema_hash }
 
+/// Whether the circuit is active (verification is allowed) or has been killed.
 public fun circuit_is_active(circuit: &Circuit): bool { circuit.active }
 
+/// The circuit's prepared verifying key, by reference. This is public Groth16
+/// verification data, intentionally exposed; it is not secret.
 public fun circuit_pvk(circuit: &Circuit): &PreparedVerifyingKey { &circuit.pvk }
 
 // Registry accessors
+
+/// The address authorized to register and (de)activate circuits in this registry.
 public fun registry_owner(registry: &CircuitRegistry): address { registry.owner }
 
+/// The number of circuits registered (including deactivated ones).
 public fun registry_circuit_count(registry: &CircuitRegistry): u64 { registry.circuits.length() }
 
 // VerificationResult accessors
+
+/// Whether the recorded verification result was valid.
 public fun result_valid(result: &VerificationResult): bool { result.valid }
 
+/// The circuit id the recorded result was verified against.
 public fun result_circuit_id(result: &VerificationResult): &vector<u8> { &result.circuit_id }
 
+/// The blake2b256 hash of the public inputs for the recorded result.
 public fun result_inputs_hash(result: &VerificationResult): &vector<u8> { &result.inputs_hash }
 
+/// The timestamp recorded for the verification result.
 public fun result_timestamp(result: &VerificationResult): u64 { result.timestamp }
 
 // ZkStateProof accessors
+
+/// The circuit id this state proof targets.
 public fun zk_proof_circuit_id(proof: &ZkStateProof): &vector<u8> { &proof.circuit_id }
 
+/// The public inputs carried by this state proof.
 public fun zk_proof_public_inputs(proof: &ZkStateProof): &vector<u8> { &proof.public_inputs }
 
+/// The raw proof bytes carried by this state proof.
 public fun zk_proof_proof(proof: &ZkStateProof): &vector<u8> { &proof.proof }
 
+/// The tunnel state version this proof attests to.
 public fun zk_proof_state_version(proof: &ZkStateProof): u64 { proof.state_version }
 
 #[test_only]

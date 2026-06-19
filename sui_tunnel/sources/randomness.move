@@ -66,12 +66,7 @@ const ERandomnessNotAvailable: vector<u8> = b"The randomness is not available ye
 #[error]
 const EInvalidRandomnessRange: vector<u8> = b"The requested randomness range is invalid; min must be less than max.";
 
-// ============================================
-// CONSTANTS
-// ============================================
-
-// Randomness seed size in bytes (Blake2b-256 output)
-// const SEED_SIZE: u64 = 32;
+// === Constants ===
 
 /// Domain separator for BLS-based randomness
 const DOMAIN_BLS_RANDOMNESS: vector<u8> = b"sui_tunnel::randomness::bls";
@@ -82,9 +77,7 @@ const DOMAIN_COMMIT_REVEAL: vector<u8> = b"sui_tunnel::randomness::commit_reveal
 /// Domain separator for chained randomness
 const DOMAIN_CHAIN: vector<u8> = b"sui_tunnel::randomness::chain";
 
-// ============================================
-// STRUCTS
-// ============================================
+// === Structs ===
 
 /// A randomness seed that can be used to derive random values
 public struct Seed has copy, drop, store {
@@ -124,12 +117,14 @@ public struct CombinedRandomness has copy, drop, store {
     finalized: bool,
 }
 
-// ============================================
-// SEED CREATION FUNCTIONS
-// ============================================
+// === Seed creation functions ===
 
 /// Creates a new seed from raw bytes.
 /// The bytes are hashed to ensure uniform distribution.
+///
+/// Note: raw-byte seeding is `public(package)` (unlike the sibling commit-reveal /
+/// tunnel-context constructors) — callers feed already-domain-separated bytes, so this
+/// is kept package-internal to avoid exposing an unprefixed seeding surface.
 public(package) fun from_bytes(bytes: vector<u8>): Seed {
     let hash_input = create_domain_message(DOMAIN_CHAIN, bytes);
     Seed {
@@ -149,9 +144,17 @@ public(package) fun from_bytes(bytes: vector<u8>): Seed {
 /// ## Security
 /// The signature MUST be verified before calling this function.
 /// Use `signature::verify_bls12381_min_sig()` or `signature::verify_bls12381_min_pk()` first.
+///
+/// Note: raw-byte seeding is `public(package)` (unlike the sibling `public` constructors) —
+/// it is reached through the verified `from_verified_bls_*` wrappers, so direct seeding from
+/// unverified bytes stays package-internal.
 public(package) fun from_bls_signature(message: &vector<u8>, bls_signature: &vector<u8>): Seed {
+    // Length-prefix each variable field to prevent seed-collision across inputs,
+    // mirroring create_commitment / combine_reveals / from_tunnel_context.
     let mut hash_input = DOMAIN_BLS_RANDOMNESS;
+    hash_input.append(signature::u64_to_be_bytes(message.length()));
     hash_input.append(*message);
+    hash_input.append(signature::u64_to_be_bytes(bls_signature.length()));
     hash_input.append(*bls_signature);
 
     Seed {
@@ -223,9 +226,7 @@ public fun from_tunnel_context(tunnel_id: vector<u8>, nonce: u64, extra_entropy:
     }
 }
 
-// ============================================
-// RANDOM VALUE DERIVATION FUNCTIONS
-// ============================================
+// === Random value derivation functions ===
 
 /// Derives the next random seed (for chaining).
 /// Returns a new seed that can be used for further derivations.
@@ -242,7 +243,7 @@ public fun next_seed(seed: &Seed): Seed {
 
 /// Derives a random u64 value and returns the new seed.
 public fun next_u64(seed: &Seed): (u64, Seed) {
-    let new_seed = next_seed(seed);
+    let new_seed = seed.next_seed();
 
     // Take first 8 bytes as u64
     let value = bytes_to_u64(&new_seed.bytes);
@@ -251,8 +252,13 @@ public fun next_u64(seed: &Seed): (u64, Seed) {
 }
 
 /// Derives a random u128 value and returns the new seed.
+///
+/// Note: this is an unbounded sample. There is no ranged u128/u256 sampler, and taking
+/// `value % range` on the result reintroduces modulo bias. Callers needing a bounded wide
+/// value should derive it via `next_u64_in_range` (the only bias-free ranged samplers are
+/// the u64/u8 variants).
 public fun next_u128(seed: &Seed): (u128, Seed) {
-    let new_seed = next_seed(seed);
+    let new_seed = seed.next_seed();
 
     // Take first 16 bytes as u128
     let value = bytes_to_u128(&new_seed.bytes);
@@ -261,8 +267,11 @@ public fun next_u128(seed: &Seed): (u128, Seed) {
 }
 
 /// Derives a random u256 value and returns the new seed.
+///
+/// Note: like `next_u128`, this is unbounded — there is no ranged u256 sampler, and
+/// `value % range` reintroduces modulo bias. For a bounded wide value, use `next_u64_in_range`.
 public fun next_u256(seed: &Seed): (u256, Seed) {
-    let new_seed = next_seed(seed);
+    let new_seed = seed.next_seed();
 
     // Use all 32 bytes as u256
     let value = bytes_to_u256(&new_seed.bytes);
@@ -284,7 +293,7 @@ public fun next_u256(seed: &Seed): (u256, Seed) {
 public fun next_u8_in_range(seed: &Seed, min: u8, max: u8): (u8, Seed) {
     assert!(min < max, EInvalidRandomnessRange);
 
-    let (value, new_seed) = next_u64_in_range(seed, (min as u64), (max as u64));
+    let (value, new_seed) = seed.next_u64_in_range((min as u64), (max as u64));
     ((value as u8), new_seed)
 }
 
@@ -297,7 +306,7 @@ public fun next_u64_in_range(seed: &Seed, min: u64, max: u64): (u64, Seed) {
 
     // If range is 1, the result is always min
     if (range == 1) {
-        let new_seed = next_seed(seed);
+        let new_seed = seed.next_seed();
         return (min, Seed { bytes: new_seed.bytes, counter: new_seed.counter + 1 })
     };
 
@@ -308,9 +317,13 @@ public fun next_u64_in_range(seed: &Seed, min: u64, max: u64): (u64, Seed) {
     let remainder = ((max_u64 % range) + 1) % range;
     let threshold = if (remainder == 0) { 0 } else { max_u64 - remainder + 1 };
 
+    // Termination: this rejection loop is unbounded but terminates in practice. The acceptance
+    // region [0, threshold) always covers more than half the u64 space (threshold/2^64 > 0.5
+    // for every range, since the rejected tail is at most range-1 < 2^63 values), so each
+    // iteration accepts with probability > 0.5 — fewer than 2 iterations are expected.
     let mut current_seed = *seed;
     loop {
-        let new_seed = next_seed(&current_seed);
+        let new_seed = current_seed.next_seed();
         let raw = bytes_to_u64(&new_seed.bytes);
 
         if (threshold == 0 || raw < threshold) {
@@ -326,7 +339,7 @@ public fun next_u64_in_range(seed: &Seed, min: u64, max: u64): (u64, Seed) {
 /// Selects a random element from a vector and returns the index.
 public fun select_index(seed: &Seed, length: u64): (u64, Seed) {
     assert!(length > 0, EEmptyInput);
-    next_u64_in_range(seed, 0, length)
+    seed.next_u64_in_range(0, length)
 }
 
 /// Draws a random element from a mutable vector, removing it.
@@ -339,7 +352,7 @@ public fun draw_from_vector<T: drop>(seed: &Seed, vec: &mut vector<T>): (T, Seed
     let length = vec.length();
     assert!(length > 0, EEmptyInput);
 
-    let (index, new_seed) = select_index(seed, length);
+    let (index, new_seed) = seed.select_index(length);
     let element = vec.swap_remove(index);
 
     (element, new_seed)
@@ -357,7 +370,7 @@ public fun shuffle<T>(seed: &Seed, vec: &mut vector<T>): Seed {
     let mut i = length - 1;
 
     while (i > 0) {
-        let (j, new_seed) = next_u64_in_range(&current_seed, 0, i + 1);
+        let (j, new_seed) = current_seed.next_u64_in_range(0, i + 1);
         current_seed = new_seed;
 
         if (i != j) {
@@ -370,9 +383,7 @@ public fun shuffle<T>(seed: &Seed, vec: &mut vector<T>): Seed {
     current_seed
 }
 
-// ============================================
-// COMMIT-REVEAL FUNCTIONS
-// ============================================
+// === Commit-reveal functions ===
 
 /// Creates a commitment to a value.
 /// The commitment is H(value || salt).
@@ -471,17 +482,15 @@ public fun finalize_combined_randomness(
     assert!(!combined.finalized, ERandomnessAlreadyRevealed);
 
     // Verify both reveals match their commitments
-    assert!(verify_commitment(&combined.commitment_a, reveal_a), ERandomnessCommitmentMismatch);
-    assert!(verify_commitment(&combined.commitment_b, reveal_b), ERandomnessCommitmentMismatch);
+    assert!(combined.commitment_a.verify_commitment(reveal_a), ERandomnessCommitmentMismatch);
+    assert!(combined.commitment_b.verify_commitment(reveal_b), ERandomnessCommitmentMismatch);
 
     // Combine reveals into seed
-    combined.seed = combine_reveals(reveal_a, reveal_b);
+    combined.seed = reveal_a.combine_reveals(reveal_b);
     combined.finalized = true;
 }
 
-// ============================================
-// ACCESSOR FUNCTIONS
-// ============================================
+// === Accessor functions ===
 
 /// Get the raw bytes of a seed
 public fun seed_bytes(seed: &Seed): &vector<u8> {
@@ -529,9 +538,7 @@ public fun combined_seed(combined: &CombinedRandomness): &Seed {
     &combined.seed
 }
 
-// ============================================
-// HELPER FUNCTIONS
-// ============================================
+// === Helper functions ===
 
 /// Creates a domain-separated message
 fun create_domain_message(domain: vector<u8>, data: vector<u8>): vector<u8> {
@@ -542,6 +549,8 @@ fun create_domain_message(domain: vector<u8>, data: vector<u8>): vector<u8> {
 
 /// Converts first 8 bytes to u64 (big-endian)
 public fun bytes_to_u64(bytes: &vector<u8>): u64 {
+    assert!(bytes.length() >= 8, EInvalidParameter);
+
     let b0 = (bytes[0] as u64);
     let b1 = (bytes[1] as u64);
     let b2 = (bytes[2] as u64);
@@ -557,43 +566,16 @@ public fun bytes_to_u64(bytes: &vector<u8>): u64 {
 
 /// Converts first 16 bytes to u128 (big-endian)
 fun bytes_to_u128(bytes: &vector<u8>): u128 {
-    let high = (bytes_to_u64(bytes) as u128);
-    let mut low_bytes = vector<u8>[];
-    let mut i = 8;
-    while (i < 16) {
-        low_bytes.push_back(bytes[i]);
-        i = i + 1;
-    };
-    // Pad to 8 bytes if needed
-    while (low_bytes.length() < 8) {
-        low_bytes.push_back(0);
-    };
-    let low = (bytes_to_u64(&low_bytes) as u128);
-
-    (high << 64) | low
+    // Direct big-endian assembly over bytes[0..16].
+    let mut acc = 0u128;
+    16u64.do!(|k| acc = (acc << 8) | (bytes[k] as u128));
+    acc
 }
 
 /// Converts 32 bytes to u256 (big-endian)
 fun bytes_to_u256(bytes: &vector<u8>): u256 {
-    let high = (bytes_to_u128(bytes) as u256);
-
-    let mut low_bytes = vector<u8>[];
-    let mut i = 16;
-    while (i < 32) {
-        low_bytes.push_back(bytes[i]);
-        i = i + 1;
-    };
-
-    // Need to compute low u128
-    let low_high = bytes_to_u64(&low_bytes);
-    let mut low_low_bytes = vector<u8>[];
-    let mut j = 8;
-    while (j < 16) {
-        low_low_bytes.push_back(low_bytes[j]);
-        j = j + 1;
-    };
-    let low_low = bytes_to_u64(&low_low_bytes);
-    let low = (((low_high as u128) << 64) | (low_low as u128) as u256);
-
-    (high << 128) | low
+    // Direct big-endian assembly over bytes[0..32].
+    let mut acc = 0u256;
+    32u64.do!(|k| acc = (acc << 8) | (bytes[k] as u256));
+    acc
 }

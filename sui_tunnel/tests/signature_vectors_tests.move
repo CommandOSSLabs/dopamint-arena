@@ -29,13 +29,13 @@ fun state_update_msg(): vector<u8> {
         1000,
         2000,
     );
-    tunnel::serialize_state_update(&data)
+    data.serialize_state_update()
 }
 
 fun settlement_msg(): vector<u8> {
     let id = sui::object::id_from_address(@0xab);
     let data = tunnel::create_settlement_data_for_testing(id, 1000, 2000, 43, 1234567890);
-    tunnel::serialize_settlement(&data)
+    data.serialize_settlement()
 }
 
 fun settlement_v2_msg(): vector<u8> {
@@ -48,7 +48,7 @@ fun settlement_v2_msg(): vector<u8> {
         1234567890,
         STATE_HASH,
     );
-    tunnel::serialize_settlement_with_root(&data)
+    data.serialize_settlement_with_root()
 }
 
 fun htlc_lock_msg(): vector<u8> {
@@ -61,7 +61,7 @@ fun htlc_lock_msg(): vector<u8> {
         @0xbb,
         9999999,
     );
-    tunnel::serialize_htlc_lock(&data)
+    data.serialize_htlc_lock()
 }
 
 // ============================================

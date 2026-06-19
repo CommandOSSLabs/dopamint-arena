@@ -198,9 +198,9 @@ fun hash_to_scalar() {
 fun create_registry() {
     let mut ctx = sui::tx_context::dummy();
     let registry = zk_verifier::create_registry(@0x1234, &mut ctx);
-    assert_eq!(zk_verifier::registry_owner(&registry), @0x1234);
-    assert_eq!(zk_verifier::registry_circuit_count(&registry), 0);
-    zk_verifier::destroy_registry_for_testing(registry);
+    assert_eq!(registry.registry_owner(), @0x1234);
+    assert_eq!(registry.registry_circuit_count(), 0);
+    registry.destroy_registry_for_testing();
 }
 
 #[test]
@@ -211,20 +211,20 @@ fun create_zk_state_proof() {
         b"proof_bytes",
         42,
     );
-    assert_eq!(*zk_verifier::zk_proof_circuit_id(&proof), b"circuit_id");
-    assert_eq!(*zk_verifier::zk_proof_public_inputs(&proof), b"public_inputs");
-    assert_eq!(*zk_verifier::zk_proof_proof(&proof), b"proof_bytes");
-    assert_eq!(zk_verifier::zk_proof_state_version(&proof), 42);
+    assert_eq!(*proof.zk_proof_circuit_id(), b"circuit_id");
+    assert_eq!(*proof.zk_proof_public_inputs(), b"public_inputs");
+    assert_eq!(*proof.zk_proof_proof(), b"proof_bytes");
+    assert_eq!(proof.zk_proof_state_version(), 42);
 }
 
 #[test]
 fun create_verification_result() {
     let inputs = b"test inputs";
     let result = zk_verifier::create_verification_result(true, b"circuit_id", &inputs, 1234567890);
-    assert!(zk_verifier::result_valid(&result));
-    assert_eq!(*zk_verifier::result_circuit_id(&result), b"circuit_id");
-    assert_eq!(zk_verifier::result_timestamp(&result), 1234567890);
-    assert_eq!(zk_verifier::result_inputs_hash(&result).length(), 32);
+    assert!(result.result_valid());
+    assert_eq!(*result.result_circuit_id(), b"circuit_id");
+    assert_eq!(result.result_timestamp(), 1234567890);
+    assert_eq!(result.result_inputs_hash().length(), 32);
 }
 
 #[test]
@@ -258,8 +258,8 @@ fun concat_scalars_too_many() {
 fun get_curve_valid() {
     // Both supported curves return without aborting; equality of returned
     // Curve values is asserted by comparing against the groth16 constructors.
-    assert_eq!(zk_verifier::get_curve(zk_verifier::curve_bls12381()), groth16::bls12381());
-    assert_eq!(zk_verifier::get_curve(zk_verifier::curve_bn254()), groth16::bn254());
+    assert_eq!(zk_verifier::curve_from_type(zk_verifier::curve_bls12381()), groth16::bls12381());
+    assert_eq!(zk_verifier::curve_from_type(zk_verifier::curve_bn254()), groth16::bn254());
 }
 
 #[
@@ -271,7 +271,7 @@ fun get_curve_valid() {
 ]
 fun get_curve_invalid_aborts() {
     // Unknown curve id -> EInvalidParameter.
-    let _ = zk_verifier::get_curve(7);
+    let _ = zk_verifier::curve_from_type(7);
 }
 
 // ============================================
@@ -283,13 +283,13 @@ fun create_circuit_with_pvk_success() {
     let circuit = make_circuit(b"payment", zk_verifier::curve_bn254(), 2);
 
     // id is the blake2b256 of the name.
-    assert_eq!(*zk_verifier::circuit_id(&circuit), zk_verifier::create_circuit_id(&b"payment"));
-    assert_eq!(*zk_verifier::circuit_name(&circuit), b"payment");
-    assert_eq!(zk_verifier::circuit_curve(&circuit), zk_verifier::curve_bn254());
-    assert_eq!(zk_verifier::circuit_num_inputs(&circuit), 2);
-    assert_eq!(*zk_verifier::circuit_input_schema_hash(&circuit), b"schema");
+    assert_eq!(*circuit.circuit_id(), zk_verifier::create_circuit_id(&b"payment"));
+    assert_eq!(*circuit.circuit_name(), b"payment");
+    assert_eq!(circuit.circuit_curve(), zk_verifier::curve_bn254());
+    assert_eq!(circuit.circuit_num_inputs(), 2);
+    assert_eq!(*circuit.circuit_input_schema_hash(), b"schema");
     // Newly created circuits are active by default.
-    assert!(zk_verifier::circuit_is_active(&circuit));
+    assert!(circuit.circuit_is_active());
 }
 
 #[test]
@@ -300,14 +300,14 @@ fun create_circuit_with_pvk_max_inputs_boundary() {
         zk_verifier::curve_bls12381(),
         zk_verifier::max_public_inputs(),
     );
-    assert_eq!(zk_verifier::circuit_num_inputs(&circuit), 8);
+    assert_eq!(circuit.circuit_num_inputs(), 8);
 }
 
 #[test]
 fun create_circuit_with_pvk_zero_inputs() {
     // Zero public inputs is valid (0 <= 8).
     let circuit = make_circuit(b"zero", zk_verifier::curve_bn254(), 0);
-    assert_eq!(zk_verifier::circuit_num_inputs(&circuit), 0);
+    assert_eq!(circuit.circuit_num_inputs(), 0);
 }
 
 #[
@@ -359,22 +359,22 @@ fun register_circuit_success() {
     let mut registry = zk_verifier::create_registry(owner, &mut ctx);
 
     let c1 = make_circuit(b"alpha", zk_verifier::curve_bn254(), 1);
-    zk_verifier::register_circuit(&mut registry, c1, &ctx);
-    assert_eq!(zk_verifier::registry_circuit_count(&registry), 1);
+    registry.register_circuit(c1, &ctx);
+    assert_eq!(registry.registry_circuit_count(), 1);
 
     let c2 = make_circuit(b"beta", zk_verifier::curve_bls12381(), 2);
-    zk_verifier::register_circuit(&mut registry, c2, &ctx);
-    assert_eq!(zk_verifier::registry_circuit_count(&registry), 2);
+    registry.register_circuit(c2, &ctx);
+    assert_eq!(registry.registry_circuit_count(), 2);
 
     // get_circuit returns the registered fields.
     let id_alpha = zk_verifier::create_circuit_id(&b"alpha");
-    let fetched = zk_verifier::get_circuit(&registry, &id_alpha);
-    assert_eq!(*zk_verifier::circuit_name(fetched), b"alpha");
-    assert_eq!(zk_verifier::circuit_num_inputs(fetched), 1);
-    assert!(zk_verifier::circuit_is_active(fetched));
-    assert!(zk_verifier::is_circuit_active(&registry, &id_alpha));
+    let fetched = registry.get_circuit(&id_alpha);
+    assert_eq!(*fetched.circuit_name(), b"alpha");
+    assert_eq!(fetched.circuit_num_inputs(), 1);
+    assert!(fetched.circuit_is_active());
+    assert!(registry.is_circuit_active(&id_alpha));
 
-    zk_verifier::destroy_registry_for_testing(registry);
+    registry.destroy_registry_for_testing();
 }
 
 #[
@@ -392,12 +392,12 @@ fun register_circuit_duplicate_aborts() {
     // Two circuits with the same name share an id -> duplicate registration
     // aborts with circuit_already_registered (605).
     let c1 = make_circuit(b"dup", zk_verifier::curve_bn254(), 1);
-    zk_verifier::register_circuit(&mut registry, c1, &ctx);
+    registry.register_circuit(c1, &ctx);
 
     let c2 = make_circuit(b"dup", zk_verifier::curve_bls12381(), 2);
-    zk_verifier::register_circuit(&mut registry, c2, &ctx);
+    registry.register_circuit(c2, &ctx);
 
-    zk_verifier::destroy_registry_for_testing(registry);
+    registry.destroy_registry_for_testing();
 }
 
 // ============================================
@@ -418,9 +418,9 @@ fun register_circuit_unauthorized_aborts() {
     // Switch to a different sender; register must abort not_authorized (0).
     scenario.next_tx(NOT_OWNER);
     let c = make_circuit(b"x", zk_verifier::curve_bn254(), 1);
-    zk_verifier::register_circuit(&mut registry, c, scenario.ctx());
+    registry.register_circuit(c, scenario.ctx());
 
-    zk_verifier::destroy_registry_for_testing(registry);
+    registry.destroy_registry_for_testing();
     scenario.end();
 }
 
@@ -435,13 +435,13 @@ fun deactivate_circuit_unauthorized_aborts() {
     let mut scenario = test_scenario::begin(OWNER);
     let mut registry = zk_verifier::create_registry(OWNER, scenario.ctx());
     let c = make_circuit(b"x", zk_verifier::curve_bn254(), 1);
-    zk_verifier::register_circuit(&mut registry, c, scenario.ctx());
+    registry.register_circuit(c, scenario.ctx());
 
     scenario.next_tx(NOT_OWNER);
     let id = zk_verifier::create_circuit_id(&b"x");
-    zk_verifier::deactivate_circuit(&mut registry, &id, scenario.ctx());
+    registry.deactivate_circuit(&id, scenario.ctx());
 
-    zk_verifier::destroy_registry_for_testing(registry);
+    registry.destroy_registry_for_testing();
     scenario.end();
 }
 
@@ -456,14 +456,14 @@ fun reactivate_circuit_unauthorized_aborts() {
     let mut scenario = test_scenario::begin(OWNER);
     let mut registry = zk_verifier::create_registry(OWNER, scenario.ctx());
     let c = make_circuit(b"x", zk_verifier::curve_bn254(), 1);
-    zk_verifier::register_circuit(&mut registry, c, scenario.ctx());
+    registry.register_circuit(c, scenario.ctx());
     let id = zk_verifier::create_circuit_id(&b"x");
-    zk_verifier::deactivate_circuit(&mut registry, &id, scenario.ctx());
+    registry.deactivate_circuit(&id, scenario.ctx());
 
     scenario.next_tx(NOT_OWNER);
-    zk_verifier::reactivate_circuit(&mut registry, &id, scenario.ctx());
+    registry.reactivate_circuit(&id, scenario.ctx());
 
-    zk_verifier::destroy_registry_for_testing(registry);
+    registry.destroy_registry_for_testing();
     scenario.end();
 }
 
@@ -473,27 +473,29 @@ fun reactivate_circuit_unauthorized_aborts() {
 
 #[test]
 fun deactivate_then_reactivate() {
-    let mut scenario = test_scenario::begin(OWNER);
-    let mut registry = zk_verifier::create_registry(OWNER, scenario.ctx());
+    // One owner for the whole lifecycle (no sender switch), so a dummy context
+    // is enough; create the registry owned by ctx.sender() so auth passes.
+    let mut ctx = sui::tx_context::dummy();
+    let owner = ctx.sender();
+    let mut registry = zk_verifier::create_registry(owner, &mut ctx);
     let c = make_circuit(b"toggle", zk_verifier::curve_bn254(), 1);
-    zk_verifier::register_circuit(&mut registry, c, scenario.ctx());
+    registry.register_circuit(c, &ctx);
     let id = zk_verifier::create_circuit_id(&b"toggle");
 
     // Initially active.
-    assert!(zk_verifier::is_circuit_active(&registry, &id));
+    assert!(registry.is_circuit_active(&id));
 
     // Deactivate flips active -> false.
-    zk_verifier::deactivate_circuit(&mut registry, &id, scenario.ctx());
-    assert!(!zk_verifier::is_circuit_active(&registry, &id));
-    assert!(!zk_verifier::circuit_is_active(zk_verifier::get_circuit(&registry, &id)));
+    registry.deactivate_circuit(&id, &ctx);
+    assert!(!registry.is_circuit_active(&id));
+    assert!(!registry.get_circuit(&id).circuit_is_active());
 
     // Reactivate flips active -> true again.
-    zk_verifier::reactivate_circuit(&mut registry, &id, scenario.ctx());
-    assert!(zk_verifier::is_circuit_active(&registry, &id));
-    assert!(zk_verifier::circuit_is_active(zk_verifier::get_circuit(&registry, &id)));
+    registry.reactivate_circuit(&id, &ctx);
+    assert!(registry.is_circuit_active(&id));
+    assert!(registry.get_circuit(&id).circuit_is_active());
 
-    zk_verifier::destroy_registry_for_testing(registry);
-    scenario.end();
+    registry.destroy_registry_for_testing();
 }
 
 #[
@@ -510,9 +512,9 @@ fun deactivate_missing_circuit_aborts() {
 
     // No circuit with this id -> circuit_not_registered (603).
     let missing = zk_verifier::create_circuit_id(&b"does_not_exist");
-    zk_verifier::deactivate_circuit(&mut registry, &missing, &ctx);
+    registry.deactivate_circuit(&missing, &ctx);
 
-    zk_verifier::destroy_registry_for_testing(registry);
+    registry.destroy_registry_for_testing();
 }
 
 #[
@@ -528,9 +530,9 @@ fun reactivate_missing_circuit_aborts() {
     let mut registry = zk_verifier::create_registry(owner, &mut ctx);
 
     let missing = zk_verifier::create_circuit_id(&b"does_not_exist");
-    zk_verifier::reactivate_circuit(&mut registry, &missing, &ctx);
+    registry.reactivate_circuit(&missing, &ctx);
 
-    zk_verifier::destroy_registry_for_testing(registry);
+    registry.destroy_registry_for_testing();
 }
 
 // ============================================
@@ -551,9 +553,9 @@ fun get_circuit_missing_aborts() {
 
     // get_circuit on a missing id aborts circuit_not_registered (603).
     let missing = zk_verifier::create_circuit_id(&b"nope");
-    let _ = zk_verifier::get_circuit(&registry, &missing);
+    let _ = registry.get_circuit(&missing);
 
-    zk_verifier::destroy_registry_for_testing(registry);
+    registry.destroy_registry_for_testing();
 }
 
 #[test]
@@ -564,9 +566,9 @@ fun is_circuit_active_missing_returns_false() {
 
     // Unlike get_circuit, is_circuit_active returns false (no abort) when absent.
     let missing = zk_verifier::create_circuit_id(&b"nope");
-    assert!(!zk_verifier::is_circuit_active(&registry, &missing));
+    assert!(!registry.is_circuit_active(&missing));
 
-    zk_verifier::destroy_registry_for_testing(registry);
+    registry.destroy_registry_for_testing();
 }
 
 // ============================================
@@ -577,11 +579,11 @@ fun is_circuit_active_missing_returns_false() {
 fun registry_version_is_current() {
     let mut ctx = sui::tx_context::dummy();
     let registry = zk_verifier::create_registry(@0x1234, &mut ctx);
-    assert_eq!(zk_verifier::registry_version(&registry), zk_verifier::current_version());
+    assert_eq!(registry.registry_version(), zk_verifier::current_version());
     assert_eq!(zk_verifier::current_version(), 1);
-    // Must not abort at the current version.
-    zk_verifier::assert_current_version(&registry);
-    zk_verifier::destroy_registry_for_testing(registry);
+    // The public check returns true at the current version.
+    assert!(registry.is_current_version());
+    registry.destroy_registry_for_testing();
 }
 
 // ============================================
@@ -604,41 +606,43 @@ fun verify_circuit_proof_wrong_input_length_aborts() {
     // scalar) so the length guard trips before any native verification runs:
     // invalid_public_inputs (602).
     let c = make_circuit(b"len2", zk_verifier::curve_bn254(), 2);
-    zk_verifier::register_circuit(&mut registry, c, &ctx);
+    registry.register_circuit(c, &ctx);
     let id = zk_verifier::create_circuit_id(&b"len2");
 
     let wrong_inputs = zk_verifier::u64_to_scalar(1); // 32 bytes, expected 64
     let proof = b"dummy_proof_bytes";
-    let _ = zk_verifier::verify_circuit_proof(&registry, &id, &wrong_inputs, &proof);
+    let _ = registry.verify_circuit_proof(&id, &wrong_inputs, &proof);
 
-    zk_verifier::destroy_registry_for_testing(registry);
+    registry.destroy_registry_for_testing();
 }
 
 #[
     test,
     expected_failure(
-        abort_code = sui_tunnel::zk_verifier::ECircuitNotRegistered,
+        abort_code = sui_tunnel::zk_verifier::ECircuitInactive,
         location = sui_tunnel::zk_verifier,
     ),
 ]
 fun verify_circuit_proof_inactive_circuit_aborts() {
-    let mut scenario = test_scenario::begin(OWNER);
-    let mut registry = zk_verifier::create_registry(OWNER, scenario.ctx());
+    // Single owner throughout (no auth switch needed), so a dummy context
+    // suffices: register then deactivate the circuit owned by ctx.sender().
+    let mut ctx = sui::tx_context::dummy();
+    let owner = ctx.sender();
+    let mut registry = zk_verifier::create_registry(owner, &mut ctx);
 
-    // Register then deactivate. verify_circuit_proof asserts circuit.active
-    // (circuit_not_registered == 603) before the input-length check, so a
-    // correct-length input still aborts 603 on an inactive circuit.
+    // verify_circuit_proof asserts circuit.active (ECircuitInactive) before the
+    // input-length check, so a correct-length input still aborts on an inactive
+    // circuit rather than reaching native verification.
     let c = make_circuit(b"inactive", zk_verifier::curve_bn254(), 1);
-    zk_verifier::register_circuit(&mut registry, c, scenario.ctx());
+    registry.register_circuit(c, &ctx);
     let id = zk_verifier::create_circuit_id(&b"inactive");
-    zk_verifier::deactivate_circuit(&mut registry, &id, scenario.ctx());
+    registry.deactivate_circuit(&id, &ctx);
 
     let inputs = zk_verifier::u64_to_scalar(1); // 32 bytes == 1 * SCALAR_SIZE
     let proof = b"dummy_proof_bytes";
-    let _ = zk_verifier::verify_circuit_proof(&registry, &id, &inputs, &proof);
+    let _ = registry.verify_circuit_proof(&id, &inputs, &proof);
 
-    zk_verifier::destroy_registry_for_testing(registry);
-    scenario.end();
+    registry.destroy_registry_for_testing();
 }
 
 #[
@@ -657,9 +661,9 @@ fun verify_circuit_proof_unregistered_aborts() {
     let id = zk_verifier::create_circuit_id(&b"ghost");
     let inputs = zk_verifier::u64_to_scalar(1);
     let proof = b"dummy_proof_bytes";
-    let _ = zk_verifier::verify_circuit_proof(&registry, &id, &inputs, &proof);
+    let _ = registry.verify_circuit_proof(&id, &inputs, &proof);
 
-    zk_verifier::destroy_registry_for_testing(registry);
+    registry.destroy_registry_for_testing();
 }
 
 #[
@@ -676,7 +680,105 @@ fun verify_with_circuit_wrong_input_length_aborts() {
     let mut wrong = zk_verifier::u64_to_scalar(1);
     wrong.append(zk_verifier::u64_to_scalar(2)); // 64 bytes, expected 32
     let proof = b"dummy_proof_bytes";
-    let _ = zk_verifier::verify_with_circuit(&circuit, &wrong, &proof);
+    let _ = circuit.verify_with_circuit(&wrong, &proof);
+}
+
+#[
+    test,
+    expected_failure(
+        abort_code = sui_tunnel::zk_verifier::ECircuitInactive,
+        location = sui_tunnel::zk_verifier,
+    ),
+]
+fun verify_with_circuit_inactive_circuit_aborts() {
+    // The direct (registry-bypassing) path enforces the same kill-switch: a
+    // deactivated circuit must abort ECircuitInactive before native verification.
+    // There is no public setter for a standalone inactive Circuit, so deactivate
+    // it inside a registry and borrow the stored (now-inactive) circuit.
+    let mut ctx = sui::tx_context::dummy();
+    let owner = ctx.sender();
+    let mut registry = zk_verifier::create_registry(owner, &mut ctx);
+    let c = make_circuit(b"killswitch", zk_verifier::curve_bn254(), 1);
+    registry.register_circuit(c, &ctx);
+    let id = zk_verifier::create_circuit_id(&b"killswitch");
+    registry.deactivate_circuit(&id, &ctx);
+
+    let inputs = zk_verifier::u64_to_scalar(1); // 32 bytes, correct length
+    let proof = b"dummy_proof_bytes";
+    let circuit = registry.get_circuit(&id);
+    let _ = circuit.verify_with_circuit(&inputs, &proof);
+
+    registry.destroy_registry_for_testing();
+}
+
+// ============================================
+// VERIFICATION: native Groth16 boolean result
+// ============================================
+//
+// The native verifier returns `false` (it never aborts) for well-formed but
+// cryptographically-wrong bytes: the only abort paths are an unsupported curve
+// and >MAX_PUBLIC_INPUTS scalars, both guarded before the native call. So a
+// dummy PVK + arbitrary proof bytes with a correctly-sized (len % 32 == 0) input
+// drives the verifier to a definitive `false` instead of an abort.
+
+#[test]
+fun verify_circuit_proof_returns_false_for_wrong_proof() {
+    let mut ctx = sui::tx_context::dummy();
+    let owner = ctx.sender();
+    let mut registry = zk_verifier::create_registry(owner, &mut ctx);
+
+    // 1-input circuit -> exactly 32 input bytes, passing the length guard so the
+    // call reaches the native verifier rather than aborting on the parity check.
+    let c = make_circuit(b"result", zk_verifier::curve_bn254(), 1);
+    registry.register_circuit(c, &ctx);
+    let id = zk_verifier::create_circuit_id(&b"result");
+
+    let inputs = zk_verifier::u64_to_scalar(1); // 32 bytes
+    let proof = b"a_well_sized_but_cryptographically_wrong_proof_blob";
+    let result = registry.verify_circuit_proof(&id, &inputs, &proof);
+    // A dummy PVK cannot satisfy any statement: the proof is rejected, not aborted.
+    assert!(!result);
+
+    registry.destroy_registry_for_testing();
+}
+
+#[test]
+fun verify_with_circuit_returns_false_for_wrong_proof() {
+    // Direct path on an active circuit also yields a definitive `false`.
+    let circuit = make_circuit(b"direct_result", zk_verifier::curve_bn254(), 1);
+    let inputs = zk_verifier::u64_to_scalar(7); // 32 bytes, correct length
+    let proof = b"dummy_wrong_proof_bytes";
+    let result = circuit.verify_with_circuit(&inputs, &proof);
+    assert!(!result);
+    // Circuit has `drop`; it falls out of scope here.
+}
+
+#[test]
+fun verify_raw_returns_false_for_wrong_proof() {
+    // verify_raw has no circuit/registry and no active/length checks: it just
+    // wires curve + dummy PVK + inputs + proof into the native verifier. Two
+    // 32-byte scalars stay under MAX_PUBLIC_INPUTS so the native call returns
+    // false rather than aborting.
+    let pvk = dummy_pvk();
+    let mut inputs = zk_verifier::u64_to_scalar(1);
+    inputs.append(zk_verifier::u64_to_scalar(2)); // 64 bytes == 2 scalars
+    let proof = b"dummy_wrong_proof_bytes";
+    let result = zk_verifier::verify_raw(zk_verifier::curve_bn254(), &pvk, &inputs, &proof);
+    assert!(!result);
+}
+
+#[test]
+fun prepare_then_verify_prepared_returns_false_for_wrong_proof() {
+    // prepare_proof bundles curve + inputs + proof for repeated verification;
+    // verify_prepared runs the native check against a PVK. With a dummy PVK the
+    // result is a definitive false (no abort).
+    let pvk = dummy_pvk();
+    let inputs = zk_verifier::u64_to_scalar(42); // 32 bytes == 1 scalar
+    let proof = b"dummy_wrong_proof_bytes";
+    let prepared = zk_verifier::prepare_proof(zk_verifier::curve_bls12381(), &inputs, &proof);
+    let result = zk_verifier::verify_prepared(&pvk, &prepared);
+    assert!(!result);
+    // PreparedProof has `drop`; it falls out of scope here.
 }
 
 // ============================================
@@ -696,7 +798,7 @@ fun verify_zk_state_proof_wrong_length_aborts() {
     let mut registry = zk_verifier::create_registry(owner, &mut ctx);
 
     let c = make_circuit(b"state", zk_verifier::curve_bn254(), 2);
-    zk_verifier::register_circuit(&mut registry, c, &ctx);
+    registry.register_circuit(c, &ctx);
     let id = zk_verifier::create_circuit_id(&b"state");
 
     // Wrap a wrong-length public-input blob and route through the state-proof
@@ -707,8 +809,8 @@ fun verify_zk_state_proof_wrong_length_aborts() {
         b"dummy_proof_bytes",
         7,
     );
-    assert_eq!(zk_verifier::state_proof_version(&state_proof), 7);
-    let _ = zk_verifier::verify_zk_state_proof(&registry, &state_proof);
+    assert_eq!(state_proof.state_proof_version(), 7);
+    let _ = registry.verify_zk_state_proof(&state_proof);
 
-    zk_verifier::destroy_registry_for_testing(registry);
+    registry.destroy_registry_for_testing();
 }

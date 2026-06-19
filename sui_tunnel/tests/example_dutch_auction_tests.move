@@ -70,29 +70,29 @@ fun price_decays_start_middle_end() {
     );
 
     // Stored timing reflects the clock at creation.
-    assert_eq!(auction::auction_start_time(&listing), CREATE_AT);
-    assert_eq!(auction::auction_end_time(&listing), END_AT);
-    assert_eq!(auction::auction_status(&listing), auction::status_active());
+    assert_eq!(listing.auction_start_time(), CREATE_AT);
+    assert_eq!(listing.auction_end_time(), END_AT);
+    assert_eq!(listing.auction_status(), auction::status_active());
 
     // Clamp before/at start -> start price.
-    assert_eq!(auction::calculate_price(&listing, 0), START_PRICE);
-    assert_eq!(auction::calculate_price(&listing, CREATE_AT), START_PRICE);
+    assert_eq!(listing.calculate_price(0), START_PRICE);
+    assert_eq!(listing.calculate_price(CREATE_AT), START_PRICE);
 
     // Halfway through -> 550 (1000 - 450).
-    assert_eq!(auction::calculate_price(&listing, MID_AT), 550);
+    assert_eq!(listing.calculate_price(MID_AT), 550);
 
     // At and beyond end -> end (reserve) price.
-    assert_eq!(auction::calculate_price(&listing, END_AT), END_PRICE);
-    assert_eq!(auction::calculate_price(&listing, END_AT + 999999), END_PRICE);
+    assert_eq!(listing.calculate_price(END_AT), END_PRICE);
+    assert_eq!(listing.calculate_price(END_AT + 999999), END_PRICE);
 
     // Linear drop rate: price_drop / duration = 900 / 600000 = 0 (integer).
-    assert_eq!(auction::price_drop_rate(&listing), 0);
+    assert_eq!(listing.price_drop_rate(), 0);
 
     // time_remaining and is_purchasable views.
-    assert_eq!(auction::time_remaining(&listing, MID_AT), END_AT - MID_AT);
-    assert_eq!(auction::time_remaining(&listing, END_AT), 0);
-    assert_eq!(auction::is_purchasable(&listing, MID_AT), true);
-    assert_eq!(auction::is_purchasable(&listing, END_AT), false);
+    assert_eq!(listing.time_remaining(MID_AT), END_AT - MID_AT);
+    assert_eq!(listing.time_remaining(END_AT), 0);
+    assert_eq!(listing.is_purchasable(MID_AT), true);
+    assert_eq!(listing.is_purchasable(END_AT), false);
 
     destroy(listing);
     clock.destroy_for_testing();
@@ -125,33 +125,33 @@ fun buy_at_midpoint_refunds_change_and_seller_withdraws() {
 
     // Advance to the midpoint -> the module charges 550.
     clock.set_for_testing(MID_AT);
-    let expected_price = auction::calculate_price(&listing, MID_AT);
+    let expected_price = listing.calculate_price(MID_AT);
     assert_eq!(expected_price, 550);
 
     // Buyer pays 1000, overpaying by 450.
     scenario.next_tx(BUYER);
     let payment = coin::mint_for_testing<SUI>(1000, scenario.ctx());
-    let (receipt, change) = auction::buy<SUI>(&mut listing, payment, &clock, scenario.ctx());
+    let (receipt, change) = listing.buy<SUI>(payment, &clock, scenario.ctx());
 
     // Exact price charged and exact change returned.
-    assert_eq!(auction::purchase_price(&receipt), 550);
-    assert_eq!(auction::purchase_buyer(&receipt), BUYER);
+    assert_eq!(receipt.purchase_price(), 550);
+    assert_eq!(receipt.purchase_buyer(), BUYER);
     assert_eq!(change.value(), 450);
 
     // Auction state after sale.
-    assert_eq!(auction::auction_status(&listing), auction::status_sold());
-    assert_eq!(auction::auction_sale_price(&listing), 550);
-    assert_eq!(*auction::auction_winner(&listing).borrow(), BUYER);
-    assert_eq!(*auction::purchase_item_id(&receipt), b"item-1");
+    assert_eq!(listing.auction_status(), auction::status_sold());
+    assert_eq!(listing.auction_sale_price(), 550);
+    assert_eq!(*listing.auction_winner().borrow(), BUYER);
+    assert_eq!(*receipt.purchase_item_id(), b"item-1");
 
     change.burn_for_testing();
 
     // Seller withdraws the collected payment; funds are public_transferred to seller.
     scenario.next_tx(SELLER);
-    let settlement = auction::withdraw_payment<SUI>(&mut listing, scenario.ctx());
-    assert_eq!(auction::settlement_amount(&settlement), 550);
-    assert_eq!(auction::settlement_status(&settlement), auction::status_sold());
-    assert_eq!(auction::settlement_seller(&settlement), SELLER);
+    let settlement = listing.withdraw_payment<SUI>(scenario.ctx());
+    assert_eq!(settlement.settlement_amount(), 550);
+    assert_eq!(settlement.settlement_status(), auction::status_sold());
+    assert_eq!(settlement.settlement_seller(), SELLER);
 
     // Seller actually received a 550-value coin.
     scenario.next_tx(SELLER);
@@ -183,17 +183,17 @@ fun buy_exact_at_start_no_change() {
     );
 
     // At creation time the price is the start price (1000).
-    let price = auction::calculate_price(&listing, CREATE_AT);
+    let price = listing.calculate_price(CREATE_AT);
     assert_eq!(price, START_PRICE);
 
     scenario.next_tx(BUYER);
     let payment = coin::mint_for_testing<SUI>(START_PRICE, scenario.ctx());
-    let (receipt, change) = auction::buy_exact<SUI>(&mut listing, payment, &clock, scenario.ctx());
+    let (receipt, change) = listing.buy_exact<SUI>(payment, &clock, scenario.ctx());
 
-    assert_eq!(auction::purchase_price(&receipt), START_PRICE);
+    assert_eq!(receipt.purchase_price(), START_PRICE);
     assert_eq!(change.value(), 0);
-    assert_eq!(auction::auction_status(&listing), auction::status_sold());
-    assert_eq!(auction::auction_sale_price(&listing), START_PRICE);
+    assert_eq!(listing.auction_status(), auction::status_sold());
+    assert_eq!(listing.auction_sale_price(), START_PRICE);
 
     change.burn_for_testing();
     destroy(listing);
@@ -225,11 +225,11 @@ fun mark_expired_after_end_time() {
     // Advance past the end and let a non-seller mark it expired.
     clock.set_for_testing(END_AT);
     scenario.next_tx(BUYER);
-    let settlement = auction::mark_expired<SUI>(&mut listing, &clock, scenario.ctx());
+    let settlement = listing.mark_expired<SUI>(&clock, scenario.ctx());
 
-    assert_eq!(auction::auction_status(&listing), auction::status_expired());
-    assert_eq!(auction::settlement_status(&settlement), auction::status_expired());
-    assert_eq!(auction::settlement_amount(&settlement), 0);
+    assert_eq!(listing.auction_status(), auction::status_expired());
+    assert_eq!(settlement.settlement_status(), auction::status_expired());
+    assert_eq!(settlement.settlement_amount(), 0);
 
     destroy(listing);
     clock.destroy_for_testing();
@@ -257,10 +257,10 @@ fun seller_cancels_active_auction() {
         scenario.ctx(),
     );
 
-    let settlement = auction::cancel_auction<SUI>(&mut listing, scenario.ctx());
-    assert_eq!(auction::auction_status(&listing), auction::status_cancelled());
-    assert_eq!(auction::settlement_status(&settlement), auction::status_cancelled());
-    assert_eq!(auction::settlement_amount(&settlement), 0);
+    let settlement = listing.cancel_auction<SUI>(scenario.ctx());
+    assert_eq!(listing.auction_status(), auction::status_cancelled());
+    assert_eq!(settlement.settlement_status(), auction::status_cancelled());
+    assert_eq!(settlement.settlement_amount(), 0);
 
     destroy(listing);
     clock.destroy_for_testing();
@@ -354,7 +354,7 @@ fun seller_cannot_buy_own_auction() {
 
     // Sender is still SELLER (== listing.seller) -> invalid_parties.
     let payment = coin::mint_for_testing<SUI>(START_PRICE, scenario.ctx());
-    let (receipt, change) = auction::buy<SUI>(&mut listing, payment, &clock, scenario.ctx());
+    let (receipt, change) = listing.buy<SUI>(payment, &clock, scenario.ctx());
 
     destroy(receipt);
     change.burn_for_testing();
@@ -389,7 +389,7 @@ fun buy_underpay_fails() {
     // At start the price is 1000; buyer offers only 999 -> insufficient_balance.
     scenario.next_tx(BUYER);
     let payment = coin::mint_for_testing<SUI>(START_PRICE - 1, scenario.ctx());
-    let (receipt, change) = auction::buy<SUI>(&mut listing, payment, &clock, scenario.ctx());
+    let (receipt, change) = listing.buy<SUI>(payment, &clock, scenario.ctx());
 
     destroy(receipt);
     change.burn_for_testing();
@@ -425,7 +425,7 @@ fun buy_after_end_fails() {
     clock.set_for_testing(END_AT);
     scenario.next_tx(BUYER);
     let payment = coin::mint_for_testing<SUI>(START_PRICE, scenario.ctx());
-    let (receipt, change) = auction::buy<SUI>(&mut listing, payment, &clock, scenario.ctx());
+    let (receipt, change) = listing.buy<SUI>(payment, &clock, scenario.ctx());
 
     destroy(receipt);
     change.burn_for_testing();
@@ -458,7 +458,7 @@ fun mark_expired_before_end_fails() {
     );
 
     // Still before end_time -> timeout_not_reached.
-    let settlement = auction::mark_expired<SUI>(&mut listing, &clock, scenario.ctx());
+    let settlement = listing.mark_expired<SUI>(&clock, scenario.ctx());
 
     destroy(settlement);
     destroy(listing);
@@ -494,12 +494,12 @@ fun non_seller_cannot_withdraw() {
     // Buyer purchases so the listing is SOLD.
     scenario.next_tx(BUYER);
     let payment = coin::mint_for_testing<SUI>(START_PRICE, scenario.ctx());
-    let (receipt, change) = auction::buy<SUI>(&mut listing, payment, &clock, scenario.ctx());
+    let (receipt, change) = listing.buy<SUI>(payment, &clock, scenario.ctx());
     destroy(receipt);
     change.burn_for_testing();
 
     // A non-seller (still BUYER) tries to withdraw -> not_authorized.
-    let settlement = auction::withdraw_payment<SUI>(&mut listing, scenario.ctx());
+    let settlement = listing.withdraw_payment<SUI>(scenario.ctx());
 
     destroy(settlement);
     destroy(listing);

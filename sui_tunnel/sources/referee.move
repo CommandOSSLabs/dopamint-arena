@@ -63,6 +63,21 @@ const ENoActiveDispute: vector<u8> = b"There is no active dispute to act on.";
 #[error]
 const ETimeoutNotReached: vector<u8> = b"The timeout has not been reached yet.";
 
+#[error]
+const EAlreadyExists: vector<u8> = b"The resource already exists and cannot be created again.";
+
+#[error]
+const ENotFound: vector<u8> = b"The requested resource was not found.";
+
+#[error]
+const EMaxParticipantsExceeded: vector<u8> = b"The maximum number of participants has been exceeded.";
+
+#[error]
+const EInvalidPenaltyAmount: vector<u8> = b"The penalty amount is invalid.";
+
+#[error]
+const EInvalidTimeout: vector<u8> = b"The timeout value is invalid.";
+
 // ============================================
 // CONSTANTS
 // ============================================
@@ -112,8 +127,13 @@ const VIOLATION_FORGERY: u8 = 3;
 /// One hour in milliseconds
 const ONE_HOUR_MS: u64 = 3600000;
 
-// One day in milliseconds
-// const ONE_DAY_MS: u64 = 86400000;
+/// Maximum number of members a committee may hold. Bounds the
+/// `votes_meet_threshold` membership scan so it cannot run unbounded.
+const MAX_COMMITTEE_MEMBERS: u64 = 100;
+
+/// Maximum number of votes `votes_meet_threshold` will tally in one call,
+/// bounding the outer loop of the vote-counting scan.
+const MAX_VOTES: u64 = 1000;
 
 // ============================================
 // STRUCTS
@@ -258,32 +278,46 @@ public struct DisputeAutoResolved has copy, drop {
 // PUBLIC GETTER FUNCTIONS FOR CONSTANTS
 // ============================================
 
+/// Referee-type tag for an automated, rules-based referee.
 public fun referee_type_automated(): u8 { REFEREE_TYPE_AUTOMATED }
 
+/// Referee-type tag for a single designated arbiter.
 public fun referee_type_designated(): u8 { REFEREE_TYPE_DESIGNATED }
 
+/// Referee-type tag for a multi-signature committee.
 public fun referee_type_committee(): u8 { REFEREE_TYPE_COMMITTEE }
 
+/// Dispute-status tag for no active dispute.
 public fun dispute_status_none(): u8 { DISPUTE_STATUS_NONE }
 
+/// Dispute-status tag for a raised dispute awaiting a response.
 public fun dispute_status_raised(): u8 { DISPUTE_STATUS_RAISED }
 
+/// Dispute-status tag for a dispute with submitted evidence under review.
 public fun dispute_status_under_review(): u8 { DISPUTE_STATUS_UNDER_REVIEW }
 
+/// Dispute-status tag for a dispute resolved in favor of party A.
 public fun dispute_status_resolved_a(): u8 { DISPUTE_STATUS_RESOLVED_A }
 
+/// Dispute-status tag for a dispute resolved in favor of party B.
 public fun dispute_status_resolved_b(): u8 { DISPUTE_STATUS_RESOLVED_B }
 
+/// Dispute-status tag for a dispute resolved with a split.
 public fun dispute_status_resolved_split(): u8 { DISPUTE_STATUS_RESOLVED_SPLIT }
 
+/// Dispute-status tag for a dispute auto-resolved by timeout.
 public fun dispute_status_timed_out(): u8 { DISPUTE_STATUS_TIMED_OUT }
 
+/// Violation-type tag for failing to respond to an action request.
 public fun violation_no_response(): u8 { VIOLATION_NO_RESPONSE }
 
+/// Violation-type tag for submitting an invalid state.
 public fun violation_invalid_state(): u8 { VIOLATION_INVALID_STATE }
 
+/// Violation-type tag for an attempted double-spend.
 public fun violation_double_spend(): u8 { VIOLATION_DOUBLE_SPEND }
 
+/// Violation-type tag for an attempted signature forgery.
 public fun violation_forgery(): u8 { VIOLATION_FORGERY }
 
 // ============================================
@@ -316,8 +350,8 @@ public fun create_config(
     min_response_time_ms: u64,
 ): RefereeConfig {
     assert!(referee_type <= REFEREE_TYPE_COMMITTEE, EInvalidParameter);
-    assert!(timeout_ms > 0, EInvalidParameter);
-    assert!(max_penalty >= base_penalty, EInvalidParameter);
+    assert_valid_timeout(timeout_ms);
+    assert!(max_penalty >= base_penalty, EInvalidPenaltyAmount);
 
     RefereeConfig {
         referee_type,
@@ -335,7 +369,7 @@ public fun create_config(
 /// Shared by the config constructors so a degenerate zero-timeout config
 /// cannot be built via any entry point.
 fun assert_valid_timeout(timeout_ms: u64) {
-    assert!(timeout_ms > 0, EInvalidParameter);
+    assert!(timeout_ms > 0, EInvalidTimeout);
 }
 
 /// Creates a simple timeout-only config (no penalties)
@@ -361,7 +395,7 @@ public fun create_penalty_config(
     max_penalty: u64,
 ): RefereeConfig {
     assert_valid_timeout(timeout_ms);
-    assert!(max_penalty >= base_penalty, EInvalidParameter);
+    assert!(max_penalty >= base_penalty, EInvalidPenaltyAmount);
 
     RefereeConfig {
         referee_type: REFEREE_TYPE_AUTOMATED,
@@ -457,27 +491,24 @@ public fun calculate_penalty(config: &RefereeConfig, last_activity: u64, clock: 
         return 0
     };
 
-    let elapsed = time_since_timeout(config, last_activity, clock);
+    let elapsed = config.time_since_timeout(last_activity, clock);
     if (elapsed == 0) {
         return 0
     };
 
-    // Start with base penalty
-    let mut penalty = config.base_penalty;
+    // Start with base penalty, accumulating in u128 so neither the
+    // time-based term nor the sum can overflow u64 and abort.
+    let mut penalty = config.base_penalty as u128;
 
     // Add time-based penalty
     if (config.penalty_per_hour > 0) {
         let hours_elapsed = elapsed / ONE_HOUR_MS;
-        let time_penalty = ((hours_elapsed as u128) * (config.penalty_per_hour as u128) as u64);
-        penalty = penalty + time_penalty;
+        penalty = penalty + (hours_elapsed as u128) * (config.penalty_per_hour as u128);
     };
 
-    // Cap at max penalty
-    if (penalty > config.max_penalty) {
-        config.max_penalty
-    } else {
-        penalty
-    }
+    // Clamp in u128 before the cast so the cast cannot abort: the clamped
+    // value is <= max_penalty <= u64::MAX.
+    (penalty.min(config.max_penalty as u128)) as u64
 }
 
 /// Calculates graduated penalty based on violation history
@@ -487,7 +518,7 @@ public fun calculate_graduated_penalty(
     last_activity: u64,
     clock: &Clock,
 ): u64 {
-    let base = calculate_penalty(config, last_activity, clock);
+    let base = config.calculate_penalty(last_activity, clock);
 
     // Multiply by consecutive timeouts (minimum 1x)
     let multiplier = if (history.consecutive_timeouts > 0) {
@@ -496,14 +527,9 @@ public fun calculate_graduated_penalty(
         1
     };
 
-    let graduated = ((base as u128) * (multiplier as u128) as u64);
-
-    // Still cap at max
-    if (graduated > config.max_penalty) {
-        config.max_penalty
-    } else {
-        graduated
-    }
+    // Clamp in u128 before the cast so the multiply-then-cast cannot abort:
+    // the clamped value is <= max_penalty <= u64::MAX.
+    (((base as u128) * (multiplier as u128)).min(config.max_penalty as u128)) as u64
 }
 
 /// Checks if penalty would exceed available deposit
@@ -600,6 +626,12 @@ public fun can_auto_resolve(dispute: &Dispute, clock: &Clock): bool {
     now >= dispute.response_deadline
 }
 
+/// Returns true when the dispute is still resolvable, i.e. it has been raised
+/// or is under review and has not yet reached a terminal resolution.
+public fun is_active_dispute(dispute: &Dispute): bool {
+    dispute.status == DISPUTE_STATUS_RAISED || dispute.status == DISPUTE_STATUS_UNDER_REVIEW
+}
+
 /// Resolves a dispute in favor of party A.
 /// Caller must ensure the dispute is in an active state before resolving.
 public fun resolve_for_a(
@@ -685,7 +717,7 @@ public fun auto_resolve_timeout(
     party_a: address,
     clock: &Clock,
 ) {
-    assert!(can_auto_resolve(dispute, clock), ETimeoutNotReached);
+    assert!(dispute.can_auto_resolve(clock), ETimeoutNotReached);
 
     dispute.status = DISPUTE_STATUS_TIMED_OUT;
     dispute.resolved_at = clock.timestamp_ms();
@@ -784,11 +816,14 @@ public fun create_committee(threshold: u64): Committee {
 /// Adds a member to the committee
 public fun add_committee_member(committee: &mut Committee, member_address: address, weight: u64) {
     assert!(weight > 0, EInvalidParameter);
+    // Bound committee size so the membership scan in `votes_meet_threshold`
+    // stays bounded.
+    assert!(committee.members.length() < MAX_COMMITTEE_MEMBERS, EMaxParticipantsExceeded);
 
     // Reject duplicates: an active member with this address must not already
     // exist, since removal only deactivates the first active match.
     committee.members.do_ref!(|existing| {
-        assert!(!(existing.address == member_address && existing.active), EInvalidParameter);
+        assert!(!(existing.address == member_address && existing.active), EAlreadyExists);
     });
 
     let member = CommitteeMember {
@@ -805,16 +840,20 @@ public fun add_committee_member(committee: &mut Committee, member_address: addre
 public fun remove_committee_member(committee: &mut Committee, member_address: address) {
     let len = committee.members.length();
     let mut i = 0;
+    let mut found = false;
 
     while (i < len) {
         let member = &mut committee.members[i];
         if (member.address == member_address && member.active) {
             member.active = false;
             committee.total_weight = committee.total_weight - member.weight;
-            return
+            found = true;
+            break
         };
         i = i + 1;
     };
+
+    assert!(found, ENotFound);
 }
 
 /// Checks if votes meet the threshold.
@@ -825,6 +864,9 @@ public fun votes_meet_threshold(
     votes: &vector<Vote>,
     in_favor_of_a: bool,
 ): bool {
+    // Bound the outer loop so the membership scan stays bounded overall.
+    assert!(votes.length() <= MAX_VOTES, EMaxParticipantsExceeded);
+
     let mut total_weight = 0u64;
     let vote_len = votes.length();
     let mut seen_voters = vec_set::empty<address>();
@@ -876,79 +918,119 @@ public fun create_vote(
 // ============================================
 
 // Config accessors
+
+/// Returns the configured referee type tag.
 public fun config_referee_type(config: &RefereeConfig): u8 { config.referee_type }
 
+/// Returns the base timeout duration in milliseconds.
 public fun config_timeout_ms(config: &RefereeConfig): u64 { config.timeout_ms }
 
+/// Returns the grace period in milliseconds before penalties apply.
 public fun config_grace_period_ms(config: &RefereeConfig): u64 { config.grace_period_ms }
 
+/// Returns the base penalty amount.
 public fun config_base_penalty(config: &RefereeConfig): u64 { config.base_penalty }
 
+/// Returns the additional penalty charged per hour past the timeout.
 public fun config_penalty_per_hour(config: &RefereeConfig): u64 { config.penalty_per_hour }
 
+/// Returns the maximum penalty cap.
 public fun config_max_penalty(config: &RefereeConfig): u64 { config.max_penalty }
 
+/// Returns whether penalties are enabled for this config.
 public fun config_penalties_enabled(config: &RefereeConfig): bool { config.penalties_enabled }
 
 // Dispute accessors
+
+/// Returns the dispute's unique identifier.
 public fun dispute_id(dispute: &Dispute): u64 { dispute.id }
 
+/// Returns the address that raised the dispute.
 public fun dispute_raised_by(dispute: &Dispute): address { dispute.raised_by }
 
+/// Returns the address the dispute is against.
 public fun dispute_against(dispute: &Dispute): address { dispute.against }
 
+/// Returns the claimed violation-type tag.
 public fun dispute_violation_type(dispute: &Dispute): u8 { dispute.violation_type }
 
+/// Returns the dispute's current status tag.
 public fun dispute_status(dispute: &Dispute): u8 { dispute.status }
 
+/// Returns a reference to the off-chain evidence hash.
 public fun dispute_evidence_hash(dispute: &Dispute): &vector<u8> { &dispute.evidence_hash }
 
+/// Returns the state nonce recorded when the dispute was raised.
 public fun dispute_state_nonce(dispute: &Dispute): u64 { dispute.state_nonce }
 
+/// Returns the timestamp (ms) at which the dispute was raised.
 public fun dispute_raised_at(dispute: &Dispute): u64 { dispute.raised_at }
 
+/// Returns the response deadline timestamp (ms).
 public fun dispute_response_deadline(dispute: &Dispute): u64 { dispute.response_deadline }
 
+/// Returns the resolution timestamp (ms), or 0 if unresolved.
 public fun dispute_resolved_at(dispute: &Dispute): u64 { dispute.resolved_at }
 
+/// Returns a reference to the dispute's resolution details.
 public fun dispute_resolution(dispute: &Dispute): &Resolution { &dispute.resolution }
 
 // Resolution accessors
+
+/// Returns the amount awarded to party A.
 public fun resolution_party_a_amount(resolution: &Resolution): u64 { resolution.party_a_amount }
 
+/// Returns the amount awarded to party B.
 public fun resolution_party_b_amount(resolution: &Resolution): u64 { resolution.party_b_amount }
 
+/// Returns the penalty amount deducted in the resolution.
 public fun resolution_penalty_deducted(resolution: &Resolution): u64 { resolution.penalty_deducted }
 
+/// Returns the resolution's reason code.
 public fun resolution_reason(resolution: &Resolution): u8 { resolution.reason }
 
 // History accessors
+
+/// Returns the total number of disputes this party has raised.
 public fun history_disputes_raised(history: &DisputeHistory): u64 { history.disputes_raised }
 
+/// Returns the total number of disputes raised against this party.
 public fun history_disputes_against(history: &DisputeHistory): u64 { history.disputes_against }
 
+/// Returns the number of disputes this party has won.
 public fun history_disputes_won(history: &DisputeHistory): u64 { history.disputes_won }
 
+/// Returns the number of disputes this party has lost.
 public fun history_disputes_lost(history: &DisputeHistory): u64 { history.disputes_lost }
 
+/// Returns the total penalties this party has paid.
 public fun history_total_penalties_paid(history: &DisputeHistory): u64 {
     history.total_penalties_paid
 }
 
+/// Returns the count of consecutive timeouts (reset on good behavior).
 public fun history_consecutive_timeouts(history: &DisputeHistory): u64 {
     history.consecutive_timeouts
 }
 
 // Committee accessors
+
+/// Returns the committee's required vote-weight threshold.
 public fun committee_threshold(committee: &Committee): u64 { committee.threshold }
 
+/// Returns the committee's total active voting weight.
 public fun committee_total_weight(committee: &Committee): u64 { committee.total_weight }
 
+/// Returns the number of member entries in the committee (including inactive).
 public fun committee_member_count(committee: &Committee): u64 { committee.members.length() }
 
 // Vote accessors
+
+/// Returns the voter's address.
 public fun vote_voter(vote: &Vote): address { vote.voter }
 
+/// Returns whether the vote favors party A.
 public fun vote_in_favor_of_a(vote: &Vote): bool { vote.in_favor_of_a }
 
+/// Returns the penalty amount suggested by the vote.
 public fun vote_suggested_penalty(vote: &Vote): u64 { vote.suggested_penalty }

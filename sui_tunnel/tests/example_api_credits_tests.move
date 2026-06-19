@@ -36,14 +36,14 @@ fun open_session() {
         &mut ctx,
     );
 
-    assert_eq!(example_api_credits::session_status<SUI>(&session), 0);
-    assert_eq!(example_api_credits::session_total_calls<SUI>(&session), 0);
-    assert_eq!(example_api_credits::session_total_cost<SUI>(&session), 0);
-    assert_eq!(example_api_credits::session_price_per_call<SUI>(&session), 10);
-    assert_eq!(example_api_credits::session_max_calls<SUI>(&session), 0);
-    assert_eq!(example_api_credits::session_nonce<SUI>(&session), 0);
+    assert_eq!(session.session_status<SUI>(), 0);
+    assert_eq!(session.session_total_calls<SUI>(), 0);
+    assert_eq!(session.session_total_cost<SUI>(), 0);
+    assert_eq!(session.session_price_per_call<SUI>(), 10);
+    assert_eq!(session.session_max_calls<SUI>(), 0);
+    assert_eq!(session.session_nonce<SUI>(), 0);
 
-    example_api_credits::destroy_session_for_testing<SUI>(session);
+    session.destroy_session_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -68,9 +68,9 @@ fun session_balance_after_open() {
     );
 
     // Verify client deposit is tracked
-    assert_eq!(example_api_credits::session_total_balance<SUI>(&session), 10000);
+    assert_eq!(session.session_total_balance<SUI>(), 10000);
 
-    example_api_credits::destroy_session_for_testing<SUI>(session);
+    session.destroy_session_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -95,8 +95,7 @@ fun record_usage() {
     );
 
     // Record 5 API calls (cost = 5 * 10 = 50)
-    example_api_credits::record_usage<SUI>(
-        &mut session,
+    session.record_usage<SUI>(
         5, // total_calls
         50, // total_cost
         1, // nonce
@@ -108,13 +107,12 @@ fun record_usage() {
         &clock,
     );
 
-    assert_eq!(example_api_credits::session_total_calls<SUI>(&session), 5);
-    assert_eq!(example_api_credits::session_total_cost<SUI>(&session), 50);
-    assert_eq!(example_api_credits::session_nonce<SUI>(&session), 1);
+    assert_eq!(session.session_total_calls<SUI>(), 5);
+    assert_eq!(session.session_total_cost<SUI>(), 50);
+    assert_eq!(session.session_nonce<SUI>(), 1);
 
     // Record 15 more calls (total 20, cost = 200)
-    example_api_credits::record_usage<SUI>(
-        &mut session,
+    session.record_usage<SUI>(
         20,
         200,
         2,
@@ -126,10 +124,10 @@ fun record_usage() {
         &clock,
     );
 
-    assert_eq!(example_api_credits::session_total_calls<SUI>(&session), 20);
-    assert_eq!(example_api_credits::session_total_cost<SUI>(&session), 200);
+    assert_eq!(session.session_total_calls<SUI>(), 20);
+    assert_eq!(session.session_total_cost<SUI>(), 200);
 
-    example_api_credits::destroy_session_for_testing<SUI>(session);
+    session.destroy_session_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -154,8 +152,7 @@ fun record_usage_with_max_calls() {
     );
 
     // Record 100 calls (at the limit)
-    example_api_credits::record_usage<SUI>(
-        &mut session,
+    session.record_usage<SUI>(
         100,
         1000,
         1,
@@ -167,9 +164,9 @@ fun record_usage_with_max_calls() {
         &clock,
     );
 
-    assert_eq!(example_api_credits::session_total_calls<SUI>(&session), 100);
+    assert_eq!(session.session_total_calls<SUI>(), 100);
 
-    example_api_credits::destroy_session_for_testing<SUI>(session);
+    session.destroy_session_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -200,8 +197,7 @@ fun record_usage_exceeds_max_calls() {
     );
 
     // Try to record 51 calls (exceeds max)
-    example_api_credits::record_usage<SUI>(
-        &mut session,
+    session.record_usage<SUI>(
         51,
         510,
         1,
@@ -213,7 +209,7 @@ fun record_usage_exceeds_max_calls() {
         &clock,
     );
 
-    example_api_credits::destroy_session_for_testing<SUI>(session);
+    session.destroy_session_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -244,8 +240,7 @@ fun record_usage_wrong_cost() {
     );
 
     // Wrong cost: 5 calls at 10 per call should be 50, not 100
-    example_api_credits::record_usage<SUI>(
-        &mut session,
+    session.record_usage<SUI>(
         5,
         100, // wrong!
         1,
@@ -257,7 +252,7 @@ fun record_usage_wrong_cost() {
         &clock,
     );
 
-    example_api_credits::destroy_session_for_testing<SUI>(session);
+    session.destroy_session_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -288,8 +283,7 @@ fun record_usage_exceeds_budget() {
     );
 
     // 20 calls * 10 = 200, but budget is only 100
-    example_api_credits::record_usage<SUI>(
-        &mut session,
+    session.record_usage<SUI>(
         20,
         200,
         1,
@@ -301,7 +295,7 @@ fun record_usage_exceeds_budget() {
         &clock,
     );
 
-    example_api_credits::destroy_session_for_testing<SUI>(session);
+    session.destroy_session_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -331,8 +325,7 @@ fun record_usage_stale_nonce() {
         &mut ctx,
     );
 
-    example_api_credits::record_usage<SUI>(
-        &mut session,
+    session.record_usage<SUI>(
         5,
         50,
         1,
@@ -345,8 +338,7 @@ fun record_usage_stale_nonce() {
     );
 
     // Stale nonce (0 <= 1)
-    example_api_credits::record_usage<SUI>(
-        &mut session,
+    session.record_usage<SUI>(
         10,
         100,
         0,
@@ -358,7 +350,7 @@ fun record_usage_stale_nonce() {
         &clock,
     );
 
-    example_api_credits::destroy_session_for_testing<SUI>(session);
+    session.destroy_session_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -388,13 +380,11 @@ fun cannot_record_usage_when_closed() {
         &mut ctx,
     );
 
-    example_api_credits::set_status_for_testing<SUI>(
-        &mut session,
+    session.set_status_for_testing<SUI>(
         example_api_credits::session_closed(),
     );
 
-    example_api_credits::record_usage<SUI>(
-        &mut session,
+    session.record_usage<SUI>(
         5,
         50,
         1,
@@ -406,7 +396,7 @@ fun cannot_record_usage_when_closed() {
         &clock,
     );
 
-    example_api_credits::destroy_session_for_testing<SUI>(session);
+    session.destroy_session_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -430,8 +420,7 @@ fun calculate_settlement() {
         &mut ctx,
     );
 
-    example_api_credits::record_usage<SUI>(
-        &mut session,
+    session.record_usage<SUI>(
         50,
         500,
         1,
@@ -443,11 +432,11 @@ fun calculate_settlement() {
         &clock,
     );
 
-    let (client_refund, provider_earned) = example_api_credits::calculate_settlement<SUI>(&session);
+    let (client_refund, provider_earned) = session.calculate_settlement<SUI>();
     assert_eq!(client_refund, 9500);
     assert_eq!(provider_earned, 500);
 
-    example_api_credits::destroy_session_for_testing<SUI>(session);
+    session.destroy_session_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
@@ -471,24 +460,24 @@ fun compute_usage_hash_deterministic() {
         &mut ctx,
     );
 
-    let hash1 = example_api_credits::compute_usage_hash<SUI>(&session, 5, 50, 1);
-    let hash2 = example_api_credits::compute_usage_hash<SUI>(&session, 5, 50, 1);
+    let hash1 = session.compute_usage_hash<SUI>(5, 50, 1);
+    let hash2 = session.compute_usage_hash<SUI>(5, 50, 1);
     assert_eq!(hash1, hash2);
 
-    let hash3 = example_api_credits::compute_usage_hash<SUI>(&session, 10, 100, 1);
+    let hash3 = session.compute_usage_hash<SUI>(10, 100, 1);
     assert!(hash1 != hash3);
     assert_eq!(hash1.length(), 32);
 
-    example_api_credits::destroy_session_for_testing<SUI>(session);
+    session.destroy_session_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }
 
 #[test]
 fun usage_state_accessors() {
     let state = example_api_credits::create_usage_state_for_testing(42, 420, 7);
-    assert_eq!(example_api_credits::usage_total_calls(&state), 42);
-    assert_eq!(example_api_credits::usage_total_cost(&state), 420);
-    assert_eq!(example_api_credits::usage_nonce(&state), 7);
+    assert_eq!(state.usage_total_calls(), 42);
+    assert_eq!(state.usage_total_cost(), 420);
+    assert_eq!(state.usage_nonce(), 7);
 }
 
 #[
@@ -517,6 +506,6 @@ fun open_session_zero_price() {
         &mut ctx,
     );
 
-    example_api_credits::destroy_session_for_testing<SUI>(session);
+    session.destroy_session_for_testing<SUI>();
     clock::destroy_for_testing(clock);
 }

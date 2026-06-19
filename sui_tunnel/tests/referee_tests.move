@@ -38,27 +38,27 @@ fun violation_constants() {
 #[test]
 fun default_config() {
     let config = referee::default_config();
-    assert_eq!(referee::config_referee_type(&config), 0);
-    assert_eq!(referee::config_timeout_ms(&config), 3600000);
-    assert_eq!(referee::config_penalties_enabled(&config), false);
+    assert_eq!(config.config_referee_type(), 0);
+    assert_eq!(config.config_timeout_ms(), 3600000);
+    assert_eq!(config.config_penalties_enabled(), false);
 }
 
 #[test]
 fun create_timeout_config() {
     let timeout = 7200000u64; // 2 hours
     let config = referee::create_timeout_config(timeout);
-    assert_eq!(referee::config_timeout_ms(&config), timeout);
-    assert_eq!(referee::config_penalties_enabled(&config), false);
+    assert_eq!(config.config_timeout_ms(), timeout);
+    assert_eq!(config.config_penalties_enabled(), false);
 }
 
 #[test]
 fun create_penalty_config() {
     let config = referee::create_penalty_config(3600000, 1000, 500, 5000);
-    assert_eq!(referee::config_timeout_ms(&config), 3600000);
-    assert_eq!(referee::config_base_penalty(&config), 1000);
-    assert_eq!(referee::config_penalty_per_hour(&config), 500);
-    assert_eq!(referee::config_max_penalty(&config), 5000);
-    assert_eq!(referee::config_penalties_enabled(&config), true);
+    assert_eq!(config.config_timeout_ms(), 3600000);
+    assert_eq!(config.config_base_penalty(), 1000);
+    assert_eq!(config.config_penalty_per_hour(), 500);
+    assert_eq!(config.config_max_penalty(), 5000);
+    assert_eq!(config.config_penalties_enabled(), true);
 }
 
 /// Builds a `Clock` frozen at `now_ms` for deterministic time-based assertions.
@@ -82,32 +82,32 @@ fun calculate_penalty_grows_then_caps() {
 
     // Exactly at the deadline: elapsed == 0 -> penalty is 0.
     let c0 = clock_at(ONE_HOUR_MS, &mut ctx);
-    assert_eq!(referee::calculate_penalty(&config, last_activity, &c0), 0);
+    assert_eq!(config.calculate_penalty(last_activity, &c0), 0);
     destroy(c0);
 
     // Just after the deadline (elapsed == 1ms): hours == 0, so only the base.
     let c1 = clock_at(ONE_HOUR_MS + 1, &mut ctx);
-    assert_eq!(referee::calculate_penalty(&config, last_activity, &c1), 1000);
+    assert_eq!(config.calculate_penalty(last_activity, &c1), 1000);
     destroy(c1);
 
     // One full hour past the deadline: base + 1 * 500 = 1500.
     let c_1h = clock_at(ONE_HOUR_MS + ONE_HOUR_MS, &mut ctx);
-    assert_eq!(referee::calculate_penalty(&config, last_activity, &c_1h), 1500);
+    assert_eq!(config.calculate_penalty(last_activity, &c_1h), 1500);
     destroy(c_1h);
 
     // Two full hours past the deadline: base + 2 * 500 = 2000.
     let c_2h = clock_at(ONE_HOUR_MS + 2 * ONE_HOUR_MS, &mut ctx);
-    assert_eq!(referee::calculate_penalty(&config, last_activity, &c_2h), 2000);
+    assert_eq!(config.calculate_penalty(last_activity, &c_2h), 2000);
     destroy(c_2h);
 
     // Eight full hours: base + 8 * 500 = 5000, exactly the cap (not yet clamped).
     let c_8h = clock_at(ONE_HOUR_MS + 8 * ONE_HOUR_MS, &mut ctx);
-    assert_eq!(referee::calculate_penalty(&config, last_activity, &c_8h), 5000);
+    assert_eq!(config.calculate_penalty(last_activity, &c_8h), 5000);
     destroy(c_8h);
 
     // Nine full hours: base + 9 * 500 = 5500 -> clamped to max_penalty 5000.
     let c_9h = clock_at(ONE_HOUR_MS + 9 * ONE_HOUR_MS, &mut ctx);
-    assert_eq!(referee::calculate_penalty(&config, last_activity, &c_9h), 5000);
+    assert_eq!(config.calculate_penalty(last_activity, &c_9h), 5000);
     destroy(c_9h);
 }
 
@@ -120,7 +120,7 @@ fun calculate_penalty_disabled_is_zero() {
 
     // Far past the deadline, but penalties are disabled.
     let c = clock_at(ONE_HOUR_MS + 100 * ONE_HOUR_MS, &mut ctx);
-    assert_eq!(referee::calculate_penalty(&config, 0, &c), 0);
+    assert_eq!(config.calculate_penalty(0, &c), 0);
     destroy(c);
 }
 
@@ -136,20 +136,20 @@ fun calculate_graduated_penalty_scales_and_caps() {
 
     // No consecutive timeouts -> multiplier 1x -> 1500.
     let mut history = referee::new_dispute_history();
-    assert_eq!(referee::calculate_graduated_penalty(&config, &history, 0, &c), 1500);
+    assert_eq!(config.calculate_graduated_penalty(&history, 0, &c), 1500);
 
     // One consecutive timeout -> multiplier 2x -> 3000.
-    referee::record_timeout(&mut history, 0);
-    assert_eq!(referee::history_consecutive_timeouts(&history), 1);
-    assert_eq!(referee::calculate_graduated_penalty(&config, &history, 0, &c), 3000);
+    history.record_timeout(0);
+    assert_eq!(history.history_consecutive_timeouts(), 1);
+    assert_eq!(config.calculate_graduated_penalty(&history, 0, &c), 3000);
 
     // Two consecutive timeouts -> multiplier 3x -> 4500.
-    referee::record_timeout(&mut history, 0);
-    assert_eq!(referee::calculate_graduated_penalty(&config, &history, 0, &c), 4500);
+    history.record_timeout(0);
+    assert_eq!(config.calculate_graduated_penalty(&history, 0, &c), 4500);
 
     // Three consecutive timeouts -> 1500 * 4 = 6000 -> clamped to max 5000.
-    referee::record_timeout(&mut history, 0);
-    assert_eq!(referee::calculate_graduated_penalty(&config, &history, 0, &c), 5000);
+    history.record_timeout(0);
+    assert_eq!(config.calculate_graduated_penalty(&history, 0, &c), 5000);
 
     destroy(c);
 }
@@ -171,67 +171,67 @@ fun would_exceed_deposit() {
 #[test]
 fun dispute_history() {
     let mut history = referee::new_dispute_history();
-    assert_eq!(referee::history_disputes_raised(&history), 0);
-    assert_eq!(referee::history_consecutive_timeouts(&history), 0);
+    assert_eq!(history.history_disputes_raised(), 0);
+    assert_eq!(history.history_consecutive_timeouts(), 0);
 
-    referee::record_dispute_raised(&mut history);
-    assert_eq!(referee::history_disputes_raised(&history), 1);
+    history.record_dispute_raised();
+    assert_eq!(history.history_disputes_raised(), 1);
 
-    referee::record_dispute_against(&mut history);
-    assert_eq!(referee::history_disputes_against(&history), 1);
+    history.record_dispute_against();
+    assert_eq!(history.history_disputes_against(), 1);
 
-    referee::record_dispute_won(&mut history);
-    assert_eq!(referee::history_disputes_won(&history), 1);
+    history.record_dispute_won();
+    assert_eq!(history.history_disputes_won(), 1);
 
-    referee::record_timeout(&mut history, 500);
-    assert_eq!(referee::history_consecutive_timeouts(&history), 1);
-    assert_eq!(referee::history_total_penalties_paid(&history), 500);
+    history.record_timeout(500);
+    assert_eq!(history.history_consecutive_timeouts(), 1);
+    assert_eq!(history.history_total_penalties_paid(), 500);
 
-    referee::record_timeout(&mut history, 1000);
-    assert_eq!(referee::history_consecutive_timeouts(&history), 2);
-    assert_eq!(referee::history_total_penalties_paid(&history), 1500);
+    history.record_timeout(1000);
+    assert_eq!(history.history_consecutive_timeouts(), 2);
+    assert_eq!(history.history_total_penalties_paid(), 1500);
 
-    referee::reset_consecutive_timeouts(&mut history);
-    assert_eq!(referee::history_consecutive_timeouts(&history), 0);
+    history.reset_consecutive_timeouts();
+    assert_eq!(history.history_consecutive_timeouts(), 0);
 }
 
 #[test]
 fun empty_resolution() {
     let resolution = referee::empty_resolution();
-    assert_eq!(referee::resolution_party_a_amount(&resolution), 0);
-    assert_eq!(referee::resolution_party_b_amount(&resolution), 0);
-    assert_eq!(referee::resolution_penalty_deducted(&resolution), 0);
-    assert_eq!(referee::resolution_reason(&resolution), 0);
+    assert_eq!(resolution.resolution_party_a_amount(), 0);
+    assert_eq!(resolution.resolution_party_b_amount(), 0);
+    assert_eq!(resolution.resolution_penalty_deducted(), 0);
+    assert_eq!(resolution.resolution_reason(), 0);
 }
 
 #[test]
 fun create_resolution() {
     let resolution = referee::create_resolution(1000, 500, 100, 1);
-    assert_eq!(referee::resolution_party_a_amount(&resolution), 1000);
-    assert_eq!(referee::resolution_party_b_amount(&resolution), 500);
-    assert_eq!(referee::resolution_penalty_deducted(&resolution), 100);
-    assert_eq!(referee::resolution_reason(&resolution), 1);
+    assert_eq!(resolution.resolution_party_a_amount(), 1000);
+    assert_eq!(resolution.resolution_party_b_amount(), 500);
+    assert_eq!(resolution.resolution_penalty_deducted(), 100);
+    assert_eq!(resolution.resolution_reason(), 1);
 }
 
 #[test]
 fun committee_operations() {
     let mut committee = referee::create_committee(60);
-    assert_eq!(referee::committee_threshold(&committee), 60);
-    assert_eq!(referee::committee_total_weight(&committee), 0);
-    assert_eq!(referee::committee_member_count(&committee), 0);
+    assert_eq!(committee.committee_threshold(), 60);
+    assert_eq!(committee.committee_total_weight(), 0);
+    assert_eq!(committee.committee_member_count(), 0);
 
-    referee::add_committee_member(&mut committee, @0x1, 40);
-    assert_eq!(referee::committee_total_weight(&committee), 40);
-    assert_eq!(referee::committee_member_count(&committee), 1);
+    committee.add_committee_member(@0x1, 40);
+    assert_eq!(committee.committee_total_weight(), 40);
+    assert_eq!(committee.committee_member_count(), 1);
 
-    referee::add_committee_member(&mut committee, @0x2, 30);
-    assert_eq!(referee::committee_total_weight(&committee), 70);
+    committee.add_committee_member(@0x2, 30);
+    assert_eq!(committee.committee_total_weight(), 70);
 
-    referee::add_committee_member(&mut committee, @0x3, 30);
-    assert_eq!(referee::committee_total_weight(&committee), 100);
+    committee.add_committee_member(@0x3, 30);
+    assert_eq!(committee.committee_total_weight(), 100);
 
-    referee::remove_committee_member(&mut committee, @0x2);
-    assert_eq!(referee::committee_total_weight(&committee), 70);
+    committee.remove_committee_member(@0x2);
+    assert_eq!(committee.committee_total_weight(), 70);
 }
 
 #[test]
@@ -241,17 +241,17 @@ fun votes_meet_threshold() {
 
     // With dummy ctx, all votes come from @0x0 (de-duplicated to 1 effective vote)
     let mut committee = referee::create_committee(50);
-    referee::add_committee_member(&mut committee, @0x0, 60);
-    referee::add_committee_member(&mut committee, @0x1, 40);
+    committee.add_committee_member(@0x0, 60);
+    committee.add_committee_member(@0x1, 40);
 
     let vote1 = referee::create_vote(true, 0, &clock, &ctx);
 
     let votes = vector[vote1];
 
     // @0x0 has weight 60, meets 50 threshold
-    assert!(referee::votes_meet_threshold(&committee, &votes, true));
+    assert!(committee.votes_meet_threshold(&votes, true));
     // No votes against A, doesn't meet 50 threshold
-    assert!(!referee::votes_meet_threshold(&committee, &votes, false));
+    assert!(!committee.votes_meet_threshold(&votes, false));
 
     clock::destroy_for_testing(clock);
 }
@@ -267,30 +267,30 @@ fun votes_meet_threshold_distinct_voters() {
     let clock = clock::create_for_testing(scenario.ctx());
 
     let mut committee = referee::create_committee(60);
-    referee::add_committee_member(&mut committee, @0x1, 20);
-    referee::add_committee_member(&mut committee, @0x2, 30);
-    referee::add_committee_member(&mut committee, @0x3, 50);
-    assert_eq!(referee::committee_total_weight(&committee), 100);
+    committee.add_committee_member(@0x1, 20);
+    committee.add_committee_member(@0x2, 30);
+    committee.add_committee_member(@0x3, 50);
+    assert_eq!(committee.committee_total_weight(), 100);
 
     // Vote from @0x1 (weight 20).
     scenario.next_tx(@0x1);
     let v_a1 = referee::create_vote(true, 0, &clock, scenario.ctx());
-    assert_eq!(referee::vote_voter(&v_a1), @0x1);
+    assert_eq!(v_a1.vote_voter(), @0x1);
 
     // Vote from @0x2 (weight 30).
     scenario.next_tx(@0x2);
     let v_a2 = referee::create_vote(true, 0, &clock, scenario.ctx());
-    assert_eq!(referee::vote_voter(&v_a2), @0x2);
+    assert_eq!(v_a2.vote_voter(), @0x2);
 
     // 20 + 30 = 50 < 60: two distinct voters still below threshold.
     let two_votes = vector[v_a1, v_a2];
-    assert!(!referee::votes_meet_threshold(&committee, &two_votes, true));
+    assert!(!committee.votes_meet_threshold(&two_votes, true));
 
     // Add @0x3 (weight 50): 20 + 30 + 50 = 100 >= 60: threshold met.
     scenario.next_tx(@0x3);
     let v_a3 = referee::create_vote(true, 0, &clock, scenario.ctx());
     let three_votes = vector[v_a1, v_a2, v_a3];
-    assert!(referee::votes_meet_threshold(&committee, &three_votes, true));
+    assert!(committee.votes_meet_threshold(&three_votes, true));
 
     clock::destroy_for_testing(clock);
     scenario.end();
@@ -306,26 +306,26 @@ fun votes_meet_threshold_dedups_same_voter() {
     let clock = clock::create_for_testing(scenario.ctx());
 
     let mut committee = referee::create_committee(60);
-    referee::add_committee_member(&mut committee, @0x1, 50);
-    referee::add_committee_member(&mut committee, @0x2, 40);
+    committee.add_committee_member(@0x1, 50);
+    committee.add_committee_member(@0x2, 40);
 
     // Two separate votes, both genuinely from @0x1.
     scenario.next_tx(@0x1);
     let v1 = referee::create_vote(true, 0, &clock, scenario.ctx());
     scenario.next_tx(@0x1);
     let v2 = referee::create_vote(true, 0, &clock, scenario.ctx());
-    assert_eq!(referee::vote_voter(&v1), @0x1);
-    assert_eq!(referee::vote_voter(&v2), @0x1);
+    assert_eq!(v1.vote_voter(), @0x1);
+    assert_eq!(v2.vote_voter(), @0x1);
 
     // Dedup: @0x1's weight (50) counts once, not 100 -> below threshold 60.
     let dup_votes = vector[v1, v2];
-    assert!(!referee::votes_meet_threshold(&committee, &dup_votes, true));
+    assert!(!committee.votes_meet_threshold(&dup_votes, true));
 
     // Distinct second voter @0x2 (40) pushes the deduped total to 90 >= 60.
     scenario.next_tx(@0x2);
     let v3 = referee::create_vote(true, 0, &clock, scenario.ctx());
     let mixed_votes = vector[v1, v2, v3];
-    assert!(referee::votes_meet_threshold(&committee, &mixed_votes, true));
+    assert!(committee.votes_meet_threshold(&mixed_votes, true));
 
     clock::destroy_for_testing(clock);
     scenario.end();
@@ -339,7 +339,7 @@ fun votes_meet_threshold_ignores_non_members() {
     let clock = clock::create_for_testing(scenario.ctx());
 
     let mut committee = referee::create_committee(60);
-    referee::add_committee_member(&mut committee, @0x1, 50);
+    committee.add_committee_member(@0x1, 50);
 
     // @0x1 is a member (50); @0x9 is NOT a committee member (ignored).
     scenario.next_tx(@0x1);
@@ -349,7 +349,7 @@ fun votes_meet_threshold_ignores_non_members() {
 
     // Only 50 counts (outsider ignored) -> below 60.
     let votes = vector[v_member, v_outsider];
-    assert!(!referee::votes_meet_threshold(&committee, &votes, true));
+    assert!(!committee.votes_meet_threshold(&votes, true));
 
     clock::destroy_for_testing(clock);
     scenario.end();
@@ -362,8 +362,8 @@ fun votes_meet_threshold_excludes_removed_member() {
     let clock = clock::create_for_testing(scenario.ctx());
 
     let mut committee = referee::create_committee(60);
-    referee::add_committee_member(&mut committee, @0x1, 50);
-    referee::add_committee_member(&mut committee, @0x2, 40);
+    committee.add_committee_member(@0x1, 50);
+    committee.add_committee_member(@0x2, 40);
 
     scenario.next_tx(@0x1);
     let v1 = referee::create_vote(true, 0, &clock, scenario.ctx());
@@ -372,11 +372,11 @@ fun votes_meet_threshold_excludes_removed_member() {
 
     // Before removal: 50 + 40 = 90 >= 60.
     let votes = vector[v1, v2];
-    assert!(referee::votes_meet_threshold(&committee, &votes, true));
+    assert!(committee.votes_meet_threshold(&votes, true));
 
     // Deactivate @0x2: only @0x1's 50 remains -> below 60.
-    referee::remove_committee_member(&mut committee, @0x2);
-    assert!(!referee::votes_meet_threshold(&committee, &votes, true));
+    committee.remove_committee_member(@0x2);
+    assert!(!committee.votes_meet_threshold(&votes, true));
 
     clock::destroy_for_testing(clock);
     scenario.end();
@@ -388,9 +388,9 @@ fun vote_accessors() {
     let clock = clock::create_for_testing(&mut ctx);
 
     let vote = referee::create_vote(true, 1000, &clock, &ctx);
-    assert_eq!(referee::vote_voter(&vote), @0x0);
-    assert_eq!(referee::vote_in_favor_of_a(&vote), true);
-    assert_eq!(referee::vote_suggested_penalty(&vote), 1000);
+    assert_eq!(vote.vote_voter(), @0x0);
+    assert_eq!(vote.vote_in_favor_of_a(), true);
+    assert_eq!(vote.vote_suggested_penalty(), 1000);
 
     clock::destroy_for_testing(clock);
 }
@@ -402,7 +402,7 @@ fun vote_accessors() {
 #[
     test,
     expected_failure(
-        abort_code = sui_tunnel::referee::EInvalidParameter,
+        abort_code = sui_tunnel::referee::EInvalidTimeout,
         location = sui_tunnel::referee,
     ),
 ]
@@ -414,7 +414,7 @@ fun create_timeout_config_zero_timeout_aborts() {
 #[
     test,
     expected_failure(
-        abort_code = sui_tunnel::referee::EInvalidParameter,
+        abort_code = sui_tunnel::referee::EInvalidTimeout,
         location = sui_tunnel::referee,
     ),
 ]
@@ -426,7 +426,7 @@ fun create_penalty_config_zero_timeout_aborts() {
 #[
     test,
     expected_failure(
-        abort_code = sui_tunnel::referee::EInvalidParameter,
+        abort_code = sui_tunnel::referee::EInvalidPenaltyAmount,
         location = sui_tunnel::referee,
     ),
 ]
@@ -450,11 +450,12 @@ fun create_config_bad_referee_type_aborts() {
 #[
     test,
     expected_failure(
-        abort_code = sui_tunnel::referee::EInvalidParameter,
+        abort_code = sui_tunnel::referee::EInvalidTimeout,
         location = sui_tunnel::referee,
     ),
 ]
 fun create_config_zero_timeout_aborts() {
+    // referee_type 0 passes the type check, so the zero timeout is what aborts.
     let _config = referee::create_config(0, 0, 0, 0, 0, 0, false, 0);
 }
 
@@ -468,21 +469,21 @@ fun create_config_zero_timeout_aborts() {
 fun add_committee_member_zero_weight_aborts() {
     let mut committee = referee::create_committee(60);
     // weight must be > 0.
-    referee::add_committee_member(&mut committee, @0x1, 0);
+    committee.add_committee_member(@0x1, 0);
 }
 
 #[
     test,
     expected_failure(
-        abort_code = sui_tunnel::referee::EInvalidParameter,
+        abort_code = sui_tunnel::referee::EAlreadyExists,
         location = sui_tunnel::referee,
     ),
 ]
 fun add_committee_member_duplicate_active_aborts() {
     let mut committee = referee::create_committee(60);
-    referee::add_committee_member(&mut committee, @0x1, 30);
+    committee.add_committee_member(@0x1, 30);
     // Re-adding the same active address is rejected.
-    referee::add_committee_member(&mut committee, @0x1, 30);
+    committee.add_committee_member(@0x1, 30);
 }
 
 #[
@@ -509,9 +510,9 @@ fun resolve_for_a_on_resolved_dispute_aborts() {
     );
 
     // First resolution moves the dispute out of RAISED.
-    referee::resolve_for_a(&mut dispute, 100, 0, 0, &clock);
+    dispute.resolve_for_a(100, 0, 0, &clock);
     // Second resolution must abort: no longer an active dispute.
-    referee::resolve_for_a(&mut dispute, 100, 0, 0, &clock);
+    dispute.resolve_for_a(100, 0, 0, &clock);
 
     clock::destroy_for_testing(clock);
     scenario.end();
@@ -543,7 +544,7 @@ fun auto_resolve_before_deadline_aborts() {
     );
 
     // Still before the deadline -> can_auto_resolve is false -> abort.
-    referee::auto_resolve_timeout(&mut dispute, 1000, 0, @0x1, &clock);
+    dispute.auto_resolve_timeout(1000, 0, @0x1, &clock);
 
     clock::destroy_for_testing(clock);
     scenario.end();
@@ -563,15 +564,15 @@ fun is_response_too_fast_handles_future_request() {
 
     // now (100) is BEFORE request_time (5000): no underflow, returns true.
     let c = clock_at(100, &mut ctx);
-    assert!(referee::is_response_too_fast(&config, 5000, &c));
+    assert!(config.is_response_too_fast(5000, &c));
 
     // now (100) == request_time (100): still "too fast" (now <= request_time).
-    assert!(referee::is_response_too_fast(&config, 100, &c));
+    assert!(config.is_response_too_fast(100, &c));
     destroy(c);
 
     // A genuinely slow response (elapsed >= min) is NOT too fast.
     let c2 = clock_at(5000, &mut ctx);
-    assert!(!referee::is_response_too_fast(&config, 100, &c2));
+    assert!(!config.is_response_too_fast(100, &c2));
     destroy(c2);
 }
 
@@ -582,7 +583,7 @@ fun is_response_too_fast_disabled_when_min_zero() {
     let mut ctx = sui::tx_context::dummy();
     let config = referee::create_timeout_config(ONE_HOUR_MS); // min_response_time_ms = 0
     let c = clock_at(0, &mut ctx);
-    assert!(!referee::is_response_too_fast(&config, u64_max(), &c));
+    assert!(!config.is_response_too_fast(u64_max(), &c));
     destroy(c);
 }
 
@@ -596,13 +597,13 @@ fun timeout_helpers_no_overflow_on_huge_last_activity() {
 
     let c = clock_at(ONE_HOUR_MS, &mut ctx);
     // Deadline far in the future -> not reached, full time remaining, no elapsed.
-    assert!(!referee::is_timeout_reached(&config, huge, &c));
-    assert!(!referee::is_timeout_with_grace_reached(&config, huge, &c));
-    assert_eq!(referee::time_since_timeout(&config, huge, &c), 0);
-    assert!(referee::time_until_timeout(&config, huge, &c) > 0);
+    assert!(!config.is_timeout_reached(huge, &c));
+    assert!(!config.is_timeout_with_grace_reached(huge, &c));
+    assert_eq!(config.time_since_timeout(huge, &c), 0);
+    assert!(config.time_until_timeout(huge, &c) > 0);
     // Penalty depends on elapsed == 0 -> zero, no abort.
     let pen_config = referee::create_penalty_config(ONE_HOUR_MS, 1000, 500, 5000);
-    assert_eq!(referee::calculate_penalty(&pen_config, huge, &c), 0);
+    assert_eq!(pen_config.calculate_penalty(huge, &c), 0);
     destroy(c);
 }
 
@@ -627,10 +628,277 @@ fun create_dispute_saturates_deadline() {
     );
 
     // now + 1h overflows u64 -> deadline saturated to u64::MAX.
-    assert_eq!(referee::dispute_response_deadline(&dispute), u64_max());
+    assert_eq!(dispute.dispute_response_deadline(), u64_max());
 
     clock::destroy_for_testing(clock);
     scenario.end();
+}
+
+// ============================================
+// ACTIVE-DISPUTE PREDICATE
+// ============================================
+
+/// `is_active_dispute` is true for a freshly raised dispute and false once it
+/// has reached a terminal resolution.
+#[test]
+fun is_active_dispute_tracks_status() {
+    let mut scenario = test_scenario::begin(@0x1);
+    let clock = clock::create_for_testing(scenario.ctx());
+    let config = referee::create_timeout_config(ONE_HOUR_MS);
+
+    let mut dispute = referee::create_dispute(
+        1,
+        @0x2,
+        referee::violation_no_response(),
+        b"evidence",
+        0,
+        &config,
+        &clock,
+        scenario.ctx(),
+    );
+
+    // Freshly created disputes are RAISED -> active.
+    assert!(dispute.is_active_dispute());
+
+    // After resolution it reaches RESOLVED_A -> no longer active.
+    dispute.resolve_for_a(100, 0, 0, &clock);
+    assert!(!dispute.is_active_dispute());
+
+    clock::destroy_for_testing(clock);
+    scenario.end();
+}
+
+// ============================================
+// PENALTY CLAMP ON LARGE INPUTS
+// ============================================
+
+/// With a huge `penalty_per_hour` the time-based term would overflow u64, but
+/// the source accumulates in u128 and clamps to `max_penalty` -> no abort.
+#[test]
+fun calculate_penalty_clamps_huge_per_hour_to_max() {
+    let mut ctx = sui::tx_context::dummy();
+    // per_hour == u64::MAX, max_penalty == 10000; base must be <= max.
+    let config = referee::create_penalty_config(ONE_HOUR_MS, 0, u64_max(), 10000);
+
+    // Several full hours past the deadline -> hours * per_hour overflows u64,
+    // so the un-clamped penalty far exceeds max_penalty.
+    let c = clock_at(ONE_HOUR_MS + 5 * ONE_HOUR_MS, &mut ctx);
+    assert_eq!(config.calculate_penalty(0, &c), 10000);
+    destroy(c);
+}
+
+/// Many consecutive timeouts make the graduated multiplier huge; the u128
+/// clamp pins the result at `max_penalty` instead of overflowing/aborting.
+#[test]
+fun calculate_graduated_penalty_clamps_many_timeouts_to_max() {
+    let mut ctx = sui::tx_context::dummy();
+    let config = referee::create_penalty_config(ONE_HOUR_MS, 1000, 500, 5000);
+
+    // One hour past the deadline -> base penalty is 1500.
+    let c = clock_at(ONE_HOUR_MS + ONE_HOUR_MS, &mut ctx);
+
+    // Pile up many consecutive timeouts so 1500 * (n + 1) >> max_penalty.
+    let mut history = referee::new_dispute_history();
+    100u64.do!(|_| history.record_timeout(0));
+    assert_eq!(history.history_consecutive_timeouts(), 100);
+
+    // 1500 * 101 = 151500 -> clamped to max_penalty 5000.
+    assert_eq!(config.calculate_graduated_penalty(&history, 0, &c), 5000);
+    destroy(c);
+}
+
+// ============================================
+// RESOLUTION ATTRIBUTION
+// ============================================
+
+/// `resolve_for_b` records the supplied amounts and stamps reason code 2.
+#[test]
+fun resolve_for_b_attributes_amounts() {
+    let mut scenario = test_scenario::begin(@0x1);
+    let clock = clock::create_for_testing(scenario.ctx());
+    let config = referee::create_timeout_config(ONE_HOUR_MS);
+
+    let mut dispute = referee::create_dispute(
+        1,
+        @0x2,
+        referee::violation_no_response(),
+        b"evidence",
+        0,
+        &config,
+        &clock,
+        scenario.ctx(),
+    );
+
+    dispute.resolve_for_b(100, 900, 50, &clock);
+
+    assert_eq!(dispute.dispute_status(), referee::dispute_status_resolved_b());
+    let resolution = dispute.dispute_resolution();
+    assert_eq!(resolution.resolution_party_a_amount(), 100);
+    assert_eq!(resolution.resolution_party_b_amount(), 900);
+    assert_eq!(resolution.resolution_penalty_deducted(), 50);
+    assert_eq!(resolution.resolution_reason(), 2);
+
+    destroy(dispute);
+    clock::destroy_for_testing(clock);
+    scenario.end();
+}
+
+/// `resolve_split` records both amounts and stamps reason code 3.
+#[test]
+fun resolve_split_attributes_amounts() {
+    let mut scenario = test_scenario::begin(@0x1);
+    let clock = clock::create_for_testing(scenario.ctx());
+    let config = referee::create_timeout_config(ONE_HOUR_MS);
+
+    let mut dispute = referee::create_dispute(
+        1,
+        @0x2,
+        referee::violation_no_response(),
+        b"evidence",
+        0,
+        &config,
+        &clock,
+        scenario.ctx(),
+    );
+
+    dispute.resolve_split(600, 400, 0, &clock);
+
+    assert_eq!(dispute.dispute_status(), referee::dispute_status_resolved_split());
+    let resolution = dispute.dispute_resolution();
+    assert_eq!(resolution.resolution_party_a_amount(), 600);
+    assert_eq!(resolution.resolution_party_b_amount(), 400);
+    assert_eq!(resolution.resolution_penalty_deducted(), 0);
+    assert_eq!(resolution.resolution_reason(), 3);
+
+    destroy(dispute);
+    clock::destroy_for_testing(clock);
+    scenario.end();
+}
+
+// ============================================
+// AUTO-RESOLVE TIMEOUT SUCCESS PATHS
+// ============================================
+
+/// Past the deadline, `auto_resolve_timeout` awards `total - penalty` to the
+/// raiser. When the raiser IS party_a the award lands in `party_a_amount`.
+#[test]
+fun auto_resolve_timeout_awards_raiser_as_party_a() {
+    let mut scenario = test_scenario::begin(@0x1);
+    let mut clock = clock::create_for_testing(scenario.ctx());
+    clock.set_for_testing(0);
+    let config = referee::create_timeout_config(ONE_HOUR_MS);
+
+    // Raised by @0x1 (the scenario sender). Deadline = 0 + 1h.
+    let mut dispute = referee::create_dispute(
+        1,
+        @0x2,
+        referee::violation_no_response(),
+        b"evidence",
+        0,
+        &config,
+        &clock,
+        scenario.ctx(),
+    );
+    assert_eq!(dispute.dispute_raised_by(), @0x1);
+
+    // Advance past the response deadline so auto-resolve is permitted.
+    clock.set_for_testing(ONE_HOUR_MS + 1);
+
+    // party_a == @0x1 == raiser: awarded = 1000 - penalty(200) = 800 -> party A.
+    dispute.auto_resolve_timeout(1000, 200, @0x1, &clock);
+
+    assert_eq!(dispute.dispute_status(), referee::dispute_status_timed_out());
+    let resolution = dispute.dispute_resolution();
+    assert_eq!(resolution.resolution_party_a_amount(), 800);
+    assert_eq!(resolution.resolution_party_b_amount(), 0);
+    assert_eq!(resolution.resolution_penalty_deducted(), 200);
+    assert_eq!(resolution.resolution_reason(), 4);
+
+    destroy(dispute);
+    clock::destroy_for_testing(clock);
+    scenario.end();
+}
+
+/// When the raiser is NOT party_a, the awarded amount is attributed to
+/// `party_b_amount` instead.
+#[test]
+fun auto_resolve_timeout_awards_raiser_as_party_b() {
+    let mut scenario = test_scenario::begin(@0x1);
+    let mut clock = clock::create_for_testing(scenario.ctx());
+    clock.set_for_testing(0);
+    let config = referee::create_timeout_config(ONE_HOUR_MS);
+
+    // Raised by @0x1; we will treat @0x2 as party_a, so the raiser is party_b.
+    let mut dispute = referee::create_dispute(
+        1,
+        @0x2,
+        referee::violation_no_response(),
+        b"evidence",
+        0,
+        &config,
+        &clock,
+        scenario.ctx(),
+    );
+
+    clock.set_for_testing(ONE_HOUR_MS + 1);
+
+    // party_a == @0x2 != raiser(@0x1): awarded 1000 lands in party B.
+    dispute.auto_resolve_timeout(1000, 0, @0x2, &clock);
+
+    let resolution = dispute.dispute_resolution();
+    assert_eq!(resolution.resolution_party_a_amount(), 0);
+    assert_eq!(resolution.resolution_party_b_amount(), 1000);
+    assert_eq!(resolution.resolution_penalty_deducted(), 0);
+    assert_eq!(resolution.resolution_reason(), 4);
+
+    destroy(dispute);
+    clock::destroy_for_testing(clock);
+    scenario.end();
+}
+
+// ============================================
+// COMMITTEE BOUNDS
+// ============================================
+
+/// A full committee (MAX_COMMITTEE_MEMBERS == 100) rejects the 101st member
+/// with EMaxParticipantsExceeded.
+#[
+    test,
+    expected_failure(
+        abort_code = sui_tunnel::referee::EMaxParticipantsExceeded,
+        location = sui_tunnel::referee,
+    ),
+]
+fun add_committee_member_over_capacity_aborts() {
+    let mut committee = referee::create_committee(1);
+    // Fill the committee to its 100-member cap with distinct addresses.
+    100u64.do!(|i| committee.add_committee_member(address_from_u64(i), 1));
+    // The 101st distinct member exceeds MAX_COMMITTEE_MEMBERS.
+    committee.add_committee_member(address_from_u64(100), 1);
+}
+
+/// Removing an address that is not an active member aborts ENotFound.
+#[
+    test,
+    expected_failure(
+        abort_code = sui_tunnel::referee::ENotFound,
+        location = sui_tunnel::referee,
+    ),
+]
+fun remove_committee_member_absent_aborts() {
+    let mut committee = referee::create_committee(60);
+    committee.add_committee_member(@0x1, 30);
+    // @0x9 was never added.
+    committee.remove_committee_member(@0x9);
+}
+
+/// Builds a distinct committee-member address from a small index (0..=255),
+/// encoding the index in the final byte of a 32-byte address.
+fun address_from_u64(i: u64): address {
+    let mut bytes = vector[];
+    31u64.do!(|_| bytes.push_back(0u8));
+    bytes.push_back(i as u8);
+    sui::address::from_bytes(bytes)
 }
 
 /// Largest u64 value, mirroring `std::u64::max_value!()` used in the source.

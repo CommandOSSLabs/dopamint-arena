@@ -62,14 +62,14 @@ fun open_session(
 
     sc.next_tx(@0xB);
     let stake_b = coin::mint_for_testing<SUI>(stake, sc.ctx());
-    mg::join_session<SUI>(&mut session, stake_b, &clock, sc.ctx());
+    session.join_session(stake_b, &clock, sc.ctx());
 
     (sc, session, clock)
 }
 
 #[test_only]
 fun close_fixture(sc: ts::Scenario, session: mg::MultiGameTicTacToe<SUI>, clock: clock::Clock) {
-    mg::destroy_session_for_testing<SUI>(session);
+    session.destroy_session_for_testing();
     clock::destroy_for_testing(clock);
     sc.end();
 }
@@ -82,14 +82,14 @@ fun close_fixture(sc: ts::Scenario, session: mg::MultiGameTicTacToe<SUI>, clock:
 fun create_and_join_seeds_even_ledger() {
     let (sc, session, clock) = open_session(100, 10, 0);
 
-    assert_eq!(mg::session_status<SUI>(&session), mg::session_active());
-    assert_eq!(mg::session_total_pot<SUI>(&session), 200);
-    assert_eq!(mg::stake_per_player<SUI>(&session), 100);
-    assert_eq!(mg::wager_per_game<SUI>(&session), 10);
-    assert_eq!(mg::session_balance_a<SUI>(&session), 100);
-    assert_eq!(mg::session_balance_b<SUI>(&session), 100);
-    assert_eq!(mg::games_played<SUI>(&session), 0);
-    assert_eq!(mg::session_nonce<SUI>(&session), 0);
+    assert_eq!(session.session_status(), mg::session_active());
+    assert_eq!(session.session_total_pot(), 200);
+    assert_eq!(session.stake_per_player(), 100);
+    assert_eq!(session.wager_per_game(), 10);
+    assert_eq!(session.session_balance_a(), 100);
+    assert_eq!(session.session_balance_b(), 100);
+    assert_eq!(session.games_played(), 0);
+    assert_eq!(session.session_nonce(), 0);
 
     close_fixture(sc, session, clock);
 }
@@ -108,44 +108,44 @@ fun three_games_accumulate_in_one_session() {
 
     // --- Game 1: an in-progress move first (no money moves), then A wins ---
     let mid = vector[1, 0, 0, 0, 2, 0, 0, 0, 0];
-    mg::record_move<SUI>(&mut session, mid, 2, 1, 0, vector[], vector[], &clock);
-    assert_eq!(mg::games_played<SUI>(&session), 0);
-    assert_eq!(mg::session_balance_a<SUI>(&session), 100);
-    assert_eq!(mg::session_balance_b<SUI>(&session), 100);
+    session.record_move(mid, 2, 1, 0, vector[], vector[], &clock);
+    assert_eq!(session.games_played(), 0);
+    assert_eq!(session.session_balance_a(), 100);
+    assert_eq!(session.session_balance_b(), 100);
 
     let a_wins = vector[1, 1, 1, 2, 2, 0, 0, 0, 0];
-    mg::record_move<SUI>(&mut session, a_wins, 5, 2, 0, vector[], vector[], &clock);
-    assert_eq!(mg::games_played<SUI>(&session), 1);
-    assert_eq!(mg::wins_a<SUI>(&session), 1);
-    assert_eq!(mg::session_balance_a<SUI>(&session), 110);
-    assert_eq!(mg::session_balance_b<SUI>(&session), 90);
+    session.record_move(a_wins, 5, 2, 0, vector[], vector[], &clock);
+    assert_eq!(session.games_played(), 1);
+    assert_eq!(session.wins_a(), 1);
+    assert_eq!(session.session_balance_a(), 110);
+    assert_eq!(session.session_balance_b(), 90);
     // Board reset for next game.
-    assert_eq!(mg::session_moves_count<SUI>(&session), 0);
+    assert_eq!(session.session_moves_count(), 0);
 
     // --- Game 2: B wins (top row of O) ---
     let b_wins = vector[2, 2, 2, 1, 1, 0, 0, 0, 0];
-    mg::record_move<SUI>(&mut session, b_wins, 5, 3, 0, vector[], vector[], &clock);
-    assert_eq!(mg::games_played<SUI>(&session), 2);
-    assert_eq!(mg::wins_b<SUI>(&session), 1);
-    assert_eq!(mg::session_balance_a<SUI>(&session), 100);
-    assert_eq!(mg::session_balance_b<SUI>(&session), 100);
+    session.record_move(b_wins, 5, 3, 0, vector[], vector[], &clock);
+    assert_eq!(session.games_played(), 2);
+    assert_eq!(session.wins_b(), 1);
+    assert_eq!(session.session_balance_a(), 100);
+    assert_eq!(session.session_balance_b(), 100);
 
     // --- Game 3: A wins again ---
     let a_wins_2 = vector[1, 1, 1, 2, 2, 0, 0, 0, 0];
-    mg::record_move<SUI>(&mut session, a_wins_2, 5, 4, 0, vector[], vector[], &clock);
+    session.record_move(a_wins_2, 5, 4, 0, vector[], vector[], &clock);
 
     // Final cumulative state.
-    assert_eq!(mg::games_played<SUI>(&session), 3);
-    assert_eq!(mg::wins_a<SUI>(&session), 2);
-    assert_eq!(mg::wins_b<SUI>(&session), 1);
-    assert_eq!(mg::draws<SUI>(&session), 0);
-    assert_eq!(mg::session_balance_a<SUI>(&session), 110);
-    assert_eq!(mg::session_balance_b<SUI>(&session), 90);
-    assert_eq!(mg::session_nonce<SUI>(&session), 4);
+    assert_eq!(session.games_played(), 3);
+    assert_eq!(session.wins_a(), 2);
+    assert_eq!(session.wins_b(), 1);
+    assert_eq!(session.draws(), 0);
+    assert_eq!(session.session_balance_a(), 110);
+    assert_eq!(session.session_balance_b(), 90);
+    assert_eq!(session.session_nonce(), 4);
     // Pot is conserved across all games.
     assert_eq!(
-        mg::session_balance_a<SUI>(&session) + mg::session_balance_b<SUI>(&session),
-        mg::session_total_pot<SUI>(&session),
+        session.session_balance_a() + session.session_balance_b(),
+        session.session_total_pot(),
     );
 
     close_fixture(sc, session, clock);
@@ -158,14 +158,14 @@ fun draw_game_keeps_balances() {
 
     // Full board, no line: X O X / X O O / O X X
     let draw = vector[1, 2, 1, 1, 2, 2, 2, 1, 1];
-    mg::record_move<SUI>(&mut session, draw, 9, 1, 0, vector[], vector[], &clock);
+    session.record_move(draw, 9, 1, 0, vector[], vector[], &clock);
 
-    assert_eq!(mg::games_played<SUI>(&session), 1);
-    assert_eq!(mg::draws<SUI>(&session), 1);
-    assert_eq!(mg::wins_a<SUI>(&session), 0);
-    assert_eq!(mg::wins_b<SUI>(&session), 0);
-    assert_eq!(mg::session_balance_a<SUI>(&session), 100);
-    assert_eq!(mg::session_balance_b<SUI>(&session), 100);
+    assert_eq!(session.games_played(), 1);
+    assert_eq!(session.draws(), 1);
+    assert_eq!(session.wins_a(), 0);
+    assert_eq!(session.wins_b(), 0);
+    assert_eq!(session.session_balance_a(), 100);
+    assert_eq!(session.session_balance_b(), 100);
 
     close_fixture(sc, session, clock);
 }
@@ -238,16 +238,16 @@ fun session_hash_deterministic_and_bound() {
     let (sc, session, clock) = open_session(100, 10, 0);
 
     let board = vector[1, 0, 0, 0, 2, 0, 0, 0, 0];
-    let h1 = mg::compute_session_hash<SUI>(&session, &board, 2, 0, 0, 0, 0, 100, 100);
-    let h2 = mg::compute_session_hash<SUI>(&session, &board, 2, 0, 0, 0, 0, 100, 100);
+    let h1 = session.compute_session_hash(&board, 2, 0, 0, 0, 0, 100, 100);
+    let h2 = session.compute_session_hash(&board, 2, 0, 0, 0, 0, 100, 100);
     assert_eq!(h1, h2);
     assert_eq!(h1.length(), 32);
 
     // Different running balance -> different hash.
-    let h3 = mg::compute_session_hash<SUI>(&session, &board, 2, 0, 0, 0, 0, 110, 90);
+    let h3 = session.compute_session_hash(&board, 2, 0, 0, 0, 0, 110, 90);
     assert!(h1 != h3);
     // Different scoreboard (games_played) -> different hash.
-    let h4 = mg::compute_session_hash<SUI>(&session, &board, 2, 1, 1, 0, 0, 100, 100);
+    let h4 = session.compute_session_hash(&board, 2, 1, 1, 0, 0, 100, 100);
     assert!(h1 != h4);
 
     close_fixture(sc, session, clock);
@@ -262,10 +262,10 @@ fun record_move_rejects_stale_nonce() {
     let (sc, mut session, clock) = open_session(100, 10, 0);
 
     let a_wins = vector[1, 1, 1, 2, 2, 0, 0, 0, 0];
-    mg::record_move<SUI>(&mut session, a_wins, 5, 5, 0, vector[], vector[], &clock);
+    session.record_move(a_wins, 5, 5, 0, vector[], vector[], &clock);
     // nonce 5 already committed; a second update at nonce 5 is stale (not greater).
     let mid = vector[1, 0, 0, 0, 2, 0, 0, 0, 0];
-    mg::record_move<SUI>(&mut session, mid, 2, 5, 0, vector[], vector[], &clock);
+    session.record_move(mid, 2, 5, 0, vector[], vector[], &clock);
 
     close_fixture(sc, session, clock);
 }
@@ -276,12 +276,12 @@ fun record_move_rejects_play_over_target() {
     let (sc, mut session, clock) = open_session(100, 10, 1);
 
     let a_wins = vector[1, 1, 1, 2, 2, 0, 0, 0, 0];
-    mg::record_move<SUI>(&mut session, a_wins, 5, 1, 0, vector[], vector[], &clock);
-    assert!(mg::is_session_complete<SUI>(&session));
+    session.record_move(a_wins, 5, 1, 0, vector[], vector[], &clock);
+    assert!(session.is_session_complete());
 
     // The session is complete; any further move must abort.
     let a_wins_2 = vector[1, 1, 1, 2, 2, 0, 0, 0, 0];
-    mg::record_move<SUI>(&mut session, a_wins_2, 5, 2, 0, vector[], vector[], &clock);
+    session.record_move(a_wins_2, 5, 2, 0, vector[], vector[], &clock);
 
     close_fixture(sc, session, clock);
 }
@@ -291,7 +291,7 @@ fun record_move_rejects_bad_board_size() {
     let (sc, mut session, clock) = open_session(100, 10, 0);
 
     let bad = vector[1, 1, 1, 2, 2, 0, 0, 0]; // 8 cells
-    mg::record_move<SUI>(&mut session, bad, 5, 1, 0, vector[], vector[], &clock);
+    session.record_move(bad, 5, 1, 0, vector[], vector[], &clock);
 
     close_fixture(sc, session, clock);
 }
@@ -301,8 +301,7 @@ fun settle_rejects_ledger_mismatch() {
     let (mut sc, mut session, clock) = open_session(100, 10, 0);
 
     // Running ledger is 100/100; claiming 150/50 must abort before any close.
-    mg::settle_session<SUI>(
-        &mut session,
+    session.settle_session(
         150,
         50,
         vector[1],
@@ -319,10 +318,10 @@ fun settle_rejects_ledger_mismatch() {
 fun cannot_record_after_settled_status() {
     let (sc, mut session, clock) = open_session(100, 10, 0);
 
-    mg::set_status_for_testing<SUI>(&mut session, mg::session_settled());
+    session.set_status_for_testing(mg::session_settled());
 
     let a_wins = vector[1, 1, 1, 2, 2, 0, 0, 0, 0];
-    mg::record_move<SUI>(&mut session, a_wins, 5, 1, 0, vector[], vector[], &clock);
+    session.record_move(a_wins, 5, 1, 0, vector[], vector[], &clock);
 
     close_fixture(sc, session, clock);
 }

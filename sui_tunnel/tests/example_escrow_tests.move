@@ -48,10 +48,10 @@ fun cancel_escrow_after_completion() {
     );
 
     // Buyer (@0x0) confirms and releases funds (funds transferred to seller internally)
-    let _receipt = example_escrow::confirm_and_release<SUI>(&mut escrow, &clock, &mut ctx);
+    let _receipt = escrow.confirm_and_release<SUI>(&clock, &mut ctx);
 
     // Now status is COMPLETED, cancel should fail with invalid_state
-    example_escrow::cancel_escrow<SUI>(&mut escrow, &mut ctx);
+    escrow.cancel_escrow<SUI>(&mut ctx);
 
     std::unit_test::destroy(escrow);
     clock.destroy_for_testing();
@@ -81,7 +81,7 @@ fun wrong_party_marks_delivered() {
     );
 
     // sender is @0x0 (buyer), but mark_delivered requires seller (@0xBBBB) -> not_authorized
-    example_escrow::mark_delivered<SUI>(&mut escrow, &clock, &ctx);
+    escrow.mark_delivered<SUI>(&clock, &ctx);
 
     std::unit_test::destroy(escrow);
     clock.destroy_for_testing();
@@ -154,7 +154,7 @@ fun buyer_cannot_refund() {
 
     // refund_buyer requires ctx.sender() == escrow.seller (@0xBBBB),
     // but sender is @0x0 (buyer) -> not_authorized
-    example_escrow::refund_buyer<SUI>(&mut escrow, &mut ctx);
+    escrow.refund_buyer<SUI>(&mut ctx);
 
     std::unit_test::destroy(escrow);
     clock.destroy_for_testing();
@@ -184,7 +184,7 @@ fun dispute_before_delivery() {
     );
 
     // Escrow is FUNDED, not DELIVERED -> raise_dispute requires DELIVERED -> invalid_state
-    example_escrow::raise_dispute<SUI>(&mut escrow, b"dispute reason", &clock, &ctx);
+    escrow.raise_dispute<SUI>(b"dispute reason", &clock, &ctx);
 
     std::unit_test::destroy(escrow);
     clock.destroy_for_testing();
