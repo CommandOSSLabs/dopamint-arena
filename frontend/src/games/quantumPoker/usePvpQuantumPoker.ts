@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTelemetry } from "../../telemetry/TelemetryProvider";
 import {
   useCurrentAccount,
   useSignAndExecuteTransaction,
@@ -9,6 +10,7 @@ import { defaultBackend } from "sui-tunnel-ts/core/crypto-native";
 import { makeEndpoint } from "sui-tunnel-ts/core/tunnel";
 import { fromHex, toHex } from "sui-tunnel-ts/core/bytes";
 import { DistributedTunnel } from "sui-tunnel-ts/core/distributedTunnel";
+import { Transcript } from "sui-tunnel-ts/proof/transcript";
 import {
   expectedQuantumPokerRevealSlots,
   QuantumPokerProtocol,
@@ -24,13 +26,17 @@ import {
   type PvpChannel,
   type Role,
 } from "../../pvp/mpClient";
-import { resolveBackendUrl } from "../../backend/controlPlane";
 import {
-  closeCooperative,
+  getControlPlaneClient,
+  resolveBackendUrl,
+} from "../../backend/controlPlane";
+import {
+  closeCooperativeWithRoot,
   depositStake,
   openAndFundSharedTunnel,
   readCreatedAt,
 } from "../../onchain/tunnelTx";
+import { coSignedToSettleRequest } from "../../backend/settleRequest";
 
 /** Locked per seat (MIST, split off the wallet's SUI gas coin — same lane as Tic-Tac-Toe). */
 const STAKE_BALANCE = 500n;
@@ -188,6 +194,8 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
   const account = useCurrentAccount();
   const client = useSuiClient();
   const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
+  const { report } = useTelemetry();
+  const moveIdRef = useRef(0);
 
   const [status, setStatus] = useState<PvpPokerStatus>("idle");
   const [role, setRole] = useState<Role | null>(null);
@@ -203,6 +211,7 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
   // Dedupe auto-proposals: at most one scheduled plumbing move per target nonce, so a
   // commit's secrets are generated exactly once (regenerating would orphan the commitment).
   const autoNonceRef = useRef<bigint>(-1n);
+  const transcriptRef = useRef<Transcript | null>(null);
 
   const sync = useCallback(() => {
     const dt = dtRef.current;
@@ -218,6 +227,7 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
     driverRef.current = null;
     selfPartyRef.current = null;
     autoNonceRef.current = -1n;
+    transcriptRef.current = null;
     setStatus("idle");
     setRole(null);
     setState(null);
@@ -364,15 +374,37 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
         dtRef.current = dt;
         driverRef.current = new QuantumPokerSeatDriver(match.role);
         autoNonceRef.current = -1n;
+        const transcript = new Transcript(tunnelId);
+        transcriptRef.current = transcript;
 
         let settling = false;
-        dt.onConfirmed = () => {
+        dt.onConfirmed = (u) => {
+          transcript.append(u);
           sync();
+          report.pushLocalTxn({
+            id: moveIdRef.current++,
+            game: "quantum-poker",
+            time: new Date().toLocaleTimeString("en-GB"),
+            bot: "You",
+            type: proto.isTerminal(dt.state) ? "Win/Loss" : "Move",
+            status: "Success",
+            amount: "",
+          });
           if (proto.isTerminal(dt.state)) {
             if (!settling) {
               settling = true;
               setStatus("settling");
-              void settle(dt, match.role, channel, waitPeer, reads, signExec, tunnelId).then(
+              void settle(
+                dt,
+                match.role,
+                channel,
+                waitPeer,
+                reads,
+                signExec,
+                tunnelId,
+                transcript,
+                getControlPlaneClient(),
+              ).then(
                 () => setStatus("settled"),
                 (e) => {
                   setError(e instanceof Error ? e.message : String(e));
@@ -397,7 +429,7 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
         setStatus("error");
       }
     })();
-  }, [account, client, signAndExecute, sync, maybeAutoPropose]);
+  }, [account, client, signAndExecute, sync, maybeAutoPropose, report]);
 
   const self = selfPartyRef.current;
   const myHole = state && self ? (self === "A" ? state.holeA : state.holeB) : null;
@@ -461,29 +493,49 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
   };
 }
 
-/** Exchange v1 settlement halves over the relay; seat A submits the cooperative close. */
+/** Exchange root-anchored settlement halves over the relay, asserting both seats anchored the
+ *  SAME transcript root, then seat A submits the close via the backend /settle (the settler
+ *  anchors the root + archives the transcript to Walrus). Both seats must anchor the same root or
+ *  close_cooperative_with_root rebuilds different bytes and on-chain verify fails — so the root is
+ *  exchanged and asserted equal before either side trusts the combine. Fallback: wallet-submitted
+ *  close_cooperative_with_root when the backend is down. Mirrors the Tic-Tac-Toe lane. */
 async function settle(
   dt: PokerTunnel,
   role: Role,
   channel: PvpChannel,
   waitPeer: <T>(t: string) => Promise<T>,
   reads: Parameters<typeof readCreatedAt>[0],
-  signExec: Parameters<typeof closeCooperative>[0]["signExec"],
+  signExec: Parameters<typeof closeCooperativeWithRoot>[0]["signExec"],
   tunnelId: string,
+  transcript: Transcript,
+  cp: ReturnType<typeof getControlPlaneClient>,
 ): Promise<void> {
   const createdAt = await readCreatedAt(reads, tunnelId);
-  const half = dt.buildSettlementHalf(createdAt, 0n);
+  const root = transcript.root();
+  const half = dt.buildSettlementHalfWithRoot(createdAt, root, 0n);
   channel.sendPeer({
     t: "settleHalf",
     partyABalance: half.settlement.partyABalance.toString(),
     partyBBalance: half.settlement.partyBBalance.toString(),
     finalNonce: half.settlement.finalNonce.toString(),
     timestamp: half.settlement.timestamp.toString(),
+    transcriptRoot: toHex(root),
     sig: toHex(half.sigSelf),
   });
-  const other = await waitPeer<{ sig: string }>("settleHalf");
-  const co = dt.combineSettlement(half.settlement, half.sigSelf, fromHex(other.sig));
-  if (role === "A") {
-    await closeCooperative({ signExec, tunnelId, settlement: co });
+  const other = await waitPeer<{ sig: string; transcriptRoot: string }>("settleHalf");
+  if (other.transcriptRoot !== toHex(root)) {
+    throw new Error("settlement transcript-root mismatch between parties");
+  }
+  const co = dt.combineSettlementWithRoot(
+    half.settlement,
+    half.sigSelf,
+    fromHex(other.sig),
+  );
+  if (role !== "A") return; // single submitter, mirrors the cooperative-close pattern
+  try {
+    await cp.settle(tunnelId, coSignedToSettleRequest(co, transcript.toRecord().entries));
+  } catch (e) {
+    console.error("[quantum-poker] backend settle failed; falling back to wallet close:", e);
+    await closeCooperativeWithRoot({ signExec, tunnelId, settlement: co });
   }
 }

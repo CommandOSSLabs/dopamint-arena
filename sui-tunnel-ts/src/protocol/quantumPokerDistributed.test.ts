@@ -168,8 +168,8 @@ test("Quantum Poker distributed settlement signs transcript-root v2", () => {
   }
 
   assert.equal(toHex(transcriptA.root()), toHex(transcriptB.root()));
-  const halfA = dtA.buildSettlementWithRootHalf(999n, transcriptA.root());
-  const halfB = dtB.buildSettlementWithRootHalf(999n, transcriptB.root());
+  const halfA = dtA.buildSettlementHalfWithRoot(999n, transcriptA.root());
+  const halfB = dtB.buildSettlementHalfWithRoot(999n, transcriptB.root());
   assert.deepEqual(halfA.settlement, halfB.settlement);
 
   const settled = dtA.combineSettlementWithRoot(
