@@ -1,0 +1,8 @@
+[package]
+name = "quantum_poker_test_buck"
+edition = "2024"
+
+[dependencies]
+
+[addresses]
+quantum_poker_test_buck = "0x0"

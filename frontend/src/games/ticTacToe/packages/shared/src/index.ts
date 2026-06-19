@@ -8,5 +8,4 @@ export * from "./caro/board";
 export * from "./caro/protocol";
 export * from "./caro/bot";
 export * as ed25519 from "./crypto/ed25519";
-export * as bls from "./crypto/bls";
 export * from "./tunnel/state";

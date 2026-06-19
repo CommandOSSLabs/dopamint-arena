@@ -27,6 +27,7 @@ export default defineConfig(({ mode }) => {
     define: {
       "process.env.PACKAGE_ID": JSON.stringify(pkgId),
       "process.env.SUI_NETWORK": JSON.stringify("testnet"),
+      "require.main": "undefined",
     },
     resolve: {
       // The vendored SDK pins an older @mysten/sui in its own node_modules. Force the bundled
@@ -39,9 +40,16 @@ export default defineConfig(({ mode }) => {
         // falls back to @noble at runtime in the browser. Map node:crypto to a stub so
         // the bundle resolves; the native path is never taken here.
         "node:crypto": fileURLToPath(new URL("./src/shims/node-crypto.ts", import.meta.url)),
+        "node:worker_threads": fileURLToPath(new URL("./src/shims/node-empty.ts", import.meta.url)),
+        "node:os": fileURLToPath(new URL("./src/shims/node-empty.ts", import.meta.url)),
+        "node:path": fileURLToPath(new URL("./src/shims/node-empty.ts", import.meta.url)),
+        "node:fs/promises": fileURLToPath(new URL("./src/shims/node-empty.ts", import.meta.url)),
+        // Stub @mysten/sui/client to point to our v1->v2 backward compatibility shim
+        "@mysten/sui/client": fileURLToPath(new URL("./src/shims/sui-client.ts", import.meta.url)),
         // config.ts calls dotenv.config() at import time; stub it (env via `define`).
         dotenv: fileURLToPath(new URL("./src/shims/dotenv.ts", import.meta.url)),
         "sui-tunnel-ts": fileURLToPath(new URL("../sui-tunnel-ts/src", import.meta.url)),
+        "@ttt/shared": fileURLToPath(new URL("./src/games/ticTacToe/packages/shared/src/index.ts", import.meta.url)),
       },
     },
   };

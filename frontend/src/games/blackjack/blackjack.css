@@ -1,21 +1,13 @@
 /* Casino table styling ported from the standalone blackjack client. */
 
-/* Sharp corners — scoped to the game shell so dashboard index.css --radius is untouched. */
-.blackjack-game {
-  --radius: 0;
-  --radius-sm: 0;
-  --radius-md: 0;
-  --radius-lg: 0;
-  --radius-xl: 0;
-}
-
-.blackjack-game [class*="rounded"] {
-  border-radius: 0 !important;
-}
-
 /* Casino Felt Table Background */
 .casino-felt {
-  background: radial-gradient(circle at center, #0c572c 0%, #06351b 50%, #032110 100%);
+  background: radial-gradient(
+    circle at center,
+    #0c572c 0%,
+    #06351b 50%,
+    #032110 100%
+  );
   position: relative;
   overflow: hidden;
 }
@@ -25,17 +17,23 @@
   position: absolute;
   inset: 0;
   opacity: 0.04;
-  background-image: radial-gradient(#ccc 1px, transparent 0), radial-gradient(#ccc 1px, transparent 0);
+  background-image:
+    radial-gradient(#ccc 1px, transparent 0),
+    radial-gradient(#ccc 1px, transparent 0);
   background-size: 8px 8px;
-  background-position: 0 0, 4px 4px;
+  background-position:
+    0 0,
+    4px 4px;
   pointer-events: none;
 }
 
 /* Mahogany Casino Table Rim border */
 .wood-rim {
   border: 16px solid #2d1810;
-  box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.8), 0 10px 25px rgba(0, 0, 0, 0.5);
-  border-radius: 0;
+  box-shadow:
+    inset 0 0 20px rgba(0, 0, 0, 0.8),
+    0 10px 25px rgba(0, 0, 0, 0.5);
+  border-radius: 40px;
 }
 
 /* Gold Text and Glows */
@@ -65,7 +63,7 @@
   position: relative;
   width: var(--chip-size);
   height: var(--chip-size);
-  border-radius: 0;
+  border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -74,7 +72,9 @@
   border-width: var(--chip-border);
   border-style: dashed;
   border-color: rgba(255, 255, 255, 0.7);
-  box-shadow: 0 4px 8px rgba(0,0,0,0.4), inset 0 0 8px rgba(0,0,0,0.6);
+  box-shadow:
+    0 4px 8px rgba(0, 0, 0, 0.4),
+    inset 0 0 8px rgba(0, 0, 0, 0.6);
   cursor: pointer;
   transition: all 0.2s;
   user-select: none;
@@ -82,7 +82,9 @@
 
 .casino-chip:hover {
   transform: translateY(-4px) scale(1.05) rotate(15deg);
-  box-shadow: 0 6px 12px rgba(0,0,0,0.5), inset 0 0 8px rgba(0,0,0,0.4);
+  box-shadow:
+    0 6px 12px rgba(0, 0, 0, 0.5),
+    inset 0 0 8px rgba(0, 0, 0, 0.4);
 }
 
 .casino-chip:active {
@@ -93,15 +95,20 @@
   content: "";
   position: absolute;
   inset: var(--chip-inset);
-  border-radius: 0;
+  border-radius: 50%;
   border: var(--chip-inner-border) solid rgba(255, 255, 255, 0.3);
   pointer-events: none;
 }
 
 /* Premium Menu Background with dark vignette overlay */
-/* background-image removed — set inline via imported URL in the component */
 .menu-background {
-  background: radial-gradient(circle at center, rgba(12, 87, 44, 0.3) 0%, rgba(3, 33, 16, 0.9) 100%);
+  background:
+    radial-gradient(
+      circle at center,
+      rgba(12, 87, 44, 0.3) 0%,
+      rgba(3, 33, 16, 0.9) 100%
+    ),
+    url("/menu-background.png");
   background-size: cover;
   background-position: center;
   position: relative;
@@ -154,20 +161,26 @@
   width: 120px;
   height: 120px;
   border: 2px dashed rgba(212, 175, 55, 0.35);
-  border-radius: 0;
+  border-radius: 50%;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   pointer-events: none;
   z-index: 10;
-  background: radial-gradient(circle, rgba(20, 80, 45, 0.4) 0%, transparent 80%);
+  background: radial-gradient(
+    circle,
+    rgba(20, 80, 45, 0.4) 0%,
+    transparent 80%
+  );
   transition: all 0.3s ease;
 }
 
 .betting-spot.active {
   border-color: rgba(212, 175, 55, 0.75);
-  box-shadow: 0 0 15px rgba(212, 175, 55, 0.2), inset 0 0 15px rgba(212, 175, 55, 0.1);
+  box-shadow:
+    0 0 15px rgba(212, 175, 55, 0.2),
+    inset 0 0 15px rgba(212, 175, 55, 0.1);
 }
 
 .betting-label {
@@ -188,17 +201,30 @@
   flex-direction: column-reverse;
   align-items: center;
   position: relative;
-  width: 70px;
-  height: 50px;
+  width: 50px;
+  height: 35px;
   margin-bottom: 2px;
+  --chip-spacing: 5px;
 }
 
 .stacked-chip {
   position: absolute;
-  width: 56px;
-  height: 56px;
+  width: 44px;
+  height: 44px;
   filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.4));
   transition: all 0.3s ease;
+}
+
+@media (min-width: 768px) {
+  .profile-chip-stack {
+    width: 70px;
+    height: 50px;
+    --chip-spacing: 8px;
+  }
+  .stacked-chip {
+    width: 56px;
+    height: 56px;
+  }
 }
 
 /* Table chips layer for active round animations */

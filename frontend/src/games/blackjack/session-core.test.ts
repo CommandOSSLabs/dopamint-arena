@@ -3,10 +3,18 @@ import assert from "node:assert/strict";
 
 // Relative SDK imports (runtime): tsx needs no path-alias config this way.
 import { createParticipant } from "../../../../sui-tunnel-ts/src/core/keys.ts";
-import { OffchainTunnel, verifyCoSignedUpdate } from "../../../../sui-tunnel-ts/src/core/tunnel.ts";
+import {
+  OffchainTunnel,
+  verifyCoSignedUpdate,
+} from "../../../../sui-tunnel-ts/src/core/tunnel.ts";
 import { BlackjackProtocol } from "../../../../sui-tunnel-ts/src/protocol/blackjack.ts";
 
-import { partyForPhase, stepSession, deriveView, sessionResult } from "./session-core.ts";
+import {
+  partyForPhase,
+  stepSession,
+  deriveView,
+  sessionResult,
+} from "./session-core.ts";
 
 function newTunnel(stake: bigint) {
   const a = createParticipant("player-bot");
@@ -24,10 +32,14 @@ function newTunnel(stake: bigint) {
   return { protocol, tunnel };
 }
 
-test("partyForPhase routes turns: dealer->B, else A", () => {
-  assert.equal(partyForPhase("player"), "A");
-  assert.equal(partyForPhase("round_over"), "A");
-  assert.equal(partyForPhase("dealer"), "B");
+test("partyForPhase routes by phase and alternates the player every two rounds", () => {
+  // round 1: player = A — so player/round_over map to A, dealer to B.
+  assert.equal(partyForPhase("player", 1n), "A");
+  assert.equal(partyForPhase("round_over", 1n), "A"); // next round (2) is still A
+  assert.equal(partyForPhase("dealer", 1n), "B");
+  // the player alternates every two rounds: round 3 flips to B.
+  assert.equal(partyForPhase("player", 3n), "B");
+  assert.equal(partyForPhase("dealer", 3n), "A");
 });
 
 test("stepSession drives the tunnel to a terminal state, conserving balances", () => {
@@ -67,5 +79,7 @@ test("deriveView and sessionResult report the bankroll outcome", () => {
   assert.equal(typeof view.playerBalance, "number");
   assert.equal(typeof view.round, "number");
   assert.equal(view.dealerCards.length, view.dealerCardCount);
-  assert.ok(["win", "lose", "push"].includes(sessionResult(tunnel.state, stake)));
+  assert.ok(
+    ["win", "lose", "push"].includes(sessionResult(tunnel.state, stake)),
+  );
 });

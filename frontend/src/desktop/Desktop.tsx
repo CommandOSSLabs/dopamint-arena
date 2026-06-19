@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import type {
+  CSSProperties,
   KeyboardEvent as ReactKeyboardEvent,
   PointerEvent as ReactPointerEvent,
 } from "react";
@@ -70,6 +71,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { disposeWindow } from "@/lib/windowSessions";
 import { flyFromDock, flyToDock } from "@/lib/dockFlight";
 import { useTelemetry } from "@/telemetry/TelemetryProvider";
 import { useLocalStorageState } from "@/lib/useLocalStorageState";
@@ -124,6 +126,17 @@ function dropKey<T>(obj: Record<string, T>, id: string): Record<string, T> {
 
 const WINDOW_SIZE = { w: 4, h: 4, minW: 3, minH: 3 } as const;
 
+/** A game's opening size + resize floor in grid units, from its registry config. */
+function sizeOf(instanceId: string) {
+  const mod = get(gameOf(instanceId));
+  return {
+    w: mod?.defaultSize?.w ?? WINDOW_SIZE.w,
+    h: mod?.defaultSize?.h ?? WINDOW_SIZE.h,
+    minW: mod?.minSize?.w ?? WINDOW_SIZE.minW,
+    minH: mod?.minSize?.h ?? WINDOW_SIZE.minH,
+  };
+}
+
 const BREAKPOINTS: GridBreakpoint[] = [
   { minWidth: 0, cols: 4 },
   { minWidth: 640, cols: 8 },
@@ -152,6 +165,18 @@ function tile(items: GridItem[]): GridItem[] {
   });
 }
 
+// Edge/corner grab zones for a floating window's free pixel resize.
+const FLOAT_HANDLES = [
+  { dir: "n", cls: "top-0 right-3 left-3 h-1.5 cursor-ns-resize" },
+  { dir: "s", cls: "right-3 bottom-0 left-3 h-1.5 cursor-ns-resize" },
+  { dir: "w", cls: "top-3 bottom-3 left-0 w-1.5 cursor-ew-resize" },
+  { dir: "e", cls: "top-3 right-0 bottom-3 w-1.5 cursor-ew-resize" },
+  { dir: "nw", cls: "top-0 left-0 size-3 cursor-nwse-resize" },
+  { dir: "ne", cls: "top-0 right-0 size-3 cursor-nesw-resize" },
+  { dir: "sw", cls: "bottom-0 left-0 size-3 cursor-nesw-resize" },
+  { dir: "se", cls: "right-0 bottom-0 size-3 cursor-nwse-resize" },
+] as const;
+
 // Community Chat is built but hidden for now — flip to re-enable everywhere.
 const SHOW_CHAT = false;
 
@@ -167,7 +192,7 @@ type MobileTab = (typeof MOBILE_TABS)[number]["id"];
 /** One tiled window per registered game. */
 function seedLayout(): GridItem[] {
   return tile(
-    list().map((mod) => ({ id: mod.id, x: 0, y: 0, ...WINDOW_SIZE })),
+    list().map((mod) => ({ id: mod.id, x: 0, y: 0, ...sizeOf(mod.id) })),
   );
 }
 
@@ -405,7 +430,7 @@ function FloorControls({
   onToggleDock,
 }: {
   className?: string;
-  side: "left" | "right" | "top";
+  side: "left" | "right";
   dockSide: DockSide;
   onOpenAdd: () => void;
   onArrange: () => void;
@@ -419,21 +444,7 @@ function FloorControls({
     setToolsOpen(false);
   };
   return (
-    <div className={cn("flex items-stretch border border-border bg-card", className)}>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            size="icon"
-            onClick={onOpenAdd}
-            aria-label="Add game"
-            className="size-10 rounded-none border-0 shadow-none [&_svg]:size-4"
-          >
-            <Plus />
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent side={side}>Add game</TooltipContent>
-      </Tooltip>
-
+    <div className={cn("flex flex-col items-end gap-2", className)}>
       <Popover open={toolsOpen} onOpenChange={setToolsOpen}>
         <Tooltip>
           <TooltipTrigger asChild>
@@ -442,7 +453,7 @@ function FloorControls({
                 size="icon"
                 variant="secondary"
                 aria-label="Layout tools"
-                className="size-10 rounded-none border-0 border-l border-border shadow-none"
+                className="size-10 border border-border shadow-lg"
               >
                 <LayoutGrid className="size-4" />
               </Button>
@@ -475,73 +486,21 @@ function FloorControls({
           />
         </PopoverContent>
       </Popover>
-    </div>
-  );
-}
 
-/** Bottom bar: add/layout always visible; dock expand/collapse fills the rest on hover. */
-function ArenaFooter({
-  dockSide,
-  bottomCollapsed,
-  onToggleBottom,
-  onOpenAdd,
-  onArrange,
-  onAddAll,
-  onRemoveAll,
-  onToggleDock,
-}: {
-  dockSide: DockSide;
-  bottomCollapsed: boolean;
-  onToggleBottom: () => void;
-  onOpenAdd: () => void;
-  onArrange: () => void;
-  onAddAll: () => void;
-  onRemoveAll: () => void;
-  onToggleDock: () => void;
-}) {
-  const collapseRotate =
-    dockSide === "bottom"
-      ? bottomCollapsed
-        ? "rotate-180"
-        : ""
-      : bottomCollapsed
-        ? "rotate-90"
-        : "-rotate-90";
-
-  return (
-    <footer className="group/footer pointer-events-auto absolute inset-x-3 bottom-3 z-30 flex h-10 items-stretch bg-transparent">
       <Tooltip>
         <TooltipTrigger asChild>
-          <button
-            type="button"
-            onClick={onToggleBottom}
-            aria-label={bottomCollapsed ? "Expand dock" : "Collapse dock"}
-            className={cn(
-              "flex h-10 flex-1 items-center justify-center border border-r-0 border-border",
-              "bg-transparent opacity-0 transition-opacity",
-              "group-hover/footer:opacity-100 group-hover/footer:bg-background",
-            )}
+          <Button
+            size="icon"
+            onClick={onOpenAdd}
+            aria-label="Add game"
+            className="size-12 shadow-lg [&_svg]:size-5"
           >
-            <ChevronDown
-              className={cn("size-4 transition-transform", collapseRotate)}
-            />
-          </button>
+            <Plus />
+          </Button>
         </TooltipTrigger>
-        <TooltipContent side="top">
-          {bottomCollapsed ? "Expand dock" : "Collapse dock"}
-        </TooltipContent>
+        <TooltipContent side={side}>Add game</TooltipContent>
       </Tooltip>
-      <FloorControls
-        side="top"
-        dockSide={dockSide}
-        onOpenAdd={onOpenAdd}
-        onArrange={onArrange}
-        onAddAll={onAddAll}
-        onRemoveAll={onRemoveAll}
-        onToggleDock={onToggleDock}
-        className="shrink-0 border border-border bg-card"
-      />
-    </footer>
+    </div>
   );
 }
 
@@ -605,6 +564,7 @@ export function Desktop() {
   };
 
   const close = (id: string) => {
+    disposeWindow(id); // tear down the game's live session (sockets, timers)
     setLayout((cur) => tile(cur.filter((w) => w.id !== id)));
     setHidden((h) => dropKey(h, id));
     setFloating((f) => dropKey(f, id));
@@ -641,7 +601,10 @@ export function Desktop() {
   // Add a fresh window for a game — duplicates allowed; the floor re-tiles.
   const addGame = (gameId: string) =>
     setLayout((cur) =>
-      tile([...cur, { id: newInstanceId(gameId), x: 0, y: 0, ...WINDOW_SIZE }]),
+      tile([
+        ...cur,
+        { id: newInstanceId(gameId), x: 0, y: 0, ...sizeOf(gameId) },
+      ]),
     );
 
   // One window per game not already on the floor.
@@ -650,13 +613,21 @@ export function Desktop() {
       const present = new Set(cur.map((w) => gameOf(w.id)));
       const adds = list()
         .filter((m) => !present.has(m.id))
-        .map((m) => ({ id: newInstanceId(m.id), x: 0, y: 0, ...WINDOW_SIZE }));
+        .map((m) => ({ id: newInstanceId(m.id), x: 0, y: 0, ...sizeOf(m.id) }));
       return tile([...cur, ...adds]);
     });
 
   // Confirmed from the Remove-all dialog: clear everything, optionally reseeding
   // the default layout (all games) instead of an empty floor.
   const confirmRemove = () => {
+    // Dispose every open/hidden/floating window's session before clearing.
+    for (const id of [
+      ...layout.map((w) => w.id),
+      ...Object.keys(hidden),
+      ...Object.keys(floating),
+    ]) {
+      disposeWindow(id);
+    }
     setLayout(resetDefault ? seedLayout() : []);
     setHidden({});
     setFloating({});
@@ -856,8 +827,45 @@ export function Desktop() {
   const hiddenCount = Object.keys(hidden).length;
   const hiddenEntries = layerEntries.filter((e) => e.hidden);
 
+  const renderFloorControls = (className: string, side: "left" | "right") => (
+    <FloorControls
+      className={className}
+      side={side}
+      dockSide={dockSide}
+      onOpenAdd={() => setAddOpen(true)}
+      onArrange={arrange}
+      onAddAll={addAll}
+      onRemoveAll={() => setRemoveOpen(true)}
+      onToggleDock={toggleDockSide}
+    />
+  );
+
+  // Every window (docked + minimized + floating) is rendered by ONE GridLayout so a
+  // window changing mode is a style change, not an unmount — gameplay state is never
+  // lost on minimize/maximize. Minimized/floating items are detached via styleOverride
+  // (excluded from grid math); docked windows still pack among themselves.
+  const allWindows: GridItem[] = [
+    ...layout,
+    ...Object.values(hidden),
+    ...Object.values(floating).map((f) => f.item),
+  ];
+  const styleFor = (item: GridItem): CSSProperties | null => {
+    if (hidden[item.id]) return { display: "none" };
+    const f = floating[item.id];
+    if (f)
+      return {
+        position: "fixed",
+        left: f.x,
+        top: f.y,
+        width: f.w,
+        height: f.h,
+        zIndex: f.z,
+      };
+    return null;
+  };
+
   const floor =
-    layout.length === 0 ? (
+    allWindows.length === 0 ? (
       <div className="flex h-full min-h-64 flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
         No games on the floor.
         <Button variant="outline" size="sm" onClick={() => setAddOpen(true)}>
@@ -866,37 +874,62 @@ export function Desktop() {
       </div>
     ) : (
       <GridLayout
-        layout={layout}
-        onLayoutChange={setLayout}
+        layout={allWindows}
+        onLayoutChange={(next) =>
+          setLayout(next.filter((w) => !hidden[w.id] && !floating[w.id]))
+        }
         breakpoints={BREAKPOINTS}
         rowHeight={72}
-        gap={0}
+        styleOverride={styleFor}
         renderItem={(item, handle) => {
           const mod = get(gameOf(item.id));
           if (!mod) return null;
           const Content = mod.Window;
-          return (
+          const fl = floating[item.id];
+          const win = (
             <GameWindow
               title={mod.name}
               icon={<GameIcon game={mod} className="size-5" />}
               domId={item.id}
-              dragHandleProps={handle.dragHandleProps}
-              isActive={handle.isActive}
-              onMinimize={() => hide(item.id)}
-              onMaximize={() => floatWindow(item.id)}
+              dragHandleProps={
+                fl ? floatDragProps(item.id) : handle.dragHandleProps
+              }
+              isActive={fl ? true : handle.isActive}
+              onMinimize={() => (fl ? minimizeFloat(item.id) : hide(item.id))}
+              onMaximize={fl ? undefined : () => floatWindow(item.id)}
+              onRestore={fl ? () => dockFloat(item.id) : undefined}
               onClose={() => close(item.id)}
             >
               <Content windowId={item.id} onClose={() => close(item.id)} />
             </GameWindow>
           );
+          if (!fl) return win;
+          // Floating: focus-to-front + free pixel resize from every edge/corner.
+          return (
+            <div
+              className="relative h-full w-full"
+              onPointerDown={() => focusFloat(item.id)}
+            >
+              {win}
+              {FLOAT_HANDLES.map((hdl) => (
+                <div
+                  key={hdl.dir}
+                  className={cn("absolute z-10 touch-none", hdl.cls)}
+                  onPointerDown={startFloatResize(item.id, hdl.dir)}
+                  aria-hidden
+                />
+              ))}
+            </div>
+          );
         }}
       />
     );
 
-  // Floor + the minimized-windows dock (footer controls live on the desktop shell).
-  const floorArea = () => (
+  // Floor + its overlays (controls column + the minimized-windows dock).
+  const floorArea = (controlsClass: string, side: "left" | "right") => (
     <div className="relative h-full">
-      <div className="bg-dot-grid h-full overflow-auto">{floor}</div>
+      <div className="bg-dot-grid h-full overflow-auto p-2">{floor}</div>
+      {renderFloorControls(controlsClass, side)}
       <MacDock
         entries={hiddenEntries}
         side={macDockSide}
@@ -906,82 +939,103 @@ export function Desktop() {
     </div>
   );
 
-  const mobileFloorControls = (
-    <FloorControls
-      side="top"
-      dockSide={dockSide}
-      onOpenAdd={() => setAddOpen(true)}
-      onArrange={arrange}
-      onAddAll={addAll}
-      onRemoveAll={() => setRemoveOpen(true)}
-      onToggleDock={toggleDockSide}
-      className="fixed bottom-20 right-3 z-30 border border-border bg-card"
-    />
+  const collapseRotate =
+    dockSide === "bottom"
+      ? bottomCollapsed
+        ? "rotate-180"
+        : ""
+      : bottomCollapsed
+        ? "rotate-90"
+        : "-rotate-90";
+  const collapseButton = (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          onClick={toggleBottom}
+          onPointerDown={(e) => e.stopPropagation()}
+          aria-label={bottomCollapsed ? "Expand dock" : "Collapse dock"}
+          className={cn(
+            "z-50 flex items-center justify-center rounded-full bg-primary text-primary-foreground shadow-lg ring-2 ring-background transition-colors hover:bg-primary/90",
+            dockSide === "bottom"
+              ? "h-6 w-16 -translate-y-5"
+              : "h-16 w-6 -translate-x-5",
+          )}
+        >
+          <ChevronDown
+            className={cn("size-4 transition-transform", collapseRotate)}
+          />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent>
+        {bottomCollapsed ? "Expand dock" : "Collapse dock"}
+      </TooltipContent>
+    </Tooltip>
   );
 
   return (
-    <div className="relative flex h-full min-h-0 flex-col text-foreground">
+    <div className="relative flex h-full flex-col text-foreground">
+      <header className="relative z-10 flex shrink-0 items-center justify-between gap-3 border-b border-border bg-background/70 px-3 py-2.5 backdrop-blur-xl">
+        <div className="flex items-center gap-2.5">
+          <span className="wal-display hidden text-base sm:inline">
+            Dopamint<span className="wal-gradient-text">Arena</span>
+          </span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <WalletButton />
+          <ThemeToggle />
+        </div>
+      </header>
+
       {isDesktop ? (
-        <>
-          {dockSide === "bottom" ? (
-            <ResizablePanelGroup
-              orientation="vertical"
-              className="relative z-[1] min-h-0 flex-1"
+        dockSide === "bottom" ? (
+          <ResizablePanelGroup
+            orientation="vertical"
+            className="relative z-[1] min-h-0 flex-1"
+          >
+            <ResizablePanel defaultSize="58%" minSize="20%" className="min-h-0">
+              {floorArea("absolute bottom-3 right-3 z-20", "left")}
+            </ResizablePanel>
+            <ResizableHandle>{collapseButton}</ResizableHandle>
+            <ResizablePanel
+              panelRef={bottomRef}
+              collapsible
+              collapsedSize="0%"
+              defaultSize="42%"
+              minSize="14%"
+              className="min-h-0"
             >
-              <ResizablePanel defaultSize="58%" minSize="20%" className="min-h-0">
-                {floorArea()}
-              </ResizablePanel>
-              <ResizableHandle />
-              <ResizablePanel
-                panelRef={bottomRef}
-                collapsible
-                collapsedSize="0%"
-                defaultSize="42%"
-                minSize="14%"
-                className="min-h-0"
-              >
-                <Dock snapshot={snapshot} side="bottom" />
-              </ResizablePanel>
-            </ResizablePanelGroup>
-          ) : (
-            <ResizablePanelGroup
-              orientation="horizontal"
-              className="relative z-[1] min-h-0 flex-1"
+              <Dock snapshot={snapshot} side="bottom" />
+            </ResizablePanel>
+          </ResizablePanelGroup>
+        ) : (
+          <ResizablePanelGroup
+            orientation="horizontal"
+            className="relative z-[1] min-h-0 flex-1"
+          >
+            <ResizablePanel defaultSize="68%" minSize="35%" className="min-w-0">
+              {floorArea("absolute bottom-3 right-3 z-20 items-end", "right")}
+            </ResizablePanel>
+            <ResizableHandle>{collapseButton}</ResizableHandle>
+            <ResizablePanel
+              panelRef={bottomRef}
+              collapsible
+              collapsedSize="0%"
+              defaultSize="32%"
+              minSize="18%"
+              className="min-w-0"
             >
-              <ResizablePanel defaultSize="68%" minSize="35%" className="min-w-0">
-                {floorArea()}
-              </ResizablePanel>
-              <ResizableHandle />
-              <ResizablePanel
-                panelRef={bottomRef}
-                collapsible
-                collapsedSize="0%"
-                defaultSize="32%"
-                minSize="18%"
-                className="min-w-0"
-              >
-                <Dock snapshot={snapshot} side="right" />
-              </ResizablePanel>
-            </ResizablePanelGroup>
-          )}
-          <ArenaFooter
-            dockSide={dockSide}
-            bottomCollapsed={bottomCollapsed}
-            onToggleBottom={toggleBottom}
-            onOpenAdd={() => setAddOpen(true)}
-            onArrange={arrange}
-            onAddAll={addAll}
-            onRemoveAll={() => setRemoveOpen(true)}
-            onToggleDock={toggleDockSide}
-          />
-        </>
+              <Dock snapshot={snapshot} side="right" />
+            </ResizablePanel>
+          </ResizablePanelGroup>
+        )
       ) : (
         <>
           <main className="relative z-[1] min-h-0 flex-1 overflow-auto">
             {mobileTab === "games" && (
-              <div className="bg-dot-grid relative min-h-full">
+              <div className="bg-dot-grid relative min-h-full p-2">
                 {floor}
-                {mobileFloorControls}
+                {renderFloorControls("fixed bottom-20 right-3 z-30", "left")}
                 <MacDock
                   entries={hiddenEntries}
                   side="right"
@@ -1086,103 +1140,6 @@ export function Desktop() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-
-      {/* Floating (maximized) windows — free over everything, click-to-front. */}
-      {Object.entries(floating).map(([id, st]) => {
-        const mod = get(gameOf(id));
-        if (!mod) return null;
-        const Content = mod.Window;
-        return (
-          <div
-            key={id}
-            className="absolute"
-            style={{
-              left: st.x,
-              top: st.y,
-              width: st.w,
-              height: st.h,
-              zIndex: st.z,
-            }}
-            onPointerDown={() => focusFloat(id)}
-          >
-            <GameWindow
-              title={mod.name}
-              icon={<GameIcon game={mod} className="size-5" />}
-              domId={id}
-              dragHandleProps={floatDragProps(id)}
-              isActive
-              onMinimize={() => minimizeFloat(id)}
-              onRestore={() => dockFloat(id)}
-              onClose={() => close(id)}
-            >
-              <Content windowId={id} onClose={() => close(id)} />
-            </GameWindow>
-            {/* Free resize from every edge + corner. */}
-            {(
-              [
-                {
-                  dir: "n",
-                  cls: "top-0 right-3 left-3 h-1.5 cursor-ns-resize",
-                },
-                {
-                  dir: "s",
-                  cls: "right-3 bottom-0 left-3 h-1.5 cursor-ns-resize",
-                },
-                {
-                  dir: "w",
-                  cls: "top-3 bottom-3 left-0 w-1.5 cursor-ew-resize",
-                },
-                {
-                  dir: "e",
-                  cls: "top-3 right-0 bottom-3 w-1.5 cursor-ew-resize",
-                },
-                { dir: "nw", cls: "top-0 left-0 size-3 cursor-nwse-resize" },
-                { dir: "ne", cls: "top-0 right-0 size-3 cursor-nesw-resize" },
-                { dir: "sw", cls: "bottom-0 left-0 size-3 cursor-nesw-resize" },
-                {
-                  dir: "se",
-                  cls: "right-0 bottom-0 size-3 cursor-nwse-resize",
-                },
-              ] as const
-            ).map((hdl) => (
-              <div
-                key={hdl.dir}
-                className={cn("absolute z-10 touch-none", hdl.cls)}
-                onPointerDown={startFloatResize(id, hdl.dir)}
-                aria-hidden
-              />
-            ))}
-            <div
-              className="pointer-events-none absolute right-0 bottom-0 grid size-5 place-items-center text-muted-foreground/70"
-              aria-hidden
-            >
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                <path
-                  d="M11 4 L4 11 M11 8 L8 11"
-                  stroke="currentColor"
-                  strokeWidth="1.4"
-                  strokeLinecap="round"
-                />
-              </svg>
-            </div>
-          </div>
-        );
-      })}
-
-      <header className="pointer-events-none absolute inset-x-3 top-3 z-30 flex items-start justify-between bg-transparent">
-        <div className="pointer-events-auto bg-background px-3 py-2">
-          <span className="wal-display text-base">
-            Dopamint<span className="wal-gradient-text">Arena</span>
-          </span>
-        </div>
-        <div className="pointer-events-auto flex items-stretch border border-border bg-background">
-          <WalletButton
-            variant="ghost"
-            className="h-10 rounded-none border-0 shadow-none px-3"
-          />
-          <ThemeToggle className="size-10 rounded-none border-0 border-l border-border shadow-none" />
-        </div>
-      </header>
     </div>
   );
 }

@@ -17,7 +17,7 @@ const chip1000 = "/chip-1000.svg";
 function getChipStack(balance: number): string[] {
   const stack: string[] = [];
   let remaining = balance;
-  
+
   const chipTypes = [
     { value: 1000, asset: chip1000 },
     { value: 500, asset: chip500 },
@@ -31,11 +31,11 @@ function getChipStack(balance: number): string[] {
       remaining -= chip.value;
     }
   }
-  
+
   if (stack.length === 0 && balance > 0) {
     stack.push(chip25);
   }
-  
+
   return stack;
 }
 
@@ -97,7 +97,9 @@ export default function PlayerVsDealer() {
   } = game;
   const latestRound = rounds.length > 0 ? rounds[rounds.length - 1] : null;
 
-  const [animState, setAnimState] = useState<"idle" | "deal" | "win" | "lose" | "push">("idle");
+  const [animState, setAnimState] = useState<
+    "idle" | "deal" | "win" | "lose" | "push"
+  >("idle");
   const prevRoundRef = useRef<number>(-1);
   const prevPhaseRef = useRef<string>("");
   const prevBalanceRef = useRef<number>(-1);
@@ -146,7 +148,11 @@ export default function PlayerVsDealer() {
     prevBalanceRef.current = view.playerBalance;
   }, [view.round, view.phase, view.playerBalance]);
 
-  type ToastMsg = { id: number; msg: string; type: "info" | "win" | "lose" | "push" };
+  type ToastMsg = {
+    id: number;
+    msg: string;
+    type: "info" | "win" | "lose" | "push";
+  };
   const [toasts, setToasts] = useState<ToastMsg[]>([]);
   const toastIdRef = useRef(0);
 
@@ -163,9 +169,12 @@ export default function PlayerVsDealer() {
 
   useEffect(() => {
     const prev = prevViewRef.current;
-    
+
     // Player Hit
-    if (view.playerCards.length > prev.playerCards.length && prev.playerCards.length > 0) {
+    if (
+      view.playerCards.length > prev.playerCards.length &&
+      prev.playerCards.length > 0
+    ) {
       addToast(`Player Hits (${view.playerSum})`);
     }
     // Player Stand
@@ -173,14 +182,17 @@ export default function PlayerVsDealer() {
       addToast(`Player Stands (${prev.playerSum})`);
     }
     // Dealer Hit
-    if (view.dealerCards.length > prev.dealerCards.length && prev.dealerCards.length > 0) {
+    if (
+      view.dealerCards.length > prev.dealerCards.length &&
+      prev.dealerCards.length > 0
+    ) {
       addToast(`Dealer Hits (${view.dealerSum})`);
     }
     // Dealer Stand
     if (prev.phase === "dealer" && view.phase === "round_over") {
       addToast(`Dealer Stands (${prev.dealerSum})`);
     }
-    
+
     prevViewRef.current = view;
   }, [view]);
 
@@ -241,9 +253,7 @@ export default function PlayerVsDealer() {
   );
 
   const running =
-    phase === "funding" ||
-    phase === "opening" ||
-    phase === "settling";
+    phase === "funding" || phase === "opening" || phase === "settling";
   const inGame =
     phase === "opening" || phase === "playing" || phase === "settling";
   const terminal = phase === "done" || result !== null;
@@ -328,11 +338,11 @@ export default function PlayerVsDealer() {
   if (!started) {
     return (
       <div
-        className="h-screen w-screen flex flex-col items-center justify-center relative text-white overflow-hidden select-none bg-zinc-950 bg-cover bg-center fade-in-up"
+        className="h-full w-full flex flex-col items-center justify-center relative text-white overflow-hidden select-none bg-zinc-950 bg-cover bg-center fade-in-up"
         style={{ backgroundImage: "url('/dealer-desk-plain-rotated.png')" }}
       >
         <div className="absolute inset-0 bg-black/60" />
-        <div className="relative z-10 flex flex-col items-center gap-6 bg-zinc-950/85 border border-zinc-800 rounded-2xl p-8 max-w-md w-full mx-4 shadow-2xl">
+        <div className="relative z-10 flex flex-col items-center gap-6 bg-zinc-950/85 border border-zinc-800 rounded-3xl p-8 md:p-12 w-[85%] max-w-4xl shadow-2xl">
           <h1 className="text-3xl font-extrabold text-[#d4af37] font-serif tracking-widest uppercase text-center">
             Play vs Dealer
           </h1>
@@ -343,10 +353,12 @@ export default function PlayerVsDealer() {
 
           <div className="flex flex-col items-center gap-1.5 text-xs font-mono text-zinc-400">
             <span>
-              Player: <span className="text-white">{suiOf(balances.a)} SUI</span>
+              Player:{" "}
+              <span className="text-white">{suiOf(balances.a)} SUI</span>
             </span>
             <span>
-              Dealer: <span className="text-white">{suiOf(balances.b)} SUI</span>
+              Dealer:{" "}
+              <span className="text-white">{suiOf(balances.b)} SUI</span>
             </span>
             {refreshBtn}
           </div>
@@ -411,7 +423,7 @@ export default function PlayerVsDealer() {
   };
 
   return (
-    <div className="h-screen w-screen flex flex-col relative text-white overflow-hidden select-none bg-zinc-950 fade-in-up">
+    <div className="h-full w-full flex flex-col relative text-white overflow-hidden select-none bg-zinc-950 fade-in-up">
       <div
         className="flex-1 w-full relative bg-cover bg-center"
         style={{ backgroundImage: "url('/dealer-desk-plain-rotated.png')" }}
@@ -448,7 +460,7 @@ export default function PlayerVsDealer() {
 
         {/* Rounds running log: top-right corner, fixed height for ~3 rows, scrollable */}
         {rounds.length > 0 && (
-          <div className="absolute top-16 right-3 md:top-4 md:right-4 z-20 w-44 md:w-52 flex flex-col bg-black/70 backdrop-blur-sm border border-amber-950 rounded-lg shadow-lg overflow-hidden">
+          <div className="absolute top-16 right-2 md:top-4 md:right-4 z-20 w-40 md:w-52 flex flex-col bg-black/70 backdrop-blur-sm border border-amber-950 rounded-lg shadow-lg overflow-hidden">
             <div className="px-3 py-1.5 text-[10px] font-extrabold uppercase tracking-widest text-[#d4af37] font-serif border-b border-amber-950/70">
               Rounds
             </div>
@@ -458,7 +470,7 @@ export default function PlayerVsDealer() {
                 return (
                   <div
                     key={`${r.round}-${i}`}
-                    className={`flex items-center justify-between gap-2 font-mono text-[11px] tabular-nums ${style.text}`}
+                    className={`flex items-center justify-between gap-2 font-mono text-[9px] md:text-[11px] tabular-nums ${style.text}`}
                   >
                     <span className="text-zinc-500">R{r.round + 1}</span>
                     <span className="text-zinc-300">
@@ -479,7 +491,7 @@ export default function PlayerVsDealer() {
         )}
 
         {/* Toasts overlay: left of Rounds panel */}
-        <div className="absolute top-16 right-48 md:top-4 md:right-60 z-30 flex flex-col items-end gap-2 pointer-events-none">
+        <div className="absolute top-[120px] right-3 md:top-4 md:right-60 z-30 flex flex-col items-end gap-2 pointer-events-none">
           {toasts.map((t) => (
             <div
               key={t.id}
@@ -488,10 +500,10 @@ export default function PlayerVsDealer() {
                 t.type === "win"
                   ? "bg-emerald-900/90 text-emerald-400 border border-emerald-500/50"
                   : t.type === "lose"
-                  ? "bg-rose-900/90 text-rose-400 border border-rose-500/50"
-                  : t.type === "push"
-                  ? "bg-amber-900/90 text-amber-400 border border-amber-500/50"
-                  : "bg-zinc-900/90 text-zinc-300 border border-zinc-700/50"
+                    ? "bg-rose-900/90 text-rose-400 border border-rose-500/50"
+                    : t.type === "push"
+                      ? "bg-amber-900/90 text-amber-400 border border-amber-500/50"
+                      : "bg-zinc-900/90 text-zinc-300 border border-zinc-700/50"
               }`}
             >
               {t.msg}
@@ -502,52 +514,78 @@ export default function PlayerVsDealer() {
         {/* Betting Spot (Desk Layout) */}
         <div className={`betting-spot ${animState !== "idle" ? "active" : ""}`}>
           <div className="betting-label">PAYS 3 TO 2</div>
-          <div className="text-[8px] text-[#d4af37]/60 font-mono tracking-wider font-extrabold uppercase mt-1">WAGER $100</div>
+          <div className="text-[8px] text-[#d4af37]/60 font-mono tracking-wider font-extrabold uppercase mt-1">
+            WAGER $100
+          </div>
         </div>
 
         {/* Active Animated Chips Layer */}
         {animState !== "idle" && (
           <div className="table-chips-layer">
             {animState === "deal" && (
-              <img src={chip100} className="animated-chip chip-deal" alt="bet chip" />
+              <img
+                src={chip100}
+                className="animated-chip chip-deal"
+                alt="bet chip"
+              />
             )}
             {animState === "win" && (
               <>
-                <img src={chip100} className="animated-chip chip-win-collect-1" alt="bet chip 1" />
-                <img src={chip100} className="animated-chip chip-win-collect-2" alt="bet chip 2" />
+                <img
+                  src={chip100}
+                  className="animated-chip chip-win-collect-1"
+                  alt="bet chip 1"
+                />
+                <img
+                  src={chip100}
+                  className="animated-chip chip-win-collect-2"
+                  alt="bet chip 2"
+                />
               </>
             )}
             {animState === "lose" && (
-              <img src={chip100} className="animated-chip chip-lose" alt="bet chip" />
+              <img
+                src={chip100}
+                className="animated-chip chip-lose"
+                alt="bet chip"
+              />
             )}
             {animState === "push" && (
-              <img src={chip100} className="animated-chip chip-push" alt="bet chip" />
+              <img
+                src={chip100}
+                className="animated-chip chip-push"
+                alt="bet chip"
+              />
             )}
           </div>
         )}
 
-        <div className="absolute top-[20%] md:top-[16%] left-1/2 -translate-x-1/2 z-20 w-full max-w-2xl flex items-center justify-center gap-4 md:gap-12">
-          <div className="flex-1 flex flex-col items-center relative pl-8 md:pl-24">
-            <CardDisplay
-              title="Dealer"
-              cards={view.dealerCards}
-              sum={view.dealerSum}
-              isWinning={result === "lose"}
-            />
-          </div>
-          <div className="w-16 md:w-24 shrink-0 flex items-end justify-center mb-4 md:mb-8">
+        <div className="absolute top-[20%] md:top-[16%] left-1/2 -translate-x-1/2 z-20 w-full max-w-xs md:max-w-md flex flex-col items-center">
+          <div className="absolute -left-8 md:-left-14 top-[40px] flex flex-col items-center">
+            <span className="text-[7px] text-emerald-200/50 uppercase tracking-widest mb-1 font-bold">
+              Stacks
+            </span>
             <div className="profile-chip-stack">
               {getChipStack(view.dealerBalance).map((chip, idx) => (
                 <img
                   key={idx}
                   src={chip}
                   className="stacked-chip"
-                  style={{ bottom: `${idx * 8}px`, transform: `rotate(${idx * 4 - 8}deg)` }}
+                  style={{
+                    bottom: `calc(var(--chip-spacing, 8px) * ${idx})`,
+                    transform: `rotate(${idx * 4 - 8}deg)`,
+                  }}
                   alt="chip"
                 />
               ))}
             </div>
           </div>
+          <CardDisplay
+            title="Dealer"
+            cards={view.dealerCards}
+            sum={view.dealerSum}
+            isWinning={result === "lose"}
+          />
         </div>
 
         {!terminal && latestRound && roundOver && (
@@ -592,34 +630,38 @@ export default function PlayerVsDealer() {
           )}
         </div>
 
-        <div className="absolute top-[70%] left-1/2 -translate-x-1/2 z-20 w-full max-w-2xl flex items-center justify-center gap-4 md:gap-12">
-          <div className="flex-1 flex flex-col items-center relative pl-8 md:pl-24">
-            <CardDisplay
-              title="You"
-              cards={view.playerCards}
-              sum={view.playerSum}
-              isPlayer
-              isWinning={result === "win"}
-            />
-          </div>
-          <div className="w-16 md:w-24 shrink-0 flex items-end justify-center mb-4 md:mb-8">
+        <div className="absolute top-[70%] left-1/2 -translate-x-1/2 z-20 w-full max-w-xs md:max-w-md flex flex-col items-center">
+          <div className="absolute -left-8 md:-left-14 top-[40px] flex flex-col items-center">
+            <span className="text-[7px] text-emerald-200/50 uppercase tracking-widest mb-1 font-bold">
+              Stacks
+            </span>
             <div className="profile-chip-stack">
               {getChipStack(view.playerBalance).map((chip, idx) => (
                 <img
                   key={idx}
                   src={chip}
                   className="stacked-chip"
-                  style={{ bottom: `${idx * 8}px`, transform: `rotate(${idx * 4 - 8}deg)` }}
+                  style={{
+                    bottom: `calc(var(--chip-spacing, 8px) * ${idx})`,
+                    transform: `rotate(${idx * 4 - 8}deg)`,
+                  }}
                   alt="chip"
                 />
               ))}
             </div>
           </div>
+          <CardDisplay
+            title="You"
+            cards={view.playerCards}
+            sum={view.playerSum}
+            isPlayer
+            isWinning={result === "win"}
+          />
         </div>
       </div>
 
       {/* Bottom HUD */}
-      <div className="w-full bg-zinc-950/95 backdrop-blur-md border-t border-zinc-800 shadow-[0_-10px_30px_rgba(0,0,0,0.95)] z-30 select-none px-4 md:px-8 py-3">
+      <div className="w-full bg-zinc-950/95 backdrop-blur-md border-t border-zinc-800 shadow-[0_-10px_30px_rgba(0,0,0,0.95)] z-30 select-none px-2 py-2 md:px-8 md:py-3">
         <div className="w-full flex flex-col md:flex-row items-center justify-between gap-3">
           <div className="flex flex-row flex-wrap items-center justify-center gap-x-5 gap-y-1">
             <div className="flex flex-col items-start gap-0.5">

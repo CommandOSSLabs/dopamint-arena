@@ -1,4 +1,4 @@
-import { bcs, fromHEX, toHEX } from "@mysten/bcs";
+import { bcs, fromHex as fromHEX, toHex as toHEX } from "@mysten/bcs";
 
 export const ID32 = bcs.fixedArray(32, bcs.u8()).transform({
   input: (id: string) => fromHEX(id),
@@ -17,9 +17,9 @@ export const GameStateStruct = bcs.struct("GameState", {
 });
 
 export interface GameState {
-  game_id: string;           // 32-byte hex
+  game_id: string; // 32-byte hex
   player_public_key: string; // hex
-  board: number[];           // length 9
+  board: number[]; // length 9
   move_index: number;
   player: number;
   turn: number;

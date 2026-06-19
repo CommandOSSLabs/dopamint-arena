@@ -61,9 +61,15 @@ describe("pickCaroMove", () => {
     let s = proto.initialState(ctx);
     // Fill the board without making five (impossible on 3x3) — ends in a draw, board full.
     const order: Array<[number, "A" | "B"]> = [
-      [0, "A"], [1, "B"], [2, "A"],
-      [4, "B"], [3, "A"], [5, "B"],
-      [7, "A"], [6, "B"], [8, "A"],
+      [0, "A"],
+      [1, "B"],
+      [2, "A"],
+      [4, "B"],
+      [3, "A"],
+      [5, "B"],
+      [7, "A"],
+      [6, "B"],
+      [8, "A"],
     ];
     for (const [cell, by] of order) s = proto.applyMove(s, { cell }, by);
     expect(() => pickCaroMove(s, "A", det, "strong")).toThrow();

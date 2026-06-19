@@ -56,9 +56,15 @@ describe("CaroProtocol", () => {
     const proto = new CaroProtocol(3);
     let s = proto.initialState(ctx(1n, 1n));
     const order: Array<[number, "A" | "B"]> = [
-      [0, "A"], [1, "B"], [2, "A"],
-      [4, "B"], [3, "A"], [5, "B"],
-      [7, "A"], [6, "B"], [8, "A"],
+      [0, "A"],
+      [1, "B"],
+      [2, "A"],
+      [4, "B"],
+      [3, "A"],
+      [5, "B"],
+      [7, "A"],
+      [6, "B"],
+      [8, "A"],
     ];
     for (const [cell, by] of order) s = proto.applyMove(s, { cell }, by);
     expect(s.winner).toBe(3);
@@ -74,7 +80,9 @@ describe("CaroProtocol", () => {
   it("encodeState is deterministic, changes with the board, and bakes in size", () => {
     const p15 = new CaroProtocol(15);
     const s0 = p15.initialState(ctx(1n, 1n));
-    expect(p15.encodeState(s0)).toEqual(p15.encodeState({ ...s0, board: s0.board.slice() }));
+    expect(p15.encodeState(s0)).toEqual(
+      p15.encodeState({ ...s0, board: s0.board.slice() }),
+    );
     const s1 = p15.applyMove(s0, { cell: 0 }, "A");
     expect(p15.encodeState(s1)).not.toEqual(p15.encodeState(s0));
 

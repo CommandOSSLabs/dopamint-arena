@@ -434,7 +434,15 @@ mod tests {
     // proof URL — what makes a global-log row clickable to its proof (spec §6).
     #[test]
     fn settled_event_carries_proof_and_payout() {
-        let ev = settled_event("0xT", 1500, 500, "deadbeef", "DiG", 1_750_000_000_000, "https://agg/v1/blobs/abc");
+        let ev = settled_event(
+            "0xT",
+            1500,
+            500,
+            "deadbeef",
+            "DiG",
+            1_750_000_000_000,
+            "https://agg/v1/blobs/abc",
+        );
         assert_eq!(ev.kind, crate::state::TunnelEventKind::Settled);
         assert_eq!(ev.party_a_balance, Some(1500));
         assert_eq!(ev.transcript_root.as_deref(), Some("deadbeef"));

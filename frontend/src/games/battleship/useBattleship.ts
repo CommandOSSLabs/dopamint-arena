@@ -1,0 +1,403 @@
+import { useSyncExternalStore } from "react";
+import {
+  useCurrentAccount,
+  useSignAndExecuteTransaction,
+  useSuiClient,
+} from "@mysten/dapp-kit";
+import { createParticipant } from "sui-tunnel-ts/core/keys";
+import { OffchainTunnel } from "sui-tunnel-ts/core/tunnel";
+import { toHex } from "sui-tunnel-ts/core/bytes";
+import { otherParty } from "sui-tunnel-ts/protocol/Protocol";
+import { registerWindowDisposer } from "@/lib/windowSessions";
+import { useTelemetry } from "../../telemetry/TelemetryProvider";
+import type { TelemetryWriter } from "../../telemetry/TelemetryProvider";
+import {
+  closeCooperative,
+  openAndFundSelfPlay,
+  readCreatedAt,
+} from "../../onchain/tunnelTx";
+import {
+  BattleshipProtocol,
+  type BattleshipMove,
+  type BattleshipState,
+} from "./protocol/battleship";
+import { deriveBattleshipView, type BattleshipView } from "./view";
+import { type Placement, placementsToBoard } from "./engine/fleet";
+import { randomSalts } from "./engine/merkle";
+import {
+  type FleetSecret,
+  makeFleetSecret,
+  nextMove,
+  randomFleetSecret,
+} from "./engine/selfPlay";
+
+/** Coins locked per seat, and the amount that shifts to the winner. */
+const LOCKED_PER_SEAT = 500n;
+const STAKE = 100n;
+/** Animation pacing for the bot's automatic moves. */
+const BOT_SHOOT_MS = 550;
+const BOT_REVEAL_MS = 240;
+
+export type BattleshipStatus =
+  | "idle"
+  | "placing"
+  | "funding"
+  | "playing"
+  | "settling"
+  | "settled"
+  | "error";
+
+export interface BattleshipSession {
+  status: BattleshipStatus;
+  view: BattleshipView | null;
+  error: string | null;
+  /** Enter fleet placement. */
+  playBot: () => void;
+  /** Commit the arranged fleet and start the match. */
+  startBattle: (placements: Placement[]) => void;
+  /** Fire at an enemy cell (only legal on your turn). */
+  fire: (cell: number) => void;
+  reset: () => void;
+}
+
+/** React-supplied capabilities, refreshed each render (wallet may connect later). */
+interface BotDeps {
+  report: TelemetryWriter;
+  account: { address: string } | null;
+  client: unknown;
+  signExec: (tx: never) => Promise<{ digest: string }>;
+}
+
+interface BotSnapshot {
+  status: BattleshipStatus;
+  view: BattleshipView | null;
+  error: string | null;
+}
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/**
+ * The bot game's whole session, kept OUT of React so it survives the window
+ * unmounting (minimize / maximize / desktop reflow). The component subscribes to
+ * it; only an explicit window close disposes it. See `lib/windowSessions`.
+ */
+class BotSession {
+  deps: BotDeps | null = null;
+
+  private status: BattleshipStatus = "idle";
+  private view: BattleshipView | null = null;
+  private error: string | null = null;
+  private snap: BotSnapshot = { status: "idle", view: null, error: null };
+  private listeners = new Set<() => void>();
+
+  private tunnel: OffchainTunnel<BattleshipState, BattleshipMove> | null = null;
+  private secrets: { A: FleetSecret; B: FleetSecret } | null = null;
+  private placements: Placement[] = []; // your fleet layout, for ship-status display
+  private tunnelId = "";
+  private createdAt = 0n;
+  private onChain = false;
+  private advancing = false;
+  // Guards re-entry: a session that has begun a match can't be restarted (only
+  // reset()/Play Again returns it to idle). Stops StrictMode / double-click dupes.
+  private starting = false;
+  private txnId = 0;
+  private lastYourShot: number | null = null;
+  private lastEnemyShot: number | null = null;
+  // Bumped on reset/dispose so an in-flight bot loop knows to abandon ship.
+  private gen = 0;
+
+  subscribe = (cb: () => void): (() => void) => {
+    this.listeners.add(cb);
+    return () => {
+      this.listeners.delete(cb);
+    };
+  };
+  getSnapshot = (): BotSnapshot => this.snap;
+
+  private emit() {
+    this.snap = { status: this.status, view: this.view, error: this.error };
+    for (const l of this.listeners) l();
+  }
+  private setStatus(s: BattleshipStatus) {
+    this.status = s;
+    this.emit();
+  }
+  private fail(e: unknown) {
+    this.error = String((e as Error)?.message ?? e);
+    this.status = "error";
+    this.emit();
+  }
+  private pushView() {
+    if (this.tunnel && this.secrets) {
+      this.view = deriveBattleshipView(
+        this.tunnel.state,
+        this.placements,
+        "A",
+        {
+          lastYourShot: this.lastYourShot,
+          lastEnemyShot: this.lastEnemyShot,
+          onChain: this.onChain,
+        },
+      );
+    }
+    this.emit();
+  }
+
+  playBot = () => {
+    this.gen += 1;
+    this.error = null;
+    this.view = null;
+    this.setStatus("placing");
+  };
+
+  reset = () => {
+    this.gen += 1;
+    this.advancing = false;
+    this.starting = false;
+    this.tunnel = null;
+    this.secrets = null;
+    this.lastYourShot = null;
+    this.lastEnemyShot = null;
+    this.deps?.report.setActive(0);
+    this.status = "idle";
+    this.view = null;
+    this.error = null;
+    this.emit();
+  };
+
+  dispose = () => {
+    this.gen += 1;
+    this.advancing = false;
+    this.deps?.report.setActive(0);
+    this.tunnel = null;
+    this.secrets = null;
+    this.listeners.clear();
+  };
+
+  private reportShotTxn(
+    move: Extract<BattleshipMove, { type: "reveal" }>,
+    defender: "A" | "B",
+  ) {
+    const youFired = otherParty(defender) === "A";
+    this.deps?.report.pushTxn({
+      id: (this.txnId += 1),
+      game: "battleship",
+      time: new Date().toLocaleTimeString("en-GB"),
+      bot: youFired ? "You" : "Foe Bot",
+      type: move.isShip ? (youFired ? "Hit" : "Hit taken") : "Miss",
+      status: "Success",
+      amount: move.isShip
+        ? `${youFired ? "+" : "-"}$${Number(STAKE)}.00`
+        : "$0.00",
+    });
+  }
+
+  private settle = async () => {
+    const tunnel = this.tunnel;
+    if (!tunnel) return;
+    this.setStatus("settling");
+    this.deps?.report.bumpCounters({ tunnelsClosed: 1, settlements: 1 });
+    this.deps?.report.setActive(0);
+    if (!this.onChain || !this.deps) {
+      this.setStatus("settled"); // demo: nothing to close on-chain
+      return;
+    }
+    try {
+      const settlement = tunnel.buildSettlement(this.createdAt);
+      await closeCooperative({
+        signExec: this.deps.signExec as never,
+        tunnelId: this.tunnelId,
+        settlement,
+      });
+      this.setStatus("settled");
+    } catch (e) {
+      this.fail(e);
+    }
+  };
+
+  /** Drive every automatic move (bot commit, all reveals, bot shots) until the human's shot or game end. */
+  private advance = async () => {
+    if (this.advancing) return;
+    this.advancing = true;
+    const myGen = this.gen;
+    const tunnel = this.tunnel;
+    const secrets = this.secrets;
+    try {
+      while (tunnel && secrets) {
+        const st = tunnel.state;
+        if (st.winner !== 0) break;
+        const driven = nextMove(st, secrets, Math.random);
+        if (!driven) break;
+        if (driven.by === "A" && driven.move.type === "shoot") break; // human's turn
+        if (driven.move.type === "shoot") {
+          await sleep(BOT_SHOOT_MS);
+          this.lastEnemyShot = driven.move.cell;
+        } else if (driven.move.type === "reveal") {
+          await sleep(BOT_REVEAL_MS);
+        }
+        if (this.gen !== myGen || this.tunnel !== tunnel) return; // reset/disposed mid-flight
+        tunnel.step(driven.move, driven.by);
+        if (driven.move.type === "reveal")
+          this.reportShotTxn(driven.move, driven.by);
+        this.pushView();
+      }
+      this.pushView();
+      if (tunnel && tunnel.state.winner !== 0) await this.settle();
+    } catch (e) {
+      this.fail(e);
+    } finally {
+      this.advancing = false;
+    }
+  };
+
+  startBattle = (placements: Placement[]) => {
+    const deps = this.deps;
+    if (!deps) return;
+    // Only a fresh/placing session may start; a live game never restarts itself.
+    if (this.starting || (this.status !== "idle" && this.status !== "placing"))
+      return;
+    this.starting = true;
+    this.gen += 1;
+    this.error = null;
+    this.txnId = 0;
+    this.lastYourShot = null;
+    this.lastEnemyShot = null;
+
+    this.placements = placements;
+    const human = makeFleetSecret(placementsToBoard(placements), randomSalts());
+    const bot = randomFleetSecret(Math.random);
+    this.secrets = { A: human, B: bot };
+
+    const a = createParticipant("you-seat");
+    const b = createParticipant("foe-seat");
+    const protocol = new BattleshipProtocol(STAKE);
+
+    void (async () => {
+      try {
+        // The wire format reads the tunnel id as a 32-byte hex object id, so the
+        // no-wallet demo needs a valid-looking one (not an arbitrary string).
+        let tunnelId = `0x${toHex(globalThis.crypto.getRandomValues(new Uint8Array(32)))}`;
+        let createdAt = 0n;
+        let onChain = false;
+
+        if (deps.account) {
+          const reads = deps.client as unknown as Parameters<
+            typeof openAndFundSelfPlay
+          >[0]["reads"];
+          this.setStatus("funding");
+          tunnelId = await openAndFundSelfPlay({
+            reads,
+            signExec: deps.signExec as never,
+            partyA: { address: a.address, publicKey: a.keyPair.publicKey },
+            partyB: { address: b.address, publicKey: b.keyPair.publicKey },
+            aAmount: LOCKED_PER_SEAT,
+            bAmount: LOCKED_PER_SEAT,
+          });
+          createdAt = await readCreatedAt(reads, tunnelId);
+          onChain = true;
+        }
+
+        const tunnel = OffchainTunnel.selfPlay(
+          protocol,
+          tunnelId,
+          a.keyPair,
+          b.keyPair,
+          a.address,
+          b.address,
+          { a: LOCKED_PER_SEAT, b: LOCKED_PER_SEAT },
+        );
+        tunnel.onUpdate = (_u, bytes) =>
+          this.deps?.report.bumpCounters({
+            updates: 1,
+            signatures: 2,
+            verifications: 2,
+            bytes,
+          });
+
+        this.tunnel = tunnel;
+        this.tunnelId = tunnelId;
+        this.createdAt = createdAt;
+        this.onChain = onChain;
+        this.deps?.report.bumpCounters({ tunnelsOpened: 1 });
+        this.deps?.report.setActive(2);
+        this.starting = false;
+        this.setStatus("playing");
+        this.pushView();
+        void this.advance(); // commit A, commit B, then hand the turn to the human
+      } catch (e) {
+        this.starting = false;
+        this.fail(e);
+      }
+    })();
+  };
+
+  fire = (cell: number) => {
+    const tunnel = this.tunnel;
+    if (!tunnel) return;
+    const st = tunnel.state;
+    if (
+      st.phase !== "playing" ||
+      st.pendingShot ||
+      st.turn !== "A" ||
+      st.winner !== 0
+    ) {
+      return;
+    }
+    if (st.shotsAtB.some((s) => s.cell === cell)) return;
+    try {
+      tunnel.step({ type: "shoot", cell }, "A");
+      this.lastYourShot = cell;
+      this.pushView();
+      void this.advance();
+    } catch (e) {
+      this.fail(e);
+    }
+  };
+}
+
+const botSessions = new Map<string, BotSession>();
+
+function getBotSession(windowId: string): BotSession {
+  let session = botSessions.get(windowId);
+  if (!session) {
+    session = new BotSession();
+    botSessions.set(windowId, session);
+    const created = session;
+    registerWindowDisposer(windowId, "battleship-bot", () => {
+      created.dispose();
+      botSessions.delete(windowId);
+    });
+  }
+  return session;
+}
+
+export function useBattleship(windowId: string): BattleshipSession {
+  const { report } = useTelemetry();
+  const account = useCurrentAccount();
+  const client = useSuiClient();
+  const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
+
+  const session = getBotSession(windowId);
+  session.deps = {
+    report,
+    account,
+    client,
+    signExec: (async (
+      tx: Parameters<typeof signAndExecute>[0]["transaction"],
+    ) => {
+      const r = await signAndExecute({ transaction: tx });
+      return { digest: r.digest };
+    }) as never,
+  };
+
+  const snap = useSyncExternalStore(session.subscribe, session.getSnapshot);
+  return {
+    status: snap.status,
+    view: snap.view,
+    error: snap.error,
+    playBot: session.playBot,
+    startBattle: session.startBattle,
+    fire: session.fire,
+    reset: session.reset,
+  };
+}

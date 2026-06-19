@@ -4,3 +4,4 @@
  */
 export * from "./scalars";
 export * from "./cardCircuit";
+export * from "./quantumPokerResultCircuit";

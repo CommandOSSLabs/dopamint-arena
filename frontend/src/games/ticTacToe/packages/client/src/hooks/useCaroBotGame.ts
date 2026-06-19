@@ -23,7 +23,12 @@ import {
   type BotIdentity,
 } from "@/lib/bots";
 import type { Difficulty } from "@/hooks/useBotGame";
-import type { BotPhase, BotScore, BotDigests, TunnelRecord } from "@/hooks/useBotGame";
+import type {
+  BotPhase,
+  BotScore,
+  BotDigests,
+  TunnelRecord,
+} from "@/hooks/useBotGame";
 
 const DEFAULT_MAX_GAMES = 5;
 const MIN_MAX_GAMES = 1;
@@ -99,7 +104,10 @@ export function useCaroBotGame(
   const [phase, setPhase] = useState<BotPhase>("idle");
   const [error, setError] = useState<string | null>(null);
   const [digests, setDigests] = useState<BotDigests>({});
-  const [balances, setBalances] = useState<{ x: bigint; o: bigint }>({ x: 0n, o: 0n });
+  const [balances, setBalances] = useState<{ x: bigint; o: bigint }>({
+    x: 0n,
+    o: 0n,
+  });
   const [score, setScore] = useState<BotScore>(loadScore);
   const [tunnels, setTunnels] = useState<TunnelRecord[]>([]);
   const [auto, setAuto] = useState(false);
@@ -117,12 +125,18 @@ export function useCaroBotGame(
   const maxGamesRef = useRef<number>(DEFAULT_MAX_GAMES);
   maxGamesRef.current = maxGames;
   const boardSizeRef = useRef<number>(boardSize);
-  boardSizeRef.current = Math.max(MIN_BOARD_SIZE, Math.min(MAX_BOARD_SIZE, Math.floor(boardSize)));
+  boardSizeRef.current = Math.max(
+    MIN_BOARD_SIZE,
+    Math.min(MAX_BOARD_SIZE, Math.floor(boardSize)),
+  );
 
   const setMaxGames = useCallback((n: number) => {
     const clamped = Math.max(
       MIN_MAX_GAMES,
-      Math.min(MAX_MAX_GAMES, Math.floor(Number.isFinite(n) ? n : DEFAULT_MAX_GAMES)),
+      Math.min(
+        MAX_MAX_GAMES,
+        Math.floor(Number.isFinite(n) ? n : DEFAULT_MAX_GAMES),
+      ),
     );
     setMaxGamesState(clamped);
   }, []);
@@ -161,7 +175,9 @@ export function useCaroBotGame(
         options: { showObjectChanges: true, showEffects: true },
       });
       if (res.effects?.status?.status !== "success") {
-        throw new Error(`tx ${res.digest} failed: ${res.effects?.status?.error ?? "unknown"}`);
+        throw new Error(
+          `tx ${res.digest} failed: ${res.effects?.status?.error ?? "unknown"}`,
+        );
       }
       await client.waitForTransaction({ digest: res.digest });
       return res;
@@ -187,7 +203,10 @@ export function useCaroBotGame(
   // Run ONE tunnel that plays `maxGames` caro games and settles once.
   const runGame = useCallback(() => {
     stopTimer();
-    if (balancesRef.current.x < MIN_PLAY_MIST || balancesRef.current.o < MIN_PLAY_MIST) {
+    if (
+      balancesRef.current.x < MIN_PLAY_MIST ||
+      balancesRef.current.o < MIN_PLAY_MIST
+    ) {
       autoRef.current = false;
       setAuto(false);
       setError("Fund the bots first");
@@ -220,19 +239,31 @@ export function useCaroBotGame(
 
         // 1) open + fund (both 1-MIST stakes) + activate in ONE tx (bot X signs).
         setPhase("opening");
-        const createRes = await submit(buildCreateAndFundTx(partyX, partyO, 1n), bots.x.keypair);
+        const createRes = await submit(
+          buildCreateAndFundTx(partyX, partyO, 1n),
+          bots.x.keypair,
+        );
         const tunnelId = parseTunnelId(createRes.objectChanges);
         if (!tunnelId) throw new Error("could not find created Tunnel id");
         setDigests((d) => ({ ...d, create: createRes.digest }));
 
         // 2) read created_at for the settlement timestamp.
-        const obj = await client.getObject({ id: tunnelId, options: { showContent: true } });
-        const fields = (obj.data?.content as { fields?: Record<string, unknown> } | undefined)
-          ?.fields;
-        const createdAt = BigInt((fields?.created_at as string | undefined) ?? 0);
+        const obj = await client.getObject({
+          id: tunnelId,
+          options: { showContent: true },
+        });
+        const fields = (
+          obj.data?.content as { fields?: Record<string, unknown> } | undefined
+        )?.fields;
+        const createdAt = BigInt(
+          (fields?.created_at as string | undefined) ?? 0,
+        );
 
         // 3) off-chain self-play tunnel (both keys local), driving MultiGameCaroProtocol.
-        const tunnel = core.OffchainTunnel.selfPlay<MultiGameCaroState, { cell: number }>(
+        const tunnel = core.OffchainTunnel.selfPlay<
+          MultiGameCaroState,
+          { cell: number }
+        >(
           proto,
           tunnelId,
           bots.x.coreKey,
@@ -270,18 +301,28 @@ export function useCaroBotGame(
                 resolve();
                 return;
               }
-              if (steps++ >= maxSteps) throw new Error("caro self-play exceeded step bound");
+              if (steps++ >= maxSteps)
+                throw new Error("caro self-play exceeded step bound");
               const inner = tunnel.state.inner;
               const innerOver = inner.winner !== 0;
               // Between games, A drives the advance with any cell; mid-game, the heuristic picks.
               const by: "A" | "B" = innerOver ? "A" : (inner.turn as "A" | "B");
               const cell = innerOver
                 ? 0
-                : pickCaroMove(inner, by, Math.random, strengthFor(difficultyRef.current, by));
+                : pickCaroMove(
+                    inner,
+                    by,
+                    Math.random,
+                    strengthFor(difficultyRef.current, by),
+                  );
               // Sign each update with the on-chain created_at so update_state's timestamp
               // check passes regardless of local clock skew.
-              const r = tunnel.step({ cell }, by, { mode: "full", timestamp: createdAt });
-              if (!r.verified) throw new Error(`state ${r.nonce} failed dual-verify`);
+              const r = tunnel.step({ cell }, by, {
+                mode: "full",
+                timestamp: createdAt,
+              });
+              if (!r.verified)
+                throw new Error(`state ${r.nonce} failed dual-verify`);
 
               const next = tunnel.state;
               setBoard([...next.inner.board]);
@@ -290,7 +331,8 @@ export function useCaroBotGame(
               setTurn(next.inner.turn as "A" | "B");
               setWinner(next.inner.winner);
               setCurrentGame(next.gamesPlayed + 1);
-              if (next.inner.winner !== 0) recordGame(next.gamesPlayed, next.inner.winner);
+              if (next.inner.winner !== 0)
+                recordGame(next.gamesPlayed, next.inner.winner);
 
               if (proto.isTerminal(next)) {
                 stopTimer();
@@ -312,7 +354,10 @@ export function useCaroBotGame(
         setPhase("settling");
         const latest = tunnel.latest;
         if (latest) {
-          const ures = await submit(buildUpdateStateTx(tunnelId, latest), bots.x.keypair);
+          const ures = await submit(
+            buildUpdateStateTx(tunnelId, latest),
+            bots.x.keypair,
+          );
           setDigests((d) => ({ ...d, update: ures.digest }));
         }
 
@@ -320,8 +365,15 @@ export function useCaroBotGame(
         const root = transcript.root();
         const onchainNonce = latest ? latest.update.nonce : 0n;
         const s = tunnel.buildSettlementWithRoot(createdAt, root, onchainNonce);
-        const closeRes = await submit(buildSettleWithRootTx(tunnelId, s), bots.x.keypair);
-        setDigests((d) => ({ ...d, close: closeRes.digest, root: `0x${bytesToHex(root)}` }));
+        const closeRes = await submit(
+          buildSettleWithRootTx(tunnelId, s),
+          bots.x.keypair,
+        );
+        setDigests((d) => ({
+          ...d,
+          close: closeRes.digest,
+          root: `0x${bytesToHex(root)}`,
+        }));
 
         // Record the settled tunnel into the history (newest first), then reset the running
         // score so the next tunnel starts fresh — each settle resets the player tally.
@@ -337,7 +389,10 @@ export function useCaroBotGame(
         setTunnels((prev) => [record, ...prev].slice(0, MAX_TUNNELS_LOGGED));
         setScore({ x: 0, o: 0, draws: 0 });
         try {
-          localStorage.setItem(SCORE_KEY, JSON.stringify({ x: 0, o: 0, draws: 0 }));
+          localStorage.setItem(
+            SCORE_KEY,
+            JSON.stringify({ x: 0, o: 0, draws: 0 }),
+          );
         } catch {
           /* ignore */
         }
@@ -354,7 +409,9 @@ export function useCaroBotGame(
           } else {
             autoRef.current = false;
             setAuto(false);
-            setError("A bot is low on gas — auto-play stopped. Fund the bots to continue.");
+            setError(
+              "A bot is low on gas — auto-play stopped. Fund the bots to continue.",
+            );
           }
         }
       } catch (e) {
@@ -378,7 +435,10 @@ export function useCaroBotGame(
   }, [runGame]);
 
   const startAuto = useCallback(() => {
-    if (balancesRef.current.x < MIN_PLAY_MIST || balancesRef.current.o < MIN_PLAY_MIST) {
+    if (
+      balancesRef.current.x < MIN_PLAY_MIST ||
+      balancesRef.current.o < MIN_PLAY_MIST
+    ) {
       setError("Fund the bots first");
       setPhase("error");
       return;

@@ -14,7 +14,8 @@ dotenv.config();
  * The deployed package ID for sui_tunnel
  * Set this via environment variable or update directly
  */
-export const PACKAGE_ID = process.env.PACKAGE_ID || "";
+export const PACKAGE_ID =
+  process.env.PACKAGE_ID || process.env.SUI_TUNNEL_PACKAGE_ID || "";
 
 /**
  * The module names in the sui_tunnel package
@@ -24,8 +25,11 @@ export const MODULES = {
   SIGNATURE: "signature",
   TUNNEL: "tunnel",
   RANDOMNESS: "randomness",
+  SUI_RANDOMNESS: "sui_randomness",
   REFEREE: "referee",
   ZK_VERIFIER: "zk_verifier",
+  QUANTUM_POKER: "quantum_poker",
+  QUANTUM_POKER_REFEREE: "quantum_poker_referee",
   HOP: "hop",
   // Example modules
   EXAMPLE_ESCROW: "example_escrow",
@@ -227,7 +231,8 @@ export const MIN_AUCTION_DURATION_MS = 600000;
  */
 export function buildTarget(module: string, func: string): string {
   // Prefer the load-time constant; fall back to the current env (set after load).
-  const pkg = PACKAGE_ID || process.env.PACKAGE_ID || "";
+  const pkg =
+    PACKAGE_ID || process.env.PACKAGE_ID || process.env.SUI_TUNNEL_PACKAGE_ID || "";
   if (!pkg) {
     throw new Error(
       "PACKAGE_ID not set. Please set it in environment variables or config.",

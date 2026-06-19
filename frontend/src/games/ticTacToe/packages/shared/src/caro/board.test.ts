@@ -1,5 +1,11 @@
 import { describe, expect, it } from "bun:test";
-import { winnerAround, winningLine, isFull, inBounds, applyMark } from "./board";
+import {
+  winnerAround,
+  winningLine,
+  isFull,
+  inBounds,
+  applyMark,
+} from "./board";
 
 // Helper: empty size*size board.
 const empty = (size: number) => new Array(size * size).fill(0) as number[];

@@ -105,7 +105,9 @@ export async function transferBetweenBots(
     options: { showEffects: true },
   });
   if (res.effects?.status?.status !== "success") {
-    throw new Error(`transfer failed: ${res.effects?.status?.error ?? "unknown"}`);
+    throw new Error(
+      `transfer failed: ${res.effects?.status?.error ?? "unknown"}`,
+    );
   }
   await client.waitForTransaction({ digest: res.digest });
   return res.digest;

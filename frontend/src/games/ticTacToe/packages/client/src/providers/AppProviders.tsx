@@ -1,6 +1,10 @@
 import { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { SuiClientProvider, WalletProvider, createNetworkConfig } from "@mysten/dapp-kit";
+import {
+  SuiClientProvider,
+  WalletProvider,
+  createNetworkConfig,
+} from "@mysten/dapp-kit";
 import { getFullnodeUrl } from "@mysten/sui/client";
 import { EnokiFlowProvider } from "@mysten/enoki/react";
 import { CustomWalletProvider } from "@/contexts/CustomWallet";
@@ -15,14 +19,18 @@ const { networkConfig } = createNetworkConfig({
 const queryClient = new QueryClient();
 const sessionStorageAdapter = {
   getItem: async (key: string) => sessionStorage.getItem(key),
-  setItem: async (key: string, value: string) => sessionStorage.setItem(key, value),
+  setItem: async (key: string, value: string) =>
+    sessionStorage.setItem(key, value),
   removeItem: async (key: string) => sessionStorage.removeItem(key),
 };
 
 export function AppProviders({ children }: { children: ReactNode }) {
   return (
     <QueryClientProvider client={queryClient}>
-      <SuiClientProvider networks={networkConfig} defaultNetwork={clientConfig.SUI_NETWORK_NAME}>
+      <SuiClientProvider
+        networks={networkConfig}
+        defaultNetwork={clientConfig.SUI_NETWORK_NAME}
+      >
         <WalletProvider autoConnect storage={sessionStorageAdapter}>
           <EnokiFlowProvider apiKey={clientConfig.ENOKI_API_KEY}>
             <CustomWalletProvider>{children}</CustomWalletProvider>

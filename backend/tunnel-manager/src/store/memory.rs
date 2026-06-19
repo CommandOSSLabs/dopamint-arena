@@ -112,7 +112,12 @@ impl ControlStore for InMemoryControlStore {
 
     async fn push_recent_event(&self, ev: TunnelEvent) {
         // Idempotent: SADD-equivalent guard so a re-poll of the same tx is a no-op.
-        if !self.seen_digests.write().unwrap().insert(ev.tx_digest.clone()) {
+        if !self
+            .seen_digests
+            .write()
+            .unwrap()
+            .insert(ev.tx_digest.clone())
+        {
             return;
         }
         let mut ring = self.recent_ring.write().unwrap();
@@ -296,7 +301,8 @@ mod tests {
     async fn recent_events_are_newest_first_capped_and_deduped() {
         let s = InMemoryControlStore::default();
         for i in 0..(crate::store::RECENT_EVENTS_CAP + 5) {
-            s.push_recent_event(settled(&format!("0x{i}"), &format!("d{i}"))).await;
+            s.push_recent_event(settled(&format!("0x{i}"), &format!("d{i}")))
+                .await;
         }
         s.push_recent_event(settled("0x0", "d0")).await; // replay of the oldest — must be a no-op
         let got = s.recent_events().await;
