@@ -7,7 +7,7 @@ config:
   dopamint:db-max-capacity: "4"
   dopamint:db-serverless: "true"
   dopamint:cache-node-type: cache.t4g.medium
-  dopamint:benchmark-instance-type: c7i.2xlarge
+  dopamint:benchmark-instance-type: c7i.48xlarge
   dopamint:benchmark-min-size: "0"
   dopamint:benchmark-max-size: "2"
   dopamint:route53-zone-id: ""
