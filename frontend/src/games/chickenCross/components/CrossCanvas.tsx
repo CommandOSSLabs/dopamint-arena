@@ -54,6 +54,7 @@ export function CrossCanvas({ view, role, winner, onDir }: CrossCanvasProps) {
       onDirRef.current(world as CrossDir);
     };
     const unbindInput = bindCrossInput(canvas, emit);
+    canvas.focus(); // receive keyboard immediately without requiring a click
     emitRef.current = emit;
 
     const ro = new ResizeObserver((entries) => {

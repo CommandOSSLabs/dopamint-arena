@@ -1,4 +1,3 @@
-import { useEffect, useRef } from "react";
 import type { CrossDir } from "sui-tunnel-ts/protocol/cross";
 import "../cross.css";
 import type { CrossView } from "../session-core";
@@ -19,49 +18,9 @@ export function CrossBoard({
   seed: number;
 }) {
   const settled = winner !== null;
-  const boardRef = useRef<HTMLDivElement>(null);
-
-  // Focus the board container on mount so keyboard events are scoped to it.
-  useEffect(() => {
-    boardRef.current?.focus();
-  }, []);
-
-  // Keyboard handler — Arrow/WASD → directions. Ignored when the game is over.
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (winner !== null) return;
-    switch (e.key) {
-      case "ArrowUp":
-      case "w":
-      case "W":
-        e.preventDefault();
-        onDir("north");
-        break;
-      case "ArrowDown":
-      case "s":
-      case "S":
-        e.preventDefault();
-        onDir("south");
-        break;
-      case "ArrowRight":
-      case "d":
-      case "D":
-        e.preventDefault();
-        onDir("east");
-        break;
-      case "ArrowLeft":
-      case "a":
-      case "A":
-        e.preventDefault();
-        onDir("west");
-        break;
-    }
-  };
 
   return (
     <div
-      ref={boardRef}
-      tabIndex={0}
-      onKeyDown={handleKeyDown}
       className="flex h-full w-full flex-col gap-2 bg-arena-bg p-3 outline-none"
     >
       <div className="flex items-center justify-between text-[11px] text-arena-muted">
