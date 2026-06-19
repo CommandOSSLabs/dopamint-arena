@@ -190,7 +190,11 @@ impl ControlStore for RedisControlStore {
             .eval::<i64, _, _, _>(
                 PUSH_RECENT_EVENT,
                 vec!["events:recent".to_string(), "events:seen".to_string()],
-                vec![json, ev.tx_digest.clone(), crate::store::RECENT_EVENTS_CAP.to_string()],
+                vec![
+                    json,
+                    ev.tx_digest.clone(),
+                    crate::store::RECENT_EVENTS_CAP.to_string(),
+                ],
             )
             .await;
         if let Err(e) = res {
@@ -201,10 +205,16 @@ impl ControlStore for RedisControlStore {
     async fn recent_events(&self) -> Vec<TunnelEvent> {
         let raws: Vec<String> = self
             .pool
-            .lrange("events:recent", 0, (crate::store::RECENT_EVENTS_CAP - 1) as i64)
+            .lrange(
+                "events:recent",
+                0,
+                (crate::store::RECENT_EVENTS_CAP - 1) as i64,
+            )
             .await
             .unwrap_or_default();
-        raws.iter().filter_map(|j| serde_json::from_str(j).ok()).collect()
+        raws.iter()
+            .filter_map(|j| serde_json::from_str(j).ok())
+            .collect()
     }
 
     // fred 9.4.0: ping takes no argument (cheat-sheet erroneously shows `ping::<String>(None)`).
