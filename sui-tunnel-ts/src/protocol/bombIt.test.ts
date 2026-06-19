@@ -13,6 +13,16 @@ import {
   BombItProtocol,
   BOMB_IT_TICK_CAP,
   BOMB_IT_MIN_STAKE,
+  BLAST_RADIUS,
+  FUSE_TICKS,
+  dest,
+  canMoveTo,
+  blastCellsFor,
+  resolveExplosions,
+  type BombItBomb,
+  type BombItPlayer,
+  type BombItMove,
+  type BombItState,
 } from "./bombIt.ts";
 
 test("border ring and interior even-even cells are walls", () => {
@@ -51,19 +61,6 @@ test("buildGrid is 180°-rotationally symmetric and seed-deterministic", () => {
   }
   assert.deepEqual(Array.from(buildGrid(42n)), Array.from(buildGrid(42n)));
 });
-
-import {
-  BLAST_RADIUS,
-  FUSE_TICKS,
-  dest,
-  canMoveTo,
-  blastCellsFor,
-  resolveExplosions,
-  type BombItBomb,
-  type BombItPlayer,
-  type BombItMove,
-  type BombItState,
-} from "./bombIt.ts";
 
 const deadFar: BombItPlayer = { row: 8, col: 8, alive: false };
 
