@@ -114,6 +114,11 @@ export default function PlayerBot() {
     balances,
     maxRounds,
     setMaxRounds,
+    bet,
+    setBet,
+    betOptions,
+    rebalance,
+    rebalancing,
   } = game;
   const latestRound = rounds.length > 0 ? rounds[rounds.length - 1] : null;
 
@@ -123,10 +128,15 @@ export default function PlayerBot() {
   const prevRoundRef = useRef<number>(-1);
   const prevPhaseRef = useRef<string>("");
   const prevBalanceRef = useRef<number>(-1);
-  const roundsEndRef = useRef<HTMLDivElement>(null);
+  const roundsListRef = useRef<HTMLDivElement>(null);
 
+  // Auto-scroll the rounds log to the newest entry. Scroll the LIST element directly via its
+  // own scrollTop — NOT scrollIntoView, which also scrolls every scrollable ancestor (the
+  // desktop window's overflow-auto content area), yanking the whole window down when the first
+  // round lands.
   useEffect(() => {
-    roundsEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    const el = roundsListRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
   }, [rounds.length]);
 
   useEffect(() => {
@@ -312,6 +322,19 @@ export default function PlayerBot() {
     </button>
   );
 
+  // Even out the two bot wallets (move half the gap richer→poorer). Disabled mid-game so the
+  // transfer can't race a tunnel's own txs.
+  const rebalanceBtn = (
+    <button
+      onClick={rebalance}
+      disabled={rebalancing || running}
+      title="Move half the balance difference from the richer bot to the poorer one"
+      className="border-2 border-zinc-650 text-zinc-300 bg-zinc-900/60 hover:bg-zinc-700/40 px-5 py-2.5 md:px-8 md:py-4 rounded-lg md:rounded-xl text-xs md:text-base font-black tracking-widest uppercase transition-all hover:scale-105 active:scale-95 cursor-pointer disabled:opacity-50 disabled:pointer-events-none"
+    >
+      {rebalancing ? "Balancing…" : "⇄ Even out bots"}
+    </button>
+  );
+
   const playBtn = (
     <button
       onClick={game.newGame}
@@ -382,6 +405,33 @@ export default function PlayerBot() {
     </div>
   );
 
+  // Per-round bet selector: the bots wager this many chips each round. A smaller bet against the
+  // same buy-in stretches the bankroll over more rounds. Locked once a game is in flight.
+  const betSelector = (
+    <div className="flex items-center gap-2">
+      <label
+        htmlFor="bet-per-round"
+        className="text-[11px] font-bold uppercase tracking-wider text-zinc-500"
+      >
+        Bet / round
+      </label>
+      <select
+        id="bet-per-round"
+        name="bet-per-round"
+        value={String(bet)}
+        onChange={(e) => setBet(Number(e.target.value))}
+        disabled={inGame}
+        className="bg-zinc-900 border border-zinc-700 text-white text-xs font-mono rounded-md px-2 py-1.5 focus:outline-none focus:border-[#d4af37] disabled:opacity-50 disabled:pointer-events-none cursor-pointer"
+      >
+        {betOptions.map((n) => (
+          <option key={n} value={n}>
+            {n.toLocaleString()} chips
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+
   // Idle start screen: no game has run yet.
   if (!started) {
     return (
@@ -417,11 +467,17 @@ export default function PlayerBot() {
           <div className="flex flex-col items-center gap-2 w-full">
             {walletFundEl}
             {roundsSelector}
+            {betSelector}
             <div className="flex items-center gap-3">
               {fundBtn}
               {playBtn}
               {autoBtn}
             </div>
+            {rebalanceBtn}
+            <p className="text-[10px] text-zinc-500 text-center max-w-md">
+              Bots play {maxRounds} rounds off-chain per tunnel, then settle once.
+              Chips are 1:1 with MIST (1 SUI = 1,000,000,000 chips).
+            </p>
           </div>
 
           {walletError && (
@@ -507,7 +563,9 @@ export default function PlayerBot() {
         {/* Round / phase badge */}
         <div className="absolute top-4 left-1/2 -translate-x-1/2 px-4 py-1.5 bg-black/70 backdrop-blur-sm border border-amber-950 rounded-full shadow-lg z-10 flex items-center gap-2">
           <span className="text-[10px] md:text-xs text-[#d4af37] font-extrabold uppercase tracking-widest font-serif">
-            Round {Math.min(rounds.length + (terminal ? 0 : 1), maxRounds)} /{" "}
+            {/* Use the protocol's round (view.round), not the rounds log — the log is capped at
+                MAX_ROUNDS_LOGGED so it can't track a long (e.g. 100-round) tunnel. */}
+            Round {Math.min(Math.max(view.round, terminal ? 0 : 1), maxRounds)} /{" "}
             {maxRounds}
           </span>
           <span className="text-[10px] text-zinc-400 uppercase tracking-widest">
@@ -522,7 +580,10 @@ export default function PlayerBot() {
             <div className="px-3 py-1.5 text-[10px] font-extrabold uppercase tracking-widest text-[#d4af37] font-serif border-b border-amber-950/70">
               Rounds
             </div>
-            <div className="max-h-[250px] overflow-y-auto px-2 py-1.5 flex flex-col gap-0.5 scrollbar-thin">
+            <div
+              ref={roundsListRef}
+              className="max-h-[250px] overflow-y-auto px-2 py-1.5 flex flex-col gap-0.5 scrollbar-thin"
+            >
               {rounds.map((r, i) => {
                 const style = OUTCOME_STYLE[r.outcome];
                 return (
@@ -543,7 +604,6 @@ export default function PlayerBot() {
                   </div>
                 );
               })}
-              <div ref={roundsEndRef} />
             </div>
           </div>
         )}
@@ -629,7 +689,7 @@ export default function PlayerBot() {
         <div className={`betting-spot ${animState !== "idle" ? "active" : ""}`}>
           <div className="betting-label">PAYS 3 TO 2</div>
           <div className="text-[8px] text-[#d4af37]/60 font-mono tracking-wider font-extrabold uppercase mt-1">
-            WAGER $100
+            WAGER {bet.toLocaleString()} CHIPS
           </div>
         </div>
 
@@ -789,16 +849,16 @@ export default function PlayerBot() {
           <div className="flex flex-row items-center gap-x-5 gap-y-1">
             <div className="flex flex-col items-start gap-0.5">
               <div className="flex items-center gap-1.5 text-[9px] md:text-[11px] font-bold uppercase tracking-wider text-zinc-500">
-                <span>Player stake:</span>
+                <span>Player chips:</span>
                 <span className="text-white font-mono font-black">
-                  {view.playerBalance}
+                  {view.playerBalance.toLocaleString()}
                 </span>
                 <span className="text-zinc-600">({view.playerSum})</span>
               </div>
               <div className="flex items-center gap-1.5 text-[9px] md:text-[11px] font-bold uppercase tracking-wider text-zinc-500">
-                <span>Dealer stake:</span>
+                <span>Dealer chips:</span>
                 <span className="text-white font-mono font-black">
-                  {view.dealerBalance}
+                  {view.dealerBalance.toLocaleString()}
                 </span>
                 <span className="text-zinc-600">({view.dealerSum})</span>
               </div>
@@ -825,7 +885,9 @@ export default function PlayerBot() {
           {/* Controls */}
           <div className="flex flex-row items-center justify-end gap-1.5 md:gap-3 flex-1">
             <div className="hidden lg:block">{roundsSelector}</div>
+            <div className="hidden lg:block">{betSelector}</div>
             <div className="hidden md:block">{walletFundEl}</div>
+            <div className="hidden md:block">{rebalanceBtn}</div>
             {fundBtn}
             {playBtn}
             {autoBtn}

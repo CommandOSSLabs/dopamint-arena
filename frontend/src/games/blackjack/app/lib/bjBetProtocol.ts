@@ -74,6 +74,35 @@ export function maxBet(s: BetBlackjackState): bigint {
   return s.balanceA < s.balanceB ? s.balanceA : s.balanceB;
 }
 
+/**
+ * The party the protocol expects to act next, by phase. In `round_over` the NEXT round's
+ * player places the bet, so the actor is `getPlayerParty(round + 1)` — not the current
+ * round's player. A self-play driver MUST use this to pick whom to move as; passing a fixed
+ * party makes `randomMove` return null the moment the designated player flips (A,A,B,B,…),
+ * which a naive loop misreads as "game over".
+ */
+export function actorFor(s: BetBlackjackState): Party {
+  if (s.phase === "player") return getPlayerParty(s.round);
+  if (s.phase === "dealer") return getDealerParty(s.round);
+  return getPlayerParty(s.round + 1n);
+}
+
+/**
+ * A fixed-amount bet move for the betting (`round_over`) phase, clamped to
+ * [MIN_BET, maxBet]. Returns null when the table can no longer fund the minimum bet (the
+ * game is effectively terminal) or when called outside the betting phase.
+ */
+export function fixedBetMove(
+  amount: number,
+  s: BetBlackjackState,
+): BetBlackjackMove | null {
+  if (s.phase !== "round_over") return null;
+  const cap = maxBet(s);
+  if (cap < MIN_BET) return null;
+  const amt = Math.max(Number(MIN_BET), Math.min(Math.floor(amount), Number(cap)));
+  return { action: "bet", amount: amt };
+}
+
 export class BlackjackBetProtocol implements protocols.Protocol<
   BetBlackjackState,
   BetBlackjackMove

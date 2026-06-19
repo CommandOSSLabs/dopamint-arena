@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { core, proof, protocols, bytesToHex } from "sui-tunnel-ts";
+import { core, proof, bytesToHex } from "sui-tunnel-ts";
 import type { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import type { Transaction } from "@mysten/sui/transactions";
 import { getControlPlaneClient, type RegisterSessionResult } from "@/backend/controlPlane";
@@ -19,10 +19,22 @@ import {
   getSuiClient,
   botBalances,
   fundBots,
+  transferBetweenBots,
   type BotIdentity,
 } from "@/games/blackjack/app/lib/bjBots";
+import {
+  BlackjackBetProtocol,
+  actorFor,
+  fixedBetMove,
+  BET_OPTIONS,
+  MIN_BET,
+  type BetBlackjackState,
+} from "@/games/blackjack/app/lib/bjBetProtocol";
 
-type State = protocols.BlackjackState;
+// Re-export so the page imports bet presets from the hook (its single source of game config).
+export { BET_OPTIONS, MIN_BET };
+
+type State = BetBlackjackState;
 
 export type BotPhase =
   | "idle"
@@ -96,9 +108,18 @@ export interface BlackjackBotGame {
   digests: BotDigests;
   balances: { a: bigint; b: bigint };
   auto: boolean;
+  /** True while a rebalance transfer is in flight (disables the control). */
+  rebalancing: boolean;
   maxRounds: number;
   setMaxRounds: (n: number) => void;
+  /** Per-round bet (chips) the bots wager each hand; chosen before play, applied all session. */
+  bet: number;
+  setBet: (n: number) => void;
+  /** Bet denominations offered in the UI (chips). */
+  betOptions: number[];
   fund: () => void;
+  /** Even out the two bots' wallet balances: move half the difference richer→poorer. */
+  rebalance: () => void;
   startAuto: () => void;
   stopAuto: () => void;
   newGame: () => void;
@@ -106,14 +127,20 @@ export interface BlackjackBotGame {
   pollBalances: (prev?: { a: bigint; b: bigint }) => Promise<void>;
 }
 
-// Each bot stakes this much into the tunnel per game.
-const STAKE = 500n;
+// Buy-in (bankroll) each bot brings to the table per game, in MIST. Chips are 1:1 with MIST
+// (1 SUI = 1,000,000,000 chips), so this is also the starting chip stack. Sized so the table
+// can sustain the full rounds-per-tunnel target before either side is drained: 0.005 SUI =
+// 5,000,000 chips covers thousands of rounds at the offered bet sizes.
+const BUY_IN = 5_000_000n;
 // Animation cadence: one move surfaced to the view per tick.
 const STEP_MS = 900;
-// A bot must hold at least this much (gas for its txs + the STAKE deposit) to safely play
-// another game; below it, auto-play stops rather than risk a mid-game tx running out of gas
-// and leaving a tunnel open. ~0.02 SUI (a game costs the busier bot ~0.01 SUI of gas).
-const MIN_PLAY_MIST = 20_000_000n;
+// The bot that opens a tunnel funds BOTH seats from its own gas coin, so it must hold at least
+// 2×BUY_IN (both deposits) plus gas to safely play another game; below it, auto-play stops
+// rather than risk a mid-game tx running out of gas and leaving a tunnel open. The funder
+// alternates each game (see runGame) so this drain stays balanced across both bots.
+const MIN_PLAY_MIST = 2n * BUY_IN + 20_000_000n;
+// Default per-round bet (chips) until the user picks one.
+const DEFAULT_BET = 100;
 // Pause between auto-played games. Long enough that the "settling…"/done state for the just-
 // finished tunnel stays briefly visible before the next tunnel opens.
 const NEXT_GAME_MS = 2500;
@@ -155,7 +182,7 @@ const EMPTY_VIEW: BlackjackBotView = {
 };
 
 export function useBlackjackBot(): BlackjackBotGame {
-  const proto = useMemo(() => new protocols.BlackjackProtocol(), []);
+  const proto = useMemo(() => new BlackjackBetProtocol(), []);
   const bots = useMemo(() => loadOrCreateBots(), []);
   const client = useMemo(() => getSuiClient(), []);
 
@@ -172,7 +199,9 @@ export function useBlackjackBot(): BlackjackBotGame {
     b: 0n,
   });
   const [auto, setAuto] = useState(false);
+  const [rebalancing, setRebalancing] = useState(false);
   const [maxRounds, setMaxRoundsState] = useState(DEFAULT_MAX_ROUNDS);
+  const [bet, setBetState] = useState(DEFAULT_BET);
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const nextRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -181,7 +210,12 @@ export function useBlackjackBot(): BlackjackBotGame {
   const runRef = useRef<() => void>(() => {});
   // Mirror of `maxRounds` so the play loop reads the live target without rebuilding runGame.
   const maxRoundsRef = useRef(DEFAULT_MAX_ROUNDS);
-  
+  // Mirror of `bet` so the play loop reads the live wager without rebuilding runGame.
+  const betRef = useRef(DEFAULT_BET);
+  // Counts games started this session so the create_and_fund signer alternates between bots —
+  // the funder pays both deposits, so alternating keeps that drain balanced across both wallets.
+  const gamesRef = useRef(0);
+
   const sessionRef = useRef<RegisterSessionResult | null>(null);
   const moveCountRef = useRef(0);
   const actionsRef = useRef(0);
@@ -218,6 +252,17 @@ export function useBlackjackBot(): BlackjackBotGame {
     );
     maxRoundsRef.current = clamped;
     setMaxRoundsState(clamped);
+  }, []);
+
+  // Clamp the per-round bet to >= MIN_BET. The per-round upper bound is the table max (the
+  // poorer side's balance) and is enforced when the bet move is built, so no fixed cap here.
+  const setBet = useCallback((n: number) => {
+    const clamped = Math.max(
+      Number(MIN_BET),
+      Math.floor(Number.isFinite(n) ? n : DEFAULT_BET),
+    );
+    betRef.current = clamped;
+    setBetState(clamped);
   }, []);
 
   const stopTimer = useCallback(() => {
@@ -339,13 +384,17 @@ export function useBlackjackBot(): BlackjackBotGame {
         const partyA = { address: bots.a.address, publicKey: bots.a.publicKey };
         const partyB = { address: bots.b.address, publicKey: bots.b.publicKey };
 
-        // 1) open + fund (both stakes) + activate in ONE tx: the player bot signs a single
-        // create_and_fund that funds both parties from its own gas coin. The dealer bot signs
-        // nothing on-chain (needs no SUI); the tunnel is active the moment this lands.
+        // 1) open + fund (both buy-ins) + activate in ONE tx: one bot signs a single
+        // create_and_fund that funds both seats from its own gas coin. The funder ALTERNATES
+        // each game — it pays both buy-ins upfront but only its own seat returns at close, so
+        // alternating keeps that transfer from steadily draining one wallet into the other over
+        // a long auto-play session. The tunnel is active the moment this lands.
+        const funder = gamesRef.current % 2 === 0 ? bots.a : bots.b;
+        gamesRef.current += 1;
         setPhase("opening");
         const createRes = await submit(
-          buildCreateAndFundTx(partyA, partyB, STAKE),
-          bots.a.keypair,
+          buildCreateAndFundTx(partyA, partyB, BUY_IN),
+          funder.keypair,
         );
         const tunnelId = parseTunnelId(createRes.objectChanges);
         if (!tunnelId) throw new Error("could not find created Tunnel id");
@@ -371,7 +420,7 @@ export function useBlackjackBot(): BlackjackBotGame {
           bots.b.coreKey,
           bots.a.address,
           bots.b.address,
-          { a: STAKE, b: STAKE },
+          { a: BUY_IN, b: BUY_IN },
         );
 
         // Accumulate every co-signed update into a transcript; its Merkle root is anchored
@@ -416,9 +465,17 @@ export function useBlackjackBot(): BlackjackBotGame {
               if (steps++ >= MAX_STEPS) {
                 throw new Error("self-play exceeded step bound");
               }
-              const by: protocols.Party =
-                tunnel.state.phase === "dealer" ? "B" : "A";
-              const move = proto.randomMove(tunnel.state, by, Math.random);
+              // Move as whoever the protocol expects this phase — the player alternates
+              // A,A,B,B across rounds, so a fixed party would make randomMove return null the
+              // moment it flips, which a naive loop misreads as "game over" (it would settle
+              // after ~2 rounds). In the betting phase, place the chosen fixed bet; otherwise
+              // let the protocol pick (basic strategy for the player, deterministic dealer).
+              const cur = tunnel.state;
+              const by = actorFor(cur);
+              const move =
+                cur.phase === "round_over"
+                  ? fixedBetMove(betRef.current, cur)
+                  : proto.randomMove(cur, by, Math.random);
               if (!move) {
                 stopTimer();
                 resolve();
@@ -478,10 +535,10 @@ export function useBlackjackBot(): BlackjackBotGame {
 
         setView(viewFromState(tunnel.state));
 
-        // Result from final balanceA vs STAKE (A is the player bot).
+        // Result from final balanceA vs the buy-in (A is the player bot).
         const finalA = tunnel.state.balanceA;
         const finalResult: BlackjackResult =
-          finalA > STAKE ? "win" : finalA < STAKE ? "lose" : "push";
+          finalA > BUY_IN ? "win" : finalA < BUY_IN ? "lose" : "push";
         setResult(finalResult);
 
         // 5) settle: anchor the transcript root AND distribute funds via sponsored close, or fallback.
@@ -590,6 +647,35 @@ export function useBlackjackBot(): BlackjackBotGame {
     setTunnels([]);
   }, []);
 
+  // Even out the two bots' wallet balances by moving half the difference from the richer bot to
+  // the poorer one (the richer bot signs its own transfer). Over an auto-play session the funder
+  // alternates but win/loss swings still skew the wallets; this lets the user square them up so
+  // neither bot drifts below the buy-in. Mirrors tic-tac-toe's bot rebalance.
+  const rebalance = useCallback(() => {
+    void (async () => {
+      setError(null);
+      const bal = balancesRef.current;
+      const fromA = bal.a >= bal.b;
+      const from = fromA ? bots.a : bots.b;
+      const to = fromA ? bots.b : bots.a;
+      const diff = fromA ? bal.a - bal.b : bal.b - bal.a;
+      // Don't bother (or pay gas) for trivial gaps — under ~0.004 SUI they're already even enough.
+      if (diff < 4_000_000n) {
+        setError("Bots are already balanced.");
+        return;
+      }
+      setRebalancing(true);
+      try {
+        await transferBetweenBots(client, from, to, Number(diff / 2n));
+        await refreshBalances();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setRebalancing(false);
+      }
+    })();
+  }, [bots, client, refreshBalances]);
+
   return {
     view,
     result,
@@ -601,9 +687,14 @@ export function useBlackjackBot(): BlackjackBotGame {
     digests,
     balances,
     auto,
+    rebalancing,
     maxRounds,
     setMaxRounds,
+    bet,
+    setBet,
+    betOptions: [...BET_OPTIONS],
     fund,
+    rebalance,
     startAuto,
     stopAuto,
     newGame,

@@ -110,10 +110,13 @@ export default function PlayerVsDealer() {
   const prevRoundRef = useRef<number>(-1);
   const prevPhaseRef = useRef<string>("");
   const prevBalanceRef = useRef<number>(-1);
-  const roundsEndRef = useRef<HTMLDivElement>(null);
+  const roundsListRef = useRef<HTMLDivElement>(null);
 
+  // Scroll the rounds log via its own scrollTop, not scrollIntoView — the latter also scrolls
+  // ancestor scroll containers (the desktop window), yanking the whole window down.
   useEffect(() => {
-    roundsEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    const el = roundsListRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
   }, [rounds.length]);
 
   useEffect(() => {
@@ -471,7 +474,10 @@ export default function PlayerVsDealer() {
             <div className="px-3 py-1.5 text-[10px] font-extrabold uppercase tracking-widest text-[#d4af37] font-serif border-b border-amber-950/70">
               Rounds
             </div>
-            <div className="max-h-[250px] overflow-y-auto px-2 py-1.5 flex flex-col gap-0.5 scrollbar-thin">
+            <div
+              ref={roundsListRef}
+              className="max-h-[250px] overflow-y-auto px-2 py-1.5 flex flex-col gap-0.5 scrollbar-thin"
+            >
               {rounds.map((r, i) => {
                 const style = OUTCOME_STYLE[r.outcome];
                 return (
@@ -492,7 +498,6 @@ export default function PlayerVsDealer() {
                   </div>
                 );
               })}
-              <div ref={roundsEndRef} />
             </div>
           </div>
         )}
