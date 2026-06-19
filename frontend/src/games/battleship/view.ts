@@ -23,6 +23,8 @@ export interface BattleshipView {
   enemyCells: CellView[];
   /** Per-ship status of YOUR fleet (intact / damaged / sunk), in fleet order. */
   fleet: ShipStatus[];
+  /** Placements of your ships, to render detailed sprites on your board. */
+  placements: readonly Placement[];
   /** Confirmed hits you've landed / taken (each fleet sinks at 17). */
   hitsOnEnemy: number;
   hitsOnYou: number;
@@ -94,6 +96,7 @@ export function deriveBattleshipView(
     ownCells,
     enemyCells,
     fleet: fleetStatus(myPlacements, hitOnMeCells),
+    placements: myPlacements,
     hitsOnEnemy,
     hitsOnYou: hitsOnMe,
     yourShots: myShots.length,

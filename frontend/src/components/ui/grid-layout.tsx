@@ -40,6 +40,9 @@ export interface GridItemHandle {
   dragHandleProps: GridDragHandleProps;
   /** True while this item is being dragged or resized. */
   isActive: boolean;
+  /** True when this item is rendered detached (see `styleOverride`): it's positioned
+   *  by the caller, kept out of grid flow, and has no grid drag/resize wired. */
+  detached: boolean;
 }
 
 /** A responsive rule: at container widths ≥ `minWidth`, use `cols` columns. */
@@ -61,6 +64,14 @@ export interface GridLayoutProps {
   rowHeight?: number;
   gap?: number;
   className?: string;
+  /**
+   * Per-item escape hatch: return a style to render that item DETACHED — absolutely
+   * positioned by you (e.g. a floating window) or hidden (`display:none` for a
+   * minimized one) — instead of in the grid. Detached items stay mounted but are
+   * excluded from grid layout math and get no grid drag/resize. Return null to keep
+   * an item in the grid. This lets a window minimize/float without unmounting.
+   */
+  styleOverride?: (item: GridItem) => CSSProperties | null;
 }
 
 /** Live pixel override for the item under the cursor (bypasses cell snapping). */
@@ -96,6 +107,7 @@ export function GridLayout({
   rowHeight = 64,
   gap = 10,
   className,
+  styleOverride,
 }: GridLayoutProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
@@ -105,6 +117,19 @@ export function GridLayout({
   // Mirror the latest layout so window event handlers never read a stale closure.
   const layoutRef = useRef(layout);
   layoutRef.current = layout;
+
+  // Detached items (floating/minimized) stay mounted but are positioned by the
+  // caller and kept OUT of grid math — docked items still pack among themselves.
+  const overrideRef = useRef(styleOverride);
+  overrideRef.current = styleOverride;
+  const isDetached = (item: GridItem) => overrideRef.current?.(item) != null;
+  const dockedOnly = (arr: GridItem[]) => arr.filter((i) => !isDetached(i));
+  /** Re-attach detached items (unchanged) after running grid math on the docked subset. */
+  const mergeDetached = (dockedNext: GridItem[]) => [
+    ...dockedNext,
+    ...layoutRef.current.filter((i) => isDetached(i)),
+  ];
+  const gridItems = layout.filter((i) => !isDetached(i));
 
   // Active column count: the widest breakpoint whose minWidth fits the container.
   const activeCols = useMemo(() => {
@@ -121,7 +146,9 @@ export function GridLayout({
   useEffect(() => {
     if (lastColsRef.current === activeCols) return;
     lastColsRef.current = activeCols;
-    onLayoutChange(fitToColumns(layoutRef.current, activeCols));
+    onLayoutChange(
+      mergeDetached(fitToColumns(dockedOnly(layoutRef.current), activeCols)),
+    );
   }, [activeCols, onLayoutChange]);
 
   // z-order: interacting with a window raises it above its neighbours.
@@ -152,7 +179,7 @@ export function GridLayout({
     width: box.w * unitWidth - gap,
     height: box.h * rowHeight - gap,
   });
-  const canvasHeight = (bottom(layout) + 1) * rowHeight;
+  const canvasHeight = (bottom(gridItems) + 1) * rowHeight;
 
   const startInteraction = useCallback(
     (
@@ -163,7 +190,7 @@ export function GridLayout({
     ) => {
       if (e.button !== 0) return;
       const it = layoutRef.current.find((i) => i.id === id);
-      if (!it || it.static) return;
+      if (!it || it.static || isDetached(it)) return;
       e.preventDefault();
       e.stopPropagation();
       bringToFront(id);
@@ -205,13 +232,13 @@ export function GridLayout({
           const tRow = Math.max(0, origin.y + Math.round(dyPx / rowHeight));
           if (tCol !== ph.x || tRow !== ph.y) {
             const next = moveItem(
-              layoutRef.current,
+              dockedOnly(layoutRef.current),
               id,
               tCol,
               tRow,
               activeCols,
             );
-            onLayoutChange(next);
+            onLayoutChange(mergeDetached(next));
             const landed = next.find((i) => i.id === id);
             if (landed)
               ph = { x: landed.x, y: landed.y, w: landed.w, h: landed.h };
@@ -233,17 +260,23 @@ export function GridLayout({
             axis === "y"
               ? origin.w
               : clamp(
-                  origin.w + Math.round(dxPx / unit),
-                  minW,
-                  activeCols - origin.x,
-                );
+                origin.w + Math.round(dxPx / unit),
+                minW,
+                activeCols - origin.x,
+              );
           const tH =
             axis === "x"
               ? origin.h
               : Math.max(minH, origin.h + Math.round(dyPx / rowHeight));
           if (tW !== ph.w || tH !== ph.h) {
-            const next = resizeItem(layoutRef.current, id, tW, tH, activeCols);
-            onLayoutChange(next);
+            const next = resizeItem(
+              dockedOnly(layoutRef.current),
+              id,
+              tW,
+              tH,
+              activeCols,
+            );
+            onLayoutChange(mergeDetached(next));
             const resized = next.find((i) => i.id === id);
             if (resized)
               ph = { x: resized.x, y: resized.y, w: resized.w, h: resized.h };
@@ -253,17 +286,17 @@ export function GridLayout({
             axis === "y"
               ? origin.w * unit - gap
               : clamp(
-                  origin.w * unit - gap + dxPx,
-                  minW * unit - gap,
-                  (activeCols - origin.x) * unit - gap,
-                );
+                origin.w * unit - gap + dxPx,
+                minW * unit - gap,
+                (activeCols - origin.x) * unit - gap,
+              );
           const liveH =
             axis === "x"
               ? origin.h * rowHeight - gap
               : Math.max(
-                  minH * rowHeight - gap,
-                  origin.h * rowHeight - gap + dyPx,
-                );
+                minH * rowHeight - gap,
+                origin.h * rowHeight - gap + dyPx,
+              );
           setLive({ id, mode, dx: 0, dy: 0, w: liveW, h: liveH });
         }
       };
@@ -280,7 +313,7 @@ export function GridLayout({
         setPlaceholder(null);
         // Float everything up to close the gaps the interaction opened; the
         // active frame eases from its free pixel position into the settled cell.
-        onLayoutChange(compact(layoutRef.current));
+        onLayoutChange(mergeDetached(compact(dockedOnly(layoutRef.current))));
       };
       window.addEventListener("pointermove", onMove);
       window.addEventListener("pointerup", onUp);
@@ -291,12 +324,26 @@ export function GridLayout({
   const onHandleKeyDown = useCallback(
     (e: ReactKeyboardEvent, id: string) => {
       const it = layoutRef.current.find((i) => i.id === id);
-      if (!it || it.static) return;
+      if (!it || it.static || isDetached(it)) return;
       const resize = e.shiftKey;
       const apply = (dx: number, dy: number) =>
-        resize
-          ? resizeItem(layoutRef.current, id, it.w + dx, it.h + dy, activeCols)
-          : moveItem(layoutRef.current, id, it.x + dx, it.y + dy, activeCols);
+        mergeDetached(
+          resize
+            ? resizeItem(
+              dockedOnly(layoutRef.current),
+              id,
+              it.w + dx,
+              it.h + dy,
+              activeCols,
+            )
+            : moveItem(
+              dockedOnly(layoutRef.current),
+              id,
+              it.x + dx,
+              it.y + dy,
+              activeCols,
+            ),
+        );
 
       let next: GridLayoutValue | null = null;
       switch (e.key) {
@@ -337,32 +384,42 @@ export function GridLayout({
       {placeholder && (
         <div
           aria-hidden
-          className="pointer-events-none absolute rounded-xl border-2 border-dashed border-primary/40 bg-primary/10 transition-all duration-150 ease-out"
+          className="pointer-events-none absolute rounded-none border-2 border-dashed border-primary/40 bg-primary/10 transition-all duration-150 ease-out"
           style={{ ...pixelBox(placeholder), zIndex: 0 }}
         />
       )}
 
       {layout.map((item) => {
-        const isActive = live?.id === item.id;
-        const style: CSSProperties = {
-          ...pixelBox(item),
-          zIndex: zOrder[item.id] ?? 1,
-          transform: "translate3d(0,0,0)",
-          transition: isActive ? "none" : FRAME_TRANSITION,
-        };
-        if (isActive && live) {
-          if (live.mode === "drag") {
-            style.transform = `translate3d(${live.dx}px, ${live.dy}px, 0)`;
-            style.willChange = "transform";
-          } else {
-            style.width = live.w;
-            style.height = live.h;
-            style.willChange = "width, height";
+        // Detached (floating/minimized): caller positions it via styleOverride; it
+        // stays mounted but is out of grid flow, with no grid drag/resize.
+        const override = styleOverride?.(item) ?? null;
+        const detached = override != null;
+        const isActive = !detached && live?.id === item.id;
+        let style: CSSProperties;
+        if (detached) {
+          style = { zIndex: zOrder[item.id] ?? 1, ...override };
+        } else {
+          style = {
+            ...pixelBox(item),
+            zIndex: zOrder[item.id] ?? 1,
+            transform: "translate3d(0,0,0)",
+            transition: isActive ? "none" : FRAME_TRANSITION,
+          };
+          if (isActive && live) {
+            if (live.mode === "drag") {
+              style.transform = `translate3d(${live.dx}px, ${live.dy}px, 0)`;
+              style.willChange = "transform";
+            } else {
+              style.width = live.w;
+              style.height = live.h;
+              style.willChange = "width, height";
+            }
           }
         }
 
         const handle: GridItemHandle = {
           isActive: !!isActive,
+          detached,
           dragHandleProps: {
             onPointerDown: (e) => startInteraction(e, item.id, "drag"),
             onKeyDown: (e) => onHandleKeyDown(e, item.id),
@@ -376,12 +433,12 @@ export function GridLayout({
         return (
           <div
             key={item.id}
-            className="absolute"
+            className={detached ? undefined : "absolute"}
             style={style}
-            onPointerDown={() => bringToFront(item.id)}
+            onPointerDown={detached ? undefined : () => bringToFront(item.id)}
           >
             {renderItem(item, handle)}
-            {!item.static && (
+            {!item.static && !detached && (
               <>
                 {/* Right edge → width only. */}
                 <div
