@@ -32,3 +32,6 @@ that depends on them. An ADR captures the decision and the reasoning so the
 - [0008](0008-quantum-poker-protocol-zk.md) — Quantum Poker: protocol-first
   tunnel model, per-slot asymmetric commit-reveal, n-deck/burn/Five-of-a-Kind
   rules, and optional ZK dispute adapter.
+- [0009](0009-super-auto-pets-on-tunnel.md) — Super Auto Pets on the tunnel:
+  deterministic trigger-event battle, commit-reveal hidden teams + fair shop,
+  session-channel settlement, phased de-scope.
