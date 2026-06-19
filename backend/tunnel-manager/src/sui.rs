@@ -18,13 +18,19 @@ use anyhow::{anyhow, Context};
 use base64::Engine;
 use sui_crypto::ed25519::Ed25519PrivateKey;
 use sui_crypto::SuiSigner;
-use sui_sdk_types::{Address, Digest, Identifier, Transaction, TypeTag, UserSignature};
+use sui_sdk_types::{
+    Address, Digest, Identifier, Transaction, TransactionExpiration, TypeTag, UserSignature,
+};
 use sui_transaction_builder::{Function, ObjectInput, TransactionBuilder};
 
 /// 0x6 system Clock — shared, first shared at version 1.
 const CLOCK_ADDRESS: &str = "0x0000000000000000000000000000000000000000000000000000000000000006";
 /// Fixed gas budget for a single cooperative close (one MoveCall, two shared objects).
 const GAS_BUDGET: u64 = 100_000_000;
+/// Testnet genesis checkpoint digest — the chain identifier `ValidDuring` uses for cross-chain
+/// replay protection (its first 4 bytes are the `4c78adac` testnet chain id). SIP-58
+/// address-balance gas requires this in the transaction expiration.
+const CHAIN_DIGEST_B58: &str = "69WiPg3DAQiwdxfncX6wYQ2siKwAe6L9BZthQea3JNMD";
 
 /// Fields for one on-chain `close_cooperative_with_root`, mapped from the SDK's
 /// SettlementWithRoot (ADR-0002). Balances/timestamp already parsed to `u64`; sigs and
@@ -157,6 +163,8 @@ impl SuiSettler {
     pub async fn submit_close(&self, args: CloseArgs) -> anyhow::Result<String> {
         let tunnel = self.resolve_shared(&args.tunnel_id).await?;
         let gas_price = self.reference_gas_price().await?;
+        let epoch = self.current_epoch().await?;
+        let chain = Digest::from_base58(CHAIN_DIGEST_B58).context("chain digest")?;
         let tx = build_close_tx(
             self.package_id,
             self.coin_type.clone(),
@@ -164,6 +172,9 @@ impl SuiSettler {
             &args,
             &tunnel,
             gas_price,
+            epoch,
+            chain,
+            nonce_from_tunnel(&args.tunnel_id),
         )?;
         // Verify-before-gas: reject a settlement that won't land before sponsoring it (ADR-0007).
         self.dry_run(&tx).await?;
@@ -239,6 +250,17 @@ impl SuiSettler {
             .and_then(|s| s.parse().ok())
             .or_else(|| r.as_u64())
             .ok_or_else(|| anyhow!("bad reference gas price: {r}"))
+    }
+
+    /// Current epoch — required for the `ValidDuring` expiration on SIP-58 address-balance gas.
+    async fn current_epoch(&self) -> anyhow::Result<u64> {
+        let r = self
+            .rpc("suix_getLatestSuiSystemState", serde_json::json!([]))
+            .await?;
+        r.pointer("/epoch")
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse().ok())
+            .ok_or_else(|| anyhow!("no epoch in latest system state"))
     }
 
     async fn execute(&self, tx: &Transaction, sig: &UserSignature) -> anyhow::Result<String> {
@@ -364,6 +386,14 @@ pub fn spawn_event_indexer(state: crate::state::SharedState) {
 /// placeholder is added to pass that check, then cleared before returning. The caller must
 /// sign the returned tx before use — clearing before signing is required since the sig covers
 /// `gas_payment`. Unit-tested.
+/// A stable per-tunnel nonce for the `ValidDuring` expiration: the low 4 bytes of the tunnel id.
+/// Exactly one cooperative close per tunnel, so this is unique per settlement.
+fn nonce_from_tunnel(tunnel_id: &str) -> u32 {
+    let h = tunnel_id.trim_start_matches("0x");
+    let tail = &h[h.len().saturating_sub(8)..];
+    u32::from_str_radix(tail, 16).unwrap_or(0)
+}
+
 fn build_close_tx(
     package_id: Address,
     coin_type: TypeTag,
@@ -371,6 +401,9 @@ fn build_close_tx(
     args: &CloseArgs,
     tunnel: &SharedRef,
     gas_price: u64,
+    epoch: u64,
+    chain: Digest,
+    nonce: u32,
 ) -> anyhow::Result<Transaction> {
     anyhow::ensure!(
         args.transcript_root.len() == 32,
@@ -412,6 +445,19 @@ fn build_close_tx(
     tb.set_sender(sender);
     tb.set_gas_budget(GAS_BUDGET);
     tb.set_gas_price(gas_price.max(1));
+    // SIP-58 address-balance gas REQUIRES a `ValidDuring` expiration: with no gas-coin object
+    // versions to mutate, the epoch-bounded window + nonce is what gives the FundsWithdrawal its
+    // replay protection. Without it the node rejects the withdrawal ("Invalid withdraw
+    // reservation"). min_epoch == max_epoch == current epoch (sui-sdk-types: "must equal current
+    // epoch"); `chain` is the genesis digest (cross-chain replay guard).
+    tb.set_expiration(TransactionExpiration::ValidDuring {
+        min_epoch: Some(epoch),
+        max_epoch: Some(epoch),
+        min_timestamp: None,
+        max_timestamp: None,
+        chain,
+        nonce,
+    });
     let mut tx = tb.try_build().map_err(|e| anyhow!("build close tx: {e}"))?;
     // Empty objects => FundsWithdrawal from sender's address balance (SIP-58).
     tx.gas_payment.objects.clear();
@@ -495,6 +541,9 @@ mod tests {
             &args_with_root(32),
             &tunnel_ref(),
             1000,
+            1135,
+            Digest::from_base58(CHAIN_DIGEST_B58).unwrap(),
+            0,
         );
         assert!(tx.is_ok(), "valid settlement should build: {:?}", tx.err());
     }
@@ -510,6 +559,9 @@ mod tests {
             &args_with_root(31),
             &tunnel_ref(),
             1000,
+            1135,
+            Digest::from_base58(CHAIN_DIGEST_B58).unwrap(),
+            0,
         )
         .unwrap_err()
         .to_string();
@@ -529,6 +581,9 @@ mod tests {
             &args_with_root(32),
             &tunnel_ref(),
             1000,
+            1135,
+            Digest::from_base58(CHAIN_DIGEST_B58).unwrap(),
+            0,
         )
         .expect("builds");
         assert!(
@@ -626,6 +681,9 @@ mod tests {
             &args_with_root(32),
             &tunnel_ref(),
             1000,
+            1135,
+            Digest::from_base58(CHAIN_DIGEST_B58).unwrap(),
+            0,
         )
         .unwrap();
         let sig = sk.sign_transaction(&tx).unwrap();
