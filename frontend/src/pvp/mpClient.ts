@@ -21,7 +21,7 @@ export interface MatchInfo {
 
 /** A peer message tunneled through the relay (everything that isn't a MOVE/ACK frame). */
 export type PeerMessage =
-  | { t: "hello"; ephemeralPubkey: string }
+  | { t: "hello"; ephemeralPubkey: string; stake?: string }
   | { t: "open"; tunnelId: string }
   | { t: "ready" }
   | { t: "endMatch" }

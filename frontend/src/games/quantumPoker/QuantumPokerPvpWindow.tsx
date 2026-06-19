@@ -1,12 +1,15 @@
-import type { CSSProperties } from "react";
+import { useState, type CSSProperties } from "react";
 import type { Party } from "sui-tunnel-ts/protocol/Protocol";
 import type { PokerState } from "sui-tunnel-ts/protocol/quantumPoker";
 import type { GameWindowProps } from "../types";
 import {
   HAND_CAP,
+  MIN_TOP_UP_SUI,
   STAKE_BALANCE,
+  stakePerSeatMist,
   usePvpQuantumPoker,
 } from "./usePvpQuantumPoker";
+import { useBotQuantumPoker } from "./useBotQuantumPoker";
 
 const SUITS = ["♠", "♥", "♦", "♣"] as const;
 const RANKS = ["2", "3", "4", "5", "6", "7", "8", "9", "T", "J", "Q", "K", "A"];
@@ -47,7 +50,8 @@ const EYEBROW = "wal-mono uppercase tracking-[0.14em]";
 const BTN =
   "min-w-[3.25rem] max-w-[8rem] flex-1 whitespace-nowrap rounded-md px-2 py-1 text-[11px] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--qp-lilac)]/60";
 
-const fmt = (n: bigint): string => n.toLocaleString("en-US");
+/** Chip amounts are valued at 1 mist = $1 in the table display. */
+const fmt = (n: bigint): string => `$${n.toLocaleString("en-US")}`;
 
 function cardText(card: number): string {
   return `${RANKS[card % 13]}${SUITS[Math.floor(card / 13)]}`;
@@ -174,13 +178,26 @@ function Seat({
 
 /** Heads-up Quantum Poker vs a real opponent: matchmaking + relay co-sign + on-chain stakes. */
 export function QuantumPokerPvpWindow(_props: GameWindowProps) {
-  const g = usePvpQuantumPoker();
+  const pvp = usePvpQuantumPoker();
+  const bot = useBotQuantumPoker();
+  // One active lane at a time: the bot lane once started, else the PvP lane (idle → the lobby).
+  const onBot = bot.status !== "idle";
+  const g = onBot ? bot : pvp;
+  // Optional stake top-up (SUI) entered in the lobby; threaded into the chosen lane.
+  const [topUp, setTopUp] = useState("");
 
-  if (g.status === "idle") {
+  if (!onBot && pvp.status === "idle") {
+    const lobbyBtn =
+      "rounded-lg px-4 py-2 text-[13px] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--qp-lilac)]/60 disabled:opacity-40";
+    const parsed = topUp.trim() ? Number(topUp) : undefined;
+    const invalid =
+      parsed != null && (!Number.isFinite(parsed) || parsed < MIN_TOP_UP_SUI);
+    const stakeSui = invalid ? undefined : parsed; // undefined → default per seat
+    const perSeat = stakePerSeatMist(stakeSui);
     return (
       <div
         style={QP}
-        className="flex h-full flex-col items-center justify-center gap-3 bg-[var(--qp-ink)] p-5 text-center"
+        className="flex h-full flex-col items-center justify-center gap-4 bg-[var(--qp-ink)] p-5 text-center"
       >
         <div className="flex flex-col items-center gap-1">
           <span className={`${EYEBROW} text-[10px] text-[var(--qp-lilac)]`}>
@@ -188,23 +205,80 @@ export function QuantumPokerPvpWindow(_props: GameWindowProps) {
           </span>
           <h2 className="wal-doto text-lg text-slate-50">QUANTUM POKER</h2>
         </div>
-        <p className="max-w-[18rem] text-[12px] leading-relaxed text-slate-400">
-          Each seat stakes{" "}
-          <span className="wal-mono text-[var(--qp-gold)]">
-            {fmt(STAKE_BALANCE)}
-          </span>{" "}
-          on-chain. The deck is dealt by a two-party commit-reveal — no dealer —
-          and chips move off-chain over a Sui tunnel for up to{" "}
+        <p className="max-w-[19rem] text-[12px] leading-relaxed text-slate-400">
+          Dealerless two-party commit-reveal; chips move off-chain over a Sui
+          tunnel for up to{" "}
           <span className="wal-mono text-slate-200">{HAND_CAP.toString()}</span>{" "}
-          hands, paid out at cooperative close.
+          hands, settled at cooperative close.
         </p>
-        <button
-          type="button"
-          onClick={g.findMatch}
-          className="rounded-lg bg-[var(--qp-violet)] px-5 py-2 text-sm font-semibold text-white shadow-[0_0_24px_-6px_var(--qp-violet)] transition hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--qp-lilac)]/60"
-        >
-          Find match
-        </button>
+        <div className="flex w-full max-w-[20rem] flex-col gap-1 text-left">
+          <label
+            htmlFor="qp-topup"
+            className={`${EYEBROW} text-[9px] text-[var(--qp-lilac)]`}
+          >
+            stake top-up (SUI) · optional · split evenly
+          </label>
+          <input
+            id="qp-topup"
+            type="number"
+            min={MIN_TOP_UP_SUI}
+            step="0.1"
+            value={topUp}
+            onChange={(e) => setTopUp(e.target.value)}
+            placeholder={`default — ${fmt(STAKE_BALANCE)} / seat`}
+            className="rounded-md border border-white/15 bg-white/5 px-3 py-1.5 text-sm text-slate-100 placeholder:text-slate-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--qp-lilac)]/60"
+          />
+          <span className="wal-mono text-[10px] text-slate-500">
+            {invalid ? (
+              <span className="text-[var(--qp-coral)]">
+                min {MIN_TOP_UP_SUI} SUI
+              </span>
+            ) : (
+              <>
+                <span className="text-[var(--qp-gold)]">{fmt(perSeat)}</span>{" "}
+                per seat
+              </>
+            )}
+          </span>
+        </div>
+        <div className="flex w-full max-w-[20rem] flex-col gap-2">
+          <button
+            type="button"
+            disabled={invalid}
+            onClick={() => pvp.findMatch(stakeSui)}
+            className={`${lobbyBtn} bg-[var(--qp-violet)] text-white shadow-[0_0_24px_-6px_var(--qp-violet)] hover:brightness-110`}
+          >
+            Find match · vs player
+          </button>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              disabled={invalid}
+              onClick={() => bot.start("vsBot", stakeSui)}
+              className={`${lobbyBtn} flex-1 border border-[var(--qp-lilac)]/40 text-[var(--qp-lilac)] hover:bg-[var(--qp-lilac)]/10`}
+            >
+              Play a bot
+            </button>
+            <button
+              type="button"
+              disabled={invalid}
+              onClick={() => bot.start("auto", stakeSui)}
+              className={`${lobbyBtn} flex-1 border border-white/15 text-slate-300 hover:bg-white/5`}
+            >
+              Watch bots
+            </button>
+          </div>
+          {/* AUTO bots are self-custodial + persistent; seed them once from the wallet (separate
+              tap so the wallet popup fires) before Watch bots. Warm sessions can skip it. */}
+          <button
+            type="button"
+            disabled={invalid || bot.fundingBots}
+            onClick={() => bot.fundBots(stakeSui)}
+            className={`${lobbyBtn} border border-[var(--qp-lilac)]/30 text-slate-300 hover:bg-white/5 disabled:opacity-50`}
+          >
+            {bot.fundingBots ? "Funding bots…" : "Fund bots · for Watch bots"}
+          </button>
+        </div>
       </div>
     );
   }

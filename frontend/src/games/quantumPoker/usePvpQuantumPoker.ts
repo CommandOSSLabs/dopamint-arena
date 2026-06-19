@@ -38,8 +38,17 @@ import {
 } from "../../onchain/tunnelTx";
 import { coSignedToSettleRequest } from "../../backend/settleRequest";
 
-/** Locked per seat (MIST, split off the wallet's SUI gas coin — same lane as Tic-Tac-Toe). */
+/** Default locked per seat (MIST) when no top-up is entered. 1 mist = $1 in the table display. */
 export const STAKE_BALANCE = 10_000n;
+/** Minimum top-up (SUI) — the lobby enforces this on the optional input. */
+export const MIN_TOP_UP_SUI = 0.1;
+/** A top-up of X SUI is the TOTAL pot split evenly, so each seat stakes X/2 SUI (in MIST). No
+ *  top-up → the default per seat. In self-play one wallet funds both halves; in PvP each player
+ *  funds only their own seat (stakes may differ — the effective-stack rule handles uneven all-ins). */
+export function stakePerSeatMist(topUpSui?: number | null): bigint {
+  if (!topUpSui || topUpSui <= 0) return STAKE_BALANCE;
+  return BigInt(Math.round((topUpSui * 1e9) / 2));
+}
 /** Hands played per match before the on-chain settle; chips move off-chain in the tunnel
  *  between hands, and the loop ends early (→ "done") if a seat can't cover the next ante. */
 export const HAND_CAP = 50n;
@@ -91,7 +100,7 @@ export interface PvpQuantumPoker {
   legal: PvpPokerLegal | null;
   opponentWallet: string | null;
   error: string | null;
-  findMatch: () => void;
+  findMatch: (topUpSui?: number) => void;
   fold: () => void;
   check: () => void;
   call: () => void;
@@ -137,7 +146,7 @@ function makeInbox(channel: PvpChannel) {
     });
 }
 
-const BET_PHASES = new Set<PokerState["phase"]>([
+export const BET_PHASES = new Set<PokerState["phase"]>([
   "preflop_bet",
   "flop_bet",
   "turn_bet",
@@ -151,7 +160,7 @@ const BET_PHASES = new Set<PokerState["phase"]>([
  * act) are strictly serialized A-then-B. Betting is owned by `state.toAct`; `null` here means
  * either a betting phase (human-driven) or nothing to do.
  */
-function plumbingProposer(s: PokerState): Party | null {
+export function plumbingProposer(s: PokerState): Party | null {
   switch (s.phase) {
     case "commit":
       if (!s.commitA) return "A";
@@ -182,7 +191,7 @@ function balance(s: PokerState, p: Party): bigint {
   return p === "A" ? s.balanceA : s.balanceB;
 }
 
-function legalFor(s: PokerState, self: Party): PvpPokerLegal {
+export function legalFor(s: PokerState, self: Party): PvpPokerLegal {
   const other: Party = self === "A" ? "B" : "A";
   const diff = streetBet(s, other) - streetBet(s, self); // amount needed to match
   // Effective stack — neither seat can wager past the shorter stack (heads-up), so the bigger
@@ -333,172 +342,233 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
     if (dtRef.current?.state.phase === "hand_over") settleNowRef.current?.();
   }, []);
 
-  const findMatch = useCallback(() => {
-    if (!account) {
-      setError("connect a wallet first");
-      setStatus("error");
-      return;
-    }
-    const wallet = account.address;
-    const signExec = async (
-      tx: Parameters<typeof signAndExecute>[0]["transaction"],
-    ) => {
-      const r = await signAndExecute({ transaction: tx });
-      return { digest: r.digest };
-    };
-    const reads = client as unknown as Parameters<
-      typeof openAndFundSharedTunnel
-    >[0]["reads"];
-
-    (async () => {
-      try {
-        setError(null);
-        setStatus("matching");
-        const ephemeral: KeyPair = generateKeyPair();
-        const mp = new MpClient(
-          resolveMpWsUrl(resolveBackendUrl()),
-          wallet,
-          ephemeral,
-        );
-        mpRef.current = mp;
-        await mp.connect();
-        const match = await mp.quickMatch(GAME_ID);
-        selfPartyRef.current = match.role;
-        setRole(match.role);
-        setOpponentWallet(match.opponentWallet);
-
-        const channel = mp.channel(match.matchId);
-        const waitPeer = makeInbox(channel);
-        channelRef.current = channel;
-        endRef.current = false;
-        settlingRef.current = false;
-
-        // 1) exchange ephemeral pubkeys (the wallet is only the matchmaking label).
-        channel.sendPeer({
-          t: "hello",
-          ephemeralPubkey: toHex(ephemeral.publicKey),
-        });
-        const hello = await waitPeer<{ ephemeralPubkey: string }>("hello");
-        const oppPub = fromHex(hello.ephemeralPubkey);
-
-        // 2) fund on-chain: seat A opens + funds its seat in one tx (one popup) and announces;
-        //    seat B gated-deposits its own stake. Identical lane to Tic-Tac-Toe.
-        setStatus("funding");
-        let tunnelId: string;
-        if (match.role === "A") {
-          tunnelId = await openAndFundSharedTunnel({
-            reads,
-            signExec,
-            partyA: { address: wallet, publicKey: ephemeral.publicKey },
-            partyB: { address: match.opponentWallet, publicKey: oppPub },
-            amount: STAKE_BALANCE,
-          });
-          mp.announceTunnel(match.matchId, tunnelId);
-          channel.sendPeer({ t: "open", tunnelId });
-        } else {
-          const open = await waitPeer<{ tunnelId: string }>("open");
-          tunnelId = open.tunnelId;
-          await depositStake({ signExec, tunnelId, amount: STAKE_BALANCE });
-        }
-
-        // 3) build the distributed poker engine over the relay transport.
-        const proto = new QuantumPokerProtocol(HAND_CAP);
-        const backend = defaultBackend();
-        const self = makeEndpoint(backend, wallet, ephemeral, true);
-        const opp = makeEndpoint(
-          backend,
-          match.opponentWallet,
-          { publicKey: oppPub, scheme: ephemeral.scheme },
-          false,
-        );
-        const dt: PokerTunnel = new DistributedTunnel(
-          proto,
-          {
-            tunnelId,
-            self,
-            opponent: opp,
-            selfParty: match.role,
-            moveCodec: pokerMoveCodec,
-          },
-          channel.transport,
-          { a: STAKE_BALANCE, b: STAKE_BALANCE },
-        );
-        dtRef.current = dt;
-        driverRef.current = new QuantumPokerSeatDriver(match.role);
-        autoNonceRef.current = -1n;
-        const transcript = new Transcript(tunnelId);
-        transcriptRef.current = transcript;
-
-        // Single cooperative close — at match end, or early once a seat asked to settle. Guarded so
-        // both seats' triggers (onConfirmed, the button, the peer's endMatch) close exactly once.
-        const triggerSettle = () => {
-          if (settlingRef.current) return;
-          settlingRef.current = true;
-          setStatus("settling");
-          void settle(
-            dt,
-            match.role,
-            channel,
-            waitPeer,
-            reads,
-            signExec,
-            tunnelId,
-            transcript,
-            getControlPlaneClient(),
-          ).then(
-            () => setStatus("settled"),
-            (e) => {
-              setError(e instanceof Error ? e.message : String(e));
-              setStatus("error");
-            },
-          );
-        };
-        settleNowRef.current = triggerSettle;
-
-        // Opponent hit "Settle": stop dealing on our side too and close at the next clean boundary
-        // (or now, if we're already parked at hand_over).
-        void waitPeer("endMatch").then(() => {
-          endRef.current = true;
-          setEndRequested(true);
-          if (dt.state.phase === "hand_over") triggerSettle();
-        });
-
-        dt.onConfirmed = (u) => {
-          transcript.append(u);
-          sync();
-          report.pushLocalTxn({
-            id: moveIdRef.current++,
-            game: "quantum-poker",
-            time: new Date().toLocaleTimeString("en-GB"),
-            bot: "You",
-            type: proto.isTerminal(dt.state) ? "Win/Loss" : "Move",
-            status: "Success",
-            amount: "",
-          });
-          // Settle at match end (done), or early at this clean hand boundary once a seat asked to end.
-          if (
-            proto.isTerminal(dt.state) ||
-            (endRef.current && dt.state.phase === "hand_over")
-          ) {
-            triggerSettle();
-            return;
-          }
-          maybeAutoPropose();
-        };
-
-        // 4) readiness handshake — only AFTER the engine is wired, so seat A's first
-        //    commit can never reach seat B before B's frame handler exists.
-        sync();
-        setStatus("playing");
-        if (match.role === "A") await waitPeer("ready");
-        else channel.sendPeer({ t: "ready" });
-        maybeAutoPropose(); // seat A kicks off the commit; seat B no-ops until its turn
-      } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+  const findMatch = useCallback(
+    (topUpSui?: number) => {
+      if (!account) {
+        setError("connect a wallet first");
         setStatus("error");
+        return;
       }
-    })();
-  }, [account, client, signAndExecute, sync, maybeAutoPropose, report]);
+      const myStake = stakePerSeatMist(topUpSui);
+      const wallet = account.address;
+      const signExec = async (
+        tx: Parameters<typeof signAndExecute>[0]["transaction"],
+      ) => {
+        const r = await signAndExecute({ transaction: tx });
+        return { digest: r.digest };
+      };
+      const reads = client as unknown as Parameters<
+        typeof openAndFundSharedTunnel
+      >[0]["reads"];
+
+      (async () => {
+        try {
+          setError(null);
+          setStatus("matching");
+          const ephemeral: KeyPair = generateKeyPair();
+          const mp = new MpClient(
+            resolveMpWsUrl(resolveBackendUrl()),
+            wallet,
+            ephemeral,
+          );
+          mpRef.current = mp;
+          await mp.connect();
+          const match = await mp.quickMatch(GAME_ID);
+          selfPartyRef.current = match.role;
+          setRole(match.role);
+          setOpponentWallet(match.opponentWallet);
+
+          const channel = mp.channel(match.matchId);
+          const waitPeer = makeInbox(channel);
+          channelRef.current = channel;
+          endRef.current = false;
+          settlingRef.current = false;
+
+          // 1) exchange ephemeral pubkeys (the wallet is only the matchmaking label).
+          channel.sendPeer({
+            t: "hello",
+            ephemeralPubkey: toHex(ephemeral.publicKey),
+            stake: myStake.toString(),
+          });
+          const hello = await waitPeer<{
+            ephemeralPubkey: string;
+            stake?: string;
+          }>("hello");
+          const oppPub = fromHex(hello.ephemeralPubkey);
+          // Each seat funds its own stake; A and B may differ (effective-stack handles uneven all-ins).
+          const oppStake = hello.stake ? BigInt(hello.stake) : STAKE_BALANCE;
+          const aAmount = match.role === "A" ? myStake : oppStake;
+          const bAmount = match.role === "A" ? oppStake : myStake;
+
+          // 2) fund on-chain: seat A opens + funds its seat in one tx (one popup) and announces;
+          //    seat B gated-deposits its own stake. Identical lane to Tic-Tac-Toe.
+          setStatus("funding");
+          let tunnelId: string;
+          if (match.role === "A") {
+            tunnelId = await openAndFundSharedTunnel({
+              reads,
+              signExec,
+              partyA: { address: wallet, publicKey: ephemeral.publicKey },
+              partyB: { address: match.opponentWallet, publicKey: oppPub },
+              amount: aAmount,
+            });
+            mp.announceTunnel(match.matchId, tunnelId);
+            channel.sendPeer({ t: "open", tunnelId });
+          } else {
+            const open = await waitPeer<{ tunnelId: string }>("open");
+            tunnelId = open.tunnelId;
+            await depositStake({ signExec, tunnelId, amount: bAmount });
+          }
+
+          // 3) build the distributed poker engine over the relay transport.
+          const proto = new QuantumPokerProtocol(HAND_CAP);
+          const backend = defaultBackend();
+          const self = makeEndpoint(backend, wallet, ephemeral, true);
+          const opp = makeEndpoint(
+            backend,
+            match.opponentWallet,
+            { publicKey: oppPub, scheme: ephemeral.scheme },
+            false,
+          );
+          const dt: PokerTunnel = new DistributedTunnel(
+            proto,
+            {
+              tunnelId,
+              self,
+              opponent: opp,
+              selfParty: match.role,
+              moveCodec: pokerMoveCodec,
+            },
+            channel.transport,
+            { a: aAmount, b: bAmount },
+          );
+          dtRef.current = dt;
+          driverRef.current = new QuantumPokerSeatDriver(match.role);
+          autoNonceRef.current = -1n;
+          const transcript = new Transcript(tunnelId);
+          transcriptRef.current = transcript;
+
+          // Report off-chain actions to the backend so the live Total Actions / TPS climb (mirrors
+          // the bot lane). ONLY seat A reports — both peers confirm the same updates, so reporting
+          // from both would double-count. registerSession is best-effort + non-blocking.
+          const cp = getControlPlaneClient();
+          let statsSession: Awaited<
+            ReturnType<typeof cp.registerSession>
+          > | null = null;
+          let actionsAccum = 0;
+          let moveCount = 0;
+          let lastBeat = Date.now();
+          const flushHeartbeat = (force: boolean) => {
+            if (
+              !statsSession ||
+              (!force && (Date.now() - lastBeat < 1000 || actionsAccum === 0))
+            )
+              return;
+            const windowMs = Math.max(1, Date.now() - lastBeat);
+            const actionsDelta = actionsAccum;
+            actionsAccum = 0;
+            lastBeat = Date.now();
+            void cp
+              .sendHeartbeat(statsSession.sessionId, statsSession.statsToken, {
+                tunnelId,
+                nonce: String(moveCount),
+                actionsDelta,
+                windowMs,
+              })
+              .catch(() => {});
+          };
+          if (match.role === "A") {
+            cp.registerSession({
+              userAddress: wallet,
+              game: "quantum_poker",
+              tunnels: [
+                { tunnelId, partyA: wallet, partyB: match.opponentWallet },
+              ],
+            })
+              .then((s) => {
+                statsSession = s;
+              })
+              .catch((e) =>
+                console.error("[poker-pvp] registerSession failed:", e),
+              );
+          }
+
+          // Single cooperative close — at match end, or early once a seat asked to settle. Guarded so
+          // both seats' triggers (onConfirmed, the button, the peer's endMatch) close exactly once.
+          const triggerSettle = () => {
+            if (settlingRef.current) return;
+            settlingRef.current = true;
+            setStatus("settling");
+            flushHeartbeat(true); // upload remaining off-chain actions before close (seat A only)
+            void settle(
+              dt,
+              match.role,
+              channel,
+              waitPeer,
+              reads,
+              signExec,
+              tunnelId,
+              transcript,
+              getControlPlaneClient(),
+            ).then(
+              () => setStatus("settled"),
+              (e) => {
+                setError(e instanceof Error ? e.message : String(e));
+                setStatus("error");
+              },
+            );
+          };
+          settleNowRef.current = triggerSettle;
+
+          // Opponent hit "Settle": stop dealing on our side too and close at the next clean boundary
+          // (or now, if we're already parked at hand_over).
+          void waitPeer("endMatch").then(() => {
+            endRef.current = true;
+            setEndRequested(true);
+            if (dt.state.phase === "hand_over") triggerSettle();
+          });
+
+          dt.onConfirmed = (u) => {
+            transcript.append(u);
+            moveCount += 1;
+            actionsAccum += 1;
+            flushHeartbeat(false); // seat A reports; a no-op for B (no session)
+            sync();
+            report.pushLocalTxn({
+              id: moveIdRef.current++,
+              game: "quantum-poker",
+              time: new Date().toLocaleTimeString("en-GB"),
+              bot: "You",
+              type: proto.isTerminal(dt.state) ? "Win/Loss" : "Move",
+              status: "Success",
+              amount: "",
+            });
+            // Settle at match end (done), or early at this clean hand boundary once a seat asked to end.
+            if (
+              proto.isTerminal(dt.state) ||
+              (endRef.current && dt.state.phase === "hand_over")
+            ) {
+              triggerSettle();
+              return;
+            }
+            maybeAutoPropose();
+          };
+
+          // 4) readiness handshake — only AFTER the engine is wired, so seat A's first
+          //    commit can never reach seat B before B's frame handler exists.
+          sync();
+          setStatus("playing");
+          if (match.role === "A") await waitPeer("ready");
+          else channel.sendPeer({ t: "ready" });
+          maybeAutoPropose(); // seat A kicks off the commit; seat B no-ops until its turn
+        } catch (e) {
+          setError(e instanceof Error ? e.message : String(e));
+          setStatus("error");
+        }
+      })();
+    },
+    [account, client, signAndExecute, sync, maybeAutoPropose, report],
+  );
 
   const self = selfPartyRef.current;
   const myHole =

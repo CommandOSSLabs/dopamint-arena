@@ -19,7 +19,10 @@ import {
   buildCloseWithRootFromSettlement as sdkCloseWithRootFromSettlement,
 } from "sui-tunnel-ts/onchain/txbuilders";
 import { SignatureScheme } from "sui-tunnel-ts/core/crypto";
-import type { CoSignedSettlement, CoSignedSettlementWithRoot } from "sui-tunnel-ts/core/tunnel";
+import type {
+  CoSignedSettlement,
+  CoSignedSettlementWithRoot,
+} from "sui-tunnel-ts/core/tunnel";
 
 // The SDK tx builders are the single source of truth for the Move ABI. The SDK pins an older
 // @mysten/sui, but vite `dedupe` makes these run against THIS app's Transaction at runtime; the
@@ -38,11 +41,12 @@ const buildCloseFromSettlement = sdkCloseFromSettlement as unknown as (
   tunnelId: string,
   settlement: Parameters<typeof sdkCloseFromSettlement>[2],
 ) => void;
-const buildCloseWithRootFromSettlement = sdkCloseWithRootFromSettlement as unknown as (
-  tx: Transaction,
-  tunnelId: string,
-  settlement: Parameters<typeof sdkCloseWithRootFromSettlement>[2],
-) => void;
+const buildCloseWithRootFromSettlement =
+  sdkCloseWithRootFromSettlement as unknown as (
+    tx: Transaction,
+    tunnelId: string,
+    settlement: Parameters<typeof sdkCloseWithRootFromSettlement>[2],
+  ) => void;
 const buildOpenAndFundMany = sdkOpenAndFundMany as unknown as (
   tx: Transaction,
   specs: Parameters<typeof sdkOpenAndFundMany>[1],
