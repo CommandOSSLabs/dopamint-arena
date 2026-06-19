@@ -1,4 +1,3 @@
-import { COLUMN_COUNT } from "sui-tunnel-ts/protocol/cross.ts";
 import type { CrossHazardSnapshot, CrossSnapshot } from "./crossSceneTypes.ts";
 import type { CrossDirection, CrossLaneType, CrossPlayerState } from "./crossSceneTypes.ts";
 import * as THREE from 'three';
@@ -68,6 +67,7 @@ export class CrossScene {
   private readonly hazardMeshes = new Map<string, THREE.Object3D>();
   private readonly playerVisuals = new Map<string, PlayerVisual>();
   private readonly grassTexture = CrossScene.createGrassTexture();
+  private readonly dimGrassTexture = CrossScene.createDimGrassTexture();
   private localPlayerId: string | null = null;
   private cameraMode: '3d' | 'direct' = '3d';
   private cameraFocus = new THREE.Vector3();
@@ -110,11 +110,10 @@ export class CrossScene {
     this.backdrop.geometry = new THREE.PlaneGeometry(180, 180);
     this.backdrop.rotation.x = -Math.PI / 2;
     this.backdrop.position.y = -0.2;
-    const dimGrassTex = CrossScene.createDimGrassTexture();
-    dimGrassTex.repeat.set(32, 32);
+    this.dimGrassTexture.repeat.set(32, 32);
     this.backdrop.material = new THREE.MeshLambertMaterial({
       color: 0xffffff,
-      map: dimGrassTex,
+      map: this.dimGrassTexture,
     });
     this.backdrop.receiveShadow = true;
     this.scene.add(this.backdrop);
@@ -225,6 +224,7 @@ export class CrossScene {
     }
     for (const [id, visual] of this.playerVisuals) {
       if (!activePlayers.has(id)) {
+        this.disposeVisual(visual);
         this.playersGroup.remove(visual.group);
         this.playerVisuals.delete(id);
       }
@@ -290,12 +290,18 @@ export class CrossScene {
     this.scene.traverse((obj) => {
       const mesh = obj as unknown as {
         geometry?: { dispose?: () => void };
-        material?: { dispose?: () => void } | Array<{ dispose?: () => void }>;
+        material?: { map?: { dispose?: () => void }; emissiveMap?: { dispose?: () => void }; dispose?: () => void } | Array<{ map?: { dispose?: () => void }; emissiveMap?: { dispose?: () => void }; dispose?: () => void }>;
       };
       mesh.geometry?.dispose?.();
       if (Array.isArray(mesh.material)) {
-        for (const m of mesh.material) m?.dispose?.();
+        for (const m of mesh.material) {
+          m?.map?.dispose?.();
+          m?.emissiveMap?.dispose?.();
+          m?.dispose?.();
+        }
       } else {
+        mesh.material?.map?.dispose?.();
+        mesh.material?.emissiveMap?.dispose?.();
         mesh.material?.dispose?.();
       }
     });
@@ -303,7 +309,28 @@ export class CrossScene {
     this.hazardMeshes.clear();
     this.playerVisuals.clear();
     this.grassTexture.dispose();
+    this.dimGrassTexture.dispose();
     this.renderer.dispose();
+  }
+
+  /** Dispose all GPU resources owned by a player visual (geometries, materials, textures). */
+  private disposeVisual(visual: PlayerVisual): void {
+    visual.group.traverse((obj) => {
+      const mesh = obj as unknown as {
+        geometry?: { dispose?: () => void };
+        material?: { map?: { dispose?: () => void }; dispose?: () => void } | Array<{ map?: { dispose?: () => void }; dispose?: () => void }>;
+      };
+      mesh.geometry?.dispose?.();
+      if (Array.isArray(mesh.material)) {
+        for (const m of mesh.material) {
+          m?.map?.dispose?.();
+          m?.dispose?.();
+        }
+      } else {
+        mesh.material?.map?.dispose?.();
+        mesh.material?.dispose?.();
+      }
+    });
   }
 
   private static createDimGrassTexture(): THREE.CanvasTexture {
@@ -615,9 +642,10 @@ export class CrossScene {
       mesh.position.set(hazard.x * TILE, 0.38, hazard.laneIndex * LANE_DEPTH);
       return;
     }
+    // lerp smooths the discrete 300ms-tick hazard feed; snap on wrap. visual only.
     // Snap when the distance exceeds half the board width (hazard wrapped columns).
     const targetX = hazard.x * TILE;
-    if (Math.abs(targetX - mesh.position.x) > (COLUMN_COUNT * TILE) / 2) {
+    if (Math.abs(targetX - mesh.position.x) > (CROSS_COLUMN_COUNT * TILE) / 2) {
       mesh.position.x = targetX; // wrap: snap, don't lerp
     } else {
       mesh.position.x += (targetX - mesh.position.x) * LOG_RIDE_LERP; // smooth follow
