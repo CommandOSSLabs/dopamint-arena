@@ -12,10 +12,13 @@ export function BombLobby({
   onCreate,
   onJoin,
   onFindMatch,
+  onBenchmark,
 }: {
   onCreate: (code: string) => void;
   onJoin: (code: string) => void;
   onFindMatch: () => void;
+  /** Enter the bot-vs-bot TPS benchmark (self-play). Omitted hides the entry. */
+  onBenchmark?: () => void;
 }) {
   const [input, setInput] = useState("");
   const [activeCode, setActiveCode] = useState<string | null>(null);
@@ -81,6 +84,15 @@ export function BombLobby({
           Find Match
         </button>
       </div>
+
+      {onBenchmark && (
+        <button
+          onClick={onBenchmark}
+          className="text-[11px] uppercase tracking-widest text-arena-muted underline-offset-2 transition-all hover:text-gold hover:underline"
+        >
+          TPS Benchmark · bot vs bot
+        </button>
+      )}
     </div>
   );
 }

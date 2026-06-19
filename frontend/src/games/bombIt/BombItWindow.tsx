@@ -1,12 +1,20 @@
+import { useState } from "react";
 import type { GameWindowProps } from "../types";
 import { usePvpBombIt } from "./usePvpBombIt";
 import { BombLobby } from "./components/BombLobby";
 import { BombBoard } from "./components/BombBoard";
+import { BombBench } from "./components/BombBench";
 
-/** PvP Bomb It: two players bomb each other on a shared grid over a Sui tunnel. */
+/** PvP Bomb It: two players bomb each other on a shared grid over a Sui tunnel.
+ *  Also hosts a bot-vs-bot TPS benchmark (self-play) reachable from the lobby. */
 export function BombItWindow(_props: GameWindowProps) {
+  const [mode, setMode] = useState<"pvp" | "bench">("pvp");
   const { status, role, code, view, winner, error, create, join, findMatch, queueAction, reset } =
     usePvpBombIt();
+
+  if (mode === "bench") {
+    return <BombBench onExit={() => setMode("pvp")} />;
+  }
 
   if (status === "error") {
     return (
@@ -20,7 +28,14 @@ export function BombItWindow(_props: GameWindowProps) {
   }
 
   if (status === "idle") {
-    return <BombLobby onCreate={create} onJoin={join} onFindMatch={findMatch} />;
+    return (
+      <BombLobby
+        onCreate={create}
+        onJoin={join}
+        onFindMatch={findMatch}
+        onBenchmark={() => setMode("bench")}
+      />
+    );
   }
 
   if (status === "matching") {

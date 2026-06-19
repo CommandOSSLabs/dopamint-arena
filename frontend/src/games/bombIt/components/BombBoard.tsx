@@ -10,20 +10,24 @@ export function BombBoard({
   role,
   onAction,
   onPlayAgain,
+  spectate = false,
 }: {
   view: BombItView;
   winner: "A" | "B" | "draw" | null;
   role: "A" | "B" | null;
   onAction: (a: BombItAction) => void;
   onPlayAgain: () => void;
+  /** Read-only view (bot-vs-bot bench): no human controls, no focus-grab, no Play Again. */
+  spectate?: boolean;
 }) {
   const settled = winner !== null;
   const boardRef = useRef<HTMLDivElement>(null);
 
-  // Focus the board container on mount so keyboard events are scoped to it.
+  // Focus the board container on mount so keyboard events are scoped to it (not in spectate mode —
+  // a looping bench would otherwise steal focus from the page every game).
   useEffect(() => {
-    boardRef.current?.focus();
-  }, []);
+    if (!spectate) boardRef.current?.focus();
+  }, [spectate]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     if (settled) return;
@@ -119,7 +123,7 @@ export function BombBoard({
         )}
       </div>
 
-      {!settled && (
+      {!settled && !spectate && (
         <div className="flex flex-col items-center gap-1 py-1">
           <button
             onPointerDown={() => onAction("north")}
@@ -164,14 +168,22 @@ export function BombBoard({
       {settled && (
         <div className="flex flex-col items-center gap-2 py-1">
           <p className="text-gold text-sm font-bold uppercase tracking-widest">
-            {winner === "draw" ? "Draw — stakes returned" : winner === role ? "You win the pot!" : "Opponent wins"}
+            {winner === "draw"
+              ? "Draw — stakes returned"
+              : spectate
+                ? `Bomber ${winner} wins the pot`
+                : winner === role
+                  ? "You win the pot!"
+                  : "Opponent wins"}
           </p>
-          <button
-            onClick={onPlayAgain}
-            className="rounded border border-arena-edge px-3 py-1.5 text-sm text-arena-text hover:opacity-90"
-          >
-            Play Again
-          </button>
+          {!spectate && (
+            <button
+              onClick={onPlayAgain}
+              className="rounded border border-arena-edge px-3 py-1.5 text-sm text-arena-text hover:opacity-90"
+            >
+              Play Again
+            </button>
+          )}
         </div>
       )}
     </div>
