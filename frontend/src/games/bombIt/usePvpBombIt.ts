@@ -165,7 +165,7 @@ export function usePvpBombIt(): PvpBombIt {
       (async () => {
         try {
           setError(null);
-          if (code) setCode(code.toUpperCase());
+          if (code) setCode(code.trim().toUpperCase());
           setStatus("matching");
           const ephemeral: KeyPair = generateKeyPair();
           const mp = new MpClient(resolveMpWsUrl(resolveBackendUrl()), wallet, ephemeral);
