@@ -1,11 +1,18 @@
 import { describe, expect, it } from "bun:test";
 import { legalMoves, winner, checkStatus, applyMove, WIN_LINES } from "./board";
 import {
-  CELL_EMPTY, CELL_PLAYER, CELL_SERVER,
-  STATUS_ONGOING, STATUS_PLAYER_WIN, STATUS_SERVER_WIN, STATUS_DRAW,
+  CELL_EMPTY,
+  CELL_PLAYER,
+  CELL_SERVER,
+  STATUS_ONGOING,
+  STATUS_PLAYER_WIN,
+  STATUS_SERVER_WIN,
+  STATUS_DRAW,
 } from "../constants";
 
-const E = CELL_EMPTY, X = CELL_PLAYER, O = CELL_SERVER;
+const E = CELL_EMPTY,
+  X = CELL_PLAYER,
+  O = CELL_SERVER;
 
 describe("board", () => {
   it("legalMoves returns empty cells ascending", () => {
@@ -15,7 +22,9 @@ describe("board", () => {
   it("detects a player win on every line", () => {
     for (const [a, b, c] of WIN_LINES) {
       const board = Array(9).fill(E);
-      board[a] = X; board[b] = X; board[c] = X;
+      board[a] = X;
+      board[b] = X;
+      board[c] = X;
       expect(winner(board)).toBe(X);
       expect(checkStatus(board)).toBe(STATUS_PLAYER_WIN);
     }

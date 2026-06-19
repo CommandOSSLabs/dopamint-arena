@@ -5,9 +5,10 @@ import { useCustomWallet } from "@/contexts/CustomWallet";
 import { LoginScene } from "@/scenes/LoginScene";
 import { SetupScene, type PlayMode, type GameType } from "@/scenes/SetupScene";
 import { GameScene } from "@/scenes/GameScene";
+import { PvpScene } from "@/scenes/PvpScene";
 import { GameCardScale } from "@/components/GameCardScale";
 
-type Scene = "login" | "setup" | "game";
+type Scene = "login" | "setup" | "game" | "pvp";
 
 export default function App() {
   const [scene, setScene] = useState<Scene>("login");
@@ -15,8 +16,12 @@ export default function App() {
   const [difficulty, setDifficulty] = useState<Difficulty>("even");
   const [gameType, setGameType] = useState<GameType>("ttt");
   const [boardSize, setBoardSize] = useState<number>(15);
-  const [windowWidth, setWindowWidth] = useState(typeof window !== "undefined" ? window.innerWidth : 1024);
-  const [windowHeight, setWindowHeight] = useState(typeof window !== "undefined" ? window.innerHeight : 768);
+  const [windowWidth, setWindowWidth] = useState(
+    typeof window !== "undefined" ? window.innerWidth : 1024,
+  );
+  const [windowHeight, setWindowHeight] = useState(
+    typeof window !== "undefined" ? window.innerHeight : 768,
+  );
 
   const { isConnected } = useCustomWallet();
   // Both hooks are always called (rules of hooks); only the active one is driven. They share
@@ -63,17 +68,19 @@ export default function App() {
   let targetHeight = 750;
 
   if (scene === "login") {
-    targetWidth = 576;
-    targetHeight = 650;
+    targetWidth = isPortrait ? 500 : 800;
+    targetHeight = isPortrait ? 800 : 500;
   } else if (scene === "setup") {
-    targetWidth = 576;
-    targetHeight = 580;
+    targetWidth = isPortrait ? 500 : 1000;
+    targetHeight = isPortrait ? 1100 : 900;
   } else if (scene === "game") {
-    targetWidth = isPortrait ? 450 : 880;
-    targetHeight = isPortrait ? 780 : 620;
-    // Caro's board is taller than the 3×3 grid, so the column needs a taller card; the card
-    // scales down to the window, keeping the board AND the action buttons below it on screen.
-    if (gameType === "caro") targetHeight = isPortrait ? 940 : 760;
+    targetWidth = isPortrait ? 500 : 980;
+    targetHeight = isPortrait ? 1300 : 700;
+    if (gameType === "caro") targetHeight = isPortrait ? 1400 : 750;
+  } else if (scene === "pvp") {
+    targetWidth = isPortrait ? 500 : 1060;
+    targetHeight = isPortrait ? 1300 : 900;
+    if (gameType === "caro") targetHeight = isPortrait ? 1400 : 950;
   }
 
   return (
@@ -83,7 +90,12 @@ export default function App() {
 
       <div className="w-full h-full flex items-center justify-center z-10 pl-[40px] md:pl-[80px]">
         <GameCardScale targetWidth={targetWidth} targetHeight={targetHeight}>
-          {scene === "login" && <LoginScene onContinue={() => setScene("setup")} />}
+          {scene === "login" && (
+            <LoginScene
+              onContinue={() => setScene("setup")}
+              onPlayOnline={() => setScene("pvp")}
+            />
+          )}
 
           {scene === "setup" && (
             <SetupScene
@@ -107,7 +119,21 @@ export default function App() {
             />
           )}
 
-          {scene === "game" && <GameScene g={g} mode={mode} gameType={gameType} onBack={backToSetup} isPortrait={isPortrait} />}
+          {scene === "game" && (
+            <GameScene
+              g={g}
+              mode={mode}
+              gameType={gameType}
+              onBack={backToSetup}
+              isPortrait={isPortrait}
+            />
+          )}
+          {scene === "pvp" && (
+            <PvpScene
+              onBack={() => setScene("login")}
+              isPortrait={isPortrait}
+            />
+          )}
         </GameCardScale>
       </div>
     </div>

@@ -1,11 +1,11 @@
 import { register } from "../registry";
-import { TicTacToePvpWindow } from "./TicTacToePvpWindow";
+import { TicTacToeWindow } from "./TicTacToeWindow";
 
-// Tic Tac Toe is the real two-player PvP game: matchmaking + relay co-sign + on-chain stakes.
+// Unified Tic-Tac-Toe & Caro (3x3 and 15x15) with Bot, Auto-play, and PvP Online modes.
 register({
   id: "tic-tac-toe",
-  name: "Tic Tac Toe",
+  name: "Tic Tac Toe & Caro",
   icon: "⭕",
   image: "/games/caro.png",
-  Window: TicTacToePvpWindow,
+  Window: TicTacToeWindow,
 });

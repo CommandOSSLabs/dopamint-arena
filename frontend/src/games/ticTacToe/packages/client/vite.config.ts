@@ -12,7 +12,9 @@ export default defineConfig(({ mode }) => {
       "process.env.PACKAGE_ID": JSON.stringify(env.VITE_TTT_PACKAGE_ID ?? ""),
       // The SDK also calls dotenv.config() and reads process.env.SUI_NETWORK; give it a
       // value and an object so the reference doesn't crash in the browser bundle.
-      "process.env.SUI_NETWORK": JSON.stringify(env.VITE_SUI_NETWORK_NAME ?? "testnet"),
+      "process.env.SUI_NETWORK": JSON.stringify(
+        env.VITE_SUI_NETWORK_NAME ?? "testnet",
+      ),
     },
     plugins: [react()],
     resolve: {

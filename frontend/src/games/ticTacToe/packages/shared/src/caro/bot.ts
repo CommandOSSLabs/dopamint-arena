@@ -49,7 +49,12 @@ function patternValue(run: number, openEnds: number): number {
 }
 
 // Best single-axis pattern value for placing `mark` at `idx`.
-function moveScore(board: number[], size: number, idx: number, mark: number): number {
+function moveScore(
+  board: number[],
+  size: number,
+  idx: number,
+  mark: number,
+): number {
   let best = 0;
   for (const [dr, dc] of DIRS) {
     const { run, openEnds } = lineInfo(board, size, idx, dr, dc, mark);
@@ -102,14 +107,17 @@ export function pickCaroMove(
   const radius = strength === "strong" ? 2 : 1;
   const defenseWeight = strength === "strong" ? 0.95 : 0.85;
   let cells = candidates(board, size, radius);
-  if (cells.length === 0) cells = board.map((_, i) => i).filter((i) => board[i] === 0);
-  if (cells.length === 0) throw new Error("pickCaroMove called with no legal move (full board)");
+  if (cells.length === 0)
+    cells = board.map((_, i) => i).filter((i) => board[i] === 0);
+  if (cells.length === 0)
+    throw new Error("pickCaroMove called with no legal move (full board)");
 
   let bestCell = cells[0];
   let bestScore = -Infinity;
   for (const i of cells) {
     const score =
-      moveScore(board, size, i, me) + defenseWeight * moveScore(board, size, i, opp);
+      moveScore(board, size, i, me) +
+      defenseWeight * moveScore(board, size, i, opp);
     // Tie-break with a small rng jitter so identical scores diversify.
     const jittered = score + rng() * 0.5;
     if (jittered > bestScore) {

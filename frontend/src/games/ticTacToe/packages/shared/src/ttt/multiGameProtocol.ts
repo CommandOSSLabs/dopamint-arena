@@ -71,9 +71,10 @@ export type MultiGameTicTacToeMove = TicTacToeMove;
  * single-game `TicTacToeProtocol`. Domain tag is distinct from the inner protocol
  * so the two encodings can never collide on the wire.
  */
-export class MultiGameTicTacToeProtocol
-  implements Protocol<MultiGameTicTacToeState, MultiGameTicTacToeMove>
-{
+export class MultiGameTicTacToeProtocol implements Protocol<
+  MultiGameTicTacToeState,
+  MultiGameTicTacToeMove
+> {
   readonly name = "tic_tac_toe.multi.v1";
 
   // Distinct domain tag so a multi-game state hash never collides with a

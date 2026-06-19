@@ -45,8 +45,8 @@ export function BetPanel({ onDeal }: { onDeal: (stake: number) => void }) {
         </button>
 
         <p className="max-w-xs text-[11px] text-arena-muted">
-          Bots co-sign each move over a Sui tunnel; play runs until one is out of
-          chips.
+          Bots co-sign each move over a Sui tunnel; play runs until one is out
+          of chips.
         </p>
       </div>
     </div>

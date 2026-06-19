@@ -1,7 +1,7 @@
 /**
- * Pure driver for a bot-vs-bot Blackjack tunnel session. No React, no timers, no
- * runtime SDK imports (types only, erased at build) so it is trivially unit-tested.
- * The React hook (useBlackjackSession) owns keypairs, the timer, and telemetry.
+ * Pure driver for a bot-vs-bot Blackjack tunnel session. No React, no timers — only the tiny
+ * party-mapping helpers are runtime SDK imports; everything else is types (erased at build), so it
+ * stays trivially unit-tested. The React hook (useBlackjackSession) owns keypairs, timer, telemetry.
  */
 import type { Party } from "sui-tunnel-ts/protocol/Protocol";
 import type {
@@ -10,13 +10,18 @@ import type {
   BlackjackMove,
   BlackjackPhase,
 } from "sui-tunnel-ts/protocol/blackjack";
+import {
+  getPlayerParty,
+  getDealerParty,
+} from "sui-tunnel-ts/protocol/blackjack";
 import type { OffchainTunnel } from "sui-tunnel-ts/core/tunnel";
 
 import { handValue, handToCardIndices } from "./cards.ts";
 
-/** Whose turn it is, derived purely from the protocol phase. */
-export function partyForPhase(phase: BlackjackPhase): Party {
-  return phase === "dealer" ? "B" : "A";
+/** Whose turn it is, derived purely from the protocol phase and round. */
+export function partyForPhase(phase: BlackjackPhase, round: bigint): Party {
+  if (phase === "round_over") return getPlayerParty(round + 1n);
+  return phase === "dealer" ? getDealerParty(round) : getPlayerParty(round);
 }
 
 /**
@@ -30,7 +35,7 @@ export function stepSession(
 ): boolean {
   const state = tunnel.state;
   if (protocol.isTerminal(state)) return false;
-  const by = partyForPhase(state.phase);
+  const by = partyForPhase(state.phase, state.round);
   const move = protocol.randomMove(state, by, rng);
   if (!move) return false;
   tunnel.step(move, by);
@@ -40,7 +45,10 @@ export function stepSession(
 /** Player-bankroll outcome relative to the starting stake. */
 export type SessionResult = "win" | "lose" | "push";
 
-export function sessionResult(state: BlackjackState, stake: bigint): SessionResult {
+export function sessionResult(
+  state: BlackjackState,
+  stake: bigint,
+): SessionResult {
   if (state.balanceA > stake) return "win";
   if (state.balanceA < stake) return "lose";
   return "push";

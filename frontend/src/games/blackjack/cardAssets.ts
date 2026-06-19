@@ -3,7 +3,21 @@
  * (`index = suit*13 + rankIndex`). Vite-only (import.meta.glob) — never import from a test.
  */
 const SUITS = ["clubs", "diamonds", "hearts", "spades"] as const;
-const NAMES = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"] as const;
+const NAMES = [
+  "A",
+  "2",
+  "3",
+  "4",
+  "5",
+  "6",
+  "7",
+  "8",
+  "9",
+  "10",
+  "J",
+  "Q",
+  "K",
+] as const;
 
 const urls = import.meta.glob("./assets/cards/**/*.svg", {
   eager: true,
