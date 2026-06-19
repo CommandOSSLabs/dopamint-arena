@@ -70,6 +70,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { disposeWindow } from "@/lib/windowSessions";
 import { flyFromDock, flyToDock } from "@/lib/dockFlight";
 import { useTelemetry } from "@/telemetry/TelemetryProvider";
 import { useLocalStorageState } from "@/lib/useLocalStorageState";
@@ -124,6 +125,17 @@ function dropKey<T>(obj: Record<string, T>, id: string): Record<string, T> {
 
 const WINDOW_SIZE = { w: 4, h: 4, minW: 3, minH: 3 } as const;
 
+/** A game's opening size + resize floor in grid units, from its registry config. */
+function sizeOf(instanceId: string) {
+  const mod = get(gameOf(instanceId));
+  return {
+    w: mod?.defaultSize?.w ?? WINDOW_SIZE.w,
+    h: mod?.defaultSize?.h ?? WINDOW_SIZE.h,
+    minW: mod?.minSize?.w ?? WINDOW_SIZE.minW,
+    minH: mod?.minSize?.h ?? WINDOW_SIZE.minH,
+  };
+}
+
 const BREAKPOINTS: GridBreakpoint[] = [
   { minWidth: 0, cols: 4 },
   { minWidth: 640, cols: 8 },
@@ -167,7 +179,7 @@ type MobileTab = (typeof MOBILE_TABS)[number]["id"];
 /** One tiled window per registered game. */
 function seedLayout(): GridItem[] {
   return tile(
-    list().map((mod) => ({ id: mod.id, x: 0, y: 0, ...WINDOW_SIZE })),
+    list().map((mod) => ({ id: mod.id, x: 0, y: 0, ...sizeOf(mod.id) })),
   );
 }
 
@@ -539,6 +551,7 @@ export function Desktop() {
   };
 
   const close = (id: string) => {
+    disposeWindow(id); // tear down the game's live session (sockets, timers)
     setLayout((cur) => tile(cur.filter((w) => w.id !== id)));
     setHidden((h) => dropKey(h, id));
     setFloating((f) => dropKey(f, id));
@@ -575,7 +588,10 @@ export function Desktop() {
   // Add a fresh window for a game — duplicates allowed; the floor re-tiles.
   const addGame = (gameId: string) =>
     setLayout((cur) =>
-      tile([...cur, { id: newInstanceId(gameId), x: 0, y: 0, ...WINDOW_SIZE }]),
+      tile([
+        ...cur,
+        { id: newInstanceId(gameId), x: 0, y: 0, ...sizeOf(gameId) },
+      ]),
     );
 
   // One window per game not already on the floor.
@@ -584,13 +600,21 @@ export function Desktop() {
       const present = new Set(cur.map((w) => gameOf(w.id)));
       const adds = list()
         .filter((m) => !present.has(m.id))
-        .map((m) => ({ id: newInstanceId(m.id), x: 0, y: 0, ...WINDOW_SIZE }));
+        .map((m) => ({ id: newInstanceId(m.id), x: 0, y: 0, ...sizeOf(m.id) }));
       return tile([...cur, ...adds]);
     });
 
   // Confirmed from the Remove-all dialog: clear everything, optionally reseeding
   // the default layout (all games) instead of an empty floor.
   const confirmRemove = () => {
+    // Dispose every open/hidden/floating window's session before clearing.
+    for (const id of [
+      ...layout.map((w) => w.id),
+      ...Object.keys(hidden),
+      ...Object.keys(floating),
+    ]) {
+      disposeWindow(id);
+    }
     setLayout(resetDefault ? seedLayout() : []);
     setHidden({});
     setFloating({});

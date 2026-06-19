@@ -1,120 +1,197 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { toHex } from "../core/bytes";
 import { ed25519Address, generateKeyPair } from "../core/crypto";
 import { OffchainTunnel, verifyCoSignedUpdate } from "../core/tunnel";
 import { mulberry32 } from "../sim/rng";
 import { Party } from "./Protocol";
 import {
+  commitSlotSecrets,
+  deriveQuantumCard,
   evaluate5,
   PokerMove,
   PokerState,
   QuantumPokerProtocol,
+  QuantumPokerSeatDriver,
+  SlotSecret,
 } from "./quantumPoker";
+import { pokerMoveFromJson, pokerMoveToJson } from "./quantumPokerCodec";
 
-test("evaluate5 ranks hands correctly", () => {
-  const straightFlush = evaluate5([8, 9, 10, 11, 12]); // suit 0, ranks 8-12
-  const quads = evaluate5([0, 13, 26, 39, 1]); // four rank-0
-  const pair = evaluate5([0, 13, 28, 42, 9]); // two rank-0
-  const high = evaluate5([0, 14, 28, 42, 9]); // ranks 0,1,2,3,9 mixed suits
+function secrets(base: number): SlotSecret[] {
+  return Array.from({ length: 9 }, (_, slot) => ({
+    value: Uint8Array.from({ length: 32 }, (_, i) => (base + slot + i) & 0xff),
+    salt: Uint8Array.from(
+      { length: 16 },
+      (_, i) => (base * 3 + slot + i) & 0xff
+    ),
+  }));
+}
+
+function reveal(secrets: SlotSecret[], slots: number[]): PokerMove {
+  return {
+    kind: "reveal_slots",
+    slots,
+    reveals: slots.map((slot) => secrets[slot]),
+  };
+}
+
+test("evaluate5 allows duplicates and ranks Five of a Kind above Straight Flush", () => {
+  const fiveKind = evaluate5([0, 13, 26, 39, 0]);
+  const straightFlush = evaluate5([8, 9, 10, 11, 12]);
+  const quads = evaluate5([0, 13, 26, 39, 1]);
+  const pair = evaluate5([0, 13, 28, 42, 9]);
+  assert.ok(fiveKind > straightFlush);
   assert.ok(straightFlush > quads);
   assert.ok(quads > pair);
-  assert.ok(pair > high);
-});
-
-test("evaluate5 rejects malformed hands (duplicate / out-of-range cards)", () => {
-  assert.throws(() => evaluate5([0, 0, 28, 42, 9]), /duplicate/);
+  assert.doesNotThrow(() => evaluate5([0, 0, 28, 42, 9]));
   assert.throws(() => evaluate5([0, 1, 2, 3, 52]), /out of range/);
-  assert.throws(() => evaluate5([0, 1, 2, 3, -1]), /out of range/);
 });
 
-test("commit-reveal: a wrong seed reveal is rejected", () => {
+test("commit move keeps local secrets local and serializes commitments only", () => {
+  const rng = mulberry32(1);
   const p = new QuantumPokerProtocol();
-  let s = p.initialState({
+  const s = p.initialState({
     tunnelId: "0xaa",
     initialBalances: { a: 1000n, b: 1000n },
   });
-  s = p.applyMove(
-    s,
-    { kind: "commit", value: Uint8Array.of(1), salt: new Uint8Array(16) },
-    "A",
+  const move = p.randomMove!(s, "A", rng);
+  assert.ok(move);
+  assert.equal(move.kind, "commit_slots");
+  assert.equal(move.commitments.length, 9);
+  assert.equal(
+    move.commitments.every((c) => c.length === 32),
+    true
   );
-  s = p.applyMove(
-    s,
-    {
-      kind: "commit",
-      value: Uint8Array.of(2),
-      salt: new Uint8Array(16).fill(2),
-    },
-    "B",
-  );
-  assert.equal(s.phase, "reveal");
-  // wrong value -> commitment mismatch
-  assert.throws(() =>
-    p.applyMove(
-      s,
-      {
-        kind: "reveal_seed",
-        value: Uint8Array.of(9),
-        salt: new Uint8Array(16),
-      },
-      "A",
-    ),
-  );
-  // correct reveal works
-  const s2 = p.applyMove(
-    s,
-    { kind: "reveal_seed", value: Uint8Array.of(1), salt: new Uint8Array(16) },
-    "A",
-  );
-  assert.ok(s2.revealedA);
+  assert.ok(move.localSecrets, "local engine keeps secrets for later reveals");
+
+  const json = pokerMoveToJson(move);
+  assert.equal(Object.hasOwn(json, "localSecrets"), false);
+  assert.deepEqual(pokerMoveFromJson(json), {
+    kind: "commit_slots",
+    commitments: move.commitments,
+  });
 });
 
-test("hole cards are hidden pre-showdown: encodeState carries commitments, not values", () => {
+test("slot reveal mismatch is rejected against commitment", () => {
   const p = new QuantumPokerProtocol();
+  const a = secrets(10);
+  const b = secrets(80);
   let s = p.initialState({
     tunnelId: "0xab",
     initialBalances: { a: 1000n, b: 1000n },
   });
   s = p.applyMove(
     s,
-    { kind: "commit", value: Uint8Array.of(1), salt: new Uint8Array(16) },
-    "A",
+    { kind: "commit_slots", commitments: commitSlotSecrets(a) },
+    "A"
   );
   s = p.applyMove(
     s,
-    {
-      kind: "commit",
-      value: Uint8Array.of(2),
-      salt: new Uint8Array(16).fill(2),
-    },
-    "B",
+    { kind: "commit_slots", commitments: commitSlotSecrets(b) },
+    "B"
   );
-  s = p.applyMove(
-    s,
-    { kind: "reveal_seed", value: Uint8Array.of(1), salt: new Uint8Array(16) },
-    "A",
-  );
-  s = p.applyMove(
-    s,
-    {
-      kind: "reveal_seed",
-      value: Uint8Array.of(2),
-      salt: new Uint8Array(16).fill(2),
-    },
-    "B",
-  );
-  assert.equal(s.phase, "bet");
-  assert.ok(s.holeCommitA && s.holeCommitA.length === 2);
-  assert.ok(s.holeA && s.holeA.length === 2); // dealt locally
-  assert.ok(s.shownHoleA === null); // not revealed -> not in encodeState
-  // encodeState is deterministic
-  assert.equal(
-    Buffer.from(p.encodeState(s)).toString("hex"),
-    Buffer.from(p.encodeState(s)).toString("hex"),
-  );
+  assert.equal(s.phase, "open_private_holes");
+
+  const bad = reveal(a, [2, 3]);
+  if (bad.kind !== "reveal_slots") throw new Error("bad test move");
+  bad.reveals[0] = { ...bad.reveals[0], value: Uint8Array.of(9) };
+  assert.throws(() => p.applyMove(s, bad, "A"), /does not match/);
+
+  const s2 = p.applyMove(s, reveal(a, [2, 3]), "A");
+  assert.ok(s2.revealsA[2]);
 });
 
-test("full self-play game: balances conserved every step, hands complete, updates settle", () => {
+test("seat driver can reveal from persisted local secrets after request boundary", () => {
+  const p = new QuantumPokerProtocol();
+  const a = secrets(30);
+  const b = secrets(130);
+  let s = p.initialState({
+    tunnelId: "0xad",
+    initialBalances: { a: 1000n, b: 1000n },
+  });
+  s = p.applyMove(
+    s,
+    { kind: "commit_slots", commitments: commitSlotSecrets(a) },
+    "A"
+  );
+  s = p.applyMove(
+    s,
+    {
+      kind: "commit_slots",
+      commitments: commitSlotSecrets(b),
+      localSecrets: b,
+    },
+    "B"
+  );
+  s = p.applyMove(s, reveal(a, [2, 3]), "A");
+
+  const statelessBot = new QuantumPokerSeatDriver("B");
+  const move = statelessBot.makeRevealMove(s);
+  assert.ok(move);
+  assert.equal(move.kind, "reveal_slots");
+  assert.deepEqual(move.slots, [0, 1]);
+  assert.deepEqual(move.reveals, [b[0], b[1]]);
+
+  s = p.applyMove(s, move, "B");
+  assert.equal(s.phase, "preflop_bet");
+  assert.ok(statelessBot.knownHoleCards(s));
+});
+
+test("manual hand reaches flop with private holes hidden from encoding", () => {
+  const p = new QuantumPokerProtocol();
+  const a = secrets(20);
+  const b = secrets(120);
+  let s = p.initialState({
+    tunnelId: "0xac",
+    initialBalances: { a: 1000n, b: 1000n },
+  });
+  s = p.applyMove(
+    s,
+    {
+      kind: "commit_slots",
+      commitments: commitSlotSecrets(a),
+      localSecrets: a,
+    },
+    "A"
+  );
+  s = p.applyMove(
+    s,
+    {
+      kind: "commit_slots",
+      commitments: commitSlotSecrets(b),
+      localSecrets: b,
+    },
+    "B"
+  );
+  s = p.applyMove(s, reveal(a, [2, 3]), "A");
+  s = p.applyMove(s, reveal(b, [0, 1]), "B");
+  assert.equal(s.phase, "preflop_bet");
+  assert.ok(s.holeA && s.holeA.length === 2);
+  assert.ok(s.holeB && s.holeB.length === 2);
+  assert.equal(s.shownHoleA, null);
+  assert.equal(
+    toHex(p.encodeState(s)).includes(toHex(Uint8Array.from(s.holeA))),
+    false
+  );
+
+  s = p.applyMove(s, { kind: "check" }, "A");
+  s = p.applyMove(s, { kind: "check" }, "B");
+  assert.equal(s.phase, "reveal_flop");
+  s = p.applyMove(s, reveal(a, [4, 5, 6]), "A");
+  s = p.applyMove(s, reveal(b, [4, 5, 6]), "B");
+  assert.equal(s.phase, "flop_bet");
+  assert.equal(s.board.length, 3);
+  assert.equal(new Set(s.board).size, 3);
+});
+
+test("deriveQuantumCard is deterministic and counter-sensitive", () => {
+  const a = secrets(1)[4];
+  const b = secrets(2)[4];
+  assert.equal(deriveQuantumCard(a, b), deriveQuantumCard(a, b));
+  assert.notEqual(deriveQuantumCard(a, b, 0), deriveQuantumCard(a, b, 1));
+});
+
+test("full self-play game: balances conserved, five-card board, updates settle", () => {
   const rng = mulberry32(123);
   const a = generateKeyPair();
   const b = generateKeyPair();
@@ -125,35 +202,41 @@ test("full self-play game: balances conserved every step, hands complete, update
     b,
     ed25519Address(a.publicKey),
     ed25519Address(b.publicKey),
-    { a: 10_000n, b: 10_000n },
+    { a: 10_000n, b: 10_000n }
   );
   const total = t.total;
+  let completedShowdownOrFold = false;
   let steps = 0;
-  while (steps < 6000 && t.state.phase !== "done") {
+  while (steps < 10_000 && t.state.phase !== "done") {
     let moved = false;
     for (const party of ["A", "B"] as Party[]) {
-      const m = t.protocol.randomMove(t.state, party, rng);
+      const m = t.protocol.randomMove!(t.state, party, rng);
       if (m) {
         t.step(m as PokerMove, party);
         moved = true;
         steps++;
         const bal = t.protocol.balances(t.state);
         assert.equal(bal.a + bal.b, total);
+        const ps = t.state as PokerState;
+        if (ps.phase === "hand_over" && ps.lastResult) {
+          completedShowdownOrFold = true;
+          if (ps.lastResult.reason === "showdown") {
+            assert.equal(ps.board.length, 5);
+            assert.equal(new Set(ps.board).size, 5);
+          }
+        }
         break;
       }
     }
     if (!moved) break;
   }
-  assert.ok(
-    (t.state as PokerState).handNo > 0n,
-    `hands: ${(t.state as PokerState).handNo}`,
-  );
+  assert.ok(completedShowdownOrFold);
   assert.ok(t.latest);
   assert.ok(
     verifyCoSignedUpdate(
       t.latest!,
       { publicKey: t.partyA.publicKey, scheme: t.partyA.scheme },
-      { publicKey: t.partyB.publicKey, scheme: t.partyB.scheme },
-    ),
+      { publicKey: t.partyB.publicKey, scheme: t.partyB.scheme }
+    )
   );
 });

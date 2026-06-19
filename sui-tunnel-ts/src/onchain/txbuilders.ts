@@ -14,10 +14,11 @@
 
 import {
   Transaction,
-  TransactionObjectArgument,
+  type TransactionObjectArgument,
+  type TransactionResult,
 } from "@mysten/sui/transactions";
 import { SUI_CLOCK_OBJECT_ID } from "@mysten/sui/utils";
-import { buildTarget, MODULES, SUI_COIN_TYPE } from "../config";
+import { buildTarget, MODULES, RANDOM_ID, SUI_COIN_TYPE } from "../config";
 import {
   CoSignedSettlement,
   CoSignedSettlementWithRoot,
@@ -26,10 +27,19 @@ import {
 import { Party } from "../protocol/Protocol";
 
 const TUNNEL = MODULES.TUNNEL;
+const QUANTUM_POKER = MODULES.QUANTUM_POKER;
+const QUANTUM_POKER_REFEREE = MODULES.QUANTUM_POKER_REFEREE;
+const SUI_RANDOMNESS = MODULES.SUI_RANDOMNESS;
 const CLOCK = SUI_CLOCK_OBJECT_ID;
 
 function vecU8(tx: Transaction, b: Uint8Array) {
   return tx.pure.vector("u8", Array.from(b));
+}
+
+type TunnelIdArg = string | TransactionResult;
+
+function tunnelIdArg(tx: Transaction, id: TunnelIdArg) {
+  return typeof id === "string" ? tx.pure.id(id) : id;
 }
 
 export interface PartyArgs {
@@ -88,6 +98,31 @@ export function buildDepositFromGas(
 ): void {
   const [coin] = tx.splitCoins(tx.gas, [tx.pure.u64(p.amount)]);
   buildDeposit(tx, { tunnelId: p.tunnelId, coin });
+}
+
+/**
+ * Emit a Sui-native randomness seed for a Quantum Poker session. This is a
+ * control-plane helper: the event seed is public entropy that the bot server
+ * mixes with private entropy before committing poker slot secrets.
+ */
+export function buildEmitQuantumPokerRandomnessSeed(
+  tx: Transaction,
+  p: {
+    tunnelId: TunnelIdArg;
+    sessionNonce: bigint;
+    context?: Uint8Array;
+    randomObjectId?: string;
+  },
+): void {
+  tx.moveCall({
+    target: buildTarget(SUI_RANDOMNESS, "entry_emit_quantum_poker_seed"),
+    arguments: [
+      tx.object(p.randomObjectId ?? RANDOM_ID),
+      tunnelIdArg(tx, p.tunnelId),
+      tx.pure.u64(p.sessionNonce),
+      vecU8(tx, p.context ?? new Uint8Array(0)),
+    ],
+  });
 }
 
 /** Cooperative close with both signatures over the settlement message. */
@@ -477,6 +512,63 @@ export function buildExpireHtlc(
     arguments: [
       tx.object(p.tunnelId),
       vecU8(tx, p.paymentHash),
+      tx.object(CLOCK),
+    ],
+  });
+}
+
+/** Create and share a Quantum Poker session bound to one tunnel and proof schema. */
+export function buildCreateQuantumPokerSession(
+  tx: Transaction,
+  p: {
+    tunnelId: string;
+    rulesHash: Uint8Array;
+    circuitId: Uint8Array;
+    inputSchemaHash: Uint8Array;
+  } & WithCoinType,
+): void {
+  tx.moveCall({
+    target: buildTarget(QUANTUM_POKER, "entry_create_session"),
+    typeArguments: [p.coinType ?? SUI_COIN_TYPE],
+    arguments: [
+      tx.object(p.tunnelId),
+      vecU8(tx, p.rulesHash),
+      vecU8(tx, p.circuitId),
+      vecU8(tx, p.inputSchemaHash),
+    ],
+  });
+}
+
+/** Resolve a disputed Quantum Poker tunnel through the proof-gated referee module. */
+export function buildResolveQuantumPokerWithProof(
+  tx: Transaction,
+  p: {
+    sessionId: string;
+    registryId: string;
+    tunnelId: string;
+    proofBytes: Uint8Array;
+    stateHash: Uint8Array;
+    handId: bigint;
+    winner: bigint | number;
+    partyABalance: bigint;
+    partyBBalance: bigint;
+    resultHash: Uint8Array;
+  } & WithCoinType,
+): void {
+  tx.moveCall({
+    target: buildTarget(QUANTUM_POKER_REFEREE, "entry_resolve_with_proof"),
+    typeArguments: [p.coinType ?? SUI_COIN_TYPE],
+    arguments: [
+      tx.object(p.sessionId),
+      tx.object(p.registryId),
+      tx.object(p.tunnelId),
+      vecU8(tx, p.proofBytes),
+      vecU8(tx, p.stateHash),
+      tx.pure.u64(p.handId),
+      tx.pure.u64(p.winner),
+      tx.pure.u64(p.partyABalance),
+      tx.pure.u64(p.partyBBalance),
+      vecU8(tx, p.resultHash),
       tx.object(CLOCK),
     ],
   });
