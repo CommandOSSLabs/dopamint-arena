@@ -5,5 +5,6 @@ register({
   id: "bomb-it",
   name: "Bomb It",
   icon: "💣",
+  image: "/games/bomb-it.png",
   Window: BombItWindow,
 });
