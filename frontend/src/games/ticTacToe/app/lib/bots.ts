@@ -11,7 +11,7 @@
  */
 import { core } from "sui-tunnel-ts";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
-import { SuiJsonRpcClient } from "@mysten/sui/jsonRpc";
+import { SuiJsonRpcClient, getJsonRpcFullnodeUrl } from "@mysten/sui/jsonRpc";
 import { Transaction } from "@mysten/sui/transactions";
 import { requestSuiFromFaucetV2, getFaucetHost } from "@mysten/sui/faucet";
 import { fromHex, toHex } from "@mysten/sui/utils";
@@ -123,8 +123,12 @@ export async function transferBetweenBots(
 let cachedClient: SuiJsonRpcClient | null = null;
 export function getSuiClient(): SuiJsonRpcClient {
   if (!cachedClient) {
+    // Fall back to a default testnet fullnode when VITE_SUI_NETWORK is unset — e.g. a fresh
+    // checkout with no .env (it's gitignored). Without this the client is built with
+    // url: undefined and every RPC fails silently: balances never load and bot funding can't
+    // confirm. (Blackjack's getSuiClient already does this; ttt was the odd one out.)
     cachedClient = new SuiJsonRpcClient({
-      url: import.meta.env.VITE_SUI_NETWORK,
+      url: import.meta.env.VITE_SUI_NETWORK || getJsonRpcFullnodeUrl("testnet"),
       network: "testnet",
     });
   }

@@ -3,6 +3,8 @@ import {
   BlackjackBetProtocol,
   MIN_BET,
   maxBet,
+  actorFor,
+  fixedBetMove,
   type BetBlackjackState,
 } from "./bjBetProtocol";
 
@@ -89,5 +91,66 @@ describe("BlackjackBetProtocol", () => {
     expect(maxBet(broke)).toBe(10n);
     expect(10n < MIN_BET).toBe(true);
     expect(proto.isTerminal(broke)).toBe(true);
+  });
+});
+
+// Regression for the bot-mode "settles after ~2 rounds" bug. The play loop must pick the actor
+// the protocol expects each phase; the protocol alternates the player A,A,B,B per round, so a
+// loop that always treats non-dealer phases as "A" stalls the moment the bettor flips to B.
+describe("bot self-play driver", () => {
+  // Faithful replay of the ORIGINAL buggy loop: actor = dealer?B:A, move = randomMove for every
+  // phase. randomMove returns null when the fixed actor isn't the designated player, which the
+  // loop reads as "no move -> game over" and settles.
+  function playOriginalBuggy(stake: bigint, target: number): number {
+    let s = proto.initialState(ctx(stake, stake));
+    let completed = 0;
+    for (let steps = 0; steps < 100_000; steps++) {
+      if (proto.isTerminal(s)) break;
+      const by: "A" | "B" = s.phase === "dealer" ? "B" : "A";
+      const move = proto.randomMove(s, by, Math.random);
+      if (!move) break;
+      const prevPhase = s.phase;
+      s = proto.applyMove(s, move, by);
+      if (s.phase === "round_over" && prevPhase !== "round_over") {
+        if (++completed >= target) break;
+      }
+    }
+    return completed;
+  }
+
+  // The FIXED loop: actor = actorFor(state), and a chosen fixed bet in the betting phase.
+  function playFixed(stake: bigint, betAmount: number, target: number): number {
+    let s = proto.initialState(ctx(stake, stake));
+    let completed = 0;
+    for (let steps = 0; steps < 1_000_000; steps++) {
+      if (proto.isTerminal(s)) break;
+      const by = actorFor(s);
+      const move =
+        s.phase === "round_over"
+          ? fixedBetMove(betAmount, s)
+          : proto.randomMove(s, by, Math.random);
+      if (!move) break;
+      const prevPhase = s.phase;
+      s = proto.applyMove(s, move, by);
+      if (s.phase === "round_over" && prevPhase !== "round_over") {
+        if (++completed >= target) break;
+      }
+    }
+    return completed;
+  }
+
+  test("the original fixed-party loop stalls after 2 rounds regardless of the target", () => {
+    expect(playOriginalBuggy(5_000_000n, 100)).toBe(2);
+  });
+
+  test("actorFor + a fixed bet reaches the requested target when the buy-in covers it", () => {
+    expect(playFixed(5_000_000n, 100, 50)).toBe(50);
+    expect(playFixed(5_000_000n, 100, 100)).toBe(100);
+  });
+
+  test("a buy-in too small for the target is capped by bankroll, not the 2-round bug", () => {
+    const rounds = playFixed(500n, 100, 100);
+    expect(rounds).toBeGreaterThan(2);
+    expect(rounds).toBeLessThan(100);
   });
 });
