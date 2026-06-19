@@ -7,10 +7,9 @@ import {
 } from "sui-tunnel-ts/core/crypto";
 import {
   DistributedTunnel,
-  type CoSignedUpdate,
-  type PartyEndpoint,
   type Transport,
 } from "sui-tunnel-ts/core/distributedTunnel";
+import type { CoSignedUpdate, PartyEndpoint } from "sui-tunnel-ts/core/tunnel";
 import type { Party } from "sui-tunnel-ts/protocol/Protocol";
 import {
   type PokerMove,

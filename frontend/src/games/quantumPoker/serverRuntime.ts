@@ -5,7 +5,7 @@ import {
   nobleBackend,
   type SignFn,
 } from "sui-tunnel-ts/core/crypto";
-import type { CoSignedUpdate } from "sui-tunnel-ts/core/distributedTunnel";
+import type { CoSignedUpdate } from "sui-tunnel-ts/core/tunnel";
 import type { StateUpdate } from "sui-tunnel-ts/core/wire";
 import type { Party } from "sui-tunnel-ts/protocol/Protocol";
 import {
