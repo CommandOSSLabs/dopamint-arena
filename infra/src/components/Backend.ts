@@ -51,7 +51,7 @@ function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
               { name: "REDIS_PUBSUB_URL", value: `rediss://${pubSubEndpoint}:6379` },
               { name: "REDIS_CACHE_URL", value: `rediss://${cacheEndpoint}:6379` },
               { name: "SUI_RPC_URL", value: "https://fullnode.testnet.sui.io:443" },
-              { name: "TUNNEL_PACKAGE_ID", value: "0x0000000000000000000000000000000000000000000000000000000000000001" },
+              { name: "TUNNEL_PACKAGE_ID", value: "0x0b89fe86e42cdbfd1e614757a83d014b455d12923d0dded58842ab18f8a5a22b" },
               { name: "WALRUS_PUBLISHER_URL", value: "https://publisher.walrus-testnet.walrus.space" },
               { name: "WALRUS_AGGREGATOR_URL", value: "https://aggregator.walrus-testnet.walrus.space" },
             ],

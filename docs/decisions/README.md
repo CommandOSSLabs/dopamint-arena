@@ -15,4 +15,15 @@ that depends on them. An ADR captures the decision and the reasoning so the
 ## Index
 
 - [0001](0001-arena-baseline-architecture.md) — Baseline architecture: Rust
-  control-plane backend, client self-play hot path, per-game `Protocol`.
+  control-plane backend, per-game `Protocol`. *(§1 self-play hot path superseded by 0006.)*
+- [0002](0002-grid-layout-engine.md) — Owned grid-layout engine over a
+  drag-and-drop library (React 19 + shadcn-style ownership).
+- [0005](0005-transaction-log-panels.md) — Transaction-log panels: client-local
+  move feed + global settlement projection (verifiable proof surface) + settle-at-close
+  cadence; generic payments out of scope.
+- [0006](0006-genuine-two-party-only-drop-self-play.md) — Genuine two-party play is
+  the only model; self-play dropped. Supersedes 0001 §1 and the removed 0004.
+- [0007](0007-settle-authorized-by-settlement-not-token.md) — Settlement is
+  self-authenticating; `/settle` verifies the co-signed bytes against the tunnel's
+  on-chain party pubkeys and drops the session bearer token. Supersedes the
+  settle-auth portion of 0002.

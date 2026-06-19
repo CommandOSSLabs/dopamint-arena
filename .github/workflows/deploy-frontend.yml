@@ -66,8 +66,11 @@ jobs:
           aws-region: us-east-1
 
       - name: Build frontend
+        # Same-origin: leave VITE_BACKEND_URL empty so the bundle calls /v1 on its own
+        # origin (CloudFront routes /v1/* to the ALB). A non-empty http ALB here bakes
+        # ws://<alb> into the build, which the https site rejects (insecure WebSocket).
         env:
-          VITE_BACKEND_URL: ${{ vars.BACKEND_URL }}
+          VITE_BACKEND_URL: ""
         run: pnpm build
 
       - name: Deploy to S3

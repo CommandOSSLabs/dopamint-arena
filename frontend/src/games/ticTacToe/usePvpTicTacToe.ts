@@ -1,20 +1,23 @@
 import { useCallback, useRef, useState } from "react";
+import { useTelemetry } from "../../telemetry/TelemetryProvider";
 import { useCurrentAccount, useSignAndExecuteTransaction, useSuiClient } from "@mysten/dapp-kit";
 import { generateKeyPair, type KeyPair } from "sui-tunnel-ts/core/crypto";
 import { defaultBackend } from "sui-tunnel-ts/core/crypto-native";
 import { makeEndpoint } from "sui-tunnel-ts/core/tunnel";
 import { fromHex, toHex } from "sui-tunnel-ts/core/bytes";
 import { DistributedTunnel } from "sui-tunnel-ts/core/distributedTunnel";
+import { Transcript } from "sui-tunnel-ts/proof/transcript";
 import { TicTacToeProtocol, type TicTacToeState, type Winner } from "sui-tunnel-ts/protocol/ticTacToe";
 import type { Party } from "sui-tunnel-ts/protocol/Protocol";
 import { MpClient, resolveMpWsUrl, type PvpChannel, type Role } from "../../pvp/mpClient";
-import { resolveBackendUrl } from "../../backend/controlPlane";
+import { getControlPlaneClient, resolveBackendUrl } from "../../backend/controlPlane";
 import {
-  closeCooperative,
+  closeCooperativeWithRoot,
   depositStake,
   openAndFundSharedTunnel,
   readCreatedAt,
 } from "../../onchain/tunnelTx";
+import { coSignedToSettleRequest } from "../../backend/settleRequest";
 
 const STAKE_BALANCE = 500n; // locked per seat (MIST)
 const STAKE_SHIFT = 100n; // moves loser→winner on a decisive result
@@ -72,6 +75,8 @@ export function usePvpTicTacToe(): PvpTicTacToe {
   const account = useCurrentAccount();
   const client = useSuiClient();
   const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
+  const { report } = useTelemetry();
+  const moveIdRef = useRef(0);
 
   const [status, setStatus] = useState<PvpStatus>("idle");
   const [role, setRole] = useState<Role | null>(null);
@@ -84,6 +89,7 @@ export function usePvpTicTacToe(): PvpTicTacToe {
   const mpRef = useRef<MpClient | null>(null);
   const dtRef = useRef<DistributedTunnel<TicTacToeState, { cell: number }> | null>(null);
   const roleRef = useRef<Role | null>(null);
+  const transcriptRef = useRef<Transcript | null>(null);
 
   // Render the engine's display state: the proposer's own move shows immediately
   // (pending, locally-signed) and reconciles to the confirmed state on co-sign.
@@ -100,6 +106,7 @@ export function usePvpTicTacToe(): PvpTicTacToe {
     mpRef.current = null;
     dtRef.current = null;
     roleRef.current = null;
+    transcriptRef.current = null;
     setStatus("idle");
     setRole(null);
     setBoard(Array(9).fill(0));
@@ -179,13 +186,35 @@ export function usePvpTicTacToe(): PvpTicTacToe {
           { a: STAKE_BALANCE, b: STAKE_BALANCE },
         );
         dtRef.current = dt;
+        const transcript = new Transcript(tunnelId);
+        transcriptRef.current = transcript;
 
         let settling = false;
-        dt.onConfirmed = () => {
+        dt.onConfirmed = (u) => {
+          transcript.append(u);
           sync();
+          report.pushLocalTxn({
+            id: moveIdRef.current++,
+            game: "tic-tac-toe",
+            time: new Date().toLocaleTimeString("en-GB"),
+            bot: "You",
+            type: dt.displayState.winner !== 0 ? "Win/Loss" : "Move",
+            status: "Success",
+            amount: "",
+          });
           if (proto.isTerminal(dt.state) && !settling) {
             settling = true;
-            void settle(dt, match.role, channel, waitPeer, reads, signExec, tunnelId).then(
+            void settle(
+              dt,
+              match.role,
+              channel,
+              waitPeer,
+              reads,
+              signExec,
+              tunnelId,
+              transcript,
+              getControlPlaneClient(),
+            ).then(
               () => setStatus("settled"),
               (e) => {
                 setError(String(e?.message ?? e));
@@ -207,7 +236,7 @@ export function usePvpTicTacToe(): PvpTicTacToe {
         setStatus("error");
       }
     })();
-  }, [account, client, signAndExecute, sync]);
+  }, [account, client, signAndExecute, sync, report]);
 
   const play = useCallback((cell: number) => {
     const dt = dtRef.current;
@@ -239,29 +268,44 @@ export function usePvpTicTacToe(): PvpTicTacToe {
   };
 }
 
-/** Exchange settlement halves over the relay; seat A submits the cooperative close. */
+/** Exchange root-anchored settlement halves over the relay, then seat A submits the close via the
+ *  backend /settle (the settler anchors the transcript root + archives to Walrus). Both seats must
+ *  anchor the SAME root or close_cooperative_with_root rebuilds different bytes and on-chain verify
+ *  fails — so the root is exchanged and asserted equal before either side trusts the combine.
+ *  Fallback: wallet-submitted close_cooperative_with_root (backend down). */
 async function settle(
   dt: DistributedTunnel<TicTacToeState, { cell: number }>,
   role: Role,
   channel: PvpChannel,
   waitPeer: <T>(t: string) => Promise<T>,
   reads: Parameters<typeof readCreatedAt>[0],
-  signExec: Parameters<typeof closeCooperative>[0]["signExec"],
+  signExec: Parameters<typeof closeCooperativeWithRoot>[0]["signExec"],
   tunnelId: string,
+  transcript: Transcript,
+  cp: ReturnType<typeof getControlPlaneClient>,
 ): Promise<void> {
   const createdAt = await readCreatedAt(reads, tunnelId);
-  const half = dt.buildSettlementHalf(createdAt, 0n);
+  const root = transcript.root();
+  const half = dt.buildSettlementHalfWithRoot(createdAt, root, 0n);
   channel.sendPeer({
     t: "settleHalf",
     partyABalance: half.settlement.partyABalance.toString(),
     partyBBalance: half.settlement.partyBBalance.toString(),
     finalNonce: half.settlement.finalNonce.toString(),
     timestamp: half.settlement.timestamp.toString(),
+    transcriptRoot: toHex(root),
     sig: toHex(half.sigSelf),
   });
-  const other = await waitPeer<{ sig: string }>("settleHalf");
-  const co = dt.combineSettlement(half.settlement, half.sigSelf, fromHex(other.sig));
-  if (role === "A") {
-    await closeCooperative({ signExec, tunnelId, settlement: co });
+  const other = await waitPeer<{ sig: string; transcriptRoot: string }>("settleHalf");
+  if (other.transcriptRoot !== toHex(root)) {
+    throw new Error("settlement transcript-root mismatch between parties");
+  }
+  const co = dt.combineSettlementWithRoot(half.settlement, half.sigSelf, fromHex(other.sig));
+  if (role !== "A") return; // single submitter, mirrors the cooperative-close pattern
+  try {
+    await cp.settle(tunnelId, coSignedToSettleRequest(co, transcript.toRecord().entries));
+  } catch (e) {
+    console.error("[tictactoe] backend settle failed; falling back to wallet close:", e);
+    await closeCooperativeWithRoot({ signExec, tunnelId, settlement: co });
   }
 }

@@ -13,7 +13,9 @@ export function PaymentsWindow(_props: GameWindowProps) {
         <span className="float-right text-arena-text">$1,248.75</span>
       </div>
       <label className="flex flex-col gap-1">
-        <span className="text-[11px] uppercase text-arena-muted">To Account</span>
+        <span className="text-[11px] uppercase text-arena-muted">
+          To Account
+        </span>
         <input
           id="to-account"
           name="toAccount"

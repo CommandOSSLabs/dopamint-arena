@@ -1,7 +1,7 @@
 //! In-memory impls of `ControlStore`, `MpStore`, and `Bus`. Today's `RwLock`
 //! maps/atomics lifted here. Selected when no `REDIS_CACHE_URL` is set.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::RwLock;
 
@@ -10,7 +10,7 @@ use tokio::sync::mpsc;
 
 use super::{Bus, ConnRef, ControlStore, MpStore};
 use crate::mp::{Checkpoint, ConnId, DirectedInvite, MatchRecord, Waiting};
-use crate::state::{GameStat, SessionRecord, StatsSnapshot, TunnelStatus};
+use crate::state::{GameStat, SessionRecord, StatsSnapshot, TunnelEvent, TunnelStatus};
 
 // ===== ControlStore =====
 
@@ -24,6 +24,8 @@ pub struct InMemoryControlStore {
     per_game_actions: RwLock<HashMap<String, u64>>,
     // Maintained at put_session time (replaces the old per-tick session scan in stats.rs).
     per_game_tunnels: RwLock<HashMap<String, u64>>,
+    recent_ring: RwLock<VecDeque<TunnelEvent>>,
+    seen_digests: RwLock<HashSet<String>>,
 }
 
 #[async_trait]
@@ -104,7 +106,22 @@ impl ControlStore for InMemoryControlStore {
             active_tunnels: self.active_tunnels.load(Ordering::Relaxed),
             settled_tunnels: self.settled_tunnels.load(Ordering::Relaxed),
             per_game,
+            recent_events: self.recent_ring.read().unwrap().iter().cloned().collect(),
         }
+    }
+
+    async fn push_recent_event(&self, ev: TunnelEvent) {
+        // Idempotent: SADD-equivalent guard so a re-poll of the same tx is a no-op.
+        if !self.seen_digests.write().unwrap().insert(ev.tx_digest.clone()) {
+            return;
+        }
+        let mut ring = self.recent_ring.write().unwrap();
+        ring.push_front(ev);
+        ring.truncate(super::RECENT_EVENTS_CAP);
+    }
+
+    async fn recent_events(&self) -> Vec<TunnelEvent> {
+        self.recent_ring.read().unwrap().iter().cloned().collect()
     }
 
     async fn ready(&self) -> bool {
@@ -247,7 +264,46 @@ impl Bus for LocalBus {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::TunnelStatus;
+    use crate::state::{TunnelEvent, TunnelEventKind, TunnelStatus};
+
+    fn settled(tunnel: &str, digest: &str) -> TunnelEvent {
+        TunnelEvent {
+            tunnel_id: tunnel.into(),
+            kind: TunnelEventKind::Settled,
+            party_a_balance: Some(1),
+            party_b_balance: Some(1),
+            transcript_root: None,
+            tx_digest: digest.into(),
+            timestamp_ms: 1,
+            proof_url: None,
+        }
+    }
+
+    // A pushed event must appear in the broadcast snapshot — that is how the dashboard receives
+    // the feed (it rides the existing /v1/stats/live SSE; no new endpoint).
+    #[tokio::test]
+    async fn snapshot_includes_recent_events() {
+        let s = InMemoryControlStore::default();
+        s.push_recent_event(settled("0xt", "dig1")).await;
+        let snap = s.snapshot().await;
+        assert_eq!(snap.recent_events.len(), 1);
+        assert_eq!(snap.recent_events[0].tx_digest, "dig1");
+    }
+
+    // Newest-first, capped, and idempotent by tx_digest: a re-polled event (cursor restart /
+    // second indexer) must NOT create a duplicate row. This is success criterion #3 in the spec.
+    #[tokio::test]
+    async fn recent_events_are_newest_first_capped_and_deduped() {
+        let s = InMemoryControlStore::default();
+        for i in 0..(crate::store::RECENT_EVENTS_CAP + 5) {
+            s.push_recent_event(settled(&format!("0x{i}"), &format!("d{i}"))).await;
+        }
+        s.push_recent_event(settled("0x0", "d0")).await; // replay of the oldest — must be a no-op
+        let got = s.recent_events().await;
+        assert_eq!(got.len(), crate::store::RECENT_EVENTS_CAP, "ring is capped");
+        let newest = crate::store::RECENT_EVENTS_CAP + 4;
+        assert_eq!(got[0].tx_digest, format!("d{newest}"), "newest first");
+    }
 
     // Heartbeat deltas must accrue to the session's game. Moved from routes.rs.
     #[tokio::test]

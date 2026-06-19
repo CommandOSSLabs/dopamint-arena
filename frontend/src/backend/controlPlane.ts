@@ -24,6 +24,58 @@ export interface Heartbeat {
   windowMs: number;
 }
 
+/** Mirrors the backend `TunnelEventKind` (serde lowercase). */
+export type TunnelEventKind = "opened" | "settled";
+
+/**
+ * One settlement-projection row from the backend (ADR-0005). camelCase per ADR-0002; u64 balances
+ * arrive as JSON numbers, `Option<_>` as nullable. `proofUrl`/`transcriptRoot` are present only
+ * once a close is archived (the /settle plan); explorer-only rows omit them.
+ */
+export interface TunnelEvent {
+  tunnelId: string;
+  kind: TunnelEventKind;
+  partyABalance: number | null;
+  partyBBalance: number | null;
+  transcriptRoot: string | null;
+  txDigest: string;
+  timestampMs: number;
+  proofUrl: string | null;
+}
+
+/** One JSON-serializable transcript entry (a `Transcript.toRecord().entries` element). */
+export interface SettleTranscriptEntry {
+  nonce: string;
+  message: string;
+  sigA: string;
+  sigB: string;
+}
+
+/** Backend /settle `settlement` object (ADR-0002 camelCase; u64 -> decimal string, 32-byte -> hex). */
+export interface SettleSettlement {
+  tunnelId: string;
+  partyABalance: string;
+  partyBBalance: string;
+  finalNonce: string;
+  timestamp: string;
+  transcriptRoot: string;
+}
+
+/** Full /settle request body: the co-signed settlement + raw sigs + the Walrus-bound transcript. */
+export interface SettleRequestBody {
+  settlement: SettleSettlement;
+  sigA: string;
+  sigB: string;
+  transcript: SettleTranscriptEntry[];
+}
+
+/** Proof links returned after the settler submits close_cooperative_with_root + Walrus archive. */
+export interface SettleResult {
+  txDigest: string;
+  walrusBlobId: string;
+  proofUrl: string;
+}
+
 /** Per-game slice of the live aggregate feed. Field names match the backend's serde. */
 export interface GameStats {
   tps: number;
@@ -38,6 +90,8 @@ export interface StatsSnapshot {
   activeTunnels: number;
   settledTunnels: number;
   perGame: Record<string, GameStats>;
+  /** Newest-first ring of recent lifecycle rows; absent on frames before the backend emits any. */
+  recentEvents?: TunnelEvent[];
 }
 
 export interface ControlPlaneClient {
@@ -51,8 +105,21 @@ export interface ControlPlaneClient {
     statsToken: string,
     heartbeat: Heartbeat,
   ): Promise<void>;
+  /** Route a cooperative close through the backend: the settler dry-runs + submits
+   *  close_cooperative_with_root (anchoring the transcript root), archives the transcript to
+   *  Walrus, and returns the proof links. Authorization is the co-signed settlement in `body`
+   *  (ADR-0007) — no session token. */
+  settle(tunnelId: string, body: SettleRequestBody): Promise<SettleResult>;
   /** Subscribe to the live aggregate SSE feed; returns an unsubscribe fn. */
-  openStatsStream(onSnapshot: (snapshot: StatsSnapshot) => void): () => void;
+  openStatsStream(handlers: StatsStreamHandlers): () => void;
+}
+
+/** Callbacks for {@link ControlPlaneClient.openStatsStream}. `onError` fires when the SSE
+ *  connection fails (e.g. backend unreachable), letting the UI tell "connecting" apart from
+ *  "offline" instead of treating both as a null snapshot. */
+export interface StatsStreamHandlers {
+  onSnapshot: (snapshot: StatsSnapshot) => void;
+  onError?: () => void;
 }
 
 class ControlPlaneError extends Error {
@@ -104,25 +171,36 @@ export function createControlPlaneClient(baseUrl: string): ControlPlaneClient {
       await failIfNotOk(res, "sendHeartbeat");
     },
 
-    openStatsStream(onSnapshot) {
+    async settle(tunnelId, body) {
+      const res = await fetch(`${root}/v1/tunnels/${tunnelId}/settle`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      await failIfNotOk(res, "settle");
+      return (await res.json()) as SettleResult;
+    },
+
+    openStatsStream(handlers) {
       const source = new EventSource(`${root}/v1/stats/live`);
       source.onmessage = (ev) => {
         try {
-          onSnapshot(JSON.parse(ev.data) as StatsSnapshot);
+          handlers.onSnapshot(JSON.parse(ev.data) as StatsSnapshot);
         } catch {
           // ignore malformed frames; the feed is best-effort
         }
       };
+      source.onerror = () => handlers.onError?.();
       return () => source.close();
     },
   };
 }
 
 /**
- * Resolve the backend base URL from VITE_BACKEND_URL. Set it to the ALB for the usual
- * cross-origin case — the backend serves CORS headers (main.rs). Leave it empty ONLY for
- * a same-origin deploy (frontend behind the same host as the backend); there is no dev
- * proxy fallback anymore, so an empty value in dev resolves to the dev server itself.
+ * Resolve the backend base URL. Empty (the default) means same-origin: dev proxies /v1 to
+ * the ALB via vite.config.ts, and prod routes /v1 to the ALB via the CloudFront `/v1/*`
+ * behavior — so the browser only ever issues same-origin requests. Set VITE_BACKEND_URL to
+ * an absolute URL only for a split-origin backend on its own https host (then CORS applies).
  */
 export function resolveBackendUrl(): string {
   return import.meta.env.VITE_BACKEND_URL ?? "";

@@ -1,0 +1,481 @@
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+} from "react";
+import { X } from "lucide-react";
+
+import { cn } from "@/lib/utils";
+import {
+  bottom,
+  clamp,
+  compact,
+  fitToColumns,
+  type GridItem,
+  type GridLayout as GridLayoutValue,
+  moveItem,
+  resizeItem,
+} from "./grid-layout-engine";
+
+export type { GridItem, GridLayoutValue };
+
+/** Props spread onto whatever element should start a drag (e.g. a title bar). */
+export interface GridDragHandleProps {
+  onPointerDown: (e: ReactPointerEvent) => void;
+  onKeyDown: (e: ReactKeyboardEvent) => void;
+  tabIndex: number;
+  role: "button";
+  "aria-label": string;
+}
+
+export interface GridItemHandle {
+  /** Spread onto the drag handle element. */
+  dragHandleProps: GridDragHandleProps;
+  /** True while this item is being dragged or resized. */
+  isActive: boolean;
+}
+
+/** A responsive rule: at container widths ≥ `minWidth`, use `cols` columns. */
+export interface GridBreakpoint {
+  minWidth: number;
+  cols: number;
+}
+
+export interface GridLayoutProps {
+  /** Controlled layout in grid units. */
+  layout: GridLayoutValue;
+  onLayoutChange: (next: GridLayoutValue) => void;
+  /** Renders each item's content; receives the drag-handle props to wire up. */
+  renderItem: (item: GridItem, handle: GridItemHandle) => ReactNode;
+  /** Fixed column count. Ignored when `breakpoints` is set. */
+  cols?: number;
+  /** Width-driven column counts; the layout refits when the active count changes. */
+  breakpoints?: GridBreakpoint[];
+  rowHeight?: number;
+  gap?: number;
+  className?: string;
+}
+
+/** Live pixel override for the item under the cursor (bypasses cell snapping). */
+type LiveState = {
+  id: string;
+  mode: "drag" | "resize";
+  dx: number;
+  dy: number;
+  w: number;
+  h: number;
+};
+
+type Box = Pick<GridItem, "x" | "y" | "w" | "h">;
+
+const FRAME_TRANSITION =
+  "left .18s cubic-bezier(.2,.8,.2,1), top .18s cubic-bezier(.2,.8,.2,1), width .18s cubic-bezier(.2,.8,.2,1), height .18s cubic-bezier(.2,.8,.2,1), transform .18s cubic-bezier(.2,.8,.2,1)";
+
+/**
+ * A draggable + resizable grid of items, react-grid-layout style, owned in-repo.
+ *
+ * For a smooth feel the active item follows the cursor pixel-precisely via a GPU
+ * `transform` (drag) or a live pixel size (resize) with transitions off, while a
+ * placeholder marks the snapped target and neighbours reflow with transitions.
+ * On release the item eases into its settled cell. Pointer moves are
+ * rAF-throttled. Arrow keys move a focused item; shift+arrows resize it.
+ */
+export function GridLayout({
+  layout,
+  onLayoutChange,
+  renderItem,
+  cols = 12,
+  breakpoints,
+  rowHeight = 64,
+  gap = 10,
+  className,
+}: GridLayoutProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(0);
+  const [live, setLive] = useState<LiveState | null>(null);
+  const [placeholder, setPlaceholder] = useState<Box | null>(null);
+
+  // Mirror the latest layout so window event handlers never read a stale closure.
+  const layoutRef = useRef(layout);
+  layoutRef.current = layout;
+
+  // Active column count: the widest breakpoint whose minWidth fits the container.
+  const activeCols = useMemo(() => {
+    if (!breakpoints?.length || !width) return cols;
+    let chosen = cols;
+    for (const bp of [...breakpoints].sort((a, b) => a.minWidth - b.minWidth)) {
+      if (width >= bp.minWidth) chosen = bp.cols;
+    }
+    return chosen;
+  }, [breakpoints, width, cols]);
+
+  // When the breakpoint changes the column count, refit the layout to it.
+  const lastColsRef = useRef(activeCols);
+  useEffect(() => {
+    if (lastColsRef.current === activeCols) return;
+    lastColsRef.current = activeCols;
+    onLayoutChange(fitToColumns(layoutRef.current, activeCols));
+  }, [activeCols, onLayoutChange]);
+
+  // z-order: interacting with a window raises it above its neighbours.
+  const [zOrder, setZOrder] = useState<Record<string, number>>({});
+  const zCounter = useRef(10);
+  const bringToFront = useCallback((id: string) => {
+    zCounter.current += 1;
+    const next = zCounter.current;
+    setZOrder((prev) => ({ ...prev, [id]: next }));
+  }, []);
+
+  // Measure container width before paint, then track it responsively.
+  useLayoutEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    setWidth(el.clientWidth);
+    const observer = new ResizeObserver(([entry]) => {
+      setWidth(entry.contentRect.width);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  const unitWidth = width / activeCols;
+  const pixelBox = (box: Box): CSSProperties => ({
+    left: box.x * unitWidth + gap / 2,
+    top: box.y * rowHeight + gap / 2,
+    width: box.w * unitWidth - gap,
+    height: box.h * rowHeight - gap,
+  });
+  const canvasHeight = (bottom(layout) + 1) * rowHeight;
+
+  const startInteraction = useCallback(
+    (
+      e: ReactPointerEvent,
+      id: string,
+      mode: "drag" | "resize",
+      axis: "both" | "x" | "y" = "both",
+    ) => {
+      if (e.button !== 0) return;
+      const it = layoutRef.current.find((i) => i.id === id);
+      if (!it || it.static) return;
+      e.preventDefault();
+      e.stopPropagation();
+      bringToFront(id);
+
+      const unit = (containerRef.current?.clientWidth ?? width) / activeCols;
+      const startX = e.clientX;
+      const startY = e.clientY;
+      const origin = { x: it.x, y: it.y, w: it.w, h: it.h };
+      const originLeft = origin.x * unit + gap / 2;
+      const originTop = origin.y * rowHeight + gap / 2;
+      const minW = it.minW ?? 1;
+      const minH = it.minH ?? 1;
+      let ph: Box = { ...origin };
+
+      setPlaceholder(ph);
+      setLive({
+        id,
+        mode,
+        dx: 0,
+        dy: 0,
+        w: origin.w * unit - gap,
+        h: origin.h * rowHeight - gap,
+      });
+
+      let raf = 0;
+      let lastEvent: PointerEvent = e.nativeEvent;
+
+      const apply = () => {
+        raf = 0;
+        const dxPx = lastEvent.clientX - startX;
+        const dyPx = lastEvent.clientY - startY;
+
+        if (mode === "drag") {
+          const tCol = clamp(
+            origin.x + Math.round(dxPx / unit),
+            0,
+            activeCols - origin.w,
+          );
+          const tRow = Math.max(0, origin.y + Math.round(dyPx / rowHeight));
+          if (tCol !== ph.x || tRow !== ph.y) {
+            const next = moveItem(
+              layoutRef.current,
+              id,
+              tCol,
+              tRow,
+              activeCols,
+            );
+            onLayoutChange(next);
+            const landed = next.find((i) => i.id === id);
+            if (landed)
+              ph = { x: landed.x, y: landed.y, w: landed.w, h: landed.h };
+            setPlaceholder(ph);
+          }
+          const snapLeft = ph.x * unit + gap / 2;
+          const snapTop = ph.y * rowHeight + gap / 2;
+          setLive({
+            id,
+            mode,
+            dx: originLeft + dxPx - snapLeft,
+            dy: originTop + dyPx - snapTop,
+            w: 0,
+            h: 0,
+          });
+        } else {
+          // Edge handles constrain one axis; the corner resizes both.
+          const tW =
+            axis === "y"
+              ? origin.w
+              : clamp(
+                  origin.w + Math.round(dxPx / unit),
+                  minW,
+                  activeCols - origin.x,
+                );
+          const tH =
+            axis === "x"
+              ? origin.h
+              : Math.max(minH, origin.h + Math.round(dyPx / rowHeight));
+          if (tW !== ph.w || tH !== ph.h) {
+            const next = resizeItem(layoutRef.current, id, tW, tH, activeCols);
+            onLayoutChange(next);
+            const resized = next.find((i) => i.id === id);
+            if (resized)
+              ph = { x: resized.x, y: resized.y, w: resized.w, h: resized.h };
+            setPlaceholder(ph);
+          }
+          const liveW =
+            axis === "y"
+              ? origin.w * unit - gap
+              : clamp(
+                  origin.w * unit - gap + dxPx,
+                  minW * unit - gap,
+                  (activeCols - origin.x) * unit - gap,
+                );
+          const liveH =
+            axis === "x"
+              ? origin.h * rowHeight - gap
+              : Math.max(
+                  minH * rowHeight - gap,
+                  origin.h * rowHeight - gap + dyPx,
+                );
+          setLive({ id, mode, dx: 0, dy: 0, w: liveW, h: liveH });
+        }
+      };
+
+      const onMove = (ev: PointerEvent) => {
+        lastEvent = ev;
+        if (!raf) raf = requestAnimationFrame(apply);
+      };
+      const onUp = () => {
+        if (raf) cancelAnimationFrame(raf);
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        setLive(null);
+        setPlaceholder(null);
+        // Float everything up to close the gaps the interaction opened; the
+        // active frame eases from its free pixel position into the settled cell.
+        onLayoutChange(compact(layoutRef.current));
+      };
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+    },
+    [activeCols, bringToFront, gap, onLayoutChange, rowHeight, width],
+  );
+
+  const onHandleKeyDown = useCallback(
+    (e: ReactKeyboardEvent, id: string) => {
+      const it = layoutRef.current.find((i) => i.id === id);
+      if (!it || it.static) return;
+      const resize = e.shiftKey;
+      const apply = (dx: number, dy: number) =>
+        resize
+          ? resizeItem(layoutRef.current, id, it.w + dx, it.h + dy, activeCols)
+          : moveItem(layoutRef.current, id, it.x + dx, it.y + dy, activeCols);
+
+      let next: GridLayoutValue | null = null;
+      switch (e.key) {
+        case "ArrowLeft":
+          next = apply(-1, 0);
+          break;
+        case "ArrowRight":
+          next = apply(1, 0);
+          break;
+        case "ArrowUp":
+          next = apply(0, -1);
+          break;
+        case "ArrowDown":
+          next = apply(0, 1);
+          break;
+        default:
+          return;
+      }
+      e.preventDefault();
+      bringToFront(id);
+      onLayoutChange(next);
+    },
+    [activeCols, bringToFront, onLayoutChange],
+  );
+
+  return (
+    <div
+      ref={containerRef}
+      className={cn("relative w-full select-none", className)}
+      style={{
+        height: canvasHeight,
+        backgroundImage: live
+          ? "linear-gradient(to right, var(--border) 1px, transparent 1px), linear-gradient(to bottom, var(--border) 1px, transparent 1px)"
+          : undefined,
+        backgroundSize: live ? `${unitWidth}px ${rowHeight}px` : undefined,
+      }}
+    >
+      {placeholder && (
+        <div
+          aria-hidden
+          className="pointer-events-none absolute rounded-xl border-2 border-dashed border-primary/40 bg-primary/10 transition-all duration-150 ease-out"
+          style={{ ...pixelBox(placeholder), zIndex: 0 }}
+        />
+      )}
+
+      {layout.map((item) => {
+        const isActive = live?.id === item.id;
+        const style: CSSProperties = {
+          ...pixelBox(item),
+          zIndex: zOrder[item.id] ?? 1,
+          transform: "translate3d(0,0,0)",
+          transition: isActive ? "none" : FRAME_TRANSITION,
+        };
+        if (isActive && live) {
+          if (live.mode === "drag") {
+            style.transform = `translate3d(${live.dx}px, ${live.dy}px, 0)`;
+            style.willChange = "transform";
+          } else {
+            style.width = live.w;
+            style.height = live.h;
+            style.willChange = "width, height";
+          }
+        }
+
+        const handle: GridItemHandle = {
+          isActive: !!isActive,
+          dragHandleProps: {
+            onPointerDown: (e) => startInteraction(e, item.id, "drag"),
+            onKeyDown: (e) => onHandleKeyDown(e, item.id),
+            tabIndex: 0,
+            role: "button",
+            "aria-label":
+              "Move window. Arrow keys move, shift plus arrows resize.",
+          },
+        };
+
+        return (
+          <div
+            key={item.id}
+            className="absolute"
+            style={style}
+            onPointerDown={() => bringToFront(item.id)}
+          >
+            {renderItem(item, handle)}
+            {!item.static && (
+              <>
+                {/* Right edge → width only. */}
+                <div
+                  className="absolute top-1 right-0 bottom-3 w-1.5 cursor-ew-resize touch-none"
+                  onPointerDown={(e) =>
+                    startInteraction(e, item.id, "resize", "x")
+                  }
+                  aria-hidden
+                />
+                {/* Bottom edge → height only. */}
+                <div
+                  className="absolute right-3 bottom-0 left-1 h-1.5 cursor-ns-resize touch-none"
+                  onPointerDown={(e) =>
+                    startInteraction(e, item.id, "resize", "y")
+                  }
+                  aria-hidden
+                />
+                {/* Corner → both axes. */}
+                <div
+                  className="absolute right-0 bottom-0 grid size-5 cursor-nwse-resize touch-none place-items-center text-muted-foreground/70 hover:text-foreground"
+                  onPointerDown={(e) =>
+                    startInteraction(e, item.id, "resize", "both")
+                  }
+                  aria-hidden
+                >
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                    <path
+                      d="M11 4 L4 11 M11 8 L8 11"
+                      stroke="currentColor"
+                      strokeWidth="1.4"
+                      strokeLinecap="round"
+                    />
+                  </svg>
+                </div>
+              </>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+export interface GridWindowProps {
+  title: ReactNode;
+  icon?: ReactNode;
+  dragHandleProps: GridDragHandleProps;
+  isActive?: boolean;
+  onClose?: () => void;
+  className?: string;
+  children: ReactNode;
+}
+
+/** Standard window chrome for a {@link GridLayout} item: draggable title bar + body. */
+export function GridWindow({
+  title,
+  icon,
+  dragHandleProps,
+  isActive = false,
+  onClose,
+  className,
+  children,
+}: GridWindowProps) {
+  return (
+    <div
+      className={cn(
+        "flex h-full w-full flex-col overflow-hidden rounded-xl border bg-card shadow-lg transition-shadow",
+        isActive
+          ? "border-primary shadow-2xl ring-1 ring-primary/30"
+          : "border-border",
+        className,
+      )}
+    >
+      <div
+        {...dragHandleProps}
+        className="flex shrink-0 cursor-grab touch-none items-center justify-between gap-2 border-b border-border bg-secondary/50 px-3 py-2 outline-none focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing"
+      >
+        <span className="flex min-w-0 items-center gap-2 text-xs font-semibold text-foreground">
+          {icon}
+          <span className="truncate">{title}</span>
+        </span>
+        {onClose && (
+          <button
+            type="button"
+            aria-label="Close window"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={onClose}
+            className="grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/15 hover:text-destructive"
+          >
+            <X className="size-3.5" />
+          </button>
+        )}
+      </div>
+      <div className="min-h-0 flex-1 overflow-auto p-3">{children}</div>
+    </div>
+  );
+}
