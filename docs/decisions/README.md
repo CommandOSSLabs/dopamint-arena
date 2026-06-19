@@ -27,3 +27,6 @@ that depends on them. An ADR captures the decision and the reasoning so the
   self-authenticating; `/settle` verifies the co-signed bytes against the tunnel's
   on-chain party pubkeys and drops the session bearer token. Supersedes the
   settle-auth portion of 0002.
+- [0008](0008-quantum-poker-protocol-zk.md) — Quantum Poker: protocol-first
+  tunnel model, per-slot asymmetric commit-reveal, n-deck/burn/Five-of-a-Kind
+  rules, and optional ZK dispute adapter.

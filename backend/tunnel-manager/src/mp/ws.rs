@@ -596,11 +596,20 @@ mod tests {
     // game actions at all. Miscount any of these and PvP TPS is wrong.
     #[test]
     fn only_move_frames_count_as_actions() {
-        assert!(relay_payload_is_move(&relay_frame("move")), "MOVE is an action");
+        assert!(
+            relay_payload_is_move(&relay_frame("move")),
+            "MOVE is an action"
+        );
         assert!(!relay_payload_is_move(&relay_frame("ack")), "ACK is not");
         let hello = serde_json::json!({ "t": "hello", "ephemeralPubkey": "0xaa" }).to_string();
-        assert!(!relay_payload_is_move(&hello), "peer messages are not actions");
-        assert!(!relay_payload_is_move("not json"), "malformed payload is not a move");
+        assert!(
+            !relay_payload_is_move(&hello),
+            "peer messages are not actions"
+        );
+        assert!(
+            !relay_payload_is_move("not json"),
+            "malformed payload is not a move"
+        );
     }
 
     // The behavior that was missing in PvP: a relayed MOVE must feed the actions counter

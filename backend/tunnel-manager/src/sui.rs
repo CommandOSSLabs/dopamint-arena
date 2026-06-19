@@ -77,7 +77,9 @@ pub struct RawTunnelEvent {
 /// u64 fields arrive over JSON-RPC as strings; accept a number too, for robustness.
 fn parsed_u64(v: &serde_json::Value, field: &str) -> Option<u64> {
     let f = v.pointer(&format!("/parsedJson/{field}"))?;
-    f.as_str().and_then(|s| s.parse().ok()).or_else(|| f.as_u64())
+    f.as_str()
+        .and_then(|s| s.parse().ok())
+        .or_else(|| f.as_u64())
 }
 
 /// `vector<u8>` arrives as an array of byte numbers; render to lowercase hex.
@@ -109,7 +111,11 @@ fn parse_event_row(ev: &serde_json::Value) -> Option<RawTunnelEvent> {
         .to_string();
     let timestamp_ms = ev
         .get("timestampMs")
-        .and_then(|v| v.as_str().and_then(|s| s.parse().ok()).or_else(|| v.as_u64()))
+        .and_then(|v| {
+            v.as_str()
+                .and_then(|s| s.parse().ok())
+                .or_else(|| v.as_u64())
+        })
         .unwrap_or(0);
     Some(RawTunnelEvent {
         type_suffix,
@@ -191,8 +197,8 @@ impl SuiSettler {
     /// are PTB `vector<u8>` arguments, so an unsigned tx is sufficient to exercise them.
     /// e2e-deferred (needs a live node); the status parse is unit-tested (`dryrun_effects_ok`).
     async fn dry_run(&self, tx: &Transaction) -> anyhow::Result<()> {
-        let tx_b64 = base64::engine::general_purpose::STANDARD
-            .encode(bcs::to_bytes(tx).context("bcs tx")?);
+        let tx_b64 =
+            base64::engine::general_purpose::STANDARD.encode(bcs::to_bytes(tx).context("bcs tx")?);
         let r = self
             .rpc("sui_dryRunTransactionBlock", serde_json::json!([tx_b64]))
             .await?;
@@ -304,7 +310,10 @@ impl SuiSettler {
             "MoveModule": { "package": self.package_id.to_string(), "module": "tunnel" }
         });
         let r = self
-            .rpc("suix_queryEvents", serde_json::json!([filter, cursor, 50, false]))
+            .rpc(
+                "suix_queryEvents",
+                serde_json::json!([filter, cursor, 50, false]),
+            )
             .await?;
         let mut events = Vec::new();
         if let Some(data) = r.get("data").and_then(|v| v.as_array()) {
@@ -394,6 +403,7 @@ fn nonce_from_tunnel(tunnel_id: &str) -> u32 {
     u32::from_str_radix(tail, 16).unwrap_or(0)
 }
 
+#[allow(clippy::too_many_arguments)] // mirrors the Move close-with-root entry's parameter list
 fn build_close_tx(
     package_id: Address,
     coin_type: TypeTag,
@@ -501,7 +511,10 @@ mod tests {
             "effects": { "status": { "status": "failure", "error": "InvalidSignature" } }
         });
         let e = dryrun_effects_ok(&r).unwrap_err();
-        assert!(e.contains("failure") || e.contains("InvalidSignature"), "got: {e}");
+        assert!(
+            e.contains("failure") || e.contains("InvalidSignature"),
+            "got: {e}"
+        );
     }
 
     // A malformed result with no effects is treated as a failure, never a silent pass.
@@ -647,7 +660,10 @@ mod tests {
         assert_eq!(row.transcript_root.as_deref(), Some("deadbeef"));
 
         closed.type_suffix = "TunnelActivated".into();
-        assert_eq!(to_tunnel_event(&closed).expect("activation").kind, TunnelEventKind::Opened);
+        assert_eq!(
+            to_tunnel_event(&closed).expect("activation").kind,
+            TunnelEventKind::Opened
+        );
 
         closed.type_suffix = "TunnelCreated".into();
         assert!(to_tunnel_event(&closed).is_none(), "created is not a row");

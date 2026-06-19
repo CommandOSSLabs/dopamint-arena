@@ -41,6 +41,7 @@ them. Don't import patterns from another ecosystem just because they're
 familiar. When the official docs, standard library, or framework examples show
 a way of doing something, that's the way — deviate only with a clear reason.
 
+Codex will review your output once you are done
 ### Naming
 
 Names (types, functions, variables, modules, files) must describe the target's

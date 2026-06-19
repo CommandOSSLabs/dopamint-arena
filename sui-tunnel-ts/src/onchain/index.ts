@@ -4,5 +4,6 @@
  * dispute-recovery orchestration.
  */
 export * from "./txbuilders";
+export * from "./createAndFund";
 export * from "./gas";
 export * from "./lifecycle";
