@@ -1,5 +1,8 @@
 import { useState } from "react";
+import { CrossSounds } from "../scene/crossSounds.ts";
 import "../cross.css";
+
+const lobbySounds = new CrossSounds();
 
 function randomCode(): string {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -21,6 +24,7 @@ export function CrossLobby({
   const [activeCode, setActiveCode] = useState<string | null>(null);
 
   const handleCreate = () => {
+    lobbySounds.play("click");
     const code = input.trim().toUpperCase() || randomCode();
     setActiveCode(code);
     setInput(code);
@@ -30,6 +34,7 @@ export function CrossLobby({
   };
 
   const handleJoin = () => {
+    lobbySounds.play("click");
     const code = input.trim().toUpperCase();
     if (!code) return;
     onJoin(code);
