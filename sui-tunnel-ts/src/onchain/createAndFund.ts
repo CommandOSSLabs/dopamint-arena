@@ -13,7 +13,7 @@ import {
 } from "@mysten/sui/transactions";
 import { SUI_CLOCK_OBJECT_ID } from "@mysten/sui/utils";
 import { buildTarget, MODULES, SUI_COIN_TYPE } from "../config";
-import type { PartyArgs, WithCoinType } from "./txbuilders";
+import { buildDeposit, type PartyArgs, type WithCoinType } from "./txbuilders";
 
 const TUNNEL = MODULES.TUNNEL;
 const CLOCK = SUI_CLOCK_OBJECT_ID;
@@ -159,4 +159,50 @@ export function buildOpenAndFundMany(
       coinType,
     }),
   );
+}
+
+/** One seat's batch deposit: which already-shared tunnel, and the stake to fund it with. */
+export interface BatchDepositSpec {
+  tunnelId: string;
+  amount: bigint;
+}
+
+/**
+ * Assemble "fund my seat in N already-shared tunnels in ONE PTB" into `tx`: a single
+ * `splitCoins` of all N stakes off one source coin, then one `entry_deposit` per tunnel.
+ *
+ * This is the human side of batch-open: the backend factory has already created+shared each
+ * tunnel (with this wallet as a party), and this PTB funds only this wallet's seats.
+ * `entry_deposit` auto-routes by sender, so the gating passes for whichever seat this wallet
+ * holds. One transaction = one gas-coin use, so the wallet never fires concurrent on-chain txs
+ * and never hits Sui equivocation.
+ *
+ * Coin selection mirrors `buildOpenAndFundMany`:
+ * - SUI (default): omit `opts`; stakes split off the gas coin.
+ * - Non-SUI: pass `opts.coinType` AND `opts.sourceCoin`; a non-SUI coinType without a sourceCoin
+ *   throws rather than mis-typing gas-coin (`Coin<SUI>`) arguments as `<T>` and aborting on-chain.
+ *
+ * Scale note: each spec adds one `splitCoins` output + one `moveCall`, so a very large
+ * `specs.length` approaches the PTB command/argument ceilings — keep batches modest.
+ */
+export function buildDepositMany(
+  tx: Transaction,
+  specs: BatchDepositSpec[],
+  opts: BatchFundOptions = {},
+): void {
+  const coinType = opts.coinType ?? SUI_COIN_TYPE;
+  if (coinType !== SUI_COIN_TYPE && !opts.sourceCoin) {
+    throw new Error(
+      `buildDepositMany: coinType ${coinType} is not SUI, so opts.sourceCoin (a Coin<${coinType}> ` +
+        `to split stakes from) is required — non-SUI stakes cannot come from the gas coin.`,
+    );
+  }
+  const source = opts.sourceCoin ?? tx.gas;
+  const coins = tx.splitCoins(
+    source,
+    specs.map((s) => tx.pure.u64(s.amount)),
+  );
+  specs.forEach((s, i) => {
+    buildDeposit(tx, { tunnelId: s.tunnelId, coin: coins[i], coinType });
+  });
 }
