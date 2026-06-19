@@ -21,6 +21,8 @@ export type PvpStatus = "idle" | "matching" | "funding" | "playing" | "settling"
 export interface PvpBombIt {
   status: PvpStatus;
   role: Role | null;
+  /** The active match code, shown on the waiting screen so the opener can share it. */
+  code: string | null;
   view: BombItView | null;
   winner: "A" | "B" | "draw" | null;
   error: string | null;
@@ -67,6 +69,7 @@ export function usePvpBombIt(): PvpBombIt {
 
   const [status, setStatus] = useState<PvpStatus>("idle");
   const [role, setRole] = useState<Role | null>(null);
+  const [code, setCode] = useState<string | null>(null);
   const [view, setView] = useState<BombItView | null>(null);
   const [winner, setWinner] = useState<"A" | "B" | "draw" | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -125,6 +128,7 @@ export function usePvpBombIt(): PvpBombIt {
     transcriptRef.current = null;
     setStatus("idle");
     setRole(null);
+    setCode(null);
     setView(null);
     setWinner(null);
     setError(null);
@@ -160,6 +164,7 @@ export function usePvpBombIt(): PvpBombIt {
       (async () => {
         try {
           setError(null);
+          setCode(code.trim().toUpperCase());
           setStatus("matching");
           const ephemeral: KeyPair = generateKeyPair();
           const mp = new MpClient(resolveMpWsUrl(resolveBackendUrl()), wallet, ephemeral);
@@ -262,7 +267,7 @@ export function usePvpBombIt(): PvpBombIt {
     nextActionRef.current = a;
   }, []);
 
-  return { status, role, view, winner, error, create, join, queueAction, reset };
+  return { status, role, code, view, winner, error, create, join, queueAction, reset };
 }
 
 /** Exchange root-anchored settlement halves over the relay, then seat A submits the close via the

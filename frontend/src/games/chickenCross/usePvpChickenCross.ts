@@ -33,6 +33,8 @@ export type PvpStatus =
 export interface PvpChickenCross {
   status: PvpStatus;
   role: Role | null;
+  /** The active match code, shown on the waiting screen so the opener can share it. */
+  code: string | null;
   view: CrossView | null;
   winner: "A" | "B" | null;
   error: string | null;
@@ -79,6 +81,7 @@ export function usePvpChickenCross(): PvpChickenCross {
 
   const [status, setStatus] = useState<PvpStatus>("idle");
   const [role, setRole] = useState<Role | null>(null);
+  const [code, setCode] = useState<string | null>(null);
   const [view, setView] = useState<CrossView | null>(null);
   const [winner, setWinner] = useState<"A" | "B" | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -139,6 +142,7 @@ export function usePvpChickenCross(): PvpChickenCross {
     transcriptRef.current = null;
     setStatus("idle");
     setRole(null);
+    setCode(null);
     setView(null);
     setWinner(null);
     setError(null);
@@ -178,6 +182,7 @@ export function usePvpChickenCross(): PvpChickenCross {
       (async () => {
         try {
           setError(null);
+          setCode(code.trim().toUpperCase());
           setStatus("matching");
           const ephemeral: KeyPair = generateKeyPair();
           const mp = new MpClient(
@@ -319,6 +324,7 @@ export function usePvpChickenCross(): PvpChickenCross {
   return {
     status,
     role,
+    code,
     view,
     winner,
     error,
