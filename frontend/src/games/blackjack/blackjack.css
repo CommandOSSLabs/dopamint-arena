@@ -1,5 +1,18 @@
 /* Casino table styling ported from the standalone blackjack client. */
 
+/* Sharp corners — scoped to the game shell so dashboard index.css --radius is untouched. */
+.blackjack-game {
+  --radius: 0;
+  --radius-sm: 0;
+  --radius-md: 0;
+  --radius-lg: 0;
+  --radius-xl: 0;
+}
+
+.blackjack-game [class*="rounded"] {
+  border-radius: 0 !important;
+}
+
 /* Casino Felt Table Background */
 .casino-felt {
   background: radial-gradient(circle at center, #0c572c 0%, #06351b 50%, #032110 100%);
@@ -22,7 +35,7 @@
 .wood-rim {
   border: 16px solid #2d1810;
   box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.8), 0 10px 25px rgba(0, 0, 0, 0.5);
-  border-radius: 40px;
+  border-radius: 0;
 }
 
 /* Gold Text and Glows */
@@ -52,7 +65,7 @@
   position: relative;
   width: var(--chip-size);
   height: var(--chip-size);
-  border-radius: 50%;
+  border-radius: 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -80,7 +93,7 @@
   content: "";
   position: absolute;
   inset: var(--chip-inset);
-  border-radius: 50%;
+  border-radius: 0;
   border: var(--chip-inner-border) solid rgba(255, 255, 255, 0.3);
   pointer-events: none;
 }
@@ -141,7 +154,7 @@
   width: 120px;
   height: 120px;
   border: 2px dashed rgba(212, 175, 55, 0.35);
-  border-radius: 50%;
+  border-radius: 0;
   display: flex;
   flex-direction: column;
   align-items: center;

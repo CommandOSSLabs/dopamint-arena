@@ -405,7 +405,7 @@ function FloorControls({
   onToggleDock,
 }: {
   className?: string;
-  side: "left" | "right";
+  side: "left" | "right" | "top";
   dockSide: DockSide;
   onOpenAdd: () => void;
   onArrange: () => void;
@@ -419,7 +419,21 @@ function FloorControls({
     setToolsOpen(false);
   };
   return (
-    <div className={cn("flex flex-col items-end gap-2", className)}>
+    <div className={cn("flex items-stretch border border-border bg-card", className)}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            size="icon"
+            onClick={onOpenAdd}
+            aria-label="Add game"
+            className="size-10 rounded-none border-0 shadow-none [&_svg]:size-4"
+          >
+            <Plus />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side={side}>Add game</TooltipContent>
+      </Tooltip>
+
       <Popover open={toolsOpen} onOpenChange={setToolsOpen}>
         <Tooltip>
           <TooltipTrigger asChild>
@@ -428,7 +442,7 @@ function FloorControls({
                 size="icon"
                 variant="secondary"
                 aria-label="Layout tools"
-                className="size-10 border border-border shadow-lg"
+                className="size-10 rounded-none border-0 border-l border-border shadow-none"
               >
                 <LayoutGrid className="size-4" />
               </Button>
@@ -461,21 +475,73 @@ function FloorControls({
           />
         </PopoverContent>
       </Popover>
+    </div>
+  );
+}
 
+/** Bottom bar: add/layout always visible; dock expand/collapse fills the rest on hover. */
+function ArenaFooter({
+  dockSide,
+  bottomCollapsed,
+  onToggleBottom,
+  onOpenAdd,
+  onArrange,
+  onAddAll,
+  onRemoveAll,
+  onToggleDock,
+}: {
+  dockSide: DockSide;
+  bottomCollapsed: boolean;
+  onToggleBottom: () => void;
+  onOpenAdd: () => void;
+  onArrange: () => void;
+  onAddAll: () => void;
+  onRemoveAll: () => void;
+  onToggleDock: () => void;
+}) {
+  const collapseRotate =
+    dockSide === "bottom"
+      ? bottomCollapsed
+        ? "rotate-180"
+        : ""
+      : bottomCollapsed
+        ? "rotate-90"
+        : "-rotate-90";
+
+  return (
+    <footer className="group/footer pointer-events-auto absolute inset-x-3 bottom-3 z-30 flex h-10 items-stretch bg-transparent">
       <Tooltip>
         <TooltipTrigger asChild>
-          <Button
-            size="icon"
-            onClick={onOpenAdd}
-            aria-label="Add game"
-            className="size-12 shadow-lg [&_svg]:size-5"
+          <button
+            type="button"
+            onClick={onToggleBottom}
+            aria-label={bottomCollapsed ? "Expand dock" : "Collapse dock"}
+            className={cn(
+              "flex h-10 flex-1 items-center justify-center border border-r-0 border-border",
+              "bg-transparent opacity-0 transition-opacity",
+              "group-hover/footer:opacity-100 group-hover/footer:bg-background",
+            )}
           >
-            <Plus />
-          </Button>
+            <ChevronDown
+              className={cn("size-4 transition-transform", collapseRotate)}
+            />
+          </button>
         </TooltipTrigger>
-        <TooltipContent side={side}>Add game</TooltipContent>
+        <TooltipContent side="top">
+          {bottomCollapsed ? "Expand dock" : "Collapse dock"}
+        </TooltipContent>
       </Tooltip>
-    </div>
+      <FloorControls
+        side="top"
+        dockSide={dockSide}
+        onOpenAdd={onOpenAdd}
+        onArrange={onArrange}
+        onAddAll={onAddAll}
+        onRemoveAll={onRemoveAll}
+        onToggleDock={onToggleDock}
+        className="shrink-0 border border-border bg-card"
+      />
+    </footer>
   );
 }
 
@@ -790,19 +856,6 @@ export function Desktop() {
   const hiddenCount = Object.keys(hidden).length;
   const hiddenEntries = layerEntries.filter((e) => e.hidden);
 
-  const renderFloorControls = (className: string, side: "left" | "right") => (
-    <FloorControls
-      className={className}
-      side={side}
-      dockSide={dockSide}
-      onOpenAdd={() => setAddOpen(true)}
-      onArrange={arrange}
-      onAddAll={addAll}
-      onRemoveAll={() => setRemoveOpen(true)}
-      onToggleDock={toggleDockSide}
-    />
-  );
-
   const floor =
     layout.length === 0 ? (
       <div className="flex h-full min-h-64 flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
@@ -817,6 +870,7 @@ export function Desktop() {
         onLayoutChange={setLayout}
         breakpoints={BREAKPOINTS}
         rowHeight={72}
+        gap={0}
         renderItem={(item, handle) => {
           const mod = get(gameOf(item.id));
           if (!mod) return null;
@@ -839,11 +893,10 @@ export function Desktop() {
       />
     );
 
-  // Floor + its overlays (controls column + the minimized-windows dock).
-  const floorArea = (controlsClass: string, side: "left" | "right") => (
+  // Floor + the minimized-windows dock (footer controls live on the desktop shell).
+  const floorArea = () => (
     <div className="relative h-full">
-      <div className="bg-dot-grid h-full overflow-auto p-2">{floor}</div>
-      {renderFloorControls(controlsClass, side)}
+      <div className="bg-dot-grid h-full overflow-auto">{floor}</div>
       <MacDock
         entries={hiddenEntries}
         side={macDockSide}
@@ -853,103 +906,82 @@ export function Desktop() {
     </div>
   );
 
-  const collapseRotate =
-    dockSide === "bottom"
-      ? bottomCollapsed
-        ? "rotate-180"
-        : ""
-      : bottomCollapsed
-        ? "rotate-90"
-        : "-rotate-90";
-  const collapseButton = (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          type="button"
-          onClick={toggleBottom}
-          onPointerDown={(e) => e.stopPropagation()}
-          aria-label={bottomCollapsed ? "Expand dock" : "Collapse dock"}
-          className={cn(
-            "z-50 flex items-center justify-center rounded-full bg-primary text-primary-foreground shadow-lg ring-2 ring-background transition-colors hover:bg-primary/90",
-            dockSide === "bottom"
-              ? "h-6 w-16 -translate-y-5"
-              : "h-16 w-6 -translate-x-5",
-          )}
-        >
-          <ChevronDown
-            className={cn("size-4 transition-transform", collapseRotate)}
-          />
-        </button>
-      </TooltipTrigger>
-      <TooltipContent>
-        {bottomCollapsed ? "Expand dock" : "Collapse dock"}
-      </TooltipContent>
-    </Tooltip>
+  const mobileFloorControls = (
+    <FloorControls
+      side="top"
+      dockSide={dockSide}
+      onOpenAdd={() => setAddOpen(true)}
+      onArrange={arrange}
+      onAddAll={addAll}
+      onRemoveAll={() => setRemoveOpen(true)}
+      onToggleDock={toggleDockSide}
+      className="fixed bottom-20 right-3 z-30 border border-border bg-card"
+    />
   );
 
   return (
-    <div className="relative flex h-full flex-col text-foreground">
-      <header className="relative z-10 flex shrink-0 items-center justify-between gap-3 border-b border-border bg-background/70 px-3 py-2.5 backdrop-blur-xl">
-        <div className="flex items-center gap-2.5">
-          <span className="wal-display hidden text-base sm:inline">
-            Dopamint<span className="wal-gradient-text">Arena</span>
-          </span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <WalletButton />
-          <ThemeToggle />
-        </div>
-      </header>
-
+    <div className="relative flex h-full min-h-0 flex-col text-foreground">
       {isDesktop ? (
-        dockSide === "bottom" ? (
-          <ResizablePanelGroup
-            orientation="vertical"
-            className="relative z-[1] min-h-0 flex-1"
-          >
-            <ResizablePanel defaultSize="58%" minSize="20%" className="min-h-0">
-              {floorArea("absolute bottom-3 right-3 z-20", "left")}
-            </ResizablePanel>
-            <ResizableHandle>{collapseButton}</ResizableHandle>
-            <ResizablePanel
-              panelRef={bottomRef}
-              collapsible
-              collapsedSize="0%"
-              defaultSize="42%"
-              minSize="14%"
-              className="min-h-0"
+        <>
+          {dockSide === "bottom" ? (
+            <ResizablePanelGroup
+              orientation="vertical"
+              className="relative z-[1] min-h-0 flex-1"
             >
-              <Dock snapshot={snapshot} side="bottom" />
-            </ResizablePanel>
-          </ResizablePanelGroup>
-        ) : (
-          <ResizablePanelGroup
-            orientation="horizontal"
-            className="relative z-[1] min-h-0 flex-1"
-          >
-            <ResizablePanel defaultSize="68%" minSize="35%" className="min-w-0">
-              {floorArea("absolute bottom-3 right-3 z-20 items-end", "right")}
-            </ResizablePanel>
-            <ResizableHandle>{collapseButton}</ResizableHandle>
-            <ResizablePanel
-              panelRef={bottomRef}
-              collapsible
-              collapsedSize="0%"
-              defaultSize="32%"
-              minSize="18%"
-              className="min-w-0"
+              <ResizablePanel defaultSize="58%" minSize="20%" className="min-h-0">
+                {floorArea()}
+              </ResizablePanel>
+              <ResizableHandle />
+              <ResizablePanel
+                panelRef={bottomRef}
+                collapsible
+                collapsedSize="0%"
+                defaultSize="42%"
+                minSize="14%"
+                className="min-h-0"
+              >
+                <Dock snapshot={snapshot} side="bottom" />
+              </ResizablePanel>
+            </ResizablePanelGroup>
+          ) : (
+            <ResizablePanelGroup
+              orientation="horizontal"
+              className="relative z-[1] min-h-0 flex-1"
             >
-              <Dock snapshot={snapshot} side="right" />
-            </ResizablePanel>
-          </ResizablePanelGroup>
-        )
+              <ResizablePanel defaultSize="68%" minSize="35%" className="min-w-0">
+                {floorArea()}
+              </ResizablePanel>
+              <ResizableHandle />
+              <ResizablePanel
+                panelRef={bottomRef}
+                collapsible
+                collapsedSize="0%"
+                defaultSize="32%"
+                minSize="18%"
+                className="min-w-0"
+              >
+                <Dock snapshot={snapshot} side="right" />
+              </ResizablePanel>
+            </ResizablePanelGroup>
+          )}
+          <ArenaFooter
+            dockSide={dockSide}
+            bottomCollapsed={bottomCollapsed}
+            onToggleBottom={toggleBottom}
+            onOpenAdd={() => setAddOpen(true)}
+            onArrange={arrange}
+            onAddAll={addAll}
+            onRemoveAll={() => setRemoveOpen(true)}
+            onToggleDock={toggleDockSide}
+          />
+        </>
       ) : (
         <>
           <main className="relative z-[1] min-h-0 flex-1 overflow-auto">
             {mobileTab === "games" && (
-              <div className="bg-dot-grid relative min-h-full p-2">
+              <div className="bg-dot-grid relative min-h-full">
                 {floor}
-                {renderFloorControls("fixed bottom-20 right-3 z-30", "left")}
+                {mobileFloorControls}
                 <MacDock
                   entries={hiddenEntries}
                   side="right"
@@ -1136,6 +1168,21 @@ export function Desktop() {
           </div>
         );
       })}
+
+      <header className="pointer-events-none absolute inset-x-3 top-3 z-30 flex items-start justify-between bg-transparent">
+        <div className="pointer-events-auto bg-background px-3 py-2">
+          <span className="wal-display text-base">
+            Dopamint<span className="wal-gradient-text">Arena</span>
+          </span>
+        </div>
+        <div className="pointer-events-auto flex items-stretch border border-border bg-background">
+          <WalletButton
+            variant="ghost"
+            className="h-10 rounded-none border-0 shadow-none px-3"
+          />
+          <ThemeToggle className="size-10 rounded-none border-0 border-l border-border shadow-none" />
+        </div>
+      </header>
     </div>
   );
 }

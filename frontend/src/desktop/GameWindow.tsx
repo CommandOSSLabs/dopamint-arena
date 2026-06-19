@@ -30,8 +30,8 @@ function HeaderButton({
           onPointerDown={(e) => e.stopPropagation()}
           onClick={onClick}
           className={cn(
-            "grid size-6 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground",
-            danger && "hover:bg-destructive/15 hover:text-destructive",
+            "grid size-6 place-items-center text-muted-foreground transition-colors hover:text-foreground",
+            danger && "hover:text-destructive",
           )}
         >
           {children}
@@ -43,12 +43,12 @@ function HeaderButton({
 }
 
 /**
- * Window chrome for a desktop game: a centered title bar (also the drag handle)
- * with minimize / maximize / close actions that reveal on hover. Minimize hides
- * the window off the floor (managed by the parent); it is re-opened from the
- * floor's Panels menu, not from an in-place collapsed bar. When `onRestore` is
- * given (the window is maximized to fill the floor) the maximize action becomes
- * a restore-down action instead.
+ * Window chrome for a desktop game: a floating title chip (left) and window
+ * controls (right) overlay the content and only appear on hover. The bar itself
+ * is transparent so the game fills the cell edge-to-edge. Minimize hides the
+ * window off the floor (managed by the parent); it is re-opened from the
+ * floor's Panels menu. When `onRestore` is given the maximize action becomes
+ * restore-down instead.
  */
 export function GameWindow({
   title,
@@ -80,27 +80,31 @@ export function GameWindow({
     <div
       data-window={domId}
       className={cn(
-        "group/window flex h-full min-h-0 w-full flex-col overflow-hidden rounded-xl border bg-card shadow-lg transition-shadow",
+        "group/window relative h-full min-h-0 w-full overflow-hidden border bg-card transition-[border-color,box-shadow]",
         isActive
-          ? "border-primary shadow-2xl ring-1 ring-primary/30"
+          ? "border-primary ring-1 ring-primary/30"
           : "border-border",
         className,
       )}
     >
-      <header
-        {...dragHandleProps}
-        className={cn(
-          "relative flex h-9 shrink-0 items-center justify-center border-b border-border bg-secondary/40 px-2 text-xs font-semibold text-foreground",
-          dragHandleProps &&
-            "cursor-grab touch-none select-none outline-none focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing",
-        )}
-      >
-        <span className="flex max-w-[60%] items-center gap-1.5">
+      <div className="h-full min-h-0 overflow-auto">{children}</div>
+
+      <header className="pointer-events-none absolute inset-x-0 top-0 z-10 flex items-start justify-between bg-transparent">
+        <div
+          {...dragHandleProps}
+          className={cn(
+            "pointer-events-auto flex max-w-[55%] items-center gap-1.5 px-2 py-1 text-xs font-semibold text-foreground",
+            "bg-transparent opacity-0 transition-opacity group-hover/window:opacity-100 group-hover/window:bg-background",
+            "focus-within:opacity-100 focus-within:bg-background",
+            dragHandleProps &&
+              "cursor-grab touch-none select-none outline-none focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing",
+          )}
+        >
           {icon}
           <span className="truncate">{title}</span>
-        </span>
+        </div>
 
-        <div className="absolute right-1 flex items-center gap-0.5 opacity-0 transition-opacity group-hover/window:opacity-100 focus-within:opacity-100 max-sm:opacity-100">
+        <div className="pointer-events-auto flex items-center gap-0.5 bg-transparent px-1 py-0.5 opacity-0 transition-opacity group-hover/window:opacity-100 group-hover/window:bg-background focus-within:opacity-100 focus-within:bg-background">
           {onMinimize && (
             <HeaderButton label="Minimize (hide)" onClick={onMinimize}>
               <Minus className="size-3.5" />
@@ -122,8 +126,6 @@ export function GameWindow({
           </HeaderButton>
         </div>
       </header>
-
-      <div className="min-h-0 flex-1 overflow-auto">{children}</div>
     </div>
   );
 }
