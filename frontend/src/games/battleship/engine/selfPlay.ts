@@ -5,8 +5,9 @@
  * moves (those need the secret fleet). In vs-bot mode one process owns BOTH
  * fleets, so this driver computes the next move for whichever seat must act —
  * committing roots, answering shots with truthful reveals + Merkle proofs, and
- * firing a simple hunt/target shot. The session hook (M1) calls this on a timer
- * and feeds each move to `OffchainTunnel.step`. See ADR 0003.
+ * firing the bot's chosen shot (strategy lives in `bot.ts`). The session hook
+ * (M1) calls this on a timer and feeds each move to `OffchainTunnel.step`. See
+ * ADR 0003.
  */
 
 import type { Party } from "sui-tunnel-ts/protocol/Protocol";
@@ -15,23 +16,20 @@ import {
   BattleshipProtocol,
   type BattleshipMove,
   type BattleshipState,
-  type ShotResult,
 } from "../protocol/battleship";
-import {
-  CELL_COUNT,
-  cellAt,
-  colOf,
-  inBounds,
-  placeFleetRandom,
-  placementsToBoard,
-  rowOf,
-} from "./fleet";
+import { CELL_COUNT, placeFleetRandom, placementsToBoard } from "./fleet";
 import {
   type BoardCommitment,
   SALT_BYTES,
   commitBoard,
   proveCell,
 } from "./merkle";
+import {
+  BOT_CONFIGS,
+  type BotDifficulty,
+  DEFAULT_BOT_DIFFICULTY,
+  pickShot,
+} from "./bot";
 
 /** A player's secret fleet plus its precomputed commitment. */
 export interface FleetSecret {
@@ -65,63 +63,17 @@ export interface DrivenMove {
   by: Party;
 }
 
-function shotsAtBoard(state: BattleshipState, defender: Party): ShotResult[] {
-  return defender === "A" ? state.shotsAtA : state.shotsAtB;
-}
-
-function orthoNeighbors(cell: number): number[] {
-  const r = rowOf(cell);
-  const c = colOf(cell);
-  const out: number[] = [];
-  for (const [dr, dc] of [
-    [-1, 0],
-    [1, 0],
-    [0, -1],
-    [0, 1],
-  ] as const) {
-    if (inBounds(r + dr, c + dc)) out.push(cellAt(r + dr, c + dc));
-  }
-  return out;
-}
-
-/**
- * Hunt/target shot: if a prior hit on the defender has unexplored neighbors,
- * fire there (chase the ship); otherwise fire a random unfired cell. Makes the
- * bot look like it's playing rather than spraying.
- */
-function pickShot(
-  state: BattleshipState,
-  shooter: Party,
-  rng: () => number,
-): number {
-  const defender = otherParty(shooter);
-  const shots = shotsAtBoard(state, defender);
-  const fired = new Set(shots.map((s) => s.cell));
-
-  const targets: number[] = [];
-  for (const s of shots) {
-    if (!s.isHit) continue;
-    for (const n of orthoNeighbors(s.cell)) if (!fired.has(n)) targets.push(n);
-  }
-  const pool = targets.length > 0 ? targets : openCells(fired);
-  return pool[Math.min(pool.length - 1, Math.floor(rng() * pool.length))];
-}
-
-function openCells(fired: Set<number>): number[] {
-  const out: number[] = [];
-  for (let cell = 0; cell < CELL_COUNT; cell++)
-    if (!fired.has(cell)) out.push(cell);
-  return out;
-}
-
 /**
  * The next move for whichever seat must act, or null when the game is over.
- * `secrets` must hold both fleets (vs-bot runs both seats locally).
+ * `secrets` must hold both fleets (vs-bot runs both seats locally). `difficulty`
+ * tunes only the bot's shot selection (see `bot.ts`); commits and reveals are
+ * forced by the protocol regardless.
  */
 export function nextMove(
   state: BattleshipState,
   secrets: { A: FleetSecret; B: FleetSecret },
   rng: () => number,
+  difficulty: BotDifficulty = DEFAULT_BOT_DIFFICULTY,
 ): DrivenMove | null {
   if (state.winner !== 0 || state.phase === "over") return null;
 
@@ -160,7 +112,10 @@ export function nextMove(
 
   return {
     by: state.turn,
-    move: { type: "shoot", cell: pickShot(state, state.turn, rng) },
+    move: {
+      type: "shoot",
+      cell: pickShot(state, state.turn, rng, BOT_CONFIGS[difficulty]),
+    },
   };
 }
 
@@ -174,11 +129,12 @@ export function playToCompletion(
   initial: BattleshipState,
   secrets: { A: FleetSecret; B: FleetSecret },
   rng: () => number,
+  difficulty: BotDifficulty = DEFAULT_BOT_DIFFICULTY,
   maxMoves = 2000,
 ): BattleshipState {
   let state = initial;
   for (let i = 0; i < maxMoves; i++) {
-    const driven = nextMove(state, secrets, rng);
+    const driven = nextMove(state, secrets, rng, difficulty);
     if (!driven) return state;
     state = protocol.applyMove(state, driven.move, driven.by);
   }
