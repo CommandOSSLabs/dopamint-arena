@@ -71,7 +71,7 @@ jobs:
           PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
         with:
           command: up
-          stack-name: ${{ github.event.inputs.environment || 'dev' }}
+          stack-name: CommandOSS/dopamint-arena/${{ github.event.inputs.environment || 'dev' }}
           work-dir: infra
           pulumi-version: 3.243.0
           config-map: |
