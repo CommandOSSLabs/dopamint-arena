@@ -92,8 +92,9 @@ export interface BotQuantumPoker {
   opponentWallet: string | null;
   error: string | null;
   start: (mode: BotPokerMode, topUpSui?: number) => void;
-  /** Seed the persistent AUTO bots from the wallet (separate step, fires the wallet popup). */
-  fundBots: (topUpSui?: number) => void;
+  /** Seed the persistent AUTO bots from the wallet (separate step, fires the wallet popup).
+   *  `onFunded` runs once the funding has landed — pass it to chain straight into a game. */
+  fundBots: (topUpSui?: number, onFunded?: () => void) => void;
   fundingBots: boolean;
   fold: () => void;
   check: () => void;
@@ -232,8 +233,10 @@ export function useBotQuantumPoker(): BotQuantumPoker {
             const need = 2n * perSeat + AUTO_MIN_GAS_MIST;
             const bal = await botBalances(botClient, bots);
             if (bal.a < need || bal.b < need) {
-              setError("fund the bots first — tap “Fund bots”");
-              setStatus("error");
+              // Not a dead error — drop back to the lobby with a hint so one tap on "Fund bots"
+              // (which keeps the wallet-popup gesture) gets the user straight into a game.
+              setError("Fund the bots first to start a game.");
+              setStatus("idle");
               return;
             }
 
@@ -478,7 +481,7 @@ export function useBotQuantumPoker(): BotQuantumPoker {
   // async balance reads in `start()` silently dropped the popup. Funds each bot the stake it must
   // front (2×perSeat) plus gas; the keys persist, so this is one-and-done like Blackjack.
   const fundBots = useCallback(
-    (topUpSui?: number) => {
+    (topUpSui?: number, onFunded?: () => void) => {
       if (!account) {
         setError("connect a wallet to fund the bots");
         return;
@@ -499,6 +502,7 @@ export function useBotQuantumPoker(): BotQuantumPoker {
             if (b.a >= need && b.b >= need) break;
             await new Promise((r) => setTimeout(r, 1000));
           }
+          onFunded?.(); // e.g. start the game so "Fund bots & play" is one tap
         })
         .catch((e) => setError(e instanceof Error ? e.message : String(e)))
         .finally(() => setFundingBots(false));

@@ -1,4 +1,4 @@
-import { useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { Party } from "sui-tunnel-ts/protocol/Protocol";
 import type { PokerState } from "sui-tunnel-ts/protocol/quantumPoker";
 import type { GameWindowProps } from "../types";
@@ -186,6 +186,22 @@ export function QuantumPokerPvpWindow(_props: GameWindowProps) {
   // Optional stake top-up (SUI) entered in the lobby; threaded into the chosen lane.
   const [topUp, setTopUp] = useState("");
 
+  // Auto-setup: drop the lobby clicks for automation/demo. With `?qpauto=auto` (or `vsbot`) the
+  // window drives straight into a game on mount; `?qpstake=0.1` sets the stake. Bots persist in
+  // localStorage, so a warm session needs NO wallet popup — open a tab and it plays. A cold
+  // session surfaces bot.start's own "fund the bots first" guard. Fires once.
+  const autoStartedRef = useRef(false);
+  useEffect(() => {
+    if (autoStartedRef.current) return;
+    const q = new URLSearchParams(window.location.search);
+    const auto = q.get("qpauto");
+    if (!auto) return;
+    autoStartedRef.current = true;
+    const stakeParam = q.get("qpstake");
+    const stake = stakeParam ? Number(stakeParam) : undefined;
+    bot.start(auto === "vsbot" ? "vsBot" : "auto", stake);
+  }, [bot]);
+
   if (!onBot && pvp.status === "idle") {
     const lobbyBtn =
       "rounded-lg px-4 py-2 text-[13px] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--qp-lilac)]/60 disabled:opacity-40";
@@ -273,11 +289,16 @@ export function QuantumPokerPvpWindow(_props: GameWindowProps) {
           <button
             type="button"
             disabled={invalid || bot.fundingBots}
-            onClick={() => bot.fundBots(stakeSui)}
+            onClick={() => bot.fundBots(stakeSui, () => bot.start("auto", stakeSui))}
             className={`${lobbyBtn} border border-[var(--qp-lilac)]/30 text-slate-300 hover:bg-white/5 disabled:opacity-50`}
           >
-            {bot.fundingBots ? "Funding bots…" : "Fund bots · for Watch bots"}
+            {bot.fundingBots ? "Funding bots…" : "Fund bots & play"}
           </button>
+          {bot.error ? (
+            <p className="text-center text-[11px] text-[var(--qp-lilac)]">
+              {bot.error}
+            </p>
+          ) : null}
         </div>
       </div>
     );
