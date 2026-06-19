@@ -28,7 +28,7 @@ export const initialFeeder = (): FeederState => ({
   facing: ["north", "north"],
 });
 
-const HAZARD_KIND: Record<string, "car" | "log" | "train"> = {
+const HAZARD_KIND: Record<"road" | "water" | "rails", "car" | "log" | "train"> = {
   road: "car",
   water: "log",
   rails: "train",
