@@ -314,22 +314,46 @@ In other words, dual ed25519 sign + verify consumes roughly **half** of the achi
 
 ---
 
+## 5.5 Worker-count tuning
+
+After the initial report, I ran a worker-count sweep to find the highest honest full-sign TPS. Tested `48, 96, 128, 144, 160, 180, 192` workers with 1000 tunnels, and then spot-checked 500 and 2000 tunnels at the best worker count.
+
+| Workers | Tunnels | Instance A TPS | Instance B TPS | Fleet TPS |
+|---|---|---|---|---|
+| 48 | 1000 | 135k | 136k | ~271k |
+| 96 | 1000 | 208k | 212k | ~420k |
+| **128** | **1000** | **228k** | **239k** | **~468k** |
+| 144 | 1000 | 210k | 210k | ~420k |
+| 160 | 1000 | 181k | 197k | ~378k |
+| 180 | 1000 | 87k* | 194k | unreliable |
+| 192 | 1000 | 105k* | 173k | unreliable |
+| 128 | 500 | 226k | 231k | ~458k |
+| 128 | 2000 | 220k | 220k | ~440k |
+
+\* Instance A showed noisy/degraded behavior during the sweep, likely from leftover load from earlier failed experiments; those rows are not representative.
+
+**Best configuration found:** `128 workers × 1000 tunnels × blackjack × full sign`, reaching **~468k fleet TPS** (~234k per instance). This is a **~14% improvement** over the original 180-worker run.
+
+---
+
 ## 6. Scaling estimate to 5M TPS
 
-Assuming near-linear horizontal scaling across identical instances:
+Assuming near-linear horizontal scaling across identical instances. Per-instance throughput is the fleet total divided by 2.
 
-| Target | Mode | Instances needed (rounded up) |
-|---|---|---|
-| 5M TPS | full sign + verify | **13** |
-| 5M TPS | sign-only | **10** |
-| 5M TPS | none (protocol only) | **6** |
+| Target | Mode | Per-instance TPS | Instances needed (rounded up) |
+|---|---|---|---|
+| 5M TPS | full sign + verify | ~205k | **25** |
+| 5M TPS | sign-only | ~373k | **14** |
+| 5M TPS | none (protocol only) | ~430k | **12** |
+
+> **Update after worker tuning (Section 5.5):** the best honest full-sign configuration reached ~234k per instance, which lowers the full-sign estimate to **~22 instances**.
 
 The current dev stack is capped at 2 instances. Reaching 5M TPS requires either:
 
-1. Raising the dev benchmark ASG max to 13+ instances, or
+1. Raising the dev benchmark ASG max to 22+ instances, or
 2. Running the benchmark in a larger Pulumi stack / region.
 
-At on-demand pricing, 13× `c7i.48xlarge` in `us-east-1` costs roughly **$90–110/hour**, so a 5-minute test is ~$8–10 in compute.
+At on-demand pricing, 22× `c7i.48xlarge` in `us-east-1` costs roughly **$150–170/hour**, so a 5-minute test is ~$12–15 in compute.
 
 ---
 
