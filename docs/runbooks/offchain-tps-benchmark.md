@@ -157,8 +157,9 @@ For a 5M-TPS oriented test, start with:
 - `blackjack` (the faster game)
 - `full` sign mode (the honest metric)
 - 1000–5000 tunnels
-- 128 workers (tuned best; each `c7i.48xlarge` has 192 vCPUs)
-- 10–20 second duration
+- 128 workers for a single-process run, **or**
+- **4 processes × 48 workers** to fully saturate a `c7i.48xlarge` (192 vCPUs)
+- 10–20 second duration for a quick test, 120 seconds for stable telemetry
 
 ### 5.2 Build + run via SSM
 
@@ -178,6 +179,21 @@ aws ssm send-command \
 ```
 
 Save the `CommandId`.
+
+### 5.2a Multi-process run (recommended for maximum TPS)
+
+To fully saturate all 192 vCPUs on a `c7i.48xlarge`, run **4 independent Node processes** in parallel, each with 48 workers and 250 tunnels:
+
+```bash
+aws ssm send-command \
+  --profile AdministratorAccess-129671602944 \
+  --region us-east-1 \
+  --instance-ids i-07ab8681b54a8c1e9 i-089589b8ee6fab47c \
+  --document-name AWS-RunShellScript \
+  --parameters commands='["cd /opt/dopamint/repo && git fetch --depth 1 origin feat/offchain-tps-bench && git reset --hard FETCH_HEAD && cd frontend && pnpm install --frozen-lockfile && pnpm build:bench && OUT=/tmp/multi_proc_bench_$(date +%Y%m%d_%H%M%S) && mkdir -p $OUT && for i in 1 2 3 4; do node dist/bench/offchainTps.js --game blackjack --workers 48 --tunnels 250 --sign full --duration 120000 --json $OUT/proc_$i.json >> $OUT/bench.log 2>&1 & done; wait; python3 -c \"import json,glob; fs=glob.glob(\\\"$OUT/proc_*.json\\\"); print(sum(json.load(open(f))[\\\"totalInteractions\\\"] for f in fs), sum(json.load(open(f))[\\\"avgTps\\\"] for f in fs))\""]'
+```
+
+This is the configuration that reached **~637k fleet TPS** in the reported run.
 
 ### 5.3 Monitor progress
 

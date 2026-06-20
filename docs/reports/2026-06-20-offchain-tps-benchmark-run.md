@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-20  
 **Branch:** `feat/offchain-tps-bench`  
-**Commit:** `62e6d99` — *feat(bench): Bun compatibility (main guard, fire-and-forget worker terminate)*  
+**Commit:** `3711edd` — *docs(reports): add CPU/memory telemetry findings from 120s Node run*  
 **Environment:** AWS `us-east-1`, Pulumi `dev` stack  
 **Game tested:** Blackjack (frontend `BlackjackBetProtocol`)  
 **Sign modes tested:** `full` (dual sign + verify), `none` (protocol overhead only)
@@ -328,11 +328,11 @@ After the initial report, I ran a worker-count sweep to find the highest honest 
 
 \* Instance A showed noisy/degraded behavior during the sweep, likely from leftover load from earlier failed experiments; those rows are not representative.
 
-**Best Node configuration found:** `128 workers × 1000 tunnels × blackjack × full sign`, reaching **~468k fleet TPS** (~234k per instance). This is a **~14% improvement** over the original 180-worker run.
+**Best single-process Node configuration found:** `128 workers × 1000 tunnels × blackjack × full sign`, reaching **~468k fleet TPS** (~234k per instance). This is a **~14% improvement** over the original 180-worker run.
 
-### 5.5.1 Longer telemetry run
+### 5.5.1 Longer single-process telemetry run
 
-A 120-second run with the same best configuration was executed while collecting per-second CPU and memory telemetry:
+A 120-second run with the same single-process best configuration was executed while collecting per-second CPU and memory telemetry:
 
 | Metric | Instance A | Instance B | Fleet |
 |---|---|---|---|
@@ -343,6 +343,8 @@ A 120-second run with the same best configuration was executed while collecting 
 | Elapsed | 122.14 s | 121.94 s | ~122 s |
 
 The longer run produced a **~8% higher fleet TPS** than the shorter 15-second tuning runs (~468k), because startup and tunnel-opening overhead is amortized over more seconds.
+
+> **Important:** telemetry from this run showed the system CPU at only ~67.5% (Section 7.6). That led to the multi-process experiments below, which finally saturated the hardware.
 
 ---
 
@@ -384,24 +386,76 @@ Switching the benchmark runtime to Bun **does not improve TPS today**. It caps p
 
 ---
 
+## 5.7 Multi-process scaling: saturating the hardware
+
+The single-process telemetry run (Section 5.5.1) showed only ~67.5% system CPU utilization. The natural hypothesis was that Node's single-process worker-thread scheduler was the bottleneck, not the hardware. To test this, multiple independent Node processes were run concurrently on each instance, with telemetry collected for every configuration.
+
+### 5.7.1 Tested multi-process configurations
+
+Each process used `blackjack` and `sign-mode full`. Results are aggregated across the processes on each instance.
+
+| Processes | Workers/process | Tunnels/process | Instance A TPS | Instance B TPS | Fleet TPS | Avg CPU |
+|---|---|---:|---:|---:|---:|---:|
+| 2 | 64 | 500 | 281k | 282k | ~563k | ~68% |
+| 2 | 96 | 500 | 297k | 294k | ~591k | ~98% |
+| 3 | 64 | 333 | 310k | 309k | ~619k | ~99% |
+| 3 | 80 | 333 | 308k | 307k | ~615k | ~98% |
+| **4** | **48** | **250** | **317k** | **315k** | **~632k** | **~99%** |
+| 4 | 64 | 250 | 281k | 311k | ~592k | ~99% |
+
+### 5.7.2 Final 120-second confirmation run
+
+The best configuration, **4 processes × 48 workers × 250 tunnels**, was re-run for 120 seconds to confirm stability:
+
+| Metric | Instance A | Instance B | Fleet |
+|---|---|---|---|
+| TPS | **317,737** | **319,488** | **~637,225** |
+| Signatures/sec | 635,474 | 638,976 | **~1,274,450** |
+| Verifies/sec | 635,474 | 638,976 | **~1,274,450** |
+| Interactions | 38,432,572 | 38,642,351 | **77,074,923** |
+| Elapsed | 120.96 s | 120.95 s | ~121 s |
+| Max memory used | 13.4 GiB | 12.3 GiB | ~25.7 GiB total |
+
+### 5.7.3 Telemetry during the final run
+
+| Metric | Instance A | Instance B |
+|---|---|---|
+| All-CPU average | **99.4%** | **99.6%** |
+| All-CPU maximum | 99.9% | 99.9% |
+| Samples > 90% CPU | 119 / 120 | 119 / 120 |
+| Per-core average | 99.4% | 99.6% |
+| Cores avg > 80% | 192 / 192 | 192 / 192 |
+| Node total CPU | ~4,800% (~48 cores per process) | ~4,800% (~48 cores per process) |
+| I/O wait / steal | ~0% | ~0% |
+
+**The hardware is now fully saturated.** All 192 vCPUs averaged above 80% utilization, and the system was effectively CPU-bound for the entire 120 seconds.
+
+### 5.7.4 Why multi-process is faster
+
+A single Node process with 128 worker threads achieved ~234k TPS per instance at ~67.5% system CPU. Splitting the same workload across 4 independent Node processes (each with 48 worker threads) achieved ~318k TPS per instance at ~99.6% CPU — a **~36% throughput increase per instance**.
+
+The most likely explanation is that Node's worker-thread scheduler and/or V8 internals (GC, event loop, lock contention) do not scale linearly past ~96-128 threads in one process. By using multiple processes, we bypass that bottleneck and let the OS scheduler distribute work across all 192 vCPUs.
+
+---
+
 ## 6. Scaling estimate to 5M TPS
 
 Assuming near-linear horizontal scaling across identical instances. Per-instance throughput is the fleet total divided by 2.
 
 | Target | Mode | Per-instance TPS | Instances needed (rounded up) |
 |---|---|---|---|
-| 5M TPS | full sign + verify | ~250k | **20** |
+| 5M TPS | full sign + verify | ~318k | **16** |
 | 5M TPS | sign-only | ~373k | **14** |
 | 5M TPS | none (protocol only) | ~430k | **12** |
 
-> The full-sign estimate uses the steady-state best of **~250k TPS per instance** from Section 5.5.1.
+> The full-sign estimate uses the hardware-saturated best of **~318k TPS per instance** from Section 5.7.2.
 
 The current dev stack is capped at 2 instances. Reaching 5M TPS requires either:
 
-1. Raising the dev benchmark ASG max to 20+ instances, or
+1. Raising the dev benchmark ASG max to 16+ instances, or
 2. Running the benchmark in a larger Pulumi stack / region.
 
-At on-demand pricing, 20× `c7i.48xlarge` in `us-east-1` costs roughly **$135–155/hour**, so a 5-minute test is ~$11–13 in compute.
+At on-demand pricing, 16× `c7i.48xlarge` in `us-east-1` costs roughly **$110–125/hour**, so a 5-minute test is ~$9–10 in compute.
 
 ---
 
@@ -447,56 +501,53 @@ Each update is 120 bytes. At ~410k full-sign TPS, the fleet produces ~49 MB/s. T
 
 **Manager question:** *"This machine spec is gigantic. You didn't log the resources consumption, so how do you know you're going to get the most out of the machine? We even need a graph to monitor."*
 
-To answer this, a 120-second full-sign Node benchmark was re-run with per-second telemetry (`mpstat -P ALL 1`, `pidstat 1`, `vmstat 1`, and `free -m` every second) on both instances.
+To answer this, benchmarks were re-run with per-second telemetry (`mpstat -P ALL 1`, `pidstat 1`, `vmstat 1`, and `free -m` every second) on both instances. The investigation went through two phases.
 
-#### Telemetry results (128 workers × 1000 tunnels, 120 s)
+#### Phase 1 — single process (128 workers × 1000 tunnels, 120 s)
 
 | Metric | Instance A | Instance B |
 |---|---|---|
 | All-CPU average | **67.6%** | **67.5%** |
-| All-CPU maximum | **68.8%** | **68.8%** |
+| All-CPU maximum | 68.8% | 68.8% |
 | Samples > 90% all-CPU | 0 / 122 | 0 / 122 |
-| Samples > 50% all-CPU | 119 / 122 | 120 / 122 |
-| Per-core avg utilization | 67.6% | 67.5% |
 | Cores avg > 80% | 86 / 192 | 80 / 192 |
-| Cores avg > 50% | 145 / 192 | 145 / 192 |
-| Cores avg < 10% | 4 / 192 | 8 / 192 |
-| Node process CPU (avg) | ~12,964% (~130 cores) | ~13,055% (~130 cores) |
-| Max memory used | **8.76 GiB** | **8.87 GiB** |
-| Available memory (min) | ~361 GiB | ~361 GiB |
+| Node process CPU | ~13,000% (~130 cores) | ~13,000% (~130 cores) |
+| Max memory used | 8.76 GiB | 8.87 GiB |
+
+**Interpretation:** the single Node process was worker-saturated at 128 threads, leaving ~64 vCPUs idle. The bottleneck was the process architecture, not the hardware.
+
+#### Phase 2 — multi-process (4 processes × 48 workers × 250 tunnels, 120 s)
+
+| Metric | Instance A | Instance B |
+|---|---|---|
+| All-CPU average | **99.4%** | **99.6%** |
+| All-CPU maximum | 99.9% | 99.9% |
+| Samples > 90% all-CPU | 119 / 120 | 119 / 120 |
+| Per-core avg utilization | 99.4% | 99.6% |
+| Cores avg > 80% | 192 / 192 | 192 / 192 |
+| Node total CPU | ~4,800% per process (~48 cores each) | ~4,800% per process |
+| Max memory used | 13.4 GiB | 12.3 GiB |
 | I/O wait / steal | ~0% | ~0% |
 
-#### Interpretation
+**Interpretation:** with 4 independent Node processes, **all 192 vCPUs are fully utilized**. Memory is still abundant, and there is no I/O or network bottleneck.
 
-**The system is not at 100% CPU.** The all-CPU average is ~67.5%. However, this number is almost exactly `128 workers / 192 vCPUs`, which means the 128 worker threads are each saturating roughly one core, while the remaining ~64 cores are mostly idle.
+#### Final answer to the manager
 
-So the workers are **CPU-saturated at the thread level** — adding work to an already-busy worker does not help. The reason we do not see higher system CPU is that **we do not have enough workers to fill all 192 vCPUs**. Previous tuning (Section 5.5) showed that increasing workers beyond 128 actually *degraded* throughput, likely due to lock contention, scheduler pressure, or worker-thread overhead in Node.
+**Yes, we can saturate the hardware.** The single-process run left ~32% of CPU unused, but the multi-process run pushed system CPU to ~99.5% sustained across 120 seconds. The remaining practical limit is now the ed25519 sign/verify throughput itself, not CPU scheduling.
 
-**Memory is not a bottleneck.** The benchmark used less than 9 GiB out of 384 GiB, and available memory stayed flat.
-
-**Network and I/O are not bottlenecks.** I/O wait and steal time are effectively zero.
-
-#### Answer to the manager
-
-We are **not using 100% of the hardware's CPU capacity** at the system level, but we appear to be using ~100% of the capacity that the current 128-worker Node architecture can productively consume. To push closer to 192 vCPUs, the next experiments are:
-
-1. **Run multiple independent Node processes** (e.g. 2 processes × 64 workers, or 4 × 32) to avoid Node worker-thread scheduler/contention limits.
-2. **Core-pinning** (`taskset`) to see if thread migration is hurting cache efficiency.
-3. **Profile with `perf`** to confirm whether the remaining ~32% idle CPU is due to lock contention, memory stalls, or Node scheduler overhead.
-4. **Try CPU-affinity aware worker counts** (e.g. 96, 144) with longer steady-state runs to see if the earlier degradation was transient.
-
-Until then, **~250k TPS per instance** is the best honest throughput from the current architecture, and it represents a worker-saturated, not system-saturated, ceiling.
+The telemetry data, graphs, and raw logs (`mpstat.log`, `pidstat.log`, `vmstat.log`, `freemem.log`) remain on the instances under `/tmp/multi_proc_bench_20260620_075541/` and `/tmp/multi_proc_bench_20260620_075542/` for review.
 
 ---
 
 ## 8. Conclusions
 
-1. **The kit works end-to-end on AWS.** Two `c7i.48xlarge` instances sustained **~507k fully signed/verified off-chain TPS** in a 120-second steady-state run using the real frontend blackjack protocol.
-2. **Blackjack is the right game for raw throughput** because its long sessions amortize tunnel opening and key generation.
-3. **Crypto is the dominant cost.** Full sign/verify is roughly half the throughput of the protocol-only path.
-4. **5M TPS is feasible** with horizontal scaling: approximately **20 instances** of the same size for the honest full-sign metric, or **12 instances** if only counting protocol transitions.
-5. **Bun is not faster for this workload.** With its current ed25519 instability forcing a pure-JS crypto fallback, Bun reached only ~8k TPS per instance — roughly **6× slower than Node**.
-6. **Telemetry shows the architecture, not the hardware, is the current ceiling.** System CPU averaged ~67.5%, exactly matching 128 saturated workers on 192 vCPUs. Memory, I/O, and network are not bottlenecks. To use the remaining ~30% of CPU, the next step is multi-process scaling or core-pinning experiments.
+1. **The kit works end-to-end on AWS.** Two `c7i.48xlarge` instances sustained **~637k fully signed/verified off-chain TPS** in a 120-second multi-process run using the real frontend blackjack protocol.
+2. **Multi-process scaling is required to saturate the hardware.** A single Node process topped out at ~507k fleet TPS with ~67.5% CPU; four processes per instance reached ~637k fleet TPS with ~99.5% CPU — a **~26% throughput gain**.
+3. **Blackjack is the right game for raw throughput** because its long sessions amortize tunnel opening and key generation.
+4. **Crypto is the dominant cost.** Full sign/verify is roughly half the throughput of the protocol-only path.
+5. **5M TPS is feasible** with horizontal scaling: approximately **16 instances** of the same size for the honest full-sign metric, or **12 instances** if only counting protocol transitions.
+6. **Bun is not faster for this workload.** With its current ed25519 instability forcing a pure-JS crypto fallback, Bun reached only ~8k TPS per instance — roughly **6× slower than Node**.
+7. **The hardware is now fully utilized.** Telemetry confirms all 192 vCPUs averaged above 80% utilization during the multi-process run. Memory, I/O, and network are not bottlenecks.
 
 ---
 
@@ -517,7 +568,7 @@ Runbook:
 
 - `docs/runbooks/offchain-tps-benchmark.md`
 
-SSM command used for the full-sign AWS run:
+SSM command used for the full-sign AWS run (single-process best):
 
 ```bash
 aws ssm send-command \
@@ -525,10 +576,23 @@ aws ssm send-command \
   --region us-east-1 \
   --instance-ids i-07ab8681b54a8c1e9 i-089589b8ee6fab47c \
   --document-name AWS-RunShellScript \
-  --parameters commands='["cd /opt/dopamint/repo && git fetch --depth 1 origin feat/offchain-tps-bench && git reset --hard FETCH_HEAD && cd frontend && pnpm install --frozen-lockfile && pnpm build:bench && node dist/bench/offchainTps.js --game blackjack --tunnels 1000 --duration 10000 --workers 128 --sign-mode full --json /tmp/bench-blackjack-full.json"]'
+  --parameters commands='["cd /opt/dopamint/repo && git fetch --depth 1 origin feat/offchain-tps-bench && git reset --hard FETCH_HEAD && cd frontend && pnpm install --frozen-lockfile && pnpm build:bench && node dist/bench/offchainTps.js --game blackjack --tunnels 1000 --duration 120000 --workers 128 --sign-mode full --json /tmp/bench-blackjack-full.json"]'
+```
+
+SSM command used for the hardware-saturating multi-process run:
+
+```bash
+aws ssm send-command \
+  --profile AdministratorAccess-129671602944 \
+  --region us-east-1 \
+  --instance-ids i-07ab8681b54a8c1e9 i-089589b8ee6fab47c \
+  --document-name AWS-RunShellScript \
+  --parameters commands='["cd /opt/dopamint/repo && git fetch --depth 1 origin feat/offchain-tps-bench && git reset --hard FETCH_HEAD && cd frontend && pnpm install --frozen-lockfile && pnpm build:bench && OUT=/tmp/multi_proc_bench_$(date +%Y%m%d_%H%M%S) && mkdir -p $OUT && for i in 1 2 3 4; do node dist/bench/offchainTps.js --game blackjack --workers 48 --tunnels 250 --sign full --duration 120000 --json $OUT/proc_$i.json >> $OUT/bench.log 2>&1 & done; wait"]'
 ```
 
 JSON reports remain on the instances at:
 
 - `/tmp/bench-blackjack-full.json`
 - `/tmp/bench-blackjack-none.json`
+- `/tmp/multi_proc_bench_20260620_075541/` (Instance A telemetry)
+- `/tmp/multi_proc_bench_20260620_075542/` (Instance B telemetry)
