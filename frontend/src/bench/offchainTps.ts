@@ -180,7 +180,15 @@ export async function runBenchmark(cfg: BenchConfig): Promise<BenchReport> {
     await Promise.all(done);
   } finally {
     clearInterval(progressTimer);
-    await Promise.all(workers.map((w) => w.terminate()));
+    // Fire-and-forget worker termination. Bun's Worker.terminate() can hang,
+    // and the workers have already exited by this point.
+    for (const w of workers) {
+      try {
+        w.terminate();
+      } catch {
+        // ignore
+      }
+    }
   }
 
   const elapsedMs = Date.now() - start;
@@ -270,6 +278,18 @@ function main(argv: string[]): void {
     });
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+function isMainModule(): boolean {
+  const nodeMain = import.meta.url === pathToFileURL(process.argv[1] ?? "").href;
+  if (nodeMain) return true;
+  // Bun sets process.argv[1] to the script path but import.meta.url may differ;
+  // fall back to checking that this file is the invoked script.
+  const bunMain =
+    typeof process !== "undefined" &&
+    "bun" in process.versions &&
+    !!process.argv[1]?.includes("offchainTps");
+  return bunMain;
+}
+
+if (isMainModule()) {
   main(process.argv.slice(2));
 }
