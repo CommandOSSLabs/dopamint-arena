@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["backend/tunnel-manager"]
+members = ["backend/tunnel-manager", "backend/explorer"]
 
 [workspace.package]
 edition = "2021"
