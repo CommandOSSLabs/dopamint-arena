@@ -400,14 +400,28 @@ A teammate then added a **single-threaded driver** (`src/bench/solo.ts`) that ru
 - **No worker-thread overhead.** Each process owns one core; the OS scheduler handles placement.
 - **All 192 vCPUs are saturated.** Telemetry shows 98.8% sustained CPU with every core above 80%.
 
-### 5.8.4 Bun vs Node final comparison
+### 5.8.4 Why not 4 × 48 workers under Bun?
+
+Because Node's best model was 4 processes × 48 workers, we tested the same shape under Bun using `runMulti.mjs` with `--backend native`. The result was surprising:
+
+| Metric | Instance A | Instance B |
+|---|---|---|
+| TPS | ~400,800 | ~427,700 |
+| All-CPU average | **53.8%** | **56.7%** |
+| Cores avg > 80% | 0 / 192 | 0 / 192 |
+| Bun process CPU | ~2,600% (~26 cores) | ~2,700% (~27 cores) |
+
+Bun 4×48 workers is faster than Node 4×48 (~318k/instance), but it **leaves nearly half the CPU idle** and is **~35% slower than Bun 192 solo**. Bun's `worker_threads` scheduler appears to hit a bottleneck even with native crypto, so the process-per-core model remains the winner.
+
+### 5.8.5 Bun vs Node final comparison
 
 | Runtime | Model | Fleet TPS | Per-instance TPS | Avg CPU |
 |---|---|---:|---:|---:|
 | Node v22.23.0 | 4 processes × 48 workers | ~637,000 | ~318,000 | ~99% |
+| Bun v1.3.14 | 4 processes × 48 workers | ~828,500 | ~414,000 | ~55% |
 | **Bun v1.3.14** | **192 single-thread processes** | **~1,304,000** | **~652,000** | **~99%** |
 
-**Bun is now ~2× faster than Node** for this benchmark when used in a process-per-core configuration.
+**The best Bun configuration is 192 single-thread processes per instance**, giving **~2× Node's throughput** and **~1.6× the Bun 4×48 worker model**.
 
 ---
 
@@ -569,7 +583,7 @@ The telemetry data, graphs, and raw logs (`mpstat.log`, `pidstat.log`, `vmstat.l
 
 1. **The kit works end-to-end on AWS.** Two `c7i.48xlarge` instances sustained **~1.3M fully signed/verified off-chain TPS** in a 120-second Bun process-per-core run using the real frontend blackjack protocol.
 2. **Multi-process scaling is required to saturate the hardware.** A single Node process topped out at ~507k fleet TPS with ~67.5% CPU; four Node processes per instance reached ~637k fleet TPS with ~99.5% CPU.
-3. **Bun process-per-core is the winning runtime.** Once native ed25519 was usable via single-threaded processes, Bun reached **~1.3M fleet TPS** — roughly **2× faster than Node** and **~4× faster than the original single-process Node run**.
+3. **Bun process-per-core is the winning runtime.** Once native ed25519 was usable via single-threaded processes, Bun reached **~1.3M fleet TPS** — roughly **2× faster than Node** and **~4× faster than the original single-process Node run**. Bun 4×48 workers was also tested and reached ~828k fleet TPS, but left ~45% CPU idle; 192 solo processes is the optimal shape.
 4. **Blackjack is the right game for raw throughput** because its long sessions amortize tunnel opening and key generation.
 5. **Crypto is the dominant cost.** Full sign/verify is roughly half the throughput of the protocol-only path.
 6. **5M TPS is feasible** with horizontal scaling: approximately **8 instances** of the same size with Bun for the honest full-sign metric.
