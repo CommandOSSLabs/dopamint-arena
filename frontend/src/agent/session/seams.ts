@@ -29,11 +29,20 @@ export interface SettlementSigner {
   closeOnTimeout(args: { tunnelId: string }): Promise<{ digest: string }>;
 }
 
+/** Settle-half payload exchanged over the app channel during cooperative close. */
+export interface SettleHalf {
+  /** Hex-encoded signature over the settlement-with-root message. */
+  sig: string;
+  /** Hex-encoded 32-byte transcript Merkle root this seat computed. */
+  root: string;
+}
+
 /**
  * Per-match coordination channel returned by the relay for a specific matchId.
  * Carries the transport for the DistributedTunnel plus the four-way handshake
  * signals (partyHello/onPeerHello for pubkey exchange, announceOpened/onOpened
- * for seat A to broadcast the tunnelId to seat B).
+ * for seat A to broadcast the tunnelId to seat B), and the settle-half exchange
+ * for cooperative close.
  */
 export interface MatchChannel {
   /** The byte transport to thread into DistributedTunnel. */
@@ -46,6 +55,10 @@ export interface MatchChannel {
   announceOpened(tunnelId: string): void;
   /** Seat B: fires once with the tunnelId broadcast by seat A, buffering races. */
   onOpened(cb: (tunnelId: string) => void): void;
+  /** Send this seat's settlement half (sig + root) to the peer. */
+  sendSettleHalf(half: SettleHalf): void;
+  /** Register a one-shot callback for the peer's settlement half, buffering races. */
+  onSettleHalf(cb: (half: SettleHalf) => void): void;
 }
 
 /**
