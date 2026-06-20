@@ -7,18 +7,39 @@ license.workspace = true
 publish.workspace = true
 
 [[bin]]
-name = "indexer_probe"
-path = "src/bin/indexer_probe.rs"
+name = "indexer"
+path = "src/bin/indexer.rs"
+
+[[bin]]
+name = "api"
+path = "src/bin/api.rs"
 
 [dependencies]
-# Framework indexer path (gate PASSED on rustc 1.95). diesel pinned to the framework's
-# RESOLVED graph (diesel-async 0.9.2 -> diesel 2.3.x, diesel_migrations 2.3.x); the plan's
-# 0.5/2.2 would recreate the probe #1-2 resolution conflict against the framework.
+# read side (api binary) — reads via shared::SettlementStore (sqlx) + axum + fred SSE
+shared = { path = "../shared" }
+tokio.workspace = true
+tokio-stream.workspace = true
+axum.workspace = true
+tower-http.workspace = true
+futures = "0.3"
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+dotenvy.workspace = true
+async-trait.workspace = true
+fred.workspace = true
+reqwest.workspace = true
+# write side (indexer binary) — sui-indexer-alt-framework (Diesel). diesel pinned to the
+# framework's resolved graph (gate evidence): diesel-async 0.9 -> diesel 2.3, migrations 2.3.
 sui-indexer-alt-framework = { git = "https://github.com/MystenLabs/sui.git", branch = "testnet" }
 diesel = { version = "2.3", features = ["postgres"] }
 diesel-async = { version = "0.9", features = ["bb8", "postgres"] }
 diesel_migrations = "2.3"
 bcs.workspace = true
 clap = { version = "4", features = ["derive"] }
-anyhow.workspace = true
-tokio.workspace = true
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+futures = "0.3"
