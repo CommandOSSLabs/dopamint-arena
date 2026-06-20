@@ -326,9 +326,11 @@ export class PvpGameSession<S, M> {
           tunnelId: t.tunnelId,
           coSigned,
         });
+        this.clearTimers();
         const cur = this.store.get();
         this.store.set({ ...cur, phase: "done", digest, error: null });
       } else {
+        this.clearTimers();
         const cur = this.store.get();
         this.store.set({ ...cur, phase: "done", error: null });
       }

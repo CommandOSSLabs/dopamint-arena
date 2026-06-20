@@ -147,19 +147,22 @@ async function runToTerminal(opts?: { seed?: number }) {
 function makeFakeSettlementSigner(opts?: { closeOnTimeoutFails?: boolean }): {
   signer: SettlementSigner;
   closeOnTimeoutCallCount: () => number;
+  capturedTunnelId: () => string | null;
 } {
   let timeoutCalls = 0;
+  let captured: string | null = null;
   const signer: SettlementSigner = {
     async openAndFundSeatA() { return { tunnelId: "0x" + "cd".repeat(32) }; },
     async depositSeatB() {},
     async submitCooperativeClose() { return { digest: "0xfeedcafe" }; },
-    async closeOnTimeout() {
+    async closeOnTimeout(args: { tunnelId: string }) {
       timeoutCalls++;
+      captured = args.tunnelId;
       if (opts?.closeOnTimeoutFails) throw new Error("closeOnTimeout failed");
       return { digest: "0xdeadbeef" };
     },
   };
-  return { signer, closeOnTimeoutCallCount: () => timeoutCalls };
+  return { signer, closeOnTimeoutCallCount: () => timeoutCalls, capturedTunnelId: () => captured };
 }
 
 // ---------------------------------------------------------------------------
@@ -303,7 +306,7 @@ describe("PvpGameSession robustness", () => {
       onSettleHalf(_cb) { /* never fires */ },
     };
 
-    const { signer, closeOnTimeoutCallCount } = makeFakeSettlementSigner();
+    const { signer, closeOnTimeoutCallCount, capturedTunnelId } = makeFakeSettlementSigner();
 
     // settle() should race against the timeout and escalate
     await sA.settle({
@@ -322,9 +325,9 @@ describe("PvpGameSession robustness", () => {
     );
 
     assert.strictEqual(
-      // tunnelId passed to closeOnTimeout should match the session's tunnel
-      tunnelId !== "",
-      true,
+      capturedTunnelId(),
+      tunnelId,
+      "tunnelId passed to closeOnTimeout should match the session's tunnel",
     );
 
     sA.dispose();
