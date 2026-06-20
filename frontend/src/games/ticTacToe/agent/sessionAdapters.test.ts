@@ -227,4 +227,36 @@ describe("makeTttRelay", () => {
     assert.equal(stub.transport.mock.calls.length, 1);
     assert.equal(stub.transport.mock.calls[0].arguments[0], "match1");
   });
+
+  it("channel.onPeerHello fires when relay emits party.hello for the same matchId", async () => {
+    const stub = makeStubRelayClient();
+    const relay = makeTttRelay(stub as unknown as Parameters<typeof makeTttRelay>[0]);
+    const ch = relay.channel("match42");
+
+    const received = await new Promise<string>((resolve) => {
+      ch.onPeerHello(resolve);
+      // Trigger the party.hello handler registered via client.on("party.hello", ...)
+      const helloCbs = stub._hellos["party.hello"] ?? [];
+      helloCbs.forEach((cb) =>
+        cb({ matchId: "match42", ephemeralPubkey: "deadbeefpubkey" }),
+      );
+    });
+    assert.equal(received, "deadbeefpubkey");
+  });
+
+  it("channel.onPeerHello ignores party.hello events for a different matchId", () => {
+    const stub = makeStubRelayClient();
+    const relay = makeTttRelay(stub as unknown as Parameters<typeof makeTttRelay>[0]);
+    const ch = relay.channel("matchA");
+
+    let called = false;
+    ch.onPeerHello(() => { called = true; });
+
+    // Fire party.hello for a different matchId — should not reach the callback
+    const helloCbs = stub._hellos["party.hello"] ?? [];
+    helloCbs.forEach((cb) =>
+      cb({ matchId: "matchB", ephemeralPubkey: "otherpubkey" }),
+    );
+    assert.equal(called, false);
+  });
 });

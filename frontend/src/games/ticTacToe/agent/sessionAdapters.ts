@@ -102,6 +102,8 @@ function makeTttMatchChannel(client: RelayClient, matchId: string): MatchChannel
   });
 
   // Wire the app-channel for opened/settle messages.
+  // RelayClient.onApp is last-writer-wins per matchId — only this adapter may
+  // register the app callback for a given match (Task 8 wiring must not call onApp again).
   client.onApp(matchId, (msg) => {
     if (msg.t === "opened") {
       const tunnelId = String(msg.tunnelId);
@@ -197,6 +199,8 @@ function makeTttMatchChannel(client: RelayClient, matchId: string): MatchChannel
  */
 export function makeTttEndpointFactory(
   eph: PvpEphemeral,
+  // Production callers (Task 8) MUST pass the real wallet address from the match
+  // context; "" is a non-production fallback only.
   walletAddress: string = "",
 ): PartyEndpointFactory {
   return {
@@ -285,6 +289,8 @@ export function makeTttSettlementSigner(
 
   const doOpenAndFund = overrides?.openAndFund ?? openAndFundSharedTunnel;
   const doDeposit = overrides?.deposit ?? depositStake;
+  // The production path MUST receive a CoSignedSettlementWithRoot; the `any`
+  // cast is only to accommodate the test override seam (which uses unknown).
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const doClose: (opts: { signExec: SignExec; tunnelId: string; settlement: any }) => Promise<string> =
     overrides?.cooperativeClose ?? closeCooperativeWithRoot;
