@@ -9,6 +9,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
+    "build:bench": "esbuild src/bench/offchainTps.ts src/bench/offchainTpsWorker.ts --bundle --platform=node --format=esm --outdir=dist/bench --tsconfig=tsconfig.json",
     "test": "node --import tsx --test \"src/agent/**/*.test.ts\" \"src/components/**/*.test.ts\" \"src/backend/**/*.test.ts\" \"src/games/blackjack/*.test.ts\" \"src/games/battleship/**/*.test.ts\"",
     "format": "prettier --write \"src/**/*.{ts,tsx,css}\""
   },
@@ -39,6 +40,7 @@
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.2",
+    "esbuild": "^0.28.1",
     "playwright": "^1.61.0",
     "prettier": "^3.8.4",
     "tailwindcss": "^4.3.1",
