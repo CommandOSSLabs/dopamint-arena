@@ -7,6 +7,17 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
+// Deterministic seeded RNG (mulberry32) used in TRIVIAL_BOT_CTX so we never
+// leak Math.random into a path that is supposed to be deterministic.
+function mulberry32(seed: number): () => number {
+  let s = seed;
+  return (): number => {
+    s |= 0; s = (s + 0x6D2B79F5) | 0;
+    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
 import { core, proof, bytesToHex, hexToBytes, type protocols } from "sui-tunnel-ts";
 import { SuiJsonRpcClient } from "@mysten/sui/jsonRpc";
 import { getControlPlaneClient, type RegisterSessionResult } from "@/backend/controlPlane";
@@ -123,11 +134,11 @@ function tttBestCell(inner: InnerState, by: "A" | "B"): number {
   return optimalMoves(board, CELL_SERVER)[0];
 }
 
-// Dummy bot context for the session — auto-play in the hook is driven by the
-// existing setTimeout loop (not the session's internal drive()), so we pass a
-// trivial RNG.  The session's bot is effectively inactive in PvP (a human sits
-// at the other side), so the plan() will return null on every opponent turn.
-const TRIVIAL_BOT_CTX: BotContext = { rngForSeat: () => Math.random };
+// Bot context for the session — auto-play in the hook is driven by the
+// existing setTimeout loop; session.drive() must NOT propose moves here (session
+// is never put in auto mode).  We supply a seeded deterministic RNG so the
+// context is reproducible even though the bot is inactive in PvP.
+const TRIVIAL_BOT_CTX: BotContext = { rngForSeat: () => mulberry32(0xcafe) };
 
 function makeKit(): GameKit<AnyState, CellMove> {
   return createTicTacToeKit(1000, STAKE) as unknown as GameKit<AnyState, CellMove>;
@@ -160,15 +171,30 @@ export function usePvpTicTacToe(
     new PvpGameSession(makeKit(), "A", TRIVIAL_BOT_CTX),
   );
 
-  // Stable subscribe/getSnapshot so useSyncExternalStore can forward to the
-  // current session instance (the ref) without needing to swap the hooks.
-  const stableSubscribe = useCallback((cb: () => void): (() => void) => {
-    return sessionRef.current.subscribe(cb);
-  }, []);
+  // Epoch counter — incremented each time sessionRef.current is replaced (queue,
+  // onMatch, leave).  Because useSyncExternalStore caches the subscribe function
+  // by identity and unsubscribes/resubscribes only when it changes, we must
+  // change the identity of stableSubscribe and stableGetSnapshot whenever the
+  // underlying session instance changes — otherwise the React listener stays
+  // registered on the OLD SnapshotStore and the new session's confirmed moves
+  // never trigger a re-render.  Depending on `sessionEpoch` in the two callbacks
+  // forces React to re-subscribe to the current session after every replacement.
+  const [sessionEpoch, setSessionEpoch] = useState(0);
+
+  // Each time the session is replaced, call this to bump the epoch and force
+  // useSyncExternalStore to re-subscribe to the new session's store.
+  const bumpEpoch = useCallback(() => setSessionEpoch((e) => e + 1), []);
+
+  const stableSubscribe = useCallback(
+    (cb: () => void): (() => void) => sessionRef.current.subscribe(cb),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sessionEpoch],
+  );
   const stableGetSnapshot = useCallback(
     (): Readonly<SessionSnapshot<AnyState>> =>
       sessionRef.current.getSnapshot() as Readonly<SessionSnapshot<AnyState>>,
-    [],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sessionEpoch],
   );
 
   // useSyncExternalStore drives re-renders whenever the session's snapshot changes.
@@ -362,9 +388,11 @@ export function usePvpTicTacToe(
       setDigests({});
 
       // Replace the session for this match so snapshot resets to idle.
-      // Dispose the previous instance to prevent timer leaks.
+      // Dispose the previous instance to prevent timer leaks.  Bump the epoch
+      // so useSyncExternalStore re-subscribes to the new session's store.
       sessionRef.current.dispose();
       sessionRef.current = new PvpGameSession(makeKit(), "A", TRIVIAL_BOT_CTX);
+      bumpEpoch();
 
       try {
         const relay = new RelayClient(MP_URL, w.address, eph.coreKey);
@@ -388,7 +416,7 @@ export function usePvpTicTacToe(
         setPhaseOverride("error");
       }
     })();
-  }, [eph, variant, boardSize]);
+  }, [eph, variant, boardSize, bumpEpoch]);
 
   // ── onMatch ──────────────────────────────────────────────────────────────────
 
@@ -405,8 +433,10 @@ export function usePvpTicTacToe(
         setRole(m.role);
 
         // Rebuild the session for the matched role so the bot's seat is correct.
+        // Bump epoch so useSyncExternalStore re-subscribes to the new session's store.
         sessionRef.current.dispose();
         sessionRef.current = new PvpGameSession(makeKit(), m.role, TRIVIAL_BOT_CTX);
+        bumpEpoch();
 
         // App-channel dispatcher: opened tunnelId, settle half, closed digest, stop request.
         relay.onApp(m.matchId, (mm) => {
@@ -663,7 +693,7 @@ export function usePvpTicTacToe(
         setPhaseOverride("error");
       }
     },
-    [client, proto, submit, eph, variant, finishSettle, flushHeartbeat],
+    [client, proto, submit, eph, variant, finishSettle, flushHeartbeat, bumpEpoch],
   );
   onMatchRef.current = onMatch;
 
@@ -713,8 +743,10 @@ export function usePvpTicTacToe(
     (on: boolean) => {
       autoRef.current = on;
       setAutoState(on);
-      // Forward to the session so its internal bot drive loop is also aware.
-      sessionRef.current.setAuto(on);
+      // Do NOT call session.setAuto() — the hook's setTimeout loop is the sole
+      // auto-play driver.  Enabling session auto mode would cause session.drive()
+      // to propose an extra move on each onConfirmed callback, resulting in a
+      // double-propose ("not my turn") on every auto move.
       const t = tunnelRef.current;
       if (!on || !t || stoppingRef.current || proto.isTerminal(t.state)) return;
       const st = t.state;
@@ -770,9 +802,11 @@ export function usePvpTicTacToe(
     setPhaseOverride(null);
     setErrorOverride(null);
     // Replace with a fresh idle session so snapshot resets to "idle".
+    // Bump epoch so useSyncExternalStore re-subscribes to the new session's store.
     sessionRef.current.dispose();
     sessionRef.current = new PvpGameSession(makeKit(), "A", TRIVIAL_BOT_CTX);
-  }, []);
+    bumpEpoch();
+  }, [bumpEpoch]);
 
   useEffect(() => () => relayRef.current?.close(), []);
 

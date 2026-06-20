@@ -7,6 +7,7 @@
 // state — phase, board, balances, terminal — plus the close digest.
 import type { SessionSnapshot } from "@/agent/session/pvpGameSession";
 import type { MultiGameTicTacToeState } from "@ttt/shared/ttt/multiGameProtocol";
+import type { CaroState } from "@ttt/shared/caro/protocol";
 import type { PvpPhase, PvpTttView, GameResult, Variant } from "../app/hooks/usePvpTicTacToe";
 
 /**
@@ -79,8 +80,8 @@ export function mapSnapshotToView(
     role,
     variant: extras.variant,
     board: inner ? inner.board : [],
-    size: inner ? (("size" in inner ? (inner as unknown as { size?: number }).size : undefined) ?? 3) : extras.variant === "caro" ? extras.boardSize : 3,
-    lastMove: inner ? (("lastMove" in inner ? (inner as unknown as { lastMove?: number }).lastMove : undefined) ?? -1) : -1,
+    size: inner ? ((inner as Partial<CaroState>).size ?? 3) : extras.variant === "caro" ? extras.boardSize : 3,
+    lastMove: inner ? ((inner as Partial<CaroState>).lastMove ?? -1) : -1,
     turn: inner ? inner.turn : null,
     winner,
     myMark,
