@@ -69,7 +69,7 @@ class TicTacToeBot implements GameBot<MultiGameTicTacToeState, MultiGameTicTacTo
     return { cell: pickCell(inner, this.seat, this.difficulty, this.rng) };
   }
 
-  confirm(): void {
+  confirm(_state: MultiGameTicTacToeState, _move: MultiGameTicTacToeMove): void {
     // No retained memory.
   }
 

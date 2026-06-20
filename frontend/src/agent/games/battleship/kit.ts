@@ -63,7 +63,7 @@ class BattleshipBot implements GameBot<BattleshipState, BattleshipMove> {
     };
   }
 
-  confirm(): void {
+  confirm(_state: BattleshipState, _move: BattleshipMove): void {
     // Targeting state is derived from public state on each plan call.
   }
 

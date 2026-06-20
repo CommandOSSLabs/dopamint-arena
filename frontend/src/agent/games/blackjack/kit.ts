@@ -46,7 +46,7 @@ class BlackjackBot implements GameBot<BetBlackjackState, BetBlackjackMove> {
     return null;
   }
 
-  confirm(): void {
+  confirm(_state: BetBlackjackState, _move: BetBlackjackMove): void {
     // No retained memory beyond the public state.
   }
 
