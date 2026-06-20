@@ -54,6 +54,10 @@ fn hex(b: &[u8]) -> String {
 
 /// One row to insert. Mirrors the Diesel Insertable defined in handler.rs; kept plain here
 /// so the mapping is testable without the framework/Diesel in scope.
+///
+/// `proof_url`, `walrus_blob_id`, and `game` are nullable schema columns NOT present here —
+/// BCS lifecycle events don't carry them; handler.rs leaves them NULL on initial insert and
+/// they are populated downstream (proof_url/walrus_blob_id via /settle enrichment; game later).
 #[derive(Debug, PartialEq)]
 pub struct RowData {
     pub tx_digest: String,
@@ -144,6 +148,14 @@ mod tests {
     #[derive(serde::Serialize)]
     struct ClosedWithRootBcs([u8; 32], u64, u64, u64, Vec<u8>, u64);
 
+    // tunnel_id, party_a_balance, party_b_balance, final_nonce, closed_at (tunnel.move:311-318).
+    #[derive(serde::Serialize)]
+    struct ClosedBcs([u8; 32], u64, u64, u64, u64);
+
+    // tunnel_id, party_a, party_b, created_at (tunnel.move:281-286).
+    #[derive(serde::Serialize)]
+    struct CreatedBcs([u8; 32], [u8; 32], [u8; 32], u64);
+
     #[test]
     fn decodes_closed_with_root_via_bcs() {
         let tunnel_id = [1u8; 32];
@@ -168,5 +180,49 @@ mod tests {
         assert_eq!(row.timestamp_ms, 1_750_000_000_000_i64);
         assert_eq!(row.closed_at_ms, Some(1_750_000_000_000_i64));
         assert_eq!(row.checkpoint, 99);
+    }
+
+    #[test]
+    fn decodes_closed_into_settled_row() {
+        let tunnel_id = [2u8; 32];
+        let closed_at = 1_750_000_001_000_u64;
+        let encoded =
+            bcs::to_bytes(&ClosedBcs(tunnel_id, 100, 50, 7, closed_at)).unwrap();
+
+        let row = event_to_row("TunnelClosed", &encoded, "DiG2", 42).unwrap();
+        assert_eq!(row.kind, "settled");
+        assert_eq!(row.party_a_balance, Some(100));
+        assert_eq!(row.final_nonce, Some(7));
+        assert!(row.transcript_root.is_none());
+        assert_eq!(row.timestamp_ms, closed_at as i64);
+        assert_eq!(row.closed_at_ms, Some(closed_at as i64));
+        assert!(row.party_a_addr.is_none());
+    }
+
+    #[test]
+    fn decodes_created_into_opened_row() {
+        let tunnel_id = [3u8; 32];
+        let party_a = [0xaau8; 32];
+        let party_b = [0xbbu8; 32];
+        let created_at = 1_750_000_002_000_u64;
+        let encoded =
+            bcs::to_bytes(&CreatedBcs(tunnel_id, party_a, party_b, created_at)).unwrap();
+
+        let row = event_to_row("TunnelCreated", &encoded, "DiG3", 55).unwrap();
+        assert_eq!(row.kind, "opened");
+        assert_eq!(
+            row.party_a_addr,
+            Some(format!("0x{}", "aa".repeat(32)))
+        );
+        assert_eq!(
+            row.party_b_addr,
+            Some(format!("0x{}", "bb".repeat(32)))
+        );
+        assert!(row.party_a_balance.is_none());
+        assert!(row.party_b_balance.is_none());
+        assert!(row.final_nonce.is_none());
+        assert!(row.transcript_root.is_none());
+        assert_eq!(row.timestamp_ms, created_at as i64);
+        assert!(row.closed_at_ms.is_none());
     }
 }

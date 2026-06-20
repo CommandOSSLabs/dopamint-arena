@@ -42,4 +42,3 @@ clap = { version = "4", features = ["derive"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
-futures = "0.3"
