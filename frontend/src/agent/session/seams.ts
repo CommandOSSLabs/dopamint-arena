@@ -28,3 +28,43 @@ export interface SettlementSigner {
   submitCooperativeClose(args: { tunnelId: string; coSigned: unknown }): Promise<{ digest: string }>;
   closeOnTimeout(args: { tunnelId: string }): Promise<{ digest: string }>;
 }
+
+/**
+ * Per-match coordination channel returned by the relay for a specific matchId.
+ * Carries the transport for the DistributedTunnel plus the four-way handshake
+ * signals (partyHello/onPeerHello for pubkey exchange, announceOpened/onOpened
+ * for seat A to broadcast the tunnelId to seat B).
+ */
+export interface MatchChannel {
+  /** The byte transport to thread into DistributedTunnel. */
+  transport: SessionTransport;
+  /** Broadcast this seat's ephemeral signing pubkey (hex). */
+  partyHello(pubkeyHex: string): void;
+  /** Fires once with the opponent's ephemeral pubkey (hex), buffering races. */
+  onPeerHello(cb: (pubkeyHex: string) => void): void;
+  /** Seat A: broadcast the on-chain tunnelId once the tunnel is created. */
+  announceOpened(tunnelId: string): void;
+  /** Seat B: fires once with the tunnelId broadcast by seat A, buffering races. */
+  onOpened(cb: (tunnelId: string) => void): void;
+}
+
+/**
+ * Minimal relay capability the session needs for matchmaking and per-match
+ * coordination.  The real adapter (over pvpRelay.ts / RelayClient) is Task 7;
+ * tests inject a fake.
+ */
+export interface SessionRelay {
+  /** Block until the relay connection is ready, then enqueue this seat for a match. */
+  queueJoin(game: string): Promise<void>;
+  /** Register a one-shot callback that fires when the matchmaker pairs us. */
+  onMatch(cb: (match: MatchFound) => void): void;
+  /** Return the app-channel for a given matchId. */
+  channel(matchId: string): MatchChannel;
+}
+
+/** Match payload delivered by the matchmaker. */
+export interface MatchFound {
+  matchId: string;
+  role: "A" | "B";
+  opponentWallet: string;
+}
