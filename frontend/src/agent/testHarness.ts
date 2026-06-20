@@ -40,6 +40,13 @@ export function driveToTerminal<S, M>(
         );
       }
 
+      const nextHash = kit.stateHash(next);
+      if (nextHash === h) {
+        throw new Error(
+          `Move for ${actor} in ${kit.id} produced an identical state hash; possible no-op loop.`,
+        );
+      }
+
       bot.confirm(state, move);
       lastHashes[actor] = h;
       lastHashes[otherParty(actor)] = null; // opponent must re-evaluate the new state
@@ -52,6 +59,13 @@ export function driveToTerminal<S, M>(
     if (!progressThisRound) {
       throw new Error(`No progress in ${kit.id} at round ${round}; game is not terminal.`);
     }
+  }
+
+  if (!kit.protocol.isTerminal(state)) {
+    throw new Error(
+      `${kit.id} did not reach a terminal state within ${maxRounds} rounds ` +
+        `(accepted ${accepted} moves). Possible infinite loop or non-terminating protocol.`,
+    );
   }
 
   return {
