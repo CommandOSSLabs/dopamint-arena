@@ -268,6 +268,10 @@ impl Bus for LocalBus {
             let _ = tx.send(text);
         }
     }
+
+    async fn publish_raw(&self, channel: &str, payload: String) {
+        let _ = (channel, payload);
+    }
 }
 
 // ===== Tests =====

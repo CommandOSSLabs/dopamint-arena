@@ -274,6 +274,15 @@ pub(crate) async fn settle(
                     &proof_url,
                 ))
                 .await;
+            if !blob_id.is_empty() {
+                let proof_msg = serde_json::json!({
+                    "txDigest": digest,
+                    "walrusBlobId": blob_id,
+                    "proofUrl": proof_url,
+                })
+                .to_string();
+                state.bus.publish_raw("explorer:proofs", proof_msg).await;
+            }
             Json(serde_json::json!({ "txDigest": digest, "walrusBlobId": blob_id, "proofUrl": proof_url }))
                 .into_response()
         }
