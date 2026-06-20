@@ -165,3 +165,33 @@ test("verifyTranscript: root mismatch vs the on-chain anchor is detected", () =>
   assert.equal(v.rootMatches, false);
   assert.equal(v.ok, false);
 });
+
+test("verifyTranscript: a real self-play transcript verifies end-to-end", () => {
+  const t = OffchainTunnel.selfPlay(
+    new PaymentsProtocol(),
+    VTID,
+    VKP_A,
+    VKP_B,
+    ed25519Address(VKP_A.publicKey),
+    ed25519Address(VKP_B.publicKey),
+    { a: 100n, b: 100n },
+  );
+  const tr = new Transcript(t.tunnelId);
+  t.onUpdate = (u) => tr.append(u);
+  const vmoves: PaymentMove[] = [
+    { from: "A", amount: 10n },
+    { from: "B", amount: 5n },
+    { from: "A", amount: 3n },
+  ];
+  for (const m of vmoves) t.step(m, m.from, { timestamp: 1000n });
+
+  const rec = tr.toRecord();
+  const v = verifyTranscript(rec, {
+    partyA: { publicKey: VKP_A.publicKey, scheme: SignatureScheme.ED25519 },
+    partyB: { publicKey: VKP_B.publicKey, scheme: SignatureScheme.ED25519 },
+    onchainRoot: toHex(tr.root()),
+    lockedTotal: 200n,
+  });
+  assert.equal(v.ok, true);
+  assert.equal(v.stepCount, 3);
+});
