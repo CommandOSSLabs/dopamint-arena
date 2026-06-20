@@ -11,7 +11,8 @@ import {
   CELL_SERVER,
   CELL_PLAYER,
 } from "@ttt/shared/constants";
-import { defaultStateHash, type BotContext, type GameBot, type GameKit } from "@/agent/gameKit";
+import { defaultStateHash } from "@/agent/stateHash";
+import { type BotContext, type GameBot, type GameKit } from "@/agent/gameKit";
 
 export type TicTacToeDifficulty = "perfect" | "fast";
 

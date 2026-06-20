@@ -11,7 +11,8 @@ import {
   type BetBlackjackMove,
 } from "@/games/blackjack/app/lib/bjBetProtocol";
 import { handValue } from "@/games/blackjack/app/lib/bjCards";
-import { defaultStateHash, type BotContext, type GameBot, type GameKit } from "@/agent/gameKit";
+import { defaultStateHash } from "@/agent/stateHash";
+import { type BotContext, type GameBot, type GameKit } from "@/agent/gameKit";
 
 class BlackjackBot implements GameBot<BetBlackjackState, BetBlackjackMove> {
   private readonly seat: Party;

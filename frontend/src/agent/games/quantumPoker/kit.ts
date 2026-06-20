@@ -8,7 +8,8 @@ import {
   QuantumPokerPersonaDriver,
   type QuantumPokerBotProfile,
 } from "sui-tunnel-ts/protocol/quantumPokerPersona";
-import { defaultStateHash, type BotContext, type GameBot, type GameKit } from "@/agent/gameKit";
+import { defaultStateHash } from "@/agent/stateHash";
+import { type BotContext, type GameBot, type GameKit } from "@/agent/gameKit";
 
 const DEFAULT_QUANTUM_POKER_BOT_PROFILE: QuantumPokerBotProfile = {
   name: "Vale",

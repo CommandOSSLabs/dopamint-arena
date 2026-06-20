@@ -16,7 +16,8 @@ import {
   type FleetSecret,
 } from "@/games/battleship/engine/selfPlay";
 import { proveCell } from "@/games/battleship/engine/merkle";
-import { defaultStateHash, type BotContext, type GameBot, type GameKit } from "@/agent/gameKit";
+import { defaultStateHash } from "@/agent/stateHash";
+import { type BotContext, type GameBot, type GameKit } from "@/agent/gameKit";
 
 export interface BattleshipBotConfig {
   difficulty?: BotDifficulty;

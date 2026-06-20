@@ -1,7 +1,13 @@
 import type { Protocol, Party, ProtocolContext, Balances } from "sui-tunnel-ts/protocol/Protocol";
+import { createTicTacToeKit } from "./games/ticTacToe/kit";
+import { createBlackjackKit } from "./games/blackjack/kit";
+import { createBattleshipKit } from "./games/battleship/kit";
+import { createQuantumPokerKit } from "./games/quantumPoker/kit";
+import { defaultStateHash, type StateHash } from "./stateHash";
 
 export type GameId = "tictactoe" | "blackjack" | "battleship" | "quantum-poker";
-export type StateHash = string;
+export type { StateHash };
+export { defaultStateHash };
 
 export interface BotContext {
   /** Per-seat, seeded, reproducible RNG stream. */
@@ -29,21 +35,10 @@ export interface GameBot<S, M> {
 
 export type GameKitRegistry = Record<GameId, GameKit<unknown, unknown>>;
 
-/** To be populated in Task 7 after all kits exist. */
-export const GAME_KITS: Partial<GameKitRegistry> = {};
-
-const HEX = "0123456789abcdef";
-
-function bytesToHex(bytes: Uint8Array): string {
-  let out = "";
-  for (let i = 0; i < bytes.length; i++) {
-    const b = bytes[i]!;
-    out += HEX[b >>> 4] + HEX[b & 0x0f];
-  }
-  return out;
-}
-
-/** Default digest for kits that treat the protocol's canonical wire encoding as the state snapshot. */
-export function defaultStateHash<S, M>(protocol: Protocol<S, M>, state: S): StateHash {
-  return bytesToHex(protocol.encodeState(state));
-}
+/** Canonical registry of all playable bot kits. */
+export const GAME_KITS: GameKitRegistry = {
+  tictactoe: createTicTacToeKit(10, 10n),
+  blackjack: createBlackjackKit(100n),
+  battleship: createBattleshipKit(10n),
+  "quantum-poker": createQuantumPokerKit(100n),
+};
