@@ -422,7 +422,7 @@ async fn relay_to_other(
     }
     let m = &cache[&match_id];
     if relay_payload_is_move(&payload) {
-        state.control.add_actions(&m.game, 1).await; // Task 2 replaces with state.actions.incr
+        state.actions.incr(&m.game, 1);
     }
     let target = if m.conn_a.conn_id == from {
         m.conn_b.clone()
@@ -744,6 +744,10 @@ mod tests {
         )
         .await
         .unwrap();
+        // Move is counted locally; drain into control before asserting.
+        for (g, d) in state.actions.drain_deltas() {
+            state.control.add_actions(&g, d).await;
+        }
         assert_eq!(
             state.control.snapshot().await.total_actions,
             1,
@@ -763,6 +767,10 @@ mod tests {
         )
         .await
         .unwrap();
+        // ACK must not produce any delta; drain should yield nothing.
+        for (g, d) in state.actions.drain_deltas() {
+            state.control.add_actions(&g, d).await;
+        }
         assert_eq!(
             state.control.snapshot().await.total_actions,
             1,

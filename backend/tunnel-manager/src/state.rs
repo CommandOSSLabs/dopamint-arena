@@ -14,6 +14,8 @@ pub struct AppState {
     /// Latest aggregate snapshot is computed once per tick and fanned out here to
     /// every SSE subscriber — so cost scales with the audience, not with TPS.
     pub stats_tx: broadcast::Sender<String>,
+    /// Per-instance move counter; flushed to `control` once/sec (see stats_counter).
+    pub actions: crate::stats_counter::LocalActionCounter,
 }
 
 pub type SharedState = std::sync::Arc<AppState>;

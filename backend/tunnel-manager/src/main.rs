@@ -7,6 +7,7 @@ mod mp;
 mod routes;
 mod state;
 mod stats;
+mod stats_counter;
 mod store;
 mod sui;
 mod walrus;
@@ -81,8 +82,11 @@ async fn main() -> anyhow::Result<()> {
         settler,
         walrus,
         stats_tx,
+        actions: crate::stats_counter::LocalActionCounter::default(),
     });
     stats::spawn_stats_broadcaster(state.clone());
+    spawn_action_flusher(state.clone());
+    sui::spawn_event_indexer(state.clone());
 
     let app = Router::new()
         .route("/healthz", get(routes::health))
@@ -104,6 +108,21 @@ async fn main() -> anyhow::Result<()> {
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     Ok(())
+}
+
+/// Drain the per-instance move counter into ControlStore once per second. Keeps the
+/// global/per-game totals correct (the broadcaster + /metrics read control.snapshot)
+/// without a Redis round trip per move. Lossy-by-design on crash: ≤1s of display counts.
+fn spawn_action_flusher(state: SharedState) {
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(1));
+        loop {
+            tick.tick().await;
+            for (game, delta) in state.actions.drain_deltas() {
+                state.control.add_actions(&game, delta).await;
+            }
+        }
+    });
 }
 
 /// Resolve on SIGINT (Ctrl-C) or SIGTERM so the orchestrator can roll the service cleanly.
