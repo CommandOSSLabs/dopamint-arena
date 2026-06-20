@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-20  
 **Branch:** `feat/offchain-tps-bench`  
-**Commit:** `b39aa45` — *refactor(games): avoid sui-tunnel-ts index imports in protocols*  
+**Commit:** `62e6d99` — *feat(bench): Bun compatibility (main guard, fire-and-forget worker terminate)*  
 **Environment:** AWS `us-east-1`, Pulumi `dev` stack  
 **Game tested:** Blackjack (frontend `BlackjackBetProtocol`)  
 **Sign modes tested:** `full` (dual sign + verify), `none` (protocol overhead only)
@@ -45,12 +45,10 @@ The benchmark (`frontend/src/bench/offchainTps.ts`) is a multi-worker-thread Nod
 The original implementation used `tsx` to run TypeScript directly. Inside worker threads, `tsx` did not reliably resolve the frontend `tsconfig` path aliases (`@/agent/gameKit`, etc.). The deployed workflow therefore bundles the main script and the worker with esbuild on the instance before running:
 
 ```bash
-./node_modules/.pnpm/esbuild@0.28.1/node_modules/esbuild/bin/esbuild \
-  src/bench/offchainTps.ts src/bench/offchainTpsWorker.ts \
-  --bundle --platform=node --format=esm --outdir=dist/bench --tsconfig=tsconfig.json
+pnpm build:bench
 ```
 
-This produces two self-contained ESM files that run with plain Node.
+This runs esbuild on both entry points and produces two self-contained ESM files that run with plain Node or Bun.
 
 ### 2.3 Protocol cleanup
 
@@ -197,11 +195,9 @@ Both instances ran the same command:
 
 ```bash
 cd /opt/dopamint/repo/frontend
-./node_modules/.pnpm/esbuild@0.28.1/node_modules/esbuild/bin/esbuild \
-  src/bench/offchainTps.ts src/bench/offchainTpsWorker.ts \
-  --bundle --platform=node --format=esm --outdir=dist/bench --tsconfig=tsconfig.json
+pnpm build:bench
 node dist/bench/offchainTps.js \
-  --game blackjack --tunnels 1000 --duration 10000 --workers 180 --sign-mode full \
+  --game blackjack --tunnels 1000 --duration 10000 --workers 128 --sign-mode full \
   --json /tmp/bench-blackjack-full.json
 ```
 
@@ -332,7 +328,45 @@ After the initial report, I ran a worker-count sweep to find the highest honest 
 
 \* Instance A showed noisy/degraded behavior during the sweep, likely from leftover load from earlier failed experiments; those rows are not representative.
 
-**Best configuration found:** `128 workers × 1000 tunnels × blackjack × full sign`, reaching **~468k fleet TPS** (~234k per instance). This is a **~14% improvement** over the original 180-worker run.
+**Best Node configuration found:** `128 workers × 1000 tunnels × blackjack × full sign`, reaching **~468k fleet TPS** (~234k per instance). This is a **~14% improvement** over the original 180-worker run.
+
+---
+
+## 5.6 Bun runtime comparison
+
+As a separate experiment, the same benchmark was run under **Bun v1.3.14** on both instances. Bun's `node:crypto` ed25519 KeyObject path currently aborts with a core dump, so the benchmark falls back to the pure-JS `@noble/curves` backend when it detects Bun.
+
+### 5.6.1 Tested configurations
+
+| Workers | Tunnels | Duration | Instance A TPS | Instance B TPS | Notes |
+|---|---:|---:|---:|---:|---|
+| 8 | 100 | 15 s | 4,440 | 4,460 | stable |
+| **16** | **100** | **15 s** | **8,324** | **8,308** | **best stable Bun result** |
+| 16 | 200 | 15 s | 8,132 | 8,158 | stable |
+| 16 | 500 | 15 s | 8,184 | 8,085 | stable |
+| 24 | 100 | 15 s | 5,714 | 6,154 | stable, lower per-core efficiency |
+| 32 | 1000 | 15 s | 5,380 | 5,271 | stable |
+| 64 | 1000 | 15 s | 2,366 | 2,461 | stable but degraded |
+| 128 | 1000 | 15 s | hung | hung | workers did not complete; command cancelled |
+
+### 5.6.2 Bun vs Node at identical small config
+
+Running the same `16 workers × 100 tunnels × full sign` configuration under both runtimes on one instance:
+
+| Runtime | Backend | TPS | Signatures/sec | Verifies/sec |
+|---|---|---:|---:|---:|
+| Bun v1.3.14 | `@noble/curves` (pure JS) | ~8,300 | ~16,600 | ~16,600 |
+| Node v22.23.0 | `node:crypto` / OpenSSL | ~49,300 | ~98,600 | ~98,600 |
+
+**Bun is ~6× slower than Node** for this workload, even though Bun is generally faster at raw JS execution. The difference is almost entirely the crypto backend:
+
+- Node uses OpenSSL's optimized ed25519 implementation (assembly, SIMD).
+- Bun's native ed25519 path crashes the process, forcing the pure-JS noble fallback.
+- The noble backend is correct and portable, but cannot match OpenSSL's throughput.
+
+### 5.6.3 Takeaway
+
+Switching the benchmark runtime to Bun **does not improve TPS today**. It caps per-instance throughput at roughly **8k TPS** and scales poorly past 16 workers. Bun may become competitive once its native ed25519 implementation is stable enough to use without crashing, but until then **Node is the better runtime for this benchmark**.
 
 ---
 
@@ -342,11 +376,11 @@ Assuming near-linear horizontal scaling across identical instances. Per-instance
 
 | Target | Mode | Per-instance TPS | Instances needed (rounded up) |
 |---|---|---|---|
-| 5M TPS | full sign + verify | ~205k | **25** |
+| 5M TPS | full sign + verify | ~234k | **22** |
 | 5M TPS | sign-only | ~373k | **14** |
 | 5M TPS | none (protocol only) | ~430k | **12** |
 
-> **Update after worker tuning (Section 5.5):** the best honest full-sign configuration reached ~234k per instance, which lowers the full-sign estimate to **~22 instances**.
+> The full-sign estimate uses the tuned best of **~234k TPS per instance** from Section 5.5.
 
 The current dev stack is capped at 2 instances. Reaching 5M TPS requires either:
 
@@ -395,15 +429,35 @@ Despite lower per-core efficiency, the absolute fleet throughput is far higher b
 
 Each update is 120 bytes. At ~410k full-sign TPS, the fleet produces ~49 MB/s. The `c7i.48xlarge` network is 50 Gbps, so network is ~0.8% utilized. The benchmark is CPU-bound by signing.
 
+### 7.6 Resource consumption and monitoring caveat
+
+**Manager question:** *"This machine spec is gigantic. You didn't log the resources consumption, so how do you know you're going to get the most out of the machine? We even need a graph to monitor."*
+
+This is a fair and important limitation of the current run. The numbers reported here are **throughput numbers only**; they do not come with fine-grained CPU, memory, disk, or network utilization data. Specifically:
+
+- **No per-process CPU sampling** was collected during the runs. The only system-level signal is CloudWatch `CPUUtilization` at 1-minute granularity, which is too coarse for a 12–15 second benchmark burst (see Section 7.1).
+- **No memory or I/O profiling** was done. The benchmark is in-memory and network-light, but this was assumed, not measured.
+- **No graph or dashboard** was produced. The SSM-based execution model makes ad-hoc live monitoring harder than an interactive SSH session.
+
+Because of this, we **cannot claim** that the current best of ~234k TPS per instance is the absolute ceiling of a `c7i.48xlarge`. It is simply the best configuration found in this tuning pass. To determine whether more TPS is available on the same hardware, the next step is to instrument the run with:
+
+1. **Per-second CPU utilization** (e.g. `mpstat -P ALL 1`, `perf stat`, or CloudWatch detailed monitoring at 1-second granularity).
+2. **Per-worker CPU sampling** so we can see if workers are actually saturated or waiting on locks / GC.
+3. **A longer steady-state run** (minutes, not seconds) to observe thermal throttling, scheduler behavior, and sustained throughput.
+4. **A live dashboard** (e.g. Grafana agent + CloudWatch, or `htop`/`bpytop` captured during the run) so the team can visually correlate TPS with resource use.
+
+Until those measurements exist, treat the reported TPS as a **lower-bound best effort**, not a proven hardware ceiling. The good news is that the benchmark itself is deterministic and repeatable, so adding resource telemetry is a straightforward next step rather than a redesign.
+
 ---
 
 ## 8. Conclusions
 
-1. **The kit works end-to-end on AWS.** Two `c7i.48xlarge` instances sustained **~410k fully signed/verified off-chain TPS** using the real frontend blackjack protocol.
+1. **The kit works end-to-end on AWS.** Two `c7i.48xlarge` instances sustained **~468k fully signed/verified off-chain TPS** using the real frontend blackjack protocol.
 2. **Blackjack is the right game for raw throughput** because its long sessions amortize tunnel opening and key generation.
 3. **Crypto is the dominant cost.** Full sign/verify is roughly half the throughput of the protocol-only path.
-4. **5M TPS is feasible** with horizontal scaling: approximately **13 instances** of the same size for the honest full-sign metric, or **6 instances** if only counting protocol transitions.
-5. **The runbook and benchmark are repeatable.** The entire flow is captured in `docs/runbooks/offchain-tps-benchmark.md` and the code on `feat/offchain-tps-bench`.
+4. **5M TPS is feasible** with horizontal scaling: approximately **22 instances** of the same size for the honest full-sign metric, or **12 instances** if only counting protocol transitions.
+5. **Bun is not faster for this workload.** With its current ed25519 instability forcing a pure-JS crypto fallback, Bun reached only ~8k TPS per instance — roughly **6× slower than Node**.
+6. **Resource telemetry is the next bottleneck to investigate.** The reported TPS is a tuned best effort, not a proven hardware ceiling, because CPU/memory utilization was not sampled during the runs.
 
 ---
 
@@ -432,7 +486,7 @@ aws ssm send-command \
   --region us-east-1 \
   --instance-ids i-07ab8681b54a8c1e9 i-089589b8ee6fab47c \
   --document-name AWS-RunShellScript \
-  --parameters commands='["cd /opt/dopamint/repo && git fetch --depth 1 origin feat/offchain-tps-bench && git reset --hard FETCH_HEAD && cd frontend && ./node_modules/.pnpm/esbuild@0.28.1/node_modules/esbuild/bin/esbuild src/bench/offchainTps.ts src/bench/offchainTpsWorker.ts --bundle --platform=node --format=esm --outdir=dist/bench --tsconfig=tsconfig.json && node dist/bench/offchainTps.js --game blackjack --tunnels 1000 --duration 10000 --workers 180 --sign-mode full --json /tmp/bench-blackjack-full.json"]'
+  --parameters commands='["cd /opt/dopamint/repo && git fetch --depth 1 origin feat/offchain-tps-bench && git reset --hard FETCH_HEAD && cd frontend && pnpm install --frozen-lockfile && pnpm build:bench && node dist/bench/offchainTps.js --game blackjack --tunnels 1000 --duration 10000 --workers 128 --sign-mode full --json /tmp/bench-blackjack-full.json"]'
 ```
 
 JSON reports remain on the instances at:

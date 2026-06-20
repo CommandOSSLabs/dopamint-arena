@@ -144,7 +144,7 @@ The benchmark CLI supports these flags:
 |---|---|---|
 | `--game` | `tictactoe` or `blackjack` | `--game blackjack` |
 | `--tunnels` | Concurrent tunnels per instance | `--tunnels 1000` |
-| `--workers` | Worker threads per instance | `--workers 180` |
+| `--workers` | Worker threads per instance | `--workers 128` |
 | `--duration` | Run for N milliseconds | `--duration 10000` |
 | `--updates-per-tunnel` | Stop after N transitions per tunnel | `--updates-per-tunnel 1000` |
 | `--sign-mode` | `full` (sign+verify), `sign-only`, or `none` | `--sign-mode full` |
@@ -157,12 +157,16 @@ For a 5M-TPS oriented test, start with:
 - `blackjack` (the faster game)
 - `full` sign mode (the honest metric)
 - 1000–5000 tunnels
-- 180 workers (each `c7i.48xlarge` has 192 vCPUs)
+- 128 workers (tuned best; each `c7i.48xlarge` has 192 vCPUs)
 - 10–20 second duration
 
 ### 5.2 Build + run via SSM
 
-The benchmark must be bundled with esbuild on the instance because Node worker threads cannot reliably resolve the frontend `tsconfig` path aliases at runtime.
+The benchmark must be bundled with esbuild on the instance because Node worker threads cannot reliably resolve the frontend `tsconfig` path aliases at runtime. A convenience script is provided:
+
+```bash
+pnpm build:bench
+```
 
 ```bash
 aws ssm send-command \
@@ -170,7 +174,7 @@ aws ssm send-command \
   --region us-east-1 \
   --instance-ids i-07ab8681b54a8c1e9 i-089589b8ee6fab47c \
   --document-name AWS-RunShellScript \
-  --parameters commands='["cd /opt/dopamint/repo && git fetch --depth 1 origin feat/offchain-tps-bench && git reset --hard FETCH_HEAD && cd frontend && ./node_modules/.pnpm/esbuild@0.28.1/node_modules/esbuild/bin/esbuild src/bench/offchainTps.ts src/bench/offchainTpsWorker.ts --bundle --platform=node --format=esm --outdir=dist/bench --tsconfig=tsconfig.json && node dist/bench/offchainTps.js --game blackjack --tunnels 1000 --duration 10000 --workers 180 --sign-mode full --json /tmp/bench-blackjack-full.json"]'
+  --parameters commands='["cd /opt/dopamint/repo && git fetch --depth 1 origin feat/offchain-tps-bench && git reset --hard FETCH_HEAD && cd frontend && pnpm install --frozen-lockfile && pnpm build:bench && node dist/bench/offchainTps.js --game blackjack --tunnels 1000 --duration 10000 --workers 128 --sign-mode full --json /tmp/bench-blackjack-full.json"]'
 ```
 
 Save the `CommandId`.
@@ -354,12 +358,13 @@ not `git pull`.
 
 ### `esbuild` binary not found
 
-Find it dynamically on the instance:
+Make sure dependencies are installed (`pnpm install`) and use the convenience script:
 
 ```bash
-ESBUILD=$(find node_modules/.pnpm -path '*esbuild*/bin/esbuild' -type f | head -1)
-$ESBUILD ...
+pnpm build:bench
 ```
+
+If you must invoke esbuild directly, find it in `node_modules/.bin/esbuild` after install.
 
 ### SSM command times out
 
