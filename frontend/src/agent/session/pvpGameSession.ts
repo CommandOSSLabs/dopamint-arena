@@ -80,7 +80,7 @@ export class PvpGameSession<S, M> {
   }
 
   /** Seat A makes the opening proposal; both seats then react on confirmation. */
-  async kickoff(): Promise<void> {
+  kickoff(): void {
     this.drive();
   }
 
@@ -109,11 +109,19 @@ export class PvpGameSession<S, M> {
   }
 
   private publish(phase: SessionPhase, state: S): void {
-    const balances = this.kit.protocol.balances(state);
+    const raw = this.kit.protocol.balances(state);
+    const prev = this.store.get().balances;
+    // Reuse the previous balances reference when the values are unchanged so that
+    // SnapshotStore.sameShallow (which uses Object.is) treats a no-op publish as
+    // identical and suppresses the spurious subscriber notification.
+    const balances =
+      prev !== null && prev.a === raw.a && prev.b === raw.b
+        ? prev
+        : { a: raw.a, b: raw.b };
     this.store.set({
       phase,
       state,
-      balances: { a: balances.a, b: balances.b },
+      balances,
       terminal: this.kit.protocol.isTerminal(state),
       error: null,
     });

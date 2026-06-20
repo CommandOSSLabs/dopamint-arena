@@ -52,7 +52,7 @@ describe("PvpGameSession (two-endpoint loopback)", () => {
     sA.setAuto(true);
     sB.setAuto(true);
 
-    await sA.kickoff();
+    sA.kickoff();
     await waitFor(() => sA.getSnapshot().terminal && sB.getSnapshot().terminal);
 
     const bal = sA.getSnapshot().balances!;
