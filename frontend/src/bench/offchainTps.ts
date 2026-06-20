@@ -17,6 +17,9 @@ import { writeFileSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import { GAME_KITS, type GameId } from "@/agent/gameKit";
+
+// Make sure tsx resolves the frontend path aliases inside worker threads.
+process.env.TSX_TSCONFIG_PATH = path.resolve(process.cwd(), "tsconfig.json");
 import {
   addInto,
   mergeCounters,
