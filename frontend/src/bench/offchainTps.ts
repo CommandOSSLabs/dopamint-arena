@@ -125,7 +125,9 @@ export async function runBenchmark(cfg: BenchConfig): Promise<BenchReport> {
 
   const isTs = import.meta.url.endsWith(".ts");
   const workerPath = path.join(path.dirname(fileURLToPath(import.meta.url)), `offchainTpsWorker${isTs ? ".ts" : ".js"}`);
-  const execArgv = isTs ? ["--import", "tsx"] : [];
+  // --loader tsx is deprecated but reliably propagates into ESM worker threads;
+  // --import tsx does not always register the resolver hook inside workers.
+  const execArgv = isTs ? ["--loader", "tsx"] : [];
 
   const progressTimer = setInterval(() => {
     const agg = mergeCounters(perShard);
