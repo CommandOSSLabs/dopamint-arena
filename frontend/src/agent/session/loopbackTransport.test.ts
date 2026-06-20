@@ -3,11 +3,13 @@ import assert from "node:assert";
 import { linkedLoopback } from "./loopbackTransport";
 
 describe("linkedLoopback", () => {
-  it("delivers a frame sent on A to B's onFrame handler", () => {
+  it("delivers a frame sent on A to B's onFrame handler", async () => {
     const { a, b } = linkedLoopback();
     const received: number[][] = [];
     b.onFrame((f) => received.push([...f]));
     a.send(Uint8Array.of(1, 2, 3));
+    // Delivery is async (queueMicrotask); flush before asserting.
+    await Promise.resolve();
     assert.deepStrictEqual(received, [[1, 2, 3]]);
   });
 
