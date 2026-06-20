@@ -255,7 +255,10 @@ git commit -m "feat(agent): reference-stable snapshot store"
 // pvpGameSession.e2e.test.ts
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { core, makeEndpoint } from "sui-tunnel-ts";          // verified exports
+import { core } from "sui-tunnel-ts"; // core barrel: DistributedTunnel, makeEndpoint, generateKeyPair, Transport
+// NOTE: makeEndpoint/generateKeyPair/DistributedTunnel are NOT top-level named exports —
+// reach them via the `core` namespace. Verify makeEndpoint's real signature in
+// sui-tunnel-ts/src/core/tunnel.ts (the args below are illustrative).
 import { GAME_KITS } from "@/agent/gameKit";
 import { linkedLoopback } from "./loopbackTransport";
 import { PvpGameSession } from "./pvpGameSession";
@@ -273,13 +276,13 @@ describe("PvpGameSession (two-endpoint loopback)", () => {
 
     const dtA = new core.DistributedTunnel(kit.protocol as never, {
       tunnelId: ctx.tunnelId, selfParty: "A",
-      self: makeEndpoint("self", "0xA", keyA, true),
-      opponent: makeEndpoint("opp", "0xB", { publicKey: keyB.publicKey }, false),
+      self: core.makeEndpoint("self", "0xA", keyA, true),
+      opponent: core.makeEndpoint("opp", "0xB", { publicKey: keyB.publicKey }, false),
     }, txA, ctx.initialBalances);
     const dtB = new core.DistributedTunnel(kit.protocol as never, {
       tunnelId: ctx.tunnelId, selfParty: "B",
-      self: makeEndpoint("self", "0xB", keyB, true),
-      opponent: makeEndpoint("opp", "0xA", { publicKey: keyA.publicKey }, false),
+      self: core.makeEndpoint("self", "0xB", keyB, true),
+      opponent: core.makeEndpoint("opp", "0xA", { publicKey: keyA.publicKey }, false),
     }, txB, ctx.initialBalances);
 
     const sA = new PvpGameSession(kit, "A", { rngForSeat: seeded(1) });
