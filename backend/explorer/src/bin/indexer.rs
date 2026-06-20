@@ -7,6 +7,7 @@
 use clap::Parser;
 use diesel_migrations::{embed_migrations, EmbeddedMigrations};
 use explorer::handler::SettlementPipeline;
+use move_core_types::account_address::AccountAddress;
 use sui_indexer_alt_framework::cluster::{Args, IndexerCluster};
 use sui_indexer_alt_framework::pipeline::concurrent::ConcurrentConfig;
 
@@ -23,7 +24,8 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let args = Args::parse();
-    let package_id = std::env::var("TUNNEL_PACKAGE_ID")?;
+    let package = AccountAddress::from_hex_literal(&std::env::var("TUNNEL_PACKAGE_ID")?)
+        .map_err(|e| anyhow::anyhow!("invalid TUNNEL_PACKAGE_ID: {e}"))?;
     let database_url: url::Url = std::env::var("DATABASE_URL")?.parse()?;
 
     let mut cluster = IndexerCluster::builder()
@@ -34,7 +36,7 @@ async fn main() -> anyhow::Result<()> {
         .await?;
 
     cluster
-        .concurrent_pipeline(SettlementPipeline { package_id }, ConcurrentConfig::default())
+        .concurrent_pipeline(SettlementPipeline { package }, ConcurrentConfig::default())
         .await?;
 
     // Framework owns watermarks + graceful shutdown; we just wait for the service to finish.

@@ -17,15 +17,16 @@ use sui_indexer_alt_framework::postgres::Connection;
 use sui_indexer_alt_framework::types::full_checkpoint_content::Checkpoint;
 use sui_indexer_alt_framework::FieldCount;
 
+use move_core_types::account_address::AccountAddress;
+
 use crate::events::{event_to_row, RowData};
 use crate::schema::settlement;
 
 /// One settlement row to insert. Mirrors the on-chain-derived subset of `events::RowData`.
 ///
-/// `proof_url`, `walrus_blob_id`, and `game` are intentionally OMITTED: the BCS lifecycle
-/// events don't carry them, so they default NULL on insert and are filled downstream (proof
-/// fields via the /settle enrichment path). The upsert below COALESCE-preserves them so a
-/// reprocessed checkpoint never clobbers that enrichment.
+/// `proof_url`, `walrus_blob_id`, and `game` are omitted from this struct (Diesel inserts NULL).
+/// `proof_url`/`walrus_blob_id` are COALESCE-preserved on upsert (enriched via /settle);
+/// `game` is populated by later enrichment.
 #[derive(Insertable, FieldCount, Clone)]
 #[diesel(table_name = crate::schema::settlement)]
 pub struct StoredSettlement {
@@ -62,9 +63,9 @@ impl StoredSettlement {
     }
 }
 
-/// Indexes `<package_id>::tunnel::*` lifecycle events into the `settlement` read-model.
+/// Indexes `<package>::tunnel::*` lifecycle events into the `settlement` read-model.
 pub struct SettlementPipeline {
-    pub package_id: String,
+    pub package: AccountAddress,
 }
 
 #[async_trait]
@@ -74,19 +75,14 @@ impl Processor for SettlementPipeline {
 
     async fn process(&self, checkpoint: &Arc<Checkpoint>) -> anyhow::Result<Vec<Self::Value>> {
         let seq = checkpoint.summary.sequence_number as i64;
-        // StructTag Display renders the address via `short_str_lossless()` (leading zeros
-        // stripped), so `TUNNEL_PACKAGE_ID` must be supplied in that same short/0x form for
-        // this filter to match. Verified at e2e time against a live node, not the build gate.
-        let prefix = format!("{}::tunnel::", self.package_id);
 
         let mut rows = Vec::new();
         for tx in &checkpoint.transactions {
             let digest = tx.transaction.digest().to_string();
             for ev in tx.events.iter().flat_map(|evs| evs.data.iter()) {
-                if !ev.type_.to_string().starts_with(&prefix) {
+                if ev.type_.address != self.package || ev.type_.module.as_str() != "tunnel" {
                     continue;
                 }
-                // Struct name suffix from the structured field — no `::` string-split edge.
                 let suffix = ev.type_.name.as_str();
                 if let Some(row) = event_to_row(suffix, &ev.contents, &digest, seq) {
                     rows.push(StoredSettlement::from_row(row));
@@ -142,7 +138,7 @@ impl Handler for SettlementPipeline {
                 "UPDATE settlement s SET party_a_addr = o.party_a_addr, party_b_addr = o.party_b_addr \
                  FROM settlement o \
                  WHERE o.tunnel_id = s.tunnel_id AND o.kind = 'opened' \
-                   AND s.kind = 'settled' AND s.party_a_addr IS NULL AND s.tunnel_id = ANY($1)",
+                   AND s.kind = 'settled' AND s.party_a_addr IS NULL AND s.party_b_addr IS NULL AND s.tunnel_id = ANY($1)",
             )
             .bind::<Array<Text>, _>(settled_tunnels)
             .execute(conn)

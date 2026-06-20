@@ -108,6 +108,7 @@ pub fn event_to_row(
                 tunnel_id: hex0x(&e.tunnel_id),
                 party_a_addr: None,
                 party_b_addr: None,
+                // per-tunnel balances are far below i64::MAX (~9.2e18 MIST); only total supply approaches it
                 party_a_balance: Some(e.party_a_balance as i64),
                 party_b_balance: Some(e.party_b_balance as i64),
                 final_nonce: Some(e.final_nonce as i64),

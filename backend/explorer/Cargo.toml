@@ -34,6 +34,7 @@ reqwest.workspace = true
 # write side (indexer binary) — sui-indexer-alt-framework (Diesel). diesel pinned to the
 # framework's resolved graph (gate evidence): diesel-async 0.9 -> diesel 2.3, migrations 2.3.
 sui-indexer-alt-framework = { git = "https://github.com/MystenLabs/sui.git", branch = "testnet" }
+move-core-types = { git = "https://github.com/MystenLabs/sui.git", branch = "testnet" }
 diesel = { version = "2.3", features = ["postgres"] }
 diesel-async = { version = "0.9", features = ["bb8", "postgres"] }
 diesel_migrations = "2.3"
