@@ -30,6 +30,8 @@ async fn main() -> anyhow::Result<()> {
 
     // Bridge Redis pub/sub -> a broadcast channel the SSE handler subscribes to.
     // `SubscriberClient` (not the base `Client`) owns the message stream.
+    // `_rx` is held here intentionally: without at least one receiver the channel reports
+    // zero receivers and the first `tx.send` would silently fail before any SSE client connects.
     let (tx, _rx) = tokio::sync::broadcast::channel::<String>(256);
     if let Ok(url) = std::env::var("REDIS_PUBSUB_URL") {
         let sub = Builder::from_config(RedisConfig::from_url(&url)?).build_subscriber_client()?;
@@ -43,6 +45,7 @@ async fn main() -> anyhow::Result<()> {
                     let _ = tx2.send(s);
                 }
             }
+            tracing::warn!("Redis explorer:events subscription closed; SSE live feed silent until restart");
         });
     }
 

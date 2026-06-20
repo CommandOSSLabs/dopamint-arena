@@ -54,7 +54,10 @@ async fn list(State(s): State<ApiState>, Query(p): Query<ListParams>) -> Respons
     };
     match s.store.list(&q).await {
         Ok(page) => Json(page).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "settlement store error");
+            (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response()
+        }
     }
 }
 
@@ -62,7 +65,10 @@ async fn detail(State(s): State<ApiState>, Path(digest): Path<String>) -> Respon
     match s.store.get(&digest).await {
         Ok(Some(row)) => Json(row).into_response(),
         Ok(None) => (StatusCode::NOT_FOUND, "no such settlement").into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "settlement store error");
+            (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response()
+        }
     }
 }
 
@@ -72,7 +78,10 @@ async fn transcript(State(s): State<ApiState>, Path(digest): Path<String>) -> Re
     let blob_id = match s.store.get(&digest).await {
         Ok(Some(row)) => row.walrus_blob_id,
         Ok(None) => return (StatusCode::NOT_FOUND, "no such settlement").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "settlement store error");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response();
+        }
     };
     let Some(blob_id) = blob_id else {
         return (StatusCode::NOT_FOUND, "settlement has no archived transcript").into_response();
@@ -90,7 +99,10 @@ async fn transcript(State(s): State<ApiState>, Path(digest): Path<String>) -> Re
 async fn stats(State(s): State<ApiState>) -> Response {
     match s.store.settled_count().await {
         Ok(n) => Json(serde_json::json!({ "settledCount": n })).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "settlement store error");
+            (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response()
+        }
     }
 }
 
