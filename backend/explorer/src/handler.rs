@@ -11,6 +11,7 @@ use async_trait::async_trait;
 use diesel::prelude::*;
 use diesel::sql_types::{Array, Nullable, Text};
 use diesel_async::RunQueryDsl;
+use fred::prelude::*;
 use sui_indexer_alt_framework::pipeline::Processor;
 use sui_indexer_alt_framework::postgres::handler::Handler;
 use sui_indexer_alt_framework::postgres::Connection;
@@ -21,6 +22,21 @@ use move_core_types::account_address::AccountAddress;
 
 use crate::events::{event_to_row, RowData};
 use crate::schema::settlement;
+
+/// Process-global Redis publisher for the live settlement feed.
+///
+/// WHY a global: the framework `Handler::commit` is a STATIC method (no `&self`, so no
+/// per-instance Redis handle can be threaded through). The binary sets this once at startup
+/// via `init_events_publisher`; `commit` reads it best-effort. Absent (no Redis) => no-op.
+///
+/// `RedisClient` (fred 9.x) — fred 10.x renamed this to `Client`, but we're pinned to 9.4.0.
+static SETTLEMENT_EVENTS: std::sync::OnceLock<RedisClient> = std::sync::OnceLock::new();
+
+/// Install the live-feed publisher. Idempotent: a second call is ignored (the `OnceLock` keeps
+/// the first). Call once from the indexer binary after `RedisClient::init()`.
+pub fn init_events_publisher(client: RedisClient) {
+    let _ = SETTLEMENT_EVENTS.set(client);
+}
 
 /// One settlement row to insert. Mirrors the on-chain-derived subset of `events::RowData`.
 ///
@@ -59,6 +75,34 @@ impl StoredSettlement {
             checkpoint: r.checkpoint,
             timestamp_ms: r.timestamp_ms,
             closed_at_ms: r.closed_at_ms,
+        }
+    }
+
+    /// Project this freshly-committed row to the api's camelCase wire shape for the live feed.
+    /// `proof_url`/`walrus_blob_id`/`game` are intentionally `None`: at commit time the chain row
+    /// carries no Walrus proof (that arrives later via the `explorer:proofs` subscriber) and no
+    /// game tag. The frontend live feed only needs the settlement identity + balances.
+    fn to_feed_row(&self) -> shared::SettlementRow {
+        let kind = match self.kind.as_str() {
+            "opened" => shared::LifecycleKind::Opened,
+            _ => shared::LifecycleKind::Settled,
+        };
+        shared::SettlementRow {
+            tx_digest: self.tx_digest.clone(),
+            kind,
+            tunnel_id: self.tunnel_id.clone(),
+            party_a_addr: self.party_a_addr.clone(),
+            party_b_addr: self.party_b_addr.clone(),
+            party_a_balance: self.party_a_balance,
+            party_b_balance: self.party_b_balance,
+            final_nonce: self.final_nonce,
+            transcript_root: self.transcript_root.clone(),
+            proof_url: None,
+            walrus_blob_id: None,
+            checkpoint: self.checkpoint,
+            timestamp_ms: self.timestamp_ms,
+            closed_at_ms: self.closed_at_ms,
+            game: None,
         }
     }
 }
@@ -143,6 +187,19 @@ impl Handler for SettlementPipeline {
             .bind::<Array<Text>, _>(settled_tunnels)
             .execute(conn)
             .await?;
+        }
+
+        // 3. Live feed (best-effort). Publish each SETTLED row in this batch to `explorer:events`
+        // (the api fans this out as SSE). Settled-only: the frontend live feed shows settlements,
+        // and a momentarily-NULL-address row is fine (the list doesn't render addresses). A
+        // publish failure (no Redis, dropped connection) MUST NOT affect the commit result — this
+        // is purely additive telemetry, so all errors are swallowed.
+        if let Some(client) = SETTLEMENT_EVENTS.get() {
+            for v in values.iter().filter(|v| v.kind == "settled") {
+                if let Ok(json) = serde_json::to_string(&v.to_feed_row()) {
+                    let _: Result<(), _> = client.publish("explorer:events", json).await;
+                }
+            }
         }
 
         Ok(inserted)
