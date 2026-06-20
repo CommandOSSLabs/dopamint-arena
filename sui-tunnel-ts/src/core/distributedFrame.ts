@@ -45,7 +45,26 @@ export const identityMoveCodec: MoveCodec<unknown> = {
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 
-export function encodeFrame<M>(frame: Frame<M>, codec: MoveCodec<M>): Uint8Array {
+/**
+ * Build the relay envelope the backend receives: `{ t: "frame", kind, data }`.
+ *
+ * Stamps `kind` on the outer envelope so the backend reads one JSON field instead of
+ * re-parsing the inner `data` string. The inner `data` is the same opaque JSON produced
+ * by `encodeFrame`; only the outer wrapper gains the extra field. Legacy backends that
+ * do not read the outer `kind` are unaffected — they still find it inside `data`.
+ */
+export function encodeRelayEnvelope<M>(
+  frame: Frame<M>,
+  codec: MoveCodec<M>
+): string {
+  const data = new TextDecoder().decode(encodeFrame(frame, codec));
+  return JSON.stringify({ t: "frame", kind: frame.kind, data });
+}
+
+export function encodeFrame<M>(
+  frame: Frame<M>,
+  codec: MoveCodec<M>
+): Uint8Array {
   const obj =
     frame.kind === "move"
       ? {
@@ -67,7 +86,10 @@ export function encodeFrame<M>(frame: Frame<M>, codec: MoveCodec<M>): Uint8Array
   return textEncoder.encode(JSON.stringify(obj));
 }
 
-export function decodeFrame<M>(bytes: Uint8Array, codec: MoveCodec<M>): Frame<M> {
+export function decodeFrame<M>(
+  bytes: Uint8Array,
+  codec: MoveCodec<M>
+): Frame<M> {
   const o = JSON.parse(textDecoder.decode(bytes));
   if (o.kind === "move") {
     return {
@@ -83,7 +105,11 @@ export function decodeFrame<M>(bytes: Uint8Array, codec: MoveCodec<M>): Frame<M>
     };
   }
   if (o.kind === "ack") {
-    return { kind: "ack", nonce: BigInt(o.nonce), sigResponder: fromHex(o.sigResponder) };
+    return {
+      kind: "ack",
+      nonce: BigInt(o.nonce),
+      sigResponder: fromHex(o.sigResponder),
+    };
   }
   throw new Error(`unknown frame kind: ${o.kind}`);
 }

@@ -5,6 +5,7 @@ import {
   AckFrame,
   decodeFrame,
   encodeFrame,
+  encodeRelayEnvelope,
   identityMoveCodec,
   MoveCodec,
   MoveFrame,
@@ -38,7 +39,11 @@ test("MOVE frame round-trips through the opaque codec", () => {
 });
 
 test("ACK frame round-trips", () => {
-  const frame: AckFrame = { kind: "ack", nonce: 2n, sigResponder: new Uint8Array(64).fill(5) };
+  const frame: AckFrame = {
+    kind: "ack",
+    nonce: 2n,
+    sigResponder: new Uint8Array(64).fill(5),
+  };
   const decoded = decodeFrame<number>(encodeFrame(frame, codec), codec);
   assert.equal(decoded.kind, "ack");
   if (decoded.kind !== "ack") return;
@@ -49,4 +54,32 @@ test("ACK frame round-trips", () => {
 test("unknown frame kind throws on decode", () => {
   const bytes = new TextEncoder().encode(JSON.stringify({ kind: "bogus" }));
   assert.throws(() => decodeFrame<number>(bytes, codec), /unknown frame kind/);
+});
+
+test("relay envelope carries an outer kind tag mirroring the frame", () => {
+  const moveFrame: MoveFrame<number> = {
+    kind: "move",
+    nonce: 3n,
+    by: "A",
+    move: 42,
+    timestamp: 1750000000000n,
+    stateHash: new Uint8Array(32).fill(1),
+    partyABalance: 1000n,
+    partyBBalance: 1000n,
+    sigProposer: new Uint8Array(64).fill(2),
+  };
+  const moveEnv = JSON.parse(encodeRelayEnvelope(moveFrame, codec));
+  assert.equal(moveEnv.t, "frame");
+  assert.equal(moveEnv.kind, "move");
+  assert.equal(typeof moveEnv.data, "string");
+
+  const ackFrame: AckFrame = {
+    kind: "ack",
+    nonce: 3n,
+    sigResponder: new Uint8Array(64).fill(5),
+  };
+  const ackEnv = JSON.parse(encodeRelayEnvelope(ackFrame, codec));
+  assert.equal(ackEnv.t, "frame");
+  assert.equal(ackEnv.kind, "ack");
+  assert.equal(typeof ackEnv.data, "string");
 });

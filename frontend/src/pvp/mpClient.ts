@@ -157,8 +157,13 @@ export class MpClient {
       this.#send({ type: "relay", matchId, payload: JSON.stringify(obj) });
     return {
       transport: {
-        send: (frame: Uint8Array) =>
-          relaySend({ t: "frame", data: new TextDecoder().decode(frame) }),
+        send: (bytes: Uint8Array) => {
+          const data = new TextDecoder().decode(bytes);
+          // Read `kind` from the already-encoded inner JSON so we can stamp it on the outer
+          // envelope without re-encoding. The inner JSON always has `kind` as its first field.
+          const { kind } = JSON.parse(data) as { kind: string };
+          this.#send({ type: "relay", matchId, payload: JSON.stringify({ t: "frame", kind, data }) });
+        },
         onFrame: (cb) => {
           engineOnFrame = cb;
         },

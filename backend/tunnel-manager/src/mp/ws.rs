@@ -435,11 +435,10 @@ async fn relay_to_other(
     state.bus.deliver(&target, envelope).await;
 }
 
-/// True iff a relayed payload carries a co-signed MOVE frame (not an ACK or a peer
-/// message). Drives PvP throughput counting: one MOVE = one action = the off-chain nonce
-/// step. Reads only the transport envelope (`t`) and the frame discriminator (`kind`) —
-/// the game-specific move payload is never inspected. Any malformed/foreign payload
-/// counts as "not a move" so the relay stays best-effort and game-agnostic.
+/// True iff a relayed payload carries a co-signed MOVE frame. Fast path: read the outer
+/// `kind` tag (the SDK stamps it) without touching the opaque `data`. Fallback: legacy
+/// frames without the outer tag are detected by the old inner parse, so SDK/backend can
+/// deploy independently. Either way the game-specific move payload is never inspected.
 fn relay_payload_is_move(payload: &str) -> bool {
     let Ok(envelope) = serde_json::from_str::<serde_json::Value>(payload) else {
         return false;
@@ -447,6 +446,11 @@ fn relay_payload_is_move(payload: &str) -> bool {
     if envelope.get("t").and_then(serde_json::Value::as_str) != Some("frame") {
         return false;
     }
+    // Fast path: outer kind tag.
+    if let Some(kind) = envelope.get("kind").and_then(serde_json::Value::as_str) {
+        return kind == "move";
+    }
+    // Fallback: legacy frames carry kind only inside the opaque inner `data`.
     let Some(frame_json) = envelope.get("data").and_then(serde_json::Value::as_str) else {
         return false;
     };
@@ -622,6 +626,19 @@ mod tests {
     fn relay_frame(kind: &str) -> String {
         let frame = serde_json::json!({ "kind": kind, "nonce": "1" }).to_string();
         serde_json::json!({ "t": "frame", "data": frame }).to_string()
+    }
+
+    // The fast path: an outer `kind` tag is read WITHOUT parsing the opaque inner `data`.
+    // `data` is deliberately not valid JSON here — if the backend still tried to parse it,
+    // move detection would fail. It must trust the outer tag.
+    #[test]
+    fn move_detection_reads_outer_kind_without_parsing_data() {
+        let moved =
+            serde_json::json!({ "t": "frame", "kind": "move", "data": "::opaque::" }).to_string();
+        let acked =
+            serde_json::json!({ "t": "frame", "kind": "ack", "data": "::opaque::" }).to_string();
+        assert!(relay_payload_is_move(&moved), "outer kind=move counts");
+        assert!(!relay_payload_is_move(&acked), "outer kind=ack does not");
     }
 
     // Throughput counting hinges on this discriminator: a MOVE is one action, an ACK is
