@@ -9,6 +9,7 @@ import {
   identityMoveCodec,
   MoveCodec,
   MoveFrame,
+  wrapInnerFrameJson,
 } from "./distributedFrame";
 
 const codec = identityMoveCodec as MoveCodec<number>;
@@ -56,7 +57,23 @@ test("unknown frame kind throws on decode", () => {
   assert.throws(() => decodeFrame<number>(bytes, codec), /unknown frame kind/);
 });
 
-test("relay envelope carries an outer kind tag mirroring the frame", () => {
+test("wrapInnerFrameJson stamps outer kind from a move inner JSON", () => {
+  const innerJson = JSON.stringify({ kind: "move", nonce: "3", by: "A" });
+  const env = JSON.parse(wrapInnerFrameJson(innerJson));
+  assert.equal(env.t, "frame");
+  assert.equal(env.kind, "move");
+  assert.equal(env.data, innerJson);
+});
+
+test("wrapInnerFrameJson stamps outer kind from an ack inner JSON", () => {
+  const innerJson = JSON.stringify({ kind: "ack", nonce: "5" });
+  const env = JSON.parse(wrapInnerFrameJson(innerJson));
+  assert.equal(env.t, "frame");
+  assert.equal(env.kind, "ack");
+  assert.equal(env.data, innerJson);
+});
+
+test("encodeRelayEnvelope delegates to wrapInnerFrameJson (move and ack)", () => {
   const moveFrame: MoveFrame<number> = {
     kind: "move",
     nonce: 3n,

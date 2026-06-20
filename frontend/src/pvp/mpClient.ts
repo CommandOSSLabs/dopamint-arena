@@ -9,6 +9,7 @@ import { defaultBackend } from "sui-tunnel-ts/core/crypto-native";
 import { toHex } from "sui-tunnel-ts/core/bytes";
 import type { KeyPair } from "sui-tunnel-ts/core/crypto";
 import type { Transport } from "sui-tunnel-ts/core/distributedTunnel";
+import { wrapInnerFrameJson } from "sui-tunnel-ts/core/distributedFrame";
 
 export type Role = "A" | "B";
 
@@ -158,11 +159,12 @@ export class MpClient {
     return {
       transport: {
         send: (bytes: Uint8Array) => {
-          const data = new TextDecoder().decode(bytes);
-          // Read `kind` from the already-encoded inner JSON so we can stamp it on the outer
-          // envelope without re-encoding. The inner JSON always has `kind` as its first field.
-          const { kind } = JSON.parse(data) as { kind: string };
-          this.#send({ type: "relay", matchId, payload: JSON.stringify({ t: "frame", kind, data }) });
+          const innerJson = new TextDecoder().decode(bytes);
+          this.#send({
+            type: "relay",
+            matchId,
+            payload: wrapInnerFrameJson(innerJson),
+          });
         },
         onFrame: (cb) => {
           engineOnFrame = cb;
