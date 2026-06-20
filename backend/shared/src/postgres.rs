@@ -34,12 +34,14 @@ fn kind_str(k: LifecycleKind) -> &'static str {
     }
 }
 
-fn row_from_pg(r: &PgRow) -> SettlementRow {
-    let kind = match r.get::<String, _>("kind").as_str() {
+fn row_from_pg(r: &PgRow) -> anyhow::Result<SettlementRow> {
+    let kind_raw = r.get::<String, _>("kind");
+    let kind = match kind_raw.as_str() {
+        "opened" => LifecycleKind::Opened,
         "settled" => LifecycleKind::Settled,
-        _ => LifecycleKind::Opened,
+        other => anyhow::bail!("unrecognised lifecycle kind: {other:?}"),
     };
-    SettlementRow {
+    Ok(SettlementRow {
         tx_digest: r.get("tx_digest"),
         kind,
         tunnel_id: r.get("tunnel_id"),
@@ -55,7 +57,7 @@ fn row_from_pg(r: &PgRow) -> SettlementRow {
         timestamp_ms: r.get("timestamp_ms"),
         closed_at_ms: r.get("closed_at_ms"),
         game: r.get("game"),
-    }
+    })
 }
 
 #[async_trait::async_trait]
@@ -65,11 +67,11 @@ impl SettlementStore for PgSettlementStore {
             .bind(tx_digest)
             .fetch_optional(&self.pool)
             .await?;
-        Ok(r.as_ref().map(row_from_pg))
+        Ok(r.as_ref().map(row_from_pg).transpose()?)
     }
 
     async fn list(&self, q: &SettlementQuery) -> anyhow::Result<SettlementPage> {
-        let limit = q.limit.max(1);
+        let limit = q.limit.clamp(1, 1000);
         // Composite keyset cursor: the row-value comparison `(ts, digest) < ($1, $2)` matches
         // the `(ts DESC, digest DESC)` order, so rows sharing a millisecond are never skipped
         // at a page edge. Both halves are NULL on page 1 (the `IS NULL` branch lets all rows in).
@@ -97,7 +99,7 @@ impl SettlementStore for PgSettlementStore {
         .fetch_all(&self.pool)
         .await?;
 
-        let mut out: Vec<SettlementRow> = rows.iter().map(row_from_pg).collect();
+        let mut out: Vec<SettlementRow> = rows.iter().map(row_from_pg).collect::<anyhow::Result<Vec<_>>>()?;
         let next_cursor = if out.len() as i64 > limit {
             out.truncate(limit as usize);
             out.last().map(|r| crate::encode_cursor(r.timestamp_ms, &r.tx_digest))

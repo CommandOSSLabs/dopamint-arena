@@ -88,7 +88,7 @@ impl SettlementStore for InMemorySettlementStore {
                 .cmp(&a.timestamp_ms)
                 .then_with(|| b.tx_digest.cmp(&a.tx_digest))
         });
-        let limit = q.limit.max(1) as usize;
+        let limit = q.limit.clamp(1, 1000) as usize;
         let next_cursor = if v.len() > limit {
             let last = &v[limit - 1];
             Some(encode_cursor(last.timestamp_ms, &last.tx_digest))

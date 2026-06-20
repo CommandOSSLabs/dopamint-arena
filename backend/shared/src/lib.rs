@@ -57,6 +57,7 @@ pub fn decode_cursor(token: &str) -> Option<(i64, String)> {
     let (ts, digest) = token.split_once(':')?;
     Some((ts.parse().ok()?, digest.to_string()))
 }
+/// Build a `"{ts}:{digest}"` keyset cursor token from a timestamp and transaction digest.
 pub fn encode_cursor(ts: i64, digest: &str) -> String {
     format!("{ts}:{digest}")
 }
