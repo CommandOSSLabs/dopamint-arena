@@ -6,12 +6,18 @@
  * swaps loser→winner per round (clamped to the loser's balance), so balances always sum to the
  * locked total. Bets are denominated in the same units as the balances/chips.
  */
-import { core, protocols } from "sui-tunnel-ts";
+import {
+  protocolDomain,
+  lengthPrefixedConcat,
+  type Protocol,
+  type Party,
+  type Balances,
+  type ProtocolContext,
+} from "sui-tunnel-ts/protocol/Protocol";
+import { concatBytes } from "sui-tunnel-ts/core/bytes";
+import { u64ToBeBytes } from "sui-tunnel-ts/core/wire";
+import { blake2b256 } from "sui-tunnel-ts/core/crypto";
 import { handValue } from "@/games/blackjack/app/lib/bjCards";
-
-type Party = protocols.Party;
-type Balances = protocols.Balances;
-type ProtocolContext = protocols.ProtocolContext;
 
 export function getPlayerParty(round: bigint): Party {
   const r = Number(round) - 1;
@@ -45,7 +51,7 @@ export type BetBlackjackMove =
   | { action: "hit" }
   | { action: "stand" };
 
-const DOMAIN = protocols.protocolDomain("blackjack.bet.v1");
+const DOMAIN = protocolDomain("blackjack.bet.v1");
 const PHASE_CODE: Record<BetPhase, number> = {
   round_over: 0,
   player: 1,
@@ -53,13 +59,13 @@ const PHASE_CODE: Record<BetPhase, number> = {
 };
 
 function drawRank(round: bigint, drawIndex: bigint): number {
-  let digest = core.blake2b256(
-    core.concatBytes([DOMAIN, core.u64ToBeBytes(round)]),
+  let digest = blake2b256(
+    concatBytes([DOMAIN, u64ToBeBytes(round)]),
   );
   const idx = Number(drawIndex);
   const block = Math.floor(idx / 32);
   for (let b = 0; b < block; b++)
-    digest = core.blake2b256(core.concatBytes([digest, core.u64ToBeBytes(b)]));
+    digest = blake2b256(concatBytes([digest, u64ToBeBytes(b)]));
   return (digest[idx % 32] % 13) + 1;
 }
 function rankValue(rank: number): number {
@@ -103,7 +109,7 @@ export function fixedBetMove(
   return { action: "bet", amount: amt };
 }
 
-export class BlackjackBetProtocol implements protocols.Protocol<
+export class BlackjackBetProtocol implements Protocol<
   BetBlackjackState,
   BetBlackjackMove
 > {
@@ -166,17 +172,17 @@ export class BlackjackBetProtocol implements protocols.Protocol<
   }
 
   encodeState(s: BetBlackjackState): Uint8Array {
-    return core.concatBytes([
+    return concatBytes([
       DOMAIN,
-      core.u64ToBeBytes(s.balanceA),
-      core.u64ToBeBytes(s.balanceB),
-      core.u64ToBeBytes(s.round),
-      core.u64ToBeBytes(s.drawIndex),
+      u64ToBeBytes(s.balanceA),
+      u64ToBeBytes(s.balanceB),
+      u64ToBeBytes(s.round),
+      u64ToBeBytes(s.drawIndex),
       new Uint8Array([PHASE_CODE[s.phase]]),
-      core.u64ToBeBytes(s.bet),
-      core.u64ToBeBytes(s.playerHand.length),
+      u64ToBeBytes(s.bet),
+      u64ToBeBytes(s.playerHand.length),
       Uint8Array.from(s.playerHand),
-      core.u64ToBeBytes(s.dealerHand.length),
+      u64ToBeBytes(s.dealerHand.length),
       Uint8Array.from(s.dealerHand),
     ]);
   }
