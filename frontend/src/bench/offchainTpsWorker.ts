@@ -17,13 +17,22 @@ import {
   type Counters,
 } from "sui-tunnel-ts/telemetry/metrics";
 import { toHex } from "sui-tunnel-ts/core/bytes";
-import { blake2b256, nobleBackend } from "sui-tunnel-ts/core/crypto";
+import { blake2b256, nobleBackend, type CryptoBackend } from "sui-tunnel-ts/core/crypto";
+import { nativeBackend, defaultBackend } from "sui-tunnel-ts/core/crypto-native";
 import type { Party, Balances } from "sui-tunnel-ts/protocol/Protocol";
 
-// Bun's node:crypto ed25519 KeyObject path currently aborts with a core dump.
-// Fall back to the pure-JS noble backend so the benchmark can run under Bun.
-const isBun = typeof process !== "undefined" && "bun" in process.versions;
-const backend = isBun ? nobleBackend : undefined;
+/**
+ * Resolve a shard's crypto backend. "default" picks native (node:crypto, which is
+ * BoringSSL under Bun) — the ~2x-faster path and the measured winner. "noble" is a
+ * pure-JS escape hatch: only Bun + worker_threads at high counts can abort with the
+ * native KeyObject path. The stable, fast Bun model is one single-thread process per
+ * core (see solo.ts), where native is both fast and crash-free.
+ */
+function resolveBackend(name: string | undefined): CryptoBackend {
+  if (name === "noble") return nobleBackend;
+  if (name === "native") return nativeBackend;
+  return defaultBackend();
+}
 
 export interface WorkerData {
   shardIndex: number;
@@ -34,6 +43,7 @@ export interface WorkerData {
   maxSteps?: number;
   seed: number;
   reportEveryMs: number;
+  backend?: string;
 }
 
 export type WorkerMessage =
@@ -79,6 +89,7 @@ function runShard(cfg: WorkerData): void {
   const counters: Counters = newCounters();
   const rng = mulberry32(cfg.seed ^ cfg.shardIndex);
   const registry = new ParticipantRegistry(rng);
+  const backend = resolveBackend(cfg.backend);
 
   let nextTunnelIndex = 0;
 

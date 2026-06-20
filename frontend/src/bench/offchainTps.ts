@@ -40,11 +40,14 @@ interface BenchConfig {
   signMode: SignMode;
   seed: number;
   reportEveryMs: number;
+  /** "native" | "noble" | "default" — which ed25519 backend the tunnels sign with. */
+  backend: string;
 }
 
 interface BenchReport {
   gameId: GameId;
   signMode: SignMode;
+  backend: string;
   tunnels: number;
   workers: number;
   cores: number;
@@ -96,7 +99,7 @@ function formatReport(rep: BenchReport): string {
   return [
     "Off-chain kit TPS benchmark",
     `  game           : ${rep.gameId}`,
-    `  config         : ${rep.tunnels} concurrent tunnels, ${rep.workers}/${rep.cores} workers, signMode=${rep.signMode}`,
+    `  config         : ${rep.tunnels} concurrent tunnels, ${rep.workers}/${rep.cores} workers, signMode=${rep.signMode}, backend=${rep.backend}`,
     `  elapsed        : ${(rep.elapsedMs / 1000).toFixed(2)}s`,
     `  interactions   : ${formatNumber(rep.totalInteractions)}`,
     `  effective TPS  : avg ${formatNumber(rep.avgTps)}  peak ${formatNumber(rep.peakTps)}  (per-core ${formatNumber(rep.perCoreTps)})`,
@@ -156,6 +159,7 @@ export async function runBenchmark(cfg: BenchConfig): Promise<BenchReport> {
         maxSteps: stepsPer?.[i],
         seed: cfg.seed,
         reportEveryMs: cfg.reportEveryMs,
+        backend: cfg.backend,
       },
     });
     workers.push(w);
@@ -199,6 +203,7 @@ export async function runBenchmark(cfg: BenchConfig): Promise<BenchReport> {
   return {
     gameId: cfg.gameId,
     signMode: cfg.signMode,
+    backend: cfg.backend,
     tunnels: cfg.tunnels,
     workers: W,
     cores: os.cpus().length,
@@ -237,6 +242,12 @@ function main(argv: string[]): void {
     process.exit(1);
   }
 
+  const backendArg = args.backend;
+  if (backendArg !== undefined && backendArg !== "native" && backendArg !== "noble" && backendArg !== "default") {
+    console.error(`--backend must be one of native|noble|default, got "${backendArg}"`);
+    process.exit(1);
+  }
+
   const num = (k: string, d: number): number => {
     if (args[k] === undefined) return d;
     const v = Number(args[k]);
@@ -253,6 +264,7 @@ function main(argv: string[]): void {
     signMode: (signModeArg as SignMode) ?? "full",
     seed: num("seed", 1),
     reportEveryMs: num("report-every", 500),
+    backend: backendArg ?? "default",
   };
 
   if (cfg.durationMs === undefined && cfg.updatesPerTunnel === undefined) {
