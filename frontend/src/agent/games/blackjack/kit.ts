@@ -15,13 +15,15 @@ import { defaultStateHash, type BotContext, type GameBot, type GameKit } from "@
 
 class BlackjackBot implements GameBot<BetBlackjackState, BetBlackjackMove> {
   private readonly seat: Party;
+  private readonly protocol: BlackjackBetProtocol;
 
-  constructor(seat: Party) {
+  constructor(seat: Party, protocol: BlackjackBetProtocol) {
     this.seat = seat;
+    this.protocol = protocol;
   }
 
   plan(state: BetBlackjackState): BetBlackjackMove | null {
-    if (new BlackjackBetProtocol().isTerminal(state)) return null;
+    if (this.protocol.isTerminal(state)) return null;
     if (actorFor(state) !== this.seat) return null;
 
     if (state.phase === "round_over") {
@@ -54,13 +56,13 @@ class BlackjackBot implements GameBot<BetBlackjackState, BetBlackjackMove> {
 }
 
 export function createBlackjackKit(stake: bigint): GameKit<BetBlackjackState, BetBlackjackMove> {
-  const protocol = new BlackjackBetProtocol(stake);
+  const protocol = new BlackjackBetProtocol();
 
   return {
     id: "blackjack",
     protocol,
     stateHash: (state) => defaultStateHash(protocol, state),
-    createBot: (seat: Party, _ctx: BotContext) => new BlackjackBot(seat),
+    createBot: (seat: Party, _ctx: BotContext) => new BlackjackBot(seat, protocol),
     defaultStake: stake,
   };
 }

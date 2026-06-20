@@ -10,6 +10,11 @@ import {
 } from "sui-tunnel-ts/protocol/quantumPokerPersona";
 import { defaultStateHash, type BotContext, type GameBot, type GameKit } from "@/agent/gameKit";
 
+const DEFAULT_QUANTUM_POKER_BOT_PROFILE: QuantumPokerBotProfile = {
+  name: "Vale",
+  persona: "balanced",
+};
+
 export interface QuantumPokerBotConfig {
   profile?: QuantumPokerBotProfile;
 }
@@ -19,7 +24,10 @@ class QuantumPokerBot implements GameBot<PokerState, PokerMove> {
   private readonly rng: () => number;
 
   constructor(seat: Party, ctx: BotContext, config: QuantumPokerBotConfig) {
-    this.driver = new QuantumPokerPersonaDriver(seat, config.profile ?? { name: "Vale", persona: "balanced" });
+    this.driver = new QuantumPokerPersonaDriver(
+      seat,
+      config.profile ?? DEFAULT_QUANTUM_POKER_BOT_PROFILE,
+    );
     this.rng = ctx.rngForSeat(seat);
   }
 
@@ -27,12 +35,12 @@ class QuantumPokerBot implements GameBot<PokerState, PokerMove> {
     return this.driver.chooseMove(state, this.rng);
   }
 
-  confirm(): void {
+  confirm(_state: PokerState, _move: PokerMove): void {
     // Driver derives round memory from public state; no explicit advance needed.
   }
 
   abort(): void {
-    // No retained memory beyond the driver instance.
+    // Instances are short-lived; no explicit teardown required.
   }
 }
 
