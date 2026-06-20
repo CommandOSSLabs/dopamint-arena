@@ -30,7 +30,7 @@ export interface GameBot<S, M> {
 export type GameKitRegistry = Record<GameId, GameKit<unknown, unknown>>;
 
 /** To be populated in Task 7 after all kits exist. */
-export const GAME_KITS: GameKitRegistry = {} as GameKitRegistry;
+export const GAME_KITS: Partial<GameKitRegistry> = {};
 
 const HEX = "0123456789abcdef";
 
@@ -43,7 +43,7 @@ function bytesToHex(bytes: Uint8Array): string {
   return out;
 }
 
-/** Default state hash: hex of protocol.encodeState. */
+/** Default digest for kits that treat the protocol's canonical wire encoding as the state snapshot. */
 export function defaultStateHash<S, M>(protocol: Protocol<S, M>, state: S): StateHash {
   return bytesToHex(protocol.encodeState(state));
 }
