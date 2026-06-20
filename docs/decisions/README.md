@@ -32,6 +32,7 @@ that depends on them. An ADR captures the decision and the reasoning so the
 - [0008](0008-quantum-poker-protocol-zk.md) — Quantum Poker: protocol-first
   tunnel model, per-slot asymmetric commit-reveal, n-deck/burn/Five-of-a-Kind
   rules, and optional ZK dispute adapter.
-- [0009](0009-super-auto-pets-on-tunnel.md) — Super Auto Pets on the tunnel:
-  deterministic trigger-event battle, commit-reveal hidden teams + fair shop,
-  session-channel settlement, phased de-scope.
+- [0009](0009-data-plane-local-control-plane-redis.md) — Partition by ownership:
+  single-owned per-move state (relay, counters, routing cache) in-process; shared
+  state (matchmaking, presence, match record, checkpoints, stats) on atomic Redis.
+  Refines 0005; demotes its per-frame `SPUBLISH` to a fallback.
