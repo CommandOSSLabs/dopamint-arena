@@ -5,11 +5,27 @@
 //! Ingestion source + checkpoint range come from CLI flags parsed into `cluster::Args`
 //! (e.g. `--remote-store-url`). Connection + package id come from the environment.
 use clap::Parser;
+use diesel::prelude::*;
+use diesel_async::pooled_connection::bb8::Pool;
+use diesel_async::pooled_connection::AsyncDieselConnectionManager;
+use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use diesel_migrations::{embed_migrations, EmbeddedMigrations};
 use explorer::handler::SettlementPipeline;
+use explorer::schema::settlement;
+use fred::prelude::*;
 use move_core_types::account_address::AccountAddress;
 use sui_indexer_alt_framework::cluster::{Args, IndexerCluster};
 use sui_indexer_alt_framework::pipeline::concurrent::ConcurrentConfig;
+
+/// Wire shape published by the control plane on `explorer:proofs`. Camel-case to match the
+/// /settle path; only the digest + the two proof fields are relevant here.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProofLink {
+    tx_digest: Option<String>,
+    walrus_blob_id: Option<String>,
+    proof_url: Option<String>,
+}
 
 const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
 
@@ -26,7 +42,8 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let package = AccountAddress::from_hex_literal(&std::env::var("TUNNEL_PACKAGE_ID")?)
         .map_err(|e| anyhow::anyhow!("invalid TUNNEL_PACKAGE_ID: {e}"))?;
-    let database_url: url::Url = std::env::var("DATABASE_URL")?.parse()?;
+    let database_url_str = std::env::var("DATABASE_URL")?;
+    let database_url: url::Url = database_url_str.parse()?;
 
     let mut cluster = IndexerCluster::builder()
         .with_database_url(database_url)
@@ -39,7 +56,92 @@ async fn main() -> anyhow::Result<()> {
         .concurrent_pipeline(SettlementPipeline { package }, ConcurrentConfig::default())
         .await?;
 
-    // Framework owns watermarks + graceful shutdown; we just wait for the service to finish.
+    // Redis wiring is additive and best-effort: gated entirely on REDIS_PUBSUB_URL so the indexer
+    // still runs against chain-only ingestion without Redis. A bad URL or failed connect is logged
+    // and skipped (warn-and-continue) — it never aborts the pipeline. Same posture as EXPLORER_*.
+    if let Ok(redis_url) = std::env::var("REDIS_PUBSUB_URL") {
+        if let Err(e) = wire_redis(&redis_url, &database_url_str).await {
+            tracing::warn!(error = %e, "Redis explorer wiring failed; live feed + proof links disabled");
+        }
+    }
+
+    // Framework owns watermarks + graceful shutdown; we just wait for the service to finish. The
+    // proof subscriber task (spawned in `wire_redis`) runs concurrently for the process lifetime.
     cluster.run().await?.join().await?;
+    Ok(())
+}
+
+/// Install the live-feed publisher and spawn the proof-link subscriber. Best-effort: any failure
+/// here is reported by the caller and never aborts the indexer.
+///
+/// Two independent Redis roles:
+/// - publisher (`RedisClient`): handed to `handler::init_events_publisher` so `commit` can push new
+///   settlements to `explorer:events`.
+/// - subscriber (`SubscriberClient`): regular `SUBSCRIBE explorer:proofs` (NOT sharded). The
+///   control plane PUBLISHes `{txDigest, walrusBlobId, proofUrl}` here when it persists a Walrus
+///   proof; we back-fill it onto the chain-sourced row.
+async fn wire_redis(redis_url: &str, database_url_str: &str) -> anyhow::Result<()> {
+    // Live-feed publisher (Part A): a plain client, init'd, installed into the process global.
+    let publisher = Builder::from_config(RedisConfig::from_url(redis_url)?).build()?;
+    publisher.init().await?;
+    explorer::handler::init_events_publisher(publisher);
+
+    // A standalone diesel-async pool for the proof UPDATEs, separate from the framework's internal
+    // pool (the framework's `Connection` is only reachable inside `commit`). Same DATABASE_URL.
+    let mgr = AsyncDieselConnectionManager::<AsyncPgConnection>::new(database_url_str);
+    let pool: Pool<AsyncPgConnection> = Pool::builder().build(mgr).await?;
+
+    let subscriber = Builder::from_config(RedisConfig::from_url(redis_url)?).build_subscriber_client()?;
+    subscriber.init().await?;
+    subscriber.subscribe("explorer:proofs").await?;
+    let mut messages = subscriber.message_rx();
+
+    // Lives for the process: drains proof links concurrently with `cluster.run()`.
+    tokio::spawn(async move {
+        // Keep the subscriber owned by the task so its connection stays alive for the message_rx.
+        let _subscriber = subscriber;
+        while let Ok(msg) = messages.recv().await {
+            let Some(payload) = msg.value.as_string() else {
+                continue;
+            };
+            let link: ProofLink = match serde_json::from_str(&payload) {
+                Ok(link) => link,
+                Err(e) => {
+                    tracing::warn!(error = %e, "explorer:proofs payload not parseable; skipping");
+                    continue;
+                }
+            };
+            // Need a digest, and at least one proof field worth writing.
+            let Some(digest) = link.tx_digest else { continue };
+            if link.proof_url.is_none() && link.walrus_blob_id.is_none() {
+                continue;
+            }
+            let mut conn = match pool.get().await {
+                Ok(conn) => conn,
+                Err(e) => {
+                    tracing::warn!(error = %e, "explorer proof pool exhausted; skipping link");
+                    continue;
+                }
+            };
+            // Upgrade-only: the `proof_url IS NULL` filter guarantees a present proof is never
+            // overwritten. Best-effort — log and keep draining on error.
+            let updated = diesel::update(
+                settlement::table
+                    .filter(settlement::tx_digest.eq(&digest))
+                    .filter(settlement::proof_url.is_null()),
+            )
+            .set((
+                settlement::proof_url.eq(link.proof_url),
+                settlement::walrus_blob_id.eq(link.walrus_blob_id),
+            ))
+            .execute(&mut conn)
+            .await;
+            if let Err(e) = updated {
+                tracing::warn!(error = %e, %digest, "explorer proof-link UPDATE failed");
+            }
+        }
+        tracing::warn!("explorer:proofs subscription closed; proof links disabled until restart");
+    });
+
     Ok(())
 }
