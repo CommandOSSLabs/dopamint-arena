@@ -1,0 +1,28 @@
+{
+  "rules": {
+    "no-restricted-imports": [
+      "error",
+      {
+        "patterns": [
+          {
+            "group": [
+              "@/games/*/app/components/**",
+              "@/games/*/app/hooks/**",
+              "@/games/*/app/pages/**",
+              "@/games/*/app/main.tsx",
+              "@/games/*/app/App.tsx",
+              "@/games/*/app/useGameRouter.tsx",
+              "@/games/*/components/**",
+              "@/games/*/hooks/**"
+            ],
+            "message": "Agent kits must import only pure-TS game logic, not app/components/hooks."
+          },
+          {
+            "group": ["*.css", "*.svg", "*.png", "*.jpg"],
+            "message": "Agent kits cannot import assets."
+          }
+        ]
+      }
+    ]
+  }
+}
