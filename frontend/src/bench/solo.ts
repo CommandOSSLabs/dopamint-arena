@@ -41,14 +41,16 @@ function open() {
   return { tunnel, botA: kit.createBot("A", ctx), botB: kit.createBot("B", ctx), last: { A: null, B: null } as Record<Party, string | null> };
 }
 
+const SEATS = ["A", "B"] as Party[];
 let slot = open();
 let steps = 0;
 const t0 = Date.now();
-while (Date.now() - t0 < durationMs) {
-  if (kit.protocol.isTerminal(slot.tunnel.state)) { slot = open(); continue; }
+const deadline = t0 + durationMs;
+while (true) {
+  if (kit.protocol.isTerminal(slot.tunnel.state)) { slot = open(); }
   const state = slot.tunnel.state;
   const h = kit.stateHash(state);
-  for (const seat of ["A", "B"] as Party[]) {
+  for (const seat of SEATS) {
     if (slot.last[seat] === h) continue;
     const bot = seat === "A" ? slot.botA : slot.botB;
     const move = bot.plan(state);
@@ -58,6 +60,8 @@ while (Date.now() - t0 < durationMs) {
     slot.last[seat] = h;
     steps++;
   }
+  // Check the duration deadline only every 1024 steps to avoid Date.now() overhead.
+  if ((steps & 1023) === 0 && Date.now() >= deadline) break;
 }
 const dt = (Date.now() - t0) / 1000;
 console.log(`STEPS_PER_S=${Math.round(steps / dt)}`);

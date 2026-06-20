@@ -37,6 +37,7 @@ function open() {
   return { tunnel, botA: kit.createBot("A", ctx), botB: kit.createBot("B", ctx), last: { A: null, B: null } as Record<Party, string | null> };
 }
 
+const SEATS = ["A", "B"] as Party[];
 let slot = open();
 let steps = 0;
 const t0 = Date.now();
@@ -44,7 +45,7 @@ while (steps < TOTAL_STEPS) {
   if (kit.protocol.isTerminal(slot.tunnel.state)) { slot = open(); continue; }
   const state = slot.tunnel.state;
   const h = kit.stateHash(state);
-  for (const seat of ["A", "B"] as Party[]) {
+  for (const seat of SEATS) {
     if (slot.last[seat] === h) continue;
     const bot = seat === "A" ? slot.botA : slot.botB;
     const move = bot.plan(state);

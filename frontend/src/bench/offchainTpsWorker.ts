@@ -133,6 +133,7 @@ function runShard(cfg: WorkerData): void {
   const slots: Slot[] = [];
   for (let i = 0; i < cfg.tunnels; i++) slots.push(openSlot());
 
+  const SEATS = ["A", "B"] as Party[];
   const start = Date.now();
   let stepsDone = 0;
 
@@ -165,7 +166,7 @@ function runShard(cfg: WorkerData): void {
         const state = slot.tunnel.state;
         const h = kit.stateHash(state);
 
-        for (const seat of ["A", "B"] as Party[]) {
+        for (const seat of SEATS) {
           if (slot.lastHashes[seat] === h) continue;
 
           const bot = seat === "A" ? slot.botA : slot.botB;
