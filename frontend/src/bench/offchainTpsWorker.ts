@@ -17,8 +17,13 @@ import {
   type Counters,
 } from "sui-tunnel-ts/telemetry/metrics";
 import { toHex } from "sui-tunnel-ts/core/bytes";
-import { blake2b256 } from "sui-tunnel-ts/core/crypto";
+import { blake2b256, nobleBackend } from "sui-tunnel-ts/core/crypto";
 import type { Party, Balances } from "sui-tunnel-ts/protocol/Protocol";
+
+// Bun's node:crypto ed25519 KeyObject path currently aborts with a core dump.
+// Fall back to the pure-JS noble backend so the benchmark can run under Bun.
+const isBun = typeof process !== "undefined" && "bun" in process.versions;
+const backend = isBun ? nobleBackend : undefined;
 
 export interface WorkerData {
   shardIndex: number;
@@ -96,6 +101,7 @@ function runShard(cfg: WorkerData): void {
       a.address,
       b.address,
       initialBalances,
+      backend,
     );
 
     const ctx: BotContext = {
