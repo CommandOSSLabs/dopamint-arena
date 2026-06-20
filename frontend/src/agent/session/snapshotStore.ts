@@ -5,7 +5,7 @@ export class SnapshotStore<T extends object> {
   constructor(initial: T) { this.current = Object.freeze({ ...initial }); }
   get(): Readonly<T> { return this.current; }
   set(next: T): void {
-    if (sameShallow(this.current, next)) return;
+    if (sameShallow(this.current as Record<string, unknown>, next as Record<string, unknown>)) return;
     this.current = Object.freeze({ ...next });
     for (const l of this.listeners) l();
   }
