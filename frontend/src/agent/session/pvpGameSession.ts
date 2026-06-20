@@ -9,6 +9,7 @@ import type { GameKit, GameBot, BotContext } from "@/agent/gameKit";
 import { SnapshotStore } from "./snapshotStore";
 import type {
   SessionRelay,
+  SessionTransport,
   PartyEndpointFactory,
   SettlementSigner,
   MatchChannel,
@@ -40,6 +41,8 @@ export interface SessionSnapshot<S> {
 // onConfirmed passes a CoSignedUpdate to match DistributedTunnel's actual signature.
 interface TunnelLike<S, M> {
   readonly tunnelId: string;
+  /** Current committed off-chain nonce.  Incremented only on confirmed ACK. */
+  readonly nonce: bigint;
   state: S;
   latest: CoSignedUpdate | null;
   onConfirmed?: ((u: CoSignedUpdate) => void) | undefined;
@@ -55,6 +58,25 @@ interface TunnelLike<S, M> {
     sigOther: Uint8Array,
   ): CoSignedSettlementWithRoot;
 }
+
+/** Timeout durations — injectable so tests use tiny values without real waits. */
+export interface SessionTimeouts {
+  /**
+   * How long (ms) to wait for our proposed move to be ACK'd before treating the
+   * opponent as abandoned.  Default: 30_000.
+   */
+  moveTimeoutMs: number;
+  /**
+   * How long (ms) to wait for the opponent's settle-half during cooperative close
+   * before escalating to a non-cooperative `closeOnTimeout`.  Default: 30_000.
+   */
+  settleTimeoutMs: number;
+}
+
+const DEFAULT_TIMEOUTS: SessionTimeouts = {
+  moveTimeoutMs: 30_000,
+  settleTimeoutMs: 30_000,
+};
 
 /** Optional deps for start(): injected by fleet code, omitted in loopback tests. */
 interface StartDeps {
@@ -77,20 +99,35 @@ export class PvpGameSession<S, M> {
   private readonly bot: GameBot<S, M>;
   private readonly store: SnapshotStore<SessionSnapshot<S>>;
   private tunnel: TunnelLike<S, M> | null = null;
+  private transport: SessionTransport | null = null;
   private auto = false;
-  private readonly transcript: Transcript;
+  // Non-readonly so attachTunnel can assign directly (no cast needed).
+  private transcript: Transcript;
   private readonly startDeps: StartDeps | undefined;
+  private readonly timeouts: SessionTimeouts;
 
-  // Deferred-confirm state: track the move we proposed so we can confirm it
-  // after the co-signed ACK arrives (i.e. the state actually advanced).
+  // Deferred-confirm state: track the nonce of the move we proposed so we can
+  // confirm it after the co-signed ACK arrives.
+  //
+  // ASSUMPTION (strictly-alternating turns): The nonce-match below is correct
+  // for any kit where each seat proposes exactly once per turn.  For a
+  // non-alternating kit (e.g. concurrent proposals) the confirmed nonce could
+  // belong to the opponent's accepted move rather than ours.  If that becomes
+  // a concern, gate on `pendingNonce !== null && u.update.nonce === pendingNonce`
+  // AND also check that the proposing party matches `this.seat`.
   private pendingMove: M | null = null;
-  private pendingPreHash: string | null = null;
+  private pendingNonce: bigint | null = null;
+
+  // Active timers — cleared whenever the session reaches any terminal phase.
+  private moveTimer: ReturnType<typeof setTimeout> | null = null;
+  private settleTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     private readonly kit: GameKit<S, M>,
     private readonly seat: Party,
     ctx: BotContext,
     startDeps?: StartDeps,
+    timeoutOverrides?: Partial<SessionTimeouts>,
   ) {
     this.bot = kit.createBot(seat, ctx);
     // Transcript is per-session; tunnelId is known only after attachTunnel, so
@@ -104,18 +141,32 @@ export class PvpGameSession<S, M> {
       error: null,
     });
     this.startDeps = startDeps;
+    this.timeouts = { ...DEFAULT_TIMEOUTS, ...timeoutOverrides };
+  }
+
+  /**
+   * Release all resources held by this session.  Must be called when the
+   * session is no longer needed (e.g. component unmount) to prevent timer leaks.
+   */
+  dispose(): void {
+    this.clearTimers();
   }
 
   // Test/Task-4 seam: inject a ready tunnel + seeded state.
-  attachTunnel(deps: { tunnel: TunnelLike<S, M>; initialState: S }): void {
+  attachTunnel(deps: { tunnel: TunnelLike<S, M>; initialState: S; transport?: SessionTransport }): void {
     this.tunnel = deps.tunnel;
     // Re-initialise the Transcript with the real tunnelId now that it's known.
-    // Cast to access the private field — the Transcript has no reset(), so we
-    // replace it via Object.assign on the prototype-transparent property.
-    (this as unknown as { transcript: Transcript }).transcript = new Transcript(
-      deps.tunnel.tunnelId,
-    );
+    this.transcript = new Transcript(deps.tunnel.tunnelId);
     this.tunnel.onConfirmed = (u: CoSignedUpdate) => this.onConfirmed(u);
+
+    // Wire transport disconnect signals so a dropped peer transitions to a
+    // first-class terminal phase rather than hanging a lane indefinitely.
+    if (deps.transport) {
+      this.transport = deps.transport;
+      deps.transport.onClose(() => this.abandon());
+      deps.transport.onError(() => this.abandon());
+    }
+
     this.publish("playing", deps.initialState);
   }
 
@@ -221,7 +272,7 @@ export class PvpGameSession<S, M> {
         initialBalances,
       );
 
-      this.attachTunnel({ tunnel: dt as never, initialState: dt.state });
+      this.attachTunnel({ tunnel: dt as never, initialState: dt.state, transport: ch.transport });
     } catch (e) {
       this.fail(e);
     }
@@ -250,9 +301,14 @@ export class PvpGameSession<S, M> {
       // send before either can receive).
       channel.sendSettleHalf({ sig: bytesToHex(half.sigSelf), root: rootHex });
 
-      const peerHalf = await new Promise<{ sig: string; root: string }>((res) =>
-        channel.onSettleHalf(res),
+      // Race the peer's settle-half against the timeout.  If the peer never
+      // responds, escalate to a non-cooperative on-chain close.
+      const peerHalf = await this.withSettleTimeout(
+        new Promise<{ sig: string; root: string }>((res) => channel.onSettleHalf(res)),
+        settlementSigner,
+        t.tunnelId,
       );
+      if (peerHalf === null) return; // timeout path already set terminal phase
 
       // Guard: both seats must have computed the same transcript root.
       if (peerHalf.root !== rootHex) {
@@ -281,19 +337,71 @@ export class PvpGameSession<S, M> {
     }
   }
 
+  /**
+   * Race a settle-half promise against the settle timeout.
+   * On expiry: calls `settlementSigner.closeOnTimeout`, sets `"opponent-abandoned"`,
+   * and returns `null` (the caller should return early).
+   */
+  private async withSettleTimeout(
+    halfPromise: Promise<{ sig: string; root: string }>,
+    settlementSigner: SettlementSigner,
+    tunnelId: string,
+  ): Promise<{ sig: string; root: string } | null> {
+    let timerReject: ((e: Error) => void) | null = null;
+    const timeoutPromise = new Promise<never>((_, rej) => {
+      timerReject = rej;
+      this.settleTimer = setTimeout(
+        () => rej(new Error("__settle_timeout__")),
+        this.timeouts.settleTimeoutMs,
+      );
+    });
+
+    try {
+      const result = await Promise.race([halfPromise, timeoutPromise]);
+      // Resolved — cancel the timer.
+      if (this.settleTimer !== null) {
+        clearTimeout(this.settleTimer);
+        this.settleTimer = null;
+      }
+      void timerReject; // suppress unused-variable lint
+      return result;
+    } catch (e) {
+      if (this.settleTimer !== null) {
+        clearTimeout(this.settleTimer);
+        this.settleTimer = null;
+      }
+      if (e instanceof Error && e.message === "__settle_timeout__") {
+        // Settle-half never arrived: escalate to non-cooperative close.
+        try {
+          await settlementSigner.closeOnTimeout({ tunnelId });
+        } catch {
+          // closeOnTimeout failure is swallowed — we still need to transition.
+        }
+        this.abandon();
+        return null;
+      }
+      throw e;
+    }
+  }
+
   private onConfirmed(u: CoSignedUpdate): void {
     const t = this.tunnel!;
     this.transcript.append(u);
 
-    // Deferred-confirm: call bot.confirm only after our proposed move is actually
-    // accepted (the co-signed ACK arrives), not immediately after propose().
-    if (this.pendingMove !== null && this.pendingPreHash !== null) {
-      const currentHash = this.kit.stateHash(t.state);
-      if (currentHash !== this.pendingPreHash) {
-        // State advanced — our move was accepted.
+    // Deferred-confirm: call bot.confirm only when the co-signed ACK is for the
+    // exact nonce we proposed, proving that OUR move was accepted.
+    //
+    // Nonce-match is safe for strictly-alternating kits (each seat proposes once
+    // per turn, so the confirmed nonce IS our move's nonce).  For non-alternating
+    // kits with concurrent proposals the opponent's accepted move could share a
+    // nonce sequence — see the class-level comment on pendingNonce for details.
+    if (this.pendingMove !== null && this.pendingNonce !== null) {
+      if (u.update.nonce === this.pendingNonce) {
+        // The ACK nonce matches: our move was accepted.
+        this.clearMoveTimer();
         this.bot.confirm(t.state, this.pendingMove);
         this.pendingMove = null;
-        this.pendingPreHash = null;
+        this.pendingNonce = null;
       }
     }
 
@@ -311,14 +419,16 @@ export class PvpGameSession<S, M> {
     const move = this.bot.plan(t.state);
     if (move == null) return;
     try {
-      // Record the pre-proposal state hash so onConfirmed can detect when our
-      // move is accepted and call bot.confirm with the POST-move confirmed state.
-      this.pendingPreHash = this.kit.stateHash(t.state);
+      // Record the expected confirmation nonce BEFORE propose() since t.nonce is
+      // the last committed (ACK'd) nonce and propose() sends nonce+1.
+      const expectedNonce = t.nonce + 1n;
       this.pendingMove = move;
+      this.pendingNonce = expectedNonce;
       t.propose(move, BigInt(Date.now()));
+      this.startMoveTimer();
     } catch (e) {
       this.pendingMove = null;
-      this.pendingPreHash = null;
+      this.pendingNonce = null;
       this.fail(e);
     }
   }
@@ -349,11 +459,51 @@ export class PvpGameSession<S, M> {
   }
 
   private fail(e: unknown): void {
+    this.clearTimers();
     const cur = this.store.get();
     this.store.set({
       ...cur,
       phase: "error",
       error: e instanceof Error ? e.message : String(e),
     });
+  }
+
+  /**
+   * Transition to `"opponent-abandoned"` — fired when the transport closes or
+   * errors unexpectedly, or when a move timeout expires without an ACK.
+   * Uses a distinct phase (not `fail()`) so callers can differentiate a dropped
+   * peer from an internal error.
+   */
+  private abandon(): void {
+    this.clearTimers();
+    const cur = this.store.get();
+    // Only transition if we're in an active (non-terminal) phase.
+    if (cur.phase === "done" || cur.phase === "error" || cur.phase === "opponent-abandoned") return;
+    this.store.set({ ...cur, phase: "opponent-abandoned", error: null });
+  }
+
+  /** Start the move-timeout clock.  Clears any existing move timer first. */
+  private startMoveTimer(): void {
+    this.clearMoveTimer();
+    this.moveTimer = setTimeout(() => {
+      this.moveTimer = null;
+      this.abandon();
+    }, this.timeouts.moveTimeoutMs);
+  }
+
+  private clearMoveTimer(): void {
+    if (this.moveTimer !== null) {
+      clearTimeout(this.moveTimer);
+      this.moveTimer = null;
+    }
+  }
+
+  /** Clear all pending timers (move + settle). */
+  private clearTimers(): void {
+    this.clearMoveTimer();
+    if (this.settleTimer !== null) {
+      clearTimeout(this.settleTimer);
+      this.settleTimer = null;
+    }
   }
 }

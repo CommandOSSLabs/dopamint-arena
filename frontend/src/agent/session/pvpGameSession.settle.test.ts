@@ -105,7 +105,7 @@ function makeFakeSettleChannelPair(
 // Fake SettlementSigner with configurable submit behaviour
 // ---------------------------------------------------------------------------
 
-type SubmitBehaviour = "ok" | "backend-fail" | "both-fail";
+type SubmitBehaviour = "ok" | "both-fail";
 
 function makeFakeSettlementSigner(behaviour: SubmitBehaviour = "ok"): {
   signer: SettlementSigner;
@@ -118,13 +118,7 @@ function makeFakeSettlementSigner(behaviour: SubmitBehaviour = "ok"): {
     async submitCooperativeClose(_args) {
       calls++;
       if (behaviour === "ok") return { digest: "0xfeedcafe" };
-      if (behaviour === "backend-fail") {
-        // First attempt fails (simulating backend), then succeeds (wallet fallback).
-        // The session is responsible for the fallback so we model the signer as
-        // handling backend→wallet internally and still returning a digest.
-        return { digest: "0xfeedcafe_wallet" };
-      }
-      // "both-fail": always reject
+      // "both-fail": always reject — backend→wallet fallback is the real adapter's job (Task 7).
       throw new Error("submitCooperativeClose hard-fail");
     },
     async closeOnTimeout() { return { digest: "0xdeadbeef" }; },
