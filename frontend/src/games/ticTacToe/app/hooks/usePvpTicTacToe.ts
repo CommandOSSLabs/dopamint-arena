@@ -1,5 +1,12 @@
 // frontend/src/games/ticTacToe/packages/client/src/hooks/usePvpTicTacToe.ts
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { core, proof, bytesToHex, hexToBytes, type protocols } from "sui-tunnel-ts";
 import { SuiJsonRpcClient } from "@mysten/sui/jsonRpc";
 import { getControlPlaneClient, type RegisterSessionResult } from "@/backend/controlPlane";
@@ -27,6 +34,13 @@ import {
   parseTunnelId,
 } from "@/games/ticTacToe/app/lib/pvpOnchain";
 import { RelayClient } from "@/games/ticTacToe/app/lib/pvpRelay";
+import { PvpGameSession } from "@/agent/session/pvpGameSession";
+import type { SessionSnapshot } from "@/agent/session/pvpGameSession";
+import { createTicTacToeKit } from "@/agent/games/ticTacToe/kit";
+import { mapSnapshotToView } from "@/games/ticTacToe/agent/mapSnapshotToView";
+import type { SnapshotExtras } from "@/games/ticTacToe/agent/mapSnapshotToView";
+import type { MultiGameTicTacToeState } from "@ttt/shared/ttt/multiGameProtocol";
+import type { GameKit, BotContext } from "@/agent/gameKit";
 
 export type Variant = "ttt" | "caro";
 
@@ -41,9 +55,6 @@ const MP_URL =
   ).replace(/^http/, "ws");
 const STAKE = 1n; // MIST per game; caro's protocol forces 0 regardless
 const BANKROLL = 1000n; // MIST deposited per seat
-const MAX_GAMES = 1000; // high cap → play until a side stops or busts
-const MOVE_MS = 600; // auto move cadence
-const NEXT_MS = 800; // pause before auto-advancing to the next game
 
 export type PvpPhase =
   | "idle"
@@ -112,6 +123,16 @@ function tttBestCell(inner: InnerState, by: "A" | "B"): number {
   return optimalMoves(board, CELL_SERVER)[0];
 }
 
+// Dummy bot context for the session — auto-play in the hook is driven by the
+// existing setTimeout loop (not the session's internal drive()), so we pass a
+// trivial RNG.  The session's bot is effectively inactive in PvP (a human sits
+// at the other side), so the plan() will return null on every opponent turn.
+const TRIVIAL_BOT_CTX: BotContext = { rngForSeat: () => Math.random };
+
+function makeKit(): GameKit<AnyState, CellMove> {
+  return createTicTacToeKit(1000, STAKE) as unknown as GameKit<AnyState, CellMove>;
+}
+
 export function usePvpTicTacToe(
   variant: Variant,
   boardSize: number,
@@ -124,34 +145,68 @@ export function usePvpTicTacToe(
   const proto = useMemo(
     () =>
       (variant === "caro"
-        ? new MultiGameCaroProtocol(MAX_GAMES, boardSize)
+        ? new MultiGameCaroProtocol(1000, boardSize)
         : new MultiGameTicTacToeProtocol(
-            MAX_GAMES,
+            1000,
             STAKE,
           )) as unknown as protocols.Protocol<AnyState, CellMove>,
     [variant, boardSize],
   );
 
-  const [phase, setPhase] = useState<PvpPhase>("idle");
-  const [error, setError] = useState<string | null>(null);
+  // Session: one instance per match, replaced on each queue() call.
+  // The ref holds the current session so imperative callbacks (play/stop/leave)
+  // always address the right instance without closing over a stale value.
+  const sessionRef = useRef<PvpGameSession<AnyState, CellMove>>(
+    new PvpGameSession(makeKit(), "A", TRIVIAL_BOT_CTX),
+  );
+
+  // Stable subscribe/getSnapshot so useSyncExternalStore can forward to the
+  // current session instance (the ref) without needing to swap the hooks.
+  const stableSubscribe = useCallback((cb: () => void): (() => void) => {
+    return sessionRef.current.subscribe(cb);
+  }, []);
+  const stableGetSnapshot = useCallback(
+    (): Readonly<SessionSnapshot<AnyState>> =>
+      sessionRef.current.getSnapshot() as Readonly<SessionSnapshot<AnyState>>,
+    [],
+  );
+
+  // useSyncExternalStore drives re-renders whenever the session's snapshot changes.
+  const snapshot = useSyncExternalStore(stableSubscribe, stableGetSnapshot);
+
+  // ── React-local state (not owned by PvpGameSession) ──────────────────────────
+
+  // role: set when match.found fires, reset on leave.
   const [role, setRole] = useState<"A" | "B" | null>(null);
-  const [state, setState] = useState<AnyState | null>(null);
+
+  // score/games: cumulative tallies accumulated per completed inner game.
+  // `score` is authoritative; `games` is capped at 50 for display only.
   const [games, setGames] = useState<GameResult[]>([]);
-  // `score` is the authoritative cumulative tally; `games` below is capped at the last 50 entries
-  // for display, so after 50 games the two intentionally diverge — do NOT re-derive score from games.
   const [score, setScore] = useState({ x: 0, o: 0, draws: 0 });
+
   const [auto, setAutoState] = useState(false);
   const [balance, setBalance] = useState<bigint>(0n);
+
+  // On-chain tx digests from open/deposit steps (create/deposit come from the
+  // wallet execution; close comes from either the session settle path or the
+  // relay app channel for seat B).
   const [digests, setDigests] = useState<{
     create?: string;
     deposit?: string;
     close?: string;
   }>({});
 
+  // Phase and error overrides for pre-tunnel phases (connecting/queuing/opening/
+  // funding/settling/done) and pre-session errors.  These overlay the session's
+  // snapshot phase so the view reflects the full lifecycle without needing the
+  // session to own wallet/relay concerns.
+  const [phaseOverride, setPhaseOverride] = useState<PvpPhase | null>(null);
+  const [errorOverride, setErrorOverride] = useState<string | null>(null);
+
+  // ── Refs ─────────────────────────────────────────────────────────────────────
+
   const relayRef = useRef<RelayClient | null>(null);
-  const tunnelRef = useRef<core.DistributedTunnel<AnyState, CellMove> | null>(
-    null,
-  );
+  const tunnelRef = useRef<core.DistributedTunnel<AnyState, CellMove> | null>(null);
   const roleRef = useRef<"A" | "B" | null>(null);
   const autoRef = useRef(false);
   const createdAtRef = useRef<bigint>(0n);
@@ -172,13 +227,15 @@ export function usePvpTicTacToe(
   const bufferedHelloRef = useRef<string | null>(null);
   const transcriptRef = useRef<proof.Transcript | null>(null);
 
-  const sessionRef = useRef<RegisterSessionResult | null>(null);
+  const statsSessionRef = useRef<RegisterSessionResult | null>(null);
   const moveCountRef = useRef(0);
   const actionsRef = useRef(0);
   const lastHeartbeatRef = useRef(Date.now());
 
+  // ── Helpers ──────────────────────────────────────────────────────────────────
+
   const flushHeartbeat = useCallback((tunnelId: string, force: boolean) => {
-    const s = sessionRef.current;
+    const s = statsSessionRef.current;
     if (!s || actionsRef.current === 0) return;
     const now = Date.now();
     const windowMs = now - lastHeartbeatRef.current;
@@ -220,6 +277,11 @@ export function usePvpTicTacToe(
     [client],
   );
 
+  // finishSettle: cooperative close — builds and exchanges settlement halves,
+  // submits the combined settlement on-chain (role A only).
+  // Phase transitions (settling/done/error) are driven via phaseOverride/errorOverride
+  // rather than through the session, since the session's settle() method requires a
+  // MatchChannel abstraction that is not yet wired here.
   const finishSettle = useCallback(
     async (
       t: core.DistributedTunnel<AnyState, CellMove>,
@@ -228,7 +290,7 @@ export function usePvpTicTacToe(
     ) => {
       if (settledRef.current) return;
       settledRef.current = true;
-      setPhase("settling");
+      setPhaseOverride("settling");
       flushHeartbeat(t.tunnelId, true);
       const root = transcriptRef.current ? transcriptRef.current.root() : new Uint8Array(32);
       const half = t.buildSettlementHalfWithRoot(createdAtRef.current, root, 0n);
@@ -267,21 +329,23 @@ export function usePvpTicTacToe(
         }
       }
       await refreshBalance();
-      setPhase("done");
+      setPhaseOverride("done");
     },
     [submit, refreshBalance, flushHeartbeat],
   );
+
+  // ── queue ────────────────────────────────────────────────────────────────────
 
   const queue = useCallback(() => {
     void (async () => {
       const w = walletRef.current;
       if (!w.isConnected || !w.address) {
-        setError("Connect your wallet on the main menu first");
-        setPhase("error");
+        setErrorOverride("Connect your wallet on the main menu first");
+        setPhaseOverride("error");
         return;
       }
-      setError(null);
-      setPhase("connecting");
+      setErrorOverride(null);
+      setPhaseOverride("connecting");
       settledRef.current = false;
       stoppingRef.current = false;
       setGames([]);
@@ -293,14 +357,23 @@ export function usePvpTicTacToe(
       openedResolveRef.current = null;
       settleResolveRef.current = null;
       helloResolveRef.current = null;
+      setRole(null);
+      roleRef.current = null;
+      setDigests({});
+
+      // Replace the session for this match so snapshot resets to idle.
+      // Dispose the previous instance to prevent timer leaks.
+      sessionRef.current.dispose();
+      sessionRef.current = new PvpGameSession(makeKit(), "A", TRIVIAL_BOT_CTX);
+
       try {
         const relay = new RelayClient(MP_URL, w.address, eph.coreKey);
         relayRef.current = relay;
         await relay.ready;
-        setPhase("queuing");
+        setPhaseOverride("queuing");
         relay.on("error", (m) => {
-          setError(`${m.code}: ${m.message}`);
-          setPhase("error");
+          setErrorOverride(`${m.code}: ${m.message}`);
+          setPhaseOverride("error");
         });
         relay.on("match.found", (m) => {
           void onMatchRef.current?.(relay, m as any);
@@ -311,11 +384,13 @@ export function usePvpTicTacToe(
           variant === "caro" ? `tictactoe:caro:${boardSize}` : "tictactoe:ttt",
         );
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
-        setPhase("error");
+        setErrorOverride(e instanceof Error ? e.message : String(e));
+        setPhaseOverride("error");
       }
     })();
   }, [eph, variant, boardSize]);
+
+  // ── onMatch ──────────────────────────────────────────────────────────────────
 
   const onMatch = useCallback(
     async (
@@ -328,6 +403,11 @@ export function usePvpTicTacToe(
         matchIdRef.current = m.matchId;
         roleRef.current = m.role;
         setRole(m.role);
+
+        // Rebuild the session for the matched role so the bot's seat is correct.
+        sessionRef.current.dispose();
+        sessionRef.current = new PvpGameSession(makeKit(), m.role, TRIVIAL_BOT_CTX);
+
         // App-channel dispatcher: opened tunnelId, settle half, closed digest, stop request.
         relay.onApp(m.matchId, (mm) => {
           if (mm.t === "opened")
@@ -337,9 +417,11 @@ export function usePvpTicTacToe(
             const rt = hexToBytes(String(mm.root));
             if (settleResolveRef.current) settleResolveRef.current({ sig, root: rt });
             else bufferedSettleRef.current = { sig, root: rt };
-          } else if (mm.t === "closed")
+          } else if (mm.t === "closed") {
+            // Seat B receives the close digest from seat A via the app channel.
             setDigests((d) => ({ ...d, close: String(mm.digest) }));
-          else if (mm.t === "stop") {
+            setPhaseOverride("done");
+          } else if (mm.t === "stop") {
             stoppingRef.current = true;
             if (tunnelRef.current)
               void finishSettle(tunnelRef.current, relay, m.matchId);
@@ -367,7 +449,7 @@ export function usePvpTicTacToe(
         // Party address = the zkLogin wallet (receives funds); party public_key = the ephemeral signer.
         let tunnelId: string;
         if (m.role === "A") {
-          setPhase("opening");
+          setPhaseOverride("opening");
           const res = await submit(
             buildCreateAndShareTx(
               { walletAddress: w.address, publicKey: eph.coreKey.publicKey }, // partyA = X (self)
@@ -382,7 +464,7 @@ export function usePvpTicTacToe(
           relay.tunnelOpened(m.matchId, tunnelId);
           relay.sendApp(m.matchId, { t: "opened", tunnelId });
         } else {
-          setPhase("opening");
+          setPhaseOverride("opening");
           tunnelId = await new Promise<string>((resolve) => {
             openedResolveRef.current = resolve;
           });
@@ -399,7 +481,7 @@ export function usePvpTicTacToe(
           (fields?.created_at as string | undefined) ?? 0,
         );
 
-        setPhase("funding");
+        setPhaseOverride("funding");
         const dep = await submit(buildDepositTx(tunnelId, BANKROLL));
         setDigests((d) => ({ ...d, deposit: dep.digest }));
         let activated = false;
@@ -456,7 +538,7 @@ export function usePvpTicTacToe(
         transcriptRef.current = new proof.Transcript(tunnelId);
 
         // Register the (real, on-chain) tunnel for stats tracking. Best-effort.
-        sessionRef.current = null;
+        statsSessionRef.current = null;
         moveCountRef.current = 0;
         actionsRef.current = 0;
         lastHeartbeatRef.current = Date.now();
@@ -473,35 +555,65 @@ export function usePvpTicTacToe(
             ],
           })
           .then((s) => {
-            sessionRef.current = s;
+            statsSessionRef.current = s;
           })
           .catch((e) => console.error("[tictactoe pvp] registerSession failed:", e));
 
-        let lastLoggedGame = 0;
-        const onAdvance = () => {
+        // Attach the tunnel to the session — wires t.onConfirmed → session.onConfirmed,
+        // publishes the initial "playing" snapshot, and clears phaseOverride so the
+        // session's snapshot drives subsequent phase display.
+        sessionRef.current.attachTunnel({
+          tunnel: t as unknown as Parameters<typeof sessionRef.current.attachTunnel>[0]["tunnel"],
+          initialState: { ...t.state, inner: { ...t.state.inner } },
+        });
+        // From here the session drives phase via snapshot; clear the override.
+        setPhaseOverride(null);
+        setErrorOverride(null);
+
+        // Layer stats/transcript/score-accumulation on top of the session's
+        // t.onConfirmed.  The session already set t.onConfirmed via attachTunnel;
+        // we chain after it so both the session's internal bookkeeping and our
+        // stats/settle logic both run.
+        const sessionOnConfirmed = t.onConfirmed;
+        t.onConfirmed = (u) => {
+          // Session-core bookkeeping first (transcript append + state publish + drive).
+          sessionOnConfirmed?.(u);
+
+          // Stats bookkeeping.
+          moveCountRef.current += 1;
+          actionsRef.current += 1;
+          transcriptRef.current?.append(u);
+          flushHeartbeat(tunnelId, false);
+
+          // Score accumulation: log each completed inner game once.
           const st = t.state;
-          setState({ ...st, inner: { ...st.inner } });
-          // Log each completed game once (winner is set on the inner game just before the advance).
           const gameNo = st.gamesPlayed + 1;
-          if (st.inner.winner !== 0 && gameNo > lastLoggedGame) {
-            const w = st.inner.winner as 1 | 2 | 3;
-            setGames((prev) =>
-              [...prev, { game: gameNo, winner: w }].slice(-50),
-            );
-            setScore((prev) => ({
-              x: prev.x + (w === 1 ? 1 : 0),
-              o: prev.o + (w === 2 ? 1 : 0),
-              draws: prev.draws + (w === 3 ? 1 : 0),
-            }));
-            lastLoggedGame = gameNo;
+          if (st.inner.winner !== 0) {
+            setGames((prev) => {
+              const lastEntry = prev[prev.length - 1];
+              if (lastEntry && lastEntry.game === gameNo) return prev; // already logged
+              const w = st.inner.winner as 1 | 2 | 3;
+              setScore((s) => ({
+                x: s.x + (w === 1 ? 1 : 0),
+                o: s.o + (w === 2 ? 1 : 0),
+                draws: s.draws + (w === 3 ? 1 : 0),
+              }));
+              return [...prev, { game: gameNo, winner: w }].slice(-50);
+            });
           }
-          if (stoppingRef.current) return;
+
+          // Settle trigger: when the session reaches terminal or a stop is requested.
+          if (stoppingRef.current) {
+            void finishSettle(t, relay, m.matchId);
+            return;
+          }
           if (proto.isTerminal(st)) {
             void finishSettle(t, relay, m.matchId);
             return;
           }
+
+          // Between-games auto-advance and in-game auto-play (matches old behavior).
           if (st.inner.winner !== 0) {
-            // Between games: only X (A) drives the advance (avoids a double-advance race).
             if (m.role === "A" && autoRef.current)
               setTimeout(() => {
                 try {
@@ -526,24 +638,36 @@ export function usePvpTicTacToe(
             }, 50);
           }
         };
-        t.onConfirmed = (u) => {
-          moveCountRef.current += 1;
-          actionsRef.current += 1;
-          transcriptRef.current?.append(u);
-          onAdvance();
-          flushHeartbeat(tunnelId, false);
-        };
-        setPhase("playing");
-        setState({ ...t.state, inner: { ...t.state.inner } });
-        onAdvance();
+
+        // If auto is already on (rematch case), drive the initial move.
+        if (autoRef.current) {
+          const st = t.state;
+          if (st.inner.turn === m.role) {
+            const cell = (() => {
+              const empties = st.inner.board
+                .map((v, i) => (v === 0 ? i : -1))
+                .filter((i) => i >= 0);
+              return empties[Math.floor(Math.random() * empties.length)];
+            })();
+            setTimeout(() => {
+              try {
+                t.propose({ cell }, BigInt(Date.now()));
+              } catch {
+                /* ignore */
+              }
+            }, 50);
+          }
+        }
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
-        setPhase("error");
+        setErrorOverride(e instanceof Error ? e.message : String(e));
+        setPhaseOverride("error");
       }
     },
     [client, proto, submit, eph, variant, finishSettle, flushHeartbeat],
   );
   onMatchRef.current = onMatch;
+
+  // ── Imperative move controls ─────────────────────────────────────────────────
 
   const play = useCallback((cell: number) => {
     const t = tunnelRef.current;
@@ -553,7 +677,8 @@ export function usePvpTicTacToe(
     try {
       t.propose({ cell }, BigInt(Date.now()));
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setErrorOverride(e instanceof Error ? e.message : String(e));
+      setPhaseOverride("error");
     }
   }, []);
 
@@ -569,7 +694,8 @@ export function usePvpTicTacToe(
     try {
       t.propose({ cell: 0 }, BigInt(Date.now()));
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setErrorOverride(e instanceof Error ? e.message : String(e));
+      setPhaseOverride("error");
     }
   }, [proto]);
 
@@ -587,6 +713,8 @@ export function usePvpTicTacToe(
     (on: boolean) => {
       autoRef.current = on;
       setAutoState(on);
+      // Forward to the session so its internal bot drive loop is also aware.
+      sessionRef.current.setAuto(on);
       const t = tunnelRef.current;
       if (!on || !t || stoppingRef.current || proto.isTerminal(t.state)) return;
       const st = t.state;
@@ -622,9 +750,8 @@ export function usePvpTicTacToe(
     relayRef.current?.close();
     relayRef.current = null;
     tunnelRef.current = null;
-    setPhase("idle");
-    setState(null);
     setRole(null);
+    roleRef.current = null;
     setDigests({});
     setGames([]);
     setScore({ x: 0, o: 0, draws: 0 });
@@ -637,44 +764,45 @@ export function usePvpTicTacToe(
     bufferedSettleRef.current = null;
     helloResolveRef.current = null;
     bufferedHelloRef.current = null;
-    sessionRef.current = null;
+    statsSessionRef.current = null;
     moveCountRef.current = 0;
     actionsRef.current = 0;
+    setPhaseOverride(null);
+    setErrorOverride(null);
+    // Replace with a fresh idle session so snapshot resets to "idle".
+    sessionRef.current.dispose();
+    sessionRef.current = new PvpGameSession(makeKit(), "A", TRIVIAL_BOT_CTX);
   }, []);
 
   useEffect(() => () => relayRef.current?.close(), []);
 
-  const s = state;
-  const inner = s?.inner ?? null;
-  const winner = inner ? inner.winner : 0;
-  const myMark: 0 | 1 | 2 =
-    roleRef.current === "A" ? 1 : roleRef.current === "B" ? 2 : 0;
-  const isMyTurn =
-    !!inner &&
-    inner.winner === 0 &&
-    inner.turn === roleRef.current &&
-    phase === "playing";
-  return {
-    phase,
-    error,
-    role: roleRef.current,
-    variant,
-    board: inner ? inner.board : [],
-    size: inner ? (inner.size ?? 3) : variant === "caro" ? boardSize : 3,
-    lastMove: inner ? (inner.lastMove ?? -1) : -1,
-    turn: inner ? inner.turn : null,
-    winner,
-    myMark,
-    isMyTurn,
-    innerOver: !!inner && inner.winner !== 0,
-    terminal: s ? proto.isTerminal(s) : false,
-    score,
-    games,
-    currentGame: s ? s.gamesPlayed + 1 : 0,
-    auto,
+  // ── View projection ──────────────────────────────────────────────────────────
+  //
+  // Pre-tunnel phases and errors are carried in phaseOverride/errorOverride rather
+  // than the session (which only knows "idle" until attachTunnel is called).
+  // Once the tunnel attaches, phaseOverride is cleared and the session drives phase.
+  // During settling/done the phase comes from finishSettle via phaseOverride again
+  // since finishSettle still owns the cooperative close (not session.settle()).
+
+  const effectiveSnapshot: Readonly<SessionSnapshot<MultiGameTicTacToeState>> =
+    phaseOverride !== null || errorOverride !== null
+      ? ({
+          ...snapshot,
+          phase: phaseOverride ?? snapshot.phase,
+          error: errorOverride ?? snapshot.error,
+        } as Readonly<SessionSnapshot<MultiGameTicTacToeState>>)
+      : (snapshot as Readonly<SessionSnapshot<MultiGameTicTacToeState>>);
+
+  const extras: SnapshotExtras = {
     address: wallet.address ?? "",
     balance,
-    digests,
+    role,
+    score,
+    games,
+    digests: { create: digests.create, deposit: digests.deposit },
+    auto,
+    variant,
+    boardSize,
     queue,
     play,
     next,
@@ -682,4 +810,14 @@ export function usePvpTicTacToe(
     setAuto,
     leave,
   };
+
+  // The close digest may come from either the session (seat A, via finishSettle →
+  // setDigests) or from the relay app channel (seat B, mm.t === "closed"). Both
+  // paths write into `digests.close` via setDigests, so we forward it here.
+  const view = mapSnapshotToView(effectiveSnapshot, extras);
+  // Override digests.close from local state (both seats write to setDigests).
+  if (digests.close && !view.digests.close) {
+    return { ...view, digests: { ...view.digests, close: digests.close } };
+  }
+  return view;
 }
