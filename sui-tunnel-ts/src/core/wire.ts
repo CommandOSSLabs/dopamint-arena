@@ -17,7 +17,7 @@
  *  - ed25519/BLS verify the RAW message (no pre-hash). Only `state_hash` is itself a digest.
  */
 
-import { concatBytes } from "./bytes";
+import { concatBytes, toHex } from "./bytes";
 
 const enc = new TextEncoder();
 
@@ -159,6 +159,40 @@ export function serializeHtlcLock(h: HtlcLock): Uint8Array {
     addressToBytes32(h.receiver),
     u64ToBeBytes(h.expiryMs),
   ]);
+}
+
+/** Inverse of {@link u64ToBeBytes}: read an 8-byte big-endian u64 at `offset`. */
+export function u64FromBeBytes(bytes: Uint8Array, offset = 0): bigint {
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  return dv.getBigUint64(offset, false);
+}
+
+/**
+ * Inverse of {@link serializeStateUpdate}. The four trailing u64s
+ * (nonce, timestamp, balA, balB) sit at the tail, so stateHash length is whatever
+ * remains between the id and the tail (no fixed-32 assumption). Throws on a bad
+ * domain prefix or a too-short message.
+ */
+export function parseStateUpdate(message: Uint8Array): StateUpdate {
+  const minLen = DOMAIN_STATE_UPDATE.length + 32 + 32; // domain + id + 4×u64 tail
+  if (message.length < minLen) {
+    throw new Error(`state_update message too short: ${message.length}`);
+  }
+  for (let i = 0; i < DOMAIN_STATE_UPDATE.length; i++) {
+    if (message[i] !== DOMAIN_STATE_UPDATE[i]) {
+      throw new Error("not a state_update message (bad domain prefix)");
+    }
+  }
+  const idOff = DOMAIN_STATE_UPDATE.length;
+  const tail = message.length - 32; // start of nonce|timestamp|balA|balB
+  return {
+    tunnelId: "0x" + toHex(message.slice(idOff, idOff + 32)),
+    stateHash: message.slice(idOff + 32, tail),
+    nonce: u64FromBeBytes(message, tail),
+    timestamp: u64FromBeBytes(message, tail + 8),
+    partyABalance: u64FromBeBytes(message, tail + 16),
+    partyBBalance: u64FromBeBytes(message, tail + 24),
+  };
 }
 
 // ============================================
