@@ -20,6 +20,8 @@ impl LocalActionCounter {
             c.fetch_add(delta, Ordering::Relaxed);
             return;
         }
+        // or_insert_with only runs if the entry is vacant — concurrent losers find
+        // the key already inserted and fetch_add on the existing atomic below.
         self.games
             .write()
             .unwrap()
