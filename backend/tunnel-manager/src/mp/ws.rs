@@ -88,6 +88,8 @@ async fn handle_socket(socket: WebSocket, state: SharedState) {
 
     let mut wallet: Option<String> = None;
     let mut joined_games: HashSet<String> = HashSet::new();
+    let mut matches: std::collections::HashMap<String, MatchRecord> =
+        std::collections::HashMap::new();
 
     let mut keepalive = tokio::time::interval(KEEPALIVE_PING_INTERVAL);
     // A stall in `handle_message` must not burst-fire catch-up ticks and trip the
@@ -145,6 +147,7 @@ async fn handle_socket(socket: WebSocket, state: SharedState) {
                     &nonce,
                     &mut wallet,
                     &mut joined_games,
+                    &mut matches,
                     client_msg,
                 )
                 .await
@@ -165,6 +168,7 @@ async fn handle_socket(socket: WebSocket, state: SharedState) {
     state.bus.unregister(conn_id);
 }
 
+#[allow(clippy::too_many_arguments)] // per-connection state refs; no meaningful grouping
 async fn handle_message(
     state: &SharedState,
     tx: &mpsc::UnboundedSender<String>,
@@ -172,6 +176,7 @@ async fn handle_message(
     nonce: &str,
     wallet: &mut Option<String>,
     joined: &mut HashSet<String>,
+    matches: &mut std::collections::HashMap<String, MatchRecord>,
     msg: ClientMsg,
 ) -> Result<(), &'static str> {
     match msg {
@@ -194,7 +199,7 @@ async fn handle_message(
         }
         other => {
             let w = wallet.as_ref().ok_or("not_authenticated")?.clone();
-            handle_authed(state, conn_id, &w, joined, other).await
+            handle_authed(state, conn_id, &w, joined, matches, other).await
         }
     }
 }
@@ -204,6 +209,7 @@ async fn handle_authed(
     conn_id: ConnId,
     wallet: &str,
     joined: &mut HashSet<String>,
+    matches: &mut std::collections::HashMap<String, MatchRecord>,
     msg: ClientMsg,
 ) -> Result<(), &'static str> {
     match msg {
@@ -349,17 +355,8 @@ async fn handle_authed(
             // parity with self-play's per-update heartbeat. The ACK half is a separate
             // frame and is skipped (else every move double-counts). Only the transport
             // envelope (`t`/`kind`) is read; the game-specific move payload stays opaque.
-            if relay_payload_is_move(&payload) {
-                if let Some(m) = state.mp.get_match(&match_id).await {
-                    state.control.add_actions(&m.game, 1).await;
-                }
-            }
-            let envelope = ServerMsg::Relay {
-                match_id: match_id.clone(),
-                payload,
-            }
-            .to_text();
-            forward_to_other(state, &match_id, conn_id, envelope).await;
+            // The match record is cached per-connection so the store is hit at most once.
+            relay_to_other(state, matches, conn_id, match_id, payload).await;
             Ok(())
         }
         ClientMsg::WatchtowerCheckpoint {
@@ -387,6 +384,7 @@ async fn handle_authed(
 }
 
 /// Forward an opaque envelope to the OTHER seat of `match_id`, wherever it lives.
+/// Used for the `party.hello` path where a per-connection cache is not available.
 async fn forward_to_other(state: &SharedState, match_id: &str, from: ConnId, text: String) {
     let Some(m) = state.mp.get_match(match_id).await else {
         return;
@@ -401,6 +399,40 @@ async fn forward_to_other(state: &SharedState, match_id: &str, from: ConnId, tex
     if let Some(t) = target {
         state.bus.deliver(&t, text).await;
     }
+}
+
+/// Relay a frame using a per-connection match cache: fetch the `MatchRecord` from the
+/// store at most once per match, then route every subsequent frame from the in-task copy.
+/// Removes both per-move Redis GETs (counting + forwarding). conn_a/conn_b are fixed at
+/// match creation, so the cached copy is valid for the life of the connection.
+async fn relay_to_other(
+    state: &SharedState,
+    cache: &mut std::collections::HashMap<String, MatchRecord>,
+    from: ConnId,
+    match_id: String,
+    payload: String,
+) {
+    if !cache.contains_key(&match_id) {
+        match state.mp.get_match(&match_id).await {
+            Some(m) => {
+                cache.insert(match_id.clone(), m);
+            }
+            None => return, // unknown match: drop, same as today's get_match None
+        }
+    }
+    let m = &cache[&match_id];
+    if relay_payload_is_move(&payload) {
+        state.control.add_actions(&m.game, 1).await; // Task 2 replaces with state.actions.incr
+    }
+    let target = if m.conn_a.conn_id == from {
+        m.conn_b.clone()
+    } else if m.conn_b.conn_id == from {
+        m.conn_a.clone()
+    } else {
+        return; // not a seat in this match
+    };
+    let envelope = ServerMsg::Relay { match_id, payload }.to_text();
+    state.bus.deliver(&target, envelope).await;
 }
 
 /// True iff a relayed payload carries a co-signed MOVE frame (not an ACK or a peer
@@ -430,6 +462,7 @@ fn relay_payload_is_move(payload: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use tokio::sync::mpsc;
     use uuid::Uuid;
 
@@ -612,6 +645,65 @@ mod tests {
         );
     }
 
+    // A second relay on the same match must NOT hit the store again: the per-connection
+    // cache serves conn_a/conn_b after the first fetch. We prove it by overwriting the
+    // store record after the first relay and asserting the second still routes correctly.
+    #[tokio::test]
+    async fn relay_uses_cached_match_after_first_fetch() {
+        let state = test_state();
+        let (conn_a, _rx_a) = make_conn_ref(&state);
+        let (conn_b, mut rx_b) = make_conn_ref(&state);
+        let inst = state.bus.instance_id().to_owned();
+        let rec = MatchRecord {
+            game: "ttt".into(),
+            seat_a: "0xa".into(),
+            seat_b: "0xb".into(),
+            conn_a: ConnRef {
+                instance_id: inst.clone(),
+                conn_id: conn_a,
+            },
+            conn_b: ConnRef {
+                instance_id: inst,
+                conn_id: conn_b,
+            },
+            tunnel_id: None,
+            latest_checkpoint: None,
+        };
+        state.mp.put_match("m1", rec).await;
+        let mut cache: HashMap<String, MatchRecord> = HashMap::new();
+
+        // first relay populates the cache and delivers to B
+        relay_to_other(&state, &mut cache, conn_a, "m1".into(), "first".into()).await;
+        assert!(rx_b.try_recv().is_ok(), "first relay delivers to B");
+        // delete the authoritative record; the cache must still serve the route
+        state
+            .mp
+            .put_match(
+                "m1",
+                MatchRecord {
+                    game: "ttt".into(),
+                    seat_a: "x".into(),
+                    seat_b: "x".into(),
+                    conn_a: ConnRef {
+                        instance_id: "gone".into(),
+                        conn_id: uuid::Uuid::nil(),
+                    },
+                    conn_b: ConnRef {
+                        instance_id: "gone".into(),
+                        conn_id: uuid::Uuid::nil(),
+                    },
+                    tunnel_id: None,
+                    latest_checkpoint: None,
+                },
+            )
+            .await;
+        relay_to_other(&state, &mut cache, conn_a, "m1".into(), "second".into()).await;
+        assert!(
+            rx_b.try_recv().is_ok(),
+            "second relay still routes from cache, not the overwritten store"
+        );
+    }
+
     // The behavior that was missing in PvP: a relayed MOVE must feed the actions counter
     // (so it shows up as TPS), while its ACK half must not double-count.
     #[tokio::test]
@@ -637,12 +729,14 @@ mod tests {
         };
         state.mp.put_match("m1", rec).await;
         let mut joined = HashSet::new();
+        let mut matches = HashMap::new();
 
         handle_authed(
             &state,
             conn_a,
             "0xa",
             &mut joined,
+            &mut matches,
             ClientMsg::Relay {
                 match_id: "m1".into(),
                 payload: relay_frame("move"),
@@ -661,6 +755,7 @@ mod tests {
             conn_b,
             "0xb",
             &mut joined,
+            &mut matches,
             ClientMsg::Relay {
                 match_id: "m1".into(),
                 payload: relay_frame("ack"),
