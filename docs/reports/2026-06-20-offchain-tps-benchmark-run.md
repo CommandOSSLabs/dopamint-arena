@@ -330,6 +330,20 @@ After the initial report, I ran a worker-count sweep to find the highest honest 
 
 **Best Node configuration found:** `128 workers × 1000 tunnels × blackjack × full sign`, reaching **~468k fleet TPS** (~234k per instance). This is a **~14% improvement** over the original 180-worker run.
 
+### 5.5.1 Longer telemetry run
+
+A 120-second run with the same best configuration was executed while collecting per-second CPU and memory telemetry:
+
+| Metric | Instance A | Instance B | Fleet |
+|---|---|---|---|
+| TPS | 250,379 | 256,546 | **~506,925** |
+| Signatures/sec | 500,759 | 513,091 | **~1,013,850** |
+| Verifies/sec | 500,759 | 513,091 | **~1,013,850** |
+| Interactions | 30,580,843 | 31,284,443 | **61,865,286** |
+| Elapsed | 122.14 s | 121.94 s | ~122 s |
+
+The longer run produced a **~8% higher fleet TPS** than the shorter 15-second tuning runs (~468k), because startup and tunnel-opening overhead is amortized over more seconds.
+
 ---
 
 ## 5.6 Bun runtime comparison
@@ -376,18 +390,18 @@ Assuming near-linear horizontal scaling across identical instances. Per-instance
 
 | Target | Mode | Per-instance TPS | Instances needed (rounded up) |
 |---|---|---|---|
-| 5M TPS | full sign + verify | ~234k | **22** |
+| 5M TPS | full sign + verify | ~250k | **20** |
 | 5M TPS | sign-only | ~373k | **14** |
 | 5M TPS | none (protocol only) | ~430k | **12** |
 
-> The full-sign estimate uses the tuned best of **~234k TPS per instance** from Section 5.5.
+> The full-sign estimate uses the steady-state best of **~250k TPS per instance** from Section 5.5.1.
 
 The current dev stack is capped at 2 instances. Reaching 5M TPS requires either:
 
-1. Raising the dev benchmark ASG max to 22+ instances, or
+1. Raising the dev benchmark ASG max to 20+ instances, or
 2. Running the benchmark in a larger Pulumi stack / region.
 
-At on-demand pricing, 22× `c7i.48xlarge` in `us-east-1` costs roughly **$150–170/hour**, so a 5-minute test is ~$12–15 in compute.
+At on-demand pricing, 20× `c7i.48xlarge` in `us-east-1` costs roughly **$135–155/hour**, so a 5-minute test is ~$11–13 in compute.
 
 ---
 
@@ -429,35 +443,60 @@ Despite lower per-core efficiency, the absolute fleet throughput is far higher b
 
 Each update is 120 bytes. At ~410k full-sign TPS, the fleet produces ~49 MB/s. The `c7i.48xlarge` network is 50 Gbps, so network is ~0.8% utilized. The benchmark is CPU-bound by signing.
 
-### 7.6 Resource consumption and monitoring caveat
+### 7.6 Resource consumption and monitoring findings
 
 **Manager question:** *"This machine spec is gigantic. You didn't log the resources consumption, so how do you know you're going to get the most out of the machine? We even need a graph to monitor."*
 
-This is a fair and important limitation of the current run. The numbers reported here are **throughput numbers only**; they do not come with fine-grained CPU, memory, disk, or network utilization data. Specifically:
+To answer this, a 120-second full-sign Node benchmark was re-run with per-second telemetry (`mpstat -P ALL 1`, `pidstat 1`, `vmstat 1`, and `free -m` every second) on both instances.
 
-- **No per-process CPU sampling** was collected during the runs. The only system-level signal is CloudWatch `CPUUtilization` at 1-minute granularity, which is too coarse for a 12–15 second benchmark burst (see Section 7.1).
-- **No memory or I/O profiling** was done. The benchmark is in-memory and network-light, but this was assumed, not measured.
-- **No graph or dashboard** was produced. The SSM-based execution model makes ad-hoc live monitoring harder than an interactive SSH session.
+#### Telemetry results (128 workers × 1000 tunnels, 120 s)
 
-Because of this, we **cannot claim** that the current best of ~234k TPS per instance is the absolute ceiling of a `c7i.48xlarge`. It is simply the best configuration found in this tuning pass. To determine whether more TPS is available on the same hardware, the next step is to instrument the run with:
+| Metric | Instance A | Instance B |
+|---|---|---|
+| All-CPU average | **67.6%** | **67.5%** |
+| All-CPU maximum | **68.8%** | **68.8%** |
+| Samples > 90% all-CPU | 0 / 122 | 0 / 122 |
+| Samples > 50% all-CPU | 119 / 122 | 120 / 122 |
+| Per-core avg utilization | 67.6% | 67.5% |
+| Cores avg > 80% | 86 / 192 | 80 / 192 |
+| Cores avg > 50% | 145 / 192 | 145 / 192 |
+| Cores avg < 10% | 4 / 192 | 8 / 192 |
+| Node process CPU (avg) | ~12,964% (~130 cores) | ~13,055% (~130 cores) |
+| Max memory used | **8.76 GiB** | **8.87 GiB** |
+| Available memory (min) | ~361 GiB | ~361 GiB |
+| I/O wait / steal | ~0% | ~0% |
 
-1. **Per-second CPU utilization** (e.g. `mpstat -P ALL 1`, `perf stat`, or CloudWatch detailed monitoring at 1-second granularity).
-2. **Per-worker CPU sampling** so we can see if workers are actually saturated or waiting on locks / GC.
-3. **A longer steady-state run** (minutes, not seconds) to observe thermal throttling, scheduler behavior, and sustained throughput.
-4. **A live dashboard** (e.g. Grafana agent + CloudWatch, or `htop`/`bpytop` captured during the run) so the team can visually correlate TPS with resource use.
+#### Interpretation
 
-Until those measurements exist, treat the reported TPS as a **lower-bound best effort**, not a proven hardware ceiling. The good news is that the benchmark itself is deterministic and repeatable, so adding resource telemetry is a straightforward next step rather than a redesign.
+**The system is not at 100% CPU.** The all-CPU average is ~67.5%. However, this number is almost exactly `128 workers / 192 vCPUs`, which means the 128 worker threads are each saturating roughly one core, while the remaining ~64 cores are mostly idle.
+
+So the workers are **CPU-saturated at the thread level** — adding work to an already-busy worker does not help. The reason we do not see higher system CPU is that **we do not have enough workers to fill all 192 vCPUs**. Previous tuning (Section 5.5) showed that increasing workers beyond 128 actually *degraded* throughput, likely due to lock contention, scheduler pressure, or worker-thread overhead in Node.
+
+**Memory is not a bottleneck.** The benchmark used less than 9 GiB out of 384 GiB, and available memory stayed flat.
+
+**Network and I/O are not bottlenecks.** I/O wait and steal time are effectively zero.
+
+#### Answer to the manager
+
+We are **not using 100% of the hardware's CPU capacity** at the system level, but we appear to be using ~100% of the capacity that the current 128-worker Node architecture can productively consume. To push closer to 192 vCPUs, the next experiments are:
+
+1. **Run multiple independent Node processes** (e.g. 2 processes × 64 workers, or 4 × 32) to avoid Node worker-thread scheduler/contention limits.
+2. **Core-pinning** (`taskset`) to see if thread migration is hurting cache efficiency.
+3. **Profile with `perf`** to confirm whether the remaining ~32% idle CPU is due to lock contention, memory stalls, or Node scheduler overhead.
+4. **Try CPU-affinity aware worker counts** (e.g. 96, 144) with longer steady-state runs to see if the earlier degradation was transient.
+
+Until then, **~250k TPS per instance** is the best honest throughput from the current architecture, and it represents a worker-saturated, not system-saturated, ceiling.
 
 ---
 
 ## 8. Conclusions
 
-1. **The kit works end-to-end on AWS.** Two `c7i.48xlarge` instances sustained **~468k fully signed/verified off-chain TPS** using the real frontend blackjack protocol.
+1. **The kit works end-to-end on AWS.** Two `c7i.48xlarge` instances sustained **~507k fully signed/verified off-chain TPS** in a 120-second steady-state run using the real frontend blackjack protocol.
 2. **Blackjack is the right game for raw throughput** because its long sessions amortize tunnel opening and key generation.
 3. **Crypto is the dominant cost.** Full sign/verify is roughly half the throughput of the protocol-only path.
-4. **5M TPS is feasible** with horizontal scaling: approximately **22 instances** of the same size for the honest full-sign metric, or **12 instances** if only counting protocol transitions.
+4. **5M TPS is feasible** with horizontal scaling: approximately **20 instances** of the same size for the honest full-sign metric, or **12 instances** if only counting protocol transitions.
 5. **Bun is not faster for this workload.** With its current ed25519 instability forcing a pure-JS crypto fallback, Bun reached only ~8k TPS per instance — roughly **6× slower than Node**.
-6. **Resource telemetry is the next bottleneck to investigate.** The reported TPS is a tuned best effort, not a proven hardware ceiling, because CPU/memory utilization was not sampled during the runs.
+6. **Telemetry shows the architecture, not the hardware, is the current ceiling.** System CPU averaged ~67.5%, exactly matching 128 saturated workers on 192 vCPUs. Memory, I/O, and network are not bottlenecks. To use the remaining ~30% of CPU, the next step is multi-process scaling or core-pinning experiments.
 
 ---
 
