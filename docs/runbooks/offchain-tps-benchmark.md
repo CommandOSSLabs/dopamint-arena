@@ -156,9 +156,8 @@ For a 5M-TPS oriented test, start with:
 
 - `blackjack` (the faster game)
 - `full` sign mode (the honest metric)
-- 1000–5000 tunnels
-- 128 workers for a single-process run, **or**
-- **4 processes × 48 workers** to fully saturate a `c7i.48xlarge` (192 vCPUs)
+- **Bun process-per-core** for maximum throughput: 192 single-thread `solo` processes per `c7i.48xlarge`
+- Alternative with Node: **4 processes × 48 workers** per instance
 - 10–20 second duration for a quick test, 120 seconds for stable telemetry
 
 ### 5.2 Build + run via SSM
@@ -194,6 +193,23 @@ aws ssm send-command \
 ```
 
 This is the configuration that reached **~637k fleet TPS** in the reported run.
+
+### 5.2b Bun process-per-core run (maximum throughput)
+
+The highest TPS was achieved with **Bun v1.3.14** running one single-threaded `solo` process per vCPU. Bun's native ed25519 (BoringSSL) is faster than Node's OpenSSL for this workload, and the single-thread model avoids the `worker_threads` crash that Bun exhibits at scale.
+
+Prerequisites on the instance: install Bun and `sysstat` for telemetry.
+
+```bash
+aws ssm send-command \
+  --profile AdministratorAccess-129671602944 \
+  --region us-east-1 \
+  --instance-ids i-04acf2495db8de697 i-06f23014658029cc0 \
+  --document-name AWS-RunShellScript \
+  --parameters commands='["export PATH=\"$HOME/.bun/bin:$PATH\"; if ! command -v bun >/dev/null; then curl -fsSL https://bun.sh/install | bash; fi; if ! command -v mpstat >/dev/null; then dnf install -y sysstat; fi; cd /opt/dopamint/repo-fresh/frontend && git fetch --depth 1 origin feat/offchain-tps-bench && git reset --hard FETCH_HEAD && cd ../sui-tunnel-ts && pnpm install --frozen-lockfile && cd ../frontend && pnpm install --frozen-lockfile && pnpm build:bench && OUT=/tmp/bun_solo_192_$(date +%Y%m%d_%H%M%S) && mkdir -p $OUT && for i in $(seq 1 192); do bun dist/bench/solo.js blackjack full 120000 $i > $OUT/proc_$i.log 2>&1 & done; wait; grep STEPS_PER_S $OUT/proc_*.log | awk -F= \"{s+=\$2} END {print \"Total TPS:\", s}\""]'
+```
+
+This is the configuration that reached **~1.3M fleet TPS** in the reported run.
 
 ### 5.3 Monitor progress
 

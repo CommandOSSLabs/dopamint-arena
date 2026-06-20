@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-20  
 **Branch:** `feat/offchain-tps-bench`  
-**Commit:** `3711edd` — *docs(reports): add CPU/memory telemetry findings from 120s Node run*  
+**Commit:** `c3b8858` — *feat(bench): bun native crypto + single-thread driver*  
 **Environment:** AWS `us-east-1`, Pulumi `dev` stack  
 **Game tested:** Blackjack (frontend `BlackjackBetProtocol`)  
 **Sign modes tested:** `full` (dual sign + verify), `none` (protocol overhead only)
@@ -348,16 +348,16 @@ The longer run produced a **~8% higher fleet TPS** than the shorter 15-second tu
 
 ---
 
-## 5.6 Bun runtime comparison
+## 5.6 Bun runtime comparison — first attempt (worker threads)
 
-As a separate experiment, the same benchmark was run under **Bun v1.3.14** on both instances. Bun's `node:crypto` ed25519 KeyObject path currently aborts with a core dump, so the benchmark falls back to the pure-JS `@noble/curves` backend when it detects Bun.
+As a separate experiment, the same benchmark was run under **Bun v1.3.14** on both instances using the original worker-thread model. Bun's `node:crypto` ed25519 KeyObject path aborts with a core dump under `worker_threads`, so the benchmark fell back to the pure-JS `@noble/curves` backend.
 
-### 5.6.1 Tested configurations
+### 5.6.1 Worker-thread results
 
 | Workers | Tunnels | Duration | Instance A TPS | Instance B TPS | Notes |
 |---|---:|---:|---:|---:|---|
 | 8 | 100 | 15 s | 4,440 | 4,460 | stable |
-| **16** | **100** | **15 s** | **8,324** | **8,308** | **best stable Bun result** |
+| **16** | **100** | **15 s** | **8,324** | **8,308** | best stable worker-thread result |
 | 16 | 200 | 15 s | 8,132 | 8,158 | stable |
 | 16 | 500 | 15 s | 8,184 | 8,085 | stable |
 | 24 | 100 | 15 s | 5,714 | 6,154 | stable, lower per-core efficiency |
@@ -365,24 +365,49 @@ As a separate experiment, the same benchmark was run under **Bun v1.3.14** on bo
 | 64 | 1000 | 15 s | 2,366 | 2,461 | stable but degraded |
 | 128 | 1000 | 15 s | hung | hung | workers did not complete; command cancelled |
 
-### 5.6.2 Bun vs Node at identical small config
+At identical small config (`16 workers × 100 tunnels × full sign`), Bun with noble was **~6× slower than Node** (~8.3k vs ~49.3k TPS). The takeaway at that point was that Bun's worker-thread path was not competitive because it could not safely use native ed25519.
 
-Running the same `16 workers × 100 tunnels × full sign` configuration under both runtimes on one instance:
+---
 
-| Runtime | Backend | TPS | Signatures/sec | Verifies/sec |
+## 5.8 Bun process-per-core scaling (native crypto)
+
+A teammate then added a **single-threaded driver** (`src/bench/solo.ts`) that runs the same off-chain loop without `worker_threads`. Under this model, Bun can safely use its native ed25519 backend (BoringSSL) and is launched as **one independent process per vCPU**. This avoids the `worker_threads` crash entirely.
+
+### 5.8.1 Process count sweep (60–120 s, blackjack, full sign)
+
+| Processes per instance | Instance A TPS | Instance B TPS | Avg CPU | Notes |
+|---:|---:|---:|---:|---|
+| 144 | 585,852 | 628,237 | ~77% | not enough processes to fill 192 vCPUs |
+| 192 (60 s) | 618,923 | 676,158 | ~99% | near saturation |
+| **192 (120 s)** | **623,976** | **680,208** | **~99%** | **stable best** |
+| 240 | 620,620 | 675,642 | ~100% | slight overhead regression |
+
+### 5.8.2 Final 120-second confirmation (192 processes)
+
+| Metric | Instance A | Instance B | Fleet |
+|---|---|---|---|
+| TPS | **623,976** | **680,208** | **~1,304,184** |
+| Signatures/sec | 1,247,952 | 1,360,416 | **~2,608,368** |
+| Verifies/sec | 1,247,952 | 1,360,416 | **~2,608,368** |
+| All-CPU average | 98.8% | 98.8% | ~98.8% |
+| All-CPU maximum | 99.1% | 99.2% | ~99.2% |
+| Cores avg > 80% | 192/192 | 192/192 | 384/384 |
+| Max memory used | 18.7 GiB | 18.6 GiB | ~37.3 GiB |
+
+### 5.8.3 Why Bun wins now
+
+- **Native crypto is safe in single-threaded processes.** Bun's BoringSSL ed25519 is ~2.3× faster than the pure-JS noble backend and faster than Node's OpenSSL path for this workload.
+- **No worker-thread overhead.** Each process owns one core; the OS scheduler handles placement.
+- **All 192 vCPUs are saturated.** Telemetry shows 98.8% sustained CPU with every core above 80%.
+
+### 5.8.4 Bun vs Node final comparison
+
+| Runtime | Model | Fleet TPS | Per-instance TPS | Avg CPU |
 |---|---|---:|---:|---:|
-| Bun v1.3.14 | `@noble/curves` (pure JS) | ~8,300 | ~16,600 | ~16,600 |
-| Node v22.23.0 | `node:crypto` / OpenSSL | ~49,300 | ~98,600 | ~98,600 |
+| Node v22.23.0 | 4 processes × 48 workers | ~637,000 | ~318,000 | ~99% |
+| **Bun v1.3.14** | **192 single-thread processes** | **~1,304,000** | **~652,000** | **~99%** |
 
-**Bun is ~6× slower than Node** for this workload, even though Bun is generally faster at raw JS execution. The difference is almost entirely the crypto backend:
-
-- Node uses OpenSSL's optimized ed25519 implementation (assembly, SIMD).
-- Bun's native ed25519 path crashes the process, forcing the pure-JS noble fallback.
-- The noble backend is correct and portable, but cannot match OpenSSL's throughput.
-
-### 5.6.3 Takeaway
-
-Switching the benchmark runtime to Bun **does not improve TPS today**. It caps per-instance throughput at roughly **8k TPS** and scales poorly past 16 workers. Bun may become competitive once its native ed25519 implementation is stable enough to use without crashing, but until then **Node is the better runtime for this benchmark**.
+**Bun is now ~2× faster than Node** for this benchmark when used in a process-per-core configuration.
 
 ---
 
@@ -442,20 +467,21 @@ The most likely explanation is that Node's worker-thread scheduler and/or V8 int
 
 Assuming near-linear horizontal scaling across identical instances. Per-instance throughput is the fleet total divided by 2.
 
-| Target | Mode | Per-instance TPS | Instances needed (rounded up) |
-|---|---|---|---|
-| 5M TPS | full sign + verify | ~318k | **16** |
-| 5M TPS | sign-only | ~373k | **14** |
-| 5M TPS | none (protocol only) | ~430k | **12** |
+| Target | Mode | Runtime | Per-instance TPS | Instances needed (rounded up) |
+|---|---|---|---|---|
+| 5M TPS | full sign + verify | Node (4×48) | ~318k | **16** |
+| 5M TPS | full sign + verify | **Bun (192 solo)** | **~652k** | **8** |
+| 5M TPS | sign-only | Node | ~373k | **14** |
+| 5M TPS | none (protocol only) | Node | ~430k | **12** |
 
-> The full-sign estimate uses the hardware-saturated best of **~318k TPS per instance** from Section 5.7.2.
+> The full-sign estimate uses the hardware-saturated best of **~652k TPS per instance** from Section 5.8.2.
 
 The current dev stack is capped at 2 instances. Reaching 5M TPS requires either:
 
-1. Raising the dev benchmark ASG max to 16+ instances, or
+1. Raising the dev benchmark ASG max to 8+ instances (Bun) or 16+ instances (Node), or
 2. Running the benchmark in a larger Pulumi stack / region.
 
-At on-demand pricing, 16× `c7i.48xlarge` in `us-east-1` costs roughly **$110–125/hour**, so a 5-minute test is ~$9–10 in compute.
+At on-demand pricing, 8× `c7i.48xlarge` in `us-east-1` costs roughly **$55–62/hour**, so a 5-minute test is ~$4.50–5.00 in compute.
 
 ---
 
@@ -541,13 +567,13 @@ The telemetry data, graphs, and raw logs (`mpstat.log`, `pidstat.log`, `vmstat.l
 
 ## 8. Conclusions
 
-1. **The kit works end-to-end on AWS.** Two `c7i.48xlarge` instances sustained **~637k fully signed/verified off-chain TPS** in a 120-second multi-process run using the real frontend blackjack protocol.
-2. **Multi-process scaling is required to saturate the hardware.** A single Node process topped out at ~507k fleet TPS with ~67.5% CPU; four processes per instance reached ~637k fleet TPS with ~99.5% CPU — a **~26% throughput gain**.
-3. **Blackjack is the right game for raw throughput** because its long sessions amortize tunnel opening and key generation.
-4. **Crypto is the dominant cost.** Full sign/verify is roughly half the throughput of the protocol-only path.
-5. **5M TPS is feasible** with horizontal scaling: approximately **16 instances** of the same size for the honest full-sign metric, or **12 instances** if only counting protocol transitions.
-6. **Bun is not faster for this workload.** With its current ed25519 instability forcing a pure-JS crypto fallback, Bun reached only ~8k TPS per instance — roughly **6× slower than Node**.
-7. **The hardware is now fully utilized.** Telemetry confirms all 192 vCPUs averaged above 80% utilization during the multi-process run. Memory, I/O, and network are not bottlenecks.
+1. **The kit works end-to-end on AWS.** Two `c7i.48xlarge` instances sustained **~1.3M fully signed/verified off-chain TPS** in a 120-second Bun process-per-core run using the real frontend blackjack protocol.
+2. **Multi-process scaling is required to saturate the hardware.** A single Node process topped out at ~507k fleet TPS with ~67.5% CPU; four Node processes per instance reached ~637k fleet TPS with ~99.5% CPU.
+3. **Bun process-per-core is the winning runtime.** Once native ed25519 was usable via single-threaded processes, Bun reached **~1.3M fleet TPS** — roughly **2× faster than Node** and **~4× faster than the original single-process Node run**.
+4. **Blackjack is the right game for raw throughput** because its long sessions amortize tunnel opening and key generation.
+5. **Crypto is the dominant cost.** Full sign/verify is roughly half the throughput of the protocol-only path.
+6. **5M TPS is feasible** with horizontal scaling: approximately **8 instances** of the same size with Bun for the honest full-sign metric.
+7. **The hardware is fully utilized.** Telemetry confirms all 192 vCPUs averaged ~98.8% during the Bun run. Memory (~18.6 GiB/instance), I/O, and network are not bottlenecks.
 
 ---
 
@@ -590,9 +616,22 @@ aws ssm send-command \
   --parameters commands='["cd /opt/dopamint/repo && git fetch --depth 1 origin feat/offchain-tps-bench && git reset --hard FETCH_HEAD && cd frontend && pnpm install --frozen-lockfile && pnpm build:bench && OUT=/tmp/multi_proc_bench_$(date +%Y%m%d_%H%M%S) && mkdir -p $OUT && for i in 1 2 3 4; do node dist/bench/offchainTps.js --game blackjack --workers 48 --tunnels 250 --sign full --duration 120000 --json $OUT/proc_$i.json >> $OUT/bench.log 2>&1 & done; wait"]'
 ```
 
-JSON reports remain on the instances at:
+SSM command used for the Bun process-per-core run (192 single-thread processes per instance):
+
+```bash
+aws ssm send-command \
+  --profile AdministratorAccess-129671602944 \
+  --region us-east-1 \
+  --instance-ids <INSTANCE_A> <INSTANCE_B> \
+  --document-name AWS-RunShellScript \
+  --parameters commands='["export PATH=\"$HOME/.bun/bin:$PATH\"; cd /opt/dopamint/repo-fresh/frontend && git fetch --depth 1 origin feat/offchain-tps-bench && git reset --hard FETCH_HEAD && cd ../sui-tunnel-ts && pnpm install --frozen-lockfile && cd ../frontend && pnpm install --frozen-lockfile && pnpm build:bench && OUT=/tmp/bun_solo_192_$(date +%Y%m%d_%H%M%S) && mkdir -p $OUT && for i in $(seq 1 192); do bun dist/bench/solo.js blackjack full 120000 $i > $OUT/proc_$i.log 2>&1 & done; wait; grep STEPS_PER_S $OUT/proc_*.log | awk -F= \"{s+=\$2} END {print \"Total TPS:\", s}\""]'
+```
+
+Reports and telemetry remain on the instances at:
 
 - `/tmp/bench-blackjack-full.json`
 - `/tmp/bench-blackjack-none.json`
-- `/tmp/multi_proc_bench_20260620_075541/` (Instance A telemetry)
-- `/tmp/multi_proc_bench_20260620_075542/` (Instance B telemetry)
+- `/tmp/multi_proc_bench_20260620_075541/` (Instance A Node telemetry)
+- `/tmp/multi_proc_bench_20260620_075542/` (Instance B Node telemetry)
+- `/tmp/bun_solo_192_20260620_112341/` (Instance A Bun telemetry)
+- `/tmp/bun_solo_192_20260620_112342/` (Instance B Bun telemetry)
