@@ -39,6 +39,9 @@ diesel-async = { version = "0.9", features = ["bb8", "postgres"] }
 diesel_migrations = "2.3"
 bcs.workspace = true
 clap = { version = "4", features = ["derive"] }
+# IndexerCluster::with_database_url takes a url::Url (transitive via the framework; declared
+# explicitly so the indexer bin can name the type). Resolves to 2.5.x in the lock.
+url = "2"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
