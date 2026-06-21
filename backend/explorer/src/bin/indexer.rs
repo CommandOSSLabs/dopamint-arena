@@ -32,13 +32,10 @@ const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let _ = dotenvy::dotenv();
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
-        )
-        .init();
-
+    // Do NOT install a tracing subscriber here: `IndexerCluster::build()` installs the framework's
+    // own global subscriber (telemetry/metrics), and a second `.init()` panics on boot with
+    // "a global default trace dispatcher has already been set". The framework's subscriber honors
+    // RUST_LOG. (The `api` binary, which does not use the framework, keeps its own init.)
     let args = Args::parse();
     let package = AccountAddress::from_hex_literal(&std::env::var("TUNNEL_PACKAGE_ID")?)
         .map_err(|e| anyhow::anyhow!("invalid TUNNEL_PACKAGE_ID: {e}"))?;
