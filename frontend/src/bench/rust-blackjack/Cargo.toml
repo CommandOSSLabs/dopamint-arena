@@ -1,0 +1,18 @@
+# Standalone bench crate — `[workspace]` keeps it OUT of the repo's root Cargo
+# workspace (members = ["backend/tunnel-manager"]) so it never touches the
+# production Cargo.lock. Build/run from this directory.
+[workspace]
+
+[package]
+name = "blackjack-tps-rs"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+ed25519-dalek = { version = "2", features = ["batch"] }
+blake2 = "0.10"
+
+[profile.release]
+opt-level = 3
+lto = true
