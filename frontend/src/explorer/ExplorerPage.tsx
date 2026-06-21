@@ -11,9 +11,12 @@ import {
 } from "@/backend/explorerClient";
 import { useSuiClientContext } from "@mysten/dapp-kit";
 
-function fmtSui(mist: number | null): string {
-  if (mist == null) return "—";
-  return (mist / 1e9).toFixed(3).replace(/\.?0+$/, "") + " SUI";
+// Balances arrive as decimal-string MIST (u64, ADR-0002); parse with BigInt to keep precision.
+const mist = (s: string | null): bigint => (s == null ? 0n : BigInt(s));
+
+function fmtSui(mistAmount: bigint): string {
+  // Display only — the exact conservation check runs in verifyTranscript on bigint.
+  return (Number(mistAmount) / 1e9).toFixed(3).replace(/\.?0+$/, "") + " SUI";
 }
 
 export function ExplorerPage() {
@@ -23,6 +26,10 @@ export function ExplorerPage() {
   const [done, setDone] = useState(false);
   const [address, setAddress] = useState("");
   const loading = useRef(false);
+  // The SSE handler is created once (empty-deps effect below); this ref lets it read the CURRENT
+  // filter without re-subscribing. Synced every render.
+  const addressRef = useRef(address);
+  addressRef.current = address;
 
   const load = useCallback(
     async (reset: boolean) => {
@@ -35,7 +42,13 @@ export function ExplorerPage() {
           address: address.trim() || undefined,
           kind: "settled",
         });
-        setRows((prev) => (reset ? page.rows : [...prev, ...page.rows]));
+        setRows((prev) => {
+          if (reset) return page.rows;
+          // Dedup against live-prepended rows: a settlement returned by both the stream and a later
+          // page must not appear twice (nor collide on the React key={txDigest}).
+          const seen = new Set(prev.map((r) => r.txDigest));
+          return [...prev, ...page.rows.filter((r) => !seen.has(r.txDigest))];
+        });
         setCursor(page.nextCursor);
         setDone(page.nextCursor == null);
       } finally {
@@ -47,9 +60,19 @@ export function ExplorerPage() {
 
   useEffect(() => {
     void load(true);
-    // Live-prepend new settlements as the indexer emits them.
+    // Live-prepend new settlements as the indexer emits them, honoring the active address filter.
+    // (Live rows carry NULL party addresses until enrichment, so a filtered view shows no live
+    // rows until reload — the DB query, not the stream, is the source of truth for filtering.)
     return openExplorerStream((row) => {
       if (row.kind !== "settled") return;
+      const filter = addressRef.current.trim().toLowerCase();
+      if (
+        filter &&
+        row.partyAAddr?.toLowerCase() !== filter &&
+        row.partyBAddr?.toLowerCase() !== filter
+      ) {
+        return;
+      }
       setRows((prev) => (prev.some((r) => r.txDigest === row.txDigest) ? prev : [row, ...prev]));
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -113,12 +136,12 @@ export function ExplorerPage() {
                     <td className="wal-mono px-3 py-2 text-muted-foreground">
                       {truncateMiddle(r.tunnelId)}
                     </td>
-                    <td className="wal-mono px-3 py-2">{r.checkpoint || "—"}</td>
+                    <td className="wal-mono px-3 py-2">{r.checkpoint}</td>
                     <td className="px-3 py-2 text-muted-foreground">
                       {new Date(r.timestampMs).toLocaleString()}
                     </td>
                     <td className="px-3 py-2 text-right">
-                      {fmtSui((r.partyABalance ?? 0) + (r.partyBBalance ?? 0))}
+                      {fmtSui(mist(r.partyABalance) + mist(r.partyBBalance))}
                     </td>
                     <td className="px-3 py-2 text-right">
                       <Link

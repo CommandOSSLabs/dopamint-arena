@@ -45,7 +45,7 @@ export function ExplorerDetailPage() {
                   {truncateMiddle(row.txDigest)}
                 </a>
               </Field>
-              <Field label="Checkpoint">{row.checkpoint || "—"}</Field>
+              <Field label="Checkpoint">{row.checkpoint}</Field>
               <Field label="Closed at">{row.closedAtMs ? new Date(row.closedAtMs).toLocaleString() : "—"}</Field>
               <Field label="Tunnel">{truncateMiddle(row.tunnelId)}</Field>
               <Field label="Party A">
@@ -64,7 +64,7 @@ export function ExplorerDetailPage() {
               </Field>
               <Field label="Anchored root">{row.transcriptRoot ? truncateMiddle(row.transcriptRoot, 8, 8) : "—"}</Field>
               <Field label="Final balances">
-                {((row.partyABalance ?? 0) / 1e9).toString()} / {((row.partyBBalance ?? 0) / 1e9).toString()} SUI
+                {(Number(row.partyABalance ?? 0) / 1e9).toString()} / {(Number(row.partyBBalance ?? 0) / 1e9).toString()} SUI
               </Field>
             </>
           )}

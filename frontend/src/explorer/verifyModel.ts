@@ -19,7 +19,18 @@ export function checksOf(v: TranscriptVerification): Check[] {
 
 export type Verdict = "verified" | "failed" | "unverifiable";
 
-export function verdictOf(v: TranscriptVerification | null, hasTranscript: boolean): Verdict {
-  if (!hasTranscript) return "unverifiable";
-  return v && v.ok ? "verified" : "failed";
+/**
+ * Map a verification result to the audit seal. "failed" is reserved for a transcript we COULD
+ * check and which did NOT hold — never for a settlement we simply can't check. So we only render a
+ * verdict (verified/failed) when there is BOTH an archived transcript AND an on-chain anchored root
+ * to check it against; otherwise it is "unverifiable". A transcript with zero signed steps proves
+ * nothing (an all-zero root trivially "matches"), so it is unverifiable too — never a green seal.
+ */
+export function verdictOf(
+  v: TranscriptVerification | null,
+  hasTranscript: boolean,
+  hasAnchoredRoot: boolean,
+): Verdict {
+  if (!hasTranscript || !hasAnchoredRoot || !v || v.stepCount === 0) return "unverifiable";
+  return v.ok ? "verified" : "failed";
 }

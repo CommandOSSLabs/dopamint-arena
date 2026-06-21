@@ -31,15 +31,22 @@ export function VerifyPanel({ row }: { row: SettlementRow }) {
           if (alive) { setHasTranscript(false); setPhase("done"); }
           return;
         }
-        // 2) party public keys from the authoritative on-chain Tunnel object (trustless).
+        // 2) Need an on-chain anchored root to check the transcript against. A close without one
+        //    (transcriptRoot null) leaves the transcript uncheckable — not failed, just unverifiable.
+        const onchainRoot = row.transcriptRoot;
+        if (onchainRoot == null) {
+          if (alive) setPhase("done");
+          return;
+        }
+        // 3) party public keys from the authoritative on-chain Tunnel object (trustless).
         const obj = await client.getObject({ id: row.tunnelId, options: { showContent: true } });
         const parties = partiesFromTunnelObject((obj.data as any)?.content);
-        // 3) re-derive the verdict in-browser.
+        // 4) re-derive the verdict in-browser. Balances are exact decimal-string MIST (BigInt).
         const lockedTotal = BigInt(row.partyABalance ?? 0) + BigInt(row.partyBBalance ?? 0);
         const v = verifyTranscript(record, {
           partyA: parties.partyA,
           partyB: parties.partyB,
-          onchainRoot: row.transcriptRoot ?? "",
+          onchainRoot,
           lockedTotal,
         });
         if (alive) { setResult(v); setPhase("done"); }
@@ -61,7 +68,8 @@ export function VerifyPanel({ row }: { row: SettlementRow }) {
     }
   }, [phase]);
 
-  const verdict: Verdict = verdictOf(result, hasTranscript);
+  const hasAnchoredRoot = row.transcriptRoot != null;
+  const verdict: Verdict = verdictOf(result, hasTranscript, hasAnchoredRoot);
 
   return (
     <Panel>
@@ -77,9 +85,9 @@ export function VerifyPanel({ row }: { row: SettlementRow }) {
 
         {verdict === "unverifiable" && (
           <p className="text-sm text-muted-foreground">
-            This settlement is <b>anchored on-chain</b> but has <b>no archived transcript</b> to
-            check against — its root and balances are recorded, but the step-by-step proof
-            isn't available here.
+            This settlement is <b>anchored on-chain</b>, but its off-chain transcript can't be
+            independently re-verified here — either no transcript was archived, or it was closed
+            without anchoring a transcript root. Its recorded balances and root still stand.
           </p>
         )}
 

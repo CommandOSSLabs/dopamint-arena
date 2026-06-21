@@ -12,9 +12,11 @@ export interface SettlementRow {
   tunnelId: string;
   partyAAddr: string | null;
   partyBAddr: string | null;
-  partyABalance: number | null;
-  partyBBalance: number | null;
-  finalNonce: number | null;
+  // u64 MIST / nonce as decimal strings (ADR-0002) — parse with BigInt; a number would lose
+  // precision past 2^53 MIST (~9.0M SUI) and break the in-browser balance-conservation check.
+  partyABalance: string | null;
+  partyBBalance: string | null;
+  finalNonce: string | null;
   transcriptRoot: string | null;
   proofUrl: string | null;
   walrusBlobId: string | null;
