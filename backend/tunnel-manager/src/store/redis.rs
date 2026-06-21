@@ -148,10 +148,9 @@ impl ControlStore for RedisControlStore {
     }
 
     async fn add_actions(&self, game: &str, delta: u64) {
-        let res: Result<i64, _> = self.pool.incr_by("stats:actions:total", delta as i64).await;
-        if let Err(e) = res {
-            tracing::warn!(error = %e, "redis add_actions incr total failed");
-        }
+        // Per-game only: the total is derived in `snapshot` as the sum of per-game keys.
+        // Writing a separate total would be a redundant, single-slot write-hotspot (every
+        // instance, every second) and could diverge from the per-game sum on partial failure.
         let res: Result<i64, _> = self
             .pool
             .incr_by(format!("stats:actions:game:{game}"), delta as i64)
@@ -162,16 +161,10 @@ impl ControlStore for RedisControlStore {
     }
 
     async fn snapshot(&self) -> StatsSnapshot {
-        let total: i64 = self
-            .pool
-            .get("stats:actions:total")
-            .await
-            .ok()
-            .flatten()
-            .unwrap_or(0);
         let active: i64 = self.pool.scard("stats:tunnels:active").await.unwrap_or(0);
         let settled: i64 = self.pool.scard("stats:tunnels:settled").await.unwrap_or(0);
 
+        let mut total_actions: u64 = 0;
         let mut per_game: HashMap<String, GameStat> = HashMap::new();
         for (prefix, is_actions) in [
             ("stats:actions:game:", true),
@@ -188,6 +181,7 @@ impl ControlStore for RedisControlStore {
                 });
                 if is_actions {
                     entry.total_actions = v as u64;
+                    total_actions += v as u64;
                 } else {
                     entry.tunnels = v as u64;
                 }
@@ -197,7 +191,7 @@ impl ControlStore for RedisControlStore {
         let recent_events = self.recent_events().await;
         StatsSnapshot {
             tps: 0.0, // filled by the broadcaster from its per-tick diff
-            total_actions: total as u64,
+            total_actions,
             active_tunnels: active as u64,
             settled_tunnels: settled as u64,
             per_game,
@@ -908,5 +902,24 @@ mod tests {
             second.is_none(),
             "reconnecting wallet must not pair with itself"
         );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires TEST_REDIS_URL"]
+    async fn actions_total_is_derived_not_a_separate_key() {
+        let Some(url) = test_url() else { return };
+        let pool = connect(&url).await.unwrap();
+        // Clear the legacy aggregate so a stale value can't mask the assertion.
+        let _: Option<i64> = pool.del("stats:actions:total").await.ok();
+        let s = RedisControlStore::new(pool.clone());
+        let game = format!("g{}", uuid::Uuid::new_v4().simple());
+        s.add_actions(&game, 7).await;
+        s.add_actions(&game, 5).await;
+        // Total must come from summing per-game keys, never from a written aggregate.
+        let legacy: Option<i64> = pool.get("stats:actions:total").await.ok().flatten();
+        assert!(legacy.is_none(), "stats:actions:total must not be written");
+        let snap = s.snapshot().await;
+        assert_eq!(snap.per_game[&game].total_actions, 12);
+        assert!(snap.total_actions >= 12, "total is the sum of per-game");
     }
 }

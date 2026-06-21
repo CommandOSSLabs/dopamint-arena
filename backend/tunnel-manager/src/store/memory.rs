@@ -18,7 +18,6 @@ use crate::state::{GameStat, SessionRecord, StatsSnapshot, TunnelEvent, TunnelSt
 pub struct InMemoryControlStore {
     sessions: RwLock<HashMap<String, SessionRecord>>,
     tunnels: RwLock<HashMap<String, TunnelStatus>>,
-    total_actions: AtomicU64,
     active_tunnels: AtomicU64,
     settled_tunnels: AtomicU64,
     per_game_actions: RwLock<HashMap<String, u64>>,
@@ -67,7 +66,7 @@ impl ControlStore for InMemoryControlStore {
     }
 
     async fn add_actions(&self, game: &str, delta: u64) {
-        self.total_actions.fetch_add(delta, Ordering::Relaxed);
+        // Per-game only; total is derived in `snapshot` (parity with the Redis impl).
         *self
             .per_game_actions
             .write()
@@ -79,6 +78,7 @@ impl ControlStore for InMemoryControlStore {
     async fn snapshot(&self) -> StatsSnapshot {
         let actions = self.per_game_actions.read().unwrap();
         let tunnels = self.per_game_tunnels.read().unwrap();
+        let mut total_actions: u64 = 0;
         let mut per_game: HashMap<String, GameStat> = HashMap::new();
         for (game, total) in actions.iter() {
             per_game
@@ -89,6 +89,7 @@ impl ControlStore for InMemoryControlStore {
                     total_actions: 0,
                 })
                 .total_actions = *total;
+            total_actions += *total;
         }
         for (game, n) in tunnels.iter() {
             per_game
@@ -102,7 +103,7 @@ impl ControlStore for InMemoryControlStore {
         }
         StatsSnapshot {
             tps: 0.0, // filled by the broadcaster from its per-tick diff
-            total_actions: self.total_actions.load(Ordering::Relaxed),
+            total_actions,
             active_tunnels: self.active_tunnels.load(Ordering::Relaxed),
             settled_tunnels: self.settled_tunnels.load(Ordering::Relaxed),
             per_game,
