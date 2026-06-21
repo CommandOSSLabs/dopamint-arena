@@ -8,4 +8,6 @@ register({
   icon: "⭕",
   image: "/games/caro.png",
   Window: TicTacToeWindow,
+  defaultSize: { w: 6, h: 7 },
+  minSize: { w: 4, h: 5 },
 });

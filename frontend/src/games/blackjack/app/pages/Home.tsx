@@ -10,6 +10,14 @@ export default function Home() {
     document.title = "Blackjack";
   }, []);
 
+  useEffect(() => {
+    const hasNavigated = sessionStorage.getItem("blackjack_auto_navigated");
+    if (account && !hasNavigated) {
+      sessionStorage.setItem("blackjack_auto_navigated", "true");
+      navigate("/play");
+    }
+  }, [account, navigate]);
+
   return (
     <div className="w-full h-full flex flex-col items-center justify-center menu-background relative text-white overflow-hidden select-none">
       <div className="bg-zinc-950/90 border border-zinc-800 rounded-3xl p-8 md:p-12 w-[85%] max-w-4xl shadow-2xl z-10 flex flex-col items-center fade-in-up">

@@ -6,6 +6,7 @@ export * from "./Protocol";
 export * from "./payments";
 export * from "./blackjack";
 export * from "./ticTacToe";
+export * from "./caro";
 export * from "./chat";
 export * from "./quantumPoker";
 export * from "./quantumPokerCodec";

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useGameNavigate } from "@/games/blackjack/app/useGameRouter";
+import { useGameScale } from "@/games/blackjack/app/components/app/ScaledWrapper";
 import { ConnectButton, useCurrentAccount } from "@mysten/dapp-kit";
 import { CardDisplay } from "@/games/blackjack/app/components/app/CardDisplay";
 import { usePvpBlackjack } from "@/games/blackjack/app/hooks/usePvpBlackjack";
@@ -102,6 +103,7 @@ function statusText(g: ReturnType<typeof usePvpBlackjack>): string {
 export default function PvpBlackjack() {
   const g = usePvpBlackjack();
   const navigate = useGameNavigate();
+  const { isPortrait } = useGameScale();
   const account = useCurrentAccount();
   useEffect(() => {
     document.title = "Blackjack — PvP";
@@ -168,8 +170,7 @@ export default function PvpBlackjack() {
     <div className="h-full w-full flex flex-col relative text-white overflow-hidden select-none bg-zinc-950">
       {/* Casino felt (same background as the bot-vs-bot table) */}
       <div
-        className="flex-1 w-full relative bg-cover bg-center"
-        style={{ backgroundImage: "url('/dealer-desk-plain-rotated.png')" }}
+        className="flex-1 w-full relative casino-felt"
       >
         <button
           onClick={() => {
@@ -207,8 +208,8 @@ export default function PvpBlackjack() {
         )}
 
         {/* Rounds log (top-right) */}
-        {g.rounds.length > 0 && (
-          <div className="absolute top-16 right-3 md:top-4 md:right-4 z-20 w-44 md:w-52 flex flex-col bg-black/70 backdrop-blur-sm border border-amber-950 rounded-lg shadow-lg overflow-hidden">
+        {!isPortrait && g.rounds.length > 0 && (
+          <div className="hidden md:flex absolute top-16 right-3 md:top-4 md:right-4 z-20 w-44 md:w-52 flex-col bg-black/70 backdrop-blur-sm border border-amber-950 rounded-lg shadow-lg overflow-hidden">
             <div className="px-3 py-1.5 text-[10px] font-extrabold uppercase tracking-widest text-[#d4af37] font-serif border-b border-amber-950/70 flex justify-between">
               <span>Rounds</span>
               <span className="text-zinc-400">
@@ -332,7 +333,7 @@ export default function PvpBlackjack() {
             </div>
 
             {/* Player hand (bottom) + chip stack */}
-            <div className="absolute top-[68%] left-1/2 -translate-x-1/2 z-20 w-full max-w-xs flex flex-col items-center">
+            <div className="absolute top-[68%] md:top-[60%] left-1/2 -translate-x-1/2 z-20 w-full max-w-xs flex flex-col items-center">
               <div className="absolute -left-10 md:-left-16 top-[40px] flex flex-col items-center">
                 <span className="text-[7px] text-emerald-200/50 uppercase tracking-widest mb-1 font-bold">
                   Player
@@ -589,11 +590,13 @@ export default function PvpBlackjack() {
             )}
           </div>
 
-          <div className="flex items-center gap-3">
-            <DigestLink label="open" digest={g.digests.create} />
-            <DigestLink label="deposit" digest={g.digests.deposit} />
-            <DigestLink label="close" digest={g.digests.close} />
-          </div>
+          {!isPortrait && (
+            <div className="flex items-center gap-3">
+              <DigestLink label="open" digest={g.digests.create} />
+              <DigestLink label="deposit" digest={g.digests.deposit} />
+              <DigestLink label="close" digest={g.digests.close} />
+            </div>
+          )}
         </div>
       )}
     </div>

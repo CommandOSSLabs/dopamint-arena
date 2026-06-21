@@ -49,7 +49,11 @@ export default defineConfig(({ mode }) => {
         // config.ts calls dotenv.config() at import time; stub it (env via `define`).
         dotenv: fileURLToPath(new URL("./src/shims/dotenv.ts", import.meta.url)),
         "sui-tunnel-ts": fileURLToPath(new URL("../sui-tunnel-ts/src", import.meta.url)),
-        "@ttt/shared": fileURLToPath(new URL("./src/games/ticTacToe/packages/shared/src/index.ts", import.meta.url)),
+        // Point at the package src DIR (not index.ts) so subpath imports like
+        // `@ttt/shared/ttt/multiGameProtocol` resolve too — mirroring the `@` alias
+        // above and tsconfig's `@ttt/shared/*` mapping. A file target would rewrite
+        // subpaths to `.../index.ts/<subpath>` and fail to resolve.
+        "@ttt/shared": fileURLToPath(new URL("./src/games/ticTacToe/packages/shared/src", import.meta.url)),
       },
     },
   };
