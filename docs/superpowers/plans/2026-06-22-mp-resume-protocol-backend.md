@@ -6,7 +6,7 @@
 
 **Architecture:** All server-side. A new atomic `rebind_match_conn` store primitive rebinds a seat's `ConnRef` in the match HASH. Four new wire messages (`resume`, `resume.ok`, `peer.resumed`, `peer.dropped`) carry the control flow. The peer's *backend* relay cache (the per-connection `matches` map in `handle_socket`) is invalidated via a new bus **eviction** path — a parallel per-connection control channel that routes an evict signal locally or cross-instance, leaving the hot-path client channel untouched. Live game-state reconciliation is client-side and is the **frontend follow-up plan**, not this one.
 
-**Tech Stack:** Rust, `tokio`, `async-trait`, `fred` 9.x (Redis), `serde_json`. Tests via `cargo test` (`#[ignore]` Redis integration tests need `TEST_REDIS_URL`).
+**Tech Stack:** Rust, `tokio`, `async-trait`, `fred` 9.x (Redis), `serde_json`. Redis integration tests use the `testcontainers` crate (ephemeral Redis per test) — see Task 0; they run as part of the normal suite and need Docker available.
 
 ## Global Constraints
 
@@ -22,11 +22,85 @@
 - **MATCH_TTL** already exists in `store/redis.rs` (6h). Rebind refreshes it.
 
 **Running tests:**
-- Fast (memory + pure): `cargo test -p tunnel-manager`
-- Redis integration: `docker run --rm -p 6379:6379 redis:7`, then
-  `TEST_REDIS_URL=redis://localhost:6379 cargo test -p tunnel-manager -- --ignored --test-threads=1`
+- All tests (memory + pure + Redis integration): `cargo test -p tunnel-manager`. The Redis
+  integration tests spin up their own ephemeral Redis via `testcontainers` (Task 0) — no manual
+  container, no `TEST_REDIS_URL`, no `--test-threads=1`. **Docker must be available** at run time;
+  if it is not, those tests fail (they no longer skip silently — that is the intended trade for
+  hermetic, isolated runs).
 
 **Out of scope (frontend follow-up plan):** the `mpClient` reconnect loop, peer co-signed-state re-send, signature verification, and per-game checkpoint reconciliation (highest both-signed nonce wins). This plan establishes and tests the *server wire contract and mechanics* those will consume.
+
+---
+
+### Task 0: Testcontainers Redis fixture (and migrate existing Redis tests)
+
+Replace the legacy `#[ignore]` + `TEST_REDIS_URL` + manual-`docker` integration-test pattern with a `testcontainers`-based fixture that starts an ephemeral Redis per test. This makes the suite hermetic and per-test isolated (no shared global Redis → no `--test-threads=1`, no global-key collisions). Do this first so every new integration test in later tasks uses the fixture.
+
+**Files:**
+- Modify: `backend/tunnel-manager/Cargo.toml` (`[dev-dependencies]`: `testcontainers`, `testcontainers-modules`)
+- Modify: `backend/tunnel-manager/src/store/redis.rs` (`mod tests`: add `redis_fixture`; migrate existing ignored tests; remove `test_url`/`#[ignore]` gating)
+
+**Interfaces:**
+- Produces: `async fn redis_fixture() -> (ContainerAsync<Redis>, RedisPool)` in `store::redis::tests` — starts a Redis container, builds a pool from its mapped port, returns both (caller holds the container alive for the test). Every integration test calls `let (_redis, pool) = redis_fixture().await;`.
+
+- [ ] **Step 1: Add the dev-dependencies**
+
+In `backend/tunnel-manager/Cargo.toml` under `[dev-dependencies]`, add (pin to the current major; check crates.io for the latest compatible patch):
+
+```toml
+testcontainers = "0.23"
+testcontainers-modules = { version = "0.11", features = ["redis"] }
+```
+
+Run `cargo build -p tunnel-manager --tests` to fetch them.
+
+- [ ] **Step 2: Add the fixture helper**
+
+In `store/redis.rs` `mod tests`, add (replacing the role of `test_url`):
+
+```rust
+use testcontainers_modules::redis::Redis;
+use testcontainers_modules::testcontainers::{runners::AsyncRunner, ContainerAsync};
+
+/// Start an ephemeral Redis and return a connected pool. The returned container must be held
+/// for the test's lifetime (drop = stop). Per-test isolation: no shared keys, runs in parallel.
+async fn redis_fixture() -> (ContainerAsync<Redis>, RedisPool) {
+    let node = Redis::default().start().await.expect("start redis container");
+    let port = node.get_host_port_ipv4(6379).await.expect("redis port");
+    let pool = connect(&format!("redis://127.0.0.1:{port}")).await.unwrap();
+    (node, pool)
+}
+```
+
+(If `RedisPool` is not the exact alias `connect` returns, use that return type. Confirm the `testcontainers_modules` re-export path for `ContainerAsync`/`AsyncRunner` against the resolved crate version; adjust the `use` if the module path differs.)
+
+- [ ] **Step 3: Migrate the existing ignored Redis tests**
+
+For each existing test in `store/redis.rs` `mod tests` marked `#[ignore = "requires TEST_REDIS_URL"]`: remove the `#[ignore]` line, and replace its setup preamble
+
+```rust
+    let Some(url) = test_url() else { return };
+    let pool = connect(&url).await.unwrap();      // or: ...connect(&url).await.unwrap() inline
+```
+with
+
+```rust
+    let (_redis, pool) = redis_fixture().await;
+```
+Keep the rest of each test body unchanged (they already use unique uuid keys). Tests that previously cleared a legacy global key (e.g. `del("stats:actions:total")`) no longer need to — each container is fresh — but leaving the `del` is harmless; remove it only if trivial. Delete the now-unused `test_url` helper once no test references it.
+
+- [ ] **Step 4: Run the full suite (now includes the migrated integration tests)**
+
+Run: `cargo test -p tunnel-manager`
+Expected: PASS — the previously-ignored Redis tests now run (each on its own container) with no `--ignored` flag and no `--test-threads=1`. (Requires Docker.)
+
+- [ ] **Step 5: Lint + commit**
+
+Run: `cargo fmt && cargo clippy -p tunnel-manager --all-targets`
+```bash
+git add backend/tunnel-manager/Cargo.toml backend/tunnel-manager/src/store/redis.rs
+git commit -m "test(store): use testcontainers for redis tests"
+```
 
 ---
 
@@ -214,14 +288,13 @@ In `store/redis.rs`, in `impl MpStore for RedisMpStore` (next to `record_checkpo
 
 - [ ] **Step 9: Write the failing Redis integration test**
 
-In `store/redis.rs` `mod tests`, add (reuse the existing `test_url`, `connect`, `sample_match`, `RedisMpStore::new` helpers):
+In `store/redis.rs` `mod tests`, add (uses the `redis_fixture` from Task 0, plus `sample_match`, `RedisMpStore::new`):
 
 ```rust
 #[tokio::test]
-#[ignore = "requires TEST_REDIS_URL"]
 async fn rebind_match_conn_rebinds_seat_and_rejects_non_owner() {
-    let Some(url) = test_url() else { return };
-    let s = RedisMpStore::new(connect(&url).await.unwrap());
+    let (_redis, pool) = redis_fixture().await;
+    let s = RedisMpStore::new(pool);
     let mid = format!("m{}", uuid::Uuid::new_v4().simple());
     s.put_match(&mid, sample_match()).await; // seat_a="0xa", seat_b="0xb"
     let new = ConnRef { instance_id: "i2".into(), conn_id: uuid::Uuid::new_v4() };
@@ -239,11 +312,10 @@ async fn rebind_match_conn_rebinds_seat_and_rejects_non_owner() {
 }
 ```
 
-- [ ] **Step 10: Run both tests (fast + Redis)**
+- [ ] **Step 10: Run both tests (memory + Redis via testcontainers)**
 
 Run: `cargo test -p tunnel-manager rebind_match_conn`
-Run: `TEST_REDIS_URL=redis://localhost:6379 cargo test -p tunnel-manager rebind_match_conn_rebinds_seat_and_rejects_non_owner -- --ignored`
-Expected: both PASS.
+Expected: both the memory unit test and the testcontainers-backed Redis test PASS (Docker required).
 
 - [ ] **Step 11: Lint + commit**
 
@@ -579,10 +651,9 @@ Then in `store/redis.rs` `mod tests`, add a test that `evict` reaches a register
 
 ```rust
 #[tokio::test]
-#[ignore = "requires TEST_REDIS_URL"]
 async fn evict_signals_the_target_ctrl_channel() {
-    let Some(url) = test_url() else { return };
-    let bus = RedisBus::new("instA".into(), connect(&url).await.unwrap()).await.unwrap();
+    let (_redis, pool) = redis_fixture().await;
+    let bus = RedisBus::new("instA".into(), pool).await.unwrap();
     let conn = uuid::Uuid::new_v4();
     let (ctx, _crx) = tokio::sync::mpsc::unbounded_channel::<String>();
     let (cctx, mut ccrx) = tokio::sync::mpsc::unbounded_channel::<String>();
@@ -595,8 +666,7 @@ async fn evict_signals_the_target_ctrl_channel() {
 
 - [ ] **Step 8: Run the eviction test + the existing relay tests**
 
-Run: `TEST_REDIS_URL=redis://localhost:6379 cargo test -p tunnel-manager evict_signals_the_target_ctrl_channel -- --ignored`
-Run: `cargo test -p tunnel-manager` (the existing `relay_to_other` cache tests at `ws.rs:690+` must stay green — they register a single tx; if they call `register`, update them to pass a dummy ctrl tx).
+Run: `cargo test -p tunnel-manager` (runs the new testcontainers-backed `evict_signals_the_target_ctrl_channel` and the existing `relay_to_other` cache tests at `ws.rs:690+`; the latter must stay green — `make_conn_ref` now passes a ctrl tx, updated in Step 6).
 Expected: PASS. Confirm `relay_to_other` itself is unchanged (only the loop and registration changed).
 
 - [ ] **Step 9: Lint + commit**
@@ -915,9 +985,7 @@ git commit -m "docs(adr): record mp resume protocol"
 
 ## Final verification
 
-- [ ] **Fast suite green:** `cargo test -p tunnel-manager` (all non-ignored pass)
-- [ ] **Redis suite green:** `docker run --rm -p 6379:6379 redis:7` then
-  `TEST_REDIS_URL=redis://localhost:6379 cargo test -p tunnel-manager -- --ignored --test-threads=1`
+- [ ] **Whole suite green (incl. testcontainers Redis tests):** `cargo test -p tunnel-manager` — memory, pure, and the testcontainers-backed Redis integration tests all pass in one run (Docker available; no `--ignored`, no `--test-threads=1`).
 - [ ] **Lint/format:** `cargo clippy -p tunnel-manager --all-targets` clean and `cargo fmt --check`
 - [ ] **Hot path unchanged:** `relay_to_other`'s body is byte-identical except that the connection loop gained a ctrl-channel `select!` arm and registration gained a ctrl tx. No Redis/on-chain op added to the per-move path. Confirm with `git diff main -- backend/tunnel-manager/src/mp/ws.rs` (only the resume arm, disconnect notice, cache-population, ctrl arm, and registration signatures changed).
 
