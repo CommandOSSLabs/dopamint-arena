@@ -62,23 +62,59 @@ export function PvpScene({
       className={`h-full flex flex-col text-on-surface relative ${isPortrait ? "w-full gap-3 p-2" : "w-[95%] max-w-5xl mx-auto gap-4 pt-0 pb-0 px-6"}`}
     >
       {(!isPortrait || !playing) && (
-        <div className="flex items-center justify-between border-b-[6px] border-primary/20 pb-4 mt-2 shrink-0">
-          <button
-            onClick={() => {
-              g.leave();
-              onBack();
-            }}
-            className="text-2xl font-bold text-secondary hover:text-primary transition-colors flex items-center gap-2"
+        <div
+          className={`flex justify-between border-primary/20 mt-2 shrink-0 ${
+            isPortrait
+              ? "border-b-2 pb-2 items-center"
+              : "border-b-[6px] pb-4 items-center"
+          }`}
+        >
+          {isPortrait ? (
+            <div className="flex flex-col items-start gap-0.5">
+              <span className="text-xl font-headline-xl uppercase tracking-widest text-primary font-bold">
+                PvP Matchmaking
+              </span>
+              <button
+                onClick={() => {
+                  g.leave();
+                  onBack();
+                }}
+                className="text-xs font-bold text-secondary hover:text-primary transition-colors flex items-center gap-1"
+              >
+                <span className="material-symbols-outlined text-base">
+                  arrow_back
+                </span>{" "}
+                Back
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => {
+                g.leave();
+                onBack();
+              }}
+              className="text-2xl font-bold text-secondary hover:text-primary transition-colors flex items-center gap-2"
+            >
+              <span className="material-symbols-outlined text-3xl">
+                arrow_back
+              </span>{" "}
+              Back
+            </button>
+          )}
+
+          {!isPortrait && (
+            <span className="text-3xl md:text-4xl font-headline-xl uppercase tracking-widest text-primary font-bold">
+              PvP Matchmaking
+            </span>
+          )}
+
+          <span
+            className={`font-mono text-on-surface/60 bg-surface rounded-lg border-primary/10 shadow-sm ${
+              isPortrait
+                ? "text-xs px-2.5 py-1 border"
+                : "text-xl px-4 py-2 border-2"
+            }`}
           >
-            <span className="material-symbols-outlined text-3xl">
-              arrow_back
-            </span>{" "}
-            Back
-          </button>
-          <span className="text-3xl md:text-4xl font-headline-xl uppercase tracking-widest text-primary font-bold">
-            PvP Matchmaking
-          </span>
-          <span className="text-xl font-mono text-on-surface/60 bg-surface px-4 py-2 rounded-lg border-2 border-primary/10 shadow-sm">
             {g.address.slice(0, 8)}…
           </span>
         </div>
