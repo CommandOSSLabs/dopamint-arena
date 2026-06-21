@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import {
   useBotGame,
   type Difficulty,
@@ -28,12 +28,8 @@ function AppContent() {
   const [difficulty, setDifficulty] = useState<Difficulty>("fast");
   const [gameType, setGameType] = useState<GameType>("ttt");
   const [boardSize, setBoardSize] = useState<number>(15);
-  const [windowWidth, setWindowWidth] = useState(
-    typeof window !== "undefined" ? window.innerWidth : 1024,
-  );
-  const [windowHeight, setWindowHeight] = useState(
-    typeof window !== "undefined" ? window.innerHeight : 768,
-  );
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [dimensions, setDimensions] = useState({ width: 1024, height: 768 });
 
   // Both hooks are always called (rules of hooks); only the active one is driven. They share
   // the same bot identities and SuiClient, so the idle hook costs only one extra balance read.
@@ -43,14 +39,25 @@ function AppContent() {
 
   const funded = g.balances.x > 0n && g.balances.o > 0n;
 
-  // Track window resizing to dynamically toggle scene target sizing
+  // Track the actual container element's parent bounds to determine orientation
   useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+
+    const parent = el.parentElement;
+    if (!parent) return;
+
     const handleResize = () => {
-      setWindowWidth(window.innerWidth);
-      setWindowHeight(window.innerHeight);
+      const w = parent.clientWidth || window.innerWidth;
+      const h = parent.clientHeight || window.innerHeight;
+      setDimensions({ width: w, height: h });
     };
-    window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
+
+    const observer = new ResizeObserver(handleResize);
+    observer.observe(parent);
+    handleResize();
+
+    return () => observer.disconnect();
   }, []);
 
   // If the wallet disconnects, fall back to the login scene (and stop any loop).
@@ -69,11 +76,13 @@ function AppContent() {
     const hasNavigated = sessionStorage.getItem("tictactoe_auto_navigated");
     if (scene === "login" && !hasNavigated) {
       sessionStorage.setItem("tictactoe_auto_navigated", "true");
-      
+
       const randomGameType = Math.random() > 0.5 ? "caro" : "ttt";
       const randomDifficulty = "fast";
-      const randomBoardSize = ([15, 19, 25] as const)[Math.floor(Math.random() * 3)];
-      
+      const randomBoardSize = ([15, 19, 25] as const)[
+        Math.floor(Math.random() * 3)
+      ];
+
       setGameType(randomGameType);
       setDifficulty(randomDifficulty);
       setBoardSize(randomBoardSize);
@@ -85,7 +94,7 @@ function AppContent() {
 
     if (scene === "setup") {
       if (g.phase === "funding") return;
-      
+
       if (!funded) {
         console.log("[tictactoe] Auto-funding bots...");
         g.fund();
@@ -112,7 +121,7 @@ function AppContent() {
     setScene("setup");
   };
 
-  const isPortrait = windowWidth < windowHeight;
+  const isPortrait = dimensions.width < dimensions.height;
   let targetWidth = 500;
   let targetHeight = 750;
 
@@ -124,12 +133,12 @@ function AppContent() {
     targetHeight = isPortrait ? 1100 : 900;
   } else if (scene === "game") {
     targetWidth = isPortrait ? 500 : 980;
-    targetHeight = isPortrait ? 1300 : 850;
-    if (gameType === "caro") targetHeight = isPortrait ? 1400 : 900;
+    targetHeight = isPortrait ? 800 : 850;
+    if (gameType === "caro") targetHeight = isPortrait ? 850 : 900;
   } else if (scene === "pvp") {
     targetWidth = isPortrait ? 500 : 1060;
-    targetHeight = isPortrait ? 1300 : 900;
-    if (gameType === "caro") targetHeight = isPortrait ? 1400 : 950;
+    targetHeight = isPortrait ? 800 : 900;
+    if (gameType === "caro") targetHeight = isPortrait ? 850 : 950;
   }
 
   return (
@@ -137,7 +146,10 @@ function AppContent() {
       {/* Vertical Margin Line (Notebook binding line) */}
       <div className="absolute top-0 bottom-0 left-[20px] md:left-[32px] w-0 border-l-double border-l-[3px] border-secondary z-0 pointer-events-none opacity-80" />
 
-      <div className="w-full h-full flex items-center justify-center z-10 pl-[20px] md:pl-[32px]">
+      <div
+        ref={containerRef}
+        className="w-full h-full flex items-center justify-center z-10 pl-[20px] md:pl-[32px]"
+      >
         <GameCardScale targetWidth={targetWidth} targetHeight={targetHeight}>
           {scene === "login" && (
             <LoginScene
