@@ -33,9 +33,33 @@ impl LifecycleKind {
     }
 }
 
+/// Serialize a `u64`-derived `Option<i64>` as a decimal STRING on the JSON wire (ADR-0002: u64
+/// values travel as decimal strings), so the browser keeps full precision past 2^53 — a balance
+/// over ~9.0M SUI (2^53 MIST) would otherwise round-trip lossily through a JS `number` and break
+/// the in-browser balance-conservation check. The Rust type stays `i64` (Postgres BIGINT).
+mod opt_u64_str {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(v: &Option<i64>, s: S) -> Result<S::Ok, S::Error> {
+        match v {
+            Some(n) => s.serialize_some(&n.to_string()),
+            None => s.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<i64>, D::Error> {
+        match Option::<String>::deserialize(d)? {
+            Some(st) => st.parse().map(Some).map_err(serde::de::Error::custom),
+            None => Ok(None),
+        }
+    }
+}
+
 /// One durable, queryable settlement-index row, keyed by `tx_digest`. u64 on-chain
 /// values are stored as i64 (Postgres BIGINT) — SUI amounts and nonces are well within
-/// i63 range. JSON is camelCase to match the SDK/frontend (ADR-0002).
+/// i63 range. JSON is camelCase to match the SDK/frontend (ADR-0002); monetary u64 fields go
+/// out as decimal strings (see `opt_u64_str`). `checkpoint`/`timestamp_ms` stay numeric — they
+/// are far below 2^53 for centuries and feed `Date`/cursor logic; revisit if that ever changes.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SettlementRow {
@@ -44,8 +68,11 @@ pub struct SettlementRow {
     pub tunnel_id: String,
     pub party_a_addr: Option<String>,
     pub party_b_addr: Option<String>,
+    #[serde(with = "opt_u64_str")]
     pub party_a_balance: Option<i64>,
+    #[serde(with = "opt_u64_str")]
     pub party_b_balance: Option<i64>,
+    #[serde(with = "opt_u64_str")]
     pub final_nonce: Option<i64>,
     pub transcript_root: Option<String>,
     pub proof_url: Option<String>,
@@ -97,4 +124,55 @@ pub trait SettlementStore: Send + Sync {
     async fn list(&self, q: &SettlementQuery) -> anyhow::Result<SettlementPage>;
     /// Maintained counter (write-time, by the indexer's Diesel trigger), not a runtime aggregate.
     async fn settled_count(&self) -> anyhow::Result<i64>;
+}
+
+#[cfg(test)]
+mod wire_tests {
+    use super::*;
+
+    fn row(party_a_balance: Option<i64>, final_nonce: Option<i64>) -> SettlementRow {
+        SettlementRow {
+            tx_digest: "d".into(),
+            kind: LifecycleKind::Settled,
+            tunnel_id: "0xt".into(),
+            party_a_addr: None,
+            party_b_addr: None,
+            party_a_balance,
+            party_b_balance: Some(0),
+            final_nonce,
+            transcript_root: None,
+            proof_url: None,
+            walrus_blob_id: None,
+            checkpoint: 1,
+            timestamp_ms: 2,
+            closed_at_ms: None,
+            game: None,
+        }
+    }
+
+    #[test]
+    fn u64_balances_serialize_as_decimal_strings_and_roundtrip_past_2_53() {
+        // A balance past 2^53 MIST would round-trip lossily through a JS `number`; on the wire it
+        // must be a string so the browser BigInts it exactly (else the conservation check breaks).
+        let big = 9_007_199_254_740_993; // 2^53 + 1, unrepresentable as an f64
+        let r = row(Some(big), Some(7));
+        let json = serde_json::to_value(&r).unwrap();
+        assert_eq!(json["partyABalance"], serde_json::json!("9007199254740993"));
+        assert_eq!(json["finalNonce"], serde_json::json!("7"));
+        assert!(json["partyBBalance"].is_string());
+        // checkpoint/timestamp intentionally stay numeric (documented divergence on the struct).
+        assert!(json["checkpoint"].is_number());
+        assert_eq!(serde_json::from_value::<SettlementRow>(json).unwrap(), r);
+    }
+
+    #[test]
+    fn null_u64_fields_serialize_as_json_null() {
+        let json = serde_json::to_value(row(None, None)).unwrap();
+        assert!(json["partyABalance"].is_null());
+        assert!(json["finalNonce"].is_null());
+        assert_eq!(
+            serde_json::from_value::<SettlementRow>(json).unwrap().party_a_balance,
+            None
+        );
+    }
 }
