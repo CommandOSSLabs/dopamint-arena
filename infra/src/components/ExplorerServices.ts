@@ -48,9 +48,10 @@ export function createExplorerServices(args: ExplorerServicesArgs): ExplorerServ
           name: "indexer",
           image: `${repo}:${tag}`,
           essential: true,
-          command: ["/usr/local/bin/indexer"],
+          // Framework IngestionClientArgs has a required(true) clap arg-group; the binary
+          // exits immediately without a checkpoint source. This is the testnet remote store.
+          command: ["/usr/local/bin/indexer", "--remote-store-url", "https://checkpoints.testnet.sui.io"],
           environment: [
-            { name: "SUI_RPC_URL", value: "https://fullnode.testnet.sui.io:443" },
             { name: "TUNNEL_PACKAGE_ID", value: "0x0b89fe86e42cdbfd1e614757a83d014b455d12923d0dded58842ab18f8a5a22b" },
             { name: "REDIS_PUBSUB_URL", value: `rediss://${pubsub}:6379` },
           ],
