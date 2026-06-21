@@ -295,7 +295,7 @@ export function SetupScene({
 
   return (
     <div
-      className={`w-[95%] max-w-5xl h-full flex flex-col relative ${isPortrait ? "gap-3" : "gap-6 pt-0 pb-0"}`}
+      className={`h-full flex flex-col relative ${isPortrait ? "w-full gap-3 p-2" : "w-[95%] max-w-5xl gap-6 pt-0 pb-0"}`}
     >
       {/* Page Header */}
       <header

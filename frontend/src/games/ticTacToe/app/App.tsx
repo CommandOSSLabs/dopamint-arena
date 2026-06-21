@@ -130,7 +130,7 @@ function AppContent() {
     targetHeight = isPortrait ? 800 : 500;
   } else if (scene === "setup") {
     targetWidth = isPortrait ? 500 : 1000;
-    targetHeight = isPortrait ? 1100 : 900;
+    targetHeight = isPortrait ? 800 : 900;
   } else if (scene === "game") {
     targetWidth = isPortrait ? 500 : 980;
     targetHeight = isPortrait ? 800 : 850;

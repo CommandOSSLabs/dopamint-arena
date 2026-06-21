@@ -59,7 +59,7 @@ export function PvpScene({
 
   return (
     <div
-      className={`w-[95%] max-w-5xl mx-auto h-full flex flex-col ${isPortrait && playing ? "gap-2 pt-2 pb-2 px-2" : "gap-4 pt-0 pb-0 px-6"} text-on-surface relative`}
+      className={`h-full flex flex-col text-on-surface relative ${isPortrait ? "w-full gap-3 p-2" : "w-[95%] max-w-5xl mx-auto gap-4 pt-0 pb-0 px-6"}`}
     >
       {(!isPortrait || !playing) && (
         <div className="flex items-center justify-between border-b-[6px] border-primary/20 pb-4 mt-2 shrink-0">
