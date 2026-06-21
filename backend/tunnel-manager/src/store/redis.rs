@@ -17,11 +17,12 @@ use crate::state::{GameStat, SessionRecord, StatsSnapshot, TunnelEvent, TunnelSt
 
 const SESSION_TTL: i64 = 24 * 3600;
 const MATCH_TTL: i64 = 6 * 3600;
+// Dedup horizon for recent-events: must exceed the indexer's worst-case cursor-replay window.
+const SEEN_TTL: i64 = 24 * 3600;
 
-// Atomic dedup-then-push for the recent-events ring. SADD returns 1 only for a new digest,
-// so a re-polled event (cursor restart / second indexer) never double-inserts. Newest-first
-// via LPUSH; LTRIM bounds the list. `events:seen` is unbounded but tiny for a demo window
-// (same accepted trade-off as stats:tunnels:active).
+// Atomic dedup-then-push for the recent-events ring. Dedup is a per-digest `events:seen:<digest>` key with a TTL, so the dedup set self-expires (no unbounded growth).
+// A re-polled event (cursor restart / second indexer) never double-inserts. Newest-first
+// via LPUSH; LTRIM bounds the list.
 //
 // On a seen digest it is NOT a blind no-op: the /settle handler's enriched row (with a Walrus
 // proofUrl) and the indexer's bare row race for the same close — and the handler loses when its
@@ -29,9 +30,9 @@ const MATCH_TTL: i64 = 6 * 3600;
 // proofUrl the stored one lacks, upgrade it in place (cjson + LSET) so the proof link is never
 // lost; never downgrade an existing proofUrl. Atomic under the script lock, so the LRANGE/LSET
 // pair sees no concurrent mutation.
-// KEYS[1]=events:recent KEYS[2]=events:seen  ARGV[1]=json ARGV[2]=digest ARGV[3]=cap
+// KEYS[1]=events:recent KEYS[2]=events:seen:<digest>  ARGV[1]=json ARGV[2]=digest ARGV[3]=cap ARGV[4]=ttl
 const PUSH_RECENT_EVENT: &str = r#"
-if redis.call('SADD', KEYS[2], ARGV[2]) == 1 then
+if redis.call('SET', KEYS[2], '1', 'NX', 'EX', tonumber(ARGV[4])) then
   redis.call('LPUSH', KEYS[1], ARGV[1])
   redis.call('LTRIM', KEYS[1], 0, tonumber(ARGV[3]) - 1)
   return 1
@@ -206,11 +207,15 @@ impl ControlStore for RedisControlStore {
             .pool
             .eval::<i64, _, _, _>(
                 PUSH_RECENT_EVENT,
-                vec!["events:recent".to_string(), "events:seen".to_string()],
+                vec![
+                    "events:recent".to_string(),
+                    format!("events:seen:{}", ev.tx_digest),
+                ],
                 vec![
                     json,
                     ev.tx_digest.clone(),
                     crate::store::RECENT_EVENTS_CAP.to_string(),
+                    SEEN_TTL.to_string(),
                 ],
             )
             .await;
@@ -909,6 +914,32 @@ mod tests {
             Some(proof),
             "bare row never downgrades a proofUrl"
         );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires TEST_REDIS_URL"]
+    async fn recent_events_dedup_key_is_per_digest_with_ttl() {
+        let Some(url) = test_url() else { return };
+        let pool = connect(&url).await.unwrap();
+        let s = RedisControlStore::new(pool.clone());
+        let digest = format!("d{}", uuid::Uuid::new_v4().simple());
+        let ev = crate::state::TunnelEvent {
+            tunnel_id: "0xt".into(),
+            kind: crate::state::TunnelEventKind::Settled,
+            party_a_balance: Some(1),
+            party_b_balance: Some(1),
+            transcript_root: None,
+            tx_digest: digest.clone(),
+            timestamp_ms: 1,
+            proof_url: None,
+        };
+        s.push_recent_event(ev).await;
+        // Dedup is tracked by a per-digest key that carries a positive TTL (self-cleaning).
+        let ttl: i64 = pool
+            .ttl(format!("events:seen:{digest}"))
+            .await
+            .unwrap_or(-2);
+        assert!(ttl > 0, "per-digest dedup key must have a TTL, got {ttl}");
     }
 
     #[tokio::test]
