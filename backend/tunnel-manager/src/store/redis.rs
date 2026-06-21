@@ -20,7 +20,8 @@ const MATCH_TTL: i64 = 6 * 3600;
 // Dedup horizon for recent-events: must exceed the indexer's worst-case cursor-replay window.
 const SEEN_TTL: i64 = 24 * 3600;
 
-// Atomic dedup-then-push for the recent-events ring. Dedup is a per-digest `events:seen:<digest>` key with a TTL, so the dedup set self-expires (no unbounded growth).
+// Atomic dedup-then-push for the recent-events ring. Dedup is a per-digest
+// `events:seen:<digest>` key with a TTL, so the dedup set self-expires (no unbounded growth).
 // A re-polled event (cursor restart / second indexer) never double-inserts. Newest-first
 // via LPUSH; LTRIM bounds the list.
 //
@@ -296,8 +297,6 @@ redis.call('RPUSH', KEYS[1], ARGV[1])
 return false
 "#;
 
-// Presence compare-and-delete: only remove if the stored conn id still matches.
-// KEYS[1]=presence:<wallet>  ARGV[1]=conn_id string
 // Presence compare-and-delete on a single key holding the full ConnRef JSON: delete only if
 // the stored conn_id still matches. cjson.decode reads conn_id (a string) only; nothing is
 // re-encoded. KEYS[1]=presence:<wallet>  ARGV[1]=conn_id string
@@ -359,6 +358,16 @@ local cur = redis.call('HGET', KEYS[1], 'checkpoint_nonce')
 if cur and tonumber(ARGV[1]) < tonumber(cur) then return 0 end
 redis.call('HSET', KEYS[1], 'latest_checkpoint', ARGV[2], 'checkpoint_nonce', ARGV[1])
 redis.call('EXPIRE', KEYS[1], tonumber(ARGV[3]))
+return 1
+"#;
+
+// Set tunnel_id only if the match still exists; refresh the 6h TTL. Mirrors the memory
+// impl's no-op-on-absent behavior and avoids leaking a one-field hash.
+// KEYS[1]=match:<id>  ARGV[1]=tunnel_id  ARGV[2]=ttl
+const SET_TUNNEL_ID: &str = r#"
+if redis.call('EXISTS', KEYS[1]) == 0 then return 0 end
+redis.call('HSET', KEYS[1], 'tunnel_id', ARGV[1])
+redis.call('EXPIRE', KEYS[1], tonumber(ARGV[2]))
 return 1
 "#;
 
@@ -534,15 +543,17 @@ impl MpStore for RedisMpStore {
     }
 
     async fn set_tunnel_id(&self, match_id: &str, tunnel_id: &str) {
-        // Independent field write — cannot clobber the checkpoint. Refresh the TTL.
-        let key = format!("match:{match_id}");
-        let res: Result<i64, _> = self.pool.hset(&key, ("tunnel_id", tunnel_id)).await;
+        let res: Result<i64, _> = self
+            .pool
+            .eval(
+                SET_TUNNEL_ID,
+                vec![format!("match:{match_id}")],
+                vec![tunnel_id.to_owned(), MATCH_TTL.to_string()],
+            )
+            .await;
         if let Err(e) = res {
-            tracing::warn!(error = %e, "redis set_tunnel_id hset failed");
-            return;
+            tracing::warn!(error = %e, "redis set_tunnel_id eval failed");
         }
-        // fred 9.4: `expire(key, seconds)` is 2-arg (returns 1 on success). Refresh the 6h TTL.
-        let _: Result<i64, _> = self.pool.expire(&key, MATCH_TTL).await;
     }
 
     async fn record_checkpoint(&self, match_id: &str, cp: crate::mp::Checkpoint) {
@@ -969,6 +980,33 @@ mod tests {
         assert_eq!(
             wins, 1,
             "exactly one concurrent accept may consume the invite"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires TEST_REDIS_URL"]
+    async fn take_invite_rejects_wrong_recipient_and_preserves_invite() {
+        let Some(url) = test_url() else { return };
+        let s = RedisMpStore::new(connect(&url).await.unwrap());
+        let mid = format!("m{}", uuid::Uuid::new_v4().simple());
+        let inv = crate::mp::DirectedInvite {
+            from: "0xa".into(),
+            to: "0xb".into(),
+            game: "ttt".into(),
+            from_conn: ConnRef {
+                instance_id: "i".into(),
+                conn_id: uuid::Uuid::nil(),
+            },
+        };
+        s.put_invite(&mid, inv).await;
+        // Wrong recipient must get None and leave the invite intact.
+        let rejected = s.take_invite(&mid, "0xwrong").await;
+        assert!(rejected.is_none(), "wrong recipient must be rejected");
+        // The invite must still be present for the correct recipient.
+        let accepted = s.take_invite(&mid, "0xb").await;
+        assert!(
+            accepted.is_some(),
+            "invite must still be present after wrong-recipient attempt"
         );
     }
 
