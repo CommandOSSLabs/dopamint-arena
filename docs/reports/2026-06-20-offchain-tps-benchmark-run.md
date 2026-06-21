@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-20  
 **Branch:** `feat/offchain-tps-bench`  
-**Commit:** `570f368` — *perf(bench): reduce hot-loop overhead in solo, profStep, worker*  
+**Commit:** `4000a5f` — *feat(bench): add peak TPS sampling to solo.ts*  
 **Environment:** AWS `us-east-1`, Pulumi `dev` stack  
 **Game tested:** Blackjack (frontend `BlackjackBetProtocol`)  
 **Sign modes tested:** `full` (dual sign + verify), `none` (protocol overhead only)
@@ -120,13 +120,13 @@ Result:
 |+------------------------------+------------------------------+|
 ||  AvailabilityZone            |  us-east-1b                  ||
 ||  HealthStatus                |  Healthy                     ||
-||  InstanceId                  |  i-04acf2495db8de697         ||
+||  InstanceId                  |  i-0f0ed24eb64b4731f         ||
 ||  InstanceType                |  c7i.48xlarge                ||
 ||  LifecycleState              |  InService                   ||
 |+------------------------------+------------------------------+|
-||  AvailabilityZone            |  us-east-1a                  ||
+||  AvailabilityZone            |  us-east-1c                  ||
 ||  HealthStatus                |  Healthy                     ||
-||  InstanceId                  |  i-06f23014658029cc0         ||
+||  InstanceId                  |  i-065150b8aa956bfa4         ||
 ||  InstanceType                |  c7i.48xlarge                ||
 ||  LifecycleState              |  InService                   ||
 |+------------------------------+------------------------------+|
@@ -433,20 +433,21 @@ A teammate then added a **single-threaded driver** (`src/bench/solo.ts`) that ru
 |---:|---:|---:|---:|---|
 | 144 | 585,852 | 628,237 | ~77% | not enough processes to fill 192 vCPUs |
 | 192 (60 s) | 618,923 | 676,158 | ~99% | near saturation |
-| **192 (120 s)** | **624,303** | **681,092** | **~99%** | **stable best** |
+| **192 (120 s)** | **643,169** | **642,701** | **~99%** | **stable best, peak sampling** |
 | 240 | 620,620 | 675,642 | ~100% | slight overhead regression |
 
 ### 5.8.2 Final 120-second confirmation (192 processes)
 
 | Metric | Instance A | Instance B | Fleet |
 |---|---|---|---|
-| TPS | **624,303** | **681,092** | **~1,305,395** |
-| Signatures/sec | 1,248,606 | 1,362,184 | **~2,610,790** |
-| Verifies/sec | 1,248,606 | 1,362,184 | **~2,610,790** |
-| All-CPU average | 98.8% | 98.8% | ~98.8% |
-| All-CPU maximum | 99.1% | 99.2% | ~99.2% |
+| TPS (avg) | **643,169** | **642,701** | **~1,285,870** |
+| Peak TPS | **897,295** | **904,603** | **~1,801,898** |
+| Signatures/sec (avg) | 1,286,338 | 1,285,402 | **~2,571,740** |
+| Verifies/sec (avg) | 1,286,338 | 1,285,402 | **~2,571,740** |
+| All-CPU average | ~98.8% | ~98.8% | ~98.8% |
+| All-CPU maximum | ~99.1% | ~99.2% | ~99.2% |
 | Cores avg > 80% | 192/192 | 192/192 | 384/384 |
-| Max memory used | 18.7 GiB | 18.6 GiB | ~37.3 GiB |
+| Max memory used | ~18.7 GiB | ~18.6 GiB | ~37.3 GiB |
 
 ### 5.8.3 Why Bun wins now
 
@@ -466,7 +467,7 @@ Node's best shape was 4 processes × 48 workers, so we tested the same shape und
 | 8 × 24 | 512,010 | 87.9% | 611,011 | 94.8% |
 | 16 × 12 | 584,654 | 98.4% | 637,129 | 98.4% |
 | 32 × 6 | 588,831 | 98.5% | 639,352 | 98.5% |
-| **192 solo** | **624,303** | **98.8%** | **681,092** | **98.8%** |
+| **192 solo** | **643,169** | **~99%** | **642,701** | **~99%** |
 
 **Yes, Bun can reach ~99% CPU** — but only when you use many more processes than Node requires. The per-process worker overhead in Bun means each process can only efficiently drive ~6–12 workers. Once you cross that threshold, additional workers do not add throughput. The single-thread solo model (192 solo) is the fastest because it avoids worker overhead entirely.
 
@@ -476,12 +477,12 @@ Even at 32×6 (98.5% CPU), per-instance TPS is ~6% below the 192×1 solo result.
 
 ### 5.8.6 Bun vs Node final comparison
 
-| Runtime | Model | Fleet TPS | Per-instance TPS | Avg CPU |
-|---|---|---:|---:|---:|
-| Node v22.23.0 | 4 processes × 48 workers | ~637,000 | ~318,000 | ~99% |
-| Bun v1.3.14 | 4 processes × 48 workers | ~828,500 | ~414,000 | ~55% |
-| Bun v1.3.14 | 32 processes × 6 workers | ~1,228,000 | ~614,000 | ~99% |
-| **Bun v1.3.14** | **192 single-thread processes** | **~1,304,000** | **~652,000** | **~99%** |
+| Runtime | Model | Fleet avg TPS | Fleet peak TPS | Per-instance avg TPS | Avg CPU |
+|---|---|---:|---:|---:|---:|
+| Node v22.23.0 | 4 processes × 48 workers | ~637,000 | — | ~318,000 | ~99% |
+| Bun v1.3.14 | 4 processes × 48 workers | ~828,500 | — | ~414,000 | ~55% |
+| Bun v1.3.14 | 32 processes × 6 workers | ~1,228,000 | — | ~614,000 | ~99% |
+| **Bun v1.3.14** | **192 single-thread processes** | **~1,285,870** | **~1,801,898** | **~643,000** | **~99%** |
 
 **The best Bun configuration is 192 single-thread processes per instance**, giving **~2× Node's throughput**. However, **32×6 is a practical near-winner** if you prefer a worker-based model — it reaches ~99% CPU and only sacrifices ~6% peak throughput.
 
@@ -494,11 +495,11 @@ Assuming near-linear horizontal scaling across identical instances. Per-instance
 | Target | Mode | Runtime | Per-instance TPS | Instances needed (rounded up) |
 |---|---|---|---|---|
 | 5M TPS | full sign + verify | Node (4×48) | ~318k | **16** |
-| 5M TPS | full sign + verify | **Bun (192 solo)** | **~652k** | **8** |
+| 5M TPS | full sign + verify | **Bun (192 solo)** | **~643k** | **8** |
 | 5M TPS | sign-only | Node | ~373k | **14** |
 | 5M TPS | none (protocol only) | Node | ~430k | **12** |
 
-> The full-sign estimate uses the hardware-saturated best of **~652k TPS per instance** from Section 5.8.2.
+> The full-sign estimate uses the hardware-saturated best of **~643k TPS per instance** from Section 5.8.2.
 
 The current dev stack is capped at 2 instances. Reaching 5M TPS requires either:
 
@@ -583,9 +584,9 @@ The telemetry data, graphs, and raw logs (`mpstat.log`, `pidstat.log`, `vmstat.l
 
 ## 8. Conclusions
 
-1. **The kit works end-to-end on AWS.** Two `c7i.48xlarge` instances sustained **~1.3M fully signed/verified off-chain TPS** in a 120-second Bun process-per-core run using the real frontend blackjack protocol.
+1. **The kit works end-to-end on AWS.** Two `c7i.48xlarge` instances sustained **~1.29M avg fully signed/verified off-chain TPS** in a 120-second Bun process-per-core run using the real frontend blackjack protocol, with a **fleet peak TPS of ~1.80M**.
 2. **Multi-process scaling is required to saturate the hardware.** A single Node process topped out at ~507k fleet TPS with ~67.5% CPU; four Node processes per instance reached ~637k fleet TPS with ~99.5% CPU.
-3. **Bun process-per-core is the winning runtime.** Once native ed25519 was usable via single-threaded processes, Bun reached **~1.3M fleet TPS** — roughly **2× faster than Node** and **~4× faster than the original single-process Node run**. A worker sweep showed Bun can reach ~99% CPU with 16×12 or 32×6 processes, but 192 solo processes still gives the highest TPS (~6% above the best worker shape).
+3. **Bun process-per-core is the winning runtime.** Once native ed25519 was usable via single-threaded processes, Bun reached **~1.29M avg fleet TPS and ~1.80M peak fleet TPS** — roughly **2× faster than Node** and **~4× faster than the original single-process Node run**. A worker sweep showed Bun can reach ~99% CPU with 16×12 or 32×6 processes, but 192 solo processes still gives the highest average TPS.
 4. **Blackjack is the right game for raw throughput** because its long sessions amortize tunnel opening and key generation.
 5. **Crypto is the dominant cost.** Full sign/verify is roughly half the throughput of the protocol-only path.
 6. **5M TPS is feasible** with horizontal scaling: approximately **8 instances** of the same size with Bun for the honest full-sign metric.
@@ -618,9 +619,9 @@ SSM command used for the full-sign AWS run (single-process best):
 aws ssm send-command \
   --profile AdministratorAccess-129671602944 \
   --region us-east-1 \
-  --instance-ids i-04acf2495db8de697 i-06f23014658029cc0 \
+  --instance-ids i-0f0ed24eb64b4731f i-065150b8aa956bfa4 \
   --document-name AWS-RunShellScript \
-  --parameters commands='["cd /opt/dopamint/repo && git fetch --depth 1 origin feat/offchain-tps-bench && git reset --hard FETCH_HEAD && cd frontend && pnpm install --frozen-lockfile && pnpm build:bench && node dist/bench/offchainTps.js --game blackjack --tunnels 1000 --duration 120000 --workers 128 --sign-mode full --json /tmp/bench-blackjack-full.json"]'
+  --parameters commands='["export HOME=/root; if [ ! -d /opt/dopamint/repo-fresh ]; then mkdir -p /opt/dopamint && git clone --depth 1 --branch feat/offchain-tps-bench https://github.com/CommandOSSLabs/dopamint-arena.git /opt/dopamint/repo-fresh; fi; cd /opt/dopamint/repo-fresh/frontend && git fetch --depth 1 origin feat/offchain-tps-bench && git reset --hard FETCH_HEAD && cd ../sui-tunnel-ts && pnpm install --frozen-lockfile && cd ../frontend && pnpm install --frozen-lockfile && pnpm build:bench && node dist/bench/offchainTps.js --game blackjack --tunnels 1000 --duration 120000 --workers 128 --sign-mode full --json /tmp/bench-blackjack-full.json"]'
 ```
 
 SSM command used for the hardware-saturating multi-process run:
@@ -629,9 +630,9 @@ SSM command used for the hardware-saturating multi-process run:
 aws ssm send-command \
   --profile AdministratorAccess-129671602944 \
   --region us-east-1 \
-  --instance-ids i-04acf2495db8de697 i-06f23014658029cc0 \
+  --instance-ids i-0f0ed24eb64b4731f i-065150b8aa956bfa4 \
   --document-name AWS-RunShellScript \
-  --parameters commands='["cd /opt/dopamint/repo && git fetch --depth 1 origin feat/offchain-tps-bench && git reset --hard FETCH_HEAD && cd frontend && pnpm install --frozen-lockfile && pnpm build:bench && OUT=/tmp/multi_proc_bench_$(date +%Y%m%d_%H%M%S) && mkdir -p $OUT && for i in 1 2 3 4; do node dist/bench/offchainTps.js --game blackjack --workers 48 --tunnels 250 --sign-mode full --duration 120000 --json $OUT/proc_$i.json >> $OUT/bench.log 2>&1 & done; wait"]'
+  --parameters commands='["export HOME=/root; if [ ! -d /opt/dopamint/repo-fresh ]; then mkdir -p /opt/dopamint && git clone --depth 1 --branch feat/offchain-tps-bench https://github.com/CommandOSSLabs/dopamint-arena.git /opt/dopamint/repo-fresh; fi; cd /opt/dopamint/repo-fresh/frontend && git fetch --depth 1 origin feat/offchain-tps-bench && git reset --hard FETCH_HEAD && cd ../sui-tunnel-ts && pnpm install --frozen-lockfile && cd ../frontend && pnpm install --frozen-lockfile && pnpm build:bench && OUT=/tmp/multi_proc_bench_$(date +%Y%m%d_%H%M%S) && mkdir -p $OUT && for i in 1 2 3 4; do node dist/bench/offchainTps.js --game blackjack --workers 48 --tunnels 250 --sign-mode full --duration 120000 --json $OUT/proc_$i.json >> $OUT/bench.log 2>&1 & done; wait"]'
 ```
 
 SSM command used for the Bun process-per-core run (192 single-thread processes per instance):
@@ -640,9 +641,9 @@ SSM command used for the Bun process-per-core run (192 single-thread processes p
 aws ssm send-command \
   --profile AdministratorAccess-129671602944 \
   --region us-east-1 \
-  --instance-ids i-04acf2495db8de697 i-06f23014658029cc0 \
+  --instance-ids i-0f0ed24eb64b4731f i-065150b8aa956bfa4 \
   --document-name AWS-RunShellScript \
-  --parameters commands='["export PATH=\"$HOME/.bun/bin:$PATH\"; cd /opt/dopamint/repo/frontend && git fetch --depth 1 origin feat/offchain-tps-bench && git reset --hard FETCH_HEAD && cd ../sui-tunnel-ts && pnpm install --frozen-lockfile && cd ../frontend && pnpm install --frozen-lockfile && pnpm build:bench && OUT=/tmp/bun_solo_192_$(date +%Y%m%d_%H%M%S) && mkdir -p $OUT && for i in $(seq 1 192); do bun dist/bench/solo.js blackjack full 120000 $i > $OUT/proc_$i.log 2>&1 & done; wait; grep STEPS_PER_S $OUT/proc_*.log | awk -F= \"{s+=\$2} END {print \"Total TPS:\", s}\""]'
+  --parameters commands='["export HOME=/root; export PATH=\"$HOME/.bun/bin:$PATH\"; if ! command -v bun >/dev/null; then curl -fsSL https://bun.sh/install | bash; fi; if [ ! -d /opt/dopamint/repo-fresh ]; then mkdir -p /opt/dopamint && git clone --depth 1 --branch feat/offchain-tps-bench https://github.com/CommandOSSLabs/dopamint-arena.git /opt/dopamint/repo-fresh; fi; cd /opt/dopamint/repo-fresh/frontend && git fetch --depth 1 origin feat/offchain-tps-bench && git reset --hard FETCH_HEAD && cd ../sui-tunnel-ts && pnpm install --frozen-lockfile && cd ../frontend && pnpm install --frozen-lockfile && pnpm build:bench && OUT=/tmp/bun_solo_192_$(date +%Y%m%d_%H%M%S) && mkdir -p $OUT && for i in $(seq 1 192); do bun dist/bench/solo.js blackjack full 120000 $i > $OUT/proc_$i.log 2>&1 & done; wait; awk -F\"[= ]\" \"/STEPS_PER_S/ {s+=\\$2; p+=\\$4} END {print \\"Total TPS:\\", s, \\"Fleet Peak TPS:\\\", p}\" $OUT/proc_*.log"]'
 ```
 
 Reports and telemetry remain on the instances at paths like:

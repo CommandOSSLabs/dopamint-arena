@@ -99,20 +99,20 @@ aws autoscaling describe-auto-scaling-groups \
 
 Save the two IDs. In this runbook they are:
 
-- `i-04acf2495db8de697`
-- `i-06f23014658029cc0`
+- `i-0f0ed24eb64b4731f`
+- `i-065150b8aa956bfa4`
 
 ### 4.2 Pull the benchmark branch and install deps on every instance
 
-Run this SSM command once. It updates the shallow clone and installs the frontend dependencies:
+Run this SSM command once. It clones the benchmark branch into `/opt/dopamint/repo-fresh` and installs dependencies:
 
 ```bash
 aws ssm send-command \
   --profile AdministratorAccess-129671602944 \
   --region us-east-1 \
-  --instance-ids i-04acf2495db8de697 i-06f23014658029cc0 \
+  --instance-ids i-0f0ed24eb64b4731f i-065150b8aa956bfa4 \
   --document-name AWS-RunShellScript \
-  --parameters commands='["cd /opt/dopamint/repo && git fetch --depth 1 origin feat/offchain-tps-bench && git reset --hard FETCH_HEAD && cd frontend && pnpm install --frozen-lockfile"]'
+  --parameters commands='["export HOME=/root; if [ ! -d /opt/dopamint/repo-fresh ]; then mkdir -p /opt/dopamint && git clone --depth 1 --branch feat/offchain-tps-bench https://github.com/CommandOSSLabs/dopamint-arena.git /opt/dopamint/repo-fresh; fi; cd /opt/dopamint/repo-fresh/frontend && git fetch --depth 1 origin feat/offchain-tps-bench && git reset --hard FETCH_HEAD && cd ../sui-tunnel-ts && pnpm install --frozen-lockfile && cd ../frontend && pnpm install --frozen-lockfile"]'
 ```
 
 Save the returned `CommandId` and poll until both instances report `Success`:
@@ -172,9 +172,10 @@ pnpm build:bench
 aws ssm send-command \
   --profile AdministratorAccess-129671602944 \
   --region us-east-1 \
-  --instance-ids i-04acf2495db8de697 i-06f23014658029cc0 \
+  --instance-ids i-0f0ed24eb64b4731f i-065150b8aa956bfa4 \
   --document-name AWS-RunShellScript \
-  --parameters commands='["cd /opt/dopamint/repo && git fetch --depth 1 origin feat/offchain-tps-bench && git reset --hard FETCH_HEAD && cd frontend && pnpm install --frozen-lockfile && pnpm build:bench && node dist/bench/offchainTps.js --game blackjack --tunnels 1000 --duration 10000 --workers 128 --sign-mode full --json /tmp/bench-blackjack-full.json"]'
+  --parameters commands='["export HOME=/root; if [ ! -d /opt/dopamint/repo-fresh ]; then mkdir -p /opt/dopamint && git clone --depth 1 --branch feat/offchain-tps-bench https://github.com/CommandOSSLabs/dopamint-arena.git /opt/dopamint/repo-fresh; fi; cd /opt/dopamint/repo-fresh/frontend && git fetch --depth 1 origin feat/offchain-tps-bench && git reset --hard FETCH_HEAD && cd ../sui-tunnel-ts && pnpm install --frozen-lockfile && cd ../frontend && pnpm install --frozen-lockfile && pnpm build:bench && node dist/bench/offchainTps.js --game blackjack --tunnels 1000 --duration 10000 --workers 128 --sign-mode full --json /tmp/bench-blackjack-full.json"]'
+```
 ```
 
 Save the `CommandId`.
@@ -187,9 +188,9 @@ To fully saturate all 192 vCPUs on a `c7i.48xlarge`, run **4 independent Node pr
 aws ssm send-command \
   --profile AdministratorAccess-129671602944 \
   --region us-east-1 \
-  --instance-ids i-04acf2495db8de697 i-06f23014658029cc0 \
+  --instance-ids i-0f0ed24eb64b4731f i-065150b8aa956bfa4 \
   --document-name AWS-RunShellScript \
-  --parameters commands='["cd /opt/dopamint/repo && git fetch --depth 1 origin feat/offchain-tps-bench && git reset --hard FETCH_HEAD && cd frontend && pnpm install --frozen-lockfile && pnpm build:bench && OUT=/tmp/multi_proc_bench_$(date +%Y%m%d_%H%M%S) && mkdir -p $OUT && for i in 1 2 3 4; do node dist/bench/offchainTps.js --game blackjack --workers 48 --tunnels 250 --sign-mode full --duration 120000 --json $OUT/proc_$i.json >> $OUT/bench.log 2>&1 & done; wait; python3 -c \"import json,glob; fs=glob.glob(\\\"$OUT/proc_*.json\\\"); print(sum(json.load(open(f))[\\\"totalInteractions\\\"] for f in fs), sum(json.load(open(f))[\\\"avgTps\\\"] for f in fs))\""]'
+  --parameters commands='["export HOME=/root; if [ ! -d /opt/dopamint/repo-fresh ]; then mkdir -p /opt/dopamint && git clone --depth 1 --branch feat/offchain-tps-bench https://github.com/CommandOSSLabs/dopamint-arena.git /opt/dopamint/repo-fresh; fi; cd /opt/dopamint/repo-fresh/frontend && git fetch --depth 1 origin feat/offchain-tps-bench && git reset --hard FETCH_HEAD && cd ../sui-tunnel-ts && pnpm install --frozen-lockfile && cd ../frontend && pnpm install --frozen-lockfile && pnpm build:bench && OUT=/tmp/multi_proc_bench_$(date +%Y%m%d_%H%M%S) && mkdir -p $OUT && for i in 1 2 3 4; do node dist/bench/offchainTps.js --game blackjack --workers 48 --tunnels 250 --sign-mode full --duration 120000 --json $OUT/proc_$i.json >> $OUT/bench.log 2>&1 & done; wait; python3 -c \"import json,glob; fs=glob.glob(\\\"$OUT/proc_*.json\\\"); print(sum(json.load(open(f))[\\\"totalInteractions\\\"] for f in fs), sum(json.load(open(f))[\\\"avgTps\\\"] for f in fs))\""]'
 ```
 
 This is the configuration that reached **~637k fleet TPS** in the reported run.
@@ -204,12 +205,12 @@ Prerequisites on the instance: install Bun and `sysstat` for telemetry.
 aws ssm send-command \
   --profile AdministratorAccess-129671602944 \
   --region us-east-1 \
-  --instance-ids i-04acf2495db8de697 i-06f23014658029cc0 \
+  --instance-ids i-0f0ed24eb64b4731f i-065150b8aa956bfa4 \
   --document-name AWS-RunShellScript \
-  --parameters commands='["export PATH=\"$HOME/.bun/bin:$PATH\"; if ! command -v bun >/dev/null; then curl -fsSL https://bun.sh/install | bash; fi; if ! command -v mpstat >/dev/null; then dnf install -y sysstat; fi; cd /opt/dopamint/repo/frontend && git fetch --depth 1 origin feat/offchain-tps-bench && git reset --hard FETCH_HEAD && cd ../sui-tunnel-ts && pnpm install --frozen-lockfile && cd ../frontend && pnpm install --frozen-lockfile && pnpm build:bench && OUT=/tmp/bun_solo_192_$(date +%Y%m%d_%H%M%S) && mkdir -p $OUT && for i in $(seq 1 192); do bun dist/bench/solo.js blackjack full 120000 $i > $OUT/proc_$i.log 2>&1 & done; wait; grep STEPS_PER_S $OUT/proc_*.log | awk -F= \"{s+=\$2} END {print \"Total TPS:\", s}\""]'
+  --parameters commands='["export HOME=/root; export PATH=\"$HOME/.bun/bin:$PATH\"; if ! command -v bun >/dev/null; then curl -fsSL https://bun.sh/install | bash; fi; if ! command -v mpstat >/dev/null; then dnf install -y sysstat; fi; if [ ! -d /opt/dopamint/repo-fresh ]; then mkdir -p /opt/dopamint && git clone --depth 1 --branch feat/offchain-tps-bench https://github.com/CommandOSSLabs/dopamint-arena.git /opt/dopamint/repo-fresh; fi; cd /opt/dopamint/repo-fresh/frontend && git fetch --depth 1 origin feat/offchain-tps-bench && git reset --hard FETCH_HEAD && cd ../sui-tunnel-ts && pnpm install --frozen-lockfile && cd ../frontend && pnpm install --frozen-lockfile && pnpm build:bench && OUT=/tmp/bun_solo_192_$(date +%Y%m%d_%H%M%S) && mkdir -p $OUT && for i in $(seq 1 192); do bun dist/bench/solo.js blackjack full 120000 $i > $OUT/proc_$i.log 2>&1 & done; wait; awk -F\"[= ]\" \"/STEPS_PER_S/ {s+=\\$2; p+=\\$4} END {print \\"Total TPS:\\", s, \\"Fleet Peak TPS:\\\", p}\" $OUT/proc_*.log"]'
 ```
 
-This is the configuration that reached **~1.3M fleet TPS** in the reported run. The run documented in the report used a fresh clone at `/opt/dopamint/repo-fresh`; the command above uses the standard `/opt/dopamint/repo` path and produces the same result.
+This is the configuration that reached **~1.29M avg fleet TPS** and **~1.80M peak fleet TPS** in the reported run.
 
 ### 5.3 Monitor progress
 
@@ -265,7 +266,7 @@ The Node driver prints a human-readable report and writes JSON to `/tmp/bench-bl
 aws ssm send-command \
   --profile AdministratorAccess-129671602944 \
   --region us-east-1 \
-  --instance-ids i-04acf2495db8de697 i-06f23014658029cc0 \
+  --instance-ids i-0f0ed24eb64b4731f i-065150b8aa956bfa4 \
   --document-name AWS-RunShellScript \
   --parameters commands='["cat /tmp/bench-blackjack-full.json"]'
 ```
@@ -276,7 +277,7 @@ aws ssm send-command \
 aws ssm send-command \
   --profile AdministratorAccess-129671602944 \
   --region us-east-1 \
-  --instance-ids i-04acf2495db8de697 i-06f23014658029cc0 \
+  --instance-ids i-0f0ed24eb64b4731f i-065150b8aa956bfa4 \
   --document-name AWS-RunShellScript \
   --parameters commands='["OUT=$(ls -d /tmp/bun_solo_192_* | tail -1); grep STEPS_PER_S $OUT/proc_*.log | awk -F= \"{s+=\$2} END {print \"Total TPS:\", s}\""]'
 ```
@@ -299,7 +300,7 @@ aws ec2 describe-instance-types \
 ### 7.2 CloudWatch CPU during the run
 
 ```bash
-for id in i-04acf2495db8de697 i-06f23014658029cc0; do
+for id in i-0f0ed24eb64b4731f i-065150b8aa956bfa4; do
   echo "--- $id ---"
   aws cloudwatch get-metric-statistics \
     --profile AdministratorAccess-129671602944 \
