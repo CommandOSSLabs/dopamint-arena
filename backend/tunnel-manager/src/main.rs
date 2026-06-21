@@ -88,6 +88,8 @@ async fn main() -> anyhow::Result<()> {
     spawn_action_flusher(state.clone());
     sui::spawn_event_indexer(state.clone());
 
+    // Clone before `state` is consumed by `.with_state` so we can flush after shutdown.
+    let flush_state = state.clone();
     let app = Router::new()
         .route("/healthz", get(routes::health))
         .route("/health/live", get(routes::live))
@@ -107,20 +109,29 @@ async fn main() -> anyhow::Result<()> {
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
+    // Graceful shutdown completed: push the last sub-second of counted moves so a clean
+    // rollout doesn't drop them (the 1 Hz flusher is gone with the runtime by now).
+    flush_actions(&flush_state).await;
     Ok(())
 }
 
-/// Drain the per-instance move counter into ControlStore once per second. Keeps the
-/// global/per-game totals correct (the broadcaster + /metrics read control.snapshot)
-/// without a Redis round trip per move. Lossy-by-design on crash: ≤1s of display counts.
+/// Drain the per-instance move counter into ControlStore once. At-most-once by design: the
+/// watermark advances at drain time, so a failed push loses ≤1 interval of display counts and
+/// never double-counts. Used both by the 1 Hz flusher and the shutdown drain.
+async fn flush_actions(state: &SharedState) {
+    for (game, delta) in state.actions.drain_deltas() {
+        state.control.add_actions(&game, delta).await;
+    }
+}
+
+/// Drain the per-instance move counter into ControlStore once per second (no Redis round trip
+/// per move). Lossy-by-design on crash: ≤1s of display counts.
 fn spawn_action_flusher(state: SharedState) {
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(std::time::Duration::from_secs(1));
         loop {
             tick.tick().await;
-            for (game, delta) in state.actions.drain_deltas() {
-                state.control.add_actions(&game, delta).await;
-            }
+            flush_actions(&state).await;
         }
     });
 }
@@ -144,4 +155,27 @@ async fn shutdown_signal() {
         _ = term => {},
     }
     tracing::info!("shutdown signal received; draining");
+}
+
+#[cfg(test)]
+mod flush_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn flush_actions_drains_counter_into_control_store() {
+        let state = crate::state::AppState::in_memory_for_test();
+        state.actions.incr("ttt", 3);
+        state.actions.incr("ttt", 2);
+        flush_actions(&state).await;
+        assert_eq!(
+            state.control.snapshot().await.per_game["ttt"].total_actions,
+            5
+        );
+        // Nothing new since the last drain → a second flush adds nothing.
+        flush_actions(&state).await;
+        assert_eq!(
+            state.control.snapshot().await.per_game["ttt"].total_actions,
+            5
+        );
+    }
 }

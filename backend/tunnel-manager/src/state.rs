@@ -20,6 +20,29 @@ pub struct AppState {
 
 pub type SharedState = std::sync::Arc<AppState>;
 
+#[cfg(any(test, feature = "test-util"))]
+impl AppState {
+    /// Build an in-memory-backed `SharedState` for unit tests. Mirrors the no-Redis branch in
+    /// `main.rs`: `InMemoryControlStore`, `InMemoryMpStore`, `LocalBus`, and a stub stats
+    /// channel. No network I/O; always synchronous and deterministic.
+    pub fn in_memory_for_test() -> SharedState {
+        use std::sync::Arc;
+
+        use crate::store::memory::{InMemoryControlStore, InMemoryMpStore, LocalBus};
+
+        let (stats_tx, _) = broadcast::channel(4);
+        Arc::new(AppState {
+            control: Arc::new(InMemoryControlStore::default()),
+            mp: Arc::new(InMemoryMpStore::default()),
+            bus: Arc::new(LocalBus::new("test-instance".to_owned())),
+            settler: crate::sui::SuiSettler::noop(),
+            walrus: crate::walrus::WalrusClient::noop(),
+            stats_tx,
+            actions: crate::stats_counter::LocalActionCounter::default(),
+        })
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SessionRecord {
     pub game: String,
