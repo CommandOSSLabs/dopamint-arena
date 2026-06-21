@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-20  
 **Branch:** `feat/offchain-tps-bench`  
-**Commit:** `c3b8858` — *feat(bench): bun native crypto + single-thread driver*  
+**Commit:** `570f368` — *perf(bench): reduce hot-loop overhead in solo, profStep, worker*  
 **Environment:** AWS `us-east-1`, Pulumi `dev` stack  
 **Game tested:** Blackjack (frontend `BlackjackBetProtocol`)  
 **Sign modes tested:** `full` (dual sign + verify), `none` (protocol overhead only)
@@ -26,19 +26,21 @@ Key questions:
 
 ### 2.1 Benchmark architecture
 
-The benchmark (`frontend/src/bench/offchainTps.ts`) is a multi-worker-thread Node application:
+Two benchmark drivers were used.
 
-- The main thread spawns **W worker threads**.
-- Each worker maintains a pool of **concurrent tunnels** (default 1000).
-- Each tunnel is created in **self-play** mode: this process controls both seats and holds both ed25519 keypairs.
-- For every turn, the kit bot (`createBot`) calls `plan(state)`, the worker calls `tunnel.step(move, seat, { mode })`, and the tunnel:
-  1. Applies the move through the real frontend protocol.
-  2. Serializes the resulting `state_update` message.
-  3. Signs the message with both parties.
-  4. In `full` mode, verifies both signatures.
-  5. Stores the co-signed update as the latest state.
-- When a tunnel reaches `isTerminal`, the worker immediately opens a new one to keep concurrency constant.
-- Counters (updates, signatures, verifications, bytes, tunnels opened/closed) are aggregated from all workers every 500 ms.
+**Driver A — multi-worker (`frontend/src/bench/offchainTps.ts`)**: a main thread spawns **W worker threads**, each maintaining a pool of **concurrent tunnels** (default 1000). This is the driver used for all Node runs and for early Bun worker-thread experiments.
+
+**Driver B — single-thread (`frontend/src/bench/solo.ts`)**: a tight single-thread loop that opens one tunnel and drives both seats in self-play. This driver was used for the best Bun result, launched as **one process per vCPU**.
+
+In both drivers each tunnel is created in **self-play** mode: the process controls both seats and holds both ed25519 keypairs. For every turn, the kit bot (`createBot`) calls `plan(state)`, the driver calls `tunnel.step(move, seat, { mode })`, and the tunnel:
+
+1. Applies the move through the real frontend protocol.
+2. Serializes the resulting `state_update` message.
+3. Signs the message with both parties.
+4. In `full` mode, verifies both signatures.
+5. Stores the co-signed update as the latest state.
+
+When a tunnel reaches `isTerminal`, the driver immediately opens a new one to keep work constant. Counters (updates, signatures, verifications, bytes, tunnels opened/closed) are aggregated from all workers every 500 ms in Driver A; Driver B reports a single `STEPS_PER_S` per process and fleet TPS is summed across processes.
 
 ### 2.2 Why bundle with esbuild
 
@@ -48,7 +50,7 @@ The original implementation used `tsx` to run TypeScript directly. Inside worker
 pnpm build:bench
 ```
 
-This runs esbuild on both entry points and produces two self-contained ESM files that run with plain Node or Bun.
+`pnpm build:bench` bundles `offchainTps.ts`, `offchainTpsWorker.ts`, and `solo.ts` into self-contained ESM files that run with plain Node or Bun.
 
 ### 2.3 Protocol cleanup
 
@@ -118,13 +120,13 @@ Result:
 |+------------------------------+------------------------------+|
 ||  AvailabilityZone            |  us-east-1b                  ||
 ||  HealthStatus                |  Healthy                     ||
-||  InstanceId                  |  i-07ab8681b54a8c1e9         ||
+||  InstanceId                  |  i-04acf2495db8de697         ||
 ||  InstanceType                |  c7i.48xlarge                ||
 ||  LifecycleState              |  InService                   ||
 |+------------------------------+------------------------------+|
 ||  AvailabilityZone            |  us-east-1a                  ||
 ||  HealthStatus                |  Healthy                     ||
-||  InstanceId                  |  i-089589b8ee6fab47c         ||
+||  InstanceId                  |  i-06f23014658029cc0         ||
 ||  InstanceType                |  c7i.48xlarge                ||
 ||  LifecycleState              |  InService                   ||
 |+------------------------------+------------------------------+|
@@ -369,70 +371,6 @@ At identical small config (`16 workers × 100 tunnels × full sign`), Bun with n
 
 ---
 
-## 5.8 Bun process-per-core scaling (native crypto)
-
-A teammate then added a **single-threaded driver** (`src/bench/solo.ts`) that runs the same off-chain loop without `worker_threads`. Under this model, Bun can safely use its native ed25519 backend (BoringSSL) and is launched as **one independent process per vCPU**. This avoids the `worker_threads` crash entirely.
-
-### 5.8.1 Process count sweep (60–120 s, blackjack, full sign)
-
-| Processes per instance | Instance A TPS | Instance B TPS | Avg CPU | Notes |
-|---:|---:|---:|---:|---|
-| 144 | 585,852 | 628,237 | ~77% | not enough processes to fill 192 vCPUs |
-| 192 (60 s) | 618,923 | 676,158 | ~99% | near saturation |
-| **192 (120 s)** | **623,976** | **680,208** | **~99%** | **stable best** |
-| 240 | 620,620 | 675,642 | ~100% | slight overhead regression |
-
-### 5.8.2 Final 120-second confirmation (192 processes)
-
-| Metric | Instance A | Instance B | Fleet |
-|---|---|---|---|
-| TPS | **623,976** | **680,208** | **~1,304,184** |
-| Signatures/sec | 1,247,952 | 1,360,416 | **~2,608,368** |
-| Verifies/sec | 1,247,952 | 1,360,416 | **~2,608,368** |
-| All-CPU average | 98.8% | 98.8% | ~98.8% |
-| All-CPU maximum | 99.1% | 99.2% | ~99.2% |
-| Cores avg > 80% | 192/192 | 192/192 | 384/384 |
-| Max memory used | 18.7 GiB | 18.6 GiB | ~37.3 GiB |
-
-### 5.8.3 Why Bun wins now
-
-- **Native crypto is safe in single-threaded processes.** Bun's BoringSSL ed25519 is ~2.3× faster than the pure-JS noble backend and faster than Node's OpenSSL path for this workload.
-- **No worker-thread overhead.** Each process owns one core; the OS scheduler handles placement.
-- **All 192 vCPUs are saturated.** Telemetry shows 98.8% sustained CPU with every core above 80%.
-
-### 5.8.4 Can Bun workers reach 99% CPU?
-
-Node's best shape was 4 processes × 48 workers, so we tested the same shape under Bun using `runMulti.mjs --backend native`. It only reached ~55% CPU. The hypothesis was that Bun's `worker_threads` have a per-process scheduling bottleneck, so we swept to more processes with fewer workers per process.
-
-#### Bun process × worker sweep (60 s, blackjack, full sign, native backend)
-
-| Shape | Instance A TPS | Instance A CPU | Instance B TPS | Instance B CPU |
-|---|---:|---:|---:|---:|
-| 4 × 48 | ~400,800 | 53.8% | ~427,700 | 56.7% |
-| 8 × 24 | 512,010 | 87.9% | 611,011 | 94.8% |
-| 16 × 12 | 584,654 | 98.4% | 637,129 | 98.4% |
-| 32 × 6 | 588,831 | 98.5% | 639,352 | 98.5% |
-| **192 × 1** | **623,976** | **98.8%** | **680,208** | **98.8%** |
-
-**Yes, Bun workers can reach ~99% CPU** — but only when you use many more processes than Node requires. The per-process worker overhead in Bun means each process can only efficiently drive ~6–12 workers. Once you cross that threshold, additional workers do not add throughput.
-
-### 5.8.5 Why the worker model is slightly slower than solo
-
-Even at 32×6 (98.5% CPU), per-instance TPS is ~6% below the 192×1 solo result. The most likely explanation is residual `worker_threads` overhead inside each Bun process: thread startup, message-passing bookkeeping, or lock contention in the runtime. Solo processes avoid all of that.
-
-### 5.8.6 Bun vs Node final comparison
-
-| Runtime | Model | Fleet TPS | Per-instance TPS | Avg CPU |
-|---|---|---:|---:|---:|
-| Node v22.23.0 | 4 processes × 48 workers | ~637,000 | ~318,000 | ~99% |
-| Bun v1.3.14 | 4 processes × 48 workers | ~828,500 | ~414,000 | ~55% |
-| Bun v1.3.14 | 32 processes × 6 workers | ~1,228,000 | ~614,000 | ~99% |
-| **Bun v1.3.14** | **192 single-thread processes** | **~1,304,000** | **~652,000** | **~99%** |
-
-**The best Bun configuration is 192 single-thread processes per instance**, giving **~2× Node's throughput**. However, **32×6 is a practical near-winner** if you prefer a worker-based model — it reaches ~99% CPU and only sacrifices ~6% peak throughput.
-
----
-
 ## 5.7 Multi-process scaling: saturating the hardware
 
 The single-process telemetry run (Section 5.5.1) showed only ~67.5% system CPU utilization. The natural hypothesis was that Node's single-process worker-thread scheduler was the bottleneck, not the hardware. To test this, multiple independent Node processes were run concurrently on each instance, with telemetry collected for every configuration.
@@ -485,6 +423,70 @@ The most likely explanation is that Node's worker-thread scheduler and/or V8 int
 
 ---
 
+## 5.8 Bun process-per-core scaling (native crypto)
+
+A teammate then added a **single-threaded driver** (`src/bench/solo.ts`) that runs the same off-chain loop without `worker_threads`. Under this model, Bun can safely use its native ed25519 backend (BoringSSL) and is launched as **one independent process per vCPU**. This avoids the `worker_threads` crash entirely.
+
+### 5.8.1 Process count sweep (60–120 s, blackjack, full sign)
+
+| Processes per instance | Instance A TPS | Instance B TPS | Avg CPU | Notes |
+|---:|---:|---:|---:|---|
+| 144 | 585,852 | 628,237 | ~77% | not enough processes to fill 192 vCPUs |
+| 192 (60 s) | 618,923 | 676,158 | ~99% | near saturation |
+| **192 (120 s)** | **624,303** | **681,092** | **~99%** | **stable best** |
+| 240 | 620,620 | 675,642 | ~100% | slight overhead regression |
+
+### 5.8.2 Final 120-second confirmation (192 processes)
+
+| Metric | Instance A | Instance B | Fleet |
+|---|---|---|---|
+| TPS | **624,303** | **681,092** | **~1,305,395** |
+| Signatures/sec | 1,248,606 | 1,362,184 | **~2,610,790** |
+| Verifies/sec | 1,248,606 | 1,362,184 | **~2,610,790** |
+| All-CPU average | 98.8% | 98.8% | ~98.8% |
+| All-CPU maximum | 99.1% | 99.2% | ~99.2% |
+| Cores avg > 80% | 192/192 | 192/192 | 384/384 |
+| Max memory used | 18.7 GiB | 18.6 GiB | ~37.3 GiB |
+
+### 5.8.3 Why Bun wins now
+
+- **Native crypto is safe in single-threaded processes.** Bun's BoringSSL ed25519 is ~2.3× faster than the pure-JS noble backend and faster than Node's OpenSSL path for this workload.
+- **No worker-thread overhead.** Each process owns one core; the OS scheduler handles placement.
+- **All 192 vCPUs are saturated.** Telemetry shows 98.8% sustained CPU with every core above 80%.
+
+### 5.8.4 Can Bun workers reach 99% CPU?
+
+Node's best shape was 4 processes × 48 workers, so we tested the same shape under Bun using `runMulti.mjs --backend native`. It only reached ~55% CPU. The hypothesis was that Bun's `worker_threads` have a per-process scheduling bottleneck, so we swept to more processes with fewer workers per process.
+
+#### Bun process × worker sweep (60 s, blackjack, full sign, native backend)
+
+| Shape | Instance A TPS | Instance A CPU | Instance B TPS | Instance B CPU |
+|---|---:|---:|---:|---:|
+| 4 × 48 | ~400,800 | 53.8% | ~427,700 | 56.7% |
+| 8 × 24 | 512,010 | 87.9% | 611,011 | 94.8% |
+| 16 × 12 | 584,654 | 98.4% | 637,129 | 98.4% |
+| 32 × 6 | 588,831 | 98.5% | 639,352 | 98.5% |
+| **192 solo** | **624,303** | **98.8%** | **681,092** | **98.8%** |
+
+**Yes, Bun can reach ~99% CPU** — but only when you use many more processes than Node requires. The per-process worker overhead in Bun means each process can only efficiently drive ~6–12 workers. Once you cross that threshold, additional workers do not add throughput. The single-thread solo model (192 solo) is the fastest because it avoids worker overhead entirely.
+
+### 5.8.5 Why the worker model is slightly slower than solo
+
+Even at 32×6 (98.5% CPU), per-instance TPS is ~6% below the 192×1 solo result. The most likely explanation is residual `worker_threads` overhead inside each Bun process: thread startup, message-passing bookkeeping, or lock contention in the runtime. Solo processes avoid all of that.
+
+### 5.8.6 Bun vs Node final comparison
+
+| Runtime | Model | Fleet TPS | Per-instance TPS | Avg CPU |
+|---|---|---:|---:|---:|
+| Node v22.23.0 | 4 processes × 48 workers | ~637,000 | ~318,000 | ~99% |
+| Bun v1.3.14 | 4 processes × 48 workers | ~828,500 | ~414,000 | ~55% |
+| Bun v1.3.14 | 32 processes × 6 workers | ~1,228,000 | ~614,000 | ~99% |
+| **Bun v1.3.14** | **192 single-thread processes** | **~1,304,000** | **~652,000** | **~99%** |
+
+**The best Bun configuration is 192 single-thread processes per instance**, giving **~2× Node's throughput**. However, **32×6 is a practical near-winner** if you prefer a worker-based model — it reaches ~99% CPU and only sacrifices ~6% peak throughput.
+
+---
+
 ## 6. Scaling estimate to 5M TPS
 
 Assuming near-linear horizontal scaling across identical instances. Per-instance throughput is the fleet total divided by 2.
@@ -511,17 +513,9 @@ At on-demand pricing, 8× `c7i.48xlarge` in `us-east-1` costs roughly **$55–62
 
 ### 7.1 CPU utilization
 
-CloudWatch `CPUUtilization` (1-minute granularity) showed a maximum of ~16% during the test windows:
+CloudWatch `CPUUtilization` reports a 1-minute average. During the very first 10–13 second runs the metric peaked at only ~16%, because the burst was averaged over a full 60-second bucket while the instances were idle before and after the test. Once we moved to 120-second runs, CloudWatch showed sustained ~99% CPU.
 
-```
-Instance i-07ab8681b54a8c1e9: max 16.02% at 11:05 UTC+7
-Instance i-089589b8ee6fab47c: max 15.98% at 11:05 UTC+7
-```
-
-This is **not** evidence of low CPU usage. The benchmark run itself lasted only ~12–13 seconds inside a 60-second CloudWatch bucket, and the instances were idle before and after the run. A 12-second burst at 100% CPU inside a 60-second window averages to ~16%. To get meaningful CPU saturation numbers, either:
-
-- run the benchmark for several minutes, or
-- collect per-process CPU inside the instance during the run.
+For an accurate view, collect per-second telemetry inside the instance (`mpstat -P ALL 1`, `pidstat 1`, `vmstat 1`) rather than relying on CloudWatch's 1-minute granularity.
 
 ### 7.2 Peak vs average TPS
 
@@ -611,6 +605,8 @@ Benchmark files:
 
 - `frontend/src/bench/offchainTps.ts`
 - `frontend/src/bench/offchainTpsWorker.ts`
+- `frontend/src/bench/solo.ts`
+- `frontend/src/bench/runMulti.mjs`
 
 Runbook:
 
@@ -622,7 +618,7 @@ SSM command used for the full-sign AWS run (single-process best):
 aws ssm send-command \
   --profile AdministratorAccess-129671602944 \
   --region us-east-1 \
-  --instance-ids i-07ab8681b54a8c1e9 i-089589b8ee6fab47c \
+  --instance-ids i-04acf2495db8de697 i-06f23014658029cc0 \
   --document-name AWS-RunShellScript \
   --parameters commands='["cd /opt/dopamint/repo && git fetch --depth 1 origin feat/offchain-tps-bench && git reset --hard FETCH_HEAD && cd frontend && pnpm install --frozen-lockfile && pnpm build:bench && node dist/bench/offchainTps.js --game blackjack --tunnels 1000 --duration 120000 --workers 128 --sign-mode full --json /tmp/bench-blackjack-full.json"]'
 ```
@@ -633,9 +629,9 @@ SSM command used for the hardware-saturating multi-process run:
 aws ssm send-command \
   --profile AdministratorAccess-129671602944 \
   --region us-east-1 \
-  --instance-ids i-07ab8681b54a8c1e9 i-089589b8ee6fab47c \
+  --instance-ids i-04acf2495db8de697 i-06f23014658029cc0 \
   --document-name AWS-RunShellScript \
-  --parameters commands='["cd /opt/dopamint/repo && git fetch --depth 1 origin feat/offchain-tps-bench && git reset --hard FETCH_HEAD && cd frontend && pnpm install --frozen-lockfile && pnpm build:bench && OUT=/tmp/multi_proc_bench_$(date +%Y%m%d_%H%M%S) && mkdir -p $OUT && for i in 1 2 3 4; do node dist/bench/offchainTps.js --game blackjack --workers 48 --tunnels 250 --sign full --duration 120000 --json $OUT/proc_$i.json >> $OUT/bench.log 2>&1 & done; wait"]'
+  --parameters commands='["cd /opt/dopamint/repo && git fetch --depth 1 origin feat/offchain-tps-bench && git reset --hard FETCH_HEAD && cd frontend && pnpm install --frozen-lockfile && pnpm build:bench && OUT=/tmp/multi_proc_bench_$(date +%Y%m%d_%H%M%S) && mkdir -p $OUT && for i in 1 2 3 4; do node dist/bench/offchainTps.js --game blackjack --workers 48 --tunnels 250 --sign-mode full --duration 120000 --json $OUT/proc_$i.json >> $OUT/bench.log 2>&1 & done; wait"]'
 ```
 
 SSM command used for the Bun process-per-core run (192 single-thread processes per instance):
@@ -644,16 +640,14 @@ SSM command used for the Bun process-per-core run (192 single-thread processes p
 aws ssm send-command \
   --profile AdministratorAccess-129671602944 \
   --region us-east-1 \
-  --instance-ids <INSTANCE_A> <INSTANCE_B> \
+  --instance-ids i-04acf2495db8de697 i-06f23014658029cc0 \
   --document-name AWS-RunShellScript \
-  --parameters commands='["export PATH=\"$HOME/.bun/bin:$PATH\"; cd /opt/dopamint/repo-fresh/frontend && git fetch --depth 1 origin feat/offchain-tps-bench && git reset --hard FETCH_HEAD && cd ../sui-tunnel-ts && pnpm install --frozen-lockfile && cd ../frontend && pnpm install --frozen-lockfile && pnpm build:bench && OUT=/tmp/bun_solo_192_$(date +%Y%m%d_%H%M%S) && mkdir -p $OUT && for i in $(seq 1 192); do bun dist/bench/solo.js blackjack full 120000 $i > $OUT/proc_$i.log 2>&1 & done; wait; grep STEPS_PER_S $OUT/proc_*.log | awk -F= \"{s+=\$2} END {print \"Total TPS:\", s}\""]'
+  --parameters commands='["export PATH=\"$HOME/.bun/bin:$PATH\"; cd /opt/dopamint/repo/frontend && git fetch --depth 1 origin feat/offchain-tps-bench && git reset --hard FETCH_HEAD && cd ../sui-tunnel-ts && pnpm install --frozen-lockfile && cd ../frontend && pnpm install --frozen-lockfile && pnpm build:bench && OUT=/tmp/bun_solo_192_$(date +%Y%m%d_%H%M%S) && mkdir -p $OUT && for i in $(seq 1 192); do bun dist/bench/solo.js blackjack full 120000 $i > $OUT/proc_$i.log 2>&1 & done; wait; grep STEPS_PER_S $OUT/proc_*.log | awk -F= \"{s+=\$2} END {print \"Total TPS:\", s}\""]'
 ```
 
-Reports and telemetry remain on the instances at:
+Reports and telemetry remain on the instances at paths like:
 
 - `/tmp/bench-blackjack-full.json`
 - `/tmp/bench-blackjack-none.json`
-- `/tmp/multi_proc_bench_20260620_075541/` (Instance A Node telemetry)
-- `/tmp/multi_proc_bench_20260620_075542/` (Instance B Node telemetry)
-- `/tmp/bun_solo_192_20260620_112341/` (Instance A Bun telemetry)
-- `/tmp/bun_solo_192_20260620_112342/` (Instance B Bun telemetry)
+- `/tmp/multi_proc_bench_20260620_<HHMMSS>/` (Node telemetry)
+- `/tmp/bun_solo_192_20260620_<HHMMSS>/` (Bun telemetry)

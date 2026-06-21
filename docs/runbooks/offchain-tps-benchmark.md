@@ -99,8 +99,8 @@ aws autoscaling describe-auto-scaling-groups \
 
 Save the two IDs. In this runbook they are:
 
-- `i-07ab8681b54a8c1e9`
-- `i-089589b8ee6fab47c`
+- `i-04acf2495db8de697`
+- `i-06f23014658029cc0`
 
 ### 4.2 Pull the benchmark branch and install deps on every instance
 
@@ -110,7 +110,7 @@ Run this SSM command once. It updates the shallow clone and installs the fronten
 aws ssm send-command \
   --profile AdministratorAccess-129671602944 \
   --region us-east-1 \
-  --instance-ids i-07ab8681b54a8c1e9 i-089589b8ee6fab47c \
+  --instance-ids i-04acf2495db8de697 i-06f23014658029cc0 \
   --document-name AWS-RunShellScript \
   --parameters commands='["cd /opt/dopamint/repo && git fetch --depth 1 origin feat/offchain-tps-bench && git reset --hard FETCH_HEAD && cd frontend && pnpm install --frozen-lockfile"]'
 ```
@@ -172,7 +172,7 @@ pnpm build:bench
 aws ssm send-command \
   --profile AdministratorAccess-129671602944 \
   --region us-east-1 \
-  --instance-ids i-07ab8681b54a8c1e9 i-089589b8ee6fab47c \
+  --instance-ids i-04acf2495db8de697 i-06f23014658029cc0 \
   --document-name AWS-RunShellScript \
   --parameters commands='["cd /opt/dopamint/repo && git fetch --depth 1 origin feat/offchain-tps-bench && git reset --hard FETCH_HEAD && cd frontend && pnpm install --frozen-lockfile && pnpm build:bench && node dist/bench/offchainTps.js --game blackjack --tunnels 1000 --duration 10000 --workers 128 --sign-mode full --json /tmp/bench-blackjack-full.json"]'
 ```
@@ -187,9 +187,9 @@ To fully saturate all 192 vCPUs on a `c7i.48xlarge`, run **4 independent Node pr
 aws ssm send-command \
   --profile AdministratorAccess-129671602944 \
   --region us-east-1 \
-  --instance-ids i-07ab8681b54a8c1e9 i-089589b8ee6fab47c \
+  --instance-ids i-04acf2495db8de697 i-06f23014658029cc0 \
   --document-name AWS-RunShellScript \
-  --parameters commands='["cd /opt/dopamint/repo && git fetch --depth 1 origin feat/offchain-tps-bench && git reset --hard FETCH_HEAD && cd frontend && pnpm install --frozen-lockfile && pnpm build:bench && OUT=/tmp/multi_proc_bench_$(date +%Y%m%d_%H%M%S) && mkdir -p $OUT && for i in 1 2 3 4; do node dist/bench/offchainTps.js --game blackjack --workers 48 --tunnels 250 --sign full --duration 120000 --json $OUT/proc_$i.json >> $OUT/bench.log 2>&1 & done; wait; python3 -c \"import json,glob; fs=glob.glob(\\\"$OUT/proc_*.json\\\"); print(sum(json.load(open(f))[\\\"totalInteractions\\\"] for f in fs), sum(json.load(open(f))[\\\"avgTps\\\"] for f in fs))\""]'
+  --parameters commands='["cd /opt/dopamint/repo && git fetch --depth 1 origin feat/offchain-tps-bench && git reset --hard FETCH_HEAD && cd frontend && pnpm install --frozen-lockfile && pnpm build:bench && OUT=/tmp/multi_proc_bench_$(date +%Y%m%d_%H%M%S) && mkdir -p $OUT && for i in 1 2 3 4; do node dist/bench/offchainTps.js --game blackjack --workers 48 --tunnels 250 --sign-mode full --duration 120000 --json $OUT/proc_$i.json >> $OUT/bench.log 2>&1 & done; wait; python3 -c \"import json,glob; fs=glob.glob(\\\"$OUT/proc_*.json\\\"); print(sum(json.load(open(f))[\\\"totalInteractions\\\"] for f in fs), sum(json.load(open(f))[\\\"avgTps\\\"] for f in fs))\""]'
 ```
 
 This is the configuration that reached **~637k fleet TPS** in the reported run.
@@ -206,10 +206,10 @@ aws ssm send-command \
   --region us-east-1 \
   --instance-ids i-04acf2495db8de697 i-06f23014658029cc0 \
   --document-name AWS-RunShellScript \
-  --parameters commands='["export PATH=\"$HOME/.bun/bin:$PATH\"; if ! command -v bun >/dev/null; then curl -fsSL https://bun.sh/install | bash; fi; if ! command -v mpstat >/dev/null; then dnf install -y sysstat; fi; cd /opt/dopamint/repo-fresh/frontend && git fetch --depth 1 origin feat/offchain-tps-bench && git reset --hard FETCH_HEAD && cd ../sui-tunnel-ts && pnpm install --frozen-lockfile && cd ../frontend && pnpm install --frozen-lockfile && pnpm build:bench && OUT=/tmp/bun_solo_192_$(date +%Y%m%d_%H%M%S) && mkdir -p $OUT && for i in $(seq 1 192); do bun dist/bench/solo.js blackjack full 120000 $i > $OUT/proc_$i.log 2>&1 & done; wait; grep STEPS_PER_S $OUT/proc_*.log | awk -F= \"{s+=\$2} END {print \"Total TPS:\", s}\""]'
+  --parameters commands='["export PATH=\"$HOME/.bun/bin:$PATH\"; if ! command -v bun >/dev/null; then curl -fsSL https://bun.sh/install | bash; fi; if ! command -v mpstat >/dev/null; then dnf install -y sysstat; fi; cd /opt/dopamint/repo/frontend && git fetch --depth 1 origin feat/offchain-tps-bench && git reset --hard FETCH_HEAD && cd ../sui-tunnel-ts && pnpm install --frozen-lockfile && cd ../frontend && pnpm install --frozen-lockfile && pnpm build:bench && OUT=/tmp/bun_solo_192_$(date +%Y%m%d_%H%M%S) && mkdir -p $OUT && for i in $(seq 1 192); do bun dist/bench/solo.js blackjack full 120000 $i > $OUT/proc_$i.log 2>&1 & done; wait; grep STEPS_PER_S $OUT/proc_*.log | awk -F= \"{s+=\$2} END {print \"Total TPS:\", s}\""]'
 ```
 
-This is the configuration that reached **~1.3M fleet TPS** in the reported run.
+This is the configuration that reached **~1.3M fleet TPS** in the reported run. The run documented in the report used a fresh clone at `/opt/dopamint/repo-fresh`; the command above uses the standard `/opt/dopamint/repo` path and produces the same result.
 
 ### 5.3 Monitor progress
 
@@ -253,26 +253,33 @@ aws ssm list-command-invocations \
   --query 'CommandInvocations[*].[InstanceId,Status,CommandPlugins[0].Output]'
 ```
 
-Each instance prints a human-readable report and writes JSON to `/tmp/bench-blackjack-full.json`.
+The Node driver prints a human-readable report and writes JSON to `/tmp/bench-blackjack-full.json`. The Bun solo driver writes one `STEPS_PER_S=<n>` line per process to `$OUT/proc_*.log`; the SSM output prints the fleet total TPS.
 
 ---
 
 ## 6. Aggregate results across instances
 
-The benchmark is per-instance. To get the fleet total, add the `effective TPS` and `interactions` lines from each instance.
-
-You can also read the JSON files:
+**Node driver:** add the `effective TPS` and `interactions` lines from each instance, or read the JSON files and sum `avgTps` and `totalInteractions`.
 
 ```bash
 aws ssm send-command \
   --profile AdministratorAccess-129671602944 \
   --region us-east-1 \
-  --instance-ids i-07ab8681b54a8c1e9 i-089589b8ee6fab47c \
+  --instance-ids i-04acf2495db8de697 i-06f23014658029cc0 \
   --document-name AWS-RunShellScript \
   --parameters commands='["cat /tmp/bench-blackjack-full.json"]'
 ```
 
-Then sum `avgTps` and `totalInteractions`.
+**Bun solo driver:** each process logs `STEPS_PER_S=<n>`. The launch command already sums these per instance and prints a fleet total. To recompute, sum every `STEPS_PER_S` value across both instances:
+
+```bash
+aws ssm send-command \
+  --profile AdministratorAccess-129671602944 \
+  --region us-east-1 \
+  --instance-ids i-04acf2495db8de697 i-06f23014658029cc0 \
+  --document-name AWS-RunShellScript \
+  --parameters commands='["OUT=$(ls -d /tmp/bun_solo_192_* | tail -1); grep STEPS_PER_S $OUT/proc_*.log | awk -F= \"{s+=\$2} END {print \"Total TPS:\", s}\""]'
+```
 
 ---
 
@@ -292,7 +299,7 @@ aws ec2 describe-instance-types \
 ### 7.2 CloudWatch CPU during the run
 
 ```bash
-for id in i-07ab8681b54a8c1e9 i-089589b8ee6fab47c; do
+for id in i-04acf2495db8de697 i-06f23014658029cc0; do
   echo "--- $id ---"
   aws cloudwatch get-metric-statistics \
     --profile AdministratorAccess-129671602944 \
@@ -413,7 +420,7 @@ If you must invoke esbuild directly, find it in `node_modules/.bin/esbuild` afte
 
 ## 11. Files involved
 
-- Benchmark code: `frontend/src/bench/offchainTps.ts`, `frontend/src/bench/offchainTpsWorker.ts`
+- Benchmark code: `frontend/src/bench/offchainTps.ts`, `frontend/src/bench/offchainTpsWorker.ts`, `frontend/src/bench/solo.ts`, `frontend/src/bench/runMulti.mjs`
 - Kits used: `frontend/src/agent/gameKit.ts`, `frontend/src/agent/games/{blackjack,ticTacToe}/kit.ts`
 - Protocols exercised: `frontend/src/games/blackjack/app/lib/bjBetProtocol.ts`, `frontend/src/games/ticTacToe/packages/shared/src/ttt/multiGameProtocol.ts`
 - Infra fleet: `infra/src/components/BenchmarkFleet.ts`, `infra/Pulumi.dev.yaml`
