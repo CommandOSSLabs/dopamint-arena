@@ -27,20 +27,10 @@ impl PgSettlementStore {
     }
 }
 
-fn kind_str(k: LifecycleKind) -> &'static str {
-    match k {
-        LifecycleKind::Opened => "opened",
-        LifecycleKind::Settled => "settled",
-    }
-}
-
 fn row_from_pg(r: &PgRow) -> anyhow::Result<SettlementRow> {
     let kind_raw = r.get::<String, _>("kind");
-    let kind = match kind_raw.as_str() {
-        "opened" => LifecycleKind::Opened,
-        "settled" => LifecycleKind::Settled,
-        other => anyhow::bail!("unrecognised lifecycle kind: {other:?}"),
-    };
+    let kind = LifecycleKind::from_db_str(&kind_raw)
+        .ok_or_else(|| anyhow::anyhow!("unrecognised lifecycle kind: {kind_raw:?}"))?;
     Ok(SettlementRow {
         tx_digest: r.get("tx_digest"),
         kind,
@@ -93,7 +83,7 @@ impl SettlementStore for PgSettlementStore {
         .bind(cur_ts)
         .bind(cur_digest)
         .bind(&q.tunnel_id)
-        .bind(q.kind.map(kind_str))
+        .bind(q.kind.map(LifecycleKind::as_str))
         .bind(&q.address)
         .bind(limit + 1)
         .fetch_all(&self.pool)

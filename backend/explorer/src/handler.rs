@@ -83,10 +83,8 @@ impl StoredSettlement {
     /// carries no Walrus proof (that arrives later via the `explorer:proofs` subscriber) and no
     /// game tag. The frontend live feed only needs the settlement identity + balances.
     fn to_feed_row(&self) -> shared::SettlementRow {
-        let kind = match self.kind.as_str() {
-            "opened" => shared::LifecycleKind::Opened,
-            _ => shared::LifecycleKind::Settled,
-        };
+        let kind =
+            shared::LifecycleKind::from_db_str(&self.kind).unwrap_or(shared::LifecycleKind::Settled);
         shared::SettlementRow {
             tx_digest: self.tx_digest.clone(),
             kind,
@@ -169,9 +167,11 @@ impl Handler for SettlementPipeline {
         // addresses; the addresses live on the opened row (TunnelCreated) — a DIFFERENT
         // tx_digest at an earlier checkpoint, same tunnel_id. `process()` is pure (per
         // checkpoint) so it can't join across them. We do the join here as a scoped UPDATE
-        // after the insert: by the time a close commits, its open row is already present
-        // because the framework commits checkpoints in order. Restricted to this batch's
-        // tunnels and to still-NULL settled rows so it's idempotent and bounded.
+        // after the insert. CAVEAT: the concurrent pipeline commits batches out of order (only
+        // watermarks advance in order), so the open row is normally present in steady state
+        // (opens precede closes by many checkpoints) but is NOT guaranteed during backfill — a
+        // close committed before its open leaves these addresses NULL with no retry. Restricted
+        // to this batch's tunnels and to still-NULL settled rows so it's idempotent and bounded.
         let settled_tunnels: Vec<String> = values
             .iter()
             .filter(|v| v.kind == "settled")

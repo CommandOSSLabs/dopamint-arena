@@ -26,14 +26,6 @@ pub struct ListParams {
     pub kind: Option<String>,
 }
 
-fn parse_kind(s: &str) -> Option<LifecycleKind> {
-    match s {
-        "opened" => Some(LifecycleKind::Opened),
-        "settled" => Some(LifecycleKind::Settled),
-        _ => None,
-    }
-}
-
 pub fn router(state: ApiState) -> Router {
     Router::new()
         .route("/v1/settlements", get(list))
@@ -50,7 +42,7 @@ async fn list(State(s): State<ApiState>, Query(p): Query<ListParams>) -> Respons
         limit: p.limit.unwrap_or(50).clamp(1, 200),
         tunnel_id: p.tunnel,
         address: p.address,
-        kind: p.kind.as_deref().and_then(parse_kind),
+        kind: p.kind.as_deref().and_then(LifecycleKind::from_db_str),
     };
     match s.store.list(&q).await {
         Ok(page) => Json(page).into_response(),

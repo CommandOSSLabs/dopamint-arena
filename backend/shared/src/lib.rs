@@ -14,6 +14,25 @@ pub enum LifecycleKind {
     Settled,
 }
 
+impl LifecycleKind {
+    /// The DB/wire token for this kind (`"opened"` / `"settled"`) — matches the serde lowercase.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LifecycleKind::Opened => "opened",
+            LifecycleKind::Settled => "settled",
+        }
+    }
+
+    /// Parse a DB/wire token back to a kind; `None` for anything else.
+    pub fn from_db_str(s: &str) -> Option<LifecycleKind> {
+        match s {
+            "opened" => Some(LifecycleKind::Opened),
+            "settled" => Some(LifecycleKind::Settled),
+            _ => None,
+        }
+    }
+}
+
 /// One durable, queryable settlement-index row, keyed by `tx_digest`. u64 on-chain
 /// values are stored as i64 (Postgres BIGINT) — SUI amounts and nonces are well within
 /// i63 range. JSON is camelCase to match the SDK/frontend (ADR-0002).
