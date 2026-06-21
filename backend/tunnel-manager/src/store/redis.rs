@@ -314,6 +314,18 @@ end
 return 1
 "#;
 
+// Atomic accept: return the invite JSON and delete it iff it exists and is addressed to the
+// accepter; else nil. Single-winner under concurrent accepts (no GET→DEL gap).
+// KEYS[1]=invite:<match_id>  ARGV[1]=accepter wallet
+const TAKE_INVITE: &str = r#"
+local raw = redis.call('GET', KEYS[1])
+if not raw then return false end
+local inv = cjson.decode(raw)
+if inv.to ~= ARGV[1] then return false end
+redis.call('DEL', KEYS[1])
+return raw
+"#;
+
 #[async_trait]
 impl MpStore for RedisMpStore {
     async fn set_presence(&self, wallet: &str, at: ConnRef) {
@@ -437,22 +449,22 @@ impl MpStore for RedisMpStore {
         match_id: &str,
         accepter: &str,
     ) -> Option<crate::mp::DirectedInvite> {
-        let v: Option<String> = self
+        let raw: Option<String> = match self
             .pool
-            .get(format!("invite:{match_id}"))
+            .eval::<Option<String>, _, _, _>(
+                TAKE_INVITE,
+                vec![format!("invite:{match_id}")],
+                vec![accepter.to_owned()],
+            )
             .await
-            .ok()
-            .flatten();
-        let inv: crate::mp::DirectedInvite = v.and_then(|j| serde_json::from_str(&j).ok())?;
-        if inv.to == accepter {
-            let res: Result<i64, _> = self.pool.del(format!("invite:{match_id}")).await;
-            if let Err(e) = res {
-                tracing::warn!(error = %e, "redis take_invite del failed");
+        {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(error = %e, "redis take_invite eval failed");
+                None
             }
-            Some(inv)
-        } else {
-            None
-        }
+        };
+        raw.and_then(|j| serde_json::from_str(&j).ok())
     }
 
     async fn drop_invite(&self, match_id: &str) {
@@ -857,6 +869,36 @@ mod tests {
             rb.proof_url.as_deref(),
             Some(proof),
             "bare row never downgrades a proofUrl"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires TEST_REDIS_URL"]
+    async fn take_invite_yields_some_to_exactly_one_concurrent_accepter() {
+        let Some(url) = test_url() else { return };
+        let s = std::sync::Arc::new(RedisMpStore::new(connect(&url).await.unwrap()));
+        let mid = format!("m{}", uuid::Uuid::new_v4().simple());
+        let inv = crate::mp::DirectedInvite {
+            from: "0xa".into(),
+            to: "0xb".into(),
+            game: "ttt".into(),
+            from_conn: ConnRef {
+                instance_id: "i".into(),
+                conn_id: uuid::Uuid::nil(),
+            },
+        };
+        s.put_invite(&mid, inv).await;
+        // Two concurrent accepts by the invited wallet; exactly one must win.
+        let (s1, s2, m1, m2) = (s.clone(), s.clone(), mid.clone(), mid.clone());
+        let h1 = tokio::spawn(async move { s1.take_invite(&m1, "0xb").await });
+        let h2 = tokio::spawn(async move { s2.take_invite(&m2, "0xb").await });
+        let wins = [h1.await.unwrap(), h2.await.unwrap()]
+            .iter()
+            .filter(|o| o.is_some())
+            .count();
+        assert_eq!(
+            wins, 1,
+            "exactly one concurrent accept may consume the invite"
         );
     }
 
