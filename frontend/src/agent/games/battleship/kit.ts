@@ -83,7 +83,8 @@ export function createBattleshipKit(
     id: "battleship",
     protocol,
     stateHash: (state) => defaultStateHash(protocol, state),
-    createBot: (seat: Party, ctx: BotContext) => new BattleshipBot(seat, ctx, config),
+    createBot: (seat: Party, ctx: BotContext) =>
+      new BattleshipBot(seat, ctx, config),
     defaultStake: stake,
   };
 }

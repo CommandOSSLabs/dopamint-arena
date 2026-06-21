@@ -112,7 +112,11 @@ export function buildCloseTx(
   const tx = new Transaction();
   if (latestUpdate) {
     tx.moveCall({
-      target: target(config.suiTunnelPackageId, MODULE_TUNNEL, "entry_update_state"),
+      target: target(
+        config.suiTunnelPackageId,
+        MODULE_TUNNEL,
+        "entry_update_state",
+      ),
       typeArguments: [config.gameCoinType],
       arguments: [
         tx.object(latestUpdate.update.tunnelId),
@@ -161,7 +165,10 @@ function createSettlement(
     partyBBalance: balances.b,
     finalNonce: onchainNonce + 1n,
     timestamp: parseBigInt(body.timestamp, BigInt(Date.now())),
-    transcriptRoot: transcriptRootFor(session.tunnelId, session.transcriptUpdates),
+    transcriptRoot: transcriptRootFor(
+      session.tunnelId,
+      session.transcriptUpdates,
+    ),
   };
 }
 
@@ -253,7 +260,8 @@ async function commitSettlement(
   });
   const checkpointNonce = parseBigInt(body.onchainNonce, 0n);
   const checkpointUpdate =
-    checkpointNonce > 0n && session.latestUpdate?.update.nonce === checkpointNonce
+    checkpointNonce > 0n &&
+    session.latestUpdate?.update.nonce === checkpointNonce
       ? session.latestUpdate
       : null;
   const result = (await client.signAndExecuteTransaction({

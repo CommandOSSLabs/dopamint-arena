@@ -146,8 +146,7 @@ export interface SettleCommitRequest {
 
 export function resolveQuantumPokerServerUrl(): string {
   return (
-    import.meta.env.VITE_QUANTUM_POKER_SERVER_URL ??
-    "http://localhost:3002"
+    import.meta.env.VITE_QUANTUM_POKER_SERVER_URL ?? "http://localhost:3002"
   ).replace(/\/$/, "");
 }
 
@@ -186,9 +185,9 @@ export class QuantumPokerServerClient {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-    const data = (await res.json().catch(() => null)) as
-      | { error?: unknown }
-      | null;
+    const data = (await res.json().catch(() => null)) as {
+      error?: unknown;
+    } | null;
     if (!res.ok) {
       const message =
         typeof data?.error === "string"

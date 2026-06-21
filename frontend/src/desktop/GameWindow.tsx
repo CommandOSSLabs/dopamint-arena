@@ -92,7 +92,7 @@ export function GameWindow({
         className={cn(
           "relative flex h-9 shrink-0 items-center justify-center border-b border-border bg-secondary/40 px-2 text-xs font-semibold text-foreground",
           dragHandleProps &&
-          "cursor-grab touch-none select-none outline-none focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing",
+            "cursor-grab touch-none select-none outline-none focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing",
         )}
       >
         <span className="flex max-w-[60%] items-center gap-1.5">

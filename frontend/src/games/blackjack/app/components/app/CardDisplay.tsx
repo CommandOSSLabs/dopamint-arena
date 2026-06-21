@@ -23,7 +23,15 @@ const SUIT_COLORS: Record<string, string> = {
   spades: "text-zinc-950",
 };
 
-function CssCard({ name, suit, size = "md" }: { name: string; suit: string; size?: "sm" | "md" }) {
+function CssCard({
+  name,
+  suit,
+  size = "md",
+}: {
+  name: string;
+  suit: string;
+  size?: "sm" | "md";
+}) {
   const symbol = SUIT_SYMBOLS[suit] || "";
   const colorClass = SUIT_COLORS[suit] || "text-zinc-950";
 
@@ -45,7 +53,9 @@ function CssCard({ name, suit, size = "md" }: { name: string; suit: string; size
       </div>
 
       {/* Center Symbol */}
-      <div className={`absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 font-bold ${centerSymSize}`}>
+      <div
+        className={`absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 font-bold ${centerSymSize}`}
+      >
         {symbol}
       </div>
 

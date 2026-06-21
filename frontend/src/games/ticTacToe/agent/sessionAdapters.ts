@@ -78,7 +78,10 @@ export function makeTttRelay(client: RelayClient): SessionRelay {
  * Buffering: each one-shot resolver is stored; if the message arrives before
  * the callback is registered it is buffered so the callback fires immediately.
  */
-function makeTttMatchChannel(client: RelayClient, matchId: string): MatchChannel {
+function makeTttMatchChannel(
+  client: RelayClient,
+  matchId: string,
+): MatchChannel {
   // Buffers for messages that arrive before the handler is registered.
   let bufferedHello: string | null = null;
   let helloResolve: ((pub: string) => void) | null = null;
@@ -218,7 +221,11 @@ export function makeTttEndpointFactory(
       const self = core.makeEndpoint(
         backend,
         walletAddress,
-        { publicKey: eph.coreKey.publicKey, scheme: 0, secretKey: eph.coreKey.secretKey },
+        {
+          publicKey: eph.coreKey.publicKey,
+          scheme: 0,
+          secretKey: eph.coreKey.secretKey,
+        },
         true,
       );
       const opponent = core.makeEndpoint(
@@ -227,7 +234,12 @@ export function makeTttEndpointFactory(
         { publicKey: args.opponentPublicKey, scheme: 0 },
         false,
       );
-      return { tunnelId: args.tunnelId, selfParty: args.selfParty, self, opponent };
+      return {
+        tunnelId: args.tunnelId,
+        selfParty: args.selfParty,
+        self,
+        opponent,
+      };
     },
   };
 }
@@ -255,7 +267,11 @@ export interface TttSignerOverrides {
     partyB: PartyOnchain;
     amount: bigint;
   }) => Promise<string>;
-  deposit?: (opts: { signExec: SignExec; tunnelId: string; amount: bigint }) => Promise<void>;
+  deposit?: (opts: {
+    signExec: SignExec;
+    tunnelId: string;
+    amount: bigint;
+  }) => Promise<void>;
   cooperativeClose?: (opts: {
     signExec: SignExec;
     tunnelId: string;
@@ -292,11 +308,17 @@ export function makeTttSettlementSigner(
   // The production path MUST receive a CoSignedSettlementWithRoot; the `any`
   // cast is only to accommodate the test override seam (which uses unknown).
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const doClose: (opts: { signExec: SignExec; tunnelId: string; settlement: any }) => Promise<string> =
+  const doClose: (opts: {
+    signExec: SignExec;
+    tunnelId: string;
+    settlement: any;
+  }) => Promise<string> =
     overrides?.cooperativeClose ?? closeCooperativeWithRoot;
 
   return {
-    async openAndFundSeatA(args: { stake: bigint }): Promise<{ tunnelId: string }> {
+    async openAndFundSeatA(args: {
+      stake: bigint;
+    }): Promise<{ tunnelId: string }> {
       const tunnelId = await doOpenAndFund({
         reads: ctx.reads,
         signExec,
@@ -307,8 +329,15 @@ export function makeTttSettlementSigner(
       return { tunnelId };
     },
 
-    async depositSeatB(args: { tunnelId: string; stake: bigint }): Promise<void> {
-      await doDeposit({ signExec, tunnelId: args.tunnelId, amount: args.stake });
+    async depositSeatB(args: {
+      tunnelId: string;
+      stake: bigint;
+    }): Promise<void> {
+      await doDeposit({
+        signExec,
+        tunnelId: args.tunnelId,
+        amount: args.stake,
+      });
     },
 
     async submitCooperativeClose(args: {
@@ -334,7 +363,9 @@ export function makeTttSettlementSigner(
       }
     },
 
-    async closeOnTimeout(args: { tunnelId: string }): Promise<{ digest: string }> {
+    async closeOnTimeout(args: {
+      tunnelId: string;
+    }): Promise<{ digest: string }> {
       // Timeout close is wallet-only (no co-signature available).
       // The session core calls this when the settle-half exchange times out.
       // We reuse closeCooperativeWithRoot's tx builder pathway via a dummy

@@ -12,16 +12,26 @@ class LoopbackEnd implements SessionTransport {
     const copy = Uint8Array.from(frame);
     queueMicrotask(() => this.peer.frameCb?.(copy));
   }
-  onFrame(cb: (f: Uint8Array) => void): void { this.frameCb = cb; }
-  onClose(cb: () => void): void { this.closeCb = cb; }
-  onError(_cb: (err: unknown) => void): void { /* loopback never errors */ }
-  close(): void { this.closeCb?.(); this.peer.closeCb?.(); }
+  onFrame(cb: (f: Uint8Array) => void): void {
+    this.frameCb = cb;
+  }
+  onClose(cb: () => void): void {
+    this.closeCb = cb;
+  }
+  onError(_cb: (err: unknown) => void): void {
+    /* loopback never errors */
+  }
+  close(): void {
+    this.closeCb?.();
+    this.peer.closeCb?.();
+  }
 }
 
 /** Two in-process transports wired to each other — for tests and self-play. */
 export function linkedLoopback(): { a: SessionTransport; b: SessionTransport } {
   const a = new LoopbackEnd();
   const b = new LoopbackEnd();
-  a.peer = b; b.peer = a;
+  a.peer = b;
+  b.peer = a;
   return { a, b };
 }

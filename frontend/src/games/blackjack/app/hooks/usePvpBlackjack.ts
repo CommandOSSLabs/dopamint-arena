@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { core, proof, bytesToHex, hexToBytes } from "sui-tunnel-ts";
-import { getControlPlaneClient, type RegisterSessionResult } from "@/backend/controlPlane";
+import {
+  getControlPlaneClient,
+  type RegisterSessionResult,
+} from "@/backend/controlPlane";
 import { coSignedToSettleRequest } from "@/backend/settleRequest";
 import {
   useCurrentAccount,
@@ -44,7 +47,9 @@ const MP_URL =
   import.meta.env.VITE_MP_URL ||
   (
     import.meta.env.VITE_BACKEND_URL ||
-    (typeof location !== "undefined" ? location.origin : "http://127.0.0.1:8080")
+    (typeof location !== "undefined"
+      ? location.origin
+      : "http://127.0.0.1:8080")
   ).replace(/^http/, "ws");
 /** Default buy-in (bankroll) deposited on-chain per seat (MIST). Each player chooses their own
  *  before matchmaking; the bet protocol caps each round at min(both balances). */
@@ -172,8 +177,13 @@ export function usePvpBlackjack(): PvpView {
       ) => Promise<void>
     >(undefined);
   const openedResolveRef = useRef<((id: string) => void) | null>(null);
-  const settleResolveRef = useRef<((val: { sig: Uint8Array; root: Uint8Array }) => void) | null>(null);
-  const bufferedSettleRef = useRef<{ sig: Uint8Array; root: Uint8Array } | null>(null);
+  const settleResolveRef = useRef<
+    ((val: { sig: Uint8Array; root: Uint8Array }) => void) | null
+  >(null);
+  const bufferedSettleRef = useRef<{
+    sig: Uint8Array;
+    root: Uint8Array;
+  } | null>(null);
   const stakeResolveRef = useRef<((amount: bigint) => void) | null>(null);
   const bufferedStakeRef = useRef<bigint | null>(null);
 
@@ -267,8 +277,14 @@ export function usePvpBlackjack(): PvpView {
       settledRef.current = true;
       setPhase("settling");
       flushHeartbeat(t.tunnelId, true);
-      const root = transcriptRef.current ? transcriptRef.current.root() : new Uint8Array(32);
-      const half = t.buildSettlementHalfWithRoot(createdAtRef.current, root, 0n);
+      const root = transcriptRef.current
+        ? transcriptRef.current.root()
+        : new Uint8Array(32);
+      const half = t.buildSettlementHalfWithRoot(
+        createdAtRef.current,
+        root,
+        0n,
+      );
       relay.sendApp(matchId, {
         t: "settle",
         sig: bytesToHex(half.sigSelf),
@@ -292,12 +308,20 @@ export function usePvpBlackjack(): PvpView {
         try {
           const result = await getControlPlaneClient().settle(
             t.tunnelId,
-            coSignedToSettleRequest(coSigned as any, transcriptRef.current ? transcriptRef.current.toRecord().entries : []),
+            coSignedToSettleRequest(
+              coSigned as any,
+              transcriptRef.current
+                ? transcriptRef.current.toRecord().entries
+                : [],
+            ),
           );
           setDigests((d) => ({ ...d, close: result.txDigest }));
           relay.sendApp(matchId, { t: "closed", digest: result.txDigest });
         } catch (e) {
-          console.warn("[settle] Server-side settle failed, falling back to wallet submission:", e);
+          console.warn(
+            "[settle] Server-side settle failed, falling back to wallet submission:",
+            e,
+          );
           const res = await submit(buildCloseWithRootTx(t.tunnelId, coSigned));
           setDigests((d) => ({ ...d, close: res.digest }));
           relay.sendApp(matchId, { t: "closed", digest: res.digest });
@@ -364,7 +388,8 @@ export function usePvpBlackjack(): PvpView {
           else if (mm.t === "settle") {
             const sig = hexToBytes(String(mm.sig));
             const rt = hexToBytes(String(mm.root));
-            if (settleResolveRef.current) settleResolveRef.current({ sig, root: rt });
+            if (settleResolveRef.current)
+              settleResolveRef.current({ sig, root: rt });
             else bufferedSettleRef.current = { sig, root: rt };
           } else if (mm.t === "stake") {
             const amt = BigInt(Math.floor(Number(mm.amount)));
@@ -544,7 +569,9 @@ export function usePvpBlackjack(): PvpView {
           .then((s) => {
             sessionRef.current = s;
           })
-          .catch((e) => console.error("[blackjack pvp] registerSession failed:", e));
+          .catch((e) =>
+            console.error("[blackjack pvp] registerSession failed:", e),
+          );
 
         // Per-round log: record the player's (party A) result's updates.
         let lastLoggedRound = 0;
@@ -576,26 +603,32 @@ export function usePvpBlackjack(): PvpView {
             if (autoRef.current) {
               const mv = proto.randomMove(st, m.role, Math.random);
               if (mv)
-                setTimeout(() => {
-                  try {
-                    t.propose(mv, BigInt(Date.now()));
-                  } catch {
-                    /* not my turn / in flight */
-                  }
-                }, autoRef.current ? 50 : BOT_MOVE_MS);
+                setTimeout(
+                  () => {
+                    try {
+                      t.propose(mv, BigInt(Date.now()));
+                    } catch {
+                      /* not my turn / in flight */
+                    }
+                  },
+                  autoRef.current ? 50 : BOT_MOVE_MS,
+                );
             }
           } else if (
             st.phase === "dealer" &&
             m.role === getDealerParty(st.round)
           ) {
             // The dealer is deterministic — always auto-stand (triggers draw-to-17), regardless of the toggle.
-            setTimeout(() => {
-              try {
-                t.propose({ action: "stand" }, BigInt(Date.now()));
-              } catch {
-                /* in flight */
-              }
-            }, autoRef.current ? 50 : DEALER_MS);
+            setTimeout(
+              () => {
+                try {
+                  t.propose({ action: "stand" }, BigInt(Date.now()));
+                } catch {
+                  /* in flight */
+                }
+              },
+              autoRef.current ? 50 : DEALER_MS,
+            );
           } else if (
             st.phase === "round_over" &&
             m.role === getPlayerParty(st.round + 1n) &&
@@ -604,13 +637,16 @@ export function usePvpBlackjack(): PvpView {
             // Only the player bets (the bet deals the next round); auto reuses the last bet.
             const mv = autoBetMove(lastBetRef.current, st);
             if (mv)
-              setTimeout(() => {
-                try {
-                  t.propose(mv, BigInt(Date.now()));
-                } catch {
-                  /* raced / in flight */
-                }
-              }, autoRef.current ? 100 : NEXT_MS);
+              setTimeout(
+                () => {
+                  try {
+                    t.propose(mv, BigInt(Date.now()));
+                  } catch {
+                    /* raced / in flight */
+                  }
+                },
+                autoRef.current ? 100 : NEXT_MS,
+              );
           }
         };
         t.onConfirmed = (u) => {
@@ -628,7 +664,15 @@ export function usePvpBlackjack(): PvpView {
         setPhase("error");
       }
     },
-    [client, proto, submit, signPersonalMessage, walletAddress, finishSettle, flushHeartbeat],
+    [
+      client,
+      proto,
+      submit,
+      signPersonalMessage,
+      walletAddress,
+      finishSettle,
+      flushHeartbeat,
+    ],
   );
   onMatchRef.current = onMatch;
 
@@ -696,26 +740,32 @@ export function usePvpBlackjack(): PvpView {
       ) {
         const mv = proto.randomMove(st, roleRef.current, Math.random);
         if (mv)
-          setTimeout(() => {
-            try {
-              t.propose(mv, BigInt(Date.now()));
-            } catch {
-              /* ignore */
-            }
-          }, autoRef.current ? 50 : BOT_MOVE_MS);
+          setTimeout(
+            () => {
+              try {
+                t.propose(mv, BigInt(Date.now()));
+              } catch {
+                /* ignore */
+              }
+            },
+            autoRef.current ? 50 : BOT_MOVE_MS,
+          );
       } else if (
         st.phase === "round_over" &&
         roleRef.current === getPlayerParty(st.round + 1n)
       ) {
         const mv = autoBetMove(lastBetRef.current, st);
         if (mv)
-          setTimeout(() => {
-            try {
-              t.propose(mv, BigInt(Date.now()));
-            } catch {
-              /* ignore */
-            }
-          }, autoRef.current ? 100 : NEXT_MS);
+          setTimeout(
+            () => {
+              try {
+                t.propose(mv, BigInt(Date.now()));
+              } catch {
+                /* ignore */
+              }
+            },
+            autoRef.current ? 100 : NEXT_MS,
+          );
       }
     },
     [proto],

@@ -29,8 +29,10 @@ function waitFor(predicate: () => boolean, timeoutMs = 2000): Promise<void> {
   return new Promise((res, rej) => {
     const t0 = Date.now();
     const i = setInterval(() => {
-      if (predicate()) { clearInterval(i); res(); }
-      else if (Date.now() - t0 > timeoutMs) {
+      if (predicate()) {
+        clearInterval(i);
+        res();
+      } else if (Date.now() - t0 > timeoutMs) {
         clearInterval(i);
         rej(new Error(`waitFor timeout after ${timeoutMs}ms`));
       }
@@ -108,27 +110,73 @@ async function runToTerminal(opts?: { seed?: number }) {
   const keyA = core.generateKeyPair();
   const keyB = core.generateKeyPair();
 
-  const dtA = new core.DistributedTunnel(kit.protocol as never, {
-    tunnelId,
-    selfParty: "A",
-    self: core.makeEndpoint(backend, "0xA", keyA, true),
-    opponent: core.makeEndpoint(backend, "0xB", { publicKey: keyB.publicKey, scheme: keyB.scheme }, false),
-  }, txA, { a: 100n, b: 100n });
+  const dtA = new core.DistributedTunnel(
+    kit.protocol as never,
+    {
+      tunnelId,
+      selfParty: "A",
+      self: core.makeEndpoint(backend, "0xA", keyA, true),
+      opponent: core.makeEndpoint(
+        backend,
+        "0xB",
+        { publicKey: keyB.publicKey, scheme: keyB.scheme },
+        false,
+      ),
+    },
+    txA,
+    { a: 100n, b: 100n },
+  );
 
-  const dtB = new core.DistributedTunnel(kit.protocol as never, {
-    tunnelId,
-    selfParty: "B",
-    self: core.makeEndpoint(backend, "0xB", keyB, true),
-    opponent: core.makeEndpoint(backend, "0xA", { publicKey: keyA.publicKey, scheme: keyA.scheme }, false),
-  }, txB, { a: 100n, b: 100n });
+  const dtB = new core.DistributedTunnel(
+    kit.protocol as never,
+    {
+      tunnelId,
+      selfParty: "B",
+      self: core.makeEndpoint(backend, "0xB", keyB, true),
+      opponent: core.makeEndpoint(
+        backend,
+        "0xA",
+        { publicKey: keyA.publicKey, scheme: keyA.scheme },
+        false,
+      ),
+    },
+    txB,
+    { a: 100n, b: 100n },
+  );
 
   const seed = opts?.seed ?? 1;
   // Use a short move timeout so tests don't wait multi-seconds
-  const sA = new PvpGameSession(kit, "A", { rngForSeat: seeded(seed) }, undefined, { moveTimeoutMs: 30, settleTimeoutMs: 30 });
-  const sB = new PvpGameSession(kit, "B", { rngForSeat: seeded(seed + 1) }, undefined, { moveTimeoutMs: 30, settleTimeoutMs: 30 });
+  const sA = new PvpGameSession(
+    kit,
+    "A",
+    { rngForSeat: seeded(seed) },
+    undefined,
+    { moveTimeoutMs: 30, settleTimeoutMs: 30 },
+  );
+  const sB = new PvpGameSession(
+    kit,
+    "B",
+    { rngForSeat: seeded(seed + 1) },
+    undefined,
+    { moveTimeoutMs: 30, settleTimeoutMs: 30 },
+  );
 
-  sA.attachTunnel({ tunnel: dtA as never, initialState: kit.protocol.initialState({ tunnelId, initialBalances: { a: 100n, b: 100n } }), transport: txA });
-  sB.attachTunnel({ tunnel: dtB as never, initialState: kit.protocol.initialState({ tunnelId, initialBalances: { a: 100n, b: 100n } }), transport: txB });
+  sA.attachTunnel({
+    tunnel: dtA as never,
+    initialState: kit.protocol.initialState({
+      tunnelId,
+      initialBalances: { a: 100n, b: 100n },
+    }),
+    transport: txA,
+  });
+  sB.attachTunnel({
+    tunnel: dtB as never,
+    initialState: kit.protocol.initialState({
+      tunnelId,
+      initialBalances: { a: 100n, b: 100n },
+    }),
+    transport: txB,
+  });
 
   sA.setAuto(true);
   sB.setAuto(true);
@@ -152,9 +200,13 @@ function makeFakeSettlementSigner(opts?: { closeOnTimeoutFails?: boolean }): {
   let timeoutCalls = 0;
   let captured: string | null = null;
   const signer: SettlementSigner = {
-    async openAndFundSeatA() { return { tunnelId: "0x" + "cd".repeat(32) }; },
+    async openAndFundSeatA() {
+      return { tunnelId: "0x" + "cd".repeat(32) };
+    },
     async depositSeatB() {},
-    async submitCooperativeClose() { return { digest: "0xfeedcafe" }; },
+    async submitCooperativeClose() {
+      return { digest: "0xfeedcafe" };
+    },
     async closeOnTimeout(args: { tunnelId: string }) {
       timeoutCalls++;
       captured = args.tunnelId;
@@ -162,7 +214,11 @@ function makeFakeSettlementSigner(opts?: { closeOnTimeoutFails?: boolean }): {
       return { digest: "0xdeadbeef" };
     },
   };
-  return { signer, closeOnTimeoutCallCount: () => timeoutCalls, capturedTunnelId: () => captured };
+  return {
+    signer,
+    closeOnTimeoutCallCount: () => timeoutCalls,
+    capturedTunnelId: () => captured,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -178,17 +234,36 @@ describe("PvpGameSession robustness", () => {
     const keyA = core.generateKeyPair();
     const keyB = core.generateKeyPair();
 
-    const dtA = new core.DistributedTunnel(kit.protocol as never, {
-      tunnelId,
-      selfParty: "A",
-      self: core.makeEndpoint(backend, "0xA", keyA, true),
-      opponent: core.makeEndpoint(backend, "0xB", { publicKey: keyB.publicKey, scheme: keyB.scheme }, false),
-    }, txA, { a: 100n, b: 100n });
+    const dtA = new core.DistributedTunnel(
+      kit.protocol as never,
+      {
+        tunnelId,
+        selfParty: "A",
+        self: core.makeEndpoint(backend, "0xA", keyA, true),
+        opponent: core.makeEndpoint(
+          backend,
+          "0xB",
+          { publicKey: keyB.publicKey, scheme: keyB.scheme },
+          false,
+        ),
+      },
+      txA,
+      { a: 100n, b: 100n },
+    );
 
-    const sA = new PvpGameSession(kit, "A", { rngForSeat: seeded(10) }, undefined, { moveTimeoutMs: 5000, settleTimeoutMs: 5000 });
+    const sA = new PvpGameSession(
+      kit,
+      "A",
+      { rngForSeat: seeded(10) },
+      undefined,
+      { moveTimeoutMs: 5000, settleTimeoutMs: 5000 },
+    );
     sA.attachTunnel({
       tunnel: dtA as never,
-      initialState: kit.protocol.initialState({ tunnelId, initialBalances: { a: 100n, b: 100n } }),
+      initialState: kit.protocol.initialState({
+        tunnelId,
+        initialBalances: { a: 100n, b: 100n },
+      }),
       transport: txA,
     });
 
@@ -197,8 +272,11 @@ describe("PvpGameSession robustness", () => {
     // Simulate the peer closing the connection.
     txA.close();
 
-    assert.strictEqual(sA.getSnapshot().phase, "opponent-abandoned",
-      "transport close must set phase to opponent-abandoned");
+    assert.strictEqual(
+      sA.getSnapshot().phase,
+      "opponent-abandoned",
+      "transport close must set phase to opponent-abandoned",
+    );
 
     sA.dispose();
   });
@@ -211,12 +289,22 @@ describe("PvpGameSession robustness", () => {
     const keyA = core.generateKeyPair();
     const keyB = core.generateKeyPair();
 
-    const dtA = new core.DistributedTunnel(kit.protocol as never, {
-      tunnelId,
-      selfParty: "A",
-      self: core.makeEndpoint(backend, "0xA", keyA, true),
-      opponent: core.makeEndpoint(backend, "0xB", { publicKey: keyB.publicKey, scheme: keyB.scheme }, false),
-    }, txA, { a: 100n, b: 100n });
+    const dtA = new core.DistributedTunnel(
+      kit.protocol as never,
+      {
+        tunnelId,
+        selfParty: "A",
+        self: core.makeEndpoint(backend, "0xA", keyA, true),
+        opponent: core.makeEndpoint(
+          backend,
+          "0xB",
+          { publicKey: keyB.publicKey, scheme: keyB.scheme },
+          false,
+        ),
+      },
+      txA,
+      { a: 100n, b: 100n },
+    );
 
     // Use a custom transport that exposes an errored() trigger
     class TestTransport implements SessionTransport {
@@ -224,18 +312,39 @@ describe("PvpGameSession robustness", () => {
       private closeCb: (() => void) | null = null;
       private errorCb: ((err: unknown) => void) | null = null;
       send(_f: Uint8Array) {}
-      onFrame(cb: (f: Uint8Array) => void) { this.frameCb = cb; void this.frameCb; }
-      onClose(cb: () => void) { this.closeCb = cb; void this.closeCb; }
-      onError(cb: (err: unknown) => void) { this.errorCb = cb; }
-      close() { this.closeCb?.(); }
-      errored(err: unknown) { this.errorCb?.(err); }
+      onFrame(cb: (f: Uint8Array) => void) {
+        this.frameCb = cb;
+        void this.frameCb;
+      }
+      onClose(cb: () => void) {
+        this.closeCb = cb;
+        void this.closeCb;
+      }
+      onError(cb: (err: unknown) => void) {
+        this.errorCb = cb;
+      }
+      close() {
+        this.closeCb?.();
+      }
+      errored(err: unknown) {
+        this.errorCb?.(err);
+      }
     }
 
     const tx = new TestTransport();
-    const sA = new PvpGameSession(kit, "A", { rngForSeat: seeded(11) }, undefined, { moveTimeoutMs: 5000, settleTimeoutMs: 5000 });
+    const sA = new PvpGameSession(
+      kit,
+      "A",
+      { rngForSeat: seeded(11) },
+      undefined,
+      { moveTimeoutMs: 5000, settleTimeoutMs: 5000 },
+    );
     sA.attachTunnel({
       tunnel: dtA as never,
-      initialState: kit.protocol.initialState({ tunnelId, initialBalances: { a: 100n, b: 100n } }),
+      initialState: kit.protocol.initialState({
+        tunnelId,
+        initialBalances: { a: 100n, b: 100n },
+      }),
       transport: tx,
     });
 
@@ -243,8 +352,11 @@ describe("PvpGameSession robustness", () => {
 
     tx.errored(new Error("network error"));
 
-    assert.strictEqual(sA.getSnapshot().phase, "opponent-abandoned",
-      "transport error must set phase to opponent-abandoned");
+    assert.strictEqual(
+      sA.getSnapshot().phase,
+      "opponent-abandoned",
+      "transport error must set phase to opponent-abandoned",
+    );
 
     sA.dispose();
   });
@@ -255,11 +367,18 @@ describe("PvpGameSession robustness", () => {
     // Use a blackhole transport: B side never sends back ACKs
     class BlackholeTransport implements SessionTransport {
       private closeCb: (() => void) | null = null;
-      send(_f: Uint8Array) { /* drop it */ }
+      send(_f: Uint8Array) {
+        /* drop it */
+      }
       onFrame(_cb: (f: Uint8Array) => void) {}
-      onClose(cb: () => void) { this.closeCb = cb; void this.closeCb; }
+      onClose(cb: () => void) {
+        this.closeCb = cb;
+        void this.closeCb;
+      }
       onError(_cb: (err: unknown) => void) {}
-      close() { this.closeCb?.(); }
+      close() {
+        this.closeCb?.();
+      }
     }
 
     const backend = defaultBackend();
@@ -267,18 +386,37 @@ describe("PvpGameSession robustness", () => {
     const keyB = core.generateKeyPair();
     const blackhole = new BlackholeTransport();
 
-    const dtA = new core.DistributedTunnel(kit.protocol as never, {
-      tunnelId,
-      selfParty: "A",
-      self: core.makeEndpoint(backend, "0xA", keyA, true),
-      opponent: core.makeEndpoint(backend, "0xB", { publicKey: keyB.publicKey, scheme: keyB.scheme }, false),
-    }, blackhole, { a: 100n, b: 100n });
+    const dtA = new core.DistributedTunnel(
+      kit.protocol as never,
+      {
+        tunnelId,
+        selfParty: "A",
+        self: core.makeEndpoint(backend, "0xA", keyA, true),
+        opponent: core.makeEndpoint(
+          backend,
+          "0xB",
+          { publicKey: keyB.publicKey, scheme: keyB.scheme },
+          false,
+        ),
+      },
+      blackhole,
+      { a: 100n, b: 100n },
+    );
 
     // Use very short move timeout so the test doesn't wait long
-    const sA = new PvpGameSession(kit, "A", { rngForSeat: seeded(12) }, undefined, { moveTimeoutMs: 30, settleTimeoutMs: 30 });
+    const sA = new PvpGameSession(
+      kit,
+      "A",
+      { rngForSeat: seeded(12) },
+      undefined,
+      { moveTimeoutMs: 30, settleTimeoutMs: 30 },
+    );
     sA.attachTunnel({
       tunnel: dtA as never,
-      initialState: kit.protocol.initialState({ tunnelId, initialBalances: { a: 100n, b: 100n } }),
+      initialState: kit.protocol.initialState({
+        tunnelId,
+        initialBalances: { a: 100n, b: 100n },
+      }),
       transport: blackhole,
     });
 
@@ -286,8 +424,11 @@ describe("PvpGameSession robustness", () => {
     sA.kickoff(); // drive() proposes a move that never gets ACK'd
 
     await waitFor(() => sA.getSnapshot().phase === "opponent-abandoned", 500);
-    assert.strictEqual(sA.getSnapshot().phase, "opponent-abandoned",
-      "move timeout must set phase to opponent-abandoned");
+    assert.strictEqual(
+      sA.getSnapshot().phase,
+      "opponent-abandoned",
+      "move timeout must set phase to opponent-abandoned",
+    );
 
     sA.dispose();
   });
@@ -303,10 +444,13 @@ describe("PvpGameSession robustness", () => {
       announceOpened() {},
       onOpened() {},
       sendSettleHalf() {},
-      onSettleHalf(_cb) { /* never fires */ },
+      onSettleHalf(_cb) {
+        /* never fires */
+      },
     };
 
-    const { signer, closeOnTimeoutCallCount, capturedTunnelId } = makeFakeSettlementSigner();
+    const { signer, closeOnTimeoutCallCount, capturedTunnelId } =
+      makeFakeSettlementSigner();
 
     // settle() should race against the timeout and escalate
     await sA.settle({
@@ -317,10 +461,13 @@ describe("PvpGameSession robustness", () => {
     });
 
     assert.strictEqual(
-      closeOnTimeoutCallCount(), 1,
+      closeOnTimeoutCallCount(),
+      1,
       "settle-half timeout must call closeOnTimeout exactly once",
     );
-    assert.strictEqual(sA.getSnapshot().phase, "opponent-abandoned",
+    assert.strictEqual(
+      sA.getSnapshot().phase,
+      "opponent-abandoned",
       "settle-half timeout must set phase to opponent-abandoned after closeOnTimeout",
     );
 
@@ -343,10 +490,14 @@ describe("PvpGameSession robustness", () => {
       announceOpened() {},
       onOpened() {},
       sendSettleHalf() {},
-      onSettleHalf(_cb) { /* never fires */ },
+      onSettleHalf(_cb) {
+        /* never fires */
+      },
     };
 
-    const { signer, closeOnTimeoutCallCount } = makeFakeSettlementSigner({ closeOnTimeoutFails: true });
+    const { signer, closeOnTimeoutCallCount } = makeFakeSettlementSigner({
+      closeOnTimeoutFails: true,
+    });
 
     await sA.settle({
       channel: hangingChannel,
@@ -355,8 +506,14 @@ describe("PvpGameSession robustness", () => {
       onchainNonce: 0n,
     });
 
-    assert.strictEqual(closeOnTimeoutCallCount(), 1, "closeOnTimeout must be called once even if it fails");
-    assert.strictEqual(sA.getSnapshot().phase, "opponent-abandoned",
+    assert.strictEqual(
+      closeOnTimeoutCallCount(),
+      1,
+      "closeOnTimeout must be called once even if it fails",
+    );
+    assert.strictEqual(
+      sA.getSnapshot().phase,
+      "opponent-abandoned",
       "phase must still be opponent-abandoned even if closeOnTimeout throws",
     );
 
@@ -367,25 +524,50 @@ describe("PvpGameSession robustness", () => {
     const { sA, sB, chA, chB } = await runToTerminal({ seed: 40 });
 
     const failSigner: SettlementSigner = {
-      async openAndFundSeatA() { return { tunnelId: "" }; },
+      async openAndFundSeatA() {
+        return { tunnelId: "" };
+      },
       async depositSeatB() {},
-      async submitCooperativeClose() { throw new Error("backend and wallet both failed"); },
-      async closeOnTimeout() { return { digest: "0xdeadbeef" }; },
+      async submitCooperativeClose() {
+        throw new Error("backend and wallet both failed");
+      },
+      async closeOnTimeout() {
+        return { digest: "0xdeadbeef" };
+      },
     };
     const okSigner: SettlementSigner = {
-      async openAndFundSeatA() { return { tunnelId: "" }; },
+      async openAndFundSeatA() {
+        return { tunnelId: "" };
+      },
       async depositSeatB() {},
-      async submitCooperativeClose() { return { digest: "0xfeedcafe" }; },
-      async closeOnTimeout() { return { digest: "0xdeadbeef" }; },
+      async submitCooperativeClose() {
+        return { digest: "0xfeedcafe" };
+      },
+      async closeOnTimeout() {
+        return { digest: "0xdeadbeef" };
+      },
     };
 
     await Promise.all([
-      sA.settle({ channel: chA, settlementSigner: failSigner, createdAt: 0n, onchainNonce: 0n }),
-      sB.settle({ channel: chB, settlementSigner: okSigner, createdAt: 0n, onchainNonce: 0n }),
+      sA.settle({
+        channel: chA,
+        settlementSigner: failSigner,
+        createdAt: 0n,
+        onchainNonce: 0n,
+      }),
+      sB.settle({
+        channel: chB,
+        settlementSigner: okSigner,
+        createdAt: 0n,
+        onchainNonce: 0n,
+      }),
     ]);
 
-    assert.strictEqual(sA.getSnapshot().phase, "error",
-      "submitCooperativeClose failure must set phase to error");
+    assert.strictEqual(
+      sA.getSnapshot().phase,
+      "error",
+      "submitCooperativeClose failure must set phase to error",
+    );
 
     sA.dispose();
     sB.dispose();
@@ -398,8 +580,18 @@ describe("PvpGameSession robustness", () => {
     const { signer: signerB } = makeFakeSettlementSigner();
 
     await Promise.all([
-      sA.settle({ channel: chA, settlementSigner: signerA, createdAt: 0n, onchainNonce: 0n }),
-      sB.settle({ channel: chB, settlementSigner: signerB, createdAt: 0n, onchainNonce: 0n }),
+      sA.settle({
+        channel: chA,
+        settlementSigner: signerA,
+        createdAt: 0n,
+        onchainNonce: 0n,
+      }),
+      sB.settle({
+        channel: chB,
+        settlementSigner: signerB,
+        createdAt: 0n,
+        onchainNonce: 0n,
+      }),
     ]);
 
     assert.strictEqual(sA.getSnapshot().phase, "done");
@@ -407,8 +599,11 @@ describe("PvpGameSession robustness", () => {
     // Simulate transport close AFTER a successful settle — must not revert to abandoned.
     (chA.transport as SessionTransport).close();
 
-    assert.strictEqual(sA.getSnapshot().phase, "done",
-      "transport close after done must not change phase");
+    assert.strictEqual(
+      sA.getSnapshot().phase,
+      "done",
+      "transport close after done must not change phase",
+    );
 
     sA.dispose();
     sB.dispose();

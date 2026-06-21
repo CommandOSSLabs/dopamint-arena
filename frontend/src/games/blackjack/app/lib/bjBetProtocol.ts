@@ -99,7 +99,10 @@ export function fixedBetMove(
   if (s.phase !== "round_over") return null;
   const cap = maxBet(s);
   if (cap < MIN_BET) return null;
-  const amt = Math.max(Number(MIN_BET), Math.min(Math.floor(amount), Number(cap)));
+  const amt = Math.max(
+    Number(MIN_BET),
+    Math.min(Math.floor(amount), Number(cap)),
+  );
   return { action: "bet", amount: amt };
 }
 

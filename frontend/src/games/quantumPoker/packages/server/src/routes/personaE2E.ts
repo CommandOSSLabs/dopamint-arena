@@ -7,7 +7,10 @@ import {
   type SettlementWithRoot,
 } from "sui-tunnel-ts/core/wire";
 import type { Party } from "sui-tunnel-ts/protocol/Protocol";
-import type { PokerMove, PokerState } from "sui-tunnel-ts/protocol/quantumPoker";
+import type {
+  PokerMove,
+  PokerState,
+} from "sui-tunnel-ts/protocol/quantumPoker";
 import {
   JULES_PROFILE,
   NARI_PROFILE,
@@ -88,7 +91,10 @@ interface DemoStep {
 }
 
 class PersonaE2EError extends Error {
-  constructor(message: string, readonly status = 500) {
+  constructor(
+    message: string,
+    readonly status = 500,
+  ) {
     super(message);
   }
 }
@@ -121,7 +127,10 @@ function parseNumber(
   if (raw === undefined) return fallback;
   const value = Number(raw);
   if (!Number.isInteger(value) || value <= 0) {
-    throw new PersonaE2EError("hands and maxSteps must be positive integers", 400);
+    throw new PersonaE2EError(
+      "hands and maxSteps must be positive integers",
+      400,
+    );
   }
   return value;
 }
@@ -254,10 +263,10 @@ function createSession(
       tunnelId,
       initialBalances: { a: stake, b: stake },
     }),
-      nonce: 0n,
-      latestUpdate: null,
-      transcriptUpdates: [],
-      pendingMove: null,
+    nonce: 0n,
+    latestUpdate: null,
+    transcriptUpdates: [],
+    pendingMove: null,
     pendingSettlement: null,
     latestSettlement: null,
     suiRandomness: null,
@@ -404,7 +413,10 @@ async function closeTunnel(
     partyBBalance: balances.b,
     finalNonce: onchainNonce + 1n,
     timestamp: BigInt(Date.now()),
-    transcriptRoot: transcriptRootFor(session.tunnelId, session.transcriptUpdates),
+    transcriptRoot: transcriptRootFor(
+      session.tunnelId,
+      session.transcriptUpdates,
+    ),
   };
   const message = serializeSettlementWithRoot(settlement);
   const signed: CoSignedSettlementWithRoot = {
@@ -465,7 +477,10 @@ export function createPersonaE2EHandler(deps: PersonaE2EDeps): Handler {
       const body = await readBody(request);
       assertConfigured(deps.config);
       if (deps.botWalletPool.availableCount() < 2) {
-        throw new PersonaE2EError("two available bot wallets are required", 409);
+        throw new PersonaE2EError(
+          "two available bot wallets are required",
+          409,
+        );
       }
 
       const stake = parseBigInt(body.stake, deps.config.defaultStake);
@@ -566,8 +581,8 @@ export function createPersonaE2EHandler(deps: PersonaE2EDeps): Handler {
         settlement: settlement
           ? coSignedSettlementToJson(settlement.signed)
           : session.latestSettlement
-          ? coSignedSettlementToJson(session.latestSettlement)
-          : null,
+            ? coSignedSettlementToJson(session.latestSettlement)
+            : null,
         settlementMessage: settlement
           ? settlementToJson(settlement.signed.settlement)
           : null,

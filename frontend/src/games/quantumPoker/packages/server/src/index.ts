@@ -70,4 +70,6 @@ const server = Bun.serve({
   fetch: router,
 });
 
-console.log(`Quantum Poker bot server listening on http://localhost:${server.port}`);
+console.log(
+  `Quantum Poker bot server listening on http://localhost:${server.port}`,
+);

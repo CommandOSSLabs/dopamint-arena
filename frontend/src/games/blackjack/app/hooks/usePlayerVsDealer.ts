@@ -2,7 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { core, proof, protocols, bytesToHex } from "sui-tunnel-ts";
 import type { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import type { Transaction } from "@mysten/sui/transactions";
-import { getControlPlaneClient, type RegisterSessionResult } from "@/backend/controlPlane";
+import {
+  getControlPlaneClient,
+  type RegisterSessionResult,
+} from "@/backend/controlPlane";
 import { coSignedToSettleRequest } from "@/backend/settleRequest";
 import {
   buildCreateAndFundTx,
@@ -350,12 +353,16 @@ export function usePlayerVsDealer(): PlayerVsDealerGame {
           .registerSession({
             userAddress: bots.a.address,
             game: "blackjack",
-            tunnels: [{ tunnelId, partyA: bots.a.address, partyB: bots.b.address }],
+            tunnels: [
+              { tunnelId, partyA: bots.a.address, partyB: bots.b.address },
+            ],
           })
           .then((s) => {
             sessionRef.current = s;
           })
-          .catch((e) => console.error("[blackjack table] registerSession failed:", e));
+          .catch((e) =>
+            console.error("[blackjack table] registerSession failed:", e),
+          );
 
         tunnelRef.current = tunnel;
         tunnelIdRef.current = tunnelId;
@@ -514,7 +521,10 @@ export function usePlayerVsDealer(): PlayerVsDealerGame {
           );
           closeDigest = result.txDigest;
         } catch (e) {
-          console.warn("[settle] Server-side settle failed, falling back to bot keypair submission:", e);
+          console.warn(
+            "[settle] Server-side settle failed, falling back to bot keypair submission:",
+            e,
+          );
           const closeRes = await submit(
             buildSettleWithRootTx(tunnelId, settlement),
             bots.a.keypair,

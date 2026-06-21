@@ -8,7 +8,12 @@
 import type { SessionSnapshot } from "@/agent/session/pvpGameSession";
 import type { MultiGameTicTacToeState } from "@ttt/shared/ttt/multiGameProtocol";
 import type { CaroState } from "@ttt/shared/caro/protocol";
-import type { PvpPhase, PvpTttView, GameResult, Variant } from "../app/hooks/usePvpTicTacToe";
+import type {
+  PvpPhase,
+  PvpTttView,
+  GameResult,
+  Variant,
+} from "../app/hooks/usePvpTicTacToe";
 
 /**
  * React-local state threaded through from the hook.
@@ -63,10 +68,7 @@ export function mapSnapshotToView(
 
   const winner = inner ? inner.winner : 0;
   const isMyTurn =
-    !!inner &&
-    inner.winner === 0 &&
-    inner.turn === role &&
-    phase === "playing";
+    !!inner && inner.winner === 0 && inner.turn === role && phase === "playing";
 
   // close digest comes from snapshot; create/deposit come from React-local extras.
   const digests: { create?: string; deposit?: string; close?: string } = {
@@ -80,7 +82,11 @@ export function mapSnapshotToView(
     role,
     variant: extras.variant,
     board: inner ? inner.board : [],
-    size: inner ? ((inner as Partial<CaroState>).size ?? 3) : extras.variant === "caro" ? extras.boardSize : 3,
+    size: inner
+      ? ((inner as Partial<CaroState>).size ?? 3)
+      : extras.variant === "caro"
+        ? extras.boardSize
+        : 3,
     lastMove: inner ? ((inner as Partial<CaroState>).lastMove ?? -1) : -1,
     turn: inner ? inner.turn : null,
     winner,

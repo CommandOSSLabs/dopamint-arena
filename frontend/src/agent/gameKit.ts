@@ -1,4 +1,9 @@
-import type { Protocol, Party, ProtocolContext, Balances } from "sui-tunnel-ts/protocol/Protocol";
+import type {
+  Protocol,
+  Party,
+  ProtocolContext,
+  Balances,
+} from "sui-tunnel-ts/protocol/Protocol";
 import { createTicTacToeKit } from "./games/ticTacToe/kit";
 import { createBlackjackKit } from "./games/blackjack/kit";
 import { createBattleshipKit } from "./games/battleship/kit";

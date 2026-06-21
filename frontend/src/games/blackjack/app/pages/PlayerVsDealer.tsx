@@ -363,9 +363,7 @@ export default function PlayerVsDealer() {
   // Pre-table start screen: no table has been dealt yet.
   if (!started) {
     return (
-      <div
-        className="h-full w-full flex flex-col items-center justify-center relative text-white overflow-hidden select-none casino-felt fade-in-up"
-      >
+      <div className="h-full w-full flex flex-col items-center justify-center relative text-white overflow-hidden select-none casino-felt fade-in-up">
         <div className="absolute inset-0 bg-black/60" />
         <div className="relative z-10 flex flex-col items-center gap-6 bg-zinc-950/85 border border-zinc-800 rounded-3xl p-8 md:p-12 w-[85%] max-w-4xl shadow-2xl">
           <h1 className="text-3xl font-extrabold text-[#d4af37] font-serif tracking-widest uppercase text-center">
@@ -449,9 +447,7 @@ export default function PlayerVsDealer() {
 
   return (
     <div className="h-full w-full flex flex-col relative text-white overflow-hidden select-none bg-zinc-950 fade-in-up">
-      <div
-        className="flex-1 w-full relative casino-felt"
-      >
+      <div className="flex-1 w-full relative casino-felt">
         <button
           onClick={() => navigate("/")}
           className="absolute top-4 left-4 z-30 p-2.5 text-zinc-400 hover:text-white bg-black/60 hover:bg-black/85 rounded-full border border-zinc-800/85 transition-all shadow-md active:scale-95 flex items-center justify-center cursor-pointer"
@@ -517,7 +513,9 @@ export default function PlayerVsDealer() {
         )}
 
         {/* Toasts overlay: left of Rounds panel */}
-        <div className={`absolute z-30 flex flex-col items-end gap-2 pointer-events-none ${isPortrait ? "top-4 right-4" : "top-[120px] right-3 md:top-4 md:right-60"}`}>
+        <div
+          className={`absolute z-30 flex flex-col items-end gap-2 pointer-events-none ${isPortrait ? "top-4 right-4" : "top-[120px] right-3 md:top-4 md:right-60"}`}
+        >
           {toasts.map((t) => (
             <div
               key={t.id}
@@ -706,7 +704,6 @@ export default function PlayerVsDealer() {
                 <span className="text-zinc-600">({view.dealerSum})</span>
               </div>
             </div>
-
           </div>
 
           {/* Controls: Hit/Stand mid-round, Next round after, Cash out anytime the table
@@ -720,9 +717,7 @@ export default function PlayerVsDealer() {
                 {cashOutBtn}
               </>
             ) : (
-              <>
-                {dealBtn}
-              </>
+              <>{dealBtn}</>
             )}
           </div>
         </div>

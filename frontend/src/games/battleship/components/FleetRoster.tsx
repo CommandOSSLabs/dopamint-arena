@@ -16,7 +16,10 @@ export function FleetRoster({ fleet }: { fleet: ShipStatus[] }) {
           )}
         >
           <span
-            className={cn("hidden @[22rem]:inline", s.sunk && "line-through opacity-60")}
+            className={cn(
+              "hidden @[22rem]:inline",
+              s.sunk && "line-through opacity-60",
+            )}
           >
             {s.name}
           </span>

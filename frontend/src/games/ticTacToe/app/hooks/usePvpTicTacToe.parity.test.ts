@@ -46,7 +46,13 @@ function baseExtras(overrides?: Partial<SnapshotExtras>): SnapshotExtras {
 }
 
 function idleSnapshot(): Readonly<SessionSnapshot<MultiGameTicTacToeState>> {
-  return { phase: "idle", state: null, balances: null, terminal: false, error: null };
+  return {
+    phase: "idle",
+    state: null,
+    balances: null,
+    terminal: false,
+    error: null,
+  };
 }
 
 function playingSnapshot(

@@ -169,9 +169,7 @@ export default function PvpBlackjack() {
   return (
     <div className="h-full w-full flex flex-col relative text-white overflow-hidden select-none bg-zinc-950">
       {/* Casino felt (same background as the bot-vs-bot table) */}
-      <div
-        className="flex-1 w-full relative casino-felt"
-      >
+      <div className="flex-1 w-full relative casino-felt">
         <button
           onClick={() => {
             g.leave();

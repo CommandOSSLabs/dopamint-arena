@@ -55,7 +55,8 @@ export function createQuantumPokerKit(
     id: "quantum-poker",
     protocol,
     stateHash: (state) => defaultStateHash(protocol, state),
-    createBot: (seat: Party, ctx: BotContext) => new QuantumPokerBot(seat, ctx, config),
+    createBot: (seat: Party, ctx: BotContext) =>
+      new QuantumPokerBot(seat, ctx, config),
     defaultStake: stake,
   };
 }

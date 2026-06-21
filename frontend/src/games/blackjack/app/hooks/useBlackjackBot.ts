@@ -2,7 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { core, proof, bytesToHex } from "sui-tunnel-ts";
 import type { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import type { Transaction } from "@mysten/sui/transactions";
-import { getControlPlaneClient, type RegisterSessionResult } from "@/backend/controlPlane";
+import {
+  getControlPlaneClient,
+  type RegisterSessionResult,
+} from "@/backend/controlPlane";
 import { coSignedToSettleRequest } from "@/backend/settleRequest";
 import {
   buildCreateAndFundTx,
@@ -437,12 +440,16 @@ export function useBlackjackBot(): BlackjackBotGame {
           .registerSession({
             userAddress: bots.a.address,
             game: "blackjack",
-            tunnels: [{ tunnelId, partyA: bots.a.address, partyB: bots.b.address }],
+            tunnels: [
+              { tunnelId, partyA: bots.a.address, partyB: bots.b.address },
+            ],
           })
           .then((s) => {
             sessionRef.current = s;
           })
-          .catch((e) => console.error("[blackjack bot] registerSession failed:", e));
+          .catch((e) =>
+            console.error("[blackjack bot] registerSession failed:", e),
+          );
 
         // 4) animate moves; each .step co-signs AND verifies both sigs (mode "full").
         // The dealer ('dealer' phase) moves as B, everyone else as A.
@@ -556,7 +563,10 @@ export function useBlackjackBot(): BlackjackBotGame {
           );
           closeDigest = result.txDigest;
         } catch (e) {
-          console.warn("[settle] Server-side settle failed, falling back to bot keypair submission:", e);
+          console.warn(
+            "[settle] Server-side settle failed, falling back to bot keypair submission:",
+            e,
+          );
           const closeRes = await submit(
             buildSettleWithRootTx(tunnelId, s),
             bots.a.keypair,
@@ -589,9 +599,12 @@ export function useBlackjackBot(): BlackjackBotGame {
         // 7) auto-play: continue until a bot is low on gas, or the user stopped.
         if (autoRef.current) {
           if (b && b.a >= MIN_PLAY_MIST && b.b >= MIN_PLAY_MIST) {
-            nextRef.current = setTimeout(() => {
-              if (autoRef.current) runRef.current();
-            }, autoRef.current ? 100 : NEXT_GAME_MS);
+            nextRef.current = setTimeout(
+              () => {
+                if (autoRef.current) runRef.current();
+              },
+              autoRef.current ? 100 : NEXT_GAME_MS,
+            );
           } else {
             autoRef.current = false;
             setAuto(false);

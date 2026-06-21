@@ -33,7 +33,9 @@ function makeFakeRelayPair(): { relayA: SessionRelay; relayB: SessionRelay } {
   const { a: txA, b: txB } = linkedLoopback();
 
   // Each channel buffers one hello and one opened event.
-  function makeChannel(transport: SessionTransport): MatchChannel & { _deliver(event: string, val: string): void } {
+  function makeChannel(
+    transport: SessionTransport,
+  ): MatchChannel & { _deliver(event: string, val: string): void } {
     let helloCb: ((pubkeyHex: string) => void) | null = null;
     let helloBuffer: string | null = null;
     let openedCb: ((tunnelId: string) => void) | null = null;
@@ -41,23 +43,35 @@ function makeFakeRelayPair(): { relayA: SessionRelay; relayB: SessionRelay } {
 
     const ch = {
       transport,
-      partyHello(_pubkeyHex: string) { /* side-channelled via _deliver */ },
-      onPeerHello(cb: (pubkeyHex: string) => void) {
-        if (helloBuffer !== null) { cb(helloBuffer); helloBuffer = null; }
-        else helloCb = cb;
+      partyHello(_pubkeyHex: string) {
+        /* side-channelled via _deliver */
       },
-      announceOpened(_tunnelId: string) { /* side-channelled via _deliver */ },
+      onPeerHello(cb: (pubkeyHex: string) => void) {
+        if (helloBuffer !== null) {
+          cb(helloBuffer);
+          helloBuffer = null;
+        } else helloCb = cb;
+      },
+      announceOpened(_tunnelId: string) {
+        /* side-channelled via _deliver */
+      },
       onOpened(cb: (tunnelId: string) => void) {
-        if (openedBuffer !== null) { cb(openedBuffer); openedBuffer = null; }
-        else openedCb = cb;
+        if (openedBuffer !== null) {
+          cb(openedBuffer);
+          openedBuffer = null;
+        } else openedCb = cb;
       },
       _deliver(event: string, val: string) {
         if (event === "hello") {
-          if (helloCb) { helloCb(val); helloCb = null; }
-          else helloBuffer = val;
+          if (helloCb) {
+            helloCb(val);
+            helloCb = null;
+          } else helloBuffer = val;
         } else if (event === "opened") {
-          if (openedCb) { openedCb(val); openedCb = null; }
-          else openedBuffer = val;
+          if (openedCb) {
+            openedCb(val);
+            openedCb = null;
+          } else openedBuffer = val;
         }
       },
     };
@@ -86,8 +100,12 @@ function makeFakeRelayPair(): { relayA: SessionRelay; relayB: SessionRelay } {
       const cbA = matchCbA;
       const cbB = matchCbB;
       // fire in separate micro-tasks so neither blocks the other
-      Promise.resolve().then(() => cbA({ matchId, role: "A", opponentWallet: walletB }));
-      Promise.resolve().then(() => cbB({ matchId, role: "B", opponentWallet: walletA }));
+      Promise.resolve().then(() =>
+        cbA({ matchId, role: "A", opponentWallet: walletB }),
+      );
+      Promise.resolve().then(() =>
+        cbB({ matchId, role: "B", opponentWallet: walletA }),
+      );
     }
   }
 
@@ -96,8 +114,13 @@ function makeFakeRelayPair(): { relayA: SessionRelay; relayB: SessionRelay } {
       aQueued = true;
       tryFire();
     },
-    onMatch(cb) { matchCbA = cb; tryFire(); },
-    channel(_matchId: string) { return chA; },
+    onMatch(cb) {
+      matchCbA = cb;
+      tryFire();
+    },
+    channel(_matchId: string) {
+      return chA;
+    },
   };
 
   const relayB: SessionRelay = {
@@ -105,8 +128,13 @@ function makeFakeRelayPair(): { relayA: SessionRelay; relayB: SessionRelay } {
       bQueued = true;
       tryFire();
     },
-    onMatch(cb) { matchCbB = cb; tryFire(); },
-    channel(_matchId: string) { return chB; },
+    onMatch(cb) {
+      matchCbB = cb;
+      tryFire();
+    },
+    channel(_matchId: string) {
+      return chB;
+    },
   };
 
   return { relayA, relayB };
@@ -182,8 +210,10 @@ function waitFor(predicate: () => boolean, timeoutMs = 5000): Promise<void> {
   return new Promise((res, rej) => {
     const t0 = Date.now();
     const i = setInterval(() => {
-      if (predicate()) { clearInterval(i); res(); }
-      else if (Date.now() - t0 > timeoutMs) {
+      if (predicate()) {
+        clearInterval(i);
+        res();
+      } else if (Date.now() - t0 > timeoutMs) {
         clearInterval(i);
         rej(new Error(`waitFor timeout after ${timeoutMs}ms`));
       }
@@ -203,16 +233,26 @@ describe("PvpGameSession start() handshake", () => {
 
     const { relayA, relayB } = makeFakeRelayPair();
 
-    const sA = new PvpGameSession(kit, "A", { rngForSeat: seeded(1) }, {
-      relay: relayA,
-      endpointFactory: makeFakeEndpointFactory(keyA, "0xAAAA"),
-      settlementSigner: makeFakeSettlementSigner(),
-    });
-    const sB = new PvpGameSession(kit, "B", { rngForSeat: seeded(2) }, {
-      relay: relayB,
-      endpointFactory: makeFakeEndpointFactory(keyB, "0xBBBB"),
-      settlementSigner: makeFakeSettlementSigner(),
-    });
+    const sA = new PvpGameSession(
+      kit,
+      "A",
+      { rngForSeat: seeded(1) },
+      {
+        relay: relayA,
+        endpointFactory: makeFakeEndpointFactory(keyA, "0xAAAA"),
+        settlementSigner: makeFakeSettlementSigner(),
+      },
+    );
+    const sB = new PvpGameSession(
+      kit,
+      "B",
+      { rngForSeat: seeded(2) },
+      {
+        relay: relayB,
+        endpointFactory: makeFakeEndpointFactory(keyB, "0xBBBB"),
+        settlementSigner: makeFakeSettlementSigner(),
+      },
+    );
 
     assert.strictEqual(sA.getSnapshot().phase, "idle");
     assert.strictEqual(sB.getSnapshot().phase, "idle");
@@ -223,8 +263,16 @@ describe("PvpGameSession start() handshake", () => {
 
     await Promise.all([doneA, doneB]);
 
-    assert.strictEqual(sA.getSnapshot().phase, "playing", "sA must reach playing");
-    assert.strictEqual(sB.getSnapshot().phase, "playing", "sB must reach playing");
+    assert.strictEqual(
+      sA.getSnapshot().phase,
+      "playing",
+      "sA must reach playing",
+    );
+    assert.strictEqual(
+      sB.getSnapshot().phase,
+      "playing",
+      "sB must reach playing",
+    );
     assert.strictEqual(sA.getSnapshot().error, null, "sA must have no error");
     assert.strictEqual(sB.getSnapshot().error, null, "sB must have no error");
   });
@@ -236,16 +284,26 @@ describe("PvpGameSession start() handshake", () => {
 
     const { relayA, relayB } = makeFakeRelayPair();
 
-    const sA = new PvpGameSession(kit, "A", { rngForSeat: seeded(3) }, {
-      relay: relayA,
-      endpointFactory: makeFakeEndpointFactory(keyA, "0xAAAA"),
-      settlementSigner: makeFakeSettlementSigner(),
-    });
-    const sB = new PvpGameSession(kit, "B", { rngForSeat: seeded(4) }, {
-      relay: relayB,
-      endpointFactory: makeFakeEndpointFactory(keyB, "0xBBBB"),
-      settlementSigner: makeFakeSettlementSigner(),
-    });
+    const sA = new PvpGameSession(
+      kit,
+      "A",
+      { rngForSeat: seeded(3) },
+      {
+        relay: relayA,
+        endpointFactory: makeFakeEndpointFactory(keyA, "0xAAAA"),
+        settlementSigner: makeFakeSettlementSigner(),
+      },
+    );
+    const sB = new PvpGameSession(
+      kit,
+      "B",
+      { rngForSeat: seeded(4) },
+      {
+        relay: relayB,
+        endpointFactory: makeFakeEndpointFactory(keyB, "0xBBBB"),
+        settlementSigner: makeFakeSettlementSigner(),
+      },
+    );
 
     sA.setAuto(true);
     sB.setAuto(true);

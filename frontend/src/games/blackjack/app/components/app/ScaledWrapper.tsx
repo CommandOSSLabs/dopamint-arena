@@ -1,4 +1,11 @@
-import { createContext, useContext, useEffect, useState, useRef, ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  useRef,
+  ReactNode,
+} from "react";
 
 interface ScaleContextType {
   width: number;

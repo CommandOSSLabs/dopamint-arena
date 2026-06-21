@@ -28,27 +28,56 @@ describe("PvpGameSession (two-endpoint loopback)", () => {
     const keyA = core.generateKeyPair();
     const keyB = core.generateKeyPair();
     // tunnelId must be a valid 0x-prefixed 32-byte hex string (wire format requirement).
-    const ctx = { tunnelId: "0x" + "ab".repeat(32), initialBalances: { a: 100n, b: 100n } };
+    const ctx = {
+      tunnelId: "0x" + "ab".repeat(32),
+      initialBalances: { a: 100n, b: 100n },
+    };
     const backend = defaultBackend();
 
-    const dtA = new core.DistributedTunnel(kit.protocol as never, {
-      tunnelId: ctx.tunnelId,
-      selfParty: "A",
-      self: core.makeEndpoint(backend, "0xA", keyA, true),
-      opponent: core.makeEndpoint(backend, "0xB", { publicKey: keyB.publicKey, scheme: keyB.scheme }, false),
-    }, txA, ctx.initialBalances);
+    const dtA = new core.DistributedTunnel(
+      kit.protocol as never,
+      {
+        tunnelId: ctx.tunnelId,
+        selfParty: "A",
+        self: core.makeEndpoint(backend, "0xA", keyA, true),
+        opponent: core.makeEndpoint(
+          backend,
+          "0xB",
+          { publicKey: keyB.publicKey, scheme: keyB.scheme },
+          false,
+        ),
+      },
+      txA,
+      ctx.initialBalances,
+    );
 
-    const dtB = new core.DistributedTunnel(kit.protocol as never, {
-      tunnelId: ctx.tunnelId,
-      selfParty: "B",
-      self: core.makeEndpoint(backend, "0xB", keyB, true),
-      opponent: core.makeEndpoint(backend, "0xA", { publicKey: keyA.publicKey, scheme: keyA.scheme }, false),
-    }, txB, ctx.initialBalances);
+    const dtB = new core.DistributedTunnel(
+      kit.protocol as never,
+      {
+        tunnelId: ctx.tunnelId,
+        selfParty: "B",
+        self: core.makeEndpoint(backend, "0xB", keyB, true),
+        opponent: core.makeEndpoint(
+          backend,
+          "0xA",
+          { publicKey: keyA.publicKey, scheme: keyA.scheme },
+          false,
+        ),
+      },
+      txB,
+      ctx.initialBalances,
+    );
 
     const sA = new PvpGameSession(kit, "A", { rngForSeat: seeded(1) });
     const sB = new PvpGameSession(kit, "B", { rngForSeat: seeded(2) });
-    sA.attachTunnel({ tunnel: dtA as never, initialState: kit.protocol.initialState(ctx) });
-    sB.attachTunnel({ tunnel: dtB as never, initialState: kit.protocol.initialState(ctx) });
+    sA.attachTunnel({
+      tunnel: dtA as never,
+      initialState: kit.protocol.initialState(ctx),
+    });
+    sB.attachTunnel({
+      tunnel: dtB as never,
+      initialState: kit.protocol.initialState(ctx),
+    });
     sA.setAuto(true);
     sB.setAuto(true);
 
@@ -74,7 +103,11 @@ function waitFor(predicate: () => boolean): Promise<void> {
         res();
       } else if (Date.now() - t0 > 5000) {
         clearInterval(i);
-        rej(new Error("waitFor timeout: game did not reach terminal state within 5s"));
+        rej(
+          new Error(
+            "waitFor timeout: game did not reach terminal state within 5s",
+          ),
+        );
       }
     }, 1);
   });

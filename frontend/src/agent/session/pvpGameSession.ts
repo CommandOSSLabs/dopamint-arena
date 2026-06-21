@@ -153,7 +153,11 @@ export class PvpGameSession<S, M> {
   }
 
   // Test/Task-4 seam: inject a ready tunnel + seeded state.
-  attachTunnel(deps: { tunnel: TunnelLike<S, M>; initialState: S; transport?: SessionTransport }): void {
+  attachTunnel(deps: {
+    tunnel: TunnelLike<S, M>;
+    initialState: S;
+    transport?: SessionTransport;
+  }): void {
     this.tunnel = deps.tunnel;
     // Re-initialise the Transcript with the real tunnelId now that it's known.
     this.transcript = new Transcript(deps.tunnel.tunnelId);
@@ -205,7 +209,11 @@ export class PvpGameSession<S, M> {
   async start(args: { game: string; stake: bigint }): Promise<void> {
     const deps = this.startDeps;
     if (!deps) {
-      this.fail(new Error("start() requires relay/endpointFactory/settlementSigner deps"));
+      this.fail(
+        new Error(
+          "start() requires relay/endpointFactory/settlementSigner deps",
+        ),
+      );
       return;
     }
     const { relay, endpointFactory, settlementSigner } = deps;
@@ -214,9 +222,11 @@ export class PvpGameSession<S, M> {
 
       // Register the match callback before queueJoin to avoid the race where
       // match.found fires during the await inside queueJoin.
-      const matchPromise = new Promise<{ matchId: string; role: "A" | "B"; opponentWallet: string }>(
-        (res) => relay.onMatch(res),
-      );
+      const matchPromise = new Promise<{
+        matchId: string;
+        role: "A" | "B";
+        opponentWallet: string;
+      }>((res) => relay.onMatch(res));
 
       await relay.queueJoin(args.game);
       this.setPhase("queuing");
@@ -236,7 +246,9 @@ export class PvpGameSession<S, M> {
       let tunnelId: string;
       if (match.role === "A") {
         this.setPhase("opening");
-        const opened = await settlementSigner.openAndFundSeatA({ stake: args.stake });
+        const opened = await settlementSigner.openAndFundSeatA({
+          stake: args.stake,
+        });
         tunnelId = opened.tunnelId;
         ch.announceOpened(tunnelId);
       } else {
@@ -272,7 +284,11 @@ export class PvpGameSession<S, M> {
         initialBalances,
       );
 
-      this.attachTunnel({ tunnel: dt as never, initialState: dt.state, transport: ch.transport });
+      this.attachTunnel({
+        tunnel: dt as never,
+        initialState: dt.state,
+        transport: ch.transport,
+      });
     } catch (e) {
       this.fail(e);
     }
@@ -304,7 +320,9 @@ export class PvpGameSession<S, M> {
       // Race the peer's settle-half against the timeout.  If the peer never
       // responds, escalate to a non-cooperative on-chain close.
       const peerHalf = await this.withSettleTimeout(
-        new Promise<{ sig: string; root: string }>((res) => channel.onSettleHalf(res)),
+        new Promise<{ sig: string; root: string }>((res) =>
+          channel.onSettleHalf(res),
+        ),
         settlementSigner,
         t.tunnelId,
       );
@@ -480,7 +498,12 @@ export class PvpGameSession<S, M> {
     this.clearTimers();
     const cur = this.store.get();
     // Only transition if we're in an active (non-terminal) phase.
-    if (cur.phase === "done" || cur.phase === "error" || cur.phase === "opponent-abandoned") return;
+    if (
+      cur.phase === "done" ||
+      cur.phase === "error" ||
+      cur.phase === "opponent-abandoned"
+    )
+      return;
     this.store.set({ ...cur, phase: "opponent-abandoned", error: null });
   }
 

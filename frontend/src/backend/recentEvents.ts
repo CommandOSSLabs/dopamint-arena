@@ -4,14 +4,17 @@ import type { TxnRow } from "../panels/types";
 /** MIST (1e9) → trimmed SUI string, e.g. 2_000_000_000 → "2", 2 → "0.000000002". */
 function fmtSui(mist: number): string {
   const whole = Math.trunc(mist / 1e9);
-  const frac = String(Math.abs(mist) % 1e9).padStart(9, "0").replace(/0+$/, "");
+  const frac = String(Math.abs(mist) % 1e9)
+    .padStart(9, "0")
+    .replace(/0+$/, "");
   return frac ? `${whole}.${frac}` : `${whole}`;
 }
 
 /** Stable non-negative int from the tx digest, for React keys (djb2). */
 function digestId(digest: string): number {
   let h = 5381;
-  for (let i = 0; i < digest.length; i++) h = ((h << 5) + h + digest.charCodeAt(i)) | 0;
+  for (let i = 0; i < digest.length; i++)
+    h = ((h << 5) + h + digest.charCodeAt(i)) | 0;
   return Math.abs(h);
 }
 

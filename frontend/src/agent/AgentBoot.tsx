@@ -3,7 +3,11 @@
 // first load). Renders children once an account is connected.
 import { useEffect, useRef, type ReactNode } from "react";
 import { getWallets } from "@mysten/wallet-standard";
-import { useConnectWallet, useCurrentAccount, useSuiClient } from "@mysten/dapp-kit";
+import {
+  useConnectWallet,
+  useCurrentAccount,
+  useSuiClient,
+} from "@mysten/dapp-kit";
 import { programmaticWalletFromSecret } from "../wallet/programmaticWallet";
 import { parseAgentConfig } from "./agentConfig";
 

@@ -1,6 +1,10 @@
 import { concatBytes } from "sui-tunnel-ts/core/bytes";
 import { blake2b256, nobleBackend } from "sui-tunnel-ts/core/crypto";
-import { nextU64, seedFromBytes, type Seed } from "sui-tunnel-ts/core/randomness";
+import {
+  nextU64,
+  seedFromBytes,
+  type Seed,
+} from "sui-tunnel-ts/core/randomness";
 import { u64ToBeBytes } from "sui-tunnel-ts/core/wire";
 import type { BotWallet } from "./botWalletPool";
 import type { QuantumPokerSession } from "./sessionStore";

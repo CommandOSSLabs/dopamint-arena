@@ -85,10 +85,14 @@ function shortHash(bytes: Uint8Array): string {
 
 function shortDigest(digest: string | null | undefined): string | null {
   if (!digest) return null;
-  return digest.length > 12 ? `${digest.slice(0, 6)}...${digest.slice(-4)}` : digest;
+  return digest.length > 12
+    ? `${digest.slice(0, 6)}...${digest.slice(-4)}`
+    : digest;
 }
 
-function isServerRuntime(runtime: RuntimeLike): runtime is ServerQuantumPokerRuntime {
+function isServerRuntime(
+  runtime: RuntimeLike,
+): runtime is ServerQuantumPokerRuntime {
   return "settle" in runtime;
 }
 
@@ -296,9 +300,8 @@ export function QuantumPokerWindow(_props: GameWindowProps) {
     }
     setBusy(true);
     try {
-      const result = (await runtimeRef.current.step()) as
-        | QuantumPokerRuntimeStep
-        | null;
+      const result =
+        (await runtimeRef.current.step()) as QuantumPokerRuntimeStep | null;
       if (result) {
         setSnapshot(runtimeRef.current.snapshot());
         appendLog({
@@ -368,9 +371,12 @@ export function QuantumPokerWindow(_props: GameWindowProps) {
 
   useEffect(() => {
     if (paused || busy) return;
-    const timer = window.setTimeout(() => {
-      void step();
-    }, isServerSnapshot(snapshot) ? 650 : 900);
+    const timer = window.setTimeout(
+      () => {
+        void step();
+      },
+      isServerSnapshot(snapshot) ? 650 : 900,
+    );
     return () => window.clearTimeout(timer);
   }, [busy, paused, snapshot, state]);
 

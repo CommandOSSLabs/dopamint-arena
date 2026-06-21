@@ -61,7 +61,10 @@ function asString(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
 
-function parseBigInt(raw: string | number | undefined, fallback: bigint): bigint {
+function parseBigInt(
+  raw: string | number | undefined,
+  fallback: bigint,
+): bigint {
   return raw === undefined ? fallback : BigInt(raw);
 }
 
@@ -211,7 +214,10 @@ export function createOpenHandler(deps: OpenDeps): Handler {
       return json({ error: "SUI_TUNNEL_PACKAGE_ID is not configured" }, 400);
     }
     if (!gameCoinConfigured(deps.config.gameCoinType)) {
-      return json({ error: "GAME_COIN_TYPE or COIN_TYPE is not configured" }, 400);
+      return json(
+        { error: "GAME_COIN_TYPE or COIN_TYPE is not configured" },
+        400,
+      );
     }
 
     const session = deps.sessionStore.get(body.sessionId);
@@ -272,10 +278,16 @@ export function createOpenHandler(deps: OpenDeps): Handler {
     }
 
     const tunnelId = extractTunnelId(result, deps.config.suiTunnelPackageId);
-    const randomness = extractRandomnessEvent(result, deps.config.suiTunnelPackageId);
+    const randomness = extractRandomnessEvent(
+      result,
+      deps.config.suiTunnelPackageId,
+    );
     if (!tunnelId || !randomness) {
       return json(
-        { error: "open transaction did not return tunnel id and randomness seed" },
+        {
+          error:
+            "open transaction did not return tunnel id and randomness seed",
+        },
         502,
       );
     }

@@ -39,8 +39,7 @@ export type ServerRuntimeStatus =
   | "closed"
   | "error";
 
-export interface ServerQuantumPokerRuntimeSnapshot
-  extends QuantumPokerRuntimeSnapshot {
+export interface ServerQuantumPokerRuntimeSnapshot extends QuantumPokerRuntimeSnapshot {
   mode: "server";
   status: ServerRuntimeStatus;
   sessionId: string;
@@ -73,7 +72,10 @@ function parseSignedUpdate(json: CoSignedUpdateJson): CoSignedUpdate {
   };
 }
 
-function stateHash(protocol: QuantumPokerProtocol, state: PokerState): Uint8Array {
+function stateHash(
+  protocol: QuantumPokerProtocol,
+  state: PokerState,
+): Uint8Array {
   return blake2b256(protocol.encodeState(state));
 }
 

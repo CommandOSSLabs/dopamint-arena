@@ -4,10 +4,22 @@ import { liveOnchainTxns, displayUpdatesPerSec } from "./liveMerge";
 import type { StatsSnapshot } from "./controlPlane";
 
 const connected: StatsSnapshot = {
-  tps: 1_000_000, totalActions: 0, activeTunnels: 0, settledTunnels: 0, perGame: {},
+  tps: 1_000_000,
+  totalActions: 0,
+  activeTunnels: 0,
+  settledTunnels: 0,
+  perGame: {},
   recentEvents: [
-    { tunnelId: "0xt", kind: "settled", partyABalance: 1e9, partyBBalance: 1e9,
-      transcriptRoot: "ab", txDigest: "D", timestampMs: 1_750_000_000_000, proofUrl: null },
+    {
+      tunnelId: "0xt",
+      kind: "settled",
+      partyABalance: 1e9,
+      partyBBalance: 1e9,
+      transcriptRoot: "ab",
+      txDigest: "D",
+      timestampMs: 1_750_000_000_000,
+      proofUrl: null,
+    },
   ],
 };
 

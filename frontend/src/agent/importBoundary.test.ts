@@ -14,7 +14,10 @@ const BOUNDARY_CONFIG_PATH = join(AGENT_DIR, ".eslintrc-import-boundary.json");
 function loadForbiddenPatterns(): ForbiddenPattern[] {
   const raw = JSON.parse(readFileSync(BOUNDARY_CONFIG_PATH, "utf8"));
   const rule = raw.rules["no-restricted-imports"];
-  assert.ok(Array.isArray(rule) && rule.length >= 2, "no-restricted-imports rule must be an array");
+  assert.ok(
+    Array.isArray(rule) && rule.length >= 2,
+    "no-restricted-imports rule must be an array",
+  );
   const options = rule[1];
   assert.ok(Array.isArray(options.patterns), "patterns must be an array");
   return options.patterns as ForbiddenPattern[];
@@ -30,7 +33,10 @@ function globToRegex(pattern: string): RegExp {
   return new RegExp(`^${regex}$`);
 }
 
-function matchesAnyPattern(source: string, patterns: ForbiddenPattern[]): ForbiddenPattern | undefined {
+function matchesAnyPattern(
+  source: string,
+  patterns: ForbiddenPattern[],
+): ForbiddenPattern | undefined {
   // Strip any Vite/Webpack query suffix (e.g. "?inline").
   const clean = source.split("?")[0]!;
   return patterns.find((p) => p.group.some((g) => globToRegex(g).test(clean)));
@@ -43,7 +49,11 @@ function* walkTsFiles(dir: string): Generator<string> {
     const st = statSync(full);
     if (st.isDirectory()) {
       yield* walkTsFiles(full);
-    } else if (st.isFile() && full.endsWith(".ts") && !full.endsWith(".test.ts")) {
+    } else if (
+      st.isFile() &&
+      full.endsWith(".ts") &&
+      !full.endsWith(".test.ts")
+    ) {
       yield full;
     }
   }
@@ -51,11 +61,13 @@ function* walkTsFiles(dir: string): Generator<string> {
 
 function* extractImportSources(code: string): Generator<string> {
   // static imports: import ... from "..."
-  const staticRe = /import\s+(?:(?:type\s+)?(?:[\s\S]*?)\s+from\s+)?["']([^"']+)["']/g;
+  const staticRe =
+    /import\s+(?:(?:type\s+)?(?:[\s\S]*?)\s+from\s+)?["']([^"']+)["']/g;
   // dynamic imports: import("...") and require("...")
   const dynamicRe = /(?:import|require)\s*\(\s*["']([^"']+)["']\s*\)/g;
   // export ... from "..."
-  const exportRe = /export\s+(?:(?:type\s+)?(?:[\s\S]*?)\s+from\s+)?["']([^"']+)["']/g;
+  const exportRe =
+    /export\s+(?:(?:type\s+)?(?:[\s\S]*?)\s+from\s+)?["']([^"']+)["']/g;
 
   for (const re of [staticRe, dynamicRe, exportRe]) {
     let m: RegExpExecArray | null;

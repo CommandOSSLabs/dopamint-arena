@@ -6,10 +6,7 @@ import type {
 } from "sui-tunnel-ts/protocol/quantumPoker";
 import type { BotPartyConfig } from "./botWalletPool";
 import type { PreparedProtocolStep } from "./tunnelSigning";
-import type {
-  CoSignedSettlementWithRoot,
-  CoSignedUpdate,
-} from "./tunnelTypes";
+import type { CoSignedSettlementWithRoot, CoSignedUpdate } from "./tunnelTypes";
 
 export interface PartyConfigJson {
   address: string;

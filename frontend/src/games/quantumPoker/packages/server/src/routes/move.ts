@@ -47,7 +47,8 @@ function messageFromError(error: unknown): string {
 }
 
 function randomId(prefix: string): string {
-  const uuid = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
+  const uuid =
+    globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
   return `${prefix}-${uuid}`;
 }
 
@@ -145,7 +146,8 @@ function chooseMove(
     protocol,
     createSuiSeededBotRng(session, wallet),
   ).chooseMove(session.state, by);
-  if (!move) return json({ error: "bot has no legal move in current state" }, 409);
+  if (!move)
+    return json({ error: "bot has no legal move in current state" }, 409);
   return move;
 }
 

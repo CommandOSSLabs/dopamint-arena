@@ -12,15 +12,25 @@ import {
 function mulberry32(seed: number): () => number {
   let s = seed;
   return (): number => {
-    s |= 0; s = (s + 0x6D2B79F5) | 0;
+    s |= 0;
+    s = (s + 0x6d2b79f5) | 0;
     let t = Math.imul(s ^ (s >>> 15), 1 | s);
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
-import { core, proof, bytesToHex, hexToBytes, type protocols } from "sui-tunnel-ts";
+import {
+  core,
+  proof,
+  bytesToHex,
+  hexToBytes,
+  type protocols,
+} from "sui-tunnel-ts";
 import { SuiJsonRpcClient } from "@mysten/sui/jsonRpc";
-import { getControlPlaneClient, type RegisterSessionResult } from "@/backend/controlPlane";
+import {
+  getControlPlaneClient,
+  type RegisterSessionResult,
+} from "@/backend/controlPlane";
 import { coSignedToSettleRequest } from "@/backend/settleRequest";
 import {
   MultiGameTicTacToeProtocol,
@@ -62,7 +72,9 @@ const MP_URL =
   import.meta.env.VITE_MP_URL ||
   (
     import.meta.env.VITE_BACKEND_URL ||
-    (typeof location !== "undefined" ? location.origin : "http://127.0.0.1:8080")
+    (typeof location !== "undefined"
+      ? location.origin
+      : "http://127.0.0.1:8080")
   ).replace(/^http/, "ws");
 const STAKE = 1n; // MIST per game; caro's protocol forces 0 regardless
 const BANKROLL = 1000n; // MIST deposited per seat
@@ -141,7 +153,10 @@ function tttBestCell(inner: InnerState, by: "A" | "B"): number {
 const TRIVIAL_BOT_CTX: BotContext = { rngForSeat: () => mulberry32(0xcafe) };
 
 function makeKit(): GameKit<AnyState, CellMove> {
-  return createTicTacToeKit(1000, STAKE) as unknown as GameKit<AnyState, CellMove>;
+  return createTicTacToeKit(1000, STAKE) as unknown as GameKit<
+    AnyState,
+    CellMove
+  >;
 }
 
 export function usePvpTicTacToe(
@@ -232,7 +247,9 @@ export function usePvpTicTacToe(
   // ── Refs ─────────────────────────────────────────────────────────────────────
 
   const relayRef = useRef<RelayClient | null>(null);
-  const tunnelRef = useRef<core.DistributedTunnel<AnyState, CellMove> | null>(null);
+  const tunnelRef = useRef<core.DistributedTunnel<AnyState, CellMove> | null>(
+    null,
+  );
   const roleRef = useRef<"A" | "B" | null>(null);
   const autoRef = useRef(false);
   const createdAtRef = useRef<bigint>(0n);
@@ -247,8 +264,13 @@ export function usePvpTicTacToe(
     | undefined
   >(undefined);
   const openedResolveRef = useRef<((id: string) => void) | null>(null);
-  const settleResolveRef = useRef<((val: { sig: Uint8Array; root: Uint8Array }) => void) | null>(null);
-  const bufferedSettleRef = useRef<{ sig: Uint8Array; root: Uint8Array } | null>(null);
+  const settleResolveRef = useRef<
+    ((val: { sig: Uint8Array; root: Uint8Array }) => void) | null
+  >(null);
+  const bufferedSettleRef = useRef<{
+    sig: Uint8Array;
+    root: Uint8Array;
+  } | null>(null);
   const helloResolveRef = useRef<((pub: string) => void) | null>(null);
   const bufferedHelloRef = useRef<string | null>(null);
   const transcriptRef = useRef<proof.Transcript | null>(null);
@@ -318,8 +340,14 @@ export function usePvpTicTacToe(
       settledRef.current = true;
       setPhaseOverride("settling");
       flushHeartbeat(t.tunnelId, true);
-      const root = transcriptRef.current ? transcriptRef.current.root() : new Uint8Array(32);
-      const half = t.buildSettlementHalfWithRoot(createdAtRef.current, root, 0n);
+      const root = transcriptRef.current
+        ? transcriptRef.current.root()
+        : new Uint8Array(32);
+      const half = t.buildSettlementHalfWithRoot(
+        createdAtRef.current,
+        root,
+        0n,
+      );
       relay.sendApp(matchId, {
         t: "settle",
         sig: bytesToHex(half.sigSelf),
@@ -343,12 +371,20 @@ export function usePvpTicTacToe(
         try {
           const result = await getControlPlaneClient().settle(
             t.tunnelId,
-            coSignedToSettleRequest(coSigned as any, transcriptRef.current ? transcriptRef.current.toRecord().entries : []),
+            coSignedToSettleRequest(
+              coSigned as any,
+              transcriptRef.current
+                ? transcriptRef.current.toRecord().entries
+                : [],
+            ),
           );
           setDigests((d) => ({ ...d, close: result.txDigest }));
           relay.sendApp(matchId, { t: "closed", digest: result.txDigest });
         } catch (e) {
-          console.warn("[settle] Server-side settle failed, falling back to wallet submission:", e);
+          console.warn(
+            "[settle] Server-side settle failed, falling back to wallet submission:",
+            e,
+          );
           const res = await submit(buildCloseWithRootTx(t.tunnelId, coSigned));
           setDigests((d) => ({ ...d, close: res.digest }));
           relay.sendApp(matchId, { t: "closed", digest: res.digest });
@@ -435,7 +471,11 @@ export function usePvpTicTacToe(
         // Rebuild the session for the matched role so the bot's seat is correct.
         // Bump epoch so useSyncExternalStore re-subscribes to the new session's store.
         sessionRef.current.dispose();
-        sessionRef.current = new PvpGameSession(makeKit(), m.role, TRIVIAL_BOT_CTX);
+        sessionRef.current = new PvpGameSession(
+          makeKit(),
+          m.role,
+          TRIVIAL_BOT_CTX,
+        );
         bumpEpoch();
 
         // App-channel dispatcher: opened tunnelId, settle half, closed digest, stop request.
@@ -445,7 +485,8 @@ export function usePvpTicTacToe(
           else if (mm.t === "settle") {
             const sig = hexToBytes(String(mm.sig));
             const rt = hexToBytes(String(mm.root));
-            if (settleResolveRef.current) settleResolveRef.current({ sig, root: rt });
+            if (settleResolveRef.current)
+              settleResolveRef.current({ sig, root: rt });
             else bufferedSettleRef.current = { sig, root: rt };
           } else if (mm.t === "closed") {
             // Seat B receives the close digest from seat A via the app channel.
@@ -587,13 +628,17 @@ export function usePvpTicTacToe(
           .then((s) => {
             statsSessionRef.current = s;
           })
-          .catch((e) => console.error("[tictactoe pvp] registerSession failed:", e));
+          .catch((e) =>
+            console.error("[tictactoe pvp] registerSession failed:", e),
+          );
 
         // Attach the tunnel to the session — wires t.onConfirmed → session.onConfirmed,
         // publishes the initial "playing" snapshot, and clears phaseOverride so the
         // session's snapshot drives subsequent phase display.
         sessionRef.current.attachTunnel({
-          tunnel: t as unknown as Parameters<typeof sessionRef.current.attachTunnel>[0]["tunnel"],
+          tunnel: t as unknown as Parameters<
+            typeof sessionRef.current.attachTunnel
+          >[0]["tunnel"],
           initialState: { ...t.state, inner: { ...t.state.inner } },
         });
         // From here the session drives phase via snapshot; clear the override.
@@ -693,7 +738,16 @@ export function usePvpTicTacToe(
         setPhaseOverride("error");
       }
     },
-    [client, proto, submit, eph, variant, finishSettle, flushHeartbeat, bumpEpoch],
+    [
+      client,
+      proto,
+      submit,
+      eph,
+      variant,
+      finishSettle,
+      flushHeartbeat,
+      bumpEpoch,
+    ],
   );
   onMatchRef.current = onMatch;
 

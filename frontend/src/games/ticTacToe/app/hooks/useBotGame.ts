@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { core, proof, protocols, bytesToHex } from "sui-tunnel-ts";
 import type { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
-import { getControlPlaneClient, type RegisterSessionResult } from "@/backend/controlPlane";
+import {
+  getControlPlaneClient,
+  type RegisterSessionResult,
+} from "@/backend/controlPlane";
 import { coSignedToSettleRequest } from "@/backend/settleRequest";
 import type { Transaction } from "@mysten/sui/transactions";
 import {
@@ -401,7 +404,9 @@ export function useBotGame(difficulty: Difficulty = "fast"): BotGameView {
           .registerSession({
             userAddress: bots.x.address,
             game: "tictactoe",
-            tunnels: [{ tunnelId, partyA: bots.x.address, partyB: bots.o.address }],
+            tunnels: [
+              { tunnelId, partyA: bots.x.address, partyB: bots.o.address },
+            ],
           })
           .then((s) => {
             sessionRef.current = s;
@@ -504,7 +509,10 @@ export function useBotGame(difficulty: Difficulty = "fast"): BotGameView {
           );
           closeDigest = result.txDigest;
         } catch (e) {
-          console.warn("[settle] Server-side settle failed, falling back to bot keypair submission:", e);
+          console.warn(
+            "[settle] Server-side settle failed, falling back to bot keypair submission:",
+            e,
+          );
           const closeRes = await submit(
             buildSettleWithRootTx(tunnelId, s),
             bots.x.keypair,

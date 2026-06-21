@@ -24,7 +24,10 @@ describe("ticTacToe kit", () => {
   it("uses the multi-game frontend protocol domain", () => {
     const kit = createTicTacToeKit(3, 10n);
     assert.strictEqual(kit.protocol.name, "tic_tac_toe.multi.v1");
-    assert.notStrictEqual(kit.protocol.name, new protocols.TicTacToeProtocol(10n).name);
+    assert.notStrictEqual(
+      kit.protocol.name,
+      new protocols.TicTacToeProtocol(10n).name,
+    );
   });
 
   it("drives a full multi-game session to terminal with conserved balances", () => {
@@ -35,7 +38,10 @@ describe("ticTacToe kit", () => {
 
     assert.ok(kit.protocol.isTerminal(result.finalState));
     const balances = kit.protocol.balances(result.finalState);
-    assert.strictEqual(balances.a + balances.b, ctx.initialBalances.a + ctx.initialBalances.b);
+    assert.strictEqual(
+      balances.a + balances.b,
+      ctx.initialBalances.a + ctx.initialBalances.b,
+    );
   });
 
   it("is deterministic and idempotent on replayed state", () => {
@@ -70,7 +76,11 @@ describe("ticTacToe kit", () => {
       total: 20n,
       stake: 5n,
     };
-    const state: MultiGameTicTacToeState = { inner, gamesPlayed: 0, maxGames: 5 };
+    const state: MultiGameTicTacToeState = {
+      inner,
+      gamesPlayed: 0,
+      maxGames: 5,
+    };
     const kit = createTicTacToeKit(5, 5n);
     const botA = kit.createBot("A", { rngForSeat: () => mulberry32(1) });
     assert.strictEqual(botA.plan(state), null);

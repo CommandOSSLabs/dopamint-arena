@@ -16,8 +16,11 @@ test("exposes one account matching the injected keypair", () => {
 test("connect returns the account without UI", async () => {
   const kp = new Ed25519Keypair();
   const w = new ProgrammaticWallet(kp, stubClient);
-  const connect = (w.features["standard:connect"] as { connect: () => Promise<{ accounts: unknown[] }> })
-    .connect;
+  const connect = (
+    w.features["standard:connect"] as {
+      connect: () => Promise<{ accounts: unknown[] }>;
+    }
+  ).connect;
   const { accounts } = await connect();
   assert.equal(accounts.length, 1);
 });
@@ -36,5 +39,8 @@ test("secret key round-trips via Bech32 (getSecretKey / fromSecretKey)", () => {
   const sk = kp.getSecretKey();
   assert.match(sk, /^suiprivkey1/);
   const back = Ed25519Keypair.fromSecretKey(sk);
-  assert.equal(back.getPublicKey().toSuiAddress(), kp.getPublicKey().toSuiAddress());
+  assert.equal(
+    back.getPublicKey().toSuiAddress(),
+    kp.getPublicKey().toSuiAddress(),
+  );
 });

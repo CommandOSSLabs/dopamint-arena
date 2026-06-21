@@ -7,7 +7,11 @@ describe("SnapshotStore", () => {
     const store = new SnapshotStore({ phase: "idle", n: 0 });
     const first = store.get();
     store.set({ phase: "idle", n: 0 }); // structurally identical
-    assert.strictEqual(store.get(), first, "no-op set must not change the reference");
+    assert.strictEqual(
+      store.get(),
+      first,
+      "no-op set must not change the reference",
+    );
     store.set({ phase: "idle", n: 1 });
     assert.notStrictEqual(store.get(), first);
   });

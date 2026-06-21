@@ -30,7 +30,12 @@ describe("makeTttEndpointFactory", () => {
       selfParty: "A",
       opponentPublicKey: oppKey,
       opponentAddress: "0xdeadbeef",
-    }) as { tunnelId: string; selfParty: string; self: { publicKey: Uint8Array }; opponent: { publicKey: Uint8Array } };
+    }) as {
+      tunnelId: string;
+      selfParty: string;
+      self: { publicKey: Uint8Array };
+      opponent: { publicKey: Uint8Array };
+    };
 
     assert.equal(cfg.tunnelId, "0xabc");
     assert.equal(cfg.selfParty, "A");
@@ -56,7 +61,9 @@ describe("makeTttSettlementSigner", () => {
   };
 
   it("openAndFundSeatA delegates to openAndFund override and returns tunnelId", async () => {
-    const mockSignExec = mock.fn(async (_tx: unknown) => ({ digest: "digest-open" }));
+    const mockSignExec = mock.fn(async (_tx: unknown) => ({
+      digest: "digest-open",
+    }));
     // Override bypasses the SDK's PACKAGE_ID requirement in tests.
     const mockOpenAndFund = mock.fn(async () => "0xtunnel1");
 
@@ -68,7 +75,9 @@ describe("makeTttSettlementSigner", () => {
     assert.equal(result.tunnelId, "0xtunnel1");
     assert.equal(mockOpenAndFund.mock.calls.length, 1);
     // Verify the override received the correct stake
-    const call = mockOpenAndFund.mock.calls[0].arguments[0] as { amount: bigint };
+    const call = mockOpenAndFund.mock.calls[0].arguments[0] as {
+      amount: bigint;
+    };
     assert.equal(call.amount, 100n);
   });
 
@@ -89,7 +98,9 @@ describe("makeTttSettlementSigner", () => {
   });
 
   it("depositSeatB delegates to deposit override", async () => {
-    const mockSignExec = mock.fn(async (_tx: unknown) => ({ digest: "digest-dep" }));
+    const mockSignExec = mock.fn(async (_tx: unknown) => ({
+      digest: "digest-dep",
+    }));
     const mockDeposit = mock.fn(async () => {});
 
     const signer = makeTttSettlementSigner(mockSignExec, baseCtx, {
@@ -114,7 +125,11 @@ describe("makeTttRelay", () => {
     const appCbs: Record<string, ((m: Record<string, unknown>) => void)[]> = {};
     const hellos: Record<string, ((m: Record<string, unknown>) => void)[]> = {};
     const sentApp: { matchId: string; msg: Record<string, unknown> }[] = [];
-    const sentTypes: { type: string; matchId?: string; [k: string]: unknown }[] = [];
+    const sentTypes: {
+      type: string;
+      matchId?: string;
+      [k: string]: unknown;
+    }[] = [];
 
     return {
       ready: Promise.resolve(),
@@ -124,9 +139,11 @@ describe("makeTttRelay", () => {
         }
       }),
       queueJoin: mock.fn((_game: string) => {}),
-      partyHello: mock.fn((matchId: string, pubkeyHex: string, _sig: string) => {
-        sentTypes.push({ type: "party.hello", matchId, pubkeyHex });
-      }),
+      partyHello: mock.fn(
+        (matchId: string, pubkeyHex: string, _sig: string) => {
+          sentTypes.push({ type: "party.hello", matchId, pubkeyHex });
+        },
+      ),
       tunnelOpened: mock.fn((matchId: string, tunnelId: string) => {
         sentTypes.push({ type: "tunnel.opened", matchId, tunnelId });
       }),
@@ -135,9 +152,11 @@ describe("makeTttRelay", () => {
         // Dispatch to registered onApp cb for this matchId
         (appCbs[matchId] ?? []).forEach((cb) => cb(msg));
       }),
-      onApp: mock.fn((matchId: string, cb: (m: Record<string, unknown>) => void) => {
-        (appCbs[matchId] ??= []).push(cb);
-      }),
+      onApp: mock.fn(
+        (matchId: string, cb: (m: Record<string, unknown>) => void) => {
+          (appCbs[matchId] ??= []).push(cb);
+        },
+      ),
       transport: mock.fn((_matchId: string) => ({
         send: mock.fn(),
         onFrame: mock.fn(),
@@ -152,7 +171,9 @@ describe("makeTttRelay", () => {
 
   it("queueJoin awaits ready then delegates", async () => {
     const stub = makeStubRelayClient();
-    const relay = makeTttRelay(stub as unknown as Parameters<typeof makeTttRelay>[0]);
+    const relay = makeTttRelay(
+      stub as unknown as Parameters<typeof makeTttRelay>[0],
+    );
     await relay.queueJoin("tictactoe:ttt");
     assert.equal(stub.queueJoin.mock.calls.length, 1);
     assert.equal(stub.queueJoin.mock.calls[0].arguments[0], "tictactoe:ttt");
@@ -160,7 +181,9 @@ describe("makeTttRelay", () => {
 
   it("channel.partyHello routes to relay.partyHello", () => {
     const stub = makeStubRelayClient();
-    const relay = makeTttRelay(stub as unknown as Parameters<typeof makeTttRelay>[0]);
+    const relay = makeTttRelay(
+      stub as unknown as Parameters<typeof makeTttRelay>[0],
+    );
     const ch = relay.channel("match1");
     ch.partyHello("aabbcc");
     assert.equal(stub.partyHello.mock.calls.length, 1);
@@ -170,7 +193,9 @@ describe("makeTttRelay", () => {
 
   it("channel.announceOpened routes to relay.tunnelOpened + sendApp {t:'opened'}", () => {
     const stub = makeStubRelayClient();
-    const relay = makeTttRelay(stub as unknown as Parameters<typeof makeTttRelay>[0]);
+    const relay = makeTttRelay(
+      stub as unknown as Parameters<typeof makeTttRelay>[0],
+    );
     const ch = relay.channel("match1");
     ch.announceOpened("0xtun");
     assert.equal(stub.tunnelOpened.mock.calls.length, 1);
@@ -181,7 +206,9 @@ describe("makeTttRelay", () => {
 
   it("channel.sendSettleHalf routes to sendApp {t:'settle'}", () => {
     const stub = makeStubRelayClient();
-    const relay = makeTttRelay(stub as unknown as Parameters<typeof makeTttRelay>[0]);
+    const relay = makeTttRelay(
+      stub as unknown as Parameters<typeof makeTttRelay>[0],
+    );
     const ch = relay.channel("match1");
     ch.sendSettleHalf({ sig: "sigsig", root: "rootroot" });
     const msg = stub._sentApp[0].msg;
@@ -192,22 +219,28 @@ describe("makeTttRelay", () => {
 
   it("channel.onSettleHalf fires when sendApp delivers {t:'settle'}", async () => {
     const stub = makeStubRelayClient();
-    const relay = makeTttRelay(stub as unknown as Parameters<typeof makeTttRelay>[0]);
+    const relay = makeTttRelay(
+      stub as unknown as Parameters<typeof makeTttRelay>[0],
+    );
     const ch = relay.channel("match1");
 
     // Register the handler first
-    const received = await new Promise<{ sig: string; root: string }>((resolve) => {
-      ch.onSettleHalf(resolve);
-      // Simulate peer sending settle via sendApp routing
-      stub.sendApp("match1", { t: "settle", sig: "s1", root: "r1" });
-    });
+    const received = await new Promise<{ sig: string; root: string }>(
+      (resolve) => {
+        ch.onSettleHalf(resolve);
+        // Simulate peer sending settle via sendApp routing
+        stub.sendApp("match1", { t: "settle", sig: "s1", root: "r1" });
+      },
+    );
     assert.equal(received.sig, "s1");
     assert.equal(received.root, "r1");
   });
 
   it("channel.onOpened fires when sendApp delivers {t:'opened'}", async () => {
     const stub = makeStubRelayClient();
-    const relay = makeTttRelay(stub as unknown as Parameters<typeof makeTttRelay>[0]);
+    const relay = makeTttRelay(
+      stub as unknown as Parameters<typeof makeTttRelay>[0],
+    );
     const ch = relay.channel("match1");
 
     const tunnelId = await new Promise<string>((resolve) => {
@@ -219,7 +252,9 @@ describe("makeTttRelay", () => {
 
   it("channel.transport delegates to relay.transport", () => {
     const stub = makeStubRelayClient();
-    const relay = makeTttRelay(stub as unknown as Parameters<typeof makeTttRelay>[0]);
+    const relay = makeTttRelay(
+      stub as unknown as Parameters<typeof makeTttRelay>[0],
+    );
     const ch = relay.channel("match1");
     // Access transport property — it should be the result of relay.transport(matchId)
     const t = ch.transport;
@@ -230,7 +265,9 @@ describe("makeTttRelay", () => {
 
   it("channel.onPeerHello fires when relay emits party.hello for the same matchId", async () => {
     const stub = makeStubRelayClient();
-    const relay = makeTttRelay(stub as unknown as Parameters<typeof makeTttRelay>[0]);
+    const relay = makeTttRelay(
+      stub as unknown as Parameters<typeof makeTttRelay>[0],
+    );
     const ch = relay.channel("match42");
 
     const received = await new Promise<string>((resolve) => {
@@ -246,11 +283,15 @@ describe("makeTttRelay", () => {
 
   it("channel.onPeerHello ignores party.hello events for a different matchId", () => {
     const stub = makeStubRelayClient();
-    const relay = makeTttRelay(stub as unknown as Parameters<typeof makeTttRelay>[0]);
+    const relay = makeTttRelay(
+      stub as unknown as Parameters<typeof makeTttRelay>[0],
+    );
     const ch = relay.channel("matchA");
 
     let called = false;
-    ch.onPeerHello(() => { called = true; });
+    ch.onPeerHello(() => {
+      called = true;
+    });
 
     // Fire party.hello for a different matchId — should not reach the callback
     const helloCbs = stub._hellos["party.hello"] ?? [];

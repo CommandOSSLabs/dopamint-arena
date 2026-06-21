@@ -63,7 +63,9 @@ export class BotWalletPool {
   }
 
   lease(sessionId: string): BotWallet {
-    const wallet = this.wallets.find((candidate) => candidate.leasedTo === null);
+    const wallet = this.wallets.find(
+      (candidate) => candidate.leasedTo === null,
+    );
     if (!wallet) {
       throw new Error("no bot wallets available");
     }
@@ -76,7 +78,9 @@ export class BotWalletPool {
   }
 
   release(sessionId: string): void {
-    const wallet = this.wallets.find((candidate) => candidate.leasedTo === sessionId);
+    const wallet = this.wallets.find(
+      (candidate) => candidate.leasedTo === sessionId,
+    );
     if (wallet) wallet.leasedTo = null;
   }
 

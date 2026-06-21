@@ -22,7 +22,8 @@ export interface SessionDeps {
 }
 
 function randomId(prefix: string): string {
-  const uuid = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
+  const uuid =
+    globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
   return `${prefix}-${uuid}`;
 }
 
@@ -30,7 +31,10 @@ function mockTunnelId(sessionId: string): string {
   return "0x" + toHex(blake2b256(new TextEncoder().encode(sessionId)));
 }
 
-function parseStake(raw: string | number | undefined, fallback: bigint): bigint {
+function parseStake(
+  raw: string | number | undefined,
+  fallback: bigint,
+): bigint {
   if (raw === undefined) return fallback;
   return BigInt(raw);
 }

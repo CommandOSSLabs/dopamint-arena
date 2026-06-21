@@ -181,7 +181,11 @@ export function BoardGrid({
                     )}
                     style={gridStyle}
                   >
-                    <ShipSprite id={p.id} size={size} horizontal={p.orient === "H"} />
+                    <ShipSprite
+                      id={p.id}
+                      size={size}
+                      horizontal={p.orient === "H"}
+                    />
                   </div>
                 );
               })}

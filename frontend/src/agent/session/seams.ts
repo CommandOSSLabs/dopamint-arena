@@ -25,7 +25,10 @@ export interface PartyEndpointFactory {
 export interface SettlementSigner {
   openAndFundSeatA(args: { stake: bigint }): Promise<{ tunnelId: string }>;
   depositSeatB(args: { tunnelId: string; stake: bigint }): Promise<void>;
-  submitCooperativeClose(args: { tunnelId: string; coSigned: unknown }): Promise<{ digest: string }>;
+  submitCooperativeClose(args: {
+    tunnelId: string;
+    coSigned: unknown;
+  }): Promise<{ digest: string }>;
   closeOnTimeout(args: { tunnelId: string }): Promise<{ digest: string }>;
 }
 

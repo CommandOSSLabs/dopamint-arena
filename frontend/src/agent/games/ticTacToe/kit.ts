@@ -6,11 +6,7 @@ import {
   type MultiGameTicTacToeMove,
 } from "@ttt/shared/ttt/multiGameProtocol";
 import { optimalMoves } from "@ttt/shared/ttt/minimax";
-import {
-  CELL_EMPTY,
-  CELL_SERVER,
-  CELL_PLAYER,
-} from "@ttt/shared/constants";
+import { CELL_EMPTY, CELL_SERVER, CELL_PLAYER } from "@ttt/shared/constants";
 import { defaultStateHash } from "@/agent/stateHash";
 import { type BotContext, type GameBot, type GameKit } from "@/agent/gameKit";
 
@@ -44,7 +40,9 @@ function pickCell(
   if (difficulty === "fast") {
     // Pure function of (seat seed, state): idempotent on a replayed state, varies
     // per board. Must NOT consume a mutable RNG stream or plan() stops being pure.
-    return empties[fastIndex(fastSeed, innerProtocol.encodeState(state), empties.length)];
+    return empties[
+      fastIndex(fastSeed, innerProtocol.encodeState(state), empties.length)
+    ];
   }
 
   const mark = seat === "A" ? 1 : 2;
@@ -55,7 +53,10 @@ function pickCell(
   return moves.length > 0 ? moves[0] : empties[0];
 }
 
-class TicTacToeBot implements GameBot<MultiGameTicTacToeState, MultiGameTicTacToeMove> {
+class TicTacToeBot implements GameBot<
+  MultiGameTicTacToeState,
+  MultiGameTicTacToeMove
+> {
   private readonly seat: Party;
   private readonly difficulty: TicTacToeDifficulty;
   private readonly innerProtocol: protocols.TicTacToeProtocol;
@@ -94,11 +95,20 @@ class TicTacToeBot implements GameBot<MultiGameTicTacToeState, MultiGameTicTacTo
 
     if (inner.turn !== this.seat) return null;
     return {
-      cell: pickCell(inner, this.seat, this.difficulty, this.fastSeed, this.innerProtocol),
+      cell: pickCell(
+        inner,
+        this.seat,
+        this.difficulty,
+        this.fastSeed,
+        this.innerProtocol,
+      ),
     };
   }
 
-  confirm(_state: MultiGameTicTacToeState, _move: MultiGameTicTacToeMove): void {
+  confirm(
+    _state: MultiGameTicTacToeState,
+    _move: MultiGameTicTacToeMove,
+  ): void {
     // No retained memory.
   }
 

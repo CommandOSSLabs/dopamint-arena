@@ -473,8 +473,8 @@ export default function PlayerBot() {
             </div>
             {rebalanceBtn}
             <p className="text-[10px] text-zinc-500 text-center max-w-md">
-              Bots play {maxRounds} rounds off-chain per tunnel, then settle once.
-              Chips are 1:1 with MIST (1 SUI = 1,000,000,000 chips).
+              Bots play {maxRounds} rounds off-chain per tunnel, then settle
+              once. Chips are 1:1 with MIST (1 SUI = 1,000,000,000 chips).
             </p>
           </div>
 
@@ -559,8 +559,8 @@ export default function PlayerBot() {
           <span className="text-[10px] md:text-xs text-[#d4af37] font-extrabold uppercase tracking-widest font-serif">
             {/* Use the protocol's round (view.round), not the rounds log — the log is capped at
                 MAX_ROUNDS_LOGGED so it can't track a long (e.g. 100-round) tunnel. */}
-            Round {Math.min(Math.max(view.round, terminal ? 0 : 1), maxRounds)} /{" "}
-            {maxRounds}
+            Round {Math.min(Math.max(view.round, terminal ? 0 : 1), maxRounds)}{" "}
+            / {maxRounds}
           </span>
           <span className="text-[10px] text-zinc-400 uppercase tracking-widest">
             · {phaseLabel[phase]}
@@ -602,7 +602,9 @@ export default function PlayerBot() {
         )}
 
         {/* Toasts overlay: left of Rounds panel */}
-        <div className={`absolute z-30 flex flex-col items-end gap-2 pointer-events-none ${isPortrait ? "top-4 right-4" : "top-16 right-[170px] md:top-4 md:right-60"}`}>
+        <div
+          className={`absolute z-30 flex flex-col items-end gap-2 pointer-events-none ${isPortrait ? "top-4 right-4" : "top-16 right-[170px] md:top-4 md:right-60"}`}
+        >
           {toasts.map((t) => (
             <div
               key={t.id}
@@ -625,68 +627,66 @@ export default function PlayerBot() {
         {/* Tunnels history: hidden on mobile, bottom-right corner on desktop */}
         {!isPortrait && (
           <div className="hidden md:flex absolute bottom-[10px] right-2 md:bottom-4 md:right-4 z-20 w-[240px] md:w-[300px] flex-col bg-black/70 backdrop-blur-sm border border-amber-950 rounded-lg shadow-lg overflow-hidden">
-          <div className="px-3 py-1 text-[9px] font-extrabold uppercase tracking-widest text-[#d4af37] font-serif border-b border-amber-950/70">
-            Tunnels
-          </div>
-          <div className="max-h-[85px] overflow-y-auto px-2 py-1 flex flex-col gap-1 scrollbar-thin">
-            {tunnels.length === 0 ? (
-              <div className="text-[9px] text-zinc-500 italic p-1.5">
-                Waiting for tunnel data...
-              </div>
-            ) : (
-              tunnels.map((t) => {
-                const style = OUTCOME_STYLE[t.result];
-                return (
-                  <div
-                    key={t.tunnelId}
-                    className="flex items-center justify-between gap-1.5 pb-1 border-b border-zinc-850/50 last:border-b-0 last:pb-0 font-mono text-[8px] md:text-[10px] tabular-nums"
-                  >
-                    <a
-                      href={`${SUISCAN_OBJECT}${t.tunnelId}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-[#d4af37] hover:text-amber-300 underline"
-                      title={t.tunnelId}
+            <div className="px-3 py-1 text-[9px] font-extrabold uppercase tracking-widest text-[#d4af37] font-serif border-b border-amber-950/70">
+              Tunnels
+            </div>
+            <div className="max-h-[85px] overflow-y-auto px-2 py-1 flex flex-col gap-1 scrollbar-thin">
+              {tunnels.length === 0 ? (
+                <div className="text-[9px] text-zinc-500 italic p-1.5">
+                  Waiting for tunnel data...
+                </div>
+              ) : (
+                tunnels.map((t) => {
+                  const style = OUTCOME_STYLE[t.result];
+                  return (
+                    <div
+                      key={t.tunnelId}
+                      className="flex items-center justify-between gap-1.5 pb-1 border-b border-zinc-850/50 last:border-b-0 last:pb-0 font-mono text-[8px] md:text-[10px] tabular-nums"
                     >
-                      {t.tunnelId.slice(0, 4)}…{t.tunnelId.slice(-2)}
-                    </a>
-                    <span className={`font-bold ${style.text}`}>
-                      {style.label}
-                    </span>
-                    <span className="text-zinc-500">
-                      {t.rounds}R
-                    </span>
-                    <span className="flex items-center gap-1.5">
-                      {t.createDigest && (
-                        <a
-                          href={`${SUISCAN_TX}${t.createDigest}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-[#d4af37] hover:text-amber-300 underline"
-                          title={`Create: ${t.createDigest}`}
-                        >
-                          c
-                        </a>
-                      )}
-                      {t.closeDigest && (
-                        <a
-                          href={`${SUISCAN_TX}${t.closeDigest}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-[#d4af37] hover:text-amber-300 underline"
-                          title={`Settle: ${t.closeDigest}`}
-                        >
-                          s
-                        </a>
-                      )}
-                    </span>
-                  </div>
-                );
-              })
-            )}
+                      <a
+                        href={`${SUISCAN_OBJECT}${t.tunnelId}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-[#d4af37] hover:text-amber-300 underline"
+                        title={t.tunnelId}
+                      >
+                        {t.tunnelId.slice(0, 4)}…{t.tunnelId.slice(-2)}
+                      </a>
+                      <span className={`font-bold ${style.text}`}>
+                        {style.label}
+                      </span>
+                      <span className="text-zinc-500">{t.rounds}R</span>
+                      <span className="flex items-center gap-1.5">
+                        {t.createDigest && (
+                          <a
+                            href={`${SUISCAN_TX}${t.createDigest}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-[#d4af37] hover:text-amber-300 underline"
+                            title={`Create: ${t.createDigest}`}
+                          >
+                            c
+                          </a>
+                        )}
+                        {t.closeDigest && (
+                          <a
+                            href={`${SUISCAN_TX}${t.closeDigest}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-[#d4af37] hover:text-amber-300 underline"
+                            title={`Settle: ${t.closeDigest}`}
+                          >
+                            s
+                          </a>
+                        )}
+                      </span>
+                    </div>
+                  );
+                })
+              )}
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
         {/* Betting Spot (Desk Layout) */}
         <div className={`betting-spot ${animState !== "idle" ? "active" : ""}`}>
@@ -866,8 +866,6 @@ export default function PlayerBot() {
                 <span className="text-zinc-600">({view.dealerSum})</span>
               </div>
             </div>
-
-
           </div>
 
           {/* Controls */}
