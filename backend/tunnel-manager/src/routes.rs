@@ -254,7 +254,18 @@ pub(crate) async fn settle(
     };
     match state.settler.submit_close(close).await {
         Ok(digest) => {
-            let blob = serde_json::to_vec(&req.transcript).unwrap_or_default();
+            // Archive the SDK `ProofRecord` shape the in-browser verifier consumes — the
+            // enclosing { root, entries } object, not a bare entries array. `root` is the
+            // co-signed transcript root (same value anchored on-chain), which verifyTranscript
+            // re-checks against the recomputed Merkle root and the on-chain anchor.
+            let update_count = req.transcript.len();
+            let record = serde_json::json!({
+                "tunnelId": req.settlement.tunnel_id.clone(),
+                "root": req.settlement.transcript_root.clone(),
+                "updateCount": update_count,
+                "entries": req.transcript,
+            });
+            let blob = serde_json::to_vec(&record).unwrap_or_default();
             let (blob_id, proof_url) = match state.walrus.upload_transcript(blob).await {
                 Ok(v) => v,
                 Err(e) => {
