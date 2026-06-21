@@ -5,13 +5,12 @@
 //! Ingestion source + checkpoint range come from CLI flags parsed into `cluster::Args`
 //! (e.g. `--remote-store-url`). Connection + package id come from the environment.
 use clap::Parser;
-use diesel::prelude::*;
+use diesel::sql_types::{Array, Nullable, Text};
 use diesel_async::pooled_connection::bb8::Pool;
 use diesel_async::pooled_connection::AsyncDieselConnectionManager;
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use diesel_migrations::{embed_migrations, EmbeddedMigrations};
-use explorer::handler::SettlementPipeline;
-use explorer::schema::settlement;
+use explorer::handler::{SettlementPipeline, PENDING_PROOF_DRAIN_SQL, PENDING_PROOF_UPSERT_SQL};
 use fred::prelude::*;
 use move_core_types::account_address::AccountAddress;
 use sui_indexer_alt_framework::cluster::{Args, IndexerCluster};
@@ -95,9 +94,20 @@ async fn wire_redis(redis_url: &str, database_url_str: &str) -> anyhow::Result<(
 
     // Lives for the process: drains proof links concurrently with `cluster.run()`.
     tokio::spawn(async move {
+        use tokio::sync::broadcast::error::RecvError;
         // Keep the subscriber owned by the task so its connection stays alive for the message_rx.
         let _subscriber = subscriber;
-        while let Ok(msg) = messages.recv().await {
+        loop {
+            let msg = match messages.recv().await {
+                Ok(msg) => msg,
+                // A transient lag is NOT end-of-stream: skip the dropped window and keep draining.
+                // (The bare `while let Ok` this replaces exited here, silencing proofs until restart.)
+                Err(RecvError::Lagged(n)) => {
+                    tracing::warn!(skipped = n, "explorer:proofs message_rx lagged; proof links dropped");
+                    continue;
+                }
+                Err(RecvError::Closed) => break,
+            };
             let Some(payload) = msg.value.as_string() else {
                 continue;
             };
@@ -108,7 +118,7 @@ async fn wire_redis(redis_url: &str, database_url_str: &str) -> anyhow::Result<(
                     continue;
                 }
             };
-            // Need a digest, and at least one proof field worth writing.
+            // Need a digest, and at least one proof field worth recording.
             let Some(digest) = link.tx_digest else { continue };
             if link.proof_url.is_none() && link.walrus_blob_id.is_none() {
                 continue;
@@ -120,21 +130,26 @@ async fn wire_redis(redis_url: &str, database_url_str: &str) -> anyhow::Result<(
                     continue;
                 }
             };
-            // Upgrade-only: the `proof_url IS NULL` filter guarantees a present proof is never
-            // overwritten. Best-effort — log and keep draining on error.
-            let updated = diesel::update(
-                settlement::table
-                    .filter(settlement::tx_digest.eq(&digest))
-                    .filter(settlement::proof_url.is_null()),
-            )
-            .set((
-                settlement::proof_url.eq(link.proof_url),
-                settlement::walrus_blob_id.eq(link.walrus_blob_id),
-            ))
-            .execute(&mut conn)
-            .await;
-            if let Err(e) = updated {
-                tracing::warn!(error = %e, %digest, "explorer proof-link UPDATE failed");
+            // Record the proof durably FIRST, then drain it onto the settlement row — which usually
+            // does NOT exist yet (the proof beats the chain-ingested close row). The indexer commit
+            // runs the SAME drain after it writes a row, so the link attaches in either arrival
+            // order. Best-effort: log and keep draining on error.
+            if let Err(e) = diesel::sql_query(PENDING_PROOF_UPSERT_SQL)
+                .bind::<Text, _>(digest.clone())
+                .bind::<Nullable<Text>, _>(link.proof_url)
+                .bind::<Nullable<Text>, _>(link.walrus_blob_id)
+                .execute(&mut conn)
+                .await
+            {
+                tracing::warn!(error = %e, %digest, "explorer pending_proof upsert failed");
+                continue;
+            }
+            if let Err(e) = diesel::sql_query(PENDING_PROOF_DRAIN_SQL)
+                .bind::<Array<Text>, _>(vec![digest.clone()])
+                .execute(&mut conn)
+                .await
+            {
+                tracing::warn!(error = %e, %digest, "explorer proof drain failed");
             }
         }
         tracing::warn!("explorer:proofs subscription closed; proof links disabled until restart");

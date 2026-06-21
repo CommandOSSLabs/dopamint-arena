@@ -40,9 +40,20 @@ async fn main() -> anyhow::Result<()> {
         let mut messages = sub.message_rx();
         let tx2 = tx.clone();
         tokio::spawn(async move {
-            while let Ok(msg) = messages.recv().await {
-                if let Some(s) = msg.value.as_string() {
-                    let _ = tx2.send(s);
+            use tokio::sync::broadcast::error::RecvError;
+            loop {
+                match messages.recv().await {
+                    Ok(msg) => {
+                        if let Some(s) = msg.value.as_string() {
+                            let _ = tx2.send(s);
+                        }
+                    }
+                    // Transient lag is NOT end-of-stream: skip the dropped window and keep bridging.
+                    // (The bare `while let Ok` this replaces exited here, silencing the feed forever.)
+                    Err(RecvError::Lagged(n)) => {
+                        tracing::warn!(skipped = n, "explorer:events message_rx lagged; live rows dropped");
+                    }
+                    Err(RecvError::Closed) => break,
                 }
             }
             tracing::warn!("Redis explorer:events subscription closed; SSE live feed silent until restart");

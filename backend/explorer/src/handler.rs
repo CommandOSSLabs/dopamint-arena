@@ -38,6 +38,33 @@ pub fn init_events_publisher(client: RedisClient) {
     let _ = SETTLEMENT_EVENTS.set(client);
 }
 
+/// Drain `pending_proof` for the given digests onto their settlement rows. Run by BOTH the
+/// indexer commit (after it writes settled rows) and the `explorer:proofs` subscriber (after it
+/// records a proof). Each side writes its own contribution durably first, then runs this same
+/// idempotent merge — so whichever becomes durable last completes the enrichment regardless of
+/// arrival order. COALESCE-preserves any already-present value, and DELETEs only the pending rows
+/// it actually merged (a proof whose settlement row doesn't exist yet is kept for a later drain).
+/// Bind `$1` = the digest list (`Array<Text>`). One atomic data-modifying CTE.
+pub const PENDING_PROOF_DRAIN_SQL: &str = "\
+WITH merged AS ( \
+    UPDATE settlement s \
+       SET proof_url      = COALESCE(s.proof_url, p.proof_url), \
+           walrus_blob_id = COALESCE(s.walrus_blob_id, p.walrus_blob_id) \
+      FROM pending_proof p \
+     WHERE p.tx_digest = s.tx_digest AND s.tx_digest = ANY($1) \
+    RETURNING s.tx_digest \
+) \
+DELETE FROM pending_proof WHERE tx_digest IN (SELECT tx_digest FROM merged)";
+
+/// Record a proof durably so it survives arriving before the settlement row exists. COALESCE so a
+/// later partial message never nulls a field already stored. Bind $1=digest, $2=proof_url,
+/// $3=walrus_blob_id. Paired with `PENDING_PROOF_DRAIN_SQL` (the subscriber upserts here, then drains).
+pub const PENDING_PROOF_UPSERT_SQL: &str = "\
+INSERT INTO pending_proof (tx_digest, proof_url, walrus_blob_id) VALUES ($1, $2, $3) \
+ON CONFLICT (tx_digest) DO UPDATE \
+   SET proof_url      = COALESCE(EXCLUDED.proof_url, pending_proof.proof_url), \
+       walrus_blob_id = COALESCE(EXCLUDED.walrus_blob_id, pending_proof.walrus_blob_id)";
+
 /// One settlement row to insert. Mirrors the on-chain-derived subset of `events::RowData`.
 ///
 /// `proof_url`, `walrus_blob_id`, and `game` are omitted from this struct (Diesel inserts NULL).
@@ -163,33 +190,50 @@ impl Handler for SettlementPipeline {
             .execute(conn)
             .await?;
 
-        // 2. Address enrichment. A settled row (close tx) carries balances but NO party
-        // addresses; the addresses live on the opened row (TunnelCreated) — a DIFFERENT
-        // tx_digest at an earlier checkpoint, same tunnel_id. `process()` is pure (per
-        // checkpoint) so it can't join across them. We do the join here as a scoped UPDATE
-        // after the insert. CAVEAT: the concurrent pipeline commits batches out of order (only
-        // watermarks advance in order), so the open row is normally present in steady state
-        // (opens precede closes by many checkpoints) but is NOT guaranteed during backfill — a
-        // close committed before its open leaves these addresses NULL with no retry. Restricted
-        // to this batch's tunnels and to still-NULL settled rows so it's idempotent and bounded.
-        let settled_tunnels: Vec<String> = values
+        // 2. Address enrichment (order-independent). A settled row (close tx) carries balances but
+        // NO party addresses; those live on the opened row (TunnelCreated) — a different tx_digest
+        // at an earlier checkpoint, same tunnel_id. `process()` is pure per checkpoint so it can't
+        // join across them; we join here after the insert. The concurrent pipeline commits batches
+        // OUT of order (only watermarks advance in order), so for EVERY tunnel touched in this
+        // batch — opened OR settled — we (re)run the settled<-opened join. That back-fills a settled
+        // row whose open committed later just as it fills one whose open committed earlier, making
+        // enrichment independent of commit order. Scoped to this batch's tunnels and still-NULL
+        // settled rows: idempotent and bounded.
+        let mut enrich_tunnels: Vec<String> = values
             .iter()
-            .filter(|v| v.kind == "settled")
+            .filter(|v| v.kind == "settled" || v.kind == "opened")
             .map(|v| v.tunnel_id.clone())
             .collect();
-        if !settled_tunnels.is_empty() {
+        enrich_tunnels.sort();
+        enrich_tunnels.dedup();
+        if !enrich_tunnels.is_empty() {
             diesel::sql_query(
                 "UPDATE settlement s SET party_a_addr = o.party_a_addr, party_b_addr = o.party_b_addr \
                  FROM settlement o \
                  WHERE o.tunnel_id = s.tunnel_id AND o.kind = 'opened' \
                    AND s.kind = 'settled' AND s.party_a_addr IS NULL AND s.party_b_addr IS NULL AND s.tunnel_id = ANY($1)",
             )
-            .bind::<Array<Text>, _>(settled_tunnels)
+            .bind::<Array<Text>, _>(enrich_tunnels)
             .execute(conn)
             .await?;
         }
 
-        // 3. Live feed (best-effort). Publish each SETTLED row in this batch to `explorer:events`
+        // 3. Drain Walrus proof links that arrived (via `explorer:proofs`) before this row existed.
+        // The subscriber records the proof into `pending_proof` and runs the same drain, so the
+        // link attaches regardless of which side commits first (see `PENDING_PROOF_DRAIN_SQL`).
+        let settled_digests: Vec<String> = values
+            .iter()
+            .filter(|v| v.kind == "settled")
+            .map(|v| v.tx_digest.clone())
+            .collect();
+        if !settled_digests.is_empty() {
+            diesel::sql_query(PENDING_PROOF_DRAIN_SQL)
+                .bind::<Array<Text>, _>(settled_digests)
+                .execute(conn)
+                .await?;
+        }
+
+        // 4. Live feed (best-effort). Publish each SETTLED row in this batch to `explorer:events`
         // (the api fans this out as SSE). Settled-only: the frontend live feed shows settlements,
         // and a momentarily-NULL-address row is fine (the list doesn't render addresses). A
         // publish failure (no Redis, dropped connection) MUST NOT affect the commit result — this
