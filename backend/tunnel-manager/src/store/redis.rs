@@ -292,13 +292,18 @@ return false
 
 // Presence compare-and-delete: only remove if the stored conn id still matches.
 // KEYS[1]=presence:<wallet>  ARGV[1]=conn_id string
+// Presence compare-and-delete on a single key holding the full ConnRef JSON: delete only if
+// the stored conn_id still matches. cjson.decode reads conn_id (a string) only; nothing is
+// re-encoded. KEYS[1]=presence:<wallet>  ARGV[1]=conn_id string
 const CLEAR_PRESENCE_IF: &str = r#"
-if redis.call('GET', KEYS[1]) == ARGV[1] then
+local raw = redis.call('GET', KEYS[1])
+if not raw then return 0 end
+local ref = cjson.decode(raw)
+if ref.conn_id == ARGV[1] then
   redis.call('DEL', KEYS[1])
   return 1
-else
-  return 0
 end
+return 0
 "#;
 
 // Atomically rebuild queue:<game> excluding every entry whose wallet == ARGV[1].
@@ -329,25 +334,12 @@ return raw
 #[async_trait]
 impl MpStore for RedisMpStore {
     async fn set_presence(&self, wallet: &str, at: ConnRef) {
-        // Two keys: a lightweight conn-id key for compare-and-delete, and a full JSON mirror
-        // for get_presence (cross-instance routing needs the full ConnRef).
+        // One key holds the full ConnRef JSON: get_presence reads it; clear_presence_if's Lua
+        // decodes conn_id from it. No separate mirror to orphan.
         let res: Result<(), _> = self
             .pool
             .set(
                 format!("presence:{wallet}"),
-                at.conn_id.to_string(),
-                None,
-                None,
-                false,
-            )
-            .await;
-        if let Err(e) = res {
-            tracing::warn!(error = %e, "redis set_presence conn_id set failed");
-        }
-        let res: Result<(), _> = self
-            .pool
-            .set(
-                format!("presence:ref:{wallet}"),
                 serde_json::to_string(&at).unwrap(),
                 None,
                 None,
@@ -355,14 +347,14 @@ impl MpStore for RedisMpStore {
             )
             .await;
         if let Err(e) = res {
-            tracing::warn!(error = %e, "redis set_presence ref set failed");
+            tracing::warn!(error = %e, "redis set_presence failed");
         }
     }
 
     async fn get_presence(&self, wallet: &str) -> Option<ConnRef> {
         let v: Option<String> = self
             .pool
-            .get(format!("presence:ref:{wallet}"))
+            .get(format!("presence:{wallet}"))
             .await
             .ok()
             .flatten();
@@ -370,27 +362,16 @@ impl MpStore for RedisMpStore {
     }
 
     async fn clear_presence_if(&self, wallet: &str, conn: crate::mp::ConnId) {
-        let deleted: i64 = match self
+        let res: Result<i64, _> = self
             .pool
-            .eval::<i64, _, _, _>(
+            .eval(
                 CLEAR_PRESENCE_IF,
                 vec![format!("presence:{wallet}")],
                 vec![conn.to_string()],
             )
-            .await
-        {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!(error = %e, "redis clear_presence_if eval failed");
-                0
-            }
-        };
-        // Only clear the ref mirror if the primary key was removed.
-        if deleted > 0 {
-            let res: Result<i64, _> = self.pool.del(format!("presence:ref:{wallet}")).await;
-            if let Err(e) = res {
-                tracing::warn!(error = %e, "redis clear_presence_if del ref failed");
-            }
+            .await;
+        if let Err(e) = res {
+            tracing::warn!(error = %e, "redis clear_presence_if eval failed");
         }
     }
 
@@ -963,5 +944,47 @@ mod tests {
         let snap = s.snapshot().await;
         assert_eq!(snap.per_game[&game].total_actions, 12);
         assert!(snap.total_actions >= 12, "total is the sum of per-game");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires TEST_REDIS_URL"]
+    async fn presence_uses_one_key_and_cas_clears_it() {
+        let Some(url) = test_url() else { return };
+        let pool = connect(&url).await.unwrap();
+        let s = RedisMpStore::new(pool.clone());
+        let wallet = format!("0x{}", uuid::Uuid::new_v4().simple());
+        let conn = uuid::Uuid::new_v4();
+        s.set_presence(
+            &wallet,
+            ConnRef {
+                instance_id: "A".into(),
+                conn_id: conn,
+            },
+        )
+        .await;
+        // No mirror key may exist.
+        let mirror: Option<String> = pool
+            .get(format!("presence:ref:{wallet}"))
+            .await
+            .ok()
+            .flatten();
+        assert!(mirror.is_none(), "no presence:ref mirror key");
+        // Round-trips the full ConnRef.
+        let got = s.get_presence(&wallet).await.expect("presence present");
+        assert_eq!((got.instance_id.as_str(), got.conn_id), ("A", conn));
+        // CAS with a wrong conn must not clear.
+        s.clear_presence_if(&wallet, uuid::Uuid::new_v4()).await;
+        assert!(
+            s.get_presence(&wallet).await.is_some(),
+            "wrong conn must not clear"
+        );
+        // CAS with the right conn clears it, leaving no key behind.
+        s.clear_presence_if(&wallet, conn).await;
+        assert!(
+            s.get_presence(&wallet).await.is_none(),
+            "matching conn clears"
+        );
+        let leftover: Option<String> = pool.get(format!("presence:{wallet}")).await.ok().flatten();
+        assert!(leftover.is_none(), "no orphaned presence key");
     }
 }
