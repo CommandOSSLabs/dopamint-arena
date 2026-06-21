@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Link } from "@tanstack/react-router";
 
 import { Panel, PanelHeader, PanelTitle } from "@/components/ui/panel";
 import { Input } from "@/components/ui/input";
@@ -120,13 +121,13 @@ export function ExplorerPage() {
                       {fmtSui((r.partyABalance ?? 0) + (r.partyBBalance ?? 0))}
                     </td>
                     <td className="px-3 py-2 text-right">
-                      {/* Plain anchor — the /explorer/$digest route lands in the next task. */}
-                      <a
-                        href={`/explorer/${r.txDigest}`}
+                      <Link
+                        to="/explorer/$digest"
+                        params={{ digest: r.txDigest }}
                         className="text-primary hover:underline"
                       >
                         Verify →
-                      </a>
+                      </Link>
                     </td>
                   </tr>
                 ))
