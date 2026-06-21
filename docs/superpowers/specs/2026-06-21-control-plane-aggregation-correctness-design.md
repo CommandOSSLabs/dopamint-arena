@@ -63,15 +63,26 @@ simplification, not added machinery.
 - **Defect**: `set_tunnel_id` and `record_checkpoint` (`redis.rs:497–514`) do
   `get_match` → mutate one field → `put_match`. Two instances racing (e.g. a `TunnelOpened`
   writing `tunnel_id` while a watchtower writes `latest_checkpoint`) lose one update.
-- **Fix**: store the match as a HASH keyed `match:<id>` with fields `seat_a`, `seat_b`,
-  `conn_a`, `conn_b`, `tunnel_id`, `latest_checkpoint`. `set_tunnel_id` → `HSET tunnel_id`
-  (one independent field). `record_checkpoint` → a tiny O(1) Lua that reads the current
-  checkpoint nonce and `HSET`s only if `cp.nonce >= current` (monotonic CAS). `get_match` →
-  `HGETALL`. Independent fields can no longer clobber each other; the checkpoint stays
-  nonce-monotonic.
+- **Fix**: store the match as a HASH keyed `match:<id>` with fields `game`, `seat_a`,
+  `seat_b`, `conn_a`, `conn_b`, `tunnel_id`, `latest_checkpoint`, and `checkpoint_nonce`.
+  `conn_a`/`conn_b`/`latest_checkpoint` hold **opaque JSON strings produced by Rust**;
+  `game`/`seat_a`/`seat_b`/`tunnel_id` are plain strings; `checkpoint_nonce` is a plain
+  integer. `set_tunnel_id` → `HSET tunnel_id` (one independent field). `record_checkpoint`
+  → an O(1) Lua that compares the incoming nonce to `checkpoint_nonce` and `HSET`s the new
+  `latest_checkpoint` (verbatim) + `checkpoint_nonce` only if newer (monotonic CAS).
+  `get_match` → `HGETALL`, reassemble the struct field-by-field. Independent fields can no
+  longer clobber each other.
+- **Why opaque field + separate nonce (load-bearing)**: a Lua RMW on a single JSON blob is
+  rejected because it must `cjson.decode`/`encode` the whole record on every write, and
+  Redis's embedded Lua represents numbers as **doubles** — so `party_a_balance` /
+  `party_b_balance` (`u64`) above 2^53 (~9M SUI in MIST) would be silently corrupted. Those
+  balances are submitted **on-chain** (`sui.rs:433-434`) and covered by the checkpoint's
+  `sig_a`/`sig_b`, so corruption breaks watchtower/settle. Storing the checkpoint as an
+  opaque string written **verbatim** (Rust's `serde_json` keeps `u64` exact) and keeping the
+  CAS on a separate integer `checkpoint_nonce` means the Lua never `cjson`-touches a balance.
 - **TTL**: a HASH has no per-write TTL like `SET EX`. Fold `HSET … ; EXPIRE match:<id> 21600`
-  into the same Lua/pipeline so `put_match` stays one round-trip and the 6h lifetime is
-  preserved; refresh TTL on field writes too.
+  into one Lua/pipeline so writes stay one round-trip and the 6h lifetime is preserved;
+  refresh TTL on field writes too.
 - **Memory impl**: unchanged in behavior — already atomic under one `RwLock` write guard.
 
 ### F2 — `take_invite` as one atomic Lua
