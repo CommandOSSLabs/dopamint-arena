@@ -85,8 +85,16 @@ export function PvpScene({
       )}
 
       {!playing ? (
-        <div className="flex-1 flex flex-col items-center gap-6 pb-4 pt-4">
-          <div className="text-2xl md:text-3xl font-mono text-on-surface/80 bg-surface px-8 py-6 rounded-2xl shadow-sm border-[4px] border-primary/20">
+        <div
+          className={`flex-1 flex flex-col items-center pb-4 pt-4 ${isPortrait ? "gap-3" : "gap-6"}`}
+        >
+          <div
+            className={`font-mono text-on-surface/80 bg-surface rounded-2xl shadow-sm border-primary/20 ${
+              isPortrait
+                ? "text-sm px-4 py-3 border-2"
+                : "text-2xl md:text-3xl px-8 py-6 border-[4px]"
+            }`}
+          >
             Wallet: <span className="font-bold">{g.address.slice(0, 8)}…</span>{" "}
             &nbsp;·&nbsp; Balance:{" "}
             <span className="font-bold text-primary">
@@ -94,30 +102,46 @@ export function PvpScene({
             </span>
           </div>
 
-          <div className="flex flex-col items-center gap-8 bg-surface-container-low p-10 md:p-14 rounded-3xl border-4 border-dashed border-primary/30 w-[90%] max-w-4xl mt-2">
-            <span className="text-2xl md:text-3xl font-bold uppercase tracking-widest text-primary">
+          <div
+            className={`flex flex-col items-center bg-surface-container-low border-primary/30 w-[90%] max-w-4xl mt-2 ${
+              isPortrait
+                ? "gap-3 p-4 border-2 border-dashed rounded-xl"
+                : "gap-8 p-10 md:p-14 border-4 border-dashed rounded-3xl"
+            }`}
+          >
+            <span
+              className={`font-bold uppercase tracking-widest text-primary ${isPortrait ? "text-sm" : "text-2xl md:text-3xl"}`}
+            >
               Game Variant
             </span>
-            <div className="flex gap-4 w-full">
+            <div className={`flex w-full ${isPortrait ? "gap-2" : "gap-4"}`}>
               {(["ttt", "caro"] as const).map((v) => (
                 <button
                   key={v}
                   disabled={locked}
                   onClick={() => setVariant(v)}
-                  className={`flex-1 py-8 rounded-2xl text-3xl font-bold shadow-sm disabled:opacity-40 transition-all ${variant === v ? "bg-tertiary text-on-tertiary shadow-[6px_6px_0px_#bc0000]" : "bg-surface border-[4px] border-primary/30 hover:border-primary/60"}`}
+                  className={`flex-1 font-bold shadow-sm disabled:opacity-40 transition-all ${
+                    isPortrait
+                      ? `py-3 rounded-lg text-base border-2 ${variant === v ? "bg-tertiary text-on-tertiary shadow-[2px_2px_0px_#bc0000]" : "bg-surface border-primary/30"}`
+                      : `py-8 rounded-2xl text-3xl ${variant === v ? "bg-tertiary text-on-tertiary shadow-[6px_6px_0px_#bc0000]" : "bg-surface border-[4px] border-primary/30 hover:border-primary/60"}`
+                  }`}
                 >
                   {v === "ttt" ? "3×3 Classic" : "Caro"}
                 </button>
               ))}
             </div>
             {variant === "caro" && (
-              <div className="flex gap-6 mt-4">
+              <div className={`flex mt-2 ${isPortrait ? "gap-3" : "gap-6"}`}>
                 {CARO_SIZES.map((sz) => (
                   <button
                     key={sz}
                     disabled={locked}
                     onClick={() => setBoardSize(sz)}
-                    className={`px-10 py-5 rounded-2xl text-2xl font-bold shadow-sm disabled:opacity-40 transition-all ${boardSize === sz ? "bg-secondary text-on-secondary shadow-[4px_4px_0px_#bc0000]" : "bg-surface border-[4px] border-primary/30 hover:border-primary/60"}`}
+                    className={`font-bold shadow-sm disabled:opacity-40 transition-all ${
+                      isPortrait
+                        ? `px-4 py-2 rounded-md text-xs border-2 ${boardSize === sz ? "bg-secondary text-on-secondary shadow-[2px_2px_0px_#bc0000]" : "bg-surface border-primary/30"}`
+                        : `px-10 py-5 rounded-2xl text-2xl ${boardSize === sz ? "bg-secondary text-on-secondary shadow-[4px_4px_0px_#bc0000]" : "bg-surface border-[4px] border-primary/30 hover:border-primary/60"}`
+                    }`}
                   >
                     {sz}×{sz}
                   </button>
@@ -127,9 +151,12 @@ export function PvpScene({
           </div>
 
           {!funded && (
-            <div className="text-2xl text-secondary font-bold text-center w-[90%] max-w-4xl bg-secondary/10 p-6 rounded-2xl mt-4">
-              Your connected wallet needs a little testnet SUI to play (gas +
-              deposit).
+            <div
+              className={`text-secondary font-bold text-center w-[90%] max-w-4xl bg-secondary/10 rounded-2xl mt-4 ${
+                isPortrait ? "text-xs p-3 mt-1" : "text-2xl p-6"
+              }`}
+            >
+              Your wallet needs SUI to play (gas + deposit).
             </div>
           )}
 
@@ -137,36 +164,52 @@ export function PvpScene({
             <button
               onClick={g.queue}
               disabled={!funded || locked}
-              className="w-[80%] max-w-3xl px-12 py-8 rounded-xl border-[6px] border-primary bg-surface text-primary font-headline-lg-mobile text-4xl uppercase tracking-widest disabled:opacity-40 shadow-[8px_8px_0px_#001e40] hover:-translate-y-1 hover:translate-x-1 hover:shadow-[10px_10px_0px_#001e40] active:translate-y-0 active:translate-x-0 active:shadow-[4px_4px_0px_#001e40] transition-all flex items-center justify-center gap-4"
+              className={`w-[80%] max-w-3xl rounded-xl border-primary bg-surface text-primary uppercase tracking-widest disabled:opacity-40 hover:-translate-y-1 hover:translate-x-1 transition-all flex items-center justify-center ${
+                isPortrait
+                  ? "px-6 py-4 border-4 text-xl gap-2 shadow-[4px_4px_0px_#001e40] hover:shadow-[5px_5px_0px_#001e40] active:translate-y-0 active:translate-x-0 active:shadow-[2px_2px_0px_#001e40]"
+                  : "px-12 py-8 border-[6px] text-4xl gap-4 shadow-[8px_8px_0px_#001e40] hover:shadow-[10px_10px_0px_#001e40] active:translate-y-0 active:translate-x-0 active:shadow-[4px_4px_0px_#001e40]"
+              }`}
             >
-              <span className="material-symbols-outlined text-5xl">
+              <span
+                className={`material-symbols-outlined ${isPortrait ? "text-2xl" : "text-5xl"}`}
+              >
                 {g.phase === "queuing"
                   ? "search"
                   : g.phase === "connecting"
                     ? "sync"
                     : "sports_esports"}
               </span>
-              {g.phase === "connecting"
-                ? "Connecting…"
-                : g.phase === "queuing"
-                  ? "Finding Opponent…"
-                  : g.phase === "opening"
-                    ? "Opening tunnel…"
-                    : g.phase === "funding"
-                      ? "Funding seat…"
-                      : "Find Match"}
+              <span>
+                {g.phase === "connecting"
+                  ? "Connecting…"
+                  : g.phase === "queuing"
+                    ? "Finding Opponent…"
+                    : g.phase === "opening"
+                      ? "Opening tunnel…"
+                      : g.phase === "funding"
+                        ? "Funding seat…"
+                        : "Find Match"}
+              </span>
             </button>
 
             {(g.phase === "queuing" || g.phase === "connecting") && (
               <button
                 onClick={g.leave}
-                className="text-2xl text-outline font-bold underline hover:text-secondary transition-colors pb-2"
+                className={`text-outline font-bold underline hover:text-secondary transition-colors pb-2 ${
+                  isPortrait ? "text-sm" : "text-2xl"
+                }`}
               >
                 Cancel Search
               </button>
             )}
             {g.error && (
-              <div className="text-2xl font-bold text-red-500 text-center w-[90%] max-w-4xl bg-red-50 p-6 rounded-2xl border-4 border-red-200 pb-2">
+              <div
+                className={`font-bold text-red-500 text-center w-[90%] max-w-4xl bg-red-50 rounded-2xl pb-2 ${
+                  isPortrait
+                    ? "text-xs p-3 border-2 border-red-200"
+                    : "text-2xl p-6 border-4 border-red-200"
+                }`}
+              >
                 {g.error}
               </div>
             )}

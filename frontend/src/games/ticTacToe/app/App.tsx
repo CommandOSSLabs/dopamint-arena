@@ -177,6 +177,7 @@ function AppContent() {
               setBoardSize={setBoardSize}
               onStart={start}
               onBack={() => setScene("login")}
+              isPortrait={isPortrait}
             />
           )}
 
