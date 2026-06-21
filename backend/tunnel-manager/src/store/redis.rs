@@ -16,6 +16,7 @@ use crate::mp::ConnId;
 use crate::state::{GameStat, SessionRecord, StatsSnapshot, TunnelEvent, TunnelStatus};
 
 const SESSION_TTL: i64 = 24 * 3600;
+const MATCH_TTL: i64 = 6 * 3600;
 
 // Atomic dedup-then-push for the recent-events ring. SADD returns 1 only for a new digest,
 // so a re-polled event (cursor restart / second indexer) never double-inserts. Newest-first
@@ -331,6 +332,31 @@ redis.call('DEL', KEYS[1])
 return raw
 "#;
 
+// Write the match HASH atomically with its 6h TTL. Core fields are always present; tunnel_id
+// and checkpoint are written only when non-empty (sentinel '' means "skip"). The checkpoint is
+// stored verbatim (opaque JSON) and its nonce kept as a plain integer field, so no balance is
+// ever cjson-round-tripped. KEYS[1]=match:<id>
+// ARGV: 1=game 2=seat_a 3=seat_b 4=conn_a 5=conn_b 6=tunnel_id|'' 7=checkpoint|'' 8=nonce|'' 9=ttl
+const PUT_MATCH: &str = r#"
+redis.call('HSET', KEYS[1], 'game', ARGV[1], 'seat_a', ARGV[2], 'seat_b', ARGV[3], 'conn_a', ARGV[4], 'conn_b', ARGV[5])
+if ARGV[6] ~= '' then redis.call('HSET', KEYS[1], 'tunnel_id', ARGV[6]) end
+if ARGV[7] ~= '' then redis.call('HSET', KEYS[1], 'latest_checkpoint', ARGV[7], 'checkpoint_nonce', ARGV[8]) end
+redis.call('EXPIRE', KEYS[1], tonumber(ARGV[9]))
+return 1
+"#;
+
+// Monotonic checkpoint CAS: store the new checkpoint (verbatim) only if its nonce >= the stored
+// one. Compares integers; never decodes the checkpoint body, so balances stay byte-exact.
+// KEYS[1]=match:<id>  ARGV[1]=nonce  ARGV[2]=checkpoint json  ARGV[3]=ttl
+const RECORD_CHECKPOINT: &str = r#"
+if redis.call('EXISTS', KEYS[1]) == 0 then return 0 end
+local cur = redis.call('HGET', KEYS[1], 'checkpoint_nonce')
+if cur and tonumber(ARGV[1]) < tonumber(cur) then return 0 end
+redis.call('HSET', KEYS[1], 'latest_checkpoint', ARGV[2], 'checkpoint_nonce', ARGV[1])
+redis.call('EXPIRE', KEYS[1], tonumber(ARGV[3]))
+return 1
+"#;
+
 #[async_trait]
 impl MpStore for RedisMpStore {
     async fn set_presence(&self, wallet: &str, at: ConnRef) {
@@ -456,47 +482,79 @@ impl MpStore for RedisMpStore {
     }
 
     async fn put_match(&self, match_id: &str, m: crate::mp::MatchRecord) {
-        let res: Result<(), _> = self
+        let (cp_json, cp_nonce) = match &m.latest_checkpoint {
+            Some(cp) => (serde_json::to_string(cp).unwrap(), cp.nonce.to_string()),
+            None => (String::new(), String::new()),
+        };
+        let res: Result<i64, _> = self
             .pool
-            .set(
-                format!("match:{match_id}"),
-                serde_json::to_string(&m).unwrap(),
-                Some(Expiration::EX(6 * 3600)),
-                None,
-                false,
+            .eval(
+                PUT_MATCH,
+                vec![format!("match:{match_id}")],
+                vec![
+                    m.game,
+                    m.seat_a,
+                    m.seat_b,
+                    serde_json::to_string(&m.conn_a).unwrap(),
+                    serde_json::to_string(&m.conn_b).unwrap(),
+                    m.tunnel_id.unwrap_or_default(),
+                    cp_json,
+                    cp_nonce,
+                    MATCH_TTL.to_string(),
+                ],
             )
             .await;
         if let Err(e) = res {
-            tracing::warn!(error = %e, "redis put_match set failed");
+            tracing::warn!(error = %e, "redis put_match eval failed");
         }
     }
 
     async fn get_match(&self, match_id: &str) -> Option<crate::mp::MatchRecord> {
-        let v: Option<String> = self
-            .pool
-            .get(format!("match:{match_id}"))
-            .await
-            .ok()
-            .flatten();
-        v.and_then(|j| serde_json::from_str(&j).ok())
+        let h: HashMap<String, String> =
+            self.pool.hgetall(format!("match:{match_id}")).await.ok()?;
+        if h.is_empty() {
+            return None;
+        }
+        Some(crate::mp::MatchRecord {
+            game: h.get("game")?.clone(),
+            seat_a: h.get("seat_a")?.clone(),
+            seat_b: h.get("seat_b")?.clone(),
+            conn_a: serde_json::from_str(h.get("conn_a")?).ok()?,
+            conn_b: serde_json::from_str(h.get("conn_b")?).ok()?,
+            tunnel_id: h.get("tunnel_id").cloned(),
+            latest_checkpoint: h
+                .get("latest_checkpoint")
+                .and_then(|s| serde_json::from_str(s).ok()),
+        })
     }
 
     async fn set_tunnel_id(&self, match_id: &str, tunnel_id: &str) {
-        if let Some(mut m) = self.get_match(match_id).await {
-            m.tunnel_id = Some(tunnel_id.to_owned());
-            self.put_match(match_id, m).await;
+        // Independent field write — cannot clobber the checkpoint. Refresh the TTL.
+        let key = format!("match:{match_id}");
+        let res: Result<i64, _> = self.pool.hset(&key, ("tunnel_id", tunnel_id)).await;
+        if let Err(e) = res {
+            tracing::warn!(error = %e, "redis set_tunnel_id hset failed");
+            return;
         }
+        // fred 9.4: `expire(key, seconds)` is 2-arg (returns 1 on success). Refresh the 6h TTL.
+        let _: Result<i64, _> = self.pool.expire(&key, MATCH_TTL).await;
     }
 
     async fn record_checkpoint(&self, match_id: &str, cp: crate::mp::Checkpoint) {
-        if let Some(mut m) = self.get_match(match_id).await {
-            if m.latest_checkpoint
-                .as_ref()
-                .map_or(true, |c| cp.nonce >= c.nonce)
-            {
-                m.latest_checkpoint = Some(cp);
-                self.put_match(match_id, m).await;
-            }
+        let res: Result<i64, _> = self
+            .pool
+            .eval(
+                RECORD_CHECKPOINT,
+                vec![format!("match:{match_id}")],
+                vec![
+                    cp.nonce.to_string(),
+                    serde_json::to_string(&cp).unwrap(),
+                    MATCH_TTL.to_string(),
+                ],
+            )
+            .await;
+        if let Err(e) = res {
+            tracing::warn!(error = %e, "redis record_checkpoint eval failed");
         }
     }
 }
@@ -986,5 +1044,101 @@ mod tests {
         );
         let leftover: Option<String> = pool.get(format!("presence:{wallet}")).await.ok().flatten();
         assert!(leftover.is_none(), "no orphaned presence key");
+    }
+
+    fn sample_match() -> crate::mp::MatchRecord {
+        let cr = ConnRef {
+            instance_id: "i".into(),
+            conn_id: uuid::Uuid::new_v4(),
+        };
+        crate::mp::MatchRecord {
+            game: "ttt".into(),
+            seat_a: "0xa".into(),
+            seat_b: "0xb".into(),
+            conn_a: cr.clone(),
+            conn_b: cr,
+            tunnel_id: None,
+            latest_checkpoint: None,
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires TEST_REDIS_URL"]
+    async fn match_record_round_trips_through_hash() {
+        let Some(url) = test_url() else { return };
+        let s = RedisMpStore::new(connect(&url).await.unwrap());
+        let mid = format!("m{}", uuid::Uuid::new_v4().simple());
+        let m = sample_match();
+        s.put_match(&mid, m.clone()).await;
+        let got = s.get_match(&mid).await.expect("match round-trips");
+        assert_eq!(got.game, m.game);
+        assert_eq!((got.seat_a, got.seat_b), (m.seat_a, m.seat_b));
+        assert_eq!(got.conn_a.conn_id, m.conn_a.conn_id);
+        assert!(got.tunnel_id.is_none() && got.latest_checkpoint.is_none());
+    }
+
+    #[tokio::test]
+    #[ignore = "requires TEST_REDIS_URL"]
+    async fn tunnel_id_and_checkpoint_writes_do_not_clobber() {
+        let Some(url) = test_url() else { return };
+        let s = std::sync::Arc::new(RedisMpStore::new(connect(&url).await.unwrap()));
+        let mid = format!("m{}", uuid::Uuid::new_v4().simple());
+        s.put_match(&mid, sample_match()).await;
+        // A huge balance (> 2^53) must survive byte-exact: it rides in the checkpoint and is
+        // submitted on-chain, so any precision loss is a correctness break.
+        let big = 9_007_199_254_740_993u64; // 2^53 + 1
+        let cp = crate::mp::Checkpoint {
+            nonce: 4,
+            party_a_balance: big,
+            party_b_balance: 1,
+            state_hash: "h".into(),
+            sig_a: "a".into(),
+            sig_b: "b".into(),
+        };
+        let (s1, s2, m1, m2) = (s.clone(), s.clone(), mid.clone(), mid.clone());
+        let h1 = tokio::spawn(async move { s1.set_tunnel_id(&m1, "0xtunnel").await });
+        let h2 = tokio::spawn(async move { s2.record_checkpoint(&m2, cp).await });
+        h1.await.unwrap();
+        h2.await.unwrap();
+        let got = s.get_match(&mid).await.unwrap();
+        assert_eq!(
+            got.tunnel_id.as_deref(),
+            Some("0xtunnel"),
+            "tunnel_id survived"
+        );
+        let stored = got.latest_checkpoint.expect("checkpoint survived");
+        assert_eq!(stored.nonce, 4);
+        assert_eq!(
+            stored.party_a_balance, big,
+            "u64 balance must be byte-exact"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires TEST_REDIS_URL"]
+    async fn record_checkpoint_keeps_highest_nonce_redis() {
+        let Some(url) = test_url() else { return };
+        let s = RedisMpStore::new(connect(&url).await.unwrap());
+        let mid = format!("m{}", uuid::Uuid::new_v4().simple());
+        s.put_match(&mid, sample_match()).await;
+        let cp = |n| crate::mp::Checkpoint {
+            nonce: n,
+            party_a_balance: 1,
+            party_b_balance: 1,
+            state_hash: "h".into(),
+            sig_a: "a".into(),
+            sig_b: "b".into(),
+        };
+        s.record_checkpoint(&mid, cp(5)).await;
+        s.record_checkpoint(&mid, cp(3)).await; // stale, must be ignored
+        assert_eq!(
+            s.get_match(&mid)
+                .await
+                .unwrap()
+                .latest_checkpoint
+                .unwrap()
+                .nonce,
+            5
+        );
     }
 }
