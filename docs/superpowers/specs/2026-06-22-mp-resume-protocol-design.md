@@ -165,14 +165,18 @@ is an integration break — see the `protocol.rs` round-trip tests).
   `bus.deliver(peer_conn_ref, PeerResumed{...})` using the match's *other-seat* `ConnRef`
   (delivery is harmless if the peer is offline — it's dropped by the bus). On `None`:
   `Error("not_a_seat" | "match_gone")`.
-- **Disconnect path:** when the socket loop ends, for each match in the per-connection cache
-  where this conn is a seat, `bus.deliver(other_seat, PeerDropped{match_id})`. Keep the
-  existing `clear_presence_if` + `unregister`. Do **not** delete the match record (it must
-  survive for re-attach within the 6h TTL). **Best-effort caveat:** the disconnect notice is
-  driven by the per-connection relay cache, so a player who drops *before relaying any frame*
-  (match created but no move yet) produces no `PeerDropped` — the peer falls back to its own
-  grace timer. Acceptable for the first slice; if a stronger guarantee is wanted later, track a
-  conn→matches set at match creation rather than inferring from the cache.
+- **Disconnect path:** when the socket loop ends, for each match this conn is a seat in,
+  `bus.deliver(other_seat, PeerDropped{match_id})`. Keep the existing `clear_presence_if` +
+  `unregister`. Do **not** delete the match record (it must survive for re-attach within the
+  6h TTL).
+- **Conn→matches tracking (perf-safe, robust):** maintain a per-connection in-memory
+  `HashSet<match_id>` (alongside the existing relay-cache map), populated when this connection
+  becomes a seat — at `match.found` (quick-match), `challenge.accept`, and on a successful
+  `Resume`. This is **control-plane, rare** (match creation, not per move): O(1) insert at
+  match-create, O(1) iteration at disconnect, **zero per-move cost**. It guarantees
+  `PeerDropped` fires even if the dropper never relayed a frame — without inferring matches
+  lazily from the relay cache. (The relay cache stays exactly as-is for the hot path; the set
+  is a separate, tiny membership index on the same connection task.)
 
 ### C4. Peer-cache invalidation (`relay_to_other` cache)
 
@@ -217,13 +221,14 @@ crypto, no new token. A wallet that owns no seat in the match gets `not_a_seat`.
 
 - The match record's 6h TTL bounds how long re-attach is *technically* possible; a returning
   player can rebind any time within it.
-- The **peer's** willingness to wait is a shorter, product-level grace window (recommended
-  **~30–60s**, configurable) after which the present party may trigger on-chain settlement
+- The **peer's** willingness to wait is a shorter, product-level grace window of **60s**
+  (configurable) after which the present party may trigger on-chain settlement
   (claim-via-timeout). Enforcement is the **on-chain dispute timeout**, not the server killing
   the match — the server never unilaterally ends a match. The grace window is surfaced to the
   FE via `PeerDropped`; the FE decides when to offer "claim/settle".
-- Pin the exact grace-window value during planning; it must be ≤ the on-chain challenge window
-  so a settle started after the grace period is always contestable by a late-returning peer.
+- The 60s window must be ≤ the on-chain challenge window so a settle started after the grace
+  period is always contestable by a late-returning peer. Confirm the on-chain challenge window
+  during planning and adjust only if it is shorter than 60s.
 
 ---
 
@@ -255,16 +260,22 @@ crypto, no new token. A wallet that owns no seat in the match gets `not_a_seat`.
 
 ---
 
-## Queue / lobby re-attach (secondary; same primitive — may be deferred)
+## Queue / lobby re-attach (in scope, first slice; same primitive)
 
 A player who drops while **queued** (not yet matched) has durable state too: the queue entry
 (`join_or_pair`, keyed by wallet) and presence both live in Redis. The same primitive applies:
-on reconnect, re-assert presence; if a `match.found` was produced while offline (the match
-record exists with this wallet as a seat), the `Resume`/re-attach path already covers it; if
-still queued, the client simply remains in queue (presence rebind makes a future `match.found`
-deliverable). **This needs no new mechanism beyond presence rebind + the existing match
-re-attach.** Treat as a thin rider on C1–C3; it can be cut from the first slice without
-affecting the core if planning prefers a smaller PR.
+on reconnect, re-assert presence (already done at `Connect`); if a `match.found` was produced
+while offline (the match record exists with this wallet as a seat), the `Resume`/re-attach path
+covers it; if still queued, the client remains in queue and presence rebind makes a future
+`match.found` deliverable to the new socket. **This needs no new mechanism beyond presence
+rebind + the match re-attach** — it ships in the first slice. The only client work is: on
+reconnect, after `Connect`, the FE issues `Resume` for any match it believed active, and
+otherwise re-issues `queue.join` if it was queued. Re-joining is **safe**: `JOIN_OR_PAIR`
+discards the caller's own entries at the queue front and never self-pairs (see the existing
+`join_or_pair_never_pairs_wallet_with_itself` test); a transient duplicate self-entry can sit
+mid-queue but is harmless and self-cleans when it reaches the front. Add a test that a
+reconnect-then-rejoin still pairs correctly and delivers `match.found` to the new socket (not
+the dead one).
 
 ---
 
@@ -299,8 +310,16 @@ affecting the core if planning prefers a smaller PR.
    (sig-verify + max both-signed nonce) over the peer-message side channel.
 4. Tests per the strategy above.
 
+## Decisions (locked)
+
+- **Grace window: 60s** (configurable), must be ≤ the on-chain challenge window — confirm that
+  window during planning and only adjust down if it is shorter than 60s.
+- **Queue/lobby re-attach: in the first slice.**
+- **`PeerDropped` reliability: robust** via the per-connection conn→matches set populated at
+  match creation — chosen specifically because it adds zero per-move cost.
+
 ## Open items to pin during planning
 
-- Exact grace-window value and its relationship to the on-chain challenge window.
-- `Seat` representation (`enum {A,B}` vs `&str`) — pick one.
-- Whether queue/lobby re-attach ships in the first slice or is split out.
+- `Seat` representation (`enum {A,B}` vs `&str`) — pick one and use it consistently.
+- Confirm the actual on-chain challenge-window duration (the Move tunnel/referee module) to
+  validate the 60s grace window.
