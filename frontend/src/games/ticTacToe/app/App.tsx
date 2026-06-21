@@ -25,7 +25,7 @@ function AppContent() {
   const { isConnected } = useCustomWallet();
   const [scene, setScene] = useState<Scene>("login");
   const [mode, setMode] = useState<PlayMode>("auto");
-  const [difficulty, setDifficulty] = useState<Difficulty>("even");
+  const [difficulty, setDifficulty] = useState<Difficulty>("fast");
   const [gameType, setGameType] = useState<GameType>("ttt");
   const [boardSize, setBoardSize] = useState<number>(15);
   const [windowWidth, setWindowWidth] = useState(
@@ -61,6 +61,44 @@ function AppContent() {
       setScene("login");
     }
   }, [isConnected, scene, tttGame, caroGame]);
+
+  // Auto-Pilot flow to skip login and setup, randomize settings, fund bots, and start playing
+  useEffect(() => {
+    if (!isConnected) return;
+
+    const hasNavigated = sessionStorage.getItem("tictactoe_auto_navigated");
+    if (scene === "login" && !hasNavigated) {
+      sessionStorage.setItem("tictactoe_auto_navigated", "true");
+      
+      const randomGameType = Math.random() > 0.5 ? "caro" : "ttt";
+      const randomDifficulty = "fast";
+      const randomBoardSize = ([15, 19, 25] as const)[Math.floor(Math.random() * 3)];
+      
+      setGameType(randomGameType);
+      setDifficulty(randomDifficulty);
+      setBoardSize(randomBoardSize);
+      setMode("auto");
+
+      setScene("setup");
+      return;
+    }
+
+    if (scene === "setup") {
+      if (g.phase === "funding") return;
+      
+      if (!funded) {
+        console.log("[tictactoe] Auto-funding bots...");
+        g.fund();
+      } else {
+        console.log("[tictactoe] Bots funded. Starting game automatically...");
+        const timer = setTimeout(() => {
+          setScene("game");
+          g.startAuto();
+        }, 1000);
+        return () => clearTimeout(timer);
+      }
+    }
+  }, [isConnected, scene, funded, g]);
 
   const start = () => {
     setScene("game");
@@ -117,8 +155,8 @@ function AppContent() {
               onRebalance={g.rebalance}
               rebalancing={g.rebalancing}
               funded={funded}
-              mode={mode}
-              setMode={setMode}
+              maxGames={g.maxGames}
+              setMaxGames={g.setMaxGames}
               difficulty={difficulty}
               setDifficulty={setDifficulty}
               gameType={gameType}

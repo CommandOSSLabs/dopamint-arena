@@ -90,7 +90,7 @@ function strengthFor(difficulty: Difficulty, by: "A" | "B"): BotStrength {
 }
 
 export function useCaroBotGame(
-  difficulty: Difficulty = "even",
+  difficulty: Difficulty = "fast",
   boardSize: number = DEFAULT_BOARD_SIZE,
 ): CaroBotGameView {
   const bots = useMemo(() => loadOrCreateBots(), []);

@@ -185,7 +185,7 @@ function pickCell(state: State, by: "A" | "B", difficulty: Difficulty): number {
   return heuristicCell(state, by); // "even"
 }
 
-export function useBotGame(difficulty: Difficulty = "even"): BotGameView {
+export function useBotGame(difficulty: Difficulty = "fast"): BotGameView {
   const bots = useMemo(() => loadOrCreateBots(), []);
   const client = useMemo(() => getSuiClient(), []);
 

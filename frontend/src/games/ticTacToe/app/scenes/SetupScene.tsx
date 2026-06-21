@@ -83,20 +83,52 @@ function BoardSizeChoice({
   );
 }
 
-const MODES: { id: PlayMode; label: string; desc: string }[] = [
-  { id: "single", label: "Single game", desc: "Play one game, then stop." },
-  {
-    id: "auto",
-    label: "Auto-play",
-    desc: "Loop games until a bot is low on gas, or you stop.",
-  },
-];
+const GAME_PRESETS = [1, 5, 10, 25] as const;
+
+function GamesPerTunnelChoice({
+  value,
+  onChange,
+}: {
+  value: number;
+  onChange: (n: number) => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-6 ml-4">
+      {GAME_PRESETS.map((n) => (
+        <button
+          key={n}
+          type="button"
+          onClick={() => onChange(n)}
+          className={`px-8 py-4 border-[6px] border-primary rounded-xl font-label-sm text-3xl transition-all ${
+            value === n
+              ? "bg-primary text-on-primary shadow-[4px_4px_0px_#001e40]"
+              : "bg-surface text-primary hover:bg-primary/5"
+          }`}
+        >
+          {n}
+        </button>
+      ))}
+      <input
+        type="number"
+        min={1}
+        max={100}
+        value={value}
+        onChange={(e) => {
+          const n = parseInt(e.target.value, 10);
+          if (Number.isFinite(n)) onChange(n);
+        }}
+        aria-label="Custom games per tunnel"
+        className="w-32 px-6 py-4 border-[6px] border-primary rounded-xl bg-surface text-primary font-label-sm text-3xl tabular-nums text-center"
+      />
+    </div>
+  );
+}
 
 const DIFFICULTIES: { id: Difficulty; label: string; desc: string }[] = [
   {
-    id: "perfect",
-    label: "Both perfect",
-    desc: "Both bots play minimax → almost always a draw.",
+    id: "fast",
+    label: "Super Easy",
+    desc: "Bots play instantly on random empty cells (super easy mode).",
   },
   {
     id: "even",
@@ -109,62 +141,11 @@ const DIFFICULTIES: { id: Difficulty; label: string; desc: string }[] = [
     desc: "Bot X plays perfectly, Bot O is weaker → X wins more.",
   },
   {
-    id: "fast",
-    label: "Super Fast",
-    desc: "Bots play instantly on random empty cells to maximize actions/sec.",
+    id: "perfect",
+    label: "Both perfect",
+    desc: "Both bots play minimax → almost always a draw.",
   },
 ];
-
-function PlayModeChoice({
-  value,
-  onChange,
-}: {
-  value: PlayMode;
-  onChange: (v: PlayMode) => void;
-}) {
-  return (
-    <div className="flex flex-wrap gap-8 ml-4">
-      {MODES.map((o) => {
-        const active = o.id === value;
-        return (
-          <label
-            key={o.id}
-            className="relative cursor-pointer flex items-center justify-center p-4"
-          >
-            <input
-              type="radio"
-              name="play_mode"
-              checked={active}
-              onChange={() => onChange(o.id)}
-              className="custom-radio sr-only"
-            />
-            <div className="relative z-10 font-body-lg text-5xl hover:text-secondary transition-colors select-none text-primary">
-              {o.label}
-              <svg
-                className={`red-circle absolute -inset-4 w-[calc(100%+32px)] h-[calc(100%+32px)] transition-all duration-300 pointer-events-none ${
-                  active
-                    ? "opacity-100 scale-100 rotate-[-2deg]"
-                    : "opacity-0 scale-95"
-                }`}
-                preserveAspectRatio="none"
-                viewBox="0 0 100 40"
-              >
-                <path
-                  className="text-secondary drop-shadow-sm"
-                  d="M5,20 C10,5 90,5 95,20 C100,35 20,40 10,25"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2.5"
-                  style={{ strokeLinecap: "round", strokeLinejoin: "round" }}
-                />
-              </svg>
-            </div>
-          </label>
-        );
-      })}
-    </div>
-  );
-}
 
 function DifficultyChoice({
   value,
@@ -178,7 +159,7 @@ function DifficultyChoice({
       {DIFFICULTIES.map((o, idx) => {
         const active = o.id === value;
         const rotation =
-          idx === 0 ? "rotate-3" : idx === 1 ? "-rotate-6" : "rotate-12";
+          idx === 0 ? "rotate-3" : idx === 1 ? "-rotate-6" : idx === 2 ? "rotate-12" : "-rotate-3";
         return (
           <label
             key={o.id}
@@ -221,8 +202,8 @@ export function SetupScene({
   onRebalance,
   rebalancing,
   funded,
-  mode,
-  setMode,
+  maxGames,
+  setMaxGames,
   difficulty,
   setDifficulty,
   gameType,
@@ -239,8 +220,8 @@ export function SetupScene({
   onRebalance: () => void;
   rebalancing: boolean;
   funded: boolean;
-  mode: PlayMode;
-  setMode: (m: PlayMode) => void;
+  maxGames: number;
+  setMaxGames: (n: number) => void;
   difficulty: Difficulty;
   setDifficulty: (d: Difficulty) => void;
   gameType: GameType;
@@ -377,13 +358,13 @@ export function SetupScene({
               </div>
               <div className="mt-8">
                 <h2 className="font-headline-lg-mobile text-4xl text-primary pt-2">
-                  Play Mode
+                  Games per tunnel
                 </h2>
                 <p className="text-2xl text-outline mt-1 mb-6">
-                  Choose how the bot matches are run.
+                  Choose the number of games to play within one tunnel before settling once.
                 </p>
                 <div className="py-2">
-                  <PlayModeChoice value={mode} onChange={setMode} />
+                  <GamesPerTunnelChoice value={maxGames} onChange={setMaxGames} />
                 </div>
               </div>
             </div>
