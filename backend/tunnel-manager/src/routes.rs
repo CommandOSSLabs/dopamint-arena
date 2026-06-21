@@ -254,6 +254,13 @@ pub(crate) async fn settle(
     };
     match state.settler.submit_close(close).await {
         Ok(digest) => {
+            // The close landed on-chain: record it in the event-derived registry so a duplicate
+            // /settle is rejected for free by the 409 guard above (no chain dry-run). Without this
+            // the guard is dead in production, since the in-process chain status poller is disabled.
+            state
+                .control
+                .set_tunnel_status(&tunnel_id, crate::state::TunnelStatus::Closed)
+                .await;
             // Archive the SDK `ProofRecord` shape the in-browser verifier consumes — the
             // enclosing { root, entries } object, not a bare entries array. `root` is the
             // co-signed transcript root (same value anchored on-chain), which verifyTranscript
