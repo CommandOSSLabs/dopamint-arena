@@ -1,8 +1,10 @@
 //! Per-instance, per-game move counter. The relay hot path increments these in-process
 //! (no Redis); a 1/s flusher pushes the delta-since-last-flush into ControlStore so the
-//! global counter stays correct without a per-move round trip. At-most-once on a crash
-//! (lose ≤1 flush interval of display counts) — acceptable for display stats, never
-//! inflates because we only ever push real, already-counted deltas.
+//! global counter stays correct without a per-move round trip.
+//!
+//! At-most-once: `drain_deltas` advances the watermark before the push, so a failed flush
+//! (crash OR a Redis error) drops that interval's delta — never double-counts. Undercount-safe
+//! by design for display stats. A graceful shutdown runs one final flush (`flush_actions`).
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};

@@ -50,7 +50,7 @@ local path; **correctness never depends on it.**
 |---|---|---|
 | Matchmaking | Lua `join-or-pair` on `queue:<game>` | two instances must not pair one waiter |
 | Presence | CAS set/clear (`presence:<wallet>`) | challenge-by-wallet across instances |
-| Match record + **owner instance** | `match:<id>` (incl. `owner_instance_id`) | any instance must resolve a seat / re-home |
+| Match record + **owner instance** | `match:<id>`; ownership is implicit in the two seat `ConnRef.instance_id`s (conn_a / conn_b) — no explicit `owner_instance_id` field; if re-homing requires one it will be added by the resume/affinity ADR | any instance must resolve a seat |
 | Invites | `invite:<id>` (TTL) | inviter/accepter may be on different instances |
 | **Checkpoints** | `latest_checkpoint` on the match record | the **durable recovery anchor** (watchtower + settle) |
 | Aggregate stats | shared `INCRBY` fed by the 1 Hz flush | every SSE viewer sees the same global total |
@@ -65,6 +65,14 @@ settlement, so we persist checkpoints, **not** moves.
 
 ## Consequences
 
+- **Aggregation correctness** is preserved by the merge-commutative primitive rule: each
+  instance pushes only its own deltas (never read-modify-writes a shared aggregate), so
+  concurrent flushes from N instances compose correctly — INCRBY is grow-only and
+  order-independent; SADD/SREM is idempotent; CAS (Lua) is last-writer. The move counter
+  is deliberately at-most-once (watermark advances before the push; a failed flush drops
+  that interval's delta). Do not add flush retries, which would make it at-least-once and
+  double-count. See `store/mod.rs` module doc and
+  `docs/superpowers/specs/2026-06-21-control-plane-aggregation-correctness-design.md`.
 - **Throughput scales by adding instances.** The data plane is shard-local and
   race-free by construction; Redis load is O(matches) + O(seconds), never
   O(moves), so Redis stops being the ceiling. This is the change that lifts the

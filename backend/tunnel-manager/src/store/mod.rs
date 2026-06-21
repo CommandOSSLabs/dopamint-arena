@@ -1,5 +1,13 @@
 //! Storage seam: the in-memory impl (today's maps/atomics; tests + local dev) and the Redis
 //! impl (prod/HA) live behind these traits. Handlers hold `Arc<dyn …>` and never see Redis.
+//!
+//! ## Aggregation invariant
+//! Each instance pushes only its own deltas into a merge-commutative primitive; no method
+//! read-modify-writes a shared aggregate. Three shapes: counts → `INCRBY` (grow-only,
+//! order-independent); membership → `SADD`/`SREM` (idempotent union); owned/last-writer →
+//! single key + CAS (Lua), never summed. The move counter is at-most-once (undercount-safe):
+//! it only ever pushes already-counted deltas, so it never inflates — do NOT add flush
+//! retries, which would make it at-least-once and double-count.
 
 pub mod memory;
 pub mod redis;
