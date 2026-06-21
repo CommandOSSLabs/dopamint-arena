@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useGameNavigate } from "@/games/blackjack/app/useGameRouter";
+import { useGameScale } from "@/games/blackjack/app/components/app/ScaledWrapper";
 import {
   ConnectButton,
   useCurrentAccount,
@@ -101,6 +102,7 @@ function DigestLink({ label, digest }: { label: string; digest?: string }) {
 // the player, bot B the dealer; there are no Hit/Stand controls — the bots self-play.
 export default function PlayerBot() {
   const navigate = useGameNavigate();
+  const { isPortrait } = useGameScale();
   const game = useBlackjackBot();
   const {
     view,
@@ -435,13 +437,9 @@ export default function PlayerBot() {
   // Idle start screen: no game has run yet.
   if (!started) {
     return (
-      <div className="fixed inset-0 z-50 flex flex-col items-center justify-center text-white overflow-hidden select-none fade-in-up">
+      <div className="h-full w-full flex flex-col items-center justify-center relative text-white overflow-hidden select-none casino-felt fade-in-up">
         {/* Background Layer with blur and transparent felt */}
         <div className="absolute inset-0 bg-black/40 backdrop-blur-md" />
-        <div
-          className="absolute inset-0 bg-cover bg-center opacity-60"
-          style={{ backgroundImage: "url('/dealer-desk-plain-rotated.png')" }}
-        />
 
         <div className="relative z-10 flex flex-col items-center justify-center gap-8 bg-zinc-950/40 backdrop-blur-sm w-full h-full p-8 md:p-12">
           <h1 className="text-5xl md:text-6xl font-extrabold text-[#d4af37] font-serif tracking-widest uppercase text-center mb-2 drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]">
@@ -528,13 +526,9 @@ export default function PlayerBot() {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col text-white overflow-hidden select-none fade-in-up">
+    <div className="h-full w-full flex flex-col relative text-white overflow-hidden select-none casino-felt fade-in-up">
       {/* Background Layer with blur and transparent felt */}
       <div className="absolute inset-0 bg-black/40 backdrop-blur-md" />
-      <div
-        className="absolute inset-0 bg-cover bg-center opacity-60"
-        style={{ backgroundImage: "url('/dealer-desk-plain-rotated.png')" }}
-      />
 
       {/* Play area: dealer-desk felt with dealer (top) and player (bottom) hands */}
       <div className="relative z-10 flex-1 w-full">
@@ -573,10 +567,9 @@ export default function PlayerBot() {
           </span>
         </div>
 
-        {/* Top-right side panels: per-round log, then persistent tunnel history below it. */}
-        {/* Rounds running log: top-right corner, fixed height for ~3 rows, scrollable */}
-        {rounds.length > 0 && (
-          <div className="absolute top-16 right-2 md:top-4 md:right-4 z-20 w-40 md:w-52 flex flex-col bg-black/70 backdrop-blur-sm border border-amber-950 rounded-lg shadow-lg overflow-hidden">
+        {/* Rounds running log: hidden on mobile, top-right corner on desktop */}
+        {!isPortrait && rounds.length > 0 && (
+          <div className="hidden md:flex absolute top-16 right-2 md:top-4 md:right-4 z-20 w-40 md:w-52 flex-col bg-black/70 backdrop-blur-sm border border-amber-950 rounded-lg shadow-lg overflow-hidden">
             <div className="px-3 py-1.5 text-[10px] font-extrabold uppercase tracking-widest text-[#d4af37] font-serif border-b border-amber-950/70">
               Rounds
             </div>
@@ -609,7 +602,7 @@ export default function PlayerBot() {
         )}
 
         {/* Toasts overlay: left of Rounds panel */}
-        <div className="absolute top-16 right-[170px] md:top-4 md:right-60 z-30 flex flex-col items-end gap-2 pointer-events-none">
+        <div className={`absolute z-30 flex flex-col items-end gap-2 pointer-events-none ${isPortrait ? "top-4 right-4" : "top-16 right-[170px] md:top-4 md:right-60"}`}>
           {toasts.map((t) => (
             <div
               key={t.id}
@@ -629,14 +622,15 @@ export default function PlayerBot() {
           ))}
         </div>
 
-        {/* Tunnels history: bottom-right corner, wider to fit links, max 3 rows, scrollable */}
-        <div className="absolute bottom-[10px] right-2 md:bottom-4 md:right-4 z-20 w-[280px] md:w-[450px] flex flex-col bg-black/70 backdrop-blur-sm border border-amber-950 rounded-lg shadow-lg overflow-hidden">
-          <div className="px-3 py-1.5 text-[10px] font-extrabold uppercase tracking-widest text-[#d4af37] font-serif border-b border-amber-950/70">
+        {/* Tunnels history: hidden on mobile, bottom-right corner on desktop */}
+        {!isPortrait && (
+          <div className="hidden md:flex absolute bottom-[10px] right-2 md:bottom-4 md:right-4 z-20 w-[240px] md:w-[300px] flex-col bg-black/70 backdrop-blur-sm border border-amber-950 rounded-lg shadow-lg overflow-hidden">
+          <div className="px-3 py-1 text-[9px] font-extrabold uppercase tracking-widest text-[#d4af37] font-serif border-b border-amber-950/70">
             Tunnels
           </div>
-          <div className="max-h-[135px] overflow-y-auto px-2 py-1.5 flex flex-col gap-1.5 scrollbar-thin">
+          <div className="max-h-[85px] overflow-y-auto px-2 py-1 flex flex-col gap-1 scrollbar-thin">
             {tunnels.length === 0 ? (
-              <div className="text-[10px] text-zinc-500 italic p-2">
+              <div className="text-[9px] text-zinc-500 italic p-1.5">
                 Waiting for tunnel data...
               </div>
             ) : (
@@ -645,45 +639,54 @@ export default function PlayerBot() {
                 return (
                   <div
                     key={t.tunnelId}
-                    className="flex flex-col gap-0.5 pb-1.5 border-b border-zinc-850 last:border-b-0 last:pb-0"
+                    className="flex items-center justify-between gap-1.5 pb-1 border-b border-zinc-850/50 last:border-b-0 last:pb-0 font-mono text-[8px] md:text-[10px] tabular-nums"
                   >
-                    <div className="flex items-center justify-between gap-2">
-                      <a
-                        href={`${SUISCAN_OBJECT}${t.tunnelId}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="font-mono text-[9px] md:text-[11px] text-[#d4af37] hover:text-amber-300 underline underline-offset-2 transition-colors"
-                        title={t.tunnelId}
-                      >
-                        {shortId(t.tunnelId)}
-                      </a>
-                      <span
-                        className={`text-[8px] md:text-[10px] font-bold uppercase tracking-wider ${style.text}`}
-                      >
-                        {style.label}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between gap-2 font-mono text-[8px] md:text-[10px] text-zinc-500 tabular-nums">
-                      <span>{t.rounds} rounds</span>
-                      <span className="flex items-center gap-2">
-                        <DigestLink label="create" digest={t.createDigest} />
-                        <DigestLink label="settle" digest={t.closeDigest} />
-                        {t.rootHex ? (
-                          <span
-                            title={`transcript root ${t.rootHex}`}
-                            className="text-zinc-600"
-                          >
-                            root {t.rootHex.slice(0, 8)}…
-                          </span>
-                        ) : null}
-                      </span>
-                    </div>
+                    <a
+                      href={`${SUISCAN_OBJECT}${t.tunnelId}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-[#d4af37] hover:text-amber-300 underline"
+                      title={t.tunnelId}
+                    >
+                      {t.tunnelId.slice(0, 4)}…{t.tunnelId.slice(-2)}
+                    </a>
+                    <span className={`font-bold ${style.text}`}>
+                      {style.label}
+                    </span>
+                    <span className="text-zinc-500">
+                      {t.rounds}R
+                    </span>
+                    <span className="flex items-center gap-1.5">
+                      {t.createDigest && (
+                        <a
+                          href={`${SUISCAN_TX}${t.createDigest}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-[#d4af37] hover:text-amber-300 underline"
+                          title={`Create: ${t.createDigest}`}
+                        >
+                          c
+                        </a>
+                      )}
+                      {t.closeDigest && (
+                        <a
+                          href={`${SUISCAN_TX}${t.closeDigest}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-[#d4af37] hover:text-amber-300 underline"
+                          title={`Settle: ${t.closeDigest}`}
+                        >
+                          s
+                        </a>
+                      )}
+                    </span>
                   </div>
                 );
               })
             )}
           </div>
         </div>
+      )}
 
         {/* Betting Spot (Desk Layout) */}
         <div className={`betting-spot ${animState !== "idle" ? "active" : ""}`}>
@@ -810,7 +813,7 @@ export default function PlayerBot() {
         </div>
 
         {/* Player hand (bottom) */}
-        <div className="absolute top-[70%] left-1/2 -translate-x-1/2 z-20 w-full max-w-xs flex flex-col items-center">
+        <div className="absolute top-[70%] md:top-[62%] left-1/2 -translate-x-1/2 z-20 w-full max-w-xs flex flex-col items-center">
           {/* Player Stack Display */}
           <div className="absolute -left-8 md:-left-14 top-[40px] flex flex-col items-center">
             <span className="text-[7px] text-emerald-200/50 uppercase tracking-widest mb-1 font-bold">
@@ -864,31 +867,17 @@ export default function PlayerBot() {
               </div>
             </div>
 
-            {/* Hidden on mobile to save space */}
-            <div className="hidden lg:flex flex-col items-start gap-0.5">
-              <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-zinc-500">
-                <span>Player wallet:</span>
-                <span className="text-white font-mono font-black">
-                  {suiOf(balances.a)} SUI
-                </span>
-              </div>
-              <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-zinc-500">
-                <span>Dealer wallet:</span>
-                <span className="text-white font-mono font-black">
-                  {suiOf(balances.b)} SUI
-                </span>
-              </div>
-              <div className="mt-0.5">{refreshBtn}</div>
-            </div>
+
           </div>
 
           {/* Controls */}
           <div className="flex flex-row items-center justify-end gap-1.5 md:gap-3 flex-1">
-            <div className="hidden lg:block">{roundsSelector}</div>
-            <div className="hidden lg:block">{betSelector}</div>
-            <div className="hidden md:block">{walletFundEl}</div>
-            <div className="hidden md:block">{rebalanceBtn}</div>
-            {fundBtn}
+            {!isPortrait && (
+              <>
+                {roundsSelector}
+                {betSelector}
+              </>
+            )}
             {playBtn}
             {autoBtn}
           </div>
@@ -915,19 +904,21 @@ export default function PlayerBot() {
               </span>
             )}
           </div>
-          <div className="hidden md:flex flex-wrap items-center justify-end gap-x-4 gap-y-1">
-            <DigestLink label="open & fund" digest={digests.create} />
-            <DigestLink label="state checkpoint" digest={digests.update} />
-            <DigestLink label="close" digest={digests.close} />
-            {digests.root ? (
-              <span
-                title={`transcript root ${digests.root}`}
-                className="text-[11px] font-mono text-zinc-500"
-              >
-                root {digests.root.slice(0, 8)}…
-              </span>
-            ) : null}
-          </div>
+          {!isPortrait && (
+            <div className="hidden md:flex flex-wrap items-center justify-end gap-x-4 gap-y-1">
+              <DigestLink label="open & fund" digest={digests.create} />
+              <DigestLink label="state checkpoint" digest={digests.update} />
+              <DigestLink label="close" digest={digests.close} />
+              {digests.root ? (
+                <span
+                  title={`transcript root ${digests.root}`}
+                  className="text-[11px] font-mono text-zinc-500"
+                >
+                  root {digests.root.slice(0, 8)}…
+                </span>
+              ) : null}
+            </div>
+          )}
         </div>
       </div>
     </div>

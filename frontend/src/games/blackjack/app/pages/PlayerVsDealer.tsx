@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useGameNavigate } from "@/games/blackjack/app/useGameRouter";
+import { useGameScale } from "@/games/blackjack/app/components/app/ScaledWrapper";
 import {
   ConnectButton,
   useCurrentAccount,
@@ -89,6 +90,7 @@ function DigestLink({ label, digest }: { label: string; digest?: string }) {
 // auto-resolves after each Stand. Settles cooperatively on Sui testnet via Cash out.
 export default function PlayerVsDealer() {
   const navigate = useGameNavigate();
+  const { isPortrait } = useGameScale();
   const game = usePlayerVsDealer();
   const {
     view,
@@ -275,6 +277,20 @@ export default function PlayerVsDealer() {
   const tableOpen = phase === "playing";
   const roundOver = view.phase === "round_over";
 
+  // Auto-fund and Auto-deal when on pre-start screen
+  useEffect(() => {
+    if (started) return;
+    if (running) return;
+
+    if (unfunded) {
+      console.log("[blackjack] Auto-funding bots from faucet...");
+      game.fund();
+    } else {
+      console.log("[blackjack] Auto-dealing new table...");
+      game.openTable();
+    }
+  }, [started, running, unfunded, phase, game]);
+
   const fundBtn = (
     <button
       onClick={game.fund}
@@ -348,8 +364,7 @@ export default function PlayerVsDealer() {
   if (!started) {
     return (
       <div
-        className="h-full w-full flex flex-col items-center justify-center relative text-white overflow-hidden select-none bg-zinc-950 bg-cover bg-center fade-in-up"
-        style={{ backgroundImage: "url('/dealer-desk-plain-rotated.png')" }}
+        className="h-full w-full flex flex-col items-center justify-center relative text-white overflow-hidden select-none casino-felt fade-in-up"
       >
         <div className="absolute inset-0 bg-black/60" />
         <div className="relative z-10 flex flex-col items-center gap-6 bg-zinc-950/85 border border-zinc-800 rounded-3xl p-8 md:p-12 w-[85%] max-w-4xl shadow-2xl">
@@ -435,8 +450,7 @@ export default function PlayerVsDealer() {
   return (
     <div className="h-full w-full flex flex-col relative text-white overflow-hidden select-none bg-zinc-950 fade-in-up">
       <div
-        className="flex-1 w-full relative bg-cover bg-center"
-        style={{ backgroundImage: "url('/dealer-desk-plain-rotated.png')" }}
+        className="flex-1 w-full relative casino-felt"
       >
         <button
           onClick={() => navigate("/")}
@@ -468,9 +482,9 @@ export default function PlayerVsDealer() {
           </span>
         </div>
 
-        {/* Rounds running log: top-right corner, fixed height for ~3 rows, scrollable */}
-        {rounds.length > 0 && (
-          <div className="absolute top-16 right-2 md:top-4 md:right-4 z-20 w-40 md:w-52 flex flex-col bg-black/70 backdrop-blur-sm border border-amber-950 rounded-lg shadow-lg overflow-hidden">
+        {/* Rounds running log: hidden on mobile, top-right corner on desktop */}
+        {!isPortrait && rounds.length > 0 && (
+          <div className="hidden md:flex absolute top-16 right-2 md:top-4 md:right-4 z-20 w-40 md:w-52 flex-col bg-black/70 backdrop-blur-sm border border-amber-950 rounded-lg shadow-lg overflow-hidden">
             <div className="px-3 py-1.5 text-[10px] font-extrabold uppercase tracking-widest text-[#d4af37] font-serif border-b border-amber-950/70">
               Rounds
             </div>
@@ -503,7 +517,7 @@ export default function PlayerVsDealer() {
         )}
 
         {/* Toasts overlay: left of Rounds panel */}
-        <div className="absolute top-[120px] right-3 md:top-4 md:right-60 z-30 flex flex-col items-end gap-2 pointer-events-none">
+        <div className={`absolute z-30 flex flex-col items-end gap-2 pointer-events-none ${isPortrait ? "top-4 right-4" : "top-[120px] right-3 md:top-4 md:right-60"}`}>
           {toasts.map((t) => (
             <div
               key={t.id}
@@ -642,7 +656,7 @@ export default function PlayerVsDealer() {
           )}
         </div>
 
-        <div className="absolute top-[70%] left-1/2 -translate-x-1/2 z-20 w-full max-w-xs md:max-w-md flex flex-col items-center">
+        <div className="absolute top-[70%] md:top-[62%] left-1/2 -translate-x-1/2 z-20 w-full max-w-xs md:max-w-md flex flex-col items-center">
           <div className="absolute -left-8 md:-left-14 top-[40px] flex flex-col items-center">
             <span className="text-[7px] text-emerald-200/50 uppercase tracking-widest mb-1 font-bold">
               Stacks
@@ -692,21 +706,7 @@ export default function PlayerVsDealer() {
                 <span className="text-zinc-600">({view.dealerSum})</span>
               </div>
             </div>
-            <div className="flex flex-col items-start gap-0.5">
-              <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-zinc-500">
-                <span>Player wallet:</span>
-                <span className="text-white font-mono font-black">
-                  {suiOf(balances.a)} SUI
-                </span>
-              </div>
-              <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-zinc-500">
-                <span>Dealer wallet:</span>
-                <span className="text-white font-mono font-black">
-                  {suiOf(balances.b)} SUI
-                </span>
-              </div>
-              <div className="mt-0.5">{refreshBtn}</div>
-            </div>
+
           </div>
 
           {/* Controls: Hit/Stand mid-round, Next round after, Cash out anytime the table
@@ -721,8 +721,6 @@ export default function PlayerVsDealer() {
               </>
             ) : (
               <>
-                {walletFundEl}
-                {fundBtn}
                 {dealBtn}
               </>
             )}
@@ -749,19 +747,21 @@ export default function PlayerVsDealer() {
               </span>
             )}
           </div>
-          <div className="flex flex-wrap items-center justify-end gap-x-4 gap-y-1">
-            <DigestLink label="open & fund" digest={digests.create} />
-            <DigestLink label="state checkpoint" digest={digests.update} />
-            <DigestLink label="close" digest={digests.close} />
-            {digests.root ? (
-              <span
-                title={`transcript root ${digests.root}`}
-                className="text-[11px] font-mono text-zinc-500"
-              >
-                root {digests.root.slice(0, 8)}…
-              </span>
-            ) : null}
-          </div>
+          {!isPortrait && (
+            <div className="flex flex-wrap items-center justify-end gap-x-4 gap-y-1">
+              <DigestLink label="open & fund" digest={digests.create} />
+              <DigestLink label="state checkpoint" digest={digests.update} />
+              <DigestLink label="close" digest={digests.close} />
+              {digests.root ? (
+                <span
+                  title={`transcript root ${digests.root}`}
+                  className="text-[11px] font-mono text-zinc-500"
+                >
+                  root {digests.root.slice(0, 8)}…
+                </span>
+              ) : null}
+            </div>
+          )}
         </div>
       </div>
     </div>
