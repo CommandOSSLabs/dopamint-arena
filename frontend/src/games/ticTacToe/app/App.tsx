@@ -30,8 +30,8 @@ function AppContent() {
   const [scene, setScene] = useState<Scene>("login");
   const [mode, setMode] = useState<PlayMode>("auto");
   const [difficulty, setDifficulty] = useState<Difficulty>("fast");
-  const [gameType, setGameType] = useState<GameType>("ttt");
-  const [boardSize, setBoardSize] = useState<number>(15);
+  const [gameType, setGameType] = useState<GameType>("caro");
+  const [boardSize, setBoardSize] = useState<number>(19);
   const containerRef = useRef<HTMLDivElement>(null);
   const [dimensions, setDimensions] = useState({ width: 1024, height: 768 });
 
@@ -88,9 +88,9 @@ function AppContent() {
     if (scene === "login") {
       if (!autoNavRef.current) {
         autoNavRef.current = true;
-        setGameType(Math.random() > 0.5 ? "caro" : "ttt");
+        setGameType("caro");
         setDifficulty("fast");
-        setBoardSize(([15, 19, 25] as const)[Math.floor(Math.random() * 3)]);
+        setBoardSize(19);
         setMode("auto");
         setScene("setup");
       }

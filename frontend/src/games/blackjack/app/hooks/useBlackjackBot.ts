@@ -155,7 +155,7 @@ const POLL_BALANCES_TRIES = 8;
 // Safety bound: the protocol caps rounds, but never spin forever on a logic bug.
 const MAX_STEPS = 5000;
 // Default number of rounds to play off-chain in one tunnel before auto-settling.
-const DEFAULT_MAX_ROUNDS = 10;
+const DEFAULT_MAX_ROUNDS = 100;
 // User-selectable range for the "rounds per tunnel" control.
 export const MIN_ROUNDS_PER_TUNNEL = 1;
 export const MAX_ROUNDS_PER_TUNNEL = 500;
