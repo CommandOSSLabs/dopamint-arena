@@ -231,6 +231,25 @@ impl MpStore for InMemoryMpStore {
             }
         }
     }
+
+    async fn rebind_match_conn(
+        &self,
+        match_id: &str,
+        wallet: &str,
+        at: ConnRef,
+    ) -> Option<crate::mp::Seat> {
+        let mut matches = self.matches.write().unwrap();
+        let m = matches.get_mut(match_id)?;
+        if m.seat_a == wallet {
+            m.conn_a = at;
+            Some(crate::mp::Seat::A)
+        } else if m.seat_b == wallet {
+            m.conn_b = at;
+            Some(crate::mp::Seat::B)
+        } else {
+            None
+        }
+    }
 }
 
 // ===== Bus =====
@@ -461,6 +480,55 @@ mod tests {
         assert_eq!(got.from, "0xa");
         // invite is consumed
         assert!(s.take_invite("mid1", "0xb").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn rebind_match_conn_rebinds_owning_seat_and_noops_otherwise() {
+        let s = InMemoryMpStore::default();
+        let mid = "m-rebind";
+        let cr = |id: &str| ConnRef {
+            instance_id: id.into(),
+            conn_id: uuid::Uuid::new_v4(),
+        };
+        s.put_match(
+            mid,
+            crate::mp::MatchRecord {
+                game: "ttt".into(),
+                seat_a: "0xa".into(),
+                seat_b: "0xb".into(),
+                conn_a: cr("i1"),
+                conn_b: cr("i1"),
+                tunnel_id: None,
+                latest_checkpoint: None,
+            },
+        )
+        .await;
+        // Wrong wallet → None, nothing changes.
+        assert_eq!(s.rebind_match_conn(mid, "0xstranger", cr("i9")).await, None);
+        // Seat A owner rebinds conn_a only.
+        let new_a = cr("i2");
+        assert_eq!(
+            s.rebind_match_conn(mid, "0xa", new_a.clone()).await,
+            Some(crate::mp::Seat::A)
+        );
+        let got = s.get_match(mid).await.unwrap();
+        assert_eq!(got.conn_a.instance_id, new_a.instance_id);
+        assert_eq!(got.conn_a.conn_id, new_a.conn_id);
+        // conn_b is untouched by a seat-A rebind.
+        assert_eq!(got.conn_b.instance_id, "i1");
+        // Seat B owner rebinds conn_b only.
+        let new_b = cr("i3");
+        assert_eq!(
+            s.rebind_match_conn(mid, "0xb", new_b.clone()).await,
+            Some(crate::mp::Seat::B)
+        );
+        let got = s.get_match(mid).await.unwrap();
+        assert_eq!(got.conn_b.instance_id, new_b.instance_id);
+        assert_eq!(got.conn_b.conn_id, new_b.conn_id);
+        // ...and conn_a still holds the seat-A rebind, not clobbered.
+        assert_eq!(got.conn_a.conn_id, new_a.conn_id);
+        // Absent match → None.
+        assert_eq!(s.rebind_match_conn("nope", "0xa", cr("i4")).await, None);
     }
 
     // A newer checkpoint supersedes an older one; a stale lower-nonce one is ignored.

@@ -61,6 +61,16 @@ pub trait MpStore: Send + Sync {
     async fn get_match(&self, match_id: &str) -> Option<crate::mp::MatchRecord>;
     async fn set_tunnel_id(&self, match_id: &str, tunnel_id: &str);
     async fn record_checkpoint(&self, match_id: &str, cp: crate::mp::Checkpoint);
+    /// Rebind a seat's live connection after a reconnect. Authorized by seat ownership:
+    /// rebinds `conn_a` iff `wallet == seat_a`, else `conn_b` iff `wallet == seat_b`, else
+    /// no-op. Refreshes the record TTL. Returns the rebound seat, or `None` if the match is
+    /// gone or the wallet owns no seat. Atomic (last-writer-wins per seat).
+    async fn rebind_match_conn(
+        &self,
+        match_id: &str,
+        wallet: &str,
+        at: ConnRef,
+    ) -> Option<crate::mp::Seat>;
 }
 
 #[async_trait]

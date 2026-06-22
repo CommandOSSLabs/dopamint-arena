@@ -371,6 +371,27 @@ redis.call('EXPIRE', KEYS[1], tonumber(ARGV[2]))
 return 1
 "#;
 
+// Rebind a seat's ConnRef, authorized by seat ownership, and refresh the TTL. Returns 'a'/'b'
+// for the rebound seat, or false if the match is gone / the wallet owns no seat. O(1): two
+// HGETs + one HSET + EXPIRE, no loops, no cjson (ConnRef carries no numeric balance).
+// KEYS[1]=match:<id>  ARGV[1]=wallet  ARGV[2]=ConnRef json  ARGV[3]=ttl
+const REBIND_MATCH_CONN: &str = r#"
+local sa = redis.call('HGET', KEYS[1], 'seat_a')
+if not sa then return false end
+if sa == ARGV[1] then
+  redis.call('HSET', KEYS[1], 'conn_a', ARGV[2])
+  redis.call('EXPIRE', KEYS[1], tonumber(ARGV[3]))
+  return 'a'
+end
+local sb = redis.call('HGET', KEYS[1], 'seat_b')
+if sb == ARGV[1] then
+  redis.call('HSET', KEYS[1], 'conn_b', ARGV[2])
+  redis.call('EXPIRE', KEYS[1], tonumber(ARGV[3]))
+  return 'b'
+end
+return false
+"#;
+
 #[async_trait]
 impl MpStore for RedisMpStore {
     async fn set_presence(&self, wallet: &str, at: ConnRef) {
@@ -571,6 +592,35 @@ impl MpStore for RedisMpStore {
             .await;
         if let Err(e) = res {
             tracing::warn!(error = %e, "redis record_checkpoint eval failed");
+        }
+    }
+
+    async fn rebind_match_conn(
+        &self,
+        match_id: &str,
+        wallet: &str,
+        at: ConnRef,
+    ) -> Option<crate::mp::Seat> {
+        let res: Result<Option<String>, _> = self
+            .pool
+            .eval(
+                REBIND_MATCH_CONN,
+                vec![format!("match:{match_id}")],
+                vec![
+                    wallet.to_owned(),
+                    serde_json::to_string(&at).unwrap(),
+                    MATCH_TTL.to_string(),
+                ],
+            )
+            .await;
+        match res {
+            Ok(Some(s)) if s == "a" => Some(crate::mp::Seat::A),
+            Ok(Some(s)) if s == "b" => Some(crate::mp::Seat::B),
+            Ok(_) => None,
+            Err(e) => {
+                tracing::warn!(error = %e, "redis rebind_match_conn eval failed");
+                None
+            }
         }
     }
 }
@@ -1163,6 +1213,38 @@ mod tests {
             stored.party_a_balance, big,
             "u64 balance must be byte-exact"
         );
+    }
+
+    #[tokio::test]
+    async fn rebind_match_conn_rebinds_seat_and_rejects_non_owner() {
+        let (_redis, pool) = redis_fixture().await;
+        let s = RedisMpStore::new(pool);
+        let mid = format!("m{}", uuid::Uuid::new_v4().simple());
+        s.put_match(&mid, sample_match()).await; // seat_a="0xa", seat_b="0xb"
+        let new = ConnRef {
+            instance_id: "i2".into(),
+            conn_id: uuid::Uuid::new_v4(),
+        };
+        // Non-owner → None, no change.
+        assert_eq!(
+            s.rebind_match_conn(&mid, "0xstranger", new.clone()).await,
+            None
+        );
+        // Seat A owner rebinds conn_a; conn_b untouched.
+        let before = s.get_match(&mid).await.unwrap();
+        assert_eq!(
+            s.rebind_match_conn(&mid, "0xa", new.clone()).await,
+            Some(crate::mp::Seat::A)
+        );
+        let after = s.get_match(&mid).await.unwrap();
+        assert_eq!(after.conn_a.conn_id, new.conn_id, "conn_a rebound");
+        assert_eq!(
+            after.conn_b.conn_id, before.conn_b.conn_id,
+            "conn_b untouched"
+        );
+        // Absent match → None (EXISTS-guarded by seat_a presence).
+        let gone = format!("m{}", uuid::Uuid::new_v4().simple());
+        assert_eq!(s.rebind_match_conn(&gone, "0xa", new).await, None);
     }
 
     #[tokio::test]
