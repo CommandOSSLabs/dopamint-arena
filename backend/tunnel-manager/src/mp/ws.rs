@@ -174,6 +174,7 @@ async fn handle_socket(socket: WebSocket, state: SharedState) {
             state.mp.leave_queue(&g, &w).await;
         }
     }
+    notify_peers_dropped(&state, conn_id, &matches).await;
     state.bus.unregister(conn_id);
 }
 
@@ -232,6 +233,7 @@ async fn handle_authed(
             if let Some(opp) = state.mp.join_or_pair(&game, me).await {
                 let (match_id, rec) = build_quick_match(&game, opp, wallet, here(state, conn_id));
                 state.mp.put_match(&match_id, rec.clone()).await;
+                matches.insert(match_id.clone(), rec.clone());
                 state
                     .bus
                     .deliver(
@@ -307,6 +309,7 @@ async fn handle_authed(
             };
             let rec = build_challenge_match(&inv, wallet, here(state, conn_id));
             state.mp.put_match(&match_id, rec.clone()).await;
+            matches.insert(match_id.clone(), rec.clone());
             state
                 .bus
                 .deliver(
@@ -461,6 +464,37 @@ async fn forward_to_other(state: &SharedState, match_id: &str, from: ConnId, tex
     };
     if let Some(t) = target {
         state.bus.deliver(&t, text).await;
+    }
+}
+
+/// On disconnect, tell each active opponent that this connection's seat dropped so their FE can
+/// start its grace timer. Driven by the per-connection relay cache (populated at match creation
+/// in Step 3), so it fires even if this seat never relayed a frame. Control-plane only.
+async fn notify_peers_dropped(
+    state: &SharedState,
+    conn_id: ConnId,
+    matches: &std::collections::HashMap<String, MatchRecord>,
+) {
+    for (match_id, rec) in matches {
+        let other = if rec.conn_a.conn_id == conn_id {
+            Some(&rec.conn_b)
+        } else if rec.conn_b.conn_id == conn_id {
+            Some(&rec.conn_a)
+        } else {
+            None
+        };
+        if let Some(other) = other {
+            state
+                .bus
+                .deliver(
+                    other,
+                    ServerMsg::PeerDropped {
+                        match_id: match_id.clone(),
+                    }
+                    .to_text(),
+                )
+                .await;
+        }
     }
 }
 
@@ -782,6 +816,40 @@ mod tests {
         assert!(
             rx_b.try_recv().is_ok(),
             "second relay still routes from cache, not the overwritten store"
+        );
+    }
+
+    #[tokio::test]
+    async fn disconnect_notifies_the_other_seat() {
+        let state = test_state();
+        let inst = state.bus.instance_id().to_owned();
+        let (conn_a, _rx_a) = make_conn_ref(&state); // the dropper (seat A)
+        let (conn_b, mut rx_b) = make_conn_ref(&state); // the opponent (seat B)
+        let mid = "m-drop";
+        let rec = MatchRecord {
+            game: "ttt".into(),
+            seat_a: "0xa".into(),
+            seat_b: "0xb".into(),
+            conn_a: ConnRef {
+                instance_id: inst.clone(),
+                conn_id: conn_a,
+            },
+            conn_b: ConnRef {
+                instance_id: inst.clone(),
+                conn_id: conn_b,
+            },
+            tunnel_id: None,
+            latest_checkpoint: None,
+        };
+        // A's per-connection cache holds the match (populated at match creation in real flow).
+        let mut matches = HashMap::new();
+        matches.insert(mid.to_string(), rec);
+        // A disconnects.
+        notify_peers_dropped(&state, conn_a, &matches).await;
+        let b = rx_b.recv().await.unwrap();
+        assert!(
+            b.contains(r#""type":"peer.dropped""#) && b.contains(r#""matchId":"m-drop""#),
+            "got: {b}"
         );
     }
 
