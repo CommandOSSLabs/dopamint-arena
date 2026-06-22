@@ -801,9 +801,23 @@ mod tests {
         s.push_recent_event(ev(&format!("{tag}-a"))).await; // replay — no-op
         s.push_recent_event(ev(&format!("{tag}-b"))).await;
         let got = s.recent_events().await;
-        // newest-first; our two unique digests are at the front (other tests may share the ring).
-        assert_eq!(got[0].tx_digest, format!("{tag}-b"));
-        assert_eq!(got[1].tx_digest, format!("{tag}-a"));
+        // The ring is shared across tests, so locate our own tagged events rather than
+        // asserting absolute positions.
+        let mine: Vec<_> = got
+            .iter()
+            .filter(|e| e.tx_digest.starts_with(&tag))
+            .collect();
+        assert_eq!(mine.len(), 2, "expected exactly two unique tagged events");
+        assert_eq!(
+            mine[0].tx_digest,
+            format!("{tag}-b"),
+            "newest tagged event first"
+        );
+        assert_eq!(
+            mine[1].tx_digest,
+            format!("{tag}-a"),
+            "older tagged event second"
+        );
         assert!(got.len() <= crate::store::RECENT_EVENTS_CAP);
     }
 
