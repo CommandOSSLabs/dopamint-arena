@@ -105,3 +105,111 @@ export function deriveBattleshipView(
     onChain: extra.onChain,
   };
 }
+
+/** One bot's side of an auto match: its own fleet revealed, with the foe's shots on it. */
+export interface AutoSeatView {
+  /** This bot's fleet, fully revealed, with incoming shots overlaid (hit/miss/sunk). */
+  cells: CellView[];
+  fleet: ShipStatus[];
+  placements: readonly Placement[];
+  /** Confirmed hits taken (this bot loses at FLEET_CELLS). */
+  hitsTaken: number;
+  shotsFired: number;
+  /** The foe's most recent shot at this bot, for the splash highlight. */
+  lastIncoming: number | null;
+}
+
+/** Why a continuous auto-play run ended ("funds" = a bot is low on gas). */
+export type AutoEndReason = "stopped" | "funds";
+
+/** The on-chain step of the current match (each match opens + settles a real tunnel). */
+export type AutoStage = "opening" | "playing" | "settling";
+
+/** Spectator projection of a bot-vs-bot match: BOTH fleets are revealed. */
+export interface BattleshipAutoView {
+  phase: BattleshipState["phase"];
+  /** Whose shot is next. */
+  turn: Party;
+  /** 0 none, 1 A, 2 B. */
+  winner: BattleshipState["winner"];
+  a: AutoSeatView;
+  b: AutoSeatView;
+  onChain: boolean;
+  /** True while a continuous run is looping new matches (vs. a finished/idle run). */
+  auto: boolean;
+  /** Where the current match is in its on-chain lifecycle. */
+  stage: AutoStage;
+  /** Matches each bot has won this run. */
+  score: { a: number; b: number };
+  /** 1-based index of the match on screen. */
+  match: number;
+  /** Each bot's on-chain gas balance, in MIST. */
+  balance: { a: number; b: number };
+  /** Set once the loop has ended, explaining why (else null while running). */
+  endReason: AutoEndReason | null;
+}
+
+export interface AutoViewExtras {
+  /** A's most recent shot (lands on B's board). */
+  lastShotByA: number | null;
+  /** B's most recent shot (lands on A's board). */
+  lastShotByB: number | null;
+  onChain: boolean;
+  auto: boolean;
+  stage: AutoStage;
+  score: { a: number; b: number };
+  match: number;
+  balance: { a: number; b: number };
+  endReason: AutoEndReason | null;
+}
+
+/**
+ * Project the public state for a spectator watching two bots. Both fleets are
+ * known here (the auto session owns both), so unlike {@link deriveBattleshipView}
+ * this reveals each board in full — it's built by projecting from each seat.
+ */
+export function deriveBattleshipAutoView(
+  state: BattleshipState,
+  aPlacements: readonly Placement[],
+  bPlacements: readonly Placement[],
+  extra: AutoViewExtras,
+): BattleshipAutoView {
+  const a = deriveBattleshipView(state, aPlacements, "A", {
+    lastYourShot: extra.lastShotByA,
+    lastEnemyShot: extra.lastShotByB, // B fires at A
+    onChain: extra.onChain,
+  });
+  const b = deriveBattleshipView(state, bPlacements, "B", {
+    lastYourShot: extra.lastShotByB,
+    lastEnemyShot: extra.lastShotByA, // A fires at B
+    onChain: extra.onChain,
+  });
+  return {
+    phase: state.phase,
+    turn: state.turn,
+    winner: state.winner,
+    onChain: extra.onChain,
+    auto: extra.auto,
+    stage: extra.stage,
+    score: extra.score,
+    match: extra.match,
+    balance: extra.balance,
+    endReason: extra.endReason,
+    a: {
+      cells: a.ownCells,
+      fleet: a.fleet,
+      placements: a.placements,
+      hitsTaken: a.hitsOnYou,
+      shotsFired: a.yourShots,
+      lastIncoming: extra.lastShotByB,
+    },
+    b: {
+      cells: b.ownCells,
+      fleet: b.fleet,
+      placements: b.placements,
+      hitsTaken: b.hitsOnYou,
+      shotsFired: b.yourShots,
+      lastIncoming: extra.lastShotByA,
+    },
+  };
+}
