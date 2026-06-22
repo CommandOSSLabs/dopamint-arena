@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { PixelPaintState } from "sui-tunnel-ts/protocol/pixelPaint";
 import { colorHex } from "../palette";
-import { DUEL, ZOOM, TAP_SLOP, glass } from "./tokens";
+import { DUEL, ZOOM, TAP_SLOP, FONT_MONO } from "./tokens";
 
 /**
  * The shared pixel wall — a single HTML5 canvas with pan, zoom-to-cursor, a ghost
@@ -418,13 +418,13 @@ export function PixelCanvas({
       />
       {/* Zoom HUD (bottom-left) */}
       <div
-        className="absolute bottom-[18px] left-4 flex items-center gap-2 rounded-[14px] px-2.5 py-1.5"
-        style={glass}
+        className="pd-glass absolute bottom-[18px] left-4 flex items-center gap-2 px-2.5 py-1.5"
+        style={{ position: "absolute" }}
       >
         <ZoomButton label="−" onClick={() => zoomBy(1 / ZOOM.step)} />
         <span
-          className="min-w-[42px] text-center text-xs font-bold tabular-nums"
-          style={{ color: DUEL.text }}
+          className="min-w-[46px] text-center text-xs font-bold tabular-nums"
+          style={{ color: DUEL.text, fontFamily: FONT_MONO }}
         >
           {Math.round((hud.zoom / 8) * 100)}%
         </span>
@@ -436,8 +436,8 @@ export function PixelCanvas({
           }}
         />
         <span
-          className="ml-1 w-[64px] text-[11px] tabular-nums"
-          style={{ color: DUEL.muted }}
+          className="ml-0.5 w-[62px] text-[11px] tabular-nums"
+          style={{ color: DUEL.muted, fontFamily: FONT_MONO }}
         >
           {hud.cell ? `${hud.cell.x},${hud.cell.y}` : "—"}
         </span>
@@ -456,7 +456,7 @@ function ZoomButton({
   return (
     <button
       onClick={onClick}
-      className="flex h-6 w-6 items-center justify-center rounded-md text-sm font-extrabold leading-none"
+      className="flex h-[26px] w-[26px] items-center justify-center rounded-[7px] text-[15px] font-bold leading-none"
       style={{ background: "rgba(255,255,255,0.08)", color: DUEL.text }}
     >
       {label}

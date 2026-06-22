@@ -8,14 +8,15 @@
  * palette; a "You ●" chip + cyan cooldown ring sit in its place. A "YOUR
  * MISSION" panel tracks your live completion and a HIT/MISS strip tallies your
  * probes. On reveal the fog lifts and an overlay shows BOTH designs, both %, the
- * winner, and the stake outcome. Pure presentation over `usePaintDuel`.
+ * winner, and the stake outcome. Pure presentation over `usePaintDuel`; the look
+ * is the cosmic liquid-glass restyle (see docs/pixel-duel-design).
  */
 import { useMemo } from "react";
 import { PixelCanvas } from "./PixelCanvas";
 import { ActivityFeed } from "./panels";
 import { DraggablePanel } from "./DraggablePanel";
 import { CooldownRing } from "./CooldownRing";
-import { DUEL, glass, COOLDOWN_MS } from "./tokens";
+import { DUEL, glass, COOLDOWN_MS, FONT_DISPLAY, FONT_MONO } from "./tokens";
 import { cooldownState } from "./cooldown";
 import { colorHex } from "../palette";
 import {
@@ -28,6 +29,16 @@ import type { PlacementEvent } from "../types";
 
 /** Stake at risk in the duel — mirrors the protocol config in usePaintDuel. */
 const STAKE = 10;
+
+/** Liquid-gradient mission-bar fills + glow, per seat (matches the design). */
+const BAR_BLUE = {
+  fill: "linear-gradient(90deg,#2f7fe0,#4DA2FF)",
+  glow: "0 0 10px rgba(77,162,255,0.6)",
+} as const;
+const BAR_ORCHID = {
+  fill: "linear-gradient(90deg,#a64fc0,#CF6EE4)",
+  glow: "0 0 10px rgba(207,110,228,0.55)",
+} as const;
 
 export function DuelView({
   duel,
@@ -100,7 +111,7 @@ export function DuelView({
   return (
     <div
       className="relative h-full min-h-0 w-full overflow-hidden"
-      style={{ background: DUEL.bg }}
+      style={{ background: DUEL.bg, color: DUEL.text, fontFamily: FONT_DISPLAY }}
     >
       <PixelCanvas
         state={duel.state}
@@ -122,30 +133,35 @@ export function DuelView({
 
       {memorizing && <MemorizeBadge sec={memSec} design={duel.yourDesignName} />}
 
-      {/* Top strip: title + live mission status */}
+      {/* Top strip: title + live mission status. The right group keeps clear of
+          PaintWindow's floating "✕ Modes" button (same glass, same height). */}
       <div
-        className="absolute left-4 right-4 top-3.5 flex h-[52px] items-center gap-3 rounded-[14px] px-4"
-        style={glass}
+        className="pd-glass absolute left-4 right-4 top-3.5 flex h-[54px] items-center gap-3.5 px-[18px]"
+        style={{ position: "absolute" }}
       >
         <span
-          className="text-sm font-extrabold tracking-wide"
-          style={{ color: DUEL.accent }}
+          className="text-[15px] font-bold"
+          style={{ color: DUEL.accent, letterSpacing: "0.01em" }}
         >
           ⚔️ Pixel Duel
         </span>
         <span
-          className="hidden flex-1 truncate text-center text-xs sm:block"
+          className="hidden flex-1 truncate text-center text-[12.5px] sm:block"
           style={{ color: DUEL.muted }}
         >
           {auto
-            ? "God-view: watch both bots build hidden shapes & probe each other"
+            ? "God-view · watch both bots build hidden shapes & probe each other"
             : "Fog of war · build your shape, probe to reveal & block the bot's"}
         </span>
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto mr-[88px] flex items-center gap-2">
           {onchain && <OnchainChip status={onchain} />}
           <span
-            className="rounded-full px-2.5 py-1 text-xs font-bold tabular-nums"
-            style={{ background: "rgba(255,255,255,0.06)", color: DUEL.text }}
+            className="rounded-full px-[11px] py-[5px] text-xs font-bold tabular-nums"
+            style={{
+              background: "rgba(255,255,255,0.06)",
+              color: DUEL.text,
+              fontFamily: FONT_MONO,
+            }}
           >
             💰 {STAKE} on the line
           </span>
@@ -155,52 +171,58 @@ export function DuelView({
       {/* YOUR MISSION panel — draggable, default top-left. */}
       <DraggablePanel
         defaultX={16}
-        defaultY={78}
-        width={210}
+        defaultY={82}
+        width={218}
         collapsedLabel={auto ? "Bots" : "Your mission"}
       >
-        <div className="p-3">
+        <div className="p-3.5">
           <div
-            className="mb-2 text-[11px] font-extrabold uppercase tracking-wider"
+            className="mb-2 text-[11px] font-bold uppercase tracking-[0.12em]"
             style={{ color: DUEL.muted }}
           >
             {auto ? "Bot A's shape" : "Your mission"}
           </div>
           <div
-            className="mb-1 flex items-center gap-2 text-sm font-extrabold"
+            className="mb-1.5 flex items-center gap-2 text-sm font-bold"
             style={{ color: DUEL.text }}
           >
             <span className="truncate">
               🎯 {auto ? "Bot A · " : ""}
               {duel.yourDesignName}
             </span>
-            {auto && (
-              <span
-                className="ml-auto tabular-nums"
-                style={{ color: DUEL.accent }}
-              >
-                {youPct}%
-              </span>
-            )}
+            <span
+              className="ml-auto tabular-nums"
+              style={{ color: DUEL.accent, fontFamily: FONT_MONO }}
+            >
+              {youPct}%
+            </span>
           </div>
-          <div className="mb-2 text-[11px]" style={{ color: DUEL.muted }}>
+          <div
+            className="mb-2 min-h-[14px] text-[11px]"
+            style={{ color: DUEL.muted }}
+          >
             {auto
               ? "Spectating — bots paint from their own plan."
               : memorizing
                 ? `Memorize it — guide hides in ${memSec}s`
                 : "Guide's gone — paint it from memory."}
           </div>
-          <ProgressBar pct={youPct} color={DUEL.accent} />
+          <ProgressBar
+            pct={youPct}
+            color={DUEL.accent}
+            fill={BAR_BLUE.fill}
+            glow={BAR_BLUE.glow}
+          />
           <div
-            className="mt-1 text-[10px] uppercase tracking-wider"
-            style={{ color: DUEL.muted }}
+            className="mt-1.5 text-[10px] uppercase tracking-[0.08em]"
+            style={{ color: DUEL.muted, fontFamily: FONT_MONO }}
           >
-            {duel.scores.you.correct}/{duel.scores.you.total} cells · {youPct}%
+            {duel.scores.you.correct}/{duel.scores.you.total} cells
           </div>
 
           {/* AUTO: Bot A's attack/defense pair (symmetric with Bot B below). */}
           {auto && (
-            <div className="mt-2 flex items-center gap-2 text-[11px] font-bold tabular-nums">
+            <div className="mt-2.5 flex items-center gap-2 text-[11px] font-bold tabular-nums">
               <span style={{ color: DUEL.accent }}>🗡️ {botAAttacks} attacks</span>
               <span style={{ color: DUEL.muted }}>·</span>
               <span style={{ color: DUEL.hit }}>🎯 {duel.cellsLost.bot} hits</span>
@@ -213,20 +235,19 @@ export function DuelView({
 
           {/* Probe tally — only meaningful for the human seat (vs-bot). */}
           {!auto && (
-            <div className="mt-2 flex items-center gap-2 text-[11px] font-bold tabular-nums">
-              <span style={{ color: DUEL.accent }}>
-                🎯 {probeTally.hits} hit
-              </span>
+            <div
+              className="mt-2.5 flex items-center gap-2 text-xs font-bold tabular-nums"
+              style={{ fontFamily: FONT_MONO }}
+            >
+              <span style={{ color: DUEL.accent }}>🎯 {probeTally.hits} hit</span>
               <span style={{ color: DUEL.muted }}>·</span>
-              <span style={{ color: DUEL.muted }}>
-                💨 {probeTally.misses} miss
-              </span>
+              <span style={{ color: DUEL.muted }}>💨 {probeTally.misses} miss</span>
             </div>
           )}
 
           {/* Your attacks (hits + misses) and shape cells the bot has blocked. */}
           {!auto && (
-            <div className="mt-1 flex items-center gap-2 text-[11px] font-bold tabular-nums">
+            <div className="mt-1.5 flex items-center gap-2 text-[11px] font-bold tabular-nums">
               <span style={{ color: DUEL.text }}>🗡️ {yourAttacks} attacks</span>
               <span style={{ color: DUEL.muted }}>·</span>
               <span style={{ color: DUEL.seatB }}>
@@ -236,7 +257,7 @@ export function DuelView({
           )}
 
           <div
-            className="mt-3 mb-1 text-[11px] font-extrabold uppercase tracking-wider"
+            className="mb-1.5 mt-3.5 text-[11px] font-bold uppercase tracking-[0.12em]"
             style={{ color: DUEL.muted }}
           >
             Opponent
@@ -245,27 +266,32 @@ export function DuelView({
             // GOD-VIEW: no secret to protect — show Bot B's name, %, and bar.
             <>
               <div className="flex items-center gap-2 text-sm font-bold">
-                <span style={{ color: DUEL.seatB }}>
+                <span className="truncate" style={{ color: DUEL.seatB }}>
                   🤖 Bot B · {duel.botDesignName ?? "—"}
                 </span>
                 <span
                   className="ml-auto tabular-nums"
-                  style={{ color: DUEL.seatB }}
+                  style={{ color: DUEL.seatB, fontFamily: FONT_MONO }}
                 >
                   {botPct}%
                 </span>
               </div>
               <div className="mt-1.5">
-                <ProgressBar pct={botPct} color={DUEL.seatB} />
+                <ProgressBar
+                  pct={botPct}
+                  color={DUEL.seatB}
+                  fill={BAR_ORCHID.fill}
+                  glow={BAR_ORCHID.glow}
+                />
               </div>
               <div
-                className="mt-1 text-[10px] uppercase tracking-wider"
-                style={{ color: DUEL.muted }}
+                className="mt-1.5 text-[10px] uppercase tracking-[0.08em]"
+                style={{ color: DUEL.muted, fontFamily: FONT_MONO }}
               >
                 {duel.scores.bot.correct}/{duel.scores.bot.total} cells
               </div>
               {/* Bot B's symmetric attack/defense pair. */}
-              <div className="mt-2 flex items-center gap-2 text-[11px] font-bold tabular-nums">
+              <div className="mt-2.5 flex items-center gap-2 text-[11px] font-bold tabular-nums">
                 <span style={{ color: DUEL.seatB }}>
                   🗡️ {botBAttacks} attacks
                 </span>
@@ -279,10 +305,25 @@ export function DuelView({
             </>
           ) : (
             // vs-bot: opponent stays fogged until reveal — never leak the shape.
-            <div className="flex items-center gap-2 text-sm font-bold">
-              <span style={{ color: DUEL.seatB }}>🤖 Bot</span>
-              <span style={{ color: DUEL.muted }}>· ??? hidden</span>
-            </div>
+            <>
+              <div className="flex items-center gap-2 text-sm font-bold">
+                <span style={{ color: DUEL.seatB }}>🤖 Bot</span>
+                <span className="text-xs" style={{ color: DUEL.muted }}>
+                  · ??? hidden
+                </span>
+              </div>
+              <div
+                className="mt-1.5 flex h-2 items-center justify-center overflow-hidden rounded-full"
+                style={{ background: "rgba(255,255,255,0.06)" }}
+              >
+                <span
+                  className="text-[9px] tracking-[0.16em]"
+                  style={{ color: "#5f5f7a", fontFamily: FONT_MONO }}
+                >
+                  FOGGED
+                </span>
+              </div>
+            </>
           )}
         </div>
       </DraggablePanel>
@@ -290,7 +331,7 @@ export function DuelView({
       {/* Live activity — draggable, default top-right (16px in from the right). */}
       <DraggablePanel
         defaultX={16}
-        defaultY={78}
+        defaultY={82}
         anchor="right"
         width={200}
         collapsedLabel="Live activity"
@@ -307,9 +348,7 @@ export function DuelView({
 
       {/* draw/give-up controls + bot fast-forward */}
       <div className="absolute bottom-[18px] right-4 flex items-center gap-2">
-        {!revealed && (
-          <SpeedPills speed={duel.speed} onSpeed={duel.setSpeed} />
-        )}
+        {!revealed && <SpeedPills speed={duel.speed} onSpeed={duel.setSpeed} />}
         {!revealed && (
           <DuelButton onClick={duel.reveal} title="End the duel and score now">
             🏁 Finish
@@ -370,7 +409,7 @@ function OnchainChip({ status }: { status: PaintDuelOnchainStatus }) {
   return (
     <span
       className="hidden items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-bold tabular-nums md:inline-flex"
-      style={{ ...glass, color }}
+      style={{ ...glass, color, fontFamily: FONT_MONO }}
       title={status.tunnelId ?? "off-chain demo"}
     >
       <span
@@ -387,23 +426,36 @@ function MemorizeBadge({ sec, design }: { sec: number; design: string }) {
   return (
     <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
       <div
-        className="rounded-2xl px-6 py-4 text-center"
-        style={{ ...glass, border: `1px solid ${DUEL.accent}` }}
+        className="rounded-[20px] px-[30px] py-[22px] text-center"
+        style={{
+          animation: "pdPop 0.25s ease",
+          background:
+            "linear-gradient(140deg, rgba(70,96,150,0.42), rgba(16,18,40,0.30))",
+          border: "1px solid rgba(120,180,255,0.5)",
+          backdropFilter: "blur(26px) saturate(180%)",
+          WebkitBackdropFilter: "blur(26px) saturate(180%)",
+          boxShadow:
+            "0 18px 56px rgba(0,0,0,0.55), 0 0 40px rgba(77,162,255,0.2), inset 0 1px 0 rgba(255,255,255,0.35)",
+        }}
       >
         <div
-          className="text-[11px] font-extrabold uppercase tracking-widest"
+          className="text-[11px] font-bold uppercase tracking-[0.22em]"
           style={{ color: DUEL.muted }}
         >
           Memorize your shape
         </div>
         <div
-          className="my-1 text-4xl font-extrabold tabular-nums"
-          style={{ color: DUEL.accent }}
+          className="my-1.5 text-[54px] font-bold leading-none tabular-nums"
+          style={{
+            color: DUEL.accent,
+            fontFamily: FONT_MONO,
+            animation: "pdPulse 1s ease-in-out infinite",
+          }}
         >
           {sec}
         </div>
-        <div className="text-xs font-bold" style={{ color: DUEL.text }}>
-          🎯 {design} — guide hides, then paint from memory
+        <div className="text-[13px] font-bold" style={{ color: DUEL.text }}>
+          🎯 {design} — then paint from memory
         </div>
       </div>
     </div>
@@ -438,18 +490,31 @@ function RevealOverlay({ duel }: { duel: UsePaintDuel }) {
         : `−${STAKE} from you (bot takes the stake).`;
 
   return (
-    <div className="absolute inset-0 flex items-center justify-center p-6">
+    <div
+      className="absolute inset-0 flex items-center justify-center p-6"
+      style={{
+        background: "rgba(6,8,16,0.5)",
+        backdropFilter: "blur(6px)",
+        WebkitBackdropFilter: "blur(6px)",
+      }}
+    >
       <div
-        className="w-full max-w-[30rem] rounded-2xl p-5 text-center"
-        style={{ ...glass, border: `1px solid ${DUEL.accent}` }}
+        className="w-full max-w-[32rem] rounded-[22px] p-6 text-center"
+        style={{
+          animation: "pdPop 0.3s ease",
+          background:
+            "linear-gradient(150deg, rgba(70,96,150,0.5), rgba(16,18,40,0.42))",
+          border: "1px solid rgba(120,180,255,0.45)",
+          backdropFilter: "blur(30px) saturate(180%)",
+          WebkitBackdropFilter: "blur(30px) saturate(180%)",
+          boxShadow:
+            "0 24px 70px rgba(0,0,0,0.6), 0 0 60px rgba(77,162,255,0.18), inset 0 1px 0 rgba(255,255,255,0.35)",
+        }}
       >
-        <div
-          className="mb-1 text-xl font-extrabold"
-          style={{ color: DUEL.text }}
-        >
+        <div className="mb-1 text-[23px] font-bold" style={{ color: DUEL.text }}>
           {headline}
         </div>
-        <div className="mb-4 text-xs" style={{ color: DUEL.muted }}>
+        <div className="mb-[18px] text-[12.5px]" style={{ color: DUEL.muted }}>
           {stakeLine}
         </div>
         <div className="flex gap-3">
@@ -476,7 +541,7 @@ function RevealOverlay({ duel }: { duel: UsePaintDuel }) {
         </div>
         <button
           onClick={duel.reset}
-          className="mt-4 rounded-[12px] px-4 py-2 text-xs font-extrabold transition-transform hover:-translate-y-0.5"
+          className="mt-[18px] rounded-[12px] px-5 py-[11px] text-[12.5px] font-bold transition-transform hover:-translate-y-0.5"
           style={{
             background: DUEL.accent,
             color: "#06203B",
@@ -512,50 +577,67 @@ function RevealCard({
 }) {
   return (
     <div
-      className="flex-1 rounded-[14px] p-3 text-left"
+      className="flex-1 rounded-[14px] p-[13px] text-left"
       style={{
         background: "rgba(255,255,255,0.04)",
         border: won ? `1px solid ${color}` : "1px solid transparent",
       }}
     >
       <div className="flex items-center gap-1.5">
-        <span className="h-3 w-3 rounded-sm" style={{ background: color }} />
-        <span className="text-xs font-extrabold" style={{ color: DUEL.text }}>
+        <span className="h-3 w-3 rounded-[3px]" style={{ background: color }} />
+        <span className="text-xs font-bold" style={{ color: DUEL.text }}>
           {label}
         </span>
-        {won && <span className="ml-auto text-sm">🏆</span>}
+        {won && <span className="ml-auto text-[15px]">🏆</span>}
       </div>
       <div
-        className="mt-1 truncate text-[13px] font-bold"
+        className="mt-1.5 truncate text-[13px] font-bold"
         style={{ color: DUEL.text }}
       >
         {design}
       </div>
       <div
-        className="mt-2 text-2xl font-extrabold tabular-nums"
-        style={{ color }}
+        className="mt-2 text-[30px] font-bold leading-none tabular-nums"
+        style={{ color, fontFamily: FONT_MONO }}
       >
         {pct}%
       </div>
-      <div className="text-[10px] tabular-nums" style={{ color: DUEL.muted }}>
+      <div
+        className="mt-1 text-[10px] tabular-nums"
+        style={{ color: DUEL.muted, fontFamily: FONT_MONO }}
+      >
         {correct}/{total} cells
       </div>
       {lost !== undefined && (
         <div
           className="text-[10px] tabular-nums"
-          style={{ color: DUEL.seatB }}
+          style={{ color: DUEL.seatB, fontFamily: FONT_MONO }}
         >
           🛡️ {lost} cells lost to probes
         </div>
       )}
-      <div className="mt-2">
+      <div className="mt-2.5">
         <ProgressBar pct={pct} color={color} />
       </div>
     </div>
   );
 }
 
-function ProgressBar({ pct, color }: { pct: number; color: string }) {
+/**
+ * Mission/score bar. `fill` (a gradient) + `glow` give the design's luminous
+ * seat bars; omit them for a flat `color` fill (reveal cards).
+ */
+function ProgressBar({
+  pct,
+  color,
+  fill,
+  glow,
+}: {
+  pct: number;
+  color: string;
+  fill?: string;
+  glow?: string;
+}) {
   return (
     <div
       className="h-2 overflow-hidden rounded-full"
@@ -565,8 +647,10 @@ function ProgressBar({ pct, color }: { pct: number; color: string }) {
         style={{
           width: `${Math.min(100, Math.max(0, pct))}%`,
           height: "100%",
-          background: color,
-          transition: "width 0.2s linear",
+          background: fill ?? color,
+          borderRadius: 999,
+          boxShadow: glow,
+          transition: "width 0.25s ease",
         }}
       />
     </div>
@@ -587,18 +671,18 @@ function SeatColorDock({
 }) {
   return (
     <div
-      className="absolute bottom-[18px] left-1/2 flex -translate-x-1/2 items-center gap-3 rounded-[14px] px-3 py-2"
-      style={glass}
+      className="pd-glass absolute bottom-[18px] left-1/2 flex -translate-x-1/2 items-center gap-3.5 px-[13px] py-[9px]"
+      style={{ position: "absolute" }}
     >
-      <div className="flex items-center gap-2 px-1.5 py-1">
+      <div className="flex items-center gap-2.5 px-1.5 py-1">
         <span
-          className="h-[26px] w-[26px] rounded-md"
+          className="h-7 w-7 rounded-[7px]"
           style={{
             background: colorHex(color),
             boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.3)",
           }}
         />
-        <span className="text-xs font-bold" style={{ color: DUEL.text }}>
+        <span className="text-[12.5px] font-bold" style={{ color: DUEL.text }}>
           You · Sui blue
         </span>
       </div>
@@ -625,12 +709,11 @@ function SpeedPills({
 }) {
   return (
     <div
-      className="inline-flex items-center gap-0.5 rounded-[12px] px-1.5 py-1"
-      style={glass}
+      className="pd-glass inline-flex items-center gap-0.5 px-1.5 py-1"
       title="Bot tick speed"
     >
       <span
-        className="px-1 text-[10px] font-extrabold uppercase tracking-wide"
+        className="px-1 text-[10px] font-bold uppercase tracking-wide"
         style={{ color: DUEL.muted }}
       >
         Speed
@@ -642,11 +725,16 @@ function SpeedPills({
             key={s}
             onClick={() => onSpeed(s)}
             aria-pressed={active}
-            className="rounded-[9px] px-2.5 py-1 text-xs font-extrabold tabular-nums transition-colors"
+            className="rounded-[9px] px-2.5 py-1 text-xs font-bold tabular-nums transition-colors"
             style={
               active
-                ? { background: DUEL.accent, color: "#06203B" }
-                : { color: DUEL.accent }
+                ? {
+                    background: DUEL.accent,
+                    color: "#06203B",
+                    boxShadow: "0 2px 12px rgba(77,162,255,0.5)",
+                    fontFamily: FONT_MONO,
+                  }
+                : { color: DUEL.accent, fontFamily: FONT_MONO }
             }
           >
             {s}×
@@ -717,15 +805,20 @@ function DuelButton({
     <button
       onClick={onClick}
       title={title}
-      className="rounded-[12px] px-3.5 py-2 text-xs font-extrabold transition-transform hover:-translate-y-0.5"
+      className="rounded-[12px] px-[15px] py-2.5 text-xs font-bold transition-transform hover:-translate-y-0.5"
       style={
         primary
           ? {
-              background: DUEL.accent,
+              background: "linear-gradient(160deg,#7dc0ff,#4DA2FF)",
               color: "#06203B",
-              boxShadow: "0 3px 0 rgba(6,32,59,0.5)",
+              boxShadow:
+                "0 4px 16px rgba(77,162,255,0.45), inset 0 1px 0 rgba(255,255,255,0.5)",
             }
-          : { ...glass, color: DUEL.text }
+          : {
+              ...glass,
+              color: DUEL.text,
+              boxShadow: "inset 0 1px 0 rgba(255,255,255,0.3)",
+            }
       }
     >
       {children}

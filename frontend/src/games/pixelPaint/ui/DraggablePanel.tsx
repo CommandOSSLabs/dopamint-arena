@@ -159,9 +159,13 @@ export function DraggablePanel({
       onPointerMove={onPointerMove}
       onPointerUp={endDrag}
       onPointerCancel={endDrag}
-      className="absolute touch-none select-none rounded-[14px]"
+      className="pd-glass absolute touch-none select-none rounded-[14px]"
       style={{
         ...glass,
+        // Inline position wins over `.pd-glass`'s default position:relative, so
+        // the panel stays absolutely placed while still getting the class's
+        // gradient-hairline ::before.
+        position: "absolute",
         left: pos.x,
         top: pos.y,
         width,

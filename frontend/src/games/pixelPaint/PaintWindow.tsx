@@ -1,9 +1,12 @@
-import { useState } from "react";
+import { useMemo, useState, type CSSProperties } from "react";
 import type { GameWindowProps } from "../types";
-import { DUEL, glass } from "./ui/tokens";
+import { DUEL, glass, FONT_DISPLAY, FONT_MONO } from "./ui/tokens";
+import { DuelChrome } from "./ui/DuelChrome";
 import { DuelView } from "./ui/DuelView";
 import { type DuelDifficulty } from "./usePaintDuel";
 import { usePaintDuelOnchain } from "./usePaintDuelOnchain";
+import { DESIGNS, type PixelDesign } from "@/agent/games/pixelPaint/designs";
+import { colorHex } from "./palette";
 
 /**
  * Pixel Wall ("Pixel Duel") — a secret-shape pixel duel on the Sui tunnel. TWO
@@ -27,27 +30,31 @@ export function PaintWindow(_props: GameWindowProps) {
   const [mode, setMode] = useState<PaintMode | null>(null);
   const [difficulty, setDifficulty] = useState<DuelDifficulty>("normal");
 
-  if (mode === null) {
-    return (
-      <ModeChooser
-        onPick={setMode}
-        difficulty={difficulty}
-        onDifficulty={setDifficulty}
-      />
-    );
-  }
+  // <DuelChrome/> mounts ONCE here so its fonts, keyframes, and #pdGlass filter
+  // are available to both the menu and the duel (and survive mode switches).
   return (
-    <div className="relative h-full min-h-0 w-full">
-      <DuelMode mode={mode} difficulty={difficulty} />
-      <button
-        onClick={() => setMode(null)}
-        className="absolute right-4 top-3.5 z-10 flex h-[52px] items-center rounded-[14px] px-3 text-xs font-bold"
-        style={{ ...glass, color: DUEL.text }}
-        title="Back to modes"
-      >
-        ✕ Modes
-      </button>
-    </div>
+    <>
+      <DuelChrome />
+      {mode === null ? (
+        <ModeChooser
+          onPick={setMode}
+          difficulty={difficulty}
+          onDifficulty={setDifficulty}
+        />
+      ) : (
+        <div className="relative h-full min-h-0 w-full">
+          <DuelMode mode={mode} difficulty={difficulty} />
+          <button
+            onClick={() => setMode(null)}
+            className="absolute right-4 top-3.5 z-10 flex h-[54px] items-center rounded-[14px] px-3 text-xs font-bold"
+            style={{ ...glass, color: DUEL.text }}
+            title="Back to modes"
+          >
+            ✕ Modes
+          </button>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -84,7 +91,96 @@ function AutoDuelInner({ difficulty }: { difficulty: DuelDifficulty }) {
   return <DuelView duel={duel} onchain={status} />;
 }
 
-// ---- Mode chooser (Battleship-style mode-bar + difficulty pills) ---------
+// ---- Mode chooser (cosmic liquid-glass menu — see pixel-duel-design) -------
+
+/** Stake is fixed by the duel protocol (STAKE = 10n in usePaintDuel); shown,
+ *  never selectable here. */
+const DUEL_STAKE = 10;
+/** Per-cell side (px) of the showcase pixel-art tiles' box-shadow grid. */
+const SHOWCASE_PIXEL = 4;
+/** Real designs rendered as the secret-shape teaser row. */
+const SHOWCASE_DESIGNS: readonly PixelDesign[] = [
+  DESIGNS.heart,
+  DESIGNS.suiDroplet,
+  DESIGNS.smiley,
+  DESIGNS.walrus,
+];
+/** Twinkling-pixel tints scattered behind the hero. */
+const FLOATER_TINTS = [DUEL.seatA, DUEL.seatB, DUEL.cyan] as const;
+
+type Floater = {
+  key: number;
+  left: string;
+  top: string;
+  size: string;
+  color: string;
+  dur: string;
+  delay: string;
+};
+
+/** Faint diagonal-fade pixel grid behind the hero. */
+const GRID_BACKDROP_STYLE: CSSProperties = {
+  position: "absolute",
+  inset: 0,
+  background:
+    "repeating-linear-gradient(0deg,transparent 0 27px,rgba(77,162,255,0.045) 27px 28px)," +
+    "repeating-linear-gradient(90deg,transparent 0 27px,rgba(77,162,255,0.045) 27px 28px)",
+  pointerEvents: "none",
+  maskImage: "radial-gradient(120% 100% at 50% 30%, #000 40%, transparent 85%)",
+  WebkitMaskImage:
+    "radial-gradient(120% 100% at 50% 30%, #000 40%, transparent 85%)",
+};
+
+/** Caption above each pill group (difficulty / stake). */
+const GROUP_LABEL_STYLE: CSSProperties = {
+  fontSize: 10.5,
+  letterSpacing: ".2em",
+  textTransform: "uppercase",
+  color: "#6f7d99",
+  whiteSpace: "nowrap",
+};
+
+/** Frosted capsule wrapping a row of pills. */
+const PILL_GROUP_STYLE: CSSProperties = {
+  display: "inline-flex",
+  padding: 4,
+  borderRadius: 999,
+  border: "1px solid rgba(160,140,255,0.2)",
+  background: "rgba(10,18,38,0.6)",
+  gap: 3,
+  backdropFilter: "blur(6px)",
+  WebkitBackdropFilter: "blur(6px)",
+};
+
+/** Active pills glow Sui-blue; idle pills are muted ghosts. */
+function pillStyle(active: boolean): CSSProperties {
+  return {
+    cursor: "pointer",
+    border: "none",
+    borderRadius: 999,
+    padding: "7px 18px",
+    fontFamily: "inherit",
+    fontSize: 13,
+    fontWeight: 700,
+    transition: "all .15s",
+    background: active ? DUEL.accent : "transparent",
+    color: active ? "#06203B" : "#7f93b5",
+    boxShadow: active ? "0 2px 12px rgba(77,162,255,0.5)" : "none",
+  };
+}
+
+function makeFloaters(): Floater[] {
+  return Array.from({ length: 22 }, (_, i) => ({
+    key: i,
+    left: `${(Math.random() * 100).toFixed(1)}%`,
+    top: `${(Math.random() * 100).toFixed(1)}%`,
+    size: `${3 + Math.floor(Math.random() * 4)}px`,
+    color: FLOATER_TINTS[i % FLOATER_TINTS.length],
+    dur: `${(2.4 + Math.random() * 2.6).toFixed(2)}s`,
+    delay: `${(Math.random() * 3).toFixed(2)}s`,
+  }));
+}
+
 function ModeChooser({
   onPick,
   difficulty,
@@ -94,52 +190,272 @@ function ModeChooser({
   difficulty: DuelDifficulty;
   onDifficulty: (d: DuelDifficulty) => void;
 }) {
+  // Frozen once so the twinkles don't re-scatter on every difficulty toggle.
+  const floaters = useMemo(makeFloaters, []);
   return (
     <div
-      className="flex h-full flex-col items-center justify-center gap-3 p-4 text-center"
-      style={{ background: DUEL.bg }}
+      style={{
+        position: "relative",
+        height: "100%",
+        width: "100%",
+        overflow: "auto",
+        background:
+          "radial-gradient(130% 100% at 50% -10%, #112c4d 0%, #0a1730 32%, #06060c 72%)",
+        fontFamily: FONT_DISPLAY,
+        color: DUEL.text,
+      }}
     >
-      <div>
-        <div className="text-2xl font-extrabold" style={{ color: DUEL.accent }}>
-          ⚔️ Pixel Duel
+      <div
+        style={{
+          position: "relative",
+          minHeight: "100%",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 22,
+          padding: 28,
+          textAlign: "center",
+          boxSizing: "border-box",
+        }}
+      >
+        <div style={GRID_BACKDROP_STYLE} aria-hidden />
+        {floaters.map((f) => (
+          <div
+            key={f.key}
+            aria-hidden
+            style={{
+              position: "absolute",
+              borderRadius: 2,
+              pointerEvents: "none",
+              left: f.left,
+              top: f.top,
+              width: f.size,
+              height: f.size,
+              background: f.color,
+              animation: `pdTwinkle ${f.dur} ease-in-out ${f.delay} infinite`,
+            }}
+          />
+        ))}
+
+        {/* hero */}
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: 14,
+            zIndex: 1,
+            animation: "pdRise .5s ease both",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              padding: "5px 14px",
+              borderRadius: 999,
+              border: "1px solid rgba(160,140,255,0.22)",
+              background: "rgba(77,162,255,0.07)",
+            }}
+          >
+            <span
+              style={{
+                width: 7,
+                height: 7,
+                borderRadius: "50%",
+                background: DUEL.accent,
+                boxShadow: `0 0 10px ${DUEL.accent}`,
+              }}
+            />
+            <span
+              style={{
+                fontSize: 11.5,
+                fontWeight: 700,
+                letterSpacing: ".34em",
+                textTransform: "uppercase",
+                color: "#9fb6d6",
+              }}
+            >
+              On-chain Pixel War
+            </span>
+          </div>
+          <div
+            style={{
+              fontSize: 66,
+              lineHeight: 0.95,
+              fontWeight: 700,
+              color: "#f3f6ff",
+              letterSpacing: "-.03em",
+              whiteSpace: "nowrap",
+              animation: "pdGlow 3.5s ease-in-out infinite",
+            }}
+          >
+            Pixel Duel
+          </div>
+          <p
+            style={{
+              margin: 0,
+              maxWidth: "32rem",
+              fontSize: 15.5,
+              lineHeight: 1.55,
+              color: "#93a0bd",
+            }}
+          >
+            Memorize a secret shape, paint it from memory under{" "}
+            <span style={{ color: "#cdd8ef", fontWeight: 600 }}>fog of war</span>
+            , then probe to reveal &amp; sabotage your opponent's. Highest match
+            takes the stake.
+          </p>
         </div>
-        <p className="mt-1 max-w-[24rem] text-xs" style={{ color: DUEL.muted }}>
-          Memorize a secret shape, paint it from memory, and sabotage your
-          opponent's. Highest match wins the stake.
-        </p>
-      </div>
 
-      <DifficultyPicker difficulty={difficulty} onDifficulty={onDifficulty} />
-
-      <div className="flex flex-wrap justify-center gap-2">
-        <button
-          onClick={() => onPick("vs-bot")}
-          className="rounded-full px-4 py-2 text-sm font-semibold transition-transform hover:-translate-y-0.5"
+        {/* secret-shape showcase */}
+        <div
           style={{
-            background: DUEL.accent,
-            color: "#06203B",
-            boxShadow: "0 0 12px rgba(77,162,255,0.3)",
+            display: "flex",
+            flexWrap: "wrap",
+            alignItems: "flex-end",
+            justifyContent: "center",
+            gap: 18,
+            zIndex: 1,
+            animation: "pdRise .6s ease .08s both",
           }}
         >
-          Play vs Bot
-        </button>
-        <button
-          onClick={() => onPick("auto")}
-          className="rounded-full border px-4 py-2 text-sm font-semibold transition-transform hover:-translate-y-0.5"
+          {SHOWCASE_DESIGNS.map((d) => (
+            <ShowcaseTile key={d.name} design={d} />
+          ))}
+        </div>
+
+        {/* difficulty + stake */}
+        <div
           style={{
-            borderColor: DUEL.panelBorder,
-            background: "rgba(77,162,255,0.08)",
-            color: DUEL.accent,
+            display: "flex",
+            flexWrap: "wrap",
+            justifyContent: "center",
+            gap: 28,
+            zIndex: 1,
+            animation: "pdRise .6s ease .14s both",
           }}
         >
-          Watch Bots (Auto)
-        </button>
+          <DifficultyPicker difficulty={difficulty} onDifficulty={onDifficulty} />
+          <StakeDisplay value={DUEL_STAKE} />
+        </div>
+
+        {/* mode cards */}
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            justifyContent: "center",
+            gap: 18,
+            zIndex: 1,
+            animation: "pdRise .6s ease .2s both",
+          }}
+        >
+          <ModeCard variant={MODE_CARDS["vs-bot"]} onClick={() => onPick("vs-bot")} />
+          <ModeCard variant={MODE_CARDS.auto} onClick={() => onPick("auto")} />
+        </div>
+
+        {/* footer stats */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 16,
+            fontSize: 11.5,
+            color: "#5f6c87",
+            zIndex: 1,
+            fontFamily: FONT_MONO,
+            animation: "pdRise .6s ease .26s both",
+          }}
+        >
+          <span>💰 {DUEL_STAKE} STAKE</span>
+          <span style={{ opacity: 0.4 }}>|</span>
+          <span>96×56 WALL</span>
+          <span style={{ opacity: 0.4 }}>|</span>
+          <span>FOG OF WAR</span>
+        </div>
       </div>
     </div>
   );
 }
 
-/** Segmented Easy / Normal / Hard control for the bot(s)' skill. */
+/** One secret-shape teaser: a real design rasterized as a box-shadow pixel
+ *  grid in its true palette colors, captioned with its name. */
+function ShowcaseTile({ design }: { design: PixelDesign }) {
+  const shadow = useMemo(() => {
+    const parts: string[] = [];
+    for (let r = 0; r < design.h; r++) {
+      for (let c = 0; c < design.w; c++) {
+        const v = design.pixels[r * design.w + c];
+        if (v !== 0) {
+          parts.push(
+            `${c * SHOWCASE_PIXEL}px ${r * SHOWCASE_PIXEL}px 0 0 ${colorHex(v)}`,
+          );
+        }
+      }
+    }
+    return parts.join(",");
+  }, [design]);
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        gap: 9,
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          width: 70,
+          height: 70,
+          borderRadius: 14,
+          background: "rgba(255,255,255,0.025)",
+          border: "1px solid rgba(160,140,255,0.16)",
+          boxShadow: "inset 0 1px 0 rgba(255,255,255,0.05)",
+        }}
+      >
+        <div
+          style={{
+            position: "relative",
+            width: design.w * SHOWCASE_PIXEL,
+            height: design.h * SHOWCASE_PIXEL,
+          }}
+        >
+          <div
+            style={{
+              position: "absolute",
+              left: 0,
+              top: 0,
+              width: SHOWCASE_PIXEL,
+              height: SHOWCASE_PIXEL,
+              background: "transparent",
+              boxShadow: shadow,
+            }}
+          />
+        </div>
+      </div>
+      <span
+        style={{
+          fontSize: 10,
+          letterSpacing: ".14em",
+          textTransform: "uppercase",
+          color: "#6f7d99",
+          fontFamily: FONT_MONO,
+        }}
+      >
+        {design.name}
+      </span>
+    </div>
+  );
+}
+
+/** Segmented Easy / Normal / Hard control for the bot(s)' skill (wired). */
 function DifficultyPicker({
   difficulty,
   onDifficulty,
@@ -148,20 +464,16 @@ function DifficultyPicker({
   onDifficulty: (d: DuelDifficulty) => void;
 }) {
   return (
-    <div className="flex flex-col items-center gap-1">
-      <span
-        className="text-[11px] uppercase tracking-wide"
-        style={{ color: DUEL.muted }}
-      >
-        Bot difficulty
-      </span>
-      <div
-        className="inline-flex rounded-full border p-0.5"
-        style={{
-          borderColor: DUEL.panelBorder,
-          background: "rgba(77,162,255,0.08)",
-        }}
-      >
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        gap: 9,
+      }}
+    >
+      <span style={GROUP_LABEL_STYLE}>Bot difficulty</span>
+      <div style={PILL_GROUP_STYLE}>
         {DIFFICULTIES.map((d) => {
           const active = d === difficulty;
           return (
@@ -169,12 +481,7 @@ function DifficultyPicker({
               key={d}
               onClick={() => onDifficulty(d)}
               aria-pressed={active}
-              className="rounded-full px-3 py-1 text-xs font-semibold transition-colors"
-              style={
-                active
-                  ? { background: DUEL.accent, color: "#06203B" }
-                  : { color: DUEL.accent }
-              }
+              style={pillStyle(active)}
             >
               {DIFFICULTY_LABEL[d]}
             </button>
@@ -182,5 +489,188 @@ function DifficultyPicker({
         })}
       </div>
     </div>
+  );
+}
+
+/** Read-only stake readout styled like the difficulty pill group. The stake is
+ *  fixed by the protocol, so this is a display, not a selector. */
+function StakeDisplay({ value }: { value: number }) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        gap: 9,
+      }}
+    >
+      <span style={GROUP_LABEL_STYLE}>Stake</span>
+      <div style={PILL_GROUP_STYLE}>
+        <div style={{ ...pillStyle(true), cursor: "default", fontFamily: FONT_MONO }}>
+          💰 {value}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+type ModeCardVariant = {
+  icon: string;
+  title: string;
+  subtitle: string;
+  accent: string;
+  blurb: string;
+  cta: string;
+  iconStyle: CSSProperties;
+  cardBg: string;
+  cardBorder: string;
+  shadowBase: string;
+  shadowHover: string;
+  sweep: boolean;
+};
+
+const MODE_CARDS: Record<PaintMode, ModeCardVariant> = {
+  "vs-bot": {
+    icon: "⚔️",
+    title: "Play vs Bot",
+    subtitle: "You · Sui blue",
+    accent: DUEL.seatA,
+    blurb:
+      "Duel a design-bot — build your secret shape and probe to sabotage theirs before it finishes.",
+    cta: "Start duel",
+    iconStyle: {
+      background: DUEL.seatA,
+      boxShadow: "0 4px 14px rgba(77,162,255,0.5)",
+    },
+    cardBg:
+      "linear-gradient(165deg, rgba(77,162,255,0.16), rgba(18,16,40,0.6))",
+    cardBorder: "1px solid rgba(77,162,255,0.38)",
+    shadowBase: "0 14px 40px rgba(77,162,255,0.18)",
+    shadowHover: "0 22px 54px rgba(77,162,255,0.32)",
+    sweep: true,
+  },
+  auto: {
+    icon: "👁",
+    title: "Watch Bots",
+    subtitle: "Spectate · god-view",
+    accent: DUEL.seatB,
+    blurb:
+      "Sit back as two bots build hidden shapes and probe each other. The wall plays itself out to the reveal.",
+    cta: "Spectate",
+    iconStyle: {
+      background: "rgba(207,110,228,0.16)",
+      border: "1px solid rgba(207,110,228,0.4)",
+    },
+    cardBg:
+      "linear-gradient(165deg, rgba(207,110,228,0.1), rgba(18,16,40,0.6))",
+    cardBorder: "1px solid rgba(160,140,255,0.26)",
+    shadowBase: "0 14px 40px rgba(0,0,0,0.3)",
+    shadowHover: "0 22px 54px rgba(207,110,228,0.22)",
+    sweep: false,
+  },
+};
+
+/** A big mode tile: sweeping highlight (blue only) + hover-lift, calling
+ *  onPick for its mode. */
+function ModeCard({
+  variant,
+  onClick,
+}: {
+  variant: ModeCardVariant;
+  onClick: () => void;
+}) {
+  const [hover, setHover] = useState(false);
+  return (
+    <button
+      onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        position: "relative",
+        overflow: "hidden",
+        width: 268,
+        textAlign: "left",
+        cursor: "pointer",
+        borderRadius: 18,
+        padding: 22,
+        fontFamily: "inherit",
+        color: DUEL.text,
+        background: variant.cardBg,
+        border: variant.cardBorder,
+        boxShadow: hover ? variant.shadowHover : variant.shadowBase,
+        transform: hover ? "translateY(-5px)" : "none",
+        transition: "transform .16s ease, box-shadow .16s ease",
+      }}
+    >
+      {variant.sweep && (
+        <div
+          aria-hidden
+          style={{
+            position: "absolute",
+            inset: 0,
+            background:
+              "linear-gradient(110deg,transparent 30%,rgba(255,255,255,0.12) 50%,transparent 70%)",
+            backgroundSize: "200% 100%",
+            animation: "pdSweep 4s linear infinite",
+            pointerEvents: "none",
+          }}
+        />
+      )}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+          marginBottom: 12,
+        }}
+      >
+        <span
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: 42,
+            height: 42,
+            borderRadius: 11,
+            fontSize: 21,
+            ...variant.iconStyle,
+          }}
+        >
+          {variant.icon}
+        </span>
+        <div>
+          <div style={{ fontSize: 17, fontWeight: 700, letterSpacing: "-.01em" }}>
+            {variant.title}
+          </div>
+          <div
+            style={{
+              fontSize: 10.5,
+              letterSpacing: ".12em",
+              textTransform: "uppercase",
+              color: variant.accent,
+              fontWeight: 700,
+            }}
+          >
+            {variant.subtitle}
+          </div>
+        </div>
+      </div>
+      <div style={{ fontSize: 12.5, lineHeight: 1.5, color: "#9fb0cf" }}>
+        {variant.blurb}
+      </div>
+      <div
+        style={{
+          marginTop: 14,
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 6,
+          fontSize: 12,
+          fontWeight: 700,
+          color: variant.accent,
+        }}
+      >
+        {variant.cta} <span style={{ fontSize: 14 }}>→</span>
+      </div>
+    </button>
   );
 }

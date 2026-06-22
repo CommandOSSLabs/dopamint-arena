@@ -1,7 +1,7 @@
 import type { Party } from "sui-tunnel-ts/protocol/Protocol";
 import { colorHex } from "../palette";
 import type { PlacementEvent } from "../types";
-import { DUEL } from "./tokens";
+import { DUEL, FONT_MONO } from "./tokens";
 
 const SEAT_TINT: Record<Party, string> = { A: "#4DA2FF", B: "#CF6EE4" };
 
@@ -11,9 +11,9 @@ const SEAT_TINT: Record<Party, string> = { A: "#4DA2FF", B: "#CF6EE4" };
 export function ActivityFeed({ events }: { events: PlacementEvent[] }) {
   const now = Date.now();
   return (
-    <div className="p-3">
+    <div className="p-3.5">
       <div
-        className="mb-2 text-[11px] font-extrabold uppercase tracking-wider"
+        className="mb-2 text-[11px] font-bold uppercase tracking-[0.12em]"
         style={{ color: DUEL.muted }}
       >
         Live activity
@@ -23,12 +23,19 @@ export function ActivityFeed({ events }: { events: PlacementEvent[] }) {
           No pixels yet.
         </div>
       ) : (
-        <ul className="space-y-1">
+        <ul className="space-y-0.5">
           {events.slice(0, 12).map((e, i) => (
-            <li key={i} className="flex items-center gap-2 text-[11px]">
+            <li
+              key={i}
+              className="flex items-center gap-2 py-px text-[11px]"
+              style={{ fontFamily: FONT_MONO }}
+            >
               <span
-                className="h-3 w-3 rounded-sm"
-                style={{ background: colorHex(e.color) }}
+                className="h-[11px] w-[11px] flex-none rounded-[3px]"
+                style={{
+                  background: colorHex(e.color),
+                  boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.15)",
+                }}
               />
               <span
                 className="font-bold tabular-nums"
