@@ -47,6 +47,32 @@ origin, wallet flow, and relay path a human uses. Spec:
    ```
    Requires the dev server up (`BASE_URL`, default :5173) and the `KEY` wallet funded on testnet.
 
+   **Environment variables:**
+
+   | Var | Meaning | Default |
+   |---|---|---|
+   | `KEY` | Funded testnet wallet secret key (`suiprivkey1…`) | **required** |
+   | `GAMES` | Comma-separated games to run | `ttt,blackjack` |
+   | `DURATION_MS` | Total run time in milliseconds | `60000` |
+   | `HEADLESS` | Run browser headless (`"true"` to enable) | `false` |
+   | `BASE_URL` | Dev server origin | `http://localhost:5173` |
+   | `TTT_WINDOWS` | Concurrent ttt tunnels — opens N windows in parallel | `1` |
+   | `BJ_WINDOWS` | Concurrent blackjack tunnels — opens N windows in parallel | `1` |
+   | `TTT_MAX_GAMES` | Off-chain ttt matches anchored per on-chain settle (fills the in-game input) | unset (in-game default) |
+   | `BJ_MAX_ROUNDS` | Off-chain blackjack rounds anchored per on-chain settle (must match an in-game option value) | unset (in-game default) |
+
+   `TTT_WINDOWS`/`BJ_WINDOWS` control **concurrent tunnels** (N browser windows run in parallel);
+   `TTT_MAX_GAMES`/`BJ_MAX_ROUNDS` control **matches per tunnel** (off-chain matches before each on-chain settle).
+
+   **Multi-window example** — 3 ttt tunnels + 2 blackjack tunnels, each with elevated match counts:
+
+   ```bash
+   KEY=<funded suiprivkey> \
+     TTT_WINDOWS=3 BJ_WINDOWS=2 \
+     TTT_MAX_GAMES=50 BJ_MAX_ROUNDS=200 \
+     DURATION_MS=60000 node agent/arena.mjs
+   ```
+
    **Smoke-test (manual gate):** verify the dev server is running on `:5173` pointing at a reachable
    backend, then run:
 
