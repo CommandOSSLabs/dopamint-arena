@@ -13,10 +13,22 @@ import { fromHex, toHex } from "sui-tunnel-ts/core/bytes";
 import { DistributedTunnel } from "sui-tunnel-ts/core/distributedTunnel";
 import { Transcript } from "sui-tunnel-ts/proof/transcript";
 import { createBehaviorProtocol } from "sui-tunnel-ts/agents/behaviors";
+import {
+  PixelDuelProtocol,
+  type PixelDuelState,
+  type PixelDuelMove,
+} from "sui-tunnel-ts/protocol/pixelDuel";
+import {
+  makeDuelSeatMaterial,
+  createDuelSeatBot,
+  type DuelSeatMaterial,
+} from "./games/pixelDuel/kit";
+import type { GameBot } from "./gameKit";
 import { MpClient, resolveMpWsUrl, type PvpChannel } from "../pvp/mpClient";
 import {
   getControlPlaneClient,
   resolveBackendUrl,
+  type RegisterSessionResult,
 } from "../backend/controlPlane";
 import {
   closeCooperativeWithRoot,
@@ -67,6 +79,31 @@ function makeInbox(channel: PvpChannel) {
     });
 }
 
+/** This match's commit-reveal context: this seat's local secret material + the peer's commit. */
+interface DuelMatch {
+  /** This seat's own mask + salt + 32-byte commit (and forced seat color). */
+  self: DuelSeatMaterial;
+  /** The peer's 32-byte template commitment, received over the relay. */
+  peerCommit: Uint8Array;
+}
+
+/**
+ * Generate THIS seat's secret duel template locally and swap only the 32-byte
+ * commit with the peer (never the mask). Each agent draws an independent template
+ * from `Math.random`, so neither side learns the other's design until reveal — the
+ * commit-reveal property the protocol enforces at the terminal.
+ */
+async function exchangeDuelCommit(
+  role: "A" | "B",
+  channel: PvpChannel,
+  waitPeer: <T>(t: string) => Promise<T>,
+): Promise<DuelMatch> {
+  const self = makeDuelSeatMaterial(role, Math.random);
+  channel.sendPeer({ t: "duelCommit", commit: toHex(self.commit) });
+  const peer = await waitPeer<{ commit: string }>("duelCommit");
+  return { self, peerCommit: fromHex(peer.commit) };
+}
+
 async function playOneMatch(
   mp: MpClient,
   deps: AgentDeps,
@@ -82,6 +119,14 @@ async function playOneMatch(
     const oppPub = fromHex(
       (await waitPeer<{ ephemeralPubkey: string }>("hello")).ephemeralPubkey,
     );
+
+    // COMMIT-REVEAL handshake (pixel-duel): BEFORE the tunnel is built each seat
+    // generates its OWN secret template+salt locally, then swaps the 32-byte commit
+    // (never the mask) so both sides can build PixelDuelProtocol with both commits.
+    // Null for every other game — the duel path is purely additive and gated here.
+    const duel: DuelMatch | null = spec.commitReveal
+      ? await exchangeDuelCommit(match.role, channel, waitPeer)
+      : null;
 
     // Fund: seat A opens + funds its seat in one tx then announces; seat B gated-deposits.
     let tunnelId: string;
@@ -104,8 +149,62 @@ async function playOneMatch(
       });
     }
 
+    // Register this tunnel under its game id so the backend attributes its co-signed
+    // moves to perGame[spec.id] (the same heartbeat path the human hooks use). Without
+    // this the fleet's throughput lands only in the global aggregate, never per-game.
+    let session: RegisterSessionResult | null = null;
+    try {
+      session = await getControlPlaneClient().registerSession({
+        userAddress: deps.wallet,
+        game: spec.id,
+        tunnels: [
+          {
+            tunnelId,
+            partyA: match.role === "A" ? deps.wallet : match.opponentWallet,
+            partyB: match.role === "B" ? deps.wallet : match.opponentWallet,
+          },
+        ],
+      });
+    } catch (e) {
+      deps.onStatus?.(
+        `slot:registerSession:${String((e as Error)?.message ?? e)}`,
+      );
+    }
+    // Throttled per-game heartbeat: report co-signed moves (actionsDelta) over the
+    // elapsed window, ≤1/sec, force-flushed at settle. Mirrors usePvpTicTacToe.
+    let actions = 0;
+    let moveCount = 0;
+    let lastHb = Date.now();
+    const flushHeartbeat = (force: boolean) => {
+      if (!session || actions === 0) return;
+      const windowMs = Date.now() - lastHb;
+      if (!force && windowMs < 1000) return;
+      const actionsDelta = actions;
+      actions = 0;
+      lastHb = Date.now();
+      getControlPlaneClient()
+        .sendHeartbeat(session.sessionId, session.statsToken, {
+          tunnelId,
+          nonce: String(moveCount),
+          actionsDelta,
+          windowMs: Math.max(1, windowMs),
+        })
+        .catch(() => {});
+    };
+
     // Build the distributed engine over the relay transport; protocol chosen by game.
-    const proto = createBehaviorProtocol(spec.behavior) as unknown as Proto;
+    // Duel builds PixelDuelProtocol INLINE with both exchanged commits (selfParty
+    // fixes which commit is A vs B); behaviors.ts can't — it has no commits. Every
+    // other game keeps its createBehaviorProtocol path byte-for-byte.
+    const proto = (
+      duel
+        ? new PixelDuelProtocol({
+            templateCommitA: match.role === "A" ? duel.self.commit : duel.peerCommit,
+            templateCommitB: match.role === "B" ? duel.self.commit : duel.peerCommit,
+            stake: spec.stake,
+          })
+        : createBehaviorProtocol(spec.behavior)
+    ) as unknown as Proto;
     const backend = defaultBackend();
     const self = makeEndpoint(backend, deps.wallet, eph, true);
     const opp = makeEndpoint(
@@ -124,22 +223,55 @@ async function playOneMatch(
     ) as any;
     const transcript = new Transcript(tunnelId);
 
-    // Auto-play: propose a random legal move whenever it is our turn (pvpTttBot's loop).
+    // The duel's seat bot drives build/contest play and emits this seat's reveal.
+    // It holds ONLY this seat's (mask, salt, color) — never the peer's.
+    const duelBot: GameBot<PixelDuelState, PixelDuelMove> | null = duel
+      ? createDuelSeatBot(match.role, { rngForSeat: () => Math.random }, duel.self)
+      : null;
+
+    // Whose turn to propose. Turn-based games (tic-tac-toe) read state.turn. Turn-free
+    // games (pixel-paint) have no turn field, so both seats derive the same proposer from
+    // the confirmed `placed` parity — exactly one proposes, giving a no-conflict ping-pong.
+    // DUEL reveal phase: `placed` is frozen, so parity can't ping-pong the two reveals —
+    // both seats instead read the public `revealed{A,B}` flags and the pending seat
+    // proposes its own reveal (a seat can only reveal its own template).
+    const proposer = (st: {
+      turn?: "A" | "B";
+      placed?: number;
+      phase?: string;
+      revealedA?: unknown;
+      revealedB?: unknown;
+    }): "A" | "B" => {
+      if (duel && st.phase === "reveal") {
+        if (!st.revealedA) return "A";
+        return "B";
+      }
+      return spec.turnFree ? ((st.placed ?? 0) % 2 === 0 ? "A" : "B") : st.turn!;
+    };
+
+    // Auto-play: propose whenever it is our turn (pvpTttBot's loop). The duel uses the
+    // seat bot's plan (paint during play, reveal at terminal — randomMove can never
+    // produce a reveal); every other game keeps the randomMove path verbatim.
     const move = () => {
       if (proto.isTerminal(dt.state)) return;
-      if (dt.state.turn === match.role) {
-        const m = proto.randomMove?.(dt.state, match.role, Math.random);
-        if (m) dt.propose(m, 0n);
-      }
+      if (proposer(dt.state) !== match.role) return;
+      const m = duelBot
+        ? duelBot.plan(dt.state as PixelDuelState)
+        : proto.randomMove?.(dt.state, match.role, Math.random);
+      if (m) dt.propose(m, 0n);
     };
 
     await new Promise<void>((resolve, reject) => {
       let settling = false;
       dt.onConfirmed = (u: CoSignedUpdate) => {
         transcript.append(u);
+        actions++;
+        moveCount++;
+        flushHeartbeat(false);
         if (proto.isTerminal(dt.state)) {
           if (settling) return;
           settling = true;
+          flushHeartbeat(true);
           settle(
             dt,
             match.role,
