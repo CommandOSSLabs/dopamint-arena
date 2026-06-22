@@ -64,10 +64,11 @@ async function setupOneTunnel(
   game: string,
   idx: number,
 ): Promise<BenchTunnel> {
-  const [mA, mB] = await Promise.all([
-    clientA.quickMatch(game),
-    clientB.quickMatch(game),
-  ]);
+  // Stagger the two queue joins slightly: if both hit the backend atomically
+  // the Redis Lua pair script can miss one of them.
+  const mA = await clientA.quickMatch(game);
+  await sleep(50);
+  const mB = await clientB.quickMatch(game);
   if (mA.matchId !== mB.matchId) {
     throw new Error(
       `match id mismatch: A=${mA.matchId} B=${mB.matchId}`,
@@ -77,6 +78,7 @@ async function setupOneTunnel(
     throw new Error(`roles not complementary: A=${mA.role} B=${mB.role}`);
   }
   const matchId = mA.matchId;
+  console.error(`[setup ${idx}] matched ${matchId} roles A=${mA.role} B=${mB.role}`);
   const chA = clientA.channel(matchId);
   const chB = clientB.channel(matchId);
 
@@ -114,6 +116,7 @@ async function setupOneTunnel(
   // Hello.
   chA.sendPeer({ t: "hello", ephemeralPubkey: core.bytesToHex(ephA.publicKey) });
   chB.sendPeer({ t: "hello", ephemeralPubkey: core.bytesToHex(ephB.publicKey) });
+  console.error(`[setup ${idx}] waiting for hellos...`);
   const [pubHexB, pubHexA] = await Promise.all([gotHelloA, gotHelloB]);
   if (pubHexB !== core.bytesToHex(ephB.publicKey)) {
     throw new Error("B pubkey mismatch in hello");
@@ -121,16 +124,21 @@ async function setupOneTunnel(
   if (pubHexA !== core.bytesToHex(ephA.publicKey)) {
     throw new Error("A pubkey mismatch in hello");
   }
+  console.error(`[setup ${idx}] hello complete`);
 
   // Stake.
   const stakeAmount = Number(STAKE);
   chA.sendPeer({ t: "stake", amount: stakeAmount });
   chB.sendPeer({ t: "stake", amount: stakeAmount });
+  console.error(`[setup ${idx}] waiting for stakes...`);
   await Promise.all([gotStakeA, gotStakeB]);
+  console.error(`[setup ${idx}] stake complete`);
 
   // Role B "opens" the tunnel with a synthetic id (we are not doing on-chain creation).
+  console.error(`[setup ${idx}] waiting for open...`);
   (mA.role === "B" ? chA : chB).sendPeer({ t: "open", tunnelId });
   await openedA;
+  console.error(`[setup ${idx}] open complete`);
 
   const backend = core.defaultBackend();
   const addrA = core.ed25519Address(ephA.publicKey);
