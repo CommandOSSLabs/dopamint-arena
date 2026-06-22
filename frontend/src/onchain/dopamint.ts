@@ -18,10 +18,15 @@ export const DOPAMINT_DECIMALS = 9;
 export const dopamint = (whole: bigint): bigint =>
   whole * 10n ** BigInt(DOPAMINT_DECIMALS);
 
-/** One faucet pull mints 10,000 DOPAMINT — thousands of games per top-up. */
-export const DOPAMINT_FAUCET_AMOUNT = dopamint(10_000n);
-/** Background top-up trigger: when the balance drops below 100 DOPAMINT, faucet more. */
-export const DOPAMINT_MIN_BALANCE = dopamint(100n);
+// One faucet pull mints 100,000,000 DOPAMINT. `dopamint::mint` mints NEW supply from the shared
+// TreasuryCap, so the faucet can NEVER run dry — this is only "how much per top-up". At ~1 DOPAMINT
+// staked per seat (self-play burns ~2/game to ephemeral seats), one pull covers tens of millions of
+// games; below the threshold the background faucet tops up again (free, gas-sponsored, invisible),
+// so a player faucets once and plays effectively without limit.
+export const DOPAMINT_FAUCET_AMOUNT = dopamint(100_000_000n);
+/** Background top-up trigger: refill once the balance falls below 100,000 DOPAMINT — a big enough
+ *  cushion that the stake hot-path always finds a coin while a top-up is in flight. */
+export const DOPAMINT_MIN_BALANCE = dopamint(100_000n);
 
 /**
  * Append a faucet mint of `amount` DOPAMINT to `recipient` (`dopamint::mint`). New supply each
@@ -56,4 +61,55 @@ export async function faucetDopamint(opts: {
   const tx = new Transaction();
   buildDopamintFaucet(tx, opts.recipient, opts.amount);
   return opts.signExec(tx);
+}
+
+/** Minimal `getCoins` surface — satisfied by dapp-kit's SuiClient. */
+interface DopamintCoinReader {
+  getCoins(input: {
+    owner: string;
+    coinType: string;
+  }): Promise<{ data: { coinObjectId: string; balance: string }[] }>;
+}
+
+/**
+ * Ensure `owner` holds a single DOPAMINT coin >= `need`, faucet-ing via `signExec` (pass a sponsored
+ * signer to top up for free) and polling past indexer lag if it's short. Returns the coin id to
+ * stake. For self-play that funds N seats from ONE coin, pass the SUM as `need`. Used by any flow
+ * that stakes DOPAMINT from a non-wallet identity (e.g. autonomous bots) where the background
+ * wallet auto-faucet doesn't apply.
+ */
+export async function ensureDopamintStakeCoin(opts: {
+  client: DopamintCoinReader;
+  signExec: SignExec;
+  owner: string;
+  need: bigint;
+}): Promise<string> {
+  const read = async () => {
+    try {
+      return (
+        await opts.client.getCoins({
+          owner: opts.owner,
+          coinType: DOPAMINT_COIN_TYPE,
+        })
+      ).data;
+    } catch (e) {
+      throw new Error(
+        `dopamint getCoins(owner=${opts.owner}, coinType=${DOPAMINT_COIN_TYPE}) failed: ${String((e as Error)?.message ?? e)}`,
+      );
+    }
+  };
+  const pick = (coins: { coinObjectId: string; balance: string }[]) =>
+    coins.find((c) => BigInt(c.balance) >= opts.need);
+
+  let coin = pick(await read());
+  if (!coin) {
+    await faucetDopamint({ signExec: opts.signExec, recipient: opts.owner });
+    // suix_getCoins can lag the executed mint; poll briefly until the coin is indexed.
+    for (let i = 0; i < 8 && !coin; i++) {
+      coin = pick(await read());
+      if (!coin) await new Promise((r) => setTimeout(r, 600));
+    }
+  }
+  if (!coin) throw new Error("DOPAMINT faucet did not yield enough to stake");
+  return coin.coinObjectId;
 }

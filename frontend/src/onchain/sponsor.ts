@@ -39,57 +39,101 @@ interface SponsorResponse {
  * so the open/fund callers don't change. The PTB must fund its stake from a user coin (not the
  * gas coin) — with sponsor gas there is no gas coin to split.
  */
-export function makeSponsoredSignExec(opts: {
+/**
+ * Core gas-sponsor flow, shared by every signer kind: build the PTB KIND → `POST /v1/sponsor` (the
+ * settler wraps it in its own SIP-58 gas + dry-runs) → the sender signs the settler-returned bytes
+ * (via `signSponsoredBytes`) → submit with both signatures. Signer kinds differ ONLY in step 3.
+ *
+ * CRITICAL: the sender must sign the EXACT bytes the settler returned — never a rebuild. A SIP-58
+ * sponsored tx carries the settler's address-balance gas with an empty `gas_payment.objects`;
+ * re-running `Transaction.build` would try to resolve gas coins for the (coin-less) sender and fail
+ * with a cryptic RPC "Invalid params". So `signSponsoredBytes` receives the raw base64 bytes.
+ */
+async function runSponsoredFlow(opts: {
+  tx: Transaction;
   sender: string;
   client: SponsorSuiClient;
-  signTransaction: WalletSignTransaction;
-}): SignExec {
+  signSponsoredBytes: (txBytes: string) => Promise<string>;
+}): Promise<{ digest: string }> {
   const root = resolveBackendUrl();
-  return async (tx: Transaction) => {
-    // 1) Serialize only the PTB — the settler supplies the gas, and sets the sender, itself.
-    //    The client resolves input object versions; `as never` bridges the nominal client type.
-    const kindBytes = await tx.build({
+  // 1) Serialize only the PTB — the settler supplies the gas, and sets the sender, itself.
+  let kindBytes: Uint8Array;
+  try {
+    kindBytes = await opts.tx.build({
       client: opts.client as never,
       onlyTransactionKind: true,
     });
-    // 2) Sponsor: the settler wraps it in settler-owned gas and rejects (422) anything it won't pay for.
-    const res = await fetch(`${root}/v1/sponsor`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ sender: opts.sender, txKindBytes: toBase64(kindBytes) }),
-    });
-    if (!res.ok) {
-      const detail = await res.text().catch(() => "");
-      throw new Error(`sponsor request failed (${res.status}): ${detail}`);
-    }
-    const { txBytes, sponsorSignature } = (await res.json()) as SponsorResponse;
-    // 3) The user co-signs the SAME sponsored bytes (sender authorization).
-    const { signature: userSignature, bytes: signedBytes } =
-      await opts.signTransaction({
-        transaction: Transaction.from(fromBase64(txBytes)),
-      });
-    // Both signatures must cover identical bytes: the settler signed `txBytes`, so if the wallet
-    // re-serialized to anything else the pair is invalid — fail loudly here, not as a cryptic
-    // on-chain signature rejection.
-    if (signedBytes !== txBytes) {
-      throw new Error("sponsored transaction bytes changed during wallet signing");
-    }
-    // 4) Submit with both sigs: the node verifies the sender (user) and the gas owner (settler).
-    const result = await opts.client.executeTransactionBlock({
+  } catch (e) {
+    // Label the failing step: a build-time error (e.g. a malformed object id / move target from an
+    // empty env id) is otherwise a bare RPC "Invalid params" with no hint of where it came from.
+    throw new Error(
+      `sponsor: build PTB kind failed: ${String((e as Error)?.message ?? e)}`,
+    );
+  }
+  // 2) Sponsor: the settler wraps it in settler-owned gas and rejects (422) anything it won't pay for.
+  const res = await fetch(`${root}/v1/sponsor`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ sender: opts.sender, txKindBytes: toBase64(kindBytes) }),
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(`sponsor request failed (${res.status}): ${detail}`);
+  }
+  const { txBytes, sponsorSignature } = (await res.json()) as SponsorResponse;
+  // 3) The sender co-signs the settler-returned bytes (sender authorization).
+  let userSignature: string;
+  try {
+    userSignature = await opts.signSponsoredBytes(txBytes);
+  } catch (e) {
+    throw new Error(`sponsor: sign sponsored bytes failed: ${String((e as Error)?.message ?? e)}`);
+  }
+  // 4) Submit with both sigs: the node verifies the sender and the gas owner (settler).
+  let result: Awaited<ReturnType<SponsorSuiClient["executeTransactionBlock"]>>;
+  try {
+    result = await opts.client.executeTransactionBlock({
       transactionBlock: txBytes,
       signature: [userSignature, sponsorSignature],
       options: { showEffects: true, showObjectChanges: true },
       requestType: "WaitForLocalExecution",
     });
-    // Surface an on-chain failure (e.g. the faucet aborted) loudly, instead of a later "no coin".
-    const status = result.effects?.status?.status;
-    if (status && status !== "success") {
-      throw new Error(
-        `sponsored transaction failed on-chain: ${result.effects?.status?.error ?? status}`,
-      );
-    }
-    return { digest: result.digest };
-  };
+  } catch (e) {
+    throw new Error(`sponsor: executeTransactionBlock failed: ${String((e as Error)?.message ?? e)}`);
+  }
+  // Surface an on-chain failure (e.g. the faucet aborted) loudly, instead of a later "no coin".
+  const status = result.effects?.status?.status;
+  if (status && status !== "success") {
+    throw new Error(
+      `sponsored transaction failed on-chain: ${result.effects?.status?.error ?? status}`,
+    );
+  }
+  return { digest: result.digest };
+}
+
+export function makeSponsoredSignExec(opts: {
+  sender: string;
+  client: SponsorSuiClient;
+  signTransaction: WalletSignTransaction;
+}): SignExec {
+  return (tx: Transaction) =>
+    runSponsoredFlow({
+      tx,
+      sender: opts.sender,
+      client: opts.client,
+      signSponsoredBytes: async (txBytes) => {
+        // dapp-kit signs the bytes handed to it; guard against a re-serialization mismatch (if the
+        // wallet rebuilt to different bytes, the signature pair would be invalid on-chain).
+        const { signature, bytes } = await opts.signTransaction({
+          transaction: Transaction.from(fromBase64(txBytes)),
+        });
+        if (bytes !== txBytes) {
+          throw new Error(
+            "sponsored transaction bytes changed during wallet signing",
+          );
+        }
+        return signature;
+      },
+    });
 }
 
 /** A local keypair's signer surface — signs raw tx bytes (e.g. a `@mysten/sui` `Ed25519Keypair`). */
@@ -110,16 +154,20 @@ export function makeKeypairSponsoredSignExec(opts: {
   keypair: KeypairSigner;
   client: SponsorSuiClient;
 }): SignExec {
-  return makeSponsoredSignExec({
-    sender: opts.address,
-    client: opts.client,
-    // Rebuild the fully-formed sponsored bytes and sign them with the keypair. The tx is already
-    // gas-complete, so build() is deterministic and reproduces the settler-signed bytes exactly.
-    signTransaction: async ({ transaction }) => {
-      const bytes = await transaction.build({ client: opts.client as never });
-      return opts.keypair.signTransaction(bytes);
-    },
-  });
+  return (tx: Transaction) =>
+    runSponsoredFlow({
+      tx,
+      sender: opts.address,
+      client: opts.client,
+      // Sign the settler-returned bytes DIRECTLY — the keypair signs raw tx bytes, so there is no
+      // rebuild to mis-resolve the (settler-owned, address-balance) gas.
+      signSponsoredBytes: async (txBytes) => {
+        const { signature } = await opts.keypair.signTransaction(
+          fromBase64(txBytes),
+        );
+        return signature;
+      },
+    });
 }
 
 /**
@@ -139,12 +187,20 @@ export async function withSponsorFallback<T>(
 ): Promise<T> {
   try {
     return await sponsored();
-  } catch (err) {
+  } catch (sponsorErr) {
     console.warn(
       `[sponsor] ${label}: sponsor failed, falling back to sender-pays`,
-      err,
+      sponsorErr,
     );
-    return senderPays();
+    try {
+      return await senderPays();
+    } catch (payErr) {
+      // Surface BOTH causes: a 0-SUI player can't sender-pay, so the bare "no SUI coin" would hide
+      // the real reason the sponsored path failed (the only path that can work for them).
+      throw new Error(
+        `${label}: sponsored path failed [${String((sponsorErr as Error)?.message ?? sponsorErr)}]; sender-pays fallback failed [${String((payErr as Error)?.message ?? payErr)}]`,
+      );
+    }
   }
 }
 
