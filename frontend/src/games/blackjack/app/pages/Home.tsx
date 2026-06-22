@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import { ConnectButton, useCurrentAccount } from "@mysten/dapp-kit";
 import { useGameNavigate } from "@/games/blackjack/app/useGameRouter";
 
@@ -9,14 +9,6 @@ export default function Home() {
   useEffect(() => {
     document.title = "Blackjack";
   }, []);
-
-  const autoNavRef = useRef(false);
-  useEffect(() => {
-    if (account && !autoNavRef.current) {
-      autoNavRef.current = true;
-      navigate("/bot"); // bot-vs-bot self-play
-    }
-  }, [account, navigate]);
 
   return (
     <div className="w-full h-full flex flex-col items-center justify-center menu-background relative text-white overflow-hidden select-none">
