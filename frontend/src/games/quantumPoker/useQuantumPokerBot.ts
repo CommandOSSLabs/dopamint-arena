@@ -19,7 +19,7 @@ import {
   type SignExec,
   type SuiReads,
 } from "@/onchain/tunnelTx";
-import { QUANTUM_POKER_STAKE, QUANTUM_POKER_HAND_CAP } from "./constants";
+import { QUANTUM_POKER_STAKE, QUANTUM_POKER_HANDS_PER_TUNNEL } from "./constants";
 import {
   makeSeatBot,
   randomPokerPersona,
@@ -34,7 +34,7 @@ import {
 import { settlePokerTunnel } from "./pokerSettle";
 
 const STAKE = QUANTUM_POKER_STAKE;
-const HAND_CAP = QUANTUM_POKER_HAND_CAP;
+const HAND_CAP = QUANTUM_POKER_HANDS_PER_TUNNEL;
 const AUTO_MS = 45; // pacing between auto moves
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 

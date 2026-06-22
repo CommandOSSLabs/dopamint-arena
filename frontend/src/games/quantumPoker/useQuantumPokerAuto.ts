@@ -20,7 +20,7 @@ import {
   readCreatedAt,
   type SignExec,
 } from "@/onchain/tunnelTx";
-import { QUANTUM_POKER_STAKE, QUANTUM_POKER_HAND_CAP } from "./constants";
+import { QUANTUM_POKER_STAKE, QUANTUM_POKER_HANDS_PER_TUNNEL } from "./constants";
 import {
   loadOrCreateQuantumPokerBots,
   botBalances,
@@ -41,7 +41,7 @@ import {
 import { settlePokerTunnel } from "./pokerSettle";
 
 const STAKE = QUANTUM_POKER_STAKE;
-const HAND_CAP = QUANTUM_POKER_HAND_CAP;
+const HAND_CAP = QUANTUM_POKER_HANDS_PER_TUNNEL;
 
 /** Pause between matches (ms). */
 const NEXT_MATCH_MS = 1200;
