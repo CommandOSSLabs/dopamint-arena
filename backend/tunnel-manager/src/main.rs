@@ -83,7 +83,6 @@ async fn main() -> anyhow::Result<()> {
         stats_tx,
     });
     stats::spawn_stats_broadcaster(state.clone());
-    sui::spawn_event_indexer(state.clone());
 
     let app = Router::new()
         .route("/healthz", get(routes::health))

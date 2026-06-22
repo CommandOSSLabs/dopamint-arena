@@ -8,6 +8,7 @@ import {
   u64ToBeBytes,
   addressToBytes32,
   StateUpdateWriter,
+  parseStateUpdate,
 } from "./wire";
 import { toHex } from "./bytes";
 
@@ -104,6 +105,28 @@ test("addressToBytes32 left-pads to 32 bytes", () => {
   );
   assert.equal(addressToBytes32("0x" + "ff".repeat(32)).length, 32);
   assert.throws(() => addressToBytes32("0x" + "ff".repeat(33)));
+});
+
+test("parseStateUpdate inverts serializeStateUpdate", () => {
+  const u = {
+    tunnelId: "0x" + "ab".repeat(32),
+    stateHash: Uint8Array.from({ length: 32 }, (_, i) => i),
+    nonce: 7n,
+    timestamp: 1234n,
+    partyABalance: 60n,
+    partyBBalance: 40n,
+  };
+  const parsed = parseStateUpdate(serializeStateUpdate(u));
+  assert.equal(parsed.tunnelId, u.tunnelId);
+  assert.equal(parsed.nonce, 7n);
+  assert.equal(parsed.timestamp, 1234n);
+  assert.equal(parsed.partyABalance, 60n);
+  assert.equal(parsed.partyBBalance, 40n);
+  assert.deepEqual(parsed.stateHash, u.stateHash);
+});
+
+test("parseStateUpdate rejects a non-state-update message", () => {
+  assert.throws(() => parseStateUpdate(new Uint8Array(10)));
 });
 
 test("StateUpdateWriter is byte-identical to serializeStateUpdate", () => {

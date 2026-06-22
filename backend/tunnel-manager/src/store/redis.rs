@@ -635,6 +635,11 @@ impl Bus for RedisBus {
             }
         }
     }
+
+    async fn publish_raw(&self, channel: &str, payload: String) {
+        // Regular PUBLISH (not SPUBLISH) so the indexer subscribes with regular SUBSCRIBE.
+        let _: Result<i64, _> = self.publisher.next().publish(channel, payload).await;
+    }
 }
 
 // ===== Integration tests (ignored without TEST_REDIS_URL) =====

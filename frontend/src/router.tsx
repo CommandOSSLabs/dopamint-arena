@@ -40,10 +40,28 @@ const playgroundRoute = createRoute({
   ),
 });
 
+/** Public settlement explorer — paginated list, address filter, live SSE prepend. */
+const explorerRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/explorer",
+  component: lazyRouteComponent(() => import("./explorer/ExplorerPage"), "ExplorerPage"),
+});
+
+const explorerDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/explorer/$digest",
+  component: lazyRouteComponent(
+    () => import("./explorer/ExplorerDetailPage"),
+    "ExplorerDetailPage",
+  ),
+});
+
 const routeTree = rootRoute.addChildren([
   homeRoute,
   designSystemRoute,
   playgroundRoute,
+  explorerRoute,
+  explorerDetailRoute,
 ]);
 
 export const router = createRouter({ routeTree });
