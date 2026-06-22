@@ -15,6 +15,7 @@
   "dependencies": {
     "@mysten/bcs": "^2.1.0",
     "@mysten/dapp-kit": "^1.1.0",
+    "@mysten/enoki": "1.1.0",
     "@mysten/sui": "^2.18.0",
     "@mysten/wallet-standard": "^0.21.0",
     "@noble/hashes": "^2.2.0",
