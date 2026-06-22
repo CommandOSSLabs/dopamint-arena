@@ -15,42 +15,6 @@ import type { TelemetrySnapshot } from "./types";
 // Ceiling the bots segbar fills toward (matches the live source's bot range).
 const BOT_CAPACITY = 24;
 
-// Display labels for the backend's per-game `perGame` keys (the `game` id each
-// session registers under). Unknown keys fall back to the raw id.
-const GAME_LABEL: Record<string, string> = {
-  tictactoe: "Tic-Tac-Toe",
-  "tic-tac-toe": "Tic-Tac-Toe",
-  blackjack: "Blackjack",
-  "quantum-poker": "Quantum Poker",
-  battleship: "Battleship",
-  "bomb-it": "Bomb It",
-  "chicken-cross": "Chicken Cross",
-  "pixel-paint": "Pixel Wall",
-  "pixel-duel": "Pixel Duel",
-};
-
-// The game whose TPS we highlight — Pixel Duel, the high-throughput paint duel
-// (the local duel + fleet register sessions under "pixel-duel").
-const HIGHLIGHT_GAME = "pixel-duel";
-
-/** Collapse a backend perGame key to its base game id: clients register sessions
- *  under noisy keys ("blackjack-0-1782…", "chicken-cross:DRUF", "quantum_poker"),
- *  so we strip the session suffix and normalize separators to aggregate per game. */
-function baseGameId(key: string): string {
-  let k = key.toLowerCase().replace(/_/g, "-");
-  k = k.split(":")[0]; // "chicken-cross:DRUF" -> "chicken-cross"
-  k = k.replace(/-0-\d+$/, ""); // "blackjack-0-1782…" -> "blackjack"
-  k = k.replace(/-\d+$/, ""); // any trailing "-<digits>"
-  return k;
-}
-
-const titleCase = (s: string) =>
-  s
-    .split("-")
-    .filter(Boolean)
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-    .join(" ");
-
 /** Pulsing "LIVE" indicator shown in the panel header. */
 function LiveBadge() {
   return (
@@ -119,17 +83,6 @@ export function SystemDashboard({
       { label: "Active Tunnels", value: fmt(backend?.activeTunnels) },
       { label: "Settled Tunnels", value: fmt(backend?.settledTunnels) },
     ];
-    // Per-game TPS, aggregated by base game then busiest first — so a single
-    // game's contribution (e.g. Pixel Wall, summed across its sessions) is
-    // readable apart from the network-wide aggregate above.
-    const byGame = new Map<string, number>();
-    for (const [key, g] of Object.entries(backend?.perGame ?? {})) {
-      const base = baseGameId(key);
-      byGame.set(base, (byGame.get(base) ?? 0) + (g.tps ?? 0));
-    }
-    const perGame = [...byGame.entries()]
-      .map(([id, tps]) => ({ id, label: GAME_LABEL[id] ?? titleCase(id), tps }))
-      .sort((a, b) => b.tps - a.tps);
     return (
       <Panel className={className}>
         <PanelHeader>
@@ -138,37 +91,10 @@ export function SystemDashboard({
             {status === "live" ? <LiveBadge /> : <ConnectingBadge />}
           </PanelAction>
         </PanelHeader>
-        <PanelContent className="p-3">
-          <div className="grid grid-cols-2 gap-3">
-            {items.map((it) => (
-              <Stat key={it.label} label={it.label} value={it.value} />
-            ))}
-          </div>
-          {perGame.length > 0 && (
-            <div className="mt-3 border-t border-border/40 pt-2.5">
-              <div className="mb-1.5 text-[10px] uppercase tracking-wide text-muted-foreground">
-                TPS by game
-              </div>
-              <div className="grid gap-1">
-                {perGame.map((g) => (
-                  <div
-                    key={g.id}
-                    className={`flex items-center justify-between text-xs ${
-                      g.id === HIGHLIGHT_GAME
-                        ? "font-semibold text-[#4DA2FF]"
-                        : "text-foreground"
-                    }`}
-                  >
-                    <span className="truncate">{g.label}</span>
-                    <span className="wal-mono tabular-nums">
-                      {Math.round(g.tps).toLocaleString("en-US")}
-                      <span className="ml-1 text-muted-foreground">tx/s</span>
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+        <PanelContent className="grid grid-cols-2 gap-3 p-3">
+          {items.map((it) => (
+            <Stat key={it.label} label={it.label} value={it.value} />
+          ))}
         </PanelContent>
       </Panel>
     );
