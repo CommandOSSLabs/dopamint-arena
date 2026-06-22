@@ -1,97 +1,26 @@
-import { useState } from "react";
 import { CrossSounds } from "../scene/crossSounds.ts";
 import "../cross.css";
 
 const lobbySounds = new CrossSounds();
 
-function randomCode(): string {
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-  let code = "";
-  for (let i = 0; i < 4; i++) {
-    code += chars[Math.floor(Math.random() * chars.length)];
-  }
-  return code;
-}
-
-export function CrossLobby({
-  onCreate,
-  onJoin,
-  onFindMatch,
-}: {
-  onCreate: (code: string) => void;
-  onJoin: (code: string) => void;
-  onFindMatch: () => void;
-}) {
-  const [input, setInput] = useState("");
-  const [activeCode, setActiveCode] = useState<string | null>(null);
-
-  const handleCreate = () => {
-    lobbySounds.play("click");
-    const code = input.trim().toUpperCase() || randomCode();
-    setActiveCode(code);
-    setInput(code);
-    // Seat role (A/B) is assigned by relay arrival order (earlier waiter = A),
-    // NOT by which button was clicked — the create-first UX makes the creator A in practice.
-    onCreate(code);
-  };
-
-  const handleJoin = () => {
-    lobbySounds.play("click");
-    const code = input.trim().toUpperCase();
-    if (!code) return;
-    onJoin(code);
-  };
-
+/** Quick-join PvP entry (single shared queue, no room code) — consistent with the other games. */
+export function CrossLobby({ onFindMatch }: { onFindMatch: () => void }) {
   return (
     <div className="flex h-full w-full flex-col items-center justify-center gap-4 bg-arena-bg p-4 text-center">
       <h2 className="text-gold text-lg font-extrabold uppercase tracking-widest">Chicken Cross PvP</h2>
       <p className="max-w-xs text-sm text-arena-muted">
-        Create a match, share the code; opponent joins with it (2nd tab works).
+        Find an opponent and race your chickens over a shared Sui tunnel.
       </p>
 
-      {activeCode && (
-        <div className="flex flex-col items-center gap-1 rounded border border-amber-500 bg-arena-accent/10 px-6 py-3">
-          <span className="text-[11px] uppercase tracking-wider text-arena-muted">Your match code</span>
-          <span className="font-mono text-2xl font-extrabold tracking-[0.25em] text-gold">
-            {activeCode}
-          </span>
-          <span className="text-[11px] text-arena-muted">Share this with your opponent</span>
-        </div>
-      )}
-
-      <label className="flex flex-col gap-1">
-        <span className="text-[11px] uppercase tracking-wider text-arena-muted">Match Code</span>
-        <input
-          type="text"
-          maxLength={8}
-          value={input}
-          onChange={(e) => setInput(e.target.value.toUpperCase())}
-          placeholder="e.g. AB12"
-          className="w-40 rounded border border-arena-edge bg-arena-bg px-2 py-1.5 text-center font-mono uppercase text-arena-text placeholder:text-arena-muted/50"
-        />
-      </label>
-
-      <div className="flex gap-3">
-        <button
-          onClick={handleCreate}
-          className="gold-glow-hover rounded border border-amber-500 bg-arena-accent px-5 py-2 font-bold uppercase tracking-widest text-arena-bg transition-all hover:opacity-90"
-        >
-          Create Match
-        </button>
-        <button
-          onClick={handleJoin}
-          disabled={!input.trim()}
-          className="rounded border border-arena-edge px-5 py-2 font-bold uppercase tracking-widest text-arena-text transition-all hover:opacity-90 disabled:opacity-40"
-        >
-          Join Match
-        </button>
-        <button
-          onClick={() => { lobbySounds.play("click"); onFindMatch(); }}
-          className="gold-glow-hover rounded border border-amber-500 bg-arena-accent px-5 py-2 font-bold uppercase tracking-widest text-arena-bg transition-all hover:opacity-90"
-        >
-          Find Match
-        </button>
-      </div>
+      <button
+        onClick={() => {
+          lobbySounds.play("click");
+          onFindMatch();
+        }}
+        className="gold-glow-hover rounded border border-amber-500 bg-arena-accent px-6 py-2 font-bold uppercase tracking-widest text-arena-bg transition-all hover:opacity-90"
+      >
+        Find Match
+      </button>
     </div>
   );
 }

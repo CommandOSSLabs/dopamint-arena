@@ -33,13 +33,9 @@ export type PvpStatus =
 export interface PvpChickenCross {
   status: PvpStatus;
   role: Role | null;
-  /** The active match code, shown on the waiting screen so the opener can share it. */
-  code: string | null;
   view: CrossView | null;
   winner: "A" | "B" | null;
   error: string | null;
-  create: (code: string) => void;
-  join: (code: string) => void;
   findMatch: () => void;
   setDir: (dir: CrossDir) => void;
   reset: () => void;
@@ -82,7 +78,6 @@ export function usePvpChickenCross(): PvpChickenCross {
 
   const [status, setStatus] = useState<PvpStatus>("idle");
   const [role, setRole] = useState<Role | null>(null);
-  const [code, setCode] = useState<string | null>(null);
   const [view, setView] = useState<CrossView | null>(null);
   const [winner, setWinner] = useState<"A" | "B" | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -143,7 +138,6 @@ export function usePvpChickenCross(): PvpChickenCross {
     transcriptRef.current = null;
     setStatus("idle");
     setRole(null);
-    setCode(null);
     setView(null);
     setWinner(null);
     setError(null);
@@ -162,9 +156,9 @@ export function usePvpChickenCross(): PvpChickenCross {
     };
   }, []);
 
-  /** Shared matchmaking + lifecycle for both create and join. */
-  const startMatch = useCallback(
-    (code: string | null) => {
+  /** Quick-join matchmaking + full match lifecycle (single shared queue, no room code). */
+  const findMatch = useCallback(
+    () => {
       if (!account) {
         setError("connect a wallet first");
         return;
@@ -183,7 +177,6 @@ export function usePvpChickenCross(): PvpChickenCross {
       (async () => {
         try {
           setError(null);
-          if (code) setCode(code.trim().toUpperCase());
           setStatus("matching");
           const ephemeral: KeyPair = generateKeyPair();
           const mp = new MpClient(
@@ -194,7 +187,7 @@ export function usePvpChickenCross(): PvpChickenCross {
           mpRef.current = mp;
           await mp.connect();
 
-          const gameKey = code ? "chicken-cross:" + code.trim().toUpperCase() : "chicken-cross";
+          const gameKey = "chicken-cross";
           const match = await mp.quickMatch(gameKey);
           roleRef.current = match.role;
           setRole(match.role);
@@ -308,18 +301,6 @@ export function usePvpChickenCross(): PvpChickenCross {
     [account, client, signAndExecute, maybePropose],
   );
 
-  const create = useCallback(
-    (code: string) => startMatch(code),
-    [startMatch],
-  );
-
-  const join = useCallback(
-    (code: string) => startMatch(code),
-    [startMatch],
-  );
-
-  const findMatch = useCallback(() => startMatch(null), [startMatch]);
-
   const setDir = useCallback((dir: CrossDir) => {
     myDirRef.current = dir;
   }, []);
@@ -327,12 +308,9 @@ export function usePvpChickenCross(): PvpChickenCross {
   return {
     status,
     role,
-    code,
     view,
     winner,
     error,
-    create,
-    join,
     findMatch,
     setDir,
     reset,
