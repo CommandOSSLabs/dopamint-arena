@@ -364,3 +364,39 @@ git commit -m "docs(agent): document arena auto-pilot"
 - Non-goals (battleship/poker, `?agent` unchanged) honored: only the listed files change; `AgentBoot` keeps `?agent` behavior via the extracted gate.
 
 **Note for the executor:** Task 3 attaches testids to existing elements found at the file:line references in the spec's control map; read each file and attach to the matching `<button>`/`CommandItem` without altering `onClick`, label text, or `disabled`. The blackjack `PlayerBot` faucet button (`game.fund`, "Fund Stake") is intentionally left untouched and unused by the bot.
+
+---
+
+## Extension: configurable concurrent tunnels + matches-per-tunnel
+
+User-approved follow-up. The arena bot becomes configurable for (a) **concurrent tunnels** = N windows per game, and (b) **matches-per-tunnel** = ttt `maxGames` / blackjack `maxRounds`. Mode/difficulty intentionally NOT included.
+
+New env (arena.mjs): `TTT_WINDOWS`/`BJ_WINDOWS` (default `1`); `TTT_MAX_GAMES`/`BJ_MAX_ROUNDS` (optional; unset ⇒ leave UI default).
+
+### Task 6: testids for per-window scoping + count controls
+
+**Files (attribute-only, no logic change):**
+- `frontend/src/desktop/Desktop.tsx`: tag each window's CONTENT container (the element that renders the game module for an `instanceId`, e.g. `tic-tac-toe#1`) with `data-game-window={instanceId}`. Find where the grid renders each open window's body (not the dock item) and attach there.
+- `frontend/src/games/ticTacToe/app/scenes/SetupScene.tsx`: the games-per-tunnel `<input>` (`aria-label="Custom games per tunnel"`) → `data-testid="ttt-max-games"`.
+- `frontend/src/games/blackjack/app/pages/PlayerBot.tsx`: the "Rounds per tunnel" `<select>` → `data-testid="bj-max-rounds"`.
+
+- [ ] Add the 3 attributes; `./node_modules/.bin/tsc --noEmit` exit 0; grep confirms `data-game-window`, `ttt-max-games`, `bj-max-rounds` present. Commit `test(ui): add testids for window scoping + counts`.
+
+### Task 7: arena.mjs — multi-window + per-window scoping + counts
+
+**Files:** Modify `frontend/agent/arena.mjs`.
+
+- Read env: `TTT_WINDOWS`/`BJ_WINDOWS` (int ≥1, default 1), `TTT_MAX_GAMES`/`BJ_MAX_ROUNDS` (optional int).
+- For each game, open `WINDOWS` windows (loop `add-game` → `launch-${id}`). Then for window index `i` in `0..WINDOWS`, build a window-scoped locator `const win = page.locator('[data-game-window^="<gameId>"]').nth(i)` and run ALL that window's interactions via `win.getByTestId(...)` (never page-global — avoids strict-mode across N windows).
+- Per ttt window: if `TTT_MAX_GAMES` set, `win.getByTestId("ttt-tab-bots").click()` then fill `ttt-max-games` (`.fill(String(n))`); then fund-if-`ttt-start`-disabled via `ttt-fund-wallet`; click `ttt-start`.
+- Per blackjack window: `win.getByTestId("bj-watch-bots").click()`; if `BJ_MAX_ROUNDS` set, `selectOption` on `bj-max-rounds`; fund-if-`bj-auto`-disabled via `bj-fund-wallet`; click `bj-auto`.
+- `node --check agent/arena.mjs` valid. Commit `feat(agent): configurable windows + matches per tunnel`.
+
+### Task 8: README — new configs + multi-window
+
+**Files:** Modify `frontend/agent/README.md` (the "Arena auto-pilot" section).
+
+- Document the new env vars (`TTT_WINDOWS`, `BJ_WINDOWS`, `TTT_MAX_GAMES`, `BJ_MAX_ROUNDS`) in a small table, and add a multi-window example, e.g.:
+  `KEY=… TTT_WINDOWS=3 BJ_WINDOWS=2 TTT_MAX_GAMES=50 BJ_MAX_ROUNDS=200 DURATION_MS=60000 node agent/arena.mjs`
+  with one line each explaining "concurrent tunnels (N windows)" vs "matches anchored per on-chain settle".
+- Commit `docs(agent): document arena windows + counts`.
