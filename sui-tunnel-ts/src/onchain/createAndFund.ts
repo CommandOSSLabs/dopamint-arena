@@ -23,9 +23,11 @@ function vecU8(tx: Transaction, b: Uint8Array) {
 }
 
 /**
- * Append one `create_and_fund_with_id` call, funding both parties from two caller-supplied
- * coins. Targets the ID-returning `public fun` so its result, the shared
- * tunnel's `ID` composes with later PTB commands; the funder need not be a party.
+ * Append one create-and-fund call, funding both parties from two caller-supplied coins; the
+ * funder need not be a party. Defaults to the ID-returning `create_and_fund_with_id` so the new
+ * shared tunnel's `ID` composes with later PTB commands. Pass `withId: false` to target the plain
+ * `create_and_fund` (shares internally, returns nothing) — for callers that read the tunnel id
+ * from `objectChanges` afterwards, and for deployments that predate the `_with_id` variant.
  */
 export function buildCreateAndFund(
   tx: Transaction,
@@ -36,10 +38,14 @@ export function buildCreateAndFund(
     coinB: TransactionObjectArgument;
     timeoutMs: bigint;
     penaltyAmount?: bigint;
+    withId?: boolean;
   } & WithCoinType,
 ): TransactionResult {
   return tx.moveCall({
-    target: buildTarget(TUNNEL, "create_and_fund_with_id"),
+    target: buildTarget(
+      TUNNEL,
+      p.withId === false ? "create_and_fund" : "create_and_fund_with_id",
+    ),
     typeArguments: [p.coinType ?? SUI_COIN_TYPE],
     arguments: [
       tx.pure.address(p.partyA.address),
@@ -161,6 +167,10 @@ export function buildOpenAndFundMany(
       timeoutMs: s.timeoutMs,
       penaltyAmount: s.penaltyAmount,
       coinType,
+      // The batch self-play opener reads each tunnel id from objectChanges, never in-PTB, so it
+      // targets the plain `create_and_fund` — which the deployed package has (the `_with_id`
+      // variant is source-only / undeployed). The id-returning path stays for composers below.
+      withId: false,
     }),
   );
 }
