@@ -35,3 +35,10 @@ that depends on them. An ADR captures the decision and the reasoning so the
 - [0009](0009-super-auto-pets-on-tunnel.md) — Super Auto Pets on the tunnel:
   deterministic trigger-event battle, commit-reveal hidden teams + fair shop,
   session-channel settlement, phased de-scope.
+- [0010](0010-pixel-duel.md) — Pixel Duel: battleship-monochrome paint duel on the
+  two-party tunnel. Strictly 2-party tunnel (no N-of-N core fork; N-painter "Paint
+  Wall" only by composing 2-party tunnels, deferred); simultaneous secret-template
+  duel with a public-only paint/own/lock mechanic (borrowed from
+  `pixel_paint.war.v1`) + commit-reveal scoring terminal; monochrome/cooldown/
+  memorize are self-imposed client-side; settles on the generic tunnel (no new
+  Move module). Builds on 0006.
