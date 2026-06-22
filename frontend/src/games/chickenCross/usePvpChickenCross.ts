@@ -28,19 +28,24 @@ export type PvpStatus =
   | "playing"
   | "settling"
   | "settled"
+  | "disconnected"
   | "error";
 
 export interface PvpChickenCross {
   status: PvpStatus;
   role: Role | null;
-  /** The active match code, shown on the waiting screen so the opener can share it. */
-  code: string | null;
+  /** Per-seat stake (MIST); surfaced in the outcome banner as the on-chain payout. */
+  stake: number;
+  /** Auto mode for YOUR seat: on (default) = a bot races it; off = you steer. The opponent
+   *  toggles their own seat independently — both on = bot-vs-bot, both off = human-vs-human. */
+  auto: boolean;
   view: CrossView | null;
   winner: "A" | "B" | null;
   error: string | null;
-  create: (code: string) => void;
-  join: (code: string) => void;
+  /** Join the public queue; paired with the next player who also clicks Find Match. */
+  findMatch: () => void;
   setDir: (dir: CrossDir) => void;
+  toggleAuto: () => void;
   reset: () => void;
 }
 
@@ -81,10 +86,11 @@ export function usePvpChickenCross(): PvpChickenCross {
 
   const [status, setStatus] = useState<PvpStatus>("idle");
   const [role, setRole] = useState<Role | null>(null);
-  const [code, setCode] = useState<string | null>(null);
   const [view, setView] = useState<CrossView | null>(null);
   const [winner, setWinner] = useState<"A" | "B" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [auto, setAutoState] = useState(true);
+  const autoRef = useRef(true);
 
   const mpRef = useRef<MpClient | null>(null);
   const dtRef = useRef<DistributedTunnel<CrossState, CrossMove> | null>(null);
@@ -116,8 +122,15 @@ export function usePvpChickenCross(): PvpChickenCross {
       if (dtNow.protocol.isTerminal(dtNow.state)) return;
       if (turn(dtNow.nonce) !== myRoleNow) return;
 
-      const dir = myDirRef.current;
-      myDirRef.current = "north"; // reset to auto-forward default
+      // Auto → a bot proposes this seat's hop; manual → your steered dir (auto-forward default).
+      let dir: CrossDir;
+      if (autoRef.current) {
+        const botMove = dtNow.protocol.randomMove?.(dtNow.state, myRoleNow, Math.random);
+        dir = (myRoleNow === "A" ? botMove?.dirA : botMove?.dirB) ?? "north";
+      } else {
+        dir = myDirRef.current;
+        myDirRef.current = "north";
+      }
       const move: CrossMove =
         myRoleNow === "A" ? { dirA: dir } : { dirB: dir };
       try {
@@ -138,11 +151,12 @@ export function usePvpChickenCross(): PvpChickenCross {
     dtRef.current = null;
     roleRef.current = null;
     myDirRef.current = "north";
+    autoRef.current = true;
+    setAutoState(true);
     settlingRef.current = false;
     transcriptRef.current = null;
     setStatus("idle");
     setRole(null);
-    setCode(null);
     setView(null);
     setWinner(null);
     setError(null);
@@ -161,11 +175,12 @@ export function usePvpChickenCross(): PvpChickenCross {
     };
   }, []);
 
-  /** Shared matchmaking + lifecycle for both create and join. */
-  const startMatch = useCallback(
-    (code: string) => {
+  /** Public auto-matchmaking + match lifecycle. Both players join the same queue and are paired. */
+  const findMatch = useCallback(
+    () => {
       if (!account) {
         setError("connect a wallet first");
+        setStatus("error");
         return;
       }
       const wallet = account.address;
@@ -182,7 +197,6 @@ export function usePvpChickenCross(): PvpChickenCross {
       (async () => {
         try {
           setError(null);
-          setCode(code.trim().toUpperCase());
           setStatus("matching");
           const ephemeral: KeyPair = generateKeyPair();
           const mp = new MpClient(
@@ -191,10 +205,15 @@ export function usePvpChickenCross(): PvpChickenCross {
             ephemeral,
           );
           mpRef.current = mp;
+          // An unexpected relay drop can't be rejoined (no rejoin-by-matchId) — surface a
+          // clear "connection lost" state rather than stalling, unless we already settled.
+          mp.onClose = () =>
+            setStatus((s) =>
+              s === "settled" || s === "settling" || s === "error" ? s : "disconnected",
+            );
           await mp.connect();
 
-          const gameKey = "chicken-cross:" + code.trim().toUpperCase();
-          const match = await mp.quickMatch(gameKey);
+          const match = await mp.quickMatch("chicken-cross");
           roleRef.current = match.role;
           setRole(match.role);
 
@@ -307,30 +326,26 @@ export function usePvpChickenCross(): PvpChickenCross {
     [account, client, signAndExecute, maybePropose],
   );
 
-  const create = useCallback(
-    (code: string) => startMatch(code),
-    [startMatch],
-  );
-
-  const join = useCallback(
-    (code: string) => startMatch(code),
-    [startMatch],
-  );
-
   const setDir = useCallback((dir: CrossDir) => {
     myDirRef.current = dir;
+  }, []);
+  const toggleAuto = useCallback(() => {
+    autoRef.current = !autoRef.current;
+    myDirRef.current = "north";
+    setAutoState(autoRef.current);
   }, []);
 
   return {
     status,
     role,
-    code,
+    stake: Number(STAKE),
+    auto,
     view,
     winner,
     error,
-    create,
-    join,
+    findMatch,
     setDir,
+    toggleAuto,
     reset,
   };
 }

@@ -5,8 +5,15 @@
  * on-chain open/close, and telemetry. CrossBoard.tsx (Vite-only) owns hazard rendering.
  */
 import type { Party } from "sui-tunnel-ts/protocol/Protocol";
-import type { CrossProtocol, CrossState, CrossMove } from "sui-tunnel-ts/protocol/cross";
+import type { CrossProtocol, CrossState, CrossMove, CrossDir } from "sui-tunnel-ts/protocol/cross";
 import type { OffchainTunnel } from "sui-tunnel-ts/core/tunnel";
+
+/** When the human takes over a seat (auto mode off), the loop supplies its hop direction for that
+ *  seat each tick; the other seat (and both while auto is on) is driven by the protocol's bot. */
+export interface HumanSeat {
+  seat: Party;
+  getDir: () => CrossDir;
+}
 
 /** Flat, render-friendly snapshot of a CrossState (bigints -> numbers). */
 export interface CrossView {
@@ -31,12 +38,18 @@ export function stepSession(
   protocol: CrossProtocol,
   tunnel: OffchainTunnel<CrossState, CrossMove>,
   rng: () => number,
+  human?: HumanSeat | null,
 ): boolean {
   const state = tunnel.state;
   if (protocol.isTerminal(state)) return false;
   const by: Party = state.tick % 2n === 0n ? "A" : "B";
   const move = protocol.randomMove(state, by, rng);
   if (!move) return false;
+  // Both chickens advance every tick; when the human owns a seat, override just its direction.
+  if (human) {
+    if (human.seat === "A") move.dirA = human.getDir();
+    else move.dirB = human.getDir();
+  }
   tunnel.step(move, by);
   return true;
 }

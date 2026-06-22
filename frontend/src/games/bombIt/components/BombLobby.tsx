@@ -1,77 +1,48 @@
 import { useState } from "react";
 import "../bomb-it.css";
 
-function randomCode(): string {
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-  let code = "";
-  for (let i = 0; i < 4; i++) code += chars[Math.floor(Math.random() * chars.length)];
-  return code;
-}
-
+/** Splash/menu: Solo (bots over a local tunnel) or PvP (auto-matched with another player). */
 export function BombLobby({
-  onCreate,
-  onJoin,
+  onSolo,
+  onFind,
 }: {
-  onCreate: (code: string) => void;
-  onJoin: (code: string) => void;
+  onSolo: (stake: number) => void;
+  onFind: () => void;
 }) {
-  const [input, setInput] = useState("");
-  const [activeCode, setActiveCode] = useState<string | null>(null);
+  const [tab, setTab] = useState<"solo" | "pvp">("solo");
+  const [stake, setStake] = useState("500");
 
-  const handleCreate = () => {
-    const code = input.trim().toUpperCase() || randomCode();
-    setActiveCode(code);
-    setInput(code);
-    onCreate(code);
-  };
-
-  const handleJoin = () => {
-    const code = input.trim().toUpperCase();
-    if (!code) return;
-    onJoin(code);
-  };
+  const handleSolo = () => onSolo(Math.max(1, Math.floor(Number(stake)) || 0));
 
   return (
-    <div className="flex h-full w-full flex-col items-center justify-center gap-4 bg-arena-bg p-4 text-center">
-      <h2 className="text-gold text-lg font-extrabold uppercase tracking-widest">Bomb It PvP</h2>
-      <p className="max-w-xs text-sm text-arena-muted">
-        Create a match, share the code; opponent joins with it (2nd tab works).
-      </p>
+    <div className="bomb-root">
+      <div className="arcade-card">
+        <h2 className="arcade-title wal-doto text-gold">BOMB IT</h2>
 
-      {activeCode && (
-        <div className="flex flex-col items-center gap-1 rounded border border-amber-500 bg-arena-accent/10 px-6 py-3">
-          <span className="text-[11px] uppercase tracking-wider text-arena-muted">Your match code</span>
-          <span className="font-mono text-2xl font-extrabold tracking-[0.25em] text-gold">{activeCode}</span>
-          <span className="text-[11px] text-arena-muted">Share this with your opponent</span>
+        <div className="arcade-seg">
+          <button className={`arcade-seg__btn${tab === "solo" ? " arcade-seg__btn--on" : ""}`} onClick={() => setTab("solo")}>
+            Solo
+          </button>
+          <button className={`arcade-seg__btn${tab === "pvp" ? " arcade-seg__btn--on" : ""}`} onClick={() => setTab("pvp")}>
+            PvP
+          </button>
         </div>
-      )}
 
-      <label className="flex flex-col gap-1">
-        <span className="text-[11px] uppercase tracking-wider text-arena-muted">Match Code</span>
-        <input
-          type="text"
-          maxLength={8}
-          value={input}
-          onChange={(e) => setInput(e.target.value.toUpperCase())}
-          placeholder="e.g. AB12"
-          className="w-40 rounded border border-arena-edge bg-arena-bg px-2 py-1.5 text-center font-mono uppercase text-arena-text placeholder:text-arena-muted/50"
-        />
-      </label>
-
-      <div className="flex gap-3">
-        <button
-          onClick={handleCreate}
-          className="gold-glow-hover rounded border border-amber-500 bg-arena-accent px-5 py-2 font-bold uppercase tracking-widest text-arena-bg transition-all hover:opacity-90"
-        >
-          Create Match
-        </button>
-        <button
-          onClick={handleJoin}
-          disabled={!input.trim()}
-          className="rounded border border-arena-edge px-5 py-2 font-bold uppercase tracking-widest text-arena-text transition-all hover:opacity-90 disabled:opacity-40"
-        >
-          Join Match
-        </button>
+        {tab === "solo" ? (
+          <>
+            <p className="arcade-sub">Two bots duel across a 29×29 arena over a real Sui tunnel — one signature funds both seats. Take the wheel anytime with the Auto toggle.</p>
+            <div className="flex flex-col items-center gap-1.5">
+              <span className="arcade-label">Stake per seat (MIST)</span>
+              <input className="arcade-field" type="number" min={1} value={stake} onChange={(e) => setStake(e.target.value)} />
+            </div>
+            <button className="arcade-cta" onClick={handleSolo}>Start Solo</button>
+          </>
+        ) : (
+          <>
+            <p className="arcade-sub">Auto-matched with the next player over a real Sui tunnel. Your bot fights for you by default — flip to Manual to play yourself.</p>
+            <button className="arcade-cta" onClick={onFind}>Find Match</button>
+          </>
+        )}
       </div>
     </div>
   );

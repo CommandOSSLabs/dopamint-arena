@@ -2,18 +2,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useCurrentAccount, useSignAndExecuteTransaction, useSuiClient } from "@mysten/dapp-kit";
 import { createParticipant } from "sui-tunnel-ts/core/keys";
 import { OffchainTunnel } from "sui-tunnel-ts/core/tunnel";
-import { CrossProtocol, MIN_STAKE } from "sui-tunnel-ts/protocol/cross";
-import type { CrossState, CrossMove, CrossDir } from "sui-tunnel-ts/protocol/cross";
+import { BombItProtocol, BOMB_IT_MIN_STAKE } from "sui-tunnel-ts/protocol/bombIt";
+import type { BombItState, BombItMove, BombItAction } from "sui-tunnel-ts/protocol/bombIt";
 import { useTelemetry } from "../../telemetry/TelemetryProvider";
 import { getControlPlaneClient, type RegisterSessionResult } from "../../backend/controlPlane";
 import { closeCooperative, openAndFundSelfPlay, readCreatedAt } from "../../onchain/tunnelTx";
-import {
-  deriveView,
-  sessionResult,
-  stepSession,
-  type CrossView,
-  type SessionResult,
-} from "./session-core";
+import { deriveView, sessionResult, stepSession, type BombItView, type BombItResult } from "./session-core";
 
 /**
  * Throughput pacing. Co-signing is synchronous crypto (2 sigs + 2 verifies per tick), so an
@@ -29,40 +23,46 @@ const MAX_STEPS_PER_FRAME = 8;
 
 export type SessionStatus = "idle" | "funding" | "playing" | "settling" | "settled" | "error";
 
-export interface ChickenCrossSession {
+export interface BombItSession {
   status: SessionStatus;
-  view: CrossView | null;
-  result: SessionResult | null;
+  view: BombItView | null;
+  result: BombItResult | null;
   stake: number;
   error: string | null;
-  /** Auto mode: when on (default), a bot autopilots your chicken; off = you steer it yourself. */
+  /** Auto mode: when on (default), a bot autopilots your seat; off = you play it yourself. */
   auto: boolean;
   start: (stake: number) => void;
   reset: () => void;
-  setDir: (dir: CrossDir) => void;
+  queueAction: (a: BombItAction) => void;
   toggleAuto: () => void;
 }
 
-/** You always steer chicken A in a solo race; chicken B is the bot opponent. */
+/** You always sit in seat A for a solo match; seat B is the bot opponent. */
 const HUMAN_SEAT = "A" as const;
 
-export function useChickenCrossSession(): ChickenCrossSession {
+/**
+ * Self-play (bot-vs-bot) Bomb It over a REAL Sui tunnel — the canonical solo on-ramp so a
+ * player can try the game with one wallet and no opponent. One signature funds BOTH seats
+ * (openAndFundSelfPlay); a timer drives RNG moves through the protocol until a kill or the
+ * tick cap, then it settles cooperatively on-chain. Mirrors useChickenCrossSession.
+ */
+export function useBombItSession(): BombItSession {
   const { report } = useTelemetry();
   const account = useCurrentAccount();
   const client = useSuiClient();
   const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
 
   const [status, setStatus] = useState<SessionStatus>("idle");
-  const [view, setView] = useState<CrossView | null>(null);
-  const [result, setResult] = useState<SessionResult | null>(null);
+  const [view, setView] = useState<BombItView | null>(null);
+  const [result, setResult] = useState<BombItResult | null>(null);
   const [stake, setStake] = useState<number>(0);
   const [error, setError] = useState<string | null>(null);
   const [auto, setAutoState] = useState(true);
   const autoRef = useRef(true);
-  const myDirRef = useRef<CrossDir>("north");
+  const nextActionRef = useRef<BombItAction>("stay");
 
-  const protocolRef = useRef<CrossProtocol | null>(null);
-  const tunnelRef = useRef<OffchainTunnel<CrossState, CrossMove> | null>(null);
+  const protocolRef = useRef<BombItProtocol | null>(null);
+  const tunnelRef = useRef<OffchainTunnel<BombItState, BombItMove> | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // Control-plane session (ADR-0002): best-effort, off the per-move loop.
   const sessionRef = useRef<RegisterSessionResult | null>(null);
@@ -87,7 +87,7 @@ export function useChickenCrossSession(): ChickenCrossSession {
     lastHeartbeatRef.current = 0;
     report.setActive(0);
     autoRef.current = true;
-    myDirRef.current = "north";
+    nextActionRef.current = "stay";
     setAutoState(true);
     setStatus("idle");
     setView(null);
@@ -100,7 +100,9 @@ export function useChickenCrossSession(): ChickenCrossSession {
     (nextStake: number) => {
       stopTimer();
       const floored = Math.floor(nextStake);
-      const stakeBig = BigInt(Math.max(Number(MIN_STAKE), Number.isFinite(floored) ? floored : 0));
+      const stakeBig = BigInt(
+        Math.max(Number(BOMB_IT_MIN_STAKE), Number.isFinite(floored) ? floored : 0),
+      );
       setStake(Number(stakeBig));
       setResult(null);
       setError(null);
@@ -118,9 +120,9 @@ export function useChickenCrossSession(): ChickenCrossSession {
 
       (async () => {
         try {
-          const a = createParticipant("chicken-a");
-          const b = createParticipant("chicken-b");
-          const protocol = new CrossProtocol();
+          const a = createParticipant("bomber-a");
+          const b = createParticipant("bomber-b");
+          const protocol = new BombItProtocol();
 
           // Open + fund BOTH bot seats in ONE wallet signature (create_and_fund).
           setStatus("funding");
@@ -160,13 +162,13 @@ export function useChickenCrossSession(): ChickenCrossSession {
           const cp = getControlPlaneClient();
           cp.registerSession({
             userAddress: account.address,
-            game: "chicken-cross",
+            game: "bomb-it",
             tunnels: [{ tunnelId, partyA: a.address, partyB: b.address }],
           })
             .then((s) => {
               sessionRef.current = s;
             })
-            .catch((e) => console.error("[chicken-cross] registerSession failed:", e));
+            .catch((e) => console.error("[bomb-it] registerSession failed:", e));
 
           const flushHeartbeat = (force: boolean) => {
             const s = sessionRef.current;
@@ -182,7 +184,7 @@ export function useChickenCrossSession(): ChickenCrossSession {
               nonce: String(moveCountRef.current),
               actionsDelta,
               windowMs: Math.max(1, windowMs),
-            }).catch((e) => console.error("[chicken-cross] heartbeat failed:", e));
+            }).catch((e) => console.error("[bomb-it] heartbeat failed:", e));
           };
 
           const settleOnChain = async () => {
@@ -196,7 +198,7 @@ export function useChickenCrossSession(): ChickenCrossSession {
               await closeCooperative({ signExec, tunnelId, settlement });
               setStatus("settled");
             } catch (e) {
-              console.error("[chicken-cross] on-chain close failed:", e);
+              console.error("[bomb-it] on-chain close failed:", e);
               setError(String((e as Error)?.message ?? e));
               setStatus("error");
             }
@@ -209,16 +211,16 @@ export function useChickenCrossSession(): ChickenCrossSession {
             // Co-sign ticks only until the per-frame time budget is spent, then yield: this is
             // what keeps TPS high yet the CPU cool (the rest of the frame stays idle).
             const deadline = performance.now() + FRAME_BUDGET_MS;
-            // Auto on → both chickens are bot-driven (your chicken autopilots). Auto off → your
-            // steered direction drives chicken A (auto-forward after each hop); the bot drives B.
+            // Auto on → both seats are bot-driven (your seat autopilots). Auto off → your queued
+            // action drives seat A; the bot still drives B.
             const human = autoRef.current
               ? null
               : {
                   seat: HUMAN_SEAT,
-                  getDir: () => {
-                    const d = myDirRef.current;
-                    myDirRef.current = "north";
-                    return d;
+                  getAction: () => {
+                    const a = nextActionRef.current;
+                    nextActionRef.current = "stay";
+                    return a;
                   },
                 };
             let ended = p.isTerminal(t.state);
@@ -238,14 +240,15 @@ export function useChickenCrossSession(): ChickenCrossSession {
             }
             setView(deriveView(t.state));
 
-            // On the deciding frame, push a panel txn for the winner (push has no winner).
-            if (ended && t.state.winner) {
+            // On the deciding frame, push a panel txn for the winner (skip draws/pushes).
+            const w = t.state.winner;
+            if (ended && (w === "A" || w === "B")) {
               report.pushTxn({
                 id: moveCountRef.current,
-                game: "chicken-cross",
+                game: "bomb-it",
                 time: new Date().toLocaleTimeString("en-GB"),
-                bot: t.state.winner === "A" ? "Chicken A" : "Chicken B",
-                type: "Chicken Cross Win",
+                bot: w === "A" ? "Bomber A" : "Bomber B",
+                type: "Bomb It Win",
                 status: "Success",
                 amount: `+$${Number(t.state.total).toFixed(2)}`,
               });
@@ -270,16 +273,16 @@ export function useChickenCrossSession(): ChickenCrossSession {
     [account, client, signAndExecute, report, stopTimer],
   );
 
-  const setDir = useCallback((dir: CrossDir) => {
-    myDirRef.current = dir;
+  const queueAction = useCallback((a: BombItAction) => {
+    nextActionRef.current = a;
   }, []);
   const toggleAuto = useCallback(() => {
     autoRef.current = !autoRef.current;
-    myDirRef.current = "north";
+    nextActionRef.current = "stay";
     setAutoState(autoRef.current);
   }, []);
 
   useEffect(() => stopTimer, [stopTimer]);
 
-  return { status, view, result, stake, error, auto, start, reset, setDir, toggleAuto };
+  return { status, view, result, stake, error, auto, start, reset, queueAction, toggleAuto };
 }

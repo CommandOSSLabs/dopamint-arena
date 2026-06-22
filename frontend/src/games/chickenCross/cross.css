@@ -1,19 +1,288 @@
+/* ============================================================
+   Chicken Cross — "Neon Highway"
+   Lanes fill the whole window (immersive, no letterbox), lit as glowing neon strips:
+   roads with a dashed centerline, shimmering water, twin-railed tracks. Only ~10 lanes
+   are visible at once, so lanes can be richly styled; the HUD + controls float over them.
+   ============================================================ */
+
+.cross-root {
+  position: relative;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  container-type: size;
+  background: #05070a;
+}
+/* Forward depth (top fades toward a horizon glow) + vignette. */
+.cross-root::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  background:
+    linear-gradient(180deg, rgba(5, 7, 10, 0.55) 0%, transparent 26%, transparent 82%, rgba(5, 7, 10, 0.5) 100%),
+    radial-gradient(130% 90% at 50% 8%, rgba(94, 234, 212, 0.07), transparent 55%);
+}
+
 .cross-grid {
+  position: absolute;
+  inset: 0;
   display: flex;
   flex-direction: column;
 }
+
 .cross-lane {
+  position: relative;
   display: grid;
   grid-template-columns: repeat(9, 1fr);
   flex: 1 1 0;
-  min-height: 26px;
+  min-height: 22px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), inset 0 -1px 0 rgba(0, 0, 0, 0.35);
 }
+.cross-lane--grass {
+  background: linear-gradient(180deg, #1c3a26, #16301f);
+}
+.cross-lane--road {
+  background: linear-gradient(180deg, #23262f, #181b22);
+}
+/* Dashed centerline on roads. */
+.cross-lane--road::before {
+  content: "";
+  position: absolute;
+  inset: 50% 0 auto 0;
+  height: 2px;
+  transform: translateY(-50%);
+  background: repeating-linear-gradient(90deg, rgba(250, 204, 21, 0.55) 0 14px, transparent 14px 30px);
+}
+.cross-lane--water {
+  background: linear-gradient(90deg, #0e3a4d, #11506b, #0e3a4d);
+}
+.cross-lane--rails {
+  background: linear-gradient(180deg, #2a2113, #1c1710);
+}
+.cross-lane--rails::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(180deg, transparent 28%, rgba(217, 180, 74, 0.5) 28%, rgba(217, 180, 74, 0.5) 31%, transparent 31%),
+    linear-gradient(180deg, transparent 69%, rgba(217, 180, 74, 0.5) 69%, rgba(217, 180, 74, 0.5) 72%, transparent 72%);
+}
+
 .cross-cell {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 16px;
+  font-size: clamp(12px, 4cqh, 30px);
   line-height: 1;
-  border-right: 1px solid rgba(255, 255, 255, 0.04);
-  transition: background 120ms linear;
+  border-right: 1px solid rgba(255, 255, 255, 0.035);
+}
+
+/* The chicken: a glowing token that hops on each advance (animation fires on mount in a new cell). */
+.cross-chick {
+  display: inline-flex;
+  animation: cross-hop 0.16s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.cross-chick--a {
+  filter: drop-shadow(0 0 6px rgba(253, 224, 71, 0.85));
+}
+.cross-chick--b {
+  filter: drop-shadow(0 0 6px rgba(186, 230, 253, 0.9));
+}
+.cross-chick--mine {
+  outline: 2px solid #fde047;
+  outline-offset: 1px;
+  border-radius: 6px;
+}
+.cross-chick--hit {
+  animation: cross-hit 0.32s ease-in-out;
+}
+.cross-haz {
+  display: inline-flex;
+  filter: drop-shadow(0 0 5px rgba(0, 0, 0, 0.5));
+}
+.cross-haz--road {
+  filter: drop-shadow(0 0 6px rgba(248, 113, 113, 0.7));
+}
+.cross-haz--rails {
+  filter: drop-shadow(0 0 7px rgba(250, 204, 21, 0.7));
+}
+@keyframes cross-hop {
+  0% { transform: translateY(0) scale(0.85); }
+  35% { transform: translateY(-22%) scale(1.2); }
+  100% { transform: translateY(0) scale(1); }
+}
+@keyframes cross-hit {
+  0%, 100% { transform: translateX(0); filter: none; }
+  25% { transform: translateX(-18%) rotate(-8deg); filter: brightness(1.6) drop-shadow(0 0 4px #fb7185); }
+  75% { transform: translateX(18%) rotate(8deg); filter: brightness(1.6) drop-shadow(0 0 4px #fb7185); }
+}
+
+/* ---- Glass HUD overlaid (top) ---- */
+.cross-hud {
+  position: absolute;
+  inset: 8px 8px auto 8px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  /* Solid-ish (no backdrop blur): a per-frame backdrop-filter recompute over the moving lanes
+     is a major heat source. */
+  background: linear-gradient(180deg, rgba(7, 11, 15, 0.92), rgba(7, 11, 15, 0.74));
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  pointer-events: none;
+}
+.cross-seat {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+.cross-seat--right {
+  flex-direction: row-reverse;
+  text-align: right;
+}
+.cross-seat__badge {
+  display: grid;
+  place-items: center;
+  width: clamp(20px, 4.5cqmin, 30px);
+  height: clamp(20px, 4.5cqmin, 30px);
+  border-radius: 50%;
+  font-size: clamp(12px, 2.8cqmin, 18px);
+  flex: none;
+}
+.cross-seat__badge--a {
+  box-shadow: 0 0 0 1px rgba(253, 224, 71, 0.8), 0 0 10px rgba(253, 224, 71, 0.45);
+}
+.cross-seat__badge--b {
+  box-shadow: 0 0 0 1px rgba(186, 230, 253, 0.9), 0 0 10px rgba(186, 230, 253, 0.45);
+}
+.cross-seat__meta {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.05;
+  min-width: 0;
+}
+.cross-seat__name {
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(226, 232, 240, 0.7);
+  white-space: nowrap;
+}
+.cross-seat__stat {
+  font-size: clamp(13px, 3cqmin, 21px);
+}
+.cross-hud__center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  line-height: 1;
+}
+.cross-hud__tick {
+  font-size: clamp(15px, 3.4cqmin, 24px);
+  color: #5eead4;
+  text-shadow: 0 0 8px rgba(94, 234, 212, 0.5);
+}
+.cross-hud__live {
+  font-size: 8px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(148, 163, 184, 0.8);
+}
+
+/* ---- On-screen D-pad (PvP human), overlaid bottom-center ---- */
+.cross-controls {
+  position: absolute;
+  inset: auto 0 10px 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+.cross-btn {
+  display: grid;
+  place-items: center;
+  width: clamp(34px, 8cqmin, 48px);
+  height: clamp(28px, 6.5cqmin, 40px);
+  border-radius: 7px;
+  font-size: clamp(13px, 3cqmin, 18px);
+  color: #e2e8f0;
+  background: rgba(12, 20, 24, 0.95);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  transition: transform 80ms ease, background 120ms ease;
+}
+.cross-btn:hover {
+  background: rgba(18, 30, 36, 0.95);
+}
+.cross-btn:active {
+  transform: scale(0.9);
+}
+
+/* ---- Win / outcome overlay ---- */
+.cross-result {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  background: radial-gradient(circle at 50% 45%, rgba(6, 10, 14, 0.4), rgba(5, 7, 10, 0.88));
+  backdrop-filter: blur(2px);
+  text-align: center;
+  padding: 16px;
+}
+.cross-result__trophy {
+  font-size: clamp(34px, 11cqmin, 60px);
+  animation: cross-trophy 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  filter: drop-shadow(0 0 16px rgba(253, 224, 71, 0.7));
+}
+@keyframes cross-trophy {
+  0% { transform: scale(0) rotate(-25deg); opacity: 0; }
+  60% { transform: scale(1.25) rotate(8deg); opacity: 1; }
+  100% { transform: scale(1) rotate(0); }
+}
+.cross-result__line {
+  font-size: clamp(16px, 4.6cqmin, 28px);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.cross-result__sub {
+  font-size: 11px;
+  color: rgba(148, 163, 184, 0.85);
+}
+.cross-play-again {
+  margin-top: 2px;
+  padding: 9px 22px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #05070a;
+  background: linear-gradient(180deg, #fde047, #f59e0b);
+  border: none;
+  box-shadow: 0 0 18px rgba(253, 224, 71, 0.45);
+  transition: transform 120ms ease, box-shadow 200ms ease;
+}
+.cross-play-again:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 0 26px rgba(253, 224, 71, 0.7);
+}
+.cross-spectate {
+  position: absolute;
+  inset: auto 0 10px 0;
+  z-index: 5;
+  text-align: center;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(148, 163, 184, 0.7);
 }

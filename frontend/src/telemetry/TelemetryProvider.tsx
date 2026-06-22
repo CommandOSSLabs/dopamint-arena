@@ -16,6 +16,13 @@ import { liveOnchainTxns, displayUpdatesPerSec } from "../backend/liveMerge";
 
 const MAX_TXNS = 12;
 const MAX_SERIES = 20;
+/** Window for the live updates/sec rate. A short trailing window reflects the CURRENT
+ *  throughput (what the batched self-play loop is pushing right now) instead of the
+ *  lifetime average since mount, which dilutes to ~1 the longer the app stays open. */
+const RATE_WINDOW_MS = 2000;
+/** Cap how often the rate/series re-renders. The self-play loop bumps counters ~180×/sec;
+ *  pushing a setState per bump would thrash React. The windowed rate (a ref) stays exact. */
+const SERIES_THROTTLE_MS = 150;
 
 /** Writer API games call to push their off-chain activity into the live panels. */
 export interface TelemetryWriter {
@@ -48,6 +55,10 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
 
   const counters = useRef<Counters>(newCounters());
   const startMs = useRef<number>(Date.now());
+  // Trailing-window samples of cumulative updates → a live (not lifetime-average) updates/sec.
+  const rateWindow = useRef<{ t: number; u: number }[]>([]);
+  const windowedUps = useRef<number>(0);
+  const lastSeriesMs = useRef<number>(0);
 
   const pushTxn = useCallback((row: TxnRow) => {
     setHasActivity(true);
@@ -71,9 +82,20 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
     c.disputes += delta.disputes ?? 0;
     c.settlements += delta.settlements ?? 0;
     c.errors += delta.errors ?? 0;
-    const elapsed = Math.max(1, Date.now() - startMs.current);
-    const ups = rateReport(c, elapsed).updatesPerSec;
-    setTpsSeries((cur) => [...cur, Math.round(ups)].slice(-MAX_SERIES));
+
+    // Live rate over a short trailing window (refs only — no per-bump re-render).
+    const now = Date.now();
+    const w = rateWindow.current;
+    w.push({ t: now, u: c.updates });
+    while (w.length > 1 && now - w[0].t > RATE_WINDOW_MS) w.shift();
+    const spanSec = (now - w[0].t) / 1000;
+    windowedUps.current = spanSec > 0 ? (c.updates - w[0].u) / spanSec : 0;
+
+    // Throttle the series re-render; the loop bumps far faster than the eye needs.
+    if (now - lastSeriesMs.current >= SERIES_THROTTLE_MS) {
+      lastSeriesMs.current = now;
+      setTpsSeries((cur) => [...cur, Math.round(windowedUps.current)].slice(-MAX_SERIES));
+    }
   }, []);
 
   const setActive = useCallback((n: number) => setBotsRunning(n), []);
@@ -85,8 +107,10 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
 
     const elapsed = Math.max(1, Date.now() - startMs.current);
     const localRate = rateReport(hasActivity ? counters.current : newCounters(), elapsed);
+    // Display the windowed (live) updates/sec, not the lifetime average.
+    const liveUps = hasActivity ? windowedUps.current : 0;
     return {
-      rate: { ...localRate, updatesPerSec: displayUpdatesPerSec(backend, localRate.updatesPerSec) },
+      rate: { ...localRate, updatesPerSec: displayUpdatesPerSec(backend, liveUps) },
       txns: liveOnchainTxns(backend, hasActivity ? txns : []),
       localTxns: hasActivity ? localTxns : [],
       deposits: PLACEHOLDER_SNAPSHOT.deposits,

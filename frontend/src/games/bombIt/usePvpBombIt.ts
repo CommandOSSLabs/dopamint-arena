@@ -16,19 +16,31 @@ import { deriveView, type BombItView } from "./session-core";
 const STAKE = 500n; // per-seat MIST
 const STEP_MS = 250; // pacing between ticks (ms)
 
-export type PvpStatus = "idle" | "matching" | "funding" | "playing" | "settling" | "settled" | "error";
+export type PvpStatus =
+  | "idle"
+  | "matching"
+  | "funding"
+  | "playing"
+  | "settling"
+  | "settled"
+  | "disconnected"
+  | "error";
 
 export interface PvpBombIt {
   status: PvpStatus;
   role: Role | null;
-  /** The active match code, shown on the waiting screen so the opener can share it. */
-  code: string | null;
+  /** Per-seat stake (MIST); surfaced in the outcome banner as the on-chain payout. */
+  stake: number;
+  /** Auto mode for YOUR seat: on (default) = a bot plays it; off = you play. The opponent
+   *  toggles their own seat independently — both on = bot-vs-bot, both off = human-vs-human. */
+  auto: boolean;
   view: BombItView | null;
   winner: "A" | "B" | "draw" | null;
   error: string | null;
-  create: (code: string) => void;
-  join: (code: string) => void;
+  /** Join the public queue; paired with the next player who also clicks Find Match. */
+  findMatch: () => void;
   queueAction: (a: BombItAction) => void;
+  toggleAuto: () => void;
   reset: () => void;
 }
 
@@ -69,10 +81,11 @@ export function usePvpBombIt(): PvpBombIt {
 
   const [status, setStatus] = useState<PvpStatus>("idle");
   const [role, setRole] = useState<Role | null>(null);
-  const [code, setCode] = useState<string | null>(null);
   const [view, setView] = useState<BombItView | null>(null);
   const [winner, setWinner] = useState<"A" | "B" | "draw" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [auto, setAutoState] = useState(true);
+  const autoRef = useRef(true);
 
   const mpRef = useRef<MpClient | null>(null);
   const dtRef = useRef<DistributedTunnel<BombItState, BombItMove> | null>(null);
@@ -103,8 +116,15 @@ export function usePvpBombIt(): PvpBombIt {
       if (dtNow.protocol.isTerminal(dtNow.state)) return;
       if (turn(dtNow.nonce) !== myRoleNow) return;
 
-      const action = nextActionRef.current;
-      nextActionRef.current = "stay"; // consume; idle default is stay
+      // Auto → a bot proposes this seat's move; manual → your queued action (idle = stay).
+      let action: BombItAction;
+      if (autoRef.current) {
+        const botMove = dtNow.protocol.randomMove?.(dtNow.state, myRoleNow, Math.random);
+        action = (myRoleNow === "A" ? botMove?.a : botMove?.b) ?? "stay";
+      } else {
+        action = nextActionRef.current;
+        nextActionRef.current = "stay";
+      }
       const move: BombItMove = myRoleNow === "A" ? { a: action } : { b: action };
       try {
         dtNow.propose(move, 0n);
@@ -124,11 +144,12 @@ export function usePvpBombIt(): PvpBombIt {
     dtRef.current = null;
     roleRef.current = null;
     nextActionRef.current = "stay";
+    autoRef.current = true;
+    setAutoState(true);
     settlingRef.current = false;
     transcriptRef.current = null;
     setStatus("idle");
     setRole(null);
-    setCode(null);
     setView(null);
     setWinner(null);
     setError(null);
@@ -147,11 +168,12 @@ export function usePvpBombIt(): PvpBombIt {
     };
   }, []);
 
-  /** Shared matchmaking + lifecycle for both create and join. */
-  const startMatch = useCallback(
-    (code: string) => {
+  /** Public auto-matchmaking + match lifecycle. Both players join the same queue and are paired. */
+  const findMatch = useCallback(
+    () => {
       if (!account) {
         setError("connect a wallet first");
+        setStatus("error");
         return;
       }
       const wallet = account.address;
@@ -164,15 +186,19 @@ export function usePvpBombIt(): PvpBombIt {
       (async () => {
         try {
           setError(null);
-          setCode(code.trim().toUpperCase());
           setStatus("matching");
           const ephemeral: KeyPair = generateKeyPair();
           const mp = new MpClient(resolveMpWsUrl(resolveBackendUrl()), wallet, ephemeral);
           mpRef.current = mp;
+          // An unexpected relay drop can't be rejoined (no rejoin-by-matchId) — surface a
+          // clear "connection lost" state rather than stalling, unless we already settled.
+          mp.onClose = () =>
+            setStatus((s) =>
+              s === "settled" || s === "settling" || s === "error" ? s : "disconnected",
+            );
           await mp.connect();
 
-          const gameKey = "bomb-it:" + code.trim().toUpperCase();
-          const match = await mp.quickMatch(gameKey);
+          const match = await mp.quickMatch("bomb-it");
           roleRef.current = match.role;
           setRole(match.role);
 
@@ -261,13 +287,16 @@ export function usePvpBombIt(): PvpBombIt {
     [account, client, signAndExecute, maybePropose],
   );
 
-  const create = useCallback((code: string) => startMatch(code), [startMatch]);
-  const join = useCallback((code: string) => startMatch(code), [startMatch]);
   const queueAction = useCallback((a: BombItAction) => {
     nextActionRef.current = a;
   }, []);
+  const toggleAuto = useCallback(() => {
+    autoRef.current = !autoRef.current;
+    nextActionRef.current = "stay";
+    setAutoState(autoRef.current);
+  }, []);
 
-  return { status, role, code, view, winner, error, create, join, queueAction, reset };
+  return { status, role, stake: Number(STAKE), auto, view, winner, error, findMatch, queueAction, toggleAuto, reset };
 }
 
 /** Exchange root-anchored settlement halves over the relay, then seat A submits the close via the
