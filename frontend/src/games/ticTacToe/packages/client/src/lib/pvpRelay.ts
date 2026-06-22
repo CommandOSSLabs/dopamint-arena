@@ -15,6 +15,10 @@ export interface RelayTransport {
 const dec = new TextDecoder();
 const enc = new TextEncoder();
 
+/**
+ * @deprecated Use `MpClient` from `@/pvp/mpClient`, which adds the reconnect/resume loop. ttt/caro
+ * migrated off `RelayClient`; this class is kept (not deleted) for reference and lower-risk rollback.
+ */
 /** One authenticated relay connection for a player. */
 export class RelayClient {
   private ws: WebSocket;

@@ -81,6 +81,10 @@ export type PeerMessage =
       transcriptRoot: string;
       sig: string;
     }
+  | { t: "opened"; tunnelId: string }
+  | { t: "settle"; sig: string; root: string }
+  | { t: "closed"; digest: string }
+  | { t: "stop" }
   | { t: "frame"; data: string };
 
 /** Engine transport + a peer-message side channel, both over one match's relay. */
