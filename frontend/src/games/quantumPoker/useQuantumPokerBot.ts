@@ -4,6 +4,7 @@ import {
   useSignAndExecuteTransaction,
   useSuiClient,
 } from "@mysten/dapp-kit";
+import { useTelemetry, type TelemetryWriter } from "../../telemetry/TelemetryProvider";
 import { createParticipant } from "sui-tunnel-ts/core/keys";
 import { OffchainTunnel } from "sui-tunnel-ts/core/tunnel";
 import { Transcript } from "sui-tunnel-ts/proof/transcript";
@@ -59,6 +60,7 @@ export interface QuantumPokerBotSession {
 }
 
 interface BotDeps {
+  report: TelemetryWriter;
   account: { address: string } | null;
   client: unknown;
   signExec: SignExec;
@@ -92,6 +94,8 @@ class BotSession {
   private transcript: Transcript | null = null;
   private botA: PokerSeatBot | null = null;
   private botB: PokerSeatBot | null = null;
+  private txnId = 0;
+  private oppName = "Bot";
   private tunnelId = "";
   private createdAt = 0n;
   private ts = 1n;
@@ -202,13 +206,24 @@ class BotSession {
           randomPokerPersona(Math.random),
           LIVE_BOT_CONTEXT,
         );
+        const oppProfile = randomPokerPersona(Math.random);
+        this.oppName = oppProfile.name;
         this.botB = makeSeatBot(
           "B",
           STAKE,
           HAND_CAP,
-          randomPokerPersona(Math.random),
+          oppProfile,
           LIVE_BOT_CONTEXT,
         );
+        this.deps?.report.pushLocalTxn({
+          id: ++this.txnId,
+          game: "quantum-poker",
+          time: new Date().toLocaleTimeString("en-GB"),
+          bot: `You vs ${this.oppName}`,
+          type: "open tunnel",
+          status: "Success",
+          amount: "",
+        });
         this.status = "playing";
         this.emit();
         void this.drive(myGen);
@@ -269,7 +284,7 @@ class BotSession {
     this.status = "settling";
     this.emit();
     try {
-      await settlePokerTunnel({
+      const settled = await settlePokerTunnel({
         tunnel,
         transcript,
         tunnelId: this.tunnelId,
@@ -277,6 +292,15 @@ class BotSession {
         fallbackSignExec: deps.signExec,
       });
       if (this.gen !== myGen) return;
+      this.deps?.report.pushLocalTxn({
+        id: ++this.txnId,
+        game: "quantum-poker",
+        time: new Date().toLocaleTimeString("en-GB"),
+        bot: `You vs ${this.oppName}`,
+        type: "settled",
+        status: "Success",
+        amount: settled.proofUrl ? "walrus ✓" : "closed",
+      });
       this.status = "settled";
       this.emit();
     } catch (e) {
@@ -305,8 +329,10 @@ export function useQuantumPokerBot(windowId: string): QuantumPokerBotSession {
   const account = useCurrentAccount();
   const client = useSuiClient();
   const { mutateAsync } = useSignAndExecuteTransaction();
+  const { report } = useTelemetry();
   const session = getSession(windowId);
   session.deps = {
+    report,
     account,
     client,
     signExec: (async (tx) => {

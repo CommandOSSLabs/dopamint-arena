@@ -156,6 +156,7 @@ class AutoSession {
   private balancesLoaded = false;
 
   private tunnel: PokerTunnel | null = null;
+  private txnId = 0;
 
   private auto = false;
   private stage: "opening" | "playing" | "settling" = "opening";
@@ -449,6 +450,15 @@ class AutoSession {
       this.tunnel = tunnel;
       this.deps.report.bumpCounters({ tunnelsOpened: 1 });
       this.deps.report.setActive(2);
+      this.deps.report.pushLocalTxn({
+        id: ++this.txnId,
+        game: "quantum-poker",
+        time: new Date().toLocaleTimeString("en-GB"),
+        bot: `${this.personas?.a ?? "Bot A"} vs ${this.personas?.b ?? "Bot B"}`,
+        type: "open tunnel",
+        status: "Success",
+        amount: "",
+      });
 
       this.stage = "playing";
       this.pushView();
@@ -505,12 +515,21 @@ class AutoSession {
       this.pushView();
       this.deps.report.bumpCounters({ tunnelsClosed: 1, settlements: 1 });
       this.deps.report.setActive(0);
-      await settlePokerTunnel({
+      const settled = await settlePokerTunnel({
         tunnel,
         transcript,
         tunnelId,
         createdAt,
         fallbackSignExec: this.botSignExec(this.bots.A),
+      });
+      this.deps?.report.pushLocalTxn({
+        id: ++this.txnId,
+        game: "quantum-poker",
+        time: new Date().toLocaleTimeString("en-GB"),
+        bot: `${this.personas?.a ?? "Bot A"} vs ${this.personas?.b ?? "Bot B"}`,
+        type: `settled · ${HAND_CAP} hands`,
+        status: "Success",
+        amount: settled.proofUrl ? "walrus ✓" : "closed",
       });
       if (this.gen !== myGen) return;
 
