@@ -1,4 +1,3 @@
-// frontend/src/games/ticTacToe/packages/client/src/scenes/PvpScene.tsx
 import { useState } from "react";
 import {
   usePvpTicTacToe,

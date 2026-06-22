@@ -1,4 +1,3 @@
-// frontend/src/games/ticTacToe/packages/client/src/components/CaroBoard.tsx
 import { winningLine } from "@ttt/shared";
 
 // Caro board: a fit-to-card size×size grid. Marks: 1 = X (✕), 2 = O (◯). The last move is
