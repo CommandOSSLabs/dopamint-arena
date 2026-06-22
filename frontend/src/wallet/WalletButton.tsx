@@ -1,4 +1,5 @@
 import { ConnectModal, useSuiClientContext } from "@mysten/dapp-kit";
+import { isEnokiWallet } from "@mysten/enoki";
 import { Copy, ExternalLink, LogOut, Wallet } from "lucide-react";
 import { toast } from "sonner";
 
@@ -20,9 +21,12 @@ export function WalletButton() {
   const { network } = useSuiClientContext();
 
   if (!session.connected) {
-    // dapp-kit's wallet picker, with our own design-system trigger.
+    // dapp-kit's wallet picker, with our own design-system trigger. The filter keeps the
+    // picker to Enoki wallets only — and since RegisterEnokiWallets registers just the
+    // Google provider, that collapses to a single "Sign in with Google" entry.
     return (
       <ConnectModal
+        walletFilter={isEnokiWallet}
         trigger={
           <Button size="sm">
             <Wallet />
