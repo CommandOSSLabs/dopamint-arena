@@ -1,6 +1,8 @@
 /**
  * Pixel Duel protocol: Battleship-Monochrome — a two-seat staked paint duel that
- * runs entirely over a tunnel (1 paint = 1 co-signed move). See ADR 0011.
+ * runs entirely over a tunnel (1 paint = 1 co-signed move). See ADR 0010.
+ * Used by the agent FLEET's commit-reveal duel (agentEngine + duelKit); the
+ * in-browser UI duel runs on the simpler PixelPaintProtocol (pixelPaint.ts).
  *
  * Each seat is forced (CLIENT-side) to a single color — A = Sui blue (14), B =
  * pink (5) — and holds a SECRET ~10×10 template placed at a random board location.
@@ -10,7 +12,7 @@
  * DIFFERENT secret templates still produce IDENTICAL bytes every move — the
  * property that lets the tunnel co-sign without leaking either template.
  *
- * Two layers, kept strictly apart (ADR 0011 §1):
+ * Two layers, kept strictly apart (ADR 0010 §1):
  *  - PROTOCOL (this file, public, co-signed): the paint/own/lock mechanic
  *    borrowed behavior-identical from `pixel_paint.war.v1`, the two 32-byte
  *    template commitments, and the commit-reveal-scoring terminal.
@@ -52,7 +54,7 @@ export const NUM_COLORS = 16;
 export const COLOR_A = 14;
 export const COLOR_B = 5;
 
-/** Board geometry and pacing defaults (ADR 0011 §7). */
+/** Board geometry and pacing defaults (ADR 0010 §7). */
 export const WIDTH = 48;
 export const HEIGHT = 40;
 export const OVERWRITE_LIMIT = 3;
@@ -94,7 +96,7 @@ export interface PixelDuelConfig {
    * `computeCommitment(template, salt)`). For the vs-bot / bot-vs-bot driver the
    * driver knows both, so it passes both here. A ZERO32 (or omitted) commit is the
    * un-committed sentinel — a reveal against it is rejected, which is the PvP
-   * pre-commit boundary (PvP commit-as-a-move is out of scope, ADR 0011 §6).
+   * pre-commit boundary (PvP commit-as-a-move is out of scope, ADR 0010 §6).
    */
   templateCommitA?: Uint8Array;
   templateCommitB?: Uint8Array;
@@ -340,7 +342,7 @@ export class PixelDuelProtocol
    * decide the winner, shift the stake, and settle (phase → over).
    *
    * A reveal whose `(template, salt)` does not match the seat's commitment throws,
-   * so the honest party simply never co-signs it — the dispute path of ADR 0011 §8.
+   * so the honest party simply never co-signs it — the dispute path of ADR 0010 §8.
    */
   private applyReveal(
     state: PixelDuelState,

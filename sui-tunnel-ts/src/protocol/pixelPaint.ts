@@ -1,5 +1,7 @@
 /**
  * Pixel Paint protocol: a two-painter pixel-canvas tunnel with three modes.
+ * Used by the UI duel (usePaintDuel/usePaintDuelOnchain) + the scene kit; the
+ * fleet's commit-reveal duel uses the separate PixelDuelProtocol (pixelDuel.ts).
  *
  * One canvas, two painters, no turns (either party may paint any cell at any
  * time, like the chat protocol). Every accepted move increments both `placed`

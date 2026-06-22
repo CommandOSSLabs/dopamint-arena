@@ -1,7 +1,7 @@
 /**
  * Pixel Duel kit: two design-bots wage the public paint/own/lock war while each
  * holds a SECRET binary-mask template, then reveal at terminal so the protocol
- * can score coverage (see sui-tunnel-ts/protocol/pixelDuel.ts and ADR 0011).
+ * can score coverage (see sui-tunnel-ts/protocol/pixelDuel.ts and ADR 0010).
  *
  * The kit owns BOTH templates + salts (the bot-vs-bot driver case): it commits
  * them up front, hands the protocol the two commitments, and gives each seat's

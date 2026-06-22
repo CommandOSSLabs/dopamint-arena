@@ -1,13 +1,6 @@
 /**
  * Agent behaviors (Deliverable 9): each maps to a tunnel protocol the agent plays.
  * payment = payment spammer, blackjack/poker/tictactoe = game players, chat = chat spammer.
- *
- * NOTE: there is deliberately NO `pixelduel` behavior. PixelDuelProtocol can't be
- * constructed without BOTH template commitments, which exist only after the two
- * seats run their commit-reveal handshake. A behavior here takes no commits, so it
- * couldn't build a valid duel protocol. The fleet engine instead builds the duel
- * protocol INLINE once both commits are exchanged (frontend agentEngine.ts duel
- * path, gated on spec.commitReveal); behaviors.ts stays commit-free.
  */
 
 import { Protocol } from "../protocol/Protocol";
