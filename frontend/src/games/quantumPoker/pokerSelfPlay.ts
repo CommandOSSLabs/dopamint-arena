@@ -58,7 +58,7 @@ export interface PokerLegalActions {
   canFold: boolean;
   canCheck: boolean;
   canCall: boolean;
-  /** MIST needed to call (clamped to the effective stack). */
+  /** MIST needed to call (must equal toCall; no partial calls allowed by the protocol). */
   callAmount: bigint;
   /** Minimum legal `bet` move amount (raise increment); 0n if no raise is possible. */
   minBet: bigint;
@@ -79,12 +79,11 @@ export function legalPokerActions(
   const effStack = s.balanceA < s.balanceB ? s.balanceA : s.balanceB;
   const available = effStack - myTotal > 0n ? effStack - myTotal : 0n;
   const toCall = oppStreet > myStreet ? oppStreet - myStreet : 0n;
-  const callAmount = toCall <= available ? toCall : available;
   return {
     canFold: true,
     canCheck: toCall === 0n,
-    canCall: toCall > 0n && available > 0n,
-    callAmount,
+    canCall: toCall > 0n && available >= toCall,
+    callAmount: toCall,
     minBet: available > toCall ? toCall + 1n : 0n,
     maxBet: available,
   };
