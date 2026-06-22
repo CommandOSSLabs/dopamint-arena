@@ -21,7 +21,7 @@ import { coSignedToSettleRequest } from "../../backend/settleRequest";
 import { makeKeypairSponsoredSignExec } from "../../onchain/sponsor";
 import {
   DOPAMINT_COIN_TYPE,
-  faucetDopamint,
+  ensureDopamintStakeCoin,
   isDopamintConfigured,
 } from "../../onchain/dopamint";
 import {
@@ -273,41 +273,6 @@ class AutoSession {
     });
   }
 
-  /** Ensure `bot` holds a single DOPAMINT coin >= `need`; faucet (sponsored) and re-read if short.
-   *  Returns the coin id to stake. Self-play funds BOTH seats from this one coin, so `need` is the
-   *  total (2× per-seat). */
-  private async ensureBotDopamint(
-    bot: BattleshipBot,
-    need: bigint,
-  ): Promise<string> {
-    const client = this.deps?.client as unknown as {
-      getCoins(i: {
-        owner: string;
-        coinType: string;
-      }): Promise<{ data: { coinObjectId: string; balance: string }[] }>;
-    };
-    const read = async () =>
-      (await client.getCoins({ owner: bot.address, coinType: DOPAMINT_COIN_TYPE }))
-        .data;
-    const pick = (coins: { coinObjectId: string; balance: string }[]) =>
-      coins.find((c) => BigInt(c.balance) >= need);
-
-    let coin = pick(await read());
-    if (!coin) {
-      await faucetDopamint({
-        signExec: this.botSponsoredSignExec(bot),
-        recipient: bot.address,
-      });
-      // suix_getCoins can lag the executed mint; poll briefly until the coin is indexed.
-      for (let i = 0; i < 8 && !coin; i++) {
-        coin = pick(await read());
-        if (!coin) await new Promise((r) => setTimeout(r, 600));
-      }
-    }
-    if (!coin) throw new Error("bot DOPAMINT faucet did not yield enough to stake");
-    return coin.coinObjectId;
-  }
-
   refreshBalances = async () => {
     const client = this.deps?.client;
     if (!client) return;
@@ -521,7 +486,12 @@ class AutoSession {
         coinType,
         // Self-play funds both seats from one coin, so faucet/select for the 2-seat total.
         stakeCoinId: dopamintOn
-          ? await this.ensureBotDopamint(this.bots.A, 2n * stakePerSeat)
+          ? await ensureDopamintStakeCoin({
+              client: this.deps.client as never,
+              signExec: this.botSponsoredSignExec(this.bots.A),
+              owner: this.bots.A.address,
+              need: 2n * stakePerSeat,
+            })
           : undefined,
       });
       if (this.gen !== myGen) return;
