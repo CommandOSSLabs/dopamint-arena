@@ -31,21 +31,17 @@ jobs:
   move:
     name: Move contracts
     runs-on: ubuntu-latest
-    # Bump to an existing release tag if the download 404s.
-    env:
-      SUI_VERSION: testnet-v1.39.3
+    # Use the same pinned sui-tools image as test.yml's move-tests. The previous
+    # downloaded CLI (testnet-v1.39.3) was too old to resolve the implicit Sui
+    # framework for edition-2024 sources, so every `sui::*` use was unbound.
+    container:
+      image: mysten/sui-tools:mainnet-v1.72.5@sha256:a8fd60e532c586bdfded5159bc9338f89feb789bbfe39e2ebdc713f56567cf05
+    defaults:
+      run:
+        working-directory: sui_tunnel
     steps:
       - uses: actions/checkout@v4
-      - name: Install Sui CLI
-        run: |
-          set -euo pipefail
-          url="https://github.com/MystenLabs/sui/releases/download/${SUI_VERSION}/sui-${SUI_VERSION}-ubuntu-x86_64.tgz"
-          curl -fsSL "$url" -o sui.tgz
-          mkdir -p sui-bin && tar -xzf sui.tgz -C sui-bin
-          sudo mv "$(find sui-bin -type f -name sui | head -1)" /usr/local/bin/sui
-          sui --version
       - name: Build & test
-        working-directory: sui_tunnel
         run: |
           sui move build
           sui move test
