@@ -318,23 +318,50 @@ export default function PlayerBot() {
   // localStorage), so opening a 2nd blackjack window double-funds and races the same
   // keypair on tunnel-open — one window wins, the others error. The desktop seeds one
   // window per game; concurrent same-game windows are not supported here.
+  const autoEvenedRef = useRef(false);
   const autoPilotRef = useRef(false);
   const autoStartedRef = useRef(false);
+  const autoStartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Cancel a pending auto-start if the window unmounts before the config beat elapses.
+  useEffect(
+    () => () => {
+      if (autoStartTimerRef.current) clearTimeout(autoStartTimerRef.current);
+    },
+    [],
+  );
   useEffect(() => {
     if (!account || running) return;
     if (!balancesLoaded) return;
     if (unfunded) {
+      const combined = balances.a + balances.b;
+      const diff =
+        balances.a > balances.b ? balances.a - balances.b : balances.b - balances.a;
+      // Even the bots BEFORE spending wallet SUI: if shifting half the surplus from the richer
+      // bot lifts the poorer one over the bar, do that cheap bot→bot transfer instead of a
+      // wallet top-up. Only fund when the pair is genuinely short (combined can't cover both).
+      if (
+        !autoEvenedRef.current &&
+        diff >= 4_000_000n &&
+        combined >= 2n * MIN_BOT_BALANCE_MIST
+      ) {
+        autoEvenedRef.current = true;
+        rebalance();
+        return;
+      }
       if (!autoPilotRef.current) {
         autoPilotRef.current = true;
-        void fundFromWallet(); // top up from wallet when a bot is below 0.1 SUI
+        void fundFromWallet(); // top up from wallet when the pair is genuinely short
       }
       return;
     }
+    // Funded + balanced: start after a short beat so the config screen (bot balances, any
+    // even/fund just done) is visibly shown and can be overridden before play begins —
+    // rather than jumping straight into the game.
     if (!autoStartedRef.current) {
       autoStartedRef.current = true;
-      game.startAuto();
+      autoStartTimerRef.current = setTimeout(() => game.startAuto(), 1500);
     }
-  }, [account, running, unfunded, game]);
+  }, [account, running, unfunded, balances.a, balances.b, game, rebalance]);
 
   // The hook seeds an empty view; treat "no cards yet, no game in flight" as the start screen.
   const started =
