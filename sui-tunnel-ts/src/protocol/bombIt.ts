@@ -8,6 +8,11 @@
  * cell OR drop a bomb); the other implicitly stays. Both seats stake S; balances stay
  * (S, S) and flip to (2S, 0) / (0, 2S) only on the killing tick, so
  * balanceA + balanceB === total holds for every reachable state.
+ *
+ * PvP fairness: the seed derives deterministically from the Sui-assigned tunnelId, not a
+ * commit-reveal. Safe because the grid is PUBLIC and 180°-rotationally symmetric — both seats
+ * face the same layout, the tunnelId cannot be ground, and there is no hidden state to bias.
+ * Commit-reveal is reserved for hidden-information games (see docs/decisions/0010).
  */
 import {
   Protocol,
