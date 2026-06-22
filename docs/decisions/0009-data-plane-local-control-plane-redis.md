@@ -84,10 +84,10 @@ settlement, so we persist checkpoints, **not** moves.
 - **Realizing the local path needs two follow-ups, each its own ADR:** (a) an
   **affinity mechanism** to co-locate both seats (local-first matchmaking and/or an
   owner-home routing token), and (b) a **resume protocol** so a dropped socket
-  reattaches to its match (today there is none — a mid-game drop abandons the
-  match and recovery is punted to the chain). Both are *optimizations and
-  robustness* layered on this partition, not preconditions for it: until they land,
-  a split match still works correctly over the pub/sub fallback.
+  reattaches to its match (now specified in [ADR-0010](0010-mp-resume-protocol.md);
+  affinity/re-homing remains deferred to a future ADR-0011). Both are *optimizations
+  and robustness* layered on this partition, not preconditions for it: until they
+  land, a split match still works correctly over the pub/sub fallback.
 - **One coupling to design around:** the per-connection match cache means a
   surviving peer won't observe a re-bound conn ref on the other seat; the resume
   ADR owns cache invalidation (generation bump or a targeted bus rebind signal).
@@ -104,6 +104,7 @@ settlement, so we persist checkpoints, **not** moves.
 - **Affinity mechanism** (own ADR): local-first pairing vs owner-home routing
   token vs hybrid; and the ingress it pins against (plain ALB app-cookie stickiness
   vs a WS gateway we control).
-- **Resume protocol** (own ADR): `resume { matchId, resumeToken }`, server-side
-  conn rebind, peer-cache invalidation, FE reconnect loop, and owner-death
-  re-homing via a Redis CAS on `owner_instance_id`.
+- **Resume protocol** (specified in [ADR-0010](0010-mp-resume-protocol.md)):
+  `ConnRef` rebind, peer-cache invalidation, FE reconnect loop. Owner-death
+  re-homing via a Redis CAS on `owner_instance_id` is deferred to a future
+  ADR-0011 (affinity).

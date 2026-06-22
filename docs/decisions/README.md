@@ -36,3 +36,6 @@ that depends on them. An ADR captures the decision and the reasoning so the
   single-owned per-move state (relay, counters, routing cache) in-process; shared
   state (matchmaking, presence, match record, checkpoints, stats) on atomic Redis.
   Refines 0005; demotes its per-frame `SPUBLISH` to a fallback.
+- [0010](0010-mp-resume-protocol.md) — MP resume: atomic `ConnRef` rebind,
+  event-driven peer-cache eviction, peer-to-peer state reconciliation; on-chain
+  settlement is the floor. Affinity/re-homing deferred to ADR-0011.
