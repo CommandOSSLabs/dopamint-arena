@@ -26,10 +26,12 @@ const GAME_LABEL: Record<string, string> = {
   "bomb-it": "Bomb It",
   "chicken-cross": "Chicken Cross",
   "pixel-paint": "Pixel Wall",
+  "pixel-duel": "Pixel Duel",
 };
 
-// The game whose TPS we highlight — Pixel Wall, the high-throughput paint game.
-const HIGHLIGHT_GAME = "pixel-paint";
+// The game whose TPS we highlight — Pixel Duel, the high-throughput paint duel
+// (the local duel + fleet register sessions under "pixel-duel").
+const HIGHLIGHT_GAME = "pixel-duel";
 
 /** Collapse a backend perGame key to its base game id: clients register sessions
  *  under noisy keys ("blackjack-0-1782…", "chicken-cross:DRUF", "quantum_poker"),
