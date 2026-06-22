@@ -647,7 +647,12 @@ class AutoSession {
       this.endRun("stopped");
       return;
     }
-    if (this.balances.a < MIN_PLAY_MIST || this.balances.b < MIN_PLAY_MIST) {
+    // DOPAMINT mode: gas is sponsored and the stake is faucet-minted, so the bots can't run out —
+    // skip the SUI-gas gate that would otherwise end the run (their SUI balance is 0).
+    if (
+      !isDopamintConfigured &&
+      (this.balances.a < MIN_PLAY_MIST || this.balances.b < MIN_PLAY_MIST)
+    ) {
       this.endRun("funds");
       return;
     }

@@ -180,6 +180,28 @@ function Centered({ children }: { children: ReactNode }) {
   );
 }
 
+/** Every mode renders inside this: a persistent top-left button back to mode select, over the
+ *  mode's own UI — so there's always a way out, whatever state the game is in. */
+function ModeFrame({
+  onBack,
+  children,
+}: {
+  onBack: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <div className="relative h-full w-full">
+      <button
+        onClick={onBack}
+        className="absolute left-2 top-2 z-30 rounded-full border border-cyan-500/40 bg-cyan-950/60 px-3 py-1 text-xs font-semibold text-cyan-300 backdrop-blur transition-colors hover:border-cyan-400 hover:bg-cyan-500/10"
+      >
+        ← Back
+      </button>
+      {children}
+    </div>
+  );
+}
+
 function ErrorPane({
   error,
   onBack,
@@ -223,35 +245,32 @@ function BotGame({
     setDifficulty(difficulty);
   }, [difficulty, setDifficulty]);
 
+  const back = () => {
+    reset();
+    onExit();
+  };
+  let content: ReactNode;
   if (status === "error") {
-    return (
-      <ErrorPane
-        error={error}
-        onBack={() => {
-          reset();
-          onExit();
-        }}
-      />
-    );
-  }
-  if (status === "funding") {
-    return (
+    content = <ErrorPane error={error} onBack={back} />;
+  } else if (status === "funding") {
+    content = (
       <Centered>
         Opening + funding the tunnel on-chain… approve in your wallet.
       </Centered>
     );
+  } else if (!view || status === "idle" || status === "placing") {
+    content = <PlacementBoard onReady={startBattle} />;
+  } else {
+    content = (
+      <BattleView
+        view={view}
+        statusLabel={settleLabel(status)}
+        onFire={fire}
+        onPlayAgain={reset}
+      />
+    );
   }
-  if (!view || status === "idle" || status === "placing") {
-    return <PlacementBoard onReady={startBattle} />;
-  }
-  return (
-    <BattleView
-      view={view}
-      statusLabel={settleLabel(status)}
-      onFire={fire}
-      onPlayAgain={reset}
-    />
-  );
+  return <ModeFrame onBack={back}>{content}</ModeFrame>;
 }
 
 function PvpGame({
@@ -264,22 +283,17 @@ function PvpGame({
   const { status, view, error, opponentWallet, findMatch, fire, reset } =
     useBattleshipPvp(windowId);
 
+  const back = () => {
+    reset();
+    onExit();
+  };
+  let content: ReactNode;
   if (status === "error") {
-    return (
-      <ErrorPane
-        error={error}
-        onBack={() => {
-          reset();
-          onExit();
-        }}
-      />
-    );
-  }
-  if (status === "idle") {
-    return <PlacementBoard onReady={findMatch} ctaLabel="Find Match" />;
-  }
-  if (status === "matching" || status === "funding" || !view) {
-    return (
+    content = <ErrorPane error={error} onBack={back} />;
+  } else if (status === "idle") {
+    content = <PlacementBoard onReady={findMatch} ctaLabel="Find Match" />;
+  } else if (status === "matching" || status === "funding" || !view) {
+    content = (
       <Centered>
         <div>
           {status === "matching"
@@ -293,18 +307,17 @@ function PvpGame({
         )}
       </Centered>
     );
+  } else {
+    content = (
+      <BattleView
+        view={view}
+        statusLabel={settleLabel(status)}
+        onFire={fire}
+        onPlayAgain={back}
+      />
+    );
   }
-  return (
-    <BattleView
-      view={view}
-      statusLabel={settleLabel(status)}
-      onFire={fire}
-      onPlayAgain={() => {
-        reset();
-        onExit();
-      }}
-    />
-  );
+  return <ModeFrame onBack={back}>{content}</ModeFrame>;
 }
 
 function AutoGame({
@@ -328,19 +341,15 @@ function AutoGame({
     reset,
   } = useBattleshipAuto(windowId);
 
+  const back = () => {
+    reset();
+    onExit();
+  };
+  let content: ReactNode;
   if (status === "error") {
-    return (
-      <ErrorPane
-        error={error}
-        onBack={() => {
-          reset();
-          onExit();
-        }}
-      />
-    );
-  }
-  if (status === "idle" || status === "funding") {
-    return (
+    content = <ErrorPane error={error} onBack={back} />;
+  } else if (status === "idle" || status === "funding") {
+    content = (
       <AutoSetup
         balances={balances}
         funded={funded}
@@ -349,14 +358,14 @@ function AutoGame({
         onFund={fund}
         onFundFromWallet={fundFromWallet}
         onStart={startAuto}
-        onBack={onExit}
       />
     );
+  } else if (!view) {
+    content = <Centered>Opening the first match on-chain…</Centered>;
+  } else {
+    content = <AutoBattleView view={view} onStop={stopAuto} onReset={reset} />;
   }
-  if (!view) {
-    return <Centered>Opening the first match on-chain…</Centered>;
-  }
-  return <AutoBattleView view={view} onStop={stopAuto} onReset={reset} />;
+  return <ModeFrame onBack={back}>{content}</ModeFrame>;
 }
 
 /** MIST → a short SUI string. */
@@ -371,7 +380,6 @@ function AutoSetup({
   onFund,
   onFundFromWallet,
   onStart,
-  onBack,
 }: {
   balances: { a: bigint; b: bigint };
   funded: boolean;
@@ -380,7 +388,6 @@ function AutoSetup({
   onFund: () => void;
   onFundFromWallet: () => void;
   onStart: (a: BotDifficulty, b: BotDifficulty) => void;
-  onBack: () => void;
 }) {
   const [a, setA] = useState<BotDifficulty>("normal");
   const [b, setB] = useState<BotDifficulty>("hard");
@@ -435,12 +442,6 @@ function AutoSetup({
           className="rounded-full bg-cyan-400 px-4 py-2 text-sm font-semibold text-black shadow-[0_0_12px_rgba(34,211,238,0.3)] transition-colors hover:bg-cyan-300 disabled:cursor-not-allowed disabled:opacity-50"
         >
           Start Auto-play
-        </button>
-        <button
-          onClick={onBack}
-          className="rounded-full border border-cyan-500/40 bg-cyan-950/40 px-4 py-2 text-sm font-semibold text-cyan-300 transition-colors hover:border-cyan-400 hover:bg-cyan-500/10"
-        >
-          Back
         </button>
       </div>
       {!funded && (
