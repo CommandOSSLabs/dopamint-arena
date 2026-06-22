@@ -73,12 +73,19 @@ function AppContent() {
   // Auto-Pilot flow to skip login and setup, randomize settings, fund bots, and start playing
   useEffect(() => {
     if (!isConnected) return;
-    // Under ?arena the script drives funding and game start — skip the auto-pilot here.
-    if (parseAgentConfig(window.location.href).arena) return;
+
+    const arena = parseAgentConfig(window.location.href).arena;
 
     const hasNavigated = sessionStorage.getItem("tictactoe_auto_navigated");
     if (scene === "login" && !hasNavigated) {
       sessionStorage.setItem("tictactoe_auto_navigated", "true");
+
+      // Under ?arena the injected wallet is already connected; land on setup so the
+      // script can click ttt-tab-bots / ttt-fund-wallet / ttt-start directly.
+      if (arena) {
+        setScene("setup");
+        return;
+      }
 
       const randomGameType = Math.random() > 0.5 ? "caro" : "ttt";
       const randomDifficulty = "fast";
@@ -94,6 +101,9 @@ function AppContent() {
       setScene("setup");
       return;
     }
+
+    // Under ?arena the script drives funding and game start — stop here on setup.
+    if (arena) return;
 
     if (scene === "setup") {
       if (g.phase === "funding") return;
