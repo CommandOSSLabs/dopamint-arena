@@ -9,17 +9,12 @@ import {
   useSignTransaction,
   useSuiClient,
 } from "@mysten/dapp-kit";
-import { Transaction } from "@mysten/sui/transactions";
 import {
   makeSponsoredSignExec,
   selectStakeCoin,
   type OwnedCoin,
 } from "./sponsor";
-import {
-  DOPAMINT_COIN_TYPE,
-  buildDopamintFaucet,
-  isDopamintConfigured,
-} from "./dopamint";
+import { DOPAMINT_COIN_TYPE, isDopamintConfigured } from "./dopamint";
 import type { SignExec } from "./tunnelTx";
 
 export interface SponsoredSignExec {
@@ -39,8 +34,9 @@ export interface SponsoredSignExec {
   selectStakeCoin: (minAmount: bigint) => Promise<string>;
   /**
    * DOPAMINT stake helper (ADR-0010): return a user `Coin<DOPAMINT>` object id with at least
-   * `minAmount`, auto-faucet-ing (invisibly, via the gas sponsor) if the balance is short. This is
-   * how a 0-token player funds a stake for free — gas is sponsored, the stake is fauceted DOPAMINT.
+   * `minAmount`. It does NOT faucet — the background top-up ({@link useDopamintAutoFaucet}) keeps
+   * the balance above the threshold, so the stake hot-path is just a coin lookup. Throws if the
+   * top-up hasn't landed yet (rare cold start) — the caller can retry.
    */
   prepareStake: (minAmount: bigint) => Promise<string>;
 }
@@ -51,7 +47,6 @@ interface CoinReader {
     owner: string;
     coinType?: string;
   }) => Promise<{ data: OwnedCoin[] }>;
-  waitForTransaction: (input: { digest: string }) => Promise<unknown>;
 }
 
 /**
@@ -81,28 +76,19 @@ export function useSponsoredSignExec(): SponsoredSignExec {
       signTransaction: signTransaction as never,
     });
 
+    // Hot-path stake: just pick a DOPAMINT coin big enough. No faucet/balance check here — the
+    // background top-up keeps the balance above the threshold (ADR-0010 optimization).
     const prepareStake = async (minAmount: bigint): Promise<string> => {
       if (!isDopamintConfigured) {
         throw new Error("DOPAMINT is not configured (VITE_DOPAMINT_* env)");
       }
-      const pick = (coins: OwnedCoin[]) =>
-        coins.find((c) => BigInt(c.balance) >= minAmount);
-      let coin = pick(await getDopamintCoins(sender));
+      const coin = (await getDopamintCoins(sender)).find(
+        (c) => BigInt(c.balance) >= minAmount,
+      );
       if (!coin) {
-        // Invisible auto-faucet: mint DOPAMINT to the player via the gas sponsor, then re-select.
-        const tx = new Transaction();
-        buildDopamintFaucet(tx, sender);
-        const { digest } = await signExec(tx);
-        // The fullnode's coin index lags execution, so wait for the tx and poll a few times for
-        // the freshly minted coin before giving up.
-        await reader.waitForTransaction({ digest });
-        for (let i = 0; i < 6 && !coin; i++) {
-          coin = pick(await getDopamintCoins(sender));
-          if (!coin) await new Promise((r) => setTimeout(r, 500));
-        }
-      }
-      if (!coin) {
-        throw new Error("DOPAMINT faucet did not yield enough to stake");
+        throw new Error(
+          "DOPAMINT balance not ready (auto-faucet topping up — retry in a moment)",
+        );
       }
       return coin.coinObjectId;
     };

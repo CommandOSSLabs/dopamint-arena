@@ -19,6 +19,7 @@ import {
 import { withSponsorFallback } from "../../onchain/sponsor";
 import { useSponsoredSignExec } from "../../onchain/useSponsoredSignExec";
 import { DOPAMINT_COIN_TYPE, isDopamintConfigured } from "../../onchain/dopamint";
+import { useDopamintAutoFaucet } from "../../onchain/useDopamintAutoFaucet";
 import {
   BattleshipProtocol,
   type BattleshipMove,
@@ -36,7 +37,7 @@ import {
 import { type BotDifficulty, DEFAULT_BOT_DIFFICULTY } from "./engine/bot";
 
 /** Coins locked per seat, and the amount that shifts to the winner. */
-const LOCKED_PER_SEAT = 500n;
+const LOCKED_PER_SEAT = 1_000_000_000n; // 1 DOPAMINT per seat (9 decimals)
 const STAKE = 100n;
 /** Animation pacing for the bot's automatic moves. */
 const BOT_SHOOT_MS = 550;
@@ -425,6 +426,7 @@ export function useBattleship(windowId: string): BattleshipSession {
   const client = useSuiClient();
   const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
   const sponsored = useSponsoredSignExec();
+  useDopamintAutoFaucet(); // keep DOPAMINT topped up in the background
 
   const session = getBotSession(windowId);
   session.deps = {

@@ -304,12 +304,15 @@ pub(crate) async fn settle(
             Json(serde_json::json!({ "txDigest": digest, "walrusBlobId": blob_id, "proofUrl": proof_url }))
                 .into_response()
         }
-        Err(e) => ApiError::resp(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "settle_failed",
-            &e.to_string(),
-        )
-        .into_response(),
+        Err(e) => {
+            tracing::warn!(tunnel_id = %tunnel_id, error = %e, "settle close failed");
+            ApiError::resp(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "settle_failed",
+                &e.to_string(),
+            )
+            .into_response()
+        }
     }
 }
 
