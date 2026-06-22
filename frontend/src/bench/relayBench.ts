@@ -201,6 +201,8 @@ async function main() {
   const durationMs = parseInt(process.argv[4] || "10000", 10);
   const processId = process.argv[5] || "0";
 
+  console.error(`[${processId}] starting relay bench: url=${backendUrl} tunnels=${numTunnels} duration=${durationMs}`);
+
   const url = mpUrl(backendUrl);
   const walletA = core.generateKeyPair();
   const walletB = core.generateKeyPair();
@@ -215,13 +217,20 @@ async function main() {
     walletB,
   );
 
+  console.error(`[${processId}] connecting...`);
   await Promise.all([clientA.connect(), clientB.connect()]);
+  console.error(`[${processId}] connected`);
 
   // Set up tunnels sequentially to avoid overwhelming the backend matchmaker.
+  console.error(`[${processId}] setting up ${numTunnels} tunnels...`);
   const tunnels: BenchTunnel[] = [];
   for (let i = 0; i < numTunnels; i++) {
     tunnels.push(await setupOneTunnel(clientA, clientB, i));
+    if ((i + 1) % 10 === 0 || i === numTunnels - 1) {
+      console.error(`[${processId}] setup ${i + 1}/${numTunnels} tunnels`);
+    }
   }
+  console.error(`[${processId}] setup complete, running...`);
 
   const counters = { steps: 0 };
   const errors = { count: 0 };
@@ -252,17 +261,18 @@ async function main() {
   await Promise.all([...tunnelLoops, sampleLoop]);
   const dt = (Date.now() - t0) / 1000;
 
-  console.log(
-    `PROCESS=${processId} TUNNELS=${numTunnels} STEPS_PER_S=${Math.round(
-      counters.steps / dt,
-    )} PEAK_TPS=${Math.round(peakTps)} TOTAL_STEPS=${counters.steps} ERRORS=${errors.count}`,
-  );
+  const result = `PROCESS=${processId} TUNNELS=${numTunnels} STEPS_PER_S=${Math.round(
+    counters.steps / dt,
+  )} PEAK_TPS=${Math.round(peakTps)} TOTAL_STEPS=${counters.steps} ERRORS=${errors.count}`;
+  console.log(result);
+  console.error(`[${processId}] done: ${result}`);
 
   clientA.close();
   clientB.close();
+  process.exit(0);
 }
 
 main().catch((e) => {
-  console.error(e);
+  console.error("FATAL:", e);
   process.exit(1);
 });
