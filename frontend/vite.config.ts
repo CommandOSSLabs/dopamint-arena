@@ -38,10 +38,16 @@ export default defineConfig(({ mode }) => {
         // The off-chain engine statically imports node:crypto in crypto-native.ts but
         // falls back to @noble at runtime in the browser. Map node:crypto to a stub so
         // the bundle resolves; the native path is never taken here.
-        "node:crypto": fileURLToPath(new URL("./src/shims/node-crypto.ts", import.meta.url)),
+        "node:crypto": fileURLToPath(
+          new URL("./src/shims/node-crypto.ts", import.meta.url),
+        ),
         // config.ts calls dotenv.config() at import time; stub it (env via `define`).
-        dotenv: fileURLToPath(new URL("./src/shims/dotenv.ts", import.meta.url)),
-        "sui-tunnel-ts": fileURLToPath(new URL("../sui-tunnel-ts/src", import.meta.url)),
+        dotenv: fileURLToPath(
+          new URL("./src/shims/dotenv.ts", import.meta.url),
+        ),
+        "sui-tunnel-ts": fileURLToPath(
+          new URL("../sui-tunnel-ts/src", import.meta.url),
+        ),
       },
     },
   };

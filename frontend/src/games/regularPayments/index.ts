@@ -1,5 +1,5 @@
 import { register } from "../registry";
-import { PaymentsWindow } from "./PaymentsWindow";
+import { PaymentsWindow } from "./components/PaymentsWindow";
 
 register({
   id: "regular-payments",
