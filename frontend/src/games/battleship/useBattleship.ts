@@ -16,6 +16,8 @@ import {
   openAndFundSelfPlay,
   readCreatedAt,
 } from "../../onchain/tunnelTx";
+import { withSponsorFallback } from "../../onchain/sponsor";
+import { useSponsoredSignExec } from "../../onchain/useSponsoredSignExec";
 import {
   BattleshipProtocol,
   type BattleshipMove,
@@ -69,6 +71,10 @@ interface BotDeps {
   account: { address: string } | null;
   client: unknown;
   signExec: (tx: never) => Promise<{ digest: string }>;
+  /** Backend-gas-sponsored signer (ADR-0009); falls back to signExec when the sponsor is down. */
+  sponsoredSignExec: (tx: never) => Promise<{ digest: string }>;
+  /** Pick a user coin to fund the (both-seat) stake; gas is sponsored, the stake is not. */
+  selectStakeCoin: (minAmount: bigint) => Promise<string>;
 }
 
 interface BotSnapshot {
@@ -290,14 +296,32 @@ class BotSession {
             typeof openAndFundSelfPlay
           >[0]["reads"];
           this.setStatus("funding");
-          tunnelId = await openAndFundSelfPlay({
-            reads,
-            signExec: deps.signExec as never,
-            partyA: { address: a.address, publicKey: a.keyPair.publicKey },
-            partyB: { address: b.address, publicKey: b.keyPair.publicKey },
-            aAmount: LOCKED_PER_SEAT,
-            bAmount: LOCKED_PER_SEAT,
-          });
+          const partyA = { address: a.address, publicKey: a.keyPair.publicKey };
+          const partyB = { address: b.address, publicKey: b.keyPair.publicKey };
+          // Try the backend gas sponsor (settler pays gas, both stakes split off a user coin);
+          // fall back to the wallet paying its own gas if the sponsor is unavailable. ADR-0009.
+          tunnelId = await withSponsorFallback(
+            async () =>
+              openAndFundSelfPlay({
+                reads,
+                signExec: deps.sponsoredSignExec as never,
+                partyA,
+                partyB,
+                aAmount: LOCKED_PER_SEAT,
+                bAmount: LOCKED_PER_SEAT,
+                stakeCoinId: await deps.selectStakeCoin(2n * LOCKED_PER_SEAT),
+              }),
+            () =>
+              openAndFundSelfPlay({
+                reads,
+                signExec: deps.signExec as never,
+                partyA,
+                partyB,
+                aAmount: LOCKED_PER_SEAT,
+                bAmount: LOCKED_PER_SEAT,
+              }),
+            "battleship bot open/fund",
+          );
           createdAt = await readCreatedAt(reads, tunnelId);
           onChain = true;
         }
@@ -385,6 +409,7 @@ export function useBattleship(windowId: string): BattleshipSession {
   const account = useCurrentAccount();
   const client = useSuiClient();
   const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
+  const sponsored = useSponsoredSignExec();
 
   const session = getBotSession(windowId);
   session.deps = {
@@ -397,6 +422,8 @@ export function useBattleship(windowId: string): BattleshipSession {
       const r = await signAndExecute({ transaction: tx });
       return { digest: r.digest };
     }) as never,
+    sponsoredSignExec: sponsored.signExec as never,
+    selectStakeCoin: sponsored.selectStakeCoin,
   };
 
   const snap = useSyncExternalStore(session.subscribe, session.getSnapshot);
