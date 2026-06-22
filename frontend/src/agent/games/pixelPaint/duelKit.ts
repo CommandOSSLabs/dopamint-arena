@@ -30,7 +30,7 @@ import {
 import { computeCommitment, MIN_SALT_LEN } from "sui-tunnel-ts/core/commitment";
 import { defaultStateHash } from "@/agent/stateHash";
 import { type BotContext, type GameBot, type GameKit } from "@/agent/gameKit";
-import { DESIGNS, type PixelDesign } from "../pixelPaint/designs";
+import { DESIGNS, type PixelDesign } from "./designs";
 
 /**
  * Curated designs whose raw cell count already lands in the protocol's

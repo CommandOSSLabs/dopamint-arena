@@ -22,7 +22,7 @@ import {
   makeDuelSeatMaterial,
   createDuelSeatBot,
   type DuelSeatMaterial,
-} from "./games/pixelDuel/kit";
+} from "./games/pixelPaint/duelKit";
 import type { GameBot } from "./gameKit";
 import { MpClient, resolveMpWsUrl, type PvpChannel } from "../pvp/mpClient";
 import {

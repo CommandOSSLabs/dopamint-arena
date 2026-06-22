@@ -11,7 +11,7 @@ import { verifyCommitment } from "sui-tunnel-ts/core/commitment";
 import type { ProtocolContext } from "sui-tunnel-ts/protocol/Protocol";
 import { driveToTerminal } from "@/agent/testHarness";
 import { GAME_KITS } from "@/agent/gameKit";
-import { createPixelDuelKit } from "./kit";
+import { createPixelDuelKit } from "./duelKit";
 
 function mulberry32(seed: number): () => number {
   let s = seed >>> 0;

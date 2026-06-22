@@ -35,7 +35,7 @@ import {
   makeDuelSeatMaterial,
   createDuelSeatBot,
   type DuelSeatMaterial,
-} from "./kit";
+} from "./duelKit";
 
 function mulberry32(seed: number): () => number {
   let s = seed >>> 0;

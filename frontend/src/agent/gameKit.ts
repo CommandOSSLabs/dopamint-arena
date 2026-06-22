@@ -6,7 +6,7 @@ import { createQuantumPokerKit } from "./games/quantumPoker/kit";
 import { createBombItKit } from "./games/bombIt/kit";
 import { createChickenCrossKit } from "./games/chickenCross/kit";
 import { createPixelPaintKit } from "./games/pixelPaint/kit";
-import { createPixelDuelKit } from "./games/pixelDuel/kit";
+import { createPixelDuelKit } from "./games/pixelPaint/duelKit";
 import { defaultStateHash, type StateHash } from "./stateHash";
 
 export type GameId =
