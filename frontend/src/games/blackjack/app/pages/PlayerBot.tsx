@@ -302,6 +302,11 @@ export default function PlayerBot() {
   const terminal = phase === "done" || result !== null;
   const unfunded = balances.a === 0n || balances.b === 0n;
 
+  // Auto-pilot: wallet-fund the bots once if low, then start bot-vs-bot self-play.
+  // Bots are SHARED across all blackjack windows (loadOrCreateBots reads shared
+  // localStorage), so opening a 2nd blackjack window double-funds and races the same
+  // keypair on tunnel-open — one window wins, the others error. The desktop seeds one
+  // window per game; concurrent same-game windows are not supported here.
   const autoPilotRef = useRef(false);
   const autoStartedRef = useRef(false);
   useEffect(() => {
@@ -521,7 +526,7 @@ export default function PlayerBot() {
           )}
           {unfunded && phase !== "funding" && !error && (
             <div className="text-[11px] text-zinc-500 text-center">
-              Fund the bots from the testnet faucet to begin.
+              Fund the bots from your wallet to begin.
             </div>
           )}
 

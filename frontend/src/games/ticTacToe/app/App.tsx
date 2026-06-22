@@ -77,6 +77,10 @@ function AppContent() {
   const autoFundRef = useRef(false);
 
   // Auto-pilot: skip login → setup → wallet-fund bots if low → start bot-vs-bot.
+  // Bots are SHARED across all ttt windows (loadOrCreateBots reads shared localStorage),
+  // so opening a 2nd ttt window double-funds and races the same keypair on tunnel-open —
+  // one window wins, the others error. The desktop seeds one window per game; concurrent
+  // same-game windows are not supported here.
   useEffect(() => {
     if (!isConnected) return;
 
