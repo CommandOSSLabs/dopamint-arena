@@ -11,7 +11,7 @@ use fred::prelude::*;
 use futures::TryStreamExt;
 use tokio::sync::mpsc;
 
-use super::{Bus, ConnRef, ControlStore, MpStore};
+use super::{Bus, ConnRef, ControlStore, CtrlMsg, MpStore};
 use crate::mp::ConnId;
 use crate::state::{GameStat, SessionRecord, StatsSnapshot, TunnelEvent, TunnelStatus};
 
@@ -628,20 +628,33 @@ impl MpStore for RedisMpStore {
 // ===== Bus =====
 
 // Cross-instance pub/sub payload. `Frame` is a client-bound relay frame; `Evict` tells a
-// connection task to drop a match from its relay cache. Retagged from the old flat
-// `{conn,text}` — internal to the bus, deployed together. A rolling deploy may drop a few
-// cross-instance frames mid-rollout (pubsub is a soft dependency, ADR-0005); accepted.
+// connection task to drop a match from its relay cache; `Populate` warms a connection's relay
+// cache with a freshly-created match record. Retagged from the old flat `{conn,text}` — internal
+// to the bus, deployed together. A rolling deploy may drop a few cross-instance frames mid-rollout
+// (pubsub is a soft dependency, ADR-0005); accepted.
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(tag = "k")]
 enum WireMsg {
-    Frame { conn: ConnId, text: String },
-    Evict { conn: ConnId, match_id: String },
+    Frame {
+        conn: ConnId,
+        text: String,
+    },
+    Evict {
+        conn: ConnId,
+        match_id: String,
+    },
+    Populate {
+        conn: ConnId,
+        match_id: String,
+        record: Box<crate::mp::MatchRecord>,
+    },
 }
 
-/// Redis `Bus`: local delivery/eviction hits the in-process `conns`/`ctrls` maps; remote routing
-/// SPUBLISH-es a `WireMsg` JSON (a `Frame` for client delivery or an `Evict` for relay-cache
-/// invalidation) to `mp:inst:<target.instance_id>`. Each instance runs one `SubscriberClient` that
-/// fans inbound `WireMsg`s to local sockets (`Frame`) or ctrl channels (`Evict`).
+/// Redis `Bus`: local delivery/eviction/populate hits the in-process `conns`/`ctrls` maps; remote
+/// routing SPUBLISH-es a `WireMsg` JSON (a `Frame` for client delivery, an `Evict` for relay-cache
+/// invalidation, or a `Populate` to warm a relay cache) to `mp:inst:<target.instance_id>`. Each
+/// instance runs one `SubscriberClient` that fans inbound `WireMsg`s to local sockets (`Frame`) or
+/// ctrl channels (`Evict`/`Populate`).
 ///
 /// Phase 5 wires this via `RedisBus::new(instance_id, publisher_pool)` where `instance_id` comes
 /// from `INSTANCE_ID` env and `publisher_pool` is built from `REDIS_PUBSUB_URL`.
@@ -650,7 +663,7 @@ pub struct RedisBus {
     /// Pool used for SPUBLISH. Kept separate from the cache pool (two different connection classes).
     publisher: RedisPool,
     conns: std::sync::Arc<RwLock<HashMap<ConnId, mpsc::UnboundedSender<String>>>>,
-    ctrls: std::sync::Arc<RwLock<HashMap<ConnId, mpsc::UnboundedSender<String>>>>,
+    ctrls: std::sync::Arc<RwLock<HashMap<ConnId, mpsc::UnboundedSender<CtrlMsg>>>>,
     // Holds the SubscriberClient so the connection stays alive for the lifetime of the bus.
     #[allow(dead_code)]
     _subscriber: SubscriberClient,
@@ -669,7 +682,7 @@ impl RedisBus {
         let channel = format!("mp:inst:{instance_id}");
         let conns: std::sync::Arc<RwLock<HashMap<ConnId, mpsc::UnboundedSender<String>>>> =
             Default::default();
-        let ctrls: std::sync::Arc<RwLock<HashMap<ConnId, mpsc::UnboundedSender<String>>>> =
+        let ctrls: std::sync::Arc<RwLock<HashMap<ConnId, mpsc::UnboundedSender<CtrlMsg>>>> =
             Default::default();
 
         // Derive subscriber config from the pool so both connections target the same Redis.
@@ -703,7 +716,16 @@ impl RedisBus {
                             }
                             WireMsg::Evict { conn, match_id } => {
                                 if let Some(tx) = ctrls_arc.read().unwrap().get(&conn) {
-                                    let _ = tx.send(match_id);
+                                    let _ = tx.send(CtrlMsg::Evict(match_id));
+                                }
+                            }
+                            WireMsg::Populate {
+                                conn,
+                                match_id,
+                                record,
+                            } => {
+                                if let Some(tx) = ctrls_arc.read().unwrap().get(&conn) {
+                                    let _ = tx.send(CtrlMsg::Populate(match_id, record));
                                 }
                             }
                         }
@@ -740,7 +762,7 @@ impl Bus for RedisBus {
         &self,
         conn: ConnId,
         client_tx: mpsc::UnboundedSender<String>,
-        ctrl_tx: mpsc::UnboundedSender<String>,
+        ctrl_tx: mpsc::UnboundedSender<CtrlMsg>,
     ) {
         self.conns.write().unwrap().insert(conn, client_tx);
         self.ctrls.write().unwrap().insert(conn, ctrl_tx);
@@ -777,7 +799,7 @@ impl Bus for RedisBus {
         if target.instance_id == self.instance_id {
             let tx = self.ctrls.read().unwrap().get(&target.conn_id).cloned();
             if let Some(tx) = tx {
-                let _ = tx.send(match_id.to_owned());
+                let _ = tx.send(CtrlMsg::Evict(match_id.to_owned()));
             }
         } else {
             let wire = serde_json::to_string(&WireMsg::Evict {
@@ -796,6 +818,30 @@ impl Bus for RedisBus {
     async fn publish_raw(&self, channel: &str, payload: String) {
         // Regular PUBLISH (not SPUBLISH) so the indexer subscribes with regular SUBSCRIBE.
         let _: Result<i64, _> = self.publisher.next().publish(channel, payload).await;
+    }
+
+    async fn populate(&self, target: &ConnRef, match_id: &str, rec: &crate::mp::MatchRecord) {
+        if target.instance_id == self.instance_id {
+            let tx = self.ctrls.read().unwrap().get(&target.conn_id).cloned();
+            if let Some(tx) = tx {
+                let _ = tx.send(CtrlMsg::Populate(
+                    match_id.to_owned(),
+                    Box::new(rec.clone()),
+                ));
+            }
+        } else {
+            let wire = serde_json::to_string(&WireMsg::Populate {
+                conn: target.conn_id,
+                match_id: match_id.to_owned(),
+                record: Box::new(rec.clone()),
+            })
+            .expect("WireMsg serializes");
+            let channel = format!("mp:inst:{}", target.instance_id);
+            let res: Result<i64, _> = self.publisher.next().spublish(channel, wire).await;
+            if let Err(e) = res {
+                tracing::warn!(error = %e, instance = %target.instance_id, "spublish populate failed");
+            }
+        }
     }
 }
 
@@ -850,7 +896,7 @@ mod tests {
         let bus_b = RedisBus::new("B".into(), pool_b).await.unwrap();
         let bus_a = RedisBus::new("A".into(), pool_a).await.unwrap();
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-        let (ctx, _crx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let (ctx, _crx) = tokio::sync::mpsc::unbounded_channel::<CtrlMsg>();
         let conn = uuid::Uuid::new_v4();
         bus_b.register(conn, tx, ctx);
         bus_a
@@ -878,7 +924,7 @@ mod tests {
         let bus = RedisBus::new("instA".into(), pool).await.unwrap();
         let conn = uuid::Uuid::new_v4();
         let (ctx, _crx) = tokio::sync::mpsc::unbounded_channel::<String>();
-        let (cctx, mut ccrx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let (cctx, mut ccrx) = tokio::sync::mpsc::unbounded_channel::<CtrlMsg>();
         bus.register(conn, ctx, cctx);
         // Same-instance evict routes to the ctrl channel.
         bus.evict(
@@ -889,7 +935,10 @@ mod tests {
             "m1",
         )
         .await;
-        assert_eq!(ccrx.recv().await.as_deref(), Some("m1"));
+        match ccrx.recv().await {
+            Some(CtrlMsg::Evict(id)) => assert_eq!(id, "m1"),
+            other => panic!("expected CtrlMsg::Evict(\"m1\"), got {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -902,7 +951,7 @@ mod tests {
         let bus_b = RedisBus::new("B".into(), pool_b).await.unwrap();
         let bus_a = RedisBus::new("A".into(), pool_a).await.unwrap();
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-        let (ctx, mut ccrx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let (ctx, mut ccrx) = tokio::sync::mpsc::unbounded_channel::<CtrlMsg>();
         let conn = uuid::Uuid::new_v4();
         bus_b.register(conn, tx, ctx);
         bus_a
@@ -918,10 +967,81 @@ mod tests {
             .await
             .expect("evict timed out")
             .expect("ctrl channel closed");
-        assert_eq!(
-            got, "m-evict",
-            "cross-instance evict must reach B's ctrl channel"
-        );
+        match got {
+            CtrlMsg::Evict(id) => assert_eq!(
+                id, "m-evict",
+                "cross-instance evict must reach B's ctrl channel"
+            ),
+            other => panic!("expected CtrlMsg::Evict, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn populate_signals_the_target_ctrl_channel() {
+        let (_redis, pool) = redis_fixture().await;
+        let bus = RedisBus::new("instA".into(), pool).await.unwrap();
+        let conn = uuid::Uuid::new_v4();
+        let (ctx, _crx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let (cctx, mut ccrx) = tokio::sync::mpsc::unbounded_channel::<CtrlMsg>();
+        bus.register(conn, ctx, cctx);
+        let rec = sample_match();
+        // Same-instance populate routes the freshly-created record to the ctrl channel.
+        bus.populate(
+            &ConnRef {
+                instance_id: "instA".into(),
+                conn_id: conn,
+            },
+            "m1",
+            &rec,
+        )
+        .await;
+        match ccrx.recv().await {
+            Some(CtrlMsg::Populate(id, got)) => {
+                assert_eq!(id, "m1");
+                assert_eq!(got.seat_a, rec.seat_a);
+            }
+            other => panic!("expected CtrlMsg::Populate(\"m1\", _), got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn populate_crosses_instances() {
+        // Both buses share one Redis so SPUBLISH of WireMsg::Populate on A reaches B's subscriber,
+        // which routes it to B's ctrl channel (the cross-instance relay-cache warming path).
+        let (redis, pool_b) = redis_fixture().await;
+        let port = redis.get_host_port_ipv4(6379).await.expect("redis port");
+        let pool_a = connect(&format!("redis://127.0.0.1:{port}")).await.unwrap();
+        let bus_b = RedisBus::new("B".into(), pool_b).await.unwrap();
+        let bus_a = RedisBus::new("A".into(), pool_a).await.unwrap();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let (ctx, mut ccrx) = tokio::sync::mpsc::unbounded_channel::<CtrlMsg>();
+        let conn = uuid::Uuid::new_v4();
+        bus_b.register(conn, tx, ctx);
+        let rec = sample_match();
+        bus_a
+            .populate(
+                &ConnRef {
+                    instance_id: "B".into(),
+                    conn_id: conn,
+                },
+                "m-populate",
+                &rec,
+            )
+            .await;
+        let got = tokio::time::timeout(std::time::Duration::from_secs(2), ccrx.recv())
+            .await
+            .expect("populate timed out")
+            .expect("ctrl channel closed");
+        match got {
+            CtrlMsg::Populate(id, record) => {
+                assert_eq!(
+                    id, "m-populate",
+                    "cross-instance populate must reach B's ctrl channel"
+                );
+                assert_eq!(record.seat_a, rec.seat_a, "record must round-trip");
+            }
+            other => panic!("expected CtrlMsg::Populate, got {other:?}"),
+        }
     }
 
     #[tokio::test]

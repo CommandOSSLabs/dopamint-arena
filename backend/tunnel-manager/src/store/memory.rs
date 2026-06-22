@@ -8,7 +8,7 @@ use std::sync::RwLock;
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 
-use super::{Bus, ConnRef, ControlStore, MpStore};
+use super::{Bus, ConnRef, ControlStore, CtrlMsg, MpStore};
 use crate::mp::{Checkpoint, ConnId, DirectedInvite, MatchRecord, Waiting};
 use crate::state::{GameStat, SessionRecord, StatsSnapshot, TunnelEvent, TunnelStatus};
 
@@ -257,7 +257,7 @@ impl MpStore for InMemoryMpStore {
 pub struct LocalBus {
     instance_id: String,
     conns: RwLock<HashMap<ConnId, mpsc::UnboundedSender<String>>>,
-    ctrls: RwLock<HashMap<ConnId, mpsc::UnboundedSender<String>>>,
+    ctrls: RwLock<HashMap<ConnId, mpsc::UnboundedSender<CtrlMsg>>>,
 }
 
 impl LocalBus {
@@ -280,7 +280,7 @@ impl Bus for LocalBus {
         &self,
         conn: ConnId,
         client_tx: mpsc::UnboundedSender<String>,
-        ctrl_tx: mpsc::UnboundedSender<String>,
+        ctrl_tx: mpsc::UnboundedSender<CtrlMsg>,
     ) {
         self.conns.write().unwrap().insert(conn, client_tx);
         self.ctrls.write().unwrap().insert(conn, ctrl_tx);
@@ -305,7 +305,17 @@ impl Bus for LocalBus {
     async fn evict(&self, target: &ConnRef, match_id: &str) {
         let tx = self.ctrls.read().unwrap().get(&target.conn_id).cloned();
         if let Some(tx) = tx {
-            let _ = tx.send(match_id.to_owned());
+            let _ = tx.send(CtrlMsg::Evict(match_id.to_owned()));
+        }
+    }
+
+    async fn populate(&self, target: &ConnRef, match_id: &str, rec: &MatchRecord) {
+        let tx = self.ctrls.read().unwrap().get(&target.conn_id).cloned();
+        if let Some(tx) = tx {
+            let _ = tx.send(CtrlMsg::Populate(
+                match_id.to_owned(),
+                Box::new(rec.clone()),
+            ));
         }
     }
 }
@@ -545,6 +555,46 @@ mod tests {
         assert_eq!(got.conn_a.conn_id, new_a.conn_id);
         // Absent match → None.
         assert_eq!(s.rebind_match_conn("nope", "0xa", cr("i4")).await, None);
+    }
+
+    // LocalBus.populate must route the freshly-created record to the target's ctrl channel so a
+    // never-relayed seat has the match cached (the gap this closes for single-instance/local dev).
+    #[tokio::test]
+    async fn populate_routes_to_the_target_ctrl_channel() {
+        let bus = LocalBus::new("i".into());
+        let conn = uuid::Uuid::new_v4();
+        let (tx, _rx) = mpsc::unbounded_channel::<String>();
+        let (ctx, mut crx) = mpsc::unbounded_channel::<CtrlMsg>();
+        bus.register(conn, tx, ctx);
+        let cr = ConnRef {
+            instance_id: "i".into(),
+            conn_id: uuid::Uuid::new_v4(),
+        };
+        let rec = MatchRecord {
+            game: "ttt".into(),
+            seat_a: "0xa".into(),
+            seat_b: "0xb".into(),
+            conn_a: cr.clone(),
+            conn_b: cr,
+            tunnel_id: None,
+            latest_checkpoint: None,
+        };
+        bus.populate(
+            &ConnRef {
+                instance_id: "i".into(),
+                conn_id: conn,
+            },
+            "m1",
+            &rec,
+        )
+        .await;
+        match crx.recv().await {
+            Some(CtrlMsg::Populate(id, got)) => {
+                assert_eq!(id, "m1");
+                assert_eq!(got.seat_a, "0xa");
+            }
+            other => panic!("expected CtrlMsg::Populate, got {other:?}"),
+        }
     }
 
     // A newer checkpoint supersedes an older one; a stale lower-nonce one is ignored.

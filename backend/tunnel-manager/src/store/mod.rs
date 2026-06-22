@@ -73,17 +73,27 @@ pub trait MpStore: Send + Sync {
     ) -> Option<crate::mp::Seat>;
 }
 
+/// Per-connection control signal routed over the bus ctrl channel (parallel to the hot-path
+/// client channel). `Evict` drops a match from the connection's relay cache; `Populate` warms it
+/// with a freshly-created record so a never-relayed seat still has the match cached. The record is
+/// boxed to keep `Evict` (the common signal) cheap to move and the enum small.
+#[derive(Debug)]
+pub enum CtrlMsg {
+    Evict(String),
+    Populate(String, Box<crate::mp::MatchRecord>),
+}
+
 #[async_trait]
 pub trait Bus: Send + Sync {
     fn instance_id(&self) -> &str;
     /// `client_tx` carries client-bound frames (written to the socket). `ctrl_tx` carries
-    /// internal control signals — currently match-ids to evict from the connection's relay
-    /// cache. Kept separate so control never competes with or parses the hot-path frame stream.
+    /// internal control signals — match-cache evict/populate. Kept separate so control never
+    /// competes with or parses the hot-path frame stream.
     fn register(
         &self,
         conn: crate::mp::ConnId,
         client_tx: tokio::sync::mpsc::UnboundedSender<String>,
-        ctrl_tx: tokio::sync::mpsc::UnboundedSender<String>,
+        ctrl_tx: tokio::sync::mpsc::UnboundedSender<CtrlMsg>,
     );
     fn unregister(&self, conn: crate::mp::ConnId);
     async fn deliver(&self, target: &ConnRef, text: String);
@@ -93,4 +103,8 @@ pub trait Bus: Send + Sync {
     /// relay re-reads the match and picks up a rebound peer `ConnRef`). Routes locally or via
     /// the cross-instance pub/sub channel. No-op if the target is unknown.
     async fn evict(&self, target: &ConnRef, match_id: &str);
+    /// Warm `target`'s relay cache with a freshly-created match record (so a seat that has not yet
+    /// relayed still has the match cached for disconnect-notify and first-relay-without-GET). Routes
+    /// locally or via the cross-instance pub/sub channel. No-op if the target is unknown.
+    async fn populate(&self, target: &ConnRef, match_id: &str, rec: &crate::mp::MatchRecord);
 }

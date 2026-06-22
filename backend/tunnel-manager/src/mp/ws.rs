@@ -13,7 +13,7 @@ use uuid::Uuid;
 use crate::mp::protocol::{ClientMsg, ServerMsg};
 use crate::mp::{auth, Checkpoint, ConnId, DirectedInvite, MatchRecord, Waiting};
 use crate::state::SharedState;
-use crate::store::ConnRef;
+use crate::store::{ConnRef, CtrlMsg};
 
 pub async fn mp_upgrade(State(state): State<SharedState>, ws: WebSocketUpgrade) -> Response {
     ws.on_upgrade(move |socket| handle_socket(socket, state))
@@ -78,7 +78,7 @@ async fn handle_socket(socket: WebSocket, state: SharedState) {
     let conn_id: ConnId = Uuid::new_v4();
     let (mut sink, mut stream) = socket.split();
     let (tx, mut rx) = mpsc::unbounded_channel::<String>();
-    let (ctrl_tx, mut ctrl_rx) = mpsc::unbounded_channel::<String>();
+    let (ctrl_tx, mut ctrl_rx) = mpsc::unbounded_channel::<CtrlMsg>();
     let nonce = conn_id.to_string();
     let _ = tx.send(
         ServerMsg::Challenge {
@@ -121,11 +121,13 @@ async fn handle_socket(socket: WebSocket, state: SharedState) {
                     None => break,
                 }
             }
-            evict = ctrl_rx.recv() => {
+            ctrl = ctrl_rx.recv() => {
                 // The ctrl channel never closes before the socket; on `None` the next loop
-                // iteration drops out via another arm, so this only acts on a match-id.
-                if let Some(match_id) = evict {
-                    matches.remove(&match_id);
+                // iteration drops out via another arm. Fires only on evict/populate, never per move.
+                match ctrl {
+                    Some(CtrlMsg::Evict(match_id)) => { matches.remove(&match_id); }
+                    Some(CtrlMsg::Populate(match_id, rec)) => { matches.insert(match_id, *rec); }
+                    None => {}
                 }
             }
             inbound = stream.next() => {
@@ -182,7 +184,7 @@ async fn handle_socket(socket: WebSocket, state: SharedState) {
 async fn handle_message(
     state: &SharedState,
     tx: &mpsc::UnboundedSender<String>,
-    ctrl_tx: &mpsc::UnboundedSender<String>,
+    ctrl_tx: &mpsc::UnboundedSender<CtrlMsg>,
     conn_id: ConnId,
     nonce: &str,
     wallet: &mut Option<String>,
@@ -234,6 +236,9 @@ async fn handle_authed(
                 let (match_id, rec) = build_quick_match(&game, opp, wallet, here(state, conn_id));
                 state.mp.put_match(&match_id, rec.clone()).await;
                 matches.insert(match_id.clone(), rec.clone());
+                // Captured before the two delivers consume `match_id`/`rec` so the populate below
+                // can warm the waiter's (seat A) cache with owned copies.
+                let (match_id_for_populate, rec_for_populate) = (match_id.clone(), rec.clone());
                 state
                     .bus
                     .deliver(
@@ -258,6 +263,16 @@ async fn handle_authed(
                             game,
                         }
                         .to_text(),
+                    )
+                    .await;
+                // Warm the waiter's (seat A) relay cache so `peer.dropped` is robust even if it
+                // drops before its first relay. Seat B is this creating connection, warmed locally.
+                state
+                    .bus
+                    .populate(
+                        &rec_for_populate.conn_a,
+                        &match_id_for_populate,
+                        &rec_for_populate,
                     )
                     .await;
             }
@@ -310,6 +325,9 @@ async fn handle_authed(
             let rec = build_challenge_match(&inv, wallet, here(state, conn_id));
             state.mp.put_match(&match_id, rec.clone()).await;
             matches.insert(match_id.clone(), rec.clone());
+            // Captured before the two delivers consume `match_id`/`rec` so the populate below
+            // can warm the waiter's (seat A / inviter) cache with owned copies.
+            let (match_id_for_populate, rec_for_populate) = (match_id.clone(), rec.clone());
             state
                 .bus
                 .deliver(
@@ -334,6 +352,16 @@ async fn handle_authed(
                         game: rec.game,
                     }
                     .to_text(),
+                )
+                .await;
+            // Warm the inviter's (seat A) relay cache; the accepter (seat B) is this creating
+            // connection, already warmed locally.
+            state
+                .bus
+                .populate(
+                    &rec_for_populate.conn_a,
+                    &match_id_for_populate,
+                    &rec_for_populate,
                 )
                 .await;
             Ok(())
@@ -611,7 +639,7 @@ mod tests {
     fn make_conn_ref(state: &SharedState) -> (ConnId, mpsc::UnboundedReceiver<String>) {
         let conn_id = Uuid::new_v4();
         let (tx, rx) = mpsc::unbounded_channel();
-        let (ctrl_tx, _ctrl_rx) = mpsc::unbounded_channel();
+        let (ctrl_tx, _ctrl_rx) = mpsc::unbounded_channel::<CtrlMsg>();
         state.bus.register(conn_id, tx, ctrl_tx);
         (conn_id, rx)
     }
