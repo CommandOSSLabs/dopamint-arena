@@ -44,10 +44,18 @@ await page.goto(`${BASE}/?arena&key=${encodeURIComponent(KEY)}`);
 await page.getByTestId("add-game").waitFor({ state: "visible", timeout: 30_000 });
 console.log("[arena] wallet connected, desktop ready");
 
-/** Open a game window from the command palette. */
-async function launch(gameId) {
-  await page.getByTestId("add-game").click();
-  await page.getByTestId(`launch-${gameId}`).click();
+/**
+ * Open n windows for gameId one at a time, waiting for each to appear before
+ * clicking the palette again — avoids racing the palette open/close animation.
+ */
+async function launchWindows(gameId, n) {
+  const sel = `[data-game-window^="${gameId}"]`;
+  const base = await page.locator(sel).count();
+  for (let i = 0; i < n; i++) {
+    await page.getByTestId("add-game").click();
+    await page.getByTestId(`launch-${gameId}`).click();
+    await waitForWindowCount(sel, base + i + 1);
+  }
 }
 
 /**
@@ -86,11 +94,8 @@ async function fundIfLow(win, fundTestId, startTestId) {
 
 if (GAMES.includes("ttt")) {
   const sel = '[data-game-window^="tic-tac-toe"]';
-  // Open all windows first.
-  for (let i = 0; i < TTT_WINDOWS; i++) {
-    await launch("tic-tac-toe");
-  }
-  await waitForWindowCount(sel, TTT_WINDOWS);
+  // Open all windows first, confirming each before the next.
+  await launchWindows("tic-tac-toe", TTT_WINDOWS);
   console.log(`[arena] ${TTT_WINDOWS} ttt window(s) open`);
 
   // Configure and start each window.
@@ -108,11 +113,8 @@ if (GAMES.includes("ttt")) {
 
 if (GAMES.includes("blackjack")) {
   const sel = '[data-game-window^="blackjack"]';
-  // Open all windows first.
-  for (let i = 0; i < BJ_WINDOWS; i++) {
-    await launch("blackjack");
-  }
-  await waitForWindowCount(sel, BJ_WINDOWS);
+  // Open all windows first, confirming each before the next.
+  await launchWindows("blackjack", BJ_WINDOWS);
   console.log(`[arena] ${BJ_WINDOWS} blackjack window(s) open`);
 
   // Configure and start each window.
