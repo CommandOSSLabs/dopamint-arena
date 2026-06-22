@@ -1,9 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 // Runtime SDK imports use RELATIVE .ts paths (tsx ignores the vite alias / tsconfig paths at
-// runtime). This mirrors frontend/src/games/blackjack/session-core.test.ts exactly.
+// runtime). Same shape as the blackjack/bomb-it session-core tests: bounded advance +
+// conservation here; full termination is covered by the protocol's own fast SDK tests.
 import { CrossProtocol, MIN_STAKE } from "../../../../sui-tunnel-ts/src/protocol/cross.ts";
-import { OffchainTunnel } from "../../../../sui-tunnel-ts/src/core/tunnel.ts";
+import { OffchainTunnel, verifyCoSignedUpdate } from "../../../../sui-tunnel-ts/src/core/tunnel.ts";
 import { createParticipant } from "../../../../sui-tunnel-ts/src/core/keys.ts";
 import { stepSession, deriveView, sessionResult } from "./session-core.ts";
 
@@ -50,4 +51,23 @@ test("sessionResult maps winner to A | B | push", () => {
   assert.equal(sessionResult({ ...s, winner: "A" }), "A");
   assert.equal(sessionResult({ ...s, winner: "B" }), "B");
   assert.equal(sessionResult({ ...s, winner: null }), "push"); // no winner ⇒ push
+});
+
+test("a co-signed update verifies after bounded play (settleable mid-game)", () => {
+  const { protocol, tunnel } = freshTunnel();
+  // Bounded window: a long real-time race co-signs thousands of updates, so we prove the
+  // co-signed state is on-chain-settleable from a slice rather than a full playout.
+  for (let i = 0; i < 50; i++) {
+    if (!stepSession(protocol, tunnel, Math.random)) break;
+  }
+  const u = tunnel.latest;
+  assert.ok(u, "has a co-signed update");
+  assert.ok(
+    verifyCoSignedUpdate(
+      u!,
+      { publicKey: tunnel.partyA.publicKey, scheme: tunnel.partyA.scheme },
+      { publicKey: tunnel.partyB.publicKey, scheme: tunnel.partyB.scheme },
+    ),
+    "settleable co-signed state",
+  );
 });

@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 // Runtime SDK imports use RELATIVE .ts paths (tsx ignores the vite alias / tsconfig paths).
 import { BombItProtocol, BOMB_IT_MIN_STAKE, CELL_COUNT } from "../../../../sui-tunnel-ts/src/protocol/bombIt.ts";
-import { OffchainTunnel } from "../../../../sui-tunnel-ts/src/core/tunnel.ts";
+import { OffchainTunnel, verifyCoSignedUpdate } from "../../../../sui-tunnel-ts/src/core/tunnel.ts";
 import { createParticipant } from "../../../../sui-tunnel-ts/src/core/keys.ts";
 import { stepSession, deriveView, sessionResult } from "./session-core.ts";
 
@@ -53,4 +53,23 @@ test("sessionResult reports the winning seat (and draws as draw)", () => {
   assert.equal(sessionResult({ ...s, winner: "B" }), "B");
   assert.equal(sessionResult({ ...s, winner: "draw" }), "draw");
   assert.equal(sessionResult(s), "draw"); // in-progress (winner null) -> neutral draw
+});
+
+test("a co-signed update verifies after bounded play (settleable mid-game)", () => {
+  const { protocol, tunnel } = freshTunnel();
+  // Bounded window: a long real-time duel co-signs thousands of updates, so we prove the
+  // co-signed state is on-chain-settleable from a slice rather than a full playout.
+  for (let i = 0; i < 50; i++) {
+    if (!stepSession(protocol, tunnel, Math.random)) break;
+  }
+  const u = tunnel.latest;
+  assert.ok(u, "has a co-signed update");
+  assert.ok(
+    verifyCoSignedUpdate(
+      u!,
+      { publicKey: tunnel.partyA.publicKey, scheme: tunnel.partyA.scheme },
+      { publicKey: tunnel.partyB.publicKey, scheme: tunnel.partyB.scheme },
+    ),
+    "settleable co-signed state",
+  );
 });
