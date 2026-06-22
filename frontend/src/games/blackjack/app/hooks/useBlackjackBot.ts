@@ -539,8 +539,8 @@ export function useBlackjackBot(): BlackjackBotGame {
                   status: "Success" as const,
                   amount: delta > 0 ? `+${delta}` : delta < 0 ? `${delta}` : "0",
                 };
-                report.pushTxn(row); // Live Transactions (per-round, like the other games)
-                report.pushLocalTxn(row); // My Activity
+                // Live Transactions is backend-sourced (on-chain indexer); only My Activity is local.
+                report.pushLocalTxn(row);
               }
               setView(viewFromState(tunnel.state));
               // Stop once a bot is bankrupt (terminal) or we've played the requested number

@@ -489,8 +489,8 @@ export function useBotGame(difficulty: Difficulty = "fast"): BotGameView {
                   status: "Success" as const,
                   amount: "",
                 };
-                report.pushTxn(row); // Live Transactions (per-game, like the other games)
-                report.pushLocalTxn(row); // My Activity
+                // Live Transactions is backend-sourced (on-chain indexer); only My Activity is local.
+                report.pushLocalTxn(row);
               }
 
               if (proto.isTerminal(next)) {
