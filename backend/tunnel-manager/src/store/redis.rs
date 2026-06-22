@@ -627,16 +627,21 @@ impl MpStore for RedisMpStore {
 
 // ===== Bus =====
 
-/// Wire format for cross-instance delivery over `mp:inst:<id>` sharded pub/sub channels.
+// Cross-instance pub/sub payload. `Frame` is a client-bound relay frame; `Evict` tells a
+// connection task to drop a match from its relay cache. Retagged from the old flat
+// `{conn,text}` — internal to the bus, deployed together. A rolling deploy may drop a few
+// cross-instance frames mid-rollout (pubsub is a soft dependency, ADR-0005); accepted.
 #[derive(serde::Serialize, serde::Deserialize)]
-struct Wire {
-    conn: ConnId,
-    text: String,
+#[serde(tag = "k")]
+enum WireMsg {
+    Frame { conn: ConnId, text: String },
+    Evict { conn: ConnId, match_id: String },
 }
 
-/// Redis `Bus`: local delivery hits the in-process `conns` map; remote delivery SPUBLISH-es a
-/// `Wire` JSON to `mp:inst:<target.instance_id>`. Each instance runs one `SubscriberClient` that
-/// fans inbound messages to local sockets.
+/// Redis `Bus`: local delivery/eviction hits the in-process `conns`/`ctrls` maps; remote routing
+/// SPUBLISH-es a `WireMsg` JSON (a `Frame` for client delivery or an `Evict` for relay-cache
+/// invalidation) to `mp:inst:<target.instance_id>`. Each instance runs one `SubscriberClient` that
+/// fans inbound `WireMsg`s to local sockets (`Frame`) or ctrl channels (`Evict`).
 ///
 /// Phase 5 wires this via `RedisBus::new(instance_id, publisher_pool)` where `instance_id` comes
 /// from `INSTANCE_ID` env and `publisher_pool` is built from `REDIS_PUBSUB_URL`.
@@ -645,6 +650,7 @@ pub struct RedisBus {
     /// Pool used for SPUBLISH. Kept separate from the cache pool (two different connection classes).
     publisher: RedisPool,
     conns: std::sync::Arc<RwLock<HashMap<ConnId, mpsc::UnboundedSender<String>>>>,
+    ctrls: std::sync::Arc<RwLock<HashMap<ConnId, mpsc::UnboundedSender<String>>>>,
     // Holds the SubscriberClient so the connection stays alive for the lifetime of the bus.
     #[allow(dead_code)]
     _subscriber: SubscriberClient,
@@ -663,6 +669,8 @@ impl RedisBus {
         let channel = format!("mp:inst:{instance_id}");
         let conns: std::sync::Arc<RwLock<HashMap<ConnId, mpsc::UnboundedSender<String>>>> =
             Default::default();
+        let ctrls: std::sync::Arc<RwLock<HashMap<ConnId, mpsc::UnboundedSender<String>>>> =
+            Default::default();
 
         // Derive subscriber config from the pool so both connections target the same Redis.
         let sub_config = publisher.client_config();
@@ -675,6 +683,7 @@ impl RedisBus {
         let mgr = sub.manage_subscriptions();
 
         let conns_arc = conns.clone();
+        let ctrls_arc = ctrls.clone();
         tokio::spawn(async move {
             use tokio::sync::broadcast::error::RecvError;
             loop {
@@ -683,11 +692,20 @@ impl RedisBus {
                         let Some(payload) = msg.value.as_string() else {
                             continue;
                         };
-                        let Ok(w) = serde_json::from_str::<Wire>(&payload) else {
+                        let Ok(msg) = serde_json::from_str::<WireMsg>(&payload) else {
                             continue;
                         };
-                        if let Some(tx) = conns_arc.read().unwrap().get(&w.conn) {
-                            let _ = tx.send(w.text);
+                        match msg {
+                            WireMsg::Frame { conn, text } => {
+                                if let Some(tx) = conns_arc.read().unwrap().get(&conn) {
+                                    let _ = tx.send(text);
+                                }
+                            }
+                            WireMsg::Evict { conn, match_id } => {
+                                if let Some(tx) = ctrls_arc.read().unwrap().get(&conn) {
+                                    let _ = tx.send(match_id);
+                                }
+                            }
                         }
                     }
                     Err(RecvError::Lagged(n)) => {
@@ -705,6 +723,7 @@ impl RedisBus {
             instance_id,
             publisher,
             conns,
+            ctrls,
             _subscriber: sub,
             _mgr: mgr,
         })
@@ -717,12 +736,19 @@ impl Bus for RedisBus {
         &self.instance_id
     }
 
-    fn register(&self, conn: ConnId, tx: mpsc::UnboundedSender<String>) {
-        self.conns.write().unwrap().insert(conn, tx);
+    fn register(
+        &self,
+        conn: ConnId,
+        client_tx: mpsc::UnboundedSender<String>,
+        ctrl_tx: mpsc::UnboundedSender<String>,
+    ) {
+        self.conns.write().unwrap().insert(conn, client_tx);
+        self.ctrls.write().unwrap().insert(conn, ctrl_tx);
     }
 
     fn unregister(&self, conn: ConnId) {
         self.conns.write().unwrap().remove(&conn);
+        self.ctrls.write().unwrap().remove(&conn);
     }
 
     async fn deliver(&self, target: &ConnRef, text: String) {
@@ -733,16 +759,36 @@ impl Bus for RedisBus {
                 let _ = tx.send(text);
             }
         } else {
-            let wire = serde_json::to_string(&Wire {
+            let wire = serde_json::to_string(&WireMsg::Frame {
                 conn: target.conn_id,
                 text,
             })
-            .expect("Wire { Uuid, String } is always serializable");
+            .expect("WireMsg serializes");
             let channel = format!("mp:inst:{}", target.instance_id);
             // RedisPool doesn't impl PubsubInterface; get a client from the pool for spublish.
             let res: Result<i64, _> = self.publisher.next().spublish(channel, wire).await;
             if let Err(e) = res {
-                tracing::warn!(error = %e, instance = %target.instance_id, "spublish cross-instance delivery failed");
+                tracing::warn!(error = %e, instance = %target.instance_id, "spublish frame failed");
+            }
+        }
+    }
+
+    async fn evict(&self, target: &ConnRef, match_id: &str) {
+        if target.instance_id == self.instance_id {
+            let tx = self.ctrls.read().unwrap().get(&target.conn_id).cloned();
+            if let Some(tx) = tx {
+                let _ = tx.send(match_id.to_owned());
+            }
+        } else {
+            let wire = serde_json::to_string(&WireMsg::Evict {
+                conn: target.conn_id,
+                match_id: match_id.to_owned(),
+            })
+            .expect("WireMsg serializes");
+            let channel = format!("mp:inst:{}", target.instance_id);
+            let res: Result<i64, _> = self.publisher.next().spublish(channel, wire).await;
+            if let Err(e) = res {
+                tracing::warn!(error = %e, instance = %target.instance_id, "spublish evict failed");
             }
         }
     }
@@ -804,8 +850,9 @@ mod tests {
         let bus_b = RedisBus::new("B".into(), pool_b).await.unwrap();
         let bus_a = RedisBus::new("A".into(), pool_a).await.unwrap();
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let (ctx, _crx) = tokio::sync::mpsc::unbounded_channel::<String>();
         let conn = uuid::Uuid::new_v4();
-        bus_b.register(conn, tx);
+        bus_b.register(conn, tx, ctx);
         bus_a
             .deliver(
                 &ConnRef {
@@ -822,6 +869,58 @@ mod tests {
         assert_eq!(
             got, "hello",
             "cross-instance message must arrive on B's socket"
+        );
+    }
+
+    #[tokio::test]
+    async fn evict_signals_the_target_ctrl_channel() {
+        let (_redis, pool) = redis_fixture().await;
+        let bus = RedisBus::new("instA".into(), pool).await.unwrap();
+        let conn = uuid::Uuid::new_v4();
+        let (ctx, _crx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let (cctx, mut ccrx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        bus.register(conn, ctx, cctx);
+        // Same-instance evict routes to the ctrl channel.
+        bus.evict(
+            &ConnRef {
+                instance_id: "instA".into(),
+                conn_id: conn,
+            },
+            "m1",
+        )
+        .await;
+        assert_eq!(ccrx.recv().await.as_deref(), Some("m1"));
+    }
+
+    #[tokio::test]
+    async fn evict_crosses_instances() {
+        // Both buses share one Redis so SPUBLISH of WireMsg::Evict on A reaches B's subscriber,
+        // which routes it to B's ctrl channel (the cross-instance relay-cache invalidation path).
+        let (redis, pool_b) = redis_fixture().await;
+        let port = redis.get_host_port_ipv4(6379).await.expect("redis port");
+        let pool_a = connect(&format!("redis://127.0.0.1:{port}")).await.unwrap();
+        let bus_b = RedisBus::new("B".into(), pool_b).await.unwrap();
+        let bus_a = RedisBus::new("A".into(), pool_a).await.unwrap();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let (ctx, mut ccrx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let conn = uuid::Uuid::new_v4();
+        bus_b.register(conn, tx, ctx);
+        bus_a
+            .evict(
+                &ConnRef {
+                    instance_id: "B".into(),
+                    conn_id: conn,
+                },
+                "m-evict",
+            )
+            .await;
+        let got = tokio::time::timeout(std::time::Duration::from_secs(2), ccrx.recv())
+            .await
+            .expect("evict timed out")
+            .expect("ctrl channel closed");
+        assert_eq!(
+            got, "m-evict",
+            "cross-instance evict must reach B's ctrl channel"
         );
     }
 

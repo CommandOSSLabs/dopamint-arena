@@ -78,6 +78,7 @@ async fn handle_socket(socket: WebSocket, state: SharedState) {
     let conn_id: ConnId = Uuid::new_v4();
     let (mut sink, mut stream) = socket.split();
     let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+    let (ctrl_tx, mut ctrl_rx) = mpsc::unbounded_channel::<String>();
     let nonce = conn_id.to_string();
     let _ = tx.send(
         ServerMsg::Challenge {
@@ -120,6 +121,13 @@ async fn handle_socket(socket: WebSocket, state: SharedState) {
                     None => break,
                 }
             }
+            evict = ctrl_rx.recv() => {
+                // The ctrl channel never closes before the socket; on `None` the next loop
+                // iteration drops out via another arm, so this only acts on a match-id.
+                if let Some(match_id) = evict {
+                    matches.remove(&match_id);
+                }
+            }
             inbound = stream.next() => {
                 let text = match inbound {
                     Some(Ok(Message::Text(t))) => t,
@@ -143,6 +151,7 @@ async fn handle_socket(socket: WebSocket, state: SharedState) {
                 if let Err(code) = handle_message(
                     &state,
                     &tx,
+                    &ctrl_tx,
                     conn_id,
                     &nonce,
                     &mut wallet,
@@ -172,6 +181,7 @@ async fn handle_socket(socket: WebSocket, state: SharedState) {
 async fn handle_message(
     state: &SharedState,
     tx: &mpsc::UnboundedSender<String>,
+    ctrl_tx: &mpsc::UnboundedSender<String>,
     conn_id: ConnId,
     nonce: &str,
     wallet: &mut Option<String>,
@@ -192,7 +202,7 @@ async fn handle_message(
             if !auth::verify_ed25519(&pubkey, nonce.as_bytes(), &sig) {
                 return Err("bad_signature");
             }
-            state.bus.register(conn_id, tx.clone());
+            state.bus.register(conn_id, tx.clone(), ctrl_tx.clone());
             state.mp.set_presence(&w, here(state, conn_id)).await;
             *wallet = Some(w);
             Ok(())
@@ -516,7 +526,8 @@ mod tests {
     fn make_conn_ref(state: &SharedState) -> (ConnId, mpsc::UnboundedReceiver<String>) {
         let conn_id = Uuid::new_v4();
         let (tx, rx) = mpsc::unbounded_channel();
-        state.bus.register(conn_id, tx);
+        let (ctrl_tx, _ctrl_rx) = mpsc::unbounded_channel();
+        state.bus.register(conn_id, tx, ctrl_tx);
         (conn_id, rx)
     }
 

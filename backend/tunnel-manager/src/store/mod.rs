@@ -76,9 +76,21 @@ pub trait MpStore: Send + Sync {
 #[async_trait]
 pub trait Bus: Send + Sync {
     fn instance_id(&self) -> &str;
-    fn register(&self, conn: crate::mp::ConnId, tx: tokio::sync::mpsc::UnboundedSender<String>);
+    /// `client_tx` carries client-bound frames (written to the socket). `ctrl_tx` carries
+    /// internal control signals — currently match-ids to evict from the connection's relay
+    /// cache. Kept separate so control never competes with or parses the hot-path frame stream.
+    fn register(
+        &self,
+        conn: crate::mp::ConnId,
+        client_tx: tokio::sync::mpsc::UnboundedSender<String>,
+        ctrl_tx: tokio::sync::mpsc::UnboundedSender<String>,
+    );
     fn unregister(&self, conn: crate::mp::ConnId);
     async fn deliver(&self, target: &ConnRef, text: String);
     /// Fire-and-forget publish to a Redis channel (cross-service signal). In-memory is a no-op.
     async fn publish_raw(&self, channel: &str, payload: String);
+    /// Tell `target`'s connection task to drop `match_id` from its relay cache (so its next
+    /// relay re-reads the match and picks up a rebound peer `ConnRef`). Routes locally or via
+    /// the cross-instance pub/sub channel. No-op if the target is unknown.
+    async fn evict(&self, target: &ConnRef, match_id: &str);
 }

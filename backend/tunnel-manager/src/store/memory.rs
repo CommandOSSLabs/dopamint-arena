@@ -257,6 +257,7 @@ impl MpStore for InMemoryMpStore {
 pub struct LocalBus {
     instance_id: String,
     conns: RwLock<HashMap<ConnId, mpsc::UnboundedSender<String>>>,
+    ctrls: RwLock<HashMap<ConnId, mpsc::UnboundedSender<String>>>,
 }
 
 impl LocalBus {
@@ -264,6 +265,7 @@ impl LocalBus {
         Self {
             instance_id,
             conns: RwLock::new(HashMap::new()),
+            ctrls: RwLock::new(HashMap::new()),
         }
     }
 }
@@ -274,12 +276,19 @@ impl Bus for LocalBus {
         &self.instance_id
     }
 
-    fn register(&self, conn: ConnId, tx: mpsc::UnboundedSender<String>) {
-        self.conns.write().unwrap().insert(conn, tx);
+    fn register(
+        &self,
+        conn: ConnId,
+        client_tx: mpsc::UnboundedSender<String>,
+        ctrl_tx: mpsc::UnboundedSender<String>,
+    ) {
+        self.conns.write().unwrap().insert(conn, client_tx);
+        self.ctrls.write().unwrap().insert(conn, ctrl_tx);
     }
 
     fn unregister(&self, conn: ConnId) {
         self.conns.write().unwrap().remove(&conn);
+        self.ctrls.write().unwrap().remove(&conn);
     }
 
     async fn deliver(&self, target: &ConnRef, text: String) {
@@ -291,6 +300,13 @@ impl Bus for LocalBus {
 
     async fn publish_raw(&self, channel: &str, payload: String) {
         let _ = (channel, payload);
+    }
+
+    async fn evict(&self, target: &ConnRef, match_id: &str) {
+        let tx = self.ctrls.read().unwrap().get(&target.conn_id).cloned();
+        if let Some(tx) = tx {
+            let _ = tx.send(match_id.to_owned());
+        }
     }
 }
 
