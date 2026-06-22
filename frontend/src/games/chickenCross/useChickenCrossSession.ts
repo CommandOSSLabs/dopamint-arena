@@ -7,7 +7,7 @@ import type { CrossState, CrossMove } from "sui-tunnel-ts/protocol/cross";
 import { Transcript } from "sui-tunnel-ts/proof/transcript";
 import { useTelemetry } from "../../telemetry/TelemetryProvider";
 import { getControlPlaneClient, type RegisterSessionResult } from "../../backend/controlPlane";
-import { coSignedToSettleRequest } from "../../backend/settleRequest";
+import { settleViaBackend } from "../../backend/settle";
 import { closeCooperativeWithRoot, openAndFundSelfPlay, readCreatedAt } from "../../onchain/tunnelTx";
 import { useSponsoredSignExec } from "../../onchain/useSponsoredSignExec";
 import { withSponsorFallback } from "../../onchain/sponsor";
@@ -229,23 +229,19 @@ export function useChickenCrossSession(): ChickenCrossSession {
               // the transcript to Walrus (ADR-0002/0005). Fall back to a wallet close if it's down.
               const settlement = tunnel.buildSettlementWithRoot(createdAt, transcript.root(), 0n);
               const coinType = isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined;
-              try {
-                await getControlPlaneClient().settle(
-                  tunnelId,
-                  coSignedToSettleRequest(settlement, transcript.toRecord().entries),
-                );
-              } catch (e) {
-                console.warn(
-                  "[chickenCross] backend settle failed; falling back to wallet close:",
-                  e,
-                );
-                await closeCooperativeWithRoot({
-                  signExec: (isDopamintConfigured ? sponsored.signExec : signExec) as never,
-                  tunnelId,
-                  settlement,
-                  coinType,
-                });
-              }
+              await settleViaBackend({
+                tunnelId,
+                settlement,
+                transcript: transcript.toRecord().entries,
+                label: "chickenCross",
+                fallbackClose: () =>
+                  closeCooperativeWithRoot({
+                    signExec: (isDopamintConfigured ? sponsored.signExec : signExec) as never,
+                    tunnelId,
+                    settlement,
+                    coinType,
+                  }),
+              });
               setStatus("settled");
 
               // JS is single-threaded: Stop can only interleave at the await above.

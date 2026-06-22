@@ -3,7 +3,7 @@ import { core, proof, bytesToHex } from "sui-tunnel-ts";
 import type { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import type { Transaction } from "@mysten/sui/transactions";
 import { getControlPlaneClient, type RegisterSessionResult } from "@/backend/controlPlane";
-import { coSignedToSettleRequest } from "@/backend/settleRequest";
+import { settleViaBackend } from "@/backend/settle";
 import {
   buildCreateAndFundTx,
   buildSettleWithRootTx,
@@ -602,29 +602,31 @@ export function useBlackjackBot(): BlackjackBotGame {
         const s = tunnel.buildSettlementWithRoot(createdAt, root, 0n);
 
         let closeDigest = "";
-        try {
-          const result = await getControlPlaneClient().settle(
-            tunnelId,
-            coSignedToSettleRequest(s, transcript.toRecord().entries),
-          );
-          closeDigest = result.txDigest;
-        } catch (e) {
-          console.warn("[settle] Server-side settle failed, falling back to bot keypair submission:", e);
-          if (isDopamintConfigured) {
-            // The funder opened the tunnel and holds the sponsored signer; close DOPAMINT sponsored.
-            const { digest } = await sponsoredSignExec(funder)(
-              buildSettleWithRootTx(tunnelId, s, coinType),
-            );
-            await client.waitForTransaction({ digest });
-            closeDigest = digest;
-          } else {
-            const closeRes = await submit(
-              buildSettleWithRootTx(tunnelId, s),
-              bots.a.keypair,
-            );
-            closeDigest = closeRes.digest;
-          }
-        }
+        const backendDigest = await settleViaBackend({
+          tunnelId,
+          settlement: s,
+          transcript: transcript.toRecord().entries,
+          label: "blackjack",
+          fallbackClose: async () => {
+            if (isDopamintConfigured) {
+              // The funder opened the tunnel and holds the sponsored signer; close DOPAMINT sponsored.
+              const { digest } = await sponsoredSignExec(funder)(
+                buildSettleWithRootTx(tunnelId, s, coinType),
+              );
+              await client.waitForTransaction({ digest });
+              closeDigest = digest;
+            } else {
+              const closeRes = await submit(
+                buildSettleWithRootTx(tunnelId, s),
+                bots.a.keypair,
+              );
+              closeDigest = closeRes.digest;
+            }
+          },
+        });
+
+        // Backend /settle returns its close digest; the fallback assigns its own (above).
+        if (backendDigest) closeDigest = backendDigest;
 
         const rootHex = `0x${bytesToHex(root)}`;
         setDigests((d) => ({ ...d, close: closeDigest, root: rootHex }));

@@ -27,7 +27,6 @@ import {
   type Role,
 } from "../../pvp/mpClient";
 import {
-  getControlPlaneClient,
   resolveBackendUrl,
 } from "../../backend/controlPlane";
 import {
@@ -39,7 +38,7 @@ import {
 import { useSponsoredSignExec } from "../../onchain/useSponsoredSignExec";
 import { withSponsorFallback } from "../../onchain/sponsor";
 import { DOPAMINT_COIN_TYPE, isDopamintConfigured } from "../../onchain/dopamint";
-import { coSignedToSettleRequest } from "../../backend/settleRequest";
+import { settleViaBackend } from "../../backend/settle";
 
 /** Locked per seat: 1 DOPAMINT (9 decimals). */
 export const STAKE_BALANCE = 1_000_000_000n;
@@ -500,7 +499,6 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
             sponsored.signExec,
             tunnelId,
             transcript,
-            getControlPlaneClient(),
             coinType,
           ).then(
             () => setStatus("settled"),
@@ -640,7 +638,6 @@ async function settle(
   sponsoredSignExec: Parameters<typeof closeCooperativeWithRoot>[0]["signExec"],
   tunnelId: string,
   transcript: Transcript,
-  cp: ReturnType<typeof getControlPlaneClient>,
   coinType: string | undefined,
 ): Promise<void> {
   const createdAt = await readCreatedAt(reads, tunnelId);
@@ -667,21 +664,17 @@ async function settle(
     fromHex(other.sig),
   );
   if (role !== "A") return; // single submitter, mirrors the cooperative-close pattern
-  try {
-    await cp.settle(
-      tunnelId,
-      coSignedToSettleRequest(co, transcript.toRecord().entries),
-    );
-  } catch (e) {
-    console.error(
-      "[quantum-poker] backend settle failed; falling back to wallet close:",
-      e,
-    );
-    await closeCooperativeWithRoot({
-      signExec: isDopamintConfigured ? sponsoredSignExec : signExec,
-      tunnelId,
-      settlement: co,
-      coinType: isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined,
-    });
-  }
+  await settleViaBackend({
+    tunnelId,
+    settlement: co,
+    transcript: transcript.toRecord().entries,
+    label: "quantumPoker",
+    fallbackClose: () =>
+      closeCooperativeWithRoot({
+        signExec: isDopamintConfigured ? sponsoredSignExec : signExec,
+        tunnelId,
+        settlement: co,
+        coinType: isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined,
+      }),
+  });
 }

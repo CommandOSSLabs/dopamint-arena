@@ -8,7 +8,7 @@ import { DistributedTunnel } from "sui-tunnel-ts/core/distributedTunnel";
 import { CrossProtocol, type CrossState, type CrossMove, type CrossDir } from "sui-tunnel-ts/protocol/cross";
 import { Transcript } from "sui-tunnel-ts/proof/transcript";
 import { MpClient, resolveMpWsUrl, type PvpChannel, type Role } from "../../pvp/mpClient";
-import { getControlPlaneClient, resolveBackendUrl } from "../../backend/controlPlane";
+import { resolveBackendUrl } from "../../backend/controlPlane";
 import {
   closeCooperativeWithRoot,
   depositStake,
@@ -18,7 +18,7 @@ import {
 import { useSponsoredSignExec } from "../../onchain/useSponsoredSignExec";
 import { withSponsorFallback } from "../../onchain/sponsor";
 import { DOPAMINT_COIN_TYPE, isDopamintConfigured } from "../../onchain/dopamint";
-import { coSignedToSettleRequest } from "../../backend/settleRequest";
+import { settleViaBackend } from "../../backend/settle";
 import { deriveView, type CrossView } from "./session-core";
 
 const STAKE = 1_000_000_000n; // per-seat: 1 DOPAMINT (9 decimals)
@@ -281,7 +281,6 @@ export function usePvpChickenCross(): PvpChickenCross {
                 sponsored.signExec,
                 tunnelId,
                 transcript,
-                getControlPlaneClient(),
               ).then(
                 () => setStatus("settled"),
                 (e) => {
@@ -345,7 +344,6 @@ async function settle(
   sponsoredSignExec: Parameters<typeof closeCooperativeWithRoot>[0]["signExec"],
   tunnelId: string,
   transcript: Transcript,
-  cp: ReturnType<typeof getControlPlaneClient>,
 ): Promise<void> {
   const createdAt = await readCreatedAt(reads, tunnelId);
   const root = transcript.root();
@@ -365,15 +363,17 @@ async function settle(
   }
   const co = dt.combineSettlementWithRoot(half.settlement, half.sigSelf, fromHex(other.sig));
   if (role !== "A") return;
-  try {
-    await cp.settle(tunnelId, coSignedToSettleRequest(co, transcript.toRecord().entries));
-  } catch (e) {
-    console.error("[chicken-cross] backend settle failed; falling back to wallet close:", e);
-    await closeCooperativeWithRoot({
-      signExec: isDopamintConfigured ? sponsoredSignExec : signExec,
-      tunnelId,
-      settlement: co,
-      coinType: isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined,
-    });
-  }
+  await settleViaBackend({
+    tunnelId,
+    settlement: co,
+    transcript: transcript.toRecord().entries,
+    label: "chickenCross",
+    fallbackClose: () =>
+      closeCooperativeWithRoot({
+        signExec: isDopamintConfigured ? sponsoredSignExec : signExec,
+        tunnelId,
+        settlement: co,
+        coinType: isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined,
+      }),
+  });
 }

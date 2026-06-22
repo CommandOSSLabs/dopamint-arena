@@ -16,8 +16,7 @@ import {
   type SignExec,
 } from "../../onchain/tunnelTx";
 import { Transcript } from "sui-tunnel-ts/proof/transcript";
-import { getControlPlaneClient } from "../../backend/controlPlane";
-import { coSignedToSettleRequest } from "../../backend/settleRequest";
+import { settleViaBackend } from "../../backend/settle";
 import { makeKeypairSponsoredSignExec } from "../../onchain/sponsor";
 import {
   DOPAMINT_COIN_TYPE,
@@ -539,25 +538,21 @@ class AutoSession {
         transcript.root(),
         0n,
       );
-      try {
-        await getControlPlaneClient().settle(
-          tunnelId,
-          coSignedToSettleRequest(settlement, transcript.toRecord().entries),
-        );
-      } catch (e) {
-        console.error(
-          "[battleship] backend settle failed; falling back to bot-key close:",
-          e,
-        );
-        await closeCooperativeWithRoot({
-          signExec: dopamintOn
-            ? this.botSponsoredSignExec(this.bots.A)
-            : this.botSignExec(this.bots.A),
-          tunnelId,
-          settlement,
-          coinType,
-        });
-      }
+      await settleViaBackend({
+        tunnelId,
+        settlement,
+        transcript: transcript.toRecord().entries,
+        label: "battleship",
+        fallbackClose: () =>
+          closeCooperativeWithRoot({
+            signExec: dopamintOn
+              ? this.botSponsoredSignExec(this.bots.A)
+              : this.botSignExec(this.bots.A),
+            tunnelId,
+            settlement,
+            coinType,
+          }),
+      });
       if (this.gen !== myGen) return;
 
       await this.refreshBalances();

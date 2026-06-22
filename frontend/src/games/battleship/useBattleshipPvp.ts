@@ -24,7 +24,6 @@ import {
   type Role,
 } from "../../pvp/mpClient";
 import {
-  getControlPlaneClient,
   resolveBackendUrl,
 } from "../../backend/controlPlane";
 import {
@@ -36,7 +35,7 @@ import {
 import { useSponsoredSignExec } from "../../onchain/useSponsoredSignExec";
 import { withSponsorFallback } from "../../onchain/sponsor";
 import { DOPAMINT_COIN_TYPE, isDopamintConfigured } from "../../onchain/dopamint";
-import { coSignedToSettleRequest } from "../../backend/settleRequest";
+import { settleViaBackend } from "../../backend/settle";
 import { type FleetSecret, makeFleetSecret } from "./engine/selfPlay";
 import { type Placement, placementsToBoard } from "./engine/fleet";
 import { randomSalts } from "./engine/merkle";
@@ -379,7 +378,6 @@ class PvpSession {
               sponsoredSignExec as never,
               tunnelId,
               transcript,
-              getControlPlaneClient(),
               coinType,
             ).then(
               () => {
@@ -502,7 +500,6 @@ async function settle(
   sponsoredSignExec: Parameters<typeof closeCooperativeWithRoot>[0]["signExec"],
   tunnelId: string,
   transcript: Transcript,
-  cp: ReturnType<typeof getControlPlaneClient>,
   coinType: string | undefined,
 ): Promise<void> {
   const createdAt = await readCreatedAt(reads, tunnelId);
@@ -529,16 +526,12 @@ async function settle(
     fromHex(other.sig),
   );
   if (role !== "A") return; // single submitter, mirrors the cooperative-close pattern
-  try {
-    await cp.settle(
-      tunnelId,
-      coSignedToSettleRequest(co, transcript.toRecord().entries),
-    );
-  } catch (e) {
-    console.error(
-      "[battleship] backend settle failed; falling back to wallet close:",
-      e,
-    );
-    await closeCooperativeWithRoot({ signExec: isDopamintConfigured ? sponsoredSignExec : signExec, tunnelId, settlement: co, coinType });
-  }
+  await settleViaBackend({
+    tunnelId,
+    settlement: co,
+    transcript: transcript.toRecord().entries,
+    label: "battleship",
+    fallbackClose: () =>
+      closeCooperativeWithRoot({ signExec: isDopamintConfigured ? sponsoredSignExec : signExec, tunnelId, settlement: co, coinType }),
+  });
 }

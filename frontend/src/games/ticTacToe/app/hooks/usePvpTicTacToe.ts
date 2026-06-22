@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { core, proof, bytesToHex, hexToBytes, type protocols } from "sui-tunnel-ts";
 import { SuiJsonRpcClient } from "@mysten/sui/jsonRpc";
 import { getControlPlaneClient, type RegisterSessionResult } from "@/backend/controlPlane";
-import { coSignedToSettleRequest } from "@/backend/settleRequest";
+import { settleViaBackend } from "@/backend/settle";
 import {
   MultiGameTicTacToeProtocol,
   MultiGameCaroProtocol,
@@ -281,24 +281,26 @@ export function usePvpTicTacToe(
       );
       if (roleRef.current === "A") {
         // X (the opener) submits the cooperative close
-        try {
-          const result = await getControlPlaneClient().settle(
-            t.tunnelId,
-            coSignedToSettleRequest(coSigned as any, transcriptRef.current ? transcriptRef.current.toRecord().entries : []),
-          );
-          setDigests((d) => ({ ...d, close: result.txDigest }));
-          relay.sendApp(matchId, { t: "closed", digest: result.txDigest });
-        } catch (e) {
-          console.warn("[settle] Server-side settle failed, falling back to wallet submission:", e);
-          // Close pays in the same coin the tunnel was funded in (DOPAMINT vs SUI). In DOPAMINT
-          // mode the player holds 0 SUI (gas is sponsored), so the close must route through the gas
-          // sponsor too — a wallet-signed close would throw and strand the staked DOPAMINT.
-          const coinType = isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined;
-          const res = await (isDopamintConfigured ? submitSponsored : submit)(
-            buildCloseWithRootTx(t.tunnelId, coSigned, coinType),
-          );
-          setDigests((d) => ({ ...d, close: res.digest }));
-          relay.sendApp(matchId, { t: "closed", digest: res.digest });
+        const closeDigest = await settleViaBackend({
+          tunnelId: t.tunnelId,
+          settlement: coSigned as any,
+          transcript: transcriptRef.current ? transcriptRef.current.toRecord().entries : [],
+          label: "tictactoe",
+          fallbackClose: async () => {
+            // Close pays in the same coin the tunnel was funded in (DOPAMINT vs SUI). In DOPAMINT
+            // mode the player holds 0 SUI (gas is sponsored), so the close must route through the gas
+            // sponsor too — a wallet-signed close would throw and strand the staked DOPAMINT.
+            const coinType = isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined;
+            const res = await (isDopamintConfigured ? submitSponsored : submit)(
+              buildCloseWithRootTx(t.tunnelId, coSigned, coinType),
+            );
+            return res.digest;
+          },
+        });
+        // Record the close + signal the opponent on BOTH paths (backend digest or fallback digest).
+        if (closeDigest) {
+          setDigests((d) => ({ ...d, close: closeDigest }));
+          relay.sendApp(matchId, { t: "closed", digest: closeDigest });
         }
       }
       await refreshBalance();

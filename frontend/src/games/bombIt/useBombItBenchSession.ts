@@ -7,8 +7,7 @@ import type { BombItState, BombItMove } from "sui-tunnel-ts/protocol/bombIt";
 import { useTelemetry } from "../../telemetry/TelemetryProvider";
 import { closeCooperativeWithRoot, openAndFundSelfPlay, readCreatedAt } from "../../onchain/tunnelTx";
 import { Transcript } from "sui-tunnel-ts/proof/transcript";
-import { getControlPlaneClient } from "../../backend/controlPlane";
-import { coSignedToSettleRequest } from "../../backend/settleRequest";
+import { settleViaBackend } from "../../backend/settle";
 import { useSponsoredSignExec } from "../../onchain/useSponsoredSignExec";
 import { withSponsorFallback } from "../../onchain/sponsor";
 import { DOPAMINT_COIN_TYPE, isDopamintConfigured } from "../../onchain/dopamint";
@@ -299,20 +298,19 @@ export function useBombItBenchSession(): BombItBenchSession {
           // coinType must match the tunnel's coin; closing via the gas sponsor is free for a 0-SUI
           // player (DOPAMINT), while the SUI fallback closes sender-pays.
           const settlement = tunnel.buildSettlementWithRoot(createdAt, transcript.root(), 0n);
-          try {
-            await getControlPlaneClient().settle(
-              tunnelId,
-              coSignedToSettleRequest(settlement, transcript.toRecord().entries),
-            );
-          } catch (e) {
-            console.warn("[bombIt] backend settle failed; falling back to wallet close:", e);
-            await closeCooperativeWithRoot({
-              signExec: (isDopamintConfigured ? sponsored.signExec : signExec) as never,
-              tunnelId,
-              settlement,
-              coinType,
-            });
-          }
+          await settleViaBackend({
+            tunnelId,
+            settlement,
+            transcript: transcript.toRecord().entries,
+            label: "bombIt",
+            fallbackClose: () =>
+              closeCooperativeWithRoot({
+                signExec: (isDopamintConfigured ? sponsored.signExec : signExec) as never,
+                tunnelId,
+                settlement,
+                coinType,
+              }),
+          });
 
           setGamesSettled((n) => n + 1);
           setTotalUpdates(totalUpdatesRef.current);

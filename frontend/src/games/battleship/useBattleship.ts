@@ -17,8 +17,7 @@ import {
   readCreatedAt,
 } from "../../onchain/tunnelTx";
 import { Transcript } from "sui-tunnel-ts/proof/transcript";
-import { getControlPlaneClient } from "../../backend/controlPlane";
-import { coSignedToSettleRequest } from "../../backend/settleRequest";
+import { settleViaBackend } from "../../backend/settle";
 import { withSponsorFallback } from "../../onchain/sponsor";
 import { useSponsoredSignExec } from "../../onchain/useSponsoredSignExec";
 import { DOPAMINT_COIN_TYPE, isDopamintConfigured } from "../../onchain/dopamint";
@@ -227,6 +226,7 @@ class BotSession {
     try {
       // Settle through the backend /settle API: the server submits the close AND archives the
       // transcript to Walrus (ADR-0002/0005). Fall back to a sponsored/wallet close if it's down.
+      const deps = this.deps; // non-null past the guard above; capture for the fallback closure
       const transcript = this.transcript;
       const settlement = tunnel.buildSettlementWithRoot(
         this.createdAt,
@@ -234,30 +234,23 @@ class BotSession {
         0n,
       );
       const coinType = isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined;
-      try {
-        await getControlPlaneClient().settle(
-          this.tunnelId,
-          coSignedToSettleRequest(
+      // DOPAMINT path closes via the gas sponsor too (so a 0-SUI player can close their bot
+      // game for free); SUI path closes sender-pays. coinType must match the tunnel's coin.
+      await settleViaBackend({
+        tunnelId: this.tunnelId,
+        settlement,
+        transcript: transcript ? transcript.toRecord().entries : [],
+        label: "battleship",
+        fallbackClose: () =>
+          closeCooperativeWithRoot({
+            signExec: (isDopamintConfigured
+              ? deps.sponsoredSignExec
+              : deps.signExec) as never,
+            tunnelId: this.tunnelId,
             settlement,
-            transcript ? transcript.toRecord().entries : [],
-          ),
-        );
-      } catch (e) {
-        console.warn(
-          "[battleship] backend settle failed; falling back to wallet close:",
-          e,
-        );
-        // DOPAMINT path closes via the gas sponsor too (so a 0-SUI player can close their bot
-        // game for free); SUI path closes sender-pays. coinType must match the tunnel's coin.
-        await closeCooperativeWithRoot({
-          signExec: (isDopamintConfigured
-            ? this.deps.sponsoredSignExec
-            : this.deps.signExec) as never,
-          tunnelId: this.tunnelId,
-          settlement,
-          coinType,
-        });
-      }
+            coinType,
+          }),
+      });
       this.setStatus("settled");
     } catch (e) {
       this.fail(e);
