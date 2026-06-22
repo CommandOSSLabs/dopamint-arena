@@ -28,12 +28,15 @@ import {
 } from "../../backend/controlPlane";
 import {
   closeCooperativeWithRoot,
-  depositStake,
   openAndFundSharedTunnel,
   readCreatedAt,
 } from "../../onchain/tunnelTx";
 import { useSponsoredSignExec } from "../../onchain/useSponsoredSignExec";
-import { withSponsorFallback } from "../../onchain/sponsor";
+import {
+  openSharedTunnelStaked,
+  depositStakeStaked,
+  type StakeStrategy,
+} from "../../onchain/stakeTunnel";
 import { DOPAMINT_COIN_TYPE, isDopamintConfigured } from "../../onchain/dopamint";
 import { settleViaBackend } from "../../backend/settle";
 import { type FleetSecret, makeFleetSecret } from "./engine/selfPlay";
@@ -265,69 +268,33 @@ class PvpSession {
         const partyA = { address: wallet, publicKey: ephemeral.publicKey };
         const partyB = { address: match.opponentWallet, publicKey: oppPub };
         const coinType = isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined;
+        const stake: StakeStrategy = {
+          sponsoredSignExec: sponsoredSignExec as never,
+          walletSignExec: signExec as never,
+          prepareStake: deps.prepareStake,
+          selectStakeCoin: deps.selectStakeCoin,
+        };
         let tunnelId: string;
         if (match.role === "A") {
-          tunnelId = isDopamintConfigured
-            ? await openAndFundSharedTunnel({
-                reads,
-                signExec: sponsoredSignExec as never,
-                partyA,
-                partyB,
-                amount: STAKE_BALANCE,
-                coinType,
-                stakeCoinId: await deps.prepareStake(STAKE_BALANCE),
-              })
-            : await withSponsorFallback(
-                async () =>
-                  openAndFundSharedTunnel({
-                    reads,
-                    signExec: sponsoredSignExec as never,
-                    partyA,
-                    partyB,
-                    amount: STAKE_BALANCE,
-                    stakeCoinId: await deps.selectStakeCoin(STAKE_BALANCE),
-                  }),
-                () =>
-                  openAndFundSharedTunnel({
-                    reads,
-                    signExec: signExec as never,
-                    partyA,
-                    partyB,
-                    amount: STAKE_BALANCE,
-                  }),
-                "battleship open/fund",
-              );
+          tunnelId = await openSharedTunnelStaked({
+            reads,
+            partyA,
+            partyB,
+            amount: STAKE_BALANCE,
+            label: "battleship",
+            ...stake,
+          });
           mp.announceTunnel(match.matchId, tunnelId);
           channel.sendPeer({ t: "open", tunnelId });
         } else {
           const open = await waitPeer<{ tunnelId: string }>("open");
           tunnelId = open.tunnelId;
-          if (isDopamintConfigured) {
-            await depositStake({
-              signExec: sponsoredSignExec as never,
-              tunnelId,
-              amount: STAKE_BALANCE,
-              coinType,
-              stakeCoinId: await deps.prepareStake(STAKE_BALANCE),
-            });
-          } else {
-            await withSponsorFallback(
-              async () =>
-                depositStake({
-                  signExec: sponsoredSignExec as never,
-                  tunnelId,
-                  amount: STAKE_BALANCE,
-                  stakeCoinId: await deps.selectStakeCoin(STAKE_BALANCE),
-                }),
-              () =>
-                depositStake({
-                  signExec: signExec as never,
-                  tunnelId,
-                  amount: STAKE_BALANCE,
-                }),
-              "battleship deposit",
-            );
-          }
+          await depositStakeStaked({
+            tunnelId,
+            amount: STAKE_BALANCE,
+            label: "battleship",
+            ...stake,
+          });
         }
 
         // 3) build the distributed engine over the relay transport.

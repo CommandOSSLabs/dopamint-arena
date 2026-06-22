@@ -11,12 +11,15 @@ import { MpClient, resolveMpWsUrl, type PvpChannel, type Role } from "../../pvp/
 import { resolveBackendUrl } from "../../backend/controlPlane";
 import {
   closeCooperativeWithRoot,
-  depositStake,
   openAndFundSharedTunnel,
   readCreatedAt,
 } from "../../onchain/tunnelTx";
 import { useSponsoredSignExec } from "../../onchain/useSponsoredSignExec";
-import { withSponsorFallback } from "../../onchain/sponsor";
+import {
+  openSharedTunnelStaked,
+  depositStakeStaked,
+  type StakeStrategy,
+} from "../../onchain/stakeTunnel";
 import { DOPAMINT_COIN_TYPE, isDopamintConfigured } from "../../onchain/dopamint";
 import { settleViaBackend } from "../../backend/settle";
 import { deriveView, type CrossView } from "./session-core";
@@ -211,28 +214,33 @@ export function usePvpChickenCross(): PvpChickenCross {
           setStatus("funding");
           const partyA = { address: wallet, publicKey: ephemeral.publicKey };
           const partyB = { address: match.opponentWallet, publicKey: oppPub };
-          const coinType = isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined;
+          const stake: StakeStrategy = {
+            sponsoredSignExec: sponsored.signExec,
+            walletSignExec: signExec as never,
+            prepareStake: sponsored.prepareStake,
+            selectStakeCoin: sponsored.selectStakeCoin,
+          };
           let tunnelId: string;
           if (match.role === "A") {
-            tunnelId = isDopamintConfigured
-              ? await openAndFundSharedTunnel({ reads, signExec: sponsored.signExec as never, partyA, partyB, amount: STAKE, coinType, stakeCoinId: await sponsored.prepareStake(STAKE) })
-              : await withSponsorFallback(
-                  async () => openAndFundSharedTunnel({ reads, signExec: sponsored.signExec as never, partyA, partyB, amount: STAKE, stakeCoinId: await sponsored.selectStakeCoin(STAKE) }),
-                  () => openAndFundSharedTunnel({ reads, signExec: signExec as never, partyA, partyB, amount: STAKE }),
-                  "chickenCross open/fund");
+            tunnelId = await openSharedTunnelStaked({
+              reads,
+              partyA,
+              partyB,
+              amount: STAKE,
+              label: "chickenCross",
+              ...stake,
+            });
             mp.announceTunnel(match.matchId, tunnelId);
             channel.sendPeer({ t: "open", tunnelId });
           } else {
             const open = await waitPeer<{ tunnelId: string }>("open");
             tunnelId = open.tunnelId;
-            if (isDopamintConfigured) {
-              await depositStake({ signExec: sponsored.signExec as never, tunnelId, amount: STAKE, coinType, stakeCoinId: await sponsored.prepareStake(STAKE) });
-            } else {
-              await withSponsorFallback(
-                async () => depositStake({ signExec: sponsored.signExec as never, tunnelId, amount: STAKE, stakeCoinId: await sponsored.selectStakeCoin(STAKE) }),
-                () => depositStake({ signExec: signExec as never, tunnelId, amount: STAKE }),
-                "chickenCross deposit");
-            }
+            await depositStakeStaked({
+              tunnelId,
+              amount: STAKE,
+              label: "chickenCross",
+              ...stake,
+            });
           }
 
           // 3) build the distributed engine

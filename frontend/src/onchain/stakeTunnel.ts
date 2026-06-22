@@ -1,0 +1,98 @@
+// Sponsored DOPAMINT staking for the shared-tunnel PvP lane (ADR-0009/0010). The seat-A open and
+// seat-B deposit each carried the same "DOPAMINT → sponsored + faucet-minted stake; SUI fallback →
+// sponsored stake with a sender-pays fallback" branch in every PvP game hook; these two helpers
+// centralize it so a fix to the funding strategy lands once, not in five files.
+import {
+  openAndFundSharedTunnel,
+  depositStake,
+  type SignExec,
+} from "./tunnelTx";
+import { withSponsorFallback } from "./sponsor";
+import { DOPAMINT_COIN_TYPE, isDopamintConfigured } from "./dopamint";
+
+type SharedReads = Parameters<typeof openAndFundSharedTunnel>[0]["reads"];
+type SharedParty = Parameters<typeof openAndFundSharedTunnel>[0]["partyA"];
+
+/** The signers + stake-coin pickers a seat needs to fund its stake. */
+export interface StakeStrategy {
+  /** Backend-gas-sponsored signer (settler pays gas). */
+  sponsoredSignExec: SignExec;
+  /** Wallet sender-pays signer — the SUI-fallback path only. */
+  walletSignExec: SignExec;
+  /** A user DOPAMINT coin >= the amount (faucets + polls on a cold-start miss). */
+  prepareStake: (min: bigint) => Promise<string>;
+  /** A user SUI coin >= the amount (SUI fallback, DOPAMINT env unset). */
+  selectStakeCoin: (min: bigint) => Promise<string>;
+}
+
+/** Seat A: open + share the tunnel and fund this seat. Returns the new tunnel id. */
+export async function openSharedTunnelStaked(
+  opts: StakeStrategy & {
+    reads: SharedReads;
+    partyA: SharedParty;
+    partyB: SharedParty;
+    amount: bigint;
+    label: string;
+  },
+): Promise<string> {
+  const { reads, partyA, partyB, amount } = opts;
+  if (isDopamintConfigured) {
+    return openAndFundSharedTunnel({
+      reads,
+      signExec: opts.sponsoredSignExec,
+      partyA,
+      partyB,
+      amount,
+      coinType: DOPAMINT_COIN_TYPE,
+      stakeCoinId: await opts.prepareStake(amount),
+    });
+  }
+  return withSponsorFallback(
+    async () =>
+      openAndFundSharedTunnel({
+        reads,
+        signExec: opts.sponsoredSignExec,
+        partyA,
+        partyB,
+        amount,
+        stakeCoinId: await opts.selectStakeCoin(amount),
+      }),
+    () =>
+      openAndFundSharedTunnel({
+        reads,
+        signExec: opts.walletSignExec,
+        partyA,
+        partyB,
+        amount,
+      }),
+    `${opts.label} open/fund`,
+  );
+}
+
+/** Seat B: deposit this seat's stake into an already-open shared tunnel. */
+export async function depositStakeStaked(
+  opts: StakeStrategy & { tunnelId: string; amount: bigint; label: string },
+): Promise<void> {
+  const { tunnelId, amount } = opts;
+  if (isDopamintConfigured) {
+    await depositStake({
+      signExec: opts.sponsoredSignExec,
+      tunnelId,
+      amount,
+      coinType: DOPAMINT_COIN_TYPE,
+      stakeCoinId: await opts.prepareStake(amount),
+    });
+    return;
+  }
+  await withSponsorFallback(
+    async () =>
+      depositStake({
+        signExec: opts.sponsoredSignExec,
+        tunnelId,
+        amount,
+        stakeCoinId: await opts.selectStakeCoin(amount),
+      }),
+    () => depositStake({ signExec: opts.walletSignExec, tunnelId, amount }),
+    `${opts.label} deposit`,
+  );
+}

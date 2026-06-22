@@ -9,9 +9,13 @@ import { BombItProtocol, type BombItState, type BombItMove, type BombItAction } 
 import { Transcript } from "sui-tunnel-ts/proof/transcript";
 import { MpClient, resolveMpWsUrl, type PvpChannel, type Role } from "../../pvp/mpClient";
 import { resolveBackendUrl } from "../../backend/controlPlane";
-import { closeCooperativeWithRoot, depositStake, openAndFundSharedTunnel, readCreatedAt } from "../../onchain/tunnelTx";
+import { closeCooperativeWithRoot, openAndFundSharedTunnel, readCreatedAt } from "../../onchain/tunnelTx";
 import { useSponsoredSignExec } from "../../onchain/useSponsoredSignExec";
-import { withSponsorFallback } from "../../onchain/sponsor";
+import {
+  openSharedTunnelStaked,
+  depositStakeStaked,
+  type StakeStrategy,
+} from "../../onchain/stakeTunnel";
 import { DOPAMINT_COIN_TYPE, isDopamintConfigured } from "../../onchain/dopamint";
 import { settleViaBackend } from "../../backend/settle";
 import { deriveView, type BombItView } from "./session-core";
@@ -189,31 +193,36 @@ export function usePvpBombIt(): PvpBombIt {
           setStatus("funding");
           const partyA = { address: wallet, publicKey: ephemeral.publicKey };
           const partyB = { address: match.opponentWallet, publicKey: oppPub };
-          const coinType = isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined;
           // Per-path stake: 1 DOPAMINT vs a tiny MIST amount on the SUI fallback (so the fallback
           // doesn't lock real SUI). The same value funds on-chain AND inits the off-chain tunnel.
           const stakePerSeat = isDopamintConfigured ? STAKE : SUI_PER_SEAT;
+          const stake: StakeStrategy = {
+            sponsoredSignExec: sponsored.signExec,
+            walletSignExec: signExec as never,
+            prepareStake: sponsored.prepareStake,
+            selectStakeCoin: sponsored.selectStakeCoin,
+          };
           let tunnelId: string;
           if (match.role === "A") {
-            tunnelId = isDopamintConfigured
-              ? await openAndFundSharedTunnel({ reads, signExec: sponsored.signExec as never, partyA, partyB, amount: stakePerSeat, coinType, stakeCoinId: await sponsored.prepareStake(stakePerSeat) })
-              : await withSponsorFallback(
-                  async () => openAndFundSharedTunnel({ reads, signExec: sponsored.signExec as never, partyA, partyB, amount: stakePerSeat, stakeCoinId: await sponsored.selectStakeCoin(stakePerSeat) }),
-                  () => openAndFundSharedTunnel({ reads, signExec: signExec as never, partyA, partyB, amount: stakePerSeat }),
-                  "bombIt open/fund");
+            tunnelId = await openSharedTunnelStaked({
+              reads,
+              partyA,
+              partyB,
+              amount: stakePerSeat,
+              label: "bombIt",
+              ...stake,
+            });
             mp.announceTunnel(match.matchId, tunnelId);
             channel.sendPeer({ t: "open", tunnelId });
           } else {
             const open = await waitPeer<{ tunnelId: string }>("open");
             tunnelId = open.tunnelId;
-            if (isDopamintConfigured) {
-              await depositStake({ signExec: sponsored.signExec as never, tunnelId, amount: stakePerSeat, coinType, stakeCoinId: await sponsored.prepareStake(stakePerSeat) });
-            } else {
-              await withSponsorFallback(
-                async () => depositStake({ signExec: sponsored.signExec as never, tunnelId, amount: stakePerSeat, stakeCoinId: await sponsored.selectStakeCoin(stakePerSeat) }),
-                () => depositStake({ signExec: signExec as never, tunnelId, amount: stakePerSeat }),
-                "bombIt deposit");
-            }
+            await depositStakeStaked({
+              tunnelId,
+              amount: stakePerSeat,
+              label: "bombIt",
+              ...stake,
+            });
           }
 
           // 3) build the distributed engine
