@@ -5,7 +5,10 @@ import { OffchainTunnel } from "sui-tunnel-ts/core/tunnel";
 import { BombItProtocol } from "sui-tunnel-ts/protocol/bombIt";
 import type { BombItState, BombItMove } from "sui-tunnel-ts/protocol/bombIt";
 import { useTelemetry } from "../../telemetry/TelemetryProvider";
-import { closeCooperative, openAndFundSelfPlay, readCreatedAt } from "../../onchain/tunnelTx";
+import { closeCooperativeWithRoot, openAndFundSelfPlay, readCreatedAt } from "../../onchain/tunnelTx";
+import { Transcript } from "sui-tunnel-ts/proof/transcript";
+import { getControlPlaneClient } from "../../backend/controlPlane";
+import { coSignedToSettleRequest } from "../../backend/settleRequest";
 import { useSponsoredSignExec } from "../../onchain/useSponsoredSignExec";
 import { withSponsorFallback } from "../../onchain/sponsor";
 import { DOPAMINT_COIN_TYPE, isDopamintConfigured } from "../../onchain/dopamint";
@@ -247,10 +250,12 @@ export function useBombItBenchSession(): BombItBenchSession {
             b.address,
             { a: STAKE, b: STAKE },
           );
+          const transcript = new Transcript(tunnelId);
           gameUpdatesRef.current = 0;
           frameUpdatesRef.current = 0;
           frameBytesRef.current = 0;
-          tunnel.onUpdate = (_u, bytes) => {
+          tunnel.onUpdate = (u, bytes) => {
+            transcript.append(u);
             gameUpdatesRef.current += 1;
             totalUpdatesRef.current += 1;
             frameUpdatesRef.current += 1;
@@ -285,15 +290,25 @@ export function useBombItBenchSession(): BombItBenchSession {
               amount: `+$${Number(tunnel.state.total)}`,
             });
           }
-          const settlement = tunnel.buildSettlement(createdAt);
-          // DOPAMINT path closes via the gas sponsor too (free for a 0-SUI player);
-          // SUI path closes sender-pays. coinType must match the tunnel's coin.
-          await closeCooperative({
-            signExec: (isDopamintConfigured ? sponsored.signExec : signExec) as never,
-            tunnelId,
-            settlement,
-            coinType: isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined,
-          });
+          // Settle through the backend /settle API: the server submits the close AND archives the
+          // transcript (ADR-0002/0005). Fall back to a wallet/sponsor close if the backend is down.
+          // coinType must match the tunnel's coin; closing via the gas sponsor is free for a 0-SUI
+          // player (DOPAMINT), while the SUI fallback closes sender-pays.
+          const settlement = tunnel.buildSettlementWithRoot(createdAt, transcript.root(), 0n);
+          try {
+            await getControlPlaneClient().settle(
+              tunnelId,
+              coSignedToSettleRequest(settlement, transcript.toRecord().entries),
+            );
+          } catch (e) {
+            console.warn("[bombIt] backend settle failed; falling back to wallet close:", e);
+            await closeCooperativeWithRoot({
+              signExec: (isDopamintConfigured ? sponsored.signExec : signExec) as never,
+              tunnelId,
+              settlement,
+              coinType,
+            });
+          }
 
           setGamesSettled((n) => n + 1);
           setTotalUpdates(totalUpdatesRef.current);

@@ -12,10 +12,13 @@ import { registerWindowDisposer } from "@/lib/windowSessions";
 import { useTelemetry } from "../../telemetry/TelemetryProvider";
 import type { TelemetryWriter } from "../../telemetry/TelemetryProvider";
 import {
-  closeCooperative,
+  closeCooperativeWithRoot,
   openAndFundSelfPlay,
   readCreatedAt,
 } from "../../onchain/tunnelTx";
+import { Transcript } from "sui-tunnel-ts/proof/transcript";
+import { getControlPlaneClient } from "../../backend/controlPlane";
+import { coSignedToSettleRequest } from "../../backend/settleRequest";
 import { withSponsorFallback } from "../../onchain/sponsor";
 import { useSponsoredSignExec } from "../../onchain/useSponsoredSignExec";
 import { DOPAMINT_COIN_TYPE, isDopamintConfigured } from "../../onchain/dopamint";
@@ -107,6 +110,7 @@ class BotSession {
   private placements: Placement[] = []; // your fleet layout, for ship-status display
   private tunnelId = "";
   private createdAt = 0n;
+  private transcript: Transcript | null = null;
   private onChain = false;
   private advancing = false;
   // Guards re-entry: a session that has begun a match can't be restarted (only
@@ -169,6 +173,7 @@ class BotSession {
     this.advancing = false;
     this.starting = false;
     this.tunnel = null;
+    this.transcript = null;
     this.secrets = null;
     this.lastYourShot = null;
     this.lastEnemyShot = null;
@@ -184,6 +189,7 @@ class BotSession {
     this.advancing = false;
     this.deps?.report.setActive(0);
     this.tunnel = null;
+    this.transcript = null;
     this.secrets = null;
     this.listeners.clear();
   };
@@ -217,17 +223,39 @@ class BotSession {
       return;
     }
     try {
-      const settlement = tunnel.buildSettlement(this.createdAt);
-      // DOPAMINT path closes via the gas sponsor too (so a 0-SUI player can close their bot
-      // game for free); SUI path closes sender-pays. coinType must match the tunnel's coin.
-      await closeCooperative({
-        signExec: (isDopamintConfigured
-          ? this.deps.sponsoredSignExec
-          : this.deps.signExec) as never,
-        tunnelId: this.tunnelId,
-        settlement,
-        coinType: isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined,
-      });
+      // Settle through the backend /settle API: the server submits the close AND archives the
+      // transcript to Walrus (ADR-0002/0005). Fall back to a sponsored/wallet close if it's down.
+      const transcript = this.transcript;
+      const settlement = tunnel.buildSettlementWithRoot(
+        this.createdAt,
+        transcript ? transcript.root() : new Uint8Array(32),
+        0n,
+      );
+      const coinType = isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined;
+      try {
+        await getControlPlaneClient().settle(
+          this.tunnelId,
+          coSignedToSettleRequest(
+            settlement,
+            transcript ? transcript.toRecord().entries : [],
+          ),
+        );
+      } catch (e) {
+        console.warn(
+          "[battleship] backend settle failed; falling back to wallet close:",
+          e,
+        );
+        // DOPAMINT path closes via the gas sponsor too (so a 0-SUI player can close their bot
+        // game for free); SUI path closes sender-pays. coinType must match the tunnel's coin.
+        await closeCooperativeWithRoot({
+          signExec: (isDopamintConfigured
+            ? this.deps.sponsoredSignExec
+            : this.deps.signExec) as never,
+          tunnelId: this.tunnelId,
+          settlement,
+          coinType,
+        });
+      }
       this.setStatus("settled");
     } catch (e) {
       this.fail(e);
@@ -355,15 +383,21 @@ class BotSession {
           b.address,
           { a: LOCKED_PER_SEAT, b: LOCKED_PER_SEAT },
         );
-        tunnel.onUpdate = (_u, bytes) =>
+        // Record every co-signed update so the close can anchor the transcript root on-chain
+        // (close_cooperative_with_root) — the same settle path caro/poker/auto use successfully.
+        const transcript = new Transcript(tunnelId);
+        tunnel.onUpdate = (u, bytes) => {
+          transcript.append(u);
           this.deps?.report.bumpCounters({
             updates: 1,
             signatures: 2,
             verifications: 2,
             bytes,
           });
+        };
 
         this.tunnel = tunnel;
+        this.transcript = transcript;
         this.tunnelId = tunnelId;
         this.createdAt = createdAt;
         this.onChain = onChain;

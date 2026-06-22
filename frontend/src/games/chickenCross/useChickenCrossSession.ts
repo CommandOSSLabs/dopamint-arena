@@ -4,9 +4,11 @@ import { createParticipant } from "sui-tunnel-ts/core/keys";
 import { OffchainTunnel } from "sui-tunnel-ts/core/tunnel";
 import { CrossProtocol, MIN_STAKE } from "sui-tunnel-ts/protocol/cross";
 import type { CrossState, CrossMove } from "sui-tunnel-ts/protocol/cross";
+import { Transcript } from "sui-tunnel-ts/proof/transcript";
 import { useTelemetry } from "../../telemetry/TelemetryProvider";
 import { getControlPlaneClient, type RegisterSessionResult } from "../../backend/controlPlane";
-import { closeCooperative, openAndFundSelfPlay, readCreatedAt } from "../../onchain/tunnelTx";
+import { coSignedToSettleRequest } from "../../backend/settleRequest";
+import { closeCooperativeWithRoot, openAndFundSelfPlay, readCreatedAt } from "../../onchain/tunnelTx";
 import { useSponsoredSignExec } from "../../onchain/useSponsoredSignExec";
 import { withSponsorFallback } from "../../onchain/sponsor";
 import { DOPAMINT_COIN_TYPE, isDopamintConfigured } from "../../onchain/dopamint";
@@ -169,8 +171,13 @@ export function useChickenCrossSession(): ChickenCrossSession {
             b.address,
             { a: stakeBig, b: stakeBig },
           );
-          tunnel.onUpdate = (_u, bytes) =>
+          // Record every co-signed update so the close can anchor the transcript root on-chain
+          // (close_cooperative_with_root) and the backend can archive the proof to Walrus.
+          const transcript = new Transcript(tunnelId);
+          tunnel.onUpdate = (u, bytes) => {
+            transcript.append(u);
             report.bumpCounters({ updates: 1, signatures: 2, verifications: 2, bytes });
+          };
 
           protocolRef.current = protocol;
           tunnelRef.current = tunnel;
@@ -218,13 +225,27 @@ export function useChickenCrossSession(): ChickenCrossSession {
             const r = sessionResult(tunnel.state);
             setResult(r);
             try {
-              const settlement = tunnel.buildSettlement(createdAt);
-              await closeCooperative({
-                signExec: (isDopamintConfigured ? sponsored.signExec : signExec) as never,
-                tunnelId,
-                settlement,
-                coinType: isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined,
-              });
+              // Settle through the backend /settle API: the server submits the close AND archives
+              // the transcript to Walrus (ADR-0002/0005). Fall back to a wallet close if it's down.
+              const settlement = tunnel.buildSettlementWithRoot(createdAt, transcript.root(), 0n);
+              const coinType = isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined;
+              try {
+                await getControlPlaneClient().settle(
+                  tunnelId,
+                  coSignedToSettleRequest(settlement, transcript.toRecord().entries),
+                );
+              } catch (e) {
+                console.warn(
+                  "[chickenCross] backend settle failed; falling back to wallet close:",
+                  e,
+                );
+                await closeCooperativeWithRoot({
+                  signExec: (isDopamintConfigured ? sponsored.signExec : signExec) as never,
+                  tunnelId,
+                  settlement,
+                  coinType,
+                });
+              }
               setStatus("settled");
 
               // JS is single-threaded: Stop can only interleave at the await above.
