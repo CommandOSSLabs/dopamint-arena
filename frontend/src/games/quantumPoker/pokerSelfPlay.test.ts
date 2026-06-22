@@ -11,6 +11,8 @@ import {
   stepPokerAuto,
   runPokerSelfPlayToEnd,
   legalPokerActions,
+  stepPokerWithHuman,
+  applyHumanMove,
 } from "./pokerSelfPlay";
 
 function mulberry32(seed: number) {
@@ -86,4 +88,34 @@ test("legalPokerActions allows check when nobody has bet this street", () => {
     if (!stepPokerAuto(tunnel, botA, botB, ts++)) break;
   }
   assert.fail("never reached an unbet betting street");
+});
+
+test("human router pauses on the human's betting turn but auto-runs everything else", () => {
+  const tunnel = newTunnel();
+  const ctx: BotContext = { rngForSeat: (s) => mulberry32(s === "A" ? 1 : 2) };
+  const botA = makeSeatBot("A", STAKE, HAND_CAP, { name: "You", persona: "balanced" }, ctx);
+  const botB = makeSeatBot("B", STAKE, HAND_CAP, { name: "Jules", persona: "loose" }, ctx);
+
+  let ts = 1n;
+  let awaited = false;
+  for (let i = 0; i < 500; i++) {
+    const r = stepPokerWithHuman(tunnel, botA, botB, "A", ts++);
+    if (r.kind === "idle") break;
+    if (r.kind === "await-human") {
+      awaited = true;
+      // Human always checks/calls to keep the hand moving.
+      const s = tunnel.state;
+      const move: import("sui-tunnel-ts/protocol/quantumPoker").PokerMove =
+        s.streetBetA === s.streetBetB ? { kind: "check" } : { kind: "call" };
+      applyHumanMove(tunnel, botA, "A", move, ts++);
+    } else {
+      // Auto step must never be a betting move BY the human seat A.
+      if (r.by === "A") {
+        assert.ok(!["bet", "check", "call", "fold"].includes(r.move.kind));
+      }
+    }
+  }
+  assert.equal(awaited, true);
+  assert.equal(tunnel.state.phase, "done");
+  assert.equal(tunnel.state.balanceA + tunnel.state.balanceB, STAKE * 2n);
 });

@@ -127,3 +127,38 @@ export function runPokerSelfPlayToEnd(
   }
   return steps;
 }
+
+export type PokerHumanStep =
+  | { kind: "applied"; by: Party; move: PokerMove }
+  | { kind: "await-human" }
+  | { kind: "idle" };
+
+/** Like stepPokerAuto, but yields control on the human seat's BETTING turn.
+ *  The human seat's mechanical moves (commit/reveal/next_hand) still auto-run via
+ *  its kit bot — only bet/check/call/fold wait for the human. */
+export function stepPokerWithHuman(
+  tunnel: PokerTunnel,
+  botA: PokerSeatBot,
+  botB: PokerSeatBot,
+  humanSeat: Party,
+  timestamp: bigint,
+): PokerHumanStep {
+  const s = tunnel.state;
+  if (s.phase === "done") return { kind: "idle" };
+  if (isHumanBettingTurn(s, humanSeat)) return { kind: "await-human" };
+  const r = stepPokerAuto(tunnel, botA, botB, timestamp);
+  return r ? { kind: "applied", by: r.by, move: r.move } : { kind: "idle" };
+}
+
+/** Apply a human-chosen move for `humanSeat`; advances its kit bot's memory. */
+export function applyHumanMove(
+  tunnel: PokerTunnel,
+  humanBot: PokerSeatBot,
+  humanSeat: Party,
+  move: PokerMove,
+  timestamp: bigint,
+): void {
+  const s = tunnel.state;
+  tunnel.step(move, humanSeat, { timestamp });
+  humanBot.confirm(s, move);
+}
