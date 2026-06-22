@@ -389,8 +389,59 @@ async fn handle_authed(
             state.mp.record_checkpoint(&match_id, cp).await;
             Ok(())
         }
-        // Task 4 wires this up; reject until then so the compiler sees all arms.
-        ClientMsg::Resume { .. } => Err("not_implemented"),
+        ClientMsg::Resume { match_id } => {
+            let me = here(state, conn_id);
+            let seat = match state
+                .mp
+                .rebind_match_conn(&match_id, wallet, me.clone())
+                .await
+            {
+                Some(s) => s,
+                None => return Err("not_a_seat"),
+            };
+            let Some(rec) = state.mp.get_match(&match_id).await else {
+                return Err("match_gone");
+            };
+            // Warm this connection's relay cache so its first post-resume relay needs no GET.
+            matches.insert(match_id.clone(), rec.clone());
+            // Opponent seat wallet + ConnRef.
+            let (opp_wallet, opp_conn) = match seat {
+                crate::mp::Seat::A => (rec.seat_b.clone(), rec.conn_b.clone()),
+                crate::mp::Seat::B => (rec.seat_a.clone(), rec.conn_a.clone()),
+            };
+            let peer_online = state.mp.get_presence(&opp_wallet).await.is_some();
+            // ResumeOk to self (delivered via the bus to this connection's socket).
+            state
+                .bus
+                .deliver(
+                    &me,
+                    ServerMsg::ResumeOk {
+                        match_id: match_id.clone(),
+                        role: seat.as_role().to_owned(),
+                        opponent_wallet: opp_wallet,
+                        game: rec.game.clone(),
+                        peer_online,
+                    }
+                    .to_text(),
+                )
+                .await;
+            // Tell the opponent we're back: PeerResumed (FE re-sends state) + evict its stale
+            // relay-cache entry so its next relay routes to our new ConnRef.
+            state
+                .bus
+                .deliver(
+                    &opp_conn,
+                    ServerMsg::PeerResumed {
+                        match_id: match_id.clone(),
+                        seat: seat.as_role().to_owned(),
+                        conn_ref: me,
+                    }
+                    .to_text(),
+                )
+                .await;
+            state.bus.evict(&opp_conn, &match_id).await;
+            Ok(())
+        }
         ClientMsg::Connect { .. } => Err("already_connected"),
     }
 }
@@ -732,6 +783,118 @@ mod tests {
             rx_b.try_recv().is_ok(),
             "second relay still routes from cache, not the overwritten store"
         );
+    }
+
+    // Resume re-attach: rebind the stale seat ConnRef, ack the resumer with its role and the
+    // peer's live status, notify the opponent (peer.resumed) and evict its stale relay cache.
+    #[tokio::test]
+    async fn resume_rebinds_seat_and_acks_with_role() {
+        let state = test_state();
+        let inst = state.bus.instance_id().to_owned();
+        let mid = "m-resume";
+        // Resumer (seat A) and opponent (seat B) connections, each with a frame receiver.
+        let (conn_a, mut rx_a) = make_conn_ref(&state);
+        let (conn_b, mut rx_b) = make_conn_ref(&state);
+        let ref_b = ConnRef {
+            instance_id: inst.clone(),
+            conn_id: conn_b,
+        };
+        // Opponent is "online" (presence set); match has a STALE conn_a to be rebound.
+        state.mp.set_presence("0xb", ref_b.clone()).await;
+        state
+            .mp
+            .put_match(
+                mid,
+                MatchRecord {
+                    game: "ttt".into(),
+                    seat_a: "0xa".into(),
+                    seat_b: "0xb".into(),
+                    conn_a: ConnRef {
+                        instance_id: "old".into(),
+                        conn_id: Uuid::new_v4(),
+                    },
+                    conn_b: ref_b,
+                    tunnel_id: None,
+                    latest_checkpoint: None,
+                },
+            )
+            .await;
+
+        let mut joined = HashSet::new();
+        let mut matches = HashMap::new();
+        handle_authed(
+            &state,
+            conn_a,
+            "0xa",
+            &mut joined,
+            &mut matches,
+            ClientMsg::Resume {
+                match_id: mid.into(),
+            },
+        )
+        .await
+        .unwrap();
+
+        // Resumer got resume.ok with role A and peerOnline true.
+        let a = rx_a.recv().await.unwrap();
+        assert!(
+            a.contains(r#""type":"resume.ok""#)
+                && a.contains(r#""role":"A""#)
+                && a.contains(r#""peerOnline":true"#),
+            "got: {a}"
+        );
+        // Opponent got peer.resumed carrying the resumer's new ConnRef.
+        let b = rx_b.recv().await.unwrap();
+        assert!(
+            b.contains(r#""type":"peer.resumed""#) && b.contains(r#""seat":"A""#),
+            "got: {b}"
+        );
+        // The store now binds conn_a to the resumer's connection, and the cache is warm.
+        assert_eq!(
+            state.mp.get_match(mid).await.unwrap().conn_a.conn_id,
+            conn_a
+        );
+        assert!(matches.contains_key(mid), "resumer cache warmed");
+    }
+
+    // A wallet that owns neither seat cannot rebind: the store rejects it and the arm errors.
+    #[tokio::test]
+    async fn resume_rejects_non_seat_wallet() {
+        let state = test_state();
+        let (conn, _rx) = make_conn_ref(&state);
+        let cr = |id: &str| ConnRef {
+            instance_id: id.into(),
+            conn_id: Uuid::new_v4(),
+        };
+        state
+            .mp
+            .put_match(
+                "m1",
+                MatchRecord {
+                    game: "ttt".into(),
+                    seat_a: "0xa".into(),
+                    seat_b: "0xb".into(),
+                    conn_a: cr("i"),
+                    conn_b: cr("i"),
+                    tunnel_id: None,
+                    latest_checkpoint: None,
+                },
+            )
+            .await;
+        let mut joined = HashSet::new();
+        let mut matches = HashMap::new();
+        let r = handle_authed(
+            &state,
+            conn,
+            "0xstranger",
+            &mut joined,
+            &mut matches,
+            ClientMsg::Resume {
+                match_id: "m1".into(),
+            },
+        )
+        .await;
+        assert_eq!(r, Err("not_a_seat"));
     }
 
     // The behavior that was missing in PvP: a relayed MOVE must feed the actions counter
