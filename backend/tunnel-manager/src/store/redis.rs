@@ -703,14 +703,30 @@ impl Bus for RedisBus {
     }
 }
 
-// ===== Integration tests (ignored without TEST_REDIS_URL) =====
+// ===== Integration tests =====
 
 #[cfg(test)]
 mod tests {
+    use testcontainers_modules::redis::Redis;
+    use testcontainers_modules::testcontainers::{runners::AsyncRunner, ContainerAsync, ImageExt};
+
     use super::*;
 
-    fn test_url() -> Option<String> {
-        std::env::var("TEST_REDIS_URL").ok()
+    /// Start an ephemeral Redis and return a connected pool. The returned container must be held
+    /// for the test's lifetime (drop = stop). Per-test isolation: no shared keys, runs in parallel.
+    ///
+    /// Pinned to a stable Redis 7 minor: `RedisBus` uses sharded pub/sub (`SSUBSCRIBE`/`SPUBLISH`),
+    /// which only exists on Redis >= 7.0, so the `redis` module's default tag (5.0) makes
+    /// `RedisBus::new` fail. Pinning the minor (not the floating `7-alpine`) keeps CI reproducible.
+    async fn redis_fixture() -> (ContainerAsync<Redis>, RedisPool) {
+        let node = Redis::default()
+            .with_tag("7.4-alpine")
+            .start()
+            .await
+            .expect("start redis container");
+        let port = node.get_host_port_ipv4(6379).await.expect("redis port");
+        let pool = connect(&format!("redis://127.0.0.1:{port}")).await.unwrap();
+        (node, pool)
     }
 
     // ElastiCache uses `rediss://` (TLS in transit). With `enable-rustls-ring`, `from_url` must
@@ -729,16 +745,14 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires TEST_REDIS_URL"]
     async fn deliver_crosses_instances() {
-        let Some(url) = test_url() else { return };
+        // Both buses must share one Redis so SPUBLISH on A reaches B's subscriber.
+        let (redis, pool_b) = redis_fixture().await;
+        let port = redis.get_host_port_ipv4(6379).await.expect("redis port");
+        let pool_a = connect(&format!("redis://127.0.0.1:{port}")).await.unwrap();
         // Instance B owns the socket; instance A delivers to it via SPUBLISH.
-        let bus_b = RedisBus::new("B".into(), connect(&url).await.unwrap())
-            .await
-            .unwrap();
-        let bus_a = RedisBus::new("A".into(), connect(&url).await.unwrap())
-            .await
-            .unwrap();
+        let bus_b = RedisBus::new("B".into(), pool_b).await.unwrap();
+        let bus_a = RedisBus::new("A".into(), pool_a).await.unwrap();
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
         let conn = uuid::Uuid::new_v4();
         bus_b.register(conn, tx);
@@ -762,10 +776,9 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires TEST_REDIS_URL"]
     async fn actions_count_accumulates_per_game() {
-        let Some(url) = test_url() else { return };
-        let s = RedisControlStore::new(connect(&url).await.unwrap());
+        let (_redis, pool) = redis_fixture().await;
+        let s = RedisControlStore::new(pool);
         s.add_actions("blackjack", 100).await;
         s.add_actions("blackjack", 50).await;
         let snap = s.snapshot().await;
@@ -779,10 +792,9 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires TEST_REDIS_URL"]
     async fn session_roundtrip() {
-        let Some(url) = test_url() else { return };
-        let s = RedisControlStore::new(connect(&url).await.unwrap());
+        let (_redis, pool) = redis_fixture().await;
+        let s = RedisControlStore::new(pool);
         let id = uuid::Uuid::new_v4().to_string();
         let tunnel = crate::routes::TunnelRef {
             tunnel_id: "t1".to_owned(),
@@ -802,10 +814,9 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires TEST_REDIS_URL"]
     async fn join_or_pair_pairs_each_waiter_exactly_once_under_concurrency() {
-        let Some(url) = test_url() else { return };
-        let s = std::sync::Arc::new(RedisMpStore::new(connect(&url).await.unwrap()));
+        let (_redis, pool) = redis_fixture().await;
+        let s = std::sync::Arc::new(RedisMpStore::new(pool));
         let game = format!("g{}", uuid::Uuid::new_v4().simple());
         let mut handles = vec![];
         for i in 0..50u32 {
@@ -842,11 +853,10 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires TEST_REDIS_URL"]
     async fn recent_events_ring_dedupes_and_caps() {
         use crate::state::{TunnelEvent, TunnelEventKind};
-        let Some(url) = test_url() else { return };
-        let s = RedisControlStore::new(connect(&url).await.unwrap());
+        let (_redis, pool) = redis_fixture().await;
+        let s = RedisControlStore::new(pool);
         let ev = |digest: &str| TunnelEvent {
             tunnel_id: "0xt".into(),
             kind: TunnelEventKind::Settled,
@@ -862,23 +872,9 @@ mod tests {
         s.push_recent_event(ev(&format!("{tag}-a"))).await; // replay — no-op
         s.push_recent_event(ev(&format!("{tag}-b"))).await;
         let got = s.recent_events().await;
-        // The ring is shared across tests, so locate our own tagged events rather than
-        // asserting absolute positions.
-        let mine: Vec<_> = got
-            .iter()
-            .filter(|e| e.tx_digest.starts_with(&tag))
-            .collect();
-        assert_eq!(mine.len(), 2, "expected exactly two unique tagged events");
-        assert_eq!(
-            mine[0].tx_digest,
-            format!("{tag}-b"),
-            "newest tagged event first"
-        );
-        assert_eq!(
-            mine[1].tx_digest,
-            format!("{tag}-a"),
-            "older tagged event second"
-        );
+        // newest-first; our two unique digests are at the front of this test's fresh-container ring.
+        assert_eq!(got[0].tx_digest, format!("{tag}-b"));
+        assert_eq!(got[1].tx_digest, format!("{tag}-a"));
         assert!(got.len() <= crate::store::RECENT_EVENTS_CAP);
     }
 
@@ -886,11 +882,10 @@ mod tests {
     // arrival order — same contract as the in-memory store, exercised through the Lua upgrade
     // path. Without it a settled row in the cross-instance ring shows no proof link.
     #[tokio::test]
-    #[ignore = "requires TEST_REDIS_URL"]
     async fn recent_events_proof_url_survives_race_either_order() {
         use crate::state::{TunnelEvent, TunnelEventKind};
-        let Some(url) = test_url() else { return };
-        let s = RedisControlStore::new(connect(&url).await.unwrap());
+        let (_redis, pool) = redis_fixture().await;
+        let s = RedisControlStore::new(pool);
         let proof = "https://agg/v1/blobs/xyz";
         let ev = |digest: &str, p: Option<&str>| TunnelEvent {
             tunnel_id: "0xt".into(),
@@ -928,10 +923,8 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires TEST_REDIS_URL"]
     async fn recent_events_dedup_key_is_per_digest_with_ttl() {
-        let Some(url) = test_url() else { return };
-        let pool = connect(&url).await.unwrap();
+        let (_redis, pool) = redis_fixture().await;
         let s = RedisControlStore::new(pool.clone());
         let digest = format!("d{}", uuid::Uuid::new_v4().simple());
         let ev = crate::state::TunnelEvent {
@@ -954,10 +947,9 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires TEST_REDIS_URL"]
     async fn take_invite_yields_some_to_exactly_one_concurrent_accepter() {
-        let Some(url) = test_url() else { return };
-        let s = std::sync::Arc::new(RedisMpStore::new(connect(&url).await.unwrap()));
+        let (_redis, pool) = redis_fixture().await;
+        let s = std::sync::Arc::new(RedisMpStore::new(pool));
         let mid = format!("m{}", uuid::Uuid::new_v4().simple());
         let inv = crate::mp::DirectedInvite {
             from: "0xa".into(),
@@ -984,10 +976,9 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires TEST_REDIS_URL"]
     async fn take_invite_rejects_wrong_recipient_and_preserves_invite() {
-        let Some(url) = test_url() else { return };
-        let s = RedisMpStore::new(connect(&url).await.unwrap());
+        let (_redis, pool) = redis_fixture().await;
+        let s = RedisMpStore::new(pool);
         let mid = format!("m{}", uuid::Uuid::new_v4().simple());
         let inv = crate::mp::DirectedInvite {
             from: "0xa".into(),
@@ -1011,10 +1002,9 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires TEST_REDIS_URL"]
     async fn join_or_pair_never_pairs_wallet_with_itself() {
-        let Some(url) = test_url() else { return };
-        let s = RedisMpStore::new(connect(&url).await.unwrap());
+        let (_redis, pool) = redis_fixture().await;
+        let s = RedisMpStore::new(pool);
         let game = format!("g{}", uuid::Uuid::new_v4().simple());
         let wallet = "0xself".to_owned();
 
@@ -1055,12 +1045,8 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires TEST_REDIS_URL"]
     async fn actions_total_is_derived_not_a_separate_key() {
-        let Some(url) = test_url() else { return };
-        let pool = connect(&url).await.unwrap();
-        // Clear the legacy aggregate so a stale value can't mask the assertion.
-        let _: Option<i64> = pool.del("stats:actions:total").await.ok();
+        let (_redis, pool) = redis_fixture().await;
         let s = RedisControlStore::new(pool.clone());
         let game = format!("g{}", uuid::Uuid::new_v4().simple());
         s.add_actions(&game, 7).await;
@@ -1074,10 +1060,8 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires TEST_REDIS_URL"]
     async fn presence_uses_one_key_and_cas_clears_it() {
-        let Some(url) = test_url() else { return };
-        let pool = connect(&url).await.unwrap();
+        let (_redis, pool) = redis_fixture().await;
         let s = RedisMpStore::new(pool.clone());
         let wallet = format!("0x{}", uuid::Uuid::new_v4().simple());
         let conn = uuid::Uuid::new_v4();
@@ -1132,10 +1116,9 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires TEST_REDIS_URL"]
     async fn match_record_round_trips_through_hash() {
-        let Some(url) = test_url() else { return };
-        let s = RedisMpStore::new(connect(&url).await.unwrap());
+        let (_redis, pool) = redis_fixture().await;
+        let s = RedisMpStore::new(pool);
         let mid = format!("m{}", uuid::Uuid::new_v4().simple());
         let m = sample_match();
         s.put_match(&mid, m.clone()).await;
@@ -1147,10 +1130,9 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires TEST_REDIS_URL"]
     async fn tunnel_id_and_checkpoint_writes_do_not_clobber() {
-        let Some(url) = test_url() else { return };
-        let s = std::sync::Arc::new(RedisMpStore::new(connect(&url).await.unwrap()));
+        let (_redis, pool) = redis_fixture().await;
+        let s = std::sync::Arc::new(RedisMpStore::new(pool));
         let mid = format!("m{}", uuid::Uuid::new_v4().simple());
         s.put_match(&mid, sample_match()).await;
         // A huge balance (> 2^53) must survive byte-exact: it rides in the checkpoint and is
@@ -1184,10 +1166,9 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires TEST_REDIS_URL"]
     async fn record_checkpoint_keeps_highest_nonce_redis() {
-        let Some(url) = test_url() else { return };
-        let s = RedisMpStore::new(connect(&url).await.unwrap());
+        let (_redis, pool) = redis_fixture().await;
+        let s = RedisMpStore::new(pool);
         let mid = format!("m{}", uuid::Uuid::new_v4().simple());
         s.put_match(&mid, sample_match()).await;
         let cp = |n| crate::mp::Checkpoint {
