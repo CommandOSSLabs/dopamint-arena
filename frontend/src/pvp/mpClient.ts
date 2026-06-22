@@ -10,6 +10,7 @@ import { toHex } from "sui-tunnel-ts/core/bytes";
 import type { KeyPair } from "sui-tunnel-ts/core/crypto";
 import type { Transport } from "sui-tunnel-ts/core/distributedTunnel";
 import { wrapInnerFrameJson } from "sui-tunnel-ts/core/distributedFrame";
+import type { WireCoSigned, JsonValue } from "./resume";
 
 export type Role = "A" | "B";
 
@@ -85,6 +86,13 @@ export type PeerMessage =
   | { t: "settle"; sig: string; root: string }
   | { t: "closed"; digest: string }
   | { t: "stop" }
+  | {
+      t: "resync";
+      nonce: string;
+      hasPending: boolean;
+      checkpoint?: WireCoSigned;
+      fullState?: JsonValue;
+    }
   | { t: "frame"; data: string };
 
 /** Engine transport + a peer-message side channel, both over one match's relay. */
@@ -92,6 +100,12 @@ export interface PvpChannel {
   transport: Transport;
   sendPeer(msg: Exclude<PeerMessage, { t: "frame" }>): void;
   onPeer(cb: (msg: Exclude<PeerMessage, { t: "frame" }>) => void): void;
+  addPeerListener(
+    cb: (msg: Exclude<PeerMessage, { t: "frame" }>) => void,
+  ): void;
+  removePeerListener(
+    cb: (msg: Exclude<PeerMessage, { t: "frame" }>) => void,
+  ): void;
 }
 
 const te = new TextEncoder();
@@ -318,12 +332,13 @@ export class MpClient {
   channel(matchId: string): PvpChannel {
     this.#activeMatches.add(matchId);
     let engineOnFrame: ((bytes: Uint8Array) => void) | null = null;
-    let peerCb: ((msg: Exclude<PeerMessage, { t: "frame" }>) => void) | null =
-      null;
+    const peerCbs = new Set<
+      (msg: Exclude<PeerMessage, { t: "frame" }>) => void
+    >();
     this.#relayHandlers.set(matchId, (payload) => {
       const o = JSON.parse(payload) as PeerMessage;
       if (o.t === "frame") engineOnFrame?.(te.encode(o.data));
-      else peerCb?.(o);
+      else peerCbs.forEach((cb) => cb(o));
     });
     const relaySend = (obj: PeerMessage) =>
       this.#send({ type: "relay", matchId, payload: JSON.stringify(obj) });
@@ -343,7 +358,14 @@ export class MpClient {
       },
       sendPeer: (msg) => relaySend(msg),
       onPeer: (cb) => {
-        peerCb = cb;
+        peerCbs.clear();
+        peerCbs.add(cb);
+      },
+      addPeerListener: (cb) => {
+        peerCbs.add(cb);
+      },
+      removePeerListener: (cb) => {
+        peerCbs.delete(cb);
       },
     };
   }
