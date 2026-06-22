@@ -29,7 +29,7 @@ graph TB
         E[Off-chain engine + per-game Protocol]
     end
 
-    subgraph CP["tunnel-manager — control plane (≥2 instances, Redis-backed) · never signs a move, never a counterparty"]
+    subgraph CP["tunnel-manager — control plane (≥2 instances, Valkey-backed) · never signs a move, never a counterparty"]
         MM[Matchmaking + presence]
         RL[Relay<br/>opaque co-signed frames]
         WT[Watchtower]
@@ -39,7 +39,7 @@ graph TB
 
     Chain[(Sui chain<br/>sui_tunnel)]
     WAL[(Walrus<br/>page + transcript proofs)]
-    Redis[(Redis<br/>shared state · cross-instance pub/sub bus)]
+    Valkey[(Valkey<br/>shared state · cross-instance pub/sub bus)]
 
     H --> E
     A --> E
@@ -89,7 +89,7 @@ backend is game-agnostic, keyed only on a `game` id.
 The control plane runs as **two or more identical instances behind a load balancer**;
 any instance can serve any request. Round-robin routing means a session can register on
 one instance and settle on another, and two paired players can land on different
-instances — so **all cross-instance state lives in Redis**, never in process memory:
+instances — so **all cross-instance state lives in Valkey**, never in process memory:
 
 - A **cache cluster** holds the ephemeral key-value state: sessions, presence,
   matchmaking queues, invites, live matches, and the stats counters. Pairing is an
@@ -103,7 +103,7 @@ instances — so **all cross-instance state lives in Redis**, never in process m
 
 There is **no relational database**: every durable fact already lives on-chain
 (settlements) or on Walrus (transcripts), and the registry is re-derived from chain
-events — the state that remains is non-relational and ephemeral, which is why Redis
+events — the state that remains is non-relational and ephemeral, which is why Valkey
 alone suffices. Liveness and readiness are split: **`/health/live`** is always 200 while
 the process runs; **`/health/ready`** is 200 only when the cache cluster is reachable, so
 a pub/sub blip degrades cross-instance PvP delivery but never blacks out stats or

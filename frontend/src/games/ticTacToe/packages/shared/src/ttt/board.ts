@@ -1,14 +1,24 @@
 import {
-  CELL_EMPTY, CELL_PLAYER, CELL_SERVER,
-  STATUS_ONGOING, STATUS_PLAYER_WIN, STATUS_SERVER_WIN, STATUS_DRAW,
+  CELL_EMPTY,
+  CELL_PLAYER,
+  CELL_SERVER,
+  STATUS_ONGOING,
+  STATUS_PLAYER_WIN,
+  STATUS_SERVER_WIN,
+  STATUS_DRAW,
 } from "../constants";
 
 export type Board = number[]; // length 9, values 0|1|2
 
 export const WIN_LINES: number[][] = [
-  [0, 1, 2], [3, 4, 5], [6, 7, 8],
-  [0, 3, 6], [1, 4, 7], [2, 5, 8],
-  [0, 4, 8], [2, 4, 6],
+  [0, 1, 2],
+  [3, 4, 5],
+  [6, 7, 8],
+  [0, 3, 6],
+  [1, 4, 7],
+  [2, 5, 8],
+  [0, 4, 8],
+  [2, 4, 6],
 ];
 
 export function legalMoves(board: Board): number[] {
@@ -19,7 +29,11 @@ export function legalMoves(board: Board): number[] {
 
 export function winner(board: Board): number {
   for (const [a, b, c] of WIN_LINES) {
-    if (board[a] !== CELL_EMPTY && board[a] === board[b] && board[b] === board[c]) {
+    if (
+      board[a] !== CELL_EMPTY &&
+      board[a] === board[b] &&
+      board[b] === board[c]
+    ) {
       return board[a];
     }
   }

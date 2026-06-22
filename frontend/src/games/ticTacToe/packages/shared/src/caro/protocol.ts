@@ -64,7 +64,11 @@ export class CaroProtocol implements Protocol<CaroState, CaroMove> {
     if (state.winner !== 0) throw new Error("caro: game already over");
     if (by !== state.turn) throw new Error("caro: not this party's turn");
     const { cell } = move;
-    if (!Number.isInteger(cell) || cell < 0 || cell >= state.size * state.size) {
+    if (
+      !Number.isInteger(cell) ||
+      cell < 0 ||
+      cell >= state.size * state.size
+    ) {
       throw new Error("caro: cell out of range");
     }
     if (state.board[cell] !== 0) throw new Error("caro: cell occupied");
@@ -121,9 +125,10 @@ export type MultiGameCaroMove = CaroMove;
 const MULTI_DOMAIN = protocols.protocolDomain("caro.multi.v1");
 
 /** Plays `maxGames` Caro games over one tunnel, composing `CaroProtocol`. */
-export class MultiGameCaroProtocol
-  implements Protocol<MultiGameCaroState, MultiGameCaroMove>
-{
+export class MultiGameCaroProtocol implements Protocol<
+  MultiGameCaroState,
+  MultiGameCaroMove
+> {
   readonly name = "caro.multi.v1";
   private readonly inner: CaroProtocol;
   private readonly maxGames: number;
@@ -141,7 +146,11 @@ export class MultiGameCaroProtocol
   }
 
   initialState(ctx: ProtocolContext): MultiGameCaroState {
-    return { inner: this.inner.initialState(ctx), gamesPlayed: 0, maxGames: this.maxGames };
+    return {
+      inner: this.inner.initialState(ctx),
+      gamesPlayed: 0,
+      maxGames: this.maxGames,
+    };
   }
 
   applyMove(
@@ -160,7 +169,11 @@ export class MultiGameCaroProtocol
       tunnelId: "",
       initialBalances: { a: state.inner.balanceA, b: state.inner.balanceB },
     });
-    return { inner: carried, gamesPlayed: state.gamesPlayed + 1, maxGames: state.maxGames };
+    return {
+      inner: carried,
+      gamesPlayed: state.gamesPlayed + 1,
+      maxGames: state.maxGames,
+    };
   }
 
   encodeState(state: MultiGameCaroState): Uint8Array {
@@ -189,7 +202,8 @@ export class MultiGameCaroProtocol
   ): MultiGameCaroMove | null {
     if (this.isTerminal(state)) return null;
     // Between games only A drives the advance (mirrors TTT); mid-game the hook supplies moves.
-    if (this.inner.isTerminal(state.inner)) return by === "A" ? { cell: 0 } : null;
+    if (this.inner.isTerminal(state.inner))
+      return by === "A" ? { cell: 0 } : null;
     // Mid-game fallback: first empty cell (the real bot uses caro/bot.ts instead).
     const i = state.inner.board.findIndex((c) => c === 0);
     return i >= 0 ? { cell: i } : null;

@@ -25,7 +25,7 @@ const RESULT_BANNER: Record<SessionResult, string> = {
 function getChipStack(balance: number): string[] {
   const stack: string[] = [];
   let remaining = balance;
-  
+
   const chipTypes = [
     { value: 1000, asset: chip1000 },
     { value: 500, asset: chip500 },
@@ -39,11 +39,11 @@ function getChipStack(balance: number): string[] {
       remaining -= chip.value;
     }
   }
-  
+
   if (stack.length === 0 && balance > 0) {
     stack.push(chip25);
   }
-  
+
   return stack;
 }
 
@@ -53,7 +53,9 @@ export function BlackjackTable({
   settled,
   onPlayAgain,
 }: BlackjackTableProps) {
-  const [animState, setAnimState] = useState<"idle" | "deal" | "win" | "lose" | "push">("idle");
+  const [animState, setAnimState] = useState<
+    "idle" | "deal" | "win" | "lose" | "push"
+  >("idle");
   const prevRoundRef = useRef<number>(-1);
   const prevPhaseRef = useRef<string>("");
   const prevBalanceRef = useRef<number>(-1);
@@ -116,14 +118,19 @@ export function BlackjackTable({
 
         {/* Dealer Stack Display */}
         <div className="absolute top-3 left-4 z-10 flex flex-col items-center">
-          <span className="text-[8px] text-emerald-200/50 uppercase tracking-widest mb-1 font-bold">Dealer Stacks</span>
+          <span className="text-[8px] text-emerald-200/50 uppercase tracking-widest mb-1 font-bold">
+            Dealer Stacks
+          </span>
           <div className="profile-chip-stack">
             {getChipStack(view.dealerBalance).map((chip, idx) => (
               <img
                 key={idx}
                 src={chip}
                 className="stacked-chip"
-                style={{ bottom: `${idx * 6}px`, transform: `rotate(${idx * 4 - 8}deg)` }}
+                style={{
+                  bottom: `${idx * 6}px`,
+                  transform: `rotate(${idx * 4 - 8}deg)`,
+                }}
                 alt="chip"
               />
             ))}
@@ -132,14 +139,19 @@ export function BlackjackTable({
 
         {/* Player Stack Display */}
         <div className="absolute bottom-[20%] left-4 z-10 flex flex-col items-center">
-          <span className="text-[8px] text-emerald-200/50 uppercase tracking-widest mb-1 font-bold">Player Stacks</span>
+          <span className="text-[8px] text-emerald-200/50 uppercase tracking-widest mb-1 font-bold">
+            Player Stacks
+          </span>
           <div className="profile-chip-stack">
             {getChipStack(view.playerBalance).map((chip, idx) => (
               <img
                 key={idx}
                 src={chip}
                 className="stacked-chip"
-                style={{ bottom: `${idx * 6}px`, transform: `rotate(${idx * 4 - 8}deg)` }}
+                style={{
+                  bottom: `${idx * 6}px`,
+                  transform: `rotate(${idx * 4 - 8}deg)`,
+                }}
                 alt="chip"
               />
             ))}
@@ -149,26 +161,48 @@ export function BlackjackTable({
         {/* Betting Spot (Desk Layout) */}
         <div className={`betting-spot ${animState !== "idle" ? "active" : ""}`}>
           <div className="betting-label">PAYS 3 TO 2</div>
-          <div className="text-[8px] text-[#d4af37]/60 font-mono tracking-wider font-extrabold uppercase mt-1">WAGER $100</div>
+          <div className="text-[8px] text-[#d4af37]/60 font-mono tracking-wider font-extrabold uppercase mt-1">
+            WAGER $100
+          </div>
         </div>
 
         {/* Active Animated Chips Layer */}
         {animState !== "idle" && (
           <div className="table-chips-layer">
             {animState === "deal" && (
-              <img src={chip100} className="animated-chip chip-deal" alt="bet chip" />
+              <img
+                src={chip100}
+                className="animated-chip chip-deal"
+                alt="bet chip"
+              />
             )}
             {animState === "win" && (
               <>
-                <img src={chip100} className="animated-chip chip-win-collect-1" alt="bet chip 1" />
-                <img src={chip100} className="animated-chip chip-win-collect-2" alt="bet chip 2" />
+                <img
+                  src={chip100}
+                  className="animated-chip chip-win-collect-1"
+                  alt="bet chip 1"
+                />
+                <img
+                  src={chip100}
+                  className="animated-chip chip-win-collect-2"
+                  alt="bet chip 2"
+                />
               </>
             )}
             {animState === "lose" && (
-              <img src={chip100} className="animated-chip chip-lose" alt="bet chip" />
+              <img
+                src={chip100}
+                className="animated-chip chip-lose"
+                alt="bet chip"
+              />
             )}
             {animState === "push" && (
-              <img src={chip100} className="animated-chip chip-push" alt="bet chip" />
+              <img
+                src={chip100}
+                className="animated-chip chip-push"
+                alt="bet chip"
+              />
             )}
           </div>
         )}

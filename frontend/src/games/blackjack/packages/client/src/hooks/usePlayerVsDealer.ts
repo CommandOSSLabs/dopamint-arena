@@ -327,19 +327,16 @@ export function usePlayerVsDealer(): PlayerVsDealerGame {
 
   // Co-signed step as a given party; throws if the dual-verify fails so we never advance
   // on an unverified state.
-  const stepBy = useCallback(
-    (tunnel: Tunnel, by: protocols.Party) => {
-      // Sign with the on-chain created_at so the final co-signed state passes
-      // update_state's timestamp check at cashOut (see hit/nextRound for the same).
-      const r = tunnel.step({ action: "stand" }, by, {
-        mode: "full",
-        timestamp: createdAtRef.current,
-      });
-      if (!r.verified) throw new Error(`state ${r.nonce} failed dual-verify`);
-      return tunnel.state;
-    },
-    [],
-  );
+  const stepBy = useCallback((tunnel: Tunnel, by: protocols.Party) => {
+    // Sign with the on-chain created_at so the final co-signed state passes
+    // update_state's timestamp check at cashOut (see hit/nextRound for the same).
+    const r = tunnel.step({ action: "stand" }, by, {
+      mode: "full",
+      timestamp: createdAtRef.current,
+    });
+    if (!r.verified) throw new Error(`state ${r.nonce} failed dual-verify`);
+    return tunnel.state;
+  }, []);
 
   // Human Hit: draw one card for the player. A bust resolves the round immediately
   // (phase -> "round_over") as a loss; we record it.
@@ -498,7 +495,9 @@ export function usePlayerVsDealer(): PlayerVsDealerGame {
   }, [isTerminal, phase, cashOut]);
 
   const isPlayerTurn =
-    phase === "playing" && view.phase === "player" && tunnelRef.current !== null;
+    phase === "playing" &&
+    view.phase === "player" &&
+    tunnelRef.current !== null;
 
   return {
     view,

@@ -21,6 +21,13 @@ export interface GameModule {
   /** Logo image path (served from public/, e.g. `/games/blackjack.png`). */
   image: string;
   Window: ComponentType<GameWindowProps>;
+  /**
+   * Opening size in grid units (default 4×4). Pick a size whose on-screen ratio
+   * suits the game — e.g. Battleship's two 10×10 boards want a wider, taller box.
+   */
+  defaultSize?: { w: number; h: number };
+  /** Smallest size the window may resize to, in grid units (default 3×3). */
+  minSize?: { w: number; h: number };
   // Deferred until games drive the engine:
   //   protocolFactory?: () => Protocol<unknown, unknown>;  // from sui-tunnel-ts
 }

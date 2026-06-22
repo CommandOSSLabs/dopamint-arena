@@ -13,6 +13,8 @@ import "@mysten/dapp-kit/dist/index.css";
 import Home from "@/pages/Home";
 import PlayerBot from "@/pages/PlayerBot";
 import PlayerVsDealer from "@/pages/PlayerVsDealer";
+import PvpBlackjack from "@/pages/PvpBlackjack";
+import { ScaledWrapper } from "@/components/app/ScaledWrapper";
 
 interface StorageAdapter {
   setItem(key: string, value: string): Promise<void>;
@@ -45,12 +47,15 @@ export default function App() {
         defaultNetwork={clientConfig.SUI_NETWORK_NAME}
       >
         <WalletProvider autoConnect storage={sessionStorageAdapter}>
-          <Routes>
-            <Route path="/" element={<Home />} />
-            <Route path="/play" element={<PlayerVsDealer />} />
-            <Route path="/bot" element={<PlayerBot />} />
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
+          <ScaledWrapper>
+            <Routes>
+              <Route path="/" element={<Home />} />
+              <Route path="/play" element={<PlayerVsDealer />} />
+              <Route path="/bot" element={<PlayerBot />} />
+              <Route path="/pvp" element={<PvpBlackjack />} />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </ScaledWrapper>
           <Toaster
             position="top-right"
             reverseOrder

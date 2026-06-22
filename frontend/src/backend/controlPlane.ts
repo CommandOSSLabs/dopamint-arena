@@ -142,7 +142,10 @@ async function failIfNotOk(res: Response, what: string): Promise<void> {
   } catch {
     // non-JSON body; keep statusText
   }
-  throw new ControlPlaneError(res.status, `${what} failed: ${res.status} ${detail}`);
+  throw new ControlPlaneError(
+    res.status,
+    `${what} failed: ${res.status} ${detail}`,
+  );
 }
 
 export function createControlPlaneClient(baseUrl: string): ControlPlaneClient {
@@ -211,6 +214,7 @@ let cachedClient: ControlPlaneClient | undefined;
 /** Browser singleton shared across game modules. Per-call failures are caught by callers —
  *  the backend is the stats/settlement spine, never the per-move loop, so it can't block play. */
 export function getControlPlaneClient(): ControlPlaneClient {
-  if (!cachedClient) cachedClient = createControlPlaneClient(resolveBackendUrl());
+  if (!cachedClient)
+    cachedClient = createControlPlaneClient(resolveBackendUrl());
   return cachedClient;
 }

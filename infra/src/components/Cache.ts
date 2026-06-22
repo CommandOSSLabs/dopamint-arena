@@ -19,9 +19,10 @@ export function createCache(
   });
 
   const pubSubCluster = new aws.elasticache.ReplicationGroup(`${name}-pubsub-cmd`, {
-    description: "Pub/Sub Redis for TPS stream",
-    engine: "redis",
-    engineVersion: "7.1",
+    description: "Pub/Sub Valkey for TPS stream",
+    engine: "valkey",
+    engineVersion: "7.2",
+    parameterGroupName: "default.valkey7",
     nodeType: args.nodeType,
     numCacheClusters: 2,
     automaticFailoverEnabled: true,
@@ -32,9 +33,10 @@ export function createCache(
   });
 
   const cacheCluster = new aws.elasticache.ReplicationGroup(`${name}-cache-cmd`, {
-    description: "Cache Redis for sessions and counters",
-    engine: "redis",
-    engineVersion: "7.1",
+    description: "Cache Valkey for sessions and counters",
+    engine: "valkey",
+    engineVersion: "7.2",
+    parameterGroupName: "default.valkey7",
     nodeType: args.nodeType,
     numCacheClusters: 2,
     automaticFailoverEnabled: true,

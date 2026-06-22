@@ -64,16 +64,16 @@ jobs:
       - run: cargo build --locked
       - run: cargo test --locked
 
-  backend-redis-it:
-    name: Backend Redis integration tests
+  backend-valkey-it:
+    name: Backend Valkey integration tests
     runs-on: ubuntu-latest
     services:
-      redis:
-        image: redis:7
+      valkey:
+        image: valkey/valkey:7.2
         ports:
           - 6379:6379
         options: >-
-          --health-cmd "redis-cli ping"
+          --health-cmd "valkey-cli ping"
           --health-interval 5s
           --health-timeout 3s
           --health-retries 5
@@ -83,7 +83,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: . -> target
-      - name: Run ignored Redis integration tests
+      - name: Run ignored Valkey integration tests
         env:
           TEST_REDIS_URL: redis://localhost:6379
         run: cargo test -p tunnel-manager -- --ignored

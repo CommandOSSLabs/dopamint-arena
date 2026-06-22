@@ -6,8 +6,10 @@ import "./chickenCross";
 import "./bombIt";
 import "./quantumPoker";
 import "./ticTacToe";
-import "./chat";
-import "./regularPayments";
-import "./coinFlip";
-import "./dice";
-import "./slots";
+import "./battleship";
+// import "./chat";
+// import "./regularPayments";
+// Hidden for now — re-enable by uncommenting.
+// import "./coinFlip";
+// import "./dice";
+// import "./slots";

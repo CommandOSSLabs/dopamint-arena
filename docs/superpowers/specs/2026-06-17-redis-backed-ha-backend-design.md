@@ -1,4 +1,4 @@
-# Redis-backed, horizontally-scalable backend — design spec
+# Valkey-backed, horizontally-scalable backend — design spec
 
 - **Date**: 2026-06-17
 - **Status**: Approved (design)
@@ -9,18 +9,18 @@
 ## Goal
 
 Make `tunnel-manager` correct at **desired count ≥ 2** by moving all shared state to
-**Redis** and delivering cross-instance messages over **sharded pub/sub** — with no
+**Valkey** and delivering cross-instance messages over **sharded pub/sub** — with no
 Postgres. Preserve the existing wire contracts (ADR-0002 HTTP, ADR-0004 WS) byte-for-byte;
 the FE sees no protocol change. Keep the pairing/routing logic in fast unit tests.
 
 ## In scope
 
 1. A storage seam (`ControlStore`, `MpStore`, `Bus` traits) with **in-memory** impls
-   (today's behavior; tests + local dev) and **Redis** impls (prod/HA).
+   (today's behavior; tests + local dev) and **Valkey** impls (prod/HA).
 2. The cross-instance delivery primitive (`Bus::deliver` + a per-instance subscription).
 3. Atomic matchmaking across instances (Lua `join-or-pair`).
 4. Shared stats counters + per-instance SSE that all report the same global numbers.
-5. Deploy contract: `/health/live` + `/health/ready`, a multi-stage Dockerfile, Redis config.
+5. Deploy contract: `/health/live` + `/health/ready`, a multi-stage Dockerfile, Valkey config.
 6. Concurrent settlement: PTB-batched self-play closes + non-shared gas (address balance or a
    Redis-leased coin pool) so closes scale at the 1M-TPS target without equivocation.
 
@@ -44,14 +44,14 @@ warm pools; per-message wallet re-auth. Carryovers from ADR-0004 remain open
 
 - **Local to each task (never shared):** `conns: HashMap<ConnId, mpsc::Sender<String>>`
   (live socket writers) and the subscription to its own `mp:inst:<instanceId>` channel.
-- **Shared in Redis cache cluster:** sessions, tunnel registry, stats counters, presence,
+- **Shared in Valkey cache cluster:** sessions, tunnel registry, stats counters, presence,
   queues, invites, matches.
-- **Redis pubsub cluster:** the per-instance delivery channel only.
+- **Valkey pubsub cluster:** the per-instance delivery channel only.
 
 ## Storage seam (the traits)
 
 All async (`#[async_trait]`). Injected into `AppState` as `Arc<dyn …>`. The **in-memory
-impl is today's code** (RwLock maps / atomics); the **Redis impl** uses `fred`.
+impl is today's code** (RwLock maps / atomics); the **Valkey impl** uses `fred`.
 
 ```rust
 #[async_trait]
@@ -213,9 +213,9 @@ a same-process guard only.
 
 ## Config (`config.rs`)
 
-Add (required at boot, fail-loud like the SUI_* vars **when running the Redis impl**):
+Add (required at boot, fail-loud like the SUI_* vars **when running the Valkey impl**):
 `REDIS_CACHE_URL`, `REDIS_PUBSUB_URL` (both `rediss://`). `INSTANCE_ID` optional → else a
-boot-time uuid. **Impl selection:** if `REDIS_CACHE_URL` is set → Redis impls; else the
+boot-time uuid. **Impl selection:** if `REDIS_CACHE_URL` is set → Valkey impls; else the
 in-memory impls (local dev / tests). No DB vars. Drop nothing else.
 
 The existing `SUI_*` / `WALRUS_*` / `TUNNEL_*` vars stay required at startup (`main.rs`), and
@@ -252,10 +252,10 @@ the store); their behavior-level tests move to `store/memory.rs`'s test module.
 
 - **Unit (fast, no IO):** pairing/routing/checkpoint/stats logic against the **in-memory**
   impls — same assertions as today (seat-A=earlier-waiter, invite-auth, highest-nonce, etc.).
-- **Integration (`#[ignore]` unless `TEST_REDIS_URL` set; run in a Redis-backed CI job):**
-  against `testcontainers` `redis:7` — `join_or_pair` under concurrency pairs each waiter
+- **Integration (`#[ignore]` unless `TEST_REDIS_URL` set; run in a Valkey-backed CI job):**
+  against `valkey/valkey:7.2` — `join_or_pair` under concurrency pairs each waiter
   exactly once; `Bus::deliver` from instance X reaches a socket owned by instance Y; presence
-  conditional-clear; checkpoint highest-nonce; `/health/ready` flips 503→200 when Redis is up.
+  conditional-clear; checkpoint highest-nonce; `/health/ready` flips 503→200 when Valkey is up.
 - **Contract unchanged:** existing `protocol.rs` / settle-shape tests stay green (no wire change).
 
 ## Phasing (for the implementation plan)

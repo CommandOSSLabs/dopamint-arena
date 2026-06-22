@@ -24,6 +24,7 @@ export type PeerMessage =
   | { t: "hello"; ephemeralPubkey: string }
   | { t: "open"; tunnelId: string }
   | { t: "ready" }
+  | { t: "endMatch" }
   | {
       t: "settleHalf";
       partyABalance: string;

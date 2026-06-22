@@ -212,7 +212,10 @@ export function useBotGame(difficulty: Difficulty = "even"): BotGameView {
   const setMaxGames = useCallback((n: number) => {
     const clamped = Math.max(
       MIN_MAX_GAMES,
-      Math.min(MAX_MAX_GAMES, Math.floor(Number.isFinite(n) ? n : DEFAULT_MAX_GAMES)),
+      Math.min(
+        MAX_MAX_GAMES,
+        Math.floor(Number.isFinite(n) ? n : DEFAULT_MAX_GAMES),
+      ),
     );
     setMaxGamesState(clamped);
   }, []);
@@ -285,7 +288,10 @@ export function useBotGame(difficulty: Difficulty = "even"): BotGameView {
   // *tunnel* (or stops if a bot is low on gas).
   const runGame = useCallback(() => {
     stopTimer();
-    if (balancesRef.current.x < MIN_PLAY_MIST || balancesRef.current.o < MIN_PLAY_MIST) {
+    if (
+      balancesRef.current.x < MIN_PLAY_MIST ||
+      balancesRef.current.o < MIN_PLAY_MIST
+    ) {
       autoRef.current = false;
       setAuto(false);
       setError("Fund the bots first");
@@ -330,7 +336,9 @@ export function useBotGame(difficulty: Difficulty = "even"): BotGameView {
         const fields = (
           obj.data?.content as { fields?: Record<string, unknown> } | undefined
         )?.fields;
-        const createdAt = BigInt((fields?.created_at as string | undefined) ?? 0);
+        const createdAt = BigInt(
+          (fields?.created_at as string | undefined) ?? 0,
+        );
 
         // 3) off-chain self-play tunnel (both keys held locally), driving the
         //    multi-game protocol so ALL games share this single tunnel.
@@ -469,7 +477,10 @@ export function useBotGame(difficulty: Difficulty = "even"): BotGameView {
         setTunnels((prev) => [record, ...prev].slice(0, MAX_TUNNELS_LOGGED));
         setScore({ x: 0, o: 0, draws: 0 });
         try {
-          localStorage.setItem(SCORE_KEY, JSON.stringify({ x: 0, o: 0, draws: 0 }));
+          localStorage.setItem(
+            SCORE_KEY,
+            JSON.stringify({ x: 0, o: 0, draws: 0 }),
+          );
         } catch {
           /* ignore */
         }
@@ -513,7 +524,10 @@ export function useBotGame(difficulty: Difficulty = "even"): BotGameView {
   }, [runGame]);
 
   const startAuto = useCallback(() => {
-    if (balancesRef.current.x < MIN_PLAY_MIST || balancesRef.current.o < MIN_PLAY_MIST) {
+    if (
+      balancesRef.current.x < MIN_PLAY_MIST ||
+      balancesRef.current.o < MIN_PLAY_MIST
+    ) {
       setError("Fund the bots first");
       setPhase("error");
       return;
@@ -551,7 +565,7 @@ export function useBotGame(difficulty: Difficulty = "even"): BotGameView {
       const fromX = b.x >= b.o;
       const from = fromX ? bots.x : bots.o;
       const to = fromX ? bots.o : bots.x;
-      const diff = (fromX ? b.x - b.o : b.o - b.x);
+      const diff = fromX ? b.x - b.o : b.o - b.x;
       if (diff < 4_000_000n) {
         setError("Bots are already balanced.");
         return;

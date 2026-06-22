@@ -1,7 +1,14 @@
 import { fromHEX, toHEX } from "@mysten/bcs";
-import { sign as blsSign, verify as blsVerify, getPublicKey } from "@noble/bls12-381";
+import {
+  sign as blsSign,
+  verify as blsVerify,
+  getPublicKey,
+} from "@noble/bls12-381";
 
-export async function sign(messageHex: string, privateKeyHex: string): Promise<string> {
+export async function sign(
+  messageHex: string,
+  privateKeyHex: string,
+): Promise<string> {
   const sig = await blsSign(fromHEX(messageHex), privateKeyHex);
   return toHEX(sig);
 }

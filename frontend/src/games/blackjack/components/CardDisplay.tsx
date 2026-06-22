@@ -1,8 +1,8 @@
 import { cardUrlFromIndex } from "../cardAssets";
 
 interface CardDisplayProps {
-  cards: number[];   // display indices 0..51
-  sum: number;       // authoritative total from the SDK (handValue)
+  cards: number[]; // display indices 0..51
+  sum: number; // authoritative total from the SDK (handValue)
   title: string;
   isWinning?: boolean;
   isPlayer?: boolean;
@@ -67,16 +67,16 @@ export function CardDisplay({
                   left: `${index * 20}px`,
                   zIndex: index,
                   filter: "drop-shadow(0px 6px 10px rgba(0,0,0,0.4))",
-                  transform: isPlayer ? `rotate(${rotation}deg) translateY(${translateY}px)` : undefined,
+                  transform: isPlayer
+                    ? `rotate(${rotation}deg) translateY(${translateY}px)`
+                    : undefined,
                   transformOrigin: "bottom center",
                 }}
               />
             );
           })}
           {cards.length > 0 && (
-            <div
-              className="absolute -right-4 top-1/2 -translate-y-1/2 flex items-center justify-center w-8 h-8 rounded-full border-2 border-[#d4af37] bg-[#2a1708] text-[#d4af37] font-bold text-sm shadow-lg z-10"
-            >
+            <div className="absolute -right-4 top-1/2 -translate-y-1/2 flex items-center justify-center w-8 h-8 rounded-full border-2 border-[#d4af37] bg-[#2a1708] text-[#d4af37] font-bold text-sm shadow-lg z-10">
               {sum}
             </div>
           )}
@@ -101,16 +101,16 @@ export function CardDisplay({
                   left: `${index * 24}px`,
                   zIndex: index,
                   filter: "drop-shadow(0px 10px 15px rgba(0,0,0,0.5))",
-                  transform: isPlayer ? `rotate(${rotation}deg) translateY(${translateY}px)` : undefined,
+                  transform: isPlayer
+                    ? `rotate(${rotation}deg) translateY(${translateY}px)`
+                    : undefined,
                   transformOrigin: "bottom center",
                 }}
               />
             );
           })}
           {cards.length > 0 && (
-            <div
-              className="absolute -right-5 top-1/2 -translate-y-1/2 flex items-center justify-center w-9 h-9 rounded-full border-2 border-[#d4af37] bg-[#2a1708] text-[#d4af37] font-bold text-base shadow-lg z-10"
-            >
+            <div className="absolute -right-5 top-1/2 -translate-y-1/2 flex items-center justify-center w-9 h-9 rounded-full border-2 border-[#d4af37] bg-[#2a1708] text-[#d4af37] font-bold text-base shadow-lg z-10">
               {sum}
             </div>
           )}

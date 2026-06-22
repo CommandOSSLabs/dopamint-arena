@@ -21,7 +21,11 @@ test("valueToCardIndex yields a 0..51 index whose rank value matches", () => {
       const idx = valueToCardIndex(value, seq);
       assert.ok(idx >= 0 && idx < 52, `index ${idx} in range`);
       const rankIdx = idx % 13;
-      assert.equal(rankIndexValue(rankIdx), value, `rank value matches for ${value}`);
+      assert.equal(
+        rankIndexValue(rankIdx),
+        value,
+        `rank value matches for ${value}`,
+      );
     }
   }
 });
@@ -30,7 +34,8 @@ test("value 11 is always an Ace; value 10 varies across 10/J/Q/K", () => {
   assert.equal(valueToCardIndex(11, 3) % 13, 0); // Ace rank index
   const faces = new Set([0, 1, 2, 3].map((s) => valueToCardIndex(10, s) % 13));
   assert.ok(faces.size > 1, "ten-valued cards vary by seq");
-  for (const r of faces) assert.ok(r >= 9 && r <= 12, "ten-valued rank is 10/J/Q/K");
+  for (const r of faces)
+    assert.ok(r >= 9 && r <= 12, "ten-valued rank is 10/J/Q/K");
 });
 
 test("handToCardIndices is stable for the same inputs and preserves length", () => {

@@ -124,7 +124,12 @@
 
 /* Casino Felt Table Background */
 .casino-felt {
-  background: radial-gradient(circle at center, #0c572c 0%, #06351b 50%, #032110 100%);
+  background: radial-gradient(
+    circle at center,
+    #0c572c 0%,
+    #06351b 50%,
+    #032110 100%
+  );
   position: relative;
   overflow: hidden;
 }
@@ -134,16 +139,22 @@
   position: absolute;
   inset: 0;
   opacity: 0.04;
-  background-image: radial-gradient(#ccc 1px, transparent 0), radial-gradient(#ccc 1px, transparent 0);
+  background-image:
+    radial-gradient(#ccc 1px, transparent 0),
+    radial-gradient(#ccc 1px, transparent 0);
   background-size: 8px 8px;
-  background-position: 0 0, 4px 4px;
+  background-position:
+    0 0,
+    4px 4px;
   pointer-events: none;
 }
 
 /* Mahogany Casino Table Rim border */
 .wood-rim {
   border: 16px solid #2d1810;
-  box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.8), 0 10px 25px rgba(0, 0, 0, 0.5);
+  box-shadow:
+    inset 0 0 20px rgba(0, 0, 0, 0.8),
+    0 10px 25px rgba(0, 0, 0, 0.5);
   border-radius: 40px;
 }
 
@@ -183,7 +194,9 @@
   border-width: var(--chip-border);
   border-style: dashed;
   border-color: rgba(255, 255, 255, 0.7);
-  box-shadow: 0 4px 8px rgba(0,0,0,0.4), inset 0 0 8px rgba(0,0,0,0.6);
+  box-shadow:
+    0 4px 8px rgba(0, 0, 0, 0.4),
+    inset 0 0 8px rgba(0, 0, 0, 0.6);
   cursor: pointer;
   transition: all 0.2s;
   user-select: none;
@@ -191,7 +204,9 @@
 
 .casino-chip:hover {
   transform: translateY(-4px) scale(1.05) rotate(15deg);
-  box-shadow: 0 6px 12px rgba(0,0,0,0.5), inset 0 0 8px rgba(0,0,0,0.4);
+  box-shadow:
+    0 6px 12px rgba(0, 0, 0, 0.5),
+    inset 0 0 8px rgba(0, 0, 0, 0.4);
 }
 
 .casino-chip:active {
@@ -209,7 +224,13 @@
 
 /* Premium Menu Background with dark vignette overlay */
 .menu-background {
-  background: radial-gradient(circle at center, rgba(12, 87, 44, 0.3) 0%, rgba(3, 33, 16, 0.9) 100%), url('/menu-background.png');
+  background:
+    radial-gradient(
+      circle at center,
+      rgba(12, 87, 44, 0.3) 0%,
+      rgba(3, 33, 16, 0.9) 100%
+    ),
+    url("/menu-background.png");
   background-size: cover;
   background-position: center;
   position: relative;
@@ -331,13 +352,19 @@
   justify-content: center;
   pointer-events: none;
   z-index: 10;
-  background: radial-gradient(circle, rgba(20, 80, 45, 0.4) 0%, transparent 80%);
+  background: radial-gradient(
+    circle,
+    rgba(20, 80, 45, 0.4) 0%,
+    transparent 80%
+  );
   transition: all 0.3s ease;
 }
 
 .betting-spot.active {
   border-color: rgba(212, 175, 55, 0.75);
-  box-shadow: 0 0 15px rgba(212, 175, 55, 0.2), inset 0 0 15px rgba(212, 175, 55, 0.1);
+  box-shadow:
+    0 0 15px rgba(212, 175, 55, 0.2),
+    inset 0 0 15px rgba(212, 175, 55, 0.1);
 }
 
 .betting-label {
@@ -515,4 +542,3 @@
     opacity: 0;
   }
 }
-

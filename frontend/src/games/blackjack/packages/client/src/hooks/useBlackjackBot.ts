@@ -182,7 +182,10 @@ export function useBlackjackBot(): BlackjackBotGame {
   const setMaxRounds = useCallback((n: number) => {
     const clamped = Math.max(
       MIN_ROUNDS_PER_TUNNEL,
-      Math.min(MAX_ROUNDS_PER_TUNNEL, Math.floor(Number.isFinite(n) ? n : DEFAULT_MAX_ROUNDS)),
+      Math.min(
+        MAX_ROUNDS_PER_TUNNEL,
+        Math.floor(Number.isFinite(n) ? n : DEFAULT_MAX_ROUNDS),
+      ),
     );
     maxRoundsRef.current = clamped;
     setMaxRoundsState(clamped);
@@ -327,7 +330,9 @@ export function useBlackjackBot(): BlackjackBotGame {
         const fields = (
           obj.data?.content as { fields?: Record<string, unknown> } | undefined
         )?.fields;
-        const createdAt = BigInt((fields?.created_at as string | undefined) ?? 0);
+        const createdAt = BigInt(
+          (fields?.created_at as string | undefined) ?? 0,
+        );
 
         // 3) off-chain self-play tunnel (both keys held locally).
         const tunnel = core.OffchainTunnel.selfPlay(
@@ -380,7 +385,10 @@ export function useBlackjackBot(): BlackjackBotGame {
               // Sign each update with the on-chain created_at (a validator timestamp,
               // always >= created_at and <= now) so the final co-signed state passes
               // update_state's timestamp check regardless of local clock skew.
-              const r = tunnel.step(move, by, { mode: "full", timestamp: createdAt });
+              const r = tunnel.step(move, by, {
+                mode: "full",
+                timestamp: createdAt,
+              });
               if (!r.verified)
                 throw new Error(`state ${r.nonce} failed dual-verify`);
               const s = tunnel.state;
@@ -467,7 +475,9 @@ export function useBlackjackBot(): BlackjackBotGame {
           result: finalResult,
           finalBalanceA: Number(finalA),
         };
-        setTunnels((prev) => [tunnelRecord, ...prev].slice(0, MAX_TUNNELS_LOGGED));
+        setTunnels((prev) =>
+          [tunnelRecord, ...prev].slice(0, MAX_TUNNELS_LOGGED),
+        );
 
         const b = await refreshBalances();
         setPhase("done");

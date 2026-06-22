@@ -61,4 +61,6 @@ pub trait Bus: Send + Sync {
     fn register(&self, conn: crate::mp::ConnId, tx: tokio::sync::mpsc::UnboundedSender<String>);
     fn unregister(&self, conn: crate::mp::ConnId);
     async fn deliver(&self, target: &ConnRef, text: String);
+    /// Fire-and-forget publish to a Redis channel (cross-service signal). In-memory is a no-op.
+    async fn publish_raw(&self, channel: &str, payload: String);
 }

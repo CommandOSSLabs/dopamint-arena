@@ -67,9 +67,11 @@ jobs:
 
       - name: Deploy infrastructure with Pulumi
         uses: pulumi/actions@cd99a7f8865434dd3532b586a26f9ebea596894f # v5.5.1
+        env:
+          PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
         with:
           command: up
-          stack-name: ${{ github.event.inputs.environment || 'dev' }}
+          stack-name: CommandOSS/dopamint-arena/${{ github.event.inputs.environment || 'dev' }}
           work-dir: infra
           pulumi-version: 3.243.0
           config-map: |

@@ -17,6 +17,7 @@ import { createBackendService } from "./components/BackendService.js";
 import { createBackendAlias } from "./components/BackendAlias.js";
 import { createMonitoring } from "./components/Monitoring.js";
 import { createBenchmarkFleet } from "./components/BenchmarkFleet.js";
+import { createExplorerServices } from "./components/ExplorerServices.js";
 import { githubEnvOutputs } from "./github.js";
 
 const cfg = getConfig();
@@ -37,6 +38,7 @@ const alb = createAlb(`dopamint-${cfg.environment}`, {
 
 const frontend = createFrontend(`dopamint-${cfg.environment}`, {
   domain: cfg.domain,
+  albDnsName: alb.alb.dnsName,
   certificateArn: dns.certificateArn,
   zoneId: dns.zoneId,
 });
@@ -64,15 +66,6 @@ if (cfg.settlerKey) {
   settlerKeySecretArn = settlerKeySecret.arn;
 }
 
-const iam = createIam(`dopamint-${cfg.environment}`, {
-  githubOrg: "CommandOSSLabs",
-  githubRepo: "dopamint-arena",
-  taskExecSecretArns: [
-    database.dbPasswordSecretArn,
-    ...(settlerKeySecretArn ? [settlerKeySecretArn] : []),
-  ],
-});
-
 const ecr = createEcr(`dopamint-${cfg.environment}`);
 const ecs = createEcs(`dopamint-${cfg.environment}`);
 
@@ -81,6 +74,26 @@ const dbProxy = createDatabaseProxy(`dopamint-${cfg.environment}`, {
   securityGroupId: sgs.db.id,
   dbClusterIdentifier: database.clusterIdentifier,
   secretArn: database.dbSecretArn,
+});
+
+// Full Postgres URL over the RDS Proxy, stored as a secret (password never in plaintext
+// env). Injected into the explorer services via ECS `secrets` as DATABASE_URL.
+const databaseUrlSecret = new aws.secretsmanager.Secret(`dopamint-${cfg.environment}-database-url`, {
+  description: `Postgres DATABASE_URL (via RDS Proxy) for dopamint-${cfg.environment}`,
+});
+new aws.secretsmanager.SecretVersion(`dopamint-${cfg.environment}-database-url-version`, {
+  secretId: databaseUrlSecret.id,
+  secretString: pulumi.interpolate`postgresql://dopamint:${database.dbPassword}@${dbProxy.proxyEndpoint}:5432/dopamint`,
+});
+
+const iam = createIam(`dopamint-${cfg.environment}`, {
+  githubOrg: "CommandOSSLabs",
+  githubRepo: "dopamint-arena",
+  taskExecSecretArns: [
+    database.dbPasswordSecretArn,
+    databaseUrlSecret.arn,
+    ...(settlerKeySecretArn ? [settlerKeySecretArn] : []),
+  ],
 });
 
 const cache = createCache(`dopamint-${cfg.environment}`, {
@@ -108,6 +121,23 @@ const backendService = createBackendService({
   targetGroupArn: alb.targetGroup.arn,
   securityGroupId: sgs.backend.id,
   subnetIds: network.privateSubnetIds,
+  listener: alb.listener,
+});
+
+const explorer = createExplorerServices({
+  name: `dopamint-${cfg.environment}`,
+  clusterId: ecs.clusterArn,
+  clusterName: ecs.clusterName,
+  repositoryUrl: ecr.repositoryUrl,
+  imageTag: cfg.backendImageTag,
+  logGroupName: ecs.logGroupName,
+  taskExecutionRoleArn: iam.taskExecutionRole.arn,
+  taskRoleArn: iam.taskRole.arn,
+  subnetIds: network.privateSubnetIds,
+  securityGroupId: sgs.backend.id, // already allowed to DB proxy (5432) + Redis (6379)
+  databaseUrlSecretArn: databaseUrlSecret.arn,
+  pubSubEndpoint: cache.pubSubEndpoint,
+  vpcId: network.vpcId,
   listener: alb.listener,
 });
 
@@ -192,3 +222,7 @@ export const benchmarkAsgName = benchmarkFleet.asgName;
 export const benchmarkMinSize = cfg.benchmarkMinSize;
 export const benchmarkComponentArn = benchmarkFleet.componentArn;
 export const benchmarkPipelineArn = benchmarkFleet.pipelineArn;
+
+export const indexerServiceName = explorer.indexerServiceName;
+export const explorerApiServiceName = explorer.apiServiceName;
+export const explorerApiTargetGroupArn = explorer.apiTargetGroupArn;
