@@ -8,6 +8,11 @@
   backend as ≥2 Fargate tasks behind an ALB. Design spec:
   `docs/superpowers/specs/2026-06-17-redis-backed-ha-backend-design.md`.
 
+> **Engine amendment (2026-06-22):** The two ElastiCache clusters are provisioned
+> with the **Valkey 7.2** engine rather than Redis OSS. Valkey is a Redis-protocol
+> fork and is API-compatible with the `fred` client and the Redis commands used by
+> the backend; the architecture decision is otherwise unchanged.
+
 ## Context
 
 ADR-0004 made the backend **stateful**: presence, matchmaking queues, invites,
