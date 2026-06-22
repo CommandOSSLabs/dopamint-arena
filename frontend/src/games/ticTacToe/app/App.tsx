@@ -142,15 +142,23 @@ function AppContent() {
   }
 
   return (
-    <div className="h-full w-full relative notebook-grid-bg text-on-surface selection:bg-tertiary selection:text-on-tertiary flex items-center justify-center p-4 overflow-hidden select-none">
+    <div
+      className={`h-full w-full relative notebook-grid-bg text-on-surface selection:bg-tertiary selection:text-on-tertiary flex items-center justify-center overflow-hidden select-none ${isPortrait ? "p-0" : "p-4"}`}
+    >
       {/* Vertical Margin Line (Notebook binding line) */}
-      <div className="absolute top-0 bottom-0 left-[20px] md:left-[32px] w-0 border-l-double border-l-[3px] border-secondary z-0 pointer-events-none opacity-80" />
+      {!isPortrait && (
+        <div className="absolute top-0 bottom-0 left-[20px] md:left-[32px] w-0 border-l-double border-l-[3px] border-secondary z-0 pointer-events-none opacity-80" />
+      )}
 
       <div
         ref={containerRef}
-        className="w-full h-full flex items-center justify-center z-10 pl-[20px] md:pl-[32px]"
+        className={`w-full h-full flex items-center justify-center z-10 ${isPortrait ? "pl-0" : "pl-[20px] md:pl-[32px]"}`}
       >
-        <GameCardScale targetWidth={targetWidth} targetHeight={targetHeight}>
+        <GameCardScale
+          targetWidth={targetWidth}
+          targetHeight={targetHeight}
+          isPortrait={isPortrait}
+        >
           {scene === "login" && (
             <LoginScene
               onContinue={() => setScene("setup")}
