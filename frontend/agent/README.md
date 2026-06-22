@@ -37,6 +37,27 @@ origin, wallet flow, and relay path a human uses. Spec:
   §Numbers#1 number must be measured **co-located in us-east-1** (spec §4) — run
   `loadtestRelay.mjs` from an EC2 instance in-region, then compare to `R_min`.
 
+4. **Arena auto-pilot** — drive the real desktop into bot-vs-bot auto-play (ttt + blackjack),
+   funding bots from the wallet only when low (no faucet):
+
+   ```bash
+   KEY=$(sui keytool export --key-identity "$(sui client active-address)" --json | jq -r .exportedPrivateKey) \
+     DURATION_MS=60000 node agent/arena.mjs
+   # HEADLESS=true to hide the browser; GAMES=ttt or GAMES=blackjack to run one.
+   ```
+   Requires the dev server up (`BASE_URL`, default :5173) and the `KEY` wallet funded on testnet.
+
+   **Smoke-test (manual gate):** verify the dev server is running on `:5173` pointing at a reachable
+   backend, then run:
+
+   ```bash
+   cd frontend
+   KEY=<funded suiprivkey> DURATION_MS=10000 HEADLESS=true node agent/arena.mjs
+   ```
+
+   Expected: logs `[arena] wallet connected, desktop ready`, `ttt auto-play started`,
+   `blackjack auto-play started`, `[arena] done`; exits 0.
+
 ## Known follow-ups (deferred)
 
 - **Backend `POST /v1/tunnels/{id}/settle` → 404:** the engine falls back to an on-chain
