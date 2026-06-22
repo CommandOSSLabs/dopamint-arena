@@ -14,7 +14,7 @@ import {
 } from "sui-tunnel-ts/protocol/quantumPoker";
 import { registerWindowDisposer } from "@/lib/windowSessions";
 import {
-  openAndFundSelfPlay,
+  openAndFundSelfPlayReturnless,
   readCreatedAt,
   type SignExec,
   type SuiReads,
@@ -166,7 +166,7 @@ class BotSession {
         const a = createParticipant("poker-you");
         const b = createParticipant("poker-foe");
         const reads = deps.client as unknown as SuiReads;
-        const tunnelId = await openAndFundSelfPlay({
+        const tunnelId = await openAndFundSelfPlayReturnless({
           reads,
           signExec: deps.signExec,
           partyA: { address: a.address, publicKey: a.keyPair.publicKey },
