@@ -24,7 +24,8 @@ export function makePokerResumeAdapter(args: {
 }): ResumeAdapter<PokerState, PokerMove> {
   return {
     serializeState: (s) => {
-      // Drop local-only secret fields; encode Uint8Array fields as plain arrays.
+      // Drop local-only secret fields; convert Uint8Array → number[] structurally while
+      // PRESERVING bigints (resume.ts tags those on persist — a JSON.stringify here would throw).
       const {
         localSecretsA: _a,
         localSecretsB: _b,
@@ -32,18 +33,65 @@ export function makePokerResumeAdapter(args: {
         holeB: _hb,
         ...pub
       } = s as PokerState;
-      return JSON.parse(
-        JSON.stringify(pub, (_k, v) =>
-          v instanceof Uint8Array ? Array.from(v) : v,
-        ),
-      ) as never;
+      return bytesToNumberArrays(pub) as never;
     },
     // The hook re-hydrates Uint8Arrays where the protocol needs them.
     deserializeState: (j) => j as PokerState,
     serializeMove: (m) => pokerMoveCodec.encode(m) as never,
     deserializeMove: (j) => pokerMoveCodec.decode(j),
-    captureSecret: () => args.getSecret() as unknown as never,
-    restoreSecret: (j) => args.setSecret(j as PokerSecret),
+    // The slot secrets carry Uint8Array value/salt, which localStorage JSON would destroy — encode
+    // them as number arrays so the cold-load round-trip is lossless.
+    captureSecret: () =>
+      ({
+        localSecretsA: encodeSlots(args.getSecret().localSecretsA),
+        localSecretsB: encodeSlots(args.getSecret().localSecretsB),
+        holeA: args.getSecret().holeA,
+        holeB: args.getSecret().holeB,
+      }) as unknown as never,
+    restoreSecret: (j) => {
+      const o = j as {
+        localSecretsA: EncodedSlot[] | null;
+        localSecretsB: EncodedSlot[] | null;
+        holeA: number[] | null;
+        holeB: number[] | null;
+      };
+      args.setSecret({
+        localSecretsA: decodeSlots(o.localSecretsA),
+        localSecretsB: decodeSlots(o.localSecretsB),
+        holeA: o.holeA,
+        holeB: o.holeB,
+      } as PokerSecret);
+    },
     onReconciled: args.onReconciled ?? (() => {}),
   };
+}
+
+type EncodedSlot = { value: number[]; salt: number[] } | null;
+
+// Recursively turn Uint8Array into number[]; leave bigint/number/string/null/arrays/objects intact.
+function bytesToNumberArrays(v: unknown): unknown {
+  if (v instanceof Uint8Array) return Array.from(v);
+  if (Array.isArray(v)) return v.map(bytesToNumberArrays);
+  if (v && typeof v === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, val] of Object.entries(v)) out[k] = bytesToNumberArrays(val);
+    return out;
+  }
+  return v;
+}
+
+function encodeSlots(arr: PokerSecret["localSecretsA"]): EncodedSlot[] | null {
+  if (!arr) return null;
+  return arr.map((s) =>
+    s ? { value: Array.from(s.value), salt: Array.from(s.salt) } : null,
+  );
+}
+
+function decodeSlots(arr: EncodedSlot[] | null): PokerSecret["localSecretsA"] {
+  if (!arr) return null;
+  return arr.map((s) =>
+    s
+      ? { value: Uint8Array.from(s.value), salt: Uint8Array.from(s.salt) }
+      : null,
+  );
 }
