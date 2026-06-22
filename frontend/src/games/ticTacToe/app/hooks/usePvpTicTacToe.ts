@@ -42,9 +42,13 @@ import {
   type PeerMessage,
   type PvpChannel,
 } from "@/pvp/mpClient";
-import { attachResume } from "@/pvp/resumeSession";
+import { attachResume, resumeActiveTunnels } from "@/pvp/resumeSession";
 import { raiseDisputeUnilateral } from "@/onchain/tunnelTx";
-import { installResumePersistence, evictExpiredRecords } from "@/pvp/resume";
+import {
+  installResumePersistence,
+  evictExpiredRecords,
+  readResumeRecord,
+} from "@/pvp/resume";
 import { makeTttResumeAdapter } from "@/games/ticTacToe/app/lib/tttResumeAdapter";
 
 export type Variant = "ttt" | "caro";
@@ -439,6 +443,31 @@ export function usePvpTicTacToe(
       try {
         const mp = new MpClient(resolveMpWsUrl(MP_URL), w.address, eph.coreKey);
         mpRef.current = mp;
+        // Cold-load: before joining a queue, rebuild any persisted in-flight match for this
+        // variant and re-attach to it. The opening handshake then carries resume{matchId}.
+        installResumePersistence();
+        const restored = resumeActiveTunnels<AnyState, CellMove>(
+          mp,
+          variant,
+          {
+            proto,
+            adapter: makeTttResumeAdapter<AnyState, CellMove>(() => {}),
+          },
+          { selfWallet: w.address },
+        );
+        if (restored.length > 0) {
+          const { tunnel, channel } = restored[0]; // one active match per game in practice
+          const rec = readResumeRecord(tunnel.tunnelId)!;
+          activateTttSession(mp, channel, tunnel, {
+            matchId: rec.matchId,
+            role: rec.role,
+            opponentWallet: rec.opponentWallet,
+            opponentPubkeyHex: rec.opponentPubkeyHex,
+            selfEphemeralSecretHex: rec.selfEphemeralSecretHex!,
+          });
+          await mp.connect();
+          return; // skip quickMatch — we are continuing an in-flight match
+        }
         await mp.connect();
         setPhase("queuing");
         // The queue key encodes the variant (+ board size for caro) so only players who chose the
@@ -452,7 +481,7 @@ export function usePvpTicTacToe(
         setPhase("error");
       }
     })();
-  }, [eph, variant, boardSize]);
+  }, [eph, variant, boardSize, proto, activateTttSession]);
 
   const onMatch = useCallback(
     async (mp: MpClient, m: MatchInfo) => {
