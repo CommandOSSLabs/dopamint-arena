@@ -39,7 +39,7 @@ import {
 } from "../../onchain/tunnelTx";
 import { coSignedToSettleRequest } from "../../backend/settleRequest";
 import {
-  QUANTUM_POKER_HAND_CAP,
+  QUANTUM_POKER_HANDS_PER_TUNNEL,
   QUANTUM_POKER_STAKE,
 } from "./constants";
 
@@ -47,7 +47,7 @@ import {
 export const STAKE_BALANCE = QUANTUM_POKER_STAKE;
 /** Hands played per match before the on-chain settle; chips move off-chain in the tunnel
  *  between hands, and the loop ends early (→ "done") if a seat can't cover the next ante. */
-export const HAND_CAP = QUANTUM_POKER_HAND_CAP;
+export const HAND_CAP = QUANTUM_POKER_HANDS_PER_TUNNEL;
 /** Demo mode runs plumbing/hand transitions immediately so throughput is visible in tx/sec. */
 const HAND_STEP_DELAY_MS = 0;
 /** Matchmaking queue id — both seats must request the same game. */

@@ -12,29 +12,36 @@ import {
 } from "@/onchain/tunnelTx";
 import type { PokerTunnel } from "./pokerSelfPlay";
 
+export interface PokerSettleResult {
+  txDigest: string;
+  proofUrl: string | null;
+}
+
 export async function settlePokerTunnel(opts: {
   tunnel: PokerTunnel;
   transcript: Transcript;
   tunnelId: string;
   createdAt: bigint;
   fallbackSignExec: SignExec;
-}): Promise<void> {
+}): Promise<PokerSettleResult> {
   const settlement = opts.tunnel.buildSettlementWithRoot(
     opts.createdAt,
     opts.transcript.root(),
     0n,
   );
   try {
-    await getControlPlaneClient().settle(
+    const r = await getControlPlaneClient().settle(
       opts.tunnelId,
       coSignedToSettleRequest(settlement, opts.transcript.toRecord().entries),
     );
+    return { txDigest: r.txDigest, proofUrl: r.proofUrl };
   } catch (e) {
     console.error("[poker] backend settle failed; bot-key close:", e);
-    await closeCooperativeWithRoot({
+    const digest = await closeCooperativeWithRoot({
       signExec: opts.fallbackSignExec,
       tunnelId: opts.tunnelId,
       settlement,
     });
+    return { txDigest: digest, proofUrl: null };
   }
 }
