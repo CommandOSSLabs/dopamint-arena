@@ -53,8 +53,12 @@ async function launchWindows(gameId, n) {
   const base = await page.locator(sel).count();
   for (let i = 0; i < n; i++) {
     await page.getByTestId("add-game").click();
-    await page.getByTestId(`launch-${gameId}`).click();
-    await waitForWindowCount(sel, base + i + 1);
+    const item = page.getByTestId(`launch-${gameId}`);
+    await item.waitFor({ state: "visible", timeout: 10_000 }); // let the palette open + settle
+    await item.click();
+    await waitForWindowCount(sel, base + i + 1);               // confirm THIS window opened
+    // wait for the command palette to fully close before the next add-game (avoid racing the re-tile)
+    await page.locator('[role="dialog"]').first().waitFor({ state: "hidden", timeout: 5_000 }).catch(() => {});
   }
 }
 
