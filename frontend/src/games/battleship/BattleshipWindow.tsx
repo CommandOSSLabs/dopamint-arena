@@ -7,6 +7,7 @@ import { AutoBattleView } from "./components/AutoBattleView";
 import { useBattleship } from "./useBattleship";
 import { useBattleshipPvp } from "./useBattleshipPvp";
 import { useBattleshipAuto } from "./useBattleshipAuto";
+import { isDopamintConfigured } from "../../onchain/dopamint";
 import {
   BOT_CONFIGS,
   BOT_DIFFICULTIES,
@@ -386,36 +387,42 @@ function AutoSetup({
   return (
     <div className="flex h-full flex-col items-center justify-center gap-3 p-4 text-center">
       <p className="text-sm text-arena-muted">
-        Two on-chain bots auto-play match after match — each opens + settles a
-        real tunnel and self-signs, so no wallet is needed. Fund them once
-        (testnet faucet); the run loops until a bot is low on gas, or you stop.
+        {isDopamintConfigured
+          ? "Two on-chain bots auto-play match after match — each opens + settles a real tunnel and self-signs. Gas is sponsored and the stake is free DOPAMINT, so there's nothing to fund: pick the skills and start. The run loops until you stop."
+          : "Two on-chain bots auto-play match after match — each opens + settles a real tunnel and self-signs, so no wallet is needed. Fund them once (testnet faucet); the run loops until a bot is low on gas, or you stop."}
       </p>
-      <div className="flex items-center justify-center gap-4 text-xs text-arena-muted">
-        <span>
-          Bot A <span className="text-arena-text">{formatSui(balances.a)}</span>
-        </span>
-        <span>
-          Bot B <span className="text-arena-text">{formatSui(balances.b)}</span>
-        </span>
-      </div>
-      <div className="flex flex-wrap justify-center gap-2">
-        {canFundFromWallet && (
-          <button
-            onClick={onFundFromWallet}
-            disabled={funding}
-            className="rounded-full bg-cyan-400 px-4 py-1.5 text-sm font-semibold text-black shadow-[0_0_12px_rgba(34,211,238,0.3)] transition-colors hover:bg-cyan-300 disabled:opacity-50"
-          >
-            {funding ? "Funding…" : "Fund from wallet · 0.1 SUI/bot"}
-          </button>
-        )}
-        <button
-          onClick={onFund}
-          disabled={funding}
-          className="rounded-full border border-cyan-500/40 bg-cyan-950/40 px-4 py-1.5 text-sm font-semibold text-cyan-300 transition-colors hover:border-cyan-400 hover:bg-cyan-500/10 disabled:opacity-50"
-        >
-          {funding ? "Funding…" : "Faucet"}
-        </button>
-      </div>
+      {!isDopamintConfigured && (
+        <>
+          <div className="flex items-center justify-center gap-4 text-xs text-arena-muted">
+            <span>
+              Bot A{" "}
+              <span className="text-arena-text">{formatSui(balances.a)}</span>
+            </span>
+            <span>
+              Bot B{" "}
+              <span className="text-arena-text">{formatSui(balances.b)}</span>
+            </span>
+          </div>
+          <div className="flex flex-wrap justify-center gap-2">
+            {canFundFromWallet && (
+              <button
+                onClick={onFundFromWallet}
+                disabled={funding}
+                className="rounded-full bg-cyan-400 px-4 py-1.5 text-sm font-semibold text-black shadow-[0_0_12px_rgba(34,211,238,0.3)] transition-colors hover:bg-cyan-300 disabled:opacity-50"
+              >
+                {funding ? "Funding…" : "Fund from wallet · 0.1 SUI/bot"}
+              </button>
+            )}
+            <button
+              onClick={onFund}
+              disabled={funding}
+              className="rounded-full border border-cyan-500/40 bg-cyan-950/40 px-4 py-1.5 text-sm font-semibold text-cyan-300 transition-colors hover:border-cyan-400 hover:bg-cyan-500/10 disabled:opacity-50"
+            >
+              {funding ? "Funding…" : "Faucet"}
+            </button>
+          </div>
+        </>
+      )}
       <div className="flex flex-wrap items-end justify-center gap-4">
         <DifficultyPicker label="Bot A" difficulty={a} onDifficulty={setA} />
         <span className="pb-1.5 text-xs text-arena-muted">vs</span>
