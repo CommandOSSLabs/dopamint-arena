@@ -92,6 +92,36 @@ export function makeSponsoredSignExec(opts: {
   };
 }
 
+/** A local keypair's signer surface — signs raw tx bytes (e.g. a `@mysten/sui` `Ed25519Keypair`). */
+export interface KeypairSigner {
+  signTransaction(
+    bytes: Uint8Array,
+  ): Promise<{ signature: string; bytes: string }>;
+}
+
+/**
+ * Sponsored {@link SignExec} for a LOCAL keypair (not a connected wallet) — e.g. the autonomous
+ * bot identities in bot-vs-bot mode. Same sponsor protocol as {@link makeSponsoredSignExec}: the
+ * settler wraps the PTB in its own gas, the keypair co-signs the SAME bytes, both are submitted —
+ * so the keypair's account needs ZERO SUI (it only signs; the settler pays gas).
+ */
+export function makeKeypairSponsoredSignExec(opts: {
+  address: string;
+  keypair: KeypairSigner;
+  client: SponsorSuiClient;
+}): SignExec {
+  return makeSponsoredSignExec({
+    sender: opts.address,
+    client: opts.client,
+    // Rebuild the fully-formed sponsored bytes and sign them with the keypair. The tx is already
+    // gas-complete, so build() is deterministic and reproduces the settler-signed bytes exactly.
+    signTransaction: async ({ transaction }) => {
+      const bytes = await transaction.build({ client: opts.client as never });
+      return opts.keypair.signTransaction(bytes);
+    },
+  });
+}
+
 /**
  * Run the gas-sponsored path; if it throws — sponsor endpoint down/rejected, or no stake coin —
  * fall back to `senderPays` (the wallet paying its own gas). Mirrors the close path's
