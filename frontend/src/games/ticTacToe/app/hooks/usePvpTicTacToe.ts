@@ -310,6 +310,111 @@ export function usePvpTicTacToe(
     [submit, refreshBalance, flushHeartbeat],
   );
 
+  // Wire the per-move loop + resume onto a freshly built/rebuilt tunnel. Shared by the live
+  // (onMatch) and cold-load (queue) paths so both get identical onConfirmed + attachResume wiring.
+  const activateTttSession = useCallback(
+    (
+      mp: MpClient,
+      channel: PvpChannel,
+      t: core.DistributedTunnel<AnyState, CellMove>,
+      info: {
+        matchId: string;
+        role: "A" | "B";
+        opponentWallet: string;
+        opponentPubkeyHex: string;
+        selfEphemeralSecretHex: string;
+      },
+    ) => {
+      tunnelRef.current = t;
+      channelRef.current = channel;
+      let lastLoggedGame = 0;
+      const onAdvance = () => {
+        const st = t.state;
+        setState({ ...st, inner: { ...st.inner } });
+        // Log each completed game once (winner is set on the inner game just before the advance).
+        const gameNo = st.gamesPlayed + 1;
+        if (st.inner.winner !== 0 && gameNo > lastLoggedGame) {
+          const w = st.inner.winner as 1 | 2 | 3;
+          setGames((prev) => [...prev, { game: gameNo, winner: w }].slice(-50));
+          setScore((prev) => ({
+            x: prev.x + (w === 1 ? 1 : 0),
+            o: prev.o + (w === 2 ? 1 : 0),
+            draws: prev.draws + (w === 3 ? 1 : 0),
+          }));
+          lastLoggedGame = gameNo;
+        }
+        if (stoppingRef.current) return;
+        if (proto.isTerminal(st)) {
+          void finishSettle(t, channel, info.matchId);
+          return;
+        }
+        if (st.inner.winner !== 0) {
+          // Between games: only X (A) drives the advance (avoids a double-advance race).
+          if (info.role === "A" && autoRef.current)
+            setTimeout(() => {
+              try {
+                t.propose({ cell: 0 }, BigInt(Date.now()));
+              } catch {
+                /* raced */
+              }
+            }, 100);
+        } else if (st.inner.turn === info.role && autoRef.current) {
+          const cell = (() => {
+            const empties = st.inner.board
+              .map((v, i) => (v === 0 ? i : -1))
+              .filter((i) => i >= 0);
+            return empties[Math.floor(Math.random() * empties.length)];
+          })();
+          setTimeout(() => {
+            try {
+              t.propose({ cell }, BigInt(Date.now()));
+            } catch {
+              /* not my turn / in flight */
+            }
+          }, 50);
+        }
+      };
+      t.onConfirmed = (u) => {
+        moveCountRef.current += 1;
+        actionsRef.current += 1;
+        transcriptRef.current?.append(u);
+        onAdvance();
+        flushHeartbeat(t.tunnelId, false);
+      };
+      // Resume wiring: persist on confirm + run the resync handshake on reconnect.
+      detachResumeRef.current?.();
+      detachResumeRef.current = attachResume({
+        mp,
+        channel,
+        tunnel: t,
+        adapter: makeTttResumeAdapter<AnyState, CellMove>(() => onAdvance()),
+        identity: {
+          matchId: info.matchId,
+          tunnelId: t.tunnelId,
+          role: info.role,
+          game: variant,
+          opponentWallet: info.opponentWallet,
+          opponentPubkeyHex: info.opponentPubkeyHex,
+          selfEphemeralSecretHex: info.selfEphemeralSecretHex,
+        },
+        // Settlement floor: after the 1h grace, settle from the held checkpoint.
+        onGraceExpired: (latest) => {
+          if (latest)
+            void raiseDisputeUnilateral({
+              signExec: submit,
+              tunnelId: t.tunnelId,
+              update: latest,
+              role: info.role,
+            });
+        },
+      });
+      setPhase("playing");
+      setState({ ...t.state, inner: { ...t.state.inner } });
+      onAdvance();
+    },
+    [proto, submit, variant, finishSettle, flushHeartbeat],
+  );
+
   const queue = useCallback(() => {
     void (async () => {
       const w = walletRef.current;
@@ -483,7 +588,6 @@ export function usePvpTicTacToe(
           channel.transport,
           { a: BANKROLL, b: BANKROLL },
         );
-        tunnelRef.current = t;
         transcriptRef.current = new proof.Transcript(tunnelId);
 
         // Register the (real, on-chain) tunnel for stats tracking. Best-effort.
@@ -510,98 +614,28 @@ export function usePvpTicTacToe(
             console.error("[tictactoe pvp] registerSession failed:", e),
           );
 
-        let lastLoggedGame = 0;
-        const onAdvance = () => {
-          const st = t.state;
-          setState({ ...st, inner: { ...st.inner } });
-          // Log each completed game once (winner is set on the inner game just before the advance).
-          const gameNo = st.gamesPlayed + 1;
-          if (st.inner.winner !== 0 && gameNo > lastLoggedGame) {
-            const w = st.inner.winner as 1 | 2 | 3;
-            setGames((prev) =>
-              [...prev, { game: gameNo, winner: w }].slice(-50),
-            );
-            setScore((prev) => ({
-              x: prev.x + (w === 1 ? 1 : 0),
-              o: prev.o + (w === 2 ? 1 : 0),
-              draws: prev.draws + (w === 3 ? 1 : 0),
-            }));
-            lastLoggedGame = gameNo;
-          }
-          if (stoppingRef.current) return;
-          if (proto.isTerminal(st)) {
-            void finishSettle(t, channel, m.matchId);
-            return;
-          }
-          if (st.inner.winner !== 0) {
-            // Between games: only X (A) drives the advance (avoids a double-advance race).
-            if (m.role === "A" && autoRef.current)
-              setTimeout(() => {
-                try {
-                  t.propose({ cell: 0 }, BigInt(Date.now()));
-                } catch {
-                  /* raced */
-                }
-              }, 100);
-          } else if (st.inner.turn === m.role && autoRef.current) {
-            const cell = (() => {
-              const empties = st.inner.board
-                .map((v, i) => (v === 0 ? i : -1))
-                .filter((i) => i >= 0);
-              return empties[Math.floor(Math.random() * empties.length)];
-            })();
-            setTimeout(() => {
-              try {
-                t.propose({ cell }, BigInt(Date.now()));
-              } catch {
-                /* not my turn / in flight */
-              }
-            }, 50);
-          }
-        };
-        t.onConfirmed = (u) => {
-          moveCountRef.current += 1;
-          actionsRef.current += 1;
-          transcriptRef.current?.append(u);
-          onAdvance();
-          flushHeartbeat(tunnelId, false);
-        };
-        // Resume wiring: persist on confirm + run the resync handshake on reconnect.
-        detachResumeRef.current?.();
-        detachResumeRef.current = attachResume({
-          mp,
-          channel,
-          tunnel: t,
-          adapter: makeTttResumeAdapter<AnyState, CellMove>(() => onAdvance()),
-          identity: {
-            matchId: m.matchId,
-            tunnelId,
-            role: m.role,
-            game: variant,
-            opponentWallet: m.opponentWallet,
-            opponentPubkeyHex: oppPubHex,
-            selfEphemeralSecretHex: bytesToHex(eph.coreKey.secretKey),
-          },
-          // Settlement floor: after the 1h grace, settle from the held checkpoint.
-          onGraceExpired: (latest) => {
-            if (latest)
-              void raiseDisputeUnilateral({
-                signExec: submit,
-                tunnelId,
-                update: latest,
-                role: m.role,
-              });
-          },
+        activateTttSession(mp, channel, t, {
+          matchId: m.matchId,
+          role: m.role,
+          opponentWallet: m.opponentWallet,
+          opponentPubkeyHex: oppPubHex,
+          selfEphemeralSecretHex: bytesToHex(eph.coreKey.secretKey),
         });
-        setPhase("playing");
-        setState({ ...t.state, inner: { ...t.state.inner } });
-        onAdvance();
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
         setPhase("error");
       }
     },
-    [client, proto, submit, eph, variant, finishSettle, flushHeartbeat],
+    [
+      client,
+      proto,
+      submit,
+      eph,
+      variant,
+      finishSettle,
+      flushHeartbeat,
+      activateTttSession,
+    ],
   );
   onMatchRef.current = onMatch;
 
