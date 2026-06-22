@@ -2,3 +2,6 @@ build/*
 traces/*
 .trace
 .coverage*
+
+# Ephemeral publication metadata (generated per `sui client publish`; header says do not commit)
+Pub.*.toml
