@@ -5,7 +5,7 @@ import { programmaticWalletFromSecret } from "../wallet/programmaticWallet";
 
 /** Registers a programmatic wallet from `secretKey` with the Wallet Standard and connects it
  *  once (dapp-kit autoConnect can't pick an unseen wallet on first load), then renders children.
- *  Shared by ?agent (headless) and ?arena (desktop UI under automation). */
+ *  Used by the ?agent (headless) boot path via AgentBoot. */
 export function ProgrammaticWalletGate({
   secretKey,
   children,
