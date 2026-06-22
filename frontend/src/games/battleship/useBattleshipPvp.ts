@@ -379,6 +379,7 @@ class PvpSession {
               tunnelId,
               transcript,
               getControlPlaneClient(),
+              coinType,
             ).then(
               () => {
                 this.status = "settled";
@@ -498,6 +499,7 @@ async function settle(
   tunnelId: string,
   transcript: Transcript,
   cp: ReturnType<typeof getControlPlaneClient>,
+  coinType: string | undefined,
 ): Promise<void> {
   const createdAt = await readCreatedAt(reads, tunnelId);
   const root = transcript.root();
@@ -533,6 +535,6 @@ async function settle(
       "[battleship] backend settle failed; falling back to wallet close:",
       e,
     );
-    await closeCooperativeWithRoot({ signExec, tunnelId, settlement: co });
+    await closeCooperativeWithRoot({ signExec, tunnelId, settlement: co, coinType });
   }
 }

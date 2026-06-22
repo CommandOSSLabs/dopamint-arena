@@ -42,11 +42,13 @@ const buildCloseFromSettlement = sdkCloseFromSettlement as unknown as (
   tx: Transaction,
   tunnelId: string,
   settlement: Parameters<typeof sdkCloseFromSettlement>[2],
+  coinType?: string,
 ) => void;
 const buildCloseWithRootFromSettlement = sdkCloseWithRootFromSettlement as unknown as (
   tx: Transaction,
   tunnelId: string,
   settlement: Parameters<typeof sdkCloseWithRootFromSettlement>[2],
+  coinType?: string,
 ) => void;
 const buildOpenAndFundMany = sdkOpenAndFundMany as unknown as (
   tx: Transaction,
@@ -215,9 +217,10 @@ export async function closeCooperative(opts: {
   signExec: SignExec;
   tunnelId: string;
   settlement: CoSignedSettlement;
+  coinType?: string;
 }): Promise<string> {
   const tx = new Transaction();
-  buildCloseFromSettlement(tx, opts.tunnelId, opts.settlement);
+  buildCloseFromSettlement(tx, opts.tunnelId, opts.settlement, opts.coinType);
   const { digest } = await opts.signExec(tx);
   return digest;
 }
@@ -229,9 +232,15 @@ export async function closeCooperativeWithRoot(opts: {
   signExec: SignExec;
   tunnelId: string;
   settlement: CoSignedSettlementWithRoot;
+  coinType?: string;
 }): Promise<string> {
   const tx = new Transaction();
-  buildCloseWithRootFromSettlement(tx, opts.tunnelId, opts.settlement);
+  buildCloseWithRootFromSettlement(
+    tx,
+    opts.tunnelId,
+    opts.settlement,
+    opts.coinType,
+  );
   const { digest } = await opts.signExec(tx);
   return digest;
 }
