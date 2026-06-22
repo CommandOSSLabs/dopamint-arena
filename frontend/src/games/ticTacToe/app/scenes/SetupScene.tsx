@@ -339,6 +339,7 @@ export function SetupScene({
           <button
             onClick={onStart}
             disabled={!funded}
+            data-testid="ttt-start"
             className={`btn-scribble relative bg-primary text-on-primary font-headline-xl hand-drawn-border overflow-hidden transition-all duration-200 hover:-translate-y-2 hover:shadow-[6px_6px_0px_#bc0000] active:translate-y-0 active:shadow-none disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:translate-y-0 disabled:hover:shadow-none flex items-center justify-center ${
               isPortrait
                 ? "px-4 py-2 text-base gap-2 rounded-lg"
@@ -365,6 +366,7 @@ export function SetupScene({
           <button
             type="button"
             onClick={() => setActiveTab("fund")}
+            data-testid="ttt-tab-bots"
             className={`font-headline-lg transition-all relative outline-none whitespace-nowrap ${
               isPortrait
                 ? "px-4 py-2 text-sm rounded-t-lg border-t-[3px] border-x-[3px] -mb-[3px]"

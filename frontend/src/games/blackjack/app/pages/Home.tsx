@@ -55,6 +55,7 @@ export default function Home() {
               </button>
               <button
                 onClick={() => navigate("/bot")}
+                data-testid="bj-watch-bots"
                 className="w-full bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white border border-zinc-800 font-bold py-4 rounded-xl text-sm md:text-base uppercase tracking-wider transition-all active:scale-95"
               >
                 👀 Watch Bot Arena

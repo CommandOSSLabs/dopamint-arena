@@ -279,6 +279,7 @@ export default function PlayerBot() {
     <button
       onClick={fundFromWallet}
       disabled={walletFunding}
+      data-testid="bj-fund-wallet"
       className="border-2 border-amber-500 text-black bg-[#d4af37] hover:bg-amber-400 px-5 py-2.5 md:px-8 md:py-4 rounded-lg md:rounded-xl text-xs md:text-base font-black tracking-widest uppercase transition-all hover:scale-105 active:scale-95 cursor-pointer disabled:opacity-50 disabled:pointer-events-none"
     >
       {walletFunding ? "Funding…" : `Top Up SUI`}
@@ -358,6 +359,7 @@ export default function PlayerBot() {
     <button
       onClick={game.startAuto}
       disabled={running || unfunded}
+      data-testid="bj-auto"
       className="border-2 border-zinc-650 text-white bg-zinc-900/60 hover:bg-zinc-650/20 px-6 py-2.5 md:px-10 md:py-4 rounded-lg md:rounded-xl text-xs md:text-base font-black tracking-widest uppercase transition-all hover:scale-105 active:scale-95 cursor-pointer disabled:opacity-50 disabled:pointer-events-none"
     >
       Auto

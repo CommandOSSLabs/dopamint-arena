@@ -147,6 +147,7 @@ export function BotPanel({
           <button
             onClick={fundFromWallet}
             disabled={walletFunding}
+            data-testid="ttt-fund-wallet"
             className={`w-full bg-primary text-on-primary font-headline-lg-mobile hover:bg-primary-container active:translate-y-[2px] disabled:opacity-40 disabled:cursor-not-allowed transition-all rounded-xl shadow-[4px_4px_0px_#bc0000] ${isPortrait ? "py-3 text-lg" : "py-6 text-3xl"}`}
           >
             {walletFunding
