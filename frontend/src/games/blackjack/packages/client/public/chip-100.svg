@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
+  <defs>
+    <radialGradient id="grad-black" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#424242"/>
+      <stop offset="70%" stop-color="#212121"/>
+      <stop offset="100%" stop-color="#0e0e0e"/>
+    </radialGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="4" stdDeviation="4" flood-color="#000000" flood-opacity="0.6"/>
+    </filter>
+  </defs>
+  <circle cx="50" cy="50" r="46" fill="url(#grad-black)" stroke="#ffffff" stroke-width="2" filter="url(#shadow)"/>
+  <circle cx="50" cy="50" r="40" fill="none" stroke="#ffffff" stroke-width="4" stroke-dasharray="8 6" opacity="0.85"/>
+  <circle cx="50" cy="50" r="28" fill="#0e0e0e" stroke="#d4af37" stroke-width="1.5"/>
+  <circle cx="50" cy="50" r="23" fill="none" stroke="#d4af37" stroke-width="1" stroke-dasharray="2 2" opacity="0.5"/>
+  <text x="50" y="56" font-family="system-ui, -apple-system, sans-serif" font-size="18" font-weight="900" fill="#ffffff" text-anchor="middle" letter-spacing="-0.5">$100</text>
+  <text x="50" y="70" font-family="system-ui, -apple-system, sans-serif" font-size="7" font-weight="800" fill="#d4af37" text-anchor="middle" letter-spacing="1.5">ARENA</text>
+</svg>

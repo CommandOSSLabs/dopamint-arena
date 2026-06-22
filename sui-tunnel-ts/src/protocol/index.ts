@@ -3,10 +3,13 @@
  * interface and is driven by the off-chain tunnel engine (core/tunnel.ts).
  */
 export * from "./blackjack";
+export * from "./bombIt";
 export * from "./chat";
+export * from "./cross";
 export * from "./multiGameTicTacToe";
 export * from "./payments";
 export * from "./Protocol";
 export * from "./quantumPoker";
+export * from "./quantumPokerCodec";
+export * from "./quantumPokerPersona";
 export * from "./ticTacToe";
-

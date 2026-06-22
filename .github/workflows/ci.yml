@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  ts-sdk:
+    name: TypeScript SDK
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sui-tunnel-ts
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          # The committed `test` script uses the stable `--test-isolation`
+          # flag, which graduated from experimental in Node 24.
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: sui-tunnel-ts/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
+
+  move:
+    name: Move contracts
+    runs-on: ubuntu-latest
+    # Bump to an existing release tag if the download 404s.
+    env:
+      SUI_VERSION: testnet-v1.39.3
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Sui CLI
+        run: |
+          set -euo pipefail
+          url="https://github.com/MystenLabs/sui/releases/download/${SUI_VERSION}/sui-${SUI_VERSION}-ubuntu-x86_64.tgz"
+          curl -fsSL "$url" -o sui.tgz
+          mkdir -p sui-bin && tar -xzf sui.tgz -C sui-bin
+          sudo mv "$(find sui-bin -type f -name sui | head -1)" /usr/local/bin/sui
+          sui --version
+      - name: Build & test
+        working-directory: sui_tunnel
+        run: |
+          sui move build
+          sui move test
+
+  rust-backend:
+    name: Rust backend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo build --locked
+      - run: cargo test --locked
+
+  backend-redis-it:
+    name: Backend Redis integration tests
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+      - name: Run ignored Redis integration tests
+        env:
+          TEST_REDIS_URL: redis://localhost:6379
+        run: cargo test -p tunnel-manager -- --ignored

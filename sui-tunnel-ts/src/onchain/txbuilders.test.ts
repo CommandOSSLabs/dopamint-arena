@@ -65,6 +65,19 @@ test("buildDepositFromGas splits gas and deposits", () => {
   assert.ok(json.includes("SplitCoins"));
 });
 
+test("buildEmitQuantumPokerRandomnessSeed targets Sui randomness bridge", () => {
+  const json = txJson((tx) =>
+    tb.buildEmitQuantumPokerRandomnessSeed(tx, {
+      tunnelId: TID,
+      sessionNonce: 1n,
+      context: new Uint8Array([1, 2, 3]),
+    }),
+  );
+  assert.ok(json.includes("sui_randomness"));
+  assert.ok(json.includes("entry_emit_quantum_poker_seed"));
+  assert.ok(json.includes("0000000000000000000000000000000000000000000000000000000000000008"));
+});
+
 test("buildCloseFromSettlement wires settlement balances + sigs", () => {
   const json = txJson((tx) =>
     tb.buildCloseFromSettlement(tx, TID, {
@@ -126,4 +139,34 @@ test("buildBatchClose adds one close per tunnel in a single tx", () => {
   const closes =
     JSON.stringify(commands).split("entry_close_cooperative").length - 1;
   assert.equal(closes, 2);
+});
+
+test("Quantum Poker builders target session creation and proof resolution", () => {
+  const sessionJson = txJson((tx) =>
+    tb.buildCreateQuantumPokerSession(tx, {
+      tunnelId: TID,
+      rulesHash: new Uint8Array(32),
+      circuitId: new Uint8Array(32),
+      inputSchemaHash: new Uint8Array(32),
+    }),
+  );
+  assert.ok(sessionJson.includes("quantum_poker"));
+  assert.ok(sessionJson.includes("entry_create_session"));
+
+  const resolveJson = txJson((tx) =>
+    tb.buildResolveQuantumPokerWithProof(tx, {
+      sessionId: "0x" + "12".repeat(32),
+      registryId: "0x" + "34".repeat(32),
+      tunnelId: TID,
+      proofBytes: new Uint8Array([1, 2, 3]),
+      stateHash: new Uint8Array(32),
+      handId: 1n,
+      winner: 0,
+      partyABalance: 100n,
+      partyBBalance: 200n,
+      resultHash: new Uint8Array(32),
+    }),
+  );
+  assert.ok(resolveJson.includes("quantum_poker_referee"));
+  assert.ok(resolveJson.includes("entry_resolve_with_proof"));
 });

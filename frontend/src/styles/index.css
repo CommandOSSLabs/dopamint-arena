@@ -1,0 +1,384 @@
+@import url("https://fonts.googleapis.com/css2?family=Doto:wght@100..900&family=Outfit:wght@100..900&family=JetBrains+Mono:ital,wght@0,300..700;1,300..700&display=swap");
+@import "tailwindcss";
+@import "tw-animate-css";
+/* ============================================================
+   Dopamint design system (Walrus Memory) — the app default.
+
+   These tokens ARE the design system: anyone using Tailwind utilities
+   (bg-background, text-primary, …) or shadcn components inherits them. The
+   theme controller (src/theme/useTheme.tsx) toggles `.dark` on <html>
+   (system-default). Legacy `arena-*` utilities are aliased to these tokens so
+   existing components follow along.
+   ============================================================ */
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --radius: 0;
+
+  /* ---- raw brand palette (light: accents darkened for cream contrast) ---- */
+  --wal-ink: #0c0f1d;
+  --wal-cream: #faf8f5;
+  --wal-lilac: #6a47f0;
+  --wal-violet: #613dff;
+  --wal-pink: #c23bb0;
+  --wal-blue: #2e69df;
+  --wal-mint: #138a5c;
+  --wal-lime: #5e6b00;
+  --wal-grad-memory: linear-gradient(
+    96deg,
+    #613dff 0%,
+    #4a7cff 38%,
+    #b06bff 68%,
+    #f6a4ff 100%
+  );
+  --wal-grad-aurora: linear-gradient(
+    120deg,
+    #9c7bff 0%,
+    #f6a4ff 22%,
+    #3a66ff 50%,
+    #2fb98c 74%,
+    #5fd9ad 100%
+  );
+  --wal-glow:
+    0 1px 2px rgba(12, 15, 29, 0.06), 0 16px 44px rgba(97, 61, 255, 0.12);
+  --wal-eyebrow: var(--wal-lilac);
+  --wal-font-sans:
+    "Outfit", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --wal-font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* ---- semantic tokens — light (cream canvas) ---- */
+  --background: #faf8f5;
+  --foreground: #0c0f1d;
+  --card: #ffffff;
+  --card-foreground: #0c0f1d;
+  --popover: #ffffff;
+  --popover-foreground: #0c0f1d;
+  --primary: #613dff;
+  --primary-foreground: #faf8f5;
+  --secondary: #f2ede6;
+  --secondary-foreground: #0c0f1d;
+  --muted: #f2ede6;
+  --muted-foreground: #565a62;
+  --accent: #f2ede6;
+  --accent-foreground: #0c0f1d;
+  --success: #138a5c;
+  --destructive: #d6336c;
+  --destructive-foreground: #fff5f8;
+  --border: rgba(12, 15, 29, 0.12);
+  --input: rgba(12, 15, 29, 0.16);
+  --ring: rgba(97, 61, 255, 0.45);
+  --scrollbar-thumb: rgba(12, 15, 29, 0.2);
+  --scrollbar-thumb-hover: rgba(12, 15, 29, 0.38);
+
+  /* ---- legacy arena-* aliases → design-system tokens ---- */
+  --arena-bg: var(--background);
+  --arena-panel: var(--card);
+  --arena-edge: var(--border);
+  --arena-text: var(--foreground);
+  --arena-muted: var(--muted-foreground);
+  --arena-accent: var(--primary);
+
+  --chart-1: #613dff;
+  --chart-2: #2e69df;
+  --chart-3: #c23bb0;
+  --chart-4: #138a5c;
+  --chart-5: #d99a00;
+
+  --sidebar: #f4f1ea;
+  --sidebar-foreground: #0c0f1d;
+  --sidebar-primary: #613dff;
+  --sidebar-primary-foreground: #faf8f5;
+  --sidebar-accent: #f2ede6;
+  --sidebar-accent-foreground: #0c0f1d;
+  --sidebar-border: rgba(12, 15, 29, 0.1);
+  --sidebar-ring: rgba(97, 61, 255, 0.45);
+}
+
+.dark {
+  /* ---- raw brand palette — dark (vivid) ---- */
+  --wal-lilac: #cab1ff;
+  --wal-violet: #613dff;
+  --wal-pink: #f6a4ff;
+  --wal-blue: #a1c8ff;
+  --wal-mint: #9cefcf;
+  --wal-lime: #eaff80;
+  --wal-glow:
+    0 0 0 1px rgba(202, 177, 255, 0.18), 0 18px 60px rgba(97, 61, 255, 0.22);
+
+  /* ---- semantic tokens — dark (ink canvas) ---- */
+  --background: #0c0f1d;
+  --foreground: #faf8f5;
+  --card: #0f1118;
+  --card-foreground: #faf8f5;
+  --popover: #0f1118;
+  --popover-foreground: #faf8f5;
+  --primary: #613dff;
+  --primary-foreground: #faf8f5;
+  --secondary: #16181f;
+  --secondary-foreground: #faf8f5;
+  --muted: #16181f;
+  --muted-foreground: #8f9294;
+  --accent: #1b1e27;
+  --accent-foreground: #faf8f5;
+  --success: #9cefcf;
+  --destructive: #fb7185;
+  --destructive-foreground: #1a0606;
+  --border: rgba(218, 218, 214, 0.14);
+  --input: rgba(218, 218, 214, 0.16);
+  --ring: rgba(202, 177, 255, 0.55);
+  --scrollbar-thumb: rgba(218, 218, 214, 0.18);
+  --scrollbar-thumb-hover: rgba(218, 218, 214, 0.34);
+
+  --chart-1: #613dff;
+  --chart-2: #a1c8ff;
+  --chart-3: #f6a4ff;
+  --chart-4: #9cefcf;
+  --chart-5: #fbbf24;
+
+  --sidebar: #0f1118;
+  --sidebar-foreground: #faf8f5;
+  --sidebar-primary: #cab1ff;
+  --sidebar-primary-foreground: #0c0f1d;
+  --sidebar-accent: #16181f;
+  --sidebar-accent-foreground: #faf8f5;
+  --sidebar-border: rgba(218, 218, 214, 0.12);
+  --sidebar-ring: rgba(202, 177, 255, 0.55);
+}
+
+/* Map the CSS variables above onto Tailwind/shadcn color + radius utilities. */
+@theme inline {
+  --radius-sm: 0;
+  --radius-md: 0;
+  --radius-lg: 0;
+  --radius-xl: 0;
+  --radius-2xl: 0;
+  --radius-3xl: 0;
+  --radius-4xl: 0;
+
+  --color-arena-bg: var(--arena-bg);
+  --color-arena-panel: var(--arena-panel);
+  --color-arena-edge: var(--arena-edge);
+  --color-arena-accent: var(--arena-accent);
+  --color-arena-text: var(--arena-text);
+  --color-arena-muted: var(--arena-muted);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-success: var(--success);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  /* Tic-Tac-Toe & Caro Material design color mappings */
+  --color-on-secondary-container: var(--on-secondary-container);
+  --color-surface-container-highest: var(--surface-container-highest);
+  --color-on-error-container: var(--on-error-container);
+  --color-on-primary-container: var(--on-primary-container);
+  --color-surface-variant: var(--surface-variant);
+  --color-outline-variant: var(--outline-variant);
+  --color-surface-container-low: var(--surface-container-low);
+  --color-tertiary: var(--tertiary);
+  --color-primary-fixed: var(--primary-fixed);
+  --color-on-background: var(--on-background);
+  --color-inverse-primary: var(--inverse-primary);
+  --color-error-container: var(--error-container);
+  --color-inverse-on-surface: var(--inverse-on-surface);
+  --color-on-tertiary-container: var(--on-tertiary-container);
+  --color-primary-container: var(--primary-container);
+  --color-tertiary-fixed: var(--tertiary-fixed);
+  --color-tertiary-container: var(--tertiary-container);
+  --color-outline: var(--outline);
+  --color-secondary-fixed: var(--secondary-fixed);
+  --color-on-surface: var(--on-surface);
+  --color-secondary-container: var(--secondary-container);
+  --color-on-tertiary-fixed-variant: var(--on-tertiary-fixed-variant);
+  --color-secondary-fixed-dim: var(--secondary-fixed-dim);
+  --color-error: var(--error);
+  --color-surface-tint: var(--surface-tint);
+  --color-on-surface-variant: var(--on-surface-variant);
+  --color-tertiary-fixed-dim: var(--tertiary-fixed-dim);
+  --color-on-error: var(--on-error);
+  --color-on-primary-fixed-variant: var(--on-primary-fixed-variant);
+  --color-on-tertiary: var(--on-tertiary);
+  --color-surface: var(--surface);
+  --color-surface-bright: var(--surface-bright);
+  --color-surface-container: var(--surface-container);
+  --color-on-secondary-fixed: var(--on-secondary-fixed);
+  --color-surface-container-lowest: var(--surface-container-lowest);
+  --color-on-primary-fixed: var(--on-primary-fixed);
+  --color-on-secondary: var(--on-secondary);
+  --color-on-secondary-fixed-variant: var(--on-secondary-fixed-variant);
+  --color-surface-container-high: var(--surface-container-high);
+  --color-inverse-surface: var(--inverse-surface);
+  --color-on-tertiary-fixed: var(--on-tertiary-fixed);
+  --color-on-primary: var(--on-primary);
+  --color-surface-dim: var(--surface-dim);
+  --color-primary-fixed-dim: var(--primary-fixed-dim);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+}
+
+/* Sharp corners — buttons & badges follow --radius like everything else. */
+[data-slot="button"],
+[data-slot="badge"] {
+  border-radius: var(--radius);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--wal-font-sans);
+}
+
+/* ---- Themed scrollbars (design system) — thin, pill thumb, transparent track. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb);
+  border: 2px solid transparent;
+  border-radius: 9999px;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--scrollbar-thumb-hover);
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* ---- design-system helper classes (available app-wide) ---- */
+.wal-mono {
+  font-family: var(--wal-font-mono);
+}
+
+/* Doto dot-matrix — for hero numerals (nullframe's `doto-mid`). Use at large
+   sizes only; the dot grid gets hard to read small. */
+.wal-doto {
+  font-family: "Doto", var(--wal-font-mono);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  font-variant-numeric: tabular-nums;
+}
+
+.wal-eyebrow {
+  font-family: var(--wal-font-mono);
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--wal-eyebrow);
+}
+
+.wal-gradient-text {
+  background: var(--wal-grad-memory);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.wal-display {
+  font-family: var(--wal-font-sans);
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  line-height: 0.95;
+}
+
+.wal-glow {
+  box-shadow: var(--wal-glow);
+}
+
+/* Holographic aurora wash (used behind design-system / playground content). */
+.wal-aurora {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  overflow: hidden;
+}
+.wal-aurora::before {
+  content: "";
+  position: absolute;
+  right: -8%;
+  top: -22%;
+  width: 65%;
+  height: 80%;
+  background:
+    radial-gradient(
+      42% 46% at 70% 32%,
+      rgba(97, 61, 255, 0.4),
+      transparent 70%
+    ),
+    radial-gradient(
+      38% 40% at 86% 18%,
+      rgba(246, 164, 255, 0.3),
+      transparent 70%
+    ),
+    radial-gradient(
+      48% 52% at 52% 8%,
+      rgba(58, 102, 255, 0.26),
+      transparent 72%
+    );
+  filter: blur(36px);
+}
+html:not(.dark) .wal-aurora::before {
+  opacity: 0.5;
+}
+
+/* Subtle dot-grid texture so large empty surfaces (the play floor) read as
+   intentional rather than blank. Tinted from the muted token → theme-aware. */
+.bg-dot-grid {
+  background-image: radial-gradient(
+    color-mix(in oklab, var(--muted-foreground) 22%, transparent) 1px,
+    transparent 1px
+  );
+  background-size: 18px 18px;
+  background-position: -9px -9px;
+}
