@@ -1,7 +1,6 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { ConnectButton, useCurrentAccount } from "@mysten/dapp-kit";
 import { useGameNavigate } from "@/games/blackjack/app/useGameRouter";
-import { parseAgentConfig } from "@/agent/agentConfig";
 
 export default function Home() {
   const navigate = useGameNavigate();
@@ -11,12 +10,11 @@ export default function Home() {
     document.title = "Blackjack";
   }, []);
 
+  const autoNavRef = useRef(false);
   useEffect(() => {
-    const hasNavigated = sessionStorage.getItem("blackjack_auto_navigated");
-    if (account && !hasNavigated) {
-      sessionStorage.setItem("blackjack_auto_navigated", "true");
-      // Under ?arena the script clicks bj-watch-bots to navigate to /bot — skip the auto-redirect.
-      if (!parseAgentConfig(window.location.href).arena) navigate("/play");
+    if (account && !autoNavRef.current) {
+      autoNavRef.current = true;
+      navigate("/bot"); // bot-vs-bot self-play
     }
   }, [account, navigate]);
 

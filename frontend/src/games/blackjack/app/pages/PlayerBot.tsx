@@ -301,6 +301,24 @@ export default function PlayerBot() {
     phase === "opening" || phase === "playing" || phase === "settling";
   const terminal = phase === "done" || result !== null;
   const unfunded = balances.a === 0n || balances.b === 0n;
+
+  const autoPilotRef = useRef(false);
+  const autoStartedRef = useRef(false);
+  useEffect(() => {
+    if (!account || running) return;
+    if (unfunded) {
+      if (!autoPilotRef.current) {
+        autoPilotRef.current = true;
+        void fundFromWallet(); // wallet-fund only when a bot balance is 0
+      }
+      return;
+    }
+    if (!autoStartedRef.current) {
+      autoStartedRef.current = true;
+      game.startAuto();
+    }
+  }, [account, running, unfunded, game]);
+
   // The hook seeds an empty view; treat "no cards yet, no game in flight" as the start screen.
   const started =
     view.playerCards.length > 0 || view.dealerCards.length > 0 || inGame;
