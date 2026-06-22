@@ -61,11 +61,12 @@ interface BenchTunnel {
 async function setupOneTunnel(
   clientA: MpClient,
   clientB: MpClient,
+  game: string,
   idx: number,
 ): Promise<BenchTunnel> {
   const [mA, mB] = await Promise.all([
-    clientA.quickMatch(GAME),
-    clientB.quickMatch(GAME),
+    clientA.quickMatch(game),
+    clientB.quickMatch(game),
   ]);
   if (mA.matchId !== mB.matchId) {
     throw new Error(
@@ -221,11 +222,13 @@ async function main() {
   await Promise.all([clientA.connect(), clientB.connect()]);
   console.error(`[${processId}] connected`);
 
-  // Set up tunnels sequentially to avoid overwhelming the backend matchmaker.
-  console.error(`[${processId}] setting up ${numTunnels} tunnels...`);
+  // Use a unique game name per process so this process self-pairs without
+  // interfering with stale queue entries from other runs or processes.
+  const game = `${GAME}-${processId}-${Date.now()}`;
+  console.error(`[${processId}] setting up ${numTunnels} tunnels for game=${game}...`);
   const tunnels: BenchTunnel[] = [];
   for (let i = 0; i < numTunnels; i++) {
-    tunnels.push(await setupOneTunnel(clientA, clientB, i));
+    tunnels.push(await setupOneTunnel(clientA, clientB, game, i));
     if ((i + 1) % 10 === 0 || i === numTunnels - 1) {
       console.error(`[${processId}] setup ${i + 1}/${numTunnels} tunnels`);
     }
