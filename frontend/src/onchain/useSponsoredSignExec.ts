@@ -9,11 +9,17 @@ import {
   useSignTransaction,
   useSuiClient,
 } from "@mysten/dapp-kit";
+import { Transaction } from "@mysten/sui/transactions";
 import {
   makeSponsoredSignExec,
   selectStakeCoin,
   type OwnedCoin,
 } from "./sponsor";
+import {
+  DOPAMINT_COIN_TYPE,
+  buildDopamintFaucet,
+  isDopamintConfigured,
+} from "./dopamint";
 import type { SignExec } from "./tunnelTx";
 
 export interface SponsoredSignExec {
@@ -31,11 +37,20 @@ export interface SponsoredSignExec {
    * wallet, pass the SUM of the stakes. Unrelated to sponsoring non-tunnel txs.
    */
   selectStakeCoin: (minAmount: bigint) => Promise<string>;
+  /**
+   * DOPAMINT stake helper (ADR-0010): return a user `Coin<DOPAMINT>` object id with at least
+   * `minAmount`, auto-faucet-ing (invisibly, via the gas sponsor) if the balance is short. This is
+   * how a 0-token player funds a stake for free — gas is sponsored, the stake is fauceted DOPAMINT.
+   */
+  prepareStake: (minAmount: bigint) => Promise<string>;
 }
 
 /** dapp-kit's v1-compat client exposes `getCoins`; typed narrowly to avoid an `any`. */
 interface CoinReader {
-  getCoins: (input: { owner: string }) => Promise<{ data: OwnedCoin[] }>;
+  getCoins: (input: {
+    owner: string;
+    coinType?: string;
+  }) => Promise<{ data: OwnedCoin[] }>;
 }
 
 /**
@@ -52,17 +67,45 @@ export function useSponsoredSignExec(): SponsoredSignExec {
   const sender = account?.address ?? "";
 
   return useMemo(() => {
+    const reader = client as unknown as CoinReader;
     const getCoins = (owner: string) =>
-      (client as unknown as CoinReader).getCoins({ owner }).then((r) => r.data);
+      reader.getCoins({ owner }).then((r) => r.data);
+    const getDopamintCoins = (owner: string) =>
+      reader
+        .getCoins({ owner, coinType: DOPAMINT_COIN_TYPE })
+        .then((r) => r.data);
+    const signExec = makeSponsoredSignExec({
+      sender,
+      client: client as never,
+      signTransaction: signTransaction as never,
+    });
+
+    const prepareStake = async (minAmount: bigint): Promise<string> => {
+      if (!isDopamintConfigured) {
+        throw new Error("DOPAMINT is not configured (VITE_DOPAMINT_* env)");
+      }
+      const pick = (coins: OwnedCoin[]) =>
+        coins.find((c) => BigInt(c.balance) >= minAmount);
+      let coin = pick(await getDopamintCoins(sender));
+      if (!coin) {
+        // Invisible auto-faucet: mint DOPAMINT to the player via the gas sponsor, then re-select.
+        const tx = new Transaction();
+        buildDopamintFaucet(tx, sender);
+        await signExec(tx);
+        coin = pick(await getDopamintCoins(sender));
+      }
+      if (!coin) {
+        throw new Error("DOPAMINT faucet did not yield enough to stake");
+      }
+      return coin.coinObjectId;
+    };
+
     return {
       ready: Boolean(sender),
-      signExec: makeSponsoredSignExec({
-        sender,
-        client: client as never,
-        signTransaction: signTransaction as never,
-      }),
+      signExec,
       selectStakeCoin: (minAmount: bigint) =>
         selectStakeCoin(getCoins, sender, minAmount),
+      prepareStake,
     };
   }, [sender, client, signTransaction]);
 }

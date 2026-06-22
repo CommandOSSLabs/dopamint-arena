@@ -620,6 +620,15 @@ fn command_references_gas(cmd: &Command) -> bool {
     }
 }
 
+/// The package address of a struct coin type (`0xABC::dopamint::DOPAMINT` -> `0xABC`), or `None`
+/// for a primitive type like SUI. Used to locate the stake token's own faucet module.
+fn coin_type_address(coin_type: &TypeTag) -> Option<Address> {
+    match coin_type {
+        TypeTag::Struct(s) => Some(*s.address()),
+        _ => None,
+    }
+}
+
 /// The anti-abuse gate (ADR-0009): the settler pays gas, so it sponsors ONLY the tunnel open/fund
 /// move calls (+ the framework `public_share_object`) plus benign coin/object plumbing over the
 /// user's OWN inputs. Three invariants make this safe rather than an open faucet:
@@ -649,8 +658,14 @@ fn validate_sponsorable(
                 let framework_share = mc.package == framework
                     && mc.module.as_str() == "transfer"
                     && mc.function.as_str() == "public_share_object";
+                // The DOPAMINT stake token's faucet lives in the coin type's own package
+                // (`<pkg>::dopamint`). Sponsor the free `mint`/`mint_default` so a 0-token player
+                // can faucet their stake (gas-sponsored) before opening a game.
+                let faucet_mint = coin_type_address(coin_type) == Some(mc.package)
+                    && mc.module.as_str() == "dopamint"
+                    && matches!(mc.function.as_str(), "mint" | "mint_default");
                 anyhow::ensure!(
-                    tunnel_call || framework_share,
+                    tunnel_call || framework_share || faucet_mint,
                     "sponsor refuses move call {}::{}::{}",
                     mc.package,
                     mc.module.as_str(),
@@ -925,6 +940,41 @@ mod tests {
             arguments: vec![],
         });
         assert!(validate_sponsorable(&ptb(vec![other]), pkg, &sui_coin()).is_err());
+    }
+
+    // The DOPAMINT faucet `mint` (in the coin type's own package) is sponsorable, so a 0-token
+    // player can faucet their stake gaslessly.
+    #[test]
+    fn validate_accepts_dopamint_faucet_mint() {
+        let coin: TypeTag = "0xabc::dopamint::DOPAMINT".parse().unwrap();
+        let mint = Command::MoveCall(sui_sdk_types::MoveCall {
+            package: Address::from_str("0xabc").unwrap(),
+            module: Identifier::new("dopamint").unwrap(),
+            function: Identifier::new("mint").unwrap(),
+            type_arguments: vec![],
+            arguments: vec![Argument::Input(0), Argument::Input(1), Argument::Input(2)],
+        });
+        // The tunnel package is unrelated to the faucet call; pass an arbitrary one.
+        let tunnel_pkg = Address::from_str("0xfff").unwrap();
+        assert!(validate_sponsorable(&ptb(vec![mint]), tunnel_pkg, &coin).is_ok());
+    }
+
+    // A `mint` from a package OTHER than the configured coin type's is refused — only the real
+    // DOPAMINT faucet is sponsored, not a look-alike.
+    #[test]
+    fn validate_rejects_faucet_mint_from_foreign_package() {
+        let coin: TypeTag = "0xabc::dopamint::DOPAMINT".parse().unwrap();
+        let mint = Command::MoveCall(sui_sdk_types::MoveCall {
+            package: Address::from_str("0xbad").unwrap(),
+            module: Identifier::new("dopamint").unwrap(),
+            function: Identifier::new("mint").unwrap(),
+            type_arguments: vec![],
+            arguments: vec![],
+        });
+        assert!(
+            validate_sponsorable(&ptb(vec![mint]), Address::from_str("0xfff").unwrap(), &coin)
+                .is_err()
+        );
     }
 
     // The end-to-end wrap: a valid kind yields a sponsored tx where the USER is the sender and the

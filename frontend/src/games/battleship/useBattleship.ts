@@ -18,6 +18,7 @@ import {
 } from "../../onchain/tunnelTx";
 import { withSponsorFallback } from "../../onchain/sponsor";
 import { useSponsoredSignExec } from "../../onchain/useSponsoredSignExec";
+import { DOPAMINT_COIN_TYPE, isDopamintConfigured } from "../../onchain/dopamint";
 import {
   BattleshipProtocol,
   type BattleshipMove,
@@ -75,6 +76,8 @@ interface BotDeps {
   sponsoredSignExec: (tx: never) => Promise<{ digest: string }>;
   /** Pick a user coin to fund the (both-seat) stake; gas is sponsored, the stake is not. */
   selectStakeCoin: (minAmount: bigint) => Promise<string>;
+  /** DOPAMINT stake: faucet (invisibly, sponsored) if short, then return a stake coin id. */
+  prepareStake: (minAmount: bigint) => Promise<string>;
 }
 
 interface BotSnapshot {
@@ -298,30 +301,42 @@ class BotSession {
           this.setStatus("funding");
           const partyA = { address: a.address, publicKey: a.keyPair.publicKey };
           const partyB = { address: b.address, publicKey: b.keyPair.publicKey };
-          // Try the backend gas sponsor (settler pays gas, both stakes split off a user coin);
-          // fall back to the wallet paying its own gas if the sponsor is unavailable. ADR-0009.
-          tunnelId = await withSponsorFallback(
-            async () =>
-              openAndFundSelfPlay({
+          // DOPAMINT (ADR-0010): faucet both seats' stake invisibly (gas-sponsored) and stake
+          // DOPAMINT — free for a 0-SUI player. SUI path (DOPAMINT env unset): sponsored SUI stake
+          // with a sender-pays fallback (ADR-0009).
+          tunnelId = isDopamintConfigured
+            ? await openAndFundSelfPlay({
                 reads,
                 signExec: deps.sponsoredSignExec as never,
                 partyA,
                 partyB,
                 aAmount: LOCKED_PER_SEAT,
                 bAmount: LOCKED_PER_SEAT,
-                stakeCoinId: await deps.selectStakeCoin(2n * LOCKED_PER_SEAT),
-              }),
-            () =>
-              openAndFundSelfPlay({
-                reads,
-                signExec: deps.signExec as never,
-                partyA,
-                partyB,
-                aAmount: LOCKED_PER_SEAT,
-                bAmount: LOCKED_PER_SEAT,
-              }),
-            "battleship bot open/fund",
-          );
+                coinType: DOPAMINT_COIN_TYPE,
+                stakeCoinId: await deps.prepareStake(2n * LOCKED_PER_SEAT),
+              })
+            : await withSponsorFallback(
+                async () =>
+                  openAndFundSelfPlay({
+                    reads,
+                    signExec: deps.sponsoredSignExec as never,
+                    partyA,
+                    partyB,
+                    aAmount: LOCKED_PER_SEAT,
+                    bAmount: LOCKED_PER_SEAT,
+                    stakeCoinId: await deps.selectStakeCoin(2n * LOCKED_PER_SEAT),
+                  }),
+                () =>
+                  openAndFundSelfPlay({
+                    reads,
+                    signExec: deps.signExec as never,
+                    partyA,
+                    partyB,
+                    aAmount: LOCKED_PER_SEAT,
+                    bAmount: LOCKED_PER_SEAT,
+                  }),
+                "battleship bot open/fund",
+              );
           createdAt = await readCreatedAt(reads, tunnelId);
           onChain = true;
         }
@@ -424,6 +439,7 @@ export function useBattleship(windowId: string): BattleshipSession {
     }) as never,
     sponsoredSignExec: sponsored.signExec as never,
     selectStakeCoin: sponsored.selectStakeCoin,
+    prepareStake: sponsored.prepareStake,
   };
 
   const snap = useSyncExternalStore(session.subscribe, session.getSnapshot);

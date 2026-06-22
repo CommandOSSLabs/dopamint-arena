@@ -104,6 +104,8 @@ export async function openAndFundSharedTunnel(opts: {
   penaltyAmount?: bigint;
   /** Split seat A's stake from this user coin (gas-sponsored path); else from the gas coin. */
   stakeCoinId?: string;
+  /** Coin type `T` for the tunnel; defaults to SUI. Pass DOPAMINT to stake the faucet token. */
+  coinType?: string;
 }): Promise<string> {
   const tx = new Transaction();
   buildOpenAndFundSeatA(tx, {
@@ -113,6 +115,7 @@ export async function openAndFundSharedTunnel(opts: {
     timeoutMs: opts.timeoutMs ?? 86_400_000n,
     penaltyAmount: opts.penaltyAmount ?? 0n,
     stakeCoin: opts.stakeCoinId ? tx.object(opts.stakeCoinId) : undefined,
+    coinType: opts.coinType,
   });
   const { digest } = await opts.signExec(tx);
   await opts.reads.waitForTransaction({ digest });
@@ -141,6 +144,8 @@ export async function openAndFundSelfPlay(opts: {
   penaltyAmount?: bigint;
   /** Split BOTH seats' stakes from this user coin (gas-sponsored path); else from the gas coin. */
   stakeCoinId?: string;
+  /** Coin type `T` for the tunnels; defaults to SUI. Pass DOPAMINT to stake the faucet token. */
+  coinType?: string;
 }): Promise<string> {
   const tx = new Transaction();
   buildOpenAndFundMany(
@@ -155,7 +160,10 @@ export async function openAndFundSelfPlay(opts: {
         penaltyAmount: opts.penaltyAmount ?? 0n,
       },
     ],
-    opts.stakeCoinId ? { sourceCoin: tx.object(opts.stakeCoinId) } : undefined,
+    {
+      coinType: opts.coinType,
+      sourceCoin: opts.stakeCoinId ? tx.object(opts.stakeCoinId) : undefined,
+    },
   );
   const { digest } = await opts.signExec(tx);
   await opts.reads.waitForTransaction({ digest });
@@ -175,13 +183,15 @@ export async function depositStake(opts: {
   tunnelId: string;
   amount: bigint;
   stakeCoinId?: string;
+  /** Coin type `T`; defaults to SUI. Pass DOPAMINT to deposit the faucet token. */
+  coinType?: string;
 }): Promise<void> {
   const tx = new Transaction();
   if (opts.stakeCoinId) {
     const [coin] = tx.splitCoins(tx.object(opts.stakeCoinId), [
       tx.pure.u64(opts.amount),
     ]);
-    buildDeposit(tx, { tunnelId: opts.tunnelId, coin });
+    buildDeposit(tx, { tunnelId: opts.tunnelId, coin, coinType: opts.coinType });
   } else {
     buildDepositFromGas(tx, { tunnelId: opts.tunnelId, amount: opts.amount });
   }

@@ -35,6 +35,7 @@ import {
 } from "../../onchain/tunnelTx";
 import { useSponsoredSignExec } from "../../onchain/useSponsoredSignExec";
 import { withSponsorFallback } from "../../onchain/sponsor";
+import { DOPAMINT_COIN_TYPE, isDopamintConfigured } from "../../onchain/dopamint";
 import { coSignedToSettleRequest } from "../../backend/settleRequest";
 import { type FleetSecret, makeFleetSecret } from "./engine/selfPlay";
 import { type Placement, placementsToBoard } from "./engine/fleet";
@@ -77,6 +78,8 @@ interface PvpDeps {
   sponsoredSignExec: (tx: never) => Promise<{ digest: string }>;
   /** Pick a user coin to fund this seat's stake (gas is sponsored, the stake is not). */
   selectStakeCoin: (minAmount: bigint) => Promise<string>;
+  /** DOPAMINT stake: faucet (invisibly, sponsored) if short, then return a stake coin id. */
+  prepareStake: (minAmount: bigint) => Promise<string>;
 }
 
 interface PvpSnapshot {
@@ -254,56 +257,78 @@ class PvpSession {
         const hello = await waitPeer<{ ephemeralPubkey: string }>("hello");
         const oppPub = fromHex(hello.ephemeralPubkey);
 
-        // 2) fund on-chain: try the backend gas sponsor (settler pays gas; the stake splits off a
-        //    user coin), and if the sponsor is unavailable fall back to the wallet paying its own
-        //    gas (the stake then splits off the gas coin — needs SUI in the wallet). ADR-0009.
+        // 2) fund on-chain. DOPAMINT path (ADR-0010): faucet the stake token invisibly (gas-
+        //    sponsored) and stake DOPAMINT — settler pays gas, so a 0-SUI player plays free; no
+        //    sender-pays fallback (the faucet itself needs the sponsor). SUI path (DOPAMINT env
+        //    unset): sponsored SUI stake with a sender-pays fallback (ADR-0009).
         this.status = "funding";
         this.emit();
         const partyA = { address: wallet, publicKey: ephemeral.publicKey };
         const partyB = { address: match.opponentWallet, publicKey: oppPub };
+        const coinType = isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined;
         let tunnelId: string;
         if (match.role === "A") {
-          tunnelId = await withSponsorFallback(
-            async () =>
-              openAndFundSharedTunnel({
+          tunnelId = isDopamintConfigured
+            ? await openAndFundSharedTunnel({
                 reads,
                 signExec: sponsoredSignExec as never,
                 partyA,
                 partyB,
                 amount: STAKE_BALANCE,
-                stakeCoinId: await deps.selectStakeCoin(STAKE_BALANCE),
-              }),
-            () =>
-              openAndFundSharedTunnel({
-                reads,
-                signExec: signExec as never,
-                partyA,
-                partyB,
-                amount: STAKE_BALANCE,
-              }),
-            "battleship open/fund",
-          );
+                coinType,
+                stakeCoinId: await deps.prepareStake(STAKE_BALANCE),
+              })
+            : await withSponsorFallback(
+                async () =>
+                  openAndFundSharedTunnel({
+                    reads,
+                    signExec: sponsoredSignExec as never,
+                    partyA,
+                    partyB,
+                    amount: STAKE_BALANCE,
+                    stakeCoinId: await deps.selectStakeCoin(STAKE_BALANCE),
+                  }),
+                () =>
+                  openAndFundSharedTunnel({
+                    reads,
+                    signExec: signExec as never,
+                    partyA,
+                    partyB,
+                    amount: STAKE_BALANCE,
+                  }),
+                "battleship open/fund",
+              );
           mp.announceTunnel(match.matchId, tunnelId);
           channel.sendPeer({ t: "open", tunnelId });
         } else {
           const open = await waitPeer<{ tunnelId: string }>("open");
           tunnelId = open.tunnelId;
-          await withSponsorFallback(
-            async () =>
-              depositStake({
-                signExec: sponsoredSignExec as never,
-                tunnelId,
-                amount: STAKE_BALANCE,
-                stakeCoinId: await deps.selectStakeCoin(STAKE_BALANCE),
-              }),
-            () =>
-              depositStake({
-                signExec: signExec as never,
-                tunnelId,
-                amount: STAKE_BALANCE,
-              }),
-            "battleship deposit",
-          );
+          if (isDopamintConfigured) {
+            await depositStake({
+              signExec: sponsoredSignExec as never,
+              tunnelId,
+              amount: STAKE_BALANCE,
+              coinType,
+              stakeCoinId: await deps.prepareStake(STAKE_BALANCE),
+            });
+          } else {
+            await withSponsorFallback(
+              async () =>
+                depositStake({
+                  signExec: sponsoredSignExec as never,
+                  tunnelId,
+                  amount: STAKE_BALANCE,
+                  stakeCoinId: await deps.selectStakeCoin(STAKE_BALANCE),
+                }),
+              () =>
+                depositStake({
+                  signExec: signExec as never,
+                  tunnelId,
+                  amount: STAKE_BALANCE,
+                }),
+              "battleship deposit",
+            );
+          }
         }
 
         // 3) build the distributed engine over the relay transport.
@@ -441,6 +466,7 @@ export function useBattleshipPvp(windowId: string): BattleshipPvp {
     // stake stays the user's own coin. (Close keeps signExec above — it's sponsored via /settle.)
     sponsoredSignExec: sponsored.signExec as never,
     selectStakeCoin: sponsored.selectStakeCoin,
+    prepareStake: sponsored.prepareStake,
   };
 
   const snap = useSyncExternalStore(session.subscribe, session.getSnapshot);
