@@ -45,7 +45,10 @@ const SPONSOR_TUNNEL_FNS: &[&str] = &[
     "deposit_party_b",
     "entry_deposit",
     "entry_create_and_share",
-    "create_and_fund_with_id",
+    // Batch self-play opener. The deployed package has `create_and_fund` (not the id-returning
+    // `_with_id`, which is source-only), and the SDK targets it post-fix — so this is what a
+    // sponsored self-play/bot open actually calls.
+    "create_and_fund",
 ];
 /// Testnet genesis checkpoint digest — the chain identifier `ValidDuring` uses for cross-chain
 /// replay protection (its first 4 bytes are the `4c78adac` testnet chain id). SIP-58
@@ -902,7 +905,7 @@ mod tests {
         let fund_from_gas = Command::MoveCall(sui_sdk_types::MoveCall {
             package: pkg,
             module: Identifier::new("tunnel").unwrap(),
-            function: Identifier::new("create_and_fund_with_id").unwrap(),
+            function: Identifier::new("create_and_fund").unwrap(),
             type_arguments: vec![sui_coin()],
             arguments: vec![Argument::Gas],
         });
