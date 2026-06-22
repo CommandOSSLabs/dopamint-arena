@@ -313,6 +313,55 @@ pub(crate) async fn settle(
     }
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SponsorRequest {
+    /// The user's address — the sender of the open/fund tx. Funds (stake) come from this account.
+    sender: String,
+    /// Base64 of the client-built transaction KIND (`build({ onlyTransactionKind: true })`).
+    tx_kind_bytes: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SponsorResponse {
+    /// Base64 of the full sponsored transaction the user must co-sign and submit.
+    tx_bytes: String,
+    /// The settler's gas signature (base64), to submit alongside the user's sender signature.
+    sponsor_signature: String,
+}
+
+/// Sponsor gas (only) for a user's open/fund tx (ADR-0009). Wraps the client-built tx KIND in
+/// SIP-58 gas owned by the settler, dry-runs it (verify-before-gas), and returns the bytes + the
+/// settler's gas signature. The user co-signs the SAME bytes and submits with both signatures;
+/// the stake comes from the user's own coin, never the sponsor. No session/bearer gate — the
+/// allowlist + budget cap + dry-run are the only thing standing between this and a gas faucet.
+pub(crate) async fn sponsor(
+    State(state): State<SharedState>,
+    Json(req): Json<SponsorRequest>,
+) -> Response {
+    match state
+        .settler
+        .sponsor_open_fund(&req.sender, &req.tx_kind_bytes)
+        .await
+    {
+        Ok((tx_bytes, sponsor_signature)) => Json(SponsorResponse {
+            tx_bytes,
+            sponsor_signature,
+        })
+        .into_response(),
+        Err(e) => {
+            tracing::warn!(sender = %req.sender, error = %e, "sponsor refused");
+            ApiError::resp(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "sponsor_refused",
+                &e.to_string(),
+            )
+            .into_response()
+        }
+    }
+}
+
 /// Build the settled Transaction-Log row for a successful close. The settle handler owns the
 /// full proof (close digest + Walrus URL), so it pushes the enriched row directly; the
 /// indexer's later explorer-only row for the same `tx_digest` is deduped. Empty strings
