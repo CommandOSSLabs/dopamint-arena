@@ -21,6 +21,12 @@ import { type BotContext, type GameBot, type GameKit } from "@/agent/gameKit";
 
 export interface BattleshipBotConfig {
   difficulty?: BotDifficulty;
+  /**
+   * Use this fleet instead of a fresh random one. Lets a caller own the fleet — e.g. a spectator
+   * view that reveals both boards, or vs-bot where the bot must answer reveals for a human-placed
+   * fleet. Omit for an autonomous bot that hides its own fleet.
+   */
+  secret?: FleetSecret;
 }
 
 class BattleshipBot implements GameBot<BattleshipState, BattleshipMove> {
@@ -32,7 +38,7 @@ class BattleshipBot implements GameBot<BattleshipState, BattleshipMove> {
   constructor(seat: Party, ctx: BotContext, config: BattleshipBotConfig) {
     this.seat = seat;
     this.rng = ctx.rngForSeat(seat);
-    this.secret = randomFleetSecret(this.rng);
+    this.secret = config.secret ?? randomFleetSecret(this.rng);
     this.difficulty = config.difficulty ?? DEFAULT_BOT_DIFFICULTY;
   }
 

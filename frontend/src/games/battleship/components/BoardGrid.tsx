@@ -72,9 +72,11 @@ export function BoardGrid({
 
   return (
     <div className="flex w-full flex-col gap-1.5">
-      <div className="text-[11px] font-semibold tracking-wider text-cyan-400/80 uppercase">
-        {title}
-      </div>
+      {title && (
+        <div className="text-[11px] font-semibold tracking-wider text-cyan-400/80 uppercase">
+          {title}
+        </div>
+      )}
       {/* Cap the board by the window height (cqh) so two stacked / side-by-side
           boards fit a short window without scrolling; width still bounds tall ones. */}
       <div className="mx-auto w-full max-w-[min(100%,40cqh)] rounded-lg bg-slate-950/40 p-1.5 ring-1 ring-cyan-500/20 shadow-lg shadow-cyan-950/20 backdrop-blur-md @[30rem]:max-w-[min(100%,78cqh)]">
