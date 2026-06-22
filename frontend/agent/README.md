@@ -37,52 +37,6 @@ origin, wallet flow, and relay path a human uses. Spec:
   §Numbers#1 number must be measured **co-located in us-east-1** (spec §4) — run
   `loadtestRelay.mjs` from an EC2 instance in-region, then compare to `R_min`.
 
-4. **Arena auto-pilot** — drive the real desktop into bot-vs-bot auto-play (ttt + blackjack),
-   funding bots from the wallet only when low (no faucet):
-
-   ```bash
-   KEY=$(sui keytool export --key-identity "$(sui client active-address)" --json | jq -r .exportedPrivateKey) \
-     DURATION_MS=60000 node agent/arena.mjs
-   # HEADLESS=true to hide the browser; GAMES=ttt or GAMES=blackjack to run one.
-   ```
-   Requires the dev server up (`BASE_URL`, default :5173) and the `KEY` wallet funded on testnet.
-
-   **Environment variables:**
-
-   | Var | Meaning | Default |
-   |---|---|---|
-   | `KEY` | Funded testnet wallet secret key (`suiprivkey1…`) | **required** |
-   | `GAMES` | Comma-separated games to run | `ttt,blackjack` |
-   | `DURATION_MS` | Total run time in milliseconds | `60000` |
-   | `HEADLESS` | Run browser headless (`"true"` to enable) | `false` |
-   | `BASE_URL` | Dev server origin | `http://localhost:5173` |
-   | `TTT_WINDOWS` | Concurrent ttt tunnels — opens N windows in parallel | `1` |
-   | `BJ_WINDOWS` | Concurrent blackjack tunnels — opens N windows in parallel | `1` |
-   | `TTT_MAX_GAMES` | Off-chain ttt matches anchored per on-chain settle (fills the in-game input) | unset (in-game default) |
-   | `BJ_MAX_ROUNDS` | Off-chain blackjack rounds anchored per on-chain settle (must match an in-game option value) | unset (in-game default) |
-
-   `TTT_WINDOWS`/`BJ_WINDOWS` control **concurrent tunnels** (N browser windows run in parallel);
-   `TTT_MAX_GAMES`/`BJ_MAX_ROUNDS` control **matches per tunnel** (off-chain matches before each on-chain settle).
-
-   **Multi-window example** — 3 ttt tunnels + 2 blackjack tunnels, each with elevated match counts.
-   Run as two single-line commands (no `\` line-continuations — they break on copy-paste/terminal wrap):
-
-   ```bash
-   export KEY=$(sui keytool export --key-identity "$(sui client active-address)" --json | jq -r .exportedPrivateKey)
-   TTT_WINDOWS=3 BJ_WINDOWS=2 TTT_MAX_GAMES=50 BJ_MAX_ROUNDS=200 DURATION_MS=60000 node agent/arena.mjs
-   ```
-
-   (`echo $KEY` should print a `suiprivkey1…` value. `export` makes `node` inherit it.)
-
-   **Smoke-test (manual gate):** verify the dev server is running on `:5173` pointing at a reachable
-   backend, then (with `KEY` exported as above) run a short headless pass:
-
-   ```bash
-   DURATION_MS=10000 HEADLESS=true node agent/arena.mjs
-   ```
-
-   Expected: logs `[arena] wallet connected, desktop ready`, `ttt auto-play started`,
-   `blackjack auto-play started`, `[arena] done`; exits 0.
 
 ## Known follow-ups (deferred)
 

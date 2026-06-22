@@ -7,7 +7,6 @@ import { App } from "./App";
 import { parseAgentConfig } from "./agent/agentConfig";
 import { AgentBoot } from "./agent/AgentBoot";
 import { AgentRunner } from "./agent/AgentRunner";
-import { ProgrammaticWalletGate } from "./agent/ProgrammaticWalletGate";
 
 const root = document.getElementById("root");
 if (!root) throw new Error("missing #root element");
@@ -21,10 +20,6 @@ createRoot(root).render(
         <AgentBoot>
           <AgentRunner />
         </AgentBoot>
-      ) : cfg.arena ? (
-        <ProgrammaticWalletGate secretKey={cfg.secretKey}>
-          <App />
-        </ProgrammaticWalletGate>
       ) : (
         <App />
       )}

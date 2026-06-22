@@ -123,7 +123,7 @@ export function GameWindow({
         </div>
       </header>
 
-      <div data-game-window={domId} className="min-h-0 flex-1 overflow-auto">{children}</div>
+      <div className="min-h-0 flex-1 overflow-auto">{children}</div>
     </div>
   );
 }

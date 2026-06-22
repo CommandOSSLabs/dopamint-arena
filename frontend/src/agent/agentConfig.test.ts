@@ -30,14 +30,3 @@ test("rotation set is tic-tac-toe only until the move-trigger fix", () => {
     ["tictactoe"],
   );
 });
-
-test("parses ?arena with a key and leaves ?agent off", () => {
-  const c = parseAgentConfig("http://x/?arena&key=suiprivkey1abc");
-  assert.strictEqual(c.arena, true);
-  assert.strictEqual(c.enabled, false); // not agent mode
-  assert.strictEqual(c.secretKey, "suiprivkey1abc");
-});
-
-test("arena defaults false with no param", () => {
-  assert.strictEqual(parseAgentConfig("http://x/").arena, false);
-});

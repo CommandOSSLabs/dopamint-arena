@@ -26,7 +26,6 @@ export const AGENT_GAMES: GameSpec[] = [
 
 export interface AgentConfig {
   enabled: boolean;
-  arena: boolean;
   secretKey: string | null; // Bech32 suiprivkey1… for the agent's funded wallet
   concurrency: number; // M: concurrent tunnel slots per agent
 }
@@ -35,7 +34,6 @@ export function parseAgentConfig(href: string): AgentConfig {
   const p = new URL(href).searchParams;
   return {
     enabled: p.get("agent") !== null,
-    arena: p.get("arena") !== null,
     secretKey: p.get("key"),
     concurrency: Math.max(1, Number(p.get("m") ?? "1")),
   };

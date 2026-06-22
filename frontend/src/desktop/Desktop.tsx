@@ -76,7 +76,6 @@ import { flyFromDock, flyToDock } from "@/lib/dockFlight";
 import { useTelemetry } from "@/telemetry/TelemetryProvider";
 import { useLocalStorageState } from "@/lib/useLocalStorageState";
 import { useMediaQuery } from "@/lib/useMediaQuery";
-import { parseAgentConfig } from "@/agent/agentConfig";
 import { WalletButton } from "@/wallet/WalletButton";
 import type { TelemetrySnapshot } from "../panels/types";
 import { ChatPanel } from "../panels/ChatPanel";
@@ -514,10 +513,9 @@ function FloorControls({
  * sections from a bottom tab bar.
  */
 export function Desktop() {
-  const arena = parseAgentConfig(window.location.href).arena;
   const [layout, setLayout] = useLocalStorageState<GridItem[]>(
     "dopamint.desktop.layout.v3",
-    arena ? () => [] : seedLayout,
+    seedLayout,
   );
   // Minimized windows: id → saved geometry, restored from the right-edge dock.
   const [hidden, setHidden] = useLocalStorageState<Record<string, GridItem>>(
