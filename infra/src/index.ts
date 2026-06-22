@@ -100,6 +100,9 @@ const backend = createBackend({
   taskRoleArn: iam.taskRole.arn,
   logGroupName: ecs.logGroupName,
   settlerKeySecretArn,
+  // Size the backend tasks to keep up with the i7ie.48xlarge bench instances.
+  taskCpu: 4096,
+  taskMemory: 8192,
 });
 
 const backendService = createBackendService({

@@ -20,6 +20,9 @@ export interface BackendArgs {
   // Secrets Manager ARN holding the base64 ed25519 settler key, injected as
   // SUI_SETTLER_KEY via ECS `secrets`. Omitted => the env var is simply absent.
   settlerKeySecretArn?: pulumi.Input<string>;
+  // Fargate task size for the backend service. Defaults sized for moderate load.
+  taskCpu?: pulumi.Input<number>;
+  taskMemory?: pulumi.Input<number>;
 }
 
 function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
@@ -105,6 +108,8 @@ function makeMigrationContainerDefinitions(args: BackendArgs): pulumi.Output<str
 
 export function createBackend(args: BackendArgs): BackendOutputs {
   const name = args.name;
+  const cpu = pulumi.output(args.taskCpu ?? 1024).apply((v) => String(v));
+  const memory = pulumi.output(args.taskMemory ?? 2048).apply((v) => String(v));
   const containerDefinitions = makeContainerDefinitions(args);
   const migrationContainerDefinitions = makeMigrationContainerDefinitions(args);
 
@@ -112,8 +117,8 @@ export function createBackend(args: BackendArgs): BackendOutputs {
     family: `${name}-backend`,
     networkMode: "awsvpc",
     requiresCompatibilities: ["FARGATE"],
-    cpu: "1024",
-    memory: "2048",
+    cpu,
+    memory,
     runtimePlatform: { cpuArchitecture: "ARM64", operatingSystemFamily: "LINUX" },
     executionRoleArn: args.taskExecutionRoleArn,
     taskRoleArn: args.taskRoleArn,
