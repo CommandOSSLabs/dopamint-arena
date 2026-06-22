@@ -528,6 +528,7 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
             game: GAME_ID,
             opponentWallet: match.opponentWallet,
             opponentPubkeyHex: toHex(oppPub),
+            selfEphemeralSecretHex: toHex(ephemeral.secretKey),
           },
           // Settlement floor: after the 1h grace, settle from the held checkpoint.
           onGraceExpired: (latest) => {

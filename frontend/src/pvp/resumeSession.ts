@@ -7,12 +7,26 @@
  * re-render hook). Verification + adoption live in the SDK; this module never touches keys or
  * signatures directly.
  */
-import type { DistributedTunnel } from "sui-tunnel-ts/core/distributedTunnel";
+import { DistributedTunnel } from "sui-tunnel-ts/core/distributedTunnel";
 import type { CoSignedUpdate } from "sui-tunnel-ts/core/tunnel";
+import { makeEndpoint } from "sui-tunnel-ts/core/tunnel";
+import { defaultBackend } from "sui-tunnel-ts/core/crypto-native";
+import { fromHex } from "sui-tunnel-ts/core/bytes";
+import type { Protocol } from "sui-tunnel-ts/protocol/Protocol";
+import type { MoveCodec } from "sui-tunnel-ts/core/distributedFrame";
 import { decideReconcile } from "sui-tunnel-ts/core/reconcile";
 import type { ReconcileAction, ResyncView } from "sui-tunnel-ts/core/reconcile";
 import type { MpClient, PvpChannel, PeerMessage } from "./mpClient";
-import { fromWireCoSigned, toWireCoSigned, writeResumeRecord } from "./resume";
+import {
+  clearResumeRecord,
+  evictExpiredRecords,
+  fromWireCoSigned,
+  keypairFromSecretHex,
+  listActiveTunnels,
+  readResumeRecord,
+  toWireCoSigned,
+  writeResumeRecord,
+} from "./resume";
 import type { JsonValue, ResumeRecord } from "./resume";
 
 export type ReconcileOutcome = ReconcileAction;
@@ -41,6 +55,8 @@ export interface ResumeIdentity {
   game: string;
   opponentWallet: string;
   opponentPubkeyHex: string;
+  /** Per-match self signing secret (hex), persisted so a cold reload can rebuild the signer. */
+  selfEphemeralSecretHex: string;
 }
 
 export interface AttachResumeArgs<State, Move> {
@@ -104,6 +120,123 @@ export function restoreInto<State, Move>(
       BigInt(record.pending.timestamp),
     );
   }
+}
+
+/** Current connected wallet at mount — the only live value cold-load can't read from a record. */
+export interface ResumeContext {
+  selfWallet: string;
+}
+
+/** The thin per-game inputs cold-load reconstruction cannot derive from a persisted record. */
+export interface RebuildSpec<State, Move> {
+  /** The same `Protocol` object the hook builds for a live match. */
+  proto: Protocol<State, Move>;
+  /** Required for games with binary moves (battleship, poker); JSON-native games omit it. */
+  moveCodec?: MoveCodec<Move>;
+  /** Full-state + hidden-secret (de)serialization + UI hydration. */
+  adapter: ResumeAdapter<State, Move>;
+  /** Override the rebuilt tunnel's locked balances; defaults to the checkpoint's A/B split. */
+  balancesFromRecord?(record: ResumeRecord): { a: bigint; b: bigint };
+}
+
+export interface RestoredSession<State, Move> {
+  tunnel: DistributedTunnel<State, Move>;
+  channel: PvpChannel;
+  detach: () => void;
+}
+
+/** Default locked balances: the checkpoint's current A/B split (sums to the same locked total). */
+function balancesFromCheckpoint(record: ResumeRecord): {
+  a: bigint;
+  b: bigint;
+} {
+  return {
+    a: BigInt(record.latestCoSigned.update.partyABalance),
+    b: BigInt(record.latestCoSigned.update.partyBBalance),
+  };
+}
+
+/**
+ * Cold-load: reconstruct one tunnel from a persisted record + per-game spec, seat it at the
+ * checkpoint, and warm-attach it. Throws if the record can't be restored (missing per-match key,
+ * `adoptCheckpoint` integrity failure) — `resumeActiveTunnels` catches and evicts those. The
+ * returned tunnel renders immediately from `tunnel.snapshot().state`; the resync handshake (run by
+ * the attached driver once the peer is reachable) closes any ≤1-move gap.
+ */
+export function rebuildTunnel<State, Move>(
+  mp: MpClient,
+  record: ResumeRecord,
+  spec: RebuildSpec<State, Move>,
+  ctx: ResumeContext,
+): RestoredSession<State, Move> {
+  if (!record.selfEphemeralSecretHex)
+    throw new Error("rebuildTunnel: record has no per-match signing key");
+  const backend = defaultBackend();
+  const keypair = keypairFromSecretHex(record.selfEphemeralSecretHex);
+  const self = makeEndpoint(backend, ctx.selfWallet, keypair, true);
+  const opponent = makeEndpoint(
+    backend,
+    record.opponentWallet,
+    { publicKey: fromHex(record.opponentPubkeyHex), scheme: keypair.scheme },
+    false,
+  );
+  const channel = mp.channel(record.matchId);
+  const balances = (spec.balancesFromRecord ?? balancesFromCheckpoint)(record);
+  const tunnel = new DistributedTunnel<State, Move>(
+    spec.proto,
+    {
+      tunnelId: record.tunnelId,
+      self,
+      opponent,
+      selfParty: record.role,
+      moveCodec: spec.moveCodec,
+    },
+    channel.transport,
+    balances,
+  );
+  restoreInto(tunnel, record, spec.adapter); // verify-on-adopt; throws on tamper
+  mp.markActive(record.matchId);
+  const detach = attachResume({
+    mp,
+    channel,
+    tunnel,
+    adapter: spec.adapter,
+    identity: {
+      matchId: record.matchId,
+      tunnelId: record.tunnelId,
+      role: record.role,
+      game: record.game,
+      opponentWallet: record.opponentWallet,
+      opponentPubkeyHex: record.opponentPubkeyHex,
+      selfEphemeralSecretHex: record.selfEphemeralSecretHex,
+    },
+  });
+  return { tunnel, channel, detach };
+}
+
+/**
+ * Cold-load every persisted match for one game: evict expired records, then rebuild each active
+ * record whose `game` matches. Corrupt/unrestorable records are evicted and skipped so a single bad
+ * entry never blocks the rest. Call once on hook mount, BEFORE `mp.connect()`.
+ */
+export function resumeActiveTunnels<State, Move>(
+  mp: MpClient,
+  gameId: string,
+  spec: RebuildSpec<State, Move>,
+  ctx: ResumeContext,
+): RestoredSession<State, Move>[] {
+  evictExpiredRecords();
+  const out: RestoredSession<State, Move>[] = [];
+  for (const tunnelId of listActiveTunnels()) {
+    const record = readResumeRecord(tunnelId);
+    if (!record || record.game !== gameId) continue;
+    try {
+      out.push(rebuildTunnel(mp, record, spec, ctx));
+    } catch {
+      clearResumeRecord(tunnelId); // unrestorable → drop; user falls through to a fresh match
+    }
+  }
+  return out;
 }
 
 /** Send THIS seat's resync (latest nonce + pending flag + checkpoint + full state for gap-fill). */

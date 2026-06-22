@@ -28,9 +28,39 @@ const {
   clearResumeRecord,
   listActiveTunnels,
   evictExpiredRecords,
+  keypairFromSecretHex,
 } = await import("./resume");
 const { OffchainTunnel } = await import("sui-tunnel-ts/core/tunnel");
 const { generateKeyPair } = await import("sui-tunnel-ts/core/crypto");
+const { toHex } = await import("sui-tunnel-ts/core/bytes");
+
+test("keypairFromSecretHex rebuilds a key that signs identically to the original", () => {
+  const kp = generateKeyPair();
+  const restored = keypairFromSecretHex(toHex(kp.secretKey));
+  assert.deepEqual(Uint8Array.from(restored.secretKey), kp.secretKey);
+  assert.deepEqual(Uint8Array.from(restored.publicKey), kp.publicKey);
+  assert.equal(restored.scheme, kp.scheme);
+});
+
+test("selfEphemeralSecretHex survives the resume-record write/read round-trip", () => {
+  const tid = `0x${"5a".repeat(32)}`;
+  const secretHex = toHex(generateKeyPair().secretKey);
+  writeResumeRecord({
+    matchId: "m",
+    tunnelId: tid,
+    role: "A",
+    game: "ttt",
+    opponentWallet: "0xb",
+    opponentPubkeyHex: "ab",
+    selfEphemeralSecretHex: secretHex,
+    latestCoSigned: toWireCoSigned(sampleCoSigned(tid)),
+    latestState: { board: [0] },
+    updatedAt: 1,
+  });
+  flushResumeWrites();
+  assert.equal(readResumeRecord(tid)?.selfEphemeralSecretHex, secretHex);
+  clearResumeRecord(tid);
+});
 
 test("bigint round-trips through stringify/parse", () => {
   const v = { a: 10n, nested: [1n, { b: 2n }], s: "x" };

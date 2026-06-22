@@ -580,6 +580,7 @@ export function usePvpTicTacToe(
             game: variant,
             opponentWallet: m.opponentWallet,
             opponentPubkeyHex: oppPubHex,
+            selfEphemeralSecretHex: bytesToHex(eph.coreKey.secretKey),
           },
           // Settlement floor: after the 1h grace, settle from the held checkpoint.
           onGraceExpired: (latest) => {

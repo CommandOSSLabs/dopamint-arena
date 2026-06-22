@@ -84,6 +84,17 @@ test("unexpected close reconnects, re-runs connect, and resumes each active matc
   assert.deepEqual(resumes.map((r) => r.matchId).sort(), ["m1", "m2"]);
 });
 
+test("first connect resumes matches registered before connect (cold-load)", async () => {
+  const { mp } = mkClient();
+  mp.markActive("m1"); // cold-load registers active matches before the first connect
+  mp.markActive("m2");
+  await connect(mp);
+  const resumes = FakeWebSocket.instances[0].sent
+    .map((s) => JSON.parse(s))
+    .filter((m) => m.type === "resume");
+  assert.deepEqual(resumes.map((r) => r.matchId).sort(), ["m1", "m2"]);
+});
+
 test("queued-only client re-issues queue.join on reconnect", async () => {
   const { mp } = mkClient();
   await connect(mp);

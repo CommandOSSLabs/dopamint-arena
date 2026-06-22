@@ -8,6 +8,7 @@
  * most one move behind, which the reconciliation handshake closes.
  */
 import { toHex, fromHex } from "sui-tunnel-ts/core/bytes";
+import { keyPairFromSecret, type KeyPair } from "sui-tunnel-ts/core/crypto";
 import type { CoSignedUpdate } from "sui-tunnel-ts/core/tunnel";
 import type { StateUpdate } from "sui-tunnel-ts/core/wire";
 
@@ -40,11 +41,20 @@ export interface ResumeRecord {
   game: string;
   opponentWallet: string;
   opponentPubkeyHex: string;
+  /** Per-match self signing secret (hex). Persisted so a cold reload can rebuild the ephemeral
+   *  KeyPair needed to co-sign moves and the resync. Optional-at-read: records written before this
+   *  field existed are unrestorable and get evicted on rebuild. */
+  selfEphemeralSecretHex?: string;
   latestCoSigned: WireCoSigned;
   latestState: JsonValue;
   pending?: { move: JsonValue; timestamp: string };
   secret?: JsonValue;
   updatedAt: number;
+}
+
+/** Rebuild an ephemeral signing KeyPair from a persisted hex secret (cold-load only). */
+export function keypairFromSecretHex(secretHex: string): KeyPair {
+  return keyPairFromSecret(fromHex(secretHex));
 }
 
 export function toWireCoSigned(u: CoSignedUpdate): WireCoSigned {

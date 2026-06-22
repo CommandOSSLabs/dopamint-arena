@@ -216,10 +216,10 @@ export class MpClient {
           );
           this.#connected = true;
           opened = true;
-          if (isReconnect) {
-            this.#reconnectAttempt = 0;
-            this.#resumeActive();
-          }
+          if (isReconnect) this.#reconnectAttempt = 0;
+          // Resume on EVERY connect, not only reconnects: cold-load registers active matches
+          // before the first connect, so the opening handshake must carry their resume frames.
+          this.#resumeActive();
           resolve();
         } else if (m.type === "match.found") {
           this.#activeMatches.add(m.matchId as string);
@@ -279,7 +279,7 @@ export class MpClient {
     }, delay);
   }
 
-  /** After a reconnect handshake, re-attach to every active match and re-queue if only queued. */
+  /** After any connect handshake, re-attach to every active match and re-queue if only queued. */
   #resumeActive(): void {
     for (const matchId of this.#activeMatches)
       this.#send({ type: "resume", matchId });

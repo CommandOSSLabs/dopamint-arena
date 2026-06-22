@@ -56,7 +56,7 @@ Layers A/B/C from the parent plan are in place and committed (Tasks 1–6A + a p
 - **Cold-load locus:** **centralized driver + thin per-game `RebuildSpec`** (approach A).
   One audited reconstruction path; the integration guide becomes "implement an adapter +
   a `RebuildSpec`," not "write a cold-load loop."
-- **Integration guide:** standalone living doc at `docs/pvp/resume-adapter-guide.md`.
+- **Integration guide:** standalone living doc at `docs/resume-adapter-guide.md`.
 - **Plan structure:** one implementation plan — a shared foundation task, then one
   phase per game.
 
@@ -286,7 +286,7 @@ clean after each task; stage only the task's files.
 
 ---
 
-## Integration guide (`docs/pvp/resume-adapter-guide.md`)
+## Integration guide (`docs/resume-adapter-guide.md`)
 
 A living how-to for adding resume to any **future** game. Contents:
 
@@ -325,7 +325,7 @@ A living how-to for adding resume to any **future** game. Contents:
 - The four adapter files as needed (secret handlers for battleship/poker).
 
 **Created**
-- `docs/pvp/resume-adapter-guide.md` — the integration guide.
+- `docs/resume-adapter-guide.md` — the integration guide.
 - Per-game cold-load test files (co-located: `src/pvp/*.test.ts` and the game dirs).
 
 ## Self-review notes (coverage)

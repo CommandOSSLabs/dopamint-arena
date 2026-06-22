@@ -16,11 +16,13 @@ import assert from "node:assert/strict";
 (globalThis as Record<string, unknown>).window = { addEventListener() {} };
 
 const { decideReconcile } = await import("sui-tunnel-ts/core/reconcile");
-const { restoreInto } = await import("./resumeSession");
+const { restoreInto, rebuildTunnel, resumeActiveTunnels } =
+  await import("./resumeSession");
 const {
   writeResumeRecord,
   flushResumeWrites,
   readResumeRecord,
+  clearResumeRecord,
   toWireCoSigned,
 } = await import("./resume");
 const { DistributedTunnel } =
@@ -29,6 +31,161 @@ const { makeEndpoint, OffchainTunnel } =
   await import("sui-tunnel-ts/core/tunnel");
 const { defaultBackend } = await import("sui-tunnel-ts/core/crypto-native");
 const { generateKeyPair } = await import("sui-tunnel-ts/core/crypto");
+const { toHex } = await import("sui-tunnel-ts/core/bytes");
+
+// A fake MpClient whose channel captures the engine-transport bytes a rebuilt tunnel sends.
+function makeFakeMp() {
+  const sent: Uint8Array[] = [];
+  const active: string[] = [];
+  return {
+    sent,
+    active,
+    channel: () => ({
+      transport: { send: (b: Uint8Array) => sent.push(b), onFrame() {} },
+      sendPeer() {},
+      onPeer() {},
+      addPeerListener() {},
+      removePeerListener() {},
+    }),
+    markActive: (id: string) => active.push(id),
+    onResumeOk: () => () => {},
+    onPeerResumed: () => () => {},
+    onPeerDropped: () => () => {},
+  };
+}
+
+// Drive self-play to nonce 2 and return a persistable record for seat A.
+function recordAtNonce2(tid: string, ka: never, kb: never, game = "counter") {
+  const sp = OffchainTunnel.selfPlay(
+    proto as never,
+    tid,
+    ka,
+    kb,
+    "0xA",
+    "0xB",
+    {
+      a: 1000n,
+      b: 1000n,
+    },
+  );
+  sp.step(0, "A");
+  sp.step(0, "B");
+  return {
+    matchId: `match-${tid.slice(0, 6)}`,
+    tunnelId: tid,
+    role: "A" as const,
+    game,
+    opponentWallet: "0xB",
+    opponentPubkeyHex: toHex((kb as { publicKey: Uint8Array }).publicKey),
+    selfEphemeralSecretHex: toHex((ka as { secretKey: Uint8Array }).secretKey),
+    latestCoSigned: toWireCoSigned(sp.latest!),
+    latestState: adapter.serializeState(sp.state),
+    updatedAt: Date.now(),
+  };
+}
+
+test("rebuildTunnel reconstructs a tunnel that co-signs the next move byte-identically", () => {
+  const ka = generateKeyPair(),
+    kb = generateKeyPair();
+  const tid = `0x${"43".repeat(32)}`;
+  const record = recordAtNonce2(tid, ka as never, kb as never);
+  writeResumeRecord(record);
+  flushResumeWrites();
+
+  // Reference: a never-dropped tunnel restored from the same checkpoint, proposing move 0 @ ts 9.
+  const backend = defaultBackend();
+  const refSent: Uint8Array[] = [];
+  const ref = new DistributedTunnel(
+    proto as never,
+    {
+      tunnelId: tid,
+      self: makeEndpoint(
+        backend,
+        "0xA",
+        { publicKey: ka.publicKey, scheme: 0, secretKey: ka.secretKey },
+        true,
+      ),
+      opponent: makeEndpoint(
+        backend,
+        "0xB",
+        { publicKey: kb.publicKey, scheme: 0 },
+        false,
+      ),
+      selfParty: "A",
+    },
+    { send: (b) => refSent.push(b), onFrame() {} },
+    { a: 1000n, b: 1000n },
+  );
+  restoreInto(ref, readResumeRecord(tid)!, adapter as never);
+  ref.propose(0, 9n);
+
+  // Rebuilt from the persisted record alone (fresh objects, same persisted secret).
+  const mp = makeFakeMp();
+  const spec = { proto, adapter };
+  const session = rebuildTunnel(
+    mp as never,
+    readResumeRecord(tid)!,
+    spec as never,
+    { selfWallet: "0xA" },
+  );
+  assert.equal(session.tunnel.nonce, 2n);
+  assert.deepEqual(mp.active, [record.matchId]);
+  session.tunnel.propose(0, 9n);
+  assert.equal(mp.sent.length, 1);
+  assert.deepEqual(
+    Uint8Array.from(mp.sent[0]),
+    Uint8Array.from(refSent[0]),
+    "rebuilt tunnel proposes byte-identically to a never-dropped tunnel",
+  );
+  clearResumeRecord(tid);
+});
+
+test("resumeActiveTunnels evicts expired records and rebuilds only the given game", () => {
+  const tidLive = `0x${"44".repeat(32)}`;
+  const tidExpired = `0x${"45".repeat(32)}`;
+  const tidOther = `0x${"46".repeat(32)}`;
+  const live = recordAtNonce2(
+    tidLive,
+    generateKeyPair() as never,
+    generateKeyPair() as never,
+  );
+  writeResumeRecord(live);
+  writeResumeRecord({
+    ...recordAtNonce2(
+      tidExpired,
+      generateKeyPair() as never,
+      generateKeyPair() as never,
+    ),
+    updatedAt: 0, // older than any TTL → evicted before rebuild
+  });
+  writeResumeRecord(
+    recordAtNonce2(
+      tidOther,
+      generateKeyPair() as never,
+      generateKeyPair() as never,
+      "other-game",
+    ),
+  );
+  flushResumeWrites();
+
+  const mp = makeFakeMp();
+  const sessions = resumeActiveTunnels(
+    mp as never,
+    "counter",
+    { proto, adapter } as never,
+    {
+      selfWallet: "0xA",
+    },
+  );
+
+  assert.equal(sessions.length, 1, "only the live counter record is rebuilt");
+  assert.equal(sessions[0].tunnel.nonce, 2n);
+  assert.equal(readResumeRecord(tidExpired), null, "expired record evicted");
+  assert.ok(readResumeRecord(tidOther), "other-game record left untouched");
+
+  clearResumeRecord(tidLive);
+  clearResumeRecord(tidOther);
+});
 
 const proto = {
   name: "counter-test",
