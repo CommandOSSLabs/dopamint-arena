@@ -320,7 +320,13 @@ export function usePaintDuelOnchain(
   // signatures match whatever we may later settle; buffered moves replay in order.
   const startRun = useCallback(async () => {
     const run: DuelRun = {
-      tunnelId: `0xdemo-paint-${Date.now().toString(16)}`,
+      // Demo id must be a VALID 32-byte hex address: OffchainTunnel.selfPlay feeds
+      // it to addressToBytes32, which throws on a non-hex marker like "demo-paint"
+      // (that crash left the chip stuck at "opening…" with no register/heartbeat).
+      // The demo/real distinction is the `onchain` flag below, not this string.
+      tunnelId: `0x${`${Date.now().toString(16)}${Math.floor(
+        Math.random() * 0xffffffff,
+      ).toString(16)}`.padStart(64, "0")}`,
       onchain: false,
       createdAt: 0n,
       tunnel: null,
