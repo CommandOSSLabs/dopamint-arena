@@ -5,6 +5,7 @@ import {
   getControlPlaneClient,
   type RegisterSessionResult,
 } from "@/backend/controlPlane";
+import { useTelemetry } from "@/telemetry/TelemetryProvider";
 import { coSignedToSettleRequest } from "@/backend/settleRequest";
 import type { Transaction } from "@mysten/sui/transactions";
 import {
@@ -190,6 +191,7 @@ function pickCell(state: State, by: "A" | "B", difficulty: Difficulty): number {
 }
 
 export function useBotGame(difficulty: Difficulty = "fast"): BotGameView {
+  const { report } = useTelemetry();
   const bots = useMemo(() => loadOrCreateBots(), []);
   const client = useMemo(() => getSuiClient(), []);
 
@@ -366,6 +368,8 @@ export function useBotGame(difficulty: Difficulty = "fast"): BotGameView {
         const tunnelId = parseTunnelId(createRes.objectChanges);
         if (!tunnelId) throw new Error("could not find created Tunnel id");
         setDigests((d) => ({ ...d, create: createRes.digest }));
+        report.bumpCounters({ tunnelsOpened: 1 });
+        report.setActive(2);
 
         // 2) read created_at for the settlement timestamp.
         const obj = await client.getObject({
@@ -465,6 +469,7 @@ export function useBotGame(difficulty: Difficulty = "fast"): BotGameView {
 
               moveCountRef.current += 1;
               actionsRef.current += 1;
+              report.bumpCounters({ updates: 1, signatures: 2, verifications: 2 });
 
               const next = tunnel.state;
               setBoard([...next.inner.board]);
@@ -475,6 +480,16 @@ export function useBotGame(difficulty: Difficulty = "fast"): BotGameView {
               // A finished inner game (winner set) is game number gamesPlayed+1.
               if (next.inner.winner !== 0) {
                 recordGame(next.gamesPlayed, next.inner.winner);
+                const w = next.inner.winner;
+                report.pushLocalTxn({
+                  id: moveCountRef.current,
+                  game: "tic-tac-toe",
+                  time: new Date().toLocaleTimeString("en-GB"),
+                  bot: bots.x.address,
+                  type: w === 1 ? "X win" : w === 2 ? "O win" : "Draw",
+                  status: "Success",
+                  amount: "",
+                });
               }
 
               if (proto.isTerminal(next)) {
@@ -529,6 +544,19 @@ export function useBotGame(difficulty: Difficulty = "fast"): BotGameView {
           close: closeDigest,
           root: `0x${bytesToHex(root)}`,
         }));
+        report.pushTxn({
+          id: actionsRef.current,
+          game: "tic-tac-toe",
+          digest: closeDigest,
+          address: bots.x.address,
+          time: new Date().toLocaleTimeString("en-GB"),
+          bot: bots.x.address,
+          type: "Settle",
+          status: "Success",
+          amount: "",
+        });
+        report.bumpCounters({ tunnelsClosed: 1, settlements: 1 });
+        report.setActive(0);
 
         // Record the settled tunnel into the history (newest first), then reset the running
         // score so the next tunnel starts fresh — each settle resets the player tally.

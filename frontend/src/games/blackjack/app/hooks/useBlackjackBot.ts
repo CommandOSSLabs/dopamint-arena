@@ -6,6 +6,7 @@ import {
   getControlPlaneClient,
   type RegisterSessionResult,
 } from "@/backend/controlPlane";
+import { useTelemetry } from "@/telemetry/TelemetryProvider";
 import { coSignedToSettleRequest } from "@/backend/settleRequest";
 import {
   buildCreateAndFundTx,
@@ -188,6 +189,7 @@ const EMPTY_VIEW: BlackjackBotView = {
 };
 
 export function useBlackjackBot(): BlackjackBotGame {
+  const { report } = useTelemetry();
   const proto = useMemo(() => new BlackjackBetProtocol(), []);
   const bots = useMemo(() => loadOrCreateBots(), []);
   const client = useMemo(() => getSuiClient(), []);
@@ -408,6 +410,8 @@ export function useBlackjackBot(): BlackjackBotGame {
         const tunnelId = parseTunnelId(createRes.objectChanges);
         if (!tunnelId) throw new Error("could not find created Tunnel id");
         setDigests((d) => ({ ...d, create: createRes.digest }));
+        report.bumpCounters({ tunnelsOpened: 1 });
+        report.setActive(2);
 
         // 2) read created_at for the settlement timestamp.
         const obj = await client.getObject({
@@ -509,6 +513,7 @@ export function useBlackjackBot(): BlackjackBotGame {
                 throw new Error(`state ${r.nonce} failed dual-verify`);
               moveCountRef.current += 1;
               actionsRef.current += 1;
+              report.bumpCounters({ updates: 1, signatures: 2, verifications: 2 });
               const s = tunnel.state;
               if (s.phase === "round_over" && prevPhase !== "round_over") {
                 const delta = Number(s.balanceA - prevBalanceA);
@@ -526,6 +531,15 @@ export function useBlackjackBot(): BlackjackBotGame {
                 );
                 completedRounds++;
                 roundsThisTunnel = completedRounds;
+                report.pushLocalTxn({
+                  id: moveCountRef.current,
+                  game: "blackjack",
+                  time: new Date().toLocaleTimeString("en-GB"),
+                  bot: bots.a.address,
+                  type: `Blackjack ${outcome === "win" ? "Win" : outcome === "lose" ? "Loss" : "Push"}`,
+                  status: "Success",
+                  amount: delta > 0 ? `+${delta}` : delta < 0 ? `${delta}` : "0",
+                });
               }
               setView(viewFromState(tunnel.state));
               // Stop once a bot is bankrupt (terminal) or we've played the requested number
@@ -582,6 +596,19 @@ export function useBlackjackBot(): BlackjackBotGame {
 
         const rootHex = `0x${bytesToHex(root)}`;
         setDigests((d) => ({ ...d, close: closeDigest, root: rootHex }));
+        report.pushTxn({
+          id: actionsRef.current,
+          game: "blackjack",
+          digest: closeDigest,
+          address: bots.a.address,
+          time: new Date().toLocaleTimeString("en-GB"),
+          bot: bots.a.address,
+          type: "Settle",
+          status: "Success",
+          amount: "",
+        });
+        report.bumpCounters({ tunnelsClosed: 1, settlements: 1 });
+        report.setActive(0);
 
         // Record this settled tunnel into the persistent history (newest first). Survives the
         // auto loop so the user can review each settlement the fast transition would otherwise

@@ -5,6 +5,7 @@ import {
   getControlPlaneClient,
   type RegisterSessionResult,
 } from "@/backend/controlPlane";
+import { useTelemetry } from "@/telemetry/TelemetryProvider";
 import { coSignedToSettleRequest } from "@/backend/settleRequest";
 import type { Transaction } from "@mysten/sui/transactions";
 import {
@@ -97,6 +98,7 @@ export function useCaroBotGame(
   difficulty: Difficulty = "fast",
   boardSize: number = DEFAULT_BOARD_SIZE,
 ): CaroBotGameView {
+  const { report } = useTelemetry();
   const bots = useMemo(() => loadOrCreateBots(), []);
   const client = useMemo(() => getSuiClient(), []);
 
@@ -279,6 +281,8 @@ export function useCaroBotGame(
         const tunnelId = parseTunnelId(createRes.objectChanges);
         if (!tunnelId) throw new Error("could not find created Tunnel id");
         setDigests((d) => ({ ...d, create: createRes.digest }));
+        report.bumpCounters({ tunnelsOpened: 1 });
+        report.setActive(2);
 
         // 2) read created_at for the settlement timestamp.
         const obj = await client.getObject({
@@ -387,6 +391,7 @@ export function useCaroBotGame(
 
               moveCountRef.current += 1;
               actionsRef.current += 1;
+              report.bumpCounters({ updates: 1, signatures: 2, verifications: 2 });
 
               const next = tunnel.state;
               setBoard([...next.inner.board]);
@@ -395,8 +400,19 @@ export function useCaroBotGame(
               setTurn(next.inner.turn as "A" | "B");
               setWinner(next.inner.winner);
               setCurrentGame(next.gamesPlayed + 1);
-              if (next.inner.winner !== 0)
+              if (next.inner.winner !== 0) {
                 recordGame(next.gamesPlayed, next.inner.winner);
+                const w = next.inner.winner;
+                report.pushLocalTxn({
+                  id: moveCountRef.current,
+                  game: "tic-tac-toe",
+                  time: new Date().toLocaleTimeString("en-GB"),
+                  bot: bots.x.address,
+                  type: w === 1 ? "X win" : w === 2 ? "O win" : "Draw",
+                  status: "Success",
+                  amount: "",
+                });
+              }
 
               if (proto.isTerminal(next)) {
                 stopTimer();
@@ -446,6 +462,19 @@ export function useCaroBotGame(
           close: closeDigest,
           root: `0x${bytesToHex(root)}`,
         }));
+        report.pushTxn({
+          id: actionsRef.current,
+          game: "tic-tac-toe",
+          digest: closeDigest,
+          address: bots.x.address,
+          time: new Date().toLocaleTimeString("en-GB"),
+          bot: bots.x.address,
+          type: "Settle",
+          status: "Success",
+          amount: "",
+        });
+        report.bumpCounters({ tunnelsClosed: 1, settlements: 1 });
+        report.setActive(0);
 
         // Record the settled tunnel into the history (newest first), then reset the running
         // score so the next tunnel starts fresh — each settle resets the player tally.
