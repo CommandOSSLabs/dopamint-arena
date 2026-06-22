@@ -11,6 +11,11 @@
  * total is 2S. Balances stay (S, S) for the whole race and flip to (2S, 0) / (0, 2S)
  * only on the winning tick — so the invariant balanceA + balanceB === total holds for
  * every reachable state (required by OffchainTunnel.step).
+ *
+ * PvP fairness: the seed is a deterministic function of the Sui-assigned tunnelId, NOT a
+ * commit-reveal. Safe here because the hazard field is PUBLIC and identical for both seats —
+ * neither party holds hidden state it could bias, and the tunnelId cannot be ground.
+ * Commit-reveal is reserved for hidden-information games (see docs/decisions/0010).
  */
 
 import {
@@ -288,10 +293,14 @@ export class CrossProtocol implements Protocol<CrossState, CrossMove> {
     let winner: Party | null = null;
     const aWon = players[0].lane >= WIN_LANE;
     const bWon = players[1].lane >= WIN_LANE;
-    // Simultaneous double-arrival is broken deterministically by higher score, ties to A.
-    // Deterministic (replay-stable) is required so both parties agree; the A-bias is harmless
-    // in self-play (both seats are the same funding wallet). Revisit for PvP fairness.
-    if (aWon && bWon) winner = players[0].score >= players[1].score ? "A" : "B";
+    // Simultaneous double-arrival: higher score wins; an exact dead heat is a PUSH (winner
+    // null), matching the TICK_CAP tie path below. Resolving by score is replay-stable so both
+    // parties agree, and the push removes the old seat-A bias in human-vs-human PvP.
+    if (aWon && bWon) {
+      if (players[0].score > players[1].score) winner = "A";
+      else if (players[1].score > players[0].score) winner = "B";
+      else winner = null;
+    }
     else if (aWon) winner = "A";
     else if (bWon) winner = "B";
     else if (tick >= TICK_CAP) {
