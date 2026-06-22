@@ -83,6 +83,9 @@ async fn main() -> anyhow::Result<()> {
         stats_tx,
     });
     stats::spawn_stats_broadcaster(state.clone());
+    // Poll-index on-chain tunnel events (Created/Activated/Closed) into recent_events so the
+    // live feed reflects real settlements; without this the stats SSE never emits any.
+    sui::spawn_event_indexer(state.clone());
 
     let app = Router::new()
         .route("/healthz", get(routes::health))
