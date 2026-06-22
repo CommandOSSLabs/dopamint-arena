@@ -3,6 +3,7 @@ import type { PokerMove } from "sui-tunnel-ts/protocol/quantumPoker";
 import type { GameWindowProps } from "../types";
 import { useQuantumPokerBot } from "./useQuantumPokerBot";
 import { QuantumPokerTable, HEADS_UP_STYLE } from "./QuantumPokerTable";
+import { pokerRaiseSizes } from "./pokerBetting";
 
 // ---------------------------------------------------------------------------
 // Presentational helpers (local only — moveLabel drives the action transcript)
@@ -36,14 +37,22 @@ void moveLabel;
 
 function ActionBar({
   legal,
+  pot,
   onAct,
 }: {
   legal: NonNullable<ReturnType<typeof useQuantumPokerBot>["legal"]>;
+  pot: bigint;
   onAct: (m: PokerMove) => void;
 }) {
   const raise = (amt: bigint) => onAct({ kind: "bet", amount: amt });
-  const clamp = (v: bigint) =>
-    v < legal.minBet ? legal.minBet : v > legal.maxBet ? legal.maxBet : v;
+  // Same three pot-relative sizes as PvP: ½ pot, pot, all-in.
+  const sizes = pokerRaiseSizes({
+    pot,
+    callAmount: legal.callAmount,
+    minBet: legal.minBet,
+    maxBet: legal.maxBet,
+    canBet: legal.minBet > 0n,
+  });
   return (
     <div className="flex flex-wrap items-center gap-1.5 rounded-md border border-white/10 bg-black/30 p-2">
       <button
@@ -71,30 +80,32 @@ function ActionBar({
           Call {legal.callAmount.toString()}
         </button>
       )}
-      {legal.minBet > 0n && (
-        <>
-          <button
-            type="button"
-            onClick={() => raise(legal.minBet)}
-            className="h-7 rounded-sm border border-amber-200/40 px-3 text-[11px] font-semibold text-amber-100"
-          >
-            Raise {legal.minBet.toString()}
-          </button>
-          <button
-            type="button"
-            onClick={() => raise(clamp(legal.maxBet / 2n))}
-            className="h-7 rounded-sm border border-amber-200/40 px-3 text-[11px] font-semibold text-amber-100"
-          >
-            ½
-          </button>
-          <button
-            type="button"
-            onClick={() => raise(legal.maxBet)}
-            className="h-7 rounded-sm bg-[var(--qp-gold)] px-3 text-[11px] font-black text-slate-950"
-          >
-            All-in {legal.maxBet.toString()}
-          </button>
-        </>
+      {sizes.showHalf && (
+        <button
+          type="button"
+          onClick={() => raise(sizes.half)}
+          className="h-7 rounded-sm border border-amber-200/40 px-3 text-[11px] font-semibold text-amber-100"
+        >
+          ½ Pot · {sizes.half.toString()}
+        </button>
+      )}
+      {sizes.showFull && (
+        <button
+          type="button"
+          onClick={() => raise(sizes.full)}
+          className="h-7 rounded-sm border border-amber-200/40 px-3 text-[11px] font-semibold text-amber-100"
+        >
+          Pot · {sizes.full.toString()}
+        </button>
+      )}
+      {sizes.showAllIn && (
+        <button
+          type="button"
+          onClick={() => raise(sizes.allIn)}
+          className="h-7 rounded-sm bg-[var(--qp-gold)] px-3 text-[11px] font-black text-slate-950"
+        >
+          All-in · {sizes.allIn.toString()}
+        </button>
       )}
     </div>
   );
@@ -174,7 +185,11 @@ export function QuantumPokerWindow({
 
         {/* Human action bar — only shown when it's the human's betting turn */}
         {game.status === "awaitHuman" && game.legal && (
-          <ActionBar legal={game.legal} onAct={game.act} />
+          <ActionBar
+            legal={game.legal}
+            pot={s.totalBetA + s.totalBetB}
+            onAct={game.act}
+          />
         )}
 
         {/* Status footer */}

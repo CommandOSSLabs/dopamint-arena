@@ -7,6 +7,7 @@ import {
   STAKE_BALANCE,
   usePvpQuantumPoker,
 } from "./usePvpQuantumPoker";
+import { pokerRaiseSizes } from "./pokerBetting";
 
 const SUITS = ["♠", "♥", "♦", "♣"] as const;
 const RANKS = ["2", "3", "4", "5", "6", "7", "8", "9", "T", "J", "Q", "K", "A"];
@@ -300,23 +301,20 @@ export function QuantumPokerPvpWindow(_props: GameWindowProps) {
   // Pot-relative bet sizing. The protocol's `bet` amount is the increment to THIS seat's
   // street bet; a pot-sized raise = call + pot-after-call = pot + 2·diff (diff = amount to
   // call, 0 when first to act). Each size clamps to a legal min-raise and the stack (all-in).
-  const diff = legal?.callAmount ?? 0n;
-  const clampBet = (raw: bigint): bigint => {
-    if (!legal) return 0n;
-    return raw < legal.minBet
-      ? legal.minBet
-      : raw > legal.maxBet
-        ? legal.maxBet
-        : raw;
-  };
-  const halfPot = clampBet(diff > 0n ? diff + (pot + diff) / 2n : pot / 2n);
-  const fullPot = clampBet(diff > 0n ? pot + 2n * diff : pot);
-  const allIn = legal?.maxBet ?? 0n;
-  // Surface only distinct, legal sizes — collapse to all-in when the stack is short.
-  const showHalf =
-    !!legal && legal.canBet && halfPot < fullPot && halfPot < allIn;
-  const showPot = !!legal && legal.canBet && fullPot < allIn;
-  const showAllIn = !!legal && legal.canBet;
+  // Same three pot-relative sizes as the Bot lane (shared helper): ½ pot, pot, all-in.
+  const sizes = pokerRaiseSizes({
+    pot,
+    callAmount: legal?.callAmount ?? 0n,
+    minBet: legal?.minBet ?? 0n,
+    maxBet: legal?.maxBet ?? 0n,
+    canBet: !!legal?.canBet,
+  });
+  const halfPot = sizes.half;
+  const fullPot = sizes.full;
+  const allIn = sizes.allIn;
+  const showHalf = sizes.showHalf;
+  const showPot = sizes.showFull;
+  const showAllIn = sizes.showAllIn;
 
   return (
     <div
