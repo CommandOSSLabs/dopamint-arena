@@ -191,7 +191,11 @@ impl SuiSettler {
         // counter; out of scope here.
         let nonce_seed = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|d| (d.as_secs() as u32).wrapping_mul(2_654_435_761).wrapping_add(d.subsec_nanos()))
+            .map(|d| {
+                (d.as_secs() as u32)
+                    .wrapping_mul(2_654_435_761)
+                    .wrapping_add(d.subsec_nanos())
+            })
             .unwrap_or(0);
         Ok(Self {
             http: reqwest::Client::new(),
@@ -642,6 +646,7 @@ fn coin_type_address(coin_type: &TypeTag) -> Option<Address> {
 ///   2. Every move call must be an allowlisted `tunnel::*` open/fund fn (or the framework share);
 ///      Publish/Upgrade and any other package/module/function are refused.
 ///   3. Tunnel calls must use the settler's configured coin type, not an arbitrary `T` (M1).
+///
 /// NOTE: this does NOT rate-limit or cap a global spend — a flood of valid sponsorships can still
 /// burn the settler's balance via gas. Add per-sender rate limiting + a daily budget before prod.
 fn validate_sponsorable(
@@ -658,8 +663,7 @@ fn validate_sponsorable(
         match cmd {
             Command::MoveCall(mc) => {
                 let is_tunnel = mc.package == package_id && mc.module.as_str() == "tunnel";
-                let tunnel_call =
-                    is_tunnel && SPONSOR_TUNNEL_FNS.contains(&mc.function.as_str());
+                let tunnel_call = is_tunnel && SPONSOR_TUNNEL_FNS.contains(&mc.function.as_str());
                 let framework_share = mc.package == framework
                     && mc.module.as_str() == "transfer"
                     && mc.function.as_str() == "public_share_object";
@@ -897,10 +901,12 @@ mod tests {
     #[test]
     fn validate_rejects_non_allowlisted_tunnel_fn() {
         let pkg = Address::from_str("0xabc").unwrap();
-        assert!(
-            validate_sponsorable(&ptb(vec![tunnel_call(pkg, "force_close")]), pkg, &sui_coin())
-                .is_err()
-        );
+        assert!(validate_sponsorable(
+            &ptb(vec![tunnel_call(pkg, "force_close")]),
+            pkg,
+            &sui_coin()
+        )
+        .is_err());
     }
 
     // H1 (settler-drain): a PTB that references the GAS coin — even via an otherwise-benign
