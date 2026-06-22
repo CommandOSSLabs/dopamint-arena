@@ -49,6 +49,11 @@ const SPONSOR_TUNNEL_FNS: &[&str] = &[
     // `_with_id`, which is source-only), and the SDK targets it post-fix — so this is what a
     // sponsored self-play/bot open actually calls.
     "create_and_fund",
+    // Cooperative close. PvP closes go through the dedicated `/settle` route (server-sponsored),
+    // but self-play/bot games close via the generic `/sponsor` route — so a 0-SUI player can close
+    // their own bot game for free. Authorization is the dual-signed settlement, re-verified on-chain.
+    "close_cooperative",
+    "close_cooperative_with_root",
 ];
 /// Testnet genesis checkpoint digest — the chain identifier `ValidDuring` uses for cross-chain
 /// replay protection (its first 4 bytes are the `4c78adac` testnet chain id). SIP-58
