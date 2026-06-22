@@ -34,6 +34,7 @@ import {
   readCreatedAt,
 } from "../../onchain/tunnelTx";
 import { useSponsoredSignExec } from "../../onchain/useSponsoredSignExec";
+import { withSponsorFallback } from "../../onchain/sponsor";
 import { coSignedToSettleRequest } from "../../backend/settleRequest";
 import { type FleetSecret, makeFleetSecret } from "./engine/selfPlay";
 import { type Placement, placementsToBoard } from "./engine/fleet";
@@ -253,33 +254,56 @@ class PvpSession {
         const hello = await waitPeer<{ ephemeralPubkey: string }>("hello");
         const oppPub = fromHex(hello.ephemeralPubkey);
 
-        // 2) fund on-chain: seat A opens + funds its seat + announces; seat B deposits. Gas is
-        //    sponsored by the backend settler (ADR-0009); each seat funds its own stake from a
-        //    coin it owns (gas is sponsored, the stake is not).
+        // 2) fund on-chain: try the backend gas sponsor (settler pays gas; the stake splits off a
+        //    user coin), and if the sponsor is unavailable fall back to the wallet paying its own
+        //    gas (the stake then splits off the gas coin — needs SUI in the wallet). ADR-0009.
         this.status = "funding";
         this.emit();
-        const stakeCoinId = await deps.selectStakeCoin(STAKE_BALANCE);
+        const partyA = { address: wallet, publicKey: ephemeral.publicKey };
+        const partyB = { address: match.opponentWallet, publicKey: oppPub };
         let tunnelId: string;
         if (match.role === "A") {
-          tunnelId = await openAndFundSharedTunnel({
-            reads,
-            signExec: sponsoredSignExec as never,
-            partyA: { address: wallet, publicKey: ephemeral.publicKey },
-            partyB: { address: match.opponentWallet, publicKey: oppPub },
-            amount: STAKE_BALANCE,
-            stakeCoinId,
-          });
+          tunnelId = await withSponsorFallback(
+            async () =>
+              openAndFundSharedTunnel({
+                reads,
+                signExec: sponsoredSignExec as never,
+                partyA,
+                partyB,
+                amount: STAKE_BALANCE,
+                stakeCoinId: await deps.selectStakeCoin(STAKE_BALANCE),
+              }),
+            () =>
+              openAndFundSharedTunnel({
+                reads,
+                signExec: signExec as never,
+                partyA,
+                partyB,
+                amount: STAKE_BALANCE,
+              }),
+            "battleship open/fund",
+          );
           mp.announceTunnel(match.matchId, tunnelId);
           channel.sendPeer({ t: "open", tunnelId });
         } else {
           const open = await waitPeer<{ tunnelId: string }>("open");
           tunnelId = open.tunnelId;
-          await depositStake({
-            signExec: sponsoredSignExec as never,
-            tunnelId,
-            amount: STAKE_BALANCE,
-            stakeCoinId,
-          });
+          await withSponsorFallback(
+            async () =>
+              depositStake({
+                signExec: sponsoredSignExec as never,
+                tunnelId,
+                amount: STAKE_BALANCE,
+                stakeCoinId: await deps.selectStakeCoin(STAKE_BALANCE),
+              }),
+            () =>
+              depositStake({
+                signExec: signExec as never,
+                tunnelId,
+                amount: STAKE_BALANCE,
+              }),
+            "battleship deposit",
+          );
         }
 
         // 3) build the distributed engine over the relay transport.

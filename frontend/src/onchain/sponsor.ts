@@ -80,6 +80,32 @@ export function makeSponsoredSignExec(opts: {
   };
 }
 
+/**
+ * Run the gas-sponsored path; if it throws — sponsor endpoint down/rejected, or no stake coin —
+ * fall back to `senderPays` (the wallet paying its own gas). Mirrors the close path's
+ * `/settle`→wallet fallback, so a sponsor outage doesn't block funded wallets.
+ *
+ * Caveat: the fallback only succeeds if the wallet holds SUI for gas. A fresh sponsored-only
+ * account (e.g. a 0-SUI zkLogin login) has none, so for it the fallback fails too — sponsorship is
+ * the only path. The sponsored attempt throws BEFORE any on-chain effect (the tx never executes on
+ * sponsor failure), so retrying sender-pays opens a fresh tunnel with no double-spend.
+ */
+export async function withSponsorFallback<T>(
+  sponsored: () => Promise<T>,
+  senderPays: () => Promise<T>,
+  label = "open/fund",
+): Promise<T> {
+  try {
+    return await sponsored();
+  } catch (err) {
+    console.warn(
+      `[sponsor] ${label}: sponsor failed, falling back to sender-pays`,
+      err,
+    );
+    return senderPays();
+  }
+}
+
 /** A coin the wallet owns: id + MIST balance, as returned by `getCoins`. */
 export interface OwnedCoin {
   coinObjectId: string;
