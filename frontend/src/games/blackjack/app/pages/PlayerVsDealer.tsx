@@ -277,19 +277,30 @@ export default function PlayerVsDealer() {
   const tableOpen = phase === "playing";
   const roundOver = view.phase === "round_over";
 
-  // Auto-fund and Auto-deal when on pre-start screen
+  // On the pre-start screen: if the bots are MISSING funds, top them up FROM THE WALLET — never
+  // the testnet faucet (it rate-limits and blocks entry with "Too many requests"). We check the
+  // balance first and only fund when a wallet is connected, and only once per mount so the wallet
+  // popup never loops. With no wallet connected we leave the Connect / "Fund from wallet" button
+  // to the user (no auto-faucet). When the bots are already funded, deal the table.
+  const autoFundTriedRef = useRef(false);
   useEffect(() => {
-    if (started) return;
-    if (running) return;
+    if (started || running) return;
 
     if (unfunded) {
-      console.log("[blackjack] Auto-funding bots from faucet...");
-      game.fund();
-    } else {
-      console.log("[blackjack] Auto-dealing new table...");
-      game.openTable();
+      if (account && !walletFunding && !autoFundTriedRef.current) {
+        autoFundTriedRef.current = true;
+        console.log("[blackjack] bots low — auto-funding from wallet…");
+        void fundFromWallet();
+      }
+      return;
     }
-  }, [started, running, unfunded, phase, game]);
+    autoFundTriedRef.current = false; // funded — allow a later drain to re-trigger a top-up
+    console.log("[blackjack] Auto-dealing new table...");
+    game.openTable();
+    // fundFromWallet is intentionally omitted: the once-ref guards re-entry, and including a
+    // non-memoised closure would re-run this effect every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [started, running, unfunded, account, walletFunding, game]);
 
   const fundBtn = (
     <button
