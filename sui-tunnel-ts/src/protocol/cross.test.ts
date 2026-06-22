@@ -159,7 +159,7 @@ test("simultaneous WIN_LANE arrival with equal score is a push, not an A-win", (
   assert.equal(next.players[0].lane >= WIN_LANE, true);
   assert.equal(next.players[1].lane >= WIN_LANE, true);
   assert.equal(next.winner, null); // dead heat ⇒ push, matching the TICK_CAP tie path
-  assert.equal(next.balanceA, next.balanceB); // stakes returned, no payout
+  assert.equal(next.balanceA, deadHeat.balanceA); // push: stakes unchanged, no payout
   assert.equal(next.balanceA + next.balanceB, next.total);
 });
 
