@@ -14,10 +14,16 @@ test("the fleet secret round-trips locally and never enters a resync/serializeSt
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
   const secret = randomFleetSecret(rng);
+  const placements = [{ id: "carrier", cell: 0, orient: "H" as const }];
+  let storedPlacements: unknown = null;
   const adapter = makeBattleshipResumeAdapter({
     getSecret: () => secret,
     setSecret: (s) => {
       stored = s;
+    },
+    getPlacements: () => placements,
+    setPlacements: (p) => {
+      storedPlacements = p;
     },
   });
   // A representative public state (no fleet).
@@ -57,4 +63,5 @@ test("the fleet secret round-trips locally and never enters a resync/serializeSt
   const cap = adapter.captureSecret!();
   adapter.restoreSecret!(cap);
   assert.deepEqual(stored, secret);
+  assert.deepEqual(storedPlacements, placements);
 });

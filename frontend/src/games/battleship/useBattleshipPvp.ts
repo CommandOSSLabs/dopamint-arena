@@ -351,6 +351,10 @@ class PvpSession {
             setSecret: (s) => {
               this.secret = s;
             },
+            getPlacements: () => this.placements,
+            setPlacements: (p) => {
+              this.placements = p;
+            },
             onReconciled: () => this.sync(),
           }),
           identity: {

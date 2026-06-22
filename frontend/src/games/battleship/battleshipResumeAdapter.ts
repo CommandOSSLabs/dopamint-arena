@@ -10,11 +10,14 @@ import {
   type BattleshipState,
   type BattleshipMove,
 } from "./protocol/battleship";
-import type { FleetSecret } from "./engine/selfPlay";
+import { makeFleetSecret, type FleetSecret } from "./engine/selfPlay";
+import type { Placement } from "./engine/fleet";
 
 export function makeBattleshipResumeAdapter(args: {
   getSecret: () => FleetSecret;
   setSecret: (s: FleetSecret) => void;
+  getPlacements: () => Placement[];
+  setPlacements: (p: Placement[]) => void;
   onReconciled?: ResumeAdapter<BattleshipState, BattleshipMove>["onReconciled"];
 }): ResumeAdapter<BattleshipState, BattleshipMove> {
   return {
@@ -35,9 +38,32 @@ export function makeBattleshipResumeAdapter(args: {
     },
     serializeMove: (m) => battleshipMoveCodec.encode(m) as never,
     deserializeMove: (j) => battleshipMoveCodec.decode(j),
-    // Fleet (board + salts + commitment) — NEVER in serializeState.
-    captureSecret: () => args.getSecret() as unknown as never,
-    restoreSecret: (j) => args.setSecret(j as FleetSecret),
+    // Fleet (board + salts) AND placements — NEVER in serializeState. Stored JSON-safe (typed
+    // arrays → number arrays so they survive localStorage); the commitment is recomputed from
+    // board+salts on restore, and placements ride along because they're not derivable from the board.
+    captureSecret: () => {
+      const fleet = args.getSecret();
+      return {
+        fleet: {
+          board: Array.from(fleet.board),
+          salts: fleet.salts.map((s) => Array.from(s)),
+        },
+        placements: args.getPlacements(),
+      } as unknown as never;
+    },
+    restoreSecret: (j) => {
+      const o = j as {
+        fleet: { board: number[]; salts: number[][] };
+        placements: Placement[];
+      };
+      args.setSecret(
+        makeFleetSecret(
+          Uint8Array.from(o.fleet.board),
+          o.fleet.salts.map((s) => Uint8Array.from(s)),
+        ),
+      );
+      args.setPlacements(o.placements);
+    },
     onReconciled: args.onReconciled ?? (() => {}),
   };
 }
