@@ -42,6 +42,9 @@ import {
   type PeerMessage,
   type PvpChannel,
 } from "@/pvp/mpClient";
+import { attachResume } from "@/pvp/resumeSession";
+import { installResumePersistence, evictExpiredRecords } from "@/pvp/resume";
+import { makeTttResumeAdapter } from "@/games/ticTacToe/app/lib/tttResumeAdapter";
 
 export type Variant = "ttt" | "caro";
 
@@ -172,6 +175,7 @@ export function usePvpTicTacToe(
   );
   const roleRef = useRef<"A" | "B" | null>(null);
   const autoRef = useRef(false);
+  const detachResumeRef = useRef<(() => void) | null>(null);
   const createdAtRef = useRef<bigint>(0n);
   const matchIdRef = useRef<string>("");
   const settledRef = useRef(false);
@@ -561,6 +565,22 @@ export function usePvpTicTacToe(
           onAdvance();
           flushHeartbeat(tunnelId, false);
         };
+        // Resume wiring: persist on confirm + run the resync handshake on reconnect.
+        detachResumeRef.current?.();
+        detachResumeRef.current = attachResume({
+          mp,
+          channel,
+          tunnel: t,
+          adapter: makeTttResumeAdapter<AnyState, CellMove>(() => onAdvance()),
+          identity: {
+            matchId: m.matchId,
+            tunnelId,
+            role: m.role,
+            game: variant,
+            opponentWallet: m.opponentWallet,
+            opponentPubkeyHex: oppPubHex,
+          },
+        });
         setPhase("playing");
         setState({ ...t.state, inner: { ...t.state.inner } });
         onAdvance();
@@ -647,6 +667,8 @@ export function usePvpTicTacToe(
   );
 
   const leave = useCallback(() => {
+    detachResumeRef.current?.();
+    detachResumeRef.current = null;
     mpRef.current?.close();
     mpRef.current = null;
     channelRef.current = null;
@@ -671,7 +693,19 @@ export function usePvpTicTacToe(
     actionsRef.current = 0;
   }, []);
 
-  useEffect(() => () => mpRef.current?.close(), []);
+  // Register the pagehide/visibility flush and evict stale records once, on mount.
+  useEffect(() => {
+    installResumePersistence();
+    evictExpiredRecords();
+  }, []);
+
+  useEffect(
+    () => () => {
+      detachResumeRef.current?.();
+      mpRef.current?.close();
+    },
+    [],
+  );
 
   const s = state;
   const inner = s?.inner ?? null;

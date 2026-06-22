@@ -39,6 +39,9 @@ import { type Placement, placementsToBoard } from "./engine/fleet";
 import { randomSalts } from "./engine/merkle";
 import { proposeDue } from "./engine/pvpDriver";
 import { deriveBattleshipView, type BattleshipView } from "./view";
+import { attachResume } from "@/pvp/resumeSession";
+import { installResumePersistence, evictExpiredRecords } from "@/pvp/resume";
+import { makeBattleshipResumeAdapter } from "./battleshipResumeAdapter";
 
 const STAKE_BALANCE = 500n; // locked per seat (MIST)
 const STAKE_SHIFT = 100n; // moves loser → winner on a decisive result
@@ -131,6 +134,7 @@ class PvpSession {
   private mp: MpClient | null = null;
   private dt: BattleshipTunnel | null = null;
   private secret: FleetSecret | null = null;
+  private detachResume: (() => void) | null = null;
   private placements: Placement[] = []; // your fleet layout, for ship-status display
   private lastYourShot: number | null = null;
   private lastEnemyShot: number | null = null;
@@ -175,6 +179,8 @@ class PvpSession {
   };
 
   reset = () => {
+    this.detachResume?.();
+    this.detachResume = null;
     this.mp?.close();
     this.mp = null;
     this.dt = null;
@@ -190,6 +196,8 @@ class PvpSession {
   };
 
   dispose = () => {
+    this.detachResume?.();
+    this.detachResume = null;
     this.mp?.close();
     this.mp = null;
     this.dt = null;
@@ -206,6 +214,8 @@ class PvpSession {
       return;
     }
     const wallet = deps.account.address;
+    installResumePersistence();
+    evictExpiredRecords();
     this.placements = placements;
     const secret = makeFleetSecret(
       placementsToBoard(placements),
@@ -327,6 +337,30 @@ class PvpSession {
             );
           }
         };
+
+        // Resume wiring: persist on confirm + run the resync handshake on reconnect.
+        // The fleet secret round-trips only through capture/restore, never the wire.
+        this.detachResume?.();
+        this.detachResume = attachResume({
+          mp,
+          channel,
+          tunnel: dt,
+          adapter: makeBattleshipResumeAdapter({
+            getSecret: () => this.secret!,
+            setSecret: (s) => {
+              this.secret = s;
+            },
+            onReconciled: () => this.sync(),
+          }),
+          identity: {
+            matchId: match.matchId,
+            tunnelId,
+            role: match.role,
+            game: "battleship",
+            opponentWallet: match.opponentWallet,
+            opponentPubkeyHex: toHex(oppPub),
+          },
+        });
 
         // 4) readiness handshake before the opening commit can reach the peer.
         this.status = "playing";

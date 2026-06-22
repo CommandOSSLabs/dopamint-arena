@@ -37,6 +37,9 @@ import {
   readCreatedAt,
 } from "../../onchain/tunnelTx";
 import { coSignedToSettleRequest } from "../../backend/settleRequest";
+import { attachResume } from "@/pvp/resumeSession";
+import { installResumePersistence, evictExpiredRecords } from "@/pvp/resume";
+import { makePokerResumeAdapter } from "./pokerResumeAdapter";
 
 /** Locked per seat (MIST, split off the wallet's SUI gas coin — same lane as Tic-Tac-Toe). */
 export const STAKE_BALANCE = 10_000n;
@@ -229,6 +232,7 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
   const autoNonceRef = useRef<bigint>(-1n);
   const transcriptRef = useRef<Transcript | null>(null);
   const channelRef = useRef<PvpChannel | null>(null);
+  const detachResumeRef = useRef<(() => void) | null>(null);
   // Early-end: once either seat asks to settle, stop dealing new hands and close at the next clean
   // hand boundary. `settlingRef` guards the single close; `settleNowRef` lets the button/peer
   // message trigger the close (which lives in findMatch's closure) when we're already at hand_over.
@@ -244,6 +248,8 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
   }, []);
 
   const reset = useCallback(() => {
+    detachResumeRef.current?.();
+    detachResumeRef.current = null;
     mpRef.current?.close();
     mpRef.current = null;
     dtRef.current = null;
@@ -340,6 +346,8 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
       return;
     }
     const wallet = account.address;
+    installResumePersistence();
+    evictExpiredRecords();
     const signExec = async (
       tx: Parameters<typeof signAndExecute>[0]["transaction"],
     ) => {
@@ -485,6 +493,42 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
           }
           maybeAutoPropose();
         };
+
+        // Resume wiring: persist on confirm + run the resync handshake on reconnect.
+        // The slot secrets / hole cards round-trip only through capture/restore, never the wire.
+        detachResumeRef.current?.();
+        detachResumeRef.current = attachResume({
+          mp,
+          channel,
+          tunnel: dt,
+          adapter: makePokerResumeAdapter({
+            getSecret: () => {
+              const s = dt.state;
+              return {
+                localSecretsA: s.localSecretsA,
+                localSecretsB: s.localSecretsB,
+                holeA: s.holeA,
+                holeB: s.holeB,
+              };
+            },
+            setSecret: (sec) => {
+              const s = dt.state;
+              s.localSecretsA = sec.localSecretsA;
+              s.localSecretsB = sec.localSecretsB;
+              s.holeA = sec.holeA;
+              s.holeB = sec.holeB;
+            },
+            onReconciled: () => sync(),
+          }),
+          identity: {
+            matchId: match.matchId,
+            tunnelId,
+            role: match.role,
+            game: GAME_ID,
+            opponentWallet: match.opponentWallet,
+            opponentPubkeyHex: toHex(oppPub),
+          },
+        });
 
         // 4) readiness handshake — only AFTER the engine is wired, so seat A's first
         //    commit can never reach seat B before B's frame handler exists.
