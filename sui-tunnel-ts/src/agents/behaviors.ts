@@ -1,6 +1,13 @@
 /**
  * Agent behaviors (Deliverable 9): each maps to a tunnel protocol the agent plays.
  * payment = payment spammer, blackjack/poker/tictactoe = game players, chat = chat spammer.
+ *
+ * NOTE: there is deliberately NO `pixelduel` behavior. PixelDuelProtocol can't be
+ * constructed without BOTH template commitments, which exist only after the two
+ * seats run their commit-reveal handshake. A behavior here takes no commits, so it
+ * couldn't build a valid duel protocol. The fleet engine instead builds the duel
+ * protocol INLINE once both commits are exchanged (frontend agentEngine.ts duel
+ * path, gated on spec.commitReveal); behaviors.ts stays commit-free.
  */
 
 import { Protocol } from "../protocol/Protocol";
@@ -9,13 +16,15 @@ import { BlackjackProtocol } from "../protocol/blackjack";
 import { TicTacToeProtocol } from "../protocol/ticTacToe";
 import { ChatProtocol } from "../protocol/chat";
 import { QuantumPokerProtocol } from "../protocol/quantumPoker";
+import { PixelPaintProtocol } from "../protocol/pixelPaint";
 
 export type BehaviorName =
   | "payment"
   | "blackjack"
   | "tictactoe"
   | "chat"
-  | "poker";
+  | "poker"
+  | "pixelpaint";
 
 export const BEHAVIOR_NAMES: BehaviorName[] = [
   "payment",
@@ -23,6 +32,7 @@ export const BEHAVIOR_NAMES: BehaviorName[] = [
   "tictactoe",
   "chat",
   "poker",
+  "pixelpaint",
 ];
 
 /** Construct a fresh protocol instance for a behavior. */
@@ -40,6 +50,11 @@ export function createBehaviorProtocol(
       return new ChatProtocol() as unknown as Protocol<unknown, unknown>;
     case "poker":
       return new QuantumPokerProtocol() as unknown as Protocol<
+        unknown,
+        unknown
+      >;
+    case "pixelpaint":
+      return new PixelPaintProtocol({ mode: "free" }) as unknown as Protocol<
         unknown,
         unknown
       >;
