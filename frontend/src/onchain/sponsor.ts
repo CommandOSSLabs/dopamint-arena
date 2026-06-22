@@ -18,7 +18,11 @@ export interface SponsorSuiClient {
     transactionBlock: string;
     signature: string[];
     options?: { showEffects?: boolean; showObjectChanges?: boolean };
-  }): Promise<{ digest: string }>;
+    requestType?: string;
+  }): Promise<{
+    digest: string;
+    effects?: { status?: { status?: string; error?: string } };
+  }>;
 }
 
 interface SponsorResponse {
@@ -71,12 +75,20 @@ export function makeSponsoredSignExec(opts: {
       throw new Error("sponsored transaction bytes changed during wallet signing");
     }
     // 4) Submit with both sigs: the node verifies the sender (user) and the gas owner (settler).
-    const { digest } = await opts.client.executeTransactionBlock({
+    const result = await opts.client.executeTransactionBlock({
       transactionBlock: txBytes,
       signature: [userSignature, sponsorSignature],
       options: { showEffects: true, showObjectChanges: true },
+      requestType: "WaitForLocalExecution",
     });
-    return { digest };
+    // Surface an on-chain failure (e.g. the faucet aborted) loudly, instead of a later "no coin".
+    const status = result.effects?.status?.status;
+    if (status && status !== "success") {
+      throw new Error(
+        `sponsored transaction failed on-chain: ${result.effects?.status?.error ?? status}`,
+      );
+    }
+    return { digest: result.digest };
   };
 }
 

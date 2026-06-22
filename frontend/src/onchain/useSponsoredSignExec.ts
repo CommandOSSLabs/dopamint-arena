@@ -51,6 +51,7 @@ interface CoinReader {
     owner: string;
     coinType?: string;
   }) => Promise<{ data: OwnedCoin[] }>;
+  waitForTransaction: (input: { digest: string }) => Promise<unknown>;
 }
 
 /**
@@ -91,8 +92,14 @@ export function useSponsoredSignExec(): SponsoredSignExec {
         // Invisible auto-faucet: mint DOPAMINT to the player via the gas sponsor, then re-select.
         const tx = new Transaction();
         buildDopamintFaucet(tx, sender);
-        await signExec(tx);
-        coin = pick(await getDopamintCoins(sender));
+        const { digest } = await signExec(tx);
+        // The fullnode's coin index lags execution, so wait for the tx and poll a few times for
+        // the freshly minted coin before giving up.
+        await reader.waitForTransaction({ digest });
+        for (let i = 0; i < 6 && !coin; i++) {
+          coin = pick(await getDopamintCoins(sender));
+          if (!coin) await new Promise((r) => setTimeout(r, 500));
+        }
       }
       if (!coin) {
         throw new Error("DOPAMINT faucet did not yield enough to stake");
