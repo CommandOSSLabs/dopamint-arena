@@ -23,9 +23,12 @@ eviction.**
 
 1. **Rebind (`rebind_match_conn`):** one atomic Lua op (`HGET` the seat wallets, `HSET` the
    matching seat's `ConnRef`, `EXPIRE` refresh). O(1), per-reconnect — never per move.
-2. **Peer notification:** the server delivers `PeerResumed{ match_id, seat, conn_ref }` to the
-   other seat over the bus. The peer updates its in-memory match cache from the message —
-   **no Redis read added to the move path** (the `ConnRef` rides in the message).
+2. **Peer cache reconciliation:** on resume the server **evicts** the peer's stale relay-cache
+   entry over the bus ctrl channel (`evict`, local or cross-instance). The peer's next relay is
+   the only place that re-reads the match — one `get_match` GET, post-resume and rare — to pick up
+   the rebound `ConnRef`. **No Redis read is added to the steady-state move path** (cache hits skip
+   the GET). The `ConnRef` does NOT ride in a message; the rebound value is read lazily from the
+   store on the first post-resume relay.
 3. **Peer-to-peer state reconciliation:** the online peer re-sends its latest co-signed
    checkpoint over the existing relay side channel. The resumer verifies both signatures and
    adopts the highest nonce that carries both signatures. This is **client-side, at resume
@@ -50,13 +53,19 @@ contestable by a late-returning peer.
   each peer independently reconnects (the load balancer may route them to different surviving
   instances) via the same `Connect`→`Resume` path and rebinds its own seat. No dedicated
   dead-instance detection or proactive migration needed.
-- **Per-move path is unchanged.** `relay_to_other` issues no new Redis or on-chain ops.
-  `PeerResumed` corrects the peer's in-memory cache without a Redis read. Performance
-  invariant from ADR-0009 holds.
-- **Cross-instance eviction rides the pub/sub channel (ADR-0005 soft dependency).** A rolling
-  deploy may drop a few cross-instance `PeerResumed` frames mid-rollout; the affected peer's
-  cache stays stale until the next frame triggers a lazy miss. Steady-state moves still work
-  via the fallback pub/sub path.
+- **Per-move path is unchanged.** `relay_to_other` issues no new Redis or on-chain ops; it reads
+  the match from its per-connection cache. Resume invalidates that cache via `evict`, costing one
+  `get_match` GET on the peer's first post-resume relay — never per move. Performance invariant
+  from ADR-0009 holds.
+- **`peer.dropped` is robust for both seats.** Both seats' relay caches are warm at `match.found`:
+  the match-creating connection inserts the record locally, and the waiter (the seat paired by the
+  other player's action) is warmed at match creation via the bus `populate` ctrl signal (local or
+  cross-instance). So a seat that drops before its first relay still notifies its peer, closing the
+  cold-cache gap a never-relayed waiter would otherwise have.
+- **Cross-instance evict/populate ride the pub/sub channel (ADR-0005 soft dependency).** A rolling
+  deploy may drop a few cross-instance ctrl signals mid-rollout; an evicted-but-missed peer's cache
+  stays stale until the next relay triggers a lazy miss, and a populate-but-missed waiter falls back
+  to the lazy first-relay GET. Steady-state moves still work via the fallback pub/sub path.
 - **Out of scope → future affinity ADR (0011):** proactive owner-death re-homing (server
   detects a dead instance and migrates matches via a Redis CAS on `owner_instance_id`),
   liveness heartbeats, and any server-side watchtower checkpoint store for resume. The server
