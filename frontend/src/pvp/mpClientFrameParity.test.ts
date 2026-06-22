@@ -77,3 +77,27 @@ test("engine frames and peer messages round-trip across two MpClients (envelope 
   );
   assert.deepEqual(peerMsg, { t: "hello", ephemeralPubkey: "deadbeef" });
 });
+
+test("stake peer-message round-trips across two MpClients", async () => {
+  const { FakeWS, peers } = fakeRelayPair();
+  const opts = {
+    WebSocketCtor: FakeWS as unknown as typeof WebSocket,
+  } as never;
+  const a = new MpClient("ws://x", "0xa", generateKeyPair() as never, opts);
+  const b = new MpClient("ws://x", "0xb", generateKeyPair() as never, opts);
+  const pa = a.connect();
+  peers[0].handshake();
+  await pa;
+  const pb = b.connect();
+  peers[1].handshake();
+  await pb;
+
+  const chA = a.channel("m1");
+  const chB = b.channel("m1");
+  let got: unknown = null;
+  chB.onPeer((m) => {
+    got = m;
+  });
+  chA.sendPeer({ t: "stake", amount: 500 });
+  assert.deepEqual(got, { t: "stake", amount: 500 });
+});

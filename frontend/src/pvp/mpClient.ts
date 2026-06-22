@@ -86,6 +86,7 @@ export type PeerMessage =
   | { t: "settle"; sig: string; root: string }
   | { t: "closed"; digest: string }
   | { t: "stop" }
+  | { t: "stake"; amount: number }
   | {
       t: "resync";
       nonce: string;
