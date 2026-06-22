@@ -20,6 +20,52 @@ export interface MatchInfo {
   game: string;
 }
 
+export interface ResumeOkEvent {
+  matchId: string;
+  role: Role;
+  opponentWallet: string;
+  game: string;
+  peerOnline: boolean;
+}
+export interface PeerResumedEvent {
+  matchId: string;
+  seat: Role;
+  /** Server-side routing only — the FE ignores its contents. */
+  connRef: unknown;
+}
+export interface PeerDroppedEvent {
+  matchId: string;
+}
+
+export interface ReconnectConfig {
+  baseMs: number;
+  maxMs: number;
+  jitter: number;
+}
+const DEFAULT_RECONNECT: ReconnectConfig = {
+  baseMs: 500,
+  maxMs: 10_000,
+  jitter: 0.2,
+};
+
+/** Capped exponential backoff with symmetric jitter. `attempt` is 0-based. `rand` ∈ [0,1). */
+export function nextBackoffDelay(
+  attempt: number,
+  cfg: ReconnectConfig,
+  rand: () => number,
+): number {
+  const capped = Math.min(cfg.maxMs, cfg.baseMs * 2 ** attempt);
+  const spread = capped * cfg.jitter;
+  return Math.round(capped - spread + rand() * spread * 2);
+}
+
+interface MpClientOptions {
+  WebSocketCtor?: typeof WebSocket;
+  reconnect?: ReconnectConfig;
+  scheduler?: (fn: () => void, ms: number) => void;
+  rand?: () => number;
+}
+
 /** A peer message tunneled through the relay (everything that isn't a MOVE/ACK frame). */
 export type PeerMessage =
   | { t: "hello"; ephemeralPubkey: string }
@@ -71,18 +117,72 @@ export class MpClient {
     reject: (e: Error) => void;
   }[] = [];
 
-  constructor(url: string, wallet: string, ephemeral: KeyPair) {
+  // Reconnect + resume state. The relay-handler map, match queue/waiters, active-match
+  // registry, and queued-game list all survive a socket swap so a dropped connection
+  // re-attaches transparently.
+  #closing = false;
+  #reconnectAttempt = 0;
+  #activeMatches = new Set<string>();
+  #queuedGames: string[] = [];
+  readonly #WebSocketCtor: typeof WebSocket;
+  readonly #reconnectCfg: ReconnectConfig;
+  readonly #schedule: (fn: () => void, ms: number) => void;
+  readonly #rand: () => number;
+  readonly #resumeOkSubs = new Set<(e: ResumeOkEvent) => void>();
+  readonly #peerResumedSubs = new Set<(e: PeerResumedEvent) => void>();
+  readonly #peerDroppedSubs = new Set<(e: PeerDroppedEvent) => void>();
+
+  constructor(
+    url: string,
+    wallet: string,
+    ephemeral: KeyPair,
+    opts: MpClientOptions = {},
+  ) {
     this.#url = url;
     this.#wallet = wallet;
     this.#ephemeral = ephemeral;
     this.#sign = defaultBackend().makeSigner(ephemeral.secretKey!);
+    this.#WebSocketCtor = opts.WebSocketCtor ?? WebSocket;
+    this.#reconnectCfg = opts.reconnect ?? DEFAULT_RECONNECT;
+    this.#schedule =
+      opts.scheduler ??
+      ((fn, ms) => {
+        setTimeout(fn, ms);
+      });
+    this.#rand = opts.rand ?? Math.random;
   }
 
-  /** Open the socket and complete the challenge→connect handshake. */
+  onResumeOk(cb: (e: ResumeOkEvent) => void): () => void {
+    this.#resumeOkSubs.add(cb);
+    return () => this.#resumeOkSubs.delete(cb);
+  }
+  onPeerResumed(cb: (e: PeerResumedEvent) => void): () => void {
+    this.#peerResumedSubs.add(cb);
+    return () => this.#peerResumedSubs.delete(cb);
+  }
+  onPeerDropped(cb: (e: PeerDroppedEvent) => void): () => void {
+    this.#peerDroppedSubs.add(cb);
+    return () => this.#peerDroppedSubs.delete(cb);
+  }
+  /** Register a match so the reconnect loop will `resume` it. */
+  markActive(matchId: string): void {
+    this.#activeMatches.add(matchId);
+  }
+
+  /** Open the socket and complete the challenge→connect handshake. Installs the persistent
+   *  onclose handler that drives reconnection. Reconnects reuse #openSocket. */
   connect(): Promise<void> {
+    this.#closing = false;
+    return this.#openSocket(false);
+  }
+
+  /** `isReconnect` re-attaches active matches / re-queues the moment the handshake completes,
+   *  synchronously, so a fresh socket carries the resume frames before any further turn. */
+  #openSocket(isReconnect: boolean): Promise<void> {
     return new Promise((resolve, reject) => {
-      const ws = new WebSocket(this.#url);
+      const ws = new this.#WebSocketCtor(this.#url);
       this.#ws = ws;
+      let opened = false;
       ws.onmessage = (ev) => {
         const m = JSON.parse(typeof ev.data === "string" ? ev.data : "");
         if (m.type === "challenge") {
@@ -97,8 +197,15 @@ export class MpClient {
             }),
           );
           this.#connected = true;
+          opened = true;
+          if (isReconnect) {
+            this.#reconnectAttempt = 0;
+            this.#resumeActive();
+          }
           resolve();
         } else if (m.type === "match.found") {
+          this.#activeMatches.add(m.matchId as string);
+          this.#dropQueued(m.game as string);
           this.#deliverMatch({
             matchId: m.matchId as string,
             role: m.role as Role,
@@ -107,6 +214,23 @@ export class MpClient {
           });
         } else if (m.type === "relay") {
           this.#relayHandlers.get(m.matchId as string)?.(m.payload as string);
+        } else if (m.type === "resume.ok") {
+          this.#activeMatches.add(m.matchId as string);
+          this.#emitResumeOk({
+            matchId: m.matchId as string,
+            role: m.role as Role,
+            opponentWallet: m.opponentWallet as string,
+            game: m.game as string,
+            peerOnline: !!m.peerOnline,
+          });
+        } else if (m.type === "peer.resumed") {
+          this.#emitPeerResumed({
+            matchId: m.matchId as string,
+            seat: m.seat as Role,
+            connRef: m.connRef,
+          });
+        } else if (m.type === "peer.dropped") {
+          this.#emitPeerDropped({ matchId: m.matchId as string });
         } else if (m.type === "queue.timeout") {
           this.#failNextMatch(new Error("queue.timeout"));
         } else if (m.type === "error") {
@@ -115,12 +239,50 @@ export class MpClient {
         }
       };
       ws.onerror = () => {
-        if (!this.#connected) reject(new Error("mp websocket error"));
+        if (!opened && !this.#connected)
+          reject(new Error("mp websocket error"));
       };
       ws.onclose = () => {
         this.#ws = null;
+        if (!this.#closing) this.#scheduleReconnect();
       };
     });
+  }
+
+  #scheduleReconnect(): void {
+    const delay = nextBackoffDelay(
+      this.#reconnectAttempt++,
+      this.#reconnectCfg,
+      this.#rand,
+    );
+    this.#schedule(() => {
+      if (this.#closing) return;
+      void this.#openSocket(true).catch(() => this.#scheduleReconnect());
+    }, delay);
+  }
+
+  /** After a reconnect handshake, re-attach to every active match and re-queue if only queued. */
+  #resumeActive(): void {
+    for (const matchId of this.#activeMatches)
+      this.#send({ type: "resume", matchId });
+    if (this.#activeMatches.size === 0) {
+      for (const game of this.#queuedGames)
+        this.#send({ type: "queue.join", game });
+    }
+  }
+
+  #emitResumeOk(e: ResumeOkEvent) {
+    this.#resumeOkSubs.forEach((cb) => cb(e));
+  }
+  #emitPeerResumed(e: PeerResumedEvent) {
+    this.#peerResumedSubs.forEach((cb) => cb(e));
+  }
+  #emitPeerDropped(e: PeerDroppedEvent) {
+    this.#peerDroppedSubs.forEach((cb) => cb(e));
+  }
+  #dropQueued(game: string) {
+    const i = this.#queuedGames.indexOf(game);
+    if (i >= 0) this.#queuedGames.splice(i, 1);
   }
 
   #deliverMatch(m: MatchInfo) {
@@ -135,9 +297,13 @@ export class MpClient {
   /** Join a per-game queue; resolves when paired. Safe to call CONCURRENTLY (FIFO-matched) —
    *  this is what lets one agent run many tunnels over one socket. */
   quickMatch(game: string): Promise<MatchInfo> {
+    this.#queuedGames.push(game);
     this.#send({ type: "queue.join", game });
     const buffered = this.#matchQueue.shift();
-    if (buffered) return Promise.resolve(buffered);
+    if (buffered) {
+      this.#dropQueued(buffered.game);
+      return Promise.resolve(buffered);
+    }
     return new Promise((resolve, reject) =>
       this.#matchWaiters.push({ resolve, reject }),
     );
@@ -146,6 +312,7 @@ export class MpClient {
   /** Build the engine transport + peer side-channel for a paired match; inbound frames route
    *  by matchId so concurrent matches never clobber each other. */
   channel(matchId: string): PvpChannel {
+    this.#activeMatches.add(matchId);
     let engineOnFrame: ((bytes: Uint8Array) => void) | null = null;
     let peerCb: ((msg: Exclude<PeerMessage, { t: "frame" }>) => void) | null =
       null;
@@ -177,9 +344,10 @@ export class MpClient {
     };
   }
 
-  /** Stop routing frames for a finished match (free its handler). */
+  /** Stop routing frames for a finished match (free its handler) and stop resuming it. */
   releaseMatch(matchId: string) {
     this.#relayHandlers.delete(matchId);
+    this.#activeMatches.delete(matchId);
   }
 
   /** Announce the opened on-chain tunnel id to the backend registry (watchtower). */
@@ -188,6 +356,7 @@ export class MpClient {
   }
 
   close() {
+    this.#closing = true;
     this.#ws?.close();
     this.#ws = null;
   }
