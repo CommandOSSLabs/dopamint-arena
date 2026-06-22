@@ -8,7 +8,10 @@ import {
   useCustomWallet,
   CustomWalletProvider,
 } from "@/games/ticTacToe/app/contexts/CustomWallet";
-import { parseAgentConfig } from "@/agent/agentConfig";
+import {
+  loadOrCreateBots,
+  buildFundTx,
+} from "@/games/ticTacToe/app/lib/bots";
 import { LoginScene } from "@/games/ticTacToe/app/scenes/LoginScene";
 import {
   SetupScene,
@@ -23,7 +26,7 @@ import "./index.css";
 type Scene = "login" | "setup" | "game" | "pvp";
 
 function AppContent() {
-  const { isConnected } = useCustomWallet();
+  const { isConnected, executeTransaction } = useCustomWallet();
   const [scene, setScene] = useState<Scene>("login");
   const [mode, setMode] = useState<PlayMode>("auto");
   const [difficulty, setDifficulty] = useState<Difficulty>("fast");
@@ -70,62 +73,51 @@ function AppContent() {
     }
   }, [isConnected, scene, tttGame, caroGame]);
 
-  // Auto-Pilot flow to skip login and setup, randomize settings, fund bots, and start playing
+  const autoNavRef = useRef(false);
+  const autoFundRef = useRef(false);
+
+  // Auto-pilot: skip login → setup → wallet-fund bots if low → start bot-vs-bot.
   useEffect(() => {
     if (!isConnected) return;
 
-    const arena = parseAgentConfig(window.location.href).arena;
-
     if (scene === "login") {
-      if (arena) {
-        // Multi-window arena: every ttt window must reach setup so the script
-        // can drive ttt-tab-bots / ttt-fund-wallet / ttt-start independently.
-        // Must NOT use the page-global tictactoe_auto_navigated flag — it is
-        // shared across all windows on the page, so the 2nd/3rd windows would
-        // see it already set and skip this block entirely.
-        setScene("setup");
-        return;
-      }
-
-      const hasNavigated = sessionStorage.getItem("tictactoe_auto_navigated");
-      if (!hasNavigated) {
-        sessionStorage.setItem("tictactoe_auto_navigated", "true");
-
-        const randomGameType = Math.random() > 0.5 ? "caro" : "ttt";
-        const randomDifficulty = "fast";
-        const randomBoardSize = ([15, 19, 25] as const)[
-          Math.floor(Math.random() * 3)
-        ];
-
-        setGameType(randomGameType);
-        setDifficulty(randomDifficulty);
-        setBoardSize(randomBoardSize);
+      if (!autoNavRef.current) {
+        autoNavRef.current = true;
+        setGameType(Math.random() > 0.5 ? "caro" : "ttt");
+        setDifficulty("fast");
+        setBoardSize(([15, 19, 25] as const)[Math.floor(Math.random() * 3)]);
         setMode("auto");
-
         setScene("setup");
-        return;
       }
+      return;
     }
-
-    // Under ?arena the script drives funding and game start — stop here on setup.
-    if (arena) return;
 
     if (scene === "setup") {
-      if (g.phase === "funding") return;
-
       if (!funded) {
-        console.log("[tictactoe] Auto-funding bots...");
-        g.fund();
-      } else {
-        console.log("[tictactoe] Bots funded. Starting game automatically...");
-        const timer = setTimeout(() => {
-          setScene("game");
-          g.startAuto();
-        }, 1000);
-        return () => clearTimeout(timer);
+        if (!autoFundRef.current) {
+          autoFundRef.current = true; // fund AT MOST ONCE per window (Global Constraint)
+          console.log("[tictactoe] funding bots from wallet…");
+          void (async () => {
+            try {
+              await executeTransaction({ tx: buildFundTx(loadOrCreateBots()) });
+              await g.refresh();
+            } catch (e) {
+              // Do NOT reset autoFundRef — a retry would re-fire against the unstable
+              // `g` dep and risk an infinite real-SUI fund loop. On failure the SetupScene
+              // surfaces the error and the manual fund button remains as the recovery path.
+              console.error("[tictactoe] wallet fund failed", e);
+            }
+          })();
+        }
+        return;
       }
+      const timer = setTimeout(() => {
+        setScene("game");
+        g.startAuto();
+      }, 1000);
+      return () => clearTimeout(timer);
     }
-  }, [isConnected, scene, funded, g]);
+  }, [isConnected, scene, funded, g, executeTransaction]);
 
   const start = () => {
     setScene("game");
