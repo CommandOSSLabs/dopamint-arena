@@ -127,10 +127,14 @@ export function QuantumPokerBotVsBotWindow({
           </div>
         </section>
 
-        <section className="grid grid-cols-3 gap-1.5 rounded-md border border-white/10 bg-black/20 p-2 text-center">
+        <section className="grid grid-cols-4 gap-1.5 rounded-md border border-white/10 bg-black/20 p-2 text-center">
           <div>
             <div className="text-[9px] uppercase text-slate-500">Tunnels</div>
             <div className="text-[12px] font-semibold tabular-nums">{s.tunnels}</div>
+          </div>
+          <div>
+            <div className="text-[9px] uppercase text-slate-500">Hands</div>
+            <div className="text-[12px] font-semibold tabular-nums">{s.hands}</div>
           </div>
           <div>
             <div className="text-[9px] uppercase text-slate-500">Actions</div>

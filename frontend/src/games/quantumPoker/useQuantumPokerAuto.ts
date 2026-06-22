@@ -54,6 +54,8 @@ export interface QuantumPokerAutoSession {
   score: { a: number; b: number };
   tunnels: number;
   actions: number;
+  /** Cumulative hands dealt across all tunnels this run. */
+  hands: number;
   balances: { a: bigint; b: bigint };
   funded: boolean;
   canFundFromWallet: boolean;
@@ -105,6 +107,8 @@ interface AutoSnapshot {
   score: { a: number; b: number };
   tunnels: number;
   actions: number;
+  /** Cumulative hands dealt across all tunnels this run. */
+  hands: number;
   balances: { a: bigint; b: bigint };
   funded: boolean;
   canFundFromWallet: boolean;
@@ -136,6 +140,7 @@ class AutoSession {
   private score = { a: 0, b: 0 };
   private tunnels = 0;
   private actions = 0;
+  private hands = 0;
   private error: string | null = null;
   private balances = { a: 0n, b: 0n };
   private snap: AutoSnapshot = {
@@ -144,6 +149,7 @@ class AutoSession {
     score: { a: 0, b: 0 },
     tunnels: 0,
     actions: 0,
+    hands: 0,
     balances: { a: 0n, b: 0n },
     funded: false,
     canFundFromWallet: false,
@@ -189,6 +195,7 @@ class AutoSession {
       score: { ...this.score },
       tunnels: this.tunnels,
       actions: this.actions,
+      hands: this.hands,
       balances: { ...this.balances },
       funded: this.funded,
       canFundFromWallet: this.deps?.account != null,
@@ -320,6 +327,7 @@ class AutoSession {
     this.score = { a: 0, b: 0 };
     this.tunnels = 0;
     this.actions = 0;
+    this.hands = 0;
     this.personas = null;
     this.setStatus("running");
     void this.runMatch();
@@ -344,6 +352,7 @@ class AutoSession {
     this.score = { a: 0, b: 0 };
     this.tunnels = 0;
     this.actions = 0;
+    this.hands = 0;
     this.deps?.report.setActive(0);
     this.status = "idle";
     this.error = null;
@@ -492,6 +501,7 @@ class AutoSession {
         await sleep(0);
         lastFlush = Date.now();
       };
+      let prevHandNo = tunnel.state.handNo;
       while (tunnel.state.phase !== "done") {
         if (this.gen !== myGen) return;
         const r = stepPokerAuto(tunnel, botA, botB, ts++);
@@ -500,6 +510,11 @@ class AutoSession {
         this.moveCount += 1;
         this.heartbeatActions += 1;
         pending += 1;
+        const hn = tunnel.state.handNo;
+        if (hn > prevHandNo) {
+          this.hands += Number(hn - prevHandNo);
+          prevHandNo = hn;
+        }
         if (Date.now() - lastFlush >= FLUSH_MS) await flush();
       }
       // Final flush — force the heartbeat so the last window is never dropped.
@@ -612,6 +627,7 @@ export function useQuantumPokerAuto(
     score: snap.score,
     tunnels: snap.tunnels,
     actions: snap.actions,
+    hands: snap.hands,
     balances: snap.balances,
     funded: snap.funded,
     canFundFromWallet: snap.canFundFromWallet,
