@@ -31,6 +31,7 @@ import {
   closeCooperativeWithRoot,
   depositStake,
   openAndFundSharedTunnel,
+  raiseDisputeUnilateral,
   readCreatedAt,
 } from "../../onchain/tunnelTx";
 import { coSignedToSettleRequest } from "../../backend/settleRequest";
@@ -359,6 +360,16 @@ class PvpSession {
             game: "battleship",
             opponentWallet: match.opponentWallet,
             opponentPubkeyHex: toHex(oppPub),
+          },
+          // Settlement floor: after the 1h grace, settle from the held checkpoint.
+          onGraceExpired: (latest) => {
+            if (latest)
+              void raiseDisputeUnilateral({
+                signExec: signExec as never,
+                tunnelId,
+                update: latest,
+                role: match.role,
+              });
           },
         });
 

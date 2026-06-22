@@ -49,6 +49,13 @@ export interface AttachResumeArgs<State, Move> {
   tunnel: DistributedTunnel<State, Move>;
   adapter: ResumeAdapter<State, Move>;
   identity: ResumeIdentity;
+  graceMs?: number;
+  onGraceExpired?: (latest: CoSignedUpdate | null) => void;
+  /** Injectable for tests; defaults to the globals. */
+  timers?: {
+    setTimeout: (fn: () => void, ms: number) => unknown;
+    clearTimeout: (h: unknown) => void;
+  };
 }
 
 /** Build the full ResumeRecord from the live tunnel snapshot + static identity + adapter. */
@@ -180,9 +187,43 @@ export function attachResume<State, Move>(
     if (e.matchId === identity.matchId) sendResync(args);
   });
 
+  const graceMs = args.graceMs ?? 3_600_000;
+  const timers = args.timers ?? {
+    setTimeout: (fn: () => void, ms: number) => setTimeout(fn, ms),
+    clearTimeout: (h: unknown) =>
+      clearTimeout(h as ReturnType<typeof setTimeout>),
+  };
+  let graceHandle: unknown = null;
+  const cancelGrace = () => {
+    if (graceHandle != null) {
+      timers.clearTimeout(graceHandle);
+      graceHandle = null;
+    }
+  };
+
+  const offDrop = mp.onPeerDropped((e) => {
+    if (e.matchId !== identity.matchId) return;
+    cancelGrace();
+    graceHandle = timers.setTimeout(() => {
+      graceHandle = null;
+      args.onGraceExpired?.(tunnel.snapshot().latest);
+    }, graceMs);
+  });
+  // a peer return cancels the grace timer (handshake handles convergence instead)
+  const offOkCancel = mp.onResumeOk((e) => {
+    if (e.matchId === identity.matchId && e.peerOnline) cancelGrace();
+  });
+  const offResCancel = mp.onPeerResumed((e) => {
+    if (e.matchId === identity.matchId) cancelGrace();
+  });
+
   return () => {
     offOk();
     offRes();
+    offDrop();
+    offOkCancel();
+    offResCancel();
+    cancelGrace();
     channel.removePeerListener(peerHandler);
     if (tunnel.onConfirmed) tunnel.onConfirmed = prevConfirmed;
   };

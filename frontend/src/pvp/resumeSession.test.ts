@@ -163,3 +163,93 @@ test("decideReconcile + adopt path: a peer-ahead resync seats the missed move", 
   t.adoptCheckpoint(peerState, peerCp); // adopt the peer-ahead checkpoint
   assert.equal(t.nonce, 2n);
 });
+
+test("peer.dropped starts a grace timer; peer return cancels it; expiry offers settle", async () => {
+  const { attachResume } = await import("./resumeSession");
+  // Minimal fake MpClient: capture subscribers, expose triggers.
+  const subs: Record<
+    string,
+    ((e: { matchId: string; peerOnline?: boolean }) => void)[]
+  > = { drop: [], ok: [], res: [] };
+  const fakeMp = {
+    onPeerDropped: (cb: never) => {
+      subs.drop.push(cb as never);
+      return () => {};
+    },
+    onResumeOk: (cb: never) => {
+      subs.ok.push(cb as never);
+      return () => {};
+    },
+    onPeerResumed: (cb: never) => {
+      subs.res.push(cb as never);
+      return () => {};
+    },
+  };
+  const channel = {
+    addPeerListener() {},
+    removePeerListener() {},
+    sendPeer() {},
+    transport: { send() {}, onFrame() {} },
+    onPeer() {},
+  };
+  let fire: (() => void) | null = null;
+  const sched = {
+    set: (fn: () => void) => {
+      fire = fn;
+      return 1 as never;
+    },
+    clear: () => {
+      fire = null;
+    },
+  };
+
+  // No latest yet → onGraceExpired receives null but still fires.
+  const tunnel = {
+    snapshot: () => ({ state: {}, nonce: 0n, latest: null, pending: null }),
+    onConfirmed: undefined,
+  } as never;
+  let expired: unknown = "unset";
+  attachResume({
+    mp: fakeMp as never,
+    channel: channel as never,
+    tunnel,
+    adapter: {
+      serializeState: (s: unknown) => s,
+      deserializeState: (j: unknown) => j,
+      onReconciled() {},
+    } as never,
+    identity: {
+      matchId: "m1",
+      tunnelId: "0xT",
+      role: "A",
+      game: "g",
+      opponentWallet: "0xb",
+      opponentPubkeyHex: "ab",
+    },
+    graceMs: 3_600_000,
+    onGraceExpired: (l) => {
+      expired = l;
+    },
+    timers: {
+      setTimeout: sched.set as never,
+      clearTimeout: sched.clear as never,
+    },
+  } as never);
+
+  // peer drops → timer armed
+  subs.drop.forEach((cb) => cb({ matchId: "m1" }));
+  assert.ok(fire, "grace timer armed on peer.dropped");
+  // peer returns before expiry → timer cancelled, no settle offer
+  subs.res.forEach((cb) => cb({ matchId: "m1" }));
+  assert.equal(fire, null, "grace timer cancelled on peer return");
+  assert.equal(expired, "unset");
+
+  // drop again, then let it expire
+  subs.drop.forEach((cb) => cb({ matchId: "m1" }));
+  fire!();
+  assert.equal(
+    expired,
+    null,
+    "grace expiry offered settle from the held checkpoint (null here)",
+  );
+});

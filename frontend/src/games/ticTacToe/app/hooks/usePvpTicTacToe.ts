@@ -43,6 +43,7 @@ import {
   type PvpChannel,
 } from "@/pvp/mpClient";
 import { attachResume } from "@/pvp/resumeSession";
+import { raiseDisputeUnilateral } from "@/onchain/tunnelTx";
 import { installResumePersistence, evictExpiredRecords } from "@/pvp/resume";
 import { makeTttResumeAdapter } from "@/games/ticTacToe/app/lib/tttResumeAdapter";
 
@@ -579,6 +580,16 @@ export function usePvpTicTacToe(
             game: variant,
             opponentWallet: m.opponentWallet,
             opponentPubkeyHex: oppPubHex,
+          },
+          // Settlement floor: after the 1h grace, settle from the held checkpoint.
+          onGraceExpired: (latest) => {
+            if (latest)
+              void raiseDisputeUnilateral({
+                signExec: submit,
+                tunnelId,
+                update: latest,
+                role: m.role,
+              });
           },
         });
         setPhase("playing");
