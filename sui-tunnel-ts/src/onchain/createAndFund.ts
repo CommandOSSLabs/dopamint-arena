@@ -58,6 +58,42 @@ export function buildCreateAndFund(
 }
 
 /**
+ * Append one returnless `create_and_fund` call (the variant that does NOT return the tunnel's
+ * `ID`). Functionally identical to {@link buildCreateAndFund} for the caller who reads the id
+ * from the tx's object changes and never chains it in the PTB — e.g. Quantum Poker, whose
+ * randomness is two-party commit-reveal, so it needs no on-chain id/seed composition.
+ */
+export function buildCreateAndFundReturnless(
+  tx: Transaction,
+  p: {
+    partyA: PartyArgs;
+    partyB: PartyArgs;
+    coinA: TransactionObjectArgument;
+    coinB: TransactionObjectArgument;
+    timeoutMs: bigint;
+    penaltyAmount?: bigint;
+  } & WithCoinType,
+): void {
+  tx.moveCall({
+    target: buildTarget(TUNNEL, "create_and_fund"),
+    typeArguments: [p.coinType ?? SUI_COIN_TYPE],
+    arguments: [
+      tx.pure.address(p.partyA.address),
+      vecU8(tx, p.partyA.publicKey),
+      tx.pure.u8(p.partyA.signatureType),
+      tx.pure.address(p.partyB.address),
+      vecU8(tx, p.partyB.publicKey),
+      tx.pure.u8(p.partyB.signatureType),
+      p.coinA,
+      p.coinB,
+      tx.pure.u64(p.timeoutMs),
+      tx.pure.u64(p.penaltyAmount ?? 0n),
+      tx.object(CLOCK),
+    ],
+  });
+}
+
+/**
  * PvP one-signature setup: open a shared tunnel AND fund seat A's stake in ONE PTB, so the
  * creator (party A) approves a single wallet tx instead of create + deposit separately.
  * Composes `create` (returns the owned object) → `deposit_party_a` (gated to the sender =
@@ -159,6 +195,40 @@ export function buildOpenAndFundMany(
       coinType,
     }),
   );
+}
+
+/**
+ * Open + fund + activate ONE tunnel in a single PTB via the returnless `create_and_fund`.
+ * Splits both seats' stakes off the source coin (gas for SUI) internally, so the caller passes
+ * only plain data and reads the tunnel id from object changes. For callers that never chain the
+ * id in the PTB (Quantum Poker — commit-reveal randomness, no on-chain seed).
+ */
+export function buildOpenAndFundOneReturnless(
+  tx: Transaction,
+  spec: TunnelOpenSpec,
+  opts: BatchFundOptions = {},
+): void {
+  const coinType = opts.coinType ?? SUI_COIN_TYPE;
+  if (coinType !== SUI_COIN_TYPE && !opts.sourceCoin) {
+    throw new Error(
+      `buildOpenAndFundOneReturnless: coinType ${coinType} is not SUI, so opts.sourceCoin ` +
+        `(a Coin<${coinType}> to split stakes from) is required.`,
+    );
+  }
+  const source = opts.sourceCoin ?? tx.gas;
+  const [coinA, coinB] = tx.splitCoins(source, [
+    tx.pure.u64(spec.aAmount),
+    tx.pure.u64(spec.bAmount),
+  ]);
+  buildCreateAndFundReturnless(tx, {
+    partyA: spec.partyA,
+    partyB: spec.partyB,
+    coinA,
+    coinB,
+    timeoutMs: spec.timeoutMs,
+    penaltyAmount: spec.penaltyAmount,
+    coinType,
+  });
 }
 
 /** One seat's batch deposit: which already-shared tunnel, and the stake to fund it with. */

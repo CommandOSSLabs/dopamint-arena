@@ -11,7 +11,7 @@ import { registerWindowDisposer } from "@/lib/windowSessions";
 import { useTelemetry } from "../../telemetry/TelemetryProvider";
 import type { TelemetryWriter } from "../../telemetry/TelemetryProvider";
 import {
-  openAndFundSelfPlay,
+  openAndFundSelfPlayReturnless,
   readCreatedAt,
   type SignExec,
 } from "@/onchain/tunnelTx";
@@ -374,11 +374,11 @@ class AutoSession {
     );
 
     const reads = this.deps.client as unknown as Parameters<
-      typeof openAndFundSelfPlay
+      typeof openAndFundSelfPlayReturnless
     >[0]["reads"];
 
     try {
-      const tunnelId = await openAndFundSelfPlay({
+      const tunnelId = await openAndFundSelfPlayReturnless({
         reads,
         signExec: this.botSignExec(this.bots.A),
         partyA: { address: this.bots.A.address, publicKey: this.bots.A.publicKey },

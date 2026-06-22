@@ -12,6 +12,7 @@ import { Transaction } from "@mysten/sui/transactions";
 import {
   buildOpenAndFundSeatA as sdkOpenAndFundSeatA,
   buildOpenAndFundMany as sdkOpenAndFundMany,
+  buildOpenAndFundOneReturnless as sdkOpenAndFundOneReturnless,
 } from "sui-tunnel-ts/onchain/createAndFund";
 import {
   buildDepositFromGas as sdkDepositFromGas,
@@ -64,6 +65,10 @@ const buildRaiseDisputeFromUpdate = sdkRaiseDisputeFromUpdate as unknown as (
 const buildForceClose = sdkForceClose as unknown as (
   tx: Transaction,
   p: { tunnelId: string },
+) => void;
+const buildOpenAndFundOneReturnless = sdkOpenAndFundOneReturnless as unknown as (
+  tx: Transaction,
+  spec: Parameters<typeof sdkOpenAndFundOneReturnless>[1],
 ) => void;
 
 /** Sign + execute a transaction (e.g. dapp-kit's signAndExecuteTransaction). */
@@ -160,6 +165,42 @@ export async function openAndFundSelfPlay(opts: {
       penaltyAmount: opts.penaltyAmount ?? 0n,
     },
   ]);
+  const { digest } = await opts.signExec(tx);
+  await opts.reads.waitForTransaction({ digest });
+  const txb = await opts.reads.getTransactionBlock({
+    digest,
+    options: { showObjectChanges: true },
+  });
+  const tunnelId = findTunnelId(txb.objectChanges);
+  if (!tunnelId) throw new Error("could not find created tunnel id");
+  return tunnelId;
+}
+
+/**
+ * Self-play open via the returnless `tunnel::create_and_fund` (no ID return; the tunnel id is
+ * read from object changes). Same one-signature flow as {@link openAndFundSelfPlay}; used by
+ * Quantum Poker, which reads the id from object changes and never chains it in the PTB (its
+ * randomness is two-party commit-reveal, so no on-chain id/seed composition is needed).
+ */
+export async function openAndFundSelfPlayReturnless(opts: {
+  reads: SuiReads;
+  signExec: SignExec;
+  partyA: PartyOnchain;
+  partyB: PartyOnchain;
+  aAmount: bigint;
+  bAmount: bigint;
+  timeoutMs?: bigint;
+  penaltyAmount?: bigint;
+}): Promise<string> {
+  const tx = new Transaction();
+  buildOpenAndFundOneReturnless(tx, {
+    partyA: { ...opts.partyA, signatureType: SignatureScheme.ED25519 },
+    partyB: { ...opts.partyB, signatureType: SignatureScheme.ED25519 },
+    aAmount: opts.aAmount,
+    bAmount: opts.bAmount,
+    timeoutMs: opts.timeoutMs ?? 86_400_000n,
+    penaltyAmount: opts.penaltyAmount ?? 0n,
+  });
   const { digest } = await opts.signExec(tx);
   await opts.reads.waitForTransaction({ digest });
   const txb = await opts.reads.getTransactionBlock({
