@@ -8,6 +8,7 @@ import {
   useCustomWallet,
   CustomWalletProvider,
 } from "@/games/ticTacToe/app/contexts/CustomWallet";
+import { parseAgentConfig } from "@/agent/agentConfig";
 import { LoginScene } from "@/games/ticTacToe/app/scenes/LoginScene";
 import {
   SetupScene,
@@ -72,6 +73,8 @@ function AppContent() {
   // Auto-Pilot flow to skip login and setup, randomize settings, fund bots, and start playing
   useEffect(() => {
     if (!isConnected) return;
+    // Under ?arena the script drives funding and game start — skip the auto-pilot here.
+    if (parseAgentConfig(window.location.href).arena) return;
 
     const hasNavigated = sessionStorage.getItem("tictactoe_auto_navigated");
     if (scene === "login" && !hasNavigated) {
