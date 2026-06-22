@@ -333,6 +333,7 @@ impl SuiSettler {
 /// Project a raw event to a displayable Transaction-Log row, or `None` if it is not one
 /// (only activations and closes are shown). `game` is left `None` for v1 — the event carries
 /// no game tag; joining `tunnel_id → game` via the session registry is a deferred follow-up.
+#[allow(dead_code)]
 fn to_tunnel_event(raw: &RawTunnelEvent) -> Option<crate::state::TunnelEvent> {
     let kind = match raw.type_suffix.as_str() {
         "TunnelActivated" => crate::state::TunnelEventKind::Opened,
@@ -354,6 +355,7 @@ fn to_tunnel_event(raw: &RawTunnelEvent) -> Option<crate::state::TunnelEvent> {
 /// Poll the chain for this package's tunnel events and fold them into the registry via
 /// `ControlStore::set_tunnel_status` — the transition logic (idempotency, count maintenance)
 /// now lives in the store impl. e2e-deferred (needs a live node + published package).
+#[allow(dead_code)]
 pub fn spawn_event_indexer(state: crate::state::SharedState) {
     tokio::spawn(async move {
         let mut cursor = None;

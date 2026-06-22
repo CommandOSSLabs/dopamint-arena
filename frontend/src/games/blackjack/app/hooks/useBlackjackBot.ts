@@ -133,9 +133,10 @@ export interface BlackjackBotGame {
 
 // Buy-in (bankroll) each bot brings to the table per game, in MIST. Chips are 1:1 with MIST
 // (1 SUI = 1,000,000,000 chips), so this is also the starting chip stack. Sized so the table
-// can sustain the full rounds-per-tunnel target before either side is drained: 0.005 SUI =
-// 5,000,000 chips covers thousands of rounds at the offered bet sizes.
-const BUY_IN = 5_000_000n;
+// can sustain the full rounds-per-tunnel target before either side is drained. Bots bet the
+// minimum (DEFAULT_BET = MIN_BET), so 50,000 chips covers far more than the rounds-per-tunnel
+// target while keeping the on-chain deposit — and thus the MIN_PLAY floor — tiny.
+const BUY_IN = 50_000n;
 // Animation cadence: one move surfaced to the view per tick.
 const STEP_MS = 900;
 // The bot that opens a tunnel funds BOTH seats from its own gas coin, so it must hold at least
@@ -143,8 +144,9 @@ const STEP_MS = 900;
 // rather than risk a mid-game tx running out of gas and leaving a tunnel open. The funder
 // alternates each game (see runGame) so this drain stays balanced across both bots.
 const MIN_PLAY_MIST = 2n * BUY_IN + 20_000_000n;
-// Default per-round bet (chips) until the user picks one.
-const DEFAULT_BET = 100;
+// Default per-round bet (chips) until the user picks one: the minimum, to keep the value
+// churned each round (and thus variance / required buy-in) as small as possible.
+const DEFAULT_BET = Number(MIN_BET);
 // Pause between auto-played games. Long enough that the "settling…"/done state for the just-
 // finished tunnel stays briefly visible before the next tunnel opens.
 const NEXT_GAME_MS = 2500;

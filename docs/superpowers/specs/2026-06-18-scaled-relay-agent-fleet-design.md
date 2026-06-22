@@ -5,7 +5,7 @@
 - **Owner**: TBD
 - **Refs**: `docs/DEMO-STRATEGY.md` (§1, §5–§9); ADR-0001 (baseline),
   ADR-0002 (FE↔BE contract), ADR-0004 (PvP experience lane), ADR-0005
-  (Redis-backed HA control plane); spec `2026-06-17-multiplayer-pvp-design.md`.
+  (Valkey-backed HA control plane); spec `2026-06-17-multiplayer-pvp-design.md`.
 
 ## Goal
 
@@ -71,7 +71,7 @@ they are not silently reopened:
 2. **Wallet provisioning + treasury funding fan-out** for thousands of agent
    wallets (gas + stake) — the binding on-chain constraint.
 3. **Scaled relay**: horizontal `tunnel-manager` matchmaking/relay (ADR-0005
-   Redis HA) with **sticky match→shard routing** and **failover**.
+   Valkey HA) with **sticky match→shard routing** and **failover**.
 4. **Fleet runner**: launches/supervises N agent contexts (Playwright) across
    AWS hosts; ramp up/down; restart on crash.
 5. **Telemetry**: per-shard / per-agent message counting, summed to the live

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["backend/tunnel-manager"]
+members = ["backend/tunnel-manager", "backend/explorer", "backend/shared"]
 
 [workspace.package]
 edition = "2021"
@@ -36,6 +36,11 @@ sui-transaction-builder = "0.3"
 sui-crypto = { version = "0.3", features = ["ed25519"] }
 bcs = "0.2"
 base64 = "0.22"
+# Postgres read-model for the explorer index (settlement history). rustls to reuse
+# the single ring CryptoProvider already selected for fred/reqwest (no aws-lc/cmake).
+sqlx = { version = "0.8", default-features = false, features = [
+  "runtime-tokio-rustls", "postgres", "macros", "migrate", "chrono",
+] }
 
 [profile.release]
 lto = "thin"

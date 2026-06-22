@@ -1,0 +1,48 @@
+[package]
+name = "explorer"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "indexer"
+path = "src/bin/indexer.rs"
+
+[[bin]]
+name = "api"
+path = "src/bin/api.rs"
+
+[dependencies]
+# read side (api binary) — reads via shared::SettlementStore (sqlx) + axum + fred SSE
+shared = { path = "../shared" }
+tokio.workspace = true
+tokio-stream.workspace = true
+axum.workspace = true
+tower-http.workspace = true
+futures = "0.3"
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+dotenvy.workspace = true
+async-trait.workspace = true
+fred.workspace = true
+reqwest.workspace = true
+# write side (indexer binary) — sui-indexer-alt-framework (Diesel). diesel pinned to the
+# framework's resolved graph (gate evidence): diesel-async 0.9 -> diesel 2.3, migrations 2.3.
+sui-indexer-alt-framework = { git = "https://github.com/MystenLabs/sui.git", branch = "testnet" }
+move-core-types = { git = "https://github.com/MystenLabs/sui.git", branch = "testnet" }
+diesel = { version = "2.3", features = ["postgres"] }
+diesel-async = { version = "0.9", features = ["bb8", "postgres"] }
+diesel_migrations = "2.3"
+bcs.workspace = true
+clap = { version = "4", features = ["derive"] }
+# IndexerCluster::with_database_url takes a url::Url (transitive via the framework; declared
+# explicitly so the indexer bin can name the type). Resolves to 2.5.x in the lock.
+url = "2"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }

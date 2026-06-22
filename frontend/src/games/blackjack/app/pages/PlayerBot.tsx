@@ -53,10 +53,11 @@ function getChipStack(balance: number): string[] {
 const ROUND_PRESETS = [5, 10, 25, 50, 100];
 
 // Auto-fund policy: a bot below MIN_BOT_BALANCE_MIST is topped up from the wallet. The
-// top-up per bot is >= the threshold so a single fund always lifts the bot above it
-// (funding less would leave it stuck below the threshold, since auto-fund runs once).
-const MIN_BOT_BALANCE_MIST = 100_000_000n; // 0.1 SUI
-const TOPUP_PER_BOT_MIST = 100_000_000; // 0.1 SUI per bot
+// threshold sits just above the hook's MIN_PLAY floor (so the bot keeps playing as long as
+// possible), and the top-up is large relative to per-tunnel gas — a big runway means few
+// re-funds. The top-up is also >= the threshold, so a single fund always clears it.
+const MIN_BOT_BALANCE_MIST = 30_000_000n; // 0.03 SUI (just above MIN_PLAY)
+const TOPUP_PER_BOT_MIST = 200_000_000; // 0.2 SUI per bot — long runway, fewer re-funds
 
 // Render MIST (bigint) as a short SUI string. 1 SUI = 1e9 MIST.
 function suiOf(mist: bigint): string {

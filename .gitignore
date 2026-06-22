@@ -55,9 +55,11 @@ build/Release
 node_modules/
 jspm_packages/
 
-# This repo uses pnpm exclusively — prevent accidental npm/yarn lockfiles
+# This repo uses pnpm exclusively — prevent accidental npm/yarn/bun lockfiles
 package-lock.json
 yarn.lock
+bun.lock
+bun.lockb
 
 # Snowpack dependency directory (https://snowpack.dev/)
 web_modules/
@@ -164,6 +166,9 @@ vite.config.ts.timestamp-*
 
 # Rust
 /target
+
+# Playwright MCP scratch output
+.playwright-mcp/
 
 # Temp files
 temp/

@@ -76,6 +76,7 @@ import { flyFromDock, flyToDock } from "@/lib/dockFlight";
 import { useTelemetry } from "@/telemetry/TelemetryProvider";
 import { useLocalStorageState } from "@/lib/useLocalStorageState";
 import { useMediaQuery } from "@/lib/useMediaQuery";
+import { Link } from "@tanstack/react-router";
 import { WalletButton } from "@/wallet/WalletButton";
 import type { TelemetrySnapshot } from "../panels/types";
 import { ChatPanel } from "../panels/ChatPanel";
@@ -982,6 +983,12 @@ export function Desktop() {
           <span className="wal-display hidden text-base sm:inline">
             Dopamint<span className="wal-gradient-text">Arena</span>
           </span>
+          <Link
+            to="/explorer"
+            className="text-xs text-muted-foreground hover:text-foreground"
+          >
+            Explorer
+          </Link>
         </div>
         <div className="flex items-center gap-1.5">
           <WalletButton />
