@@ -68,14 +68,18 @@ export function loadOrCreateQuantumPokerBots(): {
   return { A: loadOrCreateBot(STORAGE_A), B: loadOrCreateBot(STORAGE_B) };
 }
 
-export function buildFundBotsTx(
-  bots: { A: QuantumPokerBot; B: QuantumPokerBot },
-  perBotMist: number = FUND_PER_BOT_MIST,
+/**
+ * Top up ONLY bot A from the connected wallet's gas coin. In self-play bot A is the sole
+ * funder/signer — it stakes BOTH seats via `create_and_fund` and signs the open — so only bot A
+ * needs SUI. Bot B never spends: it just receives its share at each cooperative close.
+ */
+export function buildFundBotATx(
+  bots: { A: QuantumPokerBot },
+  amountMist: number = FUND_PER_BOT_MIST,
 ): Transaction {
   const tx = new Transaction();
-  const [coinA, coinB] = tx.splitCoins(tx.gas, [perBotMist, perBotMist]);
-  tx.transferObjects([coinA], bots.A.address);
-  tx.transferObjects([coinB], bots.B.address);
+  const [coin] = tx.splitCoins(tx.gas, [amountMist]);
+  tx.transferObjects([coin], bots.A.address);
   return tx;
 }
 
@@ -104,18 +108,16 @@ async function faucetStatus(recipient: string): Promise<string> {
   }
 }
 
-export async function fundBotsFromFaucet(
+/** Faucet ONLY bot A (the sole funder in self-play), then poll until it can cover a match. */
+export async function fundBotAFromFaucet(
   client: BotReadClient,
-  bots: { A: QuantumPokerBot; B: QuantumPokerBot },
-): Promise<{ a: string; b: string }> {
-  const [a, b] = await Promise.all([
-    faucetStatus(bots.A.address),
-    faucetStatus(bots.B.address),
-  ]);
+  bots: { A: QuantumPokerBot },
+): Promise<{ a: string }> {
+  const a = await faucetStatus(bots.A.address);
   for (let i = 0; i < 10; i++) {
-    const bal = await botBalances(client, bots);
-    if (bal.a >= MIN_PLAY_MIST && bal.b >= MIN_PLAY_MIST) break;
+    const bal = await client.getBalance({ owner: bots.A.address });
+    if (BigInt(bal.totalBalance) >= MIN_PLAY_MIST) break;
     await wait(1500);
   }
-  return { a, b };
+  return { a };
 }

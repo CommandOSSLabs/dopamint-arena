@@ -70,7 +70,8 @@ export function QuantumPokerBotVsBotWindow({
         {!s.funded && (
           <section className="rounded-md border border-white/10 bg-white/[0.04] p-2 text-[10px]">
             <div className="mb-1 text-slate-400">
-              Fund both bots once (stakes are refunded each close; only gas is spent).
+              Fund bot A once — it stakes both seats and signs each open; bot B
+              collects its winnings at close and never needs funding.
             </div>
             <div className="flex gap-1.5">
               <button
@@ -88,7 +89,7 @@ export function QuantumPokerBotVsBotWindow({
                   disabled={s.status === "funding"}
                   className="h-6 rounded-sm border border-amber-200/40 px-2 text-[10px] text-amber-100 disabled:opacity-45"
                 >
-                  Fund 0.1 SUI / bot
+                  Fund bot A 0.1 SUI
                 </button>
               )}
             </div>
