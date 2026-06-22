@@ -5,6 +5,8 @@ import {
   BlackjackState,
   WAGER,
   ROUND_CAP,
+  getPlayerParty,
+  getDealerParty,
 } from "./blackjack";
 import { toHex } from "../core/bytes";
 import { OffchainTunnel, verifyCoSignedUpdate } from "../core/tunnel";
@@ -80,7 +82,7 @@ test("applyMove rejects wrong-turn and illegal dealer hit", () => {
 test("applyMove rejects unknown actions", () => {
   const s = fresh();
   assert.throws(() =>
-    proto.applyMove(s, { action: "fold" } as unknown as { action: "hit" }, "A"),
+    proto.applyMove(s, { action: "fold" } as unknown as { action: "hit" }, "A")
   );
 });
 
@@ -178,7 +180,12 @@ test("randomMove only ever yields legal moves over many transitions", () => {
   const rng = () => (x = (x * 48271) % 1) || 0.5;
   for (let i = 0; i < 3000; i++) {
     if (proto.isTerminal(s)) break;
-    const by: Party = s.phase === "dealer" ? "B" : "A";
+    const by: Party =
+      s.phase === "dealer"
+        ? getDealerParty(s.round)
+        : s.phase === "player"
+        ? getPlayerParty(s.round)
+        : getPlayerParty(s.round + 1n);
     const m = proto.randomMove(s, by, rng);
     if (!m) {
       // The only non-mover should be the off-turn party; the on-turn party always moves.
@@ -224,20 +231,23 @@ test("end-to-end self-play tunnel: latest co-signed update verifies", () => {
     b,
     ed25519Address(a.publicKey),
     ed25519Address(b.publicKey),
-    { a: 1000n, b: 1000n },
+    { a: 1000n, b: 1000n }
   );
 
   // Play several rounds: player stands, dealer stands, then deal again.
   for (let r = 0; r < 5; r++) {
     if (proto.isTerminal(t.state)) break;
     if (t.state.phase === "round_over") {
-      t.step({ action: "hit" }, "A"); // deal a new round
+      const nextPlayer = getPlayerParty(t.state.round + 1n);
+      t.step({ action: "hit" }, nextPlayer); // deal a new round
     }
     if (t.state.phase === "player") {
-      t.step({ action: "stand" }, "A");
+      const playerParty = getPlayerParty(t.state.round);
+      t.step({ action: "stand" }, playerParty);
     }
     if (t.state.phase === "dealer") {
-      t.step({ action: "stand" }, "B");
+      const dealerParty = getDealerParty(t.state.round);
+      t.step({ action: "stand" }, dealerParty);
     }
   }
 
@@ -246,8 +256,8 @@ test("end-to-end self-play tunnel: latest co-signed update verifies", () => {
     verifyCoSignedUpdate(
       t.latest!,
       { publicKey: t.partyA.publicKey, scheme: t.partyA.scheme },
-      { publicKey: t.partyB.publicKey, scheme: t.partyB.scheme },
-    ),
+      { publicKey: t.partyB.publicKey, scheme: t.partyB.scheme }
+    )
   );
   const bal = proto.balances(t.state);
   assert.equal(bal.a + bal.b, 2000n);

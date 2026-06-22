@@ -226,16 +226,16 @@ export const MIN_AUCTION_DURATION_MS = 600000;
 // HELPER FUNCTIONS
 // ============================================
 
-/**
- * Build a Move call target string
- */
 export function buildTarget(module: string, func: string): string {
-  // Prefer the load-time constant; fall back to the current env (set after load).
+  // Prioritize the dynamic environment variable first to allow runtime/test overrides.
   const pkg =
-    PACKAGE_ID || process.env.PACKAGE_ID || process.env.SUI_TUNNEL_PACKAGE_ID || "";
+    process.env.PACKAGE_ID ||
+    process.env.SUI_TUNNEL_PACKAGE_ID ||
+    PACKAGE_ID ||
+    "";
   if (!pkg) {
     throw new Error(
-      "PACKAGE_ID not set. Please set it in environment variables or config.",
+      "PACKAGE_ID not set. Please set it in environment variables or config."
     );
   }
   return `${pkg}::${module}::${func}`;
@@ -254,7 +254,7 @@ export function getCurrentTimeMs(): number {
 export function validateConfig(): void {
   if (!PACKAGE_ID) {
     throw new Error(
-      "PACKAGE_ID is not configured. Please set the PACKAGE_ID environment variable.",
+      "PACKAGE_ID is not configured. Please set the PACKAGE_ID environment variable."
     );
   }
 }
