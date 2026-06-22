@@ -64,21 +64,21 @@ origin, wallet flow, and relay path a human uses. Spec:
    `TTT_WINDOWS`/`BJ_WINDOWS` control **concurrent tunnels** (N browser windows run in parallel);
    `TTT_MAX_GAMES`/`BJ_MAX_ROUNDS` control **matches per tunnel** (off-chain matches before each on-chain settle).
 
-   **Multi-window example** — 3 ttt tunnels + 2 blackjack tunnels, each with elevated match counts:
+   **Multi-window example** — 3 ttt tunnels + 2 blackjack tunnels, each with elevated match counts.
+   Run as two single-line commands (no `\` line-continuations — they break on copy-paste/terminal wrap):
 
    ```bash
-   KEY=<funded suiprivkey> \
-     TTT_WINDOWS=3 BJ_WINDOWS=2 \
-     TTT_MAX_GAMES=50 BJ_MAX_ROUNDS=200 \
-     DURATION_MS=60000 node agent/arena.mjs
+   export KEY=$(sui keytool export --key-identity "$(sui client active-address)" --json | jq -r .exportedPrivateKey)
+   TTT_WINDOWS=3 BJ_WINDOWS=2 TTT_MAX_GAMES=50 BJ_MAX_ROUNDS=200 DURATION_MS=60000 node agent/arena.mjs
    ```
 
+   (`echo $KEY` should print a `suiprivkey1…` value. `export` makes `node` inherit it.)
+
    **Smoke-test (manual gate):** verify the dev server is running on `:5173` pointing at a reachable
-   backend, then run:
+   backend, then (with `KEY` exported as above) run a short headless pass:
 
    ```bash
-   cd frontend
-   KEY=<funded suiprivkey> DURATION_MS=10000 HEADLESS=true node agent/arena.mjs
+   DURATION_MS=10000 HEADLESS=true node agent/arena.mjs
    ```
 
    Expected: logs `[arena] wallet connected, desktop ready`, `ttt auto-play started`,
