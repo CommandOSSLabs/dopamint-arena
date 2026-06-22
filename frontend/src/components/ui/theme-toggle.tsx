@@ -17,14 +17,19 @@ const OPTIONS: { value: ThemeChoice; label: string; icon: LucideIcon }[] = [
 ];
 
 /** System/Light/Dark theme switcher for the topbar. */
-export function ThemeToggle() {
+export function ThemeToggle({ className }: { className?: string }) {
   const { theme, resolved, setTheme } = useTheme();
   const TriggerIcon = resolved === "dark" ? Moon : Sun;
 
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon-sm" aria-label="Toggle theme">
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Toggle theme"
+          className={className}
+        >
           <TriggerIcon className="size-4" />
         </Button>
       </DropdownMenuTrigger>
