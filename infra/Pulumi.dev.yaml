@@ -6,7 +6,7 @@ config:
   dopamint:db-min-capacity: "0.5"
   dopamint:db-max-capacity: "4"
   dopamint:db-serverless: "true"
-  dopamint:cache-node-type: cache.t4g.medium
+  dopamint:cache-node-type: cache.r6g.4xlarge
   dopamint:benchmark-instance-type: c7i.48xlarge
   dopamint:benchmark-min-size: "2"
   dopamint:benchmark-max-size: "2"
