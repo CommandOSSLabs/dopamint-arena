@@ -75,6 +75,7 @@ function AppContent() {
 
   const autoNavRef = useRef(false);
   const autoFundRef = useRef(false);
+  const autoStartedRef = useRef(false);
 
   // Auto-pilot: skip login → setup → wallet-fund bots if low → start bot-vs-bot.
   // Bots are SHARED across all ttt windows (loadOrCreateBots reads shared localStorage),
@@ -97,6 +98,7 @@ function AppContent() {
     }
 
     if (scene === "setup") {
+      if (!g.balancesLoaded) return;
       if (!funded) {
         if (!autoFundRef.current) {
           autoFundRef.current = true; // fund AT MOST ONCE per window (Global Constraint)
@@ -115,11 +117,11 @@ function AppContent() {
         }
         return;
       }
-      const timer = setTimeout(() => {
+      if (!autoStartedRef.current) {
+        autoStartedRef.current = true;
         setScene("game");
         g.startAuto();
-      }, 1000);
-      return () => clearTimeout(timer);
+      }
     }
   }, [isConnected, scene, funded, g, executeTransaction]);
 

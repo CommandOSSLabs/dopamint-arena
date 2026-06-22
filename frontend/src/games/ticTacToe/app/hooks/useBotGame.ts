@@ -97,6 +97,7 @@ export interface BotGameView {
   maxGames: number;
   /** 1-based index of the game currently being played in this tunnel. */
   currentGame: number;
+  balancesLoaded: boolean;
   setMaxGames: (n: number) => void;
   fund: () => void;
   rebalance: () => void;
@@ -208,6 +209,7 @@ export function useBotGame(difficulty: Difficulty = "fast"): BotGameView {
   const [rebalancing, setRebalancing] = useState(false);
   const [maxGames, setMaxGamesState] = useState<number>(DEFAULT_MAX_GAMES);
   const [currentGame, setCurrentGame] = useState<number>(1);
+  const [balancesLoaded, setBalancesLoaded] = useState(false);
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const nextRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -270,6 +272,8 @@ export function useBotGame(difficulty: Difficulty = "fast"): BotGameView {
       return b;
     } catch {
       return null;
+    } finally {
+      setBalancesLoaded(true);
     }
   }, [client, bots]);
 
@@ -659,6 +663,7 @@ export function useBotGame(difficulty: Difficulty = "fast"): BotGameView {
     rebalancing,
     maxGames,
     currentGame,
+    balancesLoaded,
     setMaxGames,
     fund,
     rebalance,

@@ -120,6 +120,7 @@ export interface BlackjackBotGame {
   setBet: (n: number) => void;
   /** Bet denominations offered in the UI (chips). */
   betOptions: number[];
+  balancesLoaded: boolean;
   fund: () => void;
   /** Even out the two bots' wallet balances: move half the difference richer→poorer. */
   rebalance: () => void;
@@ -205,6 +206,7 @@ export function useBlackjackBot(): BlackjackBotGame {
   const [rebalancing, setRebalancing] = useState(false);
   const [maxRounds, setMaxRoundsState] = useState(DEFAULT_MAX_ROUNDS);
   const [bet, setBetState] = useState(DEFAULT_BET);
+  const [balancesLoaded, setBalancesLoaded] = useState(false);
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const nextRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -283,6 +285,8 @@ export function useBlackjackBot(): BlackjackBotGame {
       return b;
     } catch {
       return null;
+    } finally {
+      setBalancesLoaded(true);
     }
   }, [client, bots]);
 
@@ -706,6 +710,7 @@ export function useBlackjackBot(): BlackjackBotGame {
     bet,
     setBet,
     betOptions: [...BET_OPTIONS],
+    balancesLoaded,
     fund,
     rebalance,
     startAuto,

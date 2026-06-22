@@ -66,6 +66,7 @@ export interface CaroBotGameView {
   rebalancing: boolean;
   maxGames: number;
   currentGame: number;
+  balancesLoaded: boolean;
   setMaxGames: (n: number) => void;
   fund: () => void;
   rebalance: () => void;
@@ -119,6 +120,7 @@ export function useCaroBotGame(
   const [rebalancing, setRebalancing] = useState(false);
   const [maxGames, setMaxGamesState] = useState<number>(DEFAULT_MAX_GAMES);
   const [currentGame, setCurrentGame] = useState<number>(1);
+  const [balancesLoaded, setBalancesLoaded] = useState(false);
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const nextRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -185,6 +187,8 @@ export function useCaroBotGame(
       return b;
     } catch {
       return null;
+    } finally {
+      setBalancesLoaded(true);
     }
   }, [client, bots]);
 
@@ -576,6 +580,7 @@ export function useCaroBotGame(
     rebalancing,
     maxGames,
     currentGame,
+    balancesLoaded,
     setMaxGames,
     fund,
     rebalance,

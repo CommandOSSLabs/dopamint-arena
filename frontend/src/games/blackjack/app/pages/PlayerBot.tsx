@@ -121,6 +121,7 @@ export default function PlayerBot() {
     betOptions,
     rebalance,
     rebalancing,
+    balancesLoaded,
   } = game;
   const latestRound = rounds.length > 0 ? rounds[rounds.length - 1] : null;
 
@@ -311,6 +312,7 @@ export default function PlayerBot() {
   const autoStartedRef = useRef(false);
   useEffect(() => {
     if (!account || running) return;
+    if (!balancesLoaded) return;
     if (unfunded) {
       if (!autoPilotRef.current) {
         autoPilotRef.current = true;
