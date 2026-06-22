@@ -7,7 +7,12 @@ import {
 import { OffchainTunnel } from "sui-tunnel-ts/core/tunnel";
 import { Transcript } from "sui-tunnel-ts/proof/transcript";
 import { QuantumPokerProtocol } from "sui-tunnel-ts/protocol/quantumPoker";
+import type { PokerState } from "sui-tunnel-ts/protocol/quantumPoker";
 import { registerWindowDisposer } from "@/lib/windowSessions";
+import {
+  getControlPlaneClient,
+  type RegisterSessionResult,
+} from "@/backend/controlPlane";
 import { useTelemetry } from "../../telemetry/TelemetryProvider";
 import type { TelemetryWriter } from "../../telemetry/TelemetryProvider";
 import {
@@ -38,8 +43,6 @@ import { settlePokerTunnel } from "./pokerSettle";
 const STAKE = QUANTUM_POKER_STAKE;
 const HAND_CAP = QUANTUM_POKER_HAND_CAP;
 
-/** Spectator pacing per off-chain move (ms). */
-const SPACE_MS = 60;
 /** Pause between matches (ms). */
 const NEXT_MATCH_MS = 1200;
 
@@ -55,6 +58,12 @@ export interface QuantumPokerAutoSession {
   funded: boolean;
   canFundFromWallet: boolean;
   error: string | null;
+  /** Live poker table state (null before the first tunnel opens). */
+  state: PokerState | null;
+  /** Party A hole cards to display (both shown in auto/spectator mode). */
+  holesA: number[];
+  /** Party B hole cards to display. */
+  holesB: number[];
   /** Faucet-fund both bots (testnet). */
   fund: () => void;
   /** Fund both bots 0.1 SUI each from the connected wallet (one approval). */
@@ -100,6 +109,9 @@ interface AutoSnapshot {
   funded: boolean;
   canFundFromWallet: boolean;
   error: string | null;
+  state: PokerState | null;
+  holesA: number[];
+  holesB: number[];
 }
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -136,6 +148,9 @@ class AutoSession {
     funded: false,
     canFundFromWallet: false,
     error: null,
+    state: null,
+    holesA: [],
+    holesB: [],
   };
   private listeners = new Set<() => void>();
   private balancesLoaded = false;
@@ -148,6 +163,10 @@ class AutoSession {
   private nextTimer: ReturnType<typeof setTimeout> | null = null;
   // Bumped on stop/reset/dispose so an in-flight loop knows to abandon ship.
   private gen = 0;
+  private session: RegisterSessionResult | null = null;
+  private heartbeatActions = 0;
+  private lastHeartbeatAt = 0;
+  private moveCount = 0;
 
   subscribe = (cb: () => void): (() => void) => {
     this.listeners.add(cb);
@@ -172,6 +191,9 @@ class AutoSession {
       funded: this.funded,
       canFundFromWallet: this.deps?.account != null,
       error: this.error,
+      state: this.tunnel?.state ?? null,
+      holesA: this.tunnel?.state.holeA ?? [],
+      holesB: this.tunnel?.state.holeB ?? [],
     };
     for (const l of this.listeners) l();
   }
@@ -343,6 +365,25 @@ class AutoSession {
     this.setStatus("ended");
   }
 
+  private flushHeartbeat(tunnelId: string, force: boolean) {
+    const session = this.session;
+    if (!session || this.heartbeatActions === 0) return;
+    const now = Date.now();
+    const windowMs = now - this.lastHeartbeatAt;
+    if (!force && windowMs < 1000) return;
+    const actionsDelta = this.heartbeatActions;
+    this.heartbeatActions = 0;
+    this.lastHeartbeatAt = now;
+    getControlPlaneClient()
+      .sendHeartbeat(session.sessionId, session.statsToken, {
+        tunnelId,
+        nonce: String(this.moveCount),
+        actionsDelta,
+        windowMs: Math.max(1, windowMs),
+      })
+      .catch((e) => console.error("[poker auto] heartbeat failed:", e));
+  }
+
   /** Open + fund a fresh tunnel (bot A signs), play it off-chain, settle, then loop or stop. */
   private runMatch = async () => {
     const myGen = this.gen;
@@ -401,9 +442,8 @@ class AutoSession {
         this.bots.B.address,
         { a: STAKE, b: STAKE },
       );
-      tunnel.onUpdate = (u, bytes) => {
+      tunnel.onUpdate = (u) => {
         transcript.append(u);
-        this.deps?.report.bumpCounters({ updates: 1, signatures: 2, verifications: 2, bytes });
       };
       this.tunnel = tunnel;
       this.deps.report.bumpCounters({ tunnelsOpened: 1 });
@@ -412,16 +452,52 @@ class AutoSession {
       this.stage = "playing";
       this.pushView();
 
-      // Drive moves one step at a time, paced for spectator watchability.
+      // Register session for heartbeat (best-effort).
+      this.session = null;
+      this.heartbeatActions = 0;
+      this.lastHeartbeatAt = Date.now();
+      this.moveCount = 0;
+      try {
+        this.session = await getControlPlaneClient().registerSession({
+          userAddress: this.deps?.account?.address ?? this.bots.A.address,
+          game: "quantum-poker",
+          tunnels: [{ tunnelId, partyA: this.bots.A.address, partyB: this.bots.B.address }],
+        });
+      } catch (e) {
+        console.error("[poker auto] registerSession failed:", e);
+      }
+
       let ts = 1n;
+      let pending = 0;
+      let lastFlush = Date.now();
+      const FLUSH_MS = 80;
+      const flush = async () => {
+        if (pending > 0) {
+          this.deps?.report.bumpCounters({ updates: pending, signatures: pending * 2, verifications: pending * 2 });
+          pending = 0;
+        }
+        this.flushHeartbeat(tunnelId, false);
+        this.pushView();
+        await sleep(0);
+        lastFlush = Date.now();
+      };
       while (tunnel.state.phase !== "done") {
         if (this.gen !== myGen) return;
         const r = stepPokerAuto(tunnel, botA, botB, ts++);
         if (!r) break;
         this.actions += 1;
-        this.pushView();
-        await sleep(SPACE_MS);
+        this.moveCount += 1;
+        this.heartbeatActions += 1;
+        pending += 1;
+        if (Date.now() - lastFlush >= FLUSH_MS) await flush();
       }
+      // Final flush — force the heartbeat so the last window is never dropped.
+      if (pending > 0) {
+        this.deps?.report.bumpCounters({ updates: pending, signatures: pending * 2, verifications: pending * 2 });
+        pending = 0;
+      }
+      this.flushHeartbeat(tunnelId, true);
+      this.pushView();
       if (this.gen !== myGen) return;
 
       this.stage = "settling";
@@ -520,6 +596,9 @@ export function useQuantumPokerAuto(
     funded: snap.funded,
     canFundFromWallet: snap.canFundFromWallet,
     error: snap.error,
+    state: snap.state,
+    holesA: snap.holesA,
+    holesB: snap.holesB,
     fund: session.fund,
     fundFromWallet: session.fundFromWallet,
     startAuto: session.startAuto,

@@ -1,6 +1,7 @@
 import type { CSSProperties } from "react";
 import type { GameWindowProps } from "../types";
 import { useQuantumPokerAuto } from "./useQuantumPokerAuto";
+import { QuantumPokerTable, HEADS_UP_STYLE } from "./QuantumPokerTable";
 
 const STYLE: CSSProperties & Record<`--${string}`, string> = {
   "--qp-ink": "#090d12",
@@ -22,7 +23,7 @@ export function QuantumPokerBotVsBotWindow({
 
   return (
     <div
-      style={STYLE}
+      style={{ ...STYLE, ...HEADS_UP_STYLE }}
       className="flex h-full min-h-[14rem] flex-col overflow-hidden bg-[var(--qp-ink)] text-slate-100"
     >
       <header className="flex h-8 shrink-0 items-center justify-between border-b border-white/10 bg-[var(--qp-rail)] px-2">
@@ -92,6 +93,16 @@ export function QuantumPokerBotVsBotWindow({
               )}
             </div>
           </section>
+        )}
+
+        {s.state && (
+          <QuantumPokerTable
+            state={s.state}
+            holesA={s.holesA}
+            holesB={s.holesB}
+            nameA={s.personas?.a ?? "Bot A"}
+            nameB={s.personas?.b ?? "Bot B"}
+          />
         )}
 
         <section className="grid grid-cols-2 gap-2 rounded-md border border-white/10 bg-white/[0.04] p-2">
