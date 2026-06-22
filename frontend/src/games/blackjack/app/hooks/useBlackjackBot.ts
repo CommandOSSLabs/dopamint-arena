@@ -530,15 +530,17 @@ export function useBlackjackBot(): BlackjackBotGame {
                 );
                 completedRounds++;
                 roundsThisTunnel = completedRounds;
-                report.pushLocalTxn({
+                const row = {
                   id: moveCountRef.current,
                   game: "blackjack",
                   time: new Date().toLocaleTimeString("en-GB"),
                   bot: bots.a.address,
                   type: `Blackjack ${outcome === "win" ? "Win" : outcome === "lose" ? "Loss" : "Push"}`,
-                  status: "Success",
+                  status: "Success" as const,
                   amount: delta > 0 ? `+${delta}` : delta < 0 ? `${delta}` : "0",
-                });
+                };
+                report.pushTxn(row); // Live Transactions (per-round, like the other games)
+                report.pushLocalTxn(row); // My Activity
               }
               setView(viewFromState(tunnel.state));
               // Stop once a bot is bankrupt (terminal) or we've played the requested number

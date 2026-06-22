@@ -402,15 +402,17 @@ export function useCaroBotGame(
               if (next.inner.winner !== 0) {
                 recordGame(next.gamesPlayed, next.inner.winner);
                 const w = next.inner.winner;
-                report.pushLocalTxn({
+                const row = {
                   id: moveCountRef.current,
                   game: "tic-tac-toe",
                   time: new Date().toLocaleTimeString("en-GB"),
                   bot: bots.x.address,
                   type: w === 1 ? "X win" : w === 2 ? "O win" : "Draw",
-                  status: "Success",
+                  status: "Success" as const,
                   amount: "",
-                });
+                };
+                report.pushTxn(row); // Live Transactions (per-game, like the other games)
+                report.pushLocalTxn(row); // My Activity
               }
 
               if (proto.isTerminal(next)) {
