@@ -19,7 +19,6 @@ import {
 import {
   buildCreateAndFundTx,
   buildSettleWithRootTx,
-  buildUpdateStateTx,
   parseTunnelId,
 } from "@/games/ticTacToe/app/lib/tunnel";
 import {

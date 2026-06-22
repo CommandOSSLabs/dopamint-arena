@@ -11,7 +11,6 @@ import { coSignedToSettleRequest } from "@/backend/settleRequest";
 import {
   buildCreateAndFundTx,
   buildSettleWithRootTx,
-  buildUpdateStateTx,
   parseTunnelId,
 } from "@/games/blackjack/app/lib/bjTunnel";
 import {
