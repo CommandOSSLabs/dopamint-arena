@@ -126,6 +126,8 @@ export interface BlackjackBotGame {
   rebalance: () => void;
   startAuto: () => void;
   stopAuto: () => void;
+  /** Stop play and return to the idle/config screen (does not auto-restart). */
+  backToConfig: () => void;
   newGame: () => void;
   refresh: () => Promise<{ a: bigint; b: bigint } | null>;
   pollBalances: (prev?: { a: bigint; b: bigint }) => Promise<void>;
@@ -694,6 +696,23 @@ export function useBlackjackBot(): BlackjackBotGame {
     setTunnels([]);
   }, []);
 
+  // Return to the idle/config screen: stop the loop AND the in-flight self-play interval, then
+  // clear the table view so `started` goes false. The page's back button calls this; the
+  // auto-pilot won't restart afterward (its one-shot ref is already set), so the user stays on
+  // config and drives play manually.
+  const backToConfig = useCallback(() => {
+    autoRef.current = false;
+    setAuto(false);
+    stopTimer();
+    if (nextRef.current !== null) {
+      clearTimeout(nextRef.current);
+      nextRef.current = null;
+    }
+    setView(EMPTY_VIEW);
+    setResult(null);
+    setPhase("idle");
+  }, [stopTimer]);
+
   // Even out the two bots' wallet balances by moving half the difference from the richer bot to
   // the poorer one (the richer bot signs its own transfer). Over an auto-play session the funder
   // alternates but win/loss swings still skew the wallets; this lets the user square them up so
@@ -745,6 +764,7 @@ export function useBlackjackBot(): BlackjackBotGame {
     rebalance,
     startAuto,
     stopAuto,
+    backToConfig,
     newGame,
     refresh: refreshBalances,
     pollBalances,

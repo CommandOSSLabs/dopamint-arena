@@ -601,11 +601,12 @@ export default function PlayerBot() {
 
       {/* Play area: dealer-desk felt with dealer (top) and player (bottom) hands */}
       <div className="relative z-10 flex-1 w-full">
-        {/* Back button */}
+        {/* Back to the config screen (stops play; stays on config — no auto-restart).
+            Config's own back button then exits to the menu. */}
         <button
-          onClick={() => navigate("/")}
+          onClick={game.backToConfig}
           className="absolute top-4 left-4 z-30 p-2.5 text-zinc-400 hover:text-white bg-black/60 hover:bg-black/85 rounded-full border border-zinc-800/85 transition-all shadow-md active:scale-95 flex items-center justify-center cursor-pointer"
-          title="Exit to menu"
+          title="Back to bot config"
         >
           <svg
             className="w-4 h-4"
