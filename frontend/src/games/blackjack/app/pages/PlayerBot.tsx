@@ -52,6 +52,12 @@ function getChipStack(balance: number): string[] {
 // Quick-pick targets for rounds played off-chain per tunnel before it settles once.
 const ROUND_PRESETS = [5, 10, 25, 50, 100];
 
+// Auto-fund policy: a bot below MIN_BOT_BALANCE_MIST is topped up from the wallet. The
+// top-up per bot is >= the threshold so a single fund always lifts the bot above it
+// (funding less would leave it stuck below the threshold, since auto-fund runs once).
+const MIN_BOT_BALANCE_MIST = 100_000_000n; // 0.1 SUI
+const TOPUP_PER_BOT_MIST = 100_000_000; // 0.1 SUI per bot
+
 // Render MIST (bigint) as a short SUI string. 1 SUI = 1e9 MIST.
 function suiOf(mist: bigint): string {
   return (Number(mist) / 1e9).toLocaleString(undefined, {
@@ -252,20 +258,21 @@ export default function PlayerBot() {
     }
   }, [animState]);
 
-  // Wallet funding: send FUND_PER_BOT_MIST to each bot from the connected wallet's gas
+  // Wallet funding: send TOPUP_PER_BOT_MIST to each bot from the connected wallet's gas
   // coin. Persistent bot keys mean one top-up covers many games (deposits are refunded).
   const account = useCurrentAccount();
   const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
   const [walletFunding, setWalletFunding] = useState(false);
   const [walletError, setWalletError] = useState<string | null>(null);
-  // const fundTotalSui = ((FUND_PER_BOT_MIST * 2) / 1e9).toLocaleString();
 
   const fundFromWallet = async () => {
     setWalletFunding(true);
     setWalletError(null);
     const prev = balances;
     try {
-      await signAndExecute({ transaction: buildFundTx(loadOrCreateBots()) });
+      await signAndExecute({
+        transaction: buildFundTx(loadOrCreateBots(), TOPUP_PER_BOT_MIST),
+      });
       // The fullnode lags the funding tx — poll until balances climb above their pre-fund
       // value (or time out) instead of reading the stale value once.
       await game.pollBalances(prev);
@@ -301,7 +308,9 @@ export default function PlayerBot() {
   const inGame =
     phase === "opening" || phase === "playing" || phase === "settling";
   const terminal = phase === "done" || result !== null;
-  const unfunded = balances.a === 0n || balances.b === 0n;
+  // "Unfunded" = a bot is below 0.1 SUI; gates auto-fund, the play/auto buttons, and the hint.
+  const unfunded =
+    balances.a < MIN_BOT_BALANCE_MIST || balances.b < MIN_BOT_BALANCE_MIST;
 
   // Auto-pilot: wallet-fund the bots once if low, then start bot-vs-bot self-play.
   // Bots are SHARED across all blackjack windows (loadOrCreateBots reads shared
@@ -316,7 +325,7 @@ export default function PlayerBot() {
     if (unfunded) {
       if (!autoPilotRef.current) {
         autoPilotRef.current = true;
-        void fundFromWallet(); // wallet-fund only when a bot balance is 0
+        void fundFromWallet(); // top up from wallet when a bot is below 0.1 SUI
       }
       return;
     }
@@ -532,13 +541,17 @@ export default function PlayerBot() {
             </div>
           )}
 
-          <button
-            onClick={() => navigate("/")}
-            className="text-xs text-zinc-500 hover:text-white transition-colors font-semibold"
-          >
-            ← Back to menu
-          </button>
         </div>
+
+        {/* Absolute (not in the centered flow) so a long fund error can't push it out of
+            the overflow-hidden viewport — the back button must always stay reachable. */}
+        <button
+          onClick={() => navigate("/")}
+          title="Exit to menu"
+          className="absolute top-4 left-4 z-30 text-xs text-zinc-300 hover:text-white transition-colors font-semibold bg-black/60 hover:bg-black/85 px-3 py-2 rounded-full border border-zinc-800/85 shadow-md active:scale-95"
+        >
+          ← Back to menu
+        </button>
       </div>
     );
   }
