@@ -83,16 +83,19 @@ async function waitForWindowCount(sel, target, timeoutMs = 30_000) {
 async function fundIfLow(win, fundTestId, startTestId) {
   const start = win.getByTestId(startTestId);
   await start.waitFor({ state: "visible", timeout: 20_000 });
+  if (!(await start.isDisabled())) { console.log(`[arena] ${startTestId} already funded`); return; }
+  console.log(`[arena] ${startTestId} disabled → funding from wallet`);
+  await win.getByTestId(fundTestId).click();
+  await start.waitFor({ state: "visible" });
+  for (let i = 0; i < 40 && (await start.isDisabled()); i++) await page.waitForTimeout(1500);
   if (await start.isDisabled()) {
-    console.log(`[arena] ${startTestId} disabled → funding from wallet`);
-    await win.getByTestId(fundTestId).click();
-    await start.waitFor({ state: "visible" });
-    // Poll until the start control enables (balance landed) or time out.
-    for (let i = 0; i < 40 && (await start.isDisabled()); i++) {
-      await page.waitForTimeout(1500);
-    }
-  } else {
-    console.log(`[arena] ${startTestId} already funded`);
+    // Fund didn't enable Start — surface the in-window error text so the cause is visible.
+    const text = (await win.innerText().catch(() => "")) || "";
+    const errLine = text.split("\n").map(s => s.trim()).filter(Boolean)
+      .find(l => /error|insufficient|fail|gas|reject|not found|invalid/i.test(l));
+    console.log(`[arena] FUND DID NOT ENABLE ${startTestId}. window error: ${errLine ?? "(none visible — check the headed browser / a toast)"}`);
+    await page.screenshot({ path: `agent/arena-fund-fail-${startTestId}.png`, fullPage: true }).catch(() => {});
+    throw new Error(`fund did not enable ${startTestId} (see agent/arena-fund-fail-${startTestId}.png and the logged window error)`);
   }
 }
 
