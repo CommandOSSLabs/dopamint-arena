@@ -2,10 +2,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useCurrentAccount, useSignAndExecuteTransaction, useSuiClient } from "@mysten/dapp-kit";
 import { createParticipant } from "sui-tunnel-ts/core/keys";
 import { OffchainTunnel } from "sui-tunnel-ts/core/tunnel";
-import { BombItProtocol, BOMB_IT_MIN_STAKE } from "sui-tunnel-ts/protocol/bombIt";
+import { BombItProtocol } from "sui-tunnel-ts/protocol/bombIt";
 import type { BombItState, BombItMove } from "sui-tunnel-ts/protocol/bombIt";
 import { useTelemetry } from "../../telemetry/TelemetryProvider";
 import { closeCooperative, openAndFundSelfPlay, readCreatedAt } from "../../onchain/tunnelTx";
+import { useSponsoredSignExec } from "../../onchain/useSponsoredSignExec";
+import { withSponsorFallback } from "../../onchain/sponsor";
+import { DOPAMINT_COIN_TYPE, isDopamintConfigured } from "../../onchain/dopamint";
 import { deriveView, sessionResult, stepSession, type BombItResult, type BombItView } from "./session-core";
 
 /**
@@ -20,7 +23,7 @@ import { deriveView, sessionResult, stepSession, type BombItResult, type BombItV
 
 /** Per-seat locked stake (MIST). The smallest fundable stake — this is an exhibition bench that
  *  loops many games, so keep the per-game SUI footprint minimal (spec §3 testnet-SUI long-pole). */
-const STAKE = BOMB_IT_MIN_STAKE;
+const STAKE = 1_000_000_000n; // per-seat: 1 DOPAMINT (9 decimals)
 /** Render/measure cadence. Ticks are batched per frame to hit targetTps regardless of this value. */
 const FRAME_MS = 50;
 const DEFAULT_TARGET_TPS = 75;
@@ -59,6 +62,7 @@ export function useBombItBenchSession(): BombItBenchSession {
   const account = useCurrentAccount();
   const client = useSuiClient();
   const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
+  const sponsored = useSponsoredSignExec();
 
   const [status, setStatus] = useState<BenchStatus>("idle");
   const [running, setRunning] = useState(false);
@@ -192,14 +196,45 @@ export function useBombItBenchSession(): BombItBenchSession {
           const protocol = new BombItProtocol();
 
           setStatus("funding");
-          const tunnelId = await openAndFundSelfPlay({
-            reads,
-            signExec,
-            partyA: { address: a.address, publicKey: a.keyPair.publicKey },
-            partyB: { address: b.address, publicKey: b.keyPair.publicKey },
-            aAmount: STAKE,
-            bAmount: STAKE,
-          });
+          const partyA = { address: a.address, publicKey: a.keyPair.publicKey };
+          const partyB = { address: b.address, publicKey: b.keyPair.publicKey };
+          const coinType = isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined;
+          // DOPAMINT (ADR-0010): faucet both seats' stake invisibly (gas-sponsored) and stake
+          // DOPAMINT — free for a 0-SUI player. SUI path (DOPAMINT env unset): sponsored SUI stake
+          // with a sender-pays fallback (ADR-0009).
+          const tunnelId = isDopamintConfigured
+            ? await openAndFundSelfPlay({
+                reads,
+                signExec: sponsored.signExec as never,
+                partyA,
+                partyB,
+                aAmount: STAKE,
+                bAmount: STAKE,
+                coinType,
+                stakeCoinId: await sponsored.prepareStake(2n * STAKE),
+              })
+            : await withSponsorFallback(
+                async () =>
+                  openAndFundSelfPlay({
+                    reads,
+                    signExec: sponsored.signExec as never,
+                    partyA,
+                    partyB,
+                    aAmount: STAKE,
+                    bAmount: STAKE,
+                    stakeCoinId: await sponsored.selectStakeCoin(2n * STAKE),
+                  }),
+                () =>
+                  openAndFundSelfPlay({
+                    reads,
+                    signExec: signExec as never,
+                    partyA,
+                    partyB,
+                    aAmount: STAKE,
+                    bAmount: STAKE,
+                  }),
+                "bombIt bench open/fund",
+              );
           if (!runningRef.current) break;
           const createdAt = await readCreatedAt(reads, tunnelId);
 
@@ -251,7 +286,14 @@ export function useBombItBenchSession(): BombItBenchSession {
             });
           }
           const settlement = tunnel.buildSettlement(createdAt);
-          await closeCooperative({ signExec, tunnelId, settlement });
+          // DOPAMINT path closes via the gas sponsor too (free for a 0-SUI player);
+          // SUI path closes sender-pays. coinType must match the tunnel's coin.
+          await closeCooperative({
+            signExec: (isDopamintConfigured ? sponsored.signExec : signExec) as never,
+            tunnelId,
+            settlement,
+            coinType: isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined,
+          });
 
           setGamesSettled((n) => n + 1);
           setTotalUpdates(totalUpdatesRef.current);
@@ -267,7 +309,7 @@ export function useBombItBenchSession(): BombItBenchSession {
         setRunning(false);
       }
     })();
-  }, [account, client, signAndExecute, report, runTicks, stopTimer]);
+  }, [account, client, signAndExecute, sponsored, report, runTicks, stopTimer]);
 
   const stop = useCallback(() => {
     runningRef.current = false;

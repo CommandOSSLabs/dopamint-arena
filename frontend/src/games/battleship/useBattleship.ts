@@ -19,7 +19,6 @@ import {
 import { withSponsorFallback } from "../../onchain/sponsor";
 import { useSponsoredSignExec } from "../../onchain/useSponsoredSignExec";
 import { DOPAMINT_COIN_TYPE, isDopamintConfigured } from "../../onchain/dopamint";
-import { useDopamintAutoFaucet } from "../../onchain/useDopamintAutoFaucet";
 import {
   BattleshipProtocol,
   type BattleshipMove,
@@ -219,10 +218,15 @@ class BotSession {
     }
     try {
       const settlement = tunnel.buildSettlement(this.createdAt);
+      // DOPAMINT path closes via the gas sponsor too (so a 0-SUI player can close their bot
+      // game for free); SUI path closes sender-pays. coinType must match the tunnel's coin.
       await closeCooperative({
-        signExec: this.deps.signExec as never,
+        signExec: (isDopamintConfigured
+          ? this.deps.sponsoredSignExec
+          : this.deps.signExec) as never,
         tunnelId: this.tunnelId,
         settlement,
+        coinType: isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined,
       });
       this.setStatus("settled");
     } catch (e) {
@@ -426,7 +430,6 @@ export function useBattleship(windowId: string): BattleshipSession {
   const client = useSuiClient();
   const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
   const sponsored = useSponsoredSignExec();
-  useDopamintAutoFaucet(); // keep DOPAMINT topped up in the background
 
   const session = getBotSession(windowId);
   session.deps = {

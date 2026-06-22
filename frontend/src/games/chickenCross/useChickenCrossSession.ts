@@ -7,6 +7,9 @@ import type { CrossState, CrossMove } from "sui-tunnel-ts/protocol/cross";
 import { useTelemetry } from "../../telemetry/TelemetryProvider";
 import { getControlPlaneClient, type RegisterSessionResult } from "../../backend/controlPlane";
 import { closeCooperative, openAndFundSelfPlay, readCreatedAt } from "../../onchain/tunnelTx";
+import { useSponsoredSignExec } from "../../onchain/useSponsoredSignExec";
+import { withSponsorFallback } from "../../onchain/sponsor";
+import { DOPAMINT_COIN_TYPE, isDopamintConfigured } from "../../onchain/dopamint";
 import {
   deriveView,
   sessionResult,
@@ -39,6 +42,7 @@ export function useChickenCrossSession(): ChickenCrossSession {
   const account = useCurrentAccount();
   const client = useSuiClient();
   const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
+  const sponsored = useSponsoredSignExec();
 
   const [status, setStatus] = useState<SessionStatus>("idle");
   const [view, setView] = useState<CrossView | null>(null);
@@ -115,14 +119,45 @@ export function useChickenCrossSession(): ChickenCrossSession {
 
           // Open + fund BOTH bot seats in ONE wallet signature (create_and_fund).
           setStatus("funding");
-          const tunnelId = await openAndFundSelfPlay({
-            reads,
-            signExec,
-            partyA: { address: a.address, publicKey: a.keyPair.publicKey },
-            partyB: { address: b.address, publicKey: b.keyPair.publicKey },
-            aAmount: stakeBig,
-            bAmount: stakeBig,
-          });
+          const coinType = isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined;
+          const partyA = { address: a.address, publicKey: a.keyPair.publicKey };
+          const partyB = { address: b.address, publicKey: b.keyPair.publicKey };
+          // DOPAMINT (ADR-0010): faucet both seats' stake invisibly (gas-sponsored) and
+          // stake DOPAMINT — free for a 0-SUI player. SUI path (DOPAMINT env unset):
+          // sponsored SUI stake with a sender-pays fallback (ADR-0009).
+          const tunnelId = isDopamintConfigured
+            ? await openAndFundSelfPlay({
+                reads,
+                signExec: sponsored.signExec as never,
+                partyA,
+                partyB,
+                aAmount: stakeBig,
+                bAmount: stakeBig,
+                coinType,
+                stakeCoinId: await sponsored.prepareStake(2n * stakeBig),
+              })
+            : await withSponsorFallback(
+                async () =>
+                  openAndFundSelfPlay({
+                    reads,
+                    signExec: sponsored.signExec as never,
+                    partyA,
+                    partyB,
+                    aAmount: stakeBig,
+                    bAmount: stakeBig,
+                    stakeCoinId: await sponsored.selectStakeCoin(2n * stakeBig),
+                  }),
+                () =>
+                  openAndFundSelfPlay({
+                    reads,
+                    signExec: signExec as never,
+                    partyA,
+                    partyB,
+                    aAmount: stakeBig,
+                    bAmount: stakeBig,
+                  }),
+                "chickenCross open/fund",
+              );
           const createdAt = await readCreatedAt(reads, tunnelId);
 
           const tunnel = OffchainTunnel.selfPlay(
@@ -184,7 +219,12 @@ export function useChickenCrossSession(): ChickenCrossSession {
             setResult(r);
             try {
               const settlement = tunnel.buildSettlement(createdAt);
-              await closeCooperative({ signExec, tunnelId, settlement });
+              await closeCooperative({
+                signExec: (isDopamintConfigured ? sponsored.signExec : signExec) as never,
+                tunnelId,
+                settlement,
+                coinType: isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined,
+              });
               setStatus("settled");
 
               // JS is single-threaded: Stop can only interleave at the await above.

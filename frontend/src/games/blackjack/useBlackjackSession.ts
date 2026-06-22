@@ -21,6 +21,9 @@ import {
   openAndFundSelfPlay,
   readCreatedAt,
 } from "../../onchain/tunnelTx";
+import { useSponsoredSignExec } from "../../onchain/useSponsoredSignExec";
+import { withSponsorFallback } from "../../onchain/sponsor";
+import { DOPAMINT_COIN_TYPE, isDopamintConfigured } from "../../onchain/dopamint";
 import {
   deriveView,
   sessionResult,
@@ -31,6 +34,9 @@ import {
 
 /** Milliseconds between bot moves (animation pacing). */
 const STEP_MS = 900;
+
+/** Coins locked per seat when funding the tunnel on-chain. */
+const LOCKED_PER_SEAT = 1_000_000_000n; // 1 DOPAMINT per seat (9 decimals)
 
 export type SessionStatus =
   | "idle"
@@ -55,6 +61,7 @@ export function useBlackjackSession(): BlackjackSession {
   const account = useCurrentAccount();
   const client = useSuiClient();
   const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
+  const sponsored = useSponsoredSignExec();
 
   const [status, setStatus] = useState<SessionStatus>("idle");
   const [view, setView] = useState<BlackjackView | null>(null);
@@ -137,14 +144,47 @@ export function useBlackjackSession(): BlackjackSession {
           // Open + fund BOTH bot seats on-chain in ONE wallet signature (create_and_fund);
           // play then runs off-chain and settles back on-chain at the end.
           setStatus("funding");
-          const tunnelId = await openAndFundSelfPlay({
-            reads,
-            signExec,
-            partyA: { address: a.address, publicKey: a.keyPair.publicKey },
-            partyB: { address: b.address, publicKey: b.keyPair.publicKey },
-            aAmount: stakeBig,
-            bAmount: stakeBig,
-          });
+          const partyA = { address: a.address, publicKey: a.keyPair.publicKey };
+          const partyB = { address: b.address, publicKey: b.keyPair.publicKey };
+          const coinType = isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined;
+          // DOPAMINT (ADR-0010): faucet both seats' stake invisibly (gas-sponsored) and stake
+          // DOPAMINT — free for a 0-SUI player. SUI path (DOPAMINT env unset): sponsored SUI stake
+          // with a sender-pays fallback (ADR-0009).
+          const tunnelId = isDopamintConfigured
+            ? await openAndFundSelfPlay({
+                reads,
+                signExec: sponsored.signExec as never,
+                partyA,
+                partyB,
+                aAmount: LOCKED_PER_SEAT,
+                bAmount: LOCKED_PER_SEAT,
+                coinType,
+                stakeCoinId: await sponsored.prepareStake(2n * LOCKED_PER_SEAT),
+              })
+            : await withSponsorFallback(
+                async () =>
+                  openAndFundSelfPlay({
+                    reads,
+                    signExec: sponsored.signExec as never,
+                    partyA,
+                    partyB,
+                    aAmount: LOCKED_PER_SEAT,
+                    bAmount: LOCKED_PER_SEAT,
+                    stakeCoinId: await sponsored.selectStakeCoin(
+                      2n * LOCKED_PER_SEAT,
+                    ),
+                  }),
+                () =>
+                  openAndFundSelfPlay({
+                    reads,
+                    signExec: signExec as never,
+                    partyA,
+                    partyB,
+                    aAmount: LOCKED_PER_SEAT,
+                    bAmount: LOCKED_PER_SEAT,
+                  }),
+                "blackjack open/fund",
+              );
           const createdAt = await readCreatedAt(reads, tunnelId);
 
           const tunnel = OffchainTunnel.selfPlay(
@@ -216,7 +256,16 @@ export function useBlackjackSession(): BlackjackSession {
             setResult(sessionResult(tunnel.state, stakeRef.current));
             try {
               const settlement = tunnel.buildSettlement(createdAt);
-              await closeCooperative({ signExec, tunnelId, settlement });
+              // DOPAMINT path closes via the gas sponsor too (so a 0-SUI player can close for
+              // free); SUI path closes sender-pays. coinType must match the tunnel's coin.
+              await closeCooperative({
+                signExec: (isDopamintConfigured
+                  ? sponsored.signExec
+                  : signExec) as never,
+                tunnelId,
+                settlement,
+                coinType: isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined,
+              });
               setStatus("settled");
             } catch (e) {
               console.error("[blackjack] on-chain close failed:", e);
@@ -271,7 +320,7 @@ export function useBlackjackSession(): BlackjackSession {
         }
       })();
     },
-    [account, client, signAndExecute, report, stopTimer],
+    [account, client, signAndExecute, sponsored, report, stopTimer],
   );
 
   // Clean up the timer if the component unmounts mid-session.

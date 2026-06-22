@@ -36,10 +36,13 @@ import {
   openAndFundSharedTunnel,
   readCreatedAt,
 } from "../../onchain/tunnelTx";
+import { useSponsoredSignExec } from "../../onchain/useSponsoredSignExec";
+import { withSponsorFallback } from "../../onchain/sponsor";
+import { DOPAMINT_COIN_TYPE, isDopamintConfigured } from "../../onchain/dopamint";
 import { coSignedToSettleRequest } from "../../backend/settleRequest";
 
-/** Locked per seat (MIST, split off the wallet's SUI gas coin — same lane as Tic-Tac-Toe). */
-export const STAKE_BALANCE = 10_000n;
+/** Locked per seat: 1 DOPAMINT (9 decimals). */
+export const STAKE_BALANCE = 1_000_000_000n;
 /** Hands played per match before the on-chain settle; chips move off-chain in the tunnel
  *  between hands, and the loop ends early (→ "done") if a seat can't cover the next ante. */
 export const HAND_CAP = 50n;
@@ -209,6 +212,7 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
   const account = useCurrentAccount();
   const client = useSuiClient();
   const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
+  const sponsored = useSponsoredSignExec();
   const { report } = useTelemetry();
   const moveIdRef = useRef(0);
 
@@ -384,21 +388,72 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
         // 2) fund on-chain: seat A opens + funds its seat in one tx (one popup) and announces;
         //    seat B gated-deposits its own stake. Identical lane to Tic-Tac-Toe.
         setStatus("funding");
+        const partyA = { address: wallet, publicKey: ephemeral.publicKey };
+        const partyB = { address: match.opponentWallet, publicKey: oppPub };
+        const coinType = isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined;
         let tunnelId: string;
         if (match.role === "A") {
-          tunnelId = await openAndFundSharedTunnel({
-            reads,
-            signExec,
-            partyA: { address: wallet, publicKey: ephemeral.publicKey },
-            partyB: { address: match.opponentWallet, publicKey: oppPub },
-            amount: STAKE_BALANCE,
-          });
+          tunnelId = isDopamintConfigured
+            ? await openAndFundSharedTunnel({
+                reads,
+                signExec: sponsored.signExec as never,
+                partyA,
+                partyB,
+                amount: STAKE_BALANCE,
+                coinType,
+                stakeCoinId: await sponsored.prepareStake(STAKE_BALANCE),
+              })
+            : await withSponsorFallback(
+                async () =>
+                  openAndFundSharedTunnel({
+                    reads,
+                    signExec: sponsored.signExec as never,
+                    partyA,
+                    partyB,
+                    amount: STAKE_BALANCE,
+                    stakeCoinId: await sponsored.selectStakeCoin(STAKE_BALANCE),
+                  }),
+                () =>
+                  openAndFundSharedTunnel({
+                    reads,
+                    signExec: signExec as never,
+                    partyA,
+                    partyB,
+                    amount: STAKE_BALANCE,
+                  }),
+                "quantumPoker open/fund",
+              );
           mp.announceTunnel(match.matchId, tunnelId);
           channel.sendPeer({ t: "open", tunnelId });
         } else {
           const open = await waitPeer<{ tunnelId: string }>("open");
           tunnelId = open.tunnelId;
-          await depositStake({ signExec, tunnelId, amount: STAKE_BALANCE });
+          if (isDopamintConfigured) {
+            await depositStake({
+              signExec: sponsored.signExec as never,
+              tunnelId,
+              amount: STAKE_BALANCE,
+              coinType,
+              stakeCoinId: await sponsored.prepareStake(STAKE_BALANCE),
+            });
+          } else {
+            await withSponsorFallback(
+              async () =>
+                depositStake({
+                  signExec: sponsored.signExec as never,
+                  tunnelId,
+                  amount: STAKE_BALANCE,
+                  stakeCoinId: await sponsored.selectStakeCoin(STAKE_BALANCE),
+                }),
+              () =>
+                depositStake({
+                  signExec: signExec as never,
+                  tunnelId,
+                  amount: STAKE_BALANCE,
+                }),
+              "quantumPoker deposit",
+            );
+          }
         }
 
         // 3) build the distributed poker engine over the relay transport.
@@ -445,6 +500,7 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
             tunnelId,
             transcript,
             getControlPlaneClient(),
+            coinType,
           ).then(
             () => setStatus("settled"),
             (e) => {
@@ -498,7 +554,7 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
         setStatus("error");
       }
     })();
-  }, [account, client, signAndExecute, sync, maybeAutoPropose, report]);
+  }, [account, client, signAndExecute, sponsored, sync, maybeAutoPropose, report]);
 
   const self = selfPartyRef.current;
   const myHole =
@@ -581,6 +637,7 @@ async function settle(
   tunnelId: string,
   transcript: Transcript,
   cp: ReturnType<typeof getControlPlaneClient>,
+  coinType: string | undefined,
 ): Promise<void> {
   const createdAt = await readCreatedAt(reads, tunnelId);
   const root = transcript.root();
@@ -616,6 +673,11 @@ async function settle(
       "[quantum-poker] backend settle failed; falling back to wallet close:",
       e,
     );
-    await closeCooperativeWithRoot({ signExec, tunnelId, settlement: co });
+    await closeCooperativeWithRoot({
+      signExec,
+      tunnelId,
+      settlement: co,
+      coinType: isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined,
+    });
   }
 }

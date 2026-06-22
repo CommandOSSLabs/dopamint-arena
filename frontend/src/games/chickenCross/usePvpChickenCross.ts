@@ -15,10 +15,13 @@ import {
   openAndFundSharedTunnel,
   readCreatedAt,
 } from "../../onchain/tunnelTx";
+import { useSponsoredSignExec } from "../../onchain/useSponsoredSignExec";
+import { withSponsorFallback } from "../../onchain/sponsor";
+import { DOPAMINT_COIN_TYPE, isDopamintConfigured } from "../../onchain/dopamint";
 import { coSignedToSettleRequest } from "../../backend/settleRequest";
 import { deriveView, type CrossView } from "./session-core";
 
-const STAKE = 500n; // per-seat MIST
+const STAKE = 1_000_000_000n; // per-seat: 1 DOPAMINT (9 decimals)
 const STEP_MS = 300; // pacing between ticks (ms)
 
 export type PvpStatus =
@@ -75,6 +78,7 @@ export function usePvpChickenCross(): PvpChickenCross {
   const account = useCurrentAccount();
   const client = useSuiClient();
   const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
+  const sponsored = useSponsoredSignExec();
 
   const [status, setStatus] = useState<PvpStatus>("idle");
   const [role, setRole] = useState<Role | null>(null);
@@ -205,24 +209,30 @@ export function usePvpChickenCross(): PvpChickenCross {
 
           // 2) fund on-chain
           setStatus("funding");
+          const partyA = { address: wallet, publicKey: ephemeral.publicKey };
+          const partyB = { address: match.opponentWallet, publicKey: oppPub };
+          const coinType = isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined;
           let tunnelId: string;
           if (match.role === "A") {
-            tunnelId = await openAndFundSharedTunnel({
-              reads,
-              signExec,
-              partyA: { address: wallet, publicKey: ephemeral.publicKey },
-              partyB: {
-                address: match.opponentWallet,
-                publicKey: oppPub,
-              },
-              amount: STAKE,
-            });
+            tunnelId = isDopamintConfigured
+              ? await openAndFundSharedTunnel({ reads, signExec: sponsored.signExec as never, partyA, partyB, amount: STAKE, coinType, stakeCoinId: await sponsored.prepareStake(STAKE) })
+              : await withSponsorFallback(
+                  async () => openAndFundSharedTunnel({ reads, signExec: sponsored.signExec as never, partyA, partyB, amount: STAKE, stakeCoinId: await sponsored.selectStakeCoin(STAKE) }),
+                  () => openAndFundSharedTunnel({ reads, signExec: signExec as never, partyA, partyB, amount: STAKE }),
+                  "chickenCross open/fund");
             mp.announceTunnel(match.matchId, tunnelId);
             channel.sendPeer({ t: "open", tunnelId });
           } else {
             const open = await waitPeer<{ tunnelId: string }>("open");
             tunnelId = open.tunnelId;
-            await depositStake({ signExec, tunnelId, amount: STAKE });
+            if (isDopamintConfigured) {
+              await depositStake({ signExec: sponsored.signExec as never, tunnelId, amount: STAKE, coinType, stakeCoinId: await sponsored.prepareStake(STAKE) });
+            } else {
+              await withSponsorFallback(
+                async () => depositStake({ signExec: sponsored.signExec as never, tunnelId, amount: STAKE, stakeCoinId: await sponsored.selectStakeCoin(STAKE) }),
+                () => depositStake({ signExec: signExec as never, tunnelId, amount: STAKE }),
+                "chickenCross deposit");
+            }
           }
 
           // 3) build the distributed engine
@@ -298,7 +308,7 @@ export function usePvpChickenCross(): PvpChickenCross {
         }
       })();
     },
-    [account, client, signAndExecute, maybePropose],
+    [account, client, signAndExecute, sponsored, maybePropose],
   );
 
   const setDir = useCallback((dir: CrossDir) => {
@@ -355,6 +365,11 @@ async function settle(
     await cp.settle(tunnelId, coSignedToSettleRequest(co, transcript.toRecord().entries));
   } catch (e) {
     console.error("[chicken-cross] backend settle failed; falling back to wallet close:", e);
-    await closeCooperativeWithRoot({ signExec, tunnelId, settlement: co });
+    await closeCooperativeWithRoot({
+      signExec,
+      tunnelId,
+      settlement: co,
+      coinType: isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined,
+    });
   }
 }

@@ -10,10 +10,13 @@ import { Transcript } from "sui-tunnel-ts/proof/transcript";
 import { MpClient, resolveMpWsUrl, type PvpChannel, type Role } from "../../pvp/mpClient";
 import { getControlPlaneClient, resolveBackendUrl } from "../../backend/controlPlane";
 import { closeCooperativeWithRoot, depositStake, openAndFundSharedTunnel, readCreatedAt } from "../../onchain/tunnelTx";
+import { useSponsoredSignExec } from "../../onchain/useSponsoredSignExec";
+import { withSponsorFallback } from "../../onchain/sponsor";
+import { DOPAMINT_COIN_TYPE, isDopamintConfigured } from "../../onchain/dopamint";
 import { coSignedToSettleRequest } from "../../backend/settleRequest";
 import { deriveView, type BombItView } from "./session-core";
 
-const STAKE = 500n; // per-seat MIST
+const STAKE = 1_000_000_000n; // per-seat: 1 DOPAMINT (9 decimals)
 const STEP_MS = 250; // pacing between ticks (ms)
 
 export type PvpStatus = "idle" | "matching" | "funding" | "playing" | "settling" | "settled" | "error";
@@ -63,6 +66,7 @@ export function usePvpBombIt(): PvpBombIt {
   const account = useCurrentAccount();
   const client = useSuiClient();
   const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
+  const sponsored = useSponsoredSignExec();
 
   const [status, setStatus] = useState<PvpStatus>("idle");
   const [role, setRole] = useState<Role | null>(null);
@@ -180,21 +184,30 @@ export function usePvpBombIt(): PvpBombIt {
 
           // 2) fund on-chain
           setStatus("funding");
+          const partyA = { address: wallet, publicKey: ephemeral.publicKey };
+          const partyB = { address: match.opponentWallet, publicKey: oppPub };
+          const coinType = isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined;
           let tunnelId: string;
           if (match.role === "A") {
-            tunnelId = await openAndFundSharedTunnel({
-              reads,
-              signExec,
-              partyA: { address: wallet, publicKey: ephemeral.publicKey },
-              partyB: { address: match.opponentWallet, publicKey: oppPub },
-              amount: STAKE,
-            });
+            tunnelId = isDopamintConfigured
+              ? await openAndFundSharedTunnel({ reads, signExec: sponsored.signExec as never, partyA, partyB, amount: STAKE, coinType, stakeCoinId: await sponsored.prepareStake(STAKE) })
+              : await withSponsorFallback(
+                  async () => openAndFundSharedTunnel({ reads, signExec: sponsored.signExec as never, partyA, partyB, amount: STAKE, stakeCoinId: await sponsored.selectStakeCoin(STAKE) }),
+                  () => openAndFundSharedTunnel({ reads, signExec: signExec as never, partyA, partyB, amount: STAKE }),
+                  "bombIt open/fund");
             mp.announceTunnel(match.matchId, tunnelId);
             channel.sendPeer({ t: "open", tunnelId });
           } else {
             const open = await waitPeer<{ tunnelId: string }>("open");
             tunnelId = open.tunnelId;
-            await depositStake({ signExec, tunnelId, amount: STAKE });
+            if (isDopamintConfigured) {
+              await depositStake({ signExec: sponsored.signExec as never, tunnelId, amount: STAKE, coinType, stakeCoinId: await sponsored.prepareStake(STAKE) });
+            } else {
+              await withSponsorFallback(
+                async () => depositStake({ signExec: sponsored.signExec as never, tunnelId, amount: STAKE, stakeCoinId: await sponsored.selectStakeCoin(STAKE) }),
+                () => depositStake({ signExec: signExec as never, tunnelId, amount: STAKE }),
+                "bombIt deposit");
+            }
           }
 
           // 3) build the distributed engine
@@ -252,7 +265,7 @@ export function usePvpBombIt(): PvpBombIt {
         }
       })();
     },
-    [account, client, signAndExecute, maybePropose],
+    [account, client, signAndExecute, sponsored, maybePropose],
   );
 
   const queueAction = useCallback((a: BombItAction) => {
@@ -300,6 +313,6 @@ async function settle(
     await cp.settle(tunnelId, coSignedToSettleRequest(co, transcript.toRecord().entries));
   } catch (e) {
     console.error("[bomb-it] backend settle failed; falling back to wallet close:", e);
-    await closeCooperativeWithRoot({ signExec, tunnelId, settlement: co });
+    await closeCooperativeWithRoot({ signExec, tunnelId, settlement: co, coinType: isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined });
   }
 }

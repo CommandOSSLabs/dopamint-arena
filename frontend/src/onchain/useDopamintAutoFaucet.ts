@@ -1,7 +1,8 @@
 // Background DOPAMINT top-up (ADR-0010). Keeps a connected wallet's DOPAMINT balance above a
 // threshold by faucet-ing (gas-sponsored, free) whenever it drops below it — so the stake hot-path
-// (`prepareStake`) is just a coin lookup, never an in-line faucet. Mount once where the player can
-// connect (e.g. a game window or the app shell).
+// (`prepareStake`) is just a coin lookup, never an in-line faucet. Mounted ONCE app-wide via
+// {@link DopamintAutoFaucet} (inside the wallet provider), so a top-up fires the moment any wallet
+// connects — no game needs to opt in.
 import { useEffect, useRef } from "react";
 import { useCurrentAccount, useSuiClient } from "@mysten/dapp-kit";
 import {
@@ -59,4 +60,14 @@ export function useDopamintAutoFaucet(): void {
       clearInterval(id);
     };
   }, [owner, client, signExec]);
+}
+
+/**
+ * App-wide mount for the background top-up. Render ONCE inside the wallet provider (renders
+ * nothing). On wallet connect it checks the DOPAMINT balance and faucets if low — so every game
+ * gets a ready balance without each hook opting in.
+ */
+export function DopamintAutoFaucet(): null {
+  useDopamintAutoFaucet();
+  return null;
 }

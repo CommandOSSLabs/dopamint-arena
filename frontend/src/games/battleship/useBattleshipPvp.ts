@@ -36,7 +36,6 @@ import {
 import { useSponsoredSignExec } from "../../onchain/useSponsoredSignExec";
 import { withSponsorFallback } from "../../onchain/sponsor";
 import { DOPAMINT_COIN_TYPE, isDopamintConfigured } from "../../onchain/dopamint";
-import { useDopamintAutoFaucet } from "../../onchain/useDopamintAutoFaucet";
 import { coSignedToSettleRequest } from "../../backend/settleRequest";
 import { type FleetSecret, makeFleetSecret } from "./engine/selfPlay";
 import { type Placement, placementsToBoard } from "./engine/fleet";
@@ -453,7 +452,6 @@ export function useBattleshipPvp(windowId: string): BattleshipPvp {
   const client = useSuiClient();
   const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
   const sponsored = useSponsoredSignExec();
-  useDopamintAutoFaucet(); // keep DOPAMINT topped up in the background
 
   const session = getPvpSession(windowId);
   session.deps = {
