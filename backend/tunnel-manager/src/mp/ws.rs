@@ -379,6 +379,8 @@ async fn handle_authed(
             state.mp.record_checkpoint(&match_id, cp).await;
             Ok(())
         }
+        // Task 4 wires this up; reject until then so the compiler sees all arms.
+        ClientMsg::Resume { .. } => Err("not_implemented"),
         ClientMsg::Connect { .. } => Err("already_connected"),
     }
 }
