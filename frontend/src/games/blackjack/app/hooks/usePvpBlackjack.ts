@@ -21,6 +21,9 @@ import {
   buildCloseWithRootTx,
   parseTunnelId,
 } from "@/games/blackjack/app/lib/bjPvpOnchain";
+import { useSponsoredSignExec } from "@/onchain/useSponsoredSignExec";
+import { withSponsorFallback } from "@/onchain/sponsor";
+import { DOPAMINT_COIN_TYPE, isDopamintConfigured } from "@/onchain/dopamint";
 import { RelayClient } from "@/games/blackjack/app/lib/bjRelay";
 import { handValue } from "@/games/blackjack/app/lib/bjCards";
 import {
@@ -135,6 +138,7 @@ export function usePvpBlackjack(): PvpView {
   const walletAddress = account?.address ?? "";
   const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
   const { mutateAsync: signPersonalMessage } = useSignPersonalMessage();
+  const sponsored = useSponsoredSignExec();
   const proto = useMemo(() => new BlackjackBetProtocol(), []);
 
   const [phase, setPhase] = useState<PvpPhase>("idle");
@@ -228,6 +232,23 @@ export function usePvpBlackjack(): PvpView {
     [client, signAndExecute],
   );
 
+  // Sponsored submit (ADR-0009/0010): route the open/deposit tx through the backend gas sponsor —
+  // the settler pays gas, the stake stays a DOPAMINT coin. signExec returns only a digest, so we
+  // re-read the receipt (object changes + status) for the same downstream handling as `submit`.
+  const submitSponsored = useCallback(
+    async (tx: any) => {
+      const { digest } = await sponsored.signExec(tx);
+      const res = await client.waitForTransaction({
+        digest,
+        options: { showObjectChanges: true, showEffects: true },
+      });
+      if (res.effects?.status?.status !== "success")
+        throw new Error(res.effects?.status?.error ?? "tx failed");
+      return res;
+    },
+    [client, sponsored],
+  );
+
   const fund = useCallback(() => {
     void (async () => {
       if (!walletAddress) {
@@ -298,7 +319,12 @@ export function usePvpBlackjack(): PvpView {
           relay.sendApp(matchId, { t: "closed", digest: result.txDigest });
         } catch (e) {
           console.warn("[settle] Server-side settle failed, falling back to wallet submission:", e);
-          const res = await submit(buildCloseWithRootTx(t.tunnelId, coSigned));
+          // Wallet-close fallback needs the tunnel's coin type (DOPAMINT when configured); the
+          // /settle path above already sponsored the close server-side.
+          const coinType = isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined;
+          const res = await submit(
+            buildCloseWithRootTx(t.tunnelId, coSigned, coinType),
+          );
           setDigests((d) => ({ ...d, close: res.digest }));
           relay.sendApp(matchId, { t: "closed", digest: res.digest });
         }
@@ -429,21 +455,31 @@ export function usePvpBlackjack(): PvpView {
         const stakeB = m.role === "B" ? myStake : oppStake; // dealer's buy-in
         const penalty = stakeA < stakeB ? stakeA : stakeB; // unused on cooperative close; keep ≤ both deposits
 
+        // DOPAMINT path (ADR-0010): open/fund sponsored, staking the faucet token; SUI path keeps a
+        // sender-pays fallback. `coinType` also threads into the wallet-close fallback (the backend
+        // /settle close is sponsored server-side).
+        const coinType = isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined;
+
         // Roles: A = player (party A), B = dealer (party B). The DEALER (role B) opens the tunnel
         // and registers partyA = the player (the opponent), partyB = the dealer (self).
         let tunnelId: string;
         if (m.role === "B") {
           setPhase("opening");
-          const res = await submit(
-            buildCreateAndShareTx(
-              {
-                walletAddress: m.opponentWallet,
-                ephemeralPubkey: oppEphPubkey,
-              }, // partyA = player
-              { walletAddress, ephemeralPubkey: myEph.coreKey.publicKey }, // partyB = dealer (self)
-              penalty,
-            ),
-          );
+          const openA = {
+            walletAddress: m.opponentWallet,
+            ephemeralPubkey: oppEphPubkey,
+          }; // partyA = player
+          const openB = {
+            walletAddress,
+            ephemeralPubkey: myEph.coreKey.publicKey,
+          }; // partyB = dealer (self)
+          // create_and_share carries no coin (penalty is a parameter, deposits come later), so it's
+          // identical sponsored or sender-pays — route it sponsored when DOPAMINT for a 0-SUI dealer.
+          const res = isDopamintConfigured
+            ? await submitSponsored(
+                buildCreateAndShareTx(openA, openB, penalty, coinType),
+              )
+            : await submit(buildCreateAndShareTx(openA, openB, penalty));
           const id = parseTunnelId(res.objectChanges);
           if (!id) throw new Error("no tunnelId");
           tunnelId = id;
@@ -469,7 +505,26 @@ export function usePvpBlackjack(): PvpView {
         );
 
         setPhase("funding");
-        const dep = await submit(buildDepositTx(tunnelId, myStake));
+        // DOPAMINT: deposit this seat's buy-in from a faucet-minted DOPAMINT coin, sponsored (the
+        // faucet itself needs the sponsor, so no sender-pays fallback). SUI: sponsored stake with a
+        // sender-pays fallback (ADR-0009).
+        const dep = isDopamintConfigured
+          ? await submitSponsored(
+              buildDepositTx(tunnelId, myStake, {
+                coinType,
+                stakeCoinId: await sponsored.prepareStake(myStake),
+              }),
+            )
+          : await withSponsorFallback(
+              async () =>
+                submitSponsored(
+                  buildDepositTx(tunnelId, myStake, {
+                    stakeCoinId: await sponsored.selectStakeCoin(myStake),
+                  }),
+                ),
+              () => submit(buildDepositTx(tunnelId, myStake)),
+              "blackjack pvp deposit",
+            );
         setDigests((d) => ({ ...d, deposit: dep.digest }));
         let activated = false;
         for (let i = 0; i < 40; i++) {
@@ -628,7 +683,7 @@ export function usePvpBlackjack(): PvpView {
         setPhase("error");
       }
     },
-    [client, proto, submit, signPersonalMessage, walletAddress, finishSettle, flushHeartbeat],
+    [client, proto, submit, submitSponsored, sponsored, signPersonalMessage, walletAddress, finishSettle, flushHeartbeat],
   );
   onMatchRef.current = onMatch;
 

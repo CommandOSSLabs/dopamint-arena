@@ -36,10 +36,29 @@ export function buildCreateAndShareTx(
   return tx;
 }
 
-/** Fund this seat's bankroll from its own gas coin (signed by the seat's own keypair). */
-export function buildDepositTx(tunnelId: string, amount: bigint): Transaction {
+/**
+ * Fund this seat's bankroll. With `stakeCoinId` the stake splits off that user coin (DOPAMINT /
+ * gas-sponsored path — a sponsored tx has no gas coin to split); without it, off the gas coin
+ * (SUI fallback). `coinType` selects the staked token (defaults to SUI).
+ */
+export function buildDepositTx(
+  tunnelId: string,
+  amount: bigint,
+  opts?: { coinType?: string; stakeCoinId?: string },
+): Transaction {
   const tx = new Transaction();
-  onchain.buildDepositFromGas(tx as unknown as SdkTx, { tunnelId, amount });
+  if (opts?.stakeCoinId) {
+    const [coin] = tx.splitCoins(tx.object(opts.stakeCoinId), [
+      tx.pure.u64(amount),
+    ]);
+    onchain.buildDeposit(tx as unknown as SdkTx, {
+      tunnelId,
+      coin,
+      coinType: opts.coinType,
+    });
+  } else {
+    onchain.buildDepositFromGas(tx as unknown as SdkTx, { tunnelId, amount });
+  }
   return tx;
 }
 
@@ -47,13 +66,14 @@ export function buildDepositTx(tunnelId: string, amount: bigint): Transaction {
 export function buildCloseTx(
   tunnelId: string,
   settlement: core.CoSignedSettlement,
+  coinType: string = SUI,
 ): Transaction {
   const tx = new Transaction();
   onchain.buildCloseFromSettlement(
     tx as unknown as SdkTx,
     tunnelId,
     settlement,
-    SUI,
+    coinType,
   );
   return tx;
 }
@@ -62,13 +82,14 @@ export function buildCloseTx(
 export function buildCloseWithRootTx(
   tunnelId: string,
   settlement: core.CoSignedSettlementWithRoot,
+  coinType: string = SUI,
 ): Transaction {
   const tx = new Transaction();
   onchain.buildCloseWithRootFromSettlement(
     tx as unknown as SdkTx,
     tunnelId,
     settlement,
-    SUI,
+    coinType,
   );
   return tx;
 }
