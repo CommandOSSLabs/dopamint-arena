@@ -385,6 +385,7 @@ export default function PlayerBot() {
           if (e.target.value !== "custom") setMaxRounds(Number(e.target.value));
         }}
         disabled={inGame}
+        data-testid="bj-max-rounds"
         className="bg-zinc-900 border border-zinc-700 text-white text-xs font-mono rounded-md px-2 py-1.5 focus:outline-none focus:border-[#d4af37] disabled:opacity-50 disabled:pointer-events-none cursor-pointer"
       >
         {ROUND_PRESETS.map((n) => (

@@ -150,6 +150,7 @@ function GamesPerTunnelChoice({
           if (Number.isFinite(n)) onChange(n);
         }}
         aria-label="Custom games per tunnel"
+        data-testid="ttt-max-games"
         className={`border-primary rounded-xl bg-surface text-primary font-label-sm tabular-nums text-center ${
           isPortrait
             ? "w-16 px-2 py-2 border-4 text-sm rounded-lg"
