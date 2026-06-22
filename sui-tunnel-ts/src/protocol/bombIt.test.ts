@@ -15,6 +15,7 @@ import {
   BOMB_IT_MIN_STAKE,
   BLAST_RADIUS,
   FUSE_TICKS,
+  SPAWN_B,
   dest,
   canMoveTo,
   blastCellsFor,
@@ -27,7 +28,7 @@ import {
 
 test("border ring and interior even-even cells are walls", () => {
   assert.equal(isBorder(0, 3), true);
-  assert.equal(isBorder(8, 8), true);
+  assert.equal(isBorder(GRID_H - 1, GRID_W - 1), true);
   assert.equal(isBorder(4, 4), false);
   assert.equal(isPillar(2, 2), true);
   assert.equal(isPillar(1, 1), false); // spawn cell is floor
@@ -42,12 +43,20 @@ test("buildGrid: border + lattice are walls, spawns are floor", () => {
   }
   assert.equal(g[idx(2, 2)], CELL_WALL); // pillar
   assert.equal(g[idx(1, 1)], CELL_FLOOR); // spawn A
-  assert.equal(g[idx(7, 7)], CELL_FLOOR); // spawn B
+  assert.equal(g[idx(SPAWN_B.row, SPAWN_B.col)], CELL_FLOOR); // spawn B
 });
 
 test("buildGrid keeps the spawn escape L crate-free", () => {
   const g = buildGrid(987654n);
-  for (const [r, c] of [[1, 1], [1, 2], [2, 1], [7, 7], [7, 6], [6, 7]]) {
+  const escapeL: Array<[number, number]> = [
+    [1, 1],
+    [1, 2],
+    [2, 1],
+    [SPAWN_B.row, SPAWN_B.col],
+    [SPAWN_B.row, SPAWN_B.col - 1],
+    [SPAWN_B.row - 1, SPAWN_B.col],
+  ];
+  for (const [r, c] of escapeL) {
     assert.notEqual(g[idx(r, c)], CELL_CRATE, `(${r},${c}) must be crate-free`);
   }
 });
@@ -148,7 +157,7 @@ test("initialState locks the total, spawns two living players, no bombs/winner",
   assert.equal(s.players[1].alive, true);
   assert.equal(s.bombs.length, 0);
   assert.equal(s.winner, null);
-  assert.equal(s.grid.length, 81);
+  assert.equal(s.grid.length, GRID_W * GRID_H);
 });
 
 test("encodeState is canonical and starts with the domain tag", () => {
@@ -258,7 +267,7 @@ test("applyMove throws on a terminal state and on a forged opponent field", () =
   assert.throws(() => p.applyMove(s, { a: "north" }, "B")); // B may not submit A's action
 });
 
-test("the tick cap forces a draw and conserves balances across a full playout", () => {
+test("a full hunter-bot playout terminates (kill or cap) and conserves balances every tick", () => {
   const p = new BombItProtocol();
   let s = p.initialState(CTX);
   const rng = mulberry32ForTest(5);

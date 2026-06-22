@@ -22,9 +22,13 @@ import { u64ToBeBytes } from "../core/wire";
 // ============================================
 // CONFIG
 // ============================================
-export const GRID_W = 9;
-export const GRID_H = 9;
-export const CELL_COUNT = GRID_W * GRID_H; // 81
+// Board is a classic Bomberman lattice: odd dimensions so the border ring + even-even
+// pillars leave odd-odd interior cells (incl. both spawn corners) as floor. 29x29 = 841
+// cells ~ 10x the original 9x9 — a big arena so two survival bots roam (and stay alive)
+// for the full tick budget instead of colliding in seconds.
+export const GRID_W = 29;
+export const GRID_H = 29;
+export const CELL_COUNT = GRID_W * GRID_H; // 841
 
 export const CELL_FLOOR = 0;
 export const CELL_WALL = 1;
@@ -33,13 +37,17 @@ export const CELL_CRATE = 2;
 export const FUSE_TICKS = 8;
 export const BLAST_RADIUS = 2;
 export const MAX_BOMBS_PER_PLAYER = 1;
-export const CRATE_DENSITY = 0.75;
-export const BOMB_IT_TICK_CAP = 400n;
+/** Sparser crates than the small board so the big arena stays traversable (bots roam/survive). */
+export const CRATE_DENSITY = 0.35;
+/** Fixed match budget: ~30s at the batched self-play rate (~180 ticks/s); the cap forces a
+ *  decisive end (a kill, else a draw) so a solo match runs long and steady, not 5 seconds. */
+export const BOMB_IT_TICK_CAP = 5400n;
 /** Minimum fundable stake per seat (hook clamps to this). */
 export const BOMB_IT_MIN_STAKE = 100n;
 
 export const SPAWN_A = { row: 1, col: 1 };
-export const SPAWN_B = { row: 7, col: 7 };
+/** 180°-mirror corner of SPAWN_A; odd,odd ⇒ floor (not a pillar). */
+export const SPAWN_B = { row: GRID_H - 2, col: GRID_W - 2 };
 
 export type BombItAction = "north" | "south" | "east" | "west" | "bomb" | "stay";
 
@@ -110,10 +118,12 @@ export function isBorder(row: number, col: number): boolean {
 export function isPillar(row: number, col: number): boolean {
   return row % 2 === 0 && col % 2 === 0;
 }
-/** Spawn escape cells kept crate-free (A's, plus B's 180° mirror). */
+/** Spawn escape cells kept crate-free (A's L, plus B's 180° mirror), relative to the grid. */
 export function inSpawnSafe(row: number, col: number): boolean {
+  const br = GRID_H - 2;
+  const bc = GRID_W - 2;
   const a = (row === 1 && col === 1) || (row === 1 && col === 2) || (row === 2 && col === 1);
-  const b = (row === 7 && col === 7) || (row === 7 && col === 6) || (row === 6 && col === 7);
+  const b = (row === br && col === bc) || (row === br && col === bc - 1) || (row === br - 1 && col === bc);
   return a || b;
 }
 
@@ -258,6 +268,85 @@ function spawn(row: number, col: number): BombItPlayer {
   return { row, col, alive: true };
 }
 
+/** Cells any live bomb will cover when it detonates — a conservative danger map the bots avoid. */
+function dangerCells(grid: Uint8Array, bombs: BombItBomb[]): Set<number> {
+  const d = new Set<number>();
+  for (const b of bombs) for (const ci of blastCellsFor(grid, b)) d.add(ci);
+  return d;
+}
+
+function manhattan(a: { row: number; col: number }, b: { row: number; col: number }): number {
+  return Math.abs(a.row - b.row) + Math.abs(a.col - b.col);
+}
+
+/**
+ * Hunter self-play policy: pursue the opponent, BOMB crates to tunnel toward them, and bomb to
+ * attack when they're in blast line — but always keep a safe escape, and flee any live blast, so
+ * bots fight decisively (kills, not stalemate draws) without suiciding. Move choice is RNG-driven
+ * so the two seats diverge; the chosen action is what gets co-signed, so replay stays deterministic.
+ */
+function hunterAction(s: BombItState, by: Party, rng: () => number): BombItAction {
+  const i = by === "A" ? 0 : 1;
+  const p = s.players[i];
+  const other = s.players[i === 0 ? 1 : 0];
+  if (!p.alive) return "stay";
+
+  const danger = dangerCells(s.grid, s.bombs);
+  const dirs: BombItAction[] = ["north", "south", "east", "west"];
+  const moves = dirs.filter((d) => {
+    const [nr, nc] = dest(p.row, p.col, d);
+    return canMoveTo(s.grid, s.bombs, other, nr, nc);
+  });
+  const safe = moves.filter((d) => {
+    const [nr, nc] = dest(p.row, p.col, d);
+    return !danger.has(idx(nr, nc));
+  });
+  const pick = (xs: BombItAction[]) => xs[Math.floor(rng() * xs.length)];
+
+  // 1) Survive: never sit in a blast — flee to safety (any exit if no safe one).
+  if (danger.has(idx(p.row, p.col))) {
+    if (safe.length) return pick(safe);
+    if (moves.length) return pick(moves);
+    return "stay";
+  }
+
+  const liveOwn = s.bombs.filter((b) => b.owner === by).length;
+  const hereBomb = s.bombs.some((b) => b.row === p.row && b.col === p.col);
+  const canBomb = liveOwn < MAX_BOMBS_PER_PLAYER && !hereBomb;
+  const hasEscape = () => {
+    const future = new Set(blastCellsFor(s.grid, { row: p.row, col: p.col, fuse: 0, owner: by }));
+    return moves.some((d) => {
+      const [nr, nc] = dest(p.row, p.col, d);
+      return !future.has(idx(nr, nc)) && !danger.has(idx(nr, nc));
+    });
+  };
+  const crateInDir = (d: BombItAction) => {
+    const [nr, nc] = dest(p.row, p.col, d);
+    return nr >= 0 && nr < GRID_H && nc >= 0 && nc < GRID_W && s.grid[idx(nr, nc)] === CELL_CRATE;
+  };
+
+  // 2) Attack: opponent in line within blast reach → bomb (only with an escape).
+  const dist = manhattan(p, other);
+  const inLine = other.alive && (p.row === other.row || p.col === other.col) && dist <= BLAST_RADIUS + 1;
+  if (canBomb && inLine && hasEscape()) return "bomb";
+
+  // 3) Pursue: prefer a safe move that closes the distance.
+  const toward = dirs.filter((d) => {
+    const [nr, nc] = dest(p.row, p.col, d);
+    return manhattan({ row: nr, col: nc }, other) < dist;
+  });
+  const towardSafe = toward.filter((d) => safe.includes(d));
+  if (towardSafe.length) return pick(towardSafe);
+
+  // 4) Path blocked toward the opponent by a crate → bomb it open (with an escape).
+  if (canBomb && toward.some(crateInDir) && hasEscape()) return "bomb";
+
+  // 5) Keep moving; occasionally bomb an adjacent crate to keep opening the arena.
+  if (canBomb && dirs.some(crateInDir) && rng() < 0.12 && hasEscape()) return "bomb";
+  if (safe.length) return pick(safe);
+  return "stay";
+}
+
 export class BombItProtocol implements Protocol<BombItState, BombItMove> {
   readonly name = "bomb_it.v1";
 
@@ -363,18 +452,7 @@ export class BombItProtocol implements Protocol<BombItState, BombItMove> {
 
   randomMove(s: BombItState, by: Party, rng: () => number): BombItMove | null {
     if (this.isTerminal(s)) return null;
-    const i = by === "A" ? 0 : 1;
-    const p = s.players[i];
-    const field = (action: BombItAction): BombItMove => (by === "A" ? { a: action } : { b: action });
-    if (!p.alive) return field("stay");
-    const choices: BombItAction[] = ["stay"];
-    for (const d of ["north", "south", "east", "west"] as BombItAction[]) {
-      const [nr, nc] = dest(p.row, p.col, d);
-      if (canMoveTo(s.grid, s.bombs, s.players[i === 0 ? 1 : 0], nr, nc)) choices.push(d);
-    }
-    const liveOwn = s.bombs.filter((b) => b.owner === by).length;
-    const hereBomb = s.bombs.some((b) => b.row === p.row && b.col === p.col);
-    if (liveOwn < MAX_BOMBS_PER_PLAYER && !hereBomb) choices.push("bomb");
-    return field(choices[Math.floor(rng() * choices.length)]);
+    const action = hunterAction(s, by, rng);
+    return by === "A" ? { a: action } : { b: action };
   }
 }

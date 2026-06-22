@@ -31,10 +31,13 @@ import { u64ToBeBytes } from "../core/wire";
 export const COLUMN_COUNT = 9;
 /** Spawn / respawn column (center). */
 export const SPAWN_COL = 4;
-/** First chicken to reach this lane wins the pot. */
-export const WIN_LANE = 20;
-/** Hard upper bound on ticks; on reaching it the higher score wins (tie ⇒ push). */
-export const TICK_CAP = 600n;
+/** Finish line — reachable within the tick budget so a race ends DECISIVELY (first chicken to
+ *  cross takes the pot), not in a score-tie push. Tuned to ~30s of progress at the self-play
+ *  rate; far enough that the two bots rarely dead-heat to the same tick. */
+export const WIN_LANE = 1200;
+/** Backstop only: if a race stalls and neither chicken crosses, the higher score wins at this
+ *  cap (tie ⇒ push). Normal races finish well before it. */
+export const TICK_CAP = 5400n;
 /** Ticks of collision immunity after a respawn (also blocks moving, per the reference). */
 export const RESPAWN_INVULN = 3;
 /** Minimum fundable stake per seat (hook clamps to this). */
@@ -237,19 +240,20 @@ function greedyDir(s: CrossState, i: number, rng: () => number): CrossDir | unde
   const p = s.players[i];
   if (p.invulnTicks > 0) return undefined;
   const tick = s.tick + 1n;
-  const order: CrossDir[] = rng() < 0.5 ? ["north", "east", "west"] : ["north", "west", "east"];
+  // Seat-biased exploration (A drifts east, B drifts west) so the chickens take different hazard
+  // timings and a clear leader emerges — fewer dead-heat pushes. North (forward) always first.
+  const near: CrossDir = i === 0 ? "east" : "west";
+  const far: CrossDir = i === 0 ? "west" : "east";
+  const order: CrossDir[] = rng() < 0.8 ? ["north", near, far] : ["north", far, near];
   for (const d of order) {
     const [nl, nc] = destOf(p.lane, p.col, d);
     if (!isLethal(s.seed, nc, nl, tick)) return d;
   }
-  // Staying put is fine if our current cell survives the next tick.
-  if (!isLethal(s.seed, p.col, p.lane, tick)) return undefined;
-  // Forced: accept any non-lethal cell, including backward.
-  for (const d of ["north", "east", "west", "south"] as CrossDir[]) {
-    const [nl, nc] = destOf(p.lane, p.col, d);
-    if (!isLethal(s.seed, nc, nl, tick)) return d;
-  }
-  return undefined; // doomed this tick; will respawn
+  // Keep moving rather than idle (the chicken never stops): back up if it's safe.
+  const [sl, sc] = destOf(p.lane, p.col, "south");
+  if (!isLethal(s.seed, sc, sl, tick)) return "south";
+  // Every neighbor is lethal: hold if our current cell survives, else we're doomed (respawn).
+  return undefined;
 }
 
 // ============================================
