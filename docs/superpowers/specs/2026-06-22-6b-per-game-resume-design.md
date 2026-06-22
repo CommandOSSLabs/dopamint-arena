@@ -11,7 +11,7 @@ four, finishes the **blackjack `bjRelay → MpClient` migration**, and ships a
 **reusable adapter integration guide** so future games get resume by implementing one
 adapter + one spec.
 
-**Out of scope:** Task 7 (on-chain settlement floor — unilateral settle + 60s grace
+**Out of scope:** Task 7 (on-chain settlement floor — unilateral settle + 1h grace
 timer). It gets its own spec. Attestation unification (a teammate is folding bjRelay's
 attested hello into MpClient across the team separately) — this work **drops**
 blackjack's attestation to match the other three games' v1 self-asserted hello.

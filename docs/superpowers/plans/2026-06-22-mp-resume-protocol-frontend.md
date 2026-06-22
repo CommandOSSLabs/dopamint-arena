@@ -18,8 +18,8 @@ These apply to every task. Exact values copied from the spec/design/ADR.
 - **Per-move cost is unchanged.** Zero per-move signature verification beyond the existing `onMove`/`onAck` co-sign; zero per-move Redis/on-chain ops; the relay payload stays opaque and byte-for-byte. The only per-move addition is marking the resume record dirty; the `localStorage` write is debounced/coalesced off the hot path.
 - **Signature verification (`adoptCheckpoint`) happens at resume time only.**
 - **No new server message types.** Reconciliation rides the existing peer-message side channel via a new `resync` `PeerMessage` variant.
-- **60s grace is a frontend constant.** The server never ends a match.
-- **On-chain `timeout_ms` = `86_400_000n` (24h)** for every PvP tunnel (`frontend/src/games/ticTacToe/app/lib/pvpOnchain.ts:33`, `blackjack/app/lib/bjPvpOnchain.ts:32`, `frontend/src/onchain/tunnelTx.ts` default). 24h ≫ the 60s grace, so a post-grace settle is always contestable by a late-returning peer. **No timeout change needed.**
+- **1h grace is a frontend constant (`3_600_000` ms).** The server never ends a match.
+- **On-chain `timeout_ms` = `86_400_000n` (24h)** for every PvP tunnel (`frontend/src/games/ticTacToe/app/lib/pvpOnchain.ts:33`, `blackjack/app/lib/bjPvpOnchain.ts:32`, `frontend/src/onchain/tunnelTx.ts` default). 24h ≫ the 1h grace, so a post-grace settle is always contestable by a late-returning peer. **No timeout change needed.**
 - **Framework discipline (CLAUDE.md):** `sui-tunnel-ts` is upstream-authoritative. The SDK additions are additive, minimal, and the genuinely-missing capability resume needs — not a refactor. Keep it on pnpm + prettier + `node:test` via tsx; co-locate `*.test.ts`.
 - **`RelayClient` is deprecated, not deleted** — marked `@deprecated` (both `app/lib/pvpRelay.ts` and its `packages/client/` copy), left in the tree.
 - **bigints serialize via a JSON replacer/reviver** in persistence (a `__bigint__` sentinel); the on-chain wire fields (`stateHash`, balances, nonce, timestamp) persist as hex / decimal strings.
@@ -27,7 +27,7 @@ These apply to every task. Exact values copied from the spec/design/ADR.
 
 ## Open items — resolved during planning
 
-- **Exact `timeout_ms`:** 24h (`86_400_000n`) — confirmed above; ≥ 60s, no change.
+- **Exact `timeout_ms`:** 24h (`86_400_000n`) — confirmed above; ≥ 1h, no change.
 - **Unilateral settle entrypoint + args:** `raise_dispute` then `force_close`. `sui-tunnel-ts/src/onchain/txbuilders.ts` already ships `buildRaiseDisputeFromUpdate(tx, tunnelId, u: CoSignedUpdate, raiser: Party, coinType?)` (submits the both-signed latest state; counterparty sig is selected by `raiser`) and `buildForceClose(tx, { tunnelId, coinType? })` (finalizes after the on-chain timeout, raiser only). The FE only **surfaces** these in `frontend/src/onchain/tunnelTx.ts` (Task 7), mirroring the existing `closeCooperative` cast pattern.
 - **`encodeState` is a one-way digest input for resume purposes.** Every game's `encodeState` is a canonical byte concat over **public** state and omits local/derived fields (battleship fleet, poker slot secrets, poker hole cards). So **every adapter owns full-state JSON (de)serialization** — `adoptCheckpoint` re-binds by asserting `blake2b256(encodeState(deserialized)) === stateHash`. Uniform across all four games.
 - **Helper location:** SDK reconcile in `sui-tunnel-ts/src/core/reconcile.ts`; FE persistence in `frontend/src/pvp/resume.ts`; the shared handshake/adapter driver in `frontend/src/pvp/resumeSession.ts`. The **in-memory active-match registry lives inside `MpClient`** (connection-lifecycle state); the **persisted active-tunnel index lives in `resume.ts`** (durable game state).
@@ -54,7 +54,7 @@ These apply to every task. Exact values copied from the spec/design/ADR.
 - `sui-tunnel-ts/src/core/reconcile.test.ts` — decision-table units.
 - `frontend/src/pvp/resume.ts` — `ResumeRecord`, wire conversions, bigint JSON, debounced `localStorage` persistence, active-tunnel index, TTL eviction (Layer C persistence).
 - `frontend/src/pvp/resume.test.ts` — persistence + restore units.
-- `frontend/src/pvp/resumeSession.ts` — `ResumeAdapter` interface, `attachResume` driver, `restoreInto`, `resync` build/handle, 60s grace timer (Layer C driver).
+- `frontend/src/pvp/resumeSession.ts` — `ResumeAdapter` interface, `attachResume` driver, `restoreInto`, `resync` build/handle, 1h grace timer (Layer C driver).
 - `frontend/src/pvp/resumeSession.test.ts` — cross-client drop→reconnect→reconcile integration; grace-timer unit.
 - `frontend/src/pvp/mpClient.test.ts` — reconnect-loop units (mocked `WebSocket`).
 - `frontend/src/pvp/mpClientFrameParity.test.ts` — frame + peer-message round-trip across two `MpClient`s (migration gate).
@@ -1913,9 +1913,9 @@ git commit -m "feat(pvp): add per-game resume adapters"
 
 ---
 
-### Task 7: Settlement floor — unilateral settle + 60s grace timer
+### Task 7: Settlement floor — unilateral settle + 1h grace timer
 
-When the peer never returns (or equivocates), the present seat settles on-chain from the last co-signed checkpoint it holds. Surface the SDK's existing unilateral `raise_dispute` → `force_close` builders in `frontend/src/onchain/tunnelTx.ts` (today wires cooperative close only), and add the 60s FE grace timer to `attachResume` so `peer.dropped` → grace → settle offer.
+When the peer never returns (or equivocates), the present seat settles on-chain from the last co-signed checkpoint it holds. Surface the SDK's existing unilateral `raise_dispute` → `force_close` builders in `frontend/src/onchain/tunnelTx.ts` (today wires cooperative close only), and add the 1h FE grace timer to `attachResume` so `peer.dropped` → grace → settle offer.
 
 **Files:**
 - Modify: `frontend/src/onchain/tunnelTx.ts` (add `raiseDisputeUnilateral` + `forceCloseAfterTimeout`)
@@ -1927,7 +1927,7 @@ When the peer never returns (or equivocates), the present seat settles on-chain 
 - Produces:
   - `raiseDisputeUnilateral(opts: { signExec: SignExec; tunnelId: string; update: CoSignedUpdate; role: Party }): Promise<string>` — stakes the both-signed latest state on-chain (opens the dispute/timeout window).
   - `forceCloseAfterTimeout(opts: { signExec: SignExec; tunnelId: string }): Promise<string>` — finalizes after the on-chain `timeout_ms` (24h), paying out the staked split.
-  - `attachResume` gains `graceMs?` (default `60_000`) + `onGraceExpired?: (latest: CoSignedUpdate | null) => void`; the timer starts on `peer.dropped`, cancels on `resume.ok(peerOnline)`/`peer.resumed`.
+  - `attachResume` gains `graceMs?` (default `3_600_000`, i.e. 1h) + `onGraceExpired?: (latest: CoSignedUpdate | null) => void`; the timer starts on `peer.dropped`, cancels on `resume.ok(peerOnline)`/`peer.resumed`.
 
 - [ ] **Step 1: Write the failing grace-timer test**
 
@@ -1954,7 +1954,7 @@ test("peer.dropped starts a grace timer; peer return cancels it; expiry offers s
     mp: fakeMp as never, channel: channel as never, tunnel,
     adapter: { serializeState: (s: unknown) => s, deserializeState: (j: unknown) => j, onReconciled() {} } as never,
     identity: { matchId: "m1", tunnelId: "0xT", role: "A", game: "g", opponentWallet: "0xb", opponentPubkeyHex: "ab" },
-    graceMs: 60_000, onGraceExpired: (l) => { expired = l; },
+    graceMs: 3_600_000, onGraceExpired: (l) => { expired = l; },
     timers: { setTimeout: sched.set as never, clearTimeout: sched.clear as never },
   } as never);
 
@@ -1999,7 +1999,7 @@ export interface AttachResumeArgs<State, Move> {
 Inside `attachResume`, after the existing subscriptions, add:
 
 ```ts
-  const graceMs = args.graceMs ?? 60_000;
+  const graceMs = args.graceMs ?? 3_600_000;
   const timers = args.timers ?? { setTimeout, clearTimeout };
   let graceHandle: unknown = null;
   const cancelGrace = () => { if (graceHandle != null) { timers.clearTimeout(graceHandle); graceHandle = null; } };
@@ -2107,8 +2107,8 @@ git commit -m "feat(pvp): surface unilateral settle and grace timer"
 - **Layer A — `adoptCheckpoint` + `snapshot`** → Task 1 (plus `seatPending`/`resendPending`, the deterministic re-send primitives the "decide before touching transport" rule requires). **Generic `reconcile` engine + decision table** → Task 2.
 - **Layer B — reconnect loop (backoff+jitter), `resume`/`queue.join` on reconnect, `resume.ok`/`peer.resumed`/`peer.dropped` typed events, active-match registry, survive relay-handler re-bind** → Task 3. **ttt/caro migration onto MpClient + `@deprecated` RelayClient + frame-envelope parity** → Task 4.
 - **Layer C — persistence helper (`ResumeRecord`, debounced write, `pagehide` flush, bigint replacer/reviver, cold-load restore, active-tunnel index, 6h TTL eviction)** → Task 5. **Per-game adapters (ttt/caro, blackjack, battleship-with-fleet-secret, quantum poker) + `resync` PeerMessage variant + reconciliation handshake** → Task 6.
-- **Settlement floor — surface unilateral `raise_dispute`/`force_close` in `tunnelTx.ts`; wire 60s grace timer to `peer.dropped`; equivocation falls through the same path** → Task 7.
+- **Settlement floor — surface unilateral `raise_dispute`/`force_close` in `tunnelTx.ts`; wire 1h grace timer to `peer.dropped`; equivocation falls through the same path** → Task 7.
 - **Performance invariants** (zero per-move sig verify beyond `onMove`/`onAck`, zero per-move Redis/on-chain, opaque byte-identical relay, no new server messages, sig verify at resume only) → enforced by the design and checked in Final Verification.
-- **Open items** (timeout 24h ≥ 60s; `raise_dispute`→`force_close` from a `CoSignedUpdate`; encodeState treated as one-way so adapters own (de)serialization; helper module split) → resolved in the front-matter and grounded in code.
+- **Open items** (timeout 24h ≥ 1h; `raise_dispute`→`force_close` from a `CoSignedUpdate`; encodeState treated as one-way so adapters own (de)serialization; helper module split) → resolved in the front-matter and grounded in code.
 - **Testing strategy** maps: SDK units (Tasks 1–2), persistence + restore units (Task 5), MpClient reconnect units (Task 3), cross-client drop→reconnect→reconcile integration (Task 6A), battleship secret test (Task 6B), ttt frame-envelope parity (Task 4), grace-timer unit (Task 7).
 - **Discrepancies surfaced:** blackjack is on `bjRelay` (not `MpClient`) → migrated in Task 6B; frontend tests are `node:test` (not bun) → `src/pvp` glob added in Task 3.
