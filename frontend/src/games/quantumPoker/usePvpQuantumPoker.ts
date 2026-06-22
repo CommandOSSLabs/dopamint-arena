@@ -29,6 +29,7 @@ import {
 import {
   getControlPlaneClient,
   resolveBackendUrl,
+  type RegisterSessionResult,
 } from "../../backend/controlPlane";
 import {
   closeCooperativeWithRoot,
@@ -37,21 +38,18 @@ import {
   readCreatedAt,
 } from "../../onchain/tunnelTx";
 import { coSignedToSettleRequest } from "../../backend/settleRequest";
+import {
+  QUANTUM_POKER_HAND_CAP,
+  QUANTUM_POKER_STAKE,
+} from "./constants";
 
 /** Locked per seat (MIST, split off the wallet's SUI gas coin — same lane as Tic-Tac-Toe). */
-export const STAKE_BALANCE = 10_000n;
+export const STAKE_BALANCE = QUANTUM_POKER_STAKE;
 /** Hands played per match before the on-chain settle; chips move off-chain in the tunnel
  *  between hands, and the loop ends early (→ "done") if a seat can't cover the next ante. */
-export const HAND_CAP = 50n;
-/** Pacing for the auto-driven commit/reveal "plumbing" moves so phases (and the showdown) are
- *  readable — cards flip one street at a time instead of flashing to the result instantly. */
-const PLUMBING_DELAY_MS = 300;
-/** The showdown hole-card reveal is paced 2x slower than the other plumbing reveals so the
- *  climactic reveal lands instead of flashing past. */
-const SHOWDOWN_DELAY_MS = PLUMBING_DELAY_MS * 2;
-/** The hand-over result holds the longest — a ~5s pause on the win/loss before the next hand is
- *  dealt, so the outcome clearly registers. */
-const HAND_OVER_DELAY_MS = 5_000;
+export const HAND_CAP = QUANTUM_POKER_HAND_CAP;
+/** Demo mode runs plumbing/hand transitions immediately so throughput is visible in tx/sec. */
+const HAND_STEP_DELAY_MS = 0;
 /** Matchmaking queue id — both seats must request the same game. */
 const GAME_ID = "quantum-poker";
 /** Auto check (else fold) if a seat doesn't act within this many seconds. */
@@ -229,6 +227,10 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
   const autoNonceRef = useRef<bigint>(-1n);
   const transcriptRef = useRef<Transcript | null>(null);
   const channelRef = useRef<PvpChannel | null>(null);
+  const sessionRef = useRef<RegisterSessionResult | null>(null);
+  const moveCountRef = useRef(0);
+  const actionsRef = useRef(0);
+  const lastHeartbeatRef = useRef(0);
   // Early-end: once either seat asks to settle, stop dealing new hands and close at the next clean
   // hand boundary. `settlingRef` guards the single close; `settleNowRef` lets the button/peer
   // message trigger the close (which lives in findMatch's closure) when we're already at hand_over.
@@ -252,6 +254,10 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
     autoNonceRef.current = -1n;
     transcriptRef.current = null;
     channelRef.current = null;
+    sessionRef.current = null;
+    moveCountRef.current = 0;
+    actionsRef.current = 0;
+    lastHeartbeatRef.current = 0;
     endRef.current = false;
     settlingRef.current = false;
     settleNowRef.current = null;
@@ -279,12 +285,6 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
     const move = driver.chooseMove(dt.state, secureRng); // commit secrets minted here, once
     if (!move) return;
     autoNonceRef.current = targetNonce;
-    const delay =
-      dt.state.phase === "hand_over"
-        ? HAND_OVER_DELAY_MS
-        : dt.state.phase === "showdown"
-          ? SHOWDOWN_DELAY_MS
-          : PLUMBING_DELAY_MS;
     window.setTimeout(() => {
       const live = dtRef.current;
       if (!live || live.nonce + 1n !== targetNonce) return;
@@ -295,8 +295,29 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       }
-    }, delay);
+    }, HAND_STEP_DELAY_MS);
   }, [sync]);
+
+  const flushHeartbeat = useCallback((tunnelId: string, force: boolean) => {
+    const session = sessionRef.current;
+    if (!session || actionsRef.current === 0) return;
+    const now = Date.now();
+    const windowMs = now - lastHeartbeatRef.current;
+    if (!force && windowMs < 1000) return;
+    const actionsDelta = actionsRef.current;
+    actionsRef.current = 0;
+    lastHeartbeatRef.current = now;
+    getControlPlaneClient()
+      .sendHeartbeat(session.sessionId, session.statsToken, {
+        tunnelId,
+        nonce: String(moveCountRef.current),
+        actionsDelta,
+        windowMs: Math.max(1, windowMs),
+      })
+      .catch((e) =>
+        console.error("[quantum-poker pvp] heartbeat failed:", e),
+      );
+  }, []);
 
   const propose = useCallback(
     (move: PokerMove) => {
@@ -401,6 +422,29 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
           await depositStake({ signExec, tunnelId, amount: STAKE_BALANCE });
         }
 
+        sessionRef.current = null;
+        moveCountRef.current = 0;
+        actionsRef.current = 0;
+        lastHeartbeatRef.current = Date.now();
+        getControlPlaneClient()
+          .registerSession({
+            userAddress: wallet,
+            game: GAME_ID,
+            tunnels: [
+              {
+                tunnelId,
+                partyA: match.role === "A" ? wallet : match.opponentWallet,
+                partyB: match.role === "B" ? wallet : match.opponentWallet,
+              },
+            ],
+          })
+          .then((session) => {
+            sessionRef.current = session;
+          })
+          .catch((e) =>
+            console.error("[quantum-poker pvp] registerSession failed:", e),
+          );
+
         // 3) build the distributed poker engine over the relay transport.
         const proto = new QuantumPokerProtocol(HAND_CAP);
         const backend = defaultBackend();
@@ -435,6 +479,7 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
           if (settlingRef.current) return;
           settlingRef.current = true;
           setStatus("settling");
+          flushHeartbeat(tunnelId, true);
           void settle(
             dt,
             match.role,
@@ -465,6 +510,14 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
 
         dt.onConfirmed = (u) => {
           transcript.append(u);
+          moveCountRef.current += 1;
+          actionsRef.current += 1;
+          flushHeartbeat(tunnelId, false);
+          report.bumpCounters({
+            updates: 1,
+            signatures: 2,
+            verifications: 2,
+          });
           sync();
           report.pushLocalTxn({
             id: moveIdRef.current++,
@@ -498,7 +551,7 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
         setStatus("error");
       }
     })();
-  }, [account, client, signAndExecute, sync, maybeAutoPropose, report]);
+  }, [account, client, signAndExecute, sync, maybeAutoPropose, report, flushHeartbeat]);
 
   const self = selfPartyRef.current;
   const myHole =
