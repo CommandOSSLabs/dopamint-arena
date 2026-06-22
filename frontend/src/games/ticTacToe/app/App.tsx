@@ -76,30 +76,35 @@ function AppContent() {
 
     const arena = parseAgentConfig(window.location.href).arena;
 
-    const hasNavigated = sessionStorage.getItem("tictactoe_auto_navigated");
-    if (scene === "login" && !hasNavigated) {
-      sessionStorage.setItem("tictactoe_auto_navigated", "true");
-
-      // Under ?arena the injected wallet is already connected; land on setup so the
-      // script can click ttt-tab-bots / ttt-fund-wallet / ttt-start directly.
+    if (scene === "login") {
       if (arena) {
+        // Multi-window arena: every ttt window must reach setup so the script
+        // can drive ttt-tab-bots / ttt-fund-wallet / ttt-start independently.
+        // Must NOT use the page-global tictactoe_auto_navigated flag — it is
+        // shared across all windows on the page, so the 2nd/3rd windows would
+        // see it already set and skip this block entirely.
         setScene("setup");
         return;
       }
 
-      const randomGameType = Math.random() > 0.5 ? "caro" : "ttt";
-      const randomDifficulty = "fast";
-      const randomBoardSize = ([15, 19, 25] as const)[
-        Math.floor(Math.random() * 3)
-      ];
+      const hasNavigated = sessionStorage.getItem("tictactoe_auto_navigated");
+      if (!hasNavigated) {
+        sessionStorage.setItem("tictactoe_auto_navigated", "true");
 
-      setGameType(randomGameType);
-      setDifficulty(randomDifficulty);
-      setBoardSize(randomBoardSize);
-      setMode("auto");
+        const randomGameType = Math.random() > 0.5 ? "caro" : "ttt";
+        const randomDifficulty = "fast";
+        const randomBoardSize = ([15, 19, 25] as const)[
+          Math.floor(Math.random() * 3)
+        ];
 
-      setScene("setup");
-      return;
+        setGameType(randomGameType);
+        setDifficulty(randomDifficulty);
+        setBoardSize(randomBoardSize);
+        setMode("auto");
+
+        setScene("setup");
+        return;
+      }
     }
 
     // Under ?arena the script drives funding and game start — stop here on setup.
