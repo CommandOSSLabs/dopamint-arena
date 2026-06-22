@@ -33,6 +33,7 @@ import {
   openAndFundSharedTunnel,
   readCreatedAt,
 } from "../../onchain/tunnelTx";
+import { useSponsoredSignExec } from "../../onchain/useSponsoredSignExec";
 import { coSignedToSettleRequest } from "../../backend/settleRequest";
 import { type FleetSecret, makeFleetSecret } from "./engine/selfPlay";
 import { type Placement, placementsToBoard } from "./engine/fleet";
@@ -69,7 +70,12 @@ type BattleshipTunnel = DistributedTunnel<BattleshipState, BattleshipMove>;
 interface PvpDeps {
   account: { address: string } | null;
   client: unknown;
+  /** Wallet sender-pays signer — used for the close fallback (close is sponsored via /settle). */
   signExec: (tx: never) => Promise<{ digest: string }>;
+  /** Backend-gas-sponsored signer (ADR-0009) — used for the open/fund tx. */
+  sponsoredSignExec: (tx: never) => Promise<{ digest: string }>;
+  /** Pick a user coin to fund this seat's stake (gas is sponsored, the stake is not). */
+  selectStakeCoin: (minAmount: bigint) => Promise<string>;
 }
 
 interface PvpSnapshot {
@@ -213,6 +219,7 @@ class PvpSession {
     );
     this.secret = secret;
     const signExec = deps.signExec;
+    const sponsoredSignExec = deps.sponsoredSignExec;
     const reads = deps.client as unknown as Parameters<
       typeof openAndFundSharedTunnel
     >[0]["reads"];
@@ -246,17 +253,21 @@ class PvpSession {
         const hello = await waitPeer<{ ephemeralPubkey: string }>("hello");
         const oppPub = fromHex(hello.ephemeralPubkey);
 
-        // 2) fund on-chain: seat A opens + funds its seat + announces; seat B deposits.
+        // 2) fund on-chain: seat A opens + funds its seat + announces; seat B deposits. Gas is
+        //    sponsored by the backend settler (ADR-0009); each seat funds its own stake from a
+        //    coin it owns (gas is sponsored, the stake is not).
         this.status = "funding";
         this.emit();
+        const stakeCoinId = await deps.selectStakeCoin(STAKE_BALANCE);
         let tunnelId: string;
         if (match.role === "A") {
           tunnelId = await openAndFundSharedTunnel({
             reads,
-            signExec: signExec as never,
+            signExec: sponsoredSignExec as never,
             partyA: { address: wallet, publicKey: ephemeral.publicKey },
             partyB: { address: match.opponentWallet, publicKey: oppPub },
             amount: STAKE_BALANCE,
+            stakeCoinId,
           });
           mp.announceTunnel(match.matchId, tunnelId);
           channel.sendPeer({ t: "open", tunnelId });
@@ -264,9 +275,10 @@ class PvpSession {
           const open = await waitPeer<{ tunnelId: string }>("open");
           tunnelId = open.tunnelId;
           await depositStake({
-            signExec: signExec as never,
+            signExec: sponsoredSignExec as never,
             tunnelId,
             amount: STAKE_BALANCE,
+            stakeCoinId,
           });
         }
 
@@ -389,6 +401,7 @@ export function useBattleshipPvp(windowId: string): BattleshipPvp {
   const account = useCurrentAccount();
   const client = useSuiClient();
   const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
+  const sponsored = useSponsoredSignExec();
 
   const session = getPvpSession(windowId);
   session.deps = {
@@ -400,6 +413,10 @@ export function useBattleshipPvp(windowId: string): BattleshipPvp {
       const r = await signAndExecute({ transaction: tx });
       return { digest: r.digest };
     }) as never,
+    // Open/fund routes through the backend gas sponsor (ADR-0009): the settler pays gas, the
+    // stake stays the user's own coin. (Close keeps signExec above — it's sponsored via /settle.)
+    sponsoredSignExec: sponsored.signExec as never,
+    selectStakeCoin: sponsored.selectStakeCoin,
   };
 
   const snap = useSyncExternalStore(session.subscribe, session.getSnapshot);
