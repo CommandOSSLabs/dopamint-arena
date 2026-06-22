@@ -38,8 +38,10 @@ import {
 } from "./engine/selfPlay";
 import { type BotDifficulty, DEFAULT_BOT_DIFFICULTY } from "./engine/bot";
 
-/** Coins locked per seat, and the amount that shifts to the winner. */
-const LOCKED_PER_SEAT = 1_000_000_000n; // 1 DOPAMINT per seat (9 decimals)
+/** DOPAMINT stake locked per seat (1 DOPAMINT, 9 decimals). */
+const LOCKED_PER_SEAT = 1_000_000_000n;
+/** SUI-fallback stake per seat (MIST), when the DOPAMINT env is unset. */
+const SUI_PER_SEAT = 500n;
 const STAKE = 100n;
 /** Animation pacing for the bot's automatic moves. */
 const BOT_SHOOT_MS = 550;
@@ -327,6 +329,10 @@ class BotSession {
         let createdAt = 0n;
         let onChain = false;
 
+        // Per-path stake: 1 DOPAMINT vs a tiny MIST amount on the SUI fallback (so the fallback
+        // doesn't lock real SUI). The same value funds on-chain AND inits the off-chain tunnel.
+        const stakePerSeat = isDopamintConfigured ? LOCKED_PER_SEAT : SUI_PER_SEAT;
+
         if (deps.account) {
           const reads = deps.client as unknown as Parameters<
             typeof openAndFundSelfPlay
@@ -343,10 +349,10 @@ class BotSession {
                 signExec: deps.sponsoredSignExec as never,
                 partyA,
                 partyB,
-                aAmount: LOCKED_PER_SEAT,
-                bAmount: LOCKED_PER_SEAT,
+                aAmount: stakePerSeat,
+                bAmount: stakePerSeat,
                 coinType: DOPAMINT_COIN_TYPE,
-                stakeCoinId: await deps.prepareStake(2n * LOCKED_PER_SEAT),
+                stakeCoinId: await deps.prepareStake(2n * stakePerSeat),
               })
             : await withSponsorFallback(
                 async () =>
@@ -355,9 +361,9 @@ class BotSession {
                     signExec: deps.sponsoredSignExec as never,
                     partyA,
                     partyB,
-                    aAmount: LOCKED_PER_SEAT,
-                    bAmount: LOCKED_PER_SEAT,
-                    stakeCoinId: await deps.selectStakeCoin(2n * LOCKED_PER_SEAT),
+                    aAmount: stakePerSeat,
+                    bAmount: stakePerSeat,
+                    stakeCoinId: await deps.selectStakeCoin(2n * stakePerSeat),
                   }),
                 () =>
                   openAndFundSelfPlay({
@@ -365,8 +371,8 @@ class BotSession {
                     signExec: deps.signExec as never,
                     partyA,
                     partyB,
-                    aAmount: LOCKED_PER_SEAT,
-                    bAmount: LOCKED_PER_SEAT,
+                    aAmount: stakePerSeat,
+                    bAmount: stakePerSeat,
                   }),
                 "battleship bot open/fund",
               );
@@ -381,7 +387,7 @@ class BotSession {
           b.keyPair,
           a.address,
           b.address,
-          { a: LOCKED_PER_SEAT, b: LOCKED_PER_SEAT },
+          { a: stakePerSeat, b: stakePerSeat },
         );
         // Record every co-signed update so the close can anchor the transcript root on-chain
         // (close_cooperative_with_root) — the same settle path caro/poker/auto use successfully.

@@ -278,6 +278,7 @@ export function usePvpChickenCross(): PvpChickenCross {
                 waitPeer,
                 reads,
                 signExec,
+                sponsored.signExec,
                 tunnelId,
                 transcript,
                 getControlPlaneClient(),
@@ -339,6 +340,9 @@ async function settle(
   waitPeer: <T>(t: string) => Promise<T>,
   reads: Parameters<typeof readCreatedAt>[0],
   signExec: Parameters<typeof closeCooperativeWithRoot>[0]["signExec"],
+  // Gas-sponsored signer: the close fallback must use this in DOPAMINT mode, where the player holds
+  // 0 SUI and a wallet-signed close would throw and strand the staked DOPAMINT.
+  sponsoredSignExec: Parameters<typeof closeCooperativeWithRoot>[0]["signExec"],
   tunnelId: string,
   transcript: Transcript,
   cp: ReturnType<typeof getControlPlaneClient>,
@@ -366,7 +370,7 @@ async function settle(
   } catch (e) {
     console.error("[chicken-cross] backend settle failed; falling back to wallet close:", e);
     await closeCooperativeWithRoot({
-      signExec,
+      signExec: isDopamintConfigured ? sponsoredSignExec : signExec,
       tunnelId,
       settlement: co,
       coinType: isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined,

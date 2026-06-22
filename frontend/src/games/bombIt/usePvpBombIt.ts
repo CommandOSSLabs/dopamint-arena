@@ -16,7 +16,10 @@ import { DOPAMINT_COIN_TYPE, isDopamintConfigured } from "../../onchain/dopamint
 import { coSignedToSettleRequest } from "../../backend/settleRequest";
 import { deriveView, type BombItView } from "./session-core";
 
-const STAKE = 1_000_000_000n; // per-seat: 1 DOPAMINT (9 decimals)
+/** DOPAMINT stake per seat (1 DOPAMINT, 9 decimals). */
+const STAKE = 1_000_000_000n;
+/** SUI-fallback stake per seat (MIST), when the DOPAMINT env is unset. */
+const SUI_PER_SEAT = 500n;
 const STEP_MS = 250; // pacing between ticks (ms)
 
 export type PvpStatus = "idle" | "matching" | "funding" | "playing" | "settling" | "settled" | "error";
@@ -187,13 +190,16 @@ export function usePvpBombIt(): PvpBombIt {
           const partyA = { address: wallet, publicKey: ephemeral.publicKey };
           const partyB = { address: match.opponentWallet, publicKey: oppPub };
           const coinType = isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined;
+          // Per-path stake: 1 DOPAMINT vs a tiny MIST amount on the SUI fallback (so the fallback
+          // doesn't lock real SUI). The same value funds on-chain AND inits the off-chain tunnel.
+          const stakePerSeat = isDopamintConfigured ? STAKE : SUI_PER_SEAT;
           let tunnelId: string;
           if (match.role === "A") {
             tunnelId = isDopamintConfigured
-              ? await openAndFundSharedTunnel({ reads, signExec: sponsored.signExec as never, partyA, partyB, amount: STAKE, coinType, stakeCoinId: await sponsored.prepareStake(STAKE) })
+              ? await openAndFundSharedTunnel({ reads, signExec: sponsored.signExec as never, partyA, partyB, amount: stakePerSeat, coinType, stakeCoinId: await sponsored.prepareStake(stakePerSeat) })
               : await withSponsorFallback(
-                  async () => openAndFundSharedTunnel({ reads, signExec: sponsored.signExec as never, partyA, partyB, amount: STAKE, stakeCoinId: await sponsored.selectStakeCoin(STAKE) }),
-                  () => openAndFundSharedTunnel({ reads, signExec: signExec as never, partyA, partyB, amount: STAKE }),
+                  async () => openAndFundSharedTunnel({ reads, signExec: sponsored.signExec as never, partyA, partyB, amount: stakePerSeat, stakeCoinId: await sponsored.selectStakeCoin(stakePerSeat) }),
+                  () => openAndFundSharedTunnel({ reads, signExec: signExec as never, partyA, partyB, amount: stakePerSeat }),
                   "bombIt open/fund");
             mp.announceTunnel(match.matchId, tunnelId);
             channel.sendPeer({ t: "open", tunnelId });
@@ -201,11 +207,11 @@ export function usePvpBombIt(): PvpBombIt {
             const open = await waitPeer<{ tunnelId: string }>("open");
             tunnelId = open.tunnelId;
             if (isDopamintConfigured) {
-              await depositStake({ signExec: sponsored.signExec as never, tunnelId, amount: STAKE, coinType, stakeCoinId: await sponsored.prepareStake(STAKE) });
+              await depositStake({ signExec: sponsored.signExec as never, tunnelId, amount: stakePerSeat, coinType, stakeCoinId: await sponsored.prepareStake(stakePerSeat) });
             } else {
               await withSponsorFallback(
-                async () => depositStake({ signExec: sponsored.signExec as never, tunnelId, amount: STAKE, stakeCoinId: await sponsored.selectStakeCoin(STAKE) }),
-                () => depositStake({ signExec: signExec as never, tunnelId, amount: STAKE }),
+                async () => depositStake({ signExec: sponsored.signExec as never, tunnelId, amount: stakePerSeat, stakeCoinId: await sponsored.selectStakeCoin(stakePerSeat) }),
+                () => depositStake({ signExec: signExec as never, tunnelId, amount: stakePerSeat }),
                 "bombIt deposit");
             }
           }
@@ -224,7 +230,7 @@ export function usePvpBombIt(): PvpBombIt {
             proto,
             { tunnelId, self, opponent: opp, selfParty: match.role },
             channel.transport,
-            { a: STAKE, b: STAKE },
+            { a: stakePerSeat, b: stakePerSeat },
           );
           dtRef.current = dt;
           const transcript = new Transcript(tunnelId);
@@ -238,7 +244,7 @@ export function usePvpBombIt(): PvpBombIt {
 
             if (proto.isTerminal(dt.state) && !settlingRef.current) {
               settlingRef.current = true;
-              void settle(dt, match.role, channel, waitPeer, reads, signExec, tunnelId, transcript, getControlPlaneClient()).then(
+              void settle(dt, match.role, channel, waitPeer, reads, signExec, sponsored.signExec, tunnelId, transcript, getControlPlaneClient()).then(
                 () => setStatus("settled"),
                 (e) => {
                   setError(String((e as Error)?.message ?? e));
@@ -287,6 +293,9 @@ async function settle(
   waitPeer: <T>(t: string) => Promise<T>,
   reads: Parameters<typeof readCreatedAt>[0],
   signExec: Parameters<typeof closeCooperativeWithRoot>[0]["signExec"],
+  // Gas-sponsored signer: the close fallback must use this in DOPAMINT mode, where the player holds
+  // 0 SUI and a wallet-signed close would throw and strand the staked DOPAMINT.
+  sponsoredSignExec: Parameters<typeof closeCooperativeWithRoot>[0]["signExec"],
   tunnelId: string,
   transcript: Transcript,
   cp: ReturnType<typeof getControlPlaneClient>,
@@ -313,6 +322,6 @@ async function settle(
     await cp.settle(tunnelId, coSignedToSettleRequest(co, transcript.toRecord().entries));
   } catch (e) {
     console.error("[bomb-it] backend settle failed; falling back to wallet close:", e);
-    await closeCooperativeWithRoot({ signExec, tunnelId, settlement: co, coinType: isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined });
+    await closeCooperativeWithRoot({ signExec: isDopamintConfigured ? sponsoredSignExec : signExec, tunnelId, settlement: co, coinType: isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined });
   }
 }

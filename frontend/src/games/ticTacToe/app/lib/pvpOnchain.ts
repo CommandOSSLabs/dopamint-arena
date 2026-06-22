@@ -12,11 +12,14 @@ export interface PvpParty {
   publicKey: Uint8Array;
 }
 
-/** Open + share the tunnel registering both parties (the opener pays the trivial create gas). */
+/** Open + share the tunnel registering both parties (the opener pays the trivial create gas).
+ *  `coinType` selects the staked token (defaults to SUI) — MUST match the coin the seats deposit,
+ *  or the tunnel is `Tunnel<SUI>` and the DOPAMINT deposit aborts on a type-arg mismatch. */
 export function buildCreateAndShareTx(
   a: PvpParty,
   b: PvpParty,
   penaltyAmount: bigint,
+  coinType: string = SUI,
 ): Transaction {
   const tx = new Transaction();
   onchain.buildCreateAndShare(tx as unknown as SdkTx, {
@@ -32,6 +35,7 @@ export function buildCreateAndShareTx(
     },
     timeoutMs: 86_400_000n,
     penaltyAmount,
+    coinType,
   });
   return tx;
 }

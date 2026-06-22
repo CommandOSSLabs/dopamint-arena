@@ -376,6 +376,7 @@ class PvpSession {
               waitPeer,
               reads,
               signExec as never,
+              sponsoredSignExec as never,
               tunnelId,
               transcript,
               getControlPlaneClient(),
@@ -496,6 +497,9 @@ async function settle(
   waitPeer: <T>(t: string) => Promise<T>,
   reads: Parameters<typeof readCreatedAt>[0],
   signExec: Parameters<typeof closeCooperativeWithRoot>[0]["signExec"],
+  // Gas-sponsored signer: the close fallback must use this in DOPAMINT mode, where the player holds
+  // 0 SUI and a wallet-signed close would throw and strand the staked DOPAMINT.
+  sponsoredSignExec: Parameters<typeof closeCooperativeWithRoot>[0]["signExec"],
   tunnelId: string,
   transcript: Transcript,
   cp: ReturnType<typeof getControlPlaneClient>,
@@ -535,6 +539,6 @@ async function settle(
       "[battleship] backend settle failed; falling back to wallet close:",
       e,
     );
-    await closeCooperativeWithRoot({ signExec, tunnelId, settlement: co, coinType });
+    await closeCooperativeWithRoot({ signExec: isDopamintConfigured ? sponsoredSignExec : signExec, tunnelId, settlement: co, coinType });
   }
 }

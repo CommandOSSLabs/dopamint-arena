@@ -14,7 +14,7 @@ import {
   selectStakeCoin,
   type OwnedCoin,
 } from "./sponsor";
-import { DOPAMINT_COIN_TYPE, isDopamintConfigured } from "./dopamint";
+import { ensureDopamintStakeCoin, isDopamintConfigured } from "./dopamint";
 import type { SignExec } from "./tunnelTx";
 
 export interface SponsoredSignExec {
@@ -66,31 +66,26 @@ export function useSponsoredSignExec(): SponsoredSignExec {
     const reader = client as unknown as CoinReader;
     const getCoins = (owner: string) =>
       reader.getCoins({ owner }).then((r) => r.data);
-    const getDopamintCoins = (owner: string) =>
-      reader
-        .getCoins({ owner, coinType: DOPAMINT_COIN_TYPE })
-        .then((r) => r.data);
     const signExec = makeSponsoredSignExec({
       sender,
       client: client as never,
       signTransaction: signTransaction as never,
     });
 
-    // Hot-path stake: just pick a DOPAMINT coin big enough. No faucet/balance check here — the
-    // background top-up keeps the balance above the threshold (ADR-0010 optimization).
-    const prepareStake = async (minAmount: bigint): Promise<string> => {
+    // Stake hot-path: usually the background top-up has already landed a coin and this is a plain
+    // lookup. On a cold-start race (fresh wallet, faucet not yet indexed) it faucets via the gas
+    // sponsor and polls past indexer lag instead of throwing — so the game open never fails for a
+    // just-connected player.
+    const prepareStake = (minAmount: bigint): Promise<string> => {
       if (!isDopamintConfigured) {
         throw new Error("DOPAMINT is not configured (VITE_DOPAMINT_* env)");
       }
-      const coin = (await getDopamintCoins(sender)).find(
-        (c) => BigInt(c.balance) >= minAmount,
-      );
-      if (!coin) {
-        throw new Error(
-          "DOPAMINT balance not ready (auto-faucet topping up — retry in a moment)",
-        );
-      }
-      return coin.coinObjectId;
+      return ensureDopamintStakeCoin({
+        client: reader as never,
+        signExec,
+        owner: sender,
+        need: minAmount,
+      });
     };
 
     return {

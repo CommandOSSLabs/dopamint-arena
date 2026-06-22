@@ -290,9 +290,11 @@ export function usePvpTicTacToe(
           relay.sendApp(matchId, { t: "closed", digest: result.txDigest });
         } catch (e) {
           console.warn("[settle] Server-side settle failed, falling back to wallet submission:", e);
-          // Close pays in the same coin the tunnel was funded in (DOPAMINT vs SUI).
+          // Close pays in the same coin the tunnel was funded in (DOPAMINT vs SUI). In DOPAMINT
+          // mode the player holds 0 SUI (gas is sponsored), so the close must route through the gas
+          // sponsor too — a wallet-signed close would throw and strand the staked DOPAMINT.
           const coinType = isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined;
-          const res = await submit(
+          const res = await (isDopamintConfigured ? submitSponsored : submit)(
             buildCloseWithRootTx(t.tunnelId, coSigned, coinType),
           );
           setDigests((d) => ({ ...d, close: res.digest }));
@@ -302,7 +304,7 @@ export function usePvpTicTacToe(
       await refreshBalance();
       setPhase("done");
     },
-    [submit, refreshBalance, flushHeartbeat],
+    [submit, submitSponsored, refreshBalance, flushHeartbeat],
   );
 
   const queue = useCallback(() => {
@@ -417,6 +419,7 @@ export function usePvpTicTacToe(
               { walletAddress, publicKey: eph.coreKey.publicKey }, // partyA = X (self)
               { walletAddress: m.opponentWallet, publicKey: oppPubkey }, // partyB = O (opponent)
               0n,
+              coinType, // open Tunnel<DOPAMINT> so the seat deposits type-match
             );
           const res = dopamintOn
             ? await withSponsorFallback(

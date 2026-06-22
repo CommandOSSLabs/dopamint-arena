@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useCurrentAccount, useSignAndExecuteTransaction, useSuiClient } from "@mysten/dapp-kit";
 import { createParticipant } from "sui-tunnel-ts/core/keys";
 import { OffchainTunnel } from "sui-tunnel-ts/core/tunnel";
-import { BombItProtocol } from "sui-tunnel-ts/protocol/bombIt";
+import { BombItProtocol, BOMB_IT_MIN_STAKE } from "sui-tunnel-ts/protocol/bombIt";
 import type { BombItState, BombItMove } from "sui-tunnel-ts/protocol/bombIt";
 import { useTelemetry } from "../../telemetry/TelemetryProvider";
 import { closeCooperativeWithRoot, openAndFundSelfPlay, readCreatedAt } from "../../onchain/tunnelTx";
@@ -24,9 +24,10 @@ import { deriveView, sessionResult, stepSession, type BombItResult, type BombItV
  * so the throughput it reports is settleable, not synthetic. Twin of useChickenCrossSession.
  */
 
-/** Per-seat locked stake (MIST). The smallest fundable stake — this is an exhibition bench that
- *  loops many games, so keep the per-game SUI footprint minimal (spec §3 testnet-SUI long-pole). */
-const STAKE = 1_000_000_000n; // per-seat: 1 DOPAMINT (9 decimals)
+/** DOPAMINT stake locked per seat (1 DOPAMINT, 9 decimals). The SUI fallback uses
+ *  BOMB_IT_MIN_STAKE instead — this bench loops many games, so the per-game SUI footprint must
+ *  stay minimal (spec §3 testnet-SUI long-pole). */
+const STAKE = 1_000_000_000n;
 /** Render/measure cadence. Ticks are batched per frame to hit targetTps regardless of this value. */
 const FRAME_MS = 50;
 const DEFAULT_TARGET_TPS = 75;
@@ -202,6 +203,9 @@ export function useBombItBenchSession(): BombItBenchSession {
           const partyA = { address: a.address, publicKey: a.keyPair.publicKey };
           const partyB = { address: b.address, publicKey: b.keyPair.publicKey };
           const coinType = isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined;
+          // Per-path stake: 1 DOPAMINT vs the protocol minimum on the SUI fallback (so the fallback
+          // doesn't lock real SUI). The same value funds on-chain AND inits the off-chain tunnel.
+          const stakePerSeat = isDopamintConfigured ? STAKE : BOMB_IT_MIN_STAKE;
           // DOPAMINT (ADR-0010): faucet both seats' stake invisibly (gas-sponsored) and stake
           // DOPAMINT — free for a 0-SUI player. SUI path (DOPAMINT env unset): sponsored SUI stake
           // with a sender-pays fallback (ADR-0009).
@@ -211,10 +215,10 @@ export function useBombItBenchSession(): BombItBenchSession {
                 signExec: sponsored.signExec as never,
                 partyA,
                 partyB,
-                aAmount: STAKE,
-                bAmount: STAKE,
+                aAmount: stakePerSeat,
+                bAmount: stakePerSeat,
                 coinType,
-                stakeCoinId: await sponsored.prepareStake(2n * STAKE),
+                stakeCoinId: await sponsored.prepareStake(2n * stakePerSeat),
               })
             : await withSponsorFallback(
                 async () =>
@@ -223,9 +227,9 @@ export function useBombItBenchSession(): BombItBenchSession {
                     signExec: sponsored.signExec as never,
                     partyA,
                     partyB,
-                    aAmount: STAKE,
-                    bAmount: STAKE,
-                    stakeCoinId: await sponsored.selectStakeCoin(2n * STAKE),
+                    aAmount: stakePerSeat,
+                    bAmount: stakePerSeat,
+                    stakeCoinId: await sponsored.selectStakeCoin(2n * stakePerSeat),
                   }),
                 () =>
                   openAndFundSelfPlay({
@@ -233,8 +237,8 @@ export function useBombItBenchSession(): BombItBenchSession {
                     signExec: signExec as never,
                     partyA,
                     partyB,
-                    aAmount: STAKE,
-                    bAmount: STAKE,
+                    aAmount: stakePerSeat,
+                    bAmount: stakePerSeat,
                   }),
                 "bombIt bench open/fund",
               );
@@ -248,7 +252,7 @@ export function useBombItBenchSession(): BombItBenchSession {
             b.keyPair,
             a.address,
             b.address,
-            { a: STAKE, b: STAKE },
+            { a: stakePerSeat, b: stakePerSeat },
           );
           const transcript = new Transcript(tunnelId);
           gameUpdatesRef.current = 0;

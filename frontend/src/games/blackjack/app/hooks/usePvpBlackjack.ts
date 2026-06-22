@@ -320,9 +320,11 @@ export function usePvpBlackjack(): PvpView {
         } catch (e) {
           console.warn("[settle] Server-side settle failed, falling back to wallet submission:", e);
           // Wallet-close fallback needs the tunnel's coin type (DOPAMINT when configured); the
-          // /settle path above already sponsored the close server-side.
+          // /settle path above already sponsored the close server-side. In DOPAMINT mode the dealer
+          // holds 0 SUI (gas is sponsored), so the close must route through the gas sponsor too — a
+          // wallet-signed close would throw and strand the staked DOPAMINT.
           const coinType = isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined;
-          const res = await submit(
+          const res = await (isDopamintConfigured ? submitSponsored : submit)(
             buildCloseWithRootTx(t.tunnelId, coSigned, coinType),
           );
           setDigests((d) => ({ ...d, close: res.digest }));
@@ -332,7 +334,7 @@ export function usePvpBlackjack(): PvpView {
       await refreshBalance();
       setPhase("done");
     },
-    [submit, refreshBalance, flushHeartbeat],
+    [submit, submitSponsored, refreshBalance, flushHeartbeat],
   );
 
   const queue = useCallback(() => {
