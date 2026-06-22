@@ -130,6 +130,8 @@ test("rebuildTunnel reconstructs a tunnel that co-signs the next move byte-ident
   );
   assert.equal(session.tunnel.nonce, 2n);
   assert.deepEqual(mp.active, [record.matchId]);
+  assert.equal((session as { detach?: unknown }).detach, undefined);
+  assert.equal(session.tunnel.onConfirmed, undefined);
   session.tunnel.propose(0, 9n);
   assert.equal(mp.sent.length, 1);
   assert.deepEqual(

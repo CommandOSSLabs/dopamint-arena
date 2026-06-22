@@ -142,7 +142,6 @@ export interface RebuildSpec<State, Move> {
 export interface RestoredSession<State, Move> {
   tunnel: DistributedTunnel<State, Move>;
   channel: PvpChannel;
-  detach: () => void;
 }
 
 /** Default locked balances: the checkpoint's current A/B split (sums to the same locked total). */
@@ -196,22 +195,9 @@ export function rebuildTunnel<State, Move>(
   );
   restoreInto(tunnel, record, spec.adapter); // verify-on-adopt; throws on tamper
   mp.markActive(record.matchId);
-  const detach = attachResume({
-    mp,
-    channel,
-    tunnel,
-    adapter: spec.adapter,
-    identity: {
-      matchId: record.matchId,
-      tunnelId: record.tunnelId,
-      role: record.role,
-      game: record.game,
-      opponentWallet: record.opponentWallet,
-      opponentPubkeyHex: record.opponentPubkeyHex,
-      selfEphemeralSecretHex: record.selfEphemeralSecretHex,
-    },
-  });
-  return { tunnel, channel, detach };
+  // Reconstruct-only: the caller owns onConfirmed + attachResume (live and cold paths
+  // share one activateSession), so they can pass onGraceExpired and the per-move handler.
+  return { tunnel, channel };
 }
 
 /**
