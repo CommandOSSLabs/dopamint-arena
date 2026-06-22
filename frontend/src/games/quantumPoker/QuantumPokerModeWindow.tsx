@@ -98,8 +98,9 @@ export function QuantumPokerModeWindow(props: GameWindowProps) {
       </div>
 
       <p className="max-w-[19rem] text-[11px] leading-relaxed text-slate-500">
-        Bot mode uses the configured poker bot server. PvP uses the live relay.
-        Auto opens, funds, plays, settles, and repeats real bot tunnels.
+        Bot plays a local persona bot in your wallet-funded tunnel. PvP uses
+        the live relay. Auto loops two persona bots through real
+        open/play/settle tunnels.
       </p>
     </div>
   );
