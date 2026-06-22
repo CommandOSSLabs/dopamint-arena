@@ -23,22 +23,21 @@ import type {
   SettleHalf,
   SessionTransport,
 } from "@/agent/session/seams";
-import type { RelayClient } from "../app/lib/pvpRelay";
+import type { MpClient, MatchInfo, PvpChannel } from "@/pvp/mpClient";
 import type { PvpEphemeral } from "../app/lib/pvpIdentity";
 
 // ── SessionRelay ─────────────────────────────────────────────────────────────
 
 /**
- * Wrap an existing RelayClient as a SessionRelay. The relay client handles WS
- * auth internally; queueJoin awaits ready before forwarding the join message.
+ * Wrap an existing MpClient as a SessionRelay.
  * Each call to channel(matchId) returns the same MatchChannel instance for a
  * given matchId (channels are per-match singletons in the relay's routing).
  */
-export function makeTttRelay(client: RelayClient): SessionRelay {
+export function makeTttRelay(client: MpClient): SessionRelay {
   const channels = new Map<string, MatchChannel>();
 
   let matchCb: ((m: MatchFound) => void) | null = null;
-  client.on("match.found", (m) => {
+  client.on("match.found", (m: any) => {
     matchCb?.({
       matchId: String(m.matchId),
       role: (m.role as "A" | "B") ?? "A",
@@ -48,8 +47,16 @@ export function makeTttRelay(client: RelayClient): SessionRelay {
 
   return {
     async queueJoin(game: string): Promise<void> {
-      await client.ready;
-      client.queueJoin(game);
+      try {
+        const match = await client.quickMatch(game);
+        matchCb?.({
+          matchId: match.matchId,
+          role: match.role,
+          opponentWallet: match.opponentWallet,
+        });
+      } catch (e) {
+        console.error("makeTttRelay queueJoin failed:", e);
+      }
     },
 
     onMatch(cb: (match: MatchFound) => void): void {
@@ -68,20 +75,17 @@ export function makeTttRelay(client: RelayClient): SessionRelay {
 
 /**
  * Build a MatchChannel for a specific matchId by routing messages through
- * the relay's app-channel (sendApp/onApp) and the party.hello event.
- *
- * Envelope types used on the app channel:
- *   {t:'hello', ...}   — ephemeral pubkey exchange (via relay.on('party.hello'))
- *   {t:'opened', ...}  — seat A broadcasts the on-chain tunnelId
- *   {t:'settle', ...}  — settle-half exchange (sig + root)
+ * the relay's channel (onPeer/sendPeer) and the party.hello event.
  *
  * Buffering: each one-shot resolver is stored; if the message arrives before
  * the callback is registered it is buffered so the callback fires immediately.
  */
 function makeTttMatchChannel(
-  client: RelayClient,
+  client: MpClient,
   matchId: string,
 ): MatchChannel {
+  const ch = client.channel(matchId);
+
   // Buffers for messages that arrive before the handler is registered.
   let bufferedHello: string | null = null;
   let helloResolve: ((pub: string) => void) | null = null;
@@ -93,7 +97,7 @@ function makeTttMatchChannel(
   let settleResolve: ((half: SettleHalf) => void) | null = null;
 
   // Wire the relay's party.hello server event for pubkey exchange.
-  client.on("party.hello", (h) => {
+  client.on("party.hello", (h: any) => {
     if (h.matchId !== matchId) return;
     const pub = String(h.ephemeralPubkey);
     if (helloResolve) {
@@ -105,9 +109,7 @@ function makeTttMatchChannel(
   });
 
   // Wire the app-channel for opened/settle messages.
-  // RelayClient.onApp is last-writer-wins per matchId — only this adapter may
-  // register the app callback for a given match (Task 8 wiring must not call onApp again).
-  client.onApp(matchId, (msg) => {
+  ch.onPeer((msg: any) => {
     if (msg.t === "opened") {
       const tunnelId = String(msg.tunnelId);
       if (openedResolve) {
@@ -127,13 +129,12 @@ function makeTttMatchChannel(
     }
   });
 
-  // Build the transport once (relay.transport() registers the onFrame callback).
-  const relayTransport = client.transport(matchId);
+  // Build the transport once.
   const transport: SessionTransport = {
-    send: relayTransport.send.bind(relayTransport),
-    onFrame: relayTransport.onFrame.bind(relayTransport),
+    send: ch.transport.send.bind(ch.transport),
+    onFrame: ch.transport.onFrame.bind(ch.transport),
     onClose(_cb: () => void): void {
-      // RelayClient does not surface per-match close events; no-op for now.
+      // MpClient does not surface per-match close events; no-op for now.
     },
     onError(_cb: (err: unknown) => void): void {
       // Same — no per-match error event on this relay version.
@@ -147,7 +148,6 @@ function makeTttMatchChannel(
     transport,
 
     partyHello(pubkeyHex: string): void {
-      // walletSig unused in v1 — pass empty string as the existing hook does.
       client.partyHello(matchId, pubkeyHex, "");
     },
 
@@ -162,9 +162,8 @@ function makeTttMatchChannel(
     },
 
     announceOpened(tunnelId: string): void {
-      // Two signals for compatibility: the typed relay message + the app envelope.
       client.tunnelOpened(matchId, tunnelId);
-      client.sendApp(matchId, { t: "opened", tunnelId });
+      ch.sendPeer({ t: "opened", tunnelId });
     },
 
     onOpened(cb: (tunnelId: string) => void): void {
@@ -178,7 +177,7 @@ function makeTttMatchChannel(
     },
 
     sendSettleHalf(half: SettleHalf): void {
-      client.sendApp(matchId, { t: "settle", sig: half.sig, root: half.root });
+      ch.sendPeer({ t: "settle", sig: half.sig, root: half.root });
     },
 
     onSettleHalf(cb: (half: SettleHalf) => void): void {

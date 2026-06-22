@@ -1,4 +1,3 @@
-// frontend/src/games/ticTacToe/packages/client/src/hooks/usePvpTicTacToe.ts
 import {
   useCallback,
   useEffect,
@@ -54,7 +53,8 @@ import {
   buildCloseWithRootTx,
   parseTunnelId,
 } from "@/games/ticTacToe/app/lib/pvpOnchain";
-import { RelayClient } from "@/games/ticTacToe/app/lib/pvpRelay";
+import { MpClient, resolveMpWsUrl } from "@/pvp/mpClient";
+import type { MatchInfo, Role, PvpChannel } from "@/pvp/mpClient";
 import { PvpGameSession } from "@/agent/session/pvpGameSession";
 import type { SessionSnapshot } from "@/agent/session/pvpGameSession";
 import { createTicTacToeKit } from "@/agent/games/ticTacToe/kit";
@@ -244,9 +244,8 @@ export function usePvpTicTacToe(
   const [phaseOverride, setPhaseOverride] = useState<PvpPhase | null>(null);
   const [errorOverride, setErrorOverride] = useState<string | null>(null);
 
-  // ── Refs ─────────────────────────────────────────────────────────────────────
-
-  const relayRef = useRef<RelayClient | null>(null);
+  const relayRef = useRef<MpClient | null>(null);
+  const channelRef = useRef<PvpChannel | null>(null);
   const tunnelRef = useRef<core.DistributedTunnel<AnyState, CellMove> | null>(
     null,
   );
@@ -257,11 +256,7 @@ export function usePvpTicTacToe(
   const settledRef = useRef(false);
   const stoppingRef = useRef(false);
   const onMatchRef = useRef<
-    | ((
-        relay: RelayClient,
-        m: { matchId: string; role: "A" | "B"; opponentWallet: string },
-      ) => Promise<void>)
-    | undefined
+    ((mp: MpClient, m: MatchInfo) => Promise<void>) | undefined
   >(undefined);
   const openedResolveRef = useRef<((id: string) => void) | null>(null);
   const settleResolveRef = useRef<
@@ -333,7 +328,7 @@ export function usePvpTicTacToe(
   const finishSettle = useCallback(
     async (
       t: core.DistributedTunnel<AnyState, CellMove>,
-      relay: RelayClient,
+      mp: MpClient,
       matchId: string,
     ) => {
       if (settledRef.current) return;
@@ -348,7 +343,7 @@ export function usePvpTicTacToe(
         root,
         0n,
       );
-      relay.sendApp(matchId, {
+      channelRef.current?.sendPeer({
         t: "settle",
         sig: bytesToHex(half.sigSelf),
         root: bytesToHex(root),
@@ -379,7 +374,7 @@ export function usePvpTicTacToe(
             ),
           );
           setDigests((d) => ({ ...d, close: result.txDigest }));
-          relay.sendApp(matchId, { t: "closed", digest: result.txDigest });
+          channelRef.current?.sendPeer({ t: "closed", digest: result.txDigest });
         } catch (e) {
           console.warn(
             "[settle] Server-side settle failed, falling back to wallet submission:",
@@ -387,7 +382,7 @@ export function usePvpTicTacToe(
           );
           const res = await submit(buildCloseWithRootTx(t.tunnelId, coSigned));
           setDigests((d) => ({ ...d, close: res.digest }));
-          relay.sendApp(matchId, { t: "closed", digest: res.digest });
+          channelRef.current?.sendPeer({ t: "closed", digest: res.digest });
         }
       }
       await refreshBalance();
@@ -431,22 +426,14 @@ export function usePvpTicTacToe(
       bumpEpoch();
 
       try {
-        const relay = new RelayClient(MP_URL, w.address, eph.coreKey);
-        relayRef.current = relay;
-        await relay.ready;
+        const mp = new MpClient(resolveMpWsUrl(MP_URL), w.address, eph.coreKey);
+        relayRef.current = mp;
+        await mp.connect();
         setPhaseOverride("queuing");
-        relay.on("error", (m) => {
-          setErrorOverride(`${m.code}: ${m.message}`);
-          setPhaseOverride("error");
-        });
-        relay.on("match.found", (m) => {
-          void onMatchRef.current?.(relay, m as any);
-        });
-        // The queue key encodes the variant (+ board size for caro) so only players who chose the
-        // SAME setup match — otherwise the two seats would run incompatible protocols and diverge.
-        relay.queueJoin(
-          variant === "caro" ? `tictactoe:caro:${boardSize}` : "tictactoe:ttt",
-        );
+        const queueKey =
+          variant === "caro" ? `tictactoe:caro:${boardSize}` : "tictactoe:ttt";
+        const match = await mp.quickMatch(queueKey);
+        void onMatchRef.current?.(mp, match);
       } catch (e) {
         setErrorOverride(e instanceof Error ? e.message : String(e));
         setPhaseOverride("error");
@@ -458,8 +445,8 @@ export function usePvpTicTacToe(
 
   const onMatch = useCallback(
     async (
-      relay: RelayClient,
-      m: { matchId: string; role: "A" | "B"; opponentWallet: string },
+      relay: MpClient,
+      m: MatchInfo,
     ) => {
       try {
         const w = walletRef.current;
@@ -478,8 +465,11 @@ export function usePvpTicTacToe(
         );
         bumpEpoch();
 
+        const channel = relay.channel(m.matchId);
+        channelRef.current = channel;
+
         // App-channel dispatcher: opened tunnelId, settle half, closed digest, stop request.
-        relay.onApp(m.matchId, (mm) => {
+        channel.onPeer((mm) => {
           if (mm.t === "opened")
             openedResolveRef.current?.(String(mm.tunnelId));
           else if (mm.t === "settle") {
@@ -533,7 +523,7 @@ export function usePvpTicTacToe(
           tunnelId = id;
           setDigests((d) => ({ ...d, create: res.digest }));
           relay.tunnelOpened(m.matchId, tunnelId);
-          relay.sendApp(m.matchId, { t: "opened", tunnelId });
+          channel.sendPeer({ t: "opened", tunnelId });
         } else {
           setPhaseOverride("opening");
           tunnelId = await new Promise<string>((resolve) => {
@@ -602,7 +592,7 @@ export function usePvpTicTacToe(
             ),
             selfParty: m.role,
           },
-          relay.transport(m.matchId),
+          channel.transport,
           { a: BANKROLL, b: BANKROLL },
         );
         tunnelRef.current = t;
@@ -789,7 +779,7 @@ export function usePvpTicTacToe(
     if (!t || !relay) return;
     if (t.state.inner.winner === 0) return; // settle cleanly between games
     stoppingRef.current = true;
-    relay.sendApp(matchIdRef.current, { t: "stop" });
+    channelRef.current?.sendPeer({ t: "stop" });
     void finishSettle(t, relay, matchIdRef.current);
   }, [finishSettle]);
 

@@ -34,7 +34,12 @@ export type PeerMessage =
       transcriptRoot: string;
       sig: string;
     }
-  | { t: "frame"; data: string };
+  | { t: "frame"; data: string }
+  | { t: "settle"; sig: string; root: string }
+  | { t: "closed"; digest: string }
+  | { t: "stop" }
+  | { t: "opened"; tunnelId: string }
+  | { t: "stake"; amount: number };
 
 /** Engine transport + a peer-message side channel, both over one match's relay. */
 export interface PvpChannel {
@@ -69,6 +74,7 @@ export class MpClient {
     resolve: (m: MatchInfo) => void;
     reject: (e: Error) => void;
   }[] = [];
+  readonly #handlers = new Map<string, ((m: any) => void)[]>();
 
   constructor(url: string, wallet: string, ephemeral: KeyPair) {
     this.#url = url;
@@ -111,6 +117,8 @@ export class MpClient {
         } else if (m.type === "error") {
           if (!this.#connected) reject(new Error(`mp ${m.code}: ${m.message}`));
           else this.#failNextMatch(new Error(`mp ${m.code}: ${m.message}`));
+        } else {
+          this.#handlers.get(String(m.type))?.forEach((h) => h(m));
         }
       };
       ws.onerror = () => {
@@ -120,6 +128,23 @@ export class MpClient {
         this.#ws = null;
       };
     });
+  }
+
+  on(type: string, cb: (m: any) => void) {
+    let list = this.#handlers.get(type);
+    if (!list) {
+      list = [];
+      this.#handlers.set(type, list);
+    }
+    list.push(cb);
+  }
+
+  partyHello(matchId: string, ephemeralPubkey: string, walletSig: string) {
+    this.#send({ type: "party.hello", matchId, ephemeralPubkey, walletSig });
+  }
+
+  tunnelOpened(matchId: string, tunnelId: string) {
+    this.#send({ type: "tunnel.opened", matchId, tunnelId });
   }
 
   #deliverMatch(m: MatchInfo) {

@@ -118,6 +118,23 @@ export default function PvpBlackjack() {
   const oppBal = g.oppBalance;
   const finalResult = myBal > oppBal ? "win" : myBal < oppBal ? "lose" : "push";
 
+  // Perspective-based rendering (always show "self" at the bottom and "opponent" at the top)
+  const selfTitle = g.isDealer ? "Dealer (you)" : "Player (you)";
+  const selfLabel = g.isDealer ? "Dealer" : "Player";
+  const selfCards = g.isDealer ? g.dealerHand : g.playerHand;
+  const selfCardSeed = g.isDealer ? g.round * 2 + 1 : g.round * 2;
+  const selfSum = g.isDealer ? g.dealerSum : g.playerSum;
+  const selfBalance = g.isDealer ? g.balanceDealer : g.balancePlayer;
+  const selfIsWinning = finalResult === "win" && g.phase === "done";
+
+  const oppTitle = g.isDealer ? "Player" : "Dealer";
+  const oppLabel = g.isDealer ? "Player" : "Dealer";
+  const oppCards = g.isDealer ? g.playerHand : g.dealerHand;
+  const oppCardSeed = g.isDealer ? g.round * 2 : g.round * 2 + 1;
+  const oppSum = g.isDealer ? g.playerSum : g.dealerSum;
+  const oppBalance = g.isDealer ? g.balancePlayer : g.balanceDealer;
+  const oppIsWinning = finalResult === "lose" && g.phase === "done";
+
   // Bet/payout chip animation, driven off the player's (party A) seat — matching the fixed
   // player-bottom / dealer-top layout (same felt motion as the bot-vs-bot self-play table).
   const [customStake, setCustomStake] = useState(""); // free-typed buy-in (empty → a preset is active)
@@ -134,7 +151,7 @@ export default function PvpBlackjack() {
       prevRoundRef.current = -1;
       return;
     }
-    const balance = Number(g.balancePlayer);
+    const balance = Number(g.myBalance);
     if (prevRoundRef.current === -1) {
       if (g.gamePhase === "player") setAnimState("deal");
     } else {
@@ -153,7 +170,7 @@ export default function PvpBlackjack() {
   }, [
     g.round,
     g.gamePhase,
-    g.balancePlayer,
+    g.myBalance,
     g.playerHand.length,
     g.dealerHand.length,
   ]);
@@ -256,7 +273,7 @@ export default function PvpBlackjack() {
                 {animState === "deal" && (
                   <img
                     src={dealChip}
-                    className="animated-chip chip-deal"
+                    className={`animated-chip ${g.isDealer ? "chip-deal-reverse" : "chip-deal"}`}
                     alt="bet chip"
                   />
                 )}
@@ -267,47 +284,54 @@ export default function PvpBlackjack() {
                       className="animated-chip chip-win-collect-1"
                       alt="bet chip"
                     />
-                    <img
-                      src={dealChip}
-                      className="animated-chip chip-win-collect-2"
-                      alt="bet chip"
-                    />
+                    {!g.isDealer && (
+                      <img
+                        src={dealChip}
+                        className="animated-chip chip-win-collect-2"
+                        alt="bet chip"
+                      />
+                    )}
                   </>
                 )}
                 {animState === "lose" && (
-                  <img
-                    src={dealChip}
-                    className="animated-chip chip-lose"
-                    alt="bet chip"
-                  />
+                  <>
+                    <img
+                      src={dealChip}
+                      className="animated-chip chip-lose"
+                      alt="bet chip"
+                    />
+                    {g.isDealer && (
+                      <img
+                        src={dealChip}
+                        className="animated-chip chip-lose-from-bottom"
+                        alt="bet chip"
+                      />
+                    )}
+                  </>
                 )}
                 {animState === "push" && (
                   <img
                     src={dealChip}
-                    className="animated-chip chip-push"
+                    className={`animated-chip ${g.isDealer ? "chip-lose" : "chip-push"}`}
                     alt="bet chip"
                   />
                 )}
               </div>
             )}
 
-            {/* Dealer hand (top) + chip stack */}
+            {/* Opponent hand (top) + chip stack */}
             <div className="absolute top-[18%] md:top-[15%] left-1/2 -translate-x-1/2 z-20 w-full max-w-xs flex flex-col items-center">
               <div className="absolute -left-10 md:-left-16 top-[40px] flex flex-col items-center">
                 <span className="text-[7px] text-emerald-200/50 uppercase tracking-widest mb-1 font-bold">
-                  Dealer
+                  {oppLabel}
                 </span>
-                <ChipStack balance={g.balanceDealer} />
+                <ChipStack balance={oppBalance} />
               </div>
               <CardDisplay
-                title={`Dealer${g.isDealer ? " (you)" : ""}`}
-                cards={handToCardIndices(g.dealerHand, g.round * 2 + 1)}
-                sum={g.dealerSum}
-                isWinning={
-                  (g.isDealer
-                    ? finalResult === "win"
-                    : finalResult === "lose") && g.phase === "done"
-                }
+                title={oppTitle}
+                cards={handToCardIndices(oppCards, oppCardSeed)}
+                sum={oppSum}
+                isWinning={oppIsWinning}
               />
             </div>
 
@@ -330,24 +354,20 @@ export default function PvpBlackjack() {
               )}
             </div>
 
-            {/* Player hand (bottom) + chip stack */}
+            {/* Self hand (bottom) + chip stack */}
             <div className="absolute top-[68%] md:top-[60%] left-1/2 -translate-x-1/2 z-20 w-full max-w-xs flex flex-col items-center">
               <div className="absolute -left-10 md:-left-16 top-[40px] flex flex-col items-center">
                 <span className="text-[7px] text-emerald-200/50 uppercase tracking-widest mb-1 font-bold">
-                  Player
+                  {selfLabel}
                 </span>
-                <ChipStack balance={g.balancePlayer} />
+                <ChipStack balance={selfBalance} />
               </div>
               <CardDisplay
-                title={`Player${g.isDealer ? "" : " (you)"}`}
-                cards={handToCardIndices(g.playerHand, g.round * 2)}
-                sum={g.playerSum}
+                title={selfTitle}
+                cards={handToCardIndices(selfCards, selfCardSeed)}
+                sum={selfSum}
                 isPlayer
-                isWinning={
-                  (g.isDealer
-                    ? finalResult === "lose"
-                    : finalResult === "win") && g.phase === "done"
-                }
+                isWinning={selfIsWinning}
               />
             </div>
           </>

@@ -24,7 +24,8 @@ import {
   buildCloseWithRootTx,
   parseTunnelId,
 } from "@/games/blackjack/app/lib/bjPvpOnchain";
-import { RelayClient } from "@/games/blackjack/app/lib/bjRelay";
+import { MpClient, resolveMpWsUrl } from "@/pvp/mpClient";
+import type { MatchInfo, PvpChannel } from "@/pvp/mpClient";
 import { handValue } from "@/games/blackjack/app/lib/bjCards";
 import {
   BlackjackBetProtocol,
@@ -156,7 +157,8 @@ export function usePvpBlackjack(): PvpView {
     close?: string;
   }>({});
 
-  const relayRef = useRef<RelayClient | null>(null);
+  const relayRef = useRef<MpClient | null>(null);
+  const channelRef = useRef<PvpChannel | null>(null);
   const tunnelRef = useRef<core.DistributedTunnel<
     BlackjackState,
     BlackjackMove
@@ -172,8 +174,8 @@ export function usePvpBlackjack(): PvpView {
   const onMatchRef =
     useRef<
       (
-        relay: RelayClient,
-        m: { matchId: string; role: "A" | "B"; opponentWallet: string },
+        relay: MpClient,
+        m: MatchInfo,
       ) => Promise<void>
     >(undefined);
   const openedResolveRef = useRef<((id: string) => void) | null>(null);
@@ -270,7 +272,7 @@ export function usePvpBlackjack(): PvpView {
   const finishSettle = useCallback(
     async (
       t: core.DistributedTunnel<BlackjackState, BlackjackMove>,
-      relay: RelayClient,
+      relay: MpClient,
       matchId: string,
     ) => {
       if (settledRef.current) return;
@@ -285,7 +287,7 @@ export function usePvpBlackjack(): PvpView {
         root,
         0n,
       );
-      relay.sendApp(matchId, {
+      channelRef.current?.sendPeer({
         t: "settle",
         sig: bytesToHex(half.sigSelf),
         root: bytesToHex(root),
@@ -316,7 +318,7 @@ export function usePvpBlackjack(): PvpView {
             ),
           );
           setDigests((d) => ({ ...d, close: result.txDigest }));
-          relay.sendApp(matchId, { t: "closed", digest: result.txDigest });
+          channelRef.current?.sendPeer({ t: "closed", digest: result.txDigest });
         } catch (e) {
           console.warn(
             "[settle] Server-side settle failed, falling back to wallet submission:",
@@ -324,7 +326,7 @@ export function usePvpBlackjack(): PvpView {
           );
           const res = await submit(buildCloseWithRootTx(t.tunnelId, coSigned));
           setDigests((d) => ({ ...d, close: res.digest }));
-          relay.sendApp(matchId, { t: "closed", digest: res.digest });
+          channelRef.current?.sendPeer({ t: "closed", digest: res.digest });
         }
       }
       await refreshBalance();
@@ -349,22 +351,16 @@ export function usePvpBlackjack(): PvpView {
       setAutoState(false); // a fresh game (incl. rematch) starts in manual mode
       try {
         const connEph = core.generateKeyPair();
-        const relay = new RelayClient(
-          MP_URL,
+        const mp = new MpClient(
+          resolveMpWsUrl(MP_URL),
           walletAddress,
           core.keyPairFromSecret(connEph.secretKey),
         );
-        relayRef.current = relay;
-        await relay.ready;
+        relayRef.current = mp;
+        await mp.connect();
         setPhase("queuing");
-        relay.on("error", (m) => {
-          setError(`${m.code}: ${m.message}`);
-          setPhase("error");
-        });
-        relay.on("match.found", (m) => {
-          void onMatchRef.current?.(relay, m as any);
-        });
-        relay.queueJoin("blackjack");
+        const match = await mp.quickMatch("blackjack");
+        void onMatchRef.current?.(mp, match);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
         setPhase("error");
@@ -374,15 +370,19 @@ export function usePvpBlackjack(): PvpView {
 
   const onMatch = useCallback(
     async (
-      relay: RelayClient,
-      m: { matchId: string; role: "A" | "B"; opponentWallet: string },
+      relay: MpClient,
+      m: MatchInfo,
     ) => {
       try {
         matchIdRef.current = m.matchId;
         roleRef.current = m.role;
         setRole(m.role);
+
+        const channel = relay.channel(m.matchId);
+        channelRef.current = channel;
+
         // App-channel dispatcher: opened tunnelId, settle half, closed digest, and stop request.
-        relay.onApp(m.matchId, (mm) => {
+        channel.onPeer((mm) => {
           if (mm.t === "opened")
             openedResolveRef.current?.(String(mm.tunnelId));
           else if (mm.t === "settle") {
@@ -443,7 +443,7 @@ export function usePvpBlackjack(): PvpView {
 
         // Exchange chosen buy-ins so both seats agree on the (possibly asymmetric) starting balances.
         const myStake = stakeRef.current;
-        relay.sendApp(m.matchId, { t: "stake", amount: Number(myStake) });
+        channel.sendPeer({ t: "stake", amount: Number(myStake) });
         const oppStake =
           bufferedStakeRef.current ??
           (await new Promise<bigint>((res) => {
@@ -474,7 +474,7 @@ export function usePvpBlackjack(): PvpView {
           tunnelId = id;
           setDigests((d) => ({ ...d, create: res.digest }));
           relay.tunnelOpened(m.matchId, tunnelId);
-          relay.sendApp(m.matchId, { t: "opened", tunnelId });
+          channel.sendPeer({ t: "opened", tunnelId });
         } else {
           setPhase("opening");
           tunnelId = await new Promise<string>((resolve) => {
@@ -543,7 +543,7 @@ export function usePvpBlackjack(): PvpView {
             ),
             selfParty: m.role, // A = player, B = dealer
           },
-          relay.transport(m.matchId),
+          channel.transport,
           { a: stakeA, b: stakeB },
         );
         tunnelRef.current = t;
@@ -722,7 +722,7 @@ export function usePvpBlackjack(): PvpView {
     if (!t || !relay) return;
     if (t.state.phase !== "round_over") return; // settle cleanly between rounds
     stoppingRef.current = true;
-    relay.sendApp(matchIdRef.current, { t: "stop" });
+    channelRef.current?.sendPeer({ t: "stop" });
     void finishSettle(t, relay, matchIdRef.current);
   }, [finishSettle]);
 
@@ -774,6 +774,7 @@ export function usePvpBlackjack(): PvpView {
   const leave = useCallback(() => {
     relayRef.current?.close();
     relayRef.current = null;
+    channelRef.current = null;
     tunnelRef.current = null;
     setPhase("idle");
     setState(null);
