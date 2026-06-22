@@ -171,7 +171,9 @@ mod wire_tests {
         assert!(json["partyABalance"].is_null());
         assert!(json["finalNonce"].is_null());
         assert_eq!(
-            serde_json::from_value::<SettlementRow>(json).unwrap().party_a_balance,
+            serde_json::from_value::<SettlementRow>(json)
+                .unwrap()
+                .party_a_balance,
             None
         );
     }

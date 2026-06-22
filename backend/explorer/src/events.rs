@@ -187,8 +187,7 @@ mod tests {
     fn decodes_closed_into_settled_row() {
         let tunnel_id = [2u8; 32];
         let closed_at = 1_750_000_001_000_u64;
-        let encoded =
-            bcs::to_bytes(&ClosedBcs(tunnel_id, 100, 50, 7, closed_at)).unwrap();
+        let encoded = bcs::to_bytes(&ClosedBcs(tunnel_id, 100, 50, 7, closed_at)).unwrap();
 
         let row = event_to_row("TunnelClosed", &encoded, "DiG2", 42).unwrap();
         assert_eq!(row.kind, "settled");
@@ -206,19 +205,12 @@ mod tests {
         let party_a = [0xaau8; 32];
         let party_b = [0xbbu8; 32];
         let created_at = 1_750_000_002_000_u64;
-        let encoded =
-            bcs::to_bytes(&CreatedBcs(tunnel_id, party_a, party_b, created_at)).unwrap();
+        let encoded = bcs::to_bytes(&CreatedBcs(tunnel_id, party_a, party_b, created_at)).unwrap();
 
         let row = event_to_row("TunnelCreated", &encoded, "DiG3", 55).unwrap();
         assert_eq!(row.kind, "opened");
-        assert_eq!(
-            row.party_a_addr,
-            Some(format!("0x{}", "aa".repeat(32)))
-        );
-        assert_eq!(
-            row.party_b_addr,
-            Some(format!("0x{}", "bb".repeat(32)))
-        );
+        assert_eq!(row.party_a_addr, Some(format!("0x{}", "aa".repeat(32))));
+        assert_eq!(row.party_b_addr, Some(format!("0x{}", "bb".repeat(32))));
         assert!(row.party_a_balance.is_none());
         assert!(row.party_b_balance.is_none());
         assert!(row.final_nonce.is_none());

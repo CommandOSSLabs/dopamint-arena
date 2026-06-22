@@ -15,9 +15,11 @@ use explorer::api::{router, ApiState};
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let _ = dotenvy::dotenv();
-    tracing_subscriber::fmt().with_env_filter(
-        tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
-    ).init();
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+        )
+        .init();
 
     let database_url = std::env::var("DATABASE_URL")?;
     let store = Arc::new(shared::postgres::PgSettlementStore::connect(&database_url).await?);
@@ -51,28 +53,36 @@ async fn main() -> anyhow::Result<()> {
                     // Transient lag is NOT end-of-stream: skip the dropped window and keep bridging.
                     // (The bare `while let Ok` this replaces exited here, silencing the feed forever.)
                     Err(RecvError::Lagged(n)) => {
-                        tracing::warn!(skipped = n, "explorer:events message_rx lagged; live rows dropped");
+                        tracing::warn!(
+                            skipped = n,
+                            "explorer:events message_rx lagged; live rows dropped"
+                        );
                     }
                     Err(RecvError::Closed) => break,
                 }
             }
-            tracing::warn!("Redis explorer:events subscription closed; SSE live feed silent until restart");
+            tracing::warn!(
+                "Redis explorer:events subscription closed; SSE live feed silent until restart"
+            );
         });
     }
 
     let sse_tx = tx.clone();
-    let app = router(state).route(
-        "/v1/explorer/stream",
-        get(move || {
-            let rx = sse_tx.subscribe();
-            async move {
-                let stream = BroadcastStream::new(rx).filter_map(|m| async move {
-                    m.ok().map(|json| Ok::<_, Infallible>(Event::default().data(json)))
-                });
-                Sse::new(stream).keep_alive(KeepAlive::default())
-            }
-        }),
-    ).layer(tower_http::cors::CorsLayer::permissive());
+    let app = router(state)
+        .route(
+            "/v1/explorer/stream",
+            get(move || {
+                let rx = sse_tx.subscribe();
+                async move {
+                    let stream = BroadcastStream::new(rx).filter_map(|m| async move {
+                        m.ok()
+                            .map(|json| Ok::<_, Infallible>(Event::default().data(json)))
+                    });
+                    Sse::new(stream).keep_alive(KeepAlive::default())
+                }
+            }),
+        )
+        .layer(tower_http::cors::CorsLayer::permissive());
 
     let addr = std::env::var("EXPLORER_API_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".into());
     let listener = tokio::net::TcpListener::bind(&addr).await?;

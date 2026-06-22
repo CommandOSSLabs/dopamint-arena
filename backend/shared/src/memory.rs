@@ -96,7 +96,10 @@ impl SettlementStore for InMemorySettlementStore {
             None
         };
         v.truncate(limit);
-        Ok(SettlementPage { rows: v, next_cursor })
+        Ok(SettlementPage {
+            rows: v,
+            next_cursor,
+        })
     }
 
     async fn settled_count(&self) -> anyhow::Result<i64> {
@@ -131,12 +134,18 @@ mod tests {
     #[tokio::test]
     async fn upsert_counts_settled_once_and_upgrades_proof_url() {
         let s = InMemorySettlementStore::new();
-        s.upsert(row("d1", 10, LifecycleKind::Settled)).await.unwrap();
+        s.upsert(row("d1", 10, LifecycleKind::Settled))
+            .await
+            .unwrap();
         // indexer-sourced bare row first (no proof); then /settle enriches it.
         let mut enriched = row("d1", 10, LifecycleKind::Settled);
         enriched.proof_url = Some("https://agg/v1/blobs/x".into());
         s.upsert(enriched).await.unwrap();
-        assert_eq!(s.settled_count().await.unwrap(), 1, "same digest counts once");
+        assert_eq!(
+            s.settled_count().await.unwrap(),
+            1,
+            "same digest counts once"
+        );
         assert_eq!(
             s.get("d1").await.unwrap().unwrap().proof_url.as_deref(),
             Some("https://agg/v1/blobs/x"),
@@ -150,7 +159,9 @@ mod tests {
         let mut first = row("d1", 10, LifecycleKind::Settled);
         first.proof_url = Some("https://agg/v1/blobs/x".into());
         s.upsert(first).await.unwrap();
-        s.upsert(row("d1", 10, LifecycleKind::Settled)).await.unwrap(); // bare, no proof
+        s.upsert(row("d1", 10, LifecycleKind::Settled))
+            .await
+            .unwrap(); // bare, no proof
         assert_eq!(
             s.get("d1").await.unwrap().unwrap().proof_url.as_deref(),
             Some("https://agg/v1/blobs/x"),
@@ -165,16 +176,35 @@ mod tests {
             s.upsert(row(d, ts, LifecycleKind::Settled)).await.unwrap();
         }
         let p1 = s
-            .list(&SettlementQuery { limit: 2, ..Default::default() })
+            .list(&SettlementQuery {
+                limit: 2,
+                ..Default::default()
+            })
             .await
             .unwrap();
-        assert_eq!(p1.rows.iter().map(|r| r.tx_digest.clone()).collect::<Vec<_>>(), ["c", "b"]);
+        assert_eq!(
+            p1.rows
+                .iter()
+                .map(|r| r.tx_digest.clone())
+                .collect::<Vec<_>>(),
+            ["c", "b"]
+        );
         assert_eq!(p1.next_cursor.as_deref(), Some("20:b"));
         let p2 = s
-            .list(&SettlementQuery { cursor: p1.next_cursor, limit: 2, ..Default::default() })
+            .list(&SettlementQuery {
+                cursor: p1.next_cursor,
+                limit: 2,
+                ..Default::default()
+            })
             .await
             .unwrap();
-        assert_eq!(p2.rows.iter().map(|r| r.tx_digest.clone()).collect::<Vec<_>>(), ["a"]);
+        assert_eq!(
+            p2.rows
+                .iter()
+                .map(|r| r.tx_digest.clone())
+                .collect::<Vec<_>>(),
+            ["a"]
+        );
         assert_eq!(p2.next_cursor, None);
     }
 
@@ -186,14 +216,28 @@ mod tests {
         for d in ["a", "b", "c"] {
             s.upsert(row(d, 50, LifecycleKind::Settled)).await.unwrap();
         }
-        let p1 = s.list(&SettlementQuery { limit: 2, ..Default::default() }).await.unwrap();
-        assert_eq!(p1.rows.len(), 2);
-        let p2 = s
-            .list(&SettlementQuery { cursor: p1.next_cursor.clone(), limit: 2, ..Default::default() })
+        let p1 = s
+            .list(&SettlementQuery {
+                limit: 2,
+                ..Default::default()
+            })
             .await
             .unwrap();
-        let mut seen: Vec<String> =
-            p1.rows.iter().chain(p2.rows.iter()).map(|r| r.tx_digest.clone()).collect();
+        assert_eq!(p1.rows.len(), 2);
+        let p2 = s
+            .list(&SettlementQuery {
+                cursor: p1.next_cursor.clone(),
+                limit: 2,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let mut seen: Vec<String> = p1
+            .rows
+            .iter()
+            .chain(p2.rows.iter())
+            .map(|r| r.tx_digest.clone())
+            .collect();
         seen.sort();
         assert_eq!(seen, ["a", "b", "c"], "no same-ts row dropped across pages");
     }
@@ -205,12 +249,20 @@ mod tests {
         r.party_b_addr = Some("0xbob".into());
         s.upsert(r).await.unwrap();
         let hit = s
-            .list(&SettlementQuery { limit: 10, address: Some("0xbob".into()), ..Default::default() })
+            .list(&SettlementQuery {
+                limit: 10,
+                address: Some("0xbob".into()),
+                ..Default::default()
+            })
             .await
             .unwrap();
         assert_eq!(hit.rows.len(), 1);
         let miss = s
-            .list(&SettlementQuery { limit: 10, address: Some("0xnobody".into()), ..Default::default() })
+            .list(&SettlementQuery {
+                limit: 10,
+                address: Some("0xnobody".into()),
+                ..Default::default()
+            })
             .await
             .unwrap();
         assert_eq!(miss.rows.len(), 0);

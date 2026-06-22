@@ -110,8 +110,8 @@ impl StoredSettlement {
     /// carries no Walrus proof (that arrives later via the `explorer:proofs` subscriber) and no
     /// game tag. The frontend live feed only needs the settlement identity + balances.
     fn to_feed_row(&self) -> shared::SettlementRow {
-        let kind =
-            shared::LifecycleKind::from_db_str(&self.kind).unwrap_or(shared::LifecycleKind::Settled);
+        let kind = shared::LifecycleKind::from_db_str(&self.kind)
+            .unwrap_or(shared::LifecycleKind::Settled);
         shared::SettlementRow {
             tx_digest: self.tx_digest.clone(),
             kind,
@@ -164,7 +164,10 @@ impl Processor for SettlementPipeline {
 
 #[async_trait]
 impl Handler for SettlementPipeline {
-    async fn commit<'a>(values: &[Self::Value], conn: &mut Connection<'a>) -> anyhow::Result<usize> {
+    async fn commit<'a>(
+        values: &[Self::Value],
+        conn: &mut Connection<'a>,
+    ) -> anyhow::Result<usize> {
         // 1. Idempotent batch upsert. On a reprocessed checkpoint the enrichable columns
         // (addresses + proof fields) are COALESCE-preserved so re-decoding never clobbers
         // values filled in by a later open-row commit or the /settle path. Balances/nonce/

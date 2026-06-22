@@ -123,7 +123,11 @@ async fn proof_before_row_is_not_lost() {
         "proof link attached to the row after it arrived"
     );
     assert_eq!(p.walrus_blob_id.as_deref(), Some("blob123"));
-    assert_eq!(pending_count(&mut c, d).await, 0, "pending drained once merged");
+    assert_eq!(
+        pending_count(&mut c, d).await,
+        0,
+        "pending drained once merged"
+    );
     cleanup(&mut c, d).await;
 }
 

@@ -89,14 +89,21 @@ impl SettlementStore for PgSettlementStore {
         .fetch_all(&self.pool)
         .await?;
 
-        let mut out: Vec<SettlementRow> = rows.iter().map(row_from_pg).collect::<anyhow::Result<Vec<_>>>()?;
+        let mut out: Vec<SettlementRow> = rows
+            .iter()
+            .map(row_from_pg)
+            .collect::<anyhow::Result<Vec<_>>>()?;
         let next_cursor = if out.len() as i64 > limit {
             out.truncate(limit as usize);
-            out.last().map(|r| crate::encode_cursor(r.timestamp_ms, &r.tx_digest))
+            out.last()
+                .map(|r| crate::encode_cursor(r.timestamp_ms, &r.tx_digest))
         } else {
             None
         };
-        Ok(SettlementPage { rows: out, next_cursor })
+        Ok(SettlementPage {
+            rows: out,
+            next_cursor,
+        })
     }
 
     async fn settled_count(&self) -> anyhow::Result<i64> {
@@ -151,12 +158,10 @@ mod tests {
         .execute(&s.pool)
         .await
         .unwrap();
-        sqlx::query(
-            "CREATE INDEX IF NOT EXISTS settlement_tunnel_idx ON settlement (tunnel_id)",
-        )
-        .execute(&s.pool)
-        .await
-        .unwrap();
+        sqlx::query("CREATE INDEX IF NOT EXISTS settlement_tunnel_idx ON settlement (tunnel_id)")
+            .execute(&s.pool)
+            .await
+            .unwrap();
         sqlx::query(
             "CREATE INDEX IF NOT EXISTS settlement_party_a_idx ON settlement (party_a_addr)",
         )
@@ -187,7 +192,10 @@ mod tests {
         .await
         .unwrap();
         // Reset state before each test.
-        sqlx::query("TRUNCATE settlement").execute(&s.pool).await.unwrap();
+        sqlx::query("TRUNCATE settlement")
+            .execute(&s.pool)
+            .await
+            .unwrap();
         sqlx::query("UPDATE settlement_meta SET value = 0 WHERE key = 'settled_count'")
             .execute(&s.pool)
             .await
@@ -220,11 +228,27 @@ mod tests {
         for (d, ts) in [("a", 10i64), ("b", 20), ("c", 30)] {
             insert_row(&s.pool, d, ts, Some("0xb")).await;
         }
-        let p1 = s.list(&SettlementQuery { limit: 2, ..Default::default() }).await.unwrap();
-        assert_eq!(p1.rows.iter().map(|r| r.tx_digest.clone()).collect::<Vec<_>>(), ["c", "b"]);
+        let p1 = s
+            .list(&SettlementQuery {
+                limit: 2,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            p1.rows
+                .iter()
+                .map(|r| r.tx_digest.clone())
+                .collect::<Vec<_>>(),
+            ["c", "b"]
+        );
         assert_eq!(p1.next_cursor.as_deref(), Some("20:b"));
         let hit = s
-            .list(&SettlementQuery { limit: 10, address: Some("0xb".into()), ..Default::default() })
+            .list(&SettlementQuery {
+                limit: 10,
+                address: Some("0xb".into()),
+                ..Default::default()
+            })
             .await
             .unwrap();
         assert_eq!(hit.rows.len(), 3);
@@ -241,6 +265,10 @@ mod tests {
             .execute(&s.pool)
             .await
             .unwrap();
-        assert_eq!(s.settled_count().await.unwrap(), 5, "reads the maintained counter, not COUNT(*)");
+        assert_eq!(
+            s.settled_count().await.unwrap(),
+            5,
+            "reads the maintained counter, not COUNT(*)"
+        );
     }
 }

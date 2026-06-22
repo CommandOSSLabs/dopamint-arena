@@ -76,12 +76,30 @@ async fn transcript(State(s): State<ApiState>, Path(digest): Path<String>) -> Re
         }
     };
     let Some(blob_id) = blob_id else {
-        return (StatusCode::NOT_FOUND, "settlement has no archived transcript").into_response();
+        return (
+            StatusCode::NOT_FOUND,
+            "settlement has no archived transcript",
+        )
+            .into_response();
     };
-    let url = format!("{}/v1/blobs/{}", s.walrus_aggregator_url.trim_end_matches('/'), blob_id);
-    match s.http.get(&url).send().await.and_then(|r| r.error_for_status()) {
+    let url = format!(
+        "{}/v1/blobs/{}",
+        s.walrus_aggregator_url.trim_end_matches('/'),
+        blob_id
+    );
+    match s
+        .http
+        .get(&url)
+        .send()
+        .await
+        .and_then(|r| r.error_for_status())
+    {
         Ok(resp) => match resp.bytes().await {
-            Ok(body) => ([(axum::http::header::CONTENT_TYPE, "application/json")], body).into_response(),
+            Ok(body) => (
+                [(axum::http::header::CONTENT_TYPE, "application/json")],
+                body,
+            )
+                .into_response(),
             Err(e) => (StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
         },
         Err(e) => (StatusCode::BAD_GATEWAY, format!("walrus fetch failed: {e}")).into_response(),
@@ -121,11 +139,21 @@ mod tests {
 
     fn settled(d: &str, ts: i64) -> SettlementRow {
         SettlementRow {
-            tx_digest: d.into(), kind: LifecycleKind::Settled, tunnel_id: "0xtun".into(),
-            party_a_addr: Some("0xa".into()), party_b_addr: Some("0xb".into()),
-            party_a_balance: Some(60), party_b_balance: Some(40), final_nonce: Some(3),
-            transcript_root: Some("aa".into()), proof_url: None, walrus_blob_id: None,
-            checkpoint: 7, timestamp_ms: ts, closed_at_ms: Some(ts), game: None,
+            tx_digest: d.into(),
+            kind: LifecycleKind::Settled,
+            tunnel_id: "0xtun".into(),
+            party_a_addr: Some("0xa".into()),
+            party_b_addr: Some("0xb".into()),
+            party_a_balance: Some(60),
+            party_b_balance: Some(40),
+            final_nonce: Some(3),
+            transcript_root: Some("aa".into()),
+            proof_url: None,
+            walrus_blob_id: None,
+            checkpoint: 7,
+            timestamp_ms: ts,
+            closed_at_ms: Some(ts),
+            game: None,
         }
     }
 
@@ -133,20 +161,38 @@ mod tests {
     async fn list_returns_newest_first_json() {
         let app = router(state_with(vec![settled("a", 10), settled("b", 20)]));
         let res = app
-            .oneshot(Request::builder().uri("/v1/settlements?limit=10").body(axum::body::Body::empty()).unwrap())
-            .await.unwrap();
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/settlements?limit=10")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
         let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
         let page: shared::SettlementPage = serde_json::from_slice(&body).unwrap();
-        assert_eq!(page.rows.iter().map(|r| r.tx_digest.clone()).collect::<Vec<_>>(), ["b", "a"]);
+        assert_eq!(
+            page.rows
+                .iter()
+                .map(|r| r.tx_digest.clone())
+                .collect::<Vec<_>>(),
+            ["b", "a"]
+        );
     }
 
     #[tokio::test]
     async fn detail_404_for_unknown_digest() {
         let app = router(state_with(vec![]));
         let res = app
-            .oneshot(Request::builder().uri("/v1/settlements/nope").body(axum::body::Body::empty()).unwrap())
-            .await.unwrap();
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/settlements/nope")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
         assert_eq!(res.status(), StatusCode::NOT_FOUND);
     }
 
@@ -154,8 +200,14 @@ mod tests {
     async fn transcript_404_when_no_blob() {
         let app = router(state_with(vec![settled("a", 10)])); // walrus_blob_id None
         let res = app
-            .oneshot(Request::builder().uri("/v1/settlements/a/transcript").body(axum::body::Body::empty()).unwrap())
-            .await.unwrap();
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/settlements/a/transcript")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
         assert_eq!(res.status(), StatusCode::NOT_FOUND);
     }
 }

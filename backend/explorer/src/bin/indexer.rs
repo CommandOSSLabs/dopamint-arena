@@ -87,7 +87,8 @@ async fn wire_redis(redis_url: &str, database_url_str: &str) -> anyhow::Result<(
     let mgr = AsyncDieselConnectionManager::<AsyncPgConnection>::new(database_url_str);
     let pool: Pool<AsyncPgConnection> = Pool::builder().build(mgr).await?;
 
-    let subscriber = Builder::from_config(RedisConfig::from_url(redis_url)?).build_subscriber_client()?;
+    let subscriber =
+        Builder::from_config(RedisConfig::from_url(redis_url)?).build_subscriber_client()?;
     subscriber.init().await?;
     subscriber.subscribe("explorer:proofs").await?;
     let mut messages = subscriber.message_rx();
@@ -103,7 +104,10 @@ async fn wire_redis(redis_url: &str, database_url_str: &str) -> anyhow::Result<(
                 // A transient lag is NOT end-of-stream: skip the dropped window and keep draining.
                 // (The bare `while let Ok` this replaces exited here, silencing proofs until restart.)
                 Err(RecvError::Lagged(n)) => {
-                    tracing::warn!(skipped = n, "explorer:proofs message_rx lagged; proof links dropped");
+                    tracing::warn!(
+                        skipped = n,
+                        "explorer:proofs message_rx lagged; proof links dropped"
+                    );
                     continue;
                 }
                 Err(RecvError::Closed) => break,
@@ -119,7 +123,9 @@ async fn wire_redis(redis_url: &str, database_url_str: &str) -> anyhow::Result<(
                 }
             };
             // Need a digest, and at least one proof field worth recording.
-            let Some(digest) = link.tx_digest else { continue };
+            let Some(digest) = link.tx_digest else {
+                continue;
+            };
             if link.proof_url.is_none() && link.walrus_blob_id.is_none() {
                 continue;
             }
