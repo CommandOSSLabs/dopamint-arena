@@ -8,15 +8,10 @@ import { coSignedToSettleRequest } from "@/backend/settleRequest";
 import {
   useCurrentAccount,
   useSignAndExecuteTransaction,
-  useSignPersonalMessage,
 } from "@mysten/dapp-kit";
 import { SuiJsonRpcClient } from "@mysten/sui/jsonRpc";
 import { getSuiClient } from "@/games/blackjack/app/lib/bjBots";
-import {
-  getOrCreateEphemeral,
-  attestationMessage,
-  verifyAttestation,
-} from "@/games/blackjack/app/lib/bjPvpIdentity";
+import { getOrCreateEphemeral } from "@/games/blackjack/app/lib/bjPvpIdentity";
 import {
   buildCreateAndShareTx,
   buildDepositTx,
@@ -24,9 +19,22 @@ import {
   buildCloseWithRootTx,
   parseTunnelId,
 } from "@/games/blackjack/app/lib/bjPvpOnchain";
-import { RelayClient } from "@/games/blackjack/app/lib/bjRelay";
 import { handValue } from "@/games/blackjack/app/lib/bjCards";
-import { installResumePersistence, evictExpiredRecords } from "@/pvp/resume";
+import {
+  MpClient,
+  resolveMpWsUrl,
+  type MatchInfo,
+  type PeerMessage,
+  type PvpChannel,
+} from "@/pvp/mpClient";
+import { attachResume, resumeActiveTunnels } from "@/pvp/resumeSession";
+import { raiseDisputeUnilateral } from "@/onchain/tunnelTx";
+import { makeBlackjackResumeAdapter } from "@/games/blackjack/blackjackResumeAdapter";
+import {
+  installResumePersistence,
+  evictExpiredRecords,
+  readResumeRecord,
+} from "@/pvp/resume";
 import {
   BlackjackBetProtocol,
   maxBet as tableMaxBet,
@@ -41,7 +49,7 @@ import {
 type BlackjackState = BetBlackjackState;
 type BlackjackMove = BetBlackjackMove;
 
-// MP relay base (RelayClient appends /v1/mp). Prefer an explicit VITE_MP_URL; otherwise derive
+// MP relay base (resolveMpWsUrl appends /v1/mp). Prefer an explicit VITE_MP_URL; otherwise derive
 // from the backend base, and when that's empty (same-origin production build) from the page
 // origin. Never hardcode localhost — a deployed https site would try ws://127.0.0.1 and fail.
 const MP_URL =
@@ -140,7 +148,6 @@ export function usePvpBlackjack(): PvpView {
   const account = useCurrentAccount();
   const walletAddress = account?.address ?? "";
   const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
-  const { mutateAsync: signPersonalMessage } = useSignPersonalMessage();
   const proto = useMemo(() => new BlackjackBetProtocol(), []);
 
   const [phase, setPhase] = useState<PvpPhase>("idle");
@@ -157,7 +164,9 @@ export function usePvpBlackjack(): PvpView {
     close?: string;
   }>({});
 
-  const relayRef = useRef<RelayClient | null>(null);
+  const mpRef = useRef<MpClient | null>(null);
+  const channelRef = useRef<PvpChannel | null>(null);
+  const detachResumeRef = useRef<(() => void) | null>(null);
   const tunnelRef = useRef<core.DistributedTunnel<
     BlackjackState,
     BlackjackMove
@@ -171,12 +180,7 @@ export function usePvpBlackjack(): PvpView {
   const settledRef = useRef(false);
   const stoppingRef = useRef(false);
   const onMatchRef =
-    useRef<
-      (
-        relay: RelayClient,
-        m: { matchId: string; role: "A" | "B"; opponentWallet: string },
-      ) => Promise<void>
-    >(undefined);
+    useRef<(mp: MpClient, m: MatchInfo) => Promise<void>>(undefined);
   const openedResolveRef = useRef<((id: string) => void) | null>(null);
   const settleResolveRef = useRef<
     ((val: { sig: Uint8Array; root: Uint8Array }) => void) | null
@@ -187,6 +191,8 @@ export function usePvpBlackjack(): PvpView {
   } | null>(null);
   const stakeResolveRef = useRef<((amount: bigint) => void) | null>(null);
   const bufferedStakeRef = useRef<bigint | null>(null);
+  const helloResolveRef = useRef<((pub: string) => void) | null>(null);
+  const bufferedHelloRef = useRef<string | null>(null);
 
   const sessionRef = useRef<RegisterSessionResult | null>(null);
   const moveCountRef = useRef(0);
@@ -226,8 +232,6 @@ export function usePvpBlackjack(): PvpView {
   }, [refreshBalance]);
 
   // Register the pagehide/visibility flush and evict stale resume records once, on mount.
-  // Full attachResume wiring lands with the bjRelay -> MpClient migration (the resync handshake
-  // needs the MpClient peer side-channel; bjResumeAdapter is ready for it).
   useEffect(() => {
     installResumePersistence();
     evictExpiredRecords();
@@ -279,8 +283,8 @@ export function usePvpBlackjack(): PvpView {
   const finishSettle = useCallback(
     async (
       t: core.DistributedTunnel<BlackjackState, BlackjackMove>,
-      relay: RelayClient,
-      matchId: string,
+      channel: PvpChannel,
+      _matchId: string,
     ) => {
       if (settledRef.current) return;
       settledRef.current = true;
@@ -294,7 +298,7 @@ export function usePvpBlackjack(): PvpView {
         root,
         0n,
       );
-      relay.sendApp(matchId, {
+      channel.sendPeer({
         t: "settle",
         sig: bytesToHex(half.sigSelf),
         root: bytesToHex(root),
@@ -325,7 +329,7 @@ export function usePvpBlackjack(): PvpView {
             ),
           );
           setDigests((d) => ({ ...d, close: result.txDigest }));
-          relay.sendApp(matchId, { t: "closed", digest: result.txDigest });
+          channel.sendPeer({ t: "closed", digest: result.txDigest });
         } catch (e) {
           console.warn(
             "[settle] Server-side settle failed, falling back to wallet submission:",
@@ -333,13 +337,149 @@ export function usePvpBlackjack(): PvpView {
           );
           const res = await submit(buildCloseWithRootTx(t.tunnelId, coSigned));
           setDigests((d) => ({ ...d, close: res.digest }));
-          relay.sendApp(matchId, { t: "closed", digest: res.digest });
+          channel.sendPeer({ t: "closed", digest: res.digest });
         }
       }
       await refreshBalance();
       setPhase("done");
     },
     [submit, refreshBalance, flushHeartbeat],
+  );
+
+  // Wire the per-round loop + resume onto a freshly built/rebuilt tunnel. Shared by the live
+  // (onMatch) and cold-load (queue) paths so both get identical onConfirmed + attachResume wiring.
+  const activateSession = useCallback(
+    (
+      mp: MpClient,
+      channel: PvpChannel,
+      t: core.DistributedTunnel<BlackjackState, BlackjackMove>,
+      info: {
+        matchId: string;
+        role: "A" | "B";
+        opponentWallet: string;
+        opponentPubkeyHex: string;
+        selfEphemeralSecretHex: string;
+      },
+    ) => {
+      tunnelRef.current = t;
+      channelRef.current = channel;
+      // Per-round log: record the player's (party A) result's updates.
+      let lastLoggedRound = 0;
+      // Initialize from the live checkpoint so the first delta is correct for both the live
+      // and cold-load paths (a rebuilt tunnel resumes mid-game, not from the starting stake).
+      let lastBalanceA = Number(t.state.balanceA);
+      const onAdvance = () => {
+        const st = t.state;
+        setState({ ...st });
+        if (st.phase === "round_over" && Number(st.round) > lastLoggedRound) {
+          const balA = Number(st.balanceA);
+          const delta = balA - lastBalanceA;
+          const outcome: RoundResult["outcome"] =
+            delta > 0 ? "win" : delta < 0 ? "lose" : "push";
+          const rr: RoundResult = {
+            round: Number(st.round),
+            outcome,
+            playerSum: handValue(st.playerHand),
+            dealerSum: handValue(st.dealerHand),
+          };
+          setRounds((prev) => [...prev, rr].slice(-30));
+          lastLoggedRound = Number(st.round);
+          lastBalanceA = balA;
+        }
+        if (stoppingRef.current) return; // a stop/settle is in progress
+        if (proto.isTerminal(st)) {
+          void finishSettle(t, channel, info.matchId);
+          return;
+        }
+        if (st.phase === "player" && info.role === getPlayerParty(st.round)) {
+          if (autoRef.current) {
+            const mv = proto.randomMove(st, info.role, Math.random);
+            if (mv)
+              setTimeout(
+                () => {
+                  try {
+                    t.propose(mv, BigInt(Date.now()));
+                  } catch {
+                    /* not my turn / in flight */
+                  }
+                },
+                autoRef.current ? 50 : BOT_MOVE_MS,
+              );
+          }
+        } else if (
+          st.phase === "dealer" &&
+          info.role === getDealerParty(st.round)
+        ) {
+          // The dealer is deterministic — always auto-stand (triggers draw-to-17), regardless of the toggle.
+          setTimeout(
+            () => {
+              try {
+                t.propose({ action: "stand" }, BigInt(Date.now()));
+              } catch {
+                /* in flight */
+              }
+            },
+            autoRef.current ? 50 : DEALER_MS,
+          );
+        } else if (
+          st.phase === "round_over" &&
+          info.role === getPlayerParty(st.round + 1n) &&
+          autoRef.current
+        ) {
+          // Only the player bets (the bet deals the next round); auto reuses the last bet.
+          const mv = autoBetMove(lastBetRef.current, st);
+          if (mv)
+            setTimeout(
+              () => {
+                try {
+                  t.propose(mv, BigInt(Date.now()));
+                } catch {
+                  /* raced / in flight */
+                }
+              },
+              autoRef.current ? 100 : NEXT_MS,
+            );
+        }
+      };
+      t.onConfirmed = (u) => {
+        moveCountRef.current += 1;
+        actionsRef.current += 1;
+        transcriptRef.current?.append(u);
+        onAdvance();
+        flushHeartbeat(t.tunnelId, false);
+      };
+      // Resume wiring: persist on confirm + run the resync handshake on reconnect.
+      detachResumeRef.current?.();
+      detachResumeRef.current = attachResume({
+        mp,
+        channel,
+        tunnel: t,
+        adapter: makeBlackjackResumeAdapter(() => onAdvance()),
+        identity: {
+          matchId: info.matchId,
+          tunnelId: t.tunnelId,
+          role: info.role,
+          game: "blackjack",
+          opponentWallet: info.opponentWallet,
+          opponentPubkeyHex: info.opponentPubkeyHex,
+          selfEphemeralSecretHex: info.selfEphemeralSecretHex,
+        },
+        // Settlement floor: after the 1h grace, settle from the held checkpoint.
+        onGraceExpired: (latest) => {
+          if (latest)
+            void raiseDisputeUnilateral({
+              signExec: submit,
+              tunnelId: t.tunnelId,
+              update: latest,
+              role: info.role,
+            });
+        },
+      });
+      setPhase("playing");
+      setState({ ...t.state });
+      onAdvance(); // kick off (deal already dealt round 1 -> player phase)
+    },
+    [proto, submit, finishSettle, flushHeartbeat],
   );
 
   const queue = useCallback(() => {
@@ -356,43 +496,68 @@ export function usePvpBlackjack(): PvpView {
       setRounds([]);
       autoRef.current = false;
       setAutoState(false); // a fresh game (incl. rematch) starts in manual mode
+      bufferedSettleRef.current = null;
+      bufferedStakeRef.current = null;
+      bufferedHelloRef.current = null;
+      openedResolveRef.current = null;
+      settleResolveRef.current = null;
+      stakeResolveRef.current = null;
+      helloResolveRef.current = null;
       try {
         const connEph = core.generateKeyPair();
-        const relay = new RelayClient(
-          MP_URL,
-          walletAddress,
-          core.keyPairFromSecret(connEph.secretKey),
+        const mp = new MpClient(resolveMpWsUrl(MP_URL), walletAddress, connEph);
+        mpRef.current = mp;
+        // Cold-load: rebuild any persisted in-flight blackjack match before joining a queue.
+        installResumePersistence();
+        const restored = resumeActiveTunnels<BlackjackState, BlackjackMove>(
+          mp,
+          "blackjack",
+          { proto, adapter: makeBlackjackResumeAdapter(() => {}) },
+          { selfWallet: walletAddress },
         );
-        relayRef.current = relay;
-        await relay.ready;
+        if (restored.length > 0) {
+          const { tunnel, channel } = restored[0];
+          const rec = readResumeRecord(tunnel.tunnelId)!;
+          matchIdRef.current = rec.matchId;
+          roleRef.current = rec.role;
+          setRole(rec.role);
+          activateSession(mp, channel, tunnel, {
+            matchId: rec.matchId,
+            role: rec.role,
+            opponentWallet: rec.opponentWallet,
+            opponentPubkeyHex: rec.opponentPubkeyHex,
+            selfEphemeralSecretHex: rec.selfEphemeralSecretHex!,
+          });
+          await mp.connect();
+          return; // skip quickMatch — continuing an in-flight match
+        }
+        await mp.connect();
         setPhase("queuing");
-        relay.on("error", (m) => {
-          setError(`${m.code}: ${m.message}`);
-          setPhase("error");
-        });
-        relay.on("match.found", (m) => {
-          void onMatchRef.current?.(relay, m as any);
-        });
-        relay.queueJoin("blackjack");
+        const m = await mp.quickMatch("blackjack");
+        await onMatchRef.current?.(mp, m);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
         setPhase("error");
       }
     })();
-  }, [walletAddress]);
+  }, [walletAddress, proto, activateSession]);
 
   const onMatch = useCallback(
-    async (
-      relay: RelayClient,
-      m: { matchId: string; role: "A" | "B"; opponentWallet: string },
-    ) => {
+    async (mp: MpClient, m: MatchInfo) => {
       try {
         matchIdRef.current = m.matchId;
         roleRef.current = m.role;
         setRole(m.role);
-        // App-channel dispatcher: opened tunnelId, settle half, closed digest, and stop request.
-        relay.onApp(m.matchId, (mm) => {
-          if (mm.t === "opened")
+        // One channel per match: both the engine transport and the peer side-channel come from it.
+        const channel = mp.channel(m.matchId);
+        channelRef.current = channel;
+        // Peer-channel dispatcher: hello pubkey, opened tunnelId, settle half, stake, closed, stop.
+        channel.onPeer((mm: Exclude<PeerMessage, { t: "frame" }>) => {
+          if (mm.t === "hello") {
+            const pub = String(mm.ephemeralPubkey);
+            if (helloResolveRef.current) helloResolveRef.current(pub);
+            else bufferedHelloRef.current = pub;
+          } else if (mm.t === "opened")
             openedResolveRef.current?.(String(mm.tunnelId));
           else if (mm.t === "settle") {
             const sig = hexToBytes(String(mm.sig));
@@ -409,50 +574,26 @@ export function usePvpBlackjack(): PvpView {
           else if (mm.t === "stop") {
             stoppingRef.current = true;
             if (tunnelRef.current)
-              void finishSettle(tunnelRef.current, relay, m.matchId);
+              void finishSettle(tunnelRef.current, channel, m.matchId);
           }
         });
-        // Register the party.hello capture synchronously (before any await).
-        let helloResolve!: (h: {
-          ephemeralPubkey: string;
-          walletSig: string;
-        }) => void;
-        const oppHelloMsg = new Promise<{
-          ephemeralPubkey: string;
-          walletSig: string;
-        }>((res) => {
-          helloResolve = res;
-        });
-        relay.on("party.hello", (h) => {
-          if (h.matchId === m.matchId)
-            helloResolve({
-              ephemeralPubkey: String(h.ephemeralPubkey),
-              walletSig: String(h.walletSig),
-            });
-        });
 
+        // The per-match tunnel signing key is keyed by matchId (NOT the connection key).
         const myEph = await getOrCreateEphemeral(m.matchId);
-        const { signature: walletSig } = await signPersonalMessage({
-          message: attestationMessage(m.matchId, myEph.pubkeyHex),
-        });
-        relay.partyHello(m.matchId, myEph.pubkeyHex, walletSig);
-
-        const oppHello = await oppHelloMsg;
-        const attestOk = await verifyAttestation(
-          m.matchId,
-          oppHello.ephemeralPubkey,
-          oppHello.walletSig,
-          m.opponentWallet,
-        );
-        if (!attestOk)
-          console.warn(
-            "[pvp] opponent attestation did not verify; proceeding (lobby identity is self-asserted in v1)",
-          );
-        const oppEphPubkey = hexToBytes(oppHello.ephemeralPubkey);
+        // hello carries the single move-signer pubkey (no attestation): buffer races.
+        channel.sendPeer({ t: "hello", ephemeralPubkey: myEph.pubkeyHex });
+        const oppHello =
+          bufferedHelloRef.current ??
+          (await new Promise<string>((res) => {
+            helloResolveRef.current = res;
+          }));
+        // Opponent's move-signer pubkey. Their on-chain party is m.opponentWallet (self-asserted
+        // in v1); the two are deliberately unrelated keys, so there's no address derivation.
+        const oppEphPubkey = hexToBytes(oppHello);
 
         // Exchange chosen buy-ins so both seats agree on the (possibly asymmetric) starting balances.
         const myStake = stakeRef.current;
-        relay.sendApp(m.matchId, { t: "stake", amount: Number(myStake) });
+        channel.sendPeer({ t: "stake", amount: Number(myStake) });
         const oppStake =
           bufferedStakeRef.current ??
           (await new Promise<bigint>((res) => {
@@ -482,8 +623,8 @@ export function usePvpBlackjack(): PvpView {
           if (!id) throw new Error("no tunnelId");
           tunnelId = id;
           setDigests((d) => ({ ...d, create: res.digest }));
-          relay.tunnelOpened(m.matchId, tunnelId);
-          relay.sendApp(m.matchId, { t: "opened", tunnelId });
+          mp.announceTunnel(m.matchId, tunnelId);
+          channel.sendPeer({ t: "opened", tunnelId });
         } else {
           setPhase("opening");
           tunnelId = await new Promise<string>((resolve) => {
@@ -552,7 +693,7 @@ export function usePvpBlackjack(): PvpView {
             ),
             selfParty: m.role, // A = player, B = dealer
           },
-          relay.transport(m.matchId),
+          channel.transport,
           { a: stakeA, b: stakeB },
         );
         tunnelRef.current = t;
@@ -582,92 +723,13 @@ export function usePvpBlackjack(): PvpView {
             console.error("[blackjack pvp] registerSession failed:", e),
           );
 
-        // Per-round log: record the player's (party A) result's updates.
-        let lastLoggedRound = 0;
-        let lastBalanceA = Number(stakeA);
-        const onAdvance = () => {
-          const st = t.state;
-          setState({ ...st });
-          if (st.phase === "round_over" && Number(st.round) > lastLoggedRound) {
-            const balA = Number(st.balanceA);
-            const delta = balA - lastBalanceA;
-            const outcome: RoundResult["outcome"] =
-              delta > 0 ? "win" : delta < 0 ? "lose" : "push";
-            const rr: RoundResult = {
-              round: Number(st.round),
-              outcome,
-              playerSum: handValue(st.playerHand),
-              dealerSum: handValue(st.dealerHand),
-            };
-            setRounds((prev) => [...prev, rr].slice(-30));
-            lastLoggedRound = Number(st.round);
-            lastBalanceA = balA;
-          }
-          if (stoppingRef.current) return; // a stop/settle is in progress
-          if (proto.isTerminal(st)) {
-            void finishSettle(t, relay, m.matchId);
-            return;
-          }
-          if (st.phase === "player" && m.role === getPlayerParty(st.round)) {
-            if (autoRef.current) {
-              const mv = proto.randomMove(st, m.role, Math.random);
-              if (mv)
-                setTimeout(
-                  () => {
-                    try {
-                      t.propose(mv, BigInt(Date.now()));
-                    } catch {
-                      /* not my turn / in flight */
-                    }
-                  },
-                  autoRef.current ? 50 : BOT_MOVE_MS,
-                );
-            }
-          } else if (
-            st.phase === "dealer" &&
-            m.role === getDealerParty(st.round)
-          ) {
-            // The dealer is deterministic — always auto-stand (triggers draw-to-17), regardless of the toggle.
-            setTimeout(
-              () => {
-                try {
-                  t.propose({ action: "stand" }, BigInt(Date.now()));
-                } catch {
-                  /* in flight */
-                }
-              },
-              autoRef.current ? 50 : DEALER_MS,
-            );
-          } else if (
-            st.phase === "round_over" &&
-            m.role === getPlayerParty(st.round + 1n) &&
-            autoRef.current
-          ) {
-            // Only the player bets (the bet deals the next round); auto reuses the last bet.
-            const mv = autoBetMove(lastBetRef.current, st);
-            if (mv)
-              setTimeout(
-                () => {
-                  try {
-                    t.propose(mv, BigInt(Date.now()));
-                  } catch {
-                    /* raced / in flight */
-                  }
-                },
-                autoRef.current ? 100 : NEXT_MS,
-              );
-          }
-        };
-        t.onConfirmed = (u) => {
-          moveCountRef.current += 1;
-          actionsRef.current += 1;
-          transcriptRef.current?.append(u);
-          onAdvance();
-          flushHeartbeat(tunnelId, false);
-        };
-        setPhase("playing");
-        setState({ ...t.state });
-        onAdvance(); // kick off (deal already dealt round 1 -> player phase)
+        activateSession(mp, channel, t, {
+          matchId: m.matchId,
+          role: m.role,
+          opponentWallet: m.opponentWallet,
+          opponentPubkeyHex: oppHello,
+          selfEphemeralSecretHex: bytesToHex(myEph.coreKey.secretKey),
+        });
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
         setPhase("error");
@@ -677,10 +739,10 @@ export function usePvpBlackjack(): PvpView {
       client,
       proto,
       submit,
-      signPersonalMessage,
       walletAddress,
       finishSettle,
       flushHeartbeat,
+      activateSession,
     ],
   );
   onMatchRef.current = onMatch;
@@ -727,12 +789,12 @@ export function usePvpBlackjack(): PvpView {
   // Stop & settle the tunnel from a round boundary (either seat). Co-signed; the dealer closes.
   const stop = useCallback(() => {
     const t = tunnelRef.current;
-    const relay = relayRef.current;
-    if (!t || !relay) return;
+    const channel = channelRef.current;
+    if (!t || !channel) return;
     if (t.state.phase !== "round_over") return; // settle cleanly between rounds
     stoppingRef.current = true;
-    relay.sendApp(matchIdRef.current, { t: "stop" });
-    void finishSettle(t, relay, matchIdRef.current);
+    channel.sendPeer({ t: "stop" });
+    void finishSettle(t, channel, matchIdRef.current);
   }, [finishSettle]);
 
   const setAuto = useCallback(
@@ -781,8 +843,11 @@ export function usePvpBlackjack(): PvpView {
   );
 
   const leave = useCallback(() => {
-    relayRef.current?.close();
-    relayRef.current = null;
+    detachResumeRef.current?.();
+    detachResumeRef.current = null;
+    mpRef.current?.close();
+    mpRef.current = null;
+    channelRef.current = null;
     tunnelRef.current = null;
     setPhase("idle");
     setState(null);
@@ -798,12 +863,20 @@ export function usePvpBlackjack(): PvpView {
     bufferedSettleRef.current = null;
     stakeResolveRef.current = null;
     bufferedStakeRef.current = null;
+    helloResolveRef.current = null;
+    bufferedHelloRef.current = null;
     sessionRef.current = null;
     moveCountRef.current = 0;
     actionsRef.current = 0;
   }, []);
 
-  useEffect(() => () => relayRef.current?.close(), []);
+  useEffect(
+    () => () => {
+      detachResumeRef.current?.();
+      mpRef.current?.close();
+    },
+    [],
+  );
 
   const s = state;
   const isDealer = s
