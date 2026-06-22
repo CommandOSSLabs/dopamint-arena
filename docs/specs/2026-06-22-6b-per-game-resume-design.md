@@ -107,8 +107,8 @@ hook mount
   │                          channel.transport, balancesFromRecord(record))
   │             restoreInto(tunnel, record, spec.adapter)     (adopt checkpoint + secret + pending)
   │             mp.markActive(matchId)
-  │             detach = attachResume({ mp, channel, tunnel, adapter, identity })
-  │             return { tunnel, channel, detach }            (hook hydrates UI from tunnel.snapshot().state)
+  │             return { tunnel, channel }                     (reconstruct-only; NO attachResume here)
+  │      hook: activateSession(mp, channel, tunnel, info)      (wires onConfirmed THEN attachResume; hydrates UI)
   └─ mp.connect()                                     ── handshake sends resume{matchId} for each active match (incl. first connect)
         └─ server: resume.ok(peerOnline) / peer.resumed
               └─ attachResume → sendResync → decideReconcile → adopt | re-propose | noop | settle
@@ -122,7 +122,7 @@ hook mount
 | `ResumeRecord` (+`selfEphemeralSecretHex`) | `resume.ts` | durable per-tunnel state incl. per-match key | — |
 | `keypairFromSecretHex` | `resume.ts` | rebuild a `KeyPair` from the persisted secret | `@noble/curves`, `bytes` |
 | `RebuildSpec<State,Move>` | `resumeSession.ts` | the thin per-game inputs reconstruction can't derive | — |
-| `rebuildTunnel` | `resumeSession.ts` | reconstruct one tunnel from a record + spec; warm-attach it | `DistributedTunnel`, `MpClient`, `restoreInto`, `attachResume` |
+| `rebuildTunnel` | `resumeSession.ts` | reconstruct one tunnel from a record + spec (reconstruct-only: `restoreInto` + `markActive`, NO `attachResume` — the hook's `activateSession` owns that) | `DistributedTunnel`, `MpClient`, `restoreInto` |
 | `resumeActiveTunnels` | `resumeSession.ts` | evict + rebuild every active tunnel for a game | `resume.ts` index, `rebuildTunnel` |
 | per-game `RebuildSpec` factory + adapter | each hook / adapter file | proto, codec, secret handlers, UI hydration | the game's protocol |
 
@@ -170,7 +170,7 @@ function resumeActiveTunnels<State, Move>(
   mp: MpClient, gameId: string, spec: RebuildSpec<State, Move>, ctx: ResumeContext,
 ): RestoredSession<State, Move>[];
 
-// mpClient.ts — PeerMessage gains:
+// mpClient.ts — PeerMessage gained (landed):
 //   | { t: "stake"; amount: number }
 ```
 
@@ -202,9 +202,10 @@ Both converge through `attachResume`/`decideReconcile`; cold-load only adds the
 reconstruction step.
 
 ### UI hydration
-`rebuildTunnel` returns the live tunnel; the hook hydrates its rendered state from
-`tunnel.snapshot().state` immediately (so the board shows before the peer answers), and
-`adapter.onReconciled` re-hydrates after the handshake resolves any ≤1-move gap.
+`rebuildTunnel` returns the reconstructed tunnel; the hook's `activateSession` wires
+`onConfirmed` + `attachResume` and hydrates the rendered state from `tunnel.snapshot().state`
+immediately (so the board shows before the peer answers), and `adapter.onReconciled`
+re-hydrates after the handshake resolves any ≤1-move gap.
 
 ---
 
@@ -212,27 +213,30 @@ reconstruction step.
 
 | Aspect | ttt/caro | battleship | poker | blackjack |
 |---|---|---|---|---|
-| Transport | MpClient ✓ | MpClient ✓ | MpClient ✓ | **bjRelay → MpClient (migrate)** |
-| Balances | const symmetric | const symmetric | const symmetric | **asymmetric (from checkpoint)** |
+| Transport | MpClient ✓ | MpClient ✓ | MpClient ✓ | MpClient ✓ (migrated) |
+| Balances | const symmetric | const symmetric | const symmetric | asymmetric (from checkpoint) |
 | Move codec | JSON-native | `battleshipMoveCodec` | `pokerMoveCodec` | JSON-native |
-| Secret | none | fleet (board+salts) | hole cards + slot secrets | none |
-| Opener | role A | role A | role A | **role B (preserve)** |
-| Warm `attachResume` | wired ✓ | wired ✓ | wired ✓ | **add (currently missing)** |
-| This work adds | cold-load + persist key | cold-load + persist key | cold-load + persist key | migration + `stake` + warm + cold |
+| Secret | none | fleet (board+salts) **+ placements** | hole cards + slot secrets | none |
+| Opener | role A | role A | role A | role B (preserved) |
+| Warm `attachResume` | wired ✓ | wired ✓ | wired ✓ | wired ✓ |
+| Cold-load `activateSession` | wired ✓ | wired ✓ | wired ✓ | wired ✓ |
 
 - **ttt/caro:** `RebuildSpec` with no secret + JSON move + const balances. The shared hook
   serves both games; filter `listActiveTunnels()` by the per-game id ("tictactoe"/"caro"
   — confirm the exact ids each registers).
-- **battleship:** spec carries `battleshipMoveCodec`; `restoreInto` restores the fleet
-  from `record.secret` via `restoreSecret`. The fleet must round-trip into the hook's
-  out-of-React secret store (`PvpSession.secret`).
+- **battleship:** spec carries `battleshipMoveCodec`; `restoreInto` restores the secret
+  blob `{ fleet, placements }` via `restoreSecret`. `placements` is carried because it is
+  not reconstructable from the 0/1 board yet is needed for per-ship damage; both round-trip
+  into the hook's out-of-React store (`PvpSession.secret` / `.placements`) as number arrays
+  so they survive `localStorage` JSON (the commitment is recomputed from board+salts).
 - **poker:** spec carries `pokerMoveCodec`; restores hole-card/slot secrets via
-  `restoreSecret` into the hook's secret holder.
-- **blackjack:** apply the Task 4 `RelayClient → MpClient` mapping; add the `stake`
-  `PeerMessage` variant and move the buy-in exchange onto `sendPeer`/`onPeer`; drop the
-  attested `party.hello` (use the plain `hello`); preserve role-B-opens; wire the warm
-  `attachResume` that 6B left out; add cold-load; mark `bjRelay` `@deprecated`; and
-  clean the prettier churn `ed490ca` bundled into `usePvpBlackjack.ts`.
+  `restoreSecret` into `tunnel.state` (applied after `rebuildTunnel` returns). Slot
+  `value`/`salt` typed arrays are encoded as number arrays, and `serializeState`
+  preserves bigints structurally (no `JSON.stringify`) so the record round-trips.
+- **blackjack:** `RelayClient → MpClient` migration landed — the buy-in `stake` rides
+  `sendPeer`/`onPeer` (the new `PeerMessage` variant), the attested `party.hello` was
+  dropped for the plain `hello`, role-B-opens is preserved, and the warm `attachResume`
+  + cold-load are wired through a shared `activateSession`. `bjRelay` is `@deprecated`.
 
 ---
 

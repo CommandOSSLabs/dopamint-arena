@@ -51,7 +51,11 @@ installResumePersistence(); // idempotent; registers the pagehide/visibilitychan
 
 After the match handshake builds the `DistributedTunnel`, attach the driver. It
 persists on every confirmed move and runs the resync handshake when the peer is
-reachable. Keep the returned `detach` and call it on teardown.
+reachable. Keep the returned `detach` and call it on teardown. Wire your game's
+`tunnel.onConfirmed` (render + bot automation) **before** calling `attachResume` —
+`attachResume` chains its persistence onto whatever `onConfirmed` you set. Put
+both in one shared `activateSession(mp, channel, tunnel, info)` helper so the live
+and cold-load paths produce identical wiring.
 
 ```ts
 import { attachResume } from "@/pvp/resumeSession";
@@ -85,24 +89,41 @@ signer. Without it the record is unrestorable and gets evicted on reload.
 
 Call `resumeActiveTunnels` once on mount, **before `mp.connect()`** (so the
 opening handshake carries the `resume{matchId}` frames — `MpClient` resumes on the
-first connect, not only on reconnects). It evicts expired records, rebuilds every
-active record for your `gameId`, and warm-attaches each restored tunnel.
+first connect, not only on reconnects). It evicts expired records and rebuilds
+every active record for your `gameId`. `rebuildTunnel` is **reconstruct-only**: it
+reseats each tunnel at its checkpoint and calls `mp.markActive`, but does **not**
+wire `onConfirmed` or call `attachResume`. The hook owns that through the same
+`activateSession` it uses for the live path, so both paths get identical per-move
+wiring (and the cold path can pass `onGraceExpired`).
 
 ```ts
 import { resumeActiveTunnels } from "@/pvp/resumeSession";
+import { readResumeRecord } from "@/pvp/resume";
 
-const sessions = resumeActiveTunnels(mp, GAME_ID, spec, { selfWallet });
-for (const { tunnel } of sessions) {
-  // Hydrate the UI immediately from the restored state — before the peer answers.
-  renderFrom(tunnel.snapshot().state);
+const restored = resumeActiveTunnels(mp, GAME_ID, spec, { selfWallet });
+if (restored.length > 0) {
+  const { tunnel, channel } = restored[0]; // one active match per game in practice
+  const rec = readResumeRecord(tunnel.tunnelId)!;
+  activateSession(mp, channel, tunnel, {
+    matchId: rec.matchId,
+    role: rec.role,
+    opponentWallet: rec.opponentWallet,
+    opponentPubkeyHex: rec.opponentPubkeyHex,
+    selfEphemeralSecretHex: rec.selfEphemeralSecretHex!,
+  });
+  await mp.connect(); // opening handshake carries resume{matchId}
+  return; // skip matchmaking — we are continuing an in-flight match
 }
 await mp.connect();
+// ...normal quickMatch flow...
 ```
 
-Each `RestoredSession` carries `{ tunnel, channel, detach }`. Hydrate from
-`tunnel.snapshot().state` right away; `adapter.onReconciled` re-hydrates after the
-handshake resolves any gap. A corrupt or pre-key record is dropped and skipped —
-one bad entry never blocks the rest, and that seat falls through to a fresh match.
+Each `RestoredSession` carries `{ tunnel, channel }` (no `detach` — the hook's
+`activateSession` owns the `attachResume` lifecycle). `activateSession` hydrates
+the UI from `tunnel.snapshot().state` right away; `adapter.onReconciled` re-hydrates
+after the handshake resolves any gap. A corrupt or pre-key record is dropped and
+skipped — one bad entry never blocks the rest, and that seat falls through to a
+fresh match.
 
 ## Implementing a `ResumeAdapter`
 
@@ -175,8 +196,11 @@ const spec = { proto, adapter: makeTttResumeAdapter(onAdvance) };
 ## Worked example — battleship (hidden fleet)
 
 The fleet (board + per-cell salts) must survive restore but must never reach the
-peer. It rides `captureSecret`/`restoreSecret` exclusively; the binary move needs
-a codec:
+peer. The secret blob is `{ fleet, placements }` — `placements` (the per-ship
+layout) rides along because it is **not reconstructable from the 0/1 board**, yet
+`deriveBattleshipView`/`fleetStatus` need it for per-ship damage. Both ride
+`captureSecret`/`restoreSecret` exclusively; the binary move needs a codec, and the
+typed-array fields are stored as number arrays so they survive `localStorage` JSON:
 
 ```ts
 // frontend/src/games/battleship/battleshipResumeAdapter.ts (abridged)
@@ -189,16 +213,23 @@ return {
   deserializeState: (j) => /* number[] → Uint8Array */,
   serializeMove: (m) => battleshipMoveCodec.encode(m),
   deserializeMove: (j) => battleshipMoveCodec.decode(j),
-  captureSecret: () => getSecret(),     // fleet — NEVER in serializeState
-  restoreSecret: (j) => setSecret(j),
+  // fleet board+salts (as number arrays) AND placements — NEVER in serializeState.
+  captureSecret: () => ({
+    fleet: { board: Array.from(fleet.board), salts: fleet.salts.map(Array.from) },
+    placements: getPlacements(),
+  }),
+  restoreSecret: (j) => {
+    setSecret(makeFleetSecret(Uint8Array.from(j.fleet.board), j.fleet.salts.map(Uint8Array.from)));
+    setPlacements(j.placements); // the commitment is recomputed from board+salts
+  },
   onReconciled: () => sync(),
 };
 
 const spec = { proto, moveCodec: battleshipMoveCodec, adapter };
 ```
 
-The fleet round-trips into the hook's out-of-React secret store; on cold-load it
-is restored from `record.secret`, never from a `resync` payload.
+The fleet + placements round-trip into the hook's out-of-React secret store; on
+cold-load they are restored from `record.secret`, never from a `resync` payload.
 
 ## Invariants checklist
 
@@ -218,9 +249,10 @@ is restored from `record.secret`, never from a `resync` payload.
 ## Adoption status
 
 The shared cold-load path (`rebuildTunnel`, `resumeActiveTunnels`,
-`keypairFromSecretHex`, first-connect resume) is implemented and unit-tested.
-Per-match key persistence is wired into tic-tac-toe/caro, battleship, and poker.
-Remaining per-game adoption: calling `resumeActiveTunnels` on mount and hydrating
-the UI in each hook, and the blackjack `bjRelay → MpClient` migration (which adds
-blackjack's warm `attachResume` and a `stake` peer-message variant). Follow the
-three wirings above when adding either.
+`keypairFromSecretHex`, first-connect resume) is implemented and unit-tested, and
+all four PvP games are wired: tic-tac-toe/caro, battleship, quantum-poker, and
+blackjack each extract a shared `activateSession` and route both the live and
+cold-load paths through it. The blackjack `bjRelay → MpClient` migration landed
+alongside (adding the `stake` peer-message variant); `bjRelay` is `@deprecated` but
+retained. Each game's byte-parity reconstruction is unit-tested; the end-to-end
+page-reload path still needs manual two-tab QA per game.
