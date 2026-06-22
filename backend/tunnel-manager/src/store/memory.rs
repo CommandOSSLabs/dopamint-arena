@@ -111,18 +111,25 @@ impl ControlStore for InMemoryControlStore {
     }
 
     async fn push_recent_event(&self, ev: TunnelEvent) {
-        // Idempotent: SADD-equivalent guard so a re-poll of the same tx is a no-op.
-        if !self
-            .seen_digests
-            .write()
-            .unwrap()
-            .insert(ev.tx_digest.clone())
-        {
+        let mut seen = self.seen_digests.write().unwrap();
+        let mut ring = self.recent_ring.write().unwrap();
+        if seen.insert(ev.tx_digest.clone()) {
+            ring.push_front(ev);
+            ring.truncate(super::RECENT_EVENTS_CAP);
             return;
         }
-        let mut ring = self.recent_ring.write().unwrap();
-        ring.push_front(ev);
-        ring.truncate(super::RECENT_EVENTS_CAP);
+        // Already recorded. The /settle handler's enriched row (with a Walrus proofUrl) and the
+        // event indexer's bare row race for the same digest; whichever lands first claims it.
+        // The handler loses that race when Walrus upload delays its push past the indexer's 1s
+        // poll — so upgrade the stored row in place when this one carries a proofUrl it lacks,
+        // and never downgrade an existing one.
+        if ev.proof_url.is_some() {
+            if let Some(row) = ring.iter_mut().find(|r| r.tx_digest == ev.tx_digest) {
+                if row.proof_url.is_none() {
+                    row.proof_url = ev.proof_url;
+                }
+            }
+        }
     }
 
     async fn recent_events(&self) -> Vec<TunnelEvent> {
@@ -309,6 +316,44 @@ mod tests {
         assert_eq!(got.len(), crate::store::RECENT_EVENTS_CAP, "ring is capped");
         let newest = crate::store::RECENT_EVENTS_CAP + 4;
         assert_eq!(got[0].tx_digest, format!("d{newest}"), "newest first");
+    }
+
+    // The /settle handler's enriched row (with a Walrus proofUrl) and the indexer's bare row
+    // race for the same tx_digest. The proofUrl MUST survive regardless of arrival order: a
+    // later enriched row upgrades a bare one (the real case — Walrus upload makes the handler
+    // lose the race), and a later bare row never erases an existing proofUrl. Without this the
+    // Transaction Log shows a successful settle with no proof link.
+    #[tokio::test]
+    async fn proof_url_survives_indexer_handler_race_either_order() {
+        let proof = "https://agg/v1/blobs/xyz";
+        let enriched = |t, d| TunnelEvent {
+            proof_url: Some(proof.into()),
+            ..settled(t, d)
+        };
+
+        // indexer (bare) first, then handler (enriched): the bare row is upgraded.
+        let s = InMemoryControlStore::default();
+        s.push_recent_event(settled("0xt", "d")).await;
+        s.push_recent_event(enriched("0xt", "d")).await;
+        let got = s.recent_events().await;
+        assert_eq!(got.len(), 1, "still one row (deduped by digest)");
+        assert_eq!(
+            got[0].proof_url.as_deref(),
+            Some(proof),
+            "bare row upgraded to the proofUrl"
+        );
+
+        // handler (enriched) first, then indexer (bare): the proofUrl is not downgraded.
+        let s2 = InMemoryControlStore::default();
+        s2.push_recent_event(enriched("0xt", "d")).await;
+        s2.push_recent_event(settled("0xt", "d")).await;
+        let got2 = s2.recent_events().await;
+        assert_eq!(got2.len(), 1);
+        assert_eq!(
+            got2[0].proof_url.as_deref(),
+            Some(proof),
+            "bare row never downgrades a proofUrl"
+        );
     }
 
     // Heartbeat deltas must accrue to the session's game. Moved from routes.rs.

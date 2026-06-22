@@ -30,6 +30,7 @@ import {
   nextMove,
   randomFleetSecret,
 } from "./engine/selfPlay";
+import { type BotDifficulty, DEFAULT_BOT_DIFFICULTY } from "./engine/bot";
 
 /** Coins locked per seat, and the amount that shifts to the winner. */
 const LOCKED_PER_SEAT = 500n;
@@ -57,6 +58,8 @@ export interface BattleshipSession {
   startBattle: (placements: Placement[]) => void;
   /** Fire at an enemy cell (only legal on your turn). */
   fire: (cell: number) => void;
+  /** Set the foe bot's skill — applies to its next shot (safe to change mid-match). */
+  setDifficulty: (difficulty: BotDifficulty) => void;
   reset: () => void;
 }
 
@@ -103,6 +106,8 @@ class BotSession {
   private txnId = 0;
   private lastYourShot: number | null = null;
   private lastEnemyShot: number | null = null;
+  /** Foe bot skill; only affects shot selection, so it can change any time. */
+  private difficulty: BotDifficulty = DEFAULT_BOT_DIFFICULTY;
   // Bumped on reset/dispose so an in-flight bot loop knows to abandon ship.
   private gen = 0;
 
@@ -226,7 +231,7 @@ class BotSession {
       while (tunnel && secrets) {
         const st = tunnel.state;
         if (st.winner !== 0) break;
-        const driven = nextMove(st, secrets, Math.random);
+        const driven = nextMove(st, secrets, Math.random, this.difficulty);
         if (!driven) break;
         if (driven.by === "A" && driven.move.type === "shoot") break; // human's turn
         if (driven.move.type === "shoot") {
@@ -331,6 +336,10 @@ class BotSession {
     })();
   };
 
+  setDifficulty = (difficulty: BotDifficulty) => {
+    this.difficulty = difficulty;
+  };
+
   fire = (cell: number) => {
     const tunnel = this.tunnel;
     if (!tunnel) return;
@@ -398,6 +407,7 @@ export function useBattleship(windowId: string): BattleshipSession {
     playBot: session.playBot,
     startBattle: session.startBattle,
     fire: session.fire,
+    setDifficulty: session.setDifficulty,
     reset: session.reset,
   };
 }

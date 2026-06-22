@@ -89,6 +89,9 @@ web_modules/
 .env
 .env.*
 !.env.example
+# Production build config holds only PUBLIC testnet values (package ids, fullnode, public
+# client ids) — committed so `vite build` in CI bakes the right config without secrets.
+!.env.production
 
 # parcel-bundler cache (https://parceljs.org/)
 .cache

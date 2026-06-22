@@ -39,13 +39,19 @@ import {
 import { coSignedToSettleRequest } from "../../backend/settleRequest";
 
 /** Locked per seat (MIST, split off the wallet's SUI gas coin — same lane as Tic-Tac-Toe). */
-const STAKE_BALANCE = 10_000n;
+export const STAKE_BALANCE = 10_000n;
 /** Hands played per match before the on-chain settle; chips move off-chain in the tunnel
  *  between hands, and the loop ends early (→ "done") if a seat can't cover the next ante. */
-const HAND_CAP = 50n;
+export const HAND_CAP = 50n;
 /** Pacing for the auto-driven commit/reveal "plumbing" moves so phases (and the showdown) are
  *  readable — cards flip one street at a time instead of flashing to the result instantly. */
 const PLUMBING_DELAY_MS = 300;
+/** The showdown hole-card reveal is paced 2x slower than the other plumbing reveals so the
+ *  climactic reveal lands instead of flashing past. */
+const SHOWDOWN_DELAY_MS = PLUMBING_DELAY_MS * 2;
+/** The hand-over result holds the longest — a ~5s pause on the win/loss before the next hand is
+ *  dealt, so the outcome clearly registers. */
+const HAND_OVER_DELAY_MS = 5_000;
 /** Matchmaking queue id — both seats must request the same game. */
 const GAME_ID = "quantum-poker";
 /** Auto check (else fold) if a seat doesn't act within this many seconds. */
@@ -90,6 +96,10 @@ export interface PvpQuantumPoker {
   check: () => void;
   call: () => void;
   bet: (amount: bigint) => void;
+  /** True once this seat or the opponent asked to end early; the current hand finishes, then it settles. */
+  endRequested: boolean;
+  /** End the match cooperatively after the current hand — stop dealing and settle at the current balances. */
+  requestSettle: () => void;
   reset: () => void;
 }
 
@@ -175,7 +185,11 @@ function balance(s: PokerState, p: Party): bigint {
 function legalFor(s: PokerState, self: Party): PvpPokerLegal {
   const other: Party = self === "A" ? "B" : "A";
   const diff = streetBet(s, other) - streetBet(s, self); // amount needed to match
-  const available = balance(s, self) - totalBet(s, self); // remaining stack this hand
+  // Effective stack — neither seat can wager past the shorter stack (heads-up), so the bigger
+  // stack's surplus is unbettable and a short all-in is always callable.
+  const effectiveStack =
+    balance(s, "A") < balance(s, "B") ? balance(s, "A") : balance(s, "B");
+  const available = effectiveStack - totalBet(s, self); // remaining wagerable this hand
   const canCall = diff > 0n && available >= diff;
   // A `bet` increment raises THIS seat's street bet above the opponent's, so it must
   // exceed `diff` (when facing one) and fit in the remaining stack.
@@ -204,6 +218,7 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
   const [opponentWallet, setOpponentWallet] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [secondsLeft, setSecondsLeft] = useState<number | null>(null);
+  const [endRequested, setEndRequested] = useState(false);
 
   const mpRef = useRef<MpClient | null>(null);
   const dtRef = useRef<PokerTunnel | null>(null);
@@ -213,6 +228,13 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
   // commit's secrets are generated exactly once (regenerating would orphan the commitment).
   const autoNonceRef = useRef<bigint>(-1n);
   const transcriptRef = useRef<Transcript | null>(null);
+  const channelRef = useRef<PvpChannel | null>(null);
+  // Early-end: once either seat asks to settle, stop dealing new hands and close at the next clean
+  // hand boundary. `settlingRef` guards the single close; `settleNowRef` lets the button/peer
+  // message trigger the close (which lives in findMatch's closure) when we're already at hand_over.
+  const endRef = useRef(false);
+  const settlingRef = useRef(false);
+  const settleNowRef = useRef<(() => void) | null>(null);
 
   const sync = useCallback(() => {
     const dt = dtRef.current;
@@ -229,11 +251,16 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
     selfPartyRef.current = null;
     autoNonceRef.current = -1n;
     transcriptRef.current = null;
+    channelRef.current = null;
+    endRef.current = false;
+    settlingRef.current = false;
+    settleNowRef.current = null;
     setStatus("idle");
     setRole(null);
     setState(null);
     setOpponentWallet(null);
     setError(null);
+    setEndRequested(false);
   }, []);
 
   // Propose this seat's next automatic commit/reveal/next_hand move, if it's our turn.
@@ -243,22 +270,32 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
     const driver = driverRef.current;
     const self = selfPartyRef.current;
     if (!dt || !driver || !self) return;
+    if (settlingRef.current) return;
+    // Ending early: don't deal a new hand — settle at this clean hand boundary instead.
+    if (endRef.current && dt.state.phase === "hand_over") return;
     const targetNonce = dt.nonce + 1n;
     if (autoNonceRef.current === targetNonce) return;
     if (plumbingProposer(dt.state) !== self) return;
     const move = driver.chooseMove(dt.state, secureRng); // commit secrets minted here, once
     if (!move) return;
     autoNonceRef.current = targetNonce;
+    const delay =
+      dt.state.phase === "hand_over"
+        ? HAND_OVER_DELAY_MS
+        : dt.state.phase === "showdown"
+          ? SHOWDOWN_DELAY_MS
+          : PLUMBING_DELAY_MS;
     window.setTimeout(() => {
       const live = dtRef.current;
       if (!live || live.nonce + 1n !== targetNonce) return;
+      if (settlingRef.current) return;
       try {
         live.propose(move, 0n);
         sync();
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       }
-    }, PLUMBING_DELAY_MS);
+    }, delay);
   }, [sync]);
 
   const propose = useCallback(
@@ -284,6 +321,17 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
     (amount: bigint) => propose({ kind: "bet", amount }),
     [propose],
   );
+
+  // End the match early by mutual agreement: stop dealing new hands and settle at the current
+  // (between-hands) balances. The current hand finishes first — we never settle mid-pot. Tell the
+  // opponent so their client stops + settles too; if we're already parked at hand_over, settle now.
+  const requestSettle = useCallback(() => {
+    if (endRef.current || settlingRef.current) return;
+    endRef.current = true;
+    setEndRequested(true);
+    channelRef.current?.sendPeer({ t: "endMatch" });
+    if (dtRef.current?.state.phase === "hand_over") settleNowRef.current?.();
+  }, []);
 
   const findMatch = useCallback(() => {
     if (!account) {
@@ -321,6 +369,9 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
 
         const channel = mp.channel(match.matchId);
         const waitPeer = makeInbox(channel);
+        channelRef.current = channel;
+        endRef.current = false;
+        settlingRef.current = false;
 
         // 1) exchange ephemeral pubkeys (the wallet is only the matchmaking label).
         channel.sendPeer({
@@ -378,7 +429,40 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
         const transcript = new Transcript(tunnelId);
         transcriptRef.current = transcript;
 
-        let settling = false;
+        // Single cooperative close — at match end, or early once a seat asked to settle. Guarded so
+        // both seats' triggers (onConfirmed, the button, the peer's endMatch) close exactly once.
+        const triggerSettle = () => {
+          if (settlingRef.current) return;
+          settlingRef.current = true;
+          setStatus("settling");
+          void settle(
+            dt,
+            match.role,
+            channel,
+            waitPeer,
+            reads,
+            signExec,
+            tunnelId,
+            transcript,
+            getControlPlaneClient(),
+          ).then(
+            () => setStatus("settled"),
+            (e) => {
+              setError(e instanceof Error ? e.message : String(e));
+              setStatus("error");
+            },
+          );
+        };
+        settleNowRef.current = triggerSettle;
+
+        // Opponent hit "Settle": stop dealing on our side too and close at the next clean boundary
+        // (or now, if we're already parked at hand_over).
+        void waitPeer("endMatch").then(() => {
+          endRef.current = true;
+          setEndRequested(true);
+          if (dt.state.phase === "hand_over") triggerSettle();
+        });
+
         dt.onConfirmed = (u) => {
           transcript.append(u);
           sync();
@@ -391,28 +475,12 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
             status: "Success",
             amount: "",
           });
-          if (proto.isTerminal(dt.state)) {
-            if (!settling) {
-              settling = true;
-              setStatus("settling");
-              void settle(
-                dt,
-                match.role,
-                channel,
-                waitPeer,
-                reads,
-                signExec,
-                tunnelId,
-                transcript,
-                getControlPlaneClient(),
-              ).then(
-                () => setStatus("settled"),
-                (e) => {
-                  setError(e instanceof Error ? e.message : String(e));
-                  setStatus("error");
-                },
-              );
-            }
+          // Settle at match end (done), or early at this clean hand boundary once a seat asked to end.
+          if (
+            proto.isTerminal(dt.state) ||
+            (endRef.current && dt.state.phase === "hand_over")
+          ) {
+            triggerSettle();
             return;
           }
           maybeAutoPropose();
@@ -433,7 +501,8 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
   }, [account, client, signAndExecute, sync, maybeAutoPropose, report]);
 
   const self = selfPartyRef.current;
-  const myHole = state && self ? (self === "A" ? state.holeA : state.holeB) : null;
+  const myHole =
+    state && self ? (self === "A" ? state.holeA : state.holeB) : null;
   const myTurnToBet =
     !!state &&
     !!self &&
@@ -490,6 +559,8 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
     check,
     call,
     bet,
+    endRequested,
+    requestSettle,
     reset,
   };
 }
@@ -523,7 +594,9 @@ async function settle(
     transcriptRoot: toHex(root),
     sig: toHex(half.sigSelf),
   });
-  const other = await waitPeer<{ sig: string; transcriptRoot: string }>("settleHalf");
+  const other = await waitPeer<{ sig: string; transcriptRoot: string }>(
+    "settleHalf",
+  );
   if (other.transcriptRoot !== toHex(root)) {
     throw new Error("settlement transcript-root mismatch between parties");
   }
@@ -534,9 +607,15 @@ async function settle(
   );
   if (role !== "A") return; // single submitter, mirrors the cooperative-close pattern
   try {
-    await cp.settle(tunnelId, coSignedToSettleRequest(co, transcript.toRecord().entries));
+    await cp.settle(
+      tunnelId,
+      coSignedToSettleRequest(co, transcript.toRecord().entries),
+    );
   } catch (e) {
-    console.error("[quantum-poker] backend settle failed; falling back to wallet close:", e);
+    console.error(
+      "[quantum-poker] backend settle failed; falling back to wallet close:",
+      e,
+    );
     await closeCooperativeWithRoot({ signExec, tunnelId, settlement: co });
   }
 }

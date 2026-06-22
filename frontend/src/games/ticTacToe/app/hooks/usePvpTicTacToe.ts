@@ -30,7 +30,15 @@ import { RelayClient } from "@/games/ticTacToe/app/lib/pvpRelay";
 
 export type Variant = "ttt" | "caro";
 
-const MP_URL = import.meta.env.VITE_MP_URL ?? "ws://127.0.0.1:8080";
+// MP relay base (RelayClient appends /v1/mp). Prefer an explicit VITE_MP_URL; otherwise derive
+// from the backend base, and when that's empty (same-origin production build) from the page
+// origin. Never hardcode localhost — a deployed https site would try ws://127.0.0.1 and fail.
+const MP_URL =
+  import.meta.env.VITE_MP_URL ||
+  (
+    import.meta.env.VITE_BACKEND_URL ||
+    (typeof location !== "undefined" ? location.origin : "http://127.0.0.1:8080")
+  ).replace(/^http/, "ws");
 const STAKE = 1n; // MIST per game; caro's protocol forces 0 regardless
 const BANKROLL = 1000n; // MIST deposited per seat
 const MAX_GAMES = 1000; // high cap → play until a side stops or busts

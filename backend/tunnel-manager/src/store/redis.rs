@@ -21,12 +21,34 @@ const SESSION_TTL: i64 = 24 * 3600;
 // so a re-polled event (cursor restart / second indexer) never double-inserts. Newest-first
 // via LPUSH; LTRIM bounds the list. `events:seen` is unbounded but tiny for a demo window
 // (same accepted trade-off as stats:tunnels:active).
+//
+// On a seen digest it is NOT a blind no-op: the /settle handler's enriched row (with a Walrus
+// proofUrl) and the indexer's bare row race for the same close — and the handler loses when its
+// ~6s Walrus upload lands its push after the indexer's 1s poll. So when this row carries a
+// proofUrl the stored one lacks, upgrade it in place (cjson + LSET) so the proof link is never
+// lost; never downgrade an existing proofUrl. Atomic under the script lock, so the LRANGE/LSET
+// pair sees no concurrent mutation.
 // KEYS[1]=events:recent KEYS[2]=events:seen  ARGV[1]=json ARGV[2]=digest ARGV[3]=cap
 const PUSH_RECENT_EVENT: &str = r#"
 if redis.call('SADD', KEYS[2], ARGV[2]) == 1 then
   redis.call('LPUSH', KEYS[1], ARGV[1])
   redis.call('LTRIM', KEYS[1], 0, tonumber(ARGV[3]) - 1)
   return 1
+end
+local incoming = cjson.decode(ARGV[1])
+if incoming.proofUrl == nil or incoming.proofUrl == cjson.null then
+  return 0
+end
+local rows = redis.call('LRANGE', KEYS[1], 0, -1)
+for i = 1, #rows do
+  local row = cjson.decode(rows[i])
+  if row.txDigest == ARGV[2] then
+    if row.proofUrl == nil or row.proofUrl == cjson.null then
+      redis.call('LSET', KEYS[1], i - 1, ARGV[1])
+      return 1
+    end
+    return 0
+  end
 end
 return 0
 "#;
@@ -778,6 +800,51 @@ mod tests {
         assert_eq!(got[0].tx_digest, format!("{tag}-b"));
         assert_eq!(got[1].tx_digest, format!("{tag}-a"));
         assert!(got.len() <= crate::store::RECENT_EVENTS_CAP);
+    }
+
+    // The Walrus proofUrl must survive the indexer/handler race for the same digest, in either
+    // arrival order — same contract as the in-memory store, exercised through the Lua upgrade
+    // path. Without it a settled row in the cross-instance ring shows no proof link.
+    #[tokio::test]
+    #[ignore = "requires TEST_REDIS_URL"]
+    async fn recent_events_proof_url_survives_race_either_order() {
+        use crate::state::{TunnelEvent, TunnelEventKind};
+        let Some(url) = test_url() else { return };
+        let s = RedisControlStore::new(connect(&url).await.unwrap());
+        let proof = "https://agg/v1/blobs/xyz";
+        let ev = |digest: &str, p: Option<&str>| TunnelEvent {
+            tunnel_id: "0xt".into(),
+            kind: TunnelEventKind::Settled,
+            party_a_balance: Some(1),
+            party_b_balance: Some(1),
+            transcript_root: None,
+            tx_digest: digest.into(),
+            timestamp_ms: 1,
+            proof_url: p.map(Into::into),
+        };
+        let find = |rows: &[TunnelEvent], d: &str| rows.iter().find(|r| r.tx_digest == d).cloned();
+
+        // indexer (bare) first, then handler (enriched): bare row is upgraded.
+        let a = format!("{}-a", uuid::Uuid::new_v4().simple());
+        s.push_recent_event(ev(&a, None)).await;
+        s.push_recent_event(ev(&a, Some(proof))).await;
+        let ra = find(&s.recent_events().await, &a).expect("row present");
+        assert_eq!(
+            ra.proof_url.as_deref(),
+            Some(proof),
+            "bare row upgraded to the proofUrl"
+        );
+
+        // handler (enriched) first, then indexer (bare): proofUrl not downgraded.
+        let b = format!("{}-b", uuid::Uuid::new_v4().simple());
+        s.push_recent_event(ev(&b, Some(proof))).await;
+        s.push_recent_event(ev(&b, None)).await;
+        let rb = find(&s.recent_events().await, &b).expect("row present");
+        assert_eq!(
+            rb.proof_url.as_deref(),
+            Some(proof),
+            "bare row never downgrades a proofUrl"
+        );
     }
 
     #[tokio::test]
