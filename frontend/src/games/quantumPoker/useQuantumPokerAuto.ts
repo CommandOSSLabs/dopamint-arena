@@ -24,8 +24,8 @@ import { QUANTUM_POKER_STAKE, QUANTUM_POKER_HAND_CAP } from "./constants";
 import {
   loadOrCreateQuantumPokerBots,
   botBalances,
-  buildFundBotsTx,
-  fundBotsFromFaucet,
+  buildFundBotATx,
+  fundBotAFromFaucet,
   MIN_PLAY_MIST,
   type QuantumPokerBot,
   type BotReadClient,
@@ -177,7 +177,8 @@ class AutoSession {
   getSnapshot = (): AutoSnapshot => this.snap;
 
   private get funded(): boolean {
-    return this.balances.a >= MIN_PLAY_MIST && this.balances.b >= MIN_PLAY_MIST;
+    // Self-play: bot A funds both seats, so only bot A needs SUI. Bot B accrues winnings.
+    return this.balances.a >= MIN_PLAY_MIST;
   }
 
   private emit() {
@@ -266,7 +267,7 @@ class AutoSession {
     this.setStatus("funding");
     void (async () => {
       try {
-        await fundBotsFromFaucet(client as BotReadClient, this.bots);
+        await fundBotAFromFaucet(client as BotReadClient, this.bots);
         await this.refreshBalances();
         this.setStatus("idle");
       } catch (e) {
@@ -289,7 +290,7 @@ class AutoSession {
     void (async () => {
       try {
         const { digest } = await deps.walletSignExec(
-          buildFundBotsTx(this.bots),
+          buildFundBotATx(this.bots),
         );
         await (
           deps.client as {
@@ -535,7 +536,7 @@ class AutoSession {
       this.endRun();
       return;
     }
-    if (this.balances.a < MIN_PLAY_MIST || this.balances.b < MIN_PLAY_MIST) {
+    if (this.balances.a < MIN_PLAY_MIST) {
       this.endRun();
       return;
     }
