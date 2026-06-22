@@ -22,7 +22,11 @@ test("disconnected backend → fallback rows", () => {
   assert.equal(liveOnchainTxns(null, fallback), fallback);
 });
 
-test("tps prefers the backend global aggregate", () => {
+test("tps keeps the backend global aggregate when it is higher", () => {
   assert.equal(displayUpdatesPerSec(connected, 12), 1_000_000);
+});
+
+test("tps shows local activity when backend is lower or disconnected", () => {
+  assert.equal(displayUpdatesPerSec({ ...connected, tps: 0 }, 12), 12);
   assert.equal(displayUpdatesPerSec(null, 12), 12);
 });

@@ -9,7 +9,8 @@ export function liveOnchainTxns(backend: StatsSnapshot | null, fallback: TxnRow[
   return recentEventsToTxnRows(backend.recentEvents ?? []);
 }
 
-/** Displayed updates/sec: the backend global aggregate when connected, else the local rate. */
+/** Displayed updates/sec: live local activity should remain visible even while the
+ *  backend aggregate SSE feed is connected but idle for this client. */
 export function displayUpdatesPerSec(backend: StatsSnapshot | null, localUps: number): number {
-  return backend ? backend.tps : localUps;
+  return backend ? Math.max(backend.tps, localUps) : localUps;
 }

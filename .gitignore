@@ -1,6 +1,10 @@
 # macOS
 .DS_Store
 
+# Bot keypairs (private keys — never commit)
+.poker-bots.json
+**/.poker-bots.json
+
 # Move build artifacts
 **/build/
 
