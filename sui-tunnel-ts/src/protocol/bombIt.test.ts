@@ -284,6 +284,39 @@ test("a full hunter-bot playout terminates (kill or cap) and conserves balances 
   assert.equal(a + b, s.total);
 });
 
+test("hunter bot bombs an in-line opponent when it has an escape route", () => {
+  const p = new BombItProtocol();
+  const base = p.initialState(CTX);
+  // A at (1,1) acts (tick 0 = A); B two cells east on the same row, inside blast reach.
+  // A has a real escape (south then sideways), so it SHOULD attack with a bomb — not just chase.
+  const s: BombItState = {
+    ...base,
+    players: [spawnAt(1, 1), spawnAt(1, 3)],
+    grid: clearInterior(base.grid),
+  };
+  const m = p.randomMove(s, "A", mulberry32ForTest(1)) as BombItMove;
+  assert.equal(m.a, "bomb");
+});
+
+test("a hunter-bot match drops bombs and destroys crates", () => {
+  const p = new BombItProtocol();
+  let s = p.initialState(CTX);
+  const rng = mulberry32ForTest(5);
+  const crates0 = Array.from(s.grid).filter((c) => c === CELL_CRATE).length;
+  let bombs = 0;
+  let guard = 0;
+  while (!p.isTerminal(s) && guard < Number(BOMB_IT_TICK_CAP) + 5) {
+    const by = s.tick % 2n === 0n ? "A" : "B";
+    const m = p.randomMove(s, by, rng) as BombItMove;
+    if (m.a === "bomb" || m.b === "bomb") bombs++;
+    s = p.applyMove(s, m, by);
+    guard++;
+  }
+  const cratesEnd = Array.from(s.grid).filter((c) => c === CELL_CRATE).length;
+  assert.ok(bombs > 0, "bots must drop at least one bomb over a match");
+  assert.ok(crates0 - cratesEnd > 0, "bots must destroy at least one crate over a match");
+});
+
 // --- local test helpers ---
 function spawnAt(row: number, col: number) {
   return { row, col, alive: true };

@@ -318,12 +318,32 @@ function hunterAction(s: BombItState, by: Party, rng: () => number): BombItActio
   const liveOwn = s.bombs.filter((b) => b.owner === by).length;
   const hereBomb = s.bombs.some((b) => b.row === p.row && b.col === p.col);
   const canBomb = liveOwn < MAX_BOMBS_PER_PLAYER && !hereBomb;
+  // A radius-2 '+' blast covers EVERY orthogonal neighbour, so a single step never clears it —
+  // checking only 1-step exits makes the bot believe it can never escape and so it never bombs.
+  // Search outward instead, up to the moves the bomber gets before its own fuse blows (it acts
+  // every other tick), for a reachable cell outside this bomb's blast and any live danger.
   const hasEscape = () => {
     const future = new Set(blastCellsFor(s.grid, { row: p.row, col: p.col, fuse: 0, owner: by }));
-    return moves.some((d) => {
-      const [nr, nc] = dest(p.row, p.col, d);
-      return !future.has(idx(nr, nc)) && !danger.has(idx(nr, nc));
-    });
+    const lethal = (i: number) => future.has(i) || danger.has(i);
+    const budget = Math.max(2, Math.floor(FUSE_TICKS / 2));
+    const seen = new Set<number>([idx(p.row, p.col)]);
+    let frontier: Array<[number, number]> = [[p.row, p.col]];
+    for (let step = 0; step < budget && frontier.length > 0; step++) {
+      const next: Array<[number, number]> = [];
+      for (const [r, c] of frontier) {
+        for (const d of dirs) {
+          const [nr, nc] = dest(r, c, d);
+          const ni = idx(nr, nc);
+          if (seen.has(ni)) continue;
+          if (!canMoveTo(s.grid, s.bombs, other, nr, nc)) continue;
+          seen.add(ni);
+          if (!lethal(ni)) return true; // a reachable safe cell within the escape budget
+          next.push([nr, nc]);
+        }
+      }
+      frontier = next;
+    }
+    return false;
   };
   const crateInDir = (d: BombItAction) => {
     const [nr, nc] = dest(p.row, p.col, d);
