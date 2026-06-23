@@ -138,16 +138,32 @@ test("a finished game is not terminal while both sides can fund the next", () =>
 });
 
 test("session IS terminal once a side cannot fund the next stake", () => {
-  // Stake equals the whole balance: after a decisive game a side is at 0.
-  const proto = new MultiGameCrossProtocol("0xt", 1000n);
-  const rng = rngFrom(7);
-  let state = proto.initialState({
-    tunnelId: "0xt",
-    initialBalances: { a: 1000n, b: 1000n },
+  const proto = new MultiGameCrossProtocol("0xt", 100n);
+  const base = new CrossProtocol().initialState({
+    tunnelId: "0xt:g1",
+    initialBalances: { a: 100n, b: 100n },
   });
-  state = playOneGame(proto, state, rng, 2000n);
-  if (state.inner.winner !== null) assert.equal(proto.isTerminal(state), true);
-  else assert.equal(proto.isTerminal(state), false); // a push leaves (1000,1000)
+  const decided = { ...base, winner: "A" as const }; // a finished (terminal) inner race
+  // Exhausted: B holds less than the stake → no further game can be funded.
+  const broke: MultiGameCrossState = {
+    inner: decided,
+    gamesPlayed: 0,
+    balanceA: 1950n,
+    balanceB: 50n,
+  };
+  assert.equal(proto.isTerminal(broke), true, "B (50) cannot fund a 100 stake");
+  // Still fundable after a decided game → session continues.
+  const funded: MultiGameCrossState = {
+    inner: decided,
+    gamesPlayed: 0,
+    balanceA: 1100n,
+    balanceB: 900n,
+  };
+  assert.equal(
+    proto.isTerminal(funded),
+    false,
+    "both can still fund the next game"
+  );
 });
 
 test("encodeState is deterministic and distinguishes gamesPlayed + domain", () => {

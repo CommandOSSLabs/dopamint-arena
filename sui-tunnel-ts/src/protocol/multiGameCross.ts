@@ -111,6 +111,7 @@ export class MultiGameCrossProtocol
     }
     // This move STARTS the next race: reset the inner game (new per-game seed), carry the
     // real balances unchanged (the swap already happened on the deciding move), bump count.
+    // The kickoff move IS game N's first competitive tick — the new race starts at tick 1.
     const fresh = this.inner.initialState(this.gameCtx(state.gamesPlayed + 2));
     return {
       inner: this.inner.applyMove(fresh, move, by),
