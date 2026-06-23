@@ -53,7 +53,7 @@ const HAND_CAP = QUANTUM_POKER_HANDS_PER_TUNNEL;
 /** Pause between matches (ms). */
 const NEXT_MATCH_MS = 1200;
 /** Brief delay before the on-load auto-start so the window/table mounts first. */
-const AUTO_START_DELAY_MS = 100;
+const AUTO_START_DELAY_MS = 300;
 
 export type AutoStatus = "idle" | "funding" | "running" | "ended" | "error";
 
