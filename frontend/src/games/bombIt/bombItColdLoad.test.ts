@@ -42,6 +42,7 @@ test("bomb-it cold-load: rebuilt tunnel restores the co-signed state from localS
   const st = (tunnel as { snapshot(): { state: { tick: bigint; balanceA: bigint; total: bigint; grid: Uint8Array } } }).snapshot().state;
   assert.equal(st.tick, sp.state.tick);
   assert.equal(st.balanceA, sp.state.balanceA);
+  assert.equal(st.balanceB, sp.state.balanceB);
   assert.equal(st.total, sp.state.total);
   assert.deepEqual(Array.from(st.grid), Array.from(sp.state.grid));
   clearResumeRecord(tid);
