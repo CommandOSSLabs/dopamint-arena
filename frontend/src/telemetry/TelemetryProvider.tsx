@@ -2,6 +2,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -16,13 +17,9 @@ import { liveOnchainTxns, displayUpdatesPerSec } from "../backend/liveMerge";
 
 const MAX_TXNS = 12;
 const MAX_SERIES = 20;
-/** Window for the live updates/sec rate. A short trailing window reflects the CURRENT
- *  throughput (what the batched self-play loop is pushing right now) instead of the
- *  lifetime average since mount, which dilutes to ~1 the longer the app stays open. */
-const RATE_WINDOW_MS = 2000;
-/** Cap how often the rate/series re-renders. The self-play loop bumps counters ~180×/sec;
- *  pushing a setState per bump would thrash React. The windowed rate (a ref) stays exact. */
-const SERIES_THROTTLE_MS = 150;
+/** Offline-fallback sampling cadence for the TPS sparkline (matches the backend's ~1/s push).
+ *  Only used when no backend is connected — see the series effect below. */
+const OFFLINE_SAMPLE_MS = 1000;
 
 /** Writer API games call to push their off-chain activity into the live panels. */
 export interface TelemetryWriter {
@@ -55,10 +52,6 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
 
   const counters = useRef<Counters>(newCounters());
   const startMs = useRef<number>(Date.now());
-  // Trailing-window samples of cumulative updates → a live (not lifetime-average) updates/sec.
-  const rateWindow = useRef<{ t: number; u: number }[]>([]);
-  const windowedUps = useRef<number>(0);
-  const lastSeriesMs = useRef<number>(0);
 
   const pushTxn = useCallback((row: TxnRow) => {
     setHasActivity(true);
@@ -82,23 +75,33 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
     c.disputes += delta.disputes ?? 0;
     c.settlements += delta.settlements ?? 0;
     c.errors += delta.errors ?? 0;
-
-    // Live rate over a short trailing window (refs only — no per-bump re-render).
-    const now = Date.now();
-    const w = rateWindow.current;
-    w.push({ t: now, u: c.updates });
-    while (w.length > 1 && now - w[0].t > RATE_WINDOW_MS) w.shift();
-    const spanSec = (now - w[0].t) / 1000;
-    windowedUps.current = spanSec > 0 ? (c.updates - w[0].u) / spanSec : 0;
-
-    // Throttle the series re-render; the loop bumps far faster than the eye needs.
-    if (now - lastSeriesMs.current >= SERIES_THROTTLE_MS) {
-      lastSeriesMs.current = now;
-      setTpsSeries((cur) => [...cur, Math.round(windowedUps.current)].slice(-MAX_SERIES));
-    }
+    // No local rate is derived here: the backend is the single authoritative TPS clock
+    // (ADR-0002). Self-play reports raw counts via the heartbeat; the backend owns the rate
+    // (see docs/adding-a-tunnel-game.md § Reporting TPS). These counters feed only totals and
+    // the offline fallback below.
   }, []);
 
   const setActive = useCallback((n: number) => setBotsRunning(n), []);
+
+  // TPS sparkline ← the backend's authoritative rate. The server pushes a pre-summed `tps`
+  // ~1/s, so append each fresh snapshot. We never compute a rate from local counters while
+  // connected — that is the "don't count TPS locally" contract.
+  useEffect(() => {
+    if (!backend) return;
+    setTpsSeries((cur) => [...cur, Math.round(backend.tps)].slice(-MAX_SERIES));
+  }, [backend]);
+
+  // Offline fallback ONLY (no backend to ask): sample the lifetime-average updates/sec so the
+  // sparkline still moves during a backend-down self-play run. Never runs while connected.
+  useEffect(() => {
+    if (status !== "offline" || !hasActivity) return;
+    const id = setInterval(() => {
+      const elapsed = Math.max(1, Date.now() - startMs.current);
+      const ups = rateReport(counters.current, elapsed).updatesPerSec;
+      setTpsSeries((cur) => [...cur, Math.round(ups)].slice(-MAX_SERIES));
+    }, OFFLINE_SAMPLE_MS);
+    return () => clearInterval(id);
+  }, [status, hasActivity]);
 
   const snapshot = useMemo<TelemetrySnapshot>(() => {
     // Reserve the demo placeholder for a genuinely-offline backend with no local play. While
@@ -107,10 +110,10 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
 
     const elapsed = Math.max(1, Date.now() - startMs.current);
     const localRate = rateReport(hasActivity ? counters.current : newCounters(), elapsed);
-    // Display the windowed (live) updates/sec, not the lifetime average.
-    const liveUps = hasActivity ? windowedUps.current : 0;
+    // Headline updates/sec: the backend's authoritative rate when connected, else the local
+    // lifetime average as an offline fallback (displayUpdatesPerSec picks).
     return {
-      rate: { ...localRate, updatesPerSec: displayUpdatesPerSec(backend, liveUps) },
+      rate: { ...localRate, updatesPerSec: displayUpdatesPerSec(backend, localRate.updatesPerSec) },
       txns: liveOnchainTxns(backend, hasActivity ? txns : []),
       localTxns: hasActivity ? localTxns : [],
       deposits: PLACEHOLDER_SNAPSHOT.deposits,
