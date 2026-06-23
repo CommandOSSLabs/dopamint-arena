@@ -53,6 +53,7 @@ import {
   evictExpiredRecords,
   readResumeRecord,
   listActiveTunnels,
+  clearResumeRecord,
 } from "@/pvp/resume";
 import { makePokerResumeAdapter } from "./pokerResumeAdapter";
 import { makeSeatBot, randomPokerPersona, type PokerSeatBot } from "./pokerSelfPlay";
@@ -462,6 +463,10 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
           coinType,
         ).then(
           () => {
+            // The tunnel is closed — drop its resume record so a reload/HMR never restores this
+            // finished match. Without this the "done" record lingers and the player gets stuck in the
+            // old busted tunnel on the next cold-load.
+            clearResumeRecord(dt.tunnelId);
             // A natural match end means a seat ran out of money: the cooperative close is done, so
             // immediately open a FRESH tunnel and keep playing — new 2500 buy-in, no carry-over of
             // chips. Only when a player deliberately ended the match (endRef) do we stop at the
@@ -756,6 +761,15 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
           return;
         }
         const { tunnel, channel } = restored[0];
+        // A restored "done" tunnel is a finished match whose settle never cleared its record. Nothing
+        // would advance it (no incoming moves; no plumbing proposer for "done"), so restoring it
+        // strands the player in the old busted tunnel. Drop the record and fall through to idle.
+        if (tunnel.state.phase === "done") {
+          clearResumeRecord(tunnel.tunnelId);
+          mpRef.current = null;
+          mp.close();
+          return;
+        }
         const rec = readResumeRecord(tunnel.tunnelId)!;
         const secret = restoredSecret as RestoredSecret | null;
         if (secret) {
