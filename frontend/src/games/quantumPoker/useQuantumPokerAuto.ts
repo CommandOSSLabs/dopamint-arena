@@ -179,8 +179,11 @@ class AutoSession {
   private stage: "opening" | "playing" | "settling" = "opening";
 
   private nextTimer: ReturnType<typeof setTimeout> | null = null;
-  // Bumped on stop/reset/dispose so an in-flight loop knows to abandon ship.
+  // Bumped on reset/dispose so an in-flight loop knows to abandon ship.
   private gen = 0;
+  // Set by stopAuto (Back/Stop): the loop breaks out of play, settles THIS tunnel (fire-and-forget
+  // via the backend), then stops without reopening. Unlike `gen`, it lets the close go through.
+  private stopRequested = false;
   private session: RegisterSessionResult | null = null;
   private heartbeatActions = 0;
   private lastHeartbeatAt = 0;
@@ -345,6 +348,7 @@ class AutoSession {
       return;
     }
     this.gen += 1;
+    this.stopRequested = false;
     this.clearNext();
     this.error = null;
     this.auto = true;
@@ -378,9 +382,11 @@ class AutoSession {
   };
 
   stopAuto = () => {
-    // Fire-and-forget: bump `gen` so the in-flight match/settle abandons ship, and end the run NOW so
-    // the user can Back out immediately without waiting for the current tunnel's settle.
-    this.gen += 1;
+    // Fire-and-forget CLOSE: signal the loop to finish the current tunnel — it leaves play, fires the
+    // cooperative settle (the backend queues/processes the HTTP), then stops (auto=false → no reopen).
+    // The settle runs in the background store, so the user Backs out immediately without a stranded
+    // open tunnel. (reset/dispose still bump `gen` to hard-abandon; this one lets the close through.)
+    this.stopRequested = true;
     this.auto = false;
     this.clearNext();
     this.endRun();
@@ -388,6 +394,7 @@ class AutoSession {
 
   reset = () => {
     this.gen += 1;
+    this.stopRequested = false;
     this.clearNext();
     this.auto = false;
     this.tunnel = null;
@@ -551,7 +558,13 @@ class AutoSession {
       let ts = 1n;
       let pending = 0;
       let lastFlush = Date.now();
-      const FLUSH_MS = 80;
+      // Frame budget: step moves synchronously, then render + yield once per budget. 16ms ≈ one
+      // 60Hz display frame — the smoothest a standard screen can show, so dropping below it (e.g.
+      // battleship's 8ms) only burns extra renders the monitor never paints, costing TPS for no
+      // visible gain. At 16ms the watch-bot repaints smoothly instead of in 80ms jerks while keeping
+      // render overhead low. Only the local render + counter batch run per budget; the network
+      // heartbeat self-throttles to ≤1/s (flushHeartbeat), so a tight budget never floods the backend.
+      const FLUSH_MS = 16;
       const flush = async () => {
         if (pending > 0) {
           this.deps?.report.bumpCounters({ updates: pending, signatures: pending * 2, verifications: pending * 2 });
@@ -565,6 +578,7 @@ class AutoSession {
       let prevHandNo = tunnel.state.handNo;
       while (tunnel.state.phase !== "done") {
         if (this.gen !== myGen) return;
+        if (this.stopRequested) break; // Back/Stop → leave play, settle this tunnel below, then stop
         const r = stepPokerAuto(tunnel, botA, botB, ts++);
         if (!r) break;
         this.actions += 1;
