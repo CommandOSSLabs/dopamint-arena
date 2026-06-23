@@ -586,11 +586,11 @@ class AutoSession {
       this.pushView();
       this.deps.report.bumpCounters({ tunnelsClosed: 1, settlements: 1 });
       this.deps.report.setActive(0);
-      // Fire-and-forget the settle: the next tunnel opens on the normal cadence while this close is
-      // processed in the background. We never block the loop on a tunnel's settle. The persona label
-      // is captured now so the background log isn't relabelled by the next match.
-      const matchLabel = `${this.personas?.a ?? "Bot A"} vs ${this.personas?.b ?? "Bot B"}`;
-      void settlePokerTunnel({
+      // AWAIT the close before opening the next tunnel. The close and the next open share mutable
+      // objects (the sponsor's gas coin, bot A's stake coins, the faucet), so running them
+      // concurrently equivocates those objects — the sponsor then fails with "object … unavailable
+      // for consumption (needs to be rebuilt)" and risks a 1/3-validator lock. Serializing avoids it.
+      const settled = await settlePokerTunnel({
         tunnel,
         transcript,
         tunnelId,
@@ -599,23 +599,21 @@ class AutoSession {
         fallbackSignExec: dopamintOn
           ? this.botSponsoredSignExec(this.bots.A)
           : this.botSignExec(this.bots.A),
-      })
-        .then((settled) => {
-          this.deps?.report.pushLocalTxn({
-            id: ++this.txnId,
-            game: "quantum-poker",
-            time: new Date().toLocaleTimeString("en-GB"),
-            bot: matchLabel,
-            type: `settled · ${HAND_CAP} hands`,
-            status: "Success",
-            amount: settled.proofUrl ? "walrus ✓" : "closed",
-          });
-        })
-        .catch((e) =>
-          console.error("[quantum-poker] auto settle failed (fire-and-forget):", e),
-        );
+      });
+      this.deps?.report.pushLocalTxn({
+        id: ++this.txnId,
+        game: "quantum-poker",
+        time: new Date().toLocaleTimeString("en-GB"),
+        bot: `${this.personas?.a ?? "Bot A"} vs ${this.personas?.b ?? "Bot B"}`,
+        type: `settled · ${HAND_CAP} hands`,
+        status: "Success",
+        amount: settled.proofUrl ? "walrus ✓" : "closed",
+      });
+      if (this.gen !== myGen) return;
 
-      void this.refreshBalances();
+      await this.refreshBalances();
+      if (this.gen !== myGen) return;
+
       this.bookMatch(myGen);
     } catch (e) {
       if (this.gen !== myGen) return;
