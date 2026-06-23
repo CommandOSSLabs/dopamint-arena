@@ -28,6 +28,11 @@ async fn main() -> anyhow::Result<()> {
         walrus_aggregator_url: std::env::var("WALRUS_AGGREGATOR_URL")
             .unwrap_or_else(|_| "https://aggregator.walrus-testnet.walrus.space".into()),
         http: reqwest::Client::new(),
+        llm_base_url: std::env::var("LLM_BASE_URL")
+            .unwrap_or_else(|_| "http://localhost:11434".into()),
+        llm_model: std::env::var("LLM_MODEL")
+            .unwrap_or_else(|_| "qwen2.5:3b".into()),
+        llm_api_key: std::env::var("LLM_API_KEY").ok(),
     };
 
     // Bridge Redis pub/sub -> a broadcast channel the SSE handler subscribes to.

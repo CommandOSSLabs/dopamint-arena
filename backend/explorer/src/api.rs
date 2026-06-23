@@ -15,6 +15,9 @@ pub struct ApiState {
     pub store: Arc<dyn SettlementStore>,
     pub walrus_aggregator_url: String,
     pub http: reqwest::Client,
+    pub llm_base_url: String,
+    pub llm_model: String,
+    pub llm_api_key: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -134,6 +137,9 @@ mod tests {
             store: Arc::new(store),
             walrus_aggregator_url: "https://agg.example".into(),
             http: reqwest::Client::new(),
+            llm_base_url: "http://localhost:11434".into(),
+            llm_model: "qwen2.5:3b".into(),
+            llm_api_key: None,
         }
     }
 
