@@ -1,17 +1,16 @@
 import { register } from "../registry";
-import { QuantumPokerPvpWindow } from "./QuantumPokerPvpWindow";
+import { QuantumPokerModeWindow } from "./QuantumPokerModeWindow";
 
-// PvP is the default (and only surfaced) lane: DistributedTunnel + quickMatch like Tic-Tac-Toe
-// — two real wallets matchmake, each stakes, and the hand is co-signed over the relay.
+// Quantum Poker lanes (all local/relay — no game server):
+// - Bot: human plays party A; a random-persona bot plays party B over a
+//   wallet-funded self-play tunnel, settled gas-free via /settle.
+// - PvP: two real wallets over DistributedTunnel + quickMatch (like Tic-Tac-Toe).
+// - Auto: two persistent persona bots open/play/settle and loop real tunnels.
 register({
   id: "quantum-poker",
   name: "Quantum Poker",
   description: "Heads-up poker, co-signed and settled on-chain.",
   icon: "🎴",
   image: "/games/poker.png",
-  Window: QuantumPokerPvpWindow,
+  Window: QuantumPokerModeWindow,
 });
-
-// Backlog (kept in the tree, intentionally NOT registered → stays off the desktop): the
-// user-vs-bot / solo lane — QuantumPokerWindow + runtime/serverRuntime/serverClient and
-// packages/server. Re-register it here to bring the mode back.

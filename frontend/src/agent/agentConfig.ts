@@ -3,31 +3,32 @@
 //   ?agent              enable
 //   ?key=suiprivkey1…   the agent's funded wallet secret (Bech32, what getSecretKey() emits)
 //   ?m=20               concurrent tunnel slots per agent (default 1 for the P1 proof)
+//   ?game=quantum-poker restrict rotation to one game id / kit id
+import type { GameId } from "./gameKit";
+
 export interface GameSpec {
-  /** relay queue id — MUST equal the id the human UI queues, so humans share the queue. */
+  /** Canonical bot kit id. */
+  kitId: GameId;
+  /** Relay queue id — MUST equal the id the human UI queues, so humans share the queue. */
   id: string;
-  /** createBehaviorProtocol() key (sui-tunnel-ts/agents/behaviors). */
-  behavior: "tictactoe" | "blackjack" | "payment" | "chat" | "poker";
-  /** per-seat locked stake (MIST). */
-  stake: bigint;
+  /** Per-seat locked stake (MIST). If omitted, the kit's default stake is used. */
+  stake?: bigint;
 }
 
-// The rotation set the engine cycles. Only tic-tac-toe is move-trigger-ready today; the
-// others use a phase-based turn model the generic move-trigger doesn't yet drive (deferred
-// follow-up), and rotating into them would open tunnels that stall and strand stakes. Re-add
-// them once the move-trigger is protocol-driven.
+// The rotation set the engine cycles. The engine is protocol-driven through GAME_KITS, so
+// phase-based games no longer need a bespoke move trigger.
 export const AGENT_GAMES: GameSpec[] = [
-  { id: "tictactoe", behavior: "tictactoe", stake: 500n },
-  // { id: "blackjack", behavior: "blackjack", stake: 500n },
-  // { id: "payments", behavior: "payment", stake: 500n },
-  // { id: "chat", behavior: "chat", stake: 500n },
-  // { id: "quantumpoker", behavior: "poker", stake: 500n },
+  { id: "tictactoe", kitId: "tictactoe", stake: 500n },
+  { id: "blackjack", kitId: "blackjack", stake: 500n },
+  { id: "battleship", kitId: "battleship", stake: 500n },
+  { id: "quantum-poker", kitId: "quantum-poker", stake: 10_000n },
 ];
 
 export interface AgentConfig {
   enabled: boolean;
   secretKey: string | null; // Bech32 suiprivkey1… for the agent's funded wallet
   concurrency: number; // M: concurrent tunnel slots per agent
+  game: string | null; // optional game queue / kit filter
 }
 
 export function parseAgentConfig(href: string): AgentConfig {
@@ -36,6 +37,7 @@ export function parseAgentConfig(href: string): AgentConfig {
     enabled: p.get("agent") !== null,
     secretKey: p.get("key"),
     concurrency: Math.max(1, Number(p.get("m") ?? "1")),
+    game: p.get("game"),
   };
 }
 

@@ -53,11 +53,13 @@ import {
   evictExpiredRecords,
   readResumeRecord,
   listActiveTunnels,
+  clearResumeRecord,
 } from "@/pvp/resume";
 import { makePokerResumeAdapter } from "./pokerResumeAdapter";
+import { makeSeatBot, randomPokerPersona, type PokerSeatBot } from "./pokerSelfPlay";
+import { POKER_BUYIN } from "./constants";
+import type { BotContext } from "@/agent/gameKit";
 
-/** Locked per seat: 1 DOPAMINT (9 decimals). */
-export const STAKE_BALANCE = 1_000_000_000n;
 /** Hands played per match before the on-chain settle; chips move off-chain in the tunnel
  *  between hands, and the loop ends early (→ "done") if a seat can't cover the next ante. */
 export const HAND_CAP = 50n;
@@ -70,6 +72,8 @@ const SHOWDOWN_DELAY_MS = PLUMBING_DELAY_MS * 2;
 /** The hand-over result holds the longest — a ~5s pause on the win/loss before the next hand is
  *  dealt, so the outcome clearly registers. */
 const HAND_OVER_DELAY_MS = 5_000;
+/** Real-time RNG context for the auto-mode persona bot (live play, not a seeded replay). */
+const AUTO_BOT_CTX: BotContext = { rngForSeat: () => Math.random };
 /** Matchmaking queue id — both seats must request the same game. */
 const GAME_ID = "quantum-poker";
 /** Auto check (else fold) if a seat doesn't act within this many seconds. */
@@ -118,6 +122,10 @@ export interface PvpQuantumPoker {
   endRequested: boolean;
   /** End the match cooperatively after the current hand — stop dealing and settle at the current balances. */
   requestSettle: () => void;
+  /** True when the persona bot is auto-playing this seat's bets. */
+  auto: boolean;
+  /** Toggle auto-play: when on, a persona bot makes this seat's betting moves. */
+  setAuto: (on: boolean) => void;
   reset: () => void;
 }
 
@@ -238,6 +246,7 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
   const [error, setError] = useState<string | null>(null);
   const [secondsLeft, setSecondsLeft] = useState<number | null>(null);
   const [endRequested, setEndRequested] = useState(false);
+  const [auto, setAutoState] = useState(false);
 
   const mpRef = useRef<MpClient | null>(null);
   const dtRef = useRef<PokerTunnel | null>(null);
@@ -246,6 +255,11 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
   // Dedupe auto-proposals: at most one scheduled plumbing move per target nonce, so a
   // commit's secrets are generated exactly once (regenerating would orphan the commitment).
   const autoNonceRef = useRef<bigint>(-1n);
+  // Auto mode: a persona bot drives this seat's BETTING. `autoRef` mirrors `auto` for use inside
+  // the imperative move loop (closures that read it after toggles); `autoBotRef` is the stateless
+  // kit bot built once per match.
+  const autoRef = useRef(false);
+  const autoBotRef = useRef<PokerSeatBot | null>(null);
   const transcriptRef = useRef<Transcript | null>(null);
   const channelRef = useRef<PvpChannel | null>(null);
   const detachResumeRef = useRef<(() => void) | null>(null);
@@ -255,6 +269,9 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
   const endRef = useRef(false);
   const settlingRef = useRef(false);
   const settleNowRef = useRef<(() => void) | null>(null);
+  // Holds the latest `findMatch` so the settle handler can auto-open a fresh tunnel (new 2500 buy-in)
+  // when a match ends by a seat running out of money — see the natural-end branch in `triggerSettle`.
+  const findMatchRef = useRef<(() => void) | null>(null);
 
   const sync = useCallback(() => {
     const dt = dtRef.current;
@@ -272,6 +289,9 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
     driverRef.current = null;
     selfPartyRef.current = null;
     autoNonceRef.current = -1n;
+    autoRef.current = false;
+    autoBotRef.current = null;
+    setAutoState(false);
     transcriptRef.current = null;
     channelRef.current = null;
     endRef.current = false;
@@ -297,16 +317,32 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
     if (endRef.current && dt.state.phase === "hand_over") return;
     const targetNonce = dt.nonce + 1n;
     if (autoNonceRef.current === targetNonce) return;
-    if (plumbingProposer(dt.state) !== self) return;
-    const move = driver.chooseMove(dt.state, secureRng); // commit secrets minted here, once
+    // Plumbing (commit/reveal/next_hand) is always auto-driven by the seat driver. In AUTO mode the
+    // persona bot also drives this seat's BETTING, so the bot fully represents the player. The kit
+    // bot is stateless — plan() decides purely from public state.
+    let move: PokerMove | null = null;
+    // AUTO mode runs instant — the persona bot represents the player, so skip the watchable pacing.
+    // Manual play keeps the paced reveals/hand-over so a human can follow the table.
+    let delay = autoRef.current ? 0 : PLUMBING_DELAY_MS;
+    if (plumbingProposer(dt.state) === self) {
+      move = driver.chooseMove(dt.state, secureRng); // commit secrets minted here, once
+      delay = autoRef.current
+        ? 0
+        : dt.state.phase === "hand_over"
+          ? HAND_OVER_DELAY_MS
+          : dt.state.phase === "showdown"
+            ? SHOWDOWN_DELAY_MS
+            : PLUMBING_DELAY_MS;
+    } else if (
+      autoRef.current &&
+      BET_PHASES.has(dt.state.phase) &&
+      dt.state.toAct === self
+    ) {
+      move = autoBotRef.current?.plan(dt.state) ?? null; // persona picks bet/call/check/fold
+      delay = 0; // instant in AUTO mode
+    }
     if (!move) return;
     autoNonceRef.current = targetNonce;
-    const delay =
-      dt.state.phase === "hand_over"
-        ? HAND_OVER_DELAY_MS
-        : dt.state.phase === "showdown"
-          ? SHOWDOWN_DELAY_MS
-          : PLUMBING_DELAY_MS;
     window.setTimeout(() => {
       const live = dtRef.current;
       if (!live || live.nonce + 1n !== targetNonce) return;
@@ -319,6 +355,15 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
       }
     }, delay);
   }, [sync]);
+
+  const setAuto = useCallback(
+    (on: boolean) => {
+      autoRef.current = on;
+      setAutoState(on);
+      if (on) maybeAutoPropose(); // act now if it's already our betting turn
+    },
+    [maybeAutoPropose],
+  );
 
   const propose = useCallback(
     (move: PokerMove) => {
@@ -389,6 +434,13 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
 
       dtRef.current = dt;
       driverRef.current = new QuantumPokerSeatDriver(info.role);
+      autoBotRef.current = makeSeatBot(
+        info.role,
+        POKER_BUYIN,
+        HAND_CAP,
+        randomPokerPersona(Math.random),
+        AUTO_BOT_CTX,
+      );
       autoNonceRef.current = -1n;
 
       // Single cooperative close — at match end, or early once a seat asked to settle. Guarded so
@@ -410,7 +462,22 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
           getControlPlaneClient(),
           coinType,
         ).then(
-          () => setStatus("settled"),
+          () => {
+            // The tunnel is closed — drop its resume record so a reload/HMR never restores this
+            // finished match. Without this the "done" record lingers and the player gets stuck in the
+            // old busted tunnel on the next cold-load.
+            clearResumeRecord(dt.tunnelId);
+            // A natural match end means a seat ran out of money: the cooperative close is done, so
+            // immediately open a FRESH tunnel and keep playing — new 2500 buy-in, no carry-over of
+            // chips. Only when a player deliberately ended the match (endRef) do we stop at the
+            // settled screen instead of recycling.
+            if (endRef.current) {
+              setStatus("settled");
+            } else {
+              reset();
+              findMatchRef.current?.();
+            }
+          },
           (e) => {
             setError(e instanceof Error ? e.message : String(e));
             setStatus("error");
@@ -553,9 +620,9 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
         const hello = await waitPeer<{ ephemeralPubkey: string }>("hello");
         const oppPub = fromHex(hello.ephemeralPubkey);
 
-        // 2) fund on-chain: seat A opens + funds its seat in one tx (one popup) and announces;
-        //    seat B gated-deposits its own stake. Identical lane to Tic-Tac-Toe.
-        setStatus("funding");
+        // A round = fund a fresh tunnel + wire the engine + resume play. Shared by the first round
+        // and every auto-rebuy round, so identity (wallet/ephemeral/oppPub) is captured once here
+        // and reused — never regenerate keys per round (would strand the carried stake).
         const partyA = { address: wallet, publicKey: ephemeral.publicKey };
         const partyB = { address: match.opponentWallet, publicKey: oppPub };
         const stake: StakeStrategy = {
@@ -564,64 +631,70 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
           prepareStake: sponsored.prepareStake,
           selectStakeCoin: sponsored.selectStakeCoin,
         };
-        let tunnelId: string;
-        if (match.role === "A") {
-          tunnelId = await openSharedTunnelStaked({
-            reads,
-            partyA,
-            partyB,
-            amount: STAKE_BALANCE,
-            label: "quantumPoker",
-            ...stake,
-          });
-          mp.announceTunnel(match.matchId, tunnelId);
-          channel.sendPeer({ t: "open", tunnelId });
-        } else {
-          const open = await waitPeer<{ tunnelId: string }>("open");
-          tunnelId = open.tunnelId;
-          await depositStakeStaked({
-            tunnelId,
-            amount: STAKE_BALANCE,
-            label: "quantumPoker",
-            ...stake,
-          });
-        }
+        const startTunnelRound = async (balances: { a: bigint; b: bigint }) => {
+          // 1) fund on-chain: seat A opens + funds seat A; seat B gated-deposits seat B.
+          setStatus("funding");
+          let tunnelId: string;
+          if (match.role === "A") {
+            tunnelId = await openSharedTunnelStaked({
+              reads,
+              partyA,
+              partyB,
+              amount: balances.a,
+              label: "quantumPoker",
+              ...stake,
+            });
+            mp.announceTunnel(match.matchId, tunnelId);
+            channel.sendPeer({ t: "open", tunnelId });
+          } else {
+            const open = await waitPeer<{ tunnelId: string }>("open");
+            tunnelId = open.tunnelId;
+            await depositStakeStaked({
+              tunnelId,
+              amount: balances.b,
+              label: "quantumPoker",
+              ...stake,
+            });
+          }
 
-        // 3) build the distributed poker engine over the relay transport.
-        const proto = new QuantumPokerProtocol(HAND_CAP);
-        const backend = defaultBackend();
-        const self = makeEndpoint(backend, wallet, ephemeral, true);
-        const opp = makeEndpoint(
-          backend,
-          match.opponentWallet,
-          { publicKey: oppPub, scheme: ephemeral.scheme },
-          false,
-        );
-        const dt: PokerTunnel = new DistributedTunnel(
-          proto,
-          {
-            tunnelId,
-            self,
-            opponent: opp,
-            selfParty: match.role,
-            moveCodec: pokerMoveCodec,
-          },
-          channel.transport,
-          { a: STAKE_BALANCE, b: STAKE_BALANCE },
-        );
-        activatePokerSession(mp, channel, dt, waitPeer, {
-          matchId: match.matchId,
-          role: match.role,
-          opponentWallet: match.opponentWallet,
-          opponentPubkeyHex: toHex(oppPub),
-          selfEphemeralSecretHex: toHex(ephemeral.secretKey),
-        });
+          // 2) build the distributed poker engine over the relay transport.
+          const proto = new QuantumPokerProtocol(HAND_CAP);
+          const backend = defaultBackend();
+          const self = makeEndpoint(backend, wallet, ephemeral, true);
+          const opp = makeEndpoint(
+            backend,
+            match.opponentWallet,
+            { publicKey: oppPub, scheme: ephemeral.scheme },
+            false,
+          );
+          const dt: PokerTunnel = new DistributedTunnel(
+            proto,
+            {
+              tunnelId,
+              self,
+              opponent: opp,
+              selfParty: match.role,
+              moveCodec: pokerMoveCodec,
+            },
+            channel.transport,
+            { a: balances.a, b: balances.b },
+          );
+          settlingRef.current = false;
+          activatePokerSession(mp, channel, dt, waitPeer, {
+            matchId: match.matchId,
+            role: match.role,
+            opponentWallet: match.opponentWallet,
+            opponentPubkeyHex: toHex(oppPub),
+            selfEphemeralSecretHex: toHex(ephemeral.secretKey),
+          });
 
-        // 4) readiness handshake — only AFTER the engine is wired, so seat A's first
-        //    commit can never reach seat B before B's frame handler exists.
-        if (match.role === "A") await waitPeer("ready");
-        else channel.sendPeer({ t: "ready" });
-        maybeAutoPropose(); // seat A kicks off the commit; seat B no-ops until its turn
+          // 3) readiness handshake — only AFTER the engine is wired, so seat A's first commit can
+          //    never reach seat B before B's frame handler exists.
+          if (match.role === "A") await waitPeer("ready");
+          else channel.sendPeer({ t: "ready" });
+          maybeAutoPropose();
+        };
+        await startTunnelRound({ a: POKER_BUYIN, b: POKER_BUYIN });
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
         setStatus("error");
@@ -688,6 +761,15 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
           return;
         }
         const { tunnel, channel } = restored[0];
+        // A restored "done" tunnel is a finished match whose settle never cleared its record. Nothing
+        // would advance it (no incoming moves; no plumbing proposer for "done"), so restoring it
+        // strands the player in the old busted tunnel. Drop the record and fall through to idle.
+        if (tunnel.state.phase === "done") {
+          clearResumeRecord(tunnel.tunnelId);
+          mpRef.current = null;
+          mp.close();
+          return;
+        }
         const rec = readResumeRecord(tunnel.tunnelId)!;
         const secret = restoredSecret as RestoredSecret | null;
         if (secret) {
@@ -719,6 +801,12 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
   }, [account, activatePokerSession, maybeAutoPropose]);
 
   // Cold-load: once the wallet is known, re-attach to any persisted in-flight match.
+  // Keep findMatchRef pointing at the latest findMatch so the settle handler can auto-open a fresh
+  // tunnel when a match ends naturally (a seat ran out of money).
+  useEffect(() => {
+    findMatchRef.current = findMatch;
+  }, [findMatch]);
+
   useEffect(() => {
     resume();
   }, [resume]);
@@ -784,6 +872,8 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
     bet,
     endRequested,
     requestSettle,
+    auto,
+    setAuto,
     reset,
   };
 }
@@ -833,12 +923,12 @@ async function settle(
     fromHex(other.sig),
   );
   if (role !== "A") return; // single submitter, mirrors the cooperative-close pattern
-  try {
-    await cp.settle(
-      tunnelId,
-      coSignedToSettleRequest(co, transcript.toRecord().entries),
-    );
-  } catch (e) {
+  // Submit to the backend settle queue WITHOUT blocking: the co-signed settlement is built, so the
+  // close is durable on the backend's side and the player can start a new match immediately while it
+  // is processed/confirmed asynchronously. The request payload is captured synchronously here (before
+  // any recycle tears down the tunnel). On backend failure, fall back to a wallet-submitted close.
+  const settleRequest = coSignedToSettleRequest(co, transcript.toRecord().entries);
+  void cp.settle(tunnelId, settleRequest).catch(async (e) => {
     console.error(
       "[quantum-poker] backend settle failed; falling back to wallet close:",
       e,
@@ -848,6 +938,8 @@ async function settle(
       tunnelId,
       settlement: co,
       coinType: isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined,
-    });
-  }
+    }).catch((e2) =>
+      console.error("[quantum-poker] wallet close fallback failed:", e2),
+    );
+  });
 }

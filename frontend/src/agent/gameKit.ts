@@ -1,4 +1,5 @@
 import type { Protocol, Party, ProtocolContext, Balances } from "sui-tunnel-ts/protocol/Protocol";
+import type { MoveCodec } from "sui-tunnel-ts/core/distributedFrame";
 import { createTicTacToeKit } from "./games/ticTacToe/kit";
 import { createBlackjackKit } from "./games/blackjack/kit";
 import { createBattleshipKit } from "./games/battleship/kit";
@@ -6,6 +7,7 @@ import { createQuantumPokerKit } from "./games/quantumPoker/kit";
 import { createBombItKit } from "./games/bombIt/kit";
 import { createChickenCrossKit } from "./games/chickenCross/kit";
 import { defaultStateHash, type StateHash } from "./stateHash";
+import { QUANTUM_POKER_STAKE } from "@/games/quantumPoker/constants";
 
 export type GameId =
   | "tictactoe"
@@ -26,6 +28,8 @@ export interface GameKit<S, M> {
   id: GameId;
   /** The real frontend protocol class the human `usePvp*` hook uses. */
   protocol: Protocol<S, M>;
+  /** Transport codec for non-JSON-native moves; omitted for JSON-native games. */
+  moveCodec?: MoveCodec<M>;
   /** Stable state digest for idempotency checks. */
   stateHash(state: S): StateHash;
   createBot(seat: Party, ctx: BotContext): GameBot<S, M>;
@@ -48,7 +52,7 @@ export const GAME_KITS: GameKitRegistry = {
   tictactoe: createTicTacToeKit(10, 10n),
   blackjack: createBlackjackKit(100n),
   battleship: createBattleshipKit(10n),
-  "quantum-poker": createQuantumPokerKit(100n),
+  "quantum-poker": createQuantumPokerKit(QUANTUM_POKER_STAKE),
   "bomb-it": createBombItKit(100n),
   "chicken-cross": createChickenCrossKit(100n),
 };
