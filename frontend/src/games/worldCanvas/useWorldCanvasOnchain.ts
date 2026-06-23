@@ -66,6 +66,7 @@ import {
   getControlPlaneClient,
   type RegisterSessionResult,
 } from "@/backend/controlPlane";
+import { useTelemetry } from "@/telemetry/TelemetryProvider";
 import {
   buildCreateAndFundTx,
   buildSettleWithRootTx,
@@ -343,6 +344,22 @@ export function cellKey(cx: bigint, cy: bigint, x: number, y: number): string {
   return `${cx}:${cy}:${x}:${y}`;
 }
 
+/** Deterministic non-negative 31-bit int from a string — a stable React key for a
+ *  dashboard feed row (the TelemetryProvider reassigns its own globally-unique id on
+ *  push, so this only needs to be collision-free per row, not globally). */
+function feedRowId(s: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h = Math.imul(h ^ s.charCodeAt(i), 16777619);
+  }
+  return Math.abs(h | 0);
+}
+
+/** Compact tunnel id (head…tail of the 0x address) for the feed row's `bot` column. */
+function shortTunnelId(id: string): string {
+  return id.length > 12 ? `${id.slice(0, 6)}…${id.slice(-4)}` : id;
+}
+
 /** Floor-divide that works for negative coordinates (chunk of a global pixel). */
 function floorDiv(a: number, b: number): number {
   return Math.floor(a / b);
@@ -483,6 +500,7 @@ const EMPTY_STATUS: WorldCanvasOnchainStatus = {
 export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
   // A stable "You" display identity (never co-signs — the funded seat-A keypair does
   // the signing; this address only TAGS the human's own cells for the "You" label).
+  const { report } = useTelemetry();
   const bots = useMemo(() => loadOrCreateBots(), []);
   const client = useMemo(() => getSuiClient(), []);
   const humanAddress = bots.x.address;
@@ -868,6 +886,18 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
         })
         .catch((e) => console.error("[world-canvas] registerSession failed:", e));
 
+      // Surface the open in the dashboard's per-game "world-canvas" feed (best-effort,
+      // non-blocking — pushTxn is a synchronous panel write, never the paint path).
+      report.pushTxn({
+        id: feedRowId(run.tunnelId),
+        game: GAME,
+        time: new Date().toLocaleTimeString("en-GB"),
+        bot: shortTunnelId(run.tunnelId),
+        type: "Wall Opened",
+        status: "Success",
+        amount: "—",
+      });
+
       // Tunnel is live: drain any paints buffered during the open, then continue.
       run.ready = true;
       const buffered = run.buffer;
@@ -884,7 +914,7 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
         }));
       }
     },
-    [client, proto, submit, coSignPaint, registerPainter, humanAddress],
+    [client, proto, submit, coSignPaint, registerPainter, humanAddress, report],
   );
 
   // Checkpoint the tunnel on-chain: cooperatively close it (anchoring its transcript
@@ -941,11 +971,22 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
             return digest;
           },
         });
+        // Anchored: surface the checkpoint in the per-game feed (best-effort, already
+        // inside this guarded try so it can never throw into the settle path).
+        report.pushTxn({
+          id: feedRowId(`${run.tunnelId}:${run.moveCount}`),
+          game: GAME,
+          time: new Date().toLocaleTimeString("en-GB"),
+          bot: shortTunnelId(run.tunnelId),
+          type: "Checkpoint",
+          status: "Success",
+          amount: "—",
+        });
       } catch (e) {
         console.warn("[world-canvas] checkpoint settle failed:", e);
       }
     },
-    [client, startRun],
+    [client, startRun, report],
   );
   checkpointRef.current = checkpointRun;
 
