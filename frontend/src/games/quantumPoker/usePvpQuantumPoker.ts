@@ -56,10 +56,9 @@ import {
 } from "@/pvp/resume";
 import { makePokerResumeAdapter } from "./pokerResumeAdapter";
 import { makeSeatBot, randomPokerPersona, type PokerSeatBot } from "./pokerSelfPlay";
+import { POKER_BUYIN } from "./constants";
 import type { BotContext } from "@/agent/gameKit";
 
-/** Locked per seat: 1 DOPAMINT (9 decimals). */
-export const STAKE_BALANCE = 1_000_000_000n;
 /** Hands played per match before the on-chain settle; chips move off-chain in the tunnel
  *  between hands, and the loop ends early (→ "done") if a seat can't cover the next ante. */
 export const HAND_CAP = 50n;
@@ -272,6 +271,10 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
   const endRef = useRef(false);
   const settlingRef = useRef(false);
   const settleNowRef = useRef<(() => void) | null>(null);
+  // Exposed so Task 3's auto-rebuy trigger can call startTunnelRound for subsequent rounds.
+  const startRoundRef = useRef<
+    ((balances: { a: bigint; b: bigint }) => Promise<void>) | null
+  >(null);
 
   const sync = useCallback(() => {
     const dt = dtRef.current;
@@ -297,6 +300,7 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
     endRef.current = false;
     settlingRef.current = false;
     settleNowRef.current = null;
+    startRoundRef.current = null;
     setStatus("idle");
     setRole(null);
     setState(null);
@@ -433,7 +437,7 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
       driverRef.current = new QuantumPokerSeatDriver(info.role);
       autoBotRef.current = makeSeatBot(
         info.role,
-        STAKE_BALANCE,
+        POKER_BUYIN,
         HAND_CAP,
         randomPokerPersona(Math.random),
         AUTO_BOT_CTX,
@@ -602,9 +606,9 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
         const hello = await waitPeer<{ ephemeralPubkey: string }>("hello");
         const oppPub = fromHex(hello.ephemeralPubkey);
 
-        // 2) fund on-chain: seat A opens + funds its seat in one tx (one popup) and announces;
-        //    seat B gated-deposits its own stake. Identical lane to Tic-Tac-Toe.
-        setStatus("funding");
+        // A round = fund a fresh tunnel + wire the engine + resume play. Shared by the first round
+        // and every auto-rebuy round, so identity (wallet/ephemeral/oppPub) is captured once here
+        // and reused — never regenerate keys per round (would strand the carried stake).
         const partyA = { address: wallet, publicKey: ephemeral.publicKey };
         const partyB = { address: match.opponentWallet, publicKey: oppPub };
         const stake: StakeStrategy = {
@@ -613,64 +617,71 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
           prepareStake: sponsored.prepareStake,
           selectStakeCoin: sponsored.selectStakeCoin,
         };
-        let tunnelId: string;
-        if (match.role === "A") {
-          tunnelId = await openSharedTunnelStaked({
-            reads,
-            partyA,
-            partyB,
-            amount: STAKE_BALANCE,
-            label: "quantumPoker",
-            ...stake,
-          });
-          mp.announceTunnel(match.matchId, tunnelId);
-          channel.sendPeer({ t: "open", tunnelId });
-        } else {
-          const open = await waitPeer<{ tunnelId: string }>("open");
-          tunnelId = open.tunnelId;
-          await depositStakeStaked({
-            tunnelId,
-            amount: STAKE_BALANCE,
-            label: "quantumPoker",
-            ...stake,
-          });
-        }
+        const startTunnelRound = async (balances: { a: bigint; b: bigint }) => {
+          // 1) fund on-chain: seat A opens + funds seat A; seat B gated-deposits seat B.
+          setStatus("funding");
+          let tunnelId: string;
+          if (match.role === "A") {
+            tunnelId = await openSharedTunnelStaked({
+              reads,
+              partyA,
+              partyB,
+              amount: balances.a,
+              label: "quantumPoker",
+              ...stake,
+            });
+            mp.announceTunnel(match.matchId, tunnelId);
+            channel.sendPeer({ t: "open", tunnelId });
+          } else {
+            const open = await waitPeer<{ tunnelId: string }>("open");
+            tunnelId = open.tunnelId;
+            await depositStakeStaked({
+              tunnelId,
+              amount: balances.b,
+              label: "quantumPoker",
+              ...stake,
+            });
+          }
 
-        // 3) build the distributed poker engine over the relay transport.
-        const proto = new QuantumPokerProtocol(HAND_CAP);
-        const backend = defaultBackend();
-        const self = makeEndpoint(backend, wallet, ephemeral, true);
-        const opp = makeEndpoint(
-          backend,
-          match.opponentWallet,
-          { publicKey: oppPub, scheme: ephemeral.scheme },
-          false,
-        );
-        const dt: PokerTunnel = new DistributedTunnel(
-          proto,
-          {
-            tunnelId,
-            self,
-            opponent: opp,
-            selfParty: match.role,
-            moveCodec: pokerMoveCodec,
-          },
-          channel.transport,
-          { a: STAKE_BALANCE, b: STAKE_BALANCE },
-        );
-        activatePokerSession(mp, channel, dt, waitPeer, {
-          matchId: match.matchId,
-          role: match.role,
-          opponentWallet: match.opponentWallet,
-          opponentPubkeyHex: toHex(oppPub),
-          selfEphemeralSecretHex: toHex(ephemeral.secretKey),
-        });
+          // 2) build the distributed poker engine over the relay transport.
+          const proto = new QuantumPokerProtocol(HAND_CAP);
+          const backend = defaultBackend();
+          const self = makeEndpoint(backend, wallet, ephemeral, true);
+          const opp = makeEndpoint(
+            backend,
+            match.opponentWallet,
+            { publicKey: oppPub, scheme: ephemeral.scheme },
+            false,
+          );
+          const dt: PokerTunnel = new DistributedTunnel(
+            proto,
+            {
+              tunnelId,
+              self,
+              opponent: opp,
+              selfParty: match.role,
+              moveCodec: pokerMoveCodec,
+            },
+            channel.transport,
+            { a: balances.a, b: balances.b },
+          );
+          settlingRef.current = false;
+          activatePokerSession(mp, channel, dt, waitPeer, {
+            matchId: match.matchId,
+            role: match.role,
+            opponentWallet: match.opponentWallet,
+            opponentPubkeyHex: toHex(oppPub),
+            selfEphemeralSecretHex: toHex(ephemeral.secretKey),
+          });
 
-        // 4) readiness handshake — only AFTER the engine is wired, so seat A's first
-        //    commit can never reach seat B before B's frame handler exists.
-        if (match.role === "A") await waitPeer("ready");
-        else channel.sendPeer({ t: "ready" });
-        maybeAutoPropose(); // seat A kicks off the commit; seat B no-ops until its turn
+          // 3) readiness handshake — only AFTER the engine is wired, so seat A's first commit can
+          //    never reach seat B before B's frame handler exists.
+          if (match.role === "A") await waitPeer("ready");
+          else channel.sendPeer({ t: "ready" });
+          maybeAutoPropose();
+        };
+        startRoundRef.current = startTunnelRound;
+        await startTunnelRound({ a: POKER_BUYIN, b: POKER_BUYIN });
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
         setStatus("error");

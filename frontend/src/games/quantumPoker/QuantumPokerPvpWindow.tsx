@@ -2,11 +2,8 @@ import type { CSSProperties } from "react";
 import type { Party } from "sui-tunnel-ts/protocol/Protocol";
 import type { PokerState } from "sui-tunnel-ts/protocol/quantumPoker";
 import type { GameWindowProps } from "../types";
-import {
-  HAND_CAP,
-  STAKE_BALANCE,
-  usePvpQuantumPoker,
-} from "./usePvpQuantumPoker";
+import { HAND_CAP, usePvpQuantumPoker } from "./usePvpQuantumPoker";
+import { POKER_BUYIN } from "./constants";
 import { pokerRaiseSizes } from "./pokerBetting";
 
 const SUITS = ["♠", "♥", "♦", "♣"] as const;
@@ -192,7 +189,7 @@ export function QuantumPokerPvpWindow(_props: GameWindowProps) {
         <p className="max-w-[18rem] text-[12px] leading-relaxed text-slate-400">
           Each seat stakes{" "}
           <span className="wal-mono text-[var(--qp-gold)]">
-            {fmt(STAKE_BALANCE)}
+            {POKER_BUYIN.toString()} chip
           </span>{" "}
           on-chain. The deck is dealt by a two-party commit-reveal — no dealer —
           and chips move off-chain over a Sui tunnel for up to{" "}
