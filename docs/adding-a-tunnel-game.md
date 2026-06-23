@@ -84,11 +84,40 @@ Copy the reference game directory and adapt. Read the chosen reference under `fr
           tunnel = OffchainTunnel.selfPlay(protocol, tunnelId, a.keyPair, b.keyPair, a.address, b.address, { a, b })
           wire tunnel.onUpdate BEFORE the first step
           getControlPlaneClient().registerSession({ userAddress, game: "<game-id>", tunnels: [...] })  (best-effort .catch)
-          setInterval → stepSession; on protocol.isTerminal → buildSettlement(createdAt) → closeCooperative
+          setInterval → stepSession; count + flushHeartbeat per step (see Reporting TPS);
+          on protocol.isTerminal → buildSettlement(createdAt) → closeCooperative
 4. FE:  <Game>Window.tsx (status router) + components + css.
 5. FE:  index.ts register(...); add `import "./<game>";` to frontend/src/games/index.ts (position = tile order).
 6. Gate (run all): see Gate below.
 ```
+
+## Reporting TPS (heartbeat contract)
+
+Self-play only. The backend never sees your moves — it derives the live TPS as a windowed
+derivative of an action counter it accumulates from your heartbeats (single authoritative
+clock, ADR-0002). You send **counts, never a rate.** Reference impl: `useBotGame.ts`
+(`flushHeartbeat`, ~L224–241; counting at L457–458; tail flush at L494).
+
+Four invariants for a correct count:
+
+1. **Register once** before the first step:
+   `registerSession({ userAddress, game, tunnels }) → { sessionId, statsToken }`. Best-effort —
+   the backend is never in the per-move loop, so a failed register must `.catch` and keep playing.
+2. **One action per *verified* step.** Bump `actionsRef += 1` (and `moveCountRef += 1` for the
+   nonce) exactly once per `tunnel.step(...)`, *after* `r.verified` — never per render, per retry,
+   or per timer tick. `OffchainTunnel.selfPlay` produces every update locally, so one step = one action.
+3. **Flush as a throttled heartbeat, never per move.** After each step call
+   `flushHeartbeat(tunnelId, false)`. It self-throttles (no-op if `actionsDelta === 0`, or the window
+   is < 1 s and not forced) and on send **resets the counter to 0** and restamps the window —
+   `actionsDelta` is a *delta since last flush*, not a running total. Payload:
+   `{ tunnelId, nonce: String(moveCount), actionsDelta, windowMs }`; `nonce` is the monotonic move count.
+4. **Force-flush the tail on settle/teardown:** `flushHeartbeat(tunnelId, true)` before building the
+   settlement, so the final partial window isn't dropped.
+
+> **PvP is different — do NOT copy this into a PvP hook.** There the relay is the single point that
+> sees every move and counts it server-side (`backend/tunnel-manager/src/mp/ws.rs`). A PvP hook that
+> *also* heartbeat-counts its confirmed moves double-reports — keep the relay count, drop the client
+> `actionsDelta`.
 
 ## PvP delta
 
