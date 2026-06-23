@@ -155,6 +155,7 @@ class CrossBotSession {
   private settleRequested = false;
   private score = { you: 0, foe: 0 };
   private lastScoredGames = -1;
+  private txnId = 0;
   private stake = 0;
   private tunnelId = "";
   private createdAt = 0n;
@@ -277,6 +278,18 @@ class CrossBotSession {
     this.lastScoredGames = game;
     if (winner === "A") this.score = { ...this.score, you: this.score.you + 1 };
     else if (winner === "B") this.score = { ...this.score, foe: this.score.foe + 1 };
+    // One "My Activity" row per finished race (skip pushes), mirroring battleship.
+    if (winner === "A" || winner === "B") {
+      this.deps?.report.pushLocalTxn({
+        id: (this.txnId += 1),
+        game: "chicken-cross",
+        time: new Date().toLocaleTimeString("en-GB"),
+        bot: "You",
+        type: winner === "A" ? "Bot Win" : "Bot Loss",
+        status: "Success",
+        amount: "",
+      });
+    }
     // winner null = push → no tally, race still counts toward gamesPlayed.
   }
 
@@ -325,7 +338,11 @@ class CrossBotSession {
           if (this.gen !== myGen || this.tunnel !== tunnel) return;
           continue;
         }
-        if (boundary === "session-over") break; // exhausted — leave for settle
+        if (boundary === "session-over") {
+          this.recordGameResult(); // tally the final decided race (idempotent via lastScoredGames)
+          this.pushView();
+          break; // exhausted — leave for settle
+        }
         // boundary === "game-over": record, then rematch (auto) or stop.
         this.recordGameResult();
         this.pushView();
