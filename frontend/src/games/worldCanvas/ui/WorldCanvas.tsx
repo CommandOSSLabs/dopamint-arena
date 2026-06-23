@@ -12,35 +12,27 @@ import {
   WC,
   ZOOM,
   TAP_SLOP,
-  BRUSH,
-  radiusForSize,
   FONT_MONO,
   FONT_DISPLAY,
   shortAddress,
 } from "./tokens";
-import {
-  rasterizeTemplate,
-  drawTemplateGhost,
-  type StrokeTemplate,
-  type RasterizedTemplate,
-} from "../templates";
 
 /** Camera zoom used when jumping to a freshly spawned agent's flag. */
 const FOCUS_SCALE = 12;
-/** Long-edge cell count of a human stamp at brush size 1 (scales ×brush). */
-const STAMP_BASE_CELLS = 30;
-/** Cells co-signed per animation frame while draining a queued stamp — a bounded,
- *  chunked TPS spike that never freezes the pointer/render loop. */
-const STAMP_CHUNK = 64;
 
 /**
  * The infinite, chunked pixel wall — a single HTML5 canvas with pan (drag),
- * zoom-to-cursor (wheel), and click-to-paint. The world is divided into
+ * zoom-to-cursor (wheel), and drag-to-paint. The world is divided into
  * {@link CHUNK_SIZE}×{@link CHUNK_SIZE} chunks; each resident chunk is rasterized
  * once into its own offscreen canvas and only RE-rasterized when a paint dirties
  * it (dirty-chunk redraw). Each render frame culls to the visible chunk range and
  * blits only those — so cost is bound by what's on screen + what changed this
  * frame, never by the (unbounded) total wall size.
+ *
+ * Render is deliberately LEAN: crisp tile blits, flat strokes, a 1px brush-
+ * footprint outline, and a small agent pin. No glow ribbons, supersampling,
+ * halos, or soft-dab fields — the chunk store + viewport culling is the only
+ * machinery, so several agents stay at a smooth 60fps.
  *
  * Cells live in the parent's append-only `paints` map (keyed by cell); this view
  * is the canonical RENDER store and is updated incrementally: it folds in only
@@ -57,21 +49,6 @@ interface View {
 interface GlobalCell {
   gx: number;
   gy: number;
-}
-
-/** The active (or just-finished, fading) human stroke, captured for the smooth
- *  vector-ribbon overlay. Points are world-float so the ribbon stays anchored
- *  to the wall if the camera pans/zooms during its post-stroke fade. */
-interface StrokeRibbon {
-  pts: { wx: number; wy: number }[];
-  /** Palette index laid by this stroke (the ribbon tint). */
-  color: number;
-  /** Brush footprint edge in cells, for the ribbon width. */
-  size: number;
-  /** True while the pointer is still down; false once it lifts (then it fades). */
-  active: boolean;
-  /** performance.now() at pointer-up; drives the {@link BRUSH.fadeMs} fade-out. */
-  endedAt: number;
 }
 
 /** A resident chunk: its color buffer, the RGBA image, and its offscreen tile. */
@@ -129,38 +106,33 @@ export function WorldCanvas({
   revision,
   selectedColor,
   brushSize,
-  showGrid,
+  panOnly,
   disabled,
   onPaint,
   agents,
   focus,
   humanAddress,
-  armedTemplate,
 }: {
   /** Append-only live cells from the tunnel hook (stable identity, mutated in place). */
   paints: ReadonlyMap<string, PaintedCell>;
   /** Bumps whenever `paints` changes; gates the incremental chunk sync. */
   revision: number;
-  /** Palette index `[0, 16)` placed on click. */
+  /** Palette index `[0, 16)` placed on drag. */
   selectedColor: number;
   /** Brush footprint edge in cells (1/2/3): each sampled point paints an N×N block. */
   brushSize: number;
-  /** Overlay the per-cell/chunk grid (View ▸ Show Grid). Off by default for the
-   *  smooth-paint look; render-only, never affects the co-signed move. */
-  showGrid: boolean;
+  /** Hand tool: a left-drag pans instead of painting (still paints with no tool). */
+  panOnly: boolean;
   /** True while the tunnel is opening — show a grab cursor, swallow paints. */
   disabled: boolean;
   /** Place one cell: chunk (cx,cy) + in-chunk (x,y) + color → one co-signed move. */
   onPaint: (cx: bigint, cy: bigint, x: number, y: number, color: number) => void;
-  /** Live agents — drawn as on-canvas markers above the flag each is painting. */
+  /** Live agents — drawn as small on-canvas pins above the flag each is painting. */
   agents: AgentMarker[];
   /** Latest camera-jump request; the view eases to center this point on change. */
   focus: CanvasFocus | null;
   /** The human's address, so a hovered cell the human painted reads "You". */
   humanAddress: string;
-  /** Armed stamp template: a left-click stamps its rasterized cells (a bounded TPS
-   *  spike chunked across frames) instead of starting a brush stroke. Null = paint. */
-  armedTemplate: StrokeTemplate | null;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -197,34 +169,12 @@ export function WorldCanvas({
   selColorRef.current = selectedColor;
   const brushSizeRef = useRef(brushSize);
   brushSizeRef.current = brushSize;
-  const showGridRef = useRef(showGrid);
-  showGridRef.current = showGrid;
+  const panOnlyRef = useRef(panOnly);
+  panOnlyRef.current = panOnly;
   const paintsRef = useRef(paints);
   paintsRef.current = paints;
   const revisionRef = useRef(revision);
   revisionRef.current = revision;
-  // onPaint is a stable callback, but mirror it so the long-lived draw loop (which
-  // drains queued stamp cells) always co-signs through the current sink.
-  const onPaintRef = useRef(onPaint);
-  onPaintRef.current = onPaint;
-  // Armed stamp template (mirrored for the draw loop's ghost + the pointer handler).
-  const armedRef = useRef(armedTemplate);
-  armedRef.current = armedTemplate;
-  // Pending stamp cells (absolute global pixel + color), drained STAMP_CHUNK/frame so
-  // a big stamp is a bounded, non-blocking TPS spike. `stampHead` is the drain cursor.
-  const stampCells = useRef<{ gx: number; gy: number; color: number }[]>([]);
-  const stampHead = useRef(0);
-  // Cache the rasterized stamp for the armed template + brush size, so the ghost and
-  // the click reuse one raster (recomputed only when the template or brush changes).
-  const stampRaster = useRef<{ id: string; brush: number; rast: RasterizedTemplate } | null>(
-    null,
-  );
-
-  // Live vector stroke ribbon (the headline "no-pixel" feel): the human's active
-  // drag is captured in WORLD-float space, reprojected to screen each frame, and
-  // overlaid as a round-capped, soft-glow path that fades after pointer-up. It is
-  // a pure render echo — the co-signed cells underneath are the real, frozen truth.
-  const ribbon = useRef<StrokeRibbon | null>(null);
 
   // Cells already painted in the active pointer stroke. A drag interpolates and
   // overlaps brush blocks, so this set keeps every cell to exactly ONE co-signed
@@ -271,32 +221,6 @@ export function WorldCanvas({
     };
   };
 
-  // Continuous (non-floored) world-pixel coordinate of a screen point — feeds the
-  // smooth ribbon, which needs sub-cell precision, not a snapped cell.
-  const worldAt = (sx: number, sy: number): { wx: number; wy: number } => {
-    const v = view.current;
-    return { wx: (sx - v.offsetX) / v.scale, wy: (sy - v.offsetY) / v.scale };
-  };
-
-  // Cells-per-template-unit for the armed stamp at the current brush size: a fixed
-  // long-edge target × brush, so the stamp (and its `estimateMoves` count) is bounded
-  // and zoom-independent — only the on-screen ghost scales with zoom.
-  const stampScaleFor = (tpl: StrokeTemplate): number =>
-    (STAMP_BASE_CELLS * brushSizeRef.current) / Math.max(tpl.aspect.w, tpl.aspect.h);
-
-  // Rasterize the armed template once per (template, brush) and cache it; the ghost
-  // reads its size/count and a click reads its cells.
-  const getStampRaster = (): RasterizedTemplate | null => {
-    const tpl = armedRef.current;
-    if (!tpl) return null;
-    const brush = brushSizeRef.current;
-    const cur = stampRaster.current;
-    if (cur && cur.id === tpl.id && cur.brush === brush) return cur.rast;
-    const rast = rasterizeTemplate(tpl, stampScaleFor(tpl));
-    stampRaster.current = { id: tpl.id, brush, rast };
-    return rast;
-  };
-
   // Materialize a chunk (offscreen 256×256 tile) on first paint into it.
   const ensureChunk = (key: string): Chunk | null => {
     let c = chunks.current.get(key);
@@ -319,7 +243,7 @@ export function WorldCanvas({
   // Raster one cell into its chunk's buffer + RGBA image (O(1)), grow the painted-
   // content bbox, and mark the chunk dirty for the next frame's re-blit. Shared by
   // the authoritative `syncPaints` (co-signed paints folded in by seq) and the
-  // optimistic in-stroke echo (`paintLocal`), so both write pixels identically.
+  // optimistic in-stroke echo (`placeAt`), so both write pixels identically.
   const writeCell = (gx: number, gy: number, color: number) => {
     const cx = chunkOf(gx);
     const cy = chunkOf(gy);
@@ -366,48 +290,6 @@ export function WorldCanvas({
     appliedSeq.current = maxSeq;
   };
 
-  // Drain up to STAMP_CHUNK queued stamp cells this frame: echo each optimistically
-  // (writeCell) and co-sign it through onPaint — exactly the per-cell move path the
-  // brush uses, just fed from a template raster. Chunking keeps a big stamp a bounded
-  // TPS spike that never blocks the loop. The queue compacts once fully drained.
-  const drainStampQueue = () => {
-    const q = stampCells.current;
-    let head = stampHead.current;
-    if (head >= q.length) return;
-    let n = STAMP_CHUNK;
-    while (n-- > 0 && head < q.length) {
-      const c = q[head++];
-      writeCell(c.gx, c.gy, c.color);
-      const cx = chunkOf(c.gx);
-      const cy = chunkOf(c.gy);
-      onPaintRef.current(
-        BigInt(cx),
-        BigInt(cy),
-        c.gx - cx * CHUNK_SIZE,
-        c.gy - cy * CHUNK_SIZE,
-        c.color,
-      );
-    }
-    stampHead.current = head;
-    if (head >= q.length) {
-      q.length = 0;
-      stampHead.current = 0;
-    }
-  };
-
-  // Queue a stamp of the armed template centered on `cell`: rasterize once (cached),
-  // place its cells at absolute global coords, and let the draw loop drain them.
-  const stampTemplateAt = (cell: GlobalCell) => {
-    const rast = getStampRaster();
-    if (!rast || rast.cells.length === 0) return;
-    const ox = cell.gx - Math.floor(rast.width / 2);
-    const oy = cell.gy - Math.floor(rast.height / 2);
-    const q = stampCells.current;
-    for (const c of rast.cells) {
-      q.push({ gx: ox + c.dx, gy: oy + c.dy, color: c.color });
-    }
-  };
-
   // Continuous render loop: sync new paints, re-rasterize dirty tiles, then cull
   // to the visible chunk range and blit only those.
   useEffect(() => {
@@ -435,15 +317,14 @@ export function WorldCanvas({
       }
 
       syncPaints();
-      drainStampQueue();
 
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
       const v = view.current;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      // SMOOTH look: bilinear-upscale the chunk tiles so the painted field reads
-      // as soft paint, not hard squares. Render-only — the data model is untouched.
-      ctx.imageSmoothingEnabled = BRUSH.smoothField;
+      // Crisp pixels: no bilinear smoothing on tile blits. Cheapest path and the
+      // clean, modern look — painted cells stay sharp squares at every zoom.
+      ctx.imageSmoothingEnabled = false;
 
       // Ease the camera toward an active jump target (set when an agent spawns).
       // Manual pan/zoom clears the target so a jump never fights the user.
@@ -476,8 +357,6 @@ export function WorldCanvas({
 
       // Backdrop: the whole viewport is the empty canvas void; painted chunks
       // are blitted on top.
-      ctx.fillStyle = WC.bg;
-      ctx.fillRect(0, 0, cw, ch);
       ctx.fillStyle = WC.board;
       ctx.fillRect(0, 0, cw, ch);
 
@@ -501,126 +380,33 @@ export function WorldCanvas({
         }
       }
 
-      // Live vector stroke ribbon: overlay the human's active/just-finished drag as
-      // a resolution-independent, round-capped, soft-glow path (reprojected from
-      // world-float to screen each frame). It reads as genuine anti-aliased paint —
-      // no pixels — then fades, letting the co-signed field underneath take over.
-      const rb = ribbon.current;
-      if (rb) {
-        let fade = 1;
-        if (!rb.active) {
-          fade = 1 - (performance.now() - rb.endedAt) / BRUSH.fadeMs;
-          if (fade <= 0) ribbon.current = null;
-        }
-        if (ribbon.current && rb.pts.length) {
-          const scr = rb.pts.map((p) => ({
-            x: v.offsetX + p.wx * v.scale,
-            y: v.offsetY + p.wy * v.scale,
-          }));
-          const width = Math.max(2, radiusForSize(rb.size, v.scale) * 2);
-          drawSmoothStroke(ctx, scr, width, PALETTE[rb.color] ?? "#fff", fade);
-        }
-      }
-
-      // Chunk borders + a faint per-cell grid once zoomed in enough to read. Off by
-      // default (View ▸ Show Grid) so the smooth look isn't broken up by hard lines.
-      if (showGridRef.current && v.scale >= 8) {
-        ctx.strokeStyle = WC.grid;
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        const px0 = chunkOf(gMinX) * CHUNK_SIZE;
-        const py0 = chunkOf(gMinY) * CHUNK_SIZE;
-        for (let gx = px0; gx <= gMaxX; gx++) {
-          const sx = Math.round(v.offsetX + gx * v.scale) + 0.5;
-          ctx.moveTo(sx, 0);
-          ctx.lineTo(sx, ch);
-        }
-        for (let gy = py0; gy <= gMaxY; gy++) {
-          const sy = Math.round(v.offsetY + gy * v.scale) + 0.5;
-          ctx.moveTo(0, sy);
-          ctx.lineTo(cw, sy);
-        }
-        ctx.stroke();
-      }
-
-      // Agent markers: a labeled pin anchored just above each agent's flag, so the
-      // user always sees where every bot is currently drawing.
+      // Agent markers: a small pin + label above each agent's flag, so the user
+      // always sees where every bot is currently drawing. Flat — no halo gradient.
       for (const a of agentsRef.current) {
         const cxs = v.offsetX + a.gx * v.scale;
-        const cys = v.offsetY + a.gy * v.scale;
         const topYs = v.offsetY + (a.gy - a.h / 2) * v.scale;
         if (cxs < -160 || cxs > cw + 160 || topYs < -40 || topYs > ch + 80) {
           continue;
         }
-        // Soft tint halo where the bot is painting — gives agents the same
-        // "paint, not pixels" presence as the human ribbon, at near-zero cost.
-        const hr = Math.max(6, v.scale * BRUSH.agentHaloMul);
-        const halo = ctx.createRadialGradient(cxs, cys, 0, cxs, cys, hr);
-        halo.addColorStop(0, hexToRgba(a.tint, BRUSH.agentHaloAlpha));
-        halo.addColorStop(1, hexToRgba(a.tint, 0));
-        ctx.fillStyle = halo;
-        ctx.beginPath();
-        ctx.arc(cxs, cys, hr, 0, Math.PI * 2);
-        ctx.fill();
         drawAgentMarker(ctx, cxs, topYs, a.label, a.flagName, a.tint);
       }
 
-      // When a stamp template is armed, the cursor preview becomes a translucent
-      // template GHOST + a dashed footprint frame + an "≈ N paints" burst guard, so
-      // the human sees exactly what (and how big a TPS spike) a click will lay down.
+      // Brush footprint preview: a thin outline of the N×N block the next paint
+      // lays down, in the active color. One cheap stroked rect — no soft dab.
       const hc = hover.current;
-      const armedTpl = armedRef.current;
-      if (armedTpl && hc && !disabled) {
-        const stampScale = stampScaleFor(armedTpl);
-        const unitPx = stampScale * v.scale;
-        const wWorld = armedTpl.aspect.w * stampScale; // footprint width in cells
-        const hWorld = armedTpl.aspect.h * stampScale;
-        const ox = v.offsetX + (hc.gx + 0.5 - wWorld / 2) * v.scale;
-        const oy = v.offsetY + (hc.gy + 0.5 - hWorld / 2) * v.scale;
-        drawTemplateGhost(ctx, armedTpl, ox, oy, unitPx, 0.55);
-        ctx.save();
-        ctx.globalAlpha = 0.85;
-        ctx.strokeStyle = WC.accent;
-        ctx.setLineDash([6, 4]);
-        ctx.lineWidth = 1;
-        ctx.strokeRect(ox, oy, wWorld * v.scale, hWorld * v.scale);
-        ctx.setLineDash([]);
-        const rast = getStampRaster();
-        if (rast) {
-          const label = `≈ ${rast.cells.length.toLocaleString()} paints`;
-          ctx.font = `700 12px ${FONT_MONO}`;
-          const tw = ctx.measureText(label).width;
-          const lx = ox + (wWorld * v.scale) / 2 - tw / 2;
-          const ly = oy - 8;
-          ctx.fillStyle = "rgba(10,16,34,0.9)";
-          ctx.fillRect(lx - 6, ly - 13, tw + 12, 18);
-          ctx.fillStyle = WC.text;
-          ctx.fillText(label, lx, ly);
-        }
-        ctx.restore();
-      } else if (hc && !disabled) {
+      if (hc && !disabled && !panOnlyRef.current) {
         const n = brushSizeRef.current;
         const off = Math.floor(n / 2);
-        // Footprint center: the N×N block spans n cells from (gx-off, gy-off).
-        const ccx = v.offsetX + (hc.gx - off + n / 2) * v.scale;
-        const ccy = v.offsetY + (hc.gy - off + n / 2) * v.scale;
-        const r = Math.max(3, radiusForSize(n, v.scale));
-        const hex = PALETTE[selColorRef.current] ?? "#ffffff";
-        const grad = ctx.createRadialGradient(ccx, ccy, 0, ccx, ccy, r);
-        grad.addColorStop(0, hexToRgba(hex, BRUSH.hoverFill));
-        grad.addColorStop(0.6, hexToRgba(hex, BRUSH.hoverFill * 0.5));
-        grad.addColorStop(1, hexToRgba(hex, 0));
-        ctx.fillStyle = grad;
-        ctx.beginPath();
-        ctx.arc(ccx, ccy, r, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.globalAlpha = BRUSH.hoverRing;
+        const sx = v.offsetX + (hc.gx - off) * v.scale;
+        const sy = v.offsetY + (hc.gy - off) * v.scale;
+        const side = n * v.scale;
+        ctx.fillStyle = PALETTE[selColorRef.current] ?? "#ffffff";
+        ctx.globalAlpha = 0.22;
+        ctx.fillRect(sx, sy, side, side);
+        ctx.globalAlpha = 1;
         ctx.strokeStyle = WC.accent;
         ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        ctx.arc(ccx, ccy, r, 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.globalAlpha = 1;
+        ctx.strokeRect(sx + 0.5, sy + 0.5, side - 1, side - 1);
       }
 
       const now = performance.now();
@@ -670,8 +456,8 @@ export function WorldCanvas({
     return () => cancelAnimationFrame(raf);
   }, [disabled]);
 
-  // A pointer gesture is EITHER a paint stroke (left-drag) or a pan (right/space
-  // drag). `last` is the previous painted cell, the anchor the next sample
+  // A pointer gesture is EITHER a paint stroke (left-drag) or a pan (right/space/
+  // hand-tool drag). `last` is the previous painted cell, the anchor the next sample
   // interpolates from so the stroke stays gap-free.
   const drag = useRef<{
     lastX: number;
@@ -728,16 +514,9 @@ export function WorldCanvas({
     const { sx, sy } = localXY(e);
     const cell = cellAt(sx, sy);
     hover.current = cell;
-    // Left button with no Space modifier draws; right/middle button or held Space
-    // pans. A disabled wall never paints, but may still be panned.
-    const wantsPan = e.button !== 0 || spacePressed.current;
-    // A left-click with a stamp armed queues the template instead of starting a brush
-    // stroke (the queue drains chunked across frames = a bounded TPS spike).
-    if (armedRef.current && !wantsPan && !disabled) {
-      stampTemplateAt(cell);
-      drag.current = null;
-      return;
-    }
+    // Left button with no Space/hand modifier draws; right/middle button, held
+    // Space, or the hand tool pans. A disabled wall never paints, but may pan.
+    const wantsPan = e.button !== 0 || spacePressed.current || panOnlyRef.current;
     const painting = !wantsPan && !disabled;
     drag.current = {
       lastX: sx,
@@ -750,14 +529,6 @@ export function WorldCanvas({
     if (painting) {
       strokeSet.current.clear(); // start a fresh stroke
       stampBrush(cell); // a plain click already paints its cell
-      // Begin the smooth vector ribbon for this stroke (render-only overlay).
-      ribbon.current = {
-        pts: [worldAt(sx, sy)],
-        color: selColorRef.current,
-        size: brushSizeRef.current,
-        active: true,
-        endedAt: 0,
-      };
     }
   };
   const onPointerMove = (e: React.PointerEvent) => {
@@ -779,13 +550,6 @@ export function WorldCanvas({
         stampBrush(c);
       }
       d.last = cell;
-      // Extend the smooth ribbon; cap its length so a long drag stays cheap to
-      // re-trace each frame (the field underneath holds the full painted result).
-      const rb = ribbon.current;
-      if (rb) {
-        rb.pts.push(worldAt(sx, sy));
-        if (rb.pts.length > 600) rb.pts.shift();
-      }
     } else {
       if (d.moved > TAP_SLOP) d.panning = true;
       if (d.panning) {
@@ -796,27 +560,14 @@ export function WorldCanvas({
     d.lastX = sx;
     d.lastY = sy;
   };
-  // Let the active ribbon fade out (vs. vanish) once the stroke ends.
-  const releaseRibbon = () => {
-    if (ribbon.current) {
-      ribbon.current.active = false;
-      ribbon.current.endedAt = performance.now();
-    }
-  };
   const onPointerUp = () => {
     const d = drag.current;
     drag.current = null;
-    if (d?.painting) {
-      strokeSet.current.clear(); // end the stroke
-      releaseRibbon();
-    }
+    if (d?.painting) strokeSet.current.clear(); // end the stroke
   };
   const onPointerLeave = () => {
     hover.current = null;
-    if (drag.current?.painting) {
-      strokeSet.current.clear();
-      releaseRibbon();
-    }
+    if (drag.current?.painting) strokeSet.current.clear();
     drag.current = null;
   };
 
@@ -881,12 +632,10 @@ export function WorldCanvas({
         onWheel={onWheel}
         style={{
           touchAction: "none",
-          // Hide the native pointer while painting — the soft round brush preview
-          // drawn on-canvas IS the cursor (a soft dot), reinforcing the paint feel.
-          cursor: disabled ? "grab" : "none",
+          cursor: disabled || panOnly ? "grab" : "crosshair",
         }}
       />
-      {/* Floating per-cell owner label (mirrors nianez's "owner EThL…KwRE"). */}
+      {/* Floating per-cell owner label ("owner EThL…KwRE" / "You"). */}
       {hud.owner && (
         <div
           style={{
@@ -938,72 +687,6 @@ export function WorldCanvas({
       </div>
     </div>
   );
-}
-
-/**
- * Draw a smooth, anti-aliased stroke ribbon through screen-space points: round
- * caps/joins, a quadratic-smoothed path, and two passes (outer low-alpha glow +
- * inner solid core). `fade` (0..1) scales both alphas so a finished stroke melts
- * away. A single point renders as one soft round dab. Pure render — never co-signs.
- */
-function drawSmoothStroke(
-  ctx: CanvasRenderingContext2D,
-  pts: { x: number; y: number }[],
-  width: number,
-  hex: string,
-  fade: number,
-): void {
-  if (pts.length === 0 || fade <= 0) return;
-  ctx.save();
-  ctx.lineCap = BRUSH.cap;
-  ctx.lineJoin = BRUSH.join;
-  ctx.strokeStyle = hex;
-  ctx.fillStyle = hex;
-
-  if (pts.length === 1) {
-    const p = pts[0];
-    ctx.globalAlpha = BRUSH.glowAlpha * fade;
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, (width / 2) * BRUSH.glowWidthMul, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.globalAlpha = BRUSH.coreAlpha * fade;
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, width / 2, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-    return;
-  }
-
-  // Smooth the polyline with quadratics through segment midpoints (Chaikin-ish),
-  // so a sampled drag reads as a flowing curve, not a faceted chain.
-  const trace = () => {
-    ctx.beginPath();
-    ctx.moveTo(pts[0].x, pts[0].y);
-    for (let i = 1; i < pts.length - 1; i++) {
-      const mx = (pts[i].x + pts[i + 1].x) / 2;
-      const my = (pts[i].y + pts[i + 1].y) / 2;
-      ctx.quadraticCurveTo(pts[i].x, pts[i].y, mx, my);
-    }
-    const last = pts[pts.length - 1];
-    ctx.lineTo(last.x, last.y);
-  };
-
-  ctx.globalAlpha = BRUSH.glowAlpha * fade; // outer glow halo
-  ctx.lineWidth = width * BRUSH.glowWidthMul;
-  trace();
-  ctx.stroke();
-  ctx.globalAlpha = BRUSH.coreAlpha * fade; // inner solid core
-  ctx.lineWidth = width;
-  trace();
-  ctx.stroke();
-  ctx.restore();
-}
-
-/** Parse `#RRGGBB` → an `rgba(r,g,b,a)` string, for radial-gradient color stops. */
-function hexToRgba(hex: string, alpha: number): string {
-  const h = hex.startsWith("#") ? hex.slice(1) : hex;
-  const n = parseInt(h, 16);
-  return `rgba(${(n >> 16) & 0xff}, ${(n >> 8) & 0xff}, ${n & 0xff}, ${alpha})`;
 }
 
 function ZoomButton({ label, onClick }: { label: string; onClick: () => void }) {

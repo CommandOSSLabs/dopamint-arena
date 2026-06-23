@@ -1,8 +1,15 @@
 import { useMemo, useState, type CSSProperties } from "react";
 import type { GameWindowProps } from "../types";
 import { CanvasView } from "./ui/CanvasView";
-import { WorldCanvasChrome } from "./ui/WorldCanvasChrome";
 import { PALETTE, WC, FONT_DISPLAY, FONT_MONO } from "./ui/tokens";
+
+/** Keyframes the start menu animates against (rise/glow/twinkle). Inlined here so
+ *  there's no separate chrome component — the lean live canvas needs none. */
+const MENU_KEYFRAMES = `
+  @keyframes wcRise { from { opacity: 0; transform: translateY(14px) } to { opacity: 1; transform: none } }
+  @keyframes wcGlow { 0%,100% { text-shadow: 0 0 22px rgba(77,162,255,0.35) } 50% { text-shadow: 0 0 40px rgba(77,162,255,0.6) } }
+  @keyframes wcTwinkle { 0%,100% { opacity: 0.15; transform: scale(0.8) } 50% { opacity: 0.9; transform: scale(1.15) } }
+`;
 
 /**
  * "The World is Your Canvas" — a shared, real-time, infinite pixel wall on the
@@ -18,7 +25,7 @@ export function WorldCanvasWindow(_props: GameWindowProps) {
   const [started, setStarted] = useState(false);
   return (
     <>
-      <WorldCanvasChrome />
+      <style>{MENU_KEYFRAMES}</style>
       {started ? (
         <div className="relative h-full min-h-0 w-full">
           {/* File ▸ Exit returns to the start menu (and tears the tunnel down). */}
