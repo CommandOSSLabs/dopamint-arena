@@ -9,7 +9,7 @@ import {
 } from "@/components/ui/panel";
 import { RadialGauge } from "@/components/ui/radial-gauge";
 import { Segbar } from "@/components/ui/segbar";
-import { useBackendStats } from "@/backend/useBackendStats";
+import { useTelemetry } from "@/telemetry/TelemetryProvider";
 import type { TelemetrySnapshot } from "./types";
 
 // Ceiling the bots segbar fills toward (matches the live source's bot range).
@@ -72,7 +72,7 @@ export function SystemDashboard({
   snapshot: TelemetrySnapshot;
   className?: string;
 }) {
-  const { snapshot: backend, status } = useBackendStats();
+  const { backend, status } = useTelemetry();
 
   if (status !== "offline") {
     const fmt = (n: number | undefined) =>
