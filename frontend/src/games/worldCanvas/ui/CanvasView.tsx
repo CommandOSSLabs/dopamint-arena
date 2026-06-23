@@ -5,6 +5,7 @@ import {
 } from "../useWorldCanvasOnchain";
 import { WorldCanvas } from "./WorldCanvas";
 import { PaletteDock } from "./PaletteDock";
+import { PlayersActivityPanel, LeaderboardPanel } from "./panels";
 import { WC, glass, FONT_DISPLAY, FONT_MONO } from "./tokens";
 
 /**
@@ -29,6 +30,9 @@ export function CanvasView() {
         selectedColor={color}
         disabled={engine.status.phase === "opening"}
         onPaint={engine.submitHumanPaint}
+        agents={engine.agents}
+        focus={engine.focus}
+        humanAddress={engine.humanAddress}
       />
 
       {/* Stats panel (top-left): pixels co-signed + live TPS + active agents */}
@@ -84,6 +88,15 @@ export function CanvasView() {
           </button>
         )}
       </div>
+
+      {/* Players + Recent Activity and Leaderboard (draggable glass panels) */}
+      <PlayersActivityPanel
+        painters={engine.painters}
+        activity={engine.activity}
+        humanAddress={engine.humanAddress}
+        revision={engine.revision}
+      />
+      <LeaderboardPanel painters={engine.painters} revision={engine.revision} />
 
       <PaletteDock selected={color} onSelect={setColor} />
     </div>

@@ -58,6 +58,33 @@ test("each paint folds the digest and increments the count", () => {
   assert.equal(s.lastPainter, "A");
 });
 
+test("overpaint: re-painting a cell is a fresh co-signed move that updates its owner", () => {
+  // OVERPAINT is allowed — there are no locked cells. Re-painting an existing
+  // cell (by anyone, any color) is a full move: count++, the digest changes, and
+  // the cell's owner (lastPainter) updates to the latest painter.
+  let s = proto.initialState(ctx);
+  const cell: WorldCanvasMove = { cx: 3n, cy: -2n, x: 10, y: 10, color: 5 };
+
+  s = proto.applyMove(s, cell, "A");
+  assert.equal(s.count, 1n);
+  assert.equal(s.lastPainter, "A");
+  const afterFirst = toHex(s.rollingDigest);
+
+  // B paints over A's cell with a new color: accepted, advances, owner flips to B.
+  s = proto.applyMove(s, { ...cell, color: 8 }, "B");
+  assert.equal(s.count, 2n);
+  assert.equal(s.lastPainter, "B");
+  assert.notEqual(toHex(s.rollingDigest), afterFirst);
+
+  // Even re-painting the SAME cell with the SAME color+painter is not a no-op:
+  // the rolling digest still strictly changes, so it stays one co-signed move.
+  const beforeRepaint = toHex(s.rollingDigest);
+  s = proto.applyMove(s, { ...cell, color: 8 }, "B");
+  assert.equal(s.count, 3n);
+  assert.equal(s.lastPainter, "B");
+  assert.notEqual(toHex(s.rollingDigest), beforeRepaint);
+});
+
 test("digest is order- and painter-sensitive", () => {
   const s = proto.initialState(ctx);
   const cell: WorldCanvasMove = { cx: 2n, cy: 2n, x: 3, y: 3, color: 5 };

@@ -1,6 +1,24 @@
 import { useEffect, useRef, useState } from "react";
-import type { PaintedCell } from "../useWorldCanvasOnchain";
-import { CHUNK_SIZE, PALETTE, PALETTE_RGB, WC, ZOOM, TAP_SLOP, FONT_MONO } from "./tokens";
+import {
+  cellKey,
+  type PaintedCell,
+  type AgentMarker,
+  type CanvasFocus,
+} from "../useWorldCanvasOnchain";
+import {
+  CHUNK_SIZE,
+  PALETTE,
+  PALETTE_RGB,
+  WC,
+  ZOOM,
+  TAP_SLOP,
+  FONT_MONO,
+  FONT_DISPLAY,
+  shortAddress,
+} from "./tokens";
+
+/** Camera zoom used when jumping to a freshly spawned agent's flag. */
+const FOCUS_SCALE = 12;
 
 /**
  * The infinite, chunked pixel wall — a single HTML5 canvas with pan (drag),
@@ -48,6 +66,9 @@ export function WorldCanvas({
   selectedColor,
   disabled,
   onPaint,
+  agents,
+  focus,
+  humanAddress,
 }: {
   /** Append-only live cells from the tunnel hook (stable identity, mutated in place). */
   paints: ReadonlyMap<string, PaintedCell>;
@@ -59,12 +80,28 @@ export function WorldCanvas({
   disabled: boolean;
   /** Place one cell: chunk (cx,cy) + in-chunk (x,y) + color → one co-signed move. */
   onPaint: (cx: bigint, cy: bigint, x: number, y: number, color: number) => void;
+  /** Live agents — drawn as on-canvas markers above the flag each is painting. */
+  agents: AgentMarker[];
+  /** Latest camera-jump request; the view eases to center this point on change. */
+  focus: CanvasFocus | null;
+  /** The human's address, so a hovered cell the human painted reads "You". */
+  humanAddress: string;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const view = useRef<View>({ offsetX: 0, offsetY: 0, scale: 10 });
   const hover = useRef<GlobalCell | null>(null);
   const fitted = useRef(false);
+  // Latest agents/human for the render loop (refs so the loop never re-subscribes).
+  const agentsRef = useRef(agents);
+  agentsRef.current = agents;
+  const humanRef = useRef(humanAddress);
+  humanRef.current = humanAddress;
+  // Active camera-jump target (global-pixel center + scale); cleared on arrival or
+  // when the user pans/zooms, so a jump never fights manual control.
+  const focusTarget = useRef<{ gcx: number; gcy: number; scale: number } | null>(
+    null,
+  );
 
   // Render store: chunkKey ("cx,cy") → resident chunk, plus the set dirtied since
   // the last frame and the highest co-signed seq already folded in.
@@ -80,10 +117,18 @@ export function WorldCanvas({
   const revisionRef = useRef(revision);
   revisionRef.current = revision;
 
-  const [hud, setHud] = useState<{ zoom: number; cell: GlobalCell | null }>({
-    zoom: 10,
-    cell: null,
-  });
+  const [hud, setHud] = useState<{
+    zoom: number;
+    cell: GlobalCell | null;
+    /** Floating owner label for the hovered painted cell ("You" / "owner …"). */
+    owner: { label: string; sx: number; sy: number } | null;
+  }>({ zoom: 10, cell: null, owner: null });
+
+  // A new focus request (agent spawn) sets a camera target the draw loop eases to.
+  useEffect(() => {
+    if (!focus) return;
+    focusTarget.current = { gcx: focus.gx, gcy: focus.gy, scale: FOCUS_SCALE };
+  }, [focus?.seq]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const cellAt = (sx: number, sy: number): GlobalCell => {
     const v = view.current;
@@ -174,6 +219,28 @@ export function WorldCanvas({
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.imageSmoothingEnabled = false;
 
+      // Ease the camera toward an active jump target (set when an agent spawns).
+      // Manual pan/zoom clears the target so a jump never fights the user.
+      if (focusTarget.current) {
+        const ft = focusTarget.current;
+        const k = 0.16;
+        v.scale += (ft.scale - v.scale) * k;
+        const offX = cw / 2 - ft.gcx * v.scale;
+        const offY = ch / 2 - ft.gcy * v.scale;
+        v.offsetX += (offX - v.offsetX) * k;
+        v.offsetY += (offY - v.offsetY) * k;
+        if (
+          Math.abs(ft.scale - v.scale) < 0.04 &&
+          Math.abs(offX - v.offsetX) < 0.5 &&
+          Math.abs(offY - v.offsetY) < 0.5
+        ) {
+          v.scale = ft.scale;
+          v.offsetX = cw / 2 - ft.gcx * v.scale;
+          v.offsetY = ch / 2 - ft.gcy * v.scale;
+          focusTarget.current = null;
+        }
+      }
+
       // Re-rasterize tiles dirtied since the last frame (bound by paints/frame).
       for (const key of dirty.current) {
         const c = chunks.current.get(key);
@@ -228,6 +295,17 @@ export function WorldCanvas({
         ctx.stroke();
       }
 
+      // Agent markers: a labeled pin anchored just above each agent's flag, so the
+      // user always sees where every bot is currently drawing.
+      for (const a of agentsRef.current) {
+        const cxs = v.offsetX + a.gx * v.scale;
+        const topYs = v.offsetY + (a.gy - a.h / 2) * v.scale;
+        if (cxs < -160 || cxs > cw + 160 || topYs < -40 || topYs > ch + 80) {
+          continue;
+        }
+        drawAgentMarker(ctx, cxs, topYs, a.label, a.flagName, a.tint);
+      }
+
       // Ghost preview of the selected color under the cursor + hover outline.
       const hc = hover.current;
       if (hc) {
@@ -247,17 +325,44 @@ export function WorldCanvas({
       }
 
       const now = performance.now();
-      if (now - lastHud > 100) {
+      if (now - lastHud > 80) {
         lastHud = now;
         setHud((prev) => {
           const cell = hover.current;
+          // Resolve the owner of the hovered cell for the floating "owner …" label.
+          let owner: { label: string; sx: number; sy: number } | null = null;
+          if (cell) {
+            const ccx = chunkOf(cell.gx);
+            const ccy = chunkOf(cell.gy);
+            const p = paintsRef.current.get(
+              cellKey(
+                BigInt(ccx),
+                BigInt(ccy),
+                cell.gx - ccx * CHUNK_SIZE,
+                cell.gy - ccy * CHUNK_SIZE,
+              ),
+            );
+            if (p) {
+              owner = {
+                label:
+                  p.painter === humanRef.current
+                    ? "You"
+                    : `owner ${shortAddress(p.painter)}`,
+                sx: v.offsetX + (cell.gx + 0.5) * v.scale,
+                sy: v.offsetY + cell.gy * v.scale,
+              };
+            }
+          }
           if (
             prev.zoom === v.scale &&
             prev.cell?.gx === cell?.gx &&
-            prev.cell?.gy === cell?.gy
+            prev.cell?.gy === cell?.gy &&
+            prev.owner?.label === owner?.label &&
+            prev.owner?.sx === owner?.sx &&
+            prev.owner?.sy === owner?.sy
           )
             return prev;
-          return { zoom: v.scale, cell };
+          return { zoom: v.scale, cell, owner };
         });
       }
       raf = requestAnimationFrame(draw);
@@ -292,6 +397,7 @@ export function WorldCanvas({
   };
 
   const onPointerDown = (e: React.PointerEvent) => {
+    focusTarget.current = null; // user takes the wheel; cancel any active jump
     (e.target as Element).setPointerCapture?.(e.pointerId);
     const { sx, sy } = localXY(e);
     drag.current = { lastX: sx, lastY: sy, moved: 0, panning: false };
@@ -336,6 +442,7 @@ export function WorldCanvas({
     v.scale = next;
   };
   const onWheel = (e: React.WheelEvent) => {
+    focusTarget.current = null; // manual zoom cancels any active jump
     const { sx, sy } = localXY(e);
     zoomBy(e.deltaY < 0 ? ZOOM.step : 1 / ZOOM.step, sx, sy);
   };
@@ -355,6 +462,31 @@ export function WorldCanvas({
           imageRendering: "pixelated",
         }}
       />
+      {/* Floating per-cell owner label (mirrors nianez's "owner EThL…KwRE"). */}
+      {hud.owner && (
+        <div
+          style={{
+            position: "absolute",
+            left: hud.owner.sx,
+            top: hud.owner.sy,
+            transform: "translate(-50%, calc(-100% - 8px))",
+            pointerEvents: "none",
+            padding: "3px 8px",
+            borderRadius: 8,
+            fontSize: 10.5,
+            fontWeight: 700,
+            whiteSpace: "nowrap",
+            color: WC.text,
+            fontFamily: FONT_MONO,
+            background: "rgba(10,16,34,0.92)",
+            border: `1px solid ${WC.panelBorder}`,
+            boxShadow: "0 6px 18px rgba(0,0,0,0.4)",
+            zIndex: 5,
+          }}
+        >
+          {hud.owner.label}
+        </div>
+      )}
       {/* Zoom HUD (bottom-left) */}
       <div
         className="absolute bottom-[18px] left-4 flex items-center gap-2 px-2.5 py-1.5 rounded-[12px]"
@@ -394,4 +526,77 @@ function ZoomButton({ label, onClick }: { label: string; onClick: () => void }) 
       {label}
     </button>
   );
+}
+
+/** Trace a rounded-rectangle path (no fill/stroke) for marker label pills. */
+function roundRectPath(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  r: number,
+): void {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+/**
+ * Draw an agent's marker: a tinted pin on the flag's top edge and a label pill
+ * ("Agent #n · Vietnam") floating just above it, so it's always clear which bot
+ * owns which flag and where it's painting.
+ */
+function drawAgentMarker(
+  ctx: CanvasRenderingContext2D,
+  cxs: number,
+  topYs: number,
+  label: string,
+  flagName: string,
+  tint: string,
+): void {
+  const text = `${label} · ${flagName}`;
+  ctx.save();
+  ctx.font = `700 11px ${FONT_DISPLAY}`;
+  ctx.textBaseline = "middle";
+  const padX = 8;
+  const dotGap = 9;
+  const tw = ctx.measureText(text).width;
+  const boxW = tw + padX * 2 + dotGap;
+  const boxH = 18;
+  const boxX = cxs - boxW / 2;
+  const boxY = topYs - boxH - 9;
+
+  // Connector stem from the pill down to a pin on the flag's top edge.
+  ctx.strokeStyle = tint;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(cxs, boxY + boxH);
+  ctx.lineTo(cxs, topYs - 1);
+  ctx.stroke();
+  ctx.fillStyle = tint;
+  ctx.beginPath();
+  ctx.arc(cxs, topYs - 1, 2.6, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Label pill.
+  roundRectPath(ctx, boxX, boxY, boxW, boxH, 6);
+  ctx.fillStyle = "rgba(10,16,34,0.92)";
+  ctx.fill();
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = tint;
+  ctx.stroke();
+
+  // Tint dot + label text.
+  ctx.fillStyle = tint;
+  ctx.beginPath();
+  ctx.arc(boxX + padX, boxY + boxH / 2, 3, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "#e8e8f0";
+  ctx.fillText(text, boxX + padX + dotGap, boxY + boxH / 2 + 0.5);
+  ctx.restore();
 }

@@ -47,6 +47,16 @@ export const ZOOM = { min: 1, max: 40, step: 1.15 } as const;
 export const TAP_SLOP = 6;
 
 /**
+ * Truncate a 0x-hex address to the `4af3…9c21` short form (mirrors the wplace /
+ * nianez "owner EThL…KwRE" label). Returns the input unchanged if too short.
+ */
+export function shortAddress(addr: string): string {
+  const hex = addr.startsWith("0x") ? addr.slice(2) : addr;
+  if (hex.length <= 8) return addr;
+  return `${hex.slice(0, 4)}…${hex.slice(-4)}`;
+}
+
+/**
  * The paintable palette. A protocol paint's `color` is a direct index into this
  * array (`[0, 16)`) — there is no "empty" index here; an unpainted cell is the
  * board void, not a palette color. An r/place-style 16-color set with Sui blue.
