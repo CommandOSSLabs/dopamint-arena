@@ -16,9 +16,9 @@ function Screen({ children }: { children: React.ReactNode }) {
 }
 
 /** Bomb It: pick Solo (bot-vs-bot self-play) or PvP (human-vs-human over a shared tunnel). */
-export function BombItWindow(_props: GameWindowProps) {
+export function BombItWindow({ windowId }: GameWindowProps) {
   const [mode, setMode] = useState<"solo" | "pvp" | null>(null);
-  const pvp = usePvpBombIt();
+  const pvp = usePvpBombIt(windowId);
   const solo = useBombItSession();
 
   const backToMenu = () => {
@@ -108,18 +108,6 @@ export function BombItWindow(_props: GameWindowProps) {
       <Screen>
         <span className="arcade-title wal-doto text-gold" style={{ fontSize: 22 }}>FUNDING</span>
         <p className="arcade-sub">Opening + funding the tunnel on-chain… approve in your wallet.</p>
-      </Screen>
-    );
-  }
-
-  if (pvp.status === "disconnected") {
-    return (
-      <Screen>
-        <span className="arcade-title wal-doto" style={{ fontSize: 20, color: "#fb7185", textShadow: "0 0 18px rgba(251,113,133,0.4)" }}>
-          CONNECTION LOST
-        </span>
-        <p className="arcade-sub">The match can't be resumed. Your stake stays safe on-chain — settlement still resolves cooperatively.</p>
-        <button className="arcade-cta arcade-cta--ghost" onClick={backToMenu}>Back</button>
       </Screen>
     );
   }
