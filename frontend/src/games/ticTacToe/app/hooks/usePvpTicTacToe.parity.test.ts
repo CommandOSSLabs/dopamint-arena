@@ -41,6 +41,7 @@ function baseExtras(overrides?: Partial<SnapshotExtras>): SnapshotExtras {
     stop: NOOP,
     setAuto: NOOP_AUTO,
     leave: NOOP,
+    requeue: NOOP,
     ...overrides,
   };
 }

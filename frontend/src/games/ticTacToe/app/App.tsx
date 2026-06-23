@@ -157,11 +157,21 @@ function AppContent() {
       if (!autoStartedRef.current) {
         autoStartedRef.current = true;
         setScene("game");
-        g.startAuto();
+        // Fresh window (auto-piloted from login, startNonce 0) starts in watch; entering from
+        // the main menu means the user pressed Start (startNonce > 0) → start in manual.
+        g.startAuto(startNonce === 0);
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isConnected, scene, funded, g, executeTransaction, startNonce]);
+
+  // Leave the game for the main menu (login). Does NOT reset the auto-pilot one-shots, so
+  // re-entering "Play vs Bot" lands on the setup screen (not an auto-start) and Start runs manual.
+  const backToMenu = () => {
+    tttGame.stopAuto();
+    caroGame.stopAuto();
+    setScene("login");
+  };
 
   const backToSetup = () => {
     tttGame.stopAuto();
@@ -260,6 +270,7 @@ function AppContent() {
               mode={mode}
               gameType={gameType}
               onBack={backToSetup}
+              onMenu={backToMenu}
               isPortrait={isPortrait}
             />
           )}

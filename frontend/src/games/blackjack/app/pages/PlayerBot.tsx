@@ -367,7 +367,9 @@ export default function PlayerBot() {
     if (!autoStartedRef.current) {
       autoStartedRef.current = true;
       botAutoStartedThisWindow = true;
-      game.startAuto();
+      // Fresh window (auto-piloted, startNonce 0) starts in watch; from the main menu the user
+      // pressed Start (startNonce > 0) → start in manual so they play the hands.
+      game.startAuto(startNonce === 0);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
@@ -567,12 +569,15 @@ export default function PlayerBot() {
 
       {/* Play area: dealer-desk felt with dealer (top) and player (bottom) hands */}
       <div className="relative z-10 flex-1 w-full">
-        {/* Back to the config screen (stops play; stays on config — no auto-restart).
-            Config's own back button then exits to the menu. */}
+        {/* Back to the main menu. Stop the in-flight tunnel/timer first (backToConfig), then
+            navigate home so the running self-play loop doesn't keep ticking after we leave. */}
         <button
-          onClick={game.backToConfig}
+          onClick={() => {
+            game.backToConfig();
+            navigate("/");
+          }}
           className="absolute top-4 left-4 z-30 p-2.5 text-zinc-400 hover:text-white bg-black/60 hover:bg-black/85 rounded-full border border-zinc-800/85 transition-all shadow-md active:scale-95 flex items-center justify-center cursor-pointer"
-          title="Back to config"
+          title="Back to menu"
         >
           <svg
             className="w-4 h-4"

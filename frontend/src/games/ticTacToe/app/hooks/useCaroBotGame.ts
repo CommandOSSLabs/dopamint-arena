@@ -80,7 +80,8 @@ export interface CaroBotGameView {
   refresh: () => Promise<{ x: bigint; o: bigint } | null>;
   resetScore: () => void;
   newGame: () => void;
-  startAuto: () => void;
+  /** Begin a session. autoOn = start in watch (both bots); false = start in manual (you play X). */
+  startAuto: (autoOn?: boolean) => void;
   stopAuto: () => void;
 }
 
@@ -587,19 +588,24 @@ export function useCaroBotGame(
     runGame();
   }, [runGame, setAuto]);
 
-  const startAuto = useCallback(() => {
-    if (
-      balancesRef.current.x < MIN_PLAY_MIST ||
-      balancesRef.current.o < MIN_PLAY_MIST
-    ) {
-      setError("Fund the bots first");
-      setPhase("error");
-      return;
-    }
-    setAuto(true); // a fresh session starts with auto ticked (untick to play X yourself)
-    playingRef.current = true;
-    runGame();
-  }, [runGame, setAuto]);
+  // autoOn picks the starting mode: a fresh window starts in watch (auto on); entering from the
+  // main menu starts in manual (auto off) so you play X yourself.
+  const startAuto = useCallback(
+    (autoOn: boolean = true) => {
+      if (
+        balancesRef.current.x < MIN_PLAY_MIST ||
+        balancesRef.current.o < MIN_PLAY_MIST
+      ) {
+        setError("Fund the bots first");
+        setPhase("error");
+        return;
+      }
+      setAuto(autoOn);
+      playingRef.current = true;
+      runGame();
+    },
+    [runGame, setAuto],
+  );
 
   const resetScore = useCallback(() => {
     const zero: BotScore = { x: 0, o: 0, draws: 0 };

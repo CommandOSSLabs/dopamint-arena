@@ -42,6 +42,7 @@ export interface SnapshotExtras {
   stop: () => void;
   setAuto: (on: boolean) => void;
   leave: () => void;
+  requeue: () => void;
 }
 
 /**
@@ -107,5 +108,6 @@ export function mapSnapshotToView(
     stop: extras.stop,
     setAuto: extras.setAuto,
     leave: extras.leave,
+    requeue: extras.requeue,
   };
 }

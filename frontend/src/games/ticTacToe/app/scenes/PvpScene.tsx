@@ -10,6 +10,12 @@ const SUISCAN_TX = "https://suiscan.xyz/testnet/tx/";
 const fmtSui = (mist: bigint) => (Number(mist) / 1e9).toFixed(4);
 const CARO_SIZES = [9, 15, 19];
 
+// The 3×3 Cell renders value 1 ("O") / 2 ("X"), but the protocol marks seat A (X) as 1 and
+// seat B (O) as 2 — the opposite. Swap 1↔2 so your X shows as X (CaroBoard already maps 1→✕).
+function uiBoard(board: number[]): number[] {
+  return board.map((v) => (v === 1 ? 2 : v === 2 ? 1 : 0));
+}
+
 function Digest({ label, digest }: { label: string; digest?: string }) {
   if (!digest) return null;
   return (
@@ -284,7 +290,7 @@ export function PvpScene({
                 />
               ) : (
                 <Board
-                  board={g.board}
+                  board={uiBoard(g.board)}
                   disabled={!g.isMyTurn || g.auto}
                   onPlay={g.play}
                 />
@@ -321,13 +327,10 @@ export function PvpScene({
                   )}
                   {g.phase === "done" && (
                     <button
-                      onClick={() => {
-                        g.leave();
-                        g.queue();
-                      }}
+                      onClick={g.requeue}
                       className="flex-1 px-4 py-3 rounded-sm border-[3px] border-primary bg-surface text-primary font-bold uppercase tracking-wider hover:bg-primary/10 transition-all shadow-[3px_3px_0px_#001e40]"
                     >
-                      Rematch
+                      Find New Match
                     </button>
                   )}
                 </div>
@@ -390,13 +393,10 @@ export function PvpScene({
                   )}
                   {g.phase === "done" && (
                     <button
-                      onClick={() => {
-                        g.leave();
-                        g.queue();
-                      }}
+                      onClick={g.requeue}
                       className="w-full px-4 py-3 rounded-sm border-[3px] border-primary bg-surface text-primary font-bold uppercase tracking-wider hover:bg-primary/10 transition-all shadow-[3px_3px_0px_#001e40]"
                     >
-                      Rematch
+                      Find New Match
                     </button>
                   )}
                   <label className="flex items-center justify-center gap-2 text-base font-bold text-outline cursor-pointer bg-surface px-4 py-3 rounded-sm border-[2px] border-outline hover:border-primary hover:text-primary transition-colors">

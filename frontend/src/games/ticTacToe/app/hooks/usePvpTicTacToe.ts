@@ -45,6 +45,7 @@ import {
   installResumePersistence,
   evictExpiredRecords,
   readResumeRecord,
+  clearResumeRecord,
 } from "@/pvp/resume";
 import { makeTttResumeAdapter } from "@/games/ticTacToe/app/lib/tttResumeAdapter";
 
@@ -63,7 +64,10 @@ const MP_URL =
   ).replace(/^http/, "ws");
 const STAKE = 1n; // MIST per game; caro's protocol forces 0 regardless
 const BANKROLL = 1000n; // MIST deposited per seat
-const MAX_GAMES = 1000; // high cap → play until a side stops or busts
+// One game per tunnel: the match settles on-chain as soon as the game is decided (the winner
+// submits the close — see finishSettle), then players re-queue for the next game. A higher cap
+// would batch many games into a single end-of-session settle instead.
+const MAX_GAMES = 1;
 const MOVE_MS = 600; // auto move cadence
 const NEXT_MS = 800; // pause before auto-advancing to the next game
 
@@ -123,6 +127,8 @@ export interface PvpTttView {
   stop: () => void;
   setAuto: (on: boolean) => void;
   leave: () => void;
+  /** After a per-game settle: clear the closed match + resume record and find a new match. */
+  requeue: () => void;
 }
 
 // Perfect 3×3 move via @ttt/shared minimax (maps protocol marks 1/2 to CELL_SERVER/CELL_PLAYER).
@@ -162,7 +168,9 @@ export function usePvpTicTacToe(
   // `score` is the authoritative cumulative tally; `games` below is capped at the last 50 entries
   // for display, so after 50 games the two intentionally diverge — do NOT re-derive score from games.
   const [score, setScore] = useState({ x: 0, o: 0, draws: 0 });
-  const [auto, setAutoState] = useState(true);
+  // Default OFF: PvP is human-vs-human, so you make your own moves; tick Auto to let the bot
+  // play for you.
+  const [auto, setAutoState] = useState(false);
   const [balance, setBalance] = useState<bigint>(0n);
   const [digests, setDigests] = useState<{
     create?: string;
@@ -176,7 +184,7 @@ export function usePvpTicTacToe(
     null,
   );
   const roleRef = useRef<"A" | "B" | null>(null);
-  const autoRef = useRef(true);
+  const autoRef = useRef(false);
   const autoKickedRef = useRef(false);
   const detachResumeRef = useRef<(() => void) | null>(null);
   const createdAtRef = useRef<bigint>(0n);
@@ -257,8 +265,12 @@ export function usePvpTicTacToe(
         half.sigSelf,
         other.sig,
       );
-      if (roleRef.current === "A") {
-        // X (the opener) submits the cooperative close
+      // The game's winner submits the cooperative close (X-win or draw → A; O-win → B). The
+      // payout is fixed by the co-signed balances regardless of who submits; this just decides
+      // which seat sends the backend tx so the winner closes out their own game.
+      const decided = t.state.inner.winner; // 1 = X (A) won, 2 = O (B) won, 3/0 = draw/none
+      const submitter: "A" | "B" = decided === 2 ? "B" : "A";
+      if (roleRef.current === submitter) {
         try {
           const result = await getControlPlaneClient().settle(
             t.tunnelId,
@@ -282,6 +294,9 @@ export function usePvpTicTacToe(
         }
       }
       await refreshBalance();
+      // The tunnel is now closed on-chain (per-game match). Drop its resume record so it can't be
+      // restored and hijack the next match (the auto-requeue / Find New Match both re-queue).
+      clearResumeRecord(t.tunnelId);
       setPhase("done");
     },
     [submit, refreshBalance],
@@ -304,6 +319,11 @@ export function usePvpTicTacToe(
     ) => {
       tunnelRef.current = t;
       channelRef.current = channel;
+      // Single source of the seat role for BOTH the match and resume paths. The resume path
+      // (reconnect / reload of an active match) skips onMatch, so without setting it here roleRef
+      // stays null → myMark 0 → the view shows "◯ (O)" for both seats. A = X, B = O.
+      roleRef.current = info.role;
+      setRole(info.role);
       let lastLoggedGame = 0;
       const onAdvance = () => {
         const st = t.state;
@@ -389,70 +409,83 @@ export function usePvpTicTacToe(
     [proto, submit, variant, finishSettle],
   );
 
-  const queue = useCallback(() => {
-    void (async () => {
-      const w = walletRef.current;
-      if (!w.isConnected || !w.address) {
-        setError("Connect your wallet on the main menu first");
-        setPhase("error");
-        return;
-      }
-      setError(null);
-      setPhase("connecting");
-      settledRef.current = false;
-      stoppingRef.current = false;
-      setGames([]);
-      setScore({ x: 0, o: 0, draws: 0 });
-      autoKickedRef.current = false;
-      autoRef.current = true;
-      setAutoState(true); // default-on: kick effect fires once the phase hits "playing"
-      bufferedSettleRef.current = null;
-      bufferedHelloRef.current = null;
-      openedResolveRef.current = null;
-      settleResolveRef.current = null;
-      helloResolveRef.current = null;
-      try {
-        const mp = new MpClient(resolveMpWsUrl(MP_URL), w.address, eph.coreKey);
-        mpRef.current = mp;
-        // Cold-load: before joining a queue, rebuild any persisted in-flight match for this
-        // variant and re-attach to it. The opening handshake then carries resume{matchId}.
-        installResumePersistence();
-        const restored = resumeActiveTunnels<AnyState, CellMove>(
-          mp,
-          variant,
-          {
-            proto,
-            adapter: makeTttResumeAdapter<AnyState, CellMove>(() => {}),
-          },
-          { selfWallet: w.address },
-        );
-        if (restored.length > 0) {
-          const { tunnel, channel } = restored[0]; // one active match per game in practice
-          const rec = readResumeRecord(tunnel.tunnelId)!;
-          activateTttSession(mp, channel, tunnel, {
-            matchId: rec.matchId,
-            role: rec.role,
-            opponentWallet: rec.opponentWallet,
-            opponentPubkeyHex: rec.opponentPubkeyHex,
-            selfEphemeralSecretHex: rec.selfEphemeralSecretHex!,
-          });
-          await mp.connect();
-          return; // skip quickMatch — we are continuing an in-flight match
+  const queue = useCallback(
+    (opts?: { keepAuto?: boolean }) => {
+      void (async () => {
+        const w = walletRef.current;
+        if (!w.isConnected || !w.address) {
+          setError("Connect your wallet on the main menu first");
+          setPhase("error");
+          return;
         }
-        await mp.connect();
-        setPhase("queuing");
-        // The queue key encodes the variant (+ board size for caro) so only players who chose the
-        // SAME setup match — otherwise the two seats would run incompatible protocols and diverge.
-        const m = await mp.quickMatch(
-          variant === "caro" ? `tictactoe:caro:${boardSize}` : "tictactoe:ttt",
-        );
-        await onMatchRef.current?.(mp, m);
-      } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
-        setPhase("error");
-      }
-    })();
-  }, [eph, variant, boardSize, proto, activateTttSession]);
+        setError(null);
+        setPhase("connecting");
+        settledRef.current = false;
+        stoppingRef.current = false;
+        setGames([]);
+        setScore({ x: 0, o: 0, draws: 0 });
+        autoKickedRef.current = false;
+        // Default-off on a fresh queue; auto-requeue passes keepAuto so the Auto loop survives
+        // across per-game matches.
+        if (!opts?.keepAuto) {
+          autoRef.current = false;
+          setAutoState(false);
+        }
+        bufferedSettleRef.current = null;
+        bufferedHelloRef.current = null;
+        openedResolveRef.current = null;
+        settleResolveRef.current = null;
+        helloResolveRef.current = null;
+        try {
+          const mp = new MpClient(
+            resolveMpWsUrl(MP_URL),
+            w.address,
+            eph.coreKey,
+          );
+          mpRef.current = mp;
+          // Cold-load: before joining a queue, rebuild any persisted in-flight match for this
+          // variant and re-attach to it. The opening handshake then carries resume{matchId}.
+          installResumePersistence();
+          const restored = resumeActiveTunnels<AnyState, CellMove>(
+            mp,
+            variant,
+            {
+              proto,
+              adapter: makeTttResumeAdapter<AnyState, CellMove>(() => {}),
+            },
+            { selfWallet: w.address },
+          );
+          if (restored.length > 0) {
+            const { tunnel, channel } = restored[0]; // one active match per game in practice
+            const rec = readResumeRecord(tunnel.tunnelId)!;
+            activateTttSession(mp, channel, tunnel, {
+              matchId: rec.matchId,
+              role: rec.role,
+              opponentWallet: rec.opponentWallet,
+              opponentPubkeyHex: rec.opponentPubkeyHex,
+              selfEphemeralSecretHex: rec.selfEphemeralSecretHex!,
+            });
+            await mp.connect();
+            return; // skip quickMatch — we are continuing an in-flight match
+          }
+          await mp.connect();
+          setPhase("queuing");
+          // The queue key encodes the variant (+ board size for caro) so only players who chose the
+          // SAME setup match — otherwise the two seats would run incompatible protocols and diverge.
+          const m = await mp.quickMatch(
+            variant === "caro"
+              ? `tictactoe:caro:${boardSize}`
+              : "tictactoe:ttt",
+          );
+          await onMatchRef.current?.(mp, m);
+        } catch (e) {
+          setError(e instanceof Error ? e.message : String(e));
+          setPhase("error");
+        }
+      })();
+    },
+    [eph, variant, boardSize, proto, activateTttSession],
+  );
 
   const onMatch = useCallback(
     async (mp: MpClient, m: MatchInfo) => {
@@ -679,8 +712,9 @@ export function usePvpTicTacToe(
     [proto, variant],
   );
 
-  // Default-on auto-play: kick the resume once when the match becomes playable (the move loop
-  // otherwise only schedules auto AFTER a confirmed move, so the first move needs this).
+  // If Auto is enabled when the match becomes playable, kick the resume once (the move loop
+  // otherwise only schedules auto AFTER a confirmed move, so the first move needs this). Auto
+  // defaults OFF now, so this no-ops on entry; it matters if the user ticks Auto pre-play.
   useEffect(() => {
     if (autoKickedRef.current) return;
     if (phase === "playing" && tunnelRef.current && autoRef.current) {
@@ -689,14 +723,19 @@ export function usePvpTicTacToe(
     }
   }, [phase, setAuto]);
 
-  const leave = useCallback(() => {
+  // Tear down the current match: detach resume, drop its resume record (a closed/abandoned tunnel
+  // must never be restored — it would hijack the next match), close the transport, and clear
+  // match state. keepAuto preserves the Auto toggle so an auto loop survives a per-game requeue;
+  // a full leave clears it.
+  const teardownMatch = useCallback((keepAuto: boolean) => {
     detachResumeRef.current?.();
     detachResumeRef.current = null;
+    const tid = tunnelRef.current?.tunnelId;
+    if (tid) clearResumeRecord(tid);
     mpRef.current?.close();
     mpRef.current = null;
     channelRef.current = null;
     tunnelRef.current = null;
-    setPhase("idle");
     setState(null);
     setRole(null);
     setDigests({});
@@ -705,14 +744,77 @@ export function usePvpTicTacToe(
     settledRef.current = false;
     stoppingRef.current = false;
     autoKickedRef.current = false;
-    autoRef.current = true;
-    setAutoState(true);
+    if (!keepAuto) {
+      autoRef.current = false;
+      setAutoState(false);
+    }
     openedResolveRef.current = null;
     settleResolveRef.current = null;
     bufferedSettleRef.current = null;
     helloResolveRef.current = null;
     bufferedHelloRef.current = null;
   }, []);
+
+  const leave = useCallback(() => {
+    teardownMatch(false);
+    setPhase("idle");
+  }, [teardownMatch]);
+
+  // Find a new match after a per-game settle. Reuse the SAME socket (the relay runs many matches
+  // per connection): release the settled match and re-quickMatch in place. Tearing the socket
+  // down and reconnecting (a 2nd socket for the same wallet) raced the relay's routing and left
+  // the next match's moves un-ACKed. Falls back to a full queue() if the socket is gone.
+  const requeue = useCallback(() => {
+    const mp = mpRef.current;
+    if (!mp) {
+      queue({ keepAuto: true });
+      return;
+    }
+    detachResumeRef.current?.();
+    detachResumeRef.current = null;
+    const tid = tunnelRef.current?.tunnelId;
+    if (tid) clearResumeRecord(tid); // closed tunnel: never restore it
+    if (matchIdRef.current) mp.releaseMatch(matchIdRef.current);
+    channelRef.current = null;
+    tunnelRef.current = null;
+    setState(null);
+    setRole(null);
+    setDigests({});
+    setGames([]);
+    setScore({ x: 0, o: 0, draws: 0 });
+    settledRef.current = false;
+    stoppingRef.current = false;
+    autoKickedRef.current = false;
+    openedResolveRef.current = null;
+    settleResolveRef.current = null;
+    bufferedSettleRef.current = null;
+    helloResolveRef.current = null;
+    bufferedHelloRef.current = null;
+    setError(null);
+    // Keep Auto + the open socket; just join the queue again.
+    setPhase("queuing");
+    void (async () => {
+      try {
+        const m = await mp.quickMatch(
+          variant === "caro" ? `tictactoe:caro:${boardSize}` : "tictactoe:ttt",
+        );
+        await onMatchRef.current?.(mp, m);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+        setPhase("error");
+      }
+    })();
+  }, [queue, variant, boardSize]);
+
+  // After a per-game match settles ("done"), auto-find the next match when Auto is on. A short
+  // pause lets the result show before re-queuing.
+  useEffect(() => {
+    if (phase !== "done" || !autoRef.current) return;
+    const id = setTimeout(() => {
+      if (autoRef.current) requeue();
+    }, NEXT_MS);
+    return () => clearTimeout(id);
+  }, [phase, requeue]);
 
   // Register the pagehide/visibility flush and evict stale records once, on mount.
   useEffect(() => {
@@ -765,5 +867,6 @@ export function usePvpTicTacToe(
     stop,
     setAuto,
     leave,
+    requeue,
   };
 }

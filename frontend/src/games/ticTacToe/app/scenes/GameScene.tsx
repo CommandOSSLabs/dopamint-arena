@@ -124,6 +124,7 @@ export function GameScene({
   mode,
   gameType,
   onBack,
+  onMenu,
   isPortrait = false,
 }: {
   g: BotGameView & {
@@ -134,6 +135,8 @@ export function GameScene({
   mode: PlayMode;
   gameType: GameType;
   onBack: () => void;
+  /** Leave the game for the main menu (login). */
+  onMenu: () => void;
   isPortrait?: boolean;
 }) {
   const busy =
@@ -158,12 +161,12 @@ export function GameScene({
       Auto
     </button>
   );
-  const setupBtn = (
+  const menuBtn = (
     <button
-      onClick={onBack}
+      onClick={onMenu}
       className="flex-1 border-2 border-primary text-primary font-headline-lg-mobile text-base px-4 py-2.5 rounded-sm hover:bg-primary/5 transition-all transform rotate-1 shadow-[2px_2px_0px_#001e40]"
     >
-      ← Setup
+      ← Main menu
     </button>
   );
 
@@ -267,7 +270,7 @@ export function GameScene({
               {mode === "auto" ? (
                 <>
                   {autoToggle}
-                  {setupBtn}
+                  {menuBtn}
                 </>
               ) : (
                 <>
@@ -319,7 +322,7 @@ export function GameScene({
                 {mode === "auto" ? (
                   <>
                     {autoToggle}
-                    {setupBtn}
+                    {menuBtn}
                   </>
                 ) : (
                   <>

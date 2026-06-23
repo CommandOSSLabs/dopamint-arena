@@ -31,6 +31,7 @@ import {
   installResumePersistence,
   evictExpiredRecords,
   readResumeRecord,
+  clearResumeRecord,
 } from "@/pvp/resume";
 import {
   BlackjackBetProtocol,
@@ -152,7 +153,9 @@ export function usePvpBlackjack(): PvpView {
   const [role, setRole] = useState<"A" | "B" | null>(null);
   const [state, setState] = useState<BlackjackState | null>(null);
   const [rounds, setRounds] = useState<RoundResult[]>([]);
-  const [auto, setAutoState] = useState(true);
+  // Default OFF: PvP is human-vs-human, so you play your own hands; tick Auto to let the bot
+  // play for you.
+  const [auto, setAutoState] = useState(false);
   const [stake, setStakeState] = useState<bigint>(DEFAULT_STAKE);
   const [walletBalance, setWalletBalance] = useState<bigint>(0n);
   const [digests, setDigests] = useState<{
@@ -169,7 +172,7 @@ export function usePvpBlackjack(): PvpView {
     BlackjackMove
   > | null>(null);
   const roleRef = useRef<"A" | "B" | null>(null);
-  const autoRef = useRef(true);
+  const autoRef = useRef(false);
   const autoKickedRef = useRef(false);
   const lastBetRef = useRef<number>(DEFAULT_BET); // remembered bet for auto rounds; set on every player bet
   const stakeRef = useRef<bigint>(DEFAULT_STAKE); // chosen buy-in, read inside onMatch without stale closures
@@ -466,8 +469,8 @@ export function usePvpBlackjack(): PvpView {
       stoppingRef.current = false;
       setRounds([]);
       autoKickedRef.current = false;
-      autoRef.current = true;
-      setAutoState(true); // default-on: kick effect fires once the phase hits "playing"
+      autoRef.current = false; // default-off: you play your own hands until you tick Auto
+      setAutoState(false);
       bufferedSettleRef.current = null;
       bufferedStakeRef.current = null;
       bufferedHelloRef.current = null;
@@ -782,8 +785,9 @@ export function usePvpBlackjack(): PvpView {
     [proto],
   );
 
-  // Default-on auto-play: kick the resume once when the match becomes playable (the move loop
-  // otherwise only schedules auto AFTER a confirmed move, so the first move needs this).
+  // If Auto is enabled when the match becomes playable, kick the resume once (the move loop
+  // otherwise only schedules auto AFTER a confirmed move, so the first move needs this). Auto
+  // defaults OFF now, so this no-ops on entry; it matters if the user ticks Auto pre-play.
   useEffect(() => {
     if (autoKickedRef.current) return;
     if (phase === "playing" && tunnelRef.current && autoRef.current) {
@@ -795,6 +799,11 @@ export function usePvpBlackjack(): PvpView {
   const leave = useCallback(() => {
     detachResumeRef.current?.();
     detachResumeRef.current = null;
+    // Explicit leave = abandon this match: drop its resume record so it can't hijack the next
+    // PvP entry (resumeActiveTunnels would otherwise restore this now-peerless tunnel and skip
+    // matchmaking). Reconnect-after-reload never calls leave, so legitimate resume still works.
+    const tid = tunnelRef.current?.tunnelId;
+    if (tid) clearResumeRecord(tid);
     mpRef.current?.close();
     mpRef.current = null;
     channelRef.current = null;
@@ -807,8 +816,8 @@ export function usePvpBlackjack(): PvpView {
     settledRef.current = false;
     stoppingRef.current = false;
     autoKickedRef.current = false;
-    autoRef.current = true;
-    setAutoState(true);
+    autoRef.current = false;
+    setAutoState(false);
     openedResolveRef.current = null;
     settleResolveRef.current = null;
     bufferedSettleRef.current = null;

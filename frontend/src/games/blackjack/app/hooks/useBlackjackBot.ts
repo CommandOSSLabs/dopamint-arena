@@ -134,7 +134,8 @@ export interface BlackjackBotGame {
   fund: () => void;
   /** Even out the two bots' wallet balances: move half the difference richer→poorer. */
   rebalance: () => void;
-  startAuto: () => void;
+  /** Begin a session. autoOn = start in watch (bot plays); false = start in manual (you play). */
+  startAuto: (autoOn?: boolean) => void;
   stopAuto: () => void;
   /** Stop play and return to the idle/config screen (does not auto-restart). */
   backToConfig: () => void;
@@ -745,19 +746,24 @@ export function useBlackjackBot(): BlackjackBotGame {
     runGame();
   }, [runGame, setAuto]);
 
-  const startAuto = useCallback(() => {
-    if (
-      balancesRef.current.a < MIN_PLAY_MIST ||
-      balancesRef.current.b < MIN_PLAY_MIST
-    ) {
-      setError("Fund the bots first");
-      setPhase("error");
-      return;
-    }
-    setAuto(true); // a fresh session starts with auto ticked (the user can untick to play)
-    playingRef.current = true;
-    runGame();
-  }, [runGame, setAuto]);
+  // autoOn picks the starting mode: a fresh window starts in watch (auto on); entering from the
+  // main menu starts in manual (auto off) so the user plays the hands themselves.
+  const startAuto = useCallback(
+    (autoOn: boolean = true) => {
+      if (
+        balancesRef.current.a < MIN_PLAY_MIST ||
+        balancesRef.current.b < MIN_PLAY_MIST
+      ) {
+        setError("Fund the bots first");
+        setPhase("error");
+        return;
+      }
+      setAuto(autoOn);
+      playingRef.current = true;
+      runGame();
+    },
+    [runGame, setAuto],
+  );
 
   const stopAuto = useCallback(() => {
     playingRef.current = false;
