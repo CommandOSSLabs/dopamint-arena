@@ -8,14 +8,10 @@ import {
 import { useTelemetry } from "@/telemetry/TelemetryProvider";
 import { settleViaBackend } from "@/backend/settle";
 import type { Transaction } from "@mysten/sui/transactions";
-import {
-  optimalMoves,
-  CELL_EMPTY,
-  CELL_PLAYER,
-  CELL_SERVER,
-  MultiGameTicTacToeProtocol,
-  type MultiGameTicTacToeState,
-} from "@ttt/shared";
+import type { MultiGameTicTacToeState } from "@ttt/shared";
+// Canonical per-game bot: the live engine drives auto moves from the SAME kit the agent harness
+// uses (one source of truth), instead of a bespoke picker. Take-over just swaps in the UI cell.
+import { createTicTacToeKit } from "@/agent/games/ticTacToe/kit";
 import {
   buildCreateAndFundTx,
   buildSettleWithRootTx,
@@ -35,9 +31,6 @@ import {
   ensureDopamintStakeCoin,
   isDopamintConfigured,
 } from "@/onchain/dopamint";
-
-// The move pickers reason over a single inner TTT game (board/turn/winner).
-type State = protocols.TicTacToeState;
 
 // Default number of games to play within ONE tunnel before settling once.
 const DEFAULT_MAX_GAMES = 5;
@@ -120,6 +113,12 @@ export interface BotGameView {
   /** Begin a session. autoOn = start in watch (both bots); false = start in manual (you play X). */
   startAuto: (autoOn?: boolean) => void;
   stopAuto: () => void;
+  /** Hover-pause: the auto-play step-loop is frozen in place (shared cabinet shell). */
+  paused: boolean;
+  /** Freeze the running auto-play loop (hover). No-op when not mid-play. */
+  pause: () => void;
+  /** Resume a frozen auto-play loop from where it stopped. */
+  resume: () => void;
 }
 
 const SCORE_KEY = "ttt_bot_score.v1";
@@ -148,65 +147,6 @@ function loadScore(): BotScore {
   return { x: 0, o: 0, draws: 0 };
 }
 
-// Perfect play via full-depth minimax (from @ttt/shared). Maps protocol marks (1=A, 2=B) into
-// @ttt/shared's CELL_SERVER (= side to move) / CELL_PLAYER (= opponent) convention.
-function minimaxCell(state: State, party: "A" | "B"): number {
-  const mark = party === "A" ? 1 : 2;
-  const board = state.board.map((v) =>
-    v === 0 ? CELL_EMPTY : v === mark ? CELL_SERVER : CELL_PLAYER,
-  );
-  return optimalMoves(board, CELL_SERVER)[0];
-}
-
-// "competent but imperfect": take a winning move, else block the opponent, else random empty.
-function heuristicCell(state: State, party: "A" | "B"): number {
-  const me = party === "A" ? 1 : 2;
-  const opp = me === 1 ? 2 : 1;
-  const empties = state.board
-    .map((v, i) => (v === 0 ? i : -1))
-    .filter((i) => i >= 0);
-  const LINES = [
-    [0, 1, 2],
-    [3, 4, 5],
-    [6, 7, 8],
-    [0, 3, 6],
-    [1, 4, 7],
-    [2, 5, 8],
-    [0, 4, 8],
-    [2, 4, 6],
-  ];
-  const findFinish = (who: number) => {
-    for (const [a, b, c] of LINES) {
-      const line = [a, b, c];
-      const empt = line.find((i) => state.board[i] === 0);
-      const mine = line.filter((i) => state.board[i] === who).length;
-      if (mine === 2 && empt !== undefined) return empt;
-    }
-    return -1;
-  };
-  const win = findFinish(me);
-  if (win >= 0) return win;
-  const block = findFinish(opp);
-  if (block >= 0) return block;
-  return empties[Math.floor(Math.random() * empties.length)];
-}
-
-// Pick a move for the side to move, per chosen difficulty.
-function pickCell(state: State, by: "A" | "B", difficulty: Difficulty): number {
-  if (difficulty === "fast") {
-    const empties = state.board
-      .map((v, i) => (v === 0 ? i : -1))
-      .filter((i) => i >= 0);
-    return empties[Math.floor(Math.random() * empties.length)];
-  }
-  if (difficulty === "perfect") return minimaxCell(state, by);
-  if (difficulty === "uneven") {
-    // botX (party A) plays perfectly; botO (party B) plays the heuristic.
-    return by === "A" ? minimaxCell(state, by) : heuristicCell(state, by);
-  }
-  return heuristicCell(state, by); // "even"
-}
-
 export function useBotGame(difficulty: Difficulty = "fast"): BotGameView {
   const { report } = useTelemetry();
   const bots = useMemo(() => loadOrCreateBots(), []);
@@ -229,6 +169,8 @@ export function useBotGame(difficulty: Difficulty = "fast"): BotGameView {
   const [maxGames, setMaxGamesState] = useState<number>(DEFAULT_MAX_GAMES);
   const [currentGame, setCurrentGame] = useState<number>(1);
   const [balancesLoaded, setBalancesLoaded] = useState(false);
+  // Hover-pause (the shared cabinet shell freezes the auto-play while you decide).
+  const [paused, setPaused] = useState(false);
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const nextRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -239,6 +181,10 @@ export function useBotGame(difficulty: Difficulty = "fast"): BotGameView {
   // A user-queued cell (X) the running interval applies on its next tick, so the manual move
   // reuses the loop's single step/telemetry/score site.
   const pendingCellRef = useRef<number | null>(null);
+  // Hover-pause latch: read at the top of each tick so a hovered cabinet freezes the loop. The
+  // interval keeps firing harmless no-op ticks — the same poll-and-bail shape manual play already
+  // uses while waiting for your move — so there's no timer to stop and re-arm.
+  const pausedRef = useRef(false);
   const balancesRef = useRef<{ x: bigint; o: bigint }>({ x: 0n, o: 0n });
   const runRef = useRef<() => void>(() => {});
   const difficultyRef = useRef<Difficulty>(difficulty);
@@ -388,7 +334,17 @@ export function useBotGame(difficulty: Difficulty = "fast"): BotGameView {
     setScore({ x: 0, o: 0, draws: 0 });
 
     // One multi-game protocol instance per tunnel, sized by the current control.
-    const proto = new MultiGameTicTacToeProtocol(maxGamesRef.current, 0n);
+    // Canonical: this tunnel's protocol + per-seat bots come from the kit (one source of truth,
+    // shared with the agent harness). Fresh per tunnel with a live RNG so each game varies; the
+    // loop drives auto moves from the bot's plan(), and take-over swaps in your UI cell.
+    const kit = createTicTacToeKit(maxGamesRef.current, 0n, {
+      difficulty: difficultyRef.current,
+    });
+    const proto = kit.protocol;
+    const botBySeat = {
+      A: kit.createBot("A", { rngForSeat: () => Math.random }),
+      B: kit.createBot("B", { rngForSeat: () => Math.random }),
+    };
 
     void (async () => {
       try {
@@ -517,13 +473,21 @@ export function useBotGame(difficulty: Difficulty = "fast"): BotGameView {
         };
 
         pendingCellRef.current = null; // drop any cell queued during the inter-tunnel gap
+        pausedRef.current = false; // a fresh tunnel never inherits a stale hover-pause
+        setPaused(false);
         await new Promise<void>((resolve, reject) => {
           const delay = difficultyRef.current === "fast" ? 50 : STEP_MS;
-          timerRef.current = setInterval(() => {
+          const finish = () => {
+            stopTimer();
+            resolve();
+          };
+          // One self-play step per interval tick. A hover-pause just no-ops the tick — the same
+          // poll-and-bail shape the manual-play branch below already uses while awaiting your move.
+          const tick = () => {
+            if (pausedRef.current) return; // hover-paused: freeze on this frame
             try {
               if (proto.isTerminal(tunnel.state)) {
-                stopTimer();
-                resolve();
+                finish();
                 return;
               }
               const inner = tunnel.state.inner;
@@ -544,7 +508,7 @@ export function useBotGame(difficulty: Difficulty = "fast"): BotGameView {
               } else {
                 cell = isAdvance
                   ? 0
-                  : pickCell(inner, by, difficultyRef.current);
+                  : (botBySeat[by].plan(tunnel.state)?.cell ?? 0);
               }
               // Sign each update with the on-chain created_at (a validator timestamp,
               // always >= created_at and <= now) so the final co-signed state passes
@@ -588,8 +552,8 @@ export function useBotGame(difficulty: Difficulty = "fast"): BotGameView {
               }
 
               if (proto.isTerminal(next)) {
-                stopTimer();
-                resolve();
+                finish();
+                return;
               }
 
               flushHeartbeat(tunnelId, false);
@@ -597,7 +561,8 @@ export function useBotGame(difficulty: Difficulty = "fast"): BotGameView {
               stopTimer();
               reject(err);
             }
-          }, delay);
+          };
+          timerRef.current = setInterval(tick, delay);
         });
 
         // Reflect the final game's board/winner.
@@ -724,6 +689,18 @@ export function useBotGame(difficulty: Difficulty = "fast"): BotGameView {
     setAutoState(on);
   }, []);
 
+  // Hover-pause: set the latch and the running tick no-ops each frame (the loop's `await` never
+  // resolves, so it freezes mid-session); resume clears it and the next tick steps again.
+  const pause = useCallback(() => {
+    pausedRef.current = true;
+    setPaused(true);
+  }, []);
+
+  const resume = useCallback(() => {
+    pausedRef.current = false;
+    setPaused(false);
+  }, []);
+
   // Queue your (X) move for the running interval to apply. No-op unless it's actually your turn
   // in manual mode on an empty cell.
   const playCell = useCallback(
@@ -838,6 +815,9 @@ export function useBotGame(difficulty: Difficulty = "fast"): BotGameView {
     newGame,
     startAuto,
     stopAuto,
+    paused,
+    pause,
+    resume,
   };
 }
 

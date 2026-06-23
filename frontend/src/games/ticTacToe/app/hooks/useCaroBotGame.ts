@@ -93,6 +93,12 @@ export interface CaroBotGameView {
   /** Begin a session. autoOn = start in watch (both bots); false = start in manual (you play X). */
   startAuto: (autoOn?: boolean) => void;
   stopAuto: () => void;
+  /** Hover-pause: the auto-play step-loop is frozen in place. */
+  paused: boolean;
+  /** Freeze the running auto-play loop (hover). No-op when not mid-play. */
+  pause: () => void;
+  /** Resume a frozen auto-play loop from where it stopped. */
+  resume: () => void;
 }
 
 function loadScore(): BotScore {
@@ -140,6 +146,8 @@ export function useCaroBotGame(
   const [maxGames, setMaxGamesState] = useState<number>(DEFAULT_MAX_GAMES);
   const [currentGame, setCurrentGame] = useState<number>(1);
   const [balancesLoaded, setBalancesLoaded] = useState(false);
+  // Hover-pause (the shared cabinet shell freezes the auto-play while you decide).
+  const [paused, setPaused] = useState(false);
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const nextRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -150,6 +158,9 @@ export function useCaroBotGame(
   // A user-queued cell (X) the running interval applies on its next tick — reuses the loop's
   // single step/telemetry/score site.
   const pendingCellRef = useRef<number | null>(null);
+  // Hover-pause latch (see useBotGame): read at the top of each tick so a hovered cabinet freezes
+  // the loop. The interval keeps firing harmless no-op ticks, so there's no timer to stop/re-arm.
+  const pausedRef = useRef(false);
   const balancesRef = useRef<{ x: bigint; o: bigint }>({ x: 0n, o: 0n });
   const runRef = useRef<() => void>(() => {});
   const difficultyRef = useRef<Difficulty>(difficulty);
@@ -424,14 +435,20 @@ export function useCaroBotGame(
         };
 
         pendingCellRef.current = null; // drop any cell queued during the inter-tunnel gap
+        pausedRef.current = false; // a fresh tunnel never inherits a stale hover-pause
+        setPaused(false);
         await new Promise<void>((resolve, reject) => {
           let steps = 0;
           const delay = difficultyRef.current === "fast" ? 30 : STEP_MS;
-          timerRef.current = setInterval(() => {
+          const finish = () => {
+            stopTimer();
+            resolve();
+          };
+          const tick = () => {
+            if (pausedRef.current) return; // hover-paused: freeze on this frame
             try {
               if (proto.isTerminal(tunnel.state)) {
-                stopTimer();
-                resolve();
+                finish();
                 return;
               }
               if (steps++ >= maxSteps)
@@ -510,8 +527,8 @@ export function useCaroBotGame(
               }
 
               if (proto.isTerminal(next)) {
-                stopTimer();
-                resolve();
+                finish();
+                return;
               }
 
               flushHeartbeat(tunnelId, false);
@@ -519,7 +536,8 @@ export function useCaroBotGame(
               stopTimer();
               reject(err);
             }
-          }, delay);
+          };
+          timerRef.current = setInterval(tick, delay);
         });
 
         const finalInner = tunnel.state.inner;
@@ -642,6 +660,18 @@ export function useCaroBotGame(
     setAutoState(on);
   }, []);
 
+  // Hover-pause: set the latch and the running tick no-ops each frame (the loop's `await` never
+  // resolves, so it freezes mid-session); resume clears it and the next tick steps again.
+  const pause = useCallback(() => {
+    pausedRef.current = true;
+    setPaused(true);
+  }, []);
+
+  const resume = useCallback(() => {
+    pausedRef.current = false;
+    setPaused(false);
+  }, []);
+
   // Queue your (X) move for the running interval to apply. No-op unless it's actually your turn
   // in manual mode on an empty cell.
   const playCell = useCallback(
@@ -757,6 +787,9 @@ export function useCaroBotGame(
     newGame,
     startAuto,
     stopAuto,
+    paused,
+    pause,
+    resume,
   };
 }
 
