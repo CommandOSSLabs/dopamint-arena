@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useCurrentAccount } from "@mysten/dapp-kit";
 import { registerWindowDisposer } from "@/lib/windowSessions";
 import type { GameWindowProps } from "../types";
 import { usePvpChickenCross } from "./usePvpChickenCross";
@@ -13,8 +14,16 @@ import "./cross.css";
 // session lives out-of-React (CrossBotSession, windowId-keyed), pvp likewise. Cleared on window close.
 const modeStore = new Map<string, "solo" | "pvp">();
 
+/** Default per-game stake for the auto-started solo match (matches the lobby default). */
+const AUTO_STAKE = 500;
+// Auto-start fires AT MOST ONCE per window: on first open with a wallet we fund + play a solo bot
+// match immediately (parity with the other arena games). Module-scoped so a minimize/maximize
+// remount never re-funds, and Back returns to the lobby rather than re-triggering. Cleared on close.
+const autoStarted = new Map<string, boolean>();
+
 /** Chicken Cross: pick Solo (bot-vs-bot self-play) or PvP (two humans race over a shared tunnel). */
 export function ChickenCrossWindow({ windowId }: GameWindowProps) {
+  const account = useCurrentAccount();
   const [mode, setModeState] = useState<"solo" | "pvp" | null>(
     () => modeStore.get(windowId) ?? null,
   );
@@ -22,7 +31,10 @@ export function ChickenCrossWindow({ windowId }: GameWindowProps) {
   const solo = useChickenCrossSession(windowId);
 
   useEffect(() => {
-    registerWindowDisposer(windowId, "chicken-cross-mode", () => modeStore.delete(windowId));
+    registerWindowDisposer(windowId, "chicken-cross-mode", () => {
+      modeStore.delete(windowId);
+      autoStarted.delete(windowId);
+    });
   }, [windowId]);
   const setMode = (m: "solo" | "pvp" | null) => {
     if (m === "pvp" || m === "solo") modeStore.set(windowId, m);
@@ -35,6 +47,18 @@ export function ChickenCrossWindow({ windowId }: GameWindowProps) {
     else if (mode === "pvp") pvp.reset();
     setMode(null);
   };
+
+  // First open with a wallet connected → fund + play a solo bot match immediately (parity with the
+  // other arena games), instead of landing on the lobby. Once-only per window: a remount never
+  // re-funds (the out-of-React session is already live), and Back returns to the lobby, not a refund.
+  useEffect(() => {
+    if (autoStarted.get(windowId)) return;
+    if (mode !== null || !account || solo.status !== "idle") return;
+    autoStarted.set(windowId, true);
+    setMode("solo");
+    solo.start(AUTO_STAKE);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [account, mode, solo.status, windowId]);
 
   if (mode === null) {
     return (
