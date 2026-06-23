@@ -10,8 +10,4 @@ register({
   icon: "🌍",
   image: "/games/world-canvas.png",
   Window: WorldCanvasWindow,
-  // Opens compact like the other arena games (tic-tac-toe / chicken-cross resolve to
-  // the 4×4 default); the canvas pans/zooms and the window resizes for a bigger wall.
-  defaultSize: { w: 4, h: 4 },
-  minSize: { w: 3, h: 3 },
 });
