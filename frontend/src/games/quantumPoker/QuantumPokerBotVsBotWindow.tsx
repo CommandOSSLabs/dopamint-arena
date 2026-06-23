@@ -32,9 +32,11 @@ export function QuantumPokerBotVsBotWindow({
           {onExit && (
             <button
               type="button"
-              onClick={onExit}
-              disabled={running}
-              className="h-5 rounded-sm border border-white/10 px-1.5 text-[10px] text-slate-300 disabled:opacity-40"
+              onClick={() => {
+                s.stopAuto(); // fire-and-forget: don't wait for settle before leaving
+                onExit();
+              }}
+              className="h-5 rounded-sm border border-white/10 px-1.5 text-[10px] text-slate-300"
             >
               Back
             </button>
@@ -49,7 +51,7 @@ export function QuantumPokerBotVsBotWindow({
             <button
               type="button"
               onClick={s.stopAuto}
-              title="Finishes the current tunnel, then stops"
+              title="Stops now; the current tunnel's settle finishes in the background"
               className="h-5 rounded-sm border border-rose-200/50 px-2 text-[10px] font-semibold text-rose-100"
             >
               Stop

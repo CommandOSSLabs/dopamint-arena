@@ -52,6 +52,8 @@ const HAND_CAP = QUANTUM_POKER_HANDS_PER_TUNNEL;
 
 /** Pause between matches (ms). */
 const NEXT_MATCH_MS = 1200;
+/** Brief delay before the on-load auto-start so the window/table mounts first. */
+const AUTO_START_DELAY_MS = 100;
 
 export type AutoStatus = "idle" | "funding" | "running" | "ended" | "error";
 
@@ -361,17 +363,22 @@ class AutoSession {
   autoStartOnLoad = () => {
     if (this.didAutoStart || this.status !== "idle" || !this.funded) return;
     this.didAutoStart = true;
-    this.startAuto();
+    // Brief delay so the window/table mounts first. Stored in nextTimer so stop/reset/dispose cancel
+    // it (via clearNext) if the window closes within the delay.
+    this.clearNext();
+    this.nextTimer = setTimeout(() => {
+      this.nextTimer = null;
+      this.startAuto();
+    }, AUTO_START_DELAY_MS);
   };
 
   stopAuto = () => {
+    // Fire-and-forget: bump `gen` so the in-flight match/settle abandons ship, and end the run NOW so
+    // the user can Back out immediately without waiting for the current tunnel's settle.
+    this.gen += 1;
     this.auto = false;
     this.clearNext();
-    // Between matches (the next one is only scheduled, not opened): end now.
-    if (this.status === "running" && this.stage !== "playing") {
-      this.endRun();
-    }
-    this.pushView();
+    this.endRun();
   };
 
   reset = () => {
