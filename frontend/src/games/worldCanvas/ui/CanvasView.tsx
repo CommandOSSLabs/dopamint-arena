@@ -13,10 +13,10 @@ import { WC, FONT_DISPLAY } from "./tokens";
 const ERASER_COLOR = 0;
 
 /**
- * The lean canvas shell: the chunked wall behind a single Excalidraw-style floating
- * toolbar (tools + a few colors + brush size), the two-lane {@link ArenaControl}
- * (Paint with a bot / Watch bot arena), and the {@link MostPainted} readout. No
- * window chrome, no panels — every painted cell is one co-signed off-chain move on a
+ * The lean SOLO canvas shell: the chunked wall behind a single Excalidraw-style floating
+ * toolbar (tools + a few colors + brush size), the {@link ArenaControl} single Auto
+ * toggle (take the wheel), and the {@link MostPainted} readout. No window chrome,
+ * no panels — every painted cell is one co-signed off-chain move on the ONE
  * strictly-2-party tunnel. Free/draw: the only score is who painted the most cells.
  */
 export function CanvasView({ onExit }: { onExit?: () => void }) {
@@ -27,8 +27,10 @@ export function CanvasView({ onExit }: { onExit?: () => void }) {
 
   const tps = useRollingTps(engine.status.movesCoSigned);
 
-  // The hand tool pans; the eraser paints white; everything else paints `color`.
-  const panOnly = tool === "hand";
+  // The hand tool pans; the eraser paints white; everything else paints `color`. While
+  // Auto is on the bots own both seats (watch mode), so the wall is pan-only — flip to
+  // "You vs Bot" to take the wheel and paint seat A.
+  const panOnly = tool === "hand" || engine.auto;
   const effectiveColor = tool === "erase" ? ERASER_COLOR : color;
 
   return (
@@ -65,10 +67,9 @@ export function CanvasView({ onExit }: { onExit?: () => void }) {
       />
 
       <ArenaControl
-        agentCount={engine.agentCount}
+        auto={engine.auto}
         tps={tps}
-        onSpawn={engine.spawnAgent}
-        onStop={engine.stopAgents}
+        onToggleAuto={engine.toggleAuto}
         onViewNext={engine.viewNextAgent}
       />
 

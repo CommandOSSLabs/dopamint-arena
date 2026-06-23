@@ -136,101 +136,106 @@ export function FloatingToolbar({
   );
 }
 
+/** The seat-A bot's mint tint — echoes the engine's TINT_BOT_A so the readout's "Bot A"
+ *  swatch matches its strokes + leaderboard row. (Bot B / human reuse the WC tokens.) */
+const TINT_BOT_A = "#5fe3a1";
+
 /**
- * The arena control — two Battleship-style lanes, transposed to the shared wall.
- * Both run on REAL strictly-2-party tunnels (two DISTINCT DOPAMINT-funded seats);
- * the protocol stays free/draw, so there is never a winner or a stake shift — the
- * only score is who co-signed the most cells (the {@link MostPainted} readout).
+ * The in-canvas SOLO control — ONE strictly-2-party tunnel, two funded seats, and a
+ * SINGLE Auto toggle, exactly like the other arena games' solo board (chicken-cross /
+ * bomb-it / battleship). The two DISTINCT DOPAMINT-funded seats co-sign the SAME tunnel;
+ * the protocol stays free/draw, so there is never a winner or a stake shift — the only
+ * score is who co-signed the most cells (the {@link MostPainted} readout). NO two-lane
+ * selector, NO "Wall Bot", NO "+pair" swarm, NO many tunnels.
  *
- * - **Paint with a bot** — your wall: seat A is you ({@link onPaint via the canvas}),
- *   seat B is the always-present "Wall Bot", a DISTINCT funded party co-painting the
- *   SAME tunnel. This is the resting lane; selecting it while the arena is live tears
- *   the arena down ({@link onStop}) so the camera returns to your wall.
- * - **Watch bot arena** — {@link onSpawn} opens a fresh shared tunnel authored by TWO
- *   distinct funded bots (seat A + seat B, both co-signing every paint). "+ pair"
- *   spawns another, "View" cycles the camera, "Stop" tears every spawned tunnel down
- *   (your wall + its Wall Bot keep painting).
+ * The one toggle is "take the wheel":
+ * - **Auto ON** (the default) — both seats are bot-driven; you WATCH two funded bots
+ *   co-paint one tunnel.
+ * - **Auto OFF** — you take the wheel and author seat A ({@link onPaint via the canvas})
+ *   while the seat-B bot plays on, on the SAME tunnel.
+ *
+ * Flipping the switch calls {@link onToggleAuto}; "View" cycles the camera to a live bot.
+ * (PvP — two distinct humans over the relay — lives at the lobby, not here.)
  */
 export function ArenaControl({
-  agentCount,
+  auto,
   tps,
-  onSpawn,
-  onStop,
+  onToggleAuto,
   onViewNext,
 }: {
-  /** SPAWNED bots currently painting (each pair adds 2). 0 ⇒ only you + the Wall Bot. */
-  agentCount: number;
-  /** Live co-signed throughput across every tunnel (the TPS dial). */
+  /** True = both seats bot-driven (watch). False = you author seat A vs the seat-B bot. */
+  auto: boolean;
+  /** Live co-signed throughput on the tunnel (the TPS dial). */
   tps: number;
-  /** Open a fresh shared tunnel painted by a distinct funded bot pair (engine.spawnAgent). */
-  onSpawn: () => void;
-  /** Tear down every spawned tunnel; the human wall + Wall Bot keep painting (engine.stopAgents). */
-  onStop: () => void;
-  /** Cycle the camera to the next live bot (engine.viewNextAgent). */
+  /** Flip Auto — swap between watch (bots vs bots) and take-the-wheel (engine.toggleAuto). */
+  onToggleAuto: () => void;
+  /** Cycle the camera to the next live seat bot (engine.viewNextAgent). */
   onViewNext: () => void;
 }) {
-  const arena = agentCount > 0;
   return (
     <div style={autoWrapStyle}>
-      <div style={laneRowStyle}>
-        <LaneTab
-          label="Paint with a bot"
-          icon={<BrushIcon />}
-          active={!arena}
-          onClick={() => {
-            if (arena) onStop(); // leave the arena → back to just your wall
+      {/* The single Auto toggle — "take the wheel". ON = watch two bots co-paint one
+          tunnel; OFF = you author seat A vs the seat-B bot on the SAME tunnel. */}
+      <button
+        type="button"
+        role="switch"
+        aria-checked={auto}
+        onClick={onToggleAuto}
+        title={
+          auto
+            ? "Two bots are co-painting — click to take the wheel (paint seat A)"
+            : "You're painting seat A — click to hand back to the bots (watch)"
+        }
+        style={autoToggleStyle}
+      >
+        <span style={autoToggleLabelStyle}>
+          <BrushIcon size={14} />
+          {auto ? "Auto · watch" : "You paint"}
+        </span>
+        <span
+          style={{
+            ...switchTrackStyle,
+            background: auto ? WC.accent : "rgba(255,255,255,0.18)",
           }}
-        />
-        <LaneTab
-          label="Watch bot arena"
-          icon={<BotIcon />}
-          active={arena}
-          onClick={() => {
-            if (!arena) onSpawn(); // open the first bot-vs-bot pair
-          }}
-        />
-      </div>
+        >
+          <span
+            style={{
+              ...switchKnobStyle,
+              transform: auto ? "translateX(16px)" : "translateX(0)",
+            }}
+          />
+        </span>
+      </button>
 
-      {arena ? (
-        <div style={readoutStyle}>
-          <LiveDot />
-          <span>
-            {agentCount} {agentCount === 1 ? "bot" : "bots"}
-          </span>
-          <span style={{ color: "#9aa3bb" }}>·</span>
-          <span style={{ color: WC.text }}>{Math.round(tps)} TPS</span>
-          <span style={readoutDividerStyle} />
-          <button
-            type="button"
-            onClick={onSpawn}
-            title="Spawn another funded bot pair"
-            style={pillButtonStyle}
-          >
-            + pair
-          </button>
-          <button
-            type="button"
-            onClick={onViewNext}
-            title="Jump the camera to the next bot"
-            style={pillButtonStyle}
-          >
-            View
-          </button>
-          <button type="button" onClick={onStop} style={stopPillStyle}>
-            Stop
-          </button>
-        </div>
-      ) : (
-        <div style={readoutStyle}>
-          <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
-            <SeatDot tint={WC.seatA} /> You
-            <span style={{ color: "#9aa3bb", margin: "0 1px" }}>+</span>
-            <SeatDot tint={WC.seatB} /> Wall Bot
-          </span>
-          <span style={{ color: "#9aa3bb" }}>·</span>
-          <span style={{ color: WC.text }}>{Math.round(tps)} TPS</span>
-        </div>
-      )}
+      <div style={readoutStyle}>
+        <LiveDot />
+        <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
+          {auto ? (
+            <>
+              <SeatDot tint={TINT_BOT_A} /> Bot A
+              <span style={{ color: "#9aa3bb", margin: "0 1px" }}>vs</span>
+              <SeatDot tint={WC.seatB} /> Bot B
+            </>
+          ) : (
+            <>
+              <SeatDot tint={WC.seatA} /> You
+              <span style={{ color: "#9aa3bb", margin: "0 1px" }}>vs</span>
+              <SeatDot tint={WC.seatB} /> Bot B
+            </>
+          )}
+        </span>
+        <span style={{ color: "#9aa3bb" }}>·</span>
+        <span style={{ color: WC.text }}>{Math.round(tps)} TPS</span>
+        <span style={readoutDividerStyle} />
+        <button
+          type="button"
+          onClick={onViewNext}
+          title="Jump the camera to the next bot"
+          style={pillButtonStyle}
+        >
+          View
+        </button>
+      </div>
     </div>
   );
 }
@@ -299,62 +304,6 @@ function formatCount(n: number): string {
   if (n >= 10_000) return `${Math.round(n / 1000)}k`;
   if (n >= 1_000) return `${(n / 1000).toFixed(1)}k`;
   return `${n}`;
-}
-
-/** One lane of the arena control: a segmented tab, active = accent fill. */
-function LaneTab({
-  label,
-  icon,
-  active,
-  onClick,
-}: {
-  label: string;
-  icon: ReactNode;
-  active: boolean;
-  onClick: () => void;
-}) {
-  const [hover, setHover] = useState(false);
-  return (
-    <button
-      type="button"
-      aria-pressed={active}
-      onClick={onClick}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 7,
-        height: 32,
-        padding: "0 12px",
-        borderRadius: 9,
-        border: "none",
-        cursor: "pointer",
-        fontFamily: "inherit",
-        fontSize: 12.5,
-        fontWeight: 700,
-        whiteSpace: "nowrap",
-        color: active ? "#06203B" : WC.text,
-        background: active
-          ? WC.accent
-          : hover
-            ? "rgba(255,255,255,0.08)"
-            : "transparent",
-        transition: "background .12s, color .12s",
-      }}
-    >
-      <span
-        style={{
-          display: "grid",
-          placeItems: "center",
-          color: active ? "#06203B" : WC.muted,
-        }}
-      >
-        {icon}
-      </span>
-      {label}
-    </button>
-  );
 }
 
 /** A small square seat/painter swatch (echoes a painted pixel). */
@@ -464,16 +413,53 @@ const autoWrapStyle: CSSProperties = {
   fontFamily: FONT_DISPLAY,
 };
 
-/** The segmented two-lane container (dark glass, holds the {@link LaneTab}s). */
-const laneRowStyle: CSSProperties = {
+/** The single Auto toggle pill (dark glass): a label + a sliding switch — "take the
+ *  wheel". ON = watch two bots co-paint; OFF = you author seat A vs the seat-B bot. */
+const autoToggleStyle: CSSProperties = {
   display: "flex",
   alignItems: "center",
-  gap: 4,
-  padding: 4,
+  gap: 10,
+  height: 40,
+  padding: "0 12px",
   borderRadius: 12,
-  background: "rgba(10,16,34,0.72)",
   border: "1px solid rgba(255,255,255,0.12)",
+  cursor: "pointer",
+  background: "rgba(10,16,34,0.72)",
   backdropFilter: "blur(8px)",
+  fontFamily: FONT_DISPLAY,
+};
+
+const autoToggleLabelStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 7,
+  fontSize: 12.5,
+  fontWeight: 700,
+  whiteSpace: "nowrap",
+  color: WC.text,
+};
+
+/** The sliding-switch track (accent when Auto on). */
+const switchTrackStyle: CSSProperties = {
+  position: "relative",
+  width: 34,
+  height: 18,
+  borderRadius: 999,
+  flex: "0 0 auto",
+  transition: "background .14s",
+};
+
+/** The switch knob (slides right when Auto on). */
+const switchKnobStyle: CSSProperties = {
+  position: "absolute",
+  top: 2,
+  left: 2,
+  width: 14,
+  height: 14,
+  borderRadius: "50%",
+  background: "#fff",
+  boxShadow: "0 1px 3px rgba(0,0,0,0.4)",
+  transition: "transform .14s",
 };
 
 const readoutStyle: CSSProperties = {
@@ -511,19 +497,6 @@ const pillButtonStyle: CSSProperties = {
   fontWeight: 700,
   color: WC.text,
   background: "rgba(255,255,255,0.06)",
-};
-
-const stopPillStyle: CSSProperties = {
-  height: 26,
-  padding: "0 12px",
-  borderRadius: 8,
-  border: "none",
-  cursor: "pointer",
-  fontFamily: "inherit",
-  fontSize: 12,
-  fontWeight: 700,
-  color: "#fff",
-  background: "#e0556a",
 };
 
 /** Bottom-right "most painted" leaderboard card (dark glass, lightweight). */
@@ -633,17 +606,6 @@ function HandIcon() {
       <path d="M14 10V4a2 2 0 0 0-4 0v2" />
       <path d="M10 10.5V6a2 2 0 0 0-4 0v8" />
       <path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-6-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15" />
-    </svg>
-  );
-}
-
-function BotIcon({ size = 16 }: { size?: number }) {
-  return (
-    <svg {...iconProps(size)}>
-      <rect x="3" y="11" width="18" height="10" rx="2" />
-      <path d="M12 7v4" />
-      <circle cx="12" cy="5" r="2" />
-      <path d="M8 16h.01M16 16h.01" />
     </svg>
   );
 }
