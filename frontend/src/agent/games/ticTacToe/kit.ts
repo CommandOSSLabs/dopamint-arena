@@ -1,5 +1,9 @@
 import type { Party } from "sui-tunnel-ts/protocol/Protocol";
-import { protocols } from "sui-tunnel-ts";
+import {
+  TicTacToeProtocol,
+  type TicTacToeState,
+  type TicTacToeMove,
+} from "sui-tunnel-ts/protocol/ticTacToe";
 import {
   MultiGameTicTacToeProtocol,
   type MultiGameTicTacToeState,
@@ -21,7 +25,7 @@ export interface TicTacToeBotConfig {
 }
 
 function pickCell(
-  state: protocols.TicTacToeState,
+  state: TicTacToeState,
   seat: Party,
   difficulty: TicTacToeDifficulty,
   rng: () => number,
@@ -46,13 +50,13 @@ function pickCell(
 class TicTacToeBot implements GameBot<MultiGameTicTacToeState, MultiGameTicTacToeMove> {
   private readonly seat: Party;
   private readonly difficulty: TicTacToeDifficulty;
-  private readonly innerProtocol: protocols.TicTacToeProtocol;
+  private readonly innerProtocol: TicTacToeProtocol;
   private readonly rng: () => number;
 
   constructor(seat: Party, stake: bigint, ctx: BotContext, config: TicTacToeBotConfig) {
     this.seat = seat;
     this.difficulty = config.difficulty ?? "perfect";
-    this.innerProtocol = new protocols.TicTacToeProtocol(stake);
+    this.innerProtocol = new TicTacToeProtocol(stake);
     this.rng = ctx.rngForSeat(seat);
   }
 

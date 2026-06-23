@@ -45,14 +45,21 @@
  * the state hash.
  */
 
-import { core, protocols } from "sui-tunnel-ts";
-
-type Protocol<State, Move> = protocols.Protocol<State, Move>;
-type Party = protocols.Party;
-type Balances = protocols.Balances;
-type ProtocolContext = protocols.ProtocolContext;
-type TicTacToeState = protocols.TicTacToeState;
-type TicTacToeMove = protocols.TicTacToeMove;
+import {
+  protocolDomain,
+  lengthPrefixedConcat,
+  type Protocol,
+  type Party,
+  type Balances,
+  type ProtocolContext,
+} from "sui-tunnel-ts/protocol/Protocol";
+import { concatBytes } from "sui-tunnel-ts/core/bytes";
+import { u64ToBeBytes } from "sui-tunnel-ts/core/wire";
+import {
+  TicTacToeProtocol,
+  type TicTacToeState,
+  type TicTacToeMove,
+} from "sui-tunnel-ts/protocol/ticTacToe";
 
 export interface MultiGameTicTacToeState {
   /** Current single-game state (board, turn, winner, carried balances, stake). */
@@ -79,8 +86,8 @@ export class MultiGameTicTacToeProtocol implements Protocol<
 
   // Distinct domain tag so a multi-game state hash never collides with a
   // single-game one, even when the inner game state happens to match.
-  private readonly domain = protocols.protocolDomain("tic_tac_toe.multi.v1");
-  private readonly inner: protocols.TicTacToeProtocol;
+  private readonly domain = protocolDomain("tic_tac_toe.multi.v1");
+  private readonly inner: TicTacToeProtocol;
   private readonly maxGames: number;
 
   /**
@@ -92,7 +99,7 @@ export class MultiGameTicTacToeProtocol implements Protocol<
       throw new Error("maxGames must be a positive integer");
     }
     this.maxGames = maxGames;
-    this.inner = new protocols.TicTacToeProtocol(stake);
+    this.inner = new TicTacToeProtocol(stake);
   }
 
   initialState(ctx: ProtocolContext): MultiGameTicTacToeState {
@@ -140,11 +147,11 @@ export class MultiGameTicTacToeProtocol implements Protocol<
 
   encodeState(state: MultiGameTicTacToeState): Uint8Array {
     // Length-prefix both parts so distinct (inner, gamesPlayed) pairs can't alias.
-    return core.concatBytes([
+    return concatBytes([
       this.domain,
-      protocols.lengthPrefixedConcat([
+      lengthPrefixedConcat([
         this.inner.encodeState(state.inner),
-        core.u64ToBeBytes(state.gamesPlayed),
+        u64ToBeBytes(state.gamesPlayed),
       ]),
     ]);
   }

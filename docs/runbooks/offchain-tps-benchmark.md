@@ -1,0 +1,427 @@
+# Runbook: Off-chain TPS benchmark on AWS
+
+> **Goal:** Run the canonical game-bot-kit off-chain TPS benchmark on the existing AWS benchmark fleet, end-to-end, with full dual-sign/verify and no on-chain traffic.
+
+This runbook assumes you have **zero prior knowledge** of the repo. It covers the AWS setup check, code deployment, running the benchmark, monitoring it, and reading the results.
+
+---
+
+## 1. What you are running
+
+The benchmark (`frontend/src/bench/offchainTps.ts`) does the following:
+
+- Uses one of the frontend game kits (`tictactoe` or `blackjack`) from `GAME_KITS`.
+- Opens **N concurrent off-chain tunnels** in self-play mode.
+- For every state transition, both parties **sign** the canonical `state_update` message and, in `full` mode, **verify** both signatures.
+- Counts fully signed/verified transitions per second.
+- Does **not** hit Sui on-chain (no open/deposit/settle txs).
+
+The kit contract guarantees that the same protocol classes and wire format the human `usePvp*` hooks use are the ones being exercised.
+
+---
+
+## 2. Prerequisites
+
+### 2.1 Local tooling
+
+Install on your laptop:
+
+- `git`
+- `node` (>= 20) and `pnpm`
+- AWS CLI v2
+- Pulumi CLI (only if you plan to change the fleet size)
+
+### 2.2 AWS access
+
+You need an AWS profile that can:
+
+- Call `sts:GetCallerIdentity`
+- Read EC2 / AutoScaling / CloudWatch
+- Run SSM commands on the benchmark instances (`ssm:SendCommand`, `ssm:ListCommandInvocations`)
+
+The profile used for this runbook is named `AdministratorAccess-129671602944`. If yours is different, replace it in every command.
+
+### 2.3 Verify access
+
+```bash
+aws sts get-caller-identity --profile AdministratorAccess-129671602944
+```
+
+You should see an ARN and account `129671602944`.
+
+### 2.4 Verify the benchmark fleet exists
+
+```bash
+aws autoscaling describe-auto-scaling-groups \
+  --profile AdministratorAccess-129671602944 \
+  --region us-east-1 \
+  --query 'AutoScalingGroups[?contains(Tags[?Key==`Name`].Value, `dopamint-dev-benchmark`)].{Name:AutoScalingGroupName,Min:MinSize,Max:MaxSize,Desired:DesiredCapacity,Instances:Instances}' \
+  --output table
+```
+
+You should see an ASG named like `dopamint-dev-benchmark-<hash>` with `c7i.48xlarge` instances in `InService` state. The dev stack uses `min=2 max=2` by default.
+
+---
+
+## 3. One-time repo setup
+
+Clone the repo and switch to the benchmark branch:
+
+```bash
+git clone https://github.com/CommandOSSLabs/dopamint-arena.git
+cd dopamint-arena
+git checkout feat/offchain-tps-bench
+```
+
+No local install is required to run on AWS, but it is useful for local smoke tests:
+
+```bash
+cd frontend
+pnpm install
+pnpm run typecheck
+```
+
+---
+
+## 4. Deploy the latest benchmark code to the AWS instances
+
+The instances already have a shallow clone at `/opt/dopamint/repo`. You only need to fetch the branch you want and reset the working tree.
+
+### 4.1 Get the instance IDs
+
+```bash
+aws autoscaling describe-auto-scaling-groups \
+  --profile AdministratorAccess-129671602944 \
+  --region us-east-1 \
+  --query 'AutoScalingGroups[?contains(Tags[?Key==`Name`].Value, `dopamint-dev-benchmark`)].Instances[*].InstanceId' \
+  --output text
+```
+
+Save the two IDs. In this runbook they are:
+
+- `i-0f0ed24eb64b4731f`
+- `i-065150b8aa956bfa4`
+
+### 4.2 Pull the benchmark branch and install deps on every instance
+
+Run this SSM command once. It clones the benchmark branch into `/opt/dopamint/repo-fresh` and installs dependencies:
+
+```bash
+aws ssm send-command \
+  --profile AdministratorAccess-129671602944 \
+  --region us-east-1 \
+  --instance-ids i-0f0ed24eb64b4731f i-065150b8aa956bfa4 \
+  --document-name AWS-RunShellScript \
+  --parameters commands='["export HOME=/root; if [ ! -d /opt/dopamint/repo-fresh ]; then mkdir -p /opt/dopamint && git clone --depth 1 --branch feat/offchain-tps-bench https://github.com/CommandOSSLabs/dopamint-arena.git /opt/dopamint/repo-fresh; fi; cd /opt/dopamint/repo-fresh/frontend && git fetch --depth 1 origin feat/offchain-tps-bench && git reset --hard FETCH_HEAD && cd ../sui-tunnel-ts && pnpm install --frozen-lockfile && cd ../frontend && pnpm install --frozen-lockfile"]'
+```
+
+Save the returned `CommandId` and poll until both instances report `Success`:
+
+```bash
+aws ssm list-command-invocations \
+  --profile AdministratorAccess-129671602944 \
+  --region us-east-1 \
+  --command-id <COMMAND_ID> \
+  --details \
+  --output table \
+  --query 'CommandInvocations[*].[InstanceId,Status,CommandPlugins[0].Output]'
+```
+
+This install step only needs to be repeated when:
+
+- the benchmark code changes, or
+- the frontend `pnpm-lock.yaml` changes.
+
+---
+
+## 5. Build and run the benchmark
+
+### 5.1 Choose your parameters
+
+The benchmark CLI supports these flags:
+
+| Flag | Meaning | Example |
+|---|---|---|
+| `--game` | `tictactoe` or `blackjack` | `--game blackjack` |
+| `--tunnels` | Concurrent tunnels per instance | `--tunnels 1000` |
+| `--workers` | Worker threads per instance | `--workers 128` |
+| `--duration` | Run for N milliseconds | `--duration 10000` |
+| `--updates-per-tunnel` | Stop after N transitions per tunnel | `--updates-per-tunnel 1000` |
+| `--sign-mode` | `full` (sign+verify), `sign-only`, or `none` | `--sign-mode full` |
+| `--json` | Write a JSON report to a file | `--json /tmp/report.json` |
+
+Use **either** `--duration` **or** `--updates-per-tunnel`. If neither is supplied it defaults to 100 updates per tunnel.
+
+For a 5M-TPS oriented test, start with:
+
+- `blackjack` (the faster game)
+- `full` sign mode (the honest metric)
+- **Bun process-per-core** for maximum throughput: 192 single-thread `solo` processes per `c7i.48xlarge`
+- Alternative with Node: **4 processes × 48 workers** per instance
+- 10–20 second duration for a quick test, 120 seconds for stable telemetry
+
+### 5.2 Build + run via SSM
+
+The benchmark must be bundled with esbuild on the instance because Node worker threads cannot reliably resolve the frontend `tsconfig` path aliases at runtime. A convenience script is provided:
+
+```bash
+pnpm build:bench
+```
+
+```bash
+aws ssm send-command \
+  --profile AdministratorAccess-129671602944 \
+  --region us-east-1 \
+  --instance-ids i-0f0ed24eb64b4731f i-065150b8aa956bfa4 \
+  --document-name AWS-RunShellScript \
+  --parameters commands='["export HOME=/root; if [ ! -d /opt/dopamint/repo-fresh ]; then mkdir -p /opt/dopamint && git clone --depth 1 --branch feat/offchain-tps-bench https://github.com/CommandOSSLabs/dopamint-arena.git /opt/dopamint/repo-fresh; fi; cd /opt/dopamint/repo-fresh/frontend && git fetch --depth 1 origin feat/offchain-tps-bench && git reset --hard FETCH_HEAD && cd ../sui-tunnel-ts && pnpm install --frozen-lockfile && cd ../frontend && pnpm install --frozen-lockfile && pnpm build:bench && node dist/bench/offchainTps.js --game blackjack --tunnels 1000 --duration 10000 --workers 128 --sign-mode full --json /tmp/bench-blackjack-full.json"]'
+```
+```
+
+Save the `CommandId`.
+
+### 5.2a Multi-process run (recommended for maximum TPS)
+
+To fully saturate all 192 vCPUs on a `c7i.48xlarge`, run **4 independent Node processes** in parallel, each with 48 workers and 250 tunnels:
+
+```bash
+aws ssm send-command \
+  --profile AdministratorAccess-129671602944 \
+  --region us-east-1 \
+  --instance-ids i-0f0ed24eb64b4731f i-065150b8aa956bfa4 \
+  --document-name AWS-RunShellScript \
+  --parameters commands='["export HOME=/root; if [ ! -d /opt/dopamint/repo-fresh ]; then mkdir -p /opt/dopamint && git clone --depth 1 --branch feat/offchain-tps-bench https://github.com/CommandOSSLabs/dopamint-arena.git /opt/dopamint/repo-fresh; fi; cd /opt/dopamint/repo-fresh/frontend && git fetch --depth 1 origin feat/offchain-tps-bench && git reset --hard FETCH_HEAD && cd ../sui-tunnel-ts && pnpm install --frozen-lockfile && cd ../frontend && pnpm install --frozen-lockfile && pnpm build:bench && OUT=/tmp/multi_proc_bench_$(date +%Y%m%d_%H%M%S) && mkdir -p $OUT && for i in 1 2 3 4; do node dist/bench/offchainTps.js --game blackjack --workers 48 --tunnels 250 --sign-mode full --duration 120000 --json $OUT/proc_$i.json >> $OUT/bench.log 2>&1 & done; wait; python3 -c \"import json,glob; fs=glob.glob(\\\"$OUT/proc_*.json\\\"); print(sum(json.load(open(f))[\\\"totalInteractions\\\"] for f in fs), sum(json.load(open(f))[\\\"avgTps\\\"] for f in fs))\""]'
+```
+
+This is the configuration that reached **~637k fleet TPS** in the reported run.
+
+### 5.2b Bun process-per-core run (maximum throughput)
+
+The highest TPS was achieved with **Bun v1.3.14** running one single-threaded `solo` process per vCPU. Bun's native ed25519 (BoringSSL) is faster than Node's OpenSSL for this workload, and the single-thread model avoids the `worker_threads` crash that Bun exhibits at scale.
+
+Prerequisites on the instance: install Bun and `sysstat` for telemetry.
+
+```bash
+aws ssm send-command \
+  --profile AdministratorAccess-129671602944 \
+  --region us-east-1 \
+  --instance-ids i-0f0ed24eb64b4731f i-065150b8aa956bfa4 \
+  --document-name AWS-RunShellScript \
+  --parameters commands='["export HOME=/root; export PATH=\"$HOME/.bun/bin:$PATH\"; if ! command -v bun >/dev/null; then curl -fsSL https://bun.sh/install | bash; fi; if ! command -v mpstat >/dev/null; then dnf install -y sysstat; fi; if [ ! -d /opt/dopamint/repo-fresh ]; then mkdir -p /opt/dopamint && git clone --depth 1 --branch feat/offchain-tps-bench https://github.com/CommandOSSLabs/dopamint-arena.git /opt/dopamint/repo-fresh; fi; cd /opt/dopamint/repo-fresh/frontend && git fetch --depth 1 origin feat/offchain-tps-bench && git reset --hard FETCH_HEAD && cd ../sui-tunnel-ts && pnpm install --frozen-lockfile && cd ../frontend && pnpm install --frozen-lockfile && pnpm build:bench && OUT=/tmp/bun_solo_192_$(date +%Y%m%d_%H%M%S) && mkdir -p $OUT && for i in $(seq 1 192); do bun dist/bench/solo.js blackjack full 120000 $i > $OUT/proc_$i.log 2>&1 & done; wait; awk -F\"[= ]\" \"/STEPS_PER_S/ {s+=\\$2; p+=\\$4} END {print \\"Total TPS:\\", s, \\"Fleet Peak TPS:\\\", p}\" $OUT/proc_*.log"]'
+```
+
+This is the configuration that reached **~1.29M avg fleet TPS** and **~1.80M peak fleet TPS** in the reported run.
+
+### 5.3 Monitor progress
+
+Poll until both instances are no longer `InProgress`/`Pending`:
+
+```bash
+for i in {1..90}; do
+  echo "--- poll $i ---"
+  aws ssm list-command-invocations \
+    --profile AdministratorAccess-129671602944 \
+    --region us-east-1 \
+    --command-id <COMMAND_ID> \
+    --details \
+    --output text \
+    --query 'CommandInvocations[*].[InstanceId,Status]'
+
+  statuses=$(aws ssm list-command-invocations \
+    --profile AdministratorAccess-129671602944 \
+    --region us-east-1 \
+    --command-id <COMMAND_ID> \
+    --query 'CommandInvocations[*].Status' \
+    --output text 2>/dev/null)
+  if ! echo "$statuses" | grep -qE 'InProgress|Pending'; then
+    break
+  fi
+  sleep 10
+done
+```
+
+A 10-second run usually finishes in 30–60 seconds including bundle time and worker startup.
+
+### 5.4 Read the results
+
+```bash
+aws ssm list-command-invocations \
+  --profile AdministratorAccess-129671602944 \
+  --region us-east-1 \
+  --command-id <COMMAND_ID> \
+  --details \
+  --output text \
+  --query 'CommandInvocations[*].[InstanceId,Status,CommandPlugins[0].Output]'
+```
+
+The Node driver prints a human-readable report and writes JSON to `/tmp/bench-blackjack-full.json`. The Bun solo driver writes one `STEPS_PER_S=<n>` line per process to `$OUT/proc_*.log`; the SSM output prints the fleet total TPS.
+
+---
+
+## 6. Aggregate results across instances
+
+**Node driver:** add the `effective TPS` and `interactions` lines from each instance, or read the JSON files and sum `avgTps` and `totalInteractions`.
+
+```bash
+aws ssm send-command \
+  --profile AdministratorAccess-129671602944 \
+  --region us-east-1 \
+  --instance-ids i-0f0ed24eb64b4731f i-065150b8aa956bfa4 \
+  --document-name AWS-RunShellScript \
+  --parameters commands='["cat /tmp/bench-blackjack-full.json"]'
+```
+
+**Bun solo driver:** each process logs `STEPS_PER_S=<n>`. The launch command already sums these per instance and prints a fleet total. To recompute, sum every `STEPS_PER_S` value across both instances:
+
+```bash
+aws ssm send-command \
+  --profile AdministratorAccess-129671602944 \
+  --region us-east-1 \
+  --instance-ids i-0f0ed24eb64b4731f i-065150b8aa956bfa4 \
+  --document-name AWS-RunShellScript \
+  --parameters commands='["OUT=$(ls -d /tmp/bun_solo_192_* | tail -1); grep STEPS_PER_S $OUT/proc_*.log | awk -F= \"{s+=\$2} END {print \"Total TPS:\", s}\""]'
+```
+
+---
+
+## 7. Check instance specs and CPU
+
+### 7.1 Instance type details
+
+```bash
+aws ec2 describe-instance-types \
+  --profile AdministratorAccess-129671602944 \
+  --region us-east-1 \
+  --instance-types c7i.48xlarge \
+  --query 'InstanceTypes[0].{Type:InstanceType,Vcpus:Vcpus,MemoryMiB:MemoryInfo.SizeInMiB,ClockGhz:ProcessorInfo.SustainedClockSpeedInGhz,Network:NetworkInfo.NetworkPerformance}' \
+  --output table
+```
+
+### 7.2 CloudWatch CPU during the run
+
+```bash
+for id in i-0f0ed24eb64b4731f i-065150b8aa956bfa4; do
+  echo "--- $id ---"
+  aws cloudwatch get-metric-statistics \
+    --profile AdministratorAccess-129671602944 \
+    --region us-east-1 \
+    --namespace AWS/EC2 \
+    --metric-name CPUUtilization \
+    --dimensions Name=InstanceId,Value=$id \
+    --statistics Average Maximum \
+    --start-time 2026-06-20T10:00:00Z \
+    --end-time   2026-06-20T12:00:00Z \
+    --period 60 \
+    --output table
+done
+```
+
+Adjust the timestamps to the actual test window. Note that the default 60-second CloudWatch granularity averages a short benchmark over a full minute, so the reported percentage will look low unless the run is long.
+
+---
+
+## 8. Scaling the fleet
+
+The dev stack is capped at **2 benchmark instances** by default. To hit higher TPS you must raise the ASG size.
+
+### Option A: quick ASG change (not persistent)
+
+```bash
+aws autoscaling update-auto-scaling-group \
+  --profile AdministratorAccess-129671602944 \
+  --region us-east-1 \
+  --auto-scaling-group-name dopamint-dev-benchmark-<hash> \
+  --min-size 6 --max-size 6 --desired-capacity 6
+```
+
+Wait for new instances to become `InService`, then run the benchmark against all instance IDs.
+
+### Option B: persistent Pulumi change
+
+Edit `infra/Pulumi.dev.yaml`:
+
+```yaml
+dopamint:benchmark-min-size: "6"
+dopamint:benchmark-max-size: "6"
+```
+
+Then:
+
+```bash
+cd infra
+pulumi up --stack dev
+```
+
+---
+
+## 9. Local smoke test (optional)
+
+Before running on AWS, verify the benchmark works locally:
+
+```bash
+cd frontend
+node --import tsx src/bench/offchainTps.ts \
+  --game blackjack --tunnels 100 --duration 3000 --workers 8 --sign-mode full
+```
+
+Expected output shape:
+
+```
+Off-chain kit TPS benchmark
+  game           : blackjack
+  config         : 100 concurrent tunnels, 8/12 workers, signMode=full
+  elapsed        : 3.08s
+  interactions   : 165,571
+  effective TPS  : avg 53,844  peak 53,844  (per-core 6,731)
+  signatures/sec : 107,688
+  verifies/sec   : 107,688
+  bandwidth      : 6,461,307 B/s (120 B/update)
+```
+
+---
+
+## 10. Troubleshooting
+
+### `Cannot find package '@/agent' imported from ...offchainTpsWorker.ts`
+
+The worker thread cannot resolve the frontend `tsconfig` path aliases. **Fix:** bundle with esbuild before running, as shown in step 5.2.
+
+### `fatal: refusing to fetch into branch ... checked out`
+
+The instance has a shallow clone. Always use:
+
+```bash
+git fetch --depth 1 origin feat/offchain-tps-bench && git reset --hard FETCH_HEAD
+```
+
+not `git pull`.
+
+### `esbuild` binary not found
+
+Make sure dependencies are installed (`pnpm install`) and use the convenience script:
+
+```bash
+pnpm build:bench
+```
+
+If you must invoke esbuild directly, find it in `node_modules/.bin/esbuild` after install.
+
+### SSM command times out
+
+- Increase `--timeout-seconds` (default is 3600).
+- Reduce `--tunnels` or `--duration` for a quicker sanity check.
+
+### Results are much lower than expected
+
+- Blackjack is the faster game; tictactoe is ~20× slower in this benchmark.
+- Full sign mode is ~7× slower than `none`.
+- Make sure you are not using a `tictactoe` kit with a very low `maxGames` value; short sessions spend more time opening new tunnels.
+
+---
+
+## 11. Files involved
+
+- Benchmark code: `frontend/src/bench/offchainTps.ts`, `frontend/src/bench/offchainTpsWorker.ts`, `frontend/src/bench/solo.ts`, `frontend/src/bench/runMulti.mjs`
+- Kits used: `frontend/src/agent/gameKit.ts`, `frontend/src/agent/games/{blackjack,ticTacToe}/kit.ts`
+- Protocols exercised: `frontend/src/games/blackjack/app/lib/bjBetProtocol.ts`, `frontend/src/games/ticTacToe/packages/shared/src/ttt/multiGameProtocol.ts`
+- Infra fleet: `infra/src/components/BenchmarkFleet.ts`, `infra/Pulumi.dev.yaml`
