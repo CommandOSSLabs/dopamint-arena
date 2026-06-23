@@ -362,6 +362,11 @@ class AutoSession {
    *  funding, or while already running. In DOPAMINT mode `funded` is always true. */
   autoStartOnLoad = () => {
     if (this.didAutoStart || this.status !== "idle" || !this.funded) return;
+    // Gate auto-start behind a connected wallet: the bots self-fund (faucet + sponsored gas) and
+    // never spend the user's coins, but auto-opening sponsored tunnels on every bare page load would
+    // burn backend gas with no user in the loop. Require a wallet connect first, like every other
+    // game; once connected, the hook effect re-fires and this proceeds. (Manual Start is unaffected.)
+    if (!this.deps?.account) return;
     this.didAutoStart = true;
     // Brief delay so the window/table mounts first. Stored in nextTimer so stop/reset/dispose cancel
     // it (via clearNext) if the window closes within the delay.
@@ -690,7 +695,7 @@ export function useQuantumPokerAuto(
   // Auto-start the bot loop on load (deps are wired above), so watch-bot runs without a manual Start.
   useEffect(() => {
     session.autoStartOnLoad();
-  }, [session, snap.status, snap.funded]);
+  }, [session, snap.status, snap.funded, account?.address]);
   return {
     status: snap.status,
     personas: snap.personas,
