@@ -88,7 +88,10 @@ pub(crate) struct SettleRequest {
     settlement: Settlement,
     sig_a: String,
     sig_b: String,
-    transcript: Vec<serde_json::Value>,
+    // Opaque to the backend — only counted and forwarded to Walrus verbatim. `RawValue` keeps each
+    // entry as the unparsed source slice, so a long transcript stays ~1× its wire size instead of
+    // ballooning into a `Value` tree (the headroom that lets `/settle` accept a 16 MB body safely).
+    transcript: Vec<Box<serde_json::value::RawValue>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -267,13 +270,23 @@ pub(crate) async fn settle(
             // co-signed transcript root (same value anchored on-chain), which verifyTranscript
             // re-checks against the recomputed Merkle root and the on-chain anchor.
             let update_count = req.transcript.len();
-            let record = serde_json::json!({
-                "tunnelId": req.settlement.tunnel_id.clone(),
-                "root": req.settlement.transcript_root.clone(),
-                "updateCount": update_count,
-                "entries": req.transcript,
-            });
-            let blob = serde_json::to_vec(&record).unwrap_or_default();
+            // Serialize via a borrowed struct (not `json!`) so the `RawValue` entries stream straight
+            // through — `to_value` would re-parse them into a `Value` tree, the cost we just avoided.
+            #[derive(Serialize)]
+            #[serde(rename_all = "camelCase")]
+            struct ProofBlob<'a> {
+                tunnel_id: &'a str,
+                root: &'a str,
+                update_count: usize,
+                entries: &'a [Box<serde_json::value::RawValue>],
+            }
+            let blob = serde_json::to_vec(&ProofBlob {
+                tunnel_id: &req.settlement.tunnel_id,
+                root: &req.settlement.transcript_root,
+                update_count,
+                entries: &req.transcript,
+            })
+            .unwrap_or_default();
             let (blob_id, proof_url) = match state.walrus.upload_transcript(blob).await {
                 Ok(v) => v,
                 Err(e) => {

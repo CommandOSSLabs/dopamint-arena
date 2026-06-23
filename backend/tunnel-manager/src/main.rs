@@ -14,6 +14,7 @@ mod walrus;
 
 use std::sync::Arc;
 
+use axum::extract::DefaultBodyLimit;
 use axum::routing::{get, post};
 use axum::Router;
 use tokio::sync::broadcast;
@@ -99,10 +100,15 @@ async fn main() -> anyhow::Result<()> {
         .route("/metrics", get(routes::metrics))
         .route("/v1/sessions", post(routes::register_session))
         .route("/v1/sessions/:id/heartbeat", post(routes::heartbeat))
-        // Settlement carries the off-chain transcript (one entry per update). The 2MB Json
-        // default is intentional: it's the forcing function that keeps per-tunnel transcripts
-        // small — each game caps its tunnel length so the settle body fits.
-        .route("/v1/tunnels/:tunnel_id/settle", post(routes::settle))
+        // Settlement carries the off-chain transcript — one fixed-size entry (~0.5 KB) per co-signed
+        // move, archived to Walrus. Maximizing moves/tunnel amortizes the on-chain close and Walrus
+        // per-blob cost, so a long self-play game ships tens of thousands of moves and overflows the
+        // 2 MB Json default. Lift it to 16 MB for /settle only (≈30k moves) as the ceiling on tunnel
+        // length; entries deserialize as RawValue so the body stays ~1× in memory (see SettleRequest).
+        .route(
+            "/v1/tunnels/:tunnel_id/settle",
+            post(routes::settle).layer(DefaultBodyLimit::max(16 * 1024 * 1024)),
+        )
         .route("/v1/sponsor", post(routes::sponsor))
         .route("/v1/stats/live", get(routes::stats_live))
         .route("/v1/mp", get(crate::mp::ws::mp_upgrade))
