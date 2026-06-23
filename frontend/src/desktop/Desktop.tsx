@@ -117,6 +117,11 @@ const newInstanceId = (gameId: string) =>
 const clampNum = (n: number, lo: number, hi: number) =>
   Math.max(lo, Math.min(hi, n));
 
+/** Floating windows must stay below the app top bar (~53px, z-10 + backdrop-blur),
+ *  else a window dragged/maximized to the top hides its title bar + close/minimize
+ *  controls under the bar. Clamp every floating y to this inset. */
+const FLOAT_TOP_INSET = 56;
+
 /** Returns a copy of `obj` without `id` (or `obj` itself if absent). */
 function dropKey<T>(obj: Record<string, T>, id: string): Record<string, T> {
   if (obj[id] == null) return obj;
@@ -664,7 +669,7 @@ export function Desktop() {
         ),
         y: clampNum(
           (window.innerHeight - fh) / 2 + n * 28,
-          0,
+          FLOAT_TOP_INSET,
           window.innerHeight - fh,
         ),
         w: fw,
@@ -710,7 +715,7 @@ export function Desktop() {
               [id]: {
                 ...f[id],
                 x: clampNum(base.x + ev.clientX - startX, 0, maxX),
-                y: clampNum(base.y + ev.clientY - startY, 0, maxY),
+                y: clampNum(base.y + ev.clientY - startY, FLOAT_TOP_INSET, maxY),
               },
             }
           : f,
@@ -754,7 +759,7 @@ export function Desktop() {
           h = clampNum(base.h + dy, MIN_H, window.innerHeight - base.y);
         if (top) {
           const edge = base.y + base.h;
-          y = clampNum(base.y + dy, 0, edge - MIN_H);
+          y = clampNum(base.y + dy, FLOAT_TOP_INSET, edge - MIN_H);
           h = edge - y;
         }
         setFloating((f) =>
@@ -788,7 +793,7 @@ export function Desktop() {
             [id]: {
               ...f[id],
               x: clampNum(f[id].x + dx, 0, window.innerWidth - f[id].w),
-              y: clampNum(f[id].y + dy, 0, window.innerHeight - f[id].h),
+              y: clampNum(f[id].y + dy, FLOAT_TOP_INSET, window.innerHeight - f[id].h),
             },
           }
         : f,
@@ -857,7 +862,7 @@ export function Desktop() {
       return {
         position: "fixed",
         left: f.x,
-        top: f.y,
+        top: Math.max(f.y, FLOAT_TOP_INSET),
         width: f.w,
         height: f.h,
         zIndex: f.z,
