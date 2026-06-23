@@ -630,8 +630,10 @@ export const AGENT_MODES: Record<AgentModeId, AgentDrawMode> = {
   },
 };
 
-/** Default mode for a freshly spawned agent. */
-export const DEFAULT_AGENT_MODE: AgentModeId = "artist";
+/** Default mode for a freshly spawned agent: Scribble — random, endless, dense, no
+ *  setup. The goal is raw co-signed TPS, so a fresh agent immediately doodles fast;
+ *  the artistic modes + templates stay available but are secondary. */
+export const DEFAULT_AGENT_MODE: AgentModeId = "scribble";
 
 /** Order the Intelligence picker renders mode groups in. */
 export const AGENT_MODE_GROUPS: readonly AgentModeGroup[] = [

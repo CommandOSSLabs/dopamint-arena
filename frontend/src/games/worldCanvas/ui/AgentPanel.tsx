@@ -28,10 +28,12 @@ const MODES_BY_GROUP: { group: AgentModeGroup; modes: AgentDrawMode[] }[] =
     modes: Object.values(AGENT_MODES).filter((m) => m.group === group),
   }));
 
+/** The acceleration dial — explicit ×N multipliers on the agent's co-signed cells/sec. */
 const SPEEDS: { value: AgentSpeed; label: string }[] = [
-  { value: "slow", label: "Slow" },
-  { value: "normal", label: "Normal" },
-  { value: "fast", label: "Fast" },
+  { value: "x1", label: "×1" },
+  { value: "x2", label: "×2" },
+  { value: "x4", label: "×4" },
+  { value: "x8", label: "×8" },
 ];
 const DENSITIES = [1, 2, 3] as const;
 
@@ -88,7 +90,7 @@ export function AgentPanel({
   onClose: () => void;
 }) {
   const burst = () => {
-    engine.setAgentSpeed("fast");
+    engine.setAgentSpeed("x8");
     engine.setAgentDensity(3);
     engine.spawnAgent();
   };
@@ -139,7 +141,7 @@ export function AgentPanel({
         </button>
       </div>
 
-      <Field label="Speed">
+      <Field label="Speed (TPS multiplier)">
         <div style={{ display: "flex", gap: 3 }}>
           {SPEEDS.map((s) => (
             <Seg
@@ -147,7 +149,7 @@ export function AgentPanel({
               grow
               active={engine.agentSpeed === s.value}
               onClick={() => engine.setAgentSpeed(s.value)}
-              title={`Paint speed: ${s.label}`}
+              title={`Accelerate co-signed cells/sec ${s.label} — ${s.value} burst`}
             >
               {s.label}
             </Seg>

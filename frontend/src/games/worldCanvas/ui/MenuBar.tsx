@@ -14,7 +14,7 @@ import {
 
 export type W98MenuItem =
   | { kind: "action"; label: string; onClick: () => void; disabled?: boolean; accel?: string }
-  | { kind: "check"; label: string; checked: boolean; onClick: () => void }
+  | { kind: "check"; label: string; checked: boolean; onClick: () => void; disabled?: boolean }
   | { kind: "radio"; label: string; checked: boolean; onClick: () => void }
   | { kind: "header"; label: string }
   | { kind: "sep" };
@@ -152,7 +152,8 @@ function MenuRow({
     );
   }
 
-  const disabled = item.kind === "action" && item.disabled;
+  const disabled =
+    (item.kind === "action" || item.kind === "check") && !!item.disabled;
   const mark =
     item.kind === "check" ? (item.checked ? "✓" : "") :
     item.kind === "radio" ? (item.checked ? "●" : "") : "";

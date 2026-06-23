@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useWorldCanvasOnchain } from "../useWorldCanvasOnchain";
+import { useWorldCanvasOnchain, AGENT_SPEEDS } from "../useWorldCanvasOnchain";
 import {
   AGENT_MODES,
   AGENT_MODE_GROUPS,
@@ -17,7 +17,7 @@ import { ToolBox, type ToolId } from "./ToolBox";
 import { AgentPanel } from "./AgentPanel";
 import { StatusBar } from "./StatusBar";
 import { W98Window } from "./W98Window";
-import { W98, FONT_W98, w98Inset } from "./tokens";
+import { W98, FONT_W98, w98Inset, w98Button } from "./tokens";
 
 /** Modes bucketed by visual group — drives the Agent menu's Intelligence section. */
 const MODES_BY_GROUP: { group: AgentModeGroup; modes: AgentDrawMode[] }[] =
@@ -48,6 +48,9 @@ export function CanvasView({ onExit }: { onExit?: () => void }) {
   const [showPlayers, setShowPlayers] = useState(true);
   const [showLeaderboard, setShowLeaderboard] = useState(true);
   const [showAbout, setShowAbout] = useState(false);
+  // Focus toggle: hide ALL floating panels + the status readout at once, leaving just
+  // the canvas and the minimal draw controls (color box + tool box). One click back.
+  const [hidePanels, setHidePanels] = useState(false);
 
   const tps = useRollingTps(engine.status.movesCoSigned);
 
@@ -72,7 +75,7 @@ export function CanvasView({ onExit }: { onExit?: () => void }) {
     setSecondary(primary);
   };
   const burst = () => {
-    engine.setAgentSpeed("fast");
+    engine.setAgentSpeed("x8");
     engine.setAgentDensity(3);
     engine.spawnAgent();
   };
@@ -109,10 +112,17 @@ export function CanvasView({ onExit }: { onExit?: () => void }) {
       items: [
         { kind: "check", label: "Show Grid", checked: showGrid, onClick: () => setShowGrid((g) => !g) },
         { kind: "sep" },
-        { kind: "check", label: "Agent AI", checked: showAgentPanel, onClick: () => setShowAgentPanel((v) => !v) },
-        { kind: "check", label: "Stamps", checked: showStamps, onClick: () => setShowStamps((v) => !v) },
-        { kind: "check", label: "Players", checked: showPlayers, onClick: () => setShowPlayers((v) => !v) },
-        { kind: "check", label: "Leaderboard", checked: showLeaderboard, onClick: () => setShowLeaderboard((v) => !v) },
+        {
+          kind: "check",
+          label: "Hide Panels (focus)",
+          checked: hidePanels,
+          onClick: () => setHidePanels((v) => !v),
+        },
+        { kind: "sep" },
+        { kind: "check", label: "Agent AI", checked: showAgentPanel && !hidePanels, onClick: () => setShowAgentPanel((v) => !v), disabled: hidePanels },
+        { kind: "check", label: "Stamps", checked: showStamps && !hidePanels, onClick: () => setShowStamps((v) => !v), disabled: hidePanels },
+        { kind: "check", label: "Players", checked: showPlayers && !hidePanels, onClick: () => setShowPlayers((v) => !v), disabled: hidePanels },
+        { kind: "check", label: "Leaderboard", checked: showLeaderboard && !hidePanels, onClick: () => setShowLeaderboard((v) => !v), disabled: hidePanels },
       ],
     },
     {
@@ -128,15 +138,15 @@ export function CanvasView({ onExit }: { onExit?: () => void }) {
       label: "Agent",
       items: [
         { kind: "action", label: "Spawn Agent AI", onClick: engine.spawnAgent },
-        { kind: "action", label: "⚡ BURST (fast · 3× · spawn)", onClick: burst },
+        { kind: "action", label: "⚡ BURST (×8 · 3× · spawn)", onClick: burst },
         { kind: "action", label: "View Next Agent", onClick: engine.viewNextAgent, disabled: engine.agentCount === 0 },
         { kind: "action", label: "Stop All Agents", onClick: engine.stopAgents, disabled: engine.agentCount === 0 },
         { kind: "sep" },
-        { kind: "header", label: "Speed" },
-        ...(["slow", "normal", "fast"] as const).map(
+        { kind: "header", label: "Speed (TPS multiplier)" },
+        ...AGENT_SPEEDS.map(
           (s): W98MenuItem => ({
             kind: "radio",
-            label: s[0].toUpperCase() + s.slice(1),
+            label: `${s.replace("x", "×")} acceleration`,
             checked: engine.agentSpeed === s,
             onClick: () => engine.setAgentSpeed(s),
           }),
@@ -255,10 +265,39 @@ export function CanvasView({ onExit }: { onExit?: () => void }) {
               armedTemplate={armedTemplate}
             />
 
-            {showAgentPanel && (
+            {/* Always-visible focus toggle: collapse every floating panel + the status
+                readout to a clean canvas, or bring them all back. Top-left, clear of the
+                top-right Agent/Players windows. */}
+            <button
+              onClick={() => setHidePanels((v) => !v)}
+              title={
+                hidePanels
+                  ? "Show all panels"
+                  : "Hide all panels — focus on the canvas + color/brush"
+              }
+              aria-pressed={hidePanels}
+              style={{
+                ...w98Button(hidePanels),
+                position: "absolute",
+                top: 6,
+                left: 6,
+                zIndex: 50,
+                minHeight: 22,
+                padding: "0 9px",
+                fontFamily: FONT_W98,
+                fontSize: 11,
+                fontWeight: 700,
+                color: W98.text,
+                cursor: "pointer",
+              }}
+            >
+              {hidePanels ? "👁 Show panels" : "🙈 Hide panels"}
+            </button>
+
+            {showAgentPanel && !hidePanels && (
               <AgentPanel engine={engine} onClose={() => setShowAgentPanel(false)} />
             )}
-            {showStamps && (
+            {showStamps && !hidePanels && (
               <StampDock
                 armed={armedTemplate}
                 onArm={setArmedTemplate}
@@ -268,7 +307,7 @@ export function CanvasView({ onExit }: { onExit?: () => void }) {
                 }}
               />
             )}
-            {showPlayers && (
+            {showPlayers && !hidePanels && (
               <PlayersActivityPanel
                 painters={engine.painters}
                 activity={engine.activity}
@@ -279,7 +318,7 @@ export function CanvasView({ onExit }: { onExit?: () => void }) {
                 revision={engine.revision}
               />
             )}
-            {showLeaderboard && (
+            {showLeaderboard && !hidePanels && (
               <LeaderboardPanel
                 painters={engine.painters}
                 onClose={() => setShowLeaderboard(false)}
@@ -298,13 +337,15 @@ export function CanvasView({ onExit }: { onExit?: () => void }) {
         onSecondary={setSecondary}
       />
 
-      <StatusBar
-        movesCoSigned={engine.status.movesCoSigned}
-        tps={tps}
-        agentCount={engine.agentCount}
-        phase={engine.status.phase}
-        onchain={engine.status.onchain}
-      />
+      {!hidePanels && (
+        <StatusBar
+          movesCoSigned={engine.status.movesCoSigned}
+          tps={tps}
+          agentCount={engine.agentCount}
+          phase={engine.status.phase}
+          onchain={engine.status.onchain}
+        />
+      )}
     </div>
   );
 }

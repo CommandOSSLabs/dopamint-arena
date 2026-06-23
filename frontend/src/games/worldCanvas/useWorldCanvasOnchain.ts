@@ -133,16 +133,22 @@ const AGENT_TINTS = [
 
 export type Seat = "A" | "B";
 
-/** Agent painting SPEED — the per-cell paint interval (ms). */
-export type AgentSpeed = "slow" | "normal" | "fast";
+/** Agent acceleration MULTIPLIER — the headline "tăng tốc" dial. Each tier is an
+ *  explicit ×N on the agent's co-signed cells/sec (x1 baseline → x8 burst). */
+export type AgentSpeed = "x1" | "x2" | "x4" | "x8";
 
-/** ms between an agent's co-signed paint TICKS, per speed tier. A tick co-signs a
- *  whole BATCH (below), so per-agent TPS = batch × 1000/interval. */
+/** ms between an agent's co-signed paint TICKS, per multiplier. Pure 1/N scaling of
+ *  the base tick interval, so the named ×N is literally the cells/sec multiplier:
+ *  per-agent TPS = batch × 1000/interval, batch is speed-independent (see agentBatch).
+ *  x1 = base (~8 ticks/s), x8 = 8× (~66 ticks/s) — a clear burst. */
 const AGENT_SPEED_INTERVALS: Record<AgentSpeed, number> = {
-  slow: 240,
-  normal: 120,
-  fast: 50,
+  x1: 120,
+  x2: 60,
+  x4: 30,
+  x8: 15,
 };
+/** The acceleration tiers, in ramp order — the source for the Speed pills/menu. */
+export const AGENT_SPEEDS: readonly AgentSpeed[] = ["x1", "x2", "x4", "x8"];
 
 /** Base cells co-signed per tick, by a mode's density class — the dense↔sparse TPS
  *  spread. Scaled by the speed tier and the user Density lever, then clamped. */
@@ -151,13 +157,7 @@ const DENSITY_BATCH: Record<AgentDensity, number> = {
   medium: 3,
   dense: 6,
 };
-/** Speed tier also widens/narrows the per-tick batch (faster ticks AND fuller ticks). */
-const SPEED_BATCH_MUL: Record<AgentSpeed, number> = {
-  slow: 0.6,
-  normal: 1,
-  fast: 1.6,
-};
-/** Hard ceiling on cells co-signed in a single tick, so even dense×fast×3 stays bounded
+/** Hard ceiling on cells co-signed in a single tick, so even dense×3 stays bounded
  *  (paints still rAF-coalesce + evict). Each batched cell is one independent verified
  *  co-signed move — booked once, never double-counted. */
 const BATCH_CAP = 12;
@@ -166,19 +166,15 @@ const DENSITY_LEVELS = [1, 2, 3] as const;
 const DEFAULT_DENSITY = 1;
 
 /**
- * Cells an agent co-signs THIS tick: `density(mode) × speed × userDensity`, clamped to
- * `[1, BATCH_CAP]`. Dense modes (flow / wash / grid) burst; sparse modes (stipple /
- * calligraphy) sip — so the Intelligence pill is a real TPS dial at a fixed Speed.
+ * Cells an agent co-signs THIS tick: `density(mode) × userDensity`, clamped to
+ * `[1, BATCH_CAP]`. Speed is deliberately NOT a factor here — the Speed multiplier
+ * scales the TICK RATE (interval) instead, so x1/x2/x4/x8 stays an honest ×N on
+ * cells/sec rather than compounding with batch. Dense modes (flow / wash / grid)
+ * burst; sparse modes (stipple / calligraphy) sip — the Intelligence pill is the
+ * per-tick TPS dial, Density the per-tick multiplier, Speed the tick-rate multiplier.
  */
-function agentBatch(
-  modeId: AgentModeId,
-  speed: AgentSpeed,
-  userDensity: number,
-): number {
-  const base =
-    DENSITY_BATCH[AGENT_MODES[modeId].density] *
-    SPEED_BATCH_MUL[speed] *
-    userDensity;
+function agentBatch(modeId: AgentModeId, userDensity: number): number {
+  const base = DENSITY_BATCH[AGENT_MODES[modeId].density] * userDensity;
   return Math.max(1, Math.min(BATCH_CAP, Math.round(base)));
 }
 
@@ -465,7 +461,7 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
   const [agentCount, setAgentCount] = useState(0);
   const [agents, setAgents] = useState<AgentMarker[]>([]);
   const [focus, setFocus] = useState<CanvasFocus | null>(null);
-  const [agentSpeed, setAgentSpeedState] = useState<AgentSpeed>("normal");
+  const [agentSpeed, setAgentSpeedState] = useState<AgentSpeed>("x1");
   const [agentMode, setAgentModeState] = useState<AgentModeId>(DEFAULT_AGENT_MODE);
   const [agentDensity, setAgentDensityState] = useState<number>(DEFAULT_DENSITY);
   const [agentTemplate, setAgentTemplateState] = useState<string | null>(null);
@@ -489,7 +485,7 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
   const rafRef = useRef<number | null>(null);
   // Current speed/mode for new spawns, mirrored into refs so the paint loop can read
   // them without re-subscribing.
-  const agentSpeedRef = useRef<AgentSpeed>("normal");
+  const agentSpeedRef = useRef<AgentSpeed>("x1");
   const agentModeRef = useRef<AgentModeId>(DEFAULT_AGENT_MODE);
   // The Density lever is global (a TPS dial), read live by the paint loop.
   const agentDensityRef = useRef<number>(DEFAULT_DENSITY);
@@ -896,8 +892,10 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
 
   // One paint tick for an agent: pull a clamped BATCH of cells from its mode's stream
   // and co-sign each (one verified step = one action = one TPS, never double-counted).
-  // The batch size is `density(mode) × speed × Density-lever`, so dense modes burst and
-  // sparse modes sip at the same Speed. When the stream ends (finite mode) or the region
+  // The batch size is `density(mode) × Density-lever`; the Speed multiplier scales the
+  // tick RATE (reschedule interval) instead, so x1/x2/x4/x8 is an honest ×N on cells/sec.
+  // Dense modes burst and sparse modes sip at the same Speed. When the stream ends
+  // (finite mode) or the region
   // cap is hit (endless mode), relocate to a fresh region and read the live `mode`/footprint
   // there — so a live mode change applies cleanly on the agent's next region. Then it
   // self-reschedules at its CURRENT speed (a live speed change lands on the next tick).
@@ -907,7 +905,7 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
       if (!st) return; // agent stopped/removed → the timer chain ends here
       const run = runsRef.current.get(st.painter);
       if (run && !run.closed && run.ready && run.tunnel) {
-        const batch = agentBatch(st.mode, st.speed, agentDensityRef.current);
+        const batch = agentBatch(st.mode, agentDensityRef.current);
         for (let k = 0; k < batch; k++) {
           let cell: DesignCell | null = null;
           if (st.painted < st.maxCells) {
