@@ -1,10 +1,12 @@
 import { register } from "../registry";
-import { makePlaceholder } from "../GamePlaceholder";
+import { ChatWindow } from "./ChatWindow";
 
 register({
   id: "chat",
-  name: "Chat",
-  icon: "💬",
+  name: "AI Chat",
+  icon: "🤖",
   image: "/games/chat-app.png",
-  Window: makePlaceholder("Chat"),
+  Window: ChatWindow,
+  defaultSize: { w: 4, h: 5 },
+  minSize: { w: 3, h: 3 },
 });

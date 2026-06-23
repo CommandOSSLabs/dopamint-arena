@@ -7,7 +7,7 @@ import "./bombIt";
 import "./quantumPoker";
 import "./ticTacToe";
 import "./battleship";
-// import "./chat";
+import "./chat";
 // import "./regularPayments";
 // Hidden for now — re-enable by uncommenting.
 // import "./coinFlip";
