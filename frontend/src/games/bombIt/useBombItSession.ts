@@ -38,20 +38,26 @@ import {
   sessionResult,
   stepMultiGame,
   SOLO_STEP_MS,
+  type StepOutcome,
   type BombItView,
   type BombItResult,
 } from "./session-core";
 
 /**
- * Bomb It is a REACTION game, so its solo loop advances ONE co-signed tick per SOLO_STEP_MS
- * rather than batching many ticks per frame like chicken-cross's throughput showcase. That keeps
- * the bomb fuse and the bot fight legible (fuse ≈ FUSE_TICKS * SOLO_STEP_MS ≈ 1s) — at the batched
- * rate the 8-tick fuse burned in ~50ms, so a manual drop was instant death and a bot duel a blur.
- * One tick per interval is also negligible crypto per frame, so the CPU stays cool without a cap.
+ * Bomb It paces by mode. AUTOPILOT (the default + the throughput benchmark) batches many co-signed
+ * ticks per frame under a time budget — the SAME ~500 TPS loop chicken-cross uses, with the budget
+ * keeping the CPU cool. MANUAL play (you take over) instead co-signs ONE tick per SOLO_STEP_MS, so
+ * the bomb fuse and the fight stay reactable (fuse ≈ FUSE_TICKS * SOLO_STEP_MS ≈ 1s) — at the
+ * batched rate the 8-tick fuse burns in ~50ms, unplayable by hand. `this.auto` is read fresh each
+ * frame, so flipping autopilot switches the pace live.
  */
 
 /** A beat between finished duels so the result + updated score register before the rematch. */
 const BOMB_REMATCH_MS = 700;
+/** Autopilot throughput loop (mirrors chicken-cross): co-sign up to MAX_STEPS_PER_FRAME ticks per
+ *  FRAME_BUDGET_MS, then yield one frame — a fixed ~20% CPU duty so TPS is high yet the CPU cool. */
+const FRAME_BUDGET_MS = 10;
+const MAX_STEPS_PER_FRAME = 8;
 
 /** DOPAMINT bank locked per seat (1 DOPAMINT, 9 decimals) — funds MANY per-game stakes. */
 const LOCKED_PER_SEAT = 1_000_000_000n;
@@ -293,11 +299,11 @@ class BombBotSession {
   }
 
   /**
-   * Drive the multi-game duel. Bomb It is a reaction game, so it co-signs ONE tick per
-   * SOLO_STEP_MS (the human-scale cadence the fuse needs) — not cross's per-frame batch.
-   * Across duel boundaries: when a duel ends, record the result and EITHER loop into the
-   * next duel on the same tunnel (autopilot on, fundable, no settle pending) OR stop and
-   * leave the result on screen. Settlement is never automatic — the player calls {@link settleNow}.
+   * Drive the multi-game duel. AUTOPILOT batches co-signed ticks under a per-frame time budget
+   * (the ~500 TPS benchmark loop, shared with chicken-cross); MANUAL co-signs one legible tick per
+   * SOLO_STEP_MS. Across duel boundaries: when a duel ends, record the result and EITHER loop into
+   * the next duel on the same tunnel (autopilot on, fundable, no settle pending) OR stop and leave
+   * the result on screen. Settlement is never automatic — the player calls {@link settleNow}.
    */
   private advance = async () => {
     if (this.advancing) return;
@@ -307,28 +313,42 @@ class BombBotSession {
     const protocol = this.protocol;
     try {
       while (tunnel && protocol) {
-        // Manual: only act on the player's queued action; otherwise the seat stays put.
-        const human = this.auto
-          ? null
-          : {
-              seat: HUMAN_SEAT,
-              getAction: () => {
-                const a = this.pendingAction ?? "stay";
-                this.pendingAction = undefined;
-                return a;
-              },
-            };
-        const boundary = stepMultiGame(protocol, tunnel, Math.random, human);
+        let boundary: StepOutcome = "stepped";
+        if (this.auto) {
+          // Throughput benchmark: co-sign as many ticks as fit the frame budget, then yield once.
+          // Render + heartbeat run once per frame (below), not per tick — that decoupling is what
+          // keeps TPS high without pegging the CPU (same as chicken-cross / battleship).
+          const deadline = performance.now() + FRAME_BUDGET_MS;
+          for (let n = 0; n < MAX_STEPS_PER_FRAME; n++) {
+            boundary = stepMultiGame(protocol, tunnel, Math.random, null);
+            if (boundary !== "stepped") break;
+            this.moveCount += 1;
+            this.actions += 1;
+            if (performance.now() >= deadline) break;
+          }
+        } else {
+          // Manual: act on the player's queued action this tick; otherwise the seat stays put.
+          const human = {
+            seat: HUMAN_SEAT,
+            getAction: () => {
+              const a = this.pendingAction ?? "stay";
+              this.pendingAction = undefined;
+              return a;
+            },
+          };
+          boundary = stepMultiGame(protocol, tunnel, Math.random, human);
+          if (boundary === "stepped") {
+            this.moveCount += 1;
+            this.actions += 1;
+          }
+        }
+        this.pushView();
+        this.flushHeartbeat(false);
         if (boundary === "stepped") {
-          this.moveCount += 1;
-          this.actions += 1;
-          this.pushView();
-          this.flushHeartbeat(false);
-          await sleep(SOLO_STEP_MS);
+          await sleep(this.auto ? 0 : SOLO_STEP_MS);
           if (this.gen !== myGen || this.tunnel !== tunnel) return;
           continue;
         }
-        this.pushView();
         if (boundary === "session-over") {
           this.recordGameResult(); // tally the final decided duel (idempotent via lastScoredGames)
           this.pushView();
