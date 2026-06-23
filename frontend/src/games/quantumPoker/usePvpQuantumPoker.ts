@@ -55,6 +55,8 @@ import {
   listActiveTunnels,
 } from "@/pvp/resume";
 import { makePokerResumeAdapter } from "./pokerResumeAdapter";
+import { makeSeatBot, randomPokerPersona, type PokerSeatBot } from "./pokerSelfPlay";
+import type { BotContext } from "@/agent/gameKit";
 
 /** Locked per seat: 1 DOPAMINT (9 decimals). */
 export const STAKE_BALANCE = 1_000_000_000n;
@@ -70,6 +72,11 @@ const SHOWDOWN_DELAY_MS = PLUMBING_DELAY_MS * 2;
 /** The hand-over result holds the longest — a ~5s pause on the win/loss before the next hand is
  *  dealt, so the outcome clearly registers. */
 const HAND_OVER_DELAY_MS = 5_000;
+/** Pacing for an auto-mode persona bet: watchable, well under TURN_SECONDS so the turn timer
+ *  never fires while the bot is representing this seat. */
+const AUTO_BET_DELAY_MS = 700; // watchable, well under TURN_SECONDS so the turn timer never fires
+/** Real-time RNG context for the auto-mode persona bot (live play, not a seeded replay). */
+const AUTO_BOT_CTX: BotContext = { rngForSeat: () => Math.random };
 /** Matchmaking queue id — both seats must request the same game. */
 const GAME_ID = "quantum-poker";
 /** Auto check (else fold) if a seat doesn't act within this many seconds. */
@@ -118,6 +125,10 @@ export interface PvpQuantumPoker {
   endRequested: boolean;
   /** End the match cooperatively after the current hand — stop dealing and settle at the current balances. */
   requestSettle: () => void;
+  /** True when the persona bot is auto-playing this seat's bets. */
+  auto: boolean;
+  /** Toggle auto-play: when on, a persona bot makes this seat's betting moves. */
+  setAuto: (on: boolean) => void;
   reset: () => void;
 }
 
@@ -238,6 +249,7 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
   const [error, setError] = useState<string | null>(null);
   const [secondsLeft, setSecondsLeft] = useState<number | null>(null);
   const [endRequested, setEndRequested] = useState(false);
+  const [auto, setAutoState] = useState(false);
 
   const mpRef = useRef<MpClient | null>(null);
   const dtRef = useRef<PokerTunnel | null>(null);
@@ -246,6 +258,11 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
   // Dedupe auto-proposals: at most one scheduled plumbing move per target nonce, so a
   // commit's secrets are generated exactly once (regenerating would orphan the commitment).
   const autoNonceRef = useRef<bigint>(-1n);
+  // Auto mode: a persona bot drives this seat's BETTING. `autoRef` mirrors `auto` for use inside
+  // the imperative move loop (closures that read it after toggles); `autoBotRef` is the stateless
+  // kit bot built once per match.
+  const autoRef = useRef(false);
+  const autoBotRef = useRef<PokerSeatBot | null>(null);
   const transcriptRef = useRef<Transcript | null>(null);
   const channelRef = useRef<PvpChannel | null>(null);
   const detachResumeRef = useRef<(() => void) | null>(null);
@@ -272,6 +289,9 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
     driverRef.current = null;
     selfPartyRef.current = null;
     autoNonceRef.current = -1n;
+    autoRef.current = false;
+    autoBotRef.current = null;
+    setAutoState(false);
     transcriptRef.current = null;
     channelRef.current = null;
     endRef.current = false;
@@ -297,16 +317,29 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
     if (endRef.current && dt.state.phase === "hand_over") return;
     const targetNonce = dt.nonce + 1n;
     if (autoNonceRef.current === targetNonce) return;
-    if (plumbingProposer(dt.state) !== self) return;
-    const move = driver.chooseMove(dt.state, secureRng); // commit secrets minted here, once
+    // Plumbing (commit/reveal/next_hand) is always auto-driven by the seat driver. In AUTO mode the
+    // persona bot also drives this seat's BETTING, so the bot fully represents the player. The kit
+    // bot is stateless — plan() decides purely from public state.
+    let move: PokerMove | null = null;
+    let delay = PLUMBING_DELAY_MS;
+    if (plumbingProposer(dt.state) === self) {
+      move = driver.chooseMove(dt.state, secureRng); // commit secrets minted here, once
+      delay =
+        dt.state.phase === "hand_over"
+          ? HAND_OVER_DELAY_MS
+          : dt.state.phase === "showdown"
+            ? SHOWDOWN_DELAY_MS
+            : PLUMBING_DELAY_MS;
+    } else if (
+      autoRef.current &&
+      BET_PHASES.has(dt.state.phase) &&
+      dt.state.toAct === self
+    ) {
+      move = autoBotRef.current?.plan(dt.state) ?? null; // persona picks bet/call/check/fold
+      delay = AUTO_BET_DELAY_MS;
+    }
     if (!move) return;
     autoNonceRef.current = targetNonce;
-    const delay =
-      dt.state.phase === "hand_over"
-        ? HAND_OVER_DELAY_MS
-        : dt.state.phase === "showdown"
-          ? SHOWDOWN_DELAY_MS
-          : PLUMBING_DELAY_MS;
     window.setTimeout(() => {
       const live = dtRef.current;
       if (!live || live.nonce + 1n !== targetNonce) return;
@@ -319,6 +352,15 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
       }
     }, delay);
   }, [sync]);
+
+  const setAuto = useCallback(
+    (on: boolean) => {
+      autoRef.current = on;
+      setAutoState(on);
+      if (on) maybeAutoPropose(); // act now if it's already our betting turn
+    },
+    [maybeAutoPropose],
+  );
 
   const propose = useCallback(
     (move: PokerMove) => {
@@ -389,6 +431,13 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
 
       dtRef.current = dt;
       driverRef.current = new QuantumPokerSeatDriver(info.role);
+      autoBotRef.current = makeSeatBot(
+        info.role,
+        STAKE_BALANCE,
+        HAND_CAP,
+        randomPokerPersona(Math.random),
+        AUTO_BOT_CTX,
+      );
       autoNonceRef.current = -1n;
 
       // Single cooperative close — at match end, or early once a seat asked to settle. Guarded so
@@ -784,6 +833,8 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
     bet,
     endRequested,
     requestSettle,
+    auto,
+    setAuto,
     reset,
   };
 }

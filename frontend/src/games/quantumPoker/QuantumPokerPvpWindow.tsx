@@ -338,6 +338,25 @@ export function QuantumPokerPvpWindow(_props: GameWindowProps) {
             <span className="text-slate-300">{(s.handNo + 1n).toString()}</span>
             /{HAND_CAP.toString()}
           </span>
+          {g.status === "playing" && (
+            <button
+              type="button"
+              onClick={() => g.setAuto(!g.auto)}
+              title={
+                g.auto
+                  ? "Auto mode on — a persona bot is making your bets"
+                  : "Let a persona bot play your hand"
+              }
+              className={[
+                "rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.12em] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--qp-lilac)]/60",
+                g.auto
+                  ? "border border-[var(--qp-mint)]/60 bg-[var(--qp-mint)]/15 text-[var(--qp-mint)] shadow-[0_0_12px_-4px_var(--qp-mint)]"
+                  : "border border-white/15 text-slate-300 hover:bg-white/5",
+              ].join(" ")}
+            >
+              🤖 Auto{g.auto ? " ON" : ""}
+            </button>
+          )}
           {g.status === "playing" &&
             !terminal &&
             (g.endRequested ? (
@@ -403,7 +422,21 @@ export function QuantumPokerPvpWindow(_props: GameWindowProps) {
       {/* Action bar — pinned, always visible so the hand can advance */}
       <div className="flex min-h-[2.25rem] shrink-0 flex-wrap items-center justify-center gap-1">
         {g.myTurnToBet && legal ? (
-          <>
+          <div
+            className={[
+              "flex flex-wrap items-center justify-center gap-1 transition-opacity",
+              // Auto mode keeps the manual controls functional but visually recedes them — the
+              // persona bot is acting; a tap still lets the player override.
+              g.auto ? "opacity-40" : "opacity-100",
+            ].join(" ")}
+          >
+            {g.auto && (
+              <span
+                className={`${EYEBROW} w-full text-center text-[9px] text-[var(--qp-mint)]`}
+              >
+                🤖 Bot is playing your hand
+              </span>
+            )}
             {g.secondsLeft != null && (
               <span
                 className={[
@@ -468,7 +501,7 @@ export function QuantumPokerPvpWindow(_props: GameWindowProps) {
                 All-in · {fmt(allIn)}
               </button>
             )}
-          </>
+          </div>
         ) : (
           <div
             className={[
