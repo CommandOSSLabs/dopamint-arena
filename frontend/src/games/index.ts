@@ -1,12 +1,12 @@
 // Import each game module for its register() side-effect. The registration
 // order here is the order windows open and tile on the desktop. Add new games
 // here (one folder per game so each owner ships theirs independently).
-import "./blackjack";
+// import "./blackjack";
 import "./quantumPoker";
-import "./ticTacToe";
+// import "./ticTacToe";
 import "./battleship";
 // import "./chat";
-// import "./regularPayments";
+import "./regularPayments";
 // Hidden for now — re-enable by uncommenting.
 // import "./coinFlip";
 // import "./dice";
