@@ -405,3 +405,10 @@ an **OSM basemap via MapLibre** (free, no token — **never Mapbox**), Web-Merca
 cooldown, and human-vs-hub tunnels; Phase 2 shards for scale. Model the protocol on `chat.ts` (append-only
 + `rollingDigest`, free-mode draw). The one thing to keep honest throughout: only call it genuine-tunnel
 TPS when the hub is a real co-signing party over the relay.
+
+## 8. Build references
+
+- **[hmldns/pix-canvas](https://github.com/hmldns/pix-canvas)** — reference for the pixel-canvas **drawing**: the infinite chunked canvas, pan/zoom camera, pixel placement, and chunk load/evict loop. Mine its rendering pipeline for the §3.3 chunk system.
+- **[nianez/game-ui](https://github.com/nianez/game-ui)** — reference for the arena **game UI** (the earlier 2D version, **not** the latest 3D). Mine its component look + layout for the World Canvas window.
+
+> Study these when starting Phase 0 (canvas-only infinite chunked wall + the Agent-AI button); adapt, don't copy wholesale.
