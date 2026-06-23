@@ -60,10 +60,47 @@ function chunkOf(g: number): number {
   return Math.floor(g / CHUNK_SIZE);
 }
 
+/**
+ * Bresenham line rasterization between two cells (both endpoints inclusive). A drag
+ * only delivers discrete pointer samples; at speed those samples can be many cells
+ * apart. Walking the line between successive samples lays a gap-free trail, so a
+ * fast flick still paints a continuous stroke instead of a dotted one.
+ */
+function interpolateCells(
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+): GlobalCell[] {
+  const cells: GlobalCell[] = [];
+  const dx = Math.abs(x1 - x0);
+  const dy = Math.abs(y1 - y0);
+  const sx = x0 < x1 ? 1 : -1;
+  const sy = y0 < y1 ? 1 : -1;
+  let err = dx - dy;
+  let x = x0;
+  let y = y0;
+  for (;;) {
+    cells.push({ gx: x, gy: y });
+    if (x === x1 && y === y1) break;
+    const e2 = 2 * err;
+    if (e2 > -dy) {
+      err -= dy;
+      x += sx;
+    }
+    if (e2 < dx) {
+      err += dx;
+      y += sy;
+    }
+  }
+  return cells;
+}
+
 export function WorldCanvas({
   paints,
   revision,
   selectedColor,
+  brushSize,
   disabled,
   onPaint,
   agents,
@@ -76,6 +113,8 @@ export function WorldCanvas({
   revision: number;
   /** Palette index `[0, 16)` placed on click. */
   selectedColor: number;
+  /** Brush footprint edge in cells (1/2/3): each sampled point paints an N×N block. */
+  brushSize: number;
   /** True while the tunnel is opening — show a grab cursor, swallow paints. */
   disabled: boolean;
   /** Place one cell: chunk (cx,cy) + in-chunk (x,y) + color → one co-signed move. */
@@ -120,10 +159,20 @@ export function WorldCanvas({
 
   const selColorRef = useRef(selectedColor);
   selColorRef.current = selectedColor;
+  const brushSizeRef = useRef(brushSize);
+  brushSizeRef.current = brushSize;
   const paintsRef = useRef(paints);
   paintsRef.current = paints;
   const revisionRef = useRef(revision);
   revisionRef.current = revision;
+
+  // Cells already painted in the active pointer stroke. A drag interpolates and
+  // overlaps brush blocks, so this set keeps every cell to exactly ONE co-signed
+  // move (no wasted/duplicate co-signs within a single stroke). Cleared on stroke end.
+  const strokeSet = useRef<Set<string>>(new Set());
+  // Hold Space to pan with a left-drag instead of painting (paint-app convention),
+  // so panning stays reachable without surrendering left-drag as the brush.
+  const spacePressed = useRef(false);
 
   const [hud, setHud] = useState<{
     zoom: number;
@@ -137,6 +186,22 @@ export function WorldCanvas({
     if (!focus) return;
     focusTarget.current = { gcx: focus.gx, gcy: focus.gy, scale: FOCUS_SCALE };
   }, [focus?.seq]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Track the Space key so a left-drag pans (instead of paints) while it's held.
+  useEffect(() => {
+    const down = (e: KeyboardEvent) => {
+      if (e.code === "Space") spacePressed.current = true;
+    };
+    const up = (e: KeyboardEvent) => {
+      if (e.code === "Space") spacePressed.current = false;
+    };
+    window.addEventListener("keydown", down);
+    window.addEventListener("keyup", up);
+    return () => {
+      window.removeEventListener("keydown", down);
+      window.removeEventListener("keyup", up);
+    };
+  }, []);
 
   const cellAt = (sx: number, sy: number): GlobalCell => {
     const v = view.current;
@@ -165,9 +230,40 @@ export function WorldCanvas({
     return c;
   };
 
-  // Fold every paint with a never-seen co-signed seq into its chunk's buffer +
-  // RGBA image (O(1) per new cell), marking the chunk dirty. Gated on `revision`
-  // so the map is scanned at most once per change, not once per render frame.
+  // Raster one cell into its chunk's buffer + RGBA image (O(1)), grow the painted-
+  // content bbox, and mark the chunk dirty for the next frame's re-blit. Shared by
+  // the authoritative `syncPaints` (co-signed paints folded in by seq) and the
+  // optimistic in-stroke echo (`paintLocal`), so both write pixels identically.
+  const writeCell = (gx: number, gy: number, color: number) => {
+    const cx = chunkOf(gx);
+    const cy = chunkOf(gy);
+    const key = `${cx},${cy}`;
+    const chunk = ensureChunk(key);
+    if (!chunk) return;
+    const bb = bbox.current;
+    if (!bb) {
+      bbox.current = { minX: gx, minY: gy, maxX: gx, maxY: gy };
+    } else {
+      if (gx < bb.minX) bb.minX = gx;
+      if (gy < bb.minY) bb.minY = gy;
+      if (gx > bb.maxX) bb.maxX = gx;
+      if (gy > bb.maxY) bb.maxY = gy;
+    }
+    const idx = (gy - cy * CHUNK_SIZE) * CHUNK_SIZE + (gx - cx * CHUNK_SIZE);
+    chunk.buf[idx] = color + 1;
+    const [r, g, b] = PALETTE_RGB[color] ?? [255, 255, 255];
+    const o = idx * 4;
+    chunk.img.data[o] = r;
+    chunk.img.data[o + 1] = g;
+    chunk.img.data[o + 2] = b;
+    chunk.img.data[o + 3] = 255;
+    dirty.current.add(key);
+  };
+
+  // Fold every paint with a never-seen co-signed seq into the render store. Gated on
+  // `revision` so the map is scanned at most once per change, not once per frame.
+  // Optimistic in-stroke writes have usually already rastered these exact pixels;
+  // re-folding them here is idempotent and reconciles any overpaint by another seat.
   const syncPaints = () => {
     if (syncedRevision.current === revisionRef.current) return;
     syncedRevision.current = revisionRef.current;
@@ -175,32 +271,11 @@ export function WorldCanvas({
     for (const cell of paintsRef.current.values()) {
       if (cell.seq <= appliedSeq.current) continue;
       if (cell.seq > maxSeq) maxSeq = cell.seq;
-      const cx = Number(cell.cx);
-      const cy = Number(cell.cy);
-      const key = `${cx},${cy}`;
-      const chunk = ensureChunk(key);
-      if (!chunk) continue;
-      // Grow the painted-content bbox (global pixels) for the fit-to-content reset.
-      const gx = cx * CHUNK_SIZE + cell.x;
-      const gy = cy * CHUNK_SIZE + cell.y;
-      const bb = bbox.current;
-      if (!bb) {
-        bbox.current = { minX: gx, minY: gy, maxX: gx, maxY: gy };
-      } else {
-        if (gx < bb.minX) bb.minX = gx;
-        if (gy < bb.minY) bb.minY = gy;
-        if (gx > bb.maxX) bb.maxX = gx;
-        if (gy > bb.maxY) bb.maxY = gy;
-      }
-      const idx = cell.y * CHUNK_SIZE + cell.x;
-      chunk.buf[idx] = cell.color + 1;
-      const [r, g, b] = PALETTE_RGB[cell.color] ?? [255, 255, 255];
-      const o = idx * 4;
-      chunk.img.data[o] = r;
-      chunk.img.data[o + 1] = g;
-      chunk.img.data[o + 2] = b;
-      chunk.img.data[o + 3] = 255;
-      dirty.current.add(key);
+      writeCell(
+        Number(cell.cx) * CHUNK_SIZE + cell.x,
+        Number(cell.cy) * CHUNK_SIZE + cell.y,
+        cell.color,
+      );
     }
     appliedSeq.current = maxSeq;
   };
@@ -326,13 +401,18 @@ export function WorldCanvas({
         drawAgentMarker(ctx, cxs, topYs, a.label, a.flagName, a.tint);
       }
 
-      // Ghost preview of the selected color under the cursor + hover outline.
+      // Ghost preview of the selected color under the cursor + hover outline, sized
+      // to the brush footprint (so a bigger brush previews the whole N×N block).
       const hc = hover.current;
       if (hc) {
-        const px = Math.floor(v.offsetX + hc.gx * v.scale);
-        const py = Math.floor(v.offsetY + hc.gy * v.scale);
-        const pw = Math.floor(v.offsetX + (hc.gx + 1) * v.scale) - px;
-        const ph = Math.floor(v.offsetY + (hc.gy + 1) * v.scale) - py;
+        const n = brushSizeRef.current;
+        const off = Math.floor(n / 2);
+        const gx0 = hc.gx - off;
+        const gy0 = hc.gy - off;
+        const px = Math.floor(v.offsetX + gx0 * v.scale);
+        const py = Math.floor(v.offsetY + gy0 * v.scale);
+        const pw = Math.floor(v.offsetX + (gx0 + n) * v.scale) - px;
+        const ph = Math.floor(v.offsetY + (gy0 + n) * v.scale) - py;
         if (!disabled) {
           ctx.globalAlpha = 0.5;
           ctx.fillStyle = PALETTE[selColorRef.current] ?? "#fff";
@@ -391,12 +471,16 @@ export function WorldCanvas({
     return () => cancelAnimationFrame(raf);
   }, [disabled]);
 
-  // Drag pans; a tap (no pan) places a pixel.
+  // A pointer gesture is EITHER a paint stroke (left-drag) or a pan (right/space
+  // drag). `last` is the previous painted cell, the anchor the next sample
+  // interpolates from so the stroke stays gap-free.
   const drag = useRef<{
     lastX: number;
     lastY: number;
     moved: number;
     panning: boolean;
+    painting: boolean;
+    last: GlobalCell | null;
   } | null>(null);
 
   const localXY = (e: { clientX: number; clientY: number }) => {
@@ -404,7 +488,18 @@ export function WorldCanvas({
     return { sx: e.clientX - rect.left, sy: e.clientY - rect.top };
   };
 
+  // Paint ONE cell of the active stroke: dedupe against the stroke set, echo it into
+  // the local raster INSTANTLY (optimistic — no waiting on the co-sign), then fire
+  // the co-sign without awaiting. The tunnel is off-chain, so `onPaint` co-signs
+  // near-instantly; we still never block the pointer loop on it. One newly-painted
+  // cell = one co-signed move.
   const placeAt = (cell: GlobalCell) => {
+    if (disabled) return;
+    const key = `${cell.gx},${cell.gy}`;
+    if (strokeSet.current.has(key)) return; // already co-signed this stroke
+    strokeSet.current.add(key);
+    const color = selColorRef.current;
+    writeCell(cell.gx, cell.gy, color); // instant optimistic echo
     const cx = chunkOf(cell.gx);
     const cy = chunkOf(cell.gy);
     onPaint(
@@ -412,41 +507,82 @@ export function WorldCanvas({
       BigInt(cy),
       cell.gx - cx * CHUNK_SIZE,
       cell.gy - cy * CHUNK_SIZE,
-      selColorRef.current,
+      color,
     );
+  };
+
+  // Stamp the brush footprint (an N×N block) centered on a cell. Each cell is an
+  // independent dedup'd co-signed move, so a bigger brush is just more cells/TPS.
+  const stampBrush = (center: GlobalCell) => {
+    const n = brushSizeRef.current;
+    const off = Math.floor(n / 2);
+    for (let dy = 0; dy < n; dy++) {
+      for (let dx = 0; dx < n; dx++) {
+        placeAt({ gx: center.gx - off + dx, gy: center.gy - off + dy });
+      }
+    }
   };
 
   const onPointerDown = (e: React.PointerEvent) => {
     focusTarget.current = null; // user takes the wheel; cancel any active jump
     (e.target as Element).setPointerCapture?.(e.pointerId);
     const { sx, sy } = localXY(e);
-    drag.current = { lastX: sx, lastY: sy, moved: 0, panning: false };
+    const cell = cellAt(sx, sy);
+    hover.current = cell;
+    // Left button with no Space modifier draws; right/middle button or held Space
+    // pans. A disabled wall never paints, but may still be panned.
+    const wantsPan = e.button !== 0 || spacePressed.current;
+    const painting = !wantsPan && !disabled;
+    drag.current = {
+      lastX: sx,
+      lastY: sy,
+      moved: 0,
+      panning: wantsPan,
+      painting,
+      last: painting ? cell : null,
+    };
+    if (painting) {
+      strokeSet.current.clear(); // start a fresh stroke
+      stampBrush(cell); // a plain click already paints its cell
+    }
   };
   const onPointerMove = (e: React.PointerEvent) => {
     const { sx, sy } = localXY(e);
-    hover.current = cellAt(sx, sy);
+    const cell = cellAt(sx, sy);
+    hover.current = cell;
     const d = drag.current;
     if (!d) return;
     const dx = sx - d.lastX;
     const dy = sy - d.lastY;
     d.moved += Math.abs(dx) + Math.abs(dy);
-    if (d.moved > TAP_SLOP) d.panning = true;
-    if (d.panning) {
-      view.current.offsetX += dx;
-      view.current.offsetY += dy;
+
+    if (d.painting) {
+      // Continuous stroke: rasterize the line from the last painted cell to this one
+      // (samples can be many cells apart on a fast drag), stamping the brush at each
+      // step. Per-cell dedupe keeps every cell to exactly one co-signed move.
+      const from = d.last ?? cell;
+      for (const c of interpolateCells(from.gx, from.gy, cell.gx, cell.gy)) {
+        stampBrush(c);
+      }
+      d.last = cell;
+    } else {
+      if (d.moved > TAP_SLOP) d.panning = true;
+      if (d.panning) {
+        view.current.offsetX += dx;
+        view.current.offsetY += dy;
+      }
     }
     d.lastX = sx;
     d.lastY = sy;
   };
-  const onPointerUp = (e: React.PointerEvent) => {
+  const onPointerUp = () => {
     const d = drag.current;
     drag.current = null;
-    if (!d || d.panning || disabled) return;
-    const { sx, sy } = localXY(e);
-    placeAt(cellAt(sx, sy));
+    if (d?.painting) strokeSet.current.clear(); // end the stroke
   };
   const onPointerLeave = () => {
     hover.current = null;
+    if (drag.current?.painting) strokeSet.current.clear();
     drag.current = null;
   };
 
@@ -507,6 +643,7 @@ export function WorldCanvas({
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerLeave={onPointerLeave}
+        onContextMenu={(e) => e.preventDefault()}
         onWheel={onWheel}
         style={{
           touchAction: "none",

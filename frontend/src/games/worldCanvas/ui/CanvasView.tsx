@@ -20,6 +20,7 @@ import { WC, glass, agentPill, FONT_DISPLAY, FONT_MONO } from "./tokens";
 export function CanvasView() {
   const engine = useWorldCanvasOnchain();
   const [color, setColor] = useState(13); // default to Sui blue (index 13)
+  const [brushSize, setBrushSize] = useState(1); // 1×1 brush by default
   const tps = useRollingTps(engine.status.movesCoSigned);
 
   return (
@@ -31,6 +32,7 @@ export function CanvasView() {
         paints={engine.paints}
         revision={engine.revision}
         selectedColor={color}
+        brushSize={brushSize}
         disabled={engine.status.phase === "opening"}
         onPaint={engine.submitHumanPaint}
         agents={engine.agents}
@@ -76,7 +78,12 @@ export function CanvasView() {
       />
       <LeaderboardPanel painters={engine.painters} revision={engine.revision} />
 
-      <PaletteDock selected={color} onSelect={setColor} />
+      <PaletteDock
+        selected={color}
+        onSelect={setColor}
+        brushSize={brushSize}
+        onBrushSizeChange={setBrushSize}
+      />
     </div>
   );
 }
