@@ -5,16 +5,8 @@ import { usePvpChickenCross } from "./usePvpChickenCross";
 import { useChickenCrossSession } from "./useChickenCrossSession";
 import { CrossLobby } from "./components/CrossLobby";
 import { CrossBoard } from "./components/CrossBoard";
+import { CrossScreen } from "./components/CrossScreen";
 import "./cross.css";
-
-/** A transitional screen (funding / matching / error) on the game's atmospheric backdrop. */
-function Screen({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="cross-root">
-      <div className="arcade-card">{children}</div>
-    </div>
-  );
-}
 
 // Persisted by windowId so a remount (minimize / maximize / desktop reflow) returns to the live
 // PvP race instead of the chooser. Only "pvp" is stored — that session lives out-of-React and
@@ -63,18 +55,17 @@ export function ChickenCrossWindow({ windowId }: GameWindowProps) {
   if (mode === "solo") {
     if (solo.status === "error") {
       return (
-        <Screen>
-          <p className="text-sm text-red-400">{solo.error ?? "something went wrong"}</p>
-          <button className="arcade-cta arcade-cta--ghost" onClick={backToMenu}>Back</button>
-        </Screen>
+        <CrossScreen onBack={backToMenu}>
+          <p className="text-sm text-red-500">{solo.error ?? "something went wrong"}</p>
+        </CrossScreen>
       );
     }
     if (solo.status === "funding") {
       return (
-        <Screen>
-          <span className="arcade-title wal-doto text-gold" style={{ fontSize: 22 }}>FUNDING</span>
-          <p className="arcade-sub">Opening + funding the tunnel on-chain… approve in your wallet.</p>
-        </Screen>
+        <CrossScreen>
+          <span className="cross-lobby__title wal-doto">Funding</span>
+          <p className="cross-lobby__copy">Opening + funding the tunnel on-chain… approve in your wallet.</p>
+        </CrossScreen>
       );
     }
     if (
@@ -97,38 +88,35 @@ export function ChickenCrossWindow({ windowId }: GameWindowProps) {
       );
     }
     return (
-      <Screen>
-        <p className="arcade-sub">Loading…</p>
-      </Screen>
+      <CrossScreen>
+        <p className="cross-lobby__copy">Loading…</p>
+      </CrossScreen>
     );
   }
 
-  // PvP
   if (pvp.status === "error") {
     return (
-      <Screen>
-        <p className="text-sm text-red-400">{pvp.error ?? "something went wrong"}</p>
-        <button className="arcade-cta arcade-cta--ghost" onClick={backToMenu}>Back</button>
-      </Screen>
+      <CrossScreen onBack={backToMenu}>
+        <p className="text-sm text-red-500">{pvp.error ?? "something went wrong"}</p>
+      </CrossScreen>
     );
   }
 
   if (pvp.status === "matching") {
     return (
-      <Screen>
-        <span className="arcade-title wal-doto text-gold" style={{ fontSize: 20 }}>FINDING…</span>
-        <p className="arcade-sub">Matching you with the next player over the relay.</p>
-        <button className="arcade-cta arcade-cta--ghost" onClick={backToMenu}>Cancel</button>
-      </Screen>
+      <CrossScreen onBack={backToMenu} backLabel="Cancel">
+        <span className="cross-lobby__title wal-doto">Finding…</span>
+        <p className="cross-lobby__copy">Matching you with the next player over the relay.</p>
+      </CrossScreen>
     );
   }
 
   if (pvp.status === "funding") {
     return (
-      <Screen>
-        <span className="arcade-title wal-doto text-gold" style={{ fontSize: 22 }}>FUNDING</span>
-        <p className="arcade-sub">Opening + funding the tunnel on-chain… approve in your wallet.</p>
-      </Screen>
+      <CrossScreen>
+        <span className="cross-lobby__title wal-doto">Funding</span>
+        <p className="cross-lobby__copy">Opening + funding the tunnel on-chain… approve in your wallet.</p>
+      </CrossScreen>
     );
   }
 
@@ -150,8 +138,8 @@ export function ChickenCrossWindow({ windowId }: GameWindowProps) {
   }
 
   return (
-    <Screen>
-      <p className="arcade-sub">Loading…</p>
-    </Screen>
+    <CrossScreen>
+      <p className="cross-lobby__copy">Loading…</p>
+    </CrossScreen>
   );
 }

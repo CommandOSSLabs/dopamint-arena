@@ -65,7 +65,7 @@ export function useChickenCrossSession(): ChickenCrossSession {
   const [error, setError] = useState<string | null>(null);
   const [auto, setAutoState] = useState(true);
   const autoRef = useRef(true);
-  const myDirRef = useRef<CrossDir>("north");
+  const myDirRef = useRef<CrossDir | undefined>(undefined);
 
   const protocolRef = useRef<CrossProtocol | null>(null);
   const tunnelRef = useRef<OffchainTunnel<CrossState, CrossMove> | null>(null);
@@ -266,15 +266,14 @@ export function useChickenCrossSession(): ChickenCrossSession {
             // Co-sign ticks only until the per-frame time budget is spent, then yield: this is
             // what keeps TPS high yet the CPU cool (the rest of the frame stays idle).
             const deadline = performance.now() + FRAME_BUDGET_MS;
-            // Auto on → both chickens are bot-driven (your chicken autopilots). Auto off → your
-            // steered direction drives chicken A (auto-forward after each hop); the bot drives B.
+            // Manual: only hop when the player queued a direction; otherwise hold position.
             const human = autoRef.current
               ? null
               : {
                   seat: HUMAN_SEAT,
                   getDir: () => {
                     const d = myDirRef.current;
-                    myDirRef.current = "north";
+                    myDirRef.current = undefined;
                     return d;
                   },
                 };
@@ -332,7 +331,7 @@ export function useChickenCrossSession(): ChickenCrossSession {
   }, []);
   const toggleAuto = useCallback(() => {
     autoRef.current = !autoRef.current;
-    myDirRef.current = "north";
+    myDirRef.current = undefined;
     setAutoState(autoRef.current);
   }, []);
 

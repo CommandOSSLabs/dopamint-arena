@@ -5,16 +5,8 @@ import { usePvpBombIt } from "./usePvpBombIt";
 import { useBombItSession } from "./useBombItSession";
 import { BombLobby } from "./components/BombLobby";
 import { BombBoard } from "./components/BombBoard";
+import { BombScreen } from "./components/BombScreen";
 import "./bomb-it.css";
-
-/** A transitional screen (funding / matching / error) on the game's atmospheric backdrop. */
-function Screen({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="bomb-root">
-      <div className="arcade-card">{children}</div>
-    </div>
-  );
-}
 
 // Persisted by windowId so a remount (minimize / maximize / desktop reflow) returns to the live
 // PvP match instead of the chooser. Only "pvp" is stored — that session lives out-of-React and
@@ -63,18 +55,19 @@ export function BombItWindow({ windowId }: GameWindowProps) {
   if (mode === "solo") {
     if (solo.status === "error") {
       return (
-        <Screen>
-          <p className="text-sm text-red-400">{solo.error ?? "something went wrong"}</p>
-          <button className="arcade-cta arcade-cta--ghost" onClick={backToMenu}>Back</button>
-        </Screen>
+        <BombScreen onBack={backToMenu}>
+          <p className="text-sm text-rose-300">{solo.error ?? "something went wrong"}</p>
+        </BombScreen>
       );
     }
     if (solo.status === "funding") {
       return (
-        <Screen>
-          <span className="arcade-title wal-doto text-gold" style={{ fontSize: 22 }}>FUNDING</span>
-          <p className="arcade-sub">Opening + funding the tunnel on-chain… approve in your wallet.</p>
-        </Screen>
+        <BombScreen>
+          <span className="bomb-status-title wal-doto">Funding</span>
+          <p className="bomb-lobby__copy">
+            Opening + funding the tunnel on-chain… approve in your wallet.
+          </p>
+        </BombScreen>
       );
     }
     if (
@@ -95,38 +88,38 @@ export function BombItWindow({ windowId }: GameWindowProps) {
       );
     }
     return (
-      <Screen>
-        <p className="arcade-sub">Loading…</p>
-      </Screen>
+      <BombScreen>
+        <p className="bomb-lobby__copy">Loading…</p>
+      </BombScreen>
     );
   }
 
   // PvP
   if (pvp.status === "error") {
     return (
-      <Screen>
-        <p className="text-sm text-red-400">{pvp.error ?? "something went wrong"}</p>
-        <button className="arcade-cta arcade-cta--ghost" onClick={backToMenu}>Back</button>
-      </Screen>
+      <BombScreen onBack={backToMenu}>
+        <p className="text-sm text-rose-300">{pvp.error ?? "something went wrong"}</p>
+      </BombScreen>
     );
   }
 
   if (pvp.status === "matching") {
     return (
-      <Screen>
-        <span className="arcade-title wal-doto text-gold" style={{ fontSize: 20 }}>FINDING…</span>
-        <p className="arcade-sub">Matching you with the next player over the relay.</p>
-        <button className="arcade-cta arcade-cta--ghost" onClick={backToMenu}>Cancel</button>
-      </Screen>
+      <BombScreen onBack={backToMenu} backLabel="Cancel">
+        <span className="bomb-status-title wal-doto">Finding match</span>
+        <p className="bomb-lobby__copy">Matching you with the next player over the relay.</p>
+      </BombScreen>
     );
   }
 
   if (pvp.status === "funding") {
     return (
-      <Screen>
-        <span className="arcade-title wal-doto text-gold" style={{ fontSize: 22 }}>FUNDING</span>
-        <p className="arcade-sub">Opening + funding the tunnel on-chain… approve in your wallet.</p>
-      </Screen>
+      <BombScreen>
+        <span className="bomb-status-title wal-doto">Funding</span>
+        <p className="bomb-lobby__copy">
+          Opening + funding the tunnel on-chain… approve in your wallet.
+        </p>
+      </BombScreen>
     );
   }
 
@@ -146,8 +139,8 @@ export function BombItWindow({ windowId }: GameWindowProps) {
   }
 
   return (
-    <Screen>
-      <p className="arcade-sub">Loading…</p>
-    </Screen>
+    <BombScreen>
+      <p className="bomb-lobby__copy">Loading…</p>
+    </BombScreen>
   );
 }

@@ -12,7 +12,7 @@ import type { OffchainTunnel } from "sui-tunnel-ts/core/tunnel";
  *  seat each tick; the other seat (and both while auto is on) is driven by the protocol's bot. */
 export interface HumanSeat {
   seat: Party;
-  getDir: () => CrossDir;
+  getDir: () => CrossDir | undefined;
 }
 
 /** Flat, render-friendly snapshot of a CrossState (bigints -> numbers). */
@@ -76,6 +76,10 @@ export function deriveView(state: CrossState): CrossView {
  * the camera never scrolls past the finish; it is injected by the caller (the Vite-bundled board)
  * to keep this file's SDK imports type-only.
  */
+/** Lanes behind/ahead of your chicken on screen (top = forward). Tight window — you only. */
+const LANES_BEHIND = 3;
+const LANES_AHEAD = 4;
+
 export function visibleLanes(
   view: CrossView,
   myIndex: 0 | 1 | null,
@@ -85,8 +89,8 @@ export function visibleLanes(
     myIndex !== null
       ? view.players[myIndex]?.lane ?? 0
       : Math.max(view.players[0]?.lane ?? 0, view.players[1]?.lane ?? 0);
-  const min = Math.max(0, anchor - 3);
-  const max = Math.min(winLane, anchor + 7);
+  const min = Math.max(0, anchor - LANES_BEHIND);
+  const max = Math.min(winLane, anchor + LANES_AHEAD);
   const out: number[] = [];
   for (let L = max; L >= min; L--) out.push(L);
   return out;
