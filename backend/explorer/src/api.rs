@@ -3,11 +3,13 @@
 
 use std::sync::Arc;
 
-use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::extract::{Json as JsonBody, Path, Query, State};
+use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Json, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::Router;
+use bytes::Bytes;
+use futures::StreamExt;
 use shared::{LifecycleKind, SettlementQuery, SettlementStore};
 
 #[derive(Clone)]
@@ -29,12 +31,24 @@ pub struct ListParams {
     pub kind: Option<String>,
 }
 
+#[derive(serde::Deserialize)]
+pub struct ChatRequest {
+    pub messages: Vec<ChatMessage>,
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+pub struct ChatMessage {
+    pub role: String,
+    pub content: String,
+}
+
 pub fn router(state: ApiState) -> Router {
     Router::new()
         .route("/v1/settlements", get(list))
         .route("/v1/settlements/:digest", get(detail))
         .route("/v1/settlements/:digest/transcript", get(transcript))
         .route("/v1/stats/explorer", get(stats))
+        .route("/v1/chat", post(chat))
         .route("/health/ready", get(|| async { StatusCode::OK }))
         .with_state(state)
 }
@@ -115,6 +129,54 @@ async fn stats(State(s): State<ApiState>) -> Response {
         Err(e) => {
             tracing::error!(error = %e, "settlement store error");
             (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response()
+        }
+    }
+}
+
+async fn chat(State(s): State<ApiState>, JsonBody(req): JsonBody<ChatRequest>) -> Response {
+    let mut messages = vec![ChatMessage {
+        role: "system".into(),
+        content: "You are a helpful assistant.".into(),
+    }];
+    messages.extend(req.messages.into_iter().map(|m| ChatMessage {
+        role: m.role,
+        content: m.content,
+    }));
+
+    let body = serde_json::json!({
+        "model": s.llm_model,
+        "messages": messages,
+        "stream": true,
+    });
+
+    let url = format!("{}/api/chat", s.llm_base_url.trim_end_matches('/'));
+    let mut upstream = s.http.post(&url).json(&body);
+    if let Some(key) = &s.llm_api_key {
+        upstream = upstream.header(header::AUTHORIZATION, format!("Bearer {key}"));
+    }
+
+    match upstream.send().await {
+        Ok(resp) => {
+            if let Err(e) = resp.error_for_status_ref() {
+                let status = resp.status();
+                let text = resp.text().await.unwrap_or_default();
+                tracing::error!(error = %e, status = %status, "upstream llm error: {}", text);
+                return (StatusCode::BAD_GATEWAY, format!("upstream error: {text}")).into_response();
+            }
+
+            let stream = resp.bytes_stream().map(|res| {
+                res.map(|bytes: Bytes| axum::body::Bytes::from_owner(bytes.to_vec()))
+            });
+
+            (
+                [(header::CONTENT_TYPE, "application/x-ndjson")],
+                axum::body::Body::from_stream(stream),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "failed to reach upstream llm");
+            (StatusCode::BAD_GATEWAY, format!("llm unreachable: {e}")).into_response()
         }
     }
 }
