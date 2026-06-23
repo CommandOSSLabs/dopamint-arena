@@ -10,6 +10,20 @@
 
 ## Global Constraints
 
+> **DESIGN CORRECTION (surfaced by Task 2's tests):** chicken-cross and bomb-it are
+> *winner-takes-all* (the inner game flips the whole pot to the winner), unlike
+> battleship which swaps a small fixed stake. A wrapper that delegated balances to the
+> inner game would zero the loser after one decisive game → no rematch ever. So the
+> multi-game wrapper **owns the real carried balances** and swaps a fixed `stakePerGame`
+> loser→winner per *decided* game (push swaps nothing); the inner game runs with
+> *symbolic* per-game balances `{stakePerGame, stakePerGame}` purely to crown a winner.
+> The solo session **funds a large balance per seat** (battleship's `LOCKED_PER_SEAT` =
+> 1 DOPAMINT, `SUI_PER_SEAT` fallback) with `stakePerGame` = the lobby stake (≥ MIN), so
+> many games fit. The corrected protocol + tests live in the task briefs
+> (`.superpowers/sdd/task-2-brief.md`, `task-3-brief.md`) and **supersede the Task 2/3
+> code blocks below and the Task 5/8 funding steps** on the balance + funding model.
+> Conservation, per-game seed, out-of-React survival, and cadence are unchanged.
+
 - **Framework discipline (CLAUDE.md):** `sui-tunnel-ts` keeps pnpm + prettier + `node:test` via tsx; co-locate `*.test.ts`. Add protocols "following the existing protocol files" — do not restructure or convert to bun/biome.
 - **Determinism (ADR 0010):** per-game seed stays a pure function of `(tunnelId, gamesPlayed)` — public, symmetric, party-independent. No commit-reveal.
 - **Conservation (Protocol Invariant 1):** `balances(state).a + .b === total` for every reachable state. A reset carries inner balances forward verbatim.
