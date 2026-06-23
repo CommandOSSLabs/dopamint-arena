@@ -26,10 +26,7 @@ import {
   type protocols,
 } from "sui-tunnel-ts";
 import { SuiJsonRpcClient } from "@mysten/sui/jsonRpc";
-import {
-  getControlPlaneClient,
-  type RegisterSessionResult,
-} from "@/backend/controlPlane";
+import { getControlPlaneClient } from "@/backend/controlPlane";
 import { coSignedToSettleRequest } from "@/backend/settleRequest";
 import {
   MultiGameTicTacToeProtocol,
@@ -270,31 +267,7 @@ export function usePvpTicTacToe(
   const bufferedHelloRef = useRef<string | null>(null);
   const transcriptRef = useRef<proof.Transcript | null>(null);
 
-  const statsSessionRef = useRef<RegisterSessionResult | null>(null);
-  const moveCountRef = useRef(0);
-  const actionsRef = useRef(0);
-  const lastHeartbeatRef = useRef(Date.now());
-
   // ── Helpers ──────────────────────────────────────────────────────────────────
-
-  const flushHeartbeat = useCallback((tunnelId: string, force: boolean) => {
-    const s = statsSessionRef.current;
-    if (!s || actionsRef.current === 0) return;
-    const now = Date.now();
-    const windowMs = now - lastHeartbeatRef.current;
-    if (!force && windowMs < 1000) return;
-    const actionsDelta = actionsRef.current;
-    actionsRef.current = 0;
-    lastHeartbeatRef.current = now;
-    getControlPlaneClient()
-      .sendHeartbeat(s.sessionId, s.statsToken, {
-        tunnelId,
-        nonce: String(moveCountRef.current),
-        actionsDelta,
-        windowMs: Math.max(1, windowMs),
-      })
-      .catch((e) => console.error("[tictactoe pvp] heartbeat failed:", e));
-  }, []);
 
   const refreshBalance = useCallback(async () => {
     const addr = walletRef.current.address;
@@ -334,7 +307,6 @@ export function usePvpTicTacToe(
       if (settledRef.current) return;
       settledRef.current = true;
       setPhaseOverride("settling");
-      flushHeartbeat(t.tunnelId, true);
       const root = transcriptRef.current
         ? transcriptRef.current.root()
         : new Uint8Array(32);
@@ -388,7 +360,7 @@ export function usePvpTicTacToe(
       await refreshBalance();
       setPhaseOverride("done");
     },
-    [submit, refreshBalance, flushHeartbeat],
+    [submit, refreshBalance],
   );
 
   // ── queue ────────────────────────────────────────────────────────────────────
@@ -598,30 +570,6 @@ export function usePvpTicTacToe(
         tunnelRef.current = t;
         transcriptRef.current = new proof.Transcript(tunnelId);
 
-        // Register the (real, on-chain) tunnel for stats tracking. Best-effort.
-        statsSessionRef.current = null;
-        moveCountRef.current = 0;
-        actionsRef.current = 0;
-        lastHeartbeatRef.current = Date.now();
-        getControlPlaneClient()
-          .registerSession({
-            userAddress: w.address,
-            game: "tictactoe",
-            tunnels: [
-              {
-                tunnelId,
-                partyA: m.role === "A" ? w.address : m.opponentWallet,
-                partyB: m.role === "B" ? w.address : m.opponentWallet,
-              },
-            ],
-          })
-          .then((s) => {
-            statsSessionRef.current = s;
-          })
-          .catch((e) =>
-            console.error("[tictactoe pvp] registerSession failed:", e),
-          );
-
         // Attach the tunnel to the session — wires t.onConfirmed → session.onConfirmed,
         // publishes the initial "playing" snapshot, and clears phaseOverride so the
         // session's snapshot drives subsequent phase display.
@@ -644,11 +592,7 @@ export function usePvpTicTacToe(
           // Session-core bookkeeping first (transcript append + state publish + drive).
           sessionOnConfirmed?.(u);
 
-          // Stats bookkeeping.
-          moveCountRef.current += 1;
-          actionsRef.current += 1;
           transcriptRef.current?.append(u);
-          flushHeartbeat(tunnelId, false);
 
           // Score accumulation: log each completed inner game once.
           const st = t.state;
@@ -735,7 +679,6 @@ export function usePvpTicTacToe(
       eph,
       variant,
       finishSettle,
-      flushHeartbeat,
       bumpEpoch,
     ],
   );
@@ -840,9 +783,6 @@ export function usePvpTicTacToe(
     bufferedSettleRef.current = null;
     helloResolveRef.current = null;
     bufferedHelloRef.current = null;
-    statsSessionRef.current = null;
-    moveCountRef.current = 0;
-    actionsRef.current = 0;
     setPhaseOverride(null);
     setErrorOverride(null);
     // Replace with a fresh idle session so snapshot resets to "idle".

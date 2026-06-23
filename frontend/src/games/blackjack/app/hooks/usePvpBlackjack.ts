@@ -1,9 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { core, proof, bytesToHex, hexToBytes } from "sui-tunnel-ts";
-import {
-  getControlPlaneClient,
-  type RegisterSessionResult,
-} from "@/backend/controlPlane";
+import { getControlPlaneClient } from "@/backend/controlPlane";
 import { coSignedToSettleRequest } from "@/backend/settleRequest";
 import {
   useCurrentAccount,
@@ -189,30 +186,7 @@ export function usePvpBlackjack(): PvpView {
   const stakeResolveRef = useRef<((amount: bigint) => void) | null>(null);
   const bufferedStakeRef = useRef<bigint | null>(null);
 
-  const sessionRef = useRef<RegisterSessionResult | null>(null);
-  const moveCountRef = useRef(0);
-  const actionsRef = useRef(0);
-  const lastHeartbeatRef = useRef(Date.now());
   const transcriptRef = useRef<proof.Transcript | null>(null);
-
-  const flushHeartbeat = useCallback((tunnelId: string, force: boolean) => {
-    const s = sessionRef.current;
-    if (!s || actionsRef.current === 0) return;
-    const now = Date.now();
-    const windowMs = now - lastHeartbeatRef.current;
-    if (!force && windowMs < 1000) return;
-    const actionsDelta = actionsRef.current;
-    actionsRef.current = 0;
-    lastHeartbeatRef.current = now;
-    getControlPlaneClient()
-      .sendHeartbeat(s.sessionId, s.statsToken, {
-        tunnelId,
-        nonce: String(moveCountRef.current),
-        actionsDelta,
-        windowMs: Math.max(1, windowMs),
-      })
-      .catch((e) => console.error("[blackjack pvp] heartbeat failed:", e));
-  }, []);
 
   const refreshBalance = useCallback(async () => {
     try {
@@ -278,7 +252,6 @@ export function usePvpBlackjack(): PvpView {
       if (settledRef.current) return;
       settledRef.current = true;
       setPhase("settling");
-      flushHeartbeat(t.tunnelId, true);
       const root = transcriptRef.current
         ? transcriptRef.current.root()
         : new Uint8Array(32);
@@ -332,7 +305,7 @@ export function usePvpBlackjack(): PvpView {
       await refreshBalance();
       setPhase("done");
     },
-    [submit, refreshBalance, flushHeartbeat],
+    [submit, refreshBalance],
   );
 
   const queue = useCallback(() => {
@@ -549,30 +522,6 @@ export function usePvpBlackjack(): PvpView {
         tunnelRef.current = t;
         transcriptRef.current = new proof.Transcript(tunnelId);
 
-        // Register the (real, on-chain) tunnel for stats tracking. Best-effort.
-        sessionRef.current = null;
-        moveCountRef.current = 0;
-        actionsRef.current = 0;
-        lastHeartbeatRef.current = Date.now();
-        getControlPlaneClient()
-          .registerSession({
-            userAddress: walletAddress,
-            game: "blackjack",
-            tunnels: [
-              {
-                tunnelId,
-                partyA: m.role === "A" ? walletAddress : m.opponentWallet,
-                partyB: m.role === "B" ? walletAddress : m.opponentWallet,
-              },
-            ],
-          })
-          .then((s) => {
-            sessionRef.current = s;
-          })
-          .catch((e) =>
-            console.error("[blackjack pvp] registerSession failed:", e),
-          );
-
         // Per-round log: record the player's (party A) result's updates.
         let lastLoggedRound = 0;
         let lastBalanceA = Number(stakeA);
@@ -650,11 +599,8 @@ export function usePvpBlackjack(): PvpView {
           }
         };
         t.onConfirmed = (u) => {
-          moveCountRef.current += 1;
-          actionsRef.current += 1;
           transcriptRef.current?.append(u);
           onAdvance();
-          flushHeartbeat(tunnelId, false);
         };
         setPhase("playing");
         setState({ ...t.state });
@@ -671,7 +617,6 @@ export function usePvpBlackjack(): PvpView {
       signPersonalMessage,
       walletAddress,
       finishSettle,
-      flushHeartbeat,
     ],
   );
   onMatchRef.current = onMatch;
@@ -790,9 +735,6 @@ export function usePvpBlackjack(): PvpView {
     bufferedSettleRef.current = null;
     stakeResolveRef.current = null;
     bufferedStakeRef.current = null;
-    sessionRef.current = null;
-    moveCountRef.current = 0;
-    actionsRef.current = 0;
   }, []);
 
   useEffect(() => () => relayRef.current?.close(), []);
