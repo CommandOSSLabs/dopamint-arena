@@ -53,9 +53,15 @@ import { scoreDuelFog, type DuelSideScore } from "./duelScore";
 import { COOLDOWN_MS } from "./ui/tokens";
 import type { PlacementEvent } from "./types";
 
-const BOARD = { width: 96, height: 56 };
-const CAP = 2400;
+const BOARD = { width: 36, height: 18 };
 const OVERWRITE_LIMIT = 3;
+/** Terminal placement budget — every cell painted up to its overwrite limit. A
+ *  duel almost always ends earlier via targetResolved; this is the hard backstop
+ *  (scaled to the board, not a fixed magic number that a small wall can't reach). */
+const CAP = BOARD.width * BOARD.height * OVERWRITE_LIMIT;
+/** Empty center columns separating seat A's (left) and seat B's (right) zones so
+ *  the two secret shapes always sit apart and never touch — see build(). */
+const ZONE_GAP = 4;
 const DEFAULT_STAKE = 10;
 /** The guide flashes for this long at the start, then HIDES — both sides then
  *  build from memory AND attack (the bot pauses during the study window too, for
@@ -157,27 +163,29 @@ function pickTwoDesigns(rng: () => number): [PixelDesign, PixelDesign] {
 }
 
 /**
- * Project `design` at a random on-board anchor confined to the horizontal band
- * `[fracLo, fracHi]` of the board (a region/quadrant), clamped so the whole
- * bitmap fits inside the wall. Seat A and seat B get OPPOSITE bands with a gap
- * between them, so the two secret shapes are spread apart and never adjacent.
- * Every wanted cell is recolored to `seatColor` (MONOCHROME): the projected
- * stencil holds 0 for don't-care and `seatColor` everywhere the design paints.
+ * Project `design` at a random on-board anchor whose WHOLE bitmap is confined to
+ * the column zone `[zoneLo, zoneHi)` (an absolute, design-width-aware range — not
+ * a fraction of the board). Seat A gets the LEFT zone and seat B the RIGHT, with
+ * an empty center gap between the zones, so on the small wall the two secret
+ * shapes always land fully apart and never clip the edge or each other — even the
+ * 16-wide walrus, whose zone is sized to hold it exactly. Every wanted cell is
+ * recolored to `seatColor` (MONOCHROME): the projected stencil holds 0 for
+ * don't-care and `seatColor` everywhere the design paints.
  */
 function projectDesignInRegion(
   design: PixelDesign,
   width: number,
   height: number,
-  fracLo: number,
-  fracHi: number,
+  zoneLo: number,
+  zoneHi: number,
   seatColor: number,
   rng: () => number,
 ): Uint8Array {
-  // Valid top-left X range inside the region band; clamp so the shape fits.
-  const bandLo = Math.floor(fracLo * (width - design.w));
-  const bandHi = Math.floor(fracHi * (width - design.w));
-  const loX = Math.max(0, Math.min(bandLo, bandHi));
-  const hiX = Math.max(loX, Math.min(width - design.w, Math.max(bandLo, bandHi)));
+  // Top-left X range that keeps the ENTIRE design inside [zoneLo, zoneHi) (and on
+  // the board). Anchoring on absolute columns — rather than a fraction of
+  // (width - w) — keeps wide designs from poking past the zone toward center.
+  const loX = Math.max(0, zoneLo);
+  const hiX = Math.max(loX, Math.min(width - design.w, zoneHi - design.w));
   const ox = loX + Math.floor(rng() * (hiX - loX + 1));
   // Y is free across the whole height (clamped to fit).
   const maxOy = Math.max(0, height - design.h);
@@ -289,8 +297,13 @@ export interface UsePaintDuel {
    *  (0 when ready). Building is never gated by this. */
   cooldownRemaining: number;
   phase: DuelPhase;
-  /** Spectator mode: both seats are bot-driven (mirrors the `auto` option). */
+  /** Spectator mode: both seats are bot-driven. Starts from the `auto` option but
+   *  is LIVE — `setAuto(true)` hands seat A to a bot mid-duel. */
   auto: boolean;
+  /** Hand seat A to a bot on the SAME board (vs-bot "Auto" handoff): flips the duel
+   *  to bot-vs-bot self-play with no remount/new shapes; the human's place() then
+   *  no-ops and the running tunnel co-signs seat A's bot moves. Idempotent. */
+  setAuto: (auto: boolean) => void;
   /** Active bot skill (mirrors the `difficulty` option). */
   difficulty: DuelDifficulty;
   /** Display stake / pot in SUI (mirrors the `stake` option, default 10). */
@@ -320,8 +333,13 @@ export interface UsePaintDuel {
 }
 
 export function usePaintDuel(options: UsePaintDuelOptions = {}): UsePaintDuel {
-  const { seed, difficulty = "normal", auto = false, stake = DEFAULT_STAKE } = options;
+  const { seed, difficulty = "normal", stake = DEFAULT_STAKE } = options;
   const profile = BOT_PROFILES[difficulty];
+  // `auto` is LIVE state (not just the option) so the vs-bot "Auto" button can
+  // hand seat A to a bot MID-DUEL: flipping false→true arms the seat-A bot tick on
+  // the SAME board and turns the human's place() into a no-op — no remount, no new
+  // shapes, the co-signing tunnel keeps running with seat A now driven by the bot.
+  const [auto, setAuto] = useState<boolean>(options.auto ?? false);
   // Speed is live state (not just an option) so the pill row can fast-forward an
   // in-progress duel: changing it re-arms the bot intervals at the new cadence.
   const [speed, setSpeed] = useState<DuelSpeed>(options.speed ?? 1);
@@ -347,15 +365,19 @@ export function usePaintDuel(options: UsePaintDuelOptions = {}): UsePaintDuel {
   const build = useCallback(() => {
     const pickRng = mulberry32(seedRef.current);
     const [yourDesign, botDesign] = pickTwoDesigns(pickRng);
-    // Seat A lives in the LEFT region, seat B in the RIGHT, with a center gap so
-    // the two shapes are spread apart and never adjacent. Same stream picks the
-    // positions, so a seed replays both shape AND placement.
+    // Split the wall into a LEFT zone (seat A), an empty center gap, and a RIGHT
+    // zone (seat B). Each zone is wide enough to hold the widest design (16-wide
+    // walrus), so both shapes sit fully inside their half and the gap keeps them
+    // apart — no overlap, no clipping. Same stream picks the positions, so a seed
+    // replays both shape AND placement.
+    const leftZoneHi = Math.floor((BOARD.width - ZONE_GAP) / 2);
+    const rightZoneLo = leftZoneHi + ZONE_GAP;
     const yourTarget = projectDesignInRegion(
       yourDesign,
       BOARD.width,
       BOARD.height,
-      0.0,
-      0.38,
+      0,
+      leftZoneHi,
       SEAT_A_COLOR,
       pickRng,
     );
@@ -363,8 +385,8 @@ export function usePaintDuel(options: UsePaintDuelOptions = {}): UsePaintDuel {
       botDesign,
       BOARD.width,
       BOARD.height,
-      0.62,
-      1.0,
+      rightZoneLo,
+      BOARD.width,
       SEAT_B_COLOR,
       pickRng,
     );
@@ -814,6 +836,7 @@ export function usePaintDuel(options: UsePaintDuelOptions = {}): UsePaintDuel {
     cooldownRemaining,
     phase,
     auto,
+    setAuto,
     difficulty,
     stake,
     speed,

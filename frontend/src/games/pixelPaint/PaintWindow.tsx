@@ -64,12 +64,7 @@ export function PaintWindow(_props: GameWindowProps) {
         />
       ) : (
         <div className="relative h-full min-h-0 w-full">
-          <DuelMode
-            mode={mode}
-            difficulty={difficulty}
-            stake={stake}
-            onSwitchToAuto={() => setMode("auto")}
-          />
+          <DuelMode mode={mode} difficulty={difficulty} stake={stake} />
           <button
             onClick={() => setMode(null)}
             className="absolute right-4 top-3.5 z-10 flex h-[54px] items-center rounded-[14px] px-3 text-xs font-bold"
@@ -92,43 +87,32 @@ function DuelMode({
   mode,
   difficulty,
   stake,
-  onSwitchToAuto,
 }: {
   mode: PaintMode;
   difficulty: DuelDifficulty;
   /** DISPLAY pot in SUI carried into the duel; separate from the tunnel stake. */
   stake: DuelStake;
-  /** Switches the window to Watch-Bots; passed only to the vs-bot child. */
-  onSwitchToAuto: () => void;
 }) {
   return mode === "auto" ? (
     <AutoDuelInner key={mode} difficulty={difficulty} stake={stake} />
   ) : (
-    <VsBotDuelInner
-      key={mode}
-      difficulty={difficulty}
-      stake={stake}
-      onSwitchToAuto={onSwitchToAuto}
-    />
+    <VsBotDuelInner key={mode} difficulty={difficulty} stake={stake} />
   );
 }
 
 /** Play vs Bot — your seat-A paints + the bot's seat-B ticks co-signed over an
  *  OffchainTunnel (fog stays on; the local duel still drives the UI), reporting
- *  heartbeat TPS and (when the bots hold gas) settling on-chain. */
+ *  heartbeat TPS and (when the bots hold gas) settling on-chain. The in-view "Auto"
+ *  button hands seat A to a bot on the SAME duel via `duel.setAuto` — no remount. */
 function VsBotDuelInner({
   difficulty,
   stake,
-  onSwitchToAuto,
 }: {
   difficulty: DuelDifficulty;
   stake: DuelStake;
-  onSwitchToAuto: () => void;
 }) {
   const { duel, status } = usePaintDuelOnchain({ difficulty, auto: false, stake });
-  return (
-    <DuelView duel={duel} onchain={status} onSwitchToAuto={onSwitchToAuto} />
-  );
+  return <DuelView duel={duel} onchain={status} />;
 }
 
 /** Watch Bots (Auto) — bot-vs-bot self-play co-signed over an OffchainTunnel,
@@ -429,7 +413,7 @@ function ModeChooser({
         >
           <span>💰 {stake} STAKE</span>
           <span style={{ opacity: 0.4 }}>|</span>
-          <span>96×56 WALL</span>
+          <span>36×18 WALL</span>
           <span style={{ opacity: 0.4 }}>|</span>
           <span>FOG OF WAR</span>
         </div>

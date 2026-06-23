@@ -67,9 +67,12 @@ import {
 // is legal in the co-signing tunnel. Legality keys on size/cap/overwriteLimit/mode
 // only (never balances/stake), so the tunnel can run leaner 1-MIST stakes while the
 // duel UI keeps its display balances; the two stay move-for-move in sync.
-const BOARD = { width: 96, height: 56 };
-const CAP = 2400;
+const BOARD = { width: 36, height: 18 };
 const OVERWRITE_LIMIT = 3;
+/** Terminal placement budget — every cell painted up to its overwrite limit. A
+ *  duel almost always ends earlier via targetResolved; this is the hard backstop
+ *  (scaled to the board, not a fixed magic number that a small wall can't reach). */
+const CAP = BOARD.width * BOARD.height * OVERWRITE_LIMIT;
 /** Tunnel stake/stakes — 1 MIST each, matching the on-chain `create_and_fund`. */
 const STAKE = 1n;
 /** Dashboard game key for this arena (groups TPS/tunnels under "pixel-duel"). */
