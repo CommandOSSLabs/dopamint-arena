@@ -923,12 +923,12 @@ async function settle(
     fromHex(other.sig),
   );
   if (role !== "A") return; // single submitter, mirrors the cooperative-close pattern
-  try {
-    await cp.settle(
-      tunnelId,
-      coSignedToSettleRequest(co, transcript.toRecord().entries),
-    );
-  } catch (e) {
+  // Submit to the backend settle queue WITHOUT blocking: the co-signed settlement is built, so the
+  // close is durable on the backend's side and the player can start a new match immediately while it
+  // is processed/confirmed asynchronously. The request payload is captured synchronously here (before
+  // any recycle tears down the tunnel). On backend failure, fall back to a wallet-submitted close.
+  const settleRequest = coSignedToSettleRequest(co, transcript.toRecord().entries);
+  void cp.settle(tunnelId, settleRequest).catch(async (e) => {
     console.error(
       "[quantum-poker] backend settle failed; falling back to wallet close:",
       e,
@@ -938,6 +938,8 @@ async function settle(
       tunnelId,
       settlement: co,
       coinType: isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined,
-    });
-  }
+    }).catch((e2) =>
+      console.error("[quantum-poker] wallet close fallback failed:", e2),
+    );
+  });
 }
