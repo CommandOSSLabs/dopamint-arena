@@ -190,19 +190,20 @@ function seedLayout(): GridItem[] {
 // layout (registered with catalog: false, so they never tile or show in the picker).
 const FLOATING_DEFAULTS = ["regular-payments", "chat"] as const;
 
-/** Floating widgets pinned to the two sides for the default layout (1st on the left
- *  edge, 2nd on the right; extras stack down), vertically centered. */
+/** Floating widgets spread across the screen `space-around` for the default layout —
+ *  each centered in its 1/n slice of the width, so the gap to either edge is equal
+ *  and they sit toward the middle. Vertically centered. */
 function seedFloating(): Record<string, FloatState> {
   if (typeof window === "undefined") return {};
   const out: Record<string, FloatState> = {};
   const margin = 24;
+  const n = FLOATING_DEFAULTS.length;
   FLOATING_DEFAULTS.forEach((id, i) => {
     if (!get(id)) return; // not registered → skip
     const w = Math.min(360, window.innerWidth - 2 * margin);
     const h = Math.min(440, window.innerHeight - 2 * margin);
-    const onRight = i % 2 === 1;
-    const x = onRight ? window.innerWidth - w - margin : margin;
-    const y = (window.innerHeight - h) / 2 + Math.floor(i / 2) * 36;
+    const x = ((2 * i + 1) / (2 * n)) * window.innerWidth - w / 2;
+    const y = (window.innerHeight - h) / 2;
     out[id] = {
       x: clampNum(x, 0, window.innerWidth - w),
       y: clampNum(y, 0, window.innerHeight - h),
@@ -543,7 +544,7 @@ export function ArenaView() {
   // Popped-out windows: free-floating over the desktop, click-to-front z-order.
   const [floating, setFloating] = useLocalStorageState<
     Record<string, FloatState>
-  >("dopamint.desktop.floating.v5", seedFloating);
+  >("dopamint.desktop.floating.v6", seedFloating);
   const floatZ = useRef(100);
   const [addOpen, setAddOpen] = useState(false);
   const [removeOpen, setRemoveOpen] = useState(false);
@@ -946,22 +947,26 @@ export function ArenaView() {
               <Content windowId={item.id} onClose={() => close(item.id)} />
             </GameWindow>
           );
-          if (!fl) return win;
-          // Floating: focus-to-front + free pixel resize from every edge/corner.
+          // Always wrap identically — float-handles + focus-to-front only when
+          // floating — so maximize/minimize is a style change, NOT a remount. That
+          // keeps every game's component state alive across the transition, instead
+          // of only games that stash it in a windowId store (Battleship). The grid's
+          // own resize handles are suppressed for detached items, so no overlap.
           return (
             <div
               className="relative h-full w-full"
-              onPointerDown={() => focusFloat(item.id)}
+              onPointerDown={fl ? () => focusFloat(item.id) : undefined}
             >
               {win}
-              {FLOAT_HANDLES.map((hdl) => (
-                <div
-                  key={hdl.dir}
-                  className={cn("absolute z-10 touch-none", hdl.cls)}
-                  onPointerDown={startFloatResize(item.id, hdl.dir)}
-                  aria-hidden
-                />
-              ))}
+              {fl &&
+                FLOAT_HANDLES.map((hdl) => (
+                  <div
+                    key={hdl.dir}
+                    className={cn("absolute z-10 touch-none", hdl.cls)}
+                    onPointerDown={startFloatResize(item.id, hdl.dir)}
+                    aria-hidden
+                  />
+                ))}
             </div>
           );
         }}
