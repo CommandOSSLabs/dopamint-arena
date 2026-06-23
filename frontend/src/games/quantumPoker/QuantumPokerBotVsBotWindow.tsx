@@ -1,5 +1,6 @@
 import type { CSSProperties } from "react";
 import type { GameWindowProps } from "../types";
+import { isDopamintConfigured } from "@/onchain/dopamint";
 import { useQuantumPokerAuto } from "./useQuantumPokerAuto";
 import { QuantumPokerTable, HEADS_UP_STYLE } from "./QuantumPokerTable";
 
@@ -113,7 +114,9 @@ export function QuantumPokerBotVsBotWindow({
               {s.personas?.a ?? "—"}
             </div>
             <div className="text-[10px] tabular-nums text-[var(--qp-green)]">
-              {sui(s.balances.a)} SUI · wins {s.score.a}
+              {isDopamintConfigured
+                ? `wins ${s.score.a}`
+                : `${sui(s.balances.a)} SUI · wins ${s.score.a}`}
             </div>
           </div>
           <div className="min-w-0 text-right">
@@ -122,7 +125,9 @@ export function QuantumPokerBotVsBotWindow({
               {s.personas?.b ?? "—"}
             </div>
             <div className="text-[10px] tabular-nums text-[var(--qp-green)]">
-              {sui(s.balances.b)} SUI · wins {s.score.b}
+              {isDopamintConfigured
+                ? `wins ${s.score.b}`
+                : `${sui(s.balances.b)} SUI · wins ${s.score.b}`}
             </div>
           </div>
         </section>
