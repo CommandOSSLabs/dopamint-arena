@@ -208,6 +208,23 @@ impl SuiSettler {
         })
     }
 
+    /// Construct a no-op settler for tests — RPC calls will fail at the network layer, which is
+    /// acceptable since tests using `in_memory_for_test` never invoke `submit_close`.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn noop() -> Self {
+        let signer = Ed25519PrivateKey::new([0u8; 32]);
+        let sender = signer.public_key().derive_address();
+        Self {
+            http: reqwest::Client::new(),
+            rpc_url: String::new(),
+            package_id: Address::ZERO,
+            coin_type: "0x2::sui::SUI".parse().expect("static coin type"),
+            signer,
+            sender,
+            sponsor_nonce: AtomicU32::new(0),
+        }
+    }
+
     /// Build, sign, and execute `close_cooperative_with_root`; returns the tx digest.
     /// Resolves the tunnel shared ref + reference gas price over JSON-RPC, builds offline.
     /// Concurrent calls are safe: no shared gas coin means no equivocation risk.

@@ -6,6 +6,9 @@ WORKDIR /app
 # libpq-dev required: explorer's diesel/postgres feature links pq-sys at build time.
 RUN apt-get update && apt-get install -y libpq-dev pkg-config && rm -rf /var/lib/apt/lists/*
 COPY . .
+# crates.io fetches flake on the HTTP/2 framing layer in CI ("download of <crate> failed").
+# Retry transient network errors and disable HTTP/2 multiplexing (the layer that fails).
+ENV CARGO_NET_RETRY=10 CARGO_HTTP_MULTIPLEXING=false
 RUN cargo build --release -p tunnel-manager -p explorer
 
 FROM debian:bookworm-slim

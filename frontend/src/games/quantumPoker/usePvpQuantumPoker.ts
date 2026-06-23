@@ -27,11 +27,13 @@ import {
   type Role,
 } from "../../pvp/mpClient";
 import {
+  getControlPlaneClient,
   resolveBackendUrl,
 } from "../../backend/controlPlane";
 import {
   closeCooperativeWithRoot,
   openAndFundSharedTunnel,
+  raiseDisputeUnilateral,
   readCreatedAt,
 } from "../../onchain/tunnelTx";
 import { useSponsoredSignExec } from "../../onchain/useSponsoredSignExec";
@@ -40,8 +42,19 @@ import {
   depositStakeStaked,
   type StakeStrategy,
 } from "../../onchain/stakeTunnel";
-import { DOPAMINT_COIN_TYPE, isDopamintConfigured } from "../../onchain/dopamint";
-import { settleViaBackend } from "../../backend/settle";
+import {
+  DOPAMINT_COIN_TYPE,
+  isDopamintConfigured,
+} from "../../onchain/dopamint";
+import { coSignedToSettleRequest } from "../../backend/settleRequest";
+import { attachResume, resumeActiveTunnels } from "@/pvp/resumeSession";
+import {
+  installResumePersistence,
+  evictExpiredRecords,
+  readResumeRecord,
+  listActiveTunnels,
+} from "@/pvp/resume";
+import { makePokerResumeAdapter } from "./pokerResumeAdapter";
 
 /** Locked per seat: 1 DOPAMINT (9 decimals). */
 export const STAKE_BALANCE = 1_000_000_000n;
@@ -235,6 +248,7 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
   const autoNonceRef = useRef<bigint>(-1n);
   const transcriptRef = useRef<Transcript | null>(null);
   const channelRef = useRef<PvpChannel | null>(null);
+  const detachResumeRef = useRef<(() => void) | null>(null);
   // Early-end: once either seat asks to settle, stop dealing new hands and close at the next clean
   // hand boundary. `settlingRef` guards the single close; `settleNowRef` lets the button/peer
   // message trigger the close (which lives in findMatch's closure) when we're already at hand_over.
@@ -250,6 +264,8 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
   }, []);
 
   const reset = useCallback(() => {
+    detachResumeRef.current?.();
+    detachResumeRef.current = null;
     mpRef.current?.close();
     mpRef.current = null;
     dtRef.current = null;
@@ -339,6 +355,154 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
     if (dtRef.current?.state.phase === "hand_over") settleNowRef.current?.();
   }, []);
 
+  // Wire the per-move loop, settle triggers, and resume onto a freshly built/rebuilt tunnel.
+  // Shared by the live (findMatch) and cold-load (resume) paths. The readiness handshake and the
+  // opening maybeAutoPropose stay with the caller — a resuming peer is mid-game and never re-sends
+  // "ready".
+  const activatePokerSession = useCallback(
+    (
+      mp: MpClient,
+      channel: PvpChannel,
+      dt: PokerTunnel,
+      waitPeer: ReturnType<typeof makeInbox>,
+      info: {
+        matchId: string;
+        role: Role;
+        opponentWallet: string;
+        opponentPubkeyHex: string;
+        selfEphemeralSecretHex: string;
+      },
+    ) => {
+      const signExec = async (
+        tx: Parameters<typeof signAndExecute>[0]["transaction"],
+      ) => {
+        const r = await signAndExecute({ transaction: tx });
+        return { digest: r.digest };
+      };
+      const reads = client as unknown as Parameters<
+        typeof openAndFundSharedTunnel
+      >[0]["reads"];
+      const coinType = isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined;
+      const proto = new QuantumPokerProtocol(HAND_CAP);
+      const transcript = new Transcript(dt.tunnelId);
+      transcriptRef.current = transcript;
+
+      dtRef.current = dt;
+      driverRef.current = new QuantumPokerSeatDriver(info.role);
+      autoNonceRef.current = -1n;
+
+      // Single cooperative close — at match end, or early once a seat asked to settle. Guarded so
+      // both seats' triggers (onConfirmed, the button, the peer's endMatch) close exactly once.
+      const triggerSettle = () => {
+        if (settlingRef.current) return;
+        settlingRef.current = true;
+        setStatus("settling");
+        void settle(
+          dt,
+          info.role,
+          channel,
+          waitPeer,
+          reads,
+          signExec,
+          sponsored.signExec,
+          dt.tunnelId,
+          transcript,
+          getControlPlaneClient(),
+          coinType,
+        ).then(
+          () => setStatus("settled"),
+          (e) => {
+            setError(e instanceof Error ? e.message : String(e));
+            setStatus("error");
+          },
+        );
+      };
+      settleNowRef.current = triggerSettle;
+
+      // Opponent hit "Settle": stop dealing on our side too and close at the next clean boundary
+      // (or now, if we're already parked at hand_over).
+      void waitPeer("endMatch").then(() => {
+        endRef.current = true;
+        setEndRequested(true);
+        if (dt.state.phase === "hand_over") triggerSettle();
+      });
+
+      dt.onConfirmed = (u) => {
+        transcript.append(u);
+        sync();
+        report.pushLocalTxn({
+          id: moveIdRef.current++,
+          game: "quantum-poker",
+          time: new Date().toLocaleTimeString("en-GB"),
+          bot: "You",
+          type: proto.isTerminal(dt.state) ? "Win/Loss" : "Move",
+          status: "Success",
+          amount: "",
+        });
+        // Settle at match end (done), or early at this clean hand boundary once a seat asked to end.
+        if (
+          proto.isTerminal(dt.state) ||
+          (endRef.current && dt.state.phase === "hand_over")
+        ) {
+          triggerSettle();
+          return;
+        }
+        maybeAutoPropose();
+      };
+
+      // Resume wiring: persist on confirm + run the resync handshake on reconnect.
+      // The slot secrets / hole cards round-trip only through capture/restore, never the wire.
+      detachResumeRef.current?.();
+      detachResumeRef.current = attachResume({
+        mp,
+        channel,
+        tunnel: dt,
+        adapter: makePokerResumeAdapter({
+          getSecret: () => {
+            const s = dt.state;
+            return {
+              localSecretsA: s.localSecretsA,
+              localSecretsB: s.localSecretsB,
+              holeA: s.holeA,
+              holeB: s.holeB,
+            };
+          },
+          setSecret: (sec) => {
+            const s = dt.state;
+            s.localSecretsA = sec.localSecretsA;
+            s.localSecretsB = sec.localSecretsB;
+            s.holeA = sec.holeA;
+            s.holeB = sec.holeB;
+          },
+          onReconciled: () => sync(),
+        }),
+        identity: {
+          matchId: info.matchId,
+          tunnelId: dt.tunnelId,
+          role: info.role,
+          game: GAME_ID,
+          opponentWallet: info.opponentWallet,
+          opponentPubkeyHex: info.opponentPubkeyHex,
+          selfEphemeralSecretHex: info.selfEphemeralSecretHex,
+        },
+        // Settlement floor: after the 1h grace, settle from the held checkpoint.
+        onGraceExpired: (latest) => {
+          if (latest)
+            void raiseDisputeUnilateral({
+              signExec,
+              tunnelId: dt.tunnelId,
+              update: latest,
+              role: info.role,
+            });
+        },
+      });
+
+      sync();
+      setStatus("playing");
+    },
+    [client, signAndExecute, sponsored, sync, maybeAutoPropose, report],
+  );
+
   const findMatch = useCallback(() => {
     if (!account) {
       setError("connect a wallet first");
@@ -346,6 +510,8 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
       return;
     }
     const wallet = account.address;
+    installResumePersistence();
+    evictExpiredRecords();
     const signExec = async (
       tx: Parameters<typeof signAndExecute>[0]["transaction"],
     ) => {
@@ -392,7 +558,6 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
         setStatus("funding");
         const partyA = { address: wallet, publicKey: ephemeral.publicKey };
         const partyB = { address: match.opponentWallet, publicKey: oppPub };
-        const coinType = isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined;
         const stake: StakeStrategy = {
           sponsoredSignExec: sponsored.signExec,
           walletSignExec: signExec as never,
@@ -444,74 +609,16 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
           channel.transport,
           { a: STAKE_BALANCE, b: STAKE_BALANCE },
         );
-        dtRef.current = dt;
-        driverRef.current = new QuantumPokerSeatDriver(match.role);
-        autoNonceRef.current = -1n;
-        const transcript = new Transcript(tunnelId);
-        transcriptRef.current = transcript;
-
-        // Single cooperative close — at match end, or early once a seat asked to settle. Guarded so
-        // both seats' triggers (onConfirmed, the button, the peer's endMatch) close exactly once.
-        const triggerSettle = () => {
-          if (settlingRef.current) return;
-          settlingRef.current = true;
-          setStatus("settling");
-          void settle(
-            dt,
-            match.role,
-            channel,
-            waitPeer,
-            reads,
-            signExec,
-            sponsored.signExec,
-            tunnelId,
-            transcript,
-            coinType,
-          ).then(
-            () => setStatus("settled"),
-            (e) => {
-              setError(e instanceof Error ? e.message : String(e));
-              setStatus("error");
-            },
-          );
-        };
-        settleNowRef.current = triggerSettle;
-
-        // Opponent hit "Settle": stop dealing on our side too and close at the next clean boundary
-        // (or now, if we're already parked at hand_over).
-        void waitPeer("endMatch").then(() => {
-          endRef.current = true;
-          setEndRequested(true);
-          if (dt.state.phase === "hand_over") triggerSettle();
+        activatePokerSession(mp, channel, dt, waitPeer, {
+          matchId: match.matchId,
+          role: match.role,
+          opponentWallet: match.opponentWallet,
+          opponentPubkeyHex: toHex(oppPub),
+          selfEphemeralSecretHex: toHex(ephemeral.secretKey),
         });
-
-        dt.onConfirmed = (u) => {
-          transcript.append(u);
-          sync();
-          report.pushLocalTxn({
-            id: moveIdRef.current++,
-            game: "quantum-poker",
-            time: new Date().toLocaleTimeString("en-GB"),
-            bot: "You",
-            type: proto.isTerminal(dt.state) ? "Win/Loss" : "Move",
-            status: "Success",
-            amount: "",
-          });
-          // Settle at match end (done), or early at this clean hand boundary once a seat asked to end.
-          if (
-            proto.isTerminal(dt.state) ||
-            (endRef.current && dt.state.phase === "hand_over")
-          ) {
-            triggerSettle();
-            return;
-          }
-          maybeAutoPropose();
-        };
 
         // 4) readiness handshake — only AFTER the engine is wired, so seat A's first
         //    commit can never reach seat B before B's frame handler exists.
-        sync();
-        setStatus("playing");
         if (match.role === "A") await waitPeer("ready");
         else channel.sendPeer({ t: "ready" });
         maybeAutoPropose(); // seat A kicks off the commit; seat B no-ops until its turn
@@ -520,7 +627,101 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
         setStatus("error");
       }
     })();
-  }, [account, client, signAndExecute, sponsored, sync, maybeAutoPropose, report]);
+  }, [
+    account,
+    client,
+    signAndExecute,
+    sponsored,
+    maybeAutoPropose,
+    activatePokerSession,
+  ]);
+
+  // Cold-load entry: on mount (once the wallet is known), rebuild any persisted in-flight poker
+  // match and re-attach. Idempotent — no-ops if already connected or nothing to restore. The
+  // restored slot secrets are hydrated after rebuild, never sent over the wire.
+  const resume = useCallback(() => {
+    if (mpRef.current) return;
+    if (!account) return;
+    const wallet = account.address;
+    installResumePersistence();
+    evictExpiredRecords();
+    const resumable = listActiveTunnels()
+      .map((id) => readResumeRecord(id))
+      .some((r) => r?.game === GAME_ID);
+    if (!resumable) return;
+    void (async () => {
+      try {
+        const ephemeral: KeyPair = generateKeyPair();
+        const mp = new MpClient(
+          resolveMpWsUrl(resolveBackendUrl()),
+          wallet,
+          ephemeral,
+        );
+        mpRef.current = mp;
+        type RestoredSecret = {
+          localSecretsA: PokerState["localSecretsA"];
+          localSecretsB: PokerState["localSecretsB"];
+          holeA: PokerState["holeA"];
+          holeB: PokerState["holeB"];
+        };
+        // `restoredSecret` is filled by `setSecret` synchronously during the rebuild below; the
+        // explicit annotation keeps TS from narrowing the closure-mutated `let` to `never`.
+        let restoredSecret: RestoredSecret | null = null;
+        const restored = resumeActiveTunnels<PokerState, PokerMove>(
+          mp,
+          GAME_ID,
+          {
+            proto: new QuantumPokerProtocol(HAND_CAP),
+            moveCodec: pokerMoveCodec,
+            adapter: makePokerResumeAdapter({
+              getSecret: () => restoredSecret!,
+              setSecret: (sec) => {
+                restoredSecret = sec;
+              },
+            }),
+          },
+          { selfWallet: wallet },
+        );
+        if (restored.length === 0) {
+          mpRef.current = null;
+          mp.close();
+          return;
+        }
+        const { tunnel, channel } = restored[0];
+        const rec = readResumeRecord(tunnel.tunnelId)!;
+        const secret = restoredSecret as RestoredSecret | null;
+        if (secret) {
+          const s = tunnel.state;
+          s.localSecretsA = secret.localSecretsA;
+          s.localSecretsB = secret.localSecretsB;
+          s.holeA = secret.holeA;
+          s.holeB = secret.holeB;
+        }
+        selfPartyRef.current = rec.role;
+        setRole(rec.role);
+        setOpponentWallet(rec.opponentWallet);
+        channelRef.current = channel;
+        const waitPeer = makeInbox(channel);
+        activatePokerSession(mp, channel, tunnel, waitPeer, {
+          matchId: rec.matchId,
+          role: rec.role,
+          opponentWallet: rec.opponentWallet,
+          opponentPubkeyHex: rec.opponentPubkeyHex,
+          selfEphemeralSecretHex: rec.selfEphemeralSecretHex!,
+        });
+        await mp.connect();
+        maybeAutoPropose();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+        setStatus("error");
+      }
+    })();
+  }, [account, activatePokerSession, maybeAutoPropose]);
+
+  // Cold-load: once the wallet is known, re-attach to any persisted in-flight match.
+  useEffect(() => {
+    resume();
+  }, [resume]);
 
   const self = selfPartyRef.current;
   const myHole =
@@ -605,6 +806,7 @@ async function settle(
   sponsoredSignExec: Parameters<typeof closeCooperativeWithRoot>[0]["signExec"],
   tunnelId: string,
   transcript: Transcript,
+  cp: ReturnType<typeof getControlPlaneClient>,
   coinType: string | undefined,
 ): Promise<void> {
   const createdAt = await readCreatedAt(reads, tunnelId);
@@ -631,17 +833,21 @@ async function settle(
     fromHex(other.sig),
   );
   if (role !== "A") return; // single submitter, mirrors the cooperative-close pattern
-  await settleViaBackend({
-    tunnelId,
-    settlement: co,
-    transcript: transcript.toRecord().entries,
-    label: "quantumPoker",
-    fallbackClose: () =>
-      closeCooperativeWithRoot({
-        signExec: isDopamintConfigured ? sponsoredSignExec : signExec,
-        tunnelId,
-        settlement: co,
-        coinType: isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined,
-      }),
-  });
+  try {
+    await cp.settle(
+      tunnelId,
+      coSignedToSettleRequest(co, transcript.toRecord().entries),
+    );
+  } catch (e) {
+    console.error(
+      "[quantum-poker] backend settle failed; falling back to wallet close:",
+      e,
+    );
+    await closeCooperativeWithRoot({
+      signExec: isDopamintConfigured ? sponsoredSignExec : signExec,
+      tunnelId,
+      settlement: co,
+      coinType: isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined,
+    });
+  }
 }

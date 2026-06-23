@@ -14,7 +14,13 @@
 import { bytesEqual } from "./bytes";
 import { blake2b256 } from "./crypto";
 import { Balances, Party, Protocol } from "../protocol/Protocol";
-import { CoSignedSettlement, CoSignedSettlementWithRoot, CoSignedUpdate, PartyEndpoint } from "./tunnel";
+import {
+  CoSignedSettlement,
+  CoSignedSettlementWithRoot,
+  CoSignedUpdate,
+  PartyEndpoint,
+  verifyCoSignedUpdate,
+} from "./tunnel";
 import {
   serializeSettlement,
   serializeSettlementWithRoot,
@@ -38,6 +44,14 @@ export interface Transport {
   onFrame(cb: (frame: Uint8Array) => void): void;
 }
 
+/** Read-only view of a tunnel's resume-relevant state (for persistence / reconciliation). */
+export interface TunnelSnapshot<State, Move> {
+  state: State;
+  nonce: bigint;
+  latest: CoSignedUpdate | null;
+  pending: { move: Move; timestamp: bigint } | null;
+}
+
 export interface DistributedConfig<M> {
   tunnelId: string;
   /** This process's seat — MUST carry a `sign` fn. */
@@ -49,11 +63,13 @@ export interface DistributedConfig<M> {
   moveCodec?: MoveCodec<M>;
 }
 
-interface PendingProposal<State> {
+interface PendingProposal<State, Move> {
   next: State;
   update: StateUpdate;
   msg: Uint8Array;
   sigSelf: Uint8Array;
+  move: Move;
+  timestamp: bigint;
 }
 
 export class DistributedTunnel<State, Move> {
@@ -67,7 +83,7 @@ export class DistributedTunnel<State, Move> {
   private _state: State;
   private _nonce: bigint;
   private _latest: CoSignedUpdate | null;
-  private pending: PendingProposal<State> | null;
+  private pending: PendingProposal<State, Move> | null;
   private readonly codec: MoveCodec<Move>;
   private readonly transport: Transport;
 
@@ -78,7 +94,7 @@ export class DistributedTunnel<State, Move> {
     protocol: Protocol<State, Move>,
     cfg: DistributedConfig<Move>,
     transport: Transport,
-    initialBalances: Balances,
+    initialBalances: Balances
   ) {
     if (!cfg.self.sign) {
       throw new Error("DistributedTunnel: self endpoint must carry a signer");
@@ -89,10 +105,15 @@ export class DistributedTunnel<State, Move> {
     this.opponent = cfg.opponent;
     this.selfParty = cfg.selfParty;
     this.total = initialBalances.a + initialBalances.b;
-    this._state = protocol.initialState({ tunnelId: cfg.tunnelId, initialBalances });
+    this._state = protocol.initialState({
+      tunnelId: cfg.tunnelId,
+      initialBalances,
+    });
     const { a, b } = protocol.balances(this._state);
     if (a + b !== this.total) {
-      throw new Error(`protocol initial balances ${a + b} != locked total ${this.total}`);
+      throw new Error(
+        `protocol initial balances ${a + b} != locked total ${this.total}`
+      );
     }
     this._nonce = 0n;
     this._latest = null;
@@ -126,7 +147,11 @@ export class DistributedTunnel<State, Move> {
   }
 
   /** Place self/other signatures into A/B slots according to which side we are. */
-  private coSign(update: StateUpdate, sigSelf: Uint8Array, sigOther: Uint8Array): CoSignedUpdate {
+  private coSign(
+    update: StateUpdate,
+    sigSelf: Uint8Array,
+    sigOther: Uint8Array
+  ): CoSignedUpdate {
     return this.selfIsA()
       ? { update, sigA: sigSelf, sigB: sigOther }
       : { update, sigA: sigOther, sigB: sigSelf };
@@ -138,10 +163,20 @@ export class DistributedTunnel<State, Move> {
    * the receiver reuses it verbatim (it is folded into the signed bytes).
    */
   propose(move: Move, timestamp: bigint): void {
+    this.seatPending(move, timestamp);
+    this.transport.send(encodeFrame(this.pendingMoveFrame(), this.codec));
+  }
+
+  /** Prepare + sign this seat's pending proposal WITHOUT sending it. Deterministic: the same
+   *  (state, move, timestamp) yields byte-identical signed bytes — so a restored proposal
+   *  re-sends identically. `propose` = seatPending + send; restore uses seatPending alone and
+   *  lets the reconciliation handshake decide whether to (re-)send. */
+  seatPending(move: Move, timestamp: bigint): void {
     if (this.pending) throw new Error("a proposal is already awaiting ACK");
     const next = this.protocol.applyMove(this._state, move, this.selfParty);
     const { a, b } = this.protocol.balances(next);
-    if (a + b !== this.total) throw new Error(`balance sum ${a + b} != locked total ${this.total}`);
+    if (a + b !== this.total)
+      throw new Error(`balance sum ${a + b} != locked total ${this.total}`);
     const nonce = this._nonce + 1n;
     const stateHash = blake2b256(this.protocol.encodeState(next));
     const update: StateUpdate = {
@@ -154,19 +189,68 @@ export class DistributedTunnel<State, Move> {
     };
     const msg = serializeStateUpdate(update);
     const sigSelf = this.self.sign!(msg);
-    this.pending = { next, update, msg, sigSelf };
-    const frame: MoveFrame<Move> = {
+    this.pending = { next, update, msg, sigSelf, move, timestamp };
+  }
+
+  /** Re-send the current pending proposal's MOVE frame (idempotent at the peer iff it has not
+   *  applied it — the reconciliation handshake guarantees this). No-op if nothing is pending. */
+  resendPending(): void {
+    if (this.pending)
+      this.transport.send(encodeFrame(this.pendingMoveFrame(), this.codec));
+  }
+
+  private pendingMoveFrame(): MoveFrame<Move> {
+    const p = this.pending!;
+    return {
       kind: "move",
-      nonce,
+      nonce: p.update.nonce,
       by: this.selfParty,
-      move,
-      timestamp,
-      stateHash,
-      partyABalance: a,
-      partyBBalance: b,
-      sigProposer: sigSelf,
+      move: p.move,
+      timestamp: p.timestamp,
+      stateHash: p.update.stateHash,
+      partyABalance: p.update.partyABalance,
+      partyBBalance: p.update.partyBBalance,
+      sigProposer: p.sigSelf,
     };
-    this.transport.send(encodeFrame(frame, this.codec));
+  }
+
+  /** Seat the tunnel at a verified both-signed checkpoint (resume-time only). Asserts the
+   *  checkpoint binds to `state`, balances sum to the locked total, and both signatures verify.
+   *  A checkpoint older than the current nonce is ignored (never move backward). Throws on any
+   *  integrity failure so the caller can fall through to the settlement floor. */
+  adoptCheckpoint(state: State, coSigned: CoSignedUpdate): void {
+    const u = coSigned.update;
+    if (u.tunnelId !== this.tunnelId)
+      throw new Error("adoptCheckpoint: tunnelId mismatch");
+    if (u.nonce < this._nonce) return; // lower nonce: silent no-op
+    if (u.partyABalance + u.partyBBalance !== this.total) {
+      throw new Error("adoptCheckpoint: balance sum != locked total");
+    }
+    const reHash = blake2b256(this.protocol.encodeState(state));
+    if (!bytesEqual(reHash, u.stateHash))
+      throw new Error("adoptCheckpoint: state hash mismatch");
+    const partyA = this.selfIsA() ? this.self : this.opponent;
+    const partyB = this.selfIsA() ? this.opponent : this.self;
+    if (!verifyCoSignedUpdate(coSigned, partyA, partyB)) {
+      throw new Error("adoptCheckpoint: co-signature verification failed");
+    }
+    this._state = state;
+    this._nonce = u.nonce;
+    this._latest = coSigned;
+    if (this.pending && this.pending.update.nonce <= u.nonce)
+      this.pending = null;
+  }
+
+  /** Read-only resume snapshot for persistence / reconciliation. */
+  snapshot(): TunnelSnapshot<State, Move> {
+    return {
+      state: this._state,
+      nonce: this._nonce,
+      latest: this._latest,
+      pending: this.pending
+        ? { move: this.pending.move, timestamp: this.pending.timestamp }
+        : null,
+    };
   }
 
   private onFrame(bytes: Uint8Array): void {
@@ -176,13 +260,17 @@ export class DistributedTunnel<State, Move> {
   }
 
   private onMove(frame: MoveFrame<Move>): void {
-    if (frame.by === this.selfParty) throw new Error("received a MOVE attributed to self");
+    if (frame.by === this.selfParty)
+      throw new Error("received a MOVE attributed to self");
     if (frame.nonce !== this._nonce + 1n) {
-      throw new Error(`nonce gap: got ${frame.nonce}, expected ${this._nonce + 1n}`);
+      throw new Error(
+        `nonce gap: got ${frame.nonce}, expected ${this._nonce + 1n}`
+      );
     }
     const next = this.protocol.applyMove(this._state, frame.move, frame.by);
     const { a, b } = this.protocol.balances(next);
-    if (a + b !== this.total) throw new Error(`balance sum ${a + b} != locked total ${this.total}`);
+    if (a + b !== this.total)
+      throw new Error(`balance sum ${a + b} != locked total ${this.total}`);
     if (a !== frame.partyABalance || b !== frame.partyBBalance) {
       throw new Error("frame balances != re-derived balances");
     }
@@ -234,7 +322,7 @@ export class DistributedTunnel<State, Move> {
    */
   buildSettlementHalf(
     timestamp: bigint,
-    onchainNonce: bigint = 0n,
+    onchainNonce: bigint = 0n
   ): { settlement: Settlement; sigSelf: Uint8Array } {
     const { a, b } = this.protocol.balances(this._state);
     const settlement: Settlement = {
@@ -252,7 +340,7 @@ export class DistributedTunnel<State, Move> {
   combineSettlement(
     settlement: Settlement,
     sigSelf: Uint8Array,
-    sigOther: Uint8Array,
+    sigOther: Uint8Array
   ): CoSignedSettlement {
     const msg = serializeSettlement(settlement);
     if (!this.opponent.verify(msg, sigOther)) {
@@ -273,7 +361,7 @@ export class DistributedTunnel<State, Move> {
   buildSettlementHalfWithRoot(
     timestamp: bigint,
     transcriptRoot: Uint8Array,
-    onchainNonce: bigint = 0n,
+    onchainNonce: bigint = 0n
   ): { settlement: SettlementWithRoot; sigSelf: Uint8Array } {
     if (transcriptRoot.length !== 32) {
       throw new Error("transcriptRoot must be 32 bytes");
@@ -296,7 +384,7 @@ export class DistributedTunnel<State, Move> {
   combineSettlementWithRoot(
     settlement: SettlementWithRoot,
     sigSelf: Uint8Array,
-    sigOther: Uint8Array,
+    sigOther: Uint8Array
   ): CoSignedSettlementWithRoot {
     const msg = serializeSettlementWithRoot(settlement);
     if (!this.opponent.verify(msg, sigOther)) {

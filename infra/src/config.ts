@@ -36,7 +36,9 @@ export function getConfig(): InfraConfig {
     benchmarkMinSize: config.requireNumber("benchmark-min-size"),
     benchmarkMaxSize: config.requireNumber("benchmark-max-size"),
     benchmarkImageVersion: config.get("benchmark-image-version") ?? "1.0.1",
-    backendImageTag: config.get("backend-image-tag") ?? "latest",
+    // Fail loud rather than silently deploying a non-existent `latest` tag (which takes the
+    // ECS services down with CannotPullContainerError). deploy-backend persists a real SHA here.
+    backendImageTag: config.require("backend-image-tag"),
     settlerKey: config.getSecret("settler-key"),
   };
 }

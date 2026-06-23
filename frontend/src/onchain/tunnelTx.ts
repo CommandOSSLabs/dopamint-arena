@@ -18,9 +18,16 @@ import {
   buildDepositFromGas as sdkDepositFromGas,
   buildCloseFromSettlement as sdkCloseFromSettlement,
   buildCloseWithRootFromSettlement as sdkCloseWithRootFromSettlement,
+  buildRaiseDisputeFromUpdate as sdkRaiseDisputeFromUpdate,
+  buildForceClose as sdkForceClose,
 } from "sui-tunnel-ts/onchain/txbuilders";
 import { SignatureScheme } from "sui-tunnel-ts/core/crypto";
-import type { CoSignedSettlement, CoSignedSettlementWithRoot } from "sui-tunnel-ts/core/tunnel";
+import type {
+  CoSignedSettlement,
+  CoSignedSettlementWithRoot,
+  CoSignedUpdate,
+} from "sui-tunnel-ts/core/tunnel";
+import type { Party } from "sui-tunnel-ts/protocol/Protocol";
 
 // The SDK tx builders are the single source of truth for the Move ABI. The SDK pins an older
 // @mysten/sui, but vite `dedupe` makes these run against THIS app's Transaction at runtime; the
@@ -54,6 +61,16 @@ const buildOpenAndFundMany = sdkOpenAndFundMany as unknown as (
   tx: Transaction,
   specs: Parameters<typeof sdkOpenAndFundMany>[1],
   opts?: Parameters<typeof sdkOpenAndFundMany>[2],
+) => void;
+const buildRaiseDisputeFromUpdate = sdkRaiseDisputeFromUpdate as unknown as (
+  tx: Transaction,
+  tunnelId: string,
+  u: CoSignedUpdate,
+  raiser: Party,
+) => void;
+const buildForceClose = sdkForceClose as unknown as (
+  tx: Transaction,
+  p: { tunnelId: string },
 ) => void;
 
 /** Sign + execute a transaction (e.g. dapp-kit's signAndExecuteTransaction). */
@@ -241,6 +258,34 @@ export async function closeCooperativeWithRoot(opts: {
     opts.settlement,
     opts.coinType,
   );
+  const { digest } = await opts.signExec(tx);
+  return digest;
+}
+
+/**
+ * Unilateral settlement floor, step 1: stake the latest BOTH-signed checkpoint on-chain via
+ * `raise_dispute`, opening the on-chain timeout window. Used when the peer is gone and a fresh
+ * cooperative co-signature is unavailable. `force_close` finalizes after `timeout_ms` (24h).
+ */
+export async function raiseDisputeUnilateral(opts: {
+  signExec: SignExec;
+  tunnelId: string;
+  update: CoSignedUpdate;
+  role: Party;
+}): Promise<string> {
+  const tx = new Transaction();
+  buildRaiseDisputeFromUpdate(tx, opts.tunnelId, opts.update, opts.role);
+  const { digest } = await opts.signExec(tx);
+  return digest;
+}
+
+/** Unilateral settlement floor, step 2: finalize the staked dispute after the on-chain timeout. */
+export async function forceCloseAfterTimeout(opts: {
+  signExec: SignExec;
+  tunnelId: string;
+}): Promise<string> {
+  const tx = new Transaction();
+  buildForceClose(tx, { tunnelId: opts.tunnelId });
   const { digest } = await opts.signExec(tx);
   return digest;
 }

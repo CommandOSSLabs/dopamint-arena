@@ -40,6 +40,7 @@ pub(crate) mod test_support {
             settler,
             walrus,
             stats_tx,
+            actions: crate::stats_counter::LocalActionCounter::default(),
         })
     }
 }
