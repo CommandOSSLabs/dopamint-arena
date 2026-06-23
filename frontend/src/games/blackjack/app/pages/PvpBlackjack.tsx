@@ -508,9 +508,17 @@ export default function PvpBlackjack() {
 
       {/* Bottom HUD: balances + controls + on-chain links */}
       {playing && (
-        <div className="w-full bg-zinc-950/95 backdrop-blur-md border-t border-zinc-800 z-30 px-4 md:px-8 py-3 flex flex-col md:flex-row items-center justify-between gap-3">
-          <div className="flex items-center gap-5 text-xs">
-            {/* In-game chip balances (bet units, player-chosen each round) — not the SUI wallet balance. */}
+        <div
+          className={`w-full bg-zinc-950/95 backdrop-blur-md border-t border-zinc-800 z-30 px-4 md:px-8 py-2 md:py-3 flex items-center justify-between gap-3 flex-shrink-0 ${
+            isPortrait ? "flex-col h-[110px]" : "flex-row h-[64px]"
+          }`}
+        >
+          {/* Left / Top: Balances */}
+          <div
+            className={`flex items-center text-xs ${
+              isPortrait ? "gap-5 justify-center" : "flex-1 gap-5 justify-start"
+            }`}
+          >
             <span>
               Player{" "}
               <span className="font-mono text-emerald-300">
@@ -533,7 +541,12 @@ export default function PvpBlackjack() {
             )}
           </div>
 
-          <div className="flex flex-wrap items-center gap-2 justify-center">
+          {/* Center: Controls */}
+          <div
+            className={`flex items-center gap-2 justify-center ${
+              isPortrait ? "flex-wrap" : "flex-shrink-0"
+            }`}
+          >
             {g.phase === "playing" && g.myTurn && (
               <>
                 <button
@@ -595,26 +608,31 @@ export default function PvpBlackjack() {
                 Rematch
               </button>
             )}
-            {/* Auto governs the player only (hit/stand + re-bet); the dealer always draws deterministically. */}
-            {!g.isDealer && (
-              <label className="flex items-center gap-1.5 text-xs text-zinc-300 ml-1">
-                <input
-                  type="checkbox"
-                  checked={g.auto}
-                  onChange={(e) => g.setAuto(e.target.checked)}
-                />
-                Auto
-              </label>
-            )}
           </div>
 
-          {!isPortrait && (
-            <div className="flex items-center gap-3">
-              <DigestLink label="open" digest={g.digests.create} />
-              <DigestLink label="deposit" digest={g.digests.deposit} />
-              <DigestLink label="close" digest={g.digests.close} />
-            </div>
-          )}
+          {/* Right / Bottom: Auto toggle and Digest Links */}
+          <div
+            className={`flex items-center ${
+              isPortrait ? "justify-center gap-4" : "flex-1 justify-end gap-4"
+            }`}
+          >
+            {/* Auto governs the player only (hit/stand + re-bet); the dealer always draws deterministically. */}
+            <label className="flex items-center gap-1.5 text-xs text-zinc-300 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={g.auto}
+                onChange={(e) => g.setAuto(e.target.checked)}
+              />
+              Auto
+            </label>
+            {!isPortrait && (
+              <div className="flex items-center gap-3">
+                <DigestLink label="open" digest={g.digests.create} />
+                <DigestLink label="deposit" digest={g.digests.deposit} />
+                <DigestLink label="close" digest={g.digests.close} />
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>
