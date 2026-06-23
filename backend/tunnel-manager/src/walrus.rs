@@ -20,6 +20,13 @@ impl WalrusClient {
         }
     }
 
+    /// Construct a no-op client for tests — all method calls will fail at the network layer,
+    /// which is acceptable since tests using `in_memory_for_test` never call `upload_transcript`.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn noop() -> Self {
+        Self::new(String::new(), String::new())
+    }
+
     /// Upload `bytes`, returning `(blob_id, read_url)`. The publisher returns the id under
     /// `newlyCreated.blobObject.blobId` for a fresh blob or `alreadyCertified.blobId` for a
     /// dedup hit; the read URL is `{aggregator}/v1/blobs/<blobId>`.

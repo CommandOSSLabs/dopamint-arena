@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 import {
   useCurrentAccount,
   useSignAndExecuteTransaction,
@@ -31,6 +31,7 @@ import {
   closeCooperativeWithRoot,
   depositStake,
   openAndFundSharedTunnel,
+  raiseDisputeUnilateral,
   readCreatedAt,
 } from "../../onchain/tunnelTx";
 import { coSignedToSettleRequest } from "../../backend/settleRequest";
@@ -39,6 +40,14 @@ import { type Placement, placementsToBoard } from "./engine/fleet";
 import { randomSalts } from "./engine/merkle";
 import { proposeDue } from "./engine/pvpDriver";
 import { deriveBattleshipView, type BattleshipView } from "./view";
+import { attachResume, resumeActiveTunnels } from "@/pvp/resumeSession";
+import {
+  installResumePersistence,
+  evictExpiredRecords,
+  readResumeRecord,
+  listActiveTunnels,
+} from "@/pvp/resume";
+import { makeBattleshipResumeAdapter } from "./battleshipResumeAdapter";
 
 const STAKE_BALANCE = 500n; // locked per seat (MIST)
 const STAKE_SHIFT = 100n; // moves loser → winner on a decisive result
@@ -131,6 +140,7 @@ class PvpSession {
   private mp: MpClient | null = null;
   private dt: BattleshipTunnel | null = null;
   private secret: FleetSecret | null = null;
+  private detachResume: (() => void) | null = null;
   private placements: Placement[] = []; // your fleet layout, for ship-status display
   private lastYourShot: number | null = null;
   private lastEnemyShot: number | null = null;
@@ -175,6 +185,8 @@ class PvpSession {
   };
 
   reset = () => {
+    this.detachResume?.();
+    this.detachResume = null;
     this.mp?.close();
     this.mp = null;
     this.dt = null;
@@ -190,11 +202,178 @@ class PvpSession {
   };
 
   dispose = () => {
+    this.detachResume?.();
+    this.detachResume = null;
     this.mp?.close();
     this.mp = null;
     this.dt = null;
     this.secret = null;
     this.listeners.clear();
+  };
+
+  private makeAdapter() {
+    return makeBattleshipResumeAdapter({
+      getSecret: () => this.secret!,
+      setSecret: (s) => {
+        this.secret = s;
+      },
+      getPlacements: () => this.placements,
+      setPlacements: (p) => {
+        this.placements = p;
+      },
+      onReconciled: () => this.sync(),
+    });
+  }
+
+  // Wire the per-move loop + resume onto a freshly built/rebuilt tunnel. Shared by the live
+  // (findMatch) and cold-load (resume) paths. The readiness handshake and the opening proposeDue
+  // stay with the caller — a resuming peer is mid-game and never re-sends "ready".
+  private activateSession(
+    mp: MpClient,
+    channel: PvpChannel,
+    dt: BattleshipTunnel,
+    waitPeer: ReturnType<typeof makeInbox>,
+    info: {
+      matchId: string;
+      role: Role;
+      opponentWallet: string;
+      opponentPubkeyHex: string;
+      selfEphemeralSecretHex: string;
+    },
+  ) {
+    const deps = this.deps!;
+    const signExec = deps.signExec;
+    const reads = deps.client as unknown as Parameters<
+      typeof openAndFundSharedTunnel
+    >[0]["reads"];
+    const proto = new BattleshipProtocol(STAKE_SHIFT);
+    const transcript = new Transcript(dt.tunnelId);
+    let settling = false;
+    dt.onConfirmed = (u) => {
+      transcript.append(u); // verifiable move log, root-anchored at settle
+      const st = dt.state;
+      if (st.pendingShot && st.pendingShot.by !== info.role) {
+        this.lastEnemyShot = st.pendingShot.cell;
+      }
+      this.sync();
+      proposeDue(dt, info.role, this.secret!); // ordered commit + defender reveals
+      if (proto.isTerminal(st) && !settling) {
+        settling = true;
+        this.status = "settling";
+        this.emit();
+        void settle(
+          dt,
+          info.role,
+          channel,
+          waitPeer,
+          reads,
+          signExec as never,
+          dt.tunnelId,
+          transcript,
+          getControlPlaneClient(),
+        ).then(
+          () => {
+            this.status = "settled";
+            this.emit();
+          },
+          (e) => this.fail(e),
+        );
+      }
+    };
+
+    // Resume wiring: persist on confirm + run the resync handshake on reconnect.
+    // The fleet secret round-trips only through capture/restore, never the wire.
+    this.detachResume?.();
+    this.detachResume = attachResume({
+      mp,
+      channel,
+      tunnel: dt,
+      adapter: this.makeAdapter(),
+      identity: {
+        matchId: info.matchId,
+        tunnelId: dt.tunnelId,
+        role: info.role,
+        game: "battleship",
+        opponentWallet: info.opponentWallet,
+        opponentPubkeyHex: info.opponentPubkeyHex,
+        selfEphemeralSecretHex: info.selfEphemeralSecretHex,
+      },
+      // Settlement floor: after the 1h grace, settle from the held checkpoint.
+      onGraceExpired: (latest) => {
+        if (latest)
+          void raiseDisputeUnilateral({
+            signExec: signExec as never,
+            tunnelId: dt.tunnelId,
+            update: latest,
+            role: info.role,
+          });
+      },
+    });
+
+    this.status = "playing";
+    this.sync();
+  }
+
+  // Cold-load entry: on mount, rebuild any persisted in-flight battleship match and re-attach.
+  // The restored secret + placements are hydrated by makeAdapter during rebuildTunnel.
+  resume = () => {
+    if (this.mp) return; // already in a live or resumed session
+    const deps = this.deps;
+    if (!deps?.account) return; // wallet not ready yet; the mount effect retries
+    installResumePersistence();
+    evictExpiredRecords();
+    const wallet = deps.account.address;
+    const resumable = listActiveTunnels()
+      .map((id) => readResumeRecord(id))
+      .some((r) => r?.game === "battleship");
+    if (!resumable) return; // nothing to resume → don't open a socket
+    void (async () => {
+      try {
+        const ephemeral: KeyPair = generateKeyPair();
+        const mp = new MpClient(
+          resolveMpWsUrl(resolveBackendUrl()),
+          wallet,
+          ephemeral,
+        );
+        this.mp = mp;
+        const restored = resumeActiveTunnels<BattleshipState, BattleshipMove>(
+          mp,
+          "battleship",
+          {
+            proto: new BattleshipProtocol(STAKE_SHIFT),
+            moveCodec: battleshipMoveCodec,
+            adapter: this.makeAdapter(),
+          },
+          { selfWallet: wallet },
+        );
+        if (restored.length === 0) {
+          this.mp = null;
+          mp.close();
+          return;
+        }
+        const { tunnel, channel } = restored[0];
+        const rec = readResumeRecord(tunnel.tunnelId)!;
+        this.role = rec.role;
+        this.opponentWallet = rec.opponentWallet;
+        const waitPeer = makeInbox(channel);
+        this.activateSession(mp, channel, tunnel, waitPeer, {
+          matchId: rec.matchId,
+          role: rec.role,
+          opponentWallet: rec.opponentWallet,
+          opponentPubkeyHex: rec.opponentPubkeyHex,
+          selfEphemeralSecretHex: rec.selfEphemeralSecretHex!,
+        });
+        await mp.connect(); // opening handshake carries resume{matchId}
+        try {
+          proposeDue(tunnel, rec.role, this.secret!); // kick a due reveal/commit
+        } catch {
+          /* a move is already in flight — the resync handshake converges it */
+        }
+        this.sync();
+      } catch (e) {
+        this.fail(e);
+      }
+    })();
   };
 
   findMatch = (placements: Placement[]) => {
@@ -206,6 +385,8 @@ class PvpSession {
       return;
     }
     const wallet = deps.account.address;
+    installResumePersistence();
+    evictExpiredRecords();
     this.placements = placements;
     const secret = makeFleetSecret(
       placementsToBoard(placements),
@@ -293,44 +474,15 @@ class PvpSession {
           { a: STAKE_BALANCE, b: STAKE_BALANCE },
         );
         this.dt = dt;
-        const transcript = new Transcript(tunnelId);
-
-        let settling = false;
-        dt.onConfirmed = (u) => {
-          transcript.append(u); // verifiable move log, root-anchored at settle
-          const st = dt.state;
-          if (st.pendingShot && st.pendingShot.by !== match.role) {
-            this.lastEnemyShot = st.pendingShot.cell;
-          }
-          this.sync();
-          proposeDue(dt, match.role, secret); // ordered commit + defender reveals
-          if (proto.isTerminal(st) && !settling) {
-            settling = true;
-            this.status = "settling";
-            this.emit();
-            void settle(
-              dt,
-              match.role,
-              channel,
-              waitPeer,
-              reads,
-              signExec as never,
-              tunnelId,
-              transcript,
-              getControlPlaneClient(),
-            ).then(
-              () => {
-                this.status = "settled";
-                this.emit();
-              },
-              (e) => this.fail(e),
-            );
-          }
-        };
+        this.activateSession(mp, channel, dt, waitPeer, {
+          matchId: match.matchId,
+          role: match.role,
+          opponentWallet: match.opponentWallet,
+          opponentPubkeyHex: toHex(oppPub),
+          selfEphemeralSecretHex: toHex(ephemeral.secretKey),
+        });
 
         // 4) readiness handshake before the opening commit can reach the peer.
-        this.status = "playing";
-        this.sync();
         if (match.role === "A") {
           await waitPeer("ready");
         } else {
@@ -401,6 +553,12 @@ export function useBattleshipPvp(windowId: string): BattleshipPvp {
       return { digest: r.digest };
     }) as never,
   };
+
+  // Cold-load: once the wallet is known, re-attach to any persisted in-flight match. resume()
+  // is idempotent (no-ops if already connected or nothing to restore).
+  useEffect(() => {
+    session.resume();
+  }, [session, account?.address]);
 
   const snap = useSyncExternalStore(session.subscribe, session.getSnapshot);
   return {

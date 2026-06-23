@@ -42,6 +42,23 @@ pub struct Checkpoint {
     pub sig_b: String,
 }
 
+/// Which seat of a match a wallet occupies. `A` = seat_a/conn_a, `B` = seat_b/conn_b.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Seat {
+    A,
+    B,
+}
+
+impl Seat {
+    /// Wire form matching the FE `Role` ("A" | "B").
+    pub fn as_role(self) -> &'static str {
+        match self {
+            Seat::A => "A",
+            Seat::B => "B",
+        }
+    }
+}
+
 /// A live or forming match. Seats are wallets; `tunnel_id` is filled once the opener
 /// announces it via `tunnel.opened`.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
