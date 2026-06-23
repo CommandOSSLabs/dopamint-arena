@@ -21,8 +21,10 @@ permissions:
   id-token: write
   contents: read
 
+# Shared group with deploy-backend: both run `pulumi up` on the same stack, so they must
+# serialize or they collide with a 409 ConcurrentUpdate (Pulumi's per-stack lock).
 concurrency:
-  group: deploy-infra-${{ github.event.inputs.environment || 'dev' }}
+  group: pulumi-${{ github.event.inputs.environment || 'dev' }}
   cancel-in-progress: false
 
 jobs:
