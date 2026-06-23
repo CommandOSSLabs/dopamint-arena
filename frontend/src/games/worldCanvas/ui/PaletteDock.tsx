@@ -1,100 +1,113 @@
-import { PALETTE, WC, FONT_MONO } from "./tokens";
-
-/** Brush footprint sizes (cells per edge) offered in the dock; default is 1. */
-const BRUSH_SIZES = [1, 2, 3] as const;
-
 /**
- * Bottom-center paint dock — a brush-size selector plus 16 color swatches mapping
- * 1:1 to the protocol's palette index `[0, 16)`. The selected swatch is the color
- * the next stroke paints; the brush size is the N×N footprint stamped per cell.
+ * The Paint app's bottom COLOR BOX (jspaint style): a foreground/background dual-
+ * color indicator on the left, then the 16-color palette in two rows of eight.
+ * Left-click a swatch sets the PRIMARY (foreground) color; right-click sets the
+ * SECONDARY (background) color — the classic MS-Paint convention. Both indices map
+ * 1:1 to the protocol palette `[0,16)`; the secondary is what the Eraser tool paints.
  */
+import { PALETTE, W98, FONT_W98, w98Outset, w98Inset } from "./tokens";
+
+/** Two rows of eight, mirroring the classic Paint palette grid layout. */
+const ROW_LEN = 8;
+
 export function PaletteDock({
-  selected,
-  onSelect,
-  brushSize,
-  onBrushSizeChange,
+  primary,
+  secondary,
+  onPrimary,
+  onSecondary,
 }: {
-  selected: number;
-  onSelect: (color: number) => void;
-  brushSize: number;
-  onBrushSizeChange: (size: number) => void;
+  primary: number;
+  secondary: number;
+  onPrimary: (color: number) => void;
+  onSecondary: (color: number) => void;
 }) {
+  const rows = [
+    PALETTE.slice(0, ROW_LEN),
+    PALETTE.slice(ROW_LEN, ROW_LEN * 2),
+  ];
   return (
     <div
-      className="absolute bottom-[16px] left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-[14px] px-3 py-2"
       style={{
-        background: "rgba(10,16,34,0.7)",
-        border: "1px solid rgba(255,255,255,0.12)",
-        backdropFilter: "blur(10px)",
+        flex: "0 0 auto",
+        ...w98Outset,
+        padding: "4px 6px",
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        fontFamily: FONT_W98,
       }}
     >
-      <span
-        className="mr-1 hidden text-[10px] uppercase tracking-[0.18em] sm:block"
-        style={{ color: WC.muted, fontFamily: FONT_MONO }}
+      {/* Foreground/background dual-color indicator. */}
+      <div
+        style={{
+          ...w98Inset,
+          width: 38,
+          height: 38,
+          position: "relative",
+          flex: "0 0 auto",
+        }}
+        title={`Foreground: color ${primary} · Background: color ${secondary}`}
       >
-        Brush
-      </span>
-      <div className="flex items-center gap-[4px]">
-        {BRUSH_SIZES.map((n) => {
-          const active = n === brushSize;
-          return (
-            <button
-              key={n}
-              onClick={() => onBrushSizeChange(n)}
-              aria-pressed={active}
-              title={`Brush ${n}×${n}`}
-              className="flex h-[24px] w-[24px] items-center justify-center rounded-[7px] text-[12px] font-bold tabular-nums"
-              style={{
-                color: active ? "#06203B" : WC.text,
-                background: active ? WC.accent : "rgba(255,255,255,0.06)",
-                border: active
-                  ? `1px solid ${WC.accent}`
-                  : "1px solid rgba(255,255,255,0.12)",
-                cursor: "pointer",
-                fontFamily: FONT_MONO,
-                transition: "background .12s, color .12s",
-              }}
-            >
-              {n}
-            </button>
-          );
-        })}
+        <span
+          style={{
+            position: "absolute",
+            left: 16,
+            top: 16,
+            width: 17,
+            height: 17,
+            background: PALETTE[secondary] ?? "#000",
+            boxShadow: `inset 1px 1px 0 ${W98.shadow}, 0 0 0 1px ${W98.darkShadow}`,
+          }}
+        />
+        <span
+          style={{
+            position: "absolute",
+            left: 5,
+            top: 5,
+            width: 17,
+            height: 17,
+            background: PALETTE[primary] ?? "#fff",
+            boxShadow: `inset 1px 1px 0 ${W98.hilight}, 0 0 0 1px ${W98.darkShadow}`,
+          }}
+        />
       </div>
 
-      <span
-        className="ml-1 h-[22px] w-px"
-        style={{ background: "rgba(255,255,255,0.12)" }}
-      />
+      <span style={{ width: 1, height: 34, background: W98.shadow, flex: "0 0 auto" }} />
 
-      <span
-        className="ml-1 mr-1 hidden text-[10px] uppercase tracking-[0.18em] sm:block"
-        style={{ color: WC.muted, fontFamily: FONT_MONO }}
-      >
-        Color
-      </span>
-      <div className="flex flex-wrap items-center gap-[5px]" style={{ maxWidth: 360 }}>
-        {PALETTE.map((hex, i) => {
-          const active = i === selected;
-          return (
-            <button
-              key={i}
-              onClick={() => onSelect(i)}
-              aria-pressed={active}
-              title={`Color ${i}`}
-              className="h-[22px] w-[22px] rounded-[6px]"
-              style={{
-                background: hex,
-                cursor: "pointer",
-                border: active
-                  ? `2px solid ${WC.text}`
-                  : "1px solid rgba(0,0,0,0.35)",
-                boxShadow: active ? `0 0 0 2px ${WC.accent}` : "none",
-                transform: active ? "translateY(-2px)" : "none",
-                transition: "transform .12s",
-              }}
-            />
-          );
-        })}
+      {/* The 16-color palette: two rows of eight. */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+        {rows.map((row, r) => (
+          <div key={r} style={{ display: "flex", gap: 2 }}>
+            {row.map((hex, c) => {
+              const i = r * ROW_LEN + c;
+              const isPrimary = i === primary;
+              const isSecondary = i === secondary;
+              return (
+                <button
+                  key={i}
+                  onClick={() => onPrimary(i)}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    onSecondary(i);
+                  }}
+                  title={`Color ${i} — left-click foreground, right-click background`}
+                  style={{
+                    width: 16,
+                    height: 16,
+                    background: hex,
+                    cursor: "pointer",
+                    padding: 0,
+                    boxShadow: isPrimary
+                      ? `0 0 0 1px ${W98.field}, 0 0 0 2px ${W98.darkShadow}`
+                      : `inset 1px 1px 0 rgba(255,255,255,0.5), 0 0 0 1px ${W98.shadow}`,
+                    outline: isSecondary ? `2px dotted ${W98.darkShadow}` : "none",
+                    outlineOffset: -3,
+                  }}
+                />
+              );
+            })}
+          </div>
+        ))}
       </div>
     </div>
   );

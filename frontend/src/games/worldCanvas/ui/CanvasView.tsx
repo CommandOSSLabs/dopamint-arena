@@ -1,90 +1,338 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useWorldCanvasOnchain } from "../useWorldCanvasOnchain";
 import {
-  useWorldCanvasOnchain,
-  type WorldCanvasPhase,
-  type UseWorldCanvasOnchain,
-  type AgentSpeed,
-  type AgentMode,
-} from "../useWorldCanvasOnchain";
+  AGENT_MODES,
+  AGENT_MODE_GROUPS,
+  AGENT_GROUP_LABELS,
+  type AgentDrawMode,
+  type AgentModeGroup,
+} from "../designs";
+import { TEMPLATES, type StrokeTemplate } from "../templates";
 import { WorldCanvas } from "./WorldCanvas";
 import { PaletteDock } from "./PaletteDock";
+import { StampDock } from "./StampDock";
 import { PlayersActivityPanel, LeaderboardPanel } from "./panels";
-import { WC, glass, agentPill, FONT_DISPLAY, FONT_MONO } from "./tokens";
+import { MenuBar, type W98Menu, type W98MenuItem } from "./MenuBar";
+import { ToolBox, type ToolId } from "./ToolBox";
+import { AgentPanel } from "./AgentPanel";
+import { StatusBar } from "./StatusBar";
+import { W98Window } from "./W98Window";
+import { W98, FONT_W98, w98Inset } from "./tokens";
+
+/** Modes bucketed by visual group — drives the Agent menu's Intelligence section. */
+const MODES_BY_GROUP: { group: AgentModeGroup; modes: AgentDrawMode[] }[] =
+  AGENT_MODE_GROUPS.map((group) => ({
+    group,
+    modes: Object.values(AGENT_MODES).filter((m) => m.group === group),
+  }));
 
 /**
- * The live wall: mounts the tunnel hook (which opens a sponsored 2-party tunnel
- * on mount), renders the chunked canvas, and overlays the HUD — paint stats +
- * live TPS, the on-chain status chip, and the "Agent AI" spawn/stop controls.
- * One human click = one co-signed paint; each spawned agent paints forever.
+ * The Paint app shell: a classic Windows-98 MS-Paint window — menu bar, left tool
+ * box, sunken canvas client area, bottom color box, and a status bar — wrapped
+ * around the SMOOTH chunked canvas. Every tool/menu maps to an existing engine op;
+ * nothing new touches the wire. One human paint = one co-signed move; each spawned
+ * Agent AI paints forever over its own tunnel.
  */
-export function CanvasView() {
+export function CanvasView({ onExit }: { onExit?: () => void }) {
   const engine = useWorldCanvasOnchain();
-  const [color, setColor] = useState(13); // default to Sui blue (index 13)
-  const [brushSize, setBrushSize] = useState(1); // 1×1 brush by default
+  const [primary, setPrimary] = useState(13); // foreground — Sui blue (index 13)
+  const [secondary, setSecondary] = useState(0); // background — white (the eraser color)
+  const [brushSize, setBrushSize] = useState(1);
+  const [tool, setTool] = useState<ToolId>("brush");
+  const [showGrid, setShowGrid] = useState(false);
+  const [armedTemplate, setArmedTemplate] = useState<StrokeTemplate | null>(null);
+
+  // Floating tool windows — toggled from the View / Agent menus.
+  const [showAgentPanel, setShowAgentPanel] = useState(true);
+  const [showStamps, setShowStamps] = useState(false);
+  const [showPlayers, setShowPlayers] = useState(true);
+  const [showLeaderboard, setShowLeaderboard] = useState(true);
+  const [showAbout, setShowAbout] = useState(false);
+
   const tps = useRollingTps(engine.status.movesCoSigned);
+
+  // Arming a stamp implies the Stamps window should be visible; Esc disarms.
+  useEffect(() => {
+    if (!armedTemplate) return;
+    setShowStamps(true);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setArmedTemplate(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [armedTemplate]);
+
+  // Tool → existing paint op: Brush paints the foreground; Pencil is forced 1×;
+  // Eraser paints the background (secondary) color. Non-wired tools keep brushing.
+  const effectiveColor = tool === "eraser" ? secondary : primary;
+  const effectiveBrush = tool === "pencil" ? 1 : brushSize;
+
+  const swapColors = () => {
+    setPrimary(secondary);
+    setSecondary(primary);
+  };
+  const burst = () => {
+    engine.setAgentSpeed("fast");
+    engine.setAgentDensity(3);
+    engine.spawnAgent();
+  };
+
+  const soon = (label: string): W98MenuItem => ({
+    kind: "action",
+    label,
+    onClick: () => {},
+    disabled: true,
+    accel: "soon",
+  });
+
+  const menus: W98Menu[] = [
+    {
+      label: "File",
+      items: [
+        soon("New"),
+        soon("Save Image"),
+        { kind: "sep" },
+        {
+          kind: "action",
+          label: "Exit",
+          onClick: () => onExit?.(),
+          disabled: !onExit,
+        },
+      ],
+    },
+    {
+      label: "Edit",
+      items: [soon("Undo"), soon("Redo"), { kind: "sep" }, soon("Clear Canvas")],
+    },
+    {
+      label: "View",
+      items: [
+        { kind: "check", label: "Show Grid", checked: showGrid, onClick: () => setShowGrid((g) => !g) },
+        { kind: "sep" },
+        { kind: "check", label: "Agent AI", checked: showAgentPanel, onClick: () => setShowAgentPanel((v) => !v) },
+        { kind: "check", label: "Stamps", checked: showStamps, onClick: () => setShowStamps((v) => !v) },
+        { kind: "check", label: "Players", checked: showPlayers, onClick: () => setShowPlayers((v) => !v) },
+        { kind: "check", label: "Leaderboard", checked: showLeaderboard, onClick: () => setShowLeaderboard((v) => !v) },
+      ],
+    },
+    {
+      label: "Colors",
+      items: [
+        { kind: "action", label: "Swap Foreground / Background", onClick: swapColors },
+        { kind: "sep" },
+        { kind: "action", label: "Open Stamps…", onClick: () => setShowStamps(true) },
+        soon("Edit Colors…"),
+      ],
+    },
+    {
+      label: "Agent",
+      items: [
+        { kind: "action", label: "Spawn Agent AI", onClick: engine.spawnAgent },
+        { kind: "action", label: "⚡ BURST (fast · 3× · spawn)", onClick: burst },
+        { kind: "action", label: "View Next Agent", onClick: engine.viewNextAgent, disabled: engine.agentCount === 0 },
+        { kind: "action", label: "Stop All Agents", onClick: engine.stopAgents, disabled: engine.agentCount === 0 },
+        { kind: "sep" },
+        { kind: "header", label: "Speed" },
+        ...(["slow", "normal", "fast"] as const).map(
+          (s): W98MenuItem => ({
+            kind: "radio",
+            label: s[0].toUpperCase() + s.slice(1),
+            checked: engine.agentSpeed === s,
+            onClick: () => engine.setAgentSpeed(s),
+          }),
+        ),
+        { kind: "sep" },
+        ...MODES_BY_GROUP.flatMap(({ group, modes }): W98MenuItem[] => [
+          { kind: "header", label: `Intelligence · ${AGENT_GROUP_LABELS[group]}` },
+          ...modes.map(
+            (m): W98MenuItem => ({
+              kind: "radio",
+              label: m.label,
+              checked: engine.agentMode === m.id,
+              onClick: () => engine.setAgentMode(m.id),
+            }),
+          ),
+        ]),
+        ...(engine.agentMode === "artist"
+          ? ([
+              { kind: "sep" } as W98MenuItem,
+              { kind: "header", label: "Template" } as W98MenuItem,
+              {
+                kind: "radio",
+                label: "Flags (built-in)",
+                checked: engine.agentTemplate === null,
+                onClick: () => engine.setAgentTemplate(null),
+              } as W98MenuItem,
+              ...TEMPLATES.map(
+                (t): W98MenuItem => ({
+                  kind: "radio",
+                  label: t.name,
+                  checked: engine.agentTemplate === t.id,
+                  onClick: () => engine.setAgentTemplate(t.id),
+                }),
+              ),
+            ] as W98MenuItem[])
+          : []),
+        { kind: "sep" },
+        { kind: "header", label: "Density" },
+        ...([1, 2, 3] as const).map(
+          (n): W98MenuItem => ({
+            kind: "radio",
+            label: `${n}× per tick`,
+            checked: engine.agentDensity === n,
+            onClick: () => engine.setAgentDensity(n),
+          }),
+        ),
+        { kind: "sep" },
+        { kind: "check", label: "Agent AI Window", checked: showAgentPanel, onClick: () => setShowAgentPanel((v) => !v) },
+      ],
+    },
+    {
+      label: "Help",
+      items: [
+        { kind: "action", label: "About The World is Your Canvas…", onClick: () => setShowAbout(true) },
+        soon("Controls"),
+      ],
+    },
+  ];
 
   return (
     <div
-      className="relative h-full min-h-0 w-full overflow-hidden"
-      style={{ background: WC.bg, fontFamily: FONT_DISPLAY }}
+      style={{
+        height: "100%",
+        width: "100%",
+        display: "flex",
+        flexDirection: "column",
+        background: W98.face,
+        color: W98.text,
+        fontFamily: FONT_W98,
+        overflow: "hidden",
+      }}
     >
-      <WorldCanvas
-        paints={engine.paints}
-        revision={engine.revision}
-        selectedColor={color}
-        brushSize={brushSize}
-        disabled={engine.status.phase === "opening"}
-        onPaint={engine.submitHumanPaint}
-        agents={engine.agents}
-        focus={engine.focus}
-        humanAddress={engine.humanAddress}
-      />
+      <MenuBar menus={menus} />
 
-      {/* Stats panel (top-left): pixels co-signed + live TPS + active agents */}
+      {/* Tool box + sunken canvas client area. */}
       <div
-        className="absolute left-4 top-4 flex flex-col gap-2 rounded-[14px] px-4 py-3"
-        style={{ ...glass, color: WC.text, minWidth: 168 }}
+        style={{
+          flex: "1 1 auto",
+          minHeight: 0,
+          display: "flex",
+          gap: 3,
+          padding: 3,
+        }}
       >
-        <Stat
-          label="Pixels co-signed"
-          value={engine.status.movesCoSigned.toLocaleString()}
-          tint={WC.accent}
+        <ToolBox
+          tool={tool}
+          onTool={setTool}
+          brushSize={brushSize}
+          onBrushSize={setBrushSize}
         />
-        <Stat label="TPS" value={tps.toFixed(1)} tint={WC.ok} mono />
-        <Stat
-          label="Active agents"
-          value={String(engine.agentCount)}
-          tint={WC.seatB}
-        />
+
+        <div
+          style={{
+            flex: "1 1 auto",
+            minWidth: 0,
+            minHeight: 0,
+            position: "relative",
+            overflow: "hidden",
+            ...w98Inset,
+          }}
+        >
+          {/* Inner client: inset past the sunken bevel; the positioned ancestor for
+              both the canvas and every floating tool window. */}
+          <div style={{ position: "absolute", inset: 3, overflow: "hidden" }}>
+            <WorldCanvas
+              paints={engine.paints}
+              revision={engine.revision}
+              selectedColor={effectiveColor}
+              brushSize={effectiveBrush}
+              showGrid={showGrid}
+              disabled={engine.status.phase === "opening"}
+              onPaint={engine.submitHumanPaint}
+              agents={engine.agents}
+              focus={engine.focus}
+              humanAddress={engine.humanAddress}
+              armedTemplate={armedTemplate}
+            />
+
+            {showAgentPanel && (
+              <AgentPanel engine={engine} onClose={() => setShowAgentPanel(false)} />
+            )}
+            {showStamps && (
+              <StampDock
+                armed={armedTemplate}
+                onArm={setArmedTemplate}
+                onClose={() => {
+                  setArmedTemplate(null);
+                  setShowStamps(false);
+                }}
+              />
+            )}
+            {showPlayers && (
+              <PlayersActivityPanel
+                painters={engine.painters}
+                activity={engine.activity}
+                humanAddress={engine.humanAddress}
+                agents={engine.agents}
+                onFocusAgent={engine.focusOnAgent}
+                onClose={() => setShowPlayers(false)}
+                revision={engine.revision}
+              />
+            )}
+            {showLeaderboard && (
+              <LeaderboardPanel
+                painters={engine.painters}
+                onClose={() => setShowLeaderboard(false)}
+                revision={engine.revision}
+              />
+            )}
+            {showAbout && <AboutWindow onClose={() => setShowAbout(false)} />}
+          </div>
+        </div>
       </div>
-
-      {/* Status chip (top-right) */}
-      <div className="absolute right-4 top-4">
-        <StatusChip phase={engine.status.phase} onchain={engine.status.onchain} />
-      </div>
-
-      {/* Agent-AI controls (right, below the chip): spawn + Speed + Intelligence +
-          View Agent + Stop. Each spawn opens the agent its OWN co-signed tunnel. */}
-      <AgentControls engine={engine} />
-
-      {/* Players + Recent Activity and Leaderboard (draggable glass panels) */}
-      <PlayersActivityPanel
-        painters={engine.painters}
-        activity={engine.activity}
-        humanAddress={engine.humanAddress}
-        agents={engine.agents}
-        onFocusAgent={engine.focusOnAgent}
-        revision={engine.revision}
-      />
-      <LeaderboardPanel painters={engine.painters} revision={engine.revision} />
 
       <PaletteDock
-        selected={color}
-        onSelect={setColor}
-        brushSize={brushSize}
-        onBrushSizeChange={setBrushSize}
+        primary={primary}
+        secondary={secondary}
+        onPrimary={setPrimary}
+        onSecondary={setSecondary}
+      />
+
+      <StatusBar
+        movesCoSigned={engine.status.movesCoSigned}
+        tps={tps}
+        agentCount={engine.agentCount}
+        phase={engine.status.phase}
+        onchain={engine.status.onchain}
       />
     </div>
+  );
+}
+
+/** A small About box in the Paint-app spirit. */
+function AboutWindow({ onClose }: { onClose: () => void }) {
+  return (
+    <W98Window
+      title="About"
+      icon="🎨"
+      onClose={onClose}
+      storageKey="wc.aboutWindow"
+      defaultAnchor={{ left: "50%", top: 64 }}
+      width={272}
+    >
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, lineHeight: 1.4 }}>
+        <strong style={{ fontSize: 13 }}>The World is Your Canvas</strong>
+        <span style={{ fontSize: 11.5, color: W98.text }}>
+          A shared, infinite brush-painting wall on the Sui tunnel arena. Every cell
+          you paint is one co-signed off-chain move — roughly one TPS. Press Agent AI
+          to spawn bots that co-paint forever, each on its own tunnel.
+        </span>
+        <span style={{ fontSize: 10.5, color: W98.textDim }}>
+          Brush · Pencil · Eraser are live. Pick / Fill / Line / Rectangle / Ellipse
+          are coming soon.
+        </span>
+      </div>
+    </W98Window>
   );
 }
 
@@ -110,185 +358,4 @@ function useRollingTps(movesCoSigned: number): number {
   }, []);
 
   return tps;
-}
-
-function Stat({
-  label,
-  value,
-  tint,
-  mono,
-}: {
-  label: string;
-  value: string;
-  tint: string;
-  mono?: boolean;
-}) {
-  return (
-    <div className="flex flex-col gap-0.5">
-      <span
-        className="text-[9.5px] uppercase tracking-[0.16em]"
-        style={{ color: WC.muted, fontFamily: FONT_MONO }}
-      >
-        {label}
-      </span>
-      <span
-        className="text-[19px] font-bold leading-none tabular-nums"
-        style={{ color: tint, fontFamily: mono ? FONT_MONO : FONT_DISPLAY }}
-      >
-        {value}
-      </span>
-    </div>
-  );
-}
-
-const CHIP: Record<
-  WorldCanvasPhase,
-  { label: string; tint: string; pulse: boolean }
-> = {
-  idle: { label: "Idle", tint: WC.muted, pulse: false },
-  opening: { label: "Opening tunnel…", tint: WC.warn, pulse: true },
-  open: { label: "On-chain · live", tint: WC.ok, pulse: true },
-  demo: { label: "Self-play · demo", tint: WC.warn, pulse: true },
-  error: { label: "Error", tint: WC.err, pulse: false },
-};
-
-const AGENT_SPEEDS: { value: AgentSpeed; label: string }[] = [
-  { value: "slow", label: "Slow" },
-  { value: "normal", label: "Normal" },
-  { value: "fast", label: "Fast" },
-];
-
-const AGENT_MODES: { value: AgentMode; label: string; title: string }[] = [
-  { value: "artist", label: "Artist", title: "Draws the flag designs (Vietnam / Japan)" },
-  { value: "scatter", label: "Scatter", title: "Sprays random pixels in random colors" },
-  { value: "filler", label: "Filler", title: "Floods one solid region growing outward" },
-];
-
-/**
- * Agent-AI control card: the spawn button plus the Speed (paint interval) and
- * Intelligence (Artist / Scatter / Filler) selectors, then — once agents exist — a
- * "View Agent" camera-cycle and a Stop. Speed/mode apply to new spawns and live ones.
- */
-function AgentControls({ engine }: { engine: UseWorldCanvasOnchain }) {
-  return (
-    <div
-      className="absolute right-4 top-[64px] flex w-[210px] flex-col gap-2.5 rounded-[14px] px-3 py-3"
-      style={{ ...glass, color: WC.text }}
-    >
-      <button
-        onClick={engine.spawnAgent}
-        className="flex items-center justify-center gap-2 rounded-[12px] px-4 py-2.5 text-sm font-bold"
-        style={{
-          color: "#06203B",
-          background: WC.accent,
-          boxShadow: "0 6px 20px rgba(77,162,255,0.45)",
-          cursor: "pointer",
-        }}
-        title="Spawn one bot that paints forever over its OWN co-signed tunnel"
-      >
-        <span style={{ fontSize: 15 }}>🤖</span> Agent AI
-      </button>
-
-      <ControlRow label="Speed">
-        {AGENT_SPEEDS.map((s) => (
-          <button
-            key={s.value}
-            onClick={() => engine.setAgentSpeed(s.value)}
-            style={{ ...agentPill(engine.agentSpeed === s.value, WC.accent), flex: 1 }}
-            title={`Paint speed: ${s.label}`}
-          >
-            {s.label}
-          </button>
-        ))}
-      </ControlRow>
-
-      <ControlRow label="Intelligence">
-        {AGENT_MODES.map((m) => (
-          <button
-            key={m.value}
-            onClick={() => engine.setAgentMode(m.value)}
-            style={{ ...agentPill(engine.agentMode === m.value, WC.seatB), flex: 1 }}
-            title={m.title}
-          >
-            {m.label}
-          </button>
-        ))}
-      </ControlRow>
-
-      {engine.agentCount > 0 && (
-        <div className="flex gap-2">
-          <button
-            onClick={engine.viewNextAgent}
-            className="flex flex-1 items-center justify-center gap-1.5 rounded-[12px] px-3 py-1.5 text-xs font-bold"
-            style={{
-              color: WC.text,
-              background: WC.accentSoft,
-              border: `1px solid ${WC.accent}`,
-              cursor: "pointer",
-            }}
-            title="Cycle the camera to the next active agent"
-          >
-            📍 View Agent
-          </button>
-          <button
-            onClick={engine.stopAgents}
-            className="rounded-[12px] px-3 py-1.5 text-xs font-bold"
-            style={{
-              color: WC.text,
-              background: "rgba(255,90,106,0.16)",
-              border: "1px solid rgba(255,90,106,0.4)",
-              cursor: "pointer",
-            }}
-            title="Stop all agents and tear down their tunnels"
-          >
-            ✕ {engine.agentCount}
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/** A labeled row of segmented pills inside the agent control card. */
-function ControlRow({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div className="flex flex-col gap-1">
-      <span
-        className="text-[9px] uppercase tracking-[0.18em]"
-        style={{ color: WC.muted, fontFamily: FONT_MONO }}
-      >
-        {label}
-      </span>
-      <div className="flex gap-1">{children}</div>
-    </div>
-  );
-}
-
-function StatusChip({
-  phase,
-  onchain,
-}: {
-  phase: WorldCanvasPhase;
-  onchain: boolean;
-}) {
-  const c = CHIP[phase];
-  const label = phase === "open" && !onchain ? CHIP.demo.label : c.label;
-  return (
-    <div
-      className="flex items-center gap-2 rounded-full px-3 py-1.5 text-[11px] font-bold"
-      style={{ ...glass, color: WC.text }}
-    >
-      <span
-        style={{
-          width: 8,
-          height: 8,
-          borderRadius: "50%",
-          background: c.tint,
-          boxShadow: `0 0 9px ${c.tint}`,
-          animation: c.pulse ? "wcPulse 1.6s ease-in-out infinite" : "none",
-        }}
-      />
-      <span style={{ fontFamily: FONT_MONO }}>{label}</span>
-    </div>
-  );
 }

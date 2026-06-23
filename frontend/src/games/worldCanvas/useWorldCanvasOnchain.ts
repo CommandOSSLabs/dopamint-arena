@@ -77,15 +77,19 @@ import {
   withSponsorFallback,
 } from "@/onchain/sponsor";
 import {
-  designForMode,
-  MAX_DESIGN_WIDTH,
-  MAX_DESIGN_HEIGHT,
-  type AgentMode,
-  type PixelDesign,
+  AGENT_MODES,
+  DEFAULT_AGENT_MODE,
+  MAX_FOOTPRINT_W,
+  MAX_FOOTPRINT_H,
+  type AgentModeId,
+  type AgentDensity,
+  type DesignCell,
 } from "./designs";
+import { rasterizeTemplate, fitScale, TEMPLATES_BY_ID } from "./templates";
+import { mulberry32 } from "./geometry";
 import { WC } from "./ui/tokens";
 
-export type { AgentMode } from "./designs";
+export type { AgentModeId } from "./designs";
 
 /** Cells per chunk edge — MUST match the WorldCanvasProtocol so a paint legal in
  *  the UI is legal in the co-signing tunnel. */
@@ -102,11 +106,21 @@ const GAME = "world-canvas";
 const MAX_RETAINED_CELLS = 200_000;
 /** Recent-activity ring length (newest paints kept for the activity feed). */
 const MAX_ACTIVITY = 60;
-/** Gap (cells) between adjacent flag regions so flags never touch. */
+/** Gap (cells) between adjacent agent regions so their art never touches. */
 const REGION_GAP = 14;
-/** World slot size (cells) — sized to the largest design so any flag fits a slot. */
-const SLOT_W = MAX_DESIGN_WIDTH + REGION_GAP;
-const SLOT_H = MAX_DESIGN_HEIGHT + REGION_GAP;
+/** World slot size (cells) — sized to the LARGEST mode footprint so any mode fits a
+ *  slot on the shared spiral lattice and regions never overlap regardless of mode. */
+const SLOT_W = MAX_FOOTPRINT_W + REGION_GAP;
+const SLOT_H = MAX_FOOTPRINT_H + REGION_GAP;
+/** Seed base for per-region PRNGs (mixed with the region index for varied art). */
+const REGION_SEED = 0x9e3779b9;
+/** Endless modes (flow / scribble) never finish on their own; relocate once a region
+ *  has co-signed this multiple of its footprint area so the bot keeps spreading. */
+const REGION_FILL_FACTOR = 1.3;
+/** Fit box (cells) an Artist agent rasterizes a chosen template into — kept under the
+ *  max mode footprint so a template region never overflows its spiral slot. */
+const AGENT_TEMPLATE_W = MAX_FOOTPRINT_W - 8;
+const AGENT_TEMPLATE_H = MAX_FOOTPRINT_H - 8;
 /** Per-agent accent colors (leaderboard rows + on-canvas markers), cycled by number. */
 const AGENT_TINTS = [
   "#CF6EE4",
@@ -122,12 +136,51 @@ export type Seat = "A" | "B";
 /** Agent painting SPEED — the per-cell paint interval (ms). */
 export type AgentSpeed = "slow" | "normal" | "fast";
 
-/** ms between an agent's co-signed paints, per speed tier. */
+/** ms between an agent's co-signed paint TICKS, per speed tier. A tick co-signs a
+ *  whole BATCH (below), so per-agent TPS = batch × 1000/interval. */
 const AGENT_SPEED_INTERVALS: Record<AgentSpeed, number> = {
   slow: 240,
   normal: 120,
   fast: 50,
 };
+
+/** Base cells co-signed per tick, by a mode's density class — the dense↔sparse TPS
+ *  spread. Scaled by the speed tier and the user Density lever, then clamped. */
+const DENSITY_BATCH: Record<AgentDensity, number> = {
+  sparse: 1,
+  medium: 3,
+  dense: 6,
+};
+/** Speed tier also widens/narrows the per-tick batch (faster ticks AND fuller ticks). */
+const SPEED_BATCH_MUL: Record<AgentSpeed, number> = {
+  slow: 0.6,
+  normal: 1,
+  fast: 1.6,
+};
+/** Hard ceiling on cells co-signed in a single tick, so even dense×fast×3 stays bounded
+ *  (paints still rAF-coalesce + evict). Each batched cell is one independent verified
+ *  co-signed move — booked once, never double-counted. */
+const BATCH_CAP = 12;
+/** User Density lever range (mirrors the human brush-size selector): a TPS multiplier. */
+const DENSITY_LEVELS = [1, 2, 3] as const;
+const DEFAULT_DENSITY = 1;
+
+/**
+ * Cells an agent co-signs THIS tick: `density(mode) × speed × userDensity`, clamped to
+ * `[1, BATCH_CAP]`. Dense modes (flow / wash / grid) burst; sparse modes (stipple /
+ * calligraphy) sip — so the Intelligence pill is a real TPS dial at a fixed Speed.
+ */
+function agentBatch(
+  modeId: AgentModeId,
+  speed: AgentSpeed,
+  userDensity: number,
+): number {
+  const base =
+    DENSITY_BATCH[AGENT_MODES[modeId].density] *
+    SPEED_BATCH_MUL[speed] *
+    userDensity;
+  return Math.max(1, Math.min(BATCH_CAP, Math.round(base)));
+}
 
 export type WorldCanvasPhase = "idle" | "opening" | "open" | "demo" | "error";
 
@@ -235,9 +288,17 @@ export interface UseWorldCanvasOnchain {
   /** Set the agent paint speed; updates new spawns AND running agents. */
   setAgentSpeed(speed: AgentSpeed): void;
   /** Current agent INTELLIGENCE (applied to newly spawned + live agents). */
-  agentMode: AgentMode;
+  agentMode: AgentModeId;
   /** Set the agent drawing mode; updates new spawns AND running agents (next region). */
-  setAgentMode(mode: AgentMode): void;
+  setAgentMode(mode: AgentModeId): void;
+  /** Current agent DENSITY lever (1/2/3) — a per-tick batch multiplier (TPS burst). */
+  agentDensity: number;
+  /** Set the agent density lever; applies live to every running agent's next tick. */
+  setAgentDensity(level: number): void;
+  /** Template id an Artist agent stamps at each region, or null to lay the flag rotation. */
+  agentTemplate: string | null;
+  /** Pick the Artist agent's template (or null for flags); applies at the next region. */
+  setAgentTemplate(id: string | null): void;
   /** Paint one cell as the human (seat A) → one co-signed move on the human tunnel. */
   submitHumanPaint(
     cx: bigint,
@@ -349,7 +410,7 @@ interface CanvasRun {
   lastHeartbeat: number;
 }
 
-/** A live agent walking one design across a world region, on its own tunnel. */
+/** A live agent streaming one mode's strokes across a world region, on its own tunnel. */
 interface AgentState {
   id: string;
   num: number;
@@ -359,16 +420,23 @@ interface AgentState {
   tint: string;
   /** Captured at spawn, live-updatable: paint interval tier + drawing intelligence. */
   speed: AgentSpeed;
-  mode: AgentMode;
-  design: PixelDesign;
-  /** Top-left global-pixel origin of the current design. */
+  mode: AgentModeId;
+  /** Lazy cell stream for the CURRENT region (the mode's stroke generator). */
+  iter: Iterator<DesignCell>;
+  /** Label shown on the marker for the current region (the mode's name). */
+  regionName: string;
+  /** Current region footprint height in cells (anchors the marker above the art). */
+  footprintH: number;
+  /** Top-left global-pixel origin of the current region. */
   originGx: number;
   originGy: number;
-  /** Global-pixel center of the current design (camera/marker anchor). */
+  /** Global-pixel center of the current region (camera/marker anchor). */
   centerGx: number;
   centerGy: number;
-  /** Index of the next design cell to paint. */
-  cursor: number;
+  /** Cells co-signed in the current region so far (drives the endless-mode relocate). */
+  painted: number;
+  /** Soft cap: relocate once `painted` reaches this (bounds endless modes per region). */
+  maxCells: number;
   /** Self-rescheduling paint timer (a setTimeout chain, so speed can change live). */
   timer: ReturnType<typeof setTimeout>;
 }
@@ -398,7 +466,9 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
   const [agents, setAgents] = useState<AgentMarker[]>([]);
   const [focus, setFocus] = useState<CanvasFocus | null>(null);
   const [agentSpeed, setAgentSpeedState] = useState<AgentSpeed>("normal");
-  const [agentMode, setAgentModeState] = useState<AgentMode>("artist");
+  const [agentMode, setAgentModeState] = useState<AgentModeId>(DEFAULT_AGENT_MODE);
+  const [agentDensity, setAgentDensityState] = useState<number>(DEFAULT_DENSITY);
+  const [agentTemplate, setAgentTemplateState] = useState<string | null>(null);
 
   // One tunnel per painter, keyed by painter address (human + each agent).
   const runsRef = useRef<Map<string, CanvasRun>>(new Map());
@@ -420,13 +490,20 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
   // Current speed/mode for new spawns, mirrored into refs so the paint loop can read
   // them without re-subscribing.
   const agentSpeedRef = useRef<AgentSpeed>("normal");
-  const agentModeRef = useRef<AgentMode>("artist");
+  const agentModeRef = useRef<AgentModeId>(DEFAULT_AGENT_MODE);
+  // The Density lever is global (a TPS dial), read live by the paint loop.
+  const agentDensityRef = useRef<number>(DEFAULT_DENSITY);
+  // Artist agents' chosen template (null = the built-in flag rotation), read live by
+  // nextPlacement so a template switch lands on each agent's next region.
+  const agentTemplateRef = useRef<string | null>(null);
 
-  // Coalesce many per-paint canvas mutations into one redraw per animation frame,
-  // and push the latest aggregate paint count into the HUD at most once per frame.
+  // Throttle paint-driven React updates to ~8 Hz. The canvas redraws every frame from
+  // refs (stays smooth); only the React panels/HUD bump here — a per-frame bump
+  // re-rendered that subtree 60×/s and was the main lag source.
+  const REDRAW_THROTTLE_MS = 120;
   const scheduleRedraw = useCallback(() => {
     if (rafRef.current !== null) return;
-    rafRef.current = requestAnimationFrame(() => {
+    rafRef.current = window.setTimeout(() => {
       rafRef.current = null;
       setRevision((v) => v + 1);
       setStatus((s) =>
@@ -434,7 +511,7 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
           ? s
           : { ...s, movesCoSigned: totalMovesRef.current },
       );
-    });
+    }, REDRAW_THROTTLE_MS);
   }, []);
 
   // Mirror an accepted paint into the live canvas, evicting the oldest cell if the
@@ -744,19 +821,60 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
     [submitPaint, humanAddress],
   );
 
-  // Allocate the next design (per the given mode) + a fresh, non-overlapping region.
-  const nextPlacement = useCallback((mode: AgentMode) => {
+  // Allocate the next region for an agent: a fresh stroke stream (per the given mode)
+  // on a non-overlapping spiral slot, sized from the mode's own footprint. Each region
+  // is seeded by its index so its art is varied yet reproducible.
+  const nextPlacement = useCallback((modeId: AgentModeId) => {
     const i = regionIndexRef.current++;
-    const design = designForMode(mode, i);
+
+    // Artist mode with a chosen template: stamp the rasterized template's cells (in
+    // reveal order) instead of the flag rotation. The template is fit into a box under
+    // the max mode footprint, so its region still drops on the shared slot lattice and
+    // never overlaps a neighbour. Each cell is still one co-signed move.
+    const tplId = modeId === "artist" ? agentTemplateRef.current : null;
+    const tpl = tplId ? TEMPLATES_BY_ID[tplId] : undefined;
+    if (tpl) {
+      const scale = fitScale(tpl.aspect, AGENT_TEMPLATE_W, AGENT_TEMPLATE_H);
+      const rast = rasterizeTemplate(tpl, scale);
+      const fw = Math.max(1, rast.width);
+      const fh = Math.max(1, rast.height);
+      const { col, row } = spiralSlot(i);
+      const originGx = Math.round(col * SLOT_W - fw / 2);
+      const originGy = Math.round(row * SLOT_H - fh / 2);
+      return {
+        iter: rast.cells[Symbol.iterator]() as Iterator<DesignCell>,
+        regionName: tpl.name,
+        footprintH: fh,
+        maxCells: Math.max(1, rast.cells.length),
+        originGx,
+        originGy,
+        centerGx: originGx + fw / 2,
+        centerGy: originGy + fh / 2,
+      };
+    }
+
+    const mode = AGENT_MODES[modeId];
+    const fw = mode.footprint.width;
+    const fh = mode.footprint.height;
+    const iter = mode.strokes({
+      width: fw,
+      height: fh,
+      rng: mulberry32(REGION_SEED ^ Math.imul(i + 1, 2654435761)),
+      numColors: NUM_COLORS,
+      index: i,
+    });
     const { col, row } = spiralSlot(i);
-    const originGx = Math.round(col * SLOT_W - design.width / 2);
-    const originGy = Math.round(row * SLOT_H - design.height / 2);
+    const originGx = Math.round(col * SLOT_W - fw / 2);
+    const originGy = Math.round(row * SLOT_H - fh / 2);
     return {
-      design,
+      iter,
+      regionName: mode.label,
+      footprintH: fh,
+      maxCells: Math.round(fw * fh * REGION_FILL_FACTOR),
       originGx,
       originGy,
-      centerGx: originGx + design.width / 2,
-      centerGy: originGy + design.height / 2,
+      centerGx: originGx + fw / 2,
+      centerGy: originGy + fh / 2,
     };
   }, []);
 
@@ -767,36 +885,51 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
         id: s.id,
         label: s.label,
         painter: s.painter,
-        flagName: s.design.name,
+        flagName: s.regionName,
         tint: s.tint,
         gx: s.centerGx,
         gy: s.centerGy,
-        h: s.design.height,
+        h: s.footprintH,
       })),
     );
   }, []);
 
-  // One paint tick for an agent, then self-reschedule at its CURRENT speed (so a live
-  // speed change takes effect on the next tick). Reads the agent's live `mode` when it
-  // finishes a region, so a live mode change applies to the agent's next region.
+  // One paint tick for an agent: pull a clamped BATCH of cells from its mode's stream
+  // and co-sign each (one verified step = one action = one TPS, never double-counted).
+  // The batch size is `density(mode) × speed × Density-lever`, so dense modes burst and
+  // sparse modes sip at the same Speed. When the stream ends (finite mode) or the region
+  // cap is hit (endless mode), relocate to a fresh region and read the live `mode`/footprint
+  // there — so a live mode change applies cleanly on the agent's next region. Then it
+  // self-reschedules at its CURRENT speed (a live speed change lands on the next tick).
   const tickAgent = useCallback(
     function tick(id: string) {
       const st = agentStatesRef.current.get(id);
       if (!st) return; // agent stopped/removed → the timer chain ends here
       const run = runsRef.current.get(st.painter);
       if (run && !run.closed && run.ready && run.tunnel) {
-        if (st.cursor >= st.design.cells.length) {
-          // Design finished — relocate to a fresh region and start the next one.
-          const next = nextPlacement(st.mode);
-          st.design = next.design;
-          st.originGx = next.originGx;
-          st.originGy = next.originGy;
-          st.centerGx = next.centerGx;
-          st.centerGy = next.centerGy;
-          st.cursor = 0;
-          syncAgentMarkers();
-        } else {
-          const cell = st.design.cells[st.cursor++];
+        const batch = agentBatch(st.mode, st.speed, agentDensityRef.current);
+        for (let k = 0; k < batch; k++) {
+          let cell: DesignCell | null = null;
+          if (st.painted < st.maxCells) {
+            const nx = st.iter.next();
+            if (!nx.done) cell = nx.value;
+          }
+          if (cell === null) {
+            // Stream exhausted (finite) or region cap reached (endless) → relocate.
+            const next = nextPlacement(st.mode);
+            st.iter = next.iter;
+            st.regionName = next.regionName;
+            st.footprintH = next.footprintH;
+            st.maxCells = next.maxCells;
+            st.originGx = next.originGx;
+            st.originGy = next.originGy;
+            st.centerGx = next.centerGx;
+            st.centerGy = next.centerGy;
+            st.painted = 0;
+            syncAgentMarkers();
+            break; // the fresh region starts painting on the next tick
+          }
+          st.painted += 1;
           const mv = moveAtGlobal(
             st.originGx + cell.dx,
             st.originGy + cell.dy,
@@ -840,12 +973,15 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
       tint,
       speed,
       mode,
-      design: place.design,
+      iter: place.iter,
+      regionName: place.regionName,
+      footprintH: place.footprintH,
+      maxCells: place.maxCells,
       originGx: place.originGx,
       originGy: place.originGy,
       centerGx: place.centerGx,
       centerGy: place.centerGy,
-      cursor: 0,
+      painted: 0,
       timer: setTimeout(() => tickAgent(id), AGENT_SPEED_INTERVALS[speed]),
     });
     syncAgentMarkers();
@@ -881,11 +1017,26 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
   }, []);
 
   // Public: set the agent drawing intelligence — for new spawns AND every running
-  // agent (each switches at its next region, so the current design finishes cleanly).
-  const setAgentMode = useCallback((mode: AgentMode) => {
+  // agent (each switches at its next region, so the current stream finishes cleanly).
+  const setAgentMode = useCallback((mode: AgentModeId) => {
     agentModeRef.current = mode;
     setAgentModeState(mode);
     for (const st of agentStatesRef.current.values()) st.mode = mode;
+  }, []);
+
+  // Public: set the global Density lever (1/2/3) — a per-tick batch multiplier read
+  // live by every running agent's next tick, so the TPS burst changes immediately.
+  const setAgentDensity = useCallback((level: number) => {
+    const clamped = Math.max(1, Math.min(DENSITY_LEVELS.length, Math.round(level)));
+    agentDensityRef.current = clamped;
+    setAgentDensityState(clamped);
+  }, []);
+
+  // Public: choose the Artist agent's template (or null for the flag rotation). Read
+  // live by `nextPlacement`, so every running Artist agent switches at its next region.
+  const setAgentTemplate = useCallback((id: string | null) => {
+    agentTemplateRef.current = id;
+    setAgentTemplateState(id);
   }, []);
 
   // Public: re-center the camera on the live agent painting at `painter` (📍 button).
@@ -920,7 +1071,7 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
     return () => {
       for (const s of agentStatesRef.current.values()) clearTimeout(s.timer);
       agentStatesRef.current.clear();
-      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+      if (rafRef.current !== null) clearTimeout(rafRef.current);
       for (const run of runsRef.current.values()) {
         flushHeartbeat(run, true);
         run.closed = true;
@@ -943,6 +1094,10 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
     setAgentSpeed,
     agentMode,
     setAgentMode,
+    agentDensity,
+    setAgentDensity,
+    agentTemplate,
+    setAgentTemplate,
     submitHumanPaint,
     spawnAgent,
     stopAgents,

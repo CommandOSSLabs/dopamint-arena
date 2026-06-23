@@ -1,30 +1,20 @@
 /**
- * Floating, draggable HUD panels for the world wall, styled after the wplace /
- * nianez glass cards: a combined PLAYERS + RECENT ACTIVITY panel and a 🏆
- * LEADERBOARD. Both read the hook's live per-painter tallies and activity ring
- * (stable-identity containers; the parent re-renders them on each paint), so they
- * update as the wall fills. Panels remember where you drag them (sessionStorage).
+ * Floating, draggable Win-98 tool windows for the Paint app: a combined PLAYERS +
+ * RECENT ACTIVITY window and a 🏆 LEADERBOARD. Both read the hook's live per-painter
+ * tallies and activity ring (stable-identity containers; the parent re-renders them
+ * on each paint), so they update as the wall fills. Position persists per window
+ * (sessionStorage, via {@link W98Window}); each can be closed from its title bar.
  */
-import {
-  useEffect,
-  useRef,
-  useState,
-  type CSSProperties,
-  type ReactNode,
-} from "react";
 import type {
   PainterInfo,
   ActivityEntry,
   AgentMarker,
 } from "../useWorldCanvasOnchain";
-import {
-  WC,
-  glass,
-  FONT_DISPLAY,
-  FONT_MONO,
-  PALETTE,
-  shortAddress,
-} from "./tokens";
+import { W98, FONT_MONO, PALETTE, shortAddress } from "./tokens";
+import { W98Window } from "./W98Window";
+
+/** A readable foreground blue for the human's own rows on the gray chrome. */
+const HUMAN_BLUE = "#0a3a9a";
 
 /** Sort painters for ranking: most cells first, ties broken by who painted last. */
 function rankPainters(painters: ReadonlyMap<string, PainterInfo>): PainterInfo[] {
@@ -50,195 +40,76 @@ function globalCoord(e: ActivityEntry): string {
   return `${gx}, ${gy}`;
 }
 
-function loadPos(key: string): { left: number; top: number } | null {
-  try {
-    const raw = sessionStorage.getItem(key);
-    if (!raw) return null;
-    const p = JSON.parse(raw) as { left?: unknown; top?: unknown };
-    if (typeof p.left === "number" && typeof p.top === "number") {
-      return { left: p.left, top: p.top };
-    }
-  } catch {
-    /* ignore */
-  }
-  return null;
-}
-
-const HEADER_LABEL: CSSProperties = {
-  fontSize: 9.5,
-  fontWeight: 700,
-  letterSpacing: "0.18em",
-  textTransform: "uppercase",
-  color: WC.muted,
-  fontFamily: FONT_MONO,
-};
-
-function Empty({ children }: { children: ReactNode }) {
+function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <div
+    <span
       style={{
-        fontSize: 11,
-        color: WC.muted,
-        fontFamily: FONT_MONO,
-        padding: "8px 2px",
-        opacity: 0.8,
+        fontSize: 9.5,
+        fontWeight: 700,
+        letterSpacing: "0.08em",
+        textTransform: "uppercase",
+        color: W98.textDim,
       }}
     >
+      {children}
+    </span>
+  );
+}
+
+function Empty({ children }: { children: React.ReactNode }) {
+  return (
+    <div style={{ fontSize: 11, color: W98.textDim, padding: "6px 2px" }}>
       {children}
     </div>
   );
 }
 
-/** Glass card with a drag handle (the header). Position persists per `storageKey`. */
-function DraggablePanel({
-  header,
-  storageKey,
-  defaultAnchor,
-  width,
-  children,
-}: {
-  header: ReactNode;
-  storageKey: string;
-  defaultAnchor: CSSProperties;
-  width: number;
-  children: ReactNode;
-}) {
-  const [pos, setPos] = useState<{ left: number; top: number } | null>(() =>
-    loadPos(storageKey),
-  );
-  const drag = useRef<{
-    prLeft: number;
-    prTop: number;
-    offX: number;
-    offY: number;
-  } | null>(null);
-
-  useEffect(() => {
-    if (!pos) return;
-    try {
-      sessionStorage.setItem(storageKey, JSON.stringify(pos));
-    } catch {
-      /* ignore */
-    }
-  }, [pos, storageKey]);
-
-  const onPointerDown = (e: React.PointerEvent) => {
-    const panel = e.currentTarget.parentElement as HTMLElement | null;
-    const parent = panel?.offsetParent as HTMLElement | null;
-    if (!panel || !parent) return;
-    const pr = parent.getBoundingClientRect();
-    const br = panel.getBoundingClientRect();
-    // Pin wherever the panel renders now (default anchor or a saved spot).
-    setPos({ left: br.left - pr.left, top: br.top - pr.top });
-    drag.current = {
-      prLeft: pr.left,
-      prTop: pr.top,
-      offX: e.clientX - br.left,
-      offY: e.clientY - br.top,
-    };
-    e.currentTarget.setPointerCapture(e.pointerId);
-  };
-  const onPointerMove = (e: React.PointerEvent) => {
-    const d = drag.current;
-    if (!d) return;
-    setPos({
-      left: Math.max(4, e.clientX - d.prLeft - d.offX),
-      top: Math.max(4, e.clientY - d.prTop - d.offY),
-    });
-  };
-  const onPointerUp = () => {
-    drag.current = null;
-  };
-
-  const anchor: CSSProperties = pos
-    ? { left: pos.left, top: pos.top }
-    : defaultAnchor;
-
-  return (
-    <div
-      style={{
-        position: "absolute",
-        width,
-        ...glass,
-        borderRadius: 14,
-        color: WC.text,
-        fontFamily: FONT_DISPLAY,
-        overflow: "hidden",
-        zIndex: 6,
-        ...anchor,
-      }}
-    >
-      <div
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-        style={{
-          cursor: "grab",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 8,
-          padding: "8px 11px",
-          borderBottom: `1px solid ${WC.panelBorder}`,
-          userSelect: "none",
-          touchAction: "none",
-        }}
-      >
-        {header}
-      </div>
-      <div style={{ padding: "9px 11px 11px" }}>{children}</div>
-    </div>
-  );
-}
-
-/** PLAYERS roster + RECENT ACTIVITY feed (newest first), draggable. Each LIVE agent
- *  row gets a 📍 button that re-centers the camera on where that bot is painting. */
+/** PLAYERS roster + RECENT ACTIVITY feed (newest first). Each LIVE agent row gets a
+ *  📍 button that re-centers the camera on where that bot is painting. */
 export function PlayersActivityPanel({
   painters,
   activity,
   humanAddress,
   agents,
   onFocusAgent,
+  onClose,
   revision,
 }: {
   painters: ReadonlyMap<string, PainterInfo>;
   activity: ReadonlyArray<ActivityEntry>;
   humanAddress: string;
-  /** Live agent markers — their painter addresses gate which rows show 📍. */
   agents: ReadonlyArray<AgentMarker>;
-  /** Re-center the camera on the active agent painting at this painter address. */
   onFocusAgent: (painter: string) => void;
+  onClose: () => void;
   revision: number;
 }) {
   void revision; // re-read live containers on every parent re-render
   const players = rankPainters(painters);
   const recent = [...activity].slice(-14).reverse();
-  // Only CURRENTLY-active agents can be viewed (stopped agents keep their tally row
-  // but no longer have a location to jump to).
   const liveAgents = new Set(agents.map((a) => a.painter));
 
   return (
-    <DraggablePanel
-      header={<span style={HEADER_LABEL}>Players</span>}
+    <W98Window
+      title="Players"
+      icon="👥"
+      onClose={onClose}
       storageKey="wc.playersPanel"
-      defaultAnchor={{ right: 16, top: 300 }}
-      width={252}
+      defaultAnchor={{ right: 12, top: 300 }}
+      width={244}
     >
+      <SectionLabel>Players</SectionLabel>
       {players.length === 0 ? (
         <Empty>No players yet</Empty>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 5 }}>
           {players.map((p, i) => (
-            <div
-              key={p.address}
-              style={{ display: "flex", alignItems: "center", gap: 8 }}
-            >
+            <div key={p.address} style={{ display: "flex", alignItems: "center", gap: 7 }}>
               <span
                 style={{
-                  width: 16,
+                  width: 14,
                   fontSize: 11,
                   fontWeight: 700,
-                  color: WC.muted,
+                  color: W98.textDim,
                   fontFamily: FONT_MONO,
                   textAlign: "right",
                 }}
@@ -251,16 +122,16 @@ export function PlayersActivityPanel({
                   height: 8,
                   borderRadius: "50%",
                   background: p.tint,
-                  boxShadow: `0 0 6px ${p.tint}`,
                   flex: "0 0 auto",
+                  boxShadow: `0 0 0 1px ${W98.darkShadow}`,
                 }}
               />
               <span
                 style={{
                   flex: 1,
                   fontSize: 12,
-                  fontWeight: p.isAgent ? 600 : 700,
-                  color: p.isAgent ? WC.text : WC.accent,
+                  fontWeight: p.isAgent ? 400 : 700,
+                  color: p.isAgent ? W98.text : HUMAN_BLUE,
                   whiteSpace: "nowrap",
                   overflow: "hidden",
                   textOverflow: "ellipsis",
@@ -274,17 +145,14 @@ export function PlayersActivityPanel({
                   title="Recenter the camera on this agent"
                   style={{
                     flex: "0 0 auto",
-                    width: 20,
-                    height: 18,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    fontSize: 11,
-                    lineHeight: 1,
+                    width: 19,
+                    height: 16,
+                    display: "grid",
+                    placeItems: "center",
+                    fontSize: 10,
                     cursor: "pointer",
-                    borderRadius: 5,
-                    border: `1px solid ${p.tint}`,
-                    background: "rgba(255,255,255,0.05)",
+                    background: W98.face,
+                    boxShadow: `inset -1px -1px 0 ${W98.darkShadow}, inset 1px 1px 0 ${W98.hilight}`,
                   }}
                 >
                   📍
@@ -294,7 +162,7 @@ export function PlayersActivityPanel({
                 style={{
                   fontSize: 12,
                   fontWeight: 700,
-                  color: WC.text,
+                  color: W98.text,
                   fontFamily: FONT_MONO,
                   fontVariantNumeric: "tabular-nums",
                 }}
@@ -308,13 +176,13 @@ export function PlayersActivityPanel({
 
       <div
         style={{
-          height: 1,
-          background: WC.panelBorder,
-          margin: "11px 0 9px",
-          opacity: 0.6,
+          height: 0,
+          margin: "10px 0 7px",
+          borderTop: `1px solid ${W98.shadow}`,
+          borderBottom: `1px solid ${W98.hilight}`,
         }}
       />
-      <span style={HEADER_LABEL}>Recent activity</span>
+      <SectionLabel>Recent activity</SectionLabel>
 
       {recent.length === 0 ? (
         <Empty>No paints yet</Empty>
@@ -323,8 +191,8 @@ export function PlayersActivityPanel({
           style={{
             display: "flex",
             flexDirection: "column",
-            gap: 4,
-            marginTop: 7,
+            gap: 3,
+            marginTop: 6,
             maxHeight: 168,
             overflowY: "auto",
           }}
@@ -332,17 +200,13 @@ export function PlayersActivityPanel({
           {recent.map((e) => {
             const isYou = e.painter === humanAddress;
             return (
-              <div
-                key={e.seq}
-                style={{ display: "flex", alignItems: "center", gap: 7 }}
-              >
+              <div key={e.seq} style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <span
                   style={{
                     width: 11,
                     height: 11,
-                    borderRadius: 3,
                     background: PALETTE[e.color] ?? "#fff",
-                    border: "1px solid rgba(0,0,0,0.4)",
+                    boxShadow: `0 0 0 1px ${W98.darkShadow}`,
                     flex: "0 0 auto",
                   }}
                 />
@@ -350,7 +214,7 @@ export function PlayersActivityPanel({
                   style={{
                     fontSize: 11,
                     fontWeight: 700,
-                    color: isYou ? WC.accent : WC.text,
+                    color: isYou ? HUMAN_BLUE : W98.text,
                     flex: "0 0 auto",
                   }}
                 >
@@ -360,7 +224,7 @@ export function PlayersActivityPanel({
                   style={{
                     flex: 1,
                     fontSize: 10.5,
-                    color: WC.muted,
+                    color: W98.textDim,
                     fontFamily: FONT_MONO,
                     whiteSpace: "nowrap",
                     overflow: "hidden",
@@ -372,7 +236,7 @@ export function PlayersActivityPanel({
                 <span
                   style={{
                     fontSize: 10,
-                    color: WC.muted,
+                    color: W98.textDim,
                     fontFamily: FONT_MONO,
                     flex: "0 0 auto",
                   }}
@@ -384,16 +248,18 @@ export function PlayersActivityPanel({
           })}
         </div>
       )}
-    </DraggablePanel>
+    </W98Window>
   );
 }
 
-/** 🏆 LEADERBOARD ranked by cells painted, with a proportional ■ bar, draggable. */
+/** 🏆 LEADERBOARD ranked by cells painted, with a proportional bar. */
 export function LeaderboardPanel({
   painters,
+  onClose,
   revision,
 }: {
   painters: ReadonlyMap<string, PainterInfo>;
+  onClose: () => void;
   revision: number;
 }) {
   void revision; // re-read live containers on every parent re-render
@@ -402,57 +268,26 @@ export function LeaderboardPanel({
   const max = players.length ? Math.max(1, players[0].cells) : 1;
 
   return (
-    <DraggablePanel
-      header={
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            width: "100%",
-          }}
-        >
-          <span
-            style={{
-              fontSize: 12,
-              fontWeight: 800,
-              letterSpacing: "0.04em",
-              color: WC.text,
-            }}
-          >
-            🏆 Leaderboard
-          </span>
-          <span
-            style={{
-              fontSize: 11,
-              fontWeight: 700,
-              color: WC.ok,
-              fontFamily: FONT_MONO,
-            }}
-          >
-            {total.toLocaleString()} ■
-          </span>
-        </div>
-      }
+    <W98Window
+      title={`Leaderboard — ${total.toLocaleString()} cells`}
+      icon="🏆"
+      onClose={onClose}
       storageKey="wc.leaderboardPanel"
-      defaultAnchor={{ right: 16, bottom: 16 }}
-      width={262}
+      defaultAnchor={{ right: 12, bottom: 12 }}
+      width={252}
     >
       {players.length === 0 ? (
         <Empty>No paints yet</Empty>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {players.map((p, i) => (
-            <div
-              key={p.address}
-              style={{ display: "flex", alignItems: "center", gap: 9 }}
-            >
+            <div key={p.address} style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <span
                 style={{
-                  width: 18,
-                  fontSize: 14,
+                  width: 16,
+                  fontSize: 13,
                   fontWeight: 800,
-                  color: i === 0 ? WC.warn : WC.muted,
+                  color: i === 0 ? "#b8860b" : W98.textDim,
                   textAlign: "center",
                   fontFamily: FONT_MONO,
                 }}
@@ -471,35 +306,33 @@ export function LeaderboardPanel({
                   <span
                     style={{
                       fontSize: 12,
-                      fontWeight: p.isAgent ? 600 : 700,
-                      color: p.isAgent ? WC.text : WC.accent,
+                      fontWeight: p.isAgent ? 400 : 700,
+                      color: p.isAgent ? W98.text : HUMAN_BLUE,
                       whiteSpace: "nowrap",
                       overflow: "hidden",
                       textOverflow: "ellipsis",
                     }}
                   >
-                    {p.isAgent
-                      ? `${p.label} · ${shortAddress(p.address)}`
-                      : p.label}
+                    {p.isAgent ? `${p.label} · ${shortAddress(p.address)}` : p.label}
                   </span>
                   <span
                     style={{
                       fontSize: 12,
                       fontWeight: 800,
-                      color: p.tint,
+                      color: W98.text,
                       fontFamily: FONT_MONO,
                       flex: "0 0 auto",
                     }}
                   >
-                    {p.cells.toLocaleString()} ■
+                    {p.cells.toLocaleString()}
                   </span>
                 </div>
                 <div
                   style={{
-                    marginTop: 4,
-                    height: 5,
-                    borderRadius: 3,
-                    background: "rgba(255,255,255,0.08)",
+                    marginTop: 3,
+                    height: 8,
+                    background: W98.field,
+                    boxShadow: `inset 1px 1px 0 ${W98.shadow}, inset -1px -1px 0 ${W98.hilight}`,
                     overflow: "hidden",
                   }}
                 >
@@ -508,26 +341,15 @@ export function LeaderboardPanel({
                       width: `${Math.round((p.cells / max) * 100)}%`,
                       height: "100%",
                       background: p.tint,
-                      borderRadius: 3,
                       transition: "width .25s ease",
                     }}
                   />
-                </div>
-                <div
-                  style={{
-                    marginTop: 3,
-                    fontSize: 10,
-                    color: WC.muted,
-                    fontFamily: FONT_MONO,
-                  }}
-                >
-                  {p.cells.toLocaleString()} / {total.toLocaleString()} cells
                 </div>
               </div>
             </div>
           ))}
         </div>
       )}
-    </DraggablePanel>
+    </W98Window>
   );
 }

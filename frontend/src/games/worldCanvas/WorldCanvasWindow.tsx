@@ -2,7 +2,7 @@ import { useMemo, useState, type CSSProperties } from "react";
 import type { GameWindowProps } from "../types";
 import { CanvasView } from "./ui/CanvasView";
 import { WorldCanvasChrome } from "./ui/WorldCanvasChrome";
-import { PALETTE, WC, glass, FONT_DISPLAY, FONT_MONO } from "./ui/tokens";
+import { PALETTE, WC, FONT_DISPLAY, FONT_MONO } from "./ui/tokens";
 
 /**
  * "The World is Your Canvas" — a shared, real-time, infinite pixel wall on the
@@ -21,15 +21,8 @@ export function WorldCanvasWindow(_props: GameWindowProps) {
       <WorldCanvasChrome />
       {started ? (
         <div className="relative h-full min-h-0 w-full">
-          <CanvasView />
-          <button
-            onClick={() => setStarted(false)}
-            className="absolute right-4 bottom-4 z-10 rounded-[12px] px-3 py-2 text-xs font-bold"
-            style={{ ...glass, color: WC.text }}
-            title="Back to start menu"
-          >
-            ✕ Menu
-          </button>
+          {/* File ▸ Exit returns to the start menu (and tears the tunnel down). */}
+          <CanvasView onExit={() => setStarted(false)} />
         </div>
       ) : (
         <StartMenu onStart={() => setStarted(true)} />
