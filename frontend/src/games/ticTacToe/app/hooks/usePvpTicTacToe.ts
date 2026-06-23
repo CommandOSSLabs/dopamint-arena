@@ -162,7 +162,7 @@ export function usePvpTicTacToe(
   // `score` is the authoritative cumulative tally; `games` below is capped at the last 50 entries
   // for display, so after 50 games the two intentionally diverge — do NOT re-derive score from games.
   const [score, setScore] = useState({ x: 0, o: 0, draws: 0 });
-  const [auto, setAutoState] = useState(false);
+  const [auto, setAutoState] = useState(true);
   const [balance, setBalance] = useState<bigint>(0n);
   const [digests, setDigests] = useState<{
     create?: string;
@@ -176,7 +176,8 @@ export function usePvpTicTacToe(
     null,
   );
   const roleRef = useRef<"A" | "B" | null>(null);
-  const autoRef = useRef(false);
+  const autoRef = useRef(true);
+  const autoKickedRef = useRef(false);
   const detachResumeRef = useRef<(() => void) | null>(null);
   const createdAtRef = useRef<bigint>(0n);
   const matchIdRef = useRef<string>("");
@@ -402,8 +403,9 @@ export function usePvpTicTacToe(
       stoppingRef.current = false;
       setGames([]);
       setScore({ x: 0, o: 0, draws: 0 });
-      autoRef.current = false;
-      setAutoState(false); // fresh game (incl. rematch) starts in manual mode
+      autoKickedRef.current = false;
+      autoRef.current = true;
+      setAutoState(true); // default-on: kick effect fires once the phase hits "playing"
       bufferedSettleRef.current = null;
       bufferedHelloRef.current = null;
       openedResolveRef.current = null;
@@ -677,6 +679,16 @@ export function usePvpTicTacToe(
     [proto, variant],
   );
 
+  // Default-on auto-play: kick the resume once when the match becomes playable (the move loop
+  // otherwise only schedules auto AFTER a confirmed move, so the first move needs this).
+  useEffect(() => {
+    if (autoKickedRef.current) return;
+    if (phase === "playing" && tunnelRef.current && autoRef.current) {
+      autoKickedRef.current = true;
+      setAuto(true);
+    }
+  }, [phase, setAuto]);
+
   const leave = useCallback(() => {
     detachResumeRef.current?.();
     detachResumeRef.current = null;
@@ -692,8 +704,9 @@ export function usePvpTicTacToe(
     setScore({ x: 0, o: 0, draws: 0 });
     settledRef.current = false;
     stoppingRef.current = false;
-    autoRef.current = false;
-    setAutoState(false);
+    autoKickedRef.current = false;
+    autoRef.current = true;
+    setAutoState(true);
     openedResolveRef.current = null;
     settleResolveRef.current = null;
     bufferedSettleRef.current = null;
