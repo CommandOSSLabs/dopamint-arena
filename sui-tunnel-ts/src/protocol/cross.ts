@@ -37,9 +37,10 @@ export const COLUMN_COUNT = 9;
 /** Spawn / respawn column (center). */
 export const SPAWN_COL = 4;
 /** Finish line — reachable within the tick budget so a race ends DECISIVELY (first chicken to
- *  cross takes the pot), not in a score-tie push. Tuned to ~30s of progress at the self-play
- *  rate; far enough that the two bots rarely dead-heat to the same tick. */
-export const WIN_LANE = 1200;
+ *  cross takes the pot), not in a score-tie push at the cap. One seat hops per tick (2-party
+ *  model), so each chicken advances every other tick; 600 keeps the race ~30s at the self-play
+ *  rate. (Two seats can no longer cross on the same tick, so a finish-line dead heat can't occur.) */
+export const WIN_LANE = 600;
 /** Backstop only: if a race stalls and neither chicken crosses, the higher score wins at this
  *  cap (tie ⇒ push). Normal races finish well before it. */
 export const TICK_CAP = 5400n;
