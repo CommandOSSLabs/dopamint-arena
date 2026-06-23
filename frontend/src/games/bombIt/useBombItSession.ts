@@ -7,19 +7,22 @@ import type { BombItState, BombItMove, BombItAction } from "sui-tunnel-ts/protoc
 import { useTelemetry } from "../../telemetry/TelemetryProvider";
 import { getControlPlaneClient, type RegisterSessionResult } from "../../backend/controlPlane";
 import { closeCooperative, openAndFundSelfPlay, readCreatedAt } from "../../onchain/tunnelTx";
-import { deriveView, sessionResult, stepSession, type BombItView, type BombItResult } from "./session-core";
+import {
+  deriveView,
+  sessionResult,
+  stepSession,
+  SOLO_STEP_MS,
+  type BombItView,
+  type BombItResult,
+} from "./session-core";
 
 /**
- * Throughput pacing. Co-signing is synchronous crypto (2 sigs + 2 verifies per tick), so an
- * unbounded loop pegs the main thread → the Mac heats up and the UI stalls. Instead we cap the
- * crypto to FRAME_BUDGET_MS per FRAME_MS frame: a fixed ~20% CPU duty cycle that leaves the rest
- * of every frame idle (cool + responsive), while TPS auto-adapts to how many ticks fit the budget
- * (fast machines get more, same thermals). MAX_STEPS_PER_FRAME caps the top end. Tune
- * FRAME_BUDGET_MS up for more TPS/heat, down for a cooler run.
+ * Bomb It is a REACTION game, so its solo loop advances ONE co-signed tick per SOLO_STEP_MS rather
+ * than batching many ticks per frame like chicken-cross's throughput showcase. That keeps the bomb
+ * fuse and the bot fight legible (fuse ≈ FUSE_TICKS * SOLO_STEP_MS ≈ 1s) — at the batched rate the
+ * 8-tick fuse burned in ~50ms, so a manual drop was instant death and a bot duel was a blur. One
+ * tick per interval is also negligible crypto per frame, so the CPU stays cool without a budget cap.
  */
-const FRAME_MS = 50;
-const FRAME_BUDGET_MS = 10;
-const MAX_STEPS_PER_FRAME = 8;
 
 export type SessionStatus = "idle" | "funding" | "playing" | "settling" | "settled" | "error";
 
@@ -208,9 +211,6 @@ export function useBombItSession(): BombItSession {
             const p = protocolRef.current;
             const t = tunnelRef.current;
             if (!p || !t) return;
-            // Co-sign ticks only until the per-frame time budget is spent, then yield: this is
-            // what keeps TPS high yet the CPU cool (the rest of the frame stays idle).
-            const deadline = performance.now() + FRAME_BUDGET_MS;
             // Auto on → both seats are bot-driven (your seat autopilots). Auto off → your queued
             // action drives seat A; the bot still drives B.
             const human = autoRef.current
@@ -223,20 +223,15 @@ export function useBombItSession(): BombItSession {
                     return a;
                   },
                 };
+            // One co-signed tick per interval — the human-scale cadence a reaction game needs.
             let ended = p.isTerminal(t.state);
-            let n = 0;
-            while (!ended && n < MAX_STEPS_PER_FRAME) {
+            if (!ended) {
               const moved = stepSession(p, t, Math.random, human);
               if (moved) {
                 moveCountRef.current += 1;
                 actionsRef.current += 1;
               }
-              n++;
-              if (!moved || p.isTerminal(t.state)) {
-                ended = true;
-                break;
-              }
-              if (performance.now() >= deadline) break;
+              ended = !moved || p.isTerminal(t.state);
             }
             setView(deriveView(t.state));
 
@@ -261,7 +256,7 @@ export function useBombItSession(): BombItSession {
               flushHeartbeat(true);
               void settleOnChain();
             }
-          }, FRAME_MS);
+          }, SOLO_STEP_MS);
         } catch (e) {
           stopTimer();
           report.setActive(0);

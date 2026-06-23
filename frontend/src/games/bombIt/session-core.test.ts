@@ -1,10 +1,19 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 // Runtime SDK imports use RELATIVE .ts paths (tsx ignores the vite alias / tsconfig paths).
-import { BombItProtocol, BOMB_IT_MIN_STAKE, CELL_COUNT } from "../../../../sui-tunnel-ts/src/protocol/bombIt.ts";
+import { BombItProtocol, BOMB_IT_MIN_STAKE, CELL_COUNT, FUSE_TICKS } from "../../../../sui-tunnel-ts/src/protocol/bombIt.ts";
 import { OffchainTunnel, verifyCoSignedUpdate } from "../../../../sui-tunnel-ts/src/core/tunnel.ts";
 import { createParticipant } from "../../../../sui-tunnel-ts/src/core/keys.ts";
-import { stepSession, deriveView, sessionResult } from "./session-core.ts";
+import { stepSession, deriveView, sessionResult, SOLO_STEP_MS } from "./session-core.ts";
+
+test("solo cadence makes a bomb fuse read as ~1s of real time (manual drop-and-flee is escapable)", () => {
+  // Bomb It is a reaction game: at the high-throughput showcase rate the 8-tick fuse burned in
+  // ~50ms (instant death + an unwatchable fight). One tick per SOLO_STEP_MS must keep the fuse
+  // in a humanly-reactable window, anchored to the protocol's FUSE_TICKS.
+  const fuseMs = FUSE_TICKS * SOLO_STEP_MS;
+  assert.ok(fuseMs >= 800, `fuse lasts ${fuseMs}ms; must be >=800ms so a manual drop is escapable`);
+  assert.ok(fuseMs <= 2000, `fuse lasts ${fuseMs}ms; keep it <=2s so the duel stays snappy`);
+});
 
 const CTX = { tunnelId: "0xfeed", initialBalances: { a: BOMB_IT_MIN_STAKE, b: BOMB_IT_MIN_STAKE } };
 

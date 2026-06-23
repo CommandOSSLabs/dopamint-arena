@@ -7,6 +7,15 @@ import type { Party } from "sui-tunnel-ts/protocol/Protocol";
 import type { BombItProtocol, BombItState, BombItMove, BombItAction } from "sui-tunnel-ts/protocol/bombIt";
 import type { OffchainTunnel } from "sui-tunnel-ts/core/tunnel";
 
+/**
+ * Solo tick cadence (one co-signed tick per this many ms). Bomb It is a REACTION game: unlike
+ * chicken-cross's high-throughput showcase loop (which batches many ticks per frame), the bomb
+ * fuse and the bot fight must read as real time. `FUSE_TICKS (8) * SOLO_STEP_MS` ≈ the fuse's
+ * wall-clock life — kept near ~1s so a manual player can drop-and-flee and a bot duel is
+ * watchable. (PvP paces itself separately over the relay.)
+ */
+export const SOLO_STEP_MS = 120;
+
 /** When the human takes over a seat (auto mode off), the loop supplies its action for that seat;
  *  the other seat (and both seats while auto is on) is driven by the protocol's hunter bot. */
 export interface HumanSeat {
