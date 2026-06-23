@@ -51,7 +51,7 @@
  * ring so the HUD can render owners, players, and a leaderboard.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { core } from "sui-tunnel-ts";
+import { core, proof } from "sui-tunnel-ts";
 import {
   WorldCanvasProtocol,
   type WorldCanvasState,
@@ -65,8 +65,15 @@ import {
 } from "@/backend/controlPlane";
 import {
   buildCreateAndFundTx,
+  buildSettleWithRootTx,
   parseTunnelId,
 } from "@/games/ticTacToe/app/lib/tunnel";
+import { settleViaBackend } from "@/backend/settle";
+import {
+  isDopamintConfigured,
+  ensureDopamintStakeCoin,
+  DOPAMINT_COIN_TYPE,
+} from "@/onchain/dopamint";
 import {
   loadOrCreateBots,
   getSuiClient,
@@ -96,9 +103,12 @@ export type { AgentModeId } from "./designs";
 const CHUNK_SIZE = 256;
 /** Palette size; a paint's color is in [0, NUM_COLORS). */
 const NUM_COLORS = 16;
-/** Tunnel stake — 1 MIST each, matching the on-chain `create_and_fund`. Collaborative
- *  free mode never shifts balances, so the close (if any) is always a draw. */
+/** SUI-fallback per-seat stake (MIST) when DOPAMINT env is unset. Collaborative free
+ *  mode never shifts balances, so any close is a draw (each seat keeps its stake). */
 const STAKE = 1n;
+/** DOPAMINT per-seat stake (1 token, 9 decimals) — the default on-chain path (ADR-0010):
+ *  faucet-minted, so painters need ZERO SUI; only gas is sponsored. Mirrors the other games. */
+const DOPAMINT_STAKE_PER_SEAT = 1_000_000_000n;
 /** Dashboard game key (groups TPS/tunnels under "world-canvas"). */
 const GAME = "world-canvas";
 /** Soft cap on retained painted cells; oldest are evicted so an endless wall keeps
@@ -106,6 +116,11 @@ const GAME = "world-canvas";
 const MAX_RETAINED_CELLS = 200_000;
 /** Recent-activity ring length (newest paints kept for the activity feed). */
 const MAX_ACTIVITY = 60;
+/** Co-signed paints per tunnel between on-chain checkpoints. At each boundary the
+ *  tunnel cooperatively closes (anchoring its transcript root on-chain, like every
+ *  finite game's settle) and a fresh tunnel reopens so painting never stops. Only
+ *  real (on-chain) tunnels checkpoint; demo tunnels skip it (no chain). */
+const CHECKPOINT_EVERY = 600;
 /** Gap (cells) between adjacent agent regions so their art never touches. */
 const REGION_GAP = 14;
 /** World slot size (cells) — sized to the LARGEST mode footprint so any mode fits a
@@ -132,6 +147,18 @@ const AGENT_TINTS = [
 ] as const;
 
 export type Seat = "A" | "B";
+
+// Serialize on-chain opens across ALL painters (human + agents) and React StrictMode's
+// double-mount. Each open faucet-mints from the SHARED DOPAMINT object; minting from it
+// concurrently makes validators reject the losers as equivocation ("object already
+// locked"). Off-chain co-signing (the TPS) stays fully parallel — only the rare open
+// tx is queued. Module-global so it spans hook re-instantiations.
+let onchainOpenChain: Promise<unknown> = Promise.resolve();
+function serializeOnchainOpen<T>(fn: () => Promise<T>): Promise<T> {
+  const run = onchainOpenChain.catch(() => {}).then(fn);
+  onchainOpenChain = run.catch(() => {});
+  return run;
+}
 
 /** Agent acceleration MULTIPLIER — the headline "tăng tốc" dial. Each tier is an
  *  explicit ×N on the agent's co-signed cells/sec (x1 baseline → x8 burst). */
@@ -404,6 +431,14 @@ interface CanvasRun {
   /** Actions since this tunnel's last heartbeat flush (reset to 0 on send). */
   actions: number;
   lastHeartbeat: number;
+  /** Accumulates every co-signed update; its Merkle root is anchored at each checkpoint. */
+  transcript: proof.Transcript | null;
+  /** moveCount at the last on-chain checkpoint (close-and-reopen anchors the root). */
+  lastCheckpoint: number;
+  /** True while a checkpoint close is in flight, so paints don't trigger a second. */
+  checkpointing: boolean;
+  /** Staked token type (DOPAMINT, or undefined = SUI); the checkpoint close needs it. */
+  coinType?: string;
 }
 
 /** A live agent streaming one mode's strokes across a world region, on its own tunnel. */
@@ -648,6 +683,15 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
         paintCell(mv, by, totalMovesRef.current, painter);
         recordPaint(painter, mv, totalMovesRef.current);
         flushHeartbeat(run, false);
+        // On a real tunnel, anchor the transcript root on-chain every CHECKPOINT_EVERY
+        // co-signed paints (cooperative close-and-reopen). Demo tunnels never do this.
+        if (
+          run.onchain &&
+          !run.checkpointing &&
+          run.moveCount - run.lastCheckpoint >= CHECKPOINT_EVERY
+        ) {
+          checkpointRef.current?.(run);
+        }
       } catch (e) {
         console.warn("[world-canvas] tunnel step skipped:", e);
       }
@@ -679,6 +723,9 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
       key: string,
       identities: { a: BotIdentity; b: BotIdentity },
       isHuman: boolean,
+      // True when reopening after a checkpoint close: the HUD is already live, so skip
+      // the "opening…"/phase resets that would otherwise flicker the human's chip.
+      reopen = false,
     ) => {
       if (isHuman) registerPainter(key, "You", false, WC.seatA);
 
@@ -702,9 +749,13 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
         moveCount: 0,
         actions: 0,
         lastHeartbeat: Date.now(),
+        transcript: null,
+        lastCheckpoint: 0,
+        checkpointing: false,
+        coinType: undefined,
       };
       runsRef.current.set(key, run);
-      if (isHuman) setStatus({ ...EMPTY_STATUS, phase: "opening" });
+      if (isHuman && !reopen) setStatus({ ...EMPTY_STATUS, phase: "opening" });
 
       const partyX = {
         address: identities.a.address,
@@ -715,21 +766,49 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
         publicKey: identities.b.publicKey,
       };
 
-      // Open a REAL tunnel by default via the gas SPONSOR (the painter needs 0 SUI).
-      // `withSponsorFallback` retries sender-pays if the sponsor is unreachable AND
-      // the painter holds gas; if BOTH throw, the catch routes to the demo fallback.
+      // DOPAMINT mode (ADR-0010, the default): stake FREE faucet-minted DOPAMINT and
+      // sponsor the painter's open gas, so it needs ZERO SUI — exactly how the finite
+      // games (tic-tac-toe, battleship, …) open. A sponsored tx can't reference `tx.gas`,
+      // so the stake MUST come from a `stakeCoinId` (not the SUI gas-coin fallback).
+      // SUI fallback (DOPAMINT env unset): the painter funds the stakes from its own gas.
+      const dopamintOn = isDopamintConfigured;
+      const coinType = dopamintOn ? DOPAMINT_COIN_TYPE : undefined;
+      const stakePerSeat = dopamintOn ? DOPAMINT_STAKE_PER_SEAT : STAKE;
+      run.coinType = coinType;
+
       try {
+        await serializeOnchainOpen(async () => {
         const sponsoredSignExec = makeKeypairSponsoredSignExec({
           address: identities.a.address,
           keypair: identities.a.keypair,
           client: client as never,
         });
-        const { digest: createDigest } = await withSponsorFallback(
-          () => sponsoredSignExec(buildCreateAndFundTx(partyX, partyO, STAKE)),
-          () =>
-            submit(buildCreateAndFundTx(partyX, partyO, STAKE), identities.a.keypair),
-          "world-canvas open/fund",
-        );
+        let createDigest: string;
+        if (dopamintOn) {
+          // Self-play funds BOTH seats from one coin → faucet/select for the 2-seat total.
+          const stakeCoinId = await ensureDopamintStakeCoin({
+            client: client as never,
+            signExec: sponsoredSignExec,
+            owner: identities.a.address,
+            need: 2n * stakePerSeat,
+          });
+          ({ digest: createDigest } = await sponsoredSignExec(
+            buildCreateAndFundTx(partyX, partyO, stakePerSeat, {
+              coinType,
+              stakeCoinId,
+            }),
+          ));
+        } else {
+          ({ digest: createDigest } = await withSponsorFallback(
+            () => sponsoredSignExec(buildCreateAndFundTx(partyX, partyO, stakePerSeat)),
+            () =>
+              submit(
+                buildCreateAndFundTx(partyX, partyO, stakePerSeat),
+                identities.a.keypair,
+              ),
+            "world-canvas open/fund",
+          ));
+        }
         const createTxb = await client.getTransactionBlock({
           digest: createDigest,
           options: { showObjectChanges: true },
@@ -748,6 +827,7 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
           run.createdAt = BigInt((fields?.created_at as string | undefined) ?? 0);
           if (isHuman) setStatus((s) => ({ ...s, openDigest: createDigest }));
         }
+        });
       } catch (e) {
         console.warn(
           "[world-canvas] on-chain open failed — running off-chain demo:",
@@ -767,10 +847,16 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
         identities.b.coreKey,
         identities.a.address,
         identities.b.address,
-        { a: STAKE, b: STAKE },
+        // Match the on-chain stake so the cooperative-close balances reconcile.
+        { a: stakePerSeat, b: stakePerSeat },
       );
       run.tunnel = tunnel;
       run.lastHeartbeat = Date.now();
+      // Accumulate every co-signed update so a checkpoint can anchor the Merkle root.
+      const transcript = new proof.Transcript(run.tunnelId);
+      tunnel.onUpdate = (u) => transcript.append(u);
+      run.transcript = transcript;
+      run.lastCheckpoint = run.moveCount;
 
       // Register THIS tunnel for stats tracking. Best-effort (never blocks painting).
       getControlPlaneClient()
@@ -796,7 +882,7 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
       run.buffer = [];
       for (const { mv, by, painter } of buffered) coSignPaint(run, mv, by, painter);
 
-      if (isHuman) {
+      if (isHuman && !reopen) {
         setStatus((s) => ({
           ...s,
           phase: run.onchain ? "open" : "demo",
@@ -808,6 +894,68 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
     },
     [client, proto, submit, coSignPaint, registerPainter],
   );
+
+  // Checkpoint a tunnel on-chain: cooperatively close it (anchoring its transcript
+  // root via the SAME backend `/settle` path every finite game uses), then reopen a
+  // fresh tunnel for the painter so painting continues seamlessly. The reopen is
+  // synchronous up to its `runsRef.set`, so paints route to the new tunnel with no
+  // gap (buffered until it is live). On-chain only; demo runs never reach here.
+  const checkpointRef = useRef<((run: CanvasRun) => void) | null>(null);
+  const checkpointRun = useCallback(
+    async (run: CanvasRun) => {
+      if (
+        run.checkpointing ||
+        run.closed ||
+        !run.onchain ||
+        !run.tunnel ||
+        !run.transcript
+      )
+        return;
+      run.checkpointing = true;
+      const { tunnel, transcript } = run;
+      let settlement: core.CoSignedSettlementWithRoot;
+      try {
+        settlement = tunnel.buildSettlementWithRoot(
+          run.createdAt,
+          transcript.root(),
+          0n,
+        );
+      } catch (e) {
+        console.warn("[world-canvas] checkpoint build skipped:", e);
+        run.checkpointing = false;
+        run.lastCheckpoint = run.moveCount;
+        return;
+      }
+      // Retire the old tunnel and reopen immediately so paints keep flowing, then
+      // anchor the closed tunnel's root on-chain in the background.
+      run.closed = true;
+      void startRun(run.key, run.identities, run.isHuman, true);
+      const sponsoredClose = makeKeypairSponsoredSignExec({
+        address: run.identities.a.address,
+        keypair: run.identities.a.keypair,
+        client: client as never,
+      });
+      try {
+        await settleViaBackend({
+          tunnelId: run.tunnelId,
+          settlement,
+          transcript: transcript.toRecord().entries,
+          label: "world-canvas",
+          fallbackClose: async () => {
+            const { digest } = await sponsoredClose(
+              buildSettleWithRootTx(run.tunnelId, settlement, run.coinType),
+            );
+            await client.waitForTransaction({ digest });
+            return digest;
+          },
+        });
+      } catch (e) {
+        console.warn("[world-canvas] checkpoint settle failed:", e);
+      }
+    },
+    [client, startRun],
+  );
+  checkpointRef.current = checkpointRun;
 
   // Public: the human paints seat A on the HUMAN tunnel; one cell = one co-signed move.
   const submitHumanPaint = useCallback(

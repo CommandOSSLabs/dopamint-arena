@@ -16,10 +16,14 @@ painted over the world map: anyone places a pixel, a per-pixel/per-painter **coo
 them, and the art accretes globally and permanently. There is no winner — the wall *is* the artifact.
 
 **The World is Your Canvas** is that, on the Sui tunnel arena, with one north-star reframing: **1 painted
-pixel = 1 co-signed off-chain tunnel update = 1 TPS.** The whole point of the game is to turn a crowd of
-painters — human *and* agent — into a fleet of high-frequency tunnels and show the throughput live on the
-arena dashboard. The canvas is **infinite / unbounded**: it grows in every direction, stored sparsely
-(only painted cells), so play never hits a wall.
+pixel = 1 co-signed tunnel move = 1 TPS.** This is the standard Sui **state-channel** model — the same one
+every other arena game (tic-tac-toe, battleship, blackjack, …) runs on: paints are **executed off the L1
+hot path** for throughput, but each is a real dual-signed state transition **secured and settled on-chain** —
+the tunnel **opens on-chain** and **periodically anchors its co-signed state root on-chain** via
+`close_cooperative_with_root`. "On-chain game, off-chain execution," not "off-chain game." The whole point
+is to turn a crowd of painters — human *and* agent — into a fleet of high-frequency tunnels and show the
+throughput live on the arena dashboard. The canvas is **infinite / unbounded**: it grows in every direction,
+stored sparsely (only painted cells), so play never hits a wall.
 
 ### The core interaction: the "Agent AI" button
 
@@ -93,17 +97,22 @@ them.
   ops" — provenance + TPS). The **global** canvas is the hub's aggregate across all tunnels; the hub
   is the ordering authority that merges concurrent writes (per-pixel **last-write-wins by timestamp**,
   cooldown enforced in `applyMove`). No tunnel ever needs to know about another painter.
-- **Settlement is the standard cooperative close**, once per painter session, not per pixel: each
-  painter and the hub sign `close_cooperative_with_root` (free mode → balances unchanged → a genuine
-  draw every time, no dispute surface). The hub snapshots the merged wall root to Walrus.
+- **On-chain settlement is a periodic cooperative close, not per pixel.** Instead of closing only once
+  at the end (the finite games' model — they settle when a winner emerges), the endless wall **checkpoints**:
+  every `CHECKPOINT_EVERY` co-signed paints a tunnel cooperatively closes via `close_cooperative_with_root`
+  (free mode → balances unchanged → a genuine draw, no dispute surface), **anchoring its transcript root
+  on-chain**, then immediately reopens so painting never stops. This is what makes the wall genuinely
+  "on-chain": the paints execute off the hot path, but their co-signed state is committed on-chain at every
+  checkpoint (and the full transcript is archivable to Walrus, exactly like the finite games' settle).
 
-**Honest caveat on the TPS claim.** A painter↔hub tunnel is a *genuine* two-party tunnel **only if the
-hub is a real separate party** (its own key, its own process) and frames cross the real relay and are
-co-signed there — which is the design here. If the hub instead co-located and both-signed locally, the
-number degrades to **self-play TPS** (still a legitimate bot/stats showcase, but it is self-play, and
-should be labelled as such on the dashboard). Phase 0 (Agent-AI bots) is explicitly self-play-flavoured;
-Phase 1 (humans as party A vs the hub) is genuine two-party. Keep this distinction visible — don't quietly
-claim genuine-tunnel TPS for a self-signing hub.
+**Honest caveat on the TPS claim — what's actually shipped.** A painter↔hub tunnel is a *genuine* two-party
+tunnel **only if the hub is a real separate party** (its own key, its own process) co-signing over the real
+relay. **The shipped Phase 0 is self-play**: each painter (human and every Agent-AI) holds *both* seat
+keypairs and co-signs both sides locally on its **own** 2-party tunnel. This still respects the framework's
+2-party rule (every tunnel has exactly two seats) and produces real dual-signed, on-chain-settled moves —
+but it is **self-play TPS**, and should be labelled as such (the dashboard chip reads "Self-play"). Phase 1
+(humans as party A vs a genuine separate hub party B over the relay) is the upgrade to genuine two-party
+TPS. Keep this distinction visible — don't quietly claim genuine-tunnel TPS for a self-signing painter.
 
 Rejected alternatives in one line each: **B** drags N-party consensus back to the tile level; **C**
 needs the N-signature contract fork this game was created to avoid; **D** pays open/fund/close per
@@ -412,3 +421,272 @@ TPS when the hub is a real co-signing party over the relay.
 - **[nianez/game-ui](https://github.com/nianez/game-ui)** — reference for the arena **game UI** (the earlier 2D version, **not** the latest 3D). Mine its component look + layout for the World Canvas window.
 
 > Study these when starting Phase 0 (canvas-only infinite chunked wall + the Agent-AI button); adapt, don't copy wholesale.
+
+## 10. Smooth brush + modes + templates (TPS)
+
+> **This section supersedes the directions above where they conflict.** Specifically it
+> retires (a) the **r/place pixel-grid aesthetic** — World Canvas is now a *smooth,
+> anti-aliased brush-painting* game, no visible grid — and (b) the **on-chain canvas
+> object / Walrus persistence / OSM-map / region-shard** roadmap (§3 map, §5 Phases 1–2,
+> §6 persistence). On-chain stays **minimal: tunnel open + optional cooperative settle
+> only** — no canvas object, no deploy, no map. Everything else below reuses the
+> *already-built* path verbatim: per-painter self-play tunnels, the chunked render store,
+> click+drag smooth paint, Agent-AI bots, speed controls, owner-hover, Players/Activity +
+> Leaderboard. **No Move / SDK / protocol changes** — the signed move is frozen.
+
+### 10.1 The one frozen fact (everything bends around it)
+
+A co-signed move is **strictly an integer cell + a 16-palette index** and is golden-pinned
+in the upstream SDK: `WorldCanvasMove = {cx,cy:bigint, x,y:int∈[0,256), color:int∈[0,16)}`,
+hard-rejected if non-integer/out-of-range (`sui-tunnel-ts/src/protocol/worldCanvas.ts:163-185`),
+with a `GOLDEN_DIGEST` byte-parity test. **There is no float / sub-pixel / alpha channel on
+the wire.** Therefore:
+
+> **Smoothness is a *render-layer* property, never a *data* property.** Every "smooth"
+> stroke is computed in float path-space, **rasterized to integer cells as the final step**,
+> and the renderer manufactures the soft, anti-aliased look. The grid never leaves the data
+> model; it only leaves the screen.
+
+### 10.2 The brush → co-signed-move → TPS contract (already true; keep it exact)
+
+`1 newly-painted cell = 1 verified `tunnel.step()` = 1 action = ~1 TPS` — the same
+denominator as a Sui on-chain function call (`docs/adding-a-tunnel-game.md` "Reporting TPS").
+The chain is already in place and must stay byte-identical:
+
+- **Gate:** only `r.verified` (both signatures check) books a move —
+  `coSignPaint()` (`useWorldCanvasOnchain.ts:563-583`): `run.moveCount++ → run.actions++ →
+  totalMovesRef++ → paintCell → recordPaint → flushHeartbeat`.
+- **No no-op:** the rolling digest folds the painter byte + coordinate, so every paint
+  strictly mutates the co-signed state hash (overpaint is a legal, counted move).
+- **Stroke decomposition (built, do not re-derive):** a drag emits pointer samples →
+  `interpolateCells()` Bresenham-walks the gap (`WorldCanvas.tsx:69-97`) → `stampBrush()`
+  expands each sample to an N×N footprint (`:516-524`) → `placeAt()` dedupes against
+  `strokeSet` so **each cell co-signs exactly once per stroke** (`:496-512`), echoes the
+  pixel optimistically, and fires `onPaint` without awaiting. **A fast brush stroke = a TPS
+  burst** (many unique cells co-signed in a few ms); a tap = 1.
+- **Parallel painters:** human paints seat A of its persistent tunnel; **each Agent-AI owns
+  its own tunnel** and paints seat B (`useWorldCanvasOnchain.ts:9-19, 816-855`). N agents ⇒
+  N+1 independent co-signing pairs ⇒ additive TPS, no nonce contention.
+- **The TPS levers** stay: brush size (cells/sample = N²), stroke speed (samples × line
+  length), agent count, agent paint interval (`AGENT_SPEED_INTERVALS` 240/120/50 ms), and —
+  **new in §10.4** — per-agent *batch* (cells co-signed per tick).
+
+> **Risk already mitigated:** stroke-overlap double-co-signs (which would corrupt the
+> tunnel nonce) are prevented by the active `strokeSet` dedupe — keep it; never co-sign a
+> cell twice within one logical stroke or stamp.
+
+### 10.3 The SMOOTH render (no pixel grid) — what changes in `ui/WorldCanvas.tsx`
+
+The blockiness comes from three lines, all in the renderer, none on the wire:
+`ctx.imageSmoothingEnabled = false` (`WorldCanvas.tsx:315`), `imageRendering:"pixelated"`
+(`:651`), and the `v.scale >= 8` per-cell grid draw (`:374-391`). The data model — per-chunk
+`buf:Uint8Array` of `color+1`, `writeCell` O(1) raster, eviction, hover/ownership — stays
+**100% unchanged** (it is the canonical color truth). We render that same truth *softly* in
+three composited layers:
+
+1. **Soft color field (the static substrate).** Keep `writeCell` and the 256-res per-chunk
+   `ImageData` exactly as is (cheap, O(1), last-write-wins = exact overpaint truth). On the
+   final blit, flip to **`imageSmoothingEnabled = true`** (bilinear upscale) and drop
+   `imageRendering:"pixelated"`. Delete the grid block (`:373-391`). This alone melts the
+   hard cell edges — the already-painted wall reads as a soft field, not squares, at **zero**
+   per-cell cost.
+2. **Live vector stroke ribbons (the headline "no-pixel" feel).** While the human drags
+   (and for a ~250 ms fade after `pointerUp`), capture a **screen-space stroke buffer** in
+   the existing pointer handlers (`onPointerDown/Move/Up:526-587`) and overlay a true vector
+   path — `lineCap/lineJoin = "round"`, `imageSmoothingEnabled = true`, width =
+   `brushSize × scale × k`, drawn in two passes (outer low-alpha glow + inner solid core).
+   Because it is screen-space vector, it is resolution-independent and genuinely anti-aliased
+   — no pixels. It overlays the field, then fades as the co-signed cells underneath take
+   over. Cheap: a handful of `stroke()` calls per frame, only for the active stroke. Agents
+   get the same look from a short **per-agent recent-dab trail** (last K co-signed cells,
+   soft round dabs in the agent tint, fading).
+3. **(Optional, perf-gated) soft-dab field finish.** To make even the static field painterly
+   rather than bilinear-blocky, re-raster *dirty + visible* tiles by stamping a small
+   radial-gradient dab per cell into a modestly **supersampled (×2 → 512²) offscreen tile**,
+   under an LRU cap on resident supersampled tiles. Ship only if Layer 1+2 don't read smooth
+   enough; gate behind a per-frame budget.
+
+Also: replace the square hover ghost (`:406-425` `fillRect`+`strokeRect`) with a **soft round
+brush preview** (radial-gradient disc + faint ring, radius = brush footprint). Keep the agent
+marker pill/pin; add a faint tint glow halo. **Cursor:** `crosshair` → a soft dot.
+
+> **Biggest render risk:** Canvas2D `stroke()` + glow cost at high zoom / fast drag. Mitigate
+> by culling off-screen trail segments, batching consecutive segments into one
+> `beginPath()…stroke()`, and dropping the glow pass to every other frame above zoom ~20.
+> Target 60 FPS at default zoom (scale 10); 30 FPS fallback at zoom 20+ with glow halved.
+
+### 10.4 Agent drawing-MODE system + catalog (the Intelligence ↔ TPS dial)
+
+**Today** `designForMode(mode, i): PixelDesign` returns a flat `DesignCell[]` in reveal order
+and `tickAgent` co-signs **exactly one cell per tick** (`useWorldCanvasOnchain.ts:799-805`), so
+all modes share the same TPS at a given speed. Generalize `designs.ts` into a **two-layer stroke
+generator** + make density a real TPS lever:
+
+```ts
+// designs.ts — the mode becomes a registry entry, not a union member
+export interface ModeContext { width: number; height: number; rng: () => number; numColors: number; }
+export interface AgentDrawMode {
+  id: AgentModeId; label: string;
+  group: "art" | "gesture" | "structure" | "fluid";  // groups the pills
+  footprint: { width: number; height: number };       // sizes this mode's placement slot
+  density: "sparse" | "medium" | "dense";             // TPS class → batch factor + tooltip
+  /** Lazy iterator of integer cells in reveal order (finite = a flag; endless = a flow field). */
+  strokes(ctx: ModeContext): Iterator<DesignCell>;
+}
+export const AGENT_MODES: Record<AgentModeId, AgentDrawMode> = { /* registry */ };
+```
+
+The **only float→integer funnel** is one shared `rasterizeStroke(points: {x,y}[], radius,
+spacing): DesignCell[]` (~20 lines): walk each float polyline at sub-cell `spacing`, stamp a
+round footprint of `radius` (≈πr² cells), dedupe in reveal order. Every mode calls only this,
+so all modes are **smooth-by-construction and the wire stays integer**. `artist/scatter/filler`
+survive by wrapping their existing arrays in an iterator. Promote `inPolygon`/`starPolygon`
+(`designs.ts:42-74`) into a shared `geometry.ts` for reuse.
+
+| Mode (group) | Generator | Visual character | TPS profile |
+|---|---|---|---|
+| **Artist** (art) *exists* | Pre-baked flag/template cells, field-then-emblem reveal | Recognizable flag/logo; exercises overpaint | medium, finite |
+| **Scatter** (fluid) *exists* | Uniform random cells/colors | Noise spray | medium |
+| **Filler** (fluid) *exists* | BFS flood from center, 1 color | Expanding diamond blob | dense |
+| **Sweep — vẽ dài** (gesture) | Start + heading; long arcs, `heading += small_noise`; len 200–600; slow color drift; r≈3 | Long smooth ribbon gestures | **high burst**, large footprint |
+| **Scribble — nguệch ngoạc** (gesture) | Momentum random-walk; bounce in a loose box; r≈1–2 | Energetic organic doodle | medium-high, continuous |
+| **Calligraphy** (art) | Catmull-Rom/Bézier through few control pts; **radius modulated by path speed** (nib) | Tapered swooshes — purest "no-pixel" showcase | medium, bursty at thick joints |
+| **Geometric — cấu trúc** (structure) | grid/lattice · Archimedean spiral · rings+starburst; thin brush, 1–2 colors | Clean architectural / mathematical | grid=high, spiral=steady medium |
+| **Flow field** (fluid) | Perlin vector field; K particles trace streamlines; color by field angle; respawn → **endless** | Silky parallel currents — the modern headline | **high, sustained** (K streamlines) |
+| **Wash / Gradient** (fluid) | Filler upgraded: row/radial fill following a palette ramp + dithered edge | Soft gradient color field | **very high** (a fill) |
+| **Stipple** (art) | Poisson-disc dabs, density falloff toward center | Airy pointillist cloud | low-medium (contrast mode) |
+
+**Make density a real TPS dial (the key mechanism).** Change `tickAgent` to co-sign a **batch
+per tick** instead of one cell: `batch = clamp(round(densityFactor(mode) × speedFactor(speed)),
+1, BATCH_CAP)`; pull `batch` cells from the iterator and `coSignPaint` each (each still one
+independent verified `step` → `actions++` → `totalMovesRef++`, **no double-count** — the existing
+loop already books per cell). Per-agent TPS becomes `batch × 1000/interval`, so flow/wash/grid
+**burst** and calligraphy/stipple **sip**. Bound it with `BATCH_CAP` (~12), the existing
+`MAX_RETAINED_CELLS = 200_000` eviction, and rAF coalescing.
+
+**Placement becomes per-mode:** size each agent's slot (and spiral spacing) from `mode.footprint`
+instead of the global `MAX_DESIGN_WIDTH/HEIGHT` (`useWorldCanvasOnchain.ts:107-109, 748-761`);
+endless modes (flow/scribble) carry a soft `maxCellsPerRegion` so they still relocate.
+
+**Pills:** replace the `AgentMode` union with `AGENT_MODES`; the Intelligence row maps
+`Object.values(AGENT_MODES)` (`CanvasView.tsx:161, 205-216`) — a new mode = one registry entry,
+zero UI plumbing. Ten modes won't fit one row → render **grouped by `mode.group`** (short rows or
+a dropdown). Keep **Speed** orthogonal (interval, unchanged). Add a per-agent **Brush/Density**
+pill mirroring the human `brushSize` selector (`PaletteDock.tsx`) — the explicit TPS-burst lever
+that feeds `densityFactor`.
+
+### 10.5 TEMPLATE library (CommandOSS + Vietnam arts) + picker
+
+New module `frontend/src/games/worldCanvas/templates/` (registry + builders), resolution-independent
+vectors, colors pre-quantized to the 16-index palette:
+
+```ts
+export interface StrokeTemplate {
+  id: string; name: string;
+  category: "logo" | "vietnam" | "shape" | "text";
+  aspect: { w: number; h: number };          // unit box; placement maps it to world cells
+  paths: TemplatePath[];                       // REVEAL ORDER (fills first, emblem strokes last)
+  dedupe?: boolean;                            // default true; false keeps deliberate overpaint
+}
+export type TemplatePath =
+  | { kind: "stroke"; color: number; points: Vec2[]; closed?: boolean; radius: number } // smooth band
+  | { kind: "fill";   color: number; rings: Vec2[][] };                                  // even-odd region(s)
+```
+
+**Bridge (the only new hot-path logic):** `rasterizeTemplate(tpl, scale): PixelDesign` —
+`stroke` walks the polyline by arc length stamping a disc of `DAB_RADIUS` every `DAB_SPACING`;
+`fill` scanlines the ring bbox with even-odd `inPolygon`; dedupe via a `Set` unless
+`dedupe:false`. Output is the **existing `PixelDesign` shape**, so the agent loop, `submitPaint`,
+and `coSignPaint` are untouched. `estimateMoves(tpl, scale)` shows "**≈ N paints**" before stamping
+(the burst guard). A **human stamp** = enqueue all N points back-to-back via `submitHumanPaint`
+(synchronous local co-sign in self-play) → an **instant TPS spike**; agents stream the points one
+(or one batch) per tick.
+
+**Seed set** (`templates/`): `vn-flag` (port `buildVietnam` `designs.ts:77-92` to vector: `fill`
+rect red-5 + `fill` star ring yellow-8, `dedupe:false` to keep field→star overpaint), `vn-star`,
+**`commandoss`** (CommandOSS logo as stroke paths in Sui-blue-13 / white-0 — ship a placeholder
+geometric mark until the real SVG is dropped in; content task, not a code blocker), `lotus`
+(parametric rotated teardrop petals pink-4 + stem green-9), `dong-ho` (one Đông Hồ line-art motif
+in brown-7 strokes — highest content effort, ship one first), `heart` (closed-bezier `fill` red-5),
+`star` (`starPolygon` `fill` yellow-8), `text` (`buildText(str,color)` from a tiny built-in
+A–Z/0–9 stroke font — keeps text data-driven, no font file).
+
+**Picker (data-driven, no image assets):** a single `TEMPLATES` registry feeds two surfaces —
+(1) an **agent template strip** shown when Intelligence = Artist (the chosen template feeds the
+agent loop), and (2) a **human Stamp dock** mirroring `PaletteDock.tsx`, each thumbnail drawn from
+the template's own vectors into a small canvas (so adding a template auto-adds its thumbnail),
+grouped by `category`. **Human stamp mode** in `WorldCanvas.tsx`: arming a template draws a ghost
+outline following the cursor (extend the hover ghost `:406-425`); click sets `origin + scale` and
+enqueues all rasterized points, **chunked across `requestAnimationFrame`** and capped behind the
+visible `estimateMoves` guard. The human becomes a stamper / TPS-burster.
+
+### 10.6 How it matches the other arena games
+
+- **Window/state pattern:** World Canvas already follows the per-phase router shape
+  (`idle/opening/open/demo/error`) of `ChickenCrossWindow`/`TicTacToeWindow`; the status chip with
+  phase tint + pulse is in place (`CanvasView.tsx:144-153, 267-294`).
+- **HUD tokens:** reuse the existing **frosted glass** panels (`tokens.ts:38-45`), **stat cards**
+  (uppercase mono label 9.5px / bold tinted value 19px — `CanvasView.tsx:115-142`), **segmented
+  pills** (`agentPill`, `tokens.ts:56-74`), **draggable panels** w/ sessionStorage, and the
+  **Leaderboard + Activity** feed (`panels.tsx`). New modes/templates plug into these — no new look.
+- **TPS visualization:** keep the rolling-TPS readout (`useRollingTps`, `CanvasView.tsx:91-113`);
+  optionally add the arena's scrolling-bar TPS histogram (`/src/panels/TpsChart.tsx`) so brush
+  bursts show as visible spikes.
+- **On-chain surface:** identical to the arena's sponsored self-play path — `makeKeypairSponsored
+  SignExec` + `withSponsorFallback` open, per-tunnel `flushHeartbeat`, demo fallback. **No Move
+  changes, no canvas object, no map, no Walrus** (this section retires those).
+
+### 10.7 Phased build plan (over the existing `frontend/src/games/worldCanvas/` files)
+
+> Reuse the already-built smooth-drag + per-agent-tunnel + chunk-render work. No Move/SDK edits.
+> Each phase is shippable on its own; **Phase R is the mandate and unblocks the look first.**
+
+**Phase R — Smooth render (no pixel grid).** *Files: `ui/tokens.ts`, `ui/WorldCanvas.tsx`.*
+1. `tokens.ts`: add a `BRUSH` token block — `radiusForSize(size,scale)`, glow inner/outer alphas,
+   `trailOpacity`, `cap/join = "round"`, field-smoothing flag, fade-ms.
+2. `WorldCanvas.tsx`: flip `imageSmoothingEnabled = true` on the field blit; drop
+   `imageRendering:"pixelated"`; **delete the `scale>=8` grid block (`:373-391`).** (Smallest
+   self-contained change — already kills the r/place look.)
+3. `WorldCanvas.tsx`: add a screen-space stroke buffer in the pointer handlers + `drawSmoothStroke`
+   (round caps/joins, two-pass glow) overlaid for the active stroke with a short fade; replace the
+   square hover ghost with a soft round brush preview; add the per-agent recent-dab trail.
+   *Gate (exit):* 60 FPS at default zoom on a fast drag; the wall reads as soft paint, not squares;
+   co-signed move count unchanged for an identical stroke (render-only change proven).
+
+**Phase M — Agent modes + TPS-burst batching.** *Files: `designs.ts`, `useWorldCanvasOnchain.ts`,
+`ui/CanvasView.tsx`.*
+1. `designs.ts`: add `AgentDrawMode` + `ModeContext` + `rasterizeStroke` + `geometry.ts`; implement
+   the catalog generators (sweep, scribble, calligraphy, geometric, flow, wash, stipple); wrap
+   artist/scatter/filler as iterators; export `AGENT_MODES` and replace the `AgentMode` union.
+2. `useWorldCanvasOnchain.ts`: iterator-based `tickAgent` co-signing a **clamped batch per tick**
+   (density × speed); size placement slots from `mode.footprint`; `maxCellsPerRegion` for endless
+   modes.
+3. `CanvasView.tsx`: render the Intelligence selector grouped by `mode.group` (rows/dropdown); add
+   a per-agent Brush/Density pill. *Gate:* dense modes visibly burst more TPS than sparse ones at
+   the same Speed; no double-counted moves; placement never overlaps.
+
+**Phase T — Template library + stamp.** *Files: new `templates/`, `ui/WorldCanvas.tsx`,
+`ui/PaletteDock.tsx` (+ new `ui/StampDock.tsx`), `ui/CanvasView.tsx`.*
+1. `templates/`: `StrokeTemplate` types + `rasterizeTemplate` + `estimateMoves` + seeds (vn-flag,
+   vn-star, commandoss placeholder, lotus, dong-ho, heart, star, text); Artist mode consumes
+   `rasterizeTemplate(template, scale)`.
+2. `WorldCanvas.tsx`: human stamp mode — armed-template ghost → click → rasterize → enqueue via
+   `submitHumanPaint`, chunked across rAF, capped by `estimateMoves`.
+3. UI: agent template strip (when Artist) + a `StampDock` mirroring `PaletteDock`, vector
+   thumbnails, grouped by category. *Gate:* one template object → appears in both surfaces with a
+   free thumbnail; a stamp produces an instant, bounded TPS spike; CommandOSS + a Vietnam-arts seed
+   render recognizably.
+
+### 10.8 First 3 build steps (ordered)
+
+1. **`ui/tokens.ts` — add the `BRUSH` render-token block** (`radiusForSize`, glow inner/outer
+   alphas, `trailOpacity`, round `cap/join`, field-smoothing flag, fade-ms). Pure additive; no
+   behavior change yet. *(Phase R.1)*
+2. **`ui/WorldCanvas.tsx` — flip to smooth + kill the grid:** set `imageSmoothingEnabled = true` on
+   the field blit, remove `imageRendering:"pixelated"`, and delete the `scale>=8` per-cell grid
+   block (`:373-391`). This single change retires the pixel aesthetic with zero protocol impact.
+   *(Phase R.2)*
+3. **`ui/WorldCanvas.tsx` — live vector stroke ribbon + soft hover:** capture a screen-space stroke
+   buffer in the existing `onPointerDown/Move/Up` handlers and overlay `drawSmoothStroke` (round
+   caps/joins + two-pass glow) for the active stroke with a ~250 ms fade; replace the square hover
+   ghost (`:406-425`) with a soft round radial-gradient brush preview. *(Phase R.3)*
