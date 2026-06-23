@@ -30,9 +30,9 @@ export interface CrossView {
 export type SessionResult = "A" | "B" | "push";
 
 /**
- * Advance the session by one world tick. Returns false when the race is terminal (the
- * caller then stops the timer and settles). `by` alternates only for signing attribution;
- * the protocol advances the whole world from the move's dirA/dirB.
+ * Advance the session by one world tick. Returns false when the race is terminal (the caller
+ * then stops the timer and settles). One co-signed update is one seat's hop, chosen by tick
+ * parity; the other chicken implicitly stays (but is still death-checked) — the 2-party model.
  */
 export function stepSession(
   protocol: CrossProtocol,
