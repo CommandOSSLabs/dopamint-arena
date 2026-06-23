@@ -5,6 +5,8 @@ import { createBattleshipKit } from "./games/battleship/kit";
 import { createQuantumPokerKit } from "./games/quantumPoker/kit";
 import { createBombItKit } from "./games/bombIt/kit";
 import { createChickenCrossKit } from "./games/chickenCross/kit";
+import { createPixelPaintKit } from "./games/pixelPaint/kit";
+import { createPixelDuelKit } from "./games/pixelPaint/duelKit";
 import { defaultStateHash, type StateHash } from "./stateHash";
 
 export type GameId =
@@ -13,7 +15,9 @@ export type GameId =
   | "battleship"
   | "quantum-poker"
   | "bomb-it"
-  | "chicken-cross";
+  | "chicken-cross"
+  | "pixel-paint"
+  | "pixel-duel";
 export type { StateHash };
 export { defaultStateHash };
 
@@ -51,4 +55,6 @@ export const GAME_KITS: GameKitRegistry = {
   "quantum-poker": createQuantumPokerKit(100n),
   "bomb-it": createBombItKit(100n),
   "chicken-cross": createChickenCrossKit(100n),
+  "pixel-paint": createPixelPaintKit(),
+  "pixel-duel": createPixelDuelKit(),
 };

@@ -12,3 +12,20 @@ export * from "./cross";
 export * from "./bombIt";
 export * from "./quantumPokerCodec";
 export * from "./quantumPokerPersona";
+// Pixel protocols: re-export each class + its own types so `protocols.Pixel*` works
+// like the others. Their generic cell constants (EMPTY/OWNER_A/OWNER_B/NUM_COLORS/
+// Winner) collide between the two, so import those from the specific file instead.
+export { PixelPaintProtocol } from "./pixelPaint";
+export type {
+  PixelPaintState,
+  PixelPaintMove,
+  PixelPaintConfig,
+  PixelPaintMode,
+} from "./pixelPaint";
+export { PixelDuelProtocol } from "./pixelDuel";
+export type {
+  PixelDuelState,
+  PixelDuelMove,
+  PixelDuelConfig,
+  PixelDuelPhase,
+} from "./pixelDuel";

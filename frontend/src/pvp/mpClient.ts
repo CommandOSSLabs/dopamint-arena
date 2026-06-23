@@ -73,6 +73,9 @@ export type PeerMessage =
   | { t: "open"; tunnelId: string }
   | { t: "ready" }
   | { t: "endMatch" }
+  // Commit-reveal handshake (pixel-duel): each seat sends its 32-byte template
+  // commitment (hex) BEFORE the tunnel is built, so both build the same protocol.
+  | { t: "duelCommit"; commit: string }
   | {
       t: "settleHalf";
       partyABalance: string;

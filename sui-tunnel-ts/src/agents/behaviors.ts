@@ -11,6 +11,7 @@ import { ChatProtocol } from "../protocol/chat";
 import { QuantumPokerProtocol } from "../protocol/quantumPoker";
 import { CrossProtocol } from "../protocol/cross";
 import { BombItProtocol } from "../protocol/bombIt";
+import { PixelPaintProtocol } from "../protocol/pixelPaint";
 
 export type BehaviorName =
   | "payment"
@@ -19,7 +20,8 @@ export type BehaviorName =
   | "chat"
   | "poker"
   | "cross"
-  | "bombIt";
+  | "bombIt"
+  | "pixelpaint";
 
 export const BEHAVIOR_NAMES: BehaviorName[] = [
   "payment",
@@ -29,6 +31,7 @@ export const BEHAVIOR_NAMES: BehaviorName[] = [
   "poker",
   "cross",
   "bombIt",
+  "pixelpaint",
 ];
 
 /** Construct a fresh protocol instance for a behavior. */
@@ -53,6 +56,11 @@ export function createBehaviorProtocol(
       return new CrossProtocol() as unknown as Protocol<unknown, unknown>;
     case "bombIt":
       return new BombItProtocol() as unknown as Protocol<unknown, unknown>;
+    case "pixelpaint":
+      return new PixelPaintProtocol({ mode: "free" }) as unknown as Protocol<
+        unknown,
+        unknown
+      >;
     default: {
       const _exhaustive: never = name;
       throw new Error(`unknown behavior: ${_exhaustive}`);
