@@ -25,6 +25,10 @@ import "./index.css";
 
 type Scene = "login" | "setup" | "game" | "pvp";
 
+// A bot below this gets topped up — just above the hook's MIN_PLAY floor (0.02 SUI) so it keeps
+// playing. Even the bots before spending wallet SUI; only fund when the pair is genuinely short.
+const MIN_BOT_BALANCE_MIST = 30_000_000n; // 0.03 SUI
+
 function AppContent() {
   const { isConnected, executeTransaction } = useCustomWallet();
   const [scene, setScene] = useState<Scene>("login");
@@ -41,7 +45,8 @@ function AppContent() {
   const caroGame = useCaroBotGame(difficulty, boardSize);
   const g = gameType === "caro" ? caroGame : tttGame;
 
-  const funded = g.balances.x > 0n && g.balances.o > 0n;
+  const funded =
+    g.balances.x >= MIN_BOT_BALANCE_MIST && g.balances.o >= MIN_BOT_BALANCE_MIST;
 
   // Track the actual container element's parent bounds to determine orientation
   useEffect(() => {
@@ -74,10 +79,11 @@ function AppContent() {
   }, [isConnected, scene, tttGame, caroGame]);
 
   const autoNavRef = useRef(false);
+  const autoEvenedRef = useRef(false);
   const autoFundRef = useRef(false);
   const autoStartedRef = useRef(false);
 
-  // Auto-pilot: skip login → setup → wallet-fund bots if low → start bot-vs-bot.
+  // Auto-pilot: skip login → setup → even bots / wallet-fund if low → start bot-vs-bot.
   // Bots are SHARED across all ttt windows (loadOrCreateBots reads shared localStorage),
   // so opening a 2nd ttt window double-funds and races the same keypair on tunnel-open —
   // one window wins, the others error. The desktop seeds one window per game; concurrent
@@ -100,6 +106,23 @@ function AppContent() {
     if (scene === "setup") {
       if (!g.balancesLoaded) return;
       if (!funded) {
+        const combined = g.balances.x + g.balances.o;
+        const diff =
+          g.balances.x > g.balances.o
+            ? g.balances.x - g.balances.o
+            : g.balances.o - g.balances.x;
+        // Even the bots first: if shifting half the surplus from the richer bot lifts the
+        // poorer one over the bar, do that cheap bot→bot transfer instead of a wallet top-up.
+        // Only fund from the wallet when the pair is genuinely short.
+        if (
+          !autoEvenedRef.current &&
+          diff >= 4_000_000n &&
+          combined >= 2n * MIN_BOT_BALANCE_MIST
+        ) {
+          autoEvenedRef.current = true;
+          g.rebalance();
+          return;
+        }
         if (!autoFundRef.current) {
           autoFundRef.current = true; // fund AT MOST ONCE per window (Global Constraint)
           console.log("[tictactoe] funding bots from wallet…");

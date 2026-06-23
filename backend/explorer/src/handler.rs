@@ -139,7 +139,11 @@ pub struct SettlementPipeline {
 
 #[async_trait]
 impl Processor for SettlementPipeline {
-    const NAME: &'static str = "settlement";
+    // The framework only honors `--first-checkpoint` when no watermark exists for this name
+    // (lib.rs `add_pipeline`). Bumping the version re-anchors ingestion: it forces a fresh
+    // watermark at the configured start, skipping a from-genesis backfill. The old "settlement"
+    // watermark row is left orphaned (harmless). Bump again to re-anchor in the future.
+    const NAME: &'static str = "settlement_v2";
     type Value = StoredSettlement;
 
     async fn process(&self, checkpoint: &Arc<Checkpoint>) -> anyhow::Result<Vec<Self::Value>> {

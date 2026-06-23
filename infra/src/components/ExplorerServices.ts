@@ -50,10 +50,23 @@ export function createExplorerServices(args: ExplorerServicesArgs): ExplorerServ
           essential: true,
           // Framework IngestionClientArgs has a required(true) clap arg-group; the binary
           // exits immediately without a checkpoint source. This is the testnet remote store.
-          command: ["/usr/local/bin/indexer", "--remote-store-url", "https://checkpoints.testnet.sui.io"],
+          // `--first-checkpoint` starts ingestion near tip so the indexer reaches recent
+          // settlements in minutes instead of backfilling from genesis (testnet is at ~351.69M).
+          // It captures the existing on-chain settlements (~351.653M) and then tracks live. Only
+          // takes effect against a fresh pipeline watermark (see handler.rs SettlementPipeline).
+          command: [
+            "/usr/local/bin/indexer",
+            "--remote-store-url",
+            "https://checkpoints.testnet.sui.io",
+            "--first-checkpoint",
+            "351650000",
+          ],
           environment: [
             { name: "TUNNEL_PACKAGE_ID", value: "0x0b89fe86e42cdbfd1e614757a83d014b455d12923d0dded58842ab18f8a5a22b" },
             { name: "REDIS_PUBSUB_URL", value: `rediss://${pubsub}:6379` },
+            // Framework subscriber honors RUST_LOG; without it the indexer is silent (no
+            // ingestion progress, no errors) — see the 11h dark-running incident.
+            { name: "RUST_LOG", value: "info" },
           ],
           secrets: [{ name: "DATABASE_URL", valueFrom: dbUrlArn }],
           logConfiguration: logConfig(logGroup, "indexer"),
