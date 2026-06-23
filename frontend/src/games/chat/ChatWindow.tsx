@@ -1,24 +1,14 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import {
-  Bot,
-  RotateCcw,
-  Send,
-  Sparkles,
-  User,
-  Wallet,
-  XCircle,
-} from "lucide-react";
+import { Bot, Loader2, RotateCcw, Send, Sparkles, User } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useChatSession } from "./useChatSession";
 import type { GameWindowProps } from "../types";
 
-const DEFAULT_STAKE = 100;
-
-export function ChatWindow(_props: GameWindowProps) {
-  const { status, transcript, error, isReplying, start, send, settle, reset } =
-    useChatSession();
+export function ChatWindow({ windowId }: GameWindowProps) {
+  const { status, transcript, error, isReplying, send, reset } =
+    useChatSession(windowId);
   const [draft, setDraft] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -35,73 +25,58 @@ export function ChatWindow(_props: GameWindowProps) {
     await send(text);
   };
 
-  const statusLabel: Record<typeof status, string> = {
-    idle: "idle",
-    funding: "funding…",
-    playing: "playing",
-    settling: "settling…",
-    settled: "settled",
-    error: "error",
-  };
-
-  const statusColor =
-    status === "error"
-      ? "bg-destructive"
-      : status === "playing"
-        ? "bg-success"
-        : status === "funding" || status === "settling"
-          ? "animate-pulse bg-primary"
-          : "bg-muted";
-
-  const canType = status === "playing" && !isReplying;
+  const showInput = status === "idle" || status === "chatting";
+  const inputDisabled = status !== "chatting" || isReplying;
 
   return (
-    <div className="flex h-full flex-col overflow-hidden bg-card/50">
+    <div className="relative flex h-full flex-col overflow-hidden bg-card/50">
       <div className="flex items-center justify-between border-b border-border px-3 py-2">
         <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
           <Sparkles className="size-3.5 text-primary" />
           AI Chat
         </div>
-        <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
-          <span className={`size-1.5 rounded-full ${statusColor}`} />
-          {statusLabel[status]}
-          {status === "playing" && (
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              onClick={settle}
-              aria-label="Settle tunnel"
-            >
-              <XCircle className="size-3" />
-            </Button>
-          )}
-        </div>
       </div>
 
-      {status === "idle" && (
-        <div className="flex flex-1 flex-col items-center justify-center gap-3 p-4 text-center">
-          <Bot className="size-10 opacity-40" />
+      {(status === "opening" || status === "closing") && (
+        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-card/80 backdrop-blur-sm">
+          <Loader2 className="size-8 animate-spin text-primary" />
           <p className="text-sm text-muted-foreground">
-            Open a self-play Sui Tunnel to chat.
+            {status === "opening"
+              ? "Opening secure session…"
+              : "Closing session…"}
           </p>
-          <Button onClick={() => start(DEFAULT_STAKE)} className="gap-2">
-            <Wallet className="size-4" />
-            Open Chat Tunnel
+        </div>
+      )}
+
+      {status === "error" && (
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
+          <Bot className="size-10 text-destructive" />
+          <p className="max-w-[16rem] text-sm text-muted-foreground">
+            {error ?? "Something went wrong."}
+          </p>
+          <Button onClick={reset} variant="outline" className="gap-2">
+            <RotateCcw className="size-4" />
+            Try again
           </Button>
         </div>
       )}
 
-      {status !== "idle" && (
+      {status !== "error" && (
         <>
           <div
             ref={listRef}
             className="min-h-0 flex-1 space-y-3 overflow-auto p-3 font-mono text-xs"
           >
-            {transcript.length === 0 && status !== "settled" && (
+            {transcript.length === 0 && status === "idle" && (
               <div className="flex h-full flex-col items-center justify-center gap-2 text-muted-foreground">
                 <Bot className="size-8 opacity-40" />
                 <p>Ask the assistant anything.</p>
+              </div>
+            )}
+            {transcript.length === 0 && status === "chatting" && (
+              <div className="flex h-full flex-col items-center justify-center gap-2 text-muted-foreground">
+                <Bot className="size-8 opacity-40" />
+                <p>Session ready. Say something.</p>
               </div>
             )}
             {transcript.map((m, i) => (
@@ -138,37 +113,7 @@ export function ChatWindow(_props: GameWindowProps) {
             ))}
           </div>
 
-          {status === "settled" && (
-            <div className="flex items-center justify-between border-t border-border px-3 py-1.5 text-[11px] text-muted-foreground">
-              <span>Tunnel settled.</span>
-              <Button
-                type="button"
-                variant="link"
-                size="sm"
-                className="h-auto p-0 text-[11px]"
-                onClick={reset}
-              >
-                Start over
-              </Button>
-            </div>
-          )}
-
-          {error && (
-            <div className="flex items-center justify-between border-y border-destructive/20 bg-destructive/10 px-3 py-1.5 text-[11px] text-destructive">
-              <span className="truncate">{error}</span>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                onClick={reset}
-                aria-label="Reset"
-              >
-                <RotateCcw className="size-3.5" />
-              </Button>
-            </div>
-          )}
-
-          {status === "playing" && (
+          {showInput && (
             <form
               onSubmit={submit}
               className="flex shrink-0 items-center gap-2 border-t border-border p-2"
@@ -176,10 +121,10 @@ export function ChatWindow(_props: GameWindowProps) {
               <Input
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
-                placeholder="Message…"
+                placeholder="Type a message..."
                 className="h-8 font-mono text-xs"
                 aria-label="Chat message"
-                disabled={!canType}
+                disabled={inputDisabled}
               />
               <Button
                 type="submit"
