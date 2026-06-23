@@ -55,6 +55,9 @@ export function BombBoard({
   stake,
   auto = false,
   onToggleAuto,
+  score,
+  gamesPlayed,
+  onSettle,
 }: {
   view: BombItView;
   winner: "A" | "B" | "draw" | null;
@@ -64,6 +67,12 @@ export function BombBoard({
   stake: number;
   auto?: boolean;
   onToggleAuto?: () => void;
+  /** Running multi-game score for solo sessions. */
+  score?: { you: number; foe: number };
+  /** Number of completed duels (the running duel is gamesPlayed + 1). */
+  gamesPlayed?: number;
+  /** Cash out the tunnel at the current state — solo only, shown while live. */
+  onSettle?: () => void;
 }) {
   const settled = winner !== null;
   const spectating = role === null;
@@ -304,6 +313,28 @@ export function BombBoard({
                 <dd className="wal-mono tabular-nums">{stake}</dd>
               </div>
             </dl>
+
+            {score !== undefined && (
+              <div className="bomb-score">
+                <span className="bomb-score__tally wal-doto tabular-nums">
+                  {score.you}–{score.foe}
+                </span>
+                <span className="bomb-score__label">
+                  g{(gamesPlayed ?? 0) + 1}
+                </span>
+              </div>
+            )}
+
+            {onSettle && !settled && (
+              <button
+                type="button"
+                className="bomb-settle"
+                onClick={onSettle}
+                title="Cash out the tunnel now at the current balance"
+              >
+                settle
+              </button>
+            )}
           </div>
         </div>
       </aside>

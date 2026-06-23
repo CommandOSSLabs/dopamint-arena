@@ -9,10 +9,9 @@ import { BombScreen } from "./components/BombScreen";
 import "./bomb-it.css";
 
 // Persisted by windowId so a remount (minimize / maximize / desktop reflow) returns to the live
-// PvP match instead of the chooser. Only "pvp" is stored — that session lives out-of-React and
-// survives the remount; the Solo session is in-React (refs) and is gone on remount, so it falls
-// back to the lobby. Cleared on window close.
-const modeStore = new Map<string, "pvp">();
+// session instead of the chooser. Both "solo" and "pvp" survive remount — solo because the
+// session lives out-of-React (BombBotSession, windowId-keyed), pvp likewise. Cleared on window close.
+const modeStore = new Map<string, "solo" | "pvp">();
 
 /** Bomb It: pick Solo (bot-vs-bot self-play) or PvP (human-vs-human over a shared tunnel). */
 export function BombItWindow({ windowId }: GameWindowProps) {
@@ -26,7 +25,7 @@ export function BombItWindow({ windowId }: GameWindowProps) {
     registerWindowDisposer(windowId, "bomb-it-mode", () => modeStore.delete(windowId));
   }, [windowId]);
   const setMode = (m: "solo" | "pvp" | null) => {
-    if (m === "pvp") modeStore.set(windowId, "pvp");
+    if (m === "pvp" || m === "solo") modeStore.set(windowId, m);
     else modeStore.delete(windowId);
     setModeState(m);
   };
@@ -84,6 +83,9 @@ export function BombItWindow({ windowId }: GameWindowProps) {
           onToggleAuto={solo.toggleAuto}
           onAction={solo.queueAction}
           onPlayAgain={backToMenu}
+          score={solo.score}
+          gamesPlayed={solo.gamesPlayed}
+          onSettle={solo.status === "playing" ? solo.settleNow : undefined}
         />
       );
     }

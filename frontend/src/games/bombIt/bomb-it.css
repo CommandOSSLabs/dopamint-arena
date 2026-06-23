@@ -842,6 +842,60 @@
   color: var(--bi-gold, #fbbf24);
 }
 
+/* ---- Running score chip (solo multi-game) -------------------------------- */
+
+.bomb-score {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  border: 1px solid color-mix(in srgb, var(--bi-gold, #fbbf24) 30%, transparent);
+  background: linear-gradient(180deg, rgba(251, 191, 36, 0.1), rgba(0, 0, 0, 0.28));
+  padding: 4px 5px;
+  text-align: center;
+}
+
+.bomb-score__tally {
+  font-size: clamp(11px, 3.2cqw, 14px);
+  line-height: 1;
+  color: var(--bi-gold, #fbbf24);
+  text-shadow: 0 0 8px rgba(251, 191, 36, 0.3);
+}
+
+.bomb-score__label {
+  font-size: 6px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(148, 163, 184, 0.75);
+}
+
+/* ---- Settle button (solo, visible while live) ----------------------------- */
+
+.bomb-settle {
+  width: 100%;
+  border: 1px solid color-mix(in srgb, var(--bi-ember, #f97316) 45%, transparent);
+  background: linear-gradient(180deg, rgba(249, 115, 22, 0.14), rgba(0, 0, 0, 0.38));
+  color: var(--bi-ember, #f97316);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 6px 4px;
+  line-height: 1.1;
+  transition:
+    background 0.2s ease,
+    border-color 0.2s ease,
+    box-shadow 0.2s ease,
+    color 0.2s ease;
+}
+.bomb-settle:hover {
+  border-color: var(--bi-ember, #f97316);
+  background: linear-gradient(180deg, rgba(249, 115, 22, 0.28), rgba(0, 0, 0, 0.38));
+  color: #fdba74;
+  box-shadow: 0 0 10px rgba(249, 115, 22, 0.2);
+}
+
 @keyframes bomb-edge-pulse {
   0%, 100% { opacity: 0.35; }
   50% { opacity: 0.85; }
