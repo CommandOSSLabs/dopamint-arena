@@ -73,13 +73,13 @@ export function BoardGrid({
   return (
     <div className="flex w-full flex-col gap-1.5">
       {title && (
-        <div className="text-[11px] font-semibold tracking-wider text-cyan-400/80 uppercase">
+        <div className="wal-mono text-[11px] font-semibold tracking-wider text-[#cab1ff]/80 uppercase">
           {title}
         </div>
       )}
       {/* Cap the board by the window height (cqh) so two stacked / side-by-side
           boards fit a short window without scrolling; width still bounds tall ones. */}
-      <div className="mx-auto w-full max-w-[min(100%,40cqh)] rounded-lg bg-slate-950/40 p-1.5 ring-1 ring-cyan-500/20 shadow-lg shadow-cyan-950/20 backdrop-blur-md @[30rem]:max-w-[min(100%,78cqh)]">
+      <div className="mx-auto w-full max-w-[min(100%,40cqh)] rounded-lg bg-slate-950/40 p-1.5 ring-1 ring-[#cab1ff]/20 shadow-lg shadow-black/30 backdrop-blur-md @[30rem]:max-w-[min(100%,78cqh)]">
         <GridFrame
           renderCell={(cell) => {
             const v = cells[cell];
@@ -101,31 +101,31 @@ export function BoardGrid({
                   hasShip
                     ? "border-transparent bg-transparent"
                     : v === "water" || v === "miss"
-                      ? "border-cyan-500/10 bg-cyan-950/20 hover:border-cyan-500/30"
+                      ? "border-[#cab1ff]/10 bg-[#cab1ff]/[0.04] hover:border-[#cab1ff]/30"
                       : v === "hit"
-                        ? "border-red-500/40 bg-gradient-to-b from-slate-950 to-slate-900 shadow-md"
+                        ? "border-[#fb7185]/40 bg-gradient-to-b from-slate-950 to-slate-900 shadow-md"
                         : v === "sunk"
-                          ? "border-red-950 bg-gradient-to-b from-red-950/40 to-slate-950"
+                          ? "border-[#fb7185]/25 bg-gradient-to-b from-[#fb7185]/15 to-slate-950"
                           : "",
-                  canFire && "cursor-crosshair hover:bg-cyan-500/20",
+                  canFire && "cursor-crosshair hover:bg-[#cab1ff]/15",
                   isLast &&
-                    "ring-2 ring-cyan-400 shadow-[0_0_8px_rgba(34,211,238,0.6)]",
+                    "ring-2 ring-[#cab1ff] shadow-[0_0_8px_rgba(202,177,255,0.6)]",
                 )}
               >
-                {/* HIT Overlay: Fire & pulsing glow */}
+                {/* HIT Overlay: Fire & pulsing glow (lime flash core, destructive glow). */}
                 {v === "hit" && (
                   <>
-                    <span className="absolute inset-0 bg-red-500/20 animate-pulse pointer-events-none" />
-                    <span className="size-[45%] animate-ping absolute rounded-full bg-red-400/50 pointer-events-none" />
-                    <span className="size-[50%] rounded-full bg-amber-400 shadow-[0_0_12px_6px_rgba(248,113,113,0.9)] z-10 pointer-events-none" />
+                    <span className="absolute inset-0 bg-[#fb7185]/20 animate-pulse pointer-events-none" />
+                    <span className="size-[45%] animate-ping absolute rounded-full bg-[#fb7185]/50 pointer-events-none" />
+                    <span className="size-[50%] rounded-full bg-[#eaff80] shadow-[0_0_12px_6px_rgba(251,113,133,0.9)] z-10 pointer-events-none" />
                   </>
                 )}
 
                 {/* SUNK Overlay: Completely wrecked */}
                 {v === "sunk" && (
                   <>
-                    <span className="absolute inset-0 bg-red-950/40 pointer-events-none" />
-                    <span className="text-[12px] leading-none font-bold text-red-500/80 drop-shadow-[0_0_3px_rgba(239,68,68,0.8)] z-10 select-none">
+                    <span className="absolute inset-0 bg-[#fb7185]/10 pointer-events-none" />
+                    <span className="text-[12px] leading-none font-bold text-[#fb7185]/80 drop-shadow-[0_0_3px_rgba(251,113,133,0.8)] z-10 select-none">
                       ✕
                     </span>
                   </>
@@ -133,19 +133,19 @@ export function BoardGrid({
 
                 {/* MISS Overlay: Sonar splash circle */}
                 {v === "miss" && (
-                  <span className="size-[40%] rounded-full border-2 border-cyan-400/50 shadow-[0_0_6px_rgba(34,211,238,0.3)] animate-pulse" />
+                  <span className="size-[40%] rounded-full border-2 border-[#cab1ff]/50 shadow-[0_0_6px_rgba(202,177,255,0.3)] animate-pulse" />
                 )}
 
                 {/* One-shot splash on the latest shot */}
                 {isLast && (
-                  <span className="pointer-events-none absolute inset-0 animate-out fade-out-0 zoom-out-150 ring-4 ring-cyan-400/70 duration-1000 z-10" />
+                  <span className="pointer-events-none absolute inset-0 animate-out fade-out-0 zoom-out-150 ring-4 ring-[#cab1ff]/70 duration-1000 z-10" />
                 )}
 
                 {/* Crosshair preview while hovering a fireable cell. */}
                 {canFire && (
-                  <span className="pointer-events-none absolute inset-0 hidden items-center justify-center text-cyan-400 group-hover:flex z-10">
-                    <span className="absolute h-px w-4 bg-current shadow-[0_0_4px_rgba(34,211,238,0.5)]" />
-                    <span className="absolute h-4 w-px bg-current shadow-[0_0_4px_rgba(34,211,238,0.5)]" />
+                  <span className="pointer-events-none absolute inset-0 hidden items-center justify-center text-[#cab1ff] group-hover:flex z-10">
+                    <span className="absolute h-px w-4 bg-current shadow-[0_0_4px_rgba(202,177,255,0.5)]" />
+                    <span className="absolute h-4 w-px bg-current shadow-[0_0_4px_rgba(202,177,255,0.5)]" />
                     <span className="absolute size-2 rounded-full border border-current opacity-60 animate-ping" />
                   </span>
                 )}
@@ -183,7 +183,11 @@ export function BoardGrid({
                     )}
                     style={gridStyle}
                   >
-                    <ShipSprite id={p.id} size={size} horizontal={p.orient === "H"} />
+                    <ShipSprite
+                      id={p.id}
+                      size={size}
+                      horizontal={p.orient === "H"}
+                    />
                   </div>
                 );
               })}

@@ -103,14 +103,14 @@ export function PlacementBoard({
       }}
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="text-sm font-semibold text-cyan-400">
+        <span className="wal-mono text-[11px] uppercase tracking-wider text-[#cab1ff]">
           Place your fleet
         </span>
         <div className="flex gap-1.5">
           <button
             type="button"
             onClick={rotate}
-            className="rounded-full border border-cyan-500/20 bg-cyan-950/20 px-3 py-1 text-xs text-cyan-400 hover:bg-cyan-500/10 hover:border-cyan-400 transition-colors"
+            className="rounded-full border border-[#cab1ff]/20 bg-[#cab1ff]/[0.06] px-3 py-1.5 text-xs font-medium text-[#cab1ff] transition-colors hover:border-[#cab1ff]/60 hover:bg-[#cab1ff]/10 active:scale-95"
           >
             Rotate (R) · {orient === "H" ? "→" : "↓"}
           </button>
@@ -120,7 +120,7 @@ export function PlacementBoard({
               setPlacements(placeFleetRandom(Math.random));
               setSelected(null);
             }}
-            className="rounded-full border border-cyan-500/20 bg-cyan-950/20 px-3 py-1 text-xs text-cyan-400 hover:bg-cyan-500/10 hover:border-cyan-400 transition-colors"
+            className="rounded-full border border-[#cab1ff]/20 bg-[#cab1ff]/[0.06] px-3 py-1.5 text-xs font-medium text-[#cab1ff] transition-colors hover:border-[#cab1ff]/60 hover:bg-[#cab1ff]/10 active:scale-95"
           >
             Randomize
           </button>
@@ -136,18 +136,21 @@ export function PlacementBoard({
             className={cn(
               "flex items-center gap-1 rounded-full border px-3 py-1 text-[11px] transition-all duration-150",
               selected === ship.id
-                ? "border-cyan-400 bg-cyan-400/10 text-cyan-400 shadow-[0_0_8px_rgba(34,211,238,0.2)]"
-                : "border-cyan-500/10 text-cyan-500/60 hover:text-cyan-400 hover:border-cyan-500/30",
+                ? "border-[#cab1ff] bg-[#cab1ff]/10 text-[#cab1ff] shadow-[0_0_8px_rgba(202,177,255,0.2)]"
+                : "border-[#cab1ff]/15 text-[#cab1ff]/55 hover:border-[#cab1ff]/40 hover:text-[#cab1ff]",
             )}
           >
-            <Check className="size-3 text-emerald-400" />
+            <Check className="size-3 text-[#9cefcf]" />
             {ship.name} · {ship.size}
           </button>
         ))}
       </div>
 
+      {/* Size the board to the height LEFT OVER after the header/roster/footer
+          (~12rem of chrome) so a short window never clips the controls — the
+          parent is overflow-hidden — while a tall phone still fills the width. */}
       <div
-        className="mx-auto w-full max-w-[18rem] rounded-lg bg-slate-950/40 p-1.5 ring-1 ring-cyan-500/20 shadow-lg backdrop-blur-md"
+        className="mx-auto w-full max-w-[min(100%,calc(100cqh_-_12rem))] rounded-lg bg-slate-950/40 p-1.5 ring-1 ring-[#cab1ff]/20 shadow-lg backdrop-blur-md"
         onPointerLeave={() => setHover(null)}
       >
         <GridFrame
@@ -171,12 +174,12 @@ export function PlacementBoard({
                   "aspect-square rounded-[4px] border relative transition-all duration-150 overflow-hidden z-20",
                   inPreview
                     ? preview!.valid
-                      ? "border-cyan-400 bg-cyan-500/20"
-                      : "border-red-500 bg-red-500/20"
+                      ? "border-[#cab1ff] bg-[#cab1ff]/20"
+                      : "border-[#fb7185] bg-[#fb7185]/20"
                     : !showAsOccupied
-                      ? "border-cyan-500/10 bg-cyan-950/20 hover:border-cyan-500/30"
+                      ? "border-[#cab1ff]/10 bg-[#cab1ff]/[0.04] hover:border-[#cab1ff]/30"
                       : isSelected
-                        ? "border-cyan-400 bg-cyan-950/50 shadow-[0_0_8px_rgba(34,211,238,0.3)]"
+                        ? "border-[#cab1ff] bg-[#cab1ff]/[0.08] shadow-[0_0_8px_rgba(202,177,255,0.3)]"
                         : "border-transparent bg-transparent", // Placed ship is transparent
                   selected && !showAsOccupied && !inPreview && "cursor-pointer",
                 )}
@@ -212,7 +215,7 @@ export function PlacementBoard({
                     className={cn(
                       "pointer-events-none relative overflow-hidden transition-all duration-150",
                       isSelected
-                        ? "opacity-60 shadow-[0_0_8px_rgba(34,211,238,0.2)]"
+                        ? "opacity-60 shadow-[0_0_8px_rgba(202,177,255,0.2)]"
                         : "opacity-95",
                     )}
                     style={gridStyle}
@@ -255,7 +258,7 @@ export function PlacementBoard({
                     className={cn(
                       "pointer-events-none relative overflow-hidden transition-all duration-75",
                       preview.valid
-                        ? "opacity-75 animate-pulse shadow-[0_0_12px_rgba(34,211,238,0.4)]"
+                        ? "opacity-75 animate-pulse shadow-[0_0_12px_rgba(202,177,255,0.4)]"
                         : "opacity-45 grayscale brightness-50",
                     )}
                     style={gridStyle}
@@ -273,7 +276,7 @@ export function PlacementBoard({
       </div>
 
       <div className="mt-auto flex flex-wrap items-center justify-between gap-2">
-        <span className="text-[11px] text-cyan-500/60">
+        <span className="text-[11px] text-arena-muted">
           {legal
             ? selected
               ? "Click to drop the ship; R rotates."
@@ -284,7 +287,7 @@ export function PlacementBoard({
           type="button"
           disabled={!legal}
           onClick={() => onReady(placements)}
-          className="rounded-full bg-cyan-400 px-4 py-1.5 text-sm font-semibold text-black disabled:opacity-40 hover:bg-cyan-300 transition-colors shadow-[0_0_12px_rgba(34,211,238,0.3)]"
+          className="rounded-full bg-[#cab1ff] px-5 py-2.5 text-sm font-semibold text-[#0c0f1d] shadow-[0_0_14px_rgba(202,177,255,0.3)] transition-all hover:bg-[#b79bff] active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-40"
         >
           {ctaLabel}
         </button>
