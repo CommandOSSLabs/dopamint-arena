@@ -31,6 +31,10 @@ import {
  */
 
 type PaintMode = "vs-bot" | "auto";
+/** Selectable DISPLAY pot (SUI on the line + reveal payout); separate from the
+ *  lean sponsor-funded on-chain tunnel stake. */
+type DuelStake = 1 | 2 | 5 | 10;
+const STAKES: readonly DuelStake[] = [1, 2, 5, 10];
 const DIFFICULTIES: readonly DuelDifficulty[] = ["easy", "normal", "hard"];
 const DIFFICULTY_LABEL: Record<DuelDifficulty, string> = {
   easy: "Easy",
@@ -41,6 +45,9 @@ const DIFFICULTY_LABEL: Record<DuelDifficulty, string> = {
 export function PaintWindow(_props: GameWindowProps) {
   const [mode, setMode] = useState<PaintMode | null>(null);
   const [difficulty, setDifficulty] = useState<DuelDifficulty>("normal");
+  // The DISPLAY pot picked in the menu; carried into the duel as `duel.stake`.
+  // Independent of the on-chain tunnel stake (a lean sponsor-funded 1 MIST).
+  const [stake, setStake] = useState<DuelStake>(10);
 
   // <DuelChrome/> mounts ONCE here so its fonts, keyframes, and #pdGlass filter
   // are available to both the menu and the duel (and survive mode switches).
@@ -52,12 +59,15 @@ export function PaintWindow(_props: GameWindowProps) {
           onPick={setMode}
           difficulty={difficulty}
           onDifficulty={setDifficulty}
+          stake={stake}
+          onStake={setStake}
         />
       ) : (
         <div className="relative h-full min-h-0 w-full">
           <DuelMode
             mode={mode}
             difficulty={difficulty}
+            stake={stake}
             onSwitchToAuto={() => setMode("auto")}
           />
           <button
@@ -81,19 +91,23 @@ export function PaintWindow(_props: GameWindowProps) {
 function DuelMode({
   mode,
   difficulty,
+  stake,
   onSwitchToAuto,
 }: {
   mode: PaintMode;
   difficulty: DuelDifficulty;
+  /** DISPLAY pot in SUI carried into the duel; separate from the tunnel stake. */
+  stake: DuelStake;
   /** Switches the window to Watch-Bots; passed only to the vs-bot child. */
   onSwitchToAuto: () => void;
 }) {
   return mode === "auto" ? (
-    <AutoDuelInner key={mode} difficulty={difficulty} />
+    <AutoDuelInner key={mode} difficulty={difficulty} stake={stake} />
   ) : (
     <VsBotDuelInner
       key={mode}
       difficulty={difficulty}
+      stake={stake}
       onSwitchToAuto={onSwitchToAuto}
     />
   );
@@ -104,12 +118,14 @@ function DuelMode({
  *  heartbeat TPS and (when the bots hold gas) settling on-chain. */
 function VsBotDuelInner({
   difficulty,
+  stake,
   onSwitchToAuto,
 }: {
   difficulty: DuelDifficulty;
+  stake: DuelStake;
   onSwitchToAuto: () => void;
 }) {
-  const { duel, status } = usePaintDuelOnchain({ difficulty, auto: false });
+  const { duel, status } = usePaintDuelOnchain({ difficulty, auto: false, stake });
   return (
     <DuelView duel={duel} onchain={status} onSwitchToAuto={onSwitchToAuto} />
   );
@@ -117,16 +133,19 @@ function VsBotDuelInner({
 
 /** Watch Bots (Auto) — bot-vs-bot self-play co-signed over an OffchainTunnel,
  *  reporting heartbeat TPS and (when the bots hold gas) settling on-chain. */
-function AutoDuelInner({ difficulty }: { difficulty: DuelDifficulty }) {
-  const { duel, status } = usePaintDuelOnchain({ difficulty, auto: true });
+function AutoDuelInner({
+  difficulty,
+  stake,
+}: {
+  difficulty: DuelDifficulty;
+  stake: DuelStake;
+}) {
+  const { duel, status } = usePaintDuelOnchain({ difficulty, auto: true, stake });
   return <DuelView duel={duel} onchain={status} />;
 }
 
 // ---- Mode chooser (cosmic liquid-glass menu — see pixel-duel-design) -------
 
-/** Stake is fixed by the duel protocol (STAKE = 10n in usePaintDuel); shown,
- *  never selectable here. */
-const DUEL_STAKE = 10;
 /** Per-cell side (px) of the showcase pixel-art tiles' box-shadow grid. */
 const SHOWCASE_PIXEL = 4;
 /** Real designs rendered as the secret-shape teaser row. */
@@ -216,10 +235,14 @@ function ModeChooser({
   onPick,
   difficulty,
   onDifficulty,
+  stake,
+  onStake,
 }: {
   onPick: (m: PaintMode) => void;
   difficulty: DuelDifficulty;
   onDifficulty: (d: DuelDifficulty) => void;
+  stake: DuelStake;
+  onStake: (s: DuelStake) => void;
 }) {
   // Frozen once so the twinkles don't re-scatter on every difficulty toggle.
   const floaters = useMemo(makeFloaters, []);
@@ -370,7 +393,7 @@ function ModeChooser({
           }}
         >
           <DifficultyPicker difficulty={difficulty} onDifficulty={onDifficulty} />
-          <StakeDisplay value={DUEL_STAKE} />
+          <StakePicker stake={stake} onStake={onStake} />
         </div>
 
         {/* on-chain: faucet the shared bots so the duel opens a REAL tunnel */}
@@ -404,7 +427,7 @@ function ModeChooser({
             animation: "pdRise .6s ease .26s both",
           }}
         >
-          <span>💰 {DUEL_STAKE} STAKE</span>
+          <span>💰 {stake} STAKE</span>
           <span style={{ opacity: 0.4 }}>|</span>
           <span>96×56 WALL</span>
           <span style={{ opacity: 0.4 }}>|</span>
@@ -526,9 +549,16 @@ function DifficultyPicker({
   );
 }
 
-/** Read-only stake readout styled like the difficulty pill group. The stake is
- *  fixed by the protocol, so this is a display, not a selector. */
-function StakeDisplay({ value }: { value: number }) {
+/** Segmented 1 / 2 / 5 / 10 SUI stake selector (wired). Sets the duel's DISPLAY
+ *  pot — what's on the line + the reveal payout. The on-chain tunnel runs its own
+ *  lean sponsor-funded stake, untouched by this. */
+function StakePicker({
+  stake,
+  onStake,
+}: {
+  stake: DuelStake;
+  onStake: (s: DuelStake) => void;
+}) {
   return (
     <div
       style={{
@@ -540,9 +570,19 @@ function StakeDisplay({ value }: { value: number }) {
     >
       <span style={GROUP_LABEL_STYLE}>Stake</span>
       <div style={PILL_GROUP_STYLE}>
-        <div style={{ ...pillStyle(true), cursor: "default", fontFamily: FONT_MONO }}>
-          💰 {value}
-        </div>
+        {STAKES.map((s) => {
+          const active = s === stake;
+          return (
+            <button
+              key={s}
+              onClick={() => onStake(s)}
+              aria-pressed={active}
+              style={{ ...pillStyle(active), fontFamily: FONT_MONO }}
+            >
+              💰 {s}
+            </button>
+          );
+        })}
       </div>
     </div>
   );

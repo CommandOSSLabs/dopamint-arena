@@ -27,9 +27,6 @@ import {
 import type { PaintDuelOnchainStatus } from "../usePaintDuelOnchain";
 import type { PlacementEvent } from "../types";
 
-/** Stake at risk in the duel — mirrors the protocol config in usePaintDuel. */
-const STAKE = 10;
-
 /** Liquid-gradient mission-bar fills + glow, per seat (matches the design). */
 const BAR_BLUE = {
   fill: "linear-gradient(90deg,#2f7fe0,#4DA2FF)",
@@ -167,7 +164,7 @@ export function DuelView({
               fontFamily: FONT_MONO,
             }}
           >
-            💰 {STAKE} on the line
+            💰 {duel.stake} on the line
           </span>
         </div>
       </div>
@@ -491,15 +488,16 @@ function RevealOverlay({ duel }: { duel: UsePaintDuel }) {
       : w === 2
         ? "🤖 Bot wins the duel"
         : "🤝 Draw — shapes tied";
+  const stake = duel.stake;
   const stakeLine = auto
     ? w === 3
-      ? `No stake moves — ${STAKE} stays put.`
-      : `+${STAKE} to ${w === 1 ? "Bot A" : "Bot B"} (the other pays the stake).`
+      ? `No stake moves — ${stake} stays put.`
+      : `+${stake} to ${w === 1 ? "Bot A" : "Bot B"} (the other pays the stake).`
     : w === 3
-      ? `No stake moves — ${STAKE} stays put.`
+      ? `No stake moves — ${stake} stays put.`
       : w === 1
-        ? `+${STAKE} to you (bot pays the stake).`
-        : `−${STAKE} from you (bot takes the stake).`;
+        ? `+${stake} to you (bot pays the stake).`
+        : `−${stake} from you (bot takes the stake).`;
 
   return (
     <div

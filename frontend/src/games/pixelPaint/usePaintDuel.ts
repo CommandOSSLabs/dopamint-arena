@@ -56,7 +56,7 @@ import type { PlacementEvent } from "./types";
 const BOARD = { width: 96, height: 56 };
 const CAP = 2400;
 const OVERWRITE_LIMIT = 3;
-const STAKE = 10n;
+const DEFAULT_STAKE = 10;
 /** The guide flashes for this long at the start, then HIDES — both sides then
  *  build from memory AND attack (the bot pauses during the study window too, for
  *  fairness). Skipped entirely in `auto` mode (no human studies the guide). */
@@ -122,6 +122,8 @@ export interface UsePaintDuelOptions {
   /** Initial tick-speed multiplier (1×/2×/4×). Divides `profile.tickMs` so the
    *  bots act faster; live-adjustable via the returned `setSpeed`. Default 1. */
   speed?: DuelSpeed;
+  /** Display stake / pot in SUI (default 10). The on-chain tunnel stake is separate. */
+  stake?: number;
   /**
    * Optional sink invoked EXACTLY ONCE per accepted move, in application order —
    * covering EVERY move that hits `applyMove`: the human's `place` (seat A in
@@ -291,6 +293,8 @@ export interface UsePaintDuel {
   auto: boolean;
   /** Active bot skill (mirrors the `difficulty` option). */
   difficulty: DuelDifficulty;
+  /** Display stake / pot in SUI (mirrors the `stake` option, default 10). */
+  stake: number;
   /** Current tick-speed multiplier (1×/2×/4×) — divides the bot tick interval. */
   speed: DuelSpeed;
   /** Live-set the tick-speed multiplier; re-arms both bot intervals at the new
@@ -316,7 +320,7 @@ export interface UsePaintDuel {
 }
 
 export function usePaintDuel(options: UsePaintDuelOptions = {}): UsePaintDuel {
-  const { seed, difficulty = "normal", auto = false } = options;
+  const { seed, difficulty = "normal", auto = false, stake = DEFAULT_STAKE } = options;
   const profile = BOT_PROFILES[difficulty];
   // Speed is live state (not just an option) so the pill row can fast-forward an
   // in-progress duel: changing it re-arms the bot intervals at the new cadence.
@@ -329,10 +333,10 @@ export function usePaintDuel(options: UsePaintDuelOptions = {}): UsePaintDuel {
         ...BOARD,
         cap: CAP,
         overwriteLimit: OVERWRITE_LIMIT,
-        stake: STAKE,
+        stake: BigInt(stake),
         mode: "war",
       }),
-    [],
+    [stake],
   );
 
   // One seed drives target picks, anchors, AND the bots; `seedRef` lets reset
@@ -811,6 +815,7 @@ export function usePaintDuel(options: UsePaintDuelOptions = {}): UsePaintDuel {
     phase,
     auto,
     difficulty,
+    stake,
     speed,
     setSpeed,
     reveal,

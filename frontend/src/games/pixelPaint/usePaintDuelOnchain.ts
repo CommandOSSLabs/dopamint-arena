@@ -116,6 +116,8 @@ export interface UsePaintDuelOnchainOptions {
   difficulty?: DuelDifficulty;
   speed?: DuelSpeed;
   seed?: number;
+  /** Display stake / pot in SUI (default 10). The on-chain tunnel stake is separate. */
+  stake?: number;
   /** Spectator self-play (both seats bot-driven) when true; vs-bot (seat A is the
    *  human) when false. Defaults true so Watch-Bots callers stay unchanged. */
   auto?: boolean;
@@ -259,6 +261,7 @@ export function usePaintDuelOnchain(
     auto: options.auto ?? true,
     difficulty: options.difficulty ?? "normal",
     speed: options.speed,
+    stake: options.stake,
     seed: options.seed,
     onMove,
   });
