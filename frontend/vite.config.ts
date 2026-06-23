@@ -39,21 +39,39 @@ export default defineConfig(({ mode }) => {
         // The off-chain engine statically imports node:crypto in crypto-native.ts but
         // falls back to @noble at runtime in the browser. Map node:crypto to a stub so
         // the bundle resolves; the native path is never taken here.
-        "node:crypto": fileURLToPath(new URL("./src/shims/node-crypto.ts", import.meta.url)),
-        "node:worker_threads": fileURLToPath(new URL("./src/shims/node-empty.ts", import.meta.url)),
-        "node:os": fileURLToPath(new URL("./src/shims/node-empty.ts", import.meta.url)),
-        "node:path": fileURLToPath(new URL("./src/shims/node-empty.ts", import.meta.url)),
-        "node:fs/promises": fileURLToPath(new URL("./src/shims/node-empty.ts", import.meta.url)),
+        "node:crypto": fileURLToPath(
+          new URL("./src/shims/node-crypto.ts", import.meta.url),
+        ),
+        "node:worker_threads": fileURLToPath(
+          new URL("./src/shims/node-empty.ts", import.meta.url),
+        ),
+        "node:os": fileURLToPath(
+          new URL("./src/shims/node-empty.ts", import.meta.url),
+        ),
+        "node:path": fileURLToPath(
+          new URL("./src/shims/node-empty.ts", import.meta.url),
+        ),
+        "node:fs/promises": fileURLToPath(
+          new URL("./src/shims/node-empty.ts", import.meta.url),
+        ),
         // Stub @mysten/sui/client to point to our v1->v2 backward compatibility shim
-        "@mysten/sui/client": fileURLToPath(new URL("./src/shims/sui-client.ts", import.meta.url)),
+        "@mysten/sui/client": fileURLToPath(
+          new URL("./src/shims/sui-client.ts", import.meta.url),
+        ),
         // config.ts calls dotenv.config() at import time; stub it (env via `define`).
-        dotenv: fileURLToPath(new URL("./src/shims/dotenv.ts", import.meta.url)),
-        "sui-tunnel-ts": fileURLToPath(new URL("../sui-tunnel-ts/src", import.meta.url)),
+        dotenv: fileURLToPath(
+          new URL("./src/shims/dotenv.ts", import.meta.url),
+        ),
+        "sui-tunnel-ts": fileURLToPath(
+          new URL("../sui-tunnel-ts/src", import.meta.url),
+        ),
         // Point at the package src DIR (not index.ts) so subpath imports like
         // `@ttt/shared/ttt/multiGameProtocol` resolve too — mirroring the `@` alias
         // above and tsconfig's `@ttt/shared/*` mapping. A file target would rewrite
         // subpaths to `.../index.ts/<subpath>` and fail to resolve.
-        "@ttt/shared": fileURLToPath(new URL("./src/games/ticTacToe/packages/shared/src", import.meta.url)),
+        "@ttt/shared": fileURLToPath(
+          new URL("./src/games/ticTacToe/packages/shared/src", import.meta.url),
+        ),
       },
     },
   };

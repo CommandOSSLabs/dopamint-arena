@@ -14,11 +14,19 @@ origin, wallet flow, and relay path a human uses. Spec:
      | jq -r .exportedPrivateKey) N=10 node agent/fundTreasury.mjs
    ```
 
-2. **Run agents** — browser contexts loading the real app with bare `?agent` (rotation is
-   tic-tac-toe-only today); runs for a duration and counts completed tunnels:
+2. **Run agents** — browser contexts loading the real app with bare `?agent`; the
+   engine rotates the canonical `GAME_KITS` set and counts completed tunnels. Keys
+   come from `agent/keys.json` by default, `AGENT_KEYS_FILE`, or `AGENT_KEYS`
+   (comma-separated secret keys or JSON array):
 
    ```bash
    BASE_URL=http://localhost:5074 K=10 TIMEOUT_MS=60000 node agent/runAgents.mjs
+   ```
+
+   To self-play only Quantum Poker with two pre-funded bot wallets:
+
+   ```bash
+   BASE_URL=http://localhost:5173 GAME=quantum-poker K=2 TIMEOUT_MS=120000 node agent/runAgents.mjs
    ```
 
 3. **Relay frame-rate bench** (spec §Numbers#1) — direct to the ALB:
@@ -44,8 +52,8 @@ origin, wallet flow, and relay path a human uses. Spec:
   `close_cooperative_with_root` (settles, root anchored), but **Walrus archival is blocked**
   until that route is deployed. Pre-existing backend gap — also hits the human `usePvpTicTacToe`
   path.
-- **Move-trigger:** only tic-tac-toe rotates today; blackjack/payments/chat/poker use a
-  phase-based turn model the generic move-trigger doesn't yet drive. Re-add to `AGENT_GAMES`
-  once the trigger is protocol-driven (commented there).
+- **Move-trigger:** the browser agent now drives games through the canonical
+  `GAME_KITS` registry, so phase-based games use their own `GameBot.plan()` logic
+  instead of the old SDK `randomMove` path.
 - **`MpClient` multiplexing:** `M>1` concurrent tunnels per agent needs per-`matchId` routing;
   P1 runs `M=1`.

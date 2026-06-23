@@ -6,7 +6,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { list } from "@/games/registry";
 import { suivisionAccountUrl, suivisionTxUrl } from "@/lib/suivision";
 import type { TxnRow } from "./types";
-import { Amount, HashLink, StatusIcon } from "./atoms";
+import { HashLink, StatusIcon } from "./atoms";
 
 /**
  * Tabbed transaction table shared by the on-chain and local feeds. An "All" tab
@@ -28,7 +28,11 @@ export function TransactionsFeed({
   const [tab, setTab] = useState("all");
   const { network } = useSuiClientContext();
   const rows = tab === "all" ? allRows : allRows.filter((t) => t.game === tab);
-  const colCount = onchain ? 6 : 4;
+  // On "All", rows span every game — show a GAME column so each is identifiable. On a
+  // per-game tab it's redundant (the tab already names the game), so it's hidden.
+  const showGame = tab === "all";
+  const gameNames = new Map(list().map((g) => [g.id, g.name]));
+  const colCount = (onchain ? 5 : 3) + (showGame ? 1 : 0);
 
   return (
     <Panel className={className}>
@@ -66,10 +70,12 @@ export function TransactionsFeed({
                     <th className="px-2.5 py-1.5 font-medium">ADDRESS</th>
                   </>
                 )}
+                {showGame && (
+                  <th className="px-2.5 py-1.5 font-medium">GAME</th>
+                )}
                 <th className="px-2.5 py-1.5 font-medium">TIME</th>
                 <th className="px-2.5 py-1.5 font-medium">TYPE</th>
                 <th className="px-2.5 py-1.5 font-medium">STATUS</th>
-                <th className="px-2.5 py-1.5 text-right font-medium">AMOUNT</th>
               </tr>
             </thead>
             <tbody>
@@ -111,15 +117,17 @@ export function TransactionsFeed({
                         </td>
                       </>
                     )}
+                    {showGame && (
+                      <td className="px-2.5 py-1.5 text-foreground">
+                        {gameNames.get(t.game) ?? t.game}
+                      </td>
+                    )}
                     <td className="px-2.5 py-1.5 text-muted-foreground">
                       {t.time}
                     </td>
                     <td className="px-2.5 py-1.5">{t.type}</td>
                     <td className="px-2.5 py-1.5">
                       <StatusIcon status={t.status} />
-                    </td>
-                    <td className="px-2.5 py-1.5 text-right">
-                      <Amount value={t.amount} />
                     </td>
                   </tr>
                 ))

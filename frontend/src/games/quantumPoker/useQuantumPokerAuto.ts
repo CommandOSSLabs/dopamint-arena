@@ -5,88 +5,82 @@ import {
   useSuiClient,
 } from "@mysten/dapp-kit";
 import { OffchainTunnel } from "sui-tunnel-ts/core/tunnel";
-import { otherParty } from "sui-tunnel-ts/protocol/Protocol";
+import { Transcript } from "sui-tunnel-ts/proof/transcript";
+import { QuantumPokerProtocol } from "sui-tunnel-ts/protocol/quantumPoker";
+import type { PokerState } from "sui-tunnel-ts/protocol/quantumPoker";
 import { registerWindowDisposer } from "@/lib/windowSessions";
+import {
+  getControlPlaneClient,
+  type RegisterSessionResult,
+} from "@/backend/controlPlane";
 import { useTelemetry } from "../../telemetry/TelemetryProvider";
 import type { TelemetryWriter } from "../../telemetry/TelemetryProvider";
 import {
-  closeCooperativeWithRoot,
   openAndFundSelfPlay,
   readCreatedAt,
   type SignExec,
-} from "../../onchain/tunnelTx";
-import { Transcript } from "sui-tunnel-ts/proof/transcript";
-import { settleViaBackend } from "../../backend/settle";
-import { makeKeypairSponsoredSignExec } from "../../onchain/sponsor";
+} from "@/onchain/tunnelTx";
+import { makeKeypairSponsoredSignExec } from "@/onchain/sponsor";
 import {
   DOPAMINT_COIN_TYPE,
   ensureDopamintStakeCoin,
   isDopamintConfigured,
-} from "../../onchain/dopamint";
+} from "@/onchain/dopamint";
+import { QUANTUM_POKER_STAKE, QUANTUM_POKER_HANDS_PER_TUNNEL } from "./constants";
 import {
-  BattleshipProtocol,
-  type BattleshipMove,
-  type BattleshipState,
-} from "./protocol/battleship";
-import {
-  deriveBattleshipAutoView,
-  type AutoEndReason,
-  type AutoStage,
-  type BattleshipAutoView,
-} from "./view";
-import {
-  type Placement,
-  placeFleetRandom,
-  placementsToBoard,
-} from "./engine/fleet";
-import { randomSalts } from "./engine/merkle";
-import { makeFleetSecret } from "./engine/selfPlay";
-import { type BotDifficulty, DEFAULT_BOT_DIFFICULTY } from "./engine/bot";
-import { createBattleshipKit } from "@/agent/games/battleship/kit";
-import type { BotContext, GameBot } from "@/agent/gameKit";
-
-/** A planning bot for one Battleship seat, from the canonical agent kit. */
-type SeatBot = GameBot<BattleshipState, BattleshipMove>;
-/** Live RNG context for kit bots (auto mode runs in real time, not a seeded replay). */
-const LIVE_BOT_CONTEXT: BotContext = { rngForSeat: () => Math.random };
-import {
-  type BattleshipBot,
-  type BotReadClient,
-  MIN_PLAY_MIST,
+  loadOrCreateQuantumPokerBots,
   botBalances,
-  buildFundBotsTx,
-  fundBotsFromFaucet,
-  loadOrCreateBattleshipBots,
-} from "./engine/bots";
+  buildFundBotATx,
+  fundBotAFromFaucet,
+  MIN_PLAY_MIST,
+  type QuantumPokerBot,
+  type BotReadClient,
+} from "./bots";
+import {
+  makeSeatBot,
+  randomPokerPersona,
+  stepPokerAuto,
+  LIVE_BOT_CONTEXT,
+  type PokerSeatBot,
+  type PokerTunnel,
+} from "./pokerSelfPlay";
+import { settlePokerTunnel } from "./pokerSettle";
 
-/** Coins locked per seat per match (refunded at close); the loser pays the winner this stake. */
-const LOCKED_PER_SEAT = 500n; // SUI-fallback stake (MIST), when DOPAMINT env is unset
+const STAKE = QUANTUM_POKER_STAKE;
 const DOPAMINT_PER_SEAT = 1_000_000_000n; // 1 DOPAMINT per seat (9 decimals)
-const STAKE = 100n;
-/** Spectator pacing per off-chain move, and the pause between matches. */
-const SHOOT_MS = 300;
-const REVEAL_MS = 120;
-const COMMIT_MS = 80;
+const HAND_CAP = QUANTUM_POKER_HANDS_PER_TUNNEL;
+
+/** Pause between matches (ms). */
 const NEXT_MATCH_MS = 1200;
+/** Brief delay before the on-load auto-start so the window/table mounts first. */
+const AUTO_START_DELAY_MS = 300;
 
 export type AutoStatus = "idle" | "funding" | "running" | "ended" | "error";
 
-export interface BattleshipAutoSession {
+export interface QuantumPokerAutoSession {
   status: AutoStatus;
-  view: BattleshipAutoView | null;
-  error: string | null;
-  /** Both bots' on-chain gas balances (MIST). */
+  personas: { a: string; b: string } | null;
+  score: { a: number; b: number };
+  tunnels: number;
+  actions: number;
+  /** Cumulative hands dealt across all tunnels this run. */
+  hands: number;
   balances: { a: bigint; b: bigint };
-  /** True when both bots can cover another match. */
   funded: boolean;
-  /** True when a wallet is connected and can fund the bots. */
   canFundFromWallet: boolean;
+  error: string | null;
+  /** Live poker table state (null before the first tunnel opens). */
+  state: PokerState | null;
+  /** Party A hole cards to display (both shown in auto/spectator mode). */
+  holesA: number[];
+  /** Party B hole cards to display. */
+  holesB: number[];
   /** Faucet-fund both bots (testnet). */
   fund: () => void;
   /** Fund both bots 0.1 SUI each from the connected wallet (one approval). */
   fundFromWallet: () => void;
-  /** Begin a continuous bot-vs-bot run; loops until a bot is low on gas or stopped. */
-  startAuto: (aDifficulty: BotDifficulty, bDifficulty: BotDifficulty) => void;
+  /** Begin a continuous bot-vs-bot run; personas are random per tunnel. */
+  startAuto: () => void;
   /** Stop looping; the current match finishes, then no new one starts. */
   stopAuto: () => void;
   /** Back to the setup screen, clearing the scoreboard. */
@@ -118,66 +112,79 @@ interface SignClient {
 
 interface AutoSnapshot {
   status: AutoStatus;
-  view: BattleshipAutoView | null;
-  error: string | null;
+  personas: { a: string; b: string } | null;
+  score: { a: number; b: number };
+  tunnels: number;
+  actions: number;
+  /** Cumulative hands dealt across all tunnels this run. */
+  hands: number;
   balances: { a: bigint; b: bigint };
   funded: boolean;
   canFundFromWallet: boolean;
+  error: string | null;
+  state: PokerState | null;
+  holesA: number[];
+  holesB: number[];
 }
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 /**
  * A continuous, ON-CHAIN bot-vs-bot run, kept OUT of React so it survives the
- * window unmounting (minimize / maximize / desktop reflow). Following the caro /
- * poker auto modes, two persistent bot accounts are funded once (faucet) and then
- * SELF-SIGN every match — open + fund a fresh tunnel, play off-chain, cooperative
- * close — so the loop never waits on the player's wallet. It keeps a running
- * scoreboard and stops when a bot is low on gas, or when the user stops it. Bot A
- * signs the on-chain txs (so it pays the gas), mirroring caro's bot X.
- * See `lib/windowSessions`, `engine/bots`, ADR 0003.
+ * window unmounting (minimize / maximize / desktop reflow). Two persistent bot
+ * accounts are funded once (faucet) and then SELF-SIGN every match — open + fund
+ * a fresh tunnel, play off-chain with random personas, cooperative close — so
+ * the loop never waits on the player's wallet. It keeps a running scoreboard and
+ * stops when a bot is low on gas, or when the user stops it. Bot A signs the
+ * on-chain txs (so it pays the gas).
+ * See `lib/windowSessions`, `./bots`, ADR 0003.
  */
 class AutoSession {
   deps: AutoDeps | null = null;
 
-  private readonly bots = loadOrCreateBattleshipBots();
+  private readonly bots = loadOrCreateQuantumPokerBots();
 
   private status: AutoStatus = "idle";
-  private view: BattleshipAutoView | null = null;
+  // Guards the one-shot auto-start on window load, so a user Stop is never overridden by a remount.
+  private didAutoStart = false;
+  private personas: { a: string; b: string } | null = null;
+  private score = { a: 0, b: 0 };
+  private tunnels = 0;
+  private actions = 0;
+  private hands = 0;
   private error: string | null = null;
   private balances = { a: 0n, b: 0n };
   private snap: AutoSnapshot = {
     status: "idle",
-    view: null,
-    error: null,
+    personas: null,
+    score: { a: 0, b: 0 },
+    tunnels: 0,
+    actions: 0,
+    hands: 0,
     balances: { a: 0n, b: 0n },
     funded: false,
     canFundFromWallet: false,
+    error: null,
+    state: null,
+    holesA: [],
+    holesB: [],
   };
   private listeners = new Set<() => void>();
   private balancesLoaded = false;
 
-  private tunnel: OffchainTunnel<BattleshipState, BattleshipMove> | null = null;
-  // Per-seat planning bots from the canonical agent kit (own their injected fleet secret).
-  private botA: SeatBot | null = null;
-  private botB: SeatBot | null = null;
-  private aPlacements: Placement[] = [];
-  private bPlacements: Placement[] = [];
-  private aDifficulty: BotDifficulty = DEFAULT_BOT_DIFFICULTY;
-  private bDifficulty: BotDifficulty = DEFAULT_BOT_DIFFICULTY;
+  private tunnel: PokerTunnel | null = null;
+  private txnId = 0;
 
   private auto = false;
-  private stage: AutoStage = "opening";
-  private score = { a: 0, b: 0 };
-  private match = 0;
-  private endReason: AutoEndReason | null = null;
+  private stage: "opening" | "playing" | "settling" = "opening";
 
-  private txnId = 0;
-  private lastShotByA: number | null = null;
-  private lastShotByB: number | null = null;
   private nextTimer: ReturnType<typeof setTimeout> | null = null;
   // Bumped on stop/reset/dispose so an in-flight loop knows to abandon ship.
   private gen = 0;
+  private session: RegisterSessionResult | null = null;
+  private heartbeatActions = 0;
+  private lastHeartbeatAt = 0;
+  private moveCount = 0;
 
   subscribe = (cb: () => void): (() => void) => {
     this.listeners.add(cb);
@@ -191,24 +198,34 @@ class AutoSession {
     // DOPAMINT mode: bot gas is sponsored and the stake is faucet-minted DOPAMINT, so the bots
     // need no SUI — they're always "funded". SUI fallback still gates on a real gas balance.
     if (isDopamintConfigured) return true;
-    return this.balances.a >= MIN_PLAY_MIST && this.balances.b >= MIN_PLAY_MIST;
+    // Self-play: bot A funds both seats, so only bot A needs SUI. Bot B accrues winnings.
+    return this.balances.a >= MIN_PLAY_MIST;
   }
 
   private emit() {
     this.snap = {
       status: this.status,
-      view: this.view,
-      error: this.error,
+      personas: this.personas,
+      score: { ...this.score },
+      tunnels: this.tunnels,
+      actions: this.actions,
+      hands: this.hands,
       balances: { ...this.balances },
       funded: this.funded,
       canFundFromWallet: this.deps?.account != null,
+      error: this.error,
+      state: this.tunnel?.state ?? null,
+      holesA: this.tunnel?.state.holeA ?? [],
+      holesB: this.tunnel?.state.holeB ?? [],
     };
     for (const l of this.listeners) l();
   }
+
   private setStatus(s: AutoStatus) {
     this.status = s;
     this.emit();
   }
+
   private fail(e: unknown) {
     this.error = String((e as Error)?.message ?? e);
     this.status = "error";
@@ -216,35 +233,20 @@ class AutoSession {
     this.deps?.report.setActive(0);
     this.emit();
   }
+
   private clearNext() {
     if (this.nextTimer !== null) {
       clearTimeout(this.nextTimer);
       this.nextTimer = null;
     }
   }
+
+  /** Emit the current session state to subscribers. */
   private pushView() {
-    if (this.tunnel && this.botA && this.botB) {
-      this.view = deriveBattleshipAutoView(
-        this.tunnel.state,
-        this.aPlacements,
-        this.bPlacements,
-        {
-          lastShotByA: this.lastShotByA,
-          lastShotByB: this.lastShotByB,
-          onChain: true,
-          auto: this.auto,
-          stage: this.stage,
-          score: { ...this.score },
-          match: this.match,
-          balance: { a: Number(this.balances.a), b: Number(this.balances.b) },
-          endReason: this.endReason,
-        },
-      );
-    }
     this.emit();
   }
 
-  private botSignExec(bot: BattleshipBot): SignExec {
+  private botSignExec(bot: QuantumPokerBot): SignExec {
     const client = this.deps?.client as SignClient;
     return async (tx) => {
       const r = await client.signAndExecuteTransaction({
@@ -264,7 +266,7 @@ class AutoSession {
 
   /** Gas-sponsored signer for a bot keypair (DOPAMINT mode): the settler pays gas, so the bot
    *  needs zero SUI — it only signs. */
-  private botSponsoredSignExec(bot: BattleshipBot): SignExec {
+  private botSponsoredSignExec(bot: QuantumPokerBot): SignExec {
     return makeKeypairSponsoredSignExec({
       address: bot.address,
       keypair: bot.keypair,
@@ -297,7 +299,7 @@ class AutoSession {
     this.setStatus("funding");
     void (async () => {
       try {
-        await fundBotsFromFaucet(client as BotReadClient, this.bots);
+        await fundBotAFromFaucet(client as BotReadClient, this.bots);
         await this.refreshBalances();
         this.setStatus("idle");
       } catch (e) {
@@ -320,7 +322,7 @@ class AutoSession {
     void (async () => {
       try {
         const { digest } = await deps.walletSignExec(
-          buildFundBotsTx(this.bots),
+          buildFundBotATx(this.bots),
         );
         await (
           deps.client as {
@@ -335,7 +337,7 @@ class AutoSession {
     })();
   };
 
-  startAuto = (aDifficulty: BotDifficulty, bDifficulty: BotDifficulty) => {
+  startAuto = () => {
     if (this.status === "running" || this.status === "funding") return;
     if (!this.funded) {
       this.error = "Fund both bots first";
@@ -347,23 +349,36 @@ class AutoSession {
     this.error = null;
     this.auto = true;
     this.score = { a: 0, b: 0 };
-    this.match = 0;
-    this.endReason = null;
-    this.txnId = 0;
-    this.aDifficulty = aDifficulty;
-    this.bDifficulty = bDifficulty;
+    this.tunnels = 0;
+    this.actions = 0;
+    this.hands = 0;
+    this.personas = null;
     this.setStatus("running");
     void this.runMatch();
   };
 
+  /** Start the loop once when the window first loads — watch-bot runs without a manual Start. No-op
+   *  after the first auto-start (so a user Stop is not re-overridden on a later remount), while
+   *  funding, or while already running. In DOPAMINT mode `funded` is always true. */
+  autoStartOnLoad = () => {
+    if (this.didAutoStart || this.status !== "idle" || !this.funded) return;
+    this.didAutoStart = true;
+    // Brief delay so the window/table mounts first. Stored in nextTimer so stop/reset/dispose cancel
+    // it (via clearNext) if the window closes within the delay.
+    this.clearNext();
+    this.nextTimer = setTimeout(() => {
+      this.nextTimer = null;
+      this.startAuto();
+    }, AUTO_START_DELAY_MS);
+  };
+
   stopAuto = () => {
+    // Fire-and-forget: bump `gen` so the in-flight match/settle abandons ship, and end the run NOW so
+    // the user can Back out immediately without waiting for the current tunnel's settle.
+    this.gen += 1;
     this.auto = false;
     this.clearNext();
-    // Between matches (the next one is only scheduled, not opened): end now.
-    if (this.status === "running" && this.stage !== "playing") {
-      this.endRun("stopped");
-    }
-    this.pushView();
+    this.endRun();
   };
 
   reset = () => {
@@ -371,16 +386,13 @@ class AutoSession {
     this.clearNext();
     this.auto = false;
     this.tunnel = null;
-    this.botA = null;
-    this.botB = null;
-    this.lastShotByA = null;
-    this.lastShotByB = null;
+    this.personas = null;
     this.score = { a: 0, b: 0 };
-    this.match = 0;
-    this.endReason = null;
+    this.tunnels = 0;
+    this.actions = 0;
+    this.hands = 0;
     this.deps?.report.setActive(0);
     this.status = "idle";
-    this.view = null;
     this.error = null;
     this.emit();
     void this.refreshBalances();
@@ -392,33 +404,33 @@ class AutoSession {
     this.auto = false;
     this.deps?.report.setActive(0);
     this.tunnel = null;
-    this.botA = null;
-    this.botB = null;
     this.listeners.clear();
   };
 
-  private endRun(reason: AutoEndReason) {
+  private endRun() {
     this.auto = false;
-    this.endReason = reason;
     this.deps?.report.setActive(0);
     this.pushView();
     this.setStatus("ended");
   }
 
-  private reportShotTxn(
-    move: Extract<BattleshipMove, { type: "reveal" }>,
-    defender: "A" | "B",
-  ) {
-    const shooter = otherParty(defender);
-    this.deps?.report.pushTxn({
-      id: (this.txnId += 1),
-      game: "battleship",
-      time: new Date().toLocaleTimeString("en-GB"),
-      bot: shooter === "A" ? "Bot A" : "Bot B",
-      type: move.isShip ? "Hit" : "Miss",
-      status: "Success",
-      amount: move.isShip ? `$${Number(STAKE)}.00` : "$0.00",
-    });
+  private flushHeartbeat(tunnelId: string, force: boolean) {
+    const session = this.session;
+    if (!session || this.heartbeatActions === 0) return;
+    const now = Date.now();
+    const windowMs = now - this.lastHeartbeatAt;
+    if (!force && windowMs < 1000) return;
+    const actionsDelta = this.heartbeatActions;
+    this.heartbeatActions = 0;
+    this.lastHeartbeatAt = now;
+    getControlPlaneClient()
+      .sendHeartbeat(session.sessionId, session.statsToken, {
+        tunnelId,
+        nonce: String(this.moveCount),
+        actionsDelta,
+        windowMs: Math.max(1, windowMs),
+      })
+      .catch((e) => console.error("[poker auto] heartbeat failed:", e));
   }
 
   /** Open + fund a fresh tunnel (bot A signs), play it off-chain, settle, then loop or stop. */
@@ -428,34 +440,29 @@ class AutoSession {
       this.fail("no Sui client available");
       return;
     }
-    this.match += 1;
+    this.tunnels += 1;
     this.stage = "opening";
-    this.pushView(); // reflect "Opening tunnel…" over the prior board (no-op on the first match)
-    this.lastShotByA = null;
-    this.lastShotByB = null;
+    this.pushView();
 
-    // The session owns both fleets (so the spectator view can reveal both boards) and injects each
-    // into a canonical kit bot, which plans that seat's commit/reveal/shoot moves. See PR #28.
-    this.aPlacements = placeFleetRandom(Math.random);
-    this.bPlacements = placeFleetRandom(Math.random);
-    const aSecret = makeFleetSecret(
-      placementsToBoard(this.aPlacements),
-      randomSalts(),
+    // Random personas per tunnel.
+    const personaA = randomPokerPersona(Math.random);
+    const personaB = randomPokerPersona(Math.random);
+    this.personas = { a: personaA.name, b: personaB.name };
+    const botA: PokerSeatBot = makeSeatBot(
+      "A",
+      STAKE,
+      HAND_CAP,
+      personaA,
+      LIVE_BOT_CONTEXT,
     );
-    const bSecret = makeFleetSecret(
-      placementsToBoard(this.bPlacements),
-      randomSalts(),
+    const botB: PokerSeatBot = makeSeatBot(
+      "B",
+      STAKE,
+      HAND_CAP,
+      personaB,
+      LIVE_BOT_CONTEXT,
     );
-    this.botA = createBattleshipKit(STAKE, {
-      difficulty: this.aDifficulty,
-      secret: aSecret,
-    }).createBot("A", LIVE_BOT_CONTEXT);
-    this.botB = createBattleshipKit(STAKE, {
-      difficulty: this.bDifficulty,
-      secret: bSecret,
-    }).createBot("B", LIVE_BOT_CONTEXT);
 
-    const protocol = new BattleshipProtocol(STAKE);
     const reads = this.deps.client as unknown as Parameters<
       typeof openAndFundSelfPlay
     >[0]["reads"];
@@ -463,7 +470,7 @@ class AutoSession {
     // DOPAMINT mode: stake faucet-minted DOPAMINT and sponsor the bot's open/close gas (no SUI).
     // SUI fallback (DOPAMINT env unset): the bot funds the stake and pays its own gas.
     const dopamintOn = isDopamintConfigured;
-    const stakePerSeat = dopamintOn ? DOPAMINT_PER_SEAT : LOCKED_PER_SEAT;
+    const stakePerSeat = dopamintOn ? DOPAMINT_PER_SEAT : STAKE;
     const coinType = dopamintOn ? DOPAMINT_COIN_TYPE : undefined;
 
     try {
@@ -472,14 +479,8 @@ class AutoSession {
         signExec: dopamintOn
           ? this.botSponsoredSignExec(this.bots.A)
           : this.botSignExec(this.bots.A),
-        partyA: {
-          address: this.bots.A.address,
-          publicKey: this.bots.A.publicKey,
-        },
-        partyB: {
-          address: this.bots.B.address,
-          publicKey: this.bots.B.publicKey,
-        },
+        partyA: { address: this.bots.A.address, publicKey: this.bots.A.publicKey },
+        partyB: { address: this.bots.B.address, publicKey: this.bots.B.publicKey },
         aAmount: stakePerSeat,
         bAmount: stakePerSeat,
         coinType,
@@ -494,11 +495,13 @@ class AutoSession {
           : undefined,
       });
       if (this.gen !== myGen) return;
+
       const createdAt = await readCreatedAt(reads, tunnelId);
       if (this.gen !== myGen) return;
 
-      const tunnel = OffchainTunnel.selfPlay(
-        protocol,
+      const transcript = new Transcript(tunnelId);
+      const tunnel: PokerTunnel = OffchainTunnel.selfPlay(
+        new QuantumPokerProtocol(HAND_CAP),
         tunnelId,
         this.bots.A.coreKey,
         this.bots.B.coreKey,
@@ -506,58 +509,113 @@ class AutoSession {
         this.bots.B.address,
         { a: stakePerSeat, b: stakePerSeat },
       );
-      // Record every co-signed update so the close can anchor the transcript root on-chain
-      // (close_cooperative_with_root) — the same settle path caro/poker use successfully.
-      const transcript = new Transcript(tunnelId);
-      tunnel.onUpdate = (u, bytes) => {
+      tunnel.onUpdate = (u) => {
         transcript.append(u);
-        this.deps?.report.bumpCounters({
-          updates: 1,
-          signatures: 2,
-          verifications: 2,
-          bytes,
-        });
       };
       this.tunnel = tunnel;
       this.deps.report.bumpCounters({ tunnelsOpened: 1 });
       this.deps.report.setActive(2);
+      this.deps.report.pushLocalTxn({
+        id: ++this.txnId,
+        game: "quantum-poker",
+        time: new Date().toLocaleTimeString("en-GB"),
+        bot: `${this.personas?.a ?? "Bot A"} vs ${this.personas?.b ?? "Bot B"}`,
+        type: "open tunnel",
+        status: "Success",
+        amount: "",
+      });
 
       this.stage = "playing";
       this.pushView();
-      await this.playMatch(myGen, tunnel);
+
+      // Register session for heartbeat (best-effort).
+      this.session = null;
+      this.heartbeatActions = 0;
+      this.lastHeartbeatAt = Date.now();
+      this.moveCount = 0;
+      try {
+        this.session = await getControlPlaneClient().registerSession({
+          userAddress: this.deps?.account?.address ?? this.bots.A.address,
+          game: "quantum-poker",
+          tunnels: [{ tunnelId, partyA: this.bots.A.address, partyB: this.bots.B.address }],
+        });
+      } catch (e) {
+        console.error("[poker auto] registerSession failed:", e);
+      }
+
+      let ts = 1n;
+      let pending = 0;
+      let lastFlush = Date.now();
+      const FLUSH_MS = 80;
+      const flush = async () => {
+        if (pending > 0) {
+          this.deps?.report.bumpCounters({ updates: pending, signatures: pending * 2, verifications: pending * 2 });
+          pending = 0;
+        }
+        this.flushHeartbeat(tunnelId, false);
+        this.pushView();
+        await sleep(0);
+        lastFlush = Date.now();
+      };
+      let prevHandNo = tunnel.state.handNo;
+      while (tunnel.state.phase !== "done") {
+        if (this.gen !== myGen) return;
+        const r = stepPokerAuto(tunnel, botA, botB, ts++);
+        if (!r) break;
+        this.actions += 1;
+        this.moveCount += 1;
+        this.heartbeatActions += 1;
+        pending += 1;
+        const hn = tunnel.state.handNo;
+        if (hn > prevHandNo) {
+          this.hands += Number(hn - prevHandNo);
+          prevHandNo = hn;
+        }
+        if (Date.now() - lastFlush >= FLUSH_MS) await flush();
+      }
+      // Final flush — force the heartbeat so the last window is never dropped.
+      if (pending > 0) {
+        this.deps?.report.bumpCounters({ updates: pending, signatures: pending * 2, verifications: pending * 2 });
+        pending = 0;
+      }
+      this.flushHeartbeat(tunnelId, true);
+      this.pushView();
       if (this.gen !== myGen) return;
 
       this.stage = "settling";
       this.pushView();
       this.deps.report.bumpCounters({ tunnelsClosed: 1, settlements: 1 });
       this.deps.report.setActive(0);
-      // Settle through the backend /settle API: the server submits the close AND archives the
-      // transcript to Walrus (ADR-0002/0005). Fall back to a direct bot-key close if it's down.
-      const settlement = tunnel.buildSettlementWithRoot(
-        createdAt,
-        transcript.root(),
-        0n,
-      );
-      await settleViaBackend({
+      // Fire-and-forget the settle: the next tunnel opens on the normal cadence while this close is
+      // processed in the background. We never block the loop on a tunnel's settle. The persona label
+      // is captured now so the background log isn't relabelled by the next match.
+      const matchLabel = `${this.personas?.a ?? "Bot A"} vs ${this.personas?.b ?? "Bot B"}`;
+      void settlePokerTunnel({
+        tunnel,
+        transcript,
         tunnelId,
-        settlement,
-        transcript: transcript.toRecord().entries,
-        label: "battleship",
-        fallbackClose: () =>
-          closeCooperativeWithRoot({
-            signExec: dopamintOn
-              ? this.botSponsoredSignExec(this.bots.A)
-              : this.botSignExec(this.bots.A),
-            tunnelId,
-            settlement,
-            coinType,
-          }),
-      });
-      if (this.gen !== myGen) return;
+        createdAt,
+        coinType,
+        fallbackSignExec: dopamintOn
+          ? this.botSponsoredSignExec(this.bots.A)
+          : this.botSignExec(this.bots.A),
+      })
+        .then((settled) => {
+          this.deps?.report.pushLocalTxn({
+            id: ++this.txnId,
+            game: "quantum-poker",
+            time: new Date().toLocaleTimeString("en-GB"),
+            bot: matchLabel,
+            type: `settled · ${HAND_CAP} hands`,
+            status: "Success",
+            amount: settled.proofUrl ? "walrus ✓" : "closed",
+          });
+        })
+        .catch((e) =>
+          console.error("[quantum-poker] auto settle failed (fire-and-forget):", e),
+        );
 
-      await this.refreshBalances();
-      if (this.gen !== myGen) return;
-
+      void this.refreshBalances();
       this.bookMatch(myGen);
     } catch (e) {
       if (this.gen !== myGen) return;
@@ -565,60 +623,22 @@ class AutoSession {
     }
   };
 
-  /** Drive every off-chain move for both seats until the match ends, via the kit bots. */
-  private playMatch = async (
-    myGen: number,
-    tunnel: OffchainTunnel<BattleshipState, BattleshipMove>,
-  ) => {
-    const botA = this.botA;
-    const botB = this.botB;
-    if (!botA || !botB) return;
-    while (true) {
-      const st = tunnel.state;
-      if (st.winner !== 0 || st.phase === "over") break;
-      // Battleship is strictly turn/reveal ordered, so exactly one seat has a move; try A then B.
-      let by: "A" | "B" = "A";
-      let move = botA.plan(st);
-      if (!move) {
-        by = "B";
-        move = botB.plan(st);
-      }
-      if (!move) break;
-
-      if (move.type === "shoot") await sleep(SHOOT_MS);
-      else if (move.type === "reveal") await sleep(REVEAL_MS);
-      else await sleep(COMMIT_MS);
-      if (this.gen !== myGen || this.tunnel !== tunnel) return;
-
-      if (move.type === "shoot") {
-        if (by === "A") this.lastShotByA = move.cell;
-        else this.lastShotByB = move.cell;
-      }
-      tunnel.step(move, by);
-      (by === "A" ? botA : botB).confirm(st, move);
-      if (move.type === "reveal") this.reportShotTxn(move, by);
-      this.pushView();
-    }
-  };
-
   /** Record the finished match's winner, then loop or stop. */
   private bookMatch(myGen: number) {
     const st = this.tunnel?.state;
-    if (st?.winner === 1) this.score.a += 1;
-    else if (st?.winner === 2) this.score.b += 1;
+    if (st && st.balanceA > st.balanceB) this.score.a += 1;
+    else if (st && st.balanceB > st.balanceA) this.score.b += 1;
+    // ties: no increment
     this.pushView();
 
     if (!this.auto) {
-      this.endRun("stopped");
+      this.endRun();
       return;
     }
     // DOPAMINT mode: gas is sponsored and the stake is faucet-minted, so the bots can't run out —
     // skip the SUI-gas gate that would otherwise end the run (their SUI balance is 0).
-    if (
-      !isDopamintConfigured &&
-      (this.balances.a < MIN_PLAY_MIST || this.balances.b < MIN_PLAY_MIST)
-    ) {
-      this.endRun("funds");
+    if (!isDopamintConfigured && this.balances.a < MIN_PLAY_MIST) {
+      this.endRun();
       return;
     }
     this.nextTimer = setTimeout(() => {
@@ -635,7 +655,7 @@ function getAutoSession(windowId: string): AutoSession {
     session = new AutoSession();
     autoSessions.set(windowId, session);
     const created = session;
-    registerWindowDisposer(windowId, "battleship-auto", () => {
+    registerWindowDisposer(windowId, "quantum-poker-auto", () => {
       created.dispose();
       autoSessions.delete(windowId);
     });
@@ -643,7 +663,9 @@ function getAutoSession(windowId: string): AutoSession {
   return session;
 }
 
-export function useBattleshipAuto(windowId: string): BattleshipAutoSession {
+export function useQuantumPokerAuto(
+  windowId: string,
+): QuantumPokerAutoSession {
   const { report } = useTelemetry();
   const client = useSuiClient();
   const account = useCurrentAccount();
@@ -666,13 +688,25 @@ export function useBattleshipAuto(windowId: string): BattleshipAutoSession {
   }, [session, client]);
 
   const snap = useSyncExternalStore(session.subscribe, session.getSnapshot);
+
+  // Auto-start the bot loop on load (deps are wired above), so watch-bot runs without a manual Start.
+  useEffect(() => {
+    session.autoStartOnLoad();
+  }, [session, snap.status, snap.funded]);
   return {
     status: snap.status,
-    view: snap.view,
-    error: snap.error,
+    personas: snap.personas,
+    score: snap.score,
+    tunnels: snap.tunnels,
+    actions: snap.actions,
+    hands: snap.hands,
     balances: snap.balances,
     funded: snap.funded,
     canFundFromWallet: snap.canFundFromWallet,
+    error: snap.error,
+    state: snap.state,
+    holesA: snap.holesA,
+    holesB: snap.holesB,
     fund: session.fund,
     fundFromWallet: session.fundFromWallet,
     startAuto: session.startAuto,

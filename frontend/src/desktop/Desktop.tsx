@@ -7,14 +7,10 @@ import type {
 import {
   ChevronDown,
   Eye,
-  Gamepad2,
-  Gauge,
   LayoutGrid,
-  MessageSquare,
   PanelBottom,
   PanelRight,
   Plus,
-  ReceiptText,
   Trash2,
   X,
   type LucideIcon,
@@ -64,7 +60,6 @@ import {
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
-import { ThemeToggle } from "@/components/ui/theme-toggle";
 import {
   Tooltip,
   TooltipContent,
@@ -72,12 +67,12 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { disposeWindow } from "@/lib/windowSessions";
+import { forgetWindow, markWindowActive } from "@/lib/activeWindows";
 import { flyFromDock, flyToDock } from "@/lib/dockFlight";
 import { useTelemetry } from "@/telemetry/TelemetryProvider";
 import { useLocalStorageState } from "@/lib/useLocalStorageState";
 import { useMediaQuery } from "@/lib/useMediaQuery";
-import { Link } from "@tanstack/react-router";
-import { WalletButton } from "@/wallet/WalletButton";
+import { useSearch } from "@tanstack/react-router";
 import type { TelemetrySnapshot } from "../panels/types";
 import { ChatPanel } from "../panels/ChatPanel";
 import { LiveTransactionsFeed } from "../panels/LiveTransactionsFeed";
@@ -85,6 +80,8 @@ import { LocalTransactionsFeed } from "../panels/LocalTransactionsFeed";
 import { SystemDashboard } from "../panels/SystemDashboard";
 import { TpsChart } from "../panels/TpsChart";
 import { GameWindow } from "./GameWindow";
+import { MobileArena } from "./MobileArena";
+import type { MobileSection } from "./AppShell";
 
 type GameModule = ReturnType<typeof list>[number];
 type DockSide = "bottom" | "right";
@@ -125,44 +122,47 @@ function dropKey<T>(obj: Record<string, T>, id: string): Record<string, T> {
   return next;
 }
 
-const WINDOW_SIZE = { w: 4, h: 4, minW: 3, minH: 3 } as const;
+// Every game window opens at the SAME size so the floor reads as one uniform grid
+// rather than a patchwork of per-game footprints. minW/minH is the global resize floor.
+const TILE = { w: 4, h: 4, minW: 3, minH: 3 } as const;
 
-/** A game's opening size + resize floor in grid units, from its registry config. */
-function sizeOf(instanceId: string) {
-  const mod = get(gameOf(instanceId));
-  return {
-    w: mod?.defaultSize?.w ?? WINDOW_SIZE.w,
-    h: mod?.defaultSize?.h ?? WINDOW_SIZE.h,
-    minW: mod?.minSize?.w ?? WINDOW_SIZE.minW,
-    minH: mod?.minSize?.h ?? WINDOW_SIZE.minH,
-  };
-}
-
+// Column counts are all multiples of TILE.w (4) so uniform windows always pack into
+// full rows: 3 per row on a wide floor, 2 on a tablet-width dock, 1 on a narrow one.
 const BREAKPOINTS: GridBreakpoint[] = [
   { minWidth: 0, cols: 4 },
   { minWidth: 640, cols: 8 },
-  { minWidth: 1024, cols: 16 },
+  { minWidth: 1024, cols: 12 },
 ];
 
 // Tile against the widest breakpoint so auto-arrange fills the full row.
 const COLS = Math.max(...BREAKPOINTS.map((b) => b.cols));
 
-/** Pack windows left-to-right, wrapping at COLS, preserving each window's size. */
+/**
+ * First-fit pack: drop each window into the first free grid slot, scanning rows
+ * top-to-bottom and columns left-to-right. Unlike a plain row-packer this fills
+ * holes — e.g. the empty cells to the right of a tall window's lower half — so a
+ * newly added or re-arranged window slots into space on an existing row before
+ * opening a new row below. Footprints never overlap; each window keeps its size.
+ */
 function tile(items: GridItem[]): GridItem[] {
-  let x = 0;
-  let y = 0;
-  let rowH = 0;
+  const placed: GridItem[] = [];
+  const free = (x: number, y: number, w: number, h: number) =>
+    placed.every(
+      (p) => x + w <= p.x || x >= p.x + p.w || y + h <= p.y || y >= p.y + p.h,
+    );
   return items.map((item) => {
     const w = Math.min(item.w, COLS);
-    if (x + w > COLS) {
-      x = 0;
-      y += rowH;
-      rowH = 0;
+    const h = item.h;
+    let x = 0;
+    let y = 0;
+    search: for (y = 0; ; y++) {
+      for (x = 0; x <= COLS - w; x++) {
+        if (free(x, y, w, h)) break search;
+      }
     }
-    const placed = { ...item, x, y, w };
-    x += w;
-    rowH = Math.max(rowH, item.h);
-    return placed;
+    const placedItem = { ...item, x, y, w };
+    placed.push(placedItem);
+    return placedItem;
   });
 }
 
@@ -181,20 +181,39 @@ const FLOAT_HANDLES = [
 // Community Chat is built but hidden for now — flip to re-enable everywhere.
 const SHOW_CHAT = false;
 
-// Phone shell (< lg): one section at a time, switched from a bottom tab bar.
-const MOBILE_TABS = [
-  { id: "games", label: "Arena", icon: Gamepad2 },
-  { id: "stats", label: "Stats", icon: Gauge },
-  { id: "activity", label: "Activity", icon: ReceiptText },
-  { id: "chat", label: "Chat", icon: MessageSquare },
-] as const;
-type MobileTab = (typeof MOBILE_TABS)[number]["id"];
-
-/** One tiled window per registered game. */
+/** One tiled window per catalog game (floating-widget modules are excluded by `list()`). */
 function seedLayout(): GridItem[] {
-  return tile(
-    list().map((mod) => ({ id: mod.id, x: 0, y: 0, ...sizeOf(mod.id) })),
-  );
+  return tile(list().map((mod) => ({ id: mod.id, x: 0, y: 0, ...TILE })));
+}
+
+// Utility surfaces opened as centered floating widgets in the first-run / reset
+// layout (registered with catalog: false, so they never tile or show in the picker).
+const FLOATING_DEFAULTS = ["regular-payments", "chat"] as const;
+
+/** Floating widgets spread across the screen `space-around` for the default layout —
+ *  each centered in its 1/n slice of the width, so the gap to either edge is equal
+ *  and they sit toward the middle. Vertically centered. */
+function seedFloating(): Record<string, FloatState> {
+  if (typeof window === "undefined") return {};
+  const out: Record<string, FloatState> = {};
+  const margin = 24;
+  const n = FLOATING_DEFAULTS.length;
+  FLOATING_DEFAULTS.forEach((id, i) => {
+    if (!get(id)) return; // not registered → skip
+    const w = Math.min(360, window.innerWidth - 2 * margin);
+    const h = Math.min(440, window.innerHeight - 2 * margin);
+    const x = ((2 * i + 1) / (2 * n)) * window.innerWidth - w / 2;
+    const y = (window.innerHeight - h) / 2;
+    out[id] = {
+      x: clampNum(x, 0, window.innerWidth - w),
+      y: clampNum(y, 0, window.innerHeight - h),
+      w,
+      h,
+      z: 100 + i,
+      item: { id, x: 0, y: 0, ...TILE },
+    };
+  });
+  return out;
 }
 
 /**
@@ -508,30 +527,34 @@ function FloorControls({
 }
 
 /**
- * The arena desktop (`/`): a draggable/resizable floor of self-playing game
- * windows over a resizable, collapsible telemetry dock (bottom or right).
- * Maximizing pops a window out into a free-floating layer; phones switch
- * sections from a bottom tab bar.
+ * The arena body (`/`): a draggable/resizable floor of self-playing game windows
+ * over a resizable, collapsible telemetry dock (bottom or right). Maximizing pops
+ * a window out into a free-floating layer. On phones it renders one section at a
+ * time (`section` search param, driven by the shell's bottom tabs). The navbar and
+ * tab bar live in AppShell so this view swaps without remounting the chrome.
  */
-export function Desktop() {
+export function ArenaView() {
   const [layout, setLayout] = useLocalStorageState<GridItem[]>(
-    "dopamint.desktop.layout.v3",
+    "dopamint.desktop.layout.v4",
     seedLayout,
   );
   // Minimized windows: id → saved geometry, restored from the right-edge dock.
   const [hidden, setHidden] = useLocalStorageState<Record<string, GridItem>>(
-    "dopamint.desktop.hidden.v1",
+    "dopamint.desktop.hidden.v2",
     {},
   );
   // Popped-out windows: free-floating over the desktop, click-to-front z-order.
   const [floating, setFloating] = useLocalStorageState<
     Record<string, FloatState>
-  >("dopamint.desktop.floating.v2", {});
+  >("dopamint.desktop.floating.v6", seedFloating);
   const floatZ = useRef(100);
   const [addOpen, setAddOpen] = useState(false);
   const [removeOpen, setRemoveOpen] = useState(false);
   const [resetDefault, setResetDefault] = useState(false);
-  const [mobileTab, setMobileTab] = useState<MobileTab>("games");
+  // The phone section is driven by the shell's bottom tabs via the `section` search param.
+  const section =
+    (useSearch({ strict: false }) as { section?: MobileSection }).section ??
+    "games";
   const [dockSide, setDockSide] = useLocalStorageState<DockSide>(
     "dopamint.desktop.dockSide.v1",
     "bottom",
@@ -568,6 +591,7 @@ export function Desktop() {
 
   const close = (id: string) => {
     disposeWindow(id); // tear down the game's live session (sockets, timers)
+    forgetWindow(id); // stop the phone resuming this now-dead instance
     setLayout((cur) => tile(cur.filter((w) => w.id !== id)));
     setHidden((h) => dropKey(h, id));
     setFloating((f) => dropKey(f, id));
@@ -601,14 +625,23 @@ export function Desktop() {
     }
   };
 
-  // Add a fresh window for a game — duplicates allowed; the floor re-tiles.
-  const addGame = (gameId: string) =>
-    setLayout((cur) =>
-      tile([
-        ...cur,
-        { id: newInstanceId(gameId), x: 0, y: 0, ...sizeOf(gameId) },
-      ]),
+  // A newly packed window can land below the fold; scroll the floor to bring the
+  // given window into view so the user sees where it ended up.
+  const revealWindow = (id: string) =>
+    requestAnimationFrame(() =>
+      document
+        .querySelector(`[data-window="${id}"]`)
+        ?.scrollIntoView({ behavior: "smooth", block: "nearest" }),
     );
+
+  // Add a fresh window for a game — duplicates allowed; the floor re-tiles so the new
+  // window fills the first free slot (right-of-row before opening a new row), then
+  // scrolls into view.
+  const addGame = (gameId: string) => {
+    const id = newInstanceId(gameId);
+    setLayout((cur) => tile([...cur, { id, x: 0, y: 0, ...TILE }]));
+    revealWindow(id);
+  };
 
   // One window per game not already on the floor.
   const addAll = () =>
@@ -616,7 +649,7 @@ export function Desktop() {
       const present = new Set(cur.map((w) => gameOf(w.id)));
       const adds = list()
         .filter((m) => !present.has(m.id))
-        .map((m) => ({ id: newInstanceId(m.id), x: 0, y: 0, ...sizeOf(m.id) }));
+        .map((m) => ({ id: newInstanceId(m.id), x: 0, y: 0, ...TILE }));
       return tile([...cur, ...adds]);
     });
 
@@ -633,16 +666,26 @@ export function Desktop() {
     }
     setLayout(resetDefault ? seedLayout() : []);
     setHidden({});
-    setFloating({});
+    setFloating(resetDefault ? seedFloating() : {});
     setResetDefault(false);
     setRemoveOpen(false);
   };
 
-  // Auto-arrange: re-pack every window to fill the rows, keeping their sizes.
-  const arrange = () => setLayout((cur) => tile(cur));
+  // Auto-arrange: reset every window to the uniform tile size and re-pack into a
+  // clean grid. Manual resizes are intentionally dropped — a tidy grid is the point.
+  const arrange = () => {
+    setLayout((cur) => tile(cur.map((w) => ({ ...w, ...TILE }))));
+    // The re-packed grid anchors at the top; jump there so the tidy-up is visible.
+    requestAnimationFrame(() =>
+      document
+        .querySelector("[data-floor]")
+        ?.scrollTo({ top: 0, behavior: "smooth" }),
+    );
+  };
 
   // --- Floating (maximized) windows -------------------------------------
   const focusFloat = (id: string) => {
+    markWindowActive(id);
     floatZ.current += 1;
     const z = floatZ.current;
     setFloating((f) => (f[id] ? { ...f, [id]: { ...f[id], z } } : f));
@@ -827,7 +870,6 @@ export function Desktop() {
       hidden: w.hidden,
     };
   });
-  const hiddenCount = Object.keys(hidden).length;
   const hiddenEntries = layerEntries.filter((e) => e.hidden);
 
   const renderFloorControls = (className: string, side: "left" | "right") => (
@@ -881,6 +923,7 @@ export function Desktop() {
         onLayoutChange={(next) =>
           setLayout(next.filter((w) => !hidden[w.id] && !floating[w.id]))
         }
+        onActivate={markWindowActive}
         breakpoints={BREAKPOINTS}
         rowHeight={72}
         styleOverride={styleFor}
@@ -906,22 +949,26 @@ export function Desktop() {
               <Content windowId={item.id} onClose={() => close(item.id)} />
             </GameWindow>
           );
-          if (!fl) return win;
-          // Floating: focus-to-front + free pixel resize from every edge/corner.
+          // Always wrap identically — float-handles + focus-to-front only when
+          // floating — so maximize/minimize is a style change, NOT a remount. That
+          // keeps every game's component state alive across the transition, instead
+          // of only games that stash it in a windowId store (Battleship). The grid's
+          // own resize handles are suppressed for detached items, so no overlap.
           return (
             <div
               className="relative h-full w-full"
-              onPointerDown={() => focusFloat(item.id)}
+              onPointerDown={fl ? () => focusFloat(item.id) : undefined}
             >
               {win}
-              {FLOAT_HANDLES.map((hdl) => (
-                <div
-                  key={hdl.dir}
-                  className={cn("absolute z-10 touch-none", hdl.cls)}
-                  onPointerDown={startFloatResize(item.id, hdl.dir)}
-                  aria-hidden
-                />
-              ))}
+              {fl &&
+                FLOAT_HANDLES.map((hdl) => (
+                  <div
+                    key={hdl.dir}
+                    className={cn("absolute z-10 touch-none", hdl.cls)}
+                    onPointerDown={startFloatResize(item.id, hdl.dir)}
+                    aria-hidden
+                  />
+                ))}
             </div>
           );
         }}
@@ -931,7 +978,9 @@ export function Desktop() {
   // Floor + its overlays (controls column + the minimized-windows dock).
   const floorArea = (controlsClass: string, side: "left" | "right") => (
     <div className="relative h-full">
-      <div className="bg-dot-grid h-full overflow-auto p-2">{floor}</div>
+      <div data-floor className="bg-dot-grid h-full overflow-auto p-2">
+        {floor}
+      </div>
       {renderFloorControls(controlsClass, side)}
       <MacDock
         entries={hiddenEntries}
@@ -977,30 +1026,12 @@ export function Desktop() {
   );
 
   return (
-    <div className="relative flex h-full flex-col text-foreground">
-      <header className="relative z-10 flex shrink-0 items-center justify-between gap-3 border-b border-border bg-background/70 px-3 py-2.5 backdrop-blur-xl">
-        <div className="flex items-center gap-2.5">
-          <span className="wal-display hidden text-base sm:inline">
-            Dopamint<span className="wal-gradient-text">Arena</span>
-          </span>
-          <Link
-            to="/explorer"
-            className="text-xs text-muted-foreground hover:text-foreground"
-          >
-            Explorer
-          </Link>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <WalletButton />
-          <ThemeToggle />
-        </div>
-      </header>
-
+    <>
       {isDesktop ? (
         dockSide === "bottom" ? (
           <ResizablePanelGroup
             orientation="vertical"
-            className="relative z-[1] min-h-0 flex-1"
+            className="h-full min-h-0"
           >
             <ResizablePanel defaultSize="58%" minSize="20%" className="min-h-0">
               {floorArea("absolute bottom-3 right-3 z-20", "left")}
@@ -1020,7 +1051,7 @@ export function Desktop() {
         ) : (
           <ResizablePanelGroup
             orientation="horizontal"
-            className="relative z-[1] min-h-0 flex-1"
+            className="h-full min-h-0"
           >
             <ResizablePanel defaultSize="68%" minSize="35%" className="min-w-0">
               {floorArea("absolute bottom-3 right-3 z-20 items-end", "right")}
@@ -1039,76 +1070,27 @@ export function Desktop() {
           </ResizablePanelGroup>
         )
       ) : (
-        <>
-          <main className="relative z-[1] min-h-0 flex-1 overflow-auto">
-            {mobileTab === "games" && (
-              <div className="bg-dot-grid relative min-h-full p-2">
-                {floor}
-                {renderFloorControls("fixed bottom-20 right-3 z-30", "left")}
-                <MacDock
-                  entries={hiddenEntries}
-                  side="right"
-                  onShow={show}
-                  onClose={close}
-                />
-              </div>
-            )}
-            {mobileTab === "stats" && (
-              <div className="flex flex-col gap-2 p-2">
-                <SystemDashboard snapshot={snapshot} />
-                <TpsChart snapshot={snapshot} />
-              </div>
-            )}
-            {mobileTab === "activity" && (
-              <div className="flex h-full flex-col gap-2 p-2">
-                <LiveTransactionsFeed
-                  snapshot={snapshot}
-                  className="min-h-0 flex-1"
-                />
-                <LocalTransactionsFeed
-                  snapshot={snapshot}
-                  className="min-h-0 flex-1"
-                />
-              </div>
-            )}
-            {SHOW_CHAT && mobileTab === "chat" && (
-              <div className="h-full p-2">
-                <ChatPanel className="h-full" />
-              </div>
-            )}
-          </main>
-
-          <nav className="z-10 flex shrink-0 items-stretch border-t border-border bg-background/80 backdrop-blur-xl">
-            {MOBILE_TABS.filter((t) => SHOW_CHAT || t.id !== "chat").map(
-              (t) => {
-                const Icon = t.icon;
-                const active = mobileTab === t.id;
-                const showBadge = t.id === "games" && hiddenCount > 0;
-                return (
-                  <button
-                    key={t.id}
-                    type="button"
-                    onClick={() => setMobileTab(t.id)}
-                    aria-label={t.label}
-                    aria-current={active}
-                    className={cn(
-                      "relative flex flex-1 flex-col items-center gap-0.5 py-2.5 text-[10px] font-medium transition-colors",
-                      active
-                        ? "text-primary"
-                        : "text-muted-foreground hover:text-foreground",
-                    )}
-                  >
-                    <Icon className="size-5" />
-                    {t.label}
-                    {showBadge && (
-                      <span className="absolute top-1.5 right-[calc(50%-1.25rem)] size-1.5 rounded-full bg-primary" />
-                    )}
-                  </button>
-                );
-              },
-            )}
-          </nav>
-        </>
+        <main className="h-full overflow-auto">
+          {section === "games" && <MobileArena />}
+          {section === "stats" && (
+            <div className="flex flex-col gap-2 p-2">
+              <SystemDashboard snapshot={snapshot} />
+              <TpsChart snapshot={snapshot} />
+            </div>
+          )}
+          {section === "activity" && (
+            <div className="flex h-full flex-col gap-2 p-2">
+              <LiveTransactionsFeed
+                snapshot={snapshot}
+                className="min-h-0 flex-1"
+              />
+              <LocalTransactionsFeed
+                snapshot={snapshot}
+                className="min-h-0 flex-1"
+              />
+            </div>
+          )}
+        </main>
       )}
 
       <AddGameCommand
@@ -1149,6 +1131,6 @@ export function Desktop() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </>
   );
 }

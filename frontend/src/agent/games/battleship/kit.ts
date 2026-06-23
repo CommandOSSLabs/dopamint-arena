@@ -46,6 +46,8 @@ class BattleshipBot implements GameBot<BattleshipState, BattleshipMove> {
     if (state.phase === "over" || state.winner !== 0) return null;
 
     if (state.phase === "awaitingCommits") {
+      if (!state.commitA && this.seat !== "A") return null;
+      if (state.commitA && !state.commitB && this.seat !== "B") return null;
       const committed = this.seat === "A" ? state.commitA : state.commitB;
       if (committed !== null) return null;
       return { type: "commit", root: this.secret.commitment.root };

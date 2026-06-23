@@ -99,6 +99,9 @@ async fn main() -> anyhow::Result<()> {
         .route("/metrics", get(routes::metrics))
         .route("/v1/sessions", post(routes::register_session))
         .route("/v1/sessions/:id/heartbeat", post(routes::heartbeat))
+        // Settlement carries the off-chain transcript (one entry per update). The 2MB Json
+        // default is intentional: it's the forcing function that keeps per-tunnel transcripts
+        // small — each game caps its tunnel length so the settle body fits.
         .route("/v1/tunnels/:tunnel_id/settle", post(routes::settle))
         .route("/v1/sponsor", post(routes::sponsor))
         .route("/v1/stats/live", get(routes::stats_live))

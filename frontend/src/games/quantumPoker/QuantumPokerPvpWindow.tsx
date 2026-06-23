@@ -2,11 +2,9 @@ import type { CSSProperties } from "react";
 import type { Party } from "sui-tunnel-ts/protocol/Protocol";
 import type { PokerState } from "sui-tunnel-ts/protocol/quantumPoker";
 import type { GameWindowProps } from "../types";
-import {
-  HAND_CAP,
-  STAKE_BALANCE,
-  usePvpQuantumPoker,
-} from "./usePvpQuantumPoker";
+import { HAND_CAP, usePvpQuantumPoker } from "./usePvpQuantumPoker";
+import { POKER_BUYIN } from "./constants";
+import { pokerRaiseSizes } from "./pokerBetting";
 
 const SUITS = ["♠", "♥", "♦", "♣"] as const;
 const RANKS = ["2", "3", "4", "5", "6", "7", "8", "9", "T", "J", "Q", "K", "A"];
@@ -44,8 +42,11 @@ const QP: CSSProperties & Record<`--${string}`, string> = {
 
 /** Mono uppercase label used for eyebrows/state — the utility face, never the headline. */
 const EYEBROW = "wal-mono uppercase tracking-[0.14em]";
+// `min-w` keeps short buttons (Fold/Check) at a consistent tap size; `shrink-0` + no `flex-1` lets a
+// long label like "All-in · 2,450" grow PAST that min instead of being squeezed below its text and
+// clipping. The flex-wrap row centers them and wraps when the window is narrow.
 const BTN =
-  "min-w-[3.25rem] max-w-[8rem] flex-1 whitespace-nowrap rounded-md px-2 py-1 text-[11px] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--qp-lilac)]/60";
+  "min-w-[3.25rem] shrink-0 whitespace-nowrap rounded-md px-2.5 py-1 text-center text-[11px] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--qp-lilac)]/60";
 
 const fmt = (n: bigint): string => n.toLocaleString("en-US");
 
@@ -173,7 +174,27 @@ function Seat({
 }
 
 /** Heads-up Quantum Poker vs a real opponent: matchmaking + relay co-sign + on-chain stakes. */
-export function QuantumPokerPvpWindow(_props: GameWindowProps) {
+export function QuantumPokerPvpWindow({
+  onExit,
+  ...rest
+}: GameWindowProps & { onExit?: () => void }) {
+  return (
+    <div className="relative h-full">
+      {onExit && (
+        <button
+          type="button"
+          onClick={onExit}
+          className="absolute left-2 top-2 z-20 rounded-md border border-white/15 bg-black/30 px-2.5 py-1 text-[11px] font-semibold text-slate-200 backdrop-blur transition hover:bg-black/50"
+        >
+          ← Back
+        </button>
+      )}
+      <PvpInner {...rest} />
+    </div>
+  );
+}
+
+function PvpInner(_props: GameWindowProps) {
   const g = usePvpQuantumPoker();
 
   if (g.status === "idle") {
@@ -191,7 +212,7 @@ export function QuantumPokerPvpWindow(_props: GameWindowProps) {
         <p className="max-w-[18rem] text-[12px] leading-relaxed text-slate-400">
           Each seat stakes{" "}
           <span className="wal-mono text-[var(--qp-gold)]">
-            {fmt(STAKE_BALANCE)}
+            {POKER_BUYIN.toString()} chip
           </span>{" "}
           on-chain. The deck is dealt by a two-party commit-reveal — no dealer —
           and chips move off-chain over a Sui tunnel for up to{" "}
@@ -300,23 +321,20 @@ export function QuantumPokerPvpWindow(_props: GameWindowProps) {
   // Pot-relative bet sizing. The protocol's `bet` amount is the increment to THIS seat's
   // street bet; a pot-sized raise = call + pot-after-call = pot + 2·diff (diff = amount to
   // call, 0 when first to act). Each size clamps to a legal min-raise and the stack (all-in).
-  const diff = legal?.callAmount ?? 0n;
-  const clampBet = (raw: bigint): bigint => {
-    if (!legal) return 0n;
-    return raw < legal.minBet
-      ? legal.minBet
-      : raw > legal.maxBet
-        ? legal.maxBet
-        : raw;
-  };
-  const halfPot = clampBet(diff > 0n ? diff + (pot + diff) / 2n : pot / 2n);
-  const fullPot = clampBet(diff > 0n ? pot + 2n * diff : pot);
-  const allIn = legal?.maxBet ?? 0n;
-  // Surface only distinct, legal sizes — collapse to all-in when the stack is short.
-  const showHalf =
-    !!legal && legal.canBet && halfPot < fullPot && halfPot < allIn;
-  const showPot = !!legal && legal.canBet && fullPot < allIn;
-  const showAllIn = !!legal && legal.canBet;
+  // Same three pot-relative sizes as the Bot lane (shared helper): ½ pot, pot, all-in.
+  const sizes = pokerRaiseSizes({
+    pot,
+    callAmount: legal?.callAmount ?? 0n,
+    minBet: legal?.minBet ?? 0n,
+    maxBet: legal?.maxBet ?? 0n,
+    canBet: !!legal?.canBet,
+  });
+  const halfPot = sizes.half;
+  const fullPot = sizes.full;
+  const allIn = sizes.allIn;
+  const showHalf = sizes.showHalf;
+  const showPot = sizes.showFull;
+  const showAllIn = sizes.showAllIn;
 
   return (
     <div
@@ -340,6 +358,25 @@ export function QuantumPokerPvpWindow(_props: GameWindowProps) {
             <span className="text-slate-300">{(s.handNo + 1n).toString()}</span>
             /{HAND_CAP.toString()}
           </span>
+          {g.status === "playing" && (
+            <button
+              type="button"
+              onClick={() => g.setAuto(!g.auto)}
+              title={
+                g.auto
+                  ? "Auto mode on — a persona bot is making your bets"
+                  : "Let a persona bot play your hand"
+              }
+              className={[
+                "rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.12em] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--qp-lilac)]/60",
+                g.auto
+                  ? "border border-[var(--qp-mint)]/60 bg-[var(--qp-mint)]/15 text-[var(--qp-mint)] shadow-[0_0_12px_-4px_var(--qp-mint)]"
+                  : "border border-white/15 text-slate-300 hover:bg-white/5",
+              ].join(" ")}
+            >
+              🤖 Auto{g.auto ? " ON" : ""}
+            </button>
+          )}
           {g.status === "playing" &&
             !terminal &&
             (g.endRequested ? (
@@ -405,7 +442,21 @@ export function QuantumPokerPvpWindow(_props: GameWindowProps) {
       {/* Action bar — pinned, always visible so the hand can advance */}
       <div className="flex min-h-[2.25rem] shrink-0 flex-wrap items-center justify-center gap-1">
         {g.myTurnToBet && legal ? (
-          <>
+          <div
+            className={[
+              "flex flex-wrap items-center justify-center gap-1 transition-opacity",
+              // Auto mode keeps the manual controls functional but visually recedes them — the
+              // persona bot is acting; a tap still lets the player override.
+              g.auto ? "opacity-40" : "opacity-100",
+            ].join(" ")}
+          >
+            {g.auto && (
+              <span
+                className={`${EYEBROW} w-full text-center text-[9px] text-[var(--qp-mint)]`}
+              >
+                🤖 Bot is playing your hand
+              </span>
+            )}
             {g.secondsLeft != null && (
               <span
                 className={[
@@ -470,7 +521,7 @@ export function QuantumPokerPvpWindow(_props: GameWindowProps) {
                 All-in · {fmt(allIn)}
               </button>
             )}
-          </>
+          </div>
         ) : (
           <div
             className={[

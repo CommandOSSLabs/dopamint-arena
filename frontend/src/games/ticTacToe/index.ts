@@ -5,9 +5,8 @@ import { TicTacToeWindow } from "./TicTacToeWindow";
 register({
   id: "tic-tac-toe",
   name: "Tic Tac Toe & Caro",
+  description: "3×3 or 15×15 Caro — bot, auto-play, or live PvP.",
   icon: "⭕",
   image: "/games/caro.png",
   Window: TicTacToeWindow,
-  defaultSize: { w: 6, h: 7 },
-  minSize: { w: 4, h: 5 },
 });

@@ -27,7 +27,7 @@ export function AgentRunner() {
       const r = await mutateAsync({ transaction: tx });
       return { digest: r.digest };
     };
-    const { concurrency } = parseAgentConfig(window.location.href);
+    const { concurrency, game } = parseAgentConfig(window.location.href);
     // No cleanup-stop: under React.StrictMode the dev double-invoke (mount→cleanup→mount)
     // would cancel the still-connecting first run. The agent runs for the page's lifetime;
     // the Playwright/real browser context closing is what ends it.
@@ -43,6 +43,7 @@ export function AgentRunner() {
       },
       concurrency,
       () => false,
+      game,
     ).catch((e) => {
       // A rejected runAgent isn't a pageerror — surface it so the proof/console can see it.
       console.error("[agent] runAgent failed:", e);

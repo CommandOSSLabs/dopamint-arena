@@ -175,6 +175,43 @@ export function buildOpenAndFundMany(
   );
 }
 
+/**
+ * Open + fund + activate ONE tunnel in a single PTB via the returnless `create_and_fund`.
+ * Splits both seats' stakes off the source coin (gas for SUI) internally, so the caller passes
+ * only plain data and reads the tunnel id from object changes. For callers that never chain the
+ * id in the PTB (Quantum Poker — commit-reveal randomness, no on-chain seed).
+ */
+export function buildOpenAndFundOneReturnless(
+  tx: Transaction,
+  spec: TunnelOpenSpec,
+  opts: BatchFundOptions = {},
+): void {
+  const coinType = opts.coinType ?? SUI_COIN_TYPE;
+  if (coinType !== SUI_COIN_TYPE && !opts.sourceCoin) {
+    throw new Error(
+      `buildOpenAndFundOneReturnless: coinType ${coinType} is not SUI, so opts.sourceCoin ` +
+        `(a Coin<${coinType}> to split stakes from) is required.`,
+    );
+  }
+  const source = opts.sourceCoin ?? tx.gas;
+  const [coinA, coinB] = tx.splitCoins(source, [
+    tx.pure.u64(spec.aAmount),
+    tx.pure.u64(spec.bAmount),
+  ]);
+  // Returnless path = the plain `create_and_fund` via `withId: false` (same as buildOpenAndFundMany);
+  // the id is read from object changes, never chained in-PTB.
+  buildCreateAndFund(tx, {
+    partyA: spec.partyA,
+    partyB: spec.partyB,
+    coinA,
+    coinB,
+    timeoutMs: spec.timeoutMs,
+    penaltyAmount: spec.penaltyAmount,
+    coinType,
+    withId: false,
+  });
+}
+
 /** One seat's batch deposit: which already-shared tunnel, and the stake to fund it with. */
 export interface BatchDepositSpec {
   tunnelId: string;
