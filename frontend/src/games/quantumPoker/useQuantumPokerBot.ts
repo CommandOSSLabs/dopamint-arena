@@ -19,11 +19,13 @@ import {
   type RegisterSessionResult,
 } from "@/backend/controlPlane";
 import {
-  openAndFundSelfPlayReturnless,
+  openAndFundSelfPlay,
   readCreatedAt,
   type SignExec,
   type SuiReads,
 } from "@/onchain/tunnelTx";
+import { useSponsoredSignExec } from "@/onchain/useSponsoredSignExec";
+import { DOPAMINT_COIN_TYPE, isDopamintConfigured } from "@/onchain/dopamint";
 import { QUANTUM_POKER_STAKE, QUANTUM_POKER_HANDS_PER_TUNNEL } from "./constants";
 import {
   makeSeatBot,
@@ -39,6 +41,7 @@ import {
 import { settlePokerTunnel } from "./pokerSettle";
 
 const STAKE = QUANTUM_POKER_STAKE;
+const DOPAMINT_PER_SEAT = 1_000_000_000n; // 1 DOPAMINT per seat (9 decimals)
 const HAND_CAP = QUANTUM_POKER_HANDS_PER_TUNNEL;
 const AUTO_MS = 45; // pacing between auto moves
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -68,6 +71,10 @@ interface BotDeps {
   account: { address: string } | null;
   client: unknown;
   signExec: SignExec;
+  /** Gas-sponsored wallet signer (DOPAMINT model): settler pays gas, the wallet co-signs. */
+  sponsoredSignExec: SignExec;
+  /** Return a user `Coin<DOPAMINT>` object id holding at least `need` to fund the stake. */
+  prepareStake: (need: bigint) => Promise<string>;
 }
 
 interface Snap {
@@ -102,6 +109,8 @@ class BotSession {
   private oppName = "Bot";
   private tunnelId = "";
   private createdAt = 0n;
+  /** Coin type `T` staked at open (DOPAMINT or SUI); reused by the on-chain fallback close. */
+  private coinType: string | undefined = undefined;
   private ts = 1n;
   private gen = 0;
   private looping = false;
@@ -200,13 +209,25 @@ class BotSession {
         const a = createParticipant("poker-you");
         const b = createParticipant("poker-foe");
         const reads = deps.client as unknown as SuiReads;
-        const tunnelId = await openAndFundSelfPlayReturnless({
+        // DOPAMINT mode: stake faucet-minted DOPAMINT and sponsor the wallet's open gas (the
+        // connected wallet funds the stake but pays no gas). SUI fallback (env unset): the wallet
+        // funds the stake and pays its own gas.
+        const dopamintOn = isDopamintConfigured;
+        const stakePerSeat = dopamintOn ? DOPAMINT_PER_SEAT : STAKE;
+        const coinType = dopamintOn ? DOPAMINT_COIN_TYPE : undefined;
+        const signExec = dopamintOn ? deps.sponsoredSignExec : deps.signExec;
+        const tunnelId = await openAndFundSelfPlay({
           reads,
-          signExec: deps.signExec,
+          signExec,
           partyA: { address: a.address, publicKey: a.keyPair.publicKey },
           partyB: { address: b.address, publicKey: b.keyPair.publicKey },
-          aAmount: STAKE,
-          bAmount: STAKE,
+          aAmount: stakePerSeat,
+          bAmount: stakePerSeat,
+          coinType,
+          // Self-play funds both seats from one coin, so faucet/select for the 2-seat total.
+          stakeCoinId: dopamintOn
+            ? await deps.prepareStake(2n * stakePerSeat)
+            : undefined,
         });
         if (this.gen !== myGen) return;
         const createdAt = await readCreatedAt(reads, tunnelId);
@@ -219,7 +240,7 @@ class BotSession {
           b.keyPair,
           a.address,
           b.address,
-          { a: STAKE, b: STAKE },
+          { a: stakePerSeat, b: stakePerSeat },
         );
         const transcript = new Transcript(tunnelId);
         tunnel.onUpdate = (u) => transcript.append(u);
@@ -228,6 +249,7 @@ class BotSession {
         this.transcript = transcript;
         this.tunnelId = tunnelId;
         this.createdAt = createdAt;
+        this.coinType = coinType;
         this.ts = 1n;
         this.botA = makeSeatBot(
           "A",
@@ -344,7 +366,11 @@ class BotSession {
         transcript,
         tunnelId: this.tunnelId,
         createdAt: this.createdAt,
-        fallbackSignExec: deps.signExec,
+        coinType: this.coinType,
+        // DOPAMINT mode: the on-chain fallback close stakes DOPAMINT, so it must be gas-sponsored.
+        fallbackSignExec: isDopamintConfigured
+          ? deps.sponsoredSignExec
+          : deps.signExec,
       });
       if (this.gen !== myGen) return;
       this.deps?.report.pushLocalTxn({
@@ -384,6 +410,7 @@ export function useQuantumPokerBot(windowId: string): QuantumPokerBotSession {
   const account = useCurrentAccount();
   const client = useSuiClient();
   const { mutateAsync } = useSignAndExecuteTransaction();
+  const sponsored = useSponsoredSignExec();
   const { report } = useTelemetry();
   const session = getSession(windowId);
   session.deps = {
@@ -394,6 +421,8 @@ export function useQuantumPokerBot(windowId: string): QuantumPokerBotSession {
       const r = await mutateAsync({ transaction: tx });
       return { digest: r.digest };
     }) as SignExec,
+    sponsoredSignExec: sponsored.signExec,
+    prepareStake: sponsored.prepareStake,
   };
   const snap = useSyncExternalStore(session.subscribe, session.getSnapshot);
   return {

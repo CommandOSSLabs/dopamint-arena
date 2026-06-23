@@ -23,6 +23,9 @@ export async function settlePokerTunnel(opts: {
   tunnelId: string;
   createdAt: bigint;
   fallbackSignExec: SignExec;
+  /** Coin type `T` for the on-chain fallback close; defaults to SUI. Pass DOPAMINT for the
+   *  gas-sponsored stake model (the backend /settle reads the type off the tunnel itself). */
+  coinType?: string;
 }): Promise<PokerSettleResult> {
   const settlement = opts.tunnel.buildSettlementWithRoot(
     opts.createdAt,
@@ -41,6 +44,7 @@ export async function settlePokerTunnel(opts: {
       signExec: opts.fallbackSignExec,
       tunnelId: opts.tunnelId,
       settlement,
+      coinType: opts.coinType,
     });
     return { txDigest: digest, proofUrl: null };
   }
