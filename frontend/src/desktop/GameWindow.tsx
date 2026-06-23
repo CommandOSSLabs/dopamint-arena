@@ -100,7 +100,7 @@ export function GameWindow({
           <span className="truncate">{title}</span>
         </span>
 
-        <div className="absolute right-1 flex items-center gap-0.5 opacity-0 transition-opacity group-hover/window:opacity-100 focus-within:opacity-100 max-sm:opacity-100">
+        <div className="absolute right-1 flex items-center gap-0.5">
           {onMinimize && (
             <HeaderButton label="Minimize (hide)" onClick={onMinimize}>
               <Minus className="size-3.5" />
