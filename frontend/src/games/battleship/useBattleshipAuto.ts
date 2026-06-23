@@ -16,8 +16,13 @@ import {
   type SignExec,
 } from "../../onchain/tunnelTx";
 import { Transcript } from "sui-tunnel-ts/proof/transcript";
-import { getControlPlaneClient } from "../../backend/controlPlane";
-import { coSignedToSettleRequest } from "../../backend/settleRequest";
+import { settleViaBackend } from "../../backend/settle";
+import { makeKeypairSponsoredSignExec } from "../../onchain/sponsor";
+import {
+  DOPAMINT_COIN_TYPE,
+  ensureDopamintStakeCoin,
+  isDopamintConfigured,
+} from "../../onchain/dopamint";
 import {
   BattleshipProtocol,
   type BattleshipMove,
@@ -55,7 +60,8 @@ import {
 } from "./engine/bots";
 
 /** Coins locked per seat per match (refunded at close); the loser pays the winner this stake. */
-const LOCKED_PER_SEAT = 500n;
+const LOCKED_PER_SEAT = 500n; // SUI-fallback stake (MIST), when DOPAMINT env is unset
+const DOPAMINT_PER_SEAT = 1_000_000_000n; // 1 DOPAMINT per seat (9 decimals)
 const STAKE = 100n;
 /** Spectator pacing per off-chain move, and the pause between matches. */
 const SHOOT_MS = 300;
@@ -182,6 +188,9 @@ class AutoSession {
   getSnapshot = (): AutoSnapshot => this.snap;
 
   private get funded(): boolean {
+    // DOPAMINT mode: bot gas is sponsored and the stake is faucet-minted DOPAMINT, so the bots
+    // need no SUI — they're always "funded". SUI fallback still gates on a real gas balance.
+    if (isDopamintConfigured) return true;
     return this.balances.a >= MIN_PLAY_MIST && this.balances.b >= MIN_PLAY_MIST;
   }
 
@@ -251,6 +260,16 @@ class AutoSession {
       await client.waitForTransaction({ digest: r.digest });
       return { digest: r.digest };
     };
+  }
+
+  /** Gas-sponsored signer for a bot keypair (DOPAMINT mode): the settler pays gas, so the bot
+   *  needs zero SUI — it only signs. */
+  private botSponsoredSignExec(bot: BattleshipBot): SignExec {
+    return makeKeypairSponsoredSignExec({
+      address: bot.address,
+      keypair: bot.keypair,
+      client: this.deps?.client as never,
+    });
   }
 
   refreshBalances = async () => {
@@ -441,10 +460,18 @@ class AutoSession {
       typeof openAndFundSelfPlay
     >[0]["reads"];
 
+    // DOPAMINT mode: stake faucet-minted DOPAMINT and sponsor the bot's open/close gas (no SUI).
+    // SUI fallback (DOPAMINT env unset): the bot funds the stake and pays its own gas.
+    const dopamintOn = isDopamintConfigured;
+    const stakePerSeat = dopamintOn ? DOPAMINT_PER_SEAT : LOCKED_PER_SEAT;
+    const coinType = dopamintOn ? DOPAMINT_COIN_TYPE : undefined;
+
     try {
       const tunnelId = await openAndFundSelfPlay({
         reads,
-        signExec: this.botSignExec(this.bots.A),
+        signExec: dopamintOn
+          ? this.botSponsoredSignExec(this.bots.A)
+          : this.botSignExec(this.bots.A),
         partyA: {
           address: this.bots.A.address,
           publicKey: this.bots.A.publicKey,
@@ -453,8 +480,18 @@ class AutoSession {
           address: this.bots.B.address,
           publicKey: this.bots.B.publicKey,
         },
-        aAmount: LOCKED_PER_SEAT,
-        bAmount: LOCKED_PER_SEAT,
+        aAmount: stakePerSeat,
+        bAmount: stakePerSeat,
+        coinType,
+        // Self-play funds both seats from one coin, so faucet/select for the 2-seat total.
+        stakeCoinId: dopamintOn
+          ? await ensureDopamintStakeCoin({
+              client: this.deps.client as never,
+              signExec: this.botSponsoredSignExec(this.bots.A),
+              owner: this.bots.A.address,
+              need: 2n * stakePerSeat,
+            })
+          : undefined,
       });
       if (this.gen !== myGen) return;
       const createdAt = await readCreatedAt(reads, tunnelId);
@@ -467,7 +504,7 @@ class AutoSession {
         this.bots.B.coreKey,
         this.bots.A.address,
         this.bots.B.address,
-        { a: LOCKED_PER_SEAT, b: LOCKED_PER_SEAT },
+        { a: stakePerSeat, b: stakePerSeat },
       );
       // Record every co-signed update so the close can anchor the transcript root on-chain
       // (close_cooperative_with_root) — the same settle path caro/poker use successfully.
@@ -501,22 +538,21 @@ class AutoSession {
         transcript.root(),
         0n,
       );
-      try {
-        await getControlPlaneClient().settle(
-          tunnelId,
-          coSignedToSettleRequest(settlement, transcript.toRecord().entries),
-        );
-      } catch (e) {
-        console.error(
-          "[battleship] backend settle failed; falling back to bot-key close:",
-          e,
-        );
-        await closeCooperativeWithRoot({
-          signExec: this.botSignExec(this.bots.A),
-          tunnelId,
-          settlement,
-        });
-      }
+      await settleViaBackend({
+        tunnelId,
+        settlement,
+        transcript: transcript.toRecord().entries,
+        label: "battleship",
+        fallbackClose: () =>
+          closeCooperativeWithRoot({
+            signExec: dopamintOn
+              ? this.botSponsoredSignExec(this.bots.A)
+              : this.botSignExec(this.bots.A),
+            tunnelId,
+            settlement,
+            coinType,
+          }),
+      });
       if (this.gen !== myGen) return;
 
       await this.refreshBalances();
@@ -576,7 +612,12 @@ class AutoSession {
       this.endRun("stopped");
       return;
     }
-    if (this.balances.a < MIN_PLAY_MIST || this.balances.b < MIN_PLAY_MIST) {
+    // DOPAMINT mode: gas is sponsored and the stake is faucet-minted, so the bots can't run out —
+    // skip the SUI-gas gate that would otherwise end the run (their SUI balance is 0).
+    if (
+      !isDopamintConfigured &&
+      (this.balances.a < MIN_PLAY_MIST || this.balances.b < MIN_PLAY_MIST)
+    ) {
       this.endRun("funds");
       return;
     }

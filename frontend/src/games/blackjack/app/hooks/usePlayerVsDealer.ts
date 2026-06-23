@@ -3,7 +3,7 @@ import { core, proof, protocols, bytesToHex } from "sui-tunnel-ts";
 import type { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import type { Transaction } from "@mysten/sui/transactions";
 import { getControlPlaneClient, type RegisterSessionResult } from "@/backend/controlPlane";
-import { coSignedToSettleRequest } from "@/backend/settleRequest";
+import { settleViaBackend } from "@/backend/settle";
 import {
   buildCreateAndFundTx,
   buildSettleWithRootTx,
@@ -21,6 +21,12 @@ import {
   fundBots,
   type BotIdentity,
 } from "@/games/blackjack/app/lib/bjBots";
+import {
+  DOPAMINT_COIN_TYPE,
+  ensureDopamintStakeCoin,
+  isDopamintConfigured,
+} from "@/onchain/dopamint";
+import { makeKeypairSponsoredSignExec } from "@/onchain/sponsor";
 import type {
   BlackjackResult,
   RoundResult,
@@ -234,6 +240,19 @@ export function usePlayerVsDealer(): PlayerVsDealerGame {
     [client],
   );
 
+  // DOPAMINT mode: route a bot keypair's tx through the backend gas sponsor (ADR-0009/0010), so
+  // the bot needs zero SUI — the settler pays gas, the bot only signs. Returns just the digest;
+  // the create flow re-reads object changes via getTransactionBlock to recover the tunnel id.
+  const sponsoredSignExec = useCallback(
+    (bot: BotIdentity) =>
+      makeKeypairSponsoredSignExec({
+        address: bot.address,
+        keypair: bot.keypair,
+        client: client as never,
+      }),
+    [client],
+  );
+
   const fund = useCallback(() => {
     void (async () => {
       setPhase("funding");
@@ -282,9 +301,12 @@ export function usePlayerVsDealer(): PlayerVsDealerGame {
   // can act as soon as we surface the state.
   const openTable = useCallback(() => {
     clearDealerTimer();
+    // DOPAMINT mode: gas is sponsored and the stake is faucet-minted, so the bots need no SUI —
+    // skip the SUI-balance gate (their SUI balance is 0). SUI fallback still requires funded keys.
     if (
-      balancesRef.current.a < MIN_PLAY_MIST ||
-      balancesRef.current.b < MIN_PLAY_MIST
+      !isDopamintConfigured &&
+      (balancesRef.current.a < MIN_PLAY_MIST ||
+        balancesRef.current.b < MIN_PLAY_MIST)
     ) {
       setError("Fund the table first");
       setPhase("error");
@@ -304,14 +326,44 @@ export function usePlayerVsDealer(): PlayerVsDealerGame {
         const partyA = { address: bots.a.address, publicKey: bots.a.publicKey };
         const partyB = { address: bots.b.address, publicKey: bots.b.publicKey };
 
+        // DOPAMINT mode: stake faucet-minted DOPAMINT (both seats funded from one bot-A coin) and
+        // sponsor the bot's open/close gas (no SUI). SUI fallback: bot A funds the stakes from its
+        // own gas coin and pays its own gas.
+        const coinType = isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined;
+        const stakeCoinId = isDopamintConfigured
+          ? await ensureDopamintStakeCoin({
+              client: client as never,
+              signExec: sponsoredSignExec(bots.a),
+              owner: bots.a.address,
+              need: 2n * STAKE,
+            })
+          : undefined;
+
         setPhase("opening");
-        const createRes = await submit(
-          buildCreateAndFundTx(partyA, partyB, STAKE),
-          bots.a.keypair,
-        );
-        const tunnelId = parseTunnelId(createRes.objectChanges);
+        let createDigest: string;
+        if (isDopamintConfigured) {
+          const { digest } = await sponsoredSignExec(bots.a)(
+            buildCreateAndFundTx(partyA, partyB, STAKE, {
+              coinType,
+              stakeCoinId,
+            }),
+          );
+          await client.waitForTransaction({ digest });
+          createDigest = digest;
+        } else {
+          const createRes = await submit(
+            buildCreateAndFundTx(partyA, partyB, STAKE),
+            bots.a.keypair,
+          );
+          createDigest = createRes.digest;
+        }
+        const createTxb = await client.getTransactionBlock({
+          digest: createDigest,
+          options: { showObjectChanges: true },
+        });
+        const tunnelId = parseTunnelId(createTxb.objectChanges);
         if (!tunnelId) throw new Error("could not find created Tunnel id");
-        setDigests((d) => ({ ...d, create: createRes.digest }));
+        setDigests((d) => ({ ...d, create: createDigest }));
 
         const obj = await client.getObject({
           id: tunnelId,
@@ -371,7 +423,7 @@ export function usePlayerVsDealer(): PlayerVsDealerGame {
         setPhase("error");
       }
     })();
-  }, [bots, client, proto, submit, refreshBalances, clearDealerTimer]);
+  }, [bots, client, proto, submit, sponsoredSignExec, refreshBalances, clearDealerTimer]);
 
   // Co-signed step as a given party; throws if the dual-verify fails so we never advance
   // on an unverified state.
@@ -506,21 +558,34 @@ export function usePlayerVsDealer(): PlayerVsDealerGame {
           0n,
         );
 
+        // Backend /settle sponsors the close server-side. The fallback wallet/bot close needs the
+        // tunnel's coin type (DOPAMINT when configured), and signs sponsored so the bot needs no SUI.
+        const coinType = isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined;
         let closeDigest = "";
-        try {
-          const result = await getControlPlaneClient().settle(
-            tunnelId,
-            coSignedToSettleRequest(settlement, transcript.toRecord().entries),
-          );
-          closeDigest = result.txDigest;
-        } catch (e) {
-          console.warn("[settle] Server-side settle failed, falling back to bot keypair submission:", e);
-          const closeRes = await submit(
-            buildSettleWithRootTx(tunnelId, settlement),
-            bots.a.keypair,
-          );
-          closeDigest = closeRes.digest;
-        }
+        const backendDigest = await settleViaBackend({
+          tunnelId,
+          settlement,
+          transcript: transcript.toRecord().entries,
+          label: "blackjack",
+          fallbackClose: async () => {
+            if (isDopamintConfigured) {
+              const { digest } = await sponsoredSignExec(bots.a)(
+                buildSettleWithRootTx(tunnelId, settlement, coinType),
+              );
+              await client.waitForTransaction({ digest });
+              closeDigest = digest;
+            } else {
+              const closeRes = await submit(
+                buildSettleWithRootTx(tunnelId, settlement),
+                bots.a.keypair,
+              );
+              closeDigest = closeRes.digest;
+            }
+          },
+        });
+
+        // Backend /settle returns its close digest; the fallback assigns its own (above).
+        if (backendDigest) closeDigest = backendDigest;
 
         setDigests((d) => ({
           ...d,
@@ -541,7 +606,7 @@ export function usePlayerVsDealer(): PlayerVsDealerGame {
         busyRef.current = false;
       }
     })();
-  }, [bots, submit, refreshBalances, clearDealerTimer]);
+  }, [bots, client, submit, sponsoredSignExec, refreshBalances, clearDealerTimer]);
 
   // Once the game is terminal (bankrupt or round cap), auto-cash-out so funds settle
   // on-chain rather than stranding an open tunnel.

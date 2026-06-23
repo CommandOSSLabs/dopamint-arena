@@ -8,17 +8,23 @@ import { DistributedTunnel } from "sui-tunnel-ts/core/distributedTunnel";
 import { CrossProtocol, type CrossState, type CrossMove, type CrossDir } from "sui-tunnel-ts/protocol/cross";
 import { Transcript } from "sui-tunnel-ts/proof/transcript";
 import { MpClient, resolveMpWsUrl, type PvpChannel, type Role } from "../../pvp/mpClient";
-import { getControlPlaneClient, resolveBackendUrl } from "../../backend/controlPlane";
+import { resolveBackendUrl } from "../../backend/controlPlane";
 import {
   closeCooperativeWithRoot,
-  depositStake,
   openAndFundSharedTunnel,
   readCreatedAt,
 } from "../../onchain/tunnelTx";
-import { coSignedToSettleRequest } from "../../backend/settleRequest";
+import { useSponsoredSignExec } from "../../onchain/useSponsoredSignExec";
+import {
+  openSharedTunnelStaked,
+  depositStakeStaked,
+  type StakeStrategy,
+} from "../../onchain/stakeTunnel";
+import { DOPAMINT_COIN_TYPE, isDopamintConfigured } from "../../onchain/dopamint";
+import { settleViaBackend } from "../../backend/settle";
 import { deriveView, type CrossView } from "./session-core";
 
-const STAKE = 500n; // per-seat MIST
+const STAKE = 1_000_000_000n; // per-seat: 1 DOPAMINT (9 decimals)
 const STEP_MS = 300; // pacing between ticks (ms)
 
 export type PvpStatus =
@@ -75,6 +81,7 @@ export function usePvpChickenCross(): PvpChickenCross {
   const account = useCurrentAccount();
   const client = useSuiClient();
   const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
+  const sponsored = useSponsoredSignExec();
 
   const [status, setStatus] = useState<PvpStatus>("idle");
   const [role, setRole] = useState<Role | null>(null);
@@ -205,24 +212,35 @@ export function usePvpChickenCross(): PvpChickenCross {
 
           // 2) fund on-chain
           setStatus("funding");
+          const partyA = { address: wallet, publicKey: ephemeral.publicKey };
+          const partyB = { address: match.opponentWallet, publicKey: oppPub };
+          const stake: StakeStrategy = {
+            sponsoredSignExec: sponsored.signExec,
+            walletSignExec: signExec as never,
+            prepareStake: sponsored.prepareStake,
+            selectStakeCoin: sponsored.selectStakeCoin,
+          };
           let tunnelId: string;
           if (match.role === "A") {
-            tunnelId = await openAndFundSharedTunnel({
+            tunnelId = await openSharedTunnelStaked({
               reads,
-              signExec,
-              partyA: { address: wallet, publicKey: ephemeral.publicKey },
-              partyB: {
-                address: match.opponentWallet,
-                publicKey: oppPub,
-              },
+              partyA,
+              partyB,
               amount: STAKE,
+              label: "chickenCross",
+              ...stake,
             });
             mp.announceTunnel(match.matchId, tunnelId);
             channel.sendPeer({ t: "open", tunnelId });
           } else {
             const open = await waitPeer<{ tunnelId: string }>("open");
             tunnelId = open.tunnelId;
-            await depositStake({ signExec, tunnelId, amount: STAKE });
+            await depositStakeStaked({
+              tunnelId,
+              amount: STAKE,
+              label: "chickenCross",
+              ...stake,
+            });
           }
 
           // 3) build the distributed engine
@@ -268,9 +286,9 @@ export function usePvpChickenCross(): PvpChickenCross {
                 waitPeer,
                 reads,
                 signExec,
+                sponsored.signExec,
                 tunnelId,
                 transcript,
-                getControlPlaneClient(),
               ).then(
                 () => setStatus("settled"),
                 (e) => {
@@ -298,7 +316,7 @@ export function usePvpChickenCross(): PvpChickenCross {
         }
       })();
     },
-    [account, client, signAndExecute, maybePropose],
+    [account, client, signAndExecute, sponsored, maybePropose],
   );
 
   const setDir = useCallback((dir: CrossDir) => {
@@ -329,9 +347,11 @@ async function settle(
   waitPeer: <T>(t: string) => Promise<T>,
   reads: Parameters<typeof readCreatedAt>[0],
   signExec: Parameters<typeof closeCooperativeWithRoot>[0]["signExec"],
+  // Gas-sponsored signer: the close fallback must use this in DOPAMINT mode, where the player holds
+  // 0 SUI and a wallet-signed close would throw and strand the staked DOPAMINT.
+  sponsoredSignExec: Parameters<typeof closeCooperativeWithRoot>[0]["signExec"],
   tunnelId: string,
   transcript: Transcript,
-  cp: ReturnType<typeof getControlPlaneClient>,
 ): Promise<void> {
   const createdAt = await readCreatedAt(reads, tunnelId);
   const root = transcript.root();
@@ -351,10 +371,17 @@ async function settle(
   }
   const co = dt.combineSettlementWithRoot(half.settlement, half.sigSelf, fromHex(other.sig));
   if (role !== "A") return;
-  try {
-    await cp.settle(tunnelId, coSignedToSettleRequest(co, transcript.toRecord().entries));
-  } catch (e) {
-    console.error("[chicken-cross] backend settle failed; falling back to wallet close:", e);
-    await closeCooperativeWithRoot({ signExec, tunnelId, settlement: co });
-  }
+  await settleViaBackend({
+    tunnelId,
+    settlement: co,
+    transcript: transcript.toRecord().entries,
+    label: "chickenCross",
+    fallbackClose: () =>
+      closeCooperativeWithRoot({
+        signExec: isDopamintConfigured ? sponsoredSignExec : signExec,
+        tunnelId,
+        settlement: co,
+        coinType: isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined,
+      }),
+  });
 }

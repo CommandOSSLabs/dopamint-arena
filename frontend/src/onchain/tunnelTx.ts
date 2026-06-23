@@ -15,6 +15,7 @@ import {
   buildOpenAndFundOneReturnless as sdkOpenAndFundOneReturnless,
 } from "sui-tunnel-ts/onchain/createAndFund";
 import {
+  buildDeposit as sdkDeposit,
   buildDepositFromGas as sdkDepositFromGas,
   buildCloseFromSettlement as sdkCloseFromSettlement,
   buildCloseWithRootFromSettlement as sdkCloseWithRootFromSettlement,
@@ -41,20 +42,26 @@ const buildDepositFromGas = sdkDepositFromGas as unknown as (
   tx: Transaction,
   p: Parameters<typeof sdkDepositFromGas>[1],
 ) => void;
+const buildDeposit = sdkDeposit as unknown as (
+  tx: Transaction,
+  p: Parameters<typeof sdkDeposit>[1],
+) => void;
 const buildCloseFromSettlement = sdkCloseFromSettlement as unknown as (
   tx: Transaction,
   tunnelId: string,
   settlement: Parameters<typeof sdkCloseFromSettlement>[2],
+  coinType?: string,
 ) => void;
-const buildCloseWithRootFromSettlement =
-  sdkCloseWithRootFromSettlement as unknown as (
-    tx: Transaction,
-    tunnelId: string,
-    settlement: Parameters<typeof sdkCloseWithRootFromSettlement>[2],
-  ) => void;
+const buildCloseWithRootFromSettlement = sdkCloseWithRootFromSettlement as unknown as (
+  tx: Transaction,
+  tunnelId: string,
+  settlement: Parameters<typeof sdkCloseWithRootFromSettlement>[2],
+  coinType?: string,
+) => void;
 const buildOpenAndFundMany = sdkOpenAndFundMany as unknown as (
   tx: Transaction,
   specs: Parameters<typeof sdkOpenAndFundMany>[1],
+  opts?: Parameters<typeof sdkOpenAndFundMany>[2],
 ) => void;
 const buildRaiseDisputeFromUpdate = sdkRaiseDisputeFromUpdate as unknown as (
   tx: Transaction,
@@ -119,6 +126,10 @@ export async function openAndFundSharedTunnel(opts: {
   amount: bigint;
   timeoutMs?: bigint;
   penaltyAmount?: bigint;
+  /** Split seat A's stake from this user coin (gas-sponsored path); else from the gas coin. */
+  stakeCoinId?: string;
+  /** Coin type `T` for the tunnel; defaults to SUI. Pass DOPAMINT to stake the faucet token. */
+  coinType?: string;
 }): Promise<string> {
   const tx = new Transaction();
   buildOpenAndFundSeatA(tx, {
@@ -127,6 +138,8 @@ export async function openAndFundSharedTunnel(opts: {
     aAmount: opts.amount,
     timeoutMs: opts.timeoutMs ?? 86_400_000n,
     penaltyAmount: opts.penaltyAmount ?? 0n,
+    stakeCoin: opts.stakeCoinId ? tx.object(opts.stakeCoinId) : undefined,
+    coinType: opts.coinType,
   });
   const { digest } = await opts.signExec(tx);
   await opts.reads.waitForTransaction({ digest });
@@ -153,18 +166,29 @@ export async function openAndFundSelfPlay(opts: {
   bAmount: bigint;
   timeoutMs?: bigint;
   penaltyAmount?: bigint;
+  /** Split BOTH seats' stakes from this user coin (gas-sponsored path); else from the gas coin. */
+  stakeCoinId?: string;
+  /** Coin type `T` for the tunnels; defaults to SUI. Pass DOPAMINT to stake the faucet token. */
+  coinType?: string;
 }): Promise<string> {
   const tx = new Transaction();
-  buildOpenAndFundMany(tx, [
+  buildOpenAndFundMany(
+    tx,
+    [
+      {
+        partyA: { ...opts.partyA, signatureType: SignatureScheme.ED25519 },
+        partyB: { ...opts.partyB, signatureType: SignatureScheme.ED25519 },
+        aAmount: opts.aAmount,
+        bAmount: opts.bAmount,
+        timeoutMs: opts.timeoutMs ?? 86_400_000n,
+        penaltyAmount: opts.penaltyAmount ?? 0n,
+      },
+    ],
     {
-      partyA: { ...opts.partyA, signatureType: SignatureScheme.ED25519 },
-      partyB: { ...opts.partyB, signatureType: SignatureScheme.ED25519 },
-      aAmount: opts.aAmount,
-      bAmount: opts.bAmount,
-      timeoutMs: opts.timeoutMs ?? 86_400_000n,
-      penaltyAmount: opts.penaltyAmount ?? 0n,
+      coinType: opts.coinType,
+      sourceCoin: opts.stakeCoinId ? tx.object(opts.stakeCoinId) : undefined,
     },
-  ]);
+  );
   const { digest } = await opts.signExec(tx);
   await opts.reads.waitForTransaction({ digest });
   const txb = await opts.reads.getTransactionBlock({
@@ -212,14 +236,25 @@ export async function openAndFundSelfPlayReturnless(opts: {
   return tunnelId;
 }
 
-/** Deposit this seat's stake; the Move routes it by sender address (gated). */
+/** Deposit this seat's stake; the Move routes it by sender address (gated). With `stakeCoinId`
+ *  the stake is split off that user coin (gas-sponsored path); otherwise off the gas coin. */
 export async function depositStake(opts: {
   signExec: SignExec;
   tunnelId: string;
   amount: bigint;
+  stakeCoinId?: string;
+  /** Coin type `T`; defaults to SUI. Pass DOPAMINT to deposit the faucet token. */
+  coinType?: string;
 }): Promise<void> {
   const tx = new Transaction();
-  buildDepositFromGas(tx, { tunnelId: opts.tunnelId, amount: opts.amount });
+  if (opts.stakeCoinId) {
+    const [coin] = tx.splitCoins(tx.object(opts.stakeCoinId), [
+      tx.pure.u64(opts.amount),
+    ]);
+    buildDeposit(tx, { tunnelId: opts.tunnelId, coin, coinType: opts.coinType });
+  } else {
+    buildDepositFromGas(tx, { tunnelId: opts.tunnelId, amount: opts.amount });
+  }
   await opts.signExec(tx);
 }
 
@@ -240,9 +275,10 @@ export async function closeCooperative(opts: {
   signExec: SignExec;
   tunnelId: string;
   settlement: CoSignedSettlement;
+  coinType?: string;
 }): Promise<string> {
   const tx = new Transaction();
-  buildCloseFromSettlement(tx, opts.tunnelId, opts.settlement);
+  buildCloseFromSettlement(tx, opts.tunnelId, opts.settlement, opts.coinType);
   const { digest } = await opts.signExec(tx);
   return digest;
 }
@@ -254,9 +290,15 @@ export async function closeCooperativeWithRoot(opts: {
   signExec: SignExec;
   tunnelId: string;
   settlement: CoSignedSettlementWithRoot;
+  coinType?: string;
 }): Promise<string> {
   const tx = new Transaction();
-  buildCloseWithRootFromSettlement(tx, opts.tunnelId, opts.settlement);
+  buildCloseWithRootFromSettlement(
+    tx,
+    opts.tunnelId,
+    opts.settlement,
+    opts.coinType,
+  );
   const { digest } = await opts.signExec(tx);
   return digest;
 }

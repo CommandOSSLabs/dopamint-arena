@@ -68,7 +68,7 @@ test("buildOpenAndFundMany makes one SplitCoins and N create_and_fund calls", ()
   const funds = cmds.filter(
     (c) =>
       c.$kind === "MoveCall" &&
-      c.MoveCall?.function === "create_and_fund_with_id",
+      c.MoveCall?.function === "create_and_fund",
   );
   assert.equal(splits.length, 1);
   assert.equal(funds.length, n);
@@ -128,7 +128,7 @@ test("buildOpenAndFundMany funds a non-SUI batch from a caller-supplied source c
   const funds = cmds.filter(
     (c) =>
       c.$kind === "MoveCall" &&
-      c.MoveCall?.function === "create_and_fund_with_id",
+      c.MoveCall?.function === "create_and_fund",
   );
   assert.equal(splits.length, 1);
   assert.equal(funds.length, n);

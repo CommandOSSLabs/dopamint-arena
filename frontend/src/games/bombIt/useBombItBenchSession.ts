@@ -5,7 +5,12 @@ import { OffchainTunnel } from "sui-tunnel-ts/core/tunnel";
 import { BombItProtocol, BOMB_IT_MIN_STAKE } from "sui-tunnel-ts/protocol/bombIt";
 import type { BombItState, BombItMove } from "sui-tunnel-ts/protocol/bombIt";
 import { useTelemetry } from "../../telemetry/TelemetryProvider";
-import { closeCooperative, openAndFundSelfPlay, readCreatedAt } from "../../onchain/tunnelTx";
+import { closeCooperativeWithRoot, openAndFundSelfPlay, readCreatedAt } from "../../onchain/tunnelTx";
+import { Transcript } from "sui-tunnel-ts/proof/transcript";
+import { settleViaBackend } from "../../backend/settle";
+import { useSponsoredSignExec } from "../../onchain/useSponsoredSignExec";
+import { withSponsorFallback } from "../../onchain/sponsor";
+import { DOPAMINT_COIN_TYPE, isDopamintConfigured } from "../../onchain/dopamint";
 import { deriveView, sessionResult, stepSession, type BombItResult, type BombItView } from "./session-core";
 
 /**
@@ -18,9 +23,10 @@ import { deriveView, sessionResult, stepSession, type BombItResult, type BombItV
  * so the throughput it reports is settleable, not synthetic. Twin of useChickenCrossSession.
  */
 
-/** Per-seat locked stake (MIST). The smallest fundable stake — this is an exhibition bench that
- *  loops many games, so keep the per-game SUI footprint minimal (spec §3 testnet-SUI long-pole). */
-const STAKE = BOMB_IT_MIN_STAKE;
+/** DOPAMINT stake locked per seat (1 DOPAMINT, 9 decimals). The SUI fallback uses
+ *  BOMB_IT_MIN_STAKE instead — this bench loops many games, so the per-game SUI footprint must
+ *  stay minimal (spec §3 testnet-SUI long-pole). */
+const STAKE = 1_000_000_000n;
 /** Render/measure cadence. Ticks are batched per frame to hit targetTps regardless of this value. */
 const FRAME_MS = 50;
 const DEFAULT_TARGET_TPS = 75;
@@ -59,6 +65,7 @@ export function useBombItBenchSession(): BombItBenchSession {
   const account = useCurrentAccount();
   const client = useSuiClient();
   const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
+  const sponsored = useSponsoredSignExec();
 
   const [status, setStatus] = useState<BenchStatus>("idle");
   const [running, setRunning] = useState(false);
@@ -192,14 +199,48 @@ export function useBombItBenchSession(): BombItBenchSession {
           const protocol = new BombItProtocol();
 
           setStatus("funding");
-          const tunnelId = await openAndFundSelfPlay({
-            reads,
-            signExec,
-            partyA: { address: a.address, publicKey: a.keyPair.publicKey },
-            partyB: { address: b.address, publicKey: b.keyPair.publicKey },
-            aAmount: STAKE,
-            bAmount: STAKE,
-          });
+          const partyA = { address: a.address, publicKey: a.keyPair.publicKey };
+          const partyB = { address: b.address, publicKey: b.keyPair.publicKey };
+          const coinType = isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined;
+          // Per-path stake: 1 DOPAMINT vs the protocol minimum on the SUI fallback (so the fallback
+          // doesn't lock real SUI). The same value funds on-chain AND inits the off-chain tunnel.
+          const stakePerSeat = isDopamintConfigured ? STAKE : BOMB_IT_MIN_STAKE;
+          // DOPAMINT (ADR-0010): faucet both seats' stake invisibly (gas-sponsored) and stake
+          // DOPAMINT — free for a 0-SUI player. SUI path (DOPAMINT env unset): sponsored SUI stake
+          // with a sender-pays fallback (ADR-0009).
+          const tunnelId = isDopamintConfigured
+            ? await openAndFundSelfPlay({
+                reads,
+                signExec: sponsored.signExec as never,
+                partyA,
+                partyB,
+                aAmount: stakePerSeat,
+                bAmount: stakePerSeat,
+                coinType,
+                stakeCoinId: await sponsored.prepareStake(2n * stakePerSeat),
+              })
+            : await withSponsorFallback(
+                async () =>
+                  openAndFundSelfPlay({
+                    reads,
+                    signExec: sponsored.signExec as never,
+                    partyA,
+                    partyB,
+                    aAmount: stakePerSeat,
+                    bAmount: stakePerSeat,
+                    stakeCoinId: await sponsored.selectStakeCoin(2n * stakePerSeat),
+                  }),
+                () =>
+                  openAndFundSelfPlay({
+                    reads,
+                    signExec: signExec as never,
+                    partyA,
+                    partyB,
+                    aAmount: stakePerSeat,
+                    bAmount: stakePerSeat,
+                  }),
+                "bombIt bench open/fund",
+              );
           if (!runningRef.current) break;
           const createdAt = await readCreatedAt(reads, tunnelId);
 
@@ -210,12 +251,14 @@ export function useBombItBenchSession(): BombItBenchSession {
             b.keyPair,
             a.address,
             b.address,
-            { a: STAKE, b: STAKE },
+            { a: stakePerSeat, b: stakePerSeat },
           );
+          const transcript = new Transcript(tunnelId);
           gameUpdatesRef.current = 0;
           frameUpdatesRef.current = 0;
           frameBytesRef.current = 0;
-          tunnel.onUpdate = (_u, bytes) => {
+          tunnel.onUpdate = (u, bytes) => {
+            transcript.append(u);
             gameUpdatesRef.current += 1;
             totalUpdatesRef.current += 1;
             frameUpdatesRef.current += 1;
@@ -250,8 +293,24 @@ export function useBombItBenchSession(): BombItBenchSession {
               amount: `+$${Number(tunnel.state.total)}`,
             });
           }
-          const settlement = tunnel.buildSettlement(createdAt);
-          await closeCooperative({ signExec, tunnelId, settlement });
+          // Settle through the backend /settle API: the server submits the close AND archives the
+          // transcript (ADR-0002/0005). Fall back to a wallet/sponsor close if the backend is down.
+          // coinType must match the tunnel's coin; closing via the gas sponsor is free for a 0-SUI
+          // player (DOPAMINT), while the SUI fallback closes sender-pays.
+          const settlement = tunnel.buildSettlementWithRoot(createdAt, transcript.root(), 0n);
+          await settleViaBackend({
+            tunnelId,
+            settlement,
+            transcript: transcript.toRecord().entries,
+            label: "bombIt",
+            fallbackClose: () =>
+              closeCooperativeWithRoot({
+                signExec: (isDopamintConfigured ? sponsored.signExec : signExec) as never,
+                tunnelId,
+                settlement,
+                coinType,
+              }),
+          });
 
           setGamesSettled((n) => n + 1);
           setTotalUpdates(totalUpdatesRef.current);
@@ -267,7 +326,7 @@ export function useBombItBenchSession(): BombItBenchSession {
         setRunning(false);
       }
     })();
-  }, [account, client, signAndExecute, report, runTicks, stopTimer]);
+  }, [account, client, signAndExecute, sponsored, report, runTicks, stopTimer]);
 
   const stop = useCallback(() => {
     runningRef.current = false;

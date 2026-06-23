@@ -101,6 +101,7 @@ async fn main() -> anyhow::Result<()> {
         // default is intentional: it's the forcing function that keeps per-tunnel transcripts
         // small — each game caps its tunnel length so the settle body fits.
         .route("/v1/tunnels/:tunnel_id/settle", post(routes::settle))
+        .route("/v1/sponsor", post(routes::sponsor))
         .route("/v1/stats/live", get(routes::stats_live))
         .route("/v1/mp", get(crate::mp::ws::mp_upgrade))
         .layer(TraceLayer::new_for_http())
