@@ -80,6 +80,7 @@ import { LocalTransactionsFeed } from "../panels/LocalTransactionsFeed";
 import { SystemDashboard } from "../panels/SystemDashboard";
 import { TpsChart } from "../panels/TpsChart";
 import { GameWindow } from "./GameWindow";
+import { GameCabinet } from "@/shell/cabinet/GameCabinet";
 import { MobileArena } from "./MobileArena";
 import type { MobileSection } from "./AppShell";
 
@@ -946,7 +947,11 @@ export function ArenaView() {
               onRestore={fl ? () => dockFloat(item.id) : undefined}
               onClose={() => close(item.id)}
             >
-              <Content windowId={item.id} onClose={() => close(item.id)} />
+              {/* Shared arcade cabinet: hover → pause → take-over overlay, common to every
+                  window. Inert for games that don't register a CabinetController yet. */}
+              <GameCabinet>
+                <Content windowId={item.id} onClose={() => close(item.id)} />
+              </GameCabinet>
             </GameWindow>
           );
           // Always wrap identically — float-handles + focus-to-front only when

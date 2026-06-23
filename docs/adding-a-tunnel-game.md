@@ -91,6 +91,16 @@ Copy the reference game directory and adapt. Read the chosen reference under `fr
 6. Gate (run all): see Gate below.
 ```
 
+**Attract / take-over (canonical for self-play).** To get the arcade
+hover → pause → "Play vs Bot" UX for free, the game opts into the shared cabinet:
+drive auto from your kit (step 3 already does), expose `pause`/`resume` + a manual
+mode on the hook, and register a `CabinetController` in your App
+(`useRegisterCabinet`). The `GameCabinet` wrap in `Desktop` is automatic; a game
+that registers nothing stays inert. Reference: tic-tac-toe's `App.tsx` /
+`useBotGame.ts`; design in
+[superpowers/specs/2026-06-23-arena-attract-takeover-shell-design.md](superpowers/specs/2026-06-23-arena-attract-takeover-shell-design.md),
+decision in [decisions/0012-arena-attract-cabinet-seam.md](decisions/0012-arena-attract-cabinet-seam.md).
+
 ## Reporting TPS (heartbeat contract)
 
 Self-play only. The backend never sees your moves — it derives the live TPS as a windowed
