@@ -19,12 +19,6 @@ import { PlacementBoard } from "./components/PlacementBoard";
 import { BattleView } from "./components/BattleView";
 import { useBattleship } from "./useBattleship";
 import { useBattleshipPvp } from "./useBattleshipPvp";
-import {
-  BOT_CONFIGS,
-  BOT_DIFFICULTIES,
-  DEFAULT_BOT_DIFFICULTY,
-  type BotDifficulty,
-} from "./engine/bot";
 
 type Mode = "bot" | "pvp";
 
@@ -41,13 +35,6 @@ const BTN_PRIMARY =
 const BTN_SECONDARY =
   "inline-flex w-full items-center justify-center gap-2 rounded-full border border-[#cab1ff]/35 bg-[#cab1ff]/8 px-5 py-3 text-sm font-semibold text-[#cab1ff] transition-all hover:border-[#cab1ff]/70 hover:bg-[#cab1ff]/15 active:scale-[0.97]";
 
-/** One-line skill blurb, shown on the difficulty cards so the choice is informed. */
-const DIFFICULTY_BLURB: Record<BotDifficulty, string> = {
-  easy: "Fires at random and chases hits. A gentle warm-up.",
-  normal: "Hunts in a checkerboard and follows your hull lines.",
-  hard: "Probability-density targeting — it plays to win.",
-};
-
 /**
  * Battleship over a REAL Sui tunnel. Both modes require a connected wallet (gas is
  * sponsored, so play is free): vs-Bot opens + funds a self-play tunnel from one
@@ -56,8 +43,10 @@ const DIFFICULTY_BLURB: Record<BotDifficulty, string> = {
  * store, so minimizing or resizing the window never drops the game. ADR 0003.
  */
 export function BattleshipWindow({ windowId }: GameWindowProps) {
+  // Default straight into vs-Bot (it auto-starts with autopilot on); Back reaches the
+  // chooser for PvP. A remount restores the window's last mode.
   const [mode, setModeState] = useState<Mode | null>(
-    () => modeStore.get(windowId) ?? null,
+    () => modeStore.get(windowId) ?? "bot",
   );
   useEffect(() => {
     registerWindowDisposer(windowId, "battleship-mode", () => {
@@ -74,14 +63,11 @@ export function BattleshipWindow({ windowId }: GameWindowProps) {
   // width AND height (container queries + cqh units), not the viewport — correct
   // in a small floating window on a big screen, or full-width on mobile.
   return (
-    <div
-      className="relative h-full min-h-0 overflow-hidden bg-cover bg-center bg-no-repeat text-arena-text [container-type:size]"
-      style={{ backgroundImage: "url('/games/battleship-bg.png')" }}
-    >
-      {/* Dark overlay & blur to ensure readability */}
-      <div className="pointer-events-none absolute inset-0 z-0 bg-slate-950/85 backdrop-blur-[2px]" />
-      {/* Scanline pattern for radar effect */}
-      <div className="pointer-events-none absolute inset-0 z-0 opacity-[0.04] bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.25)_50%),linear-gradient(90deg,rgba(255,0,0,0.06),rgba(0,255,0,0.02),rgba(0,0,255,0.06))] bg-[size:100%_4px,6px_100%]" />
+    <div className="relative h-full min-h-0 overflow-hidden text-arena-text [container-type:size] bg-[radial-gradient(ellipse_at_50%_38%,rgba(97,61,255,0.18)_0%,rgba(20,16,45,0.6)_46%,#07070f_100%)]">
+      {/* Sonar sweep glow: a second, offset radial in lilac for depth. */}
+      <div className="pointer-events-none absolute inset-0 z-0 bg-[radial-gradient(120%_80%_at_85%_15%,rgba(202,177,255,0.12),transparent_55%)]" />
+      {/* Scanline pattern for the radar effect (pure CSS, no asset). */}
+      <div className="pointer-events-none absolute inset-0 z-0 opacity-[0.05] bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.35)_50%),linear-gradient(90deg,rgba(202,177,255,0.06),rgba(118,90,255,0.03),rgba(97,61,255,0.06))] bg-[size:100%_4px,6px_100%]" />
       {/* Top ambient glow line */}
       <div className="pointer-events-none absolute left-0 right-0 top-0 z-10 h-[1.5px] bg-gradient-to-r from-transparent via-[#cab1ff]/50 to-transparent" />
 
@@ -99,7 +85,7 @@ export function BattleshipWindow({ windowId }: GameWindowProps) {
   );
 }
 
-/** Home screen: pick an opponent. Difficulty is chosen later, inside vs-Bot. */
+/** Home screen (reached via Back): pick an opponent — vs-Bot or a PvP match. */
 function ModeChooser({ onPick }: { onPick: (m: Mode) => void }) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-5 p-5 text-center">
@@ -122,54 +108,6 @@ function ModeChooser({ onPick }: { onPick: (m: Mode) => void }) {
           <Users className="size-4" /> Find Match · PvP
         </button>
       </div>
-    </div>
-  );
-}
-
-/** Skill picker shown after entering vs-Bot — big tappable cards, then deploy. */
-function DifficultySelect({
-  onConfirm,
-}: {
-  onConfirm: (d: BotDifficulty) => void;
-}) {
-  const [picked, setPicked] = useState<BotDifficulty>(DEFAULT_BOT_DIFFICULTY);
-  return (
-    <div className="flex h-full flex-col items-center justify-center gap-4 p-4">
-      <div className="flex flex-col items-center gap-1 text-center">
-        <span className="wal-eyebrow">Choose your foe</span>
-        <h3 className="wal-display text-2xl text-white">Bot difficulty</h3>
-      </div>
-      <div className="grid w-full max-w-md grid-cols-1 gap-2 @[24rem]:grid-cols-3">
-        {BOT_DIFFICULTIES.map((d) => {
-          const active = d === picked;
-          return (
-            <button
-              key={d}
-              onClick={() => setPicked(d)}
-              aria-pressed={active}
-              className={cn(
-                "flex flex-col gap-1 rounded-2xl border p-3 text-left transition-all active:scale-[0.98]",
-                active
-                  ? "border-[#cab1ff] bg-[#cab1ff]/10 shadow-[0_0_16px_rgba(202,177,255,0.25)]"
-                  : "border-[#cab1ff]/15 bg-[#cab1ff]/[0.04] hover:border-[#cab1ff]/40",
-              )}
-            >
-              <span className="wal-mono text-xs uppercase tracking-wider text-[#cab1ff]">
-                {BOT_CONFIGS[d].label}
-              </span>
-              <span className="text-[11px] leading-snug text-arena-muted">
-                {DIFFICULTY_BLURB[d]}
-              </span>
-            </button>
-          );
-        })}
-      </div>
-      <button
-        onClick={() => onConfirm(picked)}
-        className={cn(BTN_PRIMARY, "max-w-xs")}
-      >
-        <Crosshair className="size-4" /> Deploy fleet
-      </button>
     </div>
   );
 }
@@ -325,7 +263,9 @@ function ModeFrame({
         )}
         {headerExtra && <div className="ml-auto shrink-0">{headerExtra}</div>}
       </header>
-      <div className="relative min-h-0 flex-1">{children}</div>
+      {/* Scrolls vertically when a pane is taller than the window (e.g. stacked
+          boards on a short phone); the radar background behind stays fixed. */}
+      <div className="relative min-h-0 flex-1 overflow-y-auto">{children}</div>
     </div>
   );
 }
@@ -367,9 +307,8 @@ function BotGame({
     status,
     view,
     error,
-    startBattle,
     fire,
-    setDifficulty,
+    autoStartOnLoad,
     auto,
     setAuto,
     score,
@@ -379,21 +318,16 @@ function BotGame({
     reset,
   } = useBattleship(windowId);
   const account = useCurrentAccount();
-  // Difficulty lives here now (chosen after entering vs-Bot), not on the home
-  // chooser. `confirmed` gates the picker so it shows once, then sticks across a
-  // Play-Again — re-pick by leaving and re-entering vs-Bot.
-  const [difficulty, setLocalDifficulty] = useState<BotDifficulty>(
-    DEFAULT_BOT_DIFFICULTY,
-  );
-  const [confirmed, setConfirmed] = useState(false);
-  // Manual rematch: after a game ends (autopilot off), "Play Again" re-opens the
-  // placement board to deploy a fresh fleet on the SAME tunnel.
+  // Manual rematch: with autopilot off, "Play Again" re-opens the placement board to
+  // deploy a fresh fleet for the next game on the SAME tunnel.
   const [placingNext, setPlacingNext] = useState(false);
 
-  // Keep the live session's foe skill in sync with the chosen difficulty.
+  // First open: drop straight into an auto-played game once the wallet is ready
+  // (idempotent — the session guards against re-opening a tunnel). Skipped while
+  // the player is hand-placing the next game.
   useEffect(() => {
-    setDifficulty(difficulty);
-  }, [difficulty, setDifficulty]);
+    if (!placingNext) autoStartOnLoad();
+  }, [autoStartOnLoad, account?.address, status, placingNext]);
 
   const back = () => {
     setPlacingNext(false);
@@ -405,19 +339,20 @@ function BotGame({
     reset();
   };
 
-  const skill = BOT_CONFIGS[difficulty].label;
   const live = status === "playing";
+  // State bar (top): which game + the running score.
+  const stateLabel = `vs Bot · Game ${gamesPlayed + 1} · ${score.you}–${score.foe}`;
   let title: ReactNode = "vs Bot";
   let content: ReactNode;
   if (!account && !view) {
-    // No wallet → require connect before placing a fleet (the match is on-chain).
+    // No wallet → require connect before the on-chain match opens.
     content = (
       <ConnectWalletPane note="Bot matches open a real tunnel and settle on-chain — gas is sponsored, so it's free to play." />
     );
   } else if (status === "error") {
     content = <ErrorPane error={error} onBack={back} />;
   } else if (status === "settling" || status === "settled") {
-    title = `vs Bot · ${skill}`;
+    title = stateLabel;
     content = (
       <SettledPane
         score={score}
@@ -425,42 +360,25 @@ function BotGame({
         onNewGame={newSession}
       />
     );
-  } else if (
-    !confirmed &&
-    !view &&
-    (status === "idle" || status === "placing")
-  ) {
-    content = (
-      <DifficultySelect
-        onConfirm={(d) => {
-          setLocalDifficulty(d);
-          setConfirmed(true);
-        }}
-      />
-    );
   } else if (status === "funding") {
-    title = `vs Bot · ${skill}`;
     content = (
       <Centered>
         Opening + funding the tunnel on-chain… approve in your wallet.
       </Centered>
     );
   } else if (live && placingNext) {
-    title = `vs Bot · ${skill}`;
+    title = "vs Bot · place fleet";
     content = (
       <PlacementBoard
-        ctaLabel="Deploy fleet"
+        ctaLabel="Start"
         onReady={(p) => {
           setPlacingNext(false);
           playNextGame(p);
         }}
       />
     );
-  } else if (!view || status === "idle" || status === "placing") {
-    title = `vs Bot · ${skill}`;
-    content = <PlacementBoard onReady={startBattle} />;
-  } else {
-    title = `vs Bot · ${skill}`;
+  } else if (live && view) {
+    title = stateLabel;
     content = (
       <BattleView
         view={view}
@@ -473,19 +391,18 @@ function BotGame({
         gameNumber={gamesPlayed + 1}
       />
     );
+  } else {
+    // Idle for the instant before the auto-start lands (e.g. wallet just connected).
+    content = <Centered>Starting…</Centered>;
   }
-  // Auto toggle appears once you're past difficulty select (placement onward); the
-  // Settle action appears whenever a tunnel is live (one tunnel hosts many games).
-  const showAuto =
-    status !== "error" &&
-    status !== "settling" &&
-    status !== "settled" &&
-    (confirmed || Boolean(view));
+
+  // Header (top): Auto toggle + Settle whenever a tunnel is live (one tunnel hosts
+  // many games). Hidden while hand-placing the next game.
   const headerExtra =
-    showAuto || live ? (
+    live && !placingNext ? (
       <div className="flex items-center gap-1.5">
-        {showAuto && <AutoToggle on={auto} onChange={setAuto} />}
-        {live && <SettleButton onSettle={settleNow} />}
+        <AutoToggle on={auto} onChange={setAuto} />
+        <SettleButton onSettle={settleNow} />
       </div>
     ) : undefined;
   return (

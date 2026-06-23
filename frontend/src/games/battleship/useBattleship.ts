@@ -46,21 +46,22 @@ import {
   nextMove,
   randomFleetSecret,
 } from "./engine/selfPlay";
-import { type BotDifficulty, DEFAULT_BOT_DIFFICULTY } from "./engine/bot";
+import { type BotDifficulty } from "./engine/bot";
 
 /** DOPAMINT stake locked per seat (1 DOPAMINT, 9 decimals). */
 const LOCKED_PER_SEAT = 1_000_000_000n;
 /** SUI-fallback stake per seat (MIST), when the DOPAMINT env is unset. */
 const SUI_PER_SEAT = 500n;
 const STAKE = 100n;
-/** Animation pacing for the bot's automatic moves (manual vs-bot — readable beats). */
-const BOT_SHOOT_MS = 550;
-const BOT_REVEAL_MS = 240;
-/** Autopilot pacing — the floor: 0ms, so a self-playing match resolves as fast as
- *  the event loop allows. `sleep(0)` still yields one frame per step, so the boards
- *  repaint (not a single jump to the result) while staying near-instant. */
-const AUTO_SHOOT_MS = 0;
-const AUTO_REVEAL_MS = 0;
+// Throughput, not per-move pacing: the driver applies moves in a synchronous batch
+// and only renders + yields to the UI once per ~frame. This uncaps TPS from both the
+// setTimeout(0) clamp (~4ms/move) and the per-move React re-render of the boards,
+// while still repainting ~once a frame. 8ms ≈ half a 16ms frame, so the UI stays
+// responsive between yields.
+const FRAME_BUDGET_MS = 8;
+/** The single bot skill — difficulty modes (easy/normal/hard) were dropped in favour
+ *  of one mode; this is the smartest profile (probability-density targeting). */
+const BOT_SKILL: BotDifficulty = "hard";
 
 export type BattleshipStatus =
   | "idle"
@@ -81,10 +82,11 @@ export interface BattleshipSession {
   startBattle: (placements: Placement[]) => void;
   /** Fire at an enemy cell (only legal on your turn). */
   fire: (cell: number) => void;
-  /** Set the foe bot's skill — applies to its next shot (safe to change mid-match). */
-  setDifficulty: (difficulty: BotDifficulty) => void;
+  /** First-open default: auto-place a fleet, open the tunnel, and start playing with
+   *  autopilot ON — instant action. Idempotent (a remount won't re-trigger). */
+  autoStartOnLoad: () => void;
   /** True while autopilot also fires YOUR shots; with it on, finished games rematch
-   *  automatically on the SAME tunnel until you settle. */
+   *  automatically on the SAME tunnel until you settle. ON by default. */
   auto: boolean;
   /** Toggle autopilot for your seat; flipping it on resumes firing / auto-rematch. */
   setAuto: (on: boolean) => void;
@@ -136,15 +138,16 @@ class BotSession {
   private status: BattleshipStatus = "idle";
   private view: BattleshipView | null = null;
   private error: string | null = null;
-  // Autopilot: when on, the driver fires YOUR shots too (with the same skill as
-  // the foe), so the whole match plays itself. Lives on the session, not React,
-  // because the off-React advance loop reads it each step.
-  private auto = false;
+  // Autopilot: when on, the driver fires YOUR shots too, so the whole match plays
+  // itself. ON by default — opening the game drops you straight into the action
+  // (toggle off to take manual control). Lives on the session, not React, because
+  // the off-React advance loop reads it each step.
+  private auto = true;
   private snap: BotSnapshot = {
     status: "idle",
     view: null,
     error: null,
-    auto: false,
+    auto: true,
     score: { you: 0, foe: 0 },
     gamesPlayed: 0,
   };
@@ -173,8 +176,8 @@ class BotSession {
   private txnId = 0;
   private lastYourShot: number | null = null;
   private lastEnemyShot: number | null = null;
-  /** Foe bot skill; only affects shot selection, so it can change any time. */
-  private difficulty: BotDifficulty = DEFAULT_BOT_DIFFICULTY;
+  // First-open auto-start guard: set once so a remount doesn't re-open a tunnel.
+  private didAutoStart = false;
   // Bumped on reset/dispose so an in-flight bot loop knows to abandon ship.
   private gen = 0;
   // Control-plane TPS heartbeat (ADR-0002, self-play contract). The backend derives
@@ -184,6 +187,16 @@ class BotSession {
   private moveCount = 0;
   private actions = 0;
   private lastHeartbeat = 0;
+  // Local-telemetry counters accumulated per move, pushed to React once per frame
+  // (see `flushCounters`) so the hot loop never pays a setState per move.
+  private pending = { updates: 0, signatures: 0, verifications: 0, bytes: 0 };
+
+  /** Push the frame's accumulated counters to the telemetry rail in one update. */
+  private flushCounters() {
+    if (this.pending.updates === 0) return;
+    this.deps?.report.bumpCounters(this.pending);
+    this.pending = { updates: 0, signatures: 0, verifications: 0, bytes: 0 };
+  }
 
   subscribe = (cb: () => void): (() => void) => {
     this.listeners.add(cb);
@@ -242,6 +255,7 @@ class BotSession {
     this.advancing = false;
     this.starting = false;
     this.settleRequested = false;
+    this.didAutoStart = false; // a fresh entry/new-session re-arms the auto-start
     this.tunnel = null;
     this.protocol = null;
     this.transcript = null;
@@ -408,18 +422,18 @@ class BotSession {
     const tunnel = this.tunnel;
     const protocol = this.protocol;
     try {
+      // Render + yield once per frame budget (not per move). Within a budget, moves
+      // run synchronously back-to-back so TPS isn't throttled by setTimeout or React.
+      let frameDeadline = Date.now() + FRAME_BUDGET_MS;
       while (tunnel && protocol && this.secrets) {
         const inner = tunnel.state.inner;
         if (inner.winner !== 0) {
           // A game finished. Tally it once, then decide: loop or stop.
           this.recordGameResult();
-          this.pushView();
           const sessionDone = protocol.isTerminal(tunnel.state); // funds exhausted
           if (!this.auto || this.settleRequested || sessionDone) break;
           // Auto rematch on the SAME tunnel: fresh fleets, A's commit resets the board.
           const next = this.makeMatchSecrets();
-          await sleep(AUTO_SHOOT_MS); // a beat so the final hit + new score register
-          if (this.gen !== myGen || this.tunnel !== tunnel) return;
           this.secrets = next.secrets;
           this.placements = next.placements;
           this.lastYourShot = null;
@@ -428,35 +442,35 @@ class BotSession {
             { type: "commit", root: next.secrets.A.commitment.root },
             "A",
           );
+        } else {
+          const driven = nextMove(inner, this.secrets, Math.random, BOT_SKILL);
+          if (!driven) break;
+          // Human's shot: stop and wait for fire() — unless autopilot drives it too.
+          if (driven.by === "A" && driven.move.type === "shoot" && !this.auto)
+            break;
+          if (driven.move.type === "shoot") {
+            if (driven.by === "A") this.lastYourShot = driven.move.cell;
+            else this.lastEnemyShot = driven.move.cell;
+          }
+          tunnel.step(driven.move, driven.by);
+          // Per-shot rows flood the feed (and re-render it) at autopilot speed — only
+          // log them in MANUAL play, where you can actually read them.
+          if (driven.move.type === "reveal" && !this.auto)
+            this.reportShotTxn(driven.move, driven.by);
+        }
+        // End of frame: flush the batched counters, paint the latest state once, then
+        // yield so the UI can repaint / process input. A synchronous batch never blocks
+        // longer than FRAME_BUDGET_MS.
+        if (Date.now() >= frameDeadline) {
+          this.flushCounters();
           this.pushView();
-          continue;
+          await sleep(0);
+          if (this.gen !== myGen || this.tunnel !== tunnel) return; // reset/disposed
+          frameDeadline = Date.now() + FRAME_BUDGET_MS;
         }
-        const driven = nextMove(
-          inner,
-          this.secrets,
-          Math.random,
-          this.difficulty,
-        );
-        if (!driven) break;
-        // Human's shot: stop and wait for fire() — unless autopilot is on, then drive it too.
-        if (driven.by === "A" && driven.move.type === "shoot" && !this.auto)
-          break;
-        // Autopilot runs at near-instant pacing; manual vs-bot keeps readable beats.
-        // Read `this.auto` fresh each step so toggling it changes the speed at once.
-        if (driven.move.type === "shoot") {
-          await sleep(this.auto ? AUTO_SHOOT_MS : BOT_SHOOT_MS);
-          if (driven.by === "A") this.lastYourShot = driven.move.cell;
-          else this.lastEnemyShot = driven.move.cell;
-        } else if (driven.move.type === "reveal") {
-          await sleep(this.auto ? AUTO_REVEAL_MS : BOT_REVEAL_MS);
-        }
-        if (this.gen !== myGen || this.tunnel !== tunnel) return; // reset/disposed mid-flight
-        tunnel.step(driven.move, driven.by);
-        if (driven.move.type === "reveal")
-          this.reportShotTxn(driven.move, driven.by);
-        this.pushView();
       }
-      this.pushView();
+      this.flushCounters();
+      this.pushView(); // final state always renders (game over / human's turn)
     } catch (e) {
       this.fail(e);
     } finally {
@@ -567,15 +581,16 @@ class BotSession {
         tunnel.onUpdate = (u, bytes) => {
           transcript.append(u);
           // One co-signed update = one action for the control-plane TPS count (ADR-0002);
-          // moveCount is the monotonic nonce. Flush is self-throttled (~1/s).
+          // moveCount is the monotonic nonce.
           this.moveCount += 1;
           this.actions += 1;
-          this.deps?.report.bumpCounters({
-            updates: 1,
-            signatures: 2,
-            verifications: 2,
-            bytes,
-          });
+          // Accumulate the local-telemetry counters here but DON'T touch React per move
+          // — `flushCounters()` pushes the whole frame's delta once, so the hot loop isn't
+          // throttled by a setState (the dominant per-move cost at high TPS).
+          this.pending.updates += 1;
+          this.pending.signatures += 2;
+          this.pending.verifications += 2;
+          this.pending.bytes += bytes;
           this.flushHeartbeat(false);
         };
 
@@ -617,8 +632,14 @@ class BotSession {
     })();
   };
 
-  setDifficulty = (difficulty: BotDifficulty) => {
-    this.difficulty = difficulty;
+  /** First-open default: drop straight into the action. Auto-place a random fleet,
+   *  open the tunnel, and start playing (autopilot is already on). Guarded so a
+   *  remount or a re-render can't re-open a second tunnel. */
+  autoStartOnLoad = () => {
+    if (this.didAutoStart || this.status !== "idle") return;
+    if (!this.deps?.account) return; // wallet not ready yet; the effect retries
+    this.didAutoStart = true;
+    this.startBattle(placeFleetRandom(Math.random));
   };
 
   setAuto = (on: boolean) => {
@@ -739,7 +760,7 @@ export function useBattleship(windowId: string): BattleshipSession {
     playBot: session.playBot,
     startBattle: session.startBattle,
     fire: session.fire,
-    setDifficulty: session.setDifficulty,
+    autoStartOnLoad: session.autoStartOnLoad,
     auto: snap.auto,
     setAuto: session.setAuto,
     score: snap.score,
