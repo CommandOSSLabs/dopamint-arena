@@ -7,6 +7,7 @@ import "./bombIt";
 import "./quantumPoker";
 import "./ticTacToe";
 import "./battleship";
+import "./worldCanvas";
 // Floating-widget modules (catalog: false) — registered for rendering but kept out
 // of the catalog; the desktop opens them centered in the default/reset layout.
 import "./chat";

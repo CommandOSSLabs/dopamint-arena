@@ -1,0 +1,184 @@
+import { useEffect, useRef, useState } from "react";
+import {
+  useWorldCanvasOnchain,
+  type WorldCanvasPhase,
+} from "../useWorldCanvasOnchain";
+import { WorldCanvas } from "./WorldCanvas";
+import { PaletteDock } from "./PaletteDock";
+import { WC, glass, FONT_DISPLAY, FONT_MONO } from "./tokens";
+
+/**
+ * The live wall: mounts the tunnel hook (which opens a sponsored 2-party tunnel
+ * on mount), renders the chunked canvas, and overlays the HUD — paint stats +
+ * live TPS, the on-chain status chip, and the "Agent AI" spawn/stop controls.
+ * One human click = one co-signed paint; each spawned agent paints forever.
+ */
+export function CanvasView() {
+  const engine = useWorldCanvasOnchain();
+  const [color, setColor] = useState(13); // default to Sui blue (index 13)
+  const tps = useRollingTps(engine.status.movesCoSigned);
+
+  return (
+    <div
+      className="relative h-full min-h-0 w-full overflow-hidden"
+      style={{ background: WC.bg, fontFamily: FONT_DISPLAY }}
+    >
+      <WorldCanvas
+        paints={engine.paints}
+        revision={engine.revision}
+        selectedColor={color}
+        disabled={engine.status.phase === "opening"}
+        onPaint={engine.submitHumanPaint}
+      />
+
+      {/* Stats panel (top-left): pixels co-signed + live TPS + active agents */}
+      <div
+        className="absolute left-4 top-4 flex flex-col gap-2 rounded-[14px] px-4 py-3"
+        style={{ ...glass, color: WC.text, minWidth: 168 }}
+      >
+        <Stat
+          label="Pixels co-signed"
+          value={engine.status.movesCoSigned.toLocaleString()}
+          tint={WC.accent}
+        />
+        <Stat label="TPS" value={tps.toFixed(1)} tint={WC.ok} mono />
+        <Stat
+          label="Active agents"
+          value={String(engine.agentCount)}
+          tint={WC.seatB}
+        />
+      </div>
+
+      {/* Status chip (top-right) */}
+      <div className="absolute right-4 top-4">
+        <StatusChip phase={engine.status.phase} onchain={engine.status.onchain} />
+      </div>
+
+      {/* Agent-AI controls (right, below the chip) */}
+      <div className="absolute right-4 top-[64px] flex flex-col items-end gap-2">
+        <button
+          onClick={engine.spawnAgent}
+          className="flex items-center gap-2 rounded-[12px] px-4 py-2.5 text-sm font-bold"
+          style={{
+            color: "#06203B",
+            background: WC.accent,
+            boxShadow: "0 6px 20px rgba(77,162,255,0.45)",
+            cursor: "pointer",
+          }}
+          title="Spawn one bot that paints forever over its own co-signed tunnel"
+        >
+          <span style={{ fontSize: 15 }}>🤖</span> Agent AI
+        </button>
+        {engine.agentCount > 0 && (
+          <button
+            onClick={engine.stopAgents}
+            className="rounded-[12px] px-3 py-1.5 text-xs font-bold"
+            style={{
+              color: WC.text,
+              background: "rgba(255,90,106,0.16)",
+              border: "1px solid rgba(255,90,106,0.4)",
+              cursor: "pointer",
+            }}
+          >
+            ✕ Stop {engine.agentCount} agent{engine.agentCount > 1 ? "s" : ""}
+          </button>
+        )}
+      </div>
+
+      <PaletteDock selected={color} onSelect={setColor} />
+    </div>
+  );
+}
+
+/** Derive a live throughput number from the monotonic co-signed paint count via a
+ *  short sliding window (sampled every 500 ms over ~3 s) — a coarse TPS dial. */
+function useRollingTps(movesCoSigned: number): number {
+  const [tps, setTps] = useState(0);
+  const samples = useRef<{ t: number; n: number }[]>([]);
+  const latest = useRef(movesCoSigned);
+  latest.current = movesCoSigned;
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      const now = performance.now();
+      const s = samples.current;
+      s.push({ t: now, n: latest.current });
+      while (s.length > 1 && now - s[0].t > 3000) s.shift();
+      const first = s[0];
+      const dt = (now - first.t) / 1000;
+      setTps(dt > 0 ? Math.max(0, (latest.current - first.n) / dt) : 0);
+    }, 500);
+    return () => clearInterval(id);
+  }, []);
+
+  return tps;
+}
+
+function Stat({
+  label,
+  value,
+  tint,
+  mono,
+}: {
+  label: string;
+  value: string;
+  tint: string;
+  mono?: boolean;
+}) {
+  return (
+    <div className="flex flex-col gap-0.5">
+      <span
+        className="text-[9.5px] uppercase tracking-[0.16em]"
+        style={{ color: WC.muted, fontFamily: FONT_MONO }}
+      >
+        {label}
+      </span>
+      <span
+        className="text-[19px] font-bold leading-none tabular-nums"
+        style={{ color: tint, fontFamily: mono ? FONT_MONO : FONT_DISPLAY }}
+      >
+        {value}
+      </span>
+    </div>
+  );
+}
+
+const CHIP: Record<
+  WorldCanvasPhase,
+  { label: string; tint: string; pulse: boolean }
+> = {
+  idle: { label: "Idle", tint: WC.muted, pulse: false },
+  opening: { label: "Opening tunnel…", tint: WC.warn, pulse: true },
+  open: { label: "On-chain · live", tint: WC.ok, pulse: true },
+  demo: { label: "Self-play · demo", tint: WC.warn, pulse: true },
+  error: { label: "Error", tint: WC.err, pulse: false },
+};
+
+function StatusChip({
+  phase,
+  onchain,
+}: {
+  phase: WorldCanvasPhase;
+  onchain: boolean;
+}) {
+  const c = CHIP[phase];
+  const label = phase === "open" && !onchain ? CHIP.demo.label : c.label;
+  return (
+    <div
+      className="flex items-center gap-2 rounded-full px-3 py-1.5 text-[11px] font-bold"
+      style={{ ...glass, color: WC.text }}
+    >
+      <span
+        style={{
+          width: 8,
+          height: 8,
+          borderRadius: "50%",
+          background: c.tint,
+          boxShadow: `0 0 9px ${c.tint}`,
+          animation: c.pulse ? "wcPulse 1.6s ease-in-out infinite" : "none",
+        }}
+      />
+      <span style={{ fontFamily: FONT_MONO }}>{label}</span>
+    </div>
+  );
+}
