@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { BotPanel } from "@/games/ticTacToe/app/components/BotPanel";
 import type { Difficulty } from "@/games/ticTacToe/app/hooks/useBotGame";
 
 export type PlayMode = "single" | "auto";
@@ -252,12 +251,6 @@ function DifficultyChoice({
 }
 
 export function SetupScene({
-  balances,
-  onFund,
-  funding,
-  onRefresh,
-  onRebalance,
-  rebalancing,
   funded,
   maxGames,
   setMaxGames,
@@ -270,13 +263,8 @@ export function SetupScene({
   onStart,
   onBack,
   isPortrait = false,
+  preparingLabel,
 }: {
-  balances: { x: bigint; o: bigint };
-  onFund: () => void;
-  funding: boolean;
-  onRefresh: () => Promise<unknown>;
-  onRebalance: () => void;
-  rebalancing: boolean;
   funded: boolean;
   maxGames: number;
   setMaxGames: (n: number) => void;
@@ -289,10 +277,11 @@ export function SetupScene({
   onStart: () => void;
   onBack: () => void;
   isPortrait?: boolean;
+  /** Non-null while actively funding bots — shows a small status indicator instead of
+   *  the Start button's enabled state. */
+  preparingLabel?: string;
 }) {
-  const [activeTab, setActiveTab] = useState<"fund" | "mode" | "difficulty">(
-    "fund",
-  );
+  const [activeTab, setActiveTab] = useState<"mode" | "difficulty">("mode");
 
   return (
     <div
@@ -326,7 +315,7 @@ export function SetupScene({
         </div>
 
         <div className="flex flex-col items-end gap-2 shrink-0">
-          {!funded && (
+          {preparingLabel && (
             <div
               className={`text-right text-secondary font-headline-lg italic animate-pulse bg-secondary/10 rounded-lg border-secondary/30 shadow-sm w-max ${
                 isPortrait
@@ -334,7 +323,7 @@ export function SetupScene({
                   : "text-lg px-4 py-2 border-2"
               }`}
             >
-              * Please fund both bots *
+              {preparingLabel}
             </div>
           )}
           <button
@@ -364,25 +353,6 @@ export function SetupScene({
         <div
           className={`flex gap-1.5 border-primary/20 pb-0.5 shrink-0 mt-2 ${isPortrait ? "border-b-[3px]" : "border-b-[6px]"}`}
         >
-          <button
-            type="button"
-            onClick={() => setActiveTab("fund")}
-            data-testid="ttt-tab-bots"
-            className={`font-headline-lg transition-all relative outline-none whitespace-nowrap ${
-              isPortrait
-                ? "px-4 py-2 text-sm rounded-t-lg border-t-[3px] border-x-[3px] -mb-[3px]"
-                : "px-12 py-5 text-3xl md:text-4xl rounded-t-2xl border-t-[6px] border-x-[6px] -mb-[6px]"
-            } ${
-              activeTab === "fund"
-                ? "border-primary bg-surface text-primary z-10 shadow-[0_-6px_0px_theme('colors.surface')]"
-                : "border-primary/20 bg-surface text-outline hover:text-primary hover:border-primary/40"
-            }`}
-          >
-            {activeTab === "fund" && (
-              <span className="absolute -inset-1.5 bg-tertiary-container/20 -z-10 rounded-t-xl highlight-bg"></span>
-            )}
-            Bots
-          </button>
           <button
             type="button"
             onClick={() => setActiveTab("mode")}
@@ -423,28 +393,6 @@ export function SetupScene({
 
         {/* Tab Content Box - Stretches to bottom */}
         <div className="flex-1 mt-2 flex flex-col justify-start pb-4">
-          {activeTab === "fund" && (
-            <div
-              className={`flex-1 flex flex-col ${isPortrait ? "space-y-2" : "space-y-4"}`}
-            >
-              <h2
-                className={`font-headline-lg-mobile text-primary ${isPortrait ? "text-base mb-1" : "text-2xl mb-2"}`}
-              >
-                Fund the AI Opponents
-              </h2>
-              <BotPanel
-                bots={balances}
-                onFund={onFund}
-                funding={funding}
-                onRefresh={onRefresh}
-                onRebalance={onRebalance}
-                rebalancing={rebalancing}
-                locked={false}
-                isPortrait={isPortrait}
-              />
-            </div>
-          )}
-
           {activeTab === "mode" && (
             <div
               className={`flex-1 flex flex-col justify-start ${isPortrait ? "space-y-4" : "space-y-10"}`}

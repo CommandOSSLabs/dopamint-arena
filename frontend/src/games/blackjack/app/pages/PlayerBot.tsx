@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useGameNavigate } from "@/games/blackjack/app/useGameRouter";
 import { useGameScale } from "@/games/blackjack/app/components/app/ScaledWrapper";
 import {
@@ -263,13 +263,11 @@ export default function PlayerBot() {
   // coin. Persistent bot keys mean one top-up covers many games (deposits are refunded).
   const account = useCurrentAccount();
   const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
+  // True while a wallet fund transaction is in-flight — used to show "Preparing bots…".
   const [walletFunding, setWalletFunding] = useState(false);
-  const [walletError, setWalletError] = useState<string | null>(null);
-
   const fundFromWallet = async () => {
-    setWalletFunding(true);
-    setWalletError(null);
     const prev = balances;
+    setWalletFunding(true);
     try {
       await signAndExecute({
         transaction: buildFundTx(loadOrCreateBots(), TOPUP_PER_BOT_MIST),
@@ -278,26 +276,11 @@ export default function PlayerBot() {
       // value (or time out) instead of reading the stale value once.
       await game.pollBalances(prev);
     } catch (e) {
-      setWalletError(e instanceof Error ? e.message : String(e));
+      console.error("[blackjack] wallet fund failed", e);
     } finally {
       setWalletFunding(false);
     }
   };
-
-  const walletFundEl = account ? (
-    <button
-      onClick={fundFromWallet}
-      disabled={walletFunding}
-      data-testid="bj-fund-wallet"
-      className="border-2 border-amber-500 text-black bg-[#d4af37] hover:bg-amber-400 px-5 py-2.5 md:px-8 md:py-4 rounded-lg md:rounded-xl text-xs md:text-base font-black tracking-widest uppercase transition-all hover:scale-105 active:scale-95 cursor-pointer disabled:opacity-50 disabled:pointer-events-none"
-    >
-      {walletFunding ? "Funding…" : `Top Up SUI`}
-    </button>
-  ) : (
-    <div className="scale-75 md:scale-100 origin-center">
-      <ConnectButton connectText="Connect wallet" />
-    </div>
-  );
 
   const running =
     phase === "funding" ||
@@ -321,14 +304,18 @@ export default function PlayerBot() {
   const autoEvenedRef = useRef(false);
   const autoPilotRef = useRef(false);
   const autoStartedRef = useRef(false);
-  const autoStartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Cancel a pending auto-start if the window unmounts before the config beat elapses.
-  useEffect(
-    () => () => {
-      if (autoStartTimerRef.current) clearTimeout(autoStartTimerRef.current);
-    },
-    [],
-  );
+  // Bumped by the Start button to re-trigger the auto-pilot after Back returns to config.
+  const [startNonce, setStartNonce] = useState(0);
+
+  // Resets one-shot refs and bumps the nonce so the auto-pilot effect re-runs the
+  // even/fund/start path. Back never calls this, so config stays after Back.
+  const handleStart = useCallback(() => {
+    autoEvenedRef.current = false;
+    autoPilotRef.current = false;
+    autoStartedRef.current = false;
+    setStartNonce((n) => n + 1);
+  }, []);
+
   useEffect(() => {
     if (!account || running) return;
     if (!balancesLoaded) return;
@@ -359,46 +346,14 @@ export default function PlayerBot() {
     // rather than jumping straight into the game.
     if (!autoStartedRef.current) {
       autoStartedRef.current = true;
-      autoStartTimerRef.current = setTimeout(() => game.startAuto(), 1500);
+      game.startAuto();
     }
-  }, [account, running, unfunded, balances.a, balances.b, game, rebalance]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [account, running, unfunded, balances.a, balances.b, game, rebalance, startNonce]);
 
   // The hook seeds an empty view; treat "no cards yet, no game in flight" as the start screen.
   const started =
     view.playerCards.length > 0 || view.dealerCards.length > 0 || inGame;
-
-  const fundBtn = (
-    <button
-      onClick={game.fund}
-      disabled={phase === "funding"}
-      className="border-2 border-amber-500 text-[#d4af37] bg-amber-950/20 hover:bg-amber-500 hover:text-black px-5 py-2.5 md:px-8 md:py-4 rounded-lg md:rounded-xl text-xs md:text-base font-black tracking-widest uppercase transition-all hover:scale-105 active:scale-95 cursor-pointer disabled:opacity-50 disabled:pointer-events-none"
-    >
-      Fund Stake
-    </button>
-  );
-
-  const refreshBtn = (
-    <button
-      onClick={() => void game.pollBalances()}
-      className="text-[11px] text-zinc-400 hover:text-[#d4af37] underline underline-offset-2 transition-colors cursor-pointer"
-      title="Re-check bot wallet balances (faucet can deliver late)"
-    >
-      Refresh balances
-    </button>
-  );
-
-  // Even out the two bot wallets (move half the gap richer→poorer). Disabled mid-game so the
-  // transfer can't race a tunnel's own txs.
-  const rebalanceBtn = (
-    <button
-      onClick={rebalance}
-      disabled={rebalancing || running}
-      title="Move half the balance difference from the richer bot to the poorer one"
-      className="border-2 border-zinc-650 text-zinc-300 bg-zinc-900/60 hover:bg-zinc-700/40 px-5 py-2.5 md:px-8 md:py-4 rounded-lg md:rounded-xl text-xs md:text-base font-black tracking-widest uppercase transition-all hover:scale-105 active:scale-95 cursor-pointer disabled:opacity-50 disabled:pointer-events-none"
-    >
-      {rebalancing ? "Balancing…" : "⇄ Even out bots"}
-    </button>
-  );
 
   const playBtn = (
     <button
@@ -499,80 +454,43 @@ export default function PlayerBot() {
     </div>
   );
 
-  // Idle start screen: no game has run yet.
+  // Config screen: shown on fresh load (before any game) and after Back from the game.
+  // The Start button re-triggers auto-pilot via handleStart (resets one-shot refs + bumps
+  // startNonce). Back never calls handleStart, so this screen stays after Back.
   if (!started) {
+    // Show "Preparing bots…" only while actively funding (wallet tx in-flight or rebalancing).
+    const preparing = walletFunding || rebalancing;
     return (
       <div className="h-full w-full flex flex-col items-center justify-center relative text-white overflow-hidden select-none casino-felt fade-in-up">
-        {/* Background Layer with blur and transparent felt */}
+        {/* Background blur layer */}
         <div className="absolute inset-0 bg-black/40 backdrop-blur-md" />
 
-        <div className="relative z-10 flex flex-col items-center justify-center gap-8 bg-zinc-950/40 backdrop-blur-sm w-full h-full p-8 md:p-12">
-          <h1 className="text-5xl md:text-6xl font-extrabold text-[#d4af37] font-serif tracking-widest uppercase text-center mb-2 drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]">
+        <div className="relative z-10 flex flex-col items-center justify-center gap-6 bg-zinc-950/40 backdrop-blur-sm w-full h-full p-8 md:p-12">
+          <h2 className="text-2xl md:text-3xl font-extrabold text-[#d4af37] font-serif tracking-widest uppercase text-center drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]">
             Bot Arena
-          </h1>
-          <p className="text-base md:text-lg max-w-2xl text-zinc-300 text-center drop-shadow-md">
-            Watch two bots play blackjack autonomously on an off-chain state
-            channel, settled on Sui testnet. No wallet or login required.
+          </h2>
+          <p className="text-xs text-zinc-400 uppercase tracking-widest">
+            Autonomous bot-vs-bot blackjack over an off-chain state channel.
           </p>
-
-          <div className="flex flex-col items-center gap-1.5 text-xs font-mono text-zinc-400">
-            <span>
-              Player Bot:{" "}
-              <span className="text-white">{suiOf(balances.a)} SUI</span>
-            </span>
-            <span>
-              Dealer Bot:{" "}
-              <span className="text-white">{suiOf(balances.b)} SUI</span>
-            </span>
-            {refreshBtn}
-          </div>
-
-          <div className="flex flex-col items-center gap-2 w-full">
-            {walletFundEl}
+          <div className="flex flex-col items-center gap-3 mt-2">
             {roundsSelector}
             {betSelector}
-            <div className="flex items-center gap-3">
-              {fundBtn}
-              {playBtn}
-              {autoBtn}
-            </div>
-            {rebalanceBtn}
-            <p className="text-[10px] text-zinc-500 text-center max-w-md">
-              Bots play {maxRounds} rounds off-chain per tunnel, then settle
-              once. Chips are 1:1 with MIST (1 SUI = 1,000,000,000 chips).
-            </p>
           </div>
-
-          {walletError && (
-            <div className="text-xs text-rose-400 text-center max-w-full break-words">
-              {walletError}
-            </div>
+          {preparing && (
+            <p className="text-xs text-[#d4af37] animate-pulse uppercase tracking-widest">
+              {walletFunding ? "Setting up bots…" : "Preparing bots…"}
+            </p>
           )}
-          {phase === "funding" && (
-            <div className="text-xs text-[#d4af37] animate-pulse uppercase tracking-widest">
-              Funding bots from faucet…
-            </div>
-          )}
-          {fundNote && (
-            <div className="text-xs text-amber-400 text-center max-w-full break-words">
-              {fundNote}
-            </div>
-          )}
-          {error && (
-            <div className="text-xs text-rose-400 text-center max-w-full break-words">
-              {error}
-            </div>
-          )}
-          {unfunded && phase !== "funding" && !error && (
-            <div className="text-[11px] text-zinc-500 text-center">
-              Fund the bots from your wallet to begin.
-            </div>
-          )}
-
+          <button
+            onClick={handleStart}
+            disabled={preparing}
+            data-testid="bj-config-start"
+            className="border-2 border-[#d4af37] text-white bg-zinc-900/60 hover:bg-[#d4af37]/20 px-8 py-3 md:px-12 md:py-4 rounded-lg md:rounded-xl text-xs md:text-base font-black tracking-widest uppercase transition-all hover:scale-105 active:scale-95 cursor-pointer disabled:opacity-50 disabled:pointer-events-none mt-2"
+          >
+            Auto
+          </button>
         </div>
 
-        {/* Absolute (not in the centered flow) so a long fund error can't push it out of
-            the overflow-hidden viewport — the back button must always stay reachable. */}
         <button
           onClick={() => navigate("/")}
           title="Exit to menu"
@@ -606,7 +524,7 @@ export default function PlayerBot() {
         <button
           onClick={game.backToConfig}
           className="absolute top-4 left-4 z-30 p-2.5 text-zinc-400 hover:text-white bg-black/60 hover:bg-black/85 rounded-full border border-zinc-800/85 transition-all shadow-md active:scale-95 flex items-center justify-center cursor-pointer"
-          title="Back to bot config"
+          title="Back to config"
         >
           <svg
             className="w-4 h-4"
@@ -954,9 +872,9 @@ export default function PlayerBot() {
         {/* Status + on-chain digests */}
         <div className="w-full flex flex-col md:flex-row items-center justify-between gap-1 md:gap-2 mt-1 md:mt-2 pt-1 md:pt-2 border-t border-zinc-850">
           <div className="text-[9px] md:text-[11px] uppercase tracking-widest font-bold">
-            {phase === "error" || error || walletError ? (
+            {phase === "error" || error ? (
               <span className="text-rose-400 normal-case tracking-normal font-mono break-words">
-                {error ?? walletError ?? "Error"}
+                {error ?? "Error"}
               </span>
             ) : fundNote ? (
               <span className="text-amber-400 normal-case tracking-normal break-words">

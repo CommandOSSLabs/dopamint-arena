@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import {
   useBotGame,
   type Difficulty,
@@ -13,11 +13,8 @@ import {
   buildFundTx,
 } from "@/games/ticTacToe/app/lib/bots";
 import { LoginScene } from "@/games/ticTacToe/app/scenes/LoginScene";
-import {
-  SetupScene,
-  type PlayMode,
-  type GameType,
-} from "@/games/ticTacToe/app/scenes/SetupScene";
+import type { PlayMode, GameType } from "@/games/ticTacToe/app/scenes/SetupScene";
+import { SetupScene } from "@/games/ticTacToe/app/scenes/SetupScene";
 import { GameScene } from "@/games/ticTacToe/app/scenes/GameScene";
 import { PvpScene } from "@/games/ticTacToe/app/scenes/PvpScene";
 import { GameCardScale } from "@/games/ticTacToe/app/components/GameCardScale";
@@ -82,6 +79,19 @@ function AppContent() {
   const autoEvenedRef = useRef(false);
   const autoFundRef = useRef(false);
   const autoStartedRef = useRef(false);
+  // Bumped by the Start button to re-trigger auto-pilot after Back returns to config.
+  const [startNonce, setStartNonce] = useState(0);
+  // True while a wallet fund tx is in-flight — drives the "Setting up bots…" indicator.
+  const [preparing, setPreparing] = useState(false);
+
+  // Resets one-shot refs and bumps startNonce so the auto-pilot effect re-runs the
+  // even/fund/start path. Back never calls this, so config stays after Back.
+  const handleStart = useCallback(() => {
+    autoEvenedRef.current = false;
+    autoFundRef.current = false;
+    autoStartedRef.current = false;
+    setStartNonce((n) => n + 1);
+  }, []);
 
   // Auto-pilot: skip login → setup → even bots / wallet-fund if low → start bot-vs-bot.
   // Bots are SHARED across all ttt windows (loadOrCreateBots reads shared localStorage),
@@ -126,6 +136,7 @@ function AppContent() {
         if (!autoFundRef.current) {
           autoFundRef.current = true; // fund AT MOST ONCE per window (Global Constraint)
           console.log("[tictactoe] funding bots from wallet…");
+          setPreparing(true);
           void (async () => {
             try {
               await executeTransaction({ tx: buildFundTx(loadOrCreateBots()) });
@@ -135,6 +146,8 @@ function AppContent() {
               // `g` dep and risk an infinite real-SUI fund loop. On failure the SetupScene
               // surfaces the error and the manual fund button remains as the recovery path.
               console.error("[tictactoe] wallet fund failed", e);
+            } finally {
+              setPreparing(false);
             }
           })();
         }
@@ -146,13 +159,8 @@ function AppContent() {
         g.startAuto();
       }
     }
-  }, [isConnected, scene, funded, g, executeTransaction]);
-
-  const start = () => {
-    setScene("game");
-    if (mode === "auto") g.startAuto();
-    else g.newGame();
-  };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isConnected, scene, funded, g, executeTransaction, startNonce]);
 
   const backToSetup = () => {
     tttGame.stopAuto();
@@ -206,26 +214,38 @@ function AppContent() {
           )}
 
           {scene === "setup" && (
-            <SetupScene
-              balances={{ x: g.balances.x, o: g.balances.o }}
-              onFund={g.fund}
-              funding={g.phase === "funding"}
-              onRefresh={g.refresh}
-              onRebalance={g.rebalance}
-              rebalancing={g.rebalancing}
-              funded={funded}
-              maxGames={g.maxGames}
-              setMaxGames={g.setMaxGames}
-              difficulty={difficulty}
-              setDifficulty={setDifficulty}
-              gameType={gameType}
-              setGameType={setGameType}
-              boardSize={boardSize}
-              setBoardSize={setBoardSize}
-              onStart={start}
-              onBack={() => setScene("login")}
-              isPortrait={isPortrait}
-            />
+            g.phase === "error" ? (
+              <div className="w-full h-full flex flex-col items-center justify-center gap-6 p-8">
+                <p className="text-sm text-rose-400 text-center break-words max-w-xs">
+                  {String(g.phase)}
+                </p>
+                <button
+                  onClick={() => {
+                    autoFundRef.current = false;
+                    autoEvenedRef.current = false;
+                  }}
+                  className="px-4 py-2 text-xs font-bold uppercase tracking-widest border border-secondary text-on-surface hover:bg-secondary/20 rounded transition-colors"
+                >
+                  Retry
+                </button>
+              </div>
+            ) : (
+              <SetupScene
+                funded={funded && !preparing}
+                maxGames={g.maxGames}
+                setMaxGames={g.setMaxGames}
+                difficulty={difficulty}
+                setDifficulty={setDifficulty}
+                gameType={gameType}
+                setGameType={setGameType}
+                boardSize={boardSize}
+                setBoardSize={setBoardSize}
+                onStart={handleStart}
+                onBack={() => setScene("login")}
+                isPortrait={isPortrait}
+                preparingLabel={preparing ? "Setting up bots…" : g.rebalancing ? "Preparing bots…" : undefined}
+              />
+            )
           )}
 
           {scene === "game" && (
