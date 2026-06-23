@@ -28,11 +28,12 @@ export const initialFeeder = (): FeederState => ({
   facing: ["north", "north"],
 });
 
-const HAZARD_KIND: Record<"road" | "water" | "rails", "car" | "log" | "train"> = {
-  road: "car",
-  water: "log",
-  rails: "train",
-};
+const HAZARD_KIND: Record<"road" | "water" | "rails", "car" | "log" | "train"> =
+  {
+    road: "car",
+    water: "log",
+    rails: "train",
+  };
 
 /** Smallest signed delta on the wrapped column ring, so a mod-wrap reads as ~0-ish, not full width. */
 function ringDelta(from: number, to: number): number {
@@ -93,7 +94,10 @@ export function crossViewToSnapshot(
 ): { snapshot: CrossSnapshot; feeder: FeederState; events: SoundEvents } {
   const ids = ["A", "B"] as const;
   const deaths: [number, number] = [feeder.deaths[0], feeder.deaths[1]];
-  const facing: [CrossDirection, CrossDirection] = [feeder.facing[0], feeder.facing[1]];
+  const facing: [CrossDirection, CrossDirection] = [
+    feeder.facing[0],
+    feeder.facing[1],
+  ];
   const events: SoundEvents = { hop: false, deaths: [] };
 
   const players: CrossPlayerState[] = view.players.map((p, i) => {
@@ -128,7 +132,11 @@ export function crossViewToSnapshot(
     roomCode: "",
     phase: "playing",
     serverTime: view.tick,
-    world: { minLane: 0, maxLane: WIN_LANE, lanes: lanesFor(view.seed, view.tick) },
+    world: {
+      minLane: 0,
+      maxLane: WIN_LANE,
+      lanes: lanesFor(view.seed, view.tick),
+    },
     players,
     winnerId: view.winner,
   };

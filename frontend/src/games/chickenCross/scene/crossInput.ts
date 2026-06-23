@@ -17,7 +17,11 @@ export function keyToScreenDir(code: string): CrossDirection | null {
 }
 
 /** Swipe vector → screen-relative direction; null if neither axis clears `threshold`. */
-export function swipeToScreenDir(dx: number, dy: number, threshold = 28): CrossDirection | null {
+export function swipeToScreenDir(
+  dx: number,
+  dy: number,
+  threshold = 28,
+): CrossDirection | null {
   if (Math.abs(dx) < threshold && Math.abs(dy) < threshold) return null;
   if (Math.abs(dx) >= Math.abs(dy)) return dx > 0 ? "east" : "west";
   return dy > 0 ? "south" : "north";

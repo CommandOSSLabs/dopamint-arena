@@ -36,9 +36,14 @@ export function BombBench({ onExit }: { onExit?: () => void }) {
   return (
     <div className="flex h-full w-full flex-col gap-2 bg-arena-bg p-3">
       <div className="flex items-center justify-between">
-        <h2 className="text-gold text-sm font-extrabold uppercase tracking-widest">Bomb It · TPS Bench</h2>
+        <h2 className="text-gold text-sm font-extrabold uppercase tracking-widest">
+          Bomb It · TPS Bench
+        </h2>
         {onExit && (
-          <button onClick={onExit} className="rounded border border-arena-edge px-2 py-1 text-[11px] text-arena-muted hover:opacity-80">
+          <button
+            onClick={onExit}
+            className="rounded border border-arena-edge px-2 py-1 text-[11px] text-arena-muted hover:opacity-80"
+          >
             ← PvP
           </button>
         )}
@@ -63,7 +68,9 @@ export function BombBench({ onExit }: { onExit?: () => void }) {
           onChange={(e) => setTargetTps(Number(e.target.value))}
           className="flex-1 accent-amber-500"
         />
-        <span className="w-8 text-right font-mono text-arena-text">{targetTps}</span>
+        <span className="w-8 text-right font-mono text-arena-text">
+          {targetTps}
+        </span>
       </label>
 
       <div className="flex items-center gap-2 px-1">
@@ -88,17 +95,28 @@ export function BombBench({ onExit }: { onExit?: () => void }) {
         >
           Reset
         </button>
-        <span className="ml-auto text-[11px] text-arena-muted">{statusLabel[status]}</span>
+        <span className="ml-auto text-[11px] text-arena-muted">
+          {statusLabel[status]}
+        </span>
       </div>
 
       {error && <p className="px-1 text-xs text-red-400">{error}</p>}
 
       <div className="min-h-0 flex-1">
         {view ? (
-          <BombBoard view={view} winner={result === "draw" ? null : result} role={null} onAction={() => {}} onPlayAgain={() => {}} spectate />
+          <BombBoard
+            view={view}
+            winner={result === "draw" ? null : result}
+            role={null}
+            onAction={() => {}}
+            onPlayAgain={() => {}}
+            spectate
+          />
         ) : (
           <div className="flex h-full items-center justify-center text-center text-xs text-arena-muted">
-            {running ? "opening the first tunnel…" : "Press Start — two bots self-play a settleable Bomb It match at the target rate."}
+            {running
+              ? "opening the first tunnel…"
+              : "Press Start — two bots self-play a settleable Bomb It match at the target rate."}
           </div>
         )}
       </div>
@@ -106,11 +124,25 @@ export function BombBench({ onExit }: { onExit?: () => void }) {
   );
 }
 
-function Stat({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
+function Stat({
+  label,
+  value,
+  accent,
+}: {
+  label: string;
+  value: string;
+  accent?: boolean;
+}) {
   return (
     <div className="flex flex-col">
-      <span className={`font-mono text-lg font-extrabold ${accent ? "text-gold" : "text-arena-text"}`}>{value}</span>
-      <span className="text-[10px] uppercase tracking-wider text-arena-muted">{label}</span>
+      <span
+        className={`font-mono text-lg font-extrabold ${accent ? "text-gold" : "text-arena-text"}`}
+      >
+        {value}
+      </span>
+      <span className="text-[10px] uppercase tracking-wider text-arena-muted">
+        {label}
+      </span>
     </div>
   );
 }

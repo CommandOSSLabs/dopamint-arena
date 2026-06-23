@@ -1,9 +1,13 @@
 import type { CrossHazardSnapshot, CrossSnapshot } from "./crossSceneTypes.ts";
-import type { CrossDirection, CrossLaneType, CrossPlayerState } from "./crossSceneTypes.ts";
-import * as THREE from 'three';
-import { crossFacingYaw } from './facing.ts';
-import { worldDirectionForScreenInput } from './screenInput.ts';
-import { CROSS_COLUMN_COUNT, CROSS_HOP_MS } from './crossSceneConstants.ts';
+import type {
+  CrossDirection,
+  CrossLaneType,
+  CrossPlayerState,
+} from "./crossSceneTypes.ts";
+import * as THREE from "three";
+import { crossFacingYaw } from "./facing.ts";
+import { worldDirectionForScreenInput } from "./screenInput.ts";
+import { CROSS_COLUMN_COUNT, CROSS_HOP_MS } from "./crossSceneConstants.ts";
 
 const TILE = 1.12;
 const LANE_DEPTH = 1.0;
@@ -69,13 +73,17 @@ export class CrossScene {
   private readonly grassTexture = CrossScene.createGrassTexture();
   private readonly dimGrassTexture = CrossScene.createDimGrassTexture();
   private localPlayerId: string | null = null;
-  private cameraMode: '3d' | 'direct' = '3d';
+  private cameraMode: "3d" | "direct" = "3d";
   private cameraFocus = new THREE.Vector3();
   private cameraGoal = new THREE.Vector3();
   private lastSnapshot: CrossSnapshot | null = null;
 
   constructor(canvas: HTMLCanvasElement) {
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
+    this.renderer = new THREE.WebGLRenderer({
+      canvas,
+      antialias: true,
+      alpha: false,
+    });
     // Initial size of 1×1 — CrossCanvas calls resize() immediately via ResizeObserver.
     this.renderer.setSize(1, 1, false);
     this.renderer.shadowMap.enabled = true;
@@ -131,7 +139,7 @@ export class CrossScene {
     this.localPlayerId = id;
   }
 
-  setCameraMode(mode: '3d' | 'direct'): void {
+  setCameraMode(mode: "3d" | "direct"): void {
     this.cameraMode = mode;
   }
 
@@ -144,7 +152,10 @@ export class CrossScene {
   resize(width: number, height: number): void {
     const w = Math.max(1, width);
     const h = Math.max(1, height);
-    const dpr = Math.min(typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1, 2);
+    const dpr = Math.min(
+      typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1,
+      2,
+    );
     this.renderer.setPixelRatio(dpr);
     this.renderer.setSize(w, h, false);
     const aspect = w / h;
@@ -184,7 +195,11 @@ export class CrossScene {
 
   getLocalPlayerFromSnapshot(): CrossPlayerState | null {
     if (!this.lastSnapshot || !this.localPlayerId) return null;
-    return this.lastSnapshot.players.find((player) => player.id === this.localPlayerId) ?? null;
+    return (
+      this.lastSnapshot.players.find(
+        (player) => player.id === this.localPlayerId,
+      ) ?? null
+    );
   }
 
   applySnapshot(snapshot: CrossSnapshot, localPlayerId: string | null): void {
@@ -195,7 +210,9 @@ export class CrossScene {
       this.ensureLaneMesh(lane.index, lane.kind);
     }
 
-    const activeLaneIds = new Set(snapshot.world.lanes.map((lane) => lane.index));
+    const activeLaneIds = new Set(
+      snapshot.world.lanes.map((lane) => lane.index),
+    );
     for (const laneId of [...this.laneMeshes.keys()]) {
       if (!activeLaneIds.has(laneId)) {
         this.worldGroup.remove(this.laneMeshes.get(laneId)!);
@@ -219,8 +236,10 @@ export class CrossScene {
 
     const activePlayers = new Set(snapshot.players.map((player) => player.id));
     for (const player of snapshot.players) {
-      const laneKind = snapshot.world.lanes.find((lane) => lane.index === player.laneIndex)?.kind;
-      this.syncPlayer(player, laneKind === 'water');
+      const laneKind = snapshot.world.lanes.find(
+        (lane) => lane.index === player.laneIndex,
+      )?.kind;
+      this.syncPlayer(player, laneKind === "water");
     }
     for (const [id, visual] of this.playerVisuals) {
       if (!activePlayers.has(id)) {
@@ -231,7 +250,8 @@ export class CrossScene {
     }
 
     const focus =
-      snapshot.players.find((player) => player.id === this.localPlayerId) ?? snapshot.players[0];
+      snapshot.players.find((player) => player.id === this.localPlayerId) ??
+      snapshot.players[0];
     if (focus) {
       this.cameraGoal.copy(this.gridToWorld(focus.column, focus.laneIndex));
       this.cameraGoal.y = 0;
@@ -243,7 +263,7 @@ export class CrossScene {
 
     this.cameraFocus.lerp(this.cameraGoal, CAMERA_LERP);
     const centerX = ((CROSS_COLUMN_COUNT - 1) * TILE) / 2;
-    if (this.cameraMode === '3d') {
+    if (this.cameraMode === "3d") {
       this.camera.position.set(centerX + 6, 12, this.cameraFocus.z - 8);
       this.camera.lookAt(centerX - 1, 0, this.cameraFocus.z + 2);
     } else {
@@ -260,9 +280,16 @@ export class CrossScene {
         visual.group.position.lerp(visual.to, LOG_RIDE_LERP);
         visual.group.position.y = visual.to.y + 0.02;
         const idleBob = Math.sin(now * 0.004) * 0.04;
-        visual.group.scale.set(visual.baseScale, visual.baseScale + idleBob, visual.baseScale);
+        visual.group.scale.set(
+          visual.baseScale,
+          visual.baseScale + idleBob,
+          visual.baseScale,
+        );
       } else {
-        const t = Math.min(1, ((now - visual.hopStart) / CROSS_HOP_MS) * HOP_LERP);
+        const t = Math.min(
+          1,
+          ((now - visual.hopStart) / CROSS_HOP_MS) * HOP_LERP,
+        );
         const eased = 1 - (1 - t) ** 3;
         visual.group.position.lerpVectors(visual.from, visual.to, eased);
         const hopArc = Math.sin(eased * Math.PI);
@@ -278,8 +305,15 @@ export class CrossScene {
         );
       }
 
-      const facingT = Math.min(1, ((now - visual.hopStart) / CROSS_HOP_MS) * FACING_LERP);
-      visual.facingYaw = THREE.MathUtils.lerp(visual.facingYaw, visual.facingGoal, facingT);
+      const facingT = Math.min(
+        1,
+        ((now - visual.hopStart) / CROSS_HOP_MS) * FACING_LERP,
+      );
+      visual.facingYaw = THREE.MathUtils.lerp(
+        visual.facingYaw,
+        visual.facingGoal,
+        facingT,
+      );
       visual.group.rotation.y = visual.facingYaw;
     }
 
@@ -290,7 +324,17 @@ export class CrossScene {
     this.scene.traverse((obj) => {
       const mesh = obj as unknown as {
         geometry?: { dispose?: () => void };
-        material?: { map?: { dispose?: () => void }; emissiveMap?: { dispose?: () => void }; dispose?: () => void } | Array<{ map?: { dispose?: () => void }; emissiveMap?: { dispose?: () => void }; dispose?: () => void }>;
+        material?:
+          | {
+              map?: { dispose?: () => void };
+              emissiveMap?: { dispose?: () => void };
+              dispose?: () => void;
+            }
+          | Array<{
+              map?: { dispose?: () => void };
+              emissiveMap?: { dispose?: () => void };
+              dispose?: () => void;
+            }>;
       };
       mesh.geometry?.dispose?.();
       if (Array.isArray(mesh.material)) {
@@ -318,7 +362,9 @@ export class CrossScene {
     visual.group.traverse((obj) => {
       const mesh = obj as unknown as {
         geometry?: { dispose?: () => void };
-        material?: { map?: { dispose?: () => void }; dispose?: () => void } | Array<{ map?: { dispose?: () => void }; dispose?: () => void }>;
+        material?:
+          | { map?: { dispose?: () => void }; dispose?: () => void }
+          | Array<{ map?: { dispose?: () => void }; dispose?: () => void }>;
       };
       mesh.geometry?.dispose?.();
       if (Array.isArray(mesh.material)) {
@@ -335,14 +381,14 @@ export class CrossScene {
 
   private static createDimGrassTexture(): THREE.CanvasTexture {
     const size = 16;
-    const canvas = document.createElement('canvas');
+    const canvas = document.createElement("canvas");
     canvas.width = size;
     canvas.height = size;
-    const ctx = canvas.getContext('2d')!;
+    const ctx = canvas.getContext("2d")!;
     for (let y = 0; y < size; y++) {
       for (let x = 0; x < size; x++) {
         const checker = (x + y) % 2 === 0;
-        ctx.fillStyle = checker ? '#4a7d3a' : '#3d6a30';
+        ctx.fillStyle = checker ? "#4a7d3a" : "#3d6a30";
         ctx.fillRect(x, y, 1, 1);
       }
     }
@@ -356,14 +402,14 @@ export class CrossScene {
 
   private static createGrassTexture(): THREE.CanvasTexture {
     const size = 16;
-    const canvas = document.createElement('canvas');
+    const canvas = document.createElement("canvas");
     canvas.width = size;
     canvas.height = size;
-    const ctx = canvas.getContext('2d')!;
+    const ctx = canvas.getContext("2d")!;
     for (let y = 0; y < size; y++) {
       for (let x = 0; x < size; x++) {
         const checker = (x + y) % 2 === 0;
-        ctx.fillStyle = checker ? '#6fbf4a' : '#5aa83d';
+        ctx.fillStyle = checker ? "#6fbf4a" : "#5aa83d";
         ctx.fillRect(x, y, 1, 1);
       }
     }
@@ -396,7 +442,7 @@ export class CrossScene {
     const matFor = (color: number, map?: THREE.Texture) =>
       new THREE.MeshLambertMaterial(map ? { color, map } : { color });
 
-    if (kind === 'grass') {
+    if (kind === "grass") {
       const base = new THREE.Mesh(
         new THREE.BoxGeometry(width + 0.2, 0.22, LANE_DEPTH),
         matFor(0xffffff, this.grassTexture),
@@ -407,7 +453,7 @@ export class CrossScene {
       if (index > 1) {
         this.addLaneDecor(group, centerX, z, index);
       }
-    } else if (kind === 'road') {
+    } else if (kind === "road") {
       const road = new THREE.Mesh(
         new THREE.BoxGeometry(width + 0.2, 0.22, LANE_DEPTH),
         matFor(COLORS.road),
@@ -423,7 +469,7 @@ export class CrossScene {
         dash.position.set(centerX + i * 1.6 - 4, 0.03, z);
         group.add(dash);
       }
-    } else if (kind === 'water') {
+    } else if (kind === "water") {
       const water = new THREE.Mesh(
         new THREE.BoxGeometry(width + 0.2, 0.2, LANE_DEPTH),
         matFor(COLORS.water),
@@ -440,7 +486,7 @@ export class CrossScene {
       );
       ripple.position.set(centerX, 0.02, z);
       group.add(ripple);
-    } else if (kind === 'rails') {
+    } else if (kind === "rails") {
       const bed = new THREE.Mesh(
         new THREE.BoxGeometry(width + 0.2, 0.22, LANE_DEPTH),
         matFor(0x4a3f33),
@@ -469,9 +515,16 @@ export class CrossScene {
       }
       // Gravel chips around the bed for texture.
       for (let g = 0; g < 6; g++) {
-        const chip = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.06, 0.12), matFor(0x6a5a4a));
+        const chip = new THREE.Mesh(
+          new THREE.BoxGeometry(0.12, 0.06, 0.12),
+          matFor(0x6a5a4a),
+        );
         const seed = (g * 37 + index * 13) % 100;
-        chip.position.set(centerX + ((seed % 9) - 4) * 1.1, 0.04, z + (seed > 50 ? 0.32 : -0.32));
+        chip.position.set(
+          centerX + ((seed % 9) - 4) * 1.1,
+          0.04,
+          z + (seed > 50 ? 0.32 : -0.32),
+        );
         group.add(chip);
       }
     }
@@ -480,14 +533,23 @@ export class CrossScene {
     this.laneMeshes.set(index, group);
   }
 
-  private addLaneDecor(group: THREE.Group, centerX: number, z: number, index: number): void {
+  private addLaneDecor(
+    group: THREE.Group,
+    centerX: number,
+    z: number,
+    index: number,
+  ): void {
     const rng = (seed: number) => {
       const x = Math.sin(seed * 12.9898 + index * 4.1414) * 43758.5453;
       return x - Math.floor(x);
     };
     if (rng(1) > 0.4) {
       const tree = this.createTree();
-      tree.position.set(centerX + (rng(2) - 0.5) * 3, 0, z + (rng(3) - 0.5) * 0.25);
+      tree.position.set(
+        centerX + (rng(2) - 0.5) * 3,
+        0,
+        z + (rng(3) - 0.5) * 0.25,
+      );
       group.add(tree);
     }
     if (rng(4) > 0.7) {
@@ -633,8 +695,9 @@ export class CrossScene {
   private syncHazard(hazard: CrossHazardSnapshot): void {
     let mesh = this.hazardMeshes.get(hazard.id);
     if (!mesh) {
-      if (hazard.kind === 'car') mesh = this.createCarMesh();
-      else if (hazard.kind === 'train') mesh = this.createTrainMesh(hazard.width);
+      if (hazard.kind === "car") mesh = this.createCarMesh();
+      else if (hazard.kind === "train")
+        mesh = this.createTrainMesh(hazard.width);
       else mesh = this.createLogMesh(hazard.width);
       this.hazardMeshes.set(hazard.id, mesh);
       this.worldGroup.add(mesh);
@@ -656,7 +719,7 @@ export class CrossScene {
   private syncPlayer(player: CrossPlayerState, onWater: boolean): void {
     const target = this.gridToWorld(player.column, player.laneIndex);
     target.y = onWater ? 0.44 : 0.4;
-    const facing = player.facing ?? 'north';
+    const facing = player.facing ?? "north";
     const facingGoal = crossFacingYaw(facing);
     const discreteCol = Math.round(player.column);
     let visual = this.playerVisuals.get(player.id);
@@ -702,7 +765,7 @@ export class CrossScene {
     }
 
     visual.baseScale = isLocal ? 1.1 : 0.95;
-    const label = visual.group.getObjectByName('nametag');
+    const label = visual.group.getObjectByName("nametag");
     if (label) label.visible = !isLocal;
   }
 
@@ -715,17 +778,32 @@ export class CrossScene {
 
     const body = new THREE.Mesh(new THREE.BoxGeometry(1.75, 0.5, 1.05), paint);
     body.castShadow = true;
-    const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.05, 0.38, 0.95), paint);
+    const cabin = new THREE.Mesh(
+      new THREE.BoxGeometry(1.05, 0.38, 0.95),
+      paint,
+    );
     cabin.position.set(-0.05, 0.28, 0);
     const roof = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.08, 0.9), trim);
     roof.position.set(-0.05, 0.5, 0);
-    const windshield = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.32, 0.05), glass);
+    const windshield = new THREE.Mesh(
+      new THREE.BoxGeometry(0.95, 0.32, 0.05),
+      glass,
+    );
     windshield.position.set(-0.05, 0.32, 0.5);
-    const rearWindow = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.28, 0.05), glass);
+    const rearWindow = new THREE.Mesh(
+      new THREE.BoxGeometry(0.7, 0.28, 0.05),
+      glass,
+    );
     rearWindow.position.set(-0.05, 0.32, -0.48);
-    const bumperF = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.12, 0.12), trim);
+    const bumperF = new THREE.Mesh(
+      new THREE.BoxGeometry(1.4, 0.12, 0.12),
+      trim,
+    );
     bumperF.position.set(0, 0.08, 0.58);
-    const bumperR = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.12, 0.12), trim);
+    const bumperR = new THREE.Mesh(
+      new THREE.BoxGeometry(1.4, 0.12, 0.12),
+      trim,
+    );
     bumperR.position.set(0, 0.08, -0.58);
     for (const [hx, hz] of [
       [-0.55, 0.42],
@@ -744,7 +822,10 @@ export class CrossScene {
       [-0.62, -0.32],
       [0.62, -0.32],
     ] as const) {
-      const wheel = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.26, 0.16), wheelMat);
+      const wheel = new THREE.Mesh(
+        new THREE.BoxGeometry(0.26, 0.26, 0.16),
+        wheelMat,
+      );
       wheel.position.set(wx, -0.1, wz);
       group.add(wheel);
     }
@@ -767,7 +848,10 @@ export class CrossScene {
     locoBody.castShadow = true;
     locoBody.position.set(locoX, 0.35, 0);
 
-    const locoStripe = new THREE.Mesh(new THREE.BoxGeometry(2.02 * scale, 0.1, 0.97), trim);
+    const locoStripe = new THREE.Mesh(
+      new THREE.BoxGeometry(2.02 * scale, 0.1, 0.97),
+      trim,
+    );
     locoStripe.position.set(locoX, 0.18, 0);
 
     const cabin = new THREE.Mesh(
@@ -802,12 +886,21 @@ export class CrossScene {
     );
     headlight.position.set(locoX + 1.0 * scale, 0.45, 0);
 
-    group.add(locoBody, locoStripe, cabin, cabinWindow, chimney, chimneyCap, headlight);
+    group.add(
+      locoBody,
+      locoStripe,
+      cabin,
+      cabinWindow,
+      chimney,
+      chimneyCap,
+      headlight,
+    );
 
     // Trailing cars (boxcars).
     for (let c = 0; c < 3; c++) {
       const carGroup = new THREE.Group();
-      const carColor = c === 0 ? 0x6a4524 : c === 1 ? COLORS.trainCar : 0x2e7d32;
+      const carColor =
+        c === 0 ? 0x6a4524 : c === 1 ? COLORS.trainCar : 0x2e7d32;
       const body = new THREE.Mesh(
         new THREE.BoxGeometry(1.6 * scale, 0.6, 0.9),
         new THREE.MeshLambertMaterial({ color: carColor }),
@@ -848,7 +941,10 @@ export class CrossScene {
     wheelXs.push(locoX - 0.7 * scale, locoX + 0.7 * scale);
     for (const wx of wheelXs) {
       for (const wz of [-0.35, 0.35]) {
-        const wheel = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.22, 0.18), wheelMat);
+        const wheel = new THREE.Mesh(
+          new THREE.BoxGeometry(0.22, 0.22, 0.18),
+          wheelMat,
+        );
         wheel.position.set(wx, 0.05, wz);
         group.add(wheel);
       }
@@ -886,11 +982,17 @@ export class CrossScene {
     const wingMat = new THREE.MeshLambertMaterial({ color: COLORS.wing });
     const eyeMat = new THREE.MeshLambertMaterial({ color: COLORS.eye });
 
-    const body = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.52, 0.55), bodyMat);
+    const body = new THREE.Mesh(
+      new THREE.BoxGeometry(0.58, 0.52, 0.55),
+      bodyMat,
+    );
     body.castShadow = true;
     body.position.y = 0.26;
 
-    const head = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.38, 0.4), bodyMat);
+    const head = new THREE.Mesh(
+      new THREE.BoxGeometry(0.42, 0.38, 0.4),
+      bodyMat,
+    );
     head.position.set(0, 0.58, 0.12);
 
     const comb = new THREE.Mesh(
@@ -915,19 +1017,28 @@ export class CrossScene {
       [-0.12, 0.58],
       [0.12, 0.58],
     ]) {
-      const eye = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.04), eyeMat);
+      const eye = new THREE.Mesh(
+        new THREE.BoxGeometry(0.08, 0.08, 0.04),
+        eyeMat,
+      );
       eye.position.set(ex, ey, 0.32);
       group.add(eye);
     }
 
     for (const wx of [-0.34, 0.34]) {
-      const wing = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.22, 0.38), wingMat);
+      const wing = new THREE.Mesh(
+        new THREE.BoxGeometry(0.14, 0.22, 0.38),
+        wingMat,
+      );
       wing.position.set(wx, 0.3, 0);
       group.add(wing);
     }
 
     for (const fx of [-0.18, 0.18]) {
-      const foot = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.06, 0.14), eyeMat);
+      const foot = new THREE.Mesh(
+        new THREE.BoxGeometry(0.12, 0.06, 0.14),
+        eyeMat,
+      );
       foot.position.set(fx, 0.03, 0.1);
       group.add(foot);
     }
@@ -938,7 +1049,7 @@ export class CrossScene {
       new THREE.ConeGeometry(0.22, 0.45, 4),
       new THREE.MeshBasicMaterial({ color: COLORS.arrow }),
     );
-    arrow.name = 'heading-arrow';
+    arrow.name = "heading-arrow";
     arrow.rotation.x = Math.PI / 2;
     arrow.position.set(0, 0.05, 0.72);
     group.add(arrow);
@@ -956,20 +1067,23 @@ export class CrossScene {
       ring.position.y = 0.02;
       group.add(ring);
     } else {
-      const canvas = document.createElement('canvas');
+      const canvas = document.createElement("canvas");
       canvas.width = 128;
       canvas.height = 32;
-      const ctx = canvas.getContext('2d')!;
-      ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      const ctx = canvas.getContext("2d")!;
+      ctx.fillStyle = "rgba(0,0,0,0.55)";
       ctx.fillRect(0, 0, 128, 32);
-      ctx.fillStyle = '#fff';
-      ctx.font = 'bold 14px sans-serif';
-      ctx.textAlign = 'center';
+      ctx.fillStyle = "#fff";
+      ctx.font = "bold 14px sans-serif";
+      ctx.textAlign = "center";
       ctx.fillText(name.slice(0, 10), 64, 21);
       const sprite = new THREE.Sprite(
-        new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(canvas), depthTest: false }),
+        new THREE.SpriteMaterial({
+          map: new THREE.CanvasTexture(canvas),
+          depthTest: false,
+        }),
       );
-      sprite.name = 'nametag';
+      sprite.name = "nametag";
       sprite.position.y = 1.15;
       sprite.scale.set(1.8, 0.45, 1);
       group.add(sprite);

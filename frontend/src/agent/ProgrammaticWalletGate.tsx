@@ -1,6 +1,10 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { getWallets } from "@mysten/wallet-standard";
-import { useConnectWallet, useCurrentAccount, useSuiClient } from "@mysten/dapp-kit";
+import {
+  useConnectWallet,
+  useCurrentAccount,
+  useSuiClient,
+} from "@mysten/dapp-kit";
 import { programmaticWalletFromSecret } from "../wallet/programmaticWallet";
 
 /** Registers a programmatic wallet from `secretKey` with the Wallet Standard and connects it

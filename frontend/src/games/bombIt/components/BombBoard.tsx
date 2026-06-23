@@ -1,5 +1,10 @@
 import { useEffect, useRef } from "react";
-import { GRID_W, GRID_H, CELL_WALL, CELL_CRATE } from "sui-tunnel-ts/protocol/bombIt";
+import {
+  GRID_W,
+  GRID_H,
+  CELL_WALL,
+  CELL_CRATE,
+} from "sui-tunnel-ts/protocol/bombIt";
 import type { BombItAction } from "sui-tunnel-ts/protocol/bombIt";
 import "../bomb-it.css";
 import type { BombItView } from "../session-core";
@@ -64,10 +69,21 @@ export function BombBoard({
     }
   };
 
-  const bombAt = (r: number, c: number) => view.bombs.some((b) => b.row === r && b.col === c);
+  const bombAt = (r: number, c: number) =>
+    view.bombs.some((b) => b.row === r && b.col === c);
   const playerAt = (r: number, c: number): "A" | "B" | null => {
-    if (view.players[0]?.alive && view.players[0].row === r && view.players[0].col === c) return "A";
-    if (view.players[1]?.alive && view.players[1].row === r && view.players[1].col === c) return "B";
+    if (
+      view.players[0]?.alive &&
+      view.players[0].row === r &&
+      view.players[0].col === c
+    )
+      return "A";
+    if (
+      view.players[1]?.alive &&
+      view.players[1].row === r &&
+      view.players[1].col === c
+    )
+      return "B";
     return null;
   };
 
@@ -80,14 +96,22 @@ export function BombBoard({
     >
       <div className="flex items-center justify-between text-[11px] text-arena-muted">
         <span>
-          {role === "A" ? <span className="font-bold text-gold">🤖 A (you)</span> : <span>🤖 A</span>} · $
-          {view.balanceA}
+          {role === "A" ? (
+            <span className="font-bold text-gold">🤖 A (you)</span>
+          ) : (
+            <span>🤖 A</span>
+          )}{" "}
+          · ${view.balanceA}
           {view.players[0]?.alive ? "" : " 💀"}
         </span>
         <span>tick {view.tick}</span>
         <span>
-          {role === "B" ? <span className="font-bold text-gold">👾 B (you)</span> : <span>👾 B</span>} · $
-          {view.balanceB}
+          {role === "B" ? (
+            <span className="font-bold text-gold">👾 B (you)</span>
+          ) : (
+            <span>👾 B</span>
+          )}{" "}
+          · ${view.balanceB}
           {view.players[1]?.alive ? "" : " 💀"}
         </span>
       </div>

@@ -8,11 +8,17 @@ import {
 } from "../../../../sui-tunnel-ts/src/protocol/bombIt.ts";
 // Type-only: tsx erases these, so the test stays free of the SDK's runtime crypto deps
 // (OffchainTunnel pulls @noble/hashes, unresolvable from the frontend package).
-import type { BombItState, BombItMove } from "../../../../sui-tunnel-ts/src/protocol/bombIt.ts";
+import type {
+  BombItState,
+  BombItMove,
+} from "../../../../sui-tunnel-ts/src/protocol/bombIt.ts";
 import type { OffchainTunnel } from "../../../../sui-tunnel-ts/src/core/tunnel.ts";
 import { deriveView, sessionResult, stepSession } from "./session-core.ts";
 
-const CTX = { tunnelId: "0xfeed", initialBalances: { a: BOMB_IT_MIN_STAKE, b: BOMB_IT_MIN_STAKE } };
+const CTX = {
+  tunnelId: "0xfeed",
+  initialBalances: { a: BOMB_IT_MIN_STAKE, b: BOMB_IT_MIN_STAKE },
+};
 
 /** Deterministic PRNG so the self-play game shape is reproducible across runs. */
 function seededRng(seed: number): () => number {
@@ -68,7 +74,10 @@ test("stepSession alternates seats, advances to a terminal result, one tick per 
   assert.ok(p.isTerminal(state), "game reaches a terminal state");
   assert.equal(advancedBy.length, steps, "exactly one tick advanced per step");
   assert.ok(steps > 0, "at least one tick was played");
-  assert.ok(steps <= Number(BOMB_IT_TICK_CAP), "the tick cap bounds the game length");
+  assert.ok(
+    steps <= Number(BOMB_IT_TICK_CAP),
+    "the tick cap bounds the game length",
+  );
   // Seats strictly alternate by tick parity: A on even ticks, B on odd.
   assert.deepEqual(advancedBy.slice(0, 4), ["A", "B", "A", "B"]);
   // The terminal step does no advance: a further call is a no-op false.

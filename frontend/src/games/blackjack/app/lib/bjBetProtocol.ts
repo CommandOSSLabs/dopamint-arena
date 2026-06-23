@@ -13,6 +13,13 @@ type Party = protocols.Party;
 type Balances = protocols.Balances;
 type ProtocolContext = protocols.ProtocolContext;
 
+/** Maps a round to the seat that holds the PLAYER role that round. */
+export type PlayerPartyFor = (round: bigint) => Party;
+
+// Default rotation: swap the player seat every two rounds. PvP needs this so BOTH humans get
+// turns playing (and betting) rather than one being a perpetual dealer. Self-play vs the bot
+// pins the player to seat A instead (FIXED_PLAYER_A) — there is no second human to be fair to,
+// and a stable seat keeps the player's chips/outcome from inverting as the role would swap.
 export function getPlayerParty(round: bigint): Party {
   const r = Number(round) - 1;
   return Math.floor(r / 2) % 2 === 0 ? "A" : "B";
@@ -20,6 +27,9 @@ export function getPlayerParty(round: bigint): Party {
 export function getDealerParty(round: bigint): Party {
   return getPlayerParty(round) === "A" ? "B" : "A";
 }
+
+/** Non-rotating assignment: seat A is always the player, seat B always the dealer. */
+export const FIXED_PLAYER_A: PlayerPartyFor = () => "A";
 
 export const MIN_BET = 25n;
 /** Chip denominations offered as bet buttons (filtered to <= the table max each round). */
@@ -81,10 +91,15 @@ export function maxBet(s: BetBlackjackState): bigint {
  * party makes `randomMove` return null the moment the designated player flips (A,A,B,B,…),
  * which a naive loop misreads as "game over".
  */
-export function actorFor(s: BetBlackjackState): Party {
-  if (s.phase === "player") return getPlayerParty(s.round);
-  if (s.phase === "dealer") return getDealerParty(s.round);
-  return getPlayerParty(s.round + 1n);
+export function actorFor(
+  s: BetBlackjackState,
+  playerPartyFor: PlayerPartyFor = getPlayerParty,
+): Party {
+  const dealerPartyFor = (r: bigint): Party =>
+    playerPartyFor(r) === "A" ? "B" : "A";
+  if (s.phase === "player") return playerPartyFor(s.round);
+  if (s.phase === "dealer") return dealerPartyFor(s.round);
+  return playerPartyFor(s.round + 1n);
 }
 
 /**
@@ -112,6 +127,21 @@ export class BlackjackBetProtocol implements protocols.Protocol<
 > {
   readonly name = "blackjack.bet.v1";
 
+  // How the player role maps to a seat each round. Defaults to the 2-round rotation; self-play
+  // passes FIXED_PLAYER_A to keep the player on seat A. Affects who acts/bets and who wins —
+  // never the encoded state, so the wire format and Move parity are unchanged.
+  private readonly playerPartyFor: PlayerPartyFor;
+  constructor(playerPartyFor: PlayerPartyFor = getPlayerParty) {
+    this.playerPartyFor = playerPartyFor;
+  }
+  private dealerPartyFor(round: bigint): Party {
+    return this.playerPartyFor(round) === "A" ? "B" : "A";
+  }
+  /** The seat the protocol expects to act next, honoring this instance's role assignment. */
+  actorFor(s: BetBlackjackState): Party {
+    return actorFor(s, this.playerPartyFor);
+  }
+
   initialState(ctx: ProtocolContext): BetBlackjackState {
     return {
       phase: "round_over",
@@ -134,7 +164,7 @@ export class BlackjackBetProtocol implements protocols.Protocol<
     if (s.phase === "round_over") {
       if (move.action !== "bet")
         throw new Error("place a bet to start the round");
-      const nextPlayer = getPlayerParty(s.round + 1n);
+      const nextPlayer = this.playerPartyFor(s.round + 1n);
       if (by !== nextPlayer)
         throw new Error(`only the player (${nextPlayer}) sets the bet`);
       if (this.isTerminal(s))
@@ -146,24 +176,24 @@ export class BlackjackBetProtocol implements protocols.Protocol<
       return dealRound(s, amount);
     }
     if (s.phase === "player") {
-      const playerParty = getPlayerParty(s.round);
+      const playerParty = this.playerPartyFor(s.round);
       if (by !== playerParty)
         throw new Error(`it is the player's (${playerParty}) turn`);
       if (move.action === "hit") {
         const { hand, drawIndex } = drawTo(s.playerHand, s.round, s.drawIndex);
         const next: BetBlackjackState = { ...s, playerHand: hand, drawIndex };
-        return isBust(hand) ? settle(next, getDealerParty(s.round)) : next;
+        return isBust(hand) ? settle(next, this.dealerPartyFor(s.round)) : next;
       }
       if (move.action === "stand") return { ...s, phase: "dealer" };
       throw new Error("invalid player action");
     }
     if (s.phase === "dealer") {
-      const dealerParty = getDealerParty(s.round);
+      const dealerParty = this.dealerPartyFor(s.round);
       if (by !== dealerParty)
         throw new Error(`it is the dealer's (${dealerParty}) turn`);
       if (move.action !== "stand")
         throw new Error("the dealer only stands (auto-play)");
-      return resolveDealer(s);
+      return resolveDealer(s, this.playerPartyFor);
     }
     throw new Error(`unexpected phase: ${String(s.phase)}`);
   }
@@ -201,7 +231,7 @@ export class BlackjackBetProtocol implements protocols.Protocol<
   ): BetBlackjackMove | null {
     if (this.isTerminal(s)) return null;
     if (s.phase === "round_over") {
-      if (by !== getPlayerParty(s.round + 1n)) return null;
+      if (by !== this.playerPartyFor(s.round + 1n)) return null;
       const cap = Number(maxBet(s));
       return {
         action: "bet",
@@ -209,13 +239,13 @@ export class BlackjackBetProtocol implements protocols.Protocol<
       };
     }
     if (s.phase === "player") {
-      if (by !== getPlayerParty(s.round)) return null;
+      if (by !== this.playerPartyFor(s.round)) return null;
       return {
         action: handValue(s.playerHand) < DEALER_STANDS_AT ? "hit" : "stand",
       };
     }
     if (s.phase === "dealer")
-      return by === getDealerParty(s.round) ? { action: "stand" } : null;
+      return by === this.dealerPartyFor(s.round) ? { action: "stand" } : null;
     return null;
   }
 }
@@ -255,7 +285,10 @@ function dealRound(s: BetBlackjackState, bet: bigint): BetBlackjackState {
     bet,
   };
 }
-function resolveDealer(s: BetBlackjackState): BetBlackjackState {
+function resolveDealer(
+  s: BetBlackjackState,
+  playerPartyFor: PlayerPartyFor,
+): BetBlackjackState {
   let hand = s.dealerHand;
   let drawIndex = s.drawIndex;
   while (handValue(hand) < DEALER_STANDS_AT) {
@@ -266,12 +299,14 @@ function resolveDealer(s: BetBlackjackState): BetBlackjackState {
   const resolved: BetBlackjackState = { ...s, dealerHand: hand, drawIndex };
   const pv = handValue(resolved.playerHand);
   const dv = handValue(resolved.dealerHand);
+  const playerParty = playerPartyFor(s.round);
+  const dealerParty: Party = playerParty === "A" ? "B" : "A";
   const winner: Party | null = isBust(resolved.dealerHand)
-    ? getPlayerParty(s.round)
+    ? playerParty
     : pv > dv
-      ? getPlayerParty(s.round)
+      ? playerParty
       : dv > pv
-        ? getDealerParty(s.round)
+        ? dealerParty
         : null;
   return settle(resolved, winner);
 }

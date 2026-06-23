@@ -27,11 +27,12 @@ import {
 } from "@/games/blackjack/app/lib/bjBots";
 import {
   BlackjackBetProtocol,
-  actorFor,
+  FIXED_PLAYER_A,
   fixedBetMove,
   BET_OPTIONS,
   MIN_BET,
   type BetBlackjackState,
+  type BetBlackjackMove,
 } from "@/games/blackjack/app/lib/bjBetProtocol";
 
 // Re-export so the page imports bet presets from the hook (its single source of game config).
@@ -110,7 +111,16 @@ export interface BlackjackBotGame {
   fundNote: string | null;
   digests: BotDigests;
   balances: { a: bigint; b: bigint };
+  /** When true your bot auto-plays the player's hand; when false you play it (hit/stand). */
   auto: boolean;
+  /** Toggle auto-play. Off hands the player's turn to the user; the dealer + betting stay auto. */
+  setAuto: (on: boolean) => void;
+  /** True when auto is off and it's the player's turn to act (show Hit/Stand). */
+  myTurn: boolean;
+  /** Take the player's hit this hand (manual mode only). */
+  hit: () => void;
+  /** Stand the player's hand this hand (manual mode only). */
+  stand: () => void;
   /** True while a rebalance transfer is in flight (disables the control). */
   rebalancing: boolean;
   maxRounds: number;
@@ -166,6 +176,8 @@ export const MAX_ROUNDS_PER_TUNNEL = 500;
 
 function viewFromState(state: State): BlackjackBotView {
   const round = Number(state.round);
+  // Self-play pins the player to seat A (FIXED_PLAYER_A), so balanceA is always the player's
+  // chips and balanceB the dealer's — no role rotation to compensate for.
   return {
     playerCards: handToCardIndices(state.playerHand, round * 2),
     dealerCards: handToCardIndices(state.dealerHand, round * 2 + 1),
@@ -191,7 +203,9 @@ const EMPTY_VIEW: BlackjackBotView = {
 
 export function useBlackjackBot(): BlackjackBotGame {
   const { report } = useTelemetry();
-  const proto = useMemo(() => new BlackjackBetProtocol(), []);
+  // Pin the player to seat A (no role rotation): "Play vs Bot" is one human vs the dealer bot,
+  // so a stable seat keeps the player's chips and per-round win/lose from inverting.
+  const proto = useMemo(() => new BlackjackBetProtocol(FIXED_PLAYER_A), []);
   const bots = useMemo(() => loadOrCreateBots(), []);
   const client = useMemo(() => getSuiClient(), []);
 
@@ -207,7 +221,7 @@ export function useBlackjackBot(): BlackjackBotGame {
     a: 0n,
     b: 0n,
   });
-  const [auto, setAuto] = useState(false);
+  const [auto, setAutoState] = useState(true);
   const [rebalancing, setRebalancing] = useState(false);
   const [maxRounds, setMaxRoundsState] = useState(DEFAULT_MAX_ROUNDS);
   const [bet, setBetState] = useState(DEFAULT_BET);
@@ -215,7 +229,13 @@ export function useBlackjackBot(): BlackjackBotGame {
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const nextRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const autoRef = useRef(false); // mirror of `auto` readable inside async flows
+  const autoRef = useRef(true); // mirror of `auto` (auto-play the player's hand) readable inside async flows
+  // A play session is live (drives tunnel-after-tunnel continuation). Decoupled from `auto`:
+  // unchecking auto switches the player's hand to manual but keeps the session running.
+  const playingRef = useRef(false);
+  // A user-queued manual move (hit/stand) the running interval applies on its next tick, so the
+  // manual path reuses the loop's single round-logging/telemetry site (incl. player-bust).
+  const pendingMoveRef = useRef<BetBlackjackMove | null>(null);
   const balancesRef = useRef<{ a: bigint; b: bigint }>({ a: 0n, b: 0n });
   const runRef = useRef<() => void>(() => {});
   // Mirror of `maxRounds` so the play loop reads the live target without rebuilding runGame.
@@ -466,12 +486,16 @@ export function useBlackjackBot(): BlackjackBotGame {
         // The dealer ('dealer' phase) moves as B, everyone else as A.
         setPhase("playing");
         setView(viewFromState(tunnel.state));
+        pendingMoveRef.current = null; // drop any move queued during the inter-tunnel gap
         // Stop after this many completed rounds in the single tunnel, then settle once.
         const roundsTarget = maxRoundsRef.current;
         let roundsThisTunnel = 0;
         await new Promise<void>((resolve, reject) => {
           let steps = 0;
           let completedRounds = 0;
+          // Wall-clock of the last dealer/betting auto-step, used to pace them to STEP_MS in
+          // manual mode (the tick itself stays at 30ms so a re-tick of Auto resumes instantly).
+          let lastAutoStepAt = 0;
           const delay = autoRef.current ? 30 : STEP_MS;
           timerRef.current = setInterval(() => {
             try {
@@ -489,11 +513,30 @@ export function useBlackjackBot(): BlackjackBotGame {
               // after ~2 rounds). In the betting phase, place the chosen fixed bet; otherwise
               // let the protocol pick (basic strategy for the player, deterministic dealer).
               const cur = tunnel.state;
-              const by = actorFor(cur);
-              const move =
-                cur.phase === "round_over"
-                  ? fixedBetMove(betRef.current, cur)
-                  : proto.randomMove(cur, by, Math.random);
+              const by = proto.actorFor(cur);
+              // Manual play (auto off): pause at the player's decision and apply only a
+              // user-queued hit/stand. The dealer is deterministic and betting auto-deals, so
+              // both proceed regardless of the toggle — same split as the PvP mode.
+              let move: BetBlackjackMove | null;
+              if (!autoRef.current && cur.phase === "player") {
+                if (!pendingMoveRef.current) {
+                  flushHeartbeat(tunnelId, false);
+                  return; // wait for the user's Hit/Stand
+                }
+                move = pendingMoveRef.current;
+                pendingMoveRef.current = null;
+              } else {
+                // Dealer reveal + next-round deal: in manual mode pace them so they're watchable
+                // between the player's decisions; in auto mode fire every tick for max throughput.
+                if (!autoRef.current && Date.now() - lastAutoStepAt < STEP_MS) {
+                  return;
+                }
+                lastAutoStepAt = Date.now();
+                move =
+                  cur.phase === "round_over"
+                    ? fixedBetMove(betRef.current, cur)
+                    : proto.randomMove(cur, by, Math.random);
+              }
               if (!move) {
                 stopTimer();
                 resolve();
@@ -514,9 +557,14 @@ export function useBlackjackBot(): BlackjackBotGame {
                 throw new Error(`state ${r.nonce} failed dual-verify`);
               moveCountRef.current += 1;
               actionsRef.current += 1;
-              report.bumpCounters({ updates: 1, signatures: 2, verifications: 2 });
+              report.bumpCounters({
+                updates: 1,
+                signatures: 2,
+                verifications: 2,
+              });
               const s = tunnel.state;
               if (s.phase === "round_over" && prevPhase !== "round_over") {
+                // Player is pinned to seat A, so balanceA's change is the player's win/loss.
                 const delta = Number(s.balanceA - prevBalanceA);
                 const outcome: BlackjackResult =
                   delta > 0 ? "win" : delta < 0 ? "lose" : "push";
@@ -539,7 +587,8 @@ export function useBlackjackBot(): BlackjackBotGame {
                   bot: bots.a.address,
                   type: `Blackjack ${outcome === "win" ? "Win" : outcome === "lose" ? "Loss" : "Push"}`,
                   status: "Success" as const,
-                  amount: delta > 0 ? `+${delta}` : delta < 0 ? `${delta}` : "0",
+                  amount:
+                    delta > 0 ? `+${delta}` : delta < 0 ? `${delta}` : "0",
                 };
                 // Live Transactions is backend-sourced (on-chain indexer); only My Activity is local.
                 report.pushLocalTxn(row);
@@ -632,18 +681,18 @@ export function useBlackjackBot(): BlackjackBotGame {
         const b = await refreshBalances();
         setPhase("done");
 
-        // 7) auto-play: continue until a bot is low on gas, or the user stopped.
-        if (autoRef.current) {
+        // 7) continue tunnel-after-tunnel while the session is live (auto or manual), until a
+        // bot is low on gas or the user goes back. Pace fast in auto, relaxed in manual.
+        if (playingRef.current) {
           if (b && b.a >= MIN_PLAY_MIST && b.b >= MIN_PLAY_MIST) {
             nextRef.current = setTimeout(
               () => {
-                if (autoRef.current) runRef.current();
+                if (playingRef.current) runRef.current();
               },
               autoRef.current ? 100 : NEXT_GAME_MS,
             );
           } else {
-            autoRef.current = false;
-            setAuto(false);
+            playingRef.current = false;
             setError(
               "A bot is low on gas — auto-play stopped. Fund the bots to continue.",
             );
@@ -651,8 +700,7 @@ export function useBlackjackBot(): BlackjackBotGame {
         }
       } catch (e) {
         stopTimer();
-        autoRef.current = false; // never loop on errors
-        setAuto(false);
+        playingRef.current = false; // never loop on errors
         setError(e instanceof Error ? e.message : String(e));
         setPhase("error");
       }
@@ -664,11 +712,38 @@ export function useBlackjackBot(): BlackjackBotGame {
     runRef.current = runGame;
   }, [runGame]);
 
+  // Auto-play toggle (player's hand only). Flipping it mid-session is enough: the running
+  // interval reads autoRef live — off makes it wait for a queued Hit/Stand, on resumes
+  // auto-stepping the player. The dealer + betting always proceed.
+  const setAuto = useCallback((on: boolean) => {
+    autoRef.current = on;
+    setAutoState(on);
+  }, []);
+
+  // Queue a manual player move for the running interval to apply (see pendingMoveRef). No-op
+  // unless a tunnel is actively waiting on the player in manual mode; a "hit" at 21+ is dropped
+  // (illegal — the table only offers Stand there).
+  const queuePlayerMove = useCallback(
+    (action: "hit" | "stand") => {
+      if (autoRef.current || phase !== "playing" || view.phase !== "player")
+        return;
+      if (action === "hit" && view.playerSum >= 21) return;
+      pendingMoveRef.current = { action };
+    },
+    [phase, view.phase, view.playerSum],
+  );
+  const hit = useCallback(() => queuePlayerMove("hit"), [queuePlayerMove]);
+  const stand = useCallback(() => queuePlayerMove("stand"), [queuePlayerMove]);
+
+  // It's the user's turn exactly when auto is off, a tunnel is playing, and the protocol is
+  // waiting on the player's decision.
+  const myTurn = !auto && phase === "playing" && view.phase === "player";
+
   const newGame = useCallback(() => {
-    autoRef.current = false;
     setAuto(false);
+    playingRef.current = false; // single tunnel: don't auto-continue
     runGame();
-  }, [runGame]);
+  }, [runGame, setAuto]);
 
   const startAuto = useCallback(() => {
     if (
@@ -679,30 +754,30 @@ export function useBlackjackBot(): BlackjackBotGame {
       setPhase("error");
       return;
     }
-    autoRef.current = true;
-    setAuto(true);
+    setAuto(true); // a fresh session starts with auto ticked (the user can untick to play)
+    playingRef.current = true;
     runGame();
-  }, [runGame]);
+  }, [runGame, setAuto]);
 
   const stopAuto = useCallback(() => {
-    autoRef.current = false;
-    setAuto(false);
+    playingRef.current = false;
+    pendingMoveRef.current = null;
     if (nextRef.current !== null) {
       clearTimeout(nextRef.current);
       nextRef.current = null;
     }
     // A full stop ends the session — clear the persistent tunnel history so the next
-    // auto/play run starts with a fresh review list.
+    // run starts with a fresh review list.
     setTunnels([]);
   }, []);
 
-  // Return to the idle/config screen: stop the loop AND the in-flight self-play interval, then
+  // Return to the idle/config screen: end the session AND the in-flight self-play interval, then
   // clear the table view so `started` goes false. The page's back button calls this; the
   // auto-pilot won't restart afterward (its one-shot ref is already set), so the user stays on
   // config and drives play manually.
   const backToConfig = useCallback(() => {
-    autoRef.current = false;
-    setAuto(false);
+    playingRef.current = false;
+    pendingMoveRef.current = null;
     stopTimer();
     if (nextRef.current !== null) {
       clearTimeout(nextRef.current);
@@ -753,6 +828,10 @@ export function useBlackjackBot(): BlackjackBotGame {
     digests,
     balances,
     auto,
+    setAuto,
+    myTurn,
+    hit,
+    stand,
     rebalancing,
     maxRounds,
     setMaxRounds,

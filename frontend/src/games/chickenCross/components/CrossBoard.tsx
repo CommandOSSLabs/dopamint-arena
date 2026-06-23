@@ -20,9 +20,7 @@ export function CrossBoard({
   const settled = winner !== null;
 
   return (
-    <div
-      className="flex h-full w-full flex-col gap-2 bg-arena-bg p-3 outline-none"
-    >
+    <div className="flex h-full w-full flex-col gap-2 bg-arena-bg p-3 outline-none">
       <div className="flex items-center justify-between text-[11px] text-arena-muted">
         <span>
           {role === "A" ? (

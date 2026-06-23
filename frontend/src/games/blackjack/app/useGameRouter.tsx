@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, ReactNode } from "react";
 
-export type RoutePath = "/" | "/play" | "/bot" | "/pvp";
+export type RoutePath = "/" | "/bot" | "/pvp";
 
 interface GameRouterContextType {
   currentRoute: RoutePath;

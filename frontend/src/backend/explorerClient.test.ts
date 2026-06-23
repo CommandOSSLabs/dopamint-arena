@@ -8,7 +8,11 @@ test("settlementsUrl builds a keyset query with only the set filters", () => {
     "https://api.example/v1/settlements?limit=50",
   );
   assert.equal(
-    settlementsUrl("https://api.example", { limit: 25, cursor: "1750:Dg", address: "0xA" }),
+    settlementsUrl("https://api.example", {
+      limit: 25,
+      cursor: "1750:Dg",
+      address: "0xA",
+    }),
     "https://api.example/v1/settlements?limit=25&cursor=1750%3ADg&address=0xA",
   );
 });

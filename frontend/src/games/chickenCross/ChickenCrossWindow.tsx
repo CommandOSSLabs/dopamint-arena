@@ -19,7 +19,10 @@ export function ChickenCrossWindow(_props: GameWindowProps) {
     return (
       <div className="relative flex h-full w-full flex-col">
         <button
-          onClick={() => { session.stopLoop(); setMode("pvp"); }}
+          onClick={() => {
+            session.stopLoop();
+            setMode("pvp");
+          }}
           className="absolute right-2 top-2 z-10 rounded border border-arena-edge px-3 py-1 text-xs text-arena-muted hover:text-arena-text"
         >
           Stop
@@ -47,7 +50,9 @@ export function ChickenCrossWindow(_props: GameWindowProps) {
   if (status === "error") {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 p-4 text-center">
-        <p className="text-sm text-red-400">{error ?? "something went wrong"}</p>
+        <p className="text-sm text-red-400">
+          {error ?? "something went wrong"}
+        </p>
         <button
           onClick={reset}
           className="rounded border border-arena-edge px-3 py-1.5 text-sm"
@@ -81,7 +86,10 @@ export function ChickenCrossWindow(_props: GameWindowProps) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 p-4 text-center">
         <p className="text-sm text-arena-muted">Finding an opponent…</p>
-        <button onClick={reset} className="rounded border border-arena-edge px-3 py-1.5 text-sm text-arena-text">
+        <button
+          onClick={reset}
+          className="rounded border border-arena-edge px-3 py-1.5 text-sm text-arena-text"
+        >
           Cancel
         </button>
       </div>

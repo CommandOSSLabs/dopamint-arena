@@ -11,7 +11,9 @@ export function BombLobby({
 }) {
   return (
     <div className="flex h-full w-full flex-col items-center justify-center gap-4 bg-arena-bg p-4 text-center">
-      <h2 className="text-gold text-lg font-extrabold uppercase tracking-widest">Bomb It PvP</h2>
+      <h2 className="text-gold text-lg font-extrabold uppercase tracking-widest">
+        Bomb It PvP
+      </h2>
       <p className="max-w-xs text-sm text-arena-muted">
         Find an opponent and bomb each other on a shared grid over a Sui tunnel.
       </p>

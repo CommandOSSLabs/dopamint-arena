@@ -1,12 +1,29 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useCurrentAccount, useSignAndExecuteTransaction, useSuiClient } from "@mysten/dapp-kit";
+import {
+  useCurrentAccount,
+  useSignAndExecuteTransaction,
+  useSuiClient,
+} from "@mysten/dapp-kit";
 import { createParticipant } from "sui-tunnel-ts/core/keys";
 import { OffchainTunnel } from "sui-tunnel-ts/core/tunnel";
-import { BombItProtocol, BOMB_IT_MIN_STAKE } from "sui-tunnel-ts/protocol/bombIt";
+import {
+  BombItProtocol,
+  BOMB_IT_MIN_STAKE,
+} from "sui-tunnel-ts/protocol/bombIt";
 import type { BombItState, BombItMove } from "sui-tunnel-ts/protocol/bombIt";
 import { useTelemetry } from "../../telemetry/TelemetryProvider";
-import { closeCooperative, openAndFundSelfPlay, readCreatedAt } from "../../onchain/tunnelTx";
-import { deriveView, sessionResult, stepSession, type BombItResult, type BombItView } from "./session-core";
+import {
+  closeCooperative,
+  openAndFundSelfPlay,
+  readCreatedAt,
+} from "../../onchain/tunnelTx";
+import {
+  deriveView,
+  sessionResult,
+  stepSession,
+  type BombItResult,
+  type BombItView,
+} from "./session-core";
 
 /**
  * Bomb It TPS benchmark: a bot-vs-bot self-play loop whose purpose is to GENERATE throughput.
@@ -27,7 +44,13 @@ const DEFAULT_TARGET_TPS = 75;
 const MIN_TARGET_TPS = 10;
 const MAX_TARGET_TPS = 200;
 
-export type BenchStatus = "idle" | "funding" | "playing" | "settling" | "settled" | "error";
+export type BenchStatus =
+  | "idle"
+  | "funding"
+  | "playing"
+  | "settling"
+  | "settled"
+  | "error";
 
 export interface BombItBenchSession {
   status: BenchStatus;
@@ -52,7 +75,13 @@ export interface BombItBenchSession {
 }
 
 const clampTps = (n: number): number =>
-  Math.max(MIN_TARGET_TPS, Math.min(MAX_TARGET_TPS, Math.round(Number.isFinite(n) ? n : DEFAULT_TARGET_TPS)));
+  Math.max(
+    MIN_TARGET_TPS,
+    Math.min(
+      MAX_TARGET_TPS,
+      Math.round(Number.isFinite(n) ? n : DEFAULT_TARGET_TPS),
+    ),
+  );
 
 export function useBombItBenchSession(): BombItBenchSession {
   const { report } = useTelemetry();
@@ -73,7 +102,9 @@ export function useBombItBenchSession(): BombItBenchSession {
   const runningRef = useRef(false);
   const targetTpsRef = useRef(DEFAULT_TARGET_TPS);
   const protocolRef = useRef<BombItProtocol | null>(null);
-  const tunnelRef = useRef<OffchainTunnel<BombItState, BombItMove> | null>(null);
+  const tunnelRef = useRef<OffchainTunnel<BombItState, BombItMove> | null>(
+    null,
+  );
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const gameStartRef = useRef(0);
   const gameUpdatesRef = useRef(0);
@@ -172,11 +203,15 @@ export function useBombItBenchSession(): BombItBenchSession {
       setStatus("error");
       return;
     }
-    const signExec = async (tx: Parameters<typeof signAndExecute>[0]["transaction"]) => {
+    const signExec = async (
+      tx: Parameters<typeof signAndExecute>[0]["transaction"],
+    ) => {
       const r = await signAndExecute({ transaction: tx });
       return { digest: r.digest };
     };
-    const reads = client as unknown as Parameters<typeof openAndFundSelfPlay>[0]["reads"];
+    const reads = client as unknown as Parameters<
+      typeof openAndFundSelfPlay
+    >[0]["reads"];
 
     runningRef.current = true;
     setRunning(true);

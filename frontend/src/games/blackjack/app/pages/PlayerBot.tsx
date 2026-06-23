@@ -59,6 +59,12 @@ const ROUND_PRESETS = [5, 10, 25, 50, 100];
 const MIN_BOT_BALANCE_MIST = 30_000_000n; // 0.03 SUI (just above MIN_PLAY)
 const TOPUP_PER_BOT_MIST = 200_000_000; // 0.2 SUI per bot — long runway, fewer re-funds
 
+// Auto-start fires once per window: a freshly-opened blackjack window drops straight into a
+// watch. Navigating BACK to the menu and re-entering "Play vs Bot" REMOUNTS this page (resetting
+// its per-mount refs), so without a module-scoped latch the auto-pilot would start the game again
+// and skip the config screen. This survives remounts; only a full page reload clears it.
+let botAutoStartedThisWindow = false;
+
 // Render MIST (bigint) as a short SUI string. 1 SUI = 1e9 MIST.
 function suiOf(mist: bigint): string {
   return (Number(mist) / 1e9).toLocaleString(undefined, {
@@ -104,9 +110,10 @@ function DigestLink({ label, digest }: { label: string; digest?: string }) {
   );
 }
 
-// Autonomous bot-vs-bot blackjack. Reuses the casino table layout from PlayerGame,
-// but fed by useBlackjackBot() (off-chain state channel, no wallet/login). Bot A is
-// the player, bot B the dealer; there are no Hit/Stand controls — the bots self-play.
+// "Play vs Bot" blackjack. Reuses the casino table layout from PlayerGame, fed by
+// useBlackjackBot() (off-chain state channel, no wallet/login). Bot A is the player, bot B the
+// dealer. With Auto ticked your bot self-plays the dealer bot; untick it to take the player's
+// hand yourself (Hit/Stand) while the dealer keeps auto-resolving.
 export default function PlayerBot() {
   const navigate = useGameNavigate();
   const { isPortrait } = useGameScale();
@@ -121,6 +128,11 @@ export default function PlayerBot() {
     fundNote,
     digests,
     balances,
+    auto,
+    setAuto,
+    myTurn,
+    hit,
+    stand,
     maxRounds,
     setMaxRounds,
     bet,
@@ -210,16 +222,17 @@ export default function PlayerBot() {
   useEffect(() => {
     const prev = prevViewRef.current;
 
-    // Player Hit
+    // Player Hit — "You" when the user is playing the hand (auto off), "Player Bot" otherwise.
+    const player = auto ? "Player Bot" : "You";
     if (
       view.playerCards.length > prev.playerCards.length &&
       prev.playerCards.length > 0
     ) {
-      addToast(`Player Bot Hits (${view.playerSum})`);
+      addToast(`${player} ${auto ? "Hits" : "Hit"} (${view.playerSum})`);
     }
     // Player Stand
     if (prev.phase === "player" && view.phase === "dealer") {
-      addToast(`Player Bot Stands (${prev.playerSum})`);
+      addToast(`${player} ${auto ? "Stands" : "Stand"} (${prev.playerSum})`);
     }
     // Dealer Hit
     if (
@@ -234,20 +247,21 @@ export default function PlayerBot() {
     }
 
     prevViewRef.current = view;
-  }, [view]);
+  }, [view, auto]);
 
   useEffect(() => {
     if (rounds.length > prevRoundsLenRef.current) {
       const newRound = rounds[rounds.length - 1];
       if (newRound) {
-        if (newRound.outcome === "win") addToast(`Player Bot Wins!`, "win");
+        const youWin = auto ? "Player Bot Wins!" : "You Win!";
+        if (newRound.outcome === "win") addToast(youWin, "win");
         else if (newRound.outcome === "lose")
           addToast(`Dealer Bot Wins!`, "lose");
         else addToast(`Round Push`, "push");
       }
     }
     prevRoundsLenRef.current = rounds.length;
-  }, [rounds]);
+  }, [rounds, auto]);
 
   // Reset animation state to idle after win/lose/push completes
   useEffect(() => {
@@ -319,10 +333,16 @@ export default function PlayerBot() {
   useEffect(() => {
     if (!account || running) return;
     if (!balancesLoaded) return;
+    // Auto-start only on the first entry of this window, or when the user presses Start
+    // (startNonce > 0). Re-entering from the main menu remounts the page with startNonce 0 and
+    // the latch already set → stay on the config screen instead of jumping into the game.
+    if (botAutoStartedThisWindow && startNonce === 0) return;
     if (unfunded) {
       const combined = balances.a + balances.b;
       const diff =
-        balances.a > balances.b ? balances.a - balances.b : balances.b - balances.a;
+        balances.a > balances.b
+          ? balances.a - balances.b
+          : balances.b - balances.a;
       // Even the bots BEFORE spending wallet SUI: if shifting half the surplus from the richer
       // bot lifts the poorer one over the bar, do that cheap bot→bot transfer instead of a
       // wallet top-up. Only fund when the pair is genuinely short (combined can't cover both).
@@ -346,40 +366,67 @@ export default function PlayerBot() {
     // rather than jumping straight into the game.
     if (!autoStartedRef.current) {
       autoStartedRef.current = true;
+      botAutoStartedThisWindow = true;
       game.startAuto();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [account, running, unfunded, balances.a, balances.b, game, rebalance, startNonce]);
+  }, [
+    account,
+    running,
+    unfunded,
+    balances.a,
+    balances.b,
+    game,
+    rebalance,
+    startNonce,
+  ]);
 
   // The hook seeds an empty view; treat "no cards yet, no game in flight" as the start screen.
   const started =
     view.playerCards.length > 0 || view.dealerCards.length > 0 || inGame;
 
-  const playBtn = (
+  // Auto toggle: ticked = your bot plays the hand (fast self-play vs the dealer bot); unticked
+  // pauses at your decision so you play Hit/Stand. The dealer + betting stay automatic either way.
+  const autoToggle = (
     <button
-      onClick={game.newGame}
-      disabled={running || unfunded}
-      className="border-2 border-emerald-500 text-white bg-[#032a14]/65 hover:bg-emerald-500 hover:text-black px-6 py-2.5 md:px-10 md:py-4 rounded-lg md:rounded-xl text-xs md:text-base font-black tracking-widest uppercase transition-all hover:scale-105 active:scale-95 cursor-pointer disabled:opacity-50 disabled:pointer-events-none"
+      onClick={() => setAuto(!auto)}
+      data-testid="bj-auto"
+      aria-pressed={auto}
+      className={`flex items-center gap-2 border-2 px-4 py-2.5 md:px-6 md:py-4 rounded-lg md:rounded-xl text-xs md:text-base font-black tracking-widest uppercase transition-all hover:scale-105 active:scale-95 cursor-pointer ${
+        auto
+          ? "border-emerald-500 text-white bg-[#032a14]/65"
+          : "border-zinc-650 text-zinc-300 bg-zinc-900/60"
+      }`}
     >
-      Play
+      <span
+        className={`grid h-4 w-4 place-items-center rounded border ${auto ? "border-emerald-400 bg-emerald-500 text-black" : "border-zinc-500"}`}
+      >
+        {auto ? "✓" : ""}
+      </span>
+      Auto
     </button>
   );
 
-  const autoBtn = game.auto ? (
+  // Manual controls: only while it's the player's turn (auto off). Hit is locked at 21+ where the
+  // only legal move is Stand.
+  const hitBtn = (
     <button
-      onClick={game.stopAuto}
-      className="border-2 border-rose-500 text-white bg-[#2d090c]/65 hover:bg-rose-500/20 px-6 py-2.5 md:px-10 md:py-4 rounded-lg md:rounded-xl text-xs md:text-base font-black tracking-widest uppercase transition-all hover:scale-105 active:scale-95 cursor-pointer"
+      onClick={hit}
+      disabled={view.playerSum >= 21}
+      data-testid="bj-hit"
+      className="border-2 border-emerald-500 text-white bg-[#032a14]/65 hover:bg-emerald-500 hover:text-black px-6 py-2.5 md:px-10 md:py-4 rounded-lg md:rounded-xl text-xs md:text-base font-black tracking-widest uppercase transition-all hover:scale-105 active:scale-95 cursor-pointer disabled:opacity-50 disabled:pointer-events-none"
     >
-      Stop
+      Hit
     </button>
-  ) : (
+  );
+
+  const standBtn = (
     <button
-      onClick={game.startAuto}
-      disabled={running || unfunded}
-      data-testid="bj-auto"
-      className="border-2 border-zinc-650 text-white bg-zinc-900/60 hover:bg-zinc-650/20 px-6 py-2.5 md:px-10 md:py-4 rounded-lg md:rounded-xl text-xs md:text-base font-black tracking-widest uppercase transition-all hover:scale-105 active:scale-95 cursor-pointer disabled:opacity-50 disabled:pointer-events-none"
+      onClick={stand}
+      data-testid="bj-stand"
+      className="border-2 border-zinc-650 text-white bg-zinc-900/60 hover:bg-zinc-650/20 px-6 py-2.5 md:px-10 md:py-4 rounded-lg md:rounded-xl text-xs md:text-base font-black tracking-widest uppercase transition-all hover:scale-105 active:scale-95 cursor-pointer"
     >
-      Auto
+      Stand
     </button>
   );
 
@@ -467,10 +514,11 @@ export default function PlayerBot() {
 
         <div className="relative z-10 flex flex-col items-center justify-center gap-6 bg-zinc-950/40 backdrop-blur-sm w-full h-full p-8 md:p-12">
           <h2 className="text-2xl md:text-3xl font-extrabold text-[#d4af37] font-serif tracking-widest uppercase text-center drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]">
-            Bot Arena
+            Play vs Bot
           </h2>
-          <p className="text-xs text-zinc-400 uppercase tracking-widest">
-            Autonomous bot-vs-bot blackjack over an off-chain state channel.
+          <p className="text-xs text-zinc-400 uppercase tracking-widest text-center max-w-md">
+            Your bot plays the dealer bot over an off-chain state channel.
+            Untick Auto in-game to take the hand yourself.
           </p>
           <div className="flex flex-col items-center gap-3 mt-2">
             {roundsSelector}
@@ -487,7 +535,7 @@ export default function PlayerBot() {
             data-testid="bj-config-start"
             className="border-2 border-[#d4af37] text-white bg-zinc-900/60 hover:bg-[#d4af37]/20 px-8 py-3 md:px-12 md:py-4 rounded-lg md:rounded-xl text-xs md:text-base font-black tracking-widest uppercase transition-all hover:scale-105 active:scale-95 cursor-pointer disabled:opacity-50 disabled:pointer-events-none mt-2"
           >
-            Auto
+            Start
           </button>
         </div>
 
@@ -864,8 +912,9 @@ export default function PlayerBot() {
                 {betSelector}
               </>
             )}
-            {playBtn}
-            {autoBtn}
+            {myTurn && hitBtn}
+            {myTurn && standBtn}
+            {autoToggle}
           </div>
         </div>
 

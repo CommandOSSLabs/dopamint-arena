@@ -1,14 +1,31 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useCurrentAccount, useSignAndExecuteTransaction, useSuiClient } from "@mysten/dapp-kit";
+import {
+  useCurrentAccount,
+  useSignAndExecuteTransaction,
+  useSuiClient,
+} from "@mysten/dapp-kit";
 import { generateKeyPair, type KeyPair } from "sui-tunnel-ts/core/crypto";
 import { defaultBackend } from "sui-tunnel-ts/core/crypto-native";
 import { makeEndpoint } from "sui-tunnel-ts/core/tunnel";
 import { fromHex, toHex } from "sui-tunnel-ts/core/bytes";
 import { DistributedTunnel } from "sui-tunnel-ts/core/distributedTunnel";
-import { CrossProtocol, type CrossState, type CrossMove, type CrossDir } from "sui-tunnel-ts/protocol/cross";
+import {
+  CrossProtocol,
+  type CrossState,
+  type CrossMove,
+  type CrossDir,
+} from "sui-tunnel-ts/protocol/cross";
 import { Transcript } from "sui-tunnel-ts/proof/transcript";
-import { MpClient, resolveMpWsUrl, type PvpChannel, type Role } from "../../pvp/mpClient";
-import { getControlPlaneClient, resolveBackendUrl } from "../../backend/controlPlane";
+import {
+  MpClient,
+  resolveMpWsUrl,
+  type PvpChannel,
+  type Role,
+} from "../../pvp/mpClient";
+import {
+  getControlPlaneClient,
+  resolveBackendUrl,
+} from "../../backend/controlPlane";
 import {
   closeCooperativeWithRoot,
   depositStake,
@@ -114,8 +131,7 @@ export function usePvpChickenCross(): PvpChickenCross {
 
       const dir = myDirRef.current;
       myDirRef.current = "north"; // reset to auto-forward default
-      const move: CrossMove =
-        myRoleNow === "A" ? { dirA: dir } : { dirB: dir };
+      const move: CrossMove = myRoleNow === "A" ? { dirA: dir } : { dirB: dir };
       try {
         dtNow.propose(move, 0n);
       } catch {
@@ -157,149 +173,146 @@ export function usePvpChickenCross(): PvpChickenCross {
   }, []);
 
   /** Quick-join matchmaking + full match lifecycle (single shared queue, no room code). */
-  const findMatch = useCallback(
-    () => {
-      if (!account) {
-        setError("connect a wallet first");
-        return;
-      }
-      const wallet = account.address;
-      const signExec = async (
-        tx: Parameters<typeof signAndExecute>[0]["transaction"],
-      ) => {
-        const r = await signAndExecute({ transaction: tx });
-        return { digest: r.digest };
-      };
-      const reads = client as unknown as Parameters<
-        typeof openAndFundSharedTunnel
-      >[0]["reads"];
+  const findMatch = useCallback(() => {
+    if (!account) {
+      setError("connect a wallet first");
+      return;
+    }
+    const wallet = account.address;
+    const signExec = async (
+      tx: Parameters<typeof signAndExecute>[0]["transaction"],
+    ) => {
+      const r = await signAndExecute({ transaction: tx });
+      return { digest: r.digest };
+    };
+    const reads = client as unknown as Parameters<
+      typeof openAndFundSharedTunnel
+    >[0]["reads"];
 
-      (async () => {
-        try {
-          setError(null);
-          setStatus("matching");
-          const ephemeral: KeyPair = generateKeyPair();
-          const mp = new MpClient(
-            resolveMpWsUrl(resolveBackendUrl()),
-            wallet,
-            ephemeral,
-          );
-          mpRef.current = mp;
-          await mp.connect();
+    (async () => {
+      try {
+        setError(null);
+        setStatus("matching");
+        const ephemeral: KeyPair = generateKeyPair();
+        const mp = new MpClient(
+          resolveMpWsUrl(resolveBackendUrl()),
+          wallet,
+          ephemeral,
+        );
+        mpRef.current = mp;
+        await mp.connect();
 
-          const gameKey = "chicken-cross";
-          const match = await mp.quickMatch(gameKey);
-          roleRef.current = match.role;
-          setRole(match.role);
+        const gameKey = "chicken-cross";
+        const match = await mp.quickMatch(gameKey);
+        roleRef.current = match.role;
+        setRole(match.role);
 
-          const channel = mp.channel(match.matchId);
-          const waitPeer = makeInbox(channel);
+        const channel = mp.channel(match.matchId);
+        const waitPeer = makeInbox(channel);
 
-          // 1) exchange ephemeral pubkeys
-          channel.sendPeer({
-            t: "hello",
-            ephemeralPubkey: toHex(ephemeral.publicKey),
+        // 1) exchange ephemeral pubkeys
+        channel.sendPeer({
+          t: "hello",
+          ephemeralPubkey: toHex(ephemeral.publicKey),
+        });
+        const hello = await waitPeer<{ ephemeralPubkey: string }>("hello");
+        const oppPub = fromHex(hello.ephemeralPubkey);
+
+        // 2) fund on-chain
+        setStatus("funding");
+        let tunnelId: string;
+        if (match.role === "A") {
+          tunnelId = await openAndFundSharedTunnel({
+            reads,
+            signExec,
+            partyA: { address: wallet, publicKey: ephemeral.publicKey },
+            partyB: {
+              address: match.opponentWallet,
+              publicKey: oppPub,
+            },
+            amount: STAKE,
           });
-          const hello = await waitPeer<{ ephemeralPubkey: string }>("hello");
-          const oppPub = fromHex(hello.ephemeralPubkey);
+          mp.announceTunnel(match.matchId, tunnelId);
+          channel.sendPeer({ t: "open", tunnelId });
+        } else {
+          const open = await waitPeer<{ tunnelId: string }>("open");
+          tunnelId = open.tunnelId;
+          await depositStake({ signExec, tunnelId, amount: STAKE });
+        }
 
-          // 2) fund on-chain
-          setStatus("funding");
-          let tunnelId: string;
-          if (match.role === "A") {
-            tunnelId = await openAndFundSharedTunnel({
-              reads,
-              signExec,
-              partyA: { address: wallet, publicKey: ephemeral.publicKey },
-              partyB: {
-                address: match.opponentWallet,
-                publicKey: oppPub,
-              },
-              amount: STAKE,
-            });
-            mp.announceTunnel(match.matchId, tunnelId);
-            channel.sendPeer({ t: "open", tunnelId });
-          } else {
-            const open = await waitPeer<{ tunnelId: string }>("open");
-            tunnelId = open.tunnelId;
-            await depositStake({ signExec, tunnelId, amount: STAKE });
+        // 3) build the distributed engine
+        const proto = new CrossProtocol();
+        const backend = defaultBackend();
+        const self = makeEndpoint(backend, wallet, ephemeral, true);
+        const opp = makeEndpoint(
+          backend,
+          match.opponentWallet,
+          { publicKey: oppPub, scheme: ephemeral.scheme },
+          false,
+        );
+        const dt = new DistributedTunnel<CrossState, CrossMove>(
+          proto,
+          {
+            tunnelId,
+            self,
+            opponent: opp,
+            selfParty: match.role,
+          },
+          channel.transport,
+          { a: STAKE, b: STAKE },
+        );
+        dtRef.current = dt;
+        const transcript = new Transcript(tunnelId);
+        transcriptRef.current = transcript;
+
+        dt.onConfirmed = (u) => {
+          transcript.append(u);
+          // Render from displayState (proposer sees their move immediately).
+          setView(deriveView(dt.displayState));
+          const currentWinner = dt.state.winner;
+          if (currentWinner !== null) {
+            setWinner(currentWinner);
           }
 
-          // 3) build the distributed engine
-          const proto = new CrossProtocol();
-          const backend = defaultBackend();
-          const self = makeEndpoint(backend, wallet, ephemeral, true);
-          const opp = makeEndpoint(
-            backend,
-            match.opponentWallet,
-            { publicKey: oppPub, scheme: ephemeral.scheme },
-            false,
-          );
-          const dt = new DistributedTunnel<CrossState, CrossMove>(
-            proto,
-            {
+          if (proto.isTerminal(dt.state) && !settlingRef.current) {
+            settlingRef.current = true;
+            void settle(
+              dt,
+              match.role,
+              channel,
+              waitPeer,
+              reads,
+              signExec,
               tunnelId,
-              self,
-              opponent: opp,
-              selfParty: match.role,
-            },
-            channel.transport,
-            { a: STAKE, b: STAKE },
-          );
-          dtRef.current = dt;
-          const transcript = new Transcript(tunnelId);
-          transcriptRef.current = transcript;
+              transcript,
+              getControlPlaneClient(),
+            ).then(
+              () => setStatus("settled"),
+              (e) => {
+                setError(String((e as Error)?.message ?? e));
+                setStatus("error");
+              },
+            );
+            setStatus("settling");
+          } else {
+            maybePropose();
+          }
+        };
 
-          dt.onConfirmed = (u) => {
-            transcript.append(u);
-            // Render from displayState (proposer sees their move immediately).
-            setView(deriveView(dt.displayState));
-            const currentWinner = dt.state.winner;
-            if (currentWinner !== null) {
-              setWinner(currentWinner);
-            }
+        // 4) readiness handshake — after engine is live
+        setView(deriveView(dt.displayState));
+        setStatus("playing");
+        if (match.role === "A") await waitPeer("ready");
+        else channel.sendPeer({ t: "ready" });
 
-            if (proto.isTerminal(dt.state) && !settlingRef.current) {
-              settlingRef.current = true;
-              void settle(
-                dt,
-                match.role,
-                channel,
-                waitPeer,
-                reads,
-                signExec,
-                tunnelId,
-                transcript,
-                getControlPlaneClient(),
-              ).then(
-                () => setStatus("settled"),
-                (e) => {
-                  setError(String((e as Error)?.message ?? e));
-                  setStatus("error");
-                },
-              );
-              setStatus("settling");
-            } else {
-              maybePropose();
-            }
-          };
-
-          // 4) readiness handshake — after engine is live
-          setView(deriveView(dt.displayState));
-          setStatus("playing");
-          if (match.role === "A") await waitPeer("ready");
-          else channel.sendPeer({ t: "ready" });
-
-          // Kick off seat A's first move (nonce 0 → A's turn)
-          maybePropose();
-        } catch (e) {
-          setError(String((e as Error)?.message ?? e));
-          setStatus("error");
-        }
-      })();
-    },
-    [account, client, signAndExecute, maybePropose],
-  );
+        // Kick off seat A's first move (nonce 0 → A's turn)
+        maybePropose();
+      } catch (e) {
+        setError(String((e as Error)?.message ?? e));
+        setStatus("error");
+      }
+    })();
+  }, [account, client, signAndExecute, maybePropose]);
 
   const setDir = useCallback((dir: CrossDir) => {
     myDirRef.current = dir;
@@ -345,16 +358,28 @@ async function settle(
     transcriptRoot: toHex(root),
     sig: toHex(half.sigSelf),
   });
-  const other = await waitPeer<{ sig: string; transcriptRoot: string }>("settleHalf");
+  const other = await waitPeer<{ sig: string; transcriptRoot: string }>(
+    "settleHalf",
+  );
   if (other.transcriptRoot !== toHex(root)) {
     throw new Error("settlement transcript-root mismatch between parties");
   }
-  const co = dt.combineSettlementWithRoot(half.settlement, half.sigSelf, fromHex(other.sig));
+  const co = dt.combineSettlementWithRoot(
+    half.settlement,
+    half.sigSelf,
+    fromHex(other.sig),
+  );
   if (role !== "A") return;
   try {
-    await cp.settle(tunnelId, coSignedToSettleRequest(co, transcript.toRecord().entries));
+    await cp.settle(
+      tunnelId,
+      coSignedToSettleRequest(co, transcript.toRecord().entries),
+    );
   } catch (e) {
-    console.error("[chicken-cross] backend settle failed; falling back to wallet close:", e);
+    console.error(
+      "[chicken-cross] backend settle failed; falling back to wallet close:",
+      e,
+    );
     await closeCooperativeWithRoot({ signExec, tunnelId, settlement: co });
   }
 }

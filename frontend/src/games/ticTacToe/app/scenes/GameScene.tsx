@@ -44,16 +44,21 @@ function statusText(
   turn: "A" | "B",
   winner: number,
   gameType: "ttt" | "caro",
+  manual: boolean,
 ): string {
   const fiveOrLine = gameType === "caro" ? " (5 in a row)" : "";
-  if (winner === 1) return `Bot X wins!${fiveOrLine} ❌`;
-  if (winner === 2) return `Bot O wins!${fiveOrLine} ⭕`;
+  // In manual mode you are X; the bot is O.
+  if (winner === 1)
+    return `${manual ? "You win" : "Bot X wins"}!${fiveOrLine} ❌`;
+  if (winner === 2)
+    return `${manual ? "Bot wins" : "Bot O wins"}!${fiveOrLine} ⭕`;
   if (winner === 3) return "Draw match.";
   switch (phase) {
     case "opening":
       return "Opening tunnel on-chain…";
     case "playing":
-      return turn === "A" ? "Bot X is thinking…" : "Bot O is thinking…";
+      if (turn === "A") return manual ? "Your move ❌" : "Bot X is thinking…";
+      return manual ? "Bot is thinking… ⭕" : "Bot O is thinking…";
     case "settling":
       return "Settling on-chain…";
     case "done":
@@ -134,6 +139,34 @@ export function GameScene({
   const busy =
     g.phase === "opening" || g.phase === "playing" || g.phase === "settling";
 
+  // Auto toggle: ticked = bots auto-play (watch); unticked hands X's turn to you (the bot keeps
+  // playing O). Replaces the old "Stop Playing" — unticking pauses auto so you can play yourself.
+  const autoToggle = (
+    <button
+      onClick={() => g.setAuto(!g.auto)}
+      aria-pressed={g.auto}
+      data-testid="ttt-auto"
+      className={`flex-1 font-headline-lg-mobile text-base px-4 py-2.5 rounded-sm border-[2px] border-primary shadow-[2px_2px_0px_#410000] hover:translate-y-[2px] hover:shadow-none transition-all transform -rotate-1 flex items-center justify-center gap-2 ${
+        g.auto ? "bg-secondary text-on-secondary" : "bg-surface text-primary"
+      }`}
+    >
+      <span
+        className={`grid h-4 w-4 place-items-center border border-primary text-xs ${g.auto ? "bg-primary text-on-primary" : "bg-surface"}`}
+      >
+        {g.auto ? "✓" : ""}
+      </span>
+      Auto
+    </button>
+  );
+  const setupBtn = (
+    <button
+      onClick={onBack}
+      className="flex-1 border-2 border-primary text-primary font-headline-lg-mobile text-base px-4 py-2.5 rounded-sm hover:bg-primary/5 transition-all transform rotate-1 shadow-[2px_2px_0px_#001e40]"
+    >
+      ← Setup
+    </button>
+  );
+
   return (
     <div
       className={`w-full h-full overflow-y-auto hide-scrollbar flex flex-col ${isPortrait ? "gap-2 pt-2 pb-2 px-2" : "gap-6 pt-8 pb-4 px-4"}`}
@@ -168,7 +201,7 @@ export function GameScene({
           <div className="w-full max-w-[540px] flex justify-between items-end mb-6 px-4 border-b-2 border-primary/20 pb-4">
             <div className="text-center">
               <div className="font-headline-lg text-lg text-primary">
-                Bot X (X)
+                {g.auto ? "Bot X (X)" : "You (X)"}
               </div>
               <div className="font-body-lg text-3xl text-primary mt-1 min-h-[30px] flex items-center justify-center font-bold">
                 {g.score.x}
@@ -193,7 +226,7 @@ export function GameScene({
             </div>
             <div className="text-center">
               <div className="font-headline-lg text-lg text-secondary">
-                Bot O (O)
+                {g.auto ? "Bot O (O)" : "Bot (O)"}
               </div>
               <div className="font-body-lg text-3xl text-secondary mt-1 min-h-[30px] flex items-center justify-center font-bold">
                 {g.score.o}
@@ -211,36 +244,31 @@ export function GameScene({
                 board={g.board}
                 size={g.boardSize ?? 15}
                 lastMove={g.lastMove ?? -1}
+                onPlay={g.playCell}
+                disabled={!g.myTurn}
               />
             ) : (
-              <Board board={uiBoard(g.board)} onPlay={() => {}} disabled />
+              <Board
+                board={uiBoard(g.board)}
+                onPlay={g.playCell}
+                disabled={!g.myTurn}
+              />
             )}
           </div>
 
           {/* Status text */}
           <div className="text-center font-body-lg text-2xl text-primary font-bold my-4 min-h-[28px] ink-bleed">
-            {statusText(g.phase, g.turn, g.winner, gameType)}
+            {statusText(g.phase, g.turn, g.winner, gameType, !g.auto)}
           </div>
 
           {/* Portrait Controls */}
           {isPortrait && (
             <div className="mt-4 flex flex-wrap gap-4 justify-center w-full max-w-[480px]">
               {mode === "auto" ? (
-                g.auto ? (
-                  <button
-                    onClick={g.stopAuto}
-                    className="w-full bg-secondary text-on-secondary font-headline-lg-mobile text-base px-6 py-2.5 rounded-sm shadow-[2px_2px_0px_#410000] hover:translate-y-[2px] hover:shadow-none transition-all transform -rotate-1 border-[2px] border-primary"
-                  >
-                    ⏹ Stop Playing
-                  </button>
-                ) : (
-                  <button
-                    onClick={onBack}
-                    className="w-full bg-primary text-on-primary font-headline-lg-mobile text-base px-6 py-2.5 rounded-sm shadow-[2px_2px_0px_#bc0000] hover:translate-y-[2px] hover:shadow-none transition-all transform rotate-1 border-[2px] border-primary"
-                  >
-                    ← Back to setup
-                  </button>
-                )
+                <>
+                  {autoToggle}
+                  {setupBtn}
+                </>
               ) : (
                 <>
                   <button
@@ -289,21 +317,10 @@ export function GameScene({
               {/* Actions */}
               <div className="mt-4 flex flex-wrap gap-4 justify-center w-full">
                 {mode === "auto" ? (
-                  g.auto ? (
-                    <button
-                      onClick={g.stopAuto}
-                      className="w-full bg-secondary text-on-secondary font-headline-lg-mobile text-base px-6 py-2.5 rounded-sm shadow-[2px_2px_0px_#410000] hover:translate-y-[2px] hover:shadow-none transition-all transform -rotate-1 border-[2px] border-primary"
-                    >
-                      ⏹ Stop Playing
-                    </button>
-                  ) : (
-                    <button
-                      onClick={onBack}
-                      className="w-full bg-primary text-on-primary font-headline-lg-mobile text-base px-6 py-2.5 rounded-sm shadow-[2px_2px_0px_#bc0000] hover:translate-y-[2px] hover:shadow-none transition-all transform rotate-1 border-[2px] border-primary"
-                    >
-                      ← Back to setup
-                    </button>
-                  )
+                  <>
+                    {autoToggle}
+                    {setupBtn}
+                  </>
                 ) : (
                   <>
                     <button

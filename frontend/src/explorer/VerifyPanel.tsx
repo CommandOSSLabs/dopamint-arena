@@ -6,7 +6,10 @@ import { Panel, PanelHeader, PanelTitle } from "@/components/ui/panel";
 import { cn } from "@/lib/utils";
 import { getTranscript, type SettlementRow } from "@/backend/explorerClient";
 import { partiesFromTunnelObject } from "@/backend/tunnelParties";
-import { verifyTranscript, type TranscriptVerification } from "../../../sui-tunnel-ts/src/proof/transcript";
+import {
+  verifyTranscript,
+  type TranscriptVerification,
+} from "../../../sui-tunnel-ts/src/proof/transcript";
 import { checksOf, verdictOf, type Verdict } from "./verifyModel";
 
 type Phase = "loading" | "done" | "error";
@@ -28,7 +31,10 @@ export function VerifyPanel({ row }: { row: SettlementRow }) {
         try {
           record = await getTranscript(row.txDigest);
         } catch {
-          if (alive) { setHasTranscript(false); setPhase("done"); }
+          if (alive) {
+            setHasTranscript(false);
+            setPhase("done");
+          }
           return;
         }
         // 2) Need an on-chain anchored root to check the transcript against. A close without one
@@ -39,22 +45,34 @@ export function VerifyPanel({ row }: { row: SettlementRow }) {
           return;
         }
         // 3) party public keys from the authoritative on-chain Tunnel object (trustless).
-        const obj = await client.getObject({ id: row.tunnelId, options: { showContent: true } });
+        const obj = await client.getObject({
+          id: row.tunnelId,
+          options: { showContent: true },
+        });
         const parties = partiesFromTunnelObject((obj.data as any)?.content);
         // 4) re-derive the verdict in-browser. Balances are exact decimal-string MIST (BigInt).
-        const lockedTotal = BigInt(row.partyABalance ?? 0) + BigInt(row.partyBBalance ?? 0);
+        const lockedTotal =
+          BigInt(row.partyABalance ?? 0) + BigInt(row.partyBBalance ?? 0);
         const v = verifyTranscript(record, {
           partyA: parties.partyA,
           partyB: parties.partyB,
           onchainRoot,
           lockedTotal,
         });
-        if (alive) { setResult(v); setPhase("done"); }
+        if (alive) {
+          setResult(v);
+          setPhase("done");
+        }
       } catch (e) {
-        if (alive) { setErr(String(e)); setPhase("error"); }
+        if (alive) {
+          setErr(String(e));
+          setPhase("error");
+        }
       }
     })();
-    return () => { alive = false; };
+    return () => {
+      alive = false;
+    };
   }, [client, row]);
 
   // One orchestrated reveal: the four checks cascade in once the verdict resolves.
@@ -75,7 +93,9 @@ export function VerifyPanel({ row }: { row: SettlementRow }) {
     <Panel>
       <PanelHeader>
         <PanelTitle>Independent verification</PanelTitle>
-        <span className="wal-eyebrow ml-auto text-muted-foreground">runs in your browser</span>
+        <span className="wal-eyebrow ml-auto text-muted-foreground">
+          runs in your browser
+        </span>
       </PanelHeader>
 
       <div className="flex flex-col gap-5 p-5">
@@ -85,9 +105,10 @@ export function VerifyPanel({ row }: { row: SettlementRow }) {
 
         {verdict === "unverifiable" && (
           <p className="text-sm text-muted-foreground">
-            This settlement is <b>anchored on-chain</b>, but its off-chain transcript can't be
-            independently re-verified here — either no transcript was archived, or it was closed
-            without anchoring a transcript root. Its recorded balances and root still stand.
+            This settlement is <b>anchored on-chain</b>, but its off-chain
+            transcript can't be independently re-verified here — either no
+            transcript was archived, or it was closed without anchoring a
+            transcript root. Its recorded balances and root still stand.
           </p>
         )}
 
@@ -103,7 +124,9 @@ export function VerifyPanel({ row }: { row: SettlementRow }) {
                 >
                   {c.ok ? "✓" : "✗"}
                 </span>
-                <span className={c.ok ? "" : "text-destructive"}>{c.label}</span>
+                <span className={c.ok ? "" : "text-destructive"}>
+                  {c.label}
+                </span>
               </li>
             ))}
           </ul>
@@ -117,17 +140,37 @@ export function VerifyPanel({ row }: { row: SettlementRow }) {
 
 function VerdictSeal({ verdict, phase }: { verdict: Verdict; phase: Phase }) {
   if (phase === "loading") {
-    return <div className="wal-eyebrow text-muted-foreground">Re-deriving proof…</div>;
+    return (
+      <div className="wal-eyebrow text-muted-foreground">
+        Re-deriving proof…
+      </div>
+    );
   }
   const map = {
-    verified: { ring: "border-success text-success", title: "Mutually authorized + integrity-verified" },
-    failed: { ring: "border-destructive text-destructive", title: "Verification FAILED" },
-    unverifiable: { ring: "border-border text-muted-foreground", title: "Anchored — transcript unavailable" },
+    verified: {
+      ring: "border-success text-success",
+      title: "Mutually authorized + integrity-verified",
+    },
+    failed: {
+      ring: "border-destructive text-destructive",
+      title: "Verification FAILED",
+    },
+    unverifiable: {
+      ring: "border-border text-muted-foreground",
+      title: "Anchored — transcript unavailable",
+    },
   } as const;
   const s = map[verdict];
   return (
-    <div className={cn("flex items-center gap-3 rounded-lg border-2 px-4 py-3", s.ring)}>
-      <span className="text-2xl">{verdict === "verified" ? "◆" : verdict === "failed" ? "✗" : "◇"}</span>
+    <div
+      className={cn(
+        "flex items-center gap-3 rounded-lg border-2 px-4 py-3",
+        s.ring,
+      )}
+    >
+      <span className="text-2xl">
+        {verdict === "verified" ? "◆" : verdict === "failed" ? "✗" : "◇"}
+      </span>
       <div>
         <div className="wal-display text-base">{s.title}</div>
         <div className="wal-eyebrow text-muted-foreground">
@@ -159,10 +202,28 @@ function StepLedger({ result }: { result: TranscriptVerification }) {
             {result.steps.map((s, i) => (
               <tr key={i} className="border-t border-border/50">
                 <td className="px-3 py-1">{s.nonce.toString()}</td>
-                <td className={cn("px-3 py-1", s.sigAValid ? "text-success" : "text-destructive")}>{s.sigAValid ? "✓" : "✗"}</td>
-                <td className={cn("px-3 py-1", s.sigBValid ? "text-success" : "text-destructive")}>{s.sigBValid ? "✓" : "✗"}</td>
-                <td className="px-3 py-1 text-right">{s.partyABalance.toString()}</td>
-                <td className="px-3 py-1 text-right">{s.partyBBalance.toString()}</td>
+                <td
+                  className={cn(
+                    "px-3 py-1",
+                    s.sigAValid ? "text-success" : "text-destructive",
+                  )}
+                >
+                  {s.sigAValid ? "✓" : "✗"}
+                </td>
+                <td
+                  className={cn(
+                    "px-3 py-1",
+                    s.sigBValid ? "text-success" : "text-destructive",
+                  )}
+                >
+                  {s.sigBValid ? "✓" : "✗"}
+                </td>
+                <td className="px-3 py-1 text-right">
+                  {s.partyABalance.toString()}
+                </td>
+                <td className="px-3 py-1 text-right">
+                  {s.partyBBalance.toString()}
+                </td>
               </tr>
             ))}
           </tbody>

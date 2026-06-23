@@ -44,7 +44,10 @@ const playgroundRoute = createRoute({
 const explorerRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/explorer",
-  component: lazyRouteComponent(() => import("./explorer/ExplorerPage"), "ExplorerPage"),
+  component: lazyRouteComponent(
+    () => import("./explorer/ExplorerPage"),
+    "ExplorerPage",
+  ),
 });
 
 const explorerDetailRoute = createRoute({

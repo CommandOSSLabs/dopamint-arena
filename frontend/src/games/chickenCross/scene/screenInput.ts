@@ -1,5 +1,5 @@
 import type { CrossDirection } from "./crossSceneTypes.ts";
-import type * as THREE from 'three';
+import type * as THREE from "three";
 
 const WORLD_EAST = { x: 1, z: 0 };
 
@@ -11,7 +11,7 @@ export function worldDirectionForScreenInput(
   camera: THREE.OrthographicCamera,
   logical: CrossDirection,
 ): CrossDirection {
-  if (logical === 'north' || logical === 'south') return logical;
+  if (logical === "north" || logical === "south") return logical;
 
   camera.updateMatrixWorld();
   // camera local +X in world XZ after lookAt
@@ -25,6 +25,6 @@ export function worldDirectionForScreenInput(
   const dotEast = sx * WORLD_EAST.x + sz * WORLD_EAST.z;
   const screenRightIsWorldEast = dotEast >= 0;
 
-  if (logical === 'east') return screenRightIsWorldEast ? 'east' : 'west';
-  return screenRightIsWorldEast ? 'west' : 'east';
+  if (logical === "east") return screenRightIsWorldEast ? "east" : "west";
+  return screenRightIsWorldEast ? "west" : "east";
 }

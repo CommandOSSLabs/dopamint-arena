@@ -4,7 +4,11 @@
  * the on-chain open/close; BombBoard.tsx (Vite-bundled) owns rendering.
  */
 import type { Party } from "sui-tunnel-ts/protocol/Protocol";
-import type { BombItProtocol, BombItState, BombItMove } from "sui-tunnel-ts/protocol/bombIt";
+import type {
+  BombItProtocol,
+  BombItState,
+  BombItMove,
+} from "sui-tunnel-ts/protocol/bombIt";
 import type { OffchainTunnel } from "sui-tunnel-ts/core/tunnel";
 
 /** Flat, render-friendly snapshot of a BombItState (bigints -> numbers). */
@@ -25,8 +29,17 @@ export function deriveView(state: BombItState): BombItView {
   return {
     tick: Number(state.tick),
     grid: Array.from(state.grid),
-    players: state.players.map((p) => ({ row: p.row, col: p.col, alive: p.alive })),
-    bombs: state.bombs.map((b) => ({ row: b.row, col: b.col, fuse: b.fuse, owner: b.owner })),
+    players: state.players.map((p) => ({
+      row: p.row,
+      col: p.col,
+      alive: p.alive,
+    })),
+    bombs: state.bombs.map((b) => ({
+      row: b.row,
+      col: b.col,
+      fuse: b.fuse,
+      owner: b.owner,
+    })),
     winner: state.winner,
     balanceA: Number(state.balanceA),
     balanceB: Number(state.balanceB),

@@ -2,7 +2,11 @@ import { useEffect, useRef } from "react";
 import type { CrossView } from "../session-core.ts";
 import type { CrossDir } from "../../../../../sui-tunnel-ts/src/protocol/cross.ts";
 import { CrossScene } from "../scene/CrossScene.ts";
-import { crossViewToSnapshot, initialFeeder, type FeederState } from "../scene/crossViewToSnapshot.ts";
+import {
+  crossViewToSnapshot,
+  initialFeeder,
+  type FeederState,
+} from "../scene/crossViewToSnapshot.ts";
 import { bindCrossInput } from "../scene/crossInput.ts";
 import { CrossSounds } from "../scene/crossSounds.ts";
 import type { CrossDirection } from "../scene/crossSceneTypes.ts";
@@ -14,7 +18,12 @@ type CrossCanvasProps = {
   onDir: (dir: CrossDir) => void;
 };
 
-const SCREEN_DIRS: Array<{ dir: CrossDirection; glyph: string; col: string; row: string }> = [
+const SCREEN_DIRS: Array<{
+  dir: CrossDirection;
+  glyph: string;
+  col: string;
+  row: string;
+}> = [
   { dir: "north", glyph: "▲", col: "2", row: "1" },
   { dir: "west", glyph: "◀", col: "1", row: "2" },
   { dir: "east", glyph: "▶", col: "3", row: "2" },
@@ -98,7 +107,10 @@ export function CrossCanvas({ view, role, winner, onDir }: CrossCanvasProps) {
     const sounds = soundsRef.current;
     if (!scene || !sounds) return;
     const { snapshot, feeder, events } = crossViewToSnapshot(
-      view, prevViewRef.current, role, feederRef.current,
+      view,
+      prevViewRef.current,
+      role,
+      feederRef.current,
     );
     scene.applySnapshot(snapshot, role);
     feederRef.current = feeder;

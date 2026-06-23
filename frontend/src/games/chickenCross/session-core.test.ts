@@ -2,7 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 // Runtime SDK imports use RELATIVE .ts paths (tsx ignores the vite alias / tsconfig paths at
 // runtime). This mirrors frontend/src/games/blackjack/session-core.test.ts exactly.
-import { CrossProtocol, MIN_STAKE } from "../../../../sui-tunnel-ts/src/protocol/cross.ts";
+import {
+  CrossProtocol,
+  MIN_STAKE,
+} from "../../../../sui-tunnel-ts/src/protocol/cross.ts";
 import { OffchainTunnel } from "../../../../sui-tunnel-ts/src/core/tunnel.ts";
 import { createParticipant } from "../../../../sui-tunnel-ts/src/core/keys.ts";
 import { stepSession, deriveView, sessionResult } from "./session-core.ts";

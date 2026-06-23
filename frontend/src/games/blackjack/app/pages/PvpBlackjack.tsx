@@ -617,14 +617,25 @@ export default function PvpBlackjack() {
             }`}
           >
             {/* Auto governs the player only (hit/stand + re-bet); the dealer always draws deterministically. */}
-            <label className="flex items-center gap-1.5 text-xs text-zinc-300 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={g.auto}
-                onChange={(e) => g.setAuto(e.target.checked)}
-              />
+            <button
+              onClick={() => g.setAuto(!g.auto)}
+              className={`flex items-center gap-2 border-2 px-3 py-1.5 rounded-xl text-xs font-black tracking-wider uppercase transition-all hover:scale-105 active:scale-95 cursor-pointer ${
+                g.auto
+                  ? "border-emerald-500 text-white bg-emerald-950/45 hover:bg-emerald-900/40"
+                  : "border-zinc-700 text-zinc-400 bg-zinc-900/60 hover:bg-zinc-800/60"
+              }`}
+            >
+              <span
+                className={`grid h-3.5 w-3.5 place-items-center rounded border transition-colors ${
+                  g.auto
+                    ? "border-emerald-400 bg-emerald-500 text-zinc-950"
+                    : "border-zinc-600 bg-zinc-800"
+                }`}
+              >
+                {g.auto ? "✓" : ""}
+              </span>
               Auto
-            </label>
+            </button>
             {!isPortrait && (
               <div className="flex items-center gap-3">
                 <DigestLink label="open" digest={g.digests.create} />

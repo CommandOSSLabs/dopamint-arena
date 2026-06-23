@@ -1,12 +1,23 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useCurrentAccount, useSignAndExecuteTransaction, useSuiClient } from "@mysten/dapp-kit";
+import {
+  useCurrentAccount,
+  useSignAndExecuteTransaction,
+  useSuiClient,
+} from "@mysten/dapp-kit";
 import { createParticipant } from "sui-tunnel-ts/core/keys";
 import { OffchainTunnel } from "sui-tunnel-ts/core/tunnel";
 import { CrossProtocol, MIN_STAKE } from "sui-tunnel-ts/protocol/cross";
 import type { CrossState, CrossMove } from "sui-tunnel-ts/protocol/cross";
 import { useTelemetry } from "../../telemetry/TelemetryProvider";
-import { getControlPlaneClient, type RegisterSessionResult } from "../../backend/controlPlane";
-import { closeCooperative, openAndFundSelfPlay, readCreatedAt } from "../../onchain/tunnelTx";
+import {
+  getControlPlaneClient,
+  type RegisterSessionResult,
+} from "../../backend/controlPlane";
+import {
+  closeCooperative,
+  openAndFundSelfPlay,
+  readCreatedAt,
+} from "../../onchain/tunnelTx";
 import {
   deriveView,
   sessionResult,
@@ -18,7 +29,13 @@ import {
 /** Milliseconds between world ticks (animation pacing). Faster than blackjack — hops are quick. */
 const STEP_MS = Number(import.meta.env.VITE_BOT_STEP_MS) || 300;
 
-export type SessionStatus = "idle" | "funding" | "playing" | "settling" | "settled" | "error";
+export type SessionStatus =
+  | "idle"
+  | "funding"
+  | "playing"
+  | "settling"
+  | "settled"
+  | "error";
 
 export interface ChickenCrossSession {
   status: SessionStatus;
@@ -91,7 +108,9 @@ export function useChickenCrossSession(): ChickenCrossSession {
     (nextStake: number) => {
       stopTimer();
       const floored = Math.floor(nextStake);
-      const stakeBig = BigInt(Math.max(Number(MIN_STAKE), Number.isFinite(floored) ? floored : 0));
+      const stakeBig = BigInt(
+        Math.max(Number(MIN_STAKE), Number.isFinite(floored) ? floored : 0),
+      );
       setStake(Number(stakeBig));
       setResult(null);
       setError(null);
@@ -101,11 +120,15 @@ export function useChickenCrossSession(): ChickenCrossSession {
         setStatus("error");
         return;
       }
-      const signExec = async (tx: Parameters<typeof signAndExecute>[0]["transaction"]) => {
+      const signExec = async (
+        tx: Parameters<typeof signAndExecute>[0]["transaction"],
+      ) => {
         const r = await signAndExecute({ transaction: tx });
         return { digest: r.digest };
       };
-      const reads = client as unknown as Parameters<typeof openAndFundSelfPlay>[0]["reads"];
+      const reads = client as unknown as Parameters<
+        typeof openAndFundSelfPlay
+      >[0]["reads"];
 
       (async () => {
         try {
@@ -135,7 +158,12 @@ export function useChickenCrossSession(): ChickenCrossSession {
             { a: stakeBig, b: stakeBig },
           );
           tunnel.onUpdate = (_u, bytes) =>
-            report.bumpCounters({ updates: 1, signatures: 2, verifications: 2, bytes });
+            report.bumpCounters({
+              updates: 1,
+              signatures: 2,
+              verifications: 2,
+              bytes,
+            });
 
           protocolRef.current = protocol;
           tunnelRef.current = tunnel;
@@ -157,7 +185,9 @@ export function useChickenCrossSession(): ChickenCrossSession {
             .then((s) => {
               sessionRef.current = s;
             })
-            .catch((e) => console.error("[chicken-cross] registerSession failed:", e));
+            .catch((e) =>
+              console.error("[chicken-cross] registerSession failed:", e),
+            );
 
           const flushHeartbeat = (force: boolean) => {
             const s = sessionRef.current;
@@ -173,7 +203,9 @@ export function useChickenCrossSession(): ChickenCrossSession {
               nonce: String(moveCountRef.current),
               actionsDelta,
               windowMs: Math.max(1, windowMs),
-            }).catch((e) => console.error("[chicken-cross] heartbeat failed:", e));
+            }).catch((e) =>
+              console.error("[chicken-cross] heartbeat failed:", e),
+            );
           };
 
           const settleOnChain = async () => {
@@ -190,7 +222,10 @@ export function useChickenCrossSession(): ChickenCrossSession {
               // JS is single-threaded: Stop can only interleave at the await above.
               // By reading the live ref here (not a pre-captured local) we see any
               // null written by stopLoop() during closeCooperative.
-              if (loopDeadlineRef.current !== null && Date.now() < loopDeadlineRef.current) {
+              if (
+                loopDeadlineRef.current !== null &&
+                Date.now() < loopDeadlineRef.current
+              ) {
                 reset(); // reset() no longer clobbers loop refs or stepMsRef
                 start(loopStakeRef.current); // stepMsRef still holds the fast value
               } else {
@@ -217,7 +252,12 @@ export function useChickenCrossSession(): ChickenCrossSession {
             setView(deriveView(t.state));
 
             // On the deciding tick, push a panel txn for the winner.
-            if (moved && !wasTerminal && p.isTerminal(t.state) && t.state.winner) {
+            if (
+              moved &&
+              !wasTerminal &&
+              p.isTerminal(t.state) &&
+              t.state.winner
+            ) {
               report.pushTxn({
                 id: moveCountRef.current,
                 game: "chicken-cross",
@@ -268,5 +308,15 @@ export function useChickenCrossSession(): ChickenCrossSession {
 
   useEffect(() => stopTimer, [stopTimer]);
 
-  return { status, view, result, stake, error, start, startLoop, stopLoop, reset };
+  return {
+    status,
+    view,
+    result,
+    stake,
+    error,
+    start,
+    startLoop,
+    stopLoop,
+    reset,
+  };
 }

@@ -62,7 +62,14 @@ export interface CaroBotGameView {
   score: BotScore;
   /** Settled tunnels this session, newest first (one per on-chain close). */
   tunnels: TunnelRecord[];
+  /** When true both sides auto-play (watch); when false you play X and the bot plays O. */
   auto: boolean;
+  /** Toggle auto-play. Off hands X's turn to you; the bot keeps playing O automatically. */
+  setAuto: (on: boolean) => void;
+  /** True when auto is off and it's your turn (X) to place a mark. */
+  myTurn: boolean;
+  /** Place your (X) mark at this cell — manual mode only, on your turn, on an empty cell. */
+  playCell: (cell: number) => void;
   rebalancing: boolean;
   maxGames: number;
   currentGame: number;
@@ -117,7 +124,7 @@ export function useCaroBotGame(
   });
   const [score, setScore] = useState<BotScore>(loadScore);
   const [tunnels, setTunnels] = useState<TunnelRecord[]>([]);
-  const [auto, setAuto] = useState(false);
+  const [auto, setAutoState] = useState(true);
   const [rebalancing, setRebalancing] = useState(false);
   const [maxGames, setMaxGamesState] = useState<number>(DEFAULT_MAX_GAMES);
   const [currentGame, setCurrentGame] = useState<number>(1);
@@ -125,7 +132,13 @@ export function useCaroBotGame(
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const nextRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const autoRef = useRef(false);
+  const autoRef = useRef(true); // mirror of `auto` (auto-play) readable inside async flows
+  // Session live (drives tunnel-after-tunnel continuation), decoupled from `auto` so unticking
+  // auto switches X to manual without ending the session.
+  const playingRef = useRef(false);
+  // A user-queued cell (X) the running interval applies on its next tick — reuses the loop's
+  // single step/telemetry/score site.
+  const pendingCellRef = useRef<number | null>(null);
   const balancesRef = useRef<{ x: bigint; o: bigint }>({ x: 0n, o: 0n });
   const runRef = useRef<() => void>(() => {});
   const difficultyRef = useRef<Difficulty>(difficulty);
@@ -346,6 +359,7 @@ export function useCaroBotGame(
           setScore({ ...tally });
         };
 
+        pendingCellRef.current = null; // drop any cell queued during the inter-tunnel gap
         await new Promise<void>((resolve, reject) => {
           let steps = 0;
           const delay = difficultyRef.current === "fast" ? 30 : STEP_MS;
@@ -362,23 +376,35 @@ export function useCaroBotGame(
               const innerOver = inner.winner !== 0;
               // Between games, A drives the advance with any cell; mid-game, the heuristic picks.
               const by: "A" | "B" = innerOver ? "A" : (inner.turn as "A" | "B");
-              const cell = innerOver
-                ? 0
-                : difficultyRef.current === "fast"
-                  ? (() => {
-                      const empties = inner.board
-                        .map((v, i) => (v === 0 ? i : -1))
-                        .filter((i) => i >= 0);
-                      return empties[
-                        Math.floor(Math.random() * empties.length)
-                      ];
-                    })()
-                  : pickCaroMove(
-                      inner,
-                      by,
-                      Math.random,
-                      strengthFor(difficultyRef.current, by),
-                    );
+              // Manual play (auto off): pause on X's turn (party A) and apply only a user-queued
+              // cell; the bot still plays O and finished games still auto-advance.
+              let cell: number;
+              if (!innerOver && !autoRef.current && by === "A") {
+                if (pendingCellRef.current === null) {
+                  flushHeartbeat(tunnelId, false);
+                  return; // wait for the user's move
+                }
+                cell = pendingCellRef.current;
+                pendingCellRef.current = null;
+              } else {
+                cell = innerOver
+                  ? 0
+                  : difficultyRef.current === "fast"
+                    ? (() => {
+                        const empties = inner.board
+                          .map((v, i) => (v === 0 ? i : -1))
+                          .filter((i) => i >= 0);
+                        return empties[
+                          Math.floor(Math.random() * empties.length)
+                        ];
+                      })()
+                    : pickCaroMove(
+                        inner,
+                        by,
+                        Math.random,
+                        strengthFor(difficultyRef.current, by),
+                      );
+              }
               // Sign each update with the on-chain created_at so update_state's timestamp
               // check passes regardless of local clock skew.
               const r = tunnel.step({ cell }, by, {
@@ -390,7 +416,11 @@ export function useCaroBotGame(
 
               moveCountRef.current += 1;
               actionsRef.current += 1;
-              report.bumpCounters({ updates: 1, signatures: 2, verifications: 2 });
+              report.bumpCounters({
+                updates: 1,
+                signatures: 2,
+                verifications: 2,
+              });
 
               const next = tunnel.state;
               setBoard([...next.inner.board]);
@@ -502,24 +532,23 @@ export function useCaroBotGame(
         const b = await refreshBalances();
         setPhase("done");
 
-        // 7) auto-play: next tunnel until a bot is low on gas.
-        if (autoRef.current) {
+        // 7) continue tunnel-after-tunnel while the session is live (auto or manual), until a
+        // bot is low on gas.
+        if (playingRef.current) {
           if (b && b.x >= MIN_PLAY_MIST && b.o >= MIN_PLAY_MIST) {
             nextRef.current = setTimeout(() => {
-              if (autoRef.current) runRef.current();
+              if (playingRef.current) runRef.current();
             }, NEXT_GAME_MS);
           } else {
-            autoRef.current = false;
-            setAuto(false);
+            playingRef.current = false;
             setError(
-              "A bot is low on gas — auto-play stopped. Fund the bots to continue.",
+              "A bot is low on gas — play stopped. Fund the bots to continue.",
             );
           }
         }
       } catch (e) {
         stopTimer();
-        autoRef.current = false;
-        setAuto(false);
+        playingRef.current = false; // never loop on errors
         setError(e instanceof Error ? e.message : String(e));
         setPhase("error");
       }
@@ -530,11 +559,33 @@ export function useCaroBotGame(
     runRef.current = runGame;
   }, [runGame]);
 
+  // Auto-play toggle. The running interval reads autoRef live: off makes it wait for a queued
+  // cell on X's turn, on resumes auto-playing both sides.
+  const setAuto = useCallback((on: boolean) => {
+    autoRef.current = on;
+    setAutoState(on);
+  }, []);
+
+  // Queue your (X) move for the running interval to apply. No-op unless it's actually your turn
+  // in manual mode on an empty cell.
+  const playCell = useCallback(
+    (cell: number) => {
+      if (autoRef.current || phase !== "playing" || winner !== 0) return;
+      if (turn !== "A") return;
+      if (cell < 0 || cell >= board.length || board[cell] !== 0) return;
+      pendingCellRef.current = cell;
+    },
+    [phase, winner, turn, board],
+  );
+
+  // Your turn = auto off, a game is in progress, and it's X (party A) to move.
+  const myTurn = !auto && phase === "playing" && winner === 0 && turn === "A";
+
   const newGame = useCallback(() => {
-    autoRef.current = false;
     setAuto(false);
+    playingRef.current = false; // single game: don't auto-continue
     runGame();
-  }, [runGame]);
+  }, [runGame, setAuto]);
 
   const startAuto = useCallback(() => {
     if (
@@ -545,10 +596,10 @@ export function useCaroBotGame(
       setPhase("error");
       return;
     }
-    autoRef.current = true;
-    setAuto(true);
+    setAuto(true); // a fresh session starts with auto ticked (untick to play X yourself)
+    playingRef.current = true;
     runGame();
-  }, [runGame]);
+  }, [runGame, setAuto]);
 
   const resetScore = useCallback(() => {
     const zero: BotScore = { x: 0, o: 0, draws: 0 };
@@ -561,14 +612,15 @@ export function useCaroBotGame(
   }, []);
 
   const stopAuto = useCallback(() => {
-    autoRef.current = false;
-    setAuto(false);
+    playingRef.current = false;
+    pendingCellRef.current = null;
+    stopTimer();
     if (nextRef.current !== null) {
       clearTimeout(nextRef.current);
       nextRef.current = null;
     }
     // Keep the settle history visible after stopping — it's the record of what was played.
-  }, []);
+  }, [stopTimer]);
 
   const rebalance = useCallback(() => {
     void (async () => {
@@ -607,6 +659,9 @@ export function useCaroBotGame(
     score,
     tunnels,
     auto,
+    setAuto,
+    myTurn,
+    playCell,
     rebalancing,
     maxGames,
     currentGame,

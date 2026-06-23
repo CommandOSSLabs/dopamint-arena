@@ -39,13 +39,16 @@ class BombItBot implements GameBot<BombItState, BombItMove> {
   }
 }
 
-export function createBombItKit(stake: bigint): GameKit<BombItState, BombItMove> {
+export function createBombItKit(
+  stake: bigint,
+): GameKit<BombItState, BombItMove> {
   const protocol = new BombItProtocol();
   return {
     id: "bomb-it",
     protocol,
     stateHash: (state) => defaultStateHash(protocol, state),
-    createBot: (seat: Party, ctx: BotContext) => new BombItBot(seat, protocol, ctx),
+    createBot: (seat: Party, ctx: BotContext) =>
+      new BombItBot(seat, protocol, ctx),
     defaultStake: stake,
   };
 }

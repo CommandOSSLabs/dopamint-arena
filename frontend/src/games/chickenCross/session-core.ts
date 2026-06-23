@@ -5,7 +5,11 @@
  * on-chain open/close, and telemetry. CrossBoard.tsx (Vite-only) owns hazard rendering.
  */
 import type { Party } from "sui-tunnel-ts/protocol/Protocol";
-import type { CrossProtocol, CrossState, CrossMove } from "sui-tunnel-ts/protocol/cross";
+import type {
+  CrossProtocol,
+  CrossState,
+  CrossMove,
+} from "sui-tunnel-ts/protocol/cross";
 import type { OffchainTunnel } from "sui-tunnel-ts/core/tunnel";
 
 /** Flat, render-friendly snapshot of a CrossState (bigints -> numbers). */
@@ -45,7 +49,11 @@ export function deriveView(state: CrossState): CrossView {
   return {
     tick: Number(state.tick),
     seed: Number(state.seed),
-    players: state.players.map((p) => ({ lane: p.lane, col: p.col, score: p.score })),
+    players: state.players.map((p) => ({
+      lane: p.lane,
+      col: p.col,
+      score: p.score,
+    })),
     winner: state.winner,
     balanceA: Number(state.balanceA),
     balanceB: Number(state.balanceB),

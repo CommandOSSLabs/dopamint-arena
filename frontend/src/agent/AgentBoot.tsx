@@ -4,5 +4,9 @@ import { ProgrammaticWalletGate } from "./ProgrammaticWalletGate";
 
 export function AgentBoot({ children }: { children: ReactNode }) {
   const cfg = parseAgentConfig(window.location.href);
-  return <ProgrammaticWalletGate secretKey={cfg.secretKey}>{children}</ProgrammaticWalletGate>;
+  return (
+    <ProgrammaticWalletGate secretKey={cfg.secretKey}>
+      {children}
+    </ProgrammaticWalletGate>
+  );
 }

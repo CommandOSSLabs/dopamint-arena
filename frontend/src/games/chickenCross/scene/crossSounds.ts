@@ -1,4 +1,10 @@
-export type CrossSoundName = "hop" | "splat" | "splash" | "win" | "room-join" | "click";
+export type CrossSoundName =
+  | "hop"
+  | "splat"
+  | "splash"
+  | "win"
+  | "room-join"
+  | "click";
 
 const FILES: Record<CrossSoundName, string> = {
   hop: "/sounds/hop.mp3",

@@ -3,7 +3,6 @@ import { useCurrentAccount } from "@mysten/dapp-kit";
 import { Toaster } from "sonner";
 import Home from "@/games/blackjack/app/pages/Home";
 import PlayerBot from "@/games/blackjack/app/pages/PlayerBot";
-import PlayerVsDealer from "@/games/blackjack/app/pages/PlayerVsDealer";
 import PvpBlackjack from "@/games/blackjack/app/pages/PvpBlackjack";
 import {
   GameRouterProvider,
@@ -33,8 +32,6 @@ function AppContent() {
   switch (currentRoute) {
     case "/":
       return <Home />;
-    case "/play":
-      return <PlayerVsDealer />;
     case "/bot":
       return <PlayerBot />;
     case "/pvp":

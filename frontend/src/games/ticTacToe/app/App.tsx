@@ -8,12 +8,12 @@ import {
   useCustomWallet,
   CustomWalletProvider,
 } from "@/games/ticTacToe/app/contexts/CustomWallet";
-import {
-  loadOrCreateBots,
-  buildFundTx,
-} from "@/games/ticTacToe/app/lib/bots";
+import { loadOrCreateBots, buildFundTx } from "@/games/ticTacToe/app/lib/bots";
 import { LoginScene } from "@/games/ticTacToe/app/scenes/LoginScene";
-import type { PlayMode, GameType } from "@/games/ticTacToe/app/scenes/SetupScene";
+import type {
+  PlayMode,
+  GameType,
+} from "@/games/ticTacToe/app/scenes/SetupScene";
 import { SetupScene } from "@/games/ticTacToe/app/scenes/SetupScene";
 import { GameScene } from "@/games/ticTacToe/app/scenes/GameScene";
 import { PvpScene } from "@/games/ticTacToe/app/scenes/PvpScene";
@@ -43,7 +43,8 @@ function AppContent() {
   const g = gameType === "caro" ? caroGame : tttGame;
 
   const funded =
-    g.balances.x >= MIN_BOT_BALANCE_MIST && g.balances.o >= MIN_BOT_BALANCE_MIST;
+    g.balances.x >= MIN_BOT_BALANCE_MIST &&
+    g.balances.o >= MIN_BOT_BALANCE_MIST;
 
   // Track the actual container element's parent bounds to determine orientation
   useEffect(() => {
@@ -213,8 +214,8 @@ function AppContent() {
             />
           )}
 
-          {scene === "setup" && (
-            g.phase === "error" ? (
+          {scene === "setup" &&
+            (g.phase === "error" ? (
               <div className="w-full h-full flex flex-col items-center justify-center gap-6 p-8">
                 <p className="text-sm text-rose-400 text-center break-words max-w-xs">
                   {String(g.phase)}
@@ -243,10 +244,15 @@ function AppContent() {
                 onStart={handleStart}
                 onBack={() => setScene("login")}
                 isPortrait={isPortrait}
-                preparingLabel={preparing ? "Setting up bots…" : g.rebalancing ? "Preparing bots…" : undefined}
+                preparingLabel={
+                  preparing
+                    ? "Setting up bots…"
+                    : g.rebalancing
+                      ? "Preparing bots…"
+                      : undefined
+                }
               />
-            )
-          )}
+            ))}
 
           {scene === "game" && (
             <GameScene
