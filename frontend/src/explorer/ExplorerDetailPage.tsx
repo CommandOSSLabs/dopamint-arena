@@ -17,7 +17,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 }
 
 export function ExplorerDetailPage() {
-  const { digest } = useParams({ from: "/explorer/$digest" });
+  const { digest } = useParams({ strict: false }) as { digest: string };
   const { network } = useSuiClientContext();
   const [row, setRow] = useState<SettlementRow | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -27,7 +27,7 @@ export function ExplorerDetailPage() {
   }, [digest]);
 
   return (
-    <div className="mx-auto flex min-h-screen max-w-4xl flex-col gap-4 p-6">
+    <div className="mx-auto flex h-full max-w-4xl flex-col gap-4 overflow-auto p-4 sm:p-6">
       <Link to="/explorer" className="text-xs text-muted-foreground hover:text-foreground">
         ← All settlements
       </Link>

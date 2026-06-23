@@ -79,7 +79,7 @@ export function ExplorerPage() {
   }, []);
 
   return (
-    <div className="mx-auto flex min-h-screen max-w-5xl flex-col gap-4 p-6">
+    <div className="mx-auto flex h-full max-w-5xl flex-col gap-4 p-4 sm:p-6">
       <header className="flex flex-col gap-1">
         <span className="wal-eyebrow text-muted-foreground">Dopamint · proof explorer</span>
         <h1 className="wal-display text-2xl">Settlements</h1>

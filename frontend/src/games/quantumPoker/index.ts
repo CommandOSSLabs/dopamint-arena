@@ -6,6 +6,7 @@ import { QuantumPokerPvpWindow } from "./QuantumPokerPvpWindow";
 register({
   id: "quantum-poker",
   name: "Quantum Poker",
+  description: "Heads-up poker, co-signed and settled on-chain.",
   icon: "🎴",
   image: "/games/poker.png",
   Window: QuantumPokerPvpWindow,
