@@ -41,9 +41,10 @@ import {
 import { settlePokerTunnel } from "./pokerSettle";
 
 const STAKE = QUANTUM_POKER_STAKE;
-const DOPAMINT_PER_SEAT = 1_000_000_000n; // 1 DOPAMINT per seat (9 decimals)
 const HAND_CAP = QUANTUM_POKER_HANDS_PER_TUNNEL;
 const AUTO_MS = 0; // instant bot/plumbing moves (no pacing)
+/** Seconds the human has to act before the turn auto-checks (else folds). */
+const TURN_SECONDS = 10;
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 export type QuantumPokerBotStatus =
@@ -61,6 +62,8 @@ export interface QuantumPokerBotSession {
   humanHoles: number[];
   legal: PokerLegalActions | null;
   error: string | null;
+  /** Seconds left on the human's turn timer (null when it isn't the player's turn to act). */
+  secondsLeft: number | null;
   open: () => void;
   act: (move: PokerMove) => void;
   /** Settle the current tunnel early (cash out) — status moves to "settled" when done. */
@@ -85,6 +88,7 @@ interface Snap {
   humanHoles: number[];
   legal: PokerLegalActions | null;
   error: string | null;
+  secondsLeft: number | null;
 }
 
 const HUMAN: "A" = "A";
@@ -100,6 +104,7 @@ class BotSession {
     humanHoles: [],
     legal: null,
     error: null,
+    secondsLeft: null,
   };
   private listeners = new Set<() => void>();
 
@@ -122,6 +127,11 @@ class BotSession {
   private heartbeatActions = 0;
   private moveCount = 0;
   private lastHeartbeatAt = 0;
+  // Human turn timer: counts down from TURN_SECONDS while it's the player's turn; at 0 it auto-checks
+  // (else folds) so an idle player can't stall the hand. `secondsLeft` is null when it isn't our turn.
+  private secondsLeft: number | null = null;
+  private turnTimer: ReturnType<typeof setTimeout> | null = null;
+  private turnTick: ReturnType<typeof setInterval> | null = null;
 
   subscribe = (cb: () => void): (() => void) => {
     this.listeners.add(cb);
@@ -139,6 +149,7 @@ class BotSession {
       legal:
         this.status === "awaitHuman" && s ? legalPokerActions(s, HUMAN) : null,
       error: this.error,
+      secondsLeft: this.secondsLeft,
     };
     for (const l of this.listeners) l();
   }
@@ -152,6 +163,7 @@ class BotSession {
   reset = () => {
     this.gen += 1;
     this.looping = false;
+    this.clearTurnTimer();
     this.tunnel = null;
     this.transcript = null;
     this.botA = null;
@@ -164,6 +176,7 @@ class BotSession {
   dispose = () => {
     this.gen += 1;
     this.looping = false;
+    this.clearTurnTimer();
     this.listeners.clear();
   };
 
@@ -215,7 +228,9 @@ class BotSession {
         // connected wallet funds the stake but pays no gas). SUI fallback (env unset): the wallet
         // funds the stake and pays its own gas.
         const dopamintOn = isDopamintConfigured;
-        const stakePerSeat = dopamintOn ? DOPAMINT_PER_SEAT : STAKE;
+        // chips == raw stake (1:1), so a 2500 buy-in means a 2500-chip stack — same as PvP. (Was a
+        // full 1 DOPAMINT = 1e9 raw, a stack so large a seat never busts.)
+        const stakePerSeat = STAKE;
         const coinType = dopamintOn ? DOPAMINT_COIN_TYPE : undefined;
         const signExec = dopamintOn ? deps.sponsoredSignExec : deps.signExec;
         const tunnelId = await openAndFundSelfPlay({
@@ -317,7 +332,7 @@ class BotSession {
         const r = stepPokerWithHuman(tunnel, botA, botB, HUMAN, this.ts++);
         if (r.kind === "await-human") {
           this.status = "awaitHuman";
-          this.emit();
+          this.startTurnTimer(); // arms the countdown and emits
           return;
         }
         if (r.kind === "idle") break; // terminal
@@ -340,6 +355,7 @@ class BotSession {
     const tunnel = this.tunnel;
     const botA = this.botA;
     if (!tunnel || !botA || this.status !== "awaitHuman") return;
+    this.clearTurnTimer(); // the turn is taken — stop the countdown
     const myGen = this.gen;
     try {
       applyHumanMove(tunnel, botA, HUMAN, move, this.ts++);
@@ -353,6 +369,34 @@ class BotSession {
       this.fail(e);
     }
   };
+
+  /** Arm the per-turn countdown; at 0 the turn auto-checks (else folds). */
+  private startTurnTimer() {
+    this.clearTurnTimer();
+    this.secondsLeft = TURN_SECONDS;
+    this.emit();
+    this.turnTick = setInterval(() => {
+      this.secondsLeft = this.secondsLeft != null ? this.secondsLeft - 1 : null;
+      this.emit();
+    }, 1000);
+    this.turnTimer = setTimeout(() => {
+      if (this.status !== "awaitHuman" || !this.tunnel) return;
+      const legal = legalPokerActions(this.tunnel.state, HUMAN);
+      this.act(legal.canCheck ? { kind: "check" } : { kind: "fold" });
+    }, TURN_SECONDS * 1000);
+  }
+
+  private clearTurnTimer() {
+    if (this.turnTimer) {
+      clearTimeout(this.turnTimer);
+      this.turnTimer = null;
+    }
+    if (this.turnTick) {
+      clearInterval(this.turnTick);
+      this.turnTick = null;
+    }
+    this.secondsLeft = null;
+  }
 
   /** End the match early and settle now (player "cash out"). Bumps `gen` so any in-flight drive loop
    *  abandons (no double settle), then closes at the current co-signed state. The window navigates
@@ -368,6 +412,7 @@ class BotSession {
     const transcript = this.transcript;
     const deps = this.deps;
     if (!tunnel || !transcript || !deps) return;
+    this.clearTurnTimer();
     this.status = "settling";
     this.emit();
     this.flushHeartbeat(this.tunnelId, true); // tail: don't drop the final partial window

@@ -40,10 +40,12 @@ function ActionBar({
   legal,
   pot,
   onAct,
+  secondsLeft,
 }: {
   legal: NonNullable<ReturnType<typeof useQuantumPokerBot>["legal"]>;
   pot: bigint;
   onAct: (m: PokerMove) => void;
+  secondsLeft: number | null;
 }) {
   const raise = (amt: bigint) => onAct({ kind: "bet", amount: amt });
   // Same three pot-relative sizes as PvP: ½ pot, pot, all-in.
@@ -56,6 +58,17 @@ function ActionBar({
   });
   return (
     <div className="flex flex-wrap items-center gap-1.5 rounded-md border border-white/10 bg-black/30 p-2">
+      {secondsLeft != null && (
+        <span
+          className={`h-7 min-w-[2rem] rounded-sm px-2 text-center text-[11px] font-semibold leading-7 tabular-nums ${
+            secondsLeft <= 3
+              ? "bg-rose-400/20 text-rose-200 motion-safe:animate-pulse"
+              : "bg-white/5 text-[var(--qp-gold)]"
+          }`}
+        >
+          {secondsLeft}s
+        </span>
+      )}
       <button
         type="button"
         onClick={() => onAct({ kind: "fold" })}
@@ -200,6 +213,7 @@ export function QuantumPokerWindow({
             legal={game.legal}
             pot={s.totalBetA + s.totalBetB}
             onAct={game.act}
+            secondsLeft={game.secondsLeft}
           />
         )}
 
