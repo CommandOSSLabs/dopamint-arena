@@ -19,6 +19,12 @@ export const WC = {
   seatB: "#CF6EE4", // agent (party B) tint
   text: "#e8e8f0",
   muted: "#8a93ad",
+  // Faded ("mờ") HUD surfaces — translucent glass so every control sits subtly over
+  // the wall instead of boxing it in. Shared by the toolbar + the top-right cluster.
+  glass: "rgba(10,16,34,0.5)", // faded dark glass: mode pill, toggle, readout, leaderboard, zoom HUD
+  glassBorder: "rgba(255,255,255,0.07)", // hairline edge for the dark glass
+  toolbar: "rgba(244,247,255,0.6)", // faded light frost for the floating toolbar
+  toolbarBorder: "rgba(255,255,255,0.4)", // soft edge for the light toolbar
 } as const;
 
 export const FONT_DISPLAY = "'Outfit', system-ui, sans-serif" as const;

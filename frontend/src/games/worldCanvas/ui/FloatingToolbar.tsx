@@ -12,17 +12,18 @@ import type { PainterInfo } from "../useWorldCanvasOnchain";
 export type ToolId = "draw" | "erase" | "hand";
 
 /** Curated swatch row — a small slice of the 16-index PALETTE (each value IS the
- *  protocol color index), kept short on purpose: a few colors, no custom picker. */
-const SWATCHES: readonly number[] = [3, 0, 5, 6, 8, 10, 11, 13, 14, 15];
+ *  protocol color index), kept short on purpose: a few colors, no custom picker.
+ *  Pure white (index 0) is intentionally omitted — it's the eraser/backdrop job. */
+const SWATCHES: readonly number[] = [3, 5, 6, 8, 10, 11, 13, 14, 15];
 
 /** Brush footprint edges offered (cells per side): a single, medium, fat nib. */
 const SIZES: readonly number[] = [1, 2, 3];
 
 /**
- * The Excalidraw-style floating toolbar: one clean, rounded, light island centered
- * at the top. Tools on the left, a few preset color swatches, and a brush-size
- * stepper — that's the whole config surface. No menus, no panels. The arena lanes
- * are their own cluster in the top-right ({@link ArenaControl}).
+ * The Excalidraw-style floating toolbar: one rounded, faded-frost island centered at
+ * the top. Tools on the left, a few preset color swatches, a brush-size stepper, and a
+ * row of backdrop presets — that's the whole config surface. No menus, no panels. The
+ * Auto "take the wheel" toggle is its own cluster in the top-right ({@link ArenaControl}).
  */
 export function FloatingToolbar({
   tool,
@@ -31,6 +32,9 @@ export function FloatingToolbar({
   onColor,
   brushSize,
   onBrushSize,
+  background,
+  backgrounds,
+  onBackground,
 }: {
   tool: ToolId;
   onTool: (t: ToolId) => void;
@@ -39,6 +43,10 @@ export function FloatingToolbar({
   onColor: (index: number) => void;
   brushSize: number;
   onBrushSize: (n: number) => void;
+  /** Current canvas backdrop color + the presets + setter (Excalidraw-style). */
+  background: string;
+  backgrounds: readonly string[];
+  onBackground: (hex: string) => void;
 }) {
   return (
     <div style={islandStyle}>
@@ -116,7 +124,7 @@ export function FloatingToolbar({
                 placeItems: "center",
                 cursor: "pointer",
                 border: "none",
-                background: on ? "#e8efff" : "transparent",
+                background: on ? "rgba(77,162,255,0.18)" : "transparent",
               }}
             >
               <span
@@ -132,6 +140,38 @@ export function FloatingToolbar({
           );
         })}
       </div>
+
+      <Divider />
+
+      {/* Canvas background presets (Excalidraw-style) — sets the board color. */}
+      <div
+        style={{ display: "flex", alignItems: "center", gap: 5 }}
+        title="Canvas background"
+      >
+        {backgrounds.map((hex) => {
+          const on = background.toLowerCase() === hex.toLowerCase();
+          return (
+            <button
+              key={hex}
+              type="button"
+              title={`Background ${hex}`}
+              aria-label={`Background ${hex}`}
+              aria-pressed={on}
+              onClick={() => onBackground(hex)}
+              style={{
+                width: 18,
+                height: 18,
+                borderRadius: "50%",
+                cursor: "pointer",
+                padding: 0,
+                background: hex,
+                border: "1px solid rgba(0,0,0,0.22)",
+                boxShadow: on ? `0 0 0 2px ${WC.accent}` : "none",
+              }}
+            />
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -141,21 +181,11 @@ export function FloatingToolbar({
 const TINT_BOT_A = "#5fe3a1";
 
 /**
- * The in-canvas SOLO control — ONE strictly-2-party tunnel, two funded seats, and a
- * SINGLE Auto toggle, exactly like the other arena games' solo board (chicken-cross /
- * bomb-it / battleship). The two DISTINCT DOPAMINT-funded seats co-sign the SAME tunnel;
- * the protocol stays free/draw, so there is never a winner or a stake shift — the only
- * score is who co-signed the most cells (the {@link MostPainted} readout). NO two-lane
- * selector, NO "Wall Bot", NO "+pair" swarm, NO many tunnels.
- *
- * The one toggle is "take the wheel":
- * - **Auto ON** (the default) — both seats are bot-driven; you WATCH two funded bots
- *   co-paint one tunnel.
- * - **Auto OFF** — you take the wheel and author seat A ({@link onPaint via the canvas})
- *   while the seat-B bot plays on, on the SAME tunnel.
- *
- * Flipping the switch calls {@link onToggleAuto}; "View" cycles the camera to a live bot.
- * (PvP — two distinct humans over the relay — lives at the lobby, not here.)
+ * The in-canvas arena cluster for the live ONE strictly-2-party tunnel: two DISTINCT
+ * DOPAMINT-funded seats co-paint it (free/draw, no winner, no stake shift; the only
+ * score is who co-signed the most cells — see {@link MostPainted}). The SINGLE Auto
+ * toggle, "take the wheel": Auto ON = watch both bots; Auto OFF = you author seat A vs
+ * the seat-B bot on the SAME tunnel. "View" cycles the camera to a live bot.
  */
 export function ArenaControl({
   auto,
@@ -368,7 +398,11 @@ function ToolButton({
         cursor: "pointer",
         border: "none",
         color: active ? WC.accent : "#1b1b1f",
-        background: active ? "#e8efff" : hover ? "#f1f1f4" : "transparent",
+        background: active
+          ? "rgba(77,162,255,0.18)"
+          : hover
+            ? "rgba(255,255,255,0.4)"
+            : "transparent",
         transition: "background .1s",
       }}
     >
@@ -379,10 +413,18 @@ function ToolButton({
 
 function Divider() {
   return (
-    <span style={{ width: 1, height: 22, background: "#e6e6ea", flex: "0 0 auto" }} />
+    <span
+      style={{
+        width: 1,
+        height: 22,
+        background: "rgba(90,100,120,0.25)",
+        flex: "0 0 auto",
+      }}
+    />
   );
 }
 
+/** The faded-frost floating toolbar island (translucent over the dark wall). */
 const islandStyle: CSSProperties = {
   position: "absolute",
   top: 14,
@@ -394,13 +436,15 @@ const islandStyle: CSSProperties = {
   gap: 6,
   padding: 6,
   borderRadius: 12,
-  background: "#ffffff",
-  border: "1px solid #e9e9ed",
-  boxShadow: "0 2px 14px rgba(0,0,0,0.18)",
+  background: WC.toolbar,
+  border: `1px solid ${WC.toolbarBorder}`,
+  boxShadow: "0 4px 16px rgba(0,0,0,0.2)",
+  backdropFilter: "blur(12px)",
+  WebkitBackdropFilter: "blur(12px)",
   fontFamily: FONT_DISPLAY,
 };
 
-/** Top-right arena cluster: the two-lane selector stacked above its context strip. */
+/** Top-right arena cluster: the Auto "take the wheel" toggle above its live readout. */
 const autoWrapStyle: CSSProperties = {
   position: "absolute",
   top: 14,
@@ -413,7 +457,7 @@ const autoWrapStyle: CSSProperties = {
   fontFamily: FONT_DISPLAY,
 };
 
-/** The single Auto toggle pill (dark glass): a label + a sliding switch — "take the
+/** The single Auto toggle pill (faded glass): a label + a sliding switch — "take the
  *  wheel". ON = watch two bots co-paint; OFF = you author seat A vs the seat-B bot. */
 const autoToggleStyle: CSSProperties = {
   display: "flex",
@@ -422,10 +466,11 @@ const autoToggleStyle: CSSProperties = {
   height: 40,
   padding: "0 12px",
   borderRadius: 12,
-  border: "1px solid rgba(255,255,255,0.12)",
+  border: `1px solid ${WC.glassBorder}`,
   cursor: "pointer",
-  background: "rgba(10,16,34,0.72)",
+  background: WC.glass,
   backdropFilter: "blur(8px)",
+  WebkitBackdropFilter: "blur(8px)",
   fontFamily: FONT_DISPLAY,
 };
 
@@ -473,9 +518,10 @@ const readoutStyle: CSSProperties = {
   fontWeight: 700,
   color: WC.text,
   fontFamily: FONT_MONO,
-  background: "rgba(10,16,34,0.72)",
-  border: "1px solid rgba(255,255,255,0.12)",
+  background: WC.glass,
+  border: `1px solid ${WC.glassBorder}`,
   backdropFilter: "blur(8px)",
+  WebkitBackdropFilter: "blur(8px)",
 };
 
 const readoutDividerStyle: CSSProperties = {
@@ -490,7 +536,7 @@ const pillButtonStyle: CSSProperties = {
   height: 26,
   padding: "0 10px",
   borderRadius: 8,
-  border: "1px solid rgba(255,255,255,0.14)",
+  border: `1px solid ${WC.glassBorder}`,
   cursor: "pointer",
   fontFamily: "inherit",
   fontSize: 12,
@@ -499,7 +545,7 @@ const pillButtonStyle: CSSProperties = {
   background: "rgba(255,255,255,0.06)",
 };
 
-/** Bottom-right "most painted" leaderboard card (dark glass, lightweight). */
+/** Bottom-right "most painted" leaderboard card (faded glass, lightweight). */
 const mostPaintedStyle: CSSProperties = {
   position: "absolute",
   right: 14,
@@ -512,9 +558,10 @@ const mostPaintedStyle: CSSProperties = {
   gap: 3,
   padding: "9px 11px",
   borderRadius: 12,
-  background: "rgba(10,16,34,0.72)",
-  border: "1px solid rgba(255,255,255,0.12)",
+  background: WC.glass,
+  border: `1px solid ${WC.glassBorder}`,
   backdropFilter: "blur(8px)",
+  WebkitBackdropFilter: "blur(8px)",
   fontFamily: FONT_DISPLAY,
 };
 

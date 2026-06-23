@@ -9,27 +9,39 @@ import {
 } from "./FloatingToolbar";
 import { WC, FONT_DISPLAY } from "./tokens";
 
-/** Eraser paints the board's lightest color (palette index 0 = white). */
-const ERASER_COLOR = 0;
+/** Eraser co-signs a real move under this index; it RENDERS in the backdrop color
+ *  (handled in WorldCanvas via `erasing`), so the index itself is never seen. */
+const ERASER_COLOR = 3;
+
+/** Selectable canvas backdrops (Excalidraw-style): a few presets, not a free picker. */
+const BACKGROUNDS: readonly string[] = [
+  WC.board, // dark navy (default)
+  "#0a0a0f", // near-black
+  "#1e293b", // slate
+  "#f6f3ea", // paper
+  "#ffffff", // white
+];
 
 /**
- * The lean SOLO canvas shell: the chunked wall behind a single Excalidraw-style floating
- * toolbar (tools + a few colors + brush size), the {@link ArenaControl} single Auto
- * toggle (take the wheel), and the {@link MostPainted} readout. No window chrome,
- * no panels — every painted cell is one co-signed off-chain move on the ONE
- * strictly-2-party tunnel. Free/draw: the only score is who painted the most cells.
+ * The lean canvas shell — opening the game lands you straight here, ready to draw (no
+ * splash, no start menu, no mode picker). The chunked wall sits behind one
+ * Excalidraw-style floating toolbar (tools + a few colors + brush size + backdrop), the
+ * {@link ArenaControl} Auto "take the wheel" toggle, and the {@link MostPainted} readout.
+ * Every painted cell is one co-signed off-chain move on the ONE strictly-2-party tunnel;
+ * free/draw, so the only score is who painted the most.
  */
-export function CanvasView({ onExit }: { onExit?: () => void }) {
+export function CanvasView() {
   const engine = useWorldCanvasOnchain();
   const [tool, setTool] = useState<ToolId>("draw");
   const [color, setColor] = useState(13); // Sui blue
   const [brushSize, setBrushSize] = useState(1);
+  const [background, setBackground] = useState<string>(WC.board);
 
   const tps = useRollingTps(engine.status.movesCoSigned);
 
-  // The hand tool pans; the eraser paints white; everything else paints `color`. While
-  // Auto is on the bots own both seats (watch mode), so the wall is pan-only — flip to
-  // "You vs Bot" to take the wheel and paint seat A.
+  // The hand tool pans; the eraser renders the backdrop; everything else paints `color`.
+  // The wall is pan-only (watch) while Auto is on or while the hand tool is picked — flip
+  // Auto off to take the wheel and paint seat A.
   const panOnly = tool === "hand" || engine.auto;
   const effectiveColor = tool === "erase" ? ERASER_COLOR : color;
 
@@ -55,6 +67,8 @@ export function CanvasView({ onExit }: { onExit?: () => void }) {
         agents={engine.agents}
         focus={engine.focus}
         humanAddress={engine.humanAddress}
+        background={background}
+        erasing={tool === "erase"}
       />
 
       <FloatingToolbar
@@ -64,6 +78,9 @@ export function CanvasView({ onExit }: { onExit?: () => void }) {
         onColor={setColor}
         brushSize={brushSize}
         onBrushSize={setBrushSize}
+        background={background}
+        backgrounds={BACKGROUNDS}
+        onBackground={setBackground}
       />
 
       <ArenaControl
@@ -74,32 +91,6 @@ export function CanvasView({ onExit }: { onExit?: () => void }) {
       />
 
       <MostPainted painters={engine.painters} />
-
-      {onExit && (
-        <button
-          type="button"
-          onClick={onExit}
-          title="Back to menu"
-          style={{
-            position: "absolute",
-            top: 14,
-            left: 14,
-            zIndex: 60,
-            height: 34,
-            padding: "0 14px",
-            borderRadius: 10,
-            border: "1px solid rgba(255,255,255,0.14)",
-            cursor: "pointer",
-            fontSize: 13,
-            fontWeight: 700,
-            color: WC.text,
-            background: "rgba(10,16,34,0.72)",
-            backdropFilter: "blur(8px)",
-          }}
-        >
-          ← Back
-        </button>
-      )}
     </div>
   );
 }

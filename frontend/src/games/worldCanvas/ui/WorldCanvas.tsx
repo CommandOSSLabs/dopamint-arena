@@ -21,6 +21,15 @@ import {
 const FOCUS_SCALE = 12;
 
 /**
+ * The draw cursor: a pencil tip (the FloatingToolbar's PencilIcon path) as an inline
+ * SVG data-URI, so painting feels like sketching — the arena's drawing affordance,
+ * matching the other games' tool cursors. A dark halo keeps it visible on light ink;
+ * the hotspot sits on the pencil's nib (bottom-left). Falls back to `crosshair`.
+ */
+const PENCIL_CURSOR =
+  `url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round"><g stroke="%23000" stroke-opacity="0.5" stroke-width="3.6"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></g><g stroke="%23fff" stroke-width="1.8"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></g></svg>') 2 20, crosshair`;
+
+/**
  * The infinite vector-ink wall — a single HTML5 canvas with pan (drag),
  * zoom-to-cursor (wheel), and drag-to-paint. The co-signed unit is still one CELL
  * (one cell = one tunnel move = 1 TPS, unchanged), but the VISUAL is real ink: each
@@ -66,6 +75,8 @@ interface GlobalCell {
 interface Stroke {
   color: number;
   outline: number[][];
+  /** Eraser stroke — rendered in the live backdrop color so it covers ("erases"). */
+  erase: boolean;
   minX: number;
   minY: number;
   maxX: number;
@@ -75,6 +86,7 @@ interface Stroke {
 interface OpenStroke {
   color: number;
   size: number;
+  erase: boolean;
   pts: number[][];
   lastX: number;
   lastY: number;
@@ -136,6 +148,8 @@ export function WorldCanvas({
   agents,
   focus,
   humanAddress,
+  background,
+  erasing,
 }: {
   /** Append-only live cells from the tunnel hook (stable identity, mutated in place). */
   paints: ReadonlyMap<string, PaintedCell>;
@@ -157,6 +171,10 @@ export function WorldCanvas({
   focus: CanvasFocus | null;
   /** The human's address, so a hovered cell the human painted reads "You". */
   humanAddress: string;
+  /** Canvas backdrop color (Excalidraw-style); the eraser paints this to "erase". */
+  background: string;
+  /** True when the eraser tool is active — the human's stroke renders in `background`. */
+  erasing: boolean;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -197,6 +215,10 @@ export function WorldCanvas({
   brushSizeRef.current = brushSize;
   const panOnlyRef = useRef(panOnly);
   panOnlyRef.current = panOnly;
+  const backgroundRef = useRef(background);
+  backgroundRef.current = background;
+  const erasingRef = useRef(erasing);
+  erasingRef.current = erasing;
   const paintsRef = useRef(paints);
   paintsRef.current = paints;
   const revisionRef = useRef(revision);
@@ -268,6 +290,7 @@ export function WorldCanvas({
     strokes.current.push({
       color: s.color,
       outline,
+      erase: s.erase,
       minX: s.minX,
       minY: s.minY,
       maxX: s.maxX,
@@ -299,6 +322,7 @@ export function WorldCanvas({
     openStrokes.current.set(key, {
       color,
       size,
+      erase: false, // agents never erase
       pts: [[px, py]],
       lastX: px,
       lastY: py,
@@ -391,8 +415,9 @@ export function WorldCanvas({
         }
       }
 
-      // Backdrop: the empty canvas void; ink strokes paint on top.
-      ctx.fillStyle = WC.board;
+      // Backdrop: the chosen canvas color; ink strokes paint on top.
+      const bg = backgroundRef.current;
+      ctx.fillStyle = bg;
       ctx.fillRect(0, 0, cw, ch);
 
       // Visible world-cell bounds (with slack) for stroke culling.
@@ -412,8 +437,9 @@ export function WorldCanvas({
         s.maxY >= gMinY - pad &&
         s.minY <= gMaxY + pad;
 
-      // Fill one world-space outline at the current pan/zoom, tinted by `color`.
-      const fillOutline = (outline: number[][], color: number) => {
+      // Fill one world-space outline at the current pan/zoom. Eraser strokes paint
+      // the backdrop color so they cover earlier ink (a visual erase on append-only art).
+      const fillOutline = (outline: number[][], color: number, erase: boolean) => {
         if (outline.length < 2) return;
         ctx.beginPath();
         ctx.moveTo(
@@ -427,20 +453,21 @@ export function WorldCanvas({
           );
         }
         ctx.closePath();
-        ctx.fillStyle = PALETTE[color] ?? "#ffffff";
+        ctx.fillStyle = erase ? bg : (PALETTE[color] ?? "#ffffff");
         ctx.fill();
       };
 
       // Finalized strokes (cached outlines) → agents' open strokes → the human's
       // live drag, all culled to the viewport.
       for (const s of strokes.current) {
-        if (visible(s)) fillOutline(s.outline, s.color);
+        if (visible(s)) fillOutline(s.outline, s.color, s.erase);
       }
       for (const s of openStrokes.current.values()) {
         if (visible(s)) {
           fillOutline(
             getStroke(s.pts, { ...STROKE_OPTS, size: s.size }) as number[][],
             s.color,
+            s.erase,
           );
         }
       }
@@ -449,6 +476,7 @@ export function WorldCanvas({
         fillOutline(
           getStroke(live.pts, { ...STROKE_OPTS, size: live.size }) as number[][],
           live.color,
+          live.erase,
         );
       }
 
@@ -556,7 +584,9 @@ export function WorldCanvas({
     const { wx, wy } = worldAt(sx, sy);
     liveStroke.current = {
       color: selColorRef.current,
-      size: brushSizeRef.current * 1.6,
+      // The eraser is a fatter nib and renders in the backdrop color (covers = erases).
+      size: brushSizeRef.current * (erasingRef.current ? 3 : 1.6),
+      erase: erasingRef.current,
       pts: [[wx, wy]],
       lastX: wx,
       lastY: wy,
@@ -747,7 +777,7 @@ export function WorldCanvas({
         onWheel={onWheel}
         style={{
           touchAction: "none",
-          cursor: disabled || panOnly ? "grab" : "crosshair",
+          cursor: disabled || panOnly ? "grab" : PENCIL_CURSOR,
         }}
       />
       {/* Floating per-cell owner label ("owner EThL…KwRE" / "You"). */}
@@ -779,8 +809,8 @@ export function WorldCanvas({
       <div
         className="absolute bottom-[18px] left-4 flex items-center gap-2 px-2.5 py-1.5 rounded-[12px]"
         style={{
-          background: "rgba(10,16,34,0.66)",
-          border: "1px solid rgba(255,255,255,0.12)",
+          background: WC.glass,
+          border: `1px solid ${WC.glassBorder}`,
           backdropFilter: "blur(8px)",
         }}
       >
