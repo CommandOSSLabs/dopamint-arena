@@ -124,6 +124,15 @@ export function PlacementBoard({
           >
             Randomize
           </button>
+          {/* Start lives top-right (not bottom) so it's always reachable. */}
+          <button
+            type="button"
+            disabled={!legal}
+            onClick={() => onReady(placements)}
+            className="rounded-full bg-[#cab1ff] px-4 py-1.5 text-xs font-semibold text-[#0c0f1d] shadow-[0_0_12px_rgba(202,177,255,0.3)] transition-all hover:bg-[#b79bff] active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {ctaLabel}
+          </button>
         </div>
       </div>
 
@@ -275,22 +284,12 @@ export function PlacementBoard({
         </GridFrame>
       </div>
 
-      <div className="mt-auto flex flex-wrap items-center justify-between gap-2">
-        <span className="text-[11px] text-arena-muted">
-          {legal
-            ? selected
-              ? "Click to drop the ship; R rotates."
-              : "Pick a ship to move it, or just start."
-            : "Ships overlap, touch, or hang off-board — adjust or Randomize."}
-        </span>
-        <button
-          type="button"
-          disabled={!legal}
-          onClick={() => onReady(placements)}
-          className="rounded-full bg-[#cab1ff] px-5 py-2.5 text-sm font-semibold text-[#0c0f1d] shadow-[0_0_14px_rgba(202,177,255,0.3)] transition-all hover:bg-[#b79bff] active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          {ctaLabel}
-        </button>
+      <div className="mt-auto text-[11px] text-arena-muted">
+        {legal
+          ? selected
+            ? "Click to drop the ship; R rotates."
+            : "Pick a ship to move it, or just start."
+          : "Ships overlap, touch, or hang off-board — adjust or Randomize."}
       </div>
     </div>
   );

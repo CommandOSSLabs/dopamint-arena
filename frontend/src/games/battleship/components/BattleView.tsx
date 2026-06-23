@@ -48,7 +48,7 @@ export function BattleView({
       : 0;
 
   return (
-    <div className="relative flex h-full flex-col gap-2 p-2 @[26rem]:p-3">
+    <div className="relative flex min-h-full flex-col gap-2 p-2 @[26rem]:p-3">
       <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5 text-[11px] text-arena-muted">
         <span>
           Enemy sunk{" "}
