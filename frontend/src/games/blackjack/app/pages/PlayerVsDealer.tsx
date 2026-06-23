@@ -15,6 +15,7 @@ import {
   buildFundTx,
   FUND_PER_BOT_MIST,
 } from "@/games/blackjack/app/lib/bjBots";
+import { isDopamintConfigured } from "@/onchain/dopamint";
 
 const chip25 = "/chip-25.svg";
 const chip100 = "/chip-100.svg";
@@ -267,7 +268,10 @@ export default function PlayerVsDealer() {
   const inGame =
     phase === "opening" || phase === "playing" || phase === "settling";
   const terminal = phase === "done" || result !== null;
-  const unfunded = balances.a === 0n || balances.b === 0n;
+  // DOPAMINT mode: play is free + auto-funded (sponsored gas, faucet stake), so the SUI-balance
+  // gate doesn't apply — never treat the table as unfunded.
+  const unfunded =
+    !isDopamintConfigured && (balances.a === 0n || balances.b === 0n);
   // Treat "no cards yet, no table in flight" as the pre-table start screen.
   const started =
     view.playerCards.length > 0 || view.dealerCards.length > 0 || inGame;
@@ -358,25 +362,28 @@ export default function PlayerVsDealer() {
           </h1>
           <p className="text-sm text-zinc-400 text-center">
             You play Hit/Stand against the house dealer on an off-chain state
-            channel, settled on Sui testnet. Fund your player key, then deal.
+            channel, settled on Sui testnet.
+            {!isDopamintConfigured && " Fund your player key, then deal."}
           </p>
 
-          <div className="flex flex-col items-center gap-1.5 text-xs font-mono text-zinc-400">
-            <span>
-              Player:{" "}
-              <span className="text-white">{suiOf(balances.a)} SUI</span>
-            </span>
-            <span>
-              Dealer:{" "}
-              <span className="text-white">{suiOf(balances.b)} SUI</span>
-            </span>
-            {refreshBtn}
-          </div>
+          {!isDopamintConfigured && (
+            <div className="flex flex-col items-center gap-1.5 text-xs font-mono text-zinc-400">
+              <span>
+                Player:{" "}
+                <span className="text-white">{suiOf(balances.a)} SUI</span>
+              </span>
+              <span>
+                Dealer:{" "}
+                <span className="text-white">{suiOf(balances.b)} SUI</span>
+              </span>
+              {refreshBtn}
+            </div>
+          )}
 
           <div className="flex flex-col items-center gap-2 w-full">
-            {walletFundEl}
+            {!isDopamintConfigured && walletFundEl}
             <div className="flex items-center gap-3">
-              {fundBtn}
+              {!isDopamintConfigured && fundBtn}
               {dealBtn}
             </div>
           </div>
@@ -401,7 +408,7 @@ export default function PlayerVsDealer() {
               {error}
             </div>
           )}
-          {unfunded && phase !== "funding" && !error && (
+          {!isDopamintConfigured && unfunded && phase !== "funding" && !error && (
             <div className="text-[11px] text-zinc-500 text-center">
               Fund your player key from wallet or the testnet faucet to begin.
             </div>
@@ -692,21 +699,23 @@ export default function PlayerVsDealer() {
                 <span className="text-zinc-600">({view.dealerSum})</span>
               </div>
             </div>
-            <div className="flex flex-col items-start gap-0.5">
-              <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-zinc-500">
-                <span>Player wallet:</span>
-                <span className="text-white font-mono font-black">
-                  {suiOf(balances.a)} SUI
-                </span>
+            {!isDopamintConfigured && (
+              <div className="flex flex-col items-start gap-0.5">
+                <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-zinc-500">
+                  <span>Player wallet:</span>
+                  <span className="text-white font-mono font-black">
+                    {suiOf(balances.a)} SUI
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-zinc-500">
+                  <span>Dealer wallet:</span>
+                  <span className="text-white font-mono font-black">
+                    {suiOf(balances.b)} SUI
+                  </span>
+                </div>
+                <div className="mt-0.5">{refreshBtn}</div>
               </div>
-              <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-zinc-500">
-                <span>Dealer wallet:</span>
-                <span className="text-white font-mono font-black">
-                  {suiOf(balances.b)} SUI
-                </span>
-              </div>
-              <div className="mt-0.5">{refreshBtn}</div>
-            </div>
+            )}
           </div>
 
           {/* Controls: Hit/Stand mid-round, Next round after, Cash out anytime the table
@@ -721,8 +730,8 @@ export default function PlayerVsDealer() {
               </>
             ) : (
               <>
-                {walletFundEl}
-                {fundBtn}
+                {!isDopamintConfigured && walletFundEl}
+                {!isDopamintConfigured && fundBtn}
                 {dealBtn}
               </>
             )}

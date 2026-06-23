@@ -3,9 +3,11 @@ import {
   useCurrentAccount,
   useDisconnectWallet,
   useSignAndExecuteTransaction,
+  useSignTransaction,
   useSuiClient,
 } from "@mysten/dapp-kit";
 import { Transaction } from "@mysten/sui/transactions";
+import { makeSponsoredSignExec } from "@/onchain/sponsor";
 
 interface SponsorAndExecuteProps {
   tx: Transaction;
@@ -41,6 +43,7 @@ export const useCustomWallet = () => useContext(CustomWalletContext);
 export const CustomWalletProvider = ({ children }: { children: ReactNode }) => {
   const currentAccount = useCurrentAccount();
   const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
+  const { mutateAsync: signTransaction } = useSignTransaction();
   const { mutate: disconnect } = useDisconnectWallet();
   const suiClient = useSuiClient();
 
@@ -56,8 +59,23 @@ export const CustomWalletProvider = ({ children }: { children: ReactNode }) => {
     disconnect();
   };
 
-  const sponsorAndExecute = async (): Promise<string> => {
-    throw new Error("Sponsorship not implemented in integrated client");
+  // Gas-sponsored execute (ADR-0009): the backend settler wraps the tx in its own SIP-58 gas, the
+  // wallet co-signs, both are submitted — so a 0-SUI player pays nothing. The backend allowlist
+  // (not this client) decides what it will pay for. `allowedAddresses` is unused: the settler,
+  // not the client, scopes sponsorship.
+  const sponsorAndExecute = async ({
+    tx,
+  }: SponsorAndExecuteProps): Promise<string> => {
+    if (!isConnected || !address) {
+      throw new Error("Wallet not connected");
+    }
+    const signExec = makeSponsoredSignExec({
+      sender: address,
+      client: suiClient as never,
+      signTransaction: signTransaction as never,
+    });
+    const { digest } = await signExec(tx);
+    return digest;
   };
 
   const executeTransaction = async ({ tx }: ExecuteProps): Promise<string> => {

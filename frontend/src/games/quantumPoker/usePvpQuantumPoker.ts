@@ -32,11 +32,20 @@ import {
 } from "../../backend/controlPlane";
 import {
   closeCooperativeWithRoot,
-  depositStake,
   openAndFundSharedTunnel,
   raiseDisputeUnilateral,
   readCreatedAt,
 } from "../../onchain/tunnelTx";
+import { useSponsoredSignExec } from "../../onchain/useSponsoredSignExec";
+import {
+  openSharedTunnelStaked,
+  depositStakeStaked,
+  type StakeStrategy,
+} from "../../onchain/stakeTunnel";
+import {
+  DOPAMINT_COIN_TYPE,
+  isDopamintConfigured,
+} from "../../onchain/dopamint";
 import { coSignedToSettleRequest } from "../../backend/settleRequest";
 import { attachResume, resumeActiveTunnels } from "@/pvp/resumeSession";
 import {
@@ -47,8 +56,8 @@ import {
 } from "@/pvp/resume";
 import { makePokerResumeAdapter } from "./pokerResumeAdapter";
 
-/** Locked per seat (MIST, split off the wallet's SUI gas coin — same lane as Tic-Tac-Toe). */
-export const STAKE_BALANCE = 10_000n;
+/** Locked per seat: 1 DOPAMINT (9 decimals). */
+export const STAKE_BALANCE = 1_000_000_000n;
 /** Hands played per match before the on-chain settle; chips move off-chain in the tunnel
  *  between hands, and the loop ends early (→ "done") if a seat can't cover the next ante. */
 export const HAND_CAP = 50n;
@@ -218,6 +227,7 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
   const account = useCurrentAccount();
   const client = useSuiClient();
   const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
+  const sponsored = useSponsoredSignExec();
   const { report } = useTelemetry();
   const moveIdRef = useRef(0);
 
@@ -372,6 +382,7 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
       const reads = client as unknown as Parameters<
         typeof openAndFundSharedTunnel
       >[0]["reads"];
+      const coinType = isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined;
       const proto = new QuantumPokerProtocol(HAND_CAP);
       const transcript = new Transcript(dt.tunnelId);
       transcriptRef.current = transcript;
@@ -393,9 +404,11 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
           waitPeer,
           reads,
           signExec,
+          sponsored.signExec,
           dt.tunnelId,
           transcript,
           getControlPlaneClient(),
+          coinType,
         ).then(
           () => setStatus("settled"),
           (e) => {
@@ -487,7 +500,7 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
       sync();
       setStatus("playing");
     },
-    [client, signAndExecute, sync, maybeAutoPropose, report],
+    [client, signAndExecute, sponsored, sync, maybeAutoPropose, report],
   );
 
   const findMatch = useCallback(() => {
@@ -543,21 +556,35 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
         // 2) fund on-chain: seat A opens + funds its seat in one tx (one popup) and announces;
         //    seat B gated-deposits its own stake. Identical lane to Tic-Tac-Toe.
         setStatus("funding");
+        const partyA = { address: wallet, publicKey: ephemeral.publicKey };
+        const partyB = { address: match.opponentWallet, publicKey: oppPub };
+        const stake: StakeStrategy = {
+          sponsoredSignExec: sponsored.signExec,
+          walletSignExec: signExec as never,
+          prepareStake: sponsored.prepareStake,
+          selectStakeCoin: sponsored.selectStakeCoin,
+        };
         let tunnelId: string;
         if (match.role === "A") {
-          tunnelId = await openAndFundSharedTunnel({
+          tunnelId = await openSharedTunnelStaked({
             reads,
-            signExec,
-            partyA: { address: wallet, publicKey: ephemeral.publicKey },
-            partyB: { address: match.opponentWallet, publicKey: oppPub },
+            partyA,
+            partyB,
             amount: STAKE_BALANCE,
+            label: "quantumPoker",
+            ...stake,
           });
           mp.announceTunnel(match.matchId, tunnelId);
           channel.sendPeer({ t: "open", tunnelId });
         } else {
           const open = await waitPeer<{ tunnelId: string }>("open");
           tunnelId = open.tunnelId;
-          await depositStake({ signExec, tunnelId, amount: STAKE_BALANCE });
+          await depositStakeStaked({
+            tunnelId,
+            amount: STAKE_BALANCE,
+            label: "quantumPoker",
+            ...stake,
+          });
         }
 
         // 3) build the distributed poker engine over the relay transport.
@@ -600,7 +627,14 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
         setStatus("error");
       }
     })();
-  }, [account, client, signAndExecute, maybeAutoPropose, activatePokerSession]);
+  }, [
+    account,
+    client,
+    signAndExecute,
+    sponsored,
+    maybeAutoPropose,
+    activatePokerSession,
+  ]);
 
   // Cold-load entry: on mount (once the wallet is known), rebuild any persisted in-flight poker
   // match and re-attach. Idempotent — no-ops if already connected or nothing to restore. The
@@ -767,9 +801,13 @@ async function settle(
   waitPeer: <T>(t: string) => Promise<T>,
   reads: Parameters<typeof readCreatedAt>[0],
   signExec: Parameters<typeof closeCooperativeWithRoot>[0]["signExec"],
+  // Gas-sponsored signer: the close fallback must use this in DOPAMINT mode, where the player holds
+  // 0 SUI and a wallet-signed close would throw and strand the staked DOPAMINT.
+  sponsoredSignExec: Parameters<typeof closeCooperativeWithRoot>[0]["signExec"],
   tunnelId: string,
   transcript: Transcript,
   cp: ReturnType<typeof getControlPlaneClient>,
+  coinType: string | undefined,
 ): Promise<void> {
   const createdAt = await readCreatedAt(reads, tunnelId);
   const root = transcript.root();
@@ -805,6 +843,11 @@ async function settle(
       "[quantum-poker] backend settle failed; falling back to wallet close:",
       e,
     );
-    await closeCooperativeWithRoot({ signExec, tunnelId, settlement: co });
+    await closeCooperativeWithRoot({
+      signExec: isDopamintConfigured ? sponsoredSignExec : signExec,
+      tunnelId,
+      settlement: co,
+      coinType: isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined,
+    });
   }
 }

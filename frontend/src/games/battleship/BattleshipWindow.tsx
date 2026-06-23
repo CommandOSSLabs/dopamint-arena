@@ -7,6 +7,7 @@ import { AutoBattleView } from "./components/AutoBattleView";
 import { useBattleship } from "./useBattleship";
 import { useBattleshipPvp } from "./useBattleshipPvp";
 import { useBattleshipAuto } from "./useBattleshipAuto";
+import { isDopamintConfigured } from "../../onchain/dopamint";
 import {
   BOT_CONFIGS,
   BOT_DIFFICULTIES,
@@ -179,6 +180,28 @@ function Centered({ children }: { children: ReactNode }) {
   );
 }
 
+/** Every mode renders inside this: a persistent top-left button back to mode select, over the
+ *  mode's own UI — so there's always a way out, whatever state the game is in. */
+function ModeFrame({
+  onBack,
+  children,
+}: {
+  onBack: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <div className="relative h-full w-full">
+      <button
+        onClick={onBack}
+        className="absolute left-2 top-2 z-30 rounded-full border border-cyan-500/40 bg-cyan-950/60 px-3 py-1 text-xs font-semibold text-cyan-300 backdrop-blur transition-colors hover:border-cyan-400 hover:bg-cyan-500/10"
+      >
+        ← Back
+      </button>
+      {children}
+    </div>
+  );
+}
+
 function ErrorPane({
   error,
   onBack,
@@ -222,35 +245,32 @@ function BotGame({
     setDifficulty(difficulty);
   }, [difficulty, setDifficulty]);
 
+  const back = () => {
+    reset();
+    onExit();
+  };
+  let content: ReactNode;
   if (status === "error") {
-    return (
-      <ErrorPane
-        error={error}
-        onBack={() => {
-          reset();
-          onExit();
-        }}
-      />
-    );
-  }
-  if (status === "funding") {
-    return (
+    content = <ErrorPane error={error} onBack={back} />;
+  } else if (status === "funding") {
+    content = (
       <Centered>
         Opening + funding the tunnel on-chain… approve in your wallet.
       </Centered>
     );
+  } else if (!view || status === "idle" || status === "placing") {
+    content = <PlacementBoard onReady={startBattle} />;
+  } else {
+    content = (
+      <BattleView
+        view={view}
+        statusLabel={settleLabel(status)}
+        onFire={fire}
+        onPlayAgain={reset}
+      />
+    );
   }
-  if (!view || status === "idle" || status === "placing") {
-    return <PlacementBoard onReady={startBattle} />;
-  }
-  return (
-    <BattleView
-      view={view}
-      statusLabel={settleLabel(status)}
-      onFire={fire}
-      onPlayAgain={reset}
-    />
-  );
+  return <ModeFrame onBack={back}>{content}</ModeFrame>;
 }
 
 function PvpGame({
@@ -263,22 +283,17 @@ function PvpGame({
   const { status, view, error, opponentWallet, findMatch, fire, reset } =
     useBattleshipPvp(windowId);
 
+  const back = () => {
+    reset();
+    onExit();
+  };
+  let content: ReactNode;
   if (status === "error") {
-    return (
-      <ErrorPane
-        error={error}
-        onBack={() => {
-          reset();
-          onExit();
-        }}
-      />
-    );
-  }
-  if (status === "idle") {
-    return <PlacementBoard onReady={findMatch} ctaLabel="Find Match" />;
-  }
-  if (status === "matching" || status === "funding" || !view) {
-    return (
+    content = <ErrorPane error={error} onBack={back} />;
+  } else if (status === "idle") {
+    content = <PlacementBoard onReady={findMatch} ctaLabel="Find Match" />;
+  } else if (status === "matching" || status === "funding" || !view) {
+    content = (
       <Centered>
         <div>
           {status === "matching"
@@ -292,18 +307,17 @@ function PvpGame({
         )}
       </Centered>
     );
+  } else {
+    content = (
+      <BattleView
+        view={view}
+        statusLabel={settleLabel(status)}
+        onFire={fire}
+        onPlayAgain={back}
+      />
+    );
   }
-  return (
-    <BattleView
-      view={view}
-      statusLabel={settleLabel(status)}
-      onFire={fire}
-      onPlayAgain={() => {
-        reset();
-        onExit();
-      }}
-    />
-  );
+  return <ModeFrame onBack={back}>{content}</ModeFrame>;
 }
 
 function AutoGame({
@@ -327,19 +341,15 @@ function AutoGame({
     reset,
   } = useBattleshipAuto(windowId);
 
+  const back = () => {
+    reset();
+    onExit();
+  };
+  let content: ReactNode;
   if (status === "error") {
-    return (
-      <ErrorPane
-        error={error}
-        onBack={() => {
-          reset();
-          onExit();
-        }}
-      />
-    );
-  }
-  if (status === "idle" || status === "funding") {
-    return (
+    content = <ErrorPane error={error} onBack={back} />;
+  } else if (status === "idle" || status === "funding") {
+    content = (
       <AutoSetup
         balances={balances}
         funded={funded}
@@ -348,14 +358,14 @@ function AutoGame({
         onFund={fund}
         onFundFromWallet={fundFromWallet}
         onStart={startAuto}
-        onBack={onExit}
       />
     );
+  } else if (!view) {
+    content = <Centered>Opening the first match on-chain…</Centered>;
+  } else {
+    content = <AutoBattleView view={view} onStop={stopAuto} onReset={reset} />;
   }
-  if (!view) {
-    return <Centered>Opening the first match on-chain…</Centered>;
-  }
-  return <AutoBattleView view={view} onStop={stopAuto} onReset={reset} />;
+  return <ModeFrame onBack={back}>{content}</ModeFrame>;
 }
 
 /** MIST → a short SUI string. */
@@ -370,7 +380,6 @@ function AutoSetup({
   onFund,
   onFundFromWallet,
   onStart,
-  onBack,
 }: {
   balances: { a: bigint; b: bigint };
   funded: boolean;
@@ -379,43 +388,48 @@ function AutoSetup({
   onFund: () => void;
   onFundFromWallet: () => void;
   onStart: (a: BotDifficulty, b: BotDifficulty) => void;
-  onBack: () => void;
 }) {
   const [a, setA] = useState<BotDifficulty>("normal");
   const [b, setB] = useState<BotDifficulty>("hard");
   return (
     <div className="flex h-full flex-col items-center justify-center gap-3 p-4 text-center">
       <p className="text-sm text-arena-muted">
-        Two on-chain bots auto-play match after match — each opens + settles a
-        real tunnel and self-signs, so no wallet is needed. Fund them once
-        (testnet faucet); the run loops until a bot is low on gas, or you stop.
+        {isDopamintConfigured
+          ? "Two on-chain bots auto-play match after match — each opens + settles a real tunnel and self-signs. Gas is sponsored and the stake is free DOPAMINT, so there's nothing to fund: pick the skills and start. The run loops until you stop."
+          : "Two on-chain bots auto-play match after match — each opens + settles a real tunnel and self-signs, so no wallet is needed. Fund them once (testnet faucet); the run loops until a bot is low on gas, or you stop."}
       </p>
-      <div className="flex items-center justify-center gap-4 text-xs text-arena-muted">
-        <span>
-          Bot A <span className="text-arena-text">{formatSui(balances.a)}</span>
-        </span>
-        <span>
-          Bot B <span className="text-arena-text">{formatSui(balances.b)}</span>
-        </span>
-      </div>
-      <div className="flex flex-wrap justify-center gap-2">
-        {canFundFromWallet && (
-          <button
-            onClick={onFundFromWallet}
-            disabled={funding}
-            className="rounded-full bg-cyan-400 px-4 py-1.5 text-sm font-semibold text-black shadow-[0_0_12px_rgba(34,211,238,0.3)] transition-colors hover:bg-cyan-300 disabled:opacity-50"
-          >
-            {funding ? "Funding…" : "Fund from wallet · 0.1 SUI/bot"}
-          </button>
-        )}
-        <button
-          onClick={onFund}
-          disabled={funding}
-          className="rounded-full border border-cyan-500/40 bg-cyan-950/40 px-4 py-1.5 text-sm font-semibold text-cyan-300 transition-colors hover:border-cyan-400 hover:bg-cyan-500/10 disabled:opacity-50"
-        >
-          {funding ? "Funding…" : "Faucet"}
-        </button>
-      </div>
+      {!isDopamintConfigured && (
+        <>
+          <div className="flex items-center justify-center gap-4 text-xs text-arena-muted">
+            <span>
+              Bot A{" "}
+              <span className="text-arena-text">{formatSui(balances.a)}</span>
+            </span>
+            <span>
+              Bot B{" "}
+              <span className="text-arena-text">{formatSui(balances.b)}</span>
+            </span>
+          </div>
+          <div className="flex flex-wrap justify-center gap-2">
+            {canFundFromWallet && (
+              <button
+                onClick={onFundFromWallet}
+                disabled={funding}
+                className="rounded-full bg-cyan-400 px-4 py-1.5 text-sm font-semibold text-black shadow-[0_0_12px_rgba(34,211,238,0.3)] transition-colors hover:bg-cyan-300 disabled:opacity-50"
+              >
+                {funding ? "Funding…" : "Fund from wallet · 0.1 SUI/bot"}
+              </button>
+            )}
+            <button
+              onClick={onFund}
+              disabled={funding}
+              className="rounded-full border border-cyan-500/40 bg-cyan-950/40 px-4 py-1.5 text-sm font-semibold text-cyan-300 transition-colors hover:border-cyan-400 hover:bg-cyan-500/10 disabled:opacity-50"
+            >
+              {funding ? "Funding…" : "Faucet"}
+            </button>
+          </div>
+        </>
+      )}
       <div className="flex flex-wrap items-end justify-center gap-4">
         <DifficultyPicker label="Bot A" difficulty={a} onDifficulty={setA} />
         <span className="pb-1.5 text-xs text-arena-muted">vs</span>
@@ -428,12 +442,6 @@ function AutoSetup({
           className="rounded-full bg-cyan-400 px-4 py-2 text-sm font-semibold text-black shadow-[0_0_12px_rgba(34,211,238,0.3)] transition-colors hover:bg-cyan-300 disabled:cursor-not-allowed disabled:opacity-50"
         >
           Start Auto-play
-        </button>
-        <button
-          onClick={onBack}
-          className="rounded-full border border-cyan-500/40 bg-cyan-950/40 px-4 py-2 text-sm font-semibold text-cyan-300 transition-colors hover:border-cyan-400 hover:bg-cyan-500/10"
-        >
-          Back
         </button>
       </div>
       {!funded && (

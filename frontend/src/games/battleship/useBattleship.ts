@@ -12,10 +12,15 @@ import { registerWindowDisposer } from "@/lib/windowSessions";
 import { useTelemetry } from "../../telemetry/TelemetryProvider";
 import type { TelemetryWriter } from "../../telemetry/TelemetryProvider";
 import {
-  closeCooperative,
+  closeCooperativeWithRoot,
   openAndFundSelfPlay,
   readCreatedAt,
 } from "../../onchain/tunnelTx";
+import { Transcript } from "sui-tunnel-ts/proof/transcript";
+import { settleViaBackend } from "../../backend/settle";
+import { withSponsorFallback } from "../../onchain/sponsor";
+import { useSponsoredSignExec } from "../../onchain/useSponsoredSignExec";
+import { DOPAMINT_COIN_TYPE, isDopamintConfigured } from "../../onchain/dopamint";
 import {
   BattleshipProtocol,
   type BattleshipMove,
@@ -32,8 +37,10 @@ import {
 } from "./engine/selfPlay";
 import { type BotDifficulty, DEFAULT_BOT_DIFFICULTY } from "./engine/bot";
 
-/** Coins locked per seat, and the amount that shifts to the winner. */
-const LOCKED_PER_SEAT = 500n;
+/** DOPAMINT stake locked per seat (1 DOPAMINT, 9 decimals). */
+const LOCKED_PER_SEAT = 1_000_000_000n;
+/** SUI-fallback stake per seat (MIST), when the DOPAMINT env is unset. */
+const SUI_PER_SEAT = 500n;
 const STAKE = 100n;
 /** Animation pacing for the bot's automatic moves. */
 const BOT_SHOOT_MS = 550;
@@ -69,6 +76,12 @@ interface BotDeps {
   account: { address: string } | null;
   client: unknown;
   signExec: (tx: never) => Promise<{ digest: string }>;
+  /** Backend-gas-sponsored signer (ADR-0009); falls back to signExec when the sponsor is down. */
+  sponsoredSignExec: (tx: never) => Promise<{ digest: string }>;
+  /** Pick a user coin to fund the (both-seat) stake; gas is sponsored, the stake is not. */
+  selectStakeCoin: (minAmount: bigint) => Promise<string>;
+  /** DOPAMINT stake: faucet (invisibly, sponsored) if short, then return a stake coin id. */
+  prepareStake: (minAmount: bigint) => Promise<string>;
 }
 
 interface BotSnapshot {
@@ -98,6 +111,7 @@ class BotSession {
   private placements: Placement[] = []; // your fleet layout, for ship-status display
   private tunnelId = "";
   private createdAt = 0n;
+  private transcript: Transcript | null = null;
   private onChain = false;
   private advancing = false;
   // Guards re-entry: a session that has begun a match can't be restarted (only
@@ -160,6 +174,7 @@ class BotSession {
     this.advancing = false;
     this.starting = false;
     this.tunnel = null;
+    this.transcript = null;
     this.secrets = null;
     this.lastYourShot = null;
     this.lastEnemyShot = null;
@@ -175,6 +190,7 @@ class BotSession {
     this.advancing = false;
     this.deps?.report.setActive(0);
     this.tunnel = null;
+    this.transcript = null;
     this.secrets = null;
     this.listeners.clear();
   };
@@ -208,11 +224,32 @@ class BotSession {
       return;
     }
     try {
-      const settlement = tunnel.buildSettlement(this.createdAt);
-      await closeCooperative({
-        signExec: this.deps.signExec as never,
+      // Settle through the backend /settle API: the server submits the close AND archives the
+      // transcript to Walrus (ADR-0002/0005). Fall back to a sponsored/wallet close if it's down.
+      const deps = this.deps; // non-null past the guard above; capture for the fallback closure
+      const transcript = this.transcript;
+      const settlement = tunnel.buildSettlementWithRoot(
+        this.createdAt,
+        transcript ? transcript.root() : new Uint8Array(32),
+        0n,
+      );
+      const coinType = isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined;
+      // DOPAMINT path closes via the gas sponsor too (so a 0-SUI player can close their bot
+      // game for free); SUI path closes sender-pays. coinType must match the tunnel's coin.
+      await settleViaBackend({
         tunnelId: this.tunnelId,
         settlement,
+        transcript: transcript ? transcript.toRecord().entries : [],
+        label: "battleship",
+        fallbackClose: () =>
+          closeCooperativeWithRoot({
+            signExec: (isDopamintConfigured
+              ? deps.sponsoredSignExec
+              : deps.signExec) as never,
+            tunnelId: this.tunnelId,
+            settlement,
+            coinType,
+          }),
       });
       this.setStatus("settled");
     } catch (e) {
@@ -285,19 +322,53 @@ class BotSession {
         let createdAt = 0n;
         let onChain = false;
 
+        // Per-path stake: 1 DOPAMINT vs a tiny MIST amount on the SUI fallback (so the fallback
+        // doesn't lock real SUI). The same value funds on-chain AND inits the off-chain tunnel.
+        const stakePerSeat = isDopamintConfigured ? LOCKED_PER_SEAT : SUI_PER_SEAT;
+
         if (deps.account) {
           const reads = deps.client as unknown as Parameters<
             typeof openAndFundSelfPlay
           >[0]["reads"];
           this.setStatus("funding");
-          tunnelId = await openAndFundSelfPlay({
-            reads,
-            signExec: deps.signExec as never,
-            partyA: { address: a.address, publicKey: a.keyPair.publicKey },
-            partyB: { address: b.address, publicKey: b.keyPair.publicKey },
-            aAmount: LOCKED_PER_SEAT,
-            bAmount: LOCKED_PER_SEAT,
-          });
+          const partyA = { address: a.address, publicKey: a.keyPair.publicKey };
+          const partyB = { address: b.address, publicKey: b.keyPair.publicKey };
+          // DOPAMINT (ADR-0010): faucet both seats' stake invisibly (gas-sponsored) and stake
+          // DOPAMINT — free for a 0-SUI player. SUI path (DOPAMINT env unset): sponsored SUI stake
+          // with a sender-pays fallback (ADR-0009).
+          tunnelId = isDopamintConfigured
+            ? await openAndFundSelfPlay({
+                reads,
+                signExec: deps.sponsoredSignExec as never,
+                partyA,
+                partyB,
+                aAmount: stakePerSeat,
+                bAmount: stakePerSeat,
+                coinType: DOPAMINT_COIN_TYPE,
+                stakeCoinId: await deps.prepareStake(2n * stakePerSeat),
+              })
+            : await withSponsorFallback(
+                async () =>
+                  openAndFundSelfPlay({
+                    reads,
+                    signExec: deps.sponsoredSignExec as never,
+                    partyA,
+                    partyB,
+                    aAmount: stakePerSeat,
+                    bAmount: stakePerSeat,
+                    stakeCoinId: await deps.selectStakeCoin(2n * stakePerSeat),
+                  }),
+                () =>
+                  openAndFundSelfPlay({
+                    reads,
+                    signExec: deps.signExec as never,
+                    partyA,
+                    partyB,
+                    aAmount: stakePerSeat,
+                    bAmount: stakePerSeat,
+                  }),
+                "battleship bot open/fund",
+              );
           createdAt = await readCreatedAt(reads, tunnelId);
           onChain = true;
         }
@@ -309,17 +380,23 @@ class BotSession {
           b.keyPair,
           a.address,
           b.address,
-          { a: LOCKED_PER_SEAT, b: LOCKED_PER_SEAT },
+          { a: stakePerSeat, b: stakePerSeat },
         );
-        tunnel.onUpdate = (_u, bytes) =>
+        // Record every co-signed update so the close can anchor the transcript root on-chain
+        // (close_cooperative_with_root) — the same settle path caro/poker/auto use successfully.
+        const transcript = new Transcript(tunnelId);
+        tunnel.onUpdate = (u, bytes) => {
+          transcript.append(u);
           this.deps?.report.bumpCounters({
             updates: 1,
             signatures: 2,
             verifications: 2,
             bytes,
           });
+        };
 
         this.tunnel = tunnel;
+        this.transcript = transcript;
         this.tunnelId = tunnelId;
         this.createdAt = createdAt;
         this.onChain = onChain;
@@ -385,6 +462,7 @@ export function useBattleship(windowId: string): BattleshipSession {
   const account = useCurrentAccount();
   const client = useSuiClient();
   const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
+  const sponsored = useSponsoredSignExec();
 
   const session = getBotSession(windowId);
   session.deps = {
@@ -397,6 +475,9 @@ export function useBattleship(windowId: string): BattleshipSession {
       const r = await signAndExecute({ transaction: tx });
       return { digest: r.digest };
     }) as never,
+    sponsoredSignExec: sponsored.signExec as never,
+    selectStakeCoin: sponsored.selectStakeCoin,
+    prepareStake: sponsored.prepareStake,
   };
 
   const snap = useSyncExternalStore(session.subscribe, session.getSnapshot);
