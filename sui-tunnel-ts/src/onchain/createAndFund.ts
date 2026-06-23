@@ -64,42 +64,6 @@ export function buildCreateAndFund(
 }
 
 /**
- * Append one returnless `create_and_fund` call (the variant that does NOT return the tunnel's
- * `ID`). Functionally identical to {@link buildCreateAndFund} for the caller who reads the id
- * from the tx's object changes and never chains it in the PTB — e.g. Quantum Poker, whose
- * randomness is two-party commit-reveal, so it needs no on-chain id/seed composition.
- */
-export function buildCreateAndFundReturnless(
-  tx: Transaction,
-  p: {
-    partyA: PartyArgs;
-    partyB: PartyArgs;
-    coinA: TransactionObjectArgument;
-    coinB: TransactionObjectArgument;
-    timeoutMs: bigint;
-    penaltyAmount?: bigint;
-  } & WithCoinType,
-): void {
-  tx.moveCall({
-    target: buildTarget(TUNNEL, "create_and_fund"),
-    typeArguments: [p.coinType ?? SUI_COIN_TYPE],
-    arguments: [
-      tx.pure.address(p.partyA.address),
-      vecU8(tx, p.partyA.publicKey),
-      tx.pure.u8(p.partyA.signatureType),
-      tx.pure.address(p.partyB.address),
-      vecU8(tx, p.partyB.publicKey),
-      tx.pure.u8(p.partyB.signatureType),
-      p.coinA,
-      p.coinB,
-      tx.pure.u64(p.timeoutMs),
-      tx.pure.u64(p.penaltyAmount ?? 0n),
-      tx.object(CLOCK),
-    ],
-  });
-}
-
-/**
  * PvP one-signature setup: open a shared tunnel AND fund seat A's stake in ONE PTB, so the
  * creator (party A) approves a single wallet tx instead of create + deposit separately.
  * Composes `create` (returns the owned object) → `deposit_party_a` (gated to the sender =
@@ -234,7 +198,9 @@ export function buildOpenAndFundOneReturnless(
     tx.pure.u64(spec.aAmount),
     tx.pure.u64(spec.bAmount),
   ]);
-  buildCreateAndFundReturnless(tx, {
+  // Returnless path = the plain `create_and_fund` via `withId: false` (same as buildOpenAndFundMany);
+  // the id is read from object changes, never chained in-PTB.
+  buildCreateAndFund(tx, {
     partyA: spec.partyA,
     partyB: spec.partyB,
     coinA,
@@ -242,6 +208,7 @@ export function buildOpenAndFundOneReturnless(
     timeoutMs: spec.timeoutMs,
     penaltyAmount: spec.penaltyAmount,
     coinType,
+    withId: false,
   });
 }
 
