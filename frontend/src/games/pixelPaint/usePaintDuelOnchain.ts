@@ -217,7 +217,9 @@ export function usePaintDuelOnchain(
           mode: "full",
           timestamp: run.createdAt,
         });
-        if (!r.signed) return;
+        // Count only honest, both-signature-VERIFIED steps (the TPS heartbeat
+        // contract — "honest effective TPS", same gate as useBotGame).
+        if (!r.verified) return;
         run.moveCount += 1;
         run.actions += 1;
         flushHeartbeat(run, false);
