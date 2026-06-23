@@ -30,16 +30,22 @@ const PACKAGE_ID = import.meta.env.VITE_TUNNEL_PACKAGE_ID as string;
 //
 // Built as a raw moveCall (mirroring the SDK's onchain.buildCreateAndFund) rather than via the
 // SDK helper, so it works regardless of whether this client's pinned SDK build exports it.
+//
+// `opts.stakeCoinId` splits BOTH stakes from that user/bot coin (DOPAMINT path); without it the
+// stakes come from `tx.gas` (SUI fallback). CRITICAL: a sponsored tx has NO gas coin and the
+// backend rejects any tx referencing `Gas`, so the DOPAMINT path MUST pass `stakeCoinId`.
 export function buildCreateAndFundTx(
   partyA: PartyInput,
   partyB: PartyInput,
   stake: bigint,
+  opts: { coinType?: string; stakeCoinId?: string } = {},
 ): Transaction {
   const tx = new Transaction();
-  const [coinA, coinB] = tx.splitCoins(tx.gas, [stake, stake]);
+  const source = opts.stakeCoinId ? tx.object(opts.stakeCoinId) : tx.gas;
+  const [coinA, coinB] = tx.splitCoins(source, [stake, stake]);
   tx.moveCall({
     target: `${PACKAGE_ID}::tunnel::create_and_fund`,
-    typeArguments: ["0x2::sui::SUI"],
+    typeArguments: [opts.coinType ?? "0x2::sui::SUI"],
     arguments: [
       tx.pure.address(partyA.address),
       tx.pure.vector("u8", Array.from(partyA.publicKey)),
@@ -75,6 +81,7 @@ export function buildUpdateStateTx(
     sigA: Uint8Array;
     sigB: Uint8Array;
   },
+  coinType: string = "0x2::sui::SUI",
 ): Transaction {
   const tx = new Transaction();
   onchain.buildUpdateState(tx as unknown as SdkTx, {
@@ -86,7 +93,7 @@ export function buildUpdateStateTx(
     timestamp: u.update.timestamp,
     sigA: u.sigA,
     sigB: u.sigB,
-    coinType: "0x2::sui::SUI",
+    coinType,
   });
   return tx;
 }
@@ -100,13 +107,14 @@ export function buildUpdateStateTx(
 export function buildSettleWithRootTx(
   tunnelId: string,
   s: core.CoSignedSettlementWithRoot,
+  coinType: string = "0x2::sui::SUI",
 ): Transaction {
   const tx = new Transaction();
   onchain.buildCloseWithRootFromSettlement(
     tx as unknown as SdkTx,
     tunnelId,
     s,
-    "0x2::sui::SUI",
+    coinType,
   );
   return tx;
 }

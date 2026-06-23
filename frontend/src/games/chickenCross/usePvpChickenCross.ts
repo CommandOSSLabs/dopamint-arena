@@ -23,18 +23,24 @@ import {
   type PvpChannel,
   type Role,
 } from "../../pvp/mpClient";
-import {
-  getControlPlaneClient,
-  resolveBackendUrl,
-} from "../../backend/controlPlane";
+import { resolveBackendUrl } from "../../backend/controlPlane";
 import {
   closeCooperativeWithRoot,
-  depositStake,
   openAndFundSharedTunnel,
   raiseDisputeUnilateral,
   readCreatedAt,
 } from "../../onchain/tunnelTx";
-import { coSignedToSettleRequest } from "../../backend/settleRequest";
+import { useSponsoredSignExec } from "../../onchain/useSponsoredSignExec";
+import {
+  openSharedTunnelStaked,
+  depositStakeStaked,
+  type StakeStrategy,
+} from "../../onchain/stakeTunnel";
+import {
+  DOPAMINT_COIN_TYPE,
+  isDopamintConfigured,
+} from "../../onchain/dopamint";
+import { settleViaBackend } from "../../backend/settle";
 import { deriveView, type CrossView } from "./session-core";
 import { attachResume, resumeActiveTunnels } from "@/pvp/resumeSession";
 import {
@@ -45,7 +51,9 @@ import {
 } from "@/pvp/resume";
 import { makeCrossResumeAdapter } from "./crossResumeAdapter";
 
-const STAKE = 500n; // per-seat MIST
+const STAKE = 1_000_000_000n; // per-seat: 1 DOPAMINT (9 decimals)
+/** SUI-fallback stake per seat (MIST), when the DOPAMINT env is unset. */
+const SUI_PER_SEAT = 500n;
 const STEP_MS = 300; // pacing between ticks (ms)
 
 export type PvpStatus =
@@ -80,7 +88,14 @@ type CrossTunnel = DistributedTunnel<CrossState, CrossMove>;
 interface PvpDeps {
   account: { address: string } | null;
   client: unknown;
+  /** Wallet sender-pays signer — used for the close fallback (close is sponsored via /settle). */
   signExec: (tx: never) => Promise<{ digest: string }>;
+  /** Backend-gas-sponsored signer (ADR-0009) — used for the open/fund tx. */
+  sponsoredSignExec: (tx: never) => Promise<{ digest: string }>;
+  /** Pick a user coin to fund this seat's stake (gas is sponsored, the stake is not). */
+  selectStakeCoin: (minAmount: bigint) => Promise<string>;
+  /** DOPAMINT stake: faucet (invisibly, sponsored) if short, then return a stake coin id. */
+  prepareStake: (minAmount: bigint) => Promise<string>;
 }
 
 interface PvpSnapshot {
@@ -141,7 +156,7 @@ class PvpSession {
   private snap: PvpSnapshot = {
     status: "idle",
     role: null,
-    stake: Number(STAKE),
+    stake: Number(isDopamintConfigured ? STAKE : SUI_PER_SEAT),
     auto: true,
     view: null,
     winner: null,
@@ -167,7 +182,7 @@ class PvpSession {
     this.snap = {
       status: this.status,
       role: this.role,
-      stake: Number(STAKE),
+      stake: Number(isDopamintConfigured ? STAKE : SUI_PER_SEAT),
       auto: this.auto,
       view: this.view,
       winner: this.winner,
@@ -289,6 +304,7 @@ class PvpSession {
   ) {
     const deps = this.deps!;
     const signExec = deps.signExec;
+    const sponsoredSignExec = deps.sponsoredSignExec;
     const reads = deps.client as unknown as Parameters<
       typeof openAndFundSharedTunnel
     >[0]["reads"];
@@ -310,9 +326,9 @@ class PvpSession {
           waitPeer,
           reads,
           signExec as never,
+          sponsoredSignExec as never,
           dt.tunnelId,
           transcript,
-          getControlPlaneClient(),
         ).then(
           () => {
             this.status = "settled";
@@ -425,6 +441,7 @@ class PvpSession {
     installResumePersistence();
     evictExpiredRecords();
     const signExec = deps.signExec;
+    const sponsoredSignExec = deps.sponsoredSignExec;
     const reads = deps.client as unknown as Parameters<
       typeof openAndFundSharedTunnel
     >[0]["reads"];
@@ -457,27 +474,41 @@ class PvpSession {
         const hello = await waitPeer<{ ephemeralPubkey: string }>("hello");
         const oppPub = fromHex(hello.ephemeralPubkey);
 
-        // 2) fund on-chain: seat A opens + funds its seat + announces; seat B deposits.
+        // 2) fund on-chain. DOPAMINT path (ADR-0010): faucet the stake token invisibly (gas-
+        //    sponsored) and stake DOPAMINT — settler pays gas, so a 0-SUI player plays free; no
+        //    sender-pays fallback (the faucet itself needs the sponsor). SUI path (DOPAMINT env
+        //    unset): sponsored SUI stake with a sender-pays fallback (ADR-0009).
         this.status = "funding";
         this.emit();
+        // Per-path stake: 1 DOPAMINT vs a tiny MIST amount on the SUI fallback (so the fallback
+        // doesn't lock real SUI). The same value funds on-chain AND inits the off-chain tunnel.
+        const stakePerSeat = isDopamintConfigured ? STAKE : SUI_PER_SEAT;
+        const stake: StakeStrategy = {
+          sponsoredSignExec: sponsoredSignExec as never,
+          walletSignExec: signExec as never,
+          prepareStake: deps.prepareStake,
+          selectStakeCoin: deps.selectStakeCoin,
+        };
         let tunnelId: string;
         if (match.role === "A") {
-          tunnelId = await openAndFundSharedTunnel({
+          tunnelId = await openSharedTunnelStaked({
             reads,
-            signExec: signExec as never,
             partyA: { address: wallet, publicKey: ephemeral.publicKey },
             partyB: { address: match.opponentWallet, publicKey: oppPub },
-            amount: STAKE,
+            amount: stakePerSeat,
+            label: "chickenCross",
+            ...stake,
           });
           mp.announceTunnel(match.matchId, tunnelId);
           channel.sendPeer({ t: "open", tunnelId });
         } else {
           const open = await waitPeer<{ tunnelId: string }>("open");
           tunnelId = open.tunnelId;
-          await depositStake({
-            signExec: signExec as never,
+          await depositStakeStaked({
             tunnelId,
-            amount: STAKE,
+            amount: stakePerSeat,
+            label: "chickenCross",
+            ...stake,
           });
         }
 
@@ -499,7 +530,7 @@ class PvpSession {
             selfParty: match.role,
           },
           channel.transport,
-          { a: STAKE, b: STAKE },
+          { a: stakePerSeat, b: stakePerSeat },
         );
         this.dt = dt;
         this.activateSession(mp, channel, dt, waitPeer, {
@@ -555,6 +586,7 @@ export function usePvpChickenCross(windowId: string): PvpChickenCross {
   const account = useCurrentAccount();
   const client = useSuiClient();
   const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
+  const sponsored = useSponsoredSignExec();
 
   const session = getPvpSession(windowId);
   session.deps = {
@@ -566,6 +598,11 @@ export function usePvpChickenCross(windowId: string): PvpChickenCross {
       const r = await signAndExecute({ transaction: tx });
       return { digest: r.digest };
     }) as never,
+    // Open/fund routes through the backend gas sponsor (ADR-0009): the settler pays gas, the
+    // stake stays the user's own coin. (Close keeps signExec above — it's sponsored via /settle.)
+    sponsoredSignExec: sponsored.signExec as never,
+    selectStakeCoin: sponsored.selectStakeCoin,
+    prepareStake: sponsored.prepareStake,
   };
 
   // Cold-load: once the wallet is known, re-attach to any persisted in-flight match. resume()
@@ -591,11 +628,10 @@ export function usePvpChickenCross(windowId: string): PvpChickenCross {
 }
 
 /**
- * Exchange root-anchored settlement halves over the relay, then seat A submits the close via the
- * backend /settle (the settler anchors the transcript root + archives to Walrus). Both seats must
- * anchor the SAME root or close_cooperative_with_root rebuilds different bytes and on-chain verify
- * fails — so the root is exchanged and asserted equal before either side trusts the combine.
- * Fallback: wallet-submitted close_cooperative_with_root (backend down).
+ * Exchange root-anchored settlement halves over the relay, then seat A submits the
+ * close via the backend /settle (falling back to a wallet close if it's down). Both
+ * seats MUST anchor the same transcript root, else close_cooperative_with_root
+ * rebuilds different bytes and on-chain verify fails — so roots are asserted equal.
  */
 async function settle(
   dt: CrossTunnel,
@@ -604,9 +640,11 @@ async function settle(
   waitPeer: <T>(t: string) => Promise<T>,
   reads: Parameters<typeof readCreatedAt>[0],
   signExec: Parameters<typeof closeCooperativeWithRoot>[0]["signExec"],
+  // Gas-sponsored signer: the close fallback must use this in DOPAMINT mode, where the player holds
+  // 0 SUI and a wallet-signed close would throw and strand the staked DOPAMINT.
+  sponsoredSignExec: Parameters<typeof closeCooperativeWithRoot>[0]["signExec"],
   tunnelId: string,
   transcript: Transcript,
-  cp: ReturnType<typeof getControlPlaneClient>,
 ): Promise<void> {
   const createdAt = await readCreatedAt(reads, tunnelId);
   const root = transcript.root();
@@ -632,16 +670,17 @@ async function settle(
     fromHex(other.sig),
   );
   if (role !== "A") return; // single submitter, mirrors the cooperative-close pattern
-  try {
-    await cp.settle(
-      tunnelId,
-      coSignedToSettleRequest(co, transcript.toRecord().entries),
-    );
-  } catch (e) {
-    console.error(
-      "[chicken-cross] backend settle failed; falling back to wallet close:",
-      e,
-    );
-    await closeCooperativeWithRoot({ signExec, tunnelId, settlement: co });
-  }
+  await settleViaBackend({
+    tunnelId,
+    settlement: co,
+    transcript: transcript.toRecord().entries,
+    label: "chickenCross",
+    fallbackClose: () =>
+      closeCooperativeWithRoot({
+        signExec: isDopamintConfigured ? sponsoredSignExec : signExec,
+        tunnelId,
+        settlement: co,
+        coinType: isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined,
+      }),
+  });
 }

@@ -17,6 +17,7 @@ import {
   buildFundTx,
   FUND_PER_BOT_MIST,
 } from "@/games/blackjack/app/lib/bjBots";
+import { isDopamintConfigured } from "@/onchain/dopamint";
 
 const chip25 = "/chip-25.svg";
 const chip100 = "/chip-100.svg";
@@ -297,7 +298,10 @@ export default function PlayerBot() {
   const inGame =
     phase === "opening" || phase === "playing" || phase === "settling";
   const terminal = phase === "done" || result !== null;
-  const unfunded = balances.a === 0n || balances.b === 0n;
+  // DOPAMINT mode: bots play free (sponsored gas, faucet buy-ins), so the SUI-balance gate doesn't
+  // apply — never treat the bots as unfunded.
+  const unfunded =
+    !isDopamintConfigured && (balances.a === 0n || balances.b === 0n);
   // The hook seeds an empty view; treat "no cards yet, no game in flight" as the start screen.
   const started =
     view.playerCards.length > 0 || view.dealerCards.length > 0 || inGame;
@@ -452,31 +456,34 @@ export default function PlayerBot() {
             channel, settled on Sui testnet. No wallet or login required.
           </p>
 
-          <div className="flex flex-col items-center gap-1.5 text-xs font-mono text-zinc-400">
-            <span>
-              Player Bot:{" "}
-              <span className="text-white">{suiOf(balances.a)} SUI</span>
-            </span>
-            <span>
-              Dealer Bot:{" "}
-              <span className="text-white">{suiOf(balances.b)} SUI</span>
-            </span>
-            {refreshBtn}
-          </div>
+          {!isDopamintConfigured && (
+            <div className="flex flex-col items-center gap-1.5 text-xs font-mono text-zinc-400">
+              <span>
+                Player Bot:{" "}
+                <span className="text-white">{suiOf(balances.a)} SUI</span>
+              </span>
+              <span>
+                Dealer Bot:{" "}
+                <span className="text-white">{suiOf(balances.b)} SUI</span>
+              </span>
+              {refreshBtn}
+            </div>
+          )}
 
           <div className="flex flex-col items-center gap-2 w-full">
-            {walletFundEl}
+            {!isDopamintConfigured && walletFundEl}
             {roundsSelector}
             {betSelector}
             <div className="flex items-center gap-3">
-              {fundBtn}
+              {!isDopamintConfigured && fundBtn}
               {playBtn}
               {autoBtn}
             </div>
-            {rebalanceBtn}
+            {!isDopamintConfigured && rebalanceBtn}
             <p className="text-[10px] text-zinc-500 text-center max-w-md">
               Bots play {maxRounds} rounds off-chain per tunnel, then settle once.
-              Chips are 1:1 with MIST (1 SUI = 1,000,000,000 chips).
+              {!isDopamintConfigured &&
+                " Chips are 1:1 with MIST (1 SUI = 1,000,000,000 chips)."}
             </p>
           </div>
 
@@ -500,7 +507,7 @@ export default function PlayerBot() {
               {error}
             </div>
           )}
-          {unfunded && phase !== "funding" && !error && (
+          {!isDopamintConfigured && unfunded && phase !== "funding" && !error && (
             <div className="text-[11px] text-zinc-500 text-center">
               Fund the bots from the testnet faucet to begin.
             </div>
@@ -864,31 +871,37 @@ export default function PlayerBot() {
               </div>
             </div>
 
-            {/* Hidden on mobile to save space */}
-            <div className="hidden lg:flex flex-col items-start gap-0.5">
-              <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-zinc-500">
-                <span>Player wallet:</span>
-                <span className="text-white font-mono font-black">
-                  {suiOf(balances.a)} SUI
-                </span>
+            {/* Hidden on mobile to save space; entirely hidden when DOPAMINT (no SUI to show) */}
+            {!isDopamintConfigured && (
+              <div className="hidden lg:flex flex-col items-start gap-0.5">
+                <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-zinc-500">
+                  <span>Player wallet:</span>
+                  <span className="text-white font-mono font-black">
+                    {suiOf(balances.a)} SUI
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-zinc-500">
+                  <span>Dealer wallet:</span>
+                  <span className="text-white font-mono font-black">
+                    {suiOf(balances.b)} SUI
+                  </span>
+                </div>
+                <div className="mt-0.5">{refreshBtn}</div>
               </div>
-              <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-zinc-500">
-                <span>Dealer wallet:</span>
-                <span className="text-white font-mono font-black">
-                  {suiOf(balances.b)} SUI
-                </span>
-              </div>
-              <div className="mt-0.5">{refreshBtn}</div>
-            </div>
+            )}
           </div>
 
           {/* Controls */}
           <div className="flex flex-row items-center justify-end gap-1.5 md:gap-3 flex-1">
             <div className="hidden lg:block">{roundsSelector}</div>
             <div className="hidden lg:block">{betSelector}</div>
-            <div className="hidden md:block">{walletFundEl}</div>
-            <div className="hidden md:block">{rebalanceBtn}</div>
-            {fundBtn}
+            {!isDopamintConfigured && (
+              <div className="hidden md:block">{walletFundEl}</div>
+            )}
+            {!isDopamintConfigured && (
+              <div className="hidden md:block">{rebalanceBtn}</div>
+            )}
+            {!isDopamintConfigured && fundBtn}
             {playBtn}
             {autoBtn}
           </div>

@@ -8,6 +8,7 @@ import {
 import { getJsonRpcFullnodeUrl } from "@mysten/sui/jsonRpc";
 
 import { RegisterEnokiWallets } from "@/wallet/enokiWallets";
+import { DopamintAutoFaucet } from "@/onchain/useDopamintAutoFaucet";
 
 const { networkConfig } = createNetworkConfig({
   testnet: { url: getJsonRpcFullnodeUrl("testnet"), network: "testnet" },
@@ -23,7 +24,11 @@ export function SuiProviders({ children }: { children: ReactNode }) {
       <SuiClientProvider networks={networkConfig} defaultNetwork="testnet">
         {/* Registers the Enoki Google zkLogin wallet before WalletProvider reads wallets. */}
         <RegisterEnokiWallets />
-        <WalletProvider autoConnect>{children}</WalletProvider>
+        <WalletProvider autoConnect>
+          {/* App-wide background DOPAMINT top-up: faucets the moment a wallet connects. */}
+          <DopamintAutoFaucet />
+          {children}
+        </WalletProvider>
       </SuiClientProvider>
     </QueryClientProvider>
   );

@@ -63,6 +63,30 @@ jobs:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: us-east-1
 
+      # deploy-backend owns the image tag when it builds; an infra-only push doesn't rebuild, so we
+      # pin to the tag the service is CURRENTLY running rather than the committed Pulumi baseline.
+      # That baseline drifts stale whenever a backend deploy advances the image without an
+      # accompanying infra commit (e.g. a feature PR that touches no infra/**), and the ECS service
+      # has no ignoreChanges on its task def — so a stale baseline here would roll the image back.
+      - name: Resolve the running backend image tag
+        id: live-image
+        env:
+          ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
+          ECS_SERVICE: ${{ vars.ECS_SERVICE }}
+        run: |
+          set -euo pipefail
+          TASK_DEF=$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
+            --query 'services[0].taskDefinition' --output text)
+          IMAGE=$(aws ecs describe-task-definition --task-definition "$TASK_DEF" \
+            --query 'taskDefinition.containerDefinitions[0].image' --output text)
+          TAG="${IMAGE##*:}"
+          if [ -z "$TAG" ] || [ "$TAG" = "None" ]; then
+            echo "could not resolve the running backend image tag (service not deployed yet?)" >&2
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Pinning infra deploy to running backend image: $TAG"
+
       - name: Deploy infrastructure with Pulumi
         uses: pulumi/actions@cd99a7f8865434dd3532b586a26f9ebea596894f # v5.5.1
         env:
@@ -72,7 +96,6 @@ jobs:
           stack-name: CommandOSS/dopamint-arena/${{ github.event.inputs.environment || 'dev' }}
           work-dir: infra
           pulumi-version: 3.243.0
-          # backend-image-tag is owned by deploy-backend (it builds + pushes the image and sets
-          # the tag). Infra deploys must NOT set it: a push has no input, so the old default
-          # clobbered the real SHA with a non-existent `latest` and took the services down.
-          # The committed Pulumi.<stack>.yaml carries a real SHA as the baseline.
+          config-map: |
+            dopamint:backend-image-tag:
+              value: ${{ steps.live-image.outputs.tag }}

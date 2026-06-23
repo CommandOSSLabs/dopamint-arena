@@ -4,6 +4,7 @@ import { ConnectButton, useCurrentAccount } from "@mysten/dapp-kit";
 import { CardDisplay } from "@/games/blackjack/app/components/app/CardDisplay";
 import { usePvpBlackjack } from "@/games/blackjack/app/hooks/usePvpBlackjack";
 import { handToCardIndices } from "@/games/blackjack/app/lib/bjCards";
+import { isDopamintConfigured } from "@/onchain/dopamint";
 
 const chip25 = "/chip-25.svg";
 const chip100 = "/chip-100.svg";
@@ -107,7 +108,9 @@ export default function PvpBlackjack() {
     document.title = "Blackjack — PvP";
   }, []);
 
-  const funded = g.walletBalance > 20_000_000n;
+  // DOPAMINT mode: gas is sponsored and the buy-in is faucet-minted DOPAMINT, so a 0-SUI player can
+  // play — the wallet-SUI gate doesn't apply. SUI mode still needs gas to open/deposit.
+  const funded = isDopamintConfigured || g.walletBalance > 20_000_000n;
   const playing =
     g.phase === "playing" || g.phase === "settling" || g.phase === "done";
   const wins = g.rounds.filter((r) => r.outcome === "win").length;
@@ -375,8 +378,10 @@ export default function PvpBlackjack() {
               ) : (
                 <div className="w-full flex flex-col gap-3">
                   <div className="text-[11px] text-zinc-500 font-mono break-all text-center">
-                    {g.walletAddress.slice(0, 12)}… · {fmtSui(g.walletBalance)}{" "}
-                    SUI
+                    {g.walletAddress.slice(0, 12)}…
+                    {!isDopamintConfigured && (
+                      <> · {fmtSui(g.walletBalance)} SUI</>
+                    )}
                   </div>
                   {/* Buy-in: each player brings their own bankroll; the table caps bets at min(both). */}
                   <div className="flex flex-col gap-2">
@@ -424,19 +429,22 @@ export default function PvpBlackjack() {
                         className="flex-1 min-w-0 bg-zinc-900 border border-zinc-700 focus:border-amber-500 rounded-lg px-3 py-2 text-sm font-mono tabular-nums outline-none disabled:opacity-40"
                       />
                     </div>
-                    {/* SUI explanation — chips are 1:1 with MIST */}
-                    <div className="text-[11px] text-zinc-400 text-center leading-relaxed">
-                      ${Number(g.stake).toLocaleString()} buy-in ≈{" "}
-                      <span className="font-mono text-emerald-300">
-                        {chipsToSui(g.stake)} SUI
-                      </span>{" "}
-                      on-chain
-                      <br />
-                      <span className="text-zinc-500">
-                        1 SUI = 1,000,000,000 chips · e.g. $500 ={" "}
-                        {chipsToSui(500n)} SUI
-                      </span>
-                    </div>
+                    {/* SUI explanation — chips are 1:1 with MIST. Hidden under DOPAMINT (the token
+                        is intentionally invisible; the buy-in is just game chips, auto-funded). */}
+                    {!isDopamintConfigured && (
+                      <div className="text-[11px] text-zinc-400 text-center leading-relaxed">
+                        ${Number(g.stake).toLocaleString()} buy-in ≈{" "}
+                        <span className="font-mono text-emerald-300">
+                          {chipsToSui(g.stake)} SUI
+                        </span>{" "}
+                        on-chain
+                        <br />
+                        <span className="text-zinc-500">
+                          1 SUI = 1,000,000,000 chips · e.g. $500 ={" "}
+                          {chipsToSui(500n)} SUI
+                        </span>
+                      </div>
+                    )}
                     {g.stake < BigInt(MIN_BUYIN) && (
                       <div className="text-rose-400 text-[11px] text-center">
                         minimum buy-in is ${MIN_BUYIN.toLocaleString()}

@@ -4,9 +4,14 @@ import { createParticipant } from "sui-tunnel-ts/core/keys";
 import { OffchainTunnel } from "sui-tunnel-ts/core/tunnel";
 import { CrossProtocol, MIN_STAKE } from "sui-tunnel-ts/protocol/cross";
 import type { CrossState, CrossMove, CrossDir } from "sui-tunnel-ts/protocol/cross";
+import { Transcript } from "sui-tunnel-ts/proof/transcript";
 import { useTelemetry } from "../../telemetry/TelemetryProvider";
 import { getControlPlaneClient, type RegisterSessionResult } from "../../backend/controlPlane";
-import { closeCooperative, openAndFundSelfPlay, readCreatedAt } from "../../onchain/tunnelTx";
+import { settleViaBackend } from "../../backend/settle";
+import { closeCooperativeWithRoot, openAndFundSelfPlay, readCreatedAt } from "../../onchain/tunnelTx";
+import { useSponsoredSignExec } from "../../onchain/useSponsoredSignExec";
+import { withSponsorFallback } from "../../onchain/sponsor";
+import { DOPAMINT_COIN_TYPE, isDopamintConfigured } from "../../onchain/dopamint";
 import {
   deriveView,
   sessionResult,
@@ -51,6 +56,7 @@ export function useChickenCrossSession(): ChickenCrossSession {
   const account = useCurrentAccount();
   const client = useSuiClient();
   const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
+  const sponsored = useSponsoredSignExec();
 
   const [status, setStatus] = useState<SessionStatus>("idle");
   const [view, setView] = useState<CrossView | null>(null);
@@ -124,14 +130,45 @@ export function useChickenCrossSession(): ChickenCrossSession {
 
           // Open + fund BOTH bot seats in ONE wallet signature (create_and_fund).
           setStatus("funding");
-          const tunnelId = await openAndFundSelfPlay({
-            reads,
-            signExec,
-            partyA: { address: a.address, publicKey: a.keyPair.publicKey },
-            partyB: { address: b.address, publicKey: b.keyPair.publicKey },
-            aAmount: stakeBig,
-            bAmount: stakeBig,
-          });
+          const coinType = isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined;
+          const partyA = { address: a.address, publicKey: a.keyPair.publicKey };
+          const partyB = { address: b.address, publicKey: b.keyPair.publicKey };
+          // DOPAMINT (ADR-0010): faucet both seats' stake invisibly (gas-sponsored) and
+          // stake DOPAMINT — free for a 0-SUI player. SUI path (DOPAMINT env unset):
+          // sponsored SUI stake with a sender-pays fallback (ADR-0009).
+          const tunnelId = isDopamintConfigured
+            ? await openAndFundSelfPlay({
+                reads,
+                signExec: sponsored.signExec as never,
+                partyA,
+                partyB,
+                aAmount: stakeBig,
+                bAmount: stakeBig,
+                coinType,
+                stakeCoinId: await sponsored.prepareStake(2n * stakeBig),
+              })
+            : await withSponsorFallback(
+                async () =>
+                  openAndFundSelfPlay({
+                    reads,
+                    signExec: sponsored.signExec as never,
+                    partyA,
+                    partyB,
+                    aAmount: stakeBig,
+                    bAmount: stakeBig,
+                    stakeCoinId: await sponsored.selectStakeCoin(2n * stakeBig),
+                  }),
+                () =>
+                  openAndFundSelfPlay({
+                    reads,
+                    signExec: signExec as never,
+                    partyA,
+                    partyB,
+                    aAmount: stakeBig,
+                    bAmount: stakeBig,
+                  }),
+                "chickenCross open/fund",
+              );
           const createdAt = await readCreatedAt(reads, tunnelId);
 
           const tunnel = OffchainTunnel.selfPlay(
@@ -143,8 +180,13 @@ export function useChickenCrossSession(): ChickenCrossSession {
             b.address,
             { a: stakeBig, b: stakeBig },
           );
-          tunnel.onUpdate = (_u, bytes) =>
+          // Record every co-signed update so the close can anchor the transcript root on-chain
+          // (close_cooperative_with_root) and the backend can archive the proof to Walrus.
+          const transcript = new Transcript(tunnelId);
+          tunnel.onUpdate = (u, bytes) => {
+            transcript.append(u);
             report.bumpCounters({ updates: 1, signatures: 2, verifications: 2, bytes });
+          };
 
           protocolRef.current = protocol;
           tunnelRef.current = tunnel;
@@ -192,8 +234,23 @@ export function useChickenCrossSession(): ChickenCrossSession {
             const r = sessionResult(tunnel.state);
             setResult(r);
             try {
-              const settlement = tunnel.buildSettlement(createdAt);
-              await closeCooperative({ signExec, tunnelId, settlement });
+              // Settle through the backend /settle API: the server submits the close AND archives
+              // the transcript to Walrus (ADR-0002/0005). Fall back to a wallet close if it's down.
+              const settlement = tunnel.buildSettlementWithRoot(createdAt, transcript.root(), 0n);
+              const coinType = isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined;
+              await settleViaBackend({
+                tunnelId,
+                settlement,
+                transcript: transcript.toRecord().entries,
+                label: "chickenCross",
+                fallbackClose: () =>
+                  closeCooperativeWithRoot({
+                    signExec: (isDopamintConfigured ? sponsored.signExec : signExec) as never,
+                    tunnelId,
+                    settlement,
+                    coinType,
+                  }),
+              });
               setStatus("settled");
             } catch (e) {
               console.error("[chicken-cross] on-chain close failed:", e);
