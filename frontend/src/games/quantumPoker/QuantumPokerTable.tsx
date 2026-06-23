@@ -176,7 +176,18 @@ export function QuantumPokerTable({
   nameA: string;
   nameB: string;
 }): JSX.Element {
-  const pot = state.totalBetA + state.totalBetB;
+  // The protocol keeps `balance` as the FULL stack and tracks live bets in `totalBet` (it never
+  // deducts a bet from the balance — `settle` only moves the net at showdown). Rendering raw
+  // `balance` + a separate pot double-counts the bet chips, so a split pot looks like both seats
+  // "lost" their bets. Show a real table instead: a seat's live stack = balance − what it pushed
+  // into THIS pot; at hand_over the pot has settled into the balances, so show the settled balance
+  // and an empty pot (a tie hands both bets back — stacks return to where they began).
+  const settled = state.phase === "hand_over" || state.phase === "done";
+  const stackA = settled ? state.balanceA : state.balanceA - state.totalBetA;
+  const stackB = settled ? state.balanceB : state.balanceB - state.totalBetB;
+  const betA = settled ? 0n : state.totalBetA;
+  const betB = settled ? 0n : state.totalBetB;
+  const pot = settled ? 0n : state.totalBetA + state.totalBetB;
   const result = state.lastResult;
 
   return (
@@ -185,8 +196,8 @@ export function QuantumPokerTable({
       <PlayerSeat
         party="B"
         name={nameB}
-        balance={state.balanceB}
-        bet={state.totalBetB}
+        balance={stackB}
+        bet={betB}
         holes={holesB}
         active={state.toAct === "B"}
         winner={result?.winner === "B"}
@@ -211,8 +222,8 @@ export function QuantumPokerTable({
       <PlayerSeat
         party="A"
         name={nameA}
-        balance={state.balanceA}
-        bet={state.totalBetA}
+        balance={stackA}
+        bet={betA}
         holes={holesA}
         active={state.toAct === "A"}
         winner={result?.winner === "A"}
