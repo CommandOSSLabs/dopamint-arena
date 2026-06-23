@@ -43,10 +43,14 @@ const BAR_ORCHID = {
 export function DuelView({
   duel,
   onchain,
+  onSwitchToAuto,
 }: {
   duel: UsePaintDuel;
   /** On-chain tunnel status for the Watch-Bots-Auto run (absent in vs-bot). */
   onchain?: PaintDuelOnchainStatus;
+  /** Flip the running Play-vs-Bot duel to bot-vs-bot self-play. Wired only in
+   *  vs-bot; the parent remounts a fresh `auto` duel (so the tunnel rolls over). */
+  onSwitchToAuto?: () => void;
 }) {
   const auto = duel.auto;
   const revealed = duel.phase === "revealed";
@@ -349,6 +353,14 @@ export function DuelView({
       {/* draw/give-up controls + bot fast-forward */}
       <div className="absolute bottom-[18px] right-4 flex items-center gap-2">
         {!revealed && <SpeedPills speed={duel.speed} onSpeed={duel.setSpeed} />}
+        {!revealed && !auto && onSwitchToAuto && (
+          <DuelButton
+            onClick={onSwitchToAuto}
+            title="Hand seat A to a bot and watch the two bots duel"
+          >
+            👁 Auto
+          </DuelButton>
+        )}
         {!revealed && (
           <DuelButton onClick={duel.reveal} title="End the duel and score now">
             🏁 Finish

@@ -55,7 +55,11 @@ export function PaintWindow(_props: GameWindowProps) {
         />
       ) : (
         <div className="relative h-full min-h-0 w-full">
-          <DuelMode mode={mode} difficulty={difficulty} />
+          <DuelMode
+            mode={mode}
+            difficulty={difficulty}
+            onSwitchToAuto={() => setMode("auto")}
+          />
           <button
             onClick={() => setMode(null)}
             className="absolute right-4 top-3.5 z-10 flex h-[54px] items-center rounded-[14px] px-3 text-xs font-bold"
@@ -77,23 +81,38 @@ export function PaintWindow(_props: GameWindowProps) {
 function DuelMode({
   mode,
   difficulty,
+  onSwitchToAuto,
 }: {
   mode: PaintMode;
   difficulty: DuelDifficulty;
+  /** Switches the window to Watch-Bots; passed only to the vs-bot child. */
+  onSwitchToAuto: () => void;
 }) {
   return mode === "auto" ? (
     <AutoDuelInner key={mode} difficulty={difficulty} />
   ) : (
-    <VsBotDuelInner key={mode} difficulty={difficulty} />
+    <VsBotDuelInner
+      key={mode}
+      difficulty={difficulty}
+      onSwitchToAuto={onSwitchToAuto}
+    />
   );
 }
 
 /** Play vs Bot — your seat-A paints + the bot's seat-B ticks co-signed over an
  *  OffchainTunnel (fog stays on; the local duel still drives the UI), reporting
  *  heartbeat TPS and (when the bots hold gas) settling on-chain. */
-function VsBotDuelInner({ difficulty }: { difficulty: DuelDifficulty }) {
+function VsBotDuelInner({
+  difficulty,
+  onSwitchToAuto,
+}: {
+  difficulty: DuelDifficulty;
+  onSwitchToAuto: () => void;
+}) {
   const { duel, status } = usePaintDuelOnchain({ difficulty, auto: false });
-  return <DuelView duel={duel} onchain={status} />;
+  return (
+    <DuelView duel={duel} onchain={status} onSwitchToAuto={onSwitchToAuto} />
+  );
 }
 
 /** Watch Bots (Auto) — bot-vs-bot self-play co-signed over an OffchainTunnel,
