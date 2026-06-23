@@ -89,10 +89,13 @@ export function AgentPanel({
   engine: UseWorldCanvasOnchain;
   onClose: () => void;
 }) {
+  // BURST = an instant TPS spike: crank to max AND spawn a whole WAVE of bots at
+  // once. (Spawn = +1 bot at the current settings; BURST = +5 at x8 + max density.)
   const burst = () => {
+    const WAVE = 5;
     engine.setAgentSpeed("x8");
     engine.setAgentDensity(3);
-    engine.spawnAgent();
+    for (let i = 0; i < WAVE; i++) engine.spawnAgent();
   };
 
   return (
@@ -108,7 +111,7 @@ export function AgentPanel({
       <div style={{ display: "flex", gap: 5 }}>
         <button
           onClick={engine.spawnAgent}
-          title="Spawn one bot that paints forever over its OWN co-signed tunnel"
+          title="Spawn ONE bot at the current speed/mode over its own co-signed tunnel (BURST drops a fast wave of 5)"
           style={{
             ...w98Outset,
             flex: "1 1 0",
@@ -124,7 +127,7 @@ export function AgentPanel({
         </button>
         <button
           onClick={burst}
-          title="BURST — fast + max density + spawn: an instant TPS spike"
+          title="BURST — drop 5 bots at once at x8 + max density: an instant TPS spike"
           style={{
             ...w98Outset,
             flex: "0 0 auto",
@@ -137,7 +140,7 @@ export function AgentPanel({
             cursor: "pointer",
           }}
         >
-          ⚡ BURST
+          ⚡ BURST ×5
         </button>
       </div>
 
