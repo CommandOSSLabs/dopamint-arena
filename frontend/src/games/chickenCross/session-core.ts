@@ -69,6 +69,29 @@ export function deriveView(state: CrossState): CrossView {
   };
 }
 
+/**
+ * The lane window the board renders (top = forward). Anchors on YOUR chicken so the camera
+ * follows you — the opponent may scroll off when they pull far ahead — and falls back to the
+ * leading chicken when spectating a bot-vs-bot race (`myIndex` null). `winLane` clamps the top so
+ * the camera never scrolls past the finish; it is injected by the caller (the Vite-bundled board)
+ * to keep this file's SDK imports type-only.
+ */
+export function visibleLanes(
+  view: CrossView,
+  myIndex: 0 | 1 | null,
+  winLane: number = Number.POSITIVE_INFINITY,
+): number[] {
+  const anchor =
+    myIndex !== null
+      ? view.players[myIndex]?.lane ?? 0
+      : Math.max(view.players[0]?.lane ?? 0, view.players[1]?.lane ?? 0);
+  const min = Math.max(0, anchor - 3);
+  const max = Math.min(winLane, anchor + 7);
+  const out: number[] = [];
+  for (let L = max; L >= min; L--) out.push(L);
+  return out;
+}
+
 export function sessionResult(state: CrossState): SessionResult {
   if (state.winner === "A") return "A";
   if (state.winner === "B") return "B";

@@ -6,7 +6,29 @@ import assert from "node:assert/strict";
 import { CrossProtocol, MIN_STAKE } from "../../../../sui-tunnel-ts/src/protocol/cross.ts";
 import { OffchainTunnel, verifyCoSignedUpdate } from "../../../../sui-tunnel-ts/src/core/tunnel.ts";
 import { createParticipant } from "../../../../sui-tunnel-ts/src/core/keys.ts";
-import { stepSession, deriveView, sessionResult } from "./session-core.ts";
+import { stepSession, deriveView, sessionResult, visibleLanes } from "./session-core.ts";
+
+const farApart = {
+  tick: 100,
+  seed: 1,
+  players: [
+    { lane: 50, col: 4, score: 50 },
+    { lane: 5, col: 4, score: 5 },
+  ],
+  winner: null as "A" | "B" | null,
+  balanceA: 100,
+  balanceB: 100,
+};
+
+test("visibleLanes keeps YOUR chicken on screen when the opponent pulls far ahead", () => {
+  const lanes = visibleLanes(farApart, 1); // you control seat B (index 1) at lane 5
+  assert.ok(lanes.includes(5), "your chicken's lane must stay visible");
+});
+
+test("visibleLanes follows the leader when spectating a bot-vs-bot race", () => {
+  const lanes = visibleLanes(farApart, null);
+  assert.ok(lanes.includes(50), "the leading chicken is the camera anchor when spectating");
+});
 
 function freshTunnel() {
   const a = createParticipant("a");

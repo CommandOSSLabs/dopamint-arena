@@ -2,17 +2,7 @@ import { useEffect, useRef } from "react";
 import { laneKind, hazardsAt, spanCoversCol, COLUMN_COUNT, WIN_LANE } from "sui-tunnel-ts/protocol/cross";
 import type { CrossDir } from "sui-tunnel-ts/protocol/cross";
 import "../cross.css";
-import type { CrossView } from "../session-core";
-
-/** A small window of lanes around the leader, drawn top = forward. */
-function visibleLanes(view: CrossView): number[] {
-  const lead = Math.max(view.players[0]?.lane ?? 0, view.players[1]?.lane ?? 0);
-  const min = Math.max(0, lead - 3);
-  const max = Math.min(WIN_LANE, lead + 7);
-  const out: number[] = [];
-  for (let L = max; L >= min; L--) out.push(L); // forward at the top
-  return out;
-}
+import { visibleLanes, type CrossView } from "../session-core";
 
 export function CrossBoard({
   view,
@@ -61,8 +51,8 @@ export function CrossBoard({
     }
   };
 
-  const lanes = visibleLanes(view);
   const myIndex = role === "A" ? 0 : role === "B" ? 1 : null;
+  const lanes = visibleLanes(view, myIndex, WIN_LANE);
   const won = !spectating && winner === role;
   const celebratory = winner !== null && (spectating || won);
 
