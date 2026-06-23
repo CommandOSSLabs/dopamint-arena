@@ -1,10 +1,16 @@
-import type { Protocol, Party, ProtocolContext, Balances } from "sui-tunnel-ts/protocol/Protocol";
+import type {
+  Protocol,
+  Party,
+  ProtocolContext,
+  Balances,
+} from "sui-tunnel-ts/protocol/Protocol";
 import { createTicTacToeKit } from "./games/ticTacToe/kit";
 import { createBlackjackKit } from "./games/blackjack/kit";
 import { createBattleshipKit } from "./games/battleship/kit";
 import { createQuantumPokerKit } from "./games/quantumPoker/kit";
 import { createBombItKit } from "./games/bombIt/kit";
 import { createChickenCrossKit } from "./games/chickenCross/kit";
+import { createChatKit } from "./games/chat/kit";
 import { defaultStateHash, type StateHash } from "./stateHash";
 
 export type GameId =
@@ -13,7 +19,8 @@ export type GameId =
   | "battleship"
   | "quantum-poker"
   | "bomb-it"
-  | "chicken-cross";
+  | "chicken-cross"
+  | "chat";
 export type { StateHash };
 export { defaultStateHash };
 
@@ -51,4 +58,5 @@ export const GAME_KITS: GameKitRegistry = {
   "quantum-poker": createQuantumPokerKit(100n),
   "bomb-it": createBombItKit(100n),
   "chicken-cross": createChickenCrossKit(100n),
+  chat: createChatKit(100n),
 };
