@@ -53,7 +53,7 @@ Implement the generic interface in `sui-tunnel-ts/src/protocol/Protocol.ts` (gre
 
 > **Invariant 1 — conservation.** `balances(state).a + .b === total` for EVERY reachable state. `OffchainTunnel.step` asserts it and throws otherwise. Move funds toward the winner only at terminal states; keep the split constant during play.
 
-> **Invariant 2 — determinism.** State must be a pure function of `(seed-or-tunnelId, ordered moves)`. Any randomness (shuffles, hazard fields, bomb timers) must be derived from a seed that is part of the state and of `encodeState`, so the counterparty and an on-chain disputer replay identically. Self-play may seed from `tunnelId`; PvP should derive the seed from a two-party commit-reveal for fairness.
+> **Invariant 2 — determinism.** State must be a pure function of `(seed-or-tunnelId, ordered moves)`. Any randomness (shuffles, hazard fields, bomb timers) must be derived from a seed that is part of the state and of `encodeState`, so the counterparty and an on-chain disputer replay identically. Seed from the `tunnelId` when the random field is **public and party-independent** (no seat can bias it and the id can't be ground) — e.g. blackjack's card stream, chicken-cross's hazard field, bomb-it's symmetric grid. Use a two-party **commit-reveal** only when a party holds **hidden state it could bias** (battleship fleets, poker hands — see ADRs 0003/0008/0009 and 0010).
 
 Encoding helpers (`protocolDomain`, `lengthPrefixedConcat`, `rollingDigest`) are exported from `Protocol.ts`. Use a fixed-size `encodeState` when state is bounded; use `rollingDigest` when state grows unbounded.
 

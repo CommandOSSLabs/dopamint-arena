@@ -1,36 +1,49 @@
+import { useState } from "react";
 import "../bomb-it.css";
 
-/** Quick-join PvP entry (single shared queue, no room code) — consistent with the other games. */
+/** Splash/menu: Solo (bots over a local tunnel) or PvP (auto-matched with another player). */
 export function BombLobby({
-  onFindMatch,
-  onBenchmark,
+  onSolo,
+  onFind,
 }: {
-  onFindMatch: () => void;
-  /** Enter the bot-vs-bot TPS benchmark (self-play). Omitted hides the entry. */
-  onBenchmark?: () => void;
+  onSolo: (stake: number) => void;
+  onFind: () => void;
 }) {
+  const [tab, setTab] = useState<"solo" | "pvp">("solo");
+  const [stake, setStake] = useState("500");
+
+  const handleSolo = () => onSolo(Math.max(1, Math.floor(Number(stake)) || 0));
+
   return (
-    <div className="flex h-full w-full flex-col items-center justify-center gap-4 bg-arena-bg p-4 text-center">
-      <h2 className="text-gold text-lg font-extrabold uppercase tracking-widest">Bomb It PvP</h2>
-      <p className="max-w-xs text-sm text-arena-muted">
-        Find an opponent and bomb each other on a shared grid over a Sui tunnel.
-      </p>
+    <div className="bomb-root">
+      <div className="arcade-card">
+        <h2 className="arcade-title wal-doto text-gold">BOMB IT</h2>
 
-      <button
-        onClick={onFindMatch}
-        className="gold-glow-hover rounded border border-amber-500 bg-arena-accent px-6 py-2 font-bold uppercase tracking-widest text-arena-bg transition-all hover:opacity-90"
-      >
-        Find Match
-      </button>
+        <div className="arcade-seg">
+          <button className={`arcade-seg__btn${tab === "solo" ? " arcade-seg__btn--on" : ""}`} onClick={() => setTab("solo")}>
+            Solo
+          </button>
+          <button className={`arcade-seg__btn${tab === "pvp" ? " arcade-seg__btn--on" : ""}`} onClick={() => setTab("pvp")}>
+            PvP
+          </button>
+        </div>
 
-      {onBenchmark && (
-        <button
-          onClick={onBenchmark}
-          className="text-[11px] uppercase tracking-widest text-arena-muted underline-offset-2 transition-all hover:text-gold hover:underline"
-        >
-          TPS Benchmark · bot vs bot
-        </button>
-      )}
+        {tab === "solo" ? (
+          <>
+            <p className="arcade-sub">Two bots duel across a 29×29 arena over a real Sui tunnel — one signature funds both seats. Take the wheel anytime with the Auto toggle.</p>
+            <div className="flex flex-col items-center gap-1.5">
+              <span className="arcade-label">Stake per seat (MIST)</span>
+              <input className="arcade-field" type="number" min={1} value={stake} onChange={(e) => setStake(e.target.value)} />
+            </div>
+            <button className="arcade-cta" onClick={handleSolo}>Start Solo</button>
+          </>
+        ) : (
+          <>
+            <p className="arcade-sub">Auto-matched with the next player over a real Sui tunnel. Your bot fights for you by default — flip to Manual to play yourself.</p>
+            <button className="arcade-cta" onClick={onFind}>Find Match</button>
+          </>
+        )}
+      </div>
     </div>
   );
 }
