@@ -1,17 +1,18 @@
 /**
- * Local multi-game TPS comparison runner.
+ * Local multi-game TPS comparison runner — uses Bun + the bundled solo driver.
  *
- * Runs the single-thread `solo.ts` driver in parallel across all CPU cores,
- * one game at a time, then reports the aggregate effective TPS per game.
+ * Runs the single-thread `dist/bench/solo.js` driver in parallel across all CPU
+ * cores, one game at a time, then reports the aggregate effective TPS per game.
  *
  * Usage:
  *   cd frontend
- *   node --import tsx src/bench/solo-local.ts --duration 10000
- *   node --import tsx src/bench/solo-local.ts --games blackjack,bomb-it --duration 5000
+ *   bun src/bench/solo-local.ts --duration 10000
+ *   bun src/bench/solo-local.ts --games blackjack,bomb-it --duration 5000
  */
 
 import os from "node:os";
 import { spawn } from "node:child_process";
+import { existsSync, statSync } from "node:fs";
 import { GAME_KITS, type GameId } from "@/agent/gameKit";
 
 interface RunResult {
@@ -27,6 +28,9 @@ const GAME_IDS = Object.keys(GAME_KITS) as GameId[];
 /** Games excluded from the default comparison because they have a finite state
  *  surface (e.g. canvas fills up / cells lock) and crash the naive self-play loop. */
 const DEFAULT_EXCLUDED: GameId[] = ["pixel-paint", "pixel-duel"];
+
+const SOLO_JS = "dist/bench/solo.js";
+const SOLO_TS = "src/bench/solo.ts";
 
 function parseArgs(argv: string[]): Record<string, string> {
   const out: Record<string, string> = {};
@@ -46,6 +50,33 @@ function parseArgs(argv: string[]): Record<string, string> {
   return out;
 }
 
+function needsBuild(): boolean {
+  if (!existsSync(SOLO_JS)) return true;
+  const jsTime = statSync(SOLO_JS).mtimeMs;
+  const tsTime = statSync(SOLO_TS).mtimeMs;
+  return tsTime > jsTime;
+}
+
+function runCommand(cmd: string, args: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(cmd, args, {
+      cwd: process.cwd(),
+      stdio: "inherit",
+    });
+    proc.on("error", reject);
+    proc.on("exit", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`${cmd} ${args.join(" ")} exited with ${code}`));
+    });
+  });
+}
+
+async function ensureBuilt(): Promise<void> {
+  if (!needsBuild()) return;
+  console.log("Building bench bundle…");
+  await runCommand("pnpm", ["build:bench"]);
+}
+
 function runOne(
   gameId: GameId,
   processIndex: number,
@@ -54,12 +85,11 @@ function runOne(
   return new Promise((resolve, reject) => {
     const seed = processIndex + 1;
     const proc = spawn(
-      process.execPath,
-      ["--import", "tsx", "src/bench/solo.ts", gameId, "full", String(durationMs), String(seed)],
+      "bun",
+      [SOLO_JS, gameId, "full", String(durationMs), String(seed)],
       {
         cwd: process.cwd(),
         stdio: ["ignore", "pipe", "inherit"],
-        env: { ...process.env, TSX_TSCONFIG_PATH: "tsconfig.json" },
       },
     );
 
@@ -132,10 +162,12 @@ async function main(argv: string[]): Promise<void> {
     gameIds = GAME_IDS.filter((g) => !DEFAULT_EXCLUDED.includes(g));
   }
 
+  await ensureBuilt();
+
   const cores = os.cpus().length;
   const processes = Math.max(1, cores);
 
-  console.log(`Local multi-game TPS benchmark`);
+  console.log(`Local multi-game TPS benchmark (Bun)`);
   console.log(`  duration   : ${durationMs} ms`);
   console.log(`  cores      : ${cores}`);
   console.log(`  processes  : ${processes} per game`);

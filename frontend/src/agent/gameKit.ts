@@ -49,7 +49,7 @@ export type GameKitRegistry = Record<GameId, GameKit<unknown, unknown>>;
 
 /** Canonical registry of all playable bot kits. */
 export const GAME_KITS: GameKitRegistry = {
-  tictactoe: createTicTacToeKit(10, 10n),
+  tictactoe: createTicTacToeKit(10, 10n, { difficulty: "fast" }),
   blackjack: createBlackjackKit(100n),
   battleship: createBattleshipKit(10n),
   "quantum-poker": createQuantumPokerKit(100n),
