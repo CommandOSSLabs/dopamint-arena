@@ -171,7 +171,27 @@ function Seat({
 }
 
 /** Heads-up Quantum Poker vs a real opponent: matchmaking + relay co-sign + on-chain stakes. */
-export function QuantumPokerPvpWindow(_props: GameWindowProps) {
+export function QuantumPokerPvpWindow({
+  onExit,
+  ...rest
+}: GameWindowProps & { onExit?: () => void }) {
+  return (
+    <div className="relative h-full">
+      {onExit && (
+        <button
+          type="button"
+          onClick={onExit}
+          className="absolute left-2 top-2 z-20 rounded-md border border-white/15 bg-black/30 px-2.5 py-1 text-[11px] font-semibold text-slate-200 backdrop-blur transition hover:bg-black/50"
+        >
+          ← Back
+        </button>
+      )}
+      <PvpInner {...rest} />
+    </div>
+  );
+}
+
+function PvpInner(_props: GameWindowProps) {
   const g = usePvpQuantumPoker();
 
   if (g.status === "idle") {

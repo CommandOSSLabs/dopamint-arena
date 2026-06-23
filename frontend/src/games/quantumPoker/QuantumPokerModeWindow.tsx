@@ -22,8 +22,9 @@ const BUTTON_BASE =
 
 export function QuantumPokerModeWindow(props: GameWindowProps) {
   const { windowId } = props;
+  // Default to "auto" (watch bots) on load; Back from any mode returns to the menu (null).
   const [mode, setModeState] = useState<Mode | null>(
-    () => modeStore.get(windowId) ?? null,
+    () => modeStore.get(windowId) ?? "auto",
   );
 
   useEffect(() => {
@@ -39,7 +40,7 @@ export function QuantumPokerModeWindow(props: GameWindowProps) {
   };
 
   if (mode === "pvp") {
-    return <QuantumPokerPvpWindow {...props} />;
+    return <QuantumPokerPvpWindow {...props} onExit={() => setMode(null)} />;
   }
 
   if (mode === "bot") {
@@ -88,19 +89,12 @@ export function QuantumPokerModeWindow(props: GameWindowProps) {
         >
           Find PvP Match
         </button>
-        <button
-          type="button"
-          onClick={() => setMode("auto")}
-          className={`${BUTTON_BASE} border border-[var(--qp-mint)]/25 bg-[var(--qp-mint)]/10 text-[var(--qp-mint)] hover:bg-[var(--qp-mint)]/15`}
-        >
-          Watch Bots (Auto)
-        </button>
       </div>
 
       <p className="max-w-[19rem] text-[11px] leading-relaxed text-slate-500">
-        Bot plays a local persona bot in your wallet-funded tunnel. PvP uses
-        the live relay. Auto loops two persona bots through real
-        open/play/settle tunnels.
+        Bot plays a local persona bot in your wallet-funded tunnel. PvP uses the
+        live relay. Watch Bots runs by default on load — press Back from it to
+        reach this menu.
       </p>
     </div>
   );
