@@ -1,12 +1,24 @@
-import { useMemo, useState, type CSSProperties } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type CSSProperties,
+} from "react";
 import type { GameWindowProps } from "../types";
 import { DUEL, glass, FONT_DISPLAY, FONT_MONO } from "./ui/tokens";
 import { DuelChrome } from "./ui/DuelChrome";
 import { DuelView } from "./ui/DuelView";
 import { type DuelDifficulty } from "./usePaintDuel";
-import { usePaintDuelOnchain } from "./usePaintDuelOnchain";
+import { usePaintDuelOnchain, MIN_PLAY_MIST } from "./usePaintDuelOnchain";
 import { DESIGNS, type PixelDesign } from "@/agent/games/pixelPaint/designs";
 import { colorHex } from "./palette";
+import {
+  loadOrCreateBots,
+  botBalances,
+  fundBots,
+  getSuiClient,
+} from "@/games/ticTacToe/app/lib/bots";
 
 /**
  * Pixel Wall ("Pixel Duel") — a secret-shape pixel duel on the Sui tunnel. TWO
@@ -342,6 +354,9 @@ function ModeChooser({
           <StakeDisplay value={DUEL_STAKE} />
         </div>
 
+        {/* on-chain: faucet the shared bots so the duel opens a REAL tunnel */}
+        <FundBotsControl />
+
         {/* mode cards */}
         <div
           style={{
@@ -510,6 +525,100 @@ function StakeDisplay({ value }: { value: number }) {
           💰 {value}
         </div>
       </div>
+    </div>
+  );
+}
+
+/** MIST (1e9) → SUI, 3 decimals. */
+const fmtSui = (mist: bigint) => (Number(mist) / 1e9).toFixed(3);
+
+/**
+ * One-click faucet funding for the two SHARED bots (the same identities
+ * tic-tac-toe uses). Funded bots make the duel open a REAL on-chain tunnel
+ * (create_and_fund → co-signed paints → settle) instead of the off-chain demo —
+ * no wallet needed, it just requests testnet SUI. Fund here, then pick a mode.
+ */
+function FundBotsControl() {
+  const bots = useMemo(() => loadOrCreateBots(), []);
+  const [bal, setBal] = useState<{ x: bigint; o: bigint } | null>(null);
+  const [funding, setFunding] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      setBal(await botBalances(getSuiClient(), bots));
+    } catch {
+      /* RPC hiccup — keep the last reading rather than flapping */
+    }
+  }, [bots]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const onFund = useCallback(async () => {
+    setFunding(true);
+    setErr(null);
+    try {
+      await fundBots(getSuiClient(), bots);
+      await refresh();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setFunding(false);
+    }
+  }, [bots, refresh]);
+
+  const ready = !!bal && bal.x >= MIN_PLAY_MIST && bal.o >= MIN_PLAY_MIST;
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        gap: 7,
+        zIndex: 1,
+        animation: "pdRise .6s ease .17s both",
+      }}
+    >
+      <span style={GROUP_LABEL_STYLE}>On-chain bots · faucet → real txns</span>
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <button
+          onClick={onFund}
+          disabled={funding}
+          style={{
+            cursor: funding ? "default" : "pointer",
+            border: "1px solid rgba(160,140,255,0.3)",
+            borderRadius: 999,
+            padding: "7px 16px",
+            fontFamily: "inherit",
+            fontSize: 12.5,
+            fontWeight: 700,
+            color: DUEL.text,
+            background: "rgba(77,162,255,0.14)",
+            opacity: funding ? 0.6 : 1,
+          }}
+        >
+          {funding ? "⛽ Funding…" : "⛽ Fund bots"}
+        </button>
+        <span
+          style={{
+            fontFamily: FONT_MONO,
+            fontSize: 11,
+            color: ready ? "#5fe3a1" : "#93a0bd",
+          }}
+        >
+          {bal
+            ? `A ${fmtSui(bal.x)} · B ${fmtSui(bal.o)} SUI${ready ? " · ready ✓" : " · needs gas"}`
+            : "checking balances…"}
+        </span>
+      </div>
+      {err && (
+        <span style={{ fontFamily: FONT_MONO, fontSize: 10, color: DUEL.hit }}>
+          faucet: {err}
+        </span>
+      )}
     </div>
   );
 }

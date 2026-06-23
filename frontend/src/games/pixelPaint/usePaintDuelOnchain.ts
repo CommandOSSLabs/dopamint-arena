@@ -72,7 +72,7 @@ const STAKE = 1n;
 const GAME = "pixel-duel";
 /** A bot needs at least this much gas to safely open+fund AND settle a tunnel;
  *  below it we run the off-chain demo instead (no open, no settle). ~0.02 SUI. */
-const MIN_PLAY_MIST = 20_000_000n;
+export const MIN_PLAY_MIST = 20_000_000n;
 
 export type OnchainPhase =
   | "idle"
