@@ -5,8 +5,17 @@
  * on-chain open/close, and telemetry. CrossBoard.tsx (Vite-only) owns hazard rendering.
  */
 import type { Party } from "sui-tunnel-ts/protocol/Protocol";
-import type { CrossProtocol, CrossState, CrossMove, CrossDir } from "sui-tunnel-ts/protocol/cross";
+import type {
+  CrossProtocol,
+  CrossState,
+  CrossMove,
+  CrossDir,
+} from "sui-tunnel-ts/protocol/cross";
 import type { OffchainTunnel } from "sui-tunnel-ts/core/tunnel";
+import type {
+  MultiGameCrossProtocol,
+  MultiGameCrossState,
+} from "sui-tunnel-ts/protocol/multiGameCross";
 
 /** When the human takes over a seat (auto mode off), the loop supplies its hop direction for that
  *  seat each tick; the other seat (and both while auto is on) is driven by the protocol's bot. */
@@ -62,7 +71,11 @@ export function deriveView(state: CrossState): CrossView {
   return {
     tick: Number(state.tick),
     seed: Number(state.seed),
-    players: state.players.map((p) => ({ lane: p.lane, col: p.col, score: p.score })),
+    players: state.players.map((p) => ({
+      lane: p.lane,
+      col: p.col,
+      score: p.score,
+    })),
     winner: state.winner,
     balanceA: Number(state.balanceA),
     balanceB: Number(state.balanceB),
@@ -87,7 +100,7 @@ export function visibleLanes(
 ): number[] {
   const anchor =
     myIndex !== null
-      ? view.players[myIndex]?.lane ?? 0
+      ? (view.players[myIndex]?.lane ?? 0)
       : Math.max(view.players[0]?.lane ?? 0, view.players[1]?.lane ?? 0);
   const min = Math.max(0, anchor - LANES_BEHIND);
   const max = Math.min(winLane, anchor + LANES_AHEAD);
@@ -100,4 +113,62 @@ export function sessionResult(state: CrossState): SessionResult {
   if (state.winner === "A") return "A";
   if (state.winner === "B") return "B";
   return "push";
+}
+
+// ---------------------------------------------------------------------------
+// Multi-game helpers
+// ---------------------------------------------------------------------------
+
+export type StepOutcome = "stepped" | "game-over" | "session-over";
+
+/**
+ * Advance a multi-game self-play race by one tick. Returns:
+ *  - "stepped"      one inner tick co-signed;
+ *  - "game-over"    the current inner game is terminal but the session can fund another
+ *                   (caller records the score, then calls kickoffNextGame to rematch);
+ *  - "session-over" stake is exhausted — caller settles.
+ * Parity reads inner.tick (the multi-game state has no top-level tick).
+ */
+export function stepMultiGame(
+  protocol: MultiGameCrossProtocol,
+  tunnel: OffchainTunnel<MultiGameCrossState, CrossMove>,
+  rng: () => number,
+  human?: HumanSeat | null,
+): StepOutcome {
+  if (protocol.isTerminal(tunnel.state)) return "session-over";
+  if (protocol.isGameOver(tunnel.state)) return "game-over";
+  const by: Party = tunnel.state.inner.tick % 2n === 0n ? "A" : "B";
+  let move: CrossMove | null;
+  if (human && human.seat === by) {
+    const dir = human.getDir();
+    move = by === "A" ? { dirA: dir } : { dirB: dir };
+  } else {
+    move = protocol.randomMove(tunnel.state, by, rng);
+  }
+  if (!move) return "game-over";
+  tunnel.step(move, by);
+  return "stepped";
+}
+
+/**
+ * Start the next game on the SAME tunnel: seat A's no-op first move, which the
+ * wrapper turns into a fresh-game reset (new per-game seed, balances carried). A's
+ * stay is always legal on a fresh board, so no bot lookahead on a not-yet-built state.
+ */
+export function kickoffNextGame(
+  tunnel: OffchainTunnel<MultiGameCrossState, CrossMove>,
+): void {
+  tunnel.step({ dirA: undefined }, "A");
+}
+
+/**
+ * Render view for a multi-game race: inner positions/score, but the REAL carried
+ * balances from the wrapper (the inner game's balances are symbolic per-game).
+ */
+export function deriveMultiView(state: MultiGameCrossState): CrossView {
+  return {
+    ...deriveView(state.inner),
+    balanceA: Number(state.balanceA),
+    balanceB: Number(state.balanceB),
+  };
 }
