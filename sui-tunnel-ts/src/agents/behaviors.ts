@@ -9,13 +9,17 @@ import { BlackjackProtocol } from "../protocol/blackjack";
 import { TicTacToeProtocol } from "../protocol/ticTacToe";
 import { ChatProtocol } from "../protocol/chat";
 import { QuantumPokerProtocol } from "../protocol/quantumPoker";
+import { CrossProtocol } from "../protocol/cross";
+import { BombItProtocol } from "../protocol/bombIt";
 
 export type BehaviorName =
   | "payment"
   | "blackjack"
   | "tictactoe"
   | "chat"
-  | "poker";
+  | "poker"
+  | "cross"
+  | "bombIt";
 
 export const BEHAVIOR_NAMES: BehaviorName[] = [
   "payment",
@@ -23,6 +27,8 @@ export const BEHAVIOR_NAMES: BehaviorName[] = [
   "tictactoe",
   "chat",
   "poker",
+  "cross",
+  "bombIt",
 ];
 
 /** Construct a fresh protocol instance for a behavior. */
@@ -43,6 +49,10 @@ export function createBehaviorProtocol(
         unknown,
         unknown
       >;
+    case "cross":
+      return new CrossProtocol() as unknown as Protocol<unknown, unknown>;
+    case "bombIt":
+      return new BombItProtocol() as unknown as Protocol<unknown, unknown>;
     default: {
       const _exhaustive: never = name;
       throw new Error(`unknown behavior: ${_exhaustive}`);
