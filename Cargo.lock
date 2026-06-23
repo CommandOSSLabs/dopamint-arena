@@ -2173,6 +2173,7 @@ dependencies = [
  "async-trait",
  "axum 0.7.9",
  "bcs 0.2.1",
+ "bytes",
  "clap",
  "diesel",
  "diesel-async",
