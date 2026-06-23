@@ -20,7 +20,7 @@ export function ChickenCrossWindow({ windowId }: GameWindowProps) {
     () => modeStore.get(windowId) ?? null,
   );
   const pvp = usePvpChickenCross(windowId);
-  const solo = useChickenCrossSession();
+  const solo = useChickenCrossSession(windowId);
 
   useEffect(() => {
     registerWindowDisposer(windowId, "chicken-cross-mode", () => modeStore.delete(windowId));
