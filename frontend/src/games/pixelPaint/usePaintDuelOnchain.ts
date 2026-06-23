@@ -16,13 +16,17 @@
  * plane is registered once per run and fed a throttled heartbeat (≤1/s, forced
  * on settle), exactly like TicTacToe's `useBotGame`.
  *
- * TWO paths, decided by whether the local bots hold gas:
- *   - FUNDED → on-chain: open+fund a real tunnel (bot X signs `create_and_fund`),
- *     co-sign every move under the real tunnelId, then settle via the backend
- *     settler (falling back to a bot-keypair `close_cooperative_with_root`),
- *     yielding a real Sui `txDigest`.
- *   - NO GAS / open fails → off-chain DEMO: a synthetic demo tunnelId, the SAME
- *     local co-signing + heartbeat TPS (no chain, can't crash), and no settle.
+ * Opening tries the gas SPONSOR first, so the bots need ZERO SUI by default:
+ *   - SPONSORED → on-chain (default): the backend settler (POST /v1/sponsor)
+ *     wraps bot X's `create_and_fund` in its OWN SIP-58 gas; bot X only co-signs.
+ *     A real tunnel opens, every move co-signs under its id, then close settles
+ *     via the settler — falling back to a SPONSORED bot-keypair
+ *     `close_cooperative_with_root` — yielding a real Sui `txDigest` with no bot gas.
+ *   - SENDER-PAYS fallback: if the sponsor endpoint is unreachable/rejects AND the
+ *     bots happen to hold gas, bot X pays its own `create_and_fund`/close gas.
+ *   - DEMO (last resort): if BOTH on-chain paths fail (sponsor down + no gas), a
+ *     synthetic demo tunnelId, the SAME local co-signing + heartbeat TPS (no chain,
+ *     can't crash), and no settle. Mirrors blackjack's bot sponsored open/close.
  *
  * The duel never blocks on the chain: moves co-sign locally the instant the
  * tunnel object exists, and any pre-open moves are buffered then replayed in
@@ -47,11 +51,11 @@ import {
   buildSettleWithRootTx,
   parseTunnelId,
 } from "@/games/ticTacToe/app/lib/tunnel";
+import { loadOrCreateBots, getSuiClient } from "@/games/ticTacToe/app/lib/bots";
 import {
-  loadOrCreateBots,
-  getSuiClient,
-  botBalances,
-} from "@/games/ticTacToe/app/lib/bots";
+  makeKeypairSponsoredSignExec,
+  withSponsorFallback,
+} from "@/onchain/sponsor";
 import {
   usePaintDuel,
   type DuelDifficulty,
@@ -70,8 +74,10 @@ const OVERWRITE_LIMIT = 3;
 const STAKE = 1n;
 /** Dashboard game key for this arena (groups TPS/tunnels under "pixel-duel"). */
 const GAME = "pixel-duel";
-/** A bot needs at least this much gas to safely open+fund AND settle a tunnel;
- *  below it we run the off-chain demo instead (no open, no settle). ~0.02 SUI. */
+/** Headroom a bot needs to pay its OWN gas in the SENDER-PAYS fallback (when the
+ *  sponsor endpoint is unreachable) and the threshold the menu's "ready ✓" funding
+ *  readout uses. NOT a hard gate: the default path is sponsor-gas, which opens a
+ *  real tunnel with 0 SUI. ~0.02 SUI. */
 export const MIN_PLAY_MIST = 20_000_000n;
 
 export type OnchainPhase =
@@ -290,14 +296,28 @@ export function usePaintDuelOnchain(
           settleDigest = result.txDigest;
         } catch (e) {
           console.warn(
-            "[pixel-duel] backend settle failed, falling back to bot submit:",
+            "[pixel-duel] backend settle failed, falling back to bot close:",
             e,
           );
-          const closeRes = await submit(
-            buildSettleWithRootTx(run.tunnelId, settlement),
-            bots.x.keypair,
+          // Close via the gas SPONSOR (bot needs 0 SUI), mirroring the open path —
+          // fall back to a sender-pays close only if the sponsor is unreachable and
+          // the bot holds gas.
+          const sponsoredSignExec = makeKeypairSponsoredSignExec({
+            address: bots.x.address,
+            keypair: bots.x.keypair,
+            client: client as never,
+          });
+          const { digest } = await withSponsorFallback(
+            () =>
+              sponsoredSignExec(buildSettleWithRootTx(run.tunnelId, settlement)),
+            () =>
+              submit(
+                buildSettleWithRootTx(run.tunnelId, settlement),
+                bots.x.keypair,
+              ),
+            "pixel-duel close/settle",
           );
-          settleDigest = closeRes.digest;
+          settleDigest = digest;
         }
         setStatus((s) => ({
           ...s,
@@ -314,7 +334,7 @@ export function usePaintDuelOnchain(
         }));
       }
     },
-    [bots, submit, flushHeartbeat],
+    [bots, client, submit, flushHeartbeat],
   );
 
   // Begin a run: try an on-chain open (if the bots hold gas), else fall to demo.
@@ -348,28 +368,40 @@ export function usePaintDuelOnchain(
     const partyX = { address: bots.x.address, publicKey: bots.x.publicKey };
     const partyO = { address: bots.o.address, publicKey: bots.o.publicKey };
 
-    // Decide on-chain vs demo by the bots' gas; open+fund a real tunnel if funded.
+    // Open a REAL tunnel by default via the gas SPONSOR (bots need 0 SUI): the
+    // settler wraps bot X's create_and_fund in its OWN SIP-58 gas; bot X only
+    // co-signs. `withSponsorFallback` retries sender-pays if the sponsor is
+    // unreachable AND the bots hold gas; if BOTH throw, the catch routes to demo.
     try {
-      const bal = await botBalances(client, bots);
-      if (bal.x >= MIN_PLAY_MIST && bal.o >= MIN_PLAY_MIST) {
-        const createRes = await submit(
-          buildCreateAndFundTx(partyX, partyO, STAKE),
-          bots.x.keypair,
-        );
-        const realId = parseTunnelId(createRes.objectChanges);
-        if (realId) {
-          run.tunnelId = realId;
-          run.onchain = true;
-          const obj = await client.getObject({
-            id: realId,
-            options: { showContent: true },
-          });
-          const fields = (
-            obj.data?.content as { fields?: Record<string, unknown> } | undefined
-          )?.fields;
-          run.createdAt = BigInt((fields?.created_at as string | undefined) ?? 0);
-          setStatus((s) => ({ ...s, openDigest: createRes.digest }));
-        }
+      const sponsoredSignExec = makeKeypairSponsoredSignExec({
+        address: bots.x.address,
+        keypair: bots.x.keypair,
+        client: client as never,
+      });
+      const { digest: createDigest } = await withSponsorFallback(
+        () => sponsoredSignExec(buildCreateAndFundTx(partyX, partyO, STAKE)),
+        () => submit(buildCreateAndFundTx(partyX, partyO, STAKE), bots.x.keypair),
+        "pixel-duel open/fund",
+      );
+      // The sponsored path returns only a digest; recover the new tunnel id from
+      // its object changes (the sender-pays submit would have inlined the same).
+      const createTxb = await client.getTransactionBlock({
+        digest: createDigest,
+        options: { showObjectChanges: true },
+      });
+      const realId = parseTunnelId(createTxb.objectChanges);
+      if (realId) {
+        run.tunnelId = realId;
+        run.onchain = true;
+        const obj = await client.getObject({
+          id: realId,
+          options: { showContent: true },
+        });
+        const fields = (
+          obj.data?.content as { fields?: Record<string, unknown> } | undefined
+        )?.fields;
+        run.createdAt = BigInt((fields?.created_at as string | undefined) ?? 0);
+        setStatus((s) => ({ ...s, openDigest: createDigest }));
       }
     } catch (e) {
       console.warn(
