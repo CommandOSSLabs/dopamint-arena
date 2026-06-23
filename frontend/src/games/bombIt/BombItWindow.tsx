@@ -20,7 +20,7 @@ export function BombItWindow({ windowId }: GameWindowProps) {
     () => modeStore.get(windowId) ?? null,
   );
   const pvp = usePvpBombIt(windowId);
-  const solo = useBombItSession();
+  const solo = useBombItSession(windowId);
 
   useEffect(() => {
     registerWindowDisposer(windowId, "bomb-it-mode", () => modeStore.delete(windowId));
