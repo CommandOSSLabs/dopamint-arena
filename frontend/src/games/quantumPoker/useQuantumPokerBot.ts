@@ -43,7 +43,7 @@ import { settlePokerTunnel } from "./pokerSettle";
 const STAKE = QUANTUM_POKER_STAKE;
 const DOPAMINT_PER_SEAT = 1_000_000_000n; // 1 DOPAMINT per seat (9 decimals)
 const HAND_CAP = QUANTUM_POKER_HANDS_PER_TUNNEL;
-const AUTO_MS = 45; // pacing between auto moves
+const AUTO_MS = 0; // instant bot/plumbing moves (no pacing)
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 export type QuantumPokerBotStatus =

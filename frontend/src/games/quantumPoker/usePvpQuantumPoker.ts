@@ -72,9 +72,6 @@ const SHOWDOWN_DELAY_MS = PLUMBING_DELAY_MS * 2;
 /** The hand-over result holds the longest — a ~5s pause on the win/loss before the next hand is
  *  dealt, so the outcome clearly registers. */
 const HAND_OVER_DELAY_MS = 5_000;
-/** Pacing for an auto-mode persona bet: watchable, well under TURN_SECONDS so the turn timer
- *  never fires while the bot is representing this seat. */
-const AUTO_BET_DELAY_MS = 700; // watchable, well under TURN_SECONDS so the turn timer never fires
 /** Real-time RNG context for the auto-mode persona bot (live play, not a seeded replay). */
 const AUTO_BOT_CTX: BotContext = { rngForSeat: () => Math.random };
 /** Matchmaking queue id — both seats must request the same game. */
@@ -324,11 +321,14 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
     // persona bot also drives this seat's BETTING, so the bot fully represents the player. The kit
     // bot is stateless — plan() decides purely from public state.
     let move: PokerMove | null = null;
-    let delay = PLUMBING_DELAY_MS;
+    // AUTO mode runs instant — the persona bot represents the player, so skip the watchable pacing.
+    // Manual play keeps the paced reveals/hand-over so a human can follow the table.
+    let delay = autoRef.current ? 0 : PLUMBING_DELAY_MS;
     if (plumbingProposer(dt.state) === self) {
       move = driver.chooseMove(dt.state, secureRng); // commit secrets minted here, once
-      delay =
-        dt.state.phase === "hand_over"
+      delay = autoRef.current
+        ? 0
+        : dt.state.phase === "hand_over"
           ? HAND_OVER_DELAY_MS
           : dt.state.phase === "showdown"
             ? SHOWDOWN_DELAY_MS
@@ -339,7 +339,7 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
       dt.state.toAct === self
     ) {
       move = autoBotRef.current?.plan(dt.state) ?? null; // persona picks bet/call/check/fold
-      delay = AUTO_BET_DELAY_MS;
+      delay = 0; // instant in AUTO mode
     }
     if (!move) return;
     autoNonceRef.current = targetNonce;
