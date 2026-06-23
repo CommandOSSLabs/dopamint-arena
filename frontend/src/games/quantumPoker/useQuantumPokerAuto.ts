@@ -586,7 +586,11 @@ class AutoSession {
       this.pushView();
       this.deps.report.bumpCounters({ tunnelsClosed: 1, settlements: 1 });
       this.deps.report.setActive(0);
-      const settled = await settlePokerTunnel({
+      // Fire-and-forget the settle: the next tunnel opens on the normal cadence while this close is
+      // processed in the background. We never block the loop on a tunnel's settle. The persona label
+      // is captured now so the background log isn't relabelled by the next match.
+      const matchLabel = `${this.personas?.a ?? "Bot A"} vs ${this.personas?.b ?? "Bot B"}`;
+      void settlePokerTunnel({
         tunnel,
         transcript,
         tunnelId,
@@ -595,21 +599,23 @@ class AutoSession {
         fallbackSignExec: dopamintOn
           ? this.botSponsoredSignExec(this.bots.A)
           : this.botSignExec(this.bots.A),
-      });
-      this.deps?.report.pushLocalTxn({
-        id: ++this.txnId,
-        game: "quantum-poker",
-        time: new Date().toLocaleTimeString("en-GB"),
-        bot: `${this.personas?.a ?? "Bot A"} vs ${this.personas?.b ?? "Bot B"}`,
-        type: `settled · ${HAND_CAP} hands`,
-        status: "Success",
-        amount: settled.proofUrl ? "walrus ✓" : "closed",
-      });
-      if (this.gen !== myGen) return;
+      })
+        .then((settled) => {
+          this.deps?.report.pushLocalTxn({
+            id: ++this.txnId,
+            game: "quantum-poker",
+            time: new Date().toLocaleTimeString("en-GB"),
+            bot: matchLabel,
+            type: `settled · ${HAND_CAP} hands`,
+            status: "Success",
+            amount: settled.proofUrl ? "walrus ✓" : "closed",
+          });
+        })
+        .catch((e) =>
+          console.error("[quantum-poker] auto settle failed (fire-and-forget):", e),
+        );
 
-      await this.refreshBalances();
-      if (this.gen !== myGen) return;
-
+      void this.refreshBalances();
       this.bookMatch(myGen);
     } catch (e) {
       if (this.gen !== myGen) return;
