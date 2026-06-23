@@ -318,6 +318,10 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
       selfEphemeralSecretHex: string;
     },
   ) {
+    // Bind the live tunnel for sync()/maybePropose()/the board. BOTH callers route through here,
+    // so set it here — the resume() cold-load path doesn't set it otherwise, which left a resumed
+    // match with a null `dt` (no view → stuck loading, the propose loop never schedules).
+    this.dt = dt;
     const deps = this.deps!;
     const signExec = deps.signExec;
     const reads = deps.client as unknown as Parameters<
