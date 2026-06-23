@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { useCurrentAccount } from "@mysten/dapp-kit";
 import type { PokerMove } from "sui-tunnel-ts/protocol/quantumPoker";
 import type { GameWindowProps } from "../types";
@@ -123,6 +124,16 @@ export function QuantumPokerWindow({
   const game = useQuantumPokerBot(windowId);
   const s = game.state;
 
+  // After a player-triggered Settle (cash out) completes, navigate back to the menu. A natural
+  // match-end settle leaves this flag false, so its "Settled · New tunnel" screen still shows.
+  const exitAfterSettleRef = useRef(false);
+  useEffect(() => {
+    if (game.status === "settled" && exitAfterSettleRef.current) {
+      exitAfterSettleRef.current = false;
+      onExit?.();
+    }
+  }, [game.status, onExit]);
+
   if (!s) {
     return (
       <div
@@ -199,6 +210,18 @@ export function QuantumPokerWindow({
             : game.status === "settling"
               ? "Settling…"
               : `phase ${s.phase}`}
+          {(game.status === "playing" || game.status === "awaitHuman") && (
+            <button
+              type="button"
+              onClick={() => {
+                exitAfterSettleRef.current = true; // settle, then auto-return to the menu
+                game.settleNow();
+              }}
+              className="ml-2 rounded-sm border border-[var(--qp-gold)]/50 px-2 py-0.5 text-[10px] font-semibold text-[var(--qp-gold)]"
+            >
+              Settle
+            </button>
+          )}
           {game.status === "settled" && (
             <button
               type="button"

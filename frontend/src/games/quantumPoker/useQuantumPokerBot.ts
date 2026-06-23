@@ -63,6 +63,8 @@ export interface QuantumPokerBotSession {
   error: string | null;
   open: () => void;
   act: (move: PokerMove) => void;
+  /** Settle the current tunnel early (cash out) — status moves to "settled" when done. */
+  settleNow: () => void;
   reset: () => void;
 }
 
@@ -352,6 +354,15 @@ class BotSession {
     }
   };
 
+  /** End the match early and settle now (player "cash out"). Bumps `gen` so any in-flight drive loop
+   *  abandons (no double settle), then closes at the current co-signed state. The window navigates
+   *  back to the menu once status reaches "settled". */
+  settleNow = () => {
+    if (this.status !== "playing" && this.status !== "awaitHuman") return;
+    const myGen = ++this.gen;
+    void this.settle(myGen);
+  };
+
   private settle = async (myGen: number) => {
     const tunnel = this.tunnel;
     const transcript = this.transcript;
@@ -429,6 +440,7 @@ export function useQuantumPokerBot(windowId: string): QuantumPokerBotSession {
     ...snap,
     open: session.open,
     act: session.act,
+    settleNow: session.settleNow,
     reset: session.reset,
   };
 }
