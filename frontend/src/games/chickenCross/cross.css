@@ -265,6 +265,54 @@
   background: rgba(255, 255, 255, 0.5);
 }
 
+/* Running multi-game score chip (solo only) */
+.cross-score {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  border: 1.5px solid var(--cx-hud-outline);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.82);
+  padding: 3px 2px;
+  box-shadow: 0 1px 0 var(--cx-hud-outline);
+}
+.cross-score__tally {
+  font-family: var(--wal-font-mono);
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1.1;
+  color: var(--cx-hud-ink);
+}
+.cross-score__label {
+  font-size: 6px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--cx-hud-outline);
+}
+
+/* Settle button — cash out the tunnel anytime (solo only) */
+.cross-settle {
+  width: 100%;
+  border: 1.5px solid var(--cx-hud-outline);
+  border-radius: 6px;
+  background: linear-gradient(180deg, #e8f5e9, #a5d6a7);
+  color: var(--cx-hud-outline);
+  font-size: 7px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 4px 1px;
+  line-height: 1.1;
+  box-shadow: 0 1px 0 var(--cx-hud-outline);
+}
+.cross-settle:active {
+  transform: translateY(1px);
+  box-shadow: none;
+  background: #c8e6c9;
+}
+
 /* ---- Arena: square tiles ----------------------------------------------- */
 
 .cross-main {

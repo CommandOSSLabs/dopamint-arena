@@ -62,6 +62,9 @@ export function CrossBoard({
   done = false,
   auto = false,
   onToggleAuto,
+  score,
+  gamesPlayed,
+  onSettle,
 }: {
   view: CrossView;
   winner: "A" | "B" | null;
@@ -73,6 +76,12 @@ export function CrossBoard({
   done?: boolean;
   auto?: boolean;
   onToggleAuto?: () => void;
+  /** Running multi-game score for solo sessions. */
+  score?: { you: number; foe: number };
+  /** Number of completed races (the current race is gamesPlayed + 1). */
+  gamesPlayed?: number;
+  /** Cash out the tunnel at the current state — solo only, shown while live. */
+  onSettle?: () => void;
 }) {
   const settled = winner !== null || done;
   const spectating = role === null;
@@ -137,6 +146,17 @@ export function CrossBoard({
             mine={role === "B"}
             tag={spectating ? "bot" : role === "B" ? "you" : ""}
           />
+
+          {score !== undefined && (
+            <div className="cross-score">
+              <span className="cross-score__tally tabular-nums">
+                {score.you}–{score.foe}
+              </span>
+              <span className="cross-score__label">
+                g{(gamesPlayed ?? 0) + 1}
+              </span>
+            </div>
+          )}
         </div>
 
         <div className="cross-pane__bottom">
@@ -175,6 +195,17 @@ export function CrossBoard({
           )}
 
           {spectating && !settled && <span className="cross-spectate">bvb</span>}
+
+          {onSettle && !settled && (
+            <button
+              type="button"
+              className="cross-settle"
+              onClick={onSettle}
+              title="Cash out the tunnel now at the current balance"
+            >
+              settle
+            </button>
+          )}
         </div>
       </aside>
 
