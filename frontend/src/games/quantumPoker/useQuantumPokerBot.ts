@@ -15,6 +15,10 @@ import {
 } from "sui-tunnel-ts/protocol/quantumPoker";
 import { registerWindowDisposer } from "@/lib/windowSessions";
 import {
+  getControlPlaneClient,
+  type RegisterSessionResult,
+} from "@/backend/controlPlane";
+import {
   openAndFundSelfPlayReturnless,
   readCreatedAt,
   type SignExec,
@@ -101,6 +105,12 @@ class BotSession {
   private ts = 1n;
   private gen = 0;
   private looping = false;
+  // Self-play TPS heartbeat: send counts (never a rate); the backend derives windowed TPS. See
+  // adding-a-tunnel-game.md "Reporting TPS". (PvP must NOT do this — the relay counts there.)
+  private session: RegisterSessionResult | null = null;
+  private heartbeatActions = 0;
+  private moveCount = 0;
+  private lastHeartbeatAt = 0;
 
   subscribe = (cb: () => void): (() => void) => {
     this.listeners.add(cb);
@@ -145,6 +155,26 @@ class BotSession {
     this.looping = false;
     this.listeners.clear();
   };
+
+  /** Throttled self-play heartbeat: sends the action delta since last flush, never a rate. */
+  private flushHeartbeat(tunnelId: string, force: boolean) {
+    const session = this.session;
+    if (!session || this.heartbeatActions === 0) return;
+    const now = Date.now();
+    const windowMs = now - this.lastHeartbeatAt;
+    if (!force && windowMs < 1000) return;
+    const actionsDelta = this.heartbeatActions;
+    this.heartbeatActions = 0;
+    this.lastHeartbeatAt = now;
+    getControlPlaneClient()
+      .sendHeartbeat(session.sessionId, session.statsToken, {
+        tunnelId,
+        nonce: String(this.moveCount),
+        actionsDelta,
+        windowMs: Math.max(1, windowMs),
+      })
+      .catch((e) => console.error("[poker bot] heartbeat failed:", e));
+  }
 
   open = () => {
     const deps = this.deps;
@@ -224,6 +254,23 @@ class BotSession {
           status: "Success",
           amount: "",
         });
+
+        // Register the self-play session so the backend can derive live TPS from heartbeats.
+        this.session = null;
+        this.heartbeatActions = 0;
+        this.moveCount = 0;
+        this.lastHeartbeatAt = Date.now();
+        try {
+          this.session = await getControlPlaneClient().registerSession({
+            userAddress: deps.account?.address ?? a.address,
+            game: "quantum-poker",
+            tunnels: [{ tunnelId, partyA: a.address, partyB: b.address }],
+          });
+        } catch (e) {
+          console.error("[poker bot] registerSession failed:", e);
+        }
+        if (this.gen !== myGen) return;
+
         this.status = "playing";
         this.emit();
         void this.drive(myGen);
@@ -250,6 +297,10 @@ class BotSession {
           return;
         }
         if (r.kind === "idle") break; // terminal
+        // r.kind === "applied": one verified self-play step → count it for TPS.
+        this.heartbeatActions += 1;
+        this.moveCount += 1;
+        this.flushHeartbeat(this.tunnelId, false);
         this.emit();
         await sleep(AUTO_MS);
       }
@@ -268,6 +319,9 @@ class BotSession {
     const myGen = this.gen;
     try {
       applyHumanMove(tunnel, botA, HUMAN, move, this.ts++);
+      this.heartbeatActions += 1;
+      this.moveCount += 1;
+      this.flushHeartbeat(this.tunnelId, false);
       this.status = "playing";
       this.emit();
       void this.drive(myGen);
@@ -283,6 +337,7 @@ class BotSession {
     if (!tunnel || !transcript || !deps) return;
     this.status = "settling";
     this.emit();
+    this.flushHeartbeat(this.tunnelId, true); // tail: don't drop the final partial window
     try {
       const settled = await settlePokerTunnel({
         tunnel,
