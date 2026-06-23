@@ -1,5 +1,5 @@
 /** Target hands per tunnel before cooperative settlement. */
-export const QUANTUM_POKER_HAND_CAP = 1000n;
+export const QUANTUM_POKER_HAND_CAP = 180n;
 
 /**
  * Hands per tunnel for the in-app Bot/Auto lanes before a cooperative close. Sized to fill — but
@@ -12,4 +12,11 @@ export const QUANTUM_POKER_HAND_CAP = 1000n;
 export const QUANTUM_POKER_HANDS_PER_TUNNEL = 180n;
 
 /** Locked per seat for the PvP/agent tunnel lane. */
-export const QUANTUM_POKER_STAKE = 10_000n;
+export const QUANTUM_POKER_STAKE = 2500n;
+
+/**
+ * Per-seat buy-in for the PvP lane, in chips. chips == raw DOPAMINT (1:1), so this is also the raw
+ * stake locked per seat per round. "1 DOPAMINT = 2500 chips" is the UI label; the on-chain stake is
+ * this many raw units. Sized so a seat busts (and auto-rebuys) within HAND_CAP at ante 50.
+ */
+export const POKER_BUYIN = 2500n;
