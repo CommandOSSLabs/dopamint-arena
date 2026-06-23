@@ -1,5 +1,12 @@
-import { useState, type CSSProperties, type ReactNode } from "react";
-import { PALETTE, WC, FONT_DISPLAY, FONT_MONO } from "./tokens";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
+import { PALETTE, WC, FONT_DISPLAY, FONT_MONO, shortAddress } from "./tokens";
+import type { PainterInfo } from "../useWorldCanvasOnchain";
 
 /** The three lean tools: freehand draw, eraser (paints white), and pan/hand. */
 export type ToolId = "draw" | "erase" | "hand";
@@ -14,8 +21,8 @@ const SIZES: readonly number[] = [1, 2, 3];
 /**
  * The Excalidraw-style floating toolbar: one clean, rounded, light island centered
  * at the top. Tools on the left, a few preset color swatches, and a brush-size
- * stepper — that's the whole config surface. No menus, no panels. The AUTO control
- * is its own pill in the top-right ({@link AutoControl}).
+ * stepper — that's the whole config surface. No menus, no panels. The arena lanes
+ * are their own cluster in the top-right ({@link ArenaControl}).
  */
 export function FloatingToolbar({
   tool,
@@ -130,59 +137,254 @@ export function FloatingToolbar({
 }
 
 /**
- * The AUTO control — the arena's "Self-play (bots)" button for this game. Spawning
- * calls the engine's {@link spawnAgent}; each agent paints alongside the human on
- * its own tunnel. A live readout shows how many bots are co-painting and the
- * current co-signed throughput (TPS).
+ * The arena control — two Battleship-style lanes, transposed to the shared wall.
+ * Both run on REAL strictly-2-party tunnels (two DISTINCT DOPAMINT-funded seats);
+ * the protocol stays free/draw, so there is never a winner or a stake shift — the
+ * only score is who co-signed the most cells (the {@link MostPainted} readout).
+ *
+ * - **Paint with a bot** — your wall: seat A is you ({@link onPaint via the canvas}),
+ *   seat B is the always-present "Wall Bot", a DISTINCT funded party co-painting the
+ *   SAME tunnel. This is the resting lane; selecting it while the arena is live tears
+ *   the arena down ({@link onStop}) so the camera returns to your wall.
+ * - **Watch bot arena** — {@link onSpawn} opens a fresh shared tunnel authored by TWO
+ *   distinct funded bots (seat A + seat B, both co-signing every paint). "+ pair"
+ *   spawns another, "View" cycles the camera, "Stop" tears every spawned tunnel down
+ *   (your wall + its Wall Bot keep painting).
  */
-export function AutoControl({
+export function ArenaControl({
   agentCount,
   tps,
   onSpawn,
   onStop,
+  onViewNext,
 }: {
+  /** SPAWNED bots currently painting (each pair adds 2). 0 ⇒ only you + the Wall Bot. */
   agentCount: number;
+  /** Live co-signed throughput across every tunnel (the TPS dial). */
   tps: number;
-  /** Spawn ONE more agent (engine.spawnAgent). */
+  /** Open a fresh shared tunnel painted by a distinct funded bot pair (engine.spawnAgent). */
   onSpawn: () => void;
-  /** Stop every agent (engine.stopAgents). */
+  /** Tear down every spawned tunnel; the human wall + Wall Bot keep painting (engine.stopAgents). */
   onStop: () => void;
+  /** Cycle the camera to the next live bot (engine.viewNextAgent). */
+  onViewNext: () => void;
 }) {
-  if (agentCount === 0) {
-    return (
-      <div style={autoWrapStyle}>
-        <button type="button" onClick={onSpawn} style={primaryButtonStyle}>
-          <BotIcon />
-          Self-play (bots)
-        </button>
-      </div>
-    );
-  }
+  const arena = agentCount > 0;
   return (
     <div style={autoWrapStyle}>
-      <div style={readoutStyle}>
-        <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <span
-            style={{
-              width: 7,
-              height: 7,
-              borderRadius: "50%",
-              background: WC.accent,
-              boxShadow: `0 0 8px ${WC.accent}`,
-            }}
-          />
-          {agentCount} {agentCount === 1 ? "bot" : "bots"}
-        </span>
-        <span style={{ color: "#9aa3bb" }}>·</span>
-        <span style={{ color: WC.text }}>{Math.round(tps)} TPS</span>
+      <div style={laneRowStyle}>
+        <LaneTab
+          label="Paint with a bot"
+          icon={<BrushIcon />}
+          active={!arena}
+          onClick={() => {
+            if (arena) onStop(); // leave the arena → back to just your wall
+          }}
+        />
+        <LaneTab
+          label="Watch bot arena"
+          icon={<BotIcon />}
+          active={arena}
+          onClick={() => {
+            if (!arena) onSpawn(); // open the first bot-vs-bot pair
+          }}
+        />
       </div>
-      <button type="button" onClick={onSpawn} title="Add a bot" style={addButtonStyle}>
-        +
-      </button>
-      <button type="button" onClick={onStop} style={stopButtonStyle}>
-        Stop
-      </button>
+
+      {arena ? (
+        <div style={readoutStyle}>
+          <LiveDot />
+          <span>
+            {agentCount} {agentCount === 1 ? "bot" : "bots"}
+          </span>
+          <span style={{ color: "#9aa3bb" }}>·</span>
+          <span style={{ color: WC.text }}>{Math.round(tps)} TPS</span>
+          <span style={readoutDividerStyle} />
+          <button
+            type="button"
+            onClick={onSpawn}
+            title="Spawn another funded bot pair"
+            style={pillButtonStyle}
+          >
+            + pair
+          </button>
+          <button
+            type="button"
+            onClick={onViewNext}
+            title="Jump the camera to the next bot"
+            style={pillButtonStyle}
+          >
+            View
+          </button>
+          <button type="button" onClick={onStop} style={stopPillStyle}>
+            Stop
+          </button>
+        </div>
+      ) : (
+        <div style={readoutStyle}>
+          <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
+            <SeatDot tint={WC.seatA} /> You
+            <span style={{ color: "#9aa3bb", margin: "0 1px" }}>+</span>
+            <SeatDot tint={WC.seatB} /> Wall Bot
+          </span>
+          <span style={{ color: "#9aa3bb" }}>·</span>
+          <span style={{ color: WC.text }}>{Math.round(tps)} TPS</span>
+        </div>
+      )}
     </div>
+  );
+}
+
+/**
+ * The "most painted" readout — a small, lightweight leaderboard of the top painters
+ * by co-signed cell count. Display only: NO money, NO winner (the protocol is
+ * free/draw). Reads the live {@link PainterInfo} tally from the engine on a coarse
+ * interval, so the panel never re-renders at the paint rate. Hidden until the first
+ * cell lands.
+ */
+export function MostPainted({
+  painters,
+}: {
+  /** Per-painter tallies, keyed by address (stable identity, mutated in place). */
+  painters: ReadonlyMap<string, PainterInfo>;
+}) {
+  const top = useTopPainters(painters, 5);
+  if (top.length === 0) return null;
+  return (
+    <div style={mostPaintedStyle}>
+      <div style={mostPaintedHeaderStyle}>
+        <BrushIcon size={12} />
+        Most painted
+      </div>
+      {top.map((p) => (
+        <div key={p.address} style={leaderRowStyle}>
+          <SeatDot tint={p.tint} />
+          <span style={leaderLabelStyle}>{p.label}</span>
+          <span style={leaderAddrStyle}>{shortAddress(p.address)}</span>
+          <span style={leaderCountStyle}>{formatCount(p.cells)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Snapshot the top-N painters by cell count, sampled on a coarse interval (not at the
+ *  paint rate) — the live Map has stable identity and is mutated in place, so polling
+ *  it is enough; ties break toward the painter who acted earliest (steadier ordering). */
+function useTopPainters(
+  painters: ReadonlyMap<string, PainterInfo>,
+  limit: number,
+): PainterInfo[] {
+  const [top, setTop] = useState<PainterInfo[]>([]);
+  const latest = useRef(painters);
+  latest.current = painters;
+  useEffect(() => {
+    const sample = () => {
+      const ranked = [...latest.current.values()]
+        .filter((p) => p.cells > 0)
+        .sort((a, b) => b.cells - a.cells || a.lastSeq - b.lastSeq)
+        .slice(0, limit);
+      setTop(ranked);
+    };
+    sample();
+    const id = setInterval(sample, 600);
+    return () => clearInterval(id);
+  }, [limit]);
+  return top;
+}
+
+/** Compact large tallies (paint-forever counts get big): 1.2k / 34k / 1.1M. */
+function formatCount(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 10_000) return `${Math.round(n / 1000)}k`;
+  if (n >= 1_000) return `${(n / 1000).toFixed(1)}k`;
+  return `${n}`;
+}
+
+/** One lane of the arena control: a segmented tab, active = accent fill. */
+function LaneTab({
+  label,
+  icon,
+  active,
+  onClick,
+}: {
+  label: string;
+  icon: ReactNode;
+  active: boolean;
+  onClick: () => void;
+}) {
+  const [hover, setHover] = useState(false);
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 7,
+        height: 32,
+        padding: "0 12px",
+        borderRadius: 9,
+        border: "none",
+        cursor: "pointer",
+        fontFamily: "inherit",
+        fontSize: 12.5,
+        fontWeight: 700,
+        whiteSpace: "nowrap",
+        color: active ? "#06203B" : WC.text,
+        background: active
+          ? WC.accent
+          : hover
+            ? "rgba(255,255,255,0.08)"
+            : "transparent",
+        transition: "background .12s, color .12s",
+      }}
+    >
+      <span
+        style={{
+          display: "grid",
+          placeItems: "center",
+          color: active ? "#06203B" : WC.muted,
+        }}
+      >
+        {icon}
+      </span>
+      {label}
+    </button>
+  );
+}
+
+/** A small square seat/painter swatch (echoes a painted pixel). */
+function SeatDot({ tint }: { tint: string }) {
+  return (
+    <span
+      style={{
+        width: 8,
+        height: 8,
+        borderRadius: 2,
+        background: tint,
+        flex: "0 0 auto",
+      }}
+    />
+  );
+}
+
+/** The pulsing "live" accent dot shown beside the active arena's TPS. */
+function LiveDot() {
+  return (
+    <span
+      style={{
+        width: 7,
+        height: 7,
+        borderRadius: "50%",
+        background: WC.accent,
+        boxShadow: `0 0 8px ${WC.accent}`,
+        flex: "0 0 auto",
+      }}
+    />
   );
 }
 
@@ -249,31 +451,29 @@ const islandStyle: CSSProperties = {
   fontFamily: FONT_DISPLAY,
 };
 
+/** Top-right arena cluster: the two-lane selector stacked above its context strip. */
 const autoWrapStyle: CSSProperties = {
   position: "absolute",
   top: 14,
   right: 14,
   zIndex: 60,
   display: "flex",
-  alignItems: "center",
-  gap: 6,
+  flexDirection: "column",
+  alignItems: "flex-end",
+  gap: 8,
   fontFamily: FONT_DISPLAY,
 };
 
-const primaryButtonStyle: CSSProperties = {
+/** The segmented two-lane container (dark glass, holds the {@link LaneTab}s). */
+const laneRowStyle: CSSProperties = {
   display: "flex",
   alignItems: "center",
-  gap: 8,
-  height: 36,
-  padding: "0 16px",
-  borderRadius: 10,
-  border: "none",
-  cursor: "pointer",
-  fontSize: 13.5,
-  fontWeight: 700,
-  color: "#06203B",
-  background: WC.accent,
-  boxShadow: "0 6px 18px rgba(77,162,255,0.4)",
+  gap: 4,
+  padding: 4,
+  borderRadius: 12,
+  background: "rgba(10,16,34,0.72)",
+  border: "1px solid rgba(255,255,255,0.12)",
+  backdropFilter: "blur(8px)",
 };
 
 const readoutStyle: CSSProperties = {
@@ -292,38 +492,112 @@ const readoutStyle: CSSProperties = {
   backdropFilter: "blur(8px)",
 };
 
-const addButtonStyle: CSSProperties = {
-  width: 36,
-  height: 36,
-  borderRadius: 10,
-  border: "1px solid rgba(255,255,255,0.14)",
-  cursor: "pointer",
-  fontSize: 18,
-  fontWeight: 700,
-  lineHeight: 1,
-  color: WC.text,
-  background: "rgba(10,16,34,0.72)",
-  backdropFilter: "blur(8px)",
+const readoutDividerStyle: CSSProperties = {
+  width: 1,
+  height: 16,
+  background: "rgba(255,255,255,0.14)",
+  margin: "0 2px",
+  flex: "0 0 auto",
 };
 
-const stopButtonStyle: CSSProperties = {
-  height: 36,
-  padding: "0 14px",
-  borderRadius: 10,
+const pillButtonStyle: CSSProperties = {
+  height: 26,
+  padding: "0 10px",
+  borderRadius: 8,
+  border: "1px solid rgba(255,255,255,0.14)",
+  cursor: "pointer",
+  fontFamily: "inherit",
+  fontSize: 12,
+  fontWeight: 700,
+  color: WC.text,
+  background: "rgba(255,255,255,0.06)",
+};
+
+const stopPillStyle: CSSProperties = {
+  height: 26,
+  padding: "0 12px",
+  borderRadius: 8,
   border: "none",
   cursor: "pointer",
-  fontSize: 13,
+  fontFamily: "inherit",
+  fontSize: 12,
   fontWeight: 700,
   color: "#fff",
   background: "#e0556a",
 };
 
-/* --- inline icons (lucide-style, 18px, stroke = currentColor) --- */
+/** Bottom-right "most painted" leaderboard card (dark glass, lightweight). */
+const mostPaintedStyle: CSSProperties = {
+  position: "absolute",
+  right: 14,
+  bottom: 18,
+  zIndex: 60,
+  minWidth: 176,
+  maxWidth: 224,
+  display: "flex",
+  flexDirection: "column",
+  gap: 3,
+  padding: "9px 11px",
+  borderRadius: 12,
+  background: "rgba(10,16,34,0.72)",
+  border: "1px solid rgba(255,255,255,0.12)",
+  backdropFilter: "blur(8px)",
+  fontFamily: FONT_DISPLAY,
+};
 
-function iconProps() {
+const mostPaintedHeaderStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 6,
+  marginBottom: 3,
+  fontSize: 10,
+  fontWeight: 800,
+  letterSpacing: ".14em",
+  textTransform: "uppercase",
+  color: WC.muted,
+};
+
+const leaderRowStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 7,
+  height: 19,
+};
+
+const leaderLabelStyle: CSSProperties = {
+  flex: "0 0 auto",
+  fontSize: 12,
+  fontWeight: 700,
+  color: WC.text,
+};
+
+const leaderAddrStyle: CSSProperties = {
+  flex: "1 1 auto",
+  minWidth: 0,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+  fontSize: 10,
+  color: WC.muted,
+  fontFamily: FONT_MONO,
+};
+
+const leaderCountStyle: CSSProperties = {
+  flex: "0 0 auto",
+  marginLeft: "auto",
+  fontSize: 12,
+  fontWeight: 800,
+  color: WC.text,
+  fontFamily: FONT_MONO,
+  fontVariantNumeric: "tabular-nums",
+};
+
+/* --- inline icons (lucide-style, stroke = currentColor; size defaults to 18px) --- */
+
+function iconProps(size = 18) {
   return {
-    width: 18,
-    height: 18,
+    width: size,
+    height: size,
     viewBox: "0 0 24 24",
     fill: "none",
     stroke: "currentColor",
@@ -363,13 +637,23 @@ function HandIcon() {
   );
 }
 
-function BotIcon() {
+function BotIcon({ size = 16 }: { size?: number }) {
   return (
-    <svg {...iconProps()} stroke="#06203B">
+    <svg {...iconProps(size)}>
       <rect x="3" y="11" width="18" height="10" rx="2" />
       <path d="M12 7v4" />
       <circle cx="12" cy="5" r="2" />
       <path d="M8 16h.01M16 16h.01" />
+    </svg>
+  );
+}
+
+function BrushIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg {...iconProps(size)}>
+      <path d="m14.622 17.897-10.68-2.913" />
+      <path d="M18.376 2.622a1 1 0 1 1 3.002 3.002L17.36 9.643a.5.5 0 0 0 0 .707l.944.944a2.41 2.41 0 0 1 0 3.408l-.944.944a.5.5 0 0 1-.707 0L8.354 8.354a.5.5 0 0 1 0-.707l.944-.944a2.41 2.41 0 0 1 3.408 0l.944.944a.5.5 0 0 0 .707 0z" />
+      <path d="M9 8c-1.804 2.71-3.97 3.46-6.583 3.948a.507.507 0 0 0-.302.819l7.32 8.883a1 1 0 0 0 1.185.204C12.735 20.405 16 16.792 16 15" />
     </svg>
   );
 }

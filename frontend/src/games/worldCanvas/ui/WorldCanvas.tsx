@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { getStroke } from "perfect-freehand";
 import {
   cellKey,
   type PaintedCell,
@@ -8,7 +9,6 @@ import {
 import {
   CHUNK_SIZE,
   PALETTE,
-  PALETTE_RGB,
   WC,
   ZOOM,
   TAP_SLOP,
@@ -21,24 +21,35 @@ import {
 const FOCUS_SCALE = 12;
 
 /**
- * The infinite, chunked pixel wall — a single HTML5 canvas with pan (drag),
- * zoom-to-cursor (wheel), and drag-to-paint. The world is divided into
- * {@link CHUNK_SIZE}×{@link CHUNK_SIZE} chunks; each resident chunk is rasterized
- * once into its own offscreen canvas and only RE-rasterized when a paint dirties
- * it (dirty-chunk redraw). Each render frame culls to the visible chunk range and
- * blits only those — so cost is bound by what's on screen + what changed this
- * frame, never by the (unbounded) total wall size.
+ * The infinite vector-ink wall — a single HTML5 canvas with pan (drag),
+ * zoom-to-cursor (wheel), and drag-to-paint. The co-signed unit is still one CELL
+ * (one cell = one tunnel move = 1 TPS, unchanged), but the VISUAL is real ink: each
+ * painter's contiguous run of cells is grouped into a STROKE and rendered as a
+ * smooth, tapered, anti-aliased {@link getStroke} (perfect-freehand) path — not a
+ * grid of squares. So the art reads like a brush, not pixels.
  *
- * Render is deliberately LEAN: crisp tile blits, flat strokes, a 1px brush-
- * footprint outline, and a small agent pin. No glow ribbons, supersampling,
- * halos, or soft-dab fields — the chunk store + viewport culling is the only
- * machinery, so several agents stay at a smooth 60fps.
- *
- * Cells live in the parent's append-only `paints` map (keyed by cell); this view
- * is the canonical RENDER store and is updated incrementally: it folds in only
- * paints with a fresh co-signed `seq`, and keeps a pixel even after the parent
- * evicts the cell from its retained set (so the wall never visibly un-paints).
+ * Strokes are built incrementally from the parent's ordered `paints` stream: each
+ * agent's cells append to that agent's open stroke (a big positional jump starts a
+ * new one); the human's own strokes come straight from the live pointer path for a
+ * crisp, lag-free preview, finalized on pointer-up. Finalized strokes cache their
+ * world-space outline (computed once) and are projected + filled per frame, culled
+ * to the viewport — so cost is bound by what's on screen.
  */
+
+/** Per-seat outline feel — tapered, smoothed ink (the perfect-freehand "signature" look). */
+const STROKE_OPTS = {
+  thinning: 0.55,
+  smoothing: 0.6,
+  streamline: 0.55,
+  simulatePressure: true,
+} as const;
+/** A positional jump larger than this (in cells) ends a painter's stroke and starts
+ *  a new one — so an agent hopping to a fresh region doesn't draw a seam across the wall. */
+const STROKE_GAP_CELLS = 4;
+/** Stroke width (cells) for agent art; the human's width tracks the brush-size selector. */
+const AGENT_STROKE_SIZE = 1.7;
+/** Cap on retained finalized strokes — constant memory for an endless wall (oldest evicted). */
+const MAX_STROKES = 12_000;
 
 interface View {
   /** Screen px of global pixel (0,0); global px g maps to offset + g*scale. */
@@ -51,13 +62,26 @@ interface GlobalCell {
   gy: number;
 }
 
-/** A resident chunk: its color buffer, the RGBA image, and its offscreen tile. */
-interface Chunk {
-  /** color+1 per cell (0 = unpainted, so the board void shows through). */
-  buf: Uint8Array;
-  img: ImageData;
-  canvas: HTMLCanvasElement;
-  ctx: CanvasRenderingContext2D;
+/** A finalized stroke: its world-space {@link getStroke} outline (cached) + bbox + tint. */
+interface Stroke {
+  color: number;
+  outline: number[][];
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+}
+/** A stroke still being extended (an agent's current run, or the human's live drag). */
+interface OpenStroke {
+  color: number;
+  size: number;
+  pts: number[][];
+  lastX: number;
+  lastY: number;
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
 }
 
 /** Floor-divide that works for negative coordinates (chunk of a global pixel). */
@@ -150,10 +174,12 @@ export function WorldCanvas({
     null,
   );
 
-  // Render store: chunkKey ("cx,cy") → resident chunk, plus the set dirtied since
-  // the last frame and the highest co-signed seq already folded in.
-  const chunks = useRef<Map<string, Chunk>>(new Map());
-  const dirty = useRef<Set<string>>(new Set());
+  // Render store: finalized strokes (cached outlines) + each painter's open stroke,
+  // built from the co-signed paint stream; plus the highest seq already folded in.
+  const strokes = useRef<Stroke[]>([]);
+  const openStrokes = useRef<Map<string, OpenStroke>>(new Map());
+  // The human's live drag, captured from the raw pointer path for a crisp preview.
+  const liveStroke = useRef<OpenStroke | null>(null);
   const appliedSeq = useRef(0);
   const syncedRevision = useRef(-1);
   // Global-pixel bounding box of every painted cell, grown as paints fold in.
@@ -221,35 +247,8 @@ export function WorldCanvas({
     };
   };
 
-  // Materialize a chunk (offscreen 256×256 tile) on first paint into it.
-  const ensureChunk = (key: string): Chunk | null => {
-    let c = chunks.current.get(key);
-    if (c) return c;
-    const canvas = document.createElement("canvas");
-    canvas.width = CHUNK_SIZE;
-    canvas.height = CHUNK_SIZE;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return null;
-    c = {
-      buf: new Uint8Array(CHUNK_SIZE * CHUNK_SIZE),
-      img: ctx.createImageData(CHUNK_SIZE, CHUNK_SIZE),
-      canvas,
-      ctx,
-    };
-    chunks.current.set(key, c);
-    return c;
-  };
-
-  // Raster one cell into its chunk's buffer + RGBA image (O(1)), grow the painted-
-  // content bbox, and mark the chunk dirty for the next frame's re-blit. Shared by
-  // the authoritative `syncPaints` (co-signed paints folded in by seq) and the
-  // optimistic in-stroke echo (`placeAt`), so both write pixels identically.
-  const writeCell = (gx: number, gy: number, color: number) => {
-    const cx = chunkOf(gx);
-    const cy = chunkOf(gy);
-    const key = `${cx},${cy}`;
-    const chunk = ensureChunk(key);
-    if (!chunk) return;
+  // Grow the painted-content bbox (global cells) for the ⊙ fit-to-content reset.
+  const growBbox = (gx: number, gy: number) => {
     const bb = bbox.current;
     if (!bb) {
       bbox.current = { minX: gx, minY: gy, maxX: gx, maxY: gy };
@@ -259,33 +258,76 @@ export function WorldCanvas({
       if (gx > bb.maxX) bb.maxX = gx;
       if (gy > bb.maxY) bb.maxY = gy;
     }
-    const idx = (gy - cy * CHUNK_SIZE) * CHUNK_SIZE + (gx - cx * CHUNK_SIZE);
-    chunk.buf[idx] = color + 1;
-    const [r, g, b] = PALETTE_RGB[color] ?? [255, 255, 255];
-    const o = idx * 4;
-    chunk.img.data[o] = r;
-    chunk.img.data[o + 1] = g;
-    chunk.img.data[o + 2] = b;
-    chunk.img.data[o + 3] = 255;
-    dirty.current.add(key);
   };
 
-  // Fold every paint with a never-seen co-signed seq into the render store. Gated on
-  // `revision` so the map is scanned at most once per change, not once per frame.
-  // Optimistic in-stroke writes have usually already rastered these exact pixels;
-  // re-folding them here is idempotent and reconciles any overpaint by another seat.
+  // Freeze an open stroke into a cached world-space outline + bbox; evict the oldest
+  // when the retained set is full (constant memory for an endless wall).
+  const finalizeStroke = (s: OpenStroke) => {
+    const outline = getStroke(s.pts, { ...STROKE_OPTS, size: s.size }) as number[][];
+    if (outline.length < 2) return;
+    strokes.current.push({
+      color: s.color,
+      outline,
+      minX: s.minX,
+      minY: s.minY,
+      maxX: s.maxX,
+      maxY: s.maxY,
+    });
+    if (strokes.current.length > MAX_STROKES) strokes.current.shift();
+  };
+
+  // Append a cell's world-center point to its painter's open stroke; a big jump (new
+  // region / pen lift) finalizes the current one and starts a fresh stroke.
+  const extendStroke = (key: string, px: number, py: number, color: number, size: number) => {
+    growBbox(Math.floor(px), Math.floor(py));
+    const open = openStrokes.current.get(key);
+    if (
+      open &&
+      open.color === color &&
+      Math.hypot(px - open.lastX, py - open.lastY) <= STROKE_GAP_CELLS
+    ) {
+      open.pts.push([px, py]);
+      open.lastX = px;
+      open.lastY = py;
+      open.minX = Math.min(open.minX, px);
+      open.minY = Math.min(open.minY, py);
+      open.maxX = Math.max(open.maxX, px);
+      open.maxY = Math.max(open.maxY, py);
+      return;
+    }
+    if (open) finalizeStroke(open);
+    openStrokes.current.set(key, {
+      color,
+      size,
+      pts: [[px, py]],
+      lastX: px,
+      lastY: py,
+      minX: px,
+      minY: py,
+      maxX: px,
+      maxY: py,
+    });
+  };
+
+  // Fold every paint with a never-seen co-signed seq into the stroke store. Gated on
+  // `revision` so the map is scanned at most once per change, not once per frame. The
+  // HUMAN's own cells are skipped here — the human stroke comes from the live pointer
+  // path (crisper) and is finalized on pointer-up; agents build from their cell runs.
   const syncPaints = () => {
     if (syncedRevision.current === revisionRef.current) return;
     syncedRevision.current = revisionRef.current;
     let maxSeq = appliedSeq.current;
+    const human = humanRef.current;
     for (const cell of paintsRef.current.values()) {
       if (cell.seq <= appliedSeq.current) continue;
       if (cell.seq > maxSeq) maxSeq = cell.seq;
-      writeCell(
-        Number(cell.cx) * CHUNK_SIZE + cell.x,
-        Number(cell.cy) * CHUNK_SIZE + cell.y,
-        cell.color,
-      );
+      const gx = Number(cell.cx) * CHUNK_SIZE + cell.x;
+      const gy = Number(cell.cy) * CHUNK_SIZE + cell.y;
+      if (cell.painter === human) {
+        growBbox(gx, gy);
+        continue;
+      }
+      extendStroke(cell.painter, gx + 0.5, gy + 0.5, cell.color, AGENT_STROKE_SIZE);
     }
     appliedSeq.current = maxSeq;
   };
@@ -322,9 +364,10 @@ export function WorldCanvas({
       if (!ctx) return;
       const v = view.current;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      // Crisp pixels: no bilinear smoothing on tile blits. Cheapest path and the
-      // clean, modern look — painted cells stay sharp squares at every zoom.
-      ctx.imageSmoothingEnabled = false;
+      // Anti-aliased vector ink (smooth stroke fills, round joins/caps).
+      ctx.imageSmoothingEnabled = true;
+      ctx.lineJoin = "round";
+      ctx.lineCap = "round";
 
       // Ease the camera toward an active jump target (set when an agent spawns).
       // Manual pan/zoom clears the target so a jump never fights the user.
@@ -348,36 +391,65 @@ export function WorldCanvas({
         }
       }
 
-      // Re-rasterize tiles dirtied since the last frame (bound by paints/frame).
-      for (const key of dirty.current) {
-        const c = chunks.current.get(key);
-        if (c) c.ctx.putImageData(c.img, 0, 0);
-      }
-      dirty.current.clear();
-
-      // Backdrop: the whole viewport is the empty canvas void; painted chunks
-      // are blitted on top.
+      // Backdrop: the empty canvas void; ink strokes paint on top.
       ctx.fillStyle = WC.board;
       ctx.fillRect(0, 0, cw, ch);
 
-      // Visible global-pixel bounds → visible chunk range (viewport culling).
-      const gMinX = (0 - v.offsetX) / v.scale;
-      const gMinY = (0 - v.offsetY) / v.scale;
+      // Visible world-cell bounds (with slack) for stroke culling.
+      const gMinX = -v.offsetX / v.scale;
+      const gMinY = -v.offsetY / v.scale;
       const gMaxX = (cw - v.offsetX) / v.scale;
       const gMaxY = (ch - v.offsetY) / v.scale;
-      const cMinX = chunkOf(gMinX);
-      const cMinY = chunkOf(gMinY);
-      const cMaxX = chunkOf(gMaxX);
-      const cMaxY = chunkOf(gMaxY);
-      const tile = CHUNK_SIZE * v.scale;
-      for (let cx = cMinX; cx <= cMaxX; cx++) {
-        for (let cy = cMinY; cy <= cMaxY; cy++) {
-          const c = chunks.current.get(`${cx},${cy}`);
-          if (!c) continue;
-          const sx = v.offsetX + cx * CHUNK_SIZE * v.scale;
-          const sy = v.offsetY + cy * CHUNK_SIZE * v.scale;
-          ctx.drawImage(c.canvas, sx, sy, tile, tile);
+      const pad = 6;
+      const visible = (s: {
+        minX: number;
+        minY: number;
+        maxX: number;
+        maxY: number;
+      }) =>
+        s.maxX >= gMinX - pad &&
+        s.minX <= gMaxX + pad &&
+        s.maxY >= gMinY - pad &&
+        s.minY <= gMaxY + pad;
+
+      // Fill one world-space outline at the current pan/zoom, tinted by `color`.
+      const fillOutline = (outline: number[][], color: number) => {
+        if (outline.length < 2) return;
+        ctx.beginPath();
+        ctx.moveTo(
+          v.offsetX + outline[0][0] * v.scale,
+          v.offsetY + outline[0][1] * v.scale,
+        );
+        for (let i = 1; i < outline.length; i++) {
+          ctx.lineTo(
+            v.offsetX + outline[i][0] * v.scale,
+            v.offsetY + outline[i][1] * v.scale,
+          );
         }
+        ctx.closePath();
+        ctx.fillStyle = PALETTE[color] ?? "#ffffff";
+        ctx.fill();
+      };
+
+      // Finalized strokes (cached outlines) → agents' open strokes → the human's
+      // live drag, all culled to the viewport.
+      for (const s of strokes.current) {
+        if (visible(s)) fillOutline(s.outline, s.color);
+      }
+      for (const s of openStrokes.current.values()) {
+        if (visible(s)) {
+          fillOutline(
+            getStroke(s.pts, { ...STROKE_OPTS, size: s.size }) as number[][],
+            s.color,
+          );
+        }
+      }
+      const live = liveStroke.current;
+      if (live && live.pts.length) {
+        fillOutline(
+          getStroke(live.pts, { ...STROKE_OPTS, size: live.size }) as number[][],
+          live.color,
+        );
       }
 
       // Agent markers: a small pin + label above each agent's flag, so the user
@@ -473,18 +545,53 @@ export function WorldCanvas({
     return { sx: e.clientX - rect.left, sy: e.clientY - rect.top };
   };
 
-  // Paint ONE cell of the active stroke: dedupe against the stroke set, echo it into
-  // the local raster INSTANTLY (optimistic — no waiting on the co-sign), then fire
-  // the co-sign without awaiting. The tunnel is off-chain, so `onPaint` co-signs
-  // near-instantly; we still never block the pointer loop on it. One newly-painted
-  // cell = one co-signed move.
+  // The human's live drag is captured as a smooth pointer path (fractional world
+  // cells) for a crisp, lag-free ink preview; it's finalized into the stroke store
+  // on pointer-up. Width tracks the brush-size selector.
+  const worldAt = (sx: number, sy: number) => {
+    const v = view.current;
+    return { wx: (sx - v.offsetX) / v.scale, wy: (sy - v.offsetY) / v.scale };
+  };
+  const liveBegin = (sx: number, sy: number) => {
+    const { wx, wy } = worldAt(sx, sy);
+    liveStroke.current = {
+      color: selColorRef.current,
+      size: brushSizeRef.current * 1.6,
+      pts: [[wx, wy]],
+      lastX: wx,
+      lastY: wy,
+      minX: wx,
+      minY: wy,
+      maxX: wx,
+      maxY: wy,
+    };
+  };
+  const livePush = (sx: number, sy: number) => {
+    const s = liveStroke.current;
+    if (!s) return;
+    const { wx, wy } = worldAt(sx, sy);
+    s.pts.push([wx, wy]);
+    s.minX = Math.min(s.minX, wx);
+    s.minY = Math.min(s.minY, wy);
+    s.maxX = Math.max(s.maxX, wx);
+    s.maxY = Math.max(s.maxY, wy);
+  };
+  const liveFinalize = () => {
+    if (liveStroke.current) {
+      finalizeStroke(liveStroke.current);
+      liveStroke.current = null;
+    }
+  };
+
+  // Co-sign ONE cell of the active stroke (the TPS unit): dedupe against the stroke
+  // set, then fire the co-sign without awaiting. The on-canvas ink comes from the
+  // live pointer path above, not from this cell. One new cell = one co-signed move.
   const placeAt = (cell: GlobalCell) => {
     if (disabled) return;
     const key = `${cell.gx},${cell.gy}`;
     if (strokeSet.current.has(key)) return; // already co-signed this stroke
     strokeSet.current.add(key);
     const color = selColorRef.current;
-    writeCell(cell.gx, cell.gy, color); // instant optimistic echo
     const cx = chunkOf(cell.gx);
     const cy = chunkOf(cell.gy);
     onPaint(
@@ -528,6 +635,7 @@ export function WorldCanvas({
     };
     if (painting) {
       strokeSet.current.clear(); // start a fresh stroke
+      liveBegin(sx, sy); // begin the smooth ink preview
       stampBrush(cell); // a plain click already paints its cell
     }
   };
@@ -550,6 +658,7 @@ export function WorldCanvas({
         stampBrush(c);
       }
       d.last = cell;
+      livePush(sx, sy); // extend the smooth ink preview along the cursor path
     } else {
       if (d.moved > TAP_SLOP) d.panning = true;
       if (d.panning) {
@@ -563,11 +672,17 @@ export function WorldCanvas({
   const onPointerUp = () => {
     const d = drag.current;
     drag.current = null;
-    if (d?.painting) strokeSet.current.clear(); // end the stroke
+    if (d?.painting) {
+      strokeSet.current.clear(); // end the stroke
+      liveFinalize(); // freeze the ink preview into the stroke store
+    }
   };
   const onPointerLeave = () => {
     hover.current = null;
-    if (drag.current?.painting) strokeSet.current.clear();
+    if (drag.current?.painting) {
+      strokeSet.current.clear();
+      liveFinalize();
+    }
     drag.current = null;
   };
 

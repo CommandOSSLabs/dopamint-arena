@@ -1,7 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { useWorldCanvasOnchain } from "../useWorldCanvasOnchain";
 import { WorldCanvas } from "./WorldCanvas";
-import { FloatingToolbar, AutoControl, type ToolId } from "./FloatingToolbar";
+import {
+  FloatingToolbar,
+  ArenaControl,
+  MostPainted,
+  type ToolId,
+} from "./FloatingToolbar";
 import { WC, FONT_DISPLAY } from "./tokens";
 
 /** Eraser paints the board's lightest color (palette index 0 = white). */
@@ -9,9 +14,10 @@ const ERASER_COLOR = 0;
 
 /**
  * The lean canvas shell: the chunked wall behind a single Excalidraw-style floating
- * toolbar (tools + a few colors + brush size) and the AUTO "Self-play (bots)"
- * control. No window chrome, no panels — every painted cell is one co-signed
- * off-chain move; each spawned agent co-paints forever over its own tunnel.
+ * toolbar (tools + a few colors + brush size), the two-lane {@link ArenaControl}
+ * (Paint with a bot / Watch bot arena), and the {@link MostPainted} readout. No
+ * window chrome, no panels — every painted cell is one co-signed off-chain move on a
+ * strictly-2-party tunnel. Free/draw: the only score is who painted the most cells.
  */
 export function CanvasView({ onExit }: { onExit?: () => void }) {
   const engine = useWorldCanvasOnchain();
@@ -58,12 +64,15 @@ export function CanvasView({ onExit }: { onExit?: () => void }) {
         onBrushSize={setBrushSize}
       />
 
-      <AutoControl
+      <ArenaControl
         agentCount={engine.agentCount}
         tps={tps}
         onSpawn={engine.spawnAgent}
         onStop={engine.stopAgents}
+        onViewNext={engine.viewNextAgent}
       />
+
+      <MostPainted painters={engine.painters} />
 
       {onExit && (
         <button
