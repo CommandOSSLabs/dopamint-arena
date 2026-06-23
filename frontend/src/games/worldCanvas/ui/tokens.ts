@@ -9,6 +9,8 @@
  * import WC, glass, PALETTE, PALETTE_RGB, ZOOM, TAP_SLOP.
  */
 
+import type { CSSProperties } from "react";
+
 /** Cells per chunk edge — MUST match the WorldCanvasProtocol / the hook. */
 export const CHUNK_SIZE = 256;
 
@@ -45,6 +47,31 @@ export const glass = {
 export const ZOOM = { min: 1, max: 40, step: 1.15 } as const;
 /** px of pointer travel still counted as a tap (place) rather than a drag (pan). */
 export const TAP_SLOP = 6;
+
+/**
+ * Compact segmented-control pill for the agent Speed / Intelligence selectors, in
+ * the world-canvas glass look. `tint` colors the ACTIVE state — accent for Speed,
+ * seatB for the drawing mode — so the two selector groups read as distinct.
+ */
+export function agentPill(
+  active: boolean,
+  tint: string = WC.accent,
+): CSSProperties {
+  return {
+    cursor: "pointer",
+    border: active ? `1px solid ${tint}` : "1px solid rgba(255,255,255,0.12)",
+    background: active ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.03)",
+    color: active ? WC.text : WC.muted,
+    boxShadow: active ? `inset 0 0 0 1px ${tint}` : "none",
+    borderRadius: 8,
+    padding: "4px 8px",
+    fontSize: 11,
+    fontWeight: 700,
+    lineHeight: 1,
+    fontFamily: FONT_DISPLAY,
+    transition: "background .12s, color .12s, border-color .12s",
+  };
+}
 
 /**
  * Truncate a 0x-hex address to the `4af3…9c21` short form (mirrors the wplace /

@@ -109,6 +109,14 @@ export function WorldCanvas({
   const dirty = useRef<Set<string>>(new Set());
   const appliedSeq = useRef(0);
   const syncedRevision = useRef(-1);
+  // Global-pixel bounding box of every painted cell, grown as paints fold in.
+  // Drives the ⊙ "fit to content" reset so a recenter never lands on a blank void.
+  const bbox = useRef<{
+    minX: number;
+    minY: number;
+    maxX: number;
+    maxY: number;
+  } | null>(null);
 
   const selColorRef = useRef(selectedColor);
   selColorRef.current = selectedColor;
@@ -172,6 +180,18 @@ export function WorldCanvas({
       const key = `${cx},${cy}`;
       const chunk = ensureChunk(key);
       if (!chunk) continue;
+      // Grow the painted-content bbox (global pixels) for the fit-to-content reset.
+      const gx = cx * CHUNK_SIZE + cell.x;
+      const gy = cy * CHUNK_SIZE + cell.y;
+      const bb = bbox.current;
+      if (!bb) {
+        bbox.current = { minX: gx, minY: gy, maxX: gx, maxY: gy };
+      } else {
+        if (gx < bb.minX) bb.minX = gx;
+        if (gy < bb.minY) bb.minY = gy;
+        if (gx > bb.maxX) bb.maxX = gx;
+        if (gy > bb.maxY) bb.maxY = gy;
+      }
       const idx = cell.y * CHUNK_SIZE + cell.x;
       chunk.buf[idx] = cell.color + 1;
       const [r, g, b] = PALETTE_RGB[cell.color] ?? [255, 255, 255];
@@ -431,6 +451,7 @@ export function WorldCanvas({
   };
 
   const zoomBy = (factor: number, sx?: number, sy?: number) => {
+    focusTarget.current = null; // manual zoom always wins over an active jump
     const v = view.current;
     const wrap = wrapRef.current!;
     const ax = sx ?? wrap.clientWidth / 2;
@@ -440,6 +461,37 @@ export function WorldCanvas({
     v.offsetX = ax * (1 - f) + v.offsetX * f;
     v.offsetY = ay * (1 - f) + v.offsetY * f;
     v.scale = next;
+  };
+
+  // ⊙ "fit to content": frame every painted cell (with a little padding) so a
+  // reset always lands on the art, never a blank region. Recenters the empty
+  // origin only when nothing has been painted yet. Cancels any active camera jump.
+  const resetView = () => {
+    const wrap = wrapRef.current;
+    if (!wrap) return;
+    focusTarget.current = null;
+    const cw = wrap.clientWidth;
+    const ch = wrap.clientHeight;
+    const v = view.current;
+    const bb = bbox.current;
+    if (!bb) {
+      v.scale = 10;
+      v.offsetX = cw / 2;
+      v.offsetY = ch / 2;
+      return;
+    }
+    const pad = 2; // cells of breathing room around the content
+    const gW = bb.maxX - bb.minX + 1 + pad * 2;
+    const gH = bb.maxY - bb.minY + 1 + pad * 2;
+    const scale = Math.max(
+      ZOOM.min,
+      Math.min(ZOOM.max, Math.min(cw / gW, ch / gH)),
+    );
+    const cgx = (bb.minX + bb.maxX + 1) / 2;
+    const cgy = (bb.minY + bb.maxY + 1) / 2;
+    v.scale = scale;
+    v.offsetX = cw / 2 - cgx * scale;
+    v.offsetY = ch / 2 - cgy * scale;
   };
   const onWheel = (e: React.WheelEvent) => {
     focusTarget.current = null; // manual zoom cancels any active jump
@@ -504,7 +556,7 @@ export function WorldCanvas({
           {Math.round((hud.zoom / 10) * 100)}%
         </span>
         <ZoomButton label="+" onClick={() => zoomBy(ZOOM.step)} />
-        <ZoomButton label="⊙" onClick={() => (fitted.current = false)} />
+        <ZoomButton label="⊙" onClick={resetView} />
         <span
           className="ml-0.5 min-w-[74px] text-[11px] tabular-nums"
           style={{ color: WC.muted, fontFamily: FONT_MONO }}

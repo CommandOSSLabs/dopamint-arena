@@ -1,12 +1,15 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   useWorldCanvasOnchain,
   type WorldCanvasPhase,
+  type UseWorldCanvasOnchain,
+  type AgentSpeed,
+  type AgentMode,
 } from "../useWorldCanvasOnchain";
 import { WorldCanvas } from "./WorldCanvas";
 import { PaletteDock } from "./PaletteDock";
 import { PlayersActivityPanel, LeaderboardPanel } from "./panels";
-import { WC, glass, FONT_DISPLAY, FONT_MONO } from "./tokens";
+import { WC, glass, agentPill, FONT_DISPLAY, FONT_MONO } from "./tokens";
 
 /**
  * The live wall: mounts the tunnel hook (which opens a sponsored 2-party tunnel
@@ -58,42 +61,17 @@ export function CanvasView() {
         <StatusChip phase={engine.status.phase} onchain={engine.status.onchain} />
       </div>
 
-      {/* Agent-AI controls (right, below the chip) */}
-      <div className="absolute right-4 top-[64px] flex flex-col items-end gap-2">
-        <button
-          onClick={engine.spawnAgent}
-          className="flex items-center gap-2 rounded-[12px] px-4 py-2.5 text-sm font-bold"
-          style={{
-            color: "#06203B",
-            background: WC.accent,
-            boxShadow: "0 6px 20px rgba(77,162,255,0.45)",
-            cursor: "pointer",
-          }}
-          title="Spawn one bot that paints forever over its own co-signed tunnel"
-        >
-          <span style={{ fontSize: 15 }}>🤖</span> Agent AI
-        </button>
-        {engine.agentCount > 0 && (
-          <button
-            onClick={engine.stopAgents}
-            className="rounded-[12px] px-3 py-1.5 text-xs font-bold"
-            style={{
-              color: WC.text,
-              background: "rgba(255,90,106,0.16)",
-              border: "1px solid rgba(255,90,106,0.4)",
-              cursor: "pointer",
-            }}
-          >
-            ✕ Stop {engine.agentCount} agent{engine.agentCount > 1 ? "s" : ""}
-          </button>
-        )}
-      </div>
+      {/* Agent-AI controls (right, below the chip): spawn + Speed + Intelligence +
+          View Agent + Stop. Each spawn opens the agent its OWN co-signed tunnel. */}
+      <AgentControls engine={engine} />
 
       {/* Players + Recent Activity and Leaderboard (draggable glass panels) */}
       <PlayersActivityPanel
         painters={engine.painters}
         activity={engine.activity}
         humanAddress={engine.humanAddress}
+        agents={engine.agents}
+        onFocusAgent={engine.focusOnAgent}
         revision={engine.revision}
       />
       <LeaderboardPanel painters={engine.painters} revision={engine.revision} />
@@ -166,6 +144,118 @@ const CHIP: Record<
   demo: { label: "Self-play · demo", tint: WC.warn, pulse: true },
   error: { label: "Error", tint: WC.err, pulse: false },
 };
+
+const AGENT_SPEEDS: { value: AgentSpeed; label: string }[] = [
+  { value: "slow", label: "Slow" },
+  { value: "normal", label: "Normal" },
+  { value: "fast", label: "Fast" },
+];
+
+const AGENT_MODES: { value: AgentMode; label: string; title: string }[] = [
+  { value: "artist", label: "Artist", title: "Draws the flag designs (Vietnam / Japan)" },
+  { value: "scatter", label: "Scatter", title: "Sprays random pixels in random colors" },
+  { value: "filler", label: "Filler", title: "Floods one solid region growing outward" },
+];
+
+/**
+ * Agent-AI control card: the spawn button plus the Speed (paint interval) and
+ * Intelligence (Artist / Scatter / Filler) selectors, then — once agents exist — a
+ * "View Agent" camera-cycle and a Stop. Speed/mode apply to new spawns and live ones.
+ */
+function AgentControls({ engine }: { engine: UseWorldCanvasOnchain }) {
+  return (
+    <div
+      className="absolute right-4 top-[64px] flex w-[210px] flex-col gap-2.5 rounded-[14px] px-3 py-3"
+      style={{ ...glass, color: WC.text }}
+    >
+      <button
+        onClick={engine.spawnAgent}
+        className="flex items-center justify-center gap-2 rounded-[12px] px-4 py-2.5 text-sm font-bold"
+        style={{
+          color: "#06203B",
+          background: WC.accent,
+          boxShadow: "0 6px 20px rgba(77,162,255,0.45)",
+          cursor: "pointer",
+        }}
+        title="Spawn one bot that paints forever over its OWN co-signed tunnel"
+      >
+        <span style={{ fontSize: 15 }}>🤖</span> Agent AI
+      </button>
+
+      <ControlRow label="Speed">
+        {AGENT_SPEEDS.map((s) => (
+          <button
+            key={s.value}
+            onClick={() => engine.setAgentSpeed(s.value)}
+            style={{ ...agentPill(engine.agentSpeed === s.value, WC.accent), flex: 1 }}
+            title={`Paint speed: ${s.label}`}
+          >
+            {s.label}
+          </button>
+        ))}
+      </ControlRow>
+
+      <ControlRow label="Intelligence">
+        {AGENT_MODES.map((m) => (
+          <button
+            key={m.value}
+            onClick={() => engine.setAgentMode(m.value)}
+            style={{ ...agentPill(engine.agentMode === m.value, WC.seatB), flex: 1 }}
+            title={m.title}
+          >
+            {m.label}
+          </button>
+        ))}
+      </ControlRow>
+
+      {engine.agentCount > 0 && (
+        <div className="flex gap-2">
+          <button
+            onClick={engine.viewNextAgent}
+            className="flex flex-1 items-center justify-center gap-1.5 rounded-[12px] px-3 py-1.5 text-xs font-bold"
+            style={{
+              color: WC.text,
+              background: WC.accentSoft,
+              border: `1px solid ${WC.accent}`,
+              cursor: "pointer",
+            }}
+            title="Cycle the camera to the next active agent"
+          >
+            📍 View Agent
+          </button>
+          <button
+            onClick={engine.stopAgents}
+            className="rounded-[12px] px-3 py-1.5 text-xs font-bold"
+            style={{
+              color: WC.text,
+              background: "rgba(255,90,106,0.16)",
+              border: "1px solid rgba(255,90,106,0.4)",
+              cursor: "pointer",
+            }}
+            title="Stop all agents and tear down their tunnels"
+          >
+            ✕ {engine.agentCount}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** A labeled row of segmented pills inside the agent control card. */
+function ControlRow({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <span
+        className="text-[9px] uppercase tracking-[0.18em]"
+        style={{ color: WC.muted, fontFamily: FONT_MONO }}
+      >
+        {label}
+      </span>
+      <div className="flex gap-1">{children}</div>
+    </div>
+  );
+}
 
 function StatusChip({
   phase,

@@ -1,43 +1,54 @@
 /**
- * useWorldCanvasOnchain — runs "The World is Your Canvas" OVER an OffchainTunnel
- * so every painted cell becomes real co-signed throughput (TPS on the dashboard
- * under "world-canvas"). It mirrors the proven pixel-duel on-chain path
- * ({@link makeKeypairSponsoredSignExec} + {@link withSponsorFallback} +
+ * useWorldCanvasOnchain — runs "The World is Your Canvas" over a HUB-AND-SPOKE set
+ * of OffchainTunnels so every painted cell becomes real co-signed throughput (TPS
+ * on the dashboard under "world-canvas"). It mirrors the proven pixel-duel on-chain
+ * path ({@link makeKeypairSponsoredSignExec} + {@link withSponsorFallback} +
  * `core.OffchainTunnel.selfPlay`), but for a COLLABORATIVE, APPEND-ONLY paint
  * stream with no turns, no winner, and no settle — the wall just paints forever.
  *
+ * ONE TUNNEL PER PAINTER. The arena tunnel is strictly 2-party, so each painter
+ * owns a private self-play tunnel (its own A+B keypairs):
+ *   - the HUMAN holds one tunnel (the persistent bot X/O pair); the human paints
+ *     seat A on it.
+ *   - EACH spawned Agent-AI opens its OWN tunnel (two freshly-minted keypairs) and
+ *     paints seat B on it.
+ * N agents ⇒ N+1 tunnels ⇒ more independent co-signing pairs ⇒ more TPS. Each
+ * tunnel keeps its OWN action counter + throttled `flushHeartbeat`; the dashboard
+ * readouts (PIXELS CO-SIGNED / TPS / ACTIVE AGENTS) AGGREGATE across tunnels with
+ * no double-counting — per the docs, one action is booked per `r.verified` step
+ * per tunnel.
+ *
  * The paint → co-signed-tx path (one paint = one co-signed move = ~1 TPS):
  *   submitHumanPaint / agent tick
- *     → submitPaint(move, seat, painter)  // human is seat A, agents seat B
- *     → run.tunnel.step(move, seat,...)   // selfPlay co-signs BOTH parties
- *     → r.verified                         // both signatures check (honest TPS gate)
- *     → run.moveCount++ + paint the cell into the live canvas + book the painter
- *     → flushHeartbeat (≤1/s)             // coarse throughput report to the control plane
- * The WorldCanvasProtocol folds each paint into a 32-byte rolling digest, so the
- * co-signed state hash strictly changes on every paint — no no-op is possible.
- * Re-painting an existing cell is a fully legal, co-signed move (the digest still
- * folds in the painter byte + coordinate): OVERPAINT is allowed and the cell's
- * owner/color simply updates to the latest painter.
+ *     → submitPaint(runKey, move, seat, painter)   // routes to that painter's run
+ *     → run.tunnel.step(move, seat, ...)           // selfPlay co-signs BOTH parties
+ *     → r.verified                                  // both signatures check (TPS gate)
+ *     → run.moveCount++ + paint the cell + book the painter + bump the global total
+ *     → flushHeartbeat(run, ≤1/s)                  // coarse throughput report per tunnel
+ * The WorldCanvasProtocol folds each paint into a 32-byte rolling digest, so a
+ * tunnel's co-signed state hash strictly changes on every paint — no no-op is
+ * possible. Re-painting an existing cell is a fully legal, co-signed move: OVERPAINT
+ * is allowed and the cell's owner/color simply updates to the latest painter.
  *
- * Opening tries the gas SPONSOR first, so the bots need ZERO SUI by default:
- *   - SPONSORED → on-chain (default): the backend settler wraps bot X's
- *     `create_and_fund` in its OWN SIP-58 gas; bot X only co-signs. A real tunnel
- *     opens and every paint co-signs under its id.
- *   - SENDER-PAYS fallback: if the sponsor endpoint is unreachable AND the bots
- *     happen to hold gas, bot X pays its own `create_and_fund` gas.
+ * Opening tries the gas SPONSOR first, so every painter (incl. fresh agent keys with
+ * ZERO SUI) opens for free:
+ *   - SPONSORED → on-chain (default): the backend settler wraps the painter's
+ *     `create_and_fund` in its OWN SIP-58 gas; the painter only co-signs.
+ *   - SENDER-PAYS fallback: if the sponsor is unreachable AND the painter holds gas.
  *   - DEMO (last resort): if BOTH on-chain paths fail, a synthetic (but valid
  *     32-byte) demo tunnelId, the SAME local co-signing + heartbeat TPS (no chain,
  *     can't crash). There is no settle to skip — the wall is endless.
  *
- * Painting never blocks on the chain: paints co-sign the instant the tunnel
- * object exists, and any pre-open paints are buffered then replayed in order.
+ * Painting never blocks on the chain: paints co-sign the instant a tunnel object
+ * exists, and any pre-open paints are buffered then replayed in order.
  *
- * Agents don't paint noise: each "Agent AI" bot is handed a flag design (the
- * Vietnam flag by default) and a fresh, non-overlapping world region, then walks
- * the design cell-by-cell — each cell one co-signed move — before moving to a new
- * region for the next flag. The hook also tracks per-cell ownership, per-painter
- * tallies, and a recent-activity ring so the HUD can render owners, players, and
- * a leaderboard.
+ * Agents don't paint noise: each "Agent AI" bot is handed an INTELLIGENCE (Artist =
+ * flag designs / Scatter = random pixels / Filler = a region growing outward) and a
+ * SPEED (per-cell paint interval), plus a fresh, non-overlapping world region. It
+ * walks its design cell-by-cell — each cell one co-signed move — before moving to a
+ * new region. Speed/mode controls apply to newly spawned agents and live ones. The
+ * hook also tracks per-cell ownership, per-painter tallies, and a recent-activity
+ * ring so the HUD can render owners, players, and a leaderboard.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { core } from "sui-tunnel-ts";
@@ -46,7 +57,7 @@ import {
   type WorldCanvasState,
   type WorldCanvasMove,
 } from "sui-tunnel-ts/protocol/worldCanvas";
-import type { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
+import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import type { Transaction } from "@mysten/sui/transactions";
 import {
   getControlPlaneClient,
@@ -56,18 +67,25 @@ import {
   buildCreateAndFundTx,
   parseTunnelId,
 } from "@/games/ticTacToe/app/lib/tunnel";
-import { loadOrCreateBots, getSuiClient } from "@/games/ticTacToe/app/lib/bots";
+import {
+  loadOrCreateBots,
+  getSuiClient,
+  type BotIdentity,
+} from "@/games/ticTacToe/app/lib/bots";
 import {
   makeKeypairSponsoredSignExec,
   withSponsorFallback,
 } from "@/onchain/sponsor";
 import {
-  designForFlagIndex,
+  designForMode,
   MAX_DESIGN_WIDTH,
   MAX_DESIGN_HEIGHT,
+  type AgentMode,
   type PixelDesign,
 } from "./designs";
 import { WC } from "./ui/tokens";
+
+export type { AgentMode } from "./designs";
 
 /** Cells per chunk edge — MUST match the WorldCanvasProtocol so a paint legal in
  *  the UI is legal in the co-signing tunnel. */
@@ -79,8 +97,6 @@ const NUM_COLORS = 16;
 const STAKE = 1n;
 /** Dashboard game key (groups TPS/tunnels under "world-canvas"). */
 const GAME = "world-canvas";
-/** How often each spawned agent lays one co-signed paint (one flag cell per tick). */
-const AGENT_PAINT_INTERVAL_MS = 70;
 /** Soft cap on retained painted cells; oldest are evicted so an endless wall keeps
  *  constant memory (the render layer does its own viewport culling). */
 const MAX_RETAINED_CELLS = 200_000;
@@ -102,6 +118,16 @@ const AGENT_TINTS = [
 ] as const;
 
 export type Seat = "A" | "B";
+
+/** Agent painting SPEED — the per-cell paint interval (ms). */
+export type AgentSpeed = "slow" | "normal" | "fast";
+
+/** ms between an agent's co-signed paints, per speed tier. */
+const AGENT_SPEED_INTERVALS: Record<AgentSpeed, number> = {
+  slow: 240,
+  normal: 120,
+  fast: 50,
+};
 
 export type WorldCanvasPhase = "idle" | "opening" | "open" | "demo" | "error";
 
@@ -154,13 +180,13 @@ export interface AgentMarker {
   /** "Agent #n". */
   label: string;
   painter: string;
-  /** Name of the flag currently being drawn (e.g. "Vietnam"). */
+  /** Name of the design currently being drawn (e.g. "Vietnam" / "Scatter"). */
   flagName: string;
   tint: string;
-  /** Global-pixel center of the current flag (camera jump + marker anchor). */
+  /** Global-pixel center of the current design (camera jump + marker anchor). */
   gx: number;
   gy: number;
-  /** Current flag height in cells (lets the marker anchor just above the flag). */
+  /** Current design height in cells (lets the marker anchor just above it). */
   h: number;
 }
 
@@ -171,16 +197,17 @@ export interface CanvasFocus {
   seq: number;
 }
 
-/** On-chain progress surfaced to the canvas HUD. */
+/** On-chain progress surfaced to the canvas HUD (driven by the HUMAN's tunnel; the
+ *  `movesCoSigned` count is the AGGREGATE across every painter's tunnel). */
 export interface WorldCanvasOnchainStatus {
   phase: WorldCanvasPhase;
-  /** Real on-chain tunnel id, or a synthetic demo id when running off-chain. */
+  /** The human tunnel's id, or a synthetic demo id when running off-chain. */
   tunnelId: string | null;
-  /** True once a real tunnel was opened on-chain (vs. the demo fallback). */
+  /** True once the human tunnel opened on-chain (vs. the demo fallback). */
   onchain: boolean;
-  /** Co-signed paints appended this run (the TPS numerator). */
+  /** Total co-signed paints across ALL tunnels this run (the TPS numerator). */
   movesCoSigned: number;
-  /** `create_and_fund` digest (on-chain path only). */
+  /** `create_and_fund` digest of the human tunnel (on-chain path only). */
   openDigest: string | null;
   error: string | null;
 }
@@ -191,11 +218,11 @@ export interface UseWorldCanvasOnchain {
   paints: ReadonlyMap<string, PaintedCell>;
   /** Bumps (rAF-throttled) whenever the canvas changes, so consumers redraw. */
   revision: number;
-  /** Number of autonomous agents currently painting. */
+  /** Number of autonomous agents currently painting (= number of agent tunnels). */
   agentCount: number;
   /** Live agent locations (markers + the "knows where it's drawing" label). */
   agents: AgentMarker[];
-  /** Latest camera-jump request (set when an agent spawns); null until first spawn. */
+  /** Latest camera-jump request; null until first spawn / view. */
   focus: CanvasFocus | null;
   /** Per-painter tallies, keyed by address (stable identity; re-read on `revision`). */
   painters: ReadonlyMap<string, PainterInfo>;
@@ -203,7 +230,15 @@ export interface UseWorldCanvasOnchain {
   activity: ReadonlyArray<ActivityEntry>;
   /** The human's address (so the UI can label the human's own cells "You"). */
   humanAddress: string;
-  /** Paint one cell as the human (seat A) → one co-signed move. */
+  /** Current agent SPEED (applied to newly spawned + live agents). */
+  agentSpeed: AgentSpeed;
+  /** Set the agent paint speed; updates new spawns AND running agents. */
+  setAgentSpeed(speed: AgentSpeed): void;
+  /** Current agent INTELLIGENCE (applied to newly spawned + live agents). */
+  agentMode: AgentMode;
+  /** Set the agent drawing mode; updates new spawns AND running agents (next region). */
+  setAgentMode(mode: AgentMode): void;
+  /** Paint one cell as the human (seat A) → one co-signed move on the human tunnel. */
   submitHumanPaint(
     cx: bigint,
     cy: bigint,
@@ -211,10 +246,14 @@ export interface UseWorldCanvasOnchain {
     y: number,
     color: number,
   ): void;
-  /** Spawn ONE agent that draws flags (seat B) forever, each cell co-signed. */
+  /** Spawn ONE agent on its OWN new tunnel; it paints (seat B) forever, each cell co-signed. */
   spawnAgent(): void;
-  /** Stop every agent (the human can keep painting; history is retained). */
+  /** Stop every agent, tearing down each agent's tunnel (the human keeps painting). */
   stopAgents(): void;
+  /** Re-center the camera on the live agent painting at `painter` (the 📍 button). */
+  focusOnAgent(painter: string): void;
+  /** Cycle the camera to the next active agent (the "View Agent" button). */
+  viewNextAgent(): void;
 }
 
 /** Stable cell key for the live canvas map. */
@@ -273,16 +312,27 @@ function spiralSlot(target: number): { col: number; row: number } {
   }
 }
 
-/** A throwaway 32-byte hex identity for an agent — display/leaderboard only (the
- *  on-chain co-signing identity is always party B). */
-function randomAgentAddress(): string {
-  let h = "";
-  for (let i = 0; i < 64; i++) h += Math.floor(Math.random() * 16).toString(16);
-  return `0x${h}`;
+/** Mint a throwaway party identity for a fresh self-play tunnel — a new ed25519 key
+ *  that needs ZERO SUI (the gas sponsor pays; the keypair only co-signs paints). */
+function makeIdentity(): BotIdentity {
+  const seed = core.generateKeyPair().secretKey;
+  const coreKey = core.keyPairFromSecret(seed);
+  const keypair = Ed25519Keypair.fromSecretKey(seed);
+  return {
+    coreKey,
+    keypair,
+    address: keypair.getPublicKey().toSuiAddress(),
+    publicKey: coreKey.publicKey,
+  };
 }
 
-/** Per-run tunnel + heartbeat/session bookkeeping (one per opened wall). */
+/** Per-painter tunnel + heartbeat/session bookkeeping (ONE per opened painter). */
 interface CanvasRun {
+  /** Map key = the painter's public address (human or agent). */
+  key: string;
+  isHuman: boolean;
+  /** The two seats co-signing this tunnel (A funds/opens, both sign every paint). */
+  identities: { a: BotIdentity; b: BotIdentity };
   tunnelId: string;
   onchain: boolean;
   createdAt: bigint;
@@ -292,28 +342,35 @@ interface CanvasRun {
   ready: boolean;
   closed: boolean;
   session: RegisterSessionResult | null;
+  /** Co-signed paints on THIS tunnel (nonce + this tunnel's heartbeat numerator). */
   moveCount: number;
+  /** Actions since this tunnel's last heartbeat flush (reset to 0 on send). */
   actions: number;
   lastHeartbeat: number;
 }
 
-/** A live agent walking one flag design across a world region. */
+/** A live agent walking one design across a world region, on its own tunnel. */
 interface AgentState {
   id: string;
   num: number;
+  /** This agent's painter address (= its tunnel's seat-B address). */
   painter: string;
   label: string;
   tint: string;
+  /** Captured at spawn, live-updatable: paint interval tier + drawing intelligence. */
+  speed: AgentSpeed;
+  mode: AgentMode;
   design: PixelDesign;
-  /** Top-left global-pixel origin of the current flag. */
+  /** Top-left global-pixel origin of the current design. */
   originGx: number;
   originGy: number;
-  /** Global-pixel center of the current flag (camera/marker anchor). */
+  /** Global-pixel center of the current design (camera/marker anchor). */
   centerGx: number;
   centerGy: number;
   /** Index of the next design cell to paint. */
   cursor: number;
-  timer: ReturnType<typeof setInterval>;
+  /** Self-rescheduling paint timer (a setTimeout chain, so speed can change live). */
+  timer: ReturnType<typeof setTimeout>;
 }
 
 const EMPTY_STATUS: WorldCanvasOnchainStatus = {
@@ -329,7 +386,7 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
   const bots = useMemo(() => loadOrCreateBots(), []);
   const client = useMemo(() => getSuiClient(), []);
   const humanAddress = bots.x.address;
-  // One protocol instance shared by the co-signing tunnel and the agents' RNG.
+  // One protocol instance shared by every co-signing tunnel.
   const proto = useMemo(
     () => new WorldCanvasProtocol({ chunkSize: CHUNK_SIZE, numColors: NUM_COLORS }),
     [],
@@ -340,8 +397,13 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
   const [agentCount, setAgentCount] = useState(0);
   const [agents, setAgents] = useState<AgentMarker[]>([]);
   const [focus, setFocus] = useState<CanvasFocus | null>(null);
+  const [agentSpeed, setAgentSpeedState] = useState<AgentSpeed>("normal");
+  const [agentMode, setAgentModeState] = useState<AgentMode>("artist");
 
-  const runRef = useRef<CanvasRun | null>(null);
+  // One tunnel per painter, keyed by painter address (human + each agent).
+  const runsRef = useRef<Map<string, CanvasRun>>(new Map());
+  // Aggregate co-signed paints across ALL tunnels (the dashboard numerator).
+  const totalMovesRef = useRef(0);
   // Live canvas data: stable identity, mutated in place; React re-reads on `revision`.
   const paintsRef = useRef<Map<string, PaintedCell>>(new Map());
   // Per-painter tallies + recent-activity ring: same "mutate + bump revision" pattern.
@@ -352,14 +414,26 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
   const regionIndexRef = useRef(0);
   const agentNumRef = useRef(0);
   const focusSeqRef = useRef(0);
+  // Round-robin cursor for the "View Agent" cycle button.
+  const viewCursorRef = useRef(0);
   const rafRef = useRef<number | null>(null);
+  // Current speed/mode for new spawns, mirrored into refs so the paint loop can read
+  // them without re-subscribing.
+  const agentSpeedRef = useRef<AgentSpeed>("normal");
+  const agentModeRef = useRef<AgentMode>("artist");
 
-  // Coalesce many per-paint canvas mutations into one redraw per animation frame.
+  // Coalesce many per-paint canvas mutations into one redraw per animation frame,
+  // and push the latest aggregate paint count into the HUD at most once per frame.
   const scheduleRedraw = useCallback(() => {
     if (rafRef.current !== null) return;
     rafRef.current = requestAnimationFrame(() => {
       rafRef.current = null;
       setRevision((v) => v + 1);
+      setStatus((s) =>
+        s.movesCoSigned === totalMovesRef.current
+          ? s
+          : { ...s, movesCoSigned: totalMovesRef.current },
+      );
     });
   }, []);
 
@@ -406,6 +480,8 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
   );
 
   // Book one accepted paint against its painter and append it to the activity ring.
+  // `seq` is the GLOBAL aggregate sequence so activity entries stay strictly ordered
+  // across tunnels (the ring is keyed by it).
   const recordPaint = useCallback(
     (address: string, mv: WorldCanvasMove, seq: number) => {
       const m = paintersRef.current;
@@ -460,7 +536,8 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
     [client],
   );
 
-  // Coarse throughput report — one call per ~1s window, never per paint.
+  // Coarse PER-TUNNEL throughput report — one call per ~1s window, never per paint.
+  // Each tunnel flushes independently, so counts never double-report across tunnels.
   const flushHeartbeat = useCallback((run: CanvasRun, force: boolean) => {
     const s = run.session;
     if (!s || run.actions === 0) return;
@@ -480,8 +557,9 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
       .catch((e) => console.error("[world-canvas] heartbeat failed:", e));
   }, []);
 
-  // Co-sign one paint through the tunnel; count only honest, both-signature-VERIFIED
-  // steps (the TPS gate), paint the cell, book the painter, and bump the counters.
+  // Co-sign one paint through a painter's tunnel; count only honest, both-signature-
+  // VERIFIED steps (the TPS gate). One verified step = one action on THIS tunnel and
+  // one increment of the GLOBAL aggregate — never double-counted.
   const coSignPaint = useCallback(
     (run: CanvasRun, mv: WorldCanvasMove, by: Seat, painter: string) => {
       if (!run.tunnel || run.closed) return;
@@ -493,10 +571,10 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
         if (!r.verified) return;
         run.moveCount += 1;
         run.actions += 1;
-        paintCell(mv, by, run.moveCount, painter);
-        recordPaint(painter, mv, run.moveCount);
+        totalMovesRef.current += 1;
+        paintCell(mv, by, totalMovesRef.current, painter);
+        recordPaint(painter, mv, totalMovesRef.current);
         flushHeartbeat(run, false);
-        setStatus((s) => ({ ...s, movesCoSigned: run.moveCount }));
       } catch (e) {
         console.warn("[world-canvas] tunnel step skipped:", e);
       }
@@ -504,11 +582,11 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
     [paintCell, recordPaint, flushHeartbeat],
   );
 
-  // The paint sink: co-sign once the tunnel exists, else buffer (preserving order)
-  // until `startRun` drains it.
+  // The paint sink: route to the painter's run and co-sign once its tunnel exists,
+  // else buffer (preserving order) until `startRun` drains it.
   const submitPaint = useCallback(
-    (mv: WorldCanvasMove, by: Seat, painter: string) => {
-      const run = runRef.current;
+    (runKey: string, mv: WorldCanvasMove, by: Seat, painter: string) => {
+      const run = runsRef.current.get(runKey);
       if (!run || run.closed) return;
       if (!run.ready || !run.tunnel) {
         run.buffer.push({ mv, by, painter });
@@ -519,138 +597,157 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
     [coSignPaint],
   );
 
-  // Begin a run: try an on-chain sponsored open, else fall to demo. The selfPlay
-  // tunnel is built with the FINAL id (real or demo) so its co-signatures match;
-  // buffered paints replay in order once it is live.
-  const startRun = useCallback(async () => {
-    // The human shows up on the leaderboard as "You" the moment they paint.
-    registerPainter(humanAddress, "You", false, WC.seatA);
+  // Open ONE painter's tunnel: try an on-chain sponsored open, else fall to demo. The
+  // selfPlay tunnel is built with the FINAL id (real or demo) so its co-signatures
+  // match; buffered paints replay in order once it is live. Only the HUMAN tunnel
+  // drives the HUD status chip; agent tunnels open quietly in the background.
+  const startRun = useCallback(
+    async (
+      key: string,
+      identities: { a: BotIdentity; b: BotIdentity },
+      isHuman: boolean,
+    ) => {
+      if (isHuman) registerPainter(key, "You", false, WC.seatA);
 
-    const run: CanvasRun = {
-      // Demo id must be a VALID 32-byte hex address: selfPlay feeds it to
-      // addressToBytes32, which throws on a non-hex marker. The demo/real
-      // distinction is the `onchain` flag, not this string.
-      tunnelId: `0x${`${Date.now().toString(16)}${Math.floor(
-        Math.random() * 0xffffffff,
-      ).toString(16)}`.padStart(64, "0")}`,
-      onchain: false,
-      createdAt: 0n,
-      tunnel: null,
-      buffer: [],
-      ready: false,
-      closed: false,
-      session: null,
-      moveCount: 0,
-      actions: 0,
-      lastHeartbeat: Date.now(),
-    };
-    runRef.current = run;
-    setStatus({ ...EMPTY_STATUS, phase: "opening" });
+      const run: CanvasRun = {
+        key,
+        isHuman,
+        identities,
+        // Demo id must be a VALID 32-byte hex address: selfPlay feeds it to
+        // addressToBytes32, which throws on a non-hex marker. The demo/real
+        // distinction is the `onchain` flag, not this string.
+        tunnelId: `0x${`${Date.now().toString(16)}${Math.floor(
+          Math.random() * 0xffffffff,
+        ).toString(16)}`.padStart(64, "0")}`,
+        onchain: false,
+        createdAt: 0n,
+        tunnel: null,
+        buffer: [],
+        ready: false,
+        closed: false,
+        session: null,
+        moveCount: 0,
+        actions: 0,
+        lastHeartbeat: Date.now(),
+      };
+      runsRef.current.set(key, run);
+      if (isHuman) setStatus({ ...EMPTY_STATUS, phase: "opening" });
 
-    const partyX = { address: bots.x.address, publicKey: bots.x.publicKey };
-    const partyO = { address: bots.o.address, publicKey: bots.o.publicKey };
+      const partyX = {
+        address: identities.a.address,
+        publicKey: identities.a.publicKey,
+      };
+      const partyO = {
+        address: identities.b.address,
+        publicKey: identities.b.publicKey,
+      };
 
-    // Open a REAL tunnel by default via the gas SPONSOR (bots need 0 SUI).
-    // `withSponsorFallback` retries sender-pays if the sponsor is unreachable AND
-    // the bots hold gas; if BOTH throw, the catch routes to the demo fallback.
-    try {
-      const sponsoredSignExec = makeKeypairSponsoredSignExec({
-        address: bots.x.address,
-        keypair: bots.x.keypair,
-        client: client as never,
-      });
-      const { digest: createDigest } = await withSponsorFallback(
-        () => sponsoredSignExec(buildCreateAndFundTx(partyX, partyO, STAKE)),
-        () => submit(buildCreateAndFundTx(partyX, partyO, STAKE), bots.x.keypair),
-        "world-canvas open/fund",
-      );
-      const createTxb = await client.getTransactionBlock({
-        digest: createDigest,
-        options: { showObjectChanges: true },
-      });
-      const realId = parseTunnelId(createTxb.objectChanges);
-      if (realId) {
-        run.tunnelId = realId;
-        run.onchain = true;
-        const obj = await client.getObject({
-          id: realId,
-          options: { showContent: true },
+      // Open a REAL tunnel by default via the gas SPONSOR (the painter needs 0 SUI).
+      // `withSponsorFallback` retries sender-pays if the sponsor is unreachable AND
+      // the painter holds gas; if BOTH throw, the catch routes to the demo fallback.
+      try {
+        const sponsoredSignExec = makeKeypairSponsoredSignExec({
+          address: identities.a.address,
+          keypair: identities.a.keypair,
+          client: client as never,
         });
-        const fields = (
-          obj.data?.content as { fields?: Record<string, unknown> } | undefined
-        )?.fields;
-        run.createdAt = BigInt((fields?.created_at as string | undefined) ?? 0);
-        setStatus((s) => ({ ...s, openDigest: createDigest }));
+        const { digest: createDigest } = await withSponsorFallback(
+          () => sponsoredSignExec(buildCreateAndFundTx(partyX, partyO, STAKE)),
+          () =>
+            submit(buildCreateAndFundTx(partyX, partyO, STAKE), identities.a.keypair),
+          "world-canvas open/fund",
+        );
+        const createTxb = await client.getTransactionBlock({
+          digest: createDigest,
+          options: { showObjectChanges: true },
+        });
+        const realId = parseTunnelId(createTxb.objectChanges);
+        if (realId) {
+          run.tunnelId = realId;
+          run.onchain = true;
+          const obj = await client.getObject({
+            id: realId,
+            options: { showContent: true },
+          });
+          const fields = (
+            obj.data?.content as { fields?: Record<string, unknown> } | undefined
+          )?.fields;
+          run.createdAt = BigInt((fields?.created_at as string | undefined) ?? 0);
+          if (isHuman) setStatus((s) => ({ ...s, openDigest: createDigest }));
+        }
+      } catch (e) {
+        console.warn(
+          "[world-canvas] on-chain open failed — running off-chain demo:",
+          e,
+        );
       }
-    } catch (e) {
-      console.warn(
-        "[world-canvas] on-chain open failed — running off-chain demo:",
-        e,
+
+      // If the run was torn down while opening (unmount/stop), don't bring up a tunnel.
+      if (run.closed) return;
+
+      // Build the local co-signing tunnel with the final id. selfPlay holds BOTH this
+      // painter's keypairs, so each of its paints co-signs both seats locally.
+      const tunnel = core.OffchainTunnel.selfPlay<WorldCanvasState, WorldCanvasMove>(
+        proto,
+        run.tunnelId,
+        identities.a.coreKey,
+        identities.b.coreKey,
+        identities.a.address,
+        identities.b.address,
+        { a: STAKE, b: STAKE },
       );
-    }
+      run.tunnel = tunnel;
+      run.lastHeartbeat = Date.now();
 
-    // If the run was torn down while opening (unmount/reset), don't bring up a tunnel.
-    if (run.closed) return;
+      // Register THIS tunnel for stats tracking. Best-effort (never blocks painting).
+      getControlPlaneClient()
+        .registerSession({
+          userAddress: identities.a.address,
+          game: GAME,
+          tunnels: [
+            {
+              tunnelId: run.tunnelId,
+              partyA: identities.a.address,
+              partyB: identities.b.address,
+            },
+          ],
+        })
+        .then((s) => {
+          run.session = s;
+        })
+        .catch((e) => console.error("[world-canvas] registerSession failed:", e));
 
-    // Build the local co-signing tunnel with the final id. selfPlay holds BOTH
-    // bot keypairs, so a human seat-A paint and an agent seat-B paint both co-sign.
-    const tunnel = core.OffchainTunnel.selfPlay<WorldCanvasState, WorldCanvasMove>(
-      proto,
-      run.tunnelId,
-      bots.x.coreKey,
-      bots.o.coreKey,
-      bots.x.address,
-      bots.o.address,
-      { a: STAKE, b: STAKE },
-    );
-    run.tunnel = tunnel;
-    run.lastHeartbeat = Date.now();
+      // Tunnel is live: drain any paints buffered during the open, then continue.
+      run.ready = true;
+      const buffered = run.buffer;
+      run.buffer = [];
+      for (const { mv, by, painter } of buffered) coSignPaint(run, mv, by, painter);
 
-    // Register the tunnel for stats tracking. Best-effort (never blocks painting).
-    getControlPlaneClient()
-      .registerSession({
-        userAddress: bots.x.address,
-        game: GAME,
-        tunnels: [
-          {
-            tunnelId: run.tunnelId,
-            partyA: bots.x.address,
-            partyB: bots.o.address,
-          },
-        ],
-      })
-      .then((s) => {
-        run.session = s;
-      })
-      .catch((e) => console.error("[world-canvas] registerSession failed:", e));
+      if (isHuman) {
+        setStatus((s) => ({
+          ...s,
+          phase: run.onchain ? "open" : "demo",
+          tunnelId: run.tunnelId,
+          onchain: run.onchain,
+          movesCoSigned: totalMovesRef.current,
+        }));
+      }
+    },
+    [client, proto, submit, coSignPaint, registerPainter],
+  );
 
-    // Tunnel is live: drain any paints buffered during the open, then continue.
-    run.ready = true;
-    const buffered = run.buffer;
-    run.buffer = [];
-    for (const { mv, by, painter } of buffered) coSignPaint(run, mv, by, painter);
-
-    setStatus((s) => ({
-      ...s,
-      phase: run.onchain ? "open" : "demo",
-      tunnelId: run.tunnelId,
-      onchain: run.onchain,
-      movesCoSigned: run.moveCount,
-    }));
-  }, [bots, client, proto, submit, coSignPaint, registerPainter, humanAddress]);
-
-  // Public: the human paints seat A; one cell = one co-signed move.
+  // Public: the human paints seat A on the HUMAN tunnel; one cell = one co-signed move.
   const submitHumanPaint = useCallback(
     (cx: bigint, cy: bigint, x: number, y: number, color: number) => {
-      submitPaint({ cx, cy, x, y, color }, "A", humanAddress);
+      submitPaint(humanAddress, { cx, cy, x, y, color }, "A", humanAddress);
     },
     [submitPaint, humanAddress],
   );
 
-  // Allocate the next flag's design + a fresh, non-overlapping world region.
-  const nextFlagPlacement = useCallback(() => {
+  // Allocate the next design (per the given mode) + a fresh, non-overlapping region.
+  const nextPlacement = useCallback((mode: AgentMode) => {
     const i = regionIndexRef.current++;
-    const design = designForFlagIndex(i);
+    const design = designForMode(mode, i);
     const { col, row } = spiralSlot(i);
     const originGx = Math.round(col * SLOT_W - design.width / 2);
     const originGy = Math.round(row * SLOT_H - design.height / 2);
@@ -679,39 +776,61 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
     );
   }, []);
 
-  // Public: spawn ONE agent that DRAWS FLAGS (seat B) forever. It walks its flag
-  // design one cell per tick (each a co-signed move), then jumps to a fresh region
-  // for the next flag. Spawning centers the camera on the new agent's flag.
+  // One paint tick for an agent, then self-reschedule at its CURRENT speed (so a live
+  // speed change takes effect on the next tick). Reads the agent's live `mode` when it
+  // finishes a region, so a live mode change applies to the agent's next region.
+  const tickAgent = useCallback(
+    function tick(id: string) {
+      const st = agentStatesRef.current.get(id);
+      if (!st) return; // agent stopped/removed → the timer chain ends here
+      const run = runsRef.current.get(st.painter);
+      if (run && !run.closed && run.ready && run.tunnel) {
+        if (st.cursor >= st.design.cells.length) {
+          // Design finished — relocate to a fresh region and start the next one.
+          const next = nextPlacement(st.mode);
+          st.design = next.design;
+          st.originGx = next.originGx;
+          st.originGy = next.originGy;
+          st.centerGx = next.centerGx;
+          st.centerGy = next.centerGy;
+          st.cursor = 0;
+          syncAgentMarkers();
+        } else {
+          const cell = st.design.cells[st.cursor++];
+          const mv = moveAtGlobal(
+            st.originGx + cell.dx,
+            st.originGy + cell.dy,
+            cell.color,
+          );
+          submitPaint(st.painter, mv, "B", st.painter);
+        }
+      }
+      st.timer = setTimeout(() => tick(id), AGENT_SPEED_INTERVALS[st.speed]);
+    },
+    [nextPlacement, syncAgentMarkers, submitPaint],
+  );
+
+  // Public: spawn ONE agent on its OWN new self-play tunnel. It walks its design one
+  // cell per tick (each a co-signed move on its tunnel), then jumps to a fresh region
+  // for the next one. Spawning opens the tunnel and centers the camera on the agent.
   const spawnAgent = useCallback(() => {
     const num = ++agentNumRef.current;
     const id = `agent_${num}_${Date.now()}`;
-    const painter = randomAgentAddress();
+    const identities = { a: makeIdentity(), b: makeIdentity() };
+    // The agent co-signs its paints as seat B of its OWN tunnel; that address is its
+    // public painter identity on the wall.
+    const painter = identities.b.address;
     const label = `Agent #${num}`;
     const tint = AGENT_TINTS[(num - 1) % AGENT_TINTS.length];
     registerPainter(painter, label, true, tint);
 
-    const place = nextFlagPlacement();
-    const timer = setInterval(() => {
-      const run = runRef.current;
-      if (!run || run.closed || !run.ready || !run.tunnel) return;
-      const st = agentStatesRef.current.get(id);
-      if (!st) return;
-      if (st.cursor >= st.design.cells.length) {
-        // Flag finished — relocate to a fresh region and start the next flag.
-        const next = nextFlagPlacement();
-        st.design = next.design;
-        st.originGx = next.originGx;
-        st.originGy = next.originGy;
-        st.centerGx = next.centerGx;
-        st.centerGy = next.centerGy;
-        st.cursor = 0;
-        syncAgentMarkers();
-        return;
-      }
-      const cell = st.design.cells[st.cursor++];
-      const mv = moveAtGlobal(st.originGx + cell.dx, st.originGy + cell.dy, cell.color);
-      submitPaint(mv, "B", st.painter);
-    }, AGENT_PAINT_INTERVAL_MS);
+    // Open this agent's OWN tunnel (sponsored, demo fallback). Paints buffer until it
+    // is live, exactly like the human's wall.
+    void startRun(painter, identities, false);
+
+    const speed = agentSpeedRef.current;
+    const mode = agentModeRef.current;
+    const place = nextPlacement(mode);
 
     agentStatesRef.current.set(id, {
       id,
@@ -719,43 +838,96 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
       painter,
       label,
       tint,
+      speed,
+      mode,
       design: place.design,
       originGx: place.originGx,
       originGy: place.originGy,
       centerGx: place.centerGx,
       centerGy: place.centerGy,
       cursor: 0,
-      timer,
+      timer: setTimeout(() => tickAgent(id), AGENT_SPEED_INTERVALS[speed]),
     });
     syncAgentMarkers();
     setAgentCount(agentStatesRef.current.size);
-    // Jump the camera to the new agent's flag so the user watches it draw.
+    // Jump the camera to the new agent's region so the user watches it draw.
     setFocus({ gx: place.centerGx, gy: place.centerGy, seq: ++focusSeqRef.current });
-  }, [registerPainter, nextFlagPlacement, syncAgentMarkers, submitPaint]);
+  }, [registerPainter, startRun, nextPlacement, syncAgentMarkers, tickAgent]);
 
-  // Public: stop every agent (the human can keep painting; tallies are retained).
+  // Public: stop every agent — clear its timer AND tear down its tunnel (force-flush
+  // its tail heartbeat, mark closed, drop the run). The human tunnel is untouched, so
+  // the human keeps painting; painter tallies are retained for the leaderboard.
   const stopAgents = useCallback(() => {
-    for (const s of agentStatesRef.current.values()) clearInterval(s.timer);
-    agentStatesRef.current.clear();
-    setAgents([]);
-    setAgentCount(0);
-  }, []);
-
-  // Open the wall on mount; tear everything down on unmount.
-  useEffect(() => {
-    if (!runRef.current) void startRun();
-    return () => {
-      for (const s of agentStatesRef.current.values()) clearInterval(s.timer);
-      agentStatesRef.current.clear();
-      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
-      const run = runRef.current;
+    for (const st of agentStatesRef.current.values()) {
+      clearTimeout(st.timer);
+      const run = runsRef.current.get(st.painter);
       if (run) {
         flushHeartbeat(run, true);
         run.closed = true;
+        runsRef.current.delete(st.painter);
       }
-      runRef.current = null;
+    }
+    agentStatesRef.current.clear();
+    setAgents([]);
+    setAgentCount(0);
+  }, [flushHeartbeat]);
+
+  // Public: set the agent paint speed — for new spawns AND every running agent (the
+  // self-rescheduling timer picks up the new interval on its next tick).
+  const setAgentSpeed = useCallback((speed: AgentSpeed) => {
+    agentSpeedRef.current = speed;
+    setAgentSpeedState(speed);
+    for (const st of agentStatesRef.current.values()) st.speed = speed;
+  }, []);
+
+  // Public: set the agent drawing intelligence — for new spawns AND every running
+  // agent (each switches at its next region, so the current design finishes cleanly).
+  const setAgentMode = useCallback((mode: AgentMode) => {
+    agentModeRef.current = mode;
+    setAgentModeState(mode);
+    for (const st of agentStatesRef.current.values()) st.mode = mode;
+  }, []);
+
+  // Public: re-center the camera on the live agent painting at `painter` (📍 button).
+  const focusOnAgent = useCallback((painter: string) => {
+    for (const st of agentStatesRef.current.values()) {
+      if (st.painter === painter) {
+        setFocus({
+          gx: st.centerGx,
+          gy: st.centerGy,
+          seq: ++focusSeqRef.current,
+        });
+        return;
+      }
+    }
+  }, []);
+
+  // Public: cycle the camera through active agents ("View Agent" button).
+  const viewNextAgent = useCallback(() => {
+    const states = [...agentStatesRef.current.values()];
+    if (states.length === 0) return;
+    const idx = viewCursorRef.current % states.length;
+    viewCursorRef.current = idx + 1;
+    const st = states[idx];
+    setFocus({ gx: st.centerGx, gy: st.centerGy, seq: ++focusSeqRef.current });
+  }, []);
+
+  // Open the HUMAN wall on mount; tear every tunnel (human + agents) down on unmount.
+  useEffect(() => {
+    if (!runsRef.current.has(humanAddress)) {
+      void startRun(humanAddress, { a: bots.x, b: bots.o }, true);
+    }
+    return () => {
+      for (const s of agentStatesRef.current.values()) clearTimeout(s.timer);
+      agentStatesRef.current.clear();
+      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+      for (const run of runsRef.current.values()) {
+        flushHeartbeat(run, true);
+        run.closed = true;
+      }
+      runsRef.current.clear();
     };
-  }, [startRun, flushHeartbeat]);
+  }, [startRun, flushHeartbeat, humanAddress, bots]);
 
   return {
     status,
@@ -767,8 +939,14 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
     painters: paintersRef.current,
     activity: activityRef.current,
     humanAddress,
+    agentSpeed,
+    setAgentSpeed,
+    agentMode,
+    setAgentMode,
     submitHumanPaint,
     spawnAgent,
     stopAgents,
+    focusOnAgent,
+    viewNextAgent,
   };
 }

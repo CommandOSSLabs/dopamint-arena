@@ -12,7 +12,11 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
-import type { PainterInfo, ActivityEntry } from "../useWorldCanvasOnchain";
+import type {
+  PainterInfo,
+  ActivityEntry,
+  AgentMarker,
+} from "../useWorldCanvasOnchain";
 import {
   WC,
   glass,
@@ -187,27 +191,37 @@ function DraggablePanel({
   );
 }
 
-/** PLAYERS roster + RECENT ACTIVITY feed (newest first), draggable. */
+/** PLAYERS roster + RECENT ACTIVITY feed (newest first), draggable. Each LIVE agent
+ *  row gets a 📍 button that re-centers the camera on where that bot is painting. */
 export function PlayersActivityPanel({
   painters,
   activity,
   humanAddress,
+  agents,
+  onFocusAgent,
   revision,
 }: {
   painters: ReadonlyMap<string, PainterInfo>;
   activity: ReadonlyArray<ActivityEntry>;
   humanAddress: string;
+  /** Live agent markers — their painter addresses gate which rows show 📍. */
+  agents: ReadonlyArray<AgentMarker>;
+  /** Re-center the camera on the active agent painting at this painter address. */
+  onFocusAgent: (painter: string) => void;
   revision: number;
 }) {
   void revision; // re-read live containers on every parent re-render
   const players = rankPainters(painters);
   const recent = [...activity].slice(-14).reverse();
+  // Only CURRENTLY-active agents can be viewed (stopped agents keep their tally row
+  // but no longer have a location to jump to).
+  const liveAgents = new Set(agents.map((a) => a.painter));
 
   return (
     <DraggablePanel
       header={<span style={HEADER_LABEL}>Players</span>}
       storageKey="wc.playersPanel"
-      defaultAnchor={{ right: 16, top: 150 }}
+      defaultAnchor={{ right: 16, top: 300 }}
       width={252}
     >
       {players.length === 0 ? (
@@ -254,6 +268,28 @@ export function PlayersActivityPanel({
               >
                 {p.isAgent ? `${p.label} · ${shortAddress(p.address)}` : p.label}
               </span>
+              {liveAgents.has(p.address) && (
+                <button
+                  onClick={() => onFocusAgent(p.address)}
+                  title="Recenter the camera on this agent"
+                  style={{
+                    flex: "0 0 auto",
+                    width: 20,
+                    height: 18,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    fontSize: 11,
+                    lineHeight: 1,
+                    cursor: "pointer",
+                    borderRadius: 5,
+                    border: `1px solid ${p.tint}`,
+                    background: "rgba(255,255,255,0.05)",
+                  }}
+                >
+                  📍
+                </button>
+              )}
               <span
                 style={{
                   fontSize: 12,

@@ -138,3 +138,83 @@ const ROTATION: readonly PixelDesign[] = [
 export function designForFlagIndex(index: number): PixelDesign {
   return ROTATION[index % ROTATION.length];
 }
+
+/**
+ * An agent's drawing INTELLIGENCE — what it lays down per region:
+ *   - `artist`  walks the flag rotation cell-by-cell (the default, recognizable art).
+ *   - `scatter` sprays random cells in random palette colors (chaotic fill).
+ *   - `filler`  floods one solid color outward from the region center (a growing blob).
+ * Every mode is still a flat list of cells in reveal order, so a tick = one cell =
+ * one co-signed move regardless of intelligence.
+ */
+export type AgentMode = "artist" | "scatter" | "filler";
+
+/** Vivid solid palette indices a Filler picks from (one color per filled region). */
+const FILLER_COLORS = [5, 6, 8, 10, 11, 12, 13, 14] as const;
+
+/**
+ * Scatter: a field of random cells in random palette colors, walked one per tick.
+ * Each region is freshly randomized so no two scatter bursts repeat. Sized within
+ * the flag footprint so it shares the same non-overlapping placement slots.
+ */
+function buildScatter(): PixelDesign {
+  const width = 26;
+  const height = 18;
+  const cells: DesignCell[] = [];
+  for (let i = 0; i < width * height; i++) {
+    cells.push({
+      dx: Math.floor(Math.random() * width),
+      dy: Math.floor(Math.random() * height),
+      color: Math.floor(Math.random() * 16),
+    });
+  }
+  return { name: "Scatter", width, height, cells };
+}
+
+/**
+ * Filler: one solid color flood-filled from the region's center outward (BFS), so
+ * the cells reveal as an expanding diamond — a contiguous region growing tick by
+ * tick. A fresh color per region keeps successive fills visually distinct.
+ */
+function buildFiller(): PixelDesign {
+  const width = 24;
+  const height = 18;
+  const color = FILLER_COLORS[Math.floor(Math.random() * FILLER_COLORS.length)];
+  const neighbors: readonly [number, number][] = [
+    [1, 0],
+    [-1, 0],
+    [0, 1],
+    [0, -1],
+  ];
+  const cells: DesignCell[] = [];
+  const seen = new Set<number>();
+  const seedX = Math.floor(width / 2);
+  const seedY = Math.floor(height / 2);
+  const queue: [number, number][] = [[seedX, seedY]];
+  seen.add(seedY * width + seedX);
+  while (queue.length > 0) {
+    const [x, y] = queue.shift()!;
+    cells.push({ dx: x, dy: y, color });
+    for (const [ddx, ddy] of neighbors) {
+      const nx = x + ddx;
+      const ny = y + ddy;
+      if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+      const k = ny * width + nx;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      queue.push([nx, ny]);
+    }
+  }
+  return { name: "Filler", width, height, cells };
+}
+
+/**
+ * Pick the design for an agent's next region given its drawing intelligence. Artist
+ * walks the deterministic flag rotation; Scatter/Filler return a freshly-randomized
+ * pattern each call (so every region they fill looks new).
+ */
+export function designForMode(mode: AgentMode, flagIndex: number): PixelDesign {
+  if (mode === "scatter") return buildScatter();
+  if (mode === "filler") return buildFiller();
+  return designForFlagIndex(flagIndex);
+}
