@@ -8,7 +8,7 @@ use std::sync::RwLock;
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 
-use super::{Bus, ConnRef, ControlStore, MpStore};
+use super::{Bus, ConnRef, ControlStore, CtrlMsg, MpStore};
 use crate::mp::{Checkpoint, ConnId, DirectedInvite, MatchRecord, Waiting};
 use crate::state::{GameStat, SessionRecord, StatsSnapshot, TunnelEvent, TunnelStatus};
 
@@ -18,7 +18,6 @@ use crate::state::{GameStat, SessionRecord, StatsSnapshot, TunnelEvent, TunnelSt
 pub struct InMemoryControlStore {
     sessions: RwLock<HashMap<String, SessionRecord>>,
     tunnels: RwLock<HashMap<String, TunnelStatus>>,
-    total_actions: AtomicU64,
     active_tunnels: AtomicU64,
     settled_tunnels: AtomicU64,
     per_game_actions: RwLock<HashMap<String, u64>>,
@@ -67,7 +66,7 @@ impl ControlStore for InMemoryControlStore {
     }
 
     async fn add_actions(&self, game: &str, delta: u64) {
-        self.total_actions.fetch_add(delta, Ordering::Relaxed);
+        // Per-game only; total is derived in `snapshot` (parity with the Redis impl).
         *self
             .per_game_actions
             .write()
@@ -79,6 +78,7 @@ impl ControlStore for InMemoryControlStore {
     async fn snapshot(&self) -> StatsSnapshot {
         let actions = self.per_game_actions.read().unwrap();
         let tunnels = self.per_game_tunnels.read().unwrap();
+        let mut total_actions: u64 = 0;
         let mut per_game: HashMap<String, GameStat> = HashMap::new();
         for (game, total) in actions.iter() {
             per_game
@@ -89,6 +89,7 @@ impl ControlStore for InMemoryControlStore {
                     total_actions: 0,
                 })
                 .total_actions = *total;
+            total_actions += *total;
         }
         for (game, n) in tunnels.iter() {
             per_game
@@ -102,7 +103,7 @@ impl ControlStore for InMemoryControlStore {
         }
         StatsSnapshot {
             tps: 0.0, // filled by the broadcaster from its per-tick diff
-            total_actions: self.total_actions.load(Ordering::Relaxed),
+            total_actions,
             active_tunnels: self.active_tunnels.load(Ordering::Relaxed),
             settled_tunnels: self.settled_tunnels.load(Ordering::Relaxed),
             per_game,
@@ -230,6 +231,25 @@ impl MpStore for InMemoryMpStore {
             }
         }
     }
+
+    async fn rebind_match_conn(
+        &self,
+        match_id: &str,
+        wallet: &str,
+        at: ConnRef,
+    ) -> Option<crate::mp::Seat> {
+        let mut matches = self.matches.write().unwrap();
+        let m = matches.get_mut(match_id)?;
+        if m.seat_a == wallet {
+            m.conn_a = at;
+            Some(crate::mp::Seat::A)
+        } else if m.seat_b == wallet {
+            m.conn_b = at;
+            Some(crate::mp::Seat::B)
+        } else {
+            None
+        }
+    }
 }
 
 // ===== Bus =====
@@ -237,6 +257,7 @@ impl MpStore for InMemoryMpStore {
 pub struct LocalBus {
     instance_id: String,
     conns: RwLock<HashMap<ConnId, mpsc::UnboundedSender<String>>>,
+    ctrls: RwLock<HashMap<ConnId, mpsc::UnboundedSender<CtrlMsg>>>,
 }
 
 impl LocalBus {
@@ -244,6 +265,7 @@ impl LocalBus {
         Self {
             instance_id,
             conns: RwLock::new(HashMap::new()),
+            ctrls: RwLock::new(HashMap::new()),
         }
     }
 }
@@ -254,18 +276,46 @@ impl Bus for LocalBus {
         &self.instance_id
     }
 
-    fn register(&self, conn: ConnId, tx: mpsc::UnboundedSender<String>) {
-        self.conns.write().unwrap().insert(conn, tx);
+    fn register(
+        &self,
+        conn: ConnId,
+        client_tx: mpsc::UnboundedSender<String>,
+        ctrl_tx: mpsc::UnboundedSender<CtrlMsg>,
+    ) {
+        self.conns.write().unwrap().insert(conn, client_tx);
+        self.ctrls.write().unwrap().insert(conn, ctrl_tx);
     }
 
     fn unregister(&self, conn: ConnId) {
         self.conns.write().unwrap().remove(&conn);
+        self.ctrls.write().unwrap().remove(&conn);
     }
 
     async fn deliver(&self, target: &ConnRef, text: String) {
         // Single instance: target is always local. (Phase 3 adds the cross-instance branch.)
         if let Some(tx) = self.conns.read().unwrap().get(&target.conn_id) {
             let _ = tx.send(text);
+        }
+    }
+
+    async fn publish_raw(&self, channel: &str, payload: String) {
+        let _ = (channel, payload);
+    }
+
+    async fn evict(&self, target: &ConnRef, match_id: &str) {
+        let tx = self.ctrls.read().unwrap().get(&target.conn_id).cloned();
+        if let Some(tx) = tx {
+            let _ = tx.send(CtrlMsg::Evict(match_id.to_owned()));
+        }
+    }
+
+    async fn populate(&self, target: &ConnRef, match_id: &str, rec: &MatchRecord) {
+        let tx = self.ctrls.read().unwrap().get(&target.conn_id).cloned();
+        if let Some(tx) = tx {
+            let _ = tx.send(CtrlMsg::Populate(
+                match_id.to_owned(),
+                Box::new(rec.clone()),
+            ));
         }
     }
 }
@@ -456,6 +506,95 @@ mod tests {
         assert_eq!(got.from, "0xa");
         // invite is consumed
         assert!(s.take_invite("mid1", "0xb").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn rebind_match_conn_rebinds_owning_seat_and_noops_otherwise() {
+        let s = InMemoryMpStore::default();
+        let mid = "m-rebind";
+        let cr = |id: &str| ConnRef {
+            instance_id: id.into(),
+            conn_id: uuid::Uuid::new_v4(),
+        };
+        s.put_match(
+            mid,
+            crate::mp::MatchRecord {
+                game: "ttt".into(),
+                seat_a: "0xa".into(),
+                seat_b: "0xb".into(),
+                conn_a: cr("i1"),
+                conn_b: cr("i1"),
+                tunnel_id: None,
+                latest_checkpoint: None,
+            },
+        )
+        .await;
+        // Wrong wallet → None, nothing changes.
+        assert_eq!(s.rebind_match_conn(mid, "0xstranger", cr("i9")).await, None);
+        // Seat A owner rebinds conn_a only.
+        let new_a = cr("i2");
+        assert_eq!(
+            s.rebind_match_conn(mid, "0xa", new_a.clone()).await,
+            Some(crate::mp::Seat::A)
+        );
+        let got = s.get_match(mid).await.unwrap();
+        assert_eq!(got.conn_a.instance_id, new_a.instance_id);
+        assert_eq!(got.conn_a.conn_id, new_a.conn_id);
+        // conn_b is untouched by a seat-A rebind.
+        assert_eq!(got.conn_b.instance_id, "i1");
+        // Seat B owner rebinds conn_b only.
+        let new_b = cr("i3");
+        assert_eq!(
+            s.rebind_match_conn(mid, "0xb", new_b.clone()).await,
+            Some(crate::mp::Seat::B)
+        );
+        let got = s.get_match(mid).await.unwrap();
+        assert_eq!(got.conn_b.instance_id, new_b.instance_id);
+        assert_eq!(got.conn_b.conn_id, new_b.conn_id);
+        // ...and conn_a still holds the seat-A rebind, not clobbered.
+        assert_eq!(got.conn_a.conn_id, new_a.conn_id);
+        // Absent match → None.
+        assert_eq!(s.rebind_match_conn("nope", "0xa", cr("i4")).await, None);
+    }
+
+    // LocalBus.populate must route the freshly-created record to the target's ctrl channel so a
+    // never-relayed seat has the match cached (the gap this closes for single-instance/local dev).
+    #[tokio::test]
+    async fn populate_routes_to_the_target_ctrl_channel() {
+        let bus = LocalBus::new("i".into());
+        let conn = uuid::Uuid::new_v4();
+        let (tx, _rx) = mpsc::unbounded_channel::<String>();
+        let (ctx, mut crx) = mpsc::unbounded_channel::<CtrlMsg>();
+        bus.register(conn, tx, ctx);
+        let cr = ConnRef {
+            instance_id: "i".into(),
+            conn_id: uuid::Uuid::new_v4(),
+        };
+        let rec = MatchRecord {
+            game: "ttt".into(),
+            seat_a: "0xa".into(),
+            seat_b: "0xb".into(),
+            conn_a: cr.clone(),
+            conn_b: cr,
+            tunnel_id: None,
+            latest_checkpoint: None,
+        };
+        bus.populate(
+            &ConnRef {
+                instance_id: "i".into(),
+                conn_id: conn,
+            },
+            "m1",
+            &rec,
+        )
+        .await;
+        match crx.recv().await {
+            Some(CtrlMsg::Populate(id, got)) => {
+                assert_eq!(id, "m1");
+                assert_eq!(got.seat_a, "0xa");
+            }
+            other => panic!("expected CtrlMsg::Populate, got {other:?}"),
+        }
     }
 
     // A newer checkpoint supersedes an older one; a stale lower-nonce one is ignored.

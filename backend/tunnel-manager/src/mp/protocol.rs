@@ -51,6 +51,10 @@ pub enum ClientMsg {
         sig_a: String,
         sig_b: String,
     },
+    /// Re-attach to an existing match after a reconnect. Valid only after `Connect`.
+    /// Authorization is the seat-ownership check server-side.
+    #[serde(rename = "resume")]
+    Resume { match_id: String },
 }
 
 /// Messages the server sends to the client.
@@ -93,6 +97,31 @@ pub enum ServerMsg {
     Relay {
         match_id: String,
         payload: String,
+    },
+    /// Re-attach confirmed. `peer_online` reflects whether the opponent currently has a live
+    /// socket (from presence), so the client knows whether to expect a peer state re-send.
+    #[serde(rename = "resume.ok")]
+    ResumeOk {
+        match_id: String,
+        role: String,
+        opponent_wallet: String,
+        game: String,
+        peer_online: bool,
+    },
+    /// Sent to the opponent when a seat reconnects: carries the new `ConnRef` so the FE can
+    /// re-send its latest co-signed state. (Backend relay-cache invalidation is separate — the
+    /// bus eviction path, Task 4.)
+    #[serde(rename = "peer.resumed")]
+    PeerResumed {
+        match_id: String,
+        seat: String,
+        conn_ref: crate::store::ConnRef,
+    },
+    /// Sent to the still-present seat when the opponent's socket drops, so the FE can start its
+    /// 60s grace timer.
+    #[serde(rename = "peer.dropped")]
+    PeerDropped {
+        match_id: String,
     },
     Error {
         code: String,
@@ -152,5 +181,53 @@ mod tests {
         let json = s.to_text();
         assert!(json.contains(r#""type":"match.found""#), "got {json}");
         assert!(json.contains(r#""opponentWallet":"0xb""#), "got {json}");
+    }
+
+    #[test]
+    fn client_resume_deserializes_dotted_name() {
+        let m: ClientMsg = serde_json::from_str(r#"{"type":"resume","matchId":"m1"}"#).unwrap();
+        assert_eq!(
+            m,
+            ClientMsg::Resume {
+                match_id: "m1".into()
+            }
+        );
+    }
+
+    #[test]
+    fn server_resume_ok_serializes_with_dotted_camelcase() {
+        let s = ServerMsg::ResumeOk {
+            match_id: "m1".into(),
+            role: "A".into(),
+            opponent_wallet: "0xb".into(),
+            game: "ttt".into(),
+            peer_online: true,
+        }
+        .to_text();
+        assert!(s.contains(r#""type":"resume.ok""#));
+        assert!(s.contains(r#""matchId":"m1""#));
+        assert!(s.contains(r#""opponentWallet":"0xb""#));
+        assert!(s.contains(r#""peerOnline":true"#));
+    }
+
+    #[test]
+    fn server_peer_dropped_and_resumed_serialize() {
+        assert!(ServerMsg::PeerDropped {
+            match_id: "m1".into()
+        }
+        .to_text()
+        .contains(r#""type":"peer.dropped""#));
+        let pr = ServerMsg::PeerResumed {
+            match_id: "m1".into(),
+            seat: "B".into(),
+            conn_ref: crate::store::ConnRef {
+                instance_id: "i2".into(),
+                conn_id: uuid::Uuid::nil(),
+            },
+        }
+        .to_text();
+        assert!(pr.contains(r#""type":"peer.resumed""#));
+        assert!(pr.contains(r#""seat":"B""#));
+        assert!(pr.contains(r#""connRef""#));
     }
 }

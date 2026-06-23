@@ -15,7 +15,8 @@ export interface RelayTransport {
 const dec = new TextDecoder();
 const enc = new TextEncoder();
 
-/** One authenticated relay connection for a player. */
+/** One authenticated relay connection for a player.
+ * @deprecated Superseded by MpClient (frontend/src/pvp/mpClient.ts); retained for reference. */
 export class RelayClient {
   private ws: WebSocket;
   private nonce = "";

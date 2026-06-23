@@ -12,17 +12,15 @@ on:
         default: "dev"
         type: choice
         options: [dev, staging, production]
-      backendImageTag:
-        description: "Backend image tag"
-        required: true
-        type: string
 
 permissions:
   id-token: write
   contents: read
 
+# Shared group with deploy-backend: both run `pulumi up` on the same stack, so they must
+# serialize or they collide with a 409 ConcurrentUpdate (Pulumi's per-stack lock).
 concurrency:
-  group: deploy-infra-${{ github.event.inputs.environment || 'dev' }}
+  group: pulumi-${{ github.event.inputs.environment || 'dev' }}
   cancel-in-progress: false
 
 jobs:
@@ -74,6 +72,7 @@ jobs:
           stack-name: CommandOSS/dopamint-arena/${{ github.event.inputs.environment || 'dev' }}
           work-dir: infra
           pulumi-version: 3.243.0
-          config-map: |
-            dopamint:backend-image-tag:
-              value: ${{ github.event.inputs.backendImageTag || 'latest' }}
+          # backend-image-tag is owned by deploy-backend (it builds + pushes the image and sets
+          # the tag). Infra deploys must NOT set it: a push has no input, so the old default
+          # clobbered the real SHA with a non-existent `latest` and took the services down.
+          # The committed Pulumi.<stack>.yaml carries a real SHA as the baseline.

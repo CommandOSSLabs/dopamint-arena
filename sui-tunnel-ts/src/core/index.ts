@@ -20,4 +20,5 @@ export * from "./commitment";
 export * from "./randomness";
 export * from "./tunnel";
 export * from "./distributedTunnel";
+export * from "./reconcile";
 export * from "./keys";

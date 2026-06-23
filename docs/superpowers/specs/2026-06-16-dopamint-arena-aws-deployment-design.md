@@ -77,13 +77,13 @@ Observed scaling: roughly **5,000 TPS per physical core** for sustained throughp
          |                                   |
          |           +-----------------------+--------------------+
          |           |                       |                    |
-    +----v----+ +----v---------+ +----------v--------+ +---------v---------+
-    | Aurora  | | RDS Proxy    | | ElastiCache Redis | | S3 transcripts   |
+    +----v----+ +----v---------+ +-----------v-------+ +---------v---------+
+    | Aurora  | | RDS Proxy    | | ElastiCache Valkey | | S3 transcripts   |
     |PostgreSQL| | (connection | | (Sharded Pub/Sub  | | + artifacts      |
     |r6g.2xl  | |  pooling)    | |  for TPS stream;  | |                  |
     |I/O-Opt  | |              | |  standalone for   | |                  |
     |provisioned| |              | |  session cache)   | |                  |
-    +---------+ +--------------+ +-------------------+ +------------------+
+    +---------+ +--------------+ +--------------------+ +------------------+
          |
          |
     +----v------------------+
@@ -132,11 +132,11 @@ The deployment assumes the backend implements these contracts; otherwise Fargate
 - Multi-AZ, encrypted at rest, automated backups.
 - **RDS Proxy** sits between Fargate tasks and Aurora to pool database connections and prevent exhaustion during Fargate scale-out.
 
-### 4. Cache — ElastiCache Redis (Two Workloads)
+### 4. Cache — ElastiCache Valkey (Two Workloads)
 
 Redis Cluster mode classic pub/sub broadcasts every message to all nodes, which creates an internal broadcast storm at high TPS. We split the workloads:
 
-- **TPS stream / pub-sub**: Redis 7.0+ with **Sharded Pub/Sub** (`SSUBSCRIBE`/`SPUBLISH`) so messages route to specific shards only. Alternatively, a small standalone Redis instance with replicas for pub/sub.
+- **TPS stream / pub-sub**: Valkey 7.2+ with **Sharded Pub/Sub** (`SSUBSCRIBE`/`SPUBLISH`) so messages route to specific shards only. Alternatively, a small standalone Valkey instance with replicas for pub/sub.
 - **Session cache / counters**: Redis Cluster mode enabled for horizontal scaling of cache reads/writes.
 
 Used for:
@@ -201,7 +201,7 @@ This is the only component that guarantees the 1M TPS number.
 | EC2 Auto Scaling | Benchmark runner fleet |
 | Aurora PostgreSQL | Primary database (provisioned in prod/staging) |
 | RDS Proxy | Connection pooling between Fargate and Aurora |
-| ElastiCache Redis | Caching, real-time aggregation, pub/sub |
+| ElastiCache Valkey | Caching, real-time aggregation, pub/sub |
 | EC2 Image Builder | Golden AMI pipeline for benchmark fleet |
 | CloudWatch | Logs, metrics, alarms |
 | Secrets Manager / SSM | Secrets and config |
@@ -225,7 +225,7 @@ infra/
 │   │   ├── Backend.ts          # ECS Fargate + ALB
 │   │   ├── Database.ts         # Aurora + subnet group + secrets
 │   │   ├── DatabaseProxy.ts    # RDS Proxy
-│   │   ├── Cache.ts            # ElastiCache Redis (pub/sub + cache)
+│   │   ├── Cache.ts            # ElastiCache Valkey (pub/sub + cache)
 │   │   ├── BenchmarkFleet.ts   # EC2 ASG + Image Builder pipeline
 │   │   └── Network.ts          # VPC, subnets, NATs (awsx)
 │   └── resources/

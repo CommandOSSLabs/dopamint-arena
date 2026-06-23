@@ -1,5 +1,13 @@
 //! Storage seam: the in-memory impl (today's maps/atomics; tests + local dev) and the Redis
 //! impl (prod/HA) live behind these traits. Handlers hold `Arc<dyn …>` and never see Redis.
+//!
+//! ## Aggregation invariant
+//! Each instance pushes only its own deltas into a merge-commutative primitive; no method
+//! read-modify-writes a shared aggregate. Three shapes: counts → `INCRBY` (grow-only,
+//! order-independent); membership → `SADD`/`SREM` (idempotent union); owned/last-writer →
+//! single key + CAS (Lua), never summed. The move counter is at-most-once (undercount-safe):
+//! it only ever pushes already-counted deltas, so it never inflates — do NOT add flush
+//! retries, which would make it at-least-once and double-count.
 
 pub mod memory;
 pub mod redis;
@@ -53,12 +61,50 @@ pub trait MpStore: Send + Sync {
     async fn get_match(&self, match_id: &str) -> Option<crate::mp::MatchRecord>;
     async fn set_tunnel_id(&self, match_id: &str, tunnel_id: &str);
     async fn record_checkpoint(&self, match_id: &str, cp: crate::mp::Checkpoint);
+    /// Rebind a seat's live connection after a reconnect. Authorized by seat ownership:
+    /// rebinds `conn_a` iff `wallet == seat_a`, else `conn_b` iff `wallet == seat_b`, else
+    /// no-op. Refreshes the record TTL. Returns the rebound seat, or `None` if the match is
+    /// gone or the wallet owns no seat. Atomic (last-writer-wins per seat).
+    async fn rebind_match_conn(
+        &self,
+        match_id: &str,
+        wallet: &str,
+        at: ConnRef,
+    ) -> Option<crate::mp::Seat>;
+}
+
+/// Per-connection control signal routed over the bus ctrl channel (parallel to the hot-path
+/// client channel). `Evict` drops a match from the connection's relay cache; `Populate` warms it
+/// with a freshly-created record so a never-relayed seat still has the match cached. The record is
+/// boxed to keep `Evict` (the common signal) cheap to move and the enum small.
+#[derive(Debug)]
+pub enum CtrlMsg {
+    Evict(String),
+    Populate(String, Box<crate::mp::MatchRecord>),
 }
 
 #[async_trait]
 pub trait Bus: Send + Sync {
     fn instance_id(&self) -> &str;
-    fn register(&self, conn: crate::mp::ConnId, tx: tokio::sync::mpsc::UnboundedSender<String>);
+    /// `client_tx` carries client-bound frames (written to the socket). `ctrl_tx` carries
+    /// internal control signals — match-cache evict/populate. Kept separate so control never
+    /// competes with or parses the hot-path frame stream.
+    fn register(
+        &self,
+        conn: crate::mp::ConnId,
+        client_tx: tokio::sync::mpsc::UnboundedSender<String>,
+        ctrl_tx: tokio::sync::mpsc::UnboundedSender<CtrlMsg>,
+    );
     fn unregister(&self, conn: crate::mp::ConnId);
     async fn deliver(&self, target: &ConnRef, text: String);
+    /// Fire-and-forget publish to a Redis channel (cross-service signal). In-memory is a no-op.
+    async fn publish_raw(&self, channel: &str, payload: String);
+    /// Tell `target`'s connection task to drop `match_id` from its relay cache (so its next
+    /// relay re-reads the match and picks up a rebound peer `ConnRef`). Routes locally or via
+    /// the cross-instance pub/sub channel. No-op if the target is unknown.
+    async fn evict(&self, target: &ConnRef, match_id: &str);
+    /// Warm `target`'s relay cache with a freshly-created match record (so a seat that has not yet
+    /// relayed still has the match cached for disconnect-notify and first-relay-without-GET). Routes
+    /// locally or via the cross-instance pub/sub channel. No-op if the target is unknown.
+    async fn populate(&self, target: &ConnRef, match_id: &str, rec: &crate::mp::MatchRecord);
 }

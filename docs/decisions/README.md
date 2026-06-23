@@ -32,3 +32,10 @@ that depends on them. An ADR captures the decision and the reasoning so the
 - [0008](0008-quantum-poker-protocol-zk.md) — Quantum Poker: protocol-first
   tunnel model, per-slot asymmetric commit-reveal, n-deck/burn/Five-of-a-Kind
   rules, and optional ZK dispute adapter.
+- [0009](0009-data-plane-local-control-plane-redis.md) — Partition by ownership:
+  single-owned per-move state (relay, counters, routing cache) in-process; shared
+  state (matchmaking, presence, match record, checkpoints, stats) on atomic Redis.
+  Refines 0005; demotes its per-frame `SPUBLISH` to a fallback.
+- [0010](0010-mp-resume-protocol.md) — MP resume: atomic `ConnRef` rebind,
+  event-driven peer-cache eviction, peer-to-peer state reconciliation; on-chain
+  settlement is the floor. Affinity/re-homing deferred to ADR-0011.

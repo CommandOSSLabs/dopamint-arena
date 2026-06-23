@@ -3,9 +3,17 @@ import { createTicTacToeKit } from "./games/ticTacToe/kit";
 import { createBlackjackKit } from "./games/blackjack/kit";
 import { createBattleshipKit } from "./games/battleship/kit";
 import { createQuantumPokerKit } from "./games/quantumPoker/kit";
+import { createBombItKit } from "./games/bombIt/kit";
+import { createChickenCrossKit } from "./games/chickenCross/kit";
 import { defaultStateHash, type StateHash } from "./stateHash";
 
-export type GameId = "tictactoe" | "blackjack" | "battleship" | "quantum-poker";
+export type GameId =
+  | "tictactoe"
+  | "blackjack"
+  | "battleship"
+  | "quantum-poker"
+  | "bomb-it"
+  | "chicken-cross";
 export type { StateHash };
 export { defaultStateHash };
 
@@ -41,4 +49,6 @@ export const GAME_KITS: GameKitRegistry = {
   blackjack: createBlackjackKit(100n),
   battleship: createBattleshipKit(10n),
   "quantum-poker": createQuantumPokerKit(100n),
+  "bomb-it": createBombItKit(100n),
+  "chicken-cross": createChickenCrossKit(100n),
 };

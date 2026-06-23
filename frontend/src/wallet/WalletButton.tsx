@@ -1,4 +1,5 @@
 import { ConnectModal, useSuiClientContext } from "@mysten/dapp-kit";
+import { isEnokiWallet } from "@mysten/enoki";
 import { Copy, ExternalLink, LogOut, Wallet } from "lucide-react";
 import { toast } from "sonner";
 
@@ -15,16 +16,25 @@ import { suivisionAccountUrl } from "@/lib/suivision";
 import { useWalletSession } from "@/wallet/useWalletSession";
 
 /** Header wallet control: connect (real dapp-kit), or a connected account menu. */
-export function WalletButton() {
+export function WalletButton({
+  className,
+  variant = "outline",
+}: {
+  className?: string;
+  variant?: "default" | "outline" | "ghost" | "secondary";
+}) {
   const session = useWalletSession();
   const { network } = useSuiClientContext();
 
   if (!session.connected) {
-    // dapp-kit's wallet picker, with our own design-system trigger.
+    // dapp-kit's wallet picker, with our own design-system trigger. The filter keeps the
+    // picker to Enoki wallets only — and since RegisterEnokiWallets registers just the
+    // Google provider, that collapses to a single "Sign in with Google" entry.
     return (
       <ConnectModal
+        walletFilter={isEnokiWallet}
         trigger={
-          <Button size="sm">
+          <Button size="sm" variant={variant} className={className}>
             <Wallet />
             <span className="hidden sm:inline">Connect Wallet</span>
           </Button>
@@ -36,7 +46,7 @@ export function WalletButton() {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="outline" size="sm">
+        <Button variant={variant} size="sm" className={className}>
           <Wallet />
           <span className="tabular-nums">{session.shortAddress}</span>
           {session.isDemo && (

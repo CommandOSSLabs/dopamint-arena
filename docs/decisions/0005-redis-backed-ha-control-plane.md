@@ -1,5 +1,12 @@
 # 0005 — Redis-backed, horizontally-scalable control-plane + mp lane
 
+> **⚠️ Latency consequence revised by [ADR-0009](0009-data-plane-local-control-plane-redis.md).**
+> This ADR assumed "PvP is ≈0 TPS, so a Redis round-trip per relayed frame is
+> immaterial." Once self-play is dropped ([ADR-0006](0006-genuine-two-party-only-drop-self-play.md))
+> every move flows through the relay, so the per-frame `SPUBLISH` path is demoted
+> to a **fallback** and the per-move data plane moves in-process. The Redis-only,
+> no-Postgres decision below is unchanged.
+
 - **Status**: Proposed
 - **Date**: 2026-06-17
 - **Refs**: builds on [ADR-0002](0002-backend-client-api-contract.md) (stateless
@@ -7,6 +14,11 @@
   stateful PvP lane). Driven by the AWS infra design (Max Mai), which runs the
   backend as ≥2 Fargate tasks behind an ALB. Design spec:
   `docs/superpowers/specs/2026-06-17-redis-backed-ha-backend-design.md`.
+
+> **Engine amendment (2026-06-22):** The two ElastiCache clusters are provisioned
+> with the **Valkey 7.2** engine rather than Redis OSS. Valkey is a Redis-protocol
+> fork and is API-compatible with the `fred` client and the Redis commands used by
+> the backend; the architecture decision is otherwise unchanged.
 
 ## Context
 

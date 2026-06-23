@@ -163,6 +163,22 @@ impl SuiSettler {
         })
     }
 
+    /// Construct a no-op settler for tests — RPC calls will fail at the network layer, which is
+    /// acceptable since tests using `in_memory_for_test` never invoke `submit_close`.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn noop() -> Self {
+        let signer = Ed25519PrivateKey::new([0u8; 32]);
+        let sender = signer.public_key().derive_address();
+        Self {
+            http: reqwest::Client::new(),
+            rpc_url: String::new(),
+            package_id: Address::ZERO,
+            coin_type: "0x2::sui::SUI".parse().expect("static coin type"),
+            signer,
+            sender,
+        }
+    }
+
     /// Build, sign, and execute `close_cooperative_with_root`; returns the tx digest.
     /// Resolves the tunnel shared ref + reference gas price over JSON-RPC, builds offline.
     /// Concurrent calls are safe: no shared gas coin means no equivocation risk.
@@ -333,6 +349,7 @@ impl SuiSettler {
 /// Project a raw event to a displayable Transaction-Log row, or `None` if it is not one
 /// (only activations and closes are shown). `game` is left `None` for v1 — the event carries
 /// no game tag; joining `tunnel_id → game` via the session registry is a deferred follow-up.
+#[allow(dead_code)]
 fn to_tunnel_event(raw: &RawTunnelEvent) -> Option<crate::state::TunnelEvent> {
     let kind = match raw.type_suffix.as_str() {
         "TunnelActivated" => crate::state::TunnelEventKind::Opened,
@@ -354,6 +371,7 @@ fn to_tunnel_event(raw: &RawTunnelEvent) -> Option<crate::state::TunnelEvent> {
 /// Poll the chain for this package's tunnel events and fold them into the registry via
 /// `ControlStore::set_tunnel_status` — the transition logic (idempotency, count maintenance)
 /// now lives in the store impl. e2e-deferred (needs a live node + published package).
+#[allow(dead_code)]
 pub fn spawn_event_indexer(state: crate::state::SharedState) {
     tokio::spawn(async move {
         let mut cursor = None;
