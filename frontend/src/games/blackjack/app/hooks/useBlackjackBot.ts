@@ -7,7 +7,7 @@ import {
   type RegisterSessionResult,
 } from "@/backend/controlPlane";
 import { useTelemetry } from "@/telemetry/TelemetryProvider";
-import { coSignedToSettleRequest } from "@/backend/settleRequest";
+import { settleViaBackend } from "@/backend/settle";
 import {
   buildCreateAndFundTx,
   buildSettleWithRootTx,
@@ -25,6 +25,12 @@ import {
   transferBetweenBots,
   type BotIdentity,
 } from "@/games/blackjack/app/lib/bjBots";
+import {
+  DOPAMINT_COIN_TYPE,
+  ensureDopamintStakeCoin,
+  isDopamintConfigured,
+} from "@/onchain/dopamint";
+import { makeKeypairSponsoredSignExec } from "@/onchain/sponsor";
 import {
   BlackjackBetProtocol,
   FIXED_PLAYER_A,
@@ -364,6 +370,19 @@ export function useBlackjackBot(): BlackjackBotGame {
     [client],
   );
 
+  // DOPAMINT mode: route a bot keypair's tx through the backend gas sponsor (ADR-0009/0010) — the
+  // settler pays gas, so the bot signs with zero SUI. Returns just the digest; create flows recover
+  // object changes via getTransactionBlock.
+  const sponsoredSignExec = useCallback(
+    (bot: BotIdentity) =>
+      makeKeypairSponsoredSignExec({
+        address: bot.address,
+        keypair: bot.keypair,
+        client: client as never,
+      }),
+    [client],
+  );
+
   const fund = useCallback(() => {
     void (async () => {
       setPhase("funding");
@@ -396,9 +415,12 @@ export function useBlackjackBot(): BlackjackBotGame {
   // When auto-play is on, schedules the next game (or stops if a bot is low on gas).
   const runGame = useCallback(() => {
     stopTimer();
+    // DOPAMINT mode: bot gas is sponsored and buy-ins are faucet-minted, so the bots need no SUI —
+    // skip the SUI-balance gate (their SUI balance is 0). SUI fallback still gates on real balances.
     if (
-      balancesRef.current.a < MIN_PLAY_MIST ||
-      balancesRef.current.b < MIN_PLAY_MIST
+      !isDopamintConfigured &&
+      (balancesRef.current.a < MIN_PLAY_MIST ||
+        balancesRef.current.b < MIN_PLAY_MIST)
     ) {
       autoRef.current = false;
       setAuto(false);
@@ -424,14 +446,45 @@ export function useBlackjackBot(): BlackjackBotGame {
         // a long auto-play session. The tunnel is active the moment this lands.
         const funder = gamesRef.current % 2 === 0 ? bots.a : bots.b;
         gamesRef.current += 1;
+
+        // DOPAMINT mode: the funder stakes faucet-minted DOPAMINT (both seats from its one coin)
+        // and sponsors its own open/close gas (no SUI). SUI fallback: the funder splits both
+        // buy-ins off its gas coin and pays its own gas.
+        const coinType = isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined;
+        const stakeCoinId = isDopamintConfigured
+          ? await ensureDopamintStakeCoin({
+              client: client as never,
+              signExec: sponsoredSignExec(funder),
+              owner: funder.address,
+              need: 2n * BUY_IN,
+            })
+          : undefined;
+
         setPhase("opening");
-        const createRes = await submit(
-          buildCreateAndFundTx(partyA, partyB, BUY_IN),
-          funder.keypair,
-        );
-        const tunnelId = parseTunnelId(createRes.objectChanges);
+        let createDigest: string;
+        if (isDopamintConfigured) {
+          const { digest } = await sponsoredSignExec(funder)(
+            buildCreateAndFundTx(partyA, partyB, BUY_IN, {
+              coinType,
+              stakeCoinId,
+            }),
+          );
+          await client.waitForTransaction({ digest });
+          createDigest = digest;
+        } else {
+          const createRes = await submit(
+            buildCreateAndFundTx(partyA, partyB, BUY_IN),
+            funder.keypair,
+          );
+          createDigest = createRes.digest;
+        }
+        const createTxb = await client.getTransactionBlock({
+          digest: createDigest,
+          options: { showObjectChanges: true },
+        });
+        const tunnelId = parseTunnelId(createTxb.objectChanges);
         if (!tunnelId) throw new Error("could not find created Tunnel id");
-        setDigests((d) => ({ ...d, create: createRes.digest }));
+        setDigests((d) => ({ ...d, create: createDigest }));
         report.bumpCounters({ tunnelsOpened: 1 });
         report.setActive(2);
 
@@ -629,23 +682,31 @@ export function useBlackjackBot(): BlackjackBotGame {
         const s = tunnel.buildSettlementWithRoot(createdAt, root, 0n);
 
         let closeDigest = "";
-        try {
-          const result = await getControlPlaneClient().settle(
-            tunnelId,
-            coSignedToSettleRequest(s, transcript.toRecord().entries),
-          );
-          closeDigest = result.txDigest;
-        } catch (e) {
-          console.warn(
-            "[settle] Server-side settle failed, falling back to bot keypair submission:",
-            e,
-          );
-          const closeRes = await submit(
-            buildSettleWithRootTx(tunnelId, s),
-            bots.a.keypair,
-          );
-          closeDigest = closeRes.digest;
-        }
+        const backendDigest = await settleViaBackend({
+          tunnelId,
+          settlement: s,
+          transcript: transcript.toRecord().entries,
+          label: "blackjack",
+          fallbackClose: async () => {
+            if (isDopamintConfigured) {
+              // The funder opened the tunnel and holds the sponsored signer; close DOPAMINT sponsored.
+              const { digest } = await sponsoredSignExec(funder)(
+                buildSettleWithRootTx(tunnelId, s, coinType),
+              );
+              await client.waitForTransaction({ digest });
+              closeDigest = digest;
+            } else {
+              const closeRes = await submit(
+                buildSettleWithRootTx(tunnelId, s),
+                bots.a.keypair,
+              );
+              closeDigest = closeRes.digest;
+            }
+          },
+        });
+
+        // Backend /settle returns its close digest; the fallback assigns its own (above).
+        if (backendDigest) closeDigest = backendDigest;
 
         const rootHex = `0x${bytesToHex(root)}`;
         setDigests((d) => ({ ...d, close: closeDigest, root: rootHex }));
@@ -668,7 +729,7 @@ export function useBlackjackBot(): BlackjackBotGame {
         // hide; cleared only on stopAuto/reset, not per tunnel.
         const tunnelRecord: TunnelRecord = {
           tunnelId,
-          createDigest: createRes.digest,
+          createDigest,
           closeDigest,
           rootHex,
           rounds: roundsThisTunnel,
@@ -682,10 +743,14 @@ export function useBlackjackBot(): BlackjackBotGame {
         const b = await refreshBalances();
         setPhase("done");
 
-        // 7) continue tunnel-after-tunnel while the session is live (auto or manual), until a
-        // bot is low on gas or the user goes back. Pace fast in auto, relaxed in manual.
+        // 7) continue tunnel-after-tunnel while the session is live (auto or manual), until a bot
+        // is low on gas or the user goes back. DOPAMINT mode: gas sponsored + buy-ins faucet-
+        // minted, so bots can't run dry — skip the SUI gate. Pace fast in auto, relaxed in manual.
         if (playingRef.current) {
-          if (b && b.a >= MIN_PLAY_MIST && b.b >= MIN_PLAY_MIST) {
+          if (
+            isDopamintConfigured ||
+            (b && b.a >= MIN_PLAY_MIST && b.b >= MIN_PLAY_MIST)
+          ) {
             nextRef.current = setTimeout(
               () => {
                 if (playingRef.current) runRef.current();
@@ -706,7 +771,15 @@ export function useBlackjackBot(): BlackjackBotGame {
         setPhase("error");
       }
     })();
-  }, [bots, client, proto, submit, refreshBalances, stopTimer]);
+  }, [
+    bots,
+    client,
+    proto,
+    submit,
+    sponsoredSignExec,
+    refreshBalances,
+    stopTimer,
+  ]);
 
   // keep a ref to the latest runGame so the auto-play timeout always calls the current one.
   useEffect(() => {
@@ -750,9 +823,11 @@ export function useBlackjackBot(): BlackjackBotGame {
   // main menu starts in manual (auto off) so the user plays the hands themselves.
   const startAuto = useCallback(
     (autoOn: boolean = true) => {
+      // DOPAMINT mode: no SUI needed (sponsored gas + faucet buy-ins), so skip the balance gate.
       if (
-        balancesRef.current.a < MIN_PLAY_MIST ||
-        balancesRef.current.b < MIN_PLAY_MIST
+        !isDopamintConfigured &&
+        (balancesRef.current.a < MIN_PLAY_MIST ||
+          balancesRef.current.b < MIN_PLAY_MIST)
       ) {
         setError("Fund the bots first");
         setPhase("error");

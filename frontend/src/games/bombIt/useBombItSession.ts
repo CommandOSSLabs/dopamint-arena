@@ -1,80 +1,76 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  useCurrentAccount,
-  useSignAndExecuteTransaction,
-  useSuiClient,
-} from "@mysten/dapp-kit";
+import { useCurrentAccount, useSignAndExecuteTransaction, useSuiClient } from "@mysten/dapp-kit";
 import { createParticipant } from "sui-tunnel-ts/core/keys";
 import { OffchainTunnel } from "sui-tunnel-ts/core/tunnel";
-import { BlackjackProtocol, WAGER } from "sui-tunnel-ts/protocol/blackjack";
-import type {
-  BlackjackState,
-  BlackjackMove,
-} from "sui-tunnel-ts/protocol/blackjack";
+import { BombItProtocol, BOMB_IT_MIN_STAKE } from "sui-tunnel-ts/protocol/bombIt";
+import type { BombItState, BombItMove, BombItAction } from "sui-tunnel-ts/protocol/bombIt";
 import { useTelemetry } from "../../telemetry/TelemetryProvider";
-import {
-  getControlPlaneClient,
-  type RegisterSessionResult,
-} from "../../backend/controlPlane";
-import {
-  closeCooperative,
-  openAndFundSelfPlay,
-  readCreatedAt,
-} from "../../onchain/tunnelTx";
+import { getControlPlaneClient, type RegisterSessionResult } from "../../backend/controlPlane";
+import { closeCooperative, openAndFundSelfPlay, readCreatedAt } from "../../onchain/tunnelTx";
 import {
   deriveView,
   sessionResult,
   stepSession,
-  type BlackjackView,
-  type SessionResult,
+  SOLO_STEP_MS,
+  type BombItView,
+  type BombItResult,
 } from "./session-core";
 
-/** Milliseconds between bot moves (animation pacing). */
-const STEP_MS = 900;
+/**
+ * Bomb It is a REACTION game, so its solo loop advances ONE co-signed tick per SOLO_STEP_MS rather
+ * than batching many ticks per frame like chicken-cross's throughput showcase. That keeps the bomb
+ * fuse and the bot fight legible (fuse ≈ FUSE_TICKS * SOLO_STEP_MS ≈ 1s) — at the batched rate the
+ * 8-tick fuse burned in ~50ms, so a manual drop was instant death and a bot duel was a blur. One
+ * tick per interval is also negligible crypto per frame, so the CPU stays cool without a budget cap.
+ */
 
-export type SessionStatus =
-  | "idle"
-  | "funding"
-  | "playing"
-  | "settling"
-  | "settled"
-  | "error";
+export type SessionStatus = "idle" | "funding" | "playing" | "settling" | "settled" | "error";
 
-export interface BlackjackSession {
+export interface BombItSession {
   status: SessionStatus;
-  view: BlackjackView | null;
-  result: SessionResult | null;
+  view: BombItView | null;
+  result: BombItResult | null;
   stake: number;
   error: string | null;
+  /** Auto mode: when on (default), a bot autopilots your seat; off = you play it yourself. */
+  auto: boolean;
   start: (stake: number) => void;
   reset: () => void;
+  queueAction: (a: BombItAction) => void;
+  toggleAuto: () => void;
 }
 
-export function useBlackjackSession(): BlackjackSession {
+/** You always sit in seat A for a solo match; seat B is the bot opponent. */
+const HUMAN_SEAT = "A" as const;
+
+/**
+ * Self-play (bot-vs-bot) Bomb It over a REAL Sui tunnel — the canonical solo on-ramp so a
+ * player can try the game with one wallet and no opponent. One signature funds BOTH seats
+ * (openAndFundSelfPlay); a timer drives RNG moves through the protocol until a kill or the
+ * tick cap, then it settles cooperatively on-chain. Mirrors useChickenCrossSession.
+ */
+export function useBombItSession(): BombItSession {
   const { report } = useTelemetry();
   const account = useCurrentAccount();
   const client = useSuiClient();
   const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
 
   const [status, setStatus] = useState<SessionStatus>("idle");
-  const [view, setView] = useState<BlackjackView | null>(null);
-  const [result, setResult] = useState<SessionResult | null>(null);
+  const [view, setView] = useState<BombItView | null>(null);
+  const [result, setResult] = useState<BombItResult | null>(null);
   const [stake, setStake] = useState<number>(0);
   const [error, setError] = useState<string | null>(null);
+  const [auto, setAutoState] = useState(true);
+  const autoRef = useRef(true);
+  const nextActionRef = useRef<BombItAction>("stay");
 
-  const protocolRef = useRef<BlackjackProtocol | null>(null);
-  const tunnelRef = useRef<OffchainTunnel<
-    BlackjackState,
-    BlackjackMove
-  > | null>(null);
+  const protocolRef = useRef<BombItProtocol | null>(null);
+  const tunnelRef = useRef<OffchainTunnel<BombItState, BombItMove> | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const stakeRef = useRef<bigint>(0n);
-
-  // Control-plane session (ADR-0002): registered on start, heartbeated ~1/s. The backend is
-  // off the per-move loop, so every call here is best-effort — failures are logged, not fatal.
+  // Control-plane session (ADR-0002): best-effort, off the per-move loop.
   const sessionRef = useRef<RegisterSessionResult | null>(null);
-  const moveCountRef = useRef(0); // cumulative co-signed updates (= off-chain nonce)
-  const actionsRef = useRef(0); // moves accrued since the last heartbeat
+  const moveCountRef = useRef(0);
+  const actionsRef = useRef(0);
   const lastHeartbeatRef = useRef(0);
 
   const stopTimer = useCallback(() => {
@@ -93,6 +89,9 @@ export function useBlackjackSession(): BlackjackSession {
     actionsRef.current = 0;
     lastHeartbeatRef.current = 0;
     report.setActive(0);
+    autoRef.current = true;
+    nextActionRef.current = "stay";
+    setAutoState(true);
     setStatus("idle");
     setView(null);
     setResult(null);
@@ -103,12 +102,10 @@ export function useBlackjackSession(): BlackjackSession {
   const start = useCallback(
     (nextStake: number) => {
       stopTimer();
-      // Stake must cover at least one wager; clamp to a whole, fundable amount. Guard NaN/Inf.
       const floored = Math.floor(nextStake);
       const stakeBig = BigInt(
-        Math.max(Number(WAGER), Number.isFinite(floored) ? floored : 0),
+        Math.max(Number(BOMB_IT_MIN_STAKE), Number.isFinite(floored) ? floored : 0),
       );
-      stakeRef.current = stakeBig;
       setStake(Number(stakeBig));
       setResult(null);
       setError(null);
@@ -118,24 +115,19 @@ export function useBlackjackSession(): BlackjackSession {
         setStatus("error");
         return;
       }
-      const signExec = async (
-        tx: Parameters<typeof signAndExecute>[0]["transaction"],
-      ) => {
+      const signExec = async (tx: Parameters<typeof signAndExecute>[0]["transaction"]) => {
         const r = await signAndExecute({ transaction: tx });
         return { digest: r.digest };
       };
-      const reads = client as unknown as Parameters<
-        typeof openAndFundSelfPlay
-      >[0]["reads"];
+      const reads = client as unknown as Parameters<typeof openAndFundSelfPlay>[0]["reads"];
 
       (async () => {
         try {
-          const a = createParticipant("player-bot");
-          const b = createParticipant("dealer-bot");
-          const protocol = new BlackjackProtocol();
+          const a = createParticipant("bomber-a");
+          const b = createParticipant("bomber-b");
+          const protocol = new BombItProtocol();
 
-          // Open + fund BOTH bot seats on-chain in ONE wallet signature (create_and_fund);
-          // play then runs off-chain and settles back on-chain at the end.
+          // Open + fund BOTH bot seats in ONE wallet signature (create_and_fund).
           setStatus("funding");
           const tunnelId = await openAndFundSelfPlay({
             reads,
@@ -157,12 +149,7 @@ export function useBlackjackSession(): BlackjackSession {
             { a: stakeBig, b: stakeBig },
           );
           tunnel.onUpdate = (_u, bytes) =>
-            report.bumpCounters({
-              updates: 1,
-              signatures: 2,
-              verifications: 2,
-              bytes,
-            });
+            report.bumpCounters({ updates: 1, signatures: 2, verifications: 2, bytes });
 
           protocolRef.current = protocol;
           tunnelRef.current = tunnel;
@@ -171,7 +158,6 @@ export function useBlackjackSession(): BlackjackSession {
           setView(deriveView(tunnel.state));
           setStatus("playing");
 
-          // Register the (real, on-chain) tunnel for stats tracking. Best-effort.
           sessionRef.current = null;
           moveCountRef.current = 0;
           actionsRef.current = 0;
@@ -179,17 +165,14 @@ export function useBlackjackSession(): BlackjackSession {
           const cp = getControlPlaneClient();
           cp.registerSession({
             userAddress: account.address,
-            game: "blackjack",
+            game: "bomb-it",
             tunnels: [{ tunnelId, partyA: a.address, partyB: b.address }],
           })
             .then((s) => {
               sessionRef.current = s;
             })
-            .catch((e) =>
-              console.error("[blackjack] registerSession failed:", e),
-            );
+            .catch((e) => console.error("[bomb-it] registerSession failed:", e));
 
-          // Coarse, aggregated throughput report (~1/s) — never one call per move (ADR-0002).
           const flushHeartbeat = (force: boolean) => {
             const s = sessionRef.current;
             if (!s || actionsRef.current === 0) return;
@@ -204,22 +187,21 @@ export function useBlackjackSession(): BlackjackSession {
               nonce: String(moveCountRef.current),
               actionsDelta,
               windowMs: Math.max(1, windowMs),
-            }).catch((e) => console.error("[blackjack] heartbeat failed:", e));
+            }).catch((e) => console.error("[bomb-it] heartbeat failed:", e));
           };
 
-          // Cooperative close on-chain: both bot keys co-sign the final balances; the wallet
-          // submits. finalNonce = 1 (no on-chain update_state). Coins move to the bot seats.
           const settleOnChain = async () => {
             setStatus("settling");
             report.bumpCounters({ tunnelsClosed: 1, settlements: 1 });
             report.setActive(0);
-            setResult(sessionResult(tunnel.state, stakeRef.current));
+            const r = sessionResult(tunnel.state);
+            setResult(r);
             try {
               const settlement = tunnel.buildSettlement(createdAt);
               await closeCooperative({ signExec, tunnelId, settlement });
               setStatus("settled");
             } catch (e) {
-              console.error("[blackjack] on-chain close failed:", e);
+              console.error("[bomb-it] on-chain close failed:", e);
               setError(String((e as Error)?.message ?? e));
               setStatus("error");
             }
@@ -229,40 +211,52 @@ export function useBlackjackSession(): BlackjackSession {
             const p = protocolRef.current;
             const t = tunnelRef.current;
             if (!p || !t) return;
-            const prevBalanceA = t.state.balanceA;
-            const moved = stepSession(p, t, Math.random);
-            if (moved) {
-              moveCountRef.current += 1;
-              actionsRef.current += 1;
+            // Auto on → both seats are bot-driven (your seat autopilots). Auto off → your queued
+            // action drives seat A; the bot still drives B.
+            const human = autoRef.current
+              ? null
+              : {
+                  seat: HUMAN_SEAT,
+                  getAction: () => {
+                    const a = nextActionRef.current;
+                    nextActionRef.current = "stay";
+                    return a;
+                  },
+                };
+            // One co-signed tick per interval — the human-scale cadence a reaction game needs.
+            let ended = p.isTerminal(t.state);
+            if (!ended) {
+              const moved = stepSession(p, t, Math.random, human);
+              if (moved) {
+                moveCountRef.current += 1;
+                actionsRef.current += 1;
+              }
+              ended = !moved || p.isTerminal(t.state);
             }
             setView(deriveView(t.state));
 
-            // A settled round (round_over with a balance change) => a panel txn.
-            if (
-              moved &&
-              t.state.phase === "round_over" &&
-              t.state.balanceA !== prevBalanceA
-            ) {
-              const delta = t.state.balanceA - prevBalanceA;
+            // On the deciding frame, push a panel txn for the winner (skip draws/pushes).
+            const w = t.state.winner;
+            if (ended && (w === "A" || w === "B")) {
               report.pushTxn({
-                id: actionsRef.current,
-                game: "blackjack",
+                id: moveCountRef.current,
+                game: "bomb-it",
                 time: new Date().toLocaleTimeString("en-GB"),
-                bot: "Player Bot",
-                type: delta > 0n ? "Blackjack Win" : "Blackjack Loss",
+                bot: w === "A" ? "Bomber A" : "Bomber B",
+                type: "Bomb It Win",
                 status: "Success",
-                amount: `${delta > 0n ? "+" : "-"}$${Math.abs(Number(delta)).toFixed(2)}`,
+                amount: `+$${Number(t.state.total).toFixed(2)}`,
               });
             }
 
             flushHeartbeat(false);
 
-            if (!moved || p.isTerminal(t.state)) {
+            if (ended) {
               stopTimer();
-              flushHeartbeat(true); // report the tail before settling
+              flushHeartbeat(true);
               void settleOnChain();
             }
-          }, STEP_MS);
+          }, SOLO_STEP_MS);
         } catch (e) {
           stopTimer();
           report.setActive(0);
@@ -274,8 +268,16 @@ export function useBlackjackSession(): BlackjackSession {
     [account, client, signAndExecute, report, stopTimer],
   );
 
-  // Clean up the timer if the component unmounts mid-session.
+  const queueAction = useCallback((a: BombItAction) => {
+    nextActionRef.current = a;
+  }, []);
+  const toggleAuto = useCallback(() => {
+    autoRef.current = !autoRef.current;
+    nextActionRef.current = "stay";
+    setAutoState(autoRef.current);
+  }, []);
+
   useEffect(() => stopTimer, [stopTimer]);
 
-  return { status, view, result, stake, error, start, reset };
+  return { status, view, result, stake, error, auto, start, reset, queueAction, toggleAuto };
 }

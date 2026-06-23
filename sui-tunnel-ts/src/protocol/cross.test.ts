@@ -143,6 +143,35 @@ test("applyMove throws once the game is terminal", () => {
   assert.throws(() => p.applyMove(terminal, { dirA: "north" }, "A"));
 });
 
+test("simultaneous WIN_LANE arrival with equal score is a push, not an A-win", () => {
+  const p = new CrossProtocol();
+  // Both chickens one hop from the finish, dead even — the exact dead-heat case.
+  // Lane WIN_LANE is grass (always safe), so both hops land and both arrive this tick.
+  const deadHeat: CrossState = {
+    ...p.initialState(CTX),
+    tick: 10n,
+    players: [
+      { lane: WIN_LANE - 1, col: SPAWN_COL, score: WIN_LANE - 1, invulnTicks: 0 },
+      { lane: WIN_LANE - 1, col: SPAWN_COL, score: WIN_LANE - 1, invulnTicks: 0 },
+    ],
+  };
+  const next = p.applyMove(deadHeat, { dirA: "north", dirB: "north" }, "A");
+  assert.equal(next.players[0].lane >= WIN_LANE, true);
+  assert.equal(next.players[1].lane >= WIN_LANE, true);
+  assert.equal(next.winner, null); // dead heat ⇒ push, matching the TICK_CAP tie path
+  assert.equal(next.balanceA, deadHeat.balanceA); // push: stakes unchanged, no payout
+  assert.equal(next.balanceA + next.balanceB, next.total);
+});
+
+test("randomMove carries only the acting seat's hop (2-party model)", () => {
+  const p = new CrossProtocol();
+  const s = p.initialState(CTX);
+  const a = p.randomMove(s, "A", mulberry32ForTest(1)) as CrossMove;
+  assert.equal(a.dirB, undefined, "A's update must not carry B's dir");
+  const b = p.randomMove(s, "B", mulberry32ForTest(1)) as CrossMove;
+  assert.equal(b.dirA, undefined, "B's update must not carry A's dir");
+});
+
 // Local deterministic RNG for tests (mirrors the protocol's internal one).
 function mulberry32ForTest(seed: number): () => number {
   let a = seed >>> 0;

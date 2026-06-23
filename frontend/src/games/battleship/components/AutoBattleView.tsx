@@ -1,4 +1,5 @@
 import { cn } from "@/lib/utils";
+import { isDopamintConfigured } from "@/onchain/dopamint";
 import { FLEET_CELLS } from "../engine/fleet";
 import type { AutoSeatView, BattleshipAutoView } from "../view";
 import { BoardGrid } from "./BoardGrid";
@@ -99,8 +100,12 @@ export function AutoBattleView({
             <dl className="grid w-full grid-cols-2 gap-y-1.5 text-[11px]">
               <Stat label="Bot A wins" value={String(view.score.a)} />
               <Stat label="Bot B wins" value={String(view.score.b)} />
-              <Stat label="A gas" value={sui(view.balance.a)} />
-              <Stat label="B gas" value={sui(view.balance.b)} />
+              {!isDopamintConfigured && (
+                <>
+                  <Stat label="A gas" value={sui(view.balance.a)} />
+                  <Stat label="B gas" value={sui(view.balance.b)} />
+                </>
+              )}
             </dl>
             <button
               onClick={onReset}
@@ -144,7 +149,9 @@ function BotColumn({
           {aiming && " ◂ aiming"}
         </span>
         <span className="text-[10.5px] text-arena-muted">
-          {sui(balance)} · hull {seat.hitsTaken}/{FLEET_CELLS}
+          {isDopamintConfigured
+            ? `hull ${seat.hitsTaken}/${FLEET_CELLS}`
+            : `${sui(balance)} · hull ${seat.hitsTaken}/${FLEET_CELLS}`}
         </span>
       </div>
       <FleetRoster fleet={seat.fleet} />

@@ -6,6 +6,7 @@ import {
   buildFundTx,
   FUND_PER_BOT_MIST,
 } from "@/games/ticTacToe/app/lib/bots";
+import { isDopamintConfigured } from "@/onchain/dopamint";
 
 function short(addr: string) {
   return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
@@ -101,11 +102,14 @@ export function BotPanel({
         >
           {short(address)}
         </span>
-        <span
-          className={`text-primary font-bold tabular-nums bg-tertiary-container/20 rounded-lg ${isPortrait ? "px-2 py-1 text-xs" : "px-4 py-2 text-2xl"}`}
-        >
-          {fmtSui(balance)} SUI
-        </span>
+        {/* DOPAMINT mode: bots play free (sponsored gas + faucet stake) — hide the SUI balance. */}
+        {!isDopamintConfigured && (
+          <span
+            className={`text-primary font-bold tabular-nums bg-tertiary-container/20 rounded-lg ${isPortrait ? "px-2 py-1 text-xs" : "px-4 py-2 text-2xl"}`}
+          >
+            {fmtSui(balance)} SUI
+          </span>
+        )}
       </div>
     </div>
   );
@@ -132,7 +136,9 @@ export function BotPanel({
       </div>
 
       <div className={`flex flex-col mt-4 ${isPortrait ? "gap-3" : "gap-6"}`}>
-        {(bots.x > 0n || bots.o > 0n) && (
+        {/* DOPAMINT mode: bots play free (sponsored gas + faucet stake), so SUI-gas funding —
+            rebalance + wallet-fund — is unnecessary; hide it. Connect/login stays for PvP. */}
+        {!isDopamintConfigured && (bots.x > 0n || bots.o > 0n) && (
           <button
             onClick={onRebalance}
             disabled={rebalancing || locked}
@@ -144,16 +150,18 @@ export function BotPanel({
         )}
 
         {isConnected ? (
-          <button
-            onClick={fundFromWallet}
-            disabled={walletFunding}
-            data-testid="ttt-fund-wallet"
-            className={`w-full bg-primary text-on-primary font-headline-lg-mobile hover:bg-primary-container active:translate-y-[2px] disabled:opacity-40 disabled:cursor-not-allowed transition-all rounded-xl shadow-[4px_4px_0px_#bc0000] ${isPortrait ? "py-3 text-lg" : "py-6 text-3xl"}`}
-          >
-            {walletFunding
-              ? "Funding…"
-              : `Fund bots from wallet (${totalSui} SUI)`}
-          </button>
+          !isDopamintConfigured && (
+            <button
+              onClick={fundFromWallet}
+              disabled={walletFunding}
+              data-testid="ttt-fund-wallet"
+              className={`w-full bg-primary text-on-primary font-headline-lg-mobile hover:bg-primary-container active:translate-y-[2px] disabled:opacity-40 disabled:cursor-not-allowed transition-all rounded-xl shadow-[4px_4px_0px_#bc0000] ${isPortrait ? "py-3 text-lg" : "py-6 text-3xl"}`}
+            >
+              {walletFunding
+                ? "Funding…"
+                : `Fund bots from wallet (${totalSui} SUI)`}
+            </button>
+          )
         ) : (
           <div
             className={`flex flex-col sm:flex-row mt-4 [&_button]:w-full [&_button]:bg-surface [&_button]:hover:bg-primary/5 [&_button]:transition-all [&_button]:shadow-[4px_4px_0px_#001e40] ${isPortrait ? "gap-3 mt-2 [&_button]:py-3 [&_button]:px-4 [&_button]:border-4 [&_button]:rounded-lg [&_button]:font-headline-lg-mobile [&_button]:text-lg" : "gap-6 [&_button]:py-6 [&_button]:px-8 [&_button]:border-[6px] [&_button]:border-primary [&_button]:rounded-xl [&_button]:font-headline-lg-mobile [&_button]:text-3xl [&_button]:text-primary"}`}
@@ -177,13 +185,18 @@ export function BotPanel({
       <div
         className={`flex items-center justify-between font-label-sm border-t-4 border-dashed border-primary/20 mt-4 ${isPortrait ? "text-sm pt-3" : "text-2xl pt-6"}`}
       >
-        <button
-          onClick={onFund}
-          disabled={funding}
-          className="text-outline hover:text-primary underline transition-colors disabled:opacity-40"
-        >
-          {funding ? "Requesting faucet…" : "or try testnet faucet"}
-        </button>
+        {/* The SUI testnet faucet is irrelevant in DOPAMINT mode (the stake is faucet-minted). */}
+        {!isDopamintConfigured ? (
+          <button
+            onClick={onFund}
+            disabled={funding}
+            className="text-outline hover:text-primary underline transition-colors disabled:opacity-40"
+          >
+            {funding ? "Requesting faucet…" : "or try testnet faucet"}
+          </button>
+        ) : (
+          <span />
+        )}
         {isConnected && (
           <button
             onClick={logout}

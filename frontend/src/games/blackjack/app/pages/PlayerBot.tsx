@@ -18,6 +18,7 @@ import {
   buildFundTx,
   FUND_PER_BOT_MIST,
 } from "@/games/blackjack/app/lib/bjBots";
+import { isDopamintConfigured } from "@/onchain/dopamint";
 
 const chip25 = "/chip-25.svg";
 const chip100 = "/chip-100.svg";
@@ -306,9 +307,10 @@ export default function PlayerBot() {
   const inGame =
     phase === "opening" || phase === "playing" || phase === "settling";
   const terminal = phase === "done" || result !== null;
-  // "Unfunded" = a bot is below 0.1 SUI; gates auto-fund, the play/auto buttons, and the hint.
+  // DOPAMINT mode: bots play free (sponsored gas, faucet buy-ins), so the SUI-balance gate doesn't
+  // apply — never treat the bots as unfunded. SUI fallback still gates on a positive balance.
   const unfunded =
-    balances.a < MIN_BOT_BALANCE_MIST || balances.b < MIN_BOT_BALANCE_MIST;
+    !isDopamintConfigured && (balances.a === 0n || balances.b === 0n);
 
   // Auto-pilot: wallet-fund the bots once if low, then start bot-vs-bot self-play.
   // Bots are SHARED across all blackjack windows (loadOrCreateBots reads shared
@@ -531,6 +533,30 @@ export default function PlayerBot() {
               {walletFunding ? "Setting up bots…" : "Preparing bots…"}
             </p>
           )}
+          {phase === "funding" && (
+            <div className="text-xs text-[#d4af37] animate-pulse uppercase tracking-widest">
+              Funding bots from faucet…
+            </div>
+          )}
+          {fundNote && (
+            <div className="text-xs text-amber-400 text-center max-w-full break-words">
+              {fundNote}
+            </div>
+          )}
+          {error && (
+            <div className="text-xs text-rose-400 text-center max-w-full break-words">
+              {error}
+            </div>
+          )}
+          {!isDopamintConfigured &&
+            unfunded &&
+            phase !== "funding" &&
+            !error && (
+              <div className="text-[11px] text-zinc-500 text-center">
+                Fund the bots from the testnet faucet to begin.
+              </div>
+            )}
+
           <button
             onClick={handleStart}
             disabled={preparing}

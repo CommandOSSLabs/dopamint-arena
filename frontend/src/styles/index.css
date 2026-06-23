@@ -382,3 +382,189 @@ html:not(.dark) .wal-aurora::before {
   background-size: 18px 18px;
   background-position: -9px -9px;
 }
+
+/* ---- arena game accents (gold) — design-system-owned, theme-independent.
+   The arena mini-games (bomb-it, chicken-cross, blackjack) share a casino-gold
+   accent for stake/win moments. These live here (not in blackjack.css) so every
+   game owns them without a hidden dependency on blackjack being bundled. */
+.text-gold {
+  color: #d4af37;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+.gold-glow {
+  box-shadow: 0 0 15px rgba(212, 175, 55, 0.4);
+}
+.gold-glow-hover {
+  transition: box-shadow 0.2s ease-in-out, transform 0.2s ease-in-out;
+}
+.gold-glow-hover:hover {
+  box-shadow: 0 0 20px rgba(212, 175, 55, 0.6);
+  transform: translateY(-2px);
+}
+
+@keyframes arena-win-pop {
+  0% {
+    transform: scale(0.6);
+    opacity: 0;
+  }
+  60% {
+    transform: scale(1.12);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+/* ---- arcade lobby kit — shared splash chrome for the arena mini-game menus
+   (bomb-it, chicken-cross). Gold-accented to match the win/CTA moment; each game
+   supplies its own atmospheric backdrop behind the card. ---- */
+.arcade-card {
+  position: relative;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: clamp(12px, 3cqmin, 16px);
+  padding: clamp(20px, 6cqmin, 30px) clamp(20px, 7cqmin, 34px);
+  border-radius: 16px;
+  width: 100%;
+  max-width: min(340px, calc(100% - 20px));
+  max-height: calc(100% - 16px);
+  overflow-y: auto;
+  text-align: center;
+  background: linear-gradient(180deg, rgba(14, 17, 26, 0.82), rgba(10, 12, 18, 0.72));
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(10px);
+  animation: arena-win-pop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+.arcade-title {
+  font-size: clamp(20px, 7cqmin, 30px);
+  letter-spacing: 0.04em;
+  text-shadow: 0 0 22px rgba(253, 224, 71, 0.45);
+}
+.arcade-sub {
+  font-size: 12px;
+  line-height: 1.45;
+  max-width: 264px;
+  color: rgba(148, 163, 184, 0.85);
+}
+.arcade-seg {
+  display: inline-flex;
+  padding: 3px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+}
+.arcade-seg__btn {
+  padding: 6px 16px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: rgba(148, 163, 184, 0.85);
+  transition: color 0.15s, background 0.15s, box-shadow 0.2s;
+}
+.arcade-seg__btn--on {
+  color: #06070c;
+  background: linear-gradient(180deg, #fde047, #f59e0b);
+  box-shadow: 0 0 14px rgba(253, 224, 71, 0.45);
+}
+.arcade-label {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(148, 163, 184, 0.8);
+}
+.arcade-field {
+  width: min(180px, 100%);
+  padding: 9px 14px;
+  border-radius: 10px;
+  background: rgba(10, 12, 18, 0.85);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  color: #f1f5f9;
+  text-align: center;
+  font-family: var(--wal-font-mono);
+}
+.arcade-field:focus {
+  outline: none;
+  border-color: rgba(253, 224, 71, 0.6);
+  box-shadow: 0 0 0 3px rgba(253, 224, 71, 0.14);
+}
+.arcade-cta {
+  padding: 11px 26px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #06070c;
+  background: linear-gradient(180deg, #fde047, #f59e0b);
+  border: none;
+  box-shadow: 0 0 18px rgba(253, 224, 71, 0.45);
+  transition: transform 0.12s, box-shadow 0.2s;
+}
+.arcade-cta:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 0 26px rgba(253, 224, 71, 0.7);
+}
+.arcade-cta:disabled {
+  opacity: 0.4;
+  box-shadow: none;
+  transform: none;
+  cursor: not-allowed;
+}
+.arcade-cta--ghost {
+  color: #e2e8f0;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  box-shadow: none;
+}
+.arcade-cta--ghost:hover {
+  background: rgba(255, 255, 255, 0.1);
+  transform: translateY(-1px);
+  box-shadow: none;
+}
+.arcade-code {
+  font-family: var(--wal-font-mono);
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: 0.3em;
+  color: #fde047;
+  text-shadow: 0 0 16px rgba(253, 224, 71, 0.5);
+}
+
+/* ---- Auto/autopilot toggle (in-board pill). On = a bot fights your seat; off = you play. ---- */
+.arena-auto {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  z-index: 6;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  cursor: pointer;
+  color: rgba(226, 232, 240, 0.85);
+  background: rgba(10, 13, 20, 0.9);
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  transition: transform 0.12s, box-shadow 0.2s, background 0.15s;
+}
+.arena-auto:hover {
+  transform: translateY(-1px);
+  background: rgba(16, 20, 30, 0.95);
+}
+.arena-auto--on {
+  color: #06070c;
+  background: linear-gradient(180deg, #fde047, #f59e0b);
+  border-color: transparent;
+  box-shadow: 0 0 14px rgba(253, 224, 71, 0.4);
+}

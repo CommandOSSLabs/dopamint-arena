@@ -6,7 +6,7 @@ import {
   type RegisterSessionResult,
 } from "@/backend/controlPlane";
 import { useTelemetry } from "@/telemetry/TelemetryProvider";
-import { coSignedToSettleRequest } from "@/backend/settleRequest";
+import { settleViaBackend } from "@/backend/settle";
 import type { Transaction } from "@mysten/sui/transactions";
 import {
   optimalMoves,
@@ -29,6 +29,12 @@ import {
   transferBetweenBots,
   type BotIdentity,
 } from "@/games/ticTacToe/app/lib/bots";
+import { makeKeypairSponsoredSignExec } from "@/onchain/sponsor";
+import {
+  DOPAMINT_COIN_TYPE,
+  ensureDopamintStakeCoin,
+  isDopamintConfigured,
+} from "@/onchain/dopamint";
 
 // The move pickers reason over a single inner TTT game (board/turn/winner).
 type State = protocols.TicTacToeState;
@@ -125,6 +131,10 @@ const STEP_MS = 600;
 // another game; below it, auto-play stops rather than risk a mid-game tx running out of gas
 // and leaving a tunnel open. ~0.02 SUI (a game costs the busier bot ~0.01 SUI of gas).
 const MIN_PLAY_MIST = 20_000_000n;
+// DOPAMINT mode: per-seat stake (1 DOPAMINT, 9 decimals). Both seats are funded from one coin.
+const DOPAMINT_PER_SEAT = 1_000_000_000n;
+// SUI-fallback per-seat stake (MIST), when the DOPAMINT env is unset.
+const SUI_PER_SEAT = 1n;
 // Pause between auto-played games.
 const NEXT_GAME_MS = 1200;
 
@@ -320,6 +330,18 @@ export function useBotGame(difficulty: Difficulty = "fast"): BotGameView {
     [client],
   );
 
+  // DOPAMINT mode (ADR-0010): a gas-sponsored signer for a bot keypair. The settler pays gas, so
+  // the bot needs zero SUI — it only signs the open/close. Faucet-minted DOPAMINT is the stake.
+  const botSponsoredSignExec = useCallback(
+    (bot: BotIdentity) =>
+      makeKeypairSponsoredSignExec({
+        address: bot.address,
+        keypair: bot.keypair,
+        client: client as never,
+      }),
+    [client],
+  );
+
   const fund = useCallback(() => {
     void (async () => {
       setPhase("funding");
@@ -342,9 +364,12 @@ export function useBotGame(difficulty: Difficulty = "fast"): BotGameView {
   // *tunnel* (or stops if a bot is low on gas).
   const runGame = useCallback(() => {
     stopTimer();
+    // DOPAMINT mode: gas is sponsored and the stake is faucet-minted, so the bots need no SUI —
+    // skip the gas gate. SUI fallback still requires a real gas balance per bot.
     if (
-      balancesRef.current.x < MIN_PLAY_MIST ||
-      balancesRef.current.o < MIN_PLAY_MIST
+      !isDopamintConfigured &&
+      (balancesRef.current.x < MIN_PLAY_MIST ||
+        balancesRef.current.o < MIN_PLAY_MIST)
     ) {
       autoRef.current = false;
       setAuto(false);
@@ -370,17 +395,55 @@ export function useBotGame(difficulty: Difficulty = "fast"): BotGameView {
         const partyX = { address: bots.x.address, publicKey: bots.x.publicKey };
         const partyO = { address: bots.o.address, publicKey: bots.o.publicKey };
 
-        // 1) open + fund (both 1-MIST stakes) + activate in ONE tx: bot X signs a single
-        // create_and_fund that funds both parties from its own gas coin. Bot O signs nothing
-        // on-chain; the tunnel is active the moment this lands.
+        // DOPAMINT mode (ADR-0010): stake faucet-minted DOPAMINT and sponsor bot X's open/close
+        // gas (no SUI). SUI fallback (env unset): bot X funds the stakes from its own gas coin.
+        const dopamintOn = isDopamintConfigured;
+        const coinType = dopamintOn ? DOPAMINT_COIN_TYPE : undefined;
+        const stakePerSeat = dopamintOn ? DOPAMINT_PER_SEAT : SUI_PER_SEAT;
+        // Bot X (party A) signs every on-chain tx; in DOPAMINT mode that's the sponsored signer.
+        const xSignExec = dopamintOn ? botSponsoredSignExec(bots.x) : null;
+
+        // 1) open + fund (both stakes) + activate in ONE tx: bot X signs a single create_and_fund
+        // that funds both parties. Bot O signs nothing on-chain; the tunnel is active the moment
+        // this lands. In DOPAMINT mode, both stakes split off one faucet-minted coin (sponsored
+        // gas has no gas coin to split); in SUI mode, off bot X's gas coin.
         setPhase("opening");
-        const createRes = await submit(
-          buildCreateAndFundTx(partyX, partyO, 1n),
-          bots.x.keypair,
-        );
-        const tunnelId = parseTunnelId(createRes.objectChanges);
-        if (!tunnelId) throw new Error("could not find created Tunnel id");
-        setDigests((d) => ({ ...d, create: createRes.digest }));
+        let tunnelId: string;
+        let createDigest: string;
+        if (dopamintOn && xSignExec) {
+          // Self-play funds BOTH seats from one coin, so faucet/select for the 2-seat total.
+          const stakeCoinId = await ensureDopamintStakeCoin({
+            client: client as never,
+            signExec: xSignExec,
+            owner: bots.x.address,
+            need: 2n * stakePerSeat,
+          });
+          const { digest } = await xSignExec(
+            buildCreateAndFundTx(partyX, partyO, stakePerSeat, {
+              coinType,
+              stakeCoinId,
+            }),
+          );
+          await client.waitForTransaction({ digest });
+          const txb = await client.getTransactionBlock({
+            digest,
+            options: { showObjectChanges: true },
+          });
+          const id = parseTunnelId(txb.objectChanges);
+          if (!id) throw new Error("could not find created Tunnel id");
+          tunnelId = id;
+          createDigest = digest;
+        } else {
+          const createRes = await submit(
+            buildCreateAndFundTx(partyX, partyO, stakePerSeat),
+            bots.x.keypair,
+          );
+          const id = parseTunnelId(createRes.objectChanges);
+          if (!id) throw new Error("could not find created Tunnel id");
+          tunnelId = id;
+          createDigest = createRes.digest;
+        }
+        setDigests((d) => ({ ...d, create: createDigest }));
         report.bumpCounters({ tunnelsOpened: 1 });
         report.setActive(2);
 
@@ -408,7 +471,7 @@ export function useBotGame(difficulty: Difficulty = "fast"): BotGameView {
           bots.o.coreKey,
           bots.x.address,
           bots.o.address,
-          { a: 1n, b: 1n },
+          { a: stakePerSeat, b: stakePerSeat },
         );
 
         // Accumulate every co-signed update into a transcript; its Merkle root is anchored
@@ -553,23 +616,30 @@ export function useBotGame(difficulty: Difficulty = "fast"): BotGameView {
         const s = tunnel.buildSettlementWithRoot(createdAt, root, 0n);
 
         let closeDigest = "";
-        try {
-          const result = await getControlPlaneClient().settle(
-            tunnelId,
-            coSignedToSettleRequest(s, transcript.toRecord().entries),
-          );
-          closeDigest = result.txDigest;
-        } catch (e) {
-          console.warn(
-            "[settle] Server-side settle failed, falling back to bot keypair submission:",
-            e,
-          );
-          const closeRes = await submit(
-            buildSettleWithRootTx(tunnelId, s),
-            bots.x.keypair,
-          );
-          closeDigest = closeRes.digest;
-        }
+        const backendDigest = await settleViaBackend({
+          tunnelId,
+          settlement: s,
+          transcript: transcript.toRecord().entries,
+          label: "tictactoe",
+          fallbackClose: async () => {
+            // DOPAMINT mode: close via the sponsored signer (no SUI); else bot X's keypair.
+            if (dopamintOn && xSignExec) {
+              const { digest } = await xSignExec(
+                buildSettleWithRootTx(tunnelId, s, coinType),
+              );
+              await client.waitForTransaction({ digest });
+              closeDigest = digest;
+            } else {
+              const closeRes = await submit(
+                buildSettleWithRootTx(tunnelId, s),
+                bots.x.keypair,
+              );
+              closeDigest = closeRes.digest;
+            }
+          },
+        });
+        // Backend /settle returns its close digest; the fallback assigns its own (above).
+        if (backendDigest) closeDigest = backendDigest;
 
         setDigests((d) => ({
           ...d,
@@ -615,10 +685,14 @@ export function useBotGame(difficulty: Difficulty = "fast"): BotGameView {
         const b = await refreshBalances();
         setPhase("done");
 
-        // 7) continue tunnel-after-tunnel while the session is live (auto or manual), until a
-        // bot is low on gas.
+        // 7) continue tunnel-after-tunnel while the session is live (auto or manual). DOPAMINT
+        // mode: gas is sponsored + the stake is faucet-minted, so bots can't run out — skip the
+        // SUI gate; SUI fallback still stops when a bot is low on gas.
         if (playingRef.current) {
-          if (b && b.x >= MIN_PLAY_MIST && b.o >= MIN_PLAY_MIST) {
+          if (
+            dopamintOn ||
+            (b && b.x >= MIN_PLAY_MIST && b.o >= MIN_PLAY_MIST)
+          ) {
             nextRef.current = setTimeout(() => {
               if (playingRef.current) runRef.current();
             }, NEXT_GAME_MS);
@@ -636,7 +710,7 @@ export function useBotGame(difficulty: Difficulty = "fast"): BotGameView {
         setPhase("error");
       }
     })();
-  }, [bots, client, submit, refreshBalances, stopTimer]);
+  }, [bots, client, submit, botSponsoredSignExec, refreshBalances, stopTimer]);
 
   // keep a ref to the latest runGame so the auto-play timeout always calls the current one.
   useEffect(() => {
@@ -675,9 +749,11 @@ export function useBotGame(difficulty: Difficulty = "fast"): BotGameView {
   // main menu starts in manual (auto off) so you play X yourself.
   const startAuto = useCallback(
     (autoOn: boolean = true) => {
+      // DOPAMINT mode: bots play free (sponsored gas + faucet stake), so skip the SUI gate.
       if (
-        balancesRef.current.x < MIN_PLAY_MIST ||
-        balancesRef.current.o < MIN_PLAY_MIST
+        !isDopamintConfigured &&
+        (balancesRef.current.x < MIN_PLAY_MIST ||
+          balancesRef.current.o < MIN_PLAY_MIST)
       ) {
         setError("Fund the bots first");
         setPhase("error");

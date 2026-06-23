@@ -1,40 +1,54 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 // Runtime SDK imports use RELATIVE .ts paths (tsx ignores the vite alias / tsconfig paths).
-import {
-  BombItProtocol,
-  BOMB_IT_MIN_STAKE,
-  BOMB_IT_TICK_CAP,
-} from "../../../../sui-tunnel-ts/src/protocol/bombIt.ts";
-// Type-only: tsx erases these, so the test stays free of the SDK's runtime crypto deps
-// (OffchainTunnel pulls @noble/hashes, unresolvable from the frontend package).
-import type {
-  BombItState,
-  BombItMove,
-} from "../../../../sui-tunnel-ts/src/protocol/bombIt.ts";
-import type { OffchainTunnel } from "../../../../sui-tunnel-ts/src/core/tunnel.ts";
-import { deriveView, sessionResult, stepSession } from "./session-core.ts";
+import { BombItProtocol, BOMB_IT_MIN_STAKE, CELL_COUNT, FUSE_TICKS } from "../../../../sui-tunnel-ts/src/protocol/bombIt.ts";
+import { OffchainTunnel, verifyCoSignedUpdate } from "../../../../sui-tunnel-ts/src/core/tunnel.ts";
+import { createParticipant } from "../../../../sui-tunnel-ts/src/core/keys.ts";
+import { stepSession, deriveView, sessionResult, SOLO_STEP_MS } from "./session-core.ts";
 
-const CTX = {
-  tunnelId: "0xfeed",
-  initialBalances: { a: BOMB_IT_MIN_STAKE, b: BOMB_IT_MIN_STAKE },
-};
+test("solo cadence makes a bomb fuse read as ~1s of real time (manual drop-and-flee is escapable)", () => {
+  // Bomb It is a reaction game: at the high-throughput showcase rate the 8-tick fuse burned in
+  // ~50ms (instant death + an unwatchable fight). One tick per SOLO_STEP_MS must keep the fuse
+  // in a humanly-reactable window, anchored to the protocol's FUSE_TICKS.
+  const fuseMs = FUSE_TICKS * SOLO_STEP_MS;
+  assert.ok(fuseMs >= 800, `fuse lasts ${fuseMs}ms; must be >=800ms so a manual drop is escapable`);
+  assert.ok(fuseMs <= 2000, `fuse lasts ${fuseMs}ms; keep it <=2s so the duel stays snappy`);
+});
 
-/** Deterministic PRNG so the self-play game shape is reproducible across runs. */
-function seededRng(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
+const CTX = { tunnelId: "0xfeed", initialBalances: { a: BOMB_IT_MIN_STAKE, b: BOMB_IT_MIN_STAKE } };
+
+function freshTunnel() {
+  const a = createParticipant("a");
+  const b = createParticipant("b");
+  const protocol = new BombItProtocol();
+  const tunnel = OffchainTunnel.selfPlay(
+    protocol,
+    "0xfeed",
+    a.keyPair,
+    b.keyPair,
+    a.address,
+    b.address,
+    { a: BOMB_IT_MIN_STAKE, b: BOMB_IT_MIN_STAKE },
+  );
+  return { protocol, tunnel };
 }
+
+test("stepSession advances a bot-vs-bot match, conserving the staked pot each tick", () => {
+  const { protocol, tunnel } = freshTunnel();
+  // The arena runs a long tick budget (~30s); assert the driver advances + conserves over a
+  // bounded window. Full-playout termination is covered by the protocol's own (crypto-free,
+  // fast) SDK tests — running it here would co-sign thousands of real updates.
+  for (let i = 0; i < 120; i++) {
+    if (!stepSession(protocol, tunnel, Math.random)) break;
+    assert.equal(tunnel.state.balanceA + tunnel.state.balanceB, tunnel.state.total);
+  }
+  assert.ok(tunnel.state.tick > 0n);
+});
 
 test("deriveView flattens grid, players, bombs, and balances to plain values", () => {
   const p = new BombItProtocol();
   const v = deriveView(p.initialState(CTX));
-  assert.equal(v.grid.length, 81);
+  assert.equal(v.grid.length, CELL_COUNT);
   assert.equal(v.players.length, 2);
   assert.equal(typeof v.balanceA, "number");
   assert.equal(v.bombs.length, 0);
@@ -50,36 +64,21 @@ test("sessionResult reports the winning seat (and draws as draw)", () => {
   assert.equal(sessionResult(s), "draw"); // in-progress (winner null) -> neutral draw
 });
 
-test("stepSession alternates seats, advances to a terminal result, one tick per step", () => {
-  const p = new BombItProtocol();
-  // Real protocol advances the state; the SDK's OffchainTunnel only adds co-signing (verified in
-  // the SDK suite). stepSession's own job — parity seat-pick, legal random move, advance-or-stop —
-  // is exercised against the REAL protocol, so the boundary under test is not faked.
-  let state: BombItState = p.initialState(CTX);
-  const advancedBy: ("A" | "B")[] = [];
-  const tunnel = {
-    get state() {
-      return state;
-    },
-    step(move: BombItMove, by: "A" | "B") {
-      state = p.applyMove(state, move, by);
-      advancedBy.push(by);
-    },
-  } as unknown as OffchainTunnel<BombItState, BombItMove>;
-
-  const rng = seededRng(0xb0b17);
-  let steps = 0;
-  while (stepSession(p, tunnel, rng)) steps += 1;
-
-  assert.ok(p.isTerminal(state), "game reaches a terminal state");
-  assert.equal(advancedBy.length, steps, "exactly one tick advanced per step");
-  assert.ok(steps > 0, "at least one tick was played");
+test("a co-signed update verifies after bounded play (settleable mid-game)", () => {
+  const { protocol, tunnel } = freshTunnel();
+  // Bounded window: a long real-time duel co-signs thousands of updates, so we prove the
+  // co-signed state is on-chain-settleable from a slice rather than a full playout.
+  for (let i = 0; i < 50; i++) {
+    if (!stepSession(protocol, tunnel, Math.random)) break;
+  }
+  const u = tunnel.latest;
+  assert.ok(u, "has a co-signed update");
   assert.ok(
-    steps <= Number(BOMB_IT_TICK_CAP),
-    "the tick cap bounds the game length",
+    verifyCoSignedUpdate(
+      u!,
+      { publicKey: tunnel.partyA.publicKey, scheme: tunnel.partyA.scheme },
+      { publicKey: tunnel.partyB.publicKey, scheme: tunnel.partyB.scheme },
+    ),
+    "settleable co-signed state",
   );
-  // Seats strictly alternate by tick parity: A on even ticks, B on odd.
-  assert.deepEqual(advancedBy.slice(0, 4), ["A", "B", "A", "B"]);
-  // The terminal step does no advance: a further call is a no-op false.
-  assert.equal(stepSession(p, tunnel, rng), false);
 });

@@ -29,11 +29,20 @@ import {
 } from "../../backend/controlPlane";
 import {
   closeCooperativeWithRoot,
-  depositStake,
   openAndFundSharedTunnel,
   raiseDisputeUnilateral,
   readCreatedAt,
 } from "../../onchain/tunnelTx";
+import { useSponsoredSignExec } from "../../onchain/useSponsoredSignExec";
+import {
+  openSharedTunnelStaked,
+  depositStakeStaked,
+  type StakeStrategy,
+} from "../../onchain/stakeTunnel";
+import {
+  DOPAMINT_COIN_TYPE,
+  isDopamintConfigured,
+} from "../../onchain/dopamint";
 import { coSignedToSettleRequest } from "../../backend/settleRequest";
 import { type FleetSecret, makeFleetSecret } from "./engine/selfPlay";
 import { type Placement, placementsToBoard } from "./engine/fleet";
@@ -49,8 +58,8 @@ import {
 } from "@/pvp/resume";
 import { makeBattleshipResumeAdapter } from "./battleshipResumeAdapter";
 
-const STAKE_BALANCE = 500n; // locked per seat (MIST)
-const STAKE_SHIFT = 100n; // moves loser → winner on a decisive result
+const STAKE_BALANCE = 1_000_000_000n; // locked per seat: 1 DOPAMINT (9 decimals)
+const STAKE_SHIFT = 200_000_000n; // 0.2 DOPAMINT moves loser → winner on a decisive result
 
 export type PvpStatus =
   | "idle"
@@ -78,7 +87,14 @@ type BattleshipTunnel = DistributedTunnel<BattleshipState, BattleshipMove>;
 interface PvpDeps {
   account: { address: string } | null;
   client: unknown;
+  /** Wallet sender-pays signer — used for the close fallback (close is sponsored via /settle). */
   signExec: (tx: never) => Promise<{ digest: string }>;
+  /** Backend-gas-sponsored signer (ADR-0009) — used for the open/fund tx. */
+  sponsoredSignExec: (tx: never) => Promise<{ digest: string }>;
+  /** Pick a user coin to fund this seat's stake (gas is sponsored, the stake is not). */
+  selectStakeCoin: (minAmount: bigint) => Promise<string>;
+  /** DOPAMINT stake: faucet (invisibly, sponsored) if short, then return a stake coin id. */
+  prepareStake: (minAmount: bigint) => Promise<string>;
 }
 
 interface PvpSnapshot {
@@ -243,9 +259,11 @@ class PvpSession {
   ) {
     const deps = this.deps!;
     const signExec = deps.signExec;
+    const sponsoredSignExec = deps.sponsoredSignExec;
     const reads = deps.client as unknown as Parameters<
       typeof openAndFundSharedTunnel
     >[0]["reads"];
+    const coinType = isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined;
     const proto = new BattleshipProtocol(STAKE_SHIFT);
     const transcript = new Transcript(dt.tunnelId);
     let settling = false;
@@ -268,9 +286,11 @@ class PvpSession {
           waitPeer,
           reads,
           signExec as never,
+          sponsoredSignExec as never,
           dt.tunnelId,
           transcript,
           getControlPlaneClient(),
+          coinType,
         ).then(
           () => {
             this.status = "settled";
@@ -394,6 +414,7 @@ class PvpSession {
     );
     this.secret = secret;
     const signExec = deps.signExec;
+    const sponsoredSignExec = deps.sponsoredSignExec;
     const reads = deps.client as unknown as Parameters<
       typeof openAndFundSharedTunnel
     >[0]["reads"];
@@ -427,27 +448,38 @@ class PvpSession {
         const hello = await waitPeer<{ ephemeralPubkey: string }>("hello");
         const oppPub = fromHex(hello.ephemeralPubkey);
 
-        // 2) fund on-chain: seat A opens + funds its seat + announces; seat B deposits.
+        // 2) fund on-chain. DOPAMINT path (ADR-0010): faucet the stake token invisibly (gas-
+        //    sponsored) and stake DOPAMINT — settler pays gas, so a 0-SUI player plays free; no
+        //    sender-pays fallback (the faucet itself needs the sponsor). SUI path (DOPAMINT env
+        //    unset): sponsored SUI stake with a sender-pays fallback (ADR-0009).
         this.status = "funding";
         this.emit();
+        const stake: StakeStrategy = {
+          sponsoredSignExec: sponsoredSignExec as never,
+          walletSignExec: signExec as never,
+          prepareStake: deps.prepareStake,
+          selectStakeCoin: deps.selectStakeCoin,
+        };
         let tunnelId: string;
         if (match.role === "A") {
-          tunnelId = await openAndFundSharedTunnel({
+          tunnelId = await openSharedTunnelStaked({
             reads,
-            signExec: signExec as never,
             partyA: { address: wallet, publicKey: ephemeral.publicKey },
             partyB: { address: match.opponentWallet, publicKey: oppPub },
             amount: STAKE_BALANCE,
+            label: "battleship",
+            ...stake,
           });
           mp.announceTunnel(match.matchId, tunnelId);
           channel.sendPeer({ t: "open", tunnelId });
         } else {
           const open = await waitPeer<{ tunnelId: string }>("open");
           tunnelId = open.tunnelId;
-          await depositStake({
-            signExec: signExec as never,
+          await depositStakeStaked({
             tunnelId,
             amount: STAKE_BALANCE,
+            label: "battleship",
+            ...stake,
           });
         }
 
@@ -541,6 +573,7 @@ export function useBattleshipPvp(windowId: string): BattleshipPvp {
   const account = useCurrentAccount();
   const client = useSuiClient();
   const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
+  const sponsored = useSponsoredSignExec();
 
   const session = getPvpSession(windowId);
   session.deps = {
@@ -552,6 +585,11 @@ export function useBattleshipPvp(windowId: string): BattleshipPvp {
       const r = await signAndExecute({ transaction: tx });
       return { digest: r.digest };
     }) as never,
+    // Open/fund routes through the backend gas sponsor (ADR-0009): the settler pays gas, the
+    // stake stays the user's own coin. (Close keeps signExec above — it's sponsored via /settle.)
+    sponsoredSignExec: sponsored.signExec as never,
+    selectStakeCoin: sponsored.selectStakeCoin,
+    prepareStake: sponsored.prepareStake,
   };
 
   // Cold-load: once the wallet is known, re-attach to any persisted in-flight match. resume()
@@ -586,9 +624,13 @@ async function settle(
   waitPeer: <T>(t: string) => Promise<T>,
   reads: Parameters<typeof readCreatedAt>[0],
   signExec: Parameters<typeof closeCooperativeWithRoot>[0]["signExec"],
+  // Gas-sponsored signer: the close fallback must use this in DOPAMINT mode, where the player holds
+  // 0 SUI and a wallet-signed close would throw and strand the staked DOPAMINT.
+  sponsoredSignExec: Parameters<typeof closeCooperativeWithRoot>[0]["signExec"],
   tunnelId: string,
   transcript: Transcript,
   cp: ReturnType<typeof getControlPlaneClient>,
+  coinType: string | undefined,
 ): Promise<void> {
   const createdAt = await readCreatedAt(reads, tunnelId);
   const root = transcript.root();
@@ -624,6 +666,11 @@ async function settle(
       "[battleship] backend settle failed; falling back to wallet close:",
       e,
     );
-    await closeCooperativeWithRoot({ signExec, tunnelId, settlement: co });
+    await closeCooperativeWithRoot({
+      signExec: isDopamintConfigured ? sponsoredSignExec : signExec,
+      tunnelId,
+      settlement: co,
+      coinType,
+    });
   }
 }

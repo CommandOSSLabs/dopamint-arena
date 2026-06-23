@@ -8,8 +8,7 @@ import {
   type protocols,
 } from "sui-tunnel-ts";
 import { SuiJsonRpcClient } from "@mysten/sui/jsonRpc";
-import { getControlPlaneClient } from "@/backend/controlPlane";
-import { coSignedToSettleRequest } from "@/backend/settleRequest";
+import { settleViaBackend } from "@/backend/settle";
 import {
   MultiGameTicTacToeProtocol,
   MultiGameCaroProtocol,
@@ -48,6 +47,9 @@ import {
   clearResumeRecord,
 } from "@/pvp/resume";
 import { makeTttResumeAdapter } from "@/games/ticTacToe/app/lib/tttResumeAdapter";
+import { useSponsoredSignExec } from "@/onchain/useSponsoredSignExec";
+import { withSponsorFallback } from "@/onchain/sponsor";
+import { DOPAMINT_COIN_TYPE, isDopamintConfigured } from "@/onchain/dopamint";
 
 export type Variant = "ttt" | "caro";
 
@@ -63,7 +65,9 @@ const MP_URL =
       : "http://127.0.0.1:8080")
   ).replace(/^http/, "ws");
 const STAKE = 1n; // MIST per game; caro's protocol forces 0 regardless
-const BANKROLL = 1000n; // MIST deposited per seat
+const BANKROLL = 1000n; // SUI-fallback MIST deposited per seat
+// DOPAMINT mode (ADR-0010): bankroll deposited per seat (1 DOPAMINT, 9 decimals).
+const DOPAMINT_BANKROLL = 1_000_000_000n;
 // One game per tunnel: the match settles on-chain as soon as the game is decided (the winner
 // submits the close — see finishSettle), then players re-queue for the next game. A higher cap
 // would batch many games into a single end-of-session settle instead.
@@ -149,6 +153,12 @@ export function usePvpTicTacToe(
   const wallet = useCustomWallet();
   const walletRef = useRef(wallet);
   walletRef.current = wallet; // read the latest wallet inside stable callbacks without re-creating them
+  // Backend gas sponsor (ADR-0009/0010): open + deposit route through the settler so a 0-SUI
+  // zkLogin player stakes faucet-minted DOPAMINT and pays no gas. Read inside stable callbacks
+  // via a ref. (The close stays sender-pays as a fallback to the backend /settle route.)
+  const sponsored = useSponsoredSignExec();
+  const sponsoredRef = useRef(sponsored);
+  sponsoredRef.current = sponsored;
   const proto = useMemo(
     () =>
       (variant === "caro"
@@ -230,6 +240,24 @@ export function usePvpTicTacToe(
     [client],
   );
 
+  // Gas-sponsored submit (ADR-0009): the settler wraps the tx in its own SIP-58 gas, the wallet
+  // co-signs, both are submitted — so a 0-SUI player pays nothing. The sponsored signExec returns
+  // only a digest, so (as in the bot flows) we fetch the block separately for objectChanges.
+  const submitSponsored = useCallback(
+    async (tx: any) => {
+      const { digest } = await sponsoredRef.current.signExec(tx);
+      await client.waitForTransaction({ digest });
+      const res = await client.getTransactionBlock({
+        digest,
+        options: { showObjectChanges: true, showEffects: true },
+      });
+      if (res.effects?.status?.status !== "success")
+        throw new Error(res.effects?.status?.error ?? "tx failed");
+      return res;
+    },
+    [client],
+  );
+
   const finishSettle = useCallback(
     async (
       t: core.DistributedTunnel<AnyState, CellMove>,
@@ -271,26 +299,30 @@ export function usePvpTicTacToe(
       const decided = t.state.inner.winner; // 1 = X (A) won, 2 = O (B) won, 3/0 = draw/none
       const submitter: "A" | "B" = decided === 2 ? "B" : "A";
       if (roleRef.current === submitter) {
-        try {
-          const result = await getControlPlaneClient().settle(
-            t.tunnelId,
-            coSignedToSettleRequest(
-              coSigned as any,
-              transcriptRef.current
-                ? transcriptRef.current.toRecord().entries
-                : [],
-            ),
-          );
-          setDigests((d) => ({ ...d, close: result.txDigest }));
-          channel.sendPeer({ t: "closed", digest: result.txDigest });
-        } catch (e) {
-          console.warn(
-            "[settle] Server-side settle failed, falling back to wallet submission:",
-            e,
-          );
-          const res = await submit(buildCloseWithRootTx(t.tunnelId, coSigned));
-          setDigests((d) => ({ ...d, close: res.digest }));
-          channel.sendPeer({ t: "closed", digest: res.digest });
+        const closeDigest = await settleViaBackend({
+          tunnelId: t.tunnelId,
+          settlement: coSigned as any,
+          transcript: transcriptRef.current
+            ? transcriptRef.current.toRecord().entries
+            : [],
+          label: "tictactoe",
+          fallbackClose: async () => {
+            // Close pays in the same coin the tunnel was funded in (DOPAMINT vs SUI). In DOPAMINT
+            // mode the player holds 0 SUI (gas is sponsored), so the close must route through the gas
+            // sponsor too — a wallet-signed close would throw and strand the staked DOPAMINT.
+            const coinType = isDopamintConfigured
+              ? DOPAMINT_COIN_TYPE
+              : undefined;
+            const res = await (isDopamintConfigured ? submitSponsored : submit)(
+              buildCloseWithRootTx(t.tunnelId, coSigned, coinType),
+            );
+            return res.digest;
+          },
+        });
+        // Record the close + signal the opponent on BOTH paths (backend digest or fallback digest).
+        if (closeDigest) {
+          setDigests((d) => ({ ...d, close: closeDigest }));
+          channel.sendPeer({ t: "closed", digest: closeDigest });
         }
       }
       await refreshBalance();
@@ -299,7 +331,7 @@ export function usePvpTicTacToe(
       clearResumeRecord(t.tunnelId);
       setPhase("done");
     },
-    [submit, refreshBalance],
+    [submit, submitSponsored, refreshBalance],
   );
 
   // Wire the per-move loop + resume onto a freshly built/rebuilt tunnel. Shared by the live
@@ -492,6 +524,7 @@ export function usePvpTicTacToe(
       try {
         const w = walletRef.current;
         if (!w.address) throw new Error("wallet disconnected");
+        const selfWallet = w.address; // narrowed (the deferred shareTx closure widens w.address back)
         matchIdRef.current = m.matchId;
         roleRef.current = m.role;
         setRole(m.role);
@@ -532,18 +565,34 @@ export function usePvpTicTacToe(
         // self-asserted in v1); the two are deliberately unrelated keys, so there's no address derivation.
         const oppPubkey = hexToBytes(oppPubHex);
 
+        // DOPAMINT mode (ADR-0010): stake faucet-minted DOPAMINT with gas sponsored — a 0-SUI
+        // player plays free. SUI fallback (env unset): sender-pays SUI stake. The bankroll, coin
+        // type, and the off-chain init balances all follow this choice so deposits reconcile.
+        const dopamintOn = isDopamintConfigured;
+        const coinType = dopamintOn ? DOPAMINT_COIN_TYPE : undefined;
+        const bankroll = dopamintOn ? DOPAMINT_BANKROLL : BANKROLL;
+
         // Roles: A = X (opener), B = O. X opens the tunnel registering partyA = self, partyB = opponent.
         // Party address = the zkLogin wallet (receives funds); party public_key = the ephemeral signer.
+        // The share tx carries no stake (each seat deposits its own), so it's gas-sponsored in
+        // DOPAMINT mode (with a sender-pays fallback), or plain sender-pays in SUI mode.
         let tunnelId: string;
         if (m.role === "A") {
           setPhase("opening");
-          const res = await submit(
+          const shareTx = () =>
             buildCreateAndShareTx(
-              { walletAddress: w.address, publicKey: eph.coreKey.publicKey }, // partyA = X (self)
+              { walletAddress: selfWallet, publicKey: eph.coreKey.publicKey }, // partyA = X (self)
               { walletAddress: m.opponentWallet, publicKey: oppPubkey }, // partyB = O (opponent)
               0n,
-            ),
-          );
+              coinType, // open Tunnel<DOPAMINT> so the seat deposits type-match
+            );
+          const res = dopamintOn
+            ? await withSponsorFallback(
+                () => submitSponsored(shareTx()),
+                () => submit(shareTx()),
+                "tictactoe open",
+              )
+            : await submit(shareTx());
           const id = parseTunnelId(res.objectChanges);
           if (!id) throw new Error("no tunnelId");
           tunnelId = id;
@@ -568,8 +617,29 @@ export function usePvpTicTacToe(
           (fields?.created_at as string | undefined) ?? 0,
         );
 
+        // Each seat funds its own deposit. DOPAMINT: split from a faucet-minted coin via the gas
+        // sponsor (with a sender-pays SUI fallback); SUI fallback: split from the wallet gas coin.
         setPhase("funding");
-        const dep = await submit(buildDepositTx(tunnelId, BANKROLL));
+        const dep = dopamintOn
+          ? await withSponsorFallback(
+              async () =>
+                submitSponsored(
+                  buildDepositTx(tunnelId, bankroll, {
+                    coinType,
+                    stakeCoinId:
+                      await sponsoredRef.current.prepareStake(bankroll),
+                  }),
+                ),
+              async () =>
+                submit(
+                  buildDepositTx(tunnelId, bankroll, {
+                    stakeCoinId:
+                      await sponsoredRef.current.selectStakeCoin(bankroll),
+                  }),
+                ),
+              "tictactoe deposit",
+            )
+          : await submit(buildDepositTx(tunnelId, bankroll));
         setDigests((d) => ({ ...d, deposit: dep.digest }));
         let activated = false;
         for (let i = 0; i < 40; i++) {
@@ -619,7 +689,7 @@ export function usePvpTicTacToe(
             selfParty: m.role,
           },
           channel.transport,
-          { a: BANKROLL, b: BANKROLL },
+          { a: bankroll, b: bankroll },
         );
         transcriptRef.current = new proof.Transcript(tunnelId);
 
@@ -635,7 +705,16 @@ export function usePvpTicTacToe(
         setPhase("error");
       }
     },
-    [client, proto, submit, eph, variant, finishSettle, activateTttSession],
+    [
+      client,
+      proto,
+      submit,
+      submitSponsored,
+      eph,
+      variant,
+      finishSettle,
+      activateTttSession,
+    ],
   );
   onMatchRef.current = onMatch;
 

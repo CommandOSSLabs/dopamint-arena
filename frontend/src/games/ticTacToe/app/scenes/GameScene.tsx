@@ -9,6 +9,7 @@ import type {
   PlayMode,
   GameType,
 } from "@/games/ticTacToe/app/scenes/SetupScene";
+import { isDopamintConfigured } from "@/onchain/dopamint";
 
 // Protocol marks (1 = botX/X, 2 = botO/O) -> Cell UI vocabulary (CELL_SERVER=2 renders "X",
 // CELL_PLAYER=1 renders "O"). Map X->2, O->1 so botX shows as X.
@@ -209,9 +210,12 @@ export function GameScene({
               <div className="font-body-lg text-3xl text-primary mt-1 min-h-[30px] flex items-center justify-center font-bold">
                 {g.score.x}
               </div>
-              <div className="font-label-sm text-[10px] text-outline mt-1">
-                {fmtSui(g.balances.x)} SUI
-              </div>
+              {/* DOPAMINT mode: play is free + auto-funded — hide the SUI gas balance. */}
+              {!isDopamintConfigured && (
+                <div className="font-label-sm text-[10px] text-outline mt-1">
+                  {fmtSui(g.balances.x)} SUI
+                </div>
+              )}
             </div>
             <div className="text-center">
               <button
@@ -234,9 +238,11 @@ export function GameScene({
               <div className="font-body-lg text-3xl text-secondary mt-1 min-h-[30px] flex items-center justify-center font-bold">
                 {g.score.o}
               </div>
-              <div className="font-label-sm text-[10px] text-outline mt-1">
-                {fmtSui(g.balances.o)} SUI
-              </div>
+              {!isDopamintConfigured && (
+                <div className="font-label-sm text-[10px] text-outline mt-1">
+                  {fmtSui(g.balances.o)} SUI
+                </div>
+              )}
             </div>
           </div>
 

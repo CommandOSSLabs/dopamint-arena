@@ -18,6 +18,7 @@ import { SetupScene } from "@/games/ticTacToe/app/scenes/SetupScene";
 import { GameScene } from "@/games/ticTacToe/app/scenes/GameScene";
 import { PvpScene } from "@/games/ticTacToe/app/scenes/PvpScene";
 import { GameCardScale } from "@/games/ticTacToe/app/components/GameCardScale";
+import { isDopamintConfigured } from "@/onchain/dopamint";
 import "./index.css";
 
 type Scene = "login" | "setup" | "game" | "pvp";
@@ -42,9 +43,10 @@ function AppContent() {
   const caroGame = useCaroBotGame(difficulty, boardSize);
   const g = gameType === "caro" ? caroGame : tttGame;
 
+  // DOPAMINT mode (ADR-0010): bots play free (sponsored gas + faucet-minted stake), so they need
+  // no SUI — they're always "funded". SUI fallback still requires a positive gas balance per bot.
   const funded =
-    g.balances.x >= MIN_BOT_BALANCE_MIST &&
-    g.balances.o >= MIN_BOT_BALANCE_MIST;
+    isDopamintConfigured || (g.balances.x > 0n && g.balances.o > 0n);
 
   // Track the actual container element's parent bounds to determine orientation
   useEffect(() => {

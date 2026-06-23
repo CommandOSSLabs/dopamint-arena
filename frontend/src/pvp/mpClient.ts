@@ -125,6 +125,12 @@ export class MpClient {
   readonly #ephemeral: KeyPair;
   readonly #sign: (msg: Uint8Array) => Uint8Array;
   #connected = false;
+  #intentionalClose = false;
+
+  /** Fires when the socket closes UNEXPECTEDLY (relay/connection drop), not on our own
+   *  close(). The relay has no rejoin-by-matchId, so a mid-match drop can't be resumed —
+   *  consumers use this only to surface a clear "connection lost" state instead of a stall. */
+  onClose: (() => void) | null = null;
 
   // Multiplexing (spec decision #6): route inbound relay frames by matchId, and hand each
   // match.found to the next waiting quickMatch (FIFO). This lets ONE socket run MANY concurrent

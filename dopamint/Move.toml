@@ -1,0 +1,8 @@
+[package]
+name = "dopamint"
+edition = "2024"
+
+[dependencies]
+
+[addresses]
+dopamint = "0x0"
