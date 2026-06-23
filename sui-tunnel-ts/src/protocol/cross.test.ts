@@ -163,6 +163,15 @@ test("simultaneous WIN_LANE arrival with equal score is a push, not an A-win", (
   assert.equal(next.balanceA + next.balanceB, next.total);
 });
 
+test("randomMove carries only the acting seat's hop (2-party model)", () => {
+  const p = new CrossProtocol();
+  const s = p.initialState(CTX);
+  const a = p.randomMove(s, "A", mulberry32ForTest(1)) as CrossMove;
+  assert.equal(a.dirB, undefined, "A's update must not carry B's dir");
+  const b = p.randomMove(s, "B", mulberry32ForTest(1)) as CrossMove;
+  assert.equal(b.dirA, undefined, "B's update must not carry A's dir");
+});
+
 // Local deterministic RNG for tests (mirrors the protocol's internal one).
 function mulberry32ForTest(seed: number): () => number {
   let a = seed >>> 0;

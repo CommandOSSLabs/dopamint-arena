@@ -43,13 +43,17 @@ export function stepSession(
   const state = tunnel.state;
   if (protocol.isTerminal(state)) return false;
   const by: Party = state.tick % 2n === 0n ? "A" : "B";
-  const move = protocol.randomMove(state, by, rng);
-  if (!move) return false;
-  // Both chickens advance every tick; when the human owns a seat, override just its direction.
-  if (human) {
-    if (human.seat === "A") move.dirA = human.getDir();
-    else move.dirB = human.getDir();
+  // One co-signed update is one seat's hop (the other implicitly stays), per the 2-party tunnel
+  // model. When the human owns the acting seat this tick its hop comes from the player; otherwise
+  // the bot proposes it. Each chicken therefore hops on its own parity ticks (like bomb-it).
+  let move: CrossMove | null;
+  if (human && human.seat === by) {
+    const dir = human.getDir();
+    move = by === "A" ? { dirA: dir } : { dirB: dir };
+  } else {
+    move = protocol.randomMove(state, by, rng);
   }
+  if (!move) return false;
   tunnel.step(move, by);
   return true;
 }

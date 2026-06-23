@@ -349,8 +349,12 @@ export class CrossProtocol implements Protocol<CrossState, CrossMove> {
     return s.winner !== null || s.tick >= TICK_CAP;
   }
 
-  randomMove(s: CrossState, _by: Party, rng: () => number): CrossMove | null {
+  randomMove(s: CrossState, by: Party, rng: () => number): CrossMove | null {
     if (this.isTerminal(s)) return null;
-    return { dirA: greedyDir(s, 0, rng), dirB: greedyDir(s, 1, rng) };
+    // One co-signed update is one seat's hop (the other implicitly stays), per the 2-party
+    // tunnel model — return only `by`'s move, never both.
+    return by === "A"
+      ? { dirA: greedyDir(s, 0, rng) }
+      : { dirB: greedyDir(s, 1, rng) };
   }
 }
