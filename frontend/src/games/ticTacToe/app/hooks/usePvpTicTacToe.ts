@@ -222,7 +222,7 @@ export function usePvpTicTacToe(
   const [games, setGames] = useState<GameResult[]>([]);
   const [score, setScore] = useState({ x: 0, o: 0, draws: 0 });
 
-  const [auto, setAutoState] = useState(false);
+  const [auto, setAutoState] = useState(true);
   const [balance, setBalance] = useState<bigint>(0n);
 
   // On-chain tx digests from open/deposit steps (create/deposit come from the
@@ -247,7 +247,8 @@ export function usePvpTicTacToe(
     null,
   );
   const roleRef = useRef<"A" | "B" | null>(null);
-  const autoRef = useRef(false);
+  const autoRef = useRef(true);
+  const autoKickedRef = useRef(false);
   const createdAtRef = useRef<bigint>(0n);
   const matchIdRef = useRef<string>("");
   const settledRef = useRef(false);
@@ -379,8 +380,9 @@ export function usePvpTicTacToe(
       stoppingRef.current = false;
       setGames([]);
       setScore({ x: 0, o: 0, draws: 0 });
-      autoRef.current = false;
-      setAutoState(false); // fresh game (incl. rematch) starts in manual mode
+      autoRef.current = true;
+      autoKickedRef.current = false;
+      setAutoState(true); // default on; the kick effect drives the first move once playing
       bufferedSettleRef.current = null;
       bufferedHelloRef.current = null;
       openedResolveRef.current = null;
@@ -776,8 +778,9 @@ export function usePvpTicTacToe(
     setScore({ x: 0, o: 0, draws: 0 });
     settledRef.current = false;
     stoppingRef.current = false;
-    autoRef.current = false;
-    setAutoState(false);
+    autoRef.current = true;
+    autoKickedRef.current = false;
+    setAutoState(true);
     openedResolveRef.current = null;
     settleResolveRef.current = null;
     bufferedSettleRef.current = null;
@@ -793,6 +796,17 @@ export function usePvpTicTacToe(
   }, [bumpEpoch]);
 
   useEffect(() => () => relayRef.current?.close(), []);
+
+  // Kick the first auto move once the match transitions into "playing".
+  // autoKickedRef resets on leave/queue so a rematch gets a fresh kick.
+  // We use snapshot.phase (driven by attachTunnel) as the ready signal.
+  useEffect(() => {
+    if (autoKickedRef.current) return;
+    if (snapshot.phase === "playing" && tunnelRef.current && autoRef.current) {
+      autoKickedRef.current = true;
+      setAuto(true);
+    }
+  }, [snapshot.phase, setAuto]);
 
   // ── View projection ──────────────────────────────────────────────────────────
   //

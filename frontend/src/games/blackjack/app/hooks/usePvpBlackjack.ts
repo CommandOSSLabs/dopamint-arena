@@ -145,7 +145,7 @@ export function usePvpBlackjack(): PvpView {
   const [role, setRole] = useState<"A" | "B" | null>(null);
   const [state, setState] = useState<BlackjackState | null>(null);
   const [rounds, setRounds] = useState<RoundResult[]>([]);
-  const [auto, setAutoState] = useState(false);
+  const [auto, setAutoState] = useState(true);
   const [stake, setStakeState] = useState<bigint>(DEFAULT_STAKE);
   const [walletBalance, setWalletBalance] = useState<bigint>(0n);
   const [digests, setDigests] = useState<{
@@ -161,7 +161,8 @@ export function usePvpBlackjack(): PvpView {
     BlackjackMove
   > | null>(null);
   const roleRef = useRef<"A" | "B" | null>(null);
-  const autoRef = useRef(false);
+  const autoRef = useRef(true);
+  const autoKickedRef = useRef(false);
   const lastBetRef = useRef<number>(DEFAULT_BET); // remembered bet for auto rounds; set on every player bet
   const stakeRef = useRef<bigint>(DEFAULT_STAKE); // chosen buy-in, read inside onMatch without stale closures
   const createdAtRef = useRef<bigint>(0n);
@@ -320,8 +321,9 @@ export function usePvpBlackjack(): PvpView {
       settledRef.current = false;
       stoppingRef.current = false;
       setRounds([]);
-      autoRef.current = false;
-      setAutoState(false); // a fresh game (incl. rematch) starts in manual mode
+      autoRef.current = true;
+      autoKickedRef.current = false;
+      setAutoState(true); // default on; the kick effect drives the first move once playing
       try {
         const connEph = core.generateKeyPair();
         const mp = new MpClient(
@@ -728,8 +730,9 @@ export function usePvpBlackjack(): PvpView {
     setRounds([]);
     settledRef.current = false;
     stoppingRef.current = false;
-    autoRef.current = false;
-    setAutoState(false);
+    autoRef.current = true;
+    autoKickedRef.current = false;
+    setAutoState(true);
     openedResolveRef.current = null;
     settleResolveRef.current = null;
     bufferedSettleRef.current = null;
@@ -738,6 +741,16 @@ export function usePvpBlackjack(): PvpView {
   }, []);
 
   useEffect(() => () => relayRef.current?.close(), []);
+
+  // Kick the first auto move once the match transitions into "playing".
+  // autoKickedRef resets on leave/queue so a rematch gets a fresh kick.
+  useEffect(() => {
+    if (autoKickedRef.current) return;
+    if (phase === "playing" && tunnelRef.current && autoRef.current) {
+      autoKickedRef.current = true;
+      setAuto(true);
+    }
+  }, [phase, setAuto]);
 
   const s = state;
   const isDealer = s
