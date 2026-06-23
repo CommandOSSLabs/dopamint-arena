@@ -1,9 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { core, proof, bytesToHex, hexToBytes } from "sui-tunnel-ts";
-import {
-  getControlPlaneClient,
-  type RegisterSessionResult,
-} from "@/backend/controlPlane";
 import { settleViaBackend } from "@/backend/settle";
 import {
   useCurrentAccount,
@@ -37,6 +33,7 @@ import {
   installResumePersistence,
   evictExpiredRecords,
   readResumeRecord,
+  clearResumeRecord,
 } from "@/pvp/resume";
 import {
   BlackjackBetProtocol,
@@ -159,6 +156,8 @@ export function usePvpBlackjack(): PvpView {
   const [role, setRole] = useState<"A" | "B" | null>(null);
   const [state, setState] = useState<BlackjackState | null>(null);
   const [rounds, setRounds] = useState<RoundResult[]>([]);
+  // Default OFF: PvP is human-vs-human, so you play your own hands; tick Auto to let the bot
+  // play for you.
   const [auto, setAutoState] = useState(false);
   const [stake, setStakeState] = useState<bigint>(DEFAULT_STAKE);
   const [walletBalance, setWalletBalance] = useState<bigint>(0n);
@@ -177,6 +176,7 @@ export function usePvpBlackjack(): PvpView {
   > | null>(null);
   const roleRef = useRef<"A" | "B" | null>(null);
   const autoRef = useRef(false);
+  const autoKickedRef = useRef(false);
   const lastBetRef = useRef<number>(DEFAULT_BET); // remembered bet for auto rounds; set on every player bet
   const stakeRef = useRef<bigint>(DEFAULT_STAKE); // chosen buy-in, read inside onMatch without stale closures
   const createdAtRef = useRef<bigint>(0n);
@@ -198,30 +198,7 @@ export function usePvpBlackjack(): PvpView {
   const helloResolveRef = useRef<((pub: string) => void) | null>(null);
   const bufferedHelloRef = useRef<string | null>(null);
 
-  const sessionRef = useRef<RegisterSessionResult | null>(null);
-  const moveCountRef = useRef(0);
-  const actionsRef = useRef(0);
-  const lastHeartbeatRef = useRef(Date.now());
   const transcriptRef = useRef<proof.Transcript | null>(null);
-
-  const flushHeartbeat = useCallback((tunnelId: string, force: boolean) => {
-    const s = sessionRef.current;
-    if (!s || actionsRef.current === 0) return;
-    const now = Date.now();
-    const windowMs = now - lastHeartbeatRef.current;
-    if (!force && windowMs < 1000) return;
-    const actionsDelta = actionsRef.current;
-    actionsRef.current = 0;
-    lastHeartbeatRef.current = now;
-    getControlPlaneClient()
-      .sendHeartbeat(s.sessionId, s.statsToken, {
-        tunnelId,
-        nonce: String(moveCountRef.current),
-        actionsDelta,
-        windowMs: Math.max(1, windowMs),
-      })
-      .catch((e) => console.error("[blackjack pvp] heartbeat failed:", e));
-  }, []);
 
   const refreshBalance = useCallback(async () => {
     try {
@@ -310,7 +287,6 @@ export function usePvpBlackjack(): PvpView {
       if (settledRef.current) return;
       settledRef.current = true;
       setPhase("settling");
-      flushHeartbeat(t.tunnelId, true);
       const root = transcriptRef.current
         ? transcriptRef.current.root()
         : new Uint8Array(32);
@@ -351,7 +327,9 @@ export function usePvpBlackjack(): PvpView {
             // /settle path above already sponsored the close server-side. In DOPAMINT mode the dealer
             // holds 0 SUI (gas is sponsored), so the close must route through the gas sponsor too — a
             // wallet-signed close would throw and strand the staked DOPAMINT.
-            const coinType = isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined;
+            const coinType = isDopamintConfigured
+              ? DOPAMINT_COIN_TYPE
+              : undefined;
             const res = await (isDopamintConfigured ? submitSponsored : submit)(
               buildCloseWithRootTx(t.tunnelId, coSigned, coinType),
             );
@@ -365,9 +343,13 @@ export function usePvpBlackjack(): PvpView {
         }
       }
       await refreshBalance();
+      // The tunnel is now closed on-chain; its resume record is dead — drop it so it can't be
+      // restored and hijack the next match (resumeActiveTunnels would otherwise glue the next
+      // queue to this peerless tunnel, leaving moves un-ACKed).
+      clearResumeRecord(t.tunnelId);
       setPhase("done");
     },
-    [submit, submitSponsored, refreshBalance, flushHeartbeat],
+    [submit, submitSponsored, refreshBalance],
   );
 
   // Wire the per-round loop + resume onto a freshly built/rebuilt tunnel. Shared by the live
@@ -466,11 +448,8 @@ export function usePvpBlackjack(): PvpView {
         }
       };
       t.onConfirmed = (u) => {
-        moveCountRef.current += 1;
-        actionsRef.current += 1;
         transcriptRef.current?.append(u);
         onAdvance();
-        flushHeartbeat(t.tunnelId, false);
       };
       // Resume wiring: persist on confirm + run the resync handshake on reconnect.
       detachResumeRef.current?.();
@@ -503,7 +482,7 @@ export function usePvpBlackjack(): PvpView {
       setState({ ...t.state });
       onAdvance(); // kick off (deal already dealt round 1 -> player phase)
     },
-    [proto, submit, finishSettle, flushHeartbeat],
+    [proto, submit, finishSettle],
   );
 
   const queue = useCallback(() => {
@@ -518,8 +497,9 @@ export function usePvpBlackjack(): PvpView {
       settledRef.current = false;
       stoppingRef.current = false;
       setRounds([]);
-      autoRef.current = false;
-      setAutoState(false); // a fresh game (incl. rematch) starts in manual mode
+      autoKickedRef.current = false;
+      autoRef.current = false; // default-off: you play your own hands until you tick Auto
+      setAutoState(false);
       bufferedSettleRef.current = null;
       bufferedStakeRef.current = null;
       bufferedHelloRef.current = null;
@@ -752,30 +732,6 @@ export function usePvpBlackjack(): PvpView {
         tunnelRef.current = t;
         transcriptRef.current = new proof.Transcript(tunnelId);
 
-        // Register the (real, on-chain) tunnel for stats tracking. Best-effort.
-        sessionRef.current = null;
-        moveCountRef.current = 0;
-        actionsRef.current = 0;
-        lastHeartbeatRef.current = Date.now();
-        getControlPlaneClient()
-          .registerSession({
-            userAddress: walletAddress,
-            game: "blackjack",
-            tunnels: [
-              {
-                tunnelId,
-                partyA: m.role === "A" ? walletAddress : m.opponentWallet,
-                partyB: m.role === "B" ? walletAddress : m.opponentWallet,
-              },
-            ],
-          })
-          .then((s) => {
-            sessionRef.current = s;
-          })
-          .catch((e) =>
-            console.error("[blackjack pvp] registerSession failed:", e),
-          );
-
         activateSession(mp, channel, t, {
           matchId: m.matchId,
           role: m.role,
@@ -796,7 +752,6 @@ export function usePvpBlackjack(): PvpView {
       sponsored,
       walletAddress,
       finishSettle,
-      flushHeartbeat,
       activateSession,
     ],
   );
@@ -897,9 +852,39 @@ export function usePvpBlackjack(): PvpView {
     [proto],
   );
 
+  // If Auto is enabled when the match becomes playable, kick the resume once (the move loop
+  // otherwise only schedules auto AFTER a confirmed move, so the first move needs this). Auto
+  // defaults OFF now, so this no-ops on entry; it matters if the user ticks Auto pre-play.
+  useEffect(() => {
+    if (autoKickedRef.current) return;
+    if (phase === "playing" && tunnelRef.current && autoRef.current) {
+      autoKickedRef.current = true;
+      setAuto(true);
+    }
+  }, [phase, setAuto]);
+
+  // Auto-settle the moment the table goes terminal — a side can't cover the minimum bet (out of
+  // chips) or the round cap is hit. The inline onAdvance check handles the common path; this
+  // declarative net also covers cases where it was skipped (a stop already in flight, or the
+  // terminal state arriving via a resume rather than a fresh confirmed move). settledRef makes
+  // the call idempotent, so it never double-settles.
+  useEffect(() => {
+    if (phase !== "playing" || stoppingRef.current || settledRef.current)
+      return;
+    const t = tunnelRef.current;
+    const ch = channelRef.current;
+    if (!t || !ch || !proto.isTerminal(t.state)) return;
+    void finishSettle(t, ch, matchIdRef.current);
+  }, [phase, state, proto, finishSettle]);
+
   const leave = useCallback(() => {
     detachResumeRef.current?.();
     detachResumeRef.current = null;
+    // Explicit leave = abandon this match: drop its resume record so it can't hijack the next
+    // PvP entry (resumeActiveTunnels would otherwise restore this now-peerless tunnel and skip
+    // matchmaking). Reconnect-after-reload never calls leave, so legitimate resume still works.
+    const tid = tunnelRef.current?.tunnelId;
+    if (tid) clearResumeRecord(tid);
     mpRef.current?.close();
     mpRef.current = null;
     channelRef.current = null;
@@ -911,6 +896,7 @@ export function usePvpBlackjack(): PvpView {
     setRounds([]);
     settledRef.current = false;
     stoppingRef.current = false;
+    autoKickedRef.current = false;
     autoRef.current = false;
     setAutoState(false);
     openedResolveRef.current = null;
@@ -920,10 +906,62 @@ export function usePvpBlackjack(): PvpView {
     bufferedStakeRef.current = null;
     helloResolveRef.current = null;
     bufferedHelloRef.current = null;
-    sessionRef.current = null;
-    moveCountRef.current = 0;
-    actionsRef.current = 0;
   }, []);
+
+  // Find a new match after a settle, reusing the SAME socket (the relay runs many matches per
+  // connection): release the settled match and re-quickMatch in place — keeping Auto on so the
+  // next match auto-plays (the chosen buy-in in stakeRef carries over). Falls back to a full
+  // queue() if the socket is gone.
+  const requeue = useCallback(() => {
+    const mp = mpRef.current;
+    if (!mp) {
+      queue();
+      return;
+    }
+    detachResumeRef.current?.();
+    detachResumeRef.current = null;
+    const tid = tunnelRef.current?.tunnelId;
+    if (tid) clearResumeRecord(tid); // closed tunnel: never restore it
+    if (matchIdRef.current) mp.releaseMatch(matchIdRef.current);
+    channelRef.current = null;
+    tunnelRef.current = null;
+    setState(null);
+    setRole(null);
+    setDigests({});
+    setRounds([]);
+    settledRef.current = false;
+    stoppingRef.current = false;
+    autoKickedRef.current = false;
+    openedResolveRef.current = null;
+    settleResolveRef.current = null;
+    bufferedSettleRef.current = null;
+    stakeResolveRef.current = null;
+    bufferedStakeRef.current = null;
+    helloResolveRef.current = null;
+    bufferedHelloRef.current = null;
+    setError(null);
+    // Keep Auto + the open socket; just join the queue again.
+    setPhase("queuing");
+    void (async () => {
+      try {
+        const m = await mp.quickMatch("blackjack");
+        await onMatchRef.current?.(mp, m);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+        setPhase("error");
+      }
+    })();
+  }, [queue]);
+
+  // After a match settles ("done"), auto-find the next match when Auto is on. A short pause lets
+  // the result show before re-queuing.
+  useEffect(() => {
+    if (phase !== "done" || !autoRef.current) return;
+    const id = setTimeout(() => {
+      if (autoRef.current) requeue();
+    }, NEXT_MS);
+    return () => clearTimeout(id);
+  }, [phase, requeue]);
 
   useEffect(
     () => () => {

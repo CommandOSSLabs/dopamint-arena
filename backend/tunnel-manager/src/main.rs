@@ -86,6 +86,8 @@ async fn main() -> anyhow::Result<()> {
     });
     stats::spawn_stats_broadcaster(state.clone());
     spawn_action_flusher(state.clone());
+    // Poll-index on-chain tunnel events (Created/Activated/Closed) into recent_events so the
+    // live feed reflects real settlements; without this the stats SSE never emits any.
     sui::spawn_event_indexer(state.clone());
 
     // Clone before `state` is consumed by `.with_state` so we can flush after shutdown.

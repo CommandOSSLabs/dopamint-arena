@@ -267,10 +267,10 @@ export function GridLayout({
             axis === "y"
               ? origin.w
               : clamp(
-                origin.w + Math.round(dxPx / unit),
-                minW,
-                activeCols - origin.x,
-              );
+                  origin.w + Math.round(dxPx / unit),
+                  minW,
+                  activeCols - origin.x,
+                );
           const tH =
             axis === "x"
               ? origin.h
@@ -293,17 +293,17 @@ export function GridLayout({
             axis === "y"
               ? origin.w * unit - gap
               : clamp(
-                origin.w * unit - gap + dxPx,
-                minW * unit - gap,
-                (activeCols - origin.x) * unit - gap,
-              );
+                  origin.w * unit - gap + dxPx,
+                  minW * unit - gap,
+                  (activeCols - origin.x) * unit - gap,
+                );
           const liveH =
             axis === "x"
               ? origin.h * rowHeight - gap
               : Math.max(
-                minH * rowHeight - gap,
-                origin.h * rowHeight - gap + dyPx,
-              );
+                  minH * rowHeight - gap,
+                  origin.h * rowHeight - gap + dyPx,
+                );
           setLive({ id, mode, dx: 0, dy: 0, w: liveW, h: liveH });
         }
       };
@@ -337,19 +337,19 @@ export function GridLayout({
         mergeDetached(
           resize
             ? resizeItem(
-              dockedOnly(layoutRef.current),
-              id,
-              it.w + dx,
-              it.h + dy,
-              activeCols,
-            )
+                dockedOnly(layoutRef.current),
+                id,
+                it.w + dx,
+                it.h + dy,
+                activeCols,
+              )
             : moveItem(
-              dockedOnly(layoutRef.current),
-              id,
-              it.x + dx,
-              it.y + dy,
-              activeCols,
-            ),
+                dockedOnly(layoutRef.current),
+                id,
+                it.x + dx,
+                it.y + dy,
+                activeCols,
+              ),
         );
 
       let next: GridLayoutValue | null = null;

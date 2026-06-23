@@ -25,7 +25,12 @@ test("maps a settled event to an honest on-chain TxnRow", () => {
 });
 
 test("opened event has no payout amount", () => {
-  const opened: TunnelEvent = { ...settled, kind: "opened", partyABalance: null, partyBBalance: null };
+  const opened: TunnelEvent = {
+    ...settled,
+    kind: "opened",
+    partyABalance: null,
+    partyBBalance: null,
+  };
   const [row] = recentEventsToTxnRows([opened]);
   assert.equal(row.type, "Opened");
   assert.equal(row.amount, "—");

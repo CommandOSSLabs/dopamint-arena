@@ -2,7 +2,11 @@
 // (routed through the programmatic wallet) and the Sui client, then runs the engine. Renders a
 // status line (data-agent-status) the Playwright proof and any showcase view can read.
 import { useEffect, useRef, useState } from "react";
-import { useCurrentAccount, useSignAndExecuteTransaction, useSuiClient } from "@mysten/dapp-kit";
+import {
+  useCurrentAccount,
+  useSignAndExecuteTransaction,
+  useSuiClient,
+} from "@mysten/dapp-kit";
 import { parseAgentConfig } from "./agentConfig";
 import { runAgent } from "./agentEngine";
 import type { SuiReads } from "../onchain/tunnelTx";
@@ -17,7 +21,9 @@ export function AgentRunner() {
   useEffect(() => {
     if (!account || started.current) return;
     started.current = true;
-    const signExec = async (tx: Parameters<typeof mutateAsync>[0]["transaction"]) => {
+    const signExec = async (
+      tx: Parameters<typeof mutateAsync>[0]["transaction"],
+    ) => {
       const r = await mutateAsync({ transaction: tx });
       return { digest: r.digest };
     };

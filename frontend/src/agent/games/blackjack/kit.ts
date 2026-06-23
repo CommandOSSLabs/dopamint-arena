@@ -28,8 +28,11 @@ class BlackjackBot implements GameBot<BetBlackjackState, BetBlackjackMove> {
     if (actorFor(state) !== this.seat) return null;
 
     if (state.phase === "round_over") {
-      const cap = state.balanceA < state.balanceB ? state.balanceA : state.balanceB;
-      const options = BET_OPTIONS.filter((o) => BigInt(o) >= MIN_BET && BigInt(o) <= cap);
+      const cap =
+        state.balanceA < state.balanceB ? state.balanceA : state.balanceB;
+      const options = BET_OPTIONS.filter(
+        (o) => BigInt(o) >= MIN_BET && BigInt(o) <= cap,
+      );
       const amount = options.length > 0 ? options[0] : Number(MIN_BET);
       return fixedBetMove(amount, state);
     }
@@ -56,14 +59,17 @@ class BlackjackBot implements GameBot<BetBlackjackState, BetBlackjackMove> {
   }
 }
 
-export function createBlackjackKit(stake: bigint): GameKit<BetBlackjackState, BetBlackjackMove> {
+export function createBlackjackKit(
+  stake: bigint,
+): GameKit<BetBlackjackState, BetBlackjackMove> {
   const protocol = new BlackjackBetProtocol();
 
   return {
     id: "blackjack",
     protocol,
     stateHash: (state) => defaultStateHash(protocol, state),
-    createBot: (seat: Party, _ctx: BotContext) => new BlackjackBot(seat, protocol),
+    createBot: (seat: Party, _ctx: BotContext) =>
+      new BlackjackBot(seat, protocol),
     defaultStake: stake,
   };
 }

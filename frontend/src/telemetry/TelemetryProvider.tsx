@@ -45,22 +45,33 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
   // the placeholder is only used as the offline-demo fallback (see the snapshot memo below).
   const [txns, setTxns] = useState<TxnRow[]>([]);
   const [localTxns, setLocalTxns] = useState<TxnRow[]>([]);
-  const [tpsSeries, setTpsSeries] = useState<number[]>(PLACEHOLDER_SNAPSHOT.tpsSeries);
-  const [botsRunning, setBotsRunning] = useState<number>(PLACEHOLDER_SNAPSHOT.botsRunning);
+  const [tpsSeries, setTpsSeries] = useState<number[]>(
+    PLACEHOLDER_SNAPSHOT.tpsSeries,
+  );
+  const [botsRunning, setBotsRunning] = useState<number>(
+    PLACEHOLDER_SNAPSHOT.botsRunning,
+  );
   const [hasActivity, setHasActivity] = useState(false);
   const { snapshot: backend, status } = useBackendStats();
 
   const counters = useRef<Counters>(newCounters());
   const startMs = useRef<number>(Date.now());
+  // Monotonic feed-row id owned HERE, not by callers: a game's own counter resets per tunnel,
+  // and the feeds are shared across games — caller ids collide and React drops rows by key.
+  // Assigning the id on push keeps every row key globally unique. Computed outside the state
+  // updater (which must stay pure / may run twice under StrictMode).
+  const txnId = useRef(0);
 
   const pushTxn = useCallback((row: TxnRow) => {
     setHasActivity(true);
-    setTxns((cur) => [row, ...cur].slice(0, MAX_TXNS));
+    const id = txnId.current++;
+    setTxns((cur) => [{ ...row, id }, ...cur].slice(0, MAX_TXNS));
   }, []);
 
   const pushLocalTxn = useCallback((row: TxnRow) => {
     setHasActivity(true);
-    setLocalTxns((cur) => [row, ...cur].slice(0, MAX_TXNS));
+    const id = txnId.current++;
+    setLocalTxns((cur) => [{ ...row, id }, ...cur].slice(0, MAX_TXNS));
   }, []);
 
   const bumpCounters = useCallback((delta: Partial<Counters>) => {
@@ -109,18 +120,27 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
     if (status === "offline" && !hasActivity) return PLACEHOLDER_SNAPSHOT;
 
     const elapsed = Math.max(1, Date.now() - startMs.current);
-    const localRate = rateReport(hasActivity ? counters.current : newCounters(), elapsed);
+    const localRate = rateReport(
+      hasActivity ? counters.current : newCounters(),
+      elapsed,
+    );
     // Headline updates/sec: the backend's authoritative rate when connected, else the local
     // lifetime average as an offline fallback (displayUpdatesPerSec picks).
     return {
-      rate: { ...localRate, updatesPerSec: displayUpdatesPerSec(backend, localRate.updatesPerSec) },
+      rate: {
+        ...localRate,
+        updatesPerSec: displayUpdatesPerSec(backend, localRate.updatesPerSec),
+      },
       txns: liveOnchainTxns(backend, hasActivity ? txns : []),
       localTxns: hasActivity ? localTxns : [],
       deposits: PLACEHOLDER_SNAPSHOT.deposits,
       tpsSeries,
       botsRunning,
       totalBalance: PLACEHOLDER_SNAPSHOT.totalBalance,
-      successRate: localRate.errors === 0 ? 100 : (localRate.updates / (localRate.updates + localRate.errors)) * 100,
+      successRate:
+        localRate.errors === 0
+          ? 100
+          : (localRate.updates / (localRate.updates + localRate.errors)) * 100,
     };
   }, [hasActivity, txns, localTxns, tpsSeries, botsRunning, backend, status]);
 
@@ -135,11 +155,16 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
     [snapshot, report],
   );
 
-  return <TelemetryContext.Provider value={value}>{children}</TelemetryContext.Provider>;
+  return (
+    <TelemetryContext.Provider value={value}>
+      {children}
+    </TelemetryContext.Provider>
+  );
 }
 
 export function useTelemetry(): TelemetryContextValue {
   const ctx = useContext(TelemetryContext);
-  if (!ctx) throw new Error("useTelemetry must be used within a TelemetryProvider");
+  if (!ctx)
+    throw new Error("useTelemetry must be used within a TelemetryProvider");
   return ctx;
 }

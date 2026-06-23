@@ -339,13 +339,21 @@ export class MpClient {
   channel(matchId: string): PvpChannel {
     this.#activeMatches.add(matchId);
     let engineOnFrame: ((bytes: Uint8Array) => void) | null = null;
+    // Frames that arrive before the engine wires onFrame (the tunnel is constructed only after
+    // on-chain activation, which the peer may finish first — slower with sponsored DOPAMINT
+    // funding). Without buffering, the opponent's first MOVE is dropped and never ACKed, leaving
+    // the proposer stuck on "a proposal is already awaiting ACK". Buffer, then flush on wire.
+    const frameBuffer: Uint8Array[] = [];
     const peerCbs = new Set<
       (msg: Exclude<PeerMessage, { t: "frame" }>) => void
     >();
     this.#relayHandlers.set(matchId, (payload) => {
       const o = JSON.parse(payload) as PeerMessage;
-      if (o.t === "frame") engineOnFrame?.(te.encode(o.data));
-      else peerCbs.forEach((cb) => cb(o));
+      if (o.t === "frame") {
+        const bytes = te.encode(o.data);
+        if (engineOnFrame) engineOnFrame(bytes);
+        else frameBuffer.push(bytes);
+      } else peerCbs.forEach((cb) => cb(o));
     });
     const relaySend = (obj: PeerMessage) =>
       this.#send({ type: "relay", matchId, payload: JSON.stringify(obj) });
@@ -361,6 +369,11 @@ export class MpClient {
         },
         onFrame: (cb) => {
           engineOnFrame = cb;
+          // Deliver any frames that arrived before the engine was ready (activation race).
+          if (frameBuffer.length) {
+            const pending = frameBuffer.splice(0);
+            for (const b of pending) cb(b);
+          }
         },
       },
       sendPeer: (msg) => relaySend(msg),

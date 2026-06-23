@@ -180,3 +180,6 @@ temp/
 # Sui Move build artifact — resolved fresh per build; dev does not commit it
 Move.lock
 sui-tunnel-ts/pnpm-workspace.yaml
+
+# Subagent-driven-development scratch (ledger, task briefs, reports, review diffs)
+.superpowers/

@@ -309,6 +309,7 @@ function AddGameCommand({
             <CommandItem
               key={g.id}
               value={g.name}
+              data-testid={`launch-${g.id}`}
               onSelect={() => {
                 onAdd(g.id);
                 onOpenChange(false);
@@ -513,6 +514,7 @@ function FloorControls({
             size="icon"
             onClick={onOpenAdd}
             aria-label="Add game"
+            data-testid="add-game"
             className="size-12 shadow-lg [&_svg]:size-5"
           >
             <Plus />

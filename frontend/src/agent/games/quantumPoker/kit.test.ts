@@ -32,6 +32,9 @@ describe("quantum poker kit", () => {
 
     assert.ok(kit.protocol.isTerminal(result.finalState));
     const balances = kit.protocol.balances(result.finalState);
-    assert.strictEqual(balances.a + balances.b, ctx.initialBalances.a + ctx.initialBalances.b);
+    assert.strictEqual(
+      balances.a + balances.b,
+      ctx.initialBalances.a + ctx.initialBalances.b,
+    );
   });
 });

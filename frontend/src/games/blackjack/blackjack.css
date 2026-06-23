@@ -371,3 +371,38 @@
     opacity: 0;
   }
 }
+
+.chip-deal-reverse {
+  animation: chipFromDealer 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.2) forwards;
+}
+
+.chip-lose-from-bottom {
+  animation: chipFromPlayerToDealer 0.9s cubic-bezier(0.25, 1, 0.5, 1) forwards;
+}
+
+@keyframes chipFromPlayerToDealer {
+  0% {
+    top: 80%;
+    left: 50%;
+    transform: translate(-50%, -50%) scale(0.6) rotate(-45deg);
+    opacity: 0;
+  }
+  40% {
+    top: 46%;
+    left: 52%;
+    transform: translate(-50%, -50%) scale(1) rotate(-15deg);
+    opacity: 1;
+  }
+  45% {
+    top: 46%;
+    left: 52%;
+    transform: translate(-50%, -50%) scale(1) rotate(-15deg);
+    opacity: 1;
+  }
+  100% {
+    top: 15%;
+    left: 50%;
+    transform: translate(-50%, -50%) scale(0.6) rotate(-60deg);
+    opacity: 0;
+  }
+}

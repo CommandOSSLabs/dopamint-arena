@@ -1,4 +1,3 @@
-// frontend/src/games/ticTacToe/packages/client/src/lib/pvpOnchain.ts
 import { Transaction } from "@mysten/sui/transactions";
 import { core, onchain } from "sui-tunnel-ts";
 

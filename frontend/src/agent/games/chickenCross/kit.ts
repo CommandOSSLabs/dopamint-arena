@@ -39,13 +39,16 @@ class ChickenCrossBot implements GameBot<CrossState, CrossMove> {
   }
 }
 
-export function createChickenCrossKit(stake: bigint): GameKit<CrossState, CrossMove> {
+export function createChickenCrossKit(
+  stake: bigint,
+): GameKit<CrossState, CrossMove> {
   const protocol = new CrossProtocol();
   return {
     id: "chicken-cross",
     protocol,
     stateHash: (state) => defaultStateHash(protocol, state),
-    createBot: (seat: Party, ctx: BotContext) => new ChickenCrossBot(seat, protocol, ctx),
+    createBot: (seat: Party, ctx: BotContext) =>
+      new ChickenCrossBot(seat, protocol, ctx),
     defaultStake: stake,
   };
 }

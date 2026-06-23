@@ -57,7 +57,9 @@ export function driveToTerminal<S, M>(
     }
 
     if (!progressThisRound) {
-      throw new Error(`No progress in ${kit.id} at round ${round}; game is not terminal.`);
+      throw new Error(
+        `No progress in ${kit.id} at round ${round}; game is not terminal.`,
+      );
     }
   }
 

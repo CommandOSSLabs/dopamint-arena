@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useGameNavigate } from "@/games/blackjack/app/useGameRouter";
+import { useGameScale } from "@/games/blackjack/app/components/app/ScaledWrapper";
 import { ConnectButton, useCurrentAccount } from "@mysten/dapp-kit";
 import { CardDisplay } from "@/games/blackjack/app/components/app/CardDisplay";
 import { usePvpBlackjack } from "@/games/blackjack/app/hooks/usePvpBlackjack";
@@ -103,6 +104,7 @@ function statusText(g: ReturnType<typeof usePvpBlackjack>): string {
 export default function PvpBlackjack() {
   const g = usePvpBlackjack();
   const navigate = useGameNavigate();
+  const { isPortrait } = useGameScale();
   const account = useCurrentAccount();
   useEffect(() => {
     document.title = "Blackjack — PvP";
@@ -118,6 +120,23 @@ export default function PvpBlackjack() {
   const myBal = g.myBalance;
   const oppBal = g.oppBalance;
   const finalResult = myBal > oppBal ? "win" : myBal < oppBal ? "lose" : "push";
+
+  // Perspective-based rendering (always show "self" at the bottom and "opponent" at the top)
+  const selfTitle = g.isDealer ? "Dealer (you)" : "Player (you)";
+  const selfLabel = g.isDealer ? "Dealer" : "Player";
+  const selfCards = g.isDealer ? g.dealerHand : g.playerHand;
+  const selfCardSeed = g.isDealer ? g.round * 2 + 1 : g.round * 2;
+  const selfSum = g.isDealer ? g.dealerSum : g.playerSum;
+  const selfBalance = g.isDealer ? g.balanceDealer : g.balancePlayer;
+  const selfIsWinning = finalResult === "win" && g.phase === "done";
+
+  const oppTitle = g.isDealer ? "Player" : "Dealer";
+  const oppLabel = g.isDealer ? "Player" : "Dealer";
+  const oppCards = g.isDealer ? g.playerHand : g.dealerHand;
+  const oppCardSeed = g.isDealer ? g.round * 2 : g.round * 2 + 1;
+  const oppSum = g.isDealer ? g.playerSum : g.dealerSum;
+  const oppBalance = g.isDealer ? g.balancePlayer : g.balanceDealer;
+  const oppIsWinning = finalResult === "lose" && g.phase === "done";
 
   // Bet/payout chip animation, driven off the player's (party A) seat — matching the fixed
   // player-bottom / dealer-top layout (same felt motion as the bot-vs-bot self-play table).
@@ -135,7 +154,7 @@ export default function PvpBlackjack() {
       prevRoundRef.current = -1;
       return;
     }
-    const balance = Number(g.balancePlayer);
+    const balance = Number(g.myBalance);
     if (prevRoundRef.current === -1) {
       if (g.gamePhase === "player") setAnimState("deal");
     } else {
@@ -154,7 +173,7 @@ export default function PvpBlackjack() {
   }, [
     g.round,
     g.gamePhase,
-    g.balancePlayer,
+    g.myBalance,
     g.playerHand.length,
     g.dealerHand.length,
   ]);
@@ -170,10 +189,7 @@ export default function PvpBlackjack() {
   return (
     <div className="h-full w-full flex flex-col relative text-white overflow-hidden select-none bg-zinc-950">
       {/* Casino felt (same background as the bot-vs-bot table) */}
-      <div
-        className="flex-1 w-full relative bg-cover bg-center"
-        style={{ backgroundImage: "url('/dealer-desk-plain-rotated.png')" }}
-      >
+      <div className="flex-1 w-full relative casino-felt">
         <button
           onClick={() => {
             g.leave();
@@ -210,8 +226,8 @@ export default function PvpBlackjack() {
         )}
 
         {/* Rounds log (top-right) */}
-        {g.rounds.length > 0 && (
-          <div className="absolute top-16 right-3 md:top-4 md:right-4 z-20 w-44 md:w-52 flex flex-col bg-black/70 backdrop-blur-sm border border-amber-950 rounded-lg shadow-lg overflow-hidden">
+        {!isPortrait && g.rounds.length > 0 && (
+          <div className="hidden md:flex absolute top-16 right-3 md:top-4 md:right-4 z-20 w-44 md:w-52 flex-col bg-black/70 backdrop-blur-sm border border-amber-950 rounded-lg shadow-lg overflow-hidden">
             <div className="px-3 py-1.5 text-[10px] font-extrabold uppercase tracking-widest text-[#d4af37] font-serif border-b border-amber-950/70 flex justify-between">
               <span>Rounds</span>
               <span className="text-zinc-400">
@@ -260,7 +276,7 @@ export default function PvpBlackjack() {
                 {animState === "deal" && (
                   <img
                     src={dealChip}
-                    className="animated-chip chip-deal"
+                    className={`animated-chip ${g.isDealer ? "chip-deal-reverse" : "chip-deal"}`}
                     alt="bet chip"
                   />
                 )}
@@ -271,47 +287,54 @@ export default function PvpBlackjack() {
                       className="animated-chip chip-win-collect-1"
                       alt="bet chip"
                     />
-                    <img
-                      src={dealChip}
-                      className="animated-chip chip-win-collect-2"
-                      alt="bet chip"
-                    />
+                    {!g.isDealer && (
+                      <img
+                        src={dealChip}
+                        className="animated-chip chip-win-collect-2"
+                        alt="bet chip"
+                      />
+                    )}
                   </>
                 )}
                 {animState === "lose" && (
-                  <img
-                    src={dealChip}
-                    className="animated-chip chip-lose"
-                    alt="bet chip"
-                  />
+                  <>
+                    <img
+                      src={dealChip}
+                      className="animated-chip chip-lose"
+                      alt="bet chip"
+                    />
+                    {g.isDealer && (
+                      <img
+                        src={dealChip}
+                        className="animated-chip chip-lose-from-bottom"
+                        alt="bet chip"
+                      />
+                    )}
+                  </>
                 )}
                 {animState === "push" && (
                   <img
                     src={dealChip}
-                    className="animated-chip chip-push"
+                    className={`animated-chip ${g.isDealer ? "chip-lose" : "chip-push"}`}
                     alt="bet chip"
                   />
                 )}
               </div>
             )}
 
-            {/* Dealer hand (top) + chip stack */}
+            {/* Opponent hand (top) + chip stack */}
             <div className="absolute top-[18%] md:top-[15%] left-1/2 -translate-x-1/2 z-20 w-full max-w-xs flex flex-col items-center">
               <div className="absolute -left-10 md:-left-16 top-[40px] flex flex-col items-center">
                 <span className="text-[7px] text-emerald-200/50 uppercase tracking-widest mb-1 font-bold">
-                  Dealer
+                  {oppLabel}
                 </span>
-                <ChipStack balance={g.balanceDealer} />
+                <ChipStack balance={oppBalance} />
               </div>
               <CardDisplay
-                title={`Dealer${g.isDealer ? " (you)" : ""}`}
-                cards={handToCardIndices(g.dealerHand, g.round * 2 + 1)}
-                sum={g.dealerSum}
-                isWinning={
-                  (g.isDealer
-                    ? finalResult === "win"
-                    : finalResult === "lose") && g.phase === "done"
-                }
+                title={oppTitle}
+                cards={handToCardIndices(oppCards, oppCardSeed)}
+                sum={oppSum}
+                isWinning={oppIsWinning}
               />
             </div>
 
@@ -334,24 +357,20 @@ export default function PvpBlackjack() {
               )}
             </div>
 
-            {/* Player hand (bottom) + chip stack */}
-            <div className="absolute top-[68%] left-1/2 -translate-x-1/2 z-20 w-full max-w-xs flex flex-col items-center">
+            {/* Self hand (bottom) + chip stack */}
+            <div className="absolute top-[68%] md:top-[60%] left-1/2 -translate-x-1/2 z-20 w-full max-w-xs flex flex-col items-center">
               <div className="absolute -left-10 md:-left-16 top-[40px] flex flex-col items-center">
                 <span className="text-[7px] text-emerald-200/50 uppercase tracking-widest mb-1 font-bold">
-                  Player
+                  {selfLabel}
                 </span>
-                <ChipStack balance={g.balancePlayer} />
+                <ChipStack balance={selfBalance} />
               </div>
               <CardDisplay
-                title={`Player${g.isDealer ? "" : " (you)"}`}
-                cards={handToCardIndices(g.playerHand, g.round * 2)}
-                sum={g.playerSum}
+                title={selfTitle}
+                cards={handToCardIndices(selfCards, selfCardSeed)}
+                sum={selfSum}
                 isPlayer
-                isWinning={
-                  (g.isDealer
-                    ? finalResult === "lose"
-                    : finalResult === "win") && g.phase === "done"
-                }
+                isWinning={selfIsWinning}
               />
             </div>
           </>
@@ -497,9 +516,17 @@ export default function PvpBlackjack() {
 
       {/* Bottom HUD: balances + controls + on-chain links */}
       {playing && (
-        <div className="w-full bg-zinc-950/95 backdrop-blur-md border-t border-zinc-800 z-30 px-4 md:px-8 py-3 flex flex-col md:flex-row items-center justify-between gap-3">
-          <div className="flex items-center gap-5 text-xs">
-            {/* In-game chip balances (bet units, player-chosen each round) — not the SUI wallet balance. */}
+        <div
+          className={`w-full bg-zinc-950/95 backdrop-blur-md border-t border-zinc-800 z-30 px-4 md:px-8 py-2 md:py-3 flex items-center justify-between gap-3 flex-shrink-0 ${
+            isPortrait ? "flex-col h-[110px]" : "flex-row h-[64px]"
+          }`}
+        >
+          {/* Left / Top: Balances */}
+          <div
+            className={`flex items-center text-xs ${
+              isPortrait ? "gap-5 justify-center" : "flex-1 gap-5 justify-start"
+            }`}
+          >
             <span>
               Player{" "}
               <span className="font-mono text-emerald-300">
@@ -522,7 +549,12 @@ export default function PvpBlackjack() {
             )}
           </div>
 
-          <div className="flex flex-wrap items-center gap-2 justify-center">
+          {/* Center: Controls */}
+          <div
+            className={`flex items-center gap-2 justify-center ${
+              isPortrait ? "flex-wrap" : "flex-shrink-0"
+            }`}
+          >
             {g.phase === "playing" && g.myTurn && (
               <>
                 <button
@@ -584,23 +616,41 @@ export default function PvpBlackjack() {
                 Rematch
               </button>
             )}
-            {/* Auto governs the player only (hit/stand + re-bet); the dealer always draws deterministically. */}
-            {!g.isDealer && (
-              <label className="flex items-center gap-1.5 text-xs text-zinc-300 ml-1">
-                <input
-                  type="checkbox"
-                  checked={g.auto}
-                  onChange={(e) => g.setAuto(e.target.checked)}
-                />
-                Auto
-              </label>
-            )}
           </div>
 
-          <div className="flex items-center gap-3">
-            <DigestLink label="open" digest={g.digests.create} />
-            <DigestLink label="deposit" digest={g.digests.deposit} />
-            <DigestLink label="close" digest={g.digests.close} />
+          {/* Right / Bottom: Auto toggle and Digest Links */}
+          <div
+            className={`flex items-center ${
+              isPortrait ? "justify-center gap-4" : "flex-1 justify-end gap-4"
+            }`}
+          >
+            {/* Auto governs the player only (hit/stand + re-bet); the dealer always draws deterministically. */}
+            <button
+              onClick={() => g.setAuto(!g.auto)}
+              className={`flex items-center gap-2 border-2 px-3 py-1.5 rounded-xl text-xs font-black tracking-wider uppercase transition-all hover:scale-105 active:scale-95 cursor-pointer ${
+                g.auto
+                  ? "border-emerald-500 text-white bg-emerald-950/45 hover:bg-emerald-900/40"
+                  : "border-zinc-700 text-zinc-400 bg-zinc-900/60 hover:bg-zinc-800/60"
+              }`}
+            >
+              <span
+                className={`grid h-3.5 w-3.5 place-items-center rounded border transition-colors ${
+                  g.auto
+                    ? "border-emerald-400 bg-emerald-500 text-zinc-950"
+                    : "border-zinc-600 bg-zinc-800"
+                }`}
+              >
+                {g.auto ? "✓" : ""}
+              </span>
+              Auto
+            </button>
+            {!isPortrait && (
+              <div className="flex items-center gap-3">
+                <DigestLink label="open" digest={g.digests.create} />
+                <DigestLink label="deposit" digest={g.digests.deposit} />
+                <DigestLink label="close" digest={g.digests.close} />
+              </div>
+            )}
           </div>
         </div>
       )}

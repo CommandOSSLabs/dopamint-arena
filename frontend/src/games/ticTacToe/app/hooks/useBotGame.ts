@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { core, proof, protocols, bytesToHex } from "sui-tunnel-ts";
 import type { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
-import { getControlPlaneClient, type RegisterSessionResult } from "@/backend/controlPlane";
+import {
+  getControlPlaneClient,
+  type RegisterSessionResult,
+} from "@/backend/controlPlane";
+import { useTelemetry } from "@/telemetry/TelemetryProvider";
 import { settleViaBackend } from "@/backend/settle";
 import type { Transaction } from "@mysten/sui/transactions";
 import {
@@ -15,7 +19,6 @@ import {
 import {
   buildCreateAndFundTx,
   buildSettleWithRootTx,
-  buildUpdateStateTx,
   parseTunnelId,
 } from "@/games/ticTacToe/app/lib/tunnel";
 import {
@@ -94,19 +97,28 @@ export interface BotGameView {
   score: BotScore;
   /** Settled tunnels this session, newest first (one per on-chain close). */
   tunnels: TunnelRecord[];
+  /** When true both sides auto-play (watch); when false you play X and the bot plays O. */
   auto: boolean;
+  /** Toggle auto-play. Off hands X's turn to you; the bot keeps playing O automatically. */
+  setAuto: (on: boolean) => void;
+  /** True when auto is off and it's your turn (X) to place a mark. */
+  myTurn: boolean;
+  /** Place your (X) mark at this cell — manual mode only, on your turn, on an empty cell. */
+  playCell: (cell: number) => void;
   rebalancing: boolean;
   /** Games to play within one tunnel before the single settle. */
   maxGames: number;
   /** 1-based index of the game currently being played in this tunnel. */
   currentGame: number;
+  balancesLoaded: boolean;
   setMaxGames: (n: number) => void;
   fund: () => void;
   rebalance: () => void;
   refresh: () => Promise<{ x: bigint; o: bigint } | null>;
   resetScore: () => void;
   newGame: () => void;
-  startAuto: () => void;
+  /** Begin a session. autoOn = start in watch (both bots); false = start in manual (you play X). */
+  startAuto: (autoOn?: boolean) => void;
   stopAuto: () => void;
 }
 
@@ -195,7 +207,8 @@ function pickCell(state: State, by: "A" | "B", difficulty: Difficulty): number {
   return heuristicCell(state, by); // "even"
 }
 
-export function useBotGame(difficulty: Difficulty = "even"): BotGameView {
+export function useBotGame(difficulty: Difficulty = "fast"): BotGameView {
+  const { report } = useTelemetry();
   const bots = useMemo(() => loadOrCreateBots(), []);
   const client = useMemo(() => getSuiClient(), []);
 
@@ -211,14 +224,21 @@ export function useBotGame(difficulty: Difficulty = "even"): BotGameView {
   });
   const [score, setScore] = useState<BotScore>(loadScore);
   const [tunnels, setTunnels] = useState<TunnelRecord[]>([]);
-  const [auto, setAuto] = useState(false);
+  const [auto, setAutoState] = useState(true);
   const [rebalancing, setRebalancing] = useState(false);
   const [maxGames, setMaxGamesState] = useState<number>(DEFAULT_MAX_GAMES);
   const [currentGame, setCurrentGame] = useState<number>(1);
+  const [balancesLoaded, setBalancesLoaded] = useState(false);
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const nextRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const autoRef = useRef(false); // mirror of `auto` readable inside async flows
+  const autoRef = useRef(true); // mirror of `auto` (auto-play) readable inside async flows
+  // A play session is live (drives tunnel-after-tunnel continuation), decoupled from `auto` so
+  // unticking auto switches X to manual without ending the session.
+  const playingRef = useRef(false);
+  // A user-queued cell (X) the running interval applies on its next tick, so the manual move
+  // reuses the loop's single step/telemetry/score site.
+  const pendingCellRef = useRef<number | null>(null);
   const balancesRef = useRef<{ x: bigint; o: bigint }>({ x: 0n, o: 0n });
   const runRef = useRef<() => void>(() => {});
   const difficultyRef = useRef<Difficulty>(difficulty);
@@ -277,6 +297,8 @@ export function useBotGame(difficulty: Difficulty = "even"): BotGameView {
       return b;
     } catch {
       return null;
+    } finally {
+      setBalancesLoaded(true);
     }
   }, [client, bots]);
 
@@ -422,6 +444,8 @@ export function useBotGame(difficulty: Difficulty = "even"): BotGameView {
           createDigest = createRes.digest;
         }
         setDigests((d) => ({ ...d, create: createDigest }));
+        report.bumpCounters({ tunnelsOpened: 1 });
+        report.setActive(2);
 
         // 2) read created_at for the settlement timestamp.
         const obj = await client.getObject({
@@ -464,7 +488,9 @@ export function useBotGame(difficulty: Difficulty = "even"): BotGameView {
           .registerSession({
             userAddress: bots.x.address,
             game: "tictactoe",
-            tunnels: [{ tunnelId, partyA: bots.x.address, partyB: bots.o.address }],
+            tunnels: [
+              { tunnelId, partyA: bots.x.address, partyB: bots.o.address },
+            ],
           })
           .then((s) => {
             sessionRef.current = s;
@@ -490,6 +516,7 @@ export function useBotGame(difficulty: Difficulty = "even"): BotGameView {
           setScore({ ...tally });
         };
 
+        pendingCellRef.current = null; // drop any cell queued during the inter-tunnel gap
         await new Promise<void>((resolve, reject) => {
           const delay = difficultyRef.current === "fast" ? 50 : STEP_MS;
           timerRef.current = setInterval(() => {
@@ -504,9 +531,21 @@ export function useBotGame(difficulty: Difficulty = "even"): BotGameView {
               // past a finished game (the protocol ignores the cell on reset).
               const isAdvance = inner.winner !== 0;
               const by = isAdvance ? "A" : (inner.turn as "A" | "B");
-              const cell = isAdvance
-                ? 0
-                : pickCell(inner, by, difficultyRef.current);
+              // Manual play (auto off): pause on X's turn (party A) and apply only a user-queued
+              // cell; the bot still plays O and finished games still auto-advance.
+              let cell: number;
+              if (!isAdvance && !autoRef.current && by === "A") {
+                if (pendingCellRef.current === null) {
+                  flushHeartbeat(tunnelId, false);
+                  return; // wait for the user's move
+                }
+                cell = pendingCellRef.current;
+                pendingCellRef.current = null;
+              } else {
+                cell = isAdvance
+                  ? 0
+                  : pickCell(inner, by, difficultyRef.current);
+              }
               // Sign each update with the on-chain created_at (a validator timestamp,
               // always >= created_at and <= now) so the final co-signed state passes
               // update_state's timestamp check regardless of local clock skew.
@@ -519,6 +558,11 @@ export function useBotGame(difficulty: Difficulty = "even"): BotGameView {
 
               moveCountRef.current += 1;
               actionsRef.current += 1;
+              report.bumpCounters({
+                updates: 1,
+                signatures: 2,
+                verifications: 2,
+              });
 
               const next = tunnel.state;
               setBoard([...next.inner.board]);
@@ -529,6 +573,18 @@ export function useBotGame(difficulty: Difficulty = "even"): BotGameView {
               // A finished inner game (winner set) is game number gamesPlayed+1.
               if (next.inner.winner !== 0) {
                 recordGame(next.gamesPlayed, next.inner.winner);
+                const w = next.inner.winner;
+                const row = {
+                  id: moveCountRef.current,
+                  game: "tic-tac-toe",
+                  time: new Date().toLocaleTimeString("en-GB"),
+                  bot: bots.x.address,
+                  type: w === 1 ? "X win" : w === 2 ? "O win" : "Draw",
+                  status: "Success" as const,
+                  amount: "",
+                };
+                // Live Transactions is backend-sourced (on-chain indexer); only My Activity is local.
+                report.pushLocalTxn(row);
               }
 
               if (proto.isTerminal(next)) {
@@ -590,6 +646,19 @@ export function useBotGame(difficulty: Difficulty = "even"): BotGameView {
           close: closeDigest,
           root: `0x${bytesToHex(root)}`,
         }));
+        report.pushTxn({
+          id: actionsRef.current,
+          game: "tic-tac-toe",
+          digest: closeDigest,
+          address: bots.x.address,
+          time: new Date().toLocaleTimeString("en-GB"),
+          bot: bots.x.address,
+          type: "Settle",
+          status: "Success",
+          amount: "",
+        });
+        report.bumpCounters({ tunnelsClosed: 1, settlements: 1 });
+        report.setActive(0);
 
         // Record the settled tunnel into the history (newest first), then reset the running
         // score so the next tunnel starts fresh — each settle resets the player tally.
@@ -616,28 +685,27 @@ export function useBotGame(difficulty: Difficulty = "even"): BotGameView {
         const b = await refreshBalances();
         setPhase("done");
 
-        // 7) auto-play: continue with the next tunnel. DOPAMINT mode: gas is sponsored and the
-        // stake is faucet-minted, so the bots can't run out — never gate on the SUI balance.
-        if (autoRef.current) {
+        // 7) continue tunnel-after-tunnel while the session is live (auto or manual). DOPAMINT
+        // mode: gas is sponsored + the stake is faucet-minted, so bots can't run out — skip the
+        // SUI gate; SUI fallback still stops when a bot is low on gas.
+        if (playingRef.current) {
           if (
             dopamintOn ||
             (b && b.x >= MIN_PLAY_MIST && b.o >= MIN_PLAY_MIST)
           ) {
             nextRef.current = setTimeout(() => {
-              if (autoRef.current) runRef.current();
+              if (playingRef.current) runRef.current();
             }, NEXT_GAME_MS);
           } else {
-            autoRef.current = false;
-            setAuto(false);
+            playingRef.current = false;
             setError(
-              "A bot is low on gas — auto-play stopped. Fund the bots to continue.",
+              "A bot is low on gas — play stopped. Fund the bots to continue.",
             );
           }
         }
       } catch (e) {
         stopTimer();
-        autoRef.current = false; // never loop on errors
-        setAuto(false);
+        playingRef.current = false; // never loop on errors
         setError(e instanceof Error ? e.message : String(e));
         setPhase("error");
       }
@@ -649,27 +717,54 @@ export function useBotGame(difficulty: Difficulty = "even"): BotGameView {
     runRef.current = runGame;
   }, [runGame]);
 
-  const newGame = useCallback(() => {
-    autoRef.current = false;
-    setAuto(false);
-    runGame();
-  }, [runGame]);
+  // Auto-play toggle. The running interval reads autoRef live: off makes it wait for a queued
+  // cell on X's turn, on resumes auto-playing both sides.
+  const setAuto = useCallback((on: boolean) => {
+    autoRef.current = on;
+    setAutoState(on);
+  }, []);
 
-  const startAuto = useCallback(() => {
-    // DOPAMINT mode: bots play free (sponsored gas + faucet stake), so skip the SUI gate.
-    if (
-      !isDopamintConfigured &&
-      (balancesRef.current.x < MIN_PLAY_MIST ||
-        balancesRef.current.o < MIN_PLAY_MIST)
-    ) {
-      setError("Fund the bots first");
-      setPhase("error");
-      return;
-    }
-    autoRef.current = true;
-    setAuto(true);
+  // Queue your (X) move for the running interval to apply. No-op unless it's actually your turn
+  // in manual mode on an empty cell.
+  const playCell = useCallback(
+    (cell: number) => {
+      if (autoRef.current || phase !== "playing" || winner !== 0) return;
+      if (turn !== "A") return;
+      if (cell < 0 || cell >= board.length || board[cell] !== 0) return;
+      pendingCellRef.current = cell;
+    },
+    [phase, winner, turn, board],
+  );
+
+  // Your turn = auto off, a game is in progress, and it's X (party A) to move.
+  const myTurn = !auto && phase === "playing" && winner === 0 && turn === "A";
+
+  const newGame = useCallback(() => {
+    setAuto(false);
+    playingRef.current = false; // single game: don't auto-continue
     runGame();
-  }, [runGame]);
+  }, [runGame, setAuto]);
+
+  // autoOn picks the starting mode: a fresh window starts in watch (auto on); entering from the
+  // main menu starts in manual (auto off) so you play X yourself.
+  const startAuto = useCallback(
+    (autoOn: boolean = true) => {
+      // DOPAMINT mode: bots play free (sponsored gas + faucet stake), so skip the SUI gate.
+      if (
+        !isDopamintConfigured &&
+        (balancesRef.current.x < MIN_PLAY_MIST ||
+          balancesRef.current.o < MIN_PLAY_MIST)
+      ) {
+        setError("Fund the bots first");
+        setPhase("error");
+        return;
+      }
+      setAuto(autoOn);
+      playingRef.current = true;
+      runGame();
+    },
+    [runGame, setAuto],
+  );
 
   const resetScore = useCallback(() => {
     const zero: BotScore = { x: 0, o: 0, draws: 0 };
@@ -682,14 +777,15 @@ export function useBotGame(difficulty: Difficulty = "even"): BotGameView {
   }, []);
 
   const stopAuto = useCallback(() => {
-    autoRef.current = false;
-    setAuto(false);
+    playingRef.current = false;
+    pendingCellRef.current = null;
+    stopTimer();
     if (nextRef.current !== null) {
       clearTimeout(nextRef.current);
       nextRef.current = null;
     }
     // Keep the settle history visible after stopping — it's the record of what was played.
-  }, []);
+  }, [stopTimer]);
 
   // Move half the balance difference from the richer bot to the poorer one (richer bot signs).
   const rebalance = useCallback(() => {
@@ -727,9 +823,13 @@ export function useBotGame(difficulty: Difficulty = "even"): BotGameView {
     score,
     tunnels,
     auto,
+    setAuto,
+    myTurn,
+    playCell,
     rebalancing,
     maxGames,
     currentGame,
+    balancesLoaded,
     setMaxGames,
     fund,
     rebalance,

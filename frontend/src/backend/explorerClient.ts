@@ -57,7 +57,9 @@ const base = () => resolveBackendUrl();
 /** Backend root with any trailing slashes trimmed (the explorer paths are appended raw). */
 const apiRoot = () => base().replace(/\/+$/, "");
 
-export async function listSettlements(q: SettlementQuery): Promise<SettlementPage> {
+export async function listSettlements(
+  q: SettlementQuery,
+): Promise<SettlementPage> {
   const res = await fetch(settlementsUrl(base(), q));
   if (!res.ok) throw new Error(`listSettlements ${res.status}`);
   return (await res.json()) as SettlementPage;
@@ -77,7 +79,9 @@ export async function getTranscript(digest: string): Promise<ProofRecord> {
 }
 
 /** Live new-settlement feed (SSE). Returns an unsubscribe fn. */
-export function openExplorerStream(onRow: (row: SettlementRow) => void): () => void {
+export function openExplorerStream(
+  onRow: (row: SettlementRow) => void,
+): () => void {
   const src = new EventSource(`${apiRoot()}/v1/explorer/stream`);
   src.onmessage = (ev) => {
     try {

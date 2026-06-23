@@ -6,8 +6,12 @@ import { partiesFromTunnelObject } from "./tunnelParties";
 const content = {
   dataType: "moveObject",
   fields: {
-    party_a: { fields: { public_key: [1, 2, 3], signature_type: 0, address: "0xa" } },
-    party_b: { fields: { public_key: [4, 5, 6], signature_type: 0, address: "0xb" } },
+    party_a: {
+      fields: { public_key: [1, 2, 3], signature_type: 0, address: "0xa" },
+    },
+    party_b: {
+      fields: { public_key: [4, 5, 6], signature_type: 0, address: "0xb" },
+    },
   },
 };
 
@@ -19,5 +23,7 @@ test("partiesFromTunnelObject extracts both ed25519 public keys", () => {
 });
 
 test("partiesFromTunnelObject throws on a non-tunnel object", () => {
-  assert.throws(() => partiesFromTunnelObject({ dataType: "moveObject", fields: {} }));
+  assert.throws(() =>
+    partiesFromTunnelObject({ dataType: "moveObject", fields: {} }),
+  );
 });

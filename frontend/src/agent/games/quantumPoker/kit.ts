@@ -89,7 +89,8 @@ export function createQuantumPokerKit(
     protocol,
     moveCodec: pokerMoveCodec,
     stateHash: (state) => defaultStateHash(protocol, state),
-    createBot: (seat: Party, ctx: BotContext) => new QuantumPokerBot(seat, ctx, config),
+    createBot: (seat: Party, ctx: BotContext) =>
+      new QuantumPokerBot(seat, ctx, config),
     defaultStake: stake,
   };
 }

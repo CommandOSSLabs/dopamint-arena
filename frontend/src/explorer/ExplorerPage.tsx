@@ -38,7 +38,7 @@ export function ExplorerPage() {
       try {
         const page = await listSettlements({
           limit: 50,
-          cursor: reset ? undefined : cursor ?? undefined,
+          cursor: reset ? undefined : (cursor ?? undefined),
           address: address.trim() || undefined,
           kind: "settled",
         });
@@ -73,7 +73,9 @@ export function ExplorerPage() {
       ) {
         return;
       }
-      setRows((prev) => (prev.some((r) => r.txDigest === row.txDigest) ? prev : [row, ...prev]));
+      setRows((prev) =>
+        prev.some((r) => r.txDigest === row.txDigest) ? prev : [row, ...prev],
+      );
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -81,11 +83,14 @@ export function ExplorerPage() {
   return (
     <div className="mx-auto flex h-full max-w-5xl flex-col gap-4 p-4 sm:p-6">
       <header className="flex flex-col gap-1">
-        <span className="wal-eyebrow text-muted-foreground">Dopamint · proof explorer</span>
+        <span className="wal-eyebrow text-muted-foreground">
+          Dopamint · proof explorer
+        </span>
         <h1 className="wal-display text-2xl">Settlements</h1>
         <p className="text-sm text-muted-foreground">
-          Every row is an on-chain settlement. Open one to re-verify the off-chain transcript
-          yourself — signatures, nonces, balance conservation, and the anchored root.
+          Every row is an on-chain settlement. Open one to re-verify the
+          off-chain transcript yourself — signatures, nonces, balance
+          conservation, and the anchored root.
         </p>
       </header>
 
@@ -116,13 +121,19 @@ export function ExplorerPage() {
             <tbody>
               {rows.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-3 py-10 text-center text-muted-foreground">
+                  <td
+                    colSpan={6}
+                    className="px-3 py-10 text-center text-muted-foreground"
+                  >
                     No settlements yet.
                   </td>
                 </tr>
               ) : (
                 rows.map((r) => (
-                  <tr key={r.txDigest} className="border-t border-border/60 hover:bg-secondary/40">
+                  <tr
+                    key={r.txDigest}
+                    className="border-t border-border/60 hover:bg-secondary/40"
+                  >
                     <td className="wal-mono px-3 py-2">
                       <a
                         href={suivisionTxUrl(r.txDigest, network)}
