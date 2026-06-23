@@ -45,13 +45,13 @@ export function PaymentsFinding({
   };
 
   return (
-    <div className="space-y-4 mt-10 p-4">
+    <div className="space-y-6 mt-10 p-4">
       <div className="text-center">
         <h2 className="wal-doto text-lg text-slate-50 uppercase">
           Payments Puzzle
         </h2>
 
-        <p className="text-xs leading-relaxed text-slate-400">
+        <p className="text-xs leading-relaxed text-slate-400 max-w-sm mx-auto">
           Battle another player using real blockchain data • Solve transaction
           puzzles before the timer expires • Win rewards from your opponent's
           balance
