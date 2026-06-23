@@ -52,15 +52,22 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
 
   const counters = useRef<Counters>(newCounters());
   const startMs = useRef<number>(Date.now());
+  // Monotonic feed-row id owned HERE, not by callers: a game's own counter resets per tunnel,
+  // and the feeds are shared across games — caller ids collide and React drops rows by key.
+  // Assigning the id on push keeps every row key globally unique. Computed outside the state
+  // updater (which must stay pure / may run twice under StrictMode).
+  const txnId = useRef(0);
 
   const pushTxn = useCallback((row: TxnRow) => {
     setHasActivity(true);
-    setTxns((cur) => [row, ...cur].slice(0, MAX_TXNS));
+    const id = txnId.current++;
+    setTxns((cur) => [{ ...row, id }, ...cur].slice(0, MAX_TXNS));
   }, []);
 
   const pushLocalTxn = useCallback((row: TxnRow) => {
     setHasActivity(true);
-    setLocalTxns((cur) => [row, ...cur].slice(0, MAX_TXNS));
+    const id = txnId.current++;
+    setLocalTxns((cur) => [{ ...row, id }, ...cur].slice(0, MAX_TXNS));
   }, []);
 
   const bumpCounters = useCallback((delta: Partial<Counters>) => {
