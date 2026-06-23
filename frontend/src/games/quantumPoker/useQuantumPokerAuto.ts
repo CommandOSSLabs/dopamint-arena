@@ -143,6 +143,8 @@ class AutoSession {
   private readonly bots = loadOrCreateQuantumPokerBots();
 
   private status: AutoStatus = "idle";
+  // Guards the one-shot auto-start on window load, so a user Stop is never overridden by a remount.
+  private didAutoStart = false;
   private personas: { a: string; b: string } | null = null;
   private score = { a: 0, b: 0 };
   private tunnels = 0;
@@ -351,6 +353,15 @@ class AutoSession {
     this.personas = null;
     this.setStatus("running");
     void this.runMatch();
+  };
+
+  /** Start the loop once when the window first loads — watch-bot runs without a manual Start. No-op
+   *  after the first auto-start (so a user Stop is not re-overridden on a later remount), while
+   *  funding, or while already running. In DOPAMINT mode `funded` is always true. */
+  autoStartOnLoad = () => {
+    if (this.didAutoStart || this.status !== "idle" || !this.funded) return;
+    this.didAutoStart = true;
+    this.startAuto();
   };
 
   stopAuto = () => {
@@ -664,6 +675,11 @@ export function useQuantumPokerAuto(
   }, [session, client]);
 
   const snap = useSyncExternalStore(session.subscribe, session.getSnapshot);
+
+  // Auto-start the bot loop on load (deps are wired above), so watch-bot runs without a manual Start.
+  useEffect(() => {
+    session.autoStartOnLoad();
+  }, [session, snap.status, snap.funded]);
   return {
     status: snap.status,
     personas: snap.personas,
