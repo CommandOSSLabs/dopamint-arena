@@ -18,15 +18,14 @@ export const DOPAMINT_DECIMALS = 9;
 export const dopamint = (whole: bigint): bigint =>
   whole * 10n ** BigInt(DOPAMINT_DECIMALS);
 
-// One faucet pull mints 100,000,000 DOPAMINT. `dopamint::mint` mints NEW supply from the shared
-// TreasuryCap, so the faucet can NEVER run dry — this is only "how much per top-up". At ~1 DOPAMINT
-// staked per seat (self-play burns ~2/game to ephemeral seats), one pull covers tens of millions of
-// games; below the threshold the background faucet tops up again (free, gas-sponsored, invisible),
-// so a player faucets once and plays effectively without limit.
-export const DOPAMINT_FAUCET_AMOUNT = dopamint(100_000_000n);
-/** Background top-up trigger: refill once the balance falls below 100,000 DOPAMINT — a big enough
- *  cushion that the stake hot-path always finds a coin while a top-up is in flight. */
-export const DOPAMINT_MIN_BALANCE = dopamint(100_000n);
+// One faucet pull mints 10,000 DOPAMINT (10^13 raw). `dopamint::mint` mints NEW supply from the
+// shared TreasuryCap, so the faucet can NEVER run dry — this is only "how much per top-up"; at a
+// tiny per-game stake it covers thousands of games, and the background faucet silently tops up
+// again (free, gas-sponsored) whenever the balance falls below the threshold.
+export const DOPAMINT_FAUCET_AMOUNT = dopamint(10_000n);
+/** Background top-up trigger: refill once the balance falls below 1,000 DOPAMINT (10^12 raw) — a
+ *  cushion big enough that the stake hot-path always finds a coin while a top-up is in flight. */
+export const DOPAMINT_MIN_BALANCE = dopamint(1_000n);
 
 /**
  * Append a faucet mint of `amount` DOPAMINT to `recipient` (`dopamint::mint`). New supply each
