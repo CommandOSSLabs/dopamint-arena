@@ -278,4 +278,59 @@ mod tests {
             .unwrap();
         assert_eq!(res.status(), StatusCode::NOT_FOUND);
     }
+
+    async fn mock_llm_server() -> (u16, tokio::task::JoinHandle<()>) {
+        use axum::extract::Json;
+        use axum::response::IntoResponse;
+        use axum::routing::post;
+        use axum::Router;
+
+        async fn mock_chat(Json(_): Json<serde_json::Value>) -> impl IntoResponse {
+            let body = "{\"message\":{\"role\":\"assistant\",\"content\":\"Hello\"},\"done\":false}\n\
+                       {\"message\":{\"role\":\"assistant\",\"content\":\"!\"},\"done\":false}\n\
+                       {\"message\":{\"role\":\"assistant\",\"content\":\"\"},\"done\":true}\n";
+            ([(header::CONTENT_TYPE, "application/x-ndjson")], body)
+        }
+
+        let app = Router::new().route("/api/chat", post(mock_chat));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (port, handle)
+    }
+
+    #[tokio::test]
+    async fn chat_streams_ndjson_from_upstream() {
+        let (port, _server) = mock_llm_server().await;
+        let mut state = state_with(vec![]);
+        state.llm_base_url = format!("http://127.0.0.1:{port}");
+
+        let app = router(state);
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/chat")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(
+                        r#"{"messages":[{"role":"user","content":"hi"}]}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(
+            res.headers().get("content-type").unwrap(),
+            "application/x-ndjson"
+        );
+        let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        let text = String::from_utf8(body.to_vec()).unwrap();
+        assert!(text.contains("\"Hello\""));
+        assert!(text.contains("\"!\""));
+        assert!(text.contains("\"done\":true"));
+    }
 }
