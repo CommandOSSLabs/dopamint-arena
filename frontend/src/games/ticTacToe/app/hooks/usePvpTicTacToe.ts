@@ -1,8 +1,17 @@
 // frontend/src/games/ticTacToe/packages/client/src/hooks/usePvpTicTacToe.ts
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { core, proof, bytesToHex, hexToBytes, type protocols } from "sui-tunnel-ts";
+import {
+  core,
+  proof,
+  bytesToHex,
+  hexToBytes,
+  type protocols,
+} from "sui-tunnel-ts";
 import { SuiJsonRpcClient } from "@mysten/sui/jsonRpc";
-import { getControlPlaneClient, type RegisterSessionResult } from "@/backend/controlPlane";
+import {
+  getControlPlaneClient,
+  type RegisterSessionResult,
+} from "@/backend/controlPlane";
 import { coSignedToSettleRequest } from "@/backend/settleRequest";
 import {
   MultiGameTicTacToeProtocol,
@@ -26,18 +35,34 @@ import {
   buildCloseWithRootTx,
   parseTunnelId,
 } from "@/games/ticTacToe/app/lib/pvpOnchain";
-import { RelayClient } from "@/games/ticTacToe/app/lib/pvpRelay";
+import {
+  MpClient,
+  resolveMpWsUrl,
+  type MatchInfo,
+  type PeerMessage,
+  type PvpChannel,
+} from "@/pvp/mpClient";
+import { attachResume, resumeActiveTunnels } from "@/pvp/resumeSession";
+import { raiseDisputeUnilateral } from "@/onchain/tunnelTx";
+import {
+  installResumePersistence,
+  evictExpiredRecords,
+  readResumeRecord,
+} from "@/pvp/resume";
+import { makeTttResumeAdapter } from "@/games/ticTacToe/app/lib/tttResumeAdapter";
 
 export type Variant = "ttt" | "caro";
 
-// MP relay base (RelayClient appends /v1/mp). Prefer an explicit VITE_MP_URL; otherwise derive
+// MP relay base (resolveMpWsUrl appends /v1/mp). Prefer an explicit VITE_MP_URL; otherwise derive
 // from the backend base, and when that's empty (same-origin production build) from the page
 // origin. Never hardcode localhost — a deployed https site would try ws://127.0.0.1 and fail.
 const MP_URL =
   import.meta.env.VITE_MP_URL ||
   (
     import.meta.env.VITE_BACKEND_URL ||
-    (typeof location !== "undefined" ? location.origin : "http://127.0.0.1:8080")
+    (typeof location !== "undefined"
+      ? location.origin
+      : "http://127.0.0.1:8080")
   ).replace(/^http/, "ws");
 const STAKE = 1n; // MIST per game; caro's protocol forces 0 regardless
 const BANKROLL = 1000n; // MIST deposited per seat
@@ -148,26 +173,29 @@ export function usePvpTicTacToe(
     close?: string;
   }>({});
 
-  const relayRef = useRef<RelayClient | null>(null);
+  const mpRef = useRef<MpClient | null>(null);
+  const channelRef = useRef<PvpChannel | null>(null);
   const tunnelRef = useRef<core.DistributedTunnel<AnyState, CellMove> | null>(
     null,
   );
   const roleRef = useRef<"A" | "B" | null>(null);
   const autoRef = useRef(false);
+  const detachResumeRef = useRef<(() => void) | null>(null);
   const createdAtRef = useRef<bigint>(0n);
   const matchIdRef = useRef<string>("");
   const settledRef = useRef(false);
   const stoppingRef = useRef(false);
   const onMatchRef = useRef<
-    | ((
-        relay: RelayClient,
-        m: { matchId: string; role: "A" | "B"; opponentWallet: string },
-      ) => Promise<void>)
-    | undefined
+    ((mp: MpClient, m: MatchInfo) => Promise<void>) | undefined
   >(undefined);
   const openedResolveRef = useRef<((id: string) => void) | null>(null);
-  const settleResolveRef = useRef<((val: { sig: Uint8Array; root: Uint8Array }) => void) | null>(null);
-  const bufferedSettleRef = useRef<{ sig: Uint8Array; root: Uint8Array } | null>(null);
+  const settleResolveRef = useRef<
+    ((val: { sig: Uint8Array; root: Uint8Array }) => void) | null
+  >(null);
+  const bufferedSettleRef = useRef<{
+    sig: Uint8Array;
+    root: Uint8Array;
+  } | null>(null);
   const helloResolveRef = useRef<((pub: string) => void) | null>(null);
   const bufferedHelloRef = useRef<string | null>(null);
   const transcriptRef = useRef<proof.Transcript | null>(null);
@@ -223,16 +251,22 @@ export function usePvpTicTacToe(
   const finishSettle = useCallback(
     async (
       t: core.DistributedTunnel<AnyState, CellMove>,
-      relay: RelayClient,
-      matchId: string,
+      channel: PvpChannel,
+      _matchId: string,
     ) => {
       if (settledRef.current) return;
       settledRef.current = true;
       setPhase("settling");
       flushHeartbeat(t.tunnelId, true);
-      const root = transcriptRef.current ? transcriptRef.current.root() : new Uint8Array(32);
-      const half = t.buildSettlementHalfWithRoot(createdAtRef.current, root, 0n);
-      relay.sendApp(matchId, {
+      const root = transcriptRef.current
+        ? transcriptRef.current.root()
+        : new Uint8Array(32);
+      const half = t.buildSettlementHalfWithRoot(
+        createdAtRef.current,
+        root,
+        0n,
+      );
+      channel.sendPeer({
         t: "settle",
         sig: bytesToHex(half.sigSelf),
         root: bytesToHex(root),
@@ -255,21 +289,134 @@ export function usePvpTicTacToe(
         try {
           const result = await getControlPlaneClient().settle(
             t.tunnelId,
-            coSignedToSettleRequest(coSigned as any, transcriptRef.current ? transcriptRef.current.toRecord().entries : []),
+            coSignedToSettleRequest(
+              coSigned as any,
+              transcriptRef.current
+                ? transcriptRef.current.toRecord().entries
+                : [],
+            ),
           );
           setDigests((d) => ({ ...d, close: result.txDigest }));
-          relay.sendApp(matchId, { t: "closed", digest: result.txDigest });
+          channel.sendPeer({ t: "closed", digest: result.txDigest });
         } catch (e) {
-          console.warn("[settle] Server-side settle failed, falling back to wallet submission:", e);
+          console.warn(
+            "[settle] Server-side settle failed, falling back to wallet submission:",
+            e,
+          );
           const res = await submit(buildCloseWithRootTx(t.tunnelId, coSigned));
           setDigests((d) => ({ ...d, close: res.digest }));
-          relay.sendApp(matchId, { t: "closed", digest: res.digest });
+          channel.sendPeer({ t: "closed", digest: res.digest });
         }
       }
       await refreshBalance();
       setPhase("done");
     },
     [submit, refreshBalance, flushHeartbeat],
+  );
+
+  // Wire the per-move loop + resume onto a freshly built/rebuilt tunnel. Shared by the live
+  // (onMatch) and cold-load (queue) paths so both get identical onConfirmed + attachResume wiring.
+  const activateTttSession = useCallback(
+    (
+      mp: MpClient,
+      channel: PvpChannel,
+      t: core.DistributedTunnel<AnyState, CellMove>,
+      info: {
+        matchId: string;
+        role: "A" | "B";
+        opponentWallet: string;
+        opponentPubkeyHex: string;
+        selfEphemeralSecretHex: string;
+      },
+    ) => {
+      tunnelRef.current = t;
+      channelRef.current = channel;
+      let lastLoggedGame = 0;
+      const onAdvance = () => {
+        const st = t.state;
+        setState({ ...st, inner: { ...st.inner } });
+        // Log each completed game once (winner is set on the inner game just before the advance).
+        const gameNo = st.gamesPlayed + 1;
+        if (st.inner.winner !== 0 && gameNo > lastLoggedGame) {
+          const w = st.inner.winner as 1 | 2 | 3;
+          setGames((prev) => [...prev, { game: gameNo, winner: w }].slice(-50));
+          setScore((prev) => ({
+            x: prev.x + (w === 1 ? 1 : 0),
+            o: prev.o + (w === 2 ? 1 : 0),
+            draws: prev.draws + (w === 3 ? 1 : 0),
+          }));
+          lastLoggedGame = gameNo;
+        }
+        if (stoppingRef.current) return;
+        if (proto.isTerminal(st)) {
+          void finishSettle(t, channel, info.matchId);
+          return;
+        }
+        if (st.inner.winner !== 0) {
+          // Between games: only X (A) drives the advance (avoids a double-advance race).
+          if (info.role === "A" && autoRef.current)
+            setTimeout(() => {
+              try {
+                t.propose({ cell: 0 }, BigInt(Date.now()));
+              } catch {
+                /* raced */
+              }
+            }, 100);
+        } else if (st.inner.turn === info.role && autoRef.current) {
+          const cell = (() => {
+            const empties = st.inner.board
+              .map((v, i) => (v === 0 ? i : -1))
+              .filter((i) => i >= 0);
+            return empties[Math.floor(Math.random() * empties.length)];
+          })();
+          setTimeout(() => {
+            try {
+              t.propose({ cell }, BigInt(Date.now()));
+            } catch {
+              /* not my turn / in flight */
+            }
+          }, 50);
+        }
+      };
+      t.onConfirmed = (u) => {
+        moveCountRef.current += 1;
+        actionsRef.current += 1;
+        transcriptRef.current?.append(u);
+        onAdvance();
+        flushHeartbeat(t.tunnelId, false);
+      };
+      // Resume wiring: persist on confirm + run the resync handshake on reconnect.
+      detachResumeRef.current?.();
+      detachResumeRef.current = attachResume({
+        mp,
+        channel,
+        tunnel: t,
+        adapter: makeTttResumeAdapter<AnyState, CellMove>(() => onAdvance()),
+        identity: {
+          matchId: info.matchId,
+          tunnelId: t.tunnelId,
+          role: info.role,
+          game: variant,
+          opponentWallet: info.opponentWallet,
+          opponentPubkeyHex: info.opponentPubkeyHex,
+          selfEphemeralSecretHex: info.selfEphemeralSecretHex,
+        },
+        // Settlement floor: after the 1h grace, settle from the held checkpoint.
+        onGraceExpired: (latest) => {
+          if (latest)
+            void raiseDisputeUnilateral({
+              signExec: submit,
+              tunnelId: t.tunnelId,
+              update: latest,
+              role: info.role,
+            });
+        },
+      });
+      setPhase("playing");
+      setState({ ...t.state, inner: { ...t.state.inner } });
+      onAdvance();
+    },
+    [proto, submit, variant, finishSettle, flushHeartbeat],
   );
 
   const queue = useCallback(() => {
@@ -294,65 +441,83 @@ export function usePvpTicTacToe(
       settleResolveRef.current = null;
       helloResolveRef.current = null;
       try {
-        const relay = new RelayClient(MP_URL, w.address, eph.coreKey);
-        relayRef.current = relay;
-        await relay.ready;
+        const mp = new MpClient(resolveMpWsUrl(MP_URL), w.address, eph.coreKey);
+        mpRef.current = mp;
+        // Cold-load: before joining a queue, rebuild any persisted in-flight match for this
+        // variant and re-attach to it. The opening handshake then carries resume{matchId}.
+        installResumePersistence();
+        const restored = resumeActiveTunnels<AnyState, CellMove>(
+          mp,
+          variant,
+          {
+            proto,
+            adapter: makeTttResumeAdapter<AnyState, CellMove>(() => {}),
+          },
+          { selfWallet: w.address },
+        );
+        if (restored.length > 0) {
+          const { tunnel, channel } = restored[0]; // one active match per game in practice
+          const rec = readResumeRecord(tunnel.tunnelId)!;
+          activateTttSession(mp, channel, tunnel, {
+            matchId: rec.matchId,
+            role: rec.role,
+            opponentWallet: rec.opponentWallet,
+            opponentPubkeyHex: rec.opponentPubkeyHex,
+            selfEphemeralSecretHex: rec.selfEphemeralSecretHex!,
+          });
+          await mp.connect();
+          return; // skip quickMatch — we are continuing an in-flight match
+        }
+        await mp.connect();
         setPhase("queuing");
-        relay.on("error", (m) => {
-          setError(`${m.code}: ${m.message}`);
-          setPhase("error");
-        });
-        relay.on("match.found", (m) => {
-          void onMatchRef.current?.(relay, m as any);
-        });
         // The queue key encodes the variant (+ board size for caro) so only players who chose the
         // SAME setup match — otherwise the two seats would run incompatible protocols and diverge.
-        relay.queueJoin(
+        const m = await mp.quickMatch(
           variant === "caro" ? `tictactoe:caro:${boardSize}` : "tictactoe:ttt",
         );
+        await onMatchRef.current?.(mp, m);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
         setPhase("error");
       }
     })();
-  }, [eph, variant, boardSize]);
+  }, [eph, variant, boardSize, proto, activateTttSession]);
 
   const onMatch = useCallback(
-    async (
-      relay: RelayClient,
-      m: { matchId: string; role: "A" | "B"; opponentWallet: string },
-    ) => {
+    async (mp: MpClient, m: MatchInfo) => {
       try {
         const w = walletRef.current;
         if (!w.address) throw new Error("wallet disconnected");
         matchIdRef.current = m.matchId;
         roleRef.current = m.role;
         setRole(m.role);
-        // App-channel dispatcher: opened tunnelId, settle half, closed digest, stop request.
-        relay.onApp(m.matchId, (mm) => {
-          if (mm.t === "opened")
+        // One channel per match: both the engine transport and the peer side-channel come from it.
+        const channel = mp.channel(m.matchId);
+        channelRef.current = channel;
+        // Peer-channel dispatcher: hello pubkey, opened tunnelId, settle half, closed digest, stop.
+        channel.onPeer((mm: Exclude<PeerMessage, { t: "frame" }>) => {
+          if (mm.t === "hello") {
+            const pub = String(mm.ephemeralPubkey);
+            if (helloResolveRef.current) helloResolveRef.current(pub);
+            else bufferedHelloRef.current = pub;
+          } else if (mm.t === "opened")
             openedResolveRef.current?.(String(mm.tunnelId));
           else if (mm.t === "settle") {
             const sig = hexToBytes(String(mm.sig));
             const rt = hexToBytes(String(mm.root));
-            if (settleResolveRef.current) settleResolveRef.current({ sig, root: rt });
+            if (settleResolveRef.current)
+              settleResolveRef.current({ sig, root: rt });
             else bufferedSettleRef.current = { sig, root: rt };
           } else if (mm.t === "closed")
             setDigests((d) => ({ ...d, close: String(mm.digest) }));
           else if (mm.t === "stop") {
             stoppingRef.current = true;
             if (tunnelRef.current)
-              void finishSettle(tunnelRef.current, relay, m.matchId);
+              void finishSettle(tunnelRef.current, channel, m.matchId);
           }
         });
-        // party.hello carries the single pubkey (no attestation): capture synchronously, buffer races.
-        relay.on("party.hello", (h) => {
-          if (h.matchId !== m.matchId) return;
-          const pub = String(h.ephemeralPubkey);
-          if (helloResolveRef.current) helloResolveRef.current(pub);
-          else bufferedHelloRef.current = pub;
-        });
-        relay.partyHello(m.matchId, eph.pubkeyHex, ""); // ephemeral move-signer pubkey; walletSig unused in v1
+        // hello carries the single pubkey (no attestation): capture synchronously, buffer races.
+        channel.sendPeer({ t: "hello", ephemeralPubkey: eph.pubkeyHex });
 
         const oppPubHex =
           bufferedHelloRef.current ??
@@ -379,8 +544,8 @@ export function usePvpTicTacToe(
           if (!id) throw new Error("no tunnelId");
           tunnelId = id;
           setDigests((d) => ({ ...d, create: res.digest }));
-          relay.tunnelOpened(m.matchId, tunnelId);
-          relay.sendApp(m.matchId, { t: "opened", tunnelId });
+          mp.announceTunnel(m.matchId, tunnelId);
+          channel.sendPeer({ t: "opened", tunnelId });
         } else {
           setPhase("opening");
           tunnelId = await new Promise<string>((resolve) => {
@@ -449,10 +614,9 @@ export function usePvpTicTacToe(
             ),
             selfParty: m.role,
           },
-          relay.transport(m.matchId),
+          channel.transport,
           { a: BANKROLL, b: BANKROLL },
         );
-        tunnelRef.current = t;
         transcriptRef.current = new proof.Transcript(tunnelId);
 
         // Register the (real, on-chain) tunnel for stats tracking. Best-effort.
@@ -475,73 +639,32 @@ export function usePvpTicTacToe(
           .then((s) => {
             sessionRef.current = s;
           })
-          .catch((e) => console.error("[tictactoe pvp] registerSession failed:", e));
+          .catch((e) =>
+            console.error("[tictactoe pvp] registerSession failed:", e),
+          );
 
-        let lastLoggedGame = 0;
-        const onAdvance = () => {
-          const st = t.state;
-          setState({ ...st, inner: { ...st.inner } });
-          // Log each completed game once (winner is set on the inner game just before the advance).
-          const gameNo = st.gamesPlayed + 1;
-          if (st.inner.winner !== 0 && gameNo > lastLoggedGame) {
-            const w = st.inner.winner as 1 | 2 | 3;
-            setGames((prev) =>
-              [...prev, { game: gameNo, winner: w }].slice(-50),
-            );
-            setScore((prev) => ({
-              x: prev.x + (w === 1 ? 1 : 0),
-              o: prev.o + (w === 2 ? 1 : 0),
-              draws: prev.draws + (w === 3 ? 1 : 0),
-            }));
-            lastLoggedGame = gameNo;
-          }
-          if (stoppingRef.current) return;
-          if (proto.isTerminal(st)) {
-            void finishSettle(t, relay, m.matchId);
-            return;
-          }
-          if (st.inner.winner !== 0) {
-            // Between games: only X (A) drives the advance (avoids a double-advance race).
-            if (m.role === "A" && autoRef.current)
-              setTimeout(() => {
-                try {
-                  t.propose({ cell: 0 }, BigInt(Date.now()));
-                } catch {
-                  /* raced */
-                }
-              }, 100);
-          } else if (st.inner.turn === m.role && autoRef.current) {
-            const cell = (() => {
-              const empties = st.inner.board
-                .map((v, i) => (v === 0 ? i : -1))
-                .filter((i) => i >= 0);
-              return empties[Math.floor(Math.random() * empties.length)];
-            })();
-            setTimeout(() => {
-              try {
-                t.propose({ cell }, BigInt(Date.now()));
-              } catch {
-                /* not my turn / in flight */
-              }
-            }, 50);
-          }
-        };
-        t.onConfirmed = (u) => {
-          moveCountRef.current += 1;
-          actionsRef.current += 1;
-          transcriptRef.current?.append(u);
-          onAdvance();
-          flushHeartbeat(tunnelId, false);
-        };
-        setPhase("playing");
-        setState({ ...t.state, inner: { ...t.state.inner } });
-        onAdvance();
+        activateTttSession(mp, channel, t, {
+          matchId: m.matchId,
+          role: m.role,
+          opponentWallet: m.opponentWallet,
+          opponentPubkeyHex: oppPubHex,
+          selfEphemeralSecretHex: bytesToHex(eph.coreKey.secretKey),
+        });
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
         setPhase("error");
       }
     },
-    [client, proto, submit, eph, variant, finishSettle, flushHeartbeat],
+    [
+      client,
+      proto,
+      submit,
+      eph,
+      variant,
+      finishSettle,
+      flushHeartbeat,
+      activateTttSession,
+    ],
   );
   onMatchRef.current = onMatch;
 
@@ -575,12 +698,12 @@ export function usePvpTicTacToe(
 
   const stop = useCallback(() => {
     const t = tunnelRef.current;
-    const relay = relayRef.current;
-    if (!t || !relay) return;
+    const channel = channelRef.current;
+    if (!t || !channel) return;
     if (t.state.inner.winner === 0) return; // settle cleanly between games
     stoppingRef.current = true;
-    relay.sendApp(matchIdRef.current, { t: "stop" });
-    void finishSettle(t, relay, matchIdRef.current);
+    channel.sendPeer({ t: "stop" });
+    void finishSettle(t, channel, matchIdRef.current);
   }, [finishSettle]);
 
   const setAuto = useCallback(
@@ -619,8 +742,11 @@ export function usePvpTicTacToe(
   );
 
   const leave = useCallback(() => {
-    relayRef.current?.close();
-    relayRef.current = null;
+    detachResumeRef.current?.();
+    detachResumeRef.current = null;
+    mpRef.current?.close();
+    mpRef.current = null;
+    channelRef.current = null;
     tunnelRef.current = null;
     setPhase("idle");
     setState(null);
@@ -642,7 +768,19 @@ export function usePvpTicTacToe(
     actionsRef.current = 0;
   }, []);
 
-  useEffect(() => () => relayRef.current?.close(), []);
+  // Register the pagehide/visibility flush and evict stale records once, on mount.
+  useEffect(() => {
+    installResumePersistence();
+    evictExpiredRecords();
+  }, []);
+
+  useEffect(
+    () => () => {
+      detachResumeRef.current?.();
+      mpRef.current?.close();
+    },
+    [],
+  );
 
   const s = state;
   const inner = s?.inner ?? null;

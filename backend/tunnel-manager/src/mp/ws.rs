@@ -13,7 +13,7 @@ use uuid::Uuid;
 use crate::mp::protocol::{ClientMsg, ServerMsg};
 use crate::mp::{auth, Checkpoint, ConnId, DirectedInvite, MatchRecord, Waiting};
 use crate::state::SharedState;
-use crate::store::ConnRef;
+use crate::store::{ConnRef, CtrlMsg};
 
 pub async fn mp_upgrade(State(state): State<SharedState>, ws: WebSocketUpgrade) -> Response {
     ws.on_upgrade(move |socket| handle_socket(socket, state))
@@ -78,6 +78,7 @@ async fn handle_socket(socket: WebSocket, state: SharedState) {
     let conn_id: ConnId = Uuid::new_v4();
     let (mut sink, mut stream) = socket.split();
     let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+    let (ctrl_tx, mut ctrl_rx) = mpsc::unbounded_channel::<CtrlMsg>();
     let nonce = conn_id.to_string();
     let _ = tx.send(
         ServerMsg::Challenge {
@@ -88,6 +89,8 @@ async fn handle_socket(socket: WebSocket, state: SharedState) {
 
     let mut wallet: Option<String> = None;
     let mut joined_games: HashSet<String> = HashSet::new();
+    let mut matches: std::collections::HashMap<String, MatchRecord> =
+        std::collections::HashMap::new();
 
     let mut keepalive = tokio::time::interval(KEEPALIVE_PING_INTERVAL);
     // A stall in `handle_message` must not burst-fire catch-up ticks and trip the
@@ -118,6 +121,15 @@ async fn handle_socket(socket: WebSocket, state: SharedState) {
                     None => break,
                 }
             }
+            ctrl = ctrl_rx.recv() => {
+                // The ctrl channel never closes before the socket; on `None` the next loop
+                // iteration drops out via another arm. Fires only on evict/populate, never per move.
+                match ctrl {
+                    Some(CtrlMsg::Evict(match_id)) => { matches.remove(&match_id); }
+                    Some(CtrlMsg::Populate(match_id, rec)) => { matches.insert(match_id, *rec); }
+                    None => {}
+                }
+            }
             inbound = stream.next() => {
                 let text = match inbound {
                     Some(Ok(Message::Text(t))) => t,
@@ -141,10 +153,12 @@ async fn handle_socket(socket: WebSocket, state: SharedState) {
                 if let Err(code) = handle_message(
                     &state,
                     &tx,
+                    &ctrl_tx,
                     conn_id,
                     &nonce,
                     &mut wallet,
                     &mut joined_games,
+                    &mut matches,
                     client_msg,
                 )
                 .await
@@ -162,16 +176,20 @@ async fn handle_socket(socket: WebSocket, state: SharedState) {
             state.mp.leave_queue(&g, &w).await;
         }
     }
+    notify_peers_dropped(&state, conn_id, &matches).await;
     state.bus.unregister(conn_id);
 }
 
+#[allow(clippy::too_many_arguments)] // per-connection state refs; no meaningful grouping
 async fn handle_message(
     state: &SharedState,
     tx: &mpsc::UnboundedSender<String>,
+    ctrl_tx: &mpsc::UnboundedSender<CtrlMsg>,
     conn_id: ConnId,
     nonce: &str,
     wallet: &mut Option<String>,
     joined: &mut HashSet<String>,
+    matches: &mut std::collections::HashMap<String, MatchRecord>,
     msg: ClientMsg,
 ) -> Result<(), &'static str> {
     match msg {
@@ -187,14 +205,14 @@ async fn handle_message(
             if !auth::verify_ed25519(&pubkey, nonce.as_bytes(), &sig) {
                 return Err("bad_signature");
             }
-            state.bus.register(conn_id, tx.clone());
+            state.bus.register(conn_id, tx.clone(), ctrl_tx.clone());
             state.mp.set_presence(&w, here(state, conn_id)).await;
             *wallet = Some(w);
             Ok(())
         }
         other => {
             let w = wallet.as_ref().ok_or("not_authenticated")?.clone();
-            handle_authed(state, conn_id, &w, joined, other).await
+            handle_authed(state, conn_id, &w, joined, matches, other).await
         }
     }
 }
@@ -204,6 +222,7 @@ async fn handle_authed(
     conn_id: ConnId,
     wallet: &str,
     joined: &mut HashSet<String>,
+    matches: &mut std::collections::HashMap<String, MatchRecord>,
     msg: ClientMsg,
 ) -> Result<(), &'static str> {
     match msg {
@@ -216,6 +235,10 @@ async fn handle_authed(
             if let Some(opp) = state.mp.join_or_pair(&game, me).await {
                 let (match_id, rec) = build_quick_match(&game, opp, wallet, here(state, conn_id));
                 state.mp.put_match(&match_id, rec.clone()).await;
+                matches.insert(match_id.clone(), rec.clone());
+                // Captured before the two delivers consume `match_id`/`rec` so the populate below
+                // can warm the waiter's (seat A) cache with owned copies.
+                let (match_id_for_populate, rec_for_populate) = (match_id.clone(), rec.clone());
                 state
                     .bus
                     .deliver(
@@ -240,6 +263,16 @@ async fn handle_authed(
                             game,
                         }
                         .to_text(),
+                    )
+                    .await;
+                // Warm the waiter's (seat A) relay cache so `peer.dropped` is robust even if it
+                // drops before its first relay. Seat B is this creating connection, warmed locally.
+                state
+                    .bus
+                    .populate(
+                        &rec_for_populate.conn_a,
+                        &match_id_for_populate,
+                        &rec_for_populate,
                     )
                     .await;
             }
@@ -291,6 +324,10 @@ async fn handle_authed(
             };
             let rec = build_challenge_match(&inv, wallet, here(state, conn_id));
             state.mp.put_match(&match_id, rec.clone()).await;
+            matches.insert(match_id.clone(), rec.clone());
+            // Captured before the two delivers consume `match_id`/`rec` so the populate below
+            // can warm the waiter's (seat A / inviter) cache with owned copies.
+            let (match_id_for_populate, rec_for_populate) = (match_id.clone(), rec.clone());
             state
                 .bus
                 .deliver(
@@ -315,6 +352,16 @@ async fn handle_authed(
                         game: rec.game,
                     }
                     .to_text(),
+                )
+                .await;
+            // Warm the inviter's (seat A) relay cache; the accepter (seat B) is this creating
+            // connection, already warmed locally.
+            state
+                .bus
+                .populate(
+                    &rec_for_populate.conn_a,
+                    &match_id_for_populate,
+                    &rec_for_populate,
                 )
                 .await;
             Ok(())
@@ -349,17 +396,8 @@ async fn handle_authed(
             // parity with self-play's per-update heartbeat. The ACK half is a separate
             // frame and is skipped (else every move double-counts). Only the transport
             // envelope (`t`/`kind`) is read; the game-specific move payload stays opaque.
-            if relay_payload_is_move(&payload) {
-                if let Some(m) = state.mp.get_match(&match_id).await {
-                    state.control.add_actions(&m.game, 1).await;
-                }
-            }
-            let envelope = ServerMsg::Relay {
-                match_id: match_id.clone(),
-                payload,
-            }
-            .to_text();
-            forward_to_other(state, &match_id, conn_id, envelope).await;
+            // The match record is cached per-connection so the store is hit at most once.
+            relay_to_other(state, matches, conn_id, match_id, payload).await;
             Ok(())
         }
         ClientMsg::WatchtowerCheckpoint {
@@ -382,11 +420,65 @@ async fn handle_authed(
             state.mp.record_checkpoint(&match_id, cp).await;
             Ok(())
         }
+        ClientMsg::Resume { match_id } => {
+            let me = here(state, conn_id);
+            let seat = match state
+                .mp
+                .rebind_match_conn(&match_id, wallet, me.clone())
+                .await
+            {
+                Some(s) => s,
+                None => return Err("not_a_seat"),
+            };
+            let Some(rec) = state.mp.get_match(&match_id).await else {
+                return Err("match_gone");
+            };
+            // Warm this connection's relay cache so its first post-resume relay needs no GET.
+            matches.insert(match_id.clone(), rec.clone());
+            // Opponent seat wallet + ConnRef.
+            let (opp_wallet, opp_conn) = match seat {
+                crate::mp::Seat::A => (rec.seat_b.clone(), rec.conn_b.clone()),
+                crate::mp::Seat::B => (rec.seat_a.clone(), rec.conn_a.clone()),
+            };
+            let peer_online = state.mp.get_presence(&opp_wallet).await.is_some();
+            // ResumeOk to self (delivered via the bus to this connection's socket).
+            state
+                .bus
+                .deliver(
+                    &me,
+                    ServerMsg::ResumeOk {
+                        match_id: match_id.clone(),
+                        role: seat.as_role().to_owned(),
+                        opponent_wallet: opp_wallet,
+                        game: rec.game.clone(),
+                        peer_online,
+                    }
+                    .to_text(),
+                )
+                .await;
+            // Tell the opponent we're back: PeerResumed (FE re-sends state) + evict its stale
+            // relay-cache entry so its next relay routes to our new ConnRef.
+            state
+                .bus
+                .deliver(
+                    &opp_conn,
+                    ServerMsg::PeerResumed {
+                        match_id: match_id.clone(),
+                        seat: seat.as_role().to_owned(),
+                        conn_ref: me,
+                    }
+                    .to_text(),
+                )
+                .await;
+            state.bus.evict(&opp_conn, &match_id).await;
+            Ok(())
+        }
         ClientMsg::Connect { .. } => Err("already_connected"),
     }
 }
 
 /// Forward an opaque envelope to the OTHER seat of `match_id`, wherever it lives.
+/// Used for the `party.hello` path where a per-connection cache is not available.
 async fn forward_to_other(state: &SharedState, match_id: &str, from: ConnId, text: String) {
     let Some(m) = state.mp.get_match(match_id).await else {
         return;
@@ -403,11 +495,75 @@ async fn forward_to_other(state: &SharedState, match_id: &str, from: ConnId, tex
     }
 }
 
-/// True iff a relayed payload carries a co-signed MOVE frame (not an ACK or a peer
-/// message). Drives PvP throughput counting: one MOVE = one action = the off-chain nonce
-/// step. Reads only the transport envelope (`t`) and the frame discriminator (`kind`) —
-/// the game-specific move payload is never inspected. Any malformed/foreign payload
-/// counts as "not a move" so the relay stays best-effort and game-agnostic.
+/// On disconnect, tell each active opponent that this connection's seat dropped so their FE can
+/// start its grace timer. Driven by the per-connection relay cache (populated at match creation
+/// in Step 3), so it fires even if this seat never relayed a frame. Control-plane only.
+async fn notify_peers_dropped(
+    state: &SharedState,
+    conn_id: ConnId,
+    matches: &std::collections::HashMap<String, MatchRecord>,
+) {
+    for (match_id, rec) in matches {
+        let other = if rec.conn_a.conn_id == conn_id {
+            Some(&rec.conn_b)
+        } else if rec.conn_b.conn_id == conn_id {
+            Some(&rec.conn_a)
+        } else {
+            None
+        };
+        if let Some(other) = other {
+            state
+                .bus
+                .deliver(
+                    other,
+                    ServerMsg::PeerDropped {
+                        match_id: match_id.clone(),
+                    }
+                    .to_text(),
+                )
+                .await;
+        }
+    }
+}
+
+/// Relay a frame using a per-connection match cache: fetch the `MatchRecord` from the
+/// store at most once per match, then route every subsequent frame from the in-task copy.
+/// Removes both per-move Redis GETs (counting + forwarding). conn_a/conn_b are fixed at
+/// match creation, so the cached copy is valid for the life of the connection.
+async fn relay_to_other(
+    state: &SharedState,
+    cache: &mut std::collections::HashMap<String, MatchRecord>,
+    from: ConnId,
+    match_id: String,
+    payload: String,
+) {
+    if !cache.contains_key(&match_id) {
+        match state.mp.get_match(&match_id).await {
+            Some(m) => {
+                cache.insert(match_id.clone(), m);
+            }
+            None => return, // unknown match: drop, same as today's get_match None
+        }
+    }
+    let m = &cache[&match_id];
+    if relay_payload_is_move(&payload) {
+        state.actions.incr(&m.game, 1);
+    }
+    let target = if m.conn_a.conn_id == from {
+        m.conn_b.clone()
+    } else if m.conn_b.conn_id == from {
+        m.conn_a.clone()
+    } else {
+        return; // not a seat in this match
+    };
+    let envelope = ServerMsg::Relay { match_id, payload }.to_text();
+    state.bus.deliver(&target, envelope).await;
+}
+
+/// True iff a relayed payload carries a co-signed MOVE frame. Fast path: read the outer
+/// `kind` tag (the SDK stamps it) without touching the opaque `data`. Fallback: legacy
+/// frames without the outer tag are detected by the old inner parse, so SDK/backend can
+/// deploy independently. Either way the game-specific move payload is never inspected.
 fn relay_payload_is_move(payload: &str) -> bool {
     let Ok(envelope) = serde_json::from_str::<serde_json::Value>(payload) else {
         return false;
@@ -415,6 +571,11 @@ fn relay_payload_is_move(payload: &str) -> bool {
     if envelope.get("t").and_then(serde_json::Value::as_str) != Some("frame") {
         return false;
     }
+    // Fast path: outer kind tag.
+    if let Some(kind) = envelope.get("kind").and_then(serde_json::Value::as_str) {
+        return kind == "move";
+    }
+    // Fallback: legacy frames carry kind only inside the opaque inner `data`.
     let Some(frame_json) = envelope.get("data").and_then(serde_json::Value::as_str) else {
         return false;
     };
@@ -430,6 +591,7 @@ fn relay_payload_is_move(payload: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use tokio::sync::mpsc;
     use uuid::Uuid;
 
@@ -477,7 +639,8 @@ mod tests {
     fn make_conn_ref(state: &SharedState) -> (ConnId, mpsc::UnboundedReceiver<String>) {
         let conn_id = Uuid::new_v4();
         let (tx, rx) = mpsc::unbounded_channel();
-        state.bus.register(conn_id, tx);
+        let (ctrl_tx, _ctrl_rx) = mpsc::unbounded_channel::<CtrlMsg>();
+        state.bus.register(conn_id, tx, ctrl_tx);
         (conn_id, rx)
     }
 
@@ -591,6 +754,19 @@ mod tests {
         serde_json::json!({ "t": "frame", "data": frame }).to_string()
     }
 
+    // The fast path: an outer `kind` tag is read WITHOUT parsing the opaque inner `data`.
+    // `data` is deliberately not valid JSON here — if the backend still tried to parse it,
+    // move detection would fail. It must trust the outer tag.
+    #[test]
+    fn move_detection_reads_outer_kind_without_parsing_data() {
+        let moved =
+            serde_json::json!({ "t": "frame", "kind": "move", "data": "::opaque::" }).to_string();
+        let acked =
+            serde_json::json!({ "t": "frame", "kind": "ack", "data": "::opaque::" }).to_string();
+        assert!(relay_payload_is_move(&moved), "outer kind=move counts");
+        assert!(!relay_payload_is_move(&acked), "outer kind=ack does not");
+    }
+
     // Throughput counting hinges on this discriminator: a MOVE is one action, an ACK is
     // the co-sign of that same move (not a new action), and peer/control messages aren't
     // game actions at all. Miscount any of these and PvP TPS is wrong.
@@ -610,6 +786,211 @@ mod tests {
             !relay_payload_is_move("not json"),
             "malformed payload is not a move"
         );
+    }
+
+    // A second relay on the same match must NOT hit the store again: the per-connection
+    // cache serves conn_a/conn_b after the first fetch. We prove it by overwriting the
+    // store record after the first relay and asserting the second still routes correctly.
+    #[tokio::test]
+    async fn relay_uses_cached_match_after_first_fetch() {
+        let state = test_state();
+        let (conn_a, _rx_a) = make_conn_ref(&state);
+        let (conn_b, mut rx_b) = make_conn_ref(&state);
+        let inst = state.bus.instance_id().to_owned();
+        let rec = MatchRecord {
+            game: "ttt".into(),
+            seat_a: "0xa".into(),
+            seat_b: "0xb".into(),
+            conn_a: ConnRef {
+                instance_id: inst.clone(),
+                conn_id: conn_a,
+            },
+            conn_b: ConnRef {
+                instance_id: inst,
+                conn_id: conn_b,
+            },
+            tunnel_id: None,
+            latest_checkpoint: None,
+        };
+        state.mp.put_match("m1", rec).await;
+        let mut cache: HashMap<String, MatchRecord> = HashMap::new();
+
+        // first relay populates the cache and delivers to B
+        relay_to_other(&state, &mut cache, conn_a, "m1".into(), "first".into()).await;
+        assert!(rx_b.try_recv().is_ok(), "first relay delivers to B");
+        // delete the authoritative record; the cache must still serve the route
+        state
+            .mp
+            .put_match(
+                "m1",
+                MatchRecord {
+                    game: "ttt".into(),
+                    seat_a: "x".into(),
+                    seat_b: "x".into(),
+                    conn_a: ConnRef {
+                        instance_id: "gone".into(),
+                        conn_id: uuid::Uuid::nil(),
+                    },
+                    conn_b: ConnRef {
+                        instance_id: "gone".into(),
+                        conn_id: uuid::Uuid::nil(),
+                    },
+                    tunnel_id: None,
+                    latest_checkpoint: None,
+                },
+            )
+            .await;
+        relay_to_other(&state, &mut cache, conn_a, "m1".into(), "second".into()).await;
+        assert!(
+            rx_b.try_recv().is_ok(),
+            "second relay still routes from cache, not the overwritten store"
+        );
+    }
+
+    #[tokio::test]
+    async fn disconnect_notifies_the_other_seat() {
+        let state = test_state();
+        let inst = state.bus.instance_id().to_owned();
+        let (conn_a, _rx_a) = make_conn_ref(&state); // the dropper (seat A)
+        let (conn_b, mut rx_b) = make_conn_ref(&state); // the opponent (seat B)
+        let mid = "m-drop";
+        let rec = MatchRecord {
+            game: "ttt".into(),
+            seat_a: "0xa".into(),
+            seat_b: "0xb".into(),
+            conn_a: ConnRef {
+                instance_id: inst.clone(),
+                conn_id: conn_a,
+            },
+            conn_b: ConnRef {
+                instance_id: inst.clone(),
+                conn_id: conn_b,
+            },
+            tunnel_id: None,
+            latest_checkpoint: None,
+        };
+        // A's per-connection cache holds the match (populated at match creation in real flow).
+        let mut matches = HashMap::new();
+        matches.insert(mid.to_string(), rec);
+        // A disconnects.
+        notify_peers_dropped(&state, conn_a, &matches).await;
+        let b = rx_b.recv().await.unwrap();
+        assert!(
+            b.contains(r#""type":"peer.dropped""#) && b.contains(r#""matchId":"m-drop""#),
+            "got: {b}"
+        );
+    }
+
+    // Resume re-attach: rebind the stale seat ConnRef, ack the resumer with its role and the
+    // peer's live status, notify the opponent (peer.resumed) and evict its stale relay cache.
+    #[tokio::test]
+    async fn resume_rebinds_seat_and_acks_with_role() {
+        let state = test_state();
+        let inst = state.bus.instance_id().to_owned();
+        let mid = "m-resume";
+        // Resumer (seat A) and opponent (seat B) connections, each with a frame receiver.
+        let (conn_a, mut rx_a) = make_conn_ref(&state);
+        let (conn_b, mut rx_b) = make_conn_ref(&state);
+        let ref_b = ConnRef {
+            instance_id: inst.clone(),
+            conn_id: conn_b,
+        };
+        // Opponent is "online" (presence set); match has a STALE conn_a to be rebound.
+        state.mp.set_presence("0xb", ref_b.clone()).await;
+        state
+            .mp
+            .put_match(
+                mid,
+                MatchRecord {
+                    game: "ttt".into(),
+                    seat_a: "0xa".into(),
+                    seat_b: "0xb".into(),
+                    conn_a: ConnRef {
+                        instance_id: "old".into(),
+                        conn_id: Uuid::new_v4(),
+                    },
+                    conn_b: ref_b,
+                    tunnel_id: None,
+                    latest_checkpoint: None,
+                },
+            )
+            .await;
+
+        let mut joined = HashSet::new();
+        let mut matches = HashMap::new();
+        handle_authed(
+            &state,
+            conn_a,
+            "0xa",
+            &mut joined,
+            &mut matches,
+            ClientMsg::Resume {
+                match_id: mid.into(),
+            },
+        )
+        .await
+        .unwrap();
+
+        // Resumer got resume.ok with role A and peerOnline true.
+        let a = rx_a.recv().await.unwrap();
+        assert!(
+            a.contains(r#""type":"resume.ok""#)
+                && a.contains(r#""role":"A""#)
+                && a.contains(r#""peerOnline":true"#),
+            "got: {a}"
+        );
+        // Opponent got peer.resumed carrying the resumer's new ConnRef.
+        let b = rx_b.recv().await.unwrap();
+        assert!(
+            b.contains(r#""type":"peer.resumed""#) && b.contains(r#""seat":"A""#),
+            "got: {b}"
+        );
+        // The store now binds conn_a to the resumer's connection, and the cache is warm.
+        assert_eq!(
+            state.mp.get_match(mid).await.unwrap().conn_a.conn_id,
+            conn_a
+        );
+        assert!(matches.contains_key(mid), "resumer cache warmed");
+    }
+
+    // A wallet that owns neither seat cannot rebind: the store rejects it and the arm errors.
+    #[tokio::test]
+    async fn resume_rejects_non_seat_wallet() {
+        let state = test_state();
+        let (conn, _rx) = make_conn_ref(&state);
+        let cr = |id: &str| ConnRef {
+            instance_id: id.into(),
+            conn_id: Uuid::new_v4(),
+        };
+        state
+            .mp
+            .put_match(
+                "m1",
+                MatchRecord {
+                    game: "ttt".into(),
+                    seat_a: "0xa".into(),
+                    seat_b: "0xb".into(),
+                    conn_a: cr("i"),
+                    conn_b: cr("i"),
+                    tunnel_id: None,
+                    latest_checkpoint: None,
+                },
+            )
+            .await;
+        let mut joined = HashSet::new();
+        let mut matches = HashMap::new();
+        let r = handle_authed(
+            &state,
+            conn,
+            "0xstranger",
+            &mut joined,
+            &mut matches,
+            ClientMsg::Resume {
+                match_id: "m1".into(),
+            },
+        )
+        .await;
+        assert_eq!(r, Err("not_a_seat"));
     }
 
     // The behavior that was missing in PvP: a relayed MOVE must feed the actions counter
@@ -637,12 +1018,14 @@ mod tests {
         };
         state.mp.put_match("m1", rec).await;
         let mut joined = HashSet::new();
+        let mut matches = HashMap::new();
 
         handle_authed(
             &state,
             conn_a,
             "0xa",
             &mut joined,
+            &mut matches,
             ClientMsg::Relay {
                 match_id: "m1".into(),
                 payload: relay_frame("move"),
@@ -650,6 +1033,10 @@ mod tests {
         )
         .await
         .unwrap();
+        // Move is counted locally; drain into control before asserting.
+        for (g, d) in state.actions.drain_deltas() {
+            state.control.add_actions(&g, d).await;
+        }
         assert_eq!(
             state.control.snapshot().await.total_actions,
             1,
@@ -661,6 +1048,7 @@ mod tests {
             conn_b,
             "0xb",
             &mut joined,
+            &mut matches,
             ClientMsg::Relay {
                 match_id: "m1".into(),
                 payload: relay_frame("ack"),
@@ -668,6 +1056,10 @@ mod tests {
         )
         .await
         .unwrap();
+        // ACK must not produce any delta; drain should yield nothing.
+        for (g, d) in state.actions.drain_deltas() {
+            state.control.add_actions(&g, d).await;
+        }
         assert_eq!(
             state.control.snapshot().await.total_actions,
             1,
