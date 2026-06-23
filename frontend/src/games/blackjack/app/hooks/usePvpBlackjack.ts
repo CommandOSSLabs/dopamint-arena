@@ -343,6 +343,10 @@ export function usePvpBlackjack(): PvpView {
         }
       }
       await refreshBalance();
+      // The tunnel is now closed on-chain; its resume record is dead — drop it so it can't be
+      // restored and hijack the next match (resumeActiveTunnels would otherwise glue the next
+      // queue to this peerless tunnel, leaving moves un-ACKed).
+      clearResumeRecord(t.tunnelId);
       setPhase("done");
     },
     [submit, submitSponsored, refreshBalance],
@@ -859,6 +863,20 @@ export function usePvpBlackjack(): PvpView {
     }
   }, [phase, setAuto]);
 
+  // Auto-settle the moment the table goes terminal — a side can't cover the minimum bet (out of
+  // chips) or the round cap is hit. The inline onAdvance check handles the common path; this
+  // declarative net also covers cases where it was skipped (a stop already in flight, or the
+  // terminal state arriving via a resume rather than a fresh confirmed move). settledRef makes
+  // the call idempotent, so it never double-settles.
+  useEffect(() => {
+    if (phase !== "playing" || stoppingRef.current || settledRef.current)
+      return;
+    const t = tunnelRef.current;
+    const ch = channelRef.current;
+    if (!t || !ch || !proto.isTerminal(t.state)) return;
+    void finishSettle(t, ch, matchIdRef.current);
+  }, [phase, state, proto, finishSettle]);
+
   const leave = useCallback(() => {
     detachResumeRef.current?.();
     detachResumeRef.current = null;
@@ -889,6 +907,61 @@ export function usePvpBlackjack(): PvpView {
     helloResolveRef.current = null;
     bufferedHelloRef.current = null;
   }, []);
+
+  // Find a new match after a settle, reusing the SAME socket (the relay runs many matches per
+  // connection): release the settled match and re-quickMatch in place — keeping Auto on so the
+  // next match auto-plays (the chosen buy-in in stakeRef carries over). Falls back to a full
+  // queue() if the socket is gone.
+  const requeue = useCallback(() => {
+    const mp = mpRef.current;
+    if (!mp) {
+      queue();
+      return;
+    }
+    detachResumeRef.current?.();
+    detachResumeRef.current = null;
+    const tid = tunnelRef.current?.tunnelId;
+    if (tid) clearResumeRecord(tid); // closed tunnel: never restore it
+    if (matchIdRef.current) mp.releaseMatch(matchIdRef.current);
+    channelRef.current = null;
+    tunnelRef.current = null;
+    setState(null);
+    setRole(null);
+    setDigests({});
+    setRounds([]);
+    settledRef.current = false;
+    stoppingRef.current = false;
+    autoKickedRef.current = false;
+    openedResolveRef.current = null;
+    settleResolveRef.current = null;
+    bufferedSettleRef.current = null;
+    stakeResolveRef.current = null;
+    bufferedStakeRef.current = null;
+    helloResolveRef.current = null;
+    bufferedHelloRef.current = null;
+    setError(null);
+    // Keep Auto + the open socket; just join the queue again.
+    setPhase("queuing");
+    void (async () => {
+      try {
+        const m = await mp.quickMatch("blackjack");
+        await onMatchRef.current?.(mp, m);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+        setPhase("error");
+      }
+    })();
+  }, [queue]);
+
+  // After a match settles ("done"), auto-find the next match when Auto is on. A short pause lets
+  // the result show before re-queuing.
+  useEffect(() => {
+    if (phase !== "done" || !autoRef.current) return;
+    const id = setTimeout(() => {
+      if (autoRef.current) requeue();
+    }, NEXT_MS);
+    return () => clearTimeout(id);
+  }, [phase, requeue]);
 
   useEffect(
     () => () => {
