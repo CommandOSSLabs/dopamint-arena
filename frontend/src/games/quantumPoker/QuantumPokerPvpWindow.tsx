@@ -42,10 +42,11 @@ const QP: CSSProperties & Record<`--${string}`, string> = {
 
 /** Mono uppercase label used for eyebrows/state — the utility face, never the headline. */
 const EYEBROW = "wal-mono uppercase tracking-[0.14em]";
-// Size to content (no `flex-1` + tiny `min-w`, which let a button shrink below its label and clip
-// "All-in · 2,450"). The flex-wrap row centers them and wraps when the window is narrow.
+// `min-w` keeps short buttons (Fold/Check) at a consistent tap size; `shrink-0` + no `flex-1` lets a
+// long label like "All-in · 2,450" grow PAST that min instead of being squeezed below its text and
+// clipping. The flex-wrap row centers them and wraps when the window is narrow.
 const BTN =
-  "shrink-0 whitespace-nowrap rounded-md px-2.5 py-1 text-[11px] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--qp-lilac)]/60";
+  "min-w-[3.25rem] shrink-0 whitespace-nowrap rounded-md px-2.5 py-1 text-center text-[11px] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--qp-lilac)]/60";
 
 const fmt = (n: bigint): string => n.toLocaleString("en-US");
 
