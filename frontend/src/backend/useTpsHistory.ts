@@ -52,18 +52,24 @@ export function useTpsHistory(
   series: TpsPoint[];
   seedError: boolean;
 } {
-  const isWindow = "window" in query;
-  // Effects key off this string so an inline-constructed `query` object doesn't re-fire them
-  // every render — only a real change to the window or range does.
-  const key = isWindow ? `w:${query.window}` : `r:${query.from}:${query.to}`;
+  // Decompose the union into primitives. The effects then depend on these directly — honest,
+  // complete dependency arrays (no eslint-disable) — whereas an inline-constructed `query` object
+  // changes identity every render and would re-fire the effects each time.
+  const windowSecs = "window" in query ? query.window : null;
+  const from = "window" in query ? null : query.from;
+  const to = "window" in query ? null : query.to;
   const [series, setSeries] = useState<TpsPoint[]>([]);
   const [seedError, setSeedError] = useState(false);
   const lastT = useRef(0);
   useEffect(() => {
     let alive = true;
     setSeedError(false);
+    const q: StatsHistoryQuery =
+      from != null && to != null
+        ? { from, to }
+        : { window: windowSecs ?? 3600 };
     getControlPlaneClient()
-      .fetchStatsHistory(query)
+      .fetchStatsHistory(q)
       .then((seed) => {
         if (alive) setSeries(seed);
       })
@@ -73,17 +79,16 @@ export function useTpsHistory(
     return () => {
       alive = false;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key]);
+  }, [windowSecs, from, to]);
   useEffect(() => {
     // A fixed historical range never grows; only a trailing window tails the live feed.
-    if (!isWindow || !snapshot) return;
+    if (windowSecs == null || !snapshot) return;
     const t = Math.floor(Date.now() / 1000);
     if (t === lastT.current) return;
     lastT.current = t;
-    const window = (query as { window: number }).window;
-    setSeries((prev) => capSeries([...prev, { t, v: snapshot.tps }], window));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [snapshot, key]);
+    setSeries((prev) =>
+      capSeries([...prev, { t, v: snapshot.tps }], windowSecs),
+    );
+  }, [snapshot, windowSecs]);
   return { series, seedError };
 }
