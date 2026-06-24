@@ -124,8 +124,17 @@ pub trait SettlementStore: Send + Sync {
     async fn list(&self, q: &SettlementQuery) -> anyhow::Result<SettlementPage>;
     /// Maintained counter (write-time, by the indexer's Diesel trigger), not a runtime aggregate.
     async fn settled_count(&self) -> anyhow::Result<i64>;
-    /// Cumulative (ts_bucket, total_actions) points within [from_secs, to_secs], ascending.
-    async fn metric_history(&self, from_secs: i64, to_secs: i64) -> anyhow::Result<Vec<(i64, i64)>>;
+    /// Cumulative (ts_bucket, total_actions) points within [from_secs, to_secs], ascending,
+    /// downsampled to one point per `stride_secs`-wide bucket (use 1 for full resolution). The
+    /// per-bucket point is the bucket's MAX — and since the counter is monotonic, MAX is the
+    /// bucket's last value, which is gap-robust (a bucket missing some seconds still reports its
+    /// true endpoint, unlike point-sampling at fixed offsets).
+    async fn metric_history(
+        &self,
+        from_secs: i64,
+        to_secs: i64,
+        stride_secs: i64,
+    ) -> anyhow::Result<Vec<(i64, i64)>>;
 }
 
 #[cfg(test)]

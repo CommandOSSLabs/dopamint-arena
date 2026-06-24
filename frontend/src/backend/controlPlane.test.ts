@@ -39,6 +39,35 @@ test("StatsSnapshot carries optional recentEvents", () => {
   assert.equal(without.recentEvents, undefined);
 });
 
+// fetchStatsHistory speaks two query shapes: a trailing `window` and an absolute `from`/`to`
+// range. Pin both URLs so a regression can't silently send the wrong params to the explorer.
+test("fetchStatsHistory builds window vs absolute-range query strings", async () => {
+  const urls: string[] = [];
+  const orig = globalThis.fetch;
+  globalThis.fetch = (async (url: string | URL) => {
+    urls.push(String(url));
+    return new Response(JSON.stringify({ metric: "tps", points: [] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }) as typeof fetch;
+  try {
+    const cp = createControlPlaneClient("https://backend.example");
+    await cp.fetchStatsHistory({ window: 3600 });
+    await cp.fetchStatsHistory({ from: 100, to: 200 });
+    assert.equal(
+      urls[0],
+      "https://backend.example/v1/stats/history?window=3600",
+    );
+    assert.equal(
+      urls[1],
+      "https://backend.example/v1/stats/history?from=100&to=200",
+    );
+  } finally {
+    globalThis.fetch = orig;
+  }
+});
+
 // ADR-0007: settle posts to the TUNNEL resource with NO Authorization — the co-signed settlement
 // is the authorization, not a bearer token. This pins the path + the absence of the header so a
 // regression can't silently re-introduce the session gate. The body is the v2 binary settle blob

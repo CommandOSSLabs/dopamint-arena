@@ -88,9 +88,18 @@ export interface ControlPlaneClient {
   settle(tunnelId: string, body: Uint8Array): Promise<SettleResult>;
   /** Subscribe to the live aggregate SSE feed; returns an unsubscribe fn. */
   openStatsStream(handlers: StatsStreamHandlers): () => void;
-  /** Seed the TPS graph: derived (ts, tps) points over the last `windowSecs` from the explorer. */
-  fetchStatsHistory(windowSecs: number): Promise<{ t: number; v: number }[]>;
+  /** Seed the TPS graph with derived (ts, tps) points from the explorer — either a trailing
+   *  `window` (seconds, ending now) or an absolute `from`/`to` epoch-second range. The server
+   *  bounds the range to retention and downsamples it, so the result is always render-sized. */
+  fetchStatsHistory(
+    query: StatsHistoryQuery,
+  ): Promise<{ t: number; v: number }[]>;
 }
+
+/** {@link ControlPlaneClient.fetchStatsHistory} argument: a trailing window or an absolute range. */
+export type StatsHistoryQuery =
+  | { window: number }
+  | { from: number; to: number };
 
 /** Callbacks for {@link ControlPlaneClient.openStatsStream}. `onError` fires when the SSE
  *  connection fails (e.g. backend unreachable), letting the UI tell "connecting" apart from
@@ -177,8 +186,12 @@ export function createControlPlaneClient(baseUrl: string): ControlPlaneClient {
       return () => source.close();
     },
 
-    async fetchStatsHistory(windowSecs) {
-      const res = await fetch(`${root}/v1/stats/history?window=${windowSecs}`);
+    async fetchStatsHistory(query) {
+      const qs =
+        "window" in query
+          ? `window=${query.window}`
+          : `from=${query.from}&to=${query.to}`;
+      const res = await fetch(`${root}/v1/stats/history?${qs}`);
       await failIfNotOk(res, "fetchStatsHistory");
       const body = (await res.json()) as {
         points: { t: string; v: number }[];

@@ -107,7 +107,12 @@ impl SettlementStore for InMemorySettlementStore {
     }
 
     // No time-series in the in-memory store; the metric_bucket table lives only in Postgres.
-    async fn metric_history(&self, _from_secs: i64, _to_secs: i64) -> anyhow::Result<Vec<(i64, i64)>> {
+    async fn metric_history(
+        &self,
+        _from_secs: i64,
+        _to_secs: i64,
+        _stride_secs: i64,
+    ) -> anyhow::Result<Vec<(i64, i64)>> {
         Ok(vec![])
     }
 }
