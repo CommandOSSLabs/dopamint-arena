@@ -1,105 +1,9 @@
 import { useEffect, useRef } from "react";
 import { useCurrentAccount } from "@mysten/dapp-kit";
-import type { PokerMove } from "sui-tunnel-ts/protocol/quantumPoker";
 import type { GameWindowProps } from "../types";
 import { useQuantumPokerBot } from "./useQuantumPokerBot";
 import { QuantumPokerTable, SketchDefs } from "./QuantumPokerTable";
-import { pokerRaiseSizes } from "./pokerBetting";
-
-// ---------------------------------------------------------------------------
-// Presentational helpers (local only — moveLabel drives the action transcript)
-// ---------------------------------------------------------------------------
-
-function moveLabel(move: PokerMove): string {
-  switch (move.kind) {
-    case "commit_slots":
-      return "committed 9 slots";
-    case "reveal_slots":
-      return `revealed ${move.slots.join("/")}`;
-    case "bet":
-      return `bet ${move.amount}`;
-    case "check":
-      return "check";
-    case "call":
-      return "call";
-    case "fold":
-      return "fold";
-    case "next_hand":
-      return "next hand";
-  }
-}
-
-// Keep moveLabel referenced so TypeScript doesn't warn on an unused export.
-void moveLabel;
-
-// ---------------------------------------------------------------------------
-// ActionBar — human betting controls (hand-drawn buttons)
-// ---------------------------------------------------------------------------
-
-function ActionBar({
-  legal,
-  pot,
-  onAct,
-  secondsLeft,
-}: {
-  legal: NonNullable<ReturnType<typeof useQuantumPokerBot>["legal"]>;
-  pot: bigint;
-  onAct: (m: PokerMove) => void;
-  secondsLeft: number | null;
-}) {
-  const raise = (amt: bigint) => onAct({ kind: "bet", amount: amt });
-  // Same three pot-relative sizes as PvP: ½ pot, pot, all-in.
-  const sizes = pokerRaiseSizes({
-    pot,
-    callAmount: legal.callAmount,
-    minBet: legal.minBet,
-    maxBet: legal.maxBet,
-    canBet: legal.minBet > 0n,
-  });
-  return (
-    <div className="flex flex-wrap items-center gap-[clamp(5px,1.8cqmin,12px)]">
-      {secondsLeft != null && (
-        <span
-          className={`qp-timer tabular-nums${secondsLeft <= 3 ? " qp-timer--low motion-safe:animate-pulse" : ""}`}
-        >
-          {secondsLeft}s
-        </span>
-      )}
-      <button type="button" className="qp-btn qp-btn--stop" onClick={() => onAct({ kind: "fold" })}>
-        Fold
-      </button>
-      {legal.canCheck && (
-        <button type="button" className="qp-btn" onClick={() => onAct({ kind: "check" })}>
-          Check
-        </button>
-      )}
-      {legal.canCall && (
-        <button
-          type="button"
-          className="qp-btn qp-btn--call"
-          onClick={() => onAct({ kind: "call" })}
-        >
-          Call {legal.callAmount.toString()}
-        </button>
-      )}
-      {sizes.showHalf && (
-        <button type="button" className="qp-btn" onClick={() => raise(sizes.half)}>
-          ½ Pot · {sizes.half.toString()}
-        </button>
-      )}
-      {sizes.showFull && (
-        <button type="button" className="qp-btn" onClick={() => raise(sizes.full)}>
-          Pot · {sizes.full.toString()}
-        </button>
-      )}
-      {sizes.showAllIn && (
-        <button type="button" className="qp-btn qp-btn--go" onClick={() => raise(sizes.allIn)}>
-          All-in · {sizes.allIn.toString()}
-        </button>
-      )}
-    </div>
-  );
-}
+import { PokerActionBar } from "./PokerActionBar";
 
 // ---------------------------------------------------------------------------
 // Main window
@@ -191,16 +95,30 @@ export function QuantumPokerWindow({
           </div>
         </div>
         {inPlay && (
-          <button
-            type="button"
-            className="qp-btn qp-btn--go"
-            onClick={() => {
-              exitAfterSettleRef.current = true; // settle, then auto-return to the menu
-              game.settleNow();
-            }}
-          >
-            Settle
-          </button>
+          <div className="flex items-center gap-[clamp(5px,1.8cqmin,12px)]">
+            <button
+              type="button"
+              className={`qp-btn${game.auto ? " qp-btn--go" : ""}`}
+              onClick={() => game.setAuto(!game.auto)}
+              title={
+                game.auto
+                  ? "Auto on — a bot is playing your seat"
+                  : "Let a bot play your seat"
+              }
+            >
+              🤖 Auto{game.auto ? " ON" : ""}
+            </button>
+            <button
+              type="button"
+              className="qp-btn qp-btn--go"
+              onClick={() => {
+                exitAfterSettleRef.current = true; // settle, then auto-return to the menu
+                game.settleNow();
+              }}
+            >
+              Settle
+            </button>
+          </div>
         )}
       </header>
 
@@ -216,7 +134,7 @@ export function QuantumPokerWindow({
 
       <footer className="grid gap-[clamp(5px,1.6cqmin,12px)] p-[clamp(6px,2.4cqmin,16px)] pt-0">
         {game.status === "awaitHuman" && game.legal && (
-          <ActionBar
+          <PokerActionBar
             legal={game.legal}
             pot={s.totalBetA + s.totalBetB}
             onAct={game.act}
@@ -231,7 +149,9 @@ export function QuantumPokerWindow({
                 ? "Settling…"
                 : game.status === "awaitHuman"
                   ? "Your move"
-                  : "Playing…"}
+                  : game.auto
+                    ? "🤖 Bot playing your seat"
+                    : "Playing…"}
           </span>
           {game.status === "settled" && (
             <button type="button" className="qp-btn qp-btn--go" onClick={game.open}>

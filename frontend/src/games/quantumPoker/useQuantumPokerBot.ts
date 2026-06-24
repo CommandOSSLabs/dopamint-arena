@@ -74,12 +74,16 @@ export interface QuantumPokerBotSession {
   error: string | null;
   /** Seconds left on the human's turn timer (null when it isn't the player's turn to act). */
   secondsLeft: number | null;
+  /** True when a bot is auto-playing the human's seat (party A). */
+  auto: boolean;
   open: () => void;
   act: (move: PokerMove) => void;
   /** Settle the current tunnel early (cash out) — status moves to "settled" when done. */
   settleNow: () => void;
-  /** Hand the human's seat to a bot and keep the match running in the background (the player left
-   *  without settling). Bot-vs-bot plays on until a seat busts → the existing terminal settle fires. */
+  /** Toggle bot auto-play of the human's seat: on → bot-vs-bot in the same tunnel; off → resume manual. */
+  setAuto: (on: boolean) => void;
+  /** Hand the human's seat to a bot on Back (alias for setAuto(true)) — the match plays on in the
+   *  background until a seat busts → terminal settle. */
   handOffToBot: () => void;
   reset: () => void;
 }
@@ -104,6 +108,7 @@ interface Snap {
   legal: PokerLegalActions | null;
   error: string | null;
   secondsLeft: number | null;
+  auto: boolean;
 }
 
 const HUMAN: "A" = "A";
@@ -120,6 +125,7 @@ class BotSession {
     legal: null,
     error: null,
     secondsLeft: null,
+    auto: false,
   };
   private listeners = new Set<() => void>();
 
@@ -147,9 +153,10 @@ class BotSession {
   private secondsLeft: number | null = null;
   private turnTimer: ReturnType<typeof setTimeout> | null = null;
   private turnTick: ReturnType<typeof setInterval> | null = null;
-  // Set when the human Backs out without settling: the drive loop then plays their seat with botA
-  // (bot-vs-bot) until a seat busts and the terminal settle closes the tunnel.
-  private humanLeft = false;
+  // Bot auto-play of party A: when on, the drive loop plays the human's seat with botA (bot-vs-bot in
+  // the same tunnel) until a seat busts and the terminal settle closes the tunnel. Toggled by the
+  // in-game Auto button or set on Back (handOffToBot).
+  private auto = false;
 
   subscribe = (cb: () => void): (() => void) => {
     this.listeners.add(cb);
@@ -168,6 +175,7 @@ class BotSession {
         this.status === "awaitHuman" && s ? legalPokerActions(s, HUMAN) : null,
       error: this.error,
       secondsLeft: this.secondsLeft,
+      auto: this.auto,
     };
     for (const l of this.listeners) l();
   }
@@ -181,7 +189,7 @@ class BotSession {
   reset = () => {
     this.gen += 1;
     this.looping = false;
-    this.humanLeft = false;
+    this.auto = false;
     this.clearTurnTimer();
     this.tunnel = null;
     this.transcript = null;
@@ -234,7 +242,7 @@ class BotSession {
     }
     this.gen += 1;
     const myGen = this.gen;
-    this.humanLeft = false;
+    this.auto = false;
     this.error = null;
     this.status = "funding";
     this.emit();
@@ -248,8 +256,8 @@ class BotSession {
         // connected wallet funds the stake but pays no gas). SUI fallback (env unset): the wallet
         // funds the stake and pays its own gas.
         const dopamintOn = isDopamintConfigured;
-        // chips == raw stake (1:1), so a 2500 buy-in means a 2500-chip stack — same as PvP. (Was a
-        // full 1 DOPAMINT = 1e9 raw, a stack so large a seat never busts.)
+        // chips == raw stake (1:1), so a 5000 buy-in means a 5000-chip stack — same as PvP. Deep
+        // enough to bet across streets without an early all-in (more off-chain actions per hand).
         const stakePerSeat = STAKE;
         const coinType = dopamintOn ? DOPAMINT_COIN_TYPE : undefined;
         const signExec = dopamintOn ? deps.sponsoredSignExec : deps.signExec;
@@ -362,9 +370,9 @@ class BotSession {
       while (this.gen === myGen) {
         const r = stepPokerWithHuman(tunnel, botA, botB, HUMAN, this.ts++);
         if (r.kind === "await-human") {
-          if (this.humanLeft) {
-            // The human Backed out: botA plays their betting turn, then the loop keeps stepping
-            // toward the showdown/bust — no turn timer, no waiting.
+          if (this.auto) {
+            // Auto-play on: botA makes party A's betting move, then the loop keeps stepping toward
+            // the showdown/bust — no turn timer, no waiting for a human.
             const move = botA.plan(tunnel.state);
             if (move) {
               applyHumanMove(tunnel, botA, HUMAN, move, this.ts++);
@@ -452,21 +460,30 @@ class BotSession {
     void this.settle(myGen);
   };
 
-  /** The human Backed out without settling: hand their seat to botA and let the match run on in the
-   *  background until a seat busts (the loop's terminal branch then settles). No-op if not in play. */
-  handOffToBot = () => {
-    if (this.humanLeft) return;
+  /** Toggle bot auto-play of the human's seat (party A). On → botA makes A's betting moves so the
+   *  match runs bot-vs-bot in the SAME tunnel until a seat busts (the loop's terminal branch settles);
+   *  off → the human resumes at A's next betting turn. No-op outside a live hand. */
+  setAuto = (on: boolean) => {
+    if (this.auto === on) return;
     if (this.status !== "playing" && this.status !== "awaitHuman") return;
-    this.humanLeft = true;
-    if (this.status === "awaitHuman") {
-      // The drive loop is parked waiting for the human — cancel the countdown and re-kick it so botA
-      // takes the turn. `drive` re-entry is safe (it cleared `looping` when it parked).
+    this.auto = on;
+    if (on && this.status === "awaitHuman") {
+      // Parked waiting for the human — cancel the countdown and re-kick so botA takes the turn now.
+      // `drive` re-entry is safe (it cleared `looping` when it parked).
       this.clearTurnTimer();
       this.status = "playing";
       this.emit();
       void this.drive(this.gen);
+    } else {
+      // Toggled off (resume manual) or on while already driving — the loop reads `this.auto` at the
+      // next await-human; just reflect the flag now.
+      this.emit();
     }
   };
+
+  /** The human left without settling (Back): hand their seat to the bot and let it play on in the
+   *  background until a seat busts → terminal settle. A convenience alias for enabling auto-play. */
+  handOffToBot = () => this.setAuto(true);
 
   private settle = async (myGen: number) => {
     const tunnel = this.tunnel;
@@ -548,6 +565,7 @@ export function useQuantumPokerBot(windowId: string): QuantumPokerBotSession {
     open: session.open,
     act: session.act,
     settleNow: session.settleNow,
+    setAuto: session.setAuto,
     handOffToBot: session.handOffToBot,
     reset: session.reset,
   };

@@ -129,6 +129,7 @@ function CardRow({
 }
 
 function PlayerSeat({
+  seat,
   party,
   name,
   stack,
@@ -137,6 +138,9 @@ function PlayerSeat({
   active,
   winner,
 }: {
+  /** Table position: the viewer ("hero", bottom) or their opponent ("opp", top). */
+  seat: "hero" | "opp";
+  /** Protocol party (A/B) — drives the corner badge + its colour, independent of position. */
   party: Party;
   name: string;
   stack: bigint;
@@ -146,9 +150,9 @@ function PlayerSeat({
   winner: boolean;
 }) {
   return (
-    <div className={`qp-player qp-player--${party === "A" ? "hero" : "opp"}`}>
+    <div className={`qp-player qp-player--${seat}`}>
       <section
-        className={`qp-seat qp-seat--${party === "A" ? "hero" : "opp"} qp-stroke${
+        className={`qp-seat qp-seat--${seat} qp-stroke${
           active ? " qp-stroke--active" : ""
         }`}
       >
@@ -189,12 +193,16 @@ export function QuantumPokerTable({
   holesB,
   nameA,
   nameB,
+  hero = "A",
 }: {
   state: PokerState;
   holesA: number[];
   holesB: number[];
   nameA: string;
   nameB: string;
+  /** Which protocol party is the viewer (rendered at the bottom). PvP passes its matched seat (which
+   *  may be B); the self-play lanes leave it at "A". */
+  hero?: Party;
 }): JSX.Element {
   // The protocol keeps `balance` as the FULL stack and tracks live bets in `totalBet` (it never
   // deducts a bet from the balance — `settle` only moves the net at showdown). Rendering raw
@@ -203,27 +211,32 @@ export function QuantumPokerTable({
   // pot; at hand_over the pot has settled into the balances, so show the settled balance and an
   // empty pot (a tie hands both bets back — stacks return to where they began).
   const settled = state.phase === "hand_over" || state.phase === "done";
-  const stackA = settled ? state.balanceA : state.balanceA - state.totalBetA;
-  const stackB = settled ? state.balanceB : state.balanceB - state.totalBetB;
-  const betA = settled ? 0n : state.totalBetA;
-  const betB = settled ? 0n : state.totalBetB;
-  const pot = settled ? 0n : state.totalBetA + state.totalBetB;
+  const balanceOf = (p: Party) => (p === "A" ? state.balanceA : state.balanceB);
+  const totalBetOf = (p: Party) => (p === "A" ? state.totalBetA : state.totalBetB);
+  const holesOf = (p: Party) => (p === "A" ? holesA : holesB);
+  const nameOf = (p: Party) => (p === "A" ? nameA : nameB);
+  const stackOf = (p: Party) =>
+    settled ? balanceOf(p) : balanceOf(p) - totalBetOf(p);
+  const betOf = (p: Party) => (settled ? 0n : totalBetOf(p));
   const winner = state.lastResult?.winner;
+  const opp: Party = hero === "A" ? "B" : "A";
+  const pot = settled ? 0n : state.totalBetA + state.totalBetB;
 
   return (
     <section className="qp-felt">
-      {/* Opponent seat (party B, top) */}
+      {/* Opponent seat (top) — holes stay face-down until showdown */}
       <PlayerSeat
-        party="B"
-        name={nameB}
-        stack={stackB}
-        bet={betB}
-        holes={holesB}
-        active={state.toAct === "B"}
-        winner={winner === "B"}
+        seat="opp"
+        party={opp}
+        name={nameOf(opp)}
+        stack={stackOf(opp)}
+        bet={betOf(opp)}
+        holes={holesOf(opp)}
+        active={state.toAct === opp}
+        winner={winner === opp}
       />
 
-      {/* Community board: pot above, five cards centered, phase below */}
+      {/* Community board: pot above, five cards centered */}
       <div className="qp-board">
         {pot > 0n && (
           <div className="qp-board__pot">
@@ -236,15 +249,16 @@ export function QuantumPokerTable({
         <CardRow cards={state.board} size={5} />
       </div>
 
-      {/* Hero seat (party A, bottom) */}
+      {/* Hero seat (bottom) — the viewer */}
       <PlayerSeat
-        party="A"
-        name={nameA}
-        stack={stackA}
-        bet={betA}
-        holes={holesA}
-        active={state.toAct === "A"}
-        winner={winner === "A"}
+        seat="hero"
+        party={hero}
+        name={nameOf(hero)}
+        stack={stackOf(hero)}
+        bet={betOf(hero)}
+        holes={holesOf(hero)}
+        active={state.toAct === hero}
+        winner={winner === hero}
       />
     </section>
   );
