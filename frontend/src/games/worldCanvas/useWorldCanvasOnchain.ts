@@ -124,7 +124,7 @@ const MAX_ACTIVITY = 60;
  *  cooperatively closes (anchoring its transcript root on-chain, like every finite
  *  game's settle) and a fresh tunnel reopens so painting never stops. Only the real
  *  (on-chain) tunnel checkpoints; the demo tunnel skips it (no chain). */
-const CHECKPOINT_EVERY = 600;
+const CHECKPOINT_EVERY = 50000;
 /** Gap (cells) between adjacent agent regions so their art never touches. */
 const REGION_GAP = 14;
 /** World slot size (cells) — sized to the LARGEST mode footprint so any mode fits a
@@ -515,7 +515,7 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
   const [auto, setAutoState] = useState(true);
   const [agents, setAgents] = useState<AgentMarker[]>([]);
   const [focus, setFocus] = useState<CanvasFocus | null>(null);
-  const [agentSpeed, setAgentSpeedState] = useState<AgentSpeed>("x1");
+  const [agentSpeed, setAgentSpeedState] = useState<AgentSpeed>("x8");
   const [agentMode, setAgentModeState] = useState<AgentModeId>(DEFAULT_AGENT_MODE);
   const [agentDensity, setAgentDensityState] = useState<number>(DEFAULT_DENSITY);
   const [agentTemplate, setAgentTemplateState] = useState<string | null>(null);
@@ -541,7 +541,7 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
   const autoRef = useRef(true);
   // Current speed/mode for the seat bots, mirrored into refs so the paint loop can read
   // them without re-subscribing.
-  const agentSpeedRef = useRef<AgentSpeed>("x1");
+  const agentSpeedRef = useRef<AgentSpeed>("x8");
   const agentModeRef = useRef<AgentModeId>(DEFAULT_AGENT_MODE);
   const agentDensityRef = useRef<number>(DEFAULT_DENSITY);
   const agentTemplateRef = useRef<string | null>(null);
@@ -886,16 +886,21 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
         })
         .catch((e) => console.error("[world-canvas] registerSession failed:", e));
 
-      // Surface the open in the dashboard's per-game "world-canvas" feed (best-effort,
-      // non-blocking — pushTxn is a synchronous panel write, never the paint path).
-      report.pushTxn({
+      // Surface the open in the dashboard exactly like every other game: bump the tunnel
+      // counters, mark both seats active, and push a MY-ACTIVITY row under "world-canvas".
+      // A post-checkpoint reopen is an honest fresh open (the prior tunnel closes at the
+      // settle site), so the open/close counters net out. Synchronous panel writes — never
+      // the paint path.
+      report.bumpCounters({ tunnelsOpened: 1 });
+      report.setActive(2);
+      report.pushLocalTxn({
         id: feedRowId(run.tunnelId),
         game: GAME,
         time: new Date().toLocaleTimeString("en-GB"),
         bot: shortTunnelId(run.tunnelId),
-        type: "Wall Opened",
+        type: "open tunnel",
         status: "Success",
-        amount: "—",
+        amount: "",
       });
 
       // Tunnel is live: drain any paints buffered during the open, then continue.
@@ -971,16 +976,19 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
             return digest;
           },
         });
-        // Anchored: surface the checkpoint in the per-game feed (best-effort, already
-        // inside this guarded try so it can never throw into the settle path).
-        report.pushTxn({
+        // Anchored: close the prior tunnel in the dashboard like every other game — bump the
+        // closed/settlement counters and push a MY-ACTIVITY "settled" row. We DON'T setActive(0)
+        // here: the reopen (startRun above) already re-marked both seats active, so the wall
+        // keeps running. (Guarded inside this try so it can never throw into the settle path.)
+        report.bumpCounters({ tunnelsClosed: 1, settlements: 1 });
+        report.pushLocalTxn({
           id: feedRowId(`${run.tunnelId}:${run.moveCount}`),
           game: GAME,
           time: new Date().toLocaleTimeString("en-GB"),
           bot: shortTunnelId(run.tunnelId),
-          type: "Checkpoint",
+          type: "settled",
           status: "Success",
-          amount: "—",
+          amount: "closed",
         });
       } catch (e) {
         console.warn("[world-canvas] checkpoint settle failed:", e);
