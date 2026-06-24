@@ -1,6 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useRegisterCabinet } from "@/shell/cabinet/CabinetContext";
-import type { CabinetController } from "@/shell/cabinet/CabinetController";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useSoloCabinet } from "@/shell/cabinet/soloCabinet";
 import {
   useBotGame,
   type Difficulty,
@@ -65,21 +64,15 @@ function AppContent() {
     stopCaroAuto();
     setScene("login");
   }, [stopTttAuto, stopCaroAuto]);
-  const takeOver = useCallback(() => {
-    setAuto(false);
-    gResume(); // unfreeze if the hover paused the loop
-  }, [setAuto, gResume]);
-  const cabinet = useMemo<CabinetController>(
-    () => ({
-      active: offerable,
-      pause: gPause,
-      resume: gResume,
-      takeOver,
-      returnHome: goToGameHome,
-    }),
-    [offerable, gPause, gResume, takeOver, goToGameHome],
-  );
-  useRegisterCabinet(cabinet);
+  // Hand X to the human (flip to manual play). Stable so the controller doesn't re-register.
+  const goManual = useCallback(() => setAuto(false), [setAuto]);
+  useSoloCabinet({
+    offerable,
+    pause: gPause,
+    resume: gResume,
+    goManual,
+    goHome: goToGameHome,
+  });
 
   // Track the actual container element's parent bounds to determine orientation
   useEffect(() => {

@@ -59,7 +59,17 @@ export function BombItWindow({ windowId }: GameWindowProps) {
     setModeState(null);
   }, [solo.reset, windowId]);
 
-  useSoloCabinet(solo, mode, goHome);
+  // Hand seat A to the human: flip auto off (reads `auto` fresh, so a double take-over is a no-op).
+  const goManual = useCallback(() => {
+    if (solo.auto) solo.toggleAuto();
+  }, [solo.auto, solo.toggleAuto]);
+  useSoloCabinet({
+    offerable: mode === "solo" && solo.status === "playing" && solo.auto,
+    pause: solo.pause,
+    resume: solo.resume,
+    goManual,
+    goHome,
+  });
 
   // Auto-retry a failed solo start every 5s while it sits in "error" (cold-start faucet race /
   // transient sponsor blip) so the unattended bot game self-heals. Retries with the stake last

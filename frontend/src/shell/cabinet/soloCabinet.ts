@@ -2,43 +2,22 @@ import { useMemo } from "react";
 import type { CabinetController } from "./CabinetController";
 import { useRegisterCabinet } from "./CabinetContext";
 
-/** A window's top-level mode; solo is the only cabinet-offerable one. */
+/** A window's top-level mode; the cabinet is offerable only in a self-play mode. */
 export type WindowMode = "solo" | "pvp" | null;
 
-/** The slice of a solo session the cabinet drives. Both game sessions satisfy it structurally. */
-export interface SoloCabinetSession {
-  status: string;
-  auto: boolean;
-  pause(): void;
-  resume(): void;
-  toggleAuto(): void;
-}
-
 /**
- * Take-over is offerable only while the window shows solo AND the self-play loop
- * is actually running on auto — never in the lobby, pvp, funding/settling, or
- * after a take-over (auto off). Mirrors ttt's `scene === "game" && g.auto`.
- */
-export function isSoloOfferable(
-  mode: WindowMode,
-  status: string,
-  auto: boolean,
-): boolean {
-  return mode === "solo" && status === "playing" && auto;
-}
-
-/**
- * Build the five-verb controller. `takeOver` flips the loop to the human seat —
- * only when currently auto, so a stray call can't re-enable auto — then unfreezes
- * a hover-pause. Settlement stays self-play on-chain; take-over is cosmetic
- * (ADR-0013).
+ * Assemble the five-verb `CabinetController` from a game's own seam. `goManual` hands THIS seat to
+ * the human — a flag flip (ttt/battleship `setAuto(false)`, bomb-it/cross a fresh-read guarded
+ * `toggleAuto`) OR a window switch (poker `setMode("bot")`); the assembler stays agnostic to which.
+ * Take-over runs `goManual` then unfreezes a hover-pause. `goManual` must be IDEMPOTENT so a double
+ * take-over is a no-op (no `auto`/`toggleAuto` contract here — that over-fits the toggle games).
+ * Settlement stays self-play on-chain — take-over is cosmetic (ADR-0013).
  */
 export function soloCabinetController(args: {
   offerable: boolean;
-  auto: boolean;
   pause(): void;
   resume(): void;
-  toggleAuto(): void;
+  goManual(): void;
   goHome(): void;
 }): CabinetController {
   return {
@@ -46,7 +25,7 @@ export function soloCabinetController(args: {
     pause: args.pause,
     resume: args.resume,
     takeOver: () => {
-      if (args.auto) args.toggleAuto();
+      args.goManual();
       args.resume();
     },
     returnHome: args.goHome,
@@ -54,29 +33,26 @@ export function soloCabinetController(args: {
 }
 
 /**
- * Register a game window's solo session with the enclosing `<GameCabinet>`
- * (Desktop wraps every window). Call once near the top of the window component,
- * before any early return — it is a hook. `goHome` MUST be stable (useCallback in
- * the caller) so the controller doesn't re-register every render.
+ * The SOLE cabinet adoption primitive: memoize a controller and register it with the enclosing
+ * `<GameCabinet>` (Desktop wraps every window). Every self-play game (ttt, battleship, bomb-it,
+ * chicken-cross, poker) calls this with the same shape; only the four expressions differ, and
+ * those differences are irreducibly per-game (the offerable predicate and the four verbs).
+ *
+ * Call once near the top of the window component, before any early return — it is a hook. Pass
+ * stable verbs (useCallback) and an inline boolean `offerable`; the controller rebuilds only when
+ * one of them changes, so it does not re-register every render.
  */
-export function useSoloCabinet(
-  session: SoloCabinetSession,
-  mode: WindowMode,
-  goHome: () => void,
-): void {
-  const { status, auto, pause, resume, toggleAuto } = session;
-  const offerable = isSoloOfferable(mode, status, auto);
+export function useSoloCabinet(args: {
+  offerable: boolean;
+  pause(): void;
+  resume(): void;
+  goManual(): void;
+  goHome(): void;
+}): void {
+  const { offerable, pause, resume, goManual, goHome } = args;
   const controller = useMemo<CabinetController>(
-    () =>
-      soloCabinetController({
-        offerable,
-        auto,
-        pause,
-        resume,
-        toggleAuto,
-        goHome,
-      }),
-    [offerable, auto, pause, resume, toggleAuto, goHome],
+    () => soloCabinetController({ offerable, pause, resume, goManual, goHome }),
+    [offerable, pause, resume, goManual, goHome],
   );
   useRegisterCabinet(controller);
 }
