@@ -4,7 +4,10 @@ import {
   useSignAndExecuteTransaction,
   useSuiClient,
 } from "@mysten/dapp-kit";
-import { useTelemetry, type TelemetryWriter } from "../../telemetry/TelemetryProvider";
+import {
+  useTelemetry,
+  type TelemetryWriter,
+} from "../../telemetry/TelemetryProvider";
 import { createParticipant } from "sui-tunnel-ts/core/keys";
 import { OffchainTunnel } from "sui-tunnel-ts/core/tunnel";
 import { Transcript } from "sui-tunnel-ts/proof/transcript";
@@ -25,8 +28,15 @@ import {
   type SuiReads,
 } from "@/onchain/tunnelTx";
 import { useSponsoredSignExec } from "@/onchain/useSponsoredSignExec";
-import { DOPAMINT_COIN_TYPE, isDopamintConfigured } from "@/onchain/dopamint";
-import { QUANTUM_POKER_STAKE, QUANTUM_POKER_HANDS_PER_TUNNEL } from "./constants";
+import {
+  DOPAMINT_COIN_TYPE,
+  isDopamintAddressBalance,
+  isDopamintConfigured,
+} from "@/onchain/dopamint";
+import {
+  QUANTUM_POKER_STAKE,
+  QUANTUM_POKER_HANDS_PER_TUNNEL,
+} from "./constants";
 import {
   makeSeatBot,
   randomPokerPersona,
@@ -83,6 +93,8 @@ interface BotDeps {
   sponsoredSignExec: SignExec;
   /** Return a user `Coin<DOPAMINT>` object id holding at least `need` to fund the stake. */
   prepareStake: (need: bigint) => Promise<string>;
+  /** ADR-0013: ensure the player's DOPAMINT address balance covers the stake. No-op once funded. */
+  ensureStakeBalance: (need: bigint) => Promise<void>;
 }
 
 interface Snap {
@@ -241,6 +253,10 @@ class BotSession {
         const stakePerSeat = STAKE;
         const coinType = dopamintOn ? DOPAMINT_COIN_TYPE : undefined;
         const signExec = dopamintOn ? deps.sponsoredSignExec : deps.signExec;
+        // ADR-0013: top up the player's DOPAMINT address balance, then the open withdraws from it
+        // (no version-pinned coin → concurrent opens across games never equivocate).
+        if (dopamintOn && isDopamintAddressBalance)
+          await deps.ensureStakeBalance(2n * stakePerSeat);
         const tunnelId = await openAndFundSelfPlay({
           reads,
           signExec,
@@ -249,10 +265,17 @@ class BotSession {
           aAmount: stakePerSeat,
           bAmount: stakePerSeat,
           coinType,
-          // Self-play funds both seats from one coin, so faucet/select for the 2-seat total.
-          stakeCoinId: dopamintOn
-            ? await deps.prepareStake(2n * stakePerSeat)
-            : undefined,
+          // Self-play funds both seats from one source, so withdraw/faucet for the 2-seat total.
+          ...(dopamintOn
+            ? isDopamintAddressBalance
+              ? {
+                  stakeFromBalance: {
+                    amount: 2n * stakePerSeat,
+                    coinType: DOPAMINT_COIN_TYPE,
+                  },
+                }
+              : { stakeCoinId: await deps.prepareStake(2n * stakePerSeat) }
+            : {}),
         });
         if (this.gen !== myGen) return;
         const createdAt = await readCreatedAt(reads, tunnelId);
@@ -517,6 +540,7 @@ export function useQuantumPokerBot(windowId: string): QuantumPokerBotSession {
     }) as SignExec,
     sponsoredSignExec: sponsored.signExec,
     prepareStake: sponsored.prepareStake,
+    ensureStakeBalance: sponsored.ensureStakeBalance,
   };
   const snap = useSyncExternalStore(session.subscribe, session.getSnapshot);
   return {

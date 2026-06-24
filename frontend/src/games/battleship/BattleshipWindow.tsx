@@ -1,4 +1,13 @@
-import { useEffect, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import { useRegisterCabinet } from "@/shell/cabinet/CabinetContext";
+import type { CabinetController } from "@/shell/cabinet/CabinetController";
 import {
   ArrowLeft,
   Bot,
@@ -311,6 +320,8 @@ function BotGame({
     autoStartOnLoad,
     auto,
     setAuto,
+    pause,
+    resume,
     score,
     gamesPlayed,
     playNextGame,
@@ -329,15 +340,38 @@ function BotGame({
     if (!placingNext) autoStartOnLoad();
   }, [autoStartOnLoad, account?.address, status, placingNext]);
 
-  const back = () => {
+  // Stable refs so the cabinet controller below doesn't re-register every render.
+  const onExitRef = useRef(onExit);
+  onExitRef.current = onExit;
+  const back = useCallback(() => {
     setPlacingNext(false);
     reset();
-    onExit();
-  };
-  const newSession = () => {
+    onExitRef.current();
+  }, [reset]);
+  const newSession = useCallback(() => {
     setPlacingNext(false);
     reset();
-  };
+  }, [reset]);
+
+  // Arcade-cabinet take-over (shared GameCabinet shell, applied to every window).
+  // While autopilot runs this is the "attract" state: hovering freezes the demo and
+  // offers "Play vs Bot" — take-over reuses manual play (autopilot off). Inert
+  // otherwise (connect / placement / manual / settled), so those scenes are untouched.
+  const takeOver = useCallback(() => {
+    setAuto(false);
+    resume(); // unfreeze if the hover paused the loop
+  }, [setAuto, resume]);
+  const cabinet = useMemo<CabinetController>(
+    () => ({
+      active: auto && status === "playing",
+      pause,
+      resume,
+      takeOver,
+      returnHome: back,
+    }),
+    [auto, status, pause, resume, takeOver, back],
+  );
+  useRegisterCabinet(cabinet);
 
   const live = status === "playing";
   // State bar (top): which game + the running score.

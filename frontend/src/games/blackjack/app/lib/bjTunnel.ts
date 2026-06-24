@@ -5,6 +5,11 @@ process.env.PACKAGE_ID ??= import.meta.env.VITE_TUNNEL_PACKAGE_ID;
 import { Transaction } from "@mysten/sui/transactions";
 import { SUI_CLOCK_OBJECT_ID } from "@mysten/sui/utils";
 import { core, onchain, protocols } from "sui-tunnel-ts";
+import {
+  consumeStakeRemainder,
+  stakeCoinArg,
+  type StakeFromBalance,
+} from "@/onchain/tunnelTx";
 
 export const proto = new protocols.BlackjackProtocol();
 
@@ -38,11 +43,17 @@ export function buildCreateAndFundTx(
   partyA: PartyInput,
   partyB: PartyInput,
   stake: bigint,
-  opts: { coinType?: string; stakeCoinId?: string } = {},
+  opts: {
+    coinType?: string;
+    stakeCoinId?: string;
+    stakeFromBalance?: StakeFromBalance;
+  } = {},
 ): Transaction {
   const tx = new Transaction();
-  const source = opts.stakeCoinId ? tx.object(opts.stakeCoinId) : tx.gas;
-  const [coinA, coinB] = tx.splitCoins(source, [stake, stake]);
+  // ADR-0013: `stakeFromBalance` withdraws from the sender's address balance (no version-pinned
+  // coin → no equivocation); else split off `stakeCoinId` (DOPAMINT coin) or `tx.gas` (SUI).
+  const source = stakeCoinArg(tx, opts);
+  const [coinA, coinB] = tx.splitCoins(source ?? tx.gas, [stake, stake]);
   tx.moveCall({
     target: `${PACKAGE_ID}::tunnel::create_and_fund`,
     typeArguments: [opts.coinType ?? "0x2::sui::SUI"],
@@ -60,6 +71,9 @@ export function buildCreateAndFundTx(
       tx.object(SUI_CLOCK_OBJECT_ID),
     ],
   });
+  // The split leaves the source coin; a redeemed Coin<T> has no `drop`, so destroy the zero
+  // remainder (no-op on the coin-object / gas paths).
+  consumeStakeRemainder(tx, opts, source);
   return tx;
 }
 
