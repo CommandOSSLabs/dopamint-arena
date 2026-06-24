@@ -46,12 +46,6 @@ let slot = open();
 let steps = 0;
 const t0 = Date.now();
 const deadline = t0 + durationMs;
-
-const SAMPLE_INTERVAL_MS = 100;
-let sampleStartSteps = 0;
-let sampleStartTime = t0;
-let peakTps = 0;
-
 while (true) {
   if (kit.protocol.isTerminal(slot.tunnel.state)) { slot = open(); }
   const state = slot.tunnel.state;
@@ -66,18 +60,8 @@ while (true) {
     slot.last[seat] = h;
     steps++;
   }
-  // Check timing only every 1024 steps to keep Date.now() out of the hot path.
-  if ((steps & 1023) === 0) {
-    const now = Date.now();
-    if (now - sampleStartTime >= SAMPLE_INTERVAL_MS) {
-      const sampleDt = (now - sampleStartTime) / 1000;
-      const sampleTps = (steps - sampleStartSteps) / sampleDt;
-      if (sampleTps > peakTps) peakTps = sampleTps;
-      sampleStartTime = now;
-      sampleStartSteps = steps;
-    }
-    if (now >= deadline) break;
-  }
+  // Check the duration deadline only every 1024 steps to avoid Date.now() overhead.
+  if ((steps & 1023) === 0 && Date.now() >= deadline) break;
 }
 const dt = (Date.now() - t0) / 1000;
-console.log(`STEPS_PER_S=${Math.round(steps / dt)} PEAK_TPS=${Math.round(peakTps)}`);
+console.log(`STEPS_PER_S=${Math.round(steps / dt)}`);
