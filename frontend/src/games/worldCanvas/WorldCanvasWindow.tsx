@@ -1,5 +1,7 @@
 import { useState, type CSSProperties } from "react";
 import type { GameWindowProps } from "../types";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { CanvasView } from "./ui/CanvasView";
 import { PvpCanvasView } from "./ui/PvpCanvasView";
 import { WC, FONT_DISPLAY } from "./ui/tokens";
@@ -43,20 +45,39 @@ export function WorldCanvasWindow({ windowId }: GameWindowProps) {
   );
 }
 
-/** The lobby — a clean Excalidraw-meets-arena card with the two paint modes. */
+/**
+ * The lobby — a normal centered menu (not a canvas overlay), so it's the one screen
+ * that adopts the shared arena {@link Card} + {@link Button} directly. Scoped `.dark`
+ * pins the arena DARK tokens regardless of the app theme (World Canvas is always-dark).
+ */
 function Lobby({ onSolo, onPvp }: { onSolo: () => void; onPvp: () => void }) {
   return (
-    <div style={lobbyWrapStyle}>
-      <div style={lobbyCardStyle}>
-        <h1 style={lobbyTitleStyle}>The World is Your Canvas</h1>
-
-        <button type="button" onClick={onSolo} style={primaryModeStyle}>
-          🤖 Paint vs Bot
-        </button>
-        <button type="button" onClick={onPvp} style={secondaryModeStyle}>
-          🌐 Paint vs Player (Online)
-        </button>
-      </div>
+    <div className="dark" style={lobbyWrapStyle}>
+      <Card
+        className="w-[min(440px,100%)] items-center gap-5 bg-[rgba(15,17,24,0.72)] text-center backdrop-blur-md"
+        style={{ boxShadow: WC.glow }}
+      >
+        <CardHeader className="items-center px-6">
+          <CardTitle className="wal-display text-[32px] font-bold text-foreground">
+            The World is Your Canvas
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="flex w-full flex-col gap-3 px-6">
+          <Button
+            onClick={onSolo}
+            className="h-[54px] w-full text-base font-bold shadow-[var(--wal-glow)]"
+          >
+            🤖 Paint vs Bot
+          </Button>
+          <Button
+            variant="secondary"
+            onClick={onPvp}
+            className="h-[50px] w-full text-[15px] font-bold"
+          >
+            🌐 Paint vs Player (Online)
+          </Button>
+        </CardContent>
+      </Card>
     </div>
   );
 }
@@ -68,57 +89,12 @@ const lobbyWrapStyle: CSSProperties = {
   placeItems: "center",
   padding: 24,
   background:
-    "radial-gradient(120% 100% at 50% -10%, #112c4d 0%, #0a1730 34%, #06060c 78%)",
+    "radial-gradient(120% 100% at 50% -10%, #1a1530 0%, #0f1118 34%, #0c0f1d 78%)",
   fontFamily: FONT_DISPLAY,
   boxSizing: "border-box",
 };
 
-const lobbyCardStyle: CSSProperties = {
-  width: "min(440px, 100%)",
-  display: "flex",
-  flexDirection: "column",
-  alignItems: "center",
-  gap: 14,
-  textAlign: "center",
-  color: WC.text,
-};
-
-const lobbyTitleStyle: CSSProperties = {
-  margin: 0,
-  fontSize: 34,
-  lineHeight: 1.05,
-  fontWeight: 800,
-  letterSpacing: "-.02em",
-  color: "#f3f6ff",
-};
-
-const primaryModeStyle: CSSProperties = {
-  width: "100%",
-  height: 54,
-  borderRadius: 14,
-  border: "none",
-  cursor: "pointer",
-  fontFamily: "inherit",
-  fontSize: 16,
-  fontWeight: 800,
-  color: "#06203B",
-  background: WC.accent,
-  boxShadow: "0 10px 30px rgba(77,162,255,0.45)",
-};
-
-const secondaryModeStyle: CSSProperties = {
-  width: "100%",
-  height: 50,
-  borderRadius: 14,
-  cursor: "pointer",
-  fontFamily: "inherit",
-  fontSize: 15,
-  fontWeight: 700,
-  color: WC.text,
-  background: "rgba(255,255,255,0.06)",
-  border: "1px solid rgba(255,255,255,0.16)",
-};
-
+/** The floating "← Menu" overlay — arena secondary-button tokens (dark glass, radius 0). */
 const backButtonStyle: CSSProperties = {
   position: "absolute",
   top: 14,
@@ -126,13 +102,14 @@ const backButtonStyle: CSSProperties = {
   zIndex: 70,
   height: 34,
   padding: "0 14px",
-  borderRadius: 10,
-  border: "1px solid rgba(255,255,255,0.14)",
+  borderRadius: 0,
+  border: `1px solid ${WC.glassBorder}`,
   cursor: "pointer",
   fontSize: 13,
   fontWeight: 700,
   color: WC.text,
-  background: "rgba(10,16,34,0.72)",
+  background: WC.glass,
+  boxShadow: WC.glow,
   backdropFilter: "blur(8px)",
   fontFamily: FONT_DISPLAY,
 };

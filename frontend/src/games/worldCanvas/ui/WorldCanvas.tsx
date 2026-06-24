@@ -73,6 +73,10 @@ interface Stroke {
   size: number;
   /** Eraser stroke — rendered in the live backdrop color so it covers ("erases"). */
   erase: boolean;
+  /** Co-signed order of this stroke's latest cell. Strokes render in `seq` order so a later
+   *  move covers an earlier one — i.e. an erase-move from EITHER seat hides the ink beneath it
+   *  (cross-painter erase), and a later paint covers an earlier erase. "Last action wins." */
+  seq: number;
   minX: number;
   minY: number;
   maxX: number;
@@ -83,6 +87,8 @@ interface OpenStroke {
   color: number;
   size: number;
   erase: boolean;
+  /** Co-signed order of the latest cell folded into this run (see {@link Stroke.seq}). */
+  seq: number;
   pts: number[][];
   lastX: number;
   lastY: number;
@@ -272,6 +278,7 @@ export function WorldCanvas({
       pts: s.pts,
       size: s.size,
       erase: s.erase,
+      seq: s.seq,
       minX: s.minX,
       minY: s.minY,
       maxX: s.maxX,
@@ -282,7 +289,14 @@ export function WorldCanvas({
 
   // Append a cell's world-center point to its painter's open stroke; a big jump (new
   // region / pen lift) finalizes the current one and starts a fresh stroke.
-  const extendStroke = (key: string, px: number, py: number, color: number, size: number) => {
+  const extendStroke = (
+    key: string,
+    px: number,
+    py: number,
+    color: number,
+    size: number,
+    seq: number,
+  ) => {
     const open = openStrokes.current.get(key);
     if (
       open &&
@@ -292,6 +306,7 @@ export function WorldCanvas({
       open.pts.push([px, py]);
       open.lastX = px;
       open.lastY = py;
+      open.seq = seq;
       open.minX = Math.min(open.minX, px);
       open.minY = Math.min(open.minY, py);
       open.maxX = Math.max(open.maxX, px);
@@ -302,7 +317,8 @@ export function WorldCanvas({
     openStrokes.current.set(key, {
       color,
       size,
-      erase: false, // agents never erase
+      erase: false, // erase is decided per-cell by color===ERASER_COLOR, not this flag
+      seq,
       pts: [[px, py]],
       lastX: px,
       lastY: py,
@@ -330,7 +346,7 @@ export function WorldCanvas({
       if (cell.painter === human) {
         continue;
       }
-      extendStroke(cell.painter, gx + 0.5, gy + 0.5, cell.color, AGENT_STROKE_SIZE);
+      extendStroke(cell.painter, gx + 0.5, gy + 0.5, cell.color, AGENT_STROKE_SIZE, cell.seq);
     }
     appliedSeq.current = maxSeq;
   };
@@ -465,14 +481,15 @@ export function WorldCanvas({
         ctx.stroke();
       };
 
-      // Finalized strokes (cached polylines) → agents' open strokes → the human's
-      // live drag, all culled to the viewport.
-      for (const s of strokes.current) {
-        if (visible(s)) strokePath(s.pts, s.color, s.size, s.erase);
-      }
-      for (const s of openStrokes.current.values()) {
-        if (visible(s)) strokePath(s.pts, s.color, s.size, s.erase);
-      }
+      // Finalized + open strokes, culled to the viewport and drawn in co-signed `seq`
+      // order so the LAST move wins: a later erase covers earlier ink (incl. the other
+      // seat's), and a later paint covers an earlier erase. Sorting only the visible set
+      // keeps this cheap. The human's live drag always rides on top (highest seq).
+      const ordered: Array<Stroke | OpenStroke> = [];
+      for (const s of strokes.current) if (visible(s)) ordered.push(s);
+      for (const s of openStrokes.current.values()) if (visible(s)) ordered.push(s);
+      ordered.sort((a, b) => a.seq - b.seq);
+      for (const s of ordered) strokePath(s.pts, s.color, s.size, s.erase);
       const live = liveStroke.current;
       if (live && live.pts.length) {
         strokePath(live.pts, live.color, live.size, live.erase);
@@ -583,6 +600,8 @@ export function WorldCanvas({
       // The eraser is a fatter nib and renders in the backdrop color (covers = erases).
       size: brushSizeRef.current * (erasingRef.current ? 3 : 1.6),
       erase: erasingRef.current,
+      // Your own in-progress ink rides on top of everything already on the wall.
+      seq: Number.MAX_SAFE_INTEGER,
       pts: [[wx, wy]],
       lastX: wx,
       lastY: wy,
@@ -604,7 +623,12 @@ export function WorldCanvas({
   };
   const liveFinalize = () => {
     if (liveStroke.current) {
-      finalizeStroke(liveStroke.current);
+      // Persist only when this seat's cells DON'T return via `syncPaints`. Solo skips the
+      // human painter there, so the live drag is the only record → keep it. In PvP
+      // (humanAddress=""), every cell — yours included — comes back through `syncPaints`
+      // with its real co-signed `seq`, so persisting the live copy would (a) double-draw and
+      // (b) pin your ink on top forever, defeating the opponent's erase. Drop it there.
+      if (humanRef.current) finalizeStroke(liveStroke.current);
       liveStroke.current = null;
     }
   };
@@ -756,15 +780,15 @@ export function WorldCanvas({
             transform: "translate(-50%, calc(-100% - 8px))",
             pointerEvents: "none",
             padding: "3px 8px",
-            borderRadius: 8,
+            borderRadius: 0,
             fontSize: 10.5,
             fontWeight: 700,
             whiteSpace: "nowrap",
             color: WC.text,
             fontFamily: FONT_MONO,
-            background: "rgba(10,16,34,0.92)",
+            background: "rgba(15,17,24,0.92)",
             border: `1px solid ${WC.panelBorder}`,
-            boxShadow: "0 6px 18px rgba(0,0,0,0.4)",
+            boxShadow: WC.glow,
             zIndex: 5,
           }}
         >
@@ -774,11 +798,12 @@ export function WorldCanvas({
       {/* Zoom HUD (bottom-left) — capped to the canvas width and wrap-friendly so it never
           runs off-screen in a narrow window. */}
       <div
-        className="absolute bottom-[18px] left-4 flex flex-wrap items-center gap-2 px-2.5 py-1.5 rounded-[12px]"
+        className="absolute bottom-[18px] left-4 flex flex-wrap items-center gap-2 px-2.5 py-1.5 rounded-none"
         style={{
           maxWidth: "calc(100% - 32px)",
           background: WC.glass,
           border: `1px solid ${WC.glassBorder}`,
+          boxShadow: WC.glow,
           backdropFilter: "blur(8px)",
         }}
       >
@@ -799,8 +824,8 @@ function ZoomButton({ label, onClick }: { label: string; onClick: () => void }) 
   return (
     <button
       onClick={onClick}
-      className="flex h-[26px] w-[26px] items-center justify-center rounded-[7px] text-[15px] font-bold leading-none"
-      style={{ background: "rgba(255,255,255,0.08)", color: WC.text }}
+      className="flex h-[26px] w-[26px] items-center justify-center rounded-none text-[15px] font-bold leading-none bg-[rgba(255,255,255,0.06)] transition-colors hover:bg-[rgba(97,61,255,0.18)]"
+      style={{ color: WC.text }}
     >
       {label}
     </button>
@@ -862,9 +887,9 @@ function drawAgentMarker(
   ctx.arc(cxs, topYs - 1, 2.6, 0, Math.PI * 2);
   ctx.fill();
 
-  // Label pill.
-  roundRectPath(ctx, boxX, boxY, boxW, boxH, 6);
-  ctx.fillStyle = "rgba(10,16,34,0.92)";
+  // Label pill — sharp (arena radius 0), card-ink fill.
+  roundRectPath(ctx, boxX, boxY, boxW, boxH, 0);
+  ctx.fillStyle = "rgba(15,17,24,0.92)";
   ctx.fill();
   ctx.lineWidth = 1;
   ctx.strokeStyle = tint;
@@ -875,7 +900,7 @@ function drawAgentMarker(
   ctx.beginPath();
   ctx.arc(boxX + padX, boxY + boxH / 2, 3, 0, Math.PI * 2);
   ctx.fill();
-  ctx.fillStyle = "#e8e8f0";
+  ctx.fillStyle = "#faf8f5";
   ctx.fillText(text, boxX + padX + dotGap, boxY + boxH / 2 + 0.5);
   ctx.restore();
 }

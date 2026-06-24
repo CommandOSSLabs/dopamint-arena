@@ -288,10 +288,10 @@ function ParticipantChip({
       title={title}
       style={{
         ...participantChipStyle,
-        background: hover ? "rgba(255,255,255,0.16)" : "rgba(255,255,255,0.06)",
+        background: hover ? "rgba(255,255,255,0.10)" : "rgba(255,255,255,0.06)",
         borderColor: hover
-          ? "rgba(255,255,255,0.3)"
-          : "rgba(255,255,255,0.14)",
+          ? "rgba(218,218,214,0.24)"
+          : "rgba(218,218,214,0.14)",
       }}
     >
       <SeatDot tint={tint} />
@@ -306,7 +306,7 @@ function SeatDot({ tint }: { tint: string }) {
       style={{
         width: 8,
         height: 8,
-        borderRadius: 2,
+        borderRadius: 0,
         background: tint,
         flex: "0 0 auto",
       }}
@@ -320,7 +320,7 @@ const wrapStyle: CSSProperties = {
   display: "grid",
   placeItems: "center",
   background:
-    "radial-gradient(120% 100% at 50% -10%, #112c4d 0%, #0a1730 34%, #06060c 78%)",
+    "radial-gradient(120% 100% at 50% -10%, #1a1530 0%, #0f1118 34%, #0c0f1d 78%)",
   fontFamily: FONT_DISPLAY,
 };
 const cardStyle: CSSProperties = {
@@ -341,18 +341,19 @@ const spinnerStyle: CSSProperties = {
   borderTopColor: WC.accent,
   animation: "spin 0.9s linear infinite",
 };
-const titleStyle: CSSProperties = { fontSize: 18, fontWeight: 800, color: "#f3f6ff" };
-const subStyle: CSSProperties = { fontSize: 13, lineHeight: 1.55, color: "#93a0bd" };
+const titleStyle: CSSProperties = { fontSize: 18, fontWeight: 800, color: WC.text };
+const subStyle: CSSProperties = { fontSize: 13, lineHeight: 1.55, color: WC.muted };
 const retryStyle: CSSProperties = {
   marginTop: 6,
   height: 38,
   padding: "0 18px",
-  borderRadius: 10,
+  borderRadius: 0,
   border: "none",
   cursor: "pointer",
   fontWeight: 800,
-  color: "#06203B",
+  color: WC.text,
   background: WC.accent,
+  boxShadow: WC.glow,
 };
 const boardWrapStyle: CSSProperties = {
   height: "100%",
@@ -372,15 +373,15 @@ const controlBarStyle: CSSProperties = {
   gap: 8,
   height: 34,
   padding: "0 10px",
-  borderRadius: 999,
+  borderRadius: 0,
   fontFamily: FONT_DISPLAY,
   fontSize: 12,
   fontWeight: 700,
   color: WC.text,
-  background: "rgba(10,16,34,0.78)",
-  border: "1px solid rgba(255,255,255,0.12)",
+  background: WC.glass,
+  border: `1px solid ${WC.glassBorder}`,
   backdropFilter: "blur(8px)",
-  boxShadow: "0 6px 20px rgba(0,0,0,0.3)",
+  boxShadow: WC.glow,
 };
 const ctlButtonStyle: CSSProperties = {
   display: "flex",
@@ -402,8 +403,8 @@ const participantChipStyle: CSSProperties = {
   gap: 5,
   height: 24,
   padding: "0 9px",
-  borderRadius: 999,
-  border: "1px solid rgba(255,255,255,0.14)",
+  borderRadius: 0,
+  border: "1px solid rgba(218,218,214,0.14)",
   background: "rgba(255,255,255,0.06)",
   cursor: "pointer",
   fontFamily: "inherit",
@@ -415,7 +416,7 @@ const participantChipStyle: CSSProperties = {
 const ctlDividerStyle: CSSProperties = {
   width: 1,
   height: 16,
-  background: "rgba(255,255,255,0.14)",
+  background: WC.glassBorder,
   flex: "0 0 auto",
 };
 const trackStyle: CSSProperties = {

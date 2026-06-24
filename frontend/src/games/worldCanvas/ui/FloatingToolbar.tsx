@@ -124,12 +124,12 @@ export function FloatingToolbar({
               style={{
                 width: 28,
                 height: 28,
-                borderRadius: 7,
+                borderRadius: 0,
                 display: "grid",
                 placeItems: "center",
                 cursor: "pointer",
                 border: "none",
-                background: on ? "rgba(77,162,255,0.18)" : "transparent",
+                background: on ? "rgba(97,61,255,0.18)" : "transparent",
               }}
             >
               <span
@@ -138,7 +138,7 @@ export function FloatingToolbar({
                   width: 4 + n * 3,
                   height: 4 + n * 3,
                   borderRadius: "50%",
-                  background: on ? WC.accent : "#5b5b66",
+                  background: on ? WC.accent : WC.muted,
                 }}
               />
             </button>
@@ -154,11 +154,11 @@ function swatchButtonStyle(fill: string, on: boolean): CSSProperties {
   return {
     width: 20,
     height: 20,
-    borderRadius: 5,
+    borderRadius: 0,
     cursor: "pointer",
     padding: 0,
     background: fill,
-    border: "1px solid rgba(0,0,0,0.18)",
+    border: "1px solid rgba(218,218,214,0.18)",
     boxShadow: on ? `0 0 0 2px ${WC.accent}` : "none",
   };
 }
@@ -219,8 +219,8 @@ function ColorPalettePopover({
 }
 
 /** The seat-A bot's mint tint — echoes the engine's TINT_BOT_A so the readout's "Bot A"
- *  swatch matches its strokes + leaderboard row. (Bot B / human reuse the WC tokens.) */
-const TINT_BOT_A = "#5fe3a1";
+ *  swatch matches its strokes + leaderboard row. Arena wal-mint. (Bot B / human reuse WC.) */
+const TINT_BOT_A = "#9cefcf";
 
 /**
  * The in-canvas arena cluster for the live ONE strictly-2-party tunnel: two DISTINCT
@@ -323,18 +323,18 @@ export function LiveReadout({
         {auto ? (
           <>
             <SeatDot tint={TINT_BOT_A} /> Bot A
-            <span style={{ color: "#9aa3bb", margin: "0 1px" }}>vs</span>
+            <span style={{ color: WC.muted, margin: "0 1px" }}>vs</span>
             <SeatDot tint={WC.seatB} /> Bot B
           </>
         ) : (
           <>
             <SeatDot tint={WC.seatA} /> You
-            <span style={{ color: "#9aa3bb", margin: "0 1px" }}>vs</span>
+            <span style={{ color: WC.muted, margin: "0 1px" }}>vs</span>
             <SeatDot tint={WC.seatB} /> Bot B
           </>
         )}
       </span>
-      <span style={{ color: "#9aa3bb" }}>·</span>
+      <span style={{ color: WC.muted }}>·</span>
       <span style={{ color: WC.text }}>{Math.round(tps)} TPS</span>
       <span style={readoutDividerStyle} />
       <button
@@ -422,7 +422,7 @@ function SeatDot({ tint }: { tint: string }) {
       style={{
         width: 8,
         height: 8,
-        borderRadius: 2,
+        borderRadius: 0,
         background: tint,
         flex: "0 0 auto",
       }}
@@ -471,18 +471,18 @@ function ToolButton({
       style={{
         width: 34,
         height: 34,
-        borderRadius: 8,
+        borderRadius: 0,
         display: "grid",
         placeItems: "center",
         cursor: "pointer",
         border: "none",
-        color: active ? WC.accent : "#1b1b1f",
+        color: active ? WC.accent : hover ? WC.text : WC.muted,
         background: active
-          ? "rgba(77,162,255,0.18)"
+          ? "rgba(97,61,255,0.18)"
           : hover
-            ? "rgba(255,255,255,0.4)"
+            ? "rgba(255,255,255,0.06)"
             : "transparent",
-        transition: "background .1s",
+        transition: "background .1s, color .1s",
       }}
     >
       {children}
@@ -496,7 +496,7 @@ function Divider() {
       style={{
         width: 1,
         height: 22,
-        background: "rgba(90,100,120,0.25)",
+        background: WC.glassBorder,
         flex: "0 0 auto",
       }}
     />
@@ -519,10 +519,10 @@ const islandStyle: CSSProperties = {
   rowGap: 6,
   maxWidth: "calc(100% - 16px)",
   padding: 6,
-  borderRadius: 12,
+  borderRadius: 0,
   background: WC.toolbar,
   border: `1px solid ${WC.toolbarBorder}`,
-  boxShadow: "0 4px 16px rgba(0,0,0,0.2)",
+  boxShadow: WC.glow,
   backdropFilter: "blur(12px)",
   WebkitBackdropFilter: "blur(12px)",
   fontFamily: FONT_DISPLAY,
@@ -585,7 +585,7 @@ const autoWrapStyle: CSSProperties = {
 function currentSwatchStyle(
   fill: string,
   active: boolean,
-  radius: number | string = 6,
+  radius: number | string = 0,
 ): CSSProperties {
   return {
     width: 26,
@@ -594,10 +594,10 @@ function currentSwatchStyle(
     cursor: "pointer",
     padding: 0,
     background: fill,
-    border: "1px solid rgba(0,0,0,0.22)",
+    border: "1px solid rgba(218,218,214,0.22)",
     boxShadow: active
       ? `0 0 0 2px ${WC.accent}`
-      : "inset 0 0 0 1.5px rgba(255,255,255,0.5)",
+      : "inset 0 0 0 1.5px rgba(255,255,255,0.32)",
   };
 }
 
@@ -619,10 +619,10 @@ const popoverStyle: CSSProperties = {
   gridTemplateColumns: "repeat(3, auto)",
   gap: 6,
   padding: 8,
-  borderRadius: 10,
+  borderRadius: 0,
   background: WC.toolbar,
   border: `1px solid ${WC.toolbarBorder}`,
-  boxShadow: "0 8px 22px rgba(0,0,0,0.28)",
+  boxShadow: WC.glow,
   backdropFilter: "blur(12px)",
   WebkitBackdropFilter: "blur(12px)",
 };
@@ -636,10 +636,11 @@ const autoToggleStyle: CSSProperties = {
   height: 40,
   maxWidth: "100%",
   padding: "0 12px",
-  borderRadius: 12,
+  borderRadius: 0,
   border: `1px solid ${WC.glassBorder}`,
   cursor: "pointer",
   background: WC.glass,
+  boxShadow: WC.glow,
   backdropFilter: "blur(8px)",
   WebkitBackdropFilter: "blur(8px)",
   fontFamily: FONT_DISPLAY,
@@ -688,13 +689,14 @@ const readoutStyle: CSSProperties = {
   minHeight: 36,
   maxWidth: "100%",
   padding: "5px 12px",
-  borderRadius: 10,
+  borderRadius: 0,
   fontSize: 12.5,
   fontWeight: 700,
   color: WC.text,
   fontFamily: FONT_MONO,
   background: WC.glass,
   border: `1px solid ${WC.glassBorder}`,
+  boxShadow: WC.glow,
   backdropFilter: "blur(8px)",
   WebkitBackdropFilter: "blur(8px)",
 };
@@ -702,7 +704,7 @@ const readoutStyle: CSSProperties = {
 const readoutDividerStyle: CSSProperties = {
   width: 1,
   height: 16,
-  background: "rgba(255,255,255,0.14)",
+  background: WC.glassBorder,
   margin: "0 2px",
   flex: "0 0 auto",
 };
@@ -710,7 +712,7 @@ const readoutDividerStyle: CSSProperties = {
 const pillButtonStyle: CSSProperties = {
   height: 26,
   padding: "0 10px",
-  borderRadius: 8,
+  borderRadius: 0,
   border: `1px solid ${WC.glassBorder}`,
   cursor: "pointer",
   fontFamily: "inherit",
@@ -732,24 +734,27 @@ const mostPaintedStyle: CSSProperties = {
   flexDirection: "column",
   gap: 3,
   padding: "9px 11px",
-  borderRadius: 12,
+  borderRadius: 0,
   background: WC.glass,
   border: `1px solid ${WC.glassBorder}`,
+  boxShadow: WC.glow,
   backdropFilter: "blur(8px)",
   WebkitBackdropFilter: "blur(8px)",
   fontFamily: FONT_DISPLAY,
 };
 
+// Arena `.wal-eyebrow` language: mono, uppercase, wide tracking, muted ink.
 const mostPaintedHeaderStyle: CSSProperties = {
   display: "flex",
   alignItems: "center",
   gap: 6,
   marginBottom: 3,
   fontSize: 10,
-  fontWeight: 800,
+  fontWeight: 700,
   letterSpacing: ".14em",
   textTransform: "uppercase",
   color: WC.muted,
+  fontFamily: FONT_MONO,
 };
 
 const leaderRowStyle: CSSProperties = {

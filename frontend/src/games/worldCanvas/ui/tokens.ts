@@ -1,30 +1,33 @@
 /**
  * Visual tokens + the 16-color paint palette for "The World is Your Canvas".
  *
- * Lean Excalidraw-style redesign: a clean light floating toolbar over the dark
- * cosmic canvas void. The cosmic-dark {@link WC} tokens style the wall + HUD; the
- * toolbar/swatches use plain light surfaces. Keep export NAMES/shape stable —
- * WC is imported by the engine and the canvas; PALETTE/PALETTE_RGB feed the raster.
+ * Always-dark canvas game (same class as Quantum Poker): the {@link WC} tokens
+ * mirror the arena's DARK theme — wal-ink void, card-ink glass, wal-cream text,
+ * wal-violet accent, sharp (radius 0) corners — so every panel/HUD reads as the
+ * same family as blackjack/poker over the white drawing canvas. Keep export
+ * NAMES/shape stable — WC is imported by the engine and the canvas;
+ * PALETTE/PALETTE_RGB feed the raster (16-color r/place set — game content, left as-is).
  */
 
 /** Cells per chunk edge — MUST match the WorldCanvasProtocol / the hook. */
 export const CHUNK_SIZE = 256;
 
 export const WC = {
-  bg: "#06060c", // deep space-black backdrop behind the wall
-  board: "#0b1430", // the empty (unpainted) canvas void — dark navy
-  panelBorder: "rgba(255,255,255,0.14)",
-  accent: "#4DA2FF", // Sui blue
-  seatA: "#4DA2FF", // human (party A) tint — consumed by the engine for agent colors
-  seatB: "#CF6EE4", // agent (party B) tint
-  text: "#e8e8f0",
-  muted: "#8a93ad",
-  // Faded ("mờ") HUD surfaces — translucent glass so every control sits subtly over
-  // the wall instead of boxing it in. Shared by the toolbar + the top-right cluster.
-  glass: "rgba(10,16,34,0.5)", // faded dark glass: mode pill, toggle, readout, leaderboard, zoom HUD
-  glassBorder: "rgba(255,255,255,0.07)", // hairline edge for the dark glass
-  toolbar: "rgba(244,247,255,0.6)", // faded light frost for the floating toolbar
-  toolbarBorder: "rgba(255,255,255,0.4)", // soft edge for the light toolbar
+  bg: "#0c0f1d", // arena void backdrop (wal-ink / --background)
+  board: "#0c0f1d", // unpainted void — same arena ink (the draw canvas itself is white)
+  panelBorder: "rgba(218,218,214,0.14)", // arena --border hairline
+  accent: "#613dff", // arena --primary (wal-violet)
+  seatA: "#613dff", // human (party A) tint — arena primary; consumed by the engine
+  seatB: "#CF6EE4", // agent (party B) tint — ≈ arena wal-pink
+  text: "#faf8f5", // arena --foreground (wal-cream)
+  muted: "#8f9294", // arena --muted-foreground
+  // Translucent arena card-ink glass so every control sits subtly over the wall.
+  glass: "rgba(15,17,24,0.72)", // arena --card @ ~0.72: pill, toggle, readout, leaderboard, zoom HUD
+  glassBorder: "rgba(218,218,214,0.14)", // arena --border hairline for the dark glass
+  toolbar: "rgba(15,17,24,0.72)", // floating toolbar = same dark arena glass
+  toolbarBorder: "rgba(218,218,214,0.14)", // arena --border for the toolbar edge
+  // Soft violet drop-glow for floating chrome (mirrors the arena --wal-glow language).
+  glow: "0 1px 2px rgba(12,15,29,0.06), 0 16px 44px rgba(97,61,255,0.12)",
 } as const;
 
 export const FONT_DISPLAY = "'Outfit', system-ui, sans-serif" as const;
