@@ -12,7 +12,7 @@
 
 - **Toolchain:** `tools/loadbench/` is a bun package. Do NOT convert `sui-tunnel-ts/` or `frontend/` to bun — they stay pnpm. The ONLY edit to an upstream pnpm package in this plan is Task 5 (two-line behaviors wiring).
 - **Imports:** `tools/loadbench` imports `sui-tunnel-ts` engine code from source via relative paths (e.g. `../../../sui-tunnel-ts/src/core/distributedTunnel`). Do not import from `frontend/`.
-- **On-chain:** real `create_and_fund` open + `close_cooperative_with_root` settle against a Sui localnet. Moves stay off-chain.
+- **Anchor mode (per run):** `onchain` = real `create_and_fund` open + `close_cooperative_with_root` settle against a Sui localnet (full real game); `offchain` = no chain at all, synthetic tunnel id, just the move loop (pure-burst TPS). Moves stay off-chain in both. Default `onchain`. `offchain --channel local` needs no stack; `offchain --channel relay` needs only the relay.
 - **Relay store:** in-memory by default (valkey out of the move path); `REDIS_*_URL` only set to benchmark the redis path.
 - **Channel labelling:** every throughput number printed MUST be labelled `local` or `relay`; never conflate them.
 - **Playable games (have an engine `randomMove`):** `payments, blackjack, ticTacToe, chat, quantumPoker, bombIt, cross`. Out of scope (no protocol): `battleship, coinFlip, dice, slots` — reject with a clear message.
@@ -1040,10 +1040,10 @@ git commit -m "feat(loadbench): spawn + health-gate the relay"
 **Interfaces:**
 - Consumes: `openTunnels`/`settleTunnel`/`openSpec` (Task 7); `pairLocalChannel` (Task 2); `connectRelaySeat` (Task 6); `playMatch`/`makeSeats` (Task 4); `protocolFor`/`gameBalances`/`isPlayable` (Task 5); `ensureRelay`/`relayWsUrl` (Task 9); `readEnvLocal` (Task 8); `createSuiClient`/`getKeypairFromEnv`.
 - Produces:
-  - `parseBenchArgs(argv: string[]): { game: string; channel: "local"|"relay"; matches: number; concurrency: number; all: boolean }`
-  - `runFullMatch(game: string, channel: "local"|"relay", funder, client, ctx): Promise<MatchResult & { openMs: number; settleMs: number; playMs: number }>`
+  - `parseBenchArgs(argv: string[]): { game: string; channel: "local"|"relay"; anchor: "onchain"|"offchain"; matches: number; concurrency: number; all: boolean }`
+  - `runFullMatch(game: string, channel: "local"|"relay", anchor: "onchain"|"offchain", ctx: { client?: SuiClient; funder?: Ed25519Keypair }): Promise<MatchResult & { openMs: number; settleMs: number; playMs: number }>`
 
-`runFullMatch`: `openTunnels([openSpec(seats)])` → tunnelId; build transports (`local` → `pairLocalChannel()`; `relay` → two `connectRelaySeat` on a unique `bench-<uuid>` game, take `[A.transport, B.transport]` ordered by role); `playMatch`; `settleTunnel`. Times each phase.
+`runFullMatch`: when `anchor === "onchain"`, `openTunnels([openSpec(seats)])` → tunnelId (require `ctx.client`+`ctx.funder`); when `offchain`, keep the synthetic `seats.tunnelId` and skip the chain. Build transports (`local` → `pairLocalChannel()`; `relay` → two `connectRelaySeat` on a unique `bench-<uuid>` game, take `[A.transport, B.transport]` ordered by role); `playMatch`; then `settleTunnel` only when `onchain`. Times each phase (`openMs`/`settleMs` are `0` offchain).
 
 - [ ] **Step 1: Write the failing arg-parse test**
 
@@ -1052,9 +1052,9 @@ git commit -m "feat(loadbench): spawn + health-gate the relay"
 import { test, expect } from "bun:test";
 import { parseBenchArgs } from "./benchGame";
 
-test("defaults: relay channel, 1 match, concurrency 1", () => {
+test("defaults: relay channel, onchain anchor, 1 match, concurrency 1", () => {
   const a = parseBenchArgs(["blackjack"]);
-  expect(a).toEqual({ game: "blackjack", channel: "relay", matches: 1, concurrency: 1, all: false });
+  expect(a).toEqual({ game: "blackjack", channel: "relay", anchor: "onchain", matches: 1, concurrency: 1, all: false });
 });
 
 test("flags override defaults", () => {
@@ -1062,6 +1062,11 @@ test("flags override defaults", () => {
   expect(a.channel).toBe("local");
   expect(a.matches).toBe(10);
   expect(a.concurrency).toBe(4);
+});
+
+test("--offchain selects the offchain anchor (no chain)", () => {
+  expect(parseBenchArgs(["payments", "--offchain"]).anchor).toBe("offchain");
+  expect(parseBenchArgs(["payments", "--anchor", "offchain"]).anchor).toBe("offchain");
 });
 
 test("--all sets the all flag", () => {
@@ -1091,14 +1096,24 @@ import type { Transport } from "../../../sui-tunnel-ts/src/core/distributedTunne
 
 export type Phased = MatchResult & { openMs: number; playMs: number; settleMs: number };
 
-export async function runFullMatch(game: string, channel: "local" | "relay", funder: Ed25519Keypair, client: SuiClient): Promise<Phased> {
+export async function runFullMatch(
+  game: string,
+  channel: "local" | "relay",
+  anchor: "onchain" | "offchain",
+  ctx: { client?: SuiClient; funder?: Ed25519Keypair },
+): Promise<Phased> {
   const id = randomUUID();
   const seats = makeSeats(id, gameBalances(game), 0n);
-  const t0 = performance.now();
-  const [tunnelId] = await openTunnels(client, funder, [openSpec(seats)]);
-  if (!tunnelId) throw new Error("open produced no tunnel id");
-  seats.tunnelId = tunnelId;
-  const openMs = performance.now() - t0;
+  let openMs = 0;
+  if (anchor === "onchain") {
+    if (!ctx.client || !ctx.funder) throw new Error("onchain anchor requires client+funder");
+    const t0 = performance.now();
+    const [tunnelId] = await openTunnels(ctx.client, ctx.funder, [openSpec(seats)]);
+    if (!tunnelId) throw new Error("open produced no tunnel id");
+    seats.tunnelId = tunnelId;
+    openMs = performance.now() - t0;
+  }
+  // offchain: keep the synthetic seats.tunnelId (= id); no chain touched.
 
   let transports: [Transport, Transport];
   const closers: Array<() => void> = [];
@@ -1120,9 +1135,12 @@ export async function runFullMatch(game: string, channel: "local" | "relay", fun
   const playMs = performance.now() - t1;
   for (const c of closers) c();
 
-  const t2 = performance.now();
-  await settleTunnel(client, funder, tunnelId, res.settlement);
-  const settleMs = performance.now() - t2;
+  let settleMs = 0;
+  if (anchor === "onchain") {
+    const t2 = performance.now();
+    await settleTunnel(ctx.client!, ctx.funder!, seats.tunnelId, res.settlement);
+    settleMs = performance.now() - t2;
+  }
   return { ...res, openMs, playMs, settleMs };
 }
 ```
@@ -1140,10 +1158,12 @@ import { runFullMatch } from "./runMatch";
 import { summarize, ratePerSec } from "./metrics";
 
 export function parseBenchArgs(argv: string[]) {
-  const out = { game: "", channel: "relay" as "local" | "relay", matches: 1, concurrency: 1, all: false };
+  const out = { game: "", channel: "relay" as "local" | "relay", anchor: "onchain" as "onchain" | "offchain", matches: 1, concurrency: 1, all: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--all") out.all = true;
+    else if (a === "--offchain") out.anchor = "offchain";
+    else if (a === "--anchor") out.anchor = argv[++i] as "onchain" | "offchain";
     else if (a === "--channel") out.channel = argv[++i] as "local" | "relay";
     else if (a === "--matches") out.matches = Number(argv[++i]);
     else if (a === "--concurrency") out.concurrency = Number(argv[++i]);
@@ -1157,33 +1177,37 @@ function funderFromEnv(env: Record<string, string>): Ed25519Keypair {
   return Ed25519Keypair.fromSecretKey(secretKey);
 }
 
-async function benchOne(game: string, args: ReturnType<typeof parseBenchArgs>, funder: Ed25519Keypair, client: SuiClient) {
+async function benchOne(game: string, args: ReturnType<typeof parseBenchArgs>, ctx: { client?: SuiClient; funder?: Ed25519Keypair }) {
   const latencies: number[] = [];
   let moves = 0;
   const start = performance.now();
   for (let done = 0; done < args.matches; done += args.concurrency) {
     const batch = Math.min(args.concurrency, args.matches - done);
-    const runs = await Promise.all(Array.from({ length: batch }, () => runFullMatch(game, args.channel, funder, client)));
+    const runs = await Promise.all(Array.from({ length: batch }, () => runFullMatch(game, args.channel, args.anchor, ctx)));
     for (const r of runs) { latencies.push(...r.latenciesMs); moves += r.moves; }
   }
   const elapsed = performance.now() - start;
   const s = summarize(latencies);
-  console.log(`[${args.channel}] ${game}: ${moves} moves, ${ratePerSec(moves, elapsed).toFixed(1)} moves/s, p50=${s.p50.toFixed(2)}ms p99=${s.p99.toFixed(2)}ms over ${args.matches} match(es)`);
+  console.log(`[${args.channel}/${args.anchor}] ${game}: ${moves} moves, ${ratePerSec(moves, elapsed).toFixed(1)} moves/s, p50=${s.p50.toFixed(2)}ms p99=${s.p99.toFixed(2)}ms over ${args.matches} match(es)`);
 }
 
 async function main() {
   const args = parseBenchArgs(process.argv.slice(2));
   const games = args.all ? [...PLAYABLE] : [args.game];
   for (const g of games) if (!isPlayable(g)) throw new Error(`game "${g}" is not playable (try: ${PLAYABLE.join(", ")})`);
-  const env = readEnvLocal();
-  if (!env.TUNNEL_PACKAGE_ID) throw new Error("run `bun run stack` first (.env.local missing PACKAGE_ID)");
-  process.env.PACKAGE_ID = env.PACKAGE_ID;
-  process.env.SUI_NETWORK = env.SUI_NETWORK;
-  const client = new SuiClient({ url: getFullnodeUrl("localnet") });
-  const funder = funderFromEnv(env);
+  // offchain needs no chain; onchain needs the published package + funded settler.
+  const ctx: { client?: SuiClient; funder?: Ed25519Keypair } = {};
+  if (args.anchor === "onchain") {
+    const env = readEnvLocal();
+    if (!env.TUNNEL_PACKAGE_ID) throw new Error("run `bun run stack` first (.env.local missing PACKAGE_ID)");
+    process.env.PACKAGE_ID = env.PACKAGE_ID;
+    process.env.SUI_NETWORK = env.SUI_NETWORK;
+    ctx.client = new SuiClient({ url: getFullnodeUrl("localnet") });
+    ctx.funder = funderFromEnv(env);
+  }
   let relay: { stop(): void } | null = null;
   if (args.channel === "relay") relay = await ensureRelay();
-  try { for (const g of games) await benchOne(g, args, funder, client); }
+  try { for (const g of games) await benchOne(g, args, ctx); }
   finally { relay?.stop(); }
 }
 
@@ -1217,10 +1241,17 @@ gated("payments local-channel match opens, plays, and settles on the local stack
   const client = new SuiClient({ url: getFullnodeUrl("localnet") });
   const { secretKey } = decodeSuiPrivateKey(env.SUI_SETTLER_KEY);
   const funder = Ed25519Keypair.fromSecretKey(secretKey);
-  const r = await runFullMatch("payments", "local", funder, client);
+  const r = await runFullMatch("payments", "local", "onchain", { client, funder });
   expect(r.moves).toBeGreaterThan(0);
   expect(r.settleMs).toBeGreaterThan(0);
 }, 120_000);
+
+test("offchain local-channel match plays with no chain (no stack needed)", async () => {
+  const r = await runFullMatch("payments", "local", "offchain", {});
+  expect(r.moves).toBeGreaterThan(0);
+  expect(r.openMs).toBe(0);
+  expect(r.settleMs).toBe(0);
+});
 ```
 
 - [ ] **Step 7: Run the smoke against a live stack**
@@ -1246,7 +1277,7 @@ git commit -m "feat(loadbench): bench:game entrypoint + golden smoke"
 **Interfaces:**
 - Consumes: `runFullMatch` (Task 10); `ensureRelay`/`relayWsUrl` (Task 9); `readEnvLocal`; `ratePerSec`; `PLAYABLE`.
 - Produces:
-  - `parseSwarmArgs(argv: string[]): { channel: "local"|"relay"; concurrency: number; matches: number | null; durationS: number | null; games: string[] }`
+  - `parseSwarmArgs(argv: string[]): { channel: "local"|"relay"; anchor: "onchain"|"offchain"; concurrency: number; matches: number | null; durationS: number | null; games: string[] }`
   - `runSwarm(run: () => Promise<{ moves: number }>, opts: { concurrency: number; matches: number | null; durationMs: number | null; now: () => number }): Promise<{ moves: number; matches: number; elapsedMs: number }>` — keeps `concurrency` matches in flight until BOTH stop conditions that are set are satisfied (matches cap reached, or duration elapsed; whichever is set — both may be set, first to trip wins).
 
 - [ ] **Step 1: Write the failing test**
@@ -1256,9 +1287,13 @@ git commit -m "feat(loadbench): bench:game entrypoint + golden smoke"
 import { test, expect } from "bun:test";
 import { parseSwarmArgs, runSwarm } from "./swarm";
 
-test("parseSwarmArgs reads channel, concurrency, both stop conditions, games", () => {
-  const a = parseSwarmArgs(["--channel", "local", "--concurrency", "8", "--matches", "100", "--duration", "30", "--games", "blackjack,chat"]);
-  expect(a).toEqual({ channel: "local", concurrency: 8, matches: 100, durationS: 30, games: ["blackjack", "chat"] });
+test("parseSwarmArgs reads channel, anchor, concurrency, both stop conditions, games", () => {
+  const a = parseSwarmArgs(["--channel", "local", "--offchain", "--concurrency", "8", "--matches", "100", "--duration", "30", "--games", "blackjack,chat"]);
+  expect(a).toEqual({ channel: "local", anchor: "offchain", concurrency: 8, matches: 100, durationS: 30, games: ["blackjack", "chat"] });
+});
+
+test("parseSwarmArgs defaults to the onchain anchor", () => {
+  expect(parseSwarmArgs([]).anchor).toBe("onchain");
 });
 
 test("runSwarm stops at the matches cap", async () => {
@@ -1292,10 +1327,12 @@ import { runFullMatch } from "./runMatch";
 import { ratePerSec } from "./metrics";
 
 export function parseSwarmArgs(argv: string[]) {
-  const out = { channel: "relay" as "local" | "relay", concurrency: 8, matches: null as number | null, durationS: null as number | null, games: [...PLAYABLE] as string[] };
+  const out = { channel: "relay" as "local" | "relay", anchor: "onchain" as "onchain" | "offchain", concurrency: 8, matches: null as number | null, durationS: null as number | null, games: [...PLAYABLE] as string[] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--channel") out.channel = argv[++i] as "local" | "relay";
+    else if (a === "--offchain") out.anchor = "offchain";
+    else if (a === "--anchor") out.anchor = argv[++i] as "onchain" | "offchain";
     else if (a === "--concurrency") out.concurrency = Number(argv[++i]);
     else if (a === "--matches") out.matches = Number(argv[++i]);
     else if (a === "--duration") out.durationS = Number(argv[++i]);
@@ -1329,23 +1366,29 @@ export async function runSwarm(
 async function main() {
   const args = parseSwarmArgs(process.argv.slice(2));
   if (args.matches === null && args.durationS === null) args.durationS = 15;
-  const env = readEnvLocal();
-  if (!env.TUNNEL_PACKAGE_ID) throw new Error("run `bun run stack` first");
-  process.env.PACKAGE_ID = env.PACKAGE_ID;
-  process.env.SUI_NETWORK = env.SUI_NETWORK;
-  const client = new SuiClient({ url: getFullnodeUrl("localnet") });
-  const { secretKey } = decodeSuiPrivateKey(env.SUI_SETTLER_KEY);
-  const funder = Ed25519Keypair.fromSecretKey(secretKey);
+  const ctx: { client?: SuiClient; funder?: Ed25519Keypair } = {};
+  if (args.anchor === "onchain") {
+    const env = readEnvLocal();
+    if (!env.TUNNEL_PACKAGE_ID) throw new Error("run `bun run stack` first");
+    process.env.PACKAGE_ID = env.PACKAGE_ID;
+    process.env.SUI_NETWORK = env.SUI_NETWORK;
+    ctx.client = new SuiClient({ url: getFullnodeUrl("localnet") });
+    const { secretKey } = decodeSuiPrivateKey(env.SUI_SETTLER_KEY);
+    ctx.funder = Ed25519Keypair.fromSecretKey(secretKey);
+  }
   const relay = args.channel === "relay" ? await ensureRelay() : null;
   let g = 0;
   const nextGame = () => args.games[g++ % args.games.length];
+  const tag = `${args.channel}/${args.anchor}`;
   try {
-    const res = await runSwarm(() => runFullMatch(nextGame(), args.channel, funder, client), {
+    const res = await runSwarm(() => runFullMatch(nextGame(), args.channel, args.anchor, ctx), {
       concurrency: args.concurrency, matches: args.matches, durationMs: args.durationS !== null ? args.durationS * 1000 : null, now: () => performance.now(),
     });
-    console.log(`[${args.channel}] swarm: ${res.moves} moves over ${res.matches} matches in ${(res.elapsedMs / 1000).toFixed(1)}s`);
-    console.log(`[${args.channel}] aggregate move-TPS: ${ratePerSec(res.moves, res.elapsedMs).toFixed(1)}`);
-    console.log(`[${args.channel}] tunnels settled/s: ${ratePerSec(res.matches, res.elapsedMs).toFixed(2)} (on-chain-finality-bound)`);
+    console.log(`[${tag}] swarm: ${res.moves} moves over ${res.matches} matches in ${(res.elapsedMs / 1000).toFixed(1)}s`);
+    console.log(`[${tag}] aggregate move-TPS: ${ratePerSec(res.moves, res.elapsedMs).toFixed(1)}`);
+    if (args.anchor === "onchain") {
+      console.log(`[${tag}] tunnels settled/s: ${ratePerSec(res.matches, res.elapsedMs).toFixed(2)} (on-chain-finality-bound)`);
+    }
   } finally { relay?.stop(); }
 }
 
@@ -1357,10 +1400,16 @@ if (import.meta.main) main().catch((e) => { console.error(e); process.exit(1); }
 Run: `cd tools/loadbench && bun test src/swarm.test.ts`
 Expected: PASS (3 tests).
 
-- [ ] **Step 5: Integration verify (live stack, both channels)**
+- [ ] **Step 5: Integration verify (offchain burst + onchain, both channels)**
 
-Run: `cd tools/loadbench && bun run stack`, then `bun run swarm --channel local --concurrency 8 --matches 40` and `bun run swarm --channel relay --concurrency 8 --duration 15`.
-Expected: each prints an aggregate move-TPS labelled by channel; the `local` number is the engine ceiling, `relay` the served number. No errors, all matches settle.
+Offchain burst (no stack needed for local; relay only for relay):
+- `cd tools/loadbench && bun run swarm --offchain --channel local --concurrency 16 --duration 10` → pure engine move-TPS, no chain, no relay.
+- `bun run swarm --offchain --channel relay --concurrency 16 --duration 10` → relay-bound move-TPS, no chain (auto-spawns the relay).
+
+Onchain (full real game, needs the stack):
+- `bun run stack`, then `bun run swarm --channel local --concurrency 8 --matches 40` and `bun run swarm --channel relay --concurrency 8 --duration 15`.
+
+Expected: each prints an aggregate move-TPS labelled `[channel/anchor]`; `local` is the engine ceiling, `relay` the served number; `offchain` runs print no "tunnels settled/s" line, `onchain` runs do. No errors.
 
 - [ ] **Step 6: Commit**
 
@@ -1378,6 +1427,7 @@ git commit -m "feat(loadbench): swarm TPS entrypoint"
 - `bench:game` per game → Task 10. ✓
 - `swarm` for TPS → Task 11. ✓
 - Two channels (local/relay), same engine path → Tasks 2, 6, 10 (`runFullMatch` channel switch). ✓
+- Anchor mode onchain/offchain (offchain = pure-burst TPS, no chain) → Tasks 10, 11 (`runFullMatch` anchor switch; `--offchain`/`--anchor` flags; offchain skips client/funder/stack). ✓
 - Real engine + signing + on-chain open/settle → Tasks 4, 7, 10. ✓
 - 7 playable games; bombIt/cross wired; 4 rejected → Task 5. ✓
 - In-memory relay store default → Task 9 (`ensureRelay` deletes `REDIS_*`). ✓

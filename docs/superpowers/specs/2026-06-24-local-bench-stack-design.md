@@ -220,6 +220,12 @@ Out of scope (no engine protocol exists): **battleship, coinFlip, dice, slots**.
 - **On-chain:** real `create_and_fund` open + cooperative settle against a Sui
   **localnet**; moves stay off-chain. Per-match lifecycle = chain bookends, the
   many moves between them are the throughput.
+- **Anchor mode (per run):** `onchain` (the above) or **`offchain`** — a
+  synthetic tunnel with no chain at all, for plainly bursting move-TPS. Selected
+  by `--offchain`/`--anchor` on both scripts; default `onchain`. `offchain`
+  reuses the exact same move loop, so it isolates engine/relay throughput from
+  on-chain finality. `offchain --channel local` needs no stack; `offchain
+  --channel relay` needs only the relay.
 - **Two channels:** local (in-process) and relay (WS to `tunnel-manager`),
   selected per run; same engine path, different wire.
 - **Location:** new top-level `tools/loadbench/` bun package; upstream pnpm
