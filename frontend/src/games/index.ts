@@ -8,9 +8,9 @@ import "./quantumPoker";
 import "./ticTacToe";
 import "./battleship";
 import "./worldCanvas";
+import "./chat";
 // Floating-widget modules (catalog: false) — registered for rendering but kept out
 // of the catalog; the desktop opens them centered in the default/reset layout.
-import "./chat";
 import "./regularPayments";
 // Hidden for now — re-enable by uncommenting.
 // import "./coinFlip";
