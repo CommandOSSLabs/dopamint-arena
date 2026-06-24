@@ -52,7 +52,7 @@ import {
 import { settlePokerTunnel } from "./pokerSettle";
 
 const STAKE = QUANTUM_POKER_STAKE;
-const DOPAMINT_PER_SEAT = 1_000_000_000n; // 1 DOPAMINT per seat (9 decimals)
+const DOPAMINT_PER_SEAT = 1_000_000n; // 0.001 DOPAMINT/seat → a clean 1.0M-chip stack; still deep enough to run a full HAND_CAP without busting
 const HAND_CAP = QUANTUM_POKER_HANDS_PER_TUNNEL;
 
 /** Pause between matches (ms). */
