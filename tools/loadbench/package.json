@@ -1,0 +1,12 @@
+{
+  "name": "loadbench",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "stack": "bun run src/stack.ts",
+    "bench:game": "bun run src/benchGame.ts",
+    "swarm": "bun run src/swarm.ts",
+    "test": "bun test"
+  },
+  "dependencies": { "@mysten/sui": "1.28.1" }
+}
