@@ -10,7 +10,6 @@ import {
   placementCells,
 } from "../engine/fleet";
 import { GridFrame } from "./GridFrame";
-import { ShipSprite } from "./ShipSprite";
 
 /**
  * Fleet placement: starts from a random legal layout (so the start button works
@@ -103,15 +102,11 @@ export function PlacementBoard({
       }}
     >
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">
-        <span className="wal-mono text-[11px] uppercase tracking-wider text-[#cab1ff]">
+        <span className="qp-eyebrow text-[clamp(9px,2.4cqmin,14px)] uppercase">
           Place your fleet
         </span>
         <div className="flex gap-1.5">
-          <button
-            type="button"
-            onClick={rotate}
-            className="rounded-full border border-[#cab1ff]/20 bg-[#cab1ff]/[0.06] px-3 py-1.5 text-xs font-medium text-[#cab1ff] transition-colors hover:border-[#cab1ff]/60 hover:bg-[#cab1ff]/10 active:scale-95"
-          >
+          <button type="button" onClick={rotate} className="qp-btn">
             Rotate (R) · {orient === "H" ? "→" : "↓"}
           </button>
           <button
@@ -120,7 +115,7 @@ export function PlacementBoard({
               setPlacements(placeFleetRandom(Math.random));
               setSelected(null);
             }}
-            className="rounded-full border border-[#cab1ff]/20 bg-[#cab1ff]/[0.06] px-3 py-1.5 text-xs font-medium text-[#cab1ff] transition-colors hover:border-[#cab1ff]/60 hover:bg-[#cab1ff]/10 active:scale-95"
+            className="qp-btn"
           >
             Randomize
           </button>
@@ -129,7 +124,7 @@ export function PlacementBoard({
             type="button"
             disabled={!legal}
             onClick={() => onReady(placements)}
-            className="rounded-full bg-[#cab1ff] px-4 py-1.5 text-xs font-semibold text-[#0c0f1d] shadow-[0_0_12px_rgba(202,177,255,0.3)] transition-all hover:bg-[#b79bff] active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+            className="qp-btn qp-btn--go"
           >
             {ctaLabel}
           </button>
@@ -142,14 +137,9 @@ export function PlacementBoard({
             key={ship.id}
             type="button"
             onClick={() => pickUp(ship.id)}
-            className={cn(
-              "flex items-center gap-1 rounded-full border px-3 py-1 text-[11px] transition-all duration-150",
-              selected === ship.id
-                ? "border-[#cab1ff] bg-[#cab1ff]/10 text-[#cab1ff] shadow-[0_0_8px_rgba(202,177,255,0.2)]"
-                : "border-[#cab1ff]/15 text-[#cab1ff]/55 hover:border-[#cab1ff]/40 hover:text-[#cab1ff]",
-            )}
+            className={cn("bs-pill", selected === ship.id && "bs-pill--on")}
           >
-            <Check className="size-3 text-[#9cefcf]" />
+            <Check className="size-[1em] text-[var(--qp-felt)]" />
             {ship.name} · {ship.size}
           </button>
         ))}
@@ -160,7 +150,7 @@ export function PlacementBoard({
           window needs no scroll. The 1.25rem trims the fixed A–J label row. */}
       <div className="grid min-h-0 flex-1 place-items-center [container-type:size]">
         <div
-          className="w-[min(100cqw,calc(100cqh_-_1.25rem))] max-w-full rounded-lg bg-slate-950/40 p-1.5 ring-1 ring-[#cab1ff]/20 shadow-lg backdrop-blur-md"
+          className="bs-board w-[min(100cqw,calc(100cqh_-_1.25rem))] max-w-full"
           onPointerLeave={() => setHover(null)}
         >
           <GridFrame
@@ -182,16 +172,16 @@ export function PlacementBoard({
                   onClick={() => placeAt(cell)}
                   onPointerEnter={() => setHover(cell)}
                   className={cn(
-                    "aspect-square rounded-[4px] border relative transition-all duration-150 overflow-hidden z-20",
+                    "bs-cell",
                     inPreview
                       ? preview!.valid
-                        ? "border-[#cab1ff] bg-[#cab1ff]/20"
-                        : "border-[#fb7185] bg-[#fb7185]/20"
-                      : !showAsOccupied
-                        ? "border-[#cab1ff]/10 bg-[#cab1ff]/[0.04] hover:border-[#cab1ff]/30"
-                        : isSelected
-                          ? "border-[#cab1ff] bg-[#cab1ff]/[0.08] shadow-[0_0_8px_rgba(202,177,255,0.3)]"
-                          : "border-transparent bg-transparent", // Placed ship is transparent
+                        ? "!border-[var(--qp-amber)] !bg-[var(--qp-amber-fill)]"
+                        : "!border-[var(--qp-red)] !bg-[rgba(224,49,49,0.16)]"
+                      : showAsOccupied && isSelected
+                        ? "!border-[var(--qp-amber)]"
+                        : showAsOccupied
+                          ? "border-transparent" // placed ship: inked overlay shows through
+                          : "",
                     selected &&
                       !showAsOccupied &&
                       !inPreview &&
@@ -227,19 +217,11 @@ export function PlacementBoard({
                     <div
                       key={p.id}
                       className={cn(
-                        "pointer-events-none relative overflow-hidden transition-all duration-150",
-                        isSelected
-                          ? "opacity-60 shadow-[0_0_8px_rgba(202,177,255,0.2)]"
-                          : "opacity-95",
+                        "bs-ship pointer-events-none transition-all duration-150",
+                        isSelected && "bs-ship--ghost",
                       )}
                       style={gridStyle}
-                    >
-                      <ShipSprite
-                        id={p.id}
-                        size={size}
-                        horizontal={p.orient === "H"}
-                      />
-                    </div>
+                    />
                   );
                 })}
 
@@ -271,19 +253,13 @@ export function PlacementBoard({
                     <div
                       key="preview-ship"
                       className={cn(
-                        "pointer-events-none relative overflow-hidden transition-all duration-75",
+                        "bs-ship pointer-events-none transition-all duration-75",
                         preview.valid
-                          ? "opacity-75 animate-pulse shadow-[0_0_12px_rgba(202,177,255,0.4)]"
-                          : "opacity-45 grayscale brightness-50",
+                          ? "bs-ship--ok motion-safe:animate-pulse"
+                          : "bs-ship--bad",
                       )}
                       style={gridStyle}
-                    >
-                      <ShipSprite
-                        id={selected}
-                        size={size}
-                        horizontal={orient === "H"}
-                      />
-                    </div>
+                    />
                   );
                 })()}
             </>
@@ -291,7 +267,7 @@ export function PlacementBoard({
         </div>
       </div>
 
-      <div className="mt-auto shrink-0 text-[11px] text-arena-muted">
+      <div className="qp-note mt-auto shrink-0 text-[clamp(10px,2.4cqmin,14px)]">
         {legal
           ? selected
             ? "Click to drop the ship; R rotates."

@@ -1,0 +1,167 @@
+/* ============================================================
+   Battleship — hand-drawn "whiteboard sketch" skin, matching Quantum Poker.
+
+   Reuses poker's design tokens (--qp-*, defined on `.qp-sketch`) and its
+   `#qpRough` turbulence filter (rendered by <SketchDefs/>), so the two games
+   share one visual language: Gochi Hand on paper, ink-stroke borders that
+   wobble, amber/red/ink palette, everything cqmin-scaled to the WINDOW.
+
+   The boards are the only battleship-specific chrome; the window frame, header,
+   buttons and panels reuse the `.qp-*` classes verbatim.
+   ============================================================ */
+
+/* ---- board: paper panel inside a hand-drawn ink frame ---- */
+.bs-board {
+  position: relative;
+  isolation: isolate;
+  padding: clamp(3px, 1.4cqmin, 9px);
+  border-radius: 13px;
+  background: #fffefb;
+}
+.bs-board::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 2.5px solid var(--qp-ink);
+  border-radius: 13px;
+  filter: url(#qpRough);
+  z-index: -1;
+}
+/* the enemy "firing" board reads as the felt-green target grid */
+.bs-board--enemy::before {
+  border-color: var(--qp-felt);
+}
+
+/* the A–J / 1–10 frame labels, inked */
+.bs-coord {
+  font-size: clamp(8px, 2.2cqmin, 13px);
+  line-height: 1;
+  color: var(--qp-ink-soft);
+}
+
+/* ---- one 10×10 square ---- */
+.bs-cell {
+  position: relative;
+  isolation: isolate;
+  aspect-ratio: 1;
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: clamp(9px, 3.4cqmin, 22px);
+  line-height: 1;
+  color: var(--qp-ink);
+  background: transparent;
+  border: 1.4px solid rgba(35, 34, 31, 0.16);
+  transition: background 0.12s ease;
+}
+/* fireable water: amber crosshair on hover */
+.bs-cell--fire {
+  cursor: crosshair;
+}
+.bs-cell--fire:hover {
+  background: var(--qp-amber-fill);
+  border-color: var(--qp-amber);
+}
+.bs-cell--miss {
+  color: var(--qp-ink-soft);
+  border-color: rgba(35, 34, 31, 0.16);
+}
+.bs-cell--hit {
+  color: var(--qp-red);
+  border-color: rgba(224, 49, 49, 0.45);
+}
+.bs-cell--sunk {
+  color: var(--qp-red);
+  background: rgba(224, 49, 49, 0.12);
+  border-color: rgba(224, 49, 49, 0.4);
+}
+/* the inked X (hit) / O (miss) glyph — sized to nearly fill its square */
+.bs-mark {
+  font-size: clamp(12px, 7cqmin, 44px);
+  font-weight: 700;
+  line-height: 1;
+}
+
+/* most-recent shot: a quick amber wobble ring */
+.bs-cell--last::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border: 2.5px solid var(--qp-amber);
+  border-radius: 7px;
+  filter: url(#qpRough);
+  pointer-events: none;
+}
+
+/* ---- a ship drawn as a hand-inked block over its footprint (replaces the
+        dark-theme PNG sprite, which used screen-blend and vanishes on paper) ---- */
+.bs-ship {
+  position: relative;
+  isolation: isolate;
+  margin: 1px;
+  border-radius: 7px;
+  background: repeating-linear-gradient(
+    45deg,
+    rgba(35, 34, 31, 0.16) 0 5px,
+    rgba(35, 34, 31, 0.05) 5px 10px
+  );
+}
+.bs-ship::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 2.5px solid var(--qp-ink);
+  border-radius: 7px;
+  filter: url(#qpRough);
+  z-index: -1;
+}
+.bs-ship--ghost {
+  opacity: 0.55;
+}
+.bs-ship--sunk {
+  background: rgba(224, 49, 49, 0.16);
+}
+.bs-ship--sunk::before {
+  border-color: var(--qp-red);
+}
+/* placement preview: accent when it fits, red when it doesn't */
+.bs-ship--ok::before {
+  border-color: var(--qp-amber);
+}
+.bs-ship--bad {
+  background: rgba(224, 49, 49, 0.12);
+}
+.bs-ship--bad::before {
+  border-color: var(--qp-red);
+}
+
+/* a small inked "ship token" chip used in the fleet picker */
+.bs-pill {
+  position: relative;
+  isolation: isolate;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+  padding: clamp(2px, 1cqmin, 6px) clamp(6px, 2cqmin, 13px);
+  font-size: clamp(10px, 2.7cqmin, 16px);
+  line-height: 1;
+  color: var(--qp-ink);
+  cursor: pointer;
+}
+.bs-pill::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 2px solid var(--qp-ink-soft);
+  border-radius: 999px;
+  filter: url(#qpRough);
+  z-index: -1;
+}
+.bs-pill--on {
+  color: var(--qp-amber);
+}
+.bs-pill--on::before {
+  border-color: var(--qp-amber);
+  border-width: 2.5px;
+}
