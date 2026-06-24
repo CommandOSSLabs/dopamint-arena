@@ -70,7 +70,7 @@ async function main() {
   if (args.anchor === "onchain") {
     const env = readEnvLocal();
     if (!env.TUNNEL_PACKAGE_ID) throw new Error("run `bun run stack` first (.env.local missing PACKAGE_ID)");
-    process.env.PACKAGE_ID = env.PACKAGE_ID;
+    process.env.PACKAGE_ID = env.TUNNEL_PACKAGE_ID;
     process.env.SUI_NETWORK = env.SUI_NETWORK;
     ctx.client = new SuiClient({ url: getFullnodeUrl("localnet") });
     ctx.funder = funderFromEnv(env);

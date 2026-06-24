@@ -14,6 +14,5 @@ export function pairLocalChannel(): [Transport, Transport] {
     send: (f) => queueMicrotask(() => cbA?.(f)),
     onFrame: (cb) => { cbB = cb; },
   };
-  void cbA;
   return [a, b];
 }

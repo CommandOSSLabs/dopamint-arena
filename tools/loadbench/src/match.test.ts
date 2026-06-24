@@ -2,7 +2,6 @@ import { test, expect } from "bun:test";
 import { pairLocalChannel } from "./channels/localChannel";
 import { makeSeats, playMatch } from "./match";
 import { PaymentsProtocol } from "../../../sui-tunnel-ts/src/protocol/payments";
-import { verifyCoSignedUpdate } from "../../../sui-tunnel-ts/src/core/tunnel";
 
 test("a payments match plays to terminal over the local channel and settles", async () => {
   const seats = makeSeats("t-1", { a: 1000n, b: 1000n }, 1234n);

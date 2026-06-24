@@ -13,3 +13,11 @@ test("frame bytes round-trip through the relay payload envelope", () => {
 test("non-frame peer payloads decode to null", () => {
   expect(payloadFrame(JSON.stringify({ t: "hello" }))).toBeNull();
 });
+
+test("malformed JSON payload returns null without throwing", () => {
+  expect(payloadFrame("not json{")).toBeNull();
+});
+
+test("non-object JSON payload (e.g. bare number) returns null without throwing", () => {
+  expect(payloadFrame("42")).toBeNull();
+});
