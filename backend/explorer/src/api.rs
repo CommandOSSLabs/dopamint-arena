@@ -32,6 +32,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/v1/settlements/:digest", get(detail))
         .route("/v1/settlements/:digest/transcript", get(transcript))
         .route("/v1/stats/explorer", get(stats))
+        .route("/v1/stats/history", get(stats_history))
         .route("/health/ready", get(|| async { StatusCode::OK }))
         .with_state(state)
 }
@@ -119,6 +120,46 @@ async fn stats(State(s): State<ApiState>) -> Response {
     }
 }
 
+/// Per-second TPS = the discrete derivative of the cumulative `total_actions` series. Pairs of
+/// adjacent buckets where time advanced; the negative-delta guard tolerates a counter reset.
+pub(crate) fn derive_tps_points(cumulative: &[(i64, i64)]) -> Vec<(i64, f64)> {
+    cumulative
+        .windows(2)
+        .filter_map(|w| {
+            let (t0, v0) = w[0];
+            let (t1, v1) = w[1];
+            let dt = t1 - t0;
+            (dt > 0).then(|| (t1, (v1 - v0).max(0) as f64 / dt as f64))
+        })
+        .collect()
+}
+
+#[derive(serde::Deserialize)]
+struct HistoryParams {
+    window: Option<i64>,
+}
+
+async fn stats_history(State(s): State<ApiState>, Query(p): Query<HistoryParams>) -> Response {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let window = p.window.unwrap_or(3600).clamp(1, 86400);
+    match s.store.metric_history(now - window, now).await {
+        Ok(cum) => {
+            let points: Vec<_> = derive_tps_points(&cum)
+                .into_iter()
+                .map(|(t, v)| serde_json::json!({ "t": t.to_string(), "v": v }))
+                .collect();
+            Json(serde_json::json!({ "metric": "tps", "points": points })).into_response()
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "metric_history");
+            (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -197,6 +238,15 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn derive_tps_points_is_the_counter_derivative() {
+        let cumulative = vec![(100i64, 10i64), (101, 25), (103, 55)];
+        assert_eq!(
+            derive_tps_points(&cumulative),
+            vec![(101i64, 15.0), (103i64, 15.0)]
+        );
     }
 
     #[tokio::test]
