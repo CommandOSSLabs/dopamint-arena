@@ -5,7 +5,7 @@ services:
       dockerfile: frontend/bench.Dockerfile
     environment:
       - BENCH_PROCESSES=4
-      - BENCH_DURATION=10000
+      - BENCH_DURATION=30000
     deploy:
       resources:
         limits:
