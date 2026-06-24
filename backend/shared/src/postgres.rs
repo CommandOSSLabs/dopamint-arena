@@ -113,6 +113,18 @@ impl SettlementStore for PgSettlementStore {
                 .await?,
         )
     }
+
+    async fn metric_history(&self, from_secs: i64, to_secs: i64) -> anyhow::Result<Vec<(i64, i64)>> {
+        let rows = sqlx::query_as::<_, (i64, i64)>(
+            "SELECT ts_bucket, total_actions FROM metric_bucket \
+             WHERE ts_bucket >= $1 AND ts_bucket <= $2 ORDER BY ts_bucket ASC",
+        )
+        .bind(from_secs)
+        .bind(to_secs)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
 }
 
 #[cfg(test)]
