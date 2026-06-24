@@ -159,6 +159,28 @@ by the same `deliver`/`populate` cross-instance machinery that already notifies 
 parked waiter today. This consolidates the two existing match-announce blocks in
 `ws.rs` (the `QueueJoin` arm) into one reused function.
 
+### Multiplexing across games over one socket
+
+One socket multiplexing matches across several games is **already first-class** —
+the agent fleet (`agentEngine.ts`) runs concurrent slots across `AGENT_GAMES` over
+one WS, and a backend connection already carries `joined_games: HashSet<String>`
+and `matches: HashMap<String, MatchRecord>`, leaving every joined queue on
+disconnect (`ws.rs`). This design preserves that because nothing keys on
+"one game per socket":
+
+- **Co-location is per *match*, not per socket or game.** A socket has exactly one
+  instance; all its matches across all games share it. A match relays in-process
+  iff *that match's* two ConnRefs share an instance (`deliver` routes per target
+  ConnRef), so one socket can be co-located in game A and split in game B at once,
+  both correct.
+- **The hold is per `queue:<game>`.** A multiplexing socket parks independently in
+  each game's queue, each park carrying its own deadline and its own timer;
+  self-drain is per-queue by wallet. No cross-game interference.
+- **Timer lifecycle:** the per-waiter hold timer is **tied to the connection's
+  task**, so a socket that drops while parked in one or more queues cancels its
+  pending parks/timers — alongside the existing disconnect `leave_queue` cleanup —
+  ensuring a dead socket's waiter is never paired and delivered into the void.
+
 ### Invariants preserved
 
 - **Exactly-once under concurrency:** `JOIN_OR_PAIR` and fallback-pair are each a
