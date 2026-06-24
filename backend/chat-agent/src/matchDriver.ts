@@ -1,6 +1,6 @@
 import type { OllamaBackendClient } from "./ollama.ts";
 import type { MpChannel } from "./mpClient.ts";
-import type { StatefulChatProtocol } from "sui-tunnel-ts/protocol/chat";
+import type { ChatMessage, StatefulChatProtocol } from "sui-tunnel-ts/protocol/chat";
 
 export interface ChatDriverDeps {
   ollama: OllamaBackendClient;
@@ -91,5 +91,9 @@ export class ChatMatchDriver {
 
   requestStop(): void {
     this.stopRequested = true;
+  }
+
+  snapshot(): { messages: ChatMessage[] } {
+    return this.protocol.stateAsChat();
   }
 }
