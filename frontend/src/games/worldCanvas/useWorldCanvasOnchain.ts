@@ -74,7 +74,7 @@ import {
   isDopamintConfigured,
   ensureDopamintStakeCoin,
   DOPAMINT_COIN_TYPE,
-} from "@/onchain/stakeBarrel";
+} from "@/onchain/dopamint";
 import {
   loadOrCreateBots,
   getSuiClient,
