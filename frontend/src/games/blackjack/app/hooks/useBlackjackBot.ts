@@ -131,6 +131,8 @@ export interface BlackjackBotGame {
   hit: () => void;
   /** Stand the player's hand this hand (manual mode only). */
   stand: () => void;
+  /** Place this round's wager (manual mode only, during the betting/round_over phase). */
+  placeBet: (amount: number) => void;
   /** True while a rebalance transfer is in flight (disables the control). */
   rebalancing: boolean;
   maxRounds: number;
@@ -624,10 +626,13 @@ export function useBlackjackBot(): BlackjackBotGame {
               // user-queued hit/stand. The dealer is deterministic and betting auto-deals, so
               // both proceed regardless of the toggle — same split as the PvP mode.
               let move: BetBlackjackMove | null;
-              if (!autoRef.current && cur.phase === "player") {
+              if (
+                !autoRef.current &&
+                (cur.phase === "player" || cur.phase === "round_over")
+              ) {
                 if (!pendingMoveRef.current) {
                   flushHeartbeat(tunnelId, false);
-                  return; // wait for the user's Hit/Stand
+                  return; // wait for the user's Hit/Stand/Bet
                 }
                 move = pendingMoveRef.current;
                 pendingMoveRef.current = null;
@@ -875,6 +880,24 @@ export function useBlackjackBot(): BlackjackBotGame {
   const hit = useCallback(() => queuePlayerMove("hit"), [queuePlayerMove]);
   const stand = useCallback(() => queuePlayerMove("stand"), [queuePlayerMove]);
 
+  // Place this round's wager — manual mode only, during the betting (round_over) phase. The
+  // loop is parked on pendingMoveRef there (it no longer auto-deals when manual), so this hands
+  // it the chosen bet and the next hand deals. No-op outside that window so a stray click can't
+  // queue a bet the protocol would reject.
+  const placeBet = useCallback(
+    (amount: number) => {
+      // Manual betting only — the bet is locked while auto-play runs. setBet keeps the wager UI
+      // (the "Wager" readout + selected chip) and betRef in sync, and betRef is what auto reuses
+      // when you switch back, so the last manual bet carries over. The loop is parked at the
+      // betting phase waiting on pendingMoveRef, so this also deals the next hand.
+      if (autoRef.current || phase !== "playing" || view.phase !== "round_over")
+        return;
+      setBet(amount);
+      pendingMoveRef.current = { action: "bet", amount };
+    },
+    [phase, view.phase, setBet],
+  );
+
   // It's the user's turn exactly when auto is off, a tunnel is playing, and the protocol is
   // waiting on the player's decision.
   const myTurn = !auto && phase === "playing" && view.phase === "player";
@@ -979,6 +1002,7 @@ export function useBlackjackBot(): BlackjackBotGame {
     myTurn,
     hit,
     stand,
+    placeBet,
     rebalancing,
     maxRounds,
     setMaxRounds,
@@ -993,7 +1017,7 @@ export function useBlackjackBot(): BlackjackBotGame {
     paused,
     pause,
     resume,
-    backToConfig,
+    backToConfig: stopTimer,
     newGame,
     refresh: refreshBalances,
     pollBalances,

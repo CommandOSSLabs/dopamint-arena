@@ -21,6 +21,7 @@ import { GameScene } from "@/games/ticTacToe/app/scenes/GameScene";
 import { PvpScene } from "@/games/ticTacToe/app/scenes/PvpScene";
 import { GameCardScale } from "@/games/ticTacToe/app/components/GameCardScale";
 import { isDopamintConfigured } from "@/onchain/dopamint";
+import { SketchDefs } from "@/games/blackjack/app/App";
 import "./index.css";
 
 type Scene = "login" | "setup" | "game" | "pvp";
@@ -216,12 +217,9 @@ function AppContent() {
 
   return (
     <div
-      className={`h-full w-full relative notebook-grid-bg text-on-surface selection:bg-tertiary selection:text-on-tertiary flex items-center justify-center overflow-hidden select-none ${isPortrait ? "p-0" : "p-4"}`}
+      className={`ttt-root qp-sketch h-full w-full relative flex items-center justify-center overflow-hidden select-none ${isPortrait ? "p-0" : "p-4"}`}
     >
-      {/* Vertical Margin Line (Notebook binding line) */}
-      {!isPortrait && (
-        <div className="absolute top-0 bottom-0 left-[20px] md:left-[32px] w-0 border-l-double border-l-[3px] border-secondary z-0 pointer-events-none opacity-80" />
-      )}
+      <SketchDefs />
 
       <div
         ref={containerRef}
@@ -242,13 +240,20 @@ function AppContent() {
           {scene === "setup" &&
             (g.phase === "error" ? (
               <div className="w-full h-full flex flex-col items-center justify-center gap-6 p-8">
-                <p className="text-sm text-rose-400 text-center break-words max-w-xs">
-                  {String(g.phase)}
+                <p className="text-sm text-rose-400 text-center break-words max-w-md">
+                  {/* The real failure (e.g. "sponsor request failed (422): …"), not the bare
+                      "error" phase — so the cause is visible instead of hidden. */}
+                  {g.error ?? "Something went wrong."}
                 </p>
                 <button
                   onClick={() => {
+                    // Resume the attract demo: clear the one-shot latches and restart in watch.
+                    // (Without this the latches stayed set and Retry did nothing.)
                     autoFundRef.current = false;
                     autoEvenedRef.current = false;
+                    autoStartedRef.current = true;
+                    setScene("game");
+                    g.startAuto(true);
                   }}
                   className="px-4 py-2 text-xs font-bold uppercase tracking-widest border border-secondary text-on-surface hover:bg-secondary/20 rounded transition-colors"
                 >

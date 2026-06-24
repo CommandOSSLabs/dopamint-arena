@@ -79,7 +79,7 @@ export function BotPanel({
     marker: string;
   }) => (
     <div
-      className={`flex items-center justify-between border-b-2 border-primary/10 ${isPortrait ? "py-2" : "py-4"}`}
+      className={`flex items-center justify-between border-b-2 border-[var(--qp-ink-soft)]/20 ${isPortrait ? "py-2" : "py-4"}`}
     >
       <div className="flex items-center gap-2 sm:gap-4">
         <span
@@ -88,7 +88,7 @@ export function BotPanel({
           {label}
         </span>
         <span
-          className={`font-body-lg border-2 border-primary/20 rounded-full leading-none bg-surface-container-low ${isPortrait ? "text-sm px-2 py-0.5" : "text-3xl px-4 py-1"}`}
+          className={`font-body-lg border-2 border-[var(--qp-ink-soft)]/40 rounded-full leading-none bg-[var(--qp-paper)] ${isPortrait ? "text-sm px-2 py-0.5" : "text-3xl px-4 py-1"}`}
         >
           {marker}
         </span>
@@ -116,7 +116,7 @@ export function BotPanel({
 
   return (
     <div
-      className={`w-full h-full flex-1 justify-center bg-surface-container-lowest border-4 border-primary shadow-[8px_8px_0px_#00336615] flex flex-col rounded-xl relative z-10 ${isPortrait ? "p-4 gap-4" : "p-12 gap-8"}`}
+      className={`qp-panel qp-stroke w-full h-full flex-1 justify-center flex flex-col relative z-10 ${isPortrait ? "p-4 gap-4" : "p-12 gap-8"}`}
     >
       <div className={`flex flex-col ${isPortrait ? "gap-2" : "gap-6"}`}>
         <Row
@@ -143,7 +143,7 @@ export function BotPanel({
             onClick={onRebalance}
             disabled={rebalancing || locked}
             title="Move half the difference from the richer bot to the poorer one"
-            className={`w-full border-primary bg-surface font-headline-lg-mobile hover:bg-primary/5 active:translate-y-[2px] disabled:opacity-40 disabled:cursor-not-allowed transition-all text-primary rounded-xl shadow-[4px_4px_0px_#001e40] ${isPortrait ? "py-3 text-lg border-4" : "py-6 text-3xl border-[6px]"}`}
+            className={`w-full bg-[var(--qp-paper)] font-bold uppercase tracking-widest hover:bg-[var(--qp-ink)]/5 active:translate-y-[2px] disabled:opacity-40 disabled:cursor-not-allowed transition-all text-[var(--qp-ink)] rounded-xl border border-[var(--qp-ink)] shadow-[4px_4px_0px_var(--qp-ink)] ${isPortrait ? "py-3 text-lg border-4" : "py-6 text-3xl border-[4px]"}`}
           >
             {rebalancing ? "Balancing…" : "⇄ Even out bots"}
           </button>
@@ -164,7 +164,7 @@ export function BotPanel({
           )
         ) : (
           <div
-            className={`flex flex-col sm:flex-row mt-4 [&_button]:w-full [&_button]:bg-surface [&_button]:hover:bg-primary/5 [&_button]:transition-all [&_button]:shadow-[4px_4px_0px_#001e40] ${isPortrait ? "gap-3 mt-2 [&_button]:py-3 [&_button]:px-4 [&_button]:border-4 [&_button]:rounded-lg [&_button]:font-headline-lg-mobile [&_button]:text-lg" : "gap-6 [&_button]:py-6 [&_button]:px-8 [&_button]:border-[6px] [&_button]:border-primary [&_button]:rounded-xl [&_button]:font-headline-lg-mobile [&_button]:text-3xl [&_button]:text-primary"}`}
+            className={`flex flex-col sm:flex-row mt-4 [&_button]:w-full [&_button]:bg-[var(--qp-paper)] [&_button]:hover:bg-[var(--qp-ink)]/5 [&_button]:transition-all [&_button]:shadow-[4px_4px_0px_var(--qp-ink)] ${isPortrait ? "gap-3 mt-2 [&_button]:py-3 [&_button]:px-4 [&_button]:border-4 [&_button]:rounded-lg [&_button]:font-bold [&_button]:text-lg" : "gap-6 [&_button]:py-6 [&_button]:px-8 [&_button]:border-[4px] [&_button]:border-[var(--qp-ink)] [&_button]:rounded-xl [&_button]:font-bold [&_button]:text-3xl [&_button]:text-[var(--qp-ink)]"}`}
           >
             <ConnectButton connectText="Connect wallet" />
             <button
@@ -183,7 +183,7 @@ export function BotPanel({
       </div>
 
       <div
-        className={`flex items-center justify-between font-label-sm border-t-4 border-dashed border-primary/20 mt-4 ${isPortrait ? "text-sm pt-3" : "text-2xl pt-6"}`}
+        className={`flex items-center justify-between font-label-sm border-t-4 border-dashed border-[var(--qp-ink-soft)]/40 mt-4 ${isPortrait ? "text-sm pt-3" : "text-2xl pt-6"}`}
       >
         {/* The SUI testnet faucet is irrelevant in DOPAMINT mode (the stake is faucet-minted). */}
         {!isDopamintConfigured ? (
