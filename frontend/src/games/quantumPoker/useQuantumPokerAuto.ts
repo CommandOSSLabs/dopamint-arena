@@ -873,8 +873,9 @@ class AutoSession {
           });
         }
         prevHandPhase = tunnel.state.phase;
-        // Watchable pacing when a human is at the table; attract stays on the 16ms render-throttle.
-        if (this.manual) await sleep(MANUAL_PACE_MS);
+        // Watchable pacing only while a human actually plays the seat; attract — and Auto, where a bot
+        // drives the seat — stay on the 16ms render-throttle, i.e. full watch-bots speed.
+        if (this.manual && !this.autoSeat) await sleep(MANUAL_PACE_MS);
         if (Date.now() - lastFlush >= FLUSH_MS) await flush();
       }
       // Final flush — force the heartbeat so the last window is never dropped.
