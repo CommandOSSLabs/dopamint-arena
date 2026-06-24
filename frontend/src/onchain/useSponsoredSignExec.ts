@@ -15,10 +15,10 @@ import {
   type OwnedCoin,
 } from "./sponsor";
 import {
-  ensureDopamintAddressBalance,
-  ensureDopamintStakeCoin,
-  isDopamintConfigured,
-} from "./dopamint";
+  ensureMtpsAddressBalance,
+  ensureMtpsStakeCoin,
+  isMtpsConfigured,
+} from "./mtps";
 import type { SignExec } from "./tunnelTx";
 
 export interface SponsoredSignExec {
@@ -37,14 +37,14 @@ export interface SponsoredSignExec {
    */
   selectStakeCoin: (minAmount: bigint) => Promise<string>;
   /**
-   * DOPAMINT stake helper (ADR-0010): return a user `Coin<DOPAMINT>` object id with at least
-   * `minAmount`. It does NOT faucet — the background top-up ({@link useDopamintAutoFaucet}) keeps
+   * MTPS stake helper (ADR-0010): return a user `Coin<MTPS>` object id with at least
+   * `minAmount`. It does NOT faucet — the background top-up ({@link useMtpsAutoFaucet}) keeps
    * the balance above the threshold, so the stake hot-path is just a coin lookup. Throws if the
    * top-up hasn't landed yet (rare cold start) — the caller can retry.
    */
   prepareStake: (minAmount: bigint) => Promise<string>;
   /**
-   * Address-balance stake helper (ADR-0013): ensure the player's DOPAMINT *address balance* holds
+   * Address-balance stake helper (ADR-0013): ensure the player's MTPS *address balance* holds
    * at least `minAmount`, faucet-ing + sweeping if short. Off the hot path — once topped up, the
    * open's own withdrawal is the only tx. Pair with the open builders' `stakeFromBalance`.
    */
@@ -87,10 +87,10 @@ export function useSponsoredSignExec(): SponsoredSignExec {
     // sponsor and polls past indexer lag instead of throwing — so the game open never fails for a
     // just-connected player.
     const prepareStake = (minAmount: bigint): Promise<string> => {
-      if (!isDopamintConfigured) {
-        throw new Error("DOPAMINT is not configured (VITE_DOPAMINT_* env)");
+      if (!isMtpsConfigured) {
+        throw new Error("MTPS is not configured (VITE_MTPS_* env)");
       }
-      return ensureDopamintStakeCoin({
+      return ensureMtpsStakeCoin({
         client: reader as never,
         signExec,
         owner: sender,
@@ -98,13 +98,13 @@ export function useSponsoredSignExec(): SponsoredSignExec {
       });
     };
 
-    // Address-balance funding (ADR-0013): keep the player's DOPAMINT address balance above the
+    // Address-balance funding (ADR-0013): keep the player's MTPS address balance above the
     // stake so a sponsored open can withdraw it without a version-pinned coin. No-op once funded.
     const ensureStakeBalance = (minAmount: bigint): Promise<void> => {
-      if (!isDopamintConfigured) {
-        throw new Error("DOPAMINT is not configured (VITE_DOPAMINT_* env)");
+      if (!isMtpsConfigured) {
+        throw new Error("MTPS is not configured (VITE_MTPS_* env)");
       }
-      return ensureDopamintAddressBalance({
+      return ensureMtpsAddressBalance({
         client: reader as never,
         signExec,
         owner: sender,

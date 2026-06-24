@@ -43,9 +43,9 @@ import {
   type StakeStrategy,
 } from "../../onchain/stakeTunnel";
 import {
-  DOPAMINT_COIN_TYPE,
-  isDopamintConfigured,
-} from "../../onchain/dopamint";
+  MTPS_COIN_TYPE,
+  isMtpsConfigured,
+} from "../../onchain/mtps";
 import { coSignedToSettleBody } from "../../backend/settleRequest";
 import { attachResume, resumeActiveTunnels } from "@/pvp/resumeSession";
 import {
@@ -431,7 +431,7 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
       const reads = client as unknown as Parameters<
         typeof openAndFundSharedTunnel
       >[0]["reads"];
-      const coinType = isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined;
+      const coinType = isMtpsConfigured ? MTPS_COIN_TYPE : undefined;
       const proto = new QuantumPokerProtocol(HAND_CAP);
       const transcript = new Transcript(dt.tunnelId);
       transcriptRef.current = transcript;
@@ -896,8 +896,8 @@ async function settle(
   waitPeer: <T>(t: string) => Promise<T>,
   reads: Parameters<typeof readCreatedAt>[0],
   signExec: Parameters<typeof closeCooperativeWithRoot>[0]["signExec"],
-  // Gas-sponsored signer: the close fallback must use this in DOPAMINT mode, where the player holds
-  // 0 SUI and a wallet-signed close would throw and strand the staked DOPAMINT.
+  // Gas-sponsored signer: the close fallback must use this in MTPS mode, where the player holds
+  // 0 SUI and a wallet-signed close would throw and strand the staked MTPS.
   sponsoredSignExec: Parameters<typeof closeCooperativeWithRoot>[0]["signExec"],
   tunnelId: string,
   transcript: Transcript,
@@ -930,7 +930,7 @@ async function settle(
   if (role !== "A") return; // single submitter, mirrors the cooperative-close pattern
   // AWAIT the close: the backend /settle executes synchronously (WaitForLocalExecution), so awaiting
   // blocks until the close is on-chain. A recycle must wait for this before opening a fresh tunnel —
-  // the close returns the staked DOPAMINT to the wallet and the next open consumes wallet coins, so
+  // the close returns the staked MTPS to the wallet and the next open consumes wallet coins, so
   // running them concurrently equivocates those coins ("object … unavailable for consumption").
   try {
     await cp.settle(
@@ -943,10 +943,10 @@ async function settle(
       e,
     );
     await closeCooperativeWithRoot({
-      signExec: isDopamintConfigured ? sponsoredSignExec : signExec,
+      signExec: isMtpsConfigured ? sponsoredSignExec : signExec,
       tunnelId,
       settlement: co,
-      coinType: isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined,
+      coinType: isMtpsConfigured ? MTPS_COIN_TYPE : undefined,
     });
   }
 }

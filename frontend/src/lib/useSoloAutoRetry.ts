@@ -2,7 +2,7 @@ import { useEffect } from "react";
 
 /**
  * Re-attempt a failed solo start on a fixed interval while the session sits in
- * "error". Recovers a transient funding failure — a cold-start DOPAMINT faucet
+ * "error". Recovers a transient funding failure — a cold-start MTPS faucet
  * race or a brief gas-sponsor outage — without the player touching anything, so
  * the unattended bot game heals itself. Inert unless `enabled` and the status is
  * "error"; the interval is torn down the moment the session leaves "error" (the

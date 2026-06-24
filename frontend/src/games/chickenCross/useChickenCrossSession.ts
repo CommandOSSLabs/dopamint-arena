@@ -31,10 +31,10 @@ import {
 import { useSponsoredSignExec } from "../../onchain/useSponsoredSignExec";
 import { withSponsorFallback } from "../../onchain/sponsor";
 import {
-  DOPAMINT_COIN_TYPE,
-  isDopamintAddressBalance,
-  isDopamintConfigured,
-} from "../../onchain/dopamint";
+  MTPS_COIN_TYPE,
+  isMtpsAddressBalance,
+  isMtpsConfigured,
+} from "../../onchain/mtps";
 import {
   deriveMultiView,
   kickoffNextGame,
@@ -61,9 +61,9 @@ const MAX_STEPS_PER_FRAME = 8;
 /** A beat between finished games so the result + updated score register before the rematch. */
 const CROSS_REMATCH_MS = 600;
 
-/** DOPAMINT bank locked per seat (1 DOPAMINT, 9 decimals) — funds MANY per-game stakes. */
+/** MTPS bank locked per seat (1 MTPS, 9 decimals) — funds MANY per-game stakes. */
 const LOCKED_PER_SEAT = 1_000_000_000n;
-/** SUI-fallback bank per seat (MIST), when the DOPAMINT env is unset. */
+/** SUI-fallback bank per seat (MIST), when the MTPS env is unset. */
 const SUI_PER_SEAT = 500n;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -113,9 +113,9 @@ interface CrossDeps {
   sponsoredSignExec: (tx: never) => Promise<{ digest: string }>;
   /** Pick a user coin to fund the (both-seat) bank; gas is sponsored, the stake is not. */
   selectStakeCoin: (minAmount: bigint) => Promise<string>;
-  /** DOPAMINT stake: faucet (invisibly, sponsored) if short, then return a stake coin id. */
+  /** MTPS stake: faucet (invisibly, sponsored) if short, then return a stake coin id. */
   prepareStake: (minAmount: bigint) => Promise<string>;
-  /** ADR-0013: ensure the player's DOPAMINT address balance covers the stake. No-op once funded. */
+  /** ADR-0013: ensure the player's MTPS address balance covers the stake. No-op once funded. */
   ensureStakeBalance: (minAmount: bigint) => Promise<void>;
 }
 
@@ -388,7 +388,7 @@ class CrossBotSession {
     const deps = this.deps;
     if (!deps) return;
     // Solo play is on-chain only: a connected wallet funds + settles the self-play
-    // tunnel (gas sponsored, DOPAMINT stake). No wallet → require connect, not a demo.
+    // tunnel (gas sponsored, MTPS stake). No wallet → require connect, not a demo.
     if (!deps.account) {
       this.error = "connect a wallet to stake the tunnel";
       this.status = "error";
@@ -422,7 +422,7 @@ class CrossBotSession {
       try {
         // The LARGE bank funded on-chain per seat (vs the small per-game stake). Multi-game
         // swaps `stakePerGame` per race off this bank, so it survives MANY races (not one).
-        const fundedPerSeat = isDopamintConfigured
+        const fundedPerSeat = isMtpsConfigured
           ? LOCKED_PER_SEAT
           : SUI_PER_SEAT;
 
@@ -432,14 +432,14 @@ class CrossBotSession {
         this.setStatus("funding");
         const partyA = { address: a.address, publicKey: a.keyPair.publicKey };
         const partyB = { address: b.address, publicKey: b.keyPair.publicKey };
-        // DOPAMINT (ADR-0010): faucet both seats' bank invisibly (gas-sponsored) and stake
-        // DOPAMINT — free for a 0-SUI player. SUI path (DOPAMINT env unset): sponsored SUI
+        // MTPS (ADR-0010): faucet both seats' bank invisibly (gas-sponsored) and stake
+        // MTPS — free for a 0-SUI player. SUI path (MTPS env unset): sponsored SUI
         // stake with a sender-pays fallback (ADR-0009).
-        // ADR-0013: top up the player's DOPAMINT address balance, then the open withdraws from it
+        // ADR-0013: top up the player's MTPS address balance, then the open withdraws from it
         // (no version-pinned coin → concurrent opens across games never equivocate).
-        if (isDopamintConfigured && isDopamintAddressBalance)
+        if (isMtpsConfigured && isMtpsAddressBalance)
           await deps.ensureStakeBalance(2n * fundedPerSeat);
-        const tunnelId = isDopamintConfigured
+        const tunnelId = isMtpsConfigured
           ? await openAndFundSelfPlay({
               reads,
               signExec: deps.sponsoredSignExec as never,
@@ -447,12 +447,12 @@ class CrossBotSession {
               partyB,
               aAmount: fundedPerSeat,
               bAmount: fundedPerSeat,
-              coinType: DOPAMINT_COIN_TYPE,
-              ...(isDopamintAddressBalance
+              coinType: MTPS_COIN_TYPE,
+              ...(isMtpsAddressBalance
                 ? {
                     stakeFromBalance: {
                       amount: 2n * fundedPerSeat,
-                      coinType: DOPAMINT_COIN_TYPE,
+                      coinType: MTPS_COIN_TYPE,
                     },
                   }
                 : { stakeCoinId: await deps.prepareStake(2n * fundedPerSeat) }),
@@ -593,8 +593,8 @@ class CrossBotSession {
         transcript ? transcript.root() : new Uint8Array(32),
         0n,
       );
-      const coinType = isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined;
-      // DOPAMINT path closes via the gas sponsor too (so a 0-SUI player can close their
+      const coinType = isMtpsConfigured ? MTPS_COIN_TYPE : undefined;
+      // MTPS path closes via the gas sponsor too (so a 0-SUI player can close their
       // bot game for free); SUI path closes sender-pays. coinType must match the tunnel's coin.
       await settleViaBackend({
         tunnelId: this.tunnelId,
@@ -603,7 +603,7 @@ class CrossBotSession {
         label: "chickenCross",
         fallbackClose: () =>
           closeCooperativeWithRoot({
-            signExec: (isDopamintConfigured
+            signExec: (isMtpsConfigured
               ? deps.sponsoredSignExec
               : deps.signExec) as never,
             tunnelId: this.tunnelId,

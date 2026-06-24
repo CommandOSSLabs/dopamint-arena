@@ -5,7 +5,7 @@ import { ConnectButton, useCurrentAccount } from "@mysten/dapp-kit";
 import { CardDisplay } from "@/games/blackjack/app/components/app/CardDisplay";
 import { usePvpBlackjack } from "@/games/blackjack/app/hooks/usePvpBlackjack";
 import { handToCardIndices } from "@/games/blackjack/app/lib/bjCards";
-import { isDopamintConfigured } from "@/onchain/dopamint";
+import { isMtpsConfigured } from "@/onchain/mtps";
 
 const chip25 = "/chip-25.svg";
 const chip100 = "/chip-100.svg";
@@ -110,9 +110,9 @@ export default function PvpBlackjack() {
     document.title = "Blackjack — PvP";
   }, []);
 
-  // DOPAMINT mode: gas is sponsored and the buy-in is faucet-minted DOPAMINT, so a 0-SUI player can
+  // MTPS mode: gas is sponsored and the buy-in is faucet-minted MTPS, so a 0-SUI player can
   // play — the wallet-SUI gate doesn't apply. SUI mode still needs gas to open/deposit.
-  const funded = isDopamintConfigured || g.walletBalance > 20_000_000n;
+  const funded = isMtpsConfigured || g.walletBalance > 20_000_000n;
   const playing =
     g.phase === "playing" || g.phase === "settling" || g.phase === "done";
   const wins = g.rounds.filter((r) => r.outcome === "win").length;
@@ -398,7 +398,7 @@ export default function PvpBlackjack() {
                 <div className="w-full flex flex-col gap-3">
                   <div className="text-[11px] text-zinc-500 font-mono break-all text-center">
                     {g.walletAddress.slice(0, 12)}…
-                    {!isDopamintConfigured && (
+                    {!isMtpsConfigured && (
                       <> · {fmtSui(g.walletBalance)} SUI</>
                     )}
                   </div>
@@ -448,9 +448,9 @@ export default function PvpBlackjack() {
                         className="flex-1 min-w-0 bg-zinc-900 border border-zinc-700 focus:border-amber-500 rounded-lg px-3 py-2 text-sm font-mono tabular-nums outline-none disabled:opacity-40"
                       />
                     </div>
-                    {/* SUI explanation — chips are 1:1 with MIST. Hidden under DOPAMINT (the token
+                    {/* SUI explanation — chips are 1:1 with MIST. Hidden under MTPS (the token
                         is intentionally invisible; the buy-in is just game chips, auto-funded). */}
-                    {!isDopamintConfigured && (
+                    {!isMtpsConfigured && (
                       <div className="text-[11px] text-zinc-400 text-center leading-relaxed">
                         ${Number(g.stake).toLocaleString()} buy-in ≈{" "}
                         <span className="font-mono text-emerald-300">

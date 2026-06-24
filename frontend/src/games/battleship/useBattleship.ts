@@ -24,10 +24,10 @@ import {
 import { withSponsorFallback } from "../../onchain/sponsor";
 import { useSponsoredSignExec } from "../../onchain/useSponsoredSignExec";
 import {
-  DOPAMINT_COIN_TYPE,
-  isDopamintAddressBalance,
-  isDopamintConfigured,
-} from "../../onchain/dopamint";
+  MTPS_COIN_TYPE,
+  isMtpsAddressBalance,
+  isMtpsConfigured,
+} from "../../onchain/mtps";
 import { type BattleshipMove } from "./protocol/battleship";
 import {
   MultiGameBattleshipProtocol,
@@ -49,9 +49,9 @@ import {
 } from "./engine/selfPlay";
 import { type BotDifficulty } from "./engine/bot";
 
-/** DOPAMINT stake locked per seat (1 DOPAMINT, 9 decimals). */
+/** MTPS stake locked per seat (1 MTPS, 9 decimals). */
 const LOCKED_PER_SEAT = 1_000_000_000n;
-/** SUI-fallback stake per seat (MIST), when the DOPAMINT env is unset. */
+/** SUI-fallback stake per seat (MIST), when the MTPS env is unset. */
 const SUI_PER_SEAT = 500n;
 const STAKE = 100n;
 // Throughput, not per-move pacing: the driver applies moves in a synchronous batch
@@ -68,9 +68,10 @@ const BOT_SKILL: BotDifficulty = "hard";
 // ~0.55 KB entry per co-signed move, and the backend rejects bodies over 16 MB. During
 // autopilot we therefore settle the current tunnel and open a fresh one after this many
 // games — or this many entries, whichever comes first — so any single settle stays well
-// under the limit. At "hard", a game is ~160 entries (≤~224 on long ones): 100 games ≈
-// 8.8 MB typical / ≤~12 MB worst, and 24k entries ≈ 13 MB is the hard byte ceiling.
-const ROLLOVER_GAMES = 100;
+// under the limit. At "hard", a game is ~160 entries (≤~224 on long ones), so the 24k-entry
+// byte safety (~13 MB) BINDS FIRST around ~150 games: it, not ROLLOVER_GAMES, is the real
+// ceiling under the 16 MB cap. Reaching the full 200-game cap would need a bigger body cap.
+const ROLLOVER_GAMES = 200;
 const ROLLOVER_ENTRIES = 24_000;
 
 export type BattleshipStatus =
@@ -125,9 +126,9 @@ interface BotDeps {
   sponsoredSignExec: (tx: never) => Promise<{ digest: string }>;
   /** Pick a user coin to fund the (both-seat) stake; gas is sponsored, the stake is not. */
   selectStakeCoin: (minAmount: bigint) => Promise<string>;
-  /** DOPAMINT stake: faucet (invisibly, sponsored) if short, then return a stake coin id. */
+  /** MTPS stake: faucet (invisibly, sponsored) if short, then return a stake coin id. */
   prepareStake: (minAmount: bigint) => Promise<string>;
-  /** ADR-0013: ensure the player's DOPAMINT address balance covers the stake (for the
+  /** ADR-0013: ensure the player's MTPS address balance covers the stake (for the
    *  address-balance open path). No-op once topped up. */
   ensureStakeBalance: (minAmount: bigint) => Promise<void>;
 }
@@ -398,8 +399,8 @@ class BotSession {
       transcript ? transcript.root() : new Uint8Array(32),
       0n,
     );
-    const coinType = isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined;
-    // DOPAMINT path closes via the gas sponsor too (so a 0-SUI player can close their bot
+    const coinType = isMtpsConfigured ? MTPS_COIN_TYPE : undefined;
+    // MTPS path closes via the gas sponsor too (so a 0-SUI player can close their bot
     // game for free); SUI path closes sender-pays. coinType must match the tunnel's coin.
     await settleViaBackend({
       tunnelId,
@@ -408,7 +409,7 @@ class BotSession {
       label: "battleship",
       fallbackClose: () =>
         closeCooperativeWithRoot({
-          signExec: (isDopamintConfigured
+          signExec: (isMtpsConfigured
             ? deps.sponsoredSignExec
             : deps.signExec) as never,
           tunnelId,
@@ -544,7 +545,7 @@ class BotSession {
     const deps = this.deps;
     if (!deps) return;
     // Bot play is on-chain only: a connected wallet funds + settles the self-play
-    // tunnel (gas sponsored, DOPAMINT stake). No wallet → require connect, not a demo.
+    // tunnel (gas sponsored, MTPS stake). No wallet → require connect, not a demo.
     if (!deps.account) {
       this.error = "connect a wallet to play";
       this.status = "error";
@@ -602,9 +603,9 @@ class BotSession {
 
     const a = createParticipant("you-seat");
     const b = createParticipant("foe-seat");
-    // Per-path stake: 1 DOPAMINT vs a tiny MIST amount on the SUI fallback (so the fallback
+    // Per-path stake: 1 MTPS vs a tiny MIST amount on the SUI fallback (so the fallback
     // doesn't lock real SUI). The same value funds on-chain AND inits the off-chain tunnel.
-    const stakePerSeat = isDopamintConfigured ? LOCKED_PER_SEAT : SUI_PER_SEAT;
+    const stakePerSeat = isMtpsConfigured ? LOCKED_PER_SEAT : SUI_PER_SEAT;
 
     const reads = deps.client as unknown as Parameters<
       typeof openAndFundSelfPlay
@@ -612,16 +613,16 @@ class BotSession {
     this.setStatus("funding");
     const partyA = { address: a.address, publicKey: a.keyPair.publicKey };
     const partyB = { address: b.address, publicKey: b.keyPair.publicKey };
-    // DOPAMINT (ADR-0010): faucet both seats' stake invisibly (gas-sponsored) and stake
-    // DOPAMINT — free for a 0-SUI player. SUI path (DOPAMINT env unset): sponsored SUI stake
+    // MTPS (ADR-0010): faucet both seats' stake invisibly (gas-sponsored) and stake
+    // MTPS — free for a 0-SUI player. SUI path (MTPS env unset): sponsored SUI stake
     // with a sender-pays fallback (ADR-0009).
-    // ADR-0013: with the address-balance path on, top up the player's DOPAMINT address balance
+    // ADR-0013: with the address-balance path on, top up the player's MTPS address balance
     // first; the open then withdraws from it instead of a version-pinned coin, so concurrent
     // reload-opens never equivocate. No-op once the balance is funded.
-    if (isDopamintAddressBalance) {
+    if (isMtpsAddressBalance) {
       await deps.ensureStakeBalance(2n * stakePerSeat);
     }
-    const tunnelId = isDopamintConfigured
+    const tunnelId = isMtpsConfigured
       ? await openAndFundSelfPlay({
           reads,
           signExec: deps.sponsoredSignExec as never,
@@ -629,12 +630,12 @@ class BotSession {
           partyB,
           aAmount: stakePerSeat,
           bAmount: stakePerSeat,
-          coinType: DOPAMINT_COIN_TYPE,
-          ...(isDopamintAddressBalance
+          coinType: MTPS_COIN_TYPE,
+          ...(isMtpsAddressBalance
             ? {
                 stakeFromBalance: {
                   amount: 2n * stakePerSeat,
-                  coinType: DOPAMINT_COIN_TYPE,
+                  coinType: MTPS_COIN_TYPE,
                 },
               }
             : { stakeCoinId: await deps.prepareStake(2n * stakePerSeat) }),

@@ -588,12 +588,12 @@ export function ArenaView() {
   const [layout, setLayout] = useLocalStorageState<GridItem[]>(
     // v5: raised the per-window floor to 4×5 (TILE) — older v4 layouts hold the 3×3 floor
     // that let games shrink into a broken sliver, so reseed at the new uniform footprint.
-    "dopamint.desktop.layout.v5",
+    "mtps.desktop.layout.v5",
     seedLayout,
   );
   // Minimized windows: id → saved geometry, restored from the right-edge dock.
   const [hidden, setHidden] = useLocalStorageState<Record<string, GridItem>>(
-    "dopamint.desktop.hidden.v2",
+    "mtps.desktop.hidden.v2",
     {},
   );
   // Popped-out windows: free-floating over the desktop, click-to-front z-order.
@@ -602,7 +602,7 @@ export function ArenaView() {
   // properly-sized tiled window instead of persisting as a stale sliver.
   const [floating, setFloating] = useLocalStorageState<
     Record<string, FloatState>
-  >("dopamint.desktop.floating.v7", seedFloating);
+  >("mtps.desktop.floating.v7", seedFloating);
   const floatZ = useRef(100);
   const [addOpen, setAddOpen] = useState(false);
   const [removeOpen, setRemoveOpen] = useState(false);
@@ -612,7 +612,7 @@ export function ArenaView() {
     (useSearch({ strict: false }) as { section?: MobileSection }).section ??
     "games";
   const [dockSide, setDockSide] = useLocalStorageState<DockSide>(
-    "dopamint.desktop.dockSide.v1",
+    "mtps.desktop.dockSide.v1",
     "bottom",
   );
   const isDesktop = useMediaQuery("(min-width: 1024px)");

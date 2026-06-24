@@ -29,10 +29,10 @@ import {
 } from "@/onchain/tunnelTx";
 import { useSponsoredSignExec } from "@/onchain/useSponsoredSignExec";
 import {
-  DOPAMINT_COIN_TYPE,
-  isDopamintAddressBalance,
-  isDopamintConfigured,
-} from "@/onchain/dopamint";
+  MTPS_COIN_TYPE,
+  isMtpsAddressBalance,
+  isMtpsConfigured,
+} from "@/onchain/mtps";
 import {
   QUANTUM_POKER_STAKE,
   QUANTUM_POKER_HANDS_PER_TUNNEL,
@@ -89,11 +89,11 @@ interface BotDeps {
   account: { address: string } | null;
   client: unknown;
   signExec: SignExec;
-  /** Gas-sponsored wallet signer (DOPAMINT model): settler pays gas, the wallet co-signs. */
+  /** Gas-sponsored wallet signer (MTPS model): settler pays gas, the wallet co-signs. */
   sponsoredSignExec: SignExec;
-  /** Return a user `Coin<DOPAMINT>` object id holding at least `need` to fund the stake. */
+  /** Return a user `Coin<MTPS>` object id holding at least `need` to fund the stake. */
   prepareStake: (need: bigint) => Promise<string>;
-  /** ADR-0013: ensure the player's DOPAMINT address balance covers the stake. No-op once funded. */
+  /** ADR-0013: ensure the player's MTPS address balance covers the stake. No-op once funded. */
   ensureStakeBalance: (need: bigint) => Promise<void>;
 }
 
@@ -131,7 +131,7 @@ class BotSession {
   private oppName = "Bot";
   private tunnelId = "";
   private createdAt = 0n;
-  /** Coin type `T` staked at open (DOPAMINT or SUI); reused by the on-chain fallback close. */
+  /** Coin type `T` staked at open (MTPS or SUI); reused by the on-chain fallback close. */
   private coinType: string | undefined = undefined;
   private ts = 1n;
   private gen = 0;
@@ -244,18 +244,18 @@ class BotSession {
         const a = createParticipant("poker-you");
         const b = createParticipant("poker-foe");
         const reads = deps.client as unknown as SuiReads;
-        // DOPAMINT mode: stake faucet-minted DOPAMINT and sponsor the wallet's open gas (the
+        // MTPS mode: stake faucet-minted MTPS and sponsor the wallet's open gas (the
         // connected wallet funds the stake but pays no gas). SUI fallback (env unset): the wallet
         // funds the stake and pays its own gas.
-        const dopamintOn = isDopamintConfigured;
+        const mtpsOn = isMtpsConfigured;
         // chips == raw stake (1:1), so a 2500 buy-in means a 2500-chip stack — same as PvP. (Was a
-        // full 1 DOPAMINT = 1e9 raw, a stack so large a seat never busts.)
+        // full 1 MTPS = 1e9 raw, a stack so large a seat never busts.)
         const stakePerSeat = STAKE;
-        const coinType = dopamintOn ? DOPAMINT_COIN_TYPE : undefined;
-        const signExec = dopamintOn ? deps.sponsoredSignExec : deps.signExec;
-        // ADR-0013: top up the player's DOPAMINT address balance, then the open withdraws from it
+        const coinType = mtpsOn ? MTPS_COIN_TYPE : undefined;
+        const signExec = mtpsOn ? deps.sponsoredSignExec : deps.signExec;
+        // ADR-0013: top up the player's MTPS address balance, then the open withdraws from it
         // (no version-pinned coin → concurrent opens across games never equivocate).
-        if (dopamintOn && isDopamintAddressBalance)
+        if (mtpsOn && isMtpsAddressBalance)
           await deps.ensureStakeBalance(2n * stakePerSeat);
         const tunnelId = await openAndFundSelfPlay({
           reads,
@@ -266,12 +266,12 @@ class BotSession {
           bAmount: stakePerSeat,
           coinType,
           // Self-play funds both seats from one source, so withdraw/faucet for the 2-seat total.
-          ...(dopamintOn
-            ? isDopamintAddressBalance
+          ...(mtpsOn
+            ? isMtpsAddressBalance
               ? {
                   stakeFromBalance: {
                     amount: 2n * stakePerSeat,
-                    coinType: DOPAMINT_COIN_TYPE,
+                    coinType: MTPS_COIN_TYPE,
                   },
                 }
               : { stakeCoinId: await deps.prepareStake(2n * stakePerSeat) }
@@ -484,8 +484,8 @@ class BotSession {
         tunnelId: this.tunnelId,
         createdAt: this.createdAt,
         coinType: this.coinType,
-        // DOPAMINT mode: the on-chain fallback close stakes DOPAMINT, so it must be gas-sponsored.
-        fallbackSignExec: isDopamintConfigured
+        // MTPS mode: the on-chain fallback close stakes MTPS, so it must be gas-sponsored.
+        fallbackSignExec: isMtpsConfigured
           ? deps.sponsoredSignExec
           : deps.signExec,
       });

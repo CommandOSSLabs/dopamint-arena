@@ -1,5 +1,5 @@
-// Sponsored DOPAMINT staking for the shared-tunnel PvP lane (ADR-0009/0010). The seat-A open and
-// seat-B deposit each carried the same "DOPAMINT → sponsored + faucet-minted stake; SUI fallback →
+// Sponsored MTPS staking for the shared-tunnel PvP lane (ADR-0009/0010). The seat-A open and
+// seat-B deposit each carried the same "MTPS → sponsored + faucet-minted stake; SUI fallback →
 // sponsored stake with a sender-pays fallback" branch in every PvP game hook; these two helpers
 // centralize it so a fix to the funding strategy lands once, not in five files.
 import {
@@ -9,10 +9,10 @@ import {
 } from "./tunnelTx";
 import { withSponsorFallback } from "./sponsor";
 import {
-  DOPAMINT_COIN_TYPE,
-  isDopamintAddressBalance,
-  isDopamintConfigured,
-} from "./dopamint";
+  MTPS_COIN_TYPE,
+  isMtpsAddressBalance,
+  isMtpsConfigured,
+} from "./mtps";
 
 type SharedReads = Parameters<typeof openAndFundSharedTunnel>[0]["reads"];
 type SharedParty = Parameters<typeof openAndFundSharedTunnel>[0]["partyA"];
@@ -23,11 +23,11 @@ export interface StakeStrategy {
   sponsoredSignExec: SignExec;
   /** Wallet sender-pays signer — the SUI-fallback path only. */
   walletSignExec: SignExec;
-  /** A user DOPAMINT coin >= the amount (faucets + polls on a cold-start miss). */
+  /** A user MTPS coin >= the amount (faucets + polls on a cold-start miss). */
   prepareStake: (min: bigint) => Promise<string>;
-  /** A user SUI coin >= the amount (SUI fallback, DOPAMINT env unset). */
+  /** A user SUI coin >= the amount (SUI fallback, MTPS env unset). */
   selectStakeCoin: (min: bigint) => Promise<string>;
-  /** ADR-0013: ensure the player's DOPAMINT address balance covers the stake (address-balance
+  /** ADR-0013: ensure the player's MTPS address balance covers the stake (address-balance
    *  path). No-op once topped up. */
   ensureStakeBalance: (min: bigint) => Promise<void>;
 }
@@ -43,8 +43,8 @@ export async function openSharedTunnelStaked(
   },
 ): Promise<string> {
   const { reads, partyA, partyB, amount } = opts;
-  if (isDopamintConfigured) {
-    if (isDopamintAddressBalance) {
+  if (isMtpsConfigured) {
+    if (isMtpsAddressBalance) {
       // ADR-0013: withdraw seat A's stake from the player's address balance — concurrent opens
       // across games don't equivocate. Top up the balance first (no-op once funded).
       await opts.ensureStakeBalance(amount);
@@ -54,8 +54,8 @@ export async function openSharedTunnelStaked(
         partyA,
         partyB,
         amount,
-        coinType: DOPAMINT_COIN_TYPE,
-        stakeFromBalance: { amount, coinType: DOPAMINT_COIN_TYPE },
+        coinType: MTPS_COIN_TYPE,
+        stakeFromBalance: { amount, coinType: MTPS_COIN_TYPE },
       });
     }
     return openAndFundSharedTunnel({
@@ -64,7 +64,7 @@ export async function openSharedTunnelStaked(
       partyA,
       partyB,
       amount,
-      coinType: DOPAMINT_COIN_TYPE,
+      coinType: MTPS_COIN_TYPE,
       stakeCoinId: await opts.prepareStake(amount),
     });
   }
@@ -95,15 +95,15 @@ export async function depositStakeStaked(
   opts: StakeStrategy & { tunnelId: string; amount: bigint; label: string },
 ): Promise<void> {
   const { tunnelId, amount } = opts;
-  if (isDopamintConfigured) {
-    if (isDopamintAddressBalance) {
+  if (isMtpsConfigured) {
+    if (isMtpsAddressBalance) {
       await opts.ensureStakeBalance(amount);
       await depositStake({
         signExec: opts.sponsoredSignExec,
         tunnelId,
         amount,
-        coinType: DOPAMINT_COIN_TYPE,
-        stakeFromBalance: { amount, coinType: DOPAMINT_COIN_TYPE },
+        coinType: MTPS_COIN_TYPE,
+        stakeFromBalance: { amount, coinType: MTPS_COIN_TYPE },
       });
       return;
     }
@@ -111,7 +111,7 @@ export async function depositStakeStaked(
       signExec: opts.sponsoredSignExec,
       tunnelId,
       amount,
-      coinType: DOPAMINT_COIN_TYPE,
+      coinType: MTPS_COIN_TYPE,
       stakeCoinId: await opts.prepareStake(amount),
     });
     return;

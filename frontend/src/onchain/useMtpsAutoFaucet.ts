@@ -1,16 +1,16 @@
-// Background DOPAMINT top-up (ADR-0010). Keeps a connected wallet's DOPAMINT balance above a
+// Background MTPS top-up (ADR-0010). Keeps a connected wallet's MTPS balance above a
 // threshold by faucet-ing (gas-sponsored, free) whenever it drops below it — so the stake hot-path
 // (`prepareStake`) is just a coin lookup, never an in-line faucet. Mounted ONCE app-wide via
-// {@link DopamintAutoFaucet} (inside the wallet provider), so a top-up fires the moment any wallet
+// {@link MtpsAutoFaucet} (inside the wallet provider), so a top-up fires the moment any wallet
 // connects — no game needs to opt in.
 import { useEffect, useRef } from "react";
 import { useCurrentAccount, useSuiClient } from "@mysten/dapp-kit";
 import {
-  DOPAMINT_COIN_TYPE,
-  DOPAMINT_MIN_BALANCE,
-  faucetDopamint,
-  isDopamintConfigured,
-} from "./dopamint";
+  MTPS_COIN_TYPE,
+  MTPS_MIN_BALANCE,
+  faucetMtps,
+  isMtpsConfigured,
+} from "./mtps";
 import { useSponsoredSignExec } from "./useSponsoredSignExec";
 
 /** dapp-kit's v1-compat client exposes `getBalance`; typed narrowly to avoid an `any`. */
@@ -23,7 +23,7 @@ interface BalanceReader {
 
 const TOP_UP_INTERVAL_MS = 30_000;
 
-export function useDopamintAutoFaucet(): void {
+export function useMtpsAutoFaucet(): void {
   const account = useCurrentAccount();
   const client = useSuiClient();
   const { signExec } = useSponsoredSignExec();
@@ -32,7 +32,7 @@ export function useDopamintAutoFaucet(): void {
   const inFlight = useRef(false);
 
   useEffect(() => {
-    if (!owner || !isDopamintConfigured) return;
+    if (!owner || !isMtpsConfigured) return;
     let cancelled = false;
     const reader = client as unknown as BalanceReader;
 
@@ -41,13 +41,13 @@ export function useDopamintAutoFaucet(): void {
       try {
         const { totalBalance } = await reader.getBalance({
           owner,
-          coinType: DOPAMINT_COIN_TYPE,
+          coinType: MTPS_COIN_TYPE,
         });
-        if (cancelled || BigInt(totalBalance) >= DOPAMINT_MIN_BALANCE) return;
+        if (cancelled || BigInt(totalBalance) >= MTPS_MIN_BALANCE) return;
         inFlight.current = true;
-        await faucetDopamint({ signExec, recipient: owner });
+        await faucetMtps({ signExec, recipient: owner });
       } catch (e) {
-        console.warn("[dopamint] auto-faucet top-up failed", e);
+        console.warn("[mtps] auto-faucet top-up failed", e);
       } finally {
         inFlight.current = false;
       }
@@ -64,10 +64,10 @@ export function useDopamintAutoFaucet(): void {
 
 /**
  * App-wide mount for the background top-up. Render ONCE inside the wallet provider (renders
- * nothing). On wallet connect it checks the DOPAMINT balance and faucets if low — so every game
+ * nothing). On wallet connect it checks the MTPS balance and faucets if low — so every game
  * gets a ready balance without each hook opting in.
  */
-export function DopamintAutoFaucet(): null {
-  useDopamintAutoFaucet();
+export function MtpsAutoFaucet(): null {
+  useMtpsAutoFaucet();
   return null;
 }

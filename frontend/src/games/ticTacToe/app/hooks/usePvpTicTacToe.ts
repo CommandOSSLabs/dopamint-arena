@@ -53,10 +53,10 @@ import { makeTttResumeAdapter } from "@/games/ticTacToe/app/lib/tttResumeAdapter
 import { useSponsoredSignExec } from "@/onchain/useSponsoredSignExec";
 import { withSponsorFallback } from "@/onchain/sponsor";
 import {
-  DOPAMINT_COIN_TYPE,
-  isDopamintAddressBalance,
-  isDopamintConfigured,
-} from "@/onchain/dopamint";
+  MTPS_COIN_TYPE,
+  isMtpsAddressBalance,
+  isMtpsConfigured,
+} from "@/onchain/mtps";
 
 export type Variant = "ttt" | "caro";
 
@@ -73,8 +73,8 @@ const MP_URL =
   ).replace(/^http/, "ws");
 const STAKE = 1n; // MIST per game; caro's protocol forces 0 regardless
 const BANKROLL = 1000n; // SUI-fallback MIST deposited per seat
-// DOPAMINT mode (ADR-0010): bankroll deposited per seat (1 DOPAMINT, 9 decimals).
-const DOPAMINT_BANKROLL = 1_000_000_000n;
+// MTPS mode (ADR-0010): bankroll deposited per seat (1 MTPS, 9 decimals).
+const MTPS_BANKROLL = 1_000_000_000n;
 // One game per tunnel: the match settles on-chain as soon as the game is decided (the winner
 // submits the close — see finishSettle), then players re-queue for the next game. A higher cap
 // would batch many games into a single end-of-session settle instead.
@@ -161,7 +161,7 @@ export function usePvpTicTacToe(
   const walletRef = useRef(wallet);
   walletRef.current = wallet; // read the latest wallet inside stable callbacks without re-creating them
   // Backend gas sponsor (ADR-0009/0010): open + deposit route through the settler so a 0-SUI
-  // zkLogin player stakes faucet-minted DOPAMINT and pays no gas. Read inside stable callbacks
+  // zkLogin player stakes faucet-minted MTPS and pays no gas. Read inside stable callbacks
   // via a ref. (The close stays sender-pays as a fallback to the backend /settle route.)
   const sponsored = useSponsoredSignExec();
   const sponsoredRef = useRef(sponsored);
@@ -314,13 +314,13 @@ export function usePvpTicTacToe(
             : [],
           label: "tictactoe",
           fallbackClose: async () => {
-            // Close pays in the same coin the tunnel was funded in (DOPAMINT vs SUI). In DOPAMINT
+            // Close pays in the same coin the tunnel was funded in (MTPS vs SUI). In MTPS
             // mode the player holds 0 SUI (gas is sponsored), so the close must route through the gas
-            // sponsor too — a wallet-signed close would throw and strand the staked DOPAMINT.
-            const coinType = isDopamintConfigured
-              ? DOPAMINT_COIN_TYPE
+            // sponsor too — a wallet-signed close would throw and strand the staked MTPS.
+            const coinType = isMtpsConfigured
+              ? MTPS_COIN_TYPE
               : undefined;
-            const res = await (isDopamintConfigured ? submitSponsored : submit)(
+            const res = await (isMtpsConfigured ? submitSponsored : submit)(
               buildCloseWithRootTx(t.tunnelId, coSigned, coinType),
             );
             return res.digest;
@@ -572,17 +572,17 @@ export function usePvpTicTacToe(
         // self-asserted in v1); the two are deliberately unrelated keys, so there's no address derivation.
         const oppPubkey = hexToBytes(oppPubHex);
 
-        // DOPAMINT mode (ADR-0010): stake faucet-minted DOPAMINT with gas sponsored — a 0-SUI
+        // MTPS mode (ADR-0010): stake faucet-minted MTPS with gas sponsored — a 0-SUI
         // player plays free. SUI fallback (env unset): sender-pays SUI stake. The bankroll, coin
         // type, and the off-chain init balances all follow this choice so deposits reconcile.
-        const dopamintOn = isDopamintConfigured;
-        const coinType = dopamintOn ? DOPAMINT_COIN_TYPE : undefined;
-        const bankroll = dopamintOn ? DOPAMINT_BANKROLL : BANKROLL;
+        const mtpsOn = isMtpsConfigured;
+        const coinType = mtpsOn ? MTPS_COIN_TYPE : undefined;
+        const bankroll = mtpsOn ? MTPS_BANKROLL : BANKROLL;
 
         // Roles: A = X (opener), B = O. X opens the tunnel registering partyA = self, partyB = opponent.
         // Party address = the zkLogin wallet (receives funds); party public_key = the ephemeral signer.
         // The share tx carries no stake (each seat deposits its own), so it's gas-sponsored in
-        // DOPAMINT mode (with a sender-pays fallback), or plain sender-pays in SUI mode.
+        // MTPS mode (with a sender-pays fallback), or plain sender-pays in SUI mode.
         let tunnelId: string;
         if (m.role === "A") {
           setPhase("opening");
@@ -591,9 +591,9 @@ export function usePvpTicTacToe(
               { walletAddress: selfWallet, publicKey: eph.coreKey.publicKey }, // partyA = X (self)
               { walletAddress: m.opponentWallet, publicKey: oppPubkey }, // partyB = O (opponent)
               0n,
-              coinType, // open Tunnel<DOPAMINT> so the seat deposits type-match
+              coinType, // open Tunnel<MTPS> so the seat deposits type-match
             );
-          const res = dopamintOn
+          const res = mtpsOn
             ? await withSponsorFallback(
                 () => submitSponsored(shareTx()),
                 () => submit(shareTx()),
@@ -624,16 +624,16 @@ export function usePvpTicTacToe(
           (fields?.created_at as string | undefined) ?? 0,
         );
 
-        // Each seat funds its own deposit. DOPAMINT: split from a faucet-minted coin via the gas
+        // Each seat funds its own deposit. MTPS: split from a faucet-minted coin via the gas
         // sponsor (with a sender-pays SUI fallback); SUI fallback: split from the wallet gas coin.
         setPhase("funding");
-        const dep = dopamintOn
+        const dep = mtpsOn
           ? await withSponsorFallback(
               async () => {
                 // ADR-0013: withdraw this seat's deposit from the wallet's address balance. Retry
                 // (rebuild) through checkpoint-settlement lag rather than fall through to the
                 // sender-pays branch (which can't help an address-balance stake).
-                if (isDopamintAddressBalance) {
+                if (isMtpsAddressBalance) {
                   await sponsoredRef.current.ensureStakeBalance(bankroll);
                   return submitRebuildingOnStale(
                     () =>
@@ -641,7 +641,7 @@ export function usePvpTicTacToe(
                         coinType,
                         stakeFromBalance: {
                           amount: bankroll,
-                          coinType: DOPAMINT_COIN_TYPE,
+                          coinType: MTPS_COIN_TYPE,
                         },
                       }),
                     submitSponsored,

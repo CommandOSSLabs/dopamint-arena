@@ -7,10 +7,10 @@ process.env.PACKAGE_ID = "0x2";
 process.env.SUI_NETWORK = "testnet";
 
 import { openAndFundSelfPlay } from "./tunnelTx.ts";
-import { buildSweepToAddressBalance } from "./dopamint.ts";
+import { buildSweepToAddressBalance } from "./mtps.ts";
 import { Transaction } from "@mysten/sui/transactions";
 
-const COIN = "0xabc::dopamint::DOPAMINT";
+const COIN = "0xabc::mtps::MTPS";
 
 // findTunnelId looks for a created `::tunnel::Tunnel` object change; the rest is unused here.
 const fakeReads = {

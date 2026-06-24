@@ -23,7 +23,7 @@ export async function settlePokerTunnel(opts: {
   tunnelId: string;
   createdAt: bigint;
   fallbackSignExec: SignExec;
-  /** Coin type `T` for the on-chain fallback close; defaults to SUI. Pass DOPAMINT for the
+  /** Coin type `T` for the on-chain fallback close; defaults to SUI. Pass MTPS for the
    *  gas-sponsored stake model (the backend /settle reads the type off the tunnel itself). */
   coinType?: string;
 }): Promise<PokerSettleResult> {

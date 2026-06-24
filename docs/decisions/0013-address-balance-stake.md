@@ -54,7 +54,7 @@ on the sponsored path:
      an H1-class settler-drain, the address-balance analogue of the existing
      `Argument::Gas` guard. The user may only withdraw their **own** funds.
 
-The cutover is gated behind `VITE_DOPAMINT_ADDRESS_BALANCE` (default off): with it
+The cutover is gated behind `VITE_MTPS_ADDRESS_BALANCE` (default off): with it
 unset, every game keeps the coin-object stake path verbatim. The retry from the
 unblock stays as a belt-and-suspenders safety net regardless.
 
