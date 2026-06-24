@@ -75,6 +75,10 @@ async fn main() -> anyhow::Result<()> {
         )
     };
 
+    let pair_hold_ms = std::env::var("MP_PAIR_HOLD_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(750);
     let state: SharedState = Arc::new(AppState {
         control,
         mp,
@@ -83,6 +87,7 @@ async fn main() -> anyhow::Result<()> {
         walrus,
         stats_tx,
         actions: crate::stats_counter::LocalActionCounter::default(),
+        pair_hold_ms,
     });
     stats::spawn_stats_broadcaster(state.clone());
     spawn_action_flusher(state.clone());

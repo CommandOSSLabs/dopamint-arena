@@ -41,6 +41,7 @@ pub(crate) mod test_support {
             walrus,
             stats_tx,
             actions: crate::stats_counter::LocalActionCounter::default(),
+            pair_hold_ms: 750,
         })
     }
 }
