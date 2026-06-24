@@ -58,8 +58,8 @@ function Lobby({ onSolo, onPvp }: { onSolo: () => void; onPvp: () => void }) {
         className="w-[min(520px,100%)] items-center gap-5 text-center"
         style={{ boxShadow: WC.glow }}
       >
-        <CardHeader className="items-center px-6">
-          <CardTitle className="wal-display text-balance text-center text-[clamp(18px,5.5vw,22px)] font-bold leading-tight text-foreground">
+        <CardHeader className="w-full items-center px-6">
+          <CardTitle className="wal-display w-full text-balance text-center text-[clamp(24px,4vw,32px)] font-bold leading-tight text-foreground">
             The World is Your Canvas
           </CardTitle>
         </CardHeader>
