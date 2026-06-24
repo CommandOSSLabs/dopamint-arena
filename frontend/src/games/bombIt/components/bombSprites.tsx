@@ -11,11 +11,43 @@ const SCENE_FLOATS: Array<{
   drift: "a" | "b" | "c";
   opacity?: number;
 }> = [
-  { kind: "crate", left: "8%", top: "10%", scale: 1.15, rotate: -14, drift: "a", opacity: 0.55 },
+  {
+    kind: "crate",
+    left: "8%",
+    top: "10%",
+    scale: 1.15,
+    rotate: -14,
+    drift: "a",
+    opacity: 0.55,
+  },
   { kind: "bomb", left: "72%", top: "6%", scale: 1.05, rotate: 10, drift: "b" },
-  { kind: "player-a", left: "18%", top: "34%", scale: 0.95, rotate: -6, drift: "c", opacity: 0.7 },
-  { kind: "wall", left: "52%", top: "22%", scale: 0.9, rotate: 0, drift: "a", opacity: 0.45 },
-  { kind: "crate", left: "62%", top: "48%", scale: 1, rotate: 12, drift: "c", opacity: 0.5 },
+  {
+    kind: "player-a",
+    left: "18%",
+    top: "34%",
+    scale: 0.95,
+    rotate: -6,
+    drift: "c",
+    opacity: 0.7,
+  },
+  {
+    kind: "wall",
+    left: "52%",
+    top: "22%",
+    scale: 0.9,
+    rotate: 0,
+    drift: "a",
+    opacity: 0.45,
+  },
+  {
+    kind: "crate",
+    left: "62%",
+    top: "48%",
+    scale: 1,
+    rotate: 12,
+    drift: "c",
+    opacity: 0.5,
+  },
 ];
 
 /** Square arena glyphs reused in lobby scene and mode tiles. */
@@ -38,7 +70,9 @@ export function BombGlyph({
       ].join(" ")}
       aria-hidden
     >
-      {kind === "player-a" || kind === "player-b" ? <span className="bomb-glyph__inner" /> : null}
+      {kind === "player-a" || kind === "player-b" ? (
+        <span className="bomb-glyph__inner" />
+      ) : null}
       {kind === "bomb" ? (
         <>
           <span className="bomb-glyph__core" />
