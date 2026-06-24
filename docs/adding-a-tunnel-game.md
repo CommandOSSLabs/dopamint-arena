@@ -153,6 +153,23 @@ stickiness cookie). Without it, reconnects are routed round-robin and co-located
 matches degrade to split (still correct, over the Redis fallback). Cross-origin
 deployments also need `SameSite=None; Secure` on the cookie.
 
+### Verifying stickiness locally
+
+`backend/tunnel-manager/smoke/` holds a self-contained harness that stands in for the
+production load balancer: `docker-compose.affinity-smoke.yml` runs Redis + two relay
+instances (`INSTANCE_ID=inst-a`/`inst-b`) behind haproxy configured for `aff`-cookie
+affinity (`haproxy.cfg`). Run it with:
+
+```bash
+backend/tunnel-manager/smoke/affinity-smoke.sh
+```
+
+The script (Docker required) brings the harness up, then asserts: a reconnect carrying
+`aff=<instance>` is pinned to that instance across repeated handshakes, while cookieless
+traffic load-balances across both. It exits non-zero on any failure and tears the harness
+down on exit. This validates the LB-honors-`aff` path; AWS ALB uses its own stickiness
+cookie, so re-verify affinity there after deploy.
+
 ## Anti-patterns
 
 | Don't | Do |

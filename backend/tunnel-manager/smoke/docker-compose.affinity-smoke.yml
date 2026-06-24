@@ -1,0 +1,74 @@
+# Local affinity smoke harness: two relay instances behind haproxy configured for
+# cookie-based session affinity on the `aff` cookie the relay sets on the /v1/mp
+# handshake. Drive it with ./affinity-smoke.sh — that brings this up, asserts
+# stickiness, and tears it down. A faithful local stand-in for the production ALB.
+name: tunnel-affinity-smoke
+
+x-relay-env: &relay-env
+  TUNNEL_MANAGER_ADDR: 0.0.0.0:8080
+  REDIS_CACHE_URL: redis://redis:6379
+  REDIS_PUBSUB_URL: redis://redis:6379
+  MP_PAIR_HOLD_MS: "750"
+  RUST_LOG: info
+  # main.rs constructs the settler + Walrus client at boot, so these must be present and
+  # well-formed even though the affinity smoke only exercises the /v1/mp handshake (which
+  # never touches settlement or Walrus). Dummy-but-valid values: an all-zero ed25519 key,
+  # the framework address, and dead RPC/Walrus URLs (the event indexer's failed background
+  # polls are harmless noise for this test).
+  SUI_RPC_URL: http://127.0.0.1:1
+  TUNNEL_PACKAGE_ID: "0x2"
+  SUI_SETTLER_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+  WALRUS_PUBLISHER_URL: http://127.0.0.1:1
+  WALRUS_AGGREGATOR_URL: http://127.0.0.1:1
+
+x-relay-health: &relay-health
+  test: ["CMD", "curl", "-fsS", "http://localhost:8080/healthz"]
+  interval: 1s
+  timeout: 3s
+  retries: 60
+
+services:
+  redis:
+    image: redis:7.4-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+
+  relay-a:
+    build: &relay-build
+      # The Dockerfile needs the workspace root (Cargo.toml + Cargo.lock live there).
+      context: ../../..
+      dockerfile: backend/tunnel-manager/Dockerfile
+    image: tunnel-manager-smoke:latest
+    environment:
+      <<: *relay-env
+      INSTANCE_ID: inst-a
+    healthcheck: *relay-health
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  relay-b:
+    build: *relay-build
+    image: tunnel-manager-smoke:latest
+    environment:
+      <<: *relay-env
+      INSTANCE_ID: inst-b
+    healthcheck: *relay-health
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  haproxy:
+    image: haproxy:2.9-alpine
+    ports:
+      - "8088:8080"
+    volumes:
+      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    depends_on:
+      relay-a:
+        condition: service_healthy
+      relay-b:
+        condition: service_healthy
