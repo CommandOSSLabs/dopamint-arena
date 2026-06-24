@@ -495,18 +495,31 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
         if (dt.state.phase === "hand_over") triggerSettle();
       });
 
+      // One "My Activity" row per finished hand (not per move): a hand settles its net into the
+      // balances at `hand_over` (bets ride in totalBet until then), so the delta since the last
+      // hand is this seat's result. Mirrors blackjack's per-round rows and the auto/watch lane.
+      let prevHandPhase = dt.state.phase;
+      let prevHandBalance =
+        info.role === "A" ? dt.state.balanceA : dt.state.balanceB;
       dt.onConfirmed = (u) => {
         transcript.append(u);
         sync();
-        report.pushLocalTxn({
-          id: moveIdRef.current++,
-          game: "quantum-poker",
-          time: new Date().toLocaleTimeString("en-GB"),
-          bot: "You",
-          type: proto.isTerminal(dt.state) ? "Win/Loss" : "Move",
-          status: "Success",
-          amount: "",
-        });
+        if (dt.state.phase === "hand_over" && prevHandPhase !== "hand_over") {
+          const selfBalance =
+            info.role === "A" ? dt.state.balanceA : dt.state.balanceB;
+          const delta = selfBalance - prevHandBalance;
+          prevHandBalance = selfBalance;
+          report.pushLocalTxn({
+            id: moveIdRef.current++,
+            game: "quantum-poker",
+            time: new Date().toLocaleTimeString("en-GB"),
+            bot: "You",
+            type: delta > 0n ? "Poker Win" : delta < 0n ? "Poker Loss" : "Push",
+            status: "Success",
+            amount: delta > 0n ? `+${delta}` : delta < 0n ? `${delta}` : "0",
+          });
+        }
+        prevHandPhase = dt.state.phase;
         // Settle at match end (done), or early at this clean hand boundary once a seat asked to end.
         if (
           proto.isTerminal(dt.state) ||
