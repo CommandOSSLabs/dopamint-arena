@@ -44,6 +44,7 @@ pub(crate) mod test_support {
             actions: crate::stats_counter::LocalActionCounter::default(),
             pair_hold_ms: 750,
             pairing: crate::stats_counter::MatchPairingMetrics::default(),
+            chat: crate::chat_store::ChatTranscriptStore::new(),
         })
     }
 }
@@ -418,6 +419,32 @@ pub(crate) async fn chat(
             ApiError::resp(StatusCode::BAD_GATEWAY, "ollama_error", &e.to_string()).into_response()
         }
     }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PublishChatRequest {
+    pub messages: Vec<crate::chat_store::ChatMessage>,
+}
+
+pub(crate) async fn chat_publish(
+    State(state): State<SharedState>,
+    Json(req): Json<PublishChatRequest>,
+) -> StatusCode {
+    for msg in req.messages {
+        state.chat.publish(msg).await;
+    }
+    StatusCode::NO_CONTENT
+}
+
+pub(crate) async fn chat_live(
+    State(state): State<SharedState>,
+) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    let stream = BroadcastStream::new(state.chat.subscribe()).filter_map(|msg| {
+        msg.ok()
+            .map(|json| Ok::<_, Infallible>(Event::default().data(json)))
+    });
+    Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
 #[derive(Debug, Serialize)]

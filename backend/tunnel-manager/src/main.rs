@@ -1,6 +1,7 @@
 //! tunnel-manager — Dopamint Arena control-plane backend (DOP-170).
 //! Off the per-move path (ADR-0001): registry + settlement + Walrus + stats only.
 
+mod chat_store;
 mod config;
 mod error;
 mod mp;
@@ -102,6 +103,7 @@ async fn main() -> anyhow::Result<()> {
         actions: crate::stats_counter::LocalActionCounter::default(),
         pair_hold_ms,
         pairing: crate::stats_counter::MatchPairingMetrics::default(),
+        chat: crate::chat_store::ChatTranscriptStore::new(),
     });
     stats::spawn_stats_broadcaster(state.clone());
     spawn_action_flusher(state.clone());
@@ -139,6 +141,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/sponsor", post(routes::sponsor))
         .route("/v1/chat", post(routes::chat))
         .route("/v1/chat/topic", get(routes::chat_topic))
+        .route("/v1/chat/live/publish", post(routes::chat_publish))
+        .route("/v1/chat/live", get(routes::chat_live))
         .route("/v1/stats/live", get(routes::stats_live))
         .route("/v1/mp", get(crate::mp::ws::mp_upgrade))
         .layer(TraceLayer::new_for_http())

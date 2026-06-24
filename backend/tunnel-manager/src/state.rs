@@ -22,6 +22,8 @@ pub struct AppState {
     pub pair_hold_ms: u64,
     /// Per-instance co-located-vs-split pairing tally (see stats_counter).
     pub pairing: crate::stats_counter::MatchPairingMetrics,
+    /// Shared transcript for the bot-vs-bot live chat feed, fanned out via SSE.
+    pub chat: crate::chat_store::ChatTranscriptStore,
 }
 
 pub type SharedState = std::sync::Arc<AppState>;
@@ -52,6 +54,7 @@ impl AppState {
             actions: crate::stats_counter::LocalActionCounter::default(),
             pair_hold_ms: 750,
             pairing: crate::stats_counter::MatchPairingMetrics::default(),
+            chat: crate::chat_store::ChatTranscriptStore::new(),
         })
     }
 }
