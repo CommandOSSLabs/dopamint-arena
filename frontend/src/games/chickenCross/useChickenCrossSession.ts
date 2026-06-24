@@ -90,6 +90,10 @@ export interface ChickenCrossSession {
   toggleAuto: () => void;
   /** Settle + close the tunnel NOW at the current co-signed state — cash out anytime. */
   settleNow: () => void;
+  /** Freeze the self-play loop in place (cabinet hover). No-op unless mid-play. */
+  pause: () => void;
+  /** Unfreeze and re-kick the loop (cabinet un-hover). No-op unless paused. */
+  resume: () => void;
 }
 
 /** You always steer chicken A in a solo race; chicken B is the bot opponent. */
@@ -165,6 +169,9 @@ class CrossBotSession {
   private transcript: Transcript | null = null;
   private onChain = false;
   private advancing = false;
+  // Cabinet hover-freeze: when true the advance loop returns at the top of its
+  // next iteration (freeze in place); resume() clears it and re-kicks the loop.
+  private paused = false;
   // Guards re-entry: a session that has begun a race can't be restarted (only
   // reset()/Play Again returns it to idle). Stops StrictMode / double-click dupes.
   private starting = false;
@@ -312,6 +319,7 @@ class CrossBotSession {
     const protocol = this.protocol;
     try {
       while (tunnel && protocol) {
+        if (this.paused) return; // hover-freeze: stop here; resume() re-kicks
         // Co-sign ticks only until the per-frame time budget is spent, then yield: this is
         // what keeps TPS high yet the CPU cool (the rest of the frame stays idle).
         const deadline = performance.now() + FRAME_BUDGET_MS;
@@ -384,6 +392,7 @@ class CrossBotSession {
     this.score = { you: 0, foe: 0 };
     this.lastScoredGames = -1;
     this.pendingDir = undefined;
+    this.paused = false;
 
     // Per-game stake from the lobby (the small swap), floored at MIN_STAKE.
     const floored = Math.floor(nextStake);
@@ -594,6 +603,17 @@ class CrossBotSession {
     if (this.auto && this.status === "playing") void this.advance();
   };
 
+  pause = () => {
+    if (this.status !== "playing") return;
+    this.paused = true;
+  };
+
+  resume = () => {
+    if (!this.paused) return;
+    this.paused = false;
+    if (this.status === "playing") void this.advance();
+  };
+
   /** Settle + close the tunnel NOW at the current co-signed state — cash out anytime,
    *  even mid-race. Stops the autopilot loop first so nothing steps during the close. */
   settleNow = () => {
@@ -660,5 +680,7 @@ export function useChickenCrossSession(windowId: string): ChickenCrossSession {
     setDir: session.setDir,
     toggleAuto: session.toggleAuto,
     settleNow: session.settleNow,
+    pause: session.pause,
+    resume: session.resume,
   };
 }
