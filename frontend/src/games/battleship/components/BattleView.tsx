@@ -76,10 +76,13 @@ export function BattleView({
         </span>
       </div>
 
-      {/* Boards take the remaining height and split it: two square boards stacked on a
-          narrow window, side-by-side once wide. `min-h-0` + `1fr` rows let them shrink to
-          fit any window height, so the view never overflows or scrolls. */}
-      <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-2 gap-3 @[30rem]:grid-cols-2 @[30rem]:grid-rows-1 @[30rem]:gap-4">
+      {/* Boards split the remaining height. The row/column choice is VIEWPORT-driven, not
+          container-driven: on desktop (≥lg, the windowed shell) the boards stay side-by-side at
+          any window size — they shrink to fit like quantum poker's felt, never restacking into a
+          column (a narrow desktop window squashing two boards into one column was the UI bug).
+          Only a true mobile viewport (<lg) stacks them so each board is large enough to tap.
+          `min-h-0` + `1fr` rows let them shrink to fit any window height, so the view never scrolls. */}
+      <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-2 gap-3 lg:grid-cols-2 lg:grid-rows-1 lg:gap-4">
         <BoardGrid
           title="Enemy waters"
           cells={view.enemyCells}
