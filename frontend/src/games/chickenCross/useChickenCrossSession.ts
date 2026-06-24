@@ -11,7 +11,9 @@ import type { CrossMove, CrossDir } from "sui-tunnel-ts/protocol/cross";
 import {
   MultiGameCrossProtocol,
   type MultiGameCrossState,
+  type MultiGameCrossMove,
 } from "sui-tunnel-ts/protocol/multiGameCross";
+import type { Party } from "sui-tunnel-ts/protocol/Protocol";
 import { Transcript } from "sui-tunnel-ts/proof/transcript";
 import { registerWindowDisposer } from "@/lib/windowSessions";
 import { useTelemetry } from "../../telemetry/TelemetryProvider";
@@ -42,6 +44,8 @@ import {
   type SessionResult,
   type StepOutcome,
 } from "./session-core";
+import { createChickenCrossKit } from "@/agent/games/chickenCross/kit";
+import type { GameBot } from "@/agent/gameKit";
 
 /**
  * Throughput pacing. Co-signing is synchronous crypto (2 sigs + 2 verifies per tick), so an
@@ -90,6 +94,10 @@ export interface ChickenCrossSession {
   toggleAuto: () => void;
   /** Settle + close the tunnel NOW at the current co-signed state — cash out anytime. */
   settleNow: () => void;
+  /** Freeze the self-play loop in place (cabinet hover). No-op unless mid-play. */
+  pause: () => void;
+  /** Unfreeze and re-kick the loop (cabinet un-hover). No-op unless paused. */
+  resume: () => void;
 }
 
 /** You always steer chicken A in a solo race; chicken B is the bot opponent. */
@@ -153,6 +161,12 @@ class CrossBotSession {
 
   private tunnel: OffchainTunnel<MultiGameCrossState, CrossMove> | null = null;
   private protocol: MultiGameCrossProtocol | null = null;
+  // The seat bots that pick auto moves, built from the canonical kit so the in-game move
+  // source matches the agent harness (kit = single source of bot behavior).
+  private bots: Record<
+    Party,
+    GameBot<MultiGameCrossState, MultiGameCrossMove>
+  > | null = null;
   // One tunnel hosts many races; settlement is player-driven. `settleRequested`
   // stops the auto-rematch loop, `score`/`lastScoredGames` track the running tally.
   private settleRequested = false;
@@ -165,6 +179,9 @@ class CrossBotSession {
   private transcript: Transcript | null = null;
   private onChain = false;
   private advancing = false;
+  // Cabinet hover-freeze: when true the advance loop returns at the top of its
+  // next iteration (freeze in place); resume() clears it and re-kicks the loop.
+  private paused = false;
   // Guards re-entry: a session that has begun a race can't be restarted (only
   // reset()/Play Again returns it to idle). Stops StrictMode / double-click dupes.
   private starting = false;
@@ -222,6 +239,7 @@ class CrossBotSession {
     this.settleRequested = false;
     this.tunnel = null;
     this.protocol = null;
+    this.bots = null;
     this.transcript = null;
     this.session = null;
     this.score = { you: 0, foe: 0 };
@@ -242,6 +260,7 @@ class CrossBotSession {
     this.deps?.report.setActive(0);
     this.tunnel = null;
     this.protocol = null;
+    this.bots = null;
     this.transcript = null;
     this.session = null;
     this.listeners.clear();
@@ -310,8 +329,10 @@ class CrossBotSession {
     const myGen = this.gen;
     const tunnel = this.tunnel;
     const protocol = this.protocol;
+    const bots = this.bots;
     try {
-      while (tunnel && protocol) {
+      while (tunnel && protocol && bots) {
+        if (this.paused) return; // hover-freeze: stop here; resume() re-kicks
         // Co-sign ticks only until the per-frame time budget is spent, then yield: this is
         // what keeps TPS high yet the CPU cool (the rest of the frame stays idle).
         const deadline = performance.now() + FRAME_BUDGET_MS;
@@ -328,7 +349,7 @@ class CrossBotSession {
                   return d;
                 },
               };
-          boundary = stepMultiGame(protocol, tunnel, Math.random, human);
+          boundary = stepMultiGame(protocol, tunnel, bots, human);
           if (boundary === "stepped") {
             this.moveCount += 1;
             this.actions += 1;
@@ -384,6 +405,7 @@ class CrossBotSession {
     this.score = { you: 0, foe: 0 };
     this.lastScoredGames = -1;
     this.pendingDir = undefined;
+    this.paused = false;
 
     // Per-game stake from the lobby (the small swap), floored at MIN_STAKE.
     const floored = Math.floor(nextStake);
@@ -462,6 +484,18 @@ class CrossBotSession {
         // Multi-game: many races on one funded tunnel; the player settles once. The per-game
         // stake is the SMALL swap, the funded bank above is what survives across races.
         const protocol = new MultiGameCrossProtocol(tunnelId, stakePerGame);
+        // Auto moves come from the canonical kit bot — the same move source the agent harness
+        // uses — so the kit is the single source of bot behavior. Built with the SAME per-game
+        // stake as the tunnel's protocol (so the bot's fund/terminal checks match) and live
+        // per-seat RNG, preserving the prior Math.random self-play.
+        const kit = createChickenCrossKit(stakePerGame);
+        const bots: Record<
+          Party,
+          GameBot<MultiGameCrossState, MultiGameCrossMove>
+        > = {
+          A: kit.createBot("A", { rngForSeat: () => Math.random }),
+          B: kit.createBot("B", { rngForSeat: () => Math.random }),
+        };
         const tunnel = OffchainTunnel.selfPlay(
           protocol,
           tunnelId,
@@ -491,6 +525,7 @@ class CrossBotSession {
 
         this.tunnel = tunnel;
         this.protocol = protocol;
+        this.bots = bots;
         this.transcript = transcript;
         this.tunnelId = tunnelId;
         this.createdAt = createdAt;
@@ -594,6 +629,17 @@ class CrossBotSession {
     if (this.auto && this.status === "playing") void this.advance();
   };
 
+  pause = () => {
+    if (this.status !== "playing") return;
+    this.paused = true;
+  };
+
+  resume = () => {
+    if (!this.paused) return;
+    this.paused = false;
+    if (this.status === "playing") void this.advance();
+  };
+
   /** Settle + close the tunnel NOW at the current co-signed state — cash out anytime,
    *  even mid-race. Stops the autopilot loop first so nothing steps during the close. */
   settleNow = () => {
@@ -660,5 +706,7 @@ export function useChickenCrossSession(windowId: string): ChickenCrossSession {
     setDir: session.setDir,
     toggleAuto: session.toggleAuto,
     settleNow: session.settleNow,
+    pause: session.pause,
+    resume: session.resume,
   };
 }

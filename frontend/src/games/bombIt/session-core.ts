@@ -14,7 +14,9 @@ import type { OffchainTunnel } from "sui-tunnel-ts/core/tunnel";
 import type {
   MultiGameBombItProtocol,
   MultiGameBombItState,
+  MultiGameBombItMove,
 } from "sui-tunnel-ts/protocol/multiGameBombIt";
+import type { GameBot } from "@/agent/gameKit";
 
 /**
  * Solo tick cadence (one co-signed tick per this many ms). Bomb It is a REACTION game: unlike
@@ -114,12 +116,14 @@ export type StepOutcome = "stepped" | "game-over" | "session-over";
  *  - "game-over"    the inner duel is terminal but the session can fund another
  *                   (caller records the score, then kickoffNextGame to rematch);
  *  - "session-over" stake exhausted — caller settles.
- * Parity reads inner.tick (the multi-game state has no top-level tick).
+ * Parity reads inner.tick (the multi-game state has no top-level tick). The auto move comes
+ * from the seat's kit bot (`bots[by].plan`) — the canonical move source shared with the agent
+ * harness — so the kit is the single source of bot behavior; a human seat overrides its own.
  */
 export function stepMultiGame(
   protocol: MultiGameBombItProtocol,
   tunnel: OffchainTunnel<MultiGameBombItState, BombItMove>,
-  rng: () => number,
+  bots: Record<Party, GameBot<MultiGameBombItState, MultiGameBombItMove>>,
   human?: HumanSeat | null,
 ): StepOutcome {
   if (protocol.isTerminal(tunnel.state)) return "session-over";
@@ -130,7 +134,7 @@ export function stepMultiGame(
     const a = human.getAction();
     move = by === "A" ? { a } : { b: a };
   } else {
-    move = protocol.randomMove(tunnel.state, by, rng);
+    move = bots[by].plan(tunnel.state);
   }
   if (!move) return "game-over";
   tunnel.step(move, by);

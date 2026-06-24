@@ -15,7 +15,9 @@ import type { OffchainTunnel } from "sui-tunnel-ts/core/tunnel";
 import type {
   MultiGameCrossProtocol,
   MultiGameCrossState,
+  MultiGameCrossMove,
 } from "sui-tunnel-ts/protocol/multiGameCross";
+import type { GameBot } from "@/agent/gameKit";
 
 /** When the human takes over a seat (auto mode off), the loop supplies its hop direction for that
  *  seat each tick; the other seat (and both while auto is on) is driven by the protocol's bot. */
@@ -132,7 +134,7 @@ export type StepOutcome = "stepped" | "game-over" | "session-over";
 export function stepMultiGame(
   protocol: MultiGameCrossProtocol,
   tunnel: OffchainTunnel<MultiGameCrossState, CrossMove>,
-  rng: () => number,
+  bots: Record<Party, GameBot<MultiGameCrossState, MultiGameCrossMove>>,
   human?: HumanSeat | null,
 ): StepOutcome {
   if (protocol.isTerminal(tunnel.state)) return "session-over";
@@ -143,7 +145,7 @@ export function stepMultiGame(
     const dir = human.getDir();
     move = by === "A" ? { dirA: dir } : { dirB: dir };
   } else {
-    move = protocol.randomMove(tunnel.state, by, rng);
+    move = bots[by].plan(tunnel.state);
   }
   if (!move) return "game-over";
   tunnel.step(move, by);

@@ -111,12 +111,29 @@ test("a co-signed update verifies after bounded play (settleable mid-game)", () 
   );
 });
 
-import { MultiGameCrossProtocol } from "../../../../sui-tunnel-ts/src/protocol/multiGameCross.ts";
+import {
+  MultiGameCrossProtocol,
+  type MultiGameCrossState,
+} from "../../../../sui-tunnel-ts/src/protocol/multiGameCross.ts";
 import {
   stepMultiGame,
   kickoffNextGame,
   deriveMultiView,
 } from "./session-core.ts";
+
+/**
+ * Per-seat auto bots for stepMultiGame — the same random move source the kit bot uses, built
+ * inline here so the session-core plumbing test stays free of the `@/` alias the kit imports
+ * pull in. Structurally a GameBot (plan/confirm/abort); confirm/abort are no-ops (memoryless).
+ */
+function selfPlayBots(protocol: MultiGameCrossProtocol) {
+  const mk = (seat: "A" | "B") => ({
+    plan: (s: MultiGameCrossState) => protocol.randomMove(s, seat, Math.random),
+    confirm: () => {},
+    abort: () => {},
+  });
+  return { A: mk("A"), B: mk("B") };
+}
 
 function freshMultiTunnel() {
   const a = createParticipant("a");
@@ -140,7 +157,7 @@ test("stepMultiGame advances a multi-game race and stays settleable", () => {
   const { protocol, tunnel } = freshMultiTunnel();
   let stepped = 0;
   for (let i = 0; i < 200; i++) {
-    const r = stepMultiGame(protocol, tunnel, Math.random);
+    const r = stepMultiGame(protocol, tunnel, selfPlayBots(protocol));
     if (r === "stepped") {
       stepped++;
       // Wrapper conservation: real carried balances always sum to the locked total.
@@ -168,7 +185,7 @@ test("kickoffNextGame starts game 2 on the same tunnel after a game ends", () =>
   // Advance until the first inner game ends (bounded — most races end well within this).
   let outcome = "stepped";
   for (let i = 0; i < 20000 && outcome === "stepped"; i++) {
-    outcome = stepMultiGame(protocol, tunnel, Math.random);
+    outcome = stepMultiGame(protocol, tunnel, selfPlayBots(protocol));
   }
   if (outcome === "game-over") {
     assert.equal(tunnel.state.gamesPlayed, 0, "still game 1 at the boundary");

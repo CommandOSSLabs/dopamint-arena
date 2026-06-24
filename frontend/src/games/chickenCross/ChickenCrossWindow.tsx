@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useCurrentAccount } from "@mysten/dapp-kit";
 import { registerWindowDisposer } from "@/lib/windowSessions";
 import type { GameWindowProps } from "../types";
@@ -7,6 +7,8 @@ import { useChickenCrossSession } from "./useChickenCrossSession";
 import { CrossLobby } from "./components/CrossLobby";
 import { CrossBoard } from "./components/CrossBoard";
 import { CrossScreen } from "./components/CrossScreen";
+import { useSoloCabinet, type WindowMode } from "@/shell/cabinet/soloCabinet";
+import { useSoloAutoRetry } from "@/lib/useSoloAutoRetry";
 import "./cross.css";
 
 // Persisted by windowId so a remount (minimize / maximize / desktop reflow) returns to the live
@@ -24,7 +26,7 @@ const autoStarted = new Map<string, boolean>();
 /** Chicken Cross: pick Solo (bot-vs-bot self-play) or PvP (two humans race over a shared tunnel). */
 export function ChickenCrossWindow({ windowId }: GameWindowProps) {
   const account = useCurrentAccount();
-  const [mode, setModeState] = useState<"solo" | "pvp" | null>(
+  const [mode, setModeState] = useState<WindowMode>(
     () => modeStore.get(windowId) ?? null,
   );
   const pvp = usePvpChickenCross(windowId);
@@ -36,7 +38,7 @@ export function ChickenCrossWindow({ windowId }: GameWindowProps) {
       autoStarted.delete(windowId);
     });
   }, [windowId]);
-  const setMode = (m: "solo" | "pvp" | null) => {
+  const setMode = (m: WindowMode) => {
     if (m === "pvp" || m === "solo") modeStore.set(windowId, m);
     else modeStore.delete(windowId);
     setModeState(m);
@@ -47,6 +49,34 @@ export function ChickenCrossWindow({ windowId }: GameWindowProps) {
     else if (mode === "pvp") pvp.reset();
     setMode(null);
   };
+
+  const goHome = useCallback(() => {
+    solo.reset();
+    modeStore.delete(windowId);
+    setModeState(null);
+  }, [solo.reset, windowId]);
+
+  // Hand seat A to the human: flip auto off (reads `auto` fresh, so a double take-over is a no-op).
+  const goManual = useCallback(() => {
+    if (solo.auto) solo.toggleAuto();
+  }, [solo.auto, solo.toggleAuto]);
+  useSoloCabinet({
+    offerable: mode === "solo" && solo.status === "playing" && solo.auto,
+    pause: solo.pause,
+    resume: solo.resume,
+    goManual,
+    goHome,
+  });
+
+  // Auto-retry a failed solo start every 5s while it sits in "error" (cold-start faucet race /
+  // transient sponsor blip) so the unattended bot game self-heals. Retries with the stake last
+  // started (auto-start uses AUTO_STAKE; the lobby's chosen stake otherwise).
+  const lastStakeRef = useRef(AUTO_STAKE);
+  const retrySolo = useCallback(() => {
+    solo.reset();
+    solo.start(lastStakeRef.current);
+  }, [solo.reset, solo.start]);
+  useSoloAutoRetry(mode === "solo", solo.status, retrySolo);
 
   // First open with a wallet connected → fund + play a solo bot match immediately (parity with the
   // other arena games), instead of landing on the lobby. Once-only per window: a remount never
@@ -64,6 +94,7 @@ export function ChickenCrossWindow({ windowId }: GameWindowProps) {
     return (
       <CrossLobby
         onSolo={(s) => {
+          lastStakeRef.current = s;
           setMode("solo");
           solo.start(s);
         }}

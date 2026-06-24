@@ -22,7 +22,7 @@ describe("bombIt kit", () => {
   it("uses the bomb-it protocol domain", () => {
     const kit = createBombItKit(100n);
     assert.strictEqual(kit.id, "bomb-it");
-    assert.strictEqual(kit.protocol.name, "bomb_it.v1");
+    assert.strictEqual(kit.protocol.name, "bomb_it.multi.v1");
   });
 
   it("drives a full self-play game to terminal with conserved balances", () => {

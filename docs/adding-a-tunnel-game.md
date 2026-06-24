@@ -96,8 +96,8 @@ hover → pause → "Play vs Bot" UX for free, the game opts into the shared cab
 drive auto from your kit (step 3 already does), expose `pause`/`resume` + a manual
 mode on the hook, and register a `CabinetController` in your App
 (`useRegisterCabinet`). The `GameCabinet` wrap in `Desktop` is automatic; a game
-that registers nothing stays inert. Reference: tic-tac-toe's `App.tsx` /
-`useBotGame.ts`; design in
+that registers nothing stays inert. Cabinet adopters: tic-tac-toe, bomb-it,
+chicken-cross. Reference: tic-tac-toe's `App.tsx` / `useBotGame.ts`; design in
 [superpowers/specs/2026-06-23-arena-attract-takeover-shell-design.md](superpowers/specs/2026-06-23-arena-attract-takeover-shell-design.md),
 decision in [decisions/0012-arena-attract-cabinet-seam.md](decisions/0012-arena-attract-cabinet-seam.md).
 
