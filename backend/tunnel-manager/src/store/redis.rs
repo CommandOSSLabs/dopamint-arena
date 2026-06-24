@@ -283,18 +283,69 @@ impl RedisMpStore {
     }
 }
 
-// KEYS[1]=queue:<game> ARGV[1]=selfWaitingJson ARGV[2]=selfWallet
-// Atomically: drain stale self entries, pop the front opponent, or park self.
-// Returns the opponent JSON (string) or nil (false in Lua → None in Rust).
+// KEYS[1]=queue:<game> ARGV[1]=selfJson ARGV[2]=selfWallet ARGV[3]=selfInstance ARGV[4]=holdMs
+// Atomically (server-clock `now` from TIME): drain stale self entries; pair a same-instance
+// opponent if one waits; else a different-wallet waiter already past its deadline; else park self
+// with deadline=now+holdMs. Co-located pairs relay in-process; cross-instance is the fallback.
+// One eval → exactly-once under concurrency. Returns the opponent JSON or nil (None in Rust).
 const JOIN_OR_PAIR: &str = r#"
-local front = redis.call('LPOP', KEYS[1])
-while front do
-  local w = cjson.decode(front)
-  if w.wallet ~= ARGV[2] then return front end
-  front = redis.call('LPOP', KEYS[1])
+local t = redis.call('TIME')
+local now = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
+local items = redis.call('LRANGE', KEYS[1], 0, -1)
+local colocated = nil
+local expired = nil
+for _, v in ipairs(items) do
+  local ok, w = pcall(cjson.decode, v)
+  if ok then
+    if w.wallet == ARGV[2] then
+      redis.call('LREM', KEYS[1], 1, v)
+    else
+      if colocated == nil and w.conn and w.conn.instance_id == ARGV[3] then
+        colocated = v
+      end
+      if expired == nil and w.deadline and tonumber(w.deadline) <= now then
+        expired = v
+      end
+    end
+  end
 end
-redis.call('RPUSH', KEYS[1], ARGV[1])
+local chosen = colocated or expired
+if chosen then
+  redis.call('LREM', KEYS[1], 1, chosen)
+  return chosen
+end
+local me = cjson.decode(ARGV[1])
+me.deadline = now + tonumber(ARGV[4])
+redis.call('RPUSH', KEYS[1], cjson.encode(me))
 return false
+"#;
+
+// KEYS[1]=queue:<game> ARGV[1]=selfWallet
+// Timer-driven fallback: if self is still parked, pair it with the oldest different-wallet
+// waiter (any instance). Drains self entries; LREMs the chosen opponent. Returns opponent JSON
+// or nil. One atomic eval → cannot double-pair against a concurrent join.
+const FALLBACK_PAIR: &str = r#"
+local items = redis.call('LRANGE', KEYS[1], 0, -1)
+local self_present = false
+local opp = nil
+for _, v in ipairs(items) do
+  local ok, w = pcall(cjson.decode, v)
+  if ok then
+    if w.wallet == ARGV[1] then
+      self_present = true
+    elseif opp == nil then
+      opp = v
+    end
+  end
+end
+if not self_present then return false end
+if opp == nil then return false end
+for _, v in ipairs(items) do
+  local ok, w = pcall(cjson.decode, v)
+  if ok and w.wallet == ARGV[1] then redis.call('LREM', KEYS[1], 1, v) end
+end
+redis.call('LREM', KEYS[1], 1, opp)
+return opp
 "#;
 
 // Presence compare-and-delete on a single key holding the full ConnRef JSON: delete only if
@@ -436,20 +487,49 @@ impl MpStore for RedisMpStore {
         }
     }
 
-    async fn join_or_pair(&self, game: &str, me: crate::mp::Waiting) -> Option<crate::mp::Waiting> {
+    async fn join_or_pair(
+        &self,
+        game: &str,
+        me: crate::mp::Waiting,
+        hold_ms: u64,
+    ) -> Option<crate::mp::Waiting> {
         let me_json = serde_json::to_string(&me).unwrap();
         let res: Option<String> = match self
             .pool
             .eval::<Option<String>, _, _, _>(
                 JOIN_OR_PAIR,
                 vec![format!("queue:{game}")],
-                vec![me_json, me.wallet.clone()],
+                vec![
+                    me_json,
+                    me.wallet.clone(),
+                    me.conn.instance_id.clone(),
+                    hold_ms.to_string(),
+                ],
             )
             .await
         {
             Ok(v) => v,
             Err(e) => {
                 tracing::warn!(error = %e, "redis join_or_pair eval failed");
+                None
+            }
+        };
+        res.and_then(|j| serde_json::from_str(&j).ok())
+    }
+
+    async fn fallback_pair(&self, game: &str, wallet: &str) -> Option<crate::mp::Waiting> {
+        let res: Option<String> = match self
+            .pool
+            .eval::<Option<String>, _, _, _>(
+                FALLBACK_PAIR,
+                vec![format!("queue:{game}")],
+                vec![wallet.to_owned()],
+            )
+            .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(error = %e, "redis fallback_pair eval failed");
                 None
             }
         };
@@ -867,7 +947,21 @@ mod tests {
             .await
             .expect("start redis container");
         let port = node.get_host_port_ipv4(6379).await.expect("redis port");
-        let pool = connect(&format!("redis://127.0.0.1:{port}")).await.unwrap();
+        // The published port can be reachable a beat before redis is accepting (the
+        // container is "Up" but still initializing). `connect` does a single eager attempt,
+        // so poll briefly through that window instead of flaking on a transient refusal.
+        let url = format!("redis://127.0.0.1:{port}");
+        let mut pool = None;
+        for _ in 0..40 {
+            match connect(&url).await {
+                Ok(p) => {
+                    pool = Some(p);
+                    break;
+                }
+                Err(_) => tokio::time::sleep(std::time::Duration::from_millis(50)).await,
+            }
+        }
+        let pool = pool.expect("connect to redis container within 2s");
         (node, pool)
     }
 
@@ -1102,6 +1196,7 @@ mod tests {
                         wallet: format!("0x{i}"),
                         conn: cr,
                     },
+                    0,
                 )
                 .await
             }));
@@ -1119,6 +1214,113 @@ mod tests {
         // atomicity, so there can never be a double-pair.
         assert_eq!(pairs, 25, "expected 25 pair events");
         assert_eq!(parked, 25, "expected 25 parked waiters");
+    }
+
+    // A long hold lets two cross-instance waiters park together; a later same-instance joiner
+    // then prefers its co-located partner over the FIFO front.
+    #[tokio::test]
+    async fn join_or_pair_prefers_a_same_instance_opponent() {
+        let (_redis, pool) = redis_fixture().await;
+        let s = RedisMpStore::new(pool);
+        let game = format!("g{}", uuid::Uuid::new_v4().simple());
+        let hold = 10_000; // long: nothing expires during the test
+        let w = |wallet: &str, inst: &str| crate::mp::Waiting {
+            wallet: wallet.to_owned(),
+            conn: ConnRef {
+                instance_id: inst.to_owned(),
+                conn_id: uuid::Uuid::new_v4(),
+            },
+        };
+        // A(ia) and B(ib) both park (no local partner, neither expired).
+        assert!(s.join_or_pair(&game, w("wa", "ia"), hold).await.is_none());
+        assert!(s.join_or_pair(&game, w("wb", "ib"), hold).await.is_none());
+        // Joiner on ib pairs the same-instance waiter wb, not the FIFO front wa.
+        let opp = s
+            .join_or_pair(&game, w("wj", "ib"), hold)
+            .await
+            .expect("pairs");
+        assert_eq!(opp.wallet, "wb", "same-instance preferred over FIFO front");
+        // wa is still queued → a same-instance joiner on ia pairs it.
+        let opp2 = s
+            .join_or_pair(&game, w("wk", "ia"), hold)
+            .await
+            .expect("pairs");
+        assert_eq!(opp2.wallet, "wa", "front waiter still pairs same-instance");
+    }
+
+    // With a short hold, a parked cross-instance waiter becomes selectable once its deadline
+    // passes — the join path's expired branch pairs it.
+    #[tokio::test]
+    async fn join_or_pair_falls_back_to_expired_waiter() {
+        let (_redis, pool) = redis_fixture().await;
+        let s = RedisMpStore::new(pool);
+        let game = format!("g{}", uuid::Uuid::new_v4().simple());
+        let w = |wallet: &str, inst: &str| crate::mp::Waiting {
+            wallet: wallet.to_owned(),
+            conn: ConnRef {
+                instance_id: inst.to_owned(),
+                conn_id: uuid::Uuid::new_v4(),
+            },
+        };
+        assert!(s.join_or_pair(&game, w("wa", "ia"), 30).await.is_none());
+        // Before expiry, a cross-instance joiner does NOT take wa — it parks instead.
+        assert!(s.join_or_pair(&game, w("wb", "ib"), 30).await.is_none());
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+        // Both wa and wb are now expired; the script scans in RPUSH (FIFO) order, so the front
+        // waiter wa is the deterministic pick — this assertion depends on that ordering, not a race.
+        let opp = s
+            .join_or_pair(&game, w("wc", "ic"), 30)
+            .await
+            .expect("pairs");
+        assert_eq!(
+            opp.wallet, "wa",
+            "expired waiter taken as cross-instance fallback"
+        );
+    }
+
+    // Two idle cross-instance waiters: the timer-driven fallback pairs them.
+    #[tokio::test]
+    async fn fallback_pair_matches_two_idle_waiters() {
+        let (_redis, pool) = redis_fixture().await;
+        let s = RedisMpStore::new(pool);
+        let game = format!("g{}", uuid::Uuid::new_v4().simple());
+        let w = |wallet: &str, inst: &str| crate::mp::Waiting {
+            wallet: wallet.to_owned(),
+            conn: ConnRef {
+                instance_id: inst.to_owned(),
+                conn_id: uuid::Uuid::new_v4(),
+            },
+        };
+        assert!(s.join_or_pair(&game, w("wa", "ia"), 10_000).await.is_none());
+        assert!(s.join_or_pair(&game, w("wb", "ib"), 10_000).await.is_none());
+        let opp = s.fallback_pair(&game, "wa").await.expect("pairs");
+        assert_eq!(opp.wallet, "wb", "fallback pairs the other idle waiter");
+        // Both removed: a subsequent fallback for wa finds nothing.
+        assert!(s.fallback_pair(&game, "wa").await.is_none());
+    }
+
+    // A lone waiter's fallback is a no-op (no opponent); an already-paired waiter's too.
+    #[tokio::test]
+    async fn fallback_pair_noops_without_opponent() {
+        let (_redis, pool) = redis_fixture().await;
+        let s = RedisMpStore::new(pool);
+        let game = format!("g{}", uuid::Uuid::new_v4().simple());
+        let w = |wallet: &str, inst: &str| crate::mp::Waiting {
+            wallet: wallet.to_owned(),
+            conn: ConnRef {
+                instance_id: inst.to_owned(),
+                conn_id: uuid::Uuid::new_v4(),
+            },
+        };
+        assert!(s.join_or_pair(&game, w("wa", "ia"), 10_000).await.is_none());
+        assert!(
+            s.fallback_pair(&game, "wa").await.is_none(),
+            "no opponent → no-op"
+        );
+        assert!(
+            s.fallback_pair(&game, "wnone").await.is_none(),
+            "absent self → no-op"
+        );
     }
 
     #[tokio::test]
@@ -1289,6 +1491,7 @@ mod tests {
                     wallet: wallet.clone(),
                     conn: cr1,
                 },
+                0,
             )
             .await;
         assert!(first.is_none(), "first call must park, not pair");
@@ -1305,6 +1508,7 @@ mod tests {
                     wallet: wallet.clone(),
                     conn: cr2,
                 },
+                0,
             )
             .await;
         assert!(

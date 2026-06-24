@@ -16,6 +16,11 @@ pub struct AppState {
     pub stats_tx: broadcast::Sender<String>,
     /// Per-instance move counter; flushed to `control` once/sec (see stats_counter).
     pub actions: crate::stats_counter::LocalActionCounter,
+    /// Matchmaking hold in ms: how long a joiner waits for a same-instance partner
+    /// before falling back to a cross-instance opponent. From `MP_PAIR_HOLD_MS`.
+    pub pair_hold_ms: u64,
+    /// Per-instance co-located-vs-split pairing tally (see stats_counter).
+    pub pairing: crate::stats_counter::MatchPairingMetrics,
 }
 
 pub type SharedState = std::sync::Arc<AppState>;
@@ -39,6 +44,8 @@ impl AppState {
             walrus: crate::walrus::WalrusClient::noop(),
             stats_tx,
             actions: crate::stats_counter::LocalActionCounter::default(),
+            pair_hold_ms: 750,
+            pairing: crate::stats_counter::MatchPairingMetrics::default(),
         })
     }
 }

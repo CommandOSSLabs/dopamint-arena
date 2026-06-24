@@ -169,10 +169,11 @@ impl MpStore for InMemoryMpStore {
         }
     }
 
-    async fn join_or_pair(&self, game: &str, me: Waiting) -> Option<Waiting> {
+    async fn join_or_pair(&self, game: &str, me: Waiting, _hold_ms: u64) -> Option<Waiting> {
+        // Single-instance store: every waiter shares this instance, so the same-instance branch
+        // always hits and we pair immediately. The hold never engages (no cross-instance waiters).
         let mut queues = self.queues.write().unwrap();
         let q = queues.entry(game.to_owned()).or_default();
-        // Drop stale self entry so a reconnect re-queues cleanly.
         q.retain(|w| w.wallet != me.wallet);
         if let Some(front) = q.pop_front() {
             Some(front)
@@ -180,6 +181,20 @@ impl MpStore for InMemoryMpStore {
             q.push_back(me);
             None
         }
+    }
+
+    async fn fallback_pair(&self, game: &str, wallet: &str) -> Option<Waiting> {
+        // Reachable only in multi-instance deployments; single-instance pairs at join time. Kept
+        // consistent: if `wallet` is still parked, pair it with the oldest different-wallet waiter.
+        let mut queues = self.queues.write().unwrap();
+        let q = queues.entry(game.to_owned()).or_default();
+        if !q.iter().any(|w| w.wallet == wallet) {
+            return None;
+        }
+        let opp_idx = q.iter().position(|w| w.wallet != wallet)?;
+        let opp = q.remove(opp_idx);
+        q.retain(|w| w.wallet != wallet);
+        opp
     }
 
     async fn leave_queue(&self, game: &str, wallet: &str) {
@@ -454,10 +469,10 @@ mod tests {
             conn: cr(),
         };
         assert!(
-            s.join_or_pair("ttt", a.clone()).await.is_none(),
+            s.join_or_pair("ttt", a.clone(), 0).await.is_none(),
             "first parks"
         );
-        let opp = s.join_or_pair("ttt", b).await.expect("second pairs");
+        let opp = s.join_or_pair("ttt", b, 0).await.expect("second pairs");
         assert_eq!(opp.wallet, "0xa", "opponent is the earlier waiter (seat A)");
     }
 
@@ -471,7 +486,8 @@ mod tests {
                 Waiting {
                     wallet: "0xa".into(),
                     conn: cr()
-                }
+                },
+                0
             )
             .await
             .is_none());
@@ -481,7 +497,8 @@ mod tests {
                 Waiting {
                     wallet: "0xb".into(),
                     conn: cr()
-                }
+                },
+                0
             )
             .await
             .is_none());

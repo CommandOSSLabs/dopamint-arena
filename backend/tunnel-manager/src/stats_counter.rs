@@ -50,9 +50,46 @@ impl LocalActionCounter {
     }
 }
 
+/// Per-instance tally of pairing outcomes: both seats on this instance (colocated → in-process
+/// relay) vs. split across instances (Redis-fallback relay). Per-instance by design — Prometheus
+/// sums these across scraped instances.
+#[derive(Default)]
+pub struct MatchPairingMetrics {
+    colocated: AtomicU64,
+    split: AtomicU64,
+}
+
+impl MatchPairingMetrics {
+    /// Record one freshly created match. `colocated` = both seats share this instance.
+    pub fn observe(&self, colocated: bool) {
+        if colocated {
+            self.colocated.fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.split.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Cumulative `(colocated, split)` totals for Prometheus export.
+    pub fn snapshot(&self) -> (u64, u64) {
+        (
+            self.colocated.load(Ordering::Relaxed),
+            self.split.load(Ordering::Relaxed),
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pairing_metrics_tally_colocated_and_split() {
+        let m = MatchPairingMetrics::default();
+        m.observe(true);
+        m.observe(true);
+        m.observe(false);
+        assert_eq!(m.snapshot(), (2, 1));
+    }
 
     #[test]
     fn drain_returns_only_new_deltas_per_game() {

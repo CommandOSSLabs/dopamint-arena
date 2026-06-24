@@ -47,8 +47,17 @@ pub trait MpStore: Send + Sync {
     async fn set_presence(&self, wallet: &str, at: ConnRef);
     async fn get_presence(&self, wallet: &str) -> Option<ConnRef>;
     async fn clear_presence_if(&self, wallet: &str, conn: crate::mp::ConnId);
-    /// Join the queue. Returns the earlier waiter (opponent) if one was parked, else parks self.
-    async fn join_or_pair(&self, game: &str, me: crate::mp::Waiting) -> Option<crate::mp::Waiting>;
+    /// Join the queue. Same-instance opponents are preferred; if none, a different-wallet waiter
+    /// past its hold deadline is taken; else parks self with `deadline = now + hold_ms`.
+    async fn join_or_pair(
+        &self,
+        game: &str,
+        me: crate::mp::Waiting,
+        hold_ms: u64,
+    ) -> Option<crate::mp::Waiting>;
+    /// Timer-driven cross-instance fallback: if `wallet` is still parked in `game`'s queue,
+    /// pair it with the oldest different-wallet waiter and return that opponent; else `None`.
+    async fn fallback_pair(&self, game: &str, wallet: &str) -> Option<crate::mp::Waiting>;
     async fn leave_queue(&self, game: &str, wallet: &str);
     async fn put_invite(&self, match_id: &str, inv: crate::mp::DirectedInvite);
     async fn take_invite(
