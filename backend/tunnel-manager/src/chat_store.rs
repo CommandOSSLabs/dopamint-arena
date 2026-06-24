@@ -39,14 +39,11 @@ impl ChatTranscriptStore {
     pub async fn publish(&self, msg: ChatMessage) {
         let json = {
             let mut lock = self.messages.lock().expect("chat store mutex poisoned");
-            lock.push(msg);
+            lock.push(msg.clone());
             if lock.len() > CAP {
                 lock.remove(0);
             }
-            serde_json::to_string(&ChatTranscript {
-                messages: lock.clone(),
-            })
-            .unwrap_or_default()
+            serde_json::to_string(&msg).unwrap_or_default()
         };
         let _ = self.tx.send(json);
     }
@@ -81,7 +78,8 @@ mod tests {
             })
             .await;
         let ev = rx.recv().await.unwrap();
-        assert!(ev.contains("bot-a"));
-        assert!(ev.contains("hello"));
+        let parsed: ChatMessage = serde_json::from_str(&ev).unwrap();
+        assert_eq!(parsed.sender, "bot-a");
+        assert_eq!(parsed.text, "hello");
     }
 }
