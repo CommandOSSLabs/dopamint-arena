@@ -10,5 +10,6 @@ export * from "./chat";
 export * from "./quantumPoker";
 export * from "./cross";
 export * from "./bombIt";
+export * from "./worldCanvas";
 export * from "./quantumPokerCodec";
 export * from "./quantumPokerPersona";
