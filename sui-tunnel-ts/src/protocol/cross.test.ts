@@ -7,9 +7,9 @@ import {
   destOf,
   COLUMN_COUNT,
   SPAWN_COL,
-} from "./cross.ts";
-import { CrossProtocol, WIN_LANE, TICK_CAP, MIN_STAKE } from "./cross.ts";
-import type { CrossState, CrossMove } from "./cross.ts";
+} from "./cross";
+import { CrossProtocol, WIN_LANE, TICK_CAP, MIN_STAKE } from "./cross";
+import type { CrossState, CrossMove } from "./cross";
 
 test("laneKind cycles grass,grass,road,road,water,rails,grass,grass after lane 2", () => {
   assert.equal(laneKind(0), "grass");

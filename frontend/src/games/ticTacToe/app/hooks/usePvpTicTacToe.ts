@@ -310,7 +310,7 @@ export function usePvpTicTacToe(
           tunnelId: t.tunnelId,
           settlement: coSigned as any,
           transcript: transcriptRef.current
-            ? transcriptRef.current.toRecord().entries
+            ? transcriptRef.current.rawEntries()
             : [],
           label: "tictactoe",
           fallbackClose: async () => {

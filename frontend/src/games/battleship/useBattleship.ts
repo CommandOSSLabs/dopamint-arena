@@ -404,7 +404,7 @@ class BotSession {
     await settleViaBackend({
       tunnelId,
       settlement,
-      transcript: transcript ? transcript.toRecord().entries : [],
+      transcript: transcript ? transcript.rawEntries() : [],
       label: "battleship",
       fallbackClose: () =>
         closeCooperativeWithRoot({

@@ -24,7 +24,7 @@ import {
   type BombItPlayer,
   type BombItMove,
   type BombItState,
-} from "./bombIt.ts";
+} from "./bombIt";
 
 test("border ring and interior even-even cells are walls", () => {
   assert.equal(isBorder(0, 3), true);

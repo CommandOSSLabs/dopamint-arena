@@ -12,7 +12,5 @@ config:
   dopamint:benchmark-min-size: "2"
   dopamint:benchmark-max-size: "2"
   dopamint:route53-zone-id: ""
-  dopamint-arena:backend-image-tag: b0f1c1d0ea179b37d5c094cae7c24d8f0a102f73
-  dopamint:backend-image-tag: b0f1c1d0ea179b37d5c094cae7c24d8f0a102f73
   dopamint:settler-key:
     secure: AAABAJh+ACo2yp6b8S9CVYe/VuZyCoRpJyWjME2aJxsKOITpdDIPVug3sqII0+sGj6dA6tzjElGaCMModIVyrvvH0OOd6HNQqDB7+g==

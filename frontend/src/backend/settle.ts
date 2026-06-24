@@ -4,11 +4,9 @@
 // differs per game (the shared `closeCooperativeWithRoot` vs a vendored `buildCloseWithRootTx`
 // builder, and the sponsored-vs-wallet signer choice), but the settle-then-fallback flow does not.
 import type { CoSignedSettlementWithRoot } from "sui-tunnel-ts/core/tunnel";
-import {
-  getControlPlaneClient,
-  type SettleTranscriptEntry,
-} from "./controlPlane";
-import { coSignedToSettleRequest } from "./settleRequest";
+import type { TranscriptEntry } from "sui-tunnel-ts/proof/transcript";
+import { getControlPlaneClient } from "./controlPlane";
+import { coSignedToSettleBody } from "./settleRequest";
 
 /**
  * Settle a tunnel: submit the co-signed root settlement to the backend `/settle` route (server-
@@ -22,14 +20,14 @@ import { coSignedToSettleRequest } from "./settleRequest";
 export async function settleViaBackend(opts: {
   tunnelId: string;
   settlement: CoSignedSettlementWithRoot;
-  transcript: SettleTranscriptEntry[];
+  transcript: TranscriptEntry[];
   label: string;
   fallbackClose: () => Promise<string | { digest: string } | void>;
 }): Promise<string | undefined> {
   try {
     const r = await getControlPlaneClient().settle(
       opts.tunnelId,
-      coSignedToSettleRequest(opts.settlement, opts.transcript),
+      coSignedToSettleBody(opts.settlement, opts.transcript),
     );
     return r.txDigest;
   } catch (e) {

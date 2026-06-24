@@ -47,7 +47,7 @@ import {
 } from "@/onchain/stakeTunnel";
 import { DOPAMINT_COIN_TYPE, isDopamintConfigured } from "@/onchain/dopamint";
 import { useSponsoredSignExec } from "@/onchain/useSponsoredSignExec";
-import { coSignedToSettleRequest } from "@/backend/settleRequest";
+import { coSignedToSettleBody } from "@/backend/settleRequest";
 import {
   attachResume,
   resumeActiveTunnels,
@@ -735,7 +735,7 @@ async function settle<State, Move>(
   try {
     await cp.settle(
       tunnelId,
-      coSignedToSettleRequest(co, transcript.toRecord().entries),
+      coSignedToSettleBody(co, transcript.rawEntries()),
     );
   } catch (e) {
     console.error(

@@ -704,7 +704,7 @@ export function useBlackjackBot(): BlackjackBotGame {
         const backendDigest = await settleViaBackend({
           tunnelId,
           settlement: s,
-          transcript: transcript.toRecord().entries,
+          transcript: transcript.rawEntries(),
           label: "blackjack",
           fallbackClose: async () => {
             if (isDopamintConfigured) {

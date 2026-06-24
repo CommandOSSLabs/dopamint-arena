@@ -1,11 +1,14 @@
 //! `GET /v1/mp` WebSocket. Upgrade → challenge → connect-auth → register presence + a local
 //! outbound channel via Bus → drive matchmaking/relay through MpStore + Bus::deliver.
 use std::collections::HashSet;
+use std::future::Future;
+use std::pin::Pin;
 use std::time::Duration;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
 use axum::response::Response;
+use futures::stream::FuturesUnordered;
 use futures::{SinkExt, StreamExt};
 use tokio::sync::mpsc;
 use uuid::Uuid;
@@ -15,8 +18,23 @@ use crate::mp::{auth, Checkpoint, ConnId, DirectedInvite, MatchRecord, Waiting};
 use crate::state::SharedState;
 use crate::store::{ConnRef, CtrlMsg};
 
+/// A parked waiter's hold expiry: resolves to `(game, me)` after the hold elapses, on the
+/// connection's task (dropped — cancelled — when the connection ends).
+type HoldTimer = Pin<Box<dyn Future<Output = (String, Waiting)> + Send>>;
+
 pub async fn mp_upgrade(State(state): State<SharedState>, ws: WebSocketUpgrade) -> Response {
-    ws.on_upgrade(move |socket| handle_socket(socket, state))
+    let instance = state.bus.instance_id().to_owned();
+    let mut resp = ws.on_upgrade(move |socket| handle_socket(socket, state));
+    // `SameSite=Lax` is correct for a same-origin relay. A cross-origin frontend needs
+    // `SameSite=None; Secure` instead (see "relay session stickiness" in
+    // docs/adding-a-tunnel-game.md) — fold that in via config if/when the relay is cross-origin.
+    if let Ok(value) =
+        axum::http::HeaderValue::from_str(&format!("aff={instance}; Path=/; SameSite=Lax"))
+    {
+        resp.headers_mut()
+            .insert(axum::http::header::SET_COOKIE, value);
+    }
+    resp
 }
 
 fn new_match_id() -> String {
@@ -29,23 +47,58 @@ fn here(state: &SharedState, conn: ConnId) -> ConnRef {
     }
 }
 
-/// Quick-match: seat A = the earlier waiter (opponent); seat B = the late joiner.
-fn build_quick_match(
+/// Build, persist, and announce a freshly paired match. Used by both the join path and the
+/// hold-timer fallback. Delivers `MatchFound` to both seats and warms both relay caches via the
+/// bus (`populate`), so neither seat needs to be the synchronous creator — the timer path pairs
+/// two parked waiters, neither of which is "the joiner".
+async fn create_and_announce_match(
+    state: &SharedState,
     game: &str,
-    opponent: Waiting,
-    me_wallet: &str,
-    me_conn: ConnRef,
+    seat_a: Waiting,
+    seat_b: Waiting,
 ) -> (String, MatchRecord) {
     let match_id = new_match_id();
     let rec = MatchRecord {
         game: game.to_owned(),
-        seat_a: opponent.wallet.clone(),
-        seat_b: me_wallet.to_owned(),
-        conn_a: opponent.conn,
-        conn_b: me_conn,
+        seat_a: seat_a.wallet.clone(),
+        seat_b: seat_b.wallet.clone(),
+        conn_a: seat_a.conn.clone(),
+        conn_b: seat_b.conn.clone(),
         tunnel_id: None,
         latest_checkpoint: None,
     };
+    state.mp.put_match(&match_id, rec.clone()).await;
+    state
+        .pairing
+        .observe(rec.conn_a.instance_id == rec.conn_b.instance_id);
+    state
+        .bus
+        .deliver(
+            &rec.conn_a,
+            ServerMsg::MatchFound {
+                match_id: match_id.clone(),
+                role: "A".into(),
+                opponent_wallet: rec.seat_b.clone(),
+                game: game.to_owned(),
+            }
+            .to_text(),
+        )
+        .await;
+    state
+        .bus
+        .deliver(
+            &rec.conn_b,
+            ServerMsg::MatchFound {
+                match_id: match_id.clone(),
+                role: "B".into(),
+                opponent_wallet: rec.seat_a.clone(),
+                game: game.to_owned(),
+            }
+            .to_text(),
+        )
+        .await;
+    state.bus.populate(&rec.conn_a, &match_id, &rec).await;
+    state.bus.populate(&rec.conn_b, &match_id, &rec).await;
     (match_id, rec)
 }
 
@@ -91,6 +144,7 @@ async fn handle_socket(socket: WebSocket, state: SharedState) {
     let mut joined_games: HashSet<String> = HashSet::new();
     let mut matches: std::collections::HashMap<String, MatchRecord> =
         std::collections::HashMap::new();
+    let mut holds: FuturesUnordered<HoldTimer> = FuturesUnordered::new();
 
     let mut keepalive = tokio::time::interval(KEEPALIVE_PING_INTERVAL);
     // A stall in `handle_message` must not burst-fire catch-up ticks and trip the
@@ -160,10 +214,18 @@ async fn handle_socket(socket: WebSocket, state: SharedState) {
                     &mut joined_games,
                     &mut matches,
                     client_msg,
+                    &mut holds,
                 )
                 .await
                 {
                     let _ = tx.send(ServerMsg::error(code, code).to_text());
+                }
+            }
+            Some((game, me)) = holds.next(), if !holds.is_empty() => {
+                // Hold expired: if still parked, pair across instances and announce.
+                if let Some(opp) = state.mp.fallback_pair(&game, &me.wallet).await {
+                    // Seat A = this (the waiter whose timer fired), seat B = the opponent.
+                    create_and_announce_match(&state, &game, me, opp).await;
                 }
             }
         }
@@ -191,6 +253,7 @@ async fn handle_message(
     joined: &mut HashSet<String>,
     matches: &mut std::collections::HashMap<String, MatchRecord>,
     msg: ClientMsg,
+    holds: &mut FuturesUnordered<HoldTimer>,
 ) -> Result<(), &'static str> {
     match msg {
         ClientMsg::Connect {
@@ -212,7 +275,7 @@ async fn handle_message(
         }
         other => {
             let w = wallet.as_ref().ok_or("not_authenticated")?.clone();
-            handle_authed(state, conn_id, &w, joined, matches, other).await
+            handle_authed(state, conn_id, &w, joined, matches, other, holds).await
         }
     }
 }
@@ -224,6 +287,7 @@ async fn handle_authed(
     joined: &mut HashSet<String>,
     matches: &mut std::collections::HashMap<String, MatchRecord>,
     msg: ClientMsg,
+    holds: &mut FuturesUnordered<HoldTimer>,
 ) -> Result<(), &'static str> {
     match msg {
         ClientMsg::QueueJoin { game } => {
@@ -232,49 +296,25 @@ async fn handle_authed(
                 wallet: wallet.to_owned(),
                 conn: here(state, conn_id),
             };
-            if let Some(opp) = state.mp.join_or_pair(&game, me).await {
-                let (match_id, rec) = build_quick_match(&game, opp, wallet, here(state, conn_id));
-                state.mp.put_match(&match_id, rec.clone()).await;
-                matches.insert(match_id.clone(), rec.clone());
-                // Captured before the two delivers consume `match_id`/`rec` so the populate below
-                // can warm the waiter's (seat A) cache with owned copies.
-                let (match_id_for_populate, rec_for_populate) = (match_id.clone(), rec.clone());
-                state
-                    .bus
-                    .deliver(
-                        &rec.conn_a,
-                        ServerMsg::MatchFound {
-                            match_id: match_id.clone(),
-                            role: "A".into(),
-                            opponent_wallet: rec.seat_b.clone(),
-                            game: game.clone(),
-                        }
-                        .to_text(),
-                    )
-                    .await;
-                state
-                    .bus
-                    .deliver(
-                        &rec.conn_b,
-                        ServerMsg::MatchFound {
-                            match_id,
-                            role: "B".into(),
-                            opponent_wallet: rec.seat_a,
-                            game,
-                        }
-                        .to_text(),
-                    )
-                    .await;
-                // Warm the waiter's (seat A) relay cache so `peer.dropped` is robust even if it
-                // drops before its first relay. Seat B is this creating connection, warmed locally.
-                state
-                    .bus
-                    .populate(
-                        &rec_for_populate.conn_a,
-                        &match_id_for_populate,
-                        &rec_for_populate,
-                    )
-                    .await;
+            match state
+                .mp
+                .join_or_pair(&game, me.clone(), state.pair_hold_ms)
+                .await
+            {
+                Some(opp) => {
+                    // Seat A = earlier waiter (opp), seat B = this joiner (me).
+                    create_and_announce_match(state, &game, opp, me).await;
+                }
+                None => {
+                    // Parked: arm a hold timer on this connection's task. On expiry the select
+                    // loop runs the cross-instance fallback. Cancelled if the connection ends.
+                    let hold = state.pair_hold_ms;
+                    let g = game.clone();
+                    holds.push(Box::pin(async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(hold)).await;
+                        (g, me)
+                    }));
+                }
             }
             Ok(())
         }
@@ -598,6 +638,7 @@ mod tests {
     use super::*;
     use crate::mp::MatchRecord;
     use crate::routes::test_support::test_state;
+    use crate::state::AppState;
     use crate::store::ConnRef;
 
     // Keepalive is server-driven (RFC 6455): a browser can't originate pings, so
@@ -690,22 +731,35 @@ mod tests {
     }
 
     // Quick-match: the earlier waiter (opponent) is seat A; the late joiner is seat B.
-    #[test]
-    fn quick_match_seat_a_is_earlier_waiter() {
+    #[tokio::test]
+    async fn quick_match_seat_a_is_earlier_waiter() {
+        let state = AppState::in_memory_for_test();
         let conn_opp = ConnRef {
-            instance_id: "i".into(),
+            instance_id: state.bus.instance_id().to_owned(),
             conn_id: Uuid::new_v4(),
         };
         let conn_me = ConnRef {
-            instance_id: "i".into(),
+            instance_id: state.bus.instance_id().to_owned(),
             conn_id: Uuid::new_v4(),
         };
+        // Register both so deliver() doesn't silently drop the frames.
+        let (tx_opp, _rx_opp) = mpsc::unbounded_channel();
+        let (ctrl_opp, _) = mpsc::unbounded_channel::<CtrlMsg>();
+        state.bus.register(conn_opp.conn_id, tx_opp, ctrl_opp);
+        let (tx_me, _rx_me) = mpsc::unbounded_channel();
+        let (ctrl_me, _) = mpsc::unbounded_channel::<CtrlMsg>();
+        state.bus.register(conn_me.conn_id, tx_me, ctrl_me);
+
         let opponent = Waiting {
             wallet: "0xearly".into(),
             conn: conn_opp.clone(),
         };
+        let joiner = Waiting {
+            wallet: "0xlate".into(),
+            conn: conn_me.clone(),
+        };
 
-        let (_, rec) = build_quick_match("chess", opponent, "0xlate", conn_me.clone());
+        let (_, rec) = create_and_announce_match(&state, "chess", opponent, joiner).await;
 
         assert_eq!(rec.seat_a, "0xearly", "seat A must be the earlier waiter");
         assert_eq!(rec.seat_b, "0xlate", "seat B must be the late joiner");
@@ -918,6 +972,7 @@ mod tests {
 
         let mut joined = HashSet::new();
         let mut matches = HashMap::new();
+        let mut holds: FuturesUnordered<HoldTimer> = FuturesUnordered::new();
         handle_authed(
             &state,
             conn_a,
@@ -927,6 +982,7 @@ mod tests {
             ClientMsg::Resume {
                 match_id: mid.into(),
             },
+            &mut holds,
         )
         .await
         .unwrap();
@@ -979,6 +1035,7 @@ mod tests {
             .await;
         let mut joined = HashSet::new();
         let mut matches = HashMap::new();
+        let mut holds: FuturesUnordered<HoldTimer> = FuturesUnordered::new();
         let r = handle_authed(
             &state,
             conn,
@@ -988,6 +1045,7 @@ mod tests {
             ClientMsg::Resume {
                 match_id: "m1".into(),
             },
+            &mut holds,
         )
         .await;
         assert_eq!(r, Err("not_a_seat"));
@@ -1019,6 +1077,7 @@ mod tests {
         state.mp.put_match("m1", rec).await;
         let mut joined = HashSet::new();
         let mut matches = HashMap::new();
+        let mut holds: FuturesUnordered<HoldTimer> = FuturesUnordered::new();
 
         handle_authed(
             &state,
@@ -1030,6 +1089,7 @@ mod tests {
                 match_id: "m1".into(),
                 payload: relay_frame("move"),
             },
+            &mut holds,
         )
         .await
         .unwrap();
@@ -1053,6 +1113,7 @@ mod tests {
                 match_id: "m1".into(),
                 payload: relay_frame("ack"),
             },
+            &mut holds,
         )
         .await
         .unwrap();
@@ -1064,6 +1125,478 @@ mod tests {
             state.control.snapshot().await.total_actions,
             1,
             "the ACK half must not add a second action"
+        );
+    }
+
+    // Register a connection on the bus and return its ConnRef + frame receiver.
+    fn test_conn(state: &SharedState) -> (ConnRef, mpsc::UnboundedReceiver<String>) {
+        let conn_id = Uuid::new_v4();
+        let (tx, rx) = mpsc::unbounded_channel();
+        let (ctrl_tx, _ctrl_rx) = mpsc::unbounded_channel::<CtrlMsg>();
+        state.bus.register(conn_id, tx, ctrl_tx);
+        let cr = ConnRef {
+            instance_id: state.bus.instance_id().to_owned(),
+            conn_id,
+        };
+        (cr, rx)
+    }
+
+    // Receive a frame and parse it as JSON. Panics if none arrives within 1 s.
+    async fn recv_json(rx: &mut mpsc::UnboundedReceiver<String>) -> serde_json::Value {
+        let text = tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv())
+            .await
+            .expect("recv_json timed out")
+            .expect("channel closed");
+        serde_json::from_str(&text).expect("frame is valid JSON")
+    }
+
+    // create_and_announce_match delivers MatchFound to BOTH seats and warms both caches.
+    #[tokio::test]
+    async fn announce_match_notifies_both_seats() {
+        let state = AppState::in_memory_for_test();
+        let inst = state.bus.instance_id().to_owned();
+        let (ca, mut rxa) = test_conn(&state);
+        let (cb, mut rxb) = test_conn(&state);
+        let a = Waiting {
+            wallet: "0xa".into(),
+            conn: ca,
+        };
+        let b = Waiting {
+            wallet: "0xb".into(),
+            conn: cb,
+        };
+        let (_mid, rec) = create_and_announce_match(&state, "ttt", a, b).await;
+        assert_eq!(rec.seat_a, "0xa");
+        assert_eq!(rec.seat_b, "0xb");
+        // Both sockets receive a match.found frame.
+        let fa = recv_json(&mut rxa).await;
+        let fb = recv_json(&mut rxb).await;
+        assert_eq!(fa["type"], "match.found");
+        assert_eq!(fa["role"], "A");
+        assert_eq!(fa["opponentWallet"], "0xb");
+        assert_eq!(fb["type"], "match.found");
+        assert_eq!(fb["role"], "B");
+        assert_eq!(fb["opponentWallet"], "0xa");
+        let _ = inst;
+    }
+
+    // The WS handshake response sets the per-browser affinity cookie naming this instance, so the
+    // LB can route reconnects back here (preserving co-location). See ADR-0011 / spec §Component 2.
+    #[tokio::test]
+    async fn mp_upgrade_sets_affinity_cookie() {
+        use axum::routing::get;
+        use axum::Router;
+
+        let app = Router::new()
+            .route("/v1/mp", get(mp_upgrade))
+            .with_state(AppState::in_memory_for_test());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        // connect_async returns (stream, Response) — the Response carries the 101 headers.
+        let (_ws, resp) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/mp"))
+            .await
+            .expect("ws connect");
+
+        let cookie = resp
+            .headers()
+            .get(axum::http::header::SET_COOKIE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        assert!(cookie.starts_with("aff=test-instance"), "got: {cookie}");
+    }
+
+    // Two idle cross-instance waiters: the hold timer fires and both sockets receive match.found.
+    // Uses a Redis-backed `RedisMpStore` + `LocalBus` so `fallback_pair` operates on real queue
+    // state. Both wallets park with a long hold (so the join path never expires them), then wa's
+    // hold timer fires and fallback_pair pairs them. Proves the select-loop timer wiring at seam.
+    #[tokio::test]
+    async fn hold_timer_pairs_two_idle_waiters() {
+        use std::sync::Arc;
+        use std::time::Duration;
+        use testcontainers_modules::redis::Redis;
+        use testcontainers_modules::testcontainers::{runners::AsyncRunner, ImageExt};
+
+        use crate::store::memory::LocalBus;
+        use crate::store::redis::{connect, RedisMpStore};
+
+        // Spin up an ephemeral Redis 7 container (sharded pub/sub required).
+        let node = Redis::default()
+            .with_tag("7.4-alpine")
+            .start()
+            .await
+            .expect("start redis container");
+        let port = node.get_host_port_ipv4(6379).await.expect("redis port");
+        let url = format!("redis://127.0.0.1:{port}");
+        let mut pool = None;
+        for _ in 0..40 {
+            match connect(&url).await {
+                Ok(p) => {
+                    pool = Some(p);
+                    break;
+                }
+                Err(_) => tokio::time::sleep(Duration::from_millis(50)).await,
+            }
+        }
+        let pool = pool.expect("connect to redis within 2s");
+
+        let mp: Arc<dyn crate::store::MpStore> = Arc::new(RedisMpStore::new(pool));
+        let bus: Arc<dyn crate::store::Bus> = Arc::new(LocalBus::new("test-hold".to_owned()));
+
+        // Build a minimal SharedState with the Redis mp + local bus.
+        let (stats_tx, _) = tokio::sync::broadcast::channel(4);
+        let state: crate::state::SharedState = Arc::new(AppState {
+            control: Arc::new(crate::store::memory::InMemoryControlStore::default()),
+            mp: mp.clone(),
+            bus: bus.clone(),
+            settler: crate::sui::SuiSettler::noop(),
+            walrus: crate::walrus::WalrusClient::noop(),
+            stats_tx,
+            actions: crate::stats_counter::LocalActionCounter::default(),
+            pair_hold_ms: 10_000, // long hold — neither expires via the join path
+            pairing: crate::stats_counter::MatchPairingMetrics::default(),
+        });
+
+        let game = format!("hold-{}", uuid::Uuid::new_v4().simple());
+
+        // Register two connections on the local bus so deliver() works.
+        let (conn_wa_ref, mut rx_wa) = test_conn(&state);
+        let (conn_wb_ref, mut rx_wb) = test_conn(&state);
+
+        let wa = Waiting {
+            wallet: "0xwa".into(),
+            conn: conn_wa_ref.clone(),
+        };
+
+        // Park wa first (queue empty → parks, no immediate pair).
+        let parked_a = state.mp.join_or_pair(&game, wa.clone(), 10_000).await;
+        assert!(parked_a.is_none(), "wa must park");
+
+        // Park wb on a DIFFERENT instance id so the Redis JOIN_OR_PAIR script doesn't see a
+        // same-instance partner and parks wb too (same-instance preference would pair them).
+        // We inject wb directly with a different instance_id in its ConnRef.
+        let wb_other_inst = Waiting {
+            wallet: "0xwb".into(),
+            conn: ConnRef {
+                instance_id: "other-instance".to_owned(),
+                conn_id: conn_wb_ref.conn_id,
+            },
+        };
+        let parked_b = state.mp.join_or_pair(&game, wb_other_inst, 10_000).await;
+        assert!(parked_b.is_none(), "wb must also park (different instance)");
+
+        // Build wa's hold timer (as the select arm does when join_or_pair returns None).
+        let mut holds: FuturesUnordered<HoldTimer> = FuturesUnordered::new();
+        let hold_ms: u64 = 30;
+        {
+            let g = game.clone();
+            let me = wa.clone();
+            holds.push(Box::pin(async move {
+                tokio::time::sleep(Duration::from_millis(hold_ms)).await;
+                (g, me)
+            }));
+        }
+
+        // Drive the timer arm: wait for the hold to expire.
+        let (fired_game, fired_me) = tokio::time::timeout(Duration::from_secs(2), holds.next())
+            .await
+            .expect("hold timer must fire within 2s")
+            .expect("holds must yield Some");
+        assert_eq!(fired_me.wallet, "0xwa");
+
+        // Execute the fallback exactly as the select arm does.
+        let opp = state
+            .mp
+            .fallback_pair(&fired_game, &fired_me.wallet)
+            .await
+            .expect("fallback_pair must return wb");
+        assert_eq!(opp.wallet, "0xwb", "opponent must be wb");
+
+        // Announce: deliver match.found to both seats.
+        // Remap opp's conn to the registered one so deliver() routes locally.
+        let opp_remapped = Waiting {
+            wallet: opp.wallet.clone(),
+            conn: conn_wb_ref.clone(),
+        };
+        create_and_announce_match(&state, &fired_game, fired_me, opp_remapped).await;
+
+        // Both connections must have received match.found.
+        let fa = recv_json(&mut rx_wa).await;
+        let fb = recv_json(&mut rx_wb).await;
+        assert_eq!(fa["type"], "match.found", "wa must receive match.found");
+        assert_eq!(fa["role"], "A", "timer-fired waiter is seat A");
+        assert_eq!(fa["opponentWallet"], "0xwb");
+        assert_eq!(fb["type"], "match.found", "wb must receive match.found");
+        assert_eq!(fb["role"], "B");
+        assert_eq!(fb["opponentWallet"], "0xwa");
+    }
+
+    // ---- Reusable multi-instance Redis harness --------------------------------------------
+    // Factored out of `hold_timer_pairs_two_idle_waiters` so the cross-instance e2e tests below
+    // don't re-duplicate the container spin-up and `SharedState` wiring.
+
+    // Ephemeral Redis 7.4 (sharded pub/sub, which `RedisBus` requires). Hold the returned node
+    // for the test's lifetime — dropping it stops the container. Returns the mapped port so
+    // several instances can share ONE Redis, which is the real multi-instance topology.
+    async fn redis_container() -> (
+        testcontainers_modules::testcontainers::ContainerAsync<
+            testcontainers_modules::redis::Redis,
+        >,
+        u16,
+    ) {
+        use crate::store::redis::connect;
+        use testcontainers_modules::redis::Redis;
+        use testcontainers_modules::testcontainers::{runners::AsyncRunner, ImageExt};
+
+        let node = Redis::default()
+            .with_tag("7.4-alpine")
+            .start()
+            .await
+            .expect("start redis container");
+        let port = node.get_host_port_ipv4(6379).await.expect("redis port");
+        // The mapped port can answer a beat before redis accepts; poll through that window.
+        let url = format!("redis://127.0.0.1:{port}");
+        for _ in 0..40 {
+            if connect(&url).await.is_ok() {
+                return (node, port);
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        panic!("redis container did not accept connections within 2s");
+    }
+
+    // A `SharedState` backed by `RedisMpStore` + `RedisBus` on `port`, identified by
+    // `instance_id`. Two of these on one port are two relay instances sharing one Redis: a frame
+    // addressed to a conn on the OTHER instance crosses via SPUBLISH, exactly as in production.
+    async fn redis_state(
+        instance_id: &str,
+        port: u16,
+        pair_hold_ms: u64,
+    ) -> crate::state::SharedState {
+        use crate::store::memory::InMemoryControlStore;
+        use crate::store::redis::{connect, RedisBus, RedisMpStore};
+        use std::sync::Arc;
+
+        let url = format!("redis://127.0.0.1:{port}");
+        let mp: Arc<dyn crate::store::MpStore> =
+            Arc::new(RedisMpStore::new(connect(&url).await.expect("mp pool")));
+        let bus: Arc<dyn crate::store::Bus> = Arc::new(
+            RedisBus::new(
+                instance_id.to_owned(),
+                connect(&url).await.expect("bus pool"),
+            )
+            .await
+            .expect("redis bus"),
+        );
+        let (stats_tx, _) = tokio::sync::broadcast::channel(4);
+        Arc::new(AppState {
+            control: Arc::new(InMemoryControlStore::default()),
+            mp,
+            bus,
+            settler: crate::sui::SuiSettler::noop(),
+            walrus: crate::walrus::WalrusClient::noop(),
+            stats_tx,
+            actions: crate::stats_counter::LocalActionCounter::default(),
+            pair_hold_ms,
+            pairing: crate::stats_counter::MatchPairingMetrics::default(),
+        })
+    }
+
+    // Like `recv_json` but with a caller-chosen timeout: cross-instance delivery over Redis
+    // sharded pub/sub needs more than the 1 s same-process budget `recv_json` allows.
+    async fn recv_json_within(
+        rx: &mut mpsc::UnboundedReceiver<String>,
+        secs: u64,
+    ) -> serde_json::Value {
+        let text = tokio::time::timeout(std::time::Duration::from_secs(secs), rx.recv())
+            .await
+            .expect("recv_json_within timed out")
+            .expect("channel closed");
+        serde_json::from_str(&text).expect("frame is valid JSON")
+    }
+
+    // Arm a hold timer exactly as the `QueueJoin` park branch does: sleep `hold_ms`, then yield
+    // `(game, me)` for the select loop's timer arm to drive `fallback_pair`.
+    fn arm_hold(holds: &mut FuturesUnordered<HoldTimer>, game: &str, me: Waiting, hold_ms: u64) {
+        let g = game.to_owned();
+        holds.push(Box::pin(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(hold_ms)).await;
+            (g, me)
+        }));
+    }
+
+    // A split match (seats on different instances) must announce ACROSS instances: the timer-path
+    // fallback pairs two cross-instance waiters, and `create_and_announce_match` on the firing
+    // instance must reach the remote seat over Redis SPUBLISH — the same `Bus::deliver` path every
+    // in-match move takes. Also asserts the pairing is metered as split, not co-located.
+    #[tokio::test]
+    async fn split_match_announce_crosses_instances() {
+        let (_node, port) = redis_container().await;
+        let state_a = redis_state("inst-A", port, 10_000).await;
+        let state_b = redis_state("inst-B", port, 10_000).await;
+
+        // wa's socket lives on instance A; wb's on instance B.
+        let (conn_wa, mut rx_wa) = test_conn(&state_a);
+        let (conn_wb, mut rx_wb) = test_conn(&state_b);
+        let game = format!("split-{}", Uuid::new_v4().simple());
+
+        // wa joins on A → parks (queue empty).
+        let wa = Waiting {
+            wallet: "0xwa".into(),
+            conn: conn_wa,
+        };
+        assert!(
+            state_a
+                .mp
+                .join_or_pair(&game, wa.clone(), 10_000)
+                .await
+                .is_none(),
+            "wa parks"
+        );
+        // wb joins on B → cross-instance, not expired (long hold) → parks too.
+        let wb = Waiting {
+            wallet: "0xwb".into(),
+            conn: conn_wb,
+        };
+        assert!(
+            state_b.mp.join_or_pair(&game, wb, 10_000).await.is_none(),
+            "wb parks cross-instance"
+        );
+
+        // wa's hold timer fires on instance A → fallback pairs the cross-instance wb.
+        let opp = state_a
+            .mp
+            .fallback_pair(&game, "0xwa")
+            .await
+            .expect("fallback pairs wb");
+        assert_eq!(opp.wallet, "0xwb");
+        assert_eq!(
+            opp.conn.instance_id, "inst-B",
+            "opponent is on the other instance"
+        );
+
+        // Announce on A: seat A = wa (local), seat B = wb (remote — must cross via SPUBLISH).
+        create_and_announce_match(&state_a, &game, wa, opp).await;
+
+        let fa = recv_json(&mut rx_wa).await; // local delivery, 1 s budget
+        assert_eq!(fa["role"], "A");
+        assert_eq!(fa["opponentWallet"], "0xwb");
+        let fb = recv_json_within(&mut rx_wb, 2).await; // crossed instances over Redis
+        assert_eq!(
+            fb["type"], "match.found",
+            "remote seat gets the announce over SPUBLISH"
+        );
+        assert_eq!(fb["role"], "B");
+        assert_eq!(fb["opponentWallet"], "0xwa");
+
+        assert_eq!(
+            state_a.pairing.snapshot(),
+            (0, 1),
+            "cross-instance pairing is metered as split, not co-located"
+        );
+    }
+
+    // The join-path/timer race: if a later same-instance joiner pairs a parked waiter before its
+    // hold timer fires, the timer's `fallback_pair` must find the waiter already gone and no-op —
+    // never a double-pair, never a second match.found. (Single Lua-atomic queue; this is the
+    // exactly-once guarantee viewed from the connection layer.)
+    #[tokio::test]
+    async fn join_path_pairing_makes_hold_timer_a_noop() {
+        let (_node, port) = redis_container().await;
+        let state = redis_state("inst-A", port, 50).await;
+        let (conn_wa, mut rx_wa) = test_conn(&state);
+        let (conn_wb, mut rx_wb) = test_conn(&state);
+        let game = format!("race-{}", Uuid::new_v4().simple());
+
+        // wa parks and arms its hold timer (as the park branch does).
+        let wa = Waiting {
+            wallet: "0xwa".into(),
+            conn: conn_wa,
+        };
+        assert!(
+            state.mp.join_or_pair(&game, wa.clone(), 50).await.is_none(),
+            "wa parks"
+        );
+        let mut holds: FuturesUnordered<HoldTimer> = FuturesUnordered::new();
+        arm_hold(&mut holds, &game, wa, 50);
+
+        // wb joins the SAME instance → same-instance preference pairs wa immediately at join.
+        let wb = Waiting {
+            wallet: "0xwb".into(),
+            conn: conn_wb,
+        };
+        let opp = state
+            .mp
+            .join_or_pair(&game, wb.clone(), 50)
+            .await
+            .expect("join path pairs wa");
+        assert_eq!(opp.wallet, "0xwa");
+        create_and_announce_match(&state, &game, opp, wb).await; // seat A = wa, seat B = wb
+        assert_eq!(recv_json(&mut rx_wa).await["role"], "A");
+        assert_eq!(recv_json(&mut rx_wb).await["role"], "B");
+
+        // Now wa's hold timer fires — the waiter is already gone, so the fallback is a no-op.
+        let (fg, fme) = tokio::time::timeout(std::time::Duration::from_secs(2), holds.next())
+            .await
+            .expect("timer fires")
+            .expect("yields Some");
+        assert!(
+            state.mp.fallback_pair(&fg, &fme.wallet).await.is_none(),
+            "no double-pair: the join path already consumed wa"
+        );
+        // wa must NOT receive a second match.found.
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(200), rx_wa.recv())
+                .await
+                .is_err(),
+            "no second announce to the already-paired waiter"
+        );
+    }
+
+    // A waiter that disconnects during its hold must leave no ghost in the queue: its own
+    // `leave_queue` drains it, the late timer no-ops, and a fresh joiner does not pair against the
+    // departed wallet. Guards the structural-cancellation claim at the queue level.
+    #[tokio::test]
+    async fn disconnect_during_hold_leaves_no_phantom() {
+        let (_node, port) = redis_container().await;
+        let state = redis_state("inst-A", port, 50).await;
+        let (conn_wa, _rx_wa) = test_conn(&state);
+        let game = format!("drop-{}", Uuid::new_v4().simple());
+
+        let wa = Waiting {
+            wallet: "0xwa".into(),
+            conn: conn_wa,
+        };
+        assert!(
+            state.mp.join_or_pair(&game, wa.clone(), 50).await.is_none(),
+            "wa parks"
+        );
+        let mut holds: FuturesUnordered<HoldTimer> = FuturesUnordered::new();
+        arm_hold(&mut holds, &game, wa, 50);
+
+        // wa disconnects: the socket-end cleanup runs leave_queue for each joined game.
+        state.mp.leave_queue(&game, "0xwa").await;
+
+        // The late timer fires but finds wa gone → no-op.
+        let (fg, fme) = tokio::time::timeout(std::time::Duration::from_secs(2), holds.next())
+            .await
+            .expect("timer fires")
+            .expect("yields Some");
+        assert!(
+            state.mp.fallback_pair(&fg, &fme.wallet).await.is_none(),
+            "disconnected waiter must not pair"
+        );
+
+        // A fresh joiner sees an empty queue — no phantom wa to pair against.
+        let (conn_wc, _rx_wc) = test_conn(&state);
+        let wc = Waiting {
+            wallet: "0xwc".into(),
+            conn: conn_wc,
+        };
+        assert!(
+            state.mp.join_or_pair(&game, wc, 50).await.is_none(),
+            "no ghost entry: fresh joiner parks instead of pairing the departed wallet"
         );
     }
 }
