@@ -35,6 +35,8 @@ export function FloatingToolbar({
   background,
   backgrounds,
   onBackground,
+  stacked = false,
+  collapse = false,
 }: {
   tool: ToolId;
   onTool: (t: ToolId) => void;
@@ -47,65 +49,74 @@ export function FloatingToolbar({
   background: string;
   backgrounds: readonly string[];
   onBackground: (hex: string) => void;
+  /** Drop the absolute float for an in-flow island the parent stacks in its top bar. */
+  stacked?: boolean;
+  /** Collapse the inline palette + backdrop rows into single swatches with popovers (and
+   *  drop the dividers) so the island stays one tidy row at narrow widths. */
+  collapse?: boolean;
 }) {
   return (
-    <div style={islandStyle}>
-      <ToolButton
-        label="Draw"
-        active={tool === "draw"}
-        onClick={() => onTool("draw")}
-      >
-        <PencilIcon />
-      </ToolButton>
-      <ToolButton
-        label="Eraser"
-        active={tool === "erase"}
-        onClick={() => onTool("erase")}
-      >
-        <EraserIcon />
-      </ToolButton>
-      <ToolButton
-        label="Pan"
-        active={tool === "hand"}
-        onClick={() => onTool("hand")}
-      >
-        <HandIcon />
-      </ToolButton>
-
-      <Divider />
-
-      <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-        {SWATCHES.map((idx) => {
-          const on = color === idx && tool !== "erase";
-          return (
-            <button
-              key={idx}
-              type="button"
-              title={`Color ${idx}`}
-              aria-label={`Color ${idx}`}
-              aria-pressed={on}
-              onClick={() => {
-                onColor(idx);
-                onTool("draw"); // picking a color implies drawing
-              }}
-              style={{
-                width: 20,
-                height: 20,
-                borderRadius: 5,
-                cursor: "pointer",
-                padding: 0,
-                background: PALETTE[idx],
-                border: "1px solid rgba(0,0,0,0.18)",
-                boxShadow: on ? `0 0 0 2px ${WC.accent}` : "none",
-              }}
-            />
-          );
-        })}
+    <div style={stacked ? { ...islandStyle, ...islandStackedStyle } : islandStyle}>
+      <div style={toolGroupStyle}>
+        <ToolButton
+          label="Draw"
+          active={tool === "draw"}
+          onClick={() => onTool("draw")}
+        >
+          <PencilIcon />
+        </ToolButton>
+        <ToolButton
+          label="Eraser"
+          active={tool === "erase"}
+          onClick={() => onTool("erase")}
+        >
+          <EraserIcon />
+        </ToolButton>
+        <ToolButton
+          label="Pan"
+          active={tool === "hand"}
+          onClick={() => onTool("hand")}
+        >
+          <HandIcon />
+        </ToolButton>
       </div>
 
-      <Divider />
+      {!collapse && <Divider />}
 
-      <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
+      {/* Wide: the full inline palette. Narrow: one current-color swatch that opens a
+          popover of the same colors — so the island stays a single, uncramped row. */}
+      {collapse ? (
+        <ColorPalettePopover
+          color={color}
+          erasing={tool === "erase"}
+          onColor={onColor}
+          onTool={onTool}
+        />
+      ) : (
+        <div style={swatchGroupStyle}>
+          {SWATCHES.map((idx) => {
+            const on = color === idx && tool !== "erase";
+            return (
+              <button
+                key={idx}
+                type="button"
+                title={`Color ${idx}`}
+                aria-label={`Color ${idx}`}
+                aria-pressed={on}
+                onClick={() => {
+                  onColor(idx);
+                  onTool("draw"); // picking a color implies drawing
+                }}
+                style={swatchButtonStyle(PALETTE[idx], on)}
+              />
+            );
+          })}
+        </div>
+      )}
+
+      {!collapse && <Divider />}
+
+      <div style={brushGroupStyle}>
         {SIZES.map((n) => {
           const on = brushSize === n;
           return (
@@ -141,37 +152,168 @@ export function FloatingToolbar({
         })}
       </div>
 
-      <Divider />
+      {!collapse && <Divider />}
 
-      {/* Canvas background presets (Excalidraw-style) — sets the board color. */}
-      <div
-        style={{ display: "flex", alignItems: "center", gap: 5 }}
+      {/* Canvas background presets (Excalidraw-style) — sets the board color. Narrow:
+          collapses to one current-background dot + popover, matching the color swatch. */}
+      {collapse ? (
+        <BackgroundPopover
+          background={background}
+          backgrounds={backgrounds}
+          onBackground={onBackground}
+        />
+      ) : (
+        <div style={swatchGroupStyle} title="Canvas background">
+          {backgrounds.map((hex) => {
+            const on = background.toLowerCase() === hex.toLowerCase();
+            return (
+              <button
+                key={hex}
+                type="button"
+                title={`Background ${hex}`}
+                aria-label={`Background ${hex}`}
+                aria-pressed={on}
+                onClick={() => onBackground(hex)}
+                style={backgroundDotStyle(hex, on)}
+              />
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** A single palette swatch (rounded square). The active swatch gets an accent ring. */
+function swatchButtonStyle(fill: string, on: boolean): CSSProperties {
+  return {
+    width: 20,
+    height: 20,
+    borderRadius: 5,
+    cursor: "pointer",
+    padding: 0,
+    background: fill,
+    border: "1px solid rgba(0,0,0,0.18)",
+    boxShadow: on ? `0 0 0 2px ${WC.accent}` : "none",
+  };
+}
+
+/** A single backdrop-preset dot (round). The active dot gets an accent ring. */
+function backgroundDotStyle(hex: string, on: boolean): CSSProperties {
+  return {
+    width: 18,
+    height: 18,
+    borderRadius: "50%",
+    cursor: "pointer",
+    padding: 0,
+    background: hex,
+    border: "1px solid rgba(0,0,0,0.22)",
+    boxShadow: on ? `0 0 0 2px ${WC.accent}` : "none",
+  };
+}
+
+/**
+ * Narrow-width color control: one swatch of the active color that opens a small popover
+ * grid of the same {@link SWATCHES}. Keeps the compact toolbar to a single row instead of
+ * wrapping the full palette. A transparent backdrop closes it on an outside click/tap.
+ */
+function ColorPalettePopover({
+  color,
+  erasing,
+  onColor,
+  onTool,
+}: {
+  color: number;
+  erasing: boolean;
+  onColor: (index: number) => void;
+  onTool: (t: ToolId) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ position: "relative", display: "flex" }}>
+      <button
+        type="button"
+        title="Pick color"
+        aria-label="Pick color"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+        style={currentSwatchStyle(PALETTE[color], !erasing)}
+      />
+      {open && (
+        <>
+          <div style={popoverBackdropStyle} onClick={() => setOpen(false)} />
+          <div style={popoverStyle}>
+            {SWATCHES.map((idx) => (
+              <button
+                key={idx}
+                type="button"
+                title={`Color ${idx}`}
+                aria-label={`Color ${idx}`}
+                onClick={() => {
+                  onColor(idx);
+                  onTool("draw"); // picking a color implies drawing
+                  setOpen(false);
+                }}
+                style={swatchButtonStyle(
+                  PALETTE[idx],
+                  color === idx && !erasing,
+                )}
+              />
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** Narrow-width backdrop control: one dot of the active background opening a popover of
+ *  the presets — the {@link ColorPalettePopover} sibling for the canvas backdrop. */
+function BackgroundPopover({
+  background,
+  backgrounds,
+  onBackground,
+}: {
+  background: string;
+  backgrounds: readonly string[];
+  onBackground: (hex: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ position: "relative", display: "flex" }}>
+      <button
+        type="button"
         title="Canvas background"
-      >
-        {backgrounds.map((hex) => {
-          const on = background.toLowerCase() === hex.toLowerCase();
-          return (
-            <button
-              key={hex}
-              type="button"
-              title={`Background ${hex}`}
-              aria-label={`Background ${hex}`}
-              aria-pressed={on}
-              onClick={() => onBackground(hex)}
-              style={{
-                width: 18,
-                height: 18,
-                borderRadius: "50%",
-                cursor: "pointer",
-                padding: 0,
-                background: hex,
-                border: "1px solid rgba(0,0,0,0.22)",
-                boxShadow: on ? `0 0 0 2px ${WC.accent}` : "none",
-              }}
-            />
-          );
-        })}
-      </div>
+        aria-label="Canvas background"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+        style={currentSwatchStyle(background, false, "50%")}
+      />
+      {open && (
+        <>
+          <div style={popoverBackdropStyle} onClick={() => setOpen(false)} />
+          {/* Right-anchored: this is the toolbar's last item, so open leftward to stay
+              inside the canvas at narrow widths. */}
+          <div style={popoverEndStyle}>
+            {backgrounds.map((hex) => (
+              <button
+                key={hex}
+                type="button"
+                title={`Background ${hex}`}
+                aria-label={`Background ${hex}`}
+                onClick={() => {
+                  onBackground(hex);
+                  setOpen(false);
+                }}
+                style={backgroundDotStyle(
+                  hex,
+                  background.toLowerCase() === hex.toLowerCase(),
+                )}
+              />
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -204,68 +346,105 @@ export function ArenaControl({
 }) {
   return (
     <div style={autoWrapStyle}>
-      {/* The single Auto toggle — "take the wheel". ON = watch two bots co-paint one
-          tunnel; OFF = you author seat A vs the seat-B bot on the SAME tunnel. */}
-      <button
-        type="button"
-        role="switch"
-        aria-checked={auto}
-        onClick={onToggleAuto}
-        title={
-          auto
-            ? "Two bots are co-painting — click to take the wheel (paint seat A)"
-            : "You're painting seat A — click to hand back to the bots (watch)"
-        }
-        style={autoToggleStyle}
+      <AutoToggle auto={auto} onToggleAuto={onToggleAuto} />
+      <LiveReadout auto={auto} tps={tps} onViewNext={onViewNext} />
+    </div>
+  );
+}
+
+/**
+ * The single Auto "take the wheel" toggle — its own pill so the narrow layout can pin it
+ * top-right while the {@link LiveReadout} reflows to its own row. ON = watch two bots
+ * co-paint one tunnel; OFF = you author seat A vs the seat-B bot on the SAME tunnel.
+ */
+export function AutoToggle({
+  auto,
+  onToggleAuto,
+}: {
+  auto: boolean;
+  onToggleAuto: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={auto}
+      onClick={onToggleAuto}
+      title={
+        auto
+          ? "Two bots are co-painting — click to take the wheel (paint seat A)"
+          : "You're painting seat A — click to hand back to the bots (watch)"
+      }
+      style={autoToggleStyle}
+    >
+      <span style={autoToggleLabelStyle}>
+        <BrushIcon size={14} />
+        {auto ? "Auto · watch" : "You paint"}
+      </span>
+      <span
+        style={{
+          ...switchTrackStyle,
+          background: auto ? WC.accent : "rgba(255,255,255,0.18)",
+        }}
       >
-        <span style={autoToggleLabelStyle}>
-          <BrushIcon size={14} />
-          {auto ? "Auto · watch" : "You paint"}
-        </span>
         <span
           style={{
-            ...switchTrackStyle,
-            background: auto ? WC.accent : "rgba(255,255,255,0.18)",
+            ...switchKnobStyle,
+            transform: auto ? "translateX(16px)" : "translateX(0)",
           }}
-        >
-          <span
-            style={{
-              ...switchKnobStyle,
-              transform: auto ? "translateX(16px)" : "translateX(0)",
-            }}
-          />
-        </span>
-      </button>
+        />
+      </span>
+    </button>
+  );
+}
 
-      <div style={readoutStyle}>
-        <LiveDot />
-        <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
-          {auto ? (
-            <>
-              <SeatDot tint={TINT_BOT_A} /> Bot A
-              <span style={{ color: "#9aa3bb", margin: "0 1px" }}>vs</span>
-              <SeatDot tint={WC.seatB} /> Bot B
-            </>
-          ) : (
-            <>
-              <SeatDot tint={WC.seatA} /> You
-              <span style={{ color: "#9aa3bb", margin: "0 1px" }}>vs</span>
-              <SeatDot tint={WC.seatB} /> Bot B
-            </>
-          )}
-        </span>
-        <span style={{ color: "#9aa3bb" }}>·</span>
-        <span style={{ color: WC.text }}>{Math.round(tps)} TPS</span>
-        <span style={readoutDividerStyle} />
-        <button
-          type="button"
-          onClick={onViewNext}
-          title="Jump the camera to the next bot"
-          style={pillButtonStyle}
-        >
-          View
-        </button>
-      </div>
+/** The live "who vs who · TPS · View" readout. A separate piece so the narrow layout can
+ *  drop it onto its own row below the toolbar — never stacked over the color controls. */
+export function LiveReadout({
+  auto,
+  tps,
+  onViewNext,
+  centered = false,
+}: {
+  auto: boolean;
+  tps: number;
+  onViewNext: () => void;
+  /** Center the contents (narrow stacked layout) instead of right-aligning them. */
+  centered?: boolean;
+}) {
+  return (
+    <div
+      style={
+        centered ? { ...readoutStyle, justifyContent: "center" } : readoutStyle
+      }
+    >
+      <LiveDot />
+      <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
+        {auto ? (
+          <>
+            <SeatDot tint={TINT_BOT_A} /> Bot A
+            <span style={{ color: "#9aa3bb", margin: "0 1px" }}>vs</span>
+            <SeatDot tint={WC.seatB} /> Bot B
+          </>
+        ) : (
+          <>
+            <SeatDot tint={WC.seatA} /> You
+            <span style={{ color: "#9aa3bb", margin: "0 1px" }}>vs</span>
+            <SeatDot tint={WC.seatB} /> Bot B
+          </>
+        )}
+      </span>
+      <span style={{ color: "#9aa3bb" }}>·</span>
+      <span style={{ color: WC.text }}>{Math.round(tps)} TPS</span>
+      <span style={readoutDividerStyle} />
+      <button
+        type="button"
+        onClick={onViewNext}
+        title="Jump the camera to the next bot"
+        style={pillButtonStyle}
+      >
+        View
+      </button>
     </div>
   );
 }
@@ -424,7 +603,8 @@ function Divider() {
   );
 }
 
-/** The faded-frost floating toolbar island (translucent over the dark wall). */
+/** The faded-frost floating toolbar island (translucent over the dark wall). It never
+ *  exceeds the canvas width — groups wrap to extra rows before anything is clipped. */
 const islandStyle: CSSProperties = {
   position: "absolute",
   top: 14,
@@ -433,7 +613,11 @@ const islandStyle: CSSProperties = {
   zIndex: 60,
   display: "flex",
   alignItems: "center",
+  flexWrap: "wrap",
+  justifyContent: "center",
   gap: 6,
+  rowGap: 6,
+  maxWidth: "calc(100% - 16px)",
   padding: 6,
   borderRadius: 12,
   background: WC.toolbar,
@@ -444,7 +628,44 @@ const islandStyle: CSSProperties = {
   fontFamily: FONT_DISPLAY,
 };
 
-/** Top-right arena cluster: the Auto "take the wheel" toggle above its live readout. */
+/** Stacked override: drop the absolute float so the parent's top bar lays the island out
+ *  in normal flow (its own row, no overlap with the back button / arena cluster). */
+const islandStackedStyle: CSSProperties = {
+  position: "relative",
+  top: "auto",
+  left: "auto",
+  transform: "none",
+  zIndex: "auto",
+  maxWidth: "100%",
+  pointerEvents: "auto",
+};
+
+/** A toolbar group (tools / swatches / sizes / backgrounds) — wraps gracefully when the
+ *  island runs out of width so swatches reflow instead of being cut off. */
+const swatchGroupStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  flexWrap: "wrap",
+  justifyContent: "center",
+  gap: 5,
+};
+
+const toolGroupStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 5,
+  flexShrink: 0,
+};
+
+const brushGroupStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 3,
+  flexShrink: 0,
+};
+
+/** Top-right arena cluster: the Auto "take the wheel" toggle above its live readout.
+ *  Capped to the canvas width so it never runs off the left edge at narrow sizes. */
 const autoWrapStyle: CSSProperties = {
   position: "absolute",
   top: 14,
@@ -454,7 +675,64 @@ const autoWrapStyle: CSSProperties = {
   flexDirection: "column",
   alignItems: "flex-end",
   gap: 8,
+  maxWidth: "calc(100% - 28px)",
   fontFamily: FONT_DISPLAY,
+};
+
+/** The collapsed current-color/background swatch shown in the narrow toolbar — tapping it
+ *  opens the matching {@link popoverStyle} grid. Slightly larger than a palette chip so it
+ *  reads as the active selection + an affordance to open the rest. */
+function currentSwatchStyle(
+  fill: string,
+  active: boolean,
+  radius: number | string = 6,
+): CSSProperties {
+  return {
+    width: 26,
+    height: 26,
+    borderRadius: radius,
+    cursor: "pointer",
+    padding: 0,
+    background: fill,
+    border: "1px solid rgba(0,0,0,0.22)",
+    boxShadow: active
+      ? `0 0 0 2px ${WC.accent}`
+      : "inset 0 0 0 1.5px rgba(255,255,255,0.5)",
+  };
+}
+
+/** Full-viewport transparent catcher behind an open popover — an outside click closes it. */
+const popoverBackdropStyle: CSSProperties = {
+  position: "fixed",
+  inset: 0,
+  zIndex: 79,
+};
+
+/** The narrow-width swatch popover: a small frosted grid of the colors/backgrounds,
+ *  anchored just under its trigger swatch. */
+const popoverStyle: CSSProperties = {
+  position: "absolute",
+  top: "calc(100% + 8px)",
+  left: 0,
+  zIndex: 80,
+  display: "grid",
+  gridTemplateColumns: "repeat(3, auto)",
+  gap: 6,
+  padding: 8,
+  borderRadius: 10,
+  background: WC.toolbar,
+  border: `1px solid ${WC.toolbarBorder}`,
+  boxShadow: "0 8px 22px rgba(0,0,0,0.28)",
+  backdropFilter: "blur(12px)",
+  WebkitBackdropFilter: "blur(12px)",
+};
+
+/** Same popover, right-anchored — for a trigger near the toolbar's right edge so the
+ *  panel opens leftward and stays on-screen. */
+const popoverEndStyle: CSSProperties = {
+  ...popoverStyle,
+  left: "auto",
+  right: 0,
 };
 
 /** The single Auto toggle pill (faded glass): a label + a sliding switch — "take the
@@ -464,6 +742,7 @@ const autoToggleStyle: CSSProperties = {
   alignItems: "center",
   gap: 10,
   height: 40,
+  maxWidth: "100%",
   padding: "0 12px",
   borderRadius: 12,
   border: `1px solid ${WC.glassBorder}`,
@@ -510,9 +789,13 @@ const switchKnobStyle: CSSProperties = {
 const readoutStyle: CSSProperties = {
   display: "flex",
   alignItems: "center",
+  justifyContent: "flex-end",
+  flexWrap: "wrap",
   gap: 7,
-  height: 36,
-  padding: "0 12px",
+  rowGap: 4,
+  minHeight: 36,
+  maxWidth: "100%",
+  padding: "5px 12px",
   borderRadius: 10,
   fontSize: 12.5,
   fontWeight: 700,
@@ -552,7 +835,7 @@ const mostPaintedStyle: CSSProperties = {
   bottom: 18,
   zIndex: 60,
   minWidth: 176,
-  maxWidth: 224,
+  maxWidth: "min(224px, calc(100% - 28px))",
   display: "flex",
   flexDirection: "column",
   gap: 3,

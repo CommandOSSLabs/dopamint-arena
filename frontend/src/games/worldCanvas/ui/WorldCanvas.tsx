@@ -814,10 +814,12 @@ export function WorldCanvas({
           {hud.owner.label}
         </div>
       )}
-      {/* Zoom HUD (bottom-left) */}
+      {/* Zoom HUD (bottom-left) — capped to the canvas width and wrap-friendly so it never
+          runs off-screen in a narrow window. */}
       <div
-        className="absolute bottom-[18px] left-4 flex items-center gap-2 px-2.5 py-1.5 rounded-[12px]"
+        className="absolute bottom-[18px] left-4 flex flex-wrap items-center gap-2 px-2.5 py-1.5 rounded-[12px]"
         style={{
+          maxWidth: "calc(100% - 32px)",
           background: WC.glass,
           border: `1px solid ${WC.glassBorder}`,
           backdropFilter: "blur(8px)",
