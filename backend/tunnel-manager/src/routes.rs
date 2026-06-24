@@ -27,12 +27,16 @@ pub(crate) mod test_support {
         )
         .expect("test settler");
         let walrus = crate::walrus::WalrusClient::new("http://pub".into(), "http://agg".into());
+        let ollama = crate::ollama::OllamaClient::new("http://localhost:11434".into(), "qwen2.5:1.8b".into()).expect("test ollama client");
+        let (stats_tx, _) = tokio::sync::broadcast::channel(4);
         std::sync::Arc::new(AppState {
             control: std::sync::Arc::new(crate::store::memory::InMemoryControlStore::default()),
             mp: std::sync::Arc::new(crate::store::memory::InMemoryMpStore::default()),
             bus: std::sync::Arc::new(crate::store::memory::LocalBus::new("test-instance".into())),
             settler,
             walrus,
+            ollama,
+            stats_tx,
             actions: crate::stats_counter::LocalActionCounter::default(),
             pair_hold_ms: 750,
             pairing: crate::stats_counter::MatchPairingMetrics::default(),

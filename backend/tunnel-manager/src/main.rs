@@ -50,6 +50,10 @@ async fn main() -> anyhow::Result<()> {
         Config::require("WALRUS_PUBLISHER_URL", &config.walrus_publisher_url)?.to_string(),
         Config::require("WALRUS_AGGREGATOR_URL", &config.walrus_aggregator_url)?.to_string(),
     );
+    let ollama = crate::ollama::OllamaClient::new(
+        config.ollama_url.clone().unwrap_or_else(|| "http://localhost:11434".into()),
+        config.ollama_model.clone().unwrap_or_else(|| "qwen2.5:1.8b".into()),
+    )?;
 
     let instance_id = config
         .instance_id
@@ -87,6 +91,8 @@ async fn main() -> anyhow::Result<()> {
         bus,
         settler,
         walrus,
+        ollama,
+        stats_tx,
         actions: crate::stats_counter::LocalActionCounter::default(),
         pair_hold_ms,
         pairing: crate::stats_counter::MatchPairingMetrics::default(),

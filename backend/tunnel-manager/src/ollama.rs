@@ -1,5 +1,5 @@
 //! Thin proxy client for a local Ollama instance.
-// TODO(chat-v2): remove this allow once Task 3 wires the client into AppState/routes.
+// TODO(chat-v2): remove this allow once a route actually consumes the client.
 #![allow(dead_code)]
 
 use std::time::Duration;
