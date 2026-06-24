@@ -41,12 +41,21 @@ const SUI_PER_SEAT = 500n;
 /** You always sit in party A; party B is the local bot. */
 const HUMAN_SEAT = "A" as const;
 
+export interface ChatStats {
+  updates: number;
+  signatures: number;
+  verifications: number;
+  bytes: number;
+}
+
 export interface ArenaChatSession {
   status: ChatSessionStatus;
   messages: ChatMessage[];
   topic: string;
   error: string | null;
   canSend: boolean;
+  stats: ChatStats;
+  txDigest: string | null;
   start: () => void;
   send: (text: string) => void;
   settleNow: () => void;
@@ -71,6 +80,8 @@ interface ChatSnapshot {
   topic: string;
   error: string | null;
   canSend: boolean;
+  stats: ChatStats;
+  txDigest: string | null;
 }
 
 /**
@@ -91,6 +102,8 @@ class ChatSession {
     topic: "",
     error: null,
     canSend: false,
+    stats: { updates: 0, signatures: 0, verifications: 0, bytes: 0 },
+    txDigest: null,
   };
   private listeners = new Set<() => void>();
 
@@ -101,6 +114,8 @@ class ChatSession {
   private settleRequested = false;
   private starting = false;
   private gen = 0;
+  private stats: ChatStats = { updates: 0, signatures: 0, verifications: 0, bytes: 0 };
+  private txDigest: string | null = null;
 
   private api = new ChatApiClient(import.meta.env.VITE_BACKEND_URL ?? "");
 
@@ -121,6 +136,8 @@ class ChatSession {
       error: this.error,
       canSend:
         this.status === "playing" && !this.settleRequested && lastSender !== "You",
+      stats: { ...this.stats },
+      txDigest: this.txDigest,
     };
     for (const l of this.listeners) l();
   }
@@ -147,6 +164,8 @@ class ChatSession {
     this.messages = [];
     this.topic = "";
     this.error = null;
+    this.stats = { updates: 0, signatures: 0, verifications: 0, bytes: 0 };
+    this.txDigest = null;
     this.deps?.report.setActive(0);
     this.status = "idle";
     this.emit();
@@ -197,28 +216,48 @@ class ChatSession {
         const partyA = { address: a.address, publicKey: a.keyPair.publicKey };
         const partyB = { address: b.address, publicKey: b.keyPair.publicKey };
 
-        // DOPAMINT path: faucet both seats' bank invisibly (gas-sponsored) and stake DOPAMINT.
-        // SUI path: sponsored SUI stake with a sender-pays fallback.
+        // DOPAMINT path: stake a user-owned DOPAMINT coin, sponsored gas first with a wallet-pays
+        // fallback (the local backend settler may be unfunded). SUI path: same pattern.
+        const stakeCoinId =
+          isDopamintConfigured && !isDopamintAddressBalance
+            ? await deps.prepareStake(2n * fundedPerSeat)
+            : undefined;
         if (isDopamintConfigured && isDopamintAddressBalance)
           await deps.ensureStakeBalance(2n * fundedPerSeat);
+
         const tunnelId = isDopamintConfigured
-          ? await openAndFundSelfPlay({
-              reads,
-              signExec: deps.sponsoredSignExec as never,
-              partyA,
-              partyB,
-              aAmount: fundedPerSeat,
-              bAmount: fundedPerSeat,
-              coinType: DOPAMINT_COIN_TYPE,
-              ...(isDopamintAddressBalance
-                ? {
-                    stakeFromBalance: {
-                      amount: 2n * fundedPerSeat,
-                      coinType: DOPAMINT_COIN_TYPE,
-                    },
-                  }
-                : { stakeCoinId: await deps.prepareStake(2n * fundedPerSeat) }),
-            })
+          ? await withSponsorFallback(
+              async () =>
+                openAndFundSelfPlay({
+                  reads,
+                  signExec: deps.sponsoredSignExec as never,
+                  partyA,
+                  partyB,
+                  aAmount: fundedPerSeat,
+                  bAmount: fundedPerSeat,
+                  coinType: DOPAMINT_COIN_TYPE,
+                  ...(isDopamintAddressBalance
+                    ? {
+                        stakeFromBalance: {
+                          amount: 2n * fundedPerSeat,
+                          coinType: DOPAMINT_COIN_TYPE,
+                        },
+                      }
+                    : { stakeCoinId: stakeCoinId! }),
+                }),
+              async () =>
+                openAndFundSelfPlay({
+                  reads,
+                  signExec: deps.signExec as never,
+                  partyA,
+                  partyB,
+                  aAmount: fundedPerSeat,
+                  bAmount: fundedPerSeat,
+                  coinType: DOPAMINT_COIN_TYPE,
+                  stakeCoinId: stakeCoinId!,
+                }),
+              "chat open/fund",
+            )
           : await withSponsorFallback(
               async () =>
                 openAndFundSelfPlay({
@@ -256,6 +295,11 @@ class ChatSession {
         const transcript = new Transcript(tunnelId);
         tunnel.onUpdate = (u, bytes) => {
           transcript.append(u);
+          this.stats.updates += 1;
+          this.stats.signatures += 2;
+          this.stats.verifications += 2;
+          this.stats.bytes += bytes;
+          this.emit();
           this.deps?.report.bumpCounters({
             updates: 1,
             signatures: 2,
@@ -312,8 +356,14 @@ class ChatSession {
 
     try {
       const history = toChatApiMessages(this.messages);
+      const topicHint = this.topic
+        ? `The current topic is "${this.topic}". Stay on topic and reply concisely.`
+        : "Reply concisely.";
       const reply = await this.api.chat([
-        { role: "system", content: "You are a brief chat bot." },
+        {
+          role: "system",
+          content: `You are a brief chat bot. ${topicHint}`,
+        },
         ...history,
       ]);
       if (this.gen !== myGen || this.settleRequested) return;
@@ -346,7 +396,7 @@ class ChatSession {
         0n,
       );
       const coinType = isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined;
-      await settleViaBackend({
+      const digest = await settleViaBackend({
         tunnelId: this.tunnelId,
         settlement,
         transcript: transcript ? transcript.toRecord().entries : [],
@@ -361,6 +411,7 @@ class ChatSession {
             coinType,
           }),
       });
+      this.txDigest = digest ?? null;
       this.setStatus("settled");
     } catch (e) {
       this.fail(e);
@@ -422,6 +473,8 @@ export function useArenaChatSession(windowId: string): ArenaChatSession {
     topic: snap.topic,
     error: snap.error,
     canSend: snap.canSend,
+    stats: snap.stats,
+    txDigest: snap.txDigest,
     start: session.start,
     send: session.send,
     settleNow: session.settleNow,

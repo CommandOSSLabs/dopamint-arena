@@ -1,16 +1,47 @@
 import { useState } from "react";
-import { useCurrentAccount } from "@mysten/dapp-kit";
+import { useCurrentAccount, useSuiClientContext } from "@mysten/dapp-kit";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { ChatMessage } from "@/components/chat/ChatMessage";
 import { ChatInput } from "@/components/chat/ChatInput";
 import { BotVsBotSpectator } from "@/components/chat/BotVsBotSpectator";
 import { ChatApiClient } from "@/lib/chatApi";
+import { suivisionTxUrl, truncateMiddle } from "@/lib/suivision";
 import type { GameWindowProps } from "../types";
 import { useArenaChatSession } from "./useArenaChatSession";
 
+function TunnelStats({
+  stats,
+  txDigest,
+  network,
+}: {
+  stats: { updates: number; signatures: number; verifications: number; bytes: number };
+  txDigest?: string | null;
+  network: string;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-3 py-1.5 border-b bg-muted/30 text-xs text-muted-foreground">
+      <span>updates: {stats.updates}</span>
+      <span>signatures: {stats.signatures}</span>
+      <span>verifications: {stats.verifications}</span>
+      <span>bytes: {stats.bytes.toLocaleString()}</span>
+      {txDigest && (
+        <a
+          href={suivisionTxUrl(txDigest, network)}
+          target="_blank"
+          rel="noreferrer"
+          className="ml-auto text-primary hover:underline"
+        >
+          tx: {truncateMiddle(txDigest)}
+        </a>
+      )}
+    </div>
+  );
+}
+
 export default function ChatGameWindow({ windowId }: GameWindowProps) {
   const account = useCurrentAccount();
+  const { network } = useSuiClientContext();
   const [activeTab, setActiveTab] = useState<"play" | "spectator">("play");
   const [input, setInput] = useState("");
   const session = useArenaChatSession(windowId);
@@ -54,6 +85,7 @@ export default function ChatGameWindow({ windowId }: GameWindowProps) {
             <div className="p-3 border-b font-semibold">
               {session.topic ? `Topic: ${session.topic}` : "Loading topic…"}
             </div>
+            <TunnelStats stats={session.stats} network={network} />
             {session.error && (
               <div className="p-2 text-destructive text-sm">
                 {session.error}
@@ -93,6 +125,11 @@ export default function ChatGameWindow({ windowId }: GameWindowProps) {
                 {session.status}
               </span>
             </div>
+            <TunnelStats
+              stats={session.stats}
+              txDigest={session.txDigest}
+              network={network}
+            />
             {session.error && (
               <div className="p-2 text-destructive text-sm">
                 {session.error}
