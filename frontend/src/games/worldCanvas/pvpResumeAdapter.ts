@@ -7,7 +7,7 @@
  */
 import type { ResumeAdapter } from "@/pvp/resumeSession";
 import type { JsonValue } from "@/pvp/resume";
-import { worldCanvasMoveCodec } from "./pvpProtocol";
+import { worldCanvasPvpMoveCodec } from "./pvpProtocol";
 import type { PvpCanvasState, PvpPaintMove } from "./pvpProtocol";
 
 const toHex = (b: Uint8Array): string =>
@@ -27,6 +27,10 @@ export function makeWorldCanvasPvpResumeAdapter(
         digest: toHex(s.digest),
         cells: s.cells,
         paintCount: s.paintCount,
+        // The per-seat idempotency cursor: persisted so a resumed seat keeps skipping cells it
+        // already folded (it isn't recoverable from the digest alone).
+        appliedSeqA: s.appliedSeqA,
+        appliedSeqB: s.appliedSeqB,
         balanceA: s.balanceA.toString(),
         balanceB: s.balanceB.toString(),
         total: s.total.toString(),
@@ -37,16 +41,18 @@ export function makeWorldCanvasPvpResumeAdapter(
         digest: fromHex(o.digest as string),
         cells: (o.cells as PvpCanvasState["cells"]) ?? [],
         paintCount: (o.paintCount as number) ?? 0,
+        appliedSeqA: (o.appliedSeqA as number) ?? 0,
+        appliedSeqB: (o.appliedSeqB as number) ?? 0,
         winner: null,
         balanceA: BigInt(o.balanceA as string),
         balanceB: BigInt(o.balanceB as string),
         total: BigInt(o.total as string),
       };
     },
-    // The move's chunk coords (cx/cy) are bigint; localStorage can't hold bigint, so a pending
-    // move round-trips through the SAME codec the relay uses (decimal-string chunk coords).
-    serializeMove: (m) => worldCanvasMoveCodec.encode(m) as JsonValue,
-    deserializeMove: (j) => worldCanvasMoveCodec.decode(j),
+    // A pending move is a batch of cells whose chunk coords (cx/cy) are bigint; localStorage
+    // can't hold bigint, so it round-trips through the SAME batch codec the relay uses.
+    serializeMove: (m) => worldCanvasPvpMoveCodec.encode(m) as JsonValue,
+    deserializeMove: (j) => worldCanvasPvpMoveCodec.decode(j),
     onReconciled: onReconciled ?? (() => {}),
   };
 }

@@ -3,11 +3,15 @@
  * (two real humans co-signing ONE shared tunnel), separate from the solo wall.
  *
  * Co-sign parity (the hard constraint): both clients must compute the SAME state hash
- * from the SAME ordered moves. We use a fixed-size ROLLING DIGEST for {@link encodeState}
- * (O(1) per paint, identical on both sides), exactly like the solo protocol — the digest
- * is the co-signed truth. A `cells` array rides along in state PURELY for rendering
- * ({@link deriveView}); it is NOT encoded, so capping it for memory can never desync the
- * two parties' state hashes. Free/draw: balances never move, there is never a winner.
+ * from the SAME ordered cells. Every painted cell folds into a fixed-size ROLLING DIGEST
+ * ({@link encodeState}), exactly like the solo protocol — the digest is the co-signed
+ * truth. A `cells` array rides along PURELY for rendering ({@link deriveView}); it is NOT
+ * encoded, so capping it can never desync the two parties. Free/draw: no winner.
+ *
+ * BATCHED moves: one co-signed move carries a RUN of cells (a stroke segment), not a
+ * single pixel — so a drag crosses the tunnel in ONE co-sign (smooth, and the opponent
+ * gets the whole stroke instead of sparse per-turn samples). Cells fold in array order,
+ * keeping both parties byte-identical.
  */
 import { blake2b256 } from "sui-tunnel-ts";
 import {
@@ -27,17 +31,33 @@ const NUM_COLORS = 16;
 export const CHUNK_SIZE = 256;
 /** Render-only cap; eviction is deterministic (drop oldest) so both sides stay identical. */
 const MAX_RENDER_CELLS = 8000;
+/** Max cells in one co-signed batch — bounds the relay frame size for a stroke segment. */
+export const MAX_BATCH_CELLS = 128;
+/** Cells the bot lays down per co-sign — a short flowing run, not a single dot. */
+const BOT_RUN = 8;
 
 /**
- * A single co-signed paint. Coordinates are (chunk, in-chunk): `cx`/`cy` are signed
- * 64-bit chunk indices (the canvas is infinite in every direction) and `x`/`y` are the
- * cell within a `CHUNK_SIZE`×`CHUNK_SIZE` chunk; `color` is a palette index. This is the
- * canonical {@link WorldCanvasMove}, so `cx`/`cy` are BIGINT — the relay envelope is JSON
- * (which can't carry bigint), so the tunnel MUST be built with {@link worldCanvasMoveCodec}
- * (decimal-string chunk coords). Without it, `JSON.stringify` drops the coords and the
- * opponent decodes an undefined paint → nothing renders on the far side.
+ * One painted cell, in (chunk, in-chunk) coords: `cx`/`cy` are signed 64-bit chunk indices
+ * (the canvas is infinite) and `x`/`y` the cell within a `CHUNK_SIZE`×`CHUNK_SIZE` chunk;
+ * `color` is a palette index. The coordinate part is the canonical {@link WorldCanvasMove},
+ * so `cx`/`cy` are BIGINT — serialized via {@link worldCanvasCellCodec} (JSON can't carry bigint).
+ *
+ * `seq` is a PER-SEAT monotonic stamp assigned by whoever paints the seat (you, or your bot).
+ * It is the IDEMPOTENCY KEY that makes the at-least-once batch buffer safe: {@link
+ * WorldCanvasPvpProtocol.applyMove} folds a cell only when its `seq` exceeds the seat's
+ * last-applied seq, so a RE-SENT run (the buffer re-proposing cells already on-chain) is a
+ * deterministic no-op on BOTH parties instead of a double-fold that would diverge the digest.
+ * It is NOT folded into the digest — purely the fold/skip gate.
  */
-export type PvpPaintMove = WorldCanvasMove;
+export interface PvpCellMove extends WorldCanvasMove {
+  /** Per-seat monotonic sequence; a cell folds iff `seq` exceeds the seat's last-applied seq. */
+  seq: number;
+}
+
+/** The co-signed tunnel move: a RUN of cells (a stroke segment) committed in one co-sign. */
+export interface PvpPaintMove {
+  cells: PvpCellMove[];
+}
 
 /** A painted cell flattened for rendering (global-pixel coords + palette index + painter seat). */
 export interface PvpCell {
@@ -45,18 +65,27 @@ export interface PvpCell {
   gy: number;
   color: number;
   by: Party;
-  /** Monotonic paint order (both parties assign identically) — lets the renderer fold
+  /** Monotonic GLOBAL paint order (both parties assign identically) — lets the renderer fold
    *  the cell stream incrementally. Render-only; not part of `encodeState`. */
   seq: number;
+  /** Per-seat seq of the source move — lets the hook seed its own seq counter cap-safely
+   *  (it survives the render cap, which only drops the oldest cells). Render-only. */
+  pseq: number;
 }
 
 export interface PvpCanvasState {
-  /** Rolling 32-byte digest of every co-signed paint — the canonical state hash. */
+  /** Rolling 32-byte digest of every co-signed cell — the canonical state hash. */
   digest: Uint8Array;
   /** Render-only painted cells (capped); never part of `encodeState`. */
   cells: PvpCell[];
-  /** Monotonic count of paints applied (drives `PvpCell.seq`). Render-only. */
+  /** Monotonic count of cells folded (drives the GLOBAL `PvpCell.seq`). Render-only. */
   paintCount: number;
+  /** Highest per-seat seq folded for each seat — the idempotency cursor. Parity-critical:
+   *  both parties advance it identically, so the seq gate decides fold/skip the SAME way on
+   *  both sides. Reconstructed only from the applied move stream (not from the digest), so it
+   *  is NOT in `encodeState` but MUST be persisted for resume. */
+  appliedSeqA: number;
+  appliedSeqB: number;
   /** Free/draw: there is never a winner. Present so the PvP engine can read it. */
   winner: null;
   balanceA: bigint;
@@ -65,9 +94,27 @@ export interface PvpCanvasState {
 }
 
 const enc = new TextEncoder();
-/** Deterministic per-paint delta folded into the digest (same on both parties). */
-function moveDelta(mv: PvpPaintMove, by: Party): Uint8Array {
-  return enc.encode(`${by}|${mv.cx},${mv.cy}|${mv.x},${mv.y}|${mv.color}`);
+/** Deterministic per-cell delta folded into the digest (same on both parties). */
+function cellDelta(c: PvpCellMove, by: Party): Uint8Array {
+  return enc.encode(`${by}|${c.cx},${c.cy}|${c.x},${c.y}|${c.color}`);
+}
+
+function isLegalCell(c: PvpCellMove): boolean {
+  return (
+    typeof c.cx === "bigint" &&
+    typeof c.cy === "bigint" &&
+    Number.isInteger(c.x) &&
+    c.x >= 0 &&
+    c.x < CHUNK_SIZE &&
+    Number.isInteger(c.y) &&
+    c.y >= 0 &&
+    c.y < CHUNK_SIZE &&
+    Number.isInteger(c.color) &&
+    c.color >= 0 &&
+    c.color < NUM_COLORS &&
+    Number.isInteger(c.seq) &&
+    c.seq >= 0
+  );
 }
 
 /** Up to the last two cells THIS seat painted, most-recent first — its pen + heading.
@@ -86,6 +133,26 @@ function clampStep(d: number): number {
   return Math.max(-2, Math.min(2, d));
 }
 
+/** Flatten a global-pixel cell to a (chunk, in-chunk) move with its per-seat `seq`; floorDiv
+ *  keeps x/y in-range for negative globals (the canvas extends in every direction). */
+function toCellMove(
+  gx: number,
+  gy: number,
+  color: number,
+  seq: number,
+): PvpCellMove {
+  const cx = Math.floor(gx / CHUNK_SIZE);
+  const cy = Math.floor(gy / CHUNK_SIZE);
+  return {
+    cx: BigInt(cx),
+    cy: BigInt(cy),
+    x: gx - cx * CHUNK_SIZE,
+    y: gy - cy * CHUNK_SIZE,
+    color,
+    seq,
+  };
+}
+
 export class WorldCanvasPvpProtocol
   implements Protocol<PvpCanvasState, PvpPaintMove>
 {
@@ -96,6 +163,8 @@ export class WorldCanvasPvpProtocol
       digest: blake2b256(protocolDomain(NAME)),
       cells: [],
       paintCount: 0,
+      appliedSeqA: 0,
+      appliedSeqB: 0,
       winner: null,
       balanceA: ctx.initialBalances.a,
       balanceB: ctx.initialBalances.b,
@@ -108,36 +177,40 @@ export class WorldCanvasPvpProtocol
     move: PvpPaintMove,
     by: Party,
   ): PvpCanvasState {
-    if (
-      typeof move.cx !== "bigint" ||
-      typeof move.cy !== "bigint" ||
-      !Number.isInteger(move.x) ||
-      move.x < 0 ||
-      move.x >= CHUNK_SIZE ||
-      !Number.isInteger(move.y) ||
-      move.y < 0 ||
-      move.y >= CHUNK_SIZE ||
-      !Number.isInteger(move.color) ||
-      move.color < 0 ||
-      move.color >= NUM_COLORS
-    ) {
-      throw new Error("world-canvas-pvp: illegal paint");
+    if (!Array.isArray(move.cells) || move.cells.length > MAX_BATCH_CELLS) {
+      throw new Error("world-canvas-pvp: illegal batch");
     }
-    const digest = rollingDigest(blake2b256, state.digest, moveDelta(move, by));
-    const seq = state.paintCount + 1;
-    // Flatten (chunk, in-chunk) back to the global-pixel grid the renderer draws on.
-    const cell: PvpCell = {
-      gx: Number(move.cx) * CHUNK_SIZE + move.x,
-      gy: Number(move.cy) * CHUNK_SIZE + move.y,
-      color: move.color,
-      by,
-      seq,
-    };
-    const cells =
-      state.cells.length >= MAX_RENDER_CELLS
-        ? [...state.cells.slice(state.cells.length - MAX_RENDER_CELLS + 1), cell]
-        : [...state.cells, cell];
-    return { ...state, digest, cells, paintCount: seq };
+    let digest = state.digest;
+    let paintCount = state.paintCount;
+    let appliedSeqA = state.appliedSeqA;
+    let appliedSeqB = state.appliedSeqB;
+    const cells = state.cells.slice();
+    for (const c of move.cells) {
+      if (!isLegalCell(c)) throw new Error("world-canvas-pvp: illegal paint");
+      // Idempotent fold gate: a cell folds exactly once per seat. A re-sent or stale cell —
+      // `seq` at or below the seat's cursor — is SKIPPED identically on both parties (the gate
+      // reads only the shared, co-signed cursor), so the rolling digest stays in lockstep no
+      // matter how the at-least-once buffer re-proposes. This is the parity guarantee.
+      const applied = by === "A" ? appliedSeqA : appliedSeqB;
+      if (c.seq <= applied) continue;
+      if (by === "A") appliedSeqA = c.seq;
+      else appliedSeqB = c.seq;
+      digest = rollingDigest(blake2b256, digest, cellDelta(c, by));
+      paintCount += 1;
+      cells.push({
+        gx: Number(c.cx) * CHUNK_SIZE + c.x,
+        gy: Number(c.cy) * CHUNK_SIZE + c.y,
+        color: c.color,
+        by,
+        seq: paintCount,
+        pseq: c.seq,
+      });
+    }
+    const capped =
+      cells.length > MAX_RENDER_CELLS
+        ? cells.slice(cells.length - MAX_RENDER_CELLS)
+        : cells;
+    return { ...state, digest, cells: capped, paintCount, appliedSeqA, appliedSeqB };
   }
 
   encodeState(state: PvpCanvasState): Uint8Array {
@@ -153,10 +226,10 @@ export class WorldCanvasPvpProtocol
     return false;
   }
 
-  /** Bot autopilot: continue THIS seat's stroke as a bounded random WALK from its last
-   *  painted cell — a coherent wandering line near wherever the seat last drew (including
-   *  right where you handed the wheel back), instead of teleporting to scattered dots at
-   *  the origin you'd never find after panning. Seat A draws blue, seat B light purple. */
+  /** Bot autopilot: continue THIS seat's stroke as a bounded random WALK, emitting a short
+   *  RUN of cells per co-sign — a coherent wandering line near wherever the seat last drew
+   *  (including right where you handed the wheel back), instead of scattered dots. Seat A
+   *  draws blue, seat B light purple. */
   randomMove(
     state: PvpCanvasState,
     by: Party,
@@ -170,7 +243,6 @@ export class WorldCanvasPvpProtocol
     if (recent.length >= 1) {
       gx = recent[0].gx;
       gy = recent[0].gy;
-      // Keep the recent heading so the line flows; jitter from scratch if it has none yet.
       dx =
         recent.length === 2
           ? clampStep(recent[0].gx - recent[1].gx)
@@ -180,42 +252,39 @@ export class WorldCanvasPvpProtocol
           ? clampStep(recent[0].gy - recent[1].gy)
           : Math.floor(rng() * 3) - 1;
     } else {
-      // First stroke: seed in this seat's own band (A left, B right) near the origin.
       gx = (by === "A" ? 0 : 70) + Math.floor(rng() * 60);
       gy = Math.floor(rng() * 90);
       dx = 1;
       dy = 0;
     }
-    // Wander: occasionally turn, and never stall in place.
-    if (rng() < 0.35) {
-      dx += Math.floor(rng() * 3) - 1;
-      dy += Math.floor(rng() * 3) - 1;
+    const color = by === "A" ? 13 : 15; // Sui blue vs light purple, like the solo seats
+    // Continue this seat's seq from the co-signed cursor so the run is always fresh and
+    // strictly increasing — never overlapping a prior run (it would be skipped as a re-send).
+    let seq = by === "A" ? state.appliedSeqA : state.appliedSeqB;
+    const cells: PvpCellMove[] = [];
+    for (let i = 0; i < BOT_RUN; i++) {
+      // Wander: occasionally turn, and never stall in place.
+      if (rng() < 0.35) {
+        dx += Math.floor(rng() * 3) - 1;
+        dy += Math.floor(rng() * 3) - 1;
+      }
+      dx = clampStep(dx);
+      dy = clampStep(dy);
+      if (dx === 0 && dy === 0) dx = 1;
+      gx += dx;
+      gy += dy;
+      seq += 1;
+      cells.push(toCellMove(gx, gy, color, seq));
     }
-    dx = clampStep(dx);
-    dy = clampStep(dy);
-    if (dx === 0 && dy === 0) dx = 1;
-    gx += dx;
-    gy += dy;
-    // Flatten global-pixel back to (chunk, in-chunk); floorDiv keeps x/y in-range for negatives.
-    const cx = Math.floor(gx / CHUNK_SIZE);
-    const cy = Math.floor(gy / CHUNK_SIZE);
-    return {
-      cx: BigInt(cx),
-      cy: BigInt(cy),
-      x: gx - cx * CHUNK_SIZE,
-      y: gy - cy * CHUNK_SIZE,
-      color: by === "A" ? 13 : 15, // Sui blue vs light purple, like the solo seats
-    };
+    return { cells };
   }
 }
 
 /**
- * Move (de)serializer for the PvP relay. The frame envelope is JSON, which can't carry
- * the move's bigint chunk indices (`cx`/`cy`) — those are encoded as decimal strings here
- * and restored with `BigInt(...)` on the far side. Pass as the tunnel's `moveCodec` so the
- * opponent receives intact coordinates (and the same paint renders on both walls).
+ * Per-cell (de)serializer: the JSON relay envelope can't carry the cell's bigint chunk
+ * indices (`cx`/`cy`), so they ride as decimal strings and restore via `BigInt(...)`.
  */
-export const worldCanvasMoveCodec: MoveCodec<WorldCanvasMove> = {
+export const worldCanvasCellCodec: MoveCodec<PvpCellMove> = {
   encode(m) {
     return {
       cx: m.cx.toString(),
@@ -223,6 +292,7 @@ export const worldCanvasMoveCodec: MoveCodec<WorldCanvasMove> = {
       x: m.x,
       y: m.y,
       color: m.color,
+      seq: m.seq,
     };
   },
   decode(j) {
@@ -232,6 +302,7 @@ export const worldCanvasMoveCodec: MoveCodec<WorldCanvasMove> = {
       x?: number;
       y?: number;
       color?: number;
+      seq?: number;
     };
     return {
       cx: BigInt(o.cx ?? "0"),
@@ -239,6 +310,21 @@ export const worldCanvasMoveCodec: MoveCodec<WorldCanvasMove> = {
       x: o.x ?? 0,
       y: o.y ?? 0,
       color: o.color ?? 0,
+      seq: o.seq ?? 0,
     };
+  },
+};
+
+/**
+ * The batch move (de)serializer the PvP tunnel is built with — maps each cell through
+ * {@link worldCanvasCellCodec} so the opponent receives an intact stroke segment.
+ */
+export const worldCanvasPvpMoveCodec: MoveCodec<PvpPaintMove> = {
+  encode(m) {
+    return { cells: m.cells.map((c) => worldCanvasCellCodec.encode(c)) };
+  },
+  decode(j) {
+    const o = j as { cells?: unknown[] };
+    return { cells: (o.cells ?? []).map((c) => worldCanvasCellCodec.decode(c)) };
   },
 };
