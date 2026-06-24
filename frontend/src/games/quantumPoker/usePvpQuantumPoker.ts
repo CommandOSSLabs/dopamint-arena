@@ -273,7 +273,7 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
   const endRef = useRef(false);
   const settlingRef = useRef(false);
   const settleNowRef = useRef<(() => void) | null>(null);
-  // Holds the latest `findMatch` so the settle handler can auto-open a fresh tunnel (new 2500 buy-in)
+  // Holds the latest `findMatch` so the settle handler can auto-open a fresh tunnel (new 5000 buy-in)
   // when a match ends by a seat running out of money — see the natural-end branch in `triggerSettle`.
   const findMatchRef = useRef<(() => void) | null>(null);
 
@@ -472,7 +472,7 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
             // old busted tunnel on the next cold-load.
             clearResumeRecord(dt.tunnelId);
             // A natural match end means a seat ran out of money: the cooperative close is done, so
-            // immediately open a FRESH tunnel and keep playing — new 2500 buy-in, no carry-over of
+            // immediately open a FRESH tunnel and keep playing — new 5000 buy-in, no carry-over of
             // chips. Only when a player deliberately ended the match (endRef) do we stop at the
             // settled screen instead of recycling.
             if (endRef.current) {
