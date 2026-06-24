@@ -3,9 +3,6 @@ import { cn } from "@/lib/utils";
 import type { CellView } from "../view";
 import { GridFrame } from "./GridFrame";
 import { type Placement, placementCells, FLEET } from "../engine/fleet";
-import { ShipSprite } from "./ShipSprite";
-
-const ROW = 10;
 
 /**
  * One firing/fleet square. Memoised so a board repaint — every auto-play frame derives
@@ -20,7 +17,6 @@ const BoardCell = memo(function BoardCell({
   canFire,
   isLast,
   hasShip,
-  radiusClass,
   onCell,
 }: {
   cell: number;
@@ -28,69 +24,42 @@ const BoardCell = memo(function BoardCell({
   canFire: boolean;
   isLast: boolean;
   hasShip: boolean;
-  /** Pre-computed hull-corner rounding for a solid cell (empty for water). */
-  radiusClass: string;
   onCell?: (cell: number) => void;
 }) {
-  const isSolid = v === "ship" || v === "hit" || v === "sunk";
+  // Plain letter markers (the symbol glyphs ✕/◯ have no Gochi Hand glyph and fall
+  // back to a mismatched symbol font): X for a struck hull, O for a splash miss.
+  const marker = v === "hit" || v === "sunk" ? "X" : v === "miss" ? "O" : "";
   return (
     <button
       type="button"
       disabled={!canFire}
       onClick={canFire ? () => onCell?.(cell) : undefined}
       className={cn(
-        "group relative flex aspect-square items-center justify-center border transition-all duration-150 overflow-hidden z-20",
-        isSolid ? radiusClass : "rounded-[4px]",
-        // If cell contains a ship, make background/border transparent so the overlay shows through
+        "bs-cell",
+        // Ship cells stay transparent so the inked hull overlay shows through; the
+        // hit/miss marker still draws on top.
         hasShip
-          ? "border-transparent bg-transparent"
-          : v === "water" || v === "miss"
-            ? "border-[#cab1ff]/10 bg-[#cab1ff]/[0.04] hover:border-[#cab1ff]/30"
-            : v === "hit"
-              ? "border-[#fb7185]/40 bg-gradient-to-b from-slate-950 to-slate-900 shadow-md"
-              : v === "sunk"
-                ? "border-[#fb7185]/25 bg-gradient-to-b from-[#fb7185]/15 to-slate-950"
+          ? "border-transparent"
+          : v === "hit"
+            ? "bs-cell--hit"
+            : v === "sunk"
+              ? "bs-cell--sunk"
+              : v === "miss"
+                ? "bs-cell--miss"
                 : "",
-        canFire && "cursor-crosshair hover:bg-[#cab1ff]/15",
-        isLast &&
-          "ring-2 ring-[#cab1ff] shadow-[0_0_8px_rgba(202,177,255,0.6)]",
+        canFire && "bs-cell--fire",
+        isLast && "bs-cell--last",
       )}
     >
-      {/* HIT Overlay: Fire & pulsing glow (lime flash core, destructive glow). */}
-      {v === "hit" && (
-        <>
-          <span className="absolute inset-0 bg-[#fb7185]/20 animate-pulse pointer-events-none" />
-          <span className="size-[45%] animate-ping absolute rounded-full bg-[#fb7185]/50 pointer-events-none" />
-          <span className="size-[50%] rounded-full bg-[#eaff80] shadow-[0_0_12px_6px_rgba(251,113,133,0.9)] z-10 pointer-events-none" />
-        </>
-      )}
-
-      {/* SUNK Overlay: Completely wrecked */}
-      {v === "sunk" && (
-        <>
-          <span className="absolute inset-0 bg-[#fb7185]/10 pointer-events-none" />
-          <span className="text-[12px] leading-none font-bold text-[#fb7185]/80 drop-shadow-[0_0_3px_rgba(251,113,133,0.8)] z-10 select-none">
-            ✕
-          </span>
-        </>
-      )}
-
-      {/* MISS Overlay: Sonar splash circle */}
-      {v === "miss" && (
-        <span className="size-[40%] rounded-full border-2 border-[#cab1ff]/50 shadow-[0_0_6px_rgba(202,177,255,0.3)] animate-pulse" />
-      )}
-
-      {/* One-shot splash on the latest shot */}
-      {isLast && (
-        <span className="pointer-events-none absolute inset-0 animate-out fade-out-0 zoom-out-150 ring-4 ring-[#cab1ff]/70 duration-1000 z-10" />
-      )}
-
-      {/* Crosshair preview while hovering a fireable cell. */}
-      {canFire && (
-        <span className="pointer-events-none absolute inset-0 hidden items-center justify-center text-[#cab1ff] group-hover:flex z-10">
-          <span className="absolute h-px w-4 bg-current shadow-[0_0_4px_rgba(202,177,255,0.5)]" />
-          <span className="absolute h-4 w-px bg-current shadow-[0_0_4px_rgba(202,177,255,0.5)]" />
-          <span className="absolute size-2 rounded-full border border-current opacity-60 animate-ping" />
+      {marker && (
+        <span
+          className={cn(
+            "bs-mark select-none",
+            v === "miss" ? "text-[var(--qp-ink-soft)]" : "text-[var(--qp-red)]",
+            v === "hit" && "motion-safe:animate-pulse",
+          )}
+        >
+          {marker}
         </span>
       )}
     </button>
@@ -119,24 +88,8 @@ export function BoardGrid({
   lastShot?: number | null;
   placements?: readonly Placement[];
 }) {
-  const solid = (idx: number) =>
-    idx >= 0 &&
-    idx < cells.length &&
-    (cells[idx] === "ship" || cells[idx] === "hit" || cells[idx] === "sunk");
-
-  const hullRadius = (cell: number) => {
-    const c = cell % ROW;
-    const up = solid(cell - ROW);
-    const down = solid(cell + ROW);
-    const left = c > 0 && solid(cell - 1);
-    const right = c < ROW - 1 && solid(cell + 1);
-    return cn(
-      !up && !left && "rounded-tl-[6px]",
-      !up && !right && "rounded-tr-[6px]",
-      !down && !left && "rounded-bl-[6px]",
-      !down && !right && "rounded-br-[6px]",
-    );
-  };
+  // The firing board (no own placements) reads as the felt-green target grid.
+  const isEnemy = !placements;
 
   // Precalculate cell-to-ship layout mapping for O(1) rendering lookup
   const shipCoverage = useMemo(() => {
@@ -161,75 +114,77 @@ export function BoardGrid({
   }, [placements]);
 
   return (
-    <div className="flex w-full flex-col gap-1.5">
+    <div className="flex w-full flex-col gap-1.5 lg:h-full lg:min-h-0">
       {title && (
-        <div className="wal-mono text-[11px] font-semibold tracking-wider text-[#cab1ff]/80 uppercase">
+        <div className="qp-eyebrow shrink-0 text-[clamp(9px,2.4cqmin,14px)] uppercase">
           {title}
         </div>
       )}
-      {/* Cap the board by the window height (cqh) so two stacked / side-by-side
-          boards fit a short window without scrolling; width still bounds tall ones. */}
-      <div className="mx-auto w-full max-w-[min(100%,40cqh)] rounded-lg bg-slate-950/40 p-1.5 ring-1 ring-[#cab1ff]/20 shadow-lg shadow-black/30 backdrop-blur-md @[30rem]:max-w-[min(100%,78cqh)]">
-        <GridFrame
-          renderCell={(cell) => {
-            const v = cells[cell];
-            const isSolid = v === "ship" || v === "hit" || v === "sunk";
-            // Compute only primitives here; the memoised cell owns the heavy cn().
-            return (
-              <BoardCell
-                key={cell}
-                cell={cell}
-                v={v}
-                canFire={interactive && v === "water"}
-                isLast={lastShot === cell}
-                hasShip={shipCoverage.has(cell)}
-                radiusClass={isSolid ? hullRadius(cell) : ""}
-                onCell={onCell}
-              />
-            );
-          }}
-        >
-          {/* Continuous Ship Overlays */}
-          {placements && (
-            <>
-              {placements.map((p) => {
-                const row = Math.floor(p.cell / 10);
-                const col = p.cell % 10;
-                const spec = FLEET.find((s) => s.id === p.id);
-                if (!spec) return null;
-                const size = spec.size;
-
-                const shipCells = placementCells(p) ?? [];
-                const isSunk = shipCells.every((c) => cells[c] === "sunk");
-
-                const gridStyle = {
-                  gridRowStart: row + 2,
-                  gridColumnStart: col + 2,
-                  gridRowEnd: p.orient === "V" ? row + 2 + size : row + 2 + 1,
-                  gridColumnEnd:
-                    p.orient === "H" ? col + 2 + size : col + 2 + 1,
-                };
-
-                return (
-                  <div
-                    key={p.id}
-                    className={cn(
-                      "pointer-events-none relative overflow-hidden transition-all duration-300",
-                      isSunk ? "opacity-35 grayscale" : "opacity-95",
-                    )}
-                    style={gridStyle}
-                  >
-                    <ShipSprite
-                      id={p.id}
-                      size={size}
-                      horizontal={p.orient === "H"}
-                    />
-                  </div>
-                );
-              })}
-            </>
+      {/* Desktop (≥lg): the board fills the height its grid cell allots and is the largest SQUARE
+          that fits — sized by whichever of width/height binds (container-query units), so it never
+          overflows a short window (no scroll). The 1.25rem trims the fixed A–J label row.
+          Mobile (<lg): a FULL-WIDTH square (no height clamp, no container-query) so cells are big
+          enough to tap; the page scrolls to reach the second board. */}
+      <div className="grid place-items-center lg:min-h-0 lg:flex-1 lg:[container-type:size]">
+        <div
+          className={cn(
+            "bs-board aspect-square w-full max-w-full lg:aspect-auto lg:w-[min(100cqw,calc(100cqh_-_1.25rem))]",
+            isEnemy && "bs-board--enemy",
           )}
-        </GridFrame>
+        >
+          <GridFrame
+            renderCell={(cell) => {
+              const v = cells[cell];
+              // Compute only primitives here; the memoised cell owns the heavy cn().
+              return (
+                <BoardCell
+                  key={cell}
+                  cell={cell}
+                  v={v}
+                  canFire={interactive && v === "water"}
+                  isLast={lastShot === cell}
+                  hasShip={shipCoverage.has(cell)}
+                  onCell={onCell}
+                />
+              );
+            }}
+          >
+            {/* Continuous Ship Overlays */}
+            {placements && (
+              <>
+                {placements.map((p) => {
+                  const row = Math.floor(p.cell / 10);
+                  const col = p.cell % 10;
+                  const spec = FLEET.find((s) => s.id === p.id);
+                  if (!spec) return null;
+                  const size = spec.size;
+
+                  const shipCells = placementCells(p) ?? [];
+                  const isSunk = shipCells.every((c) => cells[c] === "sunk");
+
+                  const gridStyle = {
+                    gridRowStart: row + 2,
+                    gridColumnStart: col + 2,
+                    gridRowEnd: p.orient === "V" ? row + 2 + size : row + 2 + 1,
+                    gridColumnEnd:
+                      p.orient === "H" ? col + 2 + size : col + 2 + 1,
+                  };
+
+                  return (
+                    <div
+                      key={p.id}
+                      className={cn(
+                        "bs-ship pointer-events-none transition-all duration-300",
+                        isSunk && "bs-ship--sunk",
+                      )}
+                      style={gridStyle}
+                    />
+                  );
+                })}
+              </>
+            )}
+          </GridFrame>
+        </div>
       </div>
     </div>
   );

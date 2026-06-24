@@ -7,7 +7,10 @@ import {
   CELL_COUNT,
   FUSE_TICKS,
 } from "../../../../sui-tunnel-ts/src/protocol/bombIt.ts";
-import { MultiGameBombItProtocol } from "../../../../sui-tunnel-ts/src/protocol/multiGameBombIt.ts";
+import {
+  MultiGameBombItProtocol,
+  type MultiGameBombItState,
+} from "../../../../sui-tunnel-ts/src/protocol/multiGameBombIt.ts";
 import {
   OffchainTunnel,
   verifyCoSignedUpdate,
@@ -22,6 +25,20 @@ import {
   kickoffNextGame,
   deriveMultiView,
 } from "./session-core.ts";
+
+/**
+ * Per-seat auto bots for stepMultiGame — the same random move source the kit bot uses, built
+ * inline here so the session-core plumbing test stays free of the `@/` alias the kit imports
+ * pull in. Structurally a GameBot (plan/confirm/abort); confirm/abort are no-ops (memoryless).
+ */
+function selfPlayBots(protocol: MultiGameBombItProtocol) {
+  const mk = (seat: "A" | "B") => ({
+    plan: (s: MultiGameBombItState) => protocol.randomMove(s, seat, Math.random),
+    confirm: () => {},
+    abort: () => {},
+  });
+  return { A: mk("A"), B: mk("B") };
+}
 
 test("solo cadence makes a bomb fuse read as ~1s of real time (manual drop-and-flee is escapable)", () => {
   // Bomb It is a reaction game: at the high-throughput showcase rate the 8-tick fuse burned in
@@ -134,7 +151,7 @@ test("stepMultiGame advances a multi-game duel and stays settleable", () => {
   const { protocol, tunnel } = freshMultiTunnel();
   let stepped = 0;
   for (let i = 0; i < 300; i++) {
-    const r = stepMultiGame(protocol, tunnel, Math.random);
+    const r = stepMultiGame(protocol, tunnel, selfPlayBots(protocol));
     if (r === "stepped") {
       stepped++;
       // Wrapper conservation: real carried balances always sum to the locked total.
@@ -162,7 +179,7 @@ test("kickoffNextGame starts game 2 after a duel ends", () => {
   // bomb-it duels end by a kill or the tick cap; 20000 steps is well beyond the cap.
   let outcome = "stepped";
   for (let i = 0; i < 20000 && outcome === "stepped"; i++) {
-    outcome = stepMultiGame(protocol, tunnel, Math.random);
+    outcome = stepMultiGame(protocol, tunnel, selfPlayBots(protocol));
   }
   if (outcome === "game-over") {
     assert.equal(tunnel.state.gamesPlayed, 0, "still duel 1 at the boundary");

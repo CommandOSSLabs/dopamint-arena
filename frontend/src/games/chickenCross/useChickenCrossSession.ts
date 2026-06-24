@@ -11,7 +11,9 @@ import type { CrossMove, CrossDir } from "sui-tunnel-ts/protocol/cross";
 import {
   MultiGameCrossProtocol,
   type MultiGameCrossState,
+  type MultiGameCrossMove,
 } from "sui-tunnel-ts/protocol/multiGameCross";
+import type { Party } from "sui-tunnel-ts/protocol/Protocol";
 import { Transcript } from "sui-tunnel-ts/proof/transcript";
 import { registerWindowDisposer } from "@/lib/windowSessions";
 import { useTelemetry } from "../../telemetry/TelemetryProvider";
@@ -29,10 +31,10 @@ import {
 import { useSponsoredSignExec } from "../../onchain/useSponsoredSignExec";
 import { withSponsorFallback } from "../../onchain/sponsor";
 import {
-  DOPAMINT_COIN_TYPE,
-  isDopamintAddressBalance,
-  isDopamintConfigured,
-} from "../../onchain/dopamint";
+  MTPS_COIN_TYPE,
+  isMtpsAddressBalance,
+  isMtpsConfigured,
+} from "../../onchain/mtps";
 import {
   deriveMultiView,
   kickoffNextGame,
@@ -42,6 +44,8 @@ import {
   type SessionResult,
   type StepOutcome,
 } from "./session-core";
+import { createChickenCrossKit } from "@/agent/games/chickenCross/kit";
+import type { GameBot } from "@/agent/gameKit";
 
 /**
  * Throughput pacing. Co-signing is synchronous crypto (2 sigs + 2 verifies per tick), so an
@@ -57,9 +61,9 @@ const MAX_STEPS_PER_FRAME = 8;
 /** A beat between finished games so the result + updated score register before the rematch. */
 const CROSS_REMATCH_MS = 600;
 
-/** DOPAMINT bank locked per seat (1 DOPAMINT, 9 decimals) — funds MANY per-game stakes. */
+/** MTPS bank locked per seat (1 MTPS, 9 decimals) — funds MANY per-game stakes. */
 const LOCKED_PER_SEAT = 1_000_000_000n;
-/** SUI-fallback bank per seat (MIST), when the DOPAMINT env is unset. */
+/** SUI-fallback bank per seat (MIST), when the MTPS env is unset. */
 const SUI_PER_SEAT = 500n;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -90,6 +94,10 @@ export interface ChickenCrossSession {
   toggleAuto: () => void;
   /** Settle + close the tunnel NOW at the current co-signed state — cash out anytime. */
   settleNow: () => void;
+  /** Freeze the self-play loop in place (cabinet hover). No-op unless mid-play. */
+  pause: () => void;
+  /** Unfreeze and re-kick the loop (cabinet un-hover). No-op unless paused. */
+  resume: () => void;
 }
 
 /** You always steer chicken A in a solo race; chicken B is the bot opponent. */
@@ -105,9 +113,9 @@ interface CrossDeps {
   sponsoredSignExec: (tx: never) => Promise<{ digest: string }>;
   /** Pick a user coin to fund the (both-seat) bank; gas is sponsored, the stake is not. */
   selectStakeCoin: (minAmount: bigint) => Promise<string>;
-  /** DOPAMINT stake: faucet (invisibly, sponsored) if short, then return a stake coin id. */
+  /** MTPS stake: faucet (invisibly, sponsored) if short, then return a stake coin id. */
   prepareStake: (minAmount: bigint) => Promise<string>;
-  /** ADR-0013: ensure the player's DOPAMINT address balance covers the stake. No-op once funded. */
+  /** ADR-0013: ensure the player's MTPS address balance covers the stake. No-op once funded. */
   ensureStakeBalance: (minAmount: bigint) => Promise<void>;
 }
 
@@ -153,6 +161,12 @@ class CrossBotSession {
 
   private tunnel: OffchainTunnel<MultiGameCrossState, CrossMove> | null = null;
   private protocol: MultiGameCrossProtocol | null = null;
+  // The seat bots that pick auto moves, built from the canonical kit so the in-game move
+  // source matches the agent harness (kit = single source of bot behavior).
+  private bots: Record<
+    Party,
+    GameBot<MultiGameCrossState, MultiGameCrossMove>
+  > | null = null;
   // One tunnel hosts many races; settlement is player-driven. `settleRequested`
   // stops the auto-rematch loop, `score`/`lastScoredGames` track the running tally.
   private settleRequested = false;
@@ -165,6 +179,9 @@ class CrossBotSession {
   private transcript: Transcript | null = null;
   private onChain = false;
   private advancing = false;
+  // Cabinet hover-freeze: when true the advance loop returns at the top of its
+  // next iteration (freeze in place); resume() clears it and re-kicks the loop.
+  private paused = false;
   // Guards re-entry: a session that has begun a race can't be restarted (only
   // reset()/Play Again returns it to idle). Stops StrictMode / double-click dupes.
   private starting = false;
@@ -222,6 +239,7 @@ class CrossBotSession {
     this.settleRequested = false;
     this.tunnel = null;
     this.protocol = null;
+    this.bots = null;
     this.transcript = null;
     this.session = null;
     this.score = { you: 0, foe: 0 };
@@ -242,6 +260,7 @@ class CrossBotSession {
     this.deps?.report.setActive(0);
     this.tunnel = null;
     this.protocol = null;
+    this.bots = null;
     this.transcript = null;
     this.session = null;
     this.listeners.clear();
@@ -310,8 +329,10 @@ class CrossBotSession {
     const myGen = this.gen;
     const tunnel = this.tunnel;
     const protocol = this.protocol;
+    const bots = this.bots;
     try {
-      while (tunnel && protocol) {
+      while (tunnel && protocol && bots) {
+        if (this.paused) return; // hover-freeze: stop here; resume() re-kicks
         // Co-sign ticks only until the per-frame time budget is spent, then yield: this is
         // what keeps TPS high yet the CPU cool (the rest of the frame stays idle).
         const deadline = performance.now() + FRAME_BUDGET_MS;
@@ -328,7 +349,7 @@ class CrossBotSession {
                   return d;
                 },
               };
-          boundary = stepMultiGame(protocol, tunnel, Math.random, human);
+          boundary = stepMultiGame(protocol, tunnel, bots, human);
           if (boundary === "stepped") {
             this.moveCount += 1;
             this.actions += 1;
@@ -367,7 +388,7 @@ class CrossBotSession {
     const deps = this.deps;
     if (!deps) return;
     // Solo play is on-chain only: a connected wallet funds + settles the self-play
-    // tunnel (gas sponsored, DOPAMINT stake). No wallet → require connect, not a demo.
+    // tunnel (gas sponsored, MTPS stake). No wallet → require connect, not a demo.
     if (!deps.account) {
       this.error = "connect a wallet to stake the tunnel";
       this.status = "error";
@@ -384,6 +405,7 @@ class CrossBotSession {
     this.score = { you: 0, foe: 0 };
     this.lastScoredGames = -1;
     this.pendingDir = undefined;
+    this.paused = false;
 
     // Per-game stake from the lobby (the small swap), floored at MIN_STAKE.
     const floored = Math.floor(nextStake);
@@ -400,7 +422,7 @@ class CrossBotSession {
       try {
         // The LARGE bank funded on-chain per seat (vs the small per-game stake). Multi-game
         // swaps `stakePerGame` per race off this bank, so it survives MANY races (not one).
-        const fundedPerSeat = isDopamintConfigured
+        const fundedPerSeat = isMtpsConfigured
           ? LOCKED_PER_SEAT
           : SUI_PER_SEAT;
 
@@ -410,14 +432,14 @@ class CrossBotSession {
         this.setStatus("funding");
         const partyA = { address: a.address, publicKey: a.keyPair.publicKey };
         const partyB = { address: b.address, publicKey: b.keyPair.publicKey };
-        // DOPAMINT (ADR-0010): faucet both seats' bank invisibly (gas-sponsored) and stake
-        // DOPAMINT — free for a 0-SUI player. SUI path (DOPAMINT env unset): sponsored SUI
+        // MTPS (ADR-0010): faucet both seats' bank invisibly (gas-sponsored) and stake
+        // MTPS — free for a 0-SUI player. SUI path (MTPS env unset): sponsored SUI
         // stake with a sender-pays fallback (ADR-0009).
-        // ADR-0013: top up the player's DOPAMINT address balance, then the open withdraws from it
+        // ADR-0013: top up the player's MTPS address balance, then the open withdraws from it
         // (no version-pinned coin → concurrent opens across games never equivocate).
-        if (isDopamintConfigured && isDopamintAddressBalance)
+        if (isMtpsConfigured && isMtpsAddressBalance)
           await deps.ensureStakeBalance(2n * fundedPerSeat);
-        const tunnelId = isDopamintConfigured
+        const tunnelId = isMtpsConfigured
           ? await openAndFundSelfPlay({
               reads,
               signExec: deps.sponsoredSignExec as never,
@@ -425,12 +447,12 @@ class CrossBotSession {
               partyB,
               aAmount: fundedPerSeat,
               bAmount: fundedPerSeat,
-              coinType: DOPAMINT_COIN_TYPE,
-              ...(isDopamintAddressBalance
+              coinType: MTPS_COIN_TYPE,
+              ...(isMtpsAddressBalance
                 ? {
                     stakeFromBalance: {
                       amount: 2n * fundedPerSeat,
-                      coinType: DOPAMINT_COIN_TYPE,
+                      coinType: MTPS_COIN_TYPE,
                     },
                   }
                 : { stakeCoinId: await deps.prepareStake(2n * fundedPerSeat) }),
@@ -462,6 +484,18 @@ class CrossBotSession {
         // Multi-game: many races on one funded tunnel; the player settles once. The per-game
         // stake is the SMALL swap, the funded bank above is what survives across races.
         const protocol = new MultiGameCrossProtocol(tunnelId, stakePerGame);
+        // Auto moves come from the canonical kit bot — the same move source the agent harness
+        // uses — so the kit is the single source of bot behavior. Built with the SAME per-game
+        // stake as the tunnel's protocol (so the bot's fund/terminal checks match) and live
+        // per-seat RNG, preserving the prior Math.random self-play.
+        const kit = createChickenCrossKit(stakePerGame);
+        const bots: Record<
+          Party,
+          GameBot<MultiGameCrossState, MultiGameCrossMove>
+        > = {
+          A: kit.createBot("A", { rngForSeat: () => Math.random }),
+          B: kit.createBot("B", { rngForSeat: () => Math.random }),
+        };
         const tunnel = OffchainTunnel.selfPlay(
           protocol,
           tunnelId,
@@ -491,6 +525,7 @@ class CrossBotSession {
 
         this.tunnel = tunnel;
         this.protocol = protocol;
+        this.bots = bots;
         this.transcript = transcript;
         this.tunnelId = tunnelId;
         this.createdAt = createdAt;
@@ -558,17 +593,17 @@ class CrossBotSession {
         transcript ? transcript.root() : new Uint8Array(32),
         0n,
       );
-      const coinType = isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined;
-      // DOPAMINT path closes via the gas sponsor too (so a 0-SUI player can close their
+      const coinType = isMtpsConfigured ? MTPS_COIN_TYPE : undefined;
+      // MTPS path closes via the gas sponsor too (so a 0-SUI player can close their
       // bot game for free); SUI path closes sender-pays. coinType must match the tunnel's coin.
       await settleViaBackend({
         tunnelId: this.tunnelId,
         settlement,
-        transcript: transcript ? transcript.toRecord().entries : [],
+        transcript: transcript ? transcript.rawEntries() : [],
         label: "chickenCross",
         fallbackClose: () =>
           closeCooperativeWithRoot({
-            signExec: (isDopamintConfigured
+            signExec: (isMtpsConfigured
               ? deps.sponsoredSignExec
               : deps.signExec) as never,
             tunnelId: this.tunnelId,
@@ -592,6 +627,17 @@ class CrossBotSession {
     this.emit();
     // Turning autopilot on while a race is live: kick the driver so it steers / loops.
     if (this.auto && this.status === "playing") void this.advance();
+  };
+
+  pause = () => {
+    if (this.status !== "playing") return;
+    this.paused = true;
+  };
+
+  resume = () => {
+    if (!this.paused) return;
+    this.paused = false;
+    if (this.status === "playing") void this.advance();
   };
 
   /** Settle + close the tunnel NOW at the current co-signed state — cash out anytime,
@@ -660,5 +706,7 @@ export function useChickenCrossSession(windowId: string): ChickenCrossSession {
     setDir: session.setDir,
     toggleAuto: session.toggleAuto,
     settleNow: session.settleNow,
+    pause: session.pause,
+    resume: session.resume,
   };
 }

@@ -5,7 +5,7 @@
 // is down. Mirrors useBattleshipAuto's settle path.
 import type { Transcript } from "sui-tunnel-ts/proof/transcript";
 import { getControlPlaneClient } from "@/backend/controlPlane";
-import { coSignedToSettleRequest } from "@/backend/settleRequest";
+import { coSignedToSettleBody } from "@/backend/settleRequest";
 import {
   closeCooperativeWithRoot,
   type SignExec,
@@ -23,7 +23,7 @@ export async function settlePokerTunnel(opts: {
   tunnelId: string;
   createdAt: bigint;
   fallbackSignExec: SignExec;
-  /** Coin type `T` for the on-chain fallback close; defaults to SUI. Pass DOPAMINT for the
+  /** Coin type `T` for the on-chain fallback close; defaults to SUI. Pass MTPS for the
    *  gas-sponsored stake model (the backend /settle reads the type off the tunnel itself). */
   coinType?: string;
 }): Promise<PokerSettleResult> {
@@ -35,7 +35,7 @@ export async function settlePokerTunnel(opts: {
   try {
     const r = await getControlPlaneClient().settle(
       opts.tunnelId,
-      coSignedToSettleRequest(settlement, opts.transcript.toRecord().entries),
+      coSignedToSettleBody(settlement, opts.transcript.rawEntries()),
     );
     return { txDigest: r.txDigest, proofUrl: r.proofUrl };
   } catch (e) {

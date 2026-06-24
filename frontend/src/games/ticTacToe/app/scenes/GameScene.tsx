@@ -9,7 +9,7 @@ import type {
   PlayMode,
   GameType,
 } from "@/games/ticTacToe/app/scenes/SetupScene";
-import { isDopamintConfigured } from "@/onchain/dopamint";
+import { isMtpsConfigured } from "@/onchain/mtps";
 
 // Protocol marks (1 = botX/X, 2 = botO/O) -> Cell UI vocabulary (CELL_SERVER=2 renders "X",
 // CELL_PLAYER=1 renders "O"). Map X->2, O->1 so botX shows as X.
@@ -203,8 +203,8 @@ export function GameScene({
               <div className="font-bold text-3xl mt-1 min-h-[30px] flex items-center justify-center">
                 {g.score.x}
               </div>
-              {/* DOPAMINT mode: play is free + auto-funded — hide the SUI gas balance. */}
-              {!isDopamintConfigured && (
+              {/* MTPS mode: play is free + auto-funded — hide the SUI gas balance. */}
+              {!isMtpsConfigured && (
                 <div className="font-mono text-[10px] opacity-60 mt-1">
                   {fmtSui(g.balances.x)} SUI
                 </div>
@@ -231,7 +231,7 @@ export function GameScene({
               <div className="font-bold text-3xl mt-1 min-h-[30px] flex items-center justify-center">
                 {g.score.o}
               </div>
-              {!isDopamintConfigured && (
+              {!isMtpsConfigured && (
                 <div className="font-mono text-[10px] opacity-60 mt-1">
                   {fmtSui(g.balances.o)} SUI
                 </div>
@@ -472,8 +472,12 @@ export function GameScene({
                     >
                       <span className="flex items-center gap-2 tabular-nums">
                         <span className="text-outline">{t.games}g</span>
-                        <span className="font-bold text-[var(--qp-red)]">✕{t.x}</span>
-                        <span className="font-bold text-[var(--qp-ink)]">◯{t.o}</span>
+                        <span className="font-bold text-[var(--qp-red)]">
+                          ✕{t.x}
+                        </span>
+                        <span className="font-bold text-[var(--qp-ink)]">
+                          ◯{t.o}
+                        </span>
                         <span className="opacity-75">={t.draws}</span>
                       </span>
                       {t.closeDigest ? (

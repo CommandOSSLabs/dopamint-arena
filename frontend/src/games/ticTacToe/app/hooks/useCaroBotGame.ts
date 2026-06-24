@@ -30,12 +30,12 @@ import {
 } from "@/games/ticTacToe/app/lib/bots";
 import { makeKeypairSponsoredSignExec } from "@/onchain/sponsor";
 import {
-  DOPAMINT_COIN_TYPE,
-  ensureDopamintAddressBalance,
-  ensureDopamintStakeCoin,
-  isDopamintAddressBalance,
-  isDopamintConfigured,
-} from "@/onchain/dopamint";
+  MTPS_COIN_TYPE,
+  ensureMtpsAddressBalance,
+  ensureMtpsStakeCoin,
+  isMtpsAddressBalance,
+  isMtpsConfigured,
+} from "@/onchain/mtps";
 import type { Difficulty } from "@/games/ticTacToe/app/hooks/useBotGame";
 import type {
   BotPhase,
@@ -54,9 +54,9 @@ const MAX_BOARD_SIZE = 29;
 const SCORE_KEY = "caro_bot_score.v1";
 const STEP_MS = 350;
 const MIN_PLAY_MIST = 20_000_000n;
-// DOPAMINT mode: per-seat stake (1 DOPAMINT, 9 decimals); both seats funded from one coin.
-const DOPAMINT_PER_SEAT = 1_000_000_000n;
-// SUI-fallback per-seat stake (MIST), when the DOPAMINT env is unset.
+// MTPS mode: per-seat stake (1 MTPS, 9 decimals); both seats funded from one coin.
+const MTPS_PER_SEAT = 1_000_000_000n;
+// SUI-fallback per-seat stake (MIST), when the MTPS env is unset.
 const SUI_PER_SEAT = 1n;
 const NEXT_GAME_MS = 1200;
 // Cap the in-session settle history so a long auto-play run can't grow it without bound.
@@ -257,8 +257,8 @@ export function useCaroBotGame(
     [client],
   );
 
-  // DOPAMINT mode (ADR-0010): a gas-sponsored signer for a bot keypair. The settler pays gas, so
-  // the bot needs zero SUI — it only signs the open/close. Faucet-minted DOPAMINT is the stake.
+  // MTPS mode (ADR-0010): a gas-sponsored signer for a bot keypair. The settler pays gas, so
+  // the bot needs zero SUI — it only signs the open/close. Faucet-minted MTPS is the stake.
   const botSponsoredSignExec = useCallback(
     (bot: BotIdentity) =>
       makeKeypairSponsoredSignExec({
@@ -287,10 +287,10 @@ export function useCaroBotGame(
   // Run ONE tunnel that plays `maxGames` caro games and settles once.
   const runGame = useCallback(() => {
     stopTimer();
-    // DOPAMINT mode: gas is sponsored and the stake is faucet-minted, so the bots need no SUI —
+    // MTPS mode: gas is sponsored and the stake is faucet-minted, so the bots need no SUI —
     // skip the gas gate. SUI fallback still requires a real gas balance per bot.
     if (
-      !isDopamintConfigured &&
+      !isMtpsConfigured &&
       (balancesRef.current.x < MIN_PLAY_MIST ||
         balancesRef.current.o < MIN_PLAY_MIST)
     ) {
@@ -324,24 +324,24 @@ export function useCaroBotGame(
         const partyX = { address: bots.x.address, publicKey: bots.x.publicKey };
         const partyO = { address: bots.o.address, publicKey: bots.o.publicKey };
 
-        // DOPAMINT mode (ADR-0010): stake faucet-minted DOPAMINT and sponsor bot X's open/close
+        // MTPS mode (ADR-0010): stake faucet-minted MTPS and sponsor bot X's open/close
         // gas (no SUI). SUI fallback (env unset): bot X funds the stakes from its own gas coin.
-        const dopamintOn = isDopamintConfigured;
-        const coinType = dopamintOn ? DOPAMINT_COIN_TYPE : undefined;
-        const stakePerSeat = dopamintOn ? DOPAMINT_PER_SEAT : SUI_PER_SEAT;
-        const xSignExec = dopamintOn ? botSponsoredSignExec(bots.x) : null;
+        const mtpsOn = isMtpsConfigured;
+        const coinType = mtpsOn ? MTPS_COIN_TYPE : undefined;
+        const stakePerSeat = mtpsOn ? MTPS_PER_SEAT : SUI_PER_SEAT;
+        const xSignExec = mtpsOn ? botSponsoredSignExec(bots.x) : null;
 
-        // 1) open + fund (both stakes) + activate in ONE tx (bot X signs). In DOPAMINT mode both
+        // 1) open + fund (both stakes) + activate in ONE tx (bot X signs). In MTPS mode both
         // stakes split off one faucet-minted coin (sponsored gas has no gas coin); in SUI mode,
         // off bot X's gas coin.
         setPhase("opening");
         let tunnelId: string;
         let createDigest: string;
-        if (dopamintOn && xSignExec) {
+        if (mtpsOn && xSignExec) {
           // Self-play funds BOTH seats from one source, so withdraw/faucet for the 2-seat total.
           // ADR-0013: bot X is the sender, so its address balance is the stake source.
-          const stakeOpt = isDopamintAddressBalance
-            ? (await ensureDopamintAddressBalance({
+          const stakeOpt = isMtpsAddressBalance
+            ? (await ensureMtpsAddressBalance({
                 client: client as never,
                 signExec: xSignExec,
                 owner: bots.x.address,
@@ -351,12 +351,12 @@ export function useCaroBotGame(
                 coinType,
                 stakeFromBalance: {
                   amount: 2n * stakePerSeat,
-                  coinType: DOPAMINT_COIN_TYPE,
+                  coinType: MTPS_COIN_TYPE,
                 },
               })
             : {
                 coinType,
-                stakeCoinId: await ensureDopamintStakeCoin({
+                stakeCoinId: await ensureMtpsStakeCoin({
                   client: client as never,
                   signExec: xSignExec,
                   owner: bots.x.address,
@@ -575,11 +575,11 @@ export function useCaroBotGame(
         const backendDigest = await settleViaBackend({
           tunnelId,
           settlement: s,
-          transcript: transcript.toRecord().entries,
+          transcript: transcript.rawEntries(),
           label: "tictactoe",
           fallbackClose: async () => {
-            // DOPAMINT mode: close via the sponsored signer (no SUI); else bot X's keypair.
-            if (dopamintOn && xSignExec) {
+            // MTPS mode: close via the sponsored signer (no SUI); else bot X's keypair.
+            if (mtpsOn && xSignExec) {
               const { digest } = await xSignExec(
                 buildSettleWithRootTx(tunnelId, s, coinType),
               );
@@ -642,12 +642,12 @@ export function useCaroBotGame(
         const b = await refreshBalances();
         setPhase("done");
 
-        // 7) continue tunnel-after-tunnel while the session is live (auto or manual). DOPAMINT
+        // 7) continue tunnel-after-tunnel while the session is live (auto or manual). MTPS
         // mode: gas is sponsored + the stake is faucet-minted, so bots can't run out — skip the
         // SUI gate; SUI fallback still stops when a bot is low on gas.
         if (playingRef.current) {
           if (
-            dopamintOn ||
+            mtpsOn ||
             (b && b.x >= MIN_PLAY_MIST && b.o >= MIN_PLAY_MIST)
           ) {
             nextRef.current = setTimeout(() => {
@@ -717,9 +717,9 @@ export function useCaroBotGame(
   // main menu starts in manual (auto off) so you play X yourself.
   const startAuto = useCallback(
     (autoOn: boolean = true) => {
-      // DOPAMINT mode: bots play free (sponsored gas + faucet stake), so skip the SUI gate.
+      // MTPS mode: bots play free (sponsored gas + faucet stake), so skip the SUI gate.
       if (
-        !isDopamintConfigured &&
+        !isMtpsConfigured &&
         (balancesRef.current.x < MIN_PLAY_MIST ||
           balancesRef.current.o < MIN_PLAY_MIST)
       ) {

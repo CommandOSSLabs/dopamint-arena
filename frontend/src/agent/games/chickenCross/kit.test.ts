@@ -22,7 +22,7 @@ describe("chickenCross kit", () => {
   it("uses the chicken-cross protocol domain", () => {
     const kit = createChickenCrossKit(100n);
     assert.strictEqual(kit.id, "chicken-cross");
-    assert.strictEqual(kit.protocol.name, "cross.v1");
+    assert.strictEqual(kit.protocol.name, "cross.multi.v1");
   });
 
   it("drives a full self-play race to terminal with conserved balances", () => {

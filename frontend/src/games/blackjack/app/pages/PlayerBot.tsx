@@ -1,7 +1,6 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useGameNavigate } from "@/games/blackjack/app/useGameRouter";
-import { useRegisterCabinet } from "@/shell/cabinet/CabinetContext";
-import type { CabinetController } from "@/shell/cabinet/CabinetController";
+import { useSoloCabinet } from "@/shell/cabinet/soloCabinet";
 import { useGameScale } from "@/games/blackjack/app/components/app/ScaledWrapper";
 import {
   useCurrentAccount,
@@ -19,7 +18,7 @@ import {
   loadOrCreateBots,
   buildFundTx,
 } from "@/games/blackjack/app/lib/bjBots";
-import { isDopamintConfigured } from "@/onchain/dopamint";
+import { isMtpsConfigured } from "@/onchain/mtps";
 import {
   betChipColor,
   SeatChips,
@@ -286,10 +285,10 @@ export default function PlayerBot({
   const inGame =
     phase === "opening" || phase === "playing" || phase === "settling";
   const terminal = phase === "done" || result !== null;
-  // DOPAMINT mode: bots play free (sponsored gas, faucet buy-ins), so the SUI-balance gate doesn't
+  // MTPS mode: bots play free (sponsored gas, faucet buy-ins), so the SUI-balance gate doesn't
   // apply — never treat the bots as unfunded. SUI fallback still gates on a positive balance.
   const unfunded =
-    !isDopamintConfigured && (balances.a === 0n || balances.b === 0n);
+    !isMtpsConfigured && (balances.a === 0n || balances.b === 0n);
 
   // Auto-pilot: wallet-fund the bots once if low, then start bot-vs-bot self-play.
   // Bots are SHARED across all blackjack windows (loadOrCreateBots reads shared
@@ -369,32 +368,24 @@ export default function PlayerBot({
     view.playerCards.length > 0 || view.dealerCards.length > 0 || inGame;
 
   // --- Shared arcade-cabinet seam (GameCabinet wraps every window in Desktop). The shell owns
-  // hover → pause → overlay; this game wires the verbs to its engine. Take-over reuses the in-game
-  // manual play (setAuto(false) → you play the player's hand). Offerable only while auto-playing a
-  // started session. Stable callbacks (the hook useCallback's them) so the controller re-registers
-  // only when `offerable` flips, not every view tick.
+  // hover → pause → overlay; this game wires the verbs to its engine via the shared useSoloCabinet
+  // assembler (same as ttt). Offerable only while auto-playing a started session.
   const offerable = started && auto;
-  const takeOver = useCallback(() => {
-    setAuto(false);
-    gResume(); // unfreeze if the hover paused the loop
-  }, [setAuto, gResume]);
+  // Hand the player's hand to the human (flip to manual). Idempotent; the assembler adds resume.
+  const goManual = useCallback(() => setAuto(false), [setAuto]);
   // "Return to Home" → blackjack's own home (the menu route), stopping the in-flight tunnel first
   // so the self-play loop doesn't keep ticking after we leave (mirrors the in-game Back button).
-  const returnHome = useCallback(() => {
+  const goHome = useCallback(() => {
     backToConfig();
     navigate("/");
   }, [backToConfig, navigate]);
-  const cabinet = useMemo<CabinetController>(
-    () => ({
-      active: offerable,
-      pause: gPause,
-      resume: gResume,
-      takeOver,
-      returnHome,
-    }),
-    [offerable, gPause, gResume, takeOver, returnHome],
-  );
-  useRegisterCabinet(cabinet);
+  useSoloCabinet({
+    offerable,
+    pause: gPause,
+    resume: gResume,
+    goManual,
+    goHome,
+  });
 
   // Auto toggle: ticked = your bot plays the hand (fast self-play vs the dealer bot); unticked
   // pauses at your decision so you play Hit/Stand. The dealer + betting stay automatic either way.
@@ -563,7 +554,7 @@ export default function PlayerBot({
                   {error}
                 </div>
               )}
-              {!isDopamintConfigured &&
+              {!isMtpsConfigured &&
                 unfunded &&
                 phase !== "funding" &&
                 !error && (

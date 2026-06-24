@@ -8,16 +8,7 @@ import {
 } from "react";
 import { useRegisterCabinet } from "@/shell/cabinet/CabinetContext";
 import type { CabinetController } from "@/shell/cabinet/CabinetController";
-import {
-  ArrowLeft,
-  Bot,
-  Check,
-  Coins,
-  Crosshair,
-  Users,
-  Wallet,
-  Zap,
-} from "lucide-react";
+import { ArrowLeft, Bot, Check, Crosshair, Users, Wallet } from "lucide-react";
 import { ConnectModal, useCurrentAccount } from "@mysten/dapp-kit";
 import { isEnokiWallet } from "@mysten/enoki";
 import { toast } from "sonner";
@@ -28,6 +19,9 @@ import { PlacementBoard } from "./components/PlacementBoard";
 import { BattleView } from "./components/BattleView";
 import { useBattleship } from "./useBattleship";
 import { useBattleshipPvp } from "./useBattleshipPvp";
+import { SketchDefs } from "../quantumPoker/QuantumPokerTable";
+import "../quantumPoker/quantumPoker.css";
+import "./battleship.css";
 
 type Mode = "bot" | "pvp";
 
@@ -35,14 +29,13 @@ type Mode = "bot" | "pvp";
 // desktop reflow) returns to the live game rather than the chooser. Cleared on close.
 const modeStore = new Map<string, Mode | null>();
 
-// Big pill actions, sized for touch (full-width on a narrow window, auto on wider).
-// Colors follow the design system (DesignSystemPage): lilac brand-fill on ink for
-// the primary, lilac outline for the secondary — vivid hexes since this surface is
-// always dark, exactly as the design system's brand-fill buttons do it.
+// Big pill actions in the shared hand-drawn "sketch" skin (matches Quantum Poker):
+// amber-inked "go" for the primary, plain ink outline for the secondary. The
+// `qp-btn` class carries the wobble border + cqmin sizing; we add layout utilities.
 const BTN_PRIMARY =
-  "inline-flex w-full items-center justify-center gap-2 rounded-full bg-[#cab1ff] px-5 py-3 text-sm font-semibold text-[#0c0f1d] shadow-[0_0_18px_rgba(202,177,255,0.35)] transition-all hover:bg-[#b79bff] active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-40";
+  "qp-btn qp-btn--go inline-flex w-full items-center justify-center gap-2";
 const BTN_SECONDARY =
-  "inline-flex w-full items-center justify-center gap-2 rounded-full border border-[#cab1ff]/35 bg-[#cab1ff]/8 px-5 py-3 text-sm font-semibold text-[#cab1ff] transition-all hover:border-[#cab1ff]/70 hover:bg-[#cab1ff]/15 active:scale-[0.97]";
+  "qp-btn inline-flex w-full items-center justify-center gap-2";
 
 /**
  * Battleship over a REAL Sui tunnel. Both modes require a connected wallet (gas is
@@ -72,13 +65,9 @@ export function BattleshipWindow({ windowId }: GameWindowProps) {
   // width AND height (container queries + cqh units), not the viewport — correct
   // in a small floating window on a big screen, or full-width on mobile.
   return (
-    <div className="relative h-full min-h-0 overflow-hidden text-arena-text [container-type:size] bg-[radial-gradient(ellipse_at_50%_38%,rgba(97,61,255,0.18)_0%,rgba(20,16,45,0.6)_46%,#07070f_100%)]">
-      {/* Sonar sweep glow: a second, offset radial in lilac for depth. */}
-      <div className="pointer-events-none absolute inset-0 z-0 bg-[radial-gradient(120%_80%_at_85%_15%,rgba(202,177,255,0.12),transparent_55%)]" />
-      {/* Scanline pattern for the radar effect (pure CSS, no asset). */}
-      <div className="pointer-events-none absolute inset-0 z-0 opacity-[0.05] bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.35)_50%),linear-gradient(90deg,rgba(202,177,255,0.06),rgba(118,90,255,0.03),rgba(97,61,255,0.06))] bg-[size:100%_4px,6px_100%]" />
-      {/* Top ambient glow line */}
-      <div className="pointer-events-none absolute left-0 right-0 top-0 z-10 h-[1.5px] bg-gradient-to-r from-transparent via-[#cab1ff]/50 to-transparent" />
+    <div className="qp-sketch relative h-full min-h-0 overflow-hidden">
+      {/* The roughen filter every `.qp-*` / `.bs-*` border references — rendered once. */}
+      <SketchDefs />
 
       {/* Actual game layout sits on top */}
       <div className="relative z-20 h-full w-full">
@@ -98,15 +87,13 @@ export function BattleshipWindow({ windowId }: GameWindowProps) {
 function ModeChooser({ onPick }: { onPick: (m: Mode) => void }) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-5 p-5 text-center">
-      <div className="flex flex-col items-center gap-2">
-        <span className="wal-eyebrow">Naval tunnel duel</span>
-        <h2 className="wal-display text-3xl text-white @[26rem]:text-4xl">
-          Battle<span className="wal-gradient-text">ship</span>
-        </h2>
-        <p className="max-w-xs text-sm leading-relaxed text-arena-muted">
+      <div className="flex flex-col items-center gap-1">
+        <span className="qp-eyebrow">You vs the sea</span>
+        <h2 className="qp-title text-[clamp(26px,9cqmin,40px)]">Battleship</h2>
+        <p className="qp-note mt-1 max-w-xs">
           Hide your fleet, then sink your foe's. Every shot is{" "}
-          <span className="text-[#cab1ff]">commit-revealed</span> and co-signed
-          in the tunnel — the winner settles on-chain.
+          <span className="text-[var(--qp-amber)]">commit-revealed</span> and
+          co-signed in the tunnel — the winner settles on-chain.
         </p>
       </div>
       <div className="flex w-full max-w-xs flex-col gap-2.5">
@@ -123,7 +110,7 @@ function ModeChooser({ onPick }: { onPick: (m: Mode) => void }) {
 
 function Centered({ children }: { children: ReactNode }) {
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-3 p-4 text-center text-sm text-arena-muted">
+    <div className="qp-note flex h-full flex-col items-center justify-center gap-3 p-4 text-center">
       {children}
     </div>
   );
@@ -134,12 +121,12 @@ function Centered({ children }: { children: ReactNode }) {
 function ConnectWalletPane({ note }: { note: string }) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-4 p-5 text-center">
-      <div className="flex flex-col items-center gap-2">
-        <span className="wal-eyebrow">Wallet required</span>
-        <h3 className="wal-display text-2xl text-white">Connect to play</h3>
-        <p className="max-w-xs text-sm leading-relaxed text-arena-muted">
-          {note}
-        </p>
+      <div className="flex flex-col items-center gap-1">
+        <span className="qp-eyebrow">Wallet required</span>
+        <h3 className="qp-title text-[clamp(20px,7cqmin,30px)]">
+          Connect to play
+        </h3>
+        <p className="qp-note mt-1 max-w-xs">{note}</p>
       </div>
       <ConnectModal
         walletFilter={isEnokiWallet}
@@ -169,23 +156,13 @@ function AutoToggle({
       onClick={() => onChange(!on)}
       title="Let the bot play your shots too"
       className={cn(
-        "inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-semibold transition-all active:scale-95",
-        on
-          ? "border-[#cab1ff] bg-[#cab1ff]/15 text-[#e7ddff] shadow-[0_0_12px_rgba(202,177,255,0.3)]"
-          : "border-[#cab1ff]/30 bg-[#cab1ff]/[0.06] text-[#cab1ff]/80 hover:border-[#cab1ff]/60",
+        "qp-btn inline-flex items-center gap-1",
+        on && "qp-btn--go",
       )}
     >
-      <span
-        className={cn(
-          "grid size-4 place-items-center rounded-[5px] border transition-colors",
-          on
-            ? "border-[#cab1ff] bg-[#cab1ff] text-[#0c0f1d]"
-            : "border-[#cab1ff]/50 bg-transparent",
-        )}
-      >
-        {on && <Check className="size-3" strokeWidth={3} />}
+      <span className="grid size-[1.1em] place-items-center">
+        {on ? <Check className="size-[0.9em]" strokeWidth={3} /> : "○"}
       </span>
-      <Zap className="size-3.5" />
       Auto
     </button>
   );
@@ -198,9 +175,9 @@ function SettleButton({ onSettle }: { onSettle: () => void }) {
       type="button"
       onClick={onSettle}
       title="Settle and close the tunnel now (cash out)"
-      className="inline-flex items-center gap-1.5 rounded-full bg-[#cab1ff] px-3 py-1.5 text-xs font-semibold text-[#0c0f1d] shadow-[0_0_12px_rgba(202,177,255,0.3)] transition-all hover:bg-[#b79bff] active:scale-95"
+      className="qp-btn qp-btn--go"
     >
-      <Coins className="size-3.5" /> Settle
+      Settle
     </button>
   );
 }
@@ -219,17 +196,17 @@ function SettledPane({
   const games = score.you + score.foe;
   return (
     <div className="flex h-full flex-col items-center justify-center gap-4 p-5 text-center">
-      <div className="flex flex-col items-center gap-2">
-        <span className="wal-eyebrow">
+      <div className="flex flex-col items-center gap-1">
+        <span className="qp-eyebrow">
           {settling ? "Settling" : "Session settled"}
         </span>
-        <h3 className="wal-display text-2xl text-white">
+        <h3 className="qp-title text-[clamp(20px,7cqmin,30px)]">
           {settling ? "Closing tunnel…" : "Settled ✓"}
         </h3>
-        <p className="max-w-xs text-sm leading-relaxed text-arena-muted">
-          You <span className="text-[#9cefcf]">{score.you}</span> –{" "}
-          <span className="text-[#fb7185]">{score.foe}</span> Bot over {games}{" "}
-          game{games === 1 ? "" : "s"} on one tunnel.
+        <p className="qp-note mt-1 max-w-xs">
+          You <span className="text-[var(--qp-felt)]">{score.you}</span> –{" "}
+          <span className="text-[var(--qp-red)]">{score.foe}</span> Bot over{" "}
+          {games} game{games === 1 ? "" : "s"} on one tunnel.
         </p>
       </div>
       {!settling && (
@@ -241,35 +218,26 @@ function SettledPane({
   );
 }
 
-/** Every mode renders inside this frame: a top header bar carries the back button,
- *  a contextual title, and optional trailing controls (e.g. the Auto toggle), with
- *  the mode's own UI filling the space BELOW it — so nothing overlaps the board and
- *  there's always a way out. */
+/** Every mode renders inside this frame: a thin control strip carries the back button
+ *  and optional trailing actions (Auto / Settle) — NOT a title, since the desktop window
+ *  chrome above already shows one — with the mode's own UI filling the space below it. */
 function ModeFrame({
   onBack,
-  title,
   headerExtra,
   children,
 }: {
   onBack: () => void;
-  title?: ReactNode;
   headerExtra?: ReactNode;
   children: ReactNode;
 }) {
   return (
     <div className="flex h-full w-full flex-col">
-      <header className="flex shrink-0 items-center gap-2 border-b border-[#cab1ff]/15 bg-slate-950/40 px-2.5 py-2 backdrop-blur-sm">
-        <button
-          onClick={onBack}
-          className="inline-flex items-center gap-1 rounded-full border border-[#cab1ff]/40 bg-[#cab1ff]/[0.08] px-3 py-1.5 text-xs font-semibold text-[#cab1ff] transition-colors hover:border-[#cab1ff]/70 hover:bg-[#cab1ff]/15 active:scale-95"
-        >
-          <ArrowLeft className="size-3.5" /> Back
+      {/* A thin in-game control strip. The window chrome above already shows the title,
+          so this carries only the game actions (Back / Auto / Settle), kept compact. */}
+      <header className="qp-head shrink-0 py-[clamp(4px,1.4cqmin,9px)]">
+        <button onClick={onBack} className="qp-btn inline-flex items-center gap-1">
+          <ArrowLeft className="size-[1em]" /> Back
         </button>
-        {title && (
-          <span className="wal-mono truncate text-[11px] uppercase tracking-wider text-[#cab1ff]/70">
-            {title}
-          </span>
-        )}
         {headerExtra && <div className="ml-auto shrink-0">{headerExtra}</div>}
       </header>
       {/* Scrolls vertically when a pane is taller than the window (e.g. stacked
@@ -288,11 +256,8 @@ function ErrorPane({
 }) {
   return (
     <Centered>
-      <p className="text-[#fb7185]">{error ?? "something went wrong"}</p>
-      <button
-        onClick={onBack}
-        className="rounded-full border border-arena-edge px-4 py-2 text-sm text-arena-text"
-      >
+      <p className="text-[var(--qp-red)]">{error ?? "something went wrong"}</p>
+      <button onClick={onBack} className="qp-btn">
         Back
       </button>
     </Centered>
@@ -375,8 +340,6 @@ function BotGame({
 
   const live = status === "playing";
   // State bar (top): which game + the running score.
-  const stateLabel = `vs Bot · Game ${gamesPlayed + 1} · ${score.you}–${score.foe}`;
-  let title: ReactNode = "vs Bot";
   let content: ReactNode;
   if (!account && !view) {
     // No wallet → require connect before the on-chain match opens.
@@ -386,7 +349,6 @@ function BotGame({
   } else if (status === "error") {
     content = <ErrorPane error={error} onBack={back} />;
   } else if (status === "settling" || status === "settled") {
-    title = stateLabel;
     content = (
       <SettledPane
         score={score}
@@ -401,7 +363,6 @@ function BotGame({
       </Centered>
     );
   } else if (live && placingNext) {
-    title = "vs Bot · place fleet";
     content = (
       <PlacementBoard
         ctaLabel="Start"
@@ -412,7 +373,6 @@ function BotGame({
       />
     );
   } else if (live && view) {
-    title = stateLabel;
     content = (
       <BattleView
         view={view}
@@ -440,7 +400,7 @@ function BotGame({
       </div>
     ) : undefined;
   return (
-    <ModeFrame onBack={back} title={title} headerExtra={headerExtra}>
+    <ModeFrame onBack={back} headerExtra={headerExtra}>
       {content}
     </ModeFrame>
   );
@@ -543,7 +503,7 @@ function PvpGame({
       <AutoToggle on={auto} onChange={setAuto} />
     ) : undefined;
   return (
-    <ModeFrame onBack={back} title="PvP Match" headerExtra={headerExtra}>
+    <ModeFrame onBack={back} headerExtra={headerExtra}>
       {content}
     </ModeFrame>
   );

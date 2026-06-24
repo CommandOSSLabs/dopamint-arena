@@ -18,6 +18,8 @@ use axum::extract::DefaultBodyLimit;
 use axum::routing::{get, post};
 use axum::Router;
 use tokio::sync::broadcast;
+use tower::limit::GlobalConcurrencyLimitLayer;
+use tower::ServiceBuilder;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use uuid::Uuid;
@@ -76,6 +78,10 @@ async fn main() -> anyhow::Result<()> {
         )
     };
 
+    let pair_hold_ms = std::env::var("MP_PAIR_HOLD_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(750);
     let state: SharedState = Arc::new(AppState {
         control,
         mp,
@@ -84,6 +90,8 @@ async fn main() -> anyhow::Result<()> {
         walrus,
         stats_tx,
         actions: crate::stats_counter::LocalActionCounter::default(),
+        pair_hold_ms,
+        pairing: crate::stats_counter::MatchPairingMetrics::default(),
     });
     stats::spawn_stats_broadcaster(state.clone());
     spawn_action_flusher(state.clone());
@@ -100,14 +108,23 @@ async fn main() -> anyhow::Result<()> {
         .route("/metrics", get(routes::metrics))
         .route("/v1/sessions", post(routes::register_session))
         .route("/v1/sessions/:id/heartbeat", post(routes::heartbeat))
-        // Settlement carries the off-chain transcript — one fixed-size entry (~0.5 KB) per co-signed
-        // move, archived to Walrus. Maximizing moves/tunnel amortizes the on-chain close and Walrus
-        // per-blob cost, so a long self-play game ships tens of thousands of moves and overflows the
-        // 2 MB Json default. Lift it to 16 MB for /settle only (≈30k moves) as the ceiling on tunnel
-        // length; entries deserialize as RawValue so the body stays ~1× in memory (see SettleRequest).
+        // Settlement carries the off-chain transcript as a v2 binary body (one fixed ~248 B entry
+        // per co-signed move), archived to Walrus verbatim. Maximizing moves/tunnel amortizes the
+        // on-chain close and Walrus per-blob cost, so a long self-play game ships tens of thousands
+        // of moves. 16 MB for /settle only (≈67k moves) caps tunnel length; the body is raw bytes,
+        // so it stays ~1× in memory (the canonical MAX_MOVES_PER_TUNNEL=50k sits well inside this).
         .route(
             "/v1/tunnels/:tunnel_id/settle",
-            post(routes::settle).layer(DefaultBodyLimit::max(16 * 1024 * 1024)),
+            // One ServiceBuilder (not two chained `.layer()`s, which leaves axum's error type
+            // ambiguous). First-added layer is outermost: the concurrency limit gates BEFORE the
+            // body is read, so worst-case memory is (limit × body cap), not (in-flight × cap).
+            post(routes::settle).layer(
+                ServiceBuilder::new()
+                    .layer(GlobalConcurrencyLimitLayer::new(
+                        config.settle_max_concurrency,
+                    ))
+                    .layer(DefaultBodyLimit::max(16 * 1024 * 1024)),
+            ),
         )
         .route("/v1/sponsor", post(routes::sponsor))
         .route("/v1/stats/live", get(routes::stats_live))

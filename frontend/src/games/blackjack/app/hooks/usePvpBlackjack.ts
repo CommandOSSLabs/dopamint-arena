@@ -18,10 +18,10 @@ import {
 import { useSponsoredSignExec } from "@/onchain/useSponsoredSignExec";
 import { withSponsorFallback } from "@/onchain/sponsor";
 import {
-  DOPAMINT_COIN_TYPE,
-  isDopamintAddressBalance,
-  isDopamintConfigured,
-} from "@/onchain/dopamint";
+  MTPS_COIN_TYPE,
+  isMtpsAddressBalance,
+  isMtpsConfigured,
+} from "@/onchain/mtps";
 import { handValue } from "@/games/blackjack/app/lib/bjCards";
 import {
   MpClient,
@@ -240,7 +240,7 @@ export function usePvpBlackjack(): PvpView {
   );
 
   // Sponsored submit (ADR-0009/0010): route the open/deposit tx through the backend gas sponsor —
-  // the settler pays gas, the stake stays a DOPAMINT coin. signExec returns only a digest, so we
+  // the settler pays gas, the stake stays a MTPS coin. signExec returns only a digest, so we
   // re-read the receipt (object changes + status) for the same downstream handling as `submit`.
   const submitSponsored = useCallback(
     async (tx: any) => {
@@ -326,18 +326,18 @@ export function usePvpBlackjack(): PvpView {
           tunnelId: t.tunnelId,
           settlement: coSigned as any,
           transcript: transcriptRef.current
-            ? transcriptRef.current.toRecord().entries
+            ? transcriptRef.current.rawEntries()
             : [],
           label: "blackjack",
           fallbackClose: async () => {
-            // Wallet-close fallback needs the tunnel's coin type (DOPAMINT when configured); the
-            // /settle path above already sponsored the close server-side. In DOPAMINT mode the dealer
+            // Wallet-close fallback needs the tunnel's coin type (MTPS when configured); the
+            // /settle path above already sponsored the close server-side. In MTPS mode the dealer
             // holds 0 SUI (gas is sponsored), so the close must route through the gas sponsor too — a
-            // wallet-signed close would throw and strand the staked DOPAMINT.
-            const coinType = isDopamintConfigured
-              ? DOPAMINT_COIN_TYPE
+            // wallet-signed close would throw and strand the staked MTPS.
+            const coinType = isMtpsConfigured
+              ? MTPS_COIN_TYPE
               : undefined;
-            const res = await (isDopamintConfigured ? submitSponsored : submit)(
+            const res = await (isMtpsConfigured ? submitSponsored : submit)(
               buildCloseWithRootTx(t.tunnelId, coSigned, coinType),
             );
             return res.digest;
@@ -615,10 +615,10 @@ export function usePvpBlackjack(): PvpView {
         const stakeB = m.role === "B" ? myStake : oppStake; // dealer's buy-in
         const penalty = stakeA < stakeB ? stakeA : stakeB; // unused on cooperative close; keep ≤ both deposits
 
-        // DOPAMINT path (ADR-0010): open/fund sponsored, staking the faucet token; SUI path keeps a
+        // MTPS path (ADR-0010): open/fund sponsored, staking the faucet token; SUI path keeps a
         // sender-pays fallback. `coinType` also threads into the wallet-close fallback (the backend
         // /settle close is sponsored server-side).
-        const coinType = isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined;
+        const coinType = isMtpsConfigured ? MTPS_COIN_TYPE : undefined;
 
         // Roles: A = player (party A), B = dealer (party B). The DEALER (role B) opens the tunnel
         // and registers partyA = the player (the opponent), partyB = the dealer (self).
@@ -634,8 +634,8 @@ export function usePvpBlackjack(): PvpView {
             ephemeralPubkey: myEph.coreKey.publicKey,
           }; // partyB = dealer (self)
           // create_and_share carries no coin (penalty is a parameter, deposits come later), so it's
-          // identical sponsored or sender-pays — route it sponsored when DOPAMINT for a 0-SUI dealer.
-          const res = isDopamintConfigured
+          // identical sponsored or sender-pays — route it sponsored when MTPS for a 0-SUI dealer.
+          const res = isMtpsConfigured
             ? await submitSponsored(
                 buildCreateAndShareTx(openA, openB, penalty, coinType),
               )
@@ -665,14 +665,14 @@ export function usePvpBlackjack(): PvpView {
         );
 
         setPhase("funding");
-        // DOPAMINT: deposit this seat's buy-in from a faucet-minted DOPAMINT coin, sponsored (the
+        // MTPS: deposit this seat's buy-in from a faucet-minted MTPS coin, sponsored (the
         // faucet itself needs the sponsor, so no sender-pays fallback). SUI: sponsored stake with a
         // sender-pays fallback (ADR-0009).
         // ADR-0013: withdraw this seat's buy-in from the wallet's address balance (top up first).
         // Retry (rebuild) through checkpoint-settlement lag instead of erroring out.
-        if (isDopamintConfigured && isDopamintAddressBalance)
+        if (isMtpsConfigured && isMtpsAddressBalance)
           await sponsored.ensureStakeBalance(myStake);
-        const dep = !isDopamintConfigured
+        const dep = !isMtpsConfigured
           ? await withSponsorFallback(
               async () =>
                 submitSponsored(
@@ -683,14 +683,14 @@ export function usePvpBlackjack(): PvpView {
               () => submit(buildDepositTx(tunnelId, myStake)),
               "blackjack pvp deposit",
             )
-          : isDopamintAddressBalance
+          : isMtpsAddressBalance
             ? await submitRebuildingOnStale(
                 () =>
                   buildDepositTx(tunnelId, myStake, {
                     coinType,
                     stakeFromBalance: {
                       amount: myStake,
-                      coinType: DOPAMINT_COIN_TYPE,
+                      coinType: MTPS_COIN_TYPE,
                     },
                   }),
                 submitSponsored,

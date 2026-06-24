@@ -1,6 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useRegisterCabinet } from "@/shell/cabinet/CabinetContext";
-import type { CabinetController } from "@/shell/cabinet/CabinetController";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useSoloCabinet } from "@/shell/cabinet/soloCabinet";
 import {
   useBotGame,
   type Difficulty,
@@ -20,7 +19,7 @@ import { SetupScene } from "@/games/ticTacToe/app/scenes/SetupScene";
 import { GameScene } from "@/games/ticTacToe/app/scenes/GameScene";
 import { PvpScene } from "@/games/ticTacToe/app/scenes/PvpScene";
 import { GameCardScale } from "@/games/ticTacToe/app/components/GameCardScale";
-import { isDopamintConfigured } from "@/onchain/dopamint";
+import { isMtpsConfigured } from "@/onchain/mtps";
 import { SketchDefs } from "@/games/blackjack/app/App";
 import "./index.css";
 
@@ -46,10 +45,9 @@ function AppContent() {
   const caroGame = useCaroBotGame(difficulty, boardSize);
   const g = gameType === "caro" ? caroGame : tttGame;
 
-  // DOPAMINT mode (ADR-0010): bots play free (sponsored gas + faucet-minted stake), so they need
+  // MTPS mode (ADR-0010): bots play free (sponsored gas + faucet-minted stake), so they need
   // no SUI — they're always "funded". SUI fallback still requires a positive gas balance per bot.
-  const funded =
-    isDopamintConfigured || (g.balances.x > 0n && g.balances.o > 0n);
+  const funded = isMtpsConfigured || (g.balances.x > 0n && g.balances.o > 0n);
 
   // --- Shared arcade-cabinet seam (GameCabinet, applied to every window in Desktop). The shell
   // owns hover → pause → overlay; this game wires the verbs to its engine. Take-over reuses the
@@ -66,21 +64,15 @@ function AppContent() {
     stopCaroAuto();
     setScene("login");
   }, [stopTttAuto, stopCaroAuto]);
-  const takeOver = useCallback(() => {
-    setAuto(false);
-    gResume(); // unfreeze if the hover paused the loop
-  }, [setAuto, gResume]);
-  const cabinet = useMemo<CabinetController>(
-    () => ({
-      active: offerable,
-      pause: gPause,
-      resume: gResume,
-      takeOver,
-      returnHome: goToGameHome,
-    }),
-    [offerable, gPause, gResume, takeOver, goToGameHome],
-  );
-  useRegisterCabinet(cabinet);
+  // Hand X to the human (flip to manual play). Stable so the controller doesn't re-register.
+  const goManual = useCallback(() => setAuto(false), [setAuto]);
+  useSoloCabinet({
+    offerable,
+    pause: gPause,
+    resume: gResume,
+    goManual,
+    goHome: goToGameHome,
+  });
 
   // Track the actual container element's parent bounds to determine orientation
   useEffect(() => {

@@ -234,8 +234,7 @@ impl SuiSettler {
     /// Concurrent calls are safe: no shared gas coin means no equivocation risk.
     pub async fn submit_close(&self, args: CloseArgs) -> anyhow::Result<String> {
         let tunnel = self.resolve_shared(&args.tunnel_id).await?;
-        let gas_price = self.reference_gas_price().await?;
-        let epoch = self.current_epoch().await?;
+        let (epoch, gas_price) = self.epoch_and_gas_price().await?;
         let chain = Digest::from_base58(CHAIN_DIGEST_B58).context("chain digest")?;
         let tx = build_close_tx(
             self.package_id,
@@ -272,8 +271,7 @@ impl SuiSettler {
         let kind_bytes = base64::engine::general_purpose::STANDARD
             .decode(kind_b64.trim())
             .context("txKindBytes is not valid base64")?;
-        let gas_price = self.reference_gas_price().await?;
-        let epoch = self.current_epoch().await?;
+        let (epoch, gas_price) = self.epoch_and_gas_price().await?;
         let chain = Digest::from_base58(CHAIN_DIGEST_B58).context("chain digest")?;
         let tx = build_sponsored_tx(
             self.package_id,
@@ -358,25 +356,28 @@ impl SuiSettler {
         })
     }
 
-    async fn reference_gas_price(&self) -> anyhow::Result<u64> {
-        let r = self
-            .rpc("suix_getReferenceGasPrice", serde_json::json!([]))
-            .await?;
-        r.as_str()
-            .and_then(|s| s.parse().ok())
-            .or_else(|| r.as_u64())
-            .ok_or_else(|| anyhow!("bad reference gas price: {r}"))
-    }
-
-    /// Current epoch — required for the `ValidDuring` expiration on SIP-58 address-balance gas.
-    async fn current_epoch(&self) -> anyhow::Result<u64> {
+    /// `(epoch, reference_gas_price)` in one round-trip. Both are per-epoch constants and the
+    /// system-state summary carries both, so the close/sponsor paths read them together instead of
+    /// firing two RPCs. Epoch is fetched fresh (never cached): the SIP-58 `ValidDuring` expiration
+    /// must equal the *current* epoch (see `build_close_tx`), so a stale epoch would be unlandable.
+    async fn epoch_and_gas_price(&self) -> anyhow::Result<(u64, u64)> {
         let r = self
             .rpc("suix_getLatestSuiSystemState", serde_json::json!([]))
             .await?;
-        r.pointer("/epoch")
+        let epoch = r
+            .pointer("/epoch")
             .and_then(|v| v.as_str())
             .and_then(|s| s.parse().ok())
-            .ok_or_else(|| anyhow!("no epoch in latest system state"))
+            .ok_or_else(|| anyhow!("no epoch in latest system state"))?;
+        let gas_price = r
+            .pointer("/referenceGasPrice")
+            .and_then(|v| {
+                v.as_str()
+                    .and_then(|s| s.parse().ok())
+                    .or_else(|| v.as_u64())
+            })
+            .ok_or_else(|| anyhow!("no referenceGasPrice in latest system state"))?;
+        Ok((epoch, gas_price))
     }
 
     async fn execute(&self, tx: &Transaction, sig: &UserSignature) -> anyhow::Result<String> {
@@ -650,7 +651,7 @@ fn command_references_gas(cmd: &Command) -> bool {
     }
 }
 
-/// The package address of a struct coin type (`0xABC::dopamint::DOPAMINT` -> `0xABC`), or `None`
+/// The package address of a struct coin type (`0xABC::mtps::MTPS` -> `0xABC`), or `None`
 /// for a primitive type like SUI. Used to locate the stake token's own faucet module.
 fn coin_type_address(coin_type: &TypeTag) -> Option<Address> {
     match coin_type {
@@ -688,11 +689,11 @@ fn validate_sponsorable(
                 let framework_share = mc.package == framework
                     && mc.module.as_str() == "transfer"
                     && mc.function.as_str() == "public_share_object";
-                // The DOPAMINT stake token's faucet lives in the coin type's own package
-                // (`<pkg>::dopamint`). Sponsor the free `mint`/`mint_default` so a 0-token player
+                // The MTPS stake token's faucet lives in the coin type's own package
+                // (`<pkg>::mtps`). Sponsor the free `mint`/`mint_default` so a 0-token player
                 // can faucet their stake (gas-sponsored) before opening a game.
                 let faucet_mint = coin_type_address(coin_type) == Some(mc.package)
-                    && mc.module.as_str() == "dopamint"
+                    && mc.module.as_str() == "mtps"
                     && matches!(mc.function.as_str(), "mint" | "mint_default");
                 // SIP-58 stake path (ADR-0013): `redeem_funds` turns the sender's address-balance
                 // withdrawal into the stake `Coin<T>` for the open; `send_funds` is the funding
@@ -1003,14 +1004,14 @@ mod tests {
         assert!(validate_sponsorable(&ptb(vec![other]), pkg, &sui_coin()).is_err());
     }
 
-    // The DOPAMINT faucet `mint` (in the coin type's own package) is sponsorable, so a 0-token
+    // The MTPS faucet `mint` (in the coin type's own package) is sponsorable, so a 0-token
     // player can faucet their stake gaslessly.
     #[test]
-    fn validate_accepts_dopamint_faucet_mint() {
-        let coin: TypeTag = "0xabc::dopamint::DOPAMINT".parse().unwrap();
+    fn validate_accepts_mtps_faucet_mint() {
+        let coin: TypeTag = "0xabc::mtps::MTPS".parse().unwrap();
         let mint = Command::MoveCall(sui_sdk_types::MoveCall {
             package: Address::from_str("0xabc").unwrap(),
-            module: Identifier::new("dopamint").unwrap(),
+            module: Identifier::new("mtps").unwrap(),
             function: Identifier::new("mint").unwrap(),
             type_arguments: vec![],
             arguments: vec![Argument::Input(0), Argument::Input(1), Argument::Input(2)],
@@ -1021,13 +1022,13 @@ mod tests {
     }
 
     // A `mint` from a package OTHER than the configured coin type's is refused — only the real
-    // DOPAMINT faucet is sponsored, not a look-alike.
+    // MTPS faucet is sponsored, not a look-alike.
     #[test]
     fn validate_rejects_faucet_mint_from_foreign_package() {
-        let coin: TypeTag = "0xabc::dopamint::DOPAMINT".parse().unwrap();
+        let coin: TypeTag = "0xabc::mtps::MTPS".parse().unwrap();
         let mint = Command::MoveCall(sui_sdk_types::MoveCall {
             package: Address::from_str("0xbad").unwrap(),
-            module: Identifier::new("dopamint").unwrap(),
+            module: Identifier::new("mtps").unwrap(),
             function: Identifier::new("mint").unwrap(),
             type_arguments: vec![],
             arguments: vec![],
@@ -1060,7 +1061,7 @@ mod tests {
     // over a sender withdrawal of the configured coin is sponsorable.
     #[test]
     fn validate_accepts_sender_stake_withdrawal() {
-        let coin: TypeTag = "0xabc::dopamint::DOPAMINT".parse().unwrap();
+        let coin: TypeTag = "0xabc::mtps::MTPS".parse().unwrap();
         let pkg = Address::from_str("0xfff").unwrap();
         let p = ptb_in(
             vec![withdrawal(coin.clone(), WithdrawFrom::Sender)],
@@ -1073,7 +1074,7 @@ mod tests {
     // = settler) must be refused — a sponsored PTB may withdraw only the user's OWN funds.
     #[test]
     fn validate_rejects_sponsor_withdrawal_settler_drain() {
-        let coin: TypeTag = "0xabc::dopamint::DOPAMINT".parse().unwrap();
+        let coin: TypeTag = "0xabc::mtps::MTPS".parse().unwrap();
         let pkg = Address::from_str("0xfff").unwrap();
         let p = ptb_in(
             vec![withdrawal(coin.clone(), WithdrawFrom::Sponsor)],
@@ -1086,7 +1087,7 @@ mod tests {
     // one is refused.
     #[test]
     fn validate_rejects_withdrawal_wrong_coin_type() {
-        let coin: TypeTag = "0xabc::dopamint::DOPAMINT".parse().unwrap();
+        let coin: TypeTag = "0xabc::mtps::MTPS".parse().unwrap();
         let other: TypeTag = "0x2::sui::SUI".parse().unwrap();
         let pkg = Address::from_str("0xfff").unwrap();
         let p = ptb_in(vec![withdrawal(other, WithdrawFrom::Sender)], vec![]);
@@ -1097,7 +1098,7 @@ mod tests {
     // sponsorable for the configured coin; a wrong type arg is refused (M1).
     #[test]
     fn validate_coin_ops_pin_coin_type() {
-        let coin: TypeTag = "0xabc::dopamint::DOPAMINT".parse().unwrap();
+        let coin: TypeTag = "0xabc::mtps::MTPS".parse().unwrap();
         let pkg = Address::from_str("0xfff").unwrap();
         for op in ["send_funds", "destroy_zero"] {
             assert!(

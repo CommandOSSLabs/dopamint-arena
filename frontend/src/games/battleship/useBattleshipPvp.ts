@@ -42,10 +42,10 @@ import {
   type StakeStrategy,
 } from "../../onchain/stakeTunnel";
 import {
-  DOPAMINT_COIN_TYPE,
-  isDopamintConfigured,
-} from "../../onchain/dopamint";
-import { coSignedToSettleRequest } from "../../backend/settleRequest";
+  MTPS_COIN_TYPE,
+  isMtpsConfigured,
+} from "../../onchain/mtps";
+import { coSignedToSettleBody } from "../../backend/settleRequest";
 import { type FleetSecret, makeFleetSecret } from "./engine/selfPlay";
 import { type Placement, placementsToBoard } from "./engine/fleet";
 import { randomSalts } from "./engine/merkle";
@@ -62,8 +62,8 @@ import {
 } from "@/pvp/resume";
 import { makeBattleshipResumeAdapter } from "./battleshipResumeAdapter";
 
-const STAKE_BALANCE = 1_000_000_000n; // locked per seat: 1 DOPAMINT (9 decimals)
-const STAKE_SHIFT = 200_000_000n; // 0.2 DOPAMINT moves loser → winner on a decisive result
+const STAKE_BALANCE = 1_000_000_000n; // locked per seat: 1 MTPS (9 decimals)
+const STAKE_SHIFT = 200_000_000n; // 0.2 MTPS moves loser → winner on a decisive result
 /** How long a cold-load resume waits for the relay's `resume.ok` before giving up. A
  *  stale/dead match (or a backend that predates resume support) never confirms, so we
  *  abandon to idle rather than hang on a frozen board. */
@@ -108,9 +108,9 @@ interface PvpDeps {
   sponsoredSignExec: (tx: never) => Promise<{ digest: string }>;
   /** Pick a user coin to fund this seat's stake (gas is sponsored, the stake is not). */
   selectStakeCoin: (minAmount: bigint) => Promise<string>;
-  /** DOPAMINT stake: faucet (invisibly, sponsored) if short, then return a stake coin id. */
+  /** MTPS stake: faucet (invisibly, sponsored) if short, then return a stake coin id. */
   prepareStake: (minAmount: bigint) => Promise<string>;
-  /** ADR-0013: ensure the player's DOPAMINT address balance covers the stake. No-op once funded. */
+  /** ADR-0013: ensure the player's MTPS address balance covers the stake. No-op once funded. */
   ensureStakeBalance: (minAmount: bigint) => Promise<void>;
 }
 
@@ -324,7 +324,7 @@ class PvpSession {
     const reads = deps.client as unknown as Parameters<
       typeof openAndFundSharedTunnel
     >[0]["reads"];
-    const coinType = isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined;
+    const coinType = isMtpsConfigured ? MTPS_COIN_TYPE : undefined;
     const proto = new BattleshipProtocol(STAKE_SHIFT);
     const transcript = new Transcript(dt.tunnelId);
     let settling = false;
@@ -563,9 +563,9 @@ class PvpSession {
         const hello = await waitPeer<{ ephemeralPubkey: string }>("hello");
         const oppPub = fromHex(hello.ephemeralPubkey);
 
-        // 2) fund on-chain. DOPAMINT path (ADR-0010): faucet the stake token invisibly (gas-
-        //    sponsored) and stake DOPAMINT — settler pays gas, so a 0-SUI player plays free; no
-        //    sender-pays fallback (the faucet itself needs the sponsor). SUI path (DOPAMINT env
+        // 2) fund on-chain. MTPS path (ADR-0010): faucet the stake token invisibly (gas-
+        //    sponsored) and stake MTPS — settler pays gas, so a 0-SUI player plays free; no
+        //    sender-pays fallback (the faucet itself needs the sponsor). SUI path (MTPS env
         //    unset): sponsored SUI stake with a sender-pays fallback (ADR-0009).
         this.status = "funding";
         this.emit();
@@ -745,8 +745,8 @@ async function settle(
   waitPeer: <T>(t: string) => Promise<T>,
   reads: Parameters<typeof readCreatedAt>[0],
   signExec: Parameters<typeof closeCooperativeWithRoot>[0]["signExec"],
-  // Gas-sponsored signer: the close fallback must use this in DOPAMINT mode, where the player holds
-  // 0 SUI and a wallet-signed close would throw and strand the staked DOPAMINT.
+  // Gas-sponsored signer: the close fallback must use this in MTPS mode, where the player holds
+  // 0 SUI and a wallet-signed close would throw and strand the staked MTPS.
   sponsoredSignExec: Parameters<typeof closeCooperativeWithRoot>[0]["signExec"],
   tunnelId: string,
   transcript: Transcript,
@@ -780,7 +780,7 @@ async function settle(
   try {
     await cp.settle(
       tunnelId,
-      coSignedToSettleRequest(co, transcript.toRecord().entries),
+      coSignedToSettleBody(co, transcript.rawEntries()),
     );
   } catch (e) {
     console.error(
@@ -788,7 +788,7 @@ async function settle(
       e,
     );
     await closeCooperativeWithRoot({
-      signExec: isDopamintConfigured ? sponsoredSignExec : signExec,
+      signExec: isMtpsConfigured ? sponsoredSignExec : signExec,
       tunnelId,
       settlement: co,
       coinType,

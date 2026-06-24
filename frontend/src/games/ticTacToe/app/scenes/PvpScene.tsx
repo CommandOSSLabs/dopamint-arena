@@ -5,7 +5,7 @@ import {
 } from "@/games/ticTacToe/app/hooks/usePvpTicTacToe";
 import { Board } from "@/games/ticTacToe/app/components/Board";
 import { CaroBoard } from "@/games/ticTacToe/app/components/CaroBoard";
-import { isDopamintConfigured } from "@/onchain/dopamint";
+import { isMtpsConfigured } from "@/onchain/mtps";
 
 const SUISCAN_TX = "https://suiscan.xyz/testnet/tx/";
 const fmtSui = (mist: bigint) => (Number(mist) / 1e9).toFixed(4);
@@ -60,9 +60,9 @@ export function PvpScene({
   const playing =
     g.phase === "playing" || g.phase === "settling" || g.phase === "done";
   // SUI mode: the connected wallet pays gas + the (tiny) deposit, so it needs a little testnet
-  // SUI. DOPAMINT mode (ADR-0010): gas is sponsored and the stake is faucet-minted, so play is
+  // SUI. MTPS mode (ADR-0010): gas is sponsored and the stake is faucet-minted, so play is
   // free — never gate on the SUI balance.
-  const funded = isDopamintConfigured || g.balance > 10_000_000n;
+  const funded = isMtpsConfigured || g.balance > 10_000_000n;
   const locked = g.phase !== "idle" && g.phase !== "error";
 
   return (
@@ -121,6 +121,26 @@ export function PvpScene({
           className={`flex-1 flex flex-col items-center pb-4 pt-4 ${isPortrait ? "gap-3" : "gap-6"}`}
         >
           <div
+            className={`font-mono text-on-surface/80 bg-surface rounded-2xl shadow-sm border-primary/20 ${
+              isPortrait
+                ? "text-sm px-4 py-3 border-2"
+                : "text-2xl md:text-3xl px-8 py-6 border-[4px]"
+            }`}
+          >
+            Wallet: <span className="font-bold">{g.address.slice(0, 8)}…</span>
+            {/* MTPS mode: play is free + auto-funded — hide the SUI balance. */}
+            {!isMtpsConfigured && (
+              <>
+                {" "}
+                &nbsp;·&nbsp; Balance:{" "}
+                <span className="font-bold text-primary">
+                  {fmtSui(g.balance)} SUI
+                </span>
+              </>
+            )}
+          </div>
+
+          <div
             className={`flex flex-col items-center qp-panel w-[90%] max-w-4xl mt-2 ${
               isPortrait ? "gap-3 p-4" : "gap-8 p-10 md:p-14"
             }`}
@@ -164,7 +184,7 @@ export function PvpScene({
             )}
           </div>
 
-          {!funded && !isDopamintConfigured && (
+          {!funded && !isMtpsConfigured && (
             <div
               className={`text-secondary font-bold text-center w-[90%] max-w-4xl bg-secondary/10 rounded-2xl mt-4 ${
                 isPortrait ? "text-xs p-3 mt-1" : "text-2xl p-6"

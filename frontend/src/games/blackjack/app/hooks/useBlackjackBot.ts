@@ -27,12 +27,12 @@ import {
   type BotIdentity,
 } from "@/games/blackjack/app/lib/bjBots";
 import {
-  DOPAMINT_COIN_TYPE,
-  ensureDopamintAddressBalance,
-  ensureDopamintStakeCoin,
-  isDopamintAddressBalance,
-  isDopamintConfigured,
-} from "@/onchain/dopamint";
+  MTPS_COIN_TYPE,
+  ensureMtpsAddressBalance,
+  ensureMtpsStakeCoin,
+  isMtpsAddressBalance,
+  isMtpsConfigured,
+} from "@/onchain/mtps";
 import { makeKeypairSponsoredSignExec } from "@/onchain/sponsor";
 import {
   actorFor,
@@ -403,7 +403,7 @@ export function useBlackjackBot(): BlackjackBotGame {
     [client],
   );
 
-  // DOPAMINT mode: route a bot keypair's tx through the backend gas sponsor (ADR-0009/0010) — the
+  // MTPS mode: route a bot keypair's tx through the backend gas sponsor (ADR-0009/0010) — the
   // settler pays gas, so the bot signs with zero SUI. Returns just the digest; create flows recover
   // object changes via getTransactionBlock.
   const sponsoredSignExec = useCallback(
@@ -448,10 +448,10 @@ export function useBlackjackBot(): BlackjackBotGame {
   // When auto-play is on, schedules the next game (or stops if a bot is low on gas).
   const runGame = useCallback(() => {
     stopTimer();
-    // DOPAMINT mode: bot gas is sponsored and buy-ins are faucet-minted, so the bots need no SUI —
+    // MTPS mode: bot gas is sponsored and buy-ins are faucet-minted, so the bots need no SUI —
     // skip the SUI-balance gate (their SUI balance is 0). SUI fallback still gates on real balances.
     if (
-      !isDopamintConfigured &&
+      !isMtpsConfigured &&
       (balancesRef.current.a < MIN_PLAY_MIST ||
         balancesRef.current.b < MIN_PLAY_MIST)
     ) {
@@ -480,18 +480,18 @@ export function useBlackjackBot(): BlackjackBotGame {
         const funder = gamesRef.current % 2 === 0 ? bots.a : bots.b;
         gamesRef.current += 1;
 
-        // DOPAMINT mode: the funder stakes faucet-minted DOPAMINT (both seats from its one coin)
+        // MTPS mode: the funder stakes faucet-minted MTPS (both seats from its one coin)
         // and sponsors its own open/close gas (no SUI). SUI fallback: the funder splits both
         // buy-ins off its gas coin and pays its own gas.
-        const coinType = isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined;
+        const coinType = isMtpsConfigured ? MTPS_COIN_TYPE : undefined;
 
         setPhase("opening");
         let createDigest: string;
-        if (isDopamintConfigured) {
+        if (isMtpsConfigured) {
           // ADR-0013: the funder bot is the tx sender → its address balance is the stake source.
           // Self-play funds BOTH seats from one source, so withdraw/faucet for the 2-seat total.
-          const stakeOpt = isDopamintAddressBalance
-            ? (await ensureDopamintAddressBalance({
+          const stakeOpt = isMtpsAddressBalance
+            ? (await ensureMtpsAddressBalance({
                 client: client as never,
                 signExec: sponsoredSignExec(funder),
                 owner: funder.address,
@@ -501,12 +501,12 @@ export function useBlackjackBot(): BlackjackBotGame {
                 coinType,
                 stakeFromBalance: {
                   amount: 2n * BUY_IN,
-                  coinType: DOPAMINT_COIN_TYPE,
+                  coinType: MTPS_COIN_TYPE,
                 },
               })
             : {
                 coinType,
-                stakeCoinId: await ensureDopamintStakeCoin({
+                stakeCoinId: await ensureMtpsStakeCoin({
                   client: client as never,
                   signExec: sponsoredSignExec(funder),
                   owner: funder.address,
@@ -744,11 +744,11 @@ export function useBlackjackBot(): BlackjackBotGame {
         const backendDigest = await settleViaBackend({
           tunnelId,
           settlement: s,
-          transcript: transcript.toRecord().entries,
+          transcript: transcript.rawEntries(),
           label: "blackjack",
           fallbackClose: async () => {
-            if (isDopamintConfigured) {
-              // The funder opened the tunnel and holds the sponsored signer; close DOPAMINT sponsored.
+            if (isMtpsConfigured) {
+              // The funder opened the tunnel and holds the sponsored signer; close MTPS sponsored.
               const { digest } = await sponsoredSignExec(funder)(
                 buildSettleWithRootTx(tunnelId, s, coinType),
               );
@@ -803,11 +803,11 @@ export function useBlackjackBot(): BlackjackBotGame {
         setPhase("done");
 
         // 7) continue tunnel-after-tunnel while the session is live (auto or manual), until a bot
-        // is low on gas or the user goes back. DOPAMINT mode: gas sponsored + buy-ins faucet-
+        // is low on gas or the user goes back. MTPS mode: gas sponsored + buy-ins faucet-
         // minted, so bots can't run dry — skip the SUI gate. Pace fast in auto, relaxed in manual.
         if (playingRef.current) {
           if (
-            isDopamintConfigured ||
+            isMtpsConfigured ||
             (b && b.a >= MIN_PLAY_MIST && b.b >= MIN_PLAY_MIST)
           ) {
             nextRef.current = setTimeout(
@@ -912,9 +912,9 @@ export function useBlackjackBot(): BlackjackBotGame {
   // main menu starts in manual (auto off) so the user plays the hands themselves.
   const startAuto = useCallback(
     (autoOn: boolean = true) => {
-      // DOPAMINT mode: no SUI needed (sponsored gas + faucet buy-ins), so skip the balance gate.
+      // MTPS mode: no SUI needed (sponsored gas + faucet buy-ins), so skip the balance gate.
       if (
-        !isDopamintConfigured &&
+        !isMtpsConfigured &&
         (balancesRef.current.a < MIN_PLAY_MIST ||
           balancesRef.current.b < MIN_PLAY_MIST)
       ) {

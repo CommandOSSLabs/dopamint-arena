@@ -5,7 +5,7 @@ import { useCurrentAccount } from "@mysten/dapp-kit";
 import { CardDisplay } from "@/games/blackjack/app/components/app/CardDisplay";
 import { usePvpBlackjack } from "@/games/blackjack/app/hooks/usePvpBlackjack";
 import { handToCardIndices } from "@/games/blackjack/app/lib/bjCards";
-import { isDopamintConfigured } from "@/onchain/dopamint";
+import { isMtpsConfigured } from "@/onchain/mtps";
 import {
   betChipColor,
   SeatChips,
@@ -47,9 +47,9 @@ export default function PvpBlackjack() {
     document.title = "Blackjack — PvP";
   }, []);
 
-  // DOPAMINT mode: gas is sponsored and the buy-in is faucet-minted DOPAMINT, so a 0-SUI player can
+  // MTPS mode: gas is sponsored and the buy-in is faucet-minted MTPS, so a 0-SUI player can
   // play — the wallet-SUI gate doesn't apply. SUI mode still needs gas to open/deposit.
-  const funded = isDopamintConfigured || g.walletBalance > 20_000_000n;
+  const funded = isMtpsConfigured || g.walletBalance > 20_000_000n;
   const playing =
     g.phase === "playing" || g.phase === "settling" || g.phase === "done";
   const myBal = g.myBalance;
@@ -520,7 +520,7 @@ export default function PvpBlackjack() {
                           className="flex-1 min-w-0 qp-input bg-[#fffdf6] border-2 border-[var(--qp-ink)] focus:border-[var(--qp-amber)] rounded-md px-3 py-1.5 text-sm font-mono outline-none"
                         />
                       </div>
-                      {!isDopamintConfigured && (
+                      {!isMtpsConfigured && (
                         <div className="text-[11px] text-[var(--qp-ink-soft)] text-center leading-relaxed">
                           ${Number(g.stake).toLocaleString()} buy-in ≈{" "}
                           <span className="font-mono text-emerald-600 font-bold">

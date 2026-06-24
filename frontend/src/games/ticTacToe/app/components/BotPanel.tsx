@@ -6,7 +6,7 @@ import {
   buildFundTx,
   FUND_PER_BOT_MIST,
 } from "@/games/ticTacToe/app/lib/bots";
-import { isDopamintConfigured } from "@/onchain/dopamint";
+import { isMtpsConfigured } from "@/onchain/mtps";
 
 function short(addr: string) {
   return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
@@ -102,8 +102,8 @@ export function BotPanel({
         >
           {short(address)}
         </span>
-        {/* DOPAMINT mode: bots play free (sponsored gas + faucet stake) — hide the SUI balance. */}
-        {!isDopamintConfigured && (
+        {/* MTPS mode: bots play free (sponsored gas + faucet stake) — hide the SUI balance. */}
+        {!isMtpsConfigured && (
           <span
             className={`text-primary font-bold tabular-nums bg-tertiary-container/20 rounded-lg ${isPortrait ? "px-2 py-1 text-xs" : "px-4 py-2 text-2xl"}`}
           >
@@ -136,9 +136,9 @@ export function BotPanel({
       </div>
 
       <div className={`flex flex-col mt-4 ${isPortrait ? "gap-3" : "gap-6"}`}>
-        {/* DOPAMINT mode: bots play free (sponsored gas + faucet stake), so SUI-gas funding —
+        {/* MTPS mode: bots play free (sponsored gas + faucet stake), so SUI-gas funding —
             rebalance + wallet-fund — is unnecessary; hide it. Connect/login stays for PvP. */}
-        {!isDopamintConfigured && (bots.x > 0n || bots.o > 0n) && (
+        {!isMtpsConfigured && (bots.x > 0n || bots.o > 0n) && (
           <button
             onClick={onRebalance}
             disabled={rebalancing || locked}
@@ -150,7 +150,7 @@ export function BotPanel({
         )}
 
         {isConnected ? (
-          !isDopamintConfigured && (
+          !isMtpsConfigured && (
             <button
               onClick={fundFromWallet}
               disabled={walletFunding}
@@ -185,8 +185,8 @@ export function BotPanel({
       <div
         className={`flex items-center justify-between font-label-sm border-t-4 border-dashed border-[var(--qp-ink-soft)]/40 mt-4 ${isPortrait ? "text-sm pt-3" : "text-2xl pt-6"}`}
       >
-        {/* The SUI testnet faucet is irrelevant in DOPAMINT mode (the stake is faucet-minted). */}
-        {!isDopamintConfigured ? (
+        {/* The SUI testnet faucet is irrelevant in MTPS mode (the stake is faucet-minted). */}
+        {!isMtpsConfigured ? (
           <button
             onClick={onFund}
             disabled={funding}

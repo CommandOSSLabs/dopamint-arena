@@ -139,7 +139,10 @@ export class UnavailableQuantumPokerResultProver
 {
   readonly circuitName = QUANTUM_POKER_RESULT_CIRCUIT_NAME;
 
-  async prove(): Promise<Uint8Array> {
+  async prove(
+    _statement: QuantumPokerResultStatement,
+    _witness: QuantumPokerResultWitness,
+  ): Promise<Uint8Array> {
     throw new Error(
       "quantum_poker_result Groth16 proving requires compiled circuit artifacts " +
         "and a trusted setup. This milestone ships public-input encoding and the " +

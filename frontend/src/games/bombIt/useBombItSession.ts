@@ -11,7 +11,9 @@ import type { BombItMove, BombItAction } from "sui-tunnel-ts/protocol/bombIt";
 import {
   MultiGameBombItProtocol,
   type MultiGameBombItState,
+  type MultiGameBombItMove,
 } from "sui-tunnel-ts/protocol/multiGameBombIt";
+import type { Party } from "sui-tunnel-ts/protocol/Protocol";
 import { Transcript } from "sui-tunnel-ts/proof/transcript";
 import { registerWindowDisposer } from "@/lib/windowSessions";
 import { useTelemetry } from "../../telemetry/TelemetryProvider";
@@ -29,9 +31,9 @@ import {
 import { useSponsoredSignExec } from "../../onchain/useSponsoredSignExec";
 import { withSponsorFallback } from "../../onchain/sponsor";
 import {
-  DOPAMINT_COIN_TYPE,
-  isDopamintConfigured,
-} from "../../onchain/dopamint";
+  MTPS_COIN_TYPE,
+  isMtpsConfigured,
+} from "../../onchain/mtps";
 import {
   deriveMultiView,
   kickoffNextGame,
@@ -42,6 +44,8 @@ import {
   type BombItView,
   type BombItResult,
 } from "./session-core";
+import { createBombItKit } from "@/agent/games/bombIt/kit";
+import type { GameBot } from "@/agent/gameKit";
 
 /**
  * Bomb It paces by mode. AUTOPILOT (the default + the throughput benchmark) batches many co-signed
@@ -59,9 +63,9 @@ const BOMB_REMATCH_MS = 700;
 const FRAME_BUDGET_MS = 10;
 const MAX_STEPS_PER_FRAME = 8;
 
-/** DOPAMINT bank locked per seat (1 DOPAMINT, 9 decimals) — funds MANY per-game stakes. */
+/** MTPS bank locked per seat (1 MTPS, 9 decimals) — funds MANY per-game stakes. */
 const LOCKED_PER_SEAT = 1_000_000_000n;
-/** SUI-fallback bank per seat (MIST), when the DOPAMINT env is unset. */
+/** SUI-fallback bank per seat (MIST), when the MTPS env is unset. */
 const SUI_PER_SEAT = 500n;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -92,6 +96,10 @@ export interface BombItSession {
   toggleAuto: () => void;
   /** Settle + close the tunnel NOW at the current co-signed state — cash out anytime. */
   settleNow: () => void;
+  /** Freeze the self-play loop in place (cabinet hover). No-op unless mid-play. */
+  pause: () => void;
+  /** Unfreeze and re-kick the loop (cabinet un-hover). No-op unless paused. */
+  resume: () => void;
 }
 
 /** You always sit in seat A for a solo match; seat B is the bot opponent. */
@@ -107,7 +115,7 @@ interface BombDeps {
   sponsoredSignExec: (tx: never) => Promise<{ digest: string }>;
   /** Pick a user coin to fund the (both-seat) bank; gas is sponsored, the stake is not. */
   selectStakeCoin: (minAmount: bigint) => Promise<string>;
-  /** DOPAMINT stake: faucet (invisibly, sponsored) if short, then return a stake coin id. */
+  /** MTPS stake: faucet (invisibly, sponsored) if short, then return a stake coin id. */
   prepareStake: (minAmount: bigint) => Promise<string>;
 }
 
@@ -153,6 +161,12 @@ class BombBotSession {
 
   private tunnel: OffchainTunnel<MultiGameBombItState, BombItMove> | null = null;
   private protocol: MultiGameBombItProtocol | null = null;
+  // The seat bots that pick auto moves, built from the canonical kit so the in-game move
+  // source matches the agent harness (kit = single source of bot behavior).
+  private bots: Record<
+    Party,
+    GameBot<MultiGameBombItState, MultiGameBombItMove>
+  > | null = null;
   // One tunnel hosts many duels; settlement is player-driven. `settleRequested`
   // stops the auto-rematch loop, `score`/`lastScoredGames` track the running tally.
   private settleRequested = false;
@@ -165,6 +179,9 @@ class BombBotSession {
   private transcript: Transcript | null = null;
   private onChain = false;
   private advancing = false;
+  // Cabinet hover-freeze: when true the advance loop returns at the top of its
+  // next iteration (freeze in place); resume() clears it and re-kicks the loop.
+  private paused = false;
   // Guards re-entry: a session that has begun a duel can't be restarted (only
   // reset()/Play Again returns it to idle). Stops StrictMode / double-click dupes.
   private starting = false;
@@ -222,6 +239,7 @@ class BombBotSession {
     this.settleRequested = false;
     this.tunnel = null;
     this.protocol = null;
+    this.bots = null;
     this.transcript = null;
     this.session = null;
     this.score = { you: 0, foe: 0 };
@@ -243,6 +261,7 @@ class BombBotSession {
     this.deps?.report.setActive(0);
     this.tunnel = null;
     this.protocol = null;
+    this.bots = null;
     this.transcript = null;
     this.session = null;
     this.listeners.clear();
@@ -311,8 +330,10 @@ class BombBotSession {
     const myGen = this.gen;
     const tunnel = this.tunnel;
     const protocol = this.protocol;
+    const bots = this.bots;
     try {
-      while (tunnel && protocol) {
+      while (tunnel && protocol && bots) {
+        if (this.paused) return; // hover-freeze: stop here; resume() re-kicks
         let boundary: StepOutcome = "stepped";
         if (this.auto) {
           // Throughput benchmark: co-sign as many ticks as fit the frame budget, then yield once.
@@ -320,7 +341,7 @@ class BombBotSession {
           // keeps TPS high without pegging the CPU (same as chicken-cross / battleship).
           const deadline = performance.now() + FRAME_BUDGET_MS;
           for (let n = 0; n < MAX_STEPS_PER_FRAME; n++) {
-            boundary = stepMultiGame(protocol, tunnel, Math.random, null);
+            boundary = stepMultiGame(protocol, tunnel, bots, null);
             if (boundary !== "stepped") break;
             this.moveCount += 1;
             this.actions += 1;
@@ -336,7 +357,7 @@ class BombBotSession {
               return a;
             },
           };
-          boundary = stepMultiGame(protocol, tunnel, Math.random, human);
+          boundary = stepMultiGame(protocol, tunnel, bots, human);
           if (boundary === "stepped") {
             this.moveCount += 1;
             this.actions += 1;
@@ -374,7 +395,7 @@ class BombBotSession {
     const deps = this.deps;
     if (!deps) return;
     // Solo play is on-chain only: a connected wallet funds + settles the self-play
-    // tunnel (gas sponsored, DOPAMINT stake). No wallet → require connect, not a demo.
+    // tunnel (gas sponsored, MTPS stake). No wallet → require connect, not a demo.
     if (!deps.account) {
       this.error = "connect a wallet to stake the tunnel";
       this.status = "error";
@@ -392,6 +413,7 @@ class BombBotSession {
     this.lastScoredGames = -1;
     this.txnId = 0;
     this.pendingAction = undefined;
+    this.paused = false;
 
     // Per-game stake from the lobby (the small swap), floored at BOMB_IT_MIN_STAKE.
     const floored = Math.floor(nextStake);
@@ -408,7 +430,7 @@ class BombBotSession {
       try {
         // The LARGE bank funded on-chain per seat (vs the small per-game stake). Multi-game
         // swaps `stakePerGame` per duel off this bank, so it survives MANY duels (not one).
-        const fundedPerSeat = isDopamintConfigured
+        const fundedPerSeat = isMtpsConfigured
           ? LOCKED_PER_SEAT
           : SUI_PER_SEAT;
 
@@ -418,10 +440,10 @@ class BombBotSession {
         this.setStatus("funding");
         const partyA = { address: a.address, publicKey: a.keyPair.publicKey };
         const partyB = { address: b.address, publicKey: b.keyPair.publicKey };
-        // DOPAMINT (ADR-0010): faucet both seats' bank invisibly (gas-sponsored) and stake
-        // DOPAMINT — free for a 0-SUI player. SUI path (DOPAMINT env unset): sponsored SUI
+        // MTPS (ADR-0010): faucet both seats' bank invisibly (gas-sponsored) and stake
+        // MTPS — free for a 0-SUI player. SUI path (MTPS env unset): sponsored SUI
         // stake with a sender-pays fallback (ADR-0009).
-        const tunnelId = isDopamintConfigured
+        const tunnelId = isMtpsConfigured
           ? await openAndFundSelfPlay({
               reads,
               signExec: deps.sponsoredSignExec as never,
@@ -429,7 +451,7 @@ class BombBotSession {
               partyB,
               aAmount: fundedPerSeat,
               bAmount: fundedPerSeat,
-              coinType: DOPAMINT_COIN_TYPE,
+              coinType: MTPS_COIN_TYPE,
               stakeCoinId: await deps.prepareStake(2n * fundedPerSeat),
             })
           : await withSponsorFallback(
@@ -459,6 +481,18 @@ class BombBotSession {
         // Multi-game: many duels on one funded tunnel; the player settles once. The per-game
         // stake is the SMALL swap, the funded bank above is what survives across duels.
         const protocol = new MultiGameBombItProtocol(tunnelId, stakePerGame);
+        // Auto moves come from the canonical kit bot — the same move source the agent harness
+        // uses — so the kit is the single source of bot behavior. Built with the SAME per-game
+        // stake as the tunnel's protocol (so the bot's fund/terminal checks match) and live
+        // per-seat RNG, preserving the prior Math.random self-play.
+        const kit = createBombItKit(stakePerGame);
+        const bots: Record<
+          Party,
+          GameBot<MultiGameBombItState, MultiGameBombItMove>
+        > = {
+          A: kit.createBot("A", { rngForSeat: () => Math.random }),
+          B: kit.createBot("B", { rngForSeat: () => Math.random }),
+        };
         const tunnel = OffchainTunnel.selfPlay(
           protocol,
           tunnelId,
@@ -488,6 +522,7 @@ class BombBotSession {
 
         this.tunnel = tunnel;
         this.protocol = protocol;
+        this.bots = bots;
         this.transcript = transcript;
         this.tunnelId = tunnelId;
         this.createdAt = createdAt;
@@ -553,17 +588,17 @@ class BombBotSession {
         transcript ? transcript.root() : new Uint8Array(32),
         0n,
       );
-      const coinType = isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined;
-      // DOPAMINT path closes via the gas sponsor too (so a 0-SUI player can close their
+      const coinType = isMtpsConfigured ? MTPS_COIN_TYPE : undefined;
+      // MTPS path closes via the gas sponsor too (so a 0-SUI player can close their
       // bot game for free); SUI path closes sender-pays. coinType must match the tunnel's coin.
       await settleViaBackend({
         tunnelId: this.tunnelId,
         settlement,
-        transcript: transcript ? transcript.toRecord().entries : [],
+        transcript: transcript ? transcript.rawEntries() : [],
         label: "bombIt",
         fallbackClose: () =>
           closeCooperativeWithRoot({
-            signExec: (isDopamintConfigured
+            signExec: (isMtpsConfigured
               ? deps.sponsoredSignExec
               : deps.signExec) as never,
             tunnelId: this.tunnelId,
@@ -587,6 +622,17 @@ class BombBotSession {
     this.emit();
     // Turning autopilot on while a duel is live: kick the driver so it steers / loops.
     if (this.auto && this.status === "playing") void this.advance();
+  };
+
+  pause = () => {
+    if (this.status !== "playing") return;
+    this.paused = true;
+  };
+
+  resume = () => {
+    if (!this.paused) return;
+    this.paused = false;
+    if (this.status === "playing") void this.advance();
   };
 
   /** Settle + close the tunnel NOW at the current co-signed state — cash out anytime,
@@ -654,5 +700,7 @@ export function useBombItSession(windowId: string): BombItSession {
     queueAction: session.queueAction,
     toggleAuto: session.toggleAuto,
     settleNow: session.settleNow,
+    pause: session.pause,
+    resume: session.resume,
   };
 }

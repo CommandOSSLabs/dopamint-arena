@@ -96,8 +96,8 @@ hover → pause → "Play vs Bot" UX for free, the game opts into the shared cab
 drive auto from your kit (step 3 already does), expose `pause`/`resume` + a manual
 mode on the hook, and register a `CabinetController` in your App
 (`useRegisterCabinet`). The `GameCabinet` wrap in `Desktop` is automatic; a game
-that registers nothing stays inert. Reference: tic-tac-toe's `App.tsx` /
-`useBotGame.ts`; design in
+that registers nothing stays inert. Cabinet adopters: tic-tac-toe, bomb-it,
+chicken-cross. Reference: tic-tac-toe's `App.tsx` / `useBotGame.ts`; design in
 [superpowers/specs/2026-06-23-arena-attract-takeover-shell-design.md](superpowers/specs/2026-06-23-arena-attract-takeover-shell-design.md),
 decision in [decisions/0012-arena-attract-cabinet-seam.md](decisions/0012-arena-attract-cabinet-seam.md).
 
@@ -153,6 +153,32 @@ cd frontend && pnpm build      # tsc + vite; a passing build confirms single reg
 ```
 
 The on-chain self-play/PvP flow needs a wallet + the `sui_tunnel` package deployed at `VITE_TUNNEL_PACKAGE_ID` (grep `VITE_TUNNEL_PACKAGE_ID`) — test it manually in `pnpm dev`; headless tools cannot pass the wallet gate.
+
+## Deployment: relay session stickiness (local-first pairing)
+
+The relay sets `Set-Cookie: aff=<instance_id>` on the `/v1/mp` WebSocket handshake.
+For co-location to survive reconnects, the load balancer MUST be configured for
+cookie-based session affinity on `/v1/mp`, honoring the `aff` cookie (or its own
+stickiness cookie). Without it, reconnects are routed round-robin and co-located
+matches degrade to split (still correct, over the Redis fallback). Cross-origin
+deployments also need `SameSite=None; Secure` on the cookie.
+
+### Verifying stickiness locally
+
+`backend/tunnel-manager/smoke/` holds a self-contained harness that stands in for the
+production load balancer: `docker-compose.affinity-smoke.yml` runs Redis + two relay
+instances (`INSTANCE_ID=inst-a`/`inst-b`) behind haproxy configured for `aff`-cookie
+affinity (`haproxy.cfg`). Run it with:
+
+```bash
+backend/tunnel-manager/smoke/affinity-smoke.sh
+```
+
+The script (Docker required) brings the harness up, then asserts: a reconnect carrying
+`aff=<instance>` is pinned to that instance across repeated handshakes, while cookieless
+traffic load-balances across both. It exits non-zero on any failure and tears the harness
+down on exit. This validates the LB-honors-`aff` path; AWS ALB uses its own stickiness
+cookie, so re-verify affinity there after deploy.
 
 ## Anti-patterns
 
