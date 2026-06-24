@@ -11,7 +11,9 @@ import type { BombItMove, BombItAction } from "sui-tunnel-ts/protocol/bombIt";
 import {
   MultiGameBombItProtocol,
   type MultiGameBombItState,
+  type MultiGameBombItMove,
 } from "sui-tunnel-ts/protocol/multiGameBombIt";
+import type { Party } from "sui-tunnel-ts/protocol/Protocol";
 import { Transcript } from "sui-tunnel-ts/proof/transcript";
 import { registerWindowDisposer } from "@/lib/windowSessions";
 import { useTelemetry } from "../../telemetry/TelemetryProvider";
@@ -42,6 +44,8 @@ import {
   type BombItView,
   type BombItResult,
 } from "./session-core";
+import { createBombItKit } from "@/agent/games/bombIt/kit";
+import type { GameBot } from "@/agent/gameKit";
 
 /**
  * Bomb It paces by mode. AUTOPILOT (the default + the throughput benchmark) batches many co-signed
@@ -157,6 +161,12 @@ class BombBotSession {
 
   private tunnel: OffchainTunnel<MultiGameBombItState, BombItMove> | null = null;
   private protocol: MultiGameBombItProtocol | null = null;
+  // The seat bots that pick auto moves, built from the canonical kit so the in-game move
+  // source matches the agent harness (kit = single source of bot behavior).
+  private bots: Record<
+    Party,
+    GameBot<MultiGameBombItState, MultiGameBombItMove>
+  > | null = null;
   // One tunnel hosts many duels; settlement is player-driven. `settleRequested`
   // stops the auto-rematch loop, `score`/`lastScoredGames` track the running tally.
   private settleRequested = false;
@@ -229,6 +239,7 @@ class BombBotSession {
     this.settleRequested = false;
     this.tunnel = null;
     this.protocol = null;
+    this.bots = null;
     this.transcript = null;
     this.session = null;
     this.score = { you: 0, foe: 0 };
@@ -250,6 +261,7 @@ class BombBotSession {
     this.deps?.report.setActive(0);
     this.tunnel = null;
     this.protocol = null;
+    this.bots = null;
     this.transcript = null;
     this.session = null;
     this.listeners.clear();
@@ -318,8 +330,9 @@ class BombBotSession {
     const myGen = this.gen;
     const tunnel = this.tunnel;
     const protocol = this.protocol;
+    const bots = this.bots;
     try {
-      while (tunnel && protocol) {
+      while (tunnel && protocol && bots) {
         if (this.paused) return; // hover-freeze: stop here; resume() re-kicks
         let boundary: StepOutcome = "stepped";
         if (this.auto) {
@@ -328,7 +341,7 @@ class BombBotSession {
           // keeps TPS high without pegging the CPU (same as chicken-cross / battleship).
           const deadline = performance.now() + FRAME_BUDGET_MS;
           for (let n = 0; n < MAX_STEPS_PER_FRAME; n++) {
-            boundary = stepMultiGame(protocol, tunnel, Math.random, null);
+            boundary = stepMultiGame(protocol, tunnel, bots, null);
             if (boundary !== "stepped") break;
             this.moveCount += 1;
             this.actions += 1;
@@ -344,7 +357,7 @@ class BombBotSession {
               return a;
             },
           };
-          boundary = stepMultiGame(protocol, tunnel, Math.random, human);
+          boundary = stepMultiGame(protocol, tunnel, bots, human);
           if (boundary === "stepped") {
             this.moveCount += 1;
             this.actions += 1;
@@ -468,6 +481,18 @@ class BombBotSession {
         // Multi-game: many duels on one funded tunnel; the player settles once. The per-game
         // stake is the SMALL swap, the funded bank above is what survives across duels.
         const protocol = new MultiGameBombItProtocol(tunnelId, stakePerGame);
+        // Auto moves come from the canonical kit bot — the same move source the agent harness
+        // uses — so the kit is the single source of bot behavior. Built with the SAME per-game
+        // stake as the tunnel's protocol (so the bot's fund/terminal checks match) and live
+        // per-seat RNG, preserving the prior Math.random self-play.
+        const kit = createBombItKit(stakePerGame);
+        const bots: Record<
+          Party,
+          GameBot<MultiGameBombItState, MultiGameBombItMove>
+        > = {
+          A: kit.createBot("A", { rngForSeat: () => Math.random }),
+          B: kit.createBot("B", { rngForSeat: () => Math.random }),
+        };
         const tunnel = OffchainTunnel.selfPlay(
           protocol,
           tunnelId,
@@ -497,6 +522,7 @@ class BombBotSession {
 
         this.tunnel = tunnel;
         this.protocol = protocol;
+        this.bots = bots;
         this.transcript = transcript;
         this.tunnelId = tunnelId;
         this.createdAt = createdAt;
