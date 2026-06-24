@@ -25,23 +25,17 @@ import {
   type TelemetryWriter,
 } from "@/telemetry/TelemetryProvider";
 import {
-  DEPOSIT_A_MIST,
-  DEPOSIT_B_MIST,
+  DEPOSIT_A,
+  DEPOSIT_B,
   MAX_CONCURRENT_RUNNING,
   MINT_COOLDOWN_MS,
-  MICRO_UNIT_MIST,
+  MICRO_UNIT,
   STREAM_DURATION_MS,
   TICK_COUNT,
-  mistToSui,
 } from "./constants";
 import { openPaymentTunnel } from "./openPaymentTunnel";
 import { settlePaymentTunnel, type PaymentTunnel } from "./paymentSettle";
-import type {
-  MachinePhase,
-  MachineSessionView,
-  MicroPaymentTick,
-  NftTier,
-} from "./types";
+import type { MachinePhase, MachineSessionView, NftTier } from "./types";
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -51,6 +45,9 @@ function isRunningPhase(phase: MachinePhase): boolean {
 
 /** Co-sign micro-payments in bursts, then yield one frame — keeps card counters smooth. */
 const FRAME_BUDGET_MS = 8;
+
+/** UI refresh while any card is streaming — decoupled from per-machine burst cadence. */
+const TPS_DISPLAY_REFRESH_MS = 100;
 
 type ShopDeps = {
   report: TelemetryWriter;
@@ -77,9 +74,7 @@ class MachineRuntime {
   phase: MachinePhase = "spawning";
   error: string | null = null;
   tickCount = 0;
-  tps = 0;
   tier: NftTier = "unknown";
-  history: MicroPaymentTick[] = [];
   private tickTimes: number[] = [];
 
   private gen = 0;
@@ -100,20 +95,27 @@ class MachineRuntime {
     this.label = label;
   }
 
+  /** Rolling 1 s window — recomputed on read so the UI stays fresh between stream bursts. */
+  private readTps(): number {
+    if (this.phase !== "running") return 0;
+    const now = performance.now();
+    const cutoff = now - 1000;
+    while (this.tickTimes.length > 0 && this.tickTimes[0] < cutoff) {
+      this.tickTimes.shift();
+    }
+    return this.tickTimes.length;
+  }
+
   toView(): MachineSessionView {
-    const spentMist = BigInt(this.tickCount) * MICRO_UNIT_MIST;
     return {
       id: this.id,
       label: this.label,
       phase: this.phase,
       error: this.error,
-      usageSpent: mistToSui(spentMist),
-      priceTarget: mistToSui(DEPOSIT_A_MIST),
-      microUnit: mistToSui(MICRO_UNIT_MIST),
       tickCount: this.tickCount,
-      tps: this.tps,
+      tickMax: TICK_COUNT,
+      tps: this.readTps(),
       tier: this.tier,
-      history: this.history,
     };
   }
 
@@ -169,7 +171,7 @@ class MachineRuntime {
         shop.keyPair,
         user.address,
         shop.address,
-        { a: DEPOSIT_A_MIST, b: DEPOSIT_B_MIST },
+        { a: DEPOSIT_A, b: DEPOSIT_B },
       );
       const transcript = new Transcript(tunnelId);
       tunnel.onUpdate = (u, bytes) => {
@@ -280,7 +282,7 @@ class MachineRuntime {
       const frameDeadline = performance.now() + FRAME_BUDGET_MS;
       while (this.tickCount < TICK_COUNT && performance.now() < frameDeadline) {
         const r = tunnel.step(
-          { from: "A", amount: MICRO_UNIT_MIST } satisfies PaymentMove,
+          { from: "A", amount: MICRO_UNIT } satisfies PaymentMove,
           "A",
           { timestamp: this.ts++ },
         );
@@ -289,11 +291,6 @@ class MachineRuntime {
 
         this.tickCount += 1;
         this.recordTps();
-        this.history.push({
-          index: this.tickCount,
-          amount: mistToSui(MICRO_UNIT_MIST),
-          at: Date.now(),
-        });
       }
 
       this.flushHeartbeat(false);
@@ -318,13 +315,7 @@ class MachineRuntime {
   }
 
   private recordTps() {
-    const now = performance.now();
-    this.tickTimes.push(now);
-    const cutoff = now - 1000;
-    while (this.tickTimes.length > 0 && this.tickTimes[0] < cutoff) {
-      this.tickTimes.shift();
-    }
-    this.tps = this.tickTimes.length;
+    this.tickTimes.push(performance.now());
   }
 
   private flushHeartbeat(force: boolean) {
@@ -367,6 +358,7 @@ class PaymentShopController {
   private snap: Snap = { machines: [] };
   private lastActiveReported = -1;
   private lastSpawnAt = 0;
+  private displayRefreshId: ReturnType<typeof setInterval> | null = null;
   deps: ShopDeps | null = null;
 
   subscribe = (cb: () => void) => {
@@ -385,10 +377,29 @@ class PaymentShopController {
       this.deps?.report.setActive(active);
       this.lastActiveReported = active;
     }
+    this.syncDisplayRefresh();
     for (const l of this.listeners) l();
   }
 
+  /** Keep TPS readouts ticking while cards stream — auto mode starves burst-driven emits. */
+  private syncDisplayRefresh() {
+    const streaming = this.machines.some((m) => m.phase === "running");
+    if (streaming && !this.displayRefreshId) {
+      this.displayRefreshId = setInterval(
+        () => this.emit(),
+        TPS_DISPLAY_REFRESH_MS,
+      );
+    } else if (!streaming && this.displayRefreshId) {
+      clearInterval(this.displayRefreshId);
+      this.displayRefreshId = null;
+    }
+  }
+
   dispose() {
+    if (this.displayRefreshId) {
+      clearInterval(this.displayRefreshId);
+      this.displayRefreshId = null;
+    }
     for (const m of this.machines) m.dispose();
     this.machines = [];
     this.listeners.clear();

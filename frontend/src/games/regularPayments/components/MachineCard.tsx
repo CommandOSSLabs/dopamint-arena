@@ -1,3 +1,4 @@
+import { MINT_DURATION_MS } from "../constants";
 import { SKETCH_INK } from "../sketchInk";
 import type { MachinePhase, MachineSessionView, NftTier } from "../types";
 
@@ -69,11 +70,6 @@ const TIER_TEXT: Record<NftTier, string> = {
   epic: "text-[#e8920c]",
 };
 
-function formatAmount(n: number): string {
-  const decimals = n > 0 && n < 0.001 ? 4 : 3;
-  return n.toFixed(decimals);
-}
-
 function formatTps(n: number): string {
   if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
   return String(Math.round(n));
@@ -98,29 +94,12 @@ function prizeHint(phase: MachinePhase, error?: string | null): string {
 
 export type MachineCardProps = {
   session: MachineSessionView;
-  paymentsOpen: boolean;
-  onPaymentsToggle: () => void;
 };
 
-export function MachineCard({
-  session,
-  paymentsOpen,
-  onPaymentsToggle,
-}: MachineCardProps) {
-  const {
-    phase,
-    error,
-    usageSpent,
-    priceTarget,
-    microUnit,
-    tickCount,
-    tps,
-    tier,
-    history,
-  } = session;
+export function MachineCard({ session }: MachineCardProps) {
+  const { phase, error, tickCount, tickMax, tps, tier } = session;
 
-  const pct =
-    priceTarget > 0 ? Math.min(100, (usageSpent / priceTarget) * 100) : 0;
+  const pct = tickMax > 0 ? Math.min(100, (tickCount / tickMax) * 100) : 0;
   const showTier = phase === "settling" || phase === "closed";
   const displayTier = showTier ? tier : "unknown";
   const isStreaming = phase === "running";
@@ -185,10 +164,10 @@ export function MachineCard({
       <div className="mb-2">
         <div className="mb-1 flex items-baseline justify-between gap-1">
           <span className="text-[clamp(9px,2.4cqmin,13px)] font-bold tracking-wide text-[rgba(35,34,31,0.6)] uppercase">
-            Usage
+            Progress
           </span>
           <span className="font-['Space_Mono',_ui-monospace,_monospace] text-[clamp(9px,2.5cqmin,14px)] font-bold">
-            {formatAmount(usageSpent)}/{formatAmount(priceTarget)}
+            {tickCount}/{tickMax}
           </span>
         </div>
 
@@ -215,7 +194,7 @@ export function MachineCard({
           [
             ["Ticks", String(tickCount)],
             ["TPS", phase === "running" ? formatTps(tps) : "—"],
-            ["Unit", formatAmount(microUnit)],
+            ["Mint", `${MINT_DURATION_MS / 1000}s`],
           ] as const
         ).map(([label, value]) => (
           <div
@@ -238,63 +217,6 @@ export function MachineCard({
             </span>
           </div>
         ))}
-      </div>
-
-      <button
-        type="button"
-        aria-expanded={paymentsOpen}
-        className="relative isolate inline-flex w-full cursor-pointer items-center justify-between text-[clamp(10px,2.6cqmin,15px)] leading-none px-[clamp(8px,2.2cqmin,14px)] py-[clamp(4px,1.4cqmin,9px)] transition-transform hover:-translate-y-px hover:-rotate-[0.4deg] active:translate-y-px"
-        onClick={onPaymentsToggle}
-      >
-        <span
-          className={`${SKETCH_INK} -z-10 rounded-[9px]`}
-          style={{
-            backgroundColor: "#fffefb",
-            borderColor: "#23221f",
-            borderWidth: 2.5,
-          }}
-        />
-        <span className="truncate">
-          Payments{history.length > 0 ? ` (${history.length})` : ""}
-        </span>
-        <span
-          className={`shrink-0 text-[0.85em] transition-transform duration-200 ${paymentsOpen ? "rotate-180" : ""}`}
-        >
-          ▼
-        </span>
-      </button>
-
-      <div
-        className={`grid transition-[grid-template-rows] duration-250 ease-out ${
-          paymentsOpen ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
-        }`}
-      >
-        <div className="min-h-0 overflow-hidden">
-          <div className="relative isolate mt-1.5 max-h-[clamp(4.5rem,18cqmin,7rem)] overflow-y-auto rounded-lg px-[clamp(6px,1.8cqmin,12px)] py-[clamp(4px,1.4cqmin,10px)] border-[2.5px] border-[#23221f]">
-            <span className={`${SKETCH_INK} -z-10 rounded-lg bg-[#fffefb]`} />
-            <ul>
-              {history.length === 0 ? (
-                <li className="font-['Space_Mono',_ui-monospace,_monospace] text-[clamp(9px,2.4cqmin,13px)] text-[rgba(35,34,31,0.6)]">
-                  No ticks yet
-                </li>
-              ) : (
-                [...history].reverse().map((tick) => (
-                  <li
-                    key={`${session.id}-${tick.index}`}
-                    className="flex items-center justify-between gap-2 border-b border-dashed border-[rgba(35,34,31,0.12)] py-0.5 font-['Space_Mono',_ui-monospace,_monospace] text-[clamp(9px,2.4cqmin,13px)] last:border-b-0"
-                  >
-                  <span className="text-[rgba(35,34,31,0.6)]">
-                    #{tick.index}
-                  </span>
-                  <span className="text-[#e03131]">
-                    −{formatAmount(tick.amount)}
-                  </span>
-                </li>
-                ))
-              )}
-            </ul>
-          </div>
-        </div>
       </div>
     </article>
   );

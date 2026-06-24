@@ -11,9 +11,9 @@ import {
   type SuiReads,
 } from "@/onchain/tunnelTx";
 import {
-  DEPOSIT_A_MIST,
-  DEPOSIT_B_MIST,
-  OPEN_TOTAL_MIST,
+  DEPOSIT_A,
+  DEPOSIT_B,
+  OPEN_TOTAL,
   PAYMENT_SHOP_STAKE_SUI,
 } from "./constants";
 
@@ -39,12 +39,12 @@ export async function openPaymentTunnel(
     reads: deps.reads,
     partyA,
     partyB,
-    aAmount: DEPOSIT_A_MIST,
-    bAmount: DEPOSIT_B_MIST,
+    aAmount: DEPOSIT_A,
+    bAmount: DEPOSIT_B,
   };
 
   if (isMtpsConfigured) {
-    if (isMtpsAddressBalance) await deps.ensureStakeBalance(OPEN_TOTAL_MIST);
+    if (isMtpsAddressBalance) await deps.ensureStakeBalance(OPEN_TOTAL);
     return openAndFundSelfPlay({
       ...base,
       signExec: deps.sponsoredSignExec,
@@ -52,11 +52,11 @@ export async function openPaymentTunnel(
       ...(isMtpsAddressBalance
         ? {
             stakeFromBalance: {
-              amount: OPEN_TOTAL_MIST,
+              amount: OPEN_TOTAL,
               coinType: MTPS_COIN_TYPE,
             },
           }
-        : { stakeCoinId: await deps.prepareStake(OPEN_TOTAL_MIST) }),
+        : { stakeCoinId: await deps.prepareStake(OPEN_TOTAL) }),
     });
   }
 
@@ -71,7 +71,7 @@ export async function openPaymentTunnel(
 
   return withSponsorFallback(
     async () => {
-      const stakeCoinId = await deps.selectStakeCoin(OPEN_TOTAL_MIST);
+      const stakeCoinId = await deps.selectStakeCoin(OPEN_TOTAL);
       return openAndFundSelfPlay({
         ...base,
         signExec: deps.sponsoredSignExec,

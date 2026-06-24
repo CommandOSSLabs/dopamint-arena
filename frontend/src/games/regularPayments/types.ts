@@ -7,22 +7,13 @@ export type MachinePhase =
 
 export type NftTier = "common" | "rare" | "epic" | "unknown";
 
-export type MicroPaymentTick = {
-  index: number;
-  amount: number;
-  at: number;
-};
-
 export type MachineSessionView = {
   id: string;
   label: string;
   phase: MachinePhase;
   error?: string | null;
-  usageSpent: number;
-  priceTarget: number;
-  microUnit: number;
   tickCount: number;
+  tickMax: number;
   tps: number;
   tier: NftTier;
-  history: MicroPaymentTick[];
 };

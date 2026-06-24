@@ -26,10 +26,8 @@ export function PaymentsWindow({ windowId }: GameWindowProps) {
   const [entered, setEntered] = useState(false);
   const [filter, setFilter] = useState<Filter>("all");
   const [autoMintEnabled, setAutoMintEnabled] = useState(true);
-  const [expandedPayments, setExpandedPayments] = useState<Set<string>>(
-    () => new Set(),
-  );
   const [mintClickLocked, setMintClickLocked] = useState(false);
+
   const mintClickLockedRef = useRef(false);
   const mintCooldownTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
@@ -75,15 +73,6 @@ export function PaymentsWindow({ windowId }: GameWindowProps) {
     setAutoMintEnabled((on) => !on);
   }, []);
 
-  const togglePayments = useCallback((machineId: string) => {
-    setExpandedPayments((prev) => {
-      const next = new Set(prev);
-      if (next.has(machineId)) next.delete(machineId);
-      else next.add(machineId);
-      return next;
-    });
-  }, []);
-
   const visible = useMemo(
     () => machines.filter((s) => phaseFilter(s.phase, filter)),
     [machines, filter],
@@ -123,9 +112,9 @@ export function PaymentsWindow({ windowId }: GameWindowProps) {
             Regular Payments
           </div>
           <p className="mb-3 text-[clamp(11px,3cqmin,17px)] leading-snug text-[rgba(35,34,31,0.6)]">
-            Open a real tunnel with 0.1 SUI, stream 500 micro-payments at ~80
-            TPS (~6 s), then settle on-chain. NFT mint comes later — for now the
-            shop closes the tunnel when the stream finishes.
+            Deposit 10 MTPS, stream 500 co-signed payments over 5 s, then settle
+            on-chain. NFT mint comes later — for now the shop closes the tunnel
+            when the stream finishes.
           </p>
           <button
             className="relative isolate text-[clamp(11px,3cqmin,18px)] leading-none px-[clamp(8px,2.6cqmin,18px)] py-[clamp(4px,1.4cqmin,9px)] transition-transform hover:-translate-y-px hover:-rotate-[0.4deg] active:translate-y-px"
@@ -247,14 +236,7 @@ export function PaymentsWindow({ windowId }: GameWindowProps) {
               : "No machines in this view."}
           </p>
         ) : (
-          visible.map((s) => (
-            <MachineCard
-              key={s.id}
-              session={s}
-              paymentsOpen={expandedPayments.has(s.id)}
-              onPaymentsToggle={() => togglePayments(s.id)}
-            />
-          ))
+          visible.map((s) => <MachineCard key={s.id} session={s} />)
         )}
       </div>
     </div>
