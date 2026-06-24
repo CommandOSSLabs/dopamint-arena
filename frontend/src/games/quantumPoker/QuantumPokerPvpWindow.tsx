@@ -4,7 +4,8 @@ import type { PokerMove } from "sui-tunnel-ts/protocol/quantumPoker";
 import type { GameWindowProps } from "../types";
 import { HAND_CAP, usePvpQuantumPoker } from "./usePvpQuantumPoker";
 import { POKER_BUYIN } from "./constants";
-import { QuantumPokerTable, SketchDefs, PHASE_LABEL } from "./QuantumPokerTable";
+import { QuantumPokerTable, PHASE_LABEL } from "./QuantumPokerTable";
+import { SketchDefs } from "../sketch";
 import { PokerActionBar } from "./PokerActionBar";
 
 /** Heads-up Quantum Poker vs a real opponent over the relay: matchmaking + co-sign + on-chain stakes,
@@ -22,12 +23,12 @@ export function QuantumPokerPvpWindow({
 
   if (g.status === "idle") {
     return (
-      <div className="qp-sketch grid h-full min-h-[14rem] place-items-center overflow-hidden p-[clamp(12px,4cqmin,28px)] text-center">
+      <div className="sketch grid h-full min-h-[14rem] place-items-center overflow-hidden p-[clamp(12px,4cqmin,28px)] text-center">
         <SketchDefs />
-        <div className="qp-panel qp-stroke max-w-[min(22rem,92%)] p-[clamp(14px,4cqmin,26px)]">
-          <span className="qp-eyebrow">heads-up · no dealer</span>
+        <div className="sketch-panel sketch-stroke max-w-[min(22rem,92%)] p-[clamp(14px,4cqmin,26px)]">
+          <span className="sketch-eyebrow">heads-up · no dealer</span>
           <div className="qp-title mb-1 mt-1">Quantum Poker</div>
-          <p className="qp-note mb-3">
+          <p className="sketch-note mb-3">
             Each seat stakes {POKER_BUYIN.toString()} chips on-chain. The deck is
             dealt by a two-party commit-reveal — no dealer — and chips move
             off-chain over a Sui tunnel for up to {HAND_CAP.toString()} hands,
@@ -36,13 +37,13 @@ export function QuantumPokerPvpWindow({
           <div className="flex flex-wrap justify-center gap-[clamp(6px,2cqmin,12px)]">
             <button
               type="button"
-              className="qp-btn qp-btn--go"
+              className="sketch-btn sketch-btn--go"
               onClick={g.findMatch}
             >
               Find match
             </button>
             {onExit && (
-              <button type="button" className="qp-btn" onClick={onExit}>
+              <button type="button" className="sketch-btn" onClick={onExit}>
                 Back
               </button>
             )}
@@ -54,24 +55,24 @@ export function QuantumPokerPvpWindow({
 
   if (g.status === "matching" || g.status === "funding") {
     return (
-      <div className="qp-sketch grid h-full min-h-[14rem] place-items-center overflow-hidden p-[clamp(12px,4cqmin,28px)] text-center">
+      <div className="sketch grid h-full min-h-[14rem] place-items-center overflow-hidden p-[clamp(12px,4cqmin,28px)] text-center">
         <SketchDefs />
-        <div className="qp-panel qp-stroke max-w-[min(22rem,92%)] p-[clamp(14px,4cqmin,26px)]">
+        <div className="sketch-panel sketch-stroke max-w-[min(22rem,92%)] p-[clamp(14px,4cqmin,26px)]">
           <div className="qp-title mb-1">
             {g.status === "matching" ? "Finding an opponent…" : "Opening tunnel…"}
           </div>
-          <p className="qp-note">
+          <p className="sketch-note">
             {g.status === "matching"
               ? "Matching you with another player."
               : "Funding both stakes on-chain."}
           </p>
           {g.opponentWallet && (
-            <p className="qp-note mt-1 tabular-nums">
+            <p className="sketch-note mt-1 tabular-nums">
               vs {g.opponentWallet.slice(0, 10)}…
             </p>
           )}
           {onExit && (
-            <button type="button" className="qp-btn mt-3" onClick={onExit}>
+            <button type="button" className="sketch-btn mt-3" onClick={onExit}>
               Back
             </button>
           )}
@@ -82,12 +83,12 @@ export function QuantumPokerPvpWindow({
 
   if (g.status === "error") {
     return (
-      <div className="qp-sketch grid h-full min-h-[14rem] place-items-center overflow-hidden p-[clamp(12px,4cqmin,28px)] text-center">
+      <div className="sketch grid h-full min-h-[14rem] place-items-center overflow-hidden p-[clamp(12px,4cqmin,28px)] text-center">
         <SketchDefs />
-        <div className="qp-panel qp-stroke max-w-[min(22rem,92%)] p-[clamp(14px,4cqmin,26px)]">
+        <div className="sketch-panel sketch-stroke max-w-[min(22rem,92%)] p-[clamp(14px,4cqmin,26px)]">
           <div className="qp-title mb-2">Match error</div>
-          <p className="qp-note mb-3 text-[var(--qp-red)]">{g.error}</p>
-          <button type="button" className="qp-btn" onClick={g.reset}>
+          <p className="sketch-note mb-3 text-[var(--sketch-red)]">{g.error}</p>
+          <button type="button" className="sketch-btn" onClick={g.reset}>
             Back
           </button>
         </div>
@@ -144,7 +145,7 @@ export function QuantumPokerPvpWindow({
   };
 
   return (
-    <div className="qp-sketch grid h-full min-h-[14rem] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden">
+    <div className="sketch grid h-full min-h-[14rem] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden">
       <SketchDefs />
 
       <header className="qp-head">
@@ -152,7 +153,7 @@ export function QuantumPokerPvpWindow({
           {onExit && (
             <button
               type="button"
-              className="qp-btn"
+              className="sketch-btn"
               onClick={() => {
                 setLeaving(true);
                 g.backOut(); // auto-fold out → settle this hand → leave when settled
@@ -162,7 +163,7 @@ export function QuantumPokerPvpWindow({
             </button>
           )}
           <div className="flex min-w-0 flex-col leading-none">
-            <span className="qp-eyebrow">
+            <span className="sketch-eyebrow">
               PvP · you are {self}
               {g.status === "settling" && " · settling…"}
               {g.status === "settled" && " · settled ✓"}
@@ -171,13 +172,13 @@ export function QuantumPokerPvpWindow({
           </div>
         </div>
         <div className="flex items-center gap-[clamp(5px,1.8cqmin,12px)]">
-          <span className="qp-eyebrow tabular-nums">
+          <span className="sketch-eyebrow tabular-nums">
             hand {(s.handNo + 1n).toString()}/{HAND_CAP.toString()}
           </span>
           {g.status === "playing" && (
             <button
               type="button"
-              className={`qp-btn${g.auto ? " qp-btn--go" : ""}`}
+              className={`sketch-btn${g.auto ? " sketch-btn--go" : ""}`}
               onClick={() => g.setAuto(!g.auto)}
               title={
                 g.auto
@@ -191,11 +192,11 @@ export function QuantumPokerPvpWindow({
           {g.status === "playing" &&
             !terminal &&
             (g.endRequested ? (
-              <span className="qp-eyebrow whitespace-nowrap">ends after hand</span>
+              <span className="sketch-eyebrow whitespace-nowrap">ends after hand</span>
             ) : (
               <button
                 type="button"
-                className="qp-btn"
+                className="sketch-btn"
                 onClick={g.requestSettle}
                 title="End the match after this hand and settle on-chain at the current stacks"
               >
@@ -221,7 +222,7 @@ export function QuantumPokerPvpWindow({
           <div
             className={`flex flex-col gap-[clamp(4px,1.4cqmin,10px)]${g.auto ? " opacity-40" : ""}`}
           >
-            {g.auto && <span className="qp-note">🤖 Bot is playing your hand</span>}
+            {g.auto && <span className="sketch-note">🤖 Bot is playing your hand</span>}
             <PokerActionBar
               legal={g.legal}
               pot={pot}
@@ -235,7 +236,7 @@ export function QuantumPokerPvpWindow({
             {g.status === "settled" && (
               <button
                 type="button"
-                className="qp-btn qp-btn--go"
+                className="sketch-btn sketch-btn--go"
                 onClick={g.reset}
               >
                 Play again
