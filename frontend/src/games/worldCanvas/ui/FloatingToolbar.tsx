@@ -129,7 +129,7 @@ export function FloatingToolbar({
                 placeItems: "center",
                 cursor: "pointer",
                 border: "none",
-                background: on ? "rgba(97,61,255,0.18)" : "transparent",
+                background: on ? WC.accentFill : "transparent",
               }}
             >
               <span
@@ -158,7 +158,7 @@ function swatchButtonStyle(fill: string, on: boolean): CSSProperties {
     cursor: "pointer",
     padding: 0,
     background: fill,
-    border: "1px solid rgba(218,218,214,0.18)",
+    border: `1px solid ${WC.hairline}`,
     boxShadow: on ? `0 0 0 2px ${WC.accent}` : "none",
   };
 }
@@ -284,7 +284,7 @@ export function AutoToggle({
       <span
         style={{
           ...switchTrackStyle,
-          background: auto ? WC.accent : "rgba(255,255,255,0.18)",
+          background: auto ? WC.accent : WC.track,
         }}
       >
         <span
@@ -477,11 +477,7 @@ function ToolButton({
         cursor: "pointer",
         border: "none",
         color: active ? WC.accent : hover ? WC.text : WC.muted,
-        background: active
-          ? "rgba(97,61,255,0.18)"
-          : hover
-            ? "rgba(255,255,255,0.06)"
-            : "transparent",
+        background: active ? WC.accentFill : hover ? WC.softFill : "transparent",
         transition: "background .1s, color .1s",
       }}
     >
@@ -503,8 +499,8 @@ function Divider() {
   );
 }
 
-/** The faded-frost floating toolbar island (translucent over the dark wall). It never
- *  exceeds the canvas width — groups wrap to extra rows before anything is clipped. */
+/** The faded-frost floating toolbar island (theme-aware glass over the white wall). It
+ *  never exceeds the canvas width — groups wrap to extra rows before anything is clipped. */
 const islandStyle: CSSProperties = {
   position: "absolute",
   top: 14,
@@ -594,7 +590,7 @@ function currentSwatchStyle(
     cursor: "pointer",
     padding: 0,
     background: fill,
-    border: "1px solid rgba(218,218,214,0.22)",
+    border: `1px solid ${WC.hairline}`,
     boxShadow: active
       ? `0 0 0 2px ${WC.accent}`
       : "inset 0 0 0 1.5px rgba(255,255,255,0.32)",
@@ -675,7 +671,7 @@ const switchKnobStyle: CSSProperties = {
   height: 14,
   borderRadius: "50%",
   background: "#fff",
-  boxShadow: "0 1px 3px rgba(0,0,0,0.4)",
+  boxShadow: "0 1px 2px rgba(12,15,29,0.28)",
   transition: "transform .14s",
 };
 
@@ -719,7 +715,7 @@ const pillButtonStyle: CSSProperties = {
   fontSize: 12,
   fontWeight: 700,
   color: WC.text,
-  background: "rgba(255,255,255,0.06)",
+  background: WC.softFill,
 };
 
 /** Bottom-right "most painted" leaderboard card (faded glass, lightweight). */

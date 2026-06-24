@@ -786,7 +786,7 @@ export function WorldCanvas({
             whiteSpace: "nowrap",
             color: WC.text,
             fontFamily: FONT_MONO,
-            background: "rgba(15,17,24,0.92)",
+            background: "color-mix(in srgb, var(--card) 92%, transparent)",
             border: `1px solid ${WC.panelBorder}`,
             boxShadow: WC.glow,
             zIndex: 5,
@@ -824,8 +824,7 @@ function ZoomButton({ label, onClick }: { label: string; onClick: () => void }) 
   return (
     <button
       onClick={onClick}
-      className="flex h-[26px] w-[26px] items-center justify-center rounded-none text-[15px] font-bold leading-none bg-[rgba(255,255,255,0.06)] transition-colors hover:bg-[rgba(97,61,255,0.18)]"
-      style={{ color: WC.text }}
+      className="flex h-[26px] w-[26px] items-center justify-center rounded-none text-[15px] font-bold leading-none text-foreground bg-foreground/5 transition-colors hover:bg-primary/20"
     >
       {label}
     </button>
@@ -887,9 +886,12 @@ function drawAgentMarker(
   ctx.arc(cxs, topYs - 1, 2.6, 0, Math.PI * 2);
   ctx.fill();
 
-  // Label pill — sharp (arena radius 0), card-ink fill.
+  // Label pill — sharp (arena radius 0), light frosted fill. The marker rides the
+  // ALWAYS-white drawing canvas, so it's pinned light (white pill + ink text + tint
+  // outline) to read native there regardless of the app theme (canvas ctx can't read
+  // a CSS var, so this can't follow the toggle the way the DOM chrome does).
   roundRectPath(ctx, boxX, boxY, boxW, boxH, 0);
-  ctx.fillStyle = "rgba(15,17,24,0.92)";
+  ctx.fillStyle = "rgba(255,255,255,0.95)";
   ctx.fill();
   ctx.lineWidth = 1;
   ctx.strokeStyle = tint;
@@ -900,7 +902,7 @@ function drawAgentMarker(
   ctx.beginPath();
   ctx.arc(boxX + padX, boxY + boxH / 2, 3, 0, Math.PI * 2);
   ctx.fill();
-  ctx.fillStyle = "#faf8f5";
+  ctx.fillStyle = "#0c0f1d";
   ctx.fillText(text, boxX + padX + dotGap, boxY + boxH / 2 + 0.5);
   ctx.restore();
 }

@@ -233,7 +233,7 @@ function Board({ m }: { m: ReturnType<typeof usePvpWorldCanvas> }) {
           <span
             style={{
               ...trackStyle,
-              background: m.auto ? WC.accent : "rgba(255,255,255,0.22)",
+              background: m.auto ? WC.accent : WC.track,
             }}
           >
             <span
@@ -288,10 +288,8 @@ function ParticipantChip({
       title={title}
       style={{
         ...participantChipStyle,
-        background: hover ? "rgba(255,255,255,0.10)" : "rgba(255,255,255,0.06)",
-        borderColor: hover
-          ? "rgba(218,218,214,0.24)"
-          : "rgba(218,218,214,0.14)",
+        background: hover ? WC.softFillHover : WC.softFill,
+        borderColor: hover ? WC.hairline : WC.glassBorder,
       }}
     >
       <SeatDot tint={tint} />
@@ -320,7 +318,7 @@ const wrapStyle: CSSProperties = {
   display: "grid",
   placeItems: "center",
   background:
-    "radial-gradient(120% 100% at 50% -10%, #1a1530 0%, #0f1118 34%, #0c0f1d 78%)",
+    "radial-gradient(120% 100% at 50% -10%, color-mix(in srgb, var(--primary) 8%, var(--background)) 0%, var(--background) 60%)",
   fontFamily: FONT_DISPLAY,
 };
 const cardStyle: CSSProperties = {
@@ -337,7 +335,7 @@ const spinnerStyle: CSSProperties = {
   width: 28,
   height: 28,
   borderRadius: "50%",
-  border: "3px solid rgba(255,255,255,0.14)",
+  border: `3px solid ${WC.hairline}`,
   borderTopColor: WC.accent,
   animation: "spin 0.9s linear infinite",
 };
@@ -351,7 +349,7 @@ const retryStyle: CSSProperties = {
   border: "none",
   cursor: "pointer",
   fontWeight: 800,
-  color: WC.text,
+  color: "var(--primary-foreground)",
   background: WC.accent,
   boxShadow: WC.glow,
 };
@@ -404,8 +402,8 @@ const participantChipStyle: CSSProperties = {
   height: 24,
   padding: "0 9px",
   borderRadius: 0,
-  border: "1px solid rgba(218,218,214,0.14)",
-  background: "rgba(255,255,255,0.06)",
+  border: `1px solid ${WC.glassBorder}`,
+  background: WC.softFill,
   cursor: "pointer",
   fontFamily: "inherit",
   fontSize: 12,
@@ -435,6 +433,6 @@ const knobStyle: CSSProperties = {
   height: 12,
   borderRadius: "50%",
   background: "#fff",
-  boxShadow: "0 1px 3px rgba(0,0,0,0.4)",
+  boxShadow: "0 1px 2px rgba(12,15,29,0.28)",
   transition: "transform .14s",
 };

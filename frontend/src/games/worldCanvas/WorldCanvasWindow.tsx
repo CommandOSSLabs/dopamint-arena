@@ -47,18 +47,19 @@ export function WorldCanvasWindow({ windowId }: GameWindowProps) {
 
 /**
  * The lobby — a normal centered menu (not a canvas overlay), so it's the one screen
- * that adopts the shared arena {@link Card} + {@link Button} directly. Scoped `.dark`
- * pins the arena DARK tokens regardless of the app theme (World Canvas is always-dark).
+ * that adopts the shared arena {@link Card} + {@link Button} directly. No theme pin:
+ * the shared components follow the app's light/dark toggle (light → white card, ink
+ * title, violet CTA), matching the arena dashboard.
  */
 function Lobby({ onSolo, onPvp }: { onSolo: () => void; onPvp: () => void }) {
   return (
-    <div className="dark" style={lobbyWrapStyle}>
+    <div style={lobbyWrapStyle}>
       <Card
-        className="w-[min(440px,100%)] items-center gap-5 bg-[rgba(15,17,24,0.72)] text-center backdrop-blur-md"
+        className="w-[min(520px,100%)] items-center gap-5 text-center"
         style={{ boxShadow: WC.glow }}
       >
         <CardHeader className="items-center px-6">
-          <CardTitle className="wal-display text-[32px] font-bold text-foreground">
+          <CardTitle className="wal-display text-[28px] font-bold text-foreground">
             The World is Your Canvas
           </CardTitle>
         </CardHeader>
@@ -89,12 +90,12 @@ const lobbyWrapStyle: CSSProperties = {
   placeItems: "center",
   padding: 24,
   background:
-    "radial-gradient(120% 100% at 50% -10%, #1a1530 0%, #0f1118 34%, #0c0f1d 78%)",
+    "radial-gradient(120% 100% at 50% -10%, color-mix(in srgb, var(--primary) 8%, var(--background)) 0%, var(--background) 60%)",
   fontFamily: FONT_DISPLAY,
   boxSizing: "border-box",
 };
 
-/** The floating "← Menu" overlay — arena secondary-button tokens (dark glass, radius 0). */
+/** The floating "← Menu" overlay — theme-aware glass tokens (light in light mode, radius 0). */
 const backButtonStyle: CSSProperties = {
   position: "absolute",
   top: 14,

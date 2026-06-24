@@ -1,10 +1,14 @@
 /**
  * Visual tokens + the 16-color paint palette for "The World is Your Canvas".
  *
- * Always-dark canvas game (same class as Quantum Poker): the {@link WC} tokens
- * mirror the arena's DARK theme — wal-ink void, card-ink glass, wal-cream text,
- * wal-violet accent, sharp (radius 0) corners — so every panel/HUD reads as the
- * same family as blackjack/poker over the white drawing canvas. Keep export
+ * The chrome (toolbar, control bars, leaderboard, zoom HUD, lobby) is THEME-AWARE:
+ * the {@link WC} string tokens point straight at the app's design-system CSS variables
+ * (--card / --background / --foreground / --muted-foreground / --primary / --border /
+ * --wal-glow), so every panel follows the arena's light/dark toggle — reading
+ * LIGHT/native over the white drawing canvas in light mode (card glass becomes
+ * white@72%, ink text, dark hairlines) and flipping to dark glass under the dark theme.
+ * The paint tints the CANVAS renders (seatA/seatB) and the brand accent stay LITERAL
+ * hex, because a 2D-canvas fillStyle/strokeStyle can't resolve a CSS var(). Keep export
  * NAMES/shape stable — WC is imported by the engine and the canvas;
  * PALETTE/PALETTE_RGB feed the raster (16-color r/place set — game content, left as-is).
  */
@@ -13,21 +17,30 @@
 export const CHUNK_SIZE = 256;
 
 export const WC = {
-  bg: "#0c0f1d", // arena void backdrop (wal-ink / --background)
-  board: "#0c0f1d", // unpainted void — same arena ink (the draw canvas itself is white)
-  panelBorder: "rgba(218,218,214,0.14)", // arena --border hairline
-  accent: "#613dff", // arena --primary (wal-violet)
-  seatA: "#613dff", // human (party A) tint — arena primary; consumed by the engine
-  seatB: "#CF6EE4", // agent (party B) tint — ≈ arena wal-pink
-  text: "#faf8f5", // arena --foreground (wal-cream)
-  muted: "#8f9294", // arena --muted-foreground
-  // Translucent arena card-ink glass so every control sits subtly over the wall.
-  glass: "rgba(15,17,24,0.72)", // arena --card @ ~0.72: pill, toggle, readout, leaderboard, zoom HUD
-  glassBorder: "rgba(218,218,214,0.14)", // arena --border hairline for the dark glass
-  toolbar: "rgba(15,17,24,0.72)", // floating toolbar = same dark arena glass
-  toolbarBorder: "rgba(218,218,214,0.14)", // arena --border for the toolbar edge
-  // Soft violet drop-glow for floating chrome (mirrors the arena --wal-glow language).
-  glow: "0 1px 2px rgba(12,15,29,0.06), 0 16px 44px rgba(97,61,255,0.12)",
+  bg: "var(--background)", // backdrop behind the (always-white) canvas — follows theme
+  board: "var(--background)", // unpainted void = app background (the draw canvas itself is white)
+  panelBorder: "var(--border)", // theme hairline (dark-on-light in light, light-on-dark in dark)
+  // Brand violet (--primary is theme-independent). Literal hex because it doubles as a
+  // 2D-canvas stroke (the brush-footprint preview), which can't resolve a CSS var.
+  accent: "#613dff",
+  seatA: "#613dff", // human (party A) tint — CANVAS stroke color (engine); literal hex
+  seatB: "#CF6EE4", // agent (party B) tint — CANVAS stroke color (engine); literal hex
+  text: "var(--foreground)", // theme ink (light) / cream (dark)
+  muted: "var(--muted-foreground)",
+  // Translucent card so chrome frosts over the wall; color-mix keeps it theme-aware —
+  // white@72% in light, ink-card@72% in dark, both straight off --card.
+  glass: "color-mix(in srgb, var(--card) 72%, transparent)",
+  glassBorder: "var(--border)", // theme hairline for the glass edge
+  toolbar: "color-mix(in srgb, var(--card) 72%, transparent)", // floating toolbar = same glass
+  toolbarBorder: "var(--border)",
+  glow: "var(--wal-glow)", // theme-aware drop-glow (soft violet light / vivid dark)
+  // Interactive-state tints derived from the theme ink/primary so they invert with the
+  // theme: a subtle dark wash on light chrome, a subtle light wash on dark chrome.
+  softFill: "color-mix(in srgb, var(--foreground) 6%, transparent)", // hover / ghost-pill bg
+  softFillHover: "color-mix(in srgb, var(--foreground) 12%, transparent)", // stronger hover
+  accentFill: "color-mix(in srgb, var(--primary) 16%, transparent)", // active tool/brush highlight
+  track: "color-mix(in srgb, var(--foreground) 22%, transparent)", // switch off-track
+  hairline: "color-mix(in srgb, var(--foreground) 16%, transparent)", // swatch/chip hairline
 } as const;
 
 export const FONT_DISPLAY = "'Outfit', system-ui, sans-serif" as const;
