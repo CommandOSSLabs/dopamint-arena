@@ -1254,7 +1254,8 @@ mod tests {
         // Before expiry, a cross-instance joiner does NOT take wa — it parks instead.
         assert!(s.join_or_pair(&game, w("wb", "ib"), 30).await.is_none());
         tokio::time::sleep(std::time::Duration::from_millis(80)).await;
-        // After expiry, the next cross-instance joiner pairs the oldest expired waiter (wa).
+        // Both wa and wb are now expired; the script scans in RPUSH (FIFO) order, so the front
+        // waiter wa is the deterministic pick — this assertion depends on that ordering, not a race.
         let opp = s.join_or_pair(&game, w("wc", "ic"), 30).await.expect("pairs");
         assert_eq!(opp.wallet, "wa", "expired waiter taken as cross-instance fallback");
     }
