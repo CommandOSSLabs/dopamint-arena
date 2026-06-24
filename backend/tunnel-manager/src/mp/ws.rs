@@ -232,7 +232,7 @@ async fn handle_authed(
                 wallet: wallet.to_owned(),
                 conn: here(state, conn_id),
             };
-            if let Some(opp) = state.mp.join_or_pair(&game, me).await {
+            if let Some(opp) = state.mp.join_or_pair(&game, me, state.pair_hold_ms).await {
                 let (match_id, rec) = build_quick_match(&game, opp, wallet, here(state, conn_id));
                 state.mp.put_match(&match_id, rec.clone()).await;
                 matches.insert(match_id.clone(), rec.clone());
