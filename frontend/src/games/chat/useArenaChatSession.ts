@@ -399,7 +399,7 @@ class ChatSession {
       const digest = await settleViaBackend({
         tunnelId: this.tunnelId,
         settlement,
-        transcript: transcript ? transcript.toRecord().entries : [],
+        transcript: transcript ? transcript.rawEntries() : [],
         label: "chat",
         fallbackClose: () =>
           closeCooperativeWithRoot({
