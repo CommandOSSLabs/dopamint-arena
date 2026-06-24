@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { memo, useCallback, useRef, useState } from "react";
 import type {
   CSSProperties,
   KeyboardEvent as ReactKeyboardEvent,
@@ -73,7 +73,6 @@ import { useTelemetry } from "@/telemetry/TelemetryProvider";
 import { useLocalStorageState } from "@/lib/useLocalStorageState";
 import { useMediaQuery } from "@/lib/useMediaQuery";
 import { useSearch } from "@tanstack/react-router";
-import type { TelemetrySnapshot } from "../panels/types";
 import { ChatPanel } from "../panels/ChatPanel";
 import { LiveTransactionsFeed } from "../panels/LiveTransactionsFeed";
 import { LocalTransactionsFeed } from "../panels/LocalTransactionsFeed";
@@ -221,13 +220,10 @@ function seedFloating(): Record<string, FloatState> {
  * Telemetry dock. `bottom` lays the panels out as a resizable horizontal strip;
  * `right` stacks them vertically as a scrolling rail.
  */
-function Dock({
-  snapshot,
-  side,
-}: {
-  snapshot: TelemetrySnapshot;
-  side: DockSide;
-}) {
+function Dock({ side }: { side: DockSide }) {
+  // Subscribe to telemetry HERE, not in ArenaView, so a snapshot tick re-renders only
+  // the dock — the game floor (a sibling panel) doesn't read the snapshot and stays put.
+  const { snapshot } = useTelemetry();
   if (side === "right") {
     return (
       <div className="flex h-full flex-col gap-2 overflow-y-auto p-2">
@@ -528,6 +524,57 @@ function FloorControls({
 }
 
 /**
+ * The game's content subtree (cabinet shell + the game's own Window), isolated in a
+ * memo so a floor re-render — dragging another window, a telemetry tick — does NOT
+ * re-render every game. Props are stable per window (a game id, a window id, and the
+ * stable `close`), so React.memo bails unless THIS window actually changes. Defined at
+ * module level so its component identity is stable; defining it inside ArenaView would
+ * remount the subtree every render and drop the game's in-React state.
+ */
+const GameContent = memo(function GameContent({
+  gameId,
+  windowId,
+  onClose,
+}: {
+  gameId: string;
+  windowId: string;
+  onClose: (id: string) => void;
+}) {
+  const mod = get(gameId);
+  const close = useCallback(() => onClose(windowId), [onClose, windowId]);
+  if (!mod) return null;
+  const Content = mod.Window;
+  return (
+    <GameCabinet>
+      <Content windowId={windowId} onClose={close} />
+    </GameCabinet>
+  );
+});
+
+/** Phone "Stats" section. Owns its telemetry subscription so a snapshot tick re-renders
+ *  only this panel, never the arena floor. */
+function MobileStats() {
+  const { snapshot } = useTelemetry();
+  return (
+    <div className="flex flex-col gap-2 p-2">
+      <SystemDashboard snapshot={snapshot} />
+      <TpsChart snapshot={snapshot} />
+    </div>
+  );
+}
+
+/** Phone "Activity" section — see {@link MobileStats} for why it owns its subscription. */
+function MobileActivity() {
+  const { snapshot } = useTelemetry();
+  return (
+    <div className="flex h-full flex-col gap-2 p-2">
+      <LiveTransactionsFeed snapshot={snapshot} className="min-h-0 flex-1" />
+      <LocalTransactionsFeed snapshot={snapshot} className="min-h-0 flex-1" />
+    </div>
+  );
+}
+
+/**
  * The arena body (`/`): a draggable/resizable floor of self-playing game windows
  * over a resizable, collapsible telemetry dock (bottom or right). Maximizing pops
  * a window out into a free-floating layer. On phones it renders one section at a
@@ -560,7 +607,6 @@ export function ArenaView() {
     "dopamint.desktop.dockSide.v1",
     "bottom",
   );
-  const { snapshot } = useTelemetry();
   const isDesktop = useMediaQuery("(min-width: 1024px)");
   // Dock collapse — a no-drag alternative to the resize handle.
   const bottomRef = useRef<PanelImperativeHandle>(null);
@@ -590,13 +636,17 @@ export function ArenaView() {
     }
   };
 
-  const close = (id: string) => {
-    disposeWindow(id); // tear down the game's live session (sockets, timers)
-    forgetWindow(id); // stop the phone resuming this now-dead instance
-    setLayout((cur) => tile(cur.filter((w) => w.id !== id)));
-    setHidden((h) => dropKey(h, id));
-    setFloating((f) => dropKey(f, id));
-  };
+  // Stable (functional setters only) so GameContent's memo can hold across re-renders.
+  const close = useCallback(
+    (id: string) => {
+      disposeWindow(id); // tear down the game's live session (sockets, timers)
+      forgetWindow(id); // stop the phone resuming this now-dead instance
+      setLayout((cur) => tile(cur.filter((w) => w.id !== id)));
+      setHidden((h) => dropKey(h, id));
+      setFloating((f) => dropKey(f, id));
+    },
+    [setLayout, setHidden, setFloating],
+  );
 
   // Minimize → fly into the dock, hide off the floor (keeping geometry), re-tile.
   const hide = (id: string) => {
@@ -748,20 +798,24 @@ export function ArenaView() {
     const startY = e.clientY;
     const maxX = window.innerWidth - base.w;
     const maxY = window.innerHeight - base.h;
-    const onMove = (ev: PointerEvent) =>
-      setFloating((f) =>
-        f[id]
-          ? {
-              ...f,
-              [id]: {
-                ...f[id],
-                x: clampNum(base.x + ev.clientX - startX, 0, maxX),
-                y: clampNum(base.y + ev.clientY - startY, 0, maxY),
-              },
-            }
-          : f,
-      );
+    // rAF-coalesce: one setState per frame, not one per pointermove (high-refresh mice
+    // fire faster than the screen paints). The localStorage write is debounced in
+    // useLocalStorageState, so the final rest position still persists.
+    let raf = 0;
+    let last: PointerEvent | null = null;
+    const apply = () => {
+      raf = 0;
+      if (!last) return;
+      const x = clampNum(base.x + last.clientX - startX, 0, maxX);
+      const y = clampNum(base.y + last.clientY - startY, 0, maxY);
+      setFloating((f) => (f[id] ? { ...f, [id]: { ...f[id], x, y } } : f));
+    };
+    const onMove = (ev: PointerEvent) => {
+      last = ev;
+      if (!raf) raf = requestAnimationFrame(apply);
+    };
     const onUp = () => {
+      if (raf) cancelAnimationFrame(raf);
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
     };
@@ -786,9 +840,14 @@ export function ArenaView() {
       const bottom = dir.includes("s");
       const MIN_W = 320;
       const MIN_H = 220;
-      const onMove = (ev: PointerEvent) => {
-        const dx = ev.clientX - startX;
-        const dy = ev.clientY - startY;
+      // rAF-coalesce one setState per frame (see startFloatDrag).
+      let raf = 0;
+      let last: PointerEvent | null = null;
+      const apply = () => {
+        raf = 0;
+        if (!last) return;
+        const dx = last.clientX - startX;
+        const dy = last.clientY - startY;
         let { x, y, w, h } = base;
         if (right) w = clampNum(base.w + dx, MIN_W, window.innerWidth - base.x);
         if (left) {
@@ -807,7 +866,12 @@ export function ArenaView() {
           f[id] ? { ...f, [id]: { ...f[id], x, y, w, h } } : f,
         );
       };
+      const onMove = (ev: PointerEvent) => {
+        last = ev;
+        if (!raf) raf = requestAnimationFrame(apply);
+      };
       const onUp = () => {
+        if (raf) cancelAnimationFrame(raf);
         window.removeEventListener("pointermove", onMove);
         window.removeEventListener("pointerup", onUp);
       };
@@ -931,7 +995,6 @@ export function ArenaView() {
         renderItem={(item, handle) => {
           const mod = get(gameOf(item.id));
           if (!mod) return null;
-          const Content = mod.Window;
           const fl = floating[item.id];
           const win = (
             <GameWindow
@@ -947,11 +1010,14 @@ export function ArenaView() {
               onRestore={fl ? () => dockFloat(item.id) : undefined}
               onClose={() => close(item.id)}
             >
-              {/* Shared arcade cabinet: hover → pause → take-over overlay, common to every
-                  window. Inert for games that don't register a CabinetController yet. */}
-              <GameCabinet>
-                <Content windowId={item.id} onClose={() => close(item.id)} />
-              </GameCabinet>
+              {/* Shared arcade cabinet + the game, isolated in a memo so a floor re-render
+                  (a sibling drag, a telemetry tick) doesn't re-render this game. Inert for
+                  games that don't register a CabinetController yet. */}
+              <GameContent
+                gameId={gameOf(item.id)}
+                windowId={item.id}
+                onClose={close}
+              />
             </GameWindow>
           );
           // Always wrap identically — float-handles + focus-to-front only when
@@ -1050,7 +1116,7 @@ export function ArenaView() {
               minSize="14%"
               className="min-h-0"
             >
-              <Dock snapshot={snapshot} side="bottom" />
+              <Dock side="bottom" />
             </ResizablePanel>
           </ResizablePanelGroup>
         ) : (
@@ -1070,31 +1136,15 @@ export function ArenaView() {
               minSize="18%"
               className="min-w-0"
             >
-              <Dock snapshot={snapshot} side="right" />
+              <Dock side="right" />
             </ResizablePanel>
           </ResizablePanelGroup>
         )
       ) : (
         <main className="h-full overflow-auto">
           {section === "games" && <MobileArena />}
-          {section === "stats" && (
-            <div className="flex flex-col gap-2 p-2">
-              <SystemDashboard snapshot={snapshot} />
-              <TpsChart snapshot={snapshot} />
-            </div>
-          )}
-          {section === "activity" && (
-            <div className="flex h-full flex-col gap-2 p-2">
-              <LiveTransactionsFeed
-                snapshot={snapshot}
-                className="min-h-0 flex-1"
-              />
-              <LocalTransactionsFeed
-                snapshot={snapshot}
-                className="min-h-0 flex-1"
-              />
-            </div>
-          )}
+          {section === "stats" && <MobileStats />}
+          {section === "activity" && <MobileActivity />}
         </main>
       )}
 
