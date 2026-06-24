@@ -326,7 +326,7 @@ export function usePvpBlackjack(): PvpView {
           tunnelId: t.tunnelId,
           settlement: coSigned as any,
           transcript: transcriptRef.current
-            ? transcriptRef.current.toRecord().entries
+            ? transcriptRef.current.rawEntries()
             : [],
           label: "blackjack",
           fallbackClose: async () => {

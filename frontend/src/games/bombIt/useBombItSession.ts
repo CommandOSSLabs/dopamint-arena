@@ -594,7 +594,7 @@ class BombBotSession {
       await settleViaBackend({
         tunnelId: this.tunnelId,
         settlement,
-        transcript: transcript ? transcript.toRecord().entries : [],
+        transcript: transcript ? transcript.rawEntries() : [],
         label: "bombIt",
         fallbackClose: () =>
           closeCooperativeWithRoot({

@@ -234,8 +234,7 @@ impl SuiSettler {
     /// Concurrent calls are safe: no shared gas coin means no equivocation risk.
     pub async fn submit_close(&self, args: CloseArgs) -> anyhow::Result<String> {
         let tunnel = self.resolve_shared(&args.tunnel_id).await?;
-        let gas_price = self.reference_gas_price().await?;
-        let epoch = self.current_epoch().await?;
+        let (epoch, gas_price) = self.epoch_and_gas_price().await?;
         let chain = Digest::from_base58(CHAIN_DIGEST_B58).context("chain digest")?;
         let tx = build_close_tx(
             self.package_id,
@@ -272,8 +271,7 @@ impl SuiSettler {
         let kind_bytes = base64::engine::general_purpose::STANDARD
             .decode(kind_b64.trim())
             .context("txKindBytes is not valid base64")?;
-        let gas_price = self.reference_gas_price().await?;
-        let epoch = self.current_epoch().await?;
+        let (epoch, gas_price) = self.epoch_and_gas_price().await?;
         let chain = Digest::from_base58(CHAIN_DIGEST_B58).context("chain digest")?;
         let tx = build_sponsored_tx(
             self.package_id,
@@ -358,25 +356,28 @@ impl SuiSettler {
         })
     }
 
-    async fn reference_gas_price(&self) -> anyhow::Result<u64> {
-        let r = self
-            .rpc("suix_getReferenceGasPrice", serde_json::json!([]))
-            .await?;
-        r.as_str()
-            .and_then(|s| s.parse().ok())
-            .or_else(|| r.as_u64())
-            .ok_or_else(|| anyhow!("bad reference gas price: {r}"))
-    }
-
-    /// Current epoch — required for the `ValidDuring` expiration on SIP-58 address-balance gas.
-    async fn current_epoch(&self) -> anyhow::Result<u64> {
+    /// `(epoch, reference_gas_price)` in one round-trip. Both are per-epoch constants and the
+    /// system-state summary carries both, so the close/sponsor paths read them together instead of
+    /// firing two RPCs. Epoch is fetched fresh (never cached): the SIP-58 `ValidDuring` expiration
+    /// must equal the *current* epoch (see `build_close_tx`), so a stale epoch would be unlandable.
+    async fn epoch_and_gas_price(&self) -> anyhow::Result<(u64, u64)> {
         let r = self
             .rpc("suix_getLatestSuiSystemState", serde_json::json!([]))
             .await?;
-        r.pointer("/epoch")
+        let epoch = r
+            .pointer("/epoch")
             .and_then(|v| v.as_str())
             .and_then(|s| s.parse().ok())
-            .ok_or_else(|| anyhow!("no epoch in latest system state"))
+            .ok_or_else(|| anyhow!("no epoch in latest system state"))?;
+        let gas_price = r
+            .pointer("/referenceGasPrice")
+            .and_then(|v| {
+                v.as_str()
+                    .and_then(|s| s.parse().ok())
+                    .or_else(|| v.as_u64())
+            })
+            .ok_or_else(|| anyhow!("no referenceGasPrice in latest system state"))?;
+        Ok((epoch, gas_price))
     }
 
     async fn execute(&self, tx: &Transaction, sig: &UserSignature) -> anyhow::Result<String> {

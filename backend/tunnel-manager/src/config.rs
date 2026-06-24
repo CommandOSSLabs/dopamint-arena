@@ -22,6 +22,9 @@ pub struct Config {
     pub redis_cache_url: Option<String>,
     pub redis_pubsub_url: Option<String>,
     pub instance_id: Option<String>,
+    /// Max settles executing at once on THIS instance. The limit gates before the request body is
+    /// read, so worst-case settle-body memory is bounded at this × the /settle body cap. Per-instance.
+    pub settle_max_concurrency: usize,
 }
 
 impl Config {
@@ -41,6 +44,12 @@ impl Config {
             redis_cache_url: opt("REDIS_CACHE_URL"),
             redis_pubsub_url: opt("REDIS_PUBSUB_URL"),
             instance_id: opt("INSTANCE_ID"),
+            // Filter out 0 — `GlobalConcurrencyLimitLayer::new(0)` would wedge /settle (never ready).
+            settle_max_concurrency: std::env::var("SETTLE_MAX_CONCURRENCY")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .filter(|&n| n > 0)
+                .unwrap_or(32),
         })
     }
 

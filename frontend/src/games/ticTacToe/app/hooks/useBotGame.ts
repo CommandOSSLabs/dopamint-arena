@@ -604,7 +604,7 @@ export function useBotGame(difficulty: Difficulty = "fast"): BotGameView {
         const backendDigest = await settleViaBackend({
           tunnelId,
           settlement: s,
-          transcript: transcript.toRecord().entries,
+          transcript: transcript.rawEntries(),
           label: "tictactoe",
           fallbackClose: async () => {
             // DOPAMINT mode: close via the sponsored signer (no SUI); else bot X's keypair.
