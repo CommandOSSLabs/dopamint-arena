@@ -110,15 +110,19 @@ export function ChickenCrossWindow({ windowId }: GameWindowProps) {
     if (solo.status === "error") {
       return (
         <CrossScreen onBack={backToMenu}>
-          <p className="text-sm text-red-500">{solo.error ?? "something went wrong"}</p>
+          <span className="sketch-eyebrow">Error</span>
+          <p className="sketch-note text-[var(--sketch-red)]">{solo.error ?? "something went wrong"}</p>
         </CrossScreen>
       );
     }
     if (solo.status === "funding") {
       return (
         <CrossScreen>
-          <span className="cross-lobby__title wal-doto">Funding</span>
-          <p className="cross-lobby__copy">Opening + funding the tunnel on-chain… approve in your wallet.</p>
+          <span className="sketch-eyebrow">Tunnel</span>
+          <h2 className="sketch-title">Funding</h2>
+          <p className="sketch-note">
+            Opening + funding the tunnel on-chain… approve in your wallet.
+          </p>
         </CrossScreen>
       );
     }
@@ -146,7 +150,7 @@ export function ChickenCrossWindow({ windowId }: GameWindowProps) {
     }
     return (
       <CrossScreen>
-        <p className="cross-lobby__copy">Loading…</p>
+        <p className="sketch-note">Loading…</p>
       </CrossScreen>
     );
   }
@@ -154,7 +158,7 @@ export function ChickenCrossWindow({ windowId }: GameWindowProps) {
   if (pvp.status === "error") {
     return (
       <CrossScreen onBack={backToMenu}>
-        <p className="text-sm text-red-500">{pvp.error ?? "something went wrong"}</p>
+        <p className="sketch-note text-[var(--sketch-red)]">{pvp.error ?? "something went wrong"}</p>
       </CrossScreen>
     );
   }
@@ -162,8 +166,9 @@ export function ChickenCrossWindow({ windowId }: GameWindowProps) {
   if (pvp.status === "matching") {
     return (
       <CrossScreen onBack={backToMenu} backLabel="Cancel">
-        <span className="cross-lobby__title wal-doto">Finding…</span>
-        <p className="cross-lobby__copy">Matching you with the next player over the relay.</p>
+        <span className="sketch-eyebrow">Relay</span>
+        <h2 className="sketch-title">Finding…</h2>
+        <p className="sketch-note">Matching you with the next player over the relay.</p>
       </CrossScreen>
     );
   }
@@ -171,8 +176,11 @@ export function ChickenCrossWindow({ windowId }: GameWindowProps) {
   if (pvp.status === "funding") {
     return (
       <CrossScreen>
-        <span className="cross-lobby__title wal-doto">Funding</span>
-        <p className="cross-lobby__copy">Opening + funding the tunnel on-chain… approve in your wallet.</p>
+        <span className="sketch-eyebrow">Tunnel</span>
+        <h2 className="sketch-title">Funding</h2>
+        <p className="sketch-note">
+          Opening + funding the tunnel on-chain… approve in your wallet.
+        </p>
       </CrossScreen>
     );
   }
@@ -196,7 +204,7 @@ export function ChickenCrossWindow({ windowId }: GameWindowProps) {
 
   return (
     <CrossScreen>
-      <p className="cross-lobby__copy">Loading…</p>
+      <p className="sketch-note">Loading…</p>
     </CrossScreen>
   );
 }

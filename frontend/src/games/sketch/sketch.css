@@ -1,0 +1,434 @@
+/* ============================================================
+   Shared hand-drawn "whiteboard sketch" skin (Excalidraw-style).
+
+   Ink-stroke borders live on a `::before` layer roughened by the SVG filter
+   `#skRough` (rendered once per window via <SketchDefs/>). Text stays crisp;
+   only borders and fills wobble.
+
+   Games override palette through CSS variables on `.sketch` while reusing the
+   same stroke mechanics.
+   ============================================================ */
+
+.sketch {
+  --sketch-ink: #23221f;
+  --sketch-ink-soft: rgba(35, 34, 31, 0.6);
+  --sketch-paper: #fbf9f3;
+  --sketch-fill: #fff9f0;
+  --sketch-accent: #e8920c;
+  --sketch-accent-fill: #ffe9bd;
+  --sketch-red: #e03131;
+  --sketch-red-fill: #ffe9e9;
+  --sketch-blue: #1971c2;
+  --sketch-blue-fill: #e7f1fb;
+  --sketch-violet: #6741d9;
+  --sketch-felt: #2f9e44;
+  --sketch-felt-fill: #eaf8ee;
+  --sketch-filter: url(#skRough);
+
+  container-type: size;
+  font-family: "Gochi Hand", "Comic Sans MS", cursive;
+  color: var(--sketch-ink);
+  background-color: var(--sketch-paper);
+  background-image: radial-gradient(rgba(35, 34, 31, 0.09) 1.1px, transparent 1.3px);
+  background-size: 16px 16px;
+  background-position: -8px -8px;
+}
+
+.sketch-defs {
+  position: absolute;
+  width: 0;
+  height: 0;
+}
+
+.sketch-stroke {
+  position: relative;
+  isolation: isolate;
+}
+.sketch-stroke::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--sketch-fill, transparent);
+  border: 2.5px solid var(--sketch-ink);
+  border-radius: 10px;
+  filter: var(--sketch-filter);
+  pointer-events: none;
+  z-index: -1;
+}
+.sketch-stroke--accent::before {
+  border-color: var(--sketch-accent);
+  border-width: 3px;
+}
+.sketch-stroke--felt::before {
+  border-color: var(--sketch-felt);
+  border-width: 3px;
+}
+
+.sketch-panel {
+  --sketch-fill: #fff9f0;
+  border-radius: 10px;
+}
+
+.sketch-btn {
+  position: relative;
+  isolation: isolate;
+  font-family: inherit;
+  font-size: clamp(11px, 3cqmin, 18px);
+  line-height: 1;
+  padding: clamp(4px, 1.4cqmin, 9px) clamp(8px, 2.6cqmin, 18px);
+  --sketch-fill: #fff9f0;
+  color: var(--sketch-ink);
+  cursor: pointer;
+  border: 0;
+  background: transparent;
+  transition: transform 0.1s ease;
+}
+.sketch-btn::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--sketch-fill);
+  border: 2.5px solid var(--sketch-ink);
+  border-radius: 9px;
+  filter: var(--sketch-filter);
+  z-index: -1;
+}
+.sketch-btn:hover:not(:disabled) {
+  transform: translateY(-1px) rotate(-0.4deg);
+}
+.sketch-btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+.sketch-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.sketch-btn--go {
+  --sketch-fill: var(--sketch-accent-fill);
+}
+.sketch-btn--go::before {
+  border-color: var(--sketch-accent);
+}
+.sketch-btn--stop {
+  --sketch-fill: var(--sketch-red-fill);
+}
+.sketch-btn--stop::before {
+  border-color: var(--sketch-red);
+}
+.sketch-btn--call {
+  --sketch-fill: var(--sketch-blue-fill);
+}
+.sketch-btn--call::before {
+  border-color: var(--sketch-blue);
+}
+.sketch-btn--ghost {
+  --sketch-fill: transparent;
+}
+
+/* Text inputs — wrapper carries ink stroke + pastel fill; inner control stays native. */
+.sketch-field {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: stretch;
+  --sketch-fill: #fff9f0;
+}
+.sketch-field::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--sketch-fill);
+  border: 2.5px solid var(--sketch-ink);
+  border-radius: 9px;
+  filter: var(--sketch-filter);
+  z-index: 0;
+  pointer-events: none;
+}
+.sketch-field__control {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  min-width: 0;
+  font-family: inherit;
+  font-size: clamp(14px, 3.6cqmin, 22px);
+  line-height: 1.1;
+  padding: clamp(8px, 2cqmin, 12px) clamp(10px, 2.8cqmin, 16px);
+  text-align: center;
+  color: var(--sketch-ink);
+  border: 0;
+  background: transparent;
+  appearance: textfield;
+}
+.sketch-field__control:focus {
+  outline: none;
+}
+.sketch-field:focus-within {
+  --sketch-fill: color-mix(in srgb, var(--sketch-accent-fill) 50%, #fff9f0);
+}
+.sketch-field--join-left::before {
+  border-radius: 9px 0 0 9px;
+}
+.sketch-action-join {
+  display: flex;
+  width: 100%;
+  align-items: stretch;
+}
+.sketch-action-join .sketch-field--join-left::before {
+  border-right-width: 0;
+}
+.sketch-action-join .sketch-btn--join-right::before {
+  border-radius: 0 9px 9px 0;
+  border-left-width: 0;
+}
+.sketch-action-join .sketch-field {
+  flex: 1;
+}
+
+.sketch-timer {
+  position: relative;
+  isolation: isolate;
+  display: inline-grid;
+  place-items: center;
+  min-width: 2.2em;
+  padding: clamp(3px, 1.2cqmin, 8px) clamp(6px, 1.8cqmin, 12px);
+  font-size: clamp(12px, 3.2cqmin, 20px);
+  line-height: 1;
+  color: var(--sketch-accent);
+}
+.sketch-timer::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 2.5px solid var(--sketch-accent);
+  border-radius: 9px;
+  filter: var(--sketch-filter);
+  z-index: -1;
+}
+.sketch-timer--low {
+  color: var(--sketch-red);
+}
+.sketch-timer--low::before {
+  border-color: var(--sketch-red);
+}
+
+.sketch-eyebrow {
+  font-size: clamp(9px, 2.4cqmin, 14px);
+  letter-spacing: 0.08em;
+  color: var(--sketch-accent);
+}
+
+.sketch-title {
+  font-size: clamp(15px, 4.2cqmin, 28px);
+  line-height: 1;
+}
+
+.sketch-note {
+  font-size: clamp(11px, 3cqmin, 17px);
+  line-height: 1.3;
+  color: var(--sketch-ink-soft);
+}
+
+/* Same dotted paper as the window root — use when a child skin zeroes its bg. */
+.sketch-paper {
+  background-color: var(--sketch-paper);
+  background-image: radial-gradient(rgba(35, 34, 31, 0.09) 1.1px, transparent 1.3px);
+  background-size: 16px 16px;
+  background-position: -8px -8px;
+}
+
+/* Layout shells pair with `.sketch` but used to set `font-family: inherit` — pin Gochi Hand. */
+.bomb-lobby.sketch,
+.bomb-shell.sketch,
+.cross-lobby.sketch,
+.cross-shell.sketch {
+  font-family: "Gochi Hand", "Comic Sans MS", cursive;
+}
+
+.bomb-lobby.sketch :where(button, input, textarea, select),
+.bomb-shell.sketch :where(button, input, textarea, select),
+.cross-lobby.sketch :where(button, input, textarea, select),
+.cross-shell.sketch :where(button, input, textarea, select) {
+  font-family: inherit;
+}
+
+.sketch-welcome {
+  display: grid;
+  height: 100%;
+  min-height: 14rem;
+  place-items: center;
+  overflow: hidden;
+  padding: clamp(14px, 4cqmin, 32px);
+  text-align: center;
+}
+
+.sketch-welcome__card {
+  display: flex;
+  width: min(22rem, 92%);
+  max-width: 100%;
+  flex-direction: column;
+  align-items: center;
+  gap: clamp(12px, 3.2cqmin, 22px);
+  padding: clamp(16px, 4.5cqmin, 30px);
+}
+
+.sketch-welcome__head {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: clamp(4px, 1.2cqmin, 8px);
+}
+
+.sketch-welcome__head .sketch-title {
+  font-size: clamp(20px, 6cqmin, 38px);
+  line-height: 1;
+}
+
+.sketch-welcome__actions {
+  display: flex;
+  width: 100%;
+  max-width: 16rem;
+  flex-direction: column;
+  align-items: stretch;
+  gap: clamp(8px, 2.4cqmin, 14px);
+}
+
+.sketch-welcome__row {
+  display: flex;
+  width: 100%;
+  align-items: stretch;
+  gap: clamp(6px, 2cqmin, 10px);
+}
+
+.sketch-welcome .cross-seg,
+.sketch-welcome .bomb-lobby__modes {
+  display: flex;
+  gap: clamp(6px, 2cqmin, 10px);
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.sketch-welcome .cross-seg__btn,
+.sketch-welcome .bomb-mode {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  font-weight: inherit;
+  letter-spacing: 0.04em;
+  text-transform: none;
+  color: var(--sketch-ink-soft);
+}
+
+.sketch-welcome .cross-seg__btn--on,
+.sketch-welcome .bomb-mode--on {
+  color: var(--sketch-ink);
+}
+
+.sketch-welcome .cross-seg__btn--on {
+  background: var(--sketch-accent-fill);
+  border-radius: 8px;
+}
+
+.sketch-welcome .cross-field,
+.sketch-welcome .bomb-field {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--sketch-ink);
+  font-family: inherit;
+  font-weight: inherit;
+  text-align: center;
+}
+
+.sketch-welcome .bomb-lobby__stake-label {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+}
+
+.sketch-welcome .bomb-lobby__legend {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.sketch-welcome .bomb-glyph::before,
+.sketch-welcome .cross-chicken.sketch-glyph::before {
+  border-color: var(--sketch-ink);
+}
+
+/* ---- arena primitives (cells + tokens) ----------------------------------- */
+
+.sketch-arena {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  background: var(--sketch-arena-fill, var(--sketch-paper));
+  border-radius: 12px;
+}
+.sketch-arena::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 3px solid var(--sketch-arena-ink, var(--sketch-ink));
+  border-radius: 12px;
+  filter: var(--sketch-filter);
+  pointer-events: none;
+  z-index: 3;
+}
+
+.sketch-cell {
+  position: relative;
+  isolation: isolate;
+}
+.sketch-cell::after {
+  content: "";
+  position: absolute;
+  inset: 1px;
+  border: 1.5px dashed color-mix(in srgb, var(--sketch-ink) 38%, transparent);
+  border-radius: 2px;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.sketch-glyph {
+  position: relative;
+  isolation: isolate;
+}
+.sketch-glyph::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  background: var(--sketch-glyph-fill, transparent);
+  border: 2.5px solid var(--sketch-glyph-ink, var(--sketch-ink));
+  border-radius: 5px;
+  filter: var(--sketch-filter);
+  pointer-events: none;
+  z-index: -1;
+}
+
+.sketch-chip {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: #fffefb;
+}
+.sketch-chip::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 2px solid var(--sketch-ink);
+  border-radius: 50%;
+  filter: var(--sketch-filter);
+  z-index: -1;
+}

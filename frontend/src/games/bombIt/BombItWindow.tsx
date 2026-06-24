@@ -113,15 +113,16 @@ export function BombItWindow({ windowId }: GameWindowProps) {
     if (solo.status === "error") {
       return (
         <BombScreen onBack={backToMenu}>
-          <p className="text-sm text-rose-300">{solo.error ?? "something went wrong"}</p>
+          <p className="sketch-note text-[var(--sketch-red)]">{solo.error ?? "something went wrong"}</p>
         </BombScreen>
       );
     }
     if (solo.status === "funding") {
       return (
         <BombScreen>
-          <span className="bomb-status-title wal-doto">Funding</span>
-          <p className="bomb-lobby__copy">
+          <span className="sketch-eyebrow">Tunnel</span>
+          <h2 className="sketch-title">Funding</h2>
+          <p className="sketch-note">
             Opening + funding the tunnel on-chain… approve in your wallet.
           </p>
         </BombScreen>
@@ -149,7 +150,7 @@ export function BombItWindow({ windowId }: GameWindowProps) {
     }
     return (
       <BombScreen>
-        <p className="bomb-lobby__copy">Loading…</p>
+        <p className="sketch-note">Loading…</p>
       </BombScreen>
     );
   }
@@ -158,7 +159,7 @@ export function BombItWindow({ windowId }: GameWindowProps) {
   if (pvp.status === "error") {
     return (
       <BombScreen onBack={backToMenu}>
-        <p className="text-sm text-rose-300">{pvp.error ?? "something went wrong"}</p>
+        <p className="sketch-note text-[var(--sketch-red)]">{pvp.error ?? "something went wrong"}</p>
       </BombScreen>
     );
   }
@@ -166,8 +167,9 @@ export function BombItWindow({ windowId }: GameWindowProps) {
   if (pvp.status === "matching") {
     return (
       <BombScreen onBack={backToMenu} backLabel="Cancel">
-        <span className="bomb-status-title wal-doto">Finding match</span>
-        <p className="bomb-lobby__copy">Matching you with the next player over the relay.</p>
+        <span className="sketch-eyebrow">Relay</span>
+        <h2 className="sketch-title">Finding match</h2>
+        <p className="sketch-note">Matching you with the next player over the relay.</p>
       </BombScreen>
     );
   }
@@ -175,8 +177,9 @@ export function BombItWindow({ windowId }: GameWindowProps) {
   if (pvp.status === "funding") {
     return (
       <BombScreen>
-        <span className="bomb-status-title wal-doto">Funding</span>
-        <p className="bomb-lobby__copy">
+        <span className="sketch-eyebrow">Tunnel</span>
+        <h2 className="sketch-title">Funding</h2>
+        <p className="sketch-note">
           Opening + funding the tunnel on-chain… approve in your wallet.
         </p>
       </BombScreen>
@@ -200,7 +203,7 @@ export function BombItWindow({ windowId }: GameWindowProps) {
 
   return (
     <BombScreen>
-      <p className="bomb-lobby__copy">Loading…</p>
+      <p className="sketch-note">Loading…</p>
     </BombScreen>
   );
 }

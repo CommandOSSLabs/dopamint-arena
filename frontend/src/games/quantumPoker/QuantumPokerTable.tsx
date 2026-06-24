@@ -3,10 +3,6 @@ import type { PokerPhase, PokerState } from "sui-tunnel-ts/protocol/quantumPoker
 import type { Party } from "sui-tunnel-ts/protocol/Protocol";
 import "./quantumPoker.css";
 
-// ---------------------------------------------------------------------------
-// Presentational constants
-// ---------------------------------------------------------------------------
-
 export const PHASE_LABEL: Record<PokerPhase, string> = {
   commit: "Shuffling",
   open_private_holes: "Dealing",
@@ -27,41 +23,8 @@ export const RANKS = [
   "2", "3", "4", "5", "6", "7", "8", "9", "T", "J", "Q", "K", "A",
 ];
 
-// Kept for back-compat with windows that still spread it; the sketch skin styles
-// everything through the `.qp-*` classes instead, so this is now a no-op object.
-export const HEADS_UP_STYLE = {} as const;
-
 // ---------------------------------------------------------------------------
-// SketchDefs — the SVG roughen filter. Render ONCE per window; every `.qp-*`
-// border (drawn on a ::before) references `url(#qpRough)` to get its hand-drawn
-// wobble. Content text is never filtered, so it stays crisp.
-// ---------------------------------------------------------------------------
-
-export function SketchDefs(): JSX.Element {
-  return (
-    <svg aria-hidden width="0" height="0" className="qp-defs">
-      <filter id="qpRough" x="-6%" y="-6%" width="112%" height="112%">
-        <feTurbulence
-          type="fractalNoise"
-          baseFrequency="0.018"
-          numOctaves={2}
-          seed={7}
-          result="noise"
-        />
-        <feDisplacementMap
-          in="SourceGraphic"
-          in2="noise"
-          scale="2.6"
-          xChannelSelector="R"
-          yChannelSelector="G"
-        />
-      </filter>
-    </svg>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Presentational helpers
+// Presentational constants
 // ---------------------------------------------------------------------------
 
 export function cardText(card: number): string {
@@ -148,8 +111,8 @@ function PlayerSeat({
   return (
     <div className={`qp-player qp-player--${party === "A" ? "hero" : "opp"}`}>
       <section
-        className={`qp-seat qp-seat--${party === "A" ? "hero" : "opp"} qp-stroke${
-          active ? " qp-stroke--active" : ""
+        className={`qp-seat qp-seat--${party === "A" ? "hero" : "opp"} sketch-stroke sketch-panel${
+          active ? " sketch-stroke--accent" : ""
         }`}
       >
         <div className="qp-seat__who">
