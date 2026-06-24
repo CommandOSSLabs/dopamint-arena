@@ -1,6 +1,6 @@
 #[test_only]
 module mtps::mtps_tests {
-    use mtps::mtps::{Self, MtpsFaucet, MTPS};
+    use mtps::mtps::{Self, MtpsFaucet, MtpsNFT, MTPS};
     use sui::test_scenario as ts;
     use sui::coin::Coin;
 
@@ -40,6 +40,18 @@ module mtps::mtps_tests {
         mtps::set_can_mint(&mut faucet, false, scenario.ctx());
         mtps::mint(&mut faucet, 1, deployer, scenario.ctx()); // aborts
         ts::return_shared(faucet);
+        scenario.end();
+    }
+
+    #[test]
+    fun mint_nft_transfers_to_caller() {
+        let user = @0xC;
+        let mut scenario = ts::begin(user);
+        mtps::mint_nft(b"Flag", b"A test NFT", b"https://example.com/i.png", scenario.ctx());
+        // The caller received the NFT.
+        scenario.next_tx(user);
+        let nft = scenario.take_from_sender<MtpsNFT>();
+        scenario.return_to_sender(nft);
         scenario.end();
     }
 }

@@ -3,9 +3,15 @@
 /// MINTS new MTPS on demand via the `TreasuryCap` (it never draws from a fixed reserve, so it
 /// can't "run out"), and the tunnel framework is generic over the coin `T` so `Coin<MTPS>`
 /// stakes need no tunnel change. Modeled on quantum-poker's `test_buck`.
+///
+/// The same package also exposes a permissionless `mint_nft` so anyone can mint a simple
+/// (title, description, image) NFT to themselves — a free testnet collectible.
 #[allow(deprecated_usage)]
 module mtps::mtps {
     use sui::coin::{Self, TreasuryCap};
+    use sui::url::{Self, Url};
+    use sui::event;
+    use std::string::{Self, String};
 
     /// One-time witness: guarantees a single `TreasuryCap<MTPS>` for this currency.
     public struct MTPS has drop {}
@@ -16,6 +22,22 @@ module mtps::mtps {
         id: UID,
         treasury_cap: TreasuryCap<MTPS>,
         can_mint: bool,
+    }
+
+    /// A free, permissionlessly-minted collectible: anyone calls `mint_nft` to mint one to
+    /// themselves. `store` so it can be transferred/sold; metadata is set once at mint.
+    public struct MtpsNFT has key, store {
+        id: UID,
+        title: String,
+        description: String,
+        image_url: Url,
+    }
+
+    /// Emitted on every `mint_nft` so wallets/indexers can surface the new collectible.
+    public struct NftMinted has copy, drop {
+        object_id: ID,
+        creator: address,
+        title: String,
     }
 
     const E_MINT_DISABLED: u64 = 0;
@@ -68,6 +90,30 @@ module mtps::mtps {
     /// anyone, so this is a demo-grade control, not hardened access control).
     public fun set_can_mint(faucet: &mut MtpsFaucet, can_mint: bool, _ctx: &mut TxContext) {
         faucet.can_mint = can_mint;
+    }
+
+    /// Permissionless: anyone mints a `(title, description, image_url)` NFT to THEMSELVES. No
+    /// cap or fee — a free testnet collectible. UTF-8 bytes in, transferred to the caller.
+    #[allow(lint(self_transfer))]
+    public fun mint_nft(
+        title: vector<u8>,
+        description: vector<u8>,
+        image_url: vector<u8>,
+        ctx: &mut TxContext,
+    ) {
+        let sender = ctx.sender();
+        let nft = MtpsNFT {
+            id: object::new(ctx),
+            title: string::utf8(title),
+            description: string::utf8(description),
+            image_url: url::new_unsafe_from_bytes(image_url),
+        };
+        event::emit(NftMinted {
+            object_id: object::id(&nft),
+            creator: sender,
+            title: nft.title,
+        });
+        transfer::public_transfer(nft, sender);
     }
 
     #[test_only]
