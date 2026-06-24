@@ -12,7 +12,10 @@ export class ChatApiClient {
   private baseUrl: string;
   private fetch: typeof globalThis.fetch;
 
-  constructor(baseUrl: string, fetchImpl: typeof globalThis.fetch = fetch) {
+  constructor(
+    baseUrl: string,
+    fetchImpl: typeof globalThis.fetch = (url, init) => globalThis.fetch(url, init),
+  ) {
     this.baseUrl = baseUrl.replace(/\/+$/, "");
     this.fetch = fetchImpl;
   }
