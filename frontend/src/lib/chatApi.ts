@@ -24,8 +24,8 @@ export class ChatApiClient {
       body: JSON.stringify({ messages }),
     });
     if (!res.ok) throw new Error(`chat failed: ${res.status}`);
-    const json = (await res.json()) as { response: string };
-    return json.response;
+    const json = (await res.json()) as { content: string };
+    return json.content;
   }
 
   async topic(): Promise<string> {

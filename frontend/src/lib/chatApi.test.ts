@@ -5,7 +5,7 @@ import { ChatApiClient } from "./chatApi.ts";
 test("chat returns assistant text", async () => {
   const fetch = mock.fn(async () => ({
     ok: true,
-    json: async () => ({ response: "hello" }),
+    json: async () => ({ content: "hello" }),
   } as Response));
   const client = new ChatApiClient("http://localhost:8080", fetch as any);
   const answer = await client.chat([{ role: "user", content: "hi" }]);
