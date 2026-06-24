@@ -68,6 +68,9 @@ export interface QuantumPokerBotSession {
   act: (move: PokerMove) => void;
   /** Settle the current tunnel early (cash out) — status moves to "settled" when done. */
   settleNow: () => void;
+  /** Hand the human's seat to a bot and keep the match running in the background (the player left
+   *  without settling). Bot-vs-bot plays on until a seat busts → the existing terminal settle fires. */
+  handOffToBot: () => void;
   reset: () => void;
 }
 
@@ -132,6 +135,9 @@ class BotSession {
   private secondsLeft: number | null = null;
   private turnTimer: ReturnType<typeof setTimeout> | null = null;
   private turnTick: ReturnType<typeof setInterval> | null = null;
+  // Set when the human Backs out without settling: the drive loop then plays their seat with botA
+  // (bot-vs-bot) until a seat busts and the terminal settle closes the tunnel.
+  private humanLeft = false;
 
   subscribe = (cb: () => void): (() => void) => {
     this.listeners.add(cb);
@@ -163,6 +169,7 @@ class BotSession {
   reset = () => {
     this.gen += 1;
     this.looping = false;
+    this.humanLeft = false;
     this.clearTurnTimer();
     this.tunnel = null;
     this.transcript = null;
@@ -215,6 +222,7 @@ class BotSession {
     }
     this.gen += 1;
     const myGen = this.gen;
+    this.humanLeft = false;
     this.error = null;
     this.status = "funding";
     this.emit();
@@ -331,6 +339,20 @@ class BotSession {
       while (this.gen === myGen) {
         const r = stepPokerWithHuman(tunnel, botA, botB, HUMAN, this.ts++);
         if (r.kind === "await-human") {
+          if (this.humanLeft) {
+            // The human Backed out: botA plays their betting turn, then the loop keeps stepping
+            // toward the showdown/bust — no turn timer, no waiting.
+            const move = botA.plan(tunnel.state);
+            if (move) {
+              applyHumanMove(tunnel, botA, HUMAN, move, this.ts++);
+              this.heartbeatActions += 1;
+              this.moveCount += 1;
+              this.flushHeartbeat(this.tunnelId, false);
+              this.emit();
+              await sleep(AUTO_MS);
+              continue;
+            }
+          }
           this.status = "awaitHuman";
           this.startTurnTimer(); // arms the countdown and emits
           return;
@@ -405,6 +427,22 @@ class BotSession {
     if (this.status !== "playing" && this.status !== "awaitHuman") return;
     const myGen = ++this.gen;
     void this.settle(myGen);
+  };
+
+  /** The human Backed out without settling: hand their seat to botA and let the match run on in the
+   *  background until a seat busts (the loop's terminal branch then settles). No-op if not in play. */
+  handOffToBot = () => {
+    if (this.humanLeft) return;
+    if (this.status !== "playing" && this.status !== "awaitHuman") return;
+    this.humanLeft = true;
+    if (this.status === "awaitHuman") {
+      // The drive loop is parked waiting for the human — cancel the countdown and re-kick it so botA
+      // takes the turn. `drive` re-entry is safe (it cleared `looping` when it parked).
+      this.clearTurnTimer();
+      this.status = "playing";
+      this.emit();
+      void this.drive(this.gen);
+    }
   };
 
   private settle = async (myGen: number) => {
@@ -486,6 +524,7 @@ export function useQuantumPokerBot(windowId: string): QuantumPokerBotSession {
     open: session.open,
     act: session.act,
     settleNow: session.settleNow,
+    handOffToBot: session.handOffToBot,
     reset: session.reset,
   };
 }
