@@ -3,7 +3,6 @@
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
-use tokio::sync::broadcast;
 
 pub struct AppState {
     pub control: std::sync::Arc<dyn crate::store::ControlStore>,
@@ -11,9 +10,6 @@ pub struct AppState {
     pub bus: std::sync::Arc<dyn crate::store::Bus>,
     pub settler: crate::sui::SuiSettler,
     pub walrus: crate::walrus::WalrusClient,
-    /// Latest aggregate snapshot is computed once per tick and fanned out here to
-    /// every SSE subscriber — so cost scales with the audience, not with TPS.
-    pub stats_tx: broadcast::Sender<String>,
     /// Per-instance move counter; flushed to `control` once/sec (see stats_counter).
     pub actions: crate::stats_counter::LocalActionCounter,
     /// Matchmaking hold in ms: how long a joiner waits for a same-instance partner
@@ -28,21 +24,19 @@ pub type SharedState = std::sync::Arc<AppState>;
 #[cfg(any(test, feature = "test-util"))]
 impl AppState {
     /// Build an in-memory-backed `SharedState` for unit tests. Mirrors the no-Redis branch in
-    /// `main.rs`: `InMemoryControlStore`, `InMemoryMpStore`, `LocalBus`, and a stub stats
-    /// channel. No network I/O; always synchronous and deterministic.
+    /// `main.rs`: `InMemoryControlStore`, `InMemoryMpStore`, `LocalBus`. No network I/O; always
+    /// synchronous and deterministic.
     pub fn in_memory_for_test() -> SharedState {
         use std::sync::Arc;
 
         use crate::store::memory::{InMemoryControlStore, InMemoryMpStore, LocalBus};
 
-        let (stats_tx, _) = broadcast::channel(4);
         Arc::new(AppState {
             control: Arc::new(InMemoryControlStore::default()),
             mp: Arc::new(InMemoryMpStore::default()),
             bus: Arc::new(LocalBus::new("test-instance".to_owned())),
             settler: crate::sui::SuiSettler::noop(),
             walrus: crate::walrus::WalrusClient::noop(),
-            stats_tx,
             actions: crate::stats_counter::LocalActionCounter::default(),
             pair_hold_ms: 750,
             pairing: crate::stats_counter::MatchPairingMetrics::default(),

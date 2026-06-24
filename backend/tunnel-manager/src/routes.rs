@@ -1,16 +1,11 @@
 //! HTTP handlers for the control-plane contract (ADR-0002). Per-move traffic never
 //! reaches here (ADR-0001): only register / heartbeat / settle / live-stats.
 
-use std::convert::Infallible;
-
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
-use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::{Deserialize, Serialize};
-use tokio_stream::wrappers::BroadcastStream;
-use tokio_stream::{Stream, StreamExt};
 use uuid::Uuid;
 
 use crate::error::ApiError;
@@ -32,14 +27,12 @@ pub(crate) mod test_support {
         )
         .expect("test settler");
         let walrus = crate::walrus::WalrusClient::new("http://pub".into(), "http://agg".into());
-        let (stats_tx, _) = tokio::sync::broadcast::channel(4);
         std::sync::Arc::new(AppState {
             control: std::sync::Arc::new(crate::store::memory::InMemoryControlStore::default()),
             mp: std::sync::Arc::new(crate::store::memory::InMemoryMpStore::default()),
             bus: std::sync::Arc::new(crate::store::memory::LocalBus::new("test-instance".into())),
             settler,
             walrus,
-            stats_tx,
             actions: crate::stats_counter::LocalActionCounter::default(),
             pair_hold_ms: 750,
             pairing: crate::stats_counter::MatchPairingMetrics::default(),
@@ -421,17 +414,6 @@ fn bearer_matches(headers: &HeaderMap, expected: &str) -> bool {
         .and_then(|s| s.strip_prefix("Bearer "))
         .map(|t| t == expected)
         .unwrap_or(false)
-}
-
-/// SSE feed for the catalog activity panel (ADR-0002 `GET /v1/stats/live`).
-pub(crate) async fn stats_live(
-    State(state): State<SharedState>,
-) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    let stream = BroadcastStream::new(state.stats_tx.subscribe()).filter_map(|msg| {
-        msg.ok()
-            .map(|json| Ok::<_, Infallible>(Event::default().data(json)))
-    });
-    Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
 /// Prometheus text exposition of the live counters.
