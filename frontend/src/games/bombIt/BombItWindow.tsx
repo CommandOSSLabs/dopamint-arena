@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useCurrentAccount } from "@mysten/dapp-kit";
 import { registerWindowDisposer } from "@/lib/windowSessions";
 import type { GameWindowProps } from "../types";
@@ -7,6 +7,7 @@ import { useBombItSession } from "./useBombItSession";
 import { BombLobby } from "./components/BombLobby";
 import { BombBoard } from "./components/BombBoard";
 import { BombScreen } from "./components/BombScreen";
+import { useSoloCabinet } from "@/shell/cabinet/soloCabinet";
 import "./bomb-it.css";
 
 // Persisted by windowId so a remount (minimize / maximize / desktop reflow) returns to the live
@@ -47,6 +48,17 @@ export function BombItWindow({ windowId }: GameWindowProps) {
     else if (mode === "pvp") pvp.reset();
     setMode(null);
   };
+
+  // Cabinet "Return to Home": stop solo + show the chooser. Stable (module-const
+  // modeStore + stable setModeState + session.reset) so the controller doesn't
+  // re-register every render.
+  const goHome = useCallback(() => {
+    solo.reset();
+    modeStore.delete(windowId);
+    setModeState(null);
+  }, [solo.reset, windowId]);
+
+  useSoloCabinet(solo, mode, goHome);
 
   // First open with a wallet connected → fund + play a solo bot match immediately (parity with the
   // other arena games), instead of landing on the lobby. Once-only per window: a remount never
