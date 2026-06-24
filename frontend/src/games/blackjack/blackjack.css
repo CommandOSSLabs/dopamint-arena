@@ -1,408 +1,342 @@
-/* Casino table styling ported from the standalone blackjack client. */
-
-/* Casino Felt Table Background */
-.casino-felt {
-  background: radial-gradient(
-    circle at center,
-    #0c572c 0%,
-    #06351b 50%,
-    #032110 100%
-  );
-  position: relative;
-  overflow: hidden;
+/* Scoped Cabinet Home Button override */
+.shell-stage:has(.bj-root) > .shell-home-btn {
+  display: none;
 }
 
-.casino-felt::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  opacity: 0.04;
-  background-image:
-    radial-gradient(#ccc 1px, transparent 0),
-    radial-gradient(#ccc 1px, transparent 0);
-  background-size: 8px 8px;
-  background-position:
-    0 0,
-    4px 4px;
-  pointer-events: none;
-}
+/* ============================================================
+   Blackjack — hand-drawn "whiteboard sketch" skin (Excalidraw-style).
+   Unifies the style with Quantum Poker.
+   ============================================================ */.bj-root {
+  --qp-ink: #23221f;
+  --qp-ink-soft: rgba(35, 34, 31, 0.6);
+  --qp-paper: #fbf9f3;
+  --qp-felt: #2f9e44;
+  --qp-felt-fill: #eaf8ee;
+  --qp-red: #e03131;
+  --qp-blue: #1971c2;
+  --qp-violet: #6741d9;
+  --qp-amber: #e8920c;
+  --qp-amber-fill: #ffe9bd;
 
-/* Mahogany Casino Table Rim border */
-.wood-rim {
-  border: 16px solid #2d1810;
-  box-shadow:
-    inset 0 0 20px rgba(0, 0, 0, 0.8),
-    0 10px 25px rgba(0, 0, 0, 0.5);
-  border-radius: 40px;
-}
+  container-type: size;
+  font-family: "Gochi Hand", "Comic Sans MS", cursive;
+  color: var(--qp-ink);
+  background-color: var(--qp-paper);
+  background-image: radial-gradient(rgba(35, 34, 31, 0.09) 1.1px, transparent 1.3px);
+  background-size: 16px 16px;
+  background-position: -8px -8px;
 
-/* Gold Text and Glows */
-.text-gold {
-  color: #d4af37;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
-}
+  & * {
+    font-family: "Gochi Hand", "Comic Sans MS", cursive;
+  }
 
-.gold-glow {
-  box-shadow: 0 0 15px rgba(212, 175, 55, 0.4);
-}
+  /* SVG filter defs holder — zero-size, out of flow */
+  & .qp-defs {
+    position: absolute;
+    width: 0;
+    height: 0;
+  }
 
-.gold-glow-hover:hover {
-  box-shadow: 0 0 20px rgba(212, 175, 55, 0.6);
-  transform: translateY(-2px);
-  transition: all 0.2s ease-in-out;
-}
+  /* ---- hand-drawn ink stroke (content stays crisp; only the border wobbles) ---- */
+  & .qp-stroke {
+    position: relative;
+    isolation: isolate;
+  }
+  & .qp-stroke::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: var(--qp-fill, transparent);
+    border: 2.5px solid var(--qp-ink);
+    border-radius: 10px;
+    filter: url(#qpRough);
+    pointer-events: none;
+    z-index: -1;
+  }
+  & .qp-stroke--felt::before {
+    border-color: var(--qp-felt);
+    border-width: 3px;
+  }
+  & .qp-stroke--active::before {
+    border-color: var(--qp-amber);
+    border-width: 3px;
+  }
 
-/* Chip style */
-.casino-chip {
-  --chip-size: 50px;
-  --chip-font: 14px;
-  --chip-border: 4px;
-  --chip-inset: 6px;
-  --chip-inner-border: 2px;
+  & .qp-panel {
+    --qp-fill: #fffefb;
+    border-radius: 10px;
+  }
 
-  position: relative;
-  width: var(--chip-size);
-  height: var(--chip-size);
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-weight: bold;
-  font-size: var(--chip-font);
-  border-width: var(--chip-border);
-  border-style: dashed;
-  border-color: rgba(255, 255, 255, 0.7);
-  box-shadow:
-    0 4px 8px rgba(0, 0, 0, 0.4),
-    inset 0 0 8px rgba(0, 0, 0, 0.6);
-  cursor: pointer;
-  transition: all 0.2s;
-  user-select: none;
-}
+  /* ---- title, eyebrow, note ---- */
+  & .qp-title {
+    font-size: 4rem; /* 64px */
+    line-height: 1.1;
+    font-weight: 950;
+    letter-spacing: 0.05em;
+  }
+  & .qp-eyebrow {
+    font-size: 1.75rem; /* 28px */
+    letter-spacing: 0.1em;
+    color: var(--qp-amber);
+    text-transform: uppercase;
+    font-weight: bold;
+  }
+  & .qp-note {
+    font-size: 1.625rem; /* 26px */
+    line-height: 1.4;
+    color: var(--qp-ink-soft);
+  }
 
-.casino-chip:hover {
-  transform: translateY(-4px) scale(1.05) rotate(15deg);
-  box-shadow:
-    0 6px 12px rgba(0, 0, 0, 0.5),
-    inset 0 0 8px rgba(0, 0, 0, 0.4);
-}
+  /* ---- sketchy button ---- */
+  & .qp-btn {
+    position: relative;
+    isolation: isolate;
+    font-family: inherit;
+    line-height: 1;
+    --qp-fill: #fffefb;
+    color: var(--qp-ink);
+    cursor: pointer;
+    transition: transform 0.1s ease;
+    border: none;
+    background: none;
+    font-size: inherit; /* override global clamp */
+    padding: revert; /* override global clamp */
+  }
+  & .qp-btn::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: var(--qp-fill);
+    border: 2.5px solid var(--qp-ink);
+    border-radius: 9px;
+    filter: url(#qpRough);
+    z-index: -1;
+  }
+  & .qp-btn:hover:not(:disabled) {
+    transform: translateY(-1px) rotate(-0.5deg);
+  }
+  & .qp-btn:active:not(:disabled) {
+    transform: translateY(1px);
+  }
+  & .qp-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  & .qp-btn--go {
+    --qp-fill: var(--qp-amber-fill);
+  }
+  & .qp-btn--go::before {
+    border-color: var(--qp-amber);
+  }
+  & .qp-btn--stop {
+    --qp-fill: #ffe9e9;
+  }
+  & .qp-btn--stop::before {
+    border-color: var(--qp-red);
+  }
+  & .qp-btn--call {
+    --qp-fill: #e7f1fb;
+  }
+  & .qp-btn--call::before {
+    border-color: var(--qp-blue);
+  }
 
-.casino-chip:active {
-  transform: translateY(-1px) scale(0.95);
-}
+  /* ---- sketchy inputs ---- */
+  & .qp-input {
+    background: #fffdf6;
+    border: 2px solid var(--qp-ink);
+    border-radius: 6px;
+    color: var(--qp-ink);
+    padding: 4px 8px;
+    outline: none;
+  }
+  & .qp-input:focus {
+    border-color: var(--qp-amber);
+  }
 
-.casino-chip::before {
-  content: "";
-  position: absolute;
-  inset: var(--chip-inset);
-  border-radius: 50%;
-  border: var(--chip-inner-border) solid rgba(255, 255, 255, 0.3);
-  pointer-events: none;
-}
+  /* ---- sketchy felt area ---- */
+  & .bj-felt {
+    position: relative;
+    isolation: isolate;
+    background: var(--qp-felt-fill);
+    border-radius: 16px;
+    width: 100%;
+    height: 100%;
+    max-width: 52rem;
+    max-height: 34rem;
+    margin: auto;
+  }
+  & .bj-felt::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border: 3px solid var(--qp-felt);
+    border-radius: 16px;
+    filter: url(#qpRough);
+    z-index: -1;
+    pointer-events: none;
+  }
 
-/* Premium Menu Background with dark vignette overlay */
-.menu-background {
-  background:
-    radial-gradient(
-      circle at center,
-      rgba(12, 87, 44, 0.3) 0%,
-      rgba(3, 33, 16, 0.9) 100%
-    ),
-    url("/menu-background.png");
-  background-size: cover;
-  background-position: center;
-  position: relative;
-  overflow: hidden;
-}
+  /* ---- betting area / chips ---- */
+  & .qp-bet {
+    position: relative;
+    isolation: isolate;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35em;
+    padding: 4px 12px;
+    font-size: 26px;
+    color: var(--qp-amber);
+  }
+  & .qp-bet::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border: 2px dashed var(--qp-amber);
+    border-radius: 999px;
+    filter: url(#qpRough);
+    z-index: -1;
+  }
 
-/* Smooth fade-in transitions */
-.fade-in-up {
-  opacity: 0;
-  animation: fadeInUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  & .qp-chip {
+    display: inline-grid;
+    place-items: center;
+    width: 1rem;
+    height: 1rem;
+    border-radius: 50%;
+    background: var(--qp-amber);
+    border: 1.5px solid var(--qp-ink);
+    margin-right: 4px;
+  }
+
+  /* ---- seats / info boxes ---- */
+  & .qp-seat {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 6px 14px;
+    --qp-fill: #fffefb;
+    border-radius: 10px;
+    border: none;
+  }
+  & .qp-seat__id {
+    display: grid;
+    place-items: center;
+    width: 3.2rem;
+    height: 3.2rem;
+    border-radius: 50%;
+    font-size: 28px;
+    color: #fffefb;
+    font-weight: bold;
+  }
+  & .qp-seat__id--a {
+    background: var(--qp-blue);
+  }
+  & .qp-seat__id--b {
+    background: var(--qp-violet);
+  }
+  & .qp-seat__name {
+    font-size: 32px;
+    font-weight: bold;
+    line-height: 1.1;
+  }
+  & .qp-seat__stack {
+    display: inline-flex;
+    align-items: center;
+    font-size: 26px;
+  }
+
+  /* ---- cards ---- */
+  & .qp-cardrow {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+  }
+  & .qp-card {
+    position: relative;
+    isolation: isolate;
+    display: grid;
+    place-items: center;
+    flex: none;
+    background: #fffdf6;
+    color: var(--qp-ink);
+    font-weight: bold;
+    border-radius: 6px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+  }
+  & .qp-card::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border: 2px solid var(--qp-ink);
+    border-radius: 7px;
+    filter: url(#qpRough);
+    z-index: -1;
+  }
+  & .qp-card--red {
+    color: var(--qp-red);
+  }
+  & .qp-card--back {
+    background:
+      repeating-linear-gradient(
+        45deg,
+        rgba(25, 113, 194, 0.22) 0 4px,
+        rgba(25, 113, 194, 0.05) 4px 8px
+      ),
+      #eef4fb;
+    color: transparent;
+  }
+
+  /* ---- header / ticker ---- */
+  & .qp-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 16px;
+    border-bottom: 2px solid var(--qp-ink);
+  }
+
+  & .qp-ticker {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+    padding: 8px 16px;
+    border-top: 2px solid var(--qp-ink);
+    background: var(--qp-paper);
+  }
+  & .qp-stat {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 4px;
+  }
+  & .qp-stat__n {
+    font-size: 18px;
+    font-weight: bold;
+  }
+  & .qp-stat__l {
+    font-size: 12px;
+    color: var(--qp-ink-soft);
+  }
+  & .qp-dot {
+    color: var(--qp-ink-soft);
+  }
+
+  /* ---- other custom styles ---- */
+  & .fade-in-up {
+    opacity: 0;
+    animation: fadeInUp 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
 }
 
 @keyframes fadeInUp {
   from {
     opacity: 0;
-    transform: translateY(12px);
+    transform: translateY(8px);
   }
   to {
     opacity: 1;
     transform: translateY(0);
-  }
-}
-
-/* Suit transition animation */
-@keyframes suitScale {
-  0% {
-    transform: scale(0.5);
-    opacity: 0;
-  }
-  40% {
-    transform: scale(1.25);
-    opacity: 1;
-  }
-  100% {
-    transform: scale(1);
-    opacity: 1;
-  }
-}
-
-.suit-anim {
-  animation: suitScale 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
-}
-
-/* Betting Spot Desk Area */
-.betting-spot {
-  position: absolute;
-  left: 50%;
-  top: 48%;
-  transform: translate(-50%, -50%);
-  width: 120px;
-  height: 120px;
-  border: 2px dashed rgba(212, 175, 55, 0.35);
-  border-radius: 50%;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  pointer-events: none;
-  z-index: 10;
-  background: radial-gradient(
-    circle,
-    rgba(20, 80, 45, 0.4) 0%,
-    transparent 80%
-  );
-  transition: all 0.3s ease;
-}
-
-.betting-spot.active {
-  border-color: rgba(212, 175, 55, 0.75);
-  box-shadow:
-    0 0 15px rgba(212, 175, 55, 0.2),
-    inset 0 0 15px rgba(212, 175, 55, 0.1);
-}
-
-.betting-label {
-  font-family: "Outfit", "Inter", sans-serif;
-  font-size: 8px;
-  font-weight: 800;
-  color: rgba(212, 175, 55, 0.7);
-  letter-spacing: 1.2px;
-  text-transform: uppercase;
-  margin-top: 4px;
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
-  pointer-events: none;
-}
-
-/* Chip stack styles next to player profiles */
-.profile-chip-stack {
-  display: flex;
-  flex-direction: column-reverse;
-  align-items: center;
-  position: relative;
-  width: 50px;
-  height: 35px;
-  margin-bottom: 2px;
-  --chip-spacing: 5px;
-}
-
-.stacked-chip {
-  position: absolute;
-  width: 44px;
-  height: 44px;
-  filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.4));
-  transition: all 0.3s ease;
-}
-
-@media (min-width: 768px) {
-  .profile-chip-stack {
-    width: 70px;
-    height: 50px;
-    --chip-spacing: 8px;
-  }
-  .stacked-chip {
-    width: 56px;
-    height: 56px;
-  }
-}
-
-/* Table chips layer for active round animations */
-.table-chips-layer {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  z-index: 25;
-}
-
-.animated-chip {
-  position: absolute;
-  width: 64px;
-  height: 64px;
-  pointer-events: none;
-  filter: drop-shadow(0 4px 6px rgba(0, 0, 0, 0.5));
-}
-
-/* Animation triggers */
-.chip-deal {
-  animation: chipFromPlayer 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.2) forwards;
-}
-
-.chip-lose {
-  animation: chipToDealer 0.5s cubic-bezier(0.55, 0.055, 0.675, 0.19) forwards;
-}
-
-.chip-push {
-  animation: chipToPlayer 0.5s cubic-bezier(0.55, 0.055, 0.675, 0.19) forwards;
-}
-
-.chip-win-collect-1 {
-  animation: chipCenterToPlayer 0.9s cubic-bezier(0.25, 1, 0.5, 1) forwards;
-}
-
-.chip-win-collect-2 {
-  animation: chipFromDealerToPlayer 0.9s cubic-bezier(0.25, 1, 0.5, 1) forwards;
-}
-
-@keyframes chipFromPlayer {
-  0% {
-    top: 80%;
-    left: 50%;
-    transform: translate(-50%, -50%) scale(0.6) rotate(-45deg);
-    opacity: 0;
-  }
-  100% {
-    top: 48%;
-    left: 50%;
-    transform: translate(-50%, -50%) scale(1) rotate(0deg);
-    opacity: 1;
-  }
-}
-
-@keyframes chipFromDealer {
-  0% {
-    top: 15%;
-    left: 50%;
-    transform: translate(-50%, -50%) scale(0.6) rotate(45deg);
-    opacity: 0;
-  }
-  100% {
-    top: 48%;
-    left: 50%;
-    transform: translate(-50%, -50%) scale(1) rotate(15deg);
-    opacity: 1;
-  }
-}
-
-@keyframes chipToDealer {
-  0% {
-    top: 48%;
-    left: 50%;
-    transform: translate(-50%, -50%) scale(1) rotate(0deg);
-    opacity: 1;
-  }
-  100% {
-    top: 15%;
-    left: 50%;
-    transform: translate(-50%, -50%) scale(0.6) rotate(-45deg);
-    opacity: 0;
-  }
-}
-
-@keyframes chipToPlayer {
-  0% {
-    top: 48%;
-    left: 50%;
-    transform: translate(-50%, -50%) scale(1) rotate(0deg);
-    opacity: 1;
-  }
-  100% {
-    top: 80%;
-    left: 50%;
-    transform: translate(-50%, -50%) scale(0.6) rotate(45deg);
-    opacity: 0;
-  }
-}
-
-@keyframes chipFromDealerToPlayer {
-  0% {
-    top: 15%;
-    left: 50%;
-    transform: translate(-50%, -50%) scale(0.6) rotate(45deg);
-    opacity: 0;
-  }
-  40% {
-    top: 46%;
-    left: 52%;
-    transform: translate(-50%, -50%) scale(1) rotate(15deg);
-    opacity: 1;
-  }
-  45% {
-    top: 46%;
-    left: 52%;
-    transform: translate(-50%, -50%) scale(1) rotate(15deg);
-    opacity: 1;
-  }
-  100% {
-    top: 80%;
-    left: 50%;
-    transform: translate(-50%, -50%) scale(0.6) rotate(60deg);
-    opacity: 0;
-  }
-}
-
-@keyframes chipCenterToPlayer {
-  0% {
-    top: 48%;
-    left: 50%;
-    transform: translate(-50%, -50%) scale(1) rotate(0deg);
-    opacity: 1;
-  }
-  45% {
-    top: 48%;
-    left: 50%;
-    transform: translate(-50%, -50%) scale(1) rotate(0deg);
-    opacity: 1;
-  }
-  100% {
-    top: 80%;
-    left: 50%;
-    transform: translate(-50%, -50%) scale(0.6) rotate(45deg);
-    opacity: 0;
-  }
-}
-
-.chip-deal-reverse {
-  animation: chipFromDealer 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.2) forwards;
-}
-
-.chip-lose-from-bottom {
-  animation: chipFromPlayerToDealer 0.9s cubic-bezier(0.25, 1, 0.5, 1) forwards;
-}
-
-@keyframes chipFromPlayerToDealer {
-  0% {
-    top: 80%;
-    left: 50%;
-    transform: translate(-50%, -50%) scale(0.6) rotate(-45deg);
-    opacity: 0;
-  }
-  40% {
-    top: 46%;
-    left: 52%;
-    transform: translate(-50%, -50%) scale(1) rotate(-15deg);
-    opacity: 1;
-  }
-  45% {
-    top: 46%;
-    left: 52%;
-    transform: translate(-50%, -50%) scale(1) rotate(-15deg);
-    opacity: 1;
-  }
-  100% {
-    top: 15%;
-    left: 50%;
-    transform: translate(-50%, -50%) scale(0.6) rotate(-60deg);
-    opacity: 0;
   }
 }

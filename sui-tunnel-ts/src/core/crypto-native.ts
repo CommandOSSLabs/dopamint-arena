@@ -63,7 +63,18 @@ export function nativeBackendSupported(): boolean {
   return cachedSupported;
 }
 
-/** The fastest backend available here: native in Node, @noble elsewhere. */
+let backendOverride: CryptoBackend | null = null;
+
+/** Override the process-wide default backend — e.g. the browser installs a WASM ed25519 backend at
+ *  boot (node:crypto is unavailable there, so the auto-pick would otherwise be the slower @noble).
+ *  Pass null to clear and restore native-or-@noble auto-detection. */
+export function setDefaultBackend(backend: CryptoBackend | null): void {
+  backendOverride = backend;
+}
+
+/** The fastest backend available here: an installed override, else native in Node / @noble elsewhere. */
 export function defaultBackend(): CryptoBackend {
-  return nativeBackendSupported() ? nativeBackend : nobleBackend;
+  return (
+    backendOverride ?? (nativeBackendSupported() ? nativeBackend : nobleBackend)
+  );
 }
