@@ -1,0 +1,32 @@
+services:
+  sui-localnet:
+    # ARM64-native image — runs on Apple Silicon without Rosetta emulation.
+    # stack.ts still detects an unhealthy container and falls back to the host
+    # `sui` binary so the bench stack works on x86 hosts too.
+    #
+    # sui ≥ 1.74 requires `sui genesis -f --with-faucet` before `sui start`
+    # when starting fresh — `--force-regenesis` alone does not seed a funded wallet.
+    image: mysten/sui-tools:testnet-v1.74.0-arm64
+    command:
+      - /bin/sh
+      - -c
+      - "sui genesis -f --with-faucet && sui start --with-faucet"
+    ports: ["9000:9000", "9123:9123"]
+    environment:
+      SUI_PROTOCOL_CONFIG_OVERRIDE_ENABLE: "1"
+      SUI_PROTOCOL_CONFIG_OVERRIDE_max_move_package_size: "512000"
+    healthcheck:
+      # curl is not in the image; probe the RPC TCP port via bash.
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/127.0.0.1/9000"]
+      interval: 5s
+      timeout: 5s
+      retries: 80
+
+  valkey:
+    image: valkey/valkey:8-alpine
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
