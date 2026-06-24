@@ -1,6 +1,9 @@
+import { useCallback, useEffect, useRef } from "react";
 import { useCurrentAccount } from "@mysten/dapp-kit";
+import { useSoloCabinet } from "@/shell/cabinet/soloCabinet";
 import type { GameWindowProps } from "../types";
 import { useQuantumPokerAuto } from "./useQuantumPokerAuto";
+import { PokerActionBar } from "./PokerActionBar";
 import { QuantumPokerTable, SketchDefs } from "./QuantumPokerTable";
 
 function Stat({ n, l }: { n: number | string; l: string }) {
@@ -15,13 +18,41 @@ function Stat({ n, l }: { n: number | string; l: string }) {
 export function QuantumPokerBotVsBotWindow({
   windowId,
   onExit,
-}: GameWindowProps & { onExit?: () => void }) {
+  autoTakeOver = false,
+}: GameWindowProps & { onExit?: () => void; autoTakeOver?: boolean }) {
   const s = useQuantumPokerAuto(windowId);
   const account = useCurrentAccount();
   const running = s.status === "running";
   const funding = s.status === "funding";
   const nameA = s.personas?.a ?? "Bot A";
   const nameB = s.personas?.b ?? "Bot B";
+
+  // "Play vs Bot" entry: take seat A once, immediately. Latches at/​before the
+  // first dealt hand, so no further wiring is needed.
+  const took = useRef(false);
+  useEffect(() => {
+    if (autoTakeOver && !took.current) {
+      took.current = true;
+      s.takeOver();
+    }
+  }, [autoTakeOver, s.takeOver]);
+
+  // Shared arcade-cabinet seam (PR #47 `useSoloCabinet` primitive): the shell owns hover → pause →
+  // overlay and the corner Home button; this window only supplies the verbs. goManual = take seat A
+  // (cosmetic, same tunnel — `takeOver` is idempotent); goHome = drop the seat + return to the menu.
+  // Offerable only while the bots auto-play (funded, running, not yet taken over, with live state).
+  const goHome = useCallback(() => {
+    s.returnHome();
+    onExit?.();
+  }, [s.returnHome, onExit]);
+  useSoloCabinet({
+    offerable:
+      !!account && s.funded && s.status === "running" && !s.manual && !!s.state,
+    pause: s.pause,
+    resume: s.resume,
+    goManual: s.takeOver,
+    goHome,
+  });
 
   return (
     <div className="qp-sketch grid h-full min-h-[14rem] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden">
@@ -34,6 +65,7 @@ export function QuantumPokerBotVsBotWindow({
               type="button"
               className="qp-btn"
               onClick={() => {
+                s.returnHome(); // reset take-over so a later "Watch Bots" starts clean
                 s.stopAuto(); // fire-and-forget settle: closes the current tunnel in the background, leave now
                 onExit();
               }}
@@ -42,14 +74,21 @@ export function QuantumPokerBotVsBotWindow({
             </button>
           )}
           <div className="flex min-w-0 flex-col leading-none">
-            <span className="qp-eyebrow">Auto · watching bots</span>
+            <span className="qp-eyebrow">
+              {s.manual ? "Your seat · vs bot" : "Auto · watching bots"}
+            </span>
             <span className="qp-title truncate">Quantum Poker</span>
           </div>
         </div>
-        {running ? (
-          <button type="button" className="qp-btn qp-btn--stop" onClick={s.stopAuto}>
-            Stop
-          </button>
+        {s.manual ? null : running ? (
+          <div className="flex items-center gap-[clamp(6px,2.2cqmin,14px)]">
+            <button type="button" className="qp-btn qp-btn--go" onClick={s.takeOver}>
+              Play vs Bot
+            </button>
+            <button type="button" className="qp-btn qp-btn--stop" onClick={s.stopAuto}>
+              Stop
+            </button>
+          </div>
         ) : (
           <button
             type="button"
@@ -109,7 +148,7 @@ export function QuantumPokerBotVsBotWindow({
             state={s.state}
             holesA={s.holesA}
             holesB={s.holesB}
-            nameA={nameA}
+            nameA={s.manual ? "You" : nameA}
             nameB={nameB}
           />
         ) : (
@@ -118,6 +157,17 @@ export function QuantumPokerBotVsBotWindow({
           </div>
         )}
       </main>
+
+      {s.manual && s.legal && s.state && (
+        <div className="qp-actions px-[clamp(8px,2.4cqmin,18px)] pb-[clamp(6px,1.8cqmin,12px)]">
+          <PokerActionBar
+            legal={s.legal}
+            pot={s.state.totalBetA + s.state.totalBetB}
+            onAct={s.act}
+            secondsLeft={s.secondsLeft}
+          />
+        </div>
+      )}
 
       <footer className="qp-ticker">
         <span className="qp-stat">
