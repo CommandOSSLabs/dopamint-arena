@@ -103,7 +103,7 @@ function laneRng(seed: bigint, lane: number): () => number {
 export function hazardsAt(
   seed: bigint,
   lane: number,
-  tick: bigint,
+  tick: bigint
 ): HazardSpan[] {
   const kind = laneKind(lane);
   if (kind === "grass") return [];
@@ -165,13 +165,13 @@ export function isLethal(
   seed: bigint,
   col: number,
   lane: number,
-  tick: bigint,
+  tick: bigint
 ): boolean {
   if (lane < 0) return true;
   const kind = laneKind(lane);
   if (kind === "grass") return false;
   const onHazard = hazardsAt(seed, lane, tick).some((s) =>
-    spanCoversCol(s, col),
+    spanCoversCol(s, col)
   );
   if (kind === "water") return !onHazard;
   return onHazard;
@@ -181,7 +181,7 @@ export function isLethal(
 export function destOf(
   lane: number,
   col: number,
-  dir: CrossDir,
+  dir: CrossDir
 ): [number, number] {
   if (dir === "north") return [lane + 1, col];
   if (dir === "south") return [Math.max(0, lane - 1), col];
@@ -242,7 +242,7 @@ function stepPlayer(
   seed: bigint,
   p: CrossPlayer,
   dir: CrossDir | undefined,
-  tick: bigint,
+  tick: bigint
 ): CrossPlayer {
   // Post-respawn immunity: no move, no death, just tick down.
   if (p.invulnTicks > 0) {
@@ -275,7 +275,7 @@ function stepPlayer(
 function greedyDir(
   s: CrossState,
   i: number,
-  rng: () => number,
+  rng: () => number
 ): CrossDir | undefined {
   const p = s.players[i];
   if (p.invulnTicks > 0) return undefined;
@@ -369,11 +369,11 @@ export class CrossProtocol implements Protocol<CrossState, CrossMove> {
         u64ToBeBytes(p.lane),
         u64ToBeBytes(p.col),
         u64ToBeBytes(p.score),
-        u64ToBeBytes(p.invulnTicks),
+        u64ToBeBytes(p.invulnTicks)
       );
     }
     parts.push(
-      new Uint8Array([s.winner === "A" ? 1 : s.winner === "B" ? 2 : 0]),
+      new Uint8Array([s.winner === "A" ? 1 : s.winner === "B" ? 2 : 0])
     );
     return concatBytes(parts);
   }

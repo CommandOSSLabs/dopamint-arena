@@ -43,7 +43,7 @@ function expectArray(value: unknown, label: string): unknown[] {
 function bytesFromHex(
   value: unknown,
   label: string,
-  length?: number,
+  length?: number
 ): Uint8Array {
   const bytes = fromHex(expectString(value, label));
   if (length !== undefined && bytes.length !== length) {
@@ -100,17 +100,17 @@ export function pokerMoveFromJson(value: unknown): PokerMove {
         kind,
         commitments: expectArray(move.commitments, "move.commitments").map(
           (commitment, i) =>
-            bytesFromHex(commitment, `move.commitments[${i}]`, 32),
+            bytesFromHex(commitment, `move.commitments[${i}]`, 32)
         ),
       };
     case "reveal_slots":
       return {
         kind,
         slots: expectArray(move.slots, "move.slots").map((slot, i) =>
-          expectInteger(slot, `move.slots[${i}]`),
+          expectInteger(slot, `move.slots[${i}]`)
         ),
         reveals: expectArray(move.reveals, "move.reveals").map((reveal, i) =>
-          revealFromJson(reveal, `move.reveals[${i}]`),
+          revealFromJson(reveal, `move.reveals[${i}]`)
         ),
       };
     case "bet":

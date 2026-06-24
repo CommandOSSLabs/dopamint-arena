@@ -39,12 +39,12 @@ export function buildCreateAndFund(
     timeoutMs: bigint;
     penaltyAmount?: bigint;
     withId?: boolean;
-  } & WithCoinType,
+  } & WithCoinType
 ): TransactionResult {
   return tx.moveCall({
     target: buildTarget(
       TUNNEL,
-      p.withId === false ? "create_and_fund" : "create_and_fund_with_id",
+      p.withId === false ? "create_and_fund" : "create_and_fund_with_id"
     ),
     typeArguments: [p.coinType ?? SUI_COIN_TYPE],
     arguments: [
@@ -83,7 +83,7 @@ export function buildOpenAndFundSeatA(
     penaltyAmount?: bigint;
     /** `Coin<T>` to split seat A's stake from; defaults to the gas coin (SUI sender-pays). */
     stakeCoin?: TransactionObjectArgument;
-  } & WithCoinType,
+  } & WithCoinType
 ): void {
   const coinType = p.coinType ?? SUI_COIN_TYPE;
   const tunnel = tx.moveCall({
@@ -143,20 +143,20 @@ export interface BatchFundOptions {
 export function buildOpenAndFundMany(
   tx: Transaction,
   specs: TunnelOpenSpec[],
-  opts: BatchFundOptions = {},
+  opts: BatchFundOptions = {}
 ): TransactionResult[] {
   const coinType = opts.coinType ?? SUI_COIN_TYPE;
   if (coinType !== SUI_COIN_TYPE && !opts.sourceCoin) {
     throw new Error(
       `buildOpenAndFundMany: coinType ${coinType} is not SUI, so opts.sourceCoin (a Coin<${coinType}> ` +
-        `to split stakes from) is required — non-SUI stakes cannot come from the gas coin.`,
+        `to split stakes from) is required — non-SUI stakes cannot come from the gas coin.`
     );
   }
   const source = opts.sourceCoin ?? tx.gas;
   const amounts = specs.flatMap((s) => [s.aAmount, s.bAmount]);
   const coins = tx.splitCoins(
     source,
-    amounts.map((a) => tx.pure.u64(a)),
+    amounts.map((a) => tx.pure.u64(a))
   );
   return specs.map((s, i) =>
     buildCreateAndFund(tx, {
@@ -171,7 +171,7 @@ export function buildOpenAndFundMany(
       // targets the plain `create_and_fund` — which the deployed package has (the `_with_id`
       // variant is source-only / undeployed). The id-returning path stays for composers below.
       withId: false,
-    }),
+    })
   );
 }
 
@@ -184,13 +184,13 @@ export function buildOpenAndFundMany(
 export function buildOpenAndFundOneReturnless(
   tx: Transaction,
   spec: TunnelOpenSpec,
-  opts: BatchFundOptions = {},
+  opts: BatchFundOptions = {}
 ): void {
   const coinType = opts.coinType ?? SUI_COIN_TYPE;
   if (coinType !== SUI_COIN_TYPE && !opts.sourceCoin) {
     throw new Error(
       `buildOpenAndFundOneReturnless: coinType ${coinType} is not SUI, so opts.sourceCoin ` +
-        `(a Coin<${coinType}> to split stakes from) is required.`,
+        `(a Coin<${coinType}> to split stakes from) is required.`
     );
   }
   const source = opts.sourceCoin ?? tx.gas;
@@ -239,19 +239,19 @@ export interface BatchDepositSpec {
 export function buildDepositMany(
   tx: Transaction,
   specs: BatchDepositSpec[],
-  opts: BatchFundOptions = {},
+  opts: BatchFundOptions = {}
 ): void {
   const coinType = opts.coinType ?? SUI_COIN_TYPE;
   if (coinType !== SUI_COIN_TYPE && !opts.sourceCoin) {
     throw new Error(
       `buildDepositMany: coinType ${coinType} is not SUI, so opts.sourceCoin (a Coin<${coinType}> ` +
-        `to split stakes from) is required — non-SUI stakes cannot come from the gas coin.`,
+        `to split stakes from) is required — non-SUI stakes cannot come from the gas coin.`
     );
   }
   const source = opts.sourceCoin ?? tx.gas;
   const coins = tx.splitCoins(
     source,
-    specs.map((s) => tx.pure.u64(s.amount)),
+    specs.map((s) => tx.pure.u64(s.amount))
   );
   specs.forEach((s, i) => {
     buildDeposit(tx, { tunnelId: s.tunnelId, coin: coins[i], coinType });

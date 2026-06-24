@@ -457,7 +457,7 @@ async function runAllExamples(): Promise<void> {
       name: "Streaming Payment",
       fn: () =>
         import("./examples/streamingPayment").then((m) =>
-          m.exampleStreamingPaymentFlow(),
+          m.exampleStreamingPaymentFlow()
         ),
     },
     {
@@ -469,7 +469,7 @@ async function runAllExamples(): Promise<void> {
       name: "Dutch Auction",
       fn: () =>
         import("./examples/dutchAuction").then((m) =>
-          m.exampleDutchAuctionFlow(),
+          m.exampleDutchAuctionFlow()
         ),
     },
     {
@@ -481,49 +481,49 @@ async function runAllExamples(): Promise<void> {
       name: "Payment Channel",
       fn: () =>
         import("./examples/paymentChannel").then((m) =>
-          m.examplePaymentChannelFlow(),
+          m.examplePaymentChannelFlow()
         ),
     },
     {
       name: "Multi-Hop Payment",
       fn: () =>
         import("./examples/multiHopPayment").then((m) =>
-          m.exampleMultiHopPaymentFlow(),
+          m.exampleMultiHopPaymentFlow()
         ),
     },
     {
       name: "Tunnel Lifecycle",
       fn: () =>
         import("./examples/tunnelLifecycle").then((m) =>
-          m.exampleTunnelLifecycleFlow(),
+          m.exampleTunnelLifecycleFlow()
         ),
     },
     {
       name: "Dispute Resolution",
       fn: () =>
         import("./examples/disputeResolution").then((m) =>
-          m.exampleDisputeResolutionFlow(),
+          m.exampleDisputeResolutionFlow()
         ),
     },
     {
       name: "ZK Private Transfer",
       fn: () =>
         import("./examples/zkPrivateTransfer").then((m) =>
-          m.exampleZkPrivateTransferFlow(),
+          m.exampleZkPrivateTransferFlow()
         ),
     },
     {
       name: "Agent Allowance",
       fn: () =>
         import("./examples/agentAllowance").then((m) =>
-          m.exampleAgentAllowanceFlow(),
+          m.exampleAgentAllowanceFlow()
         ),
     },
     {
       name: "USDC Stablecoin",
       fn: () =>
         import("./examples/usdcStablecoin").then((m) =>
-          m.exampleUsdcStablecoinFlow(),
+          m.exampleUsdcStablecoinFlow()
         ),
     },
   ];
@@ -539,7 +539,7 @@ async function runAllExamples(): Promise<void> {
   console.log("\nTo run actual transactions, set up your environment:");
   console.log("1. Set PACKAGE_ID to your deployed sui_tunnel package");
   console.log(
-    "2. Set PRIVATE_KEY (or BUYER_PRIVATE_KEY, SELLER_PRIVATE_KEY, etc.)",
+    "2. Set PRIVATE_KEY (or BUYER_PRIVATE_KEY, SELLER_PRIVATE_KEY, etc.)"
   );
   console.log("3. Ensure you have SUI tokens for gas and stakes");
 }

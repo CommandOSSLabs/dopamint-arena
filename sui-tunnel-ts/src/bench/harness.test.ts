@@ -17,7 +17,7 @@ test("runBenchmark produces a complete report from a small cluster run", async (
   assert.equal(rep.tunnels, 16);
   assert.ok(
     rep.totalInteractions >= 3500,
-    `interactions=${rep.totalInteractions}`,
+    `interactions=${rep.totalInteractions}`
   );
   assert.ok(rep.avgTps > 0);
   assert.ok(rep.peakTps > 0);

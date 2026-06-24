@@ -19,19 +19,19 @@ export function planGasShards(total: bigint, count: number): bigint[] {
   const rem = total - base * c;
   return Array.from(
     { length: count },
-    (_, i) => base + (BigInt(i) < rem ? 1n : 0n),
+    (_, i) => base + (BigInt(i) < rem ? 1n : 0n)
   );
 }
 
 /** Fan out funds from the sender's gas coin to many recipients in ONE PTB. */
 export function buildFundAccounts(
   tx: Transaction,
-  recipients: { address: string; amount: bigint }[],
+  recipients: { address: string; amount: bigint }[]
 ): void {
   if (recipients.length === 0) return;
   const coins = tx.splitCoins(
     tx.gas,
-    recipients.map((r) => tx.pure.u64(r.amount)),
+    recipients.map((r) => tx.pure.u64(r.amount))
   );
   recipients.forEach((r, i) => {
     tx.transferObjects([coins[i]], tx.pure.address(r.address));
@@ -54,7 +54,7 @@ export class SignerPool {
   /** Generate `n` fresh ephemeral signer accounts (fund them via buildFundAccounts). */
   static generate(n: number): SignerPool {
     return new SignerPool(
-      Array.from({ length: n }, () => new Ed25519Keypair()),
+      Array.from({ length: n }, () => new Ed25519Keypair())
     );
   }
 

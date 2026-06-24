@@ -47,8 +47,8 @@ test("water is inverted: lethal exactly when NOT on a log span", () => {
     const c = col + 0.5;
     const onLog = spans.some((s) =>
       [c, c - COLUMN_COUNT, c + COLUMN_COUNT].some(
-        (cc) => cc > s.center - s.half && cc < s.center + s.half,
-      ),
+        (cc) => cc > s.center - s.half && cc < s.center + s.half
+      )
     );
     assert.equal(isLethal(seed, col, lane, tick), !onLog);
   }
@@ -99,12 +99,12 @@ test("encodeState is canonical: identical states encode to identical bytes", () 
   const a = p.applyMove(
     p.initialState(CTX),
     { dirA: "north", dirB: "north" },
-    "A",
+    "A"
   );
   const b = p.applyMove(
     p.initialState(CTX),
     { dirA: "north", dirB: "north" },
-    "A",
+    "A"
   );
   assert.deepEqual(Array.from(p.encodeState(a)), Array.from(p.encodeState(b)));
 });
@@ -115,7 +115,7 @@ test("different states encode to different bytes (tick advances)", () => {
   const s1 = p.applyMove(s0, { dirA: "north" }, "A");
   assert.notDeepEqual(
     Array.from(p.encodeState(s0)),
-    Array.from(p.encodeState(s1)),
+    Array.from(p.encodeState(s1))
   );
 });
 

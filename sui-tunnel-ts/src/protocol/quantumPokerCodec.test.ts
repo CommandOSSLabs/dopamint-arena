@@ -13,7 +13,7 @@ function secrets(base: number): SlotSecret[] {
     value: Uint8Array.from({ length: 32 }, (_, i) => (base + slot + i) & 0xff),
     salt: Uint8Array.from(
       { length: 16 },
-      (_, i) => (base * 7 + slot + i) & 0xff,
+      (_, i) => (base * 7 + slot + i) & 0xff
     ),
   }));
 }
@@ -67,7 +67,7 @@ test("PokerMoveCodec rejects malformed payloads", () => {
   assert.throws(() => pokerMoveFromJson(null), /object/);
   assert.throws(
     () => pokerMoveFromJson({ kind: "commit_slots", commitments: ["0x01"] }),
-    /32 bytes/,
+    /32 bytes/
   );
   assert.throws(() => pokerMoveFromJson({ kind: "bet", amount: 7 }), /string/);
 });

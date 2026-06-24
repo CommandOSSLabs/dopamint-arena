@@ -103,7 +103,7 @@ export function verifyTranscript(
     partyB: { publicKey: Uint8Array; scheme: number };
     onchainRoot: string;
     lockedTotal?: bigint;
-  },
+  }
 ): TranscriptVerification {
   if (
     params.partyA.scheme !== SignatureScheme.ED25519 ||

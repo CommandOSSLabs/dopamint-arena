@@ -1,11 +1,11 @@
-import { useEffect, useRef } from "react";
 import { useCurrentAccount } from "@mysten/dapp-kit";
+import { useEffect, useRef } from "react";
 import type { PokerMove } from "sui-tunnel-ts/protocol/quantumPoker";
-import type { GameWindowProps } from "../types";
-import { useQuantumPokerBot } from "./useQuantumPokerBot";
-import { QuantumPokerTable } from "./QuantumPokerTable";
 import { SketchDefs } from "../sketch";
+import type { GameWindowProps } from "../types";
 import { pokerRaiseSizes } from "./pokerBetting";
+import { QuantumPokerTable } from "./QuantumPokerTable";
+import { useQuantumPokerBot } from "./useQuantumPokerBot";
 
 // ---------------------------------------------------------------------------
 // Presentational helpers (local only — moveLabel drives the action transcript)
@@ -66,11 +66,19 @@ function ActionBar({
           {secondsLeft}s
         </span>
       )}
-      <button type="button" className="sketch-btn sketch-btn--stop" onClick={() => onAct({ kind: "fold" })}>
+      <button
+        type="button"
+        className="sketch-btn sketch-btn--stop"
+        onClick={() => onAct({ kind: "fold" })}
+      >
         Fold
       </button>
       {legal.canCheck && (
-        <button type="button" className="sketch-btn" onClick={() => onAct({ kind: "check" })}>
+        <button
+          type="button"
+          className="sketch-btn"
+          onClick={() => onAct({ kind: "check" })}
+        >
           Check
         </button>
       )}
@@ -84,17 +92,29 @@ function ActionBar({
         </button>
       )}
       {sizes.showHalf && (
-        <button type="button" className="sketch-btn" onClick={() => raise(sizes.half)}>
+        <button
+          type="button"
+          className="sketch-btn"
+          onClick={() => raise(sizes.half)}
+        >
           ½ Pot · {sizes.half.toString()}
         </button>
       )}
       {sizes.showFull && (
-        <button type="button" className="sketch-btn" onClick={() => raise(sizes.full)}>
+        <button
+          type="button"
+          className="sketch-btn"
+          onClick={() => raise(sizes.full)}
+        >
           Pot · {sizes.full.toString()}
         </button>
       )}
       {sizes.showAllIn && (
-        <button type="button" className="sketch-btn sketch-btn--go" onClick={() => raise(sizes.allIn)}>
+        <button
+          type="button"
+          className="sketch-btn sketch-btn--go"
+          onClick={() => raise(sizes.allIn)}
+        >
           All-in · {sizes.allIn.toString()}
         </button>
       )}
@@ -235,7 +255,11 @@ export function QuantumPokerWindow({
                   : "Playing…"}
           </span>
           {game.status === "settled" && (
-            <button type="button" className="sketch-btn sketch-btn--go" onClick={game.open}>
+            <button
+              type="button"
+              className="sketch-btn sketch-btn--go"
+              onClick={game.open}
+            >
               New tunnel
             </button>
           )}

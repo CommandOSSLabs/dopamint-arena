@@ -82,7 +82,7 @@ test("applyMove rejects wrong-turn and illegal dealer hit", () => {
 test("applyMove rejects unknown actions", () => {
   const s = fresh();
   assert.throws(() =>
-    proto.applyMove(s, { action: "fold" } as unknown as { action: "hit" }, "A"),
+    proto.applyMove(s, { action: "fold" } as unknown as { action: "hit" }, "A")
   );
 });
 
@@ -184,8 +184,8 @@ test("randomMove only ever yields legal moves over many transitions", () => {
       s.phase === "dealer"
         ? getDealerParty(s.round)
         : s.phase === "player"
-          ? getPlayerParty(s.round)
-          : getPlayerParty(s.round + 1n);
+        ? getPlayerParty(s.round)
+        : getPlayerParty(s.round + 1n);
     const m = proto.randomMove(s, by, rng);
     if (!m) {
       // The only non-mover should be the off-turn party; the on-turn party always moves.
@@ -231,7 +231,7 @@ test("end-to-end self-play tunnel: latest co-signed update verifies", () => {
     b,
     ed25519Address(a.publicKey),
     ed25519Address(b.publicKey),
-    { a: 1000n, b: 1000n },
+    { a: 1000n, b: 1000n }
   );
 
   // Play several rounds: player stands, dealer stands, then deal again.
@@ -256,8 +256,8 @@ test("end-to-end self-play tunnel: latest co-signed update verifies", () => {
     verifyCoSignedUpdate(
       t.latest!,
       { publicKey: t.partyA.publicKey, scheme: t.partyA.scheme },
-      { publicKey: t.partyB.publicKey, scheme: t.partyB.scheme },
-    ),
+      { publicKey: t.partyB.publicKey, scheme: t.partyB.scheme }
+    )
   );
   const bal = proto.balances(t.state);
   assert.equal(bal.a + bal.b, 2000n);

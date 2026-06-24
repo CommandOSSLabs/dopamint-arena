@@ -36,10 +36,9 @@ export interface MultiGameBombItState {
 
 export type MultiGameBombItMove = BombItMove;
 
-export class MultiGameBombItProtocol implements Protocol<
-  MultiGameBombItState,
-  MultiGameBombItMove
-> {
+export class MultiGameBombItProtocol
+  implements Protocol<MultiGameBombItState, MultiGameBombItMove>
+{
   readonly name = "bomb_it.multi.v1";
 
   private readonly domain = protocolDomain("bomb_it.multi.v1");
@@ -47,7 +46,7 @@ export class MultiGameBombItProtocol implements Protocol<
 
   constructor(
     private readonly tunnelId: string,
-    private readonly stakePerGame: bigint = BOMB_IT_MIN_STAKE,
+    private readonly stakePerGame: bigint = BOMB_IT_MIN_STAKE
   ) {}
 
   private gameCtx(gameNumber: number): ProtocolContext {
@@ -73,7 +72,7 @@ export class MultiGameBombItProtocol implements Protocol<
   applyMove(
     state: MultiGameBombItState,
     move: MultiGameBombItMove,
-    by: Party,
+    by: Party
   ): MultiGameBombItState {
     if (!this.inner.isTerminal(state.inner)) {
       const nextInner = this.inner.applyMove(state.inner, move, by);
@@ -81,7 +80,7 @@ export class MultiGameBombItProtocol implements Protocol<
         const swapped = this.swap(
           state.balanceA,
           state.balanceB,
-          nextInner.winner,
+          nextInner.winner
         );
         return {
           inner: nextInner,
@@ -108,7 +107,7 @@ export class MultiGameBombItProtocol implements Protocol<
   private swap(
     a: bigint,
     b: bigint,
-    winner: BombItState["winner"],
+    winner: BombItState["winner"]
   ): { a: bigint; b: bigint } {
     if (winner === "A")
       return { a: a + this.stakePerGame, b: b - this.stakePerGame };
@@ -141,7 +140,7 @@ export class MultiGameBombItProtocol implements Protocol<
   randomMove(
     state: MultiGameBombItState,
     by: Party,
-    rng: () => number,
+    rng: () => number
   ): MultiGameBombItMove | null {
     if (!this.inner.isTerminal(state.inner))
       return this.inner.randomMove(state.inner, by, rng);

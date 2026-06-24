@@ -30,7 +30,7 @@ test("buildCreateAndShare targets entry_create_and_share with the package id", (
       partyB: PARTY_B,
       timeoutMs: 1000n,
       penaltyAmount: 0n,
-    }),
+    })
   );
   assert.ok(json.includes("entry_create_and_share"));
   assert.ok(json.includes("ab".repeat(32)));
@@ -39,27 +39,27 @@ test("buildCreateAndShare targets entry_create_and_share with the package id", (
 test("recovery builders target the correct Move functions", () => {
   assert.ok(
     txJson((tx) =>
-      tb.buildRaiseDisputeCurrentState(tx, { tunnelId: TID }),
-    ).includes("entry_raise_dispute_current_state"),
+      tb.buildRaiseDisputeCurrentState(tx, { tunnelId: TID })
+    ).includes("entry_raise_dispute_current_state")
   );
   assert.ok(
     txJson((tx) => tb.buildForceClose(tx, { tunnelId: TID })).includes(
-      "entry_force_close",
-    ),
+      "entry_force_close"
+    )
   );
   assert.ok(
     txJson((tx) =>
       tb.buildWithdrawTimeout(tx, {
         tunnelId: TID,
         recipient: PARTY_A.address,
-      }),
-    ).includes("withdraw_timeout"),
+      })
+    ).includes("withdraw_timeout")
   );
 });
 
 test("buildDepositFromGas splits gas and deposits", () => {
   const json = txJson((tx) =>
-    tb.buildDepositFromGas(tx, { tunnelId: TID, amount: 500n }),
+    tb.buildDepositFromGas(tx, { tunnelId: TID, amount: 500n })
   );
   assert.ok(json.includes("entry_deposit"));
   assert.ok(json.includes("SplitCoins"));
@@ -77,14 +77,14 @@ test("buildCloseFromSettlement wires settlement balances + sigs", () => {
       },
       sigA: new Uint8Array(64),
       sigB: new Uint8Array(64),
-    }),
+    })
   );
   assert.ok(json.includes("entry_close_cooperative"));
 });
 
 test("buildWithdrawTimeout transfers the returned coin to the recipient", () => {
   const json = txJson((tx) =>
-    tb.buildWithdrawTimeout(tx, { tunnelId: TID, recipient: PARTY_A.address }),
+    tb.buildWithdrawTimeout(tx, { tunnelId: TID, recipient: PARTY_A.address })
   );
   assert.ok(json.includes("TransferObjects"));
 });
@@ -99,7 +99,7 @@ test("buildCloseCooperativeWithRoot targets the root-anchored entry", () => {
       sigB: new Uint8Array(64),
       timestamp: 1n,
       transcriptRoot: new Uint8Array(32),
-    }),
+    })
   );
   assert.ok(json.includes("entry_close_cooperative_with_root"));
 });

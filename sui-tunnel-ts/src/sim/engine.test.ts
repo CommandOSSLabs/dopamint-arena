@@ -31,8 +31,8 @@ test("all four tunnel kinds build signable tunnels", () => {
       verifyCoSignedUpdate(
         u!,
         { publicKey: t.partyA.publicKey, scheme: t.partyA.scheme },
-        { publicKey: t.partyB.publicKey, scheme: t.partyB.scheme },
-      ),
+        { publicKey: t.partyB.publicKey, scheme: t.partyB.scheme }
+      )
     );
   }
 });

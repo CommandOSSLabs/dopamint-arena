@@ -54,7 +54,7 @@ export async function openChannel(
   counterparty: string,
   depositCoinId: string,
   client?: SuiClient,
-  keypair?: Ed25519Keypair,
+  keypair?: Ed25519Keypair
 ): Promise<{ channelId: string; digest: string }> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -74,7 +74,7 @@ export async function openChannel(
     typeArguments: [
       `${buildTarget(
         MODULES.EXAMPLE_PAYMENT_CHANNEL,
-        "PaymentChannel",
+        "PaymentChannel"
       )}<${SUI_COIN_TYPE}>`,
     ],
     arguments: [channel],
@@ -108,7 +108,7 @@ export async function joinChannel(
   channelId: string,
   depositCoinId: string,
   client?: SuiClient,
-  keypair?: Ed25519Keypair,
+  keypair?: Ed25519Keypair
 ): Promise<string> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -150,7 +150,7 @@ export async function closeChannelCooperative(
   publicKeyA: Uint8Array,
   publicKeyB: Uint8Array,
   client?: SuiClient,
-  keypair?: Ed25519Keypair,
+  keypair?: Ed25519Keypair
 ): Promise<{ digest: string }> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -174,7 +174,7 @@ export async function closeChannelCooperative(
 
   tx.transferObjects(
     [coinA, coinB],
-    tx.pure.address(signer.getPublicKey().toSuiAddress()),
+    tx.pure.address(signer.getPublicKey().toSuiAddress())
   );
 
   const result = await signAndExecute(suiClient, tx, signer);
@@ -208,7 +208,7 @@ export async function initiateClose(
   publicKeyA: Uint8Array,
   publicKeyB: Uint8Array,
   client?: SuiClient,
-  keypair?: Ed25519Keypair,
+  keypair?: Ed25519Keypair
 ): Promise<string> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -263,7 +263,7 @@ export async function challengeClose(
   publicKeyA: Uint8Array,
   publicKeyB: Uint8Array,
   client?: SuiClient,
-  keypair?: Ed25519Keypair,
+  keypair?: Ed25519Keypair
 ): Promise<string> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -304,7 +304,7 @@ export async function challengeClose(
 export async function finalizeClose(
   channelId: string,
   client?: SuiClient,
-  keypair?: Ed25519Keypair,
+  keypair?: Ed25519Keypair
 ): Promise<{ digest: string }> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -320,7 +320,7 @@ export async function finalizeClose(
 
   tx.transferObjects(
     [coinA, coinB],
-    tx.pure.address(signer.getPublicKey().toSuiAddress()),
+    tx.pure.address(signer.getPublicKey().toSuiAddress())
   );
 
   const result = await signAndExecute(suiClient, tx, signer);
@@ -348,7 +348,7 @@ export interface ChannelState {
  */
 export function computeStateHash(state: ChannelState): Uint8Array {
   const data = new TextEncoder().encode(
-    `payment_channel:${state.channelId}:${state.balanceA}:${state.balanceB}:${state.nonce}`,
+    `payment_channel:${state.channelId}:${state.balanceA}:${state.balanceB}:${state.nonce}`
   );
   return blake2b256(data);
 }
@@ -362,7 +362,7 @@ export function computeStateHash(state: ChannelState): Uint8Array {
  */
 export function createPayment(
   state: ChannelState,
-  amount: bigint,
+  amount: bigint
 ): ChannelState {
   const newBalanceA = state.balanceA - amount;
   const newBalanceB = state.balanceB + amount;
@@ -471,22 +471,22 @@ await closeChannelCooperative(
       nonce: 0n,
     };
     console.log(
-      `Initial: A=${state.balanceA}, B=${state.balanceB}, nonce=${state.nonce}`,
+      `Initial: A=${state.balanceA}, B=${state.balanceB}, nonce=${state.nonce}`
     );
 
     state = createPayment(state, 30n);
     console.log(
-      `After A pays B 30: A=${state.balanceA}, B=${state.balanceB}, nonce=${state.nonce}`,
+      `After A pays B 30: A=${state.balanceA}, B=${state.balanceB}, nonce=${state.nonce}`
     );
 
     state = createPayment(state, -10n);
     console.log(
-      `After B pays A 10: A=${state.balanceA}, B=${state.balanceB}, nonce=${state.nonce}`,
+      `After B pays A 10: A=${state.balanceA}, B=${state.balanceB}, nonce=${state.nonce}`
     );
 
     state = createPayment(state, 5n);
     console.log(
-      `After A pays B 5: A=${state.balanceA}, B=${state.balanceB}, nonce=${state.nonce}`,
+      `After A pays B 5: A=${state.balanceA}, B=${state.balanceB}, nonce=${state.nonce}`
     );
   } catch (error) {
     logError(error, "examplePaymentChannelFlow");

@@ -68,7 +68,7 @@ test("buildGrid is 180°-rotationally symmetric and seed-deterministic", () => {
       assert.equal(
         g[idx(r, c)],
         g[idx(GRID_H - 1 - r, GRID_W - 1 - c)],
-        `(${r},${c}) mirror`,
+        `(${r},${c}) mirror`
       );
     }
   }
@@ -175,7 +175,7 @@ test("encodeState is canonical and starts with the domain tag", () => {
   const tag = new TextEncoder().encode("sui_tunnel::proto::bomb_it.v1");
   assert.deepEqual(
     Array.from(p.encodeState(a).slice(0, tag.length)),
-    Array.from(tag),
+    Array.from(tag)
   );
 });
 
@@ -188,7 +188,7 @@ test("encodeState differs when a player position differs", () => {
   };
   assert.notDeepEqual(
     Array.from(p.encodeState(s)),
-    Array.from(p.encodeState(moved)),
+    Array.from(p.encodeState(moved))
   );
 });
 
@@ -208,7 +208,7 @@ test("balances return the stored split; isTerminal tracks winner", () => {
 function advance(
   p: BombItProtocol,
   s: BombItState,
-  m: BombItMove,
+  m: BombItMove
 ): BombItState {
   const by = m.a !== undefined ? "A" : "B";
   return p.applyMove(s, m, by);
@@ -358,7 +358,7 @@ test("a hunter-bot match drops bombs and destroys crates", () => {
   assert.ok(bombs > 0, "bots must drop at least one bomb over a match");
   assert.ok(
     crates0 - cratesEnd > 0,
-    "bots must destroy at least one crate over a match",
+    "bots must destroy at least one crate over a match"
   );
 });
 

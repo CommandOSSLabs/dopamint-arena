@@ -262,7 +262,7 @@ export function buildTarget(module: string, func: string): string {
   const pkg = PACKAGE_ID || process.env.PACKAGE_ID || "";
   if (!pkg) {
     throw new Error(
-      "PACKAGE_ID not set. Please set it in environment variables or config.",
+      "PACKAGE_ID not set. Please set it in environment variables or config."
     );
   }
   return `${pkg}::${module}::${func}`;
@@ -281,7 +281,7 @@ export function getCurrentTimeMs(): number {
 export function validateConfig(): void {
   if (!PACKAGE_ID) {
     throw new Error(
-      "PACKAGE_ID is not configured. Please set the PACKAGE_ID environment variable.",
+      "PACKAGE_ID is not configured. Please set the PACKAGE_ID environment variable."
     );
   }
 }

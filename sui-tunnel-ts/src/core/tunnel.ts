@@ -50,7 +50,7 @@ export function makeEndpoint(
   backend: CryptoBackend,
   address: string,
   keyPair: { publicKey: Uint8Array; scheme: number; secretKey?: Uint8Array },
-  controlled: boolean,
+  controlled: boolean
 ): PartyEndpoint {
   return {
     address,
@@ -136,7 +136,7 @@ export class OffchainTunnel<State, Move> {
   constructor(
     protocol: Protocol<State, Move>,
     config: OffchainTunnelConfig,
-    initialBalances: Balances,
+    initialBalances: Balances
   ) {
     this.tunnelId = config.tunnelId;
     this.protocol = protocol;
@@ -150,7 +150,7 @@ export class OffchainTunnel<State, Move> {
     const { a, b } = protocol.balances(this._state);
     if (a + b !== this.total) {
       throw new Error(
-        `protocol initial balances ${a + b} != locked total ${this.total}`,
+        `protocol initial balances ${a + b} != locked total ${this.total}`
       );
     }
     this._nonce = 0n; // on-chain initial commitment is nonce 0
@@ -168,7 +168,7 @@ export class OffchainTunnel<State, Move> {
     addrA: string,
     addrB: string,
     initialBalances: Balances,
-    backend: CryptoBackend = defaultBackend(),
+    backend: CryptoBackend = defaultBackend()
   ): OffchainTunnel<S, M> {
     return new OffchainTunnel(
       protocol,
@@ -177,7 +177,7 @@ export class OffchainTunnel<State, Move> {
         partyA: makeEndpoint(backend, addrA, keyA, true),
         partyB: makeEndpoint(backend, addrB, keyB, true),
       },
-      initialBalances,
+      initialBalances
     );
   }
 
@@ -265,7 +265,7 @@ export class OffchainTunnel<State, Move> {
    */
   buildSettlement(
     timestamp: bigint,
-    onchainNonce: bigint = 0n,
+    onchainNonce: bigint = 0n
   ): CoSignedSettlement {
     if (!this.partyA.sign || !this.partyB.sign) {
       throw new Error("buildSettlement requires both signers (self-play)");
@@ -294,11 +294,11 @@ export class OffchainTunnel<State, Move> {
   buildSettlementWithRoot(
     timestamp: bigint,
     transcriptRoot: Uint8Array,
-    onchainNonce: bigint = 0n,
+    onchainNonce: bigint = 0n
   ): CoSignedSettlementWithRoot {
     if (!this.partyA.sign || !this.partyB.sign) {
       throw new Error(
-        "buildSettlementWithRoot requires both signers (self-play)",
+        "buildSettlementWithRoot requires both signers (self-play)"
       );
     }
     if (transcriptRoot.length !== 32) {
@@ -328,7 +328,7 @@ export class OffchainTunnel<State, Move> {
 export function verifyCoSignedUpdate(
   u: CoSignedUpdate,
   partyA: { publicKey: Uint8Array; scheme: number },
-  partyB: { publicKey: Uint8Array; scheme: number },
+  partyB: { publicKey: Uint8Array; scheme: number }
 ): boolean {
   if (
     partyA.scheme !== SignatureScheme.ED25519 ||

@@ -6,8 +6,8 @@
  * SIGNED state-update bytes are produced separately by `wire.serializeStateUpdate`
  * and are byte-identical to self-play; this codec is only the transport envelope.
  */
-import { fromHex, toHex } from "./bytes";
 import type { Party } from "../protocol/Protocol";
+import { fromHex, toHex } from "./bytes";
 
 /** A proposed move + the proposer's signature half over the state_update message. */
 export interface MoveFrame<M> {
@@ -71,7 +71,7 @@ export function wrapInnerFrameJson(innerJson: string): string {
  */
 export function encodeRelayEnvelope<M>(
   frame: Frame<M>,
-  codec: MoveCodec<M>,
+  codec: MoveCodec<M>
 ): string {
   const innerJson = new TextDecoder().decode(encodeFrame(frame, codec));
   return wrapInnerFrameJson(innerJson);
@@ -79,7 +79,7 @@ export function encodeRelayEnvelope<M>(
 
 export function encodeFrame<M>(
   frame: Frame<M>,
-  codec: MoveCodec<M>,
+  codec: MoveCodec<M>
 ): Uint8Array {
   const obj =
     frame.kind === "move"
@@ -104,7 +104,7 @@ export function encodeFrame<M>(
 
 export function decodeFrame<M>(
   bytes: Uint8Array,
-  codec: MoveCodec<M>,
+  codec: MoveCodec<M>
 ): Frame<M> {
   const o = JSON.parse(textDecoder.decode(bytes));
   if (o.kind === "move") {

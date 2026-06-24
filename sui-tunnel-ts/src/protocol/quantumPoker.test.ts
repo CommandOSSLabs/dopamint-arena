@@ -22,7 +22,7 @@ function secrets(base: number): SlotSecret[] {
     value: Uint8Array.from({ length: 32 }, (_, i) => (base + slot + i) & 0xff),
     salt: Uint8Array.from(
       { length: 16 },
-      (_, i) => (base * 3 + slot + i) & 0xff,
+      (_, i) => (base * 3 + slot + i) & 0xff
     ),
   }));
 }
@@ -60,7 +60,7 @@ test("commit move keeps local secrets local and serializes commitments only", ()
   assert.equal(move.commitments.length, 9);
   assert.equal(
     move.commitments.every((c) => c.length === 32),
-    true,
+    true
   );
   assert.ok(move.localSecrets, "local engine keeps secrets for later reveals");
 
@@ -83,12 +83,12 @@ test("slot reveal mismatch is rejected against commitment", () => {
   s = p.applyMove(
     s,
     { kind: "commit_slots", commitments: commitSlotSecrets(a) },
-    "A",
+    "A"
   );
   s = p.applyMove(
     s,
     { kind: "commit_slots", commitments: commitSlotSecrets(b) },
-    "B",
+    "B"
   );
   assert.equal(s.phase, "open_private_holes");
 
@@ -112,7 +112,7 @@ test("seat driver can reveal from persisted local secrets after request boundary
   s = p.applyMove(
     s,
     { kind: "commit_slots", commitments: commitSlotSecrets(a) },
-    "A",
+    "A"
   );
   s = p.applyMove(
     s,
@@ -121,7 +121,7 @@ test("seat driver can reveal from persisted local secrets after request boundary
       commitments: commitSlotSecrets(b),
       localSecrets: b,
     },
-    "B",
+    "B"
   );
   s = p.applyMove(s, reveal(a, [2, 3]), "A");
 
@@ -152,7 +152,7 @@ test("manual hand reaches flop with private holes hidden from encoding", () => {
       commitments: commitSlotSecrets(a),
       localSecrets: a,
     },
-    "A",
+    "A"
   );
   s = p.applyMove(
     s,
@@ -161,7 +161,7 @@ test("manual hand reaches flop with private holes hidden from encoding", () => {
       commitments: commitSlotSecrets(b),
       localSecrets: b,
     },
-    "B",
+    "B"
   );
   s = p.applyMove(s, reveal(a, [2, 3]), "A");
   s = p.applyMove(s, reveal(b, [0, 1]), "B");
@@ -171,7 +171,7 @@ test("manual hand reaches flop with private holes hidden from encoding", () => {
   assert.equal(s.shownHoleA, null);
   assert.equal(
     toHex(p.encodeState(s)).includes(toHex(Uint8Array.from(s.holeA))),
-    false,
+    false
   );
 
   s = p.applyMove(s, { kind: "check" }, "A");
@@ -207,7 +207,7 @@ test("uneven all-in caps the big stack at the effective stack and stays callable
       commitments: commitSlotSecrets(a),
       localSecrets: a,
     },
-    "A",
+    "A"
   );
   s = p.applyMove(
     s,
@@ -216,7 +216,7 @@ test("uneven all-in caps the big stack at the effective stack and stays callable
       commitments: commitSlotSecrets(b),
       localSecrets: b,
     },
-    "B",
+    "B"
   );
   s = p.applyMove(s, reveal(a, [2, 3]), "A");
   s = p.applyMove(s, reveal(b, [0, 1]), "B");
@@ -227,7 +227,7 @@ test("uneven all-in caps the big stack at the effective stack and stays callable
   // short stack can ever match.
   assert.throws(
     () => p.applyMove(s, { kind: "bet", amount: 151n }, "A"),
-    /effective stack/,
+    /effective stack/
   );
 
   // A goes all-in for the effective stack; the short stack can still CALL it — never forced to fold.
@@ -251,7 +251,7 @@ test("full self-play game: balances conserved, five-card board, updates settle",
     b,
     ed25519Address(a.publicKey),
     ed25519Address(b.publicKey),
-    { a: 10_000n, b: 10_000n },
+    { a: 10_000n, b: 10_000n }
   );
   const total = t.total;
   let completedShowdownOrFold = false;
@@ -285,8 +285,8 @@ test("full self-play game: balances conserved, five-card board, updates settle",
     verifyCoSignedUpdate(
       t.latest!,
       { publicKey: t.partyA.publicKey, scheme: t.partyA.scheme },
-      { publicKey: t.partyB.publicKey, scheme: t.partyB.scheme },
-    ),
+      { publicKey: t.partyB.publicKey, scheme: t.partyB.scheme }
+    )
   );
 });
 
@@ -303,7 +303,7 @@ test("split pot (showdown tie) leaves BOTH stacks unchanged — neither loses ch
       b,
       ed25519Address(a.publicKey),
       ed25519Address(b.publicKey),
-      { a: 10_000n, b: 10_000n },
+      { a: 10_000n, b: 10_000n }
     );
     let preA = (t.state as PokerState).balanceA;
     let preB = (t.state as PokerState).balanceB;

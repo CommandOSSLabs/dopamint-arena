@@ -22,7 +22,7 @@ const enc = new TextEncoder();
 
 /** `b"sui_tunnel::randomness::commit_reveal"`. Matches `DOMAIN_COMMIT_REVEAL`. */
 export const DOMAIN_COMMIT_REVEAL = enc.encode(
-  "sui_tunnel::randomness::commit_reveal",
+  "sui_tunnel::randomness::commit_reveal"
 );
 
 /** Minimum salt length enforced by `randomness::create_commitment` (>= 16 bytes). */
@@ -42,17 +42,17 @@ function hashCommitment(value: Uint8Array, salt: Uint8Array): Uint8Array {
       DOMAIN_COMMIT_REVEAL,
       ...lengthPrefixed(value),
       ...lengthPrefixed(salt),
-    ]),
+    ])
   );
 }
 
 export function computeCommitment(
   value: Uint8Array,
-  salt: Uint8Array,
+  salt: Uint8Array
 ): Uint8Array {
   if (salt.length < MIN_SALT_LEN) {
     throw new Error(
-      `salt must be >= ${MIN_SALT_LEN} bytes, got ${salt.length}`,
+      `salt must be >= ${MIN_SALT_LEN} bytes, got ${salt.length}`
     );
   }
   return hashCommitment(value, salt);
@@ -67,7 +67,7 @@ export function computeCommitment(
 export function verifyCommitment(
   commitmentHash: Uint8Array,
   value: Uint8Array,
-  salt: Uint8Array,
+  salt: Uint8Array
 ): boolean {
   return bytesEqual(hashCommitment(value, salt), commitmentHash);
 }
@@ -81,7 +81,7 @@ export function combineReveals(
   valueA: Uint8Array,
   saltA: Uint8Array,
   valueB: Uint8Array,
-  saltB: Uint8Array,
+  saltB: Uint8Array
 ): Uint8Array {
   return blake2b256(
     concatBytes([
@@ -90,6 +90,6 @@ export function combineReveals(
       ...lengthPrefixed(saltA),
       ...lengthPrefixed(valueB),
       ...lengthPrefixed(saltB),
-    ]),
+    ])
   );
 }

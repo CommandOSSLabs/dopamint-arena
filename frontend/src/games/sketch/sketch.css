@@ -29,7 +29,10 @@
   font-family: "Gochi Hand", "Comic Sans MS", cursive;
   color: var(--sketch-ink);
   background-color: var(--sketch-paper);
-  background-image: radial-gradient(rgba(35, 34, 31, 0.09) 1.1px, transparent 1.3px);
+  background-image: radial-gradient(
+    rgba(35, 34, 31, 0.09) 1.1px,
+    transparent 1.3px
+  );
   background-size: 16px 16px;
   background-position: -8px -8px;
 }
@@ -233,7 +236,10 @@
 /* Same dotted paper as the window root — use when a child skin zeroes its bg. */
 .sketch-paper {
   background-color: var(--sketch-paper);
-  background-image: radial-gradient(rgba(35, 34, 31, 0.09) 1.1px, transparent 1.3px);
+  background-image: radial-gradient(
+    rgba(35, 34, 31, 0.09) 1.1px,
+    transparent 1.3px
+  );
   background-size: 16px 16px;
   background-position: -8px -8px;
 }

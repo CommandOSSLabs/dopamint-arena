@@ -107,17 +107,17 @@ function preflopStrength(holes: number[]): number {
       low >= 13
         ? 0.78
         : low === 12
-          ? 0.68
-          : low === 11
-            ? 0.62
-            : low === 10
-              ? 0.56
-              : 0.32 + low / 45;
+        ? 0.68
+        : low === 11
+        ? 0.62
+        : low === 10
+        ? 0.56
+        : 0.32 + low / 45;
     return clamp01(aceStrength + suitedBoost);
   }
   if (high === 13 && low >= 10) {
     return clamp01(
-      (low === 12 ? 0.66 : low === 11 ? 0.59 : 0.52) + suitedBoost,
+      (low === 12 ? 0.66 : low === 11 ? 0.59 : 0.52) + suitedBoost
     );
   }
   if (high === 12 && low >= 10) {
@@ -168,7 +168,7 @@ function estimateStrongDraw(holes: number[], board: number[]): boolean {
 
 function difficultyStrategyTuning(
   difficulty: QuantumPokerDifficulty,
-  adaptiveModifier: number,
+  adaptiveModifier: number
 ): StrategyTuning {
   switch (difficulty) {
     case "easy":
@@ -226,11 +226,11 @@ function personaStrategyTuning(persona: QuantumPokerPersona): StrategyTuning {
 }
 
 export function resolveQuantumPokerStrategyTuning(
-  profile: QuantumPokerBotProfile,
+  profile: QuantumPokerBotProfile
 ): StrategyTuning {
   const difficulty = difficultyStrategyTuning(
     profile.difficulty ?? "adaptive",
-    profile.adaptiveModifier ?? 0,
+    profile.adaptiveModifier ?? 0
   );
   const persona = personaStrategyTuning(profile.persona);
   return {
@@ -244,7 +244,7 @@ export function resolveQuantumPokerStrategyTuning(
 function estimateStrengthProfile(
   state: PokerState,
   party: Party,
-  holes: number[] | null,
+  holes: number[] | null
 ): StrengthProfile {
   const own = ownStreetBet(state, party);
   const other = ownStreetBet(state, otherParty(party));
@@ -278,7 +278,7 @@ function estimateStrengthProfile(
 function shouldCall(
   profile: StrengthProfile,
   tuning: StrategyTuning,
-  roll: number,
+  roll: number
 ): boolean {
   if (profile.callAmount <= 0n) return false;
   if (profile.callAmount > profile.available) return false;
@@ -295,19 +295,19 @@ function shouldCall(
       tuning.callThreshold -
       roll * 0.025
     : profile.preflop
-      ? 0.38 + profile.pressure * 0.5 + tuning.callThreshold - roll * 0.035
-      : profile.potOdds +
-        0.055 +
-        profile.pressure * 0.08 +
-        tuning.callThreshold -
-        roll * 0.025;
+    ? 0.38 + profile.pressure * 0.5 + tuning.callThreshold - roll * 0.035
+    : profile.potOdds +
+      0.055 +
+      profile.pressure * 0.08 +
+      tuning.callThreshold -
+      roll * 0.025;
   return profile.strength >= threshold;
 }
 
 function shouldBet(
   profile: StrengthProfile,
   tuning: StrategyTuning,
-  roll: number,
+  roll: number
 ): boolean {
   if (profile.available <= 0n) return false;
   if (profile.preflop) {
@@ -327,8 +327,8 @@ function betAmount(profile: StrengthProfile): bigint {
   const fraction = profile.premiumValue
     ? 0.72
     : profile.strongDraw
-      ? 0.42
-      : 0.5;
+    ? 0.42
+    : 0.5;
   const target = BigInt(Math.max(50, Math.floor(Number(pot) * fraction)));
   const capped = target < profile.available ? target : profile.available;
   return capped > 0n ? capped : 0n;
@@ -361,7 +361,7 @@ export class QuantumPokerPersonaDriver extends QuantumPokerSeatDriver {
         const strength = estimateStrengthProfile(
           state,
           this.party,
-          this.knownHoleCards(state),
+          this.knownHoleCards(state)
         );
         const roll = rng();
         if (strength.callAmount > 0n) {

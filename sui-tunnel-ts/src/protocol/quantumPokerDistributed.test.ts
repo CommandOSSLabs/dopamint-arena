@@ -65,7 +65,7 @@ function makePair(): {
       moveCodec: pokerMoveCodec,
     },
     loop.a,
-    BAL,
+    BAL
   );
   const dtB = new DistributedTunnel(
     protoB,
@@ -77,7 +77,7 @@ function makePair(): {
       moveCodec: pokerMoveCodec,
     },
     loop.b,
-    BAL,
+    BAL
   );
   return { dtA, dtB, protoA, protoB, keyA, keyB };
 }
@@ -109,15 +109,15 @@ test("Quantum Poker distributed pair keeps shared hashes equal while holes stay 
       assert.equal(dtA.nonce, dtB.nonce);
       assert.equal(
         encodedState(protoA, dtA.state),
-        encodedState(protoB, dtB.state),
+        encodedState(protoB, dtB.state)
       );
       assert.equal(
         protoA.balances(dtA.state).a + protoA.balances(dtA.state).b,
-        20_000n,
+        20_000n
       );
       assert.equal(
         protoB.balances(dtB.state).a + protoB.balances(dtB.state).b,
-        20_000n,
+        20_000n
       );
 
       if (dtA.state.phase === "preflop_bet") {
@@ -175,7 +175,7 @@ test("Quantum Poker distributed settlement signs transcript-root v2", () => {
   const settled = dtA.combineSettlementWithRoot(
     halfA.settlement,
     halfA.sigSelf,
-    halfB.sigSelf,
+    halfB.sigSelf
   );
   const msg = serializeSettlementWithRoot(settled.settlement);
   assert.ok(verify(settled.sigA, msg, keyA.publicKey));
@@ -183,6 +183,6 @@ test("Quantum Poker distributed settlement signs transcript-root v2", () => {
   assert.equal(settled.settlement.finalNonce, 1n);
   assert.equal(
     settled.settlement.partyABalance + settled.settlement.partyBBalance,
-    20_000n,
+    20_000n
   );
 });

@@ -31,7 +31,7 @@ export const DOMAIN_SETTLEMENT_V2 = enc.encode("sui_tunnel::settlement_v2");
 export const DOMAIN_HTLC_LOCK = enc.encode("sui_tunnel::htlc_lock");
 /** `b"sui_tunnel::spend_authorization"` — 31 bytes (agent allowance voucher). */
 export const DOMAIN_SPEND_AUTHORIZATION = enc.encode(
-  "sui_tunnel::spend_authorization",
+  "sui_tunnel::spend_authorization"
 );
 
 const U64_MAX = (1n << 64n) - 1n;
@@ -110,7 +110,7 @@ const STATE_UPDATE_LEN = DOMAIN_STATE_UPDATE.length + 32 + 32 + 4 * 8;
 export function parseStateUpdate(message: Uint8Array): StateUpdate {
   if (message.length !== STATE_UPDATE_LEN)
     throw new Error(
-      `state update must be ${STATE_UPDATE_LEN} bytes, got ${message.length}`,
+      `state update must be ${STATE_UPDATE_LEN} bytes, got ${message.length}`
     );
   for (let i = 0; i < DOMAIN_STATE_UPDATE.length; i++)
     if (message[i] !== DOMAIN_STATE_UPDATE[i])
@@ -167,7 +167,7 @@ export interface SettlementWithRoot extends Settlement {
 export function serializeSettlementWithRoot(s: SettlementWithRoot): Uint8Array {
   if (s.transcriptRoot.length !== 32) {
     throw new Error(
-      `transcript root must be 32 bytes, got ${s.transcriptRoot.length}`,
+      `transcript root must be 32 bytes, got ${s.transcriptRoot.length}`
     );
   }
   return concatBytes([
@@ -268,11 +268,11 @@ export class StateUpdateWriter {
     nonce: bigint,
     timestamp: bigint,
     partyABalance: bigint,
-    partyBBalance: bigint,
+    partyBBalance: bigint
   ): Uint8Array {
     if (stateHash.length !== this.stateHashLen) {
       throw new Error(
-        `stateHash length ${stateHash.length} != configured ${this.stateHashLen}`,
+        `stateHash length ${stateHash.length} != configured ${this.stateHashLen}`
       );
     }
     let o = this.tailOffset;

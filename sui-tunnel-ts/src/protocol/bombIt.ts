@@ -178,7 +178,7 @@ export function buildGrid(seed: bigint): Uint8Array {
 export function dest(
   row: number,
   col: number,
-  action: BombItAction,
+  action: BombItAction
 ): [number, number] {
   if (action === "north") return [row - 1, col];
   if (action === "south") return [row + 1, col];
@@ -193,7 +193,7 @@ export function canMoveTo(
   bombs: BombItBomb[],
   other: BombItPlayer,
   nr: number,
-  nc: number,
+  nc: number
 ): boolean {
   if (nr < 0 || nr >= GRID_H || nc < 0 || nc >= GRID_W) return false;
   const cell = grid[idx(nr, nc)];
@@ -234,7 +234,7 @@ export function blastCellsFor(grid: Uint8Array, bomb: BombItBomb): number[] {
  */
 export function resolveExplosions(
   grid: Uint8Array,
-  bombs: BombItBomb[],
+  bombs: BombItBomb[]
 ): { cells: Set<number>; remaining: BombItBomb[] } {
   const detonating = new Set<number>();
   for (let i = 0; i < bombs.length; i++)
@@ -270,7 +270,7 @@ function applyAction(
   players: [BombItPlayer, BombItPlayer],
   bombs: BombItBomb[],
   i: number,
-  action: BombItAction,
+  action: BombItAction
 ): void {
   const p = players[i];
   if (!p.alive || action === "stay") return;
@@ -310,13 +310,17 @@ function adjacentDanger(danger: Set<number>): Set<number> {
     const col = ci % GRID_W;
     for (const d of dirs) {
       const [nr, nc] = dest(row, col, d);
-      if (nr >= 0 && nr < GRID_H && nc >= 0 && nc < GRID_W) adj.add(idx(nr, nc));
+      if (nr >= 0 && nr < GRID_H && nc >= 0 && nc < GRID_W)
+        adj.add(idx(nr, nc));
     }
   }
   return adj;
 }
 
-function manhattan(a: { row: number; col: number }, b: { row: number; col: number }): number {
+function manhattan(
+  a: { row: number; col: number },
+  b: { row: number; col: number }
+): number {
   return Math.abs(a.row - b.row) + Math.abs(a.col - b.col);
 }
 
@@ -327,7 +331,7 @@ function manhattan(a: { row: number; col: number }, b: { row: number; col: numbe
 function hunterAction(
   s: BombItState,
   by: Party,
-  rng: () => number,
+  rng: () => number
 ): BombItAction {
   const i = by === "A" ? 0 : 1;
   const p = s.players[i];
@@ -365,7 +369,7 @@ function hunterAction(
   const canBomb = liveOwn < MAX_BOMBS_PER_PLAYER && !hereBomb;
   const hasEscape = () => {
     const future = new Set(
-      blastCellsFor(s.grid, { row: p.row, col: p.col, fuse: 0, owner: by }),
+      blastCellsFor(s.grid, { row: p.row, col: p.col, fuse: 0, owner: by })
     );
     const lethal = (i: number) => future.has(i) || danger.has(i);
     const budget = Math.max(2, Math.floor(FUSE_TICKS / 2));
@@ -408,14 +412,22 @@ function hunterAction(
 
   // 2) Rare attack bomb — only on a clear line within blast reach.
   const inLine =
-    other.alive && (p.row === other.row || p.col === other.col) && dist <= BLAST_RADIUS;
+    other.alive &&
+    (p.row === other.row || p.col === other.col) &&
+    dist <= BLAST_RADIUS;
   if (canBomb && inLine && hasEscape() && rng() < 0.28) return "bomb";
 
   // 3) Pursue when safe.
   if (towardSafe.length) return pick(towardSafe);
 
   // 4) Crate blocks all pursuit paths → bomb it open (still rare).
-  if (canBomb && towardSafe.length === 0 && toward.some(crateInDir) && hasEscape() && rng() < 0.35) {
+  if (
+    canBomb &&
+    towardSafe.length === 0 &&
+    toward.some(crateInDir) &&
+    hasEscape() &&
+    rng() < 0.35
+  ) {
     return "bomb";
   }
 
@@ -518,7 +530,7 @@ export class BombItProtocol implements Protocol<BombItState, BombItMove> {
       parts.push(
         u64ToBeBytes(p.row),
         u64ToBeBytes(p.col),
-        new Uint8Array([p.alive ? 1 : 0]),
+        new Uint8Array([p.alive ? 1 : 0])
       );
     }
     // Two slots indexed by owner (slot 0 = A's live bomb or empty, slot 1 = B's).
@@ -530,7 +542,7 @@ export class BombItProtocol implements Protocol<BombItState, BombItMove> {
         u64ToBeBytes(b ? b.row : 0),
         u64ToBeBytes(b ? b.col : 0),
         u64ToBeBytes(b ? b.fuse : 0),
-        new Uint8Array([slot]),
+        new Uint8Array([slot])
       );
     }
     parts.push(
@@ -538,11 +550,11 @@ export class BombItProtocol implements Protocol<BombItState, BombItMove> {
         s.winner === "A"
           ? 1
           : s.winner === "B"
-            ? 2
-            : s.winner === "draw"
-              ? 3
-              : 0,
-      ]),
+          ? 2
+          : s.winner === "draw"
+          ? 3
+          : 0,
+      ])
     );
     return concatBytes(parts);
   }

@@ -13,7 +13,7 @@ test("runSteps produces the expected counters in full mode", () => {
     sim.tunnels,
     counters,
     mulberry32(7),
-    "full",
+    "full"
   );
   gen.runSteps(1000);
   assert.equal(counters.updates, 1000);
@@ -40,13 +40,13 @@ test("REPRO #7: an even tunnel count exercises BOTH proposers on every tunnel", 
     (t as { protocol: unknown }).protocol = spy;
   });
   new ActivityGenerator(sim.tunnels, counters, mulberry32(7), "full").runSteps(
-    400,
+    400
   );
   for (let i = 0; i < seen.length; i++) {
     // Previously each tunnel saw a single proposer (one of these was 0).
     assert.ok(
       seen[i].A > 0 && seen[i].B > 0,
-      `tunnel ${i} must see both proposers, got ${JSON.stringify(seen[i])}`,
+      `tunnel ${i} must see both proposers, got ${JSON.stringify(seen[i])}`
     );
   }
 });
@@ -55,7 +55,7 @@ test("sign-only and none modes adjust signature/verification counts", () => {
   const sim = new Simulator({ users: 1, agents: 1, tunnels: 2 });
   const so = newCounters();
   new ActivityGenerator(sim.tunnels, so, mulberry32(1), "sign-only").runSteps(
-    100,
+    100
   );
   assert.equal(so.updates, 100);
   assert.equal(so.signatures, 200);
@@ -64,7 +64,7 @@ test("sign-only and none modes adjust signature/verification counts", () => {
   const sim2 = new Simulator({ users: 1, agents: 1, tunnels: 2 });
   const none = newCounters();
   new ActivityGenerator(sim2.tunnels, none, mulberry32(1), "none").runSteps(
-    100,
+    100
   );
   assert.equal(none.updates, 100);
   assert.equal(none.signatures, 0);
@@ -75,7 +75,7 @@ test("updates remain settleable (latest co-signed update verifies)", () => {
   const sim = new Simulator({ users: 2, agents: 2, tunnels: 4 });
   const counters = newCounters();
   new ActivityGenerator(sim.tunnels, counters, mulberry32(3), "full").runSteps(
-    400,
+    400
   );
   for (const t of sim.tunnels) {
     const u = t.latest!;
@@ -83,8 +83,8 @@ test("updates remain settleable (latest co-signed update verifies)", () => {
       verifyCoSignedUpdate(
         u,
         { publicKey: t.partyA.publicKey, scheme: t.partyA.scheme },
-        { publicKey: t.partyB.publicKey, scheme: t.partyB.scheme },
-      ),
+        { publicKey: t.partyB.publicKey, scheme: t.partyB.scheme }
+      )
     );
   }
 });
@@ -96,7 +96,7 @@ test("async run respects duration and records a time series", async () => {
     sim.tunnels,
     counters,
     mulberry32(5),
-    "full",
+    "full"
   );
   const { TimeSeries } = await import("../telemetry/metrics");
   const series = new TimeSeries();
@@ -114,7 +114,7 @@ test("async run honors maxSteps exactly", async () => {
     sim.tunnels,
     counters,
     mulberry32(9),
-    "full",
+    "full"
   );
   await gen.run({ maxSteps: 1000, batchSize: 250 });
   assert.equal(counters.updates, 1000);

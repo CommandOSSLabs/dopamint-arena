@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { SketchDefs } from "../../sketch";
+import "../bomb-it.css";
 import { BOMB_BTN, BOMB_IT_STYLE } from "../bombItTheme";
 import { BombGlyph, BombLobbyScene } from "./bombSprites";
-import "../bomb-it.css";
 
 /** Splash — arena scene + bottom deck with mode tiles. */
 export function BombLobby({
@@ -29,7 +29,11 @@ export function BombLobby({
           <h2 className="bomb-lobby__title sketch-title">Bomb It</h2>
         </header>
 
-        <div className="bomb-lobby__modes" role="tablist" aria-label="Game mode">
+        <div
+          className="bomb-lobby__modes"
+          role="tablist"
+          aria-label="Game mode"
+        >
           <button
             type="button"
             role="tab"
@@ -51,7 +55,10 @@ export function BombLobby({
             className={`bomb-mode-tile sketch-stroke${tab === "pvp" ? " bomb-mode-tile--on" : ""}`}
             onClick={() => setTab("pvp")}
           >
-            <span className="bomb-mode-tile__art bomb-mode-tile__art--versus" aria-hidden>
+            <span
+              className="bomb-mode-tile__art bomb-mode-tile__art--versus"
+              aria-hidden
+            >
               <BombGlyph kind="player-a" size="sm" />
               <BombGlyph kind="player-b" size="sm" />
             </span>

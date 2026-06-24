@@ -11,9 +11,17 @@
  * byte-identical to `OffchainTunnel`, so any co-signed artifact settles on-chain
  * exactly as a self-play one does.
  */
+import { Balances, Party, Protocol } from "../protocol/Protocol";
 import { bytesEqual } from "./bytes";
 import { blake2b256 } from "./crypto";
-import { Balances, Party, Protocol } from "../protocol/Protocol";
+import {
+  AckFrame,
+  decodeFrame,
+  encodeFrame,
+  identityMoveCodec,
+  MoveCodec,
+  MoveFrame,
+} from "./distributedFrame";
 import {
   CoSignedSettlement,
   CoSignedSettlementWithRoot,
@@ -29,14 +37,6 @@ import {
   SettlementWithRoot,
   StateUpdate,
 } from "./wire";
-import {
-  AckFrame,
-  decodeFrame,
-  encodeFrame,
-  identityMoveCodec,
-  MoveCodec,
-  MoveFrame,
-} from "./distributedFrame";
 
 /** Opaque byte transport between the two seats. The relay forwards frames blindly. */
 export interface Transport {
@@ -94,7 +94,7 @@ export class DistributedTunnel<State, Move> {
     protocol: Protocol<State, Move>,
     cfg: DistributedConfig<Move>,
     transport: Transport,
-    initialBalances: Balances,
+    initialBalances: Balances
   ) {
     if (!cfg.self.sign) {
       throw new Error("DistributedTunnel: self endpoint must carry a signer");
@@ -112,7 +112,7 @@ export class DistributedTunnel<State, Move> {
     const { a, b } = protocol.balances(this._state);
     if (a + b !== this.total) {
       throw new Error(
-        `protocol initial balances ${a + b} != locked total ${this.total}`,
+        `protocol initial balances ${a + b} != locked total ${this.total}`
       );
     }
     this._nonce = 0n;
@@ -150,7 +150,7 @@ export class DistributedTunnel<State, Move> {
   private coSign(
     update: StateUpdate,
     sigSelf: Uint8Array,
-    sigOther: Uint8Array,
+    sigOther: Uint8Array
   ): CoSignedUpdate {
     return this.selfIsA()
       ? { update, sigA: sigSelf, sigB: sigOther }
@@ -264,7 +264,7 @@ export class DistributedTunnel<State, Move> {
       throw new Error("received a MOVE attributed to self");
     if (frame.nonce !== this._nonce + 1n) {
       throw new Error(
-        `nonce gap: got ${frame.nonce}, expected ${this._nonce + 1n}`,
+        `nonce gap: got ${frame.nonce}, expected ${this._nonce + 1n}`
       );
     }
     const next = this.protocol.applyMove(this._state, frame.move, frame.by);
@@ -322,7 +322,7 @@ export class DistributedTunnel<State, Move> {
    */
   buildSettlementHalf(
     timestamp: bigint,
-    onchainNonce: bigint = 0n,
+    onchainNonce: bigint = 0n
   ): { settlement: Settlement; sigSelf: Uint8Array } {
     const { a, b } = this.protocol.balances(this._state);
     const settlement: Settlement = {
@@ -340,7 +340,7 @@ export class DistributedTunnel<State, Move> {
   combineSettlement(
     settlement: Settlement,
     sigSelf: Uint8Array,
-    sigOther: Uint8Array,
+    sigOther: Uint8Array
   ): CoSignedSettlement {
     const msg = serializeSettlement(settlement);
     if (!this.opponent.verify(msg, sigOther)) {
@@ -361,7 +361,7 @@ export class DistributedTunnel<State, Move> {
   buildSettlementHalfWithRoot(
     timestamp: bigint,
     transcriptRoot: Uint8Array,
-    onchainNonce: bigint = 0n,
+    onchainNonce: bigint = 0n
   ): { settlement: SettlementWithRoot; sigSelf: Uint8Array } {
     if (transcriptRoot.length !== 32) {
       throw new Error("transcriptRoot must be 32 bytes");
@@ -384,7 +384,7 @@ export class DistributedTunnel<State, Move> {
   combineSettlementWithRoot(
     settlement: SettlementWithRoot,
     sigSelf: Uint8Array,
-    sigOther: Uint8Array,
+    sigOther: Uint8Array
   ): CoSignedSettlementWithRoot {
     const msg = serializeSettlementWithRoot(settlement);
     if (!this.opponent.verify(msg, sigOther)) {
