@@ -32,14 +32,24 @@ export async function ensureDopamintBalance(
   need: bigint,
 ): Promise<void> {
   const owner = operatorKeypair.getPublicKey().toSuiAddress();
+  await ensureDopamintBalanceForAddress(client, cfg, operatorKeypair, owner, need);
+}
+
+export async function ensureDopamintBalanceForAddress(
+  client: SuiClient,
+  cfg: ChatAgentConfig,
+  operatorKeypair: Ed25519Keypair,
+  recipient: string,
+  need: bigint,
+): Promise<void> {
   const { totalBalance } = await client.getBalance({
-    owner,
+    owner: recipient,
     coinType: cfg.dopamintCoinType,
   });
   if (BigInt(totalBalance) >= need) return;
   const faucetAmount = stakeToRaw(10_000n);
   const tx = new Transaction();
-  buildDopamintFaucetTx(tx, cfg, owner, faucetAmount);
+  buildDopamintFaucetTx(tx, cfg, recipient, faucetAmount);
   const res = await client.signAndExecuteTransaction({
     signer: operatorKeypair,
     transaction: tx,
