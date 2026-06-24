@@ -1,40 +1,43 @@
 import { useEffect, useState } from "react";
+import { useCurrentAccount } from "@mysten/dapp-kit";
 import { registerWindowDisposer } from "@/lib/windowSessions";
 import type { GameWindowProps } from "../types";
 import { usePvpBombIt } from "./usePvpBombIt";
 import { useBombItSession } from "./useBombItSession";
 import { BombLobby } from "./components/BombLobby";
 import { BombBoard } from "./components/BombBoard";
+import { BombScreen } from "./components/BombScreen";
 import "./bomb-it.css";
 
-/** A transitional screen (funding / matching / error) on the game's atmospheric backdrop. */
-function Screen({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="bomb-root">
-      <div className="arcade-card">{children}</div>
-    </div>
-  );
-}
-
 // Persisted by windowId so a remount (minimize / maximize / desktop reflow) returns to the live
-// PvP match instead of the chooser. Only "pvp" is stored — that session lives out-of-React and
-// survives the remount; the Solo session is in-React (refs) and is gone on remount, so it falls
-// back to the lobby. Cleared on window close.
-const modeStore = new Map<string, "pvp">();
+// session instead of the chooser. Both "solo" and "pvp" survive remount — solo because the
+// session lives out-of-React (BombBotSession, windowId-keyed), pvp likewise. Cleared on window close.
+const modeStore = new Map<string, "solo" | "pvp">();
+
+/** Default per-game stake for the auto-started solo match (matches the lobby default). */
+const AUTO_STAKE = 500;
+// Auto-start fires AT MOST ONCE per window: on first open with a wallet we fund + play a solo bot
+// match immediately (parity with the other arena games). Module-scoped so a minimize/maximize
+// remount never re-funds, and Back returns to the lobby rather than re-triggering. Cleared on close.
+const autoStarted = new Map<string, boolean>();
 
 /** Bomb It: pick Solo (bot-vs-bot self-play) or PvP (human-vs-human over a shared tunnel). */
 export function BombItWindow({ windowId }: GameWindowProps) {
+  const account = useCurrentAccount();
   const [mode, setModeState] = useState<"solo" | "pvp" | null>(
     () => modeStore.get(windowId) ?? null,
   );
   const pvp = usePvpBombIt(windowId);
-  const solo = useBombItSession();
+  const solo = useBombItSession(windowId);
 
   useEffect(() => {
-    registerWindowDisposer(windowId, "bomb-it-mode", () => modeStore.delete(windowId));
+    registerWindowDisposer(windowId, "bomb-it-mode", () => {
+      modeStore.delete(windowId);
+      autoStarted.delete(windowId);
+    });
   }, [windowId]);
   const setMode = (m: "solo" | "pvp" | null) => {
-    if (m === "pvp") modeStore.set(windowId, "pvp");
+    if (m === "pvp" || m === "solo") modeStore.set(windowId, m);
     else modeStore.delete(windowId);
     setModeState(m);
   };
@@ -44,6 +47,18 @@ export function BombItWindow({ windowId }: GameWindowProps) {
     else if (mode === "pvp") pvp.reset();
     setMode(null);
   };
+
+  // First open with a wallet connected → fund + play a solo bot match immediately (parity with the
+  // other arena games), instead of landing on the lobby. Once-only per window: a remount never
+  // re-funds (the out-of-React session is already live), and Back returns to the lobby, not a refund.
+  useEffect(() => {
+    if (autoStarted.get(windowId)) return;
+    if (mode !== null || !account || solo.status !== "idle") return;
+    autoStarted.set(windowId, true);
+    setMode("solo");
+    solo.start(AUTO_STAKE);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [account, mode, solo.status, windowId]);
 
   if (mode === null) {
     return (
@@ -63,18 +78,19 @@ export function BombItWindow({ windowId }: GameWindowProps) {
   if (mode === "solo") {
     if (solo.status === "error") {
       return (
-        <Screen>
-          <p className="text-sm text-red-400">{solo.error ?? "something went wrong"}</p>
-          <button className="arcade-cta arcade-cta--ghost" onClick={backToMenu}>Back</button>
-        </Screen>
+        <BombScreen onBack={backToMenu}>
+          <p className="text-sm text-rose-300">{solo.error ?? "something went wrong"}</p>
+        </BombScreen>
       );
     }
     if (solo.status === "funding") {
       return (
-        <Screen>
-          <span className="arcade-title wal-doto text-gold" style={{ fontSize: 22 }}>FUNDING</span>
-          <p className="arcade-sub">Opening + funding the tunnel on-chain… approve in your wallet.</p>
-        </Screen>
+        <BombScreen>
+          <span className="bomb-status-title wal-doto">Funding</span>
+          <p className="bomb-lobby__copy">
+            Opening + funding the tunnel on-chain… approve in your wallet.
+          </p>
+        </BombScreen>
       );
     }
     if (
@@ -91,42 +107,45 @@ export function BombItWindow({ windowId }: GameWindowProps) {
           onToggleAuto={solo.toggleAuto}
           onAction={solo.queueAction}
           onPlayAgain={backToMenu}
+          score={solo.score}
+          gamesPlayed={solo.gamesPlayed}
+          onSettle={solo.status === "playing" ? solo.settleNow : undefined}
         />
       );
     }
     return (
-      <Screen>
-        <p className="arcade-sub">Loading…</p>
-      </Screen>
+      <BombScreen>
+        <p className="bomb-lobby__copy">Loading…</p>
+      </BombScreen>
     );
   }
 
   // PvP
   if (pvp.status === "error") {
     return (
-      <Screen>
-        <p className="text-sm text-red-400">{pvp.error ?? "something went wrong"}</p>
-        <button className="arcade-cta arcade-cta--ghost" onClick={backToMenu}>Back</button>
-      </Screen>
+      <BombScreen onBack={backToMenu}>
+        <p className="text-sm text-rose-300">{pvp.error ?? "something went wrong"}</p>
+      </BombScreen>
     );
   }
 
   if (pvp.status === "matching") {
     return (
-      <Screen>
-        <span className="arcade-title wal-doto text-gold" style={{ fontSize: 20 }}>FINDING…</span>
-        <p className="arcade-sub">Matching you with the next player over the relay.</p>
-        <button className="arcade-cta arcade-cta--ghost" onClick={backToMenu}>Cancel</button>
-      </Screen>
+      <BombScreen onBack={backToMenu} backLabel="Cancel">
+        <span className="bomb-status-title wal-doto">Finding match</span>
+        <p className="bomb-lobby__copy">Matching you with the next player over the relay.</p>
+      </BombScreen>
     );
   }
 
   if (pvp.status === "funding") {
     return (
-      <Screen>
-        <span className="arcade-title wal-doto text-gold" style={{ fontSize: 22 }}>FUNDING</span>
-        <p className="arcade-sub">Opening + funding the tunnel on-chain… approve in your wallet.</p>
-      </Screen>
+      <BombScreen>
+        <span className="bomb-status-title wal-doto">Funding</span>
+        <p className="bomb-lobby__copy">
+          Opening + funding the tunnel on-chain… approve in your wallet.
+        </p>
+      </BombScreen>
     );
   }
 
@@ -146,8 +165,8 @@ export function BombItWindow({ windowId }: GameWindowProps) {
   }
 
   return (
-    <Screen>
-      <p className="arcade-sub">Loading…</p>
-    </Screen>
+    <BombScreen>
+      <p className="bomb-lobby__copy">Loading…</p>
+    </BombScreen>
   );
 }

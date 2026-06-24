@@ -1,7 +1,9 @@
 import { useState } from "react";
+import { BOMB_BTN, BOMB_IT_STYLE } from "../bombItTheme";
+import { BombGlyph, BombLobbyScene } from "./bombSprites";
 import "../bomb-it.css";
 
-/** Splash/menu: Solo (bots over a local tunnel) or PvP (auto-matched with another player). */
+/** Splash/menu: bottom HUD dock + ambient arena assets (distinct from Chicken Cross card). */
 export function BombLobby({
   onSolo,
   onFind,
@@ -15,35 +17,73 @@ export function BombLobby({
   const handleSolo = () => onSolo(Math.max(1, Math.floor(Number(stake)) || 0));
 
   return (
-    <div className="bomb-root">
-      <div className="arcade-card">
-        <h2 className="arcade-title wal-doto text-gold">BOMB IT</h2>
+    <div style={BOMB_IT_STYLE} className="bomb-lobby">
+      <BombLobbyScene />
 
-        <div className="arcade-seg">
-          <button className={`arcade-seg__btn${tab === "solo" ? " arcade-seg__btn--on" : ""}`} onClick={() => setTab("solo")}>
-            Solo
-          </button>
-          <button className={`arcade-seg__btn${tab === "pvp" ? " arcade-seg__btn--on" : ""}`} onClick={() => setTab("pvp")}>
-            PvP
-          </button>
+      <footer className="bomb-lobby__dock">
+        <div className="bomb-lobby__brand">
+          <h2 className="bomb-lobby__mark wal-doto">
+            <span>BOMB</span>
+            <span>IT</span>
+          </h2>
+          <div className="bomb-lobby__legend">
+            <BombGlyph kind="player-a" size="sm" />
+            <BombGlyph kind="bomb" size="sm" pulse />
+            <BombGlyph kind="player-b" size="sm" />
+          </div>
         </div>
 
-        {tab === "solo" ? (
-          <>
-            <p className="arcade-sub">Two bots duel across a 29×29 arena over a real Sui tunnel — one signature funds both seats. Take the wheel anytime with the Auto toggle.</p>
-            <div className="flex flex-col items-center gap-1.5">
-              <span className="arcade-label">Stake per seat (MIST)</span>
-              <input className="arcade-field" type="number" min={1} value={stake} onChange={(e) => setStake(e.target.value)} />
+        <div className="bomb-lobby__console">
+          <div className="bomb-lobby__modes" role="tablist" aria-label="Game mode">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === "solo"}
+              className={`bomb-mode${tab === "solo" ? " bomb-mode--on" : ""}`}
+              onClick={() => setTab("solo")}
+            >
+              <BombGlyph kind="bomb" size="sm" />
+              <span>Solo</span>
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === "pvp"}
+              className={`bomb-mode${tab === "pvp" ? " bomb-mode--on" : ""}`}
+              onClick={() => setTab("pvp")}
+            >
+              <span className="bomb-mode__versus" aria-hidden>
+                <BombGlyph kind="player-a" size="sm" />
+                <BombGlyph kind="player-b" size="sm" />
+              </span>
+              <span>PvP</span>
+            </button>
+          </div>
+
+          {tab === "solo" ? (
+            <div className="bomb-lobby__play">
+              <label className="bomb-lobby__stake-label">
+                <span className="bomb-lobby__stake-tag">stake</span>
+                <input
+                  className="bomb-field"
+                  type="number"
+                  min={1}
+                  aria-label="Stake"
+                  value={stake}
+                  onChange={(e) => setStake(e.target.value)}
+                />
+              </label>
+              <button type="button" className={`${BOMB_BTN} bomb-cta bomb-cta--join`} onClick={handleSolo}>
+                Go
+              </button>
             </div>
-            <button className="arcade-cta" onClick={handleSolo}>Start Solo</button>
-          </>
-        ) : (
-          <>
-            <p className="arcade-sub">Auto-matched with the next player over a real Sui tunnel. Your bot fights for you by default — flip to Manual to play yourself.</p>
-            <button className="arcade-cta" onClick={onFind}>Find Match</button>
-          </>
-        )}
-      </div>
+          ) : (
+            <button type="button" className={`${BOMB_BTN} bomb-cta bomb-cta--full`} onClick={onFind}>
+              Find match
+            </button>
+          )}
+        </div>
+      </footer>
     </div>
   );
 }

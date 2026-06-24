@@ -1,7 +1,9 @@
 import { useState } from "react";
+import { CROSS_BTN, CROSS_STYLE } from "../crossTheme";
+import { CrossChicken } from "./crossSprites";
 import "../cross.css";
 
-/** Splash/menu: Solo (bots over a local tunnel) or PvP (auto-matched with another player). */
+/** Splash/menu — compact footprint, playful pane styling. */
 export function CrossLobby({
   onSolo,
   onFind,
@@ -15,33 +17,55 @@ export function CrossLobby({
   const handleSolo = () => onSolo(Math.max(1, Math.floor(Number(stake)) || 0));
 
   return (
-    <div className="cross-root">
-      <div className="arcade-card">
-        <h2 className="arcade-title wal-doto text-gold">CHICKEN CROSS</h2>
-
-        <div className="arcade-seg">
-          <button className={`arcade-seg__btn${tab === "solo" ? " arcade-seg__btn--on" : ""}`} onClick={() => setTab("solo")}>
-            Solo
-          </button>
-          <button className={`arcade-seg__btn${tab === "pvp" ? " arcade-seg__btn--on" : ""}`} onClick={() => setTab("pvp")}>
-            PvP
-          </button>
+    <div className="cross-lobby" style={CROSS_STYLE}>
+      <div className="cross-lobby__card">
+        <div className="cross-lobby__head">
+          <div className="cross-lobby__brand">
+            <span className="cross-lobby__mascot" aria-hidden>
+              <CrossChicken party="a" mini />
+            </span>
+            <h2 className="cross-lobby__title">Chicken Cross</h2>
+          </div>
+          <div className="cross-seg" role="tablist" aria-label="Game mode">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === "solo"}
+              className={`cross-seg__btn${tab === "solo" ? " cross-seg__btn--on" : ""}`}
+              onClick={() => setTab("solo")}
+            >
+              Solo
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === "pvp"}
+              className={`cross-seg__btn${tab === "pvp" ? " cross-seg__btn--on" : ""}`}
+              onClick={() => setTab("pvp")}
+            >
+              PvP
+            </button>
+          </div>
         </div>
 
         {tab === "solo" ? (
-          <>
-            <p className="arcade-sub">Two bots race up the neon highway over a real Sui tunnel — one signature funds both seats. Take the wheel anytime with the Auto toggle.</p>
-            <div className="flex flex-col items-center gap-1.5">
-              <span className="arcade-label">Stake per seat (MIST)</span>
-              <input className="arcade-field" type="number" min={1} value={stake} onChange={(e) => setStake(e.target.value)} />
-            </div>
-            <button className="arcade-cta" onClick={handleSolo}>Start Solo</button>
-          </>
+          <div className="cross-lobby__action">
+            <input
+              className="cross-field"
+              type="number"
+              min={1}
+              aria-label="Stake"
+              value={stake}
+              onChange={(e) => setStake(e.target.value)}
+            />
+            <button type="button" className={`${CROSS_BTN} cross-cta cross-cta--join`} onClick={handleSolo}>
+              Go
+            </button>
+          </div>
         ) : (
-          <>
-            <p className="arcade-sub">Auto-matched with the next player over a real Sui tunnel. Your bot races for you by default — flip to Manual to steer yourself.</p>
-            <button className="arcade-cta" onClick={onFind}>Find Match</button>
-          </>
+          <button type="button" className={`${CROSS_BTN} cross-cta cross-cta--full`} onClick={onFind}>
+            Find match
+          </button>
         )}
       </div>
     </div>

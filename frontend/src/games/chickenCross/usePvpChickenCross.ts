@@ -19,7 +19,7 @@ export type { PvpStatus };
 const usePvpMatch = createPvpMatchHook<
   CrossState,
   CrossMove,
-  CrossDir,
+  CrossDir | undefined,
   CrossView
 >({
   game: "chicken-cross",
@@ -28,14 +28,14 @@ const usePvpMatch = createPvpMatchHook<
   makeProtocol: () => new CrossProtocol(),
   deriveView,
   makeResumeAdapter: makeCrossResumeAdapter,
-  idleIntent: "north",
+  idleIntent: undefined,
   intentToMove: (role: Role, dir) =>
     role === "A" ? { dirA: dir } : { dirB: dir },
   readIntent: (role: Role, move) => (role === "A" ? move?.dirA : move?.dirB),
 });
 
 export interface PvpChickenCross
-  extends Omit<PvpMatch<CrossState, CrossDir, CrossView>, "setIntent"> {
+  extends Omit<PvpMatch<CrossState, CrossDir | undefined, CrossView>, "setIntent"> {
   setDir: (dir: CrossDir) => void;
 }
 

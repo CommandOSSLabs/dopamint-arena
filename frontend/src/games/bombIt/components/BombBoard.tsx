@@ -7,6 +7,7 @@ import {
   blastCellsFor,
 } from "sui-tunnel-ts/protocol/bombIt";
 import type { BombItAction } from "sui-tunnel-ts/protocol/bombIt";
+import { BOMB_BTN, BOMB_IT_STYLE } from "../bombItTheme";
 import "../bomb-it.css";
 import type { BombItView } from "../session-core";
 
@@ -35,7 +36,7 @@ const BombTerrain = memo(
           const kind = cell === CELL_WALL ? "wall" : cell === CELL_CRATE ? "crate" : "floor";
           return (
             <div key={i} className={`bomb-cell bomb-cell--${kind}`}>
-              {cell === CELL_CRATE ? "📦" : ""}
+              {cell === CELL_CRATE ? <span className="bomb-crate-glyph" aria-hidden /> : null}
             </div>
           );
         })}
@@ -54,19 +55,24 @@ export function BombBoard({
   stake,
   auto = false,
   onToggleAuto,
+  score,
+  gamesPlayed,
+  onSettle,
 }: {
   view: BombItView;
   winner: "A" | "B" | "draw" | null;
-  /** Seat the human controls, or null when spectating a bot-vs-bot self-play match. */
   role: "A" | "B" | null;
   onAction: (a: BombItAction) => void;
   onPlayAgain: () => void;
-  /** Per-seat stake (won/lost on settle); surfaced in the outcome banner. */
   stake: number;
-  /** Auto/autopilot: when true a bot drives this seat; hides controls + ignores keyboard. */
   auto?: boolean;
-  /** When provided, renders the Auto/Manual toggle pill. */
   onToggleAuto?: () => void;
+  /** Running multi-game score for solo sessions. */
+  score?: { you: number; foe: number };
+  /** Number of completed duels (the running duel is gamesPlayed + 1). */
+  gamesPlayed?: number;
+  /** Cash out the tunnel at the current state — solo only, shown while live. */
+  onSettle?: () => void;
 }) {
   const settled = winner !== null;
   const spectating = role === null;
@@ -77,8 +83,6 @@ export function BombBoard({
     if (canPlay) boardRef.current?.focus();
   }, [canPlay]);
 
-  // Detect bomb detonations by diffing the previous tick's bombs/grid, then flash the exact
-  // blast cells the protocol cleared (replayed via blastCellsFor on the pre-blast grid).
   const prevBombsRef = useRef<BombItView["bombs"]>([]);
   const prevGridRef = useRef<number[]>(view.grid);
   const blastSeq = useRef(0);
@@ -124,19 +128,26 @@ export function BombBoard({
     }
   };
 
-  const aDead = !view.players[0]?.alive;
-  const bDead = !view.players[1]?.alive;
+  const myParty: "A" | "B" = role ?? "A";
+  const oppParty: "A" | "B" = myParty === "A" ? "B" : "A";
+  const myIdx = myParty === "A" ? 0 : 1;
+  const oppIdx = oppParty === "A" ? 0 : 1;
+  const myBalance = myParty === "A" ? view.balanceA : view.balanceB;
+  const oppBalance = oppParty === "A" ? view.balanceA : view.balanceB;
+  const myDead = !view.players[myIdx]?.alive;
+  const oppDead = !view.players[oppIdx]?.alive;
+  const pot = view.balanceA + view.balanceB;
   const won = !spectating && winner === role;
   const celebratory = winner !== "draw" && winner !== null && (spectating || won);
 
   const title = () => {
     if (winner === "draw") return "Draw";
-    if (spectating) return winner === "A" ? "🤖 Bot A wins" : "👾 Bot B wins";
-    return won ? "You win!" : "Opponent wins";
+    if (spectating) return winner === "A" ? "Bot A wins" : "Bot B wins";
+    return won ? "You win" : "Opponent wins";
   };
   const sub = () => {
     if (winner === "draw") return "Stakes returned";
-    return won || spectating ? `+$${stake} on-chain` : `−$${stake} on-chain`;
+    return won || spectating ? `+${stake} MIST` : `−${stake} MIST`;
   };
 
   return (
@@ -144,110 +155,204 @@ export function BombBoard({
       ref={boardRef}
       tabIndex={canPlay ? 0 : -1}
       onKeyDown={handleKeyDown}
-      className="bomb-root outline-none"
+      style={BOMB_IT_STYLE}
+      className="bomb-shell outline-none"
     >
-      <div className="bomb-hud">
-        <div className="bomb-seat">
-          <span className={`bomb-seat__badge bomb-seat__badge--a${aDead ? " bomb-seat__badge--dead" : ""}`}>🤖</span>
-          <span className="bomb-seat__meta">
-            <span className="bomb-seat__name">{spectating ? "Bot A" : role === "A" ? "A · you" : "A"}{aDead ? " 💀" : ""}</span>
-            <span className="bomb-seat__bal wal-doto text-gold">${view.balanceA}</span>
-          </span>
-        </div>
-
-        <div className="bomb-hud__center">
-          <span className="bomb-hud__tick wal-doto">{view.tick}</span>
-          <span className="bomb-hud__live">ticks</span>
-        </div>
-
-        <div className="bomb-seat bomb-seat--right">
-          <span className={`bomb-seat__badge bomb-seat__badge--b${bDead ? " bomb-seat__badge--dead" : ""}`}>👾</span>
-          <span className="bomb-seat__meta">
-            <span className="bomb-seat__name">{spectating ? "Bot B" : role === "B" ? "B · you" : "B"}{bDead ? " 💀" : ""}</span>
-            <span className="bomb-seat__bal wal-doto text-gold">${view.balanceB}</span>
-          </span>
-        </div>
-      </div>
-
-      <div
-        className="bomb-stage"
-        style={{ ["--gw" as string]: GRID_W, ["--gh" as string]: GRID_H } as React.CSSProperties}
+      <aside
+        className={["bomb-pane bomb-pane--you", canPlay ? "bomb-pane--live" : ""].filter(Boolean).join(" ")}
+        aria-label="Your seat"
       >
-        <BombTerrain grid={view.grid} />
-
-        <div className="bomb-overlay">
-          {view.players[0]?.alive && (
+        <div className="bomb-pane__inner">
+          <div className="bomb-pane__block">
+            <span className="bomb-pane__eyebrow">{spectating ? "bot a" : "you"}</span>
             <div
-              key="pA"
-              className="bomb-piece"
-              style={{ ["--r" as string]: view.players[0].row, ["--c" as string]: view.players[0].col } as React.CSSProperties}
+              className={[
+                "bomb-player",
+                myParty === "A" ? "bomb-player--a" : "bomb-player--b",
+                !spectating ? "bomb-player--mine" : "",
+                myDead ? "bomb-player--dead" : "",
+                canPlay ? "bomb-player--live" : "",
+              ].join(" ")}
             >
-              <span className={`bomb-piece__glyph bomb-piece__glyph--a${role === "A" ? " bomb-piece__glyph--mine" : ""}`}>🤖</span>
+              <span className="bomb-player__badge">{myParty}</span>
+              <span className="bomb-player__bal wal-mono tabular-nums">{myBalance}</span>
+              {myDead && <span className="bomb-player__flag">out</span>}
             </div>
-          )}
-          {view.players[1]?.alive && (
-            <div
-              key="pB"
-              className="bomb-piece"
-              style={{ ["--r" as string]: view.players[1].row, ["--c" as string]: view.players[1].col } as React.CSSProperties}
-            >
-              <span className={`bomb-piece__glyph bomb-piece__glyph--b${role === "B" ? " bomb-piece__glyph--mine" : ""}`}>👾</span>
-            </div>
-          )}
-          {view.bombs.map((b) => (
-            <div
-              key={`bomb-${b.owner}`}
-              className="bomb-piece"
-              style={{ ["--r" as string]: b.row, ["--c" as string]: b.col } as React.CSSProperties}
-            >
-              <span className="bomb-piece__glyph bomb-piece__glyph--bomb">💣</span>
-            </div>
-          ))}
-          {blasts.map((bl) =>
-            bl.cells.map((ci) => (
-              <div
-                key={`${bl.id}-${ci}`}
-                className="bomb-blast"
-                style={{ ["--r" as string]: Math.floor(ci / GRID_W), ["--c" as string]: ci % GRID_W } as React.CSSProperties}
-              >
-                <span className="bomb-blast__ring" />
-                <span className="bomb-blast__core" />
-              </div>
-            )),
-          )}
-        </div>
-      </div>
-
-      {!settled && canPlay && (
-        <div className="bomb-controls">
-          <button className="bomb-btn" onPointerDown={() => onAction("north")} aria-label="Move north">▲</button>
-          <div className="flex gap-1">
-            <button className="bomb-btn" onPointerDown={() => onAction("west")} aria-label="Move west">◀</button>
-            <button className="bomb-btn bomb-btn--bomb" onPointerDown={() => onAction("bomb")} aria-label="Drop bomb">💣</button>
-            <button className="bomb-btn" onPointerDown={() => onAction("east")} aria-label="Move east">▶</button>
           </div>
-          <button className="bomb-btn" onPointerDown={() => onAction("south")} aria-label="Move south">▼</button>
+
+          <div className="bomb-pane__grow">
+            {onToggleAuto && !settled && (
+              <button
+                type="button"
+                className={`${BOMB_BTN} bomb-auto${auto ? " bomb-auto--on" : ""}`}
+                onClick={onToggleAuto}
+                title={auto ? "Bot is playing — click to take over" : "Manual — click for autopilot"}
+              >
+                {auto ? "auto" : "manual"}
+              </button>
+            )}
+
+            {!settled && canPlay && (
+              <div className="bomb-controls">
+                <div className="bomb-actionbar" role="group" aria-label="Movement controls">
+                  <button type="button" className="bomb-pad bomb-pad--n" onPointerDown={() => onAction("north")} aria-label="North">W</button>
+                  <button type="button" className="bomb-pad bomb-pad--w" onPointerDown={() => onAction("west")} aria-label="West">A</button>
+                  <button type="button" className="bomb-pad bomb-pad--bomb" onPointerDown={() => onAction("bomb")} aria-label="Bomb">■</button>
+                  <button type="button" className="bomb-pad bomb-pad--e" onPointerDown={() => onAction("east")} aria-label="East">D</button>
+                  <button type="button" className="bomb-pad bomb-pad--s" onPointerDown={() => onAction("south")} aria-label="South">S</button>
+                </div>
+              </div>
+            )}
+
+            {spectating && !settled && <span className="bomb-spectate">bot vs bot</span>}
+          </div>
         </div>
-      )}
+      </aside>
 
-      {onToggleAuto && !settled && (
-        <button
-          className={`arena-auto${auto ? " arena-auto--on" : ""}`}
-          onClick={onToggleAuto}
-          title={auto ? "Bot is playing for you — click to take over" : "You're playing — click to autopilot"}
+      <main className="bomb-main">
+        <div
+          className="bomb-stage"
+          style={{ ["--gw" as string]: GRID_W, ["--gh" as string]: GRID_H } as React.CSSProperties}
         >
-          {auto ? "🤖 Auto" : "✋ Manual"}
-        </button>
-      )}
+          <BombTerrain grid={view.grid} />
 
-      {!settled && spectating && <p className="bomb-spectate">Bot vs bot · co-signing every tick on-chain</p>}
+          <div className="bomb-overlay">
+            {view.players[0]?.alive && (
+              <div
+                key="pA"
+                className="bomb-piece"
+                style={{ ["--r" as string]: view.players[0].row, ["--c" as string]: view.players[0].col } as React.CSSProperties}
+              >
+                <span className={`bomb-piece__glyph bomb-piece__glyph--a${role === "A" ? " bomb-piece__glyph--mine" : ""}`}>
+                  <span className="bomb-piece__inner" aria-hidden />
+                </span>
+              </div>
+            )}
+            {view.players[1]?.alive && (
+              <div
+                key="pB"
+                className="bomb-piece"
+                style={{ ["--r" as string]: view.players[1].row, ["--c" as string]: view.players[1].col } as React.CSSProperties}
+              >
+                <span className={`bomb-piece__glyph bomb-piece__glyph--b${role === "B" ? " bomb-piece__glyph--mine" : ""}`}>
+                  <span className="bomb-piece__inner" aria-hidden />
+                </span>
+              </div>
+            )}
+            {view.bombs.map((b) => (
+              <div
+                key={`bomb-${b.owner}`}
+                className="bomb-piece"
+                style={{ ["--r" as string]: b.row, ["--c" as string]: b.col } as React.CSSProperties}
+              >
+                <span className="bomb-piece__glyph bomb-piece__glyph--bomb" aria-label="Bomb">
+                  <span className="bomb-piece__bomb-core" aria-hidden />
+                  <span className="bomb-piece__fuse" aria-hidden />
+                </span>
+              </div>
+            ))}
+            {blasts.map((bl) =>
+              bl.cells.map((ci) => (
+                <div
+                  key={`${bl.id}-${ci}`}
+                  className="bomb-blast"
+                  style={{ ["--r" as string]: Math.floor(ci / GRID_W), ["--c" as string]: ci % GRID_W } as React.CSSProperties}
+                >
+                  <span className="bomb-blast__fill" />
+                  <span className="bomb-blast__frame" />
+                  <span className="bomb-blast__cross" aria-hidden />
+                </div>
+              )),
+            )}
+          </div>
+        </div>
+      </main>
+
+      <aside
+        className={["bomb-pane bomb-pane--opp", !settled ? "bomb-pane--live" : ""].filter(Boolean).join(" ")}
+        aria-label="Opponent and match stats"
+      >
+        <div className="bomb-pane__inner">
+          <div className="bomb-pane__block">
+            <span className="bomb-pane__eyebrow">{spectating ? "bot b" : "opp"}</span>
+            <div
+              className={[
+                "bomb-player",
+                oppParty === "A" ? "bomb-player--a" : "bomb-player--b",
+                oppDead ? "bomb-player--dead" : "",
+                !settled && !oppDead ? "bomb-player--rival" : "",
+              ].join(" ")}
+            >
+              <span className="bomb-player__badge">{oppParty}</span>
+              <span className="bomb-player__bal wal-mono tabular-nums">{oppBalance}</span>
+              {oppDead && <span className="bomb-player__flag">out</span>}
+            </div>
+          </div>
+
+          <div className={`bomb-stats${!settled ? " bomb-stats--live" : ""}`}>
+            <div className="bomb-tx">
+              <span className="bomb-tx__label">tx</span>
+              <span key={view.tick} className="bomb-tx__value wal-doto tabular-nums">
+                {view.tick}
+              </span>
+              {!settled && <span className="bomb-tx__live" aria-label="live">●</span>}
+            </div>
+            <dl className="bomb-metrics">
+              <div className={`bomb-metric${view.bombs.length > 0 ? " bomb-metric--hot" : ""}`}>
+                <dt>bombs</dt>
+                <dd key={view.bombs.length} className="wal-mono tabular-nums">
+                  {view.bombs.length}
+                </dd>
+              </div>
+              <div className="bomb-metric">
+                <dt>pot</dt>
+                <dd className="wal-mono tabular-nums">{pot}</dd>
+              </div>
+              <div className="bomb-metric">
+                <dt>stake</dt>
+                <dd className="wal-mono tabular-nums">{stake}</dd>
+              </div>
+            </dl>
+
+            {score !== undefined && (
+              <div className="bomb-score">
+                <span className="bomb-score__tally wal-doto tabular-nums">
+                  {score.you}–{score.foe}
+                </span>
+                <span className="bomb-score__label">
+                  g{(gamesPlayed ?? 0) + 1}
+                </span>
+              </div>
+            )}
+
+            {onSettle && !settled && (
+              <button
+                type="button"
+                className="bomb-settle"
+                onClick={onSettle}
+                title="Cash out the tunnel now at the current balance"
+              >
+                settle
+              </button>
+            )}
+          </div>
+        </div>
+      </aside>
 
       {settled && (
-        <div className="bomb-result">
-          {celebratory && <div className="bomb-result__trophy">🏆</div>}
-          <div className={`bomb-result__line wal-doto ${celebratory ? "text-gold" : "text-arena-text"}`}>{title()}</div>
-          <div className="bomb-result__sub">{sub()}</div>
-          <button className="bomb-play-again" onClick={onPlayAgain}>Play Again</button>
+        <div className="bomb-result" role="dialog" aria-modal="true" aria-labelledby="bomb-result-title">
+          <div className="bomb-result__card">
+            <div
+              id="bomb-result-title"
+              className={`bomb-result__title wal-doto ${celebratory ? "text-[var(--bi-gold)]" : "text-slate-200"}`}
+            >
+              {title()}
+            </div>
+            <div className="bomb-result__sub">{sub()}</div>
+            <button type="button" className={`${BOMB_BTN} bomb-cta`} onClick={onPlayAgain}>
+              again
+            </button>
+          </div>
         </div>
       )}
     </div>
