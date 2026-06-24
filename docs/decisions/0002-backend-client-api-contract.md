@@ -11,6 +11,11 @@
 > The bearer-gated `POST /v1/sessions/{id}/settle` defined below is replaced by
 > `POST /v1/tunnels/{tunnelId}/settle`, authorized by the co-signed settlement
 > itself (no session token). Treat the settle section here as historical.
+>
+> **➕ Metrics extended by [metrics-timeseries-design](../superpowers/specs/2026-06-24-metrics-timeseries-design.md).**
+> Adds `GET /v1/stats/history` (persisted TPS time-series), a `peakTps` field on the
+> `stats/live` snapshot, and a body-token heartbeat variant for `sendBeacon`. The
+> heartbeat/stats contract here is otherwise unchanged.
 
 - **Status**: Accepted (v1 draft, target: June-19 demo)
 - **Date**: 2026-06-16
