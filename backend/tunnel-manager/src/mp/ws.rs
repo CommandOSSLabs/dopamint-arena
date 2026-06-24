@@ -1245,15 +1245,23 @@ mod tests {
         let bus: Arc<dyn crate::store::Bus> = Arc::new(LocalBus::new("test-hold".to_owned()));
 
         // Build a minimal SharedState with the Redis mp + local bus.
+        let (stats_tx, _) = tokio::sync::broadcast::channel(4);
         let state: crate::state::SharedState = Arc::new(AppState {
             control: Arc::new(crate::store::memory::InMemoryControlStore::default()),
             mp: mp.clone(),
             bus: bus.clone(),
             settler: crate::sui::SuiSettler::noop(),
             walrus: crate::walrus::WalrusClient::noop(),
+            ollama: crate::ollama::OllamaClient::new(
+                "http://localhost:11434".into(),
+                "qwen2.5:1.8b".into(),
+            )
+            .expect("test ollama client"),
+            stats_tx,
             actions: crate::stats_counter::LocalActionCounter::default(),
             pair_hold_ms: 10_000, // long hold — neither expires via the join path
             pairing: crate::stats_counter::MatchPairingMetrics::default(),
+            chat: crate::chat_store::ChatTranscriptStore::new(),
         });
 
         let game = format!("hold-{}", uuid::Uuid::new_v4().simple());
@@ -1387,15 +1395,23 @@ mod tests {
             .await
             .expect("redis bus"),
         );
+        let (stats_tx, _) = tokio::sync::broadcast::channel(4);
         Arc::new(AppState {
             control: Arc::new(InMemoryControlStore::default()),
             mp,
             bus,
             settler: crate::sui::SuiSettler::noop(),
             walrus: crate::walrus::WalrusClient::noop(),
+            ollama: crate::ollama::OllamaClient::new(
+                "http://localhost:11434".into(),
+                "qwen2.5:1.8b".into(),
+            )
+            .expect("test ollama client"),
+            stats_tx,
             actions: crate::stats_counter::LocalActionCounter::default(),
             pair_hold_ms,
             pairing: crate::stats_counter::MatchPairingMetrics::default(),
+            chat: crate::chat_store::ChatTranscriptStore::new(),
         })
     }
 
