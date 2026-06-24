@@ -120,6 +120,11 @@ const GAME = "world-canvas";
 const MAX_RETAINED_CELLS = 200_000;
 /** Recent-activity ring length (newest paints kept for the activity feed). */
 const MAX_ACTIVITY = 60;
+/** Debounce (ms) after the human's LAST paint before flushing ONE MY-ACTIVITY row that
+ *  summarizes the stroke. ~400ms is a natural stroke/gap boundary; cancel-and-reschedule
+ *  on each new human paint so a continuous stroke collapses into a single row. Human-only
+ *  (bots paint far faster and would flood the feed — their painting stays as TPS). */
+const HUMAN_STROKE_DEBOUNCE_MS = 400;
 /** Co-signed paints between on-chain checkpoints. At each boundary the tunnel
  *  cooperatively closes (anchoring its transcript root on-chain, like every finite
  *  game's settle) and a fresh tunnel reopens so painting never stops. Only the real
@@ -530,6 +535,18 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
   // Per-painter tallies + recent-activity ring: same "mutate + bump revision" pattern.
   const paintersRef = useRef<Map<string, PainterInfo>>(new Map());
   const activityRef = useRef<ActivityEntry[]>([]);
+  // Human-stroke MY-ACTIVITY summary: cells co-signed since the last flush, the latest
+  // cell painted (stroke anchor), the cancel-and-reschedule debounce timer, and a
+  // monotonic counter that keys each flushed row uniquely. See submitHumanPaint.
+  const humanStrokeCountRef = useRef(0);
+  const humanStrokeLastCellRef = useRef<{
+    cx: bigint;
+    cy: bigint;
+    x: number;
+    y: number;
+  } | null>(null);
+  const humanStrokeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const humanStrokeFlushIdRef = useRef(0);
   // The two live seat bots + the placement counter.
   const agentStatesRef = useRef<Map<string, AgentState>>(new Map());
   const regionIndexRef = useRef(0);
@@ -902,6 +919,18 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
         status: "Success",
         amount: "",
       });
+      // Also surface the open in LIVE TRANSACTIONS (snapshot.txns) under this game's tab,
+      // mirroring the "Opened" row every other game's on-chain feed uses. BOTH feeds get it:
+      // MY ACTIVITY (above) and LIVE TRANSACTIONS (here).
+      report.pushTxn({
+        id: feedRowId(run.tunnelId),
+        game: GAME,
+        time: new Date().toLocaleTimeString("en-GB"),
+        bot: shortTunnelId(run.tunnelId),
+        type: "Opened",
+        status: "Success",
+        amount: "",
+      });
 
       // Tunnel is live: drain any paints buffered during the open, then continue.
       run.ready = true;
@@ -990,6 +1019,17 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
           status: "Success",
           amount: "closed",
         });
+        // Mirror the close into LIVE TRANSACTIONS (snapshot.txns) as a "Settled" row, the
+        // on-chain-feed counterpart of the MY-ACTIVITY "settled" row above. BOTH feeds get it.
+        report.pushTxn({
+          id: feedRowId(`${run.tunnelId}:${run.moveCount}`),
+          game: GAME,
+          time: new Date().toLocaleTimeString("en-GB"),
+          bot: shortTunnelId(run.tunnelId),
+          type: "Settled",
+          status: "Success",
+          amount: "closed",
+        });
       } catch (e) {
         console.warn("[world-canvas] checkpoint settle failed:", e);
       }
@@ -998,6 +1038,29 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
   );
   checkpointRef.current = checkpointRun;
 
+  // Flush the accumulated human-stroke count into ONE MY-ACTIVITY row labelled "You".
+  // Fires ~HUMAN_STROKE_DEBOUNCE_MS after the human's last paint (the debounce timer).
+  // Best-effort: guarded so a feed write can never throw back into the paint path.
+  const flushHumanStroke = useCallback(() => {
+    humanStrokeTimerRef.current = null;
+    const n = humanStrokeCountRef.current;
+    humanStrokeCountRef.current = 0;
+    if (n === 0) return;
+    try {
+      report.pushLocalTxn({
+        id: feedRowId(`human-stroke:${humanStrokeFlushIdRef.current++}`),
+        game: GAME,
+        time: new Date().toLocaleTimeString("en-GB"),
+        bot: "You",
+        type: `painted ${n} cell(s)`,
+        status: "Success",
+        amount: "",
+      });
+    } catch (e) {
+      console.warn("[world-canvas] human-stroke activity row skipped:", e);
+    }
+  }, [report]);
+
   // Public: the human paints seat A on the single tunnel — ONLY while holding the wheel
   // (Auto OFF). When Auto is ON the seat-A bot owns the seat, so human paints are ignored
   // (watch mode), exactly like chicken-cross ignores your steering on autopilot.
@@ -1005,8 +1068,20 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
     (cx: bigint, cy: bigint, x: number, y: number, color: number) => {
       if (autoRef.current) return;
       submitPaint({ cx, cy, x, y, color }, "A", humanAddress);
+      // Summarize this stroke in MY-ACTIVITY (human-only — bots stay as TPS). Tally the
+      // cell, remember it as the stroke anchor, and cancel-and-reschedule the debounce so
+      // a continuous stroke flushes one "painted N cell(s)" row at its trailing gap.
+      humanStrokeCountRef.current += 1;
+      humanStrokeLastCellRef.current = { cx, cy, x, y };
+      if (humanStrokeTimerRef.current !== null) {
+        clearTimeout(humanStrokeTimerRef.current);
+      }
+      humanStrokeTimerRef.current = setTimeout(
+        flushHumanStroke,
+        HUMAN_STROKE_DEBOUNCE_MS,
+      );
     },
-    [submitPaint, humanAddress],
+    [submitPaint, humanAddress, flushHumanStroke],
   );
 
   // Allocate the next region for a seat bot: a fresh stroke stream (per the given mode)
@@ -1283,6 +1358,10 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
       if (redrawTimerRef.current !== null) {
         clearTimeout(redrawTimerRef.current);
         redrawTimerRef.current = null;
+      }
+      if (humanStrokeTimerRef.current !== null) {
+        clearTimeout(humanStrokeTimerRef.current);
+        humanStrokeTimerRef.current = null;
       }
       const run = runRef.current;
       if (run) {
