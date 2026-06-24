@@ -56,7 +56,11 @@ import {
   clearResumeRecord,
 } from "@/pvp/resume";
 import { makePokerResumeAdapter } from "./pokerResumeAdapter";
-import { makeSeatBot, randomPokerPersona, type PokerSeatBot } from "./pokerSelfPlay";
+import {
+  makeSeatBot,
+  randomPokerPersona,
+  type PokerSeatBot,
+} from "./pokerSelfPlay";
 import { POKER_BUYIN } from "./constants";
 import type { BotContext } from "@/agent/gameKit";
 
@@ -630,6 +634,7 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
           walletSignExec: signExec as never,
           prepareStake: sponsored.prepareStake,
           selectStakeCoin: sponsored.selectStakeCoin,
+          ensureStakeBalance: sponsored.ensureStakeBalance,
         };
         const startTunnelRound = async (balances: { a: bigint; b: bigint }) => {
           // 1) fund on-chain: seat A opens + funds seat A; seat B gated-deposits seat B.

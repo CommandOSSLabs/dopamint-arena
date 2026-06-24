@@ -14,7 +14,11 @@ import {
   selectStakeCoin,
   type OwnedCoin,
 } from "./sponsor";
-import { ensureDopamintStakeCoin, isDopamintConfigured } from "./dopamint";
+import {
+  ensureDopamintAddressBalance,
+  ensureDopamintStakeCoin,
+  isDopamintConfigured,
+} from "./dopamint";
 import type { SignExec } from "./tunnelTx";
 
 export interface SponsoredSignExec {
@@ -39,6 +43,12 @@ export interface SponsoredSignExec {
    * top-up hasn't landed yet (rare cold start) — the caller can retry.
    */
   prepareStake: (minAmount: bigint) => Promise<string>;
+  /**
+   * Address-balance stake helper (ADR-0013): ensure the player's DOPAMINT *address balance* holds
+   * at least `minAmount`, faucet-ing + sweeping if short. Off the hot path — once topped up, the
+   * open's own withdrawal is the only tx. Pair with the open builders' `stakeFromBalance`.
+   */
+  ensureStakeBalance: (minAmount: bigint) => Promise<void>;
 }
 
 /** dapp-kit's v1-compat client exposes `getCoins`; typed narrowly to avoid an `any`. */
@@ -88,12 +98,27 @@ export function useSponsoredSignExec(): SponsoredSignExec {
       });
     };
 
+    // Address-balance funding (ADR-0013): keep the player's DOPAMINT address balance above the
+    // stake so a sponsored open can withdraw it without a version-pinned coin. No-op once funded.
+    const ensureStakeBalance = (minAmount: bigint): Promise<void> => {
+      if (!isDopamintConfigured) {
+        throw new Error("DOPAMINT is not configured (VITE_DOPAMINT_* env)");
+      }
+      return ensureDopamintAddressBalance({
+        client: reader as never,
+        signExec,
+        owner: sender,
+        need: minAmount,
+      });
+    };
+
     return {
       ready: Boolean(sender),
       signExec,
       selectStakeCoin: (minAmount: bigint) =>
         selectStakeCoin(getCoins, sender, minAmount),
       prepareStake,
+      ensureStakeBalance,
     };
   }, [sender, client, signTransaction]);
 }

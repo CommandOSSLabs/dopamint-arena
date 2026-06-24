@@ -30,6 +30,7 @@ import { useSponsoredSignExec } from "../../onchain/useSponsoredSignExec";
 import { withSponsorFallback } from "../../onchain/sponsor";
 import {
   DOPAMINT_COIN_TYPE,
+  isDopamintAddressBalance,
   isDopamintConfigured,
 } from "../../onchain/dopamint";
 import {
@@ -106,6 +107,8 @@ interface CrossDeps {
   selectStakeCoin: (minAmount: bigint) => Promise<string>;
   /** DOPAMINT stake: faucet (invisibly, sponsored) if short, then return a stake coin id. */
   prepareStake: (minAmount: bigint) => Promise<string>;
+  /** ADR-0013: ensure the player's DOPAMINT address balance covers the stake. No-op once funded. */
+  ensureStakeBalance: (minAmount: bigint) => Promise<void>;
 }
 
 interface CrossSnapshot {
@@ -277,7 +280,8 @@ class CrossBotSession {
     const winner = this.tunnel.state.inner.winner; // "A" | "B" | null
     this.lastScoredGames = game;
     if (winner === "A") this.score = { ...this.score, you: this.score.you + 1 };
-    else if (winner === "B") this.score = { ...this.score, foe: this.score.foe + 1 };
+    else if (winner === "B")
+      this.score = { ...this.score, foe: this.score.foe + 1 };
     // One "My Activity" row per finished race (skip pushes), mirroring battleship.
     if (winner === "A" || winner === "B") {
       this.deps?.report.pushLocalTxn({
@@ -409,6 +413,10 @@ class CrossBotSession {
         // DOPAMINT (ADR-0010): faucet both seats' bank invisibly (gas-sponsored) and stake
         // DOPAMINT — free for a 0-SUI player. SUI path (DOPAMINT env unset): sponsored SUI
         // stake with a sender-pays fallback (ADR-0009).
+        // ADR-0013: top up the player's DOPAMINT address balance, then the open withdraws from it
+        // (no version-pinned coin → concurrent opens across games never equivocate).
+        if (isDopamintConfigured && isDopamintAddressBalance)
+          await deps.ensureStakeBalance(2n * fundedPerSeat);
         const tunnelId = isDopamintConfigured
           ? await openAndFundSelfPlay({
               reads,
@@ -418,7 +426,14 @@ class CrossBotSession {
               aAmount: fundedPerSeat,
               bAmount: fundedPerSeat,
               coinType: DOPAMINT_COIN_TYPE,
-              stakeCoinId: await deps.prepareStake(2n * fundedPerSeat),
+              ...(isDopamintAddressBalance
+                ? {
+                    stakeFromBalance: {
+                      amount: 2n * fundedPerSeat,
+                      coinType: DOPAMINT_COIN_TYPE,
+                    },
+                  }
+                : { stakeCoinId: await deps.prepareStake(2n * fundedPerSeat) }),
             })
           : await withSponsorFallback(
               async () =>
@@ -627,6 +642,7 @@ export function useChickenCrossSession(windowId: string): ChickenCrossSession {
     sponsoredSignExec: sponsored.signExec as never,
     selectStakeCoin: sponsored.selectStakeCoin,
     prepareStake: sponsored.prepareStake,
+    ensureStakeBalance: sponsored.ensureStakeBalance,
   };
 
   const snap = useSyncExternalStore(session.subscribe, session.getSnapshot);

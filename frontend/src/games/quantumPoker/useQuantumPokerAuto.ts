@@ -23,10 +23,15 @@ import {
 import { makeKeypairSponsoredSignExec } from "@/onchain/sponsor";
 import {
   DOPAMINT_COIN_TYPE,
+  ensureDopamintAddressBalance,
   ensureDopamintStakeCoin,
+  isDopamintAddressBalance,
   isDopamintConfigured,
 } from "@/onchain/dopamint";
-import { QUANTUM_POKER_STAKE, QUANTUM_POKER_HANDS_PER_TUNNEL } from "./constants";
+import {
+  QUANTUM_POKER_STAKE,
+  QUANTUM_POKER_HANDS_PER_TUNNEL,
+} from "./constants";
 import {
   loadOrCreateQuantumPokerBots,
   botBalances,
@@ -486,25 +491,50 @@ class AutoSession {
     const coinType = dopamintOn ? DOPAMINT_COIN_TYPE : undefined;
 
     try {
+      // ADR-0013: the autonomous bot A is the tx sender, so withdraw the stake from BOT A's
+      // address balance (top it up first). Withdrawals don't pin a coin version → concurrent
+      // bot opens across games never equivocate.
+      if (dopamintOn && isDopamintAddressBalance)
+        await ensureDopamintAddressBalance({
+          client: this.deps.client as never,
+          signExec: this.botSponsoredSignExec(this.bots.A),
+          owner: this.bots.A.address,
+          need: 2n * stakePerSeat,
+        });
       const tunnelId = await openAndFundSelfPlay({
         reads,
         signExec: dopamintOn
           ? this.botSponsoredSignExec(this.bots.A)
           : this.botSignExec(this.bots.A),
-        partyA: { address: this.bots.A.address, publicKey: this.bots.A.publicKey },
-        partyB: { address: this.bots.B.address, publicKey: this.bots.B.publicKey },
+        partyA: {
+          address: this.bots.A.address,
+          publicKey: this.bots.A.publicKey,
+        },
+        partyB: {
+          address: this.bots.B.address,
+          publicKey: this.bots.B.publicKey,
+        },
         aAmount: stakePerSeat,
         bAmount: stakePerSeat,
         coinType,
-        // Self-play funds both seats from one coin, so faucet/select for the 2-seat total.
-        stakeCoinId: dopamintOn
-          ? await ensureDopamintStakeCoin({
-              client: this.deps.client as never,
-              signExec: this.botSponsoredSignExec(this.bots.A),
-              owner: this.bots.A.address,
-              need: 2n * stakePerSeat,
-            })
-          : undefined,
+        // Self-play funds both seats from one source, so withdraw/faucet for the 2-seat total.
+        ...(dopamintOn
+          ? isDopamintAddressBalance
+            ? {
+                stakeFromBalance: {
+                  amount: 2n * stakePerSeat,
+                  coinType: DOPAMINT_COIN_TYPE,
+                },
+              }
+            : {
+                stakeCoinId: await ensureDopamintStakeCoin({
+                  client: this.deps.client as never,
+                  signExec: this.botSponsoredSignExec(this.bots.A),
+                  owner: this.bots.A.address,
+                  need: 2n * stakePerSeat,
+                }),
+              }
+          : {}),
       });
       if (this.gen !== myGen) return;
 
@@ -549,7 +579,13 @@ class AutoSession {
         this.session = await getControlPlaneClient().registerSession({
           userAddress: this.deps?.account?.address ?? this.bots.A.address,
           game: "quantum-poker",
-          tunnels: [{ tunnelId, partyA: this.bots.A.address, partyB: this.bots.B.address }],
+          tunnels: [
+            {
+              tunnelId,
+              partyA: this.bots.A.address,
+              partyB: this.bots.B.address,
+            },
+          ],
         });
       } catch (e) {
         console.error("[poker auto] registerSession failed:", e);
@@ -567,7 +603,11 @@ class AutoSession {
       const FLUSH_MS = 16;
       const flush = async () => {
         if (pending > 0) {
-          this.deps?.report.bumpCounters({ updates: pending, signatures: pending * 2, verifications: pending * 2 });
+          this.deps?.report.bumpCounters({
+            updates: pending,
+            signatures: pending * 2,
+            verifications: pending * 2,
+          });
           pending = 0;
         }
         this.flushHeartbeat(tunnelId, false);
@@ -594,7 +634,11 @@ class AutoSession {
       }
       // Final flush — force the heartbeat so the last window is never dropped.
       if (pending > 0) {
-        this.deps?.report.bumpCounters({ updates: pending, signatures: pending * 2, verifications: pending * 2 });
+        this.deps?.report.bumpCounters({
+          updates: pending,
+          signatures: pending * 2,
+          verifications: pending * 2,
+        });
         pending = 0;
       }
       this.flushHeartbeat(tunnelId, true);
@@ -680,9 +724,7 @@ function getAutoSession(windowId: string): AutoSession {
   return session;
 }
 
-export function useQuantumPokerAuto(
-  windowId: string,
-): QuantumPokerAutoSession {
+export function useQuantumPokerAuto(windowId: string): QuantumPokerAutoSession {
   const { report } = useTelemetry();
   const client = useSuiClient();
   const account = useCurrentAccount();
