@@ -27,7 +27,11 @@ pub(crate) mod test_support {
         )
         .expect("test settler");
         let walrus = crate::walrus::WalrusClient::new("http://pub".into(), "http://agg".into());
-        let ollama = crate::ollama::OllamaClient::new("http://localhost:11434".into(), "qwen2.5:1.8b".into()).expect("test ollama client");
+        let ollama = crate::ollama::OllamaClient::new(
+            "http://localhost:11434".into(),
+            "qwen2.5:1.8b".into(),
+        )
+        .expect("test ollama client");
         let (stats_tx, _) = tokio::sync::broadcast::channel(4);
         std::sync::Arc::new(AppState {
             control: std::sync::Arc::new(crate::store::memory::InMemoryControlStore::default()),
@@ -353,6 +357,24 @@ struct SponsorResponse {
     sponsor_signature: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ChatRequest {
+    messages: Vec<crate::ollama::OllamaMessage>,
+    /// Accepted for API compatibility but ignored: the configured `OLLAMA_MODEL` is always used.
+    #[allow(dead_code)]
+    model: Option<String>,
+    /// Accepted for API compatibility but ignored: this proxy is non-streaming.
+    #[allow(dead_code)]
+    stream: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ChatResponse {
+    content: String,
+}
+
 /// Sponsor gas (only) for a user's open/fund tx (ADR-0009). Wraps the client-built tx KIND in
 /// SIP-58 gas owned by the settler, dry-runs it (verify-before-gas), and returns the bytes + the
 /// settler's gas signature. The user co-signs the SAME bytes and submits with both signatures;
@@ -380,6 +402,20 @@ pub(crate) async fn sponsor(
                 &e.to_string(),
             )
             .into_response()
+        }
+    }
+}
+
+/// Proxy a non-streaming chat request to the configured Ollama model.
+pub(crate) async fn chat(
+    State(state): State<SharedState>,
+    Json(req): Json<ChatRequest>,
+) -> Response {
+    match state.ollama.chat(&req.messages).await {
+        Ok(content) => Json(ChatResponse { content }).into_response(),
+        Err(e) => {
+            tracing::warn!(error = %e, "ollama chat failed");
+            ApiError::resp(StatusCode::BAD_GATEWAY, "ollama_error", &e.to_string()).into_response()
         }
     }
 }
@@ -650,5 +686,70 @@ mod tests {
             "got: {body}"
         );
         assert!(body.contains("tunnel_matches_split_total 1"), "got: {body}");
+    }
+
+    async fn response_body(resp: Response) -> String {
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        String::from_utf8(bytes.to_vec()).unwrap()
+    }
+
+    // POST /v1/chat forwards messages to Ollama and returns the assistant reply.
+    #[tokio::test]
+    async fn chat_endpoint_forwards_to_ollama() {
+        use crate::ollama::{OllamaClient, OllamaMessage};
+        let mut state = test_state();
+        let server = wiremock::MockServer::start().await;
+        let body = serde_json::json!({ "message": { "role": "assistant", "content": "ok" } });
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/api/chat"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+        let ollama = OllamaClient::new(server.uri(), "qwen2.5:1.8b".into()).unwrap();
+        std::sync::Arc::get_mut(&mut state)
+            .expect("unique test arc")
+            .ollama = ollama;
+
+        let req = ChatRequest {
+            messages: vec![OllamaMessage {
+                role: "user".into(),
+                content: "hi".into(),
+            }],
+            model: None,
+            stream: None,
+        };
+        let resp = chat(axum::extract::State(state), axum::Json(req)).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: serde_json::Value = serde_json::from_str(&response_body(resp).await).unwrap();
+        assert_eq!(body["content"], "ok");
+    }
+
+    #[tokio::test]
+    async fn chat_endpoint_returns_bad_gateway_on_ollama_error() {
+        use crate::ollama::{OllamaClient, OllamaMessage};
+        let mut state = test_state();
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/api/chat"))
+            .respond_with(wiremock::ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+        let ollama = OllamaClient::new(server.uri(), "qwen2.5:1.8b".into()).unwrap();
+        std::sync::Arc::get_mut(&mut state)
+            .expect("unique test arc")
+            .ollama = ollama;
+
+        let req = ChatRequest {
+            messages: vec![OllamaMessage {
+                role: "user".into(),
+                content: "hi".into(),
+            }],
+            model: None,
+            stream: None,
+        };
+        let resp = chat(axum::extract::State(state), axum::Json(req)).await;
+        assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
     }
 }

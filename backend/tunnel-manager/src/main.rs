@@ -51,8 +51,14 @@ async fn main() -> anyhow::Result<()> {
         Config::require("WALRUS_AGGREGATOR_URL", &config.walrus_aggregator_url)?.to_string(),
     );
     let ollama = crate::ollama::OllamaClient::new(
-        config.ollama_url.clone().unwrap_or_else(|| "http://localhost:11434".into()),
-        config.ollama_model.clone().unwrap_or_else(|| "qwen2.5:1.8b".into()),
+        config
+            .ollama_url
+            .clone()
+            .unwrap_or_else(|| "http://localhost:11434".into()),
+        config
+            .ollama_model
+            .clone()
+            .unwrap_or_else(|| "qwen2.5:1.8b".into()),
     )?;
 
     let instance_id = config
@@ -131,6 +137,8 @@ async fn main() -> anyhow::Result<()> {
             ),
         )
         .route("/v1/sponsor", post(routes::sponsor))
+        .route("/v1/chat", post(routes::chat))
+        .route("/v1/stats/live", get(routes::stats_live))
         .route("/v1/mp", get(crate::mp::ws::mp_upgrade))
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())
