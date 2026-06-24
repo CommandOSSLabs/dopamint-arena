@@ -58,6 +58,9 @@ async fn create_and_announce_match(
     };
     state.mp.put_match(&match_id, rec.clone()).await;
     state
+        .pairing
+        .observe(rec.conn_a.instance_id == rec.conn_b.instance_id);
+    state
         .bus
         .deliver(
             &rec.conn_a,
@@ -1201,6 +1204,7 @@ mod tests {
             stats_tx,
             actions: crate::stats_counter::LocalActionCounter::default(),
             pair_hold_ms: 10_000, // long hold — neither expires via the join path
+            pairing: crate::stats_counter::MatchPairingMetrics::default(),
         });
 
         let game = format!("hold-{}", uuid::Uuid::new_v4().simple());

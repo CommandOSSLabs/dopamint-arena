@@ -88,6 +88,7 @@ async fn main() -> anyhow::Result<()> {
         stats_tx,
         actions: crate::stats_counter::LocalActionCounter::default(),
         pair_hold_ms,
+        pairing: crate::stats_counter::MatchPairingMetrics::default(),
     });
     stats::spawn_stats_broadcaster(state.clone());
     spawn_action_flusher(state.clone());

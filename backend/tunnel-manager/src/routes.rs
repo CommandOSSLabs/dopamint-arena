@@ -42,6 +42,7 @@ pub(crate) mod test_support {
             stats_tx,
             actions: crate::stats_counter::LocalActionCounter::default(),
             pair_hold_ms: 750,
+            pairing: crate::stats_counter::MatchPairingMetrics::default(),
         })
     }
 }
@@ -387,21 +388,24 @@ pub(crate) async fn stats_live(
 /// Prometheus text exposition of the live counters.
 pub(crate) async fn metrics(State(state): State<SharedState>) -> impl IntoResponse {
     let snap = state.control.snapshot().await;
+    let (colocated, split) = state.pairing.snapshot();
     (
         [(
             axum::http::header::CONTENT_TYPE,
             "text/plain; version=0.0.4",
         )],
-        render_metrics(&snap),
+        render_metrics(&snap, colocated, split),
     )
 }
 
-fn render_metrics(snap: &StatsSnapshot) -> String {
+fn render_metrics(snap: &StatsSnapshot, colocated: u64, split: u64) -> String {
     format!(
         "# TYPE tunnel_actions_total counter\ntunnel_actions_total {}\n\
          # TYPE tunnel_settled_total counter\ntunnel_settled_total {}\n\
-         # TYPE tunnel_active gauge\ntunnel_active {}\n",
-        snap.total_actions, snap.settled_tunnels, snap.active_tunnels,
+         # TYPE tunnel_active gauge\ntunnel_active {}\n\
+         # TYPE tunnel_matches_colocated_total counter\ntunnel_matches_colocated_total {}\n\
+         # TYPE tunnel_matches_split_total counter\ntunnel_matches_split_total {}\n",
+        snap.total_actions, snap.settled_tunnels, snap.active_tunnels, colocated, split,
     )
 }
 
@@ -544,9 +548,15 @@ mod tests {
     async fn metrics_render_exposes_counters() {
         let state = test_state();
         state.control.add_actions("blackjack", 42).await;
+        state.pairing.observe(true);
+        state.pairing.observe(true);
+        state.pairing.observe(false);
         let snap = state.control.snapshot().await;
-        let body = render_metrics(&snap);
+        let (colocated, split) = state.pairing.snapshot();
+        let body = render_metrics(&snap, colocated, split);
         assert!(body.contains("tunnel_actions_total 42"), "got: {body}");
         assert!(body.contains("# TYPE tunnel_active gauge"));
+        assert!(body.contains("tunnel_matches_colocated_total 2"), "got: {body}");
+        assert!(body.contains("tunnel_matches_split_total 1"), "got: {body}");
     }
 }
