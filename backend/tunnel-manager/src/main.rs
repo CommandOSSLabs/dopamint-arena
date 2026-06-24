@@ -4,6 +4,7 @@
 mod config;
 mod error;
 mod mp;
+mod ollama;
 mod routes;
 mod state;
 mod stats;
