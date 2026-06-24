@@ -68,9 +68,10 @@ const BOT_SKILL: BotDifficulty = "hard";
 // ~0.55 KB entry per co-signed move, and the backend rejects bodies over 16 MB. During
 // autopilot we therefore settle the current tunnel and open a fresh one after this many
 // games — or this many entries, whichever comes first — so any single settle stays well
-// under the limit. At "hard", a game is ~160 entries (≤~224 on long ones): 100 games ≈
-// 8.8 MB typical / ≤~12 MB worst, and 24k entries ≈ 13 MB is the hard byte ceiling.
-const ROLLOVER_GAMES = 100;
+// under the limit. At "hard", a game is ~160 entries (≤~224 on long ones), so the 24k-entry
+// byte safety (~13 MB) BINDS FIRST around ~150 games: it, not ROLLOVER_GAMES, is the real
+// ceiling under the 16 MB cap. Reaching the full 200-game cap would need a bigger body cap.
+const ROLLOVER_GAMES = 200;
 const ROLLOVER_ENTRIES = 24_000;
 
 export type BattleshipStatus =
