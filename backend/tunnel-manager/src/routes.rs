@@ -210,10 +210,9 @@ pub(crate) async fn heartbeat(
         ));
     }
     tracing::debug!(%session_id, tunnel = %req.tunnel_id, nonce = %req.nonce, window_ms = req.window_ms, "heartbeat");
-    state
-        .control
-        .add_actions(&rec.game, req.actions_delta)
-        .await;
+    // Park the delta in the per-instance counter; the 1 Hz flusher drains it into ControlStore.
+    // Avoids a per-heartbeat single-key INCRBY hotspot (the relay path already does this).
+    state.actions.incr(&rec.game, req.actions_delta);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -604,6 +603,52 @@ mod tests {
         let state = test_state();
         let code = ready(axum::extract::State(state)).await;
         assert_eq!(code, axum::http::StatusCode::OK);
+    }
+
+    // Heartbeat deltas must land in the per-instance LocalActionCounter (drained 1/s by the
+    // flusher), NOT directly in the shared ControlStore — that single-key INCRBY is the hotspot
+    // this change removes. The shared counter must stay untouched until the flusher runs.
+    #[tokio::test]
+    async fn heartbeat_feeds_local_counter_not_control_directly() {
+        let state = crate::state::AppState::in_memory_for_test();
+        let rec = SessionRecord {
+            game: "blackjack".into(),
+            tunnels: vec![],
+            stats_token: "tok".into(),
+        };
+        state.control.put_session("s1", rec).await;
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "Bearer tok".parse().unwrap(),
+        );
+        let req = HeartbeatRequest {
+            tunnel_id: "0xt".into(),
+            nonce: "1".into(),
+            actions_delta: 7,
+            window_ms: 1000,
+        };
+
+        heartbeat(
+            State(state.clone()),
+            Path("s1".into()),
+            headers,
+            Json(req),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            state.control.snapshot().await.total_actions,
+            0,
+            "must not hit the shared counter directly"
+        );
+        assert_eq!(
+            state.actions.drain_deltas(),
+            vec![("blackjack".to_string(), 7)],
+            "delta parked locally"
+        );
     }
 
     // /metrics must expose the live counters in Prometheus text format.
