@@ -16,18 +16,18 @@
  * `tip` shifts value from the sender to the recipient (balances always conserved).
  */
 
-import { concatBytes } from "../core/bytes";
-import { blake2b256 } from "../core/crypto";
-import { u64ToBeBytes } from "../core/wire";
 import {
-  Balances,
-  otherParty,
-  Party,
   Protocol,
+  Party,
+  Balances,
   ProtocolContext,
   protocolDomain,
+  otherParty,
   rollingDigest,
 } from "./Protocol";
+import { concatBytes } from "../core/bytes";
+import { u64ToBeBytes } from "../core/wire";
+import { blake2b256 } from "../core/crypto";
 
 export interface ChatState {
   /** 32-byte fold of the whole transcript (NOT the transcript itself). */
@@ -86,12 +86,12 @@ export class ChatProtocol implements Protocol<ChatState, ChatMove> {
         Uint8Array.of(partyByte(by)),
         u64ToBeBytes(messageBytes.length),
         messageBytes,
-      ])
+      ]),
     );
     const transcriptDigest = rollingDigest(
       blake2b256,
       state.transcriptDigest,
-      delta
+      delta,
     );
 
     // Optional tip: shift value from sender to recipient (balances conserved).

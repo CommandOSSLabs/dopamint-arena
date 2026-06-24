@@ -53,16 +53,27 @@
  *  every reachable state.
  */
 
-import { concatBytes } from "../core/bytes";
-import { blake2b256 } from "../core/crypto";
-import { u64ToBeBytes } from "../core/wire";
 import {
-  Balances,
-  Party,
   Protocol,
+  Party,
+  Balances,
   ProtocolContext,
   protocolDomain,
 } from "./Protocol";
+import { concatBytes } from "../core/bytes";
+import { u64ToBeBytes } from "../core/wire";
+import { blake2b256 } from "../core/crypto";
+
+/** Helper to determine who is the Player based on the round. */
+export function getPlayerParty(round: bigint): Party {
+  const r = Number(round) - 1;
+  return Math.floor(r / 2) % 2 === 0 ? "A" : "B";
+}
+
+/** Helper to determine who is the Dealer based on the round. */
+export function getDealerParty(round: bigint): Party {
+  return getPlayerParty(round) === "A" ? "B" : "A";
+}
 
 /** Fixed stake per round. */
 export const WAGER = 100n;
@@ -146,9 +157,10 @@ function isBust(hand: number[]): boolean {
   return handValue(hand) > BUST_AT;
 }
 
-export class BlackjackProtocol
-  implements Protocol<BlackjackState, BlackjackMove>
-{
+export class BlackjackProtocol implements Protocol<
+  BlackjackState,
+  BlackjackMove
+> {
   readonly name = "blackjack.v1";
 
   initialState(ctx: ProtocolContext): BlackjackState {
@@ -172,7 +184,7 @@ export class BlackjackProtocol
   applyMove(
     state: BlackjackState,
     move: BlackjackMove,
-    by: Party
+    by: Party,
   ): BlackjackState {
     if (move.action !== "hit" && move.action !== "stand") {
       throw new Error(`unknown action: ${String(move.action)}`);
@@ -187,12 +199,13 @@ export class BlackjackProtocol
     }
 
     if (state.phase === "player") {
-      if (by !== "A") throw new Error("it is the player's (A) turn");
+      const playerParty = getPlayerParty(state.round);
+      if (by !== playerParty) throw new Error(`it is the player's (${playerParty}) turn`);
       if (move.action === "hit") {
         const { hand, drawIndex } = drawTo(
           state.playerHand,
           state.round,
-          state.drawIndex
+          state.drawIndex,
         );
         const next: BlackjackState = {
           ...state,
@@ -201,7 +214,7 @@ export class BlackjackProtocol
         };
         if (isBust(hand)) {
           // Player busts -> dealer wins immediately, round resolves.
-          return settle(next, "B");
+          return settle(next, getDealerParty(state.round));
         }
         return next;
       }
@@ -210,7 +223,8 @@ export class BlackjackProtocol
     }
 
     if (state.phase === "dealer") {
-      if (by !== "B") throw new Error("it is the dealer's (B) turn");
+      const dealerParty = getDealerParty(state.round);
+      if (by !== dealerParty) throw new Error(`it is the dealer's (${dealerParty}) turn`);
       if (move.action !== "stand") {
         throw new Error("dealer may only 'stand' (auto-play is deterministic)");
       }
@@ -250,24 +264,25 @@ export class BlackjackProtocol
   randomMove(
     s: BlackjackState,
     by: Party,
-    rng: () => number
+    rng: () => number,
   ): BlackjackMove | null {
     if (this.isTerminal(s)) return null;
 
     if (s.phase === "round_over") {
-      // Both parties may start a new round; let A do it to keep play moving.
-      if (by !== "A") return null;
+      // Both parties may start a new round; let the next Player do it to keep play moving.
+      const nextPlayer = getPlayerParty(s.round + 1n);
+      if (by !== nextPlayer) return null;
       return { action: rng() < 0.5 ? "hit" : "stand" };
     }
 
     if (s.phase === "player") {
-      if (by !== "A") return null;
+      if (by !== getPlayerParty(s.round)) return null;
       // Basic strategy: hit while soft total < 17, else stand.
       return { action: handValue(s.playerHand) < 17 ? "hit" : "stand" };
     }
 
     if (s.phase === "dealer") {
-      if (by !== "B") return null;
+      if (by !== getDealerParty(s.round)) return null;
       return { action: "stand" }; // only legal dealer action
     }
 
@@ -288,7 +303,7 @@ function canStartRound(s: BlackjackState): boolean {
 function drawTo(
   hand: number[],
   round: bigint,
-  drawIndex: bigint
+  drawIndex: bigint,
 ): { hand: number[]; drawIndex: bigint } {
   const value = rankValue(drawRank(round, drawIndex));
   return { hand: [...hand, value], drawIndex: drawIndex + 1n };
@@ -338,11 +353,11 @@ function resolveDealer(s: BlackjackState): BlackjackState {
   const dealerValue = handValue(resolved.dealerHand);
   let winner: Party | null;
   if (isBust(resolved.dealerHand)) {
-    winner = "A"; // player did not bust (that path resolves earlier), dealer busts
+    winner = getPlayerParty(s.round); // player did not bust (that path resolves earlier), dealer busts
   } else if (playerValue > dealerValue) {
-    winner = "A";
+    winner = getPlayerParty(s.round);
   } else if (dealerValue > playerValue) {
-    winner = "B";
+    winner = getDealerParty(s.round);
   } else {
     winner = null; // push
   }

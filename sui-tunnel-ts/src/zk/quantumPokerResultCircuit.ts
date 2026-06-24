@@ -52,7 +52,7 @@ export interface QuantumPokerResultProver {
   readonly circuitName: string;
   prove(
     statement: QuantumPokerResultStatement,
-    witness: QuantumPokerResultWitness
+    witness: QuantumPokerResultWitness,
   ): Promise<Uint8Array>;
 }
 
@@ -67,7 +67,7 @@ export function quantumPokerRulesDescriptor(): Uint8Array {
       "hidden_duplicates_allowed",
       "board_duplicate_hidden_burn",
       "five_of_a_kind_enabled",
-    ].join("|")
+    ].join("|"),
   );
 }
 
@@ -88,7 +88,7 @@ export interface QuantumPokerResultDescriptor {
 }
 
 export function quantumPokerResultHash(
-  result: QuantumPokerResultDescriptor
+  result: QuantumPokerResultDescriptor,
 ): Uint8Array {
   return blake2b256(
     concatBytes([
@@ -102,7 +102,7 @@ export function quantumPokerResultHash(
       Uint8Array.from(result.shownHoleB),
       u64ToBeBytes(result.scoreA),
       u64ToBeBytes(result.scoreB),
-    ])
+    ]),
   );
 }
 
@@ -116,14 +116,14 @@ export function tunnelIdHash(tunnelId: string | Uint8Array): Uint8Array {
 }
 
 export function buildQuantumPokerResultPublicInputs(
-  statement: QuantumPokerResultStatement
+  statement: QuantumPokerResultStatement,
 ): Uint8Array {
   return concatScalars([
     fieldSafeScalar(statement.rulesHash),
     hashToFieldSafeScalar(
       typeof statement.tunnelId === "string"
         ? addressToBytes32(statement.tunnelId)
-        : statement.tunnelId
+        : statement.tunnelId,
     ),
     fieldSafeScalar(statement.stateHash),
     u64ToScalar(statement.handId),
@@ -141,12 +141,12 @@ export class UnavailableQuantumPokerResultProver
 
   async prove(
     _statement: QuantumPokerResultStatement,
-    _witness: QuantumPokerResultWitness
+    _witness: QuantumPokerResultWitness,
   ): Promise<Uint8Array> {
     throw new Error(
       "quantum_poker_result Groth16 proving requires compiled circuit artifacts " +
         "and a trusted setup. This milestone ships public-input encoding and the " +
-        "pluggable prover interface only."
+        "pluggable prover interface only.",
     );
   }
 }

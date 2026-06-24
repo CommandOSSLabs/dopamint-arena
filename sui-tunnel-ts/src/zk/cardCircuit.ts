@@ -20,10 +20,10 @@
  * require this; ZK is the optional strongest guarantee.
  */
 
-import { bytesEqual, concatBytes } from "../core/bytes";
 import { blake2b256 } from "../core/crypto";
+import { concatBytes, bytesEqual } from "../core/bytes";
 import { u64ToBeBytes } from "../core/wire";
-import { concatScalars, hashScalar, u64ToScalar } from "./scalars";
+import { u64ToScalar, hashScalar, concatScalars } from "./scalars";
 
 /** The public statement: card at `position` is in the deck committed by `deckRoot`. */
 export interface CardStatement {
@@ -53,10 +53,15 @@ const NODE_DOMAIN = new TextEncoder().encode("sui_tunnel::poker::node");
 export function cardLeaf(
   position: number,
   card: number,
-  salt: Uint8Array
+  salt: Uint8Array,
 ): Uint8Array {
   return blake2b256(
-    concatBytes([LEAF_DOMAIN, u64ToBeBytes(position), u64ToBeBytes(card), salt])
+    concatBytes([
+      LEAF_DOMAIN,
+      u64ToBeBytes(position),
+      u64ToBeBytes(card),
+      salt,
+    ]),
   );
 }
 
@@ -92,7 +97,7 @@ export interface MerkleProof {
 /** Build an inclusion proof for `index` (the private witness path). */
 export function deckMerkleProof(
   leaves: Uint8Array[],
-  index: number
+  index: number,
 ): MerkleProof {
   let level = leaves.slice();
   const zero = new Uint8Array(32);
@@ -118,7 +123,7 @@ export function deckMerkleProof(
 export function verifyMerkleProof(
   leaf: Uint8Array,
   proof: MerkleProof,
-  root: Uint8Array
+  root: Uint8Array,
 ): boolean {
   let h = leaf;
   for (let i = 0; i < proof.path.length; i++) {
@@ -150,11 +155,11 @@ export interface CardProver {
 /** Placeholder prover used until a trusted setup is wired in; throws with guidance. */
 export class UnavailableProver implements CardProver {
   readonly circuitName = "card_in_deck";
-  async prove(): Promise<Uint8Array> {
+  async prove(_stmt: CardStatement, _witness: CardWitness): Promise<Uint8Array> {
     throw new Error(
       "card_in_deck Groth16 proving requires a compiled circuit + trusted setup " +
         "(circom/snarkjs). Plug in a real CardProver; see CARD_IN_DECK_CIRCOM and " +
-        "sui-tunnel-ts/docs/QUANTUM_POKER.md."
+        "sui-tunnel-ts/docs/QUANTUM_POKER.md.",
     );
   }
 }

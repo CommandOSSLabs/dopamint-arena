@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import { registerWindowDisposer } from "@/lib/windowSessions";
 import type { GameWindowProps } from "../types";
+import { SketchDefs } from "../sketch";
 import { QuantumPokerBotVsBotWindow } from "./QuantumPokerBotVsBotWindow";
 import { QuantumPokerPvpWindow } from "./QuantumPokerPvpWindow";
 import { QuantumPokerWindow } from "./QuantumPokerWindow";
-import { SketchDefs } from "./QuantumPokerTable";
 
 type Mode = "bot" | "pvp" | "auto";
 
@@ -46,11 +46,11 @@ export function QuantumPokerModeWindow(props: GameWindowProps) {
   }
 
   return (
-    <div className="qp-sketch grid h-full min-h-[14rem] place-items-center overflow-hidden p-[clamp(14px,4cqmin,32px)] text-center">
+    <div className="sketch grid h-full min-h-[14rem] place-items-center overflow-hidden p-[clamp(14px,4cqmin,32px)] text-center">
       <SketchDefs />
-      <div className="qp-panel qp-stroke flex max-w-[min(22rem,92%)] flex-col items-center gap-[clamp(12px,3.2cqmin,22px)] p-[clamp(16px,4.5cqmin,30px)]">
+      <div className="sketch-panel sketch-stroke flex max-w-[min(22rem,92%)] flex-col items-center gap-[clamp(12px,3.2cqmin,22px)] p-[clamp(16px,4.5cqmin,30px)]">
         <div className="flex flex-col items-center gap-[clamp(2px,0.8cqmin,6px)]">
-          <span className="qp-eyebrow">Heads-up tunnel</span>
+          <span className="sketch-eyebrow">Heads-up tunnel</span>
           <h2 className="qp-title text-[clamp(20px,6cqmin,38px)]">
             Quantum Poker
           </h2>
@@ -60,20 +60,20 @@ export function QuantumPokerModeWindow(props: GameWindowProps) {
           <button
             type="button"
             onClick={() => setMode("bot")}
-            className="qp-btn qp-btn--go"
+            className="sketch-btn sketch-btn--go"
           >
             Play vs Bot
           </button>
           <button
             type="button"
             onClick={() => setMode("pvp")}
-            className="qp-btn"
+            className="sketch-btn"
           >
             Find PvP Match
           </button>
         </div>
 
-        <p className="qp-note">
+        <p className="sketch-note">
           Play a persona bot in your own tunnel, or find a live PvP match over
           the relay. Watch Bots runs by default — press Back from it to reach
           this menu.

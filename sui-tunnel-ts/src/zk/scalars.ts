@@ -9,6 +9,7 @@
  */
 
 import { concatBytes } from "../core/bytes";
+import { blake2b256 } from "../core/crypto";
 
 const SCALAR_SIZE = 32;
 
@@ -37,16 +38,34 @@ export function u256ToScalar(value: bigint): Uint8Array {
   return out;
 }
 
-/**
- * A 32-byte digest used directly as a scalar. The card circuit feeds the deck
- * root verbatim into `concat_scalars` on-chain (it is NOT passed through
- * `zk_verifier::hash_to_scalar`), so this is the identity, not a blake2b256 hash.
- */
+/** A 32-byte digest used directly as a scalar (matches `zk_verifier::hash_to_scalar` output). */
 export function hashScalar(hash32: Uint8Array): Uint8Array {
   if (hash32.length !== SCALAR_SIZE) {
     throw new Error(`hash scalar must be 32 bytes, got ${hash32.length}`);
   }
   return hash32;
+}
+
+/**
+ * Convert a 32-byte little-endian digest into a BN254-field-safe scalar.
+ *
+ * Sui's Groth16 public inputs reject values outside the scalar field. A raw
+ * blake2b256 digest can exceed the BN254 modulus, so Quantum Poker masks the top
+ * three bits of byte 31 (little-endian most-significant byte). The result is
+ * always < 2^253 < r.
+ */
+export function fieldSafeScalar(hash32: Uint8Array): Uint8Array {
+  if (hash32.length !== SCALAR_SIZE) {
+    throw new Error(`field-safe scalar input must be 32 bytes, got ${hash32.length}`);
+  }
+  const out = hash32.slice();
+  out[31] &= 0x1f;
+  return out;
+}
+
+/** blake2b256(data), then {@link fieldSafeScalar}. */
+export function hashToFieldSafeScalar(data: Uint8Array): Uint8Array {
+  return fieldSafeScalar(blake2b256(data));
 }
 
 /** Concatenate 32-byte scalars into a public-inputs blob (matches `concat_scalars`). */

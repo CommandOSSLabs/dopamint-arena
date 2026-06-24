@@ -72,7 +72,7 @@ export function ScaledWrapper({ children }: { children: ReactNode }) {
           height: "100%",
           overflow: "hidden",
           position: "relative",
-          backgroundColor: "#09090b",
+          backgroundColor: "transparent",
           display: "flex",
           alignItems: "center",
           justifyContent: "center",

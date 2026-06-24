@@ -19,7 +19,7 @@ import { PlacementBoard } from "./components/PlacementBoard";
 import { BattleView } from "./components/BattleView";
 import { useBattleship } from "./useBattleship";
 import { useBattleshipPvp } from "./useBattleshipPvp";
-import { SketchDefs } from "../quantumPoker/QuantumPokerTable";
+import { SketchDefs } from "../sketch";
 import "../quantumPoker/quantumPoker.css";
 import "./battleship.css";
 

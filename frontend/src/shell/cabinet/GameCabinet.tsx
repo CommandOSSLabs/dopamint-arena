@@ -24,6 +24,10 @@ import type { CabinetController } from "./CabinetController";
  * The shell is game-agnostic — it only owns the hover + overlay + state machine
  * and calls the controller's verbs. A new game adopts it by wrapping its own
  * window and registering a controller; nothing here is ttt-specific.
+ *
+ * The take-over is an attract invite, offered only for a window's first auto-demo: once the
+ * player claims the session (takes a hand, or toggles the game's Auto off→on themselves) the
+ * shell stops freezing-on-hover for the rest of that window's life.
  */
 export function GameCabinet({ children }: { children: ReactNode }) {
   const [controller, setController] = useState<CabinetController | null>(null);
@@ -31,6 +35,28 @@ export function GameCabinet({ children }: { children: ReactNode }) {
   const registry = useMemo(() => ({ register: setController }), []);
 
   const active = controller?.active ?? false;
+
+  // The take-over overlay is offered only for a window's INITIAL auto-demo. Once the player takes
+  // control of auto themselves — taking a hand via the overlay, or toggling the game's own Auto
+  // control off then back on — the cabinet stops offering: hovering no longer freezes the demo.
+  // A fresh window (this component remounts) gets the attract invite again.
+  const [attractConsumed, setAttractConsumed] = useState(false);
+  // What gates every attract behaviour below — active auto-play that hasn't been claimed yet.
+  const offering = active && !attractConsumed;
+  const everActiveRef = useRef(false);
+  const prevActiveRef = useRef(false);
+  useEffect(() => {
+    // Re-activation (auto OFF→ON after it was ON once) means the user is driving auto, so consume
+    // the attract. `active` only edges on real auto changes — React batches the controller's
+    // register(null)→register(new) churn into one render — so this skips the initial activation
+    // and never trips on a plain controller rebuild.
+    if (active && !prevActiveRef.current && everActiveRef.current) {
+      setAttractConsumed(true);
+    }
+    if (active) everActiveRef.current = true;
+    prevActiveRef.current = active;
+  }, [active]);
+
   const stageRef = useRef<HTMLDivElement>(null);
   // Read the controller from a ref inside the global pointer listener (below) so that
   // listener is (re)subscribed only when `active` flips — NOT every time the game
@@ -48,7 +74,7 @@ export function GameCabinet({ children }: { children: ReactNode }) {
   // overlay still only appears for the content (onEnter), so reaching an edge to resize
   // frees the cursor without popping the overlay; leaving the window resumes + dismisses.
   useEffect(() => {
-    if (!active) return;
+    if (!offering) return;
     const win = stageRef.current?.closest("[data-window]");
     if (!win) return;
     const HANDLE_MARGIN = 18;
@@ -90,21 +116,23 @@ export function GameCabinet({ children }: { children: ReactNode }) {
         dispatch({ type: "unhover" });
       }
     };
-  }, [active]);
+  }, [offering]);
 
   // The take-over overlay appears only when hovering the game CONTENT (this stage), never
   // the surrounding chrome/handles — reaching for a resize edge must not pop it. Pause is
   // redundant with the window tracker above, but keeps the overlay working if a cabinet is
   // ever mounted outside a [data-window] (no tracker). Dismissal is owned by the tracker.
   const onEnter = useCallback(() => {
-    if (active && model.state === "attract") {
+    if (offering && model.state === "attract") {
       controller?.pause();
       dispatch({ type: "hover" });
     }
-  }, [active, controller, model.state]);
+  }, [offering, controller, model.state]);
 
   const onPlay = useCallback(() => {
     controller?.takeOver();
+    // Taking a hand claims the session — don't re-offer the attract on later hovers.
+    setAttractConsumed(true);
     dispatch({ type: "takeOver" });
   }, [controller]);
 

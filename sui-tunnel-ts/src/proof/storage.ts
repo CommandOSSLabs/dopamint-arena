@@ -84,7 +84,7 @@ export type BlobReader = (ref: string) => Promise<Uint8Array | null>;
 export class WalrusStore implements TranscriptStore {
   constructor(
     private readonly publish: BlobPublisher,
-    private readonly read?: BlobReader
+    private readonly read?: BlobReader,
   ) {}
 
   async put(record: ProofRecord): Promise<PutResult> {

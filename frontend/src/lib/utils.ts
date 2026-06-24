@@ -5,3 +5,8 @@ import { twMerge } from "tailwind-merge";
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
+
+/** Format a metric readout: en-US grouped integer, em-dash when the value is absent. */
+export function formatCount(n: number | undefined | null): string {
+  return n == null ? "—" : Math.round(n).toLocaleString("en-US");
+}

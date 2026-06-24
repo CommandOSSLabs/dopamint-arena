@@ -14,15 +14,15 @@
  * face the same layout, the tunnelId cannot be ground, and there is no hidden state to bias.
  * Commit-reveal is reserved for hidden-information games (see docs/decisions/0010).
  */
-import { concatBytes } from "../core/bytes";
-import { u64ToBeBytes } from "../core/wire";
 import {
-  Balances,
-  Party,
   Protocol,
+  Party,
+  Balances,
   ProtocolContext,
   protocolDomain,
 } from "./Protocol";
+import { concatBytes } from "../core/bytes";
+import { u64ToBeBytes } from "../core/wire";
 
 // ============================================
 // CONFIG

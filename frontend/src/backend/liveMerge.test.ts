@@ -5,6 +5,7 @@ import type { StatsSnapshot } from "./controlPlane";
 
 const connected: StatsSnapshot = {
   tps: 1_000_000,
+  peakTps: 1_000_000,
   totalActions: 0,
   activeTunnels: 0,
   settledTunnels: 0,
