@@ -1,12 +1,11 @@
 import { useEffect, useState } from "react";
 import { registerWindowDisposer } from "@/lib/windowSessions";
 import type { GameWindowProps } from "../types";
-import { SketchDefs } from "../sketch";
 import { QuantumPokerBotVsBotWindow } from "./QuantumPokerBotVsBotWindow";
 import { QuantumPokerPvpWindow } from "./QuantumPokerPvpWindow";
-import { QuantumPokerWindow } from "./QuantumPokerWindow";
+import { SketchDefs } from "../sketch";
 
-type Mode = "bot" | "pvp" | "auto";
+type Mode = "play" | "pvp" | "auto";
 
 const modeStore = new Map<string, Mode | null>();
 
@@ -33,15 +32,13 @@ export function QuantumPokerModeWindow(props: GameWindowProps) {
     return <QuantumPokerPvpWindow {...props} onExit={() => setMode(null)} />;
   }
 
-  if (mode === "bot") {
+  if (mode === "auto" || mode === "play") {
     return (
-      <QuantumPokerWindow {...props} lane="bot" onExit={() => setMode(null)} />
-    );
-  }
-
-  if (mode === "auto") {
-    return (
-      <QuantumPokerBotVsBotWindow {...props} onExit={() => setMode(null)} />
+      <QuantumPokerBotVsBotWindow
+        {...props}
+        onExit={() => setMode(null)}
+        autoTakeOver={mode === "play"}
+      />
     );
   }
 
@@ -59,7 +56,7 @@ export function QuantumPokerModeWindow(props: GameWindowProps) {
         <div className="flex w-fit flex-col gap-[clamp(8px,2.4cqmin,14px)]">
           <button
             type="button"
-            onClick={() => setMode("bot")}
+            onClick={() => setMode("play")}
             className="sketch-btn sketch-btn--go"
           >
             Play vs Bot
@@ -67,16 +64,15 @@ export function QuantumPokerModeWindow(props: GameWindowProps) {
           <button
             type="button"
             onClick={() => setMode("pvp")}
-            className="sketch-btn"
+            className="sketch-btn sketch-btn--go"
           >
             Find PvP Match
           </button>
         </div>
 
         <p className="sketch-note">
-          Play a persona bot in your own tunnel, or find a live PvP match over
-          the relay. Watch Bots runs by default — press Back from it to reach
-          this menu.
+          Take a seat against a bot, or find a live PvP match over the relay.
+          Watch Bots runs by default — Back to reach this menu.
         </p>
       </div>
     </div>
