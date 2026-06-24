@@ -310,42 +310,50 @@ function* sweepStrokes(ctx: ModeContext): Generator<DesignCell> {
   }
 }
 
-/** Scribble (nguệch ngoạc): a momentum random-walk bouncing in a loose box — an
- *  energetic organic doodle. ENDLESS; the agent loop relocates at the region cap. */
+/** Scribble: a single-color momentum walk that meanders coherently across its region —
+ *  a flowing doodle LINE, like the PvP bot's walk, not a clumped multicolor scatter.
+ *  ENDLESS; the agent loop relocates at the region cap.
+ *
+ *  Tuned for "connected, not messy": ONE color for the whole region (no rainbow), a thin
+ *  nib, gentle jitter (smooth curves), and a SOFT inward turn at the edges — a hard bounce
+ *  (`v = -v`) folds the line back on itself into a blob, so instead the velocity is nudged
+ *  inward at reduced speed, curving the line away from the wall like a real pen. */
 function* scribbleStrokes(ctx: ModeContext): Generator<DesignCell> {
   const { width: w, height: h } = ctx;
-  const r = 1 + Math.floor(ctx.rng() * 2);
+  const r = 1;
   const spacing = 1.2;
   let x = w / 2;
   let y = h / 2;
   let vx = (ctx.rng() - 0.5) * 2;
   let vy = (ctx.rng() - 0.5) * 2;
-  let color = Math.floor(ctx.rng() * ctx.numColors);
+  const color = Math.floor(ctx.rng() * ctx.numColors);
   let seg: Vec2[] = [{ x, y }];
   for (;;) {
-    vx += (ctx.rng() - 0.5) * 0.8;
-    vy += (ctx.rng() - 0.5) * 0.8;
+    vx += (ctx.rng() - 0.5) * 0.35;
+    vy += (ctx.rng() - 0.5) * 0.35;
     const sp = Math.hypot(vx, vy) || 1;
-    const maxSp = 1.8;
+    const maxSp = 1.5;
     if (sp > maxSp) {
       vx = (vx / sp) * maxSp;
       vy = (vy / sp) * maxSp;
     }
     x += vx;
     y += vy;
+    // Soft turn-around: steer the velocity inward at reduced speed so the line curves off
+    // the wall instead of hard-bouncing back over itself (which clumps).
     if (x < r) {
       x = r;
-      vx = -vx;
+      vx = Math.abs(vx) * 0.6;
     } else if (x > w - 1 - r) {
       x = w - 1 - r;
-      vx = -vx;
+      vx = -Math.abs(vx) * 0.6;
     }
     if (y < r) {
       y = r;
-      vy = -vy;
+      vy = Math.abs(vy) * 0.6;
     } else if (y > h - 1 - r) {
       y = h - 1 - r;
-      vy = -vy;
+      vy = -Math.abs(vy) * 0.6;
     }
     seg.push({ x, y });
     if (seg.length >= 10) {
@@ -353,7 +361,6 @@ function* scribbleStrokes(ctx: ModeContext): Generator<DesignCell> {
         if (inBox(c, w, h)) yield c;
       }
       seg = [{ x, y }];
-      if (ctx.rng() < 0.05) color = Math.floor(ctx.rng() * ctx.numColors);
     }
   }
 }
