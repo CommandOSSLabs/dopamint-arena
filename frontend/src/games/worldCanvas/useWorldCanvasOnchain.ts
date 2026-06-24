@@ -21,7 +21,7 @@
  * (PvP — two distinct humans over the relay — is a stub for now; see {@link findMatch}.)
  *
  * The paint → co-signed-move path (one paint = one co-signed move = ~1 TPS):
- *   submitHumanPaint (seat A, while you hold the wheel) / a bot's tickAgent (its seat)
+ *   submitHumanPaint (seat A, while you hold the wheel) / the rAF paintFrame (each bot's seat)
  *     → submitPaint(move, seat, painter)        // routes to the one tunnel
  *     → run.tunnel.step(move, seat, ...)         // selfPlay co-signs BOTH seats
  *     → r.verified                                // both signatures check (TPS gate)
@@ -145,8 +145,11 @@ const SLOT_H = MAX_FOOTPRINT_H + REGION_GAP;
 /** Seed base for per-region PRNGs (mixed with the region index for varied art). */
 const REGION_SEED = 0x9e3779b9;
 /** Endless modes (flow / scribble) never finish on their own; relocate once a region
- *  has co-signed this multiple of its footprint area so the bot keeps spreading. */
-const REGION_FILL_FACTOR = 1.3;
+ *  has co-signed this multiple of its footprint area so the bot keeps spreading. Sized
+ *  generously so a fast bot fills each region densely and relocates rarely, rather than
+ *  hopping slots every second (the per-frame paint loop also continues into the fresh
+ *  region in the SAME frame, so a relocate never wastes a frame either). */
+const REGION_FILL_FACTOR = 3;
 /** Fit box (cells) an Artist agent rasterizes a chosen template into — kept under the
  *  max mode footprint so a template region never overflows its spiral slot. */
 const AGENT_TEMPLATE_W = MAX_FOOTPRINT_W - 8;
@@ -177,40 +180,57 @@ function serializeOnchainOpen<T>(fn: () => Promise<T>): Promise<T> {
  *  explicit ×N on the agent's co-signed cells/sec (x1 baseline → x8 burst). */
 export type AgentSpeed = "x1" | "x2" | "x4" | "x8";
 
-/** ms between an agent's co-signed paint TICKS, per multiplier. Pure 1/N scaling of
- *  the base tick interval, so the named ×N is literally the cells/sec multiplier. */
-const AGENT_SPEED_INTERVALS: Record<AgentSpeed, number> = {
-  x1: 120,
-  x2: 60,
-  x4: 30,
-  x8: 15,
+/** Cells one bot co-signs PER ANIMATION FRAME at each speed tier. The bots paint on a
+ *  single ~60fps requestAnimationFrame cadence (NOT a setTimeout interval), so the
+ *  display fixes the tick RATE and the Speed multiplier scales the per-frame BATCH —
+ *  still an honest ×N on cells/sec (x8 lays 8× the cells/frame of x1). At ~60fps the
+ *  default x8 lands a bot near ~480 cells/sec (8 × 60) — fast, continuous scribbling —
+ *  while each frame's synchronous co-signing stays tiny (≈0.15ms/cell, measured).
+ *  This replaces the old per-bot setTimeout chains, which the canvas's own rAF render
+ *  loop starved to a crawl (~30 TPS total) regardless of the 15ms interval. */
+const SPEED_FRAME_CELLS: Record<AgentSpeed, number> = {
+  x1: 1,
+  x2: 2,
+  x4: 4,
+  x8: 8,
 };
 /** The acceleration tiers, in ramp order — the source for the Speed pills/menu. */
 export const AGENT_SPEEDS: readonly AgentSpeed[] = ["x1", "x2", "x4", "x8"];
 
-/** Base cells co-signed per tick, by a mode's density class — the dense↔sparse TPS
- *  spread. Scaled by the user Density lever, then clamped. */
-const DENSITY_BATCH: Record<AgentDensity, number> = {
-  sparse: 1,
-  medium: 3,
-  dense: 6,
+/** Per-frame multiplier by a mode's density class — the dense↔sparse TPS spread, kept
+ *  gentle so even a sparse mode stays visibly fast. Folds into the per-frame batch. */
+const DENSITY_FRAME_FACTOR: Record<AgentDensity, number> = {
+  sparse: 0.5,
+  medium: 1,
+  dense: 1.5,
 };
-/** Hard ceiling on cells co-signed in a single tick, so even dense×3 stays bounded.
- *  Each batched cell is one independent verified co-signed move — booked once. */
-const BATCH_CAP = 12;
+/** Hard ceiling on cells one bot co-signs in a SINGLE FRAME, so even x8×dense×density3
+ *  stays bounded (≈24 × 0.15ms ≈ 3.6ms of crypto/frame/bot — well under one 16ms frame,
+ *  so the paint loop never blocks the render). Each cell is one verified co-signed move. */
+const FRAME_CELL_CAP = 24;
 /** User Density lever range (mirrors the human brush-size selector): a TPS multiplier. */
 const DENSITY_LEVELS = [1, 2, 3] as const;
 const DEFAULT_DENSITY = 1;
+/** Cap on relocations a bot may do in one frame, so a pathological near-empty stream
+ *  can't spin the frame loop while it keeps finding fresh regions (see paintFrame). */
+const MAX_RELOCATES_PER_FRAME = 4;
 
 /**
- * Cells an agent co-signs THIS tick: `density(mode) × userDensity`, clamped to
- * `[1, BATCH_CAP]`. Speed is deliberately NOT a factor here — the Speed multiplier
- * scales the TICK RATE (interval) instead, so x1/x2/x4/x8 stays an honest ×N on
- * cells/sec rather than compounding with batch.
+ * Cells one bot co-signs THIS FRAME: `speed × density(mode) × userDensity`, clamped to
+ * `[1, FRAME_CELL_CAP]`. Folding Speed in here (rather than scaling a tick interval) is
+ * what puts the bot loop on the render cadence — a fixed ~60fps frame rate with a
+ * per-frame batch — so painting is smooth (frame-aligned) AND fast at the same time.
  */
-function agentBatch(modeId: AgentModeId, userDensity: number): number {
-  const base = DENSITY_BATCH[AGENT_MODES[modeId].density] * userDensity;
-  return Math.max(1, Math.min(BATCH_CAP, Math.round(base)));
+function agentFrameBatch(
+  speed: AgentSpeed,
+  modeId: AgentModeId,
+  userDensity: number,
+): number {
+  const base =
+    SPEED_FRAME_CELLS[speed] *
+    DENSITY_FRAME_FACTOR[AGENT_MODES[modeId].density] *
+    userDensity;
+  return Math.max(1, Math.min(FRAME_CELL_CAP, Math.round(base)));
 }
 
 export type WorldCanvasPhase = "idle" | "opening" | "open" | "demo" | "error";
@@ -495,8 +515,6 @@ interface AgentState {
   painted: number;
   /** Soft cap: relocate once `painted` reaches this (bounds endless modes per region). */
   maxCells: number;
-  /** Self-rescheduling paint timer (a setTimeout chain, so speed can change live). */
-  timer: ReturnType<typeof setTimeout>;
 }
 
 const EMPTY_STATUS: WorldCanvasOnchainStatus = {
@@ -569,6 +587,10 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
   // Round-robin cursor for the "View" cycle button.
   const viewCursorRef = useRef(0);
   const redrawTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The single requestAnimationFrame loop that drives BOTH seat bots' painting, so their
+  // cells land on the render cadence (smooth, frame-aligned) instead of two competing
+  // setTimeout chains that the busy canvas rAF loop starves to a crawl.
+  const agentRafRef = useRef<number | null>(null);
   // Auto mirrored into a ref so the paint loop + paint sink read it without re-subscribing.
   const autoRef = useRef(true);
   // Current speed/mode for the seat bots, mirrored into refs so the paint loop can read
@@ -1229,58 +1251,79 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
     );
   }, []);
 
-  // One paint tick for a seat bot: pull a clamped BATCH of cells from its mode's stream
-  // and co-sign each (one verified step = one action = one TPS). The seat-A bot only
-  // paints while Auto is ON — when you hold the wheel it idles (its timer keeps ticking
-  // so flipping Auto back resumes it instantly), and your submitHumanPaint drives seat A
-  // instead. The seat-B bot always paints. On stream end / region cap, relocate.
-  const tickAgent = useCallback(
-    function tick(id: string) {
-      const st = agentStatesRef.current.get(id);
-      if (!st) return; // bot stopped/removed → the timer chain ends here
+  // The single paint frame for BOTH seat bots, driven by requestAnimationFrame (~60fps)
+  // so painting rides the render cadence — smooth and frame-aligned, never bursty, and
+  // bounded by the refresh rate so it can't run away. Each active bot pulls a clamped
+  // per-frame BATCH from its mode's stream and co-signs each cell (one verified step =
+  // one action = one TPS). On stream end / region cap it relocates and KEEPS PAINTING
+  // from the fresh region in the SAME frame (no wasted frame), bounded per frame so a
+  // near-empty stream can't spin. The seat-A bot paints only while Auto is ON — when you
+  // hold the wheel it idles and your submitHumanPaint drives seat A instead; the seat-B
+  // bot always paints. Speed/mode/density are read live each frame (refs), so the Speed
+  // pills + Density lever take effect on the very next frame.
+  const paintFrame = useCallback(
+    function frame() {
       const run = runRef.current;
-      const seatActive = st.seat === "B" || autoRef.current;
-      if (seatActive && run && !run.closed && run.ready && run.tunnel) {
-        const batch = agentBatch(st.mode, agentDensityRef.current);
-        for (let k = 0; k < batch; k++) {
-          let cell: DesignCell | null = null;
-          if (st.painted < st.maxCells) {
-            const nx = st.iter.next();
-            if (!nx.done) cell = nx.value;
-          }
-          if (cell === null) {
-            // Stream exhausted (finite) or region cap reached (endless) → relocate.
-            const next = nextPlacement(st.mode);
-            st.iter = next.iter;
-            st.regionName = next.regionName;
-            st.footprintH = next.footprintH;
-            st.maxCells = next.maxCells;
-            st.originGx = next.originGx;
-            st.originGy = next.originGy;
-            st.centerGx = next.centerGx;
-            st.centerGy = next.centerGy;
-            st.painted = 0;
-            syncAgentMarkers(); // move this bot's marker to the fresh region
-            break; // the fresh region starts painting on the next tick
-          }
-          st.painted += 1;
-          const mv = moveAtGlobal(
-            st.originGx + cell.dx,
-            st.originGy + cell.dy,
-            cell.color,
+      let relocated = false;
+      if (run && !run.closed && run.ready && run.tunnel) {
+        for (const st of agentStatesRef.current.values()) {
+          const seatActive = st.seat === "B" || autoRef.current;
+          if (!seatActive) continue;
+          const batch = agentFrameBatch(
+            st.speed,
+            st.mode,
+            agentDensityRef.current,
           );
-          submitPaint(mv, st.seat, st.painter);
+          let relocates = 0;
+          let painted = 0;
+          while (painted < batch) {
+            let cell: DesignCell | null = null;
+            if (st.painted < st.maxCells) {
+              const nx = st.iter.next();
+              if (!nx.done) cell = nx.value;
+            }
+            if (cell === null) {
+              // Stream exhausted (finite) or region cap reached (endless) → relocate and
+              // immediately continue painting from the fresh region THIS frame (no wasted
+              // frame). Bounded per frame so a pathological near-empty stream can't spin.
+              if (relocates >= MAX_RELOCATES_PER_FRAME) break;
+              relocates += 1;
+              const next = nextPlacement(st.mode);
+              st.iter = next.iter;
+              st.regionName = next.regionName;
+              st.footprintH = next.footprintH;
+              st.maxCells = next.maxCells;
+              st.originGx = next.originGx;
+              st.originGy = next.originGy;
+              st.centerGx = next.centerGx;
+              st.centerGy = next.centerGy;
+              st.painted = 0;
+              relocated = true;
+              continue;
+            }
+            st.painted += 1;
+            const mv = moveAtGlobal(
+              st.originGx + cell.dx,
+              st.originGy + cell.dy,
+              cell.color,
+            );
+            submitPaint(mv, st.seat, st.painter);
+            painted += 1;
+          }
         }
       }
-      st.timer = setTimeout(() => tick(id), AGENT_SPEED_INTERVALS[st.speed]);
+      // One marker sync per frame if any bot moved to a fresh region (not per relocate).
+      if (relocated) syncAgentMarkers();
+      agentRafRef.current = requestAnimationFrame(frame);
     },
     [nextPlacement, syncAgentMarkers, submitPaint],
   );
 
-  // Bring up one seat bot: register it, give it a starting region, and start its
-  // self-rescheduling paint timer. `seat`/`painter` are its distinct funded identity +
-  // display address. Both seat bots run for the window's life (the seat-A one idles
-  // while you hold the wheel — see tickAgent — but is never torn down).
+  // Bring up one seat bot: register it and give it a starting region. The shared rAF
+  // paintFrame loop (started on mount) drives its painting. `seat`/`painter` are its
+  // distinct funded identity + display address. Both seat bots run for the window's life
+  // (the seat-A one idles while you hold the wheel — see paintFrame — but is never torn
+  // down).
   const startSeatBot = useCallback(
     (params: { seat: Seat; painter: string; label: string; tint: string }) => {
       registerPainter(params.painter, params.label, true, params.tint);
@@ -1305,11 +1348,10 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
         centerGx: place.centerGx,
         centerGy: place.centerGy,
         painted: 0,
-        timer: setTimeout(() => tickAgent(id), AGENT_SPEED_INTERVALS[speed]),
       };
       agentStatesRef.current.set(id, st);
     },
-    [registerPainter, nextPlacement, tickAgent],
+    [registerPainter, nextPlacement],
   );
 
   // Public: flip Auto. ON = both seats bot-driven (watch, bot vs bot). OFF = the seat-A
@@ -1403,7 +1445,7 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
       // stake shift — collaborative free/draw.
       void startRun(false);
       // Two distinct funded seat bots paint the one tunnel (seat A idles when you hold
-      // the wheel — see tickAgent). Display painters differ from `humanAddress` so the
+      // the wheel — see paintFrame). Display painters differ from `humanAddress` so the
       // seat-A bot's strokes render (the human's own seat-A cells render from the live
       // pointer path instead).
       startSeatBot({
@@ -1419,9 +1461,16 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
         tint: TINT_BOT_B,
       });
       syncAgentMarkers();
+      // Start the single rAF loop that paints BOTH bots on the render cadence.
+      if (agentRafRef.current === null) {
+        agentRafRef.current = requestAnimationFrame(paintFrame);
+      }
     }
     return () => {
-      for (const s of agentStatesRef.current.values()) clearTimeout(s.timer);
+      if (agentRafRef.current !== null) {
+        cancelAnimationFrame(agentRafRef.current);
+        agentRafRef.current = null;
+      }
       agentStatesRef.current.clear();
       if (redrawTimerRef.current !== null) {
         clearTimeout(redrawTimerRef.current);
@@ -1440,7 +1489,7 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
       }
       runRef.current = null;
     };
-  }, [startRun, startSeatBot, syncAgentMarkers, flushHeartbeat]);
+  }, [startRun, startSeatBot, syncAgentMarkers, flushHeartbeat, paintFrame]);
 
   return {
     status,
