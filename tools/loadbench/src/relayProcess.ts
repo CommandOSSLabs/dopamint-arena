@@ -59,12 +59,16 @@ export async function ensureRelay(
   delete env.REDIS_CACHE_URL;
   delete env.REDIS_PUBSUB_URL;
 
-  const repoRoot = new URL("../../../..", import.meta.url).pathname;
+  const repoRoot = new URL("../../..", import.meta.url).pathname;
   const child: ChildProcess = spawn(
     "cargo",
     ["run", "-q", "-p", "tunnel-manager"],
     { cwd: repoRoot, env, stdio: "inherit" },
   );
+
+  child.on("error", (err) => {
+    console.error(`failed to spawn tunnel-manager via cargo: ${err.message}`);
+  });
 
   await waitHealthy(httpBase, { fetchImpl: f });
   return { alreadyRunning: false, stop: () => child.kill("SIGTERM") };
