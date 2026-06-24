@@ -168,11 +168,19 @@ and `matches: HashMap<String, MatchRecord>`, leaving every joined queue on
 disconnect (`ws.rs`). This design preserves that because nothing keys on
 "one game per socket":
 
-- **Co-location is per *match*, not per socket or game.** A socket has exactly one
-  instance; all its matches across all games share it. A match relays in-process
-  iff *that match's* two ConnRefs share an instance (`deliver` routes per target
-  ConnRef), so one socket can be co-located in game A and split in game B at once,
-  both correct.
+- **The socket is the unit of instance affinity.** A socket terminates at exactly
+  one instance, and match creation + `rebind_match_conn` both stamp this seat with
+  `here(state, conn_id)` = the socket's instance, identically for every match. So
+  **a socket's own seats never diverge across instances**: all its matches (all
+  games) share instance I. On reconnect they move *together* — the socket re-lands
+  on some J and `#resumeActive` rebinds every active match to J (transient mix
+  during resume, converging to J). There is no per-match "home instance."
+- **Co-location is per *match*, decided by the *opponent's* instance.** With this
+  side pinned to I, match X is co-located iff opponent X's socket is also on I. So
+  one socket can be co-located in game A (opponent on I) and split in game B
+  (opponent on J) at once — `deliver` routes per target ConnRef, both correct. The
+  only cross-instance variation is opponent-side, which is exactly what the
+  co-located-vs-split metric measures.
 - **The hold is per `queue:<game>`.** A multiplexing socket parks independently in
   each game's queue, each park carrying its own deadline and its own timer;
   self-drain is per-queue by wallet. No cross-game interference.
