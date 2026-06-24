@@ -29,11 +29,15 @@ function AppContent() {
     }
   }, [account, navigate]);
 
+  // Per-window auto-start latch (see PlayerBot): App-scoped so each blackjack window auto-starts
+  // its watch independently, and survives the back-to-menu → re-enter remount of PlayerBot.
+  const autoStartedRef = useRef(false);
+
   switch (currentRoute) {
     case "/":
       return <Home />;
     case "/bot":
-      return <PlayerBot />;
+      return <PlayerBot autoStarted={autoStartedRef} />;
     case "/pvp":
       return <PvpBlackjack />;
     default:
@@ -44,7 +48,7 @@ function AppContent() {
 export default function App() {
   return (
     <GameRouterProvider>
-      <div className="w-full h-full relative overflow-hidden bg-zinc-950">
+      <div className="bj-root w-full h-full relative overflow-hidden bg-zinc-950">
         <ScaledWrapper>
           <AppContent />
         </ScaledWrapper>

@@ -1,5 +1,7 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useGameNavigate } from "@/games/blackjack/app/useGameRouter";
+import { useRegisterCabinet } from "@/shell/cabinet/CabinetContext";
+import type { CabinetController } from "@/shell/cabinet/CabinetController";
 import { useGameScale } from "@/games/blackjack/app/components/app/ScaledWrapper";
 import {
   ConnectButton,
@@ -60,12 +62,6 @@ const ROUND_PRESETS = [5, 10, 25, 50, 100];
 const MIN_BOT_BALANCE_MIST = 30_000_000n; // 0.03 SUI (just above MIN_PLAY)
 const TOPUP_PER_BOT_MIST = 200_000_000; // 0.2 SUI per bot — long runway, fewer re-funds
 
-// Auto-start fires once per window: a freshly-opened blackjack window drops straight into a
-// watch. Navigating BACK to the menu and re-entering "Play vs Bot" REMOUNTS this page (resetting
-// its per-mount refs), so without a module-scoped latch the auto-pilot would start the game again
-// and skip the config screen. This survives remounts; only a full page reload clears it.
-let botAutoStartedThisWindow = false;
-
 // Render MIST (bigint) as a short SUI string. 1 SUI = 1e9 MIST.
 function suiOf(mist: bigint): string {
   return (Number(mist) / 1e9).toLocaleString(undefined, {
@@ -115,7 +111,16 @@ function DigestLink({ label, digest }: { label: string; digest?: string }) {
 // useBlackjackBot() (off-chain state channel, no wallet/login). Bot A is the player, bot B the
 // dealer. With Auto ticked your bot self-plays the dealer bot; untick it to take the player's
 // hand yourself (Hit/Stand) while the dealer keeps auto-resolving.
-export default function PlayerBot() {
+// `autoStarted` is the App-level (per-window) latch: each blackjack window auto-starts into a
+// watch exactly once, on its first entry. It lives in App (not module scope) so every window has
+// its OWN latch — otherwise the first window to mount would flip a shared flag and the rest stay
+// stuck on config. It survives the back-to-menu → re-enter remount (App stays mounted) but resets
+// when the window is closed/reset (App remounts), so a reset re-auto-starts all windows.
+export default function PlayerBot({
+  autoStarted,
+}: {
+  autoStarted: { current: boolean };
+}) {
   const navigate = useGameNavigate();
   const { isPortrait } = useGameScale();
   const game = useBlackjackBot();
@@ -134,6 +139,9 @@ export default function PlayerBot() {
     myTurn,
     hit,
     stand,
+    pause: gPause,
+    resume: gResume,
+    backToConfig,
     maxRounds,
     setMaxRounds,
     bet,
@@ -338,7 +346,7 @@ export default function PlayerBot() {
     // Auto-start only on the first entry of this window, or when the user presses Start
     // (startNonce > 0). Re-entering from the main menu remounts the page with startNonce 0 and
     // the latch already set → stay on the config screen instead of jumping into the game.
-    if (botAutoStartedThisWindow && startNonce === 0) return;
+    if (autoStarted.current && startNonce === 0) return;
     if (unfunded) {
       const combined = balances.a + balances.b;
       const diff =
@@ -368,7 +376,7 @@ export default function PlayerBot() {
     // rather than jumping straight into the game.
     if (!autoStartedRef.current) {
       autoStartedRef.current = true;
-      botAutoStartedThisWindow = true;
+      autoStarted.current = true;
       // Fresh window (auto-piloted, startNonce 0) starts in watch; from the main menu the user
       // pressed Start (startNonce > 0) → start in manual so they play the hands.
       game.startAuto(startNonce === 0);
@@ -388,6 +396,34 @@ export default function PlayerBot() {
   // The hook seeds an empty view; treat "no cards yet, no game in flight" as the start screen.
   const started =
     view.playerCards.length > 0 || view.dealerCards.length > 0 || inGame;
+
+  // --- Shared arcade-cabinet seam (GameCabinet wraps every window in Desktop). The shell owns
+  // hover → pause → overlay; this game wires the verbs to its engine. Take-over reuses the in-game
+  // manual play (setAuto(false) → you play the player's hand). Offerable only while auto-playing a
+  // started session. Stable callbacks (the hook useCallback's them) so the controller re-registers
+  // only when `offerable` flips, not every view tick.
+  const offerable = started && auto;
+  const takeOver = useCallback(() => {
+    setAuto(false);
+    gResume(); // unfreeze if the hover paused the loop
+  }, [setAuto, gResume]);
+  // "Return to Home" → blackjack's own home (the menu route), stopping the in-flight tunnel first
+  // so the self-play loop doesn't keep ticking after we leave (mirrors the in-game Back button).
+  const returnHome = useCallback(() => {
+    backToConfig();
+    navigate("/");
+  }, [backToConfig, navigate]);
+  const cabinet = useMemo<CabinetController>(
+    () => ({
+      active: offerable,
+      pause: gPause,
+      resume: gResume,
+      takeOver,
+      returnHome,
+    }),
+    [offerable, gPause, gResume, takeOver, returnHome],
+  );
+  useRegisterCabinet(cabinet);
 
   // Auto toggle: ticked = your bot plays the hand (fast self-play vs the dealer bot); unticked
   // pauses at your decision so you play Hit/Stand. The dealer + betting stay automatic either way.

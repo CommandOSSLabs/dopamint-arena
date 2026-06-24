@@ -143,6 +143,12 @@ export interface BlackjackBotGame {
   /** Begin a session. autoOn = start in watch (bot plays); false = start in manual (you play). */
   startAuto: (autoOn?: boolean) => void;
   stopAuto: () => void;
+  /** Hover-pause: the auto-play step-loop is frozen in place (shared cabinet shell). */
+  paused: boolean;
+  /** Freeze the running auto-play loop (hover). No-op when not mid-play. */
+  pause: () => void;
+  /** Resume a frozen auto-play loop from where it stopped. */
+  resume: () => void;
   /** Stop play and return to the idle/config screen (does not auto-restart). */
   backToConfig: () => void;
   newGame: () => void;
@@ -156,8 +162,14 @@ export interface BlackjackBotGame {
 // minimum (DEFAULT_BET = MIN_BET), so 50,000 chips covers far more than the rounds-per-tunnel
 // target while keeping the on-chain deposit — and thus the MIN_PLAY floor — tiny.
 const BUY_IN = 50_000n;
-// Animation cadence: one move surfaced to the view per tick.
+// Animation cadence: in manual mode the dealer/betting auto-steps are paced to this so they're
+// watchable between the player's decisions.
 const STEP_MS = 900;
+// Base interval tick — always fast, regardless of auto/manual. Auto-play steps every tick;
+// manual mode polls at this rate but throttles its auto-steps to STEP_MS via `lastAutoStepAt`.
+// Fixing the tick (rather than 30/STEP_MS by mode) lets toggling Auto mid-tunnel resume at full
+// speed immediately, instead of staying at the slow manual cadence until the next tunnel opens.
+const TICK_MS = 20;
 // The bot that opens a tunnel funds BOTH seats from its own gas coin, so it must hold at least
 // 2×BUY_IN (both deposits) plus gas to safely play another game; below it, auto-play stops
 // rather than risk a mid-game tx running out of gas and leaving a tunnel open. The funder
@@ -233,6 +245,8 @@ export function useBlackjackBot(): BlackjackBotGame {
   const [maxRounds, setMaxRoundsState] = useState(DEFAULT_MAX_ROUNDS);
   const [bet, setBetState] = useState(DEFAULT_BET);
   const [balancesLoaded, setBalancesLoaded] = useState(false);
+  // Hover-pause (the shared cabinet shell freezes the auto-play while you decide).
+  const [paused, setPaused] = useState(false);
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const nextRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -243,6 +257,9 @@ export function useBlackjackBot(): BlackjackBotGame {
   // A user-queued manual move (hit/stand) the running interval applies on its next tick, so the
   // manual path reuses the loop's single round-logging/telemetry site (incl. player-bust).
   const pendingMoveRef = useRef<BetBlackjackMove | null>(null);
+  // Hover-pause latch (see useBotGame): read at the top of each tick so a hovered cabinet freezes
+  // the loop. The interval keeps firing harmless no-op ticks, so there's no timer to stop/re-arm.
+  const pausedRef = useRef(false);
   const balancesRef = useRef<{ a: bigint; b: bigint }>({ a: 0n, b: 0n });
   const runRef = useRef<() => void>(() => {});
   // Mirror of `maxRounds` so the play loop reads the live target without rebuilding runGame.
@@ -541,6 +558,8 @@ export function useBlackjackBot(): BlackjackBotGame {
         setPhase("playing");
         setView(viewFromState(tunnel.state));
         pendingMoveRef.current = null; // drop any move queued during the inter-tunnel gap
+        pausedRef.current = false; // a fresh tunnel never inherits a stale hover-pause
+        setPaused(false);
         // Stop after this many completed rounds in the single tunnel, then settle once.
         const roundsTarget = maxRoundsRef.current;
         let roundsThisTunnel = 0;
@@ -548,10 +567,13 @@ export function useBlackjackBot(): BlackjackBotGame {
           let steps = 0;
           let completedRounds = 0;
           // Wall-clock of the last dealer/betting auto-step, used to pace them to STEP_MS in
-          // manual mode (the tick itself stays at 30ms so a re-tick of Auto resumes instantly).
+          // manual mode. The tick itself always runs at TICK_MS so toggling Auto on mid-tunnel
+          // resumes at full speed immediately (the delay is NOT recomputed per mode).
           let lastAutoStepAt = 0;
-          const delay = autoRef.current ? 30 : STEP_MS;
           timerRef.current = setInterval(() => {
+            // Hover-paused: freeze on this frame. The same poll-and-bail shape the manual-play
+            // branch below uses while awaiting your Hit/Stand — no timer to stop and re-arm.
+            if (pausedRef.current) return;
             try {
               if (proto.isTerminal(tunnel.state)) {
                 stopTimer();
@@ -663,7 +685,7 @@ export function useBlackjackBot(): BlackjackBotGame {
               stopTimer();
               reject(err);
             }
-          }, delay);
+          }, TICK_MS);
         });
 
         setView(viewFromState(tunnel.state));
@@ -792,6 +814,18 @@ export function useBlackjackBot(): BlackjackBotGame {
   const setAuto = useCallback((on: boolean) => {
     autoRef.current = on;
     setAutoState(on);
+  }, []);
+
+  // Hover-pause: set the latch and the running tick no-ops each frame (the loop's `await` never
+  // resolves, so it freezes mid-session); resume clears it and the next tick steps again.
+  const pause = useCallback(() => {
+    pausedRef.current = true;
+    setPaused(true);
+  }, []);
+
+  const resume = useCallback(() => {
+    pausedRef.current = false;
+    setPaused(false);
   }, []);
 
   // Queue a manual player move for the running interval to apply (see pendingMoveRef). No-op
@@ -924,6 +958,9 @@ export function useBlackjackBot(): BlackjackBotGame {
     rebalance,
     startAuto,
     stopAuto,
+    paused,
+    pause,
+    resume,
     backToConfig,
     newGame,
     refresh: refreshBalances,

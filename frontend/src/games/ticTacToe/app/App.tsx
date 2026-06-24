@@ -207,24 +207,12 @@ function AppContent() {
   };
 
   const isPortrait = dimensions.width < dimensions.height;
-  let targetWidth = 500;
-  let targetHeight = 750;
-
-  if (scene === "login") {
-    targetWidth = isPortrait ? 500 : 800;
-    targetHeight = isPortrait ? 800 : 500;
-  } else if (scene === "setup") {
-    targetWidth = isPortrait ? 500 : 1000;
-    targetHeight = isPortrait ? 800 : 900;
-  } else if (scene === "game") {
-    targetWidth = isPortrait ? 500 : 980;
-    targetHeight = isPortrait ? 800 : 850;
-    if (gameType === "caro") targetHeight = isPortrait ? 850 : 900;
-  } else if (scene === "pvp") {
-    targetWidth = isPortrait ? 500 : 1060;
-    targetHeight = isPortrait ? 800 : 900;
-    if (gameType === "caro") targetHeight = isPortrait ? 850 : 950;
-  }
+  // ONE fixed design size per orientation for the WHOLE game (like blackjack's ScaledWrapper):
+  // every scene fills this box and the whole card scales uniformly to the window, instead of each
+  // scene resizing to its own target. Sized to the tallest scene (caro board / pvp) so nothing is
+  // clipped; lighter scenes (login/setup) just center within it.
+  const targetWidth = isPortrait ? 500 : 1024;
+  const targetHeight = isPortrait ? 850 : 900;
 
   return (
     <div

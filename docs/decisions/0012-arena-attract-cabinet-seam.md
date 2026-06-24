@@ -50,8 +50,11 @@ single source of auto-play moves (shared with the agent test harness).
   mode, (3) registering a `CabinetController`. No per-game overlay code.
 - **Committed to:** the `CabinetController` contract and kit-as-auto-source.
   Genuine two-party settlement remains the on-chain model ([ADR-0006](0006-genuine-two-party-only-drop-self-play.md)).
+- **Adopted so far:** tic-tac-toe (reference) and blackjack — each registers a
+  `CabinetController` and exposes a hover-pause latch on its bot hook; take-over
+  reuses the existing in-game manual mode (ttt's auto flag, blackjack's Hit/Stand).
 - **Explicitly not done:** a real you-vs-bot channel at take-over (cosmetic
   today — "you vs bot" is presentational until the ephemeral-channel work lands);
-  rolling the controller past ttt to the other games (each just registers one);
-  deduping the per-hook pause/resume machinery into a shared primitive (kept as
-  small, stable duplication).
+  rolling the controller past ttt/blackjack to the remaining games (each just
+  registers one); deduping the per-hook pause/resume machinery into a shared
+  primitive (kept as small, stable duplication).

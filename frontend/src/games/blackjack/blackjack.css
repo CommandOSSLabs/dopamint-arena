@@ -1,5 +1,12 @@
 /* Casino table styling ported from the standalone blackjack client. */
 
+/* Blackjack owns its own in-game Back-to-menu button (top-left), so suppress the shared
+   cabinet shell's redundant ⌂ Home button — but only inside a blackjack window (scoped via the
+   .bj-root marker), leaving other games' shells untouched. */
+.shell-stage:has(.bj-root) > .shell-home-btn {
+  display: none;
+}
+
 /* Casino Felt Table Background */
 .casino-felt {
   background: radial-gradient(
