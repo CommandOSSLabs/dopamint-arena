@@ -1,13 +1,13 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
+import { test } from "node:test";
+import { concatBytes, toHex } from "./bytes";
 import {
-  computeCommitment,
-  verifyCommitment,
   combineReveals,
+  computeCommitment,
   DOMAIN_COMMIT_REVEAL,
+  verifyCommitment,
 } from "./commitment";
 import { blake2b256 } from "./crypto";
-import { concatBytes, toHex } from "./bytes";
 
 // Golden vectors shared with sui_tunnel/tests/wire_format_tests.move.
 const G_COMMITMENT =
@@ -37,6 +37,11 @@ test("verifyCommitment accepts correct reveal, rejects wrong", () => {
 
 test("salt shorter than 16 bytes is rejected (matches Move assert)", () => {
   assert.throws(() => computeCommitment(valueA, new Uint8Array(15)));
+});
+
+test("verifyCommitment returns false for a short salt instead of throwing (matches Move verify_commitment)", () => {
+  const c = computeCommitment(valueA, saltA);
+  assert.equal(verifyCommitment(c, valueA, new Uint8Array(15)), false);
 });
 
 test("regression: length-prefixed format differs from the old buggy DOMAIN||value||salt", () => {

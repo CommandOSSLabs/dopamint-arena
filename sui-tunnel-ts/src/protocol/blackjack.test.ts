@@ -1,16 +1,14 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
+import { test } from "node:test";
+import { toHex } from "../core/bytes";
+import { ed25519Address, generateKeyPair } from "../core/crypto";
+import { OffchainTunnel, verifyCoSignedUpdate } from "../core/tunnel";
 import {
   BlackjackProtocol,
   BlackjackState,
-  WAGER,
   ROUND_CAP,
-  getPlayerParty,
-  getDealerParty,
+  WAGER,
 } from "./blackjack";
-import { toHex } from "../core/bytes";
-import { OffchainTunnel, verifyCoSignedUpdate } from "../core/tunnel";
-import { generateKeyPair, ed25519Address } from "../core/crypto";
 import { Party } from "./Protocol";
 
 const proto = new BlackjackProtocol();
@@ -180,12 +178,7 @@ test("randomMove only ever yields legal moves over many transitions", () => {
   const rng = () => (x = (x * 48271) % 1) || 0.5;
   for (let i = 0; i < 3000; i++) {
     if (proto.isTerminal(s)) break;
-    const by: Party =
-      s.phase === "dealer"
-        ? getDealerParty(s.round)
-        : s.phase === "player"
-        ? getPlayerParty(s.round)
-        : getPlayerParty(s.round + 1n);
+    const by: Party = s.phase === "dealer" ? "B" : "A";
     const m = proto.randomMove(s, by, rng);
     if (!m) {
       // The only non-mover should be the off-turn party; the on-turn party always moves.
@@ -238,16 +231,13 @@ test("end-to-end self-play tunnel: latest co-signed update verifies", () => {
   for (let r = 0; r < 5; r++) {
     if (proto.isTerminal(t.state)) break;
     if (t.state.phase === "round_over") {
-      const nextPlayer = getPlayerParty(t.state.round + 1n);
-      t.step({ action: "hit" }, nextPlayer); // deal a new round
+      t.step({ action: "hit" }, "A"); // deal a new round
     }
     if (t.state.phase === "player") {
-      const playerParty = getPlayerParty(t.state.round);
-      t.step({ action: "stand" }, playerParty);
+      t.step({ action: "stand" }, "A");
     }
     if (t.state.phase === "dealer") {
-      const dealerParty = getDealerParty(t.state.round);
-      t.step({ action: "stand" }, dealerParty);
+      t.step({ action: "stand" }, "B");
     }
   }
 

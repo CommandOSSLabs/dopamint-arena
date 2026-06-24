@@ -7,16 +7,16 @@
  * benchmark (1000 updates/sec/tunnel).
  */
 
-import {
-  Protocol,
-  Party,
-  Balances,
-  ProtocolContext,
-  protocolDomain,
-  otherParty,
-} from "./Protocol";
 import { concatBytes } from "../core/bytes";
 import { u64ToBeBytes } from "../core/wire";
+import {
+  Balances,
+  otherParty,
+  Party,
+  Protocol,
+  ProtocolContext,
+  protocolDomain,
+} from "./Protocol";
 
 export interface PaymentsState {
   balanceA: bigint;
@@ -54,7 +54,7 @@ export class PaymentsProtocol implements Protocol<PaymentsState, PaymentMove> {
     const fromBal = sender === "A" ? state.balanceA : state.balanceB;
     if (move.amount > fromBal) {
       throw new Error(
-        `insufficient balance: ${sender} has ${fromBal}, sends ${move.amount}`,
+        `insufficient balance: ${sender} has ${fromBal}, sends ${move.amount}`
       );
     }
     const recipient = otherParty(sender);
@@ -96,7 +96,7 @@ export class PaymentsProtocol implements Protocol<PaymentsState, PaymentMove> {
   randomMove(
     state: PaymentsState,
     by: Party,
-    rng: () => number,
+    rng: () => number
   ): PaymentMove | null {
     const bal = by === "A" ? state.balanceA : state.balanceB;
     if (bal <= 0n) return null;

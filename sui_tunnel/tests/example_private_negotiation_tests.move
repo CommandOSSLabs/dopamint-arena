@@ -39,7 +39,7 @@ fun open_negotiation() {
     assert_eq!(example_private_negotiation::channel_status<SUI>(&channel), 0);
     assert_eq!(example_private_negotiation::channel_rounds<SUI>(&channel), 0);
     assert_eq!(example_private_negotiation::channel_latest_price<SUI>(&channel), 0);
-    assert_eq!(example_private_negotiation::channel_deal_reached<SUI>(&channel), false);
+    assert!(!example_private_negotiation::channel_deal_reached<SUI>(&channel));
     assert_eq!(example_private_negotiation::channel_asking_price<SUI>(&channel), 10000);
     assert_eq!(
         *example_private_negotiation::channel_item_description<SUI>(&channel),
@@ -113,7 +113,7 @@ fun record_negotiation_rounds() {
     );
     assert_eq!(example_private_negotiation::channel_rounds<SUI>(&channel), 1);
     assert_eq!(example_private_negotiation::channel_latest_price<SUI>(&channel), 6000);
-    assert_eq!(example_private_negotiation::channel_deal_reached<SUI>(&channel), false);
+    assert!(!example_private_negotiation::channel_deal_reached<SUI>(&channel));
 
     // Round 2: Seller counters with 9000 (private off-chain)
     example_private_negotiation::record_round<SUI>(
@@ -163,7 +163,7 @@ fun record_negotiation_rounds() {
     );
     assert_eq!(example_private_negotiation::channel_rounds<SUI>(&channel), 4);
     assert_eq!(example_private_negotiation::channel_latest_price<SUI>(&channel), 8000);
-    assert_eq!(example_private_negotiation::channel_deal_reached<SUI>(&channel), true);
+    assert!(example_private_negotiation::channel_deal_reached<SUI>(&channel));
 
     example_private_negotiation::destroy_channel_for_testing<SUI>(channel);
     clock::destroy_for_testing(clock);
@@ -324,7 +324,7 @@ fun negotiation_state_accessors() {
 
     assert_eq!(example_private_negotiation::negotiation_rounds(&state), 5);
     assert_eq!(example_private_negotiation::negotiation_latest_price(&state), 8000);
-    assert_eq!(example_private_negotiation::negotiation_deal_reached(&state), true);
+    assert!(example_private_negotiation::negotiation_deal_reached(&state));
     assert_eq!(example_private_negotiation::negotiation_nonce(&state), 10);
 }
 

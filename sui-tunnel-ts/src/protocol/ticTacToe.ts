@@ -11,15 +11,15 @@
  * mirrors that module's `check_winner`.
  */
 
+import { concatBytes } from "../core/bytes";
+import { u64ToBeBytes } from "../core/wire";
 import {
-  Protocol,
-  Party,
   Balances,
+  Party,
+  Protocol,
   ProtocolContext,
   protocolDomain,
 } from "./Protocol";
-import { concatBytes } from "../core/bytes";
-import { u64ToBeBytes } from "../core/wire";
 
 /** Cell / mark values. 0 = empty, 1 = A (X), 2 = B (O). */
 export const EMPTY = 0;
@@ -79,10 +79,9 @@ function checkWinner(board: number[], movesCount: number): Winner {
   return 0;
 }
 
-export class TicTacToeProtocol implements Protocol<
-  TicTacToeState,
-  TicTacToeMove
-> {
+export class TicTacToeProtocol
+  implements Protocol<TicTacToeState, TicTacToeMove>
+{
   readonly name = "tic_tac_toe.v1";
 
   /** Default stake used when the caller does not configure one. */
@@ -116,7 +115,7 @@ export class TicTacToeProtocol implements Protocol<
   applyMove(
     state: TicTacToeState,
     move: TicTacToeMove,
-    by: Party,
+    by: Party
   ): TicTacToeState {
     if (state.winner !== 0) throw new Error("game already over");
     if (by !== state.turn) throw new Error(`not ${by}'s turn`);
@@ -184,7 +183,7 @@ export class TicTacToeProtocol implements Protocol<
   randomMove(
     state: TicTacToeState,
     by: Party,
-    rng: () => number,
+    rng: () => number
   ): TicTacToeMove | null {
     if (state.winner !== 0 || by !== state.turn) return null;
     const empties: number[] = [];

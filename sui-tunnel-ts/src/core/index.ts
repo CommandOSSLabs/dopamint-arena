@@ -13,12 +13,10 @@
  * `sui_tunnel/tests/wire_format_tests.move`.
  */
 export * from "./bytes";
-export * from "./wire";
+export * from "./commitment";
 export * from "./crypto";
 export * from "./crypto-native";
-export * from "./commitment";
+export * from "./keys";
 export * from "./randomness";
 export * from "./tunnel";
-export * from "./distributedTunnel";
-export * from "./reconcile";
-export * from "./keys";
+export * from "./wire";

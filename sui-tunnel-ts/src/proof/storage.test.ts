@@ -1,6 +1,6 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
-import { InMemoryStore, WalrusStore, LocalFileStore } from "./storage";
+import { test } from "node:test";
+import { InMemoryStore, LocalFileStore, WalrusStore } from "./storage";
 import { ProofRecord } from "./transcript";
 
 const record: ProofRecord = {
@@ -30,7 +30,7 @@ test("WalrusStore uses injected publish/read hooks (Walrus optional)", async () 
       blobs.set(ref, bytes);
       return { ref };
     },
-    async (ref) => blobs.get(ref) ?? null,
+    async (ref) => blobs.get(ref) ?? null
   );
   const { ref } = await store.put(record);
   assert.ok(ref.startsWith("blob:"));

@@ -1,15 +1,18 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
+import { test } from "node:test";
+import type { CrossMove, CrossState } from "./cross";
 import {
-  laneKind,
+  COLUMN_COUNT,
+  CrossProtocol,
+  destOf,
   hazardsAt,
   isLethal,
-  destOf,
-  COLUMN_COUNT,
+  laneKind,
+  MIN_STAKE,
   SPAWN_COL,
+  TICK_CAP,
+  WIN_LANE,
 } from "./cross";
-import { CrossProtocol, WIN_LANE, TICK_CAP, MIN_STAKE } from "./cross";
-import type { CrossState, CrossMove } from "./cross";
 
 test("laneKind cycles grass,grass,road,road,water,rails,grass,grass after lane 2", () => {
   assert.equal(laneKind(0), "grass");
@@ -45,11 +48,10 @@ test("water is inverted: lethal exactly when NOT on a log span", () => {
   const spans = hazardsAt(seed, lane, tick);
   for (let col = 0; col < COLUMN_COUNT; col++) {
     const c = col + 0.5;
-    const onLog = spans.some(
-      (s) =>
-        [c, c - COLUMN_COUNT, c + COLUMN_COUNT].some(
-          (cc) => cc > s.center - s.half && cc < s.center + s.half,
-        ),
+    const onLog = spans.some((s) =>
+      [c, c - COLUMN_COUNT, c + COLUMN_COUNT].some(
+        (cc) => cc > s.center - s.half && cc < s.center + s.half
+      )
     );
     assert.equal(isLethal(seed, col, lane, tick), !onLog);
   }
@@ -67,7 +69,10 @@ test("destOf clamps to the board", () => {
 // TASK 2: CrossProtocol tests
 // ============================================
 
-const CTX = { tunnelId: "0xabc123", initialBalances: { a: MIN_STAKE, b: MIN_STAKE } };
+const CTX = {
+  tunnelId: "0xabc123",
+  initialBalances: { a: MIN_STAKE, b: MIN_STAKE },
+};
 
 function playout(p: CrossProtocol, seedRng: () => number): CrossState {
   let s = p.initialState(CTX);
@@ -94,8 +99,16 @@ test("initialState locks the total and starts at tick 0 with two spawned chicken
 
 test("encodeState is canonical: identical states encode to identical bytes", () => {
   const p = new CrossProtocol();
-  const a = p.applyMove(p.initialState(CTX), { dirA: "north", dirB: "north" }, "A");
-  const b = p.applyMove(p.initialState(CTX), { dirA: "north", dirB: "north" }, "A");
+  const a = p.applyMove(
+    p.initialState(CTX),
+    { dirA: "north", dirB: "north" },
+    "A"
+  );
+  const b = p.applyMove(
+    p.initialState(CTX),
+    { dirA: "north", dirB: "north" },
+    "A"
+  );
   assert.deepEqual(Array.from(p.encodeState(a)), Array.from(p.encodeState(b)));
 });
 
@@ -103,7 +116,10 @@ test("different states encode to different bytes (tick advances)", () => {
   const p = new CrossProtocol();
   const s0 = p.initialState(CTX);
   const s1 = p.applyMove(s0, { dirA: "north" }, "A");
-  assert.notDeepEqual(Array.from(p.encodeState(s0)), Array.from(p.encodeState(s1)));
+  assert.notDeepEqual(
+    Array.from(p.encodeState(s0)),
+    Array.from(p.encodeState(s1))
+  );
 });
 
 test("balances are conserved across a full random playout", () => {
@@ -139,7 +155,12 @@ test("applyMove throws once the game is terminal", () => {
   // Force a winner: drive A north repeatedly along a safe column path is non-trivial,
   // so instead assert the guard via a synthesized terminal state.
   const s = p.initialState(CTX);
-  const terminal: CrossState = { ...s, winner: "A", balanceA: s.total, balanceB: 0n };
+  const terminal: CrossState = {
+    ...s,
+    winner: "A",
+    balanceA: s.total,
+    balanceB: 0n,
+  };
   assert.throws(() => p.applyMove(terminal, { dirA: "north" }, "A"));
 });
 
@@ -151,8 +172,18 @@ test("simultaneous WIN_LANE arrival with equal score is a push, not an A-win", (
     ...p.initialState(CTX),
     tick: 10n,
     players: [
-      { lane: WIN_LANE - 1, col: SPAWN_COL, score: WIN_LANE - 1, invulnTicks: 0 },
-      { lane: WIN_LANE - 1, col: SPAWN_COL, score: WIN_LANE - 1, invulnTicks: 0 },
+      {
+        lane: WIN_LANE - 1,
+        col: SPAWN_COL,
+        score: WIN_LANE - 1,
+        invulnTicks: 0,
+      },
+      {
+        lane: WIN_LANE - 1,
+        col: SPAWN_COL,
+        score: WIN_LANE - 1,
+        invulnTicks: 0,
+      },
     ],
   };
   const next = p.applyMove(deadHeat, { dirA: "north", dirB: "north" }, "A");

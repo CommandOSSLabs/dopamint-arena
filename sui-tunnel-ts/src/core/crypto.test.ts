@@ -1,19 +1,19 @@
-import { test } from "node:test";
-import assert from "node:assert/strict";
-import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import { decodeSuiPrivateKey } from "@mysten/sui/cryptography";
+import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { toHex } from "./bytes";
 import {
+  blake2b256,
+  ed25519Address,
   generateKeyPair,
   generateKeyPairs,
   keyPairFromSecret,
   sign,
+  SignatureScheme,
   verify,
   verifyWithScheme,
-  ed25519Address,
-  blake2b256,
-  SignatureScheme,
 } from "./crypto";
-import { toHex } from "./bytes";
 
 const msg = new TextEncoder().encode("sui_tunnel::state_update example");
 
@@ -43,7 +43,7 @@ test("verifyWithScheme dispatches ed25519 and rejects unimplemented schemes", ()
   const sig = sign(msg, kp.secretKey);
   assert.ok(verifyWithScheme(SignatureScheme.ED25519, kp.publicKey, msg, sig));
   assert.throws(() =>
-    verifyWithScheme(SignatureScheme.BLS12381_MIN_SIG, kp.publicKey, msg, sig),
+    verifyWithScheme(SignatureScheme.BLS12381_MIN_SIG, kp.publicKey, msg, sig)
   );
 });
 
@@ -59,7 +59,7 @@ test("noble signatures interoperate with @mysten Ed25519Keypair (on-chain compat
   const ours = keyPairFromSecret(secretKey);
   assert.equal(
     toHex(ours.publicKey),
-    toHex(mysten.getPublicKey().toRawBytes()),
+    toHex(mysten.getPublicKey().toRawBytes())
   );
 
   // our (noble) signature verifies under @mysten's public key (raw verify)
@@ -79,7 +79,7 @@ test("ed25519Address matches @mysten toSuiAddress", () => {
 test("blake2b256(hello) matches Move hash::blake2b256", () => {
   assert.equal(
     toHex(blake2b256(new TextEncoder().encode("hello"))),
-    "324dcf027dd4a30a932c441f365a25e86b173defa4b8e58948253471b81b72cf",
+    "324dcf027dd4a30a932c441f365a25e86b173defa4b8e58948253471b81b72cf"
   );
 });
 

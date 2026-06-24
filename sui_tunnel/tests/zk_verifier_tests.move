@@ -64,26 +64,22 @@ fun u64_to_scalar() {
     assert_eq!(scalar1, x"0100000000000000000000000000000000000000000000000000000000000000");
 
     let scalar256 = zk_verifier::u64_to_scalar(256);
-    assert_eq!(*scalar256.borrow(0), 0);
-    assert_eq!(*scalar256.borrow(1), 1);
+    assert_eq!(scalar256[0], 0);
+    assert_eq!(scalar256[1], 1);
 
     // Exercise every byte of the u64 with a distinct value, then assert the
     // exact little-endian layout plus the 24 zero pad bytes (indices 8..31).
     let v: u64 = 0x0807060504030201;
     let scalar = zk_verifier::u64_to_scalar(v);
-    assert_eq!(*scalar.borrow(0), 0x01);
-    assert_eq!(*scalar.borrow(1), 0x02);
-    assert_eq!(*scalar.borrow(2), 0x03);
-    assert_eq!(*scalar.borrow(3), 0x04);
-    assert_eq!(*scalar.borrow(4), 0x05);
-    assert_eq!(*scalar.borrow(5), 0x06);
-    assert_eq!(*scalar.borrow(6), 0x07);
-    assert_eq!(*scalar.borrow(7), 0x08);
-    let mut i = 8;
-    while (i < 32) {
-        assert_eq!(*scalar.borrow(i), 0);
-        i = i + 1;
-    };
+    assert_eq!(scalar[0], 0x01);
+    assert_eq!(scalar[1], 0x02);
+    assert_eq!(scalar[2], 0x03);
+    assert_eq!(scalar[3], 0x04);
+    assert_eq!(scalar[4], 0x05);
+    assert_eq!(scalar[5], 0x06);
+    assert_eq!(scalar[6], 0x07);
+    assert_eq!(scalar[7], 0x08);
+    24u64.do!(|i| assert_eq!(scalar[8 + i], 0));
 
     // u64::MAX fills the low 8 bytes with 0xFF, pad stays zero.
     let scalar_max = zk_verifier::u64_to_scalar(0xFFFFFFFFFFFFFFFF);
@@ -97,24 +93,20 @@ fun u256_to_scalar() {
     assert_eq!(scalar, x"0000000000000000000000000000000000000000000000000000000000000000");
 
     let scalar1 = zk_verifier::u256_to_scalar(1);
-    assert_eq!(*scalar1.borrow(0), 1);
-    let mut i = 1;
-    while (i < 32) {
-        assert_eq!(*scalar1.borrow(i), 0);
-        i = i + 1;
-    };
+    assert_eq!(scalar1[0], 1);
+    31u64.do!(|i| assert_eq!(scalar1[1 + i], 0));
 
     // Little-endian: 0x0102 => byte0 = 0x02 (LSB), byte1 = 0x01.
     let scalar_le = zk_verifier::u256_to_scalar(0x0102);
-    assert_eq!(*scalar_le.borrow(0), 0x02);
-    assert_eq!(*scalar_le.borrow(1), 0x01);
-    assert_eq!(*scalar_le.borrow(2), 0x00);
+    assert_eq!(scalar_le[0], 0x02);
+    assert_eq!(scalar_le[1], 0x01);
+    assert_eq!(scalar_le[2], 0x00);
 
     // The most-significant byte lands at index 31 (full-width value).
     let top: u256 = 1u256 << 248; // 0x01 in the highest byte
     let scalar_top = zk_verifier::u256_to_scalar(top);
-    assert_eq!(*scalar_top.borrow(31), 0x01);
-    assert_eq!(*scalar_top.borrow(0), 0x00);
+    assert_eq!(scalar_top[31], 0x01);
+    assert_eq!(scalar_top[0], 0x00);
 
     // u256::MAX is all 0xFF.
     let scalar_max = zk_verifier::u256_to_scalar(
@@ -145,10 +137,10 @@ fun concat_scalars() {
 
     // The result is the in-order byte concatenation of each scalar: assert the
     // first byte of each 32-byte window matches the LSB of the source value.
-    assert_eq!(*combined.borrow(0), 100); // s1 LSB
-    assert_eq!(*combined.borrow(32), 200); // s2 LSB
-    assert_eq!(*combined.borrow(64), 44); // s3 = 300 -> 300 & 0xFF == 44
-    assert_eq!(*combined.borrow(65), 1); // s3 byte 1 -> 300 >> 8 == 1
+    assert_eq!(combined[0], 100); // s1 LSB
+    assert_eq!(combined[32], 200); // s2 LSB
+    assert_eq!(combined[64], 44); // s3 = 300 -> 300 & 0xFF == 44
+    assert_eq!(combined[65], 1); // s3 byte 1 -> 300 >> 8 == 1
 }
 
 #[test]
@@ -161,12 +153,10 @@ fun concat_scalars_empty() {
 #[test]
 fun concat_scalars_max_count() {
     // Exactly MAX_PUBLIC_INPUTS (8) scalars must succeed (boundary).
-    let mut scalars = vector<vector<u8>>[];
-    let mut i = 0;
-    while (i < zk_verifier::max_public_inputs()) {
-        scalars.push_back(zk_verifier::u64_to_scalar(i));
-        i = i + 1;
-    };
+    let scalars = vector::tabulate!(
+        zk_verifier::max_public_inputs(),
+        |i| zk_verifier::u64_to_scalar(i),
+    );
     let combined = zk_verifier::concat_scalars(scalars);
     assert_eq!(combined.length(), 8 * 32);
 }
@@ -241,12 +231,7 @@ fun max_public_inputs() {
     ),
 ]
 fun concat_scalars_too_many() {
-    let mut scalars = vector<vector<u8>>[];
-    let mut i = 0;
-    while (i < 9) {
-        scalars.push_back(zk_verifier::u64_to_scalar(i));
-        i = i + 1;
-    };
+    let scalars = vector::tabulate!(9, |i| zk_verifier::u64_to_scalar(i));
     let _ = zk_verifier::concat_scalars(scalars);
 }
 

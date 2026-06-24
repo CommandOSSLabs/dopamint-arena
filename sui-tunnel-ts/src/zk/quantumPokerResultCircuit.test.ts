@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { toHex } from "../core/bytes";
-import { fieldSafeScalar, hashToFieldSafeScalar } from "./scalars";
 import {
   buildQuantumPokerResultPublicInputs,
   QUANTUM_POKER_RESULT_PUBLIC_INPUT_COUNT,
@@ -10,6 +9,7 @@ import {
   tunnelIdHash,
   UnavailableQuantumPokerResultProver,
 } from "./quantumPokerResultCircuit";
+import { fieldSafeScalar, hashToFieldSafeScalar } from "./scalars";
 
 test("fieldSafeScalar clears top three bits without mutating input", () => {
   const raw = new Uint8Array(32).fill(0xff);
@@ -64,7 +64,7 @@ test("rules and tunnel hashes are deterministic", () => {
   assert.equal(toHex(quantumPokerRulesHash()), toHex(quantumPokerRulesHash()));
   assert.equal(
     toHex(tunnelIdHash("0x" + "22".repeat(32))),
-    toHex(tunnelIdHash("0x" + "22".repeat(32))),
+    toHex(tunnelIdHash("0x" + "22".repeat(32)))
   );
 });
 
@@ -82,8 +82,8 @@ test("UnavailableQuantumPokerResultProver throws with deployment guidance", asyn
           partyBBalance: 1000,
           resultHash: new Uint8Array(32),
         },
-        {},
+        {}
       ),
-    /trusted setup/,
+    /trusted setup/
   );
 });

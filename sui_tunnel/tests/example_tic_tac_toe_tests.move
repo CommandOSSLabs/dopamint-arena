@@ -47,11 +47,7 @@ fun create_game() {
 
     let board = example_tic_tac_toe::game_board<SUI>(&game);
     assert_eq!(board.length(), 9);
-    let mut i = 0u64;
-    while (i < 9) {
-        assert_eq!(board[i], 0);
-        i = i + 1;
-    };
+    9u64.do!(|i| assert_eq!(board[i], 0));
 
     example_tic_tac_toe::destroy_game_for_testing<SUI>(game);
     clock::destroy_for_testing(clock);
@@ -282,6 +278,18 @@ fun check_winner_no_winner_yet() {
 fun check_winner_empty_board() {
     let board = vector[0, 0, 0, 0, 0, 0, 0, 0, 0];
     assert_eq!(example_tic_tac_toe::check_winner(&board, 0), 0);
+}
+
+#[
+    test,
+    expected_failure(
+        abort_code = sui_tunnel::example_tic_tac_toe::EInvalidParameter,
+        location = sui_tunnel::example_tic_tac_toe,
+    ),
+]
+fun check_winner_short_board() {
+    let board = vector[1, 1, 1, 0, 2, 2];
+    example_tic_tac_toe::check_winner(&board, 5);
 }
 
 // ============================================

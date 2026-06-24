@@ -13,11 +13,10 @@
  * the agreed root. So this need not match Move, but it IS deterministic and replayable.
  */
 
-import { CoSignedUpdate } from "../core/tunnel";
-import { serializeStateUpdate, parseStateUpdate } from "../core/wire";
-import { blake2b256, verify, SignatureScheme } from "../core/crypto";
 import { concatBytes, toHex } from "../core/bytes";
-import { decodeSettleBody } from "./settleBinary";
+import { blake2b256 } from "../core/crypto";
+import { CoSignedUpdate } from "../core/tunnel";
+import { serializeStateUpdate } from "../core/wire";
 
 const LEAF = new TextEncoder().encode("sui_tunnel::transcript::leaf");
 const NODE = new TextEncoder().encode("sui_tunnel::transcript::node");
@@ -63,117 +62,6 @@ export interface ProofRecord {
   entries: { nonce: string; message: string; sigA: string; sigB: string }[];
 }
 
-export interface TranscriptVerification {
-  ok: boolean;
-  rootMatches: boolean;
-  allSigsValid: boolean;
-  nonceMonotonic: boolean;
-  balancesConserved: boolean;
-  stepCount: number;
-  steps: {
-    nonce: bigint;
-    sigAValid: boolean;
-    sigBValid: boolean;
-    partyABalance: bigint;
-    partyBBalance: bigint;
-  }[];
-  failures: string[];
-}
-
-function normRoot(hex: string): string {
-  const h = hex.startsWith("0x") || hex.startsWith("0X") ? hex.slice(2) : hex;
-  return h.toLowerCase();
-}
-
-/**
- * Independently re-verify a settled transcript against its on-chain anchor.
- * Proves mutual authorization + integrity — dual signatures, strictly increasing
- * nonces, Merkle root == anchored root, and balance conservation (a+b constant,
- * == lockedTotal if given). It does NOT prove game fairness: each step's app state
- * is hashed into stateHash and never revealed. ed25519 only (matches
- * verifyCoSignedUpdate); throws on any other scheme.
- *
- * Input is the binary settle body (`decodeSettleBody`) — the same bytes the FE
- * builds, the backend submits, and the explorer archives to Walrus verbatim.
- */
-export function verifyTranscript(
-  blob: Uint8Array,
-  params: {
-    partyA: { publicKey: Uint8Array; scheme: number };
-    partyB: { publicKey: Uint8Array; scheme: number };
-    onchainRoot: string;
-    lockedTotal?: bigint;
-  }
-): TranscriptVerification {
-  if (
-    params.partyA.scheme !== SignatureScheme.ED25519 ||
-    params.partyB.scheme !== SignatureScheme.ED25519
-  ) {
-    throw new Error("verifyTranscript currently supports ed25519 only");
-  }
-
-  const decoded = decodeSettleBody(blob);
-  const norm = { root: toHex(decoded.transcriptRoot), entries: decoded.entries };
-
-  const failures: string[] = [];
-  const steps: TranscriptVerification["steps"] = [];
-  const leaves: Uint8Array[] = [];
-  let allSigsValid = true;
-  let nonceMonotonic = true;
-  let balancesConserved = true;
-  let prevNonce: bigint | null = null;
-  let total: bigint | null = params.lockedTotal ?? null;
-
-  for (const e of norm.entries) {
-    const message = e.message;
-    const sigA = e.sigA;
-    const sigB = e.sigB;
-    const su = parseStateUpdate(message);
-
-    const sigAValid = verify(sigA, message, params.partyA.publicKey);
-    const sigBValid = verify(sigB, message, params.partyB.publicKey);
-    if (!sigAValid || !sigBValid) allSigsValid = false;
-
-    if (prevNonce !== null && su.nonce <= prevNonce) nonceMonotonic = false;
-    prevNonce = su.nonce;
-
-    const sum = su.partyABalance + su.partyBBalance;
-    if (total === null) total = sum;
-    else if (sum !== total) balancesConserved = false;
-
-    leaves.push(transcriptLeaf({ nonce: su.nonce, message, sigA, sigB }));
-    steps.push({
-      nonce: su.nonce,
-      sigAValid,
-      sigBValid,
-      partyABalance: su.partyABalance,
-      partyBBalance: su.partyBBalance,
-    });
-  }
-
-  const recomputed = toHex(transcriptRoot(leaves));
-  const rootMatches =
-    recomputed === normRoot(norm.root) &&
-    recomputed === normRoot(params.onchainRoot);
-
-  if (!rootMatches)
-    failures.push("merkle root does not match the on-chain anchor");
-  if (!allSigsValid) failures.push("one or more dual signatures are invalid");
-  if (!nonceMonotonic) failures.push("nonces are not strictly increasing");
-  if (!balancesConserved) failures.push("balance conservation violated");
-
-  return {
-    ok: rootMatches && allSigsValid && nonceMonotonic && balancesConserved,
-    rootMatches,
-    allSigsValid,
-    nonceMonotonic,
-    balancesConserved,
-    stepCount: norm.entries.length,
-    steps,
-    failures,
-  };
-}
-
 /** Accumulates a tunnel's co-signed updates and produces the anchorable root + record. */
 export class Transcript {
   readonly tunnelId: string;
@@ -198,11 +86,6 @@ export class Transcript {
 
   get length(): number {
     return this.entries.length;
-  }
-
-  /** Raw co-signed entries (Uint8Array message + sigs) for binary settle encoding. */
-  rawEntries(): TranscriptEntry[] {
-    return this.entries.slice();
   }
 
   /** The 32-byte Merkle root to anchor on-chain at close. */

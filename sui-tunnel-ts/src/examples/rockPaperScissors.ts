@@ -64,7 +64,7 @@ export async function createRPSGame(
   player2: string,
   stakeCoinId: string,
   client?: SuiClient,
-  keypair?: Ed25519Keypair,
+  keypair?: Ed25519Keypair
 ): Promise<CreateGameResult> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -116,7 +116,7 @@ export async function joinGame(
   gameId: string,
   stakeCoinId: string,
   client?: SuiClient,
-  keypair?: Ed25519Keypair,
+  keypair?: Ed25519Keypair
 ): Promise<string> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -157,7 +157,7 @@ export async function commitMove(
   gameId: string,
   move: number,
   client?: SuiClient,
-  keypair?: Ed25519Keypair,
+  keypair?: Ed25519Keypair
 ): Promise<{ salt: Uint8Array; commitment: Uint8Array; digest: string }> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -217,7 +217,7 @@ export async function revealMove(
   move: number,
   salt: Uint8Array,
   client?: SuiClient,
-  keypair?: Ed25519Keypair,
+  keypair?: Ed25519Keypair
 ): Promise<string> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -259,7 +259,7 @@ export async function revealMove(
 export async function settleGame(
   gameId: string,
   client?: SuiClient,
-  keypair?: Ed25519Keypair,
+  keypair?: Ed25519Keypair
 ): Promise<{ digest: string; coinId: string | null }> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -277,7 +277,7 @@ export async function settleGame(
   // Transfer prize to the caller (who is presumably the winner or either player)
   tx.transferObjects(
     [coin],
-    tx.pure.address(signer.getPublicKey().toSuiAddress()),
+    tx.pure.address(signer.getPublicKey().toSuiAddress())
   );
 
   const result = await signAndExecute(suiClient, tx, signer);
@@ -302,7 +302,7 @@ export async function settleGame(
 export async function cancelCommitTimeout(
   gameId: string,
   client?: SuiClient,
-  keypair?: Ed25519Keypair,
+  keypair?: Ed25519Keypair
 ): Promise<{ digest: string; coinId: string | null }> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -314,7 +314,7 @@ export async function cancelCommitTimeout(
   const coin = tx.moveCall({
     target: buildTarget(
       MODULES.EXAMPLE_ROCK_PAPER_SCISSORS,
-      "cancel_commit_timeout",
+      "cancel_commit_timeout"
     ),
     typeArguments: [SUI_COIN_TYPE],
     arguments: [tx.object(gameId), tx.object(SUI_CLOCK_OBJECT_ID)],
@@ -322,7 +322,7 @@ export async function cancelCommitTimeout(
 
   tx.transferObjects(
     [coin],
-    tx.pure.address(signer.getPublicKey().toSuiAddress()),
+    tx.pure.address(signer.getPublicKey().toSuiAddress())
   );
 
   const result = await signAndExecute(suiClient, tx, signer);
@@ -347,7 +347,7 @@ export async function cancelCommitTimeout(
 export async function claimRevealTimeout(
   gameId: string,
   client?: SuiClient,
-  keypair?: Ed25519Keypair,
+  keypair?: Ed25519Keypair
 ): Promise<{ digest: string; coinId: string | null }> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -359,7 +359,7 @@ export async function claimRevealTimeout(
   const coin = tx.moveCall({
     target: buildTarget(
       MODULES.EXAMPLE_ROCK_PAPER_SCISSORS,
-      "claim_reveal_timeout",
+      "claim_reveal_timeout"
     ),
     typeArguments: [SUI_COIN_TYPE],
     arguments: [tx.object(gameId), tx.object(SUI_CLOCK_OBJECT_ID)],
@@ -367,7 +367,7 @@ export async function claimRevealTimeout(
 
   tx.transferObjects(
     [coin],
-    tx.pure.address(signer.getPublicKey().toSuiAddress()),
+    tx.pure.address(signer.getPublicKey().toSuiAddress())
   );
 
   const result = await signAndExecute(suiClient, tx, signer);

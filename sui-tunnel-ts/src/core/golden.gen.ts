@@ -1,17 +1,19 @@
 // Dev utility: print canonical golden hex vectors shared by the TS tests and
-// the Move cross-check (sui_tunnel/tests/wire_format_tests.move). Run:
+// the Move cross-checks (sui_tunnel/tests/wire_format_tests.move, and
+// example_agent_allowance_tests.move for the spend-authorization vector). Run:
 //   node --import tsx src/core/golden.gen.ts
-import {
-  serializeStateUpdate,
-  serializeSettlement,
-  serializeSettlementWithRoot,
-  serializeHtlcLock,
-} from "./wire";
-import { computeCommitment, combineReveals } from "./commitment";
-import { blake2b256, keyPairFromSecret, sign } from "./crypto";
-import { seedFromBytes, shuffle } from "./randomness";
 import { buildPublicInputs } from "../zk/cardCircuit";
 import { toHex } from "./bytes";
+import { combineReveals, computeCommitment } from "./commitment";
+import { blake2b256, keyPairFromSecret, sign } from "./crypto";
+import { seedFromBytes, shuffle } from "./randomness";
+import {
+  serializeHtlcLock,
+  serializeSettlement,
+  serializeSettlementWithRoot,
+  serializeSpendAuthorization,
+  serializeStateUpdate,
+} from "./wire";
 
 const TUNNEL_ID = "0xab";
 const stateHash = Uint8Array.from({ length: 32 }, (_, i) => i + 1); // 0x01..0x20
@@ -85,7 +87,7 @@ const publicInputs = buildPublicInputs({ deckRoot, position: 5, card: 42 });
 console.log(
   "ZK_PUBLIC_IN   ",
   toHex(publicInputs),
-  `(${publicInputs.length} B)`,
+  `(${publicInputs.length} B)`
 );
 
 // Root-anchored settlement (transcript_root = 0x01..0x20).
@@ -98,3 +100,12 @@ const settleV2 = serializeSettlementWithRoot({
   transcriptRoot: stateHash,
 });
 console.log("SETTLE_V2      ", toHex(settleV2), `(${settleV2.length} B)`);
+
+// Agent-allowance spend voucher. Asserted by example_agent_allowance_tests.move
+// (not wire_format_tests.move) since serialize_spend_authorization lives in the
+// example module. allowance_id=0xab, authorized_total=1000.
+const spendAuth = serializeSpendAuthorization({
+  allowanceId: TUNNEL_ID,
+  authorizedTotal: 1000n,
+});
+console.log("SPEND_AUTH     ", toHex(spendAuth), `(${spendAuth.length} B)`);

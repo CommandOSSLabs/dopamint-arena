@@ -70,9 +70,6 @@ const EInvalidRandomnessRange: vector<u8> = b"The requested randomness range is 
 // CONSTANTS
 // ============================================
 
-// Randomness seed size in bytes (Blake2b-256 output)
-// const SEED_SIZE: u64 = 32;
-
 /// Domain separator for BLS-based randomness
 const DOMAIN_BLS_RANDOMNESS: vector<u8> = b"sui_tunnel::randomness::bls";
 
@@ -81,6 +78,9 @@ const DOMAIN_COMMIT_REVEAL: vector<u8> = b"sui_tunnel::randomness::commit_reveal
 
 /// Domain separator for chained randomness
 const DOMAIN_CHAIN: vector<u8> = b"sui_tunnel::randomness::chain";
+
+/// Domain separator for tunnel-context seeds
+const DOMAIN_TUNNEL_CONTEXT: vector<u8> = b"sui_tunnel::randomness::tunnel_context";
 
 // ============================================
 // STRUCTS
@@ -149,6 +149,9 @@ public(package) fun from_bytes(bytes: vector<u8>): Seed {
 /// ## Security
 /// The signature MUST be verified before calling this function.
 /// Use `signature::verify_bls12381_min_sig()` or `signature::verify_bls12381_min_pk()` first.
+/// BLS signatures are unique per (key, message), so the result is non-grindable only when
+/// the signed message is fixed in advance (e.g. bound to a tunnel id and nonce); otherwise
+/// the signer could grind the message to bias the outcome.
 public(package) fun from_bls_signature(message: &vector<u8>, bls_signature: &vector<u8>): Seed {
     let mut hash_input = DOMAIN_BLS_RANDOMNESS;
     hash_input.append(*message);
@@ -207,14 +210,19 @@ public fun from_verified_bls_min_pk(
 /// Creates a seed by combining multiple inputs.
 /// Useful for deriving tunnel-specific randomness.
 ///
+/// The variable-length fields are length-prefixed under a dedicated domain so
+/// distinct inputs cannot collide or coincide with `from_bytes`/`next_seed` seeds.
+///
 /// ## Parameters
 /// - `tunnel_id`: The tunnel's object ID bytes
 /// - `nonce`: A unique nonce
 /// - `extra_entropy`: Additional entropy (e.g., signatures)
 public fun from_tunnel_context(tunnel_id: vector<u8>, nonce: u64, extra_entropy: vector<u8>): Seed {
-    let mut hash_input = DOMAIN_CHAIN;
+    let mut hash_input = DOMAIN_TUNNEL_CONTEXT;
+    hash_input.append(signature::u64_to_be_bytes(tunnel_id.length()));
     hash_input.append(tunnel_id);
     hash_input.append(signature::u64_to_be_bytes(nonce));
+    hash_input.append(signature::u64_to_be_bytes(extra_entropy.length()));
     hash_input.append(extra_entropy);
 
     Seed {
@@ -379,7 +387,7 @@ public fun shuffle<T>(seed: &Seed, vec: &mut vector<T>): Seed {
 ///
 /// ## Parameters
 /// - `value`: The value to commit to
-/// - `salt`: Random salt (should be at least 32 bytes)
+/// - `salt`: Random salt (at least 16 bytes; 16 bytes gives 128 bits of hiding entropy)
 /// - `committer`: Address of the committer
 /// - `timestamp`: When the commitment was made
 public fun create_commitment(
@@ -540,8 +548,10 @@ fun create_domain_message(domain: vector<u8>, data: vector<u8>): vector<u8> {
     result
 }
 
-/// Converts first 8 bytes to u64 (big-endian)
+/// Converts first 8 bytes to u64 (big-endian).
+/// Aborts with `EInvalidParameter` if fewer than 8 bytes are supplied.
 public fun bytes_to_u64(bytes: &vector<u8>): u64 {
+    assert!(bytes.length() >= 8, EInvalidParameter);
     let b0 = (bytes[0] as u64);
     let b1 = (bytes[1] as u64);
     let b2 = (bytes[2] as u64);
@@ -558,16 +568,7 @@ public fun bytes_to_u64(bytes: &vector<u8>): u64 {
 /// Converts first 16 bytes to u128 (big-endian)
 fun bytes_to_u128(bytes: &vector<u8>): u128 {
     let high = (bytes_to_u64(bytes) as u128);
-    let mut low_bytes = vector<u8>[];
-    let mut i = 8;
-    while (i < 16) {
-        low_bytes.push_back(bytes[i]);
-        i = i + 1;
-    };
-    // Pad to 8 bytes if needed
-    while (low_bytes.length() < 8) {
-        low_bytes.push_back(0);
-    };
+    let low_bytes = vector::tabulate!(8, |i| bytes[i + 8]);
     let low = (bytes_to_u64(&low_bytes) as u128);
 
     (high << 64) | low
@@ -577,21 +578,11 @@ fun bytes_to_u128(bytes: &vector<u8>): u128 {
 fun bytes_to_u256(bytes: &vector<u8>): u256 {
     let high = (bytes_to_u128(bytes) as u256);
 
-    let mut low_bytes = vector<u8>[];
-    let mut i = 16;
-    while (i < 32) {
-        low_bytes.push_back(bytes[i]);
-        i = i + 1;
-    };
+    let low_bytes = vector::tabulate!(16, |i| bytes[i + 16]);
 
     // Need to compute low u128
     let low_high = bytes_to_u64(&low_bytes);
-    let mut low_low_bytes = vector<u8>[];
-    let mut j = 8;
-    while (j < 16) {
-        low_low_bytes.push_back(low_bytes[j]);
-        j = j + 1;
-    };
+    let low_low_bytes = vector::tabulate!(8, |j| low_bytes[j + 8]);
     let low_low = bytes_to_u64(&low_low_bytes);
     let low = (((low_high as u128) << 64) | (low_low as u128) as u256);
 

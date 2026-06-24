@@ -30,7 +30,7 @@ test("active + counterparty silent + no newer state => raise_dispute_current_sta
       nowMs: 6_000,
       hasCounterpartySignedNewerState: false,
     }),
-    "raise_dispute_current_state",
+    "raise_dispute_current_state"
   );
 });
 
@@ -46,7 +46,7 @@ test("created + counterparty never deposited + past timeout => withdraw_timeout"
       counterpartyDeposited: false,
       nowMs: 11_000,
     }),
-    "withdraw_timeout",
+    "withdraw_timeout"
   );
 });
 
@@ -58,7 +58,7 @@ test("created + within timeout => none", () => {
       counterpartyDeposited: false,
       nowMs: 5_000,
     }),
-    "none",
+    "none"
   );
 });
 
@@ -71,7 +71,7 @@ test("disputed + I am raiser + deadline passed => force_close", () => {
       disputeStartMs: 0,
       nowMs: 11_000,
     }),
-    "force_close",
+    "force_close"
   );
 });
 
@@ -84,7 +84,7 @@ test("disputed + not raiser + no newer state => none (nothing better to submit)"
       hasCounterpartySignedNewerState: false,
       nowMs: 99_999,
     }),
-    "none",
+    "none"
   );
 });
 
@@ -100,7 +100,7 @@ test("Watchtower.tick executes the decided action and stops watching after termi
     async (id, action) => {
       executed.push(`${id}:${action}`);
     },
-    { onAction: (id, action) => actions.push({ id, action }) },
+    { onAction: (id, action) => actions.push({ id, action }) }
   );
   wt.watch({
     tunnelId: "t1",
@@ -129,7 +129,7 @@ test("REPRO #1: disputed + not raiser + we hold a newer co-signed state => resol
       hasCounterpartySignedNewerState: true,
       nowMs: 99_999,
     }),
-    "resolve_dispute",
+    "resolve_dispute"
   );
 });
 
@@ -142,7 +142,7 @@ test("REPRO #2 (watchtower side): a failed terminal-recovery submission keeps th
     async () => {
       throw new Error("on-chain abort");
     },
-    { onError: (id) => errs.push(id) },
+    { onError: (id) => errs.push(id) }
   );
   wt.watch({
     tunnelId: "t-fail",
@@ -161,7 +161,7 @@ test("REPRO #2 (watchtower side): a failed terminal-recovery submission keeps th
 test("Watchtower.tick is a no-op when no action is needed", async () => {
   const executed: string[] = [];
   const wt = new Watchtower(
-    async (id, action) => void executed.push(`${id}:${action}`),
+    async (id, action) => void executed.push(`${id}:${action}`)
   );
   wt.watch({
     tunnelId: "t2",

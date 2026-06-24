@@ -1,7 +1,7 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
-import { Simulator, simTunnelId, TunnelKind } from "./engine";
+import { test } from "node:test";
 import { verifyCoSignedUpdate } from "../core/tunnel";
+import { simTunnelId, Simulator, TunnelKind } from "./engine";
 
 test("simulator builds the requested number of tunnels with unique ids", () => {
   const sim = new Simulator({ users: 10, agents: 10, tunnels: 25 });
@@ -31,8 +31,8 @@ test("all four tunnel kinds build signable tunnels", () => {
       verifyCoSignedUpdate(
         u!,
         { publicKey: t.partyA.publicKey, scheme: t.partyA.scheme },
-        { publicKey: t.partyB.publicKey, scheme: t.partyB.scheme },
-      ),
+        { publicKey: t.partyB.publicKey, scheme: t.partyB.scheme }
+      )
     );
   }
 });
