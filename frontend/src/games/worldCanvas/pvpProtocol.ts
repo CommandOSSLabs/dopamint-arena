@@ -70,6 +70,22 @@ function moveDelta(mv: PvpPaintMove, by: Party): Uint8Array {
   return enc.encode(`${by}|${mv.cx},${mv.cy}|${mv.x},${mv.y}|${mv.color}`);
 }
 
+/** Up to the last two cells THIS seat painted, most-recent first — its pen + heading.
+ *  Lets the bot CONTINUE its own stroke (a flowing line) instead of teleporting. The
+ *  last seat-A cell tracks YOUR paints too, so re-enabling Auto resumes where you left off. */
+function recentCellsBy(cells: PvpCell[], by: Party): PvpCell[] {
+  const out: PvpCell[] = [];
+  for (let i = cells.length - 1; i >= 0 && out.length < 2; i--) {
+    if (cells[i].by === by) out.push(cells[i]);
+  }
+  return out;
+}
+
+/** Clamp a per-tick step so the walk stays a tight, legible line (no big jumps). */
+function clampStep(d: number): number {
+  return Math.max(-2, Math.min(2, d));
+}
+
 export class WorldCanvasPvpProtocol
   implements Protocol<PvpCanvasState, PvpPaintMove>
 {
@@ -137,19 +153,57 @@ export class WorldCanvasPvpProtocol
     return false;
   }
 
-  /** Bot autopilot: paint a random cell in this seat's own band so the two bots' art
-   *  stays visually distinct (seat A left, seat B right), both within the origin chunk. */
+  /** Bot autopilot: continue THIS seat's stroke as a bounded random WALK from its last
+   *  painted cell — a coherent wandering line near wherever the seat last drew (including
+   *  right where you handed the wheel back), instead of teleporting to scattered dots at
+   *  the origin you'd never find after panning. Seat A draws blue, seat B light purple. */
   randomMove(
-    _state: PvpCanvasState,
+    state: PvpCanvasState,
     by: Party,
     rng: () => number,
   ): PvpPaintMove {
-    const band = by === "A" ? 0 : 70;
+    const recent = recentCellsBy(state.cells, by);
+    let gx: number;
+    let gy: number;
+    let dx: number;
+    let dy: number;
+    if (recent.length >= 1) {
+      gx = recent[0].gx;
+      gy = recent[0].gy;
+      // Keep the recent heading so the line flows; jitter from scratch if it has none yet.
+      dx =
+        recent.length === 2
+          ? clampStep(recent[0].gx - recent[1].gx)
+          : Math.floor(rng() * 3) - 1;
+      dy =
+        recent.length === 2
+          ? clampStep(recent[0].gy - recent[1].gy)
+          : Math.floor(rng() * 3) - 1;
+    } else {
+      // First stroke: seed in this seat's own band (A left, B right) near the origin.
+      gx = (by === "A" ? 0 : 70) + Math.floor(rng() * 60);
+      gy = Math.floor(rng() * 90);
+      dx = 1;
+      dy = 0;
+    }
+    // Wander: occasionally turn, and never stall in place.
+    if (rng() < 0.35) {
+      dx += Math.floor(rng() * 3) - 1;
+      dy += Math.floor(rng() * 3) - 1;
+    }
+    dx = clampStep(dx);
+    dy = clampStep(dy);
+    if (dx === 0 && dy === 0) dx = 1;
+    gx += dx;
+    gy += dy;
+    // Flatten global-pixel back to (chunk, in-chunk); floorDiv keeps x/y in-range for negatives.
+    const cx = Math.floor(gx / CHUNK_SIZE);
+    const cy = Math.floor(gy / CHUNK_SIZE);
     return {
-      cx: 0n,
-      cy: 0n,
-      x: band + Math.floor(rng() * 60),
-      y: Math.floor(rng() * 90),
+      cx: BigInt(cx),
+      cy: BigInt(cy),
+      x: gx - cx * CHUNK_SIZE,
+      y: gy - cy * CHUNK_SIZE,
       color: by === "A" ? 13 : 15, // Sui blue vs light purple, like the solo seats
     };
   }
