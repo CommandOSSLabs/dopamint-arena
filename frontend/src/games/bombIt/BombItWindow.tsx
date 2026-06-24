@@ -7,7 +7,7 @@ import { useBombItSession } from "./useBombItSession";
 import { BombLobby } from "./components/BombLobby";
 import { BombBoard } from "./components/BombBoard";
 import { BombScreen } from "./components/BombScreen";
-import { useSoloCabinet } from "@/shell/cabinet/soloCabinet";
+import { useSoloCabinet, type WindowMode } from "@/shell/cabinet/soloCabinet";
 import "./bomb-it.css";
 
 // Persisted by windowId so a remount (minimize / maximize / desktop reflow) returns to the live
@@ -25,7 +25,7 @@ const autoStarted = new Map<string, boolean>();
 /** Bomb It: pick Solo (bot-vs-bot self-play) or PvP (human-vs-human over a shared tunnel). */
 export function BombItWindow({ windowId }: GameWindowProps) {
   const account = useCurrentAccount();
-  const [mode, setModeState] = useState<"solo" | "pvp" | null>(
+  const [mode, setModeState] = useState<WindowMode>(
     () => modeStore.get(windowId) ?? null,
   );
   const pvp = usePvpBombIt(windowId);
@@ -37,7 +37,7 @@ export function BombItWindow({ windowId }: GameWindowProps) {
       autoStarted.delete(windowId);
     });
   }, [windowId]);
-  const setMode = (m: "solo" | "pvp" | null) => {
+  const setMode = (m: WindowMode) => {
     if (m === "pvp" || m === "solo") modeStore.set(windowId, m);
     else modeStore.delete(windowId);
     setModeState(m);

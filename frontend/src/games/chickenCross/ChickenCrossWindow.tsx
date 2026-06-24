@@ -7,7 +7,7 @@ import { useChickenCrossSession } from "./useChickenCrossSession";
 import { CrossLobby } from "./components/CrossLobby";
 import { CrossBoard } from "./components/CrossBoard";
 import { CrossScreen } from "./components/CrossScreen";
-import { useSoloCabinet } from "@/shell/cabinet/soloCabinet";
+import { useSoloCabinet, type WindowMode } from "@/shell/cabinet/soloCabinet";
 import "./cross.css";
 
 // Persisted by windowId so a remount (minimize / maximize / desktop reflow) returns to the live
@@ -25,7 +25,7 @@ const autoStarted = new Map<string, boolean>();
 /** Chicken Cross: pick Solo (bot-vs-bot self-play) or PvP (two humans race over a shared tunnel). */
 export function ChickenCrossWindow({ windowId }: GameWindowProps) {
   const account = useCurrentAccount();
-  const [mode, setModeState] = useState<"solo" | "pvp" | null>(
+  const [mode, setModeState] = useState<WindowMode>(
     () => modeStore.get(windowId) ?? null,
   );
   const pvp = usePvpChickenCross(windowId);
@@ -37,7 +37,7 @@ export function ChickenCrossWindow({ windowId }: GameWindowProps) {
       autoStarted.delete(windowId);
     });
   }, [windowId]);
-  const setMode = (m: "solo" | "pvp" | null) => {
+  const setMode = (m: WindowMode) => {
     if (m === "pvp" || m === "solo") modeStore.set(windowId, m);
     else modeStore.delete(windowId);
     setModeState(m);
