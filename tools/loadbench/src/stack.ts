@@ -135,6 +135,7 @@ function publishPackage(chainId: string): string {
     let newMoveToml = origMoveToml.replace(/\n\[environments\][\s\S]*$/, "");
     newMoveToml = newMoveToml.trimEnd() + `\n\n[environments]\nlocal = "${chainId}"\n`;
     writeFileSync(moveToml, newMoveToml);
+    patched = true;
 
     // 2. Remove Move.lock so the CLI regenerates it with the current chain-id.
     //    Stripping individual [pinned.local.*] sections is error-prone because the
@@ -153,8 +154,6 @@ function publishPackage(chainId: string): string {
         .trimEnd() + "\n";
       writeFileSync(publishedToml, stripped);
     }
-
-    patched = true;
 
     const out = spawnSync(
       "sui",
