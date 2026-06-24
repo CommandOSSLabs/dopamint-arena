@@ -92,6 +92,10 @@ export interface BombItSession {
   toggleAuto: () => void;
   /** Settle + close the tunnel NOW at the current co-signed state — cash out anytime. */
   settleNow: () => void;
+  /** Freeze the self-play loop in place (cabinet hover). No-op unless mid-play. */
+  pause: () => void;
+  /** Unfreeze and re-kick the loop (cabinet un-hover). No-op unless paused. */
+  resume: () => void;
 }
 
 /** You always sit in seat A for a solo match; seat B is the bot opponent. */
@@ -165,6 +169,9 @@ class BombBotSession {
   private transcript: Transcript | null = null;
   private onChain = false;
   private advancing = false;
+  // Cabinet hover-freeze: when true the advance loop returns at the top of its
+  // next iteration (freeze in place); resume() clears it and re-kicks the loop.
+  private paused = false;
   // Guards re-entry: a session that has begun a duel can't be restarted (only
   // reset()/Play Again returns it to idle). Stops StrictMode / double-click dupes.
   private starting = false;
@@ -313,6 +320,7 @@ class BombBotSession {
     const protocol = this.protocol;
     try {
       while (tunnel && protocol) {
+        if (this.paused) return; // hover-freeze: stop here; resume() re-kicks
         let boundary: StepOutcome = "stepped";
         if (this.auto) {
           // Throughput benchmark: co-sign as many ticks as fit the frame budget, then yield once.
@@ -392,6 +400,7 @@ class BombBotSession {
     this.lastScoredGames = -1;
     this.txnId = 0;
     this.pendingAction = undefined;
+    this.paused = false;
 
     // Per-game stake from the lobby (the small swap), floored at BOMB_IT_MIN_STAKE.
     const floored = Math.floor(nextStake);
@@ -589,6 +598,17 @@ class BombBotSession {
     if (this.auto && this.status === "playing") void this.advance();
   };
 
+  pause = () => {
+    if (this.status !== "playing") return;
+    this.paused = true;
+  };
+
+  resume = () => {
+    if (!this.paused) return;
+    this.paused = false;
+    if (this.status === "playing") void this.advance();
+  };
+
   /** Settle + close the tunnel NOW at the current co-signed state — cash out anytime,
    *  even mid-duel. Stops the autopilot loop first so nothing steps during the close. */
   settleNow = () => {
@@ -654,5 +674,7 @@ export function useBombItSession(windowId: string): BombItSession {
     queueAction: session.queueAction,
     toggleAuto: session.toggleAuto,
     settleNow: session.settleNow,
+    pause: session.pause,
+    resume: session.resume,
   };
 }
