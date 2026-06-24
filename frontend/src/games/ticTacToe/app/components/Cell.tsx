@@ -25,7 +25,12 @@ export function Cell({
                   ${playable ? "hover:bg-tertiary-container/15 cursor-pointer" : "cursor-default"}`}
     >
       {label && (
-        <span className={`${markClass} select-none font-bold`} style={{ fontSize: "15cqw", lineHeight: 1 }}>{label}</span>
+        <span
+          className={`${markClass} select-none font-bold`}
+          style={{ fontSize: "15cqw", lineHeight: 1 }}
+        >
+          {label}
+        </span>
       )}
     </button>
   );

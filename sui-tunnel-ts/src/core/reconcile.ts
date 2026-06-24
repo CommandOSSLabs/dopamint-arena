@@ -35,7 +35,7 @@ export interface ResyncView {
  */
 export function decideReconcile(
   self: ResyncView,
-  peer: ResyncView
+  peer: ResyncView,
 ): ReconcileDecision {
   if (peer.nonce > self.nonce) return { action: "adopt" };
   if (self.nonce > peer.nonce) return { action: "wait" };
@@ -44,7 +44,7 @@ export function decideReconcile(
     peer.checkpoint &&
     !bytesEqual(
       self.checkpoint.update.stateHash,
-      peer.checkpoint.update.stateHash
+      peer.checkpoint.update.stateHash,
     )
   ) {
     return { action: "settle" };

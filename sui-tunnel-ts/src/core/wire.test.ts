@@ -63,7 +63,7 @@ test("serializeSettlementWithRoot matches Move golden (settlement_v2)", () => {
   assert.equal(bytes.length, 121);
   assert.equal(
     toHex(bytes),
-    "7375695f74756e6e656c3a3a736574746c656d656e745f763200000000000000000000000000000000000000000000000000000000000000ab00000000000003e800000000000007d0000000000000002b00000000499602d20102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
+    "7375695f74756e6e656c3a3a736574746c656d656e745f763200000000000000000000000000000000000000000000000000000000000000ab00000000000003e800000000000007d0000000000000002b00000000499602d20102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
   );
   assert.throws(() =>
     serializeSettlementWithRoot({
@@ -73,7 +73,7 @@ test("serializeSettlementWithRoot matches Move golden (settlement_v2)", () => {
       finalNonce: 0n,
       timestamp: 0n,
       transcriptRoot: new Uint8Array(31),
-    })
+    }),
   );
 });
 
@@ -113,7 +113,7 @@ test("u64ToBeBytes rejects out-of-range", () => {
 test("addressToBytes32 left-pads to 32 bytes", () => {
   assert.equal(
     toHex(addressToBytes32("0xab")),
-    "00000000000000000000000000000000000000000000000000000000000000ab"
+    "00000000000000000000000000000000000000000000000000000000000000ab",
   );
   assert.equal(addressToBytes32("0x" + "ff".repeat(32)).length, 32);
   assert.throws(() => addressToBytes32("0x" + "ff".repeat(33)));

@@ -134,9 +134,7 @@ export function buildQuantumPokerResultPublicInputs(
   ]);
 }
 
-export class UnavailableQuantumPokerResultProver
-  implements QuantumPokerResultProver
-{
+export class UnavailableQuantumPokerResultProver implements QuantumPokerResultProver {
   readonly circuitName = QUANTUM_POKER_RESULT_CIRCUIT_NAME;
 
   async prove(

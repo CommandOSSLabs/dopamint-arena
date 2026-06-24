@@ -18,7 +18,8 @@ export function reduce(m: SeatModel, e: SeatEvent): SeatModel {
       return e.type === "hover" ? { state: "inviting" } : m;
     case "inviting":
       // unhover and the overlay's "Return to Home" both just dismiss → attract
-      if (e.type === "unhover" || e.type === "goHome") return { state: "attract" };
+      if (e.type === "unhover" || e.type === "goHome")
+        return { state: "attract" };
       if (e.type === "takeOver") return { state: "live" }; // you took the seat
       return m;
     case "live":

@@ -90,7 +90,7 @@ export interface CreateAllowanceParams {
 export async function createAndShareAllowance(
   params: CreateAllowanceParams,
   client?: SuiClient,
-  keypair?: Ed25519Keypair
+  keypair?: Ed25519Keypair,
 ): Promise<CreateAllowanceResult> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -104,7 +104,7 @@ export async function createAndShareAllowance(
   tx.moveCall({
     target: buildTarget(
       MODULES.EXAMPLE_AGENT_ALLOWANCE,
-      "create_and_share_allowance"
+      "create_and_share_allowance",
     ),
     typeArguments: [coinType],
     arguments: [
@@ -112,7 +112,7 @@ export async function createAndShareAllowance(
       tx.pure.option("address", params.delegate ?? null),
       tx.pure.vector(
         "u8",
-        Array.from(params.principalPublicKey ?? EMPTY_BYTES)
+        Array.from(params.principalPublicKey ?? EMPTY_BYTES),
       ),
       tx.pure.u8(params.signatureType ?? SignatureType.ED25519),
       tx.object(params.fundsCoinId),
@@ -148,7 +148,7 @@ export async function claim(
   amount: bigint,
   client?: SuiClient,
   keypair?: Ed25519Keypair,
-  coinType: string = SUI_COIN_TYPE
+  coinType: string = SUI_COIN_TYPE,
 ): Promise<string> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -178,7 +178,7 @@ export async function claim(
 export function signSpendVoucher(
   allowanceId: string,
   authorizedTotal: bigint,
-  principalSecretKey: Uint8Array
+  principalSecretKey: Uint8Array,
 ): Uint8Array {
   const message = serializeSpendAuthorization({ allowanceId, authorizedTotal });
   return sign(message, principalSecretKey);
@@ -196,7 +196,7 @@ export async function authorizeSpend(
   voucherSignature: Uint8Array,
   client?: SuiClient,
   keypair?: Ed25519Keypair,
-  coinType: string = SUI_COIN_TYPE
+  coinType: string = SUI_COIN_TYPE,
 ): Promise<string> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -228,7 +228,7 @@ export async function claimWithVoucher(
   amount: bigint,
   client?: SuiClient,
   keypair?: Ed25519Keypair,
-  coinType: string = SUI_COIN_TYPE
+  coinType: string = SUI_COIN_TYPE,
 ): Promise<string> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -262,7 +262,7 @@ export async function topUp(
   fundsCoinId: string,
   client?: SuiClient,
   keypair?: Ed25519Keypair,
-  coinType: string = SUI_COIN_TYPE
+  coinType: string = SUI_COIN_TYPE,
 ): Promise<string> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -286,7 +286,7 @@ export async function setRate(
   newRatePerSecond: bigint,
   client?: SuiClient,
   keypair?: Ed25519Keypair,
-  coinType: string = SUI_COIN_TYPE
+  coinType: string = SUI_COIN_TYPE,
 ): Promise<string> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -314,7 +314,7 @@ export async function increaseCap(
   newSpendCap: bigint,
   client?: SuiClient,
   keypair?: Ed25519Keypair,
-  coinType: string = SUI_COIN_TYPE
+  coinType: string = SUI_COIN_TYPE,
 ): Promise<string> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -337,7 +337,7 @@ export async function pauseAllowance(
   allowanceId: string,
   client?: SuiClient,
   keypair?: Ed25519Keypair,
-  coinType: string = SUI_COIN_TYPE
+  coinType: string = SUI_COIN_TYPE,
 ): Promise<string> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -360,7 +360,7 @@ export async function resumeAllowance(
   allowanceId: string,
   client?: SuiClient,
   keypair?: Ed25519Keypair,
-  coinType: string = SUI_COIN_TYPE
+  coinType: string = SUI_COIN_TYPE,
 ): Promise<string> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -384,7 +384,7 @@ export async function setDelegate(
   delegate: string | null,
   client?: SuiClient,
   keypair?: Ed25519Keypair,
-  coinType: string = SUI_COIN_TYPE
+  coinType: string = SUI_COIN_TYPE,
 ): Promise<string> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -413,7 +413,7 @@ export async function revokeAllowance(
   allowanceId: string,
   client?: SuiClient,
   keypair?: Ed25519Keypair,
-  coinType: string = SUI_COIN_TYPE
+  coinType: string = SUI_COIN_TYPE,
 ): Promise<string> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -480,7 +480,7 @@ export function computeAvailable(
   s: AccrualState,
   spent: bigint,
   escrowBalance: bigint,
-  nowMs: bigint
+  nowMs: bigint,
 ): bigint {
   if (s.status !== AllowanceStatus.ACTIVE) return 0n;
   const entitled = computeEntitled(s, nowMs);
@@ -519,16 +519,16 @@ export async function exampleAgentAllowanceFlow(): Promise<void> {
 
   console.log("How it works:");
   console.log(
-    "1. Principal escrows funds and sets payee + cap + (rate | voucher key)"
+    "1. Principal escrows funds and sets payee + cap + (rate | voucher key)",
   );
   console.log(
-    "2. Payee or delegate PULLS what is owed — no per-charge co-signature"
+    "2. Payee or delegate PULLS what is owed — no per-charge co-signature",
   );
   console.log(
-    "3. Entitlement = min(spendCap, max(rateAccrual, signedVoucher))"
+    "3. Entitlement = min(spendCap, max(rateAccrual, signedVoucher))",
   );
   console.log(
-    "4. Principal can top up / retune / pause / revoke at any time\n"
+    "4. Principal can top up / retune / pause / revoke at any time\n",
   );
 
   // Off-chain prediction of claimable funds (no chain needed).
@@ -548,8 +548,8 @@ export async function exampleAgentAllowanceFlow(): Promise<void> {
   console.log(
     `- t=2000s: ${computeEntitled(
       state,
-      start + 2_000_000n
-    )} entitled (cap clamps)\n`
+      start + 2_000_000n,
+    )} entitled (cap clamps)\n`,
   );
 
   console.log("Voucher signing (usage-metered, no chain needed):");

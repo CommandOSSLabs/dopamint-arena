@@ -36,7 +36,7 @@ export async function execute(
   client: SuiClient,
   signer: Ed25519Keypair,
   tx: Transaction,
-  opts: ExecOptions = {}
+  opts: ExecOptions = {},
 ): Promise<ExecResult> {
   const res = await client.signAndExecuteTransaction({
     signer,
@@ -53,7 +53,7 @@ export async function execute(
     throw new Error(
       `transaction ${res.digest} failed on-chain: ${
         status.error ?? "unknown Move abort"
-      }`
+      }`,
     );
   }
   if (opts.waitForFinality) {
@@ -98,7 +98,7 @@ export async function createTunnel(
   client: SuiClient,
   funder: Ed25519Keypair,
   p: OpenParams,
-  opts: ExecOptions = {}
+  opts: ExecOptions = {},
 ): Promise<{ tunnelId: string; digest: string }> {
   const tx = new Transaction();
   tb.buildCreateAndShare(tx, {
@@ -120,7 +120,7 @@ export async function depositAs(
   partySigner: Ed25519Keypair,
   tunnelId: string,
   amount: bigint,
-  opts: ExecOptions = {}
+  opts: ExecOptions = {},
 ): Promise<string> {
   const tx = new Transaction();
   tb.buildDepositFromGas(tx, { tunnelId, amount });
@@ -135,7 +135,7 @@ export async function closeCooperative(
   tunnelId: string,
   settlement: CoSignedSettlement,
   opts: ExecOptions = {},
-  coinType?: string
+  coinType?: string,
 ): Promise<string> {
   const tx = new Transaction();
   tb.buildCloseFromSettlement(tx, tunnelId, settlement, coinType);
@@ -154,7 +154,7 @@ export async function sampleClose(
   sampleSize: number,
   opts: ExecOptions = {},
   coinType?: string,
-  signers?: Ed25519Keypair[]
+  signers?: Ed25519Keypair[],
 ): Promise<string[]> {
   const n = Math.min(sampleSize, tunnels.length);
   // With a pool of distinct signers, round-robin them and submit concurrently so the
@@ -172,9 +172,9 @@ export async function sampleClose(
             t.tunnelId,
             t.settlement,
             opts,
-            coinType
-          )
-        )
+            coinType,
+          ),
+        ),
     );
   }
   const digests: string[] = [];
@@ -186,8 +186,8 @@ export async function sampleClose(
         tunnels[i].tunnelId,
         tunnels[i].settlement,
         opts,
-        coinType
-      )
+        coinType,
+      ),
     );
   }
   return digests;
@@ -206,7 +206,7 @@ export function makeRecoveryExecutor(
     partyFor: (tunnelId: string) => Party;
     recipientFor: (tunnelId: string) => string;
     coinType?: string;
-  }
+  },
 ): RecoveryExecutor {
   return async (tunnelId: string, action: Exclude<RecoveryAction, "none">) => {
     const tx = new Transaction();
@@ -218,7 +218,7 @@ export function makeRecoveryExecutor(
         const u = ctx.latestUpdate(tunnelId);
         if (!u) {
           throw new Error(
-            `raise_dispute requires the latest co-signed update for ${tunnelId}, but latestUpdate() returned null`
+            `raise_dispute requires the latest co-signed update for ${tunnelId}, but latestUpdate() returned null`,
           );
         }
         tb.buildRaiseDisputeFromUpdate(
@@ -226,7 +226,7 @@ export function makeRecoveryExecutor(
           tunnelId,
           u,
           ctx.partyFor(tunnelId),
-          ctx.coinType
+          ctx.coinType,
         );
         break;
       }
@@ -236,7 +236,7 @@ export function makeRecoveryExecutor(
         const u = ctx.latestUpdate(tunnelId);
         if (!u) {
           throw new Error(
-            `resolve_dispute requires the latest co-signed update for ${tunnelId}, but latestUpdate() returned null`
+            `resolve_dispute requires the latest co-signed update for ${tunnelId}, but latestUpdate() returned null`,
           );
         }
         tb.buildResolveDispute(tx, tunnelId, u, ctx.coinType);

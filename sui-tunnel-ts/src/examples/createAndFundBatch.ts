@@ -66,7 +66,7 @@ function tunnelFields(obj: unknown): {
 
 async function resolveFunder(
   client: SuiClient,
-  network: string
+  network: string,
 ): Promise<Ed25519Keypair> {
   if (process.env.PRIVATE_KEY) return getKeypairFromEnv("PRIVATE_KEY");
   if (network === "mainnet") {
@@ -129,7 +129,7 @@ function buildSettlement(g: Game): CoSignedSettlementWithRoot {
     g.b.keyPair,
     g.a.address,
     g.b.address,
-    { a: g.aAmount, b: g.bAmount }
+    { a: g.aAmount, b: g.bAmount },
   );
   // One real off-chain transition so the settled split differs from the deposit split.
   const pay = g.aAmount / 2n;
@@ -147,7 +147,7 @@ async function main(): Promise<void> {
     console.error(
       "PACKAGE_ID not set. Publish the package first, then re-run:\n" +
         "  cd sui_tunnel && sui client publish --gas-budget 200000000\n" +
-        "  PACKAGE_ID=0x<pkg> SUI_NETWORK=localnet node --import tsx src/examples/createAndFundBatch.ts"
+        "  PACKAGE_ID=0x<pkg> SUI_NETWORK=localnet node --import tsx src/examples/createAndFundBatch.ts",
     );
     process.exit(1);
   }
@@ -157,7 +157,7 @@ async function main(): Promise<void> {
   const network = getNetwork();
   const client = createSuiClient(network);
   console.log(
-    `create_and_fund batch harness — network=${network}, tunnels=${n}`
+    `create_and_fund batch harness — network=${network}, tunnels=${n}`,
   );
 
   const funder = await resolveFunder(client, network);
@@ -167,12 +167,12 @@ async function main(): Promise<void> {
   const openTx = new Transaction();
   buildOpenAndFundMany(
     openTx,
-    games.map((g) => g.spec)
+    games.map((g) => g.spec),
   );
   const open = await execute(client, funder, openTx, { waitForFinality: true });
   const ids = getCreatedObjectIds(
     open.objectChanges as any[],
-    "::tunnel::Tunnel<"
+    "::tunnel::Tunnel<",
   );
   console.log(`  OPEN  digest=${open.digest}  created ${ids.length} tunnel(s)`);
   if (ids.length !== n) {
@@ -208,7 +208,7 @@ async function main(): Promise<void> {
   }
   console.log(
     `  ACTIVE check: ${n - failures.length}/${n} active` +
-      (failures.length ? ` — ${failures.length} issue(s)` : "")
+      (failures.length ? ` — ${failures.length} issue(s)` : ""),
   );
 
   // ---- 2. PLAY + 3. SETTLE: co-sign each, then close all in one PTB ----
@@ -224,13 +224,13 @@ async function main(): Promise<void> {
       waitForFinality: true,
     });
     console.log(
-      `  SETTLE digest=${settle.digest}  closed ${settleable.length} in one PTB`
+      `  SETTLE digest=${settle.digest}  closed ${settleable.length} in one PTB`,
     );
   } catch (e) {
     // The batch PTB is atomic: one bad close aborts all. Fall back to per-tunnel closes so a
     // single failure can't strand the rest open (don't-leave-them-open teardown).
     console.warn(
-      `  batch settle failed (${(e as Error).message}); closing individually`
+      `  batch settle failed (${(e as Error).message}); closing individually`,
     );
     for (const g of settleable) {
       try {
@@ -246,7 +246,7 @@ async function main(): Promise<void> {
   // ---- verify terminal state ----
   const after = await getObjects(
     client,
-    settleable.map((g) => g.tunnelId!)
+    settleable.map((g) => g.tunnelId!),
   );
   let closed = 0;
   for (const o of after) {
@@ -262,7 +262,7 @@ async function main(): Promise<void> {
     return;
   }
   console.log(
-    `\nOK — opened+funded+activated and settled ${n} tunnels in 2 signed txs.`
+    `\nOK — opened+funded+activated and settled ${n} tunnels in 2 signed txs.`,
   );
 }
 

@@ -122,7 +122,7 @@ export class Simulator {
         b.keyPair,
         a.address,
         b.address,
-        initialBalances
+        initialBalances,
       );
     }
     this.counters.tunnelsOpened = cfg.tunnels;
@@ -130,13 +130,13 @@ export class Simulator {
 
   /** Build an activity generator over all tunnels using this sim's counters + RNG. */
   activityGenerator(
-    signMode: "full" | "sign-only" | "none" = "full"
+    signMode: "full" | "sign-only" | "none" = "full",
   ): ActivityGenerator<unknown, unknown> {
     return new ActivityGenerator(
       this.tunnels,
       this.counters,
       this.rng,
-      signMode
+      signMode,
     );
   }
 }

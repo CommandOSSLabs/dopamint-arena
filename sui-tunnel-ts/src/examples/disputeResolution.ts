@@ -79,7 +79,7 @@ export async function openCase(
   description: string,
   serviceLevel: number,
   client?: SuiClient,
-  keypair?: Ed25519Keypair
+  keypair?: Ed25519Keypair,
 ): Promise<{ caseId: string; digest: string }> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -134,7 +134,7 @@ export async function resolveForRaiser(
   partyBAmount: bigint,
   penalty: bigint,
   client?: SuiClient,
-  keypair?: Ed25519Keypair
+  keypair?: Ed25519Keypair,
 ): Promise<string> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -144,7 +144,7 @@ export async function resolveForRaiser(
   tx.moveCall({
     target: buildTarget(
       MODULES.EXAMPLE_DISPUTE_RESOLUTION,
-      "resolve_for_raiser"
+      "resolve_for_raiser",
     ),
     arguments: [
       tx.object(caseId),
@@ -178,7 +178,7 @@ export async function resolveForRespondent(
   partyBAmount: bigint,
   penalty: bigint,
   client?: SuiClient,
-  keypair?: Ed25519Keypair
+  keypair?: Ed25519Keypair,
 ): Promise<string> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -188,7 +188,7 @@ export async function resolveForRespondent(
   tx.moveCall({
     target: buildTarget(
       MODULES.EXAMPLE_DISPUTE_RESOLUTION,
-      "resolve_for_respondent"
+      "resolve_for_respondent",
     ),
     arguments: [
       tx.object(caseId),
@@ -222,7 +222,7 @@ export async function resolveSplit(
   partyBAmount: bigint,
   penalty: bigint,
   client?: SuiClient,
-  keypair?: Ed25519Keypair
+  keypair?: Ed25519Keypair,
 ): Promise<string> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -259,7 +259,7 @@ export async function autoResolveTimeout(
   caseId: string,
   totalBalance: bigint,
   client?: SuiClient,
-  keypair?: Ed25519Keypair
+  keypair?: Ed25519Keypair,
 ): Promise<string> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -269,7 +269,7 @@ export async function autoResolveTimeout(
   tx.moveCall({
     target: buildTarget(
       MODULES.EXAMPLE_DISPUTE_RESOLUTION,
-      "auto_resolve_timeout"
+      "auto_resolve_timeout",
     ),
     arguments: [
       tx.object(caseId),
@@ -374,7 +374,7 @@ export async function exampleDisputeResolutionFlow(): Promise<void> {
 
     console.log("\n=== Dispute resolution flow complete! ===");
     console.log(
-      "\nNote: Uncomment the actual calls after setting up keypairs."
+      "\nNote: Uncomment the actual calls after setting up keypairs.",
     );
   } catch (error) {
     logError(error, "exampleDisputeResolutionFlow");

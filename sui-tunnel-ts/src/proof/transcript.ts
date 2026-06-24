@@ -103,7 +103,7 @@ export function verifyTranscript(
     partyB: { publicKey: Uint8Array; scheme: number };
     onchainRoot: string;
     lockedTotal?: bigint;
-  }
+  },
 ): TranscriptVerification {
   if (
     params.partyA.scheme !== SignatureScheme.ED25519 ||
@@ -113,7 +113,10 @@ export function verifyTranscript(
   }
 
   const decoded = decodeSettleBody(blob);
-  const norm = { root: toHex(decoded.transcriptRoot), entries: decoded.entries };
+  const norm = {
+    root: toHex(decoded.transcriptRoot),
+    entries: decoded.entries,
+  };
 
   const failures: string[] = [];
   const steps: TranscriptVerification["steps"] = [];

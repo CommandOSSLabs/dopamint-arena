@@ -61,7 +61,7 @@ export function formatUsdc(baseUnits: bigint): string {
 export async function getUsdcCoins(
   client: SuiClient,
   owner: string,
-  network?: SuiNetwork
+  network?: SuiNetwork,
 ): Promise<Array<{ objectId: string; balance: bigint }>> {
   const coins = await client.getCoins({
     owner,
@@ -92,12 +92,12 @@ export async function getUsdcCoins(
 export async function createUsdcAllowance(
   params: Omit<CreateAllowanceParams, "coinType">,
   client?: SuiClient,
-  keypair?: Ed25519Keypair
+  keypair?: Ed25519Keypair,
 ): Promise<CreateAllowanceResult> {
   return createAndShareAllowance(
     { ...params, coinType: getUsdcCoinType() },
     client,
-    keypair
+    keypair,
   );
 }
 
@@ -106,7 +106,7 @@ export async function claimUsdc(
   allowanceId: string,
   amount: bigint,
   client?: SuiClient,
-  keypair?: Ed25519Keypair
+  keypair?: Ed25519Keypair,
 ): Promise<string> {
   return claim(allowanceId, amount, client, keypair, getUsdcCoinType());
 }
@@ -116,7 +116,7 @@ export async function topUpUsdc(
   allowanceId: string,
   fundsCoinId: string,
   client?: SuiClient,
-  keypair?: Ed25519Keypair
+  keypair?: Ed25519Keypair,
 ): Promise<string> {
   return topUp(allowanceId, fundsCoinId, client, keypair, getUsdcCoinType());
 }
@@ -152,12 +152,12 @@ export async function exampleUsdcStablecoinFlow(): Promise<void> {
   };
   console.log("Streaming $0.001/sec, $10 cap (entitlement in USDC):");
   console.log(
-    `- t=1h:   ${formatUsdc(computeEntitled(state, start + 3_600_000n))}`
+    `- t=1h:   ${formatUsdc(computeEntitled(state, start + 3_600_000n))}`,
   );
   console.log(
     `- t=10h:  ${formatUsdc(
-      computeEntitled(state, start + 36_000_000n)
-    )} (cap clamps)\n`
+      computeEntitled(state, start + 36_000_000n),
+    )} (cap clamps)\n`,
   );
 
   console.log("On-chain flow:");

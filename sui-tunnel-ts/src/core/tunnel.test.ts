@@ -23,7 +23,7 @@ function selfPlayPayments(a = 1_000_000n, b = 1_000_000n) {
     kpB,
     ed25519Address(kpA.publicKey),
     ed25519Address(kpB.publicKey),
-    { a, b }
+    { a, b },
   );
 }
 
@@ -51,17 +51,17 @@ test("latest co-signed update verifies independently (settleable on-chain)", () 
     verifyCoSignedUpdate(
       u,
       { publicKey: t.partyA.publicKey, scheme: t.partyA.scheme },
-      { publicKey: t.partyB.publicKey, scheme: t.partyB.scheme }
-    )
+      { publicKey: t.partyB.publicKey, scheme: t.partyB.scheme },
+    ),
   );
 });
 
 test("deterministic replay: same keys + same moves => identical signed bytes", () => {
   const kpA = keyPairFromSecret(
-    Uint8Array.from({ length: 32 }, (_, i) => i + 1)
+    Uint8Array.from({ length: 32 }, (_, i) => i + 1),
   );
   const kpB = keyPairFromSecret(
-    Uint8Array.from({ length: 32 }, (_, i) => i + 33)
+    Uint8Array.from({ length: 32 }, (_, i) => i + 33),
   );
   const moves: PaymentMove[] = [
     { from: "A", amount: 10n },
@@ -76,7 +76,7 @@ test("deterministic replay: same keys + same moves => identical signed bytes", (
       kpB,
       ed25519Address(kpA.publicKey),
       ed25519Address(kpB.publicKey),
-      { a: 100n, b: 100n }
+      { a: 100n, b: 100n },
     );
     for (const m of moves) t.step(m, m.from, { timestamp: 1000n });
     return t.latest!;
@@ -124,11 +124,11 @@ test("REPRO #3: settlement verifies over the message close_cooperative rebuilds 
   });
   assert.ok(
     verify(s.sigA, chainMsg, t.partyA.publicKey),
-    "sigA must verify over the chain-rebuilt settlement message"
+    "sigA must verify over the chain-rebuilt settlement message",
   );
   assert.ok(
     verify(s.sigB, chainMsg, t.partyB.publicKey),
-    "sigB must verify over the chain-rebuilt settlement message"
+    "sigB must verify over the chain-rebuilt settlement message",
   );
 });
 

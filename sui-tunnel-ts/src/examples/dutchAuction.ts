@@ -72,7 +72,7 @@ export async function createAuction(
   endPrice: bigint,
   durationMs: bigint,
   client?: SuiClient,
-  keypair?: Ed25519Keypair
+  keypair?: Ed25519Keypair,
 ): Promise<CreateAuctionResult> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -80,8 +80,8 @@ export async function createAuction(
   if (durationMs < BigInt(MIN_AUCTION_DURATION_MS)) {
     throw new Error(
       `Duration must be at least ${formatDuration(
-        BigInt(MIN_AUCTION_DURATION_MS)
-      )}`
+        BigInt(MIN_AUCTION_DURATION_MS),
+      )}`,
     );
   }
 
@@ -116,7 +116,7 @@ export async function createAuction(
     typeArguments: [
       `${buildTarget(
         MODULES.EXAMPLE_DUTCH_AUCTION,
-        "DutchAuction"
+        "DutchAuction",
       )}<${SUI_COIN_TYPE}>`,
     ],
     arguments: [auction],
@@ -156,7 +156,7 @@ export async function buy(
   auctionId: string,
   paymentCoinId: string,
   client?: SuiClient,
-  keypair?: Ed25519Keypair
+  keypair?: Ed25519Keypair,
 ): Promise<{ digest: string; price: bigint }> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -177,7 +177,7 @@ export async function buy(
 
   tx.transferObjects(
     [change],
-    tx.pure.address(signer.getPublicKey().toSuiAddress())
+    tx.pure.address(signer.getPublicKey().toSuiAddress()),
   );
 
   const result = await signAndExecute(suiClient, tx, signer);
@@ -211,7 +211,7 @@ export async function buyExact(
   auctionId: string,
   paymentCoinId: string,
   client?: SuiClient,
-  keypair?: Ed25519Keypair
+  keypair?: Ed25519Keypair,
 ): Promise<{ digest: string; changeCoinId: string | null }> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -232,7 +232,7 @@ export async function buyExact(
 
   tx.transferObjects(
     [change],
-    tx.pure.address(signer.getPublicKey().toSuiAddress())
+    tx.pure.address(signer.getPublicKey().toSuiAddress()),
   );
 
   const result = await signAndExecute(suiClient, tx, signer);
@@ -263,7 +263,7 @@ export async function buyExact(
 export async function withdrawPayment(
   auctionId: string,
   client?: SuiClient,
-  keypair?: Ed25519Keypair
+  keypair?: Ed25519Keypair,
 ): Promise<{ digest: string; coinId: string | null }> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -280,7 +280,7 @@ export async function withdrawPayment(
 
   tx.transferObjects(
     [coin],
-    tx.pure.address(signer.getPublicKey().toSuiAddress())
+    tx.pure.address(signer.getPublicKey().toSuiAddress()),
   );
 
   const result = await signAndExecute(suiClient, tx, signer);
@@ -311,7 +311,7 @@ export async function withdrawPayment(
 export async function markExpired(
   auctionId: string,
   client?: SuiClient,
-  keypair?: Ed25519Keypair
+  keypair?: Ed25519Keypair,
 ): Promise<string> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -349,7 +349,7 @@ export async function markExpired(
 export async function cancelAuction(
   auctionId: string,
   client?: SuiClient,
-  keypair?: Ed25519Keypair
+  keypair?: Ed25519Keypair,
 ): Promise<string> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -382,7 +382,7 @@ export function calculatePrice(
   endPrice: bigint,
   startTime: bigint,
   endTime: bigint,
-  currentTime: bigint
+  currentTime: bigint,
 ): bigint {
   if (currentTime <= startTime) return startPrice;
   if (currentTime >= endTime) return endPrice;
@@ -434,7 +434,7 @@ export function isPurchasable(status: number, endTime: bigint): boolean {
 export function priceDropRate(
   startPrice: bigint,
   endPrice: bigint,
-  durationMs: bigint
+  durationMs: bigint,
 ): bigint {
   return (startPrice - endPrice) / durationMs;
 }
@@ -506,7 +506,7 @@ await withdrawPayment(auction.auctionId);
         endPrice,
         startTime,
         endTime,
-        ms
+        ms,
       );
       const sui = Number(price) / 1_000_000_000;
       console.log(`- ${minutes} min: ${sui.toFixed(2)} SUI`);

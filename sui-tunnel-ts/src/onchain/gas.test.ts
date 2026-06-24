@@ -7,7 +7,7 @@ test("planGasShards splits a budget into amounts summing to the total", () => {
   assert.equal(shards.length, 7);
   assert.equal(
     shards.reduce((a, b) => a + b, 0n),
-    1000n
+    1000n,
   );
   // near-equal: max - min <= 1
   const max = shards.reduce((a, b) => (a > b ? a : b));

@@ -17,7 +17,7 @@
  *  - ed25519/BLS verify the RAW message (no pre-hash). Only `state_hash` is itself a digest.
  */
 
-import { concatBytes } from "./bytes";
+import { concatBytes, toHex } from "./bytes";
 
 const enc = new TextEncoder();
 
@@ -31,7 +31,7 @@ export const DOMAIN_SETTLEMENT_V2 = enc.encode("sui_tunnel::settlement_v2");
 export const DOMAIN_HTLC_LOCK = enc.encode("sui_tunnel::htlc_lock");
 /** `b"sui_tunnel::spend_authorization"` — 31 bytes (agent allowance voucher). */
 export const DOMAIN_SPEND_AUTHORIZATION = enc.encode(
-  "sui_tunnel::spend_authorization"
+  "sui_tunnel::spend_authorization",
 );
 
 const U64_MAX = (1n << 64n) - 1n;
@@ -47,6 +47,14 @@ export function u64ToBeBytes(value: bigint | number): Uint8Array {
   const out = new Uint8Array(8);
   new DataView(out.buffer).setBigUint64(0, asU64(value), false);
   return out;
+}
+
+/** Read the big-endian u64 at `offset`. Inverse of {@link u64ToBeBytes}. */
+export function u64FromBeBytes(bytes: Uint8Array, offset = 0): bigint {
+  if (offset < 0 || offset + 8 > bytes.length)
+    throw new RangeError(`u64 read out of range at offset ${offset}`);
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  return dv.getBigUint64(offset, false);
 }
 
 /**
@@ -92,6 +100,40 @@ export function serializeStateUpdate(u: StateUpdate): Uint8Array {
   ]);
 }
 
+/** Fixed serialized length: domain(24) + id(32) + state_hash(32) + 4×u64(32). */
+const STATE_UPDATE_LEN = DOMAIN_STATE_UPDATE.length + 32 + 32 + 4 * 8;
+
+/**
+ * Parse a serialized state update, the inverse of {@link serializeStateUpdate}.
+ * Assumes the canonical 32-byte state hash and validates the domain prefix.
+ */
+export function parseStateUpdate(message: Uint8Array): StateUpdate {
+  if (message.length !== STATE_UPDATE_LEN)
+    throw new Error(
+      `state update must be ${STATE_UPDATE_LEN} bytes, got ${message.length}`,
+    );
+  for (let i = 0; i < DOMAIN_STATE_UPDATE.length; i++)
+    if (message[i] !== DOMAIN_STATE_UPDATE[i])
+      throw new Error("state update domain prefix mismatch");
+  let o = DOMAIN_STATE_UPDATE.length;
+  const tunnelId = "0x" + toHex(message.slice(o, o + 32));
+  o += 32;
+  const stateHash = message.slice(o, o + 32);
+  o += 32;
+  const nonce = u64FromBeBytes(message, o);
+  const timestamp = u64FromBeBytes(message, o + 8);
+  const partyABalance = u64FromBeBytes(message, o + 16);
+  const partyBBalance = u64FromBeBytes(message, o + 24);
+  return {
+    tunnelId,
+    stateHash,
+    nonce,
+    timestamp,
+    partyABalance,
+    partyBBalance,
+  };
+}
+
 // ============================================
 // SETTLEMENT
 // ============================================
@@ -125,7 +167,7 @@ export interface SettlementWithRoot extends Settlement {
 export function serializeSettlementWithRoot(s: SettlementWithRoot): Uint8Array {
   if (s.transcriptRoot.length !== 32) {
     throw new Error(
-      `transcript root must be 32 bytes, got ${s.transcriptRoot.length}`
+      `transcript root must be 32 bytes, got ${s.transcriptRoot.length}`,
     );
   }
   return concatBytes([
@@ -226,11 +268,11 @@ export class StateUpdateWriter {
     nonce: bigint,
     timestamp: bigint,
     partyABalance: bigint,
-    partyBBalance: bigint
+    partyBBalance: bigint,
   ): Uint8Array {
     if (stateHash.length !== this.stateHashLen) {
       throw new Error(
-        `stateHash length ${stateHash.length} != configured ${this.stateHashLen}`
+        `stateHash length ${stateHash.length} != configured ${this.stateHashLen}`,
       );
     }
     let o = this.tailOffset;

@@ -155,7 +155,10 @@ export interface CardProver {
 /** Placeholder prover used until a trusted setup is wired in; throws with guidance. */
 export class UnavailableProver implements CardProver {
   readonly circuitName = "card_in_deck";
-  async prove(_stmt: CardStatement, _witness: CardWitness): Promise<Uint8Array> {
+  async prove(
+    _stmt: CardStatement,
+    _witness: CardWitness,
+  ): Promise<Uint8Array> {
     throw new Error(
       "card_in_deck Groth16 proving requires a compiled circuit + trusted setup " +
         "(circom/snarkjs). Plug in a real CardProver; see CARD_IN_DECK_CIRCOM and " +

@@ -41,9 +41,10 @@ export interface MultiGameCrossState {
 /** A move is a normal inner move; the first one after a game ends starts the next. */
 export type MultiGameCrossMove = CrossMove;
 
-export class MultiGameCrossProtocol
-  implements Protocol<MultiGameCrossState, MultiGameCrossMove>
-{
+export class MultiGameCrossProtocol implements Protocol<
+  MultiGameCrossState,
+  MultiGameCrossMove
+> {
   readonly name = "cross.multi.v1";
 
   private readonly domain = protocolDomain("cross.multi.v1");
@@ -56,7 +57,7 @@ export class MultiGameCrossProtocol
    */
   constructor(
     private readonly tunnelId: string,
-    private readonly stakePerGame: bigint = MIN_STAKE
+    private readonly stakePerGame: bigint = MIN_STAKE,
   ) {}
 
   /** Inner race ctx: symbolic per-game balances; per-game seed from the synthetic id. */
@@ -84,7 +85,7 @@ export class MultiGameCrossProtocol
   applyMove(
     state: MultiGameCrossState,
     move: MultiGameCrossMove,
-    by: Party
+    by: Party,
   ): MultiGameCrossState {
     // Mid-race: delegate to the inner protocol (throws on an illegal move). If this move
     // DECIDES the race, swap the real per-game stake loser→winner on the carried balances.
@@ -94,7 +95,7 @@ export class MultiGameCrossProtocol
         const swapped = this.swap(
           state.balanceA,
           state.balanceB,
-          nextInner.winner
+          nextInner.winner,
         );
         return {
           inner: nextInner,
@@ -125,7 +126,7 @@ export class MultiGameCrossProtocol
   private swap(
     a: bigint,
     b: bigint,
-    winner: CrossState["winner"]
+    winner: CrossState["winner"],
   ): { a: bigint; b: bigint } {
     if (winner === "A")
       return { a: a + this.stakePerGame, b: b - this.stakePerGame };
@@ -158,7 +159,7 @@ export class MultiGameCrossProtocol
   randomMove(
     state: MultiGameCrossState,
     by: Party,
-    rng: () => number
+    rng: () => number,
   ): MultiGameCrossMove | null {
     // Mid-race defer to the inner bot. Between games return null — the session decides
     // whether to rematch (a kickoff move) or settle; the simulator never auto-rematches.

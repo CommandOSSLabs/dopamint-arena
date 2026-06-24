@@ -8,11 +8,7 @@ import {
   type SignExec,
 } from "./tunnelTx";
 import { withSponsorFallback } from "./sponsor";
-import {
-  MTPS_COIN_TYPE,
-  isMtpsAddressBalance,
-  isMtpsConfigured,
-} from "./mtps";
+import { MTPS_COIN_TYPE, isMtpsAddressBalance, isMtpsConfigured } from "./mtps";
 
 type SharedReads = Parameters<typeof openAndFundSharedTunnel>[0]["reads"];
 type SharedParty = Parameters<typeof openAndFundSharedTunnel>[0]["partyA"];

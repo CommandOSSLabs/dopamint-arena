@@ -45,7 +45,7 @@ export class ActivityGenerator<S, M> {
     private readonly tunnels: OffchainTunnel<S, M>[],
     private readonly counters: Counters,
     private readonly rng: Rng,
-    private readonly signMode: SignMode = "full"
+    private readonly signMode: SignMode = "full",
   ) {
     this.sigsPerStep = signMode === "none" ? 0 : 2;
     this.verPerStep = signMode === "full" ? 2 : 0;

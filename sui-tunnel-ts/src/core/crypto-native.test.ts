@@ -60,7 +60,7 @@ test("native-backed tunnel produces updates that verify via noble (on-chain path
     ed25519Address(a.publicKey),
     ed25519Address(b.publicKey),
     { a: 1000n, b: 1000n },
-    nativeBackend
+    nativeBackend,
   );
   t.step({ from: "A", amount: 10n }, "A");
   const u = t.latest!;
@@ -68,7 +68,7 @@ test("native-backed tunnel produces updates that verify via noble (on-chain path
     verifyCoSignedUpdate(
       u,
       { publicKey: t.partyA.publicKey, scheme: t.partyA.scheme },
-      { publicKey: t.partyB.publicKey, scheme: t.partyB.scheme }
-    )
+      { publicKey: t.partyB.publicKey, scheme: t.partyB.scheme },
+    ),
   );
 });

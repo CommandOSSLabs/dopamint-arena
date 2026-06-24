@@ -27,7 +27,7 @@ export const BEHAVIOR_NAMES: BehaviorName[] = [
 
 /** Construct a fresh protocol instance for a behavior. */
 export function createBehaviorProtocol(
-  name: BehaviorName
+  name: BehaviorName,
 ): Protocol<unknown, unknown> {
   switch (name) {
     case "payment":

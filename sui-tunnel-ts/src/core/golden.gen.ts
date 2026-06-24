@@ -87,7 +87,7 @@ const publicInputs = buildPublicInputs({ deckRoot, position: 5, card: 42 });
 console.log(
   "ZK_PUBLIC_IN   ",
   toHex(publicInputs),
-  `(${publicInputs.length} B)`
+  `(${publicInputs.length} B)`,
 );
 
 // Root-anchored settlement (transcript_root = 0x01..0x20).

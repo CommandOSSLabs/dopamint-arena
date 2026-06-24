@@ -63,7 +63,21 @@ export function nativeBackendSupported(): boolean {
   return cachedSupported;
 }
 
-/** The fastest backend available here: native in Node, @noble elsewhere. */
+let installedDefault: CryptoBackend | undefined;
+
+/**
+ * Override the process-wide default backend. Browsers install a WASM ed25519
+ * backend at boot so synchronous self-play runs at native speed; Node leaves this
+ * unset and keeps the OpenSSL picker below.
+ */
+export function setDefaultBackend(backend: CryptoBackend): void {
+  installedDefault = backend;
+}
+
+/** The installed override if any, else the fastest available: native in Node, @noble elsewhere. */
 export function defaultBackend(): CryptoBackend {
-  return nativeBackendSupported() ? nativeBackend : nobleBackend;
+  return (
+    installedDefault ??
+    (nativeBackendSupported() ? nativeBackend : nobleBackend)
+  );
 }

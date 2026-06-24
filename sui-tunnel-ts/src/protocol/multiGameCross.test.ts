@@ -24,7 +24,7 @@ function playOneGame(
   proto: MultiGameCrossProtocol,
   start: MultiGameCrossState,
   rng: () => number,
-  total: bigint
+  total: bigint,
 ): MultiGameCrossState {
   let state = start;
   let guard = 0;
@@ -59,11 +59,11 @@ test("plays many games on one tunnel, conserving balances every step", () => {
   }
   assert.ok(
     games >= 1,
-    "played and rematched at least once (small stake, large balance)"
+    "played and rematched at least once (small stake, large balance)",
   );
   assert.ok(
     conserved(state, total),
-    "net result still sums to the locked total"
+    "net result still sums to the locked total",
   );
 });
 
@@ -79,17 +79,17 @@ test("a decided game swaps EXACTLY the per-game stake; the rest stays staked", (
   if (w === "A")
     assert.deepEqual(
       { a: state.balanceA, b: state.balanceB },
-      { a: 1100n, b: 900n }
+      { a: 1100n, b: 900n },
     );
   else if (w === "B")
     assert.deepEqual(
       { a: state.balanceA, b: state.balanceB },
-      { a: 900n, b: 1100n }
+      { a: 900n, b: 1100n },
     );
   else
     assert.deepEqual(
       { a: state.balanceA, b: state.balanceB },
-      { a: 1000n, b: 1000n }
+      { a: 1000n, b: 1000n },
     ); // push
 });
 
@@ -105,14 +105,14 @@ test("rematch re-seeds the inner game to a DIFFERENT board", () => {
   assert.equal(
     proto.isTerminal(state),
     false,
-    "small stake vs large balance — fundable"
+    "small stake vs large balance — fundable",
   );
   state = proto.applyMove(state, { dirA: undefined }, "A");
   assert.equal(state.gamesPlayed, 1, "gamesPlayed bumped on the rematch");
   assert.notEqual(
     state.inner.seed,
     seedG1,
-    "game 2 uses a different per-game seed"
+    "game 2 uses a different per-game seed",
   );
 });
 
@@ -133,7 +133,7 @@ test("a finished game is not terminal while both sides can fund the next", () =>
   assert.equal(
     proto.isTerminal(state),
     false,
-    "session continues — both can fund"
+    "session continues — both can fund",
   );
 });
 
@@ -162,7 +162,7 @@ test("session IS terminal once a side cannot fund the next stake", () => {
   assert.equal(
     proto.isTerminal(funded),
     false,
-    "both can still fund the next game"
+    "both can still fund the next game",
   );
 });
 

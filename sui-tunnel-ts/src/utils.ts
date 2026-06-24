@@ -31,7 +31,7 @@ export function createSuiClient(network?: SuiNetwork): SuiClient {
  * Get keypair from environment variable
  */
 export function getKeypairFromEnv(
-  envVar: string = "PRIVATE_KEY"
+  envVar: string = "PRIVATE_KEY",
 ): Ed25519Keypair {
   const privateKey = process.env[envVar];
   if (!privateKey) {
@@ -67,7 +67,7 @@ export { computeCommitment } from "./core/commitment";
  */
 export function computeRPSCommitment(
   move: number,
-  salt: Uint8Array
+  salt: Uint8Array,
 ): Uint8Array {
   const data = new Uint8Array(1 + salt.length);
   data[0] = move;
@@ -147,7 +147,7 @@ export function addressToBytes(address: string): Uint8Array {
 export async function signAndExecute(
   client: SuiClient,
   tx: Transaction,
-  keypair: Ed25519Keypair
+  keypair: Ed25519Keypair,
 ): Promise<{ digest: string; effects: any; objectChanges: any; events: any }> {
   const result = await client.signAndExecuteTransaction({
     signer: keypair,
@@ -177,7 +177,7 @@ export async function signAndExecute(
  */
 export function getCreatedObjectId(
   objectChanges: any[],
-  objectType?: string
+  objectType?: string,
 ): string | null {
   if (!objectChanges) return null;
 
@@ -196,7 +196,7 @@ export function getCreatedObjectId(
  */
 export function getCreatedObjectIds(
   objectChanges: any[],
-  objectType?: string
+  objectType?: string,
 ): string[] {
   if (!objectChanges) return [];
 
@@ -218,7 +218,7 @@ export function getCreatedObjectIds(
  */
 export async function getSuiCoins(
   client: SuiClient,
-  address: string
+  address: string,
 ): Promise<Array<{ objectId: string; balance: bigint }>> {
   const coins = await client.getCoins({
     owner: address,
@@ -237,7 +237,7 @@ export async function getSuiCoins(
 export async function getCoinWithBalance(
   client: SuiClient,
   address: string,
-  minBalance: bigint
+  minBalance: bigint,
 ): Promise<string | null> {
   const coins = await getSuiCoins(client, address);
 
@@ -255,7 +255,7 @@ export async function getCoinWithBalance(
 export function splitCoin(
   tx: Transaction,
   coinId: string,
-  amount: bigint
+  amount: bigint,
 ): TxResult {
   return tx.splitCoins(tx.object(coinId), [tx.pure.u64(amount)]);
 }
@@ -316,7 +316,7 @@ export function formatDuration(ms: bigint): string {
  */
 export async function getObject(
   client: SuiClient,
-  objectId: string
+  objectId: string,
 ): Promise<any> {
   const result = await client.getObject({
     id: objectId,
@@ -339,7 +339,7 @@ export async function getObject(
  */
 export async function getObjects(
   client: SuiClient,
-  objectIds: string[]
+  objectIds: string[],
 ): Promise<any[]> {
   const results = await client.multiGetObjects({
     ids: objectIds,
@@ -353,7 +353,7 @@ export async function getObjects(
   return results.map((result, index) => {
     if (result.error) {
       throw new Error(
-        `Failed to fetch object ${objectIds[index]}: ${result.error.code}`
+        `Failed to fetch object ${objectIds[index]}: ${result.error.code}`,
       );
     }
     return result.data;
@@ -399,7 +399,7 @@ export function normalizeAddress(address: string): string {
  */
 export function logTransactionResult(
   result: { digest: string; effects?: any; objectChanges?: any },
-  label: string = "Transaction"
+  label: string = "Transaction",
 ): void {
   console.log(`\n${label} Result:`);
   console.log(`  Digest: ${result.digest}`);
@@ -410,7 +410,7 @@ export function logTransactionResult(
 
   if (result.objectChanges) {
     const created = result.objectChanges.filter(
-      (c: any) => c.type === "created"
+      (c: any) => c.type === "created",
     );
     if (created.length > 0) {
       console.log(`  Created Objects:`);
@@ -430,7 +430,7 @@ export function logError(error: unknown, context: string): void {
     console.error(`  Message: ${error.message}`);
     if (error.stack) {
       console.error(
-        `  Stack: ${error.stack.split("\n").slice(1, 4).join("\n")}`
+        `  Stack: ${error.stack.split("\n").slice(1, 4).join("\n")}`,
       );
     }
   } else {

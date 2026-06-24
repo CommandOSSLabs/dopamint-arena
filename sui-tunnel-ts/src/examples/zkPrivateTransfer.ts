@@ -61,7 +61,7 @@ export const TransferStatus = {
  */
 export async function setupRegistry(
   client?: SuiClient,
-  keypair?: Ed25519Keypair
+  keypair?: Ed25519Keypair,
 ): Promise<{ registryId: string; digest: string }> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -79,7 +79,7 @@ export async function setupRegistry(
   const result = await signAndExecute(suiClient, tx, signer);
   const registryId = getCreatedObjectId(
     result.objectChanges,
-    "CircuitRegistry"
+    "CircuitRegistry",
   );
 
   if (!registryId) {
@@ -107,7 +107,7 @@ export async function setupRegistry(
 export function buildTransferInputs(
   sender: string,
   receiver: string,
-  total: bigint
+  total: bigint,
 ): Uint8Array {
   // Mirror the Move logic: address_to_scalar + u64_to_scalar + concat
   const senderBytes = addressToScalar(sender);
@@ -131,7 +131,7 @@ export function buildTransferInputs(
  */
 export function buildRangeProofInputs(
   minValue: bigint,
-  maxValue: bigint
+  maxValue: bigint,
 ): Uint8Array {
   if (minValue > maxValue) {
     throw new Error("minValue must be <= maxValue");
@@ -166,7 +166,7 @@ export function buildOwnershipProofInputs(addr: string): Uint8Array {
  */
 export function commitAmount(
   amount: bigint,
-  blindingFactor: Uint8Array
+  blindingFactor: Uint8Array,
 ): Uint8Array {
   const amountScalar = u64ToScalar(amount);
   const combined = new Uint8Array(amountScalar.length + blindingFactor.length);
@@ -196,7 +196,7 @@ export async function submitTransfer(
   publicInputs: Uint8Array,
   proofBytes: Uint8Array,
   client?: SuiClient,
-  keypair?: Ed25519Keypair
+  keypair?: Ed25519Keypair,
 ): Promise<{ transferId: string; digest: string }> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -221,7 +221,7 @@ export async function submitTransfer(
   const result = await signAndExecute(suiClient, tx, signer);
   const transferId = getCreatedObjectId(
     result.objectChanges,
-    "PrivateTransfer"
+    "PrivateTransfer",
   );
 
   if (!transferId) {
@@ -246,7 +246,7 @@ export async function verifyTransfer(
   transferId: string,
   registryId: string,
   client?: SuiClient,
-  keypair?: Ed25519Keypair
+  keypair?: Ed25519Keypair,
 ): Promise<string> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -279,7 +279,7 @@ export async function verifyTransfer(
 export async function logVerification(
   transferId: string,
   client?: SuiClient,
-  keypair?: Ed25519Keypair
+  keypair?: Ed25519Keypair,
 ): Promise<{ logId: string; digest: string }> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -290,7 +290,7 @@ export async function logVerification(
   const log = tx.moveCall({
     target: buildTarget(
       MODULES.EXAMPLE_ZK_PRIVATE_TRANSFER,
-      "log_verification"
+      "log_verification",
     ),
     arguments: [tx.object(transferId), tx.object(SUI_CLOCK_OBJECT_ID)],
   });
@@ -422,7 +422,7 @@ export async function exampleZkPrivateTransferFlow(): Promise<void> {
 
     console.log("\n=== ZK private transfer flow complete! ===");
     console.log(
-      "\nNote: Uncomment the actual calls after setting up keypairs and proof data."
+      "\nNote: Uncomment the actual calls after setting up keypairs and proof data.",
     );
   } catch (error) {
     logError(error, "exampleZkPrivateTransferFlow");

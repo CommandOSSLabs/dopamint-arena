@@ -21,7 +21,7 @@ import { encodeSettleBody } from "./settleBinary";
 
 const kpA = keyPairFromSecret(Uint8Array.from({ length: 32 }, (_, i) => i + 1));
 const kpB = keyPairFromSecret(
-  Uint8Array.from({ length: 32 }, (_, i) => i + 33)
+  Uint8Array.from({ length: 32 }, (_, i) => i + 33),
 );
 const moves: PaymentMove[] = [
   { from: "A", amount: 10n },
@@ -37,7 +37,7 @@ function buildTranscript(): Transcript {
     kpB,
     ed25519Address(kpA.publicKey),
     ed25519Address(kpB.publicKey),
-    { a: 100n, b: 100n }
+    { a: 100n, b: 100n },
   );
   const tr = new Transcript(t.tunnelId);
   t.onUpdate = (u) => tr.append(u);
@@ -58,7 +58,7 @@ test("transcript accumulates updates and yields a 32-byte root", () => {
 test("transcript root is deterministic and reproducible (replay)", () => {
   assert.equal(
     toHex(buildTranscript().root()),
-    toHex(buildTranscript().root())
+    toHex(buildTranscript().root()),
   );
 });
 
@@ -80,10 +80,10 @@ test("toRecord captures the full transcript + root + count", () => {
 // ============================================
 
 const VKP_A = keyPairFromSecret(
-  Uint8Array.from({ length: 32 }, (_, i) => i + 1)
+  Uint8Array.from({ length: 32 }, (_, i) => i + 1),
 );
 const VKP_B = keyPairFromSecret(
-  Uint8Array.from({ length: 32 }, (_, i) => i + 33)
+  Uint8Array.from({ length: 32 }, (_, i) => i + 33),
 );
 const VTID = "0x" + "55".repeat(32);
 const VPARTIES = {
@@ -114,7 +114,7 @@ function vEntry(nonce: bigint, a: bigint, b: bigint) {
 // would hold); pass `root` to test a deliberate mismatch.
 function vBlob(
   entries: TranscriptEntry[],
-  opts?: { root?: Uint8Array }
+  opts?: { root?: Uint8Array },
 ): Uint8Array {
   const root = opts?.root ?? transcriptRoot(entries.map(transcriptLeaf));
   return encodeSettleBody({
@@ -210,7 +210,7 @@ test("verifyTranscript: a real self-play transcript verifies end-to-end", () => 
     VKP_B,
     ed25519Address(VKP_A.publicKey),
     ed25519Address(VKP_B.publicKey),
-    { a: 100n, b: 100n }
+    { a: 100n, b: 100n },
   );
   const tr = new Transcript(t.tunnelId);
   t.onUpdate = (u) => tr.append(u);

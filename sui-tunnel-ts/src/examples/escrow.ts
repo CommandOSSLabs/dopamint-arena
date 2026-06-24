@@ -68,7 +68,7 @@ export async function createEscrow(
   paymentCoinId: string,
   disputeWindowMs: bigint = BigInt(DEFAULT_DISPUTE_WINDOW_MS),
   client?: SuiClient,
-  keypair?: Ed25519Keypair
+  keypair?: Ed25519Keypair,
 ): Promise<CreateEscrowResult> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -92,7 +92,7 @@ export async function createEscrow(
   // Transfer the escrow to sender (or you could share it)
   tx.transferObjects(
     [escrow],
-    tx.pure.address(signer.getPublicKey().toSuiAddress())
+    tx.pure.address(signer.getPublicKey().toSuiAddress()),
   );
 
   const result = await signAndExecute(suiClient, tx, signer);
@@ -127,7 +127,7 @@ export async function createEscrow(
 export async function markDelivered(
   escrowId: string,
   client?: SuiClient,
-  keypair?: Ed25519Keypair
+  keypair?: Ed25519Keypair,
 ): Promise<string> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -165,7 +165,7 @@ export async function markDelivered(
 export async function confirmAndRelease(
   escrowId: string,
   client?: SuiClient,
-  keypair?: Ed25519Keypair
+  keypair?: Ed25519Keypair,
 ): Promise<{ digest: string; coinId: string | null }> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -184,7 +184,7 @@ export async function confirmAndRelease(
   // In practice, you'd transfer to escrow.seller
   tx.transferObjects(
     [coin],
-    tx.pure.address(signer.getPublicKey().toSuiAddress())
+    tx.pure.address(signer.getPublicKey().toSuiAddress()),
   );
 
   const result = await signAndExecute(suiClient, tx, signer);
@@ -216,7 +216,7 @@ export async function raiseDispute(
   escrowId: string,
   reason: string,
   client?: SuiClient,
-  keypair?: Ed25519Keypair
+  keypair?: Ed25519Keypair,
 ): Promise<string> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -259,7 +259,7 @@ export async function raiseDispute(
 export async function autoRelease(
   escrowId: string,
   client?: SuiClient,
-  keypair?: Ed25519Keypair
+  keypair?: Ed25519Keypair,
 ): Promise<{ digest: string; coinId: string | null }> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -276,7 +276,7 @@ export async function autoRelease(
 
   tx.transferObjects(
     [coin],
-    tx.pure.address(signer.getPublicKey().toSuiAddress())
+    tx.pure.address(signer.getPublicKey().toSuiAddress()),
   );
 
   const result = await signAndExecute(suiClient, tx, signer);
@@ -307,7 +307,7 @@ export async function autoRelease(
 export async function refundBuyer(
   escrowId: string,
   client?: SuiClient,
-  keypair?: Ed25519Keypair
+  keypair?: Ed25519Keypair,
 ): Promise<{ digest: string; coinId: string | null }> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -324,7 +324,7 @@ export async function refundBuyer(
 
   tx.transferObjects(
     [coin],
-    tx.pure.address(signer.getPublicKey().toSuiAddress())
+    tx.pure.address(signer.getPublicKey().toSuiAddress()),
   );
 
   const result = await signAndExecute(suiClient, tx, signer);
@@ -355,7 +355,7 @@ export async function refundBuyer(
 export async function cancelEscrow(
   escrowId: string,
   client?: SuiClient,
-  keypair?: Ed25519Keypair
+  keypair?: Ed25519Keypair,
 ): Promise<{ digest: string; coinId: string | null }> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -372,7 +372,7 @@ export async function cancelEscrow(
 
   tx.transferObjects(
     [coin],
-    tx.pure.address(signer.getPublicKey().toSuiAddress())
+    tx.pure.address(signer.getPublicKey().toSuiAddress()),
   );
 
   const result = await signAndExecute(suiClient, tx, signer);
@@ -460,7 +460,7 @@ export async function exampleEscrowFlow(): Promise<void> {
 
     console.log("=== Escrow flow complete! ===");
     console.log(
-      "\nNote: Uncomment the actual calls after setting up keypairs and coin IDs."
+      "\nNote: Uncomment the actual calls after setting up keypairs and coin IDs.",
     );
   } catch (error) {
     logError(error, "exampleEscrowFlow");

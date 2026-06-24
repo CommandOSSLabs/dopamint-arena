@@ -84,7 +84,7 @@ export async function runCluster(cfg: ClusterConfig): Promise<ClusterResult> {
     progressTimer = setInterval(() => {
       cfg.onProgress!(
         rateReport(mergeCounters(perShard), Date.now() - start),
-        perShard
+        perShard,
       );
     }, cfg.progressEveryMs ?? 500);
   }

@@ -76,7 +76,7 @@ export async function createSwapLock(
   secretHash: Uint8Array,
   lockDurationMs: bigint,
   client?: SuiClient,
-  keypair?: Ed25519Keypair
+  keypair?: Ed25519Keypair,
 ): Promise<CreateSwapResult> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -84,8 +84,8 @@ export async function createSwapLock(
   if (lockDurationMs < BigInt(MIN_LOCK_TIME_MS)) {
     throw new Error(
       `Lock duration must be at least ${formatDuration(
-        BigInt(MIN_LOCK_TIME_MS)
-      )}`
+        BigInt(MIN_LOCK_TIME_MS),
+      )}`,
     );
   }
 
@@ -111,7 +111,7 @@ export async function createSwapLock(
     typeArguments: [
       `${buildTarget(
         MODULES.EXAMPLE_ATOMIC_SWAP,
-        "SwapLock"
+        "SwapLock",
       )}<${SUI_COIN_TYPE}>`,
     ],
     arguments: [swap],
@@ -155,7 +155,7 @@ export async function createMatchingSwap(
   initiatorSwapId: string,
   paymentCoinId: string,
   client?: SuiClient,
-  keypair?: Ed25519Keypair
+  keypair?: Ed25519Keypair,
 ): Promise<CreateSwapResult> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -180,7 +180,7 @@ export async function createMatchingSwap(
     typeArguments: [
       `${buildTarget(
         MODULES.EXAMPLE_ATOMIC_SWAP,
-        "SwapLock"
+        "SwapLock",
       )}<${SUI_COIN_TYPE}>`,
     ],
     arguments: [swap],
@@ -220,7 +220,7 @@ export async function claimSwap(
   swapId: string,
   secret: Uint8Array,
   client?: SuiClient,
-  keypair?: Ed25519Keypair
+  keypair?: Ed25519Keypair,
 ): Promise<{ digest: string; coinId: string | null; receipt: any }> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -241,7 +241,7 @@ export async function claimSwap(
 
   tx.transferObjects(
     [coin],
-    tx.pure.address(signer.getPublicKey().toSuiAddress())
+    tx.pure.address(signer.getPublicKey().toSuiAddress()),
   );
 
   const result = await signAndExecute(suiClient, tx, signer);
@@ -269,7 +269,7 @@ export async function claimWithReceipt(
   swapId: string,
   receipt: { secret: Uint8Array },
   client?: SuiClient,
-  keypair?: Ed25519Keypair
+  keypair?: Ed25519Keypair,
 ): Promise<{ digest: string; coinId: string | null }> {
   // In practice, you'd extract the secret from the receipt and use claimSwap
   return claimSwap(swapId, receipt.secret, client, keypair);
@@ -293,7 +293,7 @@ export async function claimWithReceipt(
 export async function refundExpired(
   swapId: string,
   client?: SuiClient,
-  keypair?: Ed25519Keypair
+  keypair?: Ed25519Keypair,
 ): Promise<{ digest: string; coinId: string | null }> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -310,7 +310,7 @@ export async function refundExpired(
 
   tx.transferObjects(
     [coin],
-    tx.pure.address(signer.getPublicKey().toSuiAddress())
+    tx.pure.address(signer.getPublicKey().toSuiAddress()),
   );
 
   const result = await signAndExecute(suiClient, tx, signer);
@@ -404,7 +404,7 @@ export async function exampleAtomicSwapFlow(): Promise<void> {
     console.log("Flow:");
     console.log("1. Alice generates secret, creates swap with hash(secret)");
     console.log(
-      "2. Bob sees Alice's swap, creates matching swap with same hash"
+      "2. Bob sees Alice's swap, creates matching swap with same hash",
     );
     console.log("3. Alice claims Bob's swap by revealing secret");
     console.log("4. Bob uses revealed secret to claim Alice's swap");
@@ -414,7 +414,7 @@ export async function exampleAtomicSwapFlow(): Promise<void> {
     console.log(`- Initiator's lock: 2 hours`);
     console.log(`- Responder's lock: 1.5 hours (30 min less)`);
     console.log(
-      "- This ensures initiator can always claim responder's swap first\n"
+      "- This ensures initiator can always claim responder's swap first\n",
     );
 
     console.log("Example Code:");
@@ -464,7 +464,7 @@ const bobClaim = await claimSwap(aliceSwap.swapId, revealedSecret);
     console.log("Hash:  ", bytesToHex(hash));
     console.log(
       "\nVerify: computeSecretHash(secret) === hash:",
-      bytesToHex(computeSecretHash(secret)) === bytesToHex(hash)
+      bytesToHex(computeSecretHash(secret)) === bytesToHex(hash),
     );
   } catch (error) {
     logError(error, "exampleAtomicSwapFlow");

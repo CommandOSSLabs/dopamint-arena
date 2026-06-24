@@ -152,15 +152,15 @@ export function formatReport(rep: BenchReport): string {
     `  elapsed        : ${(rep.elapsedMs / 1000).toFixed(2)}s`,
     `  interactions   : ${n(rep.totalInteractions)}`,
     `  effective TPS  : avg ${n(rep.avgTps)}  peak ${n(
-      rep.peakTps
+      rep.peakTps,
     )}  (per-core ${n(rep.perCoreTps)})`,
     `  signatures/sec : ${n(rep.signaturesPerSec)}`,
     `  verifies/sec   : ${n(rep.verificationsPerSec)}`,
     `  bandwidth      : ${n(rep.bytesPerSec)} B/s (${rep.bytesPerUpdate.toFixed(
-      0
+      0,
     )} B/update)`,
     `  settlement     : ${(rep.settlementSuccessRate * 100).toFixed(
-      1
+      1,
     )}% success (sample)`,
   ].join("\n");
 }

@@ -49,7 +49,7 @@ import {
  */
 export function createInvoice(
   amount: bigint,
-  description: string
+  description: string,
 ): {
   paymentHash: Uint8Array;
   secret: Uint8Array;
@@ -86,7 +86,7 @@ export async function createHTLC(
   timeLockMs: bigint,
   coinId: string,
   client?: SuiClient,
-  keypair?: Ed25519Keypair
+  keypair?: Ed25519Keypair,
 ): Promise<{ htlcId: string; digest: string }> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -151,7 +151,7 @@ export async function forwardHTLC(
   timeLockMs: bigint,
   coinId: string,
   client?: SuiClient,
-  keypair?: Ed25519Keypair
+  keypair?: Ed25519Keypair,
 ): Promise<{ htlcId: string; digest: string }> {
   // Same as createHTLC but with reduced amount and shorter timeout
   return createHTLC(
@@ -161,7 +161,7 @@ export async function forwardHTLC(
     timeLockMs,
     coinId,
     client,
-    keypair
+    keypair,
   );
 }
 
@@ -178,7 +178,7 @@ export async function claimHTLC(
   htlcId: string,
   secret: Uint8Array,
   client?: SuiClient,
-  keypair?: Ed25519Keypair
+  keypair?: Ed25519Keypair,
 ): Promise<{ digest: string; coinId: string | null }> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -196,7 +196,7 @@ export async function claimHTLC(
 
   tx.transferObjects(
     [coin],
-    tx.pure.address(signer.getPublicKey().toSuiAddress())
+    tx.pure.address(signer.getPublicKey().toSuiAddress()),
   );
 
   const result = await signAndExecute(suiClient, tx, signer);
@@ -221,7 +221,7 @@ export async function claimHTLC(
 export async function refundHTLC(
   htlcId: string,
   client?: SuiClient,
-  keypair?: Ed25519Keypair
+  keypair?: Ed25519Keypair,
 ): Promise<{ digest: string; coinId: string | null }> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -235,7 +235,7 @@ export async function refundHTLC(
 
   tx.transferObjects(
     [coin],
-    tx.pure.address(signer.getPublicKey().toSuiAddress())
+    tx.pure.address(signer.getPublicKey().toSuiAddress()),
   );
 
   const result = await signAndExecute(suiClient, tx, signer);
@@ -268,7 +268,7 @@ export function planRoute(
   amount: bigint,
   feePerHop: bigint,
   baseTimeoutMs: bigint,
-  timeoutDecrement: bigint
+  timeoutDecrement: bigint,
 ): Array<{ receiver: string; amount: bigint; timeoutMs: bigint }> {
   const route: Array<{ receiver: string; amount: bigint; timeoutMs: bigint }> =
     [];
@@ -298,7 +298,7 @@ export function planRoute(
 export function calculateRouteFees(
   amount: bigint,
   hops: number,
-  feePerHop: bigint
+  feePerHop: bigint,
 ): bigint {
   return feePerHop * BigInt(hops);
 }
@@ -309,7 +309,7 @@ export function calculateRouteFees(
 export function calculateTotalAmount(
   amount: bigint,
   hops: number,
-  feePerHop: bigint
+  feePerHop: bigint,
 ): bigint {
   return amount + calculateRouteFees(amount, hops, feePerHop);
 }
@@ -341,7 +341,7 @@ export function getHTLCStatusName(status: number): string {
  */
 export function validateTimeoutCascade(
   timeouts: bigint[],
-  minDifference: bigint
+  minDifference: bigint,
 ): boolean {
   for (let i = 1; i < timeouts.length; i++) {
     if (timeouts[i] >= timeouts[i - 1] - minDifference) {
@@ -456,7 +456,7 @@ await claimHTLC(htlc1.htlcId, invoice.secret, client, bobKeypair);
       console.log(
         `  Hop ${i + 1}: -> ${hop.receiver}, amount: ${hop.amount}, timeout: ${
           hop.timeoutMs
-        }`
+        }`,
       );
     });
 

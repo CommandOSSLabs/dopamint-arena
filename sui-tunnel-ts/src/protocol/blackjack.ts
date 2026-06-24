@@ -200,7 +200,8 @@ export class BlackjackProtocol implements Protocol<
 
     if (state.phase === "player") {
       const playerParty = getPlayerParty(state.round);
-      if (by !== playerParty) throw new Error(`it is the player's (${playerParty}) turn`);
+      if (by !== playerParty)
+        throw new Error(`it is the player's (${playerParty}) turn`);
       if (move.action === "hit") {
         const { hand, drawIndex } = drawTo(
           state.playerHand,
@@ -224,7 +225,8 @@ export class BlackjackProtocol implements Protocol<
 
     if (state.phase === "dealer") {
       const dealerParty = getDealerParty(state.round);
-      if (by !== dealerParty) throw new Error(`it is the dealer's (${dealerParty}) turn`);
+      if (by !== dealerParty)
+        throw new Error(`it is the dealer's (${dealerParty}) turn`);
       if (move.action !== "stand") {
         throw new Error("dealer may only 'stand' (auto-play is deterministic)");
       }

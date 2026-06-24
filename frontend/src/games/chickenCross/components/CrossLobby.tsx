@@ -22,14 +22,23 @@ export function CrossLobby({
       <SketchDefs />
       <div className="cross-lobby__card cross-lobby__card--welcome sketch-stroke sketch-panel">
         <div className="cross-lobby__hero">
-          <span className="cross-lobby__mascot cross-lobby__mascot--lg" aria-hidden>
+          <span
+            className="cross-lobby__mascot cross-lobby__mascot--lg"
+            aria-hidden
+          >
             <CrossChicken party="a" mini />
           </span>
           <h2 className="cross-lobby__title sketch-title">Chicken Cross</h2>
-          <p className="cross-lobby__tagline sketch-note">hop the lanes — stake &amp; go</p>
+          <p className="cross-lobby__tagline sketch-note">
+            hop the lanes — stake &amp; go
+          </p>
         </div>
 
-        <div className="cross-seg sketch-stroke" role="tablist" aria-label="Game mode">
+        <div
+          className="cross-seg sketch-stroke"
+          role="tablist"
+          aria-label="Game mode"
+        >
           <button
             type="button"
             role="tab"

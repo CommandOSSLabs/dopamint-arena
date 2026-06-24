@@ -674,10 +674,7 @@ export function useBotGame(difficulty: Difficulty = "fast"): BotGameView {
         // mode: gas is sponsored + the stake is faucet-minted, so bots can't run out — skip the
         // SUI gate; SUI fallback still stops when a bot is low on gas.
         if (playingRef.current) {
-          if (
-            mtpsOn ||
-            (b && b.x >= MIN_PLAY_MIST && b.o >= MIN_PLAY_MIST)
-          ) {
+          if (mtpsOn || (b && b.x >= MIN_PLAY_MIST && b.o >= MIN_PLAY_MIST)) {
             nextRef.current = setTimeout(() => {
               if (playingRef.current) runRef.current();
             }, NEXT_GAME_MS);

@@ -1,7 +1,9 @@
 {
   "name": "tik-tak-toe",
   "private": true,
-  "workspaces": ["packages/*"],
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "typecheck": "bun run --filter '*' typecheck",
     "test": "bun test packages/shared"

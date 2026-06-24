@@ -22,7 +22,7 @@ function playOneGame(
   proto: MultiGameBombItProtocol,
   start: MultiGameBombItState,
   rng: () => number,
-  total: bigint
+  total: bigint,
 ): MultiGameBombItState {
   let state = start;
   let guard = 0;
@@ -78,18 +78,18 @@ test("a decided duel swaps EXACTLY the per-game stake; draw/push swaps nothing",
   assert.equal(
     proto.isGameOver(drawn),
     true,
-    "draw is terminal for the inner duel"
+    "draw is terminal for the inner duel",
   );
   assert.equal(
     proto.isTerminal(drawn),
     false,
-    "session continues — a draw moved no funds"
+    "session continues — a draw moved no funds",
   );
   // Kickoff after a draw carries balances unchanged (no swap on a draw).
   const after = proto.applyMove(drawn, { a: "stay" }, "A");
   assert.deepEqual(
     { a: after.balanceA, b: after.balanceB },
-    { a: 1000n, b: 1000n }
+    { a: 1000n, b: 1000n },
   );
   assert.equal(after.gamesPlayed, 1);
 });
@@ -106,14 +106,14 @@ test("rematch re-seeds the inner game to a DIFFERENT grid", () => {
   assert.equal(
     proto.isTerminal(state),
     false,
-    "small stake vs large balance — fundable"
+    "small stake vs large balance — fundable",
   );
   state = proto.applyMove(state, { a: "stay" }, "A");
   assert.equal(state.gamesPlayed, 1);
   assert.notEqual(
     state.inner.seed,
     seedG1,
-    "duel 2 uses a different per-game seed"
+    "duel 2 uses a different per-game seed",
   );
 });
 

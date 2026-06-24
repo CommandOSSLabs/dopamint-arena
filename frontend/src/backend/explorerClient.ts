@@ -77,7 +77,9 @@ export async function getSettlement(digest: string): Promise<SettlementRow> {
  * does NOT parse; verifyTranscript dispatches on the bytes. Throws on a non-ok response (404 =>
  * anchored-but-unverifiable), which the caller catches.
  */
-export async function getTranscript(digest: string): Promise<Uint8Array | null> {
+export async function getTranscript(
+  digest: string,
+): Promise<Uint8Array | null> {
   const res = await fetch(`${apiRoot()}/v1/settlements/${digest}/transcript`);
   if (!res.ok) throw new Error(`getTranscript ${res.status}`);
   return new Uint8Array(await res.arrayBuffer());

@@ -100,7 +100,11 @@ function laneRng(seed: bigint, lane: number): () => number {
  * Roads carry narrow cars, water carries wide logs (platforms), rails a very wide train.
  * Positions sweep across the columns at a seeded speed and wrap at COLUMN_COUNT.
  */
-export function hazardsAt(seed: bigint, lane: number, tick: bigint): HazardSpan[] {
+export function hazardsAt(
+  seed: bigint,
+  lane: number,
+  tick: bigint,
+): HazardSpan[] {
   const kind = laneKind(lane);
   if (kind === "grass") return [];
   const rng = laneRng(seed, lane);
@@ -114,7 +118,10 @@ export function hazardsAt(seed: bigint, lane: number, tick: bigint): HazardSpan[
       const speed = 0.1 + rng() * 0.1;
       const dir = rng() < 0.5 ? 1 : -1;
       const phase = rng() * COLUMN_COUNT;
-      spans.push({ center: mod(phase + dir * speed * t, COLUMN_COUNT), half: 0.9 });
+      spans.push({
+        center: mod(phase + dir * speed * t, COLUMN_COUNT),
+        half: 0.9,
+      });
     }
   } else if (kind === "water") {
     const count = rng() < 0.5 ? 2 : 1;
@@ -122,14 +129,20 @@ export function hazardsAt(seed: bigint, lane: number, tick: bigint): HazardSpan[
       const speed = 0.06 + rng() * 0.05;
       const dir = rng() < 0.5 ? 1 : -1;
       const phase = rng() * COLUMN_COUNT + i * 3;
-      spans.push({ center: mod(phase + dir * speed * t, COLUMN_COUNT), half: 1.4 });
+      spans.push({
+        center: mod(phase + dir * speed * t, COLUMN_COUNT),
+        half: 1.4,
+      });
     }
   } else {
     // rails
     const speed = 0.2 + rng() * 0.15;
     const dir = rng() < 0.5 ? 1 : -1;
     const phase = rng() * COLUMN_COUNT;
-    spans.push({ center: mod(phase + dir * speed * t, COLUMN_COUNT), half: 3.0 });
+    spans.push({
+      center: mod(phase + dir * speed * t, COLUMN_COUNT),
+      half: 3.0,
+    });
   }
   return spans;
 }
@@ -138,7 +151,8 @@ export function hazardsAt(seed: bigint, lane: number, tick: bigint): HazardSpan[
 export function spanCoversCol(span: HazardSpan, col: number): boolean {
   const c = col + 0.5;
   for (const cc of [c, c - COLUMN_COUNT, c + COLUMN_COUNT]) {
-    if (cc > span.center - span.half && cc < span.center + span.half) return true;
+    if (cc > span.center - span.half && cc < span.center + span.half)
+      return true;
   }
   return false;
 }
@@ -147,17 +161,28 @@ export function spanCoversCol(span: HazardSpan, col: number): boolean {
  * Is the cell (col, lane) lethal at `tick`? grass = safe; road/rails = lethal when a
  * hazard overlaps; water = INVERTED (open water kills; a log saves). Behind spawn = lethal.
  */
-export function isLethal(seed: bigint, col: number, lane: number, tick: bigint): boolean {
+export function isLethal(
+  seed: bigint,
+  col: number,
+  lane: number,
+  tick: bigint,
+): boolean {
   if (lane < 0) return true;
   const kind = laneKind(lane);
   if (kind === "grass") return false;
-  const onHazard = hazardsAt(seed, lane, tick).some((s) => spanCoversCol(s, col));
+  const onHazard = hazardsAt(seed, lane, tick).some((s) =>
+    spanCoversCol(s, col),
+  );
   if (kind === "water") return !onHazard;
   return onHazard;
 }
 
 /** Destination cell for a hop, clamped to the board. */
-export function destOf(lane: number, col: number, dir: CrossDir): [number, number] {
+export function destOf(
+  lane: number,
+  col: number,
+  dir: CrossDir,
+): [number, number] {
   if (dir === "north") return [lane + 1, col];
   if (dir === "south") return [Math.max(0, lane - 1), col];
   if (dir === "east") return [lane, Math.min(COLUMN_COUNT - 1, col + 1)];
@@ -221,7 +246,12 @@ function stepPlayer(
 ): CrossPlayer {
   // Post-respawn immunity: no move, no death, just tick down.
   if (p.invulnTicks > 0) {
-    return { lane: p.lane, col: p.col, score: p.score, invulnTicks: p.invulnTicks - 1 };
+    return {
+      lane: p.lane,
+      col: p.col,
+      score: p.score,
+      invulnTicks: p.invulnTicks - 1,
+    };
   }
   let lane = p.lane;
   let col = p.col;
@@ -242,7 +272,11 @@ function stepPlayer(
 }
 
 /** Greedy bot dir for player index `i`: prefer forward, dodge sideways, avoid back, else stay. */
-function greedyDir(s: CrossState, i: number, rng: () => number): CrossDir | undefined {
+function greedyDir(
+  s: CrossState,
+  i: number,
+  rng: () => number,
+): CrossDir | undefined {
   const p = s.players[i];
   if (p.invulnTicks > 0) return undefined;
   const tick = s.tick + 1n;
@@ -250,7 +284,8 @@ function greedyDir(s: CrossState, i: number, rng: () => number): CrossDir | unde
   // timings and a clear leader emerges — fewer dead-heat pushes. North (forward) always first.
   const near: CrossDir = i === 0 ? "east" : "west";
   const far: CrossDir = i === 0 ? "west" : "east";
-  const order: CrossDir[] = rng() < 0.8 ? ["north", near, far] : ["north", far, near];
+  const order: CrossDir[] =
+    rng() < 0.8 ? ["north", near, far] : ["north", far, near];
   for (const d of order) {
     const [nl, nc] = destOf(p.lane, p.col, d);
     if (!isLethal(s.seed, nc, nl, tick)) return d;
@@ -301,8 +336,7 @@ export class CrossProtocol implements Protocol<CrossState, CrossMove> {
       if (players[0].score > players[1].score) winner = "A";
       else if (players[1].score > players[0].score) winner = "B";
       else winner = null;
-    }
-    else if (aWon) winner = "A";
+    } else if (aWon) winner = "A";
     else if (bWon) winner = "B";
     else if (tick >= TICK_CAP) {
       if (players[0].score > players[1].score) winner = "A";
@@ -338,7 +372,9 @@ export class CrossProtocol implements Protocol<CrossState, CrossMove> {
         u64ToBeBytes(p.invulnTicks),
       );
     }
-    parts.push(new Uint8Array([s.winner === "A" ? 1 : s.winner === "B" ? 2 : 0]));
+    parts.push(
+      new Uint8Array([s.winner === "A" ? 1 : s.winner === "B" ? 2 : 0]),
+    );
     return concatBytes(parts);
   }
 

@@ -38,7 +38,7 @@ export function runOffchainDemo(): void {
   // 4. Proof-of-existence: the transcript Merkle root anchors the tracked tunnel's history.
   const root = transcript.root();
   console.log(
-    `\ntranscript for ${tracked.tunnelId}: ${transcript.length} updates`
+    `\ntranscript for ${tracked.tunnelId}: ${transcript.length} updates`,
   );
   console.log(`transcript root (anchored on-chain at close): 0x${toHex(root)}`);
 
@@ -54,7 +54,7 @@ export function runOffchainDemo(): void {
   swarm.settleAll(BigInt(Date.now()));
   console.log(
     `settlement success across ${swarm.tunnels.length} tunnels: ` +
-      `${(swarm.settlementSuccessRate() * 100).toFixed(1)}%`
+      `${(swarm.settlementSuccessRate() * 100).toFixed(1)}%`,
   );
 }
 

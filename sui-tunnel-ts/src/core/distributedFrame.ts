@@ -71,7 +71,7 @@ export function wrapInnerFrameJson(innerJson: string): string {
  */
 export function encodeRelayEnvelope<M>(
   frame: Frame<M>,
-  codec: MoveCodec<M>
+  codec: MoveCodec<M>,
 ): string {
   const innerJson = new TextDecoder().decode(encodeFrame(frame, codec));
   return wrapInnerFrameJson(innerJson);
@@ -79,7 +79,7 @@ export function encodeRelayEnvelope<M>(
 
 export function encodeFrame<M>(
   frame: Frame<M>,
-  codec: MoveCodec<M>
+  codec: MoveCodec<M>,
 ): Uint8Array {
   const obj =
     frame.kind === "move"
@@ -104,7 +104,7 @@ export function encodeFrame<M>(
 
 export function decodeFrame<M>(
   bytes: Uint8Array,
-  codec: MoveCodec<M>
+  codec: MoveCodec<M>,
 ): Frame<M> {
   const o = JSON.parse(textDecoder.decode(bytes));
   if (o.kind === "move") {

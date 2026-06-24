@@ -58,7 +58,7 @@ export function buildCreateAndShare(
     partyB: PartyArgs;
     timeoutMs: bigint;
     penaltyAmount: bigint;
-  } & WithCoinType
+  } & WithCoinType,
 ): void {
   tx.moveCall({
     target: buildTarget(TUNNEL, "entry_create_and_share"),
@@ -80,7 +80,7 @@ export function buildCreateAndShare(
 /** Deposit an existing Coin<T> object/result into the tunnel. */
 export function buildDeposit(
   tx: Transaction,
-  p: { tunnelId: string; coin: TransactionObjectArgument } & WithCoinType
+  p: { tunnelId: string; coin: TransactionObjectArgument } & WithCoinType,
 ): void {
   tx.moveCall({
     target: buildTarget(TUNNEL, "entry_deposit"),
@@ -92,7 +92,7 @@ export function buildDeposit(
 /** Split `amount` off the gas coin and deposit it (SUI tunnels only). */
 export function buildDepositFromGas(
   tx: Transaction,
-  p: { tunnelId: string; amount: bigint }
+  p: { tunnelId: string; amount: bigint },
 ): void {
   const [coin] = tx.splitCoins(tx.gas, [tx.pure.u64(p.amount)]);
   buildDeposit(tx, { tunnelId: p.tunnelId, coin });
@@ -111,7 +111,7 @@ export function buildEmitQuantumPokerRandomnessSeed(
     sessionNonce: bigint;
     context?: Uint8Array;
     randomObjectId?: string;
-  }
+  },
 ): void {
   tx.moveCall({
     target: buildTarget(SUI_RANDOMNESS, "entry_emit_quantum_poker_seed"),
@@ -134,7 +134,7 @@ export function buildCloseCooperative(
     sigA: Uint8Array;
     sigB: Uint8Array;
     timestamp: bigint;
-  } & WithCoinType
+  } & WithCoinType,
 ): void {
   tx.moveCall({
     target: buildTarget(TUNNEL, "entry_close_cooperative"),
@@ -156,7 +156,7 @@ export function buildCloseFromSettlement(
   tx: Transaction,
   tunnelId: string,
   s: CoSignedSettlement,
-  coinType?: string
+  coinType?: string,
 ): void {
   buildCloseCooperative(tx, {
     tunnelId,
@@ -180,7 +180,7 @@ export function buildCloseCooperativeWithRoot(
     sigB: Uint8Array;
     timestamp: bigint;
     transcriptRoot: Uint8Array;
-  } & WithCoinType
+  } & WithCoinType,
 ): void {
   tx.moveCall({
     target: buildTarget(TUNNEL, "entry_close_cooperative_with_root"),
@@ -203,7 +203,7 @@ export function buildCloseWithRootFromSettlement(
   tx: Transaction,
   tunnelId: string,
   s: CoSignedSettlementWithRoot,
-  coinType?: string
+  coinType?: string,
 ): void {
   buildCloseCooperativeWithRoot(tx, {
     tunnelId,
@@ -225,7 +225,7 @@ export function buildCloseWithRootFromSettlement(
 export function buildBatchClose(
   tx: Transaction,
   closes: { tunnelId: string; settlement: CoSignedSettlement }[],
-  coinType?: string
+  coinType?: string,
 ): number {
   for (const c of closes) {
     buildCloseFromSettlement(tx, c.tunnelId, c.settlement, coinType);
@@ -244,7 +244,7 @@ export function buildRaiseDispute(
     partyBBalance: bigint;
     timestamp: bigint;
     otherPartySig: Uint8Array;
-  } & WithCoinType
+  } & WithCoinType,
 ): void {
   tx.moveCall({
     target: buildTarget(TUNNEL, "entry_raise_dispute"),
@@ -268,7 +268,7 @@ export function buildRaiseDisputeFromUpdate(
   tunnelId: string,
   u: CoSignedUpdate,
   raiser: Party,
-  coinType?: string
+  coinType?: string,
 ): void {
   buildRaiseDispute(tx, {
     tunnelId,
@@ -285,7 +285,7 @@ export function buildRaiseDisputeFromUpdate(
 /** Dispute the current on-chain state (nonce 0 or re-dispute; no counterparty sig). */
 export function buildRaiseDisputeCurrentState(
   tx: Transaction,
-  p: { tunnelId: string } & WithCoinType
+  p: { tunnelId: string } & WithCoinType,
 ): void {
   tx.moveCall({
     target: buildTarget(TUNNEL, "entry_raise_dispute_current_state"),
@@ -303,7 +303,7 @@ export function buildResolveDispute(
   tx: Transaction,
   tunnelId: string,
   u: CoSignedUpdate,
-  coinType?: string
+  coinType?: string,
 ): void {
   tx.moveCall({
     target: buildTarget(TUNNEL, "entry_resolve_dispute"),
@@ -325,7 +325,7 @@ export function buildResolveDispute(
 /** Finalize a dispute after the timeout window (only the raiser). */
 export function buildForceClose(
   tx: Transaction,
-  p: { tunnelId: string } & WithCoinType
+  p: { tunnelId: string } & WithCoinType,
 ): void {
   tx.moveCall({
     target: buildTarget(TUNNEL, "entry_force_close"),
@@ -337,7 +337,7 @@ export function buildForceClose(
 /** Non-raiser accepts the disputed balances immediately (skips the timeout). */
 export function buildAgreeToDispute(
   tx: Transaction,
-  p: { tunnelId: string } & WithCoinType
+  p: { tunnelId: string } & WithCoinType,
 ): void {
   tx.moveCall({
     target: buildTarget(TUNNEL, "entry_agree_to_dispute"),
@@ -358,7 +358,7 @@ export function buildUpdateState(
     timestamp: bigint;
     sigA: Uint8Array;
     sigB: Uint8Array;
-  } & WithCoinType
+  } & WithCoinType,
 ): void {
   tx.moveCall({
     target: buildTarget(TUNNEL, "entry_update_state"),
@@ -380,7 +380,7 @@ export function buildUpdateState(
 /** Recover own deposit before activation if the counterparty never deposited. */
 export function buildWithdrawBeforeActive(
   tx: Transaction,
-  p: { tunnelId: string; recipient: string } & WithCoinType
+  p: { tunnelId: string; recipient: string } & WithCoinType,
 ): void {
   const coin = tx.moveCall({
     target: buildTarget(TUNNEL, "withdraw_before_active"),
@@ -393,7 +393,7 @@ export function buildWithdrawBeforeActive(
 /** Recover own deposit after the timeout if the tunnel never activated. */
 export function buildWithdrawTimeout(
   tx: Transaction,
-  p: { tunnelId: string; recipient: string } & WithCoinType
+  p: { tunnelId: string; recipient: string } & WithCoinType,
 ): void {
   const coin = tx.moveCall({
     target: buildTarget(TUNNEL, "withdraw_timeout"),
@@ -406,7 +406,7 @@ export function buildWithdrawTimeout(
 /** Attach a single external-referee address (only while CREATED). */
 export function buildSetReferee(
   tx: Transaction,
-  p: { tunnelId: string; referee: string } & WithCoinType
+  p: { tunnelId: string; referee: string } & WithCoinType,
 ): void {
   tx.moveCall({
     target: buildTarget(TUNNEL, "entry_set_referee"),
@@ -422,7 +422,7 @@ export function buildResolveDisputeExternal(
     tunnelId: string;
     partyABalance: bigint;
     partyBBalance: bigint;
-  } & WithCoinType
+  } & WithCoinType,
 ): void {
   tx.moveCall({
     target: buildTarget(TUNNEL, "entry_resolve_dispute_external"),
@@ -439,7 +439,7 @@ export function buildResolveDisputeExternal(
 /** Extend the dispute timeout window. */
 export function buildExtendTimeout(
   tx: Transaction,
-  p: { tunnelId: string; additionalMs: bigint } & WithCoinType
+  p: { tunnelId: string; additionalMs: bigint } & WithCoinType,
 ): void {
   tx.moveCall({
     target: buildTarget(TUNNEL, "entry_extend_timeout"),
@@ -462,7 +462,7 @@ export function buildLockHtlc(
     receiver: string;
     expiryMs: bigint;
     counterpartySig: Uint8Array;
-  } & WithCoinType
+  } & WithCoinType,
 ): void {
   tx.moveCall({
     target: buildTarget(TUNNEL, "entry_lock_htlc"),
@@ -486,7 +486,7 @@ export function buildClaimHtlc(
     tunnelId: string;
     paymentHash: Uint8Array;
     preimage: Uint8Array;
-  } & WithCoinType
+  } & WithCoinType,
 ): void {
   tx.moveCall({
     target: buildTarget(TUNNEL, "entry_claim_htlc"),
@@ -503,7 +503,7 @@ export function buildClaimHtlc(
 /** Expire (reclaim) an in-tunnel HTLC after its deadline. */
 export function buildExpireHtlc(
   tx: Transaction,
-  p: { tunnelId: string; paymentHash: Uint8Array } & WithCoinType
+  p: { tunnelId: string; paymentHash: Uint8Array } & WithCoinType,
 ): void {
   tx.moveCall({
     target: buildTarget(TUNNEL, "entry_expire_htlc"),

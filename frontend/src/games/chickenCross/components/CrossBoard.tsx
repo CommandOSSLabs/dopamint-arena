@@ -1,12 +1,24 @@
 import { useEffect, useRef } from "react";
-import { laneKind, hazardsAt, spanCoversCol, COLUMN_COUNT, WIN_LANE } from "sui-tunnel-ts/protocol/cross";
+import {
+  laneKind,
+  hazardsAt,
+  spanCoversCol,
+  COLUMN_COUNT,
+  WIN_LANE,
+} from "sui-tunnel-ts/protocol/cross";
 import type { CrossDir, HazardSpan } from "sui-tunnel-ts/protocol/cross";
 import { formatCompactCount } from "@/lib/formatCompactCount";
 import "../cross.css";
 import { CROSS_STYLE, grassHasTree } from "../crossTheme";
 import { visibleLanes, type CrossView } from "../session-core";
 import { SketchDefs } from "../../sketch";
-import { CrossCar, CrossChicken, CrossLog, CrossTrain, CrossTree } from "./crossSprites";
+import {
+  CrossCar,
+  CrossChicken,
+  CrossLog,
+  CrossTrain,
+  CrossTree,
+} from "./crossSprites";
 
 function trainSegment(span: HazardSpan, col: number): "head" | "mid" | "tail" {
   const left = Math.ceil(span.center - span.half);
@@ -41,13 +53,17 @@ function SeatRail({
         mine ? "cross-seat-rail--mine" : "",
       ].join(" ")}
     >
-      {showFloatYou ? <span className="cross-seat-rail__float">you</span> : null}
+      {showFloatYou ? (
+        <span className="cross-seat-rail__float">you</span>
+      ) : null}
       <span className="cross-seat-rail__icon" aria-hidden>
         <CrossChicken party={chickParty} mini mine={mine} />
       </span>
       <div className="cross-seat-rail__meta">
         <span className="cross-seat-rail__lane tabular-nums">L{lane}</span>
-        {tag && !showFloatYou ? <span className="cross-seat-rail__tag">{tag}</span> : null}
+        {tag && !showFloatYou ? (
+          <span className="cross-seat-rail__tag">{tag}</span>
+        ) : null}
       </div>
     </div>
   );
@@ -97,10 +113,30 @@ export function CrossBoard({
   const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     if (settled || !manual) return;
     switch (e.key) {
-      case "ArrowUp": case "w": case "W": e.preventDefault(); onDir("north"); break;
-      case "ArrowDown": case "s": case "S": e.preventDefault(); onDir("south"); break;
-      case "ArrowRight": case "d": case "D": e.preventDefault(); onDir("east"); break;
-      case "ArrowLeft": case "a": case "A": e.preventDefault(); onDir("west"); break;
+      case "ArrowUp":
+      case "w":
+      case "W":
+        e.preventDefault();
+        onDir("north");
+        break;
+      case "ArrowDown":
+      case "s":
+      case "S":
+        e.preventDefault();
+        onDir("south");
+        break;
+      case "ArrowRight":
+      case "d":
+      case "D":
+        e.preventDefault();
+        onDir("east");
+        break;
+      case "ArrowLeft":
+      case "a":
+      case "A":
+        e.preventDefault();
+        onDir("west");
+        break;
     }
   };
 
@@ -129,7 +165,10 @@ export function CrossBoard({
       style={CROSS_STYLE}
     >
       <SketchDefs />
-      <aside className="cross-pane sketch-stroke sketch-panel" aria-label="Match info and controls">
+      <aside
+        className="cross-pane sketch-stroke sketch-panel"
+        aria-label="Match info and controls"
+      >
         <div className="cross-pane__top">
           <SeatRail
             party="A"
@@ -163,28 +202,56 @@ export function CrossBoard({
               type="button"
               className={`cross-auto sketch-btn${auto ? " cross-auto--on sketch-btn--go" : ""}`}
               onClick={onToggleAuto}
-              title={auto ? "Bot is racing — click to take over" : "Manual — click for autopilot"}
+              title={
+                auto
+                  ? "Bot is racing — click to take over"
+                  : "Manual — click for autopilot"
+              }
             >
               {auto ? "auto" : "manual"}
             </button>
           )}
 
           {!settled && manual && (
-            <div className="cross-actionbar sketch-stroke sketch-panel" role="group" aria-label="Movement controls">
-              <button type="button" className="cross-pad sketch-stroke" onPointerDown={() => onDir("north")} aria-label="North (W)">
+            <div
+              className="cross-actionbar sketch-stroke sketch-panel"
+              role="group"
+              aria-label="Movement controls"
+            >
+              <button
+                type="button"
+                className="cross-pad sketch-stroke"
+                onPointerDown={() => onDir("north")}
+                aria-label="North (W)"
+              >
                 <span className="cross-pad__arrow">▲</span>
                 <span className="cross-pad__key">w</span>
               </button>
               <div className="cross-pad-row">
-                <button type="button" className="cross-pad sketch-stroke" onPointerDown={() => onDir("west")} aria-label="West (A)">
+                <button
+                  type="button"
+                  className="cross-pad sketch-stroke"
+                  onPointerDown={() => onDir("west")}
+                  aria-label="West (A)"
+                >
                   <span className="cross-pad__arrow">◀</span>
                   <span className="cross-pad__key">a</span>
                 </button>
-                <button type="button" className="cross-pad sketch-stroke" onPointerDown={() => onDir("south")} aria-label="South (S)">
+                <button
+                  type="button"
+                  className="cross-pad sketch-stroke"
+                  onPointerDown={() => onDir("south")}
+                  aria-label="South (S)"
+                >
                   <span className="cross-pad__arrow">▼</span>
                   <span className="cross-pad__key">s</span>
                 </button>
-                <button type="button" className="cross-pad sketch-stroke" onPointerDown={() => onDir("east")} aria-label="East (D)">
+                <button
+                  type="button"
+                  className="cross-pad sketch-stroke"
+                  onPointerDown={() => onDir("east")}
+                  aria-label="East (D)"
+                >
                   <span className="cross-pad__arrow">▶</span>
                   <span className="cross-pad__key">d</span>
                 </button>
@@ -192,7 +259,9 @@ export function CrossBoard({
             </div>
           )}
 
-          {spectating && !settled && <span className="cross-spectate">bvb</span>}
+          {spectating && !settled && (
+            <span className="cross-spectate">bvb</span>
+          )}
 
           {onSettle && !settled && (
             <button
@@ -226,15 +295,26 @@ export function CrossBoard({
                 <div key={L} className="cross-lane">
                   {Array.from({ length: COLUMN_COUNT }).map((_, col) => {
                     const onHaz = hazards.some((s) => spanCoversCol(s, col));
-                    const aHere = view.players[0]?.lane === L && view.players[0]?.col === col;
-                    const bHere = view.players[1]?.lane === L && view.players[1]?.col === col;
+                    const aHere =
+                      view.players[0]?.lane === L &&
+                      view.players[0]?.col === col;
+                    const bHere =
+                      view.players[1]?.lane === L &&
+                      view.players[1]?.col === col;
                     const here = aHere || bHere;
                     const hit = onHaz && here;
-                    const showTree = kind === "grass" && !here && !onHaz && grassHasTree(seed, L, col);
-                    const hazSpan = onHaz ? hazards.find((s) => spanCoversCol(s, col)) : undefined;
+                    const showTree =
+                      kind === "grass" &&
+                      !here &&
+                      !onHaz &&
+                      grassHasTree(seed, L, col);
+                    const hazSpan = onHaz
+                      ? hazards.find((s) => spanCoversCol(s, col))
+                      : undefined;
                     const ord = hazSpan ? hazardOrdinal(hazards, col) : 0;
 
-                    const isMyLane = myIndex !== null && view.players[myIndex]?.lane === L;
+                    const isMyLane =
+                      myIndex !== null && view.players[myIndex]?.lane === L;
 
                     return (
                       <div
@@ -245,7 +325,9 @@ export function CrossBoard({
                           isMyLane ? "cross-cell--mine-lane" : "",
                         ].join(" ")}
                       >
-                        {finish && col === 0 ? <span className="cross-finish-flag" aria-hidden /> : null}
+                        {finish && col === 0 ? (
+                          <span className="cross-finish-flag" aria-hidden />
+                        ) : null}
                         {showTree ? (
                           <div className="cross-piece cross-piece--tree">
                             <CrossTree />
@@ -256,7 +338,11 @@ export function CrossBoard({
                             key={`a-${L}-${col}-${hit ? "hit" : "ok"}`}
                             className={`cross-piece cross-piece--chicken${bHere ? " cross-piece--duo-a" : ""}`}
                           >
-                            <CrossChicken party="a" mine={myIndex === 0} hit={hit && aHere} />
+                            <CrossChicken
+                              party="a"
+                              mine={myIndex === 0}
+                              hit={hit && aHere}
+                            />
                           </div>
                         ) : null}
                         {bHere ? (
@@ -264,7 +350,11 @@ export function CrossBoard({
                             key={`b-${L}-${col}`}
                             className={`cross-piece cross-piece--chicken${aHere ? " cross-piece--duo-b" : ""}`}
                           >
-                            <CrossChicken party="b" mine={myIndex === 1} hit={hit && bHere} />
+                            <CrossChicken
+                              party="b"
+                              mine={myIndex === 1}
+                              hit={hit && bHere}
+                            />
                           </div>
                         ) : null}
                         {!here && onHaz && hazSpan ? (
@@ -274,7 +364,9 @@ export function CrossBoard({
                             ) : kind === "water" ? (
                               <CrossLog />
                             ) : (
-                              <CrossTrain segment={trainSegment(hazSpan, col)} />
+                              <CrossTrain
+                                segment={trainSegment(hazSpan, col)}
+                              />
                             )}
                           </div>
                         ) : null}
@@ -291,11 +383,17 @@ export function CrossBoard({
           <div className="cross-result" role="dialog" aria-modal="true">
             <div className="cross-result__card sketch-stroke sketch-panel">
               {celebratory && <div className="cross-result__trophy">🏆</div>}
-              <div className={`cross-result__line ${celebratory ? "text-[var(--sketch-accent)]" : ""}`}>
+              <div
+                className={`cross-result__line ${celebratory ? "text-[var(--sketch-accent)]" : ""}`}
+              >
                 {title()}
               </div>
               <div className="cross-result__sub">{sub()}</div>
-              <button type="button" className="cross-play-again sketch-btn sketch-btn--go" onClick={onPlayAgain}>
+              <button
+                type="button"
+                className="cross-play-again sketch-btn sketch-btn--go"
+                onClick={onPlayAgain}
+              >
                 Play Again
               </button>
             </div>

@@ -66,7 +66,7 @@ test("buildOpenAndFundMany makes one SplitCoins and N create_and_fund calls", ()
 
   const splits = cmds.filter((c) => c.$kind === "SplitCoins");
   const funds = cmds.filter(
-    (c) => c.$kind === "MoveCall" && c.MoveCall?.function === "create_and_fund"
+    (c) => c.$kind === "MoveCall" && c.MoveCall?.function === "create_and_fund",
   );
   assert.equal(splits.length, 1);
   assert.equal(funds.length, n);
@@ -87,12 +87,12 @@ test("buildOpenAndFundOneReturnless targets the returnless create_and_fund", () 
   }>;
   const splits = cmds.filter((c) => c.$kind === "SplitCoins");
   const funds = cmds.filter(
-    (c) => c.$kind === "MoveCall" && c.MoveCall?.function === "create_and_fund"
+    (c) => c.$kind === "MoveCall" && c.MoveCall?.function === "create_and_fund",
   );
   const withId = cmds.filter(
     (c) =>
       c.$kind === "MoveCall" &&
-      c.MoveCall?.function === "create_and_fund_with_id"
+      c.MoveCall?.function === "create_and_fund_with_id",
   );
   assert.equal(splits.length, 1);
   assert.equal(funds.length, 1);
@@ -124,7 +124,7 @@ test("buildOpenAndFundMany funds a non-SUI batch from a caller-supplied source c
 
   const splits = cmds.filter((c) => c.$kind === "SplitCoins");
   const funds = cmds.filter(
-    (c) => c.$kind === "MoveCall" && c.MoveCall?.function === "create_and_fund"
+    (c) => c.$kind === "MoveCall" && c.MoveCall?.function === "create_and_fund",
   );
   assert.equal(splits.length, 1);
   assert.equal(funds.length, n);
@@ -144,7 +144,7 @@ test("buildOpenAndFundMany rejects a non-SUI coinType with no sourceCoin", () =>
   };
   assert.throws(
     () => buildOpenAndFundMany(tx, [spec], { coinType: USDC }),
-    /sourceCoin/
+    /sourceCoin/,
   );
 });
 

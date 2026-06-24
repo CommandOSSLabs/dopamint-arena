@@ -98,7 +98,7 @@ function makePair(loop = makeLoopback()) {
       selfParty: "A" as Party,
     },
     loop.a,
-    BAL
+    BAL,
   );
   const dtB = new DistributedTunnel(
     counterProtocol,
@@ -109,7 +109,7 @@ function makePair(loop = makeLoopback()) {
       selfParty: "B" as Party,
     },
     loop.b,
-    BAL
+    BAL,
   );
   return { dtA, dtB, keyA, keyB, addrA, addrB };
 }
@@ -125,11 +125,11 @@ test("one full move exchange advances both sides to the same co-signed update", 
   assert.equal(dtA.latest!.update.nonce, 1n);
   assert.ok(
     bytesEqual(dtA.latest!.sigA, dtB.latest!.sigA),
-    "sigA matches across seats"
+    "sigA matches across seats",
   );
   assert.ok(
     bytesEqual(dtA.latest!.sigB, dtB.latest!.sigB),
-    "sigB matches across seats"
+    "sigB matches across seats",
   );
 });
 
@@ -154,7 +154,7 @@ test("a second proposal before ACK is rejected", () => {
         },
       };
       return { a: t, b: t }; // a===b: only dtA is built from this; no delivery happens
-    })()
+    })(),
   );
   dtA.propose(1, 100n);
   assert.throws(() => dtA.propose(1, 100n), /already awaiting ACK/);
@@ -169,7 +169,7 @@ test("DistributedTunnel pair matches OffchainTunnel.selfPlay byte-for-byte", () 
     keyB,
     addrA,
     addrB,
-    BAL
+    BAL,
   );
 
   // Alternate A,B,A,B with matching timestamps on both engines.
@@ -198,19 +198,19 @@ test("DistributedTunnel pair matches OffchainTunnel.selfPlay byte-for-byte", () 
   const combined = dtA.combineSettlement(
     halfA.settlement,
     halfA.sigSelf,
-    halfB.sigSelf
+    halfB.sigSelf,
   );
   assert.ok(
     bytesEqual(combined.sigA, selfSettle.sigA),
-    "settlement sigA parity"
+    "settlement sigA parity",
   );
   assert.ok(
     bytesEqual(combined.sigB, selfSettle.sigB),
-    "settlement sigB parity"
+    "settlement sigB parity",
   );
   assert.equal(
     combined.settlement.finalNonce,
-    selfSettle.settlement.finalNonce
+    selfSettle.settlement.finalNonce,
   );
 });
 
@@ -227,7 +227,7 @@ test("co-signed sigs are independent of party address", () => {
     keyB,
     "0xAAAA",
     "0xBBBB",
-    BAL
+    BAL,
   );
   const t2 = OffchainTunnel.selfPlay(
     counterProtocol,
@@ -236,17 +236,17 @@ test("co-signed sigs are independent of party address", () => {
     keyB,
     "0xdead",
     "0xbeef",
-    BAL
+    BAL,
   );
   t1.step(0, "A", { timestamp: 1n, mode: "full" });
   t2.step(0, "A", { timestamp: 1n, mode: "full" });
   assert.ok(
     bytesEqual(t1.latest!.sigA, t2.latest!.sigA),
-    "sigA independent of address"
+    "sigA independent of address",
   );
   assert.ok(
     bytesEqual(t1.latest!.sigB, t2.latest!.sigB),
-    "sigB independent of address"
+    "sigB independent of address",
   );
 });
 
@@ -264,7 +264,7 @@ test("receiver rejects a MOVE whose stateHash != re-derived hash", () => {
       selfParty: "B" as Party,
     },
     m.transport,
-    BAL
+    BAL,
   );
   // Craft a MOVE A would send, but tamper the stateHash. A signs the (tampered) bytes
   // so the signature is valid — only the re-apply check catches it.
@@ -291,7 +291,7 @@ test("receiver rejects a MOVE whose stateHash != re-derived hash", () => {
   };
   assert.throws(
     () => m.deliver(encodeFrame(frame, identityMoveCodec)),
-    /stateHash/
+    /stateHash/,
   );
   assert.equal(dtB.nonce, 0n, "rejected MOVE must not advance state");
 });
@@ -313,24 +313,24 @@ test("displayState reflects a proposed move before the ACK; confirmed state does
       selfParty: "A" as Party,
     },
     m.transport,
-    BAL
+    BAL,
   );
   dtA.propose(0, 100n);
   assert.equal(dtA.nonce, 0n, "confirmed state must not advance before ACK");
   assert.equal(
     (dtA.state as CounterState).count,
     0,
-    "confirmed state unchanged"
+    "confirmed state unchanged",
   );
   assert.equal(
     (dtA.displayState as CounterState).count,
     1,
-    "display state shows the pending move"
+    "display state shows the pending move",
   );
   assert.equal(
     (dtA.displayState as CounterState).turn,
     "B",
-    "display state flips the turn"
+    "display state flips the turn",
   );
 });
 
@@ -341,7 +341,7 @@ test("displayState collapses to confirmed state once the ACK lands", () => {
   assert.strictEqual(
     dtA.displayState,
     dtA.state,
-    "no pending → displayState === confirmed state"
+    "no pending → displayState === confirmed state",
   );
 });
 
@@ -359,7 +359,7 @@ test("proposer advances only on a valid ACK", () => {
       selfParty: "A" as Party,
     },
     m.transport,
-    BAL
+    BAL,
   );
   dtA.propose(0, 100n);
   assert.equal(dtA.nonce, 0n, "no advance before ACK");
@@ -378,8 +378,8 @@ test("proposer advances only on a valid ACK", () => {
   m.deliver(
     encodeFrame(
       { kind: "ack", nonce: 1n, sigResponder: sigB },
-      identityMoveCodec
-    )
+      identityMoveCodec,
+    ),
   );
   assert.equal(dtA.nonce, 1n, "valid ACK advances");
   assert.ok(bytesEqual(dtA.latest!.sigB, sigB));
@@ -405,7 +405,7 @@ test("engine pair over a relay-shaped transport reaches a settleable terminal st
   assert.equal(dtA.nonce, 4n);
   assert.ok(
     counterProtocol.isTerminal(dtA.state as any),
-    "terminal after 4 moves"
+    "terminal after 4 moves",
   );
 
   const halfA = dtA.buildSettlementHalf(5n);
@@ -413,14 +413,14 @@ test("engine pair over a relay-shaped transport reaches a settleable terminal st
   const settled = dtA.combineSettlement(
     halfA.settlement,
     halfA.sigSelf,
-    halfB.sigSelf
+    halfB.sigSelf,
   );
 
   // Shape matches the backend SettleRequest.settlement (balances/nonce as strings on the wire).
   assert.equal(settled.settlement.finalNonce, 1n); // onchainNonce(0) + 1
   assert.equal(
     settled.settlement.partyABalance + settled.settlement.partyBBalance,
-    2000n
+    2000n,
   );
   assert.equal(settled.sigA.length, 64);
   assert.equal(settled.sigB.length, 64);
@@ -437,11 +437,11 @@ test("with-root settlement: both halves combine and preserve the anchored root",
   const co = dtA.combineSettlementWithRoot(
     halfA.settlement,
     halfA.sigSelf,
-    halfB.sigSelf
+    halfB.sigSelf,
   );
   assert.ok(
     bytesEqual(co.settlement.transcriptRoot, root),
-    "anchored root preserved"
+    "anchored root preserved",
   );
   assert.equal(co.settlement.finalNonce, 1n); // onchainNonce(0) + 1
   assert.equal(co.sigA.length, 64);
@@ -460,7 +460,7 @@ test("with-root halves match OffchainTunnel.buildSettlementWithRoot byte-for-byt
     keyB,
     addrA,
     addrB,
-    BAL
+    BAL,
   );
   const seq: Array<{ by: Party; ts: bigint }> = [
     { by: "A", ts: 11n },
@@ -477,21 +477,21 @@ test("with-root halves match OffchainTunnel.buildSettlementWithRoot byte-for-byt
   const combined = dtA.combineSettlementWithRoot(
     halfA.settlement,
     halfA.sigSelf,
-    halfB.sigSelf
+    halfB.sigSelf,
   );
   assert.ok(
     bytesEqual(combined.sigA, selfSettle.sigA),
-    "with-root sigA parity"
+    "with-root sigA parity",
   );
   assert.ok(
     bytesEqual(combined.sigB, selfSettle.sigB),
-    "with-root sigB parity"
+    "with-root sigB parity",
   );
   assert.ok(
     bytesEqual(
       combined.settlement.transcriptRoot,
-      selfSettle.settlement.transcriptRoot
-    )
+      selfSettle.settlement.transcriptRoot,
+    ),
   );
 });
 
@@ -504,7 +504,7 @@ test("combineSettlementWithRoot rejects a bad opponent signature", () => {
   const bogus = new Uint8Array(64).fill(9);
   assert.throws(
     () => dtA.combineSettlementWithRoot(halfA.settlement, halfA.sigSelf, bogus),
-    /signature failed verification/
+    /signature failed verification/,
   );
 });
 
@@ -532,7 +532,7 @@ test("both seats derive an identical transcript root from the same confirmed upd
   assert.ok(bytesEqual(rootA, rootB), "both parties anchor the same root");
   assert.ok(
     !bytesEqual(rootA, new Uint8Array(32)),
-    "root is non-trivial (not the empty-zero root)"
+    "root is non-trivial (not the empty-zero root)",
   );
 });
 
@@ -550,7 +550,7 @@ test("adoptCheckpoint seats a valid both-signed checkpoint and clears stale pend
     kb,
     "0xA",
     "0xB",
-    BAL
+    BAL,
   );
   sp.step(1, "A");
   sp.step(1, "B");
@@ -566,18 +566,18 @@ test("adoptCheckpoint seats a valid both-signed checkpoint and clears stale pend
         backend,
         "0xA",
         { publicKey: ka.publicKey, scheme: 0, secretKey: ka.secretKey },
-        true
+        true,
       ),
       opponent: makeEndpoint(
         backend,
         "0xB",
         { publicKey: kb.publicKey, scheme: 0 },
-        false
+        false,
       ),
       selfParty: "A",
     },
     { send() {}, onFrame() {} },
-    BAL
+    BAL,
   );
   dt.seatPending(1, 5n); // a stale pending at nonce 1
   dt.adoptCheckpoint(state, checkpoint);
@@ -587,7 +587,7 @@ test("adoptCheckpoint seats a valid both-signed checkpoint and clears stale pend
   assert.equal(
     dt.snapshot().pending,
     null,
-    "pending <= adopted nonce is cleared"
+    "pending <= adopted nonce is cleared",
   );
   assert.deepEqual(dt.state, state);
 });
@@ -603,7 +603,7 @@ test("adoptCheckpoint rejects a tampered signature", () => {
     kb,
     "0xA",
     "0xB",
-    BAL
+    BAL,
   );
   sp.step(1, "A");
   const bad = { ...sp.latest!, sigB: new Uint8Array(sp.latest!.sigB.length) };
@@ -619,18 +619,18 @@ test("adoptCheckpoint rejects a tampered signature", () => {
         backend,
         "0xA",
         { publicKey: ka.publicKey, scheme: 0, secretKey: ka.secretKey },
-        true
+        true,
       ),
       opponent: makeEndpoint(
         backend,
         "0xB",
         { publicKey: kb.publicKey, scheme: 0 },
-        false
+        false,
       ),
       selfParty: "A",
     },
     { send() {}, onFrame() {} },
-    BAL
+    BAL,
   );
   assert.throws(() => dt.adoptCheckpoint(sp.state, bad), /signature|verif/i);
 });
@@ -646,7 +646,7 @@ test("adoptCheckpoint rejects wrong tunnelId, hash mismatch, and balance-sum mis
     kb,
     "0xA",
     "0xB",
-    BAL
+    BAL,
   );
   sp.step(1, "A");
   sp.step(1, "B");
@@ -664,23 +664,23 @@ test("adoptCheckpoint rejects wrong tunnelId, hash mismatch, and balance-sum mis
           backend,
           "0xA",
           { publicKey: ka.publicKey, scheme: 0, secretKey: ka.secretKey },
-          true
+          true,
         ),
         opponent: makeEndpoint(
           backend,
           "0xB",
           { publicKey: kb.publicKey, scheme: 0 },
-          false
+          false,
         ),
         selfParty: "A",
       },
       { send() {}, onFrame() {} },
-      BAL
+      BAL,
     );
   // wrong tunnelId
   assert.throws(
     () => mk(`0x${"99".repeat(32)}`).adoptCheckpoint(sp.state, cp),
-    /tunnelId/i
+    /tunnelId/i,
   );
   // hash mismatch: a different state under the signed hash
   const wrongState = {
@@ -689,7 +689,7 @@ test("adoptCheckpoint rejects wrong tunnelId, hash mismatch, and balance-sum mis
   };
   assert.throws(
     () => mk(tunnelId).adoptCheckpoint(wrongState as typeof sp.state, cp),
-    /hash/i
+    /hash/i,
   );
   // balance-sum mismatch: a checkpoint whose balances do not sum to total
   const badBal = {
@@ -698,7 +698,7 @@ test("adoptCheckpoint rejects wrong tunnelId, hash mismatch, and balance-sum mis
   };
   assert.throws(
     () => mk(tunnelId).adoptCheckpoint(sp.state, badBal),
-    /balance/i
+    /balance/i,
   );
   // lower nonce is a silent no-op
   const dt = mk(tunnelId);
@@ -710,7 +710,7 @@ test("adoptCheckpoint rejects wrong tunnelId, hash mismatch, and balance-sum mis
     kb,
     "0xA",
     "0xB",
-    BAL
+    BAL,
   );
   older.step(1, "A"); // nonce 1
   dt.adoptCheckpoint(older.state, older.latest!); // ignored
@@ -734,18 +734,18 @@ test("seatPending does not send; resendPending re-emits the byte-identical MOVE 
         backend,
         "0xA",
         { publicKey: ka.publicKey, scheme: 0, secretKey: ka.secretKey },
-        true
+        true,
       ),
       opponent: makeEndpoint(
         backend,
         "0xB",
         { publicKey: kb.publicKey, scheme: 0 },
-        false
+        false,
       ),
       selfParty: "A",
     },
     { send: (b) => sent.push(b), onFrame() {} },
-    BAL
+    BAL,
   );
   dt.seatPending(1, 7n);
   assert.equal(sent.length, 0, "seatPending must not touch the transport");
@@ -755,7 +755,7 @@ test("seatPending does not send; resendPending re-emits the byte-identical MOVE 
   assert.deepEqual(
     sent[0],
     sent[1],
-    "re-sends are deterministic and identical"
+    "re-sends are deterministic and identical",
   );
   // and identical to what propose() would have produced
   const sent2: Uint8Array[] = [];
@@ -770,23 +770,23 @@ test("seatPending does not send; resendPending re-emits the byte-identical MOVE 
         backend,
         "0xA",
         { publicKey: ka.publicKey, scheme: 0, secretKey: ka.secretKey },
-        true
+        true,
       ),
       opponent: makeEndpoint(
         backend,
         "0xB",
         { publicKey: kb.publicKey, scheme: 0 },
-        false
+        false,
       ),
       selfParty: "A",
     },
     { send: (b) => sent2.push(b), onFrame() {} },
-    BAL
+    BAL,
   );
   dt2.propose(1, 7n);
   assert.deepEqual(
     sent[0],
     sent2[0],
-    "seatPending+resendPending == propose frame"
+    "seatPending+resendPending == propose frame",
   );
 });

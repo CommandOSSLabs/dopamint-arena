@@ -48,7 +48,11 @@ export function QuantumPokerBotVsBotWindow({
           </div>
         </div>
         {running ? (
-          <button type="button" className="sketch-btn sketch-btn--stop" onClick={s.stopAuto}>
+          <button
+            type="button"
+            className="sketch-btn sketch-btn--stop"
+            onClick={s.stopAuto}
+          >
             Stop
           </button>
         ) : (

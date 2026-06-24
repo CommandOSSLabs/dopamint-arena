@@ -72,7 +72,7 @@ export {
   USDC_COIN_TYPE_MAINNET,
   USDC_COIN_TYPE_TESTNET,
   USDC_DECIMALS,
-  validateConfig
+  validateConfig,
 } from "./config";
 
 export type { SuiNetwork } from "./config";
@@ -139,7 +139,7 @@ export type {
   Tunnel,
   VerificationLog,
   Vote,
-  WithdrawalReceipt
+  WithdrawalReceipt,
 } from "./types";
 
 // ============================================
@@ -185,7 +185,7 @@ export {
   signAndExecute,
   splitCoin,
   // Encoding
-  stringToBytes
+  stringToBytes,
 } from "./utils";
 
 // ============================================
@@ -201,7 +201,7 @@ export {
   getEscrowStatusName,
   markDelivered,
   raiseDispute,
-  refundBuyer
+  refundBuyer,
 } from "./examples/escrow";
 
 // ============================================
@@ -220,7 +220,7 @@ export {
   getMoveName,
   joinGame,
   revealMove,
-  settleGame
+  settleGame,
 } from "./examples/rockPaperScissors";
 
 // ============================================
@@ -237,7 +237,7 @@ export {
   getStreamStatusName,
   topUpStream,
   withdraw,
-  withdrawAmount
+  withdrawAmount,
 } from "./examples/streamingPayment";
 
 // ============================================
@@ -260,12 +260,12 @@ export {
   setDelegate,
   setRate,
   signSpendVoucher,
-  topUp
+  topUp,
 } from "./examples/agentAllowance";
 
 export type {
   AccrualState,
-  CreateAllowanceParams
+  CreateAllowanceParams,
 } from "./examples/agentAllowance";
 
 // ============================================
@@ -279,7 +279,7 @@ export {
   formatUsdc,
   getUsdcCoins,
   topUpUsdc,
-  usdc
+  usdc,
 } from "./examples/usdcStablecoin";
 
 // ============================================
@@ -298,7 +298,7 @@ export {
   isClaimable,
   isRefundable,
   refundExpired,
-  timeRemaining as swapTimeRemaining
+  timeRemaining as swapTimeRemaining,
 } from "./examples/atomicSwap";
 
 // ============================================
@@ -317,7 +317,7 @@ export {
   isPurchasable,
   markExpired,
   priceDropRate,
-  withdrawPayment
+  withdrawPayment,
 } from "./examples/dutchAuction";
 
 // ============================================
@@ -333,7 +333,7 @@ export {
   generateChoiceCommitment,
   getChoiceName,
   joinCoinFlipGame,
-  revealChoice
+  revealChoice,
 } from "./examples/coinFlip";
 
 // ============================================
@@ -350,7 +350,7 @@ export {
   getChannelStatusName,
   initiateClose,
   joinChannel,
-  openChannel
+  openChannel,
 } from "./examples/paymentChannel";
 
 export type { ChannelState } from "./examples/paymentChannel";
@@ -370,7 +370,7 @@ export {
   getHTLCStatusName,
   planRoute,
   refundHTLC,
-  validateTimeoutCascade
+  validateTimeoutCascade,
 } from "./examples/multiHopPayment";
 
 // ============================================
@@ -388,7 +388,7 @@ export {
   raiseDispute as raiseSessionDispute,
   recordStateUpdate,
   DEFAULT_TIMEOUT_MS as SESSION_DEFAULT_TIMEOUT_MS,
-  SessionStatus
+  SessionStatus,
 } from "./examples/tunnelLifecycle";
 
 // ============================================
@@ -407,7 +407,7 @@ export {
   resolveForRaiser,
   resolveForRespondent,
   resolveSplit,
-  ServiceLevel
+  ServiceLevel,
 } from "./examples/disputeResolution";
 
 // ============================================
@@ -428,7 +428,7 @@ export {
   setupRegistry,
   submitTransfer,
   TransferStatus,
-  verifyTransfer
+  verifyTransfer,
 } from "./examples/zkPrivateTransfer";
 
 // ============================================
@@ -457,7 +457,7 @@ async function runAllExamples(): Promise<void> {
       name: "Streaming Payment",
       fn: () =>
         import("./examples/streamingPayment").then((m) =>
-          m.exampleStreamingPaymentFlow()
+          m.exampleStreamingPaymentFlow(),
         ),
     },
     {
@@ -469,7 +469,7 @@ async function runAllExamples(): Promise<void> {
       name: "Dutch Auction",
       fn: () =>
         import("./examples/dutchAuction").then((m) =>
-          m.exampleDutchAuctionFlow()
+          m.exampleDutchAuctionFlow(),
         ),
     },
     {
@@ -481,49 +481,49 @@ async function runAllExamples(): Promise<void> {
       name: "Payment Channel",
       fn: () =>
         import("./examples/paymentChannel").then((m) =>
-          m.examplePaymentChannelFlow()
+          m.examplePaymentChannelFlow(),
         ),
     },
     {
       name: "Multi-Hop Payment",
       fn: () =>
         import("./examples/multiHopPayment").then((m) =>
-          m.exampleMultiHopPaymentFlow()
+          m.exampleMultiHopPaymentFlow(),
         ),
     },
     {
       name: "Tunnel Lifecycle",
       fn: () =>
         import("./examples/tunnelLifecycle").then((m) =>
-          m.exampleTunnelLifecycleFlow()
+          m.exampleTunnelLifecycleFlow(),
         ),
     },
     {
       name: "Dispute Resolution",
       fn: () =>
         import("./examples/disputeResolution").then((m) =>
-          m.exampleDisputeResolutionFlow()
+          m.exampleDisputeResolutionFlow(),
         ),
     },
     {
       name: "ZK Private Transfer",
       fn: () =>
         import("./examples/zkPrivateTransfer").then((m) =>
-          m.exampleZkPrivateTransferFlow()
+          m.exampleZkPrivateTransferFlow(),
         ),
     },
     {
       name: "Agent Allowance",
       fn: () =>
         import("./examples/agentAllowance").then((m) =>
-          m.exampleAgentAllowanceFlow()
+          m.exampleAgentAllowanceFlow(),
         ),
     },
     {
       name: "USDC Stablecoin",
       fn: () =>
         import("./examples/usdcStablecoin").then((m) =>
-          m.exampleUsdcStablecoinFlow()
+          m.exampleUsdcStablecoinFlow(),
         ),
     },
   ];
@@ -539,7 +539,7 @@ async function runAllExamples(): Promise<void> {
   console.log("\nTo run actual transactions, set up your environment:");
   console.log("1. Set PACKAGE_ID to your deployed sui_tunnel package");
   console.log(
-    "2. Set PRIVATE_KEY (or BUYER_PRIVATE_KEY, SELLER_PRIVATE_KEY, etc.)"
+    "2. Set PRIVATE_KEY (or BUYER_PRIVATE_KEY, SELLER_PRIVATE_KEY, etc.)",
   );
   console.log("3. Ensure you have SUI tokens for gas and stakes");
 }

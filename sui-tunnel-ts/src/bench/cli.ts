@@ -83,7 +83,7 @@ export async function main(argv: string[]): Promise<void> {
     signModeArg !== "none"
   ) {
     throw new Error(
-      `--sign-mode must be one of full|sign-only|none, got "${signModeArg}"`
+      `--sign-mode must be one of full|sign-only|none, got "${signModeArg}"`,
     );
   }
 
