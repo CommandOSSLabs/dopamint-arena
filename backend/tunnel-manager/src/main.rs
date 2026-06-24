@@ -138,6 +138,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .route("/v1/sponsor", post(routes::sponsor))
         .route("/v1/chat", post(routes::chat))
+        .route("/v1/chat/topic", get(routes::chat_topic))
         .route("/v1/stats/live", get(routes::stats_live))
         .route("/v1/mp", get(crate::mp::ws::mp_upgrade))
         .layer(TraceLayer::new_for_http())

@@ -420,6 +420,23 @@ pub(crate) async fn chat(
     }
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TopicResponse {
+    topic: String,
+}
+
+/// Ask Ollama for a short random conversation topic for two chat bots.
+pub(crate) async fn chat_topic(State(state): State<SharedState>) -> Response {
+    match state.ollama.topic().await {
+        Ok(topic) => Json(TopicResponse { topic }).into_response(),
+        Err(e) => {
+            tracing::warn!(error = %e, "ollama topic failed");
+            ApiError::resp(StatusCode::BAD_GATEWAY, "ollama_error", &e.to_string()).into_response()
+        }
+    }
+}
+
 /// Build the settled Transaction-Log row for a successful close. The settle handler owns the
 /// full proof (close digest + Walrus URL), so it pushes the enriched row directly; the
 /// indexer's later explorer-only row for the same `tx_digest` is deduped. Empty strings
@@ -751,5 +768,27 @@ mod tests {
         };
         let resp = chat(axum::extract::State(state), axum::Json(req)).await;
         assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
+    }
+
+    // GET /v1/chat/topic asks Ollama for a short random conversation topic.
+    #[tokio::test]
+    async fn chat_topic_endpoint_returns_topic() {
+        use crate::ollama::OllamaClient;
+        let mut state = test_state();
+        let server = wiremock::MockServer::start().await;
+        let body =
+            serde_json::json!({ "message": { "role": "assistant", "content": "space travel" } });
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/api/chat"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+        let ollama = OllamaClient::new(server.uri(), "qwen2.5:1.8b".into()).unwrap();
+        std::sync::Arc::get_mut(&mut state)
+            .expect("unique test arc")
+            .ollama = ollama;
+
+        let resp = chat_topic(axum::extract::State(state)).await;
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
     }
 }
