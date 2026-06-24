@@ -23,7 +23,15 @@ use crate::store::{ConnRef, CtrlMsg};
 type HoldTimer = Pin<Box<dyn Future<Output = (String, Waiting)> + Send>>;
 
 pub async fn mp_upgrade(State(state): State<SharedState>, ws: WebSocketUpgrade) -> Response {
-    ws.on_upgrade(move |socket| handle_socket(socket, state))
+    let instance = state.bus.instance_id().to_owned();
+    let mut resp = ws.on_upgrade(move |socket| handle_socket(socket, state));
+    if let Ok(value) =
+        axum::http::HeaderValue::from_str(&format!("aff={instance}; Path=/; SameSite=Lax"))
+    {
+        resp.headers_mut()
+            .insert(axum::http::header::SET_COOKIE, value);
+    }
+    resp
 }
 
 fn new_match_id() -> String {
@@ -1157,6 +1165,33 @@ mod tests {
         assert_eq!(fb["role"], "B");
         assert_eq!(fb["opponentWallet"], "0xa");
         let _ = inst;
+    }
+
+    // The WS handshake response sets the per-browser affinity cookie naming this instance, so the
+    // LB can route reconnects back here (preserving co-location). See ADR-0011 / spec §Component 2.
+    #[tokio::test]
+    async fn mp_upgrade_sets_affinity_cookie() {
+        use axum::routing::get;
+        use axum::Router;
+
+        let app = Router::new()
+            .route("/v1/mp", get(mp_upgrade))
+            .with_state(AppState::in_memory_for_test());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        // connect_async returns (stream, Response) — the Response carries the 101 headers.
+        let (_ws, resp) = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/mp"))
+            .await
+            .expect("ws connect");
+
+        let cookie = resp
+            .headers()
+            .get("set-cookie")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        assert!(cookie.starts_with("aff=test-instance"), "got: {cookie}");
     }
 
     // Two idle cross-instance waiters: the hold timer fires and both sockets receive match.found.
