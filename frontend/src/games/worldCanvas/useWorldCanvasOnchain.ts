@@ -12,7 +12,7 @@
  *
  * EXACTLY ONE TUNNEL, TWO SEATS — the corrected arena shape (no "Wall Bot", no
  * "+pair" swarm, no many parallel tunnels). The window opens a single 2-party
- * tunnel whose distinct DOPAMINT-funded seats A and B BOTH author on it:
+ * tunnel whose distinct MTPS-funded seats A and B BOTH author on it:
  *   - SOLO / watch (Auto ON, the default): seat A and seat B are each driven by a
  *     bot — bot-vs-bot collaboration on one tunnel (two distinct funded painters).
  *   - Take the wheel (Auto OFF): the HUMAN authors seat A ({@link submitHumanPaint}),
@@ -38,7 +38,7 @@
  * tunnel reopens so painting never stops.
  *
  * Opening tries the gas SPONSOR first, so the seats (fresh bot keys with ZERO SUI)
- * open for free, faucet-minting their DOPAMINT stake:
+ * open for free, faucet-minting their MTPS stake:
  *   - SPONSORED → on-chain (default): the settler wraps `create_and_fund` in its own
  *     SIP-58 gas; the painters only co-sign.
  *   - SENDER-PAYS fallback: sponsor unreachable AND the opener holds gas.
@@ -71,10 +71,10 @@ import { buildSettleWithRootTx } from "@/games/ticTacToe/app/lib/tunnel";
 import { openAndFundSelfPlay, readCreatedAt } from "@/onchain/tunnelTx";
 import { settleViaBackend } from "@/backend/settle";
 import {
-  isDopamintConfigured,
-  ensureDopamintStakeCoin,
-  DOPAMINT_COIN_TYPE,
-} from "@/onchain/dopamint";
+  isMtpsConfigured,
+  ensureMtpsStakeCoin,
+  MTPS_COIN_TYPE,
+} from "@/onchain/mtps";
 import {
   loadOrCreateBots,
   getSuiClient,
@@ -104,12 +104,12 @@ export type { AgentModeId } from "./designs";
 const CHUNK_SIZE = 256;
 /** Palette size; a paint's color is in [0, NUM_COLORS). */
 const NUM_COLORS = 16;
-/** SUI-fallback per-seat stake (MIST) when DOPAMINT env is unset. Collaborative free
+/** SUI-fallback per-seat stake (MIST) when MTPS env is unset. Collaborative free
  *  mode never shifts balances, so any close is a draw (each seat keeps its stake). */
 const STAKE = 1n;
-/** DOPAMINT per-seat stake (1 token, 9 decimals) — the default on-chain path (ADR-0010):
+/** MTPS per-seat stake (1 token, 9 decimals) — the default on-chain path (ADR-0010):
  *  faucet-minted, so painters need ZERO SUI; only gas is sponsored. Mirrors the other games. */
-const DOPAMINT_STAKE_PER_SEAT = 1_000_000_000n;
+const MTPS_STAKE_PER_SEAT = 1_000_000_000n;
 /** Dashboard game key (groups TPS/tunnels under "world-canvas"). */
 const GAME = "world-canvas";
 /** Soft cap on retained painted cells; oldest are evicted so an endless wall keeps
@@ -467,7 +467,7 @@ interface CanvasRun {
   lastCheckpoint: number;
   /** True while a checkpoint close is in flight, so paints don't trigger a second. */
   checkpointing: boolean;
-  /** Staked token type (DOPAMINT, or undefined = SUI); the checkpoint close needs it. */
+  /** Staked token type (MTPS, or undefined = SUI); the checkpoint close needs it. */
   coinType?: string;
 }
 
@@ -868,14 +868,14 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
         publicKey: identities.b.publicKey,
       };
 
-      // DOPAMINT mode (ADR-0010, the default): stake FREE faucet-minted DOPAMINT and
+      // MTPS mode (ADR-0010, the default): stake FREE faucet-minted MTPS and
       // sponsor the painter's open gas, so it needs ZERO SUI — exactly how the finite
       // games open. A sponsored tx can't reference `tx.gas`, so the stake MUST come from
-      // a `stakeCoinId` (not the SUI gas-coin fallback). SUI fallback (DOPAMINT env
+      // a `stakeCoinId` (not the SUI gas-coin fallback). SUI fallback (MTPS env
       // unset): the painter funds the stakes from its own gas.
-      const dopamintOn = isDopamintConfigured;
-      const coinType = dopamintOn ? DOPAMINT_COIN_TYPE : undefined;
-      const stakePerSeat = dopamintOn ? DOPAMINT_STAKE_PER_SEAT : STAKE;
+      const mtpsOn = isMtpsConfigured;
+      const coinType = mtpsOn ? MTPS_COIN_TYPE : undefined;
+      const stakePerSeat = mtpsOn ? MTPS_STAKE_PER_SEAT : STAKE;
       run.coinType = coinType;
 
       const sponsoredSignExec = makeKeypairSponsoredSignExec({
@@ -888,7 +888,7 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
       >[0]["reads"];
 
       try {
-        // Pre-select the DOPAMINT stake coin BEFORE the open so concurrent (re)opens of
+        // Pre-select the MTPS stake coin BEFORE the open so concurrent (re)opens of
         // the single tunnel — and React StrictMode's double-mount — don't equivocate at
         // the shared faucet object. Funding each open against a coin that's already in
         // hand is what lets us drop the old open serializer: the faucet pull (if any)
@@ -896,12 +896,12 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
         // a ready coin (Sui's own object-version ordering settles any overlap). Mirrors
         // chickenCross's `prepareStake` ahead of the open, but keyed to the ephemeral
         // seat-A identity (a 0-SUI bot key, gas-sponsored), not a connected wallet. SUI
-        // fallback (DOPAMINT env unset) has no such coin — the framework splits the stake
+        // fallback (MTPS env unset) has no such coin — the framework splits the stake
         // from the gas coin inside openAndFundSelfPlay.
         let stakeCoinId: string | undefined;
-        if (dopamintOn) {
+        if (mtpsOn) {
           // Self-play funds BOTH seats from one coin → faucet/select for the 2-seat total.
-          stakeCoinId = await ensureDopamintStakeCoin({
+          stakeCoinId = await ensureMtpsStakeCoin({
             client: client as never,
             signExec: sponsoredSignExec,
             owner: identities.a.address,
@@ -910,10 +910,10 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
         }
 
         // ONE create_and_fund opens the tunnel AND funds BOTH distinct seats' stakes in a
-        // single signature (the shared, proven self-play helper). DOPAMINT: gas-sponsored,
+        // single signature (the shared, proven self-play helper). MTPS: gas-sponsored,
         // staked from the pre-selected faucet coin. SUI fallback: sponsored first, then
         // sender-pays (the seat-A key paying its own gas).
-        const openedTunnelId = dopamintOn
+        const openedTunnelId = mtpsOn
           ? await openAndFundSelfPlay({
               reads,
               signExec: sponsoredSignExec,

@@ -224,7 +224,7 @@ const TINT_BOT_A = "#9cefcf";
 
 /**
  * The in-canvas arena cluster for the live ONE strictly-2-party tunnel: two DISTINCT
- * DOPAMINT-funded seats co-paint it (free/draw, no winner, no stake shift; the only
+ * MTPS-funded seats co-paint it (free/draw, no winner, no stake shift; the only
  * score is who co-signed the most cells — see {@link MostPainted}). The SINGLE Auto
  * toggle, "take the wheel": Auto ON = watch both bots; Auto OFF = you author seat A vs
  * the seat-B bot on the SAME tunnel. "View" cycles the camera to a live bot.
