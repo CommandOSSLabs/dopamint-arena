@@ -9,7 +9,7 @@ import {
   MostPainted,
   type ToolId,
 } from "./FloatingToolbar";
-import { WC, FONT_DISPLAY } from "./tokens";
+import { WC, FONT_DISPLAY, ERASER_COLOR } from "./tokens";
 
 /** Below this container width the centered toolbar and the top-right arena cluster can't
  *  float side-by-side without overlapping, so they reflow into a stacked top bar instead:
@@ -20,23 +20,14 @@ const STACK_WIDTH = 1120;
  *  single current-color swatch + popover (keeping the toolbar to one tidy row). */
 const COLLAPSE_WIDTH = 640;
 
-/** Eraser co-signs a real move under this index; it RENDERS in the backdrop color
- *  (handled in WorldCanvas via `erasing`), so the index itself is never seen. */
-const ERASER_COLOR = 3;
-
-/** Selectable canvas backdrops (Excalidraw-style): a few presets, not a free picker. */
-const BACKGROUNDS: readonly string[] = [
-  WC.board, // dark navy (default)
-  "#0a0a0f", // near-black
-  "#1e293b", // slate
-  "#f6f3ea", // paper
-  "#ffffff", // white
-];
+/** The fixed canvas backdrop — Excalidraw-style white. Passed straight to WorldCanvas so
+ *  the eraser can render this color to "erase" (phase 2 relies on it). No picker. */
+const CANVAS_BACKGROUND = "#ffffff";
 
 /**
  * The lean canvas shell — opening the game lands you straight here, ready to draw (no
  * splash, no start menu, no mode picker). The chunked wall sits behind one
- * Excalidraw-style floating toolbar (tools + a few colors + brush size + backdrop), the
+ * Excalidraw-style floating toolbar (tools + a few colors + brush size), the
  * {@link ArenaControl} Auto "take the wheel" toggle, and the {@link MostPainted} readout.
  * Every painted cell is one co-signed off-chain move on the ONE strictly-2-party tunnel;
  * free/draw, so the only score is who painted the most.
@@ -46,7 +37,6 @@ export function CanvasView() {
   const [tool, setTool] = useState<ToolId>("draw");
   const [color, setColor] = useState(13); // Sui blue
   const [brushSize, setBrushSize] = useState(1);
-  const [background, setBackground] = useState<string>(WC.board);
 
   // The canvas lives inside a freely-resizable window, so responsiveness keys off the
   // CONTAINER (not the viewport): a ResizeObserver flips the layout flags only when the
@@ -84,9 +74,6 @@ export function CanvasView() {
       onColor={setColor}
       brushSize={brushSize}
       onBrushSize={setBrushSize}
-      background={background}
-      backgrounds={BACKGROUNDS}
-      onBackground={setBackground}
       stacked={stacked}
       collapse={collapse}
     />
@@ -114,7 +101,7 @@ export function CanvasView() {
         agents={engine.agents}
         focus={engine.focus}
         humanAddress={engine.humanAddress}
-        background={background}
+        background={CANVAS_BACKGROUND}
         erasing={tool === "erase"}
       />
 

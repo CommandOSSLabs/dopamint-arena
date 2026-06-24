@@ -8,17 +8,12 @@ import {
   type AgentMarker,
   type CanvasFocus,
 } from "../useWorldCanvasOnchain";
-import { WC, FONT_DISPLAY } from "./tokens";
+import { WC, FONT_DISPLAY, ERASER_COLOR } from "./tokens";
 
 const CHUNK = 256;
-const ERASER_COLOR = 3;
-const BACKGROUNDS: readonly string[] = [
-  WC.board,
-  "#0a0a0f",
-  "#1e293b",
-  "#f6f3ea",
-  "#ffffff",
-];
+/** Fixed canvas backdrop (matches solo) — Excalidraw-style white, passed to WorldCanvas so
+ *  the eraser can render this color to "erase" (phase 2 relies on it). No picker. */
+const CANVAS_BACKGROUND = "#ffffff";
 const SEAT_TINT: Record<"A" | "B", string> = { A: WC.seatA, B: WC.seatB };
 
 /** Zoom a participant-chip jump eases to (HUD ~45%): wide enough to see the painter's
@@ -27,8 +22,8 @@ const SEAT_TINT: Record<"A" | "B", string> = { A: WC.seatA, B: WC.seatB };
 const PARTICIPANT_VIEW_SCALE = 4.5;
 
 /** Below this container width the full palette no longer fits one row, so the toolbar
- *  collapses its palette + backdrop into single swatch popovers (matching solo) — keeping
- *  it one tidy row instead of wrapping into a grid that buries the small PvP canvas. */
+ *  collapses its palette into a single current-color swatch + popover (matching solo) —
+ *  keeping it one tidy row instead of wrapping into a grid that buries the PvP canvas. */
 const COLLAPSE_WIDTH = 640;
 
 /**
@@ -90,7 +85,6 @@ function Board({ m }: { m: ReturnType<typeof usePvpWorldCanvas> }) {
   const [tool, setTool] = useState<ToolId>("draw");
   const [color, setColor] = useState(13);
   const [brushSize, setBrushSize] = useState(1);
-  const [background, setBackground] = useState<string>(WC.board);
   const [revision, setRevision] = useState(0);
 
   // Responsiveness keys off the CONTAINER width (the window is freely resizable), not the
@@ -207,7 +201,7 @@ function Board({ m }: { m: ReturnType<typeof usePvpWorldCanvas> }) {
         agents={agents}
         focus={focus}
         humanAddress=""
-        background={background}
+        background={CANVAS_BACKGROUND}
         erasing={tool === "erase"}
       />
 
@@ -218,9 +212,6 @@ function Board({ m }: { m: ReturnType<typeof usePvpWorldCanvas> }) {
         onColor={setColor}
         brushSize={brushSize}
         onBrushSize={setBrushSize}
-        background={background}
-        backgrounds={BACKGROUNDS}
-        onBackground={setBackground}
         collapse={collapse}
       />
 

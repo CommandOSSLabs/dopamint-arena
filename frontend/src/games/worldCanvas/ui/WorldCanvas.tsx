@@ -8,6 +8,7 @@ import {
 import {
   CHUNK_SIZE,
   PALETTE,
+  ERASER_COLOR,
   WC,
   ZOOM,
   TAP_SLOP,
@@ -198,14 +199,6 @@ export function WorldCanvas({
   const liveStroke = useRef<OpenStroke | null>(null);
   const appliedSeq = useRef(0);
   const syncedRevision = useRef(-1);
-  // Global-pixel bounding box of every painted cell, grown as paints fold in.
-  // Drives the ⊙ "fit to content" reset so a recenter never lands on a blank void.
-  const bbox = useRef<{
-    minX: number;
-    minY: number;
-    maxX: number;
-    maxY: number;
-  } | null>(null);
 
   const selColorRef = useRef(selectedColor);
   selColorRef.current = selectedColor;
@@ -232,10 +225,9 @@ export function WorldCanvas({
 
   const [hud, setHud] = useState<{
     zoom: number;
-    cell: GlobalCell | null;
     /** Floating owner label for the hovered painted cell ("You" / "owner …"). */
     owner: { label: string; sx: number; sy: number } | null;
-  }>({ zoom: 10, cell: null, owner: null });
+  }>({ zoom: 10, owner: null });
 
   // A new focus request (agent spawn) sets a camera target the draw loop eases to.
   useEffect(() => {
@@ -271,19 +263,6 @@ export function WorldCanvas({
     };
   };
 
-  // Grow the painted-content bbox (global cells) for the ⊙ fit-to-content reset.
-  const growBbox = (gx: number, gy: number) => {
-    const bb = bbox.current;
-    if (!bb) {
-      bbox.current = { minX: gx, minY: gy, maxX: gx, maxY: gy };
-    } else {
-      if (gx < bb.minX) bb.minX = gx;
-      if (gy < bb.minY) bb.minY = gy;
-      if (gx > bb.maxX) bb.maxX = gx;
-      if (gy > bb.maxY) bb.maxY = gy;
-    }
-  };
-
   // Freeze an open stroke into a cached polyline + width + bbox; evict the oldest
   // when the retained set is full (constant memory for an endless wall).
   const finalizeStroke = (s: OpenStroke) => {
@@ -304,7 +283,6 @@ export function WorldCanvas({
   // Append a cell's world-center point to its painter's open stroke; a big jump (new
   // region / pen lift) finalizes the current one and starts a fresh stroke.
   const extendStroke = (key: string, px: number, py: number, color: number, size: number) => {
-    growBbox(Math.floor(px), Math.floor(py));
     const open = openStrokes.current.get(key);
     if (
       open &&
@@ -350,7 +328,6 @@ export function WorldCanvas({
       const gx = Number(cell.cx) * CHUNK_SIZE + cell.x;
       const gy = Number(cell.cy) * CHUNK_SIZE + cell.y;
       if (cell.painter === human) {
-        growBbox(gx, gy);
         continue;
       }
       extendStroke(cell.painter, gx + 0.5, gy + 0.5, cell.color, AGENT_STROKE_SIZE);
@@ -440,9 +417,13 @@ export function WorldCanvas({
         s.minY <= gMaxY + pad;
 
       // Stroke one world-space polyline at the current pan/zoom with a round-capped
-      // line (smooth, anti-aliased — no taper). Eraser strokes paint the backdrop
-      // color so they cover earlier ink (a visual erase on append-only art). A lone
-      // point (a single click) draws as a round dab so a tap still leaves a mark.
+      // line (smooth, anti-aliased — no taper). An erase paints the backdrop color so it
+      // covers earlier ink (a visual erase on append-only art). The erase is decided
+      // PER CELL by its color index — any cell co-signed under {@link ERASER_COLOR}
+      // renders as backdrop for EVERY painter (local AND received over the tunnel), so a
+      // synced erase reads as "erased" on the opponent's wall too; the `erase` flag only
+      // mirrors the local live-stroke preview. A lone point (a single click) draws as a
+      // round dab so a tap still leaves a mark.
       const strokePath = (
         pts: number[][],
         color: number,
@@ -450,7 +431,8 @@ export function WorldCanvas({
         erase: boolean,
       ) => {
         if (!pts.length) return;
-        const ink = erase ? bg : (PALETTE[color] ?? "#ffffff");
+        const ink =
+          erase || color === ERASER_COLOR ? bg : (PALETTE[color] ?? "#ffffff");
         const lw = Math.max(1, size * v.scale);
         if (pts.length === 1) {
           ctx.fillStyle = ink;
@@ -556,14 +538,12 @@ export function WorldCanvas({
           }
           if (
             prev.zoom === v.scale &&
-            prev.cell?.gx === cell?.gx &&
-            prev.cell?.gy === cell?.gy &&
             prev.owner?.label === owner?.label &&
             prev.owner?.sx === owner?.sx &&
             prev.owner?.sy === owner?.sy
           )
             return prev;
-          return { zoom: v.scale, cell, owner };
+          return { zoom: v.scale, owner };
         });
       }
       raf = requestAnimationFrame(draw);
@@ -745,36 +725,6 @@ export function WorldCanvas({
     v.scale = next;
   };
 
-  // ⊙ "fit to content": frame every painted cell (with a little padding) so a
-  // reset always lands on the art, never a blank region. Recenters the empty
-  // origin only when nothing has been painted yet. Cancels any active camera jump.
-  const resetView = () => {
-    const wrap = wrapRef.current;
-    if (!wrap) return;
-    focusTarget.current = null;
-    const cw = wrap.clientWidth;
-    const ch = wrap.clientHeight;
-    const v = view.current;
-    const bb = bbox.current;
-    if (!bb) {
-      v.scale = 10;
-      v.offsetX = cw / 2;
-      v.offsetY = ch / 2;
-      return;
-    }
-    const pad = 2; // cells of breathing room around the content
-    const gW = bb.maxX - bb.minX + 1 + pad * 2;
-    const gH = bb.maxY - bb.minY + 1 + pad * 2;
-    const scale = Math.max(
-      ZOOM.min,
-      Math.min(ZOOM.max, Math.min(cw / gW, ch / gH)),
-    );
-    const cgx = (bb.minX + bb.maxX + 1) / 2;
-    const cgy = (bb.minY + bb.maxY + 1) / 2;
-    v.scale = scale;
-    v.offsetX = cw / 2 - cgx * scale;
-    v.offsetY = ch / 2 - cgy * scale;
-  };
   const onWheel = (e: React.WheelEvent) => {
     focusTarget.current = null; // manual zoom cancels any active jump
     const { sx, sy } = localXY(e);
@@ -840,13 +790,6 @@ export function WorldCanvas({
           {Math.round((hud.zoom / 10) * 100)}%
         </span>
         <ZoomButton label="+" onClick={() => zoomBy(ZOOM.step)} />
-        <ZoomButton label="⊙" onClick={resetView} />
-        <span
-          className="ml-0.5 min-w-[74px] text-[11px] tabular-nums"
-          style={{ color: WC.muted, fontFamily: FONT_MONO }}
-        >
-          {hud.cell ? `${hud.cell.gx},${hud.cell.gy}` : "—"}
-        </span>
       </div>
     </div>
   );

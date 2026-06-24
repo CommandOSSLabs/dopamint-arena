@@ -68,6 +68,16 @@ export const PALETTE: readonly string[] = [
   "#CF6EE4", // 15 light purple
 ];
 
+/**
+ * The reserved eraser palette index. An erase is a REAL co-signed paint move that crosses
+ * the tunnel like any other cell (so it syncs to the opponent), but EVERY painter — local
+ * AND received — RENDERS a cell of this index in the canvas backdrop color, so an erase
+ * reads as "erased" on both seats' walls. Index 0 (white) is reserved for this: it's the
+ * white backdrop, and it's deliberately omitted from the toolbar swatches, so it's never a
+ * selectable draw color. PvE and PvP MUST share this index so an erase round-trips cleanly.
+ */
+export const ERASER_COLOR = 0;
+
 /** Palette pre-parsed to [r,g,b] triples for fast ImageData writes. */
 export const PALETTE_RGB: ReadonlyArray<readonly [number, number, number]> =
   PALETTE.map((hex) => {

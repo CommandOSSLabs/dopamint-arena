@@ -21,9 +21,10 @@ const SIZES: readonly number[] = [1, 2, 3];
 
 /**
  * The Excalidraw-style floating toolbar: one rounded, faded-frost island centered at
- * the top. Tools on the left, a few preset color swatches, a brush-size stepper, and a
- * row of backdrop presets — that's the whole config surface. No menus, no panels. The
- * Auto "take the wheel" toggle is its own cluster in the top-right ({@link ArenaControl}).
+ * the top, laid out as a single compact row — tools on the left, a few preset color
+ * swatches, then a brush-size stepper. That's the whole config surface. No menus, no
+ * panels. The Auto "take the wheel" toggle is its own cluster in the top-right
+ * ({@link ArenaControl}).
  */
 export function FloatingToolbar({
   tool,
@@ -32,9 +33,6 @@ export function FloatingToolbar({
   onColor,
   brushSize,
   onBrushSize,
-  background,
-  backgrounds,
-  onBackground,
   stacked = false,
   collapse = false,
 }: {
@@ -45,14 +43,10 @@ export function FloatingToolbar({
   onColor: (index: number) => void;
   brushSize: number;
   onBrushSize: (n: number) => void;
-  /** Current canvas backdrop color + the presets + setter (Excalidraw-style). */
-  background: string;
-  backgrounds: readonly string[];
-  onBackground: (hex: string) => void;
   /** Drop the absolute float for an in-flow island the parent stacks in its top bar. */
   stacked?: boolean;
-  /** Collapse the inline palette + backdrop rows into single swatches with popovers (and
-   *  drop the dividers) so the island stays one tidy row at narrow widths. */
+  /** Collapse the inline palette into a single current-color swatch + popover (and drop
+   *  the dividers) so the island stays one tidy row at narrow widths. */
   collapse?: boolean;
 }) {
   return (
@@ -151,35 +145,6 @@ export function FloatingToolbar({
           );
         })}
       </div>
-
-      {!collapse && <Divider />}
-
-      {/* Canvas background presets (Excalidraw-style) — sets the board color. Narrow:
-          collapses to one current-background dot + popover, matching the color swatch. */}
-      {collapse ? (
-        <BackgroundPopover
-          background={background}
-          backgrounds={backgrounds}
-          onBackground={onBackground}
-        />
-      ) : (
-        <div style={swatchGroupStyle} title="Canvas background">
-          {backgrounds.map((hex) => {
-            const on = background.toLowerCase() === hex.toLowerCase();
-            return (
-              <button
-                key={hex}
-                type="button"
-                title={`Background ${hex}`}
-                aria-label={`Background ${hex}`}
-                aria-pressed={on}
-                onClick={() => onBackground(hex)}
-                style={backgroundDotStyle(hex, on)}
-              />
-            );
-          })}
-        </div>
-      )}
     </div>
   );
 }
@@ -194,20 +159,6 @@ function swatchButtonStyle(fill: string, on: boolean): CSSProperties {
     padding: 0,
     background: fill,
     border: "1px solid rgba(0,0,0,0.18)",
-    boxShadow: on ? `0 0 0 2px ${WC.accent}` : "none",
-  };
-}
-
-/** A single backdrop-preset dot (round). The active dot gets an accent ring. */
-function backgroundDotStyle(hex: string, on: boolean): CSSProperties {
-  return {
-    width: 18,
-    height: 18,
-    borderRadius: "50%",
-    cursor: "pointer",
-    padding: 0,
-    background: hex,
-    border: "1px solid rgba(0,0,0,0.22)",
     boxShadow: on ? `0 0 0 2px ${WC.accent}` : "none",
   };
 }
@@ -257,57 +208,6 @@ function ColorPalettePopover({
                 style={swatchButtonStyle(
                   PALETTE[idx],
                   color === idx && !erasing,
-                )}
-              />
-            ))}
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-/** Narrow-width backdrop control: one dot of the active background opening a popover of
- *  the presets — the {@link ColorPalettePopover} sibling for the canvas backdrop. */
-function BackgroundPopover({
-  background,
-  backgrounds,
-  onBackground,
-}: {
-  background: string;
-  backgrounds: readonly string[];
-  onBackground: (hex: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div style={{ position: "relative", display: "flex" }}>
-      <button
-        type="button"
-        title="Canvas background"
-        aria-label="Canvas background"
-        aria-expanded={open}
-        onClick={() => setOpen((o) => !o)}
-        style={currentSwatchStyle(background, false, "50%")}
-      />
-      {open && (
-        <>
-          <div style={popoverBackdropStyle} onClick={() => setOpen(false)} />
-          {/* Right-anchored: this is the toolbar's last item, so open leftward to stay
-              inside the canvas at narrow widths. */}
-          <div style={popoverEndStyle}>
-            {backgrounds.map((hex) => (
-              <button
-                key={hex}
-                type="button"
-                title={`Background ${hex}`}
-                aria-label={`Background ${hex}`}
-                onClick={() => {
-                  onBackground(hex);
-                  setOpen(false);
-                }}
-                style={backgroundDotStyle(
-                  hex,
-                  background.toLowerCase() === hex.toLowerCase(),
                 )}
               />
             ))}
@@ -640,8 +540,8 @@ const islandStackedStyle: CSSProperties = {
   pointerEvents: "auto",
 };
 
-/** A toolbar group (tools / swatches / sizes / backgrounds) — wraps gracefully when the
- *  island runs out of width so swatches reflow instead of being cut off. */
+/** A toolbar group (tools / swatches / sizes) — wraps gracefully when the island runs
+ *  out of width so swatches reflow instead of being cut off. */
 const swatchGroupStyle: CSSProperties = {
   display: "flex",
   alignItems: "center",
@@ -725,14 +625,6 @@ const popoverStyle: CSSProperties = {
   boxShadow: "0 8px 22px rgba(0,0,0,0.28)",
   backdropFilter: "blur(12px)",
   WebkitBackdropFilter: "blur(12px)",
-};
-
-/** Same popover, right-anchored — for a trigger near the toolbar's right edge so the
- *  panel opens leftward and stays on-screen. */
-const popoverEndStyle: CSSProperties = {
-  ...popoverStyle,
-  left: "auto",
-  right: 0,
 };
 
 /** The single Auto toggle pill (faded glass): a label + a sliding switch — "take the

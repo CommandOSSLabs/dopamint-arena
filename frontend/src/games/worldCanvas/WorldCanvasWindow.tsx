@@ -48,13 +48,7 @@ function Lobby({ onSolo, onPvp }: { onSolo: () => void; onPvp: () => void }) {
   return (
     <div style={lobbyWrapStyle}>
       <div style={lobbyCardStyle}>
-        <div style={lobbyKickerStyle}>● ON-CHAIN PIXEL WALL</div>
         <h1 style={lobbyTitleStyle}>The World is Your Canvas</h1>
-        <p style={lobbyBlurbStyle}>
-          A shared, real-time ink wall on the Sui tunnel — every stroke is a co-signed
-          off-chain move (pure throughput). Paint alongside bots, or co-draw with
-          another human over a genuine 2-party tunnel.
-        </p>
 
         <button type="button" onClick={onSolo} style={primaryModeStyle}>
           🤖 Paint vs Bot
@@ -89,13 +83,6 @@ const lobbyCardStyle: CSSProperties = {
   color: WC.text,
 };
 
-const lobbyKickerStyle: CSSProperties = {
-  fontSize: 11,
-  fontWeight: 800,
-  letterSpacing: ".22em",
-  color: "#9fb6d6",
-};
-
 const lobbyTitleStyle: CSSProperties = {
   margin: 0,
   fontSize: 34,
@@ -103,14 +90,6 @@ const lobbyTitleStyle: CSSProperties = {
   fontWeight: 800,
   letterSpacing: "-.02em",
   color: "#f3f6ff",
-};
-
-const lobbyBlurbStyle: CSSProperties = {
-  margin: "2px 0 10px",
-  fontSize: 13.5,
-  lineHeight: 1.55,
-  color: "#93a0bd",
-  maxWidth: "34rem",
 };
 
 const primaryModeStyle: CSSProperties = {
