@@ -7,8 +7,9 @@
  * how a per-seat "intent" maps to a `Move`. The previous per-game hooks were ~600-line copies of
  * this body; collapsing them here makes relay/staking/auto-mode parity hold by construction.
  *
- * Scope: JSON-native, no-hidden-secret games (ADR-0010) — no `moveCodec`/secret hooks. Hidden-info
- * games (battleship/poker) are a richer superset and are intentionally NOT driven by this engine.
+ * Scope: public-state, no-hidden-secret games (ADR-0010). An optional `moveCodec` lets a game carry
+ * non-JSON-native moves (e.g. bigint chunk coords) over the relay, but there are still no secret
+ * hooks. Hidden-info games (battleship/poker) are a richer superset and are NOT driven by this engine.
  */
 import { useEffect, useSyncExternalStore } from "react";
 import {
@@ -21,6 +22,7 @@ import { defaultBackend } from "sui-tunnel-ts/core/crypto-native";
 import { makeEndpoint } from "sui-tunnel-ts/core/tunnel";
 import { fromHex, toHex } from "sui-tunnel-ts/core/bytes";
 import { DistributedTunnel } from "sui-tunnel-ts/core/distributedTunnel";
+import type { MoveCodec } from "sui-tunnel-ts/core/distributedFrame";
 import type { Protocol } from "sui-tunnel-ts/protocol/Protocol";
 import { Transcript } from "sui-tunnel-ts/proof/transcript";
 import { registerWindowDisposer } from "@/lib/windowSessions";
@@ -68,7 +70,7 @@ export type PvpStatus =
  * games whose control flow is otherwise identical.
  *
  * @typeParam State  protocol state; must carry a `winner` the board reads.
- * @typeParam Move   protocol move (JSON-native — no codec).
+ * @typeParam Move   protocol move ((de)serialized by `spec.moveCodec`; identity when JSON-native).
  * @typeParam Intent a single seat's per-tick input (a direction, an action) before it becomes a Move.
  * @typeParam View   the flattened, render-ready snapshot the board consumes.
  */
@@ -88,6 +90,9 @@ export interface PvpMatchSpec<State extends { winner: unknown }, Move, Intent, V
   intentToMove: (role: Role, intent: Intent) => Move;
   /** Read this seat's intent out of a bot-proposed Move (undefined ⇒ apply `idleIntent`). */
   readIntent: (role: Role, move: Move | null) => Intent | undefined;
+  /** Optional move (de)serializer for non-JSON-native moves (e.g. bigint chunk coords).
+   *  Omitted ⇒ identity codec (JSON-native moves; the default for every other game). */
+  moveCodec?: MoveCodec<Move>;
 }
 
 /** The hook's reactive surface. Game wrappers rename `setIntent` to their domain control. */
@@ -412,6 +417,7 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
           this.spec.game,
           {
             proto: this.spec.makeProtocol(),
+            moveCodec: this.spec.moveCodec,
             adapter: this.makeAdapter(),
           },
           { selfWallet: wallet },
@@ -513,7 +519,8 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
           });
         }
 
-        // 3) build the distributed engine over the relay transport (no moveCodec — JSON-native).
+        // 3) build the distributed engine over the relay transport. `spec.moveCodec` (when set)
+        //    (de)serializes non-JSON-native moves; undefined ⇒ identity codec (JSON-native).
         const backend = defaultBackend();
         const self = makeEndpoint(backend, wallet, ephemeral, true);
         const opp = makeEndpoint(
@@ -529,6 +536,7 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
             self,
             opponent: opp,
             selfParty: match.role,
+            moveCodec: this.spec.moveCodec,
           },
           channel.transport,
           { a: this.spec.stake, b: this.spec.stake },
