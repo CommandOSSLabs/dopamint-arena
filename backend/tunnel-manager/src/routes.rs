@@ -88,7 +88,10 @@ pub(crate) struct SettleRequest {
     settlement: Settlement,
     sig_a: String,
     sig_b: String,
-    transcript: Vec<serde_json::Value>,
+    // Opaque to the backend — only counted and forwarded to Walrus verbatim. `RawValue` keeps each
+    // entry as the unparsed source slice, so a long transcript stays ~1× its wire size instead of
+    // ballooning into a `Value` tree (the headroom that lets `/settle` accept a 16 MB body safely).
+    transcript: Vec<Box<serde_json::value::RawValue>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -267,13 +270,23 @@ pub(crate) async fn settle(
             // co-signed transcript root (same value anchored on-chain), which verifyTranscript
             // re-checks against the recomputed Merkle root and the on-chain anchor.
             let update_count = req.transcript.len();
-            let record = serde_json::json!({
-                "tunnelId": req.settlement.tunnel_id.clone(),
-                "root": req.settlement.transcript_root.clone(),
-                "updateCount": update_count,
-                "entries": req.transcript,
-            });
-            let blob = serde_json::to_vec(&record).unwrap_or_default();
+            // Serialize via a borrowed struct (not `json!`) so the `RawValue` entries stream straight
+            // through — `to_value` would re-parse them into a `Value` tree, the cost we just avoided.
+            #[derive(Serialize)]
+            #[serde(rename_all = "camelCase")]
+            struct ProofBlob<'a> {
+                tunnel_id: &'a str,
+                root: &'a str,
+                update_count: usize,
+                entries: &'a [Box<serde_json::value::RawValue>],
+            }
+            let blob = serde_json::to_vec(&ProofBlob {
+                tunnel_id: &req.settlement.tunnel_id,
+                root: &req.settlement.transcript_root,
+                update_count,
+                entries: &req.transcript,
+            })
+            .unwrap_or_default();
             let (blob_id, proof_url) = match state.walrus.upload_transcript(blob).await {
                 Ok(v) => v,
                 Err(e) => {
@@ -305,12 +318,64 @@ pub(crate) async fn settle(
             Json(serde_json::json!({ "txDigest": digest, "walrusBlobId": blob_id, "proofUrl": proof_url }))
                 .into_response()
         }
-        Err(e) => ApiError::resp(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "settle_failed",
-            &e.to_string(),
-        )
+        Err(e) => {
+            tracing::warn!(tunnel_id = %tunnel_id, error = %e, "settle close failed");
+            ApiError::resp(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "settle_failed",
+                &e.to_string(),
+            )
+            .into_response()
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SponsorRequest {
+    /// The user's address — the sender of the open/fund tx. Funds (stake) come from this account.
+    sender: String,
+    /// Base64 of the client-built transaction KIND (`build({ onlyTransactionKind: true })`).
+    tx_kind_bytes: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SponsorResponse {
+    /// Base64 of the full sponsored transaction the user must co-sign and submit.
+    tx_bytes: String,
+    /// The settler's gas signature (base64), to submit alongside the user's sender signature.
+    sponsor_signature: String,
+}
+
+/// Sponsor gas (only) for a user's open/fund tx (ADR-0009). Wraps the client-built tx KIND in
+/// SIP-58 gas owned by the settler, dry-runs it (verify-before-gas), and returns the bytes + the
+/// settler's gas signature. The user co-signs the SAME bytes and submits with both signatures;
+/// the stake comes from the user's own coin, never the sponsor. No session/bearer gate — the
+/// allowlist + budget cap + dry-run are the only thing standing between this and a gas faucet.
+pub(crate) async fn sponsor(
+    State(state): State<SharedState>,
+    Json(req): Json<SponsorRequest>,
+) -> Response {
+    match state
+        .settler
+        .sponsor_open_fund(&req.sender, &req.tx_kind_bytes)
+        .await
+    {
+        Ok((tx_bytes, sponsor_signature)) => Json(SponsorResponse {
+            tx_bytes,
+            sponsor_signature,
+        })
         .into_response(),
+        Err(e) => {
+            tracing::warn!(sender = %req.sender, error = %e, "sponsor refused");
+            ApiError::resp(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "sponsor_refused",
+                &e.to_string(),
+            )
+            .into_response()
+        }
     }
 }
 

@@ -11,14 +11,6 @@ import {
 } from "@/backend/explorerClient";
 import { useSuiClientContext } from "@mysten/dapp-kit";
 
-// Balances arrive as decimal-string MIST (u64, ADR-0002); parse with BigInt to keep precision.
-const mist = (s: string | null): bigint => (s == null ? 0n : BigInt(s));
-
-function fmtSui(mistAmount: bigint): string {
-  // Display only — the exact conservation check runs in verifyTranscript on bigint.
-  return (Number(mistAmount) / 1e9).toFixed(3).replace(/\.?0+$/, "") + " SUI";
-}
-
 export function ExplorerPage() {
   const { network } = useSuiClientContext();
   const [rows, setRows] = useState<SettlementRow[]>([]);
@@ -38,7 +30,7 @@ export function ExplorerPage() {
       try {
         const page = await listSettlements({
           limit: 50,
-          cursor: reset ? undefined : cursor ?? undefined,
+          cursor: reset ? undefined : (cursor ?? undefined),
           address: address.trim() || undefined,
           kind: "settled",
         });
@@ -73,19 +65,24 @@ export function ExplorerPage() {
       ) {
         return;
       }
-      setRows((prev) => (prev.some((r) => r.txDigest === row.txDigest) ? prev : [row, ...prev]));
+      setRows((prev) =>
+        prev.some((r) => r.txDigest === row.txDigest) ? prev : [row, ...prev],
+      );
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (
-    <div className="mx-auto flex min-h-screen max-w-5xl flex-col gap-4 p-6">
+    <div className="mx-auto flex h-full max-w-5xl flex-col gap-4 p-4 sm:p-6">
       <header className="flex flex-col gap-1">
-        <span className="wal-eyebrow text-muted-foreground">Dopamint · proof explorer</span>
+        <span className="wal-eyebrow text-muted-foreground">
+          Dopamint · proof explorer
+        </span>
         <h1 className="wal-display text-2xl">Settlements</h1>
         <p className="text-sm text-muted-foreground">
-          Every row is an on-chain settlement. Open one to re-verify the off-chain transcript
-          yourself — signatures, nonces, balance conservation, and the anchored root.
+          Every row is an on-chain settlement. Open one to re-verify the
+          off-chain transcript yourself — signatures, nonces, balance
+          conservation, and the anchored root.
         </p>
       </header>
 
@@ -109,20 +106,25 @@ export function ExplorerPage() {
                 <th className="px-3 py-2 font-medium">TUNNEL</th>
                 <th className="px-3 py-2 font-medium">CHECKPOINT</th>
                 <th className="px-3 py-2 font-medium">TIME</th>
-                <th className="px-3 py-2 text-right font-medium">POT</th>
                 <th className="px-3 py-2" />
               </tr>
             </thead>
             <tbody>
               {rows.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-3 py-10 text-center text-muted-foreground">
+                  <td
+                    colSpan={6}
+                    className="px-3 py-10 text-center text-muted-foreground"
+                  >
                     No settlements yet.
                   </td>
                 </tr>
               ) : (
                 rows.map((r) => (
-                  <tr key={r.txDigest} className="border-t border-border/60 hover:bg-secondary/40">
+                  <tr
+                    key={r.txDigest}
+                    className="border-t border-border/60 hover:bg-secondary/40"
+                  >
                     <td className="wal-mono px-3 py-2">
                       <a
                         href={suivisionTxUrl(r.txDigest, network)}
@@ -139,9 +141,6 @@ export function ExplorerPage() {
                     <td className="wal-mono px-3 py-2">{r.checkpoint}</td>
                     <td className="px-3 py-2 text-muted-foreground">
                       {new Date(r.timestampMs).toLocaleString()}
-                    </td>
-                    <td className="px-3 py-2 text-right">
-                      {fmtSui(mist(r.partyABalance) + mist(r.partyBBalance))}
                     </td>
                     <td className="px-3 py-2 text-right">
                       <Link

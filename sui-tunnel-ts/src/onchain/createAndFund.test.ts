@@ -3,7 +3,11 @@ process.env.PACKAGE_ID = "0x" + "ab".repeat(32);
 import { Transaction } from "@mysten/sui/transactions";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildCreateAndFund, buildOpenAndFundMany } from "./createAndFund";
+import {
+  buildCreateAndFund,
+  buildOpenAndFundMany,
+  buildOpenAndFundOneReturnless,
+} from "./createAndFund";
 import { buildEmitQuantumPokerRandomnessSeed } from "./txbuilders";
 
 const PARTY_A = {
@@ -64,10 +68,37 @@ test("buildOpenAndFundMany makes one SplitCoins and N create_and_fund calls", ()
   const funds = cmds.filter(
     (c) =>
       c.$kind === "MoveCall" &&
-      c.MoveCall?.function === "create_and_fund_with_id",
+      c.MoveCall?.function === "create_and_fund",
   );
   assert.equal(splits.length, 1);
   assert.equal(funds.length, n);
+});
+
+test("buildOpenAndFundOneReturnless targets the returnless create_and_fund", () => {
+  const tx = new Transaction();
+  buildOpenAndFundOneReturnless(tx, {
+    partyA: PARTY_A,
+    partyB: PARTY_B,
+    aAmount: 1000n,
+    bAmount: 1000n,
+    timeoutMs: 3_600_000n,
+  });
+  const cmds = tx.getData().commands as Array<{
+    $kind: string;
+    MoveCall?: { function: string };
+  }>;
+  const splits = cmds.filter((c) => c.$kind === "SplitCoins");
+  const funds = cmds.filter(
+    (c) => c.$kind === "MoveCall" && c.MoveCall?.function === "create_and_fund",
+  );
+  const withId = cmds.filter(
+    (c) =>
+      c.$kind === "MoveCall" &&
+      c.MoveCall?.function === "create_and_fund_with_id",
+  );
+  assert.equal(splits.length, 1);
+  assert.equal(funds.length, 1);
+  assert.equal(withId.length, 0);
 });
 
 const USDC = "0x" + "cc".repeat(32) + "::usdc::USDC";
@@ -97,7 +128,7 @@ test("buildOpenAndFundMany funds a non-SUI batch from a caller-supplied source c
   const funds = cmds.filter(
     (c) =>
       c.$kind === "MoveCall" &&
-      c.MoveCall?.function === "create_and_fund_with_id",
+      c.MoveCall?.function === "create_and_fund",
   );
   assert.equal(splits.length, 1);
   assert.equal(funds.length, n);

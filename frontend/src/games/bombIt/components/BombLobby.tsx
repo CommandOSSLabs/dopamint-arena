@@ -1,36 +1,89 @@
+import { useState } from "react";
+import { BOMB_BTN, BOMB_IT_STYLE } from "../bombItTheme";
+import { BombGlyph, BombLobbyScene } from "./bombSprites";
 import "../bomb-it.css";
 
-/** Quick-join PvP entry (single shared queue, no room code) — consistent with the other games. */
+/** Splash/menu: bottom HUD dock + ambient arena assets (distinct from Chicken Cross card). */
 export function BombLobby({
-  onFindMatch,
-  onBenchmark,
+  onSolo,
+  onFind,
 }: {
-  onFindMatch: () => void;
-  /** Enter the bot-vs-bot TPS benchmark (self-play). Omitted hides the entry. */
-  onBenchmark?: () => void;
+  onSolo: (stake: number) => void;
+  onFind: () => void;
 }) {
+  const [tab, setTab] = useState<"solo" | "pvp">("solo");
+  const [stake, setStake] = useState("500");
+
+  const handleSolo = () => onSolo(Math.max(1, Math.floor(Number(stake)) || 0));
+
   return (
-    <div className="flex h-full w-full flex-col items-center justify-center gap-4 bg-arena-bg p-4 text-center">
-      <h2 className="text-gold text-lg font-extrabold uppercase tracking-widest">Bomb It PvP</h2>
-      <p className="max-w-xs text-sm text-arena-muted">
-        Find an opponent and bomb each other on a shared grid over a Sui tunnel.
-      </p>
+    <div style={BOMB_IT_STYLE} className="bomb-lobby">
+      <BombLobbyScene />
 
-      <button
-        onClick={onFindMatch}
-        className="gold-glow-hover rounded border border-amber-500 bg-arena-accent px-6 py-2 font-bold uppercase tracking-widest text-arena-bg transition-all hover:opacity-90"
-      >
-        Find Match
-      </button>
+      <footer className="bomb-lobby__dock">
+        <div className="bomb-lobby__brand">
+          <h2 className="bomb-lobby__mark wal-doto">
+            <span>BOMB</span>
+            <span>IT</span>
+          </h2>
+          <div className="bomb-lobby__legend">
+            <BombGlyph kind="player-a" size="sm" />
+            <BombGlyph kind="bomb" size="sm" pulse />
+            <BombGlyph kind="player-b" size="sm" />
+          </div>
+        </div>
 
-      {onBenchmark && (
-        <button
-          onClick={onBenchmark}
-          className="text-[11px] uppercase tracking-widest text-arena-muted underline-offset-2 transition-all hover:text-gold hover:underline"
-        >
-          TPS Benchmark · bot vs bot
-        </button>
-      )}
+        <div className="bomb-lobby__console">
+          <div className="bomb-lobby__modes" role="tablist" aria-label="Game mode">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === "solo"}
+              className={`bomb-mode${tab === "solo" ? " bomb-mode--on" : ""}`}
+              onClick={() => setTab("solo")}
+            >
+              <BombGlyph kind="bomb" size="sm" />
+              <span>Solo</span>
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === "pvp"}
+              className={`bomb-mode${tab === "pvp" ? " bomb-mode--on" : ""}`}
+              onClick={() => setTab("pvp")}
+            >
+              <span className="bomb-mode__versus" aria-hidden>
+                <BombGlyph kind="player-a" size="sm" />
+                <BombGlyph kind="player-b" size="sm" />
+              </span>
+              <span>PvP</span>
+            </button>
+          </div>
+
+          {tab === "solo" ? (
+            <div className="bomb-lobby__play">
+              <label className="bomb-lobby__stake-label">
+                <span className="bomb-lobby__stake-tag">stake</span>
+                <input
+                  className="bomb-field"
+                  type="number"
+                  min={1}
+                  aria-label="Stake"
+                  value={stake}
+                  onChange={(e) => setStake(e.target.value)}
+                />
+              </label>
+              <button type="button" className={`${BOMB_BTN} bomb-cta bomb-cta--join`} onClick={handleSolo}>
+                Go
+              </button>
+            </div>
+          ) : (
+            <button type="button" className={`${BOMB_BTN} bomb-cta bomb-cta--full`} onClick={onFind}>
+              Find match
+            </button>
+          )}
+        </div>
+      </footer>
     </div>
   );
 }

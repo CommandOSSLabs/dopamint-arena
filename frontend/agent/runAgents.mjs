@@ -1,15 +1,51 @@
-// Launch K agent contexts against the dev page with bare ?agent (rotation = tic-tac-toe only
-// for now, §AGENT_GAMES), run for a duration, and count completed (settled) tunnels — a ramp /
-// throughput observation. Anti-throttle flags are REQUIRED or background contexts idle (spec §5).
-// Run: BASE_URL=http://localhost:5074 K=10 TIMEOUT_MS=60000 node agent/runAgents.mjs
-import { readFileSync } from "node:fs";
+// Launch K agent contexts against the dev page with bare ?agent, run for a duration, and count
+// completed (settled) tunnels — a ramp / throughput observation. Anti-throttle flags are REQUIRED
+// or background contexts idle (spec §5).
+// Run: BASE_URL=http://localhost:5173 K=10 TIMEOUT_MS=60000 node agent/runAgents.mjs
+import { existsSync, readFileSync } from "node:fs";
+import { isAbsolute, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 
-const BASE = process.env.BASE_URL ?? "http://localhost:5074";
-const keys = JSON.parse(readFileSync(new URL("./keys.json", import.meta.url)));
+const agentDir = fileURLToPath(new URL(".", import.meta.url));
+
+function normalizeKeys(raw) {
+  if (!Array.isArray(raw)) throw new Error("agent keys must be an array");
+  const keys = raw.map((entry) =>
+    typeof entry === "string" ? { secretKey: entry } : entry,
+  );
+  for (const [i, key] of keys.entries()) {
+    if (!key?.secretKey || typeof key.secretKey !== "string") {
+      throw new Error(`agent key ${i} is missing secretKey`);
+    }
+  }
+  if (keys.length === 0) throw new Error("provide at least one agent key");
+  return keys;
+}
+
+function readAgentKeys() {
+  const inline = process.env.AGENT_KEYS?.trim();
+  if (inline) {
+    if (inline.startsWith("[")) return normalizeKeys(JSON.parse(inline));
+    return normalizeKeys(inline.split(/[\s,]+/).filter(Boolean));
+  }
+
+  const keysFile = process.env.AGENT_KEYS_FILE ?? "keys.json";
+  const keysPath = isAbsolute(keysFile) ? keysFile : resolve(agentDir, keysFile);
+  if (!existsSync(keysPath)) {
+    throw new Error(
+      `missing ${keysPath}; run fundTreasury.mjs or set AGENT_KEYS/AGENT_KEYS_FILE`,
+    );
+  }
+  return normalizeKeys(JSON.parse(readFileSync(keysPath, "utf8")));
+}
+
+const BASE = process.env.BASE_URL ?? "http://localhost:5173";
+const keys = readAgentKeys();
 const K = Number(process.env.K ?? 2);
 const M = Number(process.env.M ?? 1); // concurrent tunnel slots per agent (multiplexed)
 const DURATION = Number(process.env.TIMEOUT_MS ?? 60_000);
+const GAME = process.env.GAME ?? "";
 
 const browser = await chromium.launch({
   headless: true,
@@ -34,7 +70,12 @@ for (let i = 0; i < K; i++) {
     }
   });
   page.on("pageerror", (e) => console.log(`[agent ${i}] PAGEERROR ${e.message}`));
-  await page.goto(`${BASE}/?agent&m=${M}&key=${encodeURIComponent(keys[i % keys.length].secretKey)}`);
+  const url = new URL(BASE);
+  url.searchParams.set("agent", "");
+  url.searchParams.set("m", String(M));
+  url.searchParams.set("key", keys[i % keys.length].secretKey);
+  if (GAME) url.searchParams.set("game", GAME);
+  await page.goto(url.toString());
 }
 
 const start = Date.now();

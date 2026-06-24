@@ -4,6 +4,7 @@ import { protocols } from "sui-tunnel-ts";
 import { driveToTerminal } from "@/agent/testHarness";
 import { createTicTacToeKit } from "./kit";
 import type { ProtocolContext } from "sui-tunnel-ts/protocol/Protocol";
+import type { MultiGameTicTacToeState } from "@ttt/shared/ttt/multiGameProtocol";
 
 function mulberry32(seed: number): () => number {
   return () => {
@@ -23,7 +24,10 @@ describe("ticTacToe kit", () => {
   it("uses the multi-game frontend protocol domain", () => {
     const kit = createTicTacToeKit(3, 10n);
     assert.strictEqual(kit.protocol.name, "tic_tac_toe.multi.v1");
-    assert.notStrictEqual(kit.protocol.name, new protocols.TicTacToeProtocol(10n).name);
+    assert.notStrictEqual(
+      kit.protocol.name,
+      new protocols.TicTacToeProtocol(10n).name,
+    );
   });
 
   it("drives a full multi-game session to terminal with conserved balances", () => {
@@ -34,7 +38,10 @@ describe("ticTacToe kit", () => {
 
     assert.ok(kit.protocol.isTerminal(result.finalState));
     const balances = kit.protocol.balances(result.finalState);
-    assert.strictEqual(balances.a + balances.b, ctx.initialBalances.a + ctx.initialBalances.b);
+    assert.strictEqual(
+      balances.a + balances.b,
+      ctx.initialBalances.a + ctx.initialBalances.b,
+    );
   });
 
   it("is deterministic and idempotent on replayed state", () => {
@@ -53,5 +60,40 @@ describe("ticTacToe kit", () => {
     const move1 = bot.plan(state);
     const move2 = bot.plan(state);
     assert.deepStrictEqual(move1, move2);
+  });
+
+  it("does not advance when the session is terminal by funding-stop", () => {
+    // Inner game finished (A won) but B can no longer fund the next stake, so the
+    // OUTER session is terminal even though gamesPlayed + 1 < maxGames. Seat A must
+    // NOT emit an advance move — applyMove would reject it ("session over").
+    const inner: protocols.TicTacToeState = {
+      board: [1, 1, 1, 2, 2, 0, 0, 0, 0],
+      turn: "B",
+      movesCount: 5,
+      winner: 1,
+      balanceA: 20n,
+      balanceB: 0n,
+      total: 20n,
+      stake: 5n,
+    };
+    const state: MultiGameTicTacToeState = {
+      inner,
+      gamesPlayed: 0,
+      maxGames: 5,
+    };
+    const kit = createTicTacToeKit(5, 5n);
+    const botA = kit.createBot("A", { rngForSeat: () => mulberry32(1) });
+    assert.strictEqual(botA.plan(state), null);
+  });
+
+  it("fast mode plan is idempotent across repeated calls on the same state", () => {
+    const kit = createTicTacToeKit(1, 10n, { difficulty: "fast" });
+    const state = kit.protocol.initialState(ctx);
+    const bot = kit.createBot("A", { rngForSeat: () => mulberry32(7) });
+    const m1 = bot.plan(state);
+    const m2 = bot.plan(state);
+    const m3 = bot.plan(state);
+    assert.deepStrictEqual(m1, m2);
+    assert.deepStrictEqual(m1, m3);
   });
 });

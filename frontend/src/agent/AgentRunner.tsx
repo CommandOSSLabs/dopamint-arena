@@ -2,7 +2,11 @@
 // (routed through the programmatic wallet) and the Sui client, then runs the engine. Renders a
 // status line (data-agent-status) the Playwright proof and any showcase view can read.
 import { useEffect, useRef, useState } from "react";
-import { useCurrentAccount, useSignAndExecuteTransaction, useSuiClient } from "@mysten/dapp-kit";
+import {
+  useCurrentAccount,
+  useSignAndExecuteTransaction,
+  useSuiClient,
+} from "@mysten/dapp-kit";
 import { parseAgentConfig } from "./agentConfig";
 import { runAgent } from "./agentEngine";
 import type { SuiReads } from "../onchain/tunnelTx";
@@ -17,11 +21,13 @@ export function AgentRunner() {
   useEffect(() => {
     if (!account || started.current) return;
     started.current = true;
-    const signExec = async (tx: Parameters<typeof mutateAsync>[0]["transaction"]) => {
+    const signExec = async (
+      tx: Parameters<typeof mutateAsync>[0]["transaction"],
+    ) => {
       const r = await mutateAsync({ transaction: tx });
       return { digest: r.digest };
     };
-    const { concurrency } = parseAgentConfig(window.location.href);
+    const { concurrency, game } = parseAgentConfig(window.location.href);
     // No cleanup-stop: under React.StrictMode the dev double-invoke (mount→cleanup→mount)
     // would cancel the still-connecting first run. The agent runs for the page's lifetime;
     // the Playwright/real browser context closing is what ends it.
@@ -37,6 +43,7 @@ export function AgentRunner() {
       },
       concurrency,
       () => false,
+      game,
     ).catch((e) => {
       // A rejected runAgent isn't a pageerror — surface it so the proof/console can see it.
       console.error("[agent] runAgent failed:", e);

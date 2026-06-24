@@ -23,7 +23,10 @@ describe("blackjack kit", () => {
   it("uses the variable-bet frontend protocol domain", () => {
     const kit = createBlackjackKit(100n);
     assert.strictEqual(kit.protocol.name, "blackjack.bet.v1");
-    assert.notStrictEqual(kit.protocol.name, new protocols.BlackjackProtocol(100n).name);
+    assert.notStrictEqual(
+      kit.protocol.name,
+      new protocols.BlackjackProtocol(100n).name,
+    );
   });
 
   it("drives a full game to terminal with conserved balances", () => {
@@ -34,6 +37,9 @@ describe("blackjack kit", () => {
 
     assert.ok(kit.protocol.isTerminal(result.finalState));
     const balances = kit.protocol.balances(result.finalState);
-    assert.strictEqual(balances.a + balances.b, ctx.initialBalances.a + ctx.initialBalances.b);
+    assert.strictEqual(
+      balances.a + balances.b,
+      ctx.initialBalances.a + ctx.initialBalances.b,
+    );
   });
 });

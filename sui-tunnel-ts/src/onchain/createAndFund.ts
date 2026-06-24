@@ -23,9 +23,11 @@ function vecU8(tx: Transaction, b: Uint8Array) {
 }
 
 /**
- * Append one `create_and_fund_with_id` call, funding both parties from two caller-supplied
- * coins. Targets the ID-returning `public fun` so its result, the shared
- * tunnel's `ID` composes with later PTB commands; the funder need not be a party.
+ * Append one create-and-fund call, funding both parties from two caller-supplied coins; the
+ * funder need not be a party. Defaults to the ID-returning `create_and_fund_with_id` so the new
+ * shared tunnel's `ID` composes with later PTB commands. Pass `withId: false` to target the plain
+ * `create_and_fund` (shares internally, returns nothing) — for callers that read the tunnel id
+ * from `objectChanges` afterwards, and for deployments that predate the `_with_id` variant.
  */
 export function buildCreateAndFund(
   tx: Transaction,
@@ -36,10 +38,14 @@ export function buildCreateAndFund(
     coinB: TransactionObjectArgument;
     timeoutMs: bigint;
     penaltyAmount?: bigint;
+    withId?: boolean;
   } & WithCoinType,
 ): TransactionResult {
   return tx.moveCall({
-    target: buildTarget(TUNNEL, "create_and_fund_with_id"),
+    target: buildTarget(
+      TUNNEL,
+      p.withId === false ? "create_and_fund" : "create_and_fund_with_id",
+    ),
     typeArguments: [p.coinType ?? SUI_COIN_TYPE],
     arguments: [
       tx.pure.address(p.partyA.address),
@@ -62,8 +68,10 @@ export function buildCreateAndFund(
  * creator (party A) approves a single wallet tx instead of create + deposit separately.
  * Composes `create` (returns the owned object) → `deposit_party_a` (gated to the sender =
  * party A's address) → `public_share_object` (valid because `Tunnel` has the `store` ability).
- * Party B funds its own seat separately (`buildDepositFromGas`). `aAmount` is split off the gas
- * coin, so SUI only — a non-SUI `coinType` would need a supplied source coin (not exposed here).
+ * Party B funds its own seat separately (`buildDepositFromGas`). By default `aAmount` is split
+ * off the gas coin (SUI only). Pass `stakeCoin` to split the stake off a caller-owned `Coin<T>`
+ * instead — required for a non-SUI `coinType`, and used by the gas-sponsored path (ADR-0009) so
+ * the stake stays the user's while the gas is sponsored (with SIP-58 gas there is no gas coin).
  */
 export function buildOpenAndFundSeatA(
   tx: Transaction,
@@ -73,6 +81,8 @@ export function buildOpenAndFundSeatA(
     aAmount: bigint;
     timeoutMs: bigint;
     penaltyAmount?: bigint;
+    /** `Coin<T>` to split seat A's stake from; defaults to the gas coin (SUI sender-pays). */
+    stakeCoin?: TransactionObjectArgument;
   } & WithCoinType,
 ): void {
   const coinType = p.coinType ?? SUI_COIN_TYPE;
@@ -91,7 +101,7 @@ export function buildOpenAndFundSeatA(
       tx.object(CLOCK),
     ],
   });
-  const [coin] = tx.splitCoins(tx.gas, [tx.pure.u64(p.aAmount)]);
+  const [coin] = tx.splitCoins(p.stakeCoin ?? tx.gas, [tx.pure.u64(p.aAmount)]);
   tx.moveCall({
     target: buildTarget(TUNNEL, "deposit_party_a"),
     typeArguments: [coinType],
@@ -157,8 +167,49 @@ export function buildOpenAndFundMany(
       timeoutMs: s.timeoutMs,
       penaltyAmount: s.penaltyAmount,
       coinType,
+      // The batch self-play opener reads each tunnel id from objectChanges, never in-PTB, so it
+      // targets the plain `create_and_fund` — which the deployed package has (the `_with_id`
+      // variant is source-only / undeployed). The id-returning path stays for composers below.
+      withId: false,
     }),
   );
+}
+
+/**
+ * Open + fund + activate ONE tunnel in a single PTB via the returnless `create_and_fund`.
+ * Splits both seats' stakes off the source coin (gas for SUI) internally, so the caller passes
+ * only plain data and reads the tunnel id from object changes. For callers that never chain the
+ * id in the PTB (Quantum Poker — commit-reveal randomness, no on-chain seed).
+ */
+export function buildOpenAndFundOneReturnless(
+  tx: Transaction,
+  spec: TunnelOpenSpec,
+  opts: BatchFundOptions = {},
+): void {
+  const coinType = opts.coinType ?? SUI_COIN_TYPE;
+  if (coinType !== SUI_COIN_TYPE && !opts.sourceCoin) {
+    throw new Error(
+      `buildOpenAndFundOneReturnless: coinType ${coinType} is not SUI, so opts.sourceCoin ` +
+        `(a Coin<${coinType}> to split stakes from) is required.`,
+    );
+  }
+  const source = opts.sourceCoin ?? tx.gas;
+  const [coinA, coinB] = tx.splitCoins(source, [
+    tx.pure.u64(spec.aAmount),
+    tx.pure.u64(spec.bAmount),
+  ]);
+  // Returnless path = the plain `create_and_fund` via `withId: false` (same as buildOpenAndFundMany);
+  // the id is read from object changes, never chained in-PTB.
+  buildCreateAndFund(tx, {
+    partyA: spec.partyA,
+    partyB: spec.partyB,
+    coinA,
+    coinB,
+    timeoutMs: spec.timeoutMs,
+    penaltyAmount: spec.penaltyAmount,
+    coinType,
+    withId: false,
+  });
 }
 
 /** One seat's batch deposit: which already-shared tunnel, and the stake to fund it with. */

@@ -47,7 +47,11 @@ test("settle posts to the tunnel settle path with no auth and returns the proof"
   globalThis.fetch = (async (url: string | URL, init: RequestInit) => {
     calls.push({ url: String(url), init });
     return new Response(
-      JSON.stringify({ txDigest: "DiG", walrusBlobId: "blob1", proofUrl: "https://agg/v1/blobs/blob1" }),
+      JSON.stringify({
+        txDigest: "DiG",
+        walrusBlobId: "blob1",
+        proofUrl: "https://agg/v1/blobs/blob1",
+      }),
       { status: 200, headers: { "content-type": "application/json" } },
     );
   }) as typeof fetch;

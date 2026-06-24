@@ -22,7 +22,7 @@ describe("bombIt kit", () => {
   it("uses the bomb-it protocol domain", () => {
     const kit = createBombItKit(100n);
     assert.strictEqual(kit.id, "bomb-it");
-    assert.strictEqual(kit.protocol.name, "bomb_it.v1");
+    assert.strictEqual(kit.protocol.name, "bomb_it.multi.v1");
   });
 
   it("drives a full self-play game to terminal with conserved balances", () => {
@@ -34,7 +34,10 @@ describe("bombIt kit", () => {
     assert.ok(kit.protocol.isTerminal(result.finalState));
     assert.ok(result.accepted > 0);
     const balances = kit.protocol.balances(result.finalState);
-    assert.strictEqual(balances.a + balances.b, ctx.initialBalances.a + ctx.initialBalances.b);
+    assert.strictEqual(
+      balances.a + balances.b,
+      ctx.initialBalances.a + ctx.initialBalances.b,
+    );
   });
 
   it("a bot proposes only on its own tick (A even, B odd)", () => {

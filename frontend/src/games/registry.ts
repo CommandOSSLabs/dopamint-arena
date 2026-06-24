@@ -10,8 +10,10 @@ export function register(module: GameModule): void {
   modules.set(module.id, module);
 }
 
+/** Catalog modules — those shown in the picker / mobile list / seed. Excludes
+ *  `catalog: false` widgets (e.g. default floating ones), which `get()` still resolves. */
 export function list(): GameModule[] {
-  return [...modules.values()];
+  return [...modules.values()].filter((m) => m.catalog !== false);
 }
 
 export function get(id: string): GameModule | undefined {

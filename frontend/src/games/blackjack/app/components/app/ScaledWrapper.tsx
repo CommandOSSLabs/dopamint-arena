@@ -1,9 +1,36 @@
-import { useEffect, useState, useRef, ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  useRef,
+  ReactNode,
+} from "react";
+
+interface ScaleContextType {
+  width: number;
+  height: number;
+  isPortrait: boolean;
+}
+
+const ScaleContext = createContext<ScaleContextType>({
+  width: 500,
+  height: 800,
+  isPortrait: true,
+});
+
+export function useGameScale() {
+  return useContext(ScaleContext);
+}
 
 export function ScaledWrapper({ children }: { children: ReactNode }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1);
-  const [size, setSize] = useState({ w: 400, h: 650 });
+  const [dimensions, setDimensions] = useState({
+    width: 500,
+    height: 800,
+    isPortrait: true,
+  });
 
   useEffect(() => {
     const el = containerRef.current;
@@ -12,70 +39,58 @@ export function ScaledWrapper({ children }: { children: ReactNode }) {
     const parent = el.parentElement;
     if (!parent) return;
 
-    // Use ResizeObserver to watch parent container's size (e.g. Arena draggable window)
-    const observer = new ResizeObserver((entries) => {
-      const entry = entries[0];
-      if (!entry) return;
+    const handleResize = () => {
+      const w = parent.clientWidth || window.innerWidth;
+      const h = parent.clientHeight || window.innerHeight;
+      if (w === 0 || h === 0) return;
 
-      // Read dimensions of the parent container
-      const w =
-        entry.contentRect.width || parent.clientWidth || window.innerWidth;
-      const h =
-        entry.contentRect.height || parent.clientHeight || window.innerHeight;
+      const isPortrait = w < h;
+      const dWidth = isPortrait ? 500 : 1024;
+      const dHeight = isPortrait ? 800 : 640;
 
-      const MIN_W = 400; // Below this virtual size, we scale down
-      const MIN_H = 650;
-      const MAX_W = 1000; // Above this, we scale up
-      const MAX_H = 800;
+      const scaleW = w / dWidth;
+      const scaleH = h / dHeight;
+      const s = Math.min(scaleW, scaleH, 2);
 
-      let s = 1;
-      if (w < MIN_W || h < MIN_H) {
-        const scaleW = w / MIN_W;
-        const scaleH = h / MIN_H;
-        s = Math.min(scaleW, scaleH);
-      } else if (w > MAX_W && h > MAX_H) {
-        const scaleW = w / MAX_W;
-        const scaleH = h / MAX_H;
-        s = Math.min(scaleW, scaleH, 2); // Scale up to 2x max
-      }
-
+      setDimensions({ width: dWidth, height: dHeight, isPortrait });
       setScale(s);
-      setSize({ w, h });
-    });
+    };
 
+    const observer = new ResizeObserver(handleResize);
     observer.observe(parent);
+    handleResize();
 
     return () => observer.disconnect();
   }, []);
 
-  // Compute virtual internal size at 1x scale
-  const innerW = size.w / scale;
-  const innerH = size.h / scale;
-
   return (
-    <div
-      ref={containerRef}
-      style={{
-        width: "100%",
-        height: "100%",
-        overflow: "hidden",
-        position: "relative",
-        backgroundColor: "#09090b",
-      }}
-    >
+    <ScaleContext.Provider value={dimensions}>
       <div
+        ref={containerRef}
         style={{
-          width: `${innerW}px`,
-          height: `${innerH}px`,
-          transform: `scale(${scale})`,
-          transformOrigin: "top left",
-          position: "absolute",
-          top: 0,
-          left: 0,
+          width: "100%",
+          height: "100%",
+          overflow: "hidden",
+          position: "relative",
+          backgroundColor: "#09090b",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
         }}
       >
-        {children}
+        <div
+          style={{
+            width: `${dimensions.width}px`,
+            height: `${dimensions.height}px`,
+            transform: `scale(${scale})`,
+            transformOrigin: "center center",
+            flex: "none",
+            position: "relative",
+          }}
+        >
+          {children}
+        </div>
       </div>
-    </div>
+    </ScaleContext.Provider>
   );
 }

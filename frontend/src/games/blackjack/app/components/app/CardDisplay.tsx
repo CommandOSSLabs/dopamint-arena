@@ -9,6 +9,65 @@ interface CardDisplayProps {
   isPlayer?: boolean;
 }
 
+const SUIT_SYMBOLS: Record<string, string> = {
+  clubs: "♣",
+  diamonds: "♦",
+  hearts: "♥",
+  spades: "♠",
+};
+
+const SUIT_COLORS: Record<string, string> = {
+  clubs: "text-zinc-950",
+  diamonds: "text-red-600",
+  hearts: "text-red-600",
+  spades: "text-zinc-950",
+};
+
+function CssCard({
+  name,
+  suit,
+  size = "md",
+}: {
+  name: string;
+  suit: string;
+  size?: "sm" | "md";
+}) {
+  const symbol = SUIT_SYMBOLS[suit] || "";
+  const colorClass = SUIT_COLORS[suit] || "text-zinc-950";
+
+  const width = size === "sm" ? "80px" : "96px";
+  const height = size === "sm" ? "112px" : "140px";
+  const fontSizeVal = size === "sm" ? "text-sm" : "text-base";
+  const fontSizeSym = size === "sm" ? "text-xs" : "text-sm";
+  const centerSymSize = size === "sm" ? "text-2xl" : "text-4xl";
+
+  return (
+    <div
+      className={`bg-white border border-zinc-200 rounded-lg shadow-md select-none relative flex flex-col justify-between p-1.5 md:p-2 ${colorClass}`}
+      style={{ width, height, fontStyle: "normal" }}
+    >
+      {/* Top Left */}
+      <div className="flex flex-col items-center leading-none self-start">
+        <span className={`font-mono font-bold ${fontSizeVal}`}>{name}</span>
+        <span className={fontSizeSym}>{symbol}</span>
+      </div>
+
+      {/* Center Symbol */}
+      <div
+        className={`absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 font-bold ${centerSymSize}`}
+      >
+        {symbol}
+      </div>
+
+      {/* Bottom Right */}
+      <div className="flex flex-col items-center leading-none self-end transform rotate-180">
+        <span className={`font-mono font-bold ${fontSizeVal}`}>{name}</span>
+        <span className={fontSizeSym}>{symbol}</span>
+      </div>
+    </div>
+  );
+}
+
 export const CardDisplay: React.FC<CardDisplayProps> = ({
   title,
   cards,
@@ -37,7 +96,7 @@ export const CardDisplay: React.FC<CardDisplayProps> = ({
   const cardDetails = cards.map((cardIndex) => {
     const suit = suits[Math.floor(cardIndex / 13)];
     const name = names[cardIndex % 13];
-    return { name, suit, path: `/cards/${suit}/${suit}-${name}.svg` };
+    return { name, suit };
   });
 
   return (
@@ -58,21 +117,20 @@ export const CardDisplay: React.FC<CardDisplayProps> = ({
             const rotation = isPlayer ? (index - centerIndex) * 6 : 0;
             const translateY = isPlayer ? Math.abs(index - centerIndex) * 3 : 0;
             return (
-              <img
+              <div
                 key={index}
-                src={card.path}
-                alt={`${card.name} of ${card.suit}`}
-                className="absolute w-20 rounded-md transition-all duration-300 hover:-translate-y-2"
+                className="absolute transition-all duration-300 hover:-translate-y-2"
                 style={{
                   left: `${index * 20}px`,
                   zIndex: index,
-                  filter: "drop-shadow(0px 6px 10px rgba(0,0,0,0.4))",
                   transform: isPlayer
                     ? `rotate(${rotation}deg) translateY(${translateY}px)`
                     : undefined,
                   transformOrigin: "bottom center",
                 }}
-              />
+              >
+                <CssCard name={card.name} suit={card.suit} size="sm" />
+              </div>
             );
           })}
           {cards.length > 0 && (
@@ -92,21 +150,20 @@ export const CardDisplay: React.FC<CardDisplayProps> = ({
             const rotation = isPlayer ? (index - centerIndex) * 6 : 0;
             const translateY = isPlayer ? Math.abs(index - centerIndex) * 4 : 0;
             return (
-              <img
+              <div
                 key={index}
-                src={card.path}
-                alt={`${card.name} of ${card.suit}`}
-                className="absolute w-24 rounded-lg transition-all duration-300 hover:-translate-y-3"
+                className="absolute transition-all duration-300 hover:-translate-y-3"
                 style={{
                   left: `${index * 24}px`,
                   zIndex: index,
-                  filter: "drop-shadow(0px 10px 15px rgba(0,0,0,0.5))",
                   transform: isPlayer
                     ? `rotate(${rotation}deg) translateY(${translateY}px)`
                     : undefined,
                   transformOrigin: "bottom center",
                 }}
-              />
+              >
+                <CssCard name={card.name} suit={card.suit} size="md" />
+              </div>
             );
           })}
           {cards.length > 0 && (

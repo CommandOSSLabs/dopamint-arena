@@ -33,7 +33,7 @@ jobs:
     runs-on: ubuntu-latest
     # Bump to an existing release tag if the download 404s.
     env:
-      SUI_VERSION: testnet-v1.39.3
+      SUI_VERSION: testnet-v1.73.1
     steps:
       - uses: actions/checkout@v4
       - name: Install Sui CLI

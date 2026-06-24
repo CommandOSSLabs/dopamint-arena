@@ -9,8 +9,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "build:bench": "esbuild src/bench/offchainTps.ts src/bench/offchainTpsWorker.ts src/bench/solo.ts src/bench/solo-local.ts --bundle --platform=node --format=esm --outdir=dist/bench --tsconfig=tsconfig.json",
-    "test": "node --import tsx --test \"src/agent/**/*.test.ts\" \"src/components/**/*.test.ts\" \"src/backend/**/*.test.ts\" \"src/pvp/**/*.test.ts\" \"src/games/blackjack/*.test.ts\" \"src/games/battleship/**/*.test.ts\" \"src/games/ticTacToe/tttColdLoad.test.ts\" \"src/games/quantumPoker/pokerColdLoad.test.ts\"",
+    "build:bench": "bun build src/bench/offchainTps.ts src/bench/offchainTpsWorker.ts src/bench/solo.ts src/bench/solo-local.ts --outdir=dist/bench --target=bun --tsconfig-override=tsconfig.json",
+    "test": "node --import tsx --test \"src/agent/**/*.test.ts\" \"src/components/**/*.test.ts\" \"src/backend/**/*.test.ts\" \"src/pvp/**/*.test.ts\" \"src/shell/**/*.test.ts\" \"src/games/blackjack/*.test.ts\" \"src/games/battleship/**/*.test.ts\" \"src/games/bombIt/**/*.test.ts\" \"src/games/chickenCross/**/*.test.ts\" \"src/games/ticTacToe/tttColdLoad.test.ts\" \"src/games/quantumPoker/**/*.test.ts\"",
     "format": "prettier --write \"src/**/*.{ts,tsx,css}\""
   },
   "dependencies": {

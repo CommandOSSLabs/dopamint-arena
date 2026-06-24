@@ -18,11 +18,11 @@ that depends on them. An ADR captures the decision and the reasoning so the
   control-plane backend, per-game `Protocol`. *(§1 self-play hot path superseded by 0006.)*
 - [0002](0002-grid-layout-engine.md) — Owned grid-layout engine over a
   drag-and-drop library (React 19 + shadcn-style ownership).
-- [0002](0002-backend-client-api-contract.md) — Backend client API contract:
-  sessions, heartbeats, stats. (Shares number with grid-layout; will be renumbered.)
 - [0003](0003-battleship-on-sui-tunnel.md) — Battleship on the tunnel:
   commit-reveal fairness with public-only protocol state.
-- [0005](0005-redis-backed-ha-control-plane.md) — Redis-backed HA control plane.
+- [0005](0005-transaction-log-panels.md) — Transaction-log panels: client-local
+  move feed + global settlement projection (verifiable proof surface) + settle-at-close
+  cadence; generic payments out of scope.
 - [0006](0006-genuine-two-party-only-drop-self-play.md) — Genuine two-party play is
   the only model; self-play dropped. Supersedes 0001 §1 and the removed 0004.
 - [0007](0007-settle-authorized-by-settlement-not-token.md) — Settlement is
@@ -39,5 +39,13 @@ that depends on them. An ADR captures the decision and the reasoning so the
 - [0010](0010-mp-resume-protocol.md) — MP resume: atomic `ConnRef` rebind,
   event-driven peer-cache eviction, peer-to-peer state reconciliation; on-chain
   settlement is the floor. Affinity/re-homing deferred to ADR-0011.
-- [0010](0010-pixel-duel.md) — Pixel Duel: battleship-monochrome paint duel on the
-  two-party tunnel. (Shares number with mp-resume; will be renumbered.)
+- [0012](0012-arena-attract-cabinet-seam.md) — Arena attract mode: one shared
+  cabinet shell (`GameCabinet` + `CabinetController`) owns hover → pause →
+  take-over; auto-play is a config (the kit is the brain); take-over is cosmetic
+  on-chain today (real ephemeral-key you-vs-bot deferred). Applies to every arena
+  game (all share the auto-loop + take-a-seat shape); ttt is the reference.
+- [0013](0013-address-balance-stake.md) — Fund the stake from the player's SIP-58
+  address balance (`coin::redeem_funds`/`tx.withdrawal`) instead of a version-pinned
+  `Coin<T>`, so concurrent reload opens stop equivocating. Sponsor allowlist gains
+  `redeem_funds`/`send_funds` + a mandatory `WithdrawFrom::Sender` input guard
+  (anti settler-drain). Behind `VITE_DOPAMINT_ADDRESS_BALANCE`; no Move redeploy.

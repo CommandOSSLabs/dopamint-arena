@@ -1,4 +1,3 @@
-// frontend/src/games/ticTacToe/packages/client/src/lib/pvpEngine.e2e.test.ts
 import { test, expect, describe } from "bun:test";
 import { core, bytesToHex, type protocols } from "sui-tunnel-ts";
 import {

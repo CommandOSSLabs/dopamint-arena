@@ -12,8 +12,10 @@ import { Transaction } from "@mysten/sui/transactions";
 import {
   buildOpenAndFundSeatA as sdkOpenAndFundSeatA,
   buildOpenAndFundMany as sdkOpenAndFundMany,
+  buildOpenAndFundOneReturnless as sdkOpenAndFundOneReturnless,
 } from "sui-tunnel-ts/onchain/createAndFund";
 import {
+  buildDeposit as sdkDeposit,
   buildDepositFromGas as sdkDepositFromGas,
   buildCloseFromSettlement as sdkCloseFromSettlement,
   buildCloseWithRootFromSettlement as sdkCloseWithRootFromSettlement,
@@ -40,20 +42,27 @@ const buildDepositFromGas = sdkDepositFromGas as unknown as (
   tx: Transaction,
   p: Parameters<typeof sdkDepositFromGas>[1],
 ) => void;
+const buildDeposit = sdkDeposit as unknown as (
+  tx: Transaction,
+  p: Parameters<typeof sdkDeposit>[1],
+) => void;
 const buildCloseFromSettlement = sdkCloseFromSettlement as unknown as (
   tx: Transaction,
   tunnelId: string,
   settlement: Parameters<typeof sdkCloseFromSettlement>[2],
+  coinType?: string,
 ) => void;
 const buildCloseWithRootFromSettlement =
   sdkCloseWithRootFromSettlement as unknown as (
     tx: Transaction,
     tunnelId: string,
     settlement: Parameters<typeof sdkCloseWithRootFromSettlement>[2],
+    coinType?: string,
   ) => void;
 const buildOpenAndFundMany = sdkOpenAndFundMany as unknown as (
   tx: Transaction,
   specs: Parameters<typeof sdkOpenAndFundMany>[1],
+  opts?: Parameters<typeof sdkOpenAndFundMany>[2],
 ) => void;
 const buildRaiseDisputeFromUpdate = sdkRaiseDisputeFromUpdate as unknown as (
   tx: Transaction,
@@ -65,6 +74,11 @@ const buildForceClose = sdkForceClose as unknown as (
   tx: Transaction,
   p: { tunnelId: string },
 ) => void;
+const buildOpenAndFundOneReturnless =
+  sdkOpenAndFundOneReturnless as unknown as (
+    tx: Transaction,
+    spec: Parameters<typeof sdkOpenAndFundOneReturnless>[1],
+  ) => void;
 
 /** Sign + execute a transaction (e.g. dapp-kit's signAndExecuteTransaction). */
 export type SignExec = (tx: Transaction) => Promise<{ digest: string }>;
@@ -102,6 +116,126 @@ function findTunnelId(changes: unknown): string | null {
 }
 
 /**
+ * Errors a fresh REBUILD can clear: owned-object/gas equivocation. Another tx consumed the same
+ * coin/object version first, so this tx's build-time–pinned version is "unavailable for
+ * consumption" and the validators reject it as "needs to be rebuilt". This hits when several games
+ * fund their stake from the SAME user coin at once — e.g. every game auto-opening its tunnel on a
+ * page reload. The reject is pre-commit (nothing executed), so rebuilding against the object's
+ * CURRENT version and resubmitting is safe — no double-spend.
+ *
+ * Deterministic failures (insufficient balance, bad move target) and sponsor-endpoint outages are
+ * deliberately NOT matched: the former would loop forever, and the latter must surface so
+ * `withSponsorFallback` can switch to the sender-pays path.
+ */
+function isStaleObjectReject(err: unknown): boolean {
+  const msg = String((err as Error)?.message ?? err).toLowerCase();
+  return (
+    msg.includes("unavailable for consumption") ||
+    msg.includes("not available for consumption") ||
+    msg.includes("needs to be rebuilt") ||
+    msg.includes("objectversionunavailable") ||
+    msg.includes("rejected as invalid by more than 1/3") ||
+    msg.includes("equivocat") ||
+    // ADR-0013: a just-deposited address balance settles at the next checkpoint, so a withdrawal
+    // can briefly dry-run against a still-empty balance. The deposit IS landing, so rebuild + retry
+    // until it settles. (`ensureDopamintAddressBalance` waits too, but the sponsor dry-runs on its
+    // own node, which may trail by a checkpoint.)
+    msg.includes("invalid withdraw reservation") ||
+    msg.includes("available amount in account")
+  );
+}
+
+const REBUILD_RETRY_MS = 5_000;
+const submitSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/**
+ * Submit a freshly-built PTB, retrying FOREVER (~5s apart, jittered) as long as the only failure is
+ * a stale-object/equivocation reject a rebuild can clear (see {@link isStaleObjectReject}). The
+ * jitter de-syncs games that all reload at once so they don't re-collide on the same coin version
+ * every round. `buildTx` is re-invoked per attempt, so each `tx.object(id)` re-resolves to the
+ * object's CURRENT version; a rejected tx never commits, so resubmitting can't double-spend. Any
+ * other error throws on the first attempt. Returns the committed digest.
+ */
+export async function submitRebuildingOnStale(
+  buildTx: () => Transaction,
+  signExec: SignExec,
+  label: string,
+): Promise<{ digest: string }> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await signExec(buildTx());
+    } catch (err) {
+      if (!isStaleObjectReject(err)) throw err;
+      const wait = REBUILD_RETRY_MS + Math.floor(Math.random() * 1_500);
+      console.warn(
+        `[tunnelTx] ${label}: stale-object/equivocation reject (attempt ${attempt}); rebuilding in ${wait}ms —`,
+        (err as Error)?.message ?? err,
+      );
+      await submitSleep(wait);
+    }
+  }
+}
+
+/** Stake funded by a withdrawal from the SENDER's SIP-58 address balance (ADR-0013), instead of a
+ *  version-pinned `Coin<T>` object. `amount` raw units of `coinType` (the `T`). */
+export interface StakeFromBalance {
+  amount: bigint;
+  coinType: string;
+}
+
+/**
+ * Build the stake `Coin<T>` by withdrawing from the SENDER's SIP-58 address balance (ADR-0013):
+ * `coin::redeem_funds<T>(tx.withdrawal({ amount, type: T }))`. No `tx.object`, so nothing is
+ * version-pinned — concurrent opens each draw their own reservation from the one balance and never
+ * equivocate. The tx must carry a `ValidDuring` expiration (the sponsor sets it); the backend
+ * allowlists this call and refuses any withdrawal that isn't the sender's own.
+ */
+export function redeemStakeFromBalance(
+  tx: Transaction,
+  stake: StakeFromBalance,
+) {
+  const [coin] = tx.moveCall({
+    target: "0x2::coin::redeem_funds",
+    typeArguments: [stake.coinType],
+    arguments: [tx.withdrawal({ amount: stake.amount, type: stake.coinType })],
+  });
+  return coin;
+}
+
+/** The stake `Coin<T>` argument for an open/fund PTB: a SIP-58 address-balance withdrawal
+ *  (ADR-0013) if `stakeFromBalance` is set, else the user coin object `stakeCoinId`, else
+ *  `undefined` (fund from the gas coin — the non-sponsored path). */
+export function stakeCoinArg(
+  tx: Transaction,
+  opts: { stakeFromBalance?: StakeFromBalance; stakeCoinId?: string },
+) {
+  if (opts.stakeFromBalance)
+    return redeemStakeFromBalance(tx, opts.stakeFromBalance);
+  if (opts.stakeCoinId) return tx.object(opts.stakeCoinId);
+  return undefined;
+}
+
+/**
+ * Consume the zero remainder a stake split leaves behind on the address-balance path (ADR-0013).
+ * The SDK openers `splitCoins(source, [stakes…])` off the stake source and leave `source`: for an
+ * owned coin object that auto-returns, but a `redeem_funds` result `Coin<T>` has no `drop`, so the
+ * leftover (zero — we withdraw exactly the stake total) must be destroyed or the PTB is rejected
+ * with "Unused ValueWithoutDrop". No-op on the coin-object / gas paths.
+ */
+export function consumeStakeRemainder(
+  tx: Transaction,
+  opts: { stakeFromBalance?: StakeFromBalance },
+  source: ReturnType<typeof stakeCoinArg>,
+): void {
+  if (!opts.stakeFromBalance || !source) return;
+  tx.moveCall({
+    target: "0x2::coin::destroy_zero",
+    typeArguments: [opts.stakeFromBalance.coinType],
+    arguments: [source],
+  });
+}
+
+/**
  * Open the shared tunnel AND fund seat A's stake in ONE transaction (one wallet popup for the
  * host) via the SDK's `buildOpenAndFundSeatA`. Returns the shared object id from tx changes.
  * Seat B funds its own seat separately (`depositStake`).
@@ -114,16 +248,33 @@ export async function openAndFundSharedTunnel(opts: {
   amount: bigint;
   timeoutMs?: bigint;
   penaltyAmount?: bigint;
+  /** Split seat A's stake from this user coin (gas-sponsored path); else from the gas coin. */
+  stakeCoinId?: string;
+  /** ADR-0013: fund the stake from the sender's SIP-58 address balance (takes precedence over
+   *  `stakeCoinId`) — concurrent opens don't equivocate. Sponsored path only. */
+  stakeFromBalance?: StakeFromBalance;
+  /** Coin type `T` for the tunnel; defaults to SUI. Pass DOPAMINT to stake the faucet token. */
+  coinType?: string;
 }): Promise<string> {
-  const tx = new Transaction();
-  buildOpenAndFundSeatA(tx, {
-    partyA: { ...opts.partyA, signatureType: SignatureScheme.ED25519 },
-    partyB: { ...opts.partyB, signatureType: SignatureScheme.ED25519 },
-    aAmount: opts.amount,
-    timeoutMs: opts.timeoutMs ?? 86_400_000n,
-    penaltyAmount: opts.penaltyAmount ?? 0n,
-  });
-  const { digest } = await opts.signExec(tx);
+  const { digest } = await submitRebuildingOnStale(
+    () => {
+      const tx = new Transaction();
+      const source = stakeCoinArg(tx, opts);
+      buildOpenAndFundSeatA(tx, {
+        partyA: { ...opts.partyA, signatureType: SignatureScheme.ED25519 },
+        partyB: { ...opts.partyB, signatureType: SignatureScheme.ED25519 },
+        aAmount: opts.amount,
+        timeoutMs: opts.timeoutMs ?? 86_400_000n,
+        penaltyAmount: opts.penaltyAmount ?? 0n,
+        stakeCoin: source,
+        coinType: opts.coinType,
+      });
+      consumeStakeRemainder(tx, opts, source);
+      return tx;
+    },
+    opts.signExec,
+    "openAndFundSharedTunnel",
+  );
   await opts.reads.waitForTransaction({ digest });
   const txb = await opts.reads.getTransactionBlock({
     digest,
@@ -148,19 +299,38 @@ export async function openAndFundSelfPlay(opts: {
   bAmount: bigint;
   timeoutMs?: bigint;
   penaltyAmount?: bigint;
+  /** Split BOTH seats' stakes from this user coin (gas-sponsored path); else from the gas coin. */
+  stakeCoinId?: string;
+  /** ADR-0013: fund BOTH stakes from the sender's SIP-58 address balance (takes precedence over
+   *  `stakeCoinId`) — concurrent opens don't equivocate. Sponsored path only. */
+  stakeFromBalance?: StakeFromBalance;
+  /** Coin type `T` for the tunnels; defaults to SUI. Pass DOPAMINT to stake the faucet token. */
+  coinType?: string;
 }): Promise<string> {
-  const tx = new Transaction();
-  buildOpenAndFundMany(tx, [
-    {
-      partyA: { ...opts.partyA, signatureType: SignatureScheme.ED25519 },
-      partyB: { ...opts.partyB, signatureType: SignatureScheme.ED25519 },
-      aAmount: opts.aAmount,
-      bAmount: opts.bAmount,
-      timeoutMs: opts.timeoutMs ?? 86_400_000n,
-      penaltyAmount: opts.penaltyAmount ?? 0n,
+  const { digest } = await submitRebuildingOnStale(
+    () => {
+      const tx = new Transaction();
+      const source = stakeCoinArg(tx, opts);
+      buildOpenAndFundMany(
+        tx,
+        [
+          {
+            partyA: { ...opts.partyA, signatureType: SignatureScheme.ED25519 },
+            partyB: { ...opts.partyB, signatureType: SignatureScheme.ED25519 },
+            aAmount: opts.aAmount,
+            bAmount: opts.bAmount,
+            timeoutMs: opts.timeoutMs ?? 86_400_000n,
+            penaltyAmount: opts.penaltyAmount ?? 0n,
+          },
+        ],
+        { coinType: opts.coinType, sourceCoin: source },
+      );
+      consumeStakeRemainder(tx, opts, source);
+      return tx;
     },
-  ]);
-  const { digest } = await opts.signExec(tx);
+    opts.signExec,
+    "openAndFundSelfPlay",
+  );
   await opts.reads.waitForTransaction({ digest });
   const txb = await opts.reads.getTransactionBlock({
     digest,
@@ -171,15 +341,93 @@ export async function openAndFundSelfPlay(opts: {
   return tunnelId;
 }
 
-/** Deposit this seat's stake; the Move routes it by sender address (gated). */
+/**
+ * Self-play open via the returnless `tunnel::create_and_fund` (no ID return; the tunnel id is
+ * read from object changes). Same one-signature flow as {@link openAndFundSelfPlay}; used by
+ * Quantum Poker, which reads the id from object changes and never chains it in the PTB (its
+ * randomness is two-party commit-reveal, so no on-chain id/seed composition is needed).
+ */
+export async function openAndFundSelfPlayReturnless(opts: {
+  reads: SuiReads;
+  signExec: SignExec;
+  partyA: PartyOnchain;
+  partyB: PartyOnchain;
+  aAmount: bigint;
+  bAmount: bigint;
+  timeoutMs?: bigint;
+  penaltyAmount?: bigint;
+}): Promise<string> {
+  const { digest } = await submitRebuildingOnStale(
+    () => {
+      const tx = new Transaction();
+      buildOpenAndFundOneReturnless(tx, {
+        partyA: { ...opts.partyA, signatureType: SignatureScheme.ED25519 },
+        partyB: { ...opts.partyB, signatureType: SignatureScheme.ED25519 },
+        aAmount: opts.aAmount,
+        bAmount: opts.bAmount,
+        timeoutMs: opts.timeoutMs ?? 86_400_000n,
+        penaltyAmount: opts.penaltyAmount ?? 0n,
+      });
+      return tx;
+    },
+    opts.signExec,
+    "openAndFundSelfPlayReturnless",
+  );
+  await opts.reads.waitForTransaction({ digest });
+  const txb = await opts.reads.getTransactionBlock({
+    digest,
+    options: { showObjectChanges: true },
+  });
+  const tunnelId = findTunnelId(txb.objectChanges);
+  if (!tunnelId) throw new Error("could not find created tunnel id");
+  return tunnelId;
+}
+
+/** Deposit this seat's stake; the Move routes it by sender address (gated). With `stakeFromBalance`
+ *  the stake is withdrawn from the sender's SIP-58 address balance (ADR-0013); with `stakeCoinId`
+ *  it is split off that user coin (gas-sponsored path); otherwise off the gas coin. */
 export async function depositStake(opts: {
   signExec: SignExec;
   tunnelId: string;
   amount: bigint;
+  stakeCoinId?: string;
+  /** ADR-0013: deposit from the sender's SIP-58 address balance (takes precedence over
+   *  `stakeCoinId`). The withdrawal is the exact `amount`, so no split is needed. */
+  stakeFromBalance?: StakeFromBalance;
+  /** Coin type `T`; defaults to SUI. Pass DOPAMINT to deposit the faucet token. */
+  coinType?: string;
 }): Promise<void> {
-  const tx = new Transaction();
-  buildDepositFromGas(tx, { tunnelId: opts.tunnelId, amount: opts.amount });
-  await opts.signExec(tx);
+  await submitRebuildingOnStale(
+    () => {
+      const tx = new Transaction();
+      if (opts.stakeFromBalance) {
+        // The address-balance withdrawal already yields exactly `amount` — deposit it directly.
+        const coin = redeemStakeFromBalance(tx, opts.stakeFromBalance);
+        buildDeposit(tx, {
+          tunnelId: opts.tunnelId,
+          coin,
+          coinType: opts.coinType,
+        });
+      } else if (opts.stakeCoinId) {
+        const [coin] = tx.splitCoins(tx.object(opts.stakeCoinId), [
+          tx.pure.u64(opts.amount),
+        ]);
+        buildDeposit(tx, {
+          tunnelId: opts.tunnelId,
+          coin,
+          coinType: opts.coinType,
+        });
+      } else {
+        buildDepositFromGas(tx, {
+          tunnelId: opts.tunnelId,
+          amount: opts.amount,
+        });
+      }
+      return tx;
+    },
+    opts.signExec,
+    "depositStake",
+  );
 }
 
 /** Read the on-chain created_at (ms) — the settlement timestamp must be >= this. */
@@ -199,9 +447,10 @@ export async function closeCooperative(opts: {
   signExec: SignExec;
   tunnelId: string;
   settlement: CoSignedSettlement;
+  coinType?: string;
 }): Promise<string> {
   const tx = new Transaction();
-  buildCloseFromSettlement(tx, opts.tunnelId, opts.settlement);
+  buildCloseFromSettlement(tx, opts.tunnelId, opts.settlement, opts.coinType);
   const { digest } = await opts.signExec(tx);
   return digest;
 }
@@ -213,9 +462,15 @@ export async function closeCooperativeWithRoot(opts: {
   signExec: SignExec;
   tunnelId: string;
   settlement: CoSignedSettlementWithRoot;
+  coinType?: string;
 }): Promise<string> {
   const tx = new Transaction();
-  buildCloseWithRootFromSettlement(tx, opts.tunnelId, opts.settlement);
+  buildCloseWithRootFromSettlement(
+    tx,
+    opts.tunnelId,
+    opts.settlement,
+    opts.coinType,
+  );
   const { digest } = await opts.signExec(tx);
   return digest;
 }

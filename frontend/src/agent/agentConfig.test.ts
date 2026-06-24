@@ -17,6 +17,7 @@ test("on for bare ?agent, with key and default concurrency 1", () => {
   assert.equal(c.enabled, true);
   assert.equal(c.secretKey, "suiprivkey1abc");
   assert.equal(c.concurrency, 1);
+  assert.equal(c.game, null);
 });
 
 test("?m sets concurrency (min 1)", () => {
@@ -24,31 +25,18 @@ test("?m sets concurrency (min 1)", () => {
   assert.equal(parseAgentConfig("https://x/?agent&m=0").concurrency, 1);
 });
 
-test("rotation cycles the move-trigger-ready games: tic-tac-toe, pixel-paint, pixel-duel", () => {
+test("?game restricts the agent rotation", () => {
+  assert.equal(parseAgentConfig("https://x/?agent&game=quantum-poker").game, "quantum-poker");
+});
+
+test("rotation set uses canonical game kits for all bot-ready games", () => {
   assert.deepEqual(
-    AGENT_GAMES.map((g) => g.id),
-    ["tictactoe", "pixel-paint", "pixel-duel"],
+    AGENT_GAMES.map((g) => [g.id, g.kitId]),
+    [
+      ["tictactoe", "tictactoe"],
+      ["blackjack", "blackjack"],
+      ["battleship", "battleship"],
+      ["quantum-poker", "quantum-poker"],
+    ],
   );
-});
-
-test("pixel-paint is the turn-free rotation entry; tic-tac-toe stays turn-based", () => {
-  const ttt = AGENT_GAMES.find((g) => g.id === "tictactoe");
-  const paint = AGENT_GAMES.find((g) => g.id === "pixel-paint");
-  assert.equal(ttt?.turnFree, undefined);
-  assert.equal(paint?.turnFree, true);
-  assert.equal(paint?.behavior, "pixelpaint");
-});
-
-test("tic-tac-toe and pixel-paint are NOT commit-reveal (their paths stay unchanged)", () => {
-  const ttt = AGENT_GAMES.find((g) => g.id === "tictactoe");
-  const paint = AGENT_GAMES.find((g) => g.id === "pixel-paint");
-  assert.equal(ttt?.commitReveal, undefined);
-  assert.equal(paint?.commitReveal, undefined);
-});
-
-test("pixel-duel is the turn-free, commit-reveal rotation entry", () => {
-  const duel = AGENT_GAMES.find((g) => g.id === "pixel-duel");
-  assert.equal(duel?.turnFree, true);
-  assert.equal(duel?.commitReveal, true);
-  assert.equal(duel?.stake, 500n);
 });

@@ -13,13 +13,16 @@
 //! serialization (`UserSignature::to_base64`, not `bcs::to_bytes`), and `pure` encoding.
 
 use std::str::FromStr;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, Context};
 use base64::Engine;
 use sui_crypto::ed25519::Ed25519PrivateKey;
 use sui_crypto::SuiSigner;
 use sui_sdk_types::{
-    Address, Digest, Identifier, Transaction, TransactionExpiration, TypeTag, UserSignature,
+    Address, Argument, Command, Digest, GasPayment, Identifier, Input, ProgrammableTransaction,
+    Transaction, TransactionExpiration, TransactionKind, TypeTag, UserSignature, WithdrawFrom,
 };
 use sui_transaction_builder::{Function, ObjectInput, TransactionBuilder};
 
@@ -27,6 +30,35 @@ use sui_transaction_builder::{Function, ObjectInput, TransactionBuilder};
 const CLOCK_ADDRESS: &str = "0x0000000000000000000000000000000000000000000000000000000000000006";
 /// Fixed gas budget for a single cooperative close (one MoveCall, two shared objects).
 const GAS_BUDGET: u64 = 100_000_000;
+/// Gas budget cap for a sponsored open/fund tx (create + deposit + share). Same magnitude as a
+/// close; the dry-run rejects anything that would exceed it before the settler pays (ADR-0009).
+const SPONSOR_GAS_BUDGET: u64 = 100_000_000;
+/// 0x2 Sui framework — the only non-tunnel package the sponsor allows, for `public_share_object`.
+const SUI_FRAMEWORK_ADDRESS: &str =
+    "0x0000000000000000000000000000000000000000000000000000000000000002";
+/// `tunnel` module functions the sponsor will pay gas for: the open/fund lifecycle only. Every
+/// other call (other modules, other packages, Publish/Upgrade) is refused so the endpoint can't
+/// become an open gas faucet (ADR-0009). Kept in lockstep with the frontend's open/fund builders.
+const SPONSOR_TUNNEL_FNS: &[&str] = &[
+    "create",
+    "deposit_party_a",
+    "deposit_party_b",
+    "entry_deposit",
+    "entry_create_and_share",
+    // Batch self-play opener. The deployed package has `create_and_fund` (not the id-returning
+    // `_with_id`, which is source-only), and the SDK targets it post-fix — so this is what a
+    // sponsored self-play/bot open actually calls.
+    "create_and_fund",
+    // Cooperative close. PvP closes go through the dedicated `/settle` route (server-sponsored),
+    // but self-play/bot games close via the generic `/sponsor` route — so a 0-SUI player can close
+    // their own bot game for free. Authorization is the dual-signed settlement, re-verified on-chain.
+    // The SDK's close builders target the `entry_` wrappers, so those are the names a sponsored
+    // fallback close actually calls — the bare names stay for any direct caller.
+    "close_cooperative",
+    "close_cooperative_with_root",
+    "entry_close_cooperative",
+    "entry_close_cooperative_with_root",
+];
 /// Testnet genesis checkpoint digest — the chain identifier `ValidDuring` uses for cross-chain
 /// replay protection (its first 4 bytes are the `4c78adac` testnet chain id). SIP-58
 /// address-balance gas requires this in the transaction expiration.
@@ -59,6 +91,9 @@ pub struct SuiSettler {
     coin_type: TypeTag,
     signer: Ed25519PrivateKey,
     sender: Address,
+    /// Per-sponsorship nonce source for the `ValidDuring` FundsWithdrawal replay guard. Seeded
+    /// from wall-clock nanos at boot so two process runs in the same epoch don't collide.
+    sponsor_nonce: AtomicU32,
 }
 
 /// A parsed tunnel lifecycle event: the type suffix drives status folding; the rest feeds the
@@ -153,6 +188,19 @@ impl SuiSettler {
     ) -> anyhow::Result<Self> {
         let signer = load_ed25519(settler_key_b64)?;
         let sender = signer.public_key().derive_address();
+        // Seed the per-sponsorship nonce from the full wall clock (secs mixed with nanos), not
+        // just subsec_nanos, so two restarts in the same epoch are very unlikely to pick colliding
+        // seeds (a collision is a liveness hiccup — the node rejects the replayed withdrawal — not
+        // a fund risk). A multi-instance HA deployment would still want a shared/instance-tagged
+        // counter; out of scope here.
+        let nonce_seed = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| {
+                (d.as_secs() as u32)
+                    .wrapping_mul(2_654_435_761)
+                    .wrapping_add(d.subsec_nanos())
+            })
+            .unwrap_or(0);
         Ok(Self {
             http: reqwest::Client::new(),
             rpc_url,
@@ -160,6 +208,7 @@ impl SuiSettler {
             coin_type: TypeTag::from_str(coin_type).context("bad TUNNEL_COIN_TYPE")?,
             signer,
             sender,
+            sponsor_nonce: AtomicU32::new(nonce_seed),
         })
     }
 
@@ -176,6 +225,7 @@ impl SuiSettler {
             coin_type: "0x2::sui::SUI".parse().expect("static coin type"),
             signer,
             sender,
+            sponsor_nonce: AtomicU32::new(0),
         }
     }
 
@@ -205,6 +255,50 @@ impl SuiSettler {
             .sign_transaction(&tx)
             .map_err(|e| anyhow!("sign close tx: {e}"))?;
         self.execute(&tx, &sig).await
+    }
+
+    /// Sponsor gas (only) for a user's open/fund transaction (ADR-0009). The `user` is the tx
+    /// SENDER; the settler is the gas owner, paying via SIP-58 address-balance gas from its own
+    /// balance. Refuses anything but the allowlisted tunnel open/fund calls, dry-runs before
+    /// signing (so a tx that won't land never costs the settler gas), and returns
+    /// `(txBytes_b64, sponsorSig_b64)`. The caller (user) co-signs the SAME bytes and submits with
+    /// both signatures — the funds (stake) come from the user's own coin, never the sponsor.
+    pub async fn sponsor_open_fund(
+        &self,
+        user: &str,
+        kind_b64: &str,
+    ) -> anyhow::Result<(String, String)> {
+        let user_addr = Address::from_str(user).context("bad sender address")?;
+        let kind_bytes = base64::engine::general_purpose::STANDARD
+            .decode(kind_b64.trim())
+            .context("txKindBytes is not valid base64")?;
+        let gas_price = self.reference_gas_price().await?;
+        let epoch = self.current_epoch().await?;
+        let chain = Digest::from_base58(CHAIN_DIGEST_B58).context("chain digest")?;
+        let tx = build_sponsored_tx(
+            self.package_id,
+            &self.coin_type,
+            user_addr,
+            self.sender,
+            &kind_bytes,
+            gas_price,
+            epoch,
+            chain,
+            self.sponsor_nonce.fetch_add(1, Ordering::Relaxed),
+        )?;
+        // Verify-before-gas (ADR-0009, mirrors /settle): the unsigned tx is enough to simulate —
+        // the user's sender signature is not checked by a dry-run, only that the PTB would land.
+        let tx_b64 =
+            base64::engine::general_purpose::STANDARD.encode(bcs::to_bytes(&tx).context("bcs tx")?);
+        let r = self
+            .rpc("sui_dryRunTransactionBlock", serde_json::json!([tx_b64]))
+            .await?;
+        dryrun_effects_ok(&r).map_err(|e| anyhow!("sponsor dry-run failed: {e}"))?;
+        let sig = self
+            .signer
+            .sign_transaction(&tx)
+            .map_err(|e| anyhow!("sign sponsor tx: {e}"))?;
+        Ok((tx_b64, sig.to_base64()))
     }
 
     /// Dry-run the built close tx so the real `close_cooperative_with_root` runs (re-verifying
@@ -492,6 +586,178 @@ fn build_close_tx(
     Ok(tx)
 }
 
+/// Wrap a client-built transaction KIND in SIP-58 sponsor gas: the user is the sender, the settler
+/// owns the (empty, address-balance) gas, so the settler pays the user's gas from its own balance.
+/// Validates the kind is an allowlisted open/fund PTB first — the anti-abuse gate (ADR-0009).
+#[allow(clippy::too_many_arguments)] // mirrors build_close_tx's offline-build parameter list
+fn build_sponsored_tx(
+    package_id: Address,
+    coin_type: &TypeTag,
+    sender: Address,
+    gas_owner: Address,
+    kind_bytes: &[u8],
+    gas_price: u64,
+    epoch: u64,
+    chain: Digest,
+    nonce: u32,
+) -> anyhow::Result<Transaction> {
+    let kind: TransactionKind = bcs::from_bytes(kind_bytes).context("decode tx kind")?;
+    match &kind {
+        TransactionKind::ProgrammableTransaction(ptb) => {
+            validate_sponsorable(ptb, package_id, coin_type)?
+        }
+        _ => anyhow::bail!("only programmable transactions can be sponsored"),
+    }
+    Ok(Transaction {
+        kind,
+        sender,
+        gas_payment: GasPayment {
+            // SIP-58: empty objects => the gas FundsWithdrawal is drawn from the gas OWNER (the
+            // settler), NOT the sender — so the settler pays the user's gas from its own balance.
+            objects: Vec::new(),
+            owner: gas_owner,
+            price: gas_price.max(1),
+            budget: SPONSOR_GAS_BUDGET,
+        },
+        // SIP-58 address-balance gas requires a ValidDuring window; nonce is the per-withdrawal
+        // replay guard. min==max==current epoch; chain is the genesis digest (see build_close_tx).
+        expiration: TransactionExpiration::ValidDuring {
+            min_epoch: Some(epoch),
+            max_epoch: Some(epoch),
+            min_timestamp: None,
+            max_timestamp: None,
+            chain,
+            nonce,
+        },
+    })
+}
+
+/// True if any argument of `cmd` is `Argument::Gas` — i.e. the command touches the gas coin.
+/// In a sponsored tx the gas is the SETTLER's (SIP-58 address-balance), so a PTB that references
+/// the gas coin could split/transfer the settler's own funds out. The stake must come only from
+/// the user's input coins, never the gas. (Fixes the H1 settler-drain.)
+fn command_references_gas(cmd: &Command) -> bool {
+    let is_gas = |a: &Argument| matches!(a, Argument::Gas);
+    match cmd {
+        Command::MoveCall(mc) => mc.arguments.iter().any(is_gas),
+        Command::SplitCoins(s) => is_gas(&s.coin) || s.amounts.iter().any(is_gas),
+        Command::MergeCoins(m) => is_gas(&m.coin) || m.coins_to_merge.iter().any(is_gas),
+        Command::TransferObjects(t) => is_gas(&t.address) || t.objects.iter().any(is_gas),
+        Command::MakeMoveVector(v) => v.elements.iter().any(is_gas),
+        // Publish/Upgrade carry no Argument; any future variant is rejected outright by
+        // validate_sponsorable's catch-all, so it never needs a gas check here.
+        _ => false,
+    }
+}
+
+/// The package address of a struct coin type (`0xABC::dopamint::DOPAMINT` -> `0xABC`), or `None`
+/// for a primitive type like SUI. Used to locate the stake token's own faucet module.
+fn coin_type_address(coin_type: &TypeTag) -> Option<Address> {
+    match coin_type {
+        TypeTag::Struct(s) => Some(*s.address()),
+        _ => None,
+    }
+}
+
+/// The anti-abuse gate (ADR-0009): the settler pays gas, so it sponsors ONLY the tunnel open/fund
+/// move calls (+ the framework `public_share_object`) plus benign coin/object plumbing over the
+/// user's OWN inputs. Three invariants make this safe rather than an open faucet:
+///   1. No command may reference the gas coin (`Argument::Gas`) — else it could move the settler's
+///      funds out (H1). The stake comes from the user's input coins only.
+///   2. Every move call must be an allowlisted `tunnel::*` open/fund fn (or the framework share);
+///      Publish/Upgrade and any other package/module/function are refused.
+///   3. Tunnel calls must use the settler's configured coin type, not an arbitrary `T` (M1).
+///
+/// NOTE: this does NOT rate-limit or cap a global spend — a flood of valid sponsorships can still
+/// burn the settler's balance via gas. Add per-sender rate limiting + a daily budget before prod.
+fn validate_sponsorable(
+    ptb: &ProgrammableTransaction,
+    package_id: Address,
+    coin_type: &TypeTag,
+) -> anyhow::Result<()> {
+    let framework = Address::from_str(SUI_FRAMEWORK_ADDRESS).expect("static 0x2 address");
+    for cmd in &ptb.commands {
+        anyhow::ensure!(
+            !command_references_gas(cmd),
+            "sponsor refuses a command that references the gas coin",
+        );
+        match cmd {
+            Command::MoveCall(mc) => {
+                let is_tunnel = mc.package == package_id && mc.module.as_str() == "tunnel";
+                let tunnel_call = is_tunnel && SPONSOR_TUNNEL_FNS.contains(&mc.function.as_str());
+                let framework_share = mc.package == framework
+                    && mc.module.as_str() == "transfer"
+                    && mc.function.as_str() == "public_share_object";
+                // The DOPAMINT stake token's faucet lives in the coin type's own package
+                // (`<pkg>::dopamint`). Sponsor the free `mint`/`mint_default` so a 0-token player
+                // can faucet their stake (gas-sponsored) before opening a game.
+                let faucet_mint = coin_type_address(coin_type) == Some(mc.package)
+                    && mc.module.as_str() == "dopamint"
+                    && matches!(mc.function.as_str(), "mint" | "mint_default");
+                // SIP-58 stake path (ADR-0013): `redeem_funds` turns the sender's address-balance
+                // withdrawal into the stake `Coin<T>` for the open; `send_funds` is the funding
+                // sweep that deposits a faucet coin into the player's address balance;
+                // `destroy_zero` consumes the zero remainder the open's stake split leaves behind
+                // (a redeemed `Coin<T>` has no `drop`). All framework `0x2::coin` calls over the
+                // configured `T` and the user's own funds.
+                let coin_balance_op = mc.package == framework
+                    && mc.module.as_str() == "coin"
+                    && matches!(
+                        mc.function.as_str(),
+                        "redeem_funds" | "send_funds" | "destroy_zero"
+                    );
+                anyhow::ensure!(
+                    tunnel_call || framework_share || faucet_mint || coin_balance_op,
+                    "sponsor refuses move call {}::{}::{}",
+                    mc.package,
+                    mc.module.as_str(),
+                    mc.function.as_str(),
+                );
+                // The tunnel fns and the coin balance ops are generic over the coin `T`; only
+                // sponsor the configured type. (The framework share's type arg is `Tunnel<T>`, a
+                // different shape — skip it.)
+                if tunnel_call || coin_balance_op {
+                    anyhow::ensure!(
+                        mc.type_arguments.as_slice() == std::slice::from_ref(coin_type),
+                        "sponsor refuses move call with an unexpected coin type",
+                    );
+                }
+            }
+            // A sponsor must never pay to publish or upgrade code.
+            Command::Publish(_) | Command::Upgrade(_) => {
+                anyhow::bail!("sponsor refuses publish/upgrade commands");
+            }
+            // SplitCoins / MergeCoins / TransferObjects / MakeMoveVector are allowed ONLY because
+            // the gas-coin guard above already rejected any that touch the settler's gas; what
+            // remains operates on the user's own input coins/objects.
+            Command::SplitCoins(_)
+            | Command::MergeCoins(_)
+            | Command::TransferObjects(_)
+            | Command::MakeMoveVector(_) => {}
+            // `Command` is non-exhaustive; refuse anything we don't explicitly understand rather
+            // than pay gas for an unknown command shape.
+            _ => anyhow::bail!("sponsor refuses an unrecognized command"),
+        }
+    }
+    // SIP-58 (ADR-0013): a sponsored PTB may withdraw from an address balance to fund its stake,
+    // but ONLY the SENDER's own balance. `WithdrawFrom::Sponsor` would draw from the gas OWNER —
+    // the settler — draining its balance: the address-balance analogue of the `Argument::Gas`
+    // guard above. Refuse any non-sender withdrawal, and only for the configured stake coin type.
+    for input in &ptb.inputs {
+        if let Input::FundsWithdrawal(w) = input {
+            anyhow::ensure!(
+                w.source() == WithdrawFrom::Sender,
+                "sponsor refuses a FundsWithdrawal that is not from the sender",
+            );
+            anyhow::ensure!(
+                w.coin_type() == coin_type,
+                "sponsor refuses a FundsWithdrawal of an unexpected coin type",
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Decode the settler's ed25519 secret: 32 raw bytes, or 33 with the Sui ed25519 flag
 /// (`0x00`) prefix, base64-encoded.
 fn load_ed25519(b64: &str) -> anyhow::Result<Ed25519PrivateKey> {
@@ -623,6 +889,286 @@ mod tests {
         );
         assert_eq!(tx.gas_payment.owner, sender);
         assert_eq!(tx.gas_payment.budget, GAS_BUDGET);
+    }
+
+    fn sui_coin() -> TypeTag {
+        "0x2::sui::SUI".parse().unwrap()
+    }
+
+    fn tunnel_call(package: Address, function: &str) -> Command {
+        Command::MoveCall(sui_sdk_types::MoveCall {
+            package,
+            module: Identifier::new("tunnel").unwrap(),
+            function: Identifier::new(function).unwrap(),
+            // The tunnel fns are generic over the coin T; the validator pins it to the configured type.
+            type_arguments: vec![sui_coin()],
+            arguments: vec![],
+        })
+    }
+
+    fn ptb(commands: Vec<Command>) -> ProgrammableTransaction {
+        ProgrammableTransaction {
+            inputs: vec![],
+            commands,
+        }
+    }
+
+    // The happy path: the seat-A open PTB (create + deposit_party_a + framework share) is exactly
+    // what the sponsor pays gas for.
+    #[test]
+    fn validate_accepts_allowlisted_open_fund_ptb() {
+        let pkg = Address::from_str("0xabc").unwrap();
+        let p = ptb(vec![
+            tunnel_call(pkg, "create"),
+            tunnel_call(pkg, "deposit_party_a"),
+            Command::MoveCall(sui_sdk_types::MoveCall {
+                package: Address::from_str(SUI_FRAMEWORK_ADDRESS).unwrap(),
+                module: Identifier::new("transfer").unwrap(),
+                function: Identifier::new("public_share_object").unwrap(),
+                type_arguments: vec![],
+                arguments: vec![],
+            }),
+        ]);
+        assert!(validate_sponsorable(&p, pkg, &sui_coin()).is_ok());
+    }
+
+    // A call into a DIFFERENT package must never be sponsored — this is the anti-abuse core.
+    #[test]
+    fn validate_rejects_foreign_package_call() {
+        let pkg = Address::from_str("0xabc").unwrap();
+        let evil = Command::MoveCall(sui_sdk_types::MoveCall {
+            package: Address::from_str("0xdead").unwrap(),
+            module: Identifier::new("rug").unwrap(),
+            function: Identifier::new("drain").unwrap(),
+            type_arguments: vec![],
+            arguments: vec![],
+        });
+        assert!(validate_sponsorable(&ptb(vec![evil]), pkg, &sui_coin()).is_err());
+    }
+
+    // A tunnel fn outside the open/fund allowlist (e.g. a close/dispute) is refused: the sponsor
+    // pays for opening a channel, not for arbitrary tunnel operations.
+    #[test]
+    fn validate_rejects_non_allowlisted_tunnel_fn() {
+        let pkg = Address::from_str("0xabc").unwrap();
+        assert!(validate_sponsorable(
+            &ptb(vec![tunnel_call(pkg, "force_close")]),
+            pkg,
+            &sui_coin()
+        )
+        .is_err());
+    }
+
+    // H1 (settler-drain): a PTB that references the GAS coin — even via an otherwise-benign
+    // SplitCoins/TransferObjects, with NO disallowed move call — must be refused. In a sponsored
+    // tx the gas is the settler's, so touching it could move the settler's funds out.
+    #[test]
+    fn validate_rejects_any_command_touching_gas() {
+        let pkg = Address::from_str("0xabc").unwrap();
+        // Split the (settler's) gas coin — no move call at all; the variant-only check would miss it.
+        let split_gas = Command::SplitCoins(sui_sdk_types::SplitCoins {
+            coin: Argument::Gas,
+            amounts: vec![Argument::Input(0)],
+        });
+        assert!(validate_sponsorable(&ptb(vec![split_gas]), pkg, &sui_coin()).is_err());
+        // Transfer the gas coin straight out.
+        let xfer_gas = Command::TransferObjects(sui_sdk_types::TransferObjects {
+            objects: vec![Argument::Gas],
+            address: Argument::Input(0),
+        });
+        assert!(validate_sponsorable(&ptb(vec![xfer_gas]), pkg, &sui_coin()).is_err());
+        // Feed the gas coin into an allowlisted tunnel call as a funding coin.
+        let fund_from_gas = Command::MoveCall(sui_sdk_types::MoveCall {
+            package: pkg,
+            module: Identifier::new("tunnel").unwrap(),
+            function: Identifier::new("create_and_fund").unwrap(),
+            type_arguments: vec![sui_coin()],
+            arguments: vec![Argument::Gas],
+        });
+        assert!(validate_sponsorable(&ptb(vec![fund_from_gas]), pkg, &sui_coin()).is_err());
+    }
+
+    // M1: an allowlisted tunnel call for a DIFFERENT coin type than the settler's configured one
+    // is refused — the settler only sponsors gas for its own coin's tunnels.
+    #[test]
+    fn validate_rejects_wrong_coin_type() {
+        let pkg = Address::from_str("0xabc").unwrap();
+        let other = Command::MoveCall(sui_sdk_types::MoveCall {
+            package: pkg,
+            module: Identifier::new("tunnel").unwrap(),
+            function: Identifier::new("create").unwrap(),
+            type_arguments: vec!["0xabc::usdc::USDC".parse().unwrap()],
+            arguments: vec![],
+        });
+        assert!(validate_sponsorable(&ptb(vec![other]), pkg, &sui_coin()).is_err());
+    }
+
+    // The DOPAMINT faucet `mint` (in the coin type's own package) is sponsorable, so a 0-token
+    // player can faucet their stake gaslessly.
+    #[test]
+    fn validate_accepts_dopamint_faucet_mint() {
+        let coin: TypeTag = "0xabc::dopamint::DOPAMINT".parse().unwrap();
+        let mint = Command::MoveCall(sui_sdk_types::MoveCall {
+            package: Address::from_str("0xabc").unwrap(),
+            module: Identifier::new("dopamint").unwrap(),
+            function: Identifier::new("mint").unwrap(),
+            type_arguments: vec![],
+            arguments: vec![Argument::Input(0), Argument::Input(1), Argument::Input(2)],
+        });
+        // The tunnel package is unrelated to the faucet call; pass an arbitrary one.
+        let tunnel_pkg = Address::from_str("0xfff").unwrap();
+        assert!(validate_sponsorable(&ptb(vec![mint]), tunnel_pkg, &coin).is_ok());
+    }
+
+    // A `mint` from a package OTHER than the configured coin type's is refused — only the real
+    // DOPAMINT faucet is sponsored, not a look-alike.
+    #[test]
+    fn validate_rejects_faucet_mint_from_foreign_package() {
+        let coin: TypeTag = "0xabc::dopamint::DOPAMINT".parse().unwrap();
+        let mint = Command::MoveCall(sui_sdk_types::MoveCall {
+            package: Address::from_str("0xbad").unwrap(),
+            module: Identifier::new("dopamint").unwrap(),
+            function: Identifier::new("mint").unwrap(),
+            type_arguments: vec![],
+            arguments: vec![],
+        });
+        assert!(
+            validate_sponsorable(&ptb(vec![mint]), Address::from_str("0xfff").unwrap(), &coin)
+                .is_err()
+        );
+    }
+
+    fn coin_op(function: &str, coin: TypeTag) -> Command {
+        Command::MoveCall(sui_sdk_types::MoveCall {
+            package: Address::from_str(SUI_FRAMEWORK_ADDRESS).unwrap(),
+            module: Identifier::new("coin").unwrap(),
+            function: Identifier::new(function).unwrap(),
+            type_arguments: vec![coin],
+            arguments: vec![],
+        })
+    }
+
+    fn withdrawal(coin: TypeTag, source: WithdrawFrom) -> Input {
+        Input::FundsWithdrawal(sui_sdk_types::FundsWithdrawal::new(100, coin, source))
+    }
+
+    fn ptb_in(inputs: Vec<Input>, commands: Vec<Command>) -> ProgrammableTransaction {
+        ProgrammableTransaction { inputs, commands }
+    }
+
+    // ADR-0013: the stake is redeemed from the SENDER's address balance — a `coin::redeem_funds<T>`
+    // over a sender withdrawal of the configured coin is sponsorable.
+    #[test]
+    fn validate_accepts_sender_stake_withdrawal() {
+        let coin: TypeTag = "0xabc::dopamint::DOPAMINT".parse().unwrap();
+        let pkg = Address::from_str("0xfff").unwrap();
+        let p = ptb_in(
+            vec![withdrawal(coin.clone(), WithdrawFrom::Sender)],
+            vec![coin_op("redeem_funds", coin.clone())],
+        );
+        assert!(validate_sponsorable(&p, pkg, &coin).is_ok());
+    }
+
+    // Settler-drain (H1, address-balance form): a withdrawal whose source is the SPONSOR (gas owner
+    // = settler) must be refused — a sponsored PTB may withdraw only the user's OWN funds.
+    #[test]
+    fn validate_rejects_sponsor_withdrawal_settler_drain() {
+        let coin: TypeTag = "0xabc::dopamint::DOPAMINT".parse().unwrap();
+        let pkg = Address::from_str("0xfff").unwrap();
+        let p = ptb_in(
+            vec![withdrawal(coin.clone(), WithdrawFrom::Sponsor)],
+            vec![coin_op("redeem_funds", coin.clone())],
+        );
+        assert!(validate_sponsorable(&p, pkg, &coin).is_err());
+    }
+
+    // M1 (for withdrawals): a sender withdrawal of a coin type other than the settler's configured
+    // one is refused.
+    #[test]
+    fn validate_rejects_withdrawal_wrong_coin_type() {
+        let coin: TypeTag = "0xabc::dopamint::DOPAMINT".parse().unwrap();
+        let other: TypeTag = "0x2::sui::SUI".parse().unwrap();
+        let pkg = Address::from_str("0xfff").unwrap();
+        let p = ptb_in(vec![withdrawal(other, WithdrawFrom::Sender)], vec![]);
+        assert!(validate_sponsorable(&p, pkg, &coin).is_err());
+    }
+
+    // The funding sweep `coin::send_funds<T>` and the stake-remainder `coin::destroy_zero<T>` are
+    // sponsorable for the configured coin; a wrong type arg is refused (M1).
+    #[test]
+    fn validate_coin_ops_pin_coin_type() {
+        let coin: TypeTag = "0xabc::dopamint::DOPAMINT".parse().unwrap();
+        let pkg = Address::from_str("0xfff").unwrap();
+        for op in ["send_funds", "destroy_zero"] {
+            assert!(
+                validate_sponsorable(&ptb(vec![coin_op(op, coin.clone())]), pkg, &coin).is_ok(),
+                "{op} for the configured coin is sponsorable",
+            );
+        }
+        let wrong: TypeTag = "0x2::sui::SUI".parse().unwrap();
+        assert!(
+            validate_sponsorable(&ptb(vec![coin_op("destroy_zero", wrong)]), pkg, &coin).is_err()
+        );
+    }
+
+    // The end-to-end wrap: a valid kind yields a sponsored tx where the USER is the sender and the
+    // SETTLER owns the empty (SIP-58 address-balance) gas — i.e. the settler pays the user's gas.
+    #[test]
+    fn build_sponsored_tx_makes_user_sender_settler_gas() {
+        let pkg = Address::from_str("0xabc").unwrap();
+        let user = Address::from_str("0x111").unwrap();
+        let settler = Address::from_str("0x222").unwrap();
+        let kind = TransactionKind::ProgrammableTransaction(ptb(vec![tunnel_call(pkg, "create")]));
+        let kind_bytes = bcs::to_bytes(&kind).unwrap();
+        let tx = build_sponsored_tx(
+            pkg,
+            &sui_coin(),
+            user,
+            settler,
+            &kind_bytes,
+            1000,
+            1135,
+            Digest::from_base58(CHAIN_DIGEST_B58).unwrap(),
+            7,
+        )
+        .expect("valid open/fund kind builds");
+        assert_eq!(tx.sender, user, "user is the sender");
+        assert_eq!(tx.gas_payment.owner, settler, "settler owns + pays gas");
+        assert!(
+            tx.gas_payment.objects.is_empty(),
+            "SIP-58 address-balance gas (empty objects)"
+        );
+        assert_eq!(tx.gas_payment.budget, SPONSOR_GAS_BUDGET);
+    }
+
+    // The wrap refuses a kind whose move call is not allowlisted, before any gas is signed for.
+    #[test]
+    fn build_sponsored_tx_rejects_non_allowlisted_kind() {
+        let pkg = Address::from_str("0xabc").unwrap();
+        let kind = TransactionKind::ProgrammableTransaction(ptb(vec![Command::MoveCall(
+            sui_sdk_types::MoveCall {
+                package: Address::from_str("0xbad").unwrap(),
+                module: Identifier::new("x").unwrap(),
+                function: Identifier::new("y").unwrap(),
+                type_arguments: vec![],
+                arguments: vec![],
+            },
+        )]));
+        let kind_bytes = bcs::to_bytes(&kind).unwrap();
+        let err = build_sponsored_tx(
+            pkg,
+            &sui_coin(),
+            Address::ZERO,
+            Address::ZERO,
+            &kind_bytes,
+            1000,
+            1135,
+            Digest::from_base58(CHAIN_DIGEST_B58).unwrap(),
+            0,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("refuses"), "got: {err}");
     }
 
     // The indexer must lift payout + transcript root + tx digest out of a real suix_queryEvents

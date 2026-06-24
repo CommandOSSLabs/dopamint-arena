@@ -9,7 +9,9 @@ export * from "./ticTacToe";
 export * from "./chat";
 export * from "./quantumPoker";
 export * from "./cross";
+export * from "./multiGameCross";
 export * from "./bombIt";
+export * from "./multiGameBombIt";
 export * from "./quantumPokerCodec";
 export * from "./quantumPokerPersona";
 // Pixel protocols: re-export each class + its own types so `protocols.Pixel*` works

@@ -11,6 +11,8 @@ import { fromHex, toHex } from "sui-tunnel-ts/core/bytes";
 import { DistributedTunnel } from "sui-tunnel-ts/core/distributedTunnel";
 import { Transcript } from "sui-tunnel-ts/proof/transcript";
 import { registerWindowDisposer } from "@/lib/windowSessions";
+import { useTelemetry } from "../../telemetry/TelemetryProvider";
+import type { TelemetryWriter } from "../../telemetry/TelemetryProvider";
 import {
   BattleshipProtocol,
   battleshipMoveCodec,
@@ -29,16 +31,26 @@ import {
 } from "../../backend/controlPlane";
 import {
   closeCooperativeWithRoot,
-  depositStake,
   openAndFundSharedTunnel,
   raiseDisputeUnilateral,
   readCreatedAt,
 } from "../../onchain/tunnelTx";
+import { useSponsoredSignExec } from "../../onchain/useSponsoredSignExec";
+import {
+  openSharedTunnelStaked,
+  depositStakeStaked,
+  type StakeStrategy,
+} from "../../onchain/stakeTunnel";
+import {
+  DOPAMINT_COIN_TYPE,
+  isDopamintConfigured,
+} from "../../onchain/dopamint";
 import { coSignedToSettleRequest } from "../../backend/settleRequest";
 import { type FleetSecret, makeFleetSecret } from "./engine/selfPlay";
 import { type Placement, placementsToBoard } from "./engine/fleet";
 import { randomSalts } from "./engine/merkle";
 import { proposeDue } from "./engine/pvpDriver";
+import { pickShot, BOT_CONFIGS, DEFAULT_BOT_DIFFICULTY } from "./engine/bot";
 import { deriveBattleshipView, type BattleshipView } from "./view";
 import { attachResume, resumeActiveTunnels } from "@/pvp/resumeSession";
 import {
@@ -46,11 +58,16 @@ import {
   evictExpiredRecords,
   readResumeRecord,
   listActiveTunnels,
+  clearResumeRecord,
 } from "@/pvp/resume";
 import { makeBattleshipResumeAdapter } from "./battleshipResumeAdapter";
 
-const STAKE_BALANCE = 500n; // locked per seat (MIST)
-const STAKE_SHIFT = 100n; // moves loser → winner on a decisive result
+const STAKE_BALANCE = 1_000_000_000n; // locked per seat: 1 DOPAMINT (9 decimals)
+const STAKE_SHIFT = 200_000_000n; // 0.2 DOPAMINT moves loser → winner on a decisive result
+/** How long a cold-load resume waits for the relay's `resume.ok` before giving up. A
+ *  stale/dead match (or a backend that predates resume support) never confirms, so we
+ *  abandon to idle rather than hang on a frozen board. */
+const RESUME_GRACE_MS = 8_000;
 
 export type PvpStatus =
   | "idle"
@@ -70,6 +87,11 @@ export interface BattleshipPvp {
   /** Commit the placed fleet and join matchmaking. */
   findMatch: (placements: Placement[]) => void;
   fire: (cell: number) => void;
+  /** True while client-side autopilot fires YOUR shots. Settlement still waits for
+   *  the game to end (single-game tunnel); either seat's close finalizes it. */
+  auto: boolean;
+  /** Toggle autopilot for your seat; flipping it on fires immediately if it's your turn. */
+  setAuto: (on: boolean) => void;
   reset: () => void;
 }
 
@@ -78,7 +100,18 @@ type BattleshipTunnel = DistributedTunnel<BattleshipState, BattleshipMove>;
 interface PvpDeps {
   account: { address: string } | null;
   client: unknown;
+  /** Telemetry writer for the "My Activity" feed (one row per finished match). */
+  report: TelemetryWriter;
+  /** Wallet sender-pays signer — used for the close fallback (close is sponsored via /settle). */
   signExec: (tx: never) => Promise<{ digest: string }>;
+  /** Backend-gas-sponsored signer (ADR-0009) — used for the open/fund tx. */
+  sponsoredSignExec: (tx: never) => Promise<{ digest: string }>;
+  /** Pick a user coin to fund this seat's stake (gas is sponsored, the stake is not). */
+  selectStakeCoin: (minAmount: bigint) => Promise<string>;
+  /** DOPAMINT stake: faucet (invisibly, sponsored) if short, then return a stake coin id. */
+  prepareStake: (minAmount: bigint) => Promise<string>;
+  /** ADR-0013: ensure the player's DOPAMINT address balance covers the stake. No-op once funded. */
+  ensureStakeBalance: (minAmount: bigint) => Promise<void>;
 }
 
 interface PvpSnapshot {
@@ -87,6 +120,7 @@ interface PvpSnapshot {
   view: BattleshipView | null;
   opponentWallet: string | null;
   error: string | null;
+  auto: boolean;
 }
 
 /** Buffer peer messages so a waiter never misses one that arrived early. */
@@ -134,6 +168,7 @@ class PvpSession {
     view: null,
     opponentWallet: null,
     error: null,
+    auto: false,
   };
   private listeners = new Set<() => void>();
 
@@ -144,6 +179,11 @@ class PvpSession {
   private placements: Placement[] = []; // your fleet layout, for ship-status display
   private lastYourShot: number | null = null;
   private lastEnemyShot: number | null = null;
+  // Client-side autopilot: when on, fire YOUR shots automatically (one tunnel = one
+  // game in PvP, so the loop doesn't rematch — it just plays this game out).
+  private auto = false;
+  // Monotonic id for "My Activity" rows pushed per finished match.
+  private txnId = 0;
 
   subscribe = (cb: () => void): (() => void) => {
     this.listeners.add(cb);
@@ -160,9 +200,42 @@ class PvpSession {
       view: this.view,
       opponentWallet: this.opponentWallet,
       error: this.error,
+      auto: this.auto,
     };
     for (const l of this.listeners) l();
   }
+
+  /** Autopilot: if it's your turn to fire and autopilot is on, pick + propose a shot
+   *  (the bot AI). A no-op otherwise; safe to call after every confirmed update. */
+  private autoFireIfDue() {
+    if (!this.auto) return;
+    const dt = this.dt;
+    const r = this.role;
+    if (!dt || !r) return;
+    const st = dt.state;
+    if (
+      st.phase !== "playing" ||
+      st.pendingShot ||
+      st.turn !== r ||
+      st.winner !== 0
+    )
+      return;
+    const cell = pickShot(
+      st,
+      r,
+      Math.random,
+      BOT_CONFIGS[DEFAULT_BOT_DIFFICULTY],
+    );
+    this.fire(cell);
+  }
+
+  setAuto = (on: boolean) => {
+    if (this.auto === on) return;
+    this.auto = on;
+    this.emit();
+    // Flipping autopilot on while it's your turn: fire now.
+    if (on) this.autoFireIfDue();
+  };
   private fail(e: unknown) {
     this.error = String((e as Error)?.message ?? e);
     this.status = "error";
@@ -241,11 +314,17 @@ class PvpSession {
       selfEphemeralSecretHex: string;
     },
   ) {
+    // Bind the live tunnel for sync()/fire()/autopilot. BOTH callers route through
+    // here, so set it here — the resume() path doesn't set it otherwise, which left a
+    // resumed match with a null `dt` (no view → stuck at "Setting up…", dead fire).
+    this.dt = dt;
     const deps = this.deps!;
     const signExec = deps.signExec;
+    const sponsoredSignExec = deps.sponsoredSignExec;
     const reads = deps.client as unknown as Parameters<
       typeof openAndFundSharedTunnel
     >[0]["reads"];
+    const coinType = isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined;
     const proto = new BattleshipProtocol(STAKE_SHIFT);
     const transcript = new Transcript(dt.tunnelId);
     let settling = false;
@@ -256,9 +335,25 @@ class PvpSession {
         this.lastEnemyShot = st.pendingShot.cell;
       }
       this.sync();
-      proposeDue(dt, info.role, this.secret!); // ordered commit + defender reveals
+      // Drive the ordered commit + defender reveals. Autopilot-fire ONLY when nothing
+      // was proposed this tick — a shot sent right after another move races it on the
+      // channel and corrupts the frame (relay: "unparseable control message"). When a
+      // move was due, the shot follows on the next confirmed tick instead.
+      const proposed = proposeDue(dt, info.role, this.secret!);
+      if (!proposed) this.autoFireIfDue();
       if (proto.isTerminal(st) && !settling) {
         settling = true;
+        // One "My Activity" row per finished match, from this seat's perspective.
+        const iWon = st.winner === (info.role === "A" ? 1 : 2);
+        this.deps?.report.pushLocalTxn({
+          id: (this.txnId += 1),
+          game: "battleship",
+          time: new Date().toLocaleTimeString("en-GB"),
+          bot: "You",
+          type: iWon ? "PvP Win" : "PvP Loss",
+          status: "Success",
+          amount: "",
+        });
         this.status = "settling";
         this.emit();
         void settle(
@@ -268,9 +363,11 @@ class PvpSession {
           waitPeer,
           reads,
           signExec as never,
+          sponsoredSignExec as never,
           dt.tunnelId,
           transcript,
           getControlPlaneClient(),
+          coinType,
         ).then(
           () => {
             this.status = "settled";
@@ -363,6 +460,13 @@ class PvpSession {
           opponentPubkeyHex: rec.opponentPubkeyHex,
           selfEphemeralSecretHex: rec.selfEphemeralSecretHex!,
         });
+        // The relay confirms a re-attach with `resume.ok`. Watch for it; if it never
+        // arrives within the grace window, the match is dead (or the backend lacks
+        // resume support) — abandon so the user isn't stranded.
+        let resumed = false;
+        const unsubOk = mp.onResumeOk(() => {
+          resumed = true;
+        });
         await mp.connect(); // opening handshake carries resume{matchId}
         try {
           proposeDue(tunnel, rec.role, this.secret!); // kick a due reveal/commit
@@ -370,11 +474,42 @@ class PvpSession {
           /* a move is already in flight — the resync handshake converges it */
         }
         this.sync();
-      } catch (e) {
-        this.fail(e);
+        setTimeout(() => {
+          unsubOk();
+          if (!resumed && this.mp === mp) this.abandonResume(tunnel.tunnelId);
+        }, RESUME_GRACE_MS);
+      } catch {
+        this.abandonResume();
       }
     })();
   };
+
+  /** Tear down a failed/stale resume: drop the persisted record(s) so the next mount
+   *  doesn't retry-hang, close the socket, and return to idle (Find Match reachable). */
+  private abandonResume(tunnelId?: string) {
+    try {
+      if (tunnelId) clearResumeRecord(tunnelId);
+      else
+        for (const id of listActiveTunnels()) {
+          if (readResumeRecord(id)?.game === "battleship")
+            clearResumeRecord(id);
+        }
+    } catch {
+      /* best-effort cleanup */
+    }
+    this.detachResume?.();
+    this.detachResume = null;
+    this.mp?.close();
+    this.mp = null;
+    this.dt = null;
+    this.secret = null;
+    this.role = null;
+    this.opponentWallet = null;
+    this.status = "idle";
+    this.view = null;
+    this.error = null;
+    this.emit();
+  }
 
   findMatch = (placements: Placement[]) => {
     const deps = this.deps;
@@ -394,6 +529,7 @@ class PvpSession {
     );
     this.secret = secret;
     const signExec = deps.signExec;
+    const sponsoredSignExec = deps.sponsoredSignExec;
     const reads = deps.client as unknown as Parameters<
       typeof openAndFundSharedTunnel
     >[0]["reads"];
@@ -427,27 +563,39 @@ class PvpSession {
         const hello = await waitPeer<{ ephemeralPubkey: string }>("hello");
         const oppPub = fromHex(hello.ephemeralPubkey);
 
-        // 2) fund on-chain: seat A opens + funds its seat + announces; seat B deposits.
+        // 2) fund on-chain. DOPAMINT path (ADR-0010): faucet the stake token invisibly (gas-
+        //    sponsored) and stake DOPAMINT — settler pays gas, so a 0-SUI player plays free; no
+        //    sender-pays fallback (the faucet itself needs the sponsor). SUI path (DOPAMINT env
+        //    unset): sponsored SUI stake with a sender-pays fallback (ADR-0009).
         this.status = "funding";
         this.emit();
+        const stake: StakeStrategy = {
+          sponsoredSignExec: sponsoredSignExec as never,
+          walletSignExec: signExec as never,
+          prepareStake: deps.prepareStake,
+          selectStakeCoin: deps.selectStakeCoin,
+          ensureStakeBalance: deps.ensureStakeBalance,
+        };
         let tunnelId: string;
         if (match.role === "A") {
-          tunnelId = await openAndFundSharedTunnel({
+          tunnelId = await openSharedTunnelStaked({
             reads,
-            signExec: signExec as never,
             partyA: { address: wallet, publicKey: ephemeral.publicKey },
             partyB: { address: match.opponentWallet, publicKey: oppPub },
             amount: STAKE_BALANCE,
+            label: "battleship",
+            ...stake,
           });
           mp.announceTunnel(match.matchId, tunnelId);
           channel.sendPeer({ t: "open", tunnelId });
         } else {
           const open = await waitPeer<{ tunnelId: string }>("open");
           tunnelId = open.tunnelId;
-          await depositStake({
-            signExec: signExec as never,
+          await depositStakeStaked({
             tunnelId,
             amount: STAKE_BALANCE,
+            label: "battleship",
+            ...stake,
           });
         }
 
@@ -541,17 +689,26 @@ export function useBattleshipPvp(windowId: string): BattleshipPvp {
   const account = useCurrentAccount();
   const client = useSuiClient();
   const { mutateAsync: signAndExecute } = useSignAndExecuteTransaction();
+  const sponsored = useSponsoredSignExec();
+  const { report } = useTelemetry();
 
   const session = getPvpSession(windowId);
   session.deps = {
     account,
     client,
+    report,
     signExec: (async (
       tx: Parameters<typeof signAndExecute>[0]["transaction"],
     ) => {
       const r = await signAndExecute({ transaction: tx });
       return { digest: r.digest };
     }) as never,
+    // Open/fund routes through the backend gas sponsor (ADR-0009): the settler pays gas, the
+    // stake stays the user's own coin. (Close keeps signExec above — it's sponsored via /settle.)
+    sponsoredSignExec: sponsored.signExec as never,
+    selectStakeCoin: sponsored.selectStakeCoin,
+    prepareStake: sponsored.prepareStake,
+    ensureStakeBalance: sponsored.ensureStakeBalance,
   };
 
   // Cold-load: once the wallet is known, re-attach to any persisted in-flight match. resume()
@@ -569,6 +726,8 @@ export function useBattleshipPvp(windowId: string): BattleshipPvp {
     error: snap.error,
     findMatch: session.findMatch,
     fire: session.fire,
+    auto: snap.auto,
+    setAuto: session.setAuto,
     reset: session.reset,
   };
 }
@@ -586,9 +745,13 @@ async function settle(
   waitPeer: <T>(t: string) => Promise<T>,
   reads: Parameters<typeof readCreatedAt>[0],
   signExec: Parameters<typeof closeCooperativeWithRoot>[0]["signExec"],
+  // Gas-sponsored signer: the close fallback must use this in DOPAMINT mode, where the player holds
+  // 0 SUI and a wallet-signed close would throw and strand the staked DOPAMINT.
+  sponsoredSignExec: Parameters<typeof closeCooperativeWithRoot>[0]["signExec"],
   tunnelId: string,
   transcript: Transcript,
   cp: ReturnType<typeof getControlPlaneClient>,
+  coinType: string | undefined,
 ): Promise<void> {
   const createdAt = await readCreatedAt(reads, tunnelId);
   const root = transcript.root();
@@ -624,6 +787,11 @@ async function settle(
       "[battleship] backend settle failed; falling back to wallet close:",
       e,
     );
-    await closeCooperativeWithRoot({ signExec, tunnelId, settlement: co });
+    await closeCooperativeWithRoot({
+      signExec: isDopamintConfigured ? sponsoredSignExec : signExec,
+      tunnelId,
+      settlement: co,
+      coinType,
+    });
   }
 }

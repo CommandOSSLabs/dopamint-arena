@@ -289,3 +289,53 @@ test("full self-play game: balances conserved, five-card board, updates settle",
     )
   );
 });
+
+test("split pot (showdown tie) leaves BOTH stacks unchanged — neither loses chips", () => {
+  let ties = 0;
+  for (let seed = 1; seed <= 400 && ties < 3; seed++) {
+    const rng = mulberry32(seed);
+    const a = generateKeyPair();
+    const b = generateKeyPair();
+    const t = OffchainTunnel.selfPlay(
+      new QuantumPokerProtocol(50n),
+      "0x" + "55".repeat(32),
+      a,
+      b,
+      ed25519Address(a.publicKey),
+      ed25519Address(b.publicKey),
+      { a: 10_000n, b: 10_000n }
+    );
+    let preA = (t.state as PokerState).balanceA;
+    let preB = (t.state as PokerState).balanceB;
+    let handNo = (t.state as PokerState).handNo;
+    let steps = 0;
+    while (steps < 20_000 && t.state.phase !== "done") {
+      const before = t.state as PokerState;
+      if (before.handNo !== handNo) {
+        handNo = before.handNo; // new hand starting — snapshot the pre-hand stacks
+        preA = before.balanceA;
+        preB = before.balanceB;
+      }
+      let moved = false;
+      for (const party of ["A", "B"] as Party[]) {
+        const m = t.protocol.randomMove!(t.state, party, rng);
+        if (m) {
+          t.step(m as PokerMove, party);
+          steps++;
+          moved = true;
+          const cur = t.state as PokerState;
+          if (cur.phase === "hand_over" && cur.lastResult?.winner === "tie") {
+            // The split-pot case the user flagged: on a tie, neither seat should be deducted —
+            // both stacks must equal what they held when the hand began.
+            assert.equal(cur.balanceA, preA, `tie deducted A (seed ${seed})`);
+            assert.equal(cur.balanceB, preB, `tie deducted B (seed ${seed})`);
+            ties++;
+          }
+          break;
+        }
+      }
+      if (!moved) break;
+    }
+  }
+  assert.ok(ties > 0, "no showdown tie sampled — widen the seed range");
+});

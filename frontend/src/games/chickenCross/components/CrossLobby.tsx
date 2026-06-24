@@ -1,26 +1,73 @@
-import { CrossSounds } from "../scene/crossSounds.ts";
+import { useState } from "react";
+import { CROSS_BTN, CROSS_STYLE } from "../crossTheme";
+import { CrossChicken } from "./crossSprites";
 import "../cross.css";
 
-const lobbySounds = new CrossSounds();
+/** Splash/menu — compact footprint, playful pane styling. */
+export function CrossLobby({
+  onSolo,
+  onFind,
+}: {
+  onSolo: (stake: number) => void;
+  onFind: () => void;
+}) {
+  const [tab, setTab] = useState<"solo" | "pvp">("solo");
+  const [stake, setStake] = useState("500");
 
-/** Quick-join PvP entry (single shared queue, no room code) — consistent with the other games. */
-export function CrossLobby({ onFindMatch }: { onFindMatch: () => void }) {
+  const handleSolo = () => onSolo(Math.max(1, Math.floor(Number(stake)) || 0));
+
   return (
-    <div className="flex h-full w-full flex-col items-center justify-center gap-4 bg-arena-bg p-4 text-center">
-      <h2 className="text-gold text-lg font-extrabold uppercase tracking-widest">Chicken Cross PvP</h2>
-      <p className="max-w-xs text-sm text-arena-muted">
-        Find an opponent and race your chickens over a shared Sui tunnel.
-      </p>
+    <div className="cross-lobby" style={CROSS_STYLE}>
+      <div className="cross-lobby__card">
+        <div className="cross-lobby__head">
+          <div className="cross-lobby__brand">
+            <span className="cross-lobby__mascot" aria-hidden>
+              <CrossChicken party="a" mini />
+            </span>
+            <h2 className="cross-lobby__title">Chicken Cross</h2>
+          </div>
+          <div className="cross-seg" role="tablist" aria-label="Game mode">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === "solo"}
+              className={`cross-seg__btn${tab === "solo" ? " cross-seg__btn--on" : ""}`}
+              onClick={() => setTab("solo")}
+            >
+              Solo
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === "pvp"}
+              className={`cross-seg__btn${tab === "pvp" ? " cross-seg__btn--on" : ""}`}
+              onClick={() => setTab("pvp")}
+            >
+              PvP
+            </button>
+          </div>
+        </div>
 
-      <button
-        onClick={() => {
-          lobbySounds.play("click");
-          onFindMatch();
-        }}
-        className="gold-glow-hover rounded border border-amber-500 bg-arena-accent px-6 py-2 font-bold uppercase tracking-widest text-arena-bg transition-all hover:opacity-90"
-      >
-        Find Match
-      </button>
+        {tab === "solo" ? (
+          <div className="cross-lobby__action">
+            <input
+              className="cross-field"
+              type="number"
+              min={1}
+              aria-label="Stake"
+              value={stake}
+              onChange={(e) => setStake(e.target.value)}
+            />
+            <button type="button" className={`${CROSS_BTN} cross-cta cross-cta--join`} onClick={handleSolo}>
+              Go
+            </button>
+          </div>
+        ) : (
+          <button type="button" className={`${CROSS_BTN} cross-cta cross-cta--full`} onClick={onFind}>
+            Find match
+          </button>
+        )}
+      </div>
     </div>
   );
 }

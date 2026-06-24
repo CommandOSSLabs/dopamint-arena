@@ -14,6 +14,9 @@ function bytesToHex(bytes: Uint8Array): string {
 }
 
 /** Default digest for kits that treat the protocol's canonical wire encoding as the state snapshot. */
-export function defaultStateHash<S, M>(protocol: Protocol<S, M>, state: S): StateHash {
+export function defaultStateHash<S, M>(
+  protocol: Protocol<S, M>,
+  state: S,
+): StateHash {
   return bytesToHex(protocol.encodeState(state));
 }

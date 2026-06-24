@@ -40,16 +40,11 @@ export default function Home() {
           {account ? (
             <>
               <button
-                onClick={() => navigate("/play")}
+                onClick={() => navigate("/bot")}
+                data-testid="bj-play-bot"
                 className="w-full bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-zinc-950 font-black py-4 md:py-5 rounded-xl text-lg md:text-xl uppercase tracking-widest shadow-lg transition-all gold-glow-hover active:scale-95"
               >
-                🃏 Play vs Dealer
-              </button>
-              <button
-                onClick={() => navigate("/bot")}
-                className="w-full bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white border border-zinc-800 font-bold py-4 rounded-xl text-sm md:text-base uppercase tracking-wider transition-all active:scale-95"
-              >
-                👀 Watch Bot Arena
+                🤖 Play vs Bot
               </button>
               <button
                 onClick={() => navigate("/pvp")}

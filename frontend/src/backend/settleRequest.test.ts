@@ -50,6 +50,11 @@ test("coSignedToSettleRequest passes transcript entries through verbatim", () =>
   const entries = [{ nonce: "1", message: "00", sigA: "aa", sigB: "bb" }];
   const body = coSignedToSettleRequest(coSigned, entries);
   assert.equal(body.transcript.length, 1);
-  assert.deepEqual(body.transcript[0], { nonce: "1", message: "00", sigA: "aa", sigB: "bb" });
+  assert.deepEqual(body.transcript[0], {
+    nonce: "1",
+    message: "00",
+    sigA: "aa",
+    sigB: "bb",
+  });
   assert.equal(body.settlement.transcriptRoot, "00".repeat(32));
 });

@@ -1,0 +1,13 @@
+services:
+  bench:
+    build:
+      context: ..
+      dockerfile: frontend/bench.Dockerfile
+    environment:
+      - BENCH_PROCESSES=4
+      - BENCH_DURATION=10000
+    deploy:
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: 8G

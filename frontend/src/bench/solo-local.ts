@@ -145,7 +145,7 @@ function formatNumber(n: number): string {
 
 async function main(argv: string[]): Promise<void> {
   const args = parseArgs(argv);
-  const durationMs = Number(args.duration ?? 10000);
+  const durationMs = Number(args.duration ?? process.env.BENCH_DURATION ?? 10000);
   const rawGames = args.games;
 
   let gameIds: GameId[];
@@ -165,7 +165,9 @@ async function main(argv: string[]): Promise<void> {
   await ensureBuilt();
 
   const cores = os.cpus().length;
-  const processes = Math.max(1, cores);
+  const processes = process.env.BENCH_PROCESSES
+    ? Math.max(1, Number(process.env.BENCH_PROCESSES))
+    : Math.max(1, cores);
 
   console.log(`Local multi-game TPS benchmark (Bun)`);
   console.log(`  duration   : ${durationMs} ms`);

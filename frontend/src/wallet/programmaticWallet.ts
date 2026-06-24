@@ -67,7 +67,9 @@ export class ProgrammaticWallet {
       },
       "sui:signAndExecuteTransaction": {
         version: "2.0.0",
-        signAndExecuteTransaction: async (input: SuiSignAndExecuteTransactionInput) => {
+        signAndExecuteTransaction: async (
+          input: SuiSignAndExecuteTransactionInput,
+        ) => {
           const { bytes, signature } = await sign(input);
           const res = await client.executeTransactionBlock({
             transactionBlock: bytes,
@@ -88,6 +90,12 @@ export class ProgrammaticWallet {
 }
 
 /** Build a wallet from a Bech32 `suiprivkey1…` secret (what `keypair.getSecretKey()` emits). */
-export function programmaticWalletFromSecret(secretKey: string, client: ExecClient) {
-  return new ProgrammaticWallet(Ed25519Keypair.fromSecretKey(secretKey), client);
+export function programmaticWalletFromSecret(
+  secretKey: string,
+  client: ExecClient,
+) {
+  return new ProgrammaticWallet(
+    Ed25519Keypair.fromSecretKey(secretKey),
+    client,
+  );
 }

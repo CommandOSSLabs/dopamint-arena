@@ -4,10 +4,22 @@ import { liveOnchainTxns, displayUpdatesPerSec } from "./liveMerge";
 import type { StatsSnapshot } from "./controlPlane";
 
 const connected: StatsSnapshot = {
-  tps: 1_000_000, totalActions: 0, activeTunnels: 0, settledTunnels: 0, perGame: {},
+  tps: 1_000_000,
+  totalActions: 0,
+  activeTunnels: 0,
+  settledTunnels: 0,
+  perGame: {},
   recentEvents: [
-    { tunnelId: "0xt", kind: "settled", partyABalance: 1e9, partyBBalance: 1e9,
-      transcriptRoot: "ab", txDigest: "D", timestampMs: 1_750_000_000_000, proofUrl: null },
+    {
+      tunnelId: "0xt",
+      kind: "settled",
+      partyABalance: 1e9,
+      partyBBalance: 1e9,
+      transcriptRoot: "ab",
+      txDigest: "D",
+      timestampMs: 1_750_000_000_000,
+      proofUrl: null,
+    },
   ],
 };
 
@@ -22,7 +34,11 @@ test("disconnected backend → fallback rows", () => {
   assert.equal(liveOnchainTxns(null, fallback), fallback);
 });
 
-test("tps prefers the backend global aggregate", () => {
+test("tps keeps the backend global aggregate when it is higher", () => {
   assert.equal(displayUpdatesPerSec(connected, 12), 1_000_000);
+});
+
+test("tps shows local activity when backend is lower or disconnected", () => {
+  assert.equal(displayUpdatesPerSec({ ...connected, tps: 0 }, 12), 12);
   assert.equal(displayUpdatesPerSec(null, 12), 12);
 });
