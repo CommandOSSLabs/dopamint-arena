@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import { getStroke } from "perfect-freehand";
 import {
   cellKey,
   type PaintedCell,
@@ -34,24 +33,17 @@ const PENCIL_CURSOR =
  * zoom-to-cursor (wheel), and drag-to-paint. The co-signed unit is still one CELL
  * (one cell = one tunnel move = 1 TPS, unchanged), but the VISUAL is real ink: each
  * painter's contiguous run of cells is grouped into a STROKE and rendered as a
- * smooth, tapered, anti-aliased {@link getStroke} (perfect-freehand) path — not a
- * grid of squares. So the art reads like a brush, not pixels.
+ * smooth, anti-aliased native canvas line (round caps + joins) — not a grid of
+ * squares. So the art reads like a brush, not pixels.
  *
  * Strokes are built incrementally from the parent's ordered `paints` stream: each
  * agent's cells append to that agent's open stroke (a big positional jump starts a
  * new one); the human's own strokes come straight from the live pointer path for a
  * crisp, lag-free preview, finalized on pointer-up. Finalized strokes cache their
- * world-space outline (computed once) and are projected + filled per frame, culled
- * to the viewport — so cost is bound by what's on screen.
+ * world-space points + bbox and are projected + stroked per frame, culled to the
+ * viewport — so cost is bound by what's on screen.
  */
 
-/** Per-seat outline feel — tapered, smoothed ink (the perfect-freehand "signature" look). */
-const STROKE_OPTS = {
-  thinning: 0.55,
-  smoothing: 0.6,
-  streamline: 0.55,
-  simulatePressure: true,
-} as const;
 /** A positional jump larger than this (in cells) ends a painter's stroke and starts
  *  a new one — so an agent hopping to a fresh region doesn't draw a seam across the wall. */
 const STROKE_GAP_CELLS = 4;
@@ -71,10 +63,13 @@ interface GlobalCell {
   gy: number;
 }
 
-/** A finalized stroke: its world-space {@link getStroke} outline (cached) + bbox + tint. */
+/** A finalized stroke: its world-space cell-center points (the polyline) + width + bbox + tint. */
 interface Stroke {
   color: number;
-  outline: number[][];
+  /** Cell-center points of the painter's run; stroked as a round-capped path per frame. */
+  pts: number[][];
+  /** Line width in cells (projected by the camera scale at draw time). */
+  size: number;
   /** Eraser stroke — rendered in the live backdrop color so it covers ("erases"). */
   erase: boolean;
   minX: number;
@@ -282,14 +277,14 @@ export function WorldCanvas({
     }
   };
 
-  // Freeze an open stroke into a cached world-space outline + bbox; evict the oldest
+  // Freeze an open stroke into a cached polyline + width + bbox; evict the oldest
   // when the retained set is full (constant memory for an endless wall).
   const finalizeStroke = (s: OpenStroke) => {
-    const outline = getStroke(s.pts, { ...STROKE_OPTS, size: s.size }) as number[][];
-    if (outline.length < 2) return;
+    if (!s.pts.length) return;
     strokes.current.push({
       color: s.color,
-      outline,
+      pts: s.pts,
+      size: s.size,
       erase: s.erase,
       minX: s.minX,
       minY: s.minY,
@@ -437,47 +432,61 @@ export function WorldCanvas({
         s.maxY >= gMinY - pad &&
         s.minY <= gMaxY + pad;
 
-      // Fill one world-space outline at the current pan/zoom. Eraser strokes paint
-      // the backdrop color so they cover earlier ink (a visual erase on append-only art).
-      const fillOutline = (outline: number[][], color: number, erase: boolean) => {
-        if (outline.length < 2) return;
+      // Stroke one world-space polyline at the current pan/zoom with a round-capped
+      // line (smooth, anti-aliased — no taper). Eraser strokes paint the backdrop
+      // color so they cover earlier ink (a visual erase on append-only art). A lone
+      // point (a single click) draws as a round dab so a tap still leaves a mark.
+      const strokePath = (
+        pts: number[][],
+        color: number,
+        size: number,
+        erase: boolean,
+      ) => {
+        if (!pts.length) return;
+        const ink = erase ? bg : (PALETTE[color] ?? "#ffffff");
+        const lw = Math.max(1, size * v.scale);
+        if (pts.length === 1) {
+          ctx.fillStyle = ink;
+          ctx.beginPath();
+          ctx.arc(
+            v.offsetX + pts[0][0] * v.scale,
+            v.offsetY + pts[0][1] * v.scale,
+            lw / 2,
+            0,
+            Math.PI * 2,
+          );
+          ctx.fill();
+          return;
+        }
         ctx.beginPath();
         ctx.moveTo(
-          v.offsetX + outline[0][0] * v.scale,
-          v.offsetY + outline[0][1] * v.scale,
+          v.offsetX + pts[0][0] * v.scale,
+          v.offsetY + pts[0][1] * v.scale,
         );
-        for (let i = 1; i < outline.length; i++) {
+        for (let i = 1; i < pts.length; i++) {
           ctx.lineTo(
-            v.offsetX + outline[i][0] * v.scale,
-            v.offsetY + outline[i][1] * v.scale,
+            v.offsetX + pts[i][0] * v.scale,
+            v.offsetY + pts[i][1] * v.scale,
           );
         }
-        ctx.closePath();
-        ctx.fillStyle = erase ? bg : (PALETTE[color] ?? "#ffffff");
-        ctx.fill();
+        ctx.lineWidth = lw;
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.strokeStyle = ink;
+        ctx.stroke();
       };
 
-      // Finalized strokes (cached outlines) → agents' open strokes → the human's
+      // Finalized strokes (cached polylines) → agents' open strokes → the human's
       // live drag, all culled to the viewport.
       for (const s of strokes.current) {
-        if (visible(s)) fillOutline(s.outline, s.color, s.erase);
+        if (visible(s)) strokePath(s.pts, s.color, s.size, s.erase);
       }
       for (const s of openStrokes.current.values()) {
-        if (visible(s)) {
-          fillOutline(
-            getStroke(s.pts, { ...STROKE_OPTS, size: s.size }) as number[][],
-            s.color,
-            s.erase,
-          );
-        }
+        if (visible(s)) strokePath(s.pts, s.color, s.size, s.erase);
       }
       const live = liveStroke.current;
       if (live && live.pts.length) {
-        fillOutline(
-          getStroke(live.pts, { ...STROKE_OPTS, size: live.size }) as number[][],
-          live.color,
-          live.erase,
-        );
+        strokePath(live.pts, live.color, live.size, live.erase);
       }
 
       // Agent markers: a small pin + label above each agent's flag, so the user
