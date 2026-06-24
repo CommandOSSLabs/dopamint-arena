@@ -69,6 +69,7 @@ export class ChatMatchDriver {
           },
         ]);
         const move = protocol.createMove(answer);
+        protocol.applyMove(move);
         this.channel.transport.send(move);
         this.movesSent += 1;
       }

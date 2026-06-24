@@ -2,6 +2,7 @@ import { ChatMatchDriver } from "./matchDriver.ts";
 import type { OllamaBackendClient } from "./ollama.ts";
 import type { MpClient } from "./mpClient.ts";
 import { chatProtocol, type ChatMessage } from "sui-tunnel-ts/protocol/chat";
+import { setTimeout as sleep } from "node:timers/promises";
 
 export interface BotVsBotOptions {
   alice: MpClient;
@@ -59,17 +60,13 @@ export async function runBotVsBot(
     "bot-bob",
   );
 
-  const racePromise = Promise.all([
-    aliceDriver.start(topic),
-    bobDriver.start(topic),
-  ]);
+  const aliceLoop = aliceDriver.start(topic);
+  const bobLoop = bobDriver.start(topic);
 
-  setTimeout(() => {
-    aliceDriver.requestStop();
-    bobDriver.requestStop();
-  }, maxMoves * 600 + 2000);
-
-  await racePromise;
+  await sleep(maxMoves * 600 + 2000);
+  aliceDriver.requestStop();
+  bobDriver.requestStop();
+  await Promise.all([aliceLoop, bobLoop]);
 
   const transcript = aliceDriver.snapshot();
   await ollama.publishTranscript(transcript.messages);
