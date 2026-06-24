@@ -133,7 +133,13 @@ export class DistributedTunnel<State, Move> {
    * Never use this for settlement or security decisions — use `state` (confirmed) for those.
    */
   get displayState(): State {
-    return this.pending ? this.pending.next : this._state;
+    // Show the proposer's own in-flight move instantly — but ONLY while it's still ahead of the
+    // confirmed nonce. A pending re-seated on resume can already be superseded (the peer confirmed it
+    // / moved past it while we were offline); rendering its `.next` then freezes the UI on a stale
+    // hand. Once `_nonce` reaches/passes the pending, fall back to the confirmed state.
+    return this.pending && this.pending.update.nonce > this._nonce
+      ? this.pending.next
+      : this._state;
   }
   get nonce(): bigint {
     return this._nonce;
@@ -295,6 +301,9 @@ export class DistributedTunnel<State, Move> {
     this._latest = this.coSign(update, sigResponder, frame.sigProposer);
     this._state = next;
     this._nonce = frame.nonce;
+    // A confirmed move at/past our pending's nonce supersedes it (mirror adoptCheckpoint): drop the
+    // stale proposal so displayState renders the confirmed state, not a frozen `pending.next`.
+    if (this.pending && this.pending.update.nonce <= this._nonce) this.pending = null;
     const ack: AckFrame = { kind: "ack", nonce: frame.nonce, sigResponder };
     this.transport.send(encodeFrame(ack, this.codec));
     this.onConfirmed?.(this._latest);
