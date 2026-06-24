@@ -3,7 +3,7 @@ import { useCurrentAccount } from "@mysten/dapp-kit";
 import type { PokerMove } from "sui-tunnel-ts/protocol/quantumPoker";
 import type { GameWindowProps } from "../types";
 import { useQuantumPokerBot } from "./useQuantumPokerBot";
-import { QuantumPokerTable, HEADS_UP_STYLE } from "./QuantumPokerTable";
+import { QuantumPokerTable, SketchDefs } from "./QuantumPokerTable";
 import { pokerRaiseSizes } from "./pokerBetting";
 
 // ---------------------------------------------------------------------------
@@ -33,7 +33,7 @@ function moveLabel(move: PokerMove): string {
 void moveLabel;
 
 // ---------------------------------------------------------------------------
-// ActionBar — human betting controls
+// ActionBar — human betting controls (hand-drawn buttons)
 // ---------------------------------------------------------------------------
 
 function ActionBar({
@@ -57,67 +57,43 @@ function ActionBar({
     canBet: legal.minBet > 0n,
   });
   return (
-    <div className="flex flex-wrap items-center gap-1.5 rounded-md border border-white/10 bg-black/30 p-2">
+    <div className="flex flex-wrap items-center gap-[clamp(5px,1.8cqmin,12px)]">
       {secondsLeft != null && (
         <span
-          className={`h-7 min-w-[2rem] rounded-sm px-2 text-center text-[11px] font-semibold leading-7 tabular-nums ${
-            secondsLeft <= 3
-              ? "bg-rose-400/20 text-rose-200 motion-safe:animate-pulse"
-              : "bg-white/5 text-[var(--qp-gold)]"
-          }`}
+          className={`qp-timer tabular-nums${secondsLeft <= 3 ? " qp-timer--low motion-safe:animate-pulse" : ""}`}
         >
           {secondsLeft}s
         </span>
       )}
-      <button
-        type="button"
-        onClick={() => onAct({ kind: "fold" })}
-        className="h-7 rounded-sm border border-rose-300/40 px-3 text-[11px] font-semibold text-rose-100"
-      >
+      <button type="button" className="qp-btn qp-btn--stop" onClick={() => onAct({ kind: "fold" })}>
         Fold
       </button>
       {legal.canCheck && (
-        <button
-          type="button"
-          onClick={() => onAct({ kind: "check" })}
-          className="h-7 rounded-sm border border-white/20 px-3 text-[11px] font-semibold text-slate-100"
-        >
+        <button type="button" className="qp-btn" onClick={() => onAct({ kind: "check" })}>
           Check
         </button>
       )}
       {legal.canCall && (
         <button
           type="button"
+          className="qp-btn qp-btn--call"
           onClick={() => onAct({ kind: "call" })}
-          className="h-7 rounded-sm border border-[var(--qp-cyan)]/50 px-3 text-[11px] font-semibold text-cyan-100"
         >
           Call {legal.callAmount.toString()}
         </button>
       )}
       {sizes.showHalf && (
-        <button
-          type="button"
-          onClick={() => raise(sizes.half)}
-          className="h-7 rounded-sm border border-amber-200/40 px-3 text-[11px] font-semibold text-amber-100"
-        >
+        <button type="button" className="qp-btn" onClick={() => raise(sizes.half)}>
           ½ Pot · {sizes.half.toString()}
         </button>
       )}
       {sizes.showFull && (
-        <button
-          type="button"
-          onClick={() => raise(sizes.full)}
-          className="h-7 rounded-sm border border-amber-200/40 px-3 text-[11px] font-semibold text-amber-100"
-        >
+        <button type="button" className="qp-btn" onClick={() => raise(sizes.full)}>
           Pot · {sizes.full.toString()}
         </button>
       )}
       {sizes.showAllIn && (
-        <button
-          type="button"
-          onClick={() => raise(sizes.allIn)}
-          className="h-7 rounded-sm bg-[var(--qp-gold)] px-3 text-[11px] font-black text-slate-950"
-        >
+        <button type="button" className="qp-btn qp-btn--go" onClick={() => raise(sizes.allIn)}>
           All-in · {sizes.allIn.toString()}
         </button>
       )}
@@ -149,56 +125,86 @@ export function QuantumPokerWindow({
 
   if (!s) {
     return (
-      <div
-        style={HEADS_UP_STYLE}
-        className="flex h-full min-h-[14rem] flex-col items-center justify-center gap-3 bg-[#080b0d] p-5 text-center text-slate-100"
-      >
-        <span className="rounded-sm bg-[var(--qp-gold)] px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.14em] text-slate-950">
-          bot mode
-        </span>
-        <p className="max-w-[17rem] text-[12px] text-slate-400">
-          Open a real self-play tunnel: your wallet funds both seats once, you
-          play party A, a random-persona bot plays party B, then it settles
-          gas-free.
-        </p>
-        <div className="flex gap-2">
-          <button
-            type="button"
-            onClick={game.open}
-            disabled={game.status === "funding" || !account}
-            className="rounded-md bg-[var(--qp-gold)] px-4 py-2 text-[12px] font-bold text-slate-950 disabled:opacity-45"
-          >
-            {game.status === "funding"
-              ? "Opening…"
-              : account
-                ? "Open tunnel"
-                : "Connect wallet"}
-          </button>
-          {onExit && (
+      <div className="qp-sketch grid h-full min-h-[14rem] place-items-center overflow-hidden p-[clamp(12px,4cqmin,28px)] text-center">
+        <SketchDefs />
+        <div className="qp-panel qp-stroke max-w-[min(22rem,92%)] p-[clamp(14px,4cqmin,26px)]">
+          <span className="qp-eyebrow">You vs Bot</span>
+          <div className="qp-title mb-1 mt-1">Quantum Poker</div>
+          <p className="qp-note mb-3">
+            Open a real self-play tunnel: your wallet funds both seats once, you
+            play party A, a random-persona bot plays party B, then it settles
+            gas-free.
+          </p>
+          <div className="flex flex-wrap justify-center gap-[clamp(6px,2cqmin,12px)]">
             <button
               type="button"
-              onClick={onExit}
-              className="rounded-md border border-white/15 px-4 py-2 text-[12px] font-semibold text-slate-200"
+              className="qp-btn qp-btn--go"
+              onClick={game.open}
+              disabled={game.status === "funding" || !account}
             >
-              Back
+              {game.status === "funding"
+                ? "Opening…"
+                : account
+                  ? "Open tunnel"
+                  : "Connect wallet"}
             </button>
+            {onExit && (
+              <button type="button" className="qp-btn" onClick={onExit}>
+                Back
+              </button>
+            )}
+          </div>
+          {game.error && (
+            <div className="mt-3 text-[clamp(10px,2.6cqmin,15px)] text-[var(--qp-red)]">
+              {game.error}
+            </div>
           )}
         </div>
-        {game.error && (
-          <div className="text-[10px] text-rose-300">{game.error}</div>
-        )}
       </div>
     );
   }
 
   const holesB = s.shownHoleB ?? [];
+  const inPlay = game.status === "playing" || game.status === "awaitHuman";
 
   return (
-    <div
-      style={HEADS_UP_STYLE}
-      className="flex h-full min-h-[14rem] flex-col overflow-hidden bg-[#080b0d] text-slate-100"
-    >
-      <main className="flex min-h-0 flex-1 flex-col gap-2 p-2">
+    <div className="qp-sketch grid h-full min-h-[14rem] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden">
+      <SketchDefs />
+
+      <header className="qp-head">
+        <div className="flex min-w-0 items-center gap-[clamp(6px,2.2cqmin,14px)]">
+          {onExit && (
+            <button
+              type="button"
+              className="qp-btn"
+              onClick={() => {
+                game.handOffToBot(); // leave without settling → a bot finishes the match in the background
+                onExit();
+              }}
+            >
+              Back
+            </button>
+          )}
+          <div className="flex min-w-0 flex-col leading-none">
+            <span className="qp-eyebrow">You vs Bot</span>
+            <span className="qp-title truncate">Quantum Poker</span>
+          </div>
+        </div>
+        {inPlay && (
+          <button
+            type="button"
+            className="qp-btn qp-btn--go"
+            onClick={() => {
+              exitAfterSettleRef.current = true; // settle, then auto-return to the menu
+              game.settleNow();
+            }}
+          >
+            Settle
+          </button>
+        )}
+      </header>
+
+      <main className="grid min-h-0 overflow-hidden p-[clamp(10px,3.6cqmin,36px)]">
         <QuantumPokerTable
           state={s}
           holesA={game.humanHoles}
@@ -206,8 +212,9 @@ export function QuantumPokerWindow({
           nameA="You"
           nameB="Bot"
         />
+      </main>
 
-        {/* Human action bar — only shown when it's the human's betting turn */}
+      <footer className="grid gap-[clamp(5px,1.6cqmin,12px)] p-[clamp(6px,2.4cqmin,16px)] pt-0">
         {game.status === "awaitHuman" && game.legal && (
           <ActionBar
             legal={game.legal}
@@ -216,46 +223,23 @@ export function QuantumPokerWindow({
             secondsLeft={game.secondsLeft}
           />
         )}
-
-        {/* Status footer */}
-        <div className="px-2 py-1 text-[10px] text-slate-500">
-          {game.status === "settled"
-            ? "Settled."
-            : game.status === "settling"
-              ? "Settling…"
-              : `phase ${s.phase}`}
-          {(game.status === "playing" || game.status === "awaitHuman") && (
-            <button
-              type="button"
-              onClick={() => {
-                exitAfterSettleRef.current = true; // settle, then auto-return to the menu
-                game.settleNow();
-              }}
-              className="ml-2 rounded-sm border border-[var(--qp-gold)]/50 px-2 py-0.5 text-[10px] font-semibold text-[var(--qp-gold)]"
-            >
-              Settle
-            </button>
-          )}
+        <div className="flex items-center gap-[clamp(5px,1.8cqmin,12px)]">
+          <span className="qp-stat__l">
+            {game.status === "settled"
+              ? "Settled."
+              : game.status === "settling"
+                ? "Settling…"
+                : game.status === "awaitHuman"
+                  ? "Your move"
+                  : "Playing…"}
+          </span>
           {game.status === "settled" && (
-            <button
-              type="button"
-              onClick={game.open}
-              className="ml-2 rounded-sm border border-white/15 px-2 py-0.5 text-[10px]"
-            >
+            <button type="button" className="qp-btn qp-btn--go" onClick={game.open}>
               New tunnel
             </button>
           )}
-          {onExit && (
-            <button
-              type="button"
-              onClick={onExit}
-              className="ml-2 rounded-sm border border-white/15 px-2 py-0.5 text-[10px]"
-            >
-              Back
-            </button>
-          )}
         </div>
-      </main>
+      </footer>
     </div>
   );
 }

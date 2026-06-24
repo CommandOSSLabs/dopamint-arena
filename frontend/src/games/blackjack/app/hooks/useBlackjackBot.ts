@@ -13,6 +13,7 @@ import {
   buildSettleWithRootTx,
   parseTunnelId,
 } from "@/games/blackjack/app/lib/bjTunnel";
+import { submitRebuildingOnStale } from "@/onchain/tunnelTx";
 import {
   handToCardIndices,
   handValue,
@@ -27,7 +28,9 @@ import {
 } from "@/games/blackjack/app/lib/bjBots";
 import {
   DOPAMINT_COIN_TYPE,
+  ensureDopamintAddressBalance,
   ensureDopamintStakeCoin,
+  isDopamintAddressBalance,
   isDopamintConfigured,
 } from "@/onchain/dopamint";
 import { makeKeypairSponsoredSignExec } from "@/onchain/sponsor";
@@ -468,23 +471,39 @@ export function useBlackjackBot(): BlackjackBotGame {
         // and sponsors its own open/close gas (no SUI). SUI fallback: the funder splits both
         // buy-ins off its gas coin and pays its own gas.
         const coinType = isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined;
-        const stakeCoinId = isDopamintConfigured
-          ? await ensureDopamintStakeCoin({
-              client: client as never,
-              signExec: sponsoredSignExec(funder),
-              owner: funder.address,
-              need: 2n * BUY_IN,
-            })
-          : undefined;
 
         setPhase("opening");
         let createDigest: string;
         if (isDopamintConfigured) {
-          const { digest } = await sponsoredSignExec(funder)(
-            buildCreateAndFundTx(partyA, partyB, BUY_IN, {
-              coinType,
-              stakeCoinId,
-            }),
+          // ADR-0013: the funder bot is the tx sender → its address balance is the stake source.
+          // Self-play funds BOTH seats from one source, so withdraw/faucet for the 2-seat total.
+          const stakeOpt = isDopamintAddressBalance
+            ? (await ensureDopamintAddressBalance({
+                client: client as never,
+                signExec: sponsoredSignExec(funder),
+                owner: funder.address,
+                need: 2n * BUY_IN,
+              }),
+              {
+                coinType,
+                stakeFromBalance: {
+                  amount: 2n * BUY_IN,
+                  coinType: DOPAMINT_COIN_TYPE,
+                },
+              })
+            : {
+                coinType,
+                stakeCoinId: await ensureDopamintStakeCoin({
+                  client: client as never,
+                  signExec: sponsoredSignExec(funder),
+                  owner: funder.address,
+                  need: 2n * BUY_IN,
+                }),
+              };
+          const { digest } = await submitRebuildingOnStale(
+            () => buildCreateAndFundTx(partyA, partyB, BUY_IN, stakeOpt),
+            sponsoredSignExec(funder),
+            "blackjack bot open",
           );
           await client.waitForTransaction({ digest });
           createDigest = digest;

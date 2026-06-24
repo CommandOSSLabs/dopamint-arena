@@ -1,18 +1,15 @@
-import type { CSSProperties } from "react";
+import { useCurrentAccount } from "@mysten/dapp-kit";
 import type { GameWindowProps } from "../types";
-import { isDopamintConfigured } from "@/onchain/dopamint";
 import { useQuantumPokerAuto } from "./useQuantumPokerAuto";
-import { QuantumPokerTable, HEADS_UP_STYLE } from "./QuantumPokerTable";
+import { QuantumPokerTable, SketchDefs } from "./QuantumPokerTable";
 
-const STYLE: CSSProperties & Record<`--${string}`, string> = {
-  "--qp-ink": "#090d12",
-  "--qp-gold": "#f7c45b",
-  "--qp-green": "#2dd4bf",
-  "--qp-rail": "#151a20",
-};
-
-function sui(mist: bigint): string {
-  return (Number(mist) / 1e9).toFixed(3);
+function Stat({ n, l }: { n: number | string; l: string }) {
+  return (
+    <span className="qp-stat">
+      <span className="qp-stat__n tabular-nums">{n}</span>
+      <span className="qp-stat__l">{l}</span>
+    </span>
+  );
 }
 
 export function QuantumPokerBotVsBotWindow({
@@ -20,145 +17,133 @@ export function QuantumPokerBotVsBotWindow({
   onExit,
 }: GameWindowProps & { onExit?: () => void }) {
   const s = useQuantumPokerAuto(windowId);
+  const account = useCurrentAccount();
   const running = s.status === "running";
+  const funding = s.status === "funding";
+  const nameA = s.personas?.a ?? "Bot A";
+  const nameB = s.personas?.b ?? "Bot B";
 
   return (
-    <div
-      style={{ ...STYLE, ...HEADS_UP_STYLE }}
-      className="flex h-full min-h-[14rem] flex-col overflow-hidden bg-[var(--qp-ink)] text-slate-100"
-    >
-      <header className="flex h-8 shrink-0 items-center justify-between border-b border-white/10 bg-[var(--qp-rail)] px-2">
-        <div className="flex items-center gap-1.5">
+    <div className="qp-sketch grid h-full min-h-[14rem] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden">
+      <SketchDefs />
+
+      <header className="qp-head">
+        <div className="flex min-w-0 items-center gap-[clamp(6px,2.2cqmin,14px)]">
           {onExit && (
             <button
               type="button"
+              className="qp-btn"
               onClick={() => {
-                s.stopAuto(); // fire-and-forget: don't wait for settle before leaving
+                s.stopAuto(); // fire-and-forget settle: closes the current tunnel in the background, leave now
                 onExit();
               }}
-              className="h-5 rounded-sm border border-white/10 px-1.5 text-[10px] text-slate-300"
             >
               Back
             </button>
           )}
-          <span className="rounded-sm bg-[var(--qp-gold)] px-1.5 py-0.5 text-[8px] font-black text-slate-950">
-            AUTO
-          </span>
-          <span className="text-[11px] font-semibold">Bot arena</span>
+          <div className="flex min-w-0 flex-col leading-none">
+            <span className="qp-eyebrow">Auto · watching bots</span>
+            <span className="qp-title truncate">Quantum Poker</span>
+          </div>
         </div>
-        <div className="flex items-center gap-1">
-          {running ? (
-            <button
-              type="button"
-              onClick={s.stopAuto}
-              title="Stops now; the current tunnel's settle finishes in the background"
-              className="h-5 rounded-sm border border-rose-200/50 px-2 text-[10px] font-semibold text-rose-100"
-            >
-              Stop
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={s.startAuto}
-              disabled={!s.funded || s.status === "funding"}
-              className="h-5 rounded-sm bg-[var(--qp-gold)] px-2 text-[10px] font-black text-slate-950 disabled:opacity-45"
-            >
-              Start
-            </button>
-          )}
-        </div>
+        {running ? (
+          <button type="button" className="qp-btn qp-btn--stop" onClick={s.stopAuto}>
+            Stop
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="qp-btn qp-btn--go"
+            onClick={s.startAuto}
+            disabled={!account || !s.funded || funding}
+          >
+            Start
+          </button>
+        )}
       </header>
 
-      <main className="flex min-h-0 flex-1 flex-col gap-2 p-2">
-        {!s.funded && (
-          <section className="rounded-md border border-white/10 bg-white/[0.04] p-2 text-[10px]">
-            <div className="mb-1 text-slate-400">
-              Fund bot A once — it stakes both seats and signs each open; bot B
-              collects its winnings at close and never needs funding.
+      <main className="grid min-h-0 overflow-hidden p-[clamp(10px,3.6cqmin,36px)]">
+        {!account ? (
+          <div className="grid place-items-center text-center">
+            <div className="qp-panel qp-stroke max-w-[min(22rem,92%)] p-[clamp(12px,3.4cqmin,24px)]">
+              <span className="qp-eyebrow">Wallet required</span>
+              <div className="qp-title mb-1 mt-1">Connect to watch</div>
+              <p className="qp-note">
+                Connect a wallet to run the bot arena — gas is sponsored, so
+                watching the bots play is free.
+              </p>
             </div>
-            <div className="flex gap-1.5">
-              <button
-                type="button"
-                onClick={s.fund}
-                disabled={s.status === "funding"}
-                className="h-6 rounded-sm border border-[var(--qp-green)]/40 px-2 text-[10px] text-[var(--qp-green)] disabled:opacity-45"
-              >
-                {s.status === "funding" ? "Funding…" : "Faucet"}
-              </button>
-              {s.canFundFromWallet && (
+          </div>
+        ) : !s.funded ? (
+          <div className="grid place-items-center text-center">
+            <div className="qp-panel qp-stroke max-w-[min(22rem,92%)] p-[clamp(12px,3.4cqmin,24px)]">
+              <div className="qp-title mb-1">Fund bot A</div>
+              <p className="qp-note mb-3">
+                Bot A stakes both seats and signs each open; bot B collects its
+                winnings at the close and never needs funding.
+              </p>
+              <div className="flex flex-wrap justify-center gap-[clamp(6px,2cqmin,12px)]">
                 <button
                   type="button"
-                  onClick={s.fundFromWallet}
-                  disabled={s.status === "funding"}
-                  className="h-6 rounded-sm border border-amber-200/40 px-2 text-[10px] text-amber-100 disabled:opacity-45"
+                  className="qp-btn qp-btn--go"
+                  onClick={s.fund}
+                  disabled={funding}
                 >
-                  Fund bot A 0.1 SUI
+                  {funding ? "Funding…" : "Faucet"}
                 </button>
-              )}
+                {s.canFundFromWallet && (
+                  <button
+                    type="button"
+                    className="qp-btn"
+                    onClick={s.fundFromWallet}
+                    disabled={funding}
+                  >
+                    Wallet · 0.1 SUI
+                  </button>
+                )}
+              </div>
             </div>
-          </section>
-        )}
-
-        {s.state && (
+          </div>
+        ) : s.state ? (
           <QuantumPokerTable
             state={s.state}
             holesA={s.holesA}
             holesB={s.holesB}
-            nameA={s.personas?.a ?? "Bot A"}
-            nameB={s.personas?.b ?? "Bot B"}
+            nameA={nameA}
+            nameB={nameB}
           />
-        )}
-
-        <section className="grid grid-cols-2 gap-2 rounded-md border border-white/10 bg-white/[0.04] p-2">
-          <div className="min-w-0">
-            <div className="text-[9px] uppercase text-slate-500">Bot A</div>
-            <div className="truncate text-[11px] font-semibold">
-              {s.personas?.a ?? "—"}
-            </div>
-            <div className="text-[10px] tabular-nums text-[var(--qp-green)]">
-              {isDopamintConfigured
-                ? `wins ${s.score.a}`
-                : `${sui(s.balances.a)} SUI · wins ${s.score.a}`}
-            </div>
-          </div>
-          <div className="min-w-0 text-right">
-            <div className="text-[9px] uppercase text-slate-500">Bot B</div>
-            <div className="truncate text-[11px] font-semibold">
-              {s.personas?.b ?? "—"}
-            </div>
-            <div className="text-[10px] tabular-nums text-[var(--qp-green)]">
-              {isDopamintConfigured
-                ? `wins ${s.score.b}`
-                : `${sui(s.balances.b)} SUI · wins ${s.score.b}`}
-            </div>
-          </div>
-        </section>
-
-        <section className="grid grid-cols-4 gap-1.5 rounded-md border border-white/10 bg-black/20 p-2 text-center">
-          <div>
-            <div className="text-[9px] uppercase text-slate-500">Tunnels</div>
-            <div className="text-[12px] font-semibold tabular-nums">{s.tunnels}</div>
-          </div>
-          <div>
-            <div className="text-[9px] uppercase text-slate-500">Hands</div>
-            <div className="text-[12px] font-semibold tabular-nums">{s.hands}</div>
-          </div>
-          <div>
-            <div className="text-[9px] uppercase text-slate-500">Actions</div>
-            <div className="text-[12px] font-semibold tabular-nums">{s.actions}</div>
-          </div>
-          <div>
-            <div className="text-[9px] uppercase text-slate-500">Status</div>
-            <div className="truncate text-[12px] font-semibold">{s.status}</div>
-          </div>
-        </section>
-
-        {s.error && (
-          <div className="rounded-sm border border-rose-300/30 bg-rose-400/10 px-2 py-1 text-[10px] text-rose-100">
-            {s.error}
+        ) : (
+          <div className="grid place-items-center">
+            <span className="qp-note">Dealing the first hand…</span>
           </div>
         )}
       </main>
+
+      <footer className="qp-ticker">
+        <span className="qp-stat">
+          <span className="qp-stat__n">
+            {nameA} {s.score.a}
+          </span>
+          <span className="qp-stat__l">–</span>
+          <span className="qp-stat__n">
+            {s.score.b} {nameB}
+          </span>
+        </span>
+        <span className="qp-dot">·</span>
+        <Stat n={s.hands} l="hands" />
+        <span className="qp-dot">·</span>
+        <Stat n={s.actions} l="actions" />
+        <span className="qp-dot">·</span>
+        <Stat n={s.tunnels} l="tunnels" />
+        <span className="qp-dot">·</span>
+        <Stat n={s.status} l="" />
+      </footer>
+
+      {s.error && (
+        <div className="px-[clamp(8px,2.4cqmin,18px)] pb-2 text-[clamp(10px,2.6cqmin,15px)] text-[var(--qp-red)]">
+          {s.error}
+        </div>
+      )}
     </div>
   );
 }

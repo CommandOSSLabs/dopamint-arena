@@ -4,7 +4,10 @@ import {
   useSignAndExecuteTransaction,
   useSuiClient,
 } from "@mysten/dapp-kit";
-import { useTelemetry, type TelemetryWriter } from "../../telemetry/TelemetryProvider";
+import {
+  useTelemetry,
+  type TelemetryWriter,
+} from "../../telemetry/TelemetryProvider";
 import { createParticipant } from "sui-tunnel-ts/core/keys";
 import { OffchainTunnel } from "sui-tunnel-ts/core/tunnel";
 import { Transcript } from "sui-tunnel-ts/proof/transcript";
@@ -25,8 +28,15 @@ import {
   type SuiReads,
 } from "@/onchain/tunnelTx";
 import { useSponsoredSignExec } from "@/onchain/useSponsoredSignExec";
-import { DOPAMINT_COIN_TYPE, isDopamintConfigured } from "@/onchain/dopamint";
-import { QUANTUM_POKER_STAKE, QUANTUM_POKER_HANDS_PER_TUNNEL } from "./constants";
+import {
+  DOPAMINT_COIN_TYPE,
+  isDopamintAddressBalance,
+  isDopamintConfigured,
+} from "@/onchain/dopamint";
+import {
+  QUANTUM_POKER_STAKE,
+  QUANTUM_POKER_HANDS_PER_TUNNEL,
+} from "./constants";
 import {
   makeSeatBot,
   randomPokerPersona,
@@ -68,6 +78,9 @@ export interface QuantumPokerBotSession {
   act: (move: PokerMove) => void;
   /** Settle the current tunnel early (cash out) — status moves to "settled" when done. */
   settleNow: () => void;
+  /** Hand the human's seat to a bot and keep the match running in the background (the player left
+   *  without settling). Bot-vs-bot plays on until a seat busts → the existing terminal settle fires. */
+  handOffToBot: () => void;
   reset: () => void;
 }
 
@@ -80,6 +93,8 @@ interface BotDeps {
   sponsoredSignExec: SignExec;
   /** Return a user `Coin<DOPAMINT>` object id holding at least `need` to fund the stake. */
   prepareStake: (need: bigint) => Promise<string>;
+  /** ADR-0013: ensure the player's DOPAMINT address balance covers the stake. No-op once funded. */
+  ensureStakeBalance: (need: bigint) => Promise<void>;
 }
 
 interface Snap {
@@ -132,6 +147,9 @@ class BotSession {
   private secondsLeft: number | null = null;
   private turnTimer: ReturnType<typeof setTimeout> | null = null;
   private turnTick: ReturnType<typeof setInterval> | null = null;
+  // Set when the human Backs out without settling: the drive loop then plays their seat with botA
+  // (bot-vs-bot) until a seat busts and the terminal settle closes the tunnel.
+  private humanLeft = false;
 
   subscribe = (cb: () => void): (() => void) => {
     this.listeners.add(cb);
@@ -163,6 +181,7 @@ class BotSession {
   reset = () => {
     this.gen += 1;
     this.looping = false;
+    this.humanLeft = false;
     this.clearTurnTimer();
     this.tunnel = null;
     this.transcript = null;
@@ -215,6 +234,7 @@ class BotSession {
     }
     this.gen += 1;
     const myGen = this.gen;
+    this.humanLeft = false;
     this.error = null;
     this.status = "funding";
     this.emit();
@@ -233,6 +253,10 @@ class BotSession {
         const stakePerSeat = STAKE;
         const coinType = dopamintOn ? DOPAMINT_COIN_TYPE : undefined;
         const signExec = dopamintOn ? deps.sponsoredSignExec : deps.signExec;
+        // ADR-0013: top up the player's DOPAMINT address balance, then the open withdraws from it
+        // (no version-pinned coin → concurrent opens across games never equivocate).
+        if (dopamintOn && isDopamintAddressBalance)
+          await deps.ensureStakeBalance(2n * stakePerSeat);
         const tunnelId = await openAndFundSelfPlay({
           reads,
           signExec,
@@ -241,10 +265,17 @@ class BotSession {
           aAmount: stakePerSeat,
           bAmount: stakePerSeat,
           coinType,
-          // Self-play funds both seats from one coin, so faucet/select for the 2-seat total.
-          stakeCoinId: dopamintOn
-            ? await deps.prepareStake(2n * stakePerSeat)
-            : undefined,
+          // Self-play funds both seats from one source, so withdraw/faucet for the 2-seat total.
+          ...(dopamintOn
+            ? isDopamintAddressBalance
+              ? {
+                  stakeFromBalance: {
+                    amount: 2n * stakePerSeat,
+                    coinType: DOPAMINT_COIN_TYPE,
+                  },
+                }
+              : { stakeCoinId: await deps.prepareStake(2n * stakePerSeat) }
+            : {}),
         });
         if (this.gen !== myGen) return;
         const createdAt = await readCreatedAt(reads, tunnelId);
@@ -331,6 +362,20 @@ class BotSession {
       while (this.gen === myGen) {
         const r = stepPokerWithHuman(tunnel, botA, botB, HUMAN, this.ts++);
         if (r.kind === "await-human") {
+          if (this.humanLeft) {
+            // The human Backed out: botA plays their betting turn, then the loop keeps stepping
+            // toward the showdown/bust — no turn timer, no waiting.
+            const move = botA.plan(tunnel.state);
+            if (move) {
+              applyHumanMove(tunnel, botA, HUMAN, move, this.ts++);
+              this.heartbeatActions += 1;
+              this.moveCount += 1;
+              this.flushHeartbeat(this.tunnelId, false);
+              this.emit();
+              await sleep(AUTO_MS);
+              continue;
+            }
+          }
           this.status = "awaitHuman";
           this.startTurnTimer(); // arms the countdown and emits
           return;
@@ -407,6 +452,22 @@ class BotSession {
     void this.settle(myGen);
   };
 
+  /** The human Backed out without settling: hand their seat to botA and let the match run on in the
+   *  background until a seat busts (the loop's terminal branch then settles). No-op if not in play. */
+  handOffToBot = () => {
+    if (this.humanLeft) return;
+    if (this.status !== "playing" && this.status !== "awaitHuman") return;
+    this.humanLeft = true;
+    if (this.status === "awaitHuman") {
+      // The drive loop is parked waiting for the human — cancel the countdown and re-kick it so botA
+      // takes the turn. `drive` re-entry is safe (it cleared `looping` when it parked).
+      this.clearTurnTimer();
+      this.status = "playing";
+      this.emit();
+      void this.drive(this.gen);
+    }
+  };
+
   private settle = async (myGen: number) => {
     const tunnel = this.tunnel;
     const transcript = this.transcript;
@@ -479,6 +540,7 @@ export function useQuantumPokerBot(windowId: string): QuantumPokerBotSession {
     }) as SignExec,
     sponsoredSignExec: sponsored.signExec,
     prepareStake: sponsored.prepareStake,
+    ensureStakeBalance: sponsored.ensureStakeBalance,
   };
   const snap = useSyncExternalStore(session.subscribe, session.getSnapshot);
   return {
@@ -486,6 +548,7 @@ export function useQuantumPokerBot(windowId: string): QuantumPokerBotSession {
     open: session.open,
     act: session.act,
     settleNow: session.settleNow,
+    handOffToBot: session.handOffToBot,
     reset: session.reset,
   };
 }

@@ -8,7 +8,11 @@ import {
   type SignExec,
 } from "./tunnelTx";
 import { withSponsorFallback } from "./sponsor";
-import { DOPAMINT_COIN_TYPE, isDopamintConfigured } from "./dopamint";
+import {
+  DOPAMINT_COIN_TYPE,
+  isDopamintAddressBalance,
+  isDopamintConfigured,
+} from "./dopamint";
 
 type SharedReads = Parameters<typeof openAndFundSharedTunnel>[0]["reads"];
 type SharedParty = Parameters<typeof openAndFundSharedTunnel>[0]["partyA"];
@@ -23,6 +27,9 @@ export interface StakeStrategy {
   prepareStake: (min: bigint) => Promise<string>;
   /** A user SUI coin >= the amount (SUI fallback, DOPAMINT env unset). */
   selectStakeCoin: (min: bigint) => Promise<string>;
+  /** ADR-0013: ensure the player's DOPAMINT address balance covers the stake (address-balance
+   *  path). No-op once topped up. */
+  ensureStakeBalance: (min: bigint) => Promise<void>;
 }
 
 /** Seat A: open + share the tunnel and fund this seat. Returns the new tunnel id. */
@@ -37,6 +44,20 @@ export async function openSharedTunnelStaked(
 ): Promise<string> {
   const { reads, partyA, partyB, amount } = opts;
   if (isDopamintConfigured) {
+    if (isDopamintAddressBalance) {
+      // ADR-0013: withdraw seat A's stake from the player's address balance — concurrent opens
+      // across games don't equivocate. Top up the balance first (no-op once funded).
+      await opts.ensureStakeBalance(amount);
+      return openAndFundSharedTunnel({
+        reads,
+        signExec: opts.sponsoredSignExec,
+        partyA,
+        partyB,
+        amount,
+        coinType: DOPAMINT_COIN_TYPE,
+        stakeFromBalance: { amount, coinType: DOPAMINT_COIN_TYPE },
+      });
+    }
     return openAndFundSharedTunnel({
       reads,
       signExec: opts.sponsoredSignExec,
@@ -75,6 +96,17 @@ export async function depositStakeStaked(
 ): Promise<void> {
   const { tunnelId, amount } = opts;
   if (isDopamintConfigured) {
+    if (isDopamintAddressBalance) {
+      await opts.ensureStakeBalance(amount);
+      await depositStake({
+        signExec: opts.sponsoredSignExec,
+        tunnelId,
+        amount,
+        coinType: DOPAMINT_COIN_TYPE,
+        stakeFromBalance: { amount, coinType: DOPAMINT_COIN_TYPE },
+      });
+      return;
+    }
     await depositStake({
       signExec: opts.sponsoredSignExec,
       tunnelId,

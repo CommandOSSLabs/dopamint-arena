@@ -4,9 +4,14 @@
 import { Transaction } from "@mysten/sui/transactions";
 import type { SignExec } from "./tunnelTx";
 
-export const DOPAMINT_PACKAGE_ID = import.meta.env.VITE_DOPAMINT_PACKAGE_ID ?? "";
-export const DOPAMINT_FAUCET_ID = import.meta.env.VITE_DOPAMINT_FAUCET_ID ?? "";
-export const DOPAMINT_COIN_TYPE = import.meta.env.VITE_DOPAMINT_COIN_TYPE ?? "";
+// `import.meta.env?.` (not `.env.`) so the module also loads under node:test, where Vite's
+// `import.meta.env` injection is absent — the ids are empty there, which is fine for unit tests.
+export const DOPAMINT_PACKAGE_ID =
+  import.meta.env?.VITE_DOPAMINT_PACKAGE_ID ?? "";
+export const DOPAMINT_FAUCET_ID =
+  import.meta.env?.VITE_DOPAMINT_FAUCET_ID ?? "";
+export const DOPAMINT_COIN_TYPE =
+  import.meta.env?.VITE_DOPAMINT_COIN_TYPE ?? "";
 
 /** True when all three DOPAMINT ids are set — gates the DOPAMINT stake path off a missing env. */
 export const isDopamintConfigured = Boolean(
@@ -111,4 +116,108 @@ export async function ensureDopamintStakeCoin(opts: {
   }
   if (!coin) throw new Error("DOPAMINT faucet did not yield enough to stake");
   return coin.coinObjectId;
+}
+
+/**
+ * SIP-58 address-balance stake path (ADR-0013): fund the stake by withdrawing from the player's
+ * DOPAMINT *address balance* instead of a version-pinned coin object, so concurrent opens (every
+ * game auto-opening on a reload) never equivocate. ON by default whenever DOPAMINT is configured;
+ * set `VITE_DOPAMINT_ADDRESS_BALANCE=false` as a kill switch back to the coin-object path.
+ *
+ * REQUIRES a backend whose sponsor allowlists `coin::redeem_funds`/`coin::send_funds` (ADR-0013) —
+ * an older settler refuses those calls (`sponsor refuses move call …::coin::send_funds`).
+ */
+export const isDopamintAddressBalance =
+  isDopamintConfigured &&
+  String(import.meta.env?.VITE_DOPAMINT_ADDRESS_BALANCE ?? "true") !== "false";
+
+/** Read surface for the address-balance funding path: coins (to sweep) + per-type balance (to know
+ *  how much already sits in the address balance). Satisfied by dapp-kit's SuiClient. */
+interface DopamintBalanceReader extends DopamintCoinReader {
+  getBalance(input: { owner: string; coinType: string }): Promise<{
+    totalBalance: string;
+    fundsInAddressBalance?: string;
+  }>;
+}
+
+/** Deposit owned DOPAMINT coins into `owner`'s SIP-58 address balance (`0x2::coin::send_funds`),
+ *  one call per coin. The sweep is a serialized top-up step — never on the open hot path. */
+export function buildSweepToAddressBalance(
+  tx: Transaction,
+  owner: string,
+  coinIds: string[],
+): void {
+  for (const id of coinIds) {
+    tx.moveCall({
+      target: "0x2::coin::send_funds",
+      typeArguments: [DOPAMINT_COIN_TYPE],
+      arguments: [tx.object(id), tx.pure.address(owner)],
+    });
+  }
+}
+
+/**
+ * Ensure `owner`'s DOPAMINT ADDRESS BALANCE holds at least `need` (ADR-0013), so a sponsored open
+ * can withdraw its stake without a version-pinned coin. Idempotent and off the hot path: if the
+ * address balance already covers `need` it does NOTHING (the open's own withdrawal is the only tx).
+ * Otherwise it faucets — only when coins + address balance together fall short — then sweeps owned
+ * coins into the address balance. Pass a sponsored `signExec` so a 0-SUI player tops up for free.
+ */
+export async function ensureDopamintAddressBalance(opts: {
+  client: DopamintBalanceReader;
+  signExec: SignExec;
+  owner: string;
+  need: bigint;
+}): Promise<void> {
+  const readBalance = async () => {
+    const b = await opts.client.getBalance({
+      owner: opts.owner,
+      coinType: DOPAMINT_COIN_TYPE,
+    });
+    return {
+      addr: BigInt(b.fundsInAddressBalance ?? "0"),
+      total: BigInt(b.totalBalance ?? "0"),
+    };
+  };
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const readCoins = async () =>
+    (
+      await opts.client.getCoins({
+        owner: opts.owner,
+        coinType: DOPAMINT_COIN_TYPE,
+      })
+    ).data;
+
+  const { addr, total } = await readBalance();
+  if (addr >= opts.need) return; // already funded in the address balance — nothing to do
+  // Faucet only when even coins + address balance can't cover the stake (mint is free + sponsored).
+  if (total < opts.need) {
+    await faucetDopamint({ signExec: opts.signExec, recipient: opts.owner });
+  }
+  // Gather coins to sweep, polling past `getCoins` indexer lag — a just-minted faucet coin can lag
+  // the balance read, and skipping the sweep would leave the address balance empty (the bug behind
+  // "Available amount in account ... is less than requested: 0 < N").
+  let coins = await readCoins();
+  for (let i = 0; i < 12 && coins.length === 0; i++) {
+    await sleep(600);
+    coins = await readCoins();
+  }
+  // Deposit every owned coin into the address balance so the open can withdraw from it.
+  if (coins.length > 0) {
+    const tx = new Transaction();
+    buildSweepToAddressBalance(
+      tx,
+      opts.owner,
+      coins.map((c) => c.coinObjectId),
+    );
+    await opts.signExec(tx);
+  }
+  // SIP-58 deposits settle at a CHECKPOINT boundary, not in the depositing tx, so the funds aren't
+  // withdrawable in the very next transaction. Wait until the address balance reflects the deposit
+  // before returning (so the open's withdrawal doesn't dry-run against a still-empty balance). Best
+  // effort: if the RPC never surfaces the settled balance, the open's own retry covers the lag.
+  for (let i = 0; i < 15; i++) {
+    if ((await readBalance()).addr >= opts.need) return;
+    await sleep(600);
+  }
 }

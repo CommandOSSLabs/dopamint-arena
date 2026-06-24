@@ -19,6 +19,7 @@ import {
   buildSettleWithRootTx,
   parseTunnelId,
 } from "@/games/ticTacToe/app/lib/tunnel";
+import { submitRebuildingOnStale } from "@/onchain/tunnelTx";
 import {
   loadOrCreateBots,
   getSuiClient,
@@ -30,7 +31,9 @@ import {
 import { makeKeypairSponsoredSignExec } from "@/onchain/sponsor";
 import {
   DOPAMINT_COIN_TYPE,
+  ensureDopamintAddressBalance,
   ensureDopamintStakeCoin,
+  isDopamintAddressBalance,
   isDopamintConfigured,
 } from "@/onchain/dopamint";
 import type { Difficulty } from "@/games/ticTacToe/app/hooks/useBotGame";
@@ -335,18 +338,35 @@ export function useCaroBotGame(
         let tunnelId: string;
         let createDigest: string;
         if (dopamintOn && xSignExec) {
-          // Self-play funds BOTH seats from one coin, so faucet/select for the 2-seat total.
-          const stakeCoinId = await ensureDopamintStakeCoin({
-            client: client as never,
-            signExec: xSignExec,
-            owner: bots.x.address,
-            need: 2n * stakePerSeat,
-          });
-          const { digest } = await xSignExec(
-            buildCreateAndFundTx(partyX, partyO, stakePerSeat, {
-              coinType,
-              stakeCoinId,
-            }),
+          // Self-play funds BOTH seats from one source, so withdraw/faucet for the 2-seat total.
+          // ADR-0013: bot X is the sender, so its address balance is the stake source.
+          const stakeOpt = isDopamintAddressBalance
+            ? (await ensureDopamintAddressBalance({
+                client: client as never,
+                signExec: xSignExec,
+                owner: bots.x.address,
+                need: 2n * stakePerSeat,
+              }),
+              {
+                coinType,
+                stakeFromBalance: {
+                  amount: 2n * stakePerSeat,
+                  coinType: DOPAMINT_COIN_TYPE,
+                },
+              })
+            : {
+                coinType,
+                stakeCoinId: await ensureDopamintStakeCoin({
+                  client: client as never,
+                  signExec: xSignExec,
+                  owner: bots.x.address,
+                  need: 2n * stakePerSeat,
+                }),
+              };
+          const { digest } = await submitRebuildingOnStale(
+            () => buildCreateAndFundTx(partyX, partyO, stakePerSeat, stakeOpt),
+            xSignExec,
+            "caro bot open",
           );
           await client.waitForTransaction({ digest });
           const txb = await client.getTransactionBlock({

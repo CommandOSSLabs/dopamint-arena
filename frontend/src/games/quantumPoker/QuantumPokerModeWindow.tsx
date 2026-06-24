@@ -1,24 +1,14 @@
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useState } from "react";
 import { registerWindowDisposer } from "@/lib/windowSessions";
 import type { GameWindowProps } from "../types";
 import { QuantumPokerBotVsBotWindow } from "./QuantumPokerBotVsBotWindow";
 import { QuantumPokerPvpWindow } from "./QuantumPokerPvpWindow";
 import { QuantumPokerWindow } from "./QuantumPokerWindow";
+import { SketchDefs } from "./QuantumPokerTable";
 
 type Mode = "bot" | "pvp" | "auto";
 
 const modeStore = new Map<string, Mode | null>();
-
-const QP_MODE_STYLE: CSSProperties & Record<`--${string}`, string> = {
-  "--qp-ink": "#0a0c16",
-  "--qp-violet": "#613dff",
-  "--qp-lilac": "#cab1ff",
-  "--qp-gold": "#fbbf24",
-  "--qp-mint": "#9cefcf",
-};
-
-const BUTTON_BASE =
-  "rounded-lg px-4 py-2 text-[12px] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--qp-lilac)]/60";
 
 export function QuantumPokerModeWindow(props: GameWindowProps) {
   const { windowId } = props;
@@ -45,57 +35,50 @@ export function QuantumPokerModeWindow(props: GameWindowProps) {
 
   if (mode === "bot") {
     return (
-      <QuantumPokerWindow
-        {...props}
-        lane="bot"
-        onExit={() => setMode(null)}
-      />
+      <QuantumPokerWindow {...props} lane="bot" onExit={() => setMode(null)} />
     );
   }
 
   if (mode === "auto") {
     return (
-      <QuantumPokerBotVsBotWindow
-        {...props}
-        onExit={() => setMode(null)}
-      />
+      <QuantumPokerBotVsBotWindow {...props} onExit={() => setMode(null)} />
     );
   }
 
   return (
-    <div
-      style={QP_MODE_STYLE}
-      className="flex h-full min-h-[14rem] flex-col items-center justify-center gap-3 overflow-hidden bg-[var(--qp-ink)] p-5 text-center text-slate-100"
-    >
-      <div className="flex flex-col items-center gap-1">
-        <span className="rounded-sm bg-[var(--qp-violet)] px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.14em] text-white">
-          heads-up tunnel
-        </span>
-        <h2 className="wal-doto text-lg text-slate-50">QUANTUM POKER</h2>
-      </div>
+    <div className="qp-sketch grid h-full min-h-[14rem] place-items-center overflow-hidden p-[clamp(14px,4cqmin,32px)] text-center">
+      <SketchDefs />
+      <div className="qp-panel qp-stroke flex max-w-[min(22rem,92%)] flex-col items-center gap-[clamp(12px,3.2cqmin,22px)] p-[clamp(16px,4.5cqmin,30px)]">
+        <div className="flex flex-col items-center gap-[clamp(2px,0.8cqmin,6px)]">
+          <span className="qp-eyebrow">Heads-up tunnel</span>
+          <h2 className="qp-title text-[clamp(20px,6cqmin,38px)]">
+            Quantum Poker
+          </h2>
+        </div>
 
-      <div className="grid w-full max-w-[19rem] gap-2">
-        <button
-          type="button"
-          onClick={() => setMode("bot")}
-          className={`${BUTTON_BASE} bg-[var(--qp-gold)] text-[#211702] shadow-[0_0_22px_-10px_var(--qp-gold)] hover:brightness-105`}
-        >
-          Play vs Bot
-        </button>
-        <button
-          type="button"
-          onClick={() => setMode("pvp")}
-          className={`${BUTTON_BASE} border border-[var(--qp-lilac)]/30 bg-[var(--qp-violet)]/20 text-[var(--qp-lilac)] hover:bg-[var(--qp-violet)]/30`}
-        >
-          Find PvP Match
-        </button>
-      </div>
+        <div className="flex w-fit flex-col gap-[clamp(8px,2.4cqmin,14px)]">
+          <button
+            type="button"
+            onClick={() => setMode("bot")}
+            className="qp-btn qp-btn--go"
+          >
+            Play vs Bot
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode("pvp")}
+            className="qp-btn"
+          >
+            Find PvP Match
+          </button>
+        </div>
 
-      <p className="max-w-[19rem] text-[11px] leading-relaxed text-slate-500">
-        Bot plays a local persona bot in your wallet-funded tunnel. PvP uses the
-        live relay. Watch Bots runs by default on load — press Back from it to
-        reach this menu.
-      </p>
+        <p className="qp-note">
+          Play a persona bot in your own tunnel, or find a live PvP match over
+          the relay. Watch Bots runs by default — press Back from it to reach
+          this menu.
+        </p>
+      </div>
     </div>
   );
 }

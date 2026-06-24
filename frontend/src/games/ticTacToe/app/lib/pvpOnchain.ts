@@ -1,5 +1,9 @@
 import { Transaction } from "@mysten/sui/transactions";
 import { core, onchain } from "sui-tunnel-ts";
+import {
+  redeemStakeFromBalance,
+  type StakeFromBalance,
+} from "@/onchain/tunnelTx";
 
 const SUI = "0x2::sui::SUI";
 // SDK builders are typed against the SDK's pinned @mysten/sui; the client uses a newer one. The
@@ -47,10 +51,22 @@ export function buildCreateAndShareTx(
 export function buildDepositTx(
   tunnelId: string,
   amount: bigint,
-  opts?: { coinType?: string; stakeCoinId?: string },
+  opts?: {
+    coinType?: string;
+    stakeCoinId?: string;
+    stakeFromBalance?: StakeFromBalance;
+  },
 ): Transaction {
   const tx = new Transaction();
-  if (opts?.stakeCoinId) {
+  if (opts?.stakeFromBalance) {
+    // ADR-0013: the withdrawal is exactly `amount`, so deposit it whole — no split, no remainder.
+    const coin = redeemStakeFromBalance(tx, opts.stakeFromBalance);
+    onchain.buildDeposit(tx as unknown as SdkTx, {
+      tunnelId,
+      coin,
+      coinType: opts.coinType,
+    });
+  } else if (opts?.stakeCoinId) {
     const [coin] = tx.splitCoins(tx.object(opts.stakeCoinId), [
       tx.pure.u64(amount),
     ]);

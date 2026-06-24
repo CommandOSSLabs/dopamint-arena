@@ -78,7 +78,12 @@ export type PvpStatus =
  * @typeParam Intent a single seat's per-tick input (a direction, an action) before it becomes a Move.
  * @typeParam View   the flattened, render-ready snapshot the board consumes.
  */
-export interface PvpMatchSpec<State extends { winner: unknown }, Move, Intent, View> {
+export interface PvpMatchSpec<
+  State extends { winner: unknown },
+  Move,
+  Intent,
+  View,
+> {
   /** Matchmaking + resume key (e.g. "bomb-it"); also the window-disposer/log label. */
   game: string;
   /** Pacing between this seat's proposes (ms). */
@@ -127,6 +132,8 @@ interface PvpDeps {
   selectStakeCoin: (minAmount: bigint) => Promise<string>;
   /** DOPAMINT stake: faucet (invisibly, sponsored) if short, then return a stake coin id (ADR-0010). */
   prepareStake: (minAmount: bigint) => Promise<string>;
+  /** ADR-0013: ensure the player's DOPAMINT address balance covers the stake. No-op once funded. */
+  ensureStakeBalance: (minAmount: bigint) => Promise<void>;
 }
 
 interface PvpSnapshot<State extends { winner: unknown }, View> {
@@ -264,8 +271,11 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
       // Auto → a bot proposes this seat's move; manual → your queued intent (idle once consumed).
       let intent: Intent;
       if (this.auto) {
-        const botMove = dtNow.protocol.randomMove?.(dtNow.state, myRoleNow, Math.random) ?? null;
-        intent = this.spec.readIntent(myRoleNow, botMove) ?? this.spec.idleIntent;
+        const botMove =
+          dtNow.protocol.randomMove?.(dtNow.state, myRoleNow, Math.random) ??
+          null;
+        intent =
+          this.spec.readIntent(myRoleNow, botMove) ?? this.spec.idleIntent;
       } else {
         intent = this.intent;
         this.intent = this.spec.idleIntent;
@@ -520,6 +530,7 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
           walletSignExec: signExec as never,
           prepareStake: deps.prepareStake,
           selectStakeCoin: deps.selectStakeCoin,
+          ensureStakeBalance: deps.ensureStakeBalance,
         };
         let tunnelId: string;
         if (match.role === "A") {
@@ -603,7 +614,12 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
  * by `windowId` (one map per game, since each game calls this once) so a window can minimize/reflow
  * without dropping the opponent; the window-close disposer tears the session down.
  */
-export function createPvpMatchHook<State extends { winner: unknown }, Move, Intent, View>(
+export function createPvpMatchHook<
+  State extends { winner: unknown },
+  Move,
+  Intent,
+  View,
+>(
   spec: PvpMatchSpec<State, Move, Intent, View>,
 ): (windowId: string) => PvpMatch<State, Intent, View> {
   const sessions = new Map<string, PvpSession<State, Move, Intent, View>>();
@@ -643,6 +659,7 @@ export function createPvpMatchHook<State extends { winner: unknown }, Move, Inte
       sponsoredSignExec: sponsored.signExec as never,
       selectStakeCoin: sponsored.selectStakeCoin,
       prepareStake: sponsored.prepareStake,
+      ensureStakeBalance: sponsored.ensureStakeBalance,
     };
 
     // Cold-load: once the wallet is known, re-attach to any persisted in-flight match. resume()

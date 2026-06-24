@@ -21,8 +21,8 @@ use base64::Engine;
 use sui_crypto::ed25519::Ed25519PrivateKey;
 use sui_crypto::SuiSigner;
 use sui_sdk_types::{
-    Address, Argument, Command, Digest, GasPayment, Identifier, ProgrammableTransaction,
-    Transaction, TransactionExpiration, TransactionKind, TypeTag, UserSignature,
+    Address, Argument, Command, Digest, GasPayment, Identifier, Input, ProgrammableTransaction,
+    Transaction, TransactionExpiration, TransactionKind, TypeTag, UserSignature, WithdrawFrom,
 };
 use sui_transaction_builder::{Function, ObjectInput, TransactionBuilder};
 
@@ -694,16 +694,29 @@ fn validate_sponsorable(
                 let faucet_mint = coin_type_address(coin_type) == Some(mc.package)
                     && mc.module.as_str() == "dopamint"
                     && matches!(mc.function.as_str(), "mint" | "mint_default");
+                // SIP-58 stake path (ADR-0013): `redeem_funds` turns the sender's address-balance
+                // withdrawal into the stake `Coin<T>` for the open; `send_funds` is the funding
+                // sweep that deposits a faucet coin into the player's address balance;
+                // `destroy_zero` consumes the zero remainder the open's stake split leaves behind
+                // (a redeemed `Coin<T>` has no `drop`). All framework `0x2::coin` calls over the
+                // configured `T` and the user's own funds.
+                let coin_balance_op = mc.package == framework
+                    && mc.module.as_str() == "coin"
+                    && matches!(
+                        mc.function.as_str(),
+                        "redeem_funds" | "send_funds" | "destroy_zero"
+                    );
                 anyhow::ensure!(
-                    tunnel_call || framework_share || faucet_mint,
+                    tunnel_call || framework_share || faucet_mint || coin_balance_op,
                     "sponsor refuses move call {}::{}::{}",
                     mc.package,
                     mc.module.as_str(),
                     mc.function.as_str(),
                 );
-                // The tunnel fns are generic over the coin `T`; only sponsor the configured type.
-                // (The framework share's type arg is `Tunnel<T>`, a different shape — skip it.)
-                if tunnel_call {
+                // The tunnel fns and the coin balance ops are generic over the coin `T`; only
+                // sponsor the configured type. (The framework share's type arg is `Tunnel<T>`, a
+                // different shape — skip it.)
+                if tunnel_call || coin_balance_op {
                     anyhow::ensure!(
                         mc.type_arguments.as_slice() == std::slice::from_ref(coin_type),
                         "sponsor refuses move call with an unexpected coin type",
@@ -724,6 +737,22 @@ fn validate_sponsorable(
             // `Command` is non-exhaustive; refuse anything we don't explicitly understand rather
             // than pay gas for an unknown command shape.
             _ => anyhow::bail!("sponsor refuses an unrecognized command"),
+        }
+    }
+    // SIP-58 (ADR-0013): a sponsored PTB may withdraw from an address balance to fund its stake,
+    // but ONLY the SENDER's own balance. `WithdrawFrom::Sponsor` would draw from the gas OWNER —
+    // the settler — draining its balance: the address-balance analogue of the `Argument::Gas`
+    // guard above. Refuse any non-sender withdrawal, and only for the configured stake coin type.
+    for input in &ptb.inputs {
+        if let Input::FundsWithdrawal(w) = input {
+            anyhow::ensure!(
+                w.source() == WithdrawFrom::Sender,
+                "sponsor refuses a FundsWithdrawal that is not from the sender",
+            );
+            anyhow::ensure!(
+                w.coin_type() == coin_type,
+                "sponsor refuses a FundsWithdrawal of an unexpected coin type",
+            );
         }
     }
     Ok(())
@@ -1006,6 +1035,79 @@ mod tests {
         assert!(
             validate_sponsorable(&ptb(vec![mint]), Address::from_str("0xfff").unwrap(), &coin)
                 .is_err()
+        );
+    }
+
+    fn coin_op(function: &str, coin: TypeTag) -> Command {
+        Command::MoveCall(sui_sdk_types::MoveCall {
+            package: Address::from_str(SUI_FRAMEWORK_ADDRESS).unwrap(),
+            module: Identifier::new("coin").unwrap(),
+            function: Identifier::new(function).unwrap(),
+            type_arguments: vec![coin],
+            arguments: vec![],
+        })
+    }
+
+    fn withdrawal(coin: TypeTag, source: WithdrawFrom) -> Input {
+        Input::FundsWithdrawal(sui_sdk_types::FundsWithdrawal::new(100, coin, source))
+    }
+
+    fn ptb_in(inputs: Vec<Input>, commands: Vec<Command>) -> ProgrammableTransaction {
+        ProgrammableTransaction { inputs, commands }
+    }
+
+    // ADR-0013: the stake is redeemed from the SENDER's address balance — a `coin::redeem_funds<T>`
+    // over a sender withdrawal of the configured coin is sponsorable.
+    #[test]
+    fn validate_accepts_sender_stake_withdrawal() {
+        let coin: TypeTag = "0xabc::dopamint::DOPAMINT".parse().unwrap();
+        let pkg = Address::from_str("0xfff").unwrap();
+        let p = ptb_in(
+            vec![withdrawal(coin.clone(), WithdrawFrom::Sender)],
+            vec![coin_op("redeem_funds", coin.clone())],
+        );
+        assert!(validate_sponsorable(&p, pkg, &coin).is_ok());
+    }
+
+    // Settler-drain (H1, address-balance form): a withdrawal whose source is the SPONSOR (gas owner
+    // = settler) must be refused — a sponsored PTB may withdraw only the user's OWN funds.
+    #[test]
+    fn validate_rejects_sponsor_withdrawal_settler_drain() {
+        let coin: TypeTag = "0xabc::dopamint::DOPAMINT".parse().unwrap();
+        let pkg = Address::from_str("0xfff").unwrap();
+        let p = ptb_in(
+            vec![withdrawal(coin.clone(), WithdrawFrom::Sponsor)],
+            vec![coin_op("redeem_funds", coin.clone())],
+        );
+        assert!(validate_sponsorable(&p, pkg, &coin).is_err());
+    }
+
+    // M1 (for withdrawals): a sender withdrawal of a coin type other than the settler's configured
+    // one is refused.
+    #[test]
+    fn validate_rejects_withdrawal_wrong_coin_type() {
+        let coin: TypeTag = "0xabc::dopamint::DOPAMINT".parse().unwrap();
+        let other: TypeTag = "0x2::sui::SUI".parse().unwrap();
+        let pkg = Address::from_str("0xfff").unwrap();
+        let p = ptb_in(vec![withdrawal(other, WithdrawFrom::Sender)], vec![]);
+        assert!(validate_sponsorable(&p, pkg, &coin).is_err());
+    }
+
+    // The funding sweep `coin::send_funds<T>` and the stake-remainder `coin::destroy_zero<T>` are
+    // sponsorable for the configured coin; a wrong type arg is refused (M1).
+    #[test]
+    fn validate_coin_ops_pin_coin_type() {
+        let coin: TypeTag = "0xabc::dopamint::DOPAMINT".parse().unwrap();
+        let pkg = Address::from_str("0xfff").unwrap();
+        for op in ["send_funds", "destroy_zero"] {
+            assert!(
+                validate_sponsorable(&ptb(vec![coin_op(op, coin.clone())]), pkg, &coin).is_ok(),
+                "{op} for the configured coin is sponsorable",
+            );
+        }
+        let wrong: TypeTag = "0x2::sui::SUI".parse().unwrap();
+        assert!(
+            validate_sponsorable(&ptb(vec![coin_op("destroy_zero", wrong)]), pkg, &coin).is_err()
         );
     }
 
