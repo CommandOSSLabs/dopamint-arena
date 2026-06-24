@@ -95,8 +95,11 @@ async fn transcript(State(s): State<ApiState>, Path(digest): Path<String>) -> Re
         .and_then(|r| r.error_for_status())
     {
         Ok(resp) => match resp.bytes().await {
+            // The blob is opaque to us — v2 transcripts are binary (octet-stream); legacy v1 blobs
+            // are JSON but the in-browser verifier reads them as bytes either way. Advertise the
+            // honest type so non-browser consumers (curl, CDN sniff) don't mishandle binary.
             Ok(body) => (
-                [(axum::http::header::CONTENT_TYPE, "application/json")],
+                [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
                 body,
             )
                 .into_response(),

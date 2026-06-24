@@ -45,7 +45,7 @@ import {
   DOPAMINT_COIN_TYPE,
   isDopamintConfigured,
 } from "../../onchain/dopamint";
-import { coSignedToSettleRequest } from "../../backend/settleRequest";
+import { coSignedToSettleBody } from "../../backend/settleRequest";
 import { type FleetSecret, makeFleetSecret } from "./engine/selfPlay";
 import { type Placement, placementsToBoard } from "./engine/fleet";
 import { randomSalts } from "./engine/merkle";
@@ -110,6 +110,8 @@ interface PvpDeps {
   selectStakeCoin: (minAmount: bigint) => Promise<string>;
   /** DOPAMINT stake: faucet (invisibly, sponsored) if short, then return a stake coin id. */
   prepareStake: (minAmount: bigint) => Promise<string>;
+  /** ADR-0013: ensure the player's DOPAMINT address balance covers the stake. No-op once funded. */
+  ensureStakeBalance: (minAmount: bigint) => Promise<void>;
 }
 
 interface PvpSnapshot {
@@ -572,6 +574,7 @@ class PvpSession {
           walletSignExec: signExec as never,
           prepareStake: deps.prepareStake,
           selectStakeCoin: deps.selectStakeCoin,
+          ensureStakeBalance: deps.ensureStakeBalance,
         };
         let tunnelId: string;
         if (match.role === "A") {
@@ -705,6 +708,7 @@ export function useBattleshipPvp(windowId: string): BattleshipPvp {
     sponsoredSignExec: sponsored.signExec as never,
     selectStakeCoin: sponsored.selectStakeCoin,
     prepareStake: sponsored.prepareStake,
+    ensureStakeBalance: sponsored.ensureStakeBalance,
   };
 
   // Cold-load: once the wallet is known, re-attach to any persisted in-flight match. resume()
@@ -776,7 +780,7 @@ async function settle(
   try {
     await cp.settle(
       tunnelId,
-      coSignedToSettleRequest(co, transcript.toRecord().entries),
+      coSignedToSettleBody(co, transcript.rawEntries()),
     );
   } catch (e) {
     console.error(

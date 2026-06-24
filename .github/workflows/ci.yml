@@ -64,26 +64,31 @@ jobs:
       - run: cargo build --locked
       - run: cargo test --locked
 
-  backend-valkey-it:
-    name: Backend Valkey integration tests
+  frontend:
+    name: Frontend
     runs-on: ubuntu-latest
-    services:
-      valkey:
-        image: valkey/valkey:7.2
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "valkey-cli ping"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 5
+    defaults:
+      run:
+        working-directory: frontend
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: pnpm/action-setup@v4
         with:
-          workspaces: . -> target
-      - name: Run ignored Valkey integration tests
-        env:
-          TEST_REDIS_URL: redis://localhost:6379
-        run: cargo test -p tunnel-manager -- --ignored
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          # node-version-file resolves against the repo root (not working-directory),
+          # so this reads the same .nvmrc the deploy workflow uses.
+          node-version-file: .nvmrc
+          cache: pnpm
+          cache-dependency-path: |
+            frontend/pnpm-lock.yaml
+            sui-tunnel-ts/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      # tsconfig/vite alias `sui-tunnel-ts` to ../sui-tunnel-ts/src, so the SDK's
+      # own deps must be installed for typecheck and build to resolve.
+      - name: Install SDK dependencies
+        working-directory: sui-tunnel-ts
+        run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm test

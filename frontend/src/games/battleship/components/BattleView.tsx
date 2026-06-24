@@ -2,7 +2,6 @@ import { cn } from "@/lib/utils";
 import { FLEET_CELLS } from "../engine/fleet";
 import type { BattleshipView } from "../view";
 import { BoardGrid } from "./BoardGrid";
-import { FleetRoster } from "./FleetRoster";
 
 /**
  * The in-battle screen shared by both modes: enemy waters (where you fire) and
@@ -48,8 +47,8 @@ export function BattleView({
       : 0;
 
   return (
-    <div className="relative flex h-full flex-col gap-2 p-2 @[26rem]:p-3">
-      <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5 text-[11px] text-arena-muted">
+    <div className="relative flex h-full min-h-0 flex-col gap-2 overflow-hidden p-2 @[26rem]:p-3">
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-2 gap-y-0.5 text-[11px] text-arena-muted">
         <span>
           Enemy sunk{" "}
           <span className="text-arena-text">
@@ -77,9 +76,10 @@ export function BattleView({
         </span>
       </div>
 
-      <FleetRoster fleet={view.fleet} />
-
-      <div className="grid grid-cols-1 gap-3 @[30rem]:grid-cols-2 @[30rem]:gap-4">
+      {/* Boards take the remaining height and split it: two square boards stacked on a
+          narrow window, side-by-side once wide. `min-h-0` + `1fr` rows let them shrink to
+          fit any window height, so the view never overflows or scrolls. */}
+      <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-2 gap-3 @[30rem]:grid-cols-2 @[30rem]:grid-rows-1 @[30rem]:gap-4">
         <BoardGrid
           title="Enemy waters"
           cells={view.enemyCells}
@@ -95,14 +95,12 @@ export function BattleView({
         />
       </div>
 
-      {view.outcome === null && (
-        <div className="mt-auto text-sm font-semibold text-arena-text">
+      {/* Manual play only: a thin turn prompt. Autopilot needs none — the animating
+          boards already show the duel, and dropping it gives the boards more height. */}
+      {view.outcome === null && !auto && (
+        <div className="shrink-0 text-center text-sm font-semibold text-arena-text">
           <span className={cn(view.myTurn && "animate-pulse text-[#cab1ff]")}>
-            {auto
-              ? "Autopilot engaged — bots are dueling…"
-              : view.myTurn
-                ? "Your turn — fire!"
-                : "Opponent is aiming…"}
+            {view.myTurn ? "Your turn — fire!" : "Opponent is aiming…"}
           </span>
         </div>
       )}
@@ -110,7 +108,7 @@ export function BattleView({
       {/* Result card. Suppressed while autopilot is looping (it rematches on its own);
           shown when a game ends in manual play, with Play Again + (multi-game) Settle. */}
       {view.outcome !== null && !auto && (
-        <div className="absolute inset-0 grid place-items-center bg-black/45 p-2 backdrop-blur-sm @[20rem]:p-4">
+        <div className="absolute inset-0 grid place-items-center overflow-y-auto bg-black/45 p-2 backdrop-blur-sm @[20rem]:p-4">
           <div className="flex w-full max-w-xs animate-in flex-col items-center gap-3 rounded-xl border border-arena-edge bg-arena-panel p-4 text-center shadow-2xl zoom-in-95 @[20rem]:p-5">
             <div
               className={cn(

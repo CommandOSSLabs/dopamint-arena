@@ -11,14 +11,6 @@ import {
 } from "@/backend/explorerClient";
 import { useSuiClientContext } from "@mysten/dapp-kit";
 
-// Balances arrive as decimal-string MIST (u64, ADR-0002); parse with BigInt to keep precision.
-const mist = (s: string | null): bigint => (s == null ? 0n : BigInt(s));
-
-function fmtSui(mistAmount: bigint): string {
-  // Display only — the exact conservation check runs in verifyTranscript on bigint.
-  return (Number(mistAmount) / 1e9).toFixed(3).replace(/\.?0+$/, "") + " SUI";
-}
-
 export function ExplorerPage() {
   const { network } = useSuiClientContext();
   const [rows, setRows] = useState<SettlementRow[]>([]);
@@ -114,7 +106,6 @@ export function ExplorerPage() {
                 <th className="px-3 py-2 font-medium">TUNNEL</th>
                 <th className="px-3 py-2 font-medium">CHECKPOINT</th>
                 <th className="px-3 py-2 font-medium">TIME</th>
-                <th className="px-3 py-2 text-right font-medium">POT</th>
                 <th className="px-3 py-2" />
               </tr>
             </thead>
@@ -150,9 +141,6 @@ export function ExplorerPage() {
                     <td className="wal-mono px-3 py-2">{r.checkpoint}</td>
                     <td className="px-3 py-2 text-muted-foreground">
                       {new Date(r.timestampMs).toLocaleString()}
-                    </td>
-                    <td className="px-3 py-2 text-right">
-                      {fmtSui(mist(r.partyABalance) + mist(r.partyBBalance))}
                     </td>
                     <td className="px-3 py-2 text-right">
                       <Link

@@ -25,6 +25,7 @@ import { withSponsorFallback } from "../../onchain/sponsor";
 import { useSponsoredSignExec } from "../../onchain/useSponsoredSignExec";
 import {
   DOPAMINT_COIN_TYPE,
+  isDopamintAddressBalance,
   isDopamintConfigured,
 } from "../../onchain/dopamint";
 import { type BattleshipMove } from "./protocol/battleship";
@@ -46,21 +47,31 @@ import {
   nextMove,
   randomFleetSecret,
 } from "./engine/selfPlay";
-import { type BotDifficulty, DEFAULT_BOT_DIFFICULTY } from "./engine/bot";
+import { type BotDifficulty } from "./engine/bot";
 
 /** DOPAMINT stake locked per seat (1 DOPAMINT, 9 decimals). */
 const LOCKED_PER_SEAT = 1_000_000_000n;
 /** SUI-fallback stake per seat (MIST), when the DOPAMINT env is unset. */
 const SUI_PER_SEAT = 500n;
 const STAKE = 100n;
-/** Animation pacing for the bot's automatic moves (manual vs-bot — readable beats). */
-const BOT_SHOOT_MS = 550;
-const BOT_REVEAL_MS = 240;
-/** Autopilot pacing — the floor: 0ms, so a self-playing match resolves as fast as
- *  the event loop allows. `sleep(0)` still yields one frame per step, so the boards
- *  repaint (not a single jump to the result) while staying near-instant. */
-const AUTO_SHOOT_MS = 0;
-const AUTO_REVEAL_MS = 0;
+// Throughput, not per-move pacing: the driver applies moves in a synchronous batch
+// and only renders + yields to the UI once per ~frame. This uncaps TPS from both the
+// setTimeout(0) clamp (~4ms/move) and the per-move React re-render of the boards,
+// while still repainting ~once a frame. 8ms ≈ half a 16ms frame, so the UI stays
+// responsive between yields.
+const FRAME_BUDGET_MS = 8;
+/** The single bot skill — difficulty modes (easy/normal/hard) were dropped in favour
+ *  of one mode; this is the smartest profile (probability-density targeting). */
+const BOT_SKILL: BotDifficulty = "hard";
+
+// Transcript-size cap (avoids a 413 at settle). The eventual /settle POST ships one
+// ~0.55 KB entry per co-signed move, and the backend rejects bodies over 16 MB. During
+// autopilot we therefore settle the current tunnel and open a fresh one after this many
+// games — or this many entries, whichever comes first — so any single settle stays well
+// under the limit. At "hard", a game is ~160 entries (≤~224 on long ones): 100 games ≈
+// 8.8 MB typical / ≤~12 MB worst, and 24k entries ≈ 13 MB is the hard byte ceiling.
+const ROLLOVER_GAMES = 100;
+const ROLLOVER_ENTRIES = 24_000;
 
 export type BattleshipStatus =
   | "idle"
@@ -81,13 +92,17 @@ export interface BattleshipSession {
   startBattle: (placements: Placement[]) => void;
   /** Fire at an enemy cell (only legal on your turn). */
   fire: (cell: number) => void;
-  /** Set the foe bot's skill — applies to its next shot (safe to change mid-match). */
-  setDifficulty: (difficulty: BotDifficulty) => void;
+  /** First-open default: auto-place a fleet, open the tunnel, and start playing with
+   *  autopilot ON — instant action. Idempotent (a remount won't re-trigger). */
+  autoStartOnLoad: () => void;
   /** True while autopilot also fires YOUR shots; with it on, finished games rematch
-   *  automatically on the SAME tunnel until you settle. */
+   *  automatically on the SAME tunnel until you settle. ON by default. */
   auto: boolean;
   /** Toggle autopilot for your seat; flipping it on resumes firing / auto-rematch. */
   setAuto: (on: boolean) => void;
+  /** Arcade-cabinet hover-pause: freeze / unfreeze the auto loop in place. */
+  pause: () => void;
+  resume: () => void;
   /** Wins this session (one tunnel, many games): `you` = your wins, `foe` = bot wins. */
   score: { you: number; foe: number };
   /** Completed games behind the current one (the running game is `gamesPlayed + 1`). */
@@ -112,6 +127,9 @@ interface BotDeps {
   selectStakeCoin: (minAmount: bigint) => Promise<string>;
   /** DOPAMINT stake: faucet (invisibly, sponsored) if short, then return a stake coin id. */
   prepareStake: (minAmount: bigint) => Promise<string>;
+  /** ADR-0013: ensure the player's DOPAMINT address balance covers the stake (for the
+   *  address-balance open path). No-op once topped up. */
+  ensureStakeBalance: (minAmount: bigint) => Promise<void>;
 }
 
 interface BotSnapshot {
@@ -136,15 +154,16 @@ class BotSession {
   private status: BattleshipStatus = "idle";
   private view: BattleshipView | null = null;
   private error: string | null = null;
-  // Autopilot: when on, the driver fires YOUR shots too (with the same skill as
-  // the foe), so the whole match plays itself. Lives on the session, not React,
-  // because the off-React advance loop reads it each step.
-  private auto = false;
+  // Autopilot: when on, the driver fires YOUR shots too, so the whole match plays
+  // itself. ON by default — opening the game drops you straight into the action
+  // (toggle off to take manual control). Lives on the session, not React, because
+  // the off-React advance loop reads it each step.
+  private auto = true;
   private snap: BotSnapshot = {
     status: "idle",
     view: null,
     error: null,
-    auto: false,
+    auto: true,
     score: { you: 0, foe: 0 },
     gamesPlayed: 0,
   };
@@ -161,6 +180,12 @@ class BotSession {
   private settleRequested = false;
   private score = { you: 0, foe: 0 };
   private lastScoredGames = -1;
+  // Finished games on the CURRENT tunnel — drives the periodic rollover (see ROLLOVER_GAMES).
+  // Reset whenever a fresh tunnel opens; `gamesCompletedSession` keeps the cross-tunnel total.
+  private gamesThisTunnel = 0;
+  // Finished games across every tunnel this session — what the UI shows, so the count stays
+  // monotonic through a rollover (which resets the tunnel's own gamesPlayed back to 0).
+  private gamesCompletedSession = 0;
   private placements: Placement[] = []; // your fleet layout, for ship-status display
   private tunnelId = "";
   private createdAt = 0n;
@@ -173,8 +198,11 @@ class BotSession {
   private txnId = 0;
   private lastYourShot: number | null = null;
   private lastEnemyShot: number | null = null;
-  /** Foe bot skill; only affects shot selection, so it can change any time. */
-  private difficulty: BotDifficulty = DEFAULT_BOT_DIFFICULTY;
+  // First-open auto-start guard: set once so a remount doesn't re-open a tunnel.
+  private didAutoStart = false;
+  // Hover-pause latch (shared arcade-cabinet shell): when set, the auto loop freezes
+  // in place at the next frame; `resume()` restarts it. A fresh game clears it.
+  private paused = false;
   // Bumped on reset/dispose so an in-flight bot loop knows to abandon ship.
   private gen = 0;
   // Control-plane TPS heartbeat (ADR-0002, self-play contract). The backend derives
@@ -184,6 +212,16 @@ class BotSession {
   private moveCount = 0;
   private actions = 0;
   private lastHeartbeat = 0;
+  // Local-telemetry counters accumulated per move, pushed to React once per frame
+  // (see `flushCounters`) so the hot loop never pays a setState per move.
+  private pending = { updates: 0, signatures: 0, verifications: 0, bytes: 0 };
+
+  /** Push the frame's accumulated counters to the telemetry rail in one update. */
+  private flushCounters() {
+    if (this.pending.updates === 0) return;
+    this.deps?.report.bumpCounters(this.pending);
+    this.pending = { updates: 0, signatures: 0, verifications: 0, bytes: 0 };
+  }
 
   subscribe = (cb: () => void): (() => void) => {
     this.listeners.add(cb);
@@ -200,7 +238,7 @@ class BotSession {
       error: this.error,
       auto: this.auto,
       score: this.score,
-      gamesPlayed: this.tunnel?.state.gamesPlayed ?? 0,
+      gamesPlayed: this.gamesCompletedSession,
     };
     for (const l of this.listeners) l();
   }
@@ -242,6 +280,8 @@ class BotSession {
     this.advancing = false;
     this.starting = false;
     this.settleRequested = false;
+    this.paused = false;
+    this.didAutoStart = false; // a fresh entry/new-session re-arms the auto-start
     this.tunnel = null;
     this.protocol = null;
     this.transcript = null;
@@ -249,6 +289,8 @@ class BotSession {
     this.session = null;
     this.score = { you: 0, foe: 0 };
     this.lastScoredGames = -1;
+    this.gamesThisTunnel = 0;
+    this.gamesCompletedSession = 0;
     this.lastYourShot = null;
     this.lastEnemyShot = null;
     this.deps?.report.setActive(0);
@@ -325,37 +367,55 @@ class BotSession {
       return;
     }
     try {
-      // Settle through the backend /settle API: the server submits the close AND archives the
-      // transcript to Walrus (ADR-0002/0005). Fall back to a sponsored/wallet close if it's down.
-      const deps = this.deps; // non-null past the guard above; capture for the fallback closure
-      const transcript = this.transcript;
-      const settlement = tunnel.buildSettlementWithRoot(
+      await this.closeTunnel(
+        tunnel,
+        this.transcript,
+        this.tunnelId,
         this.createdAt,
-        transcript ? transcript.root() : new Uint8Array(32),
-        0n,
       );
-      const coinType = isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined;
-      // DOPAMINT path closes via the gas sponsor too (so a 0-SUI player can close their bot
-      // game for free); SUI path closes sender-pays. coinType must match the tunnel's coin.
-      await settleViaBackend({
-        tunnelId: this.tunnelId,
-        settlement,
-        transcript: transcript ? transcript.toRecord().entries : [],
-        label: "battleship",
-        fallbackClose: () =>
-          closeCooperativeWithRoot({
-            signExec: (isDopamintConfigured
-              ? deps.sponsoredSignExec
-              : deps.signExec) as never,
-            tunnelId: this.tunnelId,
-            settlement,
-            coinType,
-          }),
-      });
       this.setStatus("settled");
     } catch (e) {
       this.fail(e);
     }
+  };
+
+  /** Build the co-signed root settlement for `tunnel` and close it through the backend
+   *  /settle API — the server submits the on-chain close AND archives the transcript to
+   *  Walrus (ADR-0002/0005), with a sponsored/wallet close fallback if the backend is down.
+   *  Pure money-path: no status/React side effects, so both the player-driven settle and the
+   *  periodic rollover reuse it and each decide how a close affects the session. Needs
+   *  `this.deps` (callers guard `onChain` separately). */
+  private closeTunnel = async (
+    tunnel: OffchainTunnel<MultiGameBattleshipState, MultiGameBattleshipMove>,
+    transcript: Transcript | null,
+    tunnelId: string,
+    createdAt: bigint,
+  ): Promise<void> => {
+    const deps = this.deps;
+    if (!deps) return;
+    const settlement = tunnel.buildSettlementWithRoot(
+      createdAt,
+      transcript ? transcript.root() : new Uint8Array(32),
+      0n,
+    );
+    const coinType = isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined;
+    // DOPAMINT path closes via the gas sponsor too (so a 0-SUI player can close their bot
+    // game for free); SUI path closes sender-pays. coinType must match the tunnel's coin.
+    await settleViaBackend({
+      tunnelId,
+      settlement,
+      transcript: transcript ? transcript.rawEntries() : [],
+      label: "battleship",
+      fallbackClose: () =>
+        closeCooperativeWithRoot({
+          signExec: (isDopamintConfigured
+            ? deps.sponsoredSignExec
+            : deps.signExec) as never,
+          tunnelId,
+          settlement,
+          coinType,
+        }),
+    });
   };
 
   /** Record the just-finished inner game's winner into the running tally, once. The
@@ -368,6 +428,11 @@ class BotSession {
     const winner = tunnel.state.inner.winner;
     if (winner === 0) return;
     this.lastScoredGames = game;
+    // Count finished games once here (the dedup above makes this idempotent, so a
+    // pause/resume landing on a game-over state can't double-count). `gamesThisTunnel`
+    // drives the rollover; `gamesCompletedSession` is the cross-tunnel total the UI shows.
+    this.gamesThisTunnel += 1;
+    this.gamesCompletedSession += 1;
     const iWon = winner === 1; // seat A is "you"
     if (iWon) this.score = { ...this.score, you: this.score.you + 1 };
     else this.score = { ...this.score, foe: this.score.foe + 1 };
@@ -408,18 +473,28 @@ class BotSession {
     const tunnel = this.tunnel;
     const protocol = this.protocol;
     try {
+      // Render + yield once per frame budget (not per move). Within a budget, moves
+      // run synchronously back-to-back so TPS isn't throttled by setTimeout or React.
+      let frameDeadline = Date.now() + FRAME_BUDGET_MS;
       while (tunnel && protocol && this.secrets) {
         const inner = tunnel.state.inner;
         if (inner.winner !== 0) {
-          // A game finished. Tally it once, then decide: loop or stop.
+          // A game finished. Tally it once, then decide: loop, roll over, or stop.
           this.recordGameResult();
-          this.pushView();
           const sessionDone = protocol.isTerminal(tunnel.state); // funds exhausted
           if (!this.auto || this.settleRequested || sessionDone) break;
+          // Transcript-size cap: once this tunnel has hosted enough games/entries, settle it
+          // and continue on a fresh tunnel so the eventual /settle never 413s. rolloverTunnel
+          // bumps `gen` and restarts advance() on the new tunnel, so bail out of this loop.
+          if (
+            this.gamesThisTunnel >= ROLLOVER_GAMES ||
+            this.moveCount >= ROLLOVER_ENTRIES
+          ) {
+            void this.rolloverTunnel();
+            return;
+          }
           // Auto rematch on the SAME tunnel: fresh fleets, A's commit resets the board.
           const next = this.makeMatchSecrets();
-          await sleep(AUTO_SHOOT_MS); // a beat so the final hit + new score register
-          if (this.gen !== myGen || this.tunnel !== tunnel) return;
           this.secrets = next.secrets;
           this.placements = next.placements;
           this.lastYourShot = null;
@@ -428,35 +503,36 @@ class BotSession {
             { type: "commit", root: next.secrets.A.commitment.root },
             "A",
           );
+        } else {
+          const driven = nextMove(inner, this.secrets, Math.random, BOT_SKILL);
+          if (!driven) break;
+          // Human's shot: stop and wait for fire() — unless autopilot drives it too.
+          if (driven.by === "A" && driven.move.type === "shoot" && !this.auto)
+            break;
+          if (driven.move.type === "shoot") {
+            if (driven.by === "A") this.lastYourShot = driven.move.cell;
+            else this.lastEnemyShot = driven.move.cell;
+          }
+          tunnel.step(driven.move, driven.by);
+          // Per-shot rows flood the feed (and re-render it) at autopilot speed — only
+          // log them in MANUAL play, where you can actually read them.
+          if (driven.move.type === "reveal" && !this.auto)
+            this.reportShotTxn(driven.move, driven.by);
+        }
+        // End of frame: flush the batched counters, paint the latest state once, then
+        // yield so the UI can repaint / process input. A synchronous batch never blocks
+        // longer than FRAME_BUDGET_MS.
+        if (Date.now() >= frameDeadline) {
+          this.flushCounters();
           this.pushView();
-          continue;
+          await sleep(0);
+          if (this.gen !== myGen || this.tunnel !== tunnel) return; // reset/disposed
+          if (this.paused) return; // hover-pause: freeze here; resume() restarts the loop
+          frameDeadline = Date.now() + FRAME_BUDGET_MS;
         }
-        const driven = nextMove(
-          inner,
-          this.secrets,
-          Math.random,
-          this.difficulty,
-        );
-        if (!driven) break;
-        // Human's shot: stop and wait for fire() — unless autopilot is on, then drive it too.
-        if (driven.by === "A" && driven.move.type === "shoot" && !this.auto)
-          break;
-        // Autopilot runs at near-instant pacing; manual vs-bot keeps readable beats.
-        // Read `this.auto` fresh each step so toggling it changes the speed at once.
-        if (driven.move.type === "shoot") {
-          await sleep(this.auto ? AUTO_SHOOT_MS : BOT_SHOOT_MS);
-          if (driven.by === "A") this.lastYourShot = driven.move.cell;
-          else this.lastEnemyShot = driven.move.cell;
-        } else if (driven.move.type === "reveal") {
-          await sleep(this.auto ? AUTO_REVEAL_MS : BOT_REVEAL_MS);
-        }
-        if (this.gen !== myGen || this.tunnel !== tunnel) return; // reset/disposed mid-flight
-        tunnel.step(driven.move, driven.by);
-        if (driven.move.type === "reveal")
-          this.reportShotTxn(driven.move, driven.by);
-        this.pushView();
       }
-      this.pushView();
+      this.flushCounters();
+      this.pushView(); // final state always renders (game over / human's turn)
     } catch (e) {
       this.fail(e);
     } finally {
@@ -483,8 +559,10 @@ class BotSession {
     this.error = null;
     this.txnId = 0;
     this.settleRequested = false;
+    this.paused = false; // a fresh game never inherits a stale hover-pause
     this.score = { you: 0, foe: 0 };
     this.lastScoredGames = -1;
+    this.gamesCompletedSession = 0;
     this.lastYourShot = null;
     this.lastEnemyShot = null;
 
@@ -493,119 +571,13 @@ class BotSession {
     const bot = randomFleetSecret(Math.random);
     this.secrets = { A: human, B: bot };
 
-    const a = createParticipant("you-seat");
-    const b = createParticipant("foe-seat");
-    // Multi-game: one funded tunnel hosts many games; the player settles once.
-    const protocol = new MultiGameBattleshipProtocol(STAKE);
-    this.protocol = protocol;
+    // Multi-game: one funded tunnel hosts many games; the player settles once (or the
+    // autopilot rolls to a fresh tunnel every ROLLOVER_GAMES — see rolloverTunnel).
+    this.protocol = new MultiGameBattleshipProtocol(STAKE);
 
     void (async () => {
       try {
-        // Per-path stake: 1 DOPAMINT vs a tiny MIST amount on the SUI fallback (so the fallback
-        // doesn't lock real SUI). The same value funds on-chain AND inits the off-chain tunnel.
-        const stakePerSeat = isDopamintConfigured
-          ? LOCKED_PER_SEAT
-          : SUI_PER_SEAT;
-
-        const reads = deps.client as unknown as Parameters<
-          typeof openAndFundSelfPlay
-        >[0]["reads"];
-        this.setStatus("funding");
-        const partyA = { address: a.address, publicKey: a.keyPair.publicKey };
-        const partyB = { address: b.address, publicKey: b.keyPair.publicKey };
-        // DOPAMINT (ADR-0010): faucet both seats' stake invisibly (gas-sponsored) and stake
-        // DOPAMINT — free for a 0-SUI player. SUI path (DOPAMINT env unset): sponsored SUI stake
-        // with a sender-pays fallback (ADR-0009).
-        const tunnelId = isDopamintConfigured
-          ? await openAndFundSelfPlay({
-              reads,
-              signExec: deps.sponsoredSignExec as never,
-              partyA,
-              partyB,
-              aAmount: stakePerSeat,
-              bAmount: stakePerSeat,
-              coinType: DOPAMINT_COIN_TYPE,
-              stakeCoinId: await deps.prepareStake(2n * stakePerSeat),
-            })
-          : await withSponsorFallback(
-              async () =>
-                openAndFundSelfPlay({
-                  reads,
-                  signExec: deps.sponsoredSignExec as never,
-                  partyA,
-                  partyB,
-                  aAmount: stakePerSeat,
-                  bAmount: stakePerSeat,
-                  stakeCoinId: await deps.selectStakeCoin(2n * stakePerSeat),
-                }),
-              () =>
-                openAndFundSelfPlay({
-                  reads,
-                  signExec: deps.signExec as never,
-                  partyA,
-                  partyB,
-                  aAmount: stakePerSeat,
-                  bAmount: stakePerSeat,
-                }),
-              "battleship bot open/fund",
-            );
-        const createdAt = await readCreatedAt(reads, tunnelId);
-        const onChain = true;
-
-        const tunnel = OffchainTunnel.selfPlay(
-          protocol,
-          tunnelId,
-          a.keyPair,
-          b.keyPair,
-          a.address,
-          b.address,
-          { a: stakePerSeat, b: stakePerSeat },
-        );
-        // Record every co-signed update so the close can anchor the transcript root on-chain
-        // (close_cooperative_with_root) — the same settle path caro/poker/auto use successfully.
-        const transcript = new Transcript(tunnelId);
-        tunnel.onUpdate = (u, bytes) => {
-          transcript.append(u);
-          // One co-signed update = one action for the control-plane TPS count (ADR-0002);
-          // moveCount is the monotonic nonce. Flush is self-throttled (~1/s).
-          this.moveCount += 1;
-          this.actions += 1;
-          this.deps?.report.bumpCounters({
-            updates: 1,
-            signatures: 2,
-            verifications: 2,
-            bytes,
-          });
-          this.flushHeartbeat(false);
-        };
-
-        this.tunnel = tunnel;
-        this.transcript = transcript;
-        this.tunnelId = tunnelId;
-        this.createdAt = createdAt;
-        this.onChain = onChain;
-
-        // Register the on-chain tunnel for control-plane TPS stats (ADR-0002). Best-effort:
-        // the backend is never in the per-move loop, so a failed register must not block play.
-        this.session = null;
-        this.moveCount = 0;
-        this.actions = 0;
-        this.lastHeartbeat = Date.now();
-        getControlPlaneClient()
-          .registerSession({
-            userAddress: a.address,
-            game: "battleship",
-            tunnels: [{ tunnelId, partyA: a.address, partyB: b.address }],
-          })
-          .then((s) => {
-            this.session = s;
-          })
-          .catch((e) =>
-            console.error("[battleship bot] registerSession failed:", e),
-          );
-
-        this.deps?.report.bumpCounters({ tunnelsOpened: 1 });
-        this.deps?.report.setActive(2);
+        await this.openFundedTunnel();
         this.starting = false;
         this.setStatus("playing");
         this.pushView();
@@ -617,8 +589,199 @@ class BotSession {
     })();
   };
 
-  setDifficulty = (difficulty: BotDifficulty) => {
-    this.difficulty = difficulty;
+  /** Open + fund a fresh self-play tunnel on the current protocol and wire its transcript,
+   *  leaving it ready for `advance()` to drive. Shared by the initial start and the periodic
+   *  rollover. Mints new seat keys, sets this.tunnel/transcript/tunnelId/createdAt, and resets
+   *  the per-tunnel nonce (`moveCount`) + game counter; it does NOT touch `score`, `auto`,
+   *  `starting`, or `gamesCompletedSession`, and does NOT kick the loop — the caller owns those. */
+  private openFundedTunnel = async (): Promise<void> => {
+    const deps = this.deps;
+    const protocol = this.protocol;
+    if (!deps || !protocol)
+      throw new Error("battleship: openFundedTunnel without deps/protocol");
+
+    const a = createParticipant("you-seat");
+    const b = createParticipant("foe-seat");
+    // Per-path stake: 1 DOPAMINT vs a tiny MIST amount on the SUI fallback (so the fallback
+    // doesn't lock real SUI). The same value funds on-chain AND inits the off-chain tunnel.
+    const stakePerSeat = isDopamintConfigured ? LOCKED_PER_SEAT : SUI_PER_SEAT;
+
+    const reads = deps.client as unknown as Parameters<
+      typeof openAndFundSelfPlay
+    >[0]["reads"];
+    this.setStatus("funding");
+    const partyA = { address: a.address, publicKey: a.keyPair.publicKey };
+    const partyB = { address: b.address, publicKey: b.keyPair.publicKey };
+    // DOPAMINT (ADR-0010): faucet both seats' stake invisibly (gas-sponsored) and stake
+    // DOPAMINT — free for a 0-SUI player. SUI path (DOPAMINT env unset): sponsored SUI stake
+    // with a sender-pays fallback (ADR-0009).
+    // ADR-0013: with the address-balance path on, top up the player's DOPAMINT address balance
+    // first; the open then withdraws from it instead of a version-pinned coin, so concurrent
+    // reload-opens never equivocate. No-op once the balance is funded.
+    if (isDopamintAddressBalance) {
+      await deps.ensureStakeBalance(2n * stakePerSeat);
+    }
+    const tunnelId = isDopamintConfigured
+      ? await openAndFundSelfPlay({
+          reads,
+          signExec: deps.sponsoredSignExec as never,
+          partyA,
+          partyB,
+          aAmount: stakePerSeat,
+          bAmount: stakePerSeat,
+          coinType: DOPAMINT_COIN_TYPE,
+          ...(isDopamintAddressBalance
+            ? {
+                stakeFromBalance: {
+                  amount: 2n * stakePerSeat,
+                  coinType: DOPAMINT_COIN_TYPE,
+                },
+              }
+            : { stakeCoinId: await deps.prepareStake(2n * stakePerSeat) }),
+        })
+      : await withSponsorFallback(
+          async () =>
+            openAndFundSelfPlay({
+              reads,
+              signExec: deps.sponsoredSignExec as never,
+              partyA,
+              partyB,
+              aAmount: stakePerSeat,
+              bAmount: stakePerSeat,
+              stakeCoinId: await deps.selectStakeCoin(2n * stakePerSeat),
+            }),
+          () =>
+            openAndFundSelfPlay({
+              reads,
+              signExec: deps.signExec as never,
+              partyA,
+              partyB,
+              aAmount: stakePerSeat,
+              bAmount: stakePerSeat,
+            }),
+          "battleship bot open/fund",
+        );
+    const createdAt = await readCreatedAt(reads, tunnelId);
+
+    const tunnel = OffchainTunnel.selfPlay(
+      protocol,
+      tunnelId,
+      a.keyPair,
+      b.keyPair,
+      a.address,
+      b.address,
+      { a: stakePerSeat, b: stakePerSeat },
+    );
+    // Record every co-signed update so the close can anchor the transcript root on-chain
+    // (close_cooperative_with_root) — the same settle path caro/poker/auto use successfully.
+    const transcript = new Transcript(tunnelId);
+    tunnel.onUpdate = (u, bytes) => {
+      transcript.append(u);
+      // One co-signed update = one action for the control-plane TPS count (ADR-0002);
+      // moveCount is the monotonic nonce.
+      this.moveCount += 1;
+      this.actions += 1;
+      // Accumulate the local-telemetry counters here but DON'T touch React per move
+      // — `flushCounters()` pushes the whole frame's delta once, so the hot loop isn't
+      // throttled by a setState (the dominant per-move cost at high TPS).
+      this.pending.updates += 1;
+      this.pending.signatures += 2;
+      this.pending.verifications += 2;
+      this.pending.bytes += bytes;
+      this.flushHeartbeat(false);
+    };
+
+    this.tunnel = tunnel;
+    this.transcript = transcript;
+    this.tunnelId = tunnelId;
+    this.createdAt = createdAt;
+    this.onChain = true;
+
+    // Register the on-chain tunnel for control-plane TPS stats (ADR-0002). Best-effort:
+    // the backend is never in the per-move loop, so a failed register must not block play.
+    this.session = null;
+    this.moveCount = 0;
+    this.actions = 0;
+    this.gamesThisTunnel = 0;
+    this.lastScoredGames = -1; // dedup key is per-tunnel — gamesPlayed restarts at 0
+    this.lastHeartbeat = Date.now();
+    getControlPlaneClient()
+      .registerSession({
+        userAddress: a.address,
+        game: "battleship",
+        tunnels: [{ tunnelId, partyA: a.address, partyB: b.address }],
+      })
+      .then((s) => {
+        this.session = s;
+      })
+      .catch((e) =>
+        console.error("[battleship bot] registerSession failed:", e),
+      );
+
+    this.deps?.report.bumpCounters({ tunnelsOpened: 1 });
+    this.deps?.report.setActive(2);
+  };
+
+  /** Periodic transcript-size cap (ADR-0002 §settle): during autopilot, after ROLLOVER_GAMES
+   *  (or ROLLOVER_ENTRIES) on one tunnel, settle it and open a fresh one so any single /settle
+   *  payload stays well under the backend's 16 MB body limit. The old tunnel is self-contained
+   *  once its co-signed settlement + transcript are final, so we close it in the BACKGROUND and
+   *  start the next tunnel without waiting on the on-chain close. Score + gamesCompletedSession
+   *  carry across; only the transcript (and per-tunnel counters) reset. */
+  private rolloverTunnel = async () => {
+    const oldTunnel = this.tunnel;
+    const oldTranscript = this.transcript;
+    const oldTunnelId = this.tunnelId;
+    const oldCreatedAt = this.createdAt;
+    if (!oldTunnel || !this.deps || !this.protocol || !this.onChain) return;
+    this.gen += 1; // abandon the old loop (mirrors settleNow/playNextGame)
+    this.advancing = false;
+    // Background-close the just-finished tunnel. Failures fall back to a wallet close inside
+    // closeTunnel; if even that fails the stake stays locked, so log loudly but never abort the
+    // session — the next tunnel is already taking over.
+    this.deps.report.bumpCounters({ tunnelsClosed: 1, settlements: 1 });
+    void this.closeTunnel(
+      oldTunnel,
+      oldTranscript,
+      oldTunnelId,
+      oldCreatedAt,
+    ).catch((e) =>
+      console.error(
+        "[battleship bot] rollover close failed; stake may stay locked:",
+        e,
+      ),
+    );
+    try {
+      await this.openFundedTunnel();
+      this.setStatus("playing");
+      this.pushView();
+      void this.advance();
+    } catch (e) {
+      this.fail(e);
+    }
+  };
+
+  /** First-open default: drop straight into the action. Auto-place a random fleet,
+   *  open the tunnel, and start playing (autopilot is already on). Guarded so a
+   *  remount or a re-render can't re-open a second tunnel. */
+  autoStartOnLoad = () => {
+    if (this.didAutoStart || this.status !== "idle") return;
+    if (!this.deps?.account) return; // wallet not ready yet; the effect retries
+    this.didAutoStart = true;
+    this.startBattle(placeFleetRandom(Math.random));
+  };
+
+  /** Hover-pause (arcade-cabinet shell): freeze the auto loop in place. The running
+   *  advance() returns at its next frame; no-op if nothing is auto-playing. */
+  pause = () => {
+    this.paused = true;
+  };
+
+  /** Resume after a hover that didn't take the seat — restart the frozen loop. */
+  resume = () => {
+    if (!this.paused) return;
+    this.paused = false;
+    if (this.status === "playing") void this.advance();
   };
 
   setAuto = (on: boolean) => {
@@ -729,6 +892,7 @@ export function useBattleship(windowId: string): BattleshipSession {
     sponsoredSignExec: sponsored.signExec as never,
     selectStakeCoin: sponsored.selectStakeCoin,
     prepareStake: sponsored.prepareStake,
+    ensureStakeBalance: sponsored.ensureStakeBalance,
   };
 
   const snap = useSyncExternalStore(session.subscribe, session.getSnapshot);
@@ -739,9 +903,11 @@ export function useBattleship(windowId: string): BattleshipSession {
     playBot: session.playBot,
     startBattle: session.startBattle,
     fire: session.fire,
-    setDifficulty: session.setDifficulty,
+    autoStartOnLoad: session.autoStartOnLoad,
     auto: snap.auto,
     setAuto: session.setAuto,
+    pause: session.pause,
+    resume: session.resume,
     score: snap.score,
     gamesPlayed: snap.gamesPlayed,
     playNextGame: session.playNextGame,

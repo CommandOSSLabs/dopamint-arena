@@ -68,6 +68,7 @@ export function TransactionsFeed({
                   <>
                     <th className="px-2.5 py-1.5 font-medium">DIGEST</th>
                     <th className="px-2.5 py-1.5 font-medium">ADDRESS</th>
+                    <th className="px-2.5 py-1.5 font-medium">PROOF</th>
                   </>
                 )}
                 {showGame && (
@@ -111,6 +112,20 @@ export function TransactionsFeed({
                               href={suivisionAccountUrl(t.address, network)}
                               label="address"
                             />
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </td>
+                        <td className="px-2.5 py-1.5">
+                          {t.proofUrl ? (
+                            <a
+                              href={t.proofUrl}
+                              target="_blank"
+                              rel="noreferrer noopener"
+                              className="text-[11px] text-foreground/80 transition-colors hover:text-primary hover:underline"
+                            >
+                              ↗ Walrus
+                            </a>
                           ) : (
                             <span className="text-muted-foreground">—</span>
                           )}

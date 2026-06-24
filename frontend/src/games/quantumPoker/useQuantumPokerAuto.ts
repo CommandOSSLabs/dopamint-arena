@@ -23,10 +23,15 @@ import {
 import { makeKeypairSponsoredSignExec } from "@/onchain/sponsor";
 import {
   DOPAMINT_COIN_TYPE,
+  ensureDopamintAddressBalance,
   ensureDopamintStakeCoin,
+  isDopamintAddressBalance,
   isDopamintConfigured,
 } from "@/onchain/dopamint";
-import { QUANTUM_POKER_STAKE, QUANTUM_POKER_HANDS_PER_TUNNEL } from "./constants";
+import {
+  QUANTUM_POKER_STAKE,
+  QUANTUM_POKER_HANDS_PER_TUNNEL,
+} from "./constants";
 import {
   loadOrCreateQuantumPokerBots,
   botBalances,
@@ -179,8 +184,11 @@ class AutoSession {
   private stage: "opening" | "playing" | "settling" = "opening";
 
   private nextTimer: ReturnType<typeof setTimeout> | null = null;
-  // Bumped on stop/reset/dispose so an in-flight loop knows to abandon ship.
+  // Bumped on reset/dispose so an in-flight loop knows to abandon ship.
   private gen = 0;
+  // Set by stopAuto (Back/Stop): the loop breaks out of play, settles THIS tunnel (fire-and-forget
+  // via the backend), then stops without reopening. Unlike `gen`, it lets the close go through.
+  private stopRequested = false;
   private session: RegisterSessionResult | null = null;
   private heartbeatActions = 0;
   private lastHeartbeatAt = 0;
@@ -345,6 +353,7 @@ class AutoSession {
       return;
     }
     this.gen += 1;
+    this.stopRequested = false;
     this.clearNext();
     this.error = null;
     this.auto = true;
@@ -362,6 +371,11 @@ class AutoSession {
    *  funding, or while already running. In DOPAMINT mode `funded` is always true. */
   autoStartOnLoad = () => {
     if (this.didAutoStart || this.status !== "idle" || !this.funded) return;
+    // Gate auto-start behind a connected wallet: the bots self-fund (faucet + sponsored gas) and
+    // never spend the user's coins, but auto-opening sponsored tunnels on every bare page load would
+    // burn backend gas with no user in the loop. Require a wallet connect first, like every other
+    // game; once connected, the hook effect re-fires and this proceeds. (Manual Start is unaffected.)
+    if (!this.deps?.account) return;
     this.didAutoStart = true;
     // Brief delay so the window/table mounts first. Stored in nextTimer so stop/reset/dispose cancel
     // it (via clearNext) if the window closes within the delay.
@@ -373,9 +387,11 @@ class AutoSession {
   };
 
   stopAuto = () => {
-    // Fire-and-forget: bump `gen` so the in-flight match/settle abandons ship, and end the run NOW so
-    // the user can Back out immediately without waiting for the current tunnel's settle.
-    this.gen += 1;
+    // Fire-and-forget CLOSE: signal the loop to finish the current tunnel — it leaves play, fires the
+    // cooperative settle (the backend queues/processes the HTTP), then stops (auto=false → no reopen).
+    // The settle runs in the background store, so the user Backs out immediately without a stranded
+    // open tunnel. (reset/dispose still bump `gen` to hard-abandon; this one lets the close through.)
+    this.stopRequested = true;
     this.auto = false;
     this.clearNext();
     this.endRun();
@@ -383,6 +399,7 @@ class AutoSession {
 
   reset = () => {
     this.gen += 1;
+    this.stopRequested = false;
     this.clearNext();
     this.auto = false;
     this.tunnel = null;
@@ -474,25 +491,50 @@ class AutoSession {
     const coinType = dopamintOn ? DOPAMINT_COIN_TYPE : undefined;
 
     try {
+      // ADR-0013: the autonomous bot A is the tx sender, so withdraw the stake from BOT A's
+      // address balance (top it up first). Withdrawals don't pin a coin version → concurrent
+      // bot opens across games never equivocate.
+      if (dopamintOn && isDopamintAddressBalance)
+        await ensureDopamintAddressBalance({
+          client: this.deps.client as never,
+          signExec: this.botSponsoredSignExec(this.bots.A),
+          owner: this.bots.A.address,
+          need: 2n * stakePerSeat,
+        });
       const tunnelId = await openAndFundSelfPlay({
         reads,
         signExec: dopamintOn
           ? this.botSponsoredSignExec(this.bots.A)
           : this.botSignExec(this.bots.A),
-        partyA: { address: this.bots.A.address, publicKey: this.bots.A.publicKey },
-        partyB: { address: this.bots.B.address, publicKey: this.bots.B.publicKey },
+        partyA: {
+          address: this.bots.A.address,
+          publicKey: this.bots.A.publicKey,
+        },
+        partyB: {
+          address: this.bots.B.address,
+          publicKey: this.bots.B.publicKey,
+        },
         aAmount: stakePerSeat,
         bAmount: stakePerSeat,
         coinType,
-        // Self-play funds both seats from one coin, so faucet/select for the 2-seat total.
-        stakeCoinId: dopamintOn
-          ? await ensureDopamintStakeCoin({
-              client: this.deps.client as never,
-              signExec: this.botSponsoredSignExec(this.bots.A),
-              owner: this.bots.A.address,
-              need: 2n * stakePerSeat,
-            })
-          : undefined,
+        // Self-play funds both seats from one source, so withdraw/faucet for the 2-seat total.
+        ...(dopamintOn
+          ? isDopamintAddressBalance
+            ? {
+                stakeFromBalance: {
+                  amount: 2n * stakePerSeat,
+                  coinType: DOPAMINT_COIN_TYPE,
+                },
+              }
+            : {
+                stakeCoinId: await ensureDopamintStakeCoin({
+                  client: this.deps.client as never,
+                  signExec: this.botSponsoredSignExec(this.bots.A),
+                  owner: this.bots.A.address,
+                  need: 2n * stakePerSeat,
+                }),
+              }
+          : {}),
       });
       if (this.gen !== myGen) return;
 
@@ -537,7 +579,13 @@ class AutoSession {
         this.session = await getControlPlaneClient().registerSession({
           userAddress: this.deps?.account?.address ?? this.bots.A.address,
           game: "quantum-poker",
-          tunnels: [{ tunnelId, partyA: this.bots.A.address, partyB: this.bots.B.address }],
+          tunnels: [
+            {
+              tunnelId,
+              partyA: this.bots.A.address,
+              partyB: this.bots.B.address,
+            },
+          ],
         });
       } catch (e) {
         console.error("[poker auto] registerSession failed:", e);
@@ -546,10 +594,20 @@ class AutoSession {
       let ts = 1n;
       let pending = 0;
       let lastFlush = Date.now();
-      const FLUSH_MS = 80;
+      // Frame budget: step moves synchronously, then render + yield once per budget. 16ms ≈ one
+      // 60Hz display frame — the smoothest a standard screen can show, so dropping below it (e.g.
+      // battleship's 8ms) only burns extra renders the monitor never paints, costing TPS for no
+      // visible gain. At 16ms the watch-bot repaints smoothly instead of in 80ms jerks while keeping
+      // render overhead low. Only the local render + counter batch run per budget; the network
+      // heartbeat self-throttles to ≤1/s (flushHeartbeat), so a tight budget never floods the backend.
+      const FLUSH_MS = 16;
       const flush = async () => {
         if (pending > 0) {
-          this.deps?.report.bumpCounters({ updates: pending, signatures: pending * 2, verifications: pending * 2 });
+          this.deps?.report.bumpCounters({
+            updates: pending,
+            signatures: pending * 2,
+            verifications: pending * 2,
+          });
           pending = 0;
         }
         this.flushHeartbeat(tunnelId, false);
@@ -560,6 +618,7 @@ class AutoSession {
       let prevHandNo = tunnel.state.handNo;
       while (tunnel.state.phase !== "done") {
         if (this.gen !== myGen) return;
+        if (this.stopRequested) break; // Back/Stop → leave play, settle this tunnel below, then stop
         const r = stepPokerAuto(tunnel, botA, botB, ts++);
         if (!r) break;
         this.actions += 1;
@@ -575,7 +634,11 @@ class AutoSession {
       }
       // Final flush — force the heartbeat so the last window is never dropped.
       if (pending > 0) {
-        this.deps?.report.bumpCounters({ updates: pending, signatures: pending * 2, verifications: pending * 2 });
+        this.deps?.report.bumpCounters({
+          updates: pending,
+          signatures: pending * 2,
+          verifications: pending * 2,
+        });
         pending = 0;
       }
       this.flushHeartbeat(tunnelId, true);
@@ -586,11 +649,11 @@ class AutoSession {
       this.pushView();
       this.deps.report.bumpCounters({ tunnelsClosed: 1, settlements: 1 });
       this.deps.report.setActive(0);
-      // Fire-and-forget the settle: the next tunnel opens on the normal cadence while this close is
-      // processed in the background. We never block the loop on a tunnel's settle. The persona label
-      // is captured now so the background log isn't relabelled by the next match.
-      const matchLabel = `${this.personas?.a ?? "Bot A"} vs ${this.personas?.b ?? "Bot B"}`;
-      void settlePokerTunnel({
+      // AWAIT the close before opening the next tunnel. The close and the next open share mutable
+      // objects (the sponsor's gas coin, bot A's stake coins, the faucet), so running them
+      // concurrently equivocates those objects — the sponsor then fails with "object … unavailable
+      // for consumption (needs to be rebuilt)" and risks a 1/3-validator lock. Serializing avoids it.
+      const settled = await settlePokerTunnel({
         tunnel,
         transcript,
         tunnelId,
@@ -599,23 +662,21 @@ class AutoSession {
         fallbackSignExec: dopamintOn
           ? this.botSponsoredSignExec(this.bots.A)
           : this.botSignExec(this.bots.A),
-      })
-        .then((settled) => {
-          this.deps?.report.pushLocalTxn({
-            id: ++this.txnId,
-            game: "quantum-poker",
-            time: new Date().toLocaleTimeString("en-GB"),
-            bot: matchLabel,
-            type: `settled · ${HAND_CAP} hands`,
-            status: "Success",
-            amount: settled.proofUrl ? "walrus ✓" : "closed",
-          });
-        })
-        .catch((e) =>
-          console.error("[quantum-poker] auto settle failed (fire-and-forget):", e),
-        );
+      });
+      this.deps?.report.pushLocalTxn({
+        id: ++this.txnId,
+        game: "quantum-poker",
+        time: new Date().toLocaleTimeString("en-GB"),
+        bot: `${this.personas?.a ?? "Bot A"} vs ${this.personas?.b ?? "Bot B"}`,
+        type: `settled · ${HAND_CAP} hands`,
+        status: "Success",
+        amount: settled.proofUrl ? "walrus ✓" : "closed",
+      });
+      if (this.gen !== myGen) return;
 
-      void this.refreshBalances();
+      await this.refreshBalances();
+      if (this.gen !== myGen) return;
+
       this.bookMatch(myGen);
     } catch (e) {
       if (this.gen !== myGen) return;
@@ -663,9 +724,7 @@ function getAutoSession(windowId: string): AutoSession {
   return session;
 }
 
-export function useQuantumPokerAuto(
-  windowId: string,
-): QuantumPokerAutoSession {
+export function useQuantumPokerAuto(windowId: string): QuantumPokerAutoSession {
   const { report } = useTelemetry();
   const client = useSuiClient();
   const account = useCurrentAccount();
@@ -692,7 +751,7 @@ export function useQuantumPokerAuto(
   // Auto-start the bot loop on load (deps are wired above), so watch-bot runs without a manual Start.
   useEffect(() => {
     session.autoStartOnLoad();
-  }, [session, snap.status, snap.funded]);
+  }, [session, snap.status, snap.funded, account?.address]);
   return {
     status: snap.status,
     personas: snap.personas,

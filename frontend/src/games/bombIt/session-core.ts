@@ -4,8 +4,19 @@
  * on-chain open/close; BombBoard.tsx (Vite-bundled) owns rendering.
  */
 import type { Party } from "sui-tunnel-ts/protocol/Protocol";
-import type { BombItProtocol, BombItState, BombItMove, BombItAction } from "sui-tunnel-ts/protocol/bombIt";
+import type {
+  BombItProtocol,
+  BombItState,
+  BombItMove,
+  BombItAction,
+} from "sui-tunnel-ts/protocol/bombIt";
 import type { OffchainTunnel } from "sui-tunnel-ts/core/tunnel";
+import type {
+  MultiGameBombItProtocol,
+  MultiGameBombItState,
+  MultiGameBombItMove,
+} from "sui-tunnel-ts/protocol/multiGameBombIt";
+import type { GameBot } from "@/agent/gameKit";
 
 /**
  * Solo tick cadence (one co-signed tick per this many ms). Bomb It is a REACTION game: unlike
@@ -69,8 +80,17 @@ export function deriveView(state: BombItState): BombItView {
   return {
     tick: Number(state.tick),
     grid: Array.from(state.grid),
-    players: state.players.map((p) => ({ row: p.row, col: p.col, alive: p.alive })),
-    bombs: state.bombs.map((b) => ({ row: b.row, col: b.col, fuse: b.fuse, owner: b.owner })),
+    players: state.players.map((p) => ({
+      row: p.row,
+      col: p.col,
+      alive: p.alive,
+    })),
+    bombs: state.bombs.map((b) => ({
+      row: b.row,
+      col: b.col,
+      fuse: b.fuse,
+      owner: b.owner,
+    })),
     winner: state.winner,
     balanceA: Number(state.balanceA),
     balanceB: Number(state.balanceB),
@@ -82,4 +102,64 @@ export function sessionResult(state: BombItState): BombItResult {
   if (state.winner === "B") return "B";
   // winner === "draw" OR null (in-progress): both map to the neutral "draw" result.
   return "draw";
+}
+
+// ---------------------------------------------------------------------------
+// Multi-game helpers
+// ---------------------------------------------------------------------------
+
+export type StepOutcome = "stepped" | "game-over" | "session-over";
+
+/**
+ * Advance a multi-game self-play duel by one tick. Returns:
+ *  - "stepped"      one inner tick co-signed;
+ *  - "game-over"    the inner duel is terminal but the session can fund another
+ *                   (caller records the score, then kickoffNextGame to rematch);
+ *  - "session-over" stake exhausted — caller settles.
+ * Parity reads inner.tick (the multi-game state has no top-level tick). The auto move comes
+ * from the seat's kit bot (`bots[by].plan`) — the canonical move source shared with the agent
+ * harness — so the kit is the single source of bot behavior; a human seat overrides its own.
+ */
+export function stepMultiGame(
+  protocol: MultiGameBombItProtocol,
+  tunnel: OffchainTunnel<MultiGameBombItState, BombItMove>,
+  bots: Record<Party, GameBot<MultiGameBombItState, MultiGameBombItMove>>,
+  human?: HumanSeat | null,
+): StepOutcome {
+  if (protocol.isTerminal(tunnel.state)) return "session-over";
+  if (protocol.isGameOver(tunnel.state)) return "game-over";
+  const by: Party = tunnel.state.inner.tick % 2n === 0n ? "A" : "B";
+  let move: BombItMove | null;
+  if (human && human.seat === by) {
+    const a = human.getAction();
+    move = by === "A" ? { a } : { b: a };
+  } else {
+    move = bots[by].plan(tunnel.state);
+  }
+  if (!move) return "game-over";
+  tunnel.step(move, by);
+  return "stepped";
+}
+
+/**
+ * Start the next duel on the SAME tunnel: seat A's "stay" first move, which the wrapper
+ * turns into a fresh-duel reset (new per-game seed, balances carried). A stay is always
+ * legal on a fresh board, so no bot lookahead on a not-yet-built state.
+ */
+export function kickoffNextGame(
+  tunnel: OffchainTunnel<MultiGameBombItState, BombItMove>,
+): void {
+  tunnel.step({ a: "stay" }, "A");
+}
+
+/**
+ * Render view for a multi-game duel: inner positions, but the REAL carried balances
+ * from the wrapper (the inner duel's balances are symbolic per-game).
+ */
+export function deriveMultiView(state: MultiGameBombItState): BombItView {
+  return {
+    ...deriveView(state.inner),
+    balanceA: Number(state.balanceA),
+    balanceB: Number(state.balanceB),
+  };
 }

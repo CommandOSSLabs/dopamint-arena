@@ -19,6 +19,7 @@ import {
   buildSettleWithRootTx,
   parseTunnelId,
 } from "@/games/ticTacToe/app/lib/tunnel";
+import { submitRebuildingOnStale } from "@/onchain/tunnelTx";
 import {
   loadOrCreateBots,
   getSuiClient,
@@ -30,7 +31,9 @@ import {
 import { makeKeypairSponsoredSignExec } from "@/onchain/sponsor";
 import {
   DOPAMINT_COIN_TYPE,
+  ensureDopamintAddressBalance,
   ensureDopamintStakeCoin,
+  isDopamintAddressBalance,
   isDopamintConfigured,
 } from "@/onchain/dopamint";
 import type { Difficulty } from "@/games/ticTacToe/app/hooks/useBotGame";
@@ -93,6 +96,12 @@ export interface CaroBotGameView {
   /** Begin a session. autoOn = start in watch (both bots); false = start in manual (you play X). */
   startAuto: (autoOn?: boolean) => void;
   stopAuto: () => void;
+  /** Hover-pause: the auto-play step-loop is frozen in place. */
+  paused: boolean;
+  /** Freeze the running auto-play loop (hover). No-op when not mid-play. */
+  pause: () => void;
+  /** Resume a frozen auto-play loop from where it stopped. */
+  resume: () => void;
 }
 
 function loadScore(): BotScore {
@@ -140,6 +149,8 @@ export function useCaroBotGame(
   const [maxGames, setMaxGamesState] = useState<number>(DEFAULT_MAX_GAMES);
   const [currentGame, setCurrentGame] = useState<number>(1);
   const [balancesLoaded, setBalancesLoaded] = useState(false);
+  // Hover-pause (the shared cabinet shell freezes the auto-play while you decide).
+  const [paused, setPaused] = useState(false);
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const nextRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -150,6 +161,9 @@ export function useCaroBotGame(
   // A user-queued cell (X) the running interval applies on its next tick — reuses the loop's
   // single step/telemetry/score site.
   const pendingCellRef = useRef<number | null>(null);
+  // Hover-pause latch (see useBotGame): read at the top of each tick so a hovered cabinet freezes
+  // the loop. The interval keeps firing harmless no-op ticks, so there's no timer to stop/re-arm.
+  const pausedRef = useRef(false);
   const balancesRef = useRef<{ x: bigint; o: bigint }>({ x: 0n, o: 0n });
   const runRef = useRef<() => void>(() => {});
   const difficultyRef = useRef<Difficulty>(difficulty);
@@ -324,18 +338,35 @@ export function useCaroBotGame(
         let tunnelId: string;
         let createDigest: string;
         if (dopamintOn && xSignExec) {
-          // Self-play funds BOTH seats from one coin, so faucet/select for the 2-seat total.
-          const stakeCoinId = await ensureDopamintStakeCoin({
-            client: client as never,
-            signExec: xSignExec,
-            owner: bots.x.address,
-            need: 2n * stakePerSeat,
-          });
-          const { digest } = await xSignExec(
-            buildCreateAndFundTx(partyX, partyO, stakePerSeat, {
-              coinType,
-              stakeCoinId,
-            }),
+          // Self-play funds BOTH seats from one source, so withdraw/faucet for the 2-seat total.
+          // ADR-0013: bot X is the sender, so its address balance is the stake source.
+          const stakeOpt = isDopamintAddressBalance
+            ? (await ensureDopamintAddressBalance({
+                client: client as never,
+                signExec: xSignExec,
+                owner: bots.x.address,
+                need: 2n * stakePerSeat,
+              }),
+              {
+                coinType,
+                stakeFromBalance: {
+                  amount: 2n * stakePerSeat,
+                  coinType: DOPAMINT_COIN_TYPE,
+                },
+              })
+            : {
+                coinType,
+                stakeCoinId: await ensureDopamintStakeCoin({
+                  client: client as never,
+                  signExec: xSignExec,
+                  owner: bots.x.address,
+                  need: 2n * stakePerSeat,
+                }),
+              };
+          const { digest } = await submitRebuildingOnStale(
+            () => buildCreateAndFundTx(partyX, partyO, stakePerSeat, stakeOpt),
+            xSignExec,
+            "caro bot open",
           );
           await client.waitForTransaction({ digest });
           const txb = await client.getTransactionBlock({
@@ -424,14 +455,20 @@ export function useCaroBotGame(
         };
 
         pendingCellRef.current = null; // drop any cell queued during the inter-tunnel gap
+        pausedRef.current = false; // a fresh tunnel never inherits a stale hover-pause
+        setPaused(false);
         await new Promise<void>((resolve, reject) => {
           let steps = 0;
           const delay = difficultyRef.current === "fast" ? 30 : STEP_MS;
-          timerRef.current = setInterval(() => {
+          const finish = () => {
+            stopTimer();
+            resolve();
+          };
+          const tick = () => {
+            if (pausedRef.current) return; // hover-paused: freeze on this frame
             try {
               if (proto.isTerminal(tunnel.state)) {
-                stopTimer();
-                resolve();
+                finish();
                 return;
               }
               if (steps++ >= maxSteps)
@@ -510,8 +547,8 @@ export function useCaroBotGame(
               }
 
               if (proto.isTerminal(next)) {
-                stopTimer();
-                resolve();
+                finish();
+                return;
               }
 
               flushHeartbeat(tunnelId, false);
@@ -519,7 +556,8 @@ export function useCaroBotGame(
               stopTimer();
               reject(err);
             }
-          }, delay);
+          };
+          timerRef.current = setInterval(tick, delay);
         });
 
         const finalInner = tunnel.state.inner;
@@ -537,7 +575,7 @@ export function useCaroBotGame(
         const backendDigest = await settleViaBackend({
           tunnelId,
           settlement: s,
-          transcript: transcript.toRecord().entries,
+          transcript: transcript.rawEntries(),
           label: "tictactoe",
           fallbackClose: async () => {
             // DOPAMINT mode: close via the sponsored signer (no SUI); else bot X's keypair.
@@ -640,6 +678,18 @@ export function useCaroBotGame(
   const setAuto = useCallback((on: boolean) => {
     autoRef.current = on;
     setAutoState(on);
+  }, []);
+
+  // Hover-pause: set the latch and the running tick no-ops each frame (the loop's `await` never
+  // resolves, so it freezes mid-session); resume clears it and the next tick steps again.
+  const pause = useCallback(() => {
+    pausedRef.current = true;
+    setPaused(true);
+  }, []);
+
+  const resume = useCallback(() => {
+    pausedRef.current = false;
+    setPaused(false);
   }, []);
 
   // Queue your (X) move for the running interval to apply. No-op unless it's actually your turn
@@ -757,6 +807,9 @@ export function useCaroBotGame(
     newGame,
     startAuto,
     stopAuto,
+    paused,
+    pause,
+    resume,
   };
 }
 

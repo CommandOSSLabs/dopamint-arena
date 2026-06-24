@@ -43,32 +43,6 @@ export interface TunnelEvent {
   proofUrl: string | null;
 }
 
-/** One JSON-serializable transcript entry (a `Transcript.toRecord().entries` element). */
-export interface SettleTranscriptEntry {
-  nonce: string;
-  message: string;
-  sigA: string;
-  sigB: string;
-}
-
-/** Backend /settle `settlement` object (ADR-0002 camelCase; u64 -> decimal string, 32-byte -> hex). */
-export interface SettleSettlement {
-  tunnelId: string;
-  partyABalance: string;
-  partyBBalance: string;
-  finalNonce: string;
-  timestamp: string;
-  transcriptRoot: string;
-}
-
-/** Full /settle request body: the co-signed settlement + raw sigs + the Walrus-bound transcript. */
-export interface SettleRequestBody {
-  settlement: SettleSettlement;
-  sigA: string;
-  sigB: string;
-  transcript: SettleTranscriptEntry[];
-}
-
 /** Proof links returned after the settler submits close_cooperative_with_root + Walrus archive. */
 export interface SettleResult {
   txDigest: string;
@@ -107,9 +81,10 @@ export interface ControlPlaneClient {
   ): Promise<void>;
   /** Route a cooperative close through the backend: the settler dry-runs + submits
    *  close_cooperative_with_root (anchoring the transcript root), archives the transcript to
-   *  Walrus, and returns the proof links. Authorization is the co-signed settlement in `body`
-   *  (ADR-0007) — no session token. */
-  settle(tunnelId: string, body: SettleRequestBody): Promise<SettleResult>;
+   *  Walrus, and returns the proof links. `body` is the v2 binary settle blob (octet-stream),
+   *  POSTed verbatim and archived to Walrus byte-identical. Authorization is the co-signed
+   *  settlement encoded in `body` (ADR-0007) — no session token. */
+  settle(tunnelId: string, body: Uint8Array): Promise<SettleResult>;
   /** Subscribe to the live aggregate SSE feed; returns an unsubscribe fn. */
   openStatsStream(handlers: StatsStreamHandlers): () => void;
 }
@@ -177,8 +152,10 @@ export function createControlPlaneClient(baseUrl: string): ControlPlaneClient {
     async settle(tunnelId, body) {
       const res = await fetch(`${root}/v1/tunnels/${tunnelId}/settle`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
+        headers: { "content-type": "application/octet-stream" },
+        // TS 5.7 types Uint8Array as Uint8Array<ArrayBufferLike>, which the DOM BodyInit union
+        // no longer accepts directly; the bytes are a valid fetch body at runtime, sent verbatim.
+        body: body as BodyInit,
       });
       await failIfNotOk(res, "settle");
       return (await res.json()) as SettleResult;
@@ -206,7 +183,7 @@ export function createControlPlaneClient(baseUrl: string): ControlPlaneClient {
  * an absolute URL only for a split-origin backend on its own https host (then CORS applies).
  */
 export function resolveBackendUrl(): string {
-  return import.meta.env.VITE_BACKEND_URL ?? "";
+  return import.meta.env?.VITE_BACKEND_URL ?? "";
 }
 
 let cachedClient: ControlPlaneClient | undefined;

@@ -17,7 +17,11 @@ import {
 } from "@/games/blackjack/app/lib/bjPvpOnchain";
 import { useSponsoredSignExec } from "@/onchain/useSponsoredSignExec";
 import { withSponsorFallback } from "@/onchain/sponsor";
-import { DOPAMINT_COIN_TYPE, isDopamintConfigured } from "@/onchain/dopamint";
+import {
+  DOPAMINT_COIN_TYPE,
+  isDopamintAddressBalance,
+  isDopamintConfigured,
+} from "@/onchain/dopamint";
 import { handValue } from "@/games/blackjack/app/lib/bjCards";
 import {
   MpClient,
@@ -27,7 +31,10 @@ import {
   type PvpChannel,
 } from "@/pvp/mpClient";
 import { attachResume, resumeActiveTunnels } from "@/pvp/resumeSession";
-import { raiseDisputeUnilateral } from "@/onchain/tunnelTx";
+import {
+  raiseDisputeUnilateral,
+  submitRebuildingOnStale,
+} from "@/onchain/tunnelTx";
 import { makeBlackjackResumeAdapter } from "@/games/blackjack/blackjackResumeAdapter";
 import {
   installResumePersistence,
@@ -319,7 +326,7 @@ export function usePvpBlackjack(): PvpView {
           tunnelId: t.tunnelId,
           settlement: coSigned as any,
           transcript: transcriptRef.current
-            ? transcriptRef.current.toRecord().entries
+            ? transcriptRef.current.rawEntries()
             : [],
           label: "blackjack",
           fallbackClose: async () => {
@@ -661,14 +668,12 @@ export function usePvpBlackjack(): PvpView {
         // DOPAMINT: deposit this seat's buy-in from a faucet-minted DOPAMINT coin, sponsored (the
         // faucet itself needs the sponsor, so no sender-pays fallback). SUI: sponsored stake with a
         // sender-pays fallback (ADR-0009).
-        const dep = isDopamintConfigured
-          ? await submitSponsored(
-              buildDepositTx(tunnelId, myStake, {
-                coinType,
-                stakeCoinId: await sponsored.prepareStake(myStake),
-              }),
-            )
-          : await withSponsorFallback(
+        // ADR-0013: withdraw this seat's buy-in from the wallet's address balance (top up first).
+        // Retry (rebuild) through checkpoint-settlement lag instead of erroring out.
+        if (isDopamintConfigured && isDopamintAddressBalance)
+          await sponsored.ensureStakeBalance(myStake);
+        const dep = !isDopamintConfigured
+          ? await withSponsorFallback(
               async () =>
                 submitSponsored(
                   buildDepositTx(tunnelId, myStake, {
@@ -677,7 +682,26 @@ export function usePvpBlackjack(): PvpView {
                 ),
               () => submit(buildDepositTx(tunnelId, myStake)),
               "blackjack pvp deposit",
-            );
+            )
+          : isDopamintAddressBalance
+            ? await submitRebuildingOnStale(
+                () =>
+                  buildDepositTx(tunnelId, myStake, {
+                    coinType,
+                    stakeFromBalance: {
+                      amount: myStake,
+                      coinType: DOPAMINT_COIN_TYPE,
+                    },
+                  }),
+                submitSponsored,
+                "blackjack pvp deposit",
+              )
+            : await submitSponsored(
+                buildDepositTx(tunnelId, myStake, {
+                  coinType,
+                  stakeCoinId: await sponsored.prepareStake(myStake),
+                }),
+              );
         setDigests((d) => ({ ...d, deposit: dep.digest }));
         let activated = false;
         for (let i = 0; i < 40; i++) {

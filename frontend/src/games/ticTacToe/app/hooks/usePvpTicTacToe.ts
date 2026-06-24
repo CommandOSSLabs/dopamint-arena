@@ -39,7 +39,10 @@ import {
   type PvpChannel,
 } from "@/pvp/mpClient";
 import { attachResume, resumeActiveTunnels } from "@/pvp/resumeSession";
-import { raiseDisputeUnilateral } from "@/onchain/tunnelTx";
+import {
+  raiseDisputeUnilateral,
+  submitRebuildingOnStale,
+} from "@/onchain/tunnelTx";
 import {
   installResumePersistence,
   evictExpiredRecords,
@@ -49,7 +52,11 @@ import {
 import { makeTttResumeAdapter } from "@/games/ticTacToe/app/lib/tttResumeAdapter";
 import { useSponsoredSignExec } from "@/onchain/useSponsoredSignExec";
 import { withSponsorFallback } from "@/onchain/sponsor";
-import { DOPAMINT_COIN_TYPE, isDopamintConfigured } from "@/onchain/dopamint";
+import {
+  DOPAMINT_COIN_TYPE,
+  isDopamintAddressBalance,
+  isDopamintConfigured,
+} from "@/onchain/dopamint";
 
 export type Variant = "ttt" | "caro";
 
@@ -303,7 +310,7 @@ export function usePvpTicTacToe(
           tunnelId: t.tunnelId,
           settlement: coSigned as any,
           transcript: transcriptRef.current
-            ? transcriptRef.current.toRecord().entries
+            ? transcriptRef.current.rawEntries()
             : [],
           label: "tictactoe",
           fallbackClose: async () => {
@@ -622,14 +629,33 @@ export function usePvpTicTacToe(
         setPhase("funding");
         const dep = dopamintOn
           ? await withSponsorFallback(
-              async () =>
-                submitSponsored(
+              async () => {
+                // ADR-0013: withdraw this seat's deposit from the wallet's address balance. Retry
+                // (rebuild) through checkpoint-settlement lag rather than fall through to the
+                // sender-pays branch (which can't help an address-balance stake).
+                if (isDopamintAddressBalance) {
+                  await sponsoredRef.current.ensureStakeBalance(bankroll);
+                  return submitRebuildingOnStale(
+                    () =>
+                      buildDepositTx(tunnelId, bankroll, {
+                        coinType,
+                        stakeFromBalance: {
+                          amount: bankroll,
+                          coinType: DOPAMINT_COIN_TYPE,
+                        },
+                      }),
+                    submitSponsored,
+                    "tictactoe deposit",
+                  );
+                }
+                return submitSponsored(
                   buildDepositTx(tunnelId, bankroll, {
                     coinType,
                     stakeCoinId:
                       await sponsoredRef.current.prepareStake(bankroll),
                   }),
-                ),
+                );
+              },
               async () =>
                 submit(
                   buildDepositTx(tunnelId, bankroll, {

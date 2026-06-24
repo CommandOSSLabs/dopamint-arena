@@ -1,6 +1,6 @@
 import * as aws from "@pulumi/aws";
 import * as pulumi from "@pulumi/pulumi";
-import { getConfig } from "./config.js";
+import { getConfig, resolveBackendImageTag } from "./config.js";
 import { createNetwork } from "./components/Network.js";
 import { createDns } from "./components/Dns.js";
 import { createSecurityGroups } from "./resources/security-groups.js";
@@ -21,6 +21,10 @@ import { createExplorerServices } from "./components/ExplorerServices.js";
 import { githubEnvOutputs } from "./github.js";
 
 const cfg = getConfig();
+const backendImageTag: pulumi.Input<string> = cfg.backendImageTag
+  ? pulumi.output(cfg.backendImageTag)
+  : resolveBackendImageTag(cfg.environment);
+
 const network = createNetwork(`dopamint-${cfg.environment}`);
 const sgs = createSecurityGroups(`dopamint-${cfg.environment}`, network.vpcId);
 
@@ -105,7 +109,7 @@ const cache = createCache(`dopamint-${cfg.environment}`, {
 const backend = createBackend({
   name: `dopamint-${cfg.environment}`,
   repositoryUrl: ecr.repositoryUrl,
-  imageTag: cfg.backendImageTag,
+  imageTag: backendImageTag,
   pubSubEndpoint: cache.pubSubEndpoint,
   cacheEndpoint: cache.cacheEndpoint,
   taskExecutionRoleArn: iam.taskExecutionRole.arn,
@@ -129,7 +133,7 @@ const explorer = createExplorerServices({
   clusterId: ecs.clusterArn,
   clusterName: ecs.clusterName,
   repositoryUrl: ecr.repositoryUrl,
-  imageTag: cfg.backendImageTag,
+  imageTag: backendImageTag,
   logGroupName: ecs.logGroupName,
   taskExecutionRoleArn: iam.taskExecutionRole.arn,
   taskRoleArn: iam.taskRole.arn,

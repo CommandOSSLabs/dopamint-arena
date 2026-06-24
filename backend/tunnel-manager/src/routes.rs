@@ -41,6 +41,8 @@ pub(crate) mod test_support {
             walrus,
             stats_tx,
             actions: crate::stats_counter::LocalActionCounter::default(),
+            pair_hold_ms: 750,
+            pairing: crate::stats_counter::MatchPairingMetrics::default(),
         })
     }
 }
@@ -80,26 +82,62 @@ pub(crate) struct HeartbeatRequest {
     window_ms: u64,
 }
 
-/// Thin envelope over the SDK's `CoSignedSettlementWithRoot` plus the transcript.
-/// `{settlement, sig_a, sig_b}` drives the on-chain close; `transcript` is for Walrus only.
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct SettleRequest {
-    settlement: Settlement,
-    sig_a: String,
-    sig_b: String,
-    transcript: Vec<serde_json::Value>,
+/// The fixed-offset header of the binary `/settle` body (octet-stream). The whole body
+/// (header + length-prefixed entries) is archived to Walrus verbatim; the backend parses only
+/// the header here. Byte-identical to the SDK codec (`encodeSettleBody`), golden-vector-pinned.
+/// `final_nonce` is parsed for the tracing log only — the chain derives the on-chain nonce, so it
+/// is NOT part of `CloseArgs`.
+struct SettleBody {
+    tunnel_id: String,
+    party_a_balance: u64,
+    party_b_balance: u64,
+    final_nonce: u64,
+    timestamp: u64,
+    transcript_root: Vec<u8>,
+    sig_a: Vec<u8>,
+    sig_b: Vec<u8>,
+    update_count: u32,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct Settlement {
-    tunnel_id: String,
-    party_a_balance: String,
-    party_b_balance: String,
-    final_nonce: String,
-    timestamp: String,
-    transcript_root: String,
+const SETTLE_BODY_VERSION: u8 = 0x01;
+const SETTLE_BODY_HEADER_LEN: usize = 229;
+
+/// Parse the binary settle-body header (big-endian, fixed offsets — see the plan layout).
+/// Returns `Err` on a short body or a wrong version byte; the handler maps that to 422 before
+/// touching the settler. Entries past the header are not parsed (only `count` matters); the raw
+/// body is what gets archived.
+fn parse_settle_body(b: &[u8]) -> Result<SettleBody, String> {
+    if b.len() < SETTLE_BODY_HEADER_LEN {
+        return Err(format!(
+            "body too short: {} < {}",
+            b.len(),
+            SETTLE_BODY_HEADER_LEN
+        ));
+    }
+    if b[0] != SETTLE_BODY_VERSION {
+        return Err(format!("unexpected settle version {}", b[0]));
+    }
+    let u64be = |o: usize| u64::from_be_bytes(b[o..o + 8].try_into().unwrap());
+    Ok(SettleBody {
+        tunnel_id: format!("0x{}", hex::encode(&b[1..33])),
+        party_a_balance: u64be(33),
+        party_b_balance: u64be(41),
+        final_nonce: u64be(49),
+        timestamp: u64be(57),
+        transcript_root: b[65..97].to_vec(),
+        sig_a: b[97..161].to_vec(),
+        sig_b: b[161..225].to_vec(),
+        update_count: u32::from_be_bytes(b[225..229].try_into().unwrap()),
+    })
+}
+
+/// Normalize a Sui object/tunnel id for equality: strip an optional `0x`, lowercase, left-pad to
+/// 32 bytes (64 hex). The path id is a free-form URL string (possibly shorthand like `0x1` or
+/// mixed-case); the body id is always full lowercase. Comparing normalized forms prevents a valid
+/// settle being falsely rejected by `tunnel_mismatch` on a mere format difference.
+fn normalize_tunnel_id(id: &str) -> String {
+    let h = id.trim_start_matches("0x").to_ascii_lowercase();
+    format!("{h:0>64}")
 }
 
 pub(crate) async fn health() -> &'static str {
@@ -186,20 +224,32 @@ pub(crate) async fn heartbeat(
 pub(crate) async fn settle(
     State(state): State<SharedState>,
     Path(tunnel_id): Path<String>,
-    Json(req): Json<SettleRequest>,
+    body: axum::body::Bytes,
 ) -> Response {
+    let p = match parse_settle_body(&body) {
+        Ok(p) => p,
+        Err(e) => {
+            return ApiError::resp(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "bad_settlement",
+                &format!("invalid settle body: {e}"),
+            )
+            .into_response();
+        }
+    };
     tracing::info!(
         %tunnel_id,
-        final_nonce = %req.settlement.final_nonce,
-        balance_a = %req.settlement.party_a_balance,
-        balance_b = %req.settlement.party_b_balance,
-        transcript_len = req.transcript.len(),
+        final_nonce = p.final_nonce,
+        balance_a = p.party_a_balance,
+        balance_b = p.party_b_balance,
+        update_count = p.update_count,
         "settle requested"
     );
 
     // The signed settlement commits to its own tunnelId; a path/body mismatch is a client bug
-    // or a misroute, never a thing to sponsor gas for.
-    if req.settlement.tunnel_id != tunnel_id {
+    // or a misroute, never a thing to sponsor gas for. Compare normalized (the body id is full
+    // lowercase, the path may be shorthand/mixed-case) so a valid settle isn't falsely rejected.
+    if normalize_tunnel_id(&p.tunnel_id) != normalize_tunnel_id(&tunnel_id) {
         return ApiError::resp(
             StatusCode::UNPROCESSABLE_ENTITY,
             "tunnel_mismatch",
@@ -219,39 +269,20 @@ pub(crate) async fn settle(
         .into_response();
     }
 
-    let a = match parse_u64(&req.settlement.party_a_balance, "partyABalance") {
-        Ok(v) => v,
-        Err(e) => return e.into_response(),
-    };
-    let b = match parse_u64(&req.settlement.party_b_balance, "partyBBalance") {
-        Ok(v) => v,
-        Err(e) => return e.into_response(),
-    };
-    let ts = match parse_u64(&req.settlement.timestamp, "timestamp") {
-        Ok(v) => v,
-        Err(e) => return e.into_response(),
-    };
-    let transcript_root = match decode_hex(&req.settlement.transcript_root, "transcriptRoot") {
-        Ok(v) => v,
-        Err(e) => return e.into_response(),
-    };
-    let sig_a = match decode_hex(&req.sig_a, "sigA") {
-        Ok(v) => v,
-        Err(e) => return e.into_response(),
-    };
-    let sig_b = match decode_hex(&req.sig_b, "sigB") {
-        Ok(v) => v,
-        Err(e) => return e.into_response(),
-    };
+    let a = p.party_a_balance;
+    let b = p.party_b_balance;
+    let ts = p.timestamp;
+    // The explorer row stores the root as `0x`-prefixed hex (verifyTranscript re-checks it).
+    let transcript_root_hex = format!("0x{}", hex::encode(&p.transcript_root));
 
     let close = crate::sui::CloseArgs {
         tunnel_id: tunnel_id.clone(),
         party_a_balance: a,
         party_b_balance: b,
-        sig_a,
-        sig_b,
+        sig_a: p.sig_a,
+        sig_b: p.sig_b,
         timestamp: ts,
-        transcript_root,
+        transcript_root: p.transcript_root,
     };
     match state.settler.submit_close(close).await {
         Ok(digest) => {
@@ -262,19 +293,10 @@ pub(crate) async fn settle(
                 .control
                 .set_tunnel_status(&tunnel_id, crate::state::TunnelStatus::Closed)
                 .await;
-            // Archive the SDK `ProofRecord` shape the in-browser verifier consumes — the
-            // enclosing { root, entries } object, not a bare entries array. `root` is the
-            // co-signed transcript root (same value anchored on-chain), which verifyTranscript
-            // re-checks against the recomputed Merkle root and the on-chain anchor.
-            let update_count = req.transcript.len();
-            let record = serde_json::json!({
-                "tunnelId": req.settlement.tunnel_id.clone(),
-                "root": req.settlement.transcript_root.clone(),
-                "updateCount": update_count,
-                "entries": req.transcript,
-            });
-            let blob = serde_json::to_vec(&record).unwrap_or_default();
-            let (blob_id, proof_url) = match state.walrus.upload_transcript(blob).await {
+            // Archive the body verbatim — the blob IS the settle body. The in-browser verifier
+            // (verifyTranscript) parses the same fixed-offset bytes and re-checks the
+            // co-signed root against the recomputed Merkle root and the on-chain anchor.
+            let (blob_id, proof_url) = match state.walrus.upload_transcript(body.to_vec()).await {
                 Ok(v) => v,
                 Err(e) => {
                     tracing::error!(%digest, error = %e, "walrus archival failed");
@@ -287,7 +309,7 @@ pub(crate) async fn settle(
                     &tunnel_id,
                     a,
                     b,
-                    &req.settlement.transcript_root,
+                    &transcript_root_hex,
                     &digest,
                     ts,
                     &proof_url,
@@ -392,28 +414,6 @@ fn settled_event(
     }
 }
 
-/// Parse a decimal-string `u64` field, mapping a bad value to `422`.
-pub(crate) fn parse_u64(s: &str, field: &str) -> Result<u64, (StatusCode, Json<ApiError>)> {
-    s.parse::<u64>().map_err(|_| {
-        ApiError::resp(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "bad_settlement",
-            &format!("field `{field}` is not a u64: {s:?}"),
-        )
-    })
-}
-
-/// Decode a `0x`-prefixed hex field, mapping bad hex to `422`.
-fn decode_hex(s: &str, field: &str) -> Result<Vec<u8>, (StatusCode, Json<ApiError>)> {
-    hex::decode(s.trim_start_matches("0x")).map_err(|_| {
-        ApiError::resp(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "bad_settlement",
-            &format!("field `{field}` is not hex"),
-        )
-    })
-}
-
 /// True iff `Authorization: Bearer <token>` is present and equals `expected`.
 fn bearer_matches(headers: &HeaderMap, expected: &str) -> bool {
     headers
@@ -438,21 +438,24 @@ pub(crate) async fn stats_live(
 /// Prometheus text exposition of the live counters.
 pub(crate) async fn metrics(State(state): State<SharedState>) -> impl IntoResponse {
     let snap = state.control.snapshot().await;
+    let (colocated, split) = state.pairing.snapshot();
     (
         [(
             axum::http::header::CONTENT_TYPE,
             "text/plain; version=0.0.4",
         )],
-        render_metrics(&snap),
+        render_metrics(&snap, colocated, split),
     )
 }
 
-fn render_metrics(snap: &StatsSnapshot) -> String {
+fn render_metrics(snap: &StatsSnapshot, colocated: u64, split: u64) -> String {
     format!(
         "# TYPE tunnel_actions_total counter\ntunnel_actions_total {}\n\
          # TYPE tunnel_settled_total counter\ntunnel_settled_total {}\n\
-         # TYPE tunnel_active gauge\ntunnel_active {}\n",
-        snap.total_actions, snap.settled_tunnels, snap.active_tunnels,
+         # TYPE tunnel_active gauge\ntunnel_active {}\n\
+         # TYPE tunnel_matches_colocated_total counter\ntunnel_matches_colocated_total {}\n\
+         # TYPE tunnel_matches_split_total counter\ntunnel_matches_split_total {}\n",
+        snap.total_actions, snap.settled_tunnels, snap.active_tunnels, colocated, split,
     )
 }
 
@@ -461,32 +464,44 @@ mod tests {
     use super::test_support::test_state;
     use super::*;
 
-    // The settle payload MUST deserialize from the exact camelCase JSON the SDK
-    // emits (buildSettlementWithRoot + transcript). A rename here is an
-    // integration break with the 4 game clients — this test pins the contract.
+    // The binary /settle body the SDK codec (`encodeSettleBody`) emits — byte-identical to
+    // the TS golden vector (settleBinary.test.ts). Pasting it here pins TS↔Rust wire parity: a
+    // layout drift on either side breaks the parse asserts below. See the plan §"Shared golden vector".
+    const GOLDEN_HEX: &str = "01000000000000000000000000000000000000000000000000000000000000000100000000000000070000000000000003000000000000000500000000000004d2aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111122222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222000000020078333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444445555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555500786666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666667777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777788888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888";
+
+    // The fixed-offset header parses byte-for-byte to the golden input. `final_nonce` is read
+    // (logged) but NOT carried into CloseArgs — the chain derives the on-chain nonce.
     #[test]
-    fn settle_request_matches_sdk_camelcase_json() {
-        let json = r#"{
-            "settlement": {
-                "tunnelId": "0x1", "partyABalance": "1500", "partyBBalance": "500",
-                "finalNonce": "1", "timestamp": "1750000000000", "transcriptRoot": "0xabc"
-            },
-            "sigA": "0xaa", "sigB": "0xbb", "transcript": []
-        }"#;
-        let req: SettleRequest = serde_json::from_str(json).expect("valid settle payload");
-        assert_eq!(req.settlement.tunnel_id, "0x1");
-        assert_eq!(req.settlement.party_a_balance, "1500");
-        assert_eq!(req.settlement.final_nonce, "1");
-        assert_eq!(req.sig_a, "0xaa");
-        assert!(req.transcript.is_empty());
+    fn parse_settle_body_reads_header_from_golden_vector() {
+        let bytes = hex::decode(GOLDEN_HEX).expect("golden hex decodes");
+        let p = parse_settle_body(&bytes).expect("valid settle body");
+        assert_eq!(p.tunnel_id, "0x".to_owned() + &"00".repeat(31) + "01");
+        assert_eq!(p.party_a_balance, 7);
+        assert_eq!(p.party_b_balance, 3);
+        assert_eq!(p.final_nonce, 5);
+        assert_eq!(p.timestamp, 1234);
+        assert_eq!(p.transcript_root, vec![0xaa; 32]);
+        assert_eq!(p.sig_a, vec![0x11; 64]);
+        assert_eq!(p.sig_b, vec![0x22; 64]);
+        assert_eq!(p.update_count, 2);
     }
 
+    // A wrong version byte is a client/version bug — reject before the settler (mapped to 422).
     #[test]
-    fn parse_helpers_reject_garbage() {
-        assert!(parse_u64("not-a-number", "partyABalance").is_err());
-        assert_eq!(parse_u64("1500", "partyABalance").unwrap(), 1500);
-        assert!(decode_hex("zz", "sigA").is_err());
-        assert_eq!(decode_hex("0x00ff", "sigA").unwrap(), vec![0, 255]);
+    fn parse_settle_body_rejects_bad_version() {
+        let mut bytes = hex::decode(GOLDEN_HEX).expect("golden hex decodes");
+        bytes[0] = 0x02;
+        assert!(parse_settle_body(&bytes).is_err());
+    }
+
+    // Two ids resolve to the same on-chain object iff their normalized forms match: shorthand
+    // (`0x1`), full lowercase, and mixed-case all collapse so a valid settle isn't false-rejected.
+    #[test]
+    fn normalize_tunnel_id_collapses_format_differences() {
+        let full = "0x".to_owned() + &"00".repeat(31) + "01";
+        assert_eq!(normalize_tunnel_id("0x1"), normalize_tunnel_id(&full));
+        assert_eq!(normalize_tunnel_id("0xABC"), normalize_tunnel_id("0xabc"));
+        assert_ne!(normalize_tunnel_id("0x1"), normalize_tunnel_id("0x2"));
     }
 
     #[test]
@@ -539,44 +554,45 @@ mod tests {
         assert!(ev.transcript_root.is_none(), "empty root → no anchor");
     }
 
-    // The exact camelCase settle JSON the SDK emits (tunnelId "0x1"), reused by the guard tests.
-    const SAMPLE_SETTLE_JSON: &str = r#"{
-        "settlement": {
-            "tunnelId": "0x1", "partyABalance": "1500", "partyBBalance": "500",
-            "finalNonce": "1", "timestamp": "1750000000000", "transcriptRoot": "0xabc"
-        },
-        "sigA": "0xaa", "sigB": "0xbb", "transcript": []
-    }"#;
+    // The golden settle body, whose tunnelId is 0x00..01 — reused by the guard tests as the request body.
+    fn sample_settle_body() -> axum::body::Bytes {
+        axum::body::Bytes::from(hex::decode(GOLDEN_HEX).expect("golden hex decodes"))
+    }
+
+    // The 0x-prefixed full-length form of the golden body's tunnelId (normalizes equal to it).
+    fn golden_tunnel_id() -> String {
+        "0x".to_owned() + &"00".repeat(31) + "01"
+    }
 
     // ADR-0007: the signed settlement commits to its tunnelId, so a path/body mismatch is a
     // client bug or a misroute — reject before any RPC, never sponsor gas for it.
     #[tokio::test]
     async fn settle_rejects_path_tunnel_mismatch() {
         let state = test_state();
-        let req: SettleRequest = serde_json::from_str(SAMPLE_SETTLE_JSON).unwrap();
         let resp = settle(
             axum::extract::State(state),
             axum::extract::Path("0xDIFFERENT".to_string()),
-            axum::Json(req),
+            sample_settle_body(),
         )
         .await;
         assert_eq!(resp.status(), axum::http::StatusCode::UNPROCESSABLE_ENTITY);
     }
 
     // 409 when the event-derived registry already shows this tunnel closed — a free reject that
-    // never reaches the settler (idempotency; ADR-0007 keeps this guard).
+    // never reaches the settler (idempotency; ADR-0007 keeps this guard). The path uses the full
+    // form of the body's id so the mismatch guard passes and the conflict guard is what fires.
     #[tokio::test]
     async fn settle_conflicts_when_already_closed() {
         let state = test_state();
+        let path = golden_tunnel_id();
         state
             .control
-            .set_tunnel_status("0x1", crate::state::TunnelStatus::Closed)
+            .set_tunnel_status(&path, crate::state::TunnelStatus::Closed)
             .await;
-        let req: SettleRequest = serde_json::from_str(SAMPLE_SETTLE_JSON).unwrap();
         let resp = settle(
             axum::extract::State(state),
-            axum::extract::Path("0x1".to_string()),
-            axum::Json(req),
+            axum::extract::Path(path),
+            sample_settle_body(),
         )
         .await;
         assert_eq!(resp.status(), axum::http::StatusCode::CONFLICT);
@@ -595,9 +611,18 @@ mod tests {
     async fn metrics_render_exposes_counters() {
         let state = test_state();
         state.control.add_actions("blackjack", 42).await;
+        state.pairing.observe(true);
+        state.pairing.observe(true);
+        state.pairing.observe(false);
         let snap = state.control.snapshot().await;
-        let body = render_metrics(&snap);
+        let (colocated, split) = state.pairing.snapshot();
+        let body = render_metrics(&snap, colocated, split);
         assert!(body.contains("tunnel_actions_total 42"), "got: {body}");
         assert!(body.contains("# TYPE tunnel_active gauge"));
+        assert!(
+            body.contains("tunnel_matches_colocated_total 2"),
+            "got: {body}"
+        );
+        assert!(body.contains("tunnel_matches_split_total 1"), "got: {body}");
     }
 }

@@ -12,7 +12,8 @@ import { newCounters, rateReport } from "sui-tunnel-ts/telemetry/metrics";
 import type { Counters } from "sui-tunnel-ts/telemetry/metrics";
 import type { TelemetrySnapshot, TxnRow } from "../panels/types";
 import { PLACEHOLDER_SNAPSHOT } from "../placeholders";
-import { useBackendStats } from "../backend/useBackendStats";
+import { useBackendStats, type BackendStatus } from "../backend/useBackendStats";
+import type { StatsSnapshot } from "../backend/controlPlane";
 import { liveOnchainTxns, displayUpdatesPerSec } from "../backend/liveMerge";
 
 const MAX_TXNS = 12;
@@ -36,6 +37,10 @@ export interface TelemetryWriter {
 interface TelemetryContextValue {
   snapshot: TelemetrySnapshot;
   report: TelemetryWriter;
+  /** The single SSE aggregate frame, shared so every panel reads the same value (no per-panel
+   *  subscription drift). Null while connecting/offline. */
+  backend: StatsSnapshot | null;
+  status: BackendStatus;
 }
 
 const TelemetryContext = createContext<TelemetryContextValue | null>(null);
@@ -151,8 +156,8 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
     [pushTxn, pushLocalTxn, bumpCounters, setActive],
   );
   const value = useMemo<TelemetryContextValue>(
-    () => ({ snapshot, report }),
-    [snapshot, report],
+    () => ({ snapshot, report, backend, status }),
+    [snapshot, report, backend, status],
   );
 
   return (

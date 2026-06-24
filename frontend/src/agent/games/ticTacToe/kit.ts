@@ -10,7 +10,48 @@ import { CELL_EMPTY, CELL_SERVER, CELL_PLAYER } from "@ttt/shared/constants";
 import { defaultStateHash } from "@/agent/stateHash";
 import { type BotContext, type GameBot, type GameKit } from "@/agent/gameKit";
 
-export type TicTacToeDifficulty = "perfect" | "fast";
+// "perfect" = minimax (always draws); "even" = both heuristic (varied); "uneven" = A perfect vs
+// B heuristic (X wins more); "fast" = random empty. The full set the live arena exposes.
+export type TicTacToeDifficulty = "perfect" | "even" | "uneven" | "fast";
+
+// The 8 winning lines (rows, cols, diagonals).
+const LINES = [
+  [0, 1, 2],
+  [3, 4, 5],
+  [6, 7, 8],
+  [0, 3, 6],
+  [1, 4, 7],
+  [2, 5, 8],
+  [0, 4, 8],
+  [2, 4, 6],
+] as const;
+
+/**
+ * "Competent but imperfect": complete a winning line, else block the opponent's, else a
+ * deterministic-per-state empty (via fastIndex) — so plan() stays idempotent on a replayed state.
+ */
+function heuristicCell(
+  state: protocols.TicTacToeState,
+  mark: number,
+  empties: number[],
+  fastSeed: number,
+  innerProtocol: protocols.TicTacToeProtocol,
+): number {
+  const opp = mark === 1 ? 2 : 1;
+  const findFinish = (who: number): number => {
+    for (const line of LINES) {
+      const empt = line.find((i) => state.board[i] === 0);
+      const mine = line.filter((i) => state.board[i] === who).length;
+      if (mine === 2 && empt !== undefined) return empt;
+    }
+    return -1;
+  };
+  const win = findFinish(mark);
+  if (win >= 0) return win;
+  const block = findFinish(opp);
+  if (block >= 0) return block;
+  return empties[fastIndex(fastSeed, innerProtocol.encodeState(state), empties.length)];
+}
 
 export interface TicTacToeBotConfig {
   difficulty?: TicTacToeDifficulty;
@@ -46,6 +87,12 @@ function pickCell(
   }
 
   const mark = seat === "A" ? 1 : 2;
+  // "even" = heuristic both seats; "uneven" = A perfect, B heuristic.
+  const perfect =
+    difficulty === "perfect" || (difficulty === "uneven" && seat === "A");
+  if (!perfect) {
+    return heuristicCell(state, mark, empties, fastSeed, innerProtocol);
+  }
   const board = state.board.map((v) =>
     v === 0 ? CELL_EMPTY : v === mark ? CELL_SERVER : CELL_PLAYER,
   );

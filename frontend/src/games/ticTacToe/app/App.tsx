@@ -1,4 +1,5 @@
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useSoloCabinet } from "@/shell/cabinet/soloCabinet";
 import {
   useBotGame,
   type Difficulty,
@@ -47,6 +48,31 @@ function AppContent() {
   // no SUI — they're always "funded". SUI fallback still requires a positive gas balance per bot.
   const funded =
     isDopamintConfigured || (g.balances.x > 0n && g.balances.o > 0n);
+
+  // --- Shared arcade-cabinet seam (GameCabinet, applied to every window in Desktop). The shell
+  // owns hover → pause → overlay; this game wires the verbs to its engine. Take-over reuses the
+  // in-game manual play (setAuto(false) → you drive X); offerable only while auto-playing.
+  const { setAuto, pause: gPause, resume: gResume } = g;
+  const offerable = scene === "game" && g.auto;
+  // "Return to Home" → the game's title screen (login), stopping the auto-play loop. Stable refs
+  // (stopAuto is useCallback'd) so the controller doesn't re-register every render. Does NOT reset
+  // the auto-pilot one-shots, so re-entering "Play vs Bot" lands on setup (not an auto-start).
+  const stopTttAuto = tttGame.stopAuto;
+  const stopCaroAuto = caroGame.stopAuto;
+  const goToGameHome = useCallback(() => {
+    stopTttAuto();
+    stopCaroAuto();
+    setScene("login");
+  }, [stopTttAuto, stopCaroAuto]);
+  // Hand X to the human (flip to manual play). Stable so the controller doesn't re-register.
+  const goManual = useCallback(() => setAuto(false), [setAuto]);
+  useSoloCabinet({
+    offerable,
+    pause: gPause,
+    resume: gResume,
+    goManual,
+    goHome: goToGameHome,
+  });
 
   // Track the actual container element's parent bounds to determine orientation
   useEffect(() => {
@@ -167,14 +193,6 @@ function AppContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isConnected, scene, funded, g, executeTransaction, startNonce]);
 
-  // Leave the game for the main menu (login). Does NOT reset the auto-pilot one-shots, so
-  // re-entering "Play vs Bot" lands on the setup screen (not an auto-start) and Start runs manual.
-  const backToMenu = () => {
-    tttGame.stopAuto();
-    caroGame.stopAuto();
-    setScene("login");
-  };
-
   const backToSetup = () => {
     tttGame.stopAuto();
     caroGame.stopAuto();
@@ -272,7 +290,7 @@ function AppContent() {
               mode={mode}
               gameType={gameType}
               onBack={backToSetup}
-              onMenu={backToMenu}
+              onMenu={goToGameHome}
               isPortrait={isPortrait}
             />
           )}
