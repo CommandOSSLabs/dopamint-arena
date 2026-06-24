@@ -346,6 +346,20 @@ export function WorldCanvas({
       if (cell.painter === human) {
         continue;
       }
+      // An erase must sit above ALL ink already on the wall, of EVERY owner. Each painter's
+      // contiguous run is ONE grouped polyline tagged with its LATEST cell's `seq`; if that
+      // owner keeps drawing AFTER this erase, the whole run — including the cells UNDER the
+      // eraser — would re-sort above the erase by max-`seq` and redraw over it (the "opponent's
+      // ink comes back" bug). Lock every OTHER painter's open run closed here so its seq freezes
+      // BELOW this erase's; that owner's next cell then opens a fresh run ABOVE the erase. The
+      // eraser's own run is split by `extendStroke`'s color check, so it needs no handling here.
+      if (cell.color === ERASER_COLOR) {
+        for (const [key, open] of openStrokes.current) {
+          if (key === cell.painter) continue;
+          finalizeStroke(open);
+          openStrokes.current.delete(key);
+        }
+      }
       extendStroke(cell.painter, gx + 0.5, gy + 0.5, cell.color, AGENT_STROKE_SIZE, cell.seq);
     }
     appliedSeq.current = maxSeq;
@@ -432,14 +446,16 @@ export function WorldCanvas({
         s.maxY >= gMinY - pad &&
         s.minY <= gMaxY + pad;
 
-      // Stroke one world-space polyline at the current pan/zoom with a round-capped
-      // line (smooth, anti-aliased — no taper). An erase paints the backdrop color so it
-      // covers earlier ink (a visual erase on append-only art). The erase is decided
-      // PER CELL by its color index — any cell co-signed under {@link ERASER_COLOR}
-      // renders as backdrop for EVERY painter (local AND received over the tunnel), so a
-      // synced erase reads as "erased" on the opponent's wall too; the `erase` flag only
-      // mirrors the local live-stroke preview. A lone point (a single click) draws as a
-      // round dab so a tap still leaves a mark.
+      // Stroke one world-space polyline at the current pan/zoom with a round-capped line
+      // (smooth, anti-aliased — no taper). An erase is decided PER CELL by its color index:
+      // any cell co-signed under {@link ERASER_COLOR} CLEARS the pixels under the nib with
+      // `destination-out` for EVERY painter (local AND received over the tunnel), so a synced
+      // erase truly removes ink on the opponent's wall too — across owners — instead of
+      // overpainting the backdrop (which a later redraw of the SAME pixels could cover). The
+      // cleared pixels fall through to the canvas element's own (white) background. The `erase`
+      // flag only mirrors the local live-stroke preview; the erase ink color is irrelevant
+      // under destination-out (only its alpha is sampled). A lone point (a single click) draws
+      // as a round dab so a tap still leaves a mark.
       const strokePath = (
         pts: number[][],
         color: number,
@@ -447,9 +463,10 @@ export function WorldCanvas({
         erase: boolean,
       ) => {
         if (!pts.length) return;
-        const ink =
-          erase || color === ERASER_COLOR ? bg : (PALETTE[color] ?? "#ffffff");
+        const isErase = erase || color === ERASER_COLOR;
+        const ink = isErase ? "#000000" : (PALETTE[color] ?? "#ffffff");
         const lw = Math.max(1, size * v.scale);
+        if (isErase) ctx.globalCompositeOperation = "destination-out";
         if (pts.length === 1) {
           ctx.fillStyle = ink;
           ctx.beginPath();
@@ -461,6 +478,7 @@ export function WorldCanvas({
             Math.PI * 2,
           );
           ctx.fill();
+          if (isErase) ctx.globalCompositeOperation = "source-over";
           return;
         }
         ctx.beginPath();
@@ -479,6 +497,7 @@ export function WorldCanvas({
         ctx.lineJoin = "round";
         ctx.strokeStyle = ink;
         ctx.stroke();
+        if (isErase) ctx.globalCompositeOperation = "source-over";
       };
 
       // Finalized + open strokes, culled to the viewport and drawn in co-signed `seq`
@@ -622,15 +641,24 @@ export function WorldCanvas({
     s.maxY = Math.max(s.maxY, wy);
   };
   const liveFinalize = () => {
-    if (liveStroke.current) {
-      // Persist only when this seat's cells DON'T return via `syncPaints`. Solo skips the
-      // human painter there, so the live drag is the only record → keep it. In PvP
-      // (humanAddress=""), every cell — yours included — comes back through `syncPaints`
-      // with its real co-signed `seq`, so persisting the live copy would (a) double-draw and
-      // (b) pin your ink on top forever, defeating the opponent's erase. Drop it there.
-      if (humanRef.current) finalizeStroke(liveStroke.current);
-      liveStroke.current = null;
+    const s = liveStroke.current;
+    if (!s) return;
+    if (humanRef.current) {
+      // Solo: this seat's cells DON'T return via `syncPaints` (the human painter is skipped
+      // there), so the live drag is the only record → keep it on top (seq MAX), as before.
+      finalizeStroke(s);
+    } else if (s.erase) {
+      // PvP: a PAINT live-stroke is dropped — it returns through `syncPaints` with its real
+      // co-signed `seq`, and keeping the live copy would double-draw and pin your ink on top
+      // forever (defeating the opponent's erase). An ERASE, though, must not VANISH in the
+      // round-trip window between pointer-up and its synced cell landing — that gap is the
+      // "it reverts the instant I let go" flash. Persist the erase at a FINITE seq just above
+      // all ink currently on the wall so it holds the cleared look until the synced erase (a
+      // harmless, idempotent `destination-out` dup) arrives — finite (not MAX) so a later
+      // higher-seq repaint from either seat can still cover it.
+      finalizeStroke({ ...s, seq: appliedSeq.current + 0.5 });
     }
+    liveStroke.current = null;
   };
 
   // Co-sign ONE cell of the active stroke (the TPS unit): dedupe against the stroke
@@ -768,6 +796,10 @@ export function WorldCanvas({
         style={{
           touchAction: "none",
           cursor: disabled || panOnly ? "grab" : PENCIL_CURSOR,
+          // The drawing surface is opaque (Excalidraw white); an eraser clears canvas pixels
+          // to transparent via `destination-out`, so THIS backdrop is what shows through the
+          // cleared nib — keep it the canvas color, not the dark app void behind the canvas.
+          backgroundColor: background,
         }}
       />
       {/* Floating per-cell owner label ("owner EThL…KwRE" / "You"). */}
