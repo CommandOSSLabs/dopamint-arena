@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { registerWindowDisposer } from "@/lib/windowSessions";
+import { hasResumableMatch } from "@/pvp/resume";
 import type { GameWindowProps } from "../types";
 import { QuantumPokerBotVsBotWindow } from "./QuantumPokerBotVsBotWindow";
 import { QuantumPokerPvpWindow } from "./QuantumPokerPvpWindow";
@@ -12,9 +13,16 @@ const modeStore = new Map<string, Mode | null>();
 export function QuantumPokerModeWindow(props: GameWindowProps) {
   const { windowId } = props;
   // Default to "auto" (watch bots) on load; Back from any mode returns to the menu (null).
-  const [mode, setModeState] = useState<Mode | null>(
-    () => modeStore.get(windowId) ?? "auto",
-  );
+  // Exception: a page reload wipes the in-memory modeStore, so if an in-flight PvP match is
+  // persisted, reopen the PvP lane — its hook's resume() then continues the table instead of the
+  // player landing on watch-bots. A finished/unrestorable record self-heals: resume() clears it
+  // and falls back to the PvP idle screen.
+  const [mode, setModeState] = useState<Mode | null>(() => {
+    const stored = modeStore.get(windowId);
+    if (stored !== undefined) return stored;
+    if (hasResumableMatch("quantum-poker")) return "pvp";
+    return "auto";
+  });
 
   useEffect(() => {
     registerWindowDisposer(windowId, "quantum-poker-mode", () => {
