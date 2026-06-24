@@ -284,18 +284,37 @@ test("a full hunter-bot playout terminates (kill or cap) and conserves balances 
   assert.equal(a + b, s.total);
 });
 
-test("hunter bot bombs an in-line opponent when it has an escape route", () => {
+test("hunter bot may bomb an in-line opponent when rng allows an attack", () => {
   const p = new BombItProtocol();
   const base = p.initialState(CTX);
-  // A at (1,1) acts (tick 0 = A); B two cells east on the same row, inside blast reach.
-  // A has a real escape (south then sideways), so it SHOULD attack with a bomb — not just chase.
   const s: BombItState = {
     ...base,
     players: [spawnAt(1, 1), spawnAt(1, 3)],
     grid: clearInterior(base.grid),
   };
+  let sawBomb = false;
+  for (let seed = 0; seed < 64; seed++) {
+    const m = p.randomMove(s, "A", mulberry32ForTest(seed)) as BombItMove;
+    if (m.a === "bomb") {
+      sawBomb = true;
+      break;
+    }
+  }
+  assert.ok(sawBomb, "expected at least one seed to bomb an in-line opponent");
+});
+
+test("hunter bot flees an imminent blast instead of bombing", () => {
+  const p = new BombItProtocol();
+  const base = p.initialState(CTX);
+  const s: BombItState = {
+    ...base,
+    players: [spawnAt(1, 1), spawnAt(5, 5)],
+    grid: clearInterior(base.grid),
+    bombs: [{ row: 1, col: 2, fuse: 1, owner: "B" }],
+  };
   const m = p.randomMove(s, "A", mulberry32ForTest(1)) as BombItMove;
-  assert.equal(m.a, "bomb");
+  assert.notEqual(m.a, "bomb");
+  assert.notEqual(m.a, "stay");
 });
 
 test("a hunter-bot match drops bombs and destroys crates", () => {

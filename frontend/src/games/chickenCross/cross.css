@@ -1,3 +1,5 @@
+@import "../sketch/sketch.css";
+
 /* ============================================================
    Chicken Cross — flat 2D, left pane + square tile arena
    ============================================================ */
@@ -481,6 +483,12 @@
   vertical-align: bottom;
 }
 
+.cross-sketch-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
 .cross-chicken {
   animation: cross-hop 0.16s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
@@ -929,6 +937,39 @@
   width: 100%;
   align-items: stretch;
 }
+.cross-lobby__card--welcome {
+  align-items: center;
+  text-align: center;
+  gap: 16px;
+  width: min(20rem, calc(100% - 24px));
+}
+.cross-lobby__hero {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+.cross-lobby__mascot--lg {
+  width: 3.25rem;
+  height: 2.75rem;
+  font-size: 2.35rem;
+}
+.cross-lobby__tagline {
+  margin: 0;
+  max-width: 14rem;
+}
+.cross-lobby__stake {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  text-align: left;
+}
 .cross-field {
   flex: 1;
   min-width: 0;
@@ -1018,8 +1059,386 @@
   color: var(--cx-hud-outline);
 }
 
-/* Legacy root alias (transitional screens) */
-.cross-root {
-  height: 100%;
+/* ---- Sketch skin integration (full whiteboard — match Quantum Poker) ---- */
+
+.cross-lobby.sketch,
+.cross-shell.sketch {
+  background: var(--sketch-paper)
+    radial-gradient(rgba(35, 34, 31, 0.09) 1.1px, transparent 1.3px);
+  background-size: 16px 16px;
+  background-position: -8px -8px;
+  color: var(--sketch-ink);
+  --cx-sky-top: var(--sketch-paper);
+  --cx-sky-mid: var(--sketch-paper);
+  --cx-sky-bot: var(--sketch-paper);
+  --cx-hud-ink: var(--sketch-accent);
+  --cx-hud-outline: var(--sketch-ink);
+}
+
+.cross-shell.sketch .sketch-panel,
+.cross-shell.sketch .sketch-stroke.sketch-panel,
+.cross-lobby.sketch .sketch-panel,
+.cross-lobby.sketch .sketch-stroke.sketch-panel {
+  --sketch-fill: #fff9f0;
+}
+
+.cross-lobby.sketch::before,
+.cross-lobby.sketch::after {
+  display: none;
+}
+
+.cross-lobby.sketch .cross-lobby__card {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.cross-lobby.sketch .cross-lobby__card::before {
+  display: none;
+}
+.cross-lobby.sketch .cross-lobby__card.sketch-stroke::before {
+  display: block;
+  background: var(--sketch-fill, #fff9f0);
+}
+.cross-lobby.sketch .cross-lobby__card--welcome {
+  --sketch-fill: color-mix(in srgb, var(--sketch-felt-fill) 55%, #fff9f0);
+}
+.cross-lobby.sketch .cross-lobby__card--welcome.sketch-stroke::before {
+  border-color: var(--sketch-felt);
+}
+
+.cross-lobby.sketch .cross-lobby__title {
+  color: var(--sketch-ink);
+  text-shadow: none;
+  font-weight: inherit;
+  text-transform: none;
+  text-align: left;
+}
+
+.cross-lobby.sketch .cross-lobby__head {
+  text-align: left;
+}
+
+.cross-lobby.sketch .cross-lobby__card--compact {
+  align-items: center;
+  text-align: center;
+}
+
+.cross-lobby.sketch .cross-lobby__card--compact .sketch-eyebrow,
+.cross-lobby.sketch .cross-lobby__card--compact .sketch-title,
+.cross-lobby.sketch .cross-lobby__card--compact .sketch-note {
   width: 100%;
+}
+
+.cross-lobby.sketch .cross-seg {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  width: 100%;
+  justify-content: center;
+}
+.cross-lobby.sketch .cross-seg__btn {
+  border: 0;
+  background: transparent;
+  font-weight: inherit;
+  text-transform: none;
+  letter-spacing: 0.04em;
+}
+.cross-lobby.sketch .cross-seg__btn--on {
+  background: var(--sketch-accent-fill);
+  color: var(--sketch-ink);
+}
+
+.cross-lobby.sketch .cross-field {
+  border: 0;
+  background: transparent;
+  color: var(--sketch-ink);
+  font-weight: inherit;
+  box-shadow: none;
+}
+
+.cross-lobby.sketch .cross-cta,
+.cross-shell.sketch .cross-auto,
+.cross-shell.sketch .cross-settle,
+.cross-shell.sketch .cross-play-again {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  font-weight: inherit;
+  letter-spacing: 0.04em;
+  text-transform: none;
+}
+
+.cross-shell.sketch .cross-main {
+  background: transparent;
+}
+
+.cross-shell.sketch .cross-pane {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  --sketch-fill: #fff9f0;
+}
+.cross-shell.sketch .cross-pane.sketch-stroke::before {
+  display: block;
+  background: var(--sketch-fill, #fff9f0);
+}
+.cross-shell.sketch .cross-pane::before {
+  display: none;
+}
+
+.cross-shell.sketch .cross-seat-rail,
+.cross-shell.sketch .cross-ticker,
+.cross-shell.sketch .cross-score,
+.cross-shell.sketch .cross-actionbar {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.cross-shell.sketch .cross-ticker,
+.cross-shell.sketch .cross-score {
+  --sketch-fill: #fff9f0;
+}
+.cross-shell.sketch .cross-actionbar {
+  --sketch-fill: #fff9f0;
+}
+.cross-shell.sketch .cross-actionbar.sketch-stroke::before,
+.cross-shell.sketch .cross-result__card.sketch-stroke::before {
+  background: var(--sketch-fill, #fff9f0);
+}
+.cross-shell.sketch .cross-seat-rail--a {
+  background: transparent;
+  --sketch-fill: var(--sketch-blue-fill);
+}
+.cross-shell.sketch .cross-seat-rail--a.sketch-stroke::before {
+  border-color: var(--sketch-blue);
+}
+.cross-shell.sketch .cross-seat-rail--b {
+  background: transparent;
+  --sketch-fill: color-mix(in srgb, var(--sketch-violet) 12%, #fffefb);
+}
+.cross-shell.sketch .cross-seat-rail--b.sketch-stroke::before {
+  border-color: var(--sketch-violet);
+}
+.cross-shell.sketch .cross-seat-rail__float {
+  border: 0;
+  background: var(--sketch-accent-fill);
+  box-shadow: none;
+  font-weight: inherit;
+  color: var(--sketch-ink);
+  text-transform: none;
+}
+.cross-shell.sketch .cross-seat-rail__tag {
+  background: var(--sketch-ink);
+  font-weight: inherit;
+  text-transform: none;
+}
+
+.cross-shell.sketch .cross-pad {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--sketch-ink);
+  font-weight: inherit;
+}
+.cross-shell.sketch .cross-pad__key {
+  font-weight: inherit;
+  text-transform: lowercase;
+}
+
+.cross-shell.sketch .cross-seat-rail__lane,
+.cross-shell.sketch .cross-ticker__value,
+.cross-shell.sketch .cross-ticker__label,
+.cross-shell.sketch .cross-score__tally,
+.cross-shell.sketch .cross-score__label,
+.cross-lobby.sketch .cross-field {
+  font-family: inherit;
+  font-weight: inherit;
+  text-transform: none;
+  letter-spacing: 0.04em;
+}
+
+.cross-shell.sketch {
+  --sketch-arena-fill: var(--sketch-felt-fill);
+  --sketch-arena-ink: var(--sketch-felt);
+}
+
+.cross-shell.sketch .cross-stage {
+  background: var(--sketch-felt-fill);
+}
+.cross-shell.sketch .cross-stage.sketch-arena::before {
+  border-color: var(--sketch-felt);
+  border-width: 3px;
+}
+.cross-shell.sketch .cross-stage.sketch-stroke::before {
+  display: none;
+}
+
+.cross-shell.sketch .cross-cell {
+  border: 0;
+}
+.cross-shell.sketch .sketch-cell::after {
+  border-color: color-mix(in srgb, var(--sketch-ink) 14%, transparent);
+  opacity: 0.55;
+}
+.cross-shell.sketch .cross-cell--grass {
+  background: var(--cx-grass) !important;
+}
+.cross-shell.sketch .cross-cell--grass:nth-child(even) {
+  background: var(--cx-grass-dark) !important;
+}
+.cross-shell.sketch .cross-cell--road {
+  background: color-mix(in srgb, var(--sketch-ink) 2.5%, var(--sketch-paper)) !important;
+}
+.cross-shell.sketch .cross-cell--road:nth-child(even) {
+  background: var(--sketch-paper) !important;
+}
+.cross-shell.sketch .cross-cell--water {
+  background: var(--cx-water) !important;
+}
+.cross-shell.sketch .cross-cell--water:nth-child(odd) {
+  background: var(--cx-water-dark) !important;
+}
+.cross-shell.sketch .cross-cell--water::after {
+  content: "";
+  position: absolute;
+  inset: 12% 6%;
+  pointer-events: none;
+  z-index: 1;
+  opacity: 0.75;
+  background: repeating-linear-gradient(
+    -12deg,
+    transparent 0 5px,
+    color-mix(in srgb, var(--sketch-blue) 22%, transparent) 5px 6px,
+    transparent 6px 13px
+  );
+  filter: var(--sketch-filter);
+}
+.cross-shell.sketch .cross-cell--grass::before {
+  content: "";
+  position: absolute;
+  right: 14%;
+  bottom: 18%;
+  width: 18%;
+  height: 22%;
+  border-radius: 50% 50% 40% 40%;
+  border: 1.5px solid color-mix(in srgb, var(--sketch-felt) 55%, transparent);
+  filter: var(--sketch-filter);
+  pointer-events: none;
+  z-index: 1;
+  opacity: 0.55;
+}
+.cross-shell.sketch .cross-cell--rails {
+  background: color-mix(in srgb, var(--sketch-ink) 4%, var(--sketch-paper)) !important;
+}
+.cross-shell.sketch .cross-cell--rails::after {
+  content: "";
+  position: absolute;
+  inset: 18% 0;
+  pointer-events: none;
+  z-index: 1;
+  background: repeating-linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--sketch-ink) 18%, transparent) 0 3px,
+    transparent 3px 11px
+  );
+  filter: var(--sketch-filter);
+  opacity: 0.65;
+}
+.cross-shell.sketch .cross-cell--road::after {
+  height: 3px;
+  background: repeating-linear-gradient(
+    90deg,
+  var(--sketch-ink) 0 5px,
+    transparent 5px 11px
+  );
+  opacity: 0.45;
+  filter: var(--sketch-filter);
+}
+.cross-shell.sketch .cross-cell--rails::before {
+  filter: var(--sketch-filter);
+  opacity: 0.85;
+}
+.cross-shell.sketch .cross-cell--finish {
+  background: var(--sketch-accent-fill) !important;
+}
+.cross-shell.sketch .cross-cell--mine-lane.cross-cell--grass,
+.cross-shell.sketch .cross-cell--mine-lane.cross-cell--grass:nth-child(even) {
+  background: color-mix(in srgb, var(--sketch-accent-fill) 40%, var(--sketch-paper)) !important;
+}
+.cross-shell.sketch .cross-cell--mine-lane {
+  box-shadow: none;
+}
+.cross-shell.sketch .cross-cell--mine-lane::before {
+  content: "";
+  position: absolute;
+  inset: 2px;
+  border: 2.5px dashed var(--sketch-accent);
+  border-radius: 3px;
+  filter: var(--sketch-filter);
+  pointer-events: none;
+  z-index: 2;
+}
+
+.cross-shell.sketch .cross-chicken--hit {
+  animation: cross-hit 0.32s ease-in-out;
+}
+
+.cross-shell.sketch .cross-finish-flag {
+  filter: var(--sketch-filter);
+  background: var(--sketch-ink);
+}
+.cross-shell.sketch .cross-finish-flag::after {
+  filter: var(--sketch-filter);
+  background: repeating-linear-gradient(
+    90deg,
+    var(--sketch-accent-fill) 0 2px,
+    var(--sketch-ink) 2px 4px
+  );
+}
+
+.cross-shell.sketch .cross-result {
+  background: color-mix(in srgb, var(--sketch-paper) 88%, transparent);
+}
+.cross-shell.sketch .cross-result__card {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  --sketch-fill: #fff9f0;
+}
+.cross-shell.sketch .cross-result__card::before {
+  display: none;
+}
+.cross-shell.sketch .cross-result__card.sketch-stroke::before {
+  display: block;
+  background: var(--sketch-fill, #fff9f0);
+}
+.cross-shell.sketch .cross-result__line {
+  text-shadow: none;
+  letter-spacing: 0.04em;
+  text-transform: none;
+  font-weight: inherit;
+}
+.cross-shell.sketch .cross-result__sub {
+  color: var(--sketch-ink-soft);
+  font-weight: inherit;
+}
+.cross-shell.sketch .cross-result__trophy {
+  filter: none;
+}
+
+.cross-lobby.sketch .cross-lobby__copy,
+.cross-shell.sketch .cross-spectate {
+  color: var(--sketch-ink-soft);
+  font-weight: inherit;
+}
+.cross-shell.sketch .cross-seat-rail__lane,
+.cross-shell.sketch .cross-ticker__value,
+.cross-shell.sketch .cross-score__tally {
+  color: var(--sketch-ink);
+}
+.cross-shell.sketch .cross-ticker__label,
+.cross-shell.sketch .cross-score__label {
+  letter-spacing: 0.06em;
+  text-transform: none;
+  color: var(--sketch-ink-soft);
 }

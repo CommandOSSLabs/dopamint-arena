@@ -27,13 +27,10 @@ import { u64ToBeBytes } from "../core/wire";
 // ============================================
 // CONFIG
 // ============================================
-// Board is a classic Bomberman lattice: odd dimensions so the border ring + even-even
-// pillars leave odd-odd interior cells (incl. both spawn corners) as floor. 29x29 = 841
-// cells ~ 10x the original 9x9 — a big arena so two survival bots roam (and stay alive)
-// for the full tick budget instead of colliding in seconds.
-export const GRID_W = 29;
-export const GRID_H = 29;
-export const CELL_COUNT = GRID_W * GRID_H; // 841
+// 21×21 ≈ half the 29×29 cell count — still odd so spawn corners stay on floor tiles.
+export const GRID_W = 21;
+export const GRID_H = 21;
+export const CELL_COUNT = GRID_W * GRID_H; // 441
 
 export const CELL_FLOOR = 0;
 export const CELL_WALL = 1;
@@ -280,15 +277,28 @@ function dangerCells(grid: Uint8Array, bombs: BombItBomb[]): Set<number> {
   return d;
 }
 
+/** One step outside an imminent blast — bots treat these as unsafe when a safer route exists. */
+function adjacentDanger(danger: Set<number>): Set<number> {
+  const adj = new Set<number>();
+  const dirs: BombItAction[] = ["north", "south", "east", "west"];
+  for (const ci of danger) {
+    const row = Math.floor(ci / GRID_W);
+    const col = ci % GRID_W;
+    for (const d of dirs) {
+      const [nr, nc] = dest(row, col, d);
+      if (nr >= 0 && nr < GRID_H && nc >= 0 && nc < GRID_W) adj.add(idx(nr, nc));
+    }
+  }
+  return adj;
+}
+
 function manhattan(a: { row: number; col: number }, b: { row: number; col: number }): number {
   return Math.abs(a.row - b.row) + Math.abs(a.col - b.col);
 }
 
 /**
- * Hunter self-play policy: pursue the opponent, BOMB crates to tunnel toward them, and bomb to
- * attack when they're in blast line — but always keep a safe escape, and flee any live blast, so
- * bots fight decisively (kills, not stalemate draws) without suiciding. Move choice is RNG-driven
- * so the two seats diverge; the chosen action is what gets co-signed, so replay stays deterministic.
+ * Survival-first self-play policy: dodge live blasts, rarely plant bombs, and only bomb when
+ * an opponent is clearly in line or a crate fully blocks pursuit — with a verified escape.
  */
 function hunterAction(s: BombItState, by: Party, rng: () => number): BombItAction {
   const i = by === "A" ? 0 : 1;
@@ -297,6 +307,7 @@ function hunterAction(s: BombItState, by: Party, rng: () => number): BombItActio
   if (!p.alive) return "stay";
 
   const danger = dangerCells(s.grid, s.bombs);
+  const near = adjacentDanger(danger);
   const dirs: BombItAction[] = ["north", "south", "east", "west"];
   const moves = dirs.filter((d) => {
     const [nr, nc] = dest(p.row, p.col, d);
@@ -306,22 +317,24 @@ function hunterAction(s: BombItState, by: Party, rng: () => number): BombItActio
     const [nr, nc] = dest(p.row, p.col, d);
     return !danger.has(idx(nr, nc));
   });
+  const safer = safe.filter((d) => {
+    const [nr, nc] = dest(p.row, p.col, d);
+    return !near.has(idx(nr, nc));
+  });
   const pick = (xs: BombItAction[]) => xs[Math.floor(rng() * xs.length)];
 
-  // 1) Survive: never sit in a blast — flee to safety (any exit if no safe one).
+  // 1) Survive: flee blasts; prefer cells not hugging the blast radius.
   if (danger.has(idx(p.row, p.col))) {
+    if (safer.length) return pick(safer);
     if (safe.length) return pick(safe);
     if (moves.length) return pick(moves);
     return "stay";
   }
+  if (near.has(idx(p.row, p.col)) && safer.length) return pick(safer);
 
   const liveOwn = s.bombs.filter((b) => b.owner === by).length;
   const hereBomb = s.bombs.some((b) => b.row === p.row && b.col === p.col);
   const canBomb = liveOwn < MAX_BOMBS_PER_PLAYER && !hereBomb;
-  // A radius-2 '+' blast covers EVERY orthogonal neighbour, so a single step never clears it —
-  // checking only 1-step exits makes the bot believe it can never escape and so it never bombs.
-  // Search outward instead, up to the moves the bomber gets before its own fuse blows (it acts
-  // every other tick), for a reachable cell outside this bomb's blast and any live danger.
   const hasEscape = () => {
     const future = new Set(blastCellsFor(s.grid, { row: p.row, col: p.col, fuse: 0, owner: by }));
     const lethal = (i: number) => future.has(i) || danger.has(i);
@@ -337,7 +350,7 @@ function hunterAction(s: BombItState, by: Party, rng: () => number): BombItActio
           if (seen.has(ni)) continue;
           if (!canMoveTo(s.grid, s.bombs, other, nr, nc)) continue;
           seen.add(ni);
-          if (!lethal(ni)) return true; // a reachable safe cell within the escape budget
+          if (!lethal(ni)) return true;
           next.push([nr, nc]);
         }
       }
@@ -350,24 +363,28 @@ function hunterAction(s: BombItState, by: Party, rng: () => number): BombItActio
     return nr >= 0 && nr < GRID_H && nc >= 0 && nc < GRID_W && s.grid[idx(nr, nc)] === CELL_CRATE;
   };
 
-  // 2) Attack: opponent in line within blast reach → bomb (only with an escape).
   const dist = manhattan(p, other);
-  const inLine = other.alive && (p.row === other.row || p.col === other.col) && dist <= BLAST_RADIUS + 1;
-  if (canBomb && inLine && hasEscape()) return "bomb";
-
-  // 3) Pursue: prefer a safe move that closes the distance.
   const toward = dirs.filter((d) => {
     const [nr, nc] = dest(p.row, p.col, d);
     return manhattan({ row: nr, col: nc }, other) < dist;
   });
   const towardSafe = toward.filter((d) => safe.includes(d));
+
+  // 2) Rare attack bomb — only on a clear line within blast reach.
+  const inLine =
+    other.alive && (p.row === other.row || p.col === other.col) && dist <= BLAST_RADIUS;
+  if (canBomb && inLine && hasEscape() && rng() < 0.28) return "bomb";
+
+  // 3) Pursue when safe.
   if (towardSafe.length) return pick(towardSafe);
 
-  // 4) Path blocked toward the opponent by a crate → bomb it open (with an escape).
-  if (canBomb && toward.some(crateInDir) && hasEscape()) return "bomb";
+  // 4) Crate blocks all pursuit paths → bomb it open (still rare).
+  if (canBomb && towardSafe.length === 0 && toward.some(crateInDir) && hasEscape() && rng() < 0.35) {
+    return "bomb";
+  }
 
-  // 5) Keep moving; occasionally bomb an adjacent crate to keep opening the arena.
-  if (canBomb && dirs.some(crateInDir) && rng() < 0.12 && hasEscape()) return "bomb";
+  // 5) Wander safely — no opportunistic crate bombing.
+  if (safer.length) return pick(safer);
   if (safe.length) return pick(safe);
   return "stay";
 }
