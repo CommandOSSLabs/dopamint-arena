@@ -36,9 +36,9 @@ const PACKAGE_ID = import.meta.env.VITE_TUNNEL_PACKAGE_ID as string;
 // Built as a raw moveCall (mirroring the SDK's onchain.buildCreateAndFund) rather than via the
 // SDK helper, so it works regardless of whether this client's pinned SDK build exports it.
 //
-// `opts.stakeCoinId` splits BOTH stakes from that user/bot coin (DOPAMINT path); without it the
+// `opts.stakeCoinId` splits BOTH stakes from that user/bot coin (MTPS path); without it the
 // stakes come from `tx.gas` (SUI fallback). CRITICAL: a sponsored tx has NO gas coin and the
-// backend rejects any tx referencing `Gas`, so the DOPAMINT path MUST pass `stakeCoinId`.
+// backend rejects any tx referencing `Gas`, so the MTPS path MUST pass `stakeCoinId`.
 export function buildCreateAndFundTx(
   partyA: PartyInput,
   partyB: PartyInput,
@@ -51,7 +51,7 @@ export function buildCreateAndFundTx(
 ): Transaction {
   const tx = new Transaction();
   // ADR-0013: `stakeFromBalance` withdraws from the sender's address balance (no version-pinned
-  // coin → no equivocation); else split off `stakeCoinId` (DOPAMINT coin) or `tx.gas` (SUI).
+  // coin → no equivocation); else split off `stakeCoinId` (MTPS coin) or `tx.gas` (SUI).
   const source = stakeCoinArg(tx, opts);
   const [coinA, coinB] = tx.splitCoins(source ?? tx.gas, [stake, stake]);
   tx.moveCall({

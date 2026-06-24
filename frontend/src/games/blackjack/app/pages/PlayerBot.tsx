@@ -18,7 +18,7 @@ import {
   buildFundTx,
   FUND_PER_BOT_MIST,
 } from "@/games/blackjack/app/lib/bjBots";
-import { isDopamintConfigured } from "@/onchain/dopamint";
+import { isMtpsConfigured } from "@/onchain/mtps";
 
 const chip25 = "/chip-25.svg";
 const chip100 = "/chip-100.svg";
@@ -307,10 +307,10 @@ export default function PlayerBot() {
   const inGame =
     phase === "opening" || phase === "playing" || phase === "settling";
   const terminal = phase === "done" || result !== null;
-  // DOPAMINT mode: bots play free (sponsored gas, faucet buy-ins), so the SUI-balance gate doesn't
+  // MTPS mode: bots play free (sponsored gas, faucet buy-ins), so the SUI-balance gate doesn't
   // apply — never treat the bots as unfunded. SUI fallback still gates on a positive balance.
   const unfunded =
-    !isDopamintConfigured && (balances.a === 0n || balances.b === 0n);
+    !isMtpsConfigured && (balances.a === 0n || balances.b === 0n);
 
   // Auto-pilot: wallet-fund the bots once if low, then start bot-vs-bot self-play.
   // Bots are SHARED across all blackjack windows (loadOrCreateBots reads shared
@@ -548,7 +548,7 @@ export default function PlayerBot() {
               {error}
             </div>
           )}
-          {!isDopamintConfigured &&
+          {!isMtpsConfigured &&
             unfunded &&
             phase !== "funding" &&
             !error && (

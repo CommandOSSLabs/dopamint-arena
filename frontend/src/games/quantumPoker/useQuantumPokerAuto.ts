@@ -22,12 +22,12 @@ import {
 } from "@/onchain/tunnelTx";
 import { makeKeypairSponsoredSignExec } from "@/onchain/sponsor";
 import {
-  DOPAMINT_COIN_TYPE,
-  ensureDopamintAddressBalance,
-  ensureDopamintStakeCoin,
-  isDopamintAddressBalance,
-  isDopamintConfigured,
-} from "@/onchain/dopamint";
+  MTPS_COIN_TYPE,
+  ensureMtpsAddressBalance,
+  ensureMtpsStakeCoin,
+  isMtpsAddressBalance,
+  isMtpsConfigured,
+} from "@/onchain/mtps";
 import {
   QUANTUM_POKER_STAKE,
   QUANTUM_POKER_HANDS_PER_TUNNEL,
@@ -52,7 +52,7 @@ import {
 import { settlePokerTunnel } from "./pokerSettle";
 
 const STAKE = QUANTUM_POKER_STAKE;
-const DOPAMINT_PER_SEAT = 1_000_000_000n; // 1 DOPAMINT per seat (9 decimals)
+const MTPS_PER_SEAT = 1_000_000_000n; // 1 MTPS per seat (9 decimals)
 const HAND_CAP = QUANTUM_POKER_HANDS_PER_TUNNEL;
 
 /** Pause between matches (ms). */
@@ -203,9 +203,9 @@ class AutoSession {
   getSnapshot = (): AutoSnapshot => this.snap;
 
   private get funded(): boolean {
-    // DOPAMINT mode: bot gas is sponsored and the stake is faucet-minted DOPAMINT, so the bots
+    // MTPS mode: bot gas is sponsored and the stake is faucet-minted MTPS, so the bots
     // need no SUI — they're always "funded". SUI fallback still gates on a real gas balance.
-    if (isDopamintConfigured) return true;
+    if (isMtpsConfigured) return true;
     // Self-play: bot A funds both seats, so only bot A needs SUI. Bot B accrues winnings.
     return this.balances.a >= MIN_PLAY_MIST;
   }
@@ -272,7 +272,7 @@ class AutoSession {
     };
   }
 
-  /** Gas-sponsored signer for a bot keypair (DOPAMINT mode): the settler pays gas, so the bot
+  /** Gas-sponsored signer for a bot keypair (MTPS mode): the settler pays gas, so the bot
    *  needs zero SUI — it only signs. */
   private botSponsoredSignExec(bot: QuantumPokerBot): SignExec {
     return makeKeypairSponsoredSignExec({
@@ -368,7 +368,7 @@ class AutoSession {
 
   /** Start the loop once when the window first loads — watch-bot runs without a manual Start. No-op
    *  after the first auto-start (so a user Stop is not re-overridden on a later remount), while
-   *  funding, or while already running. In DOPAMINT mode `funded` is always true. */
+   *  funding, or while already running. In MTPS mode `funded` is always true. */
   autoStartOnLoad = () => {
     if (this.didAutoStart || this.status !== "idle" || !this.funded) return;
     // Gate auto-start behind a connected wallet: the bots self-fund (faucet + sponsored gas) and
@@ -484,18 +484,18 @@ class AutoSession {
       typeof openAndFundSelfPlay
     >[0]["reads"];
 
-    // DOPAMINT mode: stake faucet-minted DOPAMINT and sponsor the bot's open/close gas (no SUI).
-    // SUI fallback (DOPAMINT env unset): the bot funds the stake and pays its own gas.
-    const dopamintOn = isDopamintConfigured;
-    const stakePerSeat = dopamintOn ? DOPAMINT_PER_SEAT : STAKE;
-    const coinType = dopamintOn ? DOPAMINT_COIN_TYPE : undefined;
+    // MTPS mode: stake faucet-minted MTPS and sponsor the bot's open/close gas (no SUI).
+    // SUI fallback (MTPS env unset): the bot funds the stake and pays its own gas.
+    const mtpsOn = isMtpsConfigured;
+    const stakePerSeat = mtpsOn ? MTPS_PER_SEAT : STAKE;
+    const coinType = mtpsOn ? MTPS_COIN_TYPE : undefined;
 
     try {
       // ADR-0013: the autonomous bot A is the tx sender, so withdraw the stake from BOT A's
       // address balance (top it up first). Withdrawals don't pin a coin version → concurrent
       // bot opens across games never equivocate.
-      if (dopamintOn && isDopamintAddressBalance)
-        await ensureDopamintAddressBalance({
+      if (mtpsOn && isMtpsAddressBalance)
+        await ensureMtpsAddressBalance({
           client: this.deps.client as never,
           signExec: this.botSponsoredSignExec(this.bots.A),
           owner: this.bots.A.address,
@@ -503,7 +503,7 @@ class AutoSession {
         });
       const tunnelId = await openAndFundSelfPlay({
         reads,
-        signExec: dopamintOn
+        signExec: mtpsOn
           ? this.botSponsoredSignExec(this.bots.A)
           : this.botSignExec(this.bots.A),
         partyA: {
@@ -518,16 +518,16 @@ class AutoSession {
         bAmount: stakePerSeat,
         coinType,
         // Self-play funds both seats from one source, so withdraw/faucet for the 2-seat total.
-        ...(dopamintOn
-          ? isDopamintAddressBalance
+        ...(mtpsOn
+          ? isMtpsAddressBalance
             ? {
                 stakeFromBalance: {
                   amount: 2n * stakePerSeat,
-                  coinType: DOPAMINT_COIN_TYPE,
+                  coinType: MTPS_COIN_TYPE,
                 },
               }
             : {
-                stakeCoinId: await ensureDopamintStakeCoin({
+                stakeCoinId: await ensureMtpsStakeCoin({
                   client: this.deps.client as never,
                   signExec: this.botSponsoredSignExec(this.bots.A),
                   owner: this.bots.A.address,
@@ -659,7 +659,7 @@ class AutoSession {
         tunnelId,
         createdAt,
         coinType,
-        fallbackSignExec: dopamintOn
+        fallbackSignExec: mtpsOn
           ? this.botSponsoredSignExec(this.bots.A)
           : this.botSignExec(this.bots.A),
       });
@@ -696,9 +696,9 @@ class AutoSession {
       this.endRun();
       return;
     }
-    // DOPAMINT mode: gas is sponsored and the stake is faucet-minted, so the bots can't run out —
+    // MTPS mode: gas is sponsored and the stake is faucet-minted, so the bots can't run out —
     // skip the SUI-gas gate that would otherwise end the run (their SUI balance is 0).
-    if (!isDopamintConfigured && this.balances.a < MIN_PLAY_MIST) {
+    if (!isMtpsConfigured && this.balances.a < MIN_PLAY_MIST) {
       this.endRun();
       return;
     }

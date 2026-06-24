@@ -54,11 +54,11 @@ function nextWindowId(layout: GridItem[]): number {
 
 export function PlaygroundPage() {
   const [types, setTypes] = useLocalStorageState<Record<string, GameKey>>(
-    "dopamint.playground.types",
+    "mtps.playground.types",
     SEED,
   );
   const [layout, setLayout] = useLocalStorageState<GridItem[]>(
-    "dopamint.playground.layout",
+    "mtps.playground.layout",
     seedLayout,
   );
   const nextId = useRef(nextWindowId(layout));

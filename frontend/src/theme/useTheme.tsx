@@ -18,7 +18,7 @@ interface ThemeContextValue {
 }
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
-const STORAGE_KEY = "dopamint.theme";
+const STORAGE_KEY = "mtps.theme";
 
 const systemPrefersDark = () =>
   window.matchMedia("(prefers-color-scheme: dark)").matches;

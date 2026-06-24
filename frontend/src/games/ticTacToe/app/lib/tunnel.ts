@@ -44,9 +44,9 @@ const PACKAGE_ID = (import.meta.env.VITE_TUNNEL_PACKAGE_ID ||
 // co-signed final balances.
 //
 // Stake source (ADR-0010): with `stakeCoinId` both stakes split off that user coin — required for
-// the DOPAMINT path, where gas is sponsored (a SIP-58 sponsored tx has NO gas coin, and the
+// the MTPS path, where gas is sponsored (a SIP-58 sponsored tx has NO gas coin, and the
 // settler rejects any tx that references `Gas`). Without it, they split off `tx.gas` (SUI
-// fallback). `coinType` selects the staked token (DOPAMINT vs SUI).
+// fallback). `coinType` selects the staked token (MTPS vs SUI).
 //
 // Built as a raw moveCall (mirroring the SDK's onchain.buildCreateAndFund) rather than via the
 // SDK helper, so it works regardless of whether this client's pinned SDK build exports it.
@@ -62,7 +62,7 @@ export function buildCreateAndFundTx(
 ): Transaction {
   const tx = new Transaction();
   // ADR-0013: `stakeFromBalance` withdraws from the sender's address balance (no version-pinned
-  // coin → no equivocation); else split off `stakeCoinId` (DOPAMINT coin) or `tx.gas` (SUI).
+  // coin → no equivocation); else split off `stakeCoinId` (MTPS coin) or `tx.gas` (SUI).
   const source = stakeCoinArg(tx, opts ?? {});
   const [coinA, coinB] = tx.splitCoins(source ?? tx.gas, [stake, stake]);
   tx.moveCall({

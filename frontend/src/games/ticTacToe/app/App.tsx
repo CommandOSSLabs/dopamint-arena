@@ -19,7 +19,7 @@ import { SetupScene } from "@/games/ticTacToe/app/scenes/SetupScene";
 import { GameScene } from "@/games/ticTacToe/app/scenes/GameScene";
 import { PvpScene } from "@/games/ticTacToe/app/scenes/PvpScene";
 import { GameCardScale } from "@/games/ticTacToe/app/components/GameCardScale";
-import { isDopamintConfigured } from "@/onchain/dopamint";
+import { isMtpsConfigured } from "@/onchain/mtps";
 import "./index.css";
 
 type Scene = "login" | "setup" | "game" | "pvp";
@@ -44,10 +44,10 @@ function AppContent() {
   const caroGame = useCaroBotGame(difficulty, boardSize);
   const g = gameType === "caro" ? caroGame : tttGame;
 
-  // DOPAMINT mode (ADR-0010): bots play free (sponsored gas + faucet-minted stake), so they need
+  // MTPS mode (ADR-0010): bots play free (sponsored gas + faucet-minted stake), so they need
   // no SUI — they're always "funded". SUI fallback still requires a positive gas balance per bot.
   const funded =
-    isDopamintConfigured || (g.balances.x > 0n && g.balances.o > 0n);
+    isMtpsConfigured || (g.balances.x > 0n && g.balances.o > 0n);
 
   // --- Shared arcade-cabinet seam (GameCabinet, applied to every window in Desktop). The shell
   // owns hover → pause → overlay; this game wires the verbs to its engine. Take-over reuses the

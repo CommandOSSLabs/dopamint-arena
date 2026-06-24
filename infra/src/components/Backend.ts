@@ -52,9 +52,9 @@ function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
               { name: "REDIS_CACHE_URL", value: `rediss://${cacheEndpoint}:6379` },
               { name: "SUI_RPC_URL", value: "https://fullnode.testnet.sui.io:443" },
               { name: "TUNNEL_PACKAGE_ID", value: "0x0b89fe86e42cdbfd1e614757a83d014b455d12923d0dded58842ab18f8a5a22b" },
-              // The sponsor only gas-funds DOPAMINT faucet mints + staked tunnel opens whose coin
+              // The sponsor only gas-funds MTPS faucet mints + staked tunnel opens whose coin
               // type matches this; without it config defaults to 0x2::sui::SUI and /v1/sponsor 422s.
-              { name: "TUNNEL_COIN_TYPE", value: "0xa4ed01c9b4e1cf8717a49ecc3962b2948545b188eba329c9ff950c2d760e0bc0::dopamint::DOPAMINT" },
+              { name: "TUNNEL_COIN_TYPE", value: "0xe4184df2487b81757b4473a527595443599bd00204e1e1ed5b7ab63cbcb7f703::mtps::MTPS" },
               { name: "WALRUS_PUBLISHER_URL", value: "https://publisher.walrus-testnet.walrus.space" },
               { name: "WALRUS_AGGREGATOR_URL", value: "https://aggregator.walrus-testnet.walrus.space" },
             ],

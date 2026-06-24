@@ -651,7 +651,7 @@ fn command_references_gas(cmd: &Command) -> bool {
     }
 }
 
-/// The package address of a struct coin type (`0xABC::dopamint::DOPAMINT` -> `0xABC`), or `None`
+/// The package address of a struct coin type (`0xABC::mtps::MTPS` -> `0xABC`), or `None`
 /// for a primitive type like SUI. Used to locate the stake token's own faucet module.
 fn coin_type_address(coin_type: &TypeTag) -> Option<Address> {
     match coin_type {
@@ -689,11 +689,11 @@ fn validate_sponsorable(
                 let framework_share = mc.package == framework
                     && mc.module.as_str() == "transfer"
                     && mc.function.as_str() == "public_share_object";
-                // The DOPAMINT stake token's faucet lives in the coin type's own package
-                // (`<pkg>::dopamint`). Sponsor the free `mint`/`mint_default` so a 0-token player
+                // The MTPS stake token's faucet lives in the coin type's own package
+                // (`<pkg>::mtps`). Sponsor the free `mint`/`mint_default` so a 0-token player
                 // can faucet their stake (gas-sponsored) before opening a game.
                 let faucet_mint = coin_type_address(coin_type) == Some(mc.package)
-                    && mc.module.as_str() == "dopamint"
+                    && mc.module.as_str() == "mtps"
                     && matches!(mc.function.as_str(), "mint" | "mint_default");
                 // SIP-58 stake path (ADR-0013): `redeem_funds` turns the sender's address-balance
                 // withdrawal into the stake `Coin<T>` for the open; `send_funds` is the funding
@@ -1004,14 +1004,14 @@ mod tests {
         assert!(validate_sponsorable(&ptb(vec![other]), pkg, &sui_coin()).is_err());
     }
 
-    // The DOPAMINT faucet `mint` (in the coin type's own package) is sponsorable, so a 0-token
+    // The MTPS faucet `mint` (in the coin type's own package) is sponsorable, so a 0-token
     // player can faucet their stake gaslessly.
     #[test]
-    fn validate_accepts_dopamint_faucet_mint() {
-        let coin: TypeTag = "0xabc::dopamint::DOPAMINT".parse().unwrap();
+    fn validate_accepts_mtps_faucet_mint() {
+        let coin: TypeTag = "0xabc::mtps::MTPS".parse().unwrap();
         let mint = Command::MoveCall(sui_sdk_types::MoveCall {
             package: Address::from_str("0xabc").unwrap(),
-            module: Identifier::new("dopamint").unwrap(),
+            module: Identifier::new("mtps").unwrap(),
             function: Identifier::new("mint").unwrap(),
             type_arguments: vec![],
             arguments: vec![Argument::Input(0), Argument::Input(1), Argument::Input(2)],
@@ -1022,13 +1022,13 @@ mod tests {
     }
 
     // A `mint` from a package OTHER than the configured coin type's is refused — only the real
-    // DOPAMINT faucet is sponsored, not a look-alike.
+    // MTPS faucet is sponsored, not a look-alike.
     #[test]
     fn validate_rejects_faucet_mint_from_foreign_package() {
-        let coin: TypeTag = "0xabc::dopamint::DOPAMINT".parse().unwrap();
+        let coin: TypeTag = "0xabc::mtps::MTPS".parse().unwrap();
         let mint = Command::MoveCall(sui_sdk_types::MoveCall {
             package: Address::from_str("0xbad").unwrap(),
-            module: Identifier::new("dopamint").unwrap(),
+            module: Identifier::new("mtps").unwrap(),
             function: Identifier::new("mint").unwrap(),
             type_arguments: vec![],
             arguments: vec![],
@@ -1061,7 +1061,7 @@ mod tests {
     // over a sender withdrawal of the configured coin is sponsorable.
     #[test]
     fn validate_accepts_sender_stake_withdrawal() {
-        let coin: TypeTag = "0xabc::dopamint::DOPAMINT".parse().unwrap();
+        let coin: TypeTag = "0xabc::mtps::MTPS".parse().unwrap();
         let pkg = Address::from_str("0xfff").unwrap();
         let p = ptb_in(
             vec![withdrawal(coin.clone(), WithdrawFrom::Sender)],
@@ -1074,7 +1074,7 @@ mod tests {
     // = settler) must be refused — a sponsored PTB may withdraw only the user's OWN funds.
     #[test]
     fn validate_rejects_sponsor_withdrawal_settler_drain() {
-        let coin: TypeTag = "0xabc::dopamint::DOPAMINT".parse().unwrap();
+        let coin: TypeTag = "0xabc::mtps::MTPS".parse().unwrap();
         let pkg = Address::from_str("0xfff").unwrap();
         let p = ptb_in(
             vec![withdrawal(coin.clone(), WithdrawFrom::Sponsor)],
@@ -1087,7 +1087,7 @@ mod tests {
     // one is refused.
     #[test]
     fn validate_rejects_withdrawal_wrong_coin_type() {
-        let coin: TypeTag = "0xabc::dopamint::DOPAMINT".parse().unwrap();
+        let coin: TypeTag = "0xabc::mtps::MTPS".parse().unwrap();
         let other: TypeTag = "0x2::sui::SUI".parse().unwrap();
         let pkg = Address::from_str("0xfff").unwrap();
         let p = ptb_in(vec![withdrawal(other, WithdrawFrom::Sender)], vec![]);
@@ -1098,7 +1098,7 @@ mod tests {
     // sponsorable for the configured coin; a wrong type arg is refused (M1).
     #[test]
     fn validate_coin_ops_pin_coin_type() {
-        let coin: TypeTag = "0xabc::dopamint::DOPAMINT".parse().unwrap();
+        let coin: TypeTag = "0xabc::mtps::MTPS".parse().unwrap();
         let pkg = Address::from_str("0xfff").unwrap();
         for op in ["send_funds", "destroy_zero"] {
             assert!(
