@@ -96,9 +96,14 @@ phases:
     ],
   });
 
+  // Build the AMI on a small, cheap x86 instance. The recipe only installs packages
+  // and clones the repo; it does not need the same horsepower as the benchmark fleet.
+  // This avoids vCPU quota exhaustion and keeps AMI build time short.
+  const buildInstanceType = "c7i.large";
+
   const infraConfig = new aws.imagebuilder.InfrastructureConfiguration(`${args.name}-benchmark-infra`, {
     instanceProfileName: args.imageBuilderProfileName,
-    instanceTypes: [args.instanceType],
+    instanceTypes: [buildInstanceType],
     securityGroupIds: [args.securityGroupId],
     subnetId: pulumi.output(args.subnetIds).apply((ids) => {
       if (ids.length === 0) {
