@@ -6,12 +6,12 @@ import { BotVsBotSpectator } from "./BotVsBotSpectator.tsx";
 import type { ChatApiClient, LiveMessage } from "../../lib/chatApi.ts";
 
 test("BotVsBotSpectator renders live messages", async () => {
-  let liveCb: ((msg: LiveMessage) => void) | null = null;
+  const liveRef = { cb: null as ((msg: LiveMessage) => void) | null };
   const fakeApi: ChatApiClient = {
     topic: async () => "weather",
     chat: async () => "",
-    subscribeLive: (cb) => {
-      liveCb = cb;
+    subscribeLive: (cb: (msg: LiveMessage) => void) => {
+      liveRef.cb = cb;
       return () => {};
     },
   } as unknown as ChatApiClient;
@@ -21,7 +21,7 @@ test("BotVsBotSpectator renders live messages", async () => {
   assert.equal(screen.getByText("Bot vs Bot Spectator").textContent, "Bot vs Bot Spectator");
   assert.equal(screen.getByText("Waiting for bots to start chatting...").textContent?.length > 0, true);
 
-  liveCb?.({ sender: "bot-a", text: "hello" });
+  liveRef.cb?.({ sender: "bot-a", text: "hello" });
 
   await waitFor(() => screen.getByText("hello"));
   assert.equal(screen.getByText("bot-a").textContent, "bot-a");
