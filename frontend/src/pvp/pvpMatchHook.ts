@@ -46,7 +46,7 @@ import {
   depositStakeStaked,
   type StakeStrategy,
 } from "@/onchain/stakeTunnel";
-import { DOPAMINT_COIN_TYPE, isDopamintConfigured } from "@/onchain/dopamint";
+import { MTPS_COIN_TYPE, isMtpsConfigured } from "@/onchain/mtps";
 import { useSponsoredSignExec } from "@/onchain/useSponsoredSignExec";
 import { coSignedToSettleBody } from "@/backend/settleRequest";
 import {
@@ -125,15 +125,15 @@ export interface PvpMatch<State extends { winner: unknown }, Intent, View> {
 interface PvpDeps {
   account: { address: string } | null;
   client: unknown;
-  /** Wallet sender-pays signer — the SUI-fallback funding path and the non-DOPAMINT close. */
+  /** Wallet sender-pays signer — the SUI-fallback funding path and the non-MTPS close. */
   signExec: (tx: never) => Promise<{ digest: string }>;
   /** Backend-gas-sponsored signer (ADR-0009) — the open/fund path, so a 0-SUI player pays nothing. */
   sponsoredSignExec: (tx: never) => Promise<{ digest: string }>;
   /** Pick a user SUI coin to fund this seat's stake (SUI fallback; gas is sponsored, stake is not). */
   selectStakeCoin: (minAmount: bigint) => Promise<string>;
-  /** DOPAMINT stake: faucet (invisibly, sponsored) if short, then return a stake coin id (ADR-0010). */
+  /** MTPS stake: faucet (invisibly, sponsored) if short, then return a stake coin id (ADR-0010). */
   prepareStake: (minAmount: bigint) => Promise<string>;
-  /** ADR-0013: ensure the player's DOPAMINT address balance covers the stake. No-op once funded. */
+  /** ADR-0013: ensure the player's MTPS address balance covers the stake. No-op once funded. */
   ensureStakeBalance: (minAmount: bigint) => Promise<void>;
 }
 
@@ -349,7 +349,7 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
     const deps = this.deps!;
     const signExec = deps.signExec;
     const sponsoredSignExec = deps.sponsoredSignExec;
-    const coinType = isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined;
+    const coinType = isMtpsConfigured ? MTPS_COIN_TYPE : undefined;
     const reads = deps.client as unknown as Parameters<
       typeof openAndFundSharedTunnel
     >[0]["reads"];
@@ -521,8 +521,8 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
         const hello = await waitPeer<{ ephemeralPubkey: string }>("hello");
         const oppPub = fromHex(hello.ephemeralPubkey);
 
-        // 2) fund on-chain, gas-sponsored. DOPAMINT path (ADR-0010): faucet the stake invisibly
-        //    (settler pays gas) so a 0-SUI player plays free; SUI path (DOPAMINT env unset):
+        // 2) fund on-chain, gas-sponsored. MTPS path (ADR-0010): faucet the stake invisibly
+        //    (settler pays gas) so a 0-SUI player plays free; SUI path (MTPS env unset):
         //    sponsored stake with a sender-pays fallback (ADR-0009). Seat A opens + announces; B deposits.
         this.status = "funding";
         this.emit();
@@ -657,7 +657,7 @@ export function createPvpMatchHook<
         return { digest: r.digest };
       }) as never,
       // Open/fund routes through the backend gas sponsor (ADR-0009); the close keeps signExec
-      // above unless DOPAMINT mode, where settle() swaps in the sponsored signer.
+      // above unless MTPS mode, where settle() swaps in the sponsored signer.
       sponsoredSignExec: sponsored.signExec as never,
       selectStakeCoin: sponsored.selectStakeCoin,
       prepareStake: sponsored.prepareStake,
@@ -701,8 +701,8 @@ async function settle<State, Move>(
   waitPeer: <T>(t: string) => Promise<T>,
   reads: Parameters<typeof readCreatedAt>[0],
   signExec: Parameters<typeof closeCooperativeWithRoot>[0]["signExec"],
-  // In DOPAMINT mode the player holds 0 SUI, so a wallet-signed close would throw and strand the
-  // staked DOPAMINT — the fallback close must use the sponsored signer there.
+  // In MTPS mode the player holds 0 SUI, so a wallet-signed close would throw and strand the
+  // staked MTPS — the fallback close must use the sponsored signer there.
   sponsoredSignExec: Parameters<typeof closeCooperativeWithRoot>[0]["signExec"],
   tunnelId: string,
   transcript: Transcript,
@@ -745,7 +745,7 @@ async function settle<State, Move>(
       e,
     );
     await closeCooperativeWithRoot({
-      signExec: isDopamintConfigured ? sponsoredSignExec : signExec,
+      signExec: isMtpsConfigured ? sponsoredSignExec : signExec,
       tunnelId,
       settlement: co,
       coinType,

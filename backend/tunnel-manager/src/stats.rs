@@ -1,5 +1,6 @@
-//! The stats broadcaster: compute the aggregate snapshot ONCE per tick and fan it
-//! out to every SSE subscriber, so cost scales with the audience, not with TPS.
+//! The stats broadcaster: compute the aggregate snapshot ONCE per tick and publish it on the
+//! Redis `stats:snapshot` channel. The explorer relays it (SSE) and persists the time-series, so
+//! the relay service stays Valkey-only (ADR-0005) and SSE fan-out cost lives off this hot path.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -60,7 +61,7 @@ impl RateWindow {
     }
 }
 
-/// Recompute the aggregate snapshot once per tick and broadcast it to every SSE subscriber.
+/// Recompute the aggregate snapshot once per tick and publish it on `stats:snapshot`.
 /// `tps` is a sliding-window rate (see `RateWindow`), not a lifetime average and not a raw
 /// per-tick delta.
 pub(crate) fn spawn_stats_broadcaster(state: SharedState) {
@@ -73,14 +74,19 @@ pub(crate) fn spawn_stats_broadcaster(state: SharedState) {
             let now = Instant::now();
             let mut snap = state.control.snapshot().await;
             snap.tps = global.observe(now, snap.total_actions);
+            // Fold this tick's tps into the maintained peak; reflect it in the snapshot we send.
+            state.control.update_peak_tps(snap.tps).await;
+            snap.peak_tps = snap.peak_tps.max(snap.tps);
             for (game, stat) in snap.per_game.iter_mut() {
                 let w = per_game
                     .entry(game.clone())
                     .or_insert_with(|| RateWindow::new(RATE_WINDOW));
                 stat.tps = w.observe(now, stat.total_actions);
             }
+            // Publish the snapshot cross-service; the explorer relays it (SSE) and persists it.
+            // tunnel-manager no longer fans out SSE locally (ADR-0005: keep the relay Valkey-only).
             if let Ok(json) = serde_json::to_string(&snap) {
-                let _ = state.stats_tx.send(json);
+                state.bus.publish_raw("stats:snapshot", json).await;
             }
         }
     });

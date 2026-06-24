@@ -47,26 +47,26 @@ export function BattleView({
       : 0;
 
   return (
-    <div className="relative flex h-full min-h-0 flex-col gap-2 overflow-hidden p-2 @[26rem]:p-3">
-      <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-2 gap-y-0.5 text-[11px] text-arena-muted">
+    <div className="relative flex min-h-full flex-col gap-2 p-2 @[26rem]:p-3 lg:h-full lg:min-h-0 lg:overflow-hidden">
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-2 gap-y-0.5 text-[clamp(10px,2.6cqmin,15px)] text-[var(--qp-ink-soft)]">
         <span>
           Enemy sunk{" "}
-          <span className="text-arena-text">
+          <span className="text-[var(--qp-ink)]">
             {view.hitsOnEnemy}/{FLEET_CELLS}
           </span>{" "}
           · your hull{" "}
-          <span className="text-arena-text">
+          <span className="text-[var(--qp-ink)]">
             {view.hitsOnYou}/{FLEET_CELLS}
           </span>
         </span>
         <span>
           {score ? (
             <>
-              <span className="wal-mono uppercase tracking-wider text-[#cab1ff]/70">
+              <span className="uppercase tracking-wider text-[var(--qp-amber)]">
                 Game {gameNumber}
               </span>{" "}
-              · <span className="text-[#9cefcf]">{score.you}</span>–
-              <span className="text-[#fb7185]">{score.foe}</span>
+              · <span className="text-[var(--qp-felt)]">{score.you}</span>–
+              <span className="text-[var(--qp-red)]">{score.foe}</span>
             </>
           ) : view.onChain ? (
             "on-chain"
@@ -76,10 +76,13 @@ export function BattleView({
         </span>
       </div>
 
-      {/* Boards take the remaining height and split it: two square boards stacked on a
-          narrow window, side-by-side once wide. `min-h-0` + `1fr` rows let them shrink to
-          fit any window height, so the view never overflows or scrolls. */}
-      <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-2 gap-3 @[30rem]:grid-cols-2 @[30rem]:grid-rows-1 @[30rem]:gap-4">
+      {/* Boards are VIEWPORT-driven, not container-driven. Desktop (≥lg, the windowed shell):
+          side-by-side and height-fit — they shrink to fill the window like quantum poker's felt,
+          never restacking into a column and never scrolling. Mobile (<lg): one column of
+          FULL-WIDTH boards (big tap targets), and the page scrolls vertically (ModeFrame owns the
+          overflow-y-auto) since two full-width boards exceed the viewport — far easier to tap than
+          two height-squeezed boards. */}
+      <div className="grid grid-cols-1 gap-3 lg:min-h-0 lg:flex-1 lg:grid-cols-2 lg:gap-4">
         <BoardGrid
           title="Enemy waters"
           cells={view.enemyCells}
@@ -98,8 +101,14 @@ export function BattleView({
       {/* Manual play only: a thin turn prompt. Autopilot needs none — the animating
           boards already show the duel, and dropping it gives the boards more height. */}
       {view.outcome === null && !auto && (
-        <div className="shrink-0 text-center text-sm font-semibold text-arena-text">
-          <span className={cn(view.myTurn && "animate-pulse text-[#cab1ff]")}>
+        <div className="shrink-0 text-center text-[clamp(13px,3.4cqmin,20px)]">
+          <span
+            className={cn(
+              view.myTurn
+                ? "text-[var(--qp-amber)] motion-safe:animate-pulse"
+                : "text-[var(--qp-ink-soft)]",
+            )}
+          >
             {view.myTurn ? "Your turn — fire!" : "Opponent is aiming…"}
           </span>
         </div>
@@ -108,30 +117,32 @@ export function BattleView({
       {/* Result card. Suppressed while autopilot is looping (it rematches on its own);
           shown when a game ends in manual play, with Play Again + (multi-game) Settle. */}
       {view.outcome !== null && !auto && (
-        <div className="absolute inset-0 grid place-items-center overflow-y-auto bg-black/45 p-2 backdrop-blur-sm @[20rem]:p-4">
-          <div className="flex w-full max-w-xs animate-in flex-col items-center gap-3 rounded-xl border border-arena-edge bg-arena-panel p-4 text-center shadow-2xl zoom-in-95 @[20rem]:p-5">
+        <div className="absolute inset-0 grid place-items-center overflow-y-auto bg-[rgba(35,34,31,0.32)] p-2 backdrop-blur-[2px] @[20rem]:p-4">
+          <div className="qp-panel qp-stroke flex w-full max-w-xs animate-in flex-col items-center gap-3 p-4 text-center zoom-in-95 @[20rem]:p-5">
             <div
               className={cn(
-                "text-lg font-bold",
-                view.outcome === "win" ? "text-[#9cefcf]" : "text-[#fb7185]",
+                "qp-title text-[clamp(20px,7cqmin,30px)]",
+                view.outcome === "win"
+                  ? "text-[var(--qp-felt)]"
+                  : "text-[var(--qp-red)]",
               )}
             >
               {view.outcome === "win" ? "Victory" : "Defeat"}
             </div>
             {score ? (
-              <p className="text-xs text-arena-muted">
-                Session <span className="text-[#9cefcf]">{score.you}</span> –{" "}
-                <span className="text-[#fb7185]">{score.foe}</span> · settle to
-                cash out, or play on.
+              <p className="qp-note">
+                Session <span className="text-[var(--qp-felt)]">{score.you}</span>{" "}
+                – <span className="text-[var(--qp-red)]">{score.foe}</span> ·
+                settle to cash out, or play on.
               </p>
             ) : (
-              <p className="text-xs text-arena-muted">
+              <p className="qp-note">
                 {view.outcome === "win"
                   ? "You sank the enemy fleet."
                   : "Your fleet was sunk."}
               </p>
             )}
-            <dl className="grid w-full grid-cols-1 gap-y-1.5 text-[11px] @[16rem]:grid-cols-2">
+            <dl className="grid w-full grid-cols-1 gap-y-1.5 text-[clamp(10px,2.6cqmin,15px)] @[16rem]:grid-cols-2">
               <Stat label="Shots fired" value={String(view.yourShots)} />
               <Stat label="Hits" value={String(view.hitsOnEnemy)} />
               <Stat label="Accuracy" value={`${accuracy}%`} />
@@ -140,7 +151,7 @@ export function BattleView({
                 value={`${view.hitsOnYou}/${FLEET_CELLS}`}
               />
             </dl>
-            <div className="text-[11px] text-arena-muted">
+            <div className="text-[clamp(10px,2.4cqmin,14px)] text-[var(--qp-ink-soft)]">
               {statusLabel ?? ""}
             </div>
             <div className="mt-1 flex w-full flex-col gap-2">
@@ -148,19 +159,14 @@ export function BattleView({
                 onClick={onPlayAgain}
                 disabled={playAgainDisabled}
                 className={cn(
-                  "inline-flex w-full items-center justify-center rounded-full px-5 py-2.5 text-sm font-semibold transition-all active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-40",
-                  onSettle
-                    ? "border border-[#cab1ff]/40 bg-[#cab1ff]/8 text-[#cab1ff] hover:border-[#cab1ff]/70 hover:bg-[#cab1ff]/15"
-                    : "bg-[#cab1ff] text-[#0c0f1d] shadow-[0_0_14px_rgba(202,177,255,0.3)] hover:bg-[#b79bff]",
+                  "qp-btn w-full",
+                  !onSettle && "qp-btn--go",
                 )}
               >
                 {playAgainLabel ?? "Play Again"}
               </button>
               {onSettle && (
-                <button
-                  onClick={onSettle}
-                  className="inline-flex w-full items-center justify-center rounded-full bg-[#cab1ff] px-5 py-2.5 text-sm font-semibold text-[#0c0f1d] shadow-[0_0_14px_rgba(202,177,255,0.3)] transition-all hover:bg-[#b79bff] active:scale-[0.97]"
-                >
+                <button onClick={onSettle} className="qp-btn qp-btn--go w-full">
                   Settle &amp; cash out
                 </button>
               )}
@@ -175,8 +181,8 @@ export function BattleView({
 function Stat({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-center justify-between gap-2 px-2">
-      <dt className="text-arena-muted">{label}</dt>
-      <dd className="font-semibold text-arena-text">{value}</dd>
+      <dt className="text-[var(--qp-ink-soft)]">{label}</dt>
+      <dd className="text-[var(--qp-ink)]">{value}</dd>
     </div>
   );
 }

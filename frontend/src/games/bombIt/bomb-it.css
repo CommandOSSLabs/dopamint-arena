@@ -1,3 +1,5 @@
+@import "../sketch/sketch.css";
+
 /* ============================================================
    Bomb It — dual side panes + square arena. Cornerless throughout.
    ============================================================ */
@@ -11,8 +13,10 @@
   width: 100%;
   flex-direction: column;
   justify-content: flex-end;
+  align-items: stretch;
   overflow: hidden;
   container-type: size;
+  padding: 0 10px 12px;
   background:
     radial-gradient(120% 90% at 50% 0%, rgba(249, 115, 22, 0.16), transparent 55%),
     radial-gradient(70% 55% at 100% 40%, rgba(232, 121, 249, 0.08), transparent 50%),
@@ -169,180 +173,186 @@
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
 }
 
-.bomb-glyph--blast {
-  background: rgba(254, 243, 199, 0.15);
-  border-color: #f97316;
-}
-.bomb-glyph__cross {
-  position: absolute;
-  inset: 0;
-  background:
-    linear-gradient(#ef4444, #ef4444) center / 22% 100% no-repeat,
-    linear-gradient(90deg, #ef4444, #ef4444) center / 100% 22% no-repeat;
-  opacity: 0.85;
-}
 
-/* ---- Bottom dock (not a centered card) --------------------------------- */
+/* ---- Lobby deck (bottom panel + mode tiles) ----------------------------- */
 
-.bomb-lobby__dock {
+.bomb-lobby__deck {
   position: relative;
   z-index: 2;
   display: flex;
   width: 100%;
+  max-width: 32rem;
+  margin: 0 auto;
+  flex-direction: column;
   align-items: stretch;
-  gap: 10px;
-  border-top: 2px solid color-mix(in srgb, var(--bi-ember, #f97316) 45%, transparent);
-  background:
-    linear-gradient(0deg, rgba(10, 9, 13, 0.97), rgba(18, 14, 24, 0.92)),
-    var(--bi-panel, #141018);
-  padding: 10px 12px 12px;
-  box-shadow:
-    0 -12px 40px rgba(0, 0, 0, 0.45),
-    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  gap: 12px;
+  padding: 14px 16px 16px;
 }
-.bomb-lobby__dock::before {
+.bomb-lobby__deck-head {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.bomb-lobby__modes {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.bomb-mode-tile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 5.5rem;
+  padding: 10px 8px 8px;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  text-align: center;
+  --sketch-fill: #fff9f0;
+}
+.bomb-mode-tile--on {
+  --sketch-fill: var(--sketch-accent-fill, #ffe9bd);
+}
+.bomb-mode-tile__art {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 1.75rem;
+}
+.bomb-mode-tile__art--versus {
+  gap: 6px;
+}
+.bomb-mode-tile__label {
+  position: relative;
+  z-index: 1;
+  font-size: 0.95rem;
+  line-height: 1.1;
+  color: var(--sketch-ink, #23221f);
+}
+.bomb-mode-tile__hint {
+  position: relative;
+  z-index: 1;
+  margin: 0;
+  font-size: 0.72rem;
+  line-height: 1;
+}
+.bomb-lobby__stake {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+
+/* ---- Lobby card (compact status screens) ------------------------------ */
+
+.bomb-lobby__card {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  width: min(28rem, calc(100% - 16px));
+  flex-direction: column;
+  align-items: stretch;
+  gap: 14px;
+  border: 2px solid color-mix(in srgb, var(--bi-ember, #f97316) 45%, transparent);
+  border-radius: 14px;
+  background: linear-gradient(180deg, #fffef5 0%, #fff 50%, #fef3e8 100%);
+  padding: 20px 18px;
+  text-align: center;
+  box-shadow: 0 5px 0 color-mix(in srgb, var(--bi-ember, #f97316) 35%, #000);
+}
+.bomb-lobby__card::before {
   content: "";
   position: absolute;
   inset: 0;
+  border-radius: inherit;
   pointer-events: none;
-  background: repeating-linear-gradient(
-    90deg,
-    rgba(255, 255, 255, 0.02) 0 1px,
-    transparent 1px 4px
-  );
-  opacity: 0.5;
+  opacity: 0.3;
+  background-image: radial-gradient(circle at 15% 85%, rgba(255, 255, 255, 0.85) 0 2px, transparent 3px);
+  background-size: 16px 12px;
 }
-
-.bomb-lobby__brand {
+.bomb-lobby__card--compact {
+  gap: 12px;
+  padding: 18px 16px;
+}
+.bomb-lobby__head {
   position: relative;
   z-index: 1;
-  display: flex;
-  flex: none;
-  flex-direction: column;
-  justify-content: space-between;
-  gap: 8px;
-  min-width: 3.5rem;
-  padding-right: 10px;
-  border-right: 1px solid rgba(34, 211, 238, 0.25);
-}
-
-.bomb-lobby__mark {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin: 0;
-  font-size: clamp(1rem, 3.2cqw, 1.35rem);
-  line-height: 0.92;
-  letter-spacing: 0.08em;
-  color: #f1f5f9;
-  text-shadow: 0 0 12px rgba(34, 211, 238, 0.25);
-}
-.bomb-lobby__mark span:last-child {
-  color: var(--bi-ember, #f97316);
-}
-
-.bomb-lobby__legend {
   display: flex;
   align-items: center;
-  gap: 4px;
+  justify-content: space-between;
+  gap: 10px;
 }
-
-.bomb-lobby__console {
+.bomb-lobby__brand {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+.bomb-lobby__mascot {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+}
+.bomb-lobby__title {
+  font-size: 1.15rem;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: #f1f5f9;
+  line-height: 1.05;
+  text-align: left;
+}
+.bomb-lobby__action {
   position: relative;
   z-index: 1;
   display: flex;
-  flex: 1;
-  min-width: 0;
-  flex-direction: column;
-  gap: 8px;
+  width: 100%;
+  align-items: stretch;
+}
+.bomb-seg {
+  display: inline-flex;
+  flex: none;
+  overflow: hidden;
+  border: 2px solid rgba(148, 163, 184, 0.35);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.35);
+  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.35);
+}
+.bomb-seg__btn {
+  padding: 6px 11px;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(148, 163, 184, 0.9);
+  border-right: 1px solid rgba(148, 163, 184, 0.15);
+}
+.bomb-seg__btn:last-child {
+  border-right: 0;
+}
+.bomb-seg__btn--on {
+  color: #fef3c7;
+  background: linear-gradient(180deg, rgba(249, 115, 22, 0.35), rgba(0, 0, 0, 0.25));
 }
 
 .bomb-lobby__modes {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 6px;
-}
-
-.bomb-mode {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  min-height: 2.75rem;
-  border: 1px solid rgba(148, 163, 184, 0.22);
-  background: rgba(0, 0, 0, 0.42);
-  padding: 6px 4px;
-  font-size: 0.72rem;
-  font-weight: 700;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: rgba(148, 163, 184, 0.9);
-  transition:
-    background 0.18s ease,
-    border-color 0.18s ease,
-    color 0.18s ease,
-    box-shadow 0.18s ease;
-}
-.bomb-mode:hover {
-  border-color: rgba(148, 163, 184, 0.4);
-  color: #e2e8f0;
-}
-.bomb-mode--on {
-  border-color: var(--bi-ember, #f97316);
-  background: linear-gradient(180deg, rgba(249, 115, 22, 0.22), rgba(0, 0, 0, 0.35));
-  color: #fef3c7;
-  box-shadow:
-    inset 0 0 0 1px rgba(249, 115, 22, 0.35),
-    0 0 14px rgba(249, 115, 22, 0.12);
-}
-.bomb-mode__versus {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-}
-
-.bomb-lobby__play {
-  display: flex;
-  width: 100%;
-  align-items: stretch;
-  gap: 6px;
-}
-
-.bomb-lobby__stake-label {
-  display: flex;
-  flex: 1;
-  min-width: 0;
-  flex-direction: column;
-  gap: 3px;
-}
-.bomb-lobby__stake-tag {
-  font-size: 0.55rem;
-  font-weight: 700;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: rgba(148, 163, 184, 0.75);
-}
-
-.bomb-field {
-  flex: 1;
-  min-width: 0;
-  width: 100%;
-  border: 1px solid rgba(148, 163, 184, 0.28);
-  background: var(--bi-ink, #0a090d);
-  padding: 10px 12px;
-  text-align: center;
-  font-family: var(--wal-font-mono);
-  font-size: 1rem;
-  color: #f1f5f9;
-}
-.bomb-lobby__play .bomb-field {
-  border-right: 1px solid rgba(148, 163, 184, 0.28);
-}
-.bomb-field:focus {
-  outline: none;
-  border-color: var(--bi-ember, #f97316);
-  box-shadow: inset 0 0 0 1px var(--bi-ember, #f97316);
 }
 
 .bomb-cta {
@@ -369,48 +379,6 @@
 }
 .bomb-cta:hover {
   filter: brightness(1.08);
-}
-
-/* ---- Status dock (funding / matching) ---------------------------------- */
-
-.bomb-lobby__dock--status {
-  justify-content: center;
-  padding: 14px 16px 16px;
-}
-.bomb-lobby__status {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  width: min(100%, 22rem);
-  flex-direction: column;
-  align-items: stretch;
-  gap: 12px;
-  text-align: center;
-}
-
-.bomb-status-title {
-  font-size: 1.35rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--bi-ember, #f97316);
-}
-
-.bomb-lobby__copy {
-  font-size: 0.92rem;
-  line-height: 1.45;
-  color: var(--bi-muted, #94a3b8);
-}
-
-.bomb-cta-ghost {
-  border: 1px solid rgba(148, 163, 184, 0.28);
-  background: transparent;
-  color: #e2e8f0;
-  font-size: 0.9rem;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  padding: 10px 18px;
-  min-height: 2.75rem;
 }
 
 @keyframes bomb-float-a {
@@ -1177,4 +1145,414 @@
   min-width: 8rem;
   font-size: 1rem;
   padding: 0 24px;
+}
+
+/* ---- Sketch skin integration (full whiteboard — match Quantum Poker) ---- */
+
+.bomb-lobby.sketch,
+.bomb-shell.sketch {
+  background: var(--sketch-paper)
+    radial-gradient(rgba(35, 34, 31, 0.09) 1.1px, transparent 1.3px);
+  background-size: 16px 16px;
+  background-position: -8px -8px;
+  color: var(--sketch-ink);
+}
+
+.bomb-lobby.sketch .bomb-lobby__scene {
+  opacity: 0.48;
+}
+
+.bomb-lobby.sketch .bomb-lobby__deck {
+  --sketch-fill: color-mix(in srgb, var(--sketch-accent-fill) 38%, #fff9f0);
+}
+.bomb-lobby.sketch .bomb-lobby__deck.sketch-stroke::before {
+  display: block;
+  background: var(--sketch-fill, #fff9f0);
+  border-color: var(--sketch-accent);
+}
+
+.bomb-lobby.sketch .bomb-mode-tile {
+  border: 0;
+  box-shadow: none;
+  font-family: inherit;
+}
+.bomb-lobby.sketch .bomb-mode-tile.sketch-stroke::before {
+  display: block;
+  background: var(--sketch-fill, #fff9f0);
+}
+.bomb-lobby.sketch .bomb-mode-tile--on.sketch-stroke::before {
+  border-color: var(--sketch-accent);
+  border-width: 3px;
+}
+
+.bomb-lobby.sketch .bomb-lobby__title {
+  color: var(--sketch-ink);
+  text-shadow: none;
+  font-weight: inherit;
+  text-transform: none;
+  text-align: left;
+}
+
+.bomb-lobby.sketch .bomb-lobby__head {
+  text-align: left;
+}
+
+.bomb-lobby.sketch .bomb-lobby__card {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.bomb-lobby.sketch .bomb-lobby__card::before {
+  display: none;
+}
+.bomb-lobby.sketch .bomb-lobby__card.sketch-stroke::before {
+  display: block;
+  background: var(--sketch-fill, #fff9f0);
+}
+
+.bomb-lobby.sketch .bomb-lobby__card--compact {
+  align-items: center;
+  text-align: center;
+}
+
+.bomb-lobby.sketch .bomb-lobby__card--compact .sketch-eyebrow,
+.bomb-lobby.sketch .bomb-lobby__card--compact .sketch-title,
+.bomb-lobby.sketch .bomb-lobby__card--compact .sketch-note {
+  width: 100%;
+}
+
+.bomb-lobby.sketch .bomb-seg {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.bomb-lobby.sketch .bomb-seg__btn {
+  border: 0;
+  background: transparent;
+  font-weight: inherit;
+  text-transform: none;
+  letter-spacing: 0.04em;
+  color: var(--sketch-ink-soft);
+}
+.bomb-lobby.sketch .bomb-seg__btn--on {
+  background: var(--sketch-accent-fill);
+  color: var(--sketch-ink);
+}
+
+.bomb-lobby.sketch .bomb-lobby__scene::before {
+  opacity: 0.15;
+}
+.bomb-lobby.sketch .bomb-lobby__arena-hint {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  opacity: 0.35;
+}
+.bomb-lobby.sketch .bomb-lobby__arena-hint::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 3px dashed var(--sketch-ink-soft);
+  border-radius: 8px;
+  filter: var(--sketch-filter);
+}
+
+.bomb-lobby.sketch .bomb-glyph {
+  position: relative;
+  isolation: isolate;
+  border: 0;
+  box-shadow: none;
+  background: transparent;
+}
+.bomb-lobby.sketch .bomb-glyph::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 2.5px solid var(--sketch-ink);
+  border-radius: 5px;
+  filter: var(--sketch-filter);
+  background: var(--sketch-glyph-fill, transparent);
+  z-index: -1;
+}
+.bomb-lobby.sketch .bomb-glyph--player-a {
+  --sketch-glyph-fill: var(--sketch-blue-fill);
+}
+.bomb-lobby.sketch .bomb-glyph--player-a::before {
+  border-color: var(--sketch-blue);
+}
+.bomb-lobby.sketch .bomb-glyph--player-b {
+  --sketch-glyph-fill: color-mix(in srgb, var(--sketch-violet) 14%, #fffefb);
+}
+.bomb-lobby.sketch .bomb-glyph--player-b::before {
+  border-color: var(--sketch-violet);
+}
+
+.bomb-lobby.sketch .bomb-cta,
+.bomb-shell.sketch .bomb-cta,
+.bomb-shell.sketch .bomb-auto,
+.bomb-shell.sketch .bomb-settle {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  filter: none;
+  font-family: inherit;
+  letter-spacing: 0.04em;
+  text-transform: none;
+}
+
+.bomb-shell.sketch .bomb-main {
+  background: transparent;
+}
+
+.bomb-shell.sketch .sketch-panel,
+.bomb-shell.sketch .sketch-stroke.sketch-panel {
+  --sketch-fill: #fff9f0;
+}
+
+.bomb-shell.sketch .bomb-pane {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.bomb-shell.sketch .bomb-pane::before,
+.bomb-shell.sketch .bomb-pane::after {
+  display: none;
+}
+.bomb-shell.sketch .bomb-pane--you {
+  --sketch-fill: var(--sketch-blue-fill);
+}
+.bomb-shell.sketch .bomb-pane--opp {
+  --sketch-fill: color-mix(in srgb, var(--sketch-violet) 12%, #fff9f0);
+}
+.bomb-shell.sketch .bomb-pane--you.sketch-stroke::before {
+  display: block;
+  border-color: var(--sketch-blue);
+  border-width: 3px;
+  background: var(--sketch-fill, #fff9f0);
+}
+.bomb-shell.sketch .bomb-pane--opp.sketch-stroke::before {
+  display: block;
+  border-color: var(--sketch-violet);
+  border-width: 3px;
+  background: var(--sketch-fill, #fff9f0);
+}
+.bomb-shell.sketch .bomb-pane--live.sketch-stroke--accent::before {
+  border-color: var(--sketch-accent);
+}
+
+.bomb-shell.sketch .bomb-player {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.bomb-shell.sketch .bomb-player::before {
+  display: none;
+}
+.bomb-shell.sketch .bomb-player--live {
+  animation: none;
+}
+
+.bomb-shell.sketch .bomb-player__badge {
+  width: auto;
+  min-width: 1.75rem;
+  height: 1.75rem;
+  padding: 0 0.2em;
+  background: transparent;
+  box-shadow: none;
+  font-family: inherit;
+}
+.bomb-shell.sketch .bomb-player--a .bomb-player__badge {
+  background: var(--sketch-blue);
+}
+.bomb-shell.sketch .bomb-player--b .bomb-player__badge {
+  background: var(--sketch-violet);
+}
+
+.bomb-shell.sketch .bomb-controls,
+.bomb-shell.sketch .bomb-stats,
+.bomb-shell.sketch .bomb-score,
+.bomb-shell.sketch .bomb-tx,
+.bomb-shell.sketch .bomb-metrics {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  --sketch-fill: #fff9f0;
+}
+.bomb-shell.sketch .bomb-controls.sketch-stroke::before,
+.bomb-shell.sketch .bomb-stats.sketch-stroke::before,
+.bomb-shell.sketch .bomb-metrics.sketch-stroke::before {
+  background: var(--sketch-fill, #fff9f0);
+}
+
+.bomb-shell.sketch .bomb-pad {
+  border: 0;
+  background: transparent;
+  color: var(--sketch-ink);
+  box-shadow: none;
+  font-family: inherit;
+}
+.bomb-shell.sketch .bomb-pad--bomb {
+  color: var(--sketch-red);
+}
+
+.bomb-shell.sketch {
+  --bomb-floor: #fffefb;
+  --bomb-floor-2: #f5f0e4;
+  --bomb-wall: #e8e2d6;
+  --bomb-crate: #ffe9bd;
+  --bomb-line: transparent;
+  --sketch-arena-fill: var(--sketch-felt-fill);
+  --sketch-arena-ink: var(--sketch-felt);
+}
+
+.bomb-shell.sketch .bomb-stage {
+  box-shadow: none;
+  --bomb-floor: #fffefb;
+  --bomb-floor-2: #f5f0e4;
+  --bomb-wall: #e8e2d6;
+  --bomb-crate: #ffe9bd;
+  --bomb-line: transparent;
+}
+.bomb-shell.sketch .bomb-stage.sketch-arena::before {
+  border-color: var(--sketch-felt);
+  border-width: 3px;
+}
+.bomb-shell.sketch .bomb-stage.sketch-stroke::before {
+  display: none;
+}
+
+.bomb-shell.sketch .bomb-cell {
+  border: 0;
+}
+.bomb-shell.sketch .bomb-cell--wall {
+  background: color-mix(in srgb, var(--bomb-wall) 88%, #fff);
+}
+.bomb-shell.sketch .bomb-cell--crate {
+  background: color-mix(in srgb, var(--bomb-crate) 90%, #fff);
+}
+.bomb-shell.sketch .bomb-crate-glyph {
+  border: 0;
+  background: transparent;
+  position: relative;
+  isolation: isolate;
+}
+.bomb-shell.sketch .bomb-crate-glyph::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 2px solid var(--sketch-ink);
+  border-radius: 4px;
+  filter: var(--sketch-filter);
+  background: var(--bomb-crate);
+  z-index: -1;
+}
+
+.bomb-shell.sketch .bomb-piece__glyph {
+  border: 0;
+  box-shadow: none;
+  background: transparent;
+}
+.bomb-shell.sketch .bomb-piece__glyph--a {
+  --sketch-glyph-fill: var(--sketch-blue-fill);
+  --sketch-glyph-ink: var(--sketch-blue);
+}
+.bomb-shell.sketch .bomb-piece__glyph--b {
+  --sketch-glyph-fill: color-mix(in srgb, var(--sketch-violet) 14%, #fffefb);
+  --sketch-glyph-ink: var(--sketch-violet);
+}
+.bomb-shell.sketch .bomb-piece__glyph--bomb {
+  --sketch-glyph-fill: #2a2520;
+  --sketch-glyph-ink: var(--sketch-red);
+}
+.bomb-shell.sketch .bomb-piece__inner,
+.bomb-shell.sketch .bomb-piece__bomb-core,
+.bomb-shell.sketch .bomb-piece__fuse {
+  border: 1.5px solid var(--sketch-ink);
+  box-shadow: none;
+  border-radius: 3px;
+}
+.bomb-shell.sketch .bomb-piece__glyph--mine {
+  animation: none;
+  filter: none;
+}
+.bomb-shell.sketch .bomb-piece__glyph--mine::before {
+  border-color: var(--sketch-accent);
+  border-width: 3px;
+}
+
+.bomb-shell.sketch .bomb-blast__frame {
+  border: 2.5px solid var(--sketch-accent);
+  filter: var(--sketch-filter);
+  box-shadow: none;
+}
+
+.bomb-shell.sketch .bomb-result {
+  background: color-mix(in srgb, var(--sketch-paper) 88%, transparent);
+}
+.bomb-shell.sketch .bomb-result__card {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  --sketch-fill: #fff9f0;
+}
+.bomb-shell.sketch .bomb-result__card.sketch-stroke::before {
+  background: var(--sketch-fill, #fff9f0);
+}
+.bomb-shell.sketch .bomb-result__title {
+  letter-spacing: 0.04em;
+  text-transform: none;
+}
+.bomb-shell.sketch .bomb-result__sub {
+  color: var(--sketch-ink-soft);
+}
+
+.bomb-lobby.sketch .bomb-lobby__copy,
+.bomb-shell.sketch .bomb-pane__eyebrow,
+.bomb-shell.sketch .bomb-spectate {
+  color: var(--sketch-ink-soft);
+}
+
+.bomb-lobby.sketch .bomb-field,
+.bomb-lobby.sketch .bomb-mode,
+.bomb-lobby.sketch .bomb-cta,
+.bomb-shell.sketch .bomb-cta,
+.bomb-shell.sketch .bomb-auto,
+.bomb-shell.sketch .bomb-settle,
+.bomb-shell.sketch .bomb-pad,
+.bomb-shell.sketch .bomb-player__badge,
+.bomb-shell.sketch .bomb-result__title,
+.bomb-shell.sketch .bomb-result__sub,
+.bomb-lobby.sketch .bomb-lobby__copy,
+.bomb-shell.sketch .bomb-pane__eyebrow,
+.bomb-shell.sketch .bomb-spectate,
+.bomb-shell.sketch .bomb-player__bal,
+.bomb-shell.sketch .bomb-tx__value,
+.bomb-shell.sketch .bomb-metric dd,
+.bomb-shell.sketch .bomb-metric dt,
+.bomb-shell.sketch .bomb-tx__label,
+.bomb-shell.sketch .bomb-score__tally,
+.bomb-shell.sketch .bomb-score__label,
+.bomb-shell.sketch .bomb-player__flag {
+  font-family: inherit;
+  font-weight: inherit;
+  text-transform: none;
+  letter-spacing: 0.04em;
+}
+
+.bomb-shell.sketch .bomb-player__bal,
+.bomb-shell.sketch .bomb-tx__value,
+.bomb-shell.sketch .bomb-metric dd,
+.bomb-shell.sketch .bomb-score__tally {
+  color: var(--sketch-accent);
+  text-shadow: none;
+}
+
+.bomb-shell.sketch .bomb-metric dt,
+.bomb-shell.sketch .bomb-tx__label,
+.bomb-shell.sketch .bomb-score__label {
+  color: var(--sketch-ink-soft);
+}
+
+.bomb-shell.sketch .bomb-player__flag {
+  color: var(--sketch-red);
 }

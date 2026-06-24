@@ -29,11 +29,15 @@ function AppContent() {
     }
   }, [account, navigate]);
 
+  // Per-window auto-start latch (see PlayerBot): App-scoped so each blackjack window auto-starts
+  // its watch independently, and survives the back-to-menu → re-enter remount of PlayerBot.
+  const autoStartedRef = useRef(false);
+
   switch (currentRoute) {
     case "/":
       return <Home />;
     case "/bot":
-      return <PlayerBot />;
+      return <PlayerBot autoStarted={autoStartedRef} />;
     case "/pvp":
       return <PvpBlackjack />;
     default:
@@ -41,10 +45,34 @@ function AppContent() {
   }
 }
 
+export function SketchDefs() {
+  return (
+    <svg aria-hidden width="0" height="0" className="qp-defs">
+      <filter id="qpRough" x="-6%" y="-6%" width="112%" height="112%">
+        <feTurbulence
+          type="fractalNoise"
+          baseFrequency="0.018"
+          numOctaves={2}
+          seed={7}
+          result="noise"
+        />
+        <feDisplacementMap
+          in="SourceGraphic"
+          in2="noise"
+          scale="2.6"
+          xChannelSelector="R"
+          yChannelSelector="G"
+        />
+      </filter>
+    </svg>
+  );
+}
+
 export default function App() {
   return (
     <GameRouterProvider>
-      <div className="w-full h-full relative overflow-hidden bg-zinc-950">
+      <div className="bj-root qp-sketch w-full h-full relative overflow-hidden">
+        <SketchDefs />
         <ScaledWrapper>
           <AppContent />
         </ScaledWrapper>

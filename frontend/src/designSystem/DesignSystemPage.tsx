@@ -151,7 +151,7 @@ export function DesignSystemPage() {
               </Link>
               <Separator orientation="vertical" className="h-4" />
               <span className="wal-display text-sm text-foreground">
-                dopamint <span className="wal-gradient-text">design</span>
+                mtps <span className="wal-gradient-text">design</span>
               </span>
             </div>
             <div className="flex items-center gap-3">
@@ -176,7 +176,7 @@ export function DesignSystemPage() {
           <section>
             <p className="wal-eyebrow">Component Library</p>
             <h1 className="wal-display mt-3 text-5xl text-foreground md:text-6xl">
-              dopamint, the{" "}
+              mtps, the{" "}
               <span className="wal-gradient-text">walrus&nbsp;memory</span> way.
             </h1>
             <p className="mt-5 max-w-xl text-lg leading-relaxed text-muted-foreground">

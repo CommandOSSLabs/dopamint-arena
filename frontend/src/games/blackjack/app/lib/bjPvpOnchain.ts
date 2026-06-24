@@ -16,7 +16,7 @@ export interface PvpParty {
 }
 
 /** Open + share the tunnel (seat A pays the trivial create gas). penalty = stake.
- *  `coinType` defaults to SUI; pass DOPAMINT to open a token-staked tunnel. */
+ *  `coinType` defaults to SUI; pass MTPS to open a token-staked tunnel. */
 export function buildCreateAndShareTx(
   a: PvpParty,
   b: PvpParty,
@@ -42,7 +42,7 @@ export function buildCreateAndShareTx(
   return tx;
 }
 
-/** Fund this seat's stake. With `stakeCoinId` the stake is split off that user coin (the DOPAMINT,
+/** Fund this seat's stake. With `stakeCoinId` the stake is split off that user coin (the MTPS,
  *  gas-sponsored path — a sponsored tx has no gas coin); otherwise it splits off the wallet's gas
  *  coin (SUI fallback). `coinType` defaults to SUI. */
 export function buildDepositTx(

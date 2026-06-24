@@ -15,8 +15,8 @@ export const QUANTUM_POKER_HANDS_PER_TUNNEL = 1500n;
 export const QUANTUM_POKER_STAKE = 2500n;
 
 /**
- * Per-seat buy-in for the PvP lane, in chips. chips == raw DOPAMINT (1:1), so this is also the raw
- * stake locked per seat per round. "1 DOPAMINT = 2500 chips" is the UI label; the on-chain stake is
+ * Per-seat buy-in for the PvP lane, in chips. chips == raw MTPS (1:1), so this is also the raw
+ * stake locked per seat per round. "1 MTPS = 2500 chips" is the UI label; the on-chain stake is
  * this many raw units. Sized so a seat busts (and auto-rebuys) within HAND_CAP at ante 50.
  */
 export const POKER_BUYIN = 2500n;

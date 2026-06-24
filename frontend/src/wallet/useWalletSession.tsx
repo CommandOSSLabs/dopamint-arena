@@ -5,7 +5,7 @@ import {
   useSuiClientQuery,
 } from "@mysten/dapp-kit";
 
-const DEMO_KEY = "dopamint.demoWallet";
+const DEMO_KEY = "mtps.demoWallet";
 // Display-only fake address + balance so the platform is fully usable for a
 // demo without a real Sui wallet installed.
 const DEMO_ADDRESS =

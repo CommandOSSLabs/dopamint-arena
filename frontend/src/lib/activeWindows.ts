@@ -9,7 +9,7 @@
  * reason game sessions do: it must outlive the Desktop/Mobile remount on resize.
  */
 
-const KEY = "dopamint.activeWindows.v1";
+const KEY = "mtps.activeWindows.v1";
 
 /** The game id embedded in a window id (`blackjack#ab12` → `blackjack`, `blackjack` → `blackjack`). */
 const gameOf = (windowId: string) => windowId.split("#")[0];

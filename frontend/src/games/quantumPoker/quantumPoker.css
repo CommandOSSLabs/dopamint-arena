@@ -1,75 +1,18 @@
 /* ============================================================
-   Quantum Poker — hand-drawn "whiteboard sketch" skin (Excalidraw-style).
+   Quantum Poker — layout on top of the shared sketch skin.
 
-   The whole felt sits on a paper surface in Gochi Hand (loaded in index.html).
-   Ink-stroke borders are drawn on a `::before` and roughed up by the SVG
-   turbulence filter `#qpRough` (rendered once per window via <SketchDefs/>), so
-   straight edges read as hand-drawn while the TEXT underneath stays crisp.
-
+   Primitives (paper, ink stroke, buttons) live in ../sketch/sketch.css.
    Sizing is cqmin-based: the window root carries `container-type:size`, so the
    felt scales with the WINDOW (not the viewport). Layout is an explicit grid,
    never flex-fill + justify-between — that is what let seats overflow onto the
    stats panel. Grid rows can't overlap.
    ============================================================ */
 
-.qp-sketch {
-  --qp-ink: #23221f;
-  --qp-ink-soft: rgba(35, 34, 31, 0.6);
-  --qp-paper: #fbf9f3;
-  --qp-felt: #2f9e44;
-  --qp-felt-fill: #eaf8ee;
-  --qp-red: #e03131;
-  --qp-blue: #1971c2; /* seat A marker */
-  --qp-violet: #6741d9; /* seat B marker */
-  --qp-amber: #e8920c; /* chips / pot */
-  --qp-amber-fill: #ffe9bd;
+@import "../sketch/sketch.css";
 
-  container-type: size;
-  font-family: "Gochi Hand", "Comic Sans MS", cursive;
-  color: var(--qp-ink);
-  background-color: var(--qp-paper);
-  background-image: radial-gradient(rgba(35, 34, 31, 0.09) 1.1px, transparent 1.3px);
-  background-size: 16px 16px;
-  background-position: -8px -8px;
-}
-
-/* SVG filter defs holder — zero-size, out of flow (rendered once per window). */
-.qp-defs {
-  position: absolute;
-  width: 0;
-  height: 0;
-}
-
-/* ---- hand-drawn ink stroke (content stays crisp; only the border wobbles) ---- */
-.qp-stroke {
-  position: relative;
-  isolation: isolate;
-}
-.qp-stroke::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  /* fill lives on the SAME filtered layer as the border so both wobble together
-     and the colour never bleeds past the hand-drawn outline */
-  background: var(--qp-fill, transparent);
-  border: 2.5px solid var(--qp-ink);
-  border-radius: 10px;
-  filter: url(#qpRough);
-  pointer-events: none;
-  z-index: -1;
-}
-.qp-stroke--felt::before {
-  border-color: var(--qp-felt);
-  border-width: 3px;
-}
-.qp-stroke--active::before {
-  border-color: var(--qp-amber);
-  border-width: 3px;
-}
-
-.qp-panel {
-  --qp-fill: #fffefb;
-  border-radius: 10px;
+.sketch {
+  --sketch-felt: #2f9e44;
+  --sketch-felt-fill: #eaf8ee;
 }
 
 /* ---- header ---- */
@@ -87,87 +30,7 @@
 .qp-eyebrow {
   font-size: clamp(9px, 2.4cqmin, 14px);
   letter-spacing: 0.08em;
-  color: var(--qp-amber);
-}
-
-/* ---- sketchy button ---- */
-.qp-btn {
-  position: relative;
-  isolation: isolate;
-  font-family: inherit;
-  font-size: clamp(11px, 3cqmin, 18px);
-  line-height: 1;
-  padding: clamp(4px, 1.4cqmin, 9px) clamp(8px, 2.6cqmin, 18px);
-  --qp-fill: #fffefb;
-  color: var(--qp-ink);
-  cursor: pointer;
-  transition: transform 0.1s ease;
-}
-.qp-btn::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: var(--qp-fill);
-  border: 2.5px solid var(--qp-ink);
-  border-radius: 9px;
-  filter: url(#qpRough);
-  z-index: -1;
-}
-.qp-btn:hover:not(:disabled) {
-  transform: translateY(-1px) rotate(-0.4deg);
-}
-.qp-btn:active:not(:disabled) {
-  transform: translateY(1px);
-}
-.qp-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-.qp-btn--go {
-  --qp-fill: var(--qp-amber-fill);
-}
-.qp-btn--go::before {
-  border-color: var(--qp-amber);
-}
-.qp-btn--stop {
-  --qp-fill: #ffe9e9;
-}
-.qp-btn--stop::before {
-  border-color: var(--qp-red);
-}
-.qp-btn--call {
-  --qp-fill: #e7f1fb;
-}
-.qp-btn--call::before {
-  border-color: var(--qp-blue);
-}
-
-/* turn-clock chip (PvBot human turn) */
-.qp-timer {
-  position: relative;
-  isolation: isolate;
-  display: inline-grid;
-  place-items: center;
-  min-width: 2.2em;
-  padding: clamp(3px, 1.2cqmin, 8px) clamp(6px, 1.8cqmin, 12px);
-  font-size: clamp(12px, 3.2cqmin, 20px);
-  line-height: 1;
-  color: var(--qp-amber);
-}
-.qp-timer::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border: 2.5px solid var(--qp-amber);
-  border-radius: 9px;
-  filter: url(#qpRough);
-  z-index: -1;
-}
-.qp-timer--low {
-  color: var(--qp-red);
-}
-.qp-timer--low::before {
-  border-color: var(--qp-red);
+  color: var(--sketch-accent);
 }
 
 /* ---- the felt: explicit 3-row grid so nothing can overlap ---- */
@@ -191,7 +54,7 @@
   padding: clamp(8px, 2.6cqmin, 22px);
   /* the felt fill stays on the element (a full-size displacement-filtered fill is
      far too expensive to repaint every frame); only its thin border is roughened */
-  background: var(--qp-felt-fill);
+  background: var(--sketch-felt-fill);
   border-radius: 16px;
   width: 100%;
   height: 100%;
@@ -203,9 +66,9 @@
   content: "";
   position: absolute;
   inset: 0;
-  border: 3px solid var(--qp-felt);
+  border: 3px solid var(--sketch-felt);
   border-radius: 16px;
-  filter: url(#qpRough);
+  filter: var(--sketch-filter);
   z-index: -1;
 }
 
@@ -217,7 +80,7 @@
   align-items: center;
   gap: clamp(6px, 2.2cqmin, 16px);
   padding: clamp(2px, 1.2cqmin, 9px) clamp(8px, 2.2cqmin, 16px);
-  --qp-fill: #fffefb;
+  --sketch-fill: #fffefb;
   border-radius: 11px;
   max-width: 100%;
 }
@@ -270,10 +133,10 @@
   color: #fffefb;
 }
 .qp-seat__id--a {
-  background: var(--qp-blue);
+  background: var(--sketch-blue);
 }
 .qp-seat__id--b {
-  background: var(--qp-violet);
+  background: var(--sketch-violet);
 }
 .qp-seat__name {
   font-size: clamp(12px, 3.2cqmin, 20px);
@@ -297,15 +160,15 @@
   padding: clamp(1px, 0.7cqmin, 5px) clamp(6px, 1.9cqmin, 13px);
   font-size: clamp(11px, 2.9cqmin, 17px);
   line-height: 1;
-  color: var(--qp-amber);
+  color: var(--sketch-accent);
 }
 .qp-bet::before {
   content: "";
   position: absolute;
   inset: 0;
-  border: 2px dashed var(--qp-amber);
+  border: 2px dashed var(--sketch-accent);
   border-radius: 999px;
-  filter: url(#qpRough);
+  filter: var(--sketch-filter);
   z-index: -1;
 }
 .qp-win {
@@ -314,7 +177,7 @@
   padding: 0 0.4em;
   font-size: clamp(9px, 2.4cqmin, 14px);
   color: #fffefb;
-  background: var(--qp-felt);
+  background: var(--sketch-felt);
   border-radius: 6px;
   transform: rotate(-2deg);
 }
@@ -326,8 +189,8 @@
   width: clamp(0.7rem, 3cqmin, 1.1rem);
   height: clamp(0.7rem, 3cqmin, 1.1rem);
   border-radius: 50%;
-  background: var(--qp-amber);
-  border: 1.5px solid var(--qp-ink);
+  background: var(--sketch-accent);
+  border: 1.5px solid var(--sketch-ink);
 }
 .qp-pot {
   position: relative;
@@ -343,10 +206,10 @@
   content: "";
   position: absolute;
   inset: 0;
-  background: var(--qp-amber-fill);
-  border: 2px solid var(--qp-amber);
+  background: var(--sketch-accent-fill);
+  border: 2px solid var(--sketch-accent);
   border-radius: 999px;
-  filter: url(#qpRough);
+  filter: var(--sketch-filter);
   z-index: -1;
 }
 
@@ -384,19 +247,19 @@
   font-size: clamp(12px, 5cqmin, 40px);
   line-height: 1;
   background: #fffdf6;
-  color: var(--qp-ink);
+  color: var(--sketch-ink);
 }
 .qp-card::before {
   content: "";
   position: absolute;
   inset: 0;
-  border: 2px solid var(--qp-ink);
+  border: 2px solid var(--sketch-ink);
   border-radius: 7px;
-  filter: url(#qpRough);
+  filter: var(--sketch-filter);
   z-index: -1;
 }
 .qp-card--red {
-  color: var(--qp-red);
+  color: var(--sketch-red);
 }
 .qp-card--hole {
   width: clamp(1.25rem, 7cqmin, 3rem);
@@ -433,15 +296,15 @@
 }
 .qp-stat__l {
   font-size: clamp(9px, 2.4cqmin, 14px);
-  color: var(--qp-ink-soft);
+  color: var(--sketch-ink-soft);
 }
 .qp-dot {
-  color: var(--qp-ink-soft);
+  color: var(--sketch-ink-soft);
 }
 
 /* ---- fund / connect callout (pre-funding) ---- */
 .qp-note {
   font-size: clamp(11px, 3cqmin, 17px);
   line-height: 1.3;
-  color: var(--qp-ink-soft);
+  color: var(--sketch-ink-soft);
 }

@@ -10,9 +10,15 @@ import {
   type SettlementRow,
 } from "@/backend/explorerClient";
 import { useSuiClientContext } from "@mysten/dapp-kit";
+import { useBackendStats } from "@/backend/useBackendStats";
+import { MetricsStrip } from "./MetricsStrip";
+import { TpsGraph } from "./TpsGraph";
 
 export function ExplorerPage() {
   const { network } = useSuiClientContext();
+  // One shared /v1/stats/live stream for the whole page — the strip and the throughput chart
+  // read the same snapshot, so their "current TPS" can never disagree.
+  const backendStats = useBackendStats();
   const [rows, setRows] = useState<SettlementRow[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [done, setDone] = useState(false);
@@ -85,6 +91,9 @@ export function ExplorerPage() {
           conservation, and the anchored root.
         </p>
       </header>
+
+      <MetricsStrip {...backendStats} />
+      <TpsGraph {...backendStats} />
 
       <Panel className="flex min-h-0 flex-1 flex-col">
         <PanelHeader className="gap-3">

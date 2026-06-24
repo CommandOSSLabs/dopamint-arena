@@ -340,7 +340,7 @@ export class MpClient {
     this.#activeMatches.add(matchId);
     let engineOnFrame: ((bytes: Uint8Array) => void) | null = null;
     // Frames that arrive before the engine wires onFrame (the tunnel is constructed only after
-    // on-chain activation, which the peer may finish first — slower with sponsored DOPAMINT
+    // on-chain activation, which the peer may finish first — slower with sponsored MTPS
     // funding). Without buffering, the opponent's first MOVE is dropped and never ACKed, leaving
     // the proposer stuck on "a proposal is already awaiting ACK". Buffer, then flush on wire.
     const frameBuffer: Uint8Array[] = [];

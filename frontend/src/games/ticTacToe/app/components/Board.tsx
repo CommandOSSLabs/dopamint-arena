@@ -10,7 +10,7 @@ export function Board({
   disabled: boolean;
 }) {
   return (
-    <div className="w-[540px] h-[540px] relative hand-drawn-grid select-none">
+    <div className="@container w-full h-full max-h-full max-w-full aspect-square relative hand-drawn-grid select-none mx-auto">
       <div className="v-line-1"></div>
       <div className="v-line-2"></div>
       <div className="grid grid-cols-3 grid-rows-3 h-full w-full relative z-10">

@@ -27,15 +27,15 @@ import {
   type BotIdentity,
 } from "@/games/blackjack/app/lib/bjBots";
 import {
-  DOPAMINT_COIN_TYPE,
-  ensureDopamintAddressBalance,
-  ensureDopamintStakeCoin,
-  isDopamintAddressBalance,
-  isDopamintConfigured,
-} from "@/onchain/dopamint";
+  MTPS_COIN_TYPE,
+  ensureMtpsAddressBalance,
+  ensureMtpsStakeCoin,
+  isMtpsAddressBalance,
+  isMtpsConfigured,
+} from "@/onchain/mtps";
 import { makeKeypairSponsoredSignExec } from "@/onchain/sponsor";
 import {
-  BlackjackBetProtocol,
+  actorFor,
   FIXED_PLAYER_A,
   fixedBetMove,
   BET_OPTIONS,
@@ -43,6 +43,7 @@ import {
   type BetBlackjackState,
   type BetBlackjackMove,
 } from "@/games/blackjack/app/lib/bjBetProtocol";
+import { createBlackjackKit } from "@/agent/games/blackjack/kit";
 
 // Re-export so the page imports bet presets from the hook (its single source of game config).
 export { BET_OPTIONS, MIN_BET };
@@ -130,6 +131,8 @@ export interface BlackjackBotGame {
   hit: () => void;
   /** Stand the player's hand this hand (manual mode only). */
   stand: () => void;
+  /** Place this round's wager (manual mode only, during the betting/round_over phase). */
+  placeBet: (amount: number) => void;
   /** True while a rebalance transfer is in flight (disables the control). */
   rebalancing: boolean;
   maxRounds: number;
@@ -146,6 +149,12 @@ export interface BlackjackBotGame {
   /** Begin a session. autoOn = start in watch (bot plays); false = start in manual (you play). */
   startAuto: (autoOn?: boolean) => void;
   stopAuto: () => void;
+  /** Hover-pause: the auto-play step-loop is frozen in place (shared cabinet shell). */
+  paused: boolean;
+  /** Freeze the running auto-play loop (hover). No-op when not mid-play. */
+  pause: () => void;
+  /** Resume a frozen auto-play loop from where it stopped. */
+  resume: () => void;
   /** Stop play and return to the idle/config screen (does not auto-restart). */
   backToConfig: () => void;
   newGame: () => void;
@@ -159,8 +168,14 @@ export interface BlackjackBotGame {
 // minimum (DEFAULT_BET = MIN_BET), so 50,000 chips covers far more than the rounds-per-tunnel
 // target while keeping the on-chain deposit — and thus the MIN_PLAY floor — tiny.
 const BUY_IN = 50_000n;
-// Animation cadence: one move surfaced to the view per tick.
+// Animation cadence: in manual mode the dealer/betting auto-steps are paced to this so they're
+// watchable between the player's decisions.
 const STEP_MS = 900;
+// Base interval tick — always fast, regardless of auto/manual. Auto-play steps every tick;
+// manual mode polls at this rate but throttles its auto-steps to STEP_MS via `lastAutoStepAt`.
+// Fixing the tick (rather than 30/STEP_MS by mode) lets toggling Auto mid-tunnel resume at full
+// speed immediately, instead of staying at the slow manual cadence until the next tunnel opens.
+const TICK_MS = 20;
 // The bot that opens a tunnel funds BOTH seats from its own gas coin, so it must hold at least
 // 2×BUY_IN (both deposits) plus gas to safely play another game; below it, auto-play stops
 // rather than risk a mid-game tx running out of gas and leaving a tunnel open. The funder
@@ -213,9 +228,19 @@ const EMPTY_VIEW: BlackjackBotView = {
 
 export function useBlackjackBot(): BlackjackBotGame {
   const { report } = useTelemetry();
-  // Pin the player to seat A (no role rotation): "Play vs Bot" is one human vs the dealer bot,
-  // so a stable seat keeps the player's chips and per-round win/lose from inverting.
-  const proto = useMemo(() => new BlackjackBetProtocol(FIXED_PLAYER_A), []);
+  // Canonical bot kit (one source of truth, shared with the agent harness — like ttt's useBotGame):
+  // the live auto-play drives its hit/stand from the SAME kit bot the harness uses, instead of a
+  // second copy. Pin the player to seat A (no role rotation) so "Play vs Bot" stays one human vs
+  // the dealer bot and the table never inverts. The bet stays user-driven (see the loop below).
+  const kit = useMemo(() => createBlackjackKit(BUY_IN, FIXED_PLAYER_A), []);
+  const proto = kit.protocol;
+  const botBySeat = useMemo(
+    () => ({
+      A: kit.createBot("A", { rngForSeat: () => Math.random }),
+      B: kit.createBot("B", { rngForSeat: () => Math.random }),
+    }),
+    [kit],
+  );
   const bots = useMemo(() => loadOrCreateBots(), []);
   const client = useMemo(() => getSuiClient(), []);
 
@@ -236,6 +261,8 @@ export function useBlackjackBot(): BlackjackBotGame {
   const [maxRounds, setMaxRoundsState] = useState(DEFAULT_MAX_ROUNDS);
   const [bet, setBetState] = useState(DEFAULT_BET);
   const [balancesLoaded, setBalancesLoaded] = useState(false);
+  // Hover-pause (the shared cabinet shell freezes the auto-play while you decide).
+  const [paused, setPaused] = useState(false);
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const nextRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -246,6 +273,9 @@ export function useBlackjackBot(): BlackjackBotGame {
   // A user-queued manual move (hit/stand) the running interval applies on its next tick, so the
   // manual path reuses the loop's single round-logging/telemetry site (incl. player-bust).
   const pendingMoveRef = useRef<BetBlackjackMove | null>(null);
+  // Hover-pause latch (see useBotGame): read at the top of each tick so a hovered cabinet freezes
+  // the loop. The interval keeps firing harmless no-op ticks, so there's no timer to stop/re-arm.
+  const pausedRef = useRef(false);
   const balancesRef = useRef<{ a: bigint; b: bigint }>({ a: 0n, b: 0n });
   const runRef = useRef<() => void>(() => {});
   // Mirror of `maxRounds` so the play loop reads the live target without rebuilding runGame.
@@ -373,7 +403,7 @@ export function useBlackjackBot(): BlackjackBotGame {
     [client],
   );
 
-  // DOPAMINT mode: route a bot keypair's tx through the backend gas sponsor (ADR-0009/0010) — the
+  // MTPS mode: route a bot keypair's tx through the backend gas sponsor (ADR-0009/0010) — the
   // settler pays gas, so the bot signs with zero SUI. Returns just the digest; create flows recover
   // object changes via getTransactionBlock.
   const sponsoredSignExec = useCallback(
@@ -418,10 +448,10 @@ export function useBlackjackBot(): BlackjackBotGame {
   // When auto-play is on, schedules the next game (or stops if a bot is low on gas).
   const runGame = useCallback(() => {
     stopTimer();
-    // DOPAMINT mode: bot gas is sponsored and buy-ins are faucet-minted, so the bots need no SUI —
+    // MTPS mode: bot gas is sponsored and buy-ins are faucet-minted, so the bots need no SUI —
     // skip the SUI-balance gate (their SUI balance is 0). SUI fallback still gates on real balances.
     if (
-      !isDopamintConfigured &&
+      !isMtpsConfigured &&
       (balancesRef.current.a < MIN_PLAY_MIST ||
         balancesRef.current.b < MIN_PLAY_MIST)
     ) {
@@ -450,18 +480,18 @@ export function useBlackjackBot(): BlackjackBotGame {
         const funder = gamesRef.current % 2 === 0 ? bots.a : bots.b;
         gamesRef.current += 1;
 
-        // DOPAMINT mode: the funder stakes faucet-minted DOPAMINT (both seats from its one coin)
+        // MTPS mode: the funder stakes faucet-minted MTPS (both seats from its one coin)
         // and sponsors its own open/close gas (no SUI). SUI fallback: the funder splits both
         // buy-ins off its gas coin and pays its own gas.
-        const coinType = isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined;
+        const coinType = isMtpsConfigured ? MTPS_COIN_TYPE : undefined;
 
         setPhase("opening");
         let createDigest: string;
-        if (isDopamintConfigured) {
+        if (isMtpsConfigured) {
           // ADR-0013: the funder bot is the tx sender → its address balance is the stake source.
           // Self-play funds BOTH seats from one source, so withdraw/faucet for the 2-seat total.
-          const stakeOpt = isDopamintAddressBalance
-            ? (await ensureDopamintAddressBalance({
+          const stakeOpt = isMtpsAddressBalance
+            ? (await ensureMtpsAddressBalance({
                 client: client as never,
                 signExec: sponsoredSignExec(funder),
                 owner: funder.address,
@@ -471,12 +501,12 @@ export function useBlackjackBot(): BlackjackBotGame {
                 coinType,
                 stakeFromBalance: {
                   amount: 2n * BUY_IN,
-                  coinType: DOPAMINT_COIN_TYPE,
+                  coinType: MTPS_COIN_TYPE,
                 },
               })
             : {
                 coinType,
-                stakeCoinId: await ensureDopamintStakeCoin({
+                stakeCoinId: await ensureMtpsStakeCoin({
                   client: client as never,
                   signExec: sponsoredSignExec(funder),
                   owner: funder.address,
@@ -560,6 +590,8 @@ export function useBlackjackBot(): BlackjackBotGame {
         setPhase("playing");
         setView(viewFromState(tunnel.state));
         pendingMoveRef.current = null; // drop any move queued during the inter-tunnel gap
+        pausedRef.current = false; // a fresh tunnel never inherits a stale hover-pause
+        setPaused(false);
         // Stop after this many completed rounds in the single tunnel, then settle once.
         const roundsTarget = maxRoundsRef.current;
         let roundsThisTunnel = 0;
@@ -567,10 +599,13 @@ export function useBlackjackBot(): BlackjackBotGame {
           let steps = 0;
           let completedRounds = 0;
           // Wall-clock of the last dealer/betting auto-step, used to pace them to STEP_MS in
-          // manual mode (the tick itself stays at 30ms so a re-tick of Auto resumes instantly).
+          // manual mode. The tick itself always runs at TICK_MS so toggling Auto on mid-tunnel
+          // resumes at full speed immediately (the delay is NOT recomputed per mode).
           let lastAutoStepAt = 0;
-          const delay = autoRef.current ? 30 : STEP_MS;
           timerRef.current = setInterval(() => {
+            // Hover-paused: freeze on this frame. The same poll-and-bail shape the manual-play
+            // branch below uses while awaiting your Hit/Stand — no timer to stop and re-arm.
+            if (pausedRef.current) return;
             try {
               if (proto.isTerminal(tunnel.state)) {
                 stopTimer();
@@ -586,15 +621,18 @@ export function useBlackjackBot(): BlackjackBotGame {
               // after ~2 rounds). In the betting phase, place the chosen fixed bet; otherwise
               // let the protocol pick (basic strategy for the player, deterministic dealer).
               const cur = tunnel.state;
-              const by = proto.actorFor(cur);
+              const by = actorFor(cur, FIXED_PLAYER_A);
               // Manual play (auto off): pause at the player's decision and apply only a
               // user-queued hit/stand. The dealer is deterministic and betting auto-deals, so
               // both proceed regardless of the toggle — same split as the PvP mode.
               let move: BetBlackjackMove | null;
-              if (!autoRef.current && cur.phase === "player") {
+              if (
+                !autoRef.current &&
+                (cur.phase === "player" || cur.phase === "round_over")
+              ) {
                 if (!pendingMoveRef.current) {
                   flushHeartbeat(tunnelId, false);
-                  return; // wait for the user's Hit/Stand
+                  return; // wait for the user's Hit/Stand/Bet
                 }
                 move = pendingMoveRef.current;
                 pendingMoveRef.current = null;
@@ -605,10 +643,12 @@ export function useBlackjackBot(): BlackjackBotGame {
                   return;
                 }
                 lastAutoStepAt = Date.now();
+                // The bet stays user-driven (the Bet/round selector); hit/stand + the dealer come
+                // from the shared kit bot — the single brain the agent harness also plays through.
                 move =
                   cur.phase === "round_over"
                     ? fixedBetMove(betRef.current, cur)
-                    : proto.randomMove(cur, by, Math.random);
+                    : botBySeat[by].plan(cur);
               }
               if (!move) {
                 stopTimer();
@@ -682,7 +722,7 @@ export function useBlackjackBot(): BlackjackBotGame {
               stopTimer();
               reject(err);
             }
-          }, delay);
+          }, TICK_MS);
         });
 
         setView(viewFromState(tunnel.state));
@@ -707,8 +747,8 @@ export function useBlackjackBot(): BlackjackBotGame {
           transcript: transcript.rawEntries(),
           label: "blackjack",
           fallbackClose: async () => {
-            if (isDopamintConfigured) {
-              // The funder opened the tunnel and holds the sponsored signer; close DOPAMINT sponsored.
+            if (isMtpsConfigured) {
+              // The funder opened the tunnel and holds the sponsored signer; close MTPS sponsored.
               const { digest } = await sponsoredSignExec(funder)(
                 buildSettleWithRootTx(tunnelId, s, coinType),
               );
@@ -763,11 +803,11 @@ export function useBlackjackBot(): BlackjackBotGame {
         setPhase("done");
 
         // 7) continue tunnel-after-tunnel while the session is live (auto or manual), until a bot
-        // is low on gas or the user goes back. DOPAMINT mode: gas sponsored + buy-ins faucet-
+        // is low on gas or the user goes back. MTPS mode: gas sponsored + buy-ins faucet-
         // minted, so bots can't run dry — skip the SUI gate. Pace fast in auto, relaxed in manual.
         if (playingRef.current) {
           if (
-            isDopamintConfigured ||
+            isMtpsConfigured ||
             (b && b.a >= MIN_PLAY_MIST && b.b >= MIN_PLAY_MIST)
           ) {
             nextRef.current = setTimeout(
@@ -813,6 +853,18 @@ export function useBlackjackBot(): BlackjackBotGame {
     setAutoState(on);
   }, []);
 
+  // Hover-pause: set the latch and the running tick no-ops each frame (the loop's `await` never
+  // resolves, so it freezes mid-session); resume clears it and the next tick steps again.
+  const pause = useCallback(() => {
+    pausedRef.current = true;
+    setPaused(true);
+  }, []);
+
+  const resume = useCallback(() => {
+    pausedRef.current = false;
+    setPaused(false);
+  }, []);
+
   // Queue a manual player move for the running interval to apply (see pendingMoveRef). No-op
   // unless a tunnel is actively waiting on the player in manual mode; a "hit" at 21+ is dropped
   // (illegal — the table only offers Stand there).
@@ -828,6 +880,24 @@ export function useBlackjackBot(): BlackjackBotGame {
   const hit = useCallback(() => queuePlayerMove("hit"), [queuePlayerMove]);
   const stand = useCallback(() => queuePlayerMove("stand"), [queuePlayerMove]);
 
+  // Place this round's wager — manual mode only, during the betting (round_over) phase. The
+  // loop is parked on pendingMoveRef there (it no longer auto-deals when manual), so this hands
+  // it the chosen bet and the next hand deals. No-op outside that window so a stray click can't
+  // queue a bet the protocol would reject.
+  const placeBet = useCallback(
+    (amount: number) => {
+      // Manual betting only — the bet is locked while auto-play runs. setBet keeps the wager UI
+      // (the "Wager" readout + selected chip) and betRef in sync, and betRef is what auto reuses
+      // when you switch back, so the last manual bet carries over. The loop is parked at the
+      // betting phase waiting on pendingMoveRef, so this also deals the next hand.
+      if (autoRef.current || phase !== "playing" || view.phase !== "round_over")
+        return;
+      setBet(amount);
+      pendingMoveRef.current = { action: "bet", amount };
+    },
+    [phase, view.phase, setBet],
+  );
+
   // It's the user's turn exactly when auto is off, a tunnel is playing, and the protocol is
   // waiting on the player's decision.
   const myTurn = !auto && phase === "playing" && view.phase === "player";
@@ -842,9 +912,9 @@ export function useBlackjackBot(): BlackjackBotGame {
   // main menu starts in manual (auto off) so the user plays the hands themselves.
   const startAuto = useCallback(
     (autoOn: boolean = true) => {
-      // DOPAMINT mode: no SUI needed (sponsored gas + faucet buy-ins), so skip the balance gate.
+      // MTPS mode: no SUI needed (sponsored gas + faucet buy-ins), so skip the balance gate.
       if (
-        !isDopamintConfigured &&
+        !isMtpsConfigured &&
         (balancesRef.current.a < MIN_PLAY_MIST ||
           balancesRef.current.b < MIN_PLAY_MIST)
       ) {
@@ -932,6 +1002,7 @@ export function useBlackjackBot(): BlackjackBotGame {
     myTurn,
     hit,
     stand,
+    placeBet,
     rebalancing,
     maxRounds,
     setMaxRounds,
@@ -943,7 +1014,10 @@ export function useBlackjackBot(): BlackjackBotGame {
     rebalance,
     startAuto,
     stopAuto,
-    backToConfig,
+    paused,
+    pause,
+    resume,
+    backToConfig: stopTimer,
     newGame,
     refresh: refreshBalances,
     pollBalances,

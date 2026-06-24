@@ -138,7 +138,7 @@ function isStaleObjectReject(err: unknown): boolean {
     msg.includes("equivocat") ||
     // ADR-0013: a just-deposited address balance settles at the next checkpoint, so a withdrawal
     // can briefly dry-run against a still-empty balance. The deposit IS landing, so rebuild + retry
-    // until it settles. (`ensureDopamintAddressBalance` waits too, but the sponsor dry-runs on its
+    // until it settles. (`ensureMtpsAddressBalance` waits too, but the sponsor dry-runs on its
     // own node, which may trail by a checkpoint.)
     msg.includes("invalid withdraw reservation") ||
     msg.includes("available amount in account")
@@ -253,7 +253,7 @@ export async function openAndFundSharedTunnel(opts: {
   /** ADR-0013: fund the stake from the sender's SIP-58 address balance (takes precedence over
    *  `stakeCoinId`) — concurrent opens don't equivocate. Sponsored path only. */
   stakeFromBalance?: StakeFromBalance;
-  /** Coin type `T` for the tunnel; defaults to SUI. Pass DOPAMINT to stake the faucet token. */
+  /** Coin type `T` for the tunnel; defaults to SUI. Pass MTPS to stake the faucet token. */
   coinType?: string;
 }): Promise<string> {
   const { digest } = await submitRebuildingOnStale(
@@ -304,7 +304,7 @@ export async function openAndFundSelfPlay(opts: {
   /** ADR-0013: fund BOTH stakes from the sender's SIP-58 address balance (takes precedence over
    *  `stakeCoinId`) — concurrent opens don't equivocate. Sponsored path only. */
   stakeFromBalance?: StakeFromBalance;
-  /** Coin type `T` for the tunnels; defaults to SUI. Pass DOPAMINT to stake the faucet token. */
+  /** Coin type `T` for the tunnels; defaults to SUI. Pass MTPS to stake the faucet token. */
   coinType?: string;
 }): Promise<string> {
   const { digest } = await submitRebuildingOnStale(
@@ -394,7 +394,7 @@ export async function depositStake(opts: {
   /** ADR-0013: deposit from the sender's SIP-58 address balance (takes precedence over
    *  `stakeCoinId`). The withdrawal is the exact `amount`, so no split is needed. */
   stakeFromBalance?: StakeFromBalance;
-  /** Coin type `T`; defaults to SUI. Pass DOPAMINT to deposit the faucet token. */
+  /** Coin type `T`; defaults to SUI. Pass MTPS to deposit the faucet token. */
   coinType?: string;
 }): Promise<void> {
   await submitRebuildingOnStale(

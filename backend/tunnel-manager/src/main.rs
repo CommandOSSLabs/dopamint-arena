@@ -17,7 +17,6 @@ use std::sync::Arc;
 use axum::extract::DefaultBodyLimit;
 use axum::routing::{get, post};
 use axum::Router;
-use tokio::sync::broadcast;
 use tower::limit::GlobalConcurrencyLimitLayer;
 use tower::ServiceBuilder;
 use tower_http::cors::CorsLayer;
@@ -55,7 +54,6 @@ async fn main() -> anyhow::Result<()> {
         .instance_id
         .clone()
         .unwrap_or_else(|| Uuid::new_v4().to_string());
-    let (stats_tx, _) = broadcast::channel::<String>(16);
 
     let (control, mp, bus): (
         Arc<dyn store::ControlStore>,
@@ -88,7 +86,6 @@ async fn main() -> anyhow::Result<()> {
         bus,
         settler,
         walrus,
-        stats_tx,
         actions: crate::stats_counter::LocalActionCounter::default(),
         pair_hold_ms,
         pairing: crate::stats_counter::MatchPairingMetrics::default(),
@@ -127,7 +124,6 @@ async fn main() -> anyhow::Result<()> {
             ),
         )
         .route("/v1/sponsor", post(routes::sponsor))
-        .route("/v1/stats/live", get(routes::stats_live))
         .route("/v1/mp", get(crate::mp::ws::mp_upgrade))
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())

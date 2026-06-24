@@ -53,10 +53,10 @@ import { makeTttResumeAdapter } from "@/games/ticTacToe/app/lib/tttResumeAdapter
 import { useSponsoredSignExec } from "@/onchain/useSponsoredSignExec";
 import { withSponsorFallback } from "@/onchain/sponsor";
 import {
-  DOPAMINT_COIN_TYPE,
-  isDopamintAddressBalance,
-  isDopamintConfigured,
-} from "@/onchain/dopamint";
+  MTPS_COIN_TYPE,
+  isMtpsAddressBalance,
+  isMtpsConfigured,
+} from "@/onchain/mtps";
 
 export type Variant = "ttt" | "caro";
 
@@ -73,14 +73,19 @@ const MP_URL =
   ).replace(/^http/, "ws");
 const STAKE = 1n; // MIST per game; caro's protocol forces 0 regardless
 const BANKROLL = 1000n; // SUI-fallback MIST deposited per seat
-// DOPAMINT mode (ADR-0010): bankroll deposited per seat (1 DOPAMINT, 9 decimals).
-const DOPAMINT_BANKROLL = 1_000_000_000n;
+// MTPS mode (ADR-0010): bankroll deposited per seat (1 MTPS, 9 decimals).
+const MTPS_BANKROLL = 1_000_000_000n;
 // One game per tunnel: the match settles on-chain as soon as the game is decided (the winner
 // submits the close — see finishSettle), then players re-queue for the next game. A higher cap
 // would batch many games into a single end-of-session settle instead.
 const MAX_GAMES = 1;
 const MOVE_MS = 600; // auto move cadence
 const NEXT_MS = 800; // pause before auto-advancing to the next game
+// Settle-half exchange: both seats send their half at the same instant, so a single relay drop
+// would hang the close. Resend this often until the peer's half lands, and give up after the
+// timeout so a truly lost peer recovers (auto re-queues) instead of stranding the table forever.
+const SETTLE_RETRY_MS = 600;
+const SETTLE_TIMEOUT_MS = 12000;
 
 export type PvpPhase =
   | "idle"
@@ -161,7 +166,7 @@ export function usePvpTicTacToe(
   const walletRef = useRef(wallet);
   walletRef.current = wallet; // read the latest wallet inside stable callbacks without re-creating them
   // Backend gas sponsor (ADR-0009/0010): open + deposit route through the settler so a 0-SUI
-  // zkLogin player stakes faucet-minted DOPAMINT and pays no gas. Read inside stable callbacks
+  // zkLogin player stakes faucet-minted MTPS and pays no gas. Read inside stable callbacks
   // via a ref. (The close stays sender-pays as a fallback to the backend /settle route.)
   const sponsored = useSponsoredSignExec();
   const sponsoredRef = useRef(sponsored);
@@ -211,6 +216,9 @@ export function usePvpTicTacToe(
   const onMatchRef = useRef<
     ((mp: MpClient, m: MatchInfo) => Promise<void>) | undefined
   >(undefined);
+  // Latest `requeue`, called from finishSettle's recovery path (defined later — use a ref to dodge
+  // the declaration-order / dependency cycle, mirroring onMatchRef).
+  const requeueRef = useRef<(() => void) | null>(null);
   const openedResolveRef = useRef<((id: string) => void) | null>(null);
   const settleResolveRef = useRef<
     ((val: { sig: Uint8Array; root: Uint8Array }) => void) | null
@@ -274,69 +282,105 @@ export function usePvpTicTacToe(
       if (settledRef.current) return;
       settledRef.current = true;
       setPhase("settling");
-      const root = transcriptRef.current
-        ? transcriptRef.current.root()
-        : new Uint8Array(32);
-      const half = t.buildSettlementHalfWithRoot(
-        createdAtRef.current,
-        root,
-        0n,
-      );
-      channel.sendPeer({
-        t: "settle",
-        sig: bytesToHex(half.sigSelf),
-        root: bytesToHex(root),
-      });
-      const other =
-        bufferedSettleRef.current ??
-        (await new Promise<{ sig: Uint8Array; root: Uint8Array }>((res) => {
-          settleResolveRef.current = res;
-        }));
-      if (bytesToHex(other.root) !== bytesToHex(root)) {
-        throw new Error("Transcript root mismatch between players");
-      }
-      const coSigned = t.combineSettlementWithRoot(
-        half.settlement,
-        half.sigSelf,
-        other.sig,
-      );
-      // The game's winner submits the cooperative close (X-win or draw → A; O-win → B). The
-      // payout is fixed by the co-signed balances regardless of who submits; this just decides
-      // which seat sends the backend tx so the winner closes out their own game.
-      const decided = t.state.inner.winner; // 1 = X (A) won, 2 = O (B) won, 3/0 = draw/none
-      const submitter: "A" | "B" = decided === 2 ? "B" : "A";
-      if (roleRef.current === submitter) {
-        const closeDigest = await settleViaBackend({
-          tunnelId: t.tunnelId,
-          settlement: coSigned as any,
-          transcript: transcriptRef.current
-            ? transcriptRef.current.rawEntries()
-            : [],
-          label: "tictactoe",
-          fallbackClose: async () => {
-            // Close pays in the same coin the tunnel was funded in (DOPAMINT vs SUI). In DOPAMINT
-            // mode the player holds 0 SUI (gas is sponsored), so the close must route through the gas
-            // sponsor too — a wallet-signed close would throw and strand the staked DOPAMINT.
-            const coinType = isDopamintConfigured
-              ? DOPAMINT_COIN_TYPE
-              : undefined;
-            const res = await (isDopamintConfigured ? submitSponsored : submit)(
-              buildCloseWithRootTx(t.tunnelId, coSigned, coinType),
-            );
-            return res.digest;
-          },
-        });
-        // Record the close + signal the opponent on BOTH paths (backend digest or fallback digest).
-        if (closeDigest) {
-          setDigests((d) => ({ ...d, close: closeDigest }));
-          channel.sendPeer({ t: "closed", digest: closeDigest });
+      try {
+        const root = transcriptRef.current
+          ? transcriptRef.current.root()
+          : new Uint8Array(32);
+        const half = t.buildSettlementHalfWithRoot(
+          createdAtRef.current,
+          root,
+          0n,
+        );
+        const sendHalf = () =>
+          channel.sendPeer({
+            t: "settle",
+            sig: bytesToHex(half.sigSelf),
+            root: bytesToHex(root),
+          });
+        sendHalf();
+        // Wait for the peer's half. Resend ours every SETTLE_RETRY_MS until it lands (a single
+        // relay drop on this simultaneous exchange would otherwise hang here forever), and reject
+        // after SETTLE_TIMEOUT_MS so the catch below can recover instead of stranding "settling".
+        const other =
+          bufferedSettleRef.current ??
+          (await new Promise<{ sig: Uint8Array; root: Uint8Array }>(
+            (resolve, reject) => {
+              let elapsed = 0;
+              const iv = setInterval(() => {
+                elapsed += SETTLE_RETRY_MS;
+                if (elapsed >= SETTLE_TIMEOUT_MS) {
+                  clearInterval(iv);
+                  settleResolveRef.current = null;
+                  reject(new Error("settle handshake timed out"));
+                  return;
+                }
+                sendHalf();
+              }, SETTLE_RETRY_MS);
+              settleResolveRef.current = (v) => {
+                clearInterval(iv);
+                resolve(v);
+              };
+            },
+          ));
+        bufferedSettleRef.current = null;
+        if (bytesToHex(other.root) !== bytesToHex(root)) {
+          throw new Error("Transcript root mismatch between players");
+        }
+        const coSigned = t.combineSettlementWithRoot(
+          half.settlement,
+          half.sigSelf,
+          other.sig,
+        );
+        // The game's winner submits the cooperative close (X-win or draw → A; O-win → B). The
+        // payout is fixed by the co-signed balances regardless of who submits; this just decides
+        // which seat sends the backend tx so the winner closes out their own game.
+        const decided = t.state.inner.winner; // 1 = X (A) won, 2 = O (B) won, 3/0 = draw/none
+        const submitter: "A" | "B" = decided === 2 ? "B" : "A";
+        if (roleRef.current === submitter) {
+          const closeDigest = await settleViaBackend({
+            tunnelId: t.tunnelId,
+            settlement: coSigned as any,
+            transcript: transcriptRef.current
+              ? transcriptRef.current.rawEntries()
+              : [],
+            label: "tictactoe",
+            fallbackClose: async () => {
+              // Close pays in the same coin the tunnel was funded in (MTPS vs SUI). In MTPS
+              // mode the player holds 0 SUI (gas is sponsored), so the close must route through the
+              // gas sponsor too — a wallet-signed close would throw and strand the staked MTPS.
+              const coinType = isMtpsConfigured ? MTPS_COIN_TYPE : undefined;
+              const res = await (isMtpsConfigured ? submitSponsored : submit)(
+                buildCloseWithRootTx(t.tunnelId, coSigned, coinType),
+              );
+              return res.digest;
+            },
+          });
+          // Record the close + signal the opponent on BOTH paths (backend digest or fallback).
+          if (closeDigest) {
+            setDigests((d) => ({ ...d, close: closeDigest }));
+            channel.sendPeer({ t: "closed", digest: closeDigest });
+          }
+        }
+        await refreshBalance();
+        // The tunnel is now closed on-chain (per-game match). Drop its resume record so it can't be
+        // restored and hijack the next match (the auto-requeue / Find New Match both re-queue).
+        clearResumeRecord(t.tunnelId);
+        setPhase("done");
+      } catch (e) {
+        // Settle handshake/close failed (dropped peer half, root mismatch, close error). Don't
+        // strand the table at "settling": in auto, abandon this game and find a new match (the
+        // on-chain 1h grace floor still protects the stake); manual surfaces it so the player can
+        // Leave / retry.
+        console.error("[ttt pvp] settle failed:", e);
+        settledRef.current = false;
+        settleResolveRef.current = null;
+        if (autoRef.current) {
+          requeueRef.current?.();
+        } else {
+          setError(e instanceof Error ? e.message : String(e));
+          setPhase("error");
         }
       }
-      await refreshBalance();
-      // The tunnel is now closed on-chain (per-game match). Drop its resume record so it can't be
-      // restored and hijack the next match (the auto-requeue / Find New Match both re-queue).
-      clearResumeRecord(t.tunnelId);
-      setPhase("done");
     },
     [submit, submitSponsored, refreshBalance],
   );
@@ -572,17 +616,17 @@ export function usePvpTicTacToe(
         // self-asserted in v1); the two are deliberately unrelated keys, so there's no address derivation.
         const oppPubkey = hexToBytes(oppPubHex);
 
-        // DOPAMINT mode (ADR-0010): stake faucet-minted DOPAMINT with gas sponsored — a 0-SUI
+        // MTPS mode (ADR-0010): stake faucet-minted MTPS with gas sponsored — a 0-SUI
         // player plays free. SUI fallback (env unset): sender-pays SUI stake. The bankroll, coin
         // type, and the off-chain init balances all follow this choice so deposits reconcile.
-        const dopamintOn = isDopamintConfigured;
-        const coinType = dopamintOn ? DOPAMINT_COIN_TYPE : undefined;
-        const bankroll = dopamintOn ? DOPAMINT_BANKROLL : BANKROLL;
+        const mtpsOn = isMtpsConfigured;
+        const coinType = mtpsOn ? MTPS_COIN_TYPE : undefined;
+        const bankroll = mtpsOn ? MTPS_BANKROLL : BANKROLL;
 
         // Roles: A = X (opener), B = O. X opens the tunnel registering partyA = self, partyB = opponent.
         // Party address = the zkLogin wallet (receives funds); party public_key = the ephemeral signer.
         // The share tx carries no stake (each seat deposits its own), so it's gas-sponsored in
-        // DOPAMINT mode (with a sender-pays fallback), or plain sender-pays in SUI mode.
+        // MTPS mode (with a sender-pays fallback), or plain sender-pays in SUI mode.
         let tunnelId: string;
         if (m.role === "A") {
           setPhase("opening");
@@ -591,9 +635,9 @@ export function usePvpTicTacToe(
               { walletAddress: selfWallet, publicKey: eph.coreKey.publicKey }, // partyA = X (self)
               { walletAddress: m.opponentWallet, publicKey: oppPubkey }, // partyB = O (opponent)
               0n,
-              coinType, // open Tunnel<DOPAMINT> so the seat deposits type-match
+              coinType, // open Tunnel<MTPS> so the seat deposits type-match
             );
-          const res = dopamintOn
+          const res = mtpsOn
             ? await withSponsorFallback(
                 () => submitSponsored(shareTx()),
                 () => submit(shareTx()),
@@ -624,16 +668,16 @@ export function usePvpTicTacToe(
           (fields?.created_at as string | undefined) ?? 0,
         );
 
-        // Each seat funds its own deposit. DOPAMINT: split from a faucet-minted coin via the gas
+        // Each seat funds its own deposit. MTPS: split from a faucet-minted coin via the gas
         // sponsor (with a sender-pays SUI fallback); SUI fallback: split from the wallet gas coin.
         setPhase("funding");
-        const dep = dopamintOn
+        const dep = mtpsOn
           ? await withSponsorFallback(
               async () => {
                 // ADR-0013: withdraw this seat's deposit from the wallet's address balance. Retry
                 // (rebuild) through checkpoint-settlement lag rather than fall through to the
                 // sender-pays branch (which can't help an address-balance stake).
-                if (isDopamintAddressBalance) {
+                if (isMtpsAddressBalance) {
                   await sponsoredRef.current.ensureStakeBalance(bankroll);
                   return submitRebuildingOnStale(
                     () =>
@@ -641,7 +685,7 @@ export function usePvpTicTacToe(
                         coinType,
                         stakeFromBalance: {
                           amount: bankroll,
-                          coinType: DOPAMINT_COIN_TYPE,
+                          coinType: MTPS_COIN_TYPE,
                         },
                       }),
                     submitSponsored,
@@ -910,6 +954,11 @@ export function usePvpTicTacToe(
       }
     })();
   }, [queue, variant, boardSize]);
+
+  // Keep the ref finishSettle's recovery path calls in sync with the latest requeue.
+  useEffect(() => {
+    requeueRef.current = requeue;
+  }, [requeue]);
 
   // After a per-game match settles ("done"), auto-find the next match when Auto is on. A short
   // pause lets the result show before re-queuing.

@@ -48,4 +48,4 @@ that depends on them. An ADR captures the decision and the reasoning so the
   address balance (`coin::redeem_funds`/`tx.withdrawal`) instead of a version-pinned
   `Coin<T>`, so concurrent reload opens stop equivocating. Sponsor allowlist gains
   `redeem_funds`/`send_funds` + a mandatory `WithdrawFrom::Sender` input guard
-  (anti settler-drain). Behind `VITE_DOPAMINT_ADDRESS_BALANCE`; no Move redeploy.
+  (anti settler-drain). Behind `VITE_MTPS_ADDRESS_BALANCE`; no Move redeploy.
