@@ -598,7 +598,12 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
             s.holeA = sec.holeA;
             s.holeB = sec.holeB;
           },
-          onReconciled: () => sync(),
+          onReconciled: () => {
+            // A resync may have advanced our state (adopt) — re-fire the plumbing/auto loop so the
+            // next move (commit/reveal/next_hand, or the persona bot's bet in Auto) isn't stranded.
+            sync();
+            maybeAutoPropose();
+          },
         }),
         identity: {
           matchId: info.matchId,
