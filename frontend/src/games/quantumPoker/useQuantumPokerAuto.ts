@@ -709,15 +709,6 @@ class AutoSession {
       this.tunnel = tunnel;
       this.deps.report.bumpCounters({ tunnelsOpened: 1 });
       this.deps.report.setActive(2);
-      this.deps.report.pushLocalTxn({
-        id: ++this.txnId,
-        game: "quantum-poker",
-        time: new Date().toLocaleTimeString("en-GB"),
-        bot: `${this.personas?.a ?? "Bot A"} vs ${this.personas?.b ?? "Bot B"}`,
-        type: "open tunnel",
-        status: "Success",
-        amount: "",
-      });
 
       this.stage = "playing";
       this.pushView();
@@ -768,6 +759,12 @@ class AutoSession {
         lastFlush = Date.now();
       };
       let prevHandNo = tunnel.state.handNo;
+      // One "My Activity" row per finished hand (mirroring blackjack's per-round rows). A hand
+      // settles its net into balanceA at `hand_over` (bets ride in totalBet until then), so the
+      // delta since the last hand is this hand's result from seat A's perspective — the seat a
+      // human takes over. `prevHandPhase` makes the push fire once, on the transition INTO hand_over.
+      let prevHandPhase = tunnel.state.phase;
+      let prevHandBalanceA = tunnel.state.balanceA;
       while (tunnel.state.phase !== "done") {
         if (this.gen !== myGen) return;
         if (this.stopRequested) break; // Back/Stop → leave play, settle this tunnel below, then stop
@@ -833,6 +830,25 @@ class AutoSession {
           this.hands += Number(hn - prevHandNo);
           prevHandNo = hn;
         }
+        if (
+          tunnel.state.phase === "hand_over" &&
+          prevHandPhase !== "hand_over"
+        ) {
+          const delta = tunnel.state.balanceA - prevHandBalanceA;
+          prevHandBalanceA = tunnel.state.balanceA;
+          this.deps?.report.pushLocalTxn({
+            id: ++this.txnId,
+            game: "quantum-poker",
+            time: new Date().toLocaleTimeString("en-GB"),
+            bot: this.manual
+              ? "You"
+              : `${this.personas?.a ?? "Bot A"} vs ${this.personas?.b ?? "Bot B"}`,
+            type: delta > 0n ? "Poker Win" : delta < 0n ? "Poker Loss" : "Push",
+            status: "Success",
+            amount: delta > 0n ? `+${delta}` : delta < 0n ? `${delta}` : "0",
+          });
+        }
+        prevHandPhase = tunnel.state.phase;
         // Watchable pacing when a human is at the table; attract stays on the 16ms render-throttle.
         if (this.manual) await sleep(MANUAL_PACE_MS);
         if (Date.now() - lastFlush >= FLUSH_MS) await flush();
@@ -868,14 +884,20 @@ class AutoSession {
           ? this.botSponsoredSignExec(this.bots.A)
           : this.botSignExec(this.bots.A),
       });
-      this.deps?.report.pushLocalTxn({
+      // One "Settle" row per tunnel close on the Live Transactions feed — same shape as
+      // tic-tac-toe/blackjack (id, digest, settler address, type "Settle"), plus the Walrus
+      // proof poker uniquely produces. Per-hand results already went to My Activity above.
+      this.deps?.report.pushTxn({
         id: ++this.txnId,
         game: "quantum-poker",
+        digest: settled.txDigest,
+        address: this.bots.A.address,
+        proofUrl: settled.proofUrl ?? undefined,
         time: new Date().toLocaleTimeString("en-GB"),
-        bot: `${this.personas?.a ?? "Bot A"} vs ${this.personas?.b ?? "Bot B"}`,
-        type: `settled · ${HAND_CAP} hands`,
+        bot: this.bots.A.address,
+        type: "Settle",
         status: "Success",
-        amount: settled.proofUrl ? "walrus ✓" : "closed",
+        amount: "",
       });
       if (this.gen !== myGen) return;
 
