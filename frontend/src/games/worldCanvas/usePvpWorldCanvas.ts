@@ -31,6 +31,7 @@ import {
   type PvpPaintMove,
 } from "./pvpProtocol";
 import { makeWorldCanvasPvpResumeAdapter } from "./pvpResumeAdapter";
+import { useTelemetry } from "@/telemetry/TelemetryProvider";
 
 /** A seat's queued paint == the co-signed batch move (a run of cells). */
 export type PaintIntent = PvpPaintMove;
@@ -92,6 +93,38 @@ function toCellMove(
     color,
     seq,
   };
+}
+
+/** Dashboard game key — groups PvP rows under the SAME "world-canvas" feed/tab as the solo
+ *  wall, so MY ACTIVITY + LIVE TRANSACTIONS show open/painted/settled rows for online PvP too. */
+const GAME = "world-canvas";
+/** Leading-edge throttle (ms) between MY-ACTIVITY "painted N cell(s)" rows for your seat —
+ *  mirrors the solo wall's bot-activity throttle so a fast co-draw summarizes into one row per
+ *  window instead of flooding the feed. */
+const PVP_PAINT_ACTIVITY_THROTTLE_MS = 1500;
+
+/** Deterministic non-negative 31-bit int from a string — a stable React key for a feed row
+ *  (TelemetryProvider reassigns a globally-unique id on push, so this only needs per-row
+ *  uniqueness). Replicated from the solo wall (useWorldCanvasOnchain) so PvP rows key the same. */
+function feedRowId(s: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h = Math.imul(h ^ s.charCodeAt(i), 16777619);
+  }
+  return Math.abs(h | 0);
+}
+
+/** Compact id (head…tail of the 0x address) for a feed row's `bot` column. */
+function shortTunnelId(id: string): string {
+  return id.length > 12 ? `${id.slice(0, 6)}…${id.slice(-4)}` : id;
+}
+
+/** A valid 32-byte 0x id minted per match purely for the dashboard `bot` column. The shared
+ *  PvP engine doesn't surface the real on-chain tunnel id through its hook (and that hook is
+ *  off-limits), so each match stamps its own short id so the open/settle rows have a handle. */
+function makeSyntheticMatchId(): string {
+  const rand = Math.floor(Math.random() * 0xffffffff).toString(16);
+  return `0x${`${Date.now().toString(16)}${rand}`.padStart(64, "0")}`;
 }
 
 export function usePvpWorldCanvas(windowId: string): PvpWorldCanvas {
@@ -156,6 +189,167 @@ export function usePvpWorldCanvas(windowId: string): PvpWorldCanvas {
     },
     [flush],
   );
+
+  // ─── Dashboard telemetry ────────────────────────────────────────────────────
+  // PvP runs through the shared, telemetry-free engine, so the open/painted/settled rows are
+  // wired HERE off this hook's own status/view transitions (the solo wall wires the identical
+  // rows directly). Every write is best-effort: a feed error can NEVER throw back into the
+  // co-sign/sync path or stall the turn loop.
+  const { report } = useTelemetry();
+  const status = rest.status;
+  // Per-match guards so "open" fires once and "settle" fires once; reset at each new match.
+  const openFiredRef = useRef(false);
+  const settleFiredRef = useRef(false);
+  // Synthetic short id for the feed `bot` column (the engine hides the real tunnel id).
+  const matchIdRef = useRef<string | null>(null);
+  // High-water of MY confirmed GLOBAL paint seq — cap-safe (new cells always seq higher, and
+  // the render cap only drops the oldest), so it counts each of my cells exactly once.
+  const lastPaintSeqRef = useRef(0);
+  // Cells of MINE accumulated since the last MY-ACTIVITY flush + its leading-edge throttle
+  // timer and a monotonic key counter (≤ one summary row per window — never a flood).
+  const paintCountRef = useRef(0);
+  const paintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const paintFlushIdRef = useRef(0);
+
+  // Flush the accumulated my-seat paint count into ONE "painted N cell(s)" MY-ACTIVITY row
+  // ("You"). Fires on the throttle timer or eagerly at settle. MY-ACTIVITY only (no pushTxn).
+  const flushPaints = useCallback(() => {
+    paintTimerRef.current = null;
+    const n = paintCountRef.current;
+    paintCountRef.current = 0;
+    if (n === 0) return;
+    try {
+      report.pushLocalTxn({
+        id: feedRowId(`pvp-paint:${paintFlushIdRef.current++}`),
+        game: GAME,
+        time: new Date().toLocaleTimeString("en-GB"),
+        bot: "You",
+        type: `painted ${n} cell(s)`,
+        status: "Success",
+        amount: "",
+      });
+    } catch (e) {
+      console.warn("[world-canvas-pvp] paint activity row skipped:", e);
+    }
+  }, [report]);
+
+  // Open / settle / per-match reset, driven by the PvpStatus transitions. The engine sets
+  // "playing" once the real 2-party tunnel is live (→ open rows) and "settled" once the
+  // cooperative close lands (→ settle rows); "idle"/"matching" bracket a fresh match, so the
+  // per-match guards reset there (the next "playing" re-fires open for the new match).
+  useEffect(() => {
+    try {
+      if (status === "idle" || status === "matching") {
+        openFiredRef.current = false;
+        settleFiredRef.current = false;
+        matchIdRef.current = null;
+        lastPaintSeqRef.current = 0;
+        paintCountRef.current = 0;
+        if (paintTimerRef.current !== null) {
+          clearTimeout(paintTimerRef.current);
+          paintTimerRef.current = null;
+        }
+        return;
+      }
+      // ON TUNNEL OPEN: first entry into the live "playing" state for this match.
+      if (status === "playing" && !openFiredRef.current) {
+        openFiredRef.current = true;
+        const id = makeSyntheticMatchId();
+        matchIdRef.current = id;
+        report.bumpCounters({ tunnelsOpened: 1 });
+        report.setActive(2);
+        report.pushLocalTxn({
+          id: feedRowId(id),
+          game: GAME,
+          time: new Date().toLocaleTimeString("en-GB"),
+          bot: shortTunnelId(id),
+          type: "open tunnel",
+          status: "Success",
+          amount: "",
+        });
+        report.pushTxn({
+          id: feedRowId(id),
+          game: GAME,
+          time: new Date().toLocaleTimeString("en-GB"),
+          bot: shortTunnelId(id),
+          type: "Opened",
+          status: "Success",
+          amount: "",
+        });
+      }
+      // ON SETTLE/CLOSE: the cooperative close landed (terminal "settled").
+      if (
+        status === "settled" &&
+        openFiredRef.current &&
+        !settleFiredRef.current
+      ) {
+        settleFiredRef.current = true;
+        flushPaints(); // capture any pending paints before the close row
+        const id = matchIdRef.current ?? makeSyntheticMatchId();
+        report.bumpCounters({ tunnelsClosed: 1, settlements: 1 });
+        report.pushLocalTxn({
+          id: feedRowId(`${id}:settled`),
+          game: GAME,
+          time: new Date().toLocaleTimeString("en-GB"),
+          bot: shortTunnelId(id),
+          type: "settled",
+          status: "Success",
+          amount: "closed",
+        });
+        report.pushTxn({
+          id: feedRowId(`${id}:settled`),
+          game: GAME,
+          time: new Date().toLocaleTimeString("en-GB"),
+          bot: shortTunnelId(id),
+          type: "Settled",
+          status: "Success",
+          amount: "closed",
+        });
+      }
+    } catch (e) {
+      console.warn("[world-canvas-pvp] status telemetry skipped:", e);
+    }
+  }, [status, report, flushPaints]);
+
+  // PER YOUR PAINT: count NEW cells of YOUR seat (`by === role`) confirmed in `view` since the
+  // last flush and arm the leading-edge throttle (one summary row per window). Skips while not
+  // live so a fresh match's seq line (which restarts at 1) is only counted under "playing".
+  useEffect(() => {
+    if (!role || status !== "playing") return;
+    try {
+      let maxSeq = lastPaintSeqRef.current;
+      let added = 0;
+      for (const c of view ?? []) {
+        if (c.by === role && c.seq > lastPaintSeqRef.current) {
+          added += 1;
+          if (c.seq > maxSeq) maxSeq = c.seq;
+        }
+      }
+      lastPaintSeqRef.current = maxSeq;
+      if (added > 0) {
+        paintCountRef.current += added;
+        if (paintTimerRef.current === null) {
+          paintTimerRef.current = setTimeout(
+            flushPaints,
+            PVP_PAINT_ACTIVITY_THROTTLE_MS,
+          );
+        }
+      }
+    } catch (e) {
+      console.warn("[world-canvas-pvp] paint tally skipped:", e);
+    }
+  }, [view, role, status, flushPaints]);
+
+  // Clear the throttle timer on unmount/teardown so a pending flush can't fire after the
+  // component is gone.
+  useEffect(() => {
+    return () => {
+      if (paintTimerRef.current !== null) {
+        clearTimeout(paintTimerRef.current);
+        paintTimerRef.current = null;
+      }
+    };
+  }, []);
 
   return { ...rest, paint };
 }
