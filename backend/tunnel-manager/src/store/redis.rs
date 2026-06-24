@@ -867,7 +867,21 @@ mod tests {
             .await
             .expect("start redis container");
         let port = node.get_host_port_ipv4(6379).await.expect("redis port");
-        let pool = connect(&format!("redis://127.0.0.1:{port}")).await.unwrap();
+        // The published port can be reachable a beat before redis is accepting (the
+        // container is "Up" but still initializing). `connect` does a single eager attempt,
+        // so poll briefly through that window instead of flaking on a transient refusal.
+        let url = format!("redis://127.0.0.1:{port}");
+        let mut pool = None;
+        for _ in 0..40 {
+            match connect(&url).await {
+                Ok(p) => {
+                    pool = Some(p);
+                    break;
+                }
+                Err(_) => tokio::time::sleep(std::time::Duration::from_millis(50)).await,
+            }
+        }
+        let pool = pool.expect("connect to redis container within 2s");
         (node, pool)
     }
 
@@ -1119,6 +1133,38 @@ mod tests {
         // atomicity, so there can never be a double-pair.
         assert_eq!(pairs, 25, "expected 25 pair events");
         assert_eq!(parked, 25, "expected 25 parked waiters");
+    }
+
+    #[tokio::test]
+    async fn join_or_pair_prefers_a_same_instance_opponent() {
+        let (_redis, pool) = redis_fixture().await;
+        let s = RedisMpStore::new(pool);
+        let game = format!("g{}", uuid::Uuid::new_v4().simple());
+        let w = |wallet: &str, inst: &str| crate::mp::Waiting {
+            wallet: wallet.to_owned(),
+            conn: ConnRef {
+                instance_id: inst.to_owned(),
+                conn_id: uuid::Uuid::new_v4(),
+            },
+        };
+
+        // Two waiters park: A on instance "ia" (front), B on instance "ib".
+        assert!(s.join_or_pair(&game, w("wa", "ia")).await.is_none());
+        assert!(s.join_or_pair(&game, w("wb", "ib")).await.is_none());
+
+        // A joiner on "ib" must pair with the same-instance waiter (wb), not the FIFO front (wa).
+        let opp = s
+            .join_or_pair(&game, w("wj", "ib"))
+            .await
+            .expect("should pair");
+        assert_eq!(opp.wallet, "wb", "same-instance opponent preferred over FIFO front");
+
+        // The skipped front waiter (wa) is still queued → next joiner pairs with it (fallback).
+        let opp2 = s
+            .join_or_pair(&game, w("wk", "ic"))
+            .await
+            .expect("should pair");
+        assert_eq!(opp2.wallet, "wa", "FIFO-front waiter still pairs when no local match");
     }
 
     #[tokio::test]
