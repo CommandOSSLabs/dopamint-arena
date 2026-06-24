@@ -14,7 +14,11 @@ import { Transcript } from "sui-tunnel-ts/proof/transcript";
 import { registerWindowDisposer } from "@/lib/windowSessions";
 import { getControlPlaneClient } from "@/backend/controlPlane";
 import { MTPS_COIN_TYPE, isMtpsConfigured } from "@/onchain/mtps";
-import { readCreatedAt, type SignExec, type SuiReads } from "@/onchain/tunnelTx";
+import {
+  readCreatedAt,
+  type SignExec,
+  type SuiReads,
+} from "@/onchain/tunnelTx";
 import { useSponsoredSignExec } from "@/onchain/useSponsoredSignExec";
 import {
   useTelemetry,
@@ -23,7 +27,6 @@ import {
 import {
   DEPOSIT_A_MIST,
   DEPOSIT_B_MIST,
-  LOCAL_TXN_SAMPLE_EVERY,
   MAX_CONCURRENT_RUNNING,
   MINT_COOLDOWN_MS,
   MICRO_UNIT_MIST,
@@ -43,9 +46,7 @@ import type {
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 function isRunningPhase(phase: MachinePhase): boolean {
-  return (
-    phase === "spawning" || phase === "running" || phase === "settling"
-  );
+  return phase === "spawning" || phase === "running" || phase === "settling";
 }
 
 /** Co-sign micro-payments in bursts, then yield one frame — keeps card counters smooth. */
@@ -61,8 +62,6 @@ type ShopDeps = {
   prepareStake: (need: bigint) => Promise<string>;
   ensureStakeBalance: (need: bigint) => Promise<void>;
 };
-
-const MICRO_PAYMENT_AMOUNT = String(mistToSui(MICRO_UNIT_MIST));
 
 function nextTier(id: string, tickCount: number): NftTier {
   const n = (id.charCodeAt(0) + tickCount) % 10;
@@ -181,20 +180,6 @@ class MachineRuntime {
         this.pending.signatures += 2;
         this.pending.verifications += 2;
         this.pending.bytes += bytes;
-        if (
-          this.moveCount % LOCAL_TXN_SAMPLE_EVERY === 0 ||
-          this.moveCount === TICK_COUNT
-        ) {
-          deps.report.pushLocalTxn({
-            id: 0,
-            game: "regular-payments",
-            time: new Date().toLocaleTimeString("en-GB"),
-            bot: "You",
-            type: "Payment",
-            status: "Success",
-            amount: `-${MICRO_PAYMENT_AMOUNT}`,
-          });
-        }
       };
 
       this.tunnel = tunnel;
@@ -207,6 +192,15 @@ class MachineRuntime {
       onChange();
 
       deps.report.bumpCounters({ tunnelsOpened: 1 });
+      deps.report.pushLocalTxn({
+        id: 0,
+        game: "regular-payments",
+        time: new Date().toLocaleTimeString("en-GB"),
+        bot: "You",
+        type: "Opening",
+        status: "Success",
+        amount: "",
+      });
 
       try {
         const reg = await getControlPlaneClient().registerSession({
@@ -274,11 +268,7 @@ class MachineRuntime {
     }
   }
 
-  private async stream(
-    myGen: number,
-    deps: ShopDeps,
-    onChange: () => void,
-  ) {
+  private async stream(myGen: number, deps: ShopDeps, onChange: () => void) {
     const tunnel = this.tunnel;
     if (!tunnel) return;
 
@@ -288,10 +278,7 @@ class MachineRuntime {
       if (this.gen !== myGen) return;
 
       const frameDeadline = performance.now() + FRAME_BUDGET_MS;
-      while (
-        this.tickCount < TICK_COUNT &&
-        performance.now() < frameDeadline
-      ) {
+      while (this.tickCount < TICK_COUNT && performance.now() < frameDeadline) {
         const r = tunnel.step(
           { from: "A", amount: MICRO_UNIT_MIST } satisfies PaymentMove,
           "A",
@@ -393,9 +380,7 @@ class PaymentShopController {
     this.snap = {
       machines: this.machines.map((m) => m.toView()),
     };
-    const active = this.machines.filter((m) =>
-      isRunningPhase(m.phase),
-    ).length;
+    const active = this.machines.filter((m) => isRunningPhase(m.phase)).length;
     if (active !== this.lastActiveReported) {
       this.deps?.report.setActive(active);
       this.lastActiveReported = active;
