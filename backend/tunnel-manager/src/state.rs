@@ -74,6 +74,8 @@ pub enum TunnelStatus {
 #[serde(rename_all = "camelCase")]
 pub struct StatsSnapshot {
     pub tps: f64,
+    /// Running max of `tps` since process/cluster start (maintained, never recomputed).
+    pub peak_tps: f64,
     pub total_actions: u64,
     pub active_tunnels: u64,
     pub settled_tunnels: u64,

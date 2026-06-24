@@ -73,6 +73,9 @@ pub(crate) fn spawn_stats_broadcaster(state: SharedState) {
             let now = Instant::now();
             let mut snap = state.control.snapshot().await;
             snap.tps = global.observe(now, snap.total_actions);
+            // Fold this tick's tps into the maintained peak; reflect it in the snapshot we send.
+            state.control.update_peak_tps(snap.tps).await;
+            snap.peak_tps = snap.peak_tps.max(snap.tps);
             for (game, stat) in snap.per_game.iter_mut() {
                 let w = per_game
                     .entry(game.clone())

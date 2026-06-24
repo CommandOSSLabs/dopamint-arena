@@ -58,6 +58,17 @@ end
 return 0
 "#;
 
+// Running-max CAS for peak tps: store the new value only if it exceeds the stored one. Honors the
+// aggregation invariant (owned/last-writer via Lua, never a Rust read-modify-write of a shared
+// aggregate). Stored verbatim as a float string; snapshot GETs and parses it.
+// KEYS[1]=stats:peak_tps  ARGV[1]=tps
+const UPDATE_PEAK_TPS: &str = r#"
+local cur = tonumber(redis.call('GET', KEYS[1]) or '0')
+local new = tonumber(ARGV[1])
+if new > cur then redis.call('SET', KEYS[1], ARGV[1]) end
+return 1
+"#;
+
 pub async fn connect(url: &str) -> anyhow::Result<RedisPool> {
     let config = RedisConfig::from_url(url)?;
     let pool = Builder::from_config(config).build_pool(6)?;
@@ -183,6 +194,20 @@ impl ControlStore for RedisControlStore {
         }
     }
 
+    async fn update_peak_tps(&self, tps: f64) {
+        let res: Result<i64, _> = self
+            .pool
+            .eval(
+                UPDATE_PEAK_TPS,
+                vec!["stats:peak_tps".to_string()],
+                vec![tps.to_string()],
+            )
+            .await;
+        if let Err(e) = res {
+            tracing::warn!(error = %e, "redis update_peak_tps eval failed");
+        }
+    }
+
     async fn snapshot(&self) -> StatsSnapshot {
         let active: i64 = self.pool.scard("stats:tunnels:active").await.unwrap_or(0);
         let settled: i64 = self
@@ -217,9 +242,19 @@ impl ControlStore for RedisControlStore {
             }
         }
 
+        let peak_tps: f64 = self
+            .pool
+            .get::<Option<String>, _>("stats:peak_tps")
+            .await
+            .ok()
+            .flatten()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0.0);
+
         let recent_events = self.recent_events().await;
         StatsSnapshot {
             tps: 0.0, // filled by the broadcaster from its per-tick diff
+            peak_tps,
             total_actions,
             active_tunnels: active as u64,
             settled_tunnels: settled as u64,
