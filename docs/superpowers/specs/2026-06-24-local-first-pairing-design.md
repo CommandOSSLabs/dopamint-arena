@@ -179,17 +179,45 @@ re-attaches it. Today the load balancer may route the reconnect to any instance,
 so the match can come back **split**. Affinity steers the reconnect back to the
 same instance.
 
-**Mechanism (chosen): per-client affinity cookie.**
+### Frontend socket model (the reason affinity is needed)
+
+Each game hook (`usePvpTicTacToe`, `useBattleshipPvp`, `usePvpBlackjack`,
+`usePvpQuantumPoker`, `usePvpChickenCross`, `usePvpBombIt`) constructs its **own**
+`MpClient` (`frontend/src/pvp/mpClient.ts`) — there is **no shared singleton**. So:
+
+- **One socket per game** (the agent fleet runs many tunnels over one socket).
+  Within a game the socket multiplexes matches by `matchId` and is reused; a player
+  with several games open holds **several independent sockets**.
+- **Reconnect re-dials a fixed URL** (`#openSocket(true)` on capped-backoff) and
+  re-`resume`s every active match. Without stickiness, each socket — and each
+  reconnect of it — is routed independently, so a socket's instance can **rotate**.
+
+Consequence: without affinity, every reconnect can re-home a player's match(es) to
+a new instance, breaking co-location and forcing a resume-rebind each time
+(correct, but split). The multi-socket model widens this surface. This is the
+problem affinity solves.
+
+**Mechanism (chosen): per-browser affinity cookie.**
 
 - *App:* `mp_upgrade` sets `Set-Cookie: aff=<instance_id>` on the WebSocket
-  handshake response. No other app change; resume logic is untouched.
+  handshake response. Keyed per browser/origin (not per socket), so **all** of that
+  browser's game-sockets route to one instance and stop rotating. No other app
+  change; resume logic is untouched. (Browsers send stored cookies on the WS
+  handshake and honor `Set-Cookie` on the 101 response for same-origin; if the
+  relay is a different origin than the webapp the cookie needs `SameSite=None;
+  Secure`. An LB-native stickiness cookie is an equivalent zero-app-change
+  alternative.)
+- *Cold-start race:* two game-sockets opened near-simultaneously before the first
+  `Set-Cookie` lands may be split across instances initially. It self-heals on the
+  next reconnect (both converge to the cookie's instance), and fresh matchmaking
+  co-location is unaffected (the hold runs per join regardless). Minor, bounded.
 - *Ops (outside this repo):* enable cookie-based stickiness on the load balancer
   so a reconnect carrying `aff` is routed to that instance. Documented as a
   required deployment step.
-- *Why it works:* the cookie is per-client, returning each player to **its own**
-  last instance. For a co-located match both players' last instance is the same →
-  both return → still co-located. For a split match each returns to its own →
-  unchanged. It never makes co-location worse.
+- *Why it works:* the cookie pins a browser to **its own** instance, so every
+  socket and every reconnect returns there. For a co-located match both players'
+  instance is the same → both return → still co-located. For a split match each
+  returns to its own → unchanged. It never makes co-location worse.
 - *Failure mode — instance death:* the cookie points at a dead instance; the LB
   reroutes to a live one; players scatter; resume keeps the match **correct** over
   the Redis fallback (exactly today's behavior). This scatter is inherent — you
