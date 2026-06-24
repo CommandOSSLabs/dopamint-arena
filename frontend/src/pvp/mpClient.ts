@@ -11,6 +11,7 @@ import type { KeyPair } from "sui-tunnel-ts/core/crypto";
 import type { Transport } from "sui-tunnel-ts/core/distributedTunnel";
 import { wrapInnerFrameJson } from "sui-tunnel-ts/core/distributedFrame";
 import type { WireCoSigned, JsonValue } from "./resume";
+import { stringifyWithBigint, parseWithBigint } from "./resume";
 
 export type Role = "A" | "B";
 
@@ -348,7 +349,9 @@ export class MpClient {
       (msg: Exclude<PeerMessage, { t: "frame" }>) => void
     >();
     this.#relayHandlers.set(matchId, (payload) => {
-      const o = JSON.parse(payload) as PeerMessage;
+      // parseWithBigint: peer messages can carry bigint-tagged values (e.g. a resync's fullState
+      // balances) — mirror the persistence reviver so the receiver gets real bigints back.
+      const o = parseWithBigint(payload) as PeerMessage;
       if (o.t === "frame") {
         const bytes = te.encode(o.data);
         if (engineOnFrame) engineOnFrame(bytes);
@@ -356,7 +359,9 @@ export class MpClient {
       } else peerCbs.forEach((cb) => cb(o));
     });
     const relaySend = (obj: PeerMessage) =>
-      this.#send({ type: "relay", matchId, payload: JSON.stringify(obj) });
+      // stringifyWithBigint: a resync's fullState carries bigint balances (balanceA/totalBet…); plain
+      // JSON.stringify throws "Do not know how to serialize a BigInt". Tag bigints like persistence does.
+      this.#send({ type: "relay", matchId, payload: stringifyWithBigint(obj) });
     return {
       transport: {
         send: (bytes: Uint8Array) => {
