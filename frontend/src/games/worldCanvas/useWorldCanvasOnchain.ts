@@ -1093,7 +1093,7 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
         await settleViaBackend({
           tunnelId: run.tunnelId,
           settlement,
-          transcript: transcript.toRecord().entries,
+          transcript: transcript.rawEntries(),
           label: "world-canvas",
           fallbackClose: async () => {
             const { digest } = await sponsoredClose(
