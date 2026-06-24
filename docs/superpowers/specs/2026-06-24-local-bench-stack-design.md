@@ -98,7 +98,9 @@ bun run stack                # = compose up + wait-healthy + setup
 
 cargo run -p tunnel-manager  # relay; iterated on, so NOT in compose
   env from .env.local: SUI_RPC_URL=localnet, TUNNEL_PACKAGE_ID,
-       SUI_SETTLER_KEY (funded), REDIS_CACHE_URL/REDIS_PUBSUB_URL=valkey
+       SUI_SETTLER_KEY (funded)
+  store: in-memory by default (valkey out of the move path); set
+       REDIS_CACHE_URL/REDIS_PUBSUB_URL=valkey only to benchmark the redis path
 ```
 
 Division of responsibility (approved):
@@ -222,8 +224,10 @@ Out of scope (no engine protocol exists): **battleship, coinFlip, dice, slots**.
   selected per run; same engine path, different wire.
 - **Location:** new top-level `tools/loadbench/` bun package; upstream pnpm
   packages stay pnpm and near-untouched (two-line `behaviors.ts` edit aside).
-- **Infra:** Docker Compose for localnet + valkey; relay via `cargo run`;
-  publish + fund as bun setup steps.
+- **Infra:** Docker Compose for localnet + valkey; relay via `cargo run` with
+  the **in-memory store by default** (valkey is opt-in, only to benchmark the
+  redis path, so it stays out of the move path otherwise); publish + fund as bun
+  setup steps.
 
 ## Out of scope
 
