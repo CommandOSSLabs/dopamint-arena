@@ -10,6 +10,8 @@ import {
   type SettlementRow,
 } from "@/backend/explorerClient";
 import { useSuiClientContext } from "@mysten/dapp-kit";
+import { MetricsStrip } from "./MetricsStrip";
+import { TpsGraph } from "./TpsGraph";
 
 export function ExplorerPage() {
   const { network } = useSuiClientContext();
@@ -85,6 +87,9 @@ export function ExplorerPage() {
           conservation, and the anchored root.
         </p>
       </header>
+
+      <MetricsStrip />
+      <TpsGraph />
 
       <Panel className="flex min-h-0 flex-1 flex-col">
         <PanelHeader className="gap-3">
