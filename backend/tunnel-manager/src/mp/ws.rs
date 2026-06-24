@@ -1306,4 +1306,235 @@ mod tests {
         assert_eq!(fb["role"], "B");
         assert_eq!(fb["opponentWallet"], "0xwa");
     }
+
+    // ---- Reusable multi-instance Redis harness --------------------------------------------
+    // Factored out of `hold_timer_pairs_two_idle_waiters` so the cross-instance e2e tests below
+    // don't re-duplicate the container spin-up and `SharedState` wiring.
+
+    // Ephemeral Redis 7.4 (sharded pub/sub, which `RedisBus` requires). Hold the returned node
+    // for the test's lifetime — dropping it stops the container. Returns the mapped port so
+    // several instances can share ONE Redis, which is the real multi-instance topology.
+    async fn redis_container() -> (
+        testcontainers_modules::testcontainers::ContainerAsync<testcontainers_modules::redis::Redis>,
+        u16,
+    ) {
+        use crate::store::redis::connect;
+        use testcontainers_modules::redis::Redis;
+        use testcontainers_modules::testcontainers::{runners::AsyncRunner, ImageExt};
+
+        let node = Redis::default()
+            .with_tag("7.4-alpine")
+            .start()
+            .await
+            .expect("start redis container");
+        let port = node.get_host_port_ipv4(6379).await.expect("redis port");
+        // The mapped port can answer a beat before redis accepts; poll through that window.
+        let url = format!("redis://127.0.0.1:{port}");
+        for _ in 0..40 {
+            if connect(&url).await.is_ok() {
+                return (node, port);
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        panic!("redis container did not accept connections within 2s");
+    }
+
+    // A `SharedState` backed by `RedisMpStore` + `RedisBus` on `port`, identified by
+    // `instance_id`. Two of these on one port are two relay instances sharing one Redis: a frame
+    // addressed to a conn on the OTHER instance crosses via SPUBLISH, exactly as in production.
+    async fn redis_state(instance_id: &str, port: u16, pair_hold_ms: u64) -> crate::state::SharedState {
+        use crate::store::memory::InMemoryControlStore;
+        use crate::store::redis::{connect, RedisBus, RedisMpStore};
+        use std::sync::Arc;
+
+        let url = format!("redis://127.0.0.1:{port}");
+        let mp: Arc<dyn crate::store::MpStore> =
+            Arc::new(RedisMpStore::new(connect(&url).await.expect("mp pool")));
+        let bus: Arc<dyn crate::store::Bus> = Arc::new(
+            RedisBus::new(instance_id.to_owned(), connect(&url).await.expect("bus pool"))
+                .await
+                .expect("redis bus"),
+        );
+        let (stats_tx, _) = tokio::sync::broadcast::channel(4);
+        Arc::new(AppState {
+            control: Arc::new(InMemoryControlStore::default()),
+            mp,
+            bus,
+            settler: crate::sui::SuiSettler::noop(),
+            walrus: crate::walrus::WalrusClient::noop(),
+            stats_tx,
+            actions: crate::stats_counter::LocalActionCounter::default(),
+            pair_hold_ms,
+            pairing: crate::stats_counter::MatchPairingMetrics::default(),
+        })
+    }
+
+    // Like `recv_json` but with a caller-chosen timeout: cross-instance delivery over Redis
+    // sharded pub/sub needs more than the 1 s same-process budget `recv_json` allows.
+    async fn recv_json_within(
+        rx: &mut mpsc::UnboundedReceiver<String>,
+        secs: u64,
+    ) -> serde_json::Value {
+        let text = tokio::time::timeout(std::time::Duration::from_secs(secs), rx.recv())
+            .await
+            .expect("recv_json_within timed out")
+            .expect("channel closed");
+        serde_json::from_str(&text).expect("frame is valid JSON")
+    }
+
+    // Arm a hold timer exactly as the `QueueJoin` park branch does: sleep `hold_ms`, then yield
+    // `(game, me)` for the select loop's timer arm to drive `fallback_pair`.
+    fn arm_hold(holds: &mut FuturesUnordered<HoldTimer>, game: &str, me: Waiting, hold_ms: u64) {
+        let g = game.to_owned();
+        holds.push(Box::pin(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(hold_ms)).await;
+            (g, me)
+        }));
+    }
+
+    // A split match (seats on different instances) must announce ACROSS instances: the timer-path
+    // fallback pairs two cross-instance waiters, and `create_and_announce_match` on the firing
+    // instance must reach the remote seat over Redis SPUBLISH — the same `Bus::deliver` path every
+    // in-match move takes. Also asserts the pairing is metered as split, not co-located.
+    #[tokio::test]
+    async fn split_match_announce_crosses_instances() {
+        let (_node, port) = redis_container().await;
+        let state_a = redis_state("inst-A", port, 10_000).await;
+        let state_b = redis_state("inst-B", port, 10_000).await;
+
+        // wa's socket lives on instance A; wb's on instance B.
+        let (conn_wa, mut rx_wa) = test_conn(&state_a);
+        let (conn_wb, mut rx_wb) = test_conn(&state_b);
+        let game = format!("split-{}", Uuid::new_v4().simple());
+
+        // wa joins on A → parks (queue empty).
+        let wa = Waiting { wallet: "0xwa".into(), conn: conn_wa };
+        assert!(
+            state_a.mp.join_or_pair(&game, wa.clone(), 10_000).await.is_none(),
+            "wa parks"
+        );
+        // wb joins on B → cross-instance, not expired (long hold) → parks too.
+        let wb = Waiting { wallet: "0xwb".into(), conn: conn_wb };
+        assert!(
+            state_b.mp.join_or_pair(&game, wb, 10_000).await.is_none(),
+            "wb parks cross-instance"
+        );
+
+        // wa's hold timer fires on instance A → fallback pairs the cross-instance wb.
+        let opp = state_a
+            .mp
+            .fallback_pair(&game, "0xwa")
+            .await
+            .expect("fallback pairs wb");
+        assert_eq!(opp.wallet, "0xwb");
+        assert_eq!(opp.conn.instance_id, "inst-B", "opponent is on the other instance");
+
+        // Announce on A: seat A = wa (local), seat B = wb (remote — must cross via SPUBLISH).
+        create_and_announce_match(&state_a, &game, wa, opp).await;
+
+        let fa = recv_json(&mut rx_wa).await; // local delivery, 1 s budget
+        assert_eq!(fa["role"], "A");
+        assert_eq!(fa["opponentWallet"], "0xwb");
+        let fb = recv_json_within(&mut rx_wb, 2).await; // crossed instances over Redis
+        assert_eq!(fb["type"], "match.found", "remote seat gets the announce over SPUBLISH");
+        assert_eq!(fb["role"], "B");
+        assert_eq!(fb["opponentWallet"], "0xwa");
+
+        assert_eq!(
+            state_a.pairing.snapshot(),
+            (0, 1),
+            "cross-instance pairing is metered as split, not co-located"
+        );
+    }
+
+    // The join-path/timer race: if a later same-instance joiner pairs a parked waiter before its
+    // hold timer fires, the timer's `fallback_pair` must find the waiter already gone and no-op —
+    // never a double-pair, never a second match.found. (Single Lua-atomic queue; this is the
+    // exactly-once guarantee viewed from the connection layer.)
+    #[tokio::test]
+    async fn join_path_pairing_makes_hold_timer_a_noop() {
+        let (_node, port) = redis_container().await;
+        let state = redis_state("inst-A", port, 50).await;
+        let (conn_wa, mut rx_wa) = test_conn(&state);
+        let (conn_wb, mut rx_wb) = test_conn(&state);
+        let game = format!("race-{}", Uuid::new_v4().simple());
+
+        // wa parks and arms its hold timer (as the park branch does).
+        let wa = Waiting { wallet: "0xwa".into(), conn: conn_wa };
+        assert!(
+            state.mp.join_or_pair(&game, wa.clone(), 50).await.is_none(),
+            "wa parks"
+        );
+        let mut holds: FuturesUnordered<HoldTimer> = FuturesUnordered::new();
+        arm_hold(&mut holds, &game, wa, 50);
+
+        // wb joins the SAME instance → same-instance preference pairs wa immediately at join.
+        let wb = Waiting { wallet: "0xwb".into(), conn: conn_wb };
+        let opp = state
+            .mp
+            .join_or_pair(&game, wb.clone(), 50)
+            .await
+            .expect("join path pairs wa");
+        assert_eq!(opp.wallet, "0xwa");
+        create_and_announce_match(&state, &game, opp, wb).await; // seat A = wa, seat B = wb
+        assert_eq!(recv_json(&mut rx_wa).await["role"], "A");
+        assert_eq!(recv_json(&mut rx_wb).await["role"], "B");
+
+        // Now wa's hold timer fires — the waiter is already gone, so the fallback is a no-op.
+        let (fg, fme) = tokio::time::timeout(std::time::Duration::from_secs(2), holds.next())
+            .await
+            .expect("timer fires")
+            .expect("yields Some");
+        assert!(
+            state.mp.fallback_pair(&fg, &fme.wallet).await.is_none(),
+            "no double-pair: the join path already consumed wa"
+        );
+        // wa must NOT receive a second match.found.
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(200), rx_wa.recv())
+                .await
+                .is_err(),
+            "no second announce to the already-paired waiter"
+        );
+    }
+
+    // A waiter that disconnects during its hold must leave no ghost in the queue: its own
+    // `leave_queue` drains it, the late timer no-ops, and a fresh joiner does not pair against the
+    // departed wallet. Guards the structural-cancellation claim at the queue level.
+    #[tokio::test]
+    async fn disconnect_during_hold_leaves_no_phantom() {
+        let (_node, port) = redis_container().await;
+        let state = redis_state("inst-A", port, 50).await;
+        let (conn_wa, _rx_wa) = test_conn(&state);
+        let game = format!("drop-{}", Uuid::new_v4().simple());
+
+        let wa = Waiting { wallet: "0xwa".into(), conn: conn_wa };
+        assert!(
+            state.mp.join_or_pair(&game, wa.clone(), 50).await.is_none(),
+            "wa parks"
+        );
+        let mut holds: FuturesUnordered<HoldTimer> = FuturesUnordered::new();
+        arm_hold(&mut holds, &game, wa, 50);
+
+        // wa disconnects: the socket-end cleanup runs leave_queue for each joined game.
+        state.mp.leave_queue(&game, "0xwa").await;
+
+        // The late timer fires but finds wa gone → no-op.
+        let (fg, fme) = tokio::time::timeout(std::time::Duration::from_secs(2), holds.next())
+            .await
+            .expect("timer fires")
+            .expect("yields Some");
+        assert!(
+            state.mp.fallback_pair(&fg, &fme.wallet).await.is_none(),
+            "disconnected waiter must not pair"
+        );
+
+        // A fresh joiner sees an empty queue — no phantom wa to pair against.
+        let (conn_wc, _rx_wc) = test_conn(&state);
+        let wc = Waiting { wallet: "0xwc".into(), conn: conn_wc };
+        assert!(
+            state.mp.join_or_pair(&game, wc, 50).await.is_none(),
+            "no ghost entry: fresh joiner parks instead of pairing the departed wallet"
+        );
+    }
 }
