@@ -25,6 +25,8 @@ pub struct Config {
     /// Max settles executing at once on THIS instance. The limit gates before the request body is
     /// read, so worst-case settle-body memory is bounded at this × the /settle body cap. Per-instance.
     pub settle_max_concurrency: usize,
+    pub ollama_url: Option<String>,
+    pub ollama_model: Option<String>,
 }
 
 impl Config {
@@ -50,6 +52,8 @@ impl Config {
                 .and_then(|s| s.parse().ok())
                 .filter(|&n| n > 0)
                 .unwrap_or(32),
+            ollama_url: opt("OLLAMA_URL"),
+            ollama_model: opt("OLLAMA_MODEL"),
         })
     }
 
@@ -103,5 +107,24 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("SUI_RPC_URL"), "got: {err}");
+    }
+
+    struct EnvGuard(&'static str);
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            std::env::remove_var(self.0);
+        }
+    }
+
+    #[test]
+    fn from_env_reads_ollama_config() {
+        let _url = EnvGuard("OLLAMA_URL");
+        let _model = EnvGuard("OLLAMA_MODEL");
+        std::env::set_var("OLLAMA_URL", "http://ollama:11434");
+        std::env::set_var("OLLAMA_MODEL", "qwen2.5:1.8b");
+        let c = Config::from_env().unwrap();
+        assert_eq!(c.ollama_url.as_deref(), Some("http://ollama:11434"));
+        assert_eq!(c.ollama_model.as_deref(), Some("qwen2.5:1.8b"));
     }
 }
