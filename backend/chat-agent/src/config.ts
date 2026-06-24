@@ -8,6 +8,7 @@ export interface ChatAgentConfig {
   dopamintFaucetId: string;
   dopamintCoinType: string;
   operatorKey: string;
+  ollamaModel: string;
   stakeRaw: bigint;
   botPoolSize: number;
   botVsBotEnabled: boolean;
@@ -28,7 +29,8 @@ export function loadConfig(): ChatAgentConfig {
     dopamintPackageId: getEnv("DOPAMINT_PACKAGE_ID"),
     dopamintFaucetId: getEnv("DOPAMINT_FAUCET_ID"),
     dopamintCoinType: getEnv("DOPAMINT_COIN_TYPE"),
-    operatorKey: getEnv("OPERATOR_KEY"),
+    operatorKey: getEnv("SUI_SETTLER_KEY"),
+    ollamaModel: process.env.CHAT_OLLAMA_MODEL ?? "qwen2.5:1.8b",
     stakeRaw: whole * 10n ** 9n, // 9 decimals
     botPoolSize: Number(process.env.CHAT_BOT_POOL_SIZE ?? "3"),
     botVsBotEnabled: (process.env.CHAT_BOT_VS_BOT_ENABLED ?? "true") === "true",
