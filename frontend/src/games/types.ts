@@ -1,5 +1,10 @@
 import type { ComponentType } from "react";
 
+/** The arena workspace a module belongs to. The desktop tab bar and the Add dialog
+ *  group modules by this; `games` is the multi-window floor, `payment`/`chat` are
+ *  focused single-surface views. */
+export type Workspace = "games" | "payment" | "chat";
+
 /** Props a game's `Window` component receives (distinct from the GameWindow chrome). */
 export interface GameWindowProps {
   windowId: string;
@@ -27,6 +32,9 @@ export interface GameModule {
    *  default floating widget) but hidden from the catalog `list()` (picker, mobile
    *  list, filter tabs, seed). Defaults to true. */
   catalog?: boolean;
+  /** Which arena workspace this module opens in. Defaults to `games` (the window
+   *  floor). `payment`/`chat` route the Add dialog to their focused workspace view. */
+  workspace?: Workspace;
   // Window size is uniform across games — the desktop opens every window at the same
   // tile size (see TILE in Desktop.tsx), so games no longer declare their own footprint.
   // Deferred until games drive the engine:
