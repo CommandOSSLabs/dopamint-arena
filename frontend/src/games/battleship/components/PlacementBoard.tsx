@@ -89,7 +89,7 @@ export function PlacementBoard({
 
   return (
     <div
-      className="flex h-full flex-col gap-2 p-2 outline-none @[26rem]:gap-3 @[26rem]:p-3"
+      className="flex h-full min-h-0 flex-col gap-2 overflow-hidden p-2 outline-none @[26rem]:gap-3 @[26rem]:p-3"
       tabIndex={0}
       onKeyDown={(e) => {
         if (e.key === "r" || e.key === "R") {
@@ -102,7 +102,7 @@ export function PlacementBoard({
         }
       }}
     >
-      <div className="flex flex-wrap items-center justify-between gap-2">
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">
         <span className="wal-mono text-[11px] uppercase tracking-wider text-[#cab1ff]">
           Place your fleet
         </span>
@@ -136,7 +136,7 @@ export function PlacementBoard({
         </div>
       </div>
 
-      <div className="flex flex-wrap gap-1.5">
+      <div className="flex shrink-0 flex-wrap gap-1.5">
         {FLEET.map((ship) => (
           <button
             key={ship.id}
@@ -155,136 +155,143 @@ export function PlacementBoard({
         ))}
       </div>
 
-      {/* Size the board to the height LEFT OVER after the header/roster/footer
-          (~12rem of chrome) so a short window never clips the controls — the
-          parent is overflow-hidden — while a tall phone still fills the width. */}
-      <div
-        className="mx-auto w-full max-w-[min(100%,calc(100cqh_-_12rem))] rounded-lg bg-slate-950/40 p-1.5 ring-1 ring-[#cab1ff]/20 shadow-lg backdrop-blur-md"
-        onPointerLeave={() => setHover(null)}
-      >
-        <GridFrame
-          renderCell={(cell) => {
-            const owner = ownerByCell.get(cell);
-            const isOwnerSelected = owner != null && owner === selected;
-            // A ship is "lifted" if it is selected and we are hovering somewhere on the board to preview it
-            const isLifted = isOwnerSelected && hover !== null;
-
-            const showAsOccupied = owner != null && !isLifted;
-            const isSelected = owner != null && owner === selected && !isLifted;
-            const inPreview = preview?.cells.has(cell) ?? false;
-
-            return (
-              <button
-                key={cell}
-                type="button"
-                onClick={() => placeAt(cell)}
-                onPointerEnter={() => setHover(cell)}
-                className={cn(
-                  "aspect-square rounded-[4px] border relative transition-all duration-150 overflow-hidden z-20",
-                  inPreview
-                    ? preview!.valid
-                      ? "border-[#cab1ff] bg-[#cab1ff]/20"
-                      : "border-[#fb7185] bg-[#fb7185]/20"
-                    : !showAsOccupied
-                      ? "border-[#cab1ff]/10 bg-[#cab1ff]/[0.04] hover:border-[#cab1ff]/30"
-                      : isSelected
-                        ? "border-[#cab1ff] bg-[#cab1ff]/[0.08] shadow-[0_0_8px_rgba(202,177,255,0.3)]"
-                        : "border-transparent bg-transparent", // Placed ship is transparent
-                  selected && !showAsOccupied && !inPreview && "cursor-pointer",
-                )}
-              />
-            );
-          }}
+      {/* The board takes the height left after the header/picker/footer and is the largest
+          SQUARE fitting it (container-query units), so the controls never get clipped and the
+          window needs no scroll. The 1.25rem trims the fixed A–J label row. */}
+      <div className="grid min-h-0 flex-1 place-items-center [container-type:size]">
+        <div
+          className="w-[min(100cqw,calc(100cqh_-_1.25rem))] max-w-full rounded-lg bg-slate-950/40 p-1.5 ring-1 ring-[#cab1ff]/20 shadow-lg backdrop-blur-md"
+          onPointerLeave={() => setHover(null)}
         >
-          {/* Continuous Ship Overlays */}
-          <>
-            {/* Placed ships (hide selected ship if it's currently floating in preview) */}
-            {placements
-              .filter((p) => p.id !== selected || hover === null)
-              .map((p) => {
-                const row = Math.floor(p.cell / 10);
-                const col = p.cell % 10;
-                const spec = FLEET.find((s) => s.id === p.id);
-                if (!spec) return null;
-                const size = spec.size;
+          <GridFrame
+            renderCell={(cell) => {
+              const owner = ownerByCell.get(cell);
+              const isOwnerSelected = owner != null && owner === selected;
+              // A ship is "lifted" if it is selected and we are hovering somewhere on the board to preview it
+              const isLifted = isOwnerSelected && hover !== null;
 
-                const gridStyle = {
-                  gridRowStart: row + 2,
-                  gridColumnStart: col + 2,
-                  gridRowEnd: p.orient === "V" ? row + 2 + size : row + 2 + 1,
-                  gridColumnEnd:
-                    p.orient === "H" ? col + 2 + size : col + 2 + 1,
-                };
+              const showAsOccupied = owner != null && !isLifted;
+              const isSelected =
+                owner != null && owner === selected && !isLifted;
+              const inPreview = preview?.cells.has(cell) ?? false;
 
-                const isSelected = p.id === selected;
+              return (
+                <button
+                  key={cell}
+                  type="button"
+                  onClick={() => placeAt(cell)}
+                  onPointerEnter={() => setHover(cell)}
+                  className={cn(
+                    "aspect-square rounded-[4px] border relative transition-all duration-150 overflow-hidden z-20",
+                    inPreview
+                      ? preview!.valid
+                        ? "border-[#cab1ff] bg-[#cab1ff]/20"
+                        : "border-[#fb7185] bg-[#fb7185]/20"
+                      : !showAsOccupied
+                        ? "border-[#cab1ff]/10 bg-[#cab1ff]/[0.04] hover:border-[#cab1ff]/30"
+                        : isSelected
+                          ? "border-[#cab1ff] bg-[#cab1ff]/[0.08] shadow-[0_0_8px_rgba(202,177,255,0.3)]"
+                          : "border-transparent bg-transparent", // Placed ship is transparent
+                    selected &&
+                      !showAsOccupied &&
+                      !inPreview &&
+                      "cursor-pointer",
+                  )}
+                />
+              );
+            }}
+          >
+            {/* Continuous Ship Overlays */}
+            <>
+              {/* Placed ships (hide selected ship if it's currently floating in preview) */}
+              {placements
+                .filter((p) => p.id !== selected || hover === null)
+                .map((p) => {
+                  const row = Math.floor(p.cell / 10);
+                  const col = p.cell % 10;
+                  const spec = FLEET.find((s) => s.id === p.id);
+                  if (!spec) return null;
+                  const size = spec.size;
 
-                return (
-                  <div
-                    key={p.id}
-                    className={cn(
-                      "pointer-events-none relative overflow-hidden transition-all duration-150",
-                      isSelected
-                        ? "opacity-60 shadow-[0_0_8px_rgba(202,177,255,0.2)]"
-                        : "opacity-95",
-                    )}
-                    style={gridStyle}
-                  >
-                    <ShipSprite
-                      id={p.id}
-                      size={size}
-                      horizontal={p.orient === "H"}
-                    />
-                  </div>
-                );
-              })}
+                  const gridStyle = {
+                    gridRowStart: row + 2,
+                    gridColumnStart: col + 2,
+                    gridRowEnd: p.orient === "V" ? row + 2 + size : row + 2 + 1,
+                    gridColumnEnd:
+                      p.orient === "H" ? col + 2 + size : col + 2 + 1,
+                  };
 
-            {/* Hover preview ship */}
-            {selected &&
-              hover !== null &&
-              preview &&
-              (() => {
-                const row = Math.floor(hover / 10);
-                const col = hover % 10;
-                const spec = FLEET.find((s) => s.id === selected);
-                if (!spec) return null;
-                const size = spec.size;
+                  const isSelected = p.id === selected;
 
-                const inBounds =
-                  placementCells({ id: selected, cell: hover, orient }) !==
-                  null;
-                if (!inBounds) return null; // do not render overlay if it overflows board edge
+                  return (
+                    <div
+                      key={p.id}
+                      className={cn(
+                        "pointer-events-none relative overflow-hidden transition-all duration-150",
+                        isSelected
+                          ? "opacity-60 shadow-[0_0_8px_rgba(202,177,255,0.2)]"
+                          : "opacity-95",
+                      )}
+                      style={gridStyle}
+                    >
+                      <ShipSprite
+                        id={p.id}
+                        size={size}
+                        horizontal={p.orient === "H"}
+                      />
+                    </div>
+                  );
+                })}
 
-                const gridStyle = {
-                  gridRowStart: row + 2,
-                  gridColumnStart: col + 2,
-                  gridRowEnd: orient === "V" ? row + 2 + size : row + 2 + 1,
-                  gridColumnEnd: orient === "H" ? col + 2 + size : col + 2 + 1,
-                };
+              {/* Hover preview ship */}
+              {selected &&
+                hover !== null &&
+                preview &&
+                (() => {
+                  const row = Math.floor(hover / 10);
+                  const col = hover % 10;
+                  const spec = FLEET.find((s) => s.id === selected);
+                  if (!spec) return null;
+                  const size = spec.size;
 
-                return (
-                  <div
-                    key="preview-ship"
-                    className={cn(
-                      "pointer-events-none relative overflow-hidden transition-all duration-75",
-                      preview.valid
-                        ? "opacity-75 animate-pulse shadow-[0_0_12px_rgba(202,177,255,0.4)]"
-                        : "opacity-45 grayscale brightness-50",
-                    )}
-                    style={gridStyle}
-                  >
-                    <ShipSprite
-                      id={selected}
-                      size={size}
-                      horizontal={orient === "H"}
-                    />
-                  </div>
-                );
-              })()}
-          </>
-        </GridFrame>
+                  const inBounds =
+                    placementCells({ id: selected, cell: hover, orient }) !==
+                    null;
+                  if (!inBounds) return null; // do not render overlay if it overflows board edge
+
+                  const gridStyle = {
+                    gridRowStart: row + 2,
+                    gridColumnStart: col + 2,
+                    gridRowEnd: orient === "V" ? row + 2 + size : row + 2 + 1,
+                    gridColumnEnd:
+                      orient === "H" ? col + 2 + size : col + 2 + 1,
+                  };
+
+                  return (
+                    <div
+                      key="preview-ship"
+                      className={cn(
+                        "pointer-events-none relative overflow-hidden transition-all duration-75",
+                        preview.valid
+                          ? "opacity-75 animate-pulse shadow-[0_0_12px_rgba(202,177,255,0.4)]"
+                          : "opacity-45 grayscale brightness-50",
+                      )}
+                      style={gridStyle}
+                    >
+                      <ShipSprite
+                        id={selected}
+                        size={size}
+                        horizontal={orient === "H"}
+                      />
+                    </div>
+                  );
+                })()}
+            </>
+          </GridFrame>
+        </div>
       </div>
 
-      <div className="mt-auto text-[11px] text-arena-muted">
+      <div className="mt-auto shrink-0 text-[11px] text-arena-muted">
         {legal
           ? selected
             ? "Click to drop the ship; R rotates."

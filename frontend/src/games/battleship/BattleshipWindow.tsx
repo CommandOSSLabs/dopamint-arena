@@ -8,16 +8,7 @@ import {
 } from "react";
 import { useRegisterCabinet } from "@/shell/cabinet/CabinetContext";
 import type { CabinetController } from "@/shell/cabinet/CabinetController";
-import {
-  ArrowLeft,
-  Bot,
-  Check,
-  Coins,
-  Crosshair,
-  Users,
-  Wallet,
-  Zap,
-} from "lucide-react";
+import { ArrowLeft, Bot, Check, Crosshair, Users, Wallet } from "lucide-react";
 import { ConnectModal, useCurrentAccount } from "@mysten/dapp-kit";
 import { isEnokiWallet } from "@mysten/enoki";
 import { toast } from "sonner";
@@ -99,7 +90,6 @@ function ModeChooser({ onPick }: { onPick: (m: Mode) => void }) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-5 p-5 text-center">
       <div className="flex flex-col items-center gap-2">
-        <span className="wal-eyebrow">Naval tunnel duel</span>
         <h2 className="wal-display text-3xl text-white @[26rem]:text-4xl">
           Battle<span className="wal-gradient-text">ship</span>
         </h2>
@@ -169,7 +159,7 @@ function AutoToggle({
       onClick={() => onChange(!on)}
       title="Let the bot play your shots too"
       className={cn(
-        "inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-semibold transition-all active:scale-95",
+        "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold transition-all active:scale-95",
         on
           ? "border-[#cab1ff] bg-[#cab1ff]/15 text-[#e7ddff] shadow-[0_0_12px_rgba(202,177,255,0.3)]"
           : "border-[#cab1ff]/30 bg-[#cab1ff]/[0.06] text-[#cab1ff]/80 hover:border-[#cab1ff]/60",
@@ -185,7 +175,6 @@ function AutoToggle({
       >
         {on && <Check className="size-3" strokeWidth={3} />}
       </span>
-      <Zap className="size-3.5" />
       Auto
     </button>
   );
@@ -198,9 +187,9 @@ function SettleButton({ onSettle }: { onSettle: () => void }) {
       type="button"
       onClick={onSettle}
       title="Settle and close the tunnel now (cash out)"
-      className="inline-flex items-center gap-1.5 rounded-full bg-[#cab1ff] px-3 py-1.5 text-xs font-semibold text-[#0c0f1d] shadow-[0_0_12px_rgba(202,177,255,0.3)] transition-all hover:bg-[#b79bff] active:scale-95"
+      className="inline-flex items-center gap-1 rounded-full bg-[#cab1ff] px-2 py-0.5 text-[11px] font-semibold text-[#0c0f1d] shadow-[0_0_12px_rgba(202,177,255,0.3)] transition-all hover:bg-[#b79bff] active:scale-95"
     >
-      <Coins className="size-3.5" /> Settle
+      Settle
     </button>
   );
 }
@@ -241,35 +230,29 @@ function SettledPane({
   );
 }
 
-/** Every mode renders inside this frame: a top header bar carries the back button,
- *  a contextual title, and optional trailing controls (e.g. the Auto toggle), with
- *  the mode's own UI filling the space BELOW it — so nothing overlaps the board and
- *  there's always a way out. */
+/** Every mode renders inside this frame: a thin control strip carries the back button
+ *  and optional trailing actions (Auto / Settle) — NOT a title, since the desktop window
+ *  chrome above already shows one — with the mode's own UI filling the space below it. */
 function ModeFrame({
   onBack,
-  title,
   headerExtra,
   children,
 }: {
   onBack: () => void;
-  title?: ReactNode;
   headerExtra?: ReactNode;
   children: ReactNode;
 }) {
   return (
     <div className="flex h-full w-full flex-col">
-      <header className="flex shrink-0 items-center gap-2 border-b border-[#cab1ff]/15 bg-slate-950/40 px-2.5 py-2 backdrop-blur-sm">
+      {/* A thin in-game control strip. The window chrome above already shows the title,
+          so this carries only the game actions (Back / Auto / Settle), kept compact. */}
+      <header className="flex shrink-0 items-center gap-1.5 border-b border-[#cab1ff]/15 bg-slate-950/40 px-2 py-1 backdrop-blur-sm">
         <button
           onClick={onBack}
-          className="inline-flex items-center gap-1 rounded-full border border-[#cab1ff]/40 bg-[#cab1ff]/[0.08] px-3 py-1.5 text-xs font-semibold text-[#cab1ff] transition-colors hover:border-[#cab1ff]/70 hover:bg-[#cab1ff]/15 active:scale-95"
+          className="inline-flex items-center gap-1 rounded-full border border-[#cab1ff]/40 bg-[#cab1ff]/[0.08] px-2 py-0.5 text-[11px] font-semibold text-[#cab1ff] transition-colors hover:border-[#cab1ff]/70 hover:bg-[#cab1ff]/15 active:scale-95"
         >
-          <ArrowLeft className="size-3.5" /> Back
+          <ArrowLeft className="size-3" /> Back
         </button>
-        {title && (
-          <span className="wal-mono truncate text-[11px] uppercase tracking-wider text-[#cab1ff]/70">
-            {title}
-          </span>
-        )}
         {headerExtra && <div className="ml-auto shrink-0">{headerExtra}</div>}
       </header>
       {/* Scrolls vertically when a pane is taller than the window (e.g. stacked
@@ -375,8 +358,6 @@ function BotGame({
 
   const live = status === "playing";
   // State bar (top): which game + the running score.
-  const stateLabel = `vs Bot · Game ${gamesPlayed + 1} · ${score.you}–${score.foe}`;
-  let title: ReactNode = "vs Bot";
   let content: ReactNode;
   if (!account && !view) {
     // No wallet → require connect before the on-chain match opens.
@@ -386,7 +367,6 @@ function BotGame({
   } else if (status === "error") {
     content = <ErrorPane error={error} onBack={back} />;
   } else if (status === "settling" || status === "settled") {
-    title = stateLabel;
     content = (
       <SettledPane
         score={score}
@@ -401,7 +381,6 @@ function BotGame({
       </Centered>
     );
   } else if (live && placingNext) {
-    title = "vs Bot · place fleet";
     content = (
       <PlacementBoard
         ctaLabel="Start"
@@ -412,7 +391,6 @@ function BotGame({
       />
     );
   } else if (live && view) {
-    title = stateLabel;
     content = (
       <BattleView
         view={view}
@@ -440,7 +418,7 @@ function BotGame({
       </div>
     ) : undefined;
   return (
-    <ModeFrame onBack={back} title={title} headerExtra={headerExtra}>
+    <ModeFrame onBack={back} headerExtra={headerExtra}>
       {content}
     </ModeFrame>
   );
@@ -543,7 +521,7 @@ function PvpGame({
       <AutoToggle on={auto} onChange={setAuto} />
     ) : undefined;
   return (
-    <ModeFrame onBack={back} title="PvP Match" headerExtra={headerExtra}>
+    <ModeFrame onBack={back} headerExtra={headerExtra}>
       {content}
     </ModeFrame>
   );

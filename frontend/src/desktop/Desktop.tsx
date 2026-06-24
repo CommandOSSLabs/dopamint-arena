@@ -123,8 +123,11 @@ function dropKey<T>(obj: Record<string, T>, id: string): Record<string, T> {
 }
 
 // Every game window opens at the SAME size so the floor reads as one uniform grid
-// rather than a patchwork of per-game footprints. minW/minH is the global resize floor.
-const TILE = { w: 4, h: 4, minW: 3, minH: 3 } as const;
+// rather than a patchwork of per-game footprints. minW/minH is the global resize floor:
+// 4 cols × 5 rows is the smallest a game stays usable — below it the boards/controls
+// collapse (e.g. battleship's two boards stack into a broken sliver at 3 cols / 3 rows),
+// so the engine clamps resize there and new windows open at that size.
+const TILE = { w: 4, h: 5, minW: 4, minH: 5 } as const;
 
 // Column counts are all multiples of TILE.w (4) so uniform windows always pack into
 // full rows: 3 per row on a wide floor, 2 on a tablet-width dock, 1 on a narrow one.
@@ -583,7 +586,9 @@ function MobileActivity() {
  */
 export function ArenaView() {
   const [layout, setLayout] = useLocalStorageState<GridItem[]>(
-    "dopamint.desktop.layout.v4",
+    // v5: raised the per-window floor to 4×5 (TILE) — older v4 layouts hold the 3×3 floor
+    // that let games shrink into a broken sliver, so reseed at the new uniform footprint.
+    "dopamint.desktop.layout.v5",
     seedLayout,
   );
   // Minimized windows: id → saved geometry, restored from the right-edge dock.
@@ -592,9 +597,12 @@ export function ArenaView() {
     {},
   );
   // Popped-out windows: free-floating over the desktop, click-to-front z-order.
+  // v7: reseed alongside the tiled layout (v5) so entering lands the latest default —
+  // any window a prior session floated + shrank below the new 4×5 floor returns as a
+  // properly-sized tiled window instead of persisting as a stale sliver.
   const [floating, setFloating] = useLocalStorageState<
     Record<string, FloatState>
-  >("dopamint.desktop.floating.v6", seedFloating);
+  >("dopamint.desktop.floating.v7", seedFloating);
   const floatZ = useRef(100);
   const [addOpen, setAddOpen] = useState(false);
   const [removeOpen, setRemoveOpen] = useState(false);
@@ -838,8 +846,12 @@ export function ArenaView() {
       const right = dir.includes("e");
       const top = dir.includes("n");
       const bottom = dir.includes("s");
-      const MIN_W = 320;
-      const MIN_H = 220;
+      // Float resize is free pixels, so it has its OWN floor (the grid TILE min only binds
+      // tiled windows). Match it to the 4×5-cell floor: 5 rows × 72px rowHeight ≈ 360px tall,
+      // and ~480px wide (battleship's two boards go side-by-side at that width) — below this a
+      // game's UI collapses.
+      const MIN_W = 480;
+      const MIN_H = 360;
       // rAF-coalesce one setState per frame (see startFloatDrag).
       let raf = 0;
       let last: PointerEvent | null = null;
