@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useCurrentAccount } from "@mysten/dapp-kit";
 import { registerWindowDisposer } from "@/lib/windowSessions";
 import type { GameWindowProps } from "../types";
@@ -7,6 +7,7 @@ import { useChickenCrossSession } from "./useChickenCrossSession";
 import { CrossLobby } from "./components/CrossLobby";
 import { CrossBoard } from "./components/CrossBoard";
 import { CrossScreen } from "./components/CrossScreen";
+import { useSoloCabinet } from "@/shell/cabinet/soloCabinet";
 import "./cross.css";
 
 // Persisted by windowId so a remount (minimize / maximize / desktop reflow) returns to the live
@@ -47,6 +48,14 @@ export function ChickenCrossWindow({ windowId }: GameWindowProps) {
     else if (mode === "pvp") pvp.reset();
     setMode(null);
   };
+
+  const goHome = useCallback(() => {
+    solo.reset();
+    modeStore.delete(windowId);
+    setModeState(null);
+  }, [solo.reset, windowId]);
+
+  useSoloCabinet(solo, mode, goHome);
 
   // First open with a wallet connected → fund + play a solo bot match immediately (parity with the
   // other arena games), instead of landing on the lobby. Once-only per window: a remount never
