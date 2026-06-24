@@ -8,9 +8,10 @@
     "noEmit": true,
     "skipLibCheck": true,
     "allowImportingTsExtensions": true,
+    "baseUrl": ".",
     "paths": {
       "sui-tunnel-ts": ["../../sui-tunnel-ts/src/index.ts"],
-      "sui-tunnel-ts/*": ["../../sui-tunnel-ts/src/*"]
+      "sui-tunnel-ts/*": ["../../sui-tunnel-ts/src/*.ts"]
     }
   },
   "include": ["src"]
