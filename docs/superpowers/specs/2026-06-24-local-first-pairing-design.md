@@ -68,8 +68,8 @@ hold or fall back. So the design is the **bounded hold**.
    The resume protocol (ADR-0010) is unchanged — affinity only influences *which
    instance* the resumer lands on, never correctness.
 
-3. **Observability.** Per-instance counters for co-located vs. split matches and
-   for hold-fallback matches, exported on `/metrics`.
+3. **Observability.** Per-instance counters for co-located vs. split matches,
+   exported on `/metrics`.
 
 Correctness never depends on co-location: a split match still forms and works over
 the existing pub/sub fallback. The hold only delays *which* opponent a player
@@ -286,11 +286,12 @@ Per-instance counters, exported on `/metrics` alongside `tunnel_actions_total`:
 
 - `tunnel_matches_colocated_total` — both seats on one instance (in-process relay).
 - `tunnel_matches_split_total` — seats across instances (Redis-fallback relay).
-- `tunnel_matches_hold_fallback_total` — match formed via the expired/timer
-  cross-instance fallback rather than a same-instance pairing.
 
-Co-located/split is the headline (is co-location happening?); hold-fallback is the
-cost signal (how often did the hold expire without finding a local partner?).
+Co-located vs. split is the headline and is sufficient: under bounded-hold pairing a
+**split match only ever forms via the expired/timer fallback** (the co-located
+branch produces only co-located matches, and a non-expired waiter is never paired
+cross-instance), so `split` already counts "the hold expired without a local
+partner." A separate hold-fallback counter would be redundant and is omitted.
 Per-instance by design — co-location is an instance-local outcome and Prometheus
 sums across scraped instances. Incremented in `create_and_announce_match`.
 
@@ -339,7 +340,7 @@ the single-instance memory store), behavioral names:
   joins → pair A&B; metric `colocated`.
 - **Holds, then falls back:** park A(i1); B(i2) joins (no local, A not expired) →
   B parks, queue holds two; past the deadline, the next join (or timer) pairs them
-  cross-instance; metric `hold_fallback` + `split`.
+  cross-instance; metric `split`.
 - **Idle two-player fallback:** A(i1), B(i2) park with no further joins → the first
   timer firing pairs them (no starvation).
 - **Lone waiter never force-paired:** A parks alone, timer fires, no opponent →
@@ -361,7 +362,7 @@ Each phase is independently shippable and reviewable:
 1. **Bounded-hold matchmaking** + the shared `create_and_announce_match` path
    (folds in the committed `JOIN_OR_PAIR` generalization and the fixture readiness
    fix).
-2. **Pairing metric** — co-located / split / hold-fallback counters on `/metrics`.
+2. **Pairing metric** — co-located / split counters on `/metrics`.
 3. **Affinity cookie** in `mp_upgrade` + a docs note on the required LB stickiness
    config.
 
