@@ -8,7 +8,7 @@ config:
   dopamint:db-serverless: "true"
   dopamint:cache-node-type: cache.r6g.4xlarge
   dopamint:benchmark-instance-type: c7a.48xlarge
-  dopamint:benchmark-image-version: "1.0.2"
+  dopamint:benchmark-image-version: "1.0.3"
   dopamint:benchmark-min-size: "2"
   dopamint:benchmark-max-size: "2"
   dopamint:route53-zone-id: ""
