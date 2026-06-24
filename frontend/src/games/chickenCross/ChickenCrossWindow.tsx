@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useCurrentAccount } from "@mysten/dapp-kit";
 import { registerWindowDisposer } from "@/lib/windowSessions";
 import type { GameWindowProps } from "../types";
@@ -8,6 +8,7 @@ import { CrossLobby } from "./components/CrossLobby";
 import { CrossBoard } from "./components/CrossBoard";
 import { CrossScreen } from "./components/CrossScreen";
 import { useSoloCabinet, type WindowMode } from "@/shell/cabinet/soloCabinet";
+import { useSoloAutoRetry } from "@/lib/useSoloAutoRetry";
 import "./cross.css";
 
 // Persisted by windowId so a remount (minimize / maximize / desktop reflow) returns to the live
@@ -57,6 +58,16 @@ export function ChickenCrossWindow({ windowId }: GameWindowProps) {
 
   useSoloCabinet(solo, mode, goHome);
 
+  // Auto-retry a failed solo start every 5s while it sits in "error" (cold-start faucet race /
+  // transient sponsor blip) so the unattended bot game self-heals. Retries with the stake last
+  // started (auto-start uses AUTO_STAKE; the lobby's chosen stake otherwise).
+  const lastStakeRef = useRef(AUTO_STAKE);
+  const retrySolo = useCallback(() => {
+    solo.reset();
+    solo.start(lastStakeRef.current);
+  }, [solo.reset, solo.start]);
+  useSoloAutoRetry(mode === "solo", solo.status, retrySolo);
+
   // First open with a wallet connected → fund + play a solo bot match immediately (parity with the
   // other arena games), instead of landing on the lobby. Once-only per window: a remount never
   // re-funds (the out-of-React session is already live), and Back returns to the lobby, not a refund.
@@ -73,6 +84,7 @@ export function ChickenCrossWindow({ windowId }: GameWindowProps) {
     return (
       <CrossLobby
         onSolo={(s) => {
+          lastStakeRef.current = s;
           setMode("solo");
           solo.start(s);
         }}
