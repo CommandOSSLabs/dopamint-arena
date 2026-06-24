@@ -7,6 +7,7 @@ import type { Workspace } from "../games/types";
 import { disposeWindow } from "@/lib/windowSessions";
 import {
   forgetWindow,
+  lastActiveGame,
   markWindowActive,
   resolveWindowId,
 } from "@/lib/activeWindows";
@@ -18,22 +19,36 @@ const WORKSPACE_LABEL: Record<Workspace, string> = {
 };
 
 /**
- * The phone floor (< lg) for one workspace: always opens to that workspace's catalog
- * so switching the bottom-nav tab lands you on the picker (the parent keys this by
- * workspace, so each tab is a fresh picker). Tapping a card opens it full-bleed with a
- * back bar — and resumes the exact window instance you last focused (a desktop
- * `gameId#uuid` duplicate included, via {@link resolveWindowId}), so a session-backed
- * game continues rather than restarts. "Back" only unmounts the window (state is
- * resumable); the game signalling `onClose` disposes it for real.
+ * The phone floor (< lg) for one workspace.
+ *
+ * Two entry paths, distinguished by `autoResume`:
+ * - Tab tap (`autoResume` false) lands on the workspace catalog — switching tabs shows
+ *   the picker, never the previous tab's open app.
+ * - A desktop→mobile reflow (`autoResume` true) resumes the window you were just
+ *   playing (a `gameId#uuid` duplicate included, via {@link resolveWindowId}) so the
+ *   game continues across the breakpoint instead of dropping to the picker.
+ *
+ * Tapping a card opens it full-bleed with a back bar and resumes its session-backed
+ * instance. "Back" only unmounts the window (state is resumable); the game signalling
+ * `onClose` disposes it for real.
  */
 export function MobileArena({
   workspace = "games",
+  autoResume = false,
 }: {
   workspace?: Workspace;
+  autoResume?: boolean;
 }) {
   const modules = listByWorkspace(workspace);
-  // Start on the picker — switching tabs should show the catalog, not jump into an app.
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Resume the last-played window only on a desktop→mobile reflow; a tab tap starts on
+  // the picker.
+  const [selectedId, setSelectedId] = useState<string | null>(() => {
+    if (!autoResume) return null;
+    const last = lastActiveGame();
+    return last && (get(last)?.workspace ?? "games") === workspace
+      ? last
+      : null;
+  });
   const selected = selectedId ? get(selectedId) : undefined;
 
   // A remembered id can outlive its game (registry change) — drop it so the list shows.

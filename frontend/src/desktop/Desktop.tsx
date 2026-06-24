@@ -1,4 +1,4 @@
-import { memo, useCallback, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import type {
   CSSProperties,
   KeyboardEvent as ReactKeyboardEvent,
@@ -45,7 +45,12 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { disposeWindow } from "@/lib/windowSessions";
-import { forgetWindow, markWindowActive } from "@/lib/activeWindows";
+import {
+  forgetWindow,
+  lastActiveGame,
+  markWindowActive,
+  resolveWindowId,
+} from "@/lib/activeWindows";
 import { flyFromDock, flyToDock } from "@/lib/dockFlight";
 import { useTelemetry } from "@/telemetry/TelemetryProvider";
 import { useLocalStorageState } from "@/lib/useLocalStorageState";
@@ -437,6 +442,28 @@ export function ArenaView() {
     "bottom",
   );
   const isDesktop = useMediaQuery("(min-width: 1024px)");
+  // Detect a desktop→mobile reflow so the phone resumes the game you were just playing
+  // (a session-backed game continues across the breakpoint); a tab tap, by contrast,
+  // keeps `isDesktop` false and lands on the picker.
+  const wasDesktop = useRef(isDesktop);
+  const resumeOnMobile = wasDesktop.current && !isDesktop;
+  useEffect(() => {
+    wasDesktop.current = isDesktop;
+  }, [isDesktop]);
+  // On mobile, only the resumed game is on screen — but every other floor window's
+  // session (bots, sockets, timers) keeps running off-screen. Tear them all down except
+  // the active one so the phone isn't paying for a dozen background games. They re-seed
+  // fresh when you reflow back to the desktop floor.
+  useEffect(() => {
+    if (isDesktop) return;
+    const keep = resolveWindowId(lastActiveGame() ?? "");
+    const ids = [
+      ...Object.values(layouts).flatMap((ws) => ws.map((w) => w.id)),
+      ...Object.values(hiddens).flatMap((ws) => Object.keys(ws)),
+      ...Object.values(floatings).flatMap((ws) => Object.keys(ws)),
+    ];
+    for (const id of ids) if (id !== keep) disposeWindow(id);
+  }, [isDesktop, layouts, hiddens, floatings]);
   // Dock collapse — a no-drag alternative to the resize handle.
   const bottomRef = useRef<PanelImperativeHandle>(null);
   const [bottomCollapsed, setBottomCollapsed] = useState(false);
@@ -1023,15 +1050,28 @@ export function ArenaView() {
       ) : (
         <main className="h-full overflow-auto">
           {/* Key by workspace so each tab is a fresh picker — switching never carries
-              the previous tab's open app over. */}
+              the previous tab's open app over. `autoResume` continues the game across a
+              desktop→mobile reflow. */}
           {section === "payment" ? (
-            <MobileArena key="payment" workspace="payment" />
+            <MobileArena
+              key="payment"
+              workspace="payment"
+              autoResume={resumeOnMobile}
+            />
           ) : section === "chat" ? (
-            <MobileArena key="chat" workspace="chat" />
+            <MobileArena
+              key="chat"
+              workspace="chat"
+              autoResume={resumeOnMobile}
+            />
           ) : section === "live" ? (
             <MobileLive />
           ) : (
-            <MobileArena key="games" workspace="games" />
+            <MobileArena
+              key="games"
+              workspace="games"
+              autoResume={resumeOnMobile}
+            />
           )}
         </main>
       )}
