@@ -4,6 +4,7 @@ import { makeEndpoint, type CoSignedSettlementWithRoot } from "../../../sui-tunn
 import { defaultBackend } from "../../../sui-tunnel-ts/src/core/crypto-native";
 import { createParticipant } from "../../../sui-tunnel-ts/src/core/keys";
 import { blake2b256 } from "../../../sui-tunnel-ts/src/core/crypto";
+import { toHex, fromHex } from "../../../sui-tunnel-ts/src/core/bytes";
 import { mulberry32 } from "../../../sui-tunnel-ts/src/sim/rng";
 import type { Protocol, Party } from "../../../sui-tunnel-ts/src/protocol/Protocol";
 import type { MoveCodec } from "../../../sui-tunnel-ts/src/core/distributedFrame";
@@ -45,18 +46,29 @@ export function makeSeats(label: string, balances: { a: bigint; b: bigint }, cre
 }
 
 /**
- * A move codec that round-trips arbitrary JSON-like moves with bigint fields.
- * Bigints are encoded as `{ "__bigint__": "<decimal>" }` sentinels so they
- * survive JSON serialization inside the frame envelope.
+ * A move codec that round-trips arbitrary JSON-like moves with bigint and
+ * Uint8Array fields. Bigints encode as `{ "__bigint__": "<decimal>" }` and
+ * Uint8Arrays as `{ "__bytes__": "<hex>" }` so both survive JSON serialization
+ * inside the frame envelope (needed by quantumPoker's commitment arrays).
  */
 const bigintSafeCodec: MoveCodec<unknown> = {
   encode(m: unknown): unknown {
-    return JSON.parse(JSON.stringify(m, (_k, v) => (typeof v === "bigint" ? { __bigint__: v.toString() } : v)));
+    return JSON.parse(
+      JSON.stringify(m, (_k, v) => {
+        if (typeof v === "bigint") return { __bigint__: v.toString() };
+        if (v instanceof Uint8Array) return { __bytes__: toHex(v) };
+        return v;
+      }),
+    );
   },
   decode(j: unknown): unknown {
-    return JSON.parse(JSON.stringify(j), (_k, v) =>
-      v !== null && typeof v === "object" && "__bigint__" in v ? BigInt(v.__bigint__) : v,
-    );
+    return JSON.parse(JSON.stringify(j), (_k, v) => {
+      if (v !== null && typeof v === "object") {
+        if ("__bigint__" in v) return BigInt(v.__bigint__);
+        if ("__bytes__" in v) return fromHex(v.__bytes__);
+      }
+      return v;
+    });
   },
 };
 
