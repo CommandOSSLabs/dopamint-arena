@@ -34,6 +34,8 @@ pub struct ListParams {
 #[derive(serde::Deserialize)]
 pub struct ChatRequest {
     pub messages: Vec<ChatMessage>,
+    pub system: Option<String>,
+    pub max_tokens: Option<u32>,
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]
@@ -134,20 +136,24 @@ async fn stats(State(s): State<ApiState>) -> Response {
 }
 
 async fn chat(State(s): State<ApiState>, JsonBody(req): JsonBody<ChatRequest>) -> Response {
+    let system = req.system.unwrap_or_else(|| "You are a helpful assistant.".into());
     let mut messages = vec![ChatMessage {
         role: "system".into(),
-        content: "You are a helpful assistant.".into(),
+        content: system,
     }];
     messages.extend(req.messages.into_iter().map(|m| ChatMessage {
         role: m.role,
         content: m.content,
     }));
 
-    let body = serde_json::json!({
+    let mut body = serde_json::json!({
         "model": s.llm_model,
         "messages": messages,
         "stream": true,
     });
+    if let Some(max) = req.max_tokens {
+        body["options"] = serde_json::json!({ "num_predict": max });
+    }
 
     let url = format!("{}/api/chat", s.llm_base_url.trim_end_matches('/'));
     let mut upstream = s.http.post(&url).json(&body);
@@ -332,5 +338,53 @@ mod tests {
         assert!(text.contains("\"Hello\""));
         assert!(text.contains("\"!\""));
         assert!(text.contains("\"done\":true"));
+    }
+
+    #[tokio::test]
+    async fn chat_forwards_system_and_num_predict() {
+        use axum::extract::State;
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+
+        let captured = Arc::new(Mutex::new(None));
+
+        async fn mock_chat(
+            State(captured): State<Arc<Mutex<Option<serde_json::Value>>>>,
+            Json(body): Json<serde_json::Value>,
+        ) -> impl IntoResponse {
+            *captured.lock().await = Some(body);
+            let stream = "{\"message\":{\"role\":\"assistant\",\"content\":\"ok\"},\"done\":true}\n";
+            ([(header::CONTENT_TYPE, "application/x-ndjson")], stream)
+        }
+
+        let app = Router::new()
+            .route("/api/chat", post(mock_chat))
+            .with_state(captured.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let _server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let mut state = state_with(vec![]);
+        state.llm_base_url = format!("http://127.0.0.1:{port}");
+
+        let res = router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/chat")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(
+                        r#"{"messages":[{"role":"user","content":"hi"}],"system":"You are a debater.","max_tokens":80}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let upstream = captured.lock().await.take().expect("upstream received a body");
+        assert_eq!(upstream["messages"][0]["role"], "system");
+        assert_eq!(upstream["messages"][0]["content"], "You are a debater.");
+        assert_eq!(upstream["options"]["num_predict"], 80);
     }
 }

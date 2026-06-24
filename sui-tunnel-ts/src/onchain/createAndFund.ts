@@ -58,6 +58,42 @@ export function buildCreateAndFund(
 }
 
 /**
+ * Legacy fallback for deployed packages that pre-date `create_and_fund_with_id`.
+ * Calls the original `tunnel::create_and_fund`, which funds both seats from a third-party
+ * funder but does *not* return the shared tunnel's ID. The caller must recover the tunnel id
+ * from the transaction's object changes (this is what `openAndFundSelfPlay` already does).
+ */
+export function buildCreateAndFundLegacy(
+  tx: Transaction,
+  p: {
+    partyA: PartyArgs;
+    partyB: PartyArgs;
+    coinA: TransactionObjectArgument;
+    coinB: TransactionObjectArgument;
+    timeoutMs: bigint;
+    penaltyAmount?: bigint;
+  } & WithCoinType,
+): void {
+  tx.moveCall({
+    target: buildTarget(TUNNEL, "create_and_fund"),
+    typeArguments: [p.coinType ?? SUI_COIN_TYPE],
+    arguments: [
+      tx.pure.address(p.partyA.address),
+      vecU8(tx, p.partyA.publicKey),
+      tx.pure.u8(p.partyA.signatureType),
+      tx.pure.address(p.partyB.address),
+      vecU8(tx, p.partyB.publicKey),
+      tx.pure.u8(p.partyB.signatureType),
+      p.coinA,
+      p.coinB,
+      tx.pure.u64(p.timeoutMs),
+      tx.pure.u64(p.penaltyAmount ?? 0n),
+      tx.object(CLOCK),
+    ],
+  });
+}
+
+/**
  * PvP one-signature setup: open a shared tunnel AND fund seat A's stake in ONE PTB, so the
  * creator (party A) approves a single wallet tx instead of create + deposit separately.
  * Composes `create` (returns the owned object) → `deposit_party_a` (gated to the sender =

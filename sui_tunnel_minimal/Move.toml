@@ -1,0 +1,5 @@
+[package]
+name = "sui_tunnel"
+edition = "2024"
+
+[dependencies]

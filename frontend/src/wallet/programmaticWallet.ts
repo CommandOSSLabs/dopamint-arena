@@ -8,7 +8,7 @@ import { Transaction } from "@mysten/sui/transactions";
 import { toBase64 } from "@mysten/sui/utils";
 import {
   ReadonlyWalletAccount,
-  SUI_TESTNET_CHAIN,
+  SUI_LOCALNET_CHAIN,
   type SuiSignAndExecuteTransactionInput,
   type SuiSignTransactionInput,
 } from "@mysten/wallet-standard";
@@ -22,6 +22,32 @@ interface ExecClient {
     options?: { showRawEffects?: boolean };
   }): Promise<{ digest: string; rawEffects?: number[] | null }>;
   waitForTransaction(input: { digest: string }): Promise<unknown>;
+  getCoins(input: {
+    owner: string;
+    coinType?: string;
+    cursor?: string | null;
+    limit?: number | null;
+  }): Promise<{
+    data: Array<{
+      coinType: string;
+      coinObjectId: string;
+      version: string;
+      digest: string;
+      balance: string;
+    }>;
+    nextCursor?: string | null;
+    hasNextPage: boolean;
+  }>;
+  getObject(input: {
+    id: string;
+    options?: { showContent?: boolean };
+  }): Promise<{
+    data?: {
+      objectId: string;
+      version: string;
+      digest: string;
+    } | null;
+  }>;
 }
 
 // 1×1 transparent svg; the catalog/connect UI never shows for an agent.
@@ -32,7 +58,7 @@ export class ProgrammaticWallet {
   readonly version = "1.0.0" as const;
   readonly name = "Dopamint Agent";
   readonly icon = ICON;
-  readonly chains = [SUI_TESTNET_CHAIN] as const;
+  readonly chains = [SUI_LOCALNET_CHAIN] as const;
   readonly accounts: ReadonlyWalletAccount[];
   readonly features: Record<string, unknown>;
 
@@ -40,16 +66,46 @@ export class ProgrammaticWallet {
     const account = new ReadonlyWalletAccount({
       address: keypair.getPublicKey().toSuiAddress(),
       publicKey: keypair.getPublicKey().toRawBytes(),
-      chains: [SUI_TESTNET_CHAIN],
+      chains: [SUI_LOCALNET_CHAIN],
       features: ["sui:signTransaction", "sui:signAndExecuteTransaction"],
     });
     this.accounts = [account];
 
     const sign = async (input: SuiSignTransactionInput) => {
       const tx = Transaction.from(await input.transaction.toJSON());
+      const sender = tx.getData().sender ?? account.address;
+      tx.setSender(sender);
+
+      // The JSON-RPC client caches object versions; clear it before each build
+      // so concurrent or rapid-fire transactions don't reuse stale gas-coin refs.
+      (client as unknown as { cache?: { clear?: () => void } }).cache?.clear?.();
+
+      // Fetch a fresh gas coin explicitly. Small models / rapid self-play can
+      // otherwise reuse an object reference that the fullnode has already
+      // consumed, producing "object unavailable for consumption" errors.
+      const coins = await client.getCoins({ owner: sender, limit: 1 });
+      const coinId = coins.data[0]?.coinObjectId;
+      // getObject is strongly consistent for the latest object ref, whereas
+      // getCoins can lag behind recent spends on the same coin.
+      const freshCoin = coinId
+        ? (await client.getObject({ id: coinId, options: { showContent: false } }))
+            .data
+        : null;
+      console.log("[wallet] fresh coin", freshCoin);
+      if (freshCoin) {
+        tx.setGasPayment([
+          {
+            objectId: freshCoin.objectId,
+            version: freshCoin.version,
+            digest: freshCoin.digest,
+          },
+        ]);
+      }
+
       const bytes = await tx.build({ client: client as never });
+      console.log("[wallet] built bytes", bytes.length);
       const { signature } = await keypair.signTransaction(bytes);
-      return { tx, bytes, signature };
+      return { tx, bytes, signature, gasCoin: freshCoin };
     };
 
     this.features = {
@@ -68,19 +124,56 @@ export class ProgrammaticWallet {
       "sui:signAndExecuteTransaction": {
         version: "2.0.0",
         signAndExecuteTransaction: async (input: SuiSignAndExecuteTransactionInput) => {
-          const { bytes, signature } = await sign(input);
-          const res = await client.executeTransactionBlock({
-            transactionBlock: bytes,
-            signature,
-            options: { showRawEffects: true },
-          });
-          await client.waitForTransaction({ digest: res.digest });
-          return {
-            digest: res.digest,
-            bytes: toBase64(bytes),
-            signature,
-            effects: toBase64(Uint8Array.from(res.rawEffects ?? [])),
-          };
+          const isStaleObjectError = (e: unknown) =>
+            String(e).includes("unavailable for consumption") ||
+            String(e).includes("needs to be rebuilt");
+
+          for (let attempt = 0; attempt < 3; attempt++) {
+            const { bytes, signature, gasCoin } = await sign(input);
+            try {
+              const res = await client.executeTransactionBlock({
+                transactionBlock: bytes,
+                signature,
+                options: { showRawEffects: true },
+              });
+              await client.waitForTransaction({ digest: res.digest });
+
+              // Self-play can fire open → close → open in quick succession. Make
+              // sure the gas coin object reference is refreshed before the next
+              // tx builds.
+              if (gasCoin) {
+                for (let i = 0; i < 30; i++) {
+                  const obj = await client.getObject({
+                    id: gasCoin.objectId,
+                    options: { showContent: false },
+                  });
+                  if (
+                    obj.data &&
+                    (obj.data.version !== gasCoin.version ||
+                      obj.data.digest !== gasCoin.digest)
+                  ) {
+                    break;
+                  }
+                  await new Promise((r) => setTimeout(r, 200));
+                }
+              }
+
+              return {
+                digest: res.digest,
+                bytes: toBase64(bytes),
+                signature,
+                effects: toBase64(Uint8Array.from(res.rawEffects ?? [])),
+              };
+            } catch (e) {
+              if (isStaleObjectError(e) && attempt < 2) {
+                console.log("[wallet] stale object ref, retrying...", attempt + 1);
+                await new Promise((r) => setTimeout(r, 1000));
+                continue;
+              }
+              throw e;
+            }
+          }
+          throw new Error("signAndExecuteTransaction retry exhausted");
         },
       },
     };

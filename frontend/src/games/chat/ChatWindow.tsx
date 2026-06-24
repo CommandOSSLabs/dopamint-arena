@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Bot, Loader2, RotateCcw, Send, Sparkles, User } from "lucide-react";
+import { Bot, Loader2, MessageSquare, RotateCcw, Send, Sparkles, User } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -7,8 +7,20 @@ import { useChatSession } from "./useChatSession";
 import type { GameWindowProps } from "../types";
 
 export function ChatWindow({ windowId }: GameWindowProps) {
-  const { status, transcript, error, isReplying, send, reset } =
-    useChatSession(windowId);
+  const {
+    status,
+    mode,
+    transcript,
+    error,
+    isReplying,
+    exchanges,
+    topic,
+    send,
+    reset,
+    setMode,
+    startAuto,
+    stopAuto,
+  } = useChatSession(windowId);
   const [draft, setDraft] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -25,8 +37,8 @@ export function ChatWindow({ windowId }: GameWindowProps) {
     await send(text);
   };
 
-  const showInput = status === "idle" || status === "chatting";
-  const inputDisabled = status !== "chatting" || isReplying;
+  const showInput = mode === "chat" && (status === "idle" || status === "chatting");
+  const inputDisabled = mode !== "chat" || isReplying;
 
   return (
     <div className="relative flex h-full flex-col overflow-hidden bg-card/50">
@@ -35,6 +47,12 @@ export function ChatWindow({ windowId }: GameWindowProps) {
           <Sparkles className="size-3.5 text-primary" />
           AI Chat
         </div>
+        {mode === "debate" && status === "debating" && (
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Loader2 className="size-3 animate-spin" />
+            Exchange {exchanges + 1}
+          </div>
+        )}
       </div>
 
       {(status === "opening" || status === "closing") && (
@@ -68,15 +86,44 @@ export function ChatWindow({ windowId }: GameWindowProps) {
             className="min-h-0 flex-1 space-y-3 overflow-auto p-3 font-mono text-xs"
           >
             {transcript.length === 0 && status === "idle" && (
-              <div className="flex h-full flex-col items-center justify-center gap-2 text-muted-foreground">
+              <div className="flex h-full flex-col items-center justify-center gap-4 text-muted-foreground">
                 <Bot className="size-8 opacity-40" />
-                <p>Ask the assistant anything.</p>
+                <div className="flex gap-2">
+                  <Button
+                    variant={mode === "chat" ? "default" : "outline"}
+                    size="sm"
+                    onClick={() => setMode("chat")}
+                    className="gap-2"
+                  >
+                    <MessageSquare className="size-4" />
+                    Chat with AI
+                  </Button>
+                  <Button
+                    variant={mode === "debate" ? "default" : "outline"}
+                    size="sm"
+                    onClick={() => setMode("debate")}
+                    className="gap-2"
+                  >
+                    <Bot className="size-4" />
+                    AI vs AI
+                  </Button>
+                </div>
+                <p className="text-center text-xs">
+                  {mode === "chat"
+                    ? "Ask the assistant anything."
+                    : "Two LLMs debate a random topic for 20 exchanges, then restart."}
+                </p>
               </div>
             )}
             {transcript.length === 0 && status === "chatting" && (
               <div className="flex h-full flex-col items-center justify-center gap-2 text-muted-foreground">
                 <Bot className="size-8 opacity-40" />
                 <p>Session ready. Say something.</p>
+              </div>
+            )}
+            {topic && status === "debating" && transcript.length > 0 && (
+              <div className="rounded border border-primary/30 bg-primary/10 p-2 text-center text-xs text-foreground">
+                Topic: {topic}
               </div>
             )}
             {transcript.map((m, i) => (
@@ -135,6 +182,26 @@ export function ChatWindow({ windowId }: GameWindowProps) {
                 <Send className="size-3.5" />
               </Button>
             </form>
+          )}
+
+          {mode === "debate" && status === "idle" && (
+            <div className="flex shrink-0 items-center justify-center gap-2 border-t border-border p-2">
+              <Button onClick={startAuto} className="gap-2">
+                <Bot className="size-4" />
+                Start AI Debate
+              </Button>
+            </div>
+          )}
+
+          {mode === "debate" && status === "debating" && (
+            <div className="flex shrink-0 items-center justify-between border-t border-border p-2">
+              <span className="text-xs text-muted-foreground">
+                Exchange {exchanges + 1} / 20
+              </span>
+              <Button onClick={stopAuto} variant="outline" size="sm">
+                Stop
+              </Button>
+            </div>
           )}
         </>
       )}

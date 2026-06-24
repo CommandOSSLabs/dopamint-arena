@@ -8,6 +8,7 @@ import { fileURLToPath, URL } from "node:url";
 // VITE_BACKEND_URL stays empty everywhere (prod is same-origin via CloudFront), which also
 // sidesteps the https-page→http-ALB mixed-content block on the deployed frontend.
 const BACKEND_ALB =
+  process.env.BACKEND_URL ||
   "http://dopamint-dev-alb-0fac7e0-1152788681.us-east-1.elb.amazonaws.com";
 
 export default defineConfig(({ mode }) => {
@@ -15,6 +16,7 @@ export default defineConfig(({ mode }) => {
   const pkgId =
     env.VITE_TUNNEL_PACKAGE_ID ||
     "0x0b89fe86e42cdbfd1e614757a83d014b455d12923d0dded58842ab18f8a5a22b";
+  const network = env.VITE_SUI_NETWORK_NAME || process.env.SUI_NETWORK || "testnet";
   return {
     plugins: [react(), tailwindcss()],
     server: {
@@ -26,7 +28,7 @@ export default defineConfig(({ mode }) => {
     // literals so the tx builders resolve the package id in the browser bundle.
     define: {
       "process.env.PACKAGE_ID": JSON.stringify(pkgId),
-      "process.env.SUI_NETWORK": JSON.stringify("testnet"),
+      "process.env.SUI_NETWORK": JSON.stringify(network),
       "require.main": "undefined",
     },
     resolve: {

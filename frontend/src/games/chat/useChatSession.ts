@@ -6,11 +6,14 @@ import {
 } from "@mysten/dapp-kit";
 
 import { useTelemetry } from "@/telemetry/TelemetryProvider";
-import { getChatSession, type ChatSessionState } from "./chatSession";
+import { getChatSession, type ChatSessionState, type ChatMode } from "./chatSession";
 
 export interface ChatSession extends ChatSessionState {
   send: (text: string) => Promise<void>;
   reset: () => void;
+  setMode: (mode: ChatMode) => void;
+  startAuto: () => Promise<void>;
+  stopAuto: () => void;
 }
 
 export function useChatSession(windowId: string): ChatSession {
@@ -36,11 +39,17 @@ export function useChatSession(windowId: string): ChatSession {
 
   return {
     status: snap.status,
+    mode: snap.mode,
     transcript: snap.transcript,
     stake: snap.stake,
     error: snap.error,
     isReplying: snap.isReplying,
+    exchanges: snap.exchanges,
+    topic: snap.topic,
     send: session.send,
     reset: session.reset,
+    setMode: session.setMode,
+    startAuto: session.startAuto,
+    stopAuto: session.stopAuto,
   };
 }

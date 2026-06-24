@@ -15,7 +15,18 @@ import {
   openAndFundSelfPlay,
   readCreatedAt,
 } from "@/onchain/tunnelTx";
-import { buildBotMove, buildUserMove, type ChatMessage } from "./session-core";
+import {
+  buildBotMove,
+  buildUserMove,
+  debateMessages,
+  debateSystemPrompt,
+  randomDebateTopic,
+  type ChatMessage,
+  type ChatMode,
+  type ChatRole,
+} from "./session-core";
+
+export type { ChatMode } from "./session-core";
 
 interface Deps {
   report: TelemetryWriter;
@@ -28,19 +39,27 @@ export type ChatStatus =
   | "idle"
   | "opening"
   | "chatting"
+  | "debating"
   | "closing"
   | "error";
 
 export interface ChatSessionState {
   status: ChatStatus;
+  mode: ChatMode;
   transcript: ChatMessage[];
   stake: number;
   error: string | null;
   isReplying: boolean;
+  exchanges: number;
+  topic: string | null;
 }
 
 const STAKE = 100n;
 const HEARTBEAT_MS = 1000;
+const DEBATE_EXCHANGE_TARGET = Number(
+  import.meta.env.VITE_DEBATE_EXCHANGE_TARGET || 20,
+);
+const DEBATE_MAX_TOKENS = 80;
 
 function ndjsonLines(
   stream: ReadableStream<Uint8Array>,
@@ -74,16 +93,22 @@ export class ChatSession {
   deps: Deps | null = null;
 
   private status: ChatStatus = "idle";
+  private mode: ChatMode = "chat";
   private transcript: ChatMessage[] = [];
   private error: string | null = null;
   private isReplying = false;
   private stake = STAKE;
+  private exchanges = 0;
+  private topic: string | null = null;
   private snap: ChatSessionState = {
     status: "idle",
+    mode: "chat",
     transcript: [],
     stake: Number(STAKE),
     error: null,
     isReplying: false,
+    exchanges: 0,
+    topic: null,
   };
   private listeners = new Set<() => void>();
 
@@ -101,6 +126,8 @@ export class ChatSession {
 
   private opening = false;
   private gen = 0;
+  private autoRunning = false;
+  private autoNextDelay: ReturnType<typeof setTimeout> | null = null;
 
   subscribe = (cb: () => void): (() => void) => {
     this.listeners.add(cb);
@@ -114,10 +141,13 @@ export class ChatSession {
   private emit() {
     this.snap = {
       status: this.status,
+      mode: this.mode,
       transcript: [...this.transcript],
       stake: Number(this.stake),
       error: this.error,
       isReplying: this.isReplying,
+      exchanges: this.exchanges,
+      topic: this.topic,
     };
     for (const l of this.listeners) l();
   }
@@ -127,10 +157,98 @@ export class ChatSession {
     this.emit();
   }
 
+  setMode = (mode: ChatMode) => {
+    if (this.autoRunning) this.stopAuto();
+    this.mode = mode;
+    this.error = null;
+    this.emit();
+  };
+
   private fail(e: unknown) {
     this.error = String((e as Error)?.message ?? e);
     this.status = "error";
     this.emit();
+  }
+
+  /**
+   * Stream one LLM reply and append it to the transcript as the assistant.
+   * Returns the final trimmed text. The caller is responsible for stepping the
+   * corresponding tunnel move.
+   */
+  private async streamReply(
+    messages: { role: ChatRole; content: string }[],
+    opts: { system?: string; maxTokens?: number } = {},
+  ): Promise<string> {
+    const base = resolveBackendUrl();
+    this.abort = new AbortController();
+    const res = await fetch(`${base}/v1/chat`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        messages,
+        system: opts.system,
+        max_tokens: opts.maxTokens,
+      }),
+      signal: this.abort.signal,
+    });
+
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "request failed");
+      throw new Error(detail);
+    }
+    if (!res.body) {
+      throw new Error("no response body");
+    }
+
+    // Optimistically show an assistant placeholder.
+    this.transcript = [...this.transcript, { role: "assistant", text: "" }];
+    this.emit();
+
+    const reader = ndjsonLines(res.body).getReader();
+    let replyText = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      let parsed: { message?: { content?: string }; done?: boolean };
+      try {
+        parsed = JSON.parse(value) as typeof parsed;
+      } catch {
+        continue;
+      }
+      const delta = parsed.message?.content ?? "";
+      if (delta || parsed.done) {
+        replyText += delta;
+        this.transcript = this.transcript.map((m, i) =>
+          i === this.transcript.length - 1 && m.role === "assistant"
+            ? { ...m, text: replyText }
+            : m,
+        );
+        this.emit();
+      }
+    }
+
+    const finalReply = replyText.trim();
+    if (!finalReply) {
+      this.transcript = this.transcript.filter(
+        (m, i) =>
+          !(
+            i === this.transcript.length - 1 &&
+            m.role === "assistant" &&
+            m.text === ""
+          ),
+      );
+      this.emit();
+      throw new Error("assistant returned an empty reply");
+    }
+
+    this.transcript = this.transcript.map((m, i) =>
+      i === this.transcript.length - 1 && m.role === "assistant"
+        ? { ...m, text: finalReply }
+        : m,
+    );
+    this.emit();
+    return finalReply;
   }
 
   private abortFetch() {
@@ -275,16 +393,21 @@ export class ChatSession {
     this.isReplying = true;
     this.emit();
 
-    const myGen = this.gen;
+    let myGen = this.gen;
 
     try {
       if (!this.tunnel) {
         await this.open();
-        if (this.gen !== myGen) return;
+        // open() bumps gen internally; the caller's myGen is intentionally
+        // the pre-open value, so do NOT bail on gen mismatch here. Only bail
+        // if the tunnel actually failed to open.
         if (!this.tunnel) {
           // Open failed; status is already error.
           return;
         }
+        // Adopt the post-open generation so the finally block can clear
+        // isReplying after a normal send; otherwise isReplying stays true forever.
+        myGen = this.gen;
       }
 
       const t = this.tunnel;
@@ -299,80 +422,17 @@ export class ChatSession {
       this.flushHeartbeat(true);
 
       // Stream the LLM reply from the backend.
-      const base = resolveBackendUrl();
-      this.abort = new AbortController();
-      const res = await fetch(`${base}/v1/chat`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          messages: this.transcript.map((m) => ({
-            role: m.role,
-            content: m.text,
-          })),
-        }),
-        signal: this.abort.signal,
-      });
-
-      if (!res.ok) {
-        const detail = await res.text().catch(() => "request failed");
-        throw new Error(detail);
-      }
-      if (!res.body) {
-        throw new Error("no response body");
-      }
-
-      // Optimistically show an assistant placeholder.
-      this.transcript = [...this.transcript, { role: "assistant", text: "" }];
-      this.emit();
-
-      const reader = ndjsonLines(res.body).getReader();
-      let replyText = "";
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        let parsed: { message?: { content?: string }; done?: boolean };
-        try {
-          parsed = JSON.parse(value) as typeof parsed;
-        } catch {
-          continue;
-        }
-        const delta = parsed.message?.content ?? "";
-        if (delta || parsed.done) {
-          replyText += delta;
-          this.transcript = this.transcript.map((m, i) =>
-            i === this.transcript.length - 1 && m.role === "assistant"
-              ? { ...m, text: replyText }
-              : m,
-          );
-          this.emit();
-        }
-      }
-
-      const finalReply = replyText.trim();
-      if (!finalReply) {
-        this.transcript = this.transcript.filter(
-          (m, i) =>
-            !(
-              i === this.transcript.length - 1 &&
-              m.role === "assistant" &&
-              m.text === ""
-            ),
-        );
-        this.emit();
-        throw new Error("assistant returned an empty reply");
-      }
+      const messages = this.transcript.map((m) => ({
+        role: m.role,
+        content: m.text,
+      }));
+      const finalReply = await this.streamReply(messages);
 
       // Step the bot's final reply as Party B.
       const moveB = buildBotMove(finalReply);
       t.step(moveB, "B");
       this.moveCount += 1;
       this.actions += 1;
-      this.transcript = this.transcript.map((m, i) =>
-        i === this.transcript.length - 1 && m.role === "assistant"
-          ? { ...m, text: finalReply }
-          : m,
-      );
       this.emit();
       this.flushHeartbeat(true);
     } catch (e) {
@@ -391,7 +451,191 @@ export class ChatSession {
     }
   };
 
+  startAuto = async () => {
+    if (this.autoRunning || this.mode !== "debate") return;
+    this.autoRunning = true;
+    this.error = null;
+    this.isReplying = true;
+    this.exchanges = 0;
+    this.setStatus("debating");
+    await this.runDebateRound();
+  };
+
+  stopAuto = () => {
+    this.autoRunning = false;
+    this.abortFetch();
+    if (this.autoNextDelay) {
+      clearTimeout(this.autoNextDelay);
+      this.autoNextDelay = null;
+    }
+    this.isReplying = false;
+    this.setStatus("idle");
+  };
+
+  /**
+   * Run one AI-vs-AI debate round. The first round opens the tunnel and seeds
+   * Party A with a random topic. Subsequent rounds continue the same tunnel
+   * until the exchange target is hit, then the tunnel is settled and a fresh
+   * debate begins in the same window.
+   */
+  private runDebateRound = async () => {
+    if (!this.autoRunning) return;
+
+    let myGen = this.gen;
+
+    try {
+      // Ensure we have a tunnel.
+      const needsOpen = this.tunnel === null;
+      if (needsOpen) {
+        await this.open();
+        // open() bumps gen so old comparisons don't match; adopt the new gen.
+        myGen = this.gen;
+        if (this.tunnel === null || !this.autoRunning) return;
+
+        // open() sets status to "chatting" for the human mode; restore debate UI.
+        this.setStatus("debating");
+
+        // Seed the debate.
+        this.topic = randomDebateTopic();
+        this.exchanges = 0;
+        this.transcript = [];
+        this.emit();
+
+        const t = this.tunnel;
+        const opening = buildUserMove(this.topic!);
+        t.step(opening, "A");
+        this.moveCount += 1;
+        this.actions += 1;
+        this.transcript = [{ role: "user", text: this.topic }];
+        this.emit();
+        this.flushHeartbeat(true);
+      }
+
+      const t = this.tunnel;
+      if (!t || !this.topic) return;
+
+      // Party B replies.
+      const bMessages = debateMessages(this.topic, this.transcript, "B");
+      const bReply = await this.streamReply(bMessages, {
+        system: debateSystemPrompt("B"),
+        maxTokens: DEBATE_MAX_TOKENS,
+      });
+      if (this.gen !== myGen || !this.autoRunning) return;
+      const moveB = buildBotMove(bReply);
+      t.step(moveB, "B");
+      this.moveCount += 1;
+      this.actions += 1;
+      this.emit();
+      this.flushHeartbeat(true);
+
+      // Party A replies.
+      const aMessages = debateMessages(this.topic, this.transcript, "A");
+      const aReply = await this.streamReply(aMessages, {
+        system: debateSystemPrompt("A"),
+        maxTokens: DEBATE_MAX_TOKENS,
+      });
+      if (this.gen !== myGen || !this.autoRunning) return;
+      const moveA = buildUserMove(aReply);
+      t.step(moveA, "A");
+      this.moveCount += 1;
+      this.actions += 1;
+      this.emit();
+      this.flushHeartbeat(true);
+
+      this.exchanges += 1;
+      this.emit();
+
+      if (this.exchanges >= DEBATE_EXCHANGE_TARGET) {
+        await this.settleAndRestart();
+      } else {
+        // Brief pause between exchanges so the UI is readable.
+        this.autoNextDelay = setTimeout(() => {
+          this.autoNextDelay = null;
+          void this.runDebateRound();
+        }, 800);
+      }
+    } catch (e) {
+      if ((e as Error).name === "AbortError") {
+        // Stopped by user.
+      } else {
+        console.error("[chat] debate failed:", e);
+        if (this.gen === myGen) {
+          this.autoRunning = false;
+          this.isReplying = false;
+          this.fail(e);
+        }
+      }
+    }
+  };
+
+  private settleAndRestart = async () => {
+    if (!this.tunnel || !this.onChain || !this.deps) {
+      this.resetForNextDebate();
+      if (this.autoRunning) void this.runDebateRound();
+      return;
+    }
+
+    this.isReplying = true;
+    this.setStatus("closing");
+
+    try {
+      const settlement = this.tunnel.buildSettlement(this.createdAt);
+      await closeCooperative({
+        signExec: this.deps.signExec as never,
+        tunnelId: this.tunnelId,
+        settlement,
+      });
+      this.deps.report.bumpCounters({ tunnelsClosed: 1, settlements: 1 });
+    } catch (e) {
+      console.error("[chat] debate settle failed:", e);
+      this.fail(e);
+      this.autoRunning = false;
+      this.isReplying = false;
+      return;
+    }
+
+    // Stop after the target number of exchanges so the completed debate stays
+    // visible in the UI instead of immediately restarting and clearing it.
+    this.autoRunning = false;
+    this.isReplying = false;
+    this.setStatus("idle");
+
+    // Tear down the closed tunnel but keep the transcript/topic for reading.
+    this.stopHeartbeat();
+    this.tunnel = null;
+    this.tunnelId = "";
+    this.createdAt = 0n;
+    this.onChain = false;
+    this.moveCount = 0;
+    this.actions = 0;
+    this.lastHeartbeat = 0;
+    this.session = null;
+    this.deps?.report.setActive(0);
+    this.emit();
+  };
+
+  private resetForNextDebate = () => {
+    this.abortFetch();
+    this.stopHeartbeat();
+    this.tunnel = null;
+    this.tunnelId = "";
+    this.createdAt = 0n;
+    this.onChain = false;
+    this.moveCount = 0;
+    this.actions = 0;
+    this.lastHeartbeat = 0;
+    this.session = null;
+    this.transcript = [];
+    this.topic = null;
+    this.exchanges = 0;
+    this.deps?.report.setActive(0);
+    this.status = this.autoRunning ? "debating" : "idle";
+    this.error = null;
+    this.emit();
+  };
+
   reset = () => {
+    this.stopAuto();
     this.abortFetch();
     this.gen += 1;
     this.stopHeartbeat();
@@ -405,6 +649,8 @@ export class ChatSession {
     this.session = null;
     this.isReplying = false;
     this.transcript = [];
+    this.topic = null;
+    this.exchanges = 0;
     this.deps?.report.setActive(0);
     this.status = "idle";
     this.error = null;
@@ -412,7 +658,12 @@ export class ChatSession {
   };
 
   dispose = () => {
+    this.autoRunning = false;
     this.abortFetch();
+    if (this.autoNextDelay) {
+      clearTimeout(this.autoNextDelay);
+      this.autoNextDelay = null;
+    }
     this.gen += 1;
     this.stopHeartbeat();
     this.listeners.clear();

@@ -12,6 +12,7 @@ import { Transaction } from "@mysten/sui/transactions";
 import {
   buildOpenAndFundSeatA as sdkOpenAndFundSeatA,
   buildOpenAndFundMany as sdkOpenAndFundMany,
+  buildCreateAndFundLegacy as sdkCreateAndFundLegacy,
 } from "sui-tunnel-ts/onchain/createAndFund";
 import {
   buildDepositFromGas as sdkDepositFromGas,
@@ -54,6 +55,10 @@ const buildCloseWithRootFromSettlement =
 const buildOpenAndFundMany = sdkOpenAndFundMany as unknown as (
   tx: Transaction,
   specs: Parameters<typeof sdkOpenAndFundMany>[1],
+) => void;
+const buildCreateAndFundLegacy = sdkCreateAndFundLegacy as unknown as (
+  tx: Transaction,
+  p: Parameters<typeof sdkCreateAndFundLegacy>[1],
 ) => void;
 const buildRaiseDisputeFromUpdate = sdkRaiseDisputeFromUpdate as unknown as (
   tx: Transaction,
@@ -150,16 +155,18 @@ export async function openAndFundSelfPlay(opts: {
   penaltyAmount?: bigint;
 }): Promise<string> {
   const tx = new Transaction();
-  buildOpenAndFundMany(tx, [
-    {
-      partyA: { ...opts.partyA, signatureType: SignatureScheme.ED25519 },
-      partyB: { ...opts.partyB, signatureType: SignatureScheme.ED25519 },
-      aAmount: opts.aAmount,
-      bAmount: opts.bAmount,
-      timeoutMs: opts.timeoutMs ?? 86_400_000n,
-      penaltyAmount: opts.penaltyAmount ?? 0n,
-    },
+  const [coinA, coinB] = tx.splitCoins(tx.gas, [
+    tx.pure.u64(opts.aAmount),
+    tx.pure.u64(opts.bAmount),
   ]);
+  buildCreateAndFundLegacy(tx, {
+    partyA: { ...opts.partyA, signatureType: SignatureScheme.ED25519 },
+    partyB: { ...opts.partyB, signatureType: SignatureScheme.ED25519 },
+    coinA,
+    coinB,
+    timeoutMs: opts.timeoutMs ?? 86_400_000n,
+    penaltyAmount: opts.penaltyAmount ?? 0n,
+  });
   const { digest } = await opts.signExec(tx);
   await opts.reads.waitForTransaction({ digest });
   const txb = await opts.reads.getTransactionBlock({
