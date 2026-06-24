@@ -1,16 +1,11 @@
 //! HTTP handlers for the control-plane contract (ADR-0002). Per-move traffic never
 //! reaches here (ADR-0001): only register / heartbeat / settle / live-stats.
 
-use std::convert::Infallible;
-
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
-use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::{Deserialize, Serialize};
-use tokio_stream::wrappers::BroadcastStream;
-use tokio_stream::{Stream, StreamExt};
 use uuid::Uuid;
 
 use crate::error::ApiError;
@@ -32,14 +27,12 @@ pub(crate) mod test_support {
         )
         .expect("test settler");
         let walrus = crate::walrus::WalrusClient::new("http://pub".into(), "http://agg".into());
-        let (stats_tx, _) = tokio::sync::broadcast::channel(4);
         std::sync::Arc::new(AppState {
             control: std::sync::Arc::new(crate::store::memory::InMemoryControlStore::default()),
             mp: std::sync::Arc::new(crate::store::memory::InMemoryMpStore::default()),
             bus: std::sync::Arc::new(crate::store::memory::LocalBus::new("test-instance".into())),
             settler,
             walrus,
-            stats_tx,
             actions: crate::stats_counter::LocalActionCounter::default(),
             pair_hold_ms: 750,
             pairing: crate::stats_counter::MatchPairingMetrics::default(),
@@ -210,10 +203,9 @@ pub(crate) async fn heartbeat(
         ));
     }
     tracing::debug!(%session_id, tunnel = %req.tunnel_id, nonce = %req.nonce, window_ms = req.window_ms, "heartbeat");
-    state
-        .control
-        .add_actions(&rec.game, req.actions_delta)
-        .await;
+    // Park the delta in the per-instance counter; the 1 Hz flusher drains it into ControlStore.
+    // Avoids a per-heartbeat single-key INCRBY hotspot (the relay path already does this).
+    state.actions.incr(&rec.game, req.actions_delta);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -424,17 +416,6 @@ fn bearer_matches(headers: &HeaderMap, expected: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// SSE feed for the catalog activity panel (ADR-0002 `GET /v1/stats/live`).
-pub(crate) async fn stats_live(
-    State(state): State<SharedState>,
-) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    let stream = BroadcastStream::new(state.stats_tx.subscribe()).filter_map(|msg| {
-        msg.ok()
-            .map(|json| Ok::<_, Infallible>(Event::default().data(json)))
-    });
-    Sse::new(stream).keep_alive(KeepAlive::default())
-}
-
 /// Prometheus text exposition of the live counters.
 pub(crate) async fn metrics(State(state): State<SharedState>) -> impl IntoResponse {
     let snap = state.control.snapshot().await;
@@ -604,6 +585,47 @@ mod tests {
         let state = test_state();
         let code = ready(axum::extract::State(state)).await;
         assert_eq!(code, axum::http::StatusCode::OK);
+    }
+
+    // Heartbeat deltas must land in the per-instance LocalActionCounter (drained 1/s by the
+    // flusher), NOT directly in the shared ControlStore — that single-key INCRBY is the hotspot
+    // this change removes. The shared counter must stay untouched until the flusher runs.
+    #[tokio::test]
+    async fn heartbeat_feeds_local_counter_not_control_directly() {
+        let state = crate::state::AppState::in_memory_for_test();
+        let rec = SessionRecord {
+            game: "blackjack".into(),
+            tunnels: vec![],
+            stats_token: "tok".into(),
+        };
+        state.control.put_session("s1", rec).await;
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "Bearer tok".parse().unwrap(),
+        );
+        let req = HeartbeatRequest {
+            tunnel_id: "0xt".into(),
+            nonce: "1".into(),
+            actions_delta: 7,
+            window_ms: 1000,
+        };
+
+        heartbeat(State(state.clone()), Path("s1".into()), headers, Json(req))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            state.control.snapshot().await.total_actions,
+            0,
+            "must not hit the shared counter directly"
+        );
+        assert_eq!(
+            state.actions.drain_deltas(),
+            vec![("blackjack".to_string(), 7)],
+            "delta parked locally"
+        );
     }
 
     // /metrics must expose the live counters in Prometheus text format.
