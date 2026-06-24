@@ -29,9 +29,11 @@ function GameTypeChoice({
           key={o.id}
           type="button"
           onClick={() => onChange(o.id)}
-          className={`qp-btn transition-colors ${
-            isPortrait ? "!px-4 !py-3 !text-lg" : "!px-10 !py-6 !text-4xl"
-          } ${value === o.id ? "qp-btn--go" : ""}`}
+          className={`qp-btn transition-colors ${isPortrait ? "!px-4 !py-3 !text-lg" : "!px-10 !py-6 !text-4xl"
+            } ${value === o.id
+              ? "qp-btn--go"
+              : ""
+            }`}
         >
           {o.label}
         </button>
@@ -66,9 +68,11 @@ function BoardSizeChoice({
             key={n}
             type="button"
             onClick={() => onChange(n)}
-            className={`qp-btn transition-colors ${
-              isPortrait ? "!px-4 !py-2 !text-base" : "!px-10 !py-5 !text-4xl"
-            } ${value === n ? "qp-btn--go" : ""}`}
+            className={`qp-btn transition-colors ${isPortrait ? "!px-4 !py-2 !text-base" : "!px-10 !py-5 !text-4xl"
+              } ${value === n
+                ? "qp-btn--go"
+                : ""
+              }`}
           >
             {n}×{n}
           </button>
@@ -83,9 +87,10 @@ function BoardSizeChoice({
             if (Number.isFinite(n)) onChange(n);
           }}
           aria-label="Custom board size"
-          className={`qp-input bg-[#fffdf6] border-2 border-[var(--qp-ink)] focus:border-[var(--qp-amber)] rounded-md font-mono tabular-nums text-center outline-none ${
-            isPortrait ? "w-20 px-2 py-2 text-base" : "w-48 px-6 py-5 text-4xl"
-          }`}
+          className={`qp-input bg-[#fffdf6] border-2 border-[var(--qp-ink)] focus:border-[var(--qp-amber)] rounded-md font-mono tabular-nums text-center outline-none ${isPortrait
+              ? "w-20 px-2 py-2 text-base"
+              : "w-48 px-6 py-5 text-4xl"
+            }`}
         />
       </div>
     </div>
@@ -112,9 +117,11 @@ function GamesPerTunnelChoice({
           key={n}
           type="button"
           onClick={() => onChange(n)}
-          className={`qp-btn transition-colors ${
-            isPortrait ? "!px-4 !py-2 !text-base" : "!px-10 !py-5 !text-4xl"
-          } ${value === n ? "qp-btn--go" : ""}`}
+          className={`qp-btn transition-colors ${isPortrait ? "!px-4 !py-2 !text-base" : "!px-10 !py-5 !text-4xl"
+            } ${value === n
+              ? "qp-btn--go"
+              : ""
+            }`}
         >
           {n}
         </button>
@@ -130,9 +137,10 @@ function GamesPerTunnelChoice({
         }}
         aria-label="Custom games per tunnel"
         data-testid="ttt-max-games"
-        className={`qp-input bg-[#fffdf6] border-2 border-[var(--qp-ink)] focus:border-[var(--qp-amber)] rounded-md font-mono tabular-nums text-center outline-none ${
-          isPortrait ? "w-16 px-2 py-2 text-base" : "w-40 px-6 py-5 text-4xl"
-        }`}
+        className={`qp-input bg-[#fffdf6] border-2 border-[var(--qp-ink)] focus:border-[var(--qp-amber)] rounded-md font-mono tabular-nums text-center outline-none ${isPortrait
+            ? "w-16 px-2 py-2 text-base"
+            : "w-40 px-6 py-5 text-4xl"
+          }`}
       />
     </div>
   );
@@ -187,9 +195,13 @@ function DifficultyChoice({
             key={o.id}
             type="button"
             onClick={() => onChange(o.id)}
-            className={`qp-btn transition-colors flex flex-col items-start text-left ${
-              isPortrait ? "!px-4 !py-3 !text-sm" : "!px-6 !py-5 !text-2xl"
-            } ${active ? "qp-btn--go shadow-sm" : ""}`}
+            className={`qp-btn transition-colors flex flex-col items-start text-left ${isPortrait
+                ? "!px-4 !py-3 !text-sm"
+                : "!px-6 !py-5 !text-2xl"
+              } ${active
+                ? "qp-btn--go shadow-sm"
+                : ""
+              }`}
             style={{ transform: active ? `rotate(${rotation})` : "none" }}
           >
             <span className="font-bold">{o.label}</span>
@@ -246,21 +258,17 @@ export function SetupScene({
       >
         <div className="flex flex-col items-start gap-1 mt-1">
           <h1
-            className={`qp-title ${
-              isPortrait ? "text-3xl" : "text-4xl md:text-5xl"
-            }`}
+            className={`qp-title ${isPortrait ? "text-3xl" : "text-4xl md:text-5xl"
+              }`}
           >
             Tic-Tac-Toe
           </h1>
           <button
             onClick={onBack}
-            className={`font-bold text-[var(--qp-ink-soft)] hover:text-[var(--qp-ink)] flex items-center gap-1.5 transition-colors mt-1 uppercase tracking-widest ${
-              isPortrait ? "text-xs" : "text-lg"
-            }`}
+            className={`font-bold text-[var(--qp-ink-soft)] hover:text-[var(--qp-ink)] flex items-center gap-1.5 transition-colors mt-1 uppercase tracking-widest ${isPortrait ? "text-xs" : "text-lg"
+              }`}
           >
-            <span
-              className={`material-symbols-outlined ${isPortrait ? "text-sm" : "text-2xl"}`}
-            >
+            <span className={`material-symbols-outlined ${isPortrait ? "text-sm" : "text-2xl"}`}>
               arrow_back
             </span>
             Return to Main menu
@@ -270,11 +278,10 @@ export function SetupScene({
         <div className="flex flex-col items-end gap-2 shrink-0">
           {preparingLabel && (
             <div
-              className={`text-right text-secondary font-headline-lg italic animate-pulse bg-secondary/10 rounded-lg border-secondary/30 shadow-sm w-max ${
-                isPortrait
+              className={`text-right text-secondary font-headline-lg italic animate-pulse bg-secondary/10 rounded-lg border-secondary/30 shadow-sm w-max ${isPortrait
                   ? "text-xs px-2 py-1 border"
                   : "text-lg px-4 py-2 border-2"
-              }`}
+                }`}
             >
               {preparingLabel}
             </div>
@@ -283,11 +290,10 @@ export function SetupScene({
             onClick={onStart}
             disabled={!funded}
             data-testid="ttt-start"
-            className={`qp-btn qp-btn--go transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center font-black ${
-              isPortrait
+            className={`qp-btn qp-btn--go transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center font-black ${isPortrait
                 ? "!px-6 !py-3 !text-base gap-2"
                 : "!px-10 !py-4 !text-3xl gap-4"
-            }`}
+              }`}
           >
             <span>Start playing</span>
             <span
@@ -309,26 +315,22 @@ export function SetupScene({
           <button
             type="button"
             onClick={() => setActiveTab("mode")}
-            className={`transition-colors font-bold uppercase tracking-widest ${
-              isPortrait ? "px-2 py-2 text-sm" : "px-4 py-4 text-2xl"
-            } ${
-              activeTab === "mode"
+            className={`transition-colors font-bold uppercase tracking-widest ${isPortrait ? "px-2 py-2 text-sm" : "px-4 py-4 text-2xl"
+              } ${activeTab === "mode"
                 ? "text-[var(--qp-ink)] border-b-4 border-[var(--qp-ink)] -mb-[3px]"
                 : "text-[var(--qp-ink-soft)] hover:text-[var(--qp-ink)]"
-            }`}
+              }`}
           >
             Play Mode
           </button>
           <button
             type="button"
             onClick={() => setActiveTab("difficulty")}
-            className={`transition-colors font-bold uppercase tracking-widest ${
-              isPortrait ? "px-2 py-2 text-sm" : "px-4 py-4 text-2xl"
-            } ${
-              activeTab === "difficulty"
+            className={`transition-colors font-bold uppercase tracking-widest ${isPortrait ? "px-2 py-2 text-sm" : "px-4 py-4 text-2xl"
+              } ${activeTab === "difficulty"
                 ? "text-[var(--qp-ink)] border-b-4 border-[var(--qp-ink)] -mb-[3px]"
                 : "text-[var(--qp-ink-soft)] hover:text-[var(--qp-ink)]"
-            }`}
+              }`}
           >
             Difficulty
           </button>

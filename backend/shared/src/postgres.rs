@@ -113,6 +113,29 @@ impl SettlementStore for PgSettlementStore {
                 .await?,
         )
     }
+
+    async fn metric_history(
+        &self,
+        from_secs: i64,
+        to_secs: i64,
+        stride_secs: i64,
+    ) -> anyhow::Result<Vec<(i64, i64)>> {
+        // One point per stride-wide bucket: MAX(ts_bucket)/MAX(total_actions) per group. Both are
+        // aggregates (valid under GROUP BY) and, the counter being monotonic, MAX is the bucket's
+        // last value — so a bucket spanning a data gap still reports its true endpoint. stride=1
+        // collapses to one row per bucket → the full-resolution per-second series.
+        let rows = sqlx::query_as::<_, (i64, i64)>(
+            "SELECT MAX(ts_bucket) AS bucket_ts, MAX(total_actions) AS total FROM metric_bucket \
+             WHERE ts_bucket >= $1 AND ts_bucket <= $2 \
+             GROUP BY ts_bucket / $3 ORDER BY bucket_ts ASC",
+        )
+        .bind(from_secs)
+        .bind(to_secs)
+        .bind(stride_secs.max(1))
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
 }
 
 #[cfg(test)]

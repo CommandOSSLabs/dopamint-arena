@@ -12,13 +12,7 @@ import "../cross.css";
 import { CROSS_STYLE, grassHasTree } from "../crossTheme";
 import { visibleLanes, type CrossView } from "../session-core";
 import { SketchDefs } from "../../sketch";
-import {
-  CrossCar,
-  CrossChicken,
-  CrossLog,
-  CrossTrain,
-  CrossTree,
-} from "./crossSprites";
+import { CrossCar, CrossChicken, CrossLog, CrossTrain, CrossTree } from "./crossSprites";
 
 function trainSegment(span: HazardSpan, col: number): "head" | "mid" | "tail" {
   const left = Math.ceil(span.center - span.half);
@@ -165,10 +159,7 @@ export function CrossBoard({
       style={CROSS_STYLE}
     >
       <SketchDefs />
-      <aside
-        className="cross-pane sketch-stroke sketch-panel"
-        aria-label="Match info and controls"
-      >
+      <aside className="cross-pane sketch-stroke sketch-panel" aria-label="Match info and controls">
         <div className="cross-pane__top">
           <SeatRail
             party="A"
@@ -213,45 +204,21 @@ export function CrossBoard({
           )}
 
           {!settled && manual && (
-            <div
-              className="cross-actionbar sketch-stroke sketch-panel"
-              role="group"
-              aria-label="Movement controls"
-            >
-              <button
-                type="button"
-                className="cross-pad sketch-stroke"
-                onPointerDown={() => onDir("north")}
-                aria-label="North (W)"
-              >
+            <div className="cross-actionbar sketch-stroke sketch-panel" role="group" aria-label="Movement controls">
+              <button type="button" className="cross-pad sketch-stroke" onPointerDown={() => onDir("north")} aria-label="North (W)">
                 <span className="cross-pad__arrow">▲</span>
                 <span className="cross-pad__key">w</span>
               </button>
               <div className="cross-pad-row">
-                <button
-                  type="button"
-                  className="cross-pad sketch-stroke"
-                  onPointerDown={() => onDir("west")}
-                  aria-label="West (A)"
-                >
+                <button type="button" className="cross-pad sketch-stroke" onPointerDown={() => onDir("west")} aria-label="West (A)">
                   <span className="cross-pad__arrow">◀</span>
                   <span className="cross-pad__key">a</span>
                 </button>
-                <button
-                  type="button"
-                  className="cross-pad sketch-stroke"
-                  onPointerDown={() => onDir("south")}
-                  aria-label="South (S)"
-                >
+                <button type="button" className="cross-pad sketch-stroke" onPointerDown={() => onDir("south")} aria-label="South (S)">
                   <span className="cross-pad__arrow">▼</span>
                   <span className="cross-pad__key">s</span>
                 </button>
-                <button
-                  type="button"
-                  className="cross-pad sketch-stroke"
-                  onPointerDown={() => onDir("east")}
-                  aria-label="East (D)"
-                >
+                <button type="button" className="cross-pad sketch-stroke" onPointerDown={() => onDir("east")} aria-label="East (D)">
                   <span className="cross-pad__arrow">▶</span>
                   <span className="cross-pad__key">d</span>
                 </button>
@@ -383,17 +350,11 @@ export function CrossBoard({
           <div className="cross-result" role="dialog" aria-modal="true">
             <div className="cross-result__card sketch-stroke sketch-panel">
               {celebratory && <div className="cross-result__trophy">🏆</div>}
-              <div
-                className={`cross-result__line ${celebratory ? "text-[var(--sketch-accent)]" : ""}`}
-              >
+              <div className={`cross-result__line ${celebratory ? "text-[var(--sketch-accent)]" : ""}`}>
                 {title()}
               </div>
               <div className="cross-result__sub">{sub()}</div>
-              <button
-                type="button"
-                className="cross-play-again sketch-btn sketch-btn--go"
-                onClick={onPlayAgain}
-              >
+              <button type="button" className="cross-play-again sketch-btn sketch-btn--go" onClick={onPlayAgain}>
                 Play Again
               </button>
             </div>

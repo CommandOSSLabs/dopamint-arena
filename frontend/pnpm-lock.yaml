@@ -80,10 +80,10 @@ importers:
       "@tailwindcss/vite":
         specifier: ^4.3.1
         version: 4.3.1(vite@8.0.16(@types/node@25.9.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4))
-      "@types/libsodium-wrappers":
+      '@types/libsodium-wrappers':
         specifier: ^0.8.2
         version: 0.8.2
-      "@types/node":
+      '@types/node':
         specifier: ^25.9.3
         version: 25.9.3
       "@types/react":
@@ -1864,18 +1864,12 @@ packages:
         integrity: sha512-RoBvJ2X0wuKlWFIjrwffGw1IqZHKQqzIchKaadZZfnNpsAYp2mM0h36JtPCjNDAHGgYez/15uMBpfGwchhiMgg==,
       }
 
-  "@types/libsodium-wrappers@0.8.2":
-    resolution:
-      {
-        integrity: sha512-+2IDfSULPUskSjIYfZl9suIUsIE5PXwoKZiE/j0MZWd+M9nEGvJDsk/ztMZKNhL1lBL+1CaypW0dQSjqPW2dMg==,
-      }
+  '@types/libsodium-wrappers@0.8.2':
+    resolution: {integrity: sha512-+2IDfSULPUskSjIYfZl9suIUsIE5PXwoKZiE/j0MZWd+M9nEGvJDsk/ztMZKNhL1lBL+1CaypW0dQSjqPW2dMg==}
     deprecated: This is a stub types definition. libsodium-wrappers provides its own type definitions, so you do not need this installed.
 
-  "@types/node@25.9.3":
-    resolution:
-      {
-        integrity: sha512-603BddQMv3pUcr4U2dhujk83N2tTDVr/34wII2B6bJy6g+8WD6yUb11jszNs0gdi4PesVWl7ABt8nYMVpnLUcg==,
-      }
+  '@types/node@25.9.3':
+    resolution: {integrity: sha512-603BddQMv3pUcr4U2dhujk83N2tTDVr/34wII2B6bJy6g+8WD6yUb11jszNs0gdi4PesVWl7ABt8nYMVpnLUcg==}
 
   "@types/react-dom@19.2.3":
     resolution:
@@ -2233,22 +2227,13 @@ packages:
     hasBin: true
 
   jose@6.2.3:
-    resolution:
-      {
-        integrity: sha512-YYVDInQKFJfR/xa3ojUTl8c2KoTwiL1R5Wg9YCydwH0x0B9grbzlg5HC7mMjCtUJjbQ/YnGEZIhI5tCgfTb4Hw==,
-      }
+    resolution: {integrity: sha512-YYVDInQKFJfR/xa3ojUTl8c2KoTwiL1R5Wg9YCydwH0x0B9grbzlg5HC7mMjCtUJjbQ/YnGEZIhI5tCgfTb4Hw==}
 
   libsodium-wrappers@0.8.4:
-    resolution:
-      {
-        integrity: sha512-mu8aAWucZjTB5O/BtGXtW4e1agy7uHxNYG7zPthmmD1jU43LCDmSWZLN4JhflbdPXj3yDO4lxM1O9hLDgIOXDw==,
-      }
+    resolution: {integrity: sha512-mu8aAWucZjTB5O/BtGXtW4e1agy7uHxNYG7zPthmmD1jU43LCDmSWZLN4JhflbdPXj3yDO4lxM1O9hLDgIOXDw==}
 
   libsodium@0.8.4:
-    resolution:
-      {
-        integrity: sha512-lMcYaRi0zcs7tarATsQUYC7rstliIXZuoq0c6zXSgNtSNtdvBgkSegjWhpMJAXzKX3SUSwIp7+zEsob+j3LuRw==,
-      }
+    resolution: {integrity: sha512-lMcYaRi0zcs7tarATsQUYC7rstliIXZuoq0c6zXSgNtSNtdvBgkSegjWhpMJAXzKX3SUSwIp7+zEsob+j3LuRw==}
 
   lightningcss-android-arm64@1.32.0:
     resolution:
@@ -3978,11 +3963,11 @@ snapshots:
       tslib: 2.8.1
     optional: true
 
-  "@types/libsodium-wrappers@0.8.2":
+  '@types/libsodium-wrappers@0.8.2':
     dependencies:
       libsodium-wrappers: 0.8.4
 
-  "@types/node@25.9.3":
+  '@types/node@25.9.3':
     dependencies:
       undici-types: 7.24.6
 

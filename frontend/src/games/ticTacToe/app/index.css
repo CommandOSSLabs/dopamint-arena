@@ -78,15 +78,14 @@
   font-family: "Gochi Hand", "Comic Sans MS", cursive;
   color: var(--qp-ink);
   background-color: var(--qp-paper);
-  background-image: radial-gradient(
-    rgba(35, 34, 31, 0.09) 1.1px,
-    transparent 1.3px
-  );
+  background-image: radial-gradient(rgba(35, 34, 31, 0.09) 1.1px, transparent 1.3px);
   background-size: 16px 16px;
   background-position: -8px -8px;
 }
 
 /* Custom Notebook Styling */
+
+
 
 /* Hand-drawn Grid Lines */
 .hand-drawn-grid {

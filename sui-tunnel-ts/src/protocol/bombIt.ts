@@ -310,17 +310,13 @@ function adjacentDanger(danger: Set<number>): Set<number> {
     const col = ci % GRID_W;
     for (const d of dirs) {
       const [nr, nc] = dest(row, col, d);
-      if (nr >= 0 && nr < GRID_H && nc >= 0 && nc < GRID_W)
-        adj.add(idx(nr, nc));
+      if (nr >= 0 && nr < GRID_H && nc >= 0 && nc < GRID_W) adj.add(idx(nr, nc));
     }
   }
   return adj;
 }
 
-function manhattan(
-  a: { row: number; col: number },
-  b: { row: number; col: number },
-): number {
+function manhattan(a: { row: number; col: number }, b: { row: number; col: number }): number {
   return Math.abs(a.row - b.row) + Math.abs(a.col - b.col);
 }
 
@@ -412,22 +408,14 @@ function hunterAction(
 
   // 2) Rare attack bomb — only on a clear line within blast reach.
   const inLine =
-    other.alive &&
-    (p.row === other.row || p.col === other.col) &&
-    dist <= BLAST_RADIUS;
+    other.alive && (p.row === other.row || p.col === other.col) && dist <= BLAST_RADIUS;
   if (canBomb && inLine && hasEscape() && rng() < 0.28) return "bomb";
 
   // 3) Pursue when safe.
   if (towardSafe.length) return pick(towardSafe);
 
   // 4) Crate blocks all pursuit paths → bomb it open (still rare).
-  if (
-    canBomb &&
-    towardSafe.length === 0 &&
-    toward.some(crateInDir) &&
-    hasEscape() &&
-    rng() < 0.35
-  ) {
+  if (canBomb && towardSafe.length === 0 && toward.some(crateInDir) && hasEscape() && rng() < 0.35) {
     return "bomb";
   }
 

@@ -1364,11 +1364,7 @@
   background: var(--cx-grass-dark) !important;
 }
 .cross-shell.sketch .cross-cell--road {
-  background: color-mix(
-    in srgb,
-    var(--sketch-ink) 2.5%,
-    var(--sketch-paper)
-  ) !important;
+  background: color-mix(in srgb, var(--sketch-ink) 2.5%, var(--sketch-paper)) !important;
 }
 .cross-shell.sketch .cross-cell--road:nth-child(even) {
   background: var(--sketch-paper) !important;
@@ -1409,11 +1405,7 @@
   opacity: 0.55;
 }
 .cross-shell.sketch .cross-cell--rails {
-  background: color-mix(
-    in srgb,
-    var(--sketch-ink) 4%,
-    var(--sketch-paper)
-  ) !important;
+  background: color-mix(in srgb, var(--sketch-ink) 4%, var(--sketch-paper)) !important;
 }
 .cross-shell.sketch .cross-cell--rails::after {
   content: "";
@@ -1433,7 +1425,7 @@
   height: 3px;
   background: repeating-linear-gradient(
     90deg,
-    var(--sketch-ink) 0 5px,
+  var(--sketch-ink) 0 5px,
     transparent 5px 11px
   );
   opacity: 0.45;
@@ -1448,11 +1440,7 @@
 }
 .cross-shell.sketch .cross-cell--mine-lane.cross-cell--grass,
 .cross-shell.sketch .cross-cell--mine-lane.cross-cell--grass:nth-child(even) {
-  background: color-mix(
-    in srgb,
-    var(--sketch-accent-fill) 40%,
-    var(--sketch-paper)
-  ) !important;
+  background: color-mix(in srgb, var(--sketch-accent-fill) 40%, var(--sketch-paper)) !important;
 }
 .cross-shell.sketch .cross-cell--mine-lane {
   box-shadow: none;

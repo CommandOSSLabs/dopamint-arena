@@ -43,9 +43,7 @@ const BombTerrain = memo(
                 : "floor";
           return (
             <div key={i} className={`bomb-cell bomb-cell--${kind} sketch-cell`}>
-              {cell === CELL_CRATE ? (
-                <span className="bomb-crate-glyph" aria-hidden />
-              ) : null}
+              {cell === CELL_CRATE ? <span className="bomb-crate-glyph" aria-hidden /> : null}
             </div>
           );
         })}
@@ -221,9 +219,7 @@ export function BombBoard({
               ].join(" ")}
             >
               <span className="bomb-player__badge sketch-chip">{myParty}</span>
-              <span className="bomb-player__bal tabular-nums">
-                {formatCompactCount(myBalance)}
-              </span>
+              <span className="bomb-player__bal tabular-nums">{formatCompactCount(myBalance)}</span>
               {myDead && <span className="bomb-player__flag">out</span>}
             </div>
           </div>
@@ -246,51 +242,12 @@ export function BombBoard({
 
             {!settled && canPlay && (
               <div className="bomb-controls sketch-stroke sketch-panel">
-                <div
-                  className="bomb-actionbar"
-                  role="group"
-                  aria-label="Movement controls"
-                >
-                  <button
-                    type="button"
-                    className="bomb-pad bomb-pad--n sketch-stroke"
-                    onPointerDown={() => onAction("north")}
-                    aria-label="North"
-                  >
-                    W
-                  </button>
-                  <button
-                    type="button"
-                    className="bomb-pad bomb-pad--w sketch-stroke"
-                    onPointerDown={() => onAction("west")}
-                    aria-label="West"
-                  >
-                    A
-                  </button>
-                  <button
-                    type="button"
-                    className="bomb-pad bomb-pad--bomb sketch-stroke sketch-stroke--accent"
-                    onPointerDown={() => onAction("bomb")}
-                    aria-label="Bomb"
-                  >
-                    ■
-                  </button>
-                  <button
-                    type="button"
-                    className="bomb-pad bomb-pad--e sketch-stroke"
-                    onPointerDown={() => onAction("east")}
-                    aria-label="East"
-                  >
-                    D
-                  </button>
-                  <button
-                    type="button"
-                    className="bomb-pad bomb-pad--s sketch-stroke"
-                    onPointerDown={() => onAction("south")}
-                    aria-label="South"
-                  >
-                    S
-                  </button>
+                <div className="bomb-actionbar" role="group" aria-label="Movement controls">
+                  <button type="button" className="bomb-pad bomb-pad--n sketch-stroke" onPointerDown={() => onAction("north")} aria-label="North">W</button>
+                  <button type="button" className="bomb-pad bomb-pad--w sketch-stroke" onPointerDown={() => onAction("west")} aria-label="West">A</button>
+                  <button type="button" className="bomb-pad bomb-pad--bomb sketch-stroke sketch-stroke--accent" onPointerDown={() => onAction("bomb")} aria-label="Bomb">■</button>
+                  <button type="button" className="bomb-pad bomb-pad--e sketch-stroke" onPointerDown={() => onAction("east")} aria-label="East">D</button>
+                  <button type="button" className="bomb-pad bomb-pad--s sketch-stroke" onPointerDown={() => onAction("south")} aria-label="South">S</button>
                 </div>
               </div>
             )}
@@ -305,12 +262,7 @@ export function BombBoard({
       <main className="bomb-main">
         <div
           className="bomb-stage sketch-arena sketch-stroke"
-          style={
-            {
-              ["--gw" as string]: GRID_W,
-              ["--gh" as string]: GRID_H,
-            } as React.CSSProperties
-          }
+          style={{ ["--gw" as string]: GRID_W, ["--gh" as string]: GRID_H } as React.CSSProperties}
         >
           <BombTerrain grid={view.grid} />
 
@@ -326,9 +278,7 @@ export function BombBoard({
                   } as React.CSSProperties
                 }
               >
-                <span
-                  className={`bomb-piece__glyph bomb-piece__glyph--a sketch-glyph${role === "A" ? " bomb-piece__glyph--mine" : ""}`}
-                >
+                <span className={`bomb-piece__glyph bomb-piece__glyph--a sketch-glyph${role === "A" ? " bomb-piece__glyph--mine" : ""}`}>
                   <span className="bomb-piece__inner" aria-hidden />
                 </span>
               </div>
@@ -344,9 +294,7 @@ export function BombBoard({
                   } as React.CSSProperties
                 }
               >
-                <span
-                  className={`bomb-piece__glyph bomb-piece__glyph--b sketch-glyph${role === "B" ? " bomb-piece__glyph--mine" : ""}`}
-                >
+                <span className={`bomb-piece__glyph bomb-piece__glyph--b sketch-glyph${role === "B" ? " bomb-piece__glyph--mine" : ""}`}>
                   <span className="bomb-piece__inner" aria-hidden />
                 </span>
               </div>
@@ -362,10 +310,7 @@ export function BombBoard({
                   } as React.CSSProperties
                 }
               >
-                <span
-                  className="bomb-piece__glyph bomb-piece__glyph--bomb sketch-glyph"
-                  aria-label="Bomb"
-                >
+                <span className="bomb-piece__glyph bomb-piece__glyph--bomb sketch-glyph" aria-label="Bomb">
                   <span className="bomb-piece__bomb-core" aria-hidden />
                   <span className="bomb-piece__fuse" aria-hidden />
                 </span>
@@ -416,20 +361,14 @@ export function BombBoard({
               ].join(" ")}
             >
               <span className="bomb-player__badge sketch-chip">{oppParty}</span>
-              <span className="bomb-player__bal tabular-nums">
-                {formatCompactCount(oppBalance)}
-              </span>
+              <span className="bomb-player__bal tabular-nums">{formatCompactCount(oppBalance)}</span>
               {oppDead && <span className="bomb-player__flag">out</span>}
             </div>
           </div>
 
-          <div
-            className={`bomb-stats sketch-stroke sketch-panel${!settled ? " bomb-stats--live sketch-stroke--accent" : ""}`}
-          >
+          <div className={`bomb-stats sketch-stroke sketch-panel${!settled ? " bomb-stats--live sketch-stroke--accent" : ""}`}>
             <dl className="bomb-metrics sketch-stroke">
-              <div
-                className={`bomb-metric${view.bombs.length > 0 ? " bomb-metric--hot" : ""}`}
-              >
+              <div className={`bomb-metric${view.bombs.length > 0 ? " bomb-metric--hot" : ""}`}>
                 <dt>bombs</dt>
                 <dd key={view.bombs.length} className="tabular-nums">
                   {view.bombs.length}
@@ -471,12 +410,7 @@ export function BombBoard({
       </aside>
 
       {settled && (
-        <div
-          className="bomb-result"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="bomb-result-title"
-        >
+        <div className="bomb-result" role="dialog" aria-modal="true" aria-labelledby="bomb-result-title">
           <div className="bomb-result__card sketch-stroke sketch-panel">
             <div
               id="bomb-result-title"
@@ -485,11 +419,7 @@ export function BombBoard({
               {title()}
             </div>
             <div className="bomb-result__sub">{sub()}</div>
-            <button
-              type="button"
-              className={`${BOMB_BTN} bomb-cta sketch-btn sketch-btn--go`}
-              onClick={onPlayAgain}
-            >
+            <button type="button" className={`${BOMB_BTN} bomb-cta sketch-btn sketch-btn--go`} onClick={onPlayAgain}>
               again
             </button>
           </div>

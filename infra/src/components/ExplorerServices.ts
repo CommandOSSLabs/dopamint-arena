@@ -127,7 +127,7 @@ export function createExplorerServices(args: ExplorerServicesArgs): ExplorerServ
     priority: 10,
     actions: [{ type: "forward", targetGroupArn: apiTg.arn }],
     conditions: [
-      { pathPattern: { values: ["/v1/settlements", "/v1/settlements/*", "/v1/explorer/*", "/v1/stats/explorer"] } },
+      { pathPattern: { values: ["/v1/settlements", "/v1/settlements/*", "/v1/explorer/*", "/v1/stats/*"] } },
     ],
   });
 

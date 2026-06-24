@@ -17,10 +17,9 @@ export default function Home() {
       <SketchDefs />
 
       <div className="@container qp-panel qp-stroke w-[95%] max-w-2xl p-6 md:p-10 flex flex-col items-center gap-6 fade-in-up text-center mx-auto">
+
         <div className="flex flex-col items-center justify-center select-none pointer-events-none mt-2 w-full text-center">
-          <span className="qp-eyebrow mt-4 !text-lg md:!text-2xl">
-            Dopamint Arena
-          </span>
+          <span className="qp-eyebrow mt-4 !text-lg md:!text-2xl">Dopamint Arena</span>
           <h1
             className="qp-title uppercase text-center mb-6 mt-4 flex flex-wrap items-center justify-center gap-2 md:gap-4 leading-none"
             style={{ fontSize: "clamp(3.5rem, 12cqw, 7rem)" }}

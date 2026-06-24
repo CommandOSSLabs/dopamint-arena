@@ -17,9 +17,7 @@ export function LoginScene({
   return (
     <section className="qp-panel qp-stroke @container w-[95%] max-w-2xl p-6 md:p-10 flex flex-col items-center gap-6 text-center mx-auto">
       <div className="flex flex-col items-center justify-center select-none pointer-events-none mt-2 w-full text-center">
-        <span className="qp-eyebrow mt-4 !text-lg md:!text-2xl">
-          Tic Tac Toe · Caro
-        </span>
+        <span className="qp-eyebrow mt-4 !text-lg md:!text-2xl">Tic Tac Toe · Caro</span>
         <h2
           className="qp-title mb-6 mt-4 flex flex-wrap items-center justify-center gap-2 md:gap-4 leading-none"
           style={{ fontSize: "clamp(3.5rem, 12cqw, 7rem)" }}
@@ -59,6 +57,7 @@ export function LoginScene({
                 <span className="text-2xl md:text-3xl">Play Online</span>
               </button>
             )}
+
           </div>
         ) : (
           <div className="flex flex-col items-center gap-4 w-full max-w-sm mt-4">
@@ -66,9 +65,7 @@ export function LoginScene({
               <ConnectButton connectText="Connect Wallet" />
             </div>
 
-            <span className="text-lg md:text-xl font-bold text-[var(--qp-ink-soft)] italic uppercase">
-              or
-            </span>
+            <span className="text-lg md:text-xl font-bold text-[var(--qp-ink-soft)] italic uppercase">or</span>
 
             <button
               onClick={login}
