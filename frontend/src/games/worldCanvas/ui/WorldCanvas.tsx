@@ -162,8 +162,11 @@ export function WorldCanvas({
   onPaint: (cx: bigint, cy: bigint, x: number, y: number, color: number) => void;
   /** Live agents — drawn as small on-canvas pins above the flag each is painting. */
   agents: AgentMarker[];
-  /** Latest camera-jump request; the view eases to center this point on change. */
-  focus: CanvasFocus | null;
+  /** Latest camera-jump request; the view eases to center this point on change. An
+   *  optional `scale` overrides the default focus zoom — PvP's participant chips ease to a
+   *  wider, comfortable level so the painter's area is visible; solo omits it and keeps
+   *  {@link FOCUS_SCALE} (so its existing view behavior is unchanged). */
+  focus: (CanvasFocus & { scale?: number }) | null;
   /** The human's address, so a hovered cell the human painted reads "You". */
   humanAddress: string;
   /** Canvas backdrop color (Excalidraw-style); the eraser paints this to "erase". */
@@ -237,7 +240,11 @@ export function WorldCanvas({
   // A new focus request (agent spawn) sets a camera target the draw loop eases to.
   useEffect(() => {
     if (!focus) return;
-    focusTarget.current = { gcx: focus.gx, gcy: focus.gy, scale: FOCUS_SCALE };
+    focusTarget.current = {
+      gcx: focus.gx,
+      gcy: focus.gy,
+      scale: focus.scale ?? FOCUS_SCALE,
+    };
   }, [focus?.seq]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Track the Space key so a left-drag pans (instead of paints) while it's held.

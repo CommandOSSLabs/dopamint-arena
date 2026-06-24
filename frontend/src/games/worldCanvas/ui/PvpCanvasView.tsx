@@ -21,6 +21,11 @@ const BACKGROUNDS: readonly string[] = [
 ];
 const SEAT_TINT: Record<"A" | "B", string> = { A: WC.seatA, B: WC.seatB };
 
+/** Zoom a participant-chip jump eases to (HUD ~45%): wide enough to see the painter's
+ *  region with surrounding context — not nose-to-the-pixels like a fresh-spawn focus.
+ *  The HUD reads scale*10%, so 4.5 ≈ 45%. */
+const PARTICIPANT_VIEW_SCALE = 4.5;
+
 /** Below this container width the full palette no longer fits one row, so the toolbar
  *  collapses its palette + backdrop into single swatch popovers (matching solo) — keeping
  *  it one tidy row instead of wrapping into a grid that buries the small PvP canvas. */
@@ -134,28 +139,33 @@ function Board({ m }: { m: ReturnType<typeof usePvpWorldCanvas> }) {
     if (added) setRevision((v) => v + 1);
   }, [m.view]);
 
-  // Camera-jump: "View" eases the wall to a seat's latest paint so you can watch the
-  // co-draw wherever it's happening (mirrors solo's View). Cycles opponent → you.
-  const [focus, setFocus] = useState<CanvasFocus | null>(null);
+  // Camera-jump: clicking a participant chip eases the wall to THAT painter's latest cell
+  // (direct navigation), carrying a comfortable target zoom so their area is actually
+  // visible. The optional `scale` rides on the focus request WorldCanvas already eases to.
+  const [focus, setFocus] = useState<(CanvasFocus & { scale?: number }) | null>(
+    null,
+  );
   const focusSeq = useRef(0);
-  const viewCursor = useRef<"A" | "B" | null>(null);
 
   const opponentSeat: "A" | "B" = m.role === "A" ? "B" : "A";
 
-  const viewNext = () => {
+  // Jump to where a given side is drawing: scan for that seat's MOST-RECENT cell, center
+  // it, and ease the zoom to PARTICIPANT_VIEW_SCALE. No-op if that painter hasn't drawn yet.
+  const viewParticipant = (which: "you" | "opp") => {
     const cells = m.view ?? [];
-    if (!cells.length) return;
-    // Alternate which seat we jump to (opponent first), falling back to the latest cell.
-    const want = viewCursor.current === opponentSeat ? m.role : opponentSeat;
-    viewCursor.current = want ?? opponentSeat;
-    let target = cells[cells.length - 1];
+    const want = which === "you" ? m.role : opponentSeat;
     for (let i = cells.length - 1; i >= 0; i--) {
       if (cells[i].by === want) {
-        target = cells[i];
-        break;
+        const target = cells[i];
+        setFocus({
+          gx: target.gx,
+          gy: target.gy,
+          seq: ++focusSeq.current,
+          scale: PARTICIPANT_VIEW_SCALE,
+        });
+        return;
       }
     }
-    setFocus({ gx: target.gx, gy: target.gy, seq: ++focusSeq.current });
   };
 
   const agents: AgentMarker[] = useMemo(() => {
@@ -214,7 +224,8 @@ function Board({ m }: { m: ReturnType<typeof usePvpWorldCanvas> }) {
         collapse={collapse}
       />
 
-      {/* PvP control (bottom-right) — one slim bar: Auto toggle · seats · View. */}
+      {/* PvP control (bottom-right) — one slim bar: Auto toggle · clickable You/Opp chips
+          (each jumps the camera to that painter's latest cell). */}
       <div style={controlBarStyle}>
         <button
           type="button"
@@ -244,26 +255,57 @@ function Board({ m }: { m: ReturnType<typeof usePvpWorldCanvas> }) {
           Auto
         </button>
         <span style={ctlDividerStyle} />
-        <span style={seatChipStyle} title={`You are seat ${m.role ?? "—"}`}>
-          <SeatDot tint={SEAT_TINT[m.role ?? "A"]} />
-          {m.role ?? "—"}
-        </span>
+        <ParticipantChip
+          tint={SEAT_TINT[m.role ?? "A"]}
+          label="You"
+          title="Jump to where you're painting"
+          onClick={() => viewParticipant("you")}
+        />
         <span style={{ opacity: 0.45, fontSize: 11 }}>vs</span>
-        <span style={seatChipStyle} title="Your opponent">
-          <SeatDot tint={SEAT_TINT[opponentSeat]} />
-          Opp
-        </span>
-        <span style={ctlDividerStyle} />
-        <button
-          type="button"
-          onClick={viewNext}
-          title="Jump the camera to where a painter is drawing"
-          style={ctlButtonStyle}
-        >
-          View
-        </button>
+        <ParticipantChip
+          tint={SEAT_TINT[opponentSeat]}
+          label="Opp"
+          title="Jump to where your opponent is painting"
+          onClick={() => viewParticipant("opp")}
+        />
       </div>
     </div>
+  );
+}
+
+/** A clickable seat pill ("You" / "Opp"): the seat-tint dot + label in a pointer-cursor
+ *  chip that lifts on hover, so it reads as the view action — clicking jumps the camera to
+ *  that painter. (Inline styles can't do `:hover`, so a local flag drives the lift.) */
+function ParticipantChip({
+  tint,
+  label,
+  title,
+  onClick,
+}: {
+  tint: string;
+  label: string;
+  title: string;
+  onClick: () => void;
+}) {
+  const [hover, setHover] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      title={title}
+      style={{
+        ...participantChipStyle,
+        background: hover ? "rgba(255,255,255,0.16)" : "rgba(255,255,255,0.06)",
+        borderColor: hover
+          ? "rgba(255,255,255,0.3)"
+          : "rgba(255,255,255,0.14)",
+      }}
+    >
+      <SeatDot tint={tint} />
+      {label}
+    </button>
   );
 }
 
@@ -363,10 +405,21 @@ const ctlButtonStyle: CSSProperties = {
   fontWeight: 700,
   color: WC.text,
 };
-const seatChipStyle: CSSProperties = {
+const participantChipStyle: CSSProperties = {
   display: "flex",
   alignItems: "center",
-  gap: 4,
+  gap: 5,
+  height: 24,
+  padding: "0 9px",
+  borderRadius: 999,
+  border: "1px solid rgba(255,255,255,0.14)",
+  background: "rgba(255,255,255,0.06)",
+  cursor: "pointer",
+  fontFamily: "inherit",
+  fontSize: 12,
+  fontWeight: 700,
+  color: WC.text,
+  transition: "background .12s, border-color .12s",
 };
 const ctlDividerStyle: CSSProperties = {
   width: 1,
