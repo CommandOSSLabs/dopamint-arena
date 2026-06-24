@@ -556,7 +556,10 @@ mod tests {
         let body = render_metrics(&snap, colocated, split);
         assert!(body.contains("tunnel_actions_total 42"), "got: {body}");
         assert!(body.contains("# TYPE tunnel_active gauge"));
-        assert!(body.contains("tunnel_matches_colocated_total 2"), "got: {body}");
+        assert!(
+            body.contains("tunnel_matches_colocated_total 2"),
+            "got: {body}"
+        );
         assert!(body.contains("tunnel_matches_split_total 1"), "got: {body}");
     }
 }

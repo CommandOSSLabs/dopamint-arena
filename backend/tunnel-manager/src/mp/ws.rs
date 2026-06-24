@@ -296,7 +296,11 @@ async fn handle_authed(
                 wallet: wallet.to_owned(),
                 conn: here(state, conn_id),
             };
-            match state.mp.join_or_pair(&game, me.clone(), state.pair_hold_ms).await {
+            match state
+                .mp
+                .join_or_pair(&game, me.clone(), state.pair_hold_ms)
+                .await
+            {
                 Some(opp) => {
                     // Seat A = earlier waiter (opp), seat B = this joiner (me).
                     create_and_announce_match(state, &game, opp, me).await;
@@ -1153,8 +1157,14 @@ mod tests {
         let inst = state.bus.instance_id().to_owned();
         let (ca, mut rxa) = test_conn(&state);
         let (cb, mut rxb) = test_conn(&state);
-        let a = Waiting { wallet: "0xa".into(), conn: ca };
-        let b = Waiting { wallet: "0xb".into(), conn: cb };
+        let a = Waiting {
+            wallet: "0xa".into(),
+            conn: ca,
+        };
+        let b = Waiting {
+            wallet: "0xb".into(),
+            conn: cb,
+        };
         let (_mid, rec) = create_and_announce_match(&state, "ttt", a, b).await;
         assert_eq!(rec.seat_a, "0xa");
         assert_eq!(rec.seat_b, "0xb");
@@ -1208,8 +1218,8 @@ mod tests {
         use testcontainers_modules::redis::Redis;
         use testcontainers_modules::testcontainers::{runners::AsyncRunner, ImageExt};
 
-        use crate::store::redis::{connect, RedisMpStore};
         use crate::store::memory::LocalBus;
+        use crate::store::redis::{connect, RedisMpStore};
 
         // Spin up an ephemeral Redis 7 container (sharded pub/sub required).
         let node = Redis::default()
@@ -1222,7 +1232,10 @@ mod tests {
         let mut pool = None;
         for _ in 0..40 {
             match connect(&url).await {
-                Ok(p) => { pool = Some(p); break; }
+                Ok(p) => {
+                    pool = Some(p);
+                    break;
+                }
                 Err(_) => tokio::time::sleep(Duration::from_millis(50)).await,
             }
         }
@@ -1251,7 +1264,10 @@ mod tests {
         let (conn_wa_ref, mut rx_wa) = test_conn(&state);
         let (conn_wb_ref, mut rx_wb) = test_conn(&state);
 
-        let wa = Waiting { wallet: "0xwa".into(), conn: conn_wa_ref.clone() };
+        let wa = Waiting {
+            wallet: "0xwa".into(),
+            conn: conn_wa_ref.clone(),
+        };
 
         // Park wa first (queue empty → parks, no immediate pair).
         let parked_a = state.mp.join_or_pair(&game, wa.clone(), 10_000).await;
@@ -1290,13 +1306,19 @@ mod tests {
         assert_eq!(fired_me.wallet, "0xwa");
 
         // Execute the fallback exactly as the select arm does.
-        let opp = state.mp.fallback_pair(&fired_game, &fired_me.wallet).await
+        let opp = state
+            .mp
+            .fallback_pair(&fired_game, &fired_me.wallet)
+            .await
             .expect("fallback_pair must return wb");
         assert_eq!(opp.wallet, "0xwb", "opponent must be wb");
 
         // Announce: deliver match.found to both seats.
         // Remap opp's conn to the registered one so deliver() routes locally.
-        let opp_remapped = Waiting { wallet: opp.wallet.clone(), conn: conn_wb_ref.clone() };
+        let opp_remapped = Waiting {
+            wallet: opp.wallet.clone(),
+            conn: conn_wb_ref.clone(),
+        };
         create_and_announce_match(&state, &fired_game, fired_me, opp_remapped).await;
 
         // Both connections must have received match.found.
@@ -1318,7 +1340,9 @@ mod tests {
     // for the test's lifetime — dropping it stops the container. Returns the mapped port so
     // several instances can share ONE Redis, which is the real multi-instance topology.
     async fn redis_container() -> (
-        testcontainers_modules::testcontainers::ContainerAsync<testcontainers_modules::redis::Redis>,
+        testcontainers_modules::testcontainers::ContainerAsync<
+            testcontainers_modules::redis::Redis,
+        >,
         u16,
     ) {
         use crate::store::redis::connect;
@@ -1345,7 +1369,11 @@ mod tests {
     // A `SharedState` backed by `RedisMpStore` + `RedisBus` on `port`, identified by
     // `instance_id`. Two of these on one port are two relay instances sharing one Redis: a frame
     // addressed to a conn on the OTHER instance crosses via SPUBLISH, exactly as in production.
-    async fn redis_state(instance_id: &str, port: u16, pair_hold_ms: u64) -> crate::state::SharedState {
+    async fn redis_state(
+        instance_id: &str,
+        port: u16,
+        pair_hold_ms: u64,
+    ) -> crate::state::SharedState {
         use crate::store::memory::InMemoryControlStore;
         use crate::store::redis::{connect, RedisBus, RedisMpStore};
         use std::sync::Arc;
@@ -1354,9 +1382,12 @@ mod tests {
         let mp: Arc<dyn crate::store::MpStore> =
             Arc::new(RedisMpStore::new(connect(&url).await.expect("mp pool")));
         let bus: Arc<dyn crate::store::Bus> = Arc::new(
-            RedisBus::new(instance_id.to_owned(), connect(&url).await.expect("bus pool"))
-                .await
-                .expect("redis bus"),
+            RedisBus::new(
+                instance_id.to_owned(),
+                connect(&url).await.expect("bus pool"),
+            )
+            .await
+            .expect("redis bus"),
         );
         let (stats_tx, _) = tokio::sync::broadcast::channel(4);
         Arc::new(AppState {
@@ -1411,13 +1442,23 @@ mod tests {
         let game = format!("split-{}", Uuid::new_v4().simple());
 
         // wa joins on A → parks (queue empty).
-        let wa = Waiting { wallet: "0xwa".into(), conn: conn_wa };
+        let wa = Waiting {
+            wallet: "0xwa".into(),
+            conn: conn_wa,
+        };
         assert!(
-            state_a.mp.join_or_pair(&game, wa.clone(), 10_000).await.is_none(),
+            state_a
+                .mp
+                .join_or_pair(&game, wa.clone(), 10_000)
+                .await
+                .is_none(),
             "wa parks"
         );
         // wb joins on B → cross-instance, not expired (long hold) → parks too.
-        let wb = Waiting { wallet: "0xwb".into(), conn: conn_wb };
+        let wb = Waiting {
+            wallet: "0xwb".into(),
+            conn: conn_wb,
+        };
         assert!(
             state_b.mp.join_or_pair(&game, wb, 10_000).await.is_none(),
             "wb parks cross-instance"
@@ -1430,7 +1471,10 @@ mod tests {
             .await
             .expect("fallback pairs wb");
         assert_eq!(opp.wallet, "0xwb");
-        assert_eq!(opp.conn.instance_id, "inst-B", "opponent is on the other instance");
+        assert_eq!(
+            opp.conn.instance_id, "inst-B",
+            "opponent is on the other instance"
+        );
 
         // Announce on A: seat A = wa (local), seat B = wb (remote — must cross via SPUBLISH).
         create_and_announce_match(&state_a, &game, wa, opp).await;
@@ -1439,7 +1483,10 @@ mod tests {
         assert_eq!(fa["role"], "A");
         assert_eq!(fa["opponentWallet"], "0xwb");
         let fb = recv_json_within(&mut rx_wb, 2).await; // crossed instances over Redis
-        assert_eq!(fb["type"], "match.found", "remote seat gets the announce over SPUBLISH");
+        assert_eq!(
+            fb["type"], "match.found",
+            "remote seat gets the announce over SPUBLISH"
+        );
         assert_eq!(fb["role"], "B");
         assert_eq!(fb["opponentWallet"], "0xwa");
 
@@ -1463,7 +1510,10 @@ mod tests {
         let game = format!("race-{}", Uuid::new_v4().simple());
 
         // wa parks and arms its hold timer (as the park branch does).
-        let wa = Waiting { wallet: "0xwa".into(), conn: conn_wa };
+        let wa = Waiting {
+            wallet: "0xwa".into(),
+            conn: conn_wa,
+        };
         assert!(
             state.mp.join_or_pair(&game, wa.clone(), 50).await.is_none(),
             "wa parks"
@@ -1472,7 +1522,10 @@ mod tests {
         arm_hold(&mut holds, &game, wa, 50);
 
         // wb joins the SAME instance → same-instance preference pairs wa immediately at join.
-        let wb = Waiting { wallet: "0xwb".into(), conn: conn_wb };
+        let wb = Waiting {
+            wallet: "0xwb".into(),
+            conn: conn_wb,
+        };
         let opp = state
             .mp
             .join_or_pair(&game, wb.clone(), 50)
@@ -1511,7 +1564,10 @@ mod tests {
         let (conn_wa, _rx_wa) = test_conn(&state);
         let game = format!("drop-{}", Uuid::new_v4().simple());
 
-        let wa = Waiting { wallet: "0xwa".into(), conn: conn_wa };
+        let wa = Waiting {
+            wallet: "0xwa".into(),
+            conn: conn_wa,
+        };
         assert!(
             state.mp.join_or_pair(&game, wa.clone(), 50).await.is_none(),
             "wa parks"
@@ -1534,7 +1590,10 @@ mod tests {
 
         // A fresh joiner sees an empty queue — no phantom wa to pair against.
         let (conn_wc, _rx_wc) = test_conn(&state);
-        let wc = Waiting { wallet: "0xwc".into(), conn: conn_wc };
+        let wc = Waiting {
+            wallet: "0xwc".into(),
+            conn: conn_wc,
+        };
         assert!(
             state.mp.join_or_pair(&game, wc, 50).await.is_none(),
             "no ghost entry: fresh joiner parks instead of pairing the departed wallet"

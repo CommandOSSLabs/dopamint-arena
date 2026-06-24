@@ -1226,16 +1226,25 @@ mod tests {
         let hold = 10_000; // long: nothing expires during the test
         let w = |wallet: &str, inst: &str| crate::mp::Waiting {
             wallet: wallet.to_owned(),
-            conn: ConnRef { instance_id: inst.to_owned(), conn_id: uuid::Uuid::new_v4() },
+            conn: ConnRef {
+                instance_id: inst.to_owned(),
+                conn_id: uuid::Uuid::new_v4(),
+            },
         };
         // A(ia) and B(ib) both park (no local partner, neither expired).
         assert!(s.join_or_pair(&game, w("wa", "ia"), hold).await.is_none());
         assert!(s.join_or_pair(&game, w("wb", "ib"), hold).await.is_none());
         // Joiner on ib pairs the same-instance waiter wb, not the FIFO front wa.
-        let opp = s.join_or_pair(&game, w("wj", "ib"), hold).await.expect("pairs");
+        let opp = s
+            .join_or_pair(&game, w("wj", "ib"), hold)
+            .await
+            .expect("pairs");
         assert_eq!(opp.wallet, "wb", "same-instance preferred over FIFO front");
         // wa is still queued → a same-instance joiner on ia pairs it.
-        let opp2 = s.join_or_pair(&game, w("wk", "ia"), hold).await.expect("pairs");
+        let opp2 = s
+            .join_or_pair(&game, w("wk", "ia"), hold)
+            .await
+            .expect("pairs");
         assert_eq!(opp2.wallet, "wa", "front waiter still pairs same-instance");
     }
 
@@ -1248,7 +1257,10 @@ mod tests {
         let game = format!("g{}", uuid::Uuid::new_v4().simple());
         let w = |wallet: &str, inst: &str| crate::mp::Waiting {
             wallet: wallet.to_owned(),
-            conn: ConnRef { instance_id: inst.to_owned(), conn_id: uuid::Uuid::new_v4() },
+            conn: ConnRef {
+                instance_id: inst.to_owned(),
+                conn_id: uuid::Uuid::new_v4(),
+            },
         };
         assert!(s.join_or_pair(&game, w("wa", "ia"), 30).await.is_none());
         // Before expiry, a cross-instance joiner does NOT take wa — it parks instead.
@@ -1256,8 +1268,14 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(80)).await;
         // Both wa and wb are now expired; the script scans in RPUSH (FIFO) order, so the front
         // waiter wa is the deterministic pick — this assertion depends on that ordering, not a race.
-        let opp = s.join_or_pair(&game, w("wc", "ic"), 30).await.expect("pairs");
-        assert_eq!(opp.wallet, "wa", "expired waiter taken as cross-instance fallback");
+        let opp = s
+            .join_or_pair(&game, w("wc", "ic"), 30)
+            .await
+            .expect("pairs");
+        assert_eq!(
+            opp.wallet, "wa",
+            "expired waiter taken as cross-instance fallback"
+        );
     }
 
     // Two idle cross-instance waiters: the timer-driven fallback pairs them.
@@ -1268,7 +1286,10 @@ mod tests {
         let game = format!("g{}", uuid::Uuid::new_v4().simple());
         let w = |wallet: &str, inst: &str| crate::mp::Waiting {
             wallet: wallet.to_owned(),
-            conn: ConnRef { instance_id: inst.to_owned(), conn_id: uuid::Uuid::new_v4() },
+            conn: ConnRef {
+                instance_id: inst.to_owned(),
+                conn_id: uuid::Uuid::new_v4(),
+            },
         };
         assert!(s.join_or_pair(&game, w("wa", "ia"), 10_000).await.is_none());
         assert!(s.join_or_pair(&game, w("wb", "ib"), 10_000).await.is_none());
@@ -1286,11 +1307,20 @@ mod tests {
         let game = format!("g{}", uuid::Uuid::new_v4().simple());
         let w = |wallet: &str, inst: &str| crate::mp::Waiting {
             wallet: wallet.to_owned(),
-            conn: ConnRef { instance_id: inst.to_owned(), conn_id: uuid::Uuid::new_v4() },
+            conn: ConnRef {
+                instance_id: inst.to_owned(),
+                conn_id: uuid::Uuid::new_v4(),
+            },
         };
         assert!(s.join_or_pair(&game, w("wa", "ia"), 10_000).await.is_none());
-        assert!(s.fallback_pair(&game, "wa").await.is_none(), "no opponent → no-op");
-        assert!(s.fallback_pair(&game, "wnone").await.is_none(), "absent self → no-op");
+        assert!(
+            s.fallback_pair(&game, "wa").await.is_none(),
+            "no opponent → no-op"
+        );
+        assert!(
+            s.fallback_pair(&game, "wnone").await.is_none(),
+            "absent self → no-op"
+        );
     }
 
     #[tokio::test]
