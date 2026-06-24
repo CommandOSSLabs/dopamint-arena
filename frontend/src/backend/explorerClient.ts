@@ -71,11 +71,16 @@ export async function getSettlement(digest: string): Promise<SettlementRow> {
   return (await res.json()) as SettlementRow;
 }
 
-/** The full transcript, via the api's Walrus proxy (same-origin). */
-export async function getTranscript(digest: string): Promise<ProofRecord> {
+/**
+ * The full transcript bytes, via the api's Walrus proxy (same-origin). The proxy returns the
+ * raw blob verbatim — v2 blobs are binary (first byte 0x02), legacy blobs are JSON — so this
+ * does NOT parse; verifyTranscript dispatches on the bytes. Throws on a non-ok response (404 =>
+ * anchored-but-unverifiable), which the caller catches.
+ */
+export async function getTranscript(digest: string): Promise<Uint8Array | null> {
   const res = await fetch(`${apiRoot()}/v1/settlements/${digest}/transcript`);
   if (!res.ok) throw new Error(`getTranscript ${res.status}`);
-  return (await res.json()) as ProofRecord;
+  return new Uint8Array(await res.arrayBuffer());
 }
 
 /** Live new-settlement feed (SSE). Returns an unsubscribe fn. */

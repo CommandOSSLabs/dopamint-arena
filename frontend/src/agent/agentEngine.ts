@@ -26,7 +26,7 @@ import {
   type SignExec,
   type SuiReads,
 } from "../onchain/tunnelTx";
-import { coSignedToSettleRequest } from "../backend/settleRequest";
+import { coSignedToSettleBody } from "../backend/settleRequest";
 import { AGENT_GAMES, nextGameIndex, type GameSpec } from "./agentConfig";
 import { GAME_KITS, type GameBot, type StateHash } from "./gameKit";
 
@@ -325,7 +325,7 @@ async function settle(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await getControlPlaneClient().settle(
       tunnelId,
-      coSignedToSettleRequest(co as any, transcript.toRecord().entries),
+      coSignedToSettleBody(co as any, transcript.rawEntries()),
     );
   } catch {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

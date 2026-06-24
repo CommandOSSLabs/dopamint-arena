@@ -45,7 +45,7 @@ import {
   DOPAMINT_COIN_TYPE,
   isDopamintConfigured,
 } from "../../onchain/dopamint";
-import { coSignedToSettleRequest } from "../../backend/settleRequest";
+import { coSignedToSettleBody } from "../../backend/settleRequest";
 import { type FleetSecret, makeFleetSecret } from "./engine/selfPlay";
 import { type Placement, placementsToBoard } from "./engine/fleet";
 import { randomSalts } from "./engine/merkle";
@@ -780,7 +780,7 @@ async function settle(
   try {
     await cp.settle(
       tunnelId,
-      coSignedToSettleRequest(co, transcript.toRecord().entries),
+      coSignedToSettleBody(co, transcript.rawEntries()),
     );
   } catch (e) {
     console.error(

@@ -26,11 +26,18 @@ export function VerifyPanel({ row }: { row: SettlementRow }) {
     let alive = true;
     (async () => {
       try {
-        // 1) transcript via the api's Walrus proxy (404 => anchored-but-unverifiable).
-        let record;
+        // 1) transcript bytes via the api's Walrus proxy (404 => anchored-but-unverifiable).
+        let record: Uint8Array | null;
         try {
           record = await getTranscript(row.txDigest);
         } catch {
+          if (alive) {
+            setHasTranscript(false);
+            setPhase("done");
+          }
+          return;
+        }
+        if (record == null) {
           if (alive) {
             setHasTranscript(false);
             setPhase("done");

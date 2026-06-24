@@ -2,7 +2,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { StatsSnapshot } from "./controlPlane";
 import { createControlPlaneClient } from "./controlPlane";
-import type { SettleRequestBody } from "./controlPlane";
 
 // The backend now emits `recentEvents` (camelCase, u64 as JSON number, Option → nullable)
 // on the stats snapshot. A frame WITHOUT it must still parse (older backend / no events).
@@ -40,8 +39,10 @@ test("StatsSnapshot carries optional recentEvents", () => {
 
 // ADR-0007: settle posts to the TUNNEL resource with NO Authorization — the co-signed settlement
 // is the authorization, not a bearer token. This pins the path + the absence of the header so a
-// regression can't silently re-introduce the session gate.
-test("settle posts to the tunnel settle path with no auth and returns the proof", async () => {
+// regression can't silently re-introduce the session gate. The body is the v2 binary settle blob
+// (octet-stream), posted verbatim — NOT JSON.stringify'd — so the bytes reach the backend (and
+// Walrus) byte-identical.
+test("settle posts the binary body to the tunnel path with no auth and returns the proof", async () => {
   const calls: { url: string; init: RequestInit }[] = [];
   const orig = globalThis.fetch;
   globalThis.fetch = (async (url: string | URL, init: RequestInit) => {
@@ -57,19 +58,7 @@ test("settle posts to the tunnel settle path with no auth and returns the proof"
   }) as typeof fetch;
   try {
     const cp = createControlPlaneClient("https://backend.example");
-    const body: SettleRequestBody = {
-      settlement: {
-        tunnelId: "0x1",
-        partyABalance: "1500",
-        partyBBalance: "500",
-        finalNonce: "1",
-        timestamp: "1750000000000",
-        transcriptRoot: "deadbeef",
-      },
-      sigA: "aa",
-      sigB: "bb",
-      transcript: [],
-    };
+    const body = new Uint8Array([0x02, 0xde, 0xad, 0xbe, 0xef]);
     const res = await cp.settle("0x1", body);
     assert.equal(res.txDigest, "DiG");
     assert.equal(res.walrusBlobId, "blob1");
@@ -79,8 +68,9 @@ test("settle posts to the tunnel settle path with no auth and returns the proof"
     assert.equal(String(calls[0].init.method).toUpperCase(), "POST");
     const headers = new Headers(calls[0].init.headers);
     assert.equal(headers.get("authorization"), null);
-    assert.equal(headers.get("content-type"), "application/json");
-    assert.deepEqual(JSON.parse(String(calls[0].init.body)), body);
+    assert.equal(headers.get("content-type"), "application/octet-stream");
+    // The body is the bytes themselves, not a JSON string.
+    assert.equal(calls[0].init.body, body);
   } finally {
     globalThis.fetch = orig;
   }
