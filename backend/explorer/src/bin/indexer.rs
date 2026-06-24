@@ -198,7 +198,10 @@ async fn wire_redis(redis_url: &str, database_url_str: &str) -> anyhow::Result<(
             let msg = match stats_msgs.recv().await {
                 Ok(m) => m,
                 Err(RecvError::Lagged(n)) => {
-                    tracing::warn!(skipped = n, "stats:snapshot message_rx lagged; samples dropped");
+                    tracing::warn!(
+                        skipped = n,
+                        "stats:snapshot message_rx lagged; samples dropped"
+                    );
                     continue;
                 }
                 Err(RecvError::Closed) => break,

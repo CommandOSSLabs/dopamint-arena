@@ -303,8 +303,7 @@ mod tests {
     #[test]
     fn history_bounds_clamp_future_to_now_and_far_past_to_retention() {
         let now = 5_000_000;
-        let (from, to, _) =
-            history_query_bounds(&params(None, Some(0), Some(now + 99_999)), now);
+        let (from, to, _) = history_query_bounds(&params(None, Some(0), Some(now + 99_999)), now);
         assert_eq!(to, now);
         assert_eq!(from, now - HISTORY_RETENTION_SECS);
     }

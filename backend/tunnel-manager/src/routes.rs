@@ -612,14 +612,9 @@ mod tests {
             window_ms: 1000,
         };
 
-        heartbeat(
-            State(state.clone()),
-            Path("s1".into()),
-            headers,
-            Json(req),
-        )
-        .await
-        .unwrap();
+        heartbeat(State(state.clone()), Path("s1".into()), headers, Json(req))
+            .await
+            .unwrap();
 
         assert_eq!(
             state.control.snapshot().await.total_actions,
