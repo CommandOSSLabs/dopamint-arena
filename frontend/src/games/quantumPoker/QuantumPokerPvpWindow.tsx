@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import type { Party } from "sui-tunnel-ts/protocol/Protocol";
 import type { PokerMove } from "sui-tunnel-ts/protocol/quantumPoker";
 import type { GameWindowProps } from "../types";
@@ -12,6 +13,12 @@ export function QuantumPokerPvpWindow({
   onExit,
 }: GameWindowProps & { onExit?: () => void }) {
   const g = usePvpQuantumPoker();
+
+  // Back during a live hand bails out (auto-fold → settle this hand); leave once the close lands.
+  const [leaving, setLeaving] = useState(false);
+  useEffect(() => {
+    if (leaving && g.status === "settled") onExit?.();
+  }, [leaving, g.status, onExit]);
 
   if (g.status === "idle") {
     return (
@@ -143,8 +150,15 @@ export function QuantumPokerPvpWindow({
       <header className="qp-head">
         <div className="flex min-w-0 items-center gap-[clamp(6px,2.2cqmin,14px)]">
           {onExit && (
-            <button type="button" className="qp-btn" onClick={onExit}>
-              Back
+            <button
+              type="button"
+              className="qp-btn"
+              onClick={() => {
+                setLeaving(true);
+                g.backOut(); // auto-fold out → settle this hand → leave when settled
+              }}
+            >
+              {leaving ? "Leaving…" : "Back"}
             </button>
           )}
           <div className="flex min-w-0 flex-col leading-none">

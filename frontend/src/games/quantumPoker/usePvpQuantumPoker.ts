@@ -123,6 +123,8 @@ export interface PvpQuantumPoker {
   endRequested: boolean;
   /** End the match cooperatively after the current hand — stop dealing and settle at the current balances. */
   requestSettle: () => void;
+  /** Bail out now: auto-fold this seat's remaining action so the hand ends immediately, then settle. */
+  backOut: () => void;
   /** True when the persona bot is auto-playing this seat's bets. */
   auto: boolean;
   /** Toggle auto-play: when on, a persona bot makes this seat's betting moves. */
@@ -268,8 +270,13 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
   // hand boundary. `settlingRef` guards the single close; `settleNowRef` lets the button/peer
   // message trigger the close (which lives in findMatch's closure) when we're already at hand_over.
   const endRef = useRef(false);
+  // Bail-out (Back): auto-fold this seat's betting turns so the current hand ends at once, then the
+  // normal end-of-hand settle runs. Unlike `endRef` (which plays the hand out), this surrenders the pot.
+  const foldOutRef = useRef(false);
+  // This seat stays while the peer bailed out (Back) → it submits the cooperative close (not just seat A).
+  const peerLeftRef = useRef(false);
   const settlingRef = useRef(false);
-  const settleNowRef = useRef<(() => void) | null>(null);
+  const settleNowRef = useRef<((publishOnly?: boolean) => void) | null>(null);
   // Holds the latest `findMatch` so the settle handler can auto-open a fresh tunnel (new 5000 buy-in)
   // when a match ends by a seat running out of money — see the natural-end branch in `triggerSettle`.
   const findMatchRef = useRef<(() => void) | null>(null);
@@ -296,6 +303,8 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
     transcriptRef.current = null;
     channelRef.current = null;
     endRef.current = false;
+    foldOutRef.current = false;
+    peerLeftRef.current = false;
     settlingRef.current = false;
     settleNowRef.current = null;
     setStatus("idle");
@@ -324,16 +333,24 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
     let move: PokerMove | null = null;
     // AUTO mode runs instant — the persona bot represents the player, so skip the watchable pacing.
     // Manual play keeps the paced reveals/hand-over so a human can follow the table.
-    let delay = autoRef.current ? 0 : PLUMBING_DELAY_MS;
+    let delay = autoRef.current || foldOutRef.current ? 0 : PLUMBING_DELAY_MS;
     if (plumbingProposer(dt.state) === self) {
       move = driver.chooseMove(dt.state, secureRng); // commit secrets minted here, once
-      delay = autoRef.current
-        ? 0
-        : dt.state.phase === "hand_over"
-          ? HAND_OVER_DELAY_MS
-          : dt.state.phase === "showdown"
-            ? SHOWDOWN_DELAY_MS
-            : PLUMBING_DELAY_MS;
+      delay =
+        autoRef.current || foldOutRef.current
+          ? 0
+          : dt.state.phase === "hand_over"
+            ? HAND_OVER_DELAY_MS
+            : dt.state.phase === "showdown"
+              ? SHOWDOWN_DELAY_MS
+              : PLUMBING_DELAY_MS;
+    } else if (
+      foldOutRef.current &&
+      BET_PHASES.has(dt.state.phase) &&
+      dt.state.toAct === self
+    ) {
+      move = { kind: "fold" }; // bailing out: surrender the hand so it ends now
+      delay = 0;
     } else if (
       autoRef.current &&
       BET_PHASES.has(dt.state.phase) &&
@@ -401,6 +418,21 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
     if (dtRef.current?.state.phase === "hand_over") settleNowRef.current?.();
   }, []);
 
+  // Bail out on Back: auto-fold this seat's action so the hand ends now, then publish our signed
+  // settlement half and leave — the STAYING seat collects our half and submits the close, so we never
+  // block on the on-chain settle (~one fold round-trip, then out). The window exits once we're settled.
+  const backOut = useCallback(() => {
+    if (settlingRef.current || endRef.current) return;
+    foldOutRef.current = true;
+    endRef.current = true;
+    setEndRequested(true);
+    // Tell the opponent we're LEAVING (not just ending) so they become the close submitter.
+    channelRef.current?.sendPeer({ t: "endMatch", leaving: true });
+    // Already between hands → publish our half now; otherwise auto-fold to reach hand_over first.
+    if (dtRef.current?.state.phase === "hand_over") settleNowRef.current?.(true);
+    else maybeAutoPropose();
+  }, [maybeAutoPropose]);
+
   // Wire the per-move loop, settle triggers, and resume onto a freshly built/rebuilt tunnel.
   // Shared by the live (findMatch) and cold-load (resume) paths. The readiness handshake and the
   // opening maybeAutoPropose stay with the caller — a resuming peer is mid-game and never re-sends
@@ -446,7 +478,7 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
 
       // Single cooperative close — at match end, or early once a seat asked to settle. Guarded so
       // both seats' triggers (onConfirmed, the button, the peer's endMatch) close exactly once.
-      const triggerSettle = () => {
+      const triggerSettle = (publishOnly = false) => {
         if (settlingRef.current) return;
         settlingRef.current = true;
         setStatus("settling");
@@ -462,12 +494,20 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
           transcript,
           getControlPlaneClient(),
           coinType,
+          publishOnly,
+          peerLeftRef.current,
         ).then(
           () => {
             // The tunnel is closed — drop its resume record so a reload/HMR never restores this
             // finished match. Without this the "done" record lingers and the player gets stuck in the
             // old busted tunnel on the next cold-load.
             clearResumeRecord(dt.tunnelId);
+            // Bailing out (Back): our half is on the wire and the opponent submits the close — leave
+            // now (the window exits on "settled"), never blocking on the on-chain settle.
+            if (publishOnly) {
+              setStatus("settled");
+              return;
+            }
             // A natural match end means a seat ran out of money: the cooperative close is done, so
             // immediately open a FRESH tunnel and keep playing — new 5000 buy-in, no carry-over of
             // chips. Only when a player deliberately ended the match (endRef) do we stop at the
@@ -489,9 +529,11 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
 
       // Opponent hit "Settle": stop dealing on our side too and close at the next clean boundary
       // (or now, if we're already parked at hand_over).
-      void waitPeer("endMatch").then(() => {
+      void waitPeer<{ leaving?: boolean }>("endMatch").then((msg) => {
         endRef.current = true;
         setEndRequested(true);
+        // Peer bailed out (Back) → we're the staying seat, so we submit the cooperative close.
+        if (msg.leaving) peerLeftRef.current = true;
         if (dt.state.phase === "hand_over") triggerSettle();
       });
 
@@ -525,7 +567,8 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
           proto.isTerminal(dt.state) ||
           (endRef.current && dt.state.phase === "hand_over")
         ) {
-          triggerSettle();
+          // Bailing out → publish our half and leave; staying/natural end → full settle + submit.
+          triggerSettle(foldOutRef.current);
           return;
         }
         maybeAutoPropose();
@@ -624,6 +667,8 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
         const waitPeer = makeInbox(channel);
         channelRef.current = channel;
         endRef.current = false;
+        foldOutRef.current = false;
+        peerLeftRef.current = false;
         settlingRef.current = false;
 
         // 1) exchange ephemeral pubkeys (the wallet is only the matchmaking label).
@@ -887,6 +932,7 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
     bet,
     endRequested,
     requestSettle,
+    backOut,
     auto,
     setAuto,
     reset,
@@ -913,6 +959,10 @@ async function settle(
   transcript: Transcript,
   cp: ReturnType<typeof getControlPlaneClient>,
   coinType: string | undefined,
+  // Leaver: publish our signed half and return without waiting on the on-chain close.
+  publishOnly: boolean,
+  // Submit the close even as seat B — set when the peer bailed out and we're the staying seat.
+  peerLeft: boolean,
 ): Promise<void> {
   const createdAt = await readCreatedAt(reads, tunnelId);
   const root = transcript.root();
@@ -926,6 +976,8 @@ async function settle(
     transcriptRoot: toHex(root),
     sig: toHex(half.sigSelf),
   });
+  // Leaver: our signed half is on the wire — the staying seat collects it, combines, and submits.
+  if (publishOnly) return;
   const other = await waitPeer<{ sig: string; transcriptRoot: string }>(
     "settleHalf",
   );
@@ -937,7 +989,8 @@ async function settle(
     half.sigSelf,
     fromHex(other.sig),
   );
-  if (role !== "A") return; // single submitter, mirrors the cooperative-close pattern
+  // Single submitter: the seat that stays when a peer bailed out, else seat A by convention.
+  if (!(peerLeft || role === "A")) return;
   // AWAIT the close: the backend /settle executes synchronously (WaitForLocalExecution), so awaiting
   // blocks until the close is on-chain. A recycle must wait for this before opening a fresh tunnel —
   // the close returns the staked MTPS to the wallet and the next open consumes wallet coins, so
