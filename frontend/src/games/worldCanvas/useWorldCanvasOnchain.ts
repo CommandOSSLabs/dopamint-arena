@@ -125,6 +125,12 @@ const MAX_ACTIVITY = 60;
  *  on each new human paint so a continuous stroke collapses into a single row. Human-only
  *  (bots paint far faster and would flood the feed — their painting stays as TPS). */
 const HUMAN_STROKE_DEBOUNCE_MS = 400;
+/** Throttle (ms) between a single bot's MY-ACTIVITY "painted N cell(s)" rows. The seat
+ *  bots paint far faster than a human stroke, so a LEADING-edge throttle (one timer per
+ *  painter address, fires ~1.5s after the first un-flushed paint, then summarizes that
+ *  whole window into one row) keeps Auto-mode activity legible without flooding the feed.
+ *  Bot-only — the human seat uses HUMAN_STROKE_DEBOUNCE_MS (a debounce) instead. */
+const BOT_ACTIVITY_THROTTLE_MS = 1500;
 /** Co-signed paints between on-chain checkpoints. At each boundary the tunnel
  *  cooperatively closes (anchoring its transcript root on-chain, like every finite
  *  game's settle) and a fresh tunnel reopens so painting never stops. Only the real
@@ -547,6 +553,15 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
   } | null>(null);
   const humanStrokeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const humanStrokeFlushIdRef = useRef(0);
+  // Per-bot MY-ACTIVITY summary (Auto mode): cells co-signed by each seat bot since its
+  // last flush (keyed by painter address), one leading-edge throttle timer per painter
+  // address, and a monotonic counter that keys each flushed row uniquely. Bot-only — the
+  // human seat uses the humanStroke* refs above (a debounce, not this throttle).
+  const botPaintCountsRef = useRef<Map<string, number>>(new Map());
+  const botActivityTimersRef = useRef<
+    Map<string, ReturnType<typeof setTimeout>>
+  >(new Map());
+  const botActivityFlushIdRef = useRef(0);
   // The two live seat bots + the placement counter.
   const agentStatesRef = useRef<Map<string, AgentState>>(new Map());
   const regionIndexRef = useRef(0);
@@ -657,6 +672,55 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
     [humanAddress],
   );
 
+  // Flush one seat bot's accumulated paint count into ONE MY-ACTIVITY row labelled with
+  // its painter ("Bot A" / "Bot B"). Fires on the leading-edge throttle timer (see
+  // accumulateBotPaint), summarizing the whole ~BOT_ACTIVITY_THROTTLE_MS window. The
+  // label is read live from the painters tally so it tracks any relabel. Best-effort: a
+  // feed write can never throw back into the paint path.
+  const flushBotPaints = useCallback(
+    (painter: string) => {
+      botActivityTimersRef.current.delete(painter);
+      const n = botPaintCountsRef.current.get(painter) ?? 0;
+      botPaintCountsRef.current.set(painter, 0);
+      if (n === 0) return;
+      try {
+        const label = paintersRef.current.get(painter)?.label ?? "Bot";
+        report.pushLocalTxn({
+          id: feedRowId(`bot-stroke:${painter}:${botActivityFlushIdRef.current++}`),
+          game: GAME,
+          time: new Date().toLocaleTimeString("en-GB"),
+          bot: label,
+          type: `painted ${n} cell(s)`,
+          status: "Success",
+          amount: "",
+        });
+      } catch (e) {
+        console.warn("[world-canvas] bot-stroke activity row skipped:", e);
+      }
+    },
+    [report],
+  );
+
+  // Book one bot-co-signed cell toward its painter's next MY-ACTIVITY row and arm the
+  // leading-edge throttle: the FIRST un-flushed paint per painter schedules a single
+  // flush ~BOT_ACTIVITY_THROTTLE_MS out; subsequent paints only bump the count (no
+  // reschedule), so at most one row per painter per window — never a flood. Bot-only;
+  // the human seat's own row comes from submitHumanPaint's debounce, so coSignPaint must
+  // skip the human painter here to avoid doubling up.
+  const accumulateBotPaint = useCallback(
+    (painter: string) => {
+      const counts = botPaintCountsRef.current;
+      counts.set(painter, (counts.get(painter) ?? 0) + 1);
+      if (!botActivityTimersRef.current.has(painter)) {
+        botActivityTimersRef.current.set(
+          painter,
+          setTimeout(() => flushBotPaints(painter), BOT_ACTIVITY_THROTTLE_MS),
+        );
+      }
+    },
+    [flushBotPaints],
+  );
+
   // Submit a tx signed by a bot keypair; assert success (sender-pays fallback only).
   const submit = useCallback(
     async (tx: Transaction, signer: Ed25519Keypair) => {
@@ -714,6 +778,10 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
         totalMovesRef.current += 1;
         paintCell(mv, by, totalMovesRef.current, painter);
         recordPaint(painter, mv, totalMovesRef.current);
+        // Surface bot painting in MY ACTIVITY too (throttled per painter). The human's
+        // own paints already get a per-stroke row via submitHumanPaint, so skip the human
+        // painter here to avoid a duplicate row.
+        if (painter !== humanAddress) accumulateBotPaint(painter);
         flushHeartbeat(run, false);
         // On a real tunnel, anchor the transcript root on-chain every CHECKPOINT_EVERY
         // co-signed paints (cooperative close-and-reopen). The demo tunnel never does this.
@@ -728,7 +796,7 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
         console.warn("[world-canvas] tunnel step skipped:", e);
       }
     },
-    [paintCell, recordPaint, flushHeartbeat],
+    [paintCell, recordPaint, flushHeartbeat, accumulateBotPaint, humanAddress],
   );
 
   // The paint sink: co-sign once the single tunnel exists, else buffer (preserving
@@ -1363,6 +1431,8 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
         clearTimeout(humanStrokeTimerRef.current);
         humanStrokeTimerRef.current = null;
       }
+      for (const t of botActivityTimersRef.current.values()) clearTimeout(t);
+      botActivityTimersRef.current.clear();
       const run = runRef.current;
       if (run) {
         flushHeartbeat(run, true);
