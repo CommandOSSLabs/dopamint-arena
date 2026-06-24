@@ -22,8 +22,6 @@ import {
   type Balances,
   type ProtocolContext,
 } from "sui-tunnel-ts/protocol/Protocol";
-import type { MoveCodec } from "sui-tunnel-ts/core/distributedFrame";
-import type { WorldCanvasMove } from "sui-tunnel-ts/protocol/worldCanvas";
 
 const NAME = "world-canvas-pvp";
 const NUM_COLORS = 16;
@@ -37,10 +35,10 @@ export const MAX_BATCH_CELLS = 128;
 const BOT_RUN = 8;
 
 /**
- * One painted cell, in (chunk, in-chunk) coords: `cx`/`cy` are signed 64-bit chunk indices
- * (the canvas is infinite) and `x`/`y` the cell within a `CHUNK_SIZE`×`CHUNK_SIZE` chunk;
- * `color` is a palette index. The coordinate part is the canonical {@link WorldCanvasMove},
- * so `cx`/`cy` are BIGINT — serialized via {@link worldCanvasCellCodec} (JSON can't carry bigint).
+ * One painted cell, in (chunk, in-chunk) coords: `cx`/`cy` are signed chunk indices (the canvas
+ * is infinite) and `x`/`y` the cell within a `CHUNK_SIZE`×`CHUNK_SIZE` chunk; `color` is a palette
+ * index. The move is JSON-NATIVE — `cx`/`cy` are JS safe ints (a ~9-quadrillion-pixel canvas fits
+ * in a `Number`), so the relay carries it with no codec, exactly like chicken-cross's `{dirA}`.
  *
  * `seq` is a PER-SEAT monotonic stamp assigned by whoever paints the seat (you, or your bot).
  * It is the IDEMPOTENCY KEY that makes the at-least-once batch buffer safe: {@link
@@ -49,7 +47,15 @@ const BOT_RUN = 8;
  * deterministic no-op on BOTH parties instead of a double-fold that would diverge the digest.
  * It is NOT folded into the digest — purely the fold/skip gate.
  */
-export interface PvpCellMove extends WorldCanvasMove {
+export interface PvpCellMove {
+  /** Signed chunk index (JS safe int); the canvas is infinite in every direction. */
+  cx: number;
+  cy: number;
+  /** Cell within the chunk: `0 ≤ x,y < CHUNK_SIZE`. */
+  x: number;
+  y: number;
+  /** Palette index. */
+  color: number;
   /** Per-seat monotonic sequence; a cell folds iff `seq` exceeds the seat's last-applied seq. */
   seq: number;
 }
@@ -101,8 +107,8 @@ function cellDelta(c: PvpCellMove, by: Party): Uint8Array {
 
 function isLegalCell(c: PvpCellMove): boolean {
   return (
-    typeof c.cx === "bigint" &&
-    typeof c.cy === "bigint" &&
+    Number.isInteger(c.cx) &&
+    Number.isInteger(c.cy) &&
     Number.isInteger(c.x) &&
     c.x >= 0 &&
     c.x < CHUNK_SIZE &&
@@ -144,8 +150,8 @@ function toCellMove(
   const cx = Math.floor(gx / CHUNK_SIZE);
   const cy = Math.floor(gy / CHUNK_SIZE);
   return {
-    cx: BigInt(cx),
-    cy: BigInt(cy),
+    cx,
+    cy,
     x: gx - cx * CHUNK_SIZE,
     y: gy - cy * CHUNK_SIZE,
     color,
@@ -198,8 +204,8 @@ export class WorldCanvasPvpProtocol
       digest = rollingDigest(blake2b256, digest, cellDelta(c, by));
       paintCount += 1;
       cells.push({
-        gx: Number(c.cx) * CHUNK_SIZE + c.x,
-        gy: Number(c.cy) * CHUNK_SIZE + c.y,
+        gx: c.cx * CHUNK_SIZE + c.x,
+        gy: c.cy * CHUNK_SIZE + c.y,
         color: c.color,
         by,
         seq: paintCount,
@@ -279,52 +285,3 @@ export class WorldCanvasPvpProtocol
     return { cells };
   }
 }
-
-/**
- * Per-cell (de)serializer: the JSON relay envelope can't carry the cell's bigint chunk
- * indices (`cx`/`cy`), so they ride as decimal strings and restore via `BigInt(...)`.
- */
-export const worldCanvasCellCodec: MoveCodec<PvpCellMove> = {
-  encode(m) {
-    return {
-      cx: m.cx.toString(),
-      cy: m.cy.toString(),
-      x: m.x,
-      y: m.y,
-      color: m.color,
-      seq: m.seq,
-    };
-  },
-  decode(j) {
-    const o = j as {
-      cx?: string;
-      cy?: string;
-      x?: number;
-      y?: number;
-      color?: number;
-      seq?: number;
-    };
-    return {
-      cx: BigInt(o.cx ?? "0"),
-      cy: BigInt(o.cy ?? "0"),
-      x: o.x ?? 0,
-      y: o.y ?? 0,
-      color: o.color ?? 0,
-      seq: o.seq ?? 0,
-    };
-  },
-};
-
-/**
- * The batch move (de)serializer the PvP tunnel is built with — maps each cell through
- * {@link worldCanvasCellCodec} so the opponent receives an intact stroke segment.
- */
-export const worldCanvasPvpMoveCodec: MoveCodec<PvpPaintMove> = {
-  encode(m) {
-    return { cells: m.cells.map((c) => worldCanvasCellCodec.encode(c)) };
-  },
-  decode(j) {
-    const o = j as { cells?: unknown[] };
-    return { cells: (o.cells ?? []).map((c) => worldCanvasCellCodec.decode(c)) };
-  },
-};

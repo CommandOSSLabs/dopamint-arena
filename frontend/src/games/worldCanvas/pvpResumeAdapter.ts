@@ -1,13 +1,12 @@
 /**
- * Resume adapter for World Canvas PvP: round-trips {@link PvpCanvasState} (and any
- * pending move) through localStorage so a cold reload re-syncs the match. The digest
- * is the co-signed truth (hex), cells are render-only, balances + the move's chunk
- * coords are bigints (decimal strings — localStorage can't hold bigints). No hidden
- * secret — the wall is fully public.
+ * Resume adapter for World Canvas PvP: round-trips {@link PvpCanvasState} through localStorage
+ * so a cold reload re-syncs the match. The digest is the co-signed truth (hex), cells are
+ * render-only, and the balances are bigints (decimal strings — localStorage can't hold bigints).
+ * The pending move is JSON-native (number chunk coords), so it needs no (de)serializer — the
+ * resume layer's default identity pass-through carries it. No hidden secret — the wall is public.
  */
 import type { ResumeAdapter } from "@/pvp/resumeSession";
 import type { JsonValue } from "@/pvp/resume";
-import { worldCanvasPvpMoveCodec } from "./pvpProtocol";
 import type { PvpCanvasState, PvpPaintMove } from "./pvpProtocol";
 
 const toHex = (b: Uint8Array): string =>
@@ -49,10 +48,8 @@ export function makeWorldCanvasPvpResumeAdapter(
         total: BigInt(o.total as string),
       };
     },
-    // A pending move is a batch of cells whose chunk coords (cx/cy) are bigint; localStorage
-    // can't hold bigint, so it round-trips through the SAME batch codec the relay uses.
-    serializeMove: (m) => worldCanvasPvpMoveCodec.encode(m) as JsonValue,
-    deserializeMove: (j) => worldCanvasPvpMoveCodec.decode(j),
+    // The pending move is JSON-native (a batch of number-coord cells), so serializeMove/
+    // deserializeMove are omitted — the resume layer's default identity pass-through carries it.
     onReconciled: onReconciled ?? (() => {}),
   };
 }

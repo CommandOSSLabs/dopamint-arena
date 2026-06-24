@@ -9,9 +9,9 @@
  * turn would crawl and a fast drag would lose most of its cells. Instead each co-signed
  * move carries a RUN of cells: `paint()` buffers your cells and flushes the whole pending
  * run as ONE move on your turn, trimming cells from the buffer as they confirm in the
- * view — so a drag crosses as a stroke, not sparse dots. The batch move carries bigint
- * chunk indices, so the tunnel is built with {@link worldCanvasPvpMoveCodec} (JSON can't
- * carry bigint) — that is what lets the opponent receive intact coordinates.
+ * view — so a drag crosses as a stroke, not sparse dots. The batch move is JSON-native
+ * (chunk indices are JS safe ints), so the tunnel carries it over the relay with no codec,
+ * exactly like chicken-cross.
  */
 import { useCallback, useEffect, useRef } from "react";
 import {
@@ -22,7 +22,6 @@ import {
 import type { Role } from "@/pvp/mpClient";
 import {
   WorldCanvasPvpProtocol,
-  worldCanvasPvpMoveCodec,
   CHUNK_SIZE,
   MAX_BATCH_CELLS,
   type PvpCanvasState,
@@ -57,9 +56,6 @@ const usePvpMatch = createPvpMatchHook<
   stepMs: 80,
   stake: 1n, // 1 MIST per seat — free/draw, never shifts (each human funds its own seat)
   makeProtocol: () => new WorldCanvasPvpProtocol(),
-  // The batch move carries bigint chunk coords; the JSON relay can't carry bigint, so the
-  // tunnel (de)serializes moves through this codec — else the opponent decodes empty runs.
-  moveCodec: worldCanvasPvpMoveCodec,
   deriveView: (s) => s.cells,
   makeResumeAdapter: makeWorldCanvasPvpResumeAdapter,
   idleIntent: IDLE_INTENT,
@@ -86,8 +82,8 @@ function toCellMove(
   const cx = Math.floor(gx / CHUNK_SIZE);
   const cy = Math.floor(gy / CHUNK_SIZE);
   return {
-    cx: BigInt(cx),
-    cy: BigInt(cy),
+    cx,
+    cy,
     x: gx - cx * CHUNK_SIZE,
     y: gy - cy * CHUNK_SIZE,
     color,
