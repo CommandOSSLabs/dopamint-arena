@@ -67,11 +67,8 @@ import {
   type RegisterSessionResult,
 } from "@/backend/controlPlane";
 import { useTelemetry } from "@/telemetry/TelemetryProvider";
-import {
-  buildCreateAndFundTx,
-  buildSettleWithRootTx,
-  parseTunnelId,
-} from "@/games/ticTacToe/app/lib/tunnel";
+import { buildSettleWithRootTx } from "@/games/ticTacToe/app/lib/tunnel";
+import { openAndFundSelfPlay, readCreatedAt } from "@/onchain/tunnelTx";
 import { settleViaBackend } from "@/backend/settle";
 import {
   isDopamintConfigured,
@@ -163,18 +160,6 @@ export type Seat = "A" | "B";
 const TINT_HUMAN = WC.seatA;
 const TINT_BOT_A = "#5fe3a1";
 const TINT_BOT_B = WC.seatB;
-
-// Serialize on-chain opens across the (re)opens of the single tunnel and React
-// StrictMode's double-mount. Each open faucet-mints from the SHARED DOPAMINT object;
-// minting from it concurrently makes validators reject the losers as equivocation
-// ("object already locked"). Off-chain co-signing (the TPS) stays fully parallel —
-// only the rare open tx is queued. Module-global so it spans hook re-instantiations.
-let onchainOpenChain: Promise<unknown> = Promise.resolve();
-function serializeOnchainOpen<T>(fn: () => Promise<T>): Promise<T> {
-  const run = onchainOpenChain.catch(() => {}).then(fn);
-  onchainOpenChain = run.catch(() => {});
-  return run;
-}
 
 /** Agent acceleration MULTIPLIER — the headline "tăng tốc" dial. Each tier is an
  *  explicit ×N on the agent's co-signed cells/sec (x1 baseline → x8 burst). */
@@ -893,58 +878,81 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
       const stakePerSeat = dopamintOn ? DOPAMINT_STAKE_PER_SEAT : STAKE;
       run.coinType = coinType;
 
+      const sponsoredSignExec = makeKeypairSponsoredSignExec({
+        address: identities.a.address,
+        keypair: identities.a.keypair,
+        client: client as never,
+      });
+      const reads = client as unknown as Parameters<
+        typeof openAndFundSelfPlay
+      >[0]["reads"];
+
       try {
-        await serializeOnchainOpen(async () => {
-          const sponsoredSignExec = makeKeypairSponsoredSignExec({
-            address: identities.a.address,
-            keypair: identities.a.keypair,
+        // Pre-select the DOPAMINT stake coin BEFORE the open so concurrent (re)opens of
+        // the single tunnel — and React StrictMode's double-mount — don't equivocate at
+        // the shared faucet object. Funding each open against a coin that's already in
+        // hand is what lets us drop the old open serializer: the faucet pull (if any)
+        // happens here, off the hot open path, and the `create_and_fund` then only splits
+        // a ready coin (Sui's own object-version ordering settles any overlap). Mirrors
+        // chickenCross's `prepareStake` ahead of the open, but keyed to the ephemeral
+        // seat-A identity (a 0-SUI bot key, gas-sponsored), not a connected wallet. SUI
+        // fallback (DOPAMINT env unset) has no such coin — the framework splits the stake
+        // from the gas coin inside openAndFundSelfPlay.
+        let stakeCoinId: string | undefined;
+        if (dopamintOn) {
+          // Self-play funds BOTH seats from one coin → faucet/select for the 2-seat total.
+          stakeCoinId = await ensureDopamintStakeCoin({
             client: client as never,
+            signExec: sponsoredSignExec,
+            owner: identities.a.address,
+            need: 2n * stakePerSeat,
           });
-          let createDigest: string;
-          if (dopamintOn) {
-            // Self-play funds BOTH seats from one coin → faucet/select for the 2-seat total.
-            const stakeCoinId = await ensureDopamintStakeCoin({
-              client: client as never,
+        }
+
+        // ONE create_and_fund opens the tunnel AND funds BOTH distinct seats' stakes in a
+        // single signature (the shared, proven self-play helper). DOPAMINT: gas-sponsored,
+        // staked from the pre-selected faucet coin. SUI fallback: sponsored first, then
+        // sender-pays (the seat-A key paying its own gas).
+        const openedTunnelId = dopamintOn
+          ? await openAndFundSelfPlay({
+              reads,
               signExec: sponsoredSignExec,
-              owner: identities.a.address,
-              need: 2n * stakePerSeat,
-            });
-            ({ digest: createDigest } = await sponsoredSignExec(
-              buildCreateAndFundTx(partyX, partyO, stakePerSeat, {
-                coinType,
-                stakeCoinId,
-              }),
-            ));
-          } else {
-            ({ digest: createDigest } = await withSponsorFallback(
-              () => sponsoredSignExec(buildCreateAndFundTx(partyX, partyO, stakePerSeat)),
+              partyA: partyX,
+              partyB: partyO,
+              aAmount: stakePerSeat,
+              bAmount: stakePerSeat,
+              coinType,
+              stakeCoinId,
+            })
+          : await withSponsorFallback(
               () =>
-                submit(
-                  buildCreateAndFundTx(partyX, partyO, stakePerSeat),
-                  identities.a.keypair,
-                ),
+                openAndFundSelfPlay({
+                  reads,
+                  signExec: sponsoredSignExec,
+                  partyA: partyX,
+                  partyB: partyO,
+                  aAmount: stakePerSeat,
+                  bAmount: stakePerSeat,
+                }),
+              () =>
+                openAndFundSelfPlay({
+                  reads,
+                  signExec: (tx) => submit(tx, identities.a.keypair),
+                  partyA: partyX,
+                  partyB: partyO,
+                  aAmount: stakePerSeat,
+                  bAmount: stakePerSeat,
+                }),
               "world-canvas open/fund",
-            ));
-          }
-          const createTxb = await client.getTransactionBlock({
-            digest: createDigest,
-            options: { showObjectChanges: true },
-          });
-          const realId = parseTunnelId(createTxb.objectChanges);
-          if (realId) {
-            run.tunnelId = realId;
-            run.onchain = true;
-            const obj = await client.getObject({
-              id: realId,
-              options: { showContent: true },
-            });
-            const fields = (
-              obj.data?.content as { fields?: Record<string, unknown> } | undefined
-            )?.fields;
-            run.createdAt = BigInt((fields?.created_at as string | undefined) ?? 0);
-            if (!reopen) setStatus((s) => ({ ...s, openDigest: createDigest }));
-          }
-        });
+            );
+
+        run.tunnelId = openedTunnelId;
+        run.onchain = true;
+        run.createdAt = await readCreatedAt(reads, openedTunnelId);
+        // `openDigest` historically carried the create_and_fund digest; the shared helper
+        // returns the tunnel id directly (the digest stays internal), so surface that —
+        // the field is only an "opened on-chain" HUD handle, never a feed-row key.
+        if (!reopen) setStatus((s) => ({ ...s, openDigest: openedTunnelId }));
       } catch (e) {
         console.warn(
           "[world-canvas] on-chain open failed — running off-chain demo:",
@@ -1433,8 +1441,9 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
 
   // Open the single tunnel on mount with two distinct funded seat bots; tear it down on
   // unmount. Default Auto ON ⇒ both bots paint immediately (live TPS from the first
-  // frame). React StrictMode's double-mount is guarded by `identitiesRef` + the open
-  // serializer, so only one tunnel is ever live.
+  // frame). React StrictMode's double-mount is guarded by `identitiesRef` + the
+  // `runRef.current` check, so only one tunnel is ever opened; each open also pre-selects
+  // its stake coin (see startRun), so a stray concurrent open can't equivocate the faucet.
   useEffect(() => {
     if (!identitiesRef.current) {
       identitiesRef.current = { a: makeIdentity(), b: makeIdentity() };
