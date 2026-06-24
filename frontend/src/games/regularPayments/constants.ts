@@ -46,6 +46,12 @@ export const TICK_INTERVAL_MS = STREAM_DURATION_MS / TICK_COUNT;
 /** Sample My Activity rows during stream (~20 rows per 500-tick mint at 80 TPS). */
 export const LOCAL_TXN_SAMPLE_EVERY = 25;
 
+/** Auto-mint interval — one spawn attempt per tick while auto mode is on. */
+export const AUTO_MINT_INTERVAL_MS = 500;
+
+/** Minimum gap between mint spawns — manual clicks, auto-interval, and bot-driven. */
+export const MINT_COOLDOWN_MS = 200;
+
 export const MIST_PER_SUI = 1_000_000_000n;
 
 /**

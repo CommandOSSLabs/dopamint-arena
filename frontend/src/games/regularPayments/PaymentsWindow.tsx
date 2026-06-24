@@ -1,10 +1,14 @@
-import { useCallback, useMemo, useState } from "react";
-import { Sparkles } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Repeat, Sparkles } from "lucide-react";
 import type { GameWindowProps } from "../types";
 import { MachineCard } from "./components/MachineCard";
 import { SketchDefs } from "./components/SketchDefs";
 import { SKETCH_INK, SKETCH_SURFACE } from "./sketchInk";
-import { MAX_CONCURRENT_RUNNING } from "./constants";
+import {
+  AUTO_MINT_INTERVAL_MS,
+  MINT_COOLDOWN_MS,
+  MAX_CONCURRENT_RUNNING,
+} from "./constants";
 import { usePaymentShop } from "./usePaymentShop";
 import type { MachinePhase } from "./types";
 
@@ -21,10 +25,55 @@ function phaseFilter(phase: MachinePhase, filter: Filter): boolean {
 export function PaymentsWindow({ windowId }: GameWindowProps) {
   const [entered, setEntered] = useState(false);
   const [filter, setFilter] = useState<Filter>("all");
+  const [autoMintEnabled, setAutoMintEnabled] = useState(true);
   const [expandedPayments, setExpandedPayments] = useState<Set<string>>(
     () => new Set(),
   );
+  const [mintClickLocked, setMintClickLocked] = useState(false);
+  const mintClickLockedRef = useRef(false);
+  const mintCooldownTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
   const { machines, spawnMachine, walletConnected } = usePaymentShop(windowId);
+
+  useEffect(
+    () => () => {
+      if (mintCooldownTimerRef.current) {
+        clearTimeout(mintCooldownTimerRef.current);
+      }
+    },
+    [],
+  );
+
+  const withMintClickCooldown = useCallback((action: () => void) => {
+    if (mintClickLockedRef.current) return;
+    mintClickLockedRef.current = true;
+    setMintClickLocked(true);
+    action();
+    if (mintCooldownTimerRef.current) {
+      clearTimeout(mintCooldownTimerRef.current);
+    }
+    mintCooldownTimerRef.current = setTimeout(() => {
+      mintClickLockedRef.current = false;
+      setMintClickLocked(false);
+      mintCooldownTimerRef.current = null;
+    }, MINT_COOLDOWN_MS);
+  }, []);
+
+  useEffect(() => {
+    if (!entered || !autoMintEnabled) return;
+    const id = setInterval(() => spawnMachine(), AUTO_MINT_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [entered, autoMintEnabled, spawnMachine]);
+
+  const handleMintNft = useCallback(() => {
+    if (autoMintEnabled) setAutoMintEnabled(false);
+    spawnMachine();
+  }, [autoMintEnabled, spawnMachine]);
+
+  const handleAutoMintToggle = useCallback(() => {
+    setAutoMintEnabled((on) => !on);
+  }, []);
 
   const togglePayments = useCallback((machineId: string) => {
     setExpandedPayments((prev) => {
@@ -45,8 +94,7 @@ export function PaymentsWindow({ windowId }: GameWindowProps) {
       s.phase === "running" || s.phase === "spawning" || s.phase === "settling",
   ).length;
   const settledCount = machines.filter((s) => s.phase === "closed").length;
-  const canMint =
-    walletConnected && runningCount < MAX_CONCURRENT_RUNNING;
+  const canMint = walletConnected && runningCount < MAX_CONCURRENT_RUNNING;
 
   const gridCols =
     visible.length >= 3
@@ -75,9 +123,9 @@ export function PaymentsWindow({ windowId }: GameWindowProps) {
             Regular Payments
           </div>
           <p className="mb-3 text-[clamp(11px,3cqmin,17px)] leading-snug text-[rgba(35,34,31,0.6)]">
-            Open a real tunnel with 0.1 SUI, stream 500 micro-payments at ~80 TPS
-            (~6 s), then settle on-chain. NFT mint comes later — for now the shop
-            closes the tunnel when the stream finishes.
+            Open a real tunnel with 0.1 SUI, stream 500 micro-payments at ~80
+            TPS (~6 s), then settle on-chain. NFT mint comes later — for now the
+            shop closes the tunnel when the stream finishes.
           </p>
           <button
             className="relative isolate text-[clamp(11px,3cqmin,18px)] leading-none px-[clamp(8px,2.6cqmin,18px)] py-[clamp(4px,1.4cqmin,9px)] transition-transform hover:-translate-y-px hover:-rotate-[0.4deg] active:translate-y-px"
@@ -136,29 +184,57 @@ export function PaymentsWindow({ windowId }: GameWindowProps) {
           })}
         </div>
 
-        <button
-          className="relative isolate inline-flex shrink-0 items-center gap-1.5 text-[clamp(11px,3cqmin,18px)] leading-none px-[clamp(8px,2.6cqmin,18px)] py-[clamp(4px,1.4cqmin,9px)] transition-transform hover:-translate-y-px hover:-rotate-[0.4deg] active:translate-y-px disabled:cursor-not-allowed disabled:opacity-40"
-          onClick={spawnMachine}
-          disabled={!canMint}
-          title={
-            !walletConnected
-              ? "Connect wallet"
-              : runningCount >= MAX_CONCURRENT_RUNNING
-                ? `Max ${MAX_CONCURRENT_RUNNING} running — wait for a mint to settle`
-                : "Open tunnel + start stream"
-          }
-        >
-          <span
-            className={`${SKETCH_INK} -z-10 rounded-[9px]`}
-            style={{
-              backgroundColor: "#ffe9bd",
-              borderColor: "#e8920c",
-              borderWidth: 2.5,
-            }}
-          />
-          <Sparkles className="size-3.5" strokeWidth={2.25} />
-          Mint NFT
-        </button>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <button
+            className="relative isolate inline-flex items-center gap-1.5 text-[clamp(11px,3cqmin,18px)] leading-none px-[clamp(8px,2.6cqmin,18px)] py-[clamp(4px,1.4cqmin,9px)] transition-transform hover:-translate-y-px hover:-rotate-[0.4deg] active:translate-y-px disabled:cursor-not-allowed disabled:opacity-40"
+            onClick={() => withMintClickCooldown(handleAutoMintToggle)}
+            disabled={!walletConnected}
+            title={
+              !walletConnected
+                ? "Connect wallet"
+                : autoMintEnabled
+                  ? "Stop auto-minting every 2s"
+                  : "Mint one NFT every 2s until stopped"
+            }
+          >
+            <span
+              className={`${SKETCH_INK} -z-10 rounded-[9px]`}
+              style={{
+                backgroundColor: autoMintEnabled ? "#eaf8ee" : "#fffefb",
+                borderColor: autoMintEnabled ? "#2f9e44" : "#23221f",
+                borderWidth: 2.5,
+              }}
+            />
+            <Repeat className="size-3.5" strokeWidth={2.25} />
+            Auto mode
+          </button>
+
+          <button
+            className="relative isolate inline-flex items-center gap-1.5 text-[clamp(11px,3cqmin,18px)] leading-none px-[clamp(8px,2.6cqmin,18px)] py-[clamp(4px,1.4cqmin,9px)] transition-transform hover:-translate-y-px hover:-rotate-[0.4deg] active:translate-y-px disabled:cursor-not-allowed disabled:opacity-40"
+            onClick={() => withMintClickCooldown(handleMintNft)}
+            disabled={!canMint || mintClickLocked}
+            title={
+              !walletConnected
+                ? "Connect wallet"
+                : runningCount >= MAX_CONCURRENT_RUNNING
+                  ? `Max ${MAX_CONCURRENT_RUNNING} running — wait for a mint to settle`
+                  : autoMintEnabled
+                    ? "Manual mint — turns off Auto Mint"
+                    : "Open tunnel + start stream"
+            }
+          >
+            <span
+              className={`${SKETCH_INK} -z-10 rounded-[9px]`}
+              style={{
+                backgroundColor: "#ffe9bd",
+                borderColor: "#e8920c",
+                borderWidth: 2.5,
+              }}
+            />
+            <Sparkles className="size-3.5" strokeWidth={2.25} />
+            Mint NFT
+          </button>
+        </div>
       </header>
 
       <div

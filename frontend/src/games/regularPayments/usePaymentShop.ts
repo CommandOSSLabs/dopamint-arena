@@ -25,6 +25,7 @@ import {
   DEPOSIT_B_MIST,
   LOCAL_TXN_SAMPLE_EVERY,
   MAX_CONCURRENT_RUNNING,
+  MINT_COOLDOWN_MS,
   MICRO_UNIT_MIST,
   STREAM_DURATION_MS,
   TICK_COUNT,
@@ -378,6 +379,7 @@ class PaymentShopController {
   private listeners = new Set<() => void>();
   private snap: Snap = { machines: [] };
   private lastActiveReported = -1;
+  private lastSpawnAt = 0;
   deps: ShopDeps | null = null;
 
   subscribe = (cb: () => void) => {
@@ -410,12 +412,16 @@ class PaymentShopController {
   }
 
   spawnMachine = () => {
+    const now = Date.now();
+    if (now - this.lastSpawnAt < MINT_COOLDOWN_MS) return;
+
     const deps = this.deps;
     if (!deps?.account) return;
 
     const running = this.machines.filter((m) => isRunningPhase(m.phase)).length;
     if (running >= MAX_CONCURRENT_RUNNING) return;
 
+    this.lastSpawnAt = now;
     this.seq += 1;
     const runtime = new MachineRuntime(
       `machine-${Date.now()}-${this.seq}`,
