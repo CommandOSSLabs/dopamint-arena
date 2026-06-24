@@ -76,12 +76,29 @@ export function QuantumPokerBotVsBotWindow({
           )}
           <div className="flex min-w-0 flex-col leading-none">
             <span className="sketch-eyebrow">
-              {s.manual ? "Your seat · vs bot" : "Auto · watching bots"}
+              {s.manual
+                ? s.autoSeat
+                  ? "Auto · bot plays your seat"
+                  : "Your seat · vs bot"
+                : "Auto · watching bots"}
             </span>
             <span className="qp-title truncate">Quantum Poker</span>
           </div>
         </div>
-        {s.manual ? null : running ? (
+        {s.manual ? (
+          <button
+            type="button"
+            className={`sketch-btn${s.autoSeat ? " sketch-btn--go" : ""}`}
+            onClick={() => s.setAutoSeat(!s.autoSeat)}
+            title={
+              s.autoSeat
+                ? "Auto on — a bot is playing your seat"
+                : "Let a bot play your seat"
+            }
+          >
+            🤖 Auto{s.autoSeat ? " ON" : ""}
+          </button>
+        ) : running ? (
           <div className="flex items-center gap-[clamp(6px,2.2cqmin,14px)]">
             <button type="button" className="sketch-btn sketch-btn--go" onClick={s.takeOver}>
               Play vs Bot

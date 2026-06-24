@@ -96,6 +96,8 @@ export interface QuantumPokerAutoSession {
   holesB: number[];
   /** True when a human is playing seat A (take-over / live); false = bot-vs-bot attract. */
   manual: boolean;
+  /** During take-over, true = a bot auto-plays seat A for the human (the 🤖 Auto toggle). */
+  autoSeat: boolean;
   /** Legal betting options for seat A, non-null only when it's the human's turn to act. */
   legal: PokerLegalActions | null;
   /** Seconds left on the human's turn timer (null when it isn't the player's turn). */
@@ -114,6 +116,8 @@ export interface QuantumPokerAutoSession {
   takeOver: () => void;
   /** Return seat A to the bot (back to attract); the tunnel keeps recycling. */
   returnHome: () => void;
+  /** During take-over, hand seat A to a bot (on) or take it back (off) — the 🤖 Auto toggle. */
+  setAutoSeat: (on: boolean) => void;
   /** Queue the human's betting move (consumed by the play loop). */
   act: (move: PokerMove) => void;
   /** Hover-freeze the attract loop (latch). */
@@ -163,6 +167,7 @@ interface AutoSnapshot {
   holesA: number[];
   holesB: number[];
   manual: boolean;
+  autoSeat: boolean;
   legal: PokerLegalActions | null;
   secondsLeft: number | null;
   paused: boolean;
@@ -210,6 +215,7 @@ class AutoSession {
     holesA: [],
     holesB: [],
     manual: false,
+    autoSeat: false,
     legal: null,
     secondsLeft: null,
     paused: false,
@@ -221,6 +227,8 @@ class AutoSession {
   private txnId = 0;
 
   private auto = false;
+  // Take-over sub-mode: true = a bot auto-plays the human's seat A (🤖 Auto); false = the human plays.
+  private autoSeat = false;
   private stage: "opening" | "playing" | "settling" = "opening";
 
   // Take-over mode: false = bot plays seat A (attract); true = a human plays seat A (live). The
@@ -294,8 +302,9 @@ class AutoSession {
       holesA,
       holesB,
       manual: this.manual,
+      autoSeat: this.autoSeat,
       legal:
-        this.manual && state && isHumanBettingTurn(state, "A")
+        this.manual && !this.autoSeat && state && isHumanBettingTurn(state, "A")
           ? legalPokerActions(state, "A")
           : null,
       secondsLeft: this.secondsLeft,
@@ -487,6 +496,7 @@ class AutoSession {
    *  the channel is never abandoned. */
   returnHome = () => {
     this.manual = false;
+    this.autoSeat = false;
     this.takeoverPending = false;
     this.takeoverFromHand = null;
     this.pendingMove = null;
@@ -494,9 +504,21 @@ class AutoSession {
     this.emit();
   };
 
+  /** During take-over, hand seat A to a bot (on) or take it back (off). The tunnel is untouched —
+   *  only who supplies seat A's moves flips. Switching to the bot drops any half-armed human turn. */
+  setAutoSeat = (on: boolean) => {
+    if (!this.manual || this.autoSeat === on) return;
+    this.autoSeat = on;
+    if (on) {
+      this.pendingMove = null;
+      this.clearTurn();
+    }
+    this.emit();
+  };
+
   /** Queue the human's betting move (consumed by the play loop). No-op in attract. */
   act = (move: PokerMove) => {
-    if (!this.manual) return;
+    if (!this.manual || this.autoSeat) return;
     this.pendingMove = move;
     this.clearTurn();
   };
@@ -548,6 +570,7 @@ class AutoSession {
     this.clearTurn();
     this.auto = false;
     this.manual = false;
+    this.autoSeat = false;
     this.takeoverPending = false;
     this.takeoverFromHand = null;
     this.pendingMove = null;
@@ -795,7 +818,7 @@ class AutoSession {
           this.deps?.report.setActive(1);
           this.pushView();
         }
-        if (this.manual) {
+        if (this.manual && !this.autoSeat) {
           const step = stepPokerWithHuman(tunnel, botA, botB, "A", ts);
           if (step.kind === "await-human") {
             // Park for the human: arm the countdown and poll until act() (or the timer) queues a move.
@@ -818,6 +841,7 @@ class AutoSession {
             ts++;
           }
         } else {
+          // Attract, or take-over with 🤖 Auto on — a bot drives seat A (and seat B).
           const r = stepPokerAuto(tunnel, botA, botB, ts++);
           if (!r) break;
         }
@@ -998,6 +1022,7 @@ export function useQuantumPokerAuto(windowId: string): QuantumPokerAutoSession {
     holesA: snap.holesA,
     holesB: snap.holesB,
     manual: snap.manual,
+    autoSeat: snap.autoSeat,
     legal: snap.legal,
     secondsLeft: snap.secondsLeft,
     paused: snap.paused,
@@ -1008,6 +1033,7 @@ export function useQuantumPokerAuto(windowId: string): QuantumPokerAutoSession {
     takeOver: session.takeOver,
     returnHome: session.returnHome,
     act: session.act,
+    setAutoSeat: session.setAutoSeat,
     pause: session.pause,
     resume: session.resume,
     reset: session.reset,
