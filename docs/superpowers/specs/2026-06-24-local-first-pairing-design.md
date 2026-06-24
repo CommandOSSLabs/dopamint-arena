@@ -253,6 +253,26 @@ problem affinity solves.
   the Redis fallback (exactly today's behavior). This scatter is inherent — you
   cannot route to a dead pod — and is **not** something this design tries to beat.
 
+### No per-match instance conflict on reconnect
+
+A natural worry: if one socket carries several matches, could reconnect make them
+"want" different instances and drift apart? **No** — one reconnect serves them all,
+because of the socket-as-affinity-unit invariant (§Component 1):
+
+- A socket is **one** instance at all times; reconnect re-lands it on a single
+  instance and `#resumeActive` rebinds **every** active match there together. They
+  move as a unit; they cannot split across instances on this side.
+- All of a socket's **co-located** matches were co-located on the *same* instance —
+  this socket's. So a single sticky reconnect back to instance I (via the `aff`
+  cookie) restores co-location for **all** of them simultaneously. There is no
+  match that prefers a different instance: a match whose opponent is elsewhere was
+  already split and is unaffected by returning to I.
+- The only thing that changes the picture is **instance death** (I gone): the
+  socket lands uniformly on a new K and previously-I-co-located matches degrade to
+  split — a uniform move, still no drift. Opponent-side movement (a peer resuming
+  onto a new instance) likewise just flips that one match to split, handled by the
+  existing resume `evict`/`populate`; this side stays unified on I.
+
 **Rejected / deferred — per-instance addressing + redirect-on-resume.** Precise
 enough to send a player to the *peer's* instance even if the player's own instance
 moved, but it requires per-pod public DNS + TLS (the per-task addressing ADR-0009
