@@ -35,7 +35,7 @@ import {
 } from "@/onchain/dopamint";
 import { makeKeypairSponsoredSignExec } from "@/onchain/sponsor";
 import {
-  BlackjackBetProtocol,
+  actorFor,
   FIXED_PLAYER_A,
   fixedBetMove,
   BET_OPTIONS,
@@ -43,6 +43,7 @@ import {
   type BetBlackjackState,
   type BetBlackjackMove,
 } from "@/games/blackjack/app/lib/bjBetProtocol";
+import { createBlackjackKit } from "@/agent/games/blackjack/kit";
 
 // Re-export so the page imports bet presets from the hook (its single source of game config).
 export { BET_OPTIONS, MIN_BET };
@@ -225,9 +226,19 @@ const EMPTY_VIEW: BlackjackBotView = {
 
 export function useBlackjackBot(): BlackjackBotGame {
   const { report } = useTelemetry();
-  // Pin the player to seat A (no role rotation): "Play vs Bot" is one human vs the dealer bot,
-  // so a stable seat keeps the player's chips and per-round win/lose from inverting.
-  const proto = useMemo(() => new BlackjackBetProtocol(FIXED_PLAYER_A), []);
+  // Canonical bot kit (one source of truth, shared with the agent harness — like ttt's useBotGame):
+  // the live auto-play drives its hit/stand from the SAME kit bot the harness uses, instead of a
+  // second copy. Pin the player to seat A (no role rotation) so "Play vs Bot" stays one human vs
+  // the dealer bot and the table never inverts. The bet stays user-driven (see the loop below).
+  const kit = useMemo(() => createBlackjackKit(BUY_IN, FIXED_PLAYER_A), []);
+  const proto = kit.protocol;
+  const botBySeat = useMemo(
+    () => ({
+      A: kit.createBot("A", { rngForSeat: () => Math.random }),
+      B: kit.createBot("B", { rngForSeat: () => Math.random }),
+    }),
+    [kit],
+  );
   const bots = useMemo(() => loadOrCreateBots(), []);
   const client = useMemo(() => getSuiClient(), []);
 
@@ -608,7 +619,7 @@ export function useBlackjackBot(): BlackjackBotGame {
               // after ~2 rounds). In the betting phase, place the chosen fixed bet; otherwise
               // let the protocol pick (basic strategy for the player, deterministic dealer).
               const cur = tunnel.state;
-              const by = proto.actorFor(cur);
+              const by = actorFor(cur, FIXED_PLAYER_A);
               // Manual play (auto off): pause at the player's decision and apply only a
               // user-queued hit/stand. The dealer is deterministic and betting auto-deals, so
               // both proceed regardless of the toggle — same split as the PvP mode.
@@ -627,10 +638,12 @@ export function useBlackjackBot(): BlackjackBotGame {
                   return;
                 }
                 lastAutoStepAt = Date.now();
+                // The bet stays user-driven (the Bet/round selector); hit/stand + the dealer come
+                // from the shared kit bot — the single brain the agent harness also plays through.
                 move =
                   cur.phase === "round_over"
                     ? fixedBetMove(betRef.current, cur)
-                    : proto.randomMove(cur, by, Math.random);
+                    : botBySeat[by].plan(cur);
               }
               if (!move) {
                 stopTimer();
