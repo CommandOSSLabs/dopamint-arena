@@ -8,6 +8,7 @@ import { createControlPlaneClient } from "./controlPlane";
 test("StatsSnapshot carries optional recentEvents", () => {
   const withEvents: StatsSnapshot = {
     tps: 5,
+    peakTps: 5,
     totalActions: 10,
     activeTunnels: 2,
     settledTunnels: 1,
@@ -29,6 +30,7 @@ test("StatsSnapshot carries optional recentEvents", () => {
 
   const without: StatsSnapshot = {
     tps: 0,
+    peakTps: 0,
     totalActions: 0,
     activeTunnels: 0,
     settledTunnels: 0,

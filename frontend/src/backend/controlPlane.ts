@@ -60,6 +60,7 @@ export interface GameStats {
 /** One server-sent aggregate snapshot from GET /v1/stats/live. */
 export interface StatsSnapshot {
   tps: number;
+  peakTps: number;
   totalActions: number;
   activeTunnels: number;
   settledTunnels: number;
@@ -87,6 +88,8 @@ export interface ControlPlaneClient {
   settle(tunnelId: string, body: Uint8Array): Promise<SettleResult>;
   /** Subscribe to the live aggregate SSE feed; returns an unsubscribe fn. */
   openStatsStream(handlers: StatsStreamHandlers): () => void;
+  /** Seed the TPS graph: derived (ts, tps) points over the last `windowSecs` from the explorer. */
+  fetchStatsHistory(windowSecs: number): Promise<{ t: number; v: number }[]>;
 }
 
 /** Callbacks for {@link ControlPlaneClient.openStatsStream}. `onError` fires when the SSE
@@ -172,6 +175,15 @@ export function createControlPlaneClient(baseUrl: string): ControlPlaneClient {
       };
       source.onerror = () => handlers.onError?.();
       return () => source.close();
+    },
+
+    async fetchStatsHistory(windowSecs) {
+      const res = await fetch(`${root}/v1/stats/history?window=${windowSecs}`);
+      await failIfNotOk(res, "fetchStatsHistory");
+      const body = (await res.json()) as {
+        points: { t: string; v: number }[];
+      };
+      return body.points.map((p) => ({ t: Number(p.t), v: p.v }));
     },
   };
 }
