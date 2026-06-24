@@ -161,75 +161,79 @@ export function BoardGrid({
   }, [placements]);
 
   return (
-    <div className="flex w-full flex-col gap-1.5">
+    <div className="flex h-full min-h-0 w-full flex-col gap-1.5">
       {title && (
-        <div className="wal-mono text-[11px] font-semibold tracking-wider text-[#cab1ff]/80 uppercase">
+        <div className="shrink-0 wal-mono text-[11px] font-semibold tracking-wider text-[#cab1ff]/80 uppercase">
           {title}
         </div>
       )}
-      {/* Cap the board by the window height (cqh) so two stacked / side-by-side
-          boards fit a short window without scrolling; width still bounds tall ones. */}
-      <div className="mx-auto w-full max-w-[min(100%,40cqh)] rounded-lg bg-slate-950/40 p-1.5 ring-1 ring-[#cab1ff]/20 shadow-lg shadow-black/30 backdrop-blur-md @[30rem]:max-w-[min(100%,78cqh)]">
-        <GridFrame
-          renderCell={(cell) => {
-            const v = cells[cell];
-            const isSolid = v === "ship" || v === "hit" || v === "sunk";
-            // Compute only primitives here; the memoised cell owns the heavy cn().
-            return (
-              <BoardCell
-                key={cell}
-                cell={cell}
-                v={v}
-                canFire={interactive && v === "water"}
-                isLast={lastShot === cell}
-                hasShip={shipCoverage.has(cell)}
-                radiusClass={isSolid ? hullRadius(cell) : ""}
-                onCell={onCell}
-              />
-            );
-          }}
-        >
-          {/* Continuous Ship Overlays */}
-          {placements && (
-            <>
-              {placements.map((p) => {
-                const row = Math.floor(p.cell / 10);
-                const col = p.cell % 10;
-                const spec = FLEET.find((s) => s.id === p.id);
-                if (!spec) return null;
-                const size = spec.size;
+      {/* The board fills the height its parent grid cell allots and is the largest SQUARE
+          that fits — sized by whichever of the cell's width/height binds (container-query
+          units), so it never overflows a short window (no scroll, no drag-to-resize). The
+          1.25rem trims the fixed A–J label row so the square's natural height fits too. */}
+      <div className="grid min-h-0 flex-1 place-items-center [container-type:size]">
+        <div className="w-[min(100cqw,calc(100cqh_-_1.25rem))] max-w-full rounded-lg bg-slate-950/40 p-1.5 ring-1 ring-[#cab1ff]/20 shadow-lg shadow-black/30 backdrop-blur-md">
+          <GridFrame
+            renderCell={(cell) => {
+              const v = cells[cell];
+              const isSolid = v === "ship" || v === "hit" || v === "sunk";
+              // Compute only primitives here; the memoised cell owns the heavy cn().
+              return (
+                <BoardCell
+                  key={cell}
+                  cell={cell}
+                  v={v}
+                  canFire={interactive && v === "water"}
+                  isLast={lastShot === cell}
+                  hasShip={shipCoverage.has(cell)}
+                  radiusClass={isSolid ? hullRadius(cell) : ""}
+                  onCell={onCell}
+                />
+              );
+            }}
+          >
+            {/* Continuous Ship Overlays */}
+            {placements && (
+              <>
+                {placements.map((p) => {
+                  const row = Math.floor(p.cell / 10);
+                  const col = p.cell % 10;
+                  const spec = FLEET.find((s) => s.id === p.id);
+                  if (!spec) return null;
+                  const size = spec.size;
 
-                const shipCells = placementCells(p) ?? [];
-                const isSunk = shipCells.every((c) => cells[c] === "sunk");
+                  const shipCells = placementCells(p) ?? [];
+                  const isSunk = shipCells.every((c) => cells[c] === "sunk");
 
-                const gridStyle = {
-                  gridRowStart: row + 2,
-                  gridColumnStart: col + 2,
-                  gridRowEnd: p.orient === "V" ? row + 2 + size : row + 2 + 1,
-                  gridColumnEnd:
-                    p.orient === "H" ? col + 2 + size : col + 2 + 1,
-                };
+                  const gridStyle = {
+                    gridRowStart: row + 2,
+                    gridColumnStart: col + 2,
+                    gridRowEnd: p.orient === "V" ? row + 2 + size : row + 2 + 1,
+                    gridColumnEnd:
+                      p.orient === "H" ? col + 2 + size : col + 2 + 1,
+                  };
 
-                return (
-                  <div
-                    key={p.id}
-                    className={cn(
-                      "pointer-events-none relative overflow-hidden transition-all duration-300",
-                      isSunk ? "opacity-35 grayscale" : "opacity-95",
-                    )}
-                    style={gridStyle}
-                  >
-                    <ShipSprite
-                      id={p.id}
-                      size={size}
-                      horizontal={p.orient === "H"}
-                    />
-                  </div>
-                );
-              })}
-            </>
-          )}
-        </GridFrame>
+                  return (
+                    <div
+                      key={p.id}
+                      className={cn(
+                        "pointer-events-none relative overflow-hidden transition-all duration-300",
+                        isSunk ? "opacity-35 grayscale" : "opacity-95",
+                      )}
+                      style={gridStyle}
+                    >
+                      <ShipSprite
+                        id={p.id}
+                        size={size}
+                        horizontal={p.orient === "H"}
+                      />
+                    </div>
+                  );
+                })}
+              </>
+            )}
+          </GridFrame>
+        </div>
       </div>
     </div>
   );
