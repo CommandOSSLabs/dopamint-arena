@@ -25,11 +25,12 @@ import {
   otherParty,
   rollingDigest,
 } from "./Protocol";
-import { concatBytes } from "../core/bytes";
+import { concatBytes, toHex } from "../core/bytes";
 import { u64ToBeBytes } from "../core/wire";
 import { blake2b256 } from "../core/crypto";
 
-export interface ChatState {
+/** Canonical protocol state data: the rolling digest and balances. */
+export interface ChatStateData {
   /** 32-byte fold of the whole transcript (NOT the transcript itself). */
   transcriptDigest: Uint8Array;
   messageCount: bigint;
@@ -40,12 +41,41 @@ export interface ChatState {
   total: bigint;
 }
 
+/** High-level driver state for a chat match. */
+export enum ChatState {
+  Ready = "Ready",
+  AwaitingPeer = "AwaitingPeer",
+  Settled = "Settled",
+}
+
 export interface ChatMove {
   kind: "msg";
   /** UTF-8 message text; must be non-empty. */
   text: string;
   /** Optional micropayment shifted from the sender to the recipient. */
   tip?: bigint;
+}
+
+export interface ChatMessage {
+  sender: string;
+  text: string;
+}
+
+/** Wire wrapper for a chat move so the receiver knows which party sent it. */
+interface MoveEnvelope {
+  kind: "msg";
+  text: string;
+  by: Party;
+}
+
+export interface StatefulChatProtocol {
+  readonly name: string;
+  state(): ChatState;
+  stateAsChat(): { messages: ChatMessage[] };
+  ourTurn(): boolean;
+  isTerminal(): boolean;
+  createMove(text: string): Uint8Array;
+  applyMove(bytes: Uint8Array): void;
 }
 
 const DOMAIN = protocolDomain("chat.v1");
@@ -56,11 +86,12 @@ function partyByte(p: Party): number {
 }
 
 const enc = new TextEncoder();
+const dec = new TextDecoder();
 
-export class ChatProtocol implements Protocol<ChatState, ChatMove> {
+export class ChatProtocol implements Protocol<ChatStateData, ChatMove> {
   readonly name = "chat.v1";
 
-  initialState(ctx: ProtocolContext): ChatState {
+  initialState(ctx: ProtocolContext): ChatStateData {
     return {
       transcriptDigest: new Uint8Array(32), // 32 zero bytes
       messageCount: 0n,
@@ -71,7 +102,7 @@ export class ChatProtocol implements Protocol<ChatState, ChatMove> {
     };
   }
 
-  applyMove(state: ChatState, move: ChatMove, by: Party): ChatState {
+  applyMove(state: ChatStateData, move: ChatMove, by: Party): ChatStateData {
     if (move.kind !== "msg") {
       throw new Error(`unknown chat move kind: ${(move as ChatMove).kind}`);
     }
@@ -121,7 +152,7 @@ export class ChatProtocol implements Protocol<ChatState, ChatMove> {
     };
   }
 
-  encodeState(state: ChatState): Uint8Array {
+  encodeState(state: ChatStateData): Uint8Array {
     // Fixed-size canonical encoding: domain || digest(32) || count || balances.
     return concatBytes([
       DOMAIN,
@@ -132,7 +163,7 @@ export class ChatProtocol implements Protocol<ChatState, ChatMove> {
     ]);
   }
 
-  balances(state: ChatState): Balances {
+  balances(state: ChatStateData): Balances {
     return { a: state.balanceA, b: state.balanceB };
   }
 
@@ -140,7 +171,7 @@ export class ChatProtocol implements Protocol<ChatState, ChatMove> {
     return false; // chat runs until the tunnel is explicitly closed
   }
 
-  randomMove(state: ChatState, by: Party, rng: () => number): ChatMove {
+  randomMove(state: ChatStateData, by: Party, rng: () => number): ChatMove {
     const text = `msg${state.messageCount}`;
     const bal = by === "A" ? state.balanceA : state.balanceB;
     // ~25% of messages carry a small tip the sender can actually afford.
@@ -151,4 +182,64 @@ export class ChatProtocol implements Protocol<ChatState, ChatMove> {
     }
     return { kind: "msg", text };
   }
+}
+
+/** Build a stateful chat protocol driver bound to one party. */
+export function chatProtocol(ourParty: Party = "A"): StatefulChatProtocol {
+  const inner = new ChatProtocol();
+  const ctx: ProtocolContext = {
+    tunnelId: "0x0",
+    initialBalances: { a: 100n, b: 100n },
+  };
+  let data = inner.initialState(ctx);
+  let settled = false;
+  const messages: ChatMessage[] = [];
+  const applied = new Set<string>();
+
+  const our = ourParty;
+  const nameOf = (p: Party): string => (p === "A" ? "A" : "B");
+
+  return {
+    name: inner.name,
+
+    state: () => (settled ? ChatState.Settled : ChatState.Ready),
+
+    stateAsChat: () => ({ messages }),
+
+    ourTurn: () => {
+      if (settled) return false;
+      const last = data.lastSender;
+      if (last === null) return our === "A";
+      return last !== our;
+    },
+
+    isTerminal: () => false,
+
+    createMove: (text: string) => {
+      const envelope: MoveEnvelope = { kind: "msg", text, by: our };
+      const bytes = enc.encode(JSON.stringify(envelope));
+      const key = toHex(blake2b256(bytes));
+      if (!applied.has(key)) {
+        applied.add(key);
+        const move: ChatMove = { kind: "msg", text };
+        data = inner.applyMove(data, move, our);
+        messages.push({ sender: nameOf(our), text });
+      }
+      return bytes;
+    },
+
+    applyMove: (bytes: Uint8Array) => {
+      const key = toHex(blake2b256(bytes));
+      if (applied.has(key)) return;
+      applied.add(key);
+      const envelope = JSON.parse(dec.decode(bytes)) as MoveEnvelope;
+      if (envelope.kind !== "msg") {
+        throw new Error(`unknown chat envelope kind: ${envelope.kind}`);
+      }
+      const by = envelope.by;
+      const move: ChatMove = { kind: "msg", text: envelope.text };
+      data = inner.applyMove(data, move, by);
+      messages.push({ sender: nameOf(by), text: envelope.text });
+    },
+  };
 }
