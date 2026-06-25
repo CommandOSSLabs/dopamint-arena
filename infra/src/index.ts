@@ -133,6 +133,7 @@ const backend = createBackend({
   ollamaEnabled: cfg.ollamaEnabled,
   ollamaModel: cfg.ollamaModel,
   ollamaImageTag: cfg.ollamaImageTag,
+  corsAllowedOrigins: cfg.corsAllowedOrigins,
 });
 
 const backendService = createBackendService({
@@ -160,6 +161,7 @@ const explorer = createExplorerServices({
   pubSubEndpoint: cache.pubSubEndpoint,
   vpcId: network.vpcId,
   listener: alb.listener,
+  corsAllowedOrigins: cfg.corsAllowedOrigins,
 });
 
 createBackendAlias({
