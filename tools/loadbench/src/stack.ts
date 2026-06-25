@@ -18,13 +18,14 @@
  */
 
 import { spawnSync, spawn } from "node:child_process";
-import { writeFileSync, readFileSync, existsSync, unlinkSync } from "node:fs";
+import { writeFileSync, readFileSync, existsSync, unlinkSync, mkdirSync } from "node:fs";
 import { SuiClient } from "@mysten/sui/client";
-import { getFaucetHost, requestSuiFromFaucetV2 } from "@mysten/sui/faucet";
+import { requestSuiFromFaucetV2 } from "@mysten/sui/faucet";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
+import { decodeSuiPrivateKey } from "@mysten/sui/cryptography";
 import { writeEnvLocal } from "./env";
+import { envName, project, ports, suiConfigDir } from "./benchEnv";
 
-const RPC = "http://127.0.0.1:9000";
 const COMPOSE_FILE = new URL("../docker-compose.yml", import.meta.url).pathname;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -43,10 +44,10 @@ async function waitRpc(client: SuiClient): Promise<void> {
 }
 
 /** Poll the local faucet until it responds to a GET, allowing the faucet process to start. */
-async function waitFaucet(): Promise<void> {
+async function waitFaucet(faucetUrl: string): Promise<void> {
   for (let i = 0; i < 30; i++) {
     try {
-      const res = await fetch("http://127.0.0.1:9123/");
+      const res = await fetch(faucetUrl);
       if (res.status < 500) return;
     } catch {
       // ECONNREFUSED — faucet not up yet
@@ -201,13 +202,13 @@ function publishPackage(chainId: string): string {
 type FundedKey = { secretKey: string; address: string };
 
 /** Generate `n` fresh keypairs, request faucet funds, and wait for balances to confirm. */
-async function fundKeys(client: SuiClient, n: number): Promise<FundedKey[]> {
+async function fundKeys(client: SuiClient, n: number, faucetUrl: string): Promise<FundedKey[]> {
   const keys: FundedKey[] = [];
   for (let i = 0; i < n; i++) {
     const kp = new Ed25519Keypair();
     const address = kp.toSuiAddress();
     await requestSuiFromFaucetV2({
-      host: getFaucetHost("localnet"),
+      host: faucetUrl,
       recipient: address,
     });
     keys.push({ secretKey: kp.getSecretKey(), address });
@@ -223,16 +224,57 @@ async function fundKeys(client: SuiClient, n: number): Promise<FundedKey[]> {
   return keys;
 }
 
+/** Write a self-contained sui CLI config (client.yaml + keystore + aliases) whose
+ *  active env points at this stack's localnet, so `sui client publish` never touches ~/.sui. */
+function seedSuiConfig(configDir: string, rpc: string, kp: Ed25519Keypair): string {
+  mkdirSync(configDir, { recursive: true });
+  // 0x00 prefix = ed25519 flag byte, matching the sui keystore wire format.
+  const flagged = (bytes: Uint8Array) =>
+    Buffer.concat([Buffer.from([0x00]), Buffer.from(bytes)]).toString("base64");
+  const { secretKey } = decodeSuiPrivateKey(kp.getSecretKey());
+  const addr = kp.toSuiAddress();
+  writeFileSync(`${configDir}/sui.keystore`, JSON.stringify([flagged(secretKey)], null, 2));
+  writeFileSync(
+    `${configDir}/sui.aliases`,
+    JSON.stringify([{ alias: "publisher", public_key_base64: flagged(kp.getPublicKey().toRawBytes()) }], null, 2),
+  );
+  writeFileSync(
+    `${configDir}/client.yaml`,
+    `keystore:\n  File: ${configDir}/sui.keystore\nenvs:\n  - alias: localnet\n    rpc: "${rpc}"\n    ws: ~\n    basic_auth: ~\nactive_env: localnet\nactive_address: "${addr}"\n`,
+  );
+  return addr;
+}
+
 async function main(): Promise<void> {
   const n = Number(process.env.N ?? "8");
 
+  // Change 1: resolve env identity once, before any compose or sui invocation.
+  const name = envName();
+  const proj = project(name);
+  const p = ports(name);
+  const cfgDir = suiConfigDir(name);
+  // All `sui` CLI calls in this process target the per-stack config, never ~/.sui.
+  process.env.SUI_CONFIG_DIR = cfgDir;
+  let rpcPort = p.rpc;
+  let faucetPort = p.faucet;
+  const rpcUrl = () => `http://127.0.0.1:${rpcPort}`;
+  const faucetUrl = () => `http://127.0.0.1:${faucetPort}`;
+  console.log(`bench env "${name}" → project ${proj}, rpc :${rpcPort}, faucet :${faucetPort}, relay :${p.relay}`);
+
   console.log("bringing up compose infra (localnet + valkey)…");
+  // Change 2: compose up under the env project + per-env ports.
   // Start all services detached; valkey is healthy quickly.
   // sui-localnet may stay unhealthy (architecture mismatch, etc.) — detected below.
+  const composeEnv = {
+    ...process.env,
+    SUI_RPC_PORT: String(rpcPort),
+    SUI_FAUCET_PORT: String(faucetPort),
+    VALKEY_PORT: String(p.valkey),
+  } as NodeJS.ProcessEnv;
   const up = spawnSync(
     "docker",
-    ["compose", "-f", COMPOSE_FILE, "up", "-d"],
-    { stdio: "inherit" },
+    ["compose", "-f", COMPOSE_FILE, "-p", proj, "up", "-d"],
+    { stdio: "inherit", env: composeEnv },
   );
   if (up.status !== 0) throw new Error("docker compose up failed");
 
@@ -243,7 +285,8 @@ async function main(): Promise<void> {
   let suiViaDocker = false;
   for (let i = 0; i < 12; i++) {
     await sleep(5000);
-    const h = containerHealth("loadbench-sui-localnet-1");
+    // Change 3: health container name is project-derived.
+    const h = containerHealth(`${proj}-sui-localnet-1`);
     if (h === "healthy") {
       suiViaDocker = true;
       break;
@@ -254,14 +297,20 @@ async function main(): Promise<void> {
 
   let hostSuiProc: ReturnType<typeof spawn> | null = null;
   if (!suiViaDocker) {
-    // Stop the broken sui-localnet container so its port-forwards (9000, 9123) are
+    // Stop the broken sui-localnet container so its port-forwards are
     // released before we start the host sui binary on those same ports.
-    console.log("stopping broken sui-localnet container to free ports 9000/9123…");
+    console.log("stopping broken sui-localnet container to free ports…");
+    // Change 4: stop uses the project.
     spawnSync(
       "docker",
-      ["compose", "-f", COMPOSE_FILE, "stop", "sui-localnet"],
-      { stdio: "inherit" },
+      ["compose", "-f", COMPOSE_FILE, "-p", proj, "stop", "sui-localnet"],
+      { stdio: "inherit", env: composeEnv },
     );
+
+    // Change 5: host-sui fallback is single-stack — reset to default ports.
+    rpcPort = 9000;
+    faucetPort = 9123;
+    console.log("host-sui fallback is NOT isolated — using default ports 9000/9123 (one stack at a time).");
 
     // The sui binary needs max_move_package_size raised (sui_tunnel is 139 KB,
     // default limit on localnet is 102 KB).
@@ -271,7 +320,7 @@ async function main(): Promise<void> {
     await sleep(3000);
   }
 
-  const client = new SuiClient({ url: RPC });
+  const client = new SuiClient({ url: rpcUrl() });
   try {
     await waitRpc(client);
   } catch (err) {
@@ -280,16 +329,14 @@ async function main(): Promise<void> {
   }
   console.log("localnet RPC ready");
 
-  // Ensure the sui client targets localnet.
-  // This also updates the cached chain_id in ~/.sui/sui_config/client.yaml,
-  // which must match what we write into Move.toml's [environments] section.
-  spawnSync("sui", ["client", "switch", "--env", "local"], {
-    encoding: "utf8",
-    stdio: "pipe",
-  });
+  // Change 7: seed the per-stack sui CLI config so `sui client publish`
+  // never reads or writes global ~/.sui.
+  const publisherKp = new Ed25519Keypair();
+  const publisherAddr = seedSuiConfig(cfgDir, rpcUrl(), publisherKp);
+  // SUI_CONFIG_DIR is already exported, so all `sui` calls below use this config.
 
-  // Wait for the faucet process to start (it launches a few seconds after RPC).
-  await waitFaucet();
+  // Change 6: faucet polling uses faucetUrl().
+  await waitFaucet(faucetUrl());
 
   // Read chain ID from the CLI (not the TypeScript client) so it matches exactly
   // what `sui client publish` will validate against Move.toml [environments].
@@ -302,12 +349,10 @@ async function main(): Promise<void> {
   // Fund the active wallet so the publish transaction has enough gas.
   // The sui_tunnel package is large; a budget of 2B MIST is needed.
   // Each faucet response gives 5 × 200 SUI coins; one call is sufficient.
-  const publisherAddr = spawnSync("sui", ["client", "active-address"], {
-    encoding: "utf8",
-  }).stdout.trim();
   console.log(`funding publisher wallet ${publisherAddr}…`);
+  // Change 6: funding uses faucetUrl() instead of getFaucetHost("localnet").
   await requestSuiFromFaucetV2({
-    host: getFaucetHost("localnet"),
+    host: faucetUrl(),
     recipient: publisherAddr,
   });
   for (let i = 0; i < 30; i++) {
@@ -329,8 +374,8 @@ async function main(): Promise<void> {
   let settler: FundedKey;
   let keys: FundedKey[];
   try {
-    [settler] = await fundKeys(client, 1);
-    keys = await fundKeys(client, n);
+    [settler] = await fundKeys(client, 1, faucetUrl());
+    keys = await fundKeys(client, n, faucetUrl());
   } catch (err) {
     if (hostSuiProc) hostSuiProc.kill();
     throw err;
@@ -340,12 +385,14 @@ async function main(): Promise<void> {
     new URL("../keys.json", import.meta.url),
     JSON.stringify(keys, null, 2),
   );
+  // Change 8: write resolved URLs to .env.local, including relay URL.
   writeEnvLocal({
-    SUI_RPC_URL: RPC,
-    SUI_NETWORK: RPC,
+    SUI_RPC_URL: rpcUrl(),
+    SUI_NETWORK: rpcUrl(),
     TUNNEL_PACKAGE_ID: packageId,
     PACKAGE_ID: packageId,
     SUI_SETTLER_KEY: settler.secretKey,
+    MP_WS_URL: `ws://127.0.0.1:${p.relay}/v1/mp`,
   });
 
   console.log(
