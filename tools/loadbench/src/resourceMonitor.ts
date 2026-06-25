@@ -179,7 +179,11 @@ function readCgroupCpuUsec(): number | null {
  *  capped container, else the host core count. */
 export function cpuBudget(): { cores: number; basis: "cgroup" | "system" } {
   const quota = readCgroupQuotaCores();
-  if (quota !== null && quota > 0 && readCgroupCpuUsec() !== null) return { cores: quota, basis: "cgroup" };
+  // cgroup quota is quota/period and can carry float noise (e.g. 17.99999); round
+  // to 0.01 so a whole-core limit reads cleanly while fractional --cpus survive.
+  if (quota !== null && quota > 0 && readCgroupCpuUsec() !== null) {
+    return { cores: Math.round(quota * 100) / 100, basis: "cgroup" };
+  }
   return { cores: os.availableParallelism?.() ?? os.cpus().length, basis: "system" };
 }
 
