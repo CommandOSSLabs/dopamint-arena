@@ -60,11 +60,12 @@ valkey = 9200 + slot
 relay  = 9300 + slot
 faucet = 9400 + slot
 ```
-where `slot = hash($LOADBENCH_ENV) % 100`. The actual RPC and relay URLs are
-written to `.env.local` on stack bring-up — read them from there rather than
-assuming `:9000`. If two active envs collide on a port (rare; the hash spreads
-to 100 slots), `bun run stack` will fail with "port already allocated" — set
-`LOADBENCH_ENV` to a different name to move one env to a new slot.
+where `slot = hash(<env-name>) % 100`, and `<env-name>` is the resolved env name
+(after `$LOADBENCH_ENV` → slugified-branch → `default` fallback). The actual RPC
+and relay URLs are written to `.env.local` on stack bring-up — read them from
+there rather than assuming `:9000`. If two active envs collide on a port (rare;
+the hash spreads to 100 slots), `bun run stack` will fail with "port already
+allocated" — set `LOADBENCH_ENV` to a different name to move one env to a new slot.
 
 **Parallel stacks:** Two worktrees can run `bun run stack` and benches
 simultaneously; each publishes under its own `SUI_CONFIG_DIR` and never touches
@@ -74,13 +75,13 @@ the global `~/.sui`, so there is no contention.
 uses the same env name, project, and ports as the host from which you invoke it.
 No additional setup needed.
 
-**Multi-arch support:** The localnet image runs on both arm64 and x86_64. The
-host-`sui` fallback (when Docker is unavailable) is single-stack and uses the
-default `9000`/`9123` ports.
+**Multi-arch support and host-`sui` fallback:** The localnet image runs on both
+arm64 and x86_64. The host-`sui` fallback (when Docker is unavailable) is
+single-stack and uses the default `9000`/`9123` ports.
 
 **Migration from single stack:** If you had a legacy single-stack setup before
 this change, the old stack runs under the Docker project `loadbench` (no env
-suffix). Remove it with:
+suffix). Remove it with (from `tools/loadbench/`):
 ```bash
 docker compose -f docker-compose.yml -p loadbench down
 ```
@@ -145,8 +146,9 @@ bun run bench --game blackjack --offchain --channel local --matches 50
 # onchain swarm against a local stack you brought up with `bun run stack`:
 bun run bench --channel local --matches 40
 
-# onchain against an explicit endpoint (use the port from .env.local):
-bun run bench --channel local --rpc-url http://127.0.0.1:9000 \
+# onchain against an explicit endpoint (port comes from .env.local):
+source .env.local
+bun run bench --channel local --rpc-url "$SUI_RPC_URL" \
   --package-id 0x… --settler-key suiprivkey… --matches 40
 
 # relay against a relay you're running:
