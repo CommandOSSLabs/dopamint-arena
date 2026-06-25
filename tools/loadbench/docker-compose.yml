@@ -46,8 +46,10 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "4"
-          memory: 4g
-    # Default: offchain burst. Override per run (e.g. --channel local --anchor onchain).
-    # --channel relay is unsupported in-container (relay process runs host-side).
-    command: ["--offchain", "--channel", "local", "--workers", "auto", "--duration", "10"]
+          # Overridden per run by the host cli via `--cpus` / `--memory`
+          # (exported as BENCH_CPUS / BENCH_MEMORY before `docker compose run`).
+          cpus: "${BENCH_CPUS:-4}"
+          memory: "${BENCH_MEMORY:-4g}"
+    # Default when run with no args: offchain burst. The host `bench --container …`
+    # path passes explicit inner args. --channel relay is unsupported in-container.
+    command: ["--channel", "local", "--anchor", "offchain", "--workers", "auto", "--duration", "10"]

@@ -59,4 +59,4 @@ RUN cd /app/tools/loadbench && bun install
 COPY tools/loadbench/src /app/tools/loadbench/src
 
 WORKDIR /app/tools/loadbench
-ENTRYPOINT ["bun", "run", "src/swarm.ts"]
+ENTRYPOINT ["bun", "run", "src/cli.ts"]
