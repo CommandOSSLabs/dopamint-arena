@@ -1,5 +1,13 @@
 {
   "extends": "../../tsconfig.base.json",
-  "compilerOptions": { "lib": ["ESNext", "DOM"], "types": ["bun"] },
+  "compilerOptions": {
+    "lib": ["ESNext", "DOM"],
+    "types": ["bun"],
+    "baseUrl": ".",
+    "paths": {
+      "sui-tunnel-ts": ["../../../../../../sui-tunnel-ts/src/index.ts"],
+      "sui-tunnel-ts/*": ["../../../../../../sui-tunnel-ts/src/*"]
+    }
+  },
   "include": ["src"]
 }
