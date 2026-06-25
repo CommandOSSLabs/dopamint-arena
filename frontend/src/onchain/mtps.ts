@@ -20,10 +20,10 @@ export const MTPS_DECIMALS = 9;
 export const mtps = (whole: bigint): bigint =>
   whole * 10n ** BigInt(MTPS_DECIMALS);
 
-// One faucet pull mints 10,000 MTPS (10^13 raw). `mtps::mint` mints NEW supply from the
-// shared TreasuryCap, so the faucet can NEVER run dry — this is only "how much per top-up"; at a
-// tiny per-game stake it covers thousands of games, and the background faucet silently tops up
-// again (free, gas-sponsored) whenever the balance falls below the threshold.
+// One faucet pull mints 10,000 MTPS (10^13 raw). `mtps::mint` mints NEW supply from the shared
+// TreasuryCap, bounded only by the contract's hard supply cap (ADR-0015) — far above any real
+// usage, so this is just "how much per top-up"; at a tiny per-game stake it covers thousands of
+// games, and the background faucet silently tops up again (free, gas-sponsored) below threshold.
 export const MTPS_FAUCET_AMOUNT = mtps(10_000n);
 /** Background top-up trigger: refill once the balance falls below 1,000 MTPS (10^12 raw) — a
  *  cushion big enough that the stake hot-path always finds a coin while a top-up is in flight. */
@@ -31,8 +31,8 @@ export const MTPS_MIN_BALANCE = mtps(1_000n);
 
 /**
  * Append a faucet mint of `amount` MTPS to `recipient` (`mtps::mint`). New supply each
- * call — the faucet mints, it doesn't draw from a reserve, so it can't run out. Submitted via the
- * gas sponsor (the backend allowlists this call), so the player pays nothing.
+ * call — the faucet mints fresh supply (bounded by the contract's supply cap), not from a reserve.
+ * Submitted via the gas sponsor (the backend allowlists this call), so the player pays nothing.
  */
 export function buildMtpsFaucet(
   tx: Transaction,
