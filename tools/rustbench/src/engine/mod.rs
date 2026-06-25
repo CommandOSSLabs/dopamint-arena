@@ -7,4 +7,5 @@
 pub mod codec;
 pub mod commitment;
 pub mod crypto;
+pub mod frame;
 pub mod wire;
