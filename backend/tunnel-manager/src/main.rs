@@ -169,7 +169,11 @@ fn cors_layer() -> CorsLayer {
         Ok(origins) if !origins.is_empty() => {
             let origins: Vec<http::HeaderValue> = origins
                 .split(',')
-                .map(|s| s.trim().parse().expect("invalid CORS_ALLOWED_ORIGINS value"))
+                .map(|s| {
+                    s.trim()
+                        .parse()
+                        .expect("invalid CORS_ALLOWED_ORIGINS value")
+                })
                 .collect();
             CorsLayer::new()
                 .allow_origin(origins)
