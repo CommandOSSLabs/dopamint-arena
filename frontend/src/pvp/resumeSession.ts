@@ -67,10 +67,6 @@ export interface AttachResumeArgs<State, Move> {
   identity: ResumeIdentity;
   graceMs?: number;
   onGraceExpired?: (latest: CoSignedUpdate | null) => void;
-  /** Optional peer-presence signal: `true` when the peer drops mid-match, `false` when it
-   *  reconnects (resume.ok with peerOnline, or peer.resumed). Additive — games that don't pass
-   *  it (every wagered game today) behave identically. Lets a game surface a reconnect overlay. */
-  onPeerState?: (dropped: boolean) => void;
   /** Injectable for tests; defaults to the globals. */
   timers?: {
     setTimeout: (fn: () => void, ms: number) => unknown;
@@ -326,7 +322,6 @@ export function attachResume<State, Move>(
 
   const offDrop = mp.onPeerDropped((e) => {
     if (e.matchId !== identity.matchId) return;
-    args.onPeerState?.(true);
     cancelGrace();
     graceHandle = timers.setTimeout(() => {
       graceHandle = null;
@@ -335,16 +330,10 @@ export function attachResume<State, Move>(
   });
   // a peer return cancels the grace timer (handshake handles convergence instead)
   const offOkCancel = mp.onResumeOk((e) => {
-    if (e.matchId === identity.matchId && e.peerOnline) {
-      args.onPeerState?.(false);
-      cancelGrace();
-    }
+    if (e.matchId === identity.matchId && e.peerOnline) cancelGrace();
   });
   const offResCancel = mp.onPeerResumed((e) => {
-    if (e.matchId === identity.matchId) {
-      args.onPeerState?.(false);
-      cancelGrace();
-    }
+    if (e.matchId === identity.matchId) cancelGrace();
   });
 
   return () => {

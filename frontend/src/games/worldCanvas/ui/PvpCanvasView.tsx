@@ -6,7 +6,7 @@ import {
   type CSSProperties,
 } from "react";
 import { usePvpWorldCanvas } from "../usePvpWorldCanvas";
-import { botColorHint } from "../pvpProtocol";
+import { botColorHint } from "sui-tunnel-ts/protocol/worldCanvasPvp";
 import { WorldCanvas } from "./WorldCanvas";
 import { FloatingToolbar, type ToolId } from "./FloatingToolbar";
 import {
@@ -15,7 +15,6 @@ import {
   type AgentMarker,
   type CanvasFocus,
 } from "../useWorldCanvasOnchain";
-import { GRACE_MS } from "../pvpProtocol";
 import { WC, ERASER_COLOR, PALETTE } from "./tokens";
 
 const CHUNK = 256;
@@ -110,24 +109,6 @@ function Board({ m }: { m: ReturnType<typeof usePvpWorldCanvas> }) {
   useEffect(() => {
     botColorHint.current = color;
   }, [color]);
-
-  // Reconnect overlay countdown: when the opponent drops mid-match, count the shared GRACE_MS down
-  // to zero so the player sees exactly how long until the canvas auto-closes as a draw. The same
-  // GRACE_MS drives the engine's settle deadline, so the on-screen number can't drift from it.
-  // Started when peerDropped flips true; cleared the instant the opponent returns.
-  const [graceLeft, setGraceLeft] = useState(0);
-  useEffect(() => {
-    if (!m.peerDropped) {
-      setGraceLeft(0);
-      return;
-    }
-    const deadline = Date.now() + GRACE_MS;
-    const tick = () =>
-      setGraceLeft(Math.max(0, Math.ceil((deadline - Date.now()) / 1000)));
-    tick();
-    const id = setInterval(tick, 500);
-    return () => clearInterval(id);
-  }, [m.peerDropped]);
 
   // Responsiveness keys off the CONTAINER width (the window is freely resizable), not the
   // viewport: a ResizeObserver flips `collapse` only when the width crosses the breakpoint,
@@ -314,19 +295,6 @@ function Board({ m }: { m: ReturnType<typeof usePvpWorldCanvas> }) {
           onClick={() => viewParticipant("opp")}
         />
       </div>
-
-      {/* Reconnect overlay: the opponent dropped mid-match. Blur the canvas behind a sketch card
-          with a live grace countdown. No "claim winnings" — World Canvas is free/draw, so a
-          no-show just closes the canvas as a refund. Hidden the instant the opponent returns. */}
-      {m.peerDropped && (
-        <div style={peerDropOverlayStyle}>
-          <div className="sketch-panel sketch-stroke" style={peerDropCardStyle}>
-            <div style={spinnerStyle} />
-            <div className="sketch-title">Opponent reconnecting…</div>
-            <p className="sketch-note">Closing the canvas in {graceLeft}s</p>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
@@ -388,31 +356,6 @@ const boardWrapStyle: CSSProperties = {
   position: "relative",
   overflow: "hidden",
   background: WC.bg,
-};
-/** Full-cover reconnect scrim — blurs the live canvas and sits above the control bar (zIndex 60). */
-const peerDropOverlayStyle: CSSProperties = {
-  position: "absolute",
-  top: 0,
-  left: 0,
-  right: 0,
-  bottom: 0,
-  zIndex: 80,
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  padding: 24,
-  backdropFilter: "blur(6px)",
-  WebkitBackdropFilter: "blur(6px)",
-  background: "color-mix(in srgb, var(--background) 55%, transparent)",
-};
-const peerDropCardStyle: CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  alignItems: "center",
-  gap: 12,
-  textAlign: "center",
-  maxWidth: 340,
-  padding: "24px 28px",
 };
 const controlBarStyle: CSSProperties = {
   position: "absolute",

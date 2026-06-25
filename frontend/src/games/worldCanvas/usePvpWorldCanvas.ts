@@ -24,17 +24,12 @@ import {
   WorldCanvasPvpProtocol,
   CHUNK_SIZE,
   MAX_BATCH_CELLS,
-  GRACE_MS,
   type PvpCanvasState,
   type PvpCell,
   type PvpCellMove,
   type PvpPaintMove,
-} from "./pvpProtocol";
+} from "sui-tunnel-ts/protocol/worldCanvasPvp";
 import { makeWorldCanvasPvpResumeAdapter } from "./pvpResumeAdapter";
-import {
-  raiseDisputeUnilateral,
-  forceCloseAfterTimeout,
-} from "@/onchain/tunnelTx";
 import { useTelemetry } from "@/telemetry/TelemetryProvider";
 
 /** A seat's queued paint == the co-signed batch move (a run of cells). */
@@ -42,15 +37,6 @@ export type PaintIntent = PvpPaintMove;
 
 /** Default when no human paint is pending: an empty run (a no-op co-sign tick). */
 const IDLE_INTENT: PaintIntent = { cells: [] };
-
-/**
- * On-chain dispute window (ms) the WC tunnel is opened with. The open path
- * (openSharedTunnelStaked → openAndFundSharedTunnel) passes no `timeoutMs`, so it inherits
- * tunnelTx's 24h default; `force_close` only finalizes a staked dispute after this elapses. The
- * disconnect settle schedules the force-close past it so the dispute resolves on its own. Keep in
- * lockstep with the open's default `timeoutMs`.
- */
-const CHALLENGE_WINDOW_MS = 86_400_000;
 
 function intentToMove(_role: Role, i: PaintIntent): PvpPaintMove {
   return i;
@@ -72,49 +58,12 @@ const usePvpMatch = createPvpMatchHook<
   game: "world-canvas",
   stepMs: 80,
   stake: 1n, // 1 MIST per seat — free/draw, never shifts (each human funds its own seat)
-  graceMs: GRACE_MS,
-  // A matched PvP player paints THEMSELVES from the start — don't auto-hand their seat to a bot.
-  // Auto is opt-in via the toggle (take a break / let the bot paint). Solo (vs Bot) still auto-runs.
-  initialAuto: false,
   makeProtocol: () => new WorldCanvasPvpProtocol(),
   deriveView: (s) => s.cells,
   makeResumeAdapter: makeWorldCanvasPvpResumeAdapter,
   idleIntent: IDLE_INTENT,
   intentToMove,
   readIntent,
-  // Free/draw disconnect settle (ADR-0010): when the reconnect grace lapses with the opponent
-  // still gone, the present seat (the stayer — the only seat whose grace timer fires) stakes the
-  // last co-signed checkpoint on-chain, then force-closes it after the dispute window. With
-  // penalty_amount = 0 and symmetric 1-MIST stakes, force_close refunds each seat its own stake —
-  // a DRAW, never a forfeit (winner: null). No `role === "A"` gate: onPeerDropped fires only on the
-  // stayer, so it is already the sole submitter; gating on role would strand the case where seat A
-  // dropped (seat B would raise but never finalize). Best-effort — a failed on-chain tx is logged,
-  // never thrown back into the engine.
-  onGraceSettle: ({
-    latest,
-    role,
-    tunnelId,
-    signExec,
-    peerReturned,
-    markSettled,
-  }) => {
-    if (!latest) return; // nothing co-signed yet → no checkpoint to stake; open-timeout is the floor
-    void raiseDisputeUnilateral({ signExec, tunnelId, update: latest, role })
-      .then(() => {
-        // Finalize after the on-chain dispute window so status moves settling → settled.
-        setTimeout(() => {
-          if (peerReturned()) return; // opponent returned during the window — leave the match live
-          void forceCloseAfterTimeout({ signExec, tunnelId })
-            .then(() => markSettled())
-            .catch((e) =>
-              console.warn("[world-canvas-pvp] force-close skipped:", e),
-            );
-        }, CHALLENGE_WINDOW_MS);
-      })
-      .catch((e) =>
-        console.warn("[world-canvas-pvp] raise-dispute skipped:", e),
-      );
-  },
 });
 
 export type { PvpStatus };
