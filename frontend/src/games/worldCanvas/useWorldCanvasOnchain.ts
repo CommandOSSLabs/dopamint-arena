@@ -96,7 +96,7 @@ import {
 } from "./designs";
 import { rasterizeTemplate, fitScale, TEMPLATES_BY_ID } from "./templates";
 import { mulberry32 } from "./geometry";
-import { WC } from "./ui/tokens";
+import { WC, ZOOM } from "./ui/tokens";
 
 export type { AgentModeId } from "./designs";
 
@@ -147,6 +147,10 @@ export function clampMovesPerGame(n: number): number {
 }
 /** Gap (cells) between adjacent agent regions so their art never touches. */
 const REGION_GAP = 14;
+/** Auto-follow cadence (ms): while Auto is on, how often the spectator camera re-centers on
+ *  seat A's bot. Lazy enough to read as a smooth trailing follow (the canvas eases each step),
+ *  not a per-frame jerk. */
+const AUTO_FOLLOW_MS = 1_000;
 /** World slot size (cells) — sized to the LARGEST mode footprint so any mode fits a
  *  slot on the shared spiral lattice and regions never overlap regardless of mode. */
 const SLOT_W = MAX_FOOTPRINT_W + REGION_GAP;
@@ -168,7 +172,7 @@ const AGENT_TEMPLATE_H = MAX_FOOTPRINT_H - 8;
  *  seat B light purple) so each seat draws ONE distinct continuous line. */
 const FREESTYLE_COLOR_A = 13;
 const FREESTYLE_COLOR_B = 15;
-/** Per-step chance a freestyle walk turns (mirrors pvpProtocol.randomMove's 0.35). */
+/** Per-step chance a freestyle walk turns (mirrors worldCanvasPvp.randomMove's 0.35). */
 const FREESTYLE_TURN_CHANCE = 0.35;
 /** Nominal marker anchor height for a freestyle bot (it draws a line, not a footprint box). */
 const FREESTYLE_MARKER_H = 4;
@@ -305,11 +309,14 @@ export interface AgentMarker {
   h: number;
 }
 
-/** A camera-jump request: center this global-pixel point; `seq` bumps per request. */
+/** A camera-jump request: center this global-pixel point; `seq` bumps per request. An
+ *  optional `scale` overrides the camera zoom on arrival (px per cell); omit to keep the
+ *  view's default focus zoom. */
 export interface CanvasFocus {
   gx: number;
   gy: number;
   seq: number;
+  scale?: number;
 }
 
 /** On-chain progress surfaced to the canvas HUD (driven by the single tunnel). */
@@ -561,7 +568,7 @@ interface AgentState {
   centerGx: number;
   centerGy: number;
   /** Freestyle momentum walk: global-pixel cursor + heading + per-bot RNG + fixed line
-   *  color — a bounded random walk mirroring pvpProtocol.randomMove. Unused for templates. */
+   *  color — a bounded random walk mirroring worldCanvasPvp.randomMove. Unused for templates. */
   walkGx: number;
   walkGy: number;
   walkDx: number;
@@ -575,14 +582,14 @@ interface AgentState {
 }
 
 /** Clamp a per-step delta so the freestyle walk stays a tight, legible line (mirrors
- *  pvpProtocol's clampStep — no big jumps). */
+ *  worldCanvasPvp's clampStep — no big jumps). */
 function clampStep(n: number): number {
   return Math.max(-2, Math.min(2, n));
 }
 
 /** Advance a freestyle bot's momentum random walk by ONE cell and return it (origin-relative
  *  so the shared `moveAtGlobal(origin + cell)` paint path is unchanged). Mirrors the inner
- *  loop of pvpProtocol.randomMove: occasionally turn, clamp the heading, never stall — a
+ *  loop of worldCanvasPvp.randomMove: occasionally turn, clamp the heading, never stall — a
  *  coherent wandering line continued from the bot's last painted cell. */
 function stepFreestyle(st: AgentState): DesignCell {
   const rng = st.rng;
@@ -1423,7 +1430,7 @@ export function useWorldCanvasOnchain(
         };
       }
 
-      // Freestyle: a bounded momentum random walk (mirroring pvpProtocol.randomMove). Spawn
+      // Freestyle: a bounded momentum random walk (mirroring worldCanvasPvp.randomMove). Spawn
       // at a distinct slot center and walk forever from the last painted cell — no per-region
       // cap (maxCells = ∞ ⇒ it never relocates), so the line wanders freely across the canvas.
       const rng = mulberry32(REGION_SEED ^ Math.imul(i + 1, 2654435761));
@@ -1712,6 +1719,32 @@ export function useWorldCanvasOnchain(
       }
     }
   }, []);
+
+  // Auto-follow (spectator cam): while Auto is on, lazily ease the camera to seat A's bot so
+  // you WATCH it paint instead of staring at a blank wall while it draws off-screen — the
+  // arena's other games auto-frame their bots the same way. Re-centers on a timer (the bot's
+  // center moves as it walks) at the WIDEST zoom (ZOOM.min), so you see the whole picture
+  // forming rather than nose-to-the-pixels — never zooming in. Stops the instant you take the
+  // wheel (Auto off), handing camera + zoom control back to you.
+  useEffect(() => {
+    if (!auto) return;
+    const followSeatA = () => {
+      for (const st of agentStatesRef.current.values()) {
+        if (st.seat === "A") {
+          setFocus({
+            gx: st.centerGx,
+            gy: st.centerGy,
+            seq: ++focusSeqRef.current,
+            scale: ZOOM.min,
+          });
+          return;
+        }
+      }
+    };
+    followSeatA();
+    const id = setInterval(followSeatA, AUTO_FOLLOW_MS);
+    return () => clearInterval(id);
+  }, [auto]);
 
   // Public: cycle the camera through the live seat bots ("View" button).
   const viewNextAgent = useCallback(() => {

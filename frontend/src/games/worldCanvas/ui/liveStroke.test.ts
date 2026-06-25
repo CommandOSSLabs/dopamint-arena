@@ -18,7 +18,7 @@ import {
   WorldCanvasPvpProtocol,
   CHUNK_SIZE,
   type PvpCellMove,
-} from "../pvpProtocol";
+} from "sui-tunnel-ts/protocol/worldCanvasPvp";
 
 const ctx = { tunnelId: "0xworld", initialBalances: { a: 1n, b: 1n } };
 const hex = (bytes: Uint8Array): string => Buffer.from(bytes).toString("hex");
