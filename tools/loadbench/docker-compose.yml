@@ -54,4 +54,4 @@ services:
           memory: "${BENCH_MEMORY:-4g}"
     # Default when run with no args: offchain burst. The host `bench --container …`
     # path passes explicit inner args. --channel relay is unsupported in-container.
-    command: ["--channel", "local", "--anchor", "offchain", "--workers", "auto", "--duration", "10"]
+    command: ["--channel", "local", "--tunnel-anchor", "offchain", "--workers", "auto", "--duration", "10"]

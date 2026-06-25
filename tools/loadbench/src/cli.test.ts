@@ -17,7 +17,7 @@ test("defaults to a host swarm run, local+onchain, no infra env", () => {
   expect(planRun([], COMPOSE, PROJECT)).toEqual({
     kind: "host",
     mode: "swarm",
-    innerArgv: ["--channel", "local", "--anchor", "onchain"],
+    innerArgv: ["--channel", "local", "--tunnel-anchor", "onchain"],
     childEnv: {},
   });
 });
@@ -28,7 +28,7 @@ test("offchain local swarm forwards swarm tuning, no infra env", () => {
   ).toEqual({
     kind: "host",
     mode: "swarm",
-    innerArgv: ["--channel", "local", "--anchor", "offchain", "--workers", "auto", "--duration", "10"],
+    innerArgv: ["--channel", "local", "--tunnel-anchor", "offchain", "--workers", "auto", "--duration", "10"],
     childEnv: {},
   });
 });
@@ -42,7 +42,7 @@ test("infra flags become childEnv, not inner argv", () => {
   expect(plan).toEqual({
     kind: "host",
     mode: "swarm",
-    innerArgv: ["--channel", "local", "--anchor", "onchain"],
+    innerArgv: ["--channel", "local", "--tunnel-anchor", "onchain"],
     childEnv: {
       SUI_RPC_URL: "http://h:9000",
       PACKAGE_ID: "0xpkg",
@@ -66,7 +66,7 @@ test("--game selects latency mode and emits a positional game name", () => {
   ).toEqual({
     kind: "host",
     mode: "game",
-    innerArgv: ["blackjack", "--channel", "local", "--anchor", "offchain", "--matches", "5"],
+    innerArgv: ["blackjack", "--channel", "local", "--tunnel-anchor", "offchain", "--matches", "5"],
     childEnv: {},
   });
 });
@@ -77,7 +77,7 @@ test("--game all routes to the multi-core swarm with --all", () => {
     { kind: "host" }
   >;
   expect(plan.mode).toBe("swarm");
-  expect(plan.innerArgv).toEqual(["--all", "--channel", "local", "--anchor", "offchain"]);
+  expect(plan.innerArgv).toEqual(["--all", "--channel", "local", "--tunnel-anchor", "offchain"]);
 });
 
 test("--game all forwards fleet + duration tuning to the swarm", () => {
@@ -88,7 +88,7 @@ test("--game all forwards fleet + duration tuning to the swarm", () => {
   ) as Extract<ReturnType<typeof planRun>, { kind: "host" }>;
   expect(plan.mode).toBe("swarm");
   expect(plan.innerArgv).toEqual([
-    "--all", "--channel", "local", "--anchor", "offchain", "--workers", "8", "--duration", "10",
+    "--all", "--channel", "local", "--tunnel-anchor", "offchain", "--workers", "8", "--duration", "10",
   ]);
 });
 
@@ -106,12 +106,12 @@ test("--container re-execs in the env project with -p, resource env, -e infra, s
   );
   expect(plan).toEqual({
     kind: "container",
-    innerArgv: ["--channel", "local", "--anchor", "onchain", "--duration", "10"],
+    innerArgv: ["--channel", "local", "--tunnel-anchor", "onchain", "--duration", "10"],
     dockerArgs: [
       "compose", "-f", COMPOSE, "-p", PROJECT, "--profile", "bench", "run", "--rm",
       "-e", "SUI_RPC_URL=http://sui:9000",
       "loadbench",
-      "--channel", "local", "--anchor", "onchain", "--duration", "10",
+      "--channel", "local", "--tunnel-anchor", "onchain", "--duration", "10",
     ],
     composeEnv: { BENCH_CPUS: "8", BENCH_MEMORY: "8g" },
   });

@@ -40,7 +40,8 @@ export function parseSwarmArgs(argv: string[]): {
     const a = argv[i];
     if (a === "--channel") out.channel = argv[++i] as "local" | "relay";
     else if (a === "--offchain") out.anchor = "offchain";
-    else if (a === "--anchor") out.anchor = argv[++i] as "onchain" | "offchain";
+    else if (a === "--onchain") out.anchor = "onchain";
+    else if (a === "--tunnel-anchor") out.anchor = argv[++i] as "onchain" | "offchain";
     else if (a === "--workers") { i++; out.workers = argv[i] === "auto" ? "auto" : Number(argv[i]); }
     else if (a === "--concurrency") { i++; out.concurrency = argv[i] === "auto" ? "auto" : Number(argv[i]); }
     else if (a === "--matches") out.matches = Number(argv[++i]);

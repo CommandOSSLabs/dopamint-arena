@@ -50,9 +50,10 @@ function parse(argv: string[]): Parsed {
         p.channel = v; break;
       }
       case "--offchain": p.anchor = "offchain"; break;
-      case "--anchor": {
+      case "--onchain": p.anchor = "onchain"; break;
+      case "--tunnel-anchor": {
         const v = need(argv, ++i, a);
-        if (v !== "onchain" && v !== "offchain") throw new Error(`--anchor must be onchain or offchain (got ${v})`);
+        if (v !== "onchain" && v !== "offchain") throw new Error(`--tunnel-anchor must be onchain or offchain (got ${v})`);
         p.anchor = v; break;
       }
       case "--game": p.game = need(argv, ++i, a); break;
@@ -97,13 +98,13 @@ function buildInner(p: Parsed): { mode: RunMode; innerArgv: string[] } {
     push("--duration", p.duration);
     push("--mem-budget-mb", p.memBudgetMb);
     push("--per-match-kb", p.perMatchKb);
-    return { mode: "swarm", innerArgv: ["--all", "--channel", p.channel, "--anchor", p.anchor, ...tail] };
+    return { mode: "swarm", innerArgv: ["--all", "--channel", p.channel, "--tunnel-anchor", p.anchor, ...tail] };
   }
   // single game: latency mode (single-stream).
   if (p.game !== null) {
     push("--matches", p.matches);
     push("--concurrency", p.concurrency);
-    return { mode: "game", innerArgv: [p.game, "--channel", p.channel, "--anchor", p.anchor, ...tail] };
+    return { mode: "game", innerArgv: [p.game, "--channel", p.channel, "--tunnel-anchor", p.anchor, ...tail] };
   }
   push("--workers", p.workers);
   push("--concurrency", p.concurrency);
@@ -112,7 +113,7 @@ function buildInner(p: Parsed): { mode: RunMode; innerArgv: string[] } {
   push("--games", p.games);
   push("--mem-budget-mb", p.memBudgetMb);
   push("--per-match-kb", p.perMatchKb);
-  return { mode: "swarm", innerArgv: ["--channel", p.channel, "--anchor", p.anchor, ...tail] };
+  return { mode: "swarm", innerArgv: ["--channel", p.channel, "--tunnel-anchor", p.anchor, ...tail] };
 }
 
 export function planRun(argv: string[], composeFile: string, project: string): RunPlan {
@@ -186,12 +187,13 @@ CHANNEL — how moves travel
                      is given. Not supported with --container.
 
 ANCHOR — whether tunnel open/settle hit the Sui chain
-  --anchor onchain   (default) real on-chain open (create_and_fund) + cooperative
+  --tunnel-anchor onchain   (default) real on-chain open (create_and_fund) + cooperative
                      settle (close_cooperative_with_root) on a Sui localnet.
                      Requires a published package + funded settler -> run
                      'bun run stack' first, or pass --package-id/--settler-key.
-  --anchor offchain  no chain: synthetic tunnel id, pure move loop. No infra.
-  --offchain         shorthand for --anchor offchain.
+  --tunnel-anchor offchain  no chain: synthetic tunnel id, pure move loop. No infra.
+  --onchain          shorthand for --tunnel-anchor onchain.
+  --offchain         shorthand for --tunnel-anchor offchain.
 
 CAP — how much work per run
   --duration S       run for S seconds. Swarm: total run length. --game all:

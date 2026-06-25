@@ -27,8 +27,8 @@ labelled `[channel/anchor]` — never conflate them.
 |---|---|---|
 | `--channel local` | two transports paired in memory (engine/signing ceiling) | nothing |
 | `--channel relay` | headless WS client through the `tunnel-manager` relay | the relay |
-| `--anchor onchain` (default) | real `create_and_fund` open + `close_cooperative_with_root` settle on a Sui localnet | the stack |
-| `--offchain` / `--anchor offchain` | no chain at all; synthetic tunnel id, pure move loop | nothing (local) / relay only |
+| `--tunnel-anchor onchain` (default, or `--onchain`) | real `create_and_fund` open + `close_cooperative_with_root` settle on a Sui localnet | the stack |
+| `--offchain` / `--tunnel-anchor offchain` | no chain at all; synthetic tunnel id, pure move loop | nothing (local) / relay only |
 
 Moves stay off-chain in both anchor modes. `--offchain --channel local` needs no
 infra at all — start there.
@@ -36,7 +36,7 @@ infra at all — start there.
 ## Prerequisites
 
 - `bun`, `docker`, `cargo`, and the `sui` CLI on PATH.
-- For `--anchor onchain` or `--channel relay`: run `bun run stack` once (below).
+- For `--tunnel-anchor onchain` or `--channel relay`: run `bun run stack` once (below).
 - Apple Silicon: the compose file uses an arm64 Sui image; first relay run
   compiles `tunnel-manager` via `cargo` and can take a few minutes.
 
@@ -119,7 +119,7 @@ selected by flag:
   game, prints per-move p50/p99. Use `--game all` to run every playable game
   sequentially and emit an aggregated report (see below).
 
-**Defaults:** `--channel local`, `--anchor onchain`, swarm mode.
+**Defaults:** `--channel local`, `--tunnel-anchor onchain`, swarm mode.
 
 The bench performs **no infra orchestration**. Bring infra up yourself (`bun run
 stack` for a local one), then point `bench` at it via flags or `.env.local`.
@@ -170,7 +170,7 @@ bun run bench --game all --channel local --duration 30
 fleet, one game at a time**, then aggregates the data. Each game gets the full
 fleet (so it saturates the cores the way the swarm benchmark does), and the
 report shows each game's throughput and CPU utilization side by side. It reuses
-the swarm tuning flags — `--channel` / `--offchain` / `--anchor` / `--workers` /
+the swarm tuning flags — `--channel` / `--offchain` / `--tunnel-anchor` / `--workers` /
 `--concurrency`.
 
 **Each game is capped by time, not match count** — different games have very
@@ -227,7 +227,8 @@ All flags hang off `bun run bench`.
 | `--game <name\|all>` | — | yes | selects latency mode; one of the playable games or `all` |
 | `--games a,b,c` | yes | — | comma-separated game filter; defaults to all |
 | `--channel local\|relay` | yes | yes | default `local` |
-| `--offchain` / `--anchor offchain\|onchain` | yes | yes | default `onchain` |
+| `--tunnel-anchor onchain\|offchain` | yes | yes | tunnel open/settle bookends hit the chain or not; default `onchain` |
+| `--onchain` / `--offchain` | yes | yes | shorthand for `--tunnel-anchor onchain` / `offchain` |
 | `--rpc-url <url>` | yes | yes | onchain: Sui RPC endpoint |
 | `--package-id <id>` | yes | yes | onchain: published tunnel package id |
 | `--settler-key <key>` | yes | yes | onchain: settler private key |

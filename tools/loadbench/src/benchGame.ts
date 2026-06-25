@@ -21,7 +21,8 @@ export function parseBenchArgs(argv: string[]) {
     const a = argv[i];
     if (a === "--all") out.all = true;
     else if (a === "--offchain") out.anchor = "offchain";
-    else if (a === "--anchor") out.anchor = argv[++i] as "onchain" | "offchain";
+    else if (a === "--onchain") out.anchor = "onchain";
+    else if (a === "--tunnel-anchor") out.anchor = argv[++i] as "onchain" | "offchain";
     else if (a === "--channel") out.channel = argv[++i] as "local" | "relay";
     else if (a === "--matches") out.matches = Number(argv[++i]);
     else if (a === "--concurrency") out.concurrency = Number(argv[++i]);
