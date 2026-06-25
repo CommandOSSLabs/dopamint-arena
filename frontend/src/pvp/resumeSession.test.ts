@@ -24,6 +24,7 @@ const {
   readResumeRecord,
   clearResumeRecord,
   toWireCoSigned,
+  transcriptToWire,
 } = await import("./resume");
 const { DistributedTunnel } =
   await import("sui-tunnel-ts/core/distributedTunnel");
@@ -32,6 +33,7 @@ const { makeEndpoint, OffchainTunnel } =
 const { defaultBackend } = await import("sui-tunnel-ts/core/crypto-native");
 const { generateKeyPair } = await import("sui-tunnel-ts/core/crypto");
 const { toHex } = await import("sui-tunnel-ts/core/bytes");
+const { Transcript } = await import("sui-tunnel-ts/proof/transcript");
 
 // A fake MpClient whose channel captures the engine-transport bytes a rebuilt tunnel sends.
 function makeFakeMp() {
@@ -411,4 +413,78 @@ test("peer.dropped starts a grace timer; peer return cancels it; expiry offers s
     null,
     "grace expiry offered settle from the held checkpoint (null here)",
   );
+});
+
+test("rebuildTunnel surfaces a transcript whose root matches the persisted entries", () => {
+  const ka = generateKeyPair(),
+    kb = generateKeyPair();
+  const tid = `0x${"47".repeat(32)}`;
+  const sp = OffchainTunnel.selfPlay(
+    proto as never,
+    tid,
+    ka,
+    kb,
+    "0xA",
+    "0xB",
+    {
+      a: 1000n,
+      b: 1000n,
+    },
+  );
+  sp.step(0, "A");
+  const u1 = sp.latest!;
+  sp.step(0, "B");
+  const u2 = sp.latest!;
+  const ref = new Transcript(tid);
+  ref.append(u1);
+  ref.append(u2);
+
+  writeResumeRecord({
+    matchId: `match-${tid.slice(0, 6)}`,
+    tunnelId: tid,
+    role: "A",
+    game: "counter",
+    opponentWallet: "0xB",
+    opponentPubkeyHex: toHex(kb.publicKey),
+    selfEphemeralSecretHex: toHex(ka.secretKey),
+    latestCoSigned: toWireCoSigned(u2),
+    latestState: adapter.serializeState(sp.state),
+    transcript: transcriptToWire(ref),
+    updatedAt: Date.now(),
+  });
+  flushResumeWrites();
+
+  const mp = makeFakeMp();
+  const session = rebuildTunnel(
+    mp as never,
+    readResumeRecord(tid)!,
+    { proto, adapter } as never,
+    { selfWallet: "0xA" },
+  );
+  assert.ok(session.transcript, "transcript surfaced on the restored session");
+  assert.deepEqual(
+    Uint8Array.from(session.transcript!.root()),
+    Uint8Array.from(ref.root()),
+    "rebuilt transcript root matches the persisted one",
+  );
+  clearResumeRecord(tid);
+});
+
+test("rebuildTunnel returns a null transcript when the record has none", () => {
+  const tid = `0x${"48".repeat(32)}`;
+  const record = recordAtNonce2(
+    tid,
+    generateKeyPair() as never,
+    generateKeyPair() as never,
+  );
+  writeResumeRecord(record);
+  flushResumeWrites();
+  const session = rebuildTunnel(
+    makeFakeMp() as never,
+    readResumeRecord(tid)!,
+    { proto, adapter } as never,
+    { selfWallet: "0xA" },
+  );
+  assert.equal(session.transcript, null);
+  clearResumeRecord(tid);
 });

@@ -16,6 +16,7 @@ import type { Protocol } from "sui-tunnel-ts/protocol/Protocol";
 import type { MoveCodec } from "sui-tunnel-ts/core/distributedFrame";
 import { decideReconcile } from "sui-tunnel-ts/core/reconcile";
 import type { ReconcileAction, ResyncView } from "sui-tunnel-ts/core/reconcile";
+import type { Transcript } from "sui-tunnel-ts/proof/transcript";
 import type { MpClient, PvpChannel, PeerMessage } from "./mpClient";
 import {
   clearResumeRecord,
@@ -24,10 +25,11 @@ import {
   keypairFromSecretHex,
   listActiveTunnels,
   readResumeRecord,
+  rebuildTranscript,
   toWireCoSigned,
   writeResumeRecord,
 } from "./resume";
-import type { JsonValue, ResumeRecord } from "./resume";
+import type { JsonValue, ResumeRecord, WireTranscriptEntry } from "./resume";
 
 export type ReconcileOutcome = ReconcileAction;
 
@@ -41,6 +43,9 @@ export interface ResumeAdapter<State, Move> {
   deserializeMove?(j: JsonValue): Move;
   captureSecret?(): JsonValue;
   restoreSecret?(j: JsonValue): void;
+  /** Serialize the game's live transcript for persistence (atomic with the checkpoint). Games that
+   *  build a Transcript supply this; others omit it. Restore is via RestoredSession.transcript. */
+  captureTranscript?(): WireTranscriptEntry[];
   onReconciled(
     tunnel: DistributedTunnel<State, Move>,
     outcome: ReconcileOutcome,
@@ -95,6 +100,7 @@ function buildRecord<State, Move>(
         }
       : undefined,
     secret: adapter.captureSecret ? adapter.captureSecret() : undefined,
+    transcript: adapter.captureTranscript?.(),
     updatedAt: Date.now(),
   };
 }
@@ -142,6 +148,7 @@ export interface RebuildSpec<State, Move> {
 export interface RestoredSession<State, Move> {
   tunnel: DistributedTunnel<State, Move>;
   channel: PvpChannel;
+  transcript: Transcript | null;
 }
 
 /** Default locked balances: the checkpoint's current A/B split (sums to the same locked total). */
@@ -197,7 +204,10 @@ export function rebuildTunnel<State, Move>(
   mp.markActive(record.matchId);
   // Reconstruct-only: the caller owns onConfirmed + attachResume (live and cold paths
   // share one activateSession), so they can pass onGraceExpired and the per-move handler.
-  return { tunnel, channel };
+  const transcript = record.transcript
+    ? rebuildTranscript(record.tunnelId, record.transcript)
+    : null;
+  return { tunnel, channel, transcript };
 }
 
 /**
