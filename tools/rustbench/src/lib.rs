@@ -8,3 +8,4 @@ pub mod driver;
 pub mod engine;
 pub mod fleet;
 pub mod game;
+pub mod report;
