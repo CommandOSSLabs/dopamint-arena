@@ -32,13 +32,20 @@ const CANVAS_BACKGROUND = "#ffffff";
  * Every painted cell is one co-signed off-chain move on the ONE strictly-2-party tunnel;
  * free/draw, so the only score is who painted the most.
  */
-export function CanvasView({ onHome }: { onHome: () => void }) {
+export function CanvasView({
+  onHome,
+  movesPerGame,
+}: {
+  onHome: () => void;
+  movesPerGame: number;
+}) {
   const [tool, setTool] = useState<ToolId>("draw");
   const [color, setColor] = useState(13); // Sui blue
   const [brushSize, setBrushSize] = useState(1);
   // Feed the toolbar's color to the engine so the BOTS paint in your selected color too
-  // (you set the palette; they follow while they draw).
-  const engine = useWorldCanvasOnchain({ botColor: color });
+  // (you set the palette; they follow while they draw). `movesPerGame` is the lobby-chosen
+  // per-game settle cap (the canvas wipes + the tunnel settles at this many paints).
+  const engine = useWorldCanvasOnchain({ botColor: color, movesPerGame });
 
   // Shared arcade-cabinet seam (Desktop wraps every window in <GameCabinet>). The shell owns
   // hover → pause → "Play vs Bot" overlay; here we map the verbs onto the canvas engine.

@@ -3,6 +3,10 @@ import type { GameWindowProps } from "../types";
 import { SketchDefs } from "../sketch";
 import { CanvasView } from "./ui/CanvasView";
 import { PvpCanvasView } from "./ui/PvpCanvasView";
+import {
+  MOVES_PER_GAME,
+  MIN_MOVES_PER_GAME,
+} from "./useWorldCanvasOnchain";
 import "./ui/worldCanvas.sketch.css";
 
 type Mode = "menu" | "solo" | "pvp";
@@ -33,6 +37,11 @@ export function WorldCanvasWindow({ windowId }: GameWindowProps) {
   // one tap away via the floating "← Menu".
   const [mode, setMode] = useState<Mode>("solo");
 
+  // Per-game settle cap (PvE): how many co-signed paints before the canvas wipes + the tunnel
+  // settles and reopens. Chosen in the lobby (default = MOVES_PER_GAME = the max); applies to
+  // the SOLO bot battle. PvP is unchanged.
+  const [movesPerGame, setMovesPerGame] = useState(MOVES_PER_GAME);
+
   // Cabinet "Return to Home" (the shared GameCabinet Desktop wraps every window in): send the
   // solo canvas back to this lobby. Stable (setMode is stable) so the controller CanvasView
   // registers doesn't re-register every render.
@@ -45,11 +54,16 @@ export function WorldCanvasWindow({ windowId }: GameWindowProps) {
     >
       <SketchDefs />
       {mode === "menu" ? (
-        <Lobby onSolo={() => setMode("solo")} onPvp={() => setMode("pvp")} />
+        <Lobby
+          onSolo={() => setMode("solo")}
+          onPvp={() => setMode("pvp")}
+          movesPerGame={movesPerGame}
+          onMovesPerGame={setMovesPerGame}
+        />
       ) : (
         <>
           {mode === "solo" ? (
-            <CanvasView onHome={goHome} />
+            <CanvasView onHome={goHome} movesPerGame={movesPerGame} />
           ) : (
             <PvpCanvasView windowId={windowId} />
           )}
@@ -73,7 +87,17 @@ export function WorldCanvasWindow({ windowId }: GameWindowProps) {
  * other game menus (Quantum Poker's mode picker). The paper + ink come from the
  * `.wc-sketch.sketch` root; the card and its two CTAs are sketch primitives.
  */
-function Lobby({ onSolo, onPvp }: { onSolo: () => void; onPvp: () => void }) {
+function Lobby({
+  onSolo,
+  onPvp,
+  movesPerGame,
+  onMovesPerGame,
+}: {
+  onSolo: () => void;
+  onPvp: () => void;
+  movesPerGame: number;
+  onMovesPerGame: (n: number) => void;
+}) {
   return (
     <div className="sketch-welcome">
       <div className="sketch-welcome__card sketch-panel sketch-stroke">
@@ -81,6 +105,25 @@ function Lobby({ onSolo, onPvp }: { onSolo: () => void; onPvp: () => void }) {
           <span className="sketch-eyebrow">Infinite ink wall</span>
           <span className="sketch-title">The World is Your Canvas</span>
         </div>
+
+        {/* Per-game settle cap (PvE): the canvas wipes + the tunnel settles every N co-signed
+            paints. Drag to set N; the max is the default. PvP is unaffected. */}
+        <label style={configRowStyle}>
+          <span className="sketch-eyebrow">
+            Paints / game · {movesPerGame.toLocaleString("en-US")}
+          </span>
+          <input
+            type="range"
+            min={MIN_MOVES_PER_GAME}
+            max={MOVES_PER_GAME}
+            step={1000}
+            value={movesPerGame}
+            onChange={(e) => onMovesPerGame(Number(e.target.value))}
+            style={{ width: "100%" }}
+            aria-label="Paints per game (settle cap)"
+          />
+        </label>
+
         <div className="sketch-welcome__actions">
           <button
             type="button"
@@ -97,6 +140,15 @@ function Lobby({ onSolo, onPvp }: { onSolo: () => void; onPvp: () => void }) {
     </div>
   );
 }
+
+/** Lobby config row — the per-game settle-cap slider + its live value. */
+const configRowStyle: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 6,
+  width: "100%",
+  margin: "4px 0 10px",
+};
 
 /** The floating "← Menu" overlay — only positioning here; the ink-stroke border, pastel
  *  fill and Gochi Hand text all come from the `.sketch-btn--ghost` skin. */

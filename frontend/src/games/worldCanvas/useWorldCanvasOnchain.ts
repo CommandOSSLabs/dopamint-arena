@@ -135,7 +135,16 @@ const BOT_ACTIVITY_THROTTLE_MS = 1500;
  *  tunnel reopens, and the game counter bumps — so the wall runs as discrete games
  *  ("New game, clear canvas") rather than one endless stream. BOTH the on-chain and the
  *  demo tunnel bound at this cap; only the on-chain path also settles + anchors a root. */
-const MOVES_PER_GAME = 50_000;
+/** Default + hard MAX co-signed-move cap per game (the lobby slider tops out here). */
+export const MOVES_PER_GAME = 50_000;
+/** Floor for the configurable cap — below this a game would settle near-instantly and
+ *  re-open in a storm, so the lobby slider bottoms out here (not 0). */
+export const MIN_MOVES_PER_GAME = 1_000;
+/** Clamp a requested per-game cap into the allowed range. */
+export function clampMovesPerGame(n: number): number {
+  if (!Number.isFinite(n)) return MOVES_PER_GAME;
+  return Math.max(MIN_MOVES_PER_GAME, Math.min(MOVES_PER_GAME, Math.round(n)));
+}
 /** Gap (cells) between adjacent agent regions so their art never touches. */
 const REGION_GAP = 14;
 /** World slot size (cells) — sized to the LARGEST mode footprint so any mode fits a
@@ -623,7 +632,7 @@ const EMPTY_STATUS: WorldCanvasOnchainStatus = {
 };
 
 export function useWorldCanvasOnchain(
-  opts: { botColor?: number } = {},
+  opts: { botColor?: number; movesPerGame?: number } = {},
 ): UseWorldCanvasOnchain {
   // A stable "You" display identity (never co-signs — the funded seat-A keypair does
   // the signing; this address only TAGS the human's own cells for the "You" label).
@@ -635,6 +644,12 @@ export function useWorldCanvasOnchain(
   // the palette, they follow). A ref so the rAF paintFrame reads it without re-subscribing.
   const botColorRef = useRef(opts.botColor ?? 13);
   botColorRef.current = opts.botColor ?? 13;
+  // Per-game co-signed-move cap (the canvas wipes + the tunnel settles at this many paints).
+  // User-configurable in the lobby; clamped to [MIN_MOVES_PER_GAME, MOVES_PER_GAME], default
+  // MOVES_PER_GAME. A ref so the live cap-check reads the latest without re-subscribing.
+  const movesPerGame = clampMovesPerGame(opts.movesPerGame ?? MOVES_PER_GAME);
+  const movesPerGameRef = useRef(movesPerGame);
+  movesPerGameRef.current = movesPerGame;
   // One protocol instance shared by the tunnel (and its reopens).
   const proto = useMemo(
     () =>
@@ -931,7 +946,7 @@ export function useWorldCanvasOnchain(
         // settle is gated inside checkpointRun, so demo bounds without touching the chain.
         if (
           !run.checkpointing &&
-          run.moveCount - run.lastCheckpoint >= MOVES_PER_GAME
+          run.moveCount - run.lastCheckpoint >= movesPerGameRef.current
         ) {
           checkpointRef.current?.(run);
         }
@@ -1787,7 +1802,7 @@ export function useWorldCanvasOnchain(
     revision,
     game,
     movesThisGame: movesThisGameRef.current,
-    movesPerGame: MOVES_PER_GAME,
+    movesPerGame: movesPerGameRef.current,
     auto,
     toggleAuto,
     setAuto,
