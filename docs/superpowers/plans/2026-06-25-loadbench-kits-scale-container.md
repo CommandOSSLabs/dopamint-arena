@@ -39,7 +39,7 @@ From `tools/loadbench/src/`, the frontend kit path is `../../../frontend/src/age
 
 ## Phase A — Kit-driven match engine
 
-### Task A1: Resolve the `sui-tunnel-ts` alias + kit-import gate
+### Task 1 (A1): Resolve the `sui-tunnel-ts` alias + kit-import gate
 
 **Files:**
 - Modify: `tools/loadbench/tsconfig.json`
@@ -108,7 +108,7 @@ git commit -m "feat(loadbench): resolve kit alias + import gate"
 
 ---
 
-### Task A2: Kit registry (`games.ts` rewrite)
+### Task 2 (A2): Kit registry (`games.ts` rewrite)
 
 **Files:**
 - Modify (rewrite): `tools/loadbench/src/games.ts`
@@ -199,7 +199,7 @@ git commit -m "feat(loadbench): kit registry for the 6 real games"
 
 ---
 
-### Task A3: Bot-driven `playMatch` (`match.ts`)
+### Task 3 (A3): Bot-driven `playMatch` (`match.ts`)
 
 **Files:**
 - Modify: `tools/loadbench/src/match.ts`
@@ -321,7 +321,7 @@ git commit -m "feat(loadbench): drive matches via game-kit bots"
 
 ---
 
-### Task A4: Wire `runMatch` + all-6 settlement + smoke
+### Task 4 (A4): Wire `runMatch` + all-6 settlement + smoke
 
 **Files:**
 - Modify: `tools/loadbench/src/runMatch.ts`
@@ -388,7 +388,7 @@ git commit -m "feat(loadbench): wire kit driver through runMatch + smoke"
 
 ## Phase B — Max-scale parallelism, metrics, container
 
-### Task B1: Resource monitor
+### Task 5 (B1): Resource monitor
 
 **Files:**
 - Create: `tools/loadbench/src/resourceMonitor.ts`
@@ -511,7 +511,7 @@ git commit -m "feat(loadbench): process-api resource monitor"
 
 ---
 
-### Task B2: Fleet arg parsing + auto resolver + slice math
+### Task 6 (B2): Fleet arg parsing + auto resolver + slice math
 
 **Files:**
 - Modify: `tools/loadbench/src/swarm.ts` (arg parsing + two pure exported helpers; `main()` rewrite is Task B3)
@@ -665,7 +665,7 @@ git commit -m "feat(loadbench): fleet arg parsing + auto resolver"
 
 ---
 
-### Task B3: Worker thread + `swarm` fleet `main()`
+### Task 7 (B3): Worker thread + `swarm` fleet `main()`
 
 **Files:**
 - Create: `tools/loadbench/src/worker.ts`
@@ -818,7 +818,7 @@ git commit -m "feat(loadbench): worker-thread fleet for swarm"
 
 ---
 
-### Task B4: `bench:game` resource report + env-driven RPC
+### Task 8 (B4): `bench:game` resource report + env-driven RPC
 
 **Files:**
 - Modify: `tools/loadbench/src/benchGame.ts`
@@ -874,7 +874,7 @@ git commit -m "feat(loadbench): resource report + env RPC for bench:game"
 
 ---
 
-### Task B5: Container — Dockerfile + compose service
+### Task 9 (B5): Container — Dockerfile + compose service
 
 **Files:**
 - Create: `tools/loadbench/Dockerfile`
@@ -964,7 +964,7 @@ git commit -m "feat(loadbench): containerized bench service"
 
 ---
 
-### Task B6: Update README
+### Task 10 (B6): Update README
 
 **Files:**
 - Modify: `tools/loadbench/README.md`
