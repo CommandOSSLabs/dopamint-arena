@@ -33,7 +33,10 @@ function inRings(px: number, py: number, rings: Vec2[][]): boolean {
 
 /** Rasterize one stroke band at `scale`: scale the polyline + nib, walk + stamp. */
 function rasterStroke(path: TemplateStrokePath, scale: number): DesignCell[] {
-  const pts: Vec2[] = path.points.map((p) => ({ x: p.x * scale, y: p.y * scale }));
+  const pts: Vec2[] = path.points.map((p) => ({
+    x: p.x * scale,
+    y: p.y * scale,
+  }));
   if (path.closed && pts.length > 1) pts.push({ ...pts[0] });
   const radius = Math.max(MIN_RADIUS, path.radius * scale);
   return rasterizeStroke(pts, radius, DAB_SPACING, path.color);
@@ -85,7 +88,9 @@ export function rasterizeTemplate(
   const raw: DesignCell[] = [];
   for (const path of tpl.paths) {
     const cells =
-      path.kind === "stroke" ? rasterStroke(path, scale) : rasterFill(path, scale);
+      path.kind === "stroke"
+        ? rasterStroke(path, scale)
+        : rasterFill(path, scale);
     for (const c of cells) raw.push(c);
   }
 

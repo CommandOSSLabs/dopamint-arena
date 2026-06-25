@@ -27,7 +27,11 @@ type Mode = "menu" | "solo" | "pvp";
  * leaving a mode unmounts its view and tears its tunnel down.
  */
 export function WorldCanvasWindow({ windowId }: GameWindowProps) {
-  const [mode, setMode] = useState<Mode>("menu");
+  // Open straight into the SOLO bot battle (it runs `auto=true`, so the two funded bots
+  // start co-painting immediately and keep going) — mirroring the arena's other games,
+  // which land on a live "watching bots" demo rather than a menu. The lobby (and PvP) is
+  // one tap away via the floating "← Menu".
+  const [mode, setMode] = useState<Mode>("solo");
 
   return (
     <div

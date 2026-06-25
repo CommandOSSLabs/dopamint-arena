@@ -568,7 +568,11 @@ function stepFreestyle(st: AgentState): DesignCell {
   if (st.walkDx === 0 && st.walkDy === 0) st.walkDx = 1;
   st.walkGx += st.walkDx;
   st.walkGy += st.walkDy;
-  return { dx: st.walkGx - st.originGx, dy: st.walkGy - st.originGy, color: st.color };
+  return {
+    dx: st.walkGx - st.originGx,
+    dy: st.walkGy - st.originGy,
+    color: st.color,
+  };
 }
 
 /** Copy a fresh placement onto a live bot (initial spawn, relocate, or mode-kind switch). */
@@ -609,7 +613,8 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
   const humanAddress = bots.x.address;
   // One protocol instance shared by the tunnel (and its reopens).
   const proto = useMemo(
-    () => new WorldCanvasProtocol({ chunkSize: CHUNK_SIZE, numColors: NUM_COLORS }),
+    () =>
+      new WorldCanvasProtocol({ chunkSize: CHUNK_SIZE, numColors: NUM_COLORS }),
     [],
   );
 
@@ -619,8 +624,10 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
   const [agents, setAgents] = useState<AgentMarker[]>([]);
   const [focus, setFocus] = useState<CanvasFocus | null>(null);
   const [agentSpeed, setAgentSpeedState] = useState<AgentSpeed>("x8");
-  const [agentMode, setAgentModeState] = useState<AgentModeId>(DEFAULT_AGENT_MODE);
-  const [agentDensity, setAgentDensityState] = useState<number>(DEFAULT_DENSITY);
+  const [agentMode, setAgentModeState] =
+    useState<AgentModeId>(DEFAULT_AGENT_MODE);
+  const [agentDensity, setAgentDensityState] =
+    useState<number>(DEFAULT_DENSITY);
   const [agentTemplate, setAgentTemplateState] = useState<string | null>(null);
 
   // The single tunnel (swapped out on each checkpoint reopen) and the two seats.
@@ -643,7 +650,9 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
     x: number;
     y: number;
   } | null>(null);
-  const humanStrokeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const humanStrokeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
   const humanStrokeFlushIdRef = useRef(0);
   // Per-bot MY-ACTIVITY summary (Auto mode): cells co-signed by each seat bot since its
   // last flush (keyed by painter address), one leading-edge throttle timer per painter
@@ -784,7 +793,9 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
       try {
         const label = paintersRef.current.get(painter)?.label ?? "Bot";
         report.pushLocalTxn({
-          id: feedRowId(`bot-stroke:${painter}:${botActivityFlushIdRef.current++}`),
+          id: feedRowId(
+            `bot-stroke:${painter}:${botActivityFlushIdRef.current++}`,
+          ),
           game: GAME,
           time: new Date().toLocaleTimeString("en-GB"),
           bot: label,
@@ -1056,7 +1067,10 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
 
       // Build the local co-signing tunnel with the final id. selfPlay holds BOTH seats'
       // keypairs, so each paint co-signs both distinct funded parties locally.
-      const tunnel = core.OffchainTunnel.selfPlay<WorldCanvasState, WorldCanvasMove>(
+      const tunnel = core.OffchainTunnel.selfPlay<
+        WorldCanvasState,
+        WorldCanvasMove
+      >(
         proto,
         run.tunnelId,
         identities.a.coreKey,
@@ -1090,7 +1104,9 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
         .then((s) => {
           run.session = s;
         })
-        .catch((e) => console.error("[world-canvas] registerSession failed:", e));
+        .catch((e) =>
+          console.error("[world-canvas] registerSession failed:", e),
+        );
 
       // Surface the open in the dashboard exactly like every other game: bump the tunnel
       // counters, mark both seats active, and push a MY-ACTIVITY row under "world-canvas".
@@ -1125,7 +1141,8 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
       run.ready = true;
       const buffered = run.buffer;
       run.buffer = [];
-      for (const { mv, by, painter } of buffered) coSignPaint(run, mv, by, painter);
+      for (const { mv, by, painter } of buffered)
+        coSignPaint(run, mv, by, painter);
 
       if (!reopen) {
         setStatus((s) => ({
@@ -1290,7 +1307,11 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
         const tplId = agentTemplateRef.current;
         const tpl = tplId ? TEMPLATES_BY_ID[tplId] : undefined;
         if (tpl) {
-          const scale = fitScale(tpl.aspect, AGENT_TEMPLATE_W, AGENT_TEMPLATE_H);
+          const scale = fitScale(
+            tpl.aspect,
+            AGENT_TEMPLATE_W,
+            AGENT_TEMPLATE_H,
+          );
           const rast = rasterizeTemplate(tpl, scale);
           const fw = Math.max(1, rast.width);
           const fh = Math.max(1, rast.height);
@@ -1438,7 +1459,11 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
             }
             st.painted += 1;
             submitPaint(
-              moveAtGlobal(st.originGx + cell.dx, st.originGy + cell.dy, cell.color),
+              moveAtGlobal(
+                st.originGx + cell.dx,
+                st.originGy + cell.dy,
+                cell.color,
+              ),
               st.seat,
               st.painter,
             );
@@ -1533,7 +1558,8 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
       const nextKind = mode === "artist" ? "template" : "freestyle";
       for (const st of agentStatesRef.current.values()) {
         st.mode = mode;
-        if (st.kind !== nextKind) applyPlacement(st, nextPlacement(mode, st.seat));
+        if (st.kind !== nextKind)
+          applyPlacement(st, nextPlacement(mode, st.seat));
       }
       syncAgentMarkers();
     },
@@ -1543,7 +1569,10 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
   // Public: set the global Density lever (1/2/3) — a per-tick batch multiplier read
   // live by both seat bots' next tick, so the TPS burst changes immediately.
   const setAgentDensity = useCallback((level: number) => {
-    const clamped = Math.max(1, Math.min(DENSITY_LEVELS.length, Math.round(level)));
+    const clamped = Math.max(
+      1,
+      Math.min(DENSITY_LEVELS.length, Math.round(level)),
+    );
     agentDensityRef.current = clamped;
     setAgentDensityState(clamped);
   }, []);

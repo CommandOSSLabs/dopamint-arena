@@ -139,7 +139,9 @@ export function FloatingToolbar({
                   width: 4 + n * 3,
                   height: 4 + n * 3,
                   borderRadius: "50%",
-                  background: on ? "var(--sketch-accent)" : "var(--sketch-ink-soft)",
+                  background: on
+                    ? "var(--sketch-accent)"
+                    : "var(--sketch-ink-soft)",
                 }}
               />
             </button>

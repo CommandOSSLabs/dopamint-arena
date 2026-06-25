@@ -10,7 +10,9 @@
     "preview": "pulumi preview",
     "up": "pulumi up -y",
     "destroy": "pulumi destroy -y",
-    "output": "pulumi stack output --json > output.json"
+    "output": "pulumi stack output --json > output.json",
+    "format": "prettier --write \"src/**/*.ts\"",
+    "format:check": "prettier --check \"src/**/*.ts\""
   },
   "dependencies": {
     "@pulumi/aws": "^7.29.0",
@@ -20,6 +22,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
+    "prettier": "^3.8.4",
     "tsx": "^4.19.0",
     "typescript": "^5.9.0"
   }

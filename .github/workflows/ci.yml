@@ -90,5 +90,6 @@ jobs:
       - name: Install SDK dependencies
         working-directory: sui-tunnel-ts
         run: pnpm install --frozen-lockfile
+      - run: pnpm format:check
       - run: pnpm build
       - run: pnpm test
