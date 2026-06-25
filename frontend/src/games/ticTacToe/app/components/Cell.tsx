@@ -12,9 +12,9 @@ export function Cell({
   const label = value === CELL_PLAYER ? "O" : value === CELL_SERVER ? "X" : "";
   const markClass =
     value === CELL_PLAYER
-      ? "mark-o text-5xl md:text-6xl"
+      ? "mark-o"
       : value === CELL_SERVER
-        ? "mark-x text-5xl md:text-6xl animate-[ping_0.15s_ease-out_1]"
+        ? "mark-x animate-[ping_0.15s_ease-out_1]"
         : "";
 
   return (
@@ -25,7 +25,12 @@ export function Cell({
                   ${playable ? "hover:bg-tertiary-container/15 cursor-pointer" : "cursor-default"}`}
     >
       {label && (
-        <span className={`${markClass} select-none font-bold`}>{label}</span>
+        <span
+          className={`${markClass} select-none font-bold`}
+          style={{ fontSize: "15cqw", lineHeight: 1 }}
+        >
+          {label}
+        </span>
       )}
     </button>
   );

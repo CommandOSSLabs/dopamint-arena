@@ -20,6 +20,8 @@ pub struct InMemoryControlStore {
     tunnels: RwLock<HashMap<String, TunnelStatus>>,
     active_tunnels: AtomicU64,
     settled_tunnels: AtomicU64,
+    // Running max of tps, milli-tps to stay an integer atomic (fetch_max is lock-free).
+    peak_tps_milli: AtomicU64,
     per_game_actions: RwLock<HashMap<String, u64>>,
     // Maintained at put_session time (replaces the old per-tick session scan in stats.rs).
     per_game_tunnels: RwLock<HashMap<String, u64>>,
@@ -75,6 +77,11 @@ impl ControlStore for InMemoryControlStore {
             .or_insert(0) += delta;
     }
 
+    async fn update_peak_tps(&self, tps: f64) {
+        self.peak_tps_milli
+            .fetch_max((tps * 1000.0) as u64, Ordering::Relaxed);
+    }
+
     async fn snapshot(&self) -> StatsSnapshot {
         let actions = self.per_game_actions.read().unwrap();
         let tunnels = self.per_game_tunnels.read().unwrap();
@@ -103,6 +110,7 @@ impl ControlStore for InMemoryControlStore {
         }
         StatsSnapshot {
             tps: 0.0, // filled by the broadcaster from its per-tick diff
+            peak_tps: self.peak_tps_milli.load(Ordering::Relaxed) as f64 / 1000.0,
             total_actions,
             active_tunnels: self.active_tunnels.load(Ordering::Relaxed),
             settled_tunnels: self.settled_tunnels.load(Ordering::Relaxed),
@@ -432,6 +440,17 @@ mod tests {
         assert_eq!(snap.per_game["blackjack"].total_actions, 1200);
         assert_eq!(snap.per_game["payments"].total_actions, 250);
         assert_eq!(snap.total_actions, 1450);
+    }
+
+    // peak_tps is a maintained running max, not a recomputed aggregate: a later lower reading
+    // never lowers it. The broadcaster folds each tick's tps in via update_peak_tps.
+    #[tokio::test]
+    async fn peak_tps_is_a_running_max() {
+        let s = InMemoryControlStore::default();
+        s.update_peak_tps(10.0).await;
+        s.update_peak_tps(4.0).await;
+        s.update_peak_tps(25.0).await;
+        assert_eq!(s.snapshot().await.peak_tps, 25.0);
     }
 
     // Created→Active→Closed reduces correctly; replay (cursor restart) is idempotent.

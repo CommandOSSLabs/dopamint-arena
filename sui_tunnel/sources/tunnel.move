@@ -131,6 +131,9 @@ const EHtlcExpired: vector<u8> = b"The HTLC has expired.";
 const EHtlcNotExpired: vector<u8> = b"The HTLC has not expired yet.";
 
 #[error]
+const EOutstandingHtlc: vector<u8> = b"The tunnel still has outstanding HTLCs; claim or expire them before destroying.";
+
+#[error]
 const EInsufficientBalance: vector<u8> = b"Insufficient balance for this operation.";
 
 #[error]
@@ -223,6 +226,9 @@ public struct Tunnel<phantom T> has key, store {
     penalty_amount: u64,
     /// Address of the party who raised the current dispute (if any)
     dispute_raiser: Option<address>,
+    /// Highest state nonce that has already been disputed, plus one.
+    /// Enforces monotonic dispute progress so an un-advanced state cannot be re-disputed.
+    last_disputed_nonce: u64,
 }
 
 /// Data structure for settlement agreement
@@ -555,6 +561,7 @@ fun build_tunnel<T>(
         timeout_ms,
         penalty_amount,
         dispute_raiser: option::none(),
+        last_disputed_nonce: 0,
     };
 
     event::emit(TunnelCreated {
@@ -648,28 +655,24 @@ public fun create_and_share<T>(
 // Added downstream for the Dopamint arena demo; keep isolated in this banner so
 // an upstream re-sync produces an obvious conflict here rather than silent drift.
 
-/// Creates a tunnel and funds BOTH parties from the transaction sender, then shares it.
+/// Creates a tunnel, funds BOTH parties from the transaction sender, and shares it.
 ///
 /// Unlike `deposit_party_a`/`deposit_party_b`, this does NOT require the sender to be a
-/// party: the funder need not be party A or party B. This exists for the demo's self-play
-/// model, where a single user wallet opens and funds multiple 2-party tunnels in one PTB,
-/// and the parties are the user's own ephemeral keys that hold no funds. Both stakes are
-/// supplied as `Coin<T>` arguments (typically SplitCoins results), so the wallet can fund
-/// both sides of all its tunnels under a single signature.
+/// party. It exists for the demo's self-play model, where one wallet opens and funds
+/// multiple 2-party tunnels in a single PTB and the parties are the wallet's own ephemeral
+/// keys that hold no funds. Both stakes are passed as `Coin<T>` arguments (typically
+/// SplitCoins results) so the wallet can fund every side under one signature. The stakes
+/// settle to the party addresses, so a funder that does not control those keys cannot
+/// reclaim them; this is intended only for the self-play model. It is `public fun` (not
+/// `entry`) so it composes with PTB command results.
 ///
-/// This is `public fun` (not `entry`) so it composes with PTB command results.
+/// Funding reuses `deposit_internal`, so `TunnelCreated`, `TunnelDeposit` (twice), and
+/// `TunnelActivated` all fire in the SAME transaction, whereas the normal flow spreads them
+/// across separate txs; the backend indexer must handle this atomic create+activate. At four
+/// events per call, one PTB can batch at most ~256 `create_and_fund` calls before reaching
+/// the 1024-events-per-transaction limit.
 ///
-/// Funding reuses `deposit_internal` for both sides, so `TunnelDeposit` fires twice and
-/// `maybe_activate` emits `TunnelActivated` once both deposits land — the backend indexer
-/// relies on those events, so they must fire exactly as in the normal deposit path. Note this
-/// emits `TunnelCreated` and `TunnelActivated` in the SAME transaction/checkpoint (the normal
-/// flow spreads them across separate txs), so the indexer must handle atomic create+activate.
-///
-/// Returns the shared tunnel's `ID` so a PTB can chain it.
-/// `create_and_fund` is the same operation without the return value.
-///
-/// `share_owned` is suppressed for the same reason as `create_and_share`: `build_tunnel`
-/// returns a freshly-created object that never escapes this function before being shared.
+/// `share_owned` is suppressed for the same reason as `create_and_share`.
 #[allow(lint(share_owned))]
 public fun create_and_fund_with_id<T>(
     party_a_address: address,
@@ -707,6 +710,8 @@ public fun create_and_fund_with_id<T>(
     id_copy
 }
 
+/// Returnless variant of `create_and_fund_with_id` for PTB callers that do not need the
+/// tunnel ID threaded back.
 public fun create_and_fund<T>(
     party_a_address: address,
     party_a_pk: vector<u8>,
@@ -736,6 +741,7 @@ public fun create_and_fund<T>(
         ctx,
     );
 }
+
 // ===== end Dopamint extension =====
 
 /// Validates parameters for tunnel creation
@@ -891,13 +897,23 @@ public fun update_state<T>(
     // other length so a degenerate (e.g. empty) hash cannot be co-signed.
     assert!(new_state_hash.length() == 32, EInvalidHash);
     assert!(new_nonce > tunnel.state.nonce, EInvalidNonce);
+    // Reserve u64::MAX so every `state.nonce + 1` derived later (the settlement
+    // final_nonce and the dispute high-water mark) stays overflow-safe, even when
+    // callers use sparse or large/timestamp-derived nonces.
+    assert!(new_nonce < std::u64::max_value!(), EInvalidNonce);
 
     // Validate balances sum to total
     let total = tunnel.balance.value();
     assert_balance_split(party_a_balance, party_b_balance, total);
 
     let now = clock.timestamp_ms();
-    // Validate timestamp is reasonable
+    // Bound the signed timestamp to a sane window: not in the future, not before
+    // the tunnel existed. Ordering is enforced by the strictly-increasing nonce,
+    // NOT by wall-clock. We deliberately do not require the signed timestamp to
+    // exceed the stored state's timestamp: dispute paths overwrite state.timestamp
+    // with the on-chain clock, so a validly co-signed higher-nonce state carrying
+    // its earlier off-chain signing time would be wrongly rejected and the channel
+    // would freeze after a resolve.
     assert!(timestamp <= now, EInvalidParameter);
     assert!(timestamp >= tunnel.created_at, EInvalidParameter);
 
@@ -1208,6 +1224,12 @@ public fun raise_dispute<T>(
 
     // The submitted state must be newer than current
     assert!(nonce > tunnel.state.nonce, EStaleState);
+    // Reserve u64::MAX so the `last_disputed_nonce = nonce + 1` ratchet below and
+    // any later settlement `final_nonce` cannot overflow.
+    assert!(nonce < std::u64::max_value!(), EInvalidNonce);
+    // Monotonic dispute progress: the disputed nonce must advance past the last one
+    // disputed, so an un-advanced state cannot be re-disputed for griefing.
+    assert!(nonce >= tunnel.last_disputed_nonce, EStaleState);
 
     let now = clock.timestamp_ms();
 
@@ -1242,6 +1264,7 @@ public fun raise_dispute<T>(
     // Update to disputed state with stored balances
     tunnel.status = STATUS_DISPUTED;
     tunnel.dispute_raiser = option::some(sender);
+    tunnel.last_disputed_nonce = nonce + 1;
     tunnel.state =
         StateCommitment {
             state_hash,
@@ -1291,6 +1314,9 @@ public fun resolve_dispute<T>(
 
     // Must submit a newer state
     assert!(nonce > tunnel.state.nonce, EStaleState);
+    // Reserve u64::MAX so any later `state.nonce + 1` (settlement final_nonce)
+    // stays overflow-safe.
+    assert!(nonce < std::u64::max_value!(), EInvalidNonce);
 
     // Validate balances match current total
     let total = tunnel.balance.value();
@@ -1335,8 +1361,11 @@ public fun resolve_dispute<T>(
         EInvalidSignature,
     );
 
-    // Update state and return to active
+    // Update state and return to active. last_disputed_nonce is deliberately NOT
+    // reset here: keeping the high-water mark across resolve preserves monotonic
+    // dispute progress so the counterparty cannot re-grief an un-advanced state.
     tunnel.status = STATUS_ACTIVE;
+    tunnel.dispute_raiser = option::none();
     tunnel.state =
         StateCommitment {
             state_hash,
@@ -1367,6 +1396,9 @@ public fun resolve_dispute<T>(
 /// deposits) or verified via dual signatures in a prior `update_state` or
 /// `resolve_dispute` call.
 ///
+/// Dispute progress is monotonic: an un-advanced state cannot be re-disputed, so
+/// re-disputing after a resolution requires the on-chain nonce to have advanced.
+///
 /// ## Liveness requirement
 /// This (like `raise_dispute`) forces settlement on the CURRENT on-chain state
 /// after `timeout_ms`. If newer co-signed states exist off-chain, the
@@ -1382,6 +1414,11 @@ public fun raise_dispute_current_state<T>(tunnel: &mut Tunnel<T>, clock: &Clock,
 
     let sender = ctx.sender();
     assert!(sender == tunnel.party_a.address || sender == tunnel.party_b.address, ENotAuthorized);
+
+    // Monotonic dispute progress: an un-advanced state cannot be re-disputed, so a
+    // resolve that returns the tunnel to ACTIVE cannot be followed by a free re-dispute.
+    assert!(tunnel.state.nonce >= tunnel.last_disputed_nonce, EStaleState);
+    tunnel.last_disputed_nonce = tunnel.state.nonce + 1;
 
     let now = clock.timestamp_ms();
     tunnel.status = STATUS_DISPUTED;
@@ -1608,7 +1645,16 @@ public fun lock_htlc<T>(
         EInvalidSignature,
     );
 
-    lock_htlc_internal(tunnel, payment_hash, amount, sender, receiver, expiry_ms, is_party_a, now);
+    lock_htlc_internal(
+        tunnel,
+        payment_hash,
+        amount,
+        sender,
+        receiver,
+        expiry_ms,
+        is_party_a,
+        now,
+    );
 }
 
 /// Internal: record an HTLC lock once authorization has been established.
@@ -1771,7 +1817,7 @@ public fun expire_htlc_in_tunnel<T>(
 }
 
 /// Internal: get total HTLC-locked amount for a party
-fun get_party_htlc_locked<T>(tunnel: &Tunnel<T>, party: address): u64 {
+fun party_htlc_locked_internal<T>(tunnel: &Tunnel<T>, party: address): u64 {
     let key = HTLCPartyCounterKey { party };
     if (df::exists(&tunnel.id, key)) {
         let counter: &HTLCPartyCounter = df::borrow(&tunnel.id, key);
@@ -1817,6 +1863,9 @@ fun update_party_htlc_counter<T>(
 public fun set_referee<T>(tunnel: &mut Tunnel<T>, referee: address, ctx: &TxContext) {
     assert!(tunnel.version == CURRENT_VERSION, EInvalidVersion);
     assert!(tunnel.status == STATUS_CREATED, EInvalidState);
+    // No funds may be committed yet, so each party can verify the referee before
+    // depositing and neither can swap it once the counterparty has funded.
+    assert!(tunnel.party_a_deposit == 0 && tunnel.party_b_deposit == 0, EInvalidState);
 
     let sender = ctx.sender();
     assert!(sender == tunnel.party_a.address || sender == tunnel.party_b.address, ENotAuthorized);
@@ -2037,10 +2086,20 @@ public fun withdraw_timeout<T>(
 
 /// Destroy (tombstone) a closed tunnel with zero balance.
 /// Only a tunnel party can call this.
+///
+/// HTLC funds live in dedicated dynamic fields, not in `tunnel.balance`, and
+/// `claim_htlc_in_tunnel` / `expire_htlc_in_tunnel` refuse to run once the tunnel is
+/// `STATUS_DESTROYED`. Destroying with HTLCs still locked would therefore strand those
+/// funds permanently, so require both per-party locked totals to be zero first.
 public fun destroy_tunnel<T>(tunnel: &mut Tunnel<T>, clock: &Clock, ctx: &TxContext) {
     assert!(tunnel.version == CURRENT_VERSION, EInvalidVersion);
     assert!(tunnel.status == STATUS_CLOSED, EInvalidState);
     assert!(tunnel.balance.value() == 0, EInsufficientBalance);
+    assert!(
+        party_htlc_locked_internal(tunnel, tunnel.party_a.address) == 0 &&
+        party_htlc_locked_internal(tunnel, tunnel.party_b.address) == 0,
+        EOutstandingHtlc,
+    );
 
     let sender = ctx.sender();
     assert!(sender == tunnel.party_a.address || sender == tunnel.party_b.address, ENotAuthorized);
@@ -2362,9 +2421,14 @@ public fun current_version(): u64 { CURRENT_VERSION }
 /// Get the tunnel's version
 public fun version<T>(tunnel: &Tunnel<T>): u64 { tunnel.version }
 
+/// Returns whether the tunnel is at the current module version.
+public fun is_current_version<T>(tunnel: &Tunnel<T>): bool {
+    tunnel.version == CURRENT_VERSION
+}
+
 /// Assert that the tunnel is at the current version
 public fun assert_current_version<T>(tunnel: &Tunnel<T>) {
-    assert!(tunnel.version == CURRENT_VERSION, EInvalidVersion);
+    assert!(is_current_version(tunnel), EInvalidVersion);
 }
 
 /// Get the tunnel ID
@@ -2505,7 +2569,7 @@ public fun get_referee<T>(tunnel: &Tunnel<T>): address {
 
 /// Get the total HTLC-locked amount for a specific party
 public fun party_htlc_locked<T>(tunnel: &Tunnel<T>, party: address): u64 {
-    get_party_htlc_locked(tunnel, party)
+    party_htlc_locked_internal(tunnel, party)
 }
 
 /// Get the total number of active HTLCs for a specific party
@@ -2584,7 +2648,14 @@ public fun create_state_update_data_for_testing(
     party_a_balance: u64,
     party_b_balance: u64,
 ): StateUpdateData {
-    StateUpdateData { tunnel_id, state_hash, nonce, timestamp, party_a_balance, party_b_balance }
+    StateUpdateData {
+        tunnel_id,
+        state_hash,
+        nonce,
+        timestamp,
+        party_a_balance,
+        party_b_balance,
+    }
 }
 
 #[test_only]
@@ -2704,7 +2775,55 @@ public fun lock_htlc_no_sig_for_testing<T>(
     } else {
         abort ENotAuthorized
     };
-    lock_htlc_internal(tunnel, payment_hash, amount, sender, receiver, expiry_ms, is_party_a, now);
+    lock_htlc_internal(
+        tunnel,
+        payment_hash,
+        amount,
+        sender,
+        receiver,
+        expiry_ms,
+        is_party_a,
+        now,
+    );
+}
+
+#[test_only]
+/// Cooperatively close a tunnel without verifying party signatures, exercising the
+/// real on-chain settlement fund movement (balance split + `public_transfer` to the
+/// party addresses) so balance-invariant regressions are caught. Signature
+/// verification is covered independently by the signature and wire-format suites.
+public fun close_cooperative_no_sig_for_testing<T>(
+    tunnel: &mut Tunnel<T>,
+    party_a_balance: u64,
+    party_b_balance: u64,
+    clock: &Clock,
+    ctx: &mut TxContext,
+) {
+    assert!(tunnel.status == STATUS_ACTIVE || tunnel.status == STATUS_CREATED, ETunnelClosed);
+    let total = tunnel.balance.value();
+    assert_balance_split(party_a_balance, party_b_balance, total);
+
+    tunnel.status = STATUS_CLOSED;
+    tunnel.last_activity = clock.timestamp_ms();
+
+    let coin_a = coin::from_balance(tunnel.balance.split(party_a_balance), ctx);
+    let coin_b = coin::from_balance(tunnel.balance.split(party_b_balance), ctx);
+    transfer::public_transfer(coin_a, tunnel.party_a.address);
+    transfer::public_transfer(coin_b, tunnel.party_b.address);
+}
+
+#[test_only]
+/// Force a disputed tunnel back to ACTIVE without advancing its nonce, simulating the
+/// post-resolution state needed to exercise the monotonic-dispute guard.
+public fun reactivate_for_testing<T>(tunnel: &mut Tunnel<T>) {
+    tunnel.status = STATUS_ACTIVE;
+    tunnel.dispute_raiser = option::none();
+}
+
+#[test_only]
+/// Override the stored state timestamp to exercise the timestamp-monotonicity guard.
+public fun set_state_timestamp_for_testing<T>(tunnel: &mut Tunnel<T>, timestamp: u64) {
+    tunnel.state.timestamp = timestamp;
 }
 
 #[test_only]

@@ -3,8 +3,12 @@ module sui_tunnel::example_multi_hop_payment_tests;
 
 use std::unit_test::assert_eq;
 use sui::clock;
+use sui::coin::Coin;
+use sui::sui::SUI;
+use sui::test_scenario;
 use sui_tunnel::example_multi_hop_payment;
 use sui_tunnel::hop;
+use sui_tunnel::tunnel;
 
 #[test]
 fun status_constants() {
@@ -89,8 +93,22 @@ fun add_payment_hops() {
         3600000,
         &ctx,
     );
-    example_multi_hop_payment::add_payment_hop(&mut payment, b"tunnel_bc", @0xC, 80, 3480000, &ctx);
-    example_multi_hop_payment::add_payment_hop(&mut payment, b"tunnel_cd", @0xD, 60, 3360000, &ctx);
+    example_multi_hop_payment::add_payment_hop(
+        &mut payment,
+        b"tunnel_bc",
+        @0xC,
+        80,
+        3480000,
+        &ctx,
+    );
+    example_multi_hop_payment::add_payment_hop(
+        &mut payment,
+        b"tunnel_cd",
+        @0xD,
+        60,
+        3360000,
+        &ctx,
+    );
 
     assert_eq!(example_multi_hop_payment::payment_total_fees(&payment), 240);
     assert_eq!(hop::route_hop_count(example_multi_hop_payment::payment_route(&payment)), 3);
@@ -144,7 +162,7 @@ fun complete_payment_flow() {
     assert!(example_multi_hop_payment::validate_payment(&payment));
 
     // Setup HTLCs
-    example_multi_hop_payment::setup_htlcs(&mut payment, 3600000, &ctx);
+    example_multi_hop_payment::setup_htlcs(&mut payment, 3600000, &clock, &ctx);
     assert_eq!(example_multi_hop_payment::payment_status(&payment), 1);
     assert_eq!(example_multi_hop_payment::payment_htlc_count(&payment), 2);
 
@@ -168,10 +186,23 @@ fun calculate_total_needed() {
     let mut ctx = sui::tx_context::dummy();
     let clock = clock::create_for_testing(&mut ctx);
     let preimage = b"test";
-    let invoice = example_multi_hop_payment::create_invoice(&preimage, 10000, @0xB, 3600000, b"");
+    let invoice = example_multi_hop_payment::create_invoice(
+        &preimage,
+        10000,
+        @0xB,
+        3600000,
+        b"",
+    );
 
     let mut payment = example_multi_hop_payment::create_payment(&invoice, &clock, &mut ctx);
-    example_multi_hop_payment::add_payment_hop(&mut payment, b"tunnel", @0xB, 500, 3600000, &ctx);
+    example_multi_hop_payment::add_payment_hop(
+        &mut payment,
+        b"tunnel",
+        @0xB,
+        500,
+        3600000,
+        &ctx,
+    );
 
     assert_eq!(example_multi_hop_payment::calculate_total_needed(&payment), 10500);
 
@@ -185,18 +216,276 @@ fun payment_with_wrong_preimage() {
     let clock = clock::create_for_testing(&mut ctx);
     let preimage = b"correct_preimage";
     // Receiver = @0x0 to match dummy ctx sender for claim_payment auth
-    let invoice = example_multi_hop_payment::create_invoice(&preimage, 1000, @0x0, 3600000, b"");
+    let invoice = example_multi_hop_payment::create_invoice(
+        &preimage,
+        1000,
+        @0x0,
+        3600000,
+        b"",
+    );
 
     let mut payment = example_multi_hop_payment::create_payment(&invoice, &clock, &mut ctx);
-    example_multi_hop_payment::add_payment_hop(&mut payment, b"tunnel", @0x0, 100, 3600000, &ctx);
+    example_multi_hop_payment::add_payment_hop(
+        &mut payment,
+        b"tunnel",
+        @0x0,
+        100,
+        3600000,
+        &ctx,
+    );
 
-    example_multi_hop_payment::setup_htlcs(&mut payment, 3600000, &ctx);
+    example_multi_hop_payment::setup_htlcs(&mut payment, 3600000, &clock, &ctx);
 
     // Try claiming with wrong preimage
-    let claimed = example_multi_hop_payment::claim_payment(&mut payment, b"wrong_preimage", &ctx);
+    let claimed = example_multi_hop_payment::claim_payment(
+        &mut payment,
+        b"wrong_preimage",
+        &ctx,
+    );
     assert!(!claimed);
     assert_eq!(example_multi_hop_payment::payment_status(&payment), 1);
 
     example_multi_hop_payment::destroy_for_testing(payment);
     clock::destroy_for_testing(clock);
+}
+
+// ============================================
+// ON-CHAIN HTLC ROUTING (REAL FUND MOVEMENT)
+// ============================================
+
+const ALICE: address = @0xA11CE;
+const BOB: address = @0xB0B;
+const CAROL: address = @0xCA01;
+const TUNNEL_TIMEOUT_MS: u64 = 7200000;
+const PREIMAGE: vector<u8> = b"the_route_preimage";
+
+/// Builds a real two-hop route Alice -> Bob -> Carol over two funded tunnels and sets
+/// up the off-chain HTLC plan. Payment amount 1000, hop-0 fee 10 (so Alice locks 1010
+/// to Bob, Bob locks 1000 to Carol). Sender stays ALICE.
+fun setup_two_hop(
+    scenario: &mut test_scenario::Scenario,
+    clock: &clock::Clock,
+): (tunnel::Tunnel<SUI>, tunnel::Tunnel<SUI>, example_multi_hop_payment::MultiHopPayment) {
+    let tunnel_ab = tunnel::create_active_for_testing<SUI>(
+        ALICE,
+        BOB,
+        2000,
+        1000,
+        TUNNEL_TIMEOUT_MS,
+        0,
+        clock,
+        scenario.ctx(),
+    );
+    let tunnel_bc = tunnel::create_active_for_testing<SUI>(
+        BOB,
+        CAROL,
+        2000,
+        1000,
+        TUNNEL_TIMEOUT_MS,
+        0,
+        clock,
+        scenario.ctx(),
+    );
+
+    let preimage = PREIMAGE;
+    let invoice = example_multi_hop_payment::create_invoice(
+        &preimage,
+        1000,
+        CAROL,
+        3600000,
+        b"goods",
+    );
+    let mut payment = example_multi_hop_payment::create_payment(
+        &invoice,
+        clock,
+        scenario.ctx(),
+    );
+    example_multi_hop_payment::add_payment_hop(
+        &mut payment,
+        example_multi_hop_payment::tunnel_route_id(&tunnel_ab),
+        BOB,
+        10,
+        3600000,
+        scenario.ctx(),
+    );
+    example_multi_hop_payment::add_payment_hop(
+        &mut payment,
+        example_multi_hop_payment::tunnel_route_id(&tunnel_bc),
+        CAROL,
+        0,
+        3480000,
+        scenario.ctx(),
+    );
+    example_multi_hop_payment::setup_htlcs(&mut payment, 3600000, clock, scenario.ctx());
+
+    (tunnel_ab, tunnel_bc, payment)
+}
+
+#[test]
+fun single_preimage_moves_real_funds_across_hops() {
+    let mut scenario = test_scenario::begin(ALICE);
+    let mut clock = clock::create_for_testing(scenario.ctx());
+    clock.set_for_testing(1000);
+
+    let (mut tunnel_ab, mut tunnel_bc, payment) = setup_two_hop(&mut scenario, &clock);
+
+    // Forward: Alice locks 1010 to Bob, then Bob locks 1000 to Carol.
+    example_multi_hop_payment::lock_hop_htlc_no_sig_for_testing(
+        &payment,
+        &mut tunnel_ab,
+        0,
+        &clock,
+        scenario.ctx(),
+    );
+    scenario.next_tx(BOB);
+    example_multi_hop_payment::lock_hop_htlc_no_sig_for_testing(
+        &payment,
+        &mut tunnel_bc,
+        1,
+        &clock,
+        scenario.ctx(),
+    );
+
+    // Backward: Carol reveals the preimage to claim from Bob, then Bob claims from Alice.
+    scenario.next_tx(CAROL);
+    example_multi_hop_payment::claim_hop_htlc(
+        &payment,
+        &mut tunnel_bc,
+        1,
+        PREIMAGE,
+        &clock,
+        scenario.ctx(),
+    );
+    scenario.next_tx(BOB);
+    example_multi_hop_payment::claim_hop_htlc(
+        &payment,
+        &mut tunnel_ab,
+        0,
+        PREIMAGE,
+        &clock,
+        scenario.ctx(),
+    );
+
+    // Carol received the 1000 payment; Bob netted his 10 fee (received 1010, paid 1000).
+    scenario.next_tx(CAROL);
+    let to_carol = scenario.take_from_address<Coin<SUI>>(CAROL);
+    assert_eq!(to_carol.value(), 1000);
+    to_carol.burn_for_testing();
+
+    scenario.next_tx(BOB);
+    let to_bob = scenario.take_from_address<Coin<SUI>>(BOB);
+    assert_eq!(to_bob.value(), 1010);
+    to_bob.burn_for_testing();
+
+    tunnel::destroy_for_testing(tunnel_ab);
+    tunnel::destroy_for_testing(tunnel_bc);
+    example_multi_hop_payment::destroy_for_testing(payment);
+    clock.destroy_for_testing();
+    scenario.end();
+}
+
+#[test]
+fun expire_returns_locked_funds_to_locker() {
+    let mut scenario = test_scenario::begin(ALICE);
+    let mut clock = clock::create_for_testing(scenario.ctx());
+    clock.set_for_testing(1000);
+
+    let (mut tunnel_ab, tunnel_bc, payment) = setup_two_hop(&mut scenario, &clock);
+
+    // Alice locks hop 0 (1010) but the payment never completes.
+    example_multi_hop_payment::lock_hop_htlc_no_sig_for_testing(
+        &payment,
+        &mut tunnel_ab,
+        0,
+        &clock,
+        scenario.ctx(),
+    );
+
+    // Hop-0 expiry is absolute: lock-time clock (1000) + base timeout (3600000).
+    clock.set_for_testing(3601001);
+    example_multi_hop_payment::expire_hop_htlc(
+        &payment,
+        &mut tunnel_ab,
+        0,
+        &clock,
+        scenario.ctx(),
+    );
+
+    scenario.next_tx(ALICE);
+    let refunded = scenario.take_from_address<Coin<SUI>>(ALICE);
+    assert_eq!(refunded.value(), 1010);
+    refunded.burn_for_testing();
+
+    tunnel::destroy_for_testing(tunnel_ab);
+    tunnel::destroy_for_testing(tunnel_bc);
+    example_multi_hop_payment::destroy_for_testing(payment);
+    clock.destroy_for_testing();
+    scenario.end();
+}
+
+#[test]
+fun htlc_expiry_is_absolute_at_realistic_clock() {
+    let mut scenario = test_scenario::begin(ALICE);
+    let mut clock = clock::create_for_testing(scenario.ctx());
+
+    // A realistic on-chain timestamp. With relative expiries this would exceed
+    // the per-hop timeout and lock_htlc would abort EInvalidTimeout.
+    let now = 1_700_000_000_000;
+    clock.set_for_testing(now);
+
+    let (mut tunnel_ab, mut tunnel_bc, payment) = setup_two_hop(&mut scenario, &clock);
+
+    // Locking succeeds only because each stored expiry_ms is now + relative_timeout > now.
+    example_multi_hop_payment::lock_hop_htlc_no_sig_for_testing(
+        &payment,
+        &mut tunnel_ab,
+        0,
+        &clock,
+        scenario.ctx(),
+    );
+    scenario.next_tx(BOB);
+    example_multi_hop_payment::lock_hop_htlc_no_sig_for_testing(
+        &payment,
+        &mut tunnel_bc,
+        1,
+        &clock,
+        scenario.ctx(),
+    );
+
+    tunnel::destroy_for_testing(tunnel_ab);
+    tunnel::destroy_for_testing(tunnel_bc);
+    example_multi_hop_payment::destroy_for_testing(payment);
+    clock.destroy_for_testing();
+    scenario.end();
+}
+
+#[
+    test,
+    expected_failure(
+        abort_code = sui_tunnel::example_multi_hop_payment::EHopTunnelMismatch,
+        location = sui_tunnel::example_multi_hop_payment,
+    ),
+]
+fun lock_with_wrong_tunnel_aborts() {
+    let mut scenario = test_scenario::begin(ALICE);
+    let mut clock = clock::create_for_testing(scenario.ctx());
+    clock.set_for_testing(1000);
+
+    let (tunnel_ab, mut tunnel_bc, payment) = setup_two_hop(&mut scenario, &clock);
+
+    // Hop 0 is bound to tunnel_ab, but we pass tunnel_bc.
+    example_multi_hop_payment::lock_hop_htlc_no_sig_for_testing(
+        &payment,
+        &mut tunnel_bc,
+        0,
+        &clock,
+        scenario.ctx(),
+    );
+
+    // Unreachable; present so the test type-checks.
+    tunnel::destroy_for_testing(tunnel_ab);
+    tunnel::destroy_for_testing(tunnel_bc);
+    example_multi_hop_payment::destroy_for_testing(payment);
+    clock.destroy_for_testing();
+    scenario.end();
 }

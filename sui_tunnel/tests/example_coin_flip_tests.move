@@ -2,9 +2,18 @@
 module sui_tunnel::example_coin_flip_tests;
 
 use std::unit_test::assert_eq;
+use sui::clock;
+use sui::coin;
 use sui::sui::SUI;
+use sui::test_scenario;
 use sui_tunnel::example_coin_flip;
 use sui_tunnel::randomness;
+
+const PLAYER_1: address = @0xA11CE;
+const PLAYER_2: address = @0xB0B;
+const OUTSIDER: address = @0xCAFE;
+const BET: u64 = 1000;
+const START_TIME: u64 = 1000;
 
 #[test]
 fun status_constants() {
@@ -91,9 +100,7 @@ fun create_game_same_players() {
     let mut clock = sui::clock::create_for_testing(&mut ctx);
     clock.set_for_testing(1000);
 
-    let mut commitment = vector<u8>[];
-    let mut i = 0u64;
-    while (i < 32) { commitment.push_back(0); i = i + 1u64; };
+    let commitment = vector::tabulate!(32, |_| 0u8);
 
     let stake = sui::coin::mint_for_testing<SUI>(1000, &mut ctx);
     // sender is @0x0 (player_1), player_2 is also @0x0 -> invalid_parties
@@ -115,9 +122,7 @@ fun create_game_zero_bet() {
     let mut clock = sui::clock::create_for_testing(&mut ctx);
     clock.set_for_testing(1000);
 
-    let mut commitment = vector<u8>[];
-    let mut i = 0u64;
-    while (i < 32) { commitment.push_back(0); i = i + 1u64; };
+    let commitment = vector::tabulate!(32, |_| 0u8);
 
     let stake = sui::coin::mint_for_testing<SUI>(0, &mut ctx);
     // Zero bet -> invalid_deposit_amount
@@ -139,9 +144,7 @@ fun create_game_invalid_choice() {
     let mut clock = sui::clock::create_for_testing(&mut ctx);
     clock.set_for_testing(1000);
 
-    let mut commitment = vector<u8>[];
-    let mut i = 0u64;
-    while (i < 32) { commitment.push_back(0); i = i + 1u64; };
+    let commitment = vector::tabulate!(32, |_| 0u8);
 
     let stake = sui::coin::mint_for_testing<SUI>(1000, &mut ctx);
     // Choice 5 is neither HEADS (0) nor TAILS (1) -> invalid_parameter
@@ -163,9 +166,7 @@ fun wrong_player_joins_game() {
     let mut clock = sui::clock::create_for_testing(&mut ctx);
     clock.set_for_testing(1000);
 
-    let mut commitment = vector<u8>[];
-    let mut i = 0u64;
-    while (i < 32) { commitment.push_back(0); i = i + 1u64; };
+    let commitment = vector::tabulate!(32, |_| 0u8);
 
     let stake = sui::coin::mint_for_testing<SUI>(1000, &mut ctx);
     // Player 1 is @0x0, Player 2 is @0xBBBB
@@ -188,6 +189,150 @@ fun wrong_player_joins_game() {
 
     std::unit_test::destroy(game);
     clock.destroy_for_testing();
+}
+
+/// Builds a game in STATUS_AWAITING_REVEALS where neither player has revealed.
+fun joined_game(
+    scenario: &mut test_scenario::Scenario,
+    clock: &clock::Clock,
+): example_coin_flip::CoinFlipGame<SUI> {
+    let commitment_1 = example_coin_flip::create_player_commitment(
+        &b"p1_value",
+        &b"p1_salt_at_least_16_bytes",
+        PLAYER_1,
+    );
+    let stake_1 = coin::mint_for_testing<SUI>(BET, scenario.ctx());
+    let mut game = example_coin_flip::create_game_for_testing<SUI>(
+        PLAYER_2,
+        example_coin_flip::choice_heads(),
+        commitment_1,
+        stake_1,
+        clock,
+        scenario.ctx(),
+    );
+
+    scenario.next_tx(PLAYER_2);
+    let commitment_2 = example_coin_flip::create_player_commitment(
+        &b"p2_value",
+        &b"p2_salt_at_least_16_bytes",
+        PLAYER_2,
+    );
+    let stake_2 = coin::mint_for_testing<SUI>(BET, scenario.ctx());
+    example_coin_flip::join_game<SUI>(&mut game, commitment_2, stake_2, scenario.ctx());
+
+    game
+}
+
+/// Both-silent refund path: if neither player reveals before the timeout, either
+/// player can call cancel_no_reveal to refund each player their own stake so the
+/// pot is never trapped.
+#[test]
+fun cancel_no_reveal_refunds_both_stakes() {
+    let mut scenario = test_scenario::begin(PLAYER_1);
+    let mut clock = clock::create_for_testing(scenario.ctx());
+    clock.set_for_testing(START_TIME);
+
+    let mut game = joined_game(&mut scenario, &clock);
+    assert_eq!(example_coin_flip::game_status(&game), example_coin_flip::status_awaiting_reveals());
+
+    clock.set_for_testing(START_TIME + example_coin_flip::timeout_ms() + 1);
+
+    scenario.next_tx(PLAYER_1);
+    example_coin_flip::cancel_no_reveal<SUI>(&mut game, &clock, scenario.ctx());
+    assert_eq!(example_coin_flip::game_status(&game), example_coin_flip::status_cancelled());
+
+    scenario.next_tx(PLAYER_1);
+    let refund_1 = scenario.take_from_address<coin::Coin<SUI>>(PLAYER_1);
+    assert_eq!(refund_1.value(), BET);
+    refund_1.burn_for_testing();
+
+    let refund_2 = scenario.take_from_address<coin::Coin<SUI>>(PLAYER_2);
+    assert_eq!(refund_2.value(), BET);
+    refund_2.burn_for_testing();
+
+    std::unit_test::destroy(game);
+    clock.destroy_for_testing();
+    scenario.end();
+}
+
+/// Test: cancel_no_reveal cannot run before the timeout is reached.
+#[
+    test,
+    expected_failure(
+        abort_code = sui_tunnel::example_coin_flip::ETimeoutNotReached,
+        location = sui_tunnel::example_coin_flip,
+    ),
+]
+fun cancel_no_reveal_before_timeout() {
+    let mut scenario = test_scenario::begin(PLAYER_1);
+    let mut clock = clock::create_for_testing(scenario.ctx());
+    clock.set_for_testing(START_TIME);
+
+    let mut game = joined_game(&mut scenario, &clock);
+
+    scenario.next_tx(PLAYER_1);
+    example_coin_flip::cancel_no_reveal<SUI>(&mut game, &clock, scenario.ctx());
+
+    std::unit_test::destroy(game);
+    clock.destroy_for_testing();
+    scenario.end();
+}
+
+/// Test: an outsider cannot call cancel_no_reveal.
+#[
+    test,
+    expected_failure(
+        abort_code = sui_tunnel::example_coin_flip::ENotAuthorized,
+        location = sui_tunnel::example_coin_flip,
+    ),
+]
+fun cancel_no_reveal_outsider() {
+    let mut scenario = test_scenario::begin(PLAYER_1);
+    let mut clock = clock::create_for_testing(scenario.ctx());
+    clock.set_for_testing(START_TIME);
+
+    let mut game = joined_game(&mut scenario, &clock);
+    clock.set_for_testing(START_TIME + example_coin_flip::timeout_ms() + 1);
+
+    scenario.next_tx(OUTSIDER);
+    example_coin_flip::cancel_no_reveal<SUI>(&mut game, &clock, scenario.ctx());
+
+    std::unit_test::destroy(game);
+    clock.destroy_for_testing();
+    scenario.end();
+}
+
+/// Test: cancel_no_reveal is rejected once a player has revealed (use claim_no_reveal instead).
+#[
+    test,
+    expected_failure(
+        abort_code = sui_tunnel::example_coin_flip::EInvalidState,
+        location = sui_tunnel::example_coin_flip,
+    ),
+]
+fun cancel_no_reveal_after_one_revealed() {
+    let mut scenario = test_scenario::begin(PLAYER_1);
+    let mut clock = clock::create_for_testing(scenario.ctx());
+    clock.set_for_testing(START_TIME);
+
+    let mut game = joined_game(&mut scenario, &clock);
+
+    scenario.next_tx(PLAYER_1);
+    example_coin_flip::reveal_player_1<SUI>(
+        &mut game,
+        b"p1_value",
+        b"p1_salt_at_least_16_bytes",
+        scenario.ctx(),
+    );
+
+    clock.set_for_testing(START_TIME + example_coin_flip::timeout_ms() + 1);
+
+    scenario.next_tx(PLAYER_1);
+    example_coin_flip::cancel_no_reveal<SUI>(&mut game, &clock, scenario.ctx());
+
+    std::unit_test::destroy(game);
+    clock.destroy_for_testing();
+    scenario.end();
 }
 
 /// Test: Cannot create game with wrong commitment length (requires 32 bytes)

@@ -94,7 +94,7 @@ export interface WatchedTunnel {
 /** Executes a recovery action for a tunnel (wraps the txbuilders + a client). */
 export type RecoveryExecutor = (
   tunnelId: string,
-  action: Exclude<RecoveryAction, "none">,
+  action: Exclude<RecoveryAction, "none">
 ) => Promise<void>;
 
 export interface WatchtowerOptions {
@@ -116,7 +116,7 @@ export class Watchtower {
 
   constructor(
     private readonly execute: RecoveryExecutor,
-    private readonly opts: WatchtowerOptions = {},
+    private readonly opts: WatchtowerOptions = {}
   ) {}
 
   watch(t: WatchedTunnel): void {
@@ -156,7 +156,7 @@ export class Watchtower {
     if (this.timer) return;
     this.timer = setInterval(
       () => void this.tick(),
-      this.opts.intervalMs ?? 5000,
+      this.opts.intervalMs ?? 5000
     );
   }
 

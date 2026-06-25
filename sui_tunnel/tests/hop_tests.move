@@ -85,6 +85,48 @@ fun validate_route_bad_timeout() {
 }
 
 #[test]
+#[expected_failure(abort_code = sui_tunnel::hop::EInvalidHop, location = sui_tunnel::hop)]
+fun add_hop_rejects_fee_meeting_or_exceeding_amount() {
+    let mut route = hop::create_route(@0xA, @0xB, 10, 1234567890);
+
+    // A single hop cannot charge a fee that meets or exceeds the routed amount.
+    hop::add_hop(&mut route, b"tunnel_1", @0xB, 100, 3600000);
+}
+
+#[test]
+fun validate_route_small_fee_still_valid() {
+    let mut route = hop::create_route(@0xA, @0xB, 10, 1234567890);
+
+    hop::add_hop(&mut route, b"tunnel_1", @0xC, 1, 3600000);
+    hop::add_hop(&mut route, b"tunnel_2", @0xB, 1, 3480000);
+
+    let validation = hop::validate_route(&route);
+    assert!(hop::validation_valid(&validation));
+    assert_eq!(hop::validation_total_amount(&validation), 12);
+}
+
+#[test]
+fun validate_route_cumulative_fees_exceed_amount() {
+    let mut route = hop::create_route(@0xA, @0xB, 10, 1234567890);
+
+    // Each fee individually fits the route amount, but together they consume it.
+    hop::add_hop(&mut route, b"tunnel_1", @0xC, 6, 3600000);
+    hop::add_hop(&mut route, b"tunnel_2", @0xB, 6, 3480000);
+
+    let validation = hop::validate_route(&route);
+    assert!(!hop::validation_valid(&validation));
+    assert_eq!(hop::validation_error_code(&validation), 800);
+}
+
+#[test]
+#[expected_failure(abort_code = sui_tunnel::hop::EInvalidHop, location = sui_tunnel::hop)]
+fun add_hop_fee_exceeds_amount_aborts() {
+    let mut route = hop::create_route(@0xA, @0xB, 10, 1234567890);
+    // Fee of 100 cannot be charged on a 10-unit route.
+    hop::add_hop(&mut route, b"tunnel_1", @0xB, 100, 3600000);
+}
+
+#[test]
 fun create_htlc() {
     let preimage = b"secret_preimage";
     let payment_hash = hop::create_payment_hash(&preimage);
@@ -192,9 +234,9 @@ fun cascading_timeouts() {
     let timeouts = hop::create_cascading_timeouts(3600000, 3, 120000);
 
     assert_eq!(timeouts.length(), 3);
-    assert_eq!(*timeouts.borrow(0), 3600000);
-    assert_eq!(*timeouts.borrow(1), 3480000);
-    assert_eq!(*timeouts.borrow(2), 3360000);
+    assert_eq!(timeouts[0], 3600000);
+    assert_eq!(timeouts[1], 3480000);
+    assert_eq!(timeouts[2], 3360000);
 }
 
 #[test]
@@ -202,9 +244,9 @@ fun cascading_timeouts_boundary_ok() {
     // base == num_hops * delta exactly: the loop's final subtraction reaches 0 (no underflow).
     let timeouts = hop::create_cascading_timeouts(180000, 3, 60000);
     assert_eq!(timeouts.length(), 3);
-    assert_eq!(*timeouts.borrow(0), 180000);
-    assert_eq!(*timeouts.borrow(1), 120000);
-    assert_eq!(*timeouts.borrow(2), 60000);
+    assert_eq!(timeouts[0], 180000);
+    assert_eq!(timeouts[1], 120000);
+    assert_eq!(timeouts[2], 60000);
 }
 
 #[test]

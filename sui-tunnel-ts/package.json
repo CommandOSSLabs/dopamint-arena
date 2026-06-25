@@ -27,7 +27,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "npx tsc --project tsconfig.build.json",
+    "build": "npx tsc",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test --test-isolation=none \"src/**/*.test.ts\"",
     "init": "node dist/init.js",

@@ -62,137 +62,31 @@
   --font-size-label-sm: 12px;
 }
 
-.notebook-grid-bg,
-.notebook-paper {
-  --primary: #001e40 !important;
-  --secondary: #bc0000 !important;
-  --foreground: #1c1c18 !important;
-  --background: #fcf9f2 !important;
+.ttt-root.qp-sketch {
+  --qp-ink: #23221f;
+  --qp-ink-soft: rgba(35, 34, 31, 0.6);
+  --qp-paper: #fbf9f3;
+  --qp-felt: #2f9e44;
+  --qp-felt-fill: #eaf8ee;
+  --qp-red: #e03131;
+  --qp-blue: #1971c2;
+  --qp-violet: #6741d9;
+  --qp-amber: #e8920c;
+  --qp-amber-fill: #ffe9bd;
 
-  --color-primary: #001e40 !important;
-  --color-secondary: #bc0000 !important;
-  --color-foreground: #1c1c18 !important;
-  --color-background: #fcf9f2 !important;
-
-  /* Standard aliases with and without --color- prefix for Tailwind v4 compatibility */
-  --on-primary: #ffffff !important;
-  --color-on-primary: #ffffff !important;
-  --on-secondary: #ffffff !important;
-  --color-on-secondary: #ffffff !important;
-  --on-background: #1c1c18 !important;
-  --color-on-background: #1c1c18 !important;
-  --on-surface: #1c1c18 !important;
-  --color-on-surface: #1c1c18 !important;
-  --on-error: #ffffff !important;
-  --color-on-error: #ffffff !important;
-  --on-secondary-container: #fffbff !important;
-  --color-on-secondary-container: #fffbff !important;
-  --on-primary-container: #799dd6 !important;
-  --color-on-primary-container: #799dd6 !important;
-  --on-tertiary-container: #474000 !important;
-  --color-on-tertiary-container: #474000 !important;
-  --surface-container-lowest: #ffffff !important;
-  --color-surface-container-lowest: #ffffff !important;
-  --surface: #fcf9f2 !important;
-  --color-surface: #fcf9f2 !important;
-  --outline: #737780 !important;
-  --color-outline: #737780 !important;
-  --tertiary: #695f00 !important;
-  --color-tertiary: #695f00 !important;
-  --primary-container: #003366 !important;
-  --color-primary-container: #003366 !important;
-  --secondary-container: #e41f13 !important;
-  --color-secondary-container: #e41f13 !important;
-  --on-tertiary: #ffffff !important;
-  --color-on-tertiary: #ffffff !important;
-  --surface-tint: #3a5f94 !important;
-  --color-surface-tint: #3a5f94 !important;
-  --surface-container-low: #f6f3ec !important;
-  --color-surface-container-low: #f6f3ec !important;
-  --surface-container-high: #ebe8e1 !important;
-  --color-surface-container-high: #ebe8e1 !important;
-  --surface-container-highest: #e5e2db !important;
-  --color-surface-container-highest: #e5e2db !important;
-  --surface-container: #f0eee7 !important;
-  --color-surface-container: #f0eee7 !important;
-  --surface-variant: #e5e2db !important;
-  --color-surface-variant: #e5e2db !important;
-  --surface-bright: #fcf9f2 !important;
-  --color-surface-bright: #fcf9f2 !important;
-  --surface-dim: #dcdad3 !important;
-  --color-surface-dim: #dcdad3 !important;
+  container-type: size;
+  font-family: "Gochi Hand", "Comic Sans MS", cursive;
+  color: var(--qp-ink);
+  background-color: var(--qp-paper);
+  background-image: radial-gradient(
+    rgba(35, 34, 31, 0.09) 1.1px,
+    transparent 1.3px
+  );
+  background-size: 16px 16px;
+  background-position: -8px -8px;
 }
 
 /* Custom Notebook Styling */
-
-.notebook-paper {
-  background-color: #fcf9f2; /* surface */
-  background-image:
-    linear-gradient(
-      90deg,
-      transparent 79px,
-      #bc0000 79px,
-      #bc0000 81px,
-      transparent 81px
-    ),
-    linear-gradient(
-      90deg,
-      transparent 85px,
-      #bc0000 85px,
-      #bc0000 87px,
-      transparent 87px
-    ),
-    linear-gradient(#001e40 1px, transparent 1px);
-  background-size:
-    100% 100%,
-    100% 100%,
-    100% 24px;
-  background-position: 0 0;
-  position: relative;
-}
-
-.notebook-paper::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background-image: linear-gradient(#001e40 1px, transparent 1px);
-  background-size: 100% 24px;
-  opacity: 0.1;
-  pointer-events: none;
-  z-index: 0;
-}
-
-@media (max-width: 768px) {
-  .notebook-paper {
-    background-image:
-      linear-gradient(
-        90deg,
-        transparent 39px,
-        #bc0000 39px,
-        #bc0000 41px,
-        transparent 41px
-      ),
-      linear-gradient(
-        90deg,
-        transparent 45px,
-        #bc0000 45px,
-        #bc0000 47px,
-        transparent 47px
-      );
-  }
-}
-
-/* Main Grid paper background for gameplay/layout */
-.notebook-grid-bg {
-  background-color: #fcf9f2; /* surface */
-  background-image:
-    linear-gradient(to right, #e5e2db 1.5px, transparent 1.5px),
-    linear-gradient(to bottom, #e5e2db 1.5px, transparent 1.5px);
-  background-size: 24px 24px;
-}
 
 /* Hand-drawn Grid Lines */
 .hand-drawn-grid {
@@ -242,12 +136,12 @@
 
 /* Hand-drawn Xs and Os */
 .mark-x {
-  color: #001e40; /* primary */
+  color: var(--qp-red); /* sketch style */
   font-family: "Gochi Hand", cursive;
   line-height: 1;
 }
 .mark-o {
-  color: #bc0000; /* secondary */
+  color: var(--qp-ink); /* sketch style */
   font-family: "Gochi Hand", cursive;
   line-height: 1;
 }

@@ -37,14 +37,23 @@ function client() {
     const m = JSON.parse(data);
     if (m.type === "challenge") {
       const sig = toHex(await kp.sign(te.encode(m.nonce)));
-      ws.send(JSON.stringify({ type: "connect", wallet, pubkey, sig, nonce: m.nonce }));
+      ws.send(
+        JSON.stringify({
+          type: "connect",
+          wallet,
+          pubkey,
+          sig,
+          nonce: m.nonce,
+        }),
+      );
       ws.send(JSON.stringify({ type: "queue.join", game: GAME }));
     } else if (m.type === "match.found") {
       matchId = m.matchId;
       matched++;
       // Seat A primes the pipeline; both sides reply 1-for-1, keeping ~PIPELINE frames circulating.
       if (m.role === "A")
-        for (let k = 0; k < PIPELINE; k++) ws.send(JSON.stringify({ type: "relay", matchId, payload: "x" }));
+        for (let k = 0; k < PIPELINE; k++)
+          ws.send(JSON.stringify({ type: "relay", matchId, payload: "x" }));
     } else if (m.type === "relay") {
       frames++;
       ws.send(JSON.stringify({ type: "relay", matchId, payload: "x" }));

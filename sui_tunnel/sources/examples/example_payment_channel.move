@@ -362,8 +362,8 @@ public fun initiate_close<T>(
     let total = channel.balance_a.value() + channel.balance_b.value();
     assert!(balance_a + balance_b == total, EBalanceMismatch);
 
-    // Verify nonce is at least current
-    assert!(nonce >= channel.nonce, EInvalidNonce);
+    // Verify nonce strictly advances
+    assert!(nonce > channel.nonce, EInvalidNonce);
 
     // Create state bytes for verification
     let channel_id = channel.id.uid_to_bytes();
@@ -458,29 +458,16 @@ public fun finalize_close<T>(channel: &mut PaymentChannel<T>, clock: &Clock, ctx
         final_balance_b: channel.proposed_balance_b,
     });
 
-    // Split balances according to final state
-    let coin_a = coin::from_balance(
-        channel.balance_a.split(channel.proposed_balance_a),
-        ctx,
-    );
-
-    // Remaining balance_a (if any due to rounding) goes to balance_b
-    if (channel.balance_a.value() > 0) {
-        let remaining = channel.balance_a.withdraw_all();
-        channel.balance_b.join(remaining);
-    };
-
-    let coin_b = coin::from_balance(channel.balance_b.withdraw_all(), ctx);
-
-    // Transfer directly to parties to prevent interception
-    transfer::public_transfer(coin_a, channel.party_a);
-    transfer::public_transfer(coin_b, channel.party_b);
+    let final_a = channel.proposed_balance_a;
+    let final_b = channel.proposed_balance_b;
+    payout(channel, final_a, final_b, ctx);
 }
 
 /// Cooperative close - both parties agree, no dispute period needed.
 /// Transfers coins directly to the parties to prevent fund redirection in PTBs.
 public fun cooperative_close<T>(
     channel: &mut PaymentChannel<T>,
+    nonce: u64,
     balance_a: u64,
     balance_b: u64,
     sig_a: vector<u8>,
@@ -493,22 +480,18 @@ public fun cooperative_close<T>(
     let total = channel.balance_a.value() + channel.balance_b.value();
     assert!(balance_a + balance_b == total, EBalanceMismatch);
 
+    // The signed payment-state nonce must advance to prevent replaying a stale split
+    assert!(nonce > channel.nonce, EInvalidNonce);
+
     // Create close message
     let channel_id = channel.id.uid_to_bytes();
-    let mut close_msg = b"payment_channel::close";
-    close_msg.append(channel_id);
-
-    close_msg.append(signature::u64_to_be_bytes(balance_a));
-
-    close_msg.append(signature::u64_to_be_bytes(balance_b));
-
-    // Include nonce to prevent signature replay
-    close_msg.append(signature::u64_to_be_bytes(channel.nonce));
+    let close_msg = build_close_msg(&channel_id, nonce, balance_a, balance_b);
 
     // Verify signatures using stored public keys
     assert!(signature::verify_ed25519(&channel.pk_a, &close_msg, &sig_a), EInvalidSignature);
     assert!(signature::verify_ed25519(&channel.pk_b, &close_msg, &sig_b), EInvalidSignature);
 
+    channel.nonce = nonce;
     channel.status = CHANNEL_CLOSED;
 
     event::emit(ChannelClosed {
@@ -518,15 +501,38 @@ public fun cooperative_close<T>(
         final_balance_b: balance_b,
     });
 
-    // Split balances
-    let coin_a = coin::from_balance(channel.balance_a.split(balance_a), ctx);
+    payout(channel, balance_a, balance_b, ctx);
+}
 
-    if (channel.balance_a.value() > 0) {
-        let remaining = channel.balance_a.withdraw_all();
-        channel.balance_b.join(remaining);
-    };
+/// Builds the cooperative-close message bound to the payment-state nonce.
+fun build_close_msg(
+    channel_id: &vector<u8>,
+    nonce: u64,
+    balance_a: u64,
+    balance_b: u64,
+): vector<u8> {
+    let mut close_msg = b"payment_channel::close";
+    close_msg.append(*channel_id);
+    close_msg.append(signature::u64_to_be_bytes(balance_a));
+    close_msg.append(signature::u64_to_be_bytes(balance_b));
+    close_msg.append(signature::u64_to_be_bytes(nonce));
+    close_msg
+}
 
-    let coin_b = coin::from_balance(channel.balance_b.withdraw_all(), ctx);
+/// Merges both per-party pools, then pays each party its agreed amount so any
+/// net cross-party settlement is payable regardless of deposit direction.
+fun payout<T>(
+    channel: &mut PaymentChannel<T>,
+    balance_a: u64,
+    balance_b: u64,
+    ctx: &mut TxContext,
+) {
+    let mut combined = channel.balance_a.withdraw_all();
+    combined.join(channel.balance_b.withdraw_all());
+
+    let coin_a = coin::from_balance(combined.split(balance_a), ctx);
+    let coin_b = coin::from_balance(combined.split(balance_b), ctx);
+    combined.destroy_zero();
 
     // Transfer directly to parties to prevent interception
     transfer::public_transfer(coin_a, channel.party_a);
@@ -578,3 +584,91 @@ public fun signed_state(ss: &SignedState): &PaymentState { &ss.state }
 public fun signed_sig_a(ss: &SignedState): &vector<u8> { &ss.sig_a }
 
 public fun signed_sig_b(ss: &SignedState): &vector<u8> { &ss.sig_b }
+
+// ============================================
+// TEST HELPERS
+// ============================================
+
+#[test_only]
+public fun create_funded_for_testing<T>(
+    party_a: address,
+    party_b: address,
+    deposit_a: Coin<T>,
+    deposit_b: Coin<T>,
+    ctx: &mut TxContext,
+): PaymentChannel<T> {
+    let balance_a = deposit_a.into_balance();
+    let balance_b = deposit_b.into_balance();
+    let total = balance_a.value() + balance_b.value();
+    PaymentChannel {
+        id: object::new(ctx),
+        party_a,
+        party_b,
+        balance_a,
+        balance_b,
+        status: CHANNEL_OPEN,
+        nonce: 0,
+        state_hash: vector[],
+        closing_started_at: 0,
+        proposed_balance_a: total,
+        proposed_balance_b: 0,
+        pk_a: x"1111111111111111111111111111111111111111111111111111111111111111",
+        pk_b: x"2222222222222222222222222222222222222222222222222222222222222222",
+    }
+}
+
+#[test_only]
+public fun destroy_for_testing<T>(channel: PaymentChannel<T>) {
+    let PaymentChannel { id, balance_a, balance_b, .. } = channel;
+    id.delete();
+    balance_a.destroy_for_testing();
+    balance_b.destroy_for_testing();
+}
+
+/// Cooperative close skipping only the signature check; the nonce and
+/// balance-sum guards still apply so replay and split behavior stay testable.
+#[test_only]
+public fun cooperative_close_no_sig_for_testing<T>(
+    channel: &mut PaymentChannel<T>,
+    nonce: u64,
+    balance_a: u64,
+    balance_b: u64,
+    ctx: &mut TxContext,
+) {
+    assert!(channel.status == CHANNEL_OPEN, ETunnelClosed);
+    let total = channel.balance_a.value() + channel.balance_b.value();
+    assert!(balance_a + balance_b == total, EBalanceMismatch);
+    assert!(nonce > channel.nonce, EInvalidNonce);
+
+    channel.nonce = nonce;
+    channel.status = CHANNEL_CLOSED;
+
+    event::emit(ChannelClosed {
+        party_a: channel.party_a,
+        party_b: channel.party_b,
+        final_balance_a: balance_a,
+        final_balance_b: balance_b,
+    });
+
+    payout(channel, balance_a, balance_b, ctx);
+}
+
+#[test_only]
+public fun set_closing_for_testing<T>(
+    channel: &mut PaymentChannel<T>,
+    nonce: u64,
+    balance_a: u64,
+    balance_b: u64,
+    closing_started_at: u64,
+) {
+    channel.status = CHANNEL_CLOSING;
+    channel.nonce = nonce;
+    channel.proposed_balance_a = balance_a;
+    channel.proposed_balance_b = balance_b;
+    channel.closing_started_at = closing_started_at;
+}
+
+#[test_only]
+public fun set_status_open_for_testing<T>(channel: &mut PaymentChannel<T>) {
+    channel.status = CHANNEL_OPEN;
+}

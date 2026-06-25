@@ -513,6 +513,72 @@ fun compute_milestone_hash_deterministic() {
     clock::destroy_for_testing(clock);
 }
 
+#[
+    test,
+    expected_failure(
+        abort_code = sui_tunnel::example_freelance_milestone::EInvalidParameter,
+        location = sui_tunnel::example_freelance_milestone,
+    ),
+]
+fun compute_milestone_hash_inconsistent_total_earned() {
+    let mut ctx = sui::tx_context::dummy();
+    let clock = clock::create_for_testing(&mut ctx);
+    let pk_a = x"0000000000000000000000000000000000000000000000000000000000000001";
+    let pk_b = x"0000000000000000000000000000000000000000000000000000000000000002";
+    let budget = coin::mint_for_testing<SUI>(10000, &mut ctx);
+
+    let contract = example_freelance_milestone::create_contract<SUI>(
+        @0x0,
+        pk_a,
+        @0x2,
+        pk_b,
+        budget,
+        5,
+        2000,
+        b"project",
+        &clock,
+        &mut ctx,
+    );
+
+    // 3 milestones at 2000 each must equal 6000; 9999 is inconsistent and must abort.
+    let _ = example_freelance_milestone::compute_milestone_hash<SUI>(&contract, 3, 9999, 1);
+
+    example_freelance_milestone::destroy_contract_for_testing<SUI>(contract);
+    clock::destroy_for_testing(clock);
+}
+
+#[
+    test,
+    expected_failure(
+        abort_code = sui_tunnel::example_freelance_milestone::EOverflow,
+        location = sui_tunnel::example_freelance_milestone,
+    ),
+]
+fun create_contract_budget_overflow() {
+    let mut ctx = sui::tx_context::dummy();
+    let clock = clock::create_for_testing(&mut ctx);
+    let pk_a = x"0000000000000000000000000000000000000000000000000000000000000001";
+    let pk_b = x"0000000000000000000000000000000000000000000000000000000000000002";
+    let budget = coin::mint_for_testing<SUI>(10000, &mut ctx);
+
+    // total_milestones * amount_per_milestone overflows u64.
+    let contract = example_freelance_milestone::create_contract<SUI>(
+        @0x0,
+        pk_a,
+        @0x2,
+        pk_b,
+        budget,
+        2,
+        18446744073709551615,
+        b"project",
+        &clock,
+        &mut ctx,
+    );
+
+    example_freelance_milestone::destroy_contract_for_testing<SUI>(contract);
+    clock::destroy_for_testing(clock);
+}
+
 #[test]
 fun milestone_state_accessors() {
     let state = example_freelance_milestone::create_milestone_state_for_testing(
@@ -669,6 +735,44 @@ fun cannot_record_milestone_when_completed() {
         &clock,
     );
 
+    example_freelance_milestone::destroy_contract_for_testing<SUI>(contract);
+    clock::destroy_for_testing(clock);
+}
+
+#[test]
+fun reclaim_budget_before_join_refunds_client() {
+    let mut ctx = sui::tx_context::dummy();
+    let clock = clock::create_for_testing(&mut ctx);
+    let pk_a = x"0000000000000000000000000000000000000000000000000000000000000001";
+    let pk_b = x"0000000000000000000000000000000000000000000000000000000000000002";
+    let budget = coin::mint_for_testing<SUI>(10000, &mut ctx);
+
+    // Client is the dummy ctx sender (@0x0); freelancer never joins.
+    let mut contract = example_freelance_milestone::create_contract<SUI>(
+        @0x0,
+        pk_a,
+        @0x2,
+        pk_b,
+        budget,
+        5,
+        2000,
+        b"project",
+        &clock,
+        &mut ctx,
+    );
+
+    let refund = example_freelance_milestone::reclaim_budget_before_join<SUI>(
+        &mut contract,
+        &clock,
+        &mut ctx,
+    );
+    assert_eq!(refund.value(), 10000);
+    assert_eq!(
+        example_freelance_milestone::contract_status<SUI>(&contract),
+        example_freelance_milestone::contract_cancelled(),
+    );
+
+    refund.burn_for_testing();
     example_freelance_milestone::destroy_contract_for_testing<SUI>(contract);
     clock::destroy_for_testing(clock);
 }

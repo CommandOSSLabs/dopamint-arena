@@ -70,7 +70,7 @@ fun one_funder_opens_and_activates_five_tunnels() {
     let funder = @0xF;
     let party_as = vector[@0xA1, @0xA2, @0xA3, @0xA4, @0xA5];
     let party_bs = vector[@0xB1, @0xB2, @0xB3, @0xB4, @0xB5];
-    let n = 5;
+    let n = 5u64;
 
     let mut scenario = test_scenario::begin(funder);
     let mut clock = clock::create_for_testing(scenario.ctx());
@@ -78,15 +78,14 @@ fun one_funder_opens_and_activates_five_tunnels() {
 
     // All five opens land in the begin() transaction. Stakes scale with the index
     // so every tunnel's total is distinct and a == 4 * b holds for each.
-    let mut i = 0;
-    while (i < n) {
+    n.do!(|i| {
         let coin_a = coin::mint_for_testing<SUI>(1000 * (i + 1), scenario.ctx());
         let coin_b = coin::mint_for_testing<SUI>(250 * (i + 1), scenario.ctx());
         tunnel::create_and_fund<SUI>(
-            *party_as.borrow(i),
+            party_as[i],
             PK_A,
             signature::ed25519(),
-            *party_bs.borrow(i),
+            party_bs[i],
             PK_B,
             signature::ed25519(),
             coin_a,
@@ -96,8 +95,7 @@ fun one_funder_opens_and_activates_five_tunnels() {
             &clock,
             scenario.ctx(),
         );
-        i = i + 1;
-    };
+    });
 
     // effects.shared is exactly the five tunnels (minted coins are consumed in-tx;
     // the clock is owned, not shared). Each tunnel must emit Created + Deposit x2 +
@@ -109,9 +107,8 @@ fun one_funder_opens_and_activates_five_tunnels() {
 
     // Every tunnel is independently ACTIVE and holds exactly its own two stakes.
     let mut totals = vector[];
-    let mut j = 0;
-    while (j < n) {
-        let t = scenario.take_shared_by_id<Tunnel<SUI>>(*tunnel_ids.borrow(j));
+    n.do!(|j| {
+        let t = scenario.take_shared_by_id<Tunnel<SUI>>(tunnel_ids[j]);
         assert_eq!(tunnel::is_active(&t), true);
         let a = tunnel::party_a_deposit(&t);
         let b = tunnel::party_b_deposit(&t);
@@ -119,25 +116,21 @@ fun one_funder_opens_and_activates_five_tunnels() {
         assert_eq!(tunnel::total_balance(&t), a + b);
         totals.push_back(a + b);
         test_scenario::return_shared(t);
-        j = j + 1;
-    };
+    });
 
     // The five distinct totals each appear once: no stake landed in the wrong
     // tunnel and no tunnel was funded twice from a reused coin.
     let expected = vector[1250u64, 2500, 3750, 5000, 6250];
-    let mut k = 0;
-    while (k < n) {
-        assert_eq!(totals.contains(expected.borrow(k)), true);
-        k = k + 1;
-    };
+    n.do!(|k| assert_eq!(totals.contains(&expected[k]), true));
 
     clock.destroy_for_testing();
     scenario.end();
 }
 
 // ---- Negative paths: create_and_fund must be wired to the same validators as `create`. ----
-// Each pins one failure mode of the shared param/deposit checks. The trailing cleanup never
-// runs (the call aborts) but is required to type-check the function.
+// Each pins one failure mode of the shared param/deposit checks. These only need a context,
+// not a TestScenario (nothing shared is read back). The trailing clock teardown never runs
+// (the call aborts) but is required because `Clock` has no `drop`.
 
 // A zero timeout would let funds be trapped forever, so it is rejected up front.
 #[
@@ -148,12 +141,12 @@ fun one_funder_opens_and_activates_five_tunnels() {
     ),
 ]
 fun create_and_fund_rejects_zero_timeout() {
-    let mut scenario = test_scenario::begin(@0xF);
-    let mut clock = clock::create_for_testing(scenario.ctx());
+    let mut ctx = sui::tx_context::dummy();
+    let mut clock = clock::create_for_testing(&mut ctx);
     clock.set_for_testing(1000);
 
-    let coin_a = coin::mint_for_testing<SUI>(1000, scenario.ctx());
-    let coin_b = coin::mint_for_testing<SUI>(250, scenario.ctx());
+    let coin_a = coin::mint_for_testing<SUI>(1000, &mut ctx);
+    let coin_b = coin::mint_for_testing<SUI>(250, &mut ctx);
 
     tunnel::create_and_fund<SUI>(
         @0xA,
@@ -167,11 +160,10 @@ fun create_and_fund_rejects_zero_timeout() {
         0, // zero timeout
         0,
         &clock,
-        scenario.ctx(),
+        &mut ctx,
     );
 
     clock.destroy_for_testing();
-    scenario.end();
 }
 
 // Both parties sharing one address is meaningless for a two-party channel.
@@ -183,12 +175,12 @@ fun create_and_fund_rejects_zero_timeout() {
     ),
 ]
 fun create_and_fund_rejects_same_party() {
-    let mut scenario = test_scenario::begin(@0xF);
-    let mut clock = clock::create_for_testing(scenario.ctx());
+    let mut ctx = sui::tx_context::dummy();
+    let mut clock = clock::create_for_testing(&mut ctx);
     clock.set_for_testing(1000);
 
-    let coin_a = coin::mint_for_testing<SUI>(1000, scenario.ctx());
-    let coin_b = coin::mint_for_testing<SUI>(250, scenario.ctx());
+    let coin_a = coin::mint_for_testing<SUI>(1000, &mut ctx);
+    let coin_b = coin::mint_for_testing<SUI>(250, &mut ctx);
 
     tunnel::create_and_fund<SUI>(
         @0xA,
@@ -202,11 +194,10 @@ fun create_and_fund_rejects_same_party() {
         60000,
         0,
         &clock,
-        scenario.ctx(),
+        &mut ctx,
     );
 
     clock.destroy_for_testing();
-    scenario.end();
 }
 
 // A public key whose length does not match its scheme (ed25519 wants 32 bytes) is rejected.
@@ -218,12 +209,12 @@ fun create_and_fund_rejects_same_party() {
     ),
 ]
 fun create_and_fund_rejects_bad_pubkey_length() {
-    let mut scenario = test_scenario::begin(@0xF);
-    let mut clock = clock::create_for_testing(scenario.ctx());
+    let mut ctx = sui::tx_context::dummy();
+    let mut clock = clock::create_for_testing(&mut ctx);
     clock.set_for_testing(1000);
 
-    let coin_a = coin::mint_for_testing<SUI>(1000, scenario.ctx());
-    let coin_b = coin::mint_for_testing<SUI>(250, scenario.ctx());
+    let coin_a = coin::mint_for_testing<SUI>(1000, &mut ctx);
+    let coin_b = coin::mint_for_testing<SUI>(250, &mut ctx);
 
     tunnel::create_and_fund<SUI>(
         @0xA,
@@ -237,11 +228,10 @@ fun create_and_fund_rejects_bad_pubkey_length() {
         60000,
         0,
         &clock,
-        scenario.ctx(),
+        &mut ctx,
     );
 
     clock.destroy_for_testing();
-    scenario.end();
 }
 
 // A zero-value stake is below MIN_DEPOSIT, so the first deposit_internal aborts — the new
@@ -254,12 +244,12 @@ fun create_and_fund_rejects_bad_pubkey_length() {
     ),
 ]
 fun create_and_fund_rejects_zero_value_coin() {
-    let mut scenario = test_scenario::begin(@0xF);
-    let mut clock = clock::create_for_testing(scenario.ctx());
+    let mut ctx = sui::tx_context::dummy();
+    let mut clock = clock::create_for_testing(&mut ctx);
     clock.set_for_testing(1000);
 
-    let coin_a = coin::mint_for_testing<SUI>(0, scenario.ctx()); // below MIN_DEPOSIT
-    let coin_b = coin::mint_for_testing<SUI>(250, scenario.ctx());
+    let coin_a = coin::mint_for_testing<SUI>(0, &mut ctx); // below MIN_DEPOSIT
+    let coin_b = coin::mint_for_testing<SUI>(250, &mut ctx);
 
     tunnel::create_and_fund<SUI>(
         @0xA,
@@ -273,9 +263,8 @@ fun create_and_fund_rejects_zero_value_coin() {
         60000,
         0,
         &clock,
-        scenario.ctx(),
+        &mut ctx,
     );
 
     clock.destroy_for_testing();
-    scenario.end();
 }

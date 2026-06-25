@@ -86,12 +86,12 @@ export class ChatProtocol implements Protocol<ChatState, ChatMove> {
         Uint8Array.of(partyByte(by)),
         u64ToBeBytes(messageBytes.length),
         messageBytes,
-      ]),
+      ])
     );
     const transcriptDigest = rollingDigest(
       blake2b256,
       state.transcriptDigest,
-      delta,
+      delta
     );
 
     // Optional tip: shift value from sender to recipient (balances conserved).

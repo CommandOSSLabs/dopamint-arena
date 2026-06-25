@@ -26,7 +26,10 @@ test("?m sets concurrency (min 1)", () => {
 });
 
 test("?game restricts the agent rotation", () => {
-  assert.equal(parseAgentConfig("https://x/?agent&game=quantum-poker").game, "quantum-poker");
+  assert.equal(
+    parseAgentConfig("https://x/?agent&game=quantum-poker").game,
+    "quantum-poker",
+  );
 });
 
 test("rotation set uses canonical game kits for all bot-ready games", () => {

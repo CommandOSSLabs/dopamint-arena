@@ -12,7 +12,10 @@ import { newCounters, rateReport } from "sui-tunnel-ts/telemetry/metrics";
 import type { Counters } from "sui-tunnel-ts/telemetry/metrics";
 import type { TelemetrySnapshot, TxnRow } from "../panels/types";
 import { PLACEHOLDER_SNAPSHOT } from "../placeholders";
-import { useBackendStats, type BackendStatus } from "../backend/useBackendStats";
+import {
+  useBackendStats,
+  type BackendStatus,
+} from "../backend/useBackendStats";
 import type { StatsSnapshot } from "../backend/controlPlane";
 import { liveOnchainTxns, displayUpdatesPerSec } from "../backend/liveMerge";
 

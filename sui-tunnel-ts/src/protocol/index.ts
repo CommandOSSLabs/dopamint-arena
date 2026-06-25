@@ -11,6 +11,7 @@ export * from "./quantumPoker";
 export * from "./cross";
 export * from "./multiGameCross";
 export * from "./bombIt";
+export * from "./worldCanvas";
 export * from "./multiGameBombIt";
 export * from "./quantumPokerCodec";
 export * from "./quantumPokerPersona";

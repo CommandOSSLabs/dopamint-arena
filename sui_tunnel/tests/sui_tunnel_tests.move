@@ -35,9 +35,7 @@ fun signature_error_integration() {
     // This test verifies the modules work together correctly
 
     // Create a valid ED25519 public key (32 bytes)
-    let mut pk_32 = vector<u8>[];
-    let mut i = 0u64;
-    while (i < 32) { pk_32.push_back(0); i = i + 1; };
+    let pk_32 = vector::tabulate!(32, |_| 0u8);
 
     // Verify length validation works
     assert!(signature::is_valid_public_key_length(signature::ed25519(), &pk_32));
@@ -199,12 +197,7 @@ fun game_simulation() {
     let seed = randomness::from_bytes(b"game_session_seed");
 
     // Create a deck (0-51)
-    let mut deck = vector<u8>[];
-    let mut i = 0u8;
-    while (i < 52) {
-        deck.push_back(i);
-        i = i + 1;
-    };
+    let mut deck = vector::tabulate!(52, |i| i as u8);
 
     // Shuffle the deck
     let shuffled_seed = randomness::shuffle(&seed, &mut deck);
@@ -383,7 +376,7 @@ fun zk_verifier_scalar_conversion() {
     assert_eq!(scalar.length(), 32);
 
     // First byte should be least significant
-    assert_eq!(*scalar.borrow(0), (12345u64 & 0xFFu64) as u8);
+    assert_eq!(scalar[0], (12345u64 & 0xFFu64) as u8);
 
     // u256 to scalar
     let scalar256 = zk_verifier::u256_to_scalar(0xABCD);
@@ -410,7 +403,7 @@ fun zk_verifier_concat_scalars() {
     // First 32 bytes should match s1
     let mut i = 0;
     while (i < 32) {
-        assert_eq!(*combined.borrow(i), *s1.borrow(i));
+        assert_eq!(combined[i], s1[i]);
         i = i + 1;
     };
 }
@@ -756,15 +749,15 @@ fun hop_timeout_cascade() {
     let timeouts = hop::create_cascading_timeouts(base_timeout, 4, delta);
 
     assert_eq!(timeouts.length(), 4);
-    assert_eq!(*timeouts.borrow(0), 7200000); // First hop: 2 hours
-    assert_eq!(*timeouts.borrow(1), 7080000); // Second hop: 118 min
-    assert_eq!(*timeouts.borrow(2), 6960000); // Third hop: 116 min
-    assert_eq!(*timeouts.borrow(3), 6840000); // Fourth hop: 114 min
+    assert_eq!(timeouts[0], 7200000); // First hop: 2 hours
+    assert_eq!(timeouts[1], 7080000); // Second hop: 118 min
+    assert_eq!(timeouts[2], 6960000); // Third hop: 116 min
+    assert_eq!(timeouts[3], 6840000); // Fourth hop: 114 min
 
     // Each timeout is larger than the next (required for safety)
     let mut i = 1;
     while (i < 4) {
-        assert!(*timeouts.borrow(i - 1) > *timeouts.borrow(i));
+        assert!(timeouts[i - 1] > timeouts[i]);
         i = i + 1;
     };
 }
@@ -891,12 +884,8 @@ fun deposit_wrong_party() {
     let mut clock = sui::clock::create_for_testing(&mut ctx);
     clock.set_for_testing(1000);
 
-    let mut pk_a = vector<u8>[];
-    let mut i = 0u64;
-    while (i < 32) { pk_a.push_back(0); i = i + 1u64; };
-    let mut pk_b = vector<u8>[];
-    let mut j = 0u64;
-    while (j < 32) { pk_b.push_back(1); j = j + 1u64; };
+    let pk_a = vector::tabulate!(32, |_| 0u8);
+    let pk_b = vector::tabulate!(32, |_| 1u8);
 
     // sender is @0x0 which is party_a, not party_b
     let mut t = tunnel::create<sui::sui::SUI>(
@@ -933,12 +922,8 @@ fun force_close_not_disputed() {
     let mut clock = sui::clock::create_for_testing(&mut ctx);
     clock.set_for_testing(1000);
 
-    let mut pk_a = vector<u8>[];
-    let mut i = 0u64;
-    while (i < 32) { pk_a.push_back(0); i = i + 1u64; };
-    let mut pk_b = vector<u8>[];
-    let mut j = 0u64;
-    while (j < 32) { pk_b.push_back(1); j = j + 1u64; };
+    let pk_a = vector::tabulate!(32, |_| 0u8);
+    let pk_b = vector::tabulate!(32, |_| 1u8);
 
     let mut t = tunnel::create<sui::sui::SUI>(
         @0x0,
@@ -973,9 +958,7 @@ fun create_tunnel_same_parties() {
     let mut clock = sui::clock::create_for_testing(&mut ctx);
     clock.set_for_testing(1000);
 
-    let mut pk = vector<u8>[];
-    let mut i = 0u64;
-    while (i < 32) { pk.push_back(0); i = i + 1u64; };
+    let pk = vector::tabulate!(32, |_| 0u8);
 
     // Same address for both parties -> invalid_parties
     let t = tunnel::create<sui::sui::SUI>(
@@ -1008,12 +991,8 @@ fun update_state_wrong_status() {
     let mut clock = sui::clock::create_for_testing(&mut ctx);
     clock.set_for_testing(1000);
 
-    let mut pk_a = vector<u8>[];
-    let mut i = 0u64;
-    while (i < 32) { pk_a.push_back(0); i = i + 1u64; };
-    let mut pk_b = vector<u8>[];
-    let mut j = 0u64;
-    while (j < 32) { pk_b.push_back(1); j = j + 1u64; };
+    let pk_a = vector::tabulate!(32, |_| 0u8);
+    let pk_b = vector::tabulate!(32, |_| 1u8);
 
     // Tunnel is in CREATED status (not ACTIVE), update_state requires ACTIVE
     let mut t = tunnel::create<sui::sui::SUI>(
@@ -1048,12 +1027,8 @@ fun close_balance_mismatch() {
     let mut clock = sui::clock::create_for_testing(&mut ctx);
     clock.set_for_testing(1000);
 
-    let mut pk_a = vector<u8>[];
-    let mut i = 0u64;
-    while (i < 32) { pk_a.push_back(0); i = i + 1u64; };
-    let mut pk_b = vector<u8>[];
-    let mut j = 0u64;
-    while (j < 32) { pk_b.push_back(1); j = j + 1u64; };
+    let pk_a = vector::tabulate!(32, |_| 0u8);
+    let pk_b = vector::tabulate!(32, |_| 1u8);
 
     let mut t = tunnel::create<sui::sui::SUI>(
         @0x0,
@@ -1216,12 +1191,8 @@ fun resolve_dispute_not_disputed() {
     let mut clock = sui::clock::create_for_testing(&mut ctx);
     clock.set_for_testing(1000);
 
-    let mut pk_a = vector<u8>[];
-    let mut i = 0u64;
-    while (i < 32) { pk_a.push_back(0); i = i + 1u64; };
-    let mut pk_b = vector<u8>[];
-    let mut j = 0u64;
-    while (j < 32) { pk_b.push_back(1); j = j + 1u64; };
+    let pk_a = vector::tabulate!(32, |_| 0u8);
+    let pk_b = vector::tabulate!(32, |_| 1u8);
 
     let mut t = tunnel::create<sui::sui::SUI>(
         @0x0,
@@ -1256,9 +1227,7 @@ fun create_tunnel_invalid_sig_type() {
     let mut clock = sui::clock::create_for_testing(&mut ctx);
     clock.set_for_testing(1000);
 
-    let mut pk = vector<u8>[];
-    let mut i = 0u64;
-    while (i < 32) { pk.push_back(0); i = i + 1u64; };
+    let pk = vector::tabulate!(32, |_| 0u8);
 
     // Signature type 99 is not supported -> unsupported_signature_type
     let t = tunnel::create<sui::sui::SUI>(
@@ -1291,9 +1260,7 @@ fun create_tunnel_wrong_pk_length() {
     let mut clock = sui::clock::create_for_testing(&mut ctx);
     clock.set_for_testing(1000);
 
-    let mut pk_a = vector<u8>[];
-    let mut i = 0u64;
-    while (i < 32) { pk_a.push_back(0); i = i + 1u64; };
+    let pk_a = vector::tabulate!(32, |_| 0u8);
 
     // ED25519 requires 32-byte key, but we provide only 3 bytes -> invalid_public_key
     let short_pk = vector[1u8, 2, 3];
@@ -1450,12 +1417,8 @@ fun tunnel_version() {
     let mut clock = sui::clock::create_for_testing(&mut ctx);
     clock.set_for_testing(1000);
 
-    let mut pk_a = vector<u8>[];
-    let mut i = 0u64;
-    while (i < 32) { pk_a.push_back(0); i = i + 1u64; };
-    let mut pk_b = vector<u8>[];
-    let mut j = 0u64;
-    while (j < 32) { pk_b.push_back(1); j = j + 1u64; };
+    let pk_a = vector::tabulate!(32, |_| 0u8);
+    let pk_b = vector::tabulate!(32, |_| 1u8);
 
     let t = tunnel::create<sui::sui::SUI>(
         @0x0,
@@ -1485,12 +1448,8 @@ fun deposit_unified_party_a() {
     let mut clock = sui::clock::create_for_testing(&mut ctx);
     clock.set_for_testing(1000);
 
-    let mut pk_a = vector<u8>[];
-    let mut i = 0u64;
-    while (i < 32) { pk_a.push_back(0); i = i + 1u64; };
-    let mut pk_b = vector<u8>[];
-    let mut j = 0u64;
-    while (j < 32) { pk_b.push_back(1); j = j + 1u64; };
+    let pk_a = vector::tabulate!(32, |_| 0u8);
+    let pk_b = vector::tabulate!(32, |_| 1u8);
 
     let mut t = tunnel::create<sui::sui::SUI>(
         @0x0,
@@ -1528,12 +1487,8 @@ fun deposit_unified_unauthorized() {
     let mut clock = sui::clock::create_for_testing(&mut ctx);
     clock.set_for_testing(1000);
 
-    let mut pk_a = vector<u8>[];
-    let mut i = 0u64;
-    while (i < 32) { pk_a.push_back(0); i = i + 1u64; };
-    let mut pk_b = vector<u8>[];
-    let mut j = 0u64;
-    while (j < 32) { pk_b.push_back(1); j = j + 1u64; };
+    let pk_a = vector::tabulate!(32, |_| 0u8);
+    let pk_b = vector::tabulate!(32, |_| 1u8);
 
     // sender is @0x0 but neither party is @0x0
     let mut t = tunnel::create<sui::sui::SUI>(
@@ -1563,12 +1518,8 @@ fun withdraw_before_active() {
     let mut clock = sui::clock::create_for_testing(&mut ctx);
     clock.set_for_testing(1000);
 
-    let mut pk_a = vector<u8>[];
-    let mut i = 0u64;
-    while (i < 32) { pk_a.push_back(0); i = i + 1u64; };
-    let mut pk_b = vector<u8>[];
-    let mut j = 0u64;
-    while (j < 32) { pk_b.push_back(1); j = j + 1u64; };
+    let pk_a = vector::tabulate!(32, |_| 0u8);
+    let pk_b = vector::tabulate!(32, |_| 1u8);
 
     let mut t = tunnel::create<sui::sui::SUI>(
         @0x0,
@@ -1610,12 +1561,8 @@ fun withdraw_before_active_wrong_status() {
     let mut clock = sui::clock::create_for_testing(&mut ctx);
     clock.set_for_testing(1000);
 
-    let mut pk_a = vector<u8>[];
-    let mut i = 0u64;
-    while (i < 32) { pk_a.push_back(0); i = i + 1u64; };
-    let mut pk_b = vector<u8>[];
-    let mut j = 0u64;
-    while (j < 32) { pk_b.push_back(1); j = j + 1u64; };
+    let pk_a = vector::tabulate!(32, |_| 0u8);
+    let pk_b = vector::tabulate!(32, |_| 1u8);
 
     // Tunnel is CREATED but will transition to ACTIVE after both deposit.
     // Since we can only act as @0x0 with dummy ctx, and we need the tunnel
@@ -1652,12 +1599,8 @@ fun withdraw_timeout() {
     let mut clock = sui::clock::create_for_testing(&mut ctx);
     clock.set_for_testing(1000);
 
-    let mut pk_a = vector<u8>[];
-    let mut i = 0u64;
-    while (i < 32) { pk_a.push_back(0); i = i + 1u64; };
-    let mut pk_b = vector<u8>[];
-    let mut j = 0u64;
-    while (j < 32) { pk_b.push_back(1); j = j + 1u64; };
+    let pk_a = vector::tabulate!(32, |_| 0u8);
+    let pk_b = vector::tabulate!(32, |_| 1u8);
 
     let mut t = tunnel::create<sui::sui::SUI>(
         @0x0,
@@ -1700,12 +1643,8 @@ fun withdraw_timeout_not_reached() {
     let mut clock = sui::clock::create_for_testing(&mut ctx);
     clock.set_for_testing(1000);
 
-    let mut pk_a = vector<u8>[];
-    let mut i = 0u64;
-    while (i < 32) { pk_a.push_back(0); i = i + 1u64; };
-    let mut pk_b = vector<u8>[];
-    let mut j = 0u64;
-    while (j < 32) { pk_b.push_back(1); j = j + 1u64; };
+    let pk_a = vector::tabulate!(32, |_| 0u8);
+    let pk_b = vector::tabulate!(32, |_| 1u8);
 
     let mut t = tunnel::create<sui::sui::SUI>(
         @0x0,
@@ -1738,12 +1677,8 @@ fun destroy_tunnel() {
     let mut clock = sui::clock::create_for_testing(&mut ctx);
     clock.set_for_testing(1000);
 
-    let mut pk_a = vector<u8>[];
-    let mut i = 0u64;
-    while (i < 32) { pk_a.push_back(0); i = i + 1u64; };
-    let mut pk_b = vector<u8>[];
-    let mut j = 0u64;
-    while (j < 32) { pk_b.push_back(1); j = j + 1u64; };
+    let pk_a = vector::tabulate!(32, |_| 0u8);
+    let pk_b = vector::tabulate!(32, |_| 1u8);
 
     let mut t = tunnel::create<sui::sui::SUI>(
         @0x0,
@@ -1787,12 +1722,8 @@ fun destroy_tunnel_not_closed() {
     let mut clock = sui::clock::create_for_testing(&mut ctx);
     clock.set_for_testing(1000);
 
-    let mut pk_a = vector<u8>[];
-    let mut i = 0u64;
-    while (i < 32) { pk_a.push_back(0); i = i + 1u64; };
-    let mut pk_b = vector<u8>[];
-    let mut j = 0u64;
-    while (j < 32) { pk_b.push_back(1); j = j + 1u64; };
+    let pk_a = vector::tabulate!(32, |_| 0u8);
+    let pk_b = vector::tabulate!(32, |_| 1u8);
 
     let mut t = tunnel::create<sui::sui::SUI>(
         @0x0,

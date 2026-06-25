@@ -9,15 +9,15 @@
  * tunnel is locally signable regardless of its topological kind.
  */
 
-import { OffchainTunnel } from "../core/tunnel";
+import { toHex } from "../core/bytes";
+import { blake2b256 } from "../core/crypto";
 import {
-  ParticipantRegistry,
   Participant,
+  ParticipantRegistry,
   createParticipant,
 } from "../core/keys";
-import { blake2b256 } from "../core/crypto";
-import { toHex } from "../core/bytes";
-import { Protocol, Balances } from "../protocol/Protocol";
+import { OffchainTunnel } from "../core/tunnel";
+import { Balances, Protocol } from "../protocol/Protocol";
 import { PaymentsProtocol } from "../protocol/payments";
 import { Counters, newCounters } from "../telemetry/metrics";
 import { ActivityGenerator } from "./activityGen";
@@ -122,7 +122,7 @@ export class Simulator {
         b.keyPair,
         a.address,
         b.address,
-        initialBalances,
+        initialBalances
       );
     }
     this.counters.tunnelsOpened = cfg.tunnels;
@@ -130,13 +130,13 @@ export class Simulator {
 
   /** Build an activity generator over all tunnels using this sim's counters + RNG. */
   activityGenerator(
-    signMode: "full" | "sign-only" | "none" = "full",
+    signMode: "full" | "sign-only" | "none" = "full"
   ): ActivityGenerator<unknown, unknown> {
     return new ActivityGenerator(
       this.tunnels,
       this.counters,
       this.rng,
-      signMode,
+      signMode
     );
   }
 }

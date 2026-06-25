@@ -1,15 +1,14 @@
-import test from "node:test";
 import assert from "node:assert/strict";
-import { bytesEqual } from "./bytes";
-import { blake2b256, generateKeyPair, KeyPair, sign as edSign } from "./crypto";
-import { defaultBackend } from "./crypto-native";
-import { makeEndpoint, OffchainTunnel, PartyEndpoint } from "./tunnel";
-import { Balances, otherParty, Party, Protocol } from "../protocol/Protocol";
-import { serializeStateUpdate, u64ToBeBytes } from "./wire";
-import { Transport } from "./distributedTunnel";
-import { DistributedTunnel } from "./distributedTunnel";
-import { encodeFrame, identityMoveCodec, MoveFrame } from "./distributedFrame";
+import test from "node:test";
 import { Transcript } from "../proof/transcript";
+import { Balances, otherParty, Party, Protocol } from "../protocol/Protocol";
+import { bytesEqual } from "./bytes";
+import { blake2b256, sign as edSign, generateKeyPair, KeyPair } from "./crypto";
+import { defaultBackend } from "./crypto-native";
+import { encodeFrame, identityMoveCodec, MoveFrame } from "./distributedFrame";
+import { DistributedTunnel, Transport } from "./distributedTunnel";
+import { makeEndpoint, OffchainTunnel } from "./tunnel";
+import { serializeStateUpdate, u64ToBeBytes } from "./wire";
 
 // ---- shared test fixtures ----
 

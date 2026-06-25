@@ -1,14 +1,16 @@
+import { formatCompactCount } from "@/lib/formatCompactCount";
 import { memo, useEffect, useRef, useState } from "react";
+import type { BombItAction } from "sui-tunnel-ts/protocol/bombIt";
 import {
-  GRID_W,
-  GRID_H,
-  CELL_WALL,
   CELL_CRATE,
+  CELL_WALL,
+  GRID_H,
+  GRID_W,
   blastCellsFor,
 } from "sui-tunnel-ts/protocol/bombIt";
-import type { BombItAction } from "sui-tunnel-ts/protocol/bombIt";
-import { BOMB_BTN, BOMB_IT_STYLE } from "../bombItTheme";
+import { SketchDefs } from "../../sketch";
 import "../bomb-it.css";
+import { BOMB_BTN, BOMB_IT_STYLE } from "../bombItTheme";
 import type { BombItView } from "../session-core";
 
 /** A short-lived explosion drawn over the cells a detonating bomb covered. */
@@ -18,7 +20,7 @@ interface Blast {
 }
 
 /**
- * Static terrain layer (29×29 = 841 cells). Memoized on grid CONTENT so it doesn't re-render
+ * Static terrain layer (protocol grid). Memoized on grid CONTENT so it doesn't re-render
  * on every animation frame — the grid only changes when a crate is destroyed, while pieces and
  * blasts (a handful of nodes) repaint each frame on the overlay above it.
  */
@@ -33,17 +35,25 @@ const BombTerrain = memo(
         }}
       >
         {grid.map((cell, i) => {
-          const kind = cell === CELL_WALL ? "wall" : cell === CELL_CRATE ? "crate" : "floor";
+          const kind =
+            cell === CELL_WALL
+              ? "wall"
+              : cell === CELL_CRATE
+                ? "crate"
+                : "floor";
           return (
-            <div key={i} className={`bomb-cell bomb-cell--${kind}`}>
-              {cell === CELL_CRATE ? <span className="bomb-crate-glyph" aria-hidden /> : null}
+            <div key={i} className={`bomb-cell bomb-cell--${kind} sketch-cell`}>
+              {cell === CELL_CRATE ? (
+                <span className="bomb-crate-glyph" aria-hidden />
+              ) : null}
             </div>
           );
         })}
       </div>
     );
   },
-  (a, b) => a.grid.length === b.grid.length && a.grid.every((v, i) => v === b.grid[i]),
+  (a, b) =>
+    a.grid.length === b.grid.length && a.grid.every((v, i) => v === b.grid[i]),
 );
 
 export function BombBoard({
@@ -96,7 +106,8 @@ export function BombBoard({
     if (detonated.length > 0) {
       const grid = Uint8Array.from(prevGridRef.current);
       const cells = new Set<number>();
-      for (const b of detonated) for (const ci of blastCellsFor(grid, { ...b, fuse: 0 })) cells.add(ci);
+      for (const b of detonated)
+        for (const ci of blastCellsFor(grid, { ...b, fuse: 0 })) cells.add(ci);
       const id = blastSeq.current++;
       setBlasts((prev) => [...prev, { id, cells: [...cells] }]);
       const t = setTimeout(() => {
@@ -120,11 +131,35 @@ export function BombBoard({
   const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     if (settled || !canPlay) return;
     switch (e.key) {
-      case "ArrowUp": case "w": case "W": e.preventDefault(); onAction("north"); break;
-      case "ArrowDown": case "s": case "S": e.preventDefault(); onAction("south"); break;
-      case "ArrowRight": case "d": case "D": e.preventDefault(); onAction("east"); break;
-      case "ArrowLeft": case "a": case "A": e.preventDefault(); onAction("west"); break;
-      case " ": case "Spacebar": e.preventDefault(); onAction("bomb"); break;
+      case "ArrowUp":
+      case "w":
+      case "W":
+        e.preventDefault();
+        onAction("north");
+        break;
+      case "ArrowDown":
+      case "s":
+      case "S":
+        e.preventDefault();
+        onAction("south");
+        break;
+      case "ArrowRight":
+      case "d":
+      case "D":
+        e.preventDefault();
+        onAction("east");
+        break;
+      case "ArrowLeft":
+      case "a":
+      case "A":
+        e.preventDefault();
+        onAction("west");
+        break;
+      case " ":
+      case "Spacebar":
+        e.preventDefault();
+        onAction("bomb");
+        break;
     }
   };
 
@@ -138,7 +173,8 @@ export function BombBoard({
   const oppDead = !view.players[oppIdx]?.alive;
   const pot = view.balanceA + view.balanceB;
   const won = !spectating && winner === role;
-  const celebratory = winner !== "draw" && winner !== null && (spectating || won);
+  const celebratory =
+    winner !== "draw" && winner !== null && (spectating || won);
 
   const title = () => {
     if (winner === "draw") return "Draw";
@@ -147,7 +183,9 @@ export function BombBoard({
   };
   const sub = () => {
     if (winner === "draw") return "Stakes returned";
-    return won || spectating ? `+${stake} MIST` : `−${stake} MIST`;
+    return won || spectating
+      ? `+${formatCompactCount(stake)} MIST`
+      : `−${formatCompactCount(stake)} MIST`;
   };
 
   return (
@@ -156,26 +194,36 @@ export function BombBoard({
       tabIndex={canPlay ? 0 : -1}
       onKeyDown={handleKeyDown}
       style={BOMB_IT_STYLE}
-      className="bomb-shell outline-none"
+      className="bomb-shell sketch outline-none"
     >
+      <SketchDefs />
       <aside
-        className={["bomb-pane bomb-pane--you", canPlay ? "bomb-pane--live" : ""].filter(Boolean).join(" ")}
+        className={[
+          "bomb-pane bomb-pane--you sketch-stroke sketch-panel",
+          canPlay ? "bomb-pane--live sketch-stroke--accent" : "",
+        ]
+          .filter(Boolean)
+          .join(" ")}
         aria-label="Your seat"
       >
         <div className="bomb-pane__inner">
           <div className="bomb-pane__block">
-            <span className="bomb-pane__eyebrow">{spectating ? "bot a" : "you"}</span>
+            <span className="bomb-pane__eyebrow">
+              {spectating ? "bot a" : "you"}
+            </span>
             <div
               className={[
-                "bomb-player",
+                "bomb-player sketch-stroke",
                 myParty === "A" ? "bomb-player--a" : "bomb-player--b",
                 !spectating ? "bomb-player--mine" : "",
                 myDead ? "bomb-player--dead" : "",
                 canPlay ? "bomb-player--live" : "",
               ].join(" ")}
             >
-              <span className="bomb-player__badge">{myParty}</span>
-              <span className="bomb-player__bal wal-mono tabular-nums">{myBalance}</span>
+              <span className="bomb-player__badge sketch-chip">{myParty}</span>
+              <span className="bomb-player__bal tabular-nums">
+                {formatCompactCount(myBalance)}
+              </span>
               {myDead && <span className="bomb-player__flag">out</span>}
             </div>
           </div>
@@ -184,35 +232,85 @@ export function BombBoard({
             {onToggleAuto && !settled && (
               <button
                 type="button"
-                className={`${BOMB_BTN} bomb-auto${auto ? " bomb-auto--on" : ""}`}
+                className={`${BOMB_BTN} bomb-auto sketch-btn${auto ? " bomb-auto--on sketch-btn--go" : ""}`}
                 onClick={onToggleAuto}
-                title={auto ? "Bot is playing — click to take over" : "Manual — click for autopilot"}
+                title={
+                  auto
+                    ? "Bot is playing — click to take over"
+                    : "Manual — click for autopilot"
+                }
               >
                 {auto ? "auto" : "manual"}
               </button>
             )}
 
             {!settled && canPlay && (
-              <div className="bomb-controls">
-                <div className="bomb-actionbar" role="group" aria-label="Movement controls">
-                  <button type="button" className="bomb-pad bomb-pad--n" onPointerDown={() => onAction("north")} aria-label="North">W</button>
-                  <button type="button" className="bomb-pad bomb-pad--w" onPointerDown={() => onAction("west")} aria-label="West">A</button>
-                  <button type="button" className="bomb-pad bomb-pad--bomb" onPointerDown={() => onAction("bomb")} aria-label="Bomb">■</button>
-                  <button type="button" className="bomb-pad bomb-pad--e" onPointerDown={() => onAction("east")} aria-label="East">D</button>
-                  <button type="button" className="bomb-pad bomb-pad--s" onPointerDown={() => onAction("south")} aria-label="South">S</button>
+              <div className="bomb-controls sketch-stroke sketch-panel">
+                <div
+                  className="bomb-actionbar"
+                  role="group"
+                  aria-label="Movement controls"
+                >
+                  <button
+                    type="button"
+                    className="bomb-pad bomb-pad--n sketch-stroke"
+                    onPointerDown={() => onAction("north")}
+                    aria-label="North"
+                  >
+                    W
+                  </button>
+                  <button
+                    type="button"
+                    className="bomb-pad bomb-pad--w sketch-stroke"
+                    onPointerDown={() => onAction("west")}
+                    aria-label="West"
+                  >
+                    A
+                  </button>
+                  <button
+                    type="button"
+                    className="bomb-pad bomb-pad--bomb sketch-stroke sketch-stroke--accent"
+                    onPointerDown={() => onAction("bomb")}
+                    aria-label="Bomb"
+                  >
+                    ■
+                  </button>
+                  <button
+                    type="button"
+                    className="bomb-pad bomb-pad--e sketch-stroke"
+                    onPointerDown={() => onAction("east")}
+                    aria-label="East"
+                  >
+                    D
+                  </button>
+                  <button
+                    type="button"
+                    className="bomb-pad bomb-pad--s sketch-stroke"
+                    onPointerDown={() => onAction("south")}
+                    aria-label="South"
+                  >
+                    S
+                  </button>
                 </div>
               </div>
             )}
 
-            {spectating && !settled && <span className="bomb-spectate">bot vs bot</span>}
+            {spectating && !settled && (
+              <span className="bomb-spectate">bot vs bot</span>
+            )}
           </div>
         </div>
       </aside>
 
       <main className="bomb-main">
         <div
-          className="bomb-stage"
-          style={{ ["--gw" as string]: GRID_W, ["--gh" as string]: GRID_H } as React.CSSProperties}
+          className="bomb-stage sketch-arena sketch-stroke"
+          style={
+            {
+              ["--gw" as string]: GRID_W,
+              ["--gh" as string]: GRID_H,
+            } as React.CSSProperties
+          }
         >
           <BombTerrain grid={view.grid} />
 
@@ -221,9 +319,16 @@ export function BombBoard({
               <div
                 key="pA"
                 className="bomb-piece"
-                style={{ ["--r" as string]: view.players[0].row, ["--c" as string]: view.players[0].col } as React.CSSProperties}
+                style={
+                  {
+                    ["--r" as string]: view.players[0].row,
+                    ["--c" as string]: view.players[0].col,
+                  } as React.CSSProperties
+                }
               >
-                <span className={`bomb-piece__glyph bomb-piece__glyph--a${role === "A" ? " bomb-piece__glyph--mine" : ""}`}>
+                <span
+                  className={`bomb-piece__glyph bomb-piece__glyph--a sketch-glyph${role === "A" ? " bomb-piece__glyph--mine" : ""}`}
+                >
                   <span className="bomb-piece__inner" aria-hidden />
                 </span>
               </div>
@@ -232,9 +337,16 @@ export function BombBoard({
               <div
                 key="pB"
                 className="bomb-piece"
-                style={{ ["--r" as string]: view.players[1].row, ["--c" as string]: view.players[1].col } as React.CSSProperties}
+                style={
+                  {
+                    ["--r" as string]: view.players[1].row,
+                    ["--c" as string]: view.players[1].col,
+                  } as React.CSSProperties
+                }
               >
-                <span className={`bomb-piece__glyph bomb-piece__glyph--b${role === "B" ? " bomb-piece__glyph--mine" : ""}`}>
+                <span
+                  className={`bomb-piece__glyph bomb-piece__glyph--b sketch-glyph${role === "B" ? " bomb-piece__glyph--mine" : ""}`}
+                >
                   <span className="bomb-piece__inner" aria-hidden />
                 </span>
               </div>
@@ -243,9 +355,17 @@ export function BombBoard({
               <div
                 key={`bomb-${b.owner}`}
                 className="bomb-piece"
-                style={{ ["--r" as string]: b.row, ["--c" as string]: b.col } as React.CSSProperties}
+                style={
+                  {
+                    ["--r" as string]: b.row,
+                    ["--c" as string]: b.col,
+                  } as React.CSSProperties
+                }
               >
-                <span className="bomb-piece__glyph bomb-piece__glyph--bomb" aria-label="Bomb">
+                <span
+                  className="bomb-piece__glyph bomb-piece__glyph--bomb sketch-glyph"
+                  aria-label="Bomb"
+                >
                   <span className="bomb-piece__bomb-core" aria-hidden />
                   <span className="bomb-piece__fuse" aria-hidden />
                 </span>
@@ -256,7 +376,12 @@ export function BombBoard({
                 <div
                   key={`${bl.id}-${ci}`}
                   className="bomb-blast"
-                  style={{ ["--r" as string]: Math.floor(ci / GRID_W), ["--c" as string]: ci % GRID_W } as React.CSSProperties}
+                  style={
+                    {
+                      ["--r" as string]: Math.floor(ci / GRID_W),
+                      ["--c" as string]: ci % GRID_W,
+                    } as React.CSSProperties
+                  }
                 >
                   <span className="bomb-blast__fill" />
                   <span className="bomb-blast__frame" />
@@ -269,54 +394,60 @@ export function BombBoard({
       </main>
 
       <aside
-        className={["bomb-pane bomb-pane--opp", !settled ? "bomb-pane--live" : ""].filter(Boolean).join(" ")}
+        className={[
+          "bomb-pane bomb-pane--opp sketch-stroke sketch-panel",
+          !settled ? "bomb-pane--live" : "",
+        ]
+          .filter(Boolean)
+          .join(" ")}
         aria-label="Opponent and match stats"
       >
         <div className="bomb-pane__inner">
           <div className="bomb-pane__block">
-            <span className="bomb-pane__eyebrow">{spectating ? "bot b" : "opp"}</span>
+            <span className="bomb-pane__eyebrow">
+              {spectating ? "bot b" : "opp"}
+            </span>
             <div
               className={[
-                "bomb-player",
+                "bomb-player sketch-stroke",
                 oppParty === "A" ? "bomb-player--a" : "bomb-player--b",
                 oppDead ? "bomb-player--dead" : "",
                 !settled && !oppDead ? "bomb-player--rival" : "",
               ].join(" ")}
             >
-              <span className="bomb-player__badge">{oppParty}</span>
-              <span className="bomb-player__bal wal-mono tabular-nums">{oppBalance}</span>
+              <span className="bomb-player__badge sketch-chip">{oppParty}</span>
+              <span className="bomb-player__bal tabular-nums">
+                {formatCompactCount(oppBalance)}
+              </span>
               {oppDead && <span className="bomb-player__flag">out</span>}
             </div>
           </div>
 
-          <div className={`bomb-stats${!settled ? " bomb-stats--live" : ""}`}>
-            <div className="bomb-tx">
-              <span className="bomb-tx__label">tx</span>
-              <span key={view.tick} className="bomb-tx__value wal-doto tabular-nums">
-                {view.tick}
-              </span>
-              {!settled && <span className="bomb-tx__live" aria-label="live">●</span>}
-            </div>
-            <dl className="bomb-metrics">
-              <div className={`bomb-metric${view.bombs.length > 0 ? " bomb-metric--hot" : ""}`}>
+          <div
+            className={`bomb-stats sketch-stroke sketch-panel${!settled ? " bomb-stats--live sketch-stroke--accent" : ""}`}
+          >
+            <dl className="bomb-metrics sketch-stroke">
+              <div
+                className={`bomb-metric${view.bombs.length > 0 ? " bomb-metric--hot" : ""}`}
+              >
                 <dt>bombs</dt>
-                <dd key={view.bombs.length} className="wal-mono tabular-nums">
+                <dd key={view.bombs.length} className="tabular-nums">
                   {view.bombs.length}
                 </dd>
               </div>
               <div className="bomb-metric">
                 <dt>pot</dt>
-                <dd className="wal-mono tabular-nums">{pot}</dd>
+                <dd className="tabular-nums">{formatCompactCount(pot)}</dd>
               </div>
               <div className="bomb-metric">
                 <dt>stake</dt>
-                <dd className="wal-mono tabular-nums">{stake}</dd>
+                <dd className="tabular-nums">{formatCompactCount(stake)}</dd>
               </div>
             </dl>
 
             {score !== undefined && (
-              <div className="bomb-score">
-                <span className="bomb-score__tally wal-doto tabular-nums">
+              <div className="bomb-score sketch-stroke">
+                <span className="bomb-score__tally tabular-nums">
                   {score.you}–{score.foe}
                 </span>
                 <span className="bomb-score__label">
@@ -328,7 +459,7 @@ export function BombBoard({
             {onSettle && !settled && (
               <button
                 type="button"
-                className="bomb-settle"
+                className="bomb-settle sketch-btn sketch-btn--go"
                 onClick={onSettle}
                 title="Cash out the tunnel now at the current balance"
               >
@@ -340,16 +471,25 @@ export function BombBoard({
       </aside>
 
       {settled && (
-        <div className="bomb-result" role="dialog" aria-modal="true" aria-labelledby="bomb-result-title">
-          <div className="bomb-result__card">
+        <div
+          className="bomb-result"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="bomb-result-title"
+        >
+          <div className="bomb-result__card sketch-stroke sketch-panel">
             <div
               id="bomb-result-title"
-              className={`bomb-result__title wal-doto ${celebratory ? "text-[var(--bi-gold)]" : "text-slate-200"}`}
+              className={`bomb-result__title ${celebratory ? "text-[var(--sketch-accent)]" : ""}`}
             >
               {title()}
             </div>
             <div className="bomb-result__sub">{sub()}</div>
-            <button type="button" className={`${BOMB_BTN} bomb-cta`} onClick={onPlayAgain}>
+            <button
+              type="button"
+              className={`${BOMB_BTN} bomb-cta sketch-btn sketch-btn--go`}
+              onClick={onPlayAgain}
+            >
               again
             </button>
           </div>

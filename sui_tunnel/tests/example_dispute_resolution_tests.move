@@ -1,10 +1,14 @@
 #[test_only]
 module sui_tunnel::example_dispute_resolution_tests;
 
-use std::unit_test::assert_eq;
+use std::unit_test::{assert_eq, destroy};
 use sui::clock;
+use sui::coin;
+use sui::sui::SUI;
+use sui::test_scenario;
 use sui_tunnel::example_dispute_resolution;
 use sui_tunnel::referee;
+use sui_tunnel::tunnel;
 
 const TWENTY_FOUR_HOURS_MS: u64 = 86400000;
 const FOUR_HOURS_MS: u64 = 14400000;
@@ -29,7 +33,7 @@ fun case_status_constants() {
 fun create_basic_config() {
     let config = example_dispute_resolution::create_basic_config();
     assert_eq!(referee::config_timeout_ms(&config), TWENTY_FOUR_HOURS_MS);
-    assert_eq!(referee::config_penalties_enabled(&config), false);
+    assert!(!referee::config_penalties_enabled(&config));
     assert_eq!(referee::config_referee_type(&config), referee::referee_type_automated());
 }
 
@@ -37,7 +41,7 @@ fun create_basic_config() {
 fun create_standard_config() {
     let config = example_dispute_resolution::create_standard_config();
     assert_eq!(referee::config_timeout_ms(&config), FOUR_HOURS_MS);
-    assert_eq!(referee::config_penalties_enabled(&config), true);
+    assert!(referee::config_penalties_enabled(&config));
     assert_eq!(referee::config_base_penalty(&config), 500);
     assert_eq!(referee::config_penalty_per_hour(&config), 200);
     assert_eq!(referee::config_max_penalty(&config), 5000);
@@ -48,7 +52,7 @@ fun create_standard_config() {
 fun create_premium_config() {
     let config = example_dispute_resolution::create_premium_config();
     assert_eq!(referee::config_timeout_ms(&config), ONE_HOUR_MS);
-    assert_eq!(referee::config_penalties_enabled(&config), true);
+    assert!(referee::config_penalties_enabled(&config));
     assert_eq!(referee::config_base_penalty(&config), 2000);
     assert_eq!(referee::config_penalty_per_hour(&config), 1000);
     assert_eq!(referee::config_max_penalty(&config), 20000);
@@ -185,7 +189,13 @@ fun resolve_for_respondent() {
         &mut ctx,
     );
 
-    let result = example_dispute_resolution::resolve_for_respondent(&mut case, 200, 800, 0, &clock);
+    let result = example_dispute_resolution::resolve_for_respondent(
+        &mut case,
+        200,
+        800,
+        0,
+        &clock,
+    );
 
     assert_eq!(example_dispute_resolution::case_status(&case), 1); // CASE_RESOLVED
     assert_eq!(example_dispute_resolution::result_winner(&result), option::some(@0xB));
@@ -286,7 +296,12 @@ fun auto_resolve_timeout_basic() {
     assert!(example_dispute_resolution::can_auto_resolve(&case, &clock));
 
     // party_a = @0x0 (the raiser from dummy ctx)
-    let result = example_dispute_resolution::auto_resolve_timeout(&mut case, 1000, @0x0, &clock);
+    let result = example_dispute_resolution::auto_resolve_timeout(
+        &mut case,
+        1000,
+        @0x0,
+        &clock,
+    );
 
     assert_eq!(example_dispute_resolution::case_status(&case), 2); // CASE_TIMED_OUT
     assert_eq!(example_dispute_resolution::result_winner(&result), option::some(@0x0));
@@ -321,7 +336,12 @@ fun auto_resolve_timeout_standard_with_penalty() {
     // Advance past 4h timeout + 2 hours
     clock::increment_for_testing(&mut clock, FOUR_HOURS_MS + 2 * ONE_HOUR_MS);
 
-    let result = example_dispute_resolution::auto_resolve_timeout(&mut case, 10000, @0x0, &clock);
+    let result = example_dispute_resolution::auto_resolve_timeout(
+        &mut case,
+        10000,
+        @0x0,
+        &clock,
+    );
 
     assert_eq!(example_dispute_resolution::case_status(&case), 2); // CASE_TIMED_OUT
     // Standard config: base_penalty=500, penalty_per_hour=200, 2 hours elapsed
@@ -365,7 +385,12 @@ fun graduated_penalty_repeat_offender() {
     let penalty = example_dispute_resolution::calculate_penalty(&case, &clock);
     assert_eq!(penalty, 2100);
 
-    let result = example_dispute_resolution::auto_resolve_timeout(&mut case, 10000, @0x0, &clock);
+    let result = example_dispute_resolution::auto_resolve_timeout(
+        &mut case,
+        10000,
+        @0x0,
+        &clock,
+    );
     assert_eq!(example_dispute_resolution::result_penalty_amount(&result), 2100);
 
     // After this timeout, consecutive count should be 3
@@ -413,7 +438,12 @@ fun penalty_capped_at_max() {
     // Should be capped at max_penalty = 5000
     assert_eq!(penalty, 5000);
 
-    let result = example_dispute_resolution::auto_resolve_timeout(&mut case, 10000, @0x0, &clock);
+    let result = example_dispute_resolution::auto_resolve_timeout(
+        &mut case,
+        10000,
+        @0x0,
+        &clock,
+    );
     assert_eq!(example_dispute_resolution::result_penalty_amount(&result), 5000);
 
     example_dispute_resolution::destroy_case_for_testing(case);
@@ -424,7 +454,11 @@ fun penalty_capped_at_max() {
 fun create_arbitration_committee() {
     let members = vector[@0x1, @0x2, @0x3];
     let weights = vector[30u64, 30, 40];
-    let committee = example_dispute_resolution::create_arbitration_committee(members, weights, 51);
+    let committee = example_dispute_resolution::create_arbitration_committee(
+        members,
+        weights,
+        51,
+    );
 
     assert_eq!(referee::committee_threshold(&committee), 51);
     assert_eq!(referee::committee_total_weight(&committee), 100);
@@ -439,7 +473,11 @@ fun committee_voting_quorum() {
     // With dummy ctx, all votes come from @0x0 (de-duplicated to 1 effective vote)
     let members = vector[@0x0, @0x1];
     let weights = vector[60u64, 40];
-    let committee = example_dispute_resolution::create_arbitration_committee(members, weights, 51);
+    let committee = example_dispute_resolution::create_arbitration_committee(
+        members,
+        weights,
+        51,
+    );
 
     let vote1 = example_dispute_resolution::committee_vote(true, 500, &clock, &ctx);
 
@@ -461,7 +499,11 @@ fun committee_voting_no_quorum() {
     // @0x0 has weight 25, not enough for 51 threshold
     let members = vector[@0x0, @0x1, @0x2, @0x3];
     let weights = vector[25u64, 25, 25, 25];
-    let committee = example_dispute_resolution::create_arbitration_committee(members, weights, 51);
+    let committee = example_dispute_resolution::create_arbitration_committee(
+        members,
+        weights,
+        51,
+    );
 
     let vote1 = example_dispute_resolution::committee_vote(true, 500, &clock, &ctx);
     let votes = vector[vote1];
@@ -555,4 +597,315 @@ fun arbitration_result_accessors() {
     assert_eq!(example_dispute_resolution::result_party_b_amount(&result), 300);
     assert_eq!(example_dispute_resolution::result_penalty_amount(&result), 100);
     assert_eq!(example_dispute_resolution::result_resolution_method(&result), 1);
+}
+
+// ============================================
+// ON-CHAIN ARBITRATION (REAL FUND MOVEMENT)
+// ============================================
+
+const PARTY_A: address = @0xA11CE;
+const PARTY_B: address = @0xB0B;
+const REFEREE: address = @0xC0FFEE;
+const PK_A: vector<u8> = x"1111111111111111111111111111111111111111111111111111111111111111";
+const PK_B: vector<u8> = x"2222222222222222222222222222222222222222222222222222222222222222";
+const FUND_START_MS: u64 = 1000;
+
+/// Opens a standard-service funded case (PARTY_A is the sender/raiser, against
+/// PARTY_B), then joins PARTY_B so the tunnel activates. Leaves the sender as PARTY_B.
+fun open_and_join(
+    scenario: &mut test_scenario::Scenario,
+    clock: &clock::Clock,
+    deposit_a: u64,
+    deposit_b: u64,
+): example_dispute_resolution::FundedDisputeCase<SUI> {
+    let coin_a = coin::mint_for_testing<SUI>(deposit_a, scenario.ctx());
+    let mut case = example_dispute_resolution::open_funded_case<SUI>(
+        1,
+        PK_A,
+        PARTY_B,
+        PK_B,
+        PARTY_B,
+        0,
+        b"evidence",
+        0,
+        b"late delivery",
+        example_dispute_resolution::service_standard(),
+        referee::new_dispute_history(),
+        REFEREE,
+        coin_a,
+        clock,
+        scenario.ctx(),
+    );
+
+    scenario.next_tx(PARTY_B);
+    let coin_b = coin::mint_for_testing<SUI>(deposit_b, scenario.ctx());
+    example_dispute_resolution::join_funded_case<SUI>(&mut case, coin_b, clock, scenario.ctx());
+    case
+}
+
+#[test]
+fun open_funded_case_custodies_real_funds() {
+    let mut scenario = test_scenario::begin(PARTY_A);
+    let mut clock = clock::create_for_testing(scenario.ctx());
+    clock.set_for_testing(FUND_START_MS);
+
+    let case = open_and_join(&mut scenario, &clock, 1000, 1000);
+
+    assert_eq!(example_dispute_resolution::funded_case_total_balance(&case), 2000);
+    assert_eq!(
+        example_dispute_resolution::funded_case_status(&case),
+        example_dispute_resolution::case_open(),
+    );
+    let tun = example_dispute_resolution::funded_case_tunnel(&case);
+    assert!(tunnel::is_active(tun));
+    assert!(tunnel::has_referee(tun));
+    assert_eq!(tunnel::get_referee(tun), REFEREE);
+
+    example_dispute_resolution::destroy_funded_case_for_testing(case);
+    clock.destroy_for_testing();
+    scenario.end();
+}
+
+#[test]
+fun cancel_before_join_refunds_party_a() {
+    let mut scenario = test_scenario::begin(PARTY_A);
+    let mut clock = clock::create_for_testing(scenario.ctx());
+    clock.set_for_testing(FUND_START_MS);
+
+    let coin_a = coin::mint_for_testing<SUI>(1000, scenario.ctx());
+    let mut case = example_dispute_resolution::open_funded_case<SUI>(
+        1,
+        PK_A,
+        PARTY_B,
+        PK_B,
+        PARTY_B,
+        0,
+        b"evidence",
+        0,
+        b"late delivery",
+        example_dispute_resolution::service_standard(),
+        referee::new_dispute_history(),
+        REFEREE,
+        coin_a,
+        &clock,
+        scenario.ctx(),
+    );
+
+    // PARTY_B never joins; PARTY_A reclaims the full escrowed deposit.
+    let refund = example_dispute_resolution::cancel_funded_case<SUI>(
+        &mut case,
+        &clock,
+        scenario.ctx(),
+    );
+    assert_eq!(refund.value(), 1000);
+    assert_eq!(
+        example_dispute_resolution::funded_case_status(&case),
+        example_dispute_resolution::case_resolved(),
+    );
+    assert!(tunnel::is_closed(example_dispute_resolution::funded_case_tunnel(&case)));
+
+    refund.burn_for_testing();
+    example_dispute_resolution::destroy_funded_case_for_testing(case);
+    clock.destroy_for_testing();
+    scenario.end();
+}
+
+#[test]
+fun referee_split_settlement_transfers_funds() {
+    let mut scenario = test_scenario::begin(PARTY_A);
+    let mut clock = clock::create_for_testing(scenario.ctx());
+    clock.set_for_testing(FUND_START_MS);
+
+    let mut case = open_and_join(&mut scenario, &clock, 1000, 1000);
+
+    // Either party escalates the dispute on-chain (sender is PARTY_B after join).
+    example_dispute_resolution::escalate_to_chain(&mut case, &clock, scenario.ctx());
+
+    // The assigned referee splits the disputed funds 1200/800.
+    scenario.next_tx(REFEREE);
+    example_dispute_resolution::resolve_split_and_settle(
+        &mut case,
+        1200,
+        800,
+        0,
+        &clock,
+        scenario.ctx(),
+    );
+    assert_eq!(
+        example_dispute_resolution::funded_case_status(&case),
+        example_dispute_resolution::case_resolved(),
+    );
+    assert!(tunnel::is_closed(example_dispute_resolution::funded_case_tunnel(&case)));
+
+    scenario.next_tx(PARTY_A);
+    let to_a = scenario.take_from_address<coin::Coin<SUI>>(PARTY_A);
+    assert_eq!(to_a.value(), 1200);
+    to_a.burn_for_testing();
+
+    scenario.next_tx(PARTY_B);
+    let to_b = scenario.take_from_address<coin::Coin<SUI>>(PARTY_B);
+    assert_eq!(to_b.value(), 800);
+    to_b.burn_for_testing();
+
+    example_dispute_resolution::destroy_funded_case_for_testing(case);
+    clock.destroy_for_testing();
+    scenario.end();
+}
+
+#[test]
+fun referee_awards_full_balance_to_raiser() {
+    let mut scenario = test_scenario::begin(PARTY_A);
+    let mut clock = clock::create_for_testing(scenario.ctx());
+    clock.set_for_testing(FUND_START_MS);
+
+    let mut case = open_and_join(&mut scenario, &clock, 1500, 500);
+    example_dispute_resolution::escalate_to_chain(&mut case, &clock, scenario.ctx());
+
+    scenario.next_tx(REFEREE);
+    example_dispute_resolution::resolve_for_raiser_and_settle(
+        &mut case,
+        2000,
+        0,
+        0,
+        &clock,
+        scenario.ctx(),
+    );
+
+    scenario.next_tx(PARTY_A);
+    let to_a = scenario.take_from_address<coin::Coin<SUI>>(PARTY_A);
+    assert_eq!(to_a.value(), 2000);
+    to_a.burn_for_testing();
+
+    example_dispute_resolution::destroy_funded_case_for_testing(case);
+    clock.destroy_for_testing();
+    scenario.end();
+}
+
+#[test]
+fun timeout_auto_resolution_awards_raiser_full_balance() {
+    let mut scenario = test_scenario::begin(PARTY_A);
+    let mut clock = clock::create_for_testing(scenario.ctx());
+    clock.set_for_testing(FUND_START_MS);
+
+    let mut case = open_and_join(&mut scenario, &clock, 1000, 1000);
+    example_dispute_resolution::escalate_to_chain(&mut case, &clock, scenario.ctx());
+
+    // Advance past the standard-service dispute deadline (4h) so the referee can
+    // auto-resolve. The unresponsive respondent forfeits the full balance.
+    clock.set_for_testing(FUND_START_MS + FOUR_HOURS_MS + 1);
+
+    scenario.next_tx(REFEREE);
+    example_dispute_resolution::auto_resolve_timeout_and_settle(
+        &mut case,
+        &clock,
+        scenario.ctx(),
+    );
+    assert!(tunnel::is_closed(example_dispute_resolution::funded_case_tunnel(&case)));
+
+    scenario.next_tx(PARTY_A);
+    let to_a = scenario.take_from_address<coin::Coin<SUI>>(PARTY_A);
+    assert_eq!(to_a.value(), 2000);
+    to_a.burn_for_testing();
+
+    example_dispute_resolution::destroy_funded_case_for_testing(case);
+    clock.destroy_for_testing();
+    scenario.end();
+}
+
+#[test]
+fun force_close_fallback_returns_disputed_balances() {
+    let mut scenario = test_scenario::begin(PARTY_A);
+    let mut clock = clock::create_for_testing(scenario.ctx());
+    clock.set_for_testing(FUND_START_MS);
+
+    let mut case = open_and_join(&mut scenario, &clock, 1000, 1000);
+
+    // PARTY_A escalates so PARTY_A becomes the tunnel dispute_raiser.
+    scenario.next_tx(PARTY_A);
+    example_dispute_resolution::escalate_to_chain(&mut case, &clock, scenario.ctx());
+    assert!(!example_dispute_resolution::can_force_close(&case, &clock));
+
+    // Advance past the tunnel timeout (standard = 4h) so the raiser can force-close.
+    clock.set_for_testing(FUND_START_MS + FOUR_HOURS_MS + 1);
+    assert!(example_dispute_resolution::can_force_close(&case, &clock));
+
+    example_dispute_resolution::force_close_fallback(&mut case, &clock, scenario.ctx());
+
+    scenario.next_tx(PARTY_A);
+    let to_a = scenario.take_from_address<coin::Coin<SUI>>(PARTY_A);
+    assert_eq!(to_a.value(), 1000);
+    to_a.burn_for_testing();
+
+    scenario.next_tx(PARTY_B);
+    let to_b = scenario.take_from_address<coin::Coin<SUI>>(PARTY_B);
+    assert_eq!(to_b.value(), 1000);
+    to_b.burn_for_testing();
+
+    example_dispute_resolution::destroy_funded_case_for_testing(case);
+    clock.destroy_for_testing();
+    scenario.end();
+}
+
+#[
+    test,
+    expected_failure(
+        abort_code = sui_tunnel::tunnel::ERefereeNotAuthorized,
+        location = sui_tunnel::tunnel,
+    ),
+]
+fun non_referee_cannot_settle() {
+    let mut scenario = test_scenario::begin(PARTY_A);
+    let mut clock = clock::create_for_testing(scenario.ctx());
+    clock.set_for_testing(FUND_START_MS);
+
+    let mut case = open_and_join(&mut scenario, &clock, 1000, 1000);
+    example_dispute_resolution::escalate_to_chain(&mut case, &clock, scenario.ctx());
+
+    // PARTY_A is a tunnel party but not the assigned referee.
+    scenario.next_tx(PARTY_A);
+    example_dispute_resolution::resolve_for_raiser_and_settle(
+        &mut case,
+        2000,
+        0,
+        0,
+        &clock,
+        scenario.ctx(),
+    );
+
+    // Unreachable; present so the test type-checks.
+    destroy(case);
+    clock.destroy_for_testing();
+    scenario.end();
+}
+
+#[
+    test,
+    expected_failure(
+        abort_code = sui_tunnel::tunnel::EBalanceSumMismatch,
+        location = sui_tunnel::tunnel,
+    ),
+]
+fun settlement_must_conserve_balance() {
+    let mut scenario = test_scenario::begin(PARTY_A);
+    let mut clock = clock::create_for_testing(scenario.ctx());
+    clock.set_for_testing(FUND_START_MS);
+
+    let mut case = open_and_join(&mut scenario, &clock, 1000, 1000);
+    example_dispute_resolution::escalate_to_chain(&mut case, &clock, scenario.ctx());
+
+    // Amounts sum to 1500, not the 2000 held by the tunnel.
+    scenario.next_tx(REFEREE);
+    example_dispute_resolution::resolve_split_and_settle(
+        &mut case,
+        1000,
+        500,
+        0,
+        &clock,
+        scenario.ctx(),
+    );
+
+    // Unreachable; present so the test type-checks.
+    destroy(case);
+    clock.destroy_for_testing();
+    scenario.end();
 }

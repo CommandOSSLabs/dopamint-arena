@@ -23,11 +23,7 @@ class BombItBot implements GameBot<MultiGameBombItState, MultiGameBombItMove> {
   private readonly protocol: MultiGameBombItProtocol;
   private readonly rng: () => number;
 
-  constructor(
-    seat: Party,
-    protocol: MultiGameBombItProtocol,
-    ctx: BotContext,
-  ) {
+  constructor(seat: Party, protocol: MultiGameBombItProtocol, ctx: BotContext) {
     this.seat = seat;
     this.protocol = protocol;
     this.rng = ctx.rngForSeat(seat);

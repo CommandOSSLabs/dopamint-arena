@@ -19,6 +19,8 @@ const SESSION_TTL: i64 = 24 * 3600;
 const MATCH_TTL: i64 = 6 * 3600;
 // Dedup horizon for recent-events: must exceed the indexer's worst-case cursor-replay window.
 const SEEN_TTL: i64 = 24 * 3600;
+// Count-once horizon for settled tunnels: exceeds the indexer cursor-replay window (matches SEEN_TTL).
+const SETTLED_SEEN_TTL: i64 = 24 * 3600;
 
 // Atomic dedup-then-push for the recent-events ring. Dedup is a per-digest
 // `events:seen:<digest>` key with a TTL, so the dedup set self-expires (no unbounded growth).
@@ -54,6 +56,17 @@ for i = 1, #rows do
   end
 end
 return 0
+"#;
+
+// Running-max CAS for peak tps: store the new value only if it exceeds the stored one. Honors the
+// aggregation invariant (owned/last-writer via Lua, never a Rust read-modify-write of a shared
+// aggregate). Stored verbatim as a float string; snapshot GETs and parses it.
+// KEYS[1]=stats:peak_tps  ARGV[1]=tps
+const UPDATE_PEAK_TPS: &str = r#"
+local cur = tonumber(redis.call('GET', KEYS[1]) or '0')
+local new = tonumber(ARGV[1])
+if new > cur then redis.call('SET', KEYS[1], ARGV[1]) end
+return 1
 "#;
 
 pub async fn connect(url: &str) -> anyhow::Result<RedisPool> {
@@ -109,7 +122,9 @@ impl ControlStore for RedisControlStore {
         v.and_then(|j| serde_json::from_str(&j).ok())
     }
 
-    // SADD/SREM sets so N indexers replaying events don't over-count — SCARD gives correct total.
+    // `active` is a SADD/SREM set (bounded — shrinks on close; SCARD gives the live count).
+    // `settled` is a count-once INCR counter: a per-id NX dedup key gates the increment so N
+    // indexers replaying Closed events don't over-count, without an ever-growing set.
     async fn set_tunnel_status(&self, id: &str, s: TunnelStatus) {
         let res: Result<(), _> = self
             .pool
@@ -136,9 +151,25 @@ impl ControlStore for RedisControlStore {
                 if let Err(e) = res {
                     tracing::warn!(error = %e, "redis set_tunnel_status srem active failed");
                 }
-                let res: Result<i64, _> = self.pool.sadd("stats:tunnels:settled", id).await;
-                if let Err(e) = res {
-                    tracing::warn!(error = %e, "redis set_tunnel_status sadd settled failed");
+                // Count-once: SET NX returns nil when the id was already seen → no increment on
+                // replay. The dedup key self-expires (TTL), so it never grows unbounded.
+                let newly: Option<String> = self
+                    .pool
+                    .set(
+                        format!("tunnels:seen:settled:{id}"),
+                        "1",
+                        Some(Expiration::EX(SETTLED_SEEN_TTL)),
+                        Some(SetOptions::NX),
+                        false,
+                    )
+                    .await
+                    .ok()
+                    .flatten();
+                if newly.is_some() {
+                    let res: Result<i64, _> = self.pool.incr("stats:tunnels:settled_count").await;
+                    if let Err(e) = res {
+                        tracing::warn!(error = %e, "redis set_tunnel_status incr settled_count failed");
+                    }
                 }
             }
             TunnelStatus::Created => {}
@@ -163,9 +194,29 @@ impl ControlStore for RedisControlStore {
         }
     }
 
+    async fn update_peak_tps(&self, tps: f64) {
+        let res: Result<i64, _> = self
+            .pool
+            .eval(
+                UPDATE_PEAK_TPS,
+                vec!["stats:peak_tps".to_string()],
+                vec![tps.to_string()],
+            )
+            .await;
+        if let Err(e) = res {
+            tracing::warn!(error = %e, "redis update_peak_tps eval failed");
+        }
+    }
+
     async fn snapshot(&self) -> StatsSnapshot {
         let active: i64 = self.pool.scard("stats:tunnels:active").await.unwrap_or(0);
-        let settled: i64 = self.pool.scard("stats:tunnels:settled").await.unwrap_or(0);
+        let settled: i64 = self
+            .pool
+            .get("stats:tunnels:settled_count")
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or(0);
 
         let mut total_actions: u64 = 0;
         let mut per_game: HashMap<String, GameStat> = HashMap::new();
@@ -191,9 +242,19 @@ impl ControlStore for RedisControlStore {
             }
         }
 
+        let peak_tps: f64 = self
+            .pool
+            .get::<Option<String>, _>("stats:peak_tps")
+            .await
+            .ok()
+            .flatten()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0.0);
+
         let recent_events = self.recent_events().await;
         StatsSnapshot {
             tps: 0.0, // filled by the broadcaster from its per-tick diff
+            peak_tps,
             total_actions,
             active_tunnels: active as u64,
             settled_tunnels: settled as u64,
@@ -1136,6 +1197,22 @@ mod tests {
             }
             other => panic!("expected CtrlMsg::Populate, got {other:?}"),
         }
+    }
+
+    // "Total tunnels" is a count-once counter, not a growing SADD set: a replayed Closed event
+    // (cursor restart / second indexer) must not double-count. The first sighting of an id
+    // increments; subsequent ones are deduped by the `tunnels:seen:settled:<id>` NX key.
+    #[tokio::test]
+    async fn settled_count_is_idempotent_under_replay() {
+        let (_redis, pool) = redis_fixture().await;
+        let store = RedisControlStore::new(pool);
+        store.set_tunnel_status("0xtun", TunnelStatus::Closed).await;
+        store.set_tunnel_status("0xtun", TunnelStatus::Closed).await; // replay / second indexer
+        assert_eq!(
+            store.snapshot().await.settled_tunnels,
+            1,
+            "replay must not double-count"
+        );
     }
 
     #[tokio::test]

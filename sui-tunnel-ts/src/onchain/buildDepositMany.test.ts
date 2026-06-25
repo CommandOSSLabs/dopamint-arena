@@ -29,7 +29,7 @@ test("buildDepositMany makes one SplitCoins and N entry_deposit calls", () => {
   // that funds the whole batch under a single signature.
   const splits = cmds.filter((c) => c.$kind === "SplitCoins");
   const deposits = cmds.filter(
-    (c) => c.$kind === "MoveCall" && c.MoveCall?.function === "entry_deposit",
+    (c) => c.$kind === "MoveCall" && c.MoveCall?.function === "entry_deposit"
   );
   assert.equal(splits.length, 1);
   assert.equal(deposits.length, n);
@@ -45,7 +45,7 @@ test("buildDepositMany targets every requested tunnel (no silent drop)", () => {
   const tx = new Transaction();
   buildDepositMany(
     tx,
-    ids.map((id) => ({ tunnelId: id, amount: 500n })),
+    ids.map((id) => ({ tunnelId: id, amount: 500n }))
   );
   const json = JSON.stringify(tx.getData());
   for (const id of ids) {
@@ -69,7 +69,7 @@ test("buildDepositMany funds a non-SUI batch from a caller-supplied source coin"
 
   const splits = cmds.filter((c) => c.$kind === "SplitCoins");
   const deposits = cmds.filter(
-    (c) => c.$kind === "MoveCall" && c.MoveCall?.function === "entry_deposit",
+    (c) => c.$kind === "MoveCall" && c.MoveCall?.function === "entry_deposit"
   );
   assert.equal(splits.length, 1);
   assert.equal(deposits.length, n);
@@ -85,6 +85,6 @@ test("buildDepositMany rejects a non-SUI coinType with no sourceCoin (no gas-spl
       buildDepositMany(tx, [{ tunnelId: tunnelId(0), amount: 500n }], {
         coinType: USDC,
       }),
-    /sourceCoin/,
+    /sourceCoin/
   );
 });

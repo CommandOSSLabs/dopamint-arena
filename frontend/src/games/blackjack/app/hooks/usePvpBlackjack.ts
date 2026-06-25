@@ -334,9 +334,7 @@ export function usePvpBlackjack(): PvpView {
             // /settle path above already sponsored the close server-side. In MTPS mode the dealer
             // holds 0 SUI (gas is sponsored), so the close must route through the gas sponsor too — a
             // wallet-signed close would throw and strand the staked MTPS.
-            const coinType = isMtpsConfigured
-              ? MTPS_COIN_TYPE
-              : undefined;
+            const coinType = isMtpsConfigured ? MTPS_COIN_TYPE : undefined;
             const res = await (isMtpsConfigured ? submitSponsored : submit)(
               buildCloseWithRootTx(t.tunnelId, coSigned, coinType),
             );

@@ -19,7 +19,7 @@ import { PlacementBoard } from "./components/PlacementBoard";
 import { BattleView } from "./components/BattleView";
 import { useBattleship } from "./useBattleship";
 import { useBattleshipPvp } from "./useBattleshipPvp";
-import { SketchDefs } from "../quantumPoker/QuantumPokerTable";
+import { SketchDefs } from "../sketch";
 import "../quantumPoker/quantumPoker.css";
 import "./battleship.css";
 
@@ -235,7 +235,10 @@ function ModeFrame({
       {/* A thin in-game control strip. The window chrome above already shows the title,
           so this carries only the game actions (Back / Auto / Settle), kept compact. */}
       <header className="qp-head shrink-0 py-[clamp(4px,1.4cqmin,9px)]">
-        <button onClick={onBack} className="qp-btn inline-flex items-center gap-1">
+        <button
+          onClick={onBack}
+          className="qp-btn inline-flex items-center gap-1"
+        >
           <ArrowLeft className="size-[1em]" /> Back
         </button>
         {headerExtra && <div className="ml-auto shrink-0">{headerExtra}</div>}

@@ -65,7 +65,11 @@ test("buildGrid is 180°-rotationally symmetric and seed-deterministic", () => {
   const g = buildGrid(42n);
   for (let r = 0; r < GRID_H; r++) {
     for (let c = 0; c < GRID_W; c++) {
-      assert.equal(g[idx(r, c)], g[idx(GRID_H - 1 - r, GRID_W - 1 - c)], `(${r},${c}) mirror`);
+      assert.equal(
+        g[idx(r, c)],
+        g[idx(GRID_H - 1 - r, GRID_W - 1 - c)],
+        `(${r},${c}) mirror`
+      );
     }
   }
   assert.deepEqual(Array.from(buildGrid(42n)), Array.from(buildGrid(42n)));
@@ -145,7 +149,10 @@ test("resolveExplosions leaves un-fused bombs untouched", () => {
   assert.equal(cells.size, 0);
 });
 
-const CTX = { tunnelId: "0xabc123", initialBalances: { a: BOMB_IT_MIN_STAKE, b: BOMB_IT_MIN_STAKE } };
+const CTX = {
+  tunnelId: "0xabc123",
+  initialBalances: { a: BOMB_IT_MIN_STAKE, b: BOMB_IT_MIN_STAKE },
+};
 
 test("initialState locks the total, spawns two living players, no bombs/winner", () => {
   const p = new BombItProtocol();
@@ -166,27 +173,43 @@ test("encodeState is canonical and starts with the domain tag", () => {
   const b = p.initialState(CTX);
   assert.deepEqual(Array.from(p.encodeState(a)), Array.from(p.encodeState(b)));
   const tag = new TextEncoder().encode("sui_tunnel::proto::bomb_it.v1");
-  assert.deepEqual(Array.from(p.encodeState(a).slice(0, tag.length)), Array.from(tag));
+  assert.deepEqual(
+    Array.from(p.encodeState(a).slice(0, tag.length)),
+    Array.from(tag)
+  );
 });
 
 test("encodeState differs when a player position differs", () => {
   const p = new BombItProtocol();
   const s = p.initialState(CTX);
-  const moved = { ...s, players: [{ ...s.players[0], col: 2 }, s.players[1]] as typeof s.players };
-  assert.notDeepEqual(Array.from(p.encodeState(s)), Array.from(p.encodeState(moved)));
+  const moved = {
+    ...s,
+    players: [{ ...s.players[0], col: 2 }, s.players[1]] as typeof s.players,
+  };
+  assert.notDeepEqual(
+    Array.from(p.encodeState(s)),
+    Array.from(p.encodeState(moved))
+  );
 });
 
 test("balances return the stored split; isTerminal tracks winner", () => {
   const p = new BombItProtocol();
   const s = p.initialState(CTX);
-  assert.deepEqual(p.balances(s), { a: BOMB_IT_MIN_STAKE, b: BOMB_IT_MIN_STAKE });
+  assert.deepEqual(p.balances(s), {
+    a: BOMB_IT_MIN_STAKE,
+    b: BOMB_IT_MIN_STAKE,
+  });
   assert.equal(p.isTerminal(s), false);
   assert.equal(p.isTerminal({ ...s, winner: "A" }), true);
   assert.equal(p.isTerminal({ ...s, winner: "draw" }), true);
 });
 
 /** Run the world forward applying the SAME move object both seats would (only one field set). */
-function advance(p: BombItProtocol, s: BombItState, m: BombItMove): BombItState {
+function advance(
+  p: BombItProtocol,
+  s: BombItState,
+  m: BombItMove
+): BombItState {
   const by = m.a !== undefined ? "A" : "B";
   return p.applyMove(s, m, by);
 }
@@ -284,18 +307,37 @@ test("a full hunter-bot playout terminates (kill or cap) and conserves balances 
   assert.equal(a + b, s.total);
 });
 
-test("hunter bot bombs an in-line opponent when it has an escape route", () => {
+test("hunter bot may bomb an in-line opponent when rng allows an attack", () => {
   const p = new BombItProtocol();
   const base = p.initialState(CTX);
-  // A at (1,1) acts (tick 0 = A); B two cells east on the same row, inside blast reach.
-  // A has a real escape (south then sideways), so it SHOULD attack with a bomb — not just chase.
   const s: BombItState = {
     ...base,
     players: [spawnAt(1, 1), spawnAt(1, 3)],
     grid: clearInterior(base.grid),
   };
+  let sawBomb = false;
+  for (let seed = 0; seed < 64; seed++) {
+    const m = p.randomMove(s, "A", mulberry32ForTest(seed)) as BombItMove;
+    if (m.a === "bomb") {
+      sawBomb = true;
+      break;
+    }
+  }
+  assert.ok(sawBomb, "expected at least one seed to bomb an in-line opponent");
+});
+
+test("hunter bot flees an imminent blast instead of bombing", () => {
+  const p = new BombItProtocol();
+  const base = p.initialState(CTX);
+  const s: BombItState = {
+    ...base,
+    players: [spawnAt(1, 1), spawnAt(5, 5)],
+    grid: clearInterior(base.grid),
+    bombs: [{ row: 1, col: 2, fuse: 1, owner: "B" }],
+  };
   const m = p.randomMove(s, "A", mulberry32ForTest(1)) as BombItMove;
-  assert.equal(m.a, "bomb");
+  assert.notEqual(m.a, "bomb");
+  assert.notEqual(m.a, "stay");
 });
 
 test("a hunter-bot match drops bombs and destroys crates", () => {
@@ -314,7 +356,10 @@ test("a hunter-bot match drops bombs and destroys crates", () => {
   }
   const cratesEnd = Array.from(s.grid).filter((c) => c === CELL_CRATE).length;
   assert.ok(bombs > 0, "bots must drop at least one bomb over a match");
-  assert.ok(crates0 - cratesEnd > 0, "bots must destroy at least one crate over a match");
+  assert.ok(
+    crates0 - cratesEnd > 0,
+    "bots must destroy at least one crate over a match"
+  );
 });
 
 // --- local test helpers ---

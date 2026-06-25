@@ -20,6 +20,7 @@ import { GameScene } from "@/games/ticTacToe/app/scenes/GameScene";
 import { PvpScene } from "@/games/ticTacToe/app/scenes/PvpScene";
 import { GameCardScale } from "@/games/ticTacToe/app/components/GameCardScale";
 import { isMtpsConfigured } from "@/onchain/mtps";
+import { SketchDefs } from "@/games/blackjack/app/App";
 import "./index.css";
 
 type Scene = "login" | "setup" | "game" | "pvp";
@@ -46,8 +47,7 @@ function AppContent() {
 
   // MTPS mode (ADR-0010): bots play free (sponsored gas + faucet-minted stake), so they need
   // no SUI — they're always "funded". SUI fallback still requires a positive gas balance per bot.
-  const funded =
-    isMtpsConfigured || (g.balances.x > 0n && g.balances.o > 0n);
+  const funded = isMtpsConfigured || (g.balances.x > 0n && g.balances.o > 0n);
 
   // --- Shared arcade-cabinet seam (GameCabinet, applied to every window in Desktop). The shell
   // owns hover → pause → overlay; this game wires the verbs to its engine. Take-over reuses the
@@ -200,33 +200,18 @@ function AppContent() {
   };
 
   const isPortrait = dimensions.width < dimensions.height;
-  let targetWidth = 500;
-  let targetHeight = 750;
-
-  if (scene === "login") {
-    targetWidth = isPortrait ? 500 : 800;
-    targetHeight = isPortrait ? 800 : 500;
-  } else if (scene === "setup") {
-    targetWidth = isPortrait ? 500 : 1000;
-    targetHeight = isPortrait ? 800 : 900;
-  } else if (scene === "game") {
-    targetWidth = isPortrait ? 500 : 980;
-    targetHeight = isPortrait ? 800 : 850;
-    if (gameType === "caro") targetHeight = isPortrait ? 850 : 900;
-  } else if (scene === "pvp") {
-    targetWidth = isPortrait ? 500 : 1060;
-    targetHeight = isPortrait ? 800 : 900;
-    if (gameType === "caro") targetHeight = isPortrait ? 850 : 950;
-  }
+  // ONE fixed design size per orientation for the WHOLE game (like blackjack's ScaledWrapper):
+  // every scene fills this box and the whole card scales uniformly to the window, instead of each
+  // scene resizing to its own target. Sized to the tallest scene (caro board / pvp) so nothing is
+  // clipped; lighter scenes (login/setup) just center within it.
+  const targetWidth = isPortrait ? 500 : 1024;
+  const targetHeight = isPortrait ? 850 : 900;
 
   return (
     <div
-      className={`h-full w-full relative notebook-grid-bg text-on-surface selection:bg-tertiary selection:text-on-tertiary flex items-center justify-center overflow-hidden select-none ${isPortrait ? "p-0" : "p-4"}`}
+      className={`ttt-root qp-sketch h-full w-full relative flex items-center justify-center overflow-hidden select-none ${isPortrait ? "p-0" : "p-4"}`}
     >
-      {/* Vertical Margin Line (Notebook binding line) */}
-      {!isPortrait && (
-        <div className="absolute top-0 bottom-0 left-[20px] md:left-[32px] w-0 border-l-double border-l-[3px] border-secondary z-0 pointer-events-none opacity-80" />
-      )}
+      <SketchDefs />
 
       <div
         ref={containerRef}
@@ -247,13 +232,20 @@ function AppContent() {
           {scene === "setup" &&
             (g.phase === "error" ? (
               <div className="w-full h-full flex flex-col items-center justify-center gap-6 p-8">
-                <p className="text-sm text-rose-400 text-center break-words max-w-xs">
-                  {String(g.phase)}
+                <p className="text-sm text-rose-400 text-center break-words max-w-md">
+                  {/* The real failure (e.g. "sponsor request failed (422): …"), not the bare
+                      "error" phase — so the cause is visible instead of hidden. */}
+                  {g.error ?? "Something went wrong."}
                 </p>
                 <button
                   onClick={() => {
+                    // Resume the attract demo: clear the one-shot latches and restart in watch.
+                    // (Without this the latches stayed set and Retry did nothing.)
                     autoFundRef.current = false;
                     autoEvenedRef.current = false;
+                    autoStartedRef.current = true;
+                    setScene("game");
+                    g.startAuto(true);
                   }}
                   className="px-4 py-2 text-xs font-bold uppercase tracking-widest border border-secondary text-on-surface hover:bg-secondary/20 rounded transition-colors"
                 >

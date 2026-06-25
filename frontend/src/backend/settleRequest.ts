@@ -26,6 +26,10 @@ export function coSignedToSettleBody(
     transcriptRoot: s.transcriptRoot,
     sigA: coSigned.sigA,
     sigB: coSigned.sigB,
-    entries: entries.map((e) => ({ message: e.message, sigA: e.sigA, sigB: e.sigB })),
+    entries: entries.map((e) => ({
+      message: e.message,
+      sigA: e.sigA,
+      sigB: e.sigB,
+    })),
   });
 }

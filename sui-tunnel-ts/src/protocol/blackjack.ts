@@ -157,10 +157,9 @@ function isBust(hand: number[]): boolean {
   return handValue(hand) > BUST_AT;
 }
 
-export class BlackjackProtocol implements Protocol<
-  BlackjackState,
-  BlackjackMove
-> {
+export class BlackjackProtocol
+  implements Protocol<BlackjackState, BlackjackMove>
+{
   readonly name = "blackjack.v1";
 
   initialState(ctx: ProtocolContext): BlackjackState {
@@ -184,7 +183,7 @@ export class BlackjackProtocol implements Protocol<
   applyMove(
     state: BlackjackState,
     move: BlackjackMove,
-    by: Party,
+    by: Party
   ): BlackjackState {
     if (move.action !== "hit" && move.action !== "stand") {
       throw new Error(`unknown action: ${String(move.action)}`);
@@ -200,12 +199,13 @@ export class BlackjackProtocol implements Protocol<
 
     if (state.phase === "player") {
       const playerParty = getPlayerParty(state.round);
-      if (by !== playerParty) throw new Error(`it is the player's (${playerParty}) turn`);
+      if (by !== playerParty)
+        throw new Error(`it is the player's (${playerParty}) turn`);
       if (move.action === "hit") {
         const { hand, drawIndex } = drawTo(
           state.playerHand,
           state.round,
-          state.drawIndex,
+          state.drawIndex
         );
         const next: BlackjackState = {
           ...state,
@@ -224,7 +224,8 @@ export class BlackjackProtocol implements Protocol<
 
     if (state.phase === "dealer") {
       const dealerParty = getDealerParty(state.round);
-      if (by !== dealerParty) throw new Error(`it is the dealer's (${dealerParty}) turn`);
+      if (by !== dealerParty)
+        throw new Error(`it is the dealer's (${dealerParty}) turn`);
       if (move.action !== "stand") {
         throw new Error("dealer may only 'stand' (auto-play is deterministic)");
       }
@@ -264,7 +265,7 @@ export class BlackjackProtocol implements Protocol<
   randomMove(
     s: BlackjackState,
     by: Party,
-    rng: () => number,
+    rng: () => number
   ): BlackjackMove | null {
     if (this.isTerminal(s)) return null;
 
@@ -303,7 +304,7 @@ function canStartRound(s: BlackjackState): boolean {
 function drawTo(
   hand: number[],
   round: bigint,
-  drawIndex: bigint,
+  drawIndex: bigint
 ): { hand: number[]; drawIndex: bigint } {
   const value = rankValue(drawRank(round, drawIndex));
   return { hand: [...hand, value], drawIndex: drawIndex + 1n };

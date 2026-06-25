@@ -56,7 +56,9 @@ export function hashScalar(hash32: Uint8Array): Uint8Array {
  */
 export function fieldSafeScalar(hash32: Uint8Array): Uint8Array {
   if (hash32.length !== SCALAR_SIZE) {
-    throw new Error(`field-safe scalar input must be 32 bytes, got ${hash32.length}`);
+    throw new Error(
+      `field-safe scalar input must be 32 bytes, got ${hash32.length}`
+    );
   }
   const out = hash32.slice();
   out[31] &= 0x1f;

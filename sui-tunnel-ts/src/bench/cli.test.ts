@@ -12,6 +12,6 @@ test("REPRO #11: a non-numeric --agents value is rejected (not silently NaN)", a
 test("an invalid --sign-mode value is rejected", async () => {
   await assert.rejects(
     () => main(["--sign-mode", "bogus"]),
-    /full\|sign-only\|none/,
+    /full\|sign-only\|none/
   );
 });

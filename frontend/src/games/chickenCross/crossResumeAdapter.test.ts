@@ -5,7 +5,10 @@ import { CrossProtocol } from "../../../../sui-tunnel-ts/src/protocol/cross.ts";
 
 test("serializeState round-trips through JSON and restores bigints", () => {
   const proto = new CrossProtocol();
-  const s0 = proto.initialState({ tunnelId: "0xfeed", initialBalances: { a: 500n, b: 500n } });
+  const s0 = proto.initialState({
+    tunnelId: "0xfeed",
+    initialBalances: { a: 500n, b: 500n },
+  });
   const s1 = proto.applyMove(s0, { dirA: "north" }, "A"); // tick=1n, a real bigint state
   const adapter = makeCrossResumeAdapter();
   const json = JSON.parse(JSON.stringify(adapter.serializeState(s1))); // must be JSON-safe
@@ -22,8 +25,14 @@ test("serializeState round-trips through JSON and restores bigints", () => {
 
 test("serializeState emits no bigint values (localStorage-safe)", () => {
   const proto = new CrossProtocol();
-  const s = proto.initialState({ tunnelId: "0xabc", initialBalances: { a: 500n, b: 500n } });
-  const j = makeCrossResumeAdapter().serializeState(s) as Record<string, unknown>;
+  const s = proto.initialState({
+    tunnelId: "0xabc",
+    initialBalances: { a: 500n, b: 500n },
+  });
+  const j = makeCrossResumeAdapter().serializeState(s) as Record<
+    string,
+    unknown
+  >;
   for (const k of ["tick", "seed", "balanceA", "balanceB", "total"])
     assert.equal(typeof j[k], "string", `${k} must serialize to string`);
 });

@@ -26,6 +26,24 @@ struct ProofLink {
     proof_url: Option<String>,
 }
 
+/// Subset of the `StatsSnapshot` JSON tunnel-manager publishes on `stats:snapshot`. Camel-case
+/// to match the snapshot wire shape; these three counters serialize as plain numbers (not the
+/// JS-safe decimal strings used for balances/nonce), so `i64` parses directly.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StatsSample {
+    total_actions: i64,
+    active_tunnels: i64,
+    settled_tunnels: i64,
+}
+
+const METRIC_RETENTION_SECS: i64 = 30 * 24 * 3600;
+const METRIC_UPSERT_SQL: &str = "INSERT INTO metric_bucket \
+    (ts_bucket, total_actions, active_tunnels, settled_tunnels) VALUES ($1,$2,$3,$4) \
+    ON CONFLICT (ts_bucket) DO UPDATE SET total_actions=EXCLUDED.total_actions, \
+    active_tunnels=EXCLUDED.active_tunnels, settled_tunnels=EXCLUDED.settled_tunnels";
+const METRIC_RETENTION_SQL: &str = "DELETE FROM metric_bucket WHERE ts_bucket < $1";
+
 const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
 
 #[tokio::main]
@@ -86,6 +104,8 @@ async fn wire_redis(redis_url: &str, database_url_str: &str) -> anyhow::Result<(
     // pool (the framework's `Connection` is only reachable inside `commit`). Same DATABASE_URL.
     let mgr = AsyncDieselConnectionManager::<AsyncPgConnection>::new(database_url_str);
     let pool: Pool<AsyncPgConnection> = Pool::builder().build(mgr).await?;
+    // Clone before the proofs task moves `pool`, so the stats-sample task can own its own handle.
+    let stats_pool = pool.clone();
 
     let subscriber =
         Builder::from_config(RedisConfig::from_url(redis_url)?).build_subscriber_client()?;
@@ -159,6 +179,63 @@ async fn wire_redis(redis_url: &str, database_url_str: &str) -> anyhow::Result<(
             }
         }
         tracing::warn!("explorer:proofs subscription closed; proof links disabled until restart");
+    });
+
+    // TPS time-series subscriber: tunnel-manager publishes the full snapshot on `stats:snapshot`
+    // each tick; we upsert one row per epoch-second (PK dedup collapses the N near-identical
+    // publishes per second into one row) and roll off rows past the retention window.
+    let stats_sub =
+        Builder::from_config(RedisConfig::from_url(redis_url)?).build_subscriber_client()?;
+    stats_sub.init().await?;
+    stats_sub.subscribe("stats:snapshot").await?;
+    let mut stats_msgs = stats_sub.message_rx();
+    tokio::spawn(async move {
+        use diesel::sql_types::BigInt;
+        use tokio::sync::broadcast::error::RecvError;
+        // Keep the subscriber owned by the task so its connection stays alive for message_rx.
+        let _stats_sub = stats_sub;
+        loop {
+            let msg = match stats_msgs.recv().await {
+                Ok(m) => m,
+                Err(RecvError::Lagged(n)) => {
+                    tracing::warn!(
+                        skipped = n,
+                        "stats:snapshot message_rx lagged; samples dropped"
+                    );
+                    continue;
+                }
+                Err(RecvError::Closed) => break,
+            };
+            let Some(payload) = msg.value.as_string() else {
+                continue;
+            };
+            let Ok(s) = serde_json::from_str::<StatsSample>(&payload) else {
+                continue;
+            };
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64;
+            let mut conn = match stats_pool.get().await {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!(error = %e, "stats sample pool exhausted; skipping");
+                    continue;
+                }
+            };
+            let _ = diesel::sql_query(METRIC_UPSERT_SQL)
+                .bind::<BigInt, _>(ts)
+                .bind::<BigInt, _>(s.total_actions)
+                .bind::<BigInt, _>(s.active_tunnels)
+                .bind::<BigInt, _>(s.settled_tunnels)
+                .execute(&mut conn)
+                .await;
+            let _ = diesel::sql_query(METRIC_RETENTION_SQL)
+                .bind::<BigInt, _>(ts - METRIC_RETENTION_SECS)
+                .execute(&mut conn)
+                .await;
+        }
+        tracing::warn!("stats:snapshot subscription closed; tps samples disabled until restart");
     });
 
     Ok(())
