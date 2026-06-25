@@ -4,8 +4,8 @@ A **bun** package that benchmarks real off-chain games on the `sui-tunnel-ts`
 engine. One match opens and cooperatively settles a real tunnel; the many moves
 between those bookends are the throughput. It measures two things:
 
-- **per-game latency** (`bench:game`) — open → play → settle, with per-move p50/p99.
-- **aggregate move-TPS** (`swarm`) — many concurrent matches across games.
+- **aggregate move-TPS** (default) — many concurrent matches across games.
+- **per-game latency** (`--game <name>`) — open → play → settle, with per-move p50/p99.
 
 It swaps only the **transport** under a fixed engine path, so the numbers are
 comparable across two channels and two anchor modes (below).
@@ -30,7 +30,7 @@ labelled `[channel/anchor]` — never conflate them.
 | `--anchor onchain` (default) | real `create_and_fund` open + `close_cooperative_with_root` settle on a Sui localnet | the stack |
 | `--offchain` / `--anchor offchain` | no chain at all; synthetic tunnel id, pure move loop | nothing (local) / relay only |
 
-Moves stay off-chain in both anchor modes. `offchain --channel local` needs no
+Moves stay off-chain in both anchor modes. `--offchain --channel local` needs no
 infra at all — start there.
 
 ## Prerequisites
@@ -59,43 +59,54 @@ N=16 bun run stack     # more keys
 Re-run only after `docker compose down` or when you want a fresh genesis. Check
 state with `docker compose ps` (both services should be `healthy`).
 
-### `bun run bench:game <game> [flags]` — one game
+### `bun run bench [flags]` — run the benchmark
+
+`bun run bench` is the single run entry point. It operates in two modes
+selected by flag:
+
+- **Default (no `--game`)**: aggregate move-TPS swarm — many concurrent matches
+  across games, prints `tunnels settled/s`.
+- **`--game <name>`**: per-game latency — open → play → settle for the named
+  game, prints per-move p50/p99. Use `--game all` to run every playable game.
+
+**Defaults:** `--channel local`, `--anchor onchain`, swarm mode.
+
+The bench performs **no infra orchestration**. Bring infra up yourself (`bun run
+stack` for a local one), then point `bench` at it via flags or `.env.local`.
+
+#### Infra by flag
+
+Infra values are resolved in this order: **flag → `.env.local` → process env**.
+`.env.local` is written by `bun run stack` and holds the localnet coordinates
+after a successful stack bring-up.
+
+- **Onchain**: `--rpc-url <url>`, `--package-id <id>`, `--settler-key <key>`
+- **Relay**: `--relay-url ws://…` connects to a relay you are already running.
+  Omitted ⇒ the relay auto-spawns (`cargo run -p tunnel-manager`, in-memory
+  store) as before.
+
+#### Worked examples
 
 ```bash
-# pure engine ceiling — no chain, no relay (start here):
-bun run bench:game ticTacToe --channel local --offchain
+# pure engine burst — no infra (start here):
+bun run bench --offchain --channel local --duration 10
 
-# real on-chain match on the localnet (onchain is the default anchor):
-bun run bench:game blackjack --channel local
+# one game's latency, no infra:
+bun run bench --game blackjack --offchain --channel local --matches 50
 
-# more matches, run concurrently:
-bun run bench:game ticTacToe --channel local --offchain --matches 50 --concurrency 8
+# onchain swarm against a local stack you brought up with `bun run stack`:
+bun run bench --channel local --matches 40
 
-# every playable game in one go:
-bun run bench:game --all --channel local --offchain
+# onchain against an explicit endpoint:
+bun run bench --channel local --rpc-url http://127.0.0.1:9000 \
+  --package-id 0x… --settler-key suiprivkey… --matches 40
+
+# relay against a relay you're running:
+bun run bench --channel relay --relay-url ws://127.0.0.1:8080/v1/mp --duration 10
+
+# isolated in a container, capped at 8 cores / 8 GB:
+bun run bench --container --cpus 8 --memory 8g --offchain --channel local --duration 10
 ```
-
-Defaults: `--channel relay`, `--anchor onchain`, `--matches 1`, `--concurrency 1`.
-
-### `bun run swarm [flags]` — aggregate move-TPS
-
-```bash
-# pure-burst engine TPS, no infra:
-bun run swarm --offchain --channel local --duration 10
-
-# fixed match count, on-chain, default game rotation:
-bun run swarm --channel local --matches 40
-
-# pick games and run for a duration:
-bun run swarm --offchain --channel local --games blackjack,quantumPoker --duration 15
-
-# explicit fleet size:
-bun run swarm --offchain --channel local --workers 4 --concurrency 6 --duration 10
-```
-
-Defaults: `--channel relay`, `--anchor onchain`, `--workers auto`, `--concurrency
-auto`, all playable games. If you pass neither `--matches` nor `--duration`, it
-runs for 15s. The `tunnels settled/s` line prints only for `--anchor onchain`.
 
 ### `bun test` — the unit + smoke suite
 
@@ -109,19 +120,27 @@ suite green with no infra. The offchain smoke always runs.
 
 ## Flags
 
-| flag | `bench:game` | `swarm` | notes |
+All flags hang off `bun run bench`.
+
+| flag | swarm | latency | notes |
 |---|---|---|---|
-| `<game>` (positional) | yes | — | one of the playable games below |
-| `--all` | yes | — | run every playable game |
-| `--games a,b,c` | — | yes | comma-separated; defaults to all |
-| `--channel local\|relay` | yes | yes | default `relay` |
+| `--game <name\|all>` | — | yes | selects latency mode; one of the playable games or `all` |
+| `--games a,b,c` | yes | — | comma-separated game filter; defaults to all |
+| `--channel local\|relay` | yes | yes | default `local` |
 | `--offchain` / `--anchor offchain\|onchain` | yes | yes | default `onchain` |
-| `--matches N` | yes | yes | swarm: stops at this count |
+| `--rpc-url <url>` | yes | yes | onchain: Sui RPC endpoint |
+| `--package-id <id>` | yes | yes | onchain: published tunnel package id |
+| `--settler-key <key>` | yes | yes | onchain: settler private key |
+| `--relay-url <ws-url>` | yes | yes | relay: WS URL of a running relay |
+| `--matches N` | yes | yes | stop after N matches (swarm) / run N matches (latency) |
 | `--concurrency N` | yes | yes | async matches in flight per worker |
-| `--duration S` | — | yes | swarm: stop after S seconds |
-| `--workers N\|auto` | — | yes | OS worker threads (true multi-core) |
-| `--mem-budget-mb N` | — | yes | memory cap for auto concurrency (io mode) |
-| `--per-match-kb N` | — | yes | per-match RSS estimate for auto concurrency |
+| `--duration S` | yes | — | swarm: stop after S seconds |
+| `--workers N\|auto` | yes | — | OS worker threads (true multi-core) |
+| `--mem-budget-mb N` | yes | — | memory cap for auto concurrency (io mode) |
+| `--per-match-kb N` | yes | — | per-match RSS estimate for auto concurrency |
+| `--container` | yes | yes | re-exec this run inside the `loadbench` compose service |
+| `--cpus N` | yes | yes | override compose CPU limit for `--container` run |
+| `--memory Ng` | yes | yes | override compose memory limit for `--container` run |
 
 **Playable games:** `ticTacToe, blackjack, battleship, quantumPoker, bombIt,
 cross`. These map to the real frontend kit classes; any other name is rejected
@@ -129,7 +148,7 @@ with a message listing the valid options.
 
 ## Fleet sizing (`--workers` and `--concurrency`)
 
-`swarm` distributes work across a fleet of OS worker threads:
+In swarm mode, `bench` distributes work across a fleet of OS worker threads:
 
 - **`--workers`** = number of Node.js `worker_threads`. Each thread runs on its
   own OS core, giving **true multi-core parallelism**. `auto` resolves to
@@ -168,43 +187,47 @@ reported for CPU (cores + %) and RSS.
 
 ## Container
 
-The `loadbench` service in `docker-compose.yml` (profile `bench`) runs the
-bench inside Docker, sharing the same `sui-localnet` network:
+`--container` re-execs the identical `bun run bench` invocation inside the
+`loadbench` compose service (profile `bench`), sharing the same `sui-localnet`
+network. `--cpus N` and `--memory Ng` override the compose CPU/memory limits
+for that run. Infra flags (`--rpc-url`, `--package-id`, `--settler-key`) pass
+through as `-e` env vars into the container. `.env.local` and `keys.json` are
+mounted read-only from `tools/loadbench/`.
 
 ```bash
 # build the image (once, or after code changes):
 docker compose --profile bench build loadbench
 
-# offchain burst — no chain needed:
-docker compose --profile bench run --rm loadbench \
-  --offchain --channel local --workers auto --duration 10
+# offchain burst inside the container:
+bun run bench --container --offchain --channel local --duration 10
 
-# onchain — stack must be up first (bun run stack):
-docker compose --profile bench run --rm loadbench \
-  --channel local --anchor onchain --workers auto --duration 10
+# onchain inside the container (stack must be up first):
+bun run bench --container --channel local --matches 40
+
+# cap at 8 cores / 8 GB for this run:
+bun run bench --container --cpus 8 --memory 8g --offchain --channel local --duration 10
 ```
 
 Key details:
 
 - **CPU/memory limits**: the service defaults to `cpus: "4"` and `memory: 4g`
-  via `deploy.resources.limits`. Override per run with
-  `docker run --cpus N --memory Ng`.
+  via `deploy.resources.limits`; override per run with `--cpus` / `--memory`.
 - **RPC**: `SUI_RPC_URL=http://sui-localnet:9000` is baked into the service
   environment so the container reaches the localnet by name.
-- **Secrets**: `.env.local` and `keys.json` are mounted read-only from
-  `tools/loadbench/` into the container.
 - **`--channel relay` is host-only**: the relay process (`cargo run -p
   tunnel-manager`) is not included in the image. Run relay benchmarks from the
-  host with `bun run swarm`.
+  host without `--container`.
 
 ## Relay specifics
 
-`--channel relay` auto-spawns the relay (`cargo run -p tunnel-manager`) if one
-isn't already healthy at `http://127.0.0.1:8080/healthz`, and connects over
-`ws://127.0.0.1:8080/v1/mp` (override with `MP_WS_URL`). The relay runs with its
-**in-memory store by default** — `REDIS_*` env vars are stripped from the spawned
-process. Set `REDIS_CACHE_URL` / `REDIS_PUBSUB_URL` only to benchmark the redis
-path.
+`--relay-url ws://…` connects `bench` to a relay you are already running.
+
+Without `--relay-url`, `--channel relay` auto-spawns the relay (`cargo run -p
+tunnel-manager`) if one isn't already healthy at `http://127.0.0.1:8080/healthz`,
+and connects over `ws://127.0.0.1:8080/v1/mp`. The relay runs with its
+**in-memory store by default** — `REDIS_*` env vars are stripped from the
+spawned process. Set `REDIS_CACHE_URL` / `REDIS_PUBSUB_URL` only to benchmark
+the redis path.
 
 ## Status / known gaps
 
@@ -231,9 +254,10 @@ path.
 | `src/stack.ts` + `docker-compose.yml` | localnet + valkey + publish + funding |
 | `src/relayProcess.ts` | relay spawn + health gate |
 | `src/runMatch.ts` | composes channel + anchor into one full match |
-| `src/benchGame.ts` | `bench:game` entrypoint |
-| `src/swarm.ts` | `swarm` entrypoint (fleet, resource monitor) |
+| `src/benchGame.ts` | latency mode (`--game`) entrypoint |
+| `src/swarm.ts` | swarm entrypoint (fleet, resource monitor) |
 | `src/worker.ts` | per-thread swarm worker |
+| `src/bench.ts` | `bun run bench` CLI entry; routes to swarm or latency mode |
 | `Dockerfile` | `loadbench` container image (bun + frontend kits; no cargo) |
 
 Secrets (`.env.local`, `keys.json`) are localnet-only and gitignored.
