@@ -6,4 +6,5 @@
 pub mod cli;
 pub mod driver;
 pub mod engine;
+pub mod fleet;
 pub mod game;
