@@ -4,3 +4,4 @@
 //! See docs/superpowers/specs/2026-06-25-rustbench-blackjack-design.md.
 
 pub mod engine;
+pub mod game;
