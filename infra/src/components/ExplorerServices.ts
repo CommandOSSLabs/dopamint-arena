@@ -17,6 +17,8 @@ export interface ExplorerServicesArgs {
   // ALB plumbing for the api (the indexer has no inbound).
   vpcId: pulumi.Input<string>;
   listener: aws.lb.Listener;
+  // Comma-separated list of origins allowed by the CORS layer. Omitted => permissive CORS.
+  corsAllowedOrigins?: pulumi.Input<string>;
 }
 
 export interface ExplorerServicesOutputs {
@@ -162,8 +164,9 @@ export function createExplorerServices(
       args.pubSubEndpoint,
       args.logGroupName,
       args.databaseUrlSecretArn,
+      args.corsAllowedOrigins ?? pulumi.output(undefined),
     ])
-    .apply(([repo, tag, pubsub, logGroup, dbUrlArn]) =>
+    .apply(([repo, tag, pubsub, logGroup, dbUrlArn, corsAllowedOrigins]) =>
       JSON.stringify([
         {
           name: "api",
@@ -177,6 +180,9 @@ export function createExplorerServices(
               value: "https://aggregator.walrus-testnet.walrus.space",
             },
             { name: "REDIS_PUBSUB_URL", value: `rediss://${pubsub}:6379` },
+            ...(corsAllowedOrigins
+              ? [{ name: "CORS_ALLOWED_ORIGINS", value: corsAllowedOrigins }]
+              : []),
           ],
           secrets: [{ name: "DATABASE_URL", valueFrom: dbUrlArn }],
           logConfiguration: logConfig(logGroup, "explorer-api"),

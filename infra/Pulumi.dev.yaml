@@ -1,7 +1,11 @@
 config:
   aws:region: us-east-1
   dopamint:environment: dev
-  dopamint:domain: dev.dopamint.example.com
+  dopamint:domain: dev.millionstps.io
+  dopamint:backend-domain: relay-dev.millionstps.io
+  dopamint:certificate-arn: arn:aws:acm:us-east-1:129671602944:certificate/cffc1c65-b146-498e-9e48-eca08bd55164
+  dopamint:cors-allowed-origins: http://localhost:5173,https://dev.millionstps.io
+  dopamint:route53-zone-id: ""
   dopamint:db-instance-class: db.r6g.large
   dopamint:db-min-capacity: "0.5"
   dopamint:db-max-capacity: "4"
@@ -10,9 +14,9 @@ config:
   dopamint:benchmark-instance-type: c7i.48xlarge
   dopamint:benchmark-min-size: "2"
   dopamint:benchmark-max-size: "2"
-  dopamint:route53-zone-id: ""
   dopamint:settler-key:
     secure: AAABAJh+ACo2yp6b8S9CVYe/VuZyCoRpJyWjME2aJxsKOITpdDIPVug3sqII0+sGj6dA6tzjElGaCMModIVyrvvH0OOd6HNQqDB7+g==
+  dopamint:backend-image-tag: 4bde1e4
   # Ollama sidecar for the chat-v2 feature. Disabled with `pulumi config set dopamint:ollama-enabled false`.
   dopamint:ollama-enabled: "true"
   dopamint:ollama-model: qwen2.5:1.8b

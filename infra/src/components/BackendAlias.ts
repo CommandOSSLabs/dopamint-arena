@@ -3,7 +3,7 @@ import * as pulumi from "@pulumi/pulumi";
 
 export interface BackendAliasArgs {
   name: string;
-  domain: string;
+  backendDomain: string;
   zoneId?: pulumi.Input<string>;
   albDnsName: pulumi.Input<string>;
   albHostedZoneId: pulumi.Input<string>;
@@ -14,7 +14,7 @@ export function createBackendAlias(args: BackendAliasArgs): void {
 
   new aws.route53.Record(`${args.name}-backend-alias`, {
     zoneId: args.zoneId,
-    name: `api.${args.domain}`,
+    name: args.backendDomain,
     type: "A",
     aliases: [
       {
