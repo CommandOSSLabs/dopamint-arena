@@ -48,25 +48,25 @@ export function BattleView({
 
   return (
     <div className="relative flex min-h-full flex-col gap-2 p-2 @[26rem]:p-3 lg:h-full lg:min-h-0 lg:overflow-hidden">
-      <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-2 gap-y-0.5 text-[clamp(10px,2.6cqmin,15px)] text-[var(--qp-ink-soft)]">
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-2 gap-y-0.5 text-[clamp(10px,2.6cqmin,15px)] text-[var(--sketch-ink-soft)]">
         <span>
           Enemy sunk{" "}
-          <span className="text-[var(--qp-ink)]">
+          <span className="text-[var(--sketch-ink)]">
             {view.hitsOnEnemy}/{FLEET_CELLS}
           </span>{" "}
           · your hull{" "}
-          <span className="text-[var(--qp-ink)]">
+          <span className="text-[var(--sketch-ink)]">
             {view.hitsOnYou}/{FLEET_CELLS}
           </span>
         </span>
         <span>
           {score ? (
             <>
-              <span className="uppercase tracking-wider text-[var(--qp-amber)]">
+              <span className="uppercase tracking-wider text-[var(--sketch-accent)]">
                 Game {gameNumber}
               </span>{" "}
-              · <span className="text-[var(--qp-felt)]">{score.you}</span>–
-              <span className="text-[var(--qp-red)]">{score.foe}</span>
+              · <span className="text-[var(--sketch-felt)]">{score.you}</span>–
+              <span className="text-[var(--sketch-red)]">{score.foe}</span>
             </>
           ) : view.onChain ? (
             "on-chain"
@@ -105,8 +105,8 @@ export function BattleView({
           <span
             className={cn(
               view.myTurn
-                ? "text-[var(--qp-amber)] motion-safe:animate-pulse"
-                : "text-[var(--qp-ink-soft)]",
+                ? "text-[var(--sketch-accent)] motion-safe:animate-pulse"
+                : "text-[var(--sketch-ink-soft)]",
             )}
           >
             {view.myTurn ? "Your turn — fire!" : "Opponent is aiming…"}
@@ -118,26 +118,26 @@ export function BattleView({
           shown when a game ends in manual play, with Play Again + (multi-game) Settle. */}
       {view.outcome !== null && !auto && (
         <div className="absolute inset-0 grid place-items-center overflow-y-auto bg-[rgba(35,34,31,0.32)] p-2 backdrop-blur-[2px] @[20rem]:p-4">
-          <div className="qp-panel qp-stroke flex w-full max-w-xs animate-in flex-col items-center gap-3 p-4 text-center zoom-in-95 @[20rem]:p-5">
+          <div className="sketch-panel sketch-stroke flex w-full max-w-xs animate-in flex-col items-center gap-3 p-4 text-center zoom-in-95 @[20rem]:p-5">
             <div
               className={cn(
-                "qp-title text-[clamp(20px,7cqmin,30px)]",
+                "sketch-title text-[clamp(20px,7cqmin,30px)]",
                 view.outcome === "win"
-                  ? "text-[var(--qp-felt)]"
-                  : "text-[var(--qp-red)]",
+                  ? "text-[var(--sketch-felt)]"
+                  : "text-[var(--sketch-red)]",
               )}
             >
               {view.outcome === "win" ? "Victory" : "Defeat"}
             </div>
             {score ? (
-              <p className="qp-note">
+              <p className="sketch-note">
                 Session{" "}
-                <span className="text-[var(--qp-felt)]">{score.you}</span> –{" "}
-                <span className="text-[var(--qp-red)]">{score.foe}</span> ·
+                <span className="text-[var(--sketch-felt)]">{score.you}</span> –{" "}
+                <span className="text-[var(--sketch-red)]">{score.foe}</span> ·
                 settle to cash out, or play on.
               </p>
             ) : (
-              <p className="qp-note">
+              <p className="sketch-note">
                 {view.outcome === "win"
                   ? "You sank the enemy fleet."
                   : "Your fleet was sunk."}
@@ -152,19 +152,25 @@ export function BattleView({
                 value={`${view.hitsOnYou}/${FLEET_CELLS}`}
               />
             </dl>
-            <div className="text-[clamp(10px,2.4cqmin,14px)] text-[var(--qp-ink-soft)]">
+            <div className="text-[clamp(10px,2.4cqmin,14px)] text-[var(--sketch-ink-soft)]">
               {statusLabel ?? ""}
             </div>
             <div className="mt-1 flex w-full flex-col gap-2">
               <button
                 onClick={onPlayAgain}
                 disabled={playAgainDisabled}
-                className={cn("qp-btn w-full", !onSettle && "qp-btn--go")}
+                className={cn(
+                  "sketch-btn w-full",
+                  !onSettle && "sketch-btn--go",
+                )}
               >
                 {playAgainLabel ?? "Play Again"}
               </button>
               {onSettle && (
-                <button onClick={onSettle} className="qp-btn qp-btn--go w-full">
+                <button
+                  onClick={onSettle}
+                  className="sketch-btn sketch-btn--go w-full"
+                >
                   Settle &amp; cash out
                 </button>
               )}
@@ -179,8 +185,8 @@ export function BattleView({
 function Stat({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-center justify-between gap-2 px-2">
-      <dt className="text-[var(--qp-ink-soft)]">{label}</dt>
-      <dd className="text-[var(--qp-ink)]">{value}</dd>
+      <dt className="text-[var(--sketch-ink-soft)]">{label}</dt>
+      <dd className="text-[var(--sketch-ink)]">{value}</dd>
     </div>
   );
 }

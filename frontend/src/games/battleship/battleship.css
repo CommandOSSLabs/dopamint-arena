@@ -1,14 +1,25 @@
 /* ============================================================
    Battleship — hand-drawn "whiteboard sketch" skin, matching Quantum Poker.
 
-   Reuses poker's design tokens (--qp-*, defined on `.qp-sketch`) and its
-   `#qpRough` turbulence filter (rendered by <SketchDefs/>), so the two games
+   Reuses poker's design tokens (--sketch-*, defined on `.sketch` in sketch.css)
+   and its `#skRough` turbulence filter (rendered by <SketchDefs/>), so the two games
    share one visual language: Gochi Hand on paper, ink-stroke borders that
-   wobble, amber/red/ink palette, everything cqmin-scaled to the WINDOW.
+   wobble, accent/red/ink palette, everything cqmin-scaled to the WINDOW.
 
    The boards are the only battleship-specific chrome; the window frame, header,
-   buttons and panels reuse the `.qp-*` classes verbatim.
+   buttons and panels reuse the `.sketch-*` classes verbatim.
    ============================================================ */
+
+@import "../sketch/sketch.css";
+
+/* ---- game header control bar ---- */
+.bs-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: clamp(6px, 2cqmin, 14px);
+  padding: clamp(5px, 1.6cqmin, 12px) clamp(8px, 2.4cqmin, 18px);
+}
 
 /* ---- board: paper panel inside a hand-drawn ink frame ---- */
 .bs-board {
@@ -22,21 +33,21 @@
   content: "";
   position: absolute;
   inset: 0;
-  border: 2.5px solid var(--qp-ink);
+  border: 2.5px solid var(--sketch-ink);
   border-radius: 13px;
-  filter: url(#qpRough);
+  filter: var(--sketch-filter);
   z-index: -1;
 }
 /* the enemy "firing" board reads as the felt-green target grid */
 .bs-board--enemy::before {
-  border-color: var(--qp-felt);
+  border-color: var(--sketch-felt);
 }
 
 /* the A–J / 1–10 frame labels, inked */
 .bs-coord {
   font-size: clamp(8px, 2.2cqmin, 13px);
   line-height: 1;
-  color: var(--qp-ink-soft);
+  color: var(--sketch-ink-soft);
 }
 
 /* ---- one 10×10 square ---- */
@@ -50,29 +61,29 @@
   font-family: inherit;
   font-size: clamp(9px, 3.4cqmin, 22px);
   line-height: 1;
-  color: var(--qp-ink);
+  color: var(--sketch-ink);
   background: transparent;
   border: 1.4px solid rgba(35, 34, 31, 0.16);
   transition: background 0.12s ease;
 }
-/* fireable water: amber crosshair on hover */
+/* fireable water: accent crosshair on hover */
 .bs-cell--fire {
   cursor: crosshair;
 }
 .bs-cell--fire:hover {
-  background: var(--qp-amber-fill);
-  border-color: var(--qp-amber);
+  background: var(--sketch-accent-fill);
+  border-color: var(--sketch-accent);
 }
 .bs-cell--miss {
-  color: var(--qp-ink-soft);
+  color: var(--sketch-ink-soft);
   border-color: rgba(35, 34, 31, 0.16);
 }
 .bs-cell--hit {
-  color: var(--qp-red);
+  color: var(--sketch-red);
   border-color: rgba(224, 49, 49, 0.45);
 }
 .bs-cell--sunk {
-  color: var(--qp-red);
+  color: var(--sketch-red);
   background: rgba(224, 49, 49, 0.12);
   border-color: rgba(224, 49, 49, 0.4);
 }
@@ -83,14 +94,14 @@
   line-height: 1;
 }
 
-/* most-recent shot: a quick amber wobble ring */
+/* most-recent shot: a quick accent wobble ring */
 .bs-cell--last::after {
   content: "";
   position: absolute;
   inset: -2px;
-  border: 2.5px solid var(--qp-amber);
+  border: 2.5px solid var(--sketch-accent);
   border-radius: 7px;
-  filter: url(#qpRough);
+  filter: var(--sketch-filter);
   pointer-events: none;
 }
 
@@ -111,9 +122,9 @@
   content: "";
   position: absolute;
   inset: 0;
-  border: 2.5px solid var(--qp-ink);
+  border: 2.5px solid var(--sketch-ink);
   border-radius: 7px;
-  filter: url(#qpRough);
+  filter: var(--sketch-filter);
   z-index: -1;
 }
 .bs-ship--ghost {
@@ -123,17 +134,17 @@
   background: rgba(224, 49, 49, 0.16);
 }
 .bs-ship--sunk::before {
-  border-color: var(--qp-red);
+  border-color: var(--sketch-red);
 }
 /* placement preview: accent when it fits, red when it doesn't */
 .bs-ship--ok::before {
-  border-color: var(--qp-amber);
+  border-color: var(--sketch-accent);
 }
 .bs-ship--bad {
   background: rgba(224, 49, 49, 0.12);
 }
 .bs-ship--bad::before {
-  border-color: var(--qp-red);
+  border-color: var(--sketch-red);
 }
 
 /* a small inked "ship token" chip used in the fleet picker */
@@ -146,22 +157,22 @@
   padding: clamp(2px, 1cqmin, 6px) clamp(6px, 2cqmin, 13px);
   font-size: clamp(10px, 2.7cqmin, 16px);
   line-height: 1;
-  color: var(--qp-ink);
+  color: var(--sketch-ink);
   cursor: pointer;
 }
 .bs-pill::before {
   content: "";
   position: absolute;
   inset: 0;
-  border: 2px solid var(--qp-ink-soft);
+  border: 2px solid var(--sketch-ink-soft);
   border-radius: 999px;
-  filter: url(#qpRough);
+  filter: var(--sketch-filter);
   z-index: -1;
 }
 .bs-pill--on {
-  color: var(--qp-amber);
+  color: var(--sketch-accent);
 }
 .bs-pill--on::before {
-  border-color: var(--qp-amber);
+  border-color: var(--sketch-accent);
   border-width: 2.5px;
 }

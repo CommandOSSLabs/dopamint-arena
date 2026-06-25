@@ -55,7 +55,9 @@ const BoardCell = memo(function BoardCell({
         <span
           className={cn(
             "bs-mark select-none",
-            v === "miss" ? "text-[var(--qp-ink-soft)]" : "text-[var(--qp-red)]",
+            v === "miss"
+              ? "text-[var(--sketch-ink-soft)]"
+              : "text-[var(--sketch-red)]",
             v === "hit" && "motion-safe:animate-pulse",
           )}
         >
@@ -116,7 +118,7 @@ export function BoardGrid({
   return (
     <div className="flex w-full flex-col gap-1.5 lg:h-full lg:min-h-0">
       {title && (
-        <div className="qp-eyebrow shrink-0 text-[clamp(9px,2.4cqmin,14px)] uppercase">
+        <div className="sketch-eyebrow shrink-0 text-[clamp(9px,2.4cqmin,14px)] uppercase">
           {title}
         </div>
       )}

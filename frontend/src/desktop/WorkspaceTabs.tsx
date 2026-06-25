@@ -47,8 +47,9 @@ const WORKSPACE_TABS: {
 ];
 
 const tab =
-  "inline-flex items-center gap-1.5 rounded-md border border-transparent px-3 py-1.5 text-xs font-medium text-foreground/60 transition-colors hover:text-foreground";
-const tabActive = "border-border bg-background text-foreground shadow-sm";
+  "inline-flex items-center gap-1.5 rounded-md border border-transparent px-3 py-1.5 text-xs font-medium transition-colors";
+const tabInactive = "text-foreground/60 hover:text-foreground";
+const tabActive = "border-border bg-secondary text-foreground shadow-sm";
 
 /** A row action in the layout-tools menu. */
 function ToolItem({
@@ -113,7 +114,10 @@ export function WorkspaceTabs({
               key={t.section}
               to="/"
               search={t.section === "games" ? {} : { section: t.section }}
-              className={cn(tab, active === t.section && tabActive)}
+              className={cn(
+                tab,
+                active === t.section ? tabActive : tabInactive,
+              )}
             >
               <Icon className="size-3.5" />
               {t.label}
