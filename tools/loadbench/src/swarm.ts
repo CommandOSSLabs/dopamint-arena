@@ -134,21 +134,6 @@ export async function runSwarm(
   return { moves: totalMoves, matches: totalMatches, elapsedMs: opts.now() - start };
 }
 
-function runWorker(input: Record<string, unknown>): Promise<{ ok: boolean; moves?: number; matches?: number; error?: string }> {
-  return new Promise((resolve) => {
-    const w = new Worker(new URL("./worker.ts", import.meta.url), { workerData: input });
-    let settled = false;
-    const settle = (v: { ok: boolean; moves?: number; matches?: number; error?: string }) => {
-      if (!settled) { settled = true; resolve(v); }
-    };
-    w.once("message", (m) => settle(m));
-    w.once("error", (e) => settle({ ok: false, error: String(e?.stack ?? e) }));
-    // Safety net: a normal worker posts a message before exiting, so this only
-    // fires on abnormal termination (OOM kill, uncaught crash) that skips the message.
-    w.once("exit", (code) => settle({ ok: false, error: `worker exited without result (code ${code})` }));
-  });
-}
-
 /** Onchain runs need the published package + a funded settler; offchain needs nothing. */
 function buildOnchainEnv(args: ReturnType<typeof parseSwarmArgs>): Record<string, string> {
   const env: Record<string, string> = {};
@@ -168,7 +153,7 @@ interface WorkerResult { ok: boolean; moves?: number; matches?: number; error?: 
 
 interface PoolWorker {
   ready: Promise<void>;
-  run(cmd: { game: string; matches: number | null; durationMs: number | null }): Promise<WorkerResult>;
+  run(cmd: { games: string[]; matches: number | null; durationMs: number | null }): Promise<WorkerResult>;
   done(): void;
 }
 
@@ -183,7 +168,7 @@ function spawnPoolWorker(init: {
   concurrency: number;
   env: Record<string, string>;
 }): PoolWorker {
-  const w = new Worker(new URL("./worker.ts", import.meta.url), { workerData: { ...init, pool: true } });
+  const w = new Worker(new URL("./worker.ts", import.meta.url), { workerData: init });
   let pending: ((v: WorkerResult) => void) | null = null;
   let resolveReady!: () => void;
   const ready = new Promise<void>((res) => { resolveReady = res; });
@@ -230,7 +215,7 @@ async function runAllGamesReport(
       const cpu = startCpuUtilMonitor();
       const start = performance.now();
       const wr = await Promise.all(
-        pool.map((p, i) => p.run({ game, matches: slices ? slices[i] : null, durationMs })),
+        pool.map((p, i) => p.run({ games: [game], matches: slices ? slices[i] : null, durationMs })),
       );
       const elapsedMs = performance.now() - start;
       const cpuSummary = cpu.stop();
@@ -304,27 +289,30 @@ async function main() {
       return;
     }
 
+    // Spawn the fleet warm and wait until every worker has imported the engine
+    // and built its context; only then start measuring, so spin-up never counts
+    // against throughput or CPU utilization.
     const slices = args.matches !== null ? sliceMatches(args.matches, workers) : null;
+    const pool = Array.from({ length: workers }, (_, i) =>
+      spawnPoolWorker({ workerId: i, channel: args.channel, anchor: args.anchor, concurrency, env }),
+    );
+    await Promise.all(pool.map((p) => p.ready));
+
+    let results: WorkerResult[];
+    let elapsedMs: number;
     const monitor = startResourceMonitor();
     const start = performance.now();
-    const inputs = Array.from({ length: workers }, (_, i) => ({
-      workerId: i,
-      channel: args.channel,
-      anchor: args.anchor,
-      games: args.games,
-      concurrency,
-      matches: slices ? slices[i] : null,
-      durationMs,
-      env,
-    })).filter((inp) => inp.matches === null || inp.matches > 0);
-
-    const results = await Promise.all(inputs.map(runWorker));
-    const elapsedMs = performance.now() - start;
+    try {
+      results = await Promise.all(pool.map((p, i) => p.run({ games: args.games, matches: slices ? slices[i] : null, durationMs })));
+      elapsedMs = performance.now() - start;
+    } finally {
+      pool.forEach((p) => p.done());
+    }
+    const res = monitor.stop();
     const ok = results.filter((r) => r.ok);
     const failed = results.length - ok.length;
     const moves = ok.reduce((a, r) => a + (r.moves ?? 0), 0);
     const matches = ok.reduce((a, r) => a + (r.matches ?? 0), 0);
-    const res = monitor.stop();
 
     console.log(`[${tag}] fleet: workers=${workers} concurrency=${concurrency}${args.workers === "auto" || args.concurrency === "auto" ? " (auto)" : ""}${failed ? ` (${failed} worker(s) failed)` : ""}`);
     console.log(`[${tag}] swarm: ${moves} moves over ${matches} matches in ${(elapsedMs / 1000).toFixed(1)}s`);

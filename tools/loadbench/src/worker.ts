@@ -9,13 +9,8 @@ interface WorkerInput {
   workerId: number;
   channel: "local" | "relay";
   anchor: "onchain" | "offchain";
-  games: string[];
   concurrency: number;
-  matches: number | null;
-  durationMs: number | null;
   env: Record<string, string>;
-  /** Pool mode: stay alive and run one game per "run" command (warm across games). */
-  pool?: boolean;
 }
 
 /** Build the match context once — onchain needs an RPC client + funded settler. */
@@ -31,44 +26,37 @@ function buildCtx(d: WorkerInput): { client?: SuiClient; funder?: Ed25519Keypair
   return ctx;
 }
 
-/** One-shot: run the swarm once over the games list, post the result, exit. */
-async function oneShot(d: WorkerInput): Promise<void> {
+/** Warm worker: build ctx once, then run each "run" command (round-robin over
+ *  its games list) until "done". Spawning + engine import + ctx build all
+ *  complete before the "ready" signal, so the controller can start its CPU/timer
+ *  measurement only once every worker is warm — startup is never measured. */
+function warmLoop(d: WorkerInput): void {
   const ctx = buildCtx(d);
   let g = 0;
-  const nextGame = () => d.games[g++ % d.games.length];
-  const res = await runSwarm(() => runFullMatch(nextGame(), d.channel, d.anchor, ctx), {
-    concurrency: d.concurrency,
-    matches: d.matches,
-    durationMs: d.durationMs,
-    now: () => performance.now(),
-  });
-  parentPort!.postMessage({ ok: true, moves: res.moves, matches: res.matches });
-}
-
-/** Pool: build ctx once (warm), then run one game per "run" command until "done". */
-function poolLoop(d: WorkerInput): void {
-  const ctx = buildCtx(d);
-  parentPort!.on("message", async (cmd: { type: "run" | "done"; game?: string; matches?: number | null; durationMs?: number | null }) => {
-    if (cmd.type === "done") {
-      parentPort!.close();
-      return;
-    }
-    try {
-      const res = await runSwarm(() => runFullMatch(cmd.game!, d.channel, d.anchor, ctx), {
-        concurrency: d.concurrency,
-        matches: cmd.matches ?? null,
-        durationMs: cmd.durationMs ?? null,
-        now: () => performance.now(),
-      });
-      parentPort!.postMessage({ ok: true, moves: res.moves, matches: res.matches });
-    } catch (e) {
-      parentPort!.postMessage({ ok: false, error: String((e as Error)?.stack ?? e) });
-    }
-  });
+  parentPort!.on(
+    "message",
+    async (cmd: { type: "run" | "done"; games?: string[]; matches?: number | null; durationMs?: number | null }) => {
+      if (cmd.type === "done") {
+        parentPort!.close();
+        return;
+      }
+      try {
+        const games = cmd.games!;
+        const nextGame = () => games[g++ % games.length];
+        const res = await runSwarm(() => runFullMatch(nextGame(), d.channel, d.anchor, ctx), {
+          concurrency: d.concurrency,
+          matches: cmd.matches ?? null,
+          durationMs: cmd.durationMs ?? null,
+          now: () => performance.now(),
+        });
+        parentPort!.postMessage({ ok: true, moves: res.moves, matches: res.matches });
+      } catch (e) {
+        parentPort!.postMessage({ ok: false, error: String((e as Error)?.stack ?? e) });
+      }
+    },
+  );
   // Imports + ctx are done; signal the parent the worker is warm and idle.
   parentPort!.postMessage({ ready: true });
 }
 
-const d = workerData as WorkerInput;
-if (d.pool) poolLoop(d);
-else oneShot(d).catch((e) => parentPort!.postMessage({ ok: false, error: String(e?.stack ?? e) }));
+warmLoop(workerData as WorkerInput);
