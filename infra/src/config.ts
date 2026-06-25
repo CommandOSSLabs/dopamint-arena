@@ -24,6 +24,11 @@ export interface InfraConfig {
   // (Phase 0) and fails loud at settler construction if absent. Sourced from secret
   // config so it lands in Secrets Manager, never in the task definition.
   settlerKey?: pulumi.Output<string>;
+  // Ollama sidecar for the chat-v2 feature. Enabled by default; disable in envs
+  // where chat is not needed or where you want to supply an external Ollama URL.
+  ollamaEnabled: boolean;
+  ollamaModel: string;
+  ollamaImageTag: string;
 }
 
 export function getConfig(): InfraConfig {
@@ -42,6 +47,9 @@ export function getConfig(): InfraConfig {
     benchmarkImageVersion: config.get("benchmark-image-version") ?? "1.0.1",
     backendImageTag: config.get("backend-image-tag") ?? undefined,
     settlerKey: config.getSecret("settler-key"),
+    ollamaEnabled: config.getBoolean("ollama-enabled") ?? true,
+    ollamaModel: config.get("ollama-model") ?? "qwen2.5:1.8b",
+    ollamaImageTag: config.get("ollama-image-tag") ?? "0.6.2",
   };
 }
 

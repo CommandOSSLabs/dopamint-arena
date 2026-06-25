@@ -25,10 +25,12 @@
 ### Task 1: Chicken Cross resume adapter
 
 **Files:**
+
 - Create: `frontend/src/games/chickenCross/crossResumeAdapter.ts`
 - Test: `frontend/src/games/chickenCross/crossResumeAdapter.test.ts`
 
 **Interfaces:**
+
 - Consumes: `ResumeAdapter` from `@/pvp/resumeSession`; `CrossState`, `CrossMove` from `sui-tunnel-ts/protocol/cross` (test uses the relative `.ts` path).
 - Produces: `export function makeCrossResumeAdapter(onReconciled?): ResumeAdapter<CrossState, CrossMove>`.
 
@@ -46,7 +48,10 @@ import { CrossProtocol } from "../../../../sui-tunnel-ts/src/protocol/cross.ts";
 
 test("serializeState round-trips through JSON and restores bigints", () => {
   const proto = new CrossProtocol();
-  const s0 = proto.initialState({ tunnelId: "0xfeed", initialBalances: { a: 500n, b: 500n } });
+  const s0 = proto.initialState({
+    tunnelId: "0xfeed",
+    initialBalances: { a: 500n, b: 500n },
+  });
   const s1 = proto.applyMove(s0, { dirA: "north" }, "A"); // tick=1n, a real bigint state
   const adapter = makeCrossResumeAdapter();
   const json = JSON.parse(JSON.stringify(adapter.serializeState(s1))); // must be JSON-safe
@@ -63,8 +68,14 @@ test("serializeState round-trips through JSON and restores bigints", () => {
 
 test("serializeState emits no bigint values (localStorage-safe)", () => {
   const proto = new CrossProtocol();
-  const s = proto.initialState({ tunnelId: "0xabc", initialBalances: { a: 500n, b: 500n } });
-  const j = makeCrossResumeAdapter().serializeState(s) as Record<string, unknown>;
+  const s = proto.initialState({
+    tunnelId: "0xabc",
+    initialBalances: { a: 500n, b: 500n },
+  });
+  const j = makeCrossResumeAdapter().serializeState(s) as Record<
+    string,
+    unknown
+  >;
   for (const k of ["tick", "seed", "balanceA", "balanceB", "total"])
     assert.equal(typeof j[k], "string", `${k} must serialize to string`);
 });
@@ -138,10 +149,12 @@ git commit -m "feat(cross): pvp resume adapter"
 ### Task 2: Bomb It resume adapter
 
 **Files:**
+
 - Create: `frontend/src/games/bombIt/bombItResumeAdapter.ts`
 - Test: `frontend/src/games/bombIt/bombItResumeAdapter.test.ts`
 
 **Interfaces:**
+
 - Produces: `export function makeBombItResumeAdapter(onReconciled?): ResumeAdapter<BombItState, BombItMove>`.
 
 `BombItState` fields (from `sui-tunnel-ts/src/protocol/bombIt.ts`): `tick: bigint`, `seed: bigint`, `grid: Uint8Array`, `players: [BombItPlayer, BombItPlayer]` (`{ row, col, alive }` — JSON-native), `bombs: BombItBomb[]` (`{ row, col, fuse, owner }` — JSON-native), `winner: "A"|"B"|"draw"|null`, `balanceA/B/total: bigint`. Conversion needed: five bigints → strings, `grid: Uint8Array` → number[].
@@ -154,14 +167,22 @@ git commit -m "feat(cross): pvp resume adapter"
 import test from "node:test";
 import assert from "node:assert/strict";
 import { makeBombItResumeAdapter } from "./bombItResumeAdapter.ts";
-import { BombItProtocol, CELL_COUNT } from "../../../../sui-tunnel-ts/src/protocol/bombIt.ts";
+import {
+  BombItProtocol,
+  CELL_COUNT,
+} from "../../../../sui-tunnel-ts/src/protocol/bombIt.ts";
 
 test("serializeState round-trips through JSON: bigints + grid Uint8Array", () => {
   const proto = new BombItProtocol();
-  const s0 = proto.initialState({ tunnelId: "0xfeed", initialBalances: { a: 100n, b: 100n } });
+  const s0 = proto.initialState({
+    tunnelId: "0xfeed",
+    initialBalances: { a: 100n, b: 100n },
+  });
   const s1 = proto.applyMove(s0, { a: "bomb" }, "A"); // tick=1n + a live bomb
   const adapter = makeBombItResumeAdapter();
-  const back = adapter.deserializeState(JSON.parse(JSON.stringify(adapter.serializeState(s1))));
+  const back = adapter.deserializeState(
+    JSON.parse(JSON.stringify(adapter.serializeState(s1))),
+  );
   assert.equal(back.tick, s1.tick);
   assert.equal(back.seed, s1.seed);
   assert.equal(back.balanceA, s1.balanceA);
@@ -177,8 +198,14 @@ test("serializeState round-trips through JSON: bigints + grid Uint8Array", () =>
 
 test("serializeState is JSON-safe (no bigint, grid as number[])", () => {
   const proto = new BombItProtocol();
-  const s = proto.initialState({ tunnelId: "0xabc", initialBalances: { a: 100n, b: 100n } });
-  const j = makeBombItResumeAdapter().serializeState(s) as Record<string, unknown>;
+  const s = proto.initialState({
+    tunnelId: "0xabc",
+    initialBalances: { a: 100n, b: 100n },
+  });
+  const j = makeBombItResumeAdapter().serializeState(s) as Record<
+    string,
+    unknown
+  >;
   for (const k of ["tick", "seed", "balanceA", "balanceB", "total"])
     assert.equal(typeof j[k], "string");
   assert.ok(Array.isArray(j.grid));
@@ -257,10 +284,12 @@ git commit -m "feat(bomb-it): pvp resume adapter"
 ### Task 3: Chicken Cross PvP hook → out-of-React session + resume
 
 **Files:**
+
 - Rewrite: `frontend/src/games/chickenCross/usePvpChickenCross.ts`
 - Modify: `frontend/src/games/chickenCross/ChickenCrossWindow.tsx` (pass `windowId`)
 
 **Interfaces:**
+
 - Consumes: `makeCrossResumeAdapter` (Task 1); `attachResume`, `resumeActiveTunnels` from `@/pvp/resumeSession`; `installResumePersistence`, `evictExpiredRecords`, `readResumeRecord`, `listActiveTunnels` from `@/pvp/resume`; `registerWindowDisposer` from `@/lib/windowSessions`; existing `CrossProtocol`, `deriveView`, `MpClient`, `DistributedTunnel`, `Transcript`, on-chain builders, `coSignedToSettleRequest`.
 - Produces: `export function usePvpChickenCross(windowId: string): PvpChickenCross` — same `PvpChickenCross` interface fields as today (`status, role, stake, auto, view, winner, error, findMatch, setDir, toggleAuto, reset`), now driven by `useSyncExternalStore`.
 
@@ -305,10 +334,12 @@ git commit -m "feat(cross): pvp match resume + session"
 ### Task 4: Bomb It PvP hook → out-of-React session + resume
 
 **Files:**
+
 - Rewrite: `frontend/src/games/bombIt/usePvpBombIt.ts`
 - Modify: `frontend/src/games/bombIt/BombItWindow.tsx` (pass `windowId`)
 
 **Interfaces:**
+
 - Same as Task 3 but for bomb-it: `makeBombItResumeAdapter`, `BombItProtocol`, `BombItState`/`BombItMove`, `game: "bomb-it"`, `STEP_MS = 250`, controls `queueAction`/`toggleAuto`/`auto`, bot move via `proto.randomMove(state, myRole, rng)` reading `.a`/`.b`, human via `nextActionRef`.
 - Produces: `export function usePvpBombIt(windowId: string): PvpBombIt` (same interface fields as today), `useSyncExternalStore`-driven.
 
@@ -343,6 +374,7 @@ git commit -m "feat(bomb-it): pvp match resume + session"
 ### Task 5: Cold-load round-trip tests
 
 **Files:**
+
 - Create: `frontend/src/games/chickenCross/crossColdLoad.test.ts`
 - Create: `frontend/src/games/bombIt/bombItColdLoad.test.ts`
 
@@ -360,9 +392,16 @@ import assert from "node:assert/strict";
 import { makeCrossResumeAdapter } from "./crossResumeAdapter.ts";
 import { rebuildTunnel } from "../../pvp/resumeSession.ts";
 import {
-  writeResumeRecord, flushResumeWrites, readResumeRecord, clearResumeRecord, toWireCoSigned,
+  writeResumeRecord,
+  flushResumeWrites,
+  readResumeRecord,
+  clearResumeRecord,
+  toWireCoSigned,
 } from "../../pvp/resume.ts";
-import { OffchainTunnel, makeEndpoint } from "../../../../sui-tunnel-ts/src/core/tunnel.ts";
+import {
+  OffchainTunnel,
+  makeEndpoint,
+} from "../../../../sui-tunnel-ts/src/core/tunnel.ts";
 import { defaultBackend } from "../../../../sui-tunnel-ts/src/core/crypto-native.ts";
 import { generateKeyPair } from "../../../../sui-tunnel-ts/src/core/crypto.ts";
 import { toHex } from "../../../../sui-tunnel-ts/src/core/bytes.ts";
@@ -370,24 +409,43 @@ import { CrossProtocol } from "../../../../sui-tunnel-ts/src/protocol/cross.ts";
 
 (globalThis as Record<string, unknown>).localStorage = new (class {
   m = new Map<string, string>();
-  getItem(k: string) { return this.m.has(k) ? this.m.get(k)! : null; }
-  setItem(k: string, v: string) { this.m.set(k, v); }
-  removeItem(k: string) { this.m.delete(k); }
+  getItem(k: string) {
+    return this.m.has(k) ? this.m.get(k)! : null;
+  }
+  setItem(k: string, v: string) {
+    this.m.set(k, v);
+  }
+  removeItem(k: string) {
+    this.m.delete(k);
+  }
 })();
 (globalThis as Record<string, unknown>).window = { addEventListener() {} };
 
 test("cross cold-load: rebuilt tunnel restores the co-signed state from localStorage", () => {
   const proto = new CrossProtocol() as never;
-  const ka = generateKeyPair(), kb = generateKeyPair();
+  const ka = generateKeyPair(),
+    kb = generateKeyPair();
   const tid = `0x${"63".repeat(32)}`;
-  const sp = OffchainTunnel.selfPlay(proto, tid, ka as never, kb as never, "0xA", "0xB", { a: 500n, b: 500n });
+  const sp = OffchainTunnel.selfPlay(
+    proto,
+    tid,
+    ka as never,
+    kb as never,
+    "0xA",
+    "0xB",
+    { a: 500n, b: 500n },
+  );
   sp.step({ dirA: "north" }, "A");
   sp.step({ dirB: "north" }, "B");
 
   const adapter = makeCrossResumeAdapter();
   writeResumeRecord({
-    matchId: "match-cross", tunnelId: tid, role: "B", game: "chicken-cross",
-    opponentWallet: "0xA", opponentPubkeyHex: toHex(ka.publicKey),
+    matchId: "match-cross",
+    tunnelId: tid,
+    role: "B",
+    game: "chicken-cross",
+    opponentWallet: "0xA",
+    opponentPubkeyHex: toHex(ka.publicKey),
     selfEphemeralSecretHex: toHex(kb.secretKey),
     latestCoSigned: toWireCoSigned(sp.latest!),
     latestState: adapter.serializeState(sp.state as never),
@@ -395,9 +453,27 @@ test("cross cold-load: rebuilt tunnel restores the co-signed state from localSto
   } as never);
   flushResumeWrites();
 
-  const mp = { channel: () => ({ transport: { send() {}, onFrame() {} }, sendPeer() {}, onPeer() {}, addPeerListener() {}, removePeerListener() {} }), markActive() {} } as never;
-  const { tunnel } = rebuildTunnel(mp, readResumeRecord(tid)!, { proto, adapter: makeCrossResumeAdapter() } as never, { selfWallet: "0xB" });
-  const st = (tunnel as { snapshot(): { state: { tick: bigint; balanceA: bigint; total: bigint } } }).snapshot().state;
+  const mp = {
+    channel: () => ({
+      transport: { send() {}, onFrame() {} },
+      sendPeer() {},
+      onPeer() {},
+      addPeerListener() {},
+      removePeerListener() {},
+    }),
+    markActive() {},
+  } as never;
+  const { tunnel } = rebuildTunnel(
+    mp,
+    readResumeRecord(tid)!,
+    { proto, adapter: makeCrossResumeAdapter() } as never,
+    { selfWallet: "0xB" },
+  );
+  const st = (
+    tunnel as {
+      snapshot(): { state: { tick: bigint; balanceA: bigint; total: bigint } };
+    }
+  ).snapshot().state;
   assert.equal(st.tick, sp.state.tick);
   assert.equal(st.balanceA, sp.state.balanceA);
   assert.equal(st.total, sp.state.total);

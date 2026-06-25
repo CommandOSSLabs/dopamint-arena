@@ -38,13 +38,13 @@ MUST be archived in full (every entry, both signatures) for the proof to verify
 
 ### Cost levers (why the design points where it does)
 
-| layer | per tunnel | scales as | wants |
-|---|---|---|---|
-| on-chain close | 1 sponsored tx | `1/S` | big S |
-| Walrus blob | write fee + (~5× encoded + fixed per-blob metadata) × epochs | per-blob overhead dominates small blobs | big S |
-| settle RAM | whole body buffered | `concurrency × body` | bounded S |
-| crash-before-close | loses unanchored history | linear in S | bounded S |
-| **signatures** | 128 B/entry, **incompressible** | — | the hard floor |
+| layer              | per tunnel                                                   | scales as                               | wants          |
+| ------------------ | ------------------------------------------------------------ | --------------------------------------- | -------------- |
+| on-chain close     | 1 sponsored tx                                               | `1/S`                                   | big S          |
+| Walrus blob        | write fee + (~5× encoded + fixed per-blob metadata) × epochs | per-blob overhead dominates small blobs | big S          |
+| settle RAM         | whole body buffered                                          | `concurrency × body`                    | bounded S      |
+| crash-before-close | loses unanchored history                                     | linear in S                             | bounded S      |
+| **signatures**     | 128 B/entry, **incompressible**                              | —                                       | the hard floor |
 
 `S` = moves/tunnel. Everything except RAM and crash-loss wants big S. So: **max
 S on an efficient encoding, with a safety cap**. The 128 B/entry signature floor
@@ -114,18 +114,21 @@ together on `dev`); no backward-compat is carried.
 ## Touch points
 
 **SDK (`sui-tunnel-ts/`)**
-- `src/proof/limits.ts` *(new)* — `MAX_MOVES_PER_TUNNEL`, `shouldRotateTunnel`.
-- `src/proof/settleBinary.ts` *(new)* — `encodeSettleBody` / `decodeSettleBody`.
+
+- `src/proof/limits.ts` _(new)_ — `MAX_MOVES_PER_TUNNEL`, `shouldRotateTunnel`.
+- `src/proof/settleBinary.ts` _(new)_ — `encodeSettleBody` / `decodeSettleBody`.
 - `src/proof/transcript.ts` — `verifyTranscript` accepts the binary blob.
 - `src/proof/index.ts` / barrel — export the new module.
 
 **Frontend (`frontend/`)**
+
 - `src/backend/settleRequest.ts` — `coSignedToSettleBody(...)` → `Uint8Array`.
 - `src/backend/controlPlane.ts` — `settle()` POSTs `application/octet-stream`.
 - `src/explorer/explorerClient.ts` / `VerifyPanel.tsx` — fetch the blob as bytes,
   pass to `verifyTranscript`.
 
 **Backend (`backend/tunnel-manager/`)**
+
 - `src/routes.rs` — `settle` reads `Bytes`, parses the binary header → `CloseArgs`
   (close path unchanged), stores the body to Walrus, `updateCount` = `count`.
   The `transcript: Vec<Box<RawValue>>` JSON field is removed (superseded).

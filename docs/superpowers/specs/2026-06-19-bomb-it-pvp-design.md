@@ -39,22 +39,38 @@ STAKE = 500n (per seat; total 1000n)   BOMB_IT_MIN_STAKE = 100n
 ```ts
 type BombItAction = "north" | "south" | "east" | "west" | "bomb" | "stay";
 
-interface BombItPlayer { row: number; col: number; alive: boolean; }
-interface BombItBomb   { row: number; col: number; fuse: number; owner: Party; }
+interface BombItPlayer {
+  row: number;
+  col: number;
+  alive: boolean;
+}
+interface BombItBomb {
+  row: number;
+  col: number;
+  fuse: number;
+  owner: Party;
+}
 
 interface BombItState {
   tick: bigint;
-  seed: bigint;                          // seedFromTunnelId(tunnelId); part of encodeState
-  grid: Uint8Array;                      // length 81; 0 floor · 1 wall · 2 crate
+  seed: bigint; // seedFromTunnelId(tunnelId); part of encodeState
+  grid: Uint8Array; // length 81; 0 floor · 1 wall · 2 crate
   players: [BombItPlayer, BombItPlayer]; // index 0 = A, 1 = B
-  bombs: BombItBomb[];                   // ≤ 2 live (1 per player)
-  winner: Party | "draw" | null;         // null = ongoing
-  balanceA: bigint; balanceB: bigint; total: bigint;
+  bombs: BombItBomb[]; // ≤ 2 live (1 per player)
+  winner: Party | "draw" | null; // null = ongoing
+  balanceA: bigint;
+  balanceB: bigint;
+  total: bigint;
 }
 
-interface BombItMove { a?: BombItAction; b?: BombItAction } // proposer fills only its own side
+interface BombItMove {
+  a?: BombItAction;
+  b?: BombItAction;
+} // proposer fills only its own side
 
-class BombItProtocol implements Protocol<BombItState, BombItMove> { readonly name = "bomb_it.v1"; }
+class BombItProtocol implements Protocol<BombItState, BombItMove> {
+  readonly name = "bomb_it.v1";
+}
 ```
 
 ### Board layout (deterministic, symmetric)
@@ -78,12 +94,12 @@ The proposer's field (`a` for A, `b` for B) carries the action; the opposite sea
    wall/crate, not occupied by a live bomb, and not occupied by the other living player; otherwise a
    no-op. `"bomb"` → place a bomb on the actor's cell if it has `< MAX_BOMBS_PER_PLAYER` live bombs
    and the cell has none; the actor stays on it (dropping is legal even though the cell now holds a
-   bomb — you simply cannot move *back onto* any bomb cell, including your own, once you leave).
+   bomb — you simply cannot move _back onto_ any bomb cell, including your own, once you leave).
    Soft-invalid actions resolve to a deterministic **no-op `"stay"`** so
    both seats re-derive the identical next state and co-sign — they never throw.
 2. **World advance** (every call, after the action): decrement every bomb's `fuse`; collect the
    detonation set at `fuse ≤ 0` and grow it to a fixpoint (a bomb inside any blast detonates too);
-   union all blast cells (each `+` arm extends `BLAST_RADIUS`, stopping at a wall and stopping *after*
+   union all blast cells (each `+` arm extends `BLAST_RADIUS`, stopping at a wall and stopping _after_
    destroying the first crate); destroy crated blast cells (`2→0`), kill any player standing in a
    blast cell, remove detonated bombs.
 3. `tick += 1n`.
@@ -128,7 +144,7 @@ the Move wire format (golden vectors at `sui_tunnel/tests/wire_format_tests.move
 
 `BombItProtocol` advances the world one tick per call; the engine is one-proposer-per-nonce. Bridge
 (same as Chicken Cross): **each seat proposes only on its turn, carrying only its own action; the
-world advances each propose.** Because bomb fuses tick down on *every* world tick, the world must
+world advances each propose.** Because bomb fuses tick down on _every_ world tick, the world must
 keep advancing even while a player idles (so a placed bomb detonates) — this is the **continuous**
 hook pattern (timer-driven), not the turn-gated tic-tac-toe pattern.
 
@@ -153,10 +169,10 @@ future refinement requiring an `mpClient` peer-message addition — out of scope
 No directed-challenge API exists; use a **per-match private queue name** (like Chicken Cross). No
 backend change.
 
-| Action | Flow |
-| --- | --- |
+| Action | Flow                                                                                                                                              |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Create | generate a short code; `quickMatch("bomb-it:" + code)` parks first ⇒ this seat is `A` (opener/funder); show the code while awaiting `match.found` |
-| Join | enter the code; `quickMatch("bomb-it:" + code)` ⇒ seat `B` |
+| Join   | enter the code; `quickMatch("bomb-it:" + code)` ⇒ seat `B`                                                                                        |
 
 Same machine = two tabs (one creates, one joins). Distinct on-chain stakes need two wallet accounts.
 
@@ -185,20 +201,20 @@ so no stake-shift parameter is needed (unlike tic-tac-toe).
 
 ## 7. Files
 
-| File | Change |
-| --- | --- |
-| `sui-tunnel-ts/src/protocol/bombIt.ts` | NEW — `BombItProtocol` + types + constants + `seedFromTunnelId`/`mulberry32` helpers |
-| `sui-tunnel-ts/src/protocol/bombIt.test.ts` | NEW — `tsx` unit tests: applyMove rules, fuse/blast/chain, win/draw/cap, encodeState determinism & symmetry |
-| `sui-tunnel-ts/src/protocol/index.ts` | EDIT — add `export * as bombIt from "./bombIt"` alongside existing protocols |
-| `frontend/src/games/bombIt/index.ts` | NEW — `register({ id: "bomb-it", name: "Bomb It", icon: "💣", Window: BombItWindow })` |
-| `frontend/src/games/bombIt/BombItWindow.tsx` | NEW — status router: lobby → board → result; statuses idle/matching/funding/playing/settling/settled/error |
-| `frontend/src/games/bombIt/usePvpBombIt.ts` | NEW — the PvP hook (continuous pattern: STEP_MS timer + scoped `maybePropose` + `reset()` and unmount teardown, per commit 8deb445) |
-| `frontend/src/games/bombIt/session-core.ts` | NEW — pure, React-free `deriveView(state): BombItView` + view types (type-only SDK import so it runs under `tsx`) |
-| `frontend/src/games/bombIt/session-core.test.ts` | NEW — `tsx` unit test of `deriveView` |
-| `frontend/src/games/bombIt/components/BombLobby.tsx` | NEW — create/join-code screen |
-| `frontend/src/games/bombIt/components/BombBoard.tsx` | NEW — 9×9 grid render from `deriveView(dt.displayState)`; arrows/WASD → dir, space → "bomb" → `nextActionRef` |
-| `frontend/src/games/bombIt/bomb-it.css` | NEW — grid/board styles |
-| `frontend/src/games/index.ts` | EDIT — add `import "./bombIt"` (registration side-effect; import position = desktop tile order) |
+| File                                                 | Change                                                                                                                              |
+| ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `sui-tunnel-ts/src/protocol/bombIt.ts`               | NEW — `BombItProtocol` + types + constants + `seedFromTunnelId`/`mulberry32` helpers                                                |
+| `sui-tunnel-ts/src/protocol/bombIt.test.ts`          | NEW — `tsx` unit tests: applyMove rules, fuse/blast/chain, win/draw/cap, encodeState determinism & symmetry                         |
+| `sui-tunnel-ts/src/protocol/index.ts`                | EDIT — add `export * as bombIt from "./bombIt"` alongside existing protocols                                                        |
+| `frontend/src/games/bombIt/index.ts`                 | NEW — `register({ id: "bomb-it", name: "Bomb It", icon: "💣", Window: BombItWindow })`                                              |
+| `frontend/src/games/bombIt/BombItWindow.tsx`         | NEW — status router: lobby → board → result; statuses idle/matching/funding/playing/settling/settled/error                          |
+| `frontend/src/games/bombIt/usePvpBombIt.ts`          | NEW — the PvP hook (continuous pattern: STEP_MS timer + scoped `maybePropose` + `reset()` and unmount teardown, per commit 8deb445) |
+| `frontend/src/games/bombIt/session-core.ts`          | NEW — pure, React-free `deriveView(state): BombItView` + view types (type-only SDK import so it runs under `tsx`)                   |
+| `frontend/src/games/bombIt/session-core.test.ts`     | NEW — `tsx` unit test of `deriveView`                                                                                               |
+| `frontend/src/games/bombIt/components/BombLobby.tsx` | NEW — create/join-code screen                                                                                                       |
+| `frontend/src/games/bombIt/components/BombBoard.tsx` | NEW — 9×9 grid render from `deriveView(dt.displayState)`; arrows/WASD → dir, space → "bomb" → `nextActionRef`                       |
+| `frontend/src/games/bombIt/bomb-it.css`              | NEW — grid/board styles                                                                                                             |
+| `frontend/src/games/index.ts`                        | EDIT — add `import "./bombIt"` (registration side-effect; import position = desktop tile order)                                     |
 
 **UNCHANGED:** backend (`tunnel-manager`), Move (`sui_tunnel`), `frontend/src/games/registry.ts`,
 `frontend/src/games/types.ts`. PvP-only — no self-play/bot hook (`randomMove` covers sim/tests).
@@ -211,7 +227,7 @@ so no stake-shift parameter is needed (unlike tic-tac-toe).
   180° map symmetry** (same seed → byte-identical state both seats; mirrored layout).
 - **`deriveView`** unit test (`tsx`).
 - **Gate:** `cd sui-tunnel-ts && npx tsx --test src/protocol/bombIt.test.ts` green; `cd frontend &&
-  pnpm typecheck && pnpm build` green (`build` also enforces single registration).
+pnpm typecheck && pnpm build` green (`build` also enforces single registration).
 - **Full e2e is manual** (cannot run headless): backend `tunnel-manager` `/v1/mp` relay up, two tabs
   (two testnet wallet accounts, `sui_tunnel` deployed at `VITE_TUNNEL_PACKAGE_ID`), create+join a
   code, duel, confirm the winner is paid.
@@ -231,4 +247,7 @@ so no stake-shift parameter is needed (unlike tic-tac-toe).
   additive future protocol bump (`bomb_it.v2`) — they grow State + encodeState but reuse the wiring.
 - **Disconnect/timeout.** v1 has no reconnect; a dropped peer strands the match. The on-chain
   `timeout`/dispute path (`force_close_after_timeout`) is the safety net; reconnect is out of scope.
+
+```
+
 ```

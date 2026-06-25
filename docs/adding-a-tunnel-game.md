@@ -11,12 +11,12 @@
 
 A new game is almost entirely a frontend package plus ONE SDK protocol class. The backend and Move layers are game-agnostic and need no edits.
 
-| Layer | New game must add | Why |
-|---|---|---|
-| `frontend/src/games/<game>/` | A game package (window + hook + register) | The arena desktop is a plugin registry |
-| `sui-tunnel-ts/src/protocol/` | One `Protocol<State, Move>` class | The off-chain engine drives any protocol generically |
-| `backend/tunnel-manager` | Nothing — just a new `game` string | Generic control-plane + opaque relay; keys stats/matchmaking by string |
-| `sui_tunnel` (Move) | Nothing | `tunnel` is a generic 2-party state channel (state_hash + nonce + balances + dual sigs) |
+| Layer                         | New game must add                         | Why                                                                                     |
+| ----------------------------- | ----------------------------------------- | --------------------------------------------------------------------------------------- |
+| `frontend/src/games/<game>/`  | A game package (window + hook + register) | The arena desktop is a plugin registry                                                  |
+| `sui-tunnel-ts/src/protocol/` | One `Protocol<State, Move>` class         | The off-chain engine drives any protocol generically                                    |
+| `backend/tunnel-manager`      | Nothing — just a new `game` string        | Generic control-plane + opaque relay; keys stats/matchmaking by string                  |
+| `sui_tunnel` (Move)           | Nothing                                   | `tunnel` is a generic 2-party state channel (state_hash + nonce + balances + dual sigs) |
 
 `sui_tunnel/` and `sui-tunnel-ts/` are **upstream-vendored** (see [CLAUDE.md](../CLAUDE.md) § Repository layout). Add a protocol following the existing protocol files; keep the SDK on its pnpm / `node:test` toolchain — do not convert it to bun/biome or restructure it.
 
@@ -26,15 +26,15 @@ A new game is almost entirely a frontend package plus ONE SDK protocol class. Th
 
 The pattern is fixed by **which signing keys the browser holds**, which selects the engine class. Copy the matching reference game wholesale, then swap the protocol.
 
-| | Self-play (bot vs bot) | PvP (human vs human) |
-|---|---|---|
-| Engine | `OffchainTunnel.selfPlay` in `sui-tunnel-ts/src/core/tunnel.ts` (grep `selfPlay`) | `DistributedTunnel` in `sui-tunnel-ts/src/core/distributedTunnel.ts` (grep `DistributedTunnel`) |
-| Keys | One browser holds BOTH seats' ephemeral keys | Each browser holds ONE seat's key |
-| Co-sign a move | Two local signatures, no network | propose→ACK over the relay |
-| Funding | `openAndFundSelfPlay` — both seats, one wallet signature | seat A `openAndFundSharedTunnel` + seat B `depositStake` |
-| Matchmaking | None (runs solo) | `MpClient.quickMatch("<game-id>")` in `frontend/src/pvp/mpClient.ts` (grep `quickMatch`) |
-| Reference to copy | `frontend/src/games/blackjack/` | `frontend/src/games/ticTacToe/` |
-| Hardest part | The protocol | The protocol + real-time determinism over a turn-based channel |
+|                   | Self-play (bot vs bot)                                                            | PvP (human vs human)                                                                            |
+| ----------------- | --------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| Engine            | `OffchainTunnel.selfPlay` in `sui-tunnel-ts/src/core/tunnel.ts` (grep `selfPlay`) | `DistributedTunnel` in `sui-tunnel-ts/src/core/distributedTunnel.ts` (grep `DistributedTunnel`) |
+| Keys              | One browser holds BOTH seats' ephemeral keys                                      | Each browser holds ONE seat's key                                                               |
+| Co-sign a move    | Two local signatures, no network                                                  | propose→ACK over the relay                                                                      |
+| Funding           | `openAndFundSelfPlay` — both seats, one wallet signature                          | seat A `openAndFundSharedTunnel` + seat B `depositStake`                                        |
+| Matchmaking       | None (runs solo)                                                                  | `MpClient.quickMatch("<game-id>")` in `frontend/src/pvp/mpClient.ts` (grep `quickMatch`)        |
+| Reference to copy | `frontend/src/games/blackjack/`                                                   | `frontend/src/games/ticTacToe/`                                                                 |
+| Hardest part      | The protocol                                                                      | The protocol + real-time determinism over a turn-based channel                                  |
 
 Funding builders live in `frontend/src/onchain/tunnelTx.ts` (grep `openAndFundSelfPlay`). Worked example: Chicken Cross (self-play) — design rationale in [superpowers/specs/2026-06-18-chicken-cross-tunnel-design.md](superpowers/specs/2026-06-18-chicken-cross-tunnel-design.md), step-by-step in [superpowers/plans/2026-06-18-chicken-cross-game-mode.md](superpowers/plans/2026-06-18-chicken-cross-game-mode.md).
 
@@ -42,14 +42,14 @@ Funding builders live in `frontend/src/onchain/tunnelTx.ts` (grep `openAndFundSe
 
 Implement the generic interface in `sui-tunnel-ts/src/protocol/Protocol.ts` (grep `interface Protocol`). Copy an existing protocol file in `sui-tunnel-ts/src/protocol/` as the structural template; read `sui-tunnel-ts/src/protocol/index.ts` for the current set and the barrel export to add to.
 
-| Method | Contract |
-|---|---|
-| `initialState(ctx)` | Deterministic opening state; set `total = a + b` from `ctx.initialBalances` |
-| `applyMove(state, move, by)` | PURE (no mutation), throws on illegal move; returns next state |
-| `encodeState(state)` | Canonical bytes → hashed into the tunnel `state_hash`; same state ⇒ same bytes |
-| `balances(state)` | `{ a, b }` — see the two hard invariants below |
-| `isTerminal(state)` | Game over, ready to settle |
-| `randomMove(state, by, rng)` | Optional; drives self-play bots and the simulator |
+| Method                       | Contract                                                                       |
+| ---------------------------- | ------------------------------------------------------------------------------ |
+| `initialState(ctx)`          | Deterministic opening state; set `total = a + b` from `ctx.initialBalances`    |
+| `applyMove(state, move, by)` | PURE (no mutation), throws on illegal move; returns next state                 |
+| `encodeState(state)`         | Canonical bytes → hashed into the tunnel `state_hash`; same state ⇒ same bytes |
+| `balances(state)`            | `{ a, b }` — see the two hard invariants below                                 |
+| `isTerminal(state)`          | Game over, ready to settle                                                     |
+| `randomMove(state, by, rng)` | Optional; drives self-play bots and the simulator                              |
 
 > **Invariant 1 — conservation.** `balances(state).a + .b === total` for EVERY reachable state. `OffchainTunnel.step` asserts it and throws otherwise. Move funds toward the winner only at terminal states; keep the split constant during play.
 
@@ -61,13 +61,13 @@ Encoding helpers (`protocolDomain`, `lengthPrefixedConcat`, `rollingDigest`) are
 
 Copy the reference game directory and adapt. Read the chosen reference under `frontend/src/games/` for the current file set; the roles are:
 
-| File | Role |
-|---|---|
-| `index.ts` | Calls `register({ id, name, icon, Window })` from `frontend/src/games/registry.ts` (grep `export function register`) |
-| `<Game>Window.tsx` | Status-router component (`GameWindowProps`); renders bet panel / funding / board / error by status |
-| `use<Game>Session.ts` | The integration hook — owns keys, on-chain open/fund/close, the engine, the step timer, telemetry, control-plane |
-| `session-core.ts` | Pure, React-free driver (`stepSession` / `deriveView` / `sessionResult`); SDK imports are `import type` only so it runs under `tsx` |
-| `components/`, `*.css` | Presentation only — read the view, never decide outcomes |
+| File                   | Role                                                                                                                                |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `index.ts`             | Calls `register({ id, name, icon, Window })` from `frontend/src/games/registry.ts` (grep `export function register`)                |
+| `<Game>Window.tsx`     | Status-router component (`GameWindowProps`); renders bet panel / funding / board / error by status                                  |
+| `use<Game>Session.ts`  | The integration hook — owns keys, on-chain open/fund/close, the engine, the step timer, telemetry, control-plane                    |
+| `session-core.ts`      | Pure, React-free driver (`stepSession` / `deriveView` / `sessionResult`); SDK imports are `import type` only so it runs under `tsx` |
+| `components/`, `*.css` | Presentation only — read the view, never decide outcomes                                                                            |
 
 ## Self-play checklist
 
@@ -113,20 +113,20 @@ Four invariants for a correct count:
 1. **Register once** before the first step:
    `registerSession({ userAddress, game, tunnels }) → { sessionId, statsToken }`. Best-effort —
    the backend is never in the per-move loop, so a failed register must `.catch` and keep playing.
-2. **One action per *verified* step.** Bump `actionsRef += 1` (and `moveCountRef += 1` for the
-   nonce) exactly once per `tunnel.step(...)`, *after* `r.verified` — never per render, per retry,
+2. **One action per _verified_ step.** Bump `actionsRef += 1` (and `moveCountRef += 1` for the
+   nonce) exactly once per `tunnel.step(...)`, _after_ `r.verified` — never per render, per retry,
    or per timer tick. `OffchainTunnel.selfPlay` produces every update locally, so one step = one action.
 3. **Flush as a throttled heartbeat, never per move.** After each step call
    `flushHeartbeat(tunnelId, false)`. It self-throttles (no-op if `actionsDelta === 0`, or the window
    is < 1 s and not forced) and on send **resets the counter to 0** and restamps the window —
-   `actionsDelta` is a *delta since last flush*, not a running total. Payload:
+   `actionsDelta` is a _delta since last flush_, not a running total. Payload:
    `{ tunnelId, nonce: String(moveCount), actionsDelta, windowMs }`; `nonce` is the monotonic move count.
 4. **Force-flush the tail on settle/teardown:** `flushHeartbeat(tunnelId, true)` before building the
    settlement, so the final partial window isn't dropped.
 
 > **PvP is different — do NOT copy this into a PvP hook.** There the relay is the single point that
 > sees every move and counts it server-side (`backend/tunnel-manager/src/mp/ws.rs`). A PvP hook that
-> *also* heartbeat-counts its confirmed moves double-reports — keep the relay count, drop the client
+> _also_ heartbeat-counts its confirmed moves double-reports — keep the relay count, drop the client
 > `actionsDelta`.
 
 ## PvP delta
@@ -137,11 +137,11 @@ Same protocol; the hook differs. Copy `frontend/src/games/ticTacToe/` and its Pv
 
 `tsx` (the test runner) ignores the Vite alias and tsconfig `paths` at runtime; Vite resolves them at build/typecheck. This splits how SDK imports are written.
 
-| Context | SDK import style |
-|---|---|
-| `session-core.ts` (runs under tsx) | `import type ... from "sui-tunnel-ts/..."` — type-only, erased at runtime |
-| `*.test.ts` (runs under tsx) — runtime engine imports | Relative `.ts` path: `../../../../sui-tunnel-ts/src/core/tunnel.ts` |
-| Hook / components / window (Vite-bundled) | Bare runtime specifier: `from "sui-tunnel-ts/..."` |
+| Context                                               | SDK import style                                                          |
+| ----------------------------------------------------- | ------------------------------------------------------------------------- |
+| `session-core.ts` (runs under tsx)                    | `import type ... from "sui-tunnel-ts/..."` — type-only, erased at runtime |
+| `*.test.ts` (runs under tsx) — runtime engine imports | Relative `.ts` path: `../../../../sui-tunnel-ts/src/core/tunnel.ts`       |
+| Hook / components / window (Vite-bundled)             | Bare runtime specifier: `from "sui-tunnel-ts/..."`                        |
 
 ## Gate
 
@@ -182,11 +182,11 @@ cookie, so re-verify affinity there after deploy.
 
 ## Anti-patterns
 
-| Don't | Do |
-|---|---|
-| Deciding death/win/score in the renderer | The protocol is the sole authority; the board reads the view |
-| `applyMove` that mutates `state` or breaks conservation | Pure transitions; balances sum to `total` every step |
-| Randomness not derived from a state-carried seed | Seed in state + `encodeState`, so play is replayable |
-| `bun install` / converting SDK toolchain | The SDK is upstream-vendored — pnpm + `node:test` only |
-| Bare `sui-tunnel-ts/...` runtime import in a `*.test.ts` | Relative `.ts` path in tests (see Import discipline) |
-| Per-game backend or Move code | Both layers are generic — a new game is just a new id string |
+| Don't                                                    | Do                                                           |
+| -------------------------------------------------------- | ------------------------------------------------------------ |
+| Deciding death/win/score in the renderer                 | The protocol is the sole authority; the board reads the view |
+| `applyMove` that mutates `state` or breaks conservation  | Pure transitions; balances sum to `total` every step         |
+| Randomness not derived from a state-carried seed         | Seed in state + `encodeState`, so play is replayable         |
+| `bun install` / converting SDK toolchain                 | The SDK is upstream-vendored — pnpm + `node:test` only       |
+| Bare `sui-tunnel-ts/...` runtime import in a `*.test.ts` | Relative `.ts` path in tests (see Import discipline)         |
+| Per-game backend or Move code                            | Both layers are generic — a new game is just a new id string |

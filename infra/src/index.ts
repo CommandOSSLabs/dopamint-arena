@@ -128,6 +128,9 @@ const backend = createBackend({
   taskRoleArn: iam.taskRole.arn,
   logGroupName: ecs.logGroupName,
   settlerKeySecretArn,
+  ollamaEnabled: cfg.ollamaEnabled,
+  ollamaModel: cfg.ollamaModel,
+  ollamaImageTag: cfg.ollamaImageTag,
 });
 
 const backendService = createBackendService({

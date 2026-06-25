@@ -42,7 +42,7 @@ needs no tunnel change, and the ADR-0009 "stake from a user coin" path is exactl
 - **MTPS can't run out** (mint-on-demand), so the only finite resource is the settler's **SUI
   for gas** — which still drains under load. Rate limiting + a spend budget remain a follow-up
   (deliberately skipped for now); monitor/refill the settler's SUI.
-- **One coin type per backend.** `TUNNEL_COIN_TYPE` is global, so all *sponsored* games must use
+- **One coin type per backend.** `TUNNEL_COIN_TYPE` is global, so all _sponsored_ games must use
   MTPS; SUI-sponsored games would fail the type pin. Non-sponsored (sender-pays) games are
   unaffected. The MTPS stake path is env-gated so the SUI path still works where MTPS is unset.
 - **Not doing.** An MTPS balance/UI; rate limiting; non-battleship games (follow-ups); a capped

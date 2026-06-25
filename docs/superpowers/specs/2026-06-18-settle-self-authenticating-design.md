@@ -23,7 +23,7 @@ signed wire format.
 
 - **Writer of a settlement:** the two seats, once, at tunnel close. Rate =
   tunnel-count × settle-frequency = **once per tunnel lifetime** (ADR-0005
-  settle-at-close cadence) — *not* TPS. The per-move hot path never touches
+  settle-at-close cadence) — _not_ TPS. The per-move hot path never touches
   `/settle`.
 - **Reader:** the settler (submits) + one bounded feed-row push. No aggregation,
   no unbounded growth on this path.
@@ -38,16 +38,18 @@ signed wire format.
 ## Current state (what changes)
 
 Backend (`backend/tunnel-manager/`):
+
 - Route `POST /v1/sessions/:id/settle` → `routes::settle` (main.rs:95).
 - `settle` (routes.rs:182) gates on `control.get_session` + `bearer_matches`
   (stats_token) + tunnel-membership, then `409` if already closed, then
   `settler.submit_close` → archive → push proof row → `{txDigest, walrusBlobId,
-  proofUrl}`.
+proofUrl}`.
 - `SuiSettler::submit_close` (sui.rs:141): resolve shared ref → `build_close_tx`
   → sign → `execute`. **No pre-submit verification** — a bad settlement reaches
   the chain and wastes gas.
 
 Frontend:
+
 - `controlPlane.settle(sessionId, statsToken, body)` → POSTs to
   `/v1/sessions/${sessionId}/settle` with `Authorization: Bearer`.
 - `usePvpTicTacToe.ts` calls `registerSession` (seat A) purely to obtain the
@@ -84,12 +86,12 @@ In `SuiSettler::submit_close`, between `build_close_tx` and `execute`:
 
 - `dry_run(&tx)` calls `sui_dryRunTransactionBlock` with the **same** base64 BCS
   tx bytes `execute` uses (an unsigned tx is fine — the seat sigs are PTB
-  `vector<u8>` *arguments*, so the dry-run still runs the real Move
+  `vector<u8>` _arguments_, so the dry-run still runs the real Move
   `close_cooperative_with_root`, which re-verifies `sig_a`/`sig_b` against the
   on-chain `party_a`/`party_b` pubkeys and the balance sum).
 - A **pure** `fn dryrun_effects_ok(resp: &serde_json::Value) -> Result<(), String>`
   reads `/effects/status/status`; `"success"` → `Ok`, otherwise `Err(<the status
-  json>)`. This mirrors the existing `execute()` status check and is unit-tested
+json>)`. This mirrors the existing `execute()` status check and is unit-tested
   against sample JSON exactly like `parse_event_row`.
 - If the dry-run says failure → `submit_close` returns `Err` (→ handler `422`),
   **no `execute`, no gas**. Only a passing dry-run proceeds to sign + execute.

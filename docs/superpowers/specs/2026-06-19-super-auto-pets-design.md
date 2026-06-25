@@ -1,4 +1,4 @@
-  # Super Auto Pets Game Mode — Design
+# Super Auto Pets Game Mode — Design
 
 **Date:** 2026-06-19
 **Status:** Draft (design); pending review → implementation plan
@@ -20,13 +20,13 @@ Quantum Poker (commit-reveal hidden info).
 
 ### Why SAP fits the tunnel
 
-| Tunnel property | SAP feature it enables |
-| --- | --- |
-| Off-chain dual-signed updates (instant, no gas) | Every shop action is instant and free |
-| Session channel = many rounds, one tunnel (`quantumPoker` multi-hand pattern, on `dev`) | A full run is ~10+ rounds → one open, one settle |
-| Commit-reveal + verifiable shuffle (`quantumPoker`, `coin_flip`) | **Provably fair shop** + **hidden team** (no counter-pick) |
-| Strictly-increasing nonce + dual signatures | Replay protection + dispute safety, inherited free |
-| Running balances that sum to the locked total | Wager shifts loser→winner each round; settle once |
+| Tunnel property                                                                         | SAP feature it enables                                     |
+| --------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| Off-chain dual-signed updates (instant, no gas)                                         | Every shop action is instant and free                      |
+| Session channel = many rounds, one tunnel (`quantumPoker` multi-hand pattern, on `dev`) | A full run is ~10+ rounds → one open, one settle           |
+| Commit-reveal + verifiable shuffle (`quantumPoker`, `coin_flip`)                        | **Provably fair shop** + **hidden team** (no counter-pick) |
+| Strictly-increasing nonce + dual signatures                                             | Replay protection + dispute safety, inherited free         |
+| Running balances that sum to the locked total                                           | Wager shifts loser→winner each round; settle once          |
 
 ### Decisions to lock during review
 
@@ -57,7 +57,7 @@ randomness (random target, ability order ties) is drawn from the seed. No wall-c
 RNG in the engine. Same property `example_tic_tac_toe::check_winner` and the SDK `ticTacToe`
 engine rely on, extended to a richer battle with triggered abilities.
 
-**Ability model (the complexity to control):** abilities are *triggered effects* on a fixed event
+**Ability model (the complexity to control):** abilities are _triggered effects_ on a fixed event
 set — `onBuy`, `onSell`, `onLevelUp`, `onStartOfBattle`, `onFaint`, `onHurt`, `onBeforeAttack`,
 `onFriendFaint`. Each pet declares which events it reacts to and a pure effect function. The
 engine fires triggers in a deterministic order (left→right, seed-broken ties). Adding a pet =
@@ -110,18 +110,23 @@ type SapPhase = "shop" | "reveal" | "battle" | "done";
 interface SapState {
   phase: SapPhase;
   round: bigint;
-  heartsA: number; heartsB: number;
-  seedCommitA: Uint8Array | null; seedCommitB: Uint8Array | null; // fair shop RNG
-  teamCommitA: Uint8Array | null; teamCommitB: Uint8Array | null; // hidden teams
+  heartsA: number;
+  heartsB: number;
+  seedCommitA: Uint8Array | null;
+  seedCommitB: Uint8Array | null; // fair shop RNG
+  teamCommitA: Uint8Array | null;
+  teamCommitB: Uint8Array | null; // hidden teams
   // private (excluded from encodeState): teamA, saltA, teamB, saltB, gold, shop
-  balanceA: bigint; balanceB: bigint; total: bigint;              // sum invariant
+  balanceA: bigint;
+  balanceB: bigint;
+  total: bigint; // sum invariant
   wagerPerRound: bigint;
 }
 
 type SapMove =
   | { kind: "commitSeed"; commitment: Uint8Array }
   | { kind: "revealSeed"; share: Uint8Array; salt: Uint8Array }
-  | { kind: "commitTeam"; commitment: Uint8Array }   // end of private shop phase
+  | { kind: "commitTeam"; commitment: Uint8Array } // end of private shop phase
   | { kind: "revealTeam"; team: Pet[]; salt: Uint8Array };
 ```
 
@@ -177,6 +182,7 @@ Tic-Tac-Toe / Quantum Poker PvP wiring (`DistributedTunnel` + `MpClient.quickMat
 Ordered so there is **always a shippable slice**. Each phase is independently demoable.
 
 **Week 1 — build**
+
 - **Day 1–2 — engine core.** `sapEngine.ts`: pet/team model, leftmost-attack battle loop,
   `onStartOfBattle` + `onFaint` triggers, ~6 tier-1 pets. Unit tests on the engine only.
 - **Day 3–4 — vertical slice (settles!).** `superAutoPets.ts` protocol on the `Protocol`
@@ -190,6 +196,7 @@ Ordered so there is **always a shippable slice**. Each phase is independently de
   `superAutoPets/` frontend folder + PvP wiring skeleton.
 
 **Week 2 — test**
+
 - Golden tests (TS↔Move byte parity); engine fuzz/property tests; PvP e2e on testnet (two funded
   wallets); FE polish (shop UX, battle playback); bug-fix + telemetry. Treat flakes as bugs.
 

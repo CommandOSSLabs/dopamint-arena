@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
+use tokio::sync::broadcast;
 
 pub struct AppState {
     pub control: std::sync::Arc<dyn crate::store::ControlStore>,
@@ -10,6 +11,11 @@ pub struct AppState {
     pub bus: std::sync::Arc<dyn crate::store::Bus>,
     pub settler: crate::sui::SuiSettler,
     pub walrus: crate::walrus::WalrusClient,
+    #[allow(dead_code)] // TODO(chat-v2): used by chat routes in Task 4
+    pub ollama: crate::ollama::OllamaClient,
+    /// Latest aggregate snapshot is computed once per tick and fanned out here to
+    /// every SSE subscriber — so cost scales with the audience, not with TPS.
+    pub stats_tx: broadcast::Sender<String>,
     /// Per-instance move counter; flushed to `control` once/sec (see stats_counter).
     pub actions: crate::stats_counter::LocalActionCounter,
     /// Matchmaking hold in ms: how long a joiner waits for a same-instance partner
@@ -17,6 +23,8 @@ pub struct AppState {
     pub pair_hold_ms: u64,
     /// Per-instance co-located-vs-split pairing tally (see stats_counter).
     pub pairing: crate::stats_counter::MatchPairingMetrics,
+    /// Shared transcript for the bot-vs-bot live chat feed, fanned out via SSE.
+    pub chat: crate::chat_store::ChatTranscriptStore,
 }
 
 pub type SharedState = std::sync::Arc<AppState>;
@@ -31,15 +39,23 @@ impl AppState {
 
         use crate::store::memory::{InMemoryControlStore, InMemoryMpStore, LocalBus};
 
+        let (stats_tx, _) = broadcast::channel(4);
         Arc::new(AppState {
             control: Arc::new(InMemoryControlStore::default()),
             mp: Arc::new(InMemoryMpStore::default()),
             bus: Arc::new(LocalBus::new("test-instance".to_owned())),
             settler: crate::sui::SuiSettler::noop(),
             walrus: crate::walrus::WalrusClient::noop(),
+            ollama: crate::ollama::OllamaClient::new(
+                "http://localhost:11434".into(),
+                "qwen2.5:1.8b".into(),
+            )
+            .expect("test ollama client"),
+            stats_tx,
             actions: crate::stats_counter::LocalActionCounter::default(),
             pair_hold_ms: 750,
             pairing: crate::stats_counter::MatchPairingMetrics::default(),
+            chat: crate::chat_store::ChatTranscriptStore::new(),
         })
     }
 }

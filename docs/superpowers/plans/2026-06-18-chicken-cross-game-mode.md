@@ -23,10 +23,12 @@
 ### Task 1: Hazard & collision core (deterministic)
 
 **Files:**
+
 - Create: `sui-tunnel-ts/src/protocol/cross.ts`
 - Test: `sui-tunnel-ts/src/protocol/cross.test.ts`
 
 **Interfaces:**
+
 - Consumes: nothing (leaf module besides `./Protocol` helpers, used in Task 2).
 - Produces: `COLUMN_COUNT`, `SPAWN_COL`, `WIN_LANE`, `TICK_CAP`, `RESPAWN_INVULN`, `MIN_STAKE` (constants); `CrossDir` (`"north"|"south"|"east"|"west"`); `CrossLaneKind` (`"grass"|"road"|"water"|"rails"`); `HazardSpan { center:number; half:number }`; `laneKind(lane:number):CrossLaneKind`; `hazardsAt(seed:bigint, lane:number, tick:bigint):HazardSpan[]`; `isLethal(seed:bigint, col:number, lane:number, tick:bigint):boolean`; `destOf(lane:number, col:number, dir:CrossDir):[number,number]`.
 
@@ -79,11 +81,10 @@ test("water is inverted: lethal exactly when NOT on a log span", () => {
   const spans = hazardsAt(seed, lane, tick);
   for (let col = 0; col < COLUMN_COUNT; col++) {
     const c = col + 0.5;
-    const onLog = spans.some(
-      (s) =>
-        [c, c - COLUMN_COUNT, c + COLUMN_COUNT].some(
-          (cc) => cc > s.center - s.half && cc < s.center + s.half,
-        ),
+    const onLog = spans.some((s) =>
+      [c, c - COLUMN_COUNT, c + COLUMN_COUNT].some(
+        (cc) => cc > s.center - s.half && cc < s.center + s.half,
+      ),
     );
     assert.equal(isLethal(seed, col, lane, tick), !onLog);
   }
@@ -201,7 +202,11 @@ function laneRng(seed: bigint, lane: number): () => number {
  * Roads carry narrow cars, water carries wide logs (platforms), rails a very wide train.
  * Positions sweep across the columns at a seeded speed and wrap at COLUMN_COUNT.
  */
-export function hazardsAt(seed: bigint, lane: number, tick: bigint): HazardSpan[] {
+export function hazardsAt(
+  seed: bigint,
+  lane: number,
+  tick: bigint,
+): HazardSpan[] {
   const kind = laneKind(lane);
   if (kind === "grass") return [];
   const rng = laneRng(seed, lane);
@@ -215,7 +220,10 @@ export function hazardsAt(seed: bigint, lane: number, tick: bigint): HazardSpan[
       const speed = 0.1 + rng() * 0.1;
       const dir = rng() < 0.5 ? 1 : -1;
       const phase = rng() * COLUMN_COUNT;
-      spans.push({ center: mod(phase + dir * speed * t, COLUMN_COUNT), half: 0.9 });
+      spans.push({
+        center: mod(phase + dir * speed * t, COLUMN_COUNT),
+        half: 0.9,
+      });
     }
   } else if (kind === "water") {
     const count = rng() < 0.5 ? 2 : 1;
@@ -223,14 +231,20 @@ export function hazardsAt(seed: bigint, lane: number, tick: bigint): HazardSpan[
       const speed = 0.06 + rng() * 0.05;
       const dir = rng() < 0.5 ? 1 : -1;
       const phase = rng() * COLUMN_COUNT + i * 3;
-      spans.push({ center: mod(phase + dir * speed * t, COLUMN_COUNT), half: 1.4 });
+      spans.push({
+        center: mod(phase + dir * speed * t, COLUMN_COUNT),
+        half: 1.4,
+      });
     }
   } else {
     // rails
     const speed = 0.2 + rng() * 0.15;
     const dir = rng() < 0.5 ? 1 : -1;
     const phase = rng() * COLUMN_COUNT;
-    spans.push({ center: mod(phase + dir * speed * t, COLUMN_COUNT), half: 3.0 });
+    spans.push({
+      center: mod(phase + dir * speed * t, COLUMN_COUNT),
+      half: 3.0,
+    });
   }
   return spans;
 }
@@ -239,7 +253,8 @@ export function hazardsAt(seed: bigint, lane: number, tick: bigint): HazardSpan[
 function spanCoversCol(span: HazardSpan, col: number): boolean {
   const c = col + 0.5;
   for (const cc of [c, c - COLUMN_COUNT, c + COLUMN_COUNT]) {
-    if (cc > span.center - span.half && cc < span.center + span.half) return true;
+    if (cc > span.center - span.half && cc < span.center + span.half)
+      return true;
   }
   return false;
 }
@@ -248,17 +263,28 @@ function spanCoversCol(span: HazardSpan, col: number): boolean {
  * Is the cell (col, lane) lethal at `tick`? grass = safe; road/rails = lethal when a
  * hazard overlaps; water = INVERTED (open water kills; a log saves). Behind spawn = lethal.
  */
-export function isLethal(seed: bigint, col: number, lane: number, tick: bigint): boolean {
+export function isLethal(
+  seed: bigint,
+  col: number,
+  lane: number,
+  tick: bigint,
+): boolean {
   if (lane < 0) return true;
   const kind = laneKind(lane);
   if (kind === "grass") return false;
-  const onHazard = hazardsAt(seed, lane, tick).some((s) => spanCoversCol(s, col));
+  const onHazard = hazardsAt(seed, lane, tick).some((s) =>
+    spanCoversCol(s, col),
+  );
   if (kind === "water") return !onHazard;
   return onHazard;
 }
 
 /** Destination cell for a hop, clamped to the board. */
-export function destOf(lane: number, col: number, dir: CrossDir): [number, number] {
+export function destOf(
+  lane: number,
+  col: number,
+  dir: CrossDir,
+): [number, number] {
   if (dir === "north") return [lane + 1, col];
   if (dir === "south") return [Math.max(0, lane - 1), col];
   if (dir === "east") return [lane, Math.min(COLUMN_COUNT - 1, col + 1)];
@@ -284,11 +310,13 @@ git commit -m "feat(sdk): chicken-cross hazard & collision core (deterministic)"
 ### Task 2: CrossProtocol (state machine, encoding, settlement)
 
 **Files:**
+
 - Modify: `sui-tunnel-ts/src/protocol/cross.ts` (append the protocol + helpers)
 - Modify: `sui-tunnel-ts/src/protocol/index.ts:5-10` (add the export)
 - Test: `sui-tunnel-ts/src/protocol/cross.test.ts` (append protocol tests)
 
 **Interfaces:**
+
 - Consumes: everything from Task 1; `Protocol`, `Party`, `Balances`, `ProtocolContext`, `protocolDomain` from `./Protocol`; `concatBytes`, `u64ToBeBytes`.
 - Produces: `CrossPlayer { lane:number; col:number; score:number; invulnTicks:number }`; `CrossState { tick:bigint; seed:bigint; players:[CrossPlayer,CrossPlayer]; winner:Party|null; balanceA:bigint; balanceB:bigint; total:bigint }`; `CrossMove { dirA?:CrossDir; dirB?:CrossDir }`; `class CrossProtocol implements Protocol<CrossState, CrossMove>` with `name = "cross.v1"`.
 
@@ -300,7 +328,10 @@ Append to `sui-tunnel-ts/src/protocol/cross.test.ts`:
 import { CrossProtocol, WIN_LANE, TICK_CAP, MIN_STAKE } from "./cross.ts";
 import type { CrossState, CrossMove } from "./cross.ts";
 
-const CTX = { tunnelId: "0xabc123", initialBalances: { a: MIN_STAKE, b: MIN_STAKE } };
+const CTX = {
+  tunnelId: "0xabc123",
+  initialBalances: { a: MIN_STAKE, b: MIN_STAKE },
+};
 
 function playout(p: CrossProtocol, seedRng: () => number): CrossState {
   let s = p.initialState(CTX);
@@ -327,8 +358,16 @@ test("initialState locks the total and starts at tick 0 with two spawned chicken
 
 test("encodeState is canonical: identical states encode to identical bytes", () => {
   const p = new CrossProtocol();
-  const a = p.applyMove(p.initialState(CTX), { dirA: "north", dirB: "north" }, "A");
-  const b = p.applyMove(p.initialState(CTX), { dirA: "north", dirB: "north" }, "A");
+  const a = p.applyMove(
+    p.initialState(CTX),
+    { dirA: "north", dirB: "north" },
+    "A",
+  );
+  const b = p.applyMove(
+    p.initialState(CTX),
+    { dirA: "north", dirB: "north" },
+    "A",
+  );
   assert.deepEqual(Array.from(p.encodeState(a)), Array.from(p.encodeState(b)));
 });
 
@@ -336,7 +375,10 @@ test("different states encode to different bytes (tick advances)", () => {
   const p = new CrossProtocol();
   const s0 = p.initialState(CTX);
   const s1 = p.applyMove(s0, { dirA: "north" }, "A");
-  assert.notDeepEqual(Array.from(p.encodeState(s0)), Array.from(p.encodeState(s1)));
+  assert.notDeepEqual(
+    Array.from(p.encodeState(s0)),
+    Array.from(p.encodeState(s1)),
+  );
 });
 
 test("balances are conserved across a full random playout", () => {
@@ -372,7 +414,12 @@ test("applyMove throws once the game is terminal", () => {
   // Force a winner: drive A north repeatedly along a safe column path is non-trivial,
   // so instead assert the guard via a synthesized terminal state.
   const s = p.initialState(CTX);
-  const terminal: CrossState = { ...s, winner: "A", balanceA: s.total, balanceB: 0n };
+  const terminal: CrossState = {
+    ...s,
+    winner: "A",
+    balanceA: s.total,
+    balanceB: 0n,
+  };
   assert.throws(() => p.applyMove(terminal, { dirA: "north" }, "A"));
 });
 
@@ -456,7 +503,12 @@ function stepPlayer(
 ): CrossPlayer {
   // Post-respawn immunity: no move, no death, just tick down.
   if (p.invulnTicks > 0) {
-    return { lane: p.lane, col: p.col, score: p.score, invulnTicks: p.invulnTicks - 1 };
+    return {
+      lane: p.lane,
+      col: p.col,
+      score: p.score,
+      invulnTicks: p.invulnTicks - 1,
+    };
   }
   let lane = p.lane;
   let col = p.col;
@@ -477,11 +529,16 @@ function stepPlayer(
 }
 
 /** Greedy bot dir for player index `i`: prefer forward, dodge sideways, avoid back, else stay. */
-function greedyDir(s: CrossState, i: number, rng: () => number): CrossDir | undefined {
+function greedyDir(
+  s: CrossState,
+  i: number,
+  rng: () => number,
+): CrossDir | undefined {
   const p = s.players[i];
   if (p.invulnTicks > 0) return undefined;
   const tick = s.tick + 1n;
-  const order: CrossDir[] = rng() < 0.5 ? ["north", "east", "west"] : ["north", "west", "east"];
+  const order: CrossDir[] =
+    rng() < 0.5 ? ["north", "east", "west"] : ["north", "west", "east"];
   for (const d of order) {
     const [nl, nc] = destOf(p.lane, p.col, d);
     if (!isLethal(s.seed, nc, nl, tick)) return d;
@@ -565,7 +622,9 @@ export class CrossProtocol implements Protocol<CrossState, CrossMove> {
         u64ToBeBytes(p.invulnTicks),
       );
     }
-    parts.push(new Uint8Array([s.winner === "A" ? 1 : s.winner === "B" ? 2 : 0]));
+    parts.push(
+      new Uint8Array([s.winner === "A" ? 1 : s.winner === "B" ? 2 : 0]),
+    );
     return concatBytes(parts);
   }
 
@@ -610,10 +669,12 @@ git commit -m "feat(sdk): CrossProtocol — deterministic lane-race over a tunne
 ### Task 3: Frontend pure session-core
 
 **Files:**
+
 - Create: `frontend/src/games/chickenCross/session-core.ts`
 - Test: `frontend/src/games/chickenCross/session-core.test.ts`
 
 **Interfaces:**
+
 - Consumes (type-only): `Party` from `sui-tunnel-ts/protocol/Protocol`; `CrossProtocol`, `CrossState`, `CrossMove` from `sui-tunnel-ts/protocol/cross`; `OffchainTunnel` from `sui-tunnel-ts/core/tunnel`.
 - Produces: `CrossView { tick:number; seed:number; players:{lane:number;col:number;score:number}[]; winner:"A"|"B"|null; balanceA:number; balanceB:number }`; `SessionResult = "A" | "B" | "push"`; `stepSession(protocol, tunnel, rng):boolean`; `deriveView(state):CrossView`; `sessionResult(state):SessionResult`. The `seed` field lets the Vite-only board render hazards aligned to the protocol's collisions.
 
@@ -626,7 +687,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 // Runtime SDK imports use RELATIVE .ts paths (tsx ignores the vite alias / tsconfig paths at
 // runtime). This mirrors frontend/src/games/blackjack/session-core.test.ts exactly.
-import { CrossProtocol, MIN_STAKE } from "../../../../sui-tunnel-ts/src/protocol/cross.ts";
+import {
+  CrossProtocol,
+  MIN_STAKE,
+} from "../../../../sui-tunnel-ts/src/protocol/cross.ts";
 import { OffchainTunnel } from "../../../../sui-tunnel-ts/src/core/tunnel.ts";
 import { createParticipant } from "../../../../sui-tunnel-ts/src/core/keys.ts";
 import { stepSession, deriveView, sessionResult } from "./session-core.ts";
@@ -691,7 +755,11 @@ Create `frontend/src/games/chickenCross/session-core.ts`:
  * on-chain open/close, and telemetry. CrossBoard.tsx (Vite-only) owns hazard rendering.
  */
 import type { Party } from "sui-tunnel-ts/protocol/Protocol";
-import type { CrossProtocol, CrossState, CrossMove } from "sui-tunnel-ts/protocol/cross";
+import type {
+  CrossProtocol,
+  CrossState,
+  CrossMove,
+} from "sui-tunnel-ts/protocol/cross";
 import type { OffchainTunnel } from "sui-tunnel-ts/core/tunnel";
 
 /** Flat, render-friendly snapshot of a CrossState (bigints -> numbers). */
@@ -731,7 +799,11 @@ export function deriveView(state: CrossState): CrossView {
   return {
     tick: Number(state.tick),
     seed: Number(state.seed),
-    players: state.players.map((p) => ({ lane: p.lane, col: p.col, score: p.score })),
+    players: state.players.map((p) => ({
+      lane: p.lane,
+      col: p.col,
+      score: p.score,
+    })),
     winner: state.winner,
     balanceA: Number(state.balanceA),
     balanceB: Number(state.balanceB),
@@ -763,9 +835,11 @@ git commit -m "feat(web): chicken-cross pure session-core + tests"
 ### Task 4: Frontend integration hook
 
 **Files:**
+
 - Create: `frontend/src/games/chickenCross/useChickenCrossSession.ts`
 
 **Interfaces:**
+
 - Consumes: `openAndFundSelfPlay`, `readCreatedAt`, `closeCooperative` from `../../onchain/tunnelTx`; `getControlPlaneClient`, `RegisterSessionResult` from `../../backend/controlPlane`; `useTelemetry` from `../../telemetry/TelemetryProvider`; `OffchainTunnel`, `createParticipant`; `CrossProtocol`, `MIN_STAKE`, `CrossState`, `CrossMove`; `deriveView`, `sessionResult`, `stepSession`, `CrossView`, `SessionResult` from `./session-core`.
 - Produces: `useChickenCrossSession(): { status; view; result; stake; error; start; reset }` with `status: "idle"|"funding"|"playing"|"settling"|"settled"|"error"`.
 
@@ -775,14 +849,25 @@ Create `frontend/src/games/chickenCross/useChickenCrossSession.ts`:
 
 ```ts
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useCurrentAccount, useSignAndExecuteTransaction, useSuiClient } from "@mysten/dapp-kit";
+import {
+  useCurrentAccount,
+  useSignAndExecuteTransaction,
+  useSuiClient,
+} from "@mysten/dapp-kit";
 import { createParticipant } from "sui-tunnel-ts/core/keys";
 import { OffchainTunnel } from "sui-tunnel-ts/core/tunnel";
 import { CrossProtocol, MIN_STAKE } from "sui-tunnel-ts/protocol/cross";
 import type { CrossState, CrossMove } from "sui-tunnel-ts/protocol/cross";
 import { useTelemetry } from "../../telemetry/TelemetryProvider";
-import { getControlPlaneClient, type RegisterSessionResult } from "../../backend/controlPlane";
-import { closeCooperative, openAndFundSelfPlay, readCreatedAt } from "../../onchain/tunnelTx";
+import {
+  getControlPlaneClient,
+  type RegisterSessionResult,
+} from "../../backend/controlPlane";
+import {
+  closeCooperative,
+  openAndFundSelfPlay,
+  readCreatedAt,
+} from "../../onchain/tunnelTx";
 import {
   deriveView,
   sessionResult,
@@ -794,7 +879,13 @@ import {
 /** Milliseconds between world ticks (animation pacing). Faster than blackjack — hops are quick. */
 const STEP_MS = 300;
 
-export type SessionStatus = "idle" | "funding" | "playing" | "settling" | "settled" | "error";
+export type SessionStatus =
+  | "idle"
+  | "funding"
+  | "playing"
+  | "settling"
+  | "settled"
+  | "error";
 
 export interface ChickenCrossSession {
   status: SessionStatus;
@@ -856,7 +947,9 @@ export function useChickenCrossSession(): ChickenCrossSession {
     (nextStake: number) => {
       stopTimer();
       const floored = Math.floor(nextStake);
-      const stakeBig = BigInt(Math.max(Number(MIN_STAKE), Number.isFinite(floored) ? floored : 0));
+      const stakeBig = BigInt(
+        Math.max(Number(MIN_STAKE), Number.isFinite(floored) ? floored : 0),
+      );
       stakeRef.current = stakeBig;
       setStake(Number(stakeBig));
       setResult(null);
@@ -867,11 +960,15 @@ export function useChickenCrossSession(): ChickenCrossSession {
         setStatus("error");
         return;
       }
-      const signExec = async (tx: Parameters<typeof signAndExecute>[0]["transaction"]) => {
+      const signExec = async (
+        tx: Parameters<typeof signAndExecute>[0]["transaction"],
+      ) => {
         const r = await signAndExecute({ transaction: tx });
         return { digest: r.digest };
       };
-      const reads = client as unknown as Parameters<typeof openAndFundSelfPlay>[0]["reads"];
+      const reads = client as unknown as Parameters<
+        typeof openAndFundSelfPlay
+      >[0]["reads"];
 
       (async () => {
         try {
@@ -901,7 +998,12 @@ export function useChickenCrossSession(): ChickenCrossSession {
             { a: stakeBig, b: stakeBig },
           );
           tunnel.onUpdate = (_u, bytes) =>
-            report.bumpCounters({ updates: 1, signatures: 2, verifications: 2, bytes });
+            report.bumpCounters({
+              updates: 1,
+              signatures: 2,
+              verifications: 2,
+              bytes,
+            });
 
           protocolRef.current = protocol;
           tunnelRef.current = tunnel;
@@ -923,7 +1025,9 @@ export function useChickenCrossSession(): ChickenCrossSession {
             .then((s) => {
               sessionRef.current = s;
             })
-            .catch((e) => console.error("[chicken-cross] registerSession failed:", e));
+            .catch((e) =>
+              console.error("[chicken-cross] registerSession failed:", e),
+            );
 
           const flushHeartbeat = (force: boolean) => {
             const s = sessionRef.current;
@@ -939,7 +1043,9 @@ export function useChickenCrossSession(): ChickenCrossSession {
               nonce: String(moveCountRef.current),
               actionsDelta,
               windowMs: Math.max(1, windowMs),
-            }).catch((e) => console.error("[chicken-cross] heartbeat failed:", e));
+            }).catch((e) =>
+              console.error("[chicken-cross] heartbeat failed:", e),
+            );
           };
 
           const settleOnChain = async () => {
@@ -972,7 +1078,12 @@ export function useChickenCrossSession(): ChickenCrossSession {
             setView(deriveView(t.state));
 
             // On the deciding tick, push a panel txn for the winner.
-            if (moved && !wasTerminal && p.isTerminal(t.state) && t.state.winner) {
+            if (
+              moved &&
+              !wasTerminal &&
+              p.isTerminal(t.state) &&
+              t.state.winner
+            ) {
               report.pushTxn({
                 time: new Date().toLocaleTimeString("en-GB"),
                 bot: t.state.winner === "A" ? "Chicken A" : "Chicken B",
@@ -1025,12 +1136,14 @@ git commit -m "feat(web): chicken-cross self-play hook over a real tunnel"
 ### Task 5: Frontend UI (BetPanel, CrossBoard, Window, CSS)
 
 **Files:**
+
 - Create: `frontend/src/games/chickenCross/components/BetPanel.tsx`
 - Create: `frontend/src/games/chickenCross/components/CrossBoard.tsx`
 - Create: `frontend/src/games/chickenCross/cross.css`
 - Create: `frontend/src/games/chickenCross/ChickenCrossWindow.tsx`
 
 **Interfaces:**
+
 - Consumes: `useChickenCrossSession` (Task 4); `CrossView` (Task 3); runtime `laneKind`, `hazardsAt`, `COLUMN_COUNT`, `WIN_LANE` from `sui-tunnel-ts/protocol/cross` (Vite-only, allowed in a `.tsx` component); `GameWindowProps` from `../types`.
 - Produces: `ChickenCrossWindow: ComponentType<GameWindowProps>`.
 
@@ -1048,10 +1161,16 @@ export function BetPanel({ onStart }: { onStart: (stake: number) => void }) {
   const [stake, setStake] = useState<number>(500);
   return (
     <div className="flex h-full w-full flex-col items-center justify-center gap-3 bg-arena-bg p-4 text-center">
-      <h2 className="text-gold text-lg font-extrabold uppercase tracking-widest">Chicken Cross</h2>
-      <p className="text-sm text-arena-text">Set a stake — two bot chickens race across the lanes.</p>
+      <h2 className="text-gold text-lg font-extrabold uppercase tracking-widest">
+        Chicken Cross
+      </h2>
+      <p className="text-sm text-arena-text">
+        Set a stake — two bot chickens race across the lanes.
+      </p>
       <label className="flex flex-col gap-1">
-        <span className="text-[11px] uppercase tracking-wider text-arena-muted">Stake</span>
+        <span className="text-[11px] uppercase tracking-wider text-arena-muted">
+          Stake
+        </span>
         <input
           id="chicken-cross-stake"
           name="stake"
@@ -1070,7 +1189,8 @@ export function BetPanel({ onStart }: { onStart: (stake: number) => void }) {
         Race
       </button>
       <p className="max-w-xs text-[11px] text-arena-muted">
-        Each tick is co-signed over a Sui tunnel; first chicken to lane {WIN_LANE} takes the pot.
+        Each tick is co-signed over a Sui tunnel; first chicken to lane{" "}
+        {WIN_LANE} takes the pot.
       </p>
     </div>
   );
@@ -1082,7 +1202,12 @@ export function BetPanel({ onStart }: { onStart: (stake: number) => void }) {
 Create `frontend/src/games/chickenCross/components/CrossBoard.tsx`:
 
 ```tsx
-import { laneKind, hazardsAt, COLUMN_COUNT, WIN_LANE } from "sui-tunnel-ts/protocol/cross";
+import {
+  laneKind,
+  hazardsAt,
+  COLUMN_COUNT,
+  WIN_LANE,
+} from "sui-tunnel-ts/protocol/cross";
 import "../cross.css";
 import type { CrossView, SessionResult } from "../session-core";
 
@@ -1120,9 +1245,13 @@ export function CrossBoard({
   return (
     <div className="flex h-full w-full flex-col gap-2 bg-arena-bg p-3">
       <div className="flex items-center justify-between text-[11px] text-arena-muted">
-        <span>🐔 A · lane {view.players[0]?.lane ?? 0} · ${view.balanceA}</span>
+        <span>
+          🐔 A · lane {view.players[0]?.lane ?? 0} · ${view.balanceA}
+        </span>
         <span>tick {view.tick}</span>
-        <span>🐔 B · lane {view.players[1]?.lane ?? 0} · ${view.balanceB}</span>
+        <span>
+          🐔 B · lane {view.players[1]?.lane ?? 0} · ${view.balanceB}
+        </span>
       </div>
 
       <div className="cross-grid flex-1 overflow-hidden rounded border border-arena-edge">
@@ -1130,7 +1259,11 @@ export function CrossBoard({
           const kind = laneKind(L);
           const hazards = hazardsAt(BigInt(seed), L, BigInt(view.tick));
           return (
-            <div key={L} className="cross-lane" style={{ background: LANE_BG[kind] }}>
+            <div
+              key={L}
+              className="cross-lane"
+              style={{ background: LANE_BG[kind] }}
+            >
               {Array.from({ length: COLUMN_COUNT }).map((_, col) => {
                 const onHaz = hazards.some((s) => {
                   const c = col + 0.5;
@@ -1138,9 +1271,17 @@ export function CrossBoard({
                     (cc) => cc > s.center - s.half && cc < s.center + s.half,
                   );
                 });
-                const aHere = view.players[0]?.lane === L && view.players[0]?.col === col;
-                const bHere = view.players[1]?.lane === L && view.players[1]?.col === col;
-                const haz = onHaz ? (kind === "road" ? "🚗" : kind === "rails" ? "🚆" : "🪵") : "";
+                const aHere =
+                  view.players[0]?.lane === L && view.players[0]?.col === col;
+                const bHere =
+                  view.players[1]?.lane === L && view.players[1]?.col === col;
+                const haz = onHaz
+                  ? kind === "road"
+                    ? "🚗"
+                    : kind === "rails"
+                      ? "🚆"
+                      : "🪵"
+                  : "";
                 return (
                   <div key={col} className="cross-cell">
                     {aHere ? "🐔" : bHere ? "🐤" : haz}
@@ -1155,7 +1296,9 @@ export function CrossBoard({
       {settled && (
         <div className="flex flex-col items-center gap-2 py-1">
           <p className="text-gold text-sm font-bold uppercase tracking-widest">
-            {result === "push" ? "Push — stakes returned" : `Chicken ${result} wins the pot!`}
+            {result === "push"
+              ? "Push — stakes returned"
+              : `Chicken ${result} wins the pot!`}
           </p>
           <button
             onClick={onPlayAgain}
@@ -1209,13 +1352,19 @@ import { CrossBoard } from "./components/CrossBoard";
 /** Bot-vs-bot Chicken Cross over a REAL Sui tunnel: the wallet opens+funds it (one signature),
  *  the bots co-sign each tick off-chain, and the winner settles back on-chain. */
 export function ChickenCrossWindow(_props: GameWindowProps) {
-  const { status, view, result, error, start, reset } = useChickenCrossSession();
+  const { status, view, result, error, start, reset } =
+    useChickenCrossSession();
 
   if (status === "error") {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 p-4 text-center">
-        <p className="text-sm text-red-400">{error ?? "something went wrong"}</p>
-        <button onClick={reset} className="rounded border border-arena-edge px-3 py-1.5 text-sm">
+        <p className="text-sm text-red-400">
+          {error ?? "something went wrong"}
+        </p>
+        <button
+          onClick={reset}
+          className="rounded border border-arena-edge px-3 py-1.5 text-sm"
+        >
           Back
         </button>
       </div>
@@ -1266,10 +1415,12 @@ git commit -m "feat(web): chicken-cross window, 2D board, bet panel, styles"
 ### Task 6: Register the game + full gate
 
 **Files:**
+
 - Create: `frontend/src/games/chickenCross/index.ts`
 - Modify: `frontend/src/games/index.ts` (add one import line)
 
 **Interfaces:**
+
 - Consumes: `register` from `../registry`; `ChickenCrossWindow` from `./ChickenCrossWindow`.
 - Produces: a registered `GameModule` with id `chicken-cross` (auto-discovered by `Desktop.tsx`).
 
@@ -1305,6 +1456,7 @@ cd /Users/realestzan/Projects/code/dopamint-arena/frontend && node --import tsx 
 cd /Users/realestzan/Projects/code/dopamint-arena/frontend && pnpm typecheck
 cd /Users/realestzan/Projects/code/dopamint-arena/frontend && pnpm build
 ```
+
 Expected: all PASS; `pnpm build` completes (the duplicate-id guard in `registry.ts` confirms `chicken-cross` registered exactly once).
 
 - [ ] **Step 4: Commit**
@@ -1334,4 +1486,7 @@ git commit -m "feat(web): register chicken-cross in the arena desktop"
 - Spec §10 testing → Tasks 1–3 unit tests; Task 6 full gate. ✓
 - Spec §11 deferred PvP → not built (correct); no PvP files in this plan. ✓
 - Known deferral: positional log-carry drift is simplified to inverted-water survival (a log under you keeps you alive; no sideways push). Collision faithfulness preserved; sideways drift is a future refinement. Flagged here so it isn't mistaken for a miss.
+
+```
+
 ```

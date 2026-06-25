@@ -52,7 +52,7 @@ the FE can code against a mock before the backend exists.
 - Base path `/v1`; JSON; UTF-8. Auth: `Authorization: Bearer <statsToken>`
   (returned by `POST /sessions`).
 - **All `u64` values (balances, nonce, timestamp) are encoded as decimal
-  *strings*** — they exceed JS `number` precision and the SDK holds them as
+  _strings_** — they exceed JS `number` precision and the SDK holds them as
   `bigint`. 32-byte values (pubkeys, signatures, hashes, `transcriptRoot`) are
   `0x`-prefixed hex.
 - **Registry authority:** the **on-chain events are the source of truth** for a
@@ -64,11 +64,13 @@ the FE can code against a mock before the backend exists.
 ## Endpoints
 
 ### `POST /v1/sessions` — register a game session
+
 Called after the wallet PTB (`create_and_fund`) has opened+funded the tunnels.
 Groups them under a session for stats + settlement tracking. The SDK side of
 this extension lives in `sui-tunnel-ts/src/onchain/createAndFund.ts`
 (`buildOpenAndFundMany`), exercised end-to-end by
 `src/examples/createAndFundBatch.ts` (localnet open→settle harness).
+
 ```jsonc
 // request
 { "userAddress": "0x..",
@@ -79,7 +81,9 @@ this extension lives in `sui-tunnel-ts/src/onchain/createAndFund.ts`
 ```
 
 ### `POST /v1/sessions/{sessionId}/heartbeat` — throughput report
+
 Coarse, **aggregated deltas** (~1/s) — **not** one call per move.
+
 ```jsonc
 // request
 { "tunnelId": "0x..", "nonce": "48213", "actionsDelta": 4800, "windowMs": 1000 }
@@ -87,9 +91,11 @@ Coarse, **aggregated deltas** (~1/s) — **not** one call per move.
 ```
 
 ### `POST /v1/sessions/{sessionId}/settle` — settle + archive one tunnel
+
 A **thin envelope over the SDK's `CoSignedSettlementWithRoot`** — the FE
 serializes `buildSettlementWithRoot()` output directly; do not rename fields.
 The payload has **two parts for two consumers**:
+
 - `{ settlement, sigA, sigB }` → on-chain `close_cooperative_with_root`.
 - `transcript[]` → **Walrus only** (proof-of-existence; never goes on-chain).
 
@@ -99,6 +105,7 @@ the co-signatures against it; the backend passes it through but does not supply 
 chain. The SDK signs `onchainNonce + 1`, and in self-play (no on-chain `update_state`)
 `onchainNonce = 0`, so this is `"1"` — **not** the heartbeat's off-chain `nonce` (e.g.
 `48213`). Signing the move count here fails on-chain with `EInvalidSignature`.
+
 ```jsonc
 // request
 { "settlement": { "tunnelId": "0x..", "partyABalance": "1500", "partyBBalance": "500",
@@ -111,10 +118,17 @@ chain. The SDK signs `onchainNonce + 1`, and in self-play (no on-chain `update_s
 ```
 
 ### `GET /v1/stats/live` — aggregate feed (SSE) → catalog activity panel
+
 Server-sent events; the backend sums per-client heartbeats into global figures.
+
 ```jsonc
-{ "tps": 812345, "totalActions": 19200345, "activeTunnels": 2104,
-  "settledTunnels": 880, "perGame": { "blackjack": { "tps": 410234, "tunnels": 1200 } } }
+{
+  "tps": 812345,
+  "totalActions": 19200345,
+  "activeTunnels": 2104,
+  "settledTunnels": 880,
+  "perGame": { "blackjack": { "tps": 410234, "tunnels": 1200 } },
+}
 ```
 
 ## Sequence

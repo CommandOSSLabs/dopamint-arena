@@ -13,9 +13,9 @@
 ## Background
 
 PR #46 shipped the **attract-mode take-over cabinet**: an unattended self-play
-game window auto-plays itself (*attract*); hovering freezes the frame and offers
-**Play vs Bot** (*inviting*); taking the seat hands the human control while the
-bot plays the other seat (*live*); **Return to Home** sends the game back to its
+game window auto-plays itself (_attract_); hovering freezes the frame and offers
+**Play vs Bot** (_inviting_); taking the seat hands the human control while the
+bot plays the other seat (_live_); **Return to Home** sends the game back to its
 own title screen. The behavior lives in **one shared shell** —
 `frontend/src/shell/cabinet/` (`GameCabinet`, `CabinetController`,
 `TakeOverOverlay`, the `attract → inviting → live` reducer) — so each game opts
@@ -106,7 +106,8 @@ Add a pause latch to each `BotSession` class:
 Expose on the session interface:
 
 ```ts
-interface BombItSession {        // and ChickenCrossSession, symmetric
+interface BombItSession {
+  // and ChickenCrossSession, symmetric
   /* …existing… */
   paused: boolean;
   pause(): void;
@@ -129,7 +130,7 @@ start however it does today — verify during implementation).
 
 Wrap the **solo** render subtree in `<GameCabinet>` (it provides the
 `CabinetRegistry` context, renders the shared `TakeOverOverlay` in the
-*inviting* state and the ⌂ Home control in *live*). The cabinet is rendered by
+_inviting_ state and the ⌂ Home control in _live_). The cabinet is rendered by
 the game's own Window component (self-contained, like ttt's App) — the desktop
 shell is untouched. Place `<GameCabinet>` so its hover root covers the board
 play surface inside the existing `GameWindow` chrome.
@@ -137,26 +138,28 @@ play surface inside the existing `GameWindow` chrome.
 Build a memoized `CabinetController` and register it:
 
 ```ts
-const offerable =
-  scene === "solo" && solo.status === "playing" && solo.auto;
+const offerable = scene === "solo" && solo.status === "playing" && solo.auto;
 
 const takeOver = useCallback(() => {
   if (solo.auto) solo.toggleAuto(); // hand seat A to the human
-  solo.resume();                    // unfreeze if hover paused it
+  solo.resume(); // unfreeze if hover paused it
 }, [solo.auto, solo.toggleAuto, solo.resume]);
 
 const returnHome = useCallback(() => {
-  solo.reset();   // stop auto + clear session
-  setMode(null);  // back to the solo/pvp chooser
+  solo.reset(); // stop auto + clear session
+  setMode(null); // back to the solo/pvp chooser
 }, [solo.reset]);
 
-const cabinet = useMemo<CabinetController>(() => ({
-  active: offerable,
-  pause: solo.pause,
-  resume: solo.resume,
-  takeOver,
-  returnHome,
-}), [offerable, solo.pause, solo.resume, takeOver, returnHome]);
+const cabinet = useMemo<CabinetController>(
+  () => ({
+    active: offerable,
+    pause: solo.pause,
+    resume: solo.resume,
+    takeOver,
+    returnHome,
+  }),
+  [offerable, solo.pause, solo.resume, takeOver, returnHome],
+);
 
 useRegisterCabinet(cabinet);
 ```
@@ -204,9 +207,9 @@ board.
 - **Reuse** the shared `seatControlState` reducer tests (already green) — the
   state machine is unchanged, so no new reducer tests.
 - **In-browser walk (both games)** — attract self-play → hover freezes the frame
-  + overlay appears → **Play vs Bot** → keyboard drives seat A, bot plays B →
-  **Return to Home** → solo/pvp chooser. Plus: minimize/maximize during *live*
-  preserves the human game (session survival already covered, re-verify).
+  - overlay appears → **Play vs Bot** → keyboard drives seat A, bot plays B →
+    **Return to Home** → solo/pvp chooser. Plus: minimize/maximize during _live_
+    preserves the human game (session survival already covered, re-verify).
 - **Gate** — `pnpm typecheck` 0 · `pnpm build` OK · existing session-core +
   protocol tests green. No SDK/Move test changes expected.
 
@@ -220,7 +223,7 @@ Touched:
   check belongs in the pure core (decide in implementation; prefer keeping the
   latch in the session class if the loop lives there).
 - `frontend/src/games/bombIt/BombItWindow.tsx` — `GameCabinet` wrap + controller
-  + attract-on-open auto.
+  - attract-on-open auto.
 - `frontend/src/games/bombIt/useBombItSession.test.ts` (or session-core test) —
   pause/resume unit tests.
 - `frontend/src/games/chickenCross/useChickenCrossSession.ts` — symmetric.

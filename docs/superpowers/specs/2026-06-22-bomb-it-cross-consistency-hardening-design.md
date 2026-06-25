@@ -10,15 +10,16 @@
 ## Background
 
 bomb-it and chicken-cross are arena-native games (window + hook + `session-core`
-+ SDK `Protocol`), more integrated than the references (blackjack/ttt are thin
-wrappers around vendored apps). A parity review found them strongly consistent —
-file layout, hook wiring (telemetry, control-plane, settlement), the `Protocol`
-contract, the PvP `DistributedTunnel` pattern, and the shared `arcade-*`/`text-gold`
-chrome all match. Four narrow gaps remain. This spec resolves them.
+
+- SDK `Protocol`), more integrated than the references (blackjack/ttt are thin
+  wrappers around vendored apps). A parity review found them strongly consistent —
+  file layout, hook wiring (telemetry, control-plane, settlement), the `Protocol`
+  contract, the PvP `DistributedTunnel` pattern, and the shared `arcade-*`/`text-gold`
+  chrome all match. Four narrow gaps remain. This spec resolves them.
 
 Non-goals (verified, explicitly out of scope): adding sound (the references are
 silent too — parity holds); reworking the neon play-surface palette (every game
-hardcodes its own surface; ours consume all shared *chrome* tokens). An incidental
+hardcodes its own surface; ours consume all shared _chrome_ tokens). An incidental
 discovery — `docs/decisions/README.md` is out of sync with the actual ADR files
 (duplicate `0002`, a phantom `0006`/`0005` index entry) — is noted for the owner
 but not addressed here.
@@ -39,7 +40,7 @@ The repo already has both patterns, split by a clear line:
   Auto Pets teams (ADR-0009).
 - **Deterministic seed from `(tunnelId, …)`** is used where the random field is
   **public and no party controls it** — blackjack's card stream (`blackjack.ts`
-  header: *"bias-free without any commit-reveal round-trips"*).
+  header: _"bias-free without any commit-reveal round-trips"_).
 
 bomb-it and chicken-cross are squarely in the second category: the hazard field
 (per-lane, by `(seed, lane, tick)`) and the bomb grid (180°-rotationally
@@ -51,12 +52,12 @@ commit-reveal would add handshake round-trips and SDK surface for no fairness ga
 ### Changes
 
 - **`sui-tunnel-ts/src/protocol/cross.ts`** and **`bombIt.ts`** — add a short
-  header note (mirroring `blackjack.ts:5-8`) stating *why* deterministic
+  header note (mirroring `blackjack.ts:5-8`) stating _why_ deterministic
   tunnelId-seeding is fair here: public, symmetric, party-independent field;
   un-grindable id; no hidden state ⇒ no commit-reveal.
 - **`docs/adding-a-tunnel-game.md`** (§"The protocol contract", Invariant 2,
-  line ~56) — replace the absolute *"PvP should derive the seed from a two-party
-  commit-reveal"* with the real rule: deterministic seeding is fine when the random
+  line ~56) — replace the absolute _"PvP should derive the seed from a two-party
+  commit-reveal"_ with the real rule: deterministic seeding is fine when the random
   field is **public and party-independent**; commit-reveal is required only when a
   party holds **hidden state it could bias** (cite ADR-0003/0008/0009 vs blackjack).
 - **`docs/decisions/0010-deterministic-seed-vs-commit-reveal.md`** — new ADR
@@ -89,7 +90,7 @@ already sum to `total`) and makes both tie paths consistent.
 ## #2 — delete the dead `.arena-win-banner` rule
 
 `frontend/src/styles/index.css` (~lines 406-409) defines `.arena-win-banner` with
-the comment *"Used by every arena game's result screen."* It has **zero usages**
+the comment _"Used by every arena game's result screen."_ It has **zero usages**
 anywhere in `src`. Our boards already animate their result via
 `.bomb-result__trophy` / `.cross-result__trophy` (custom scale+rotate pops); the
 vendored references have their own. The class is dead and the comment is false.
@@ -103,7 +104,7 @@ the existing trophy pops.
 ## #3 — test honesty + settleability coverage
 
 - **`frontend/src/games/chickenCross/session-core.test.ts:3-4`** — the header says
-  it *"mirrors `blackjack/session-core.test.ts` exactly."* It doesn't (it omits
+  it _"mirrors `blackjack/session-core.test.ts` exactly."_ It doesn't (it omits
   blackjack's settleability test and bounds at 120 ticks). Correct the comment to
   state the real shape: bounded advance + conservation, with full termination
   covered by the protocol's own SDK tests. (bomb-it's test makes no such claim.)
@@ -142,6 +143,7 @@ cd frontend && pnpm build
 ```
 
 New/changed tests:
+
 - `cross.test.ts` — equal-score double-arrival ⇒ push.
 - both `session-core.test.ts` — bounded settleability (`verifyCoSignedUpdate`).
 

@@ -15,7 +15,7 @@
 - **Commits:** Conventional Commits (`<type>(<scope>): <subject>`), subject ≤ 50 chars, imperative, lowercase after type, no trailing period. **No AI attribution** (commits read as human-authored).
 - **`Waiting` struct stays unchanged.** The hold `deadline` is a Lua-managed field on the queue-entry JSON; Rust ignores it on deserialize (serde drops unknown fields). Do not add a Rust field for it.
 - **`JOIN_OR_PAIR` and `fallback_pair` stay single atomic Redis evals** (exactly-once pairing under concurrency; never pair a wallet with itself; drain stale self-entries).
-- **Correctness never depends on co-location:** a split match must still form and relay over the pub/sub fallback. The hold changes *which* opponent, never *whether* a valid match forms.
+- **Correctness never depends on co-location:** a split match must still form and relay over the pub/sub fallback. The hold changes _which_ opponent, never _whether_ a valid match forms.
 - **Server clock for deadlines:** compute "now" inside Lua via `redis.call('TIME')` so every instance agrees with zero skew. Never pass a Rust wall-clock time as the deadline base.
 - **Memory store keeps current behavior:** single-instance ⇒ every waiter is same-instance ⇒ pair immediately; the hold/timer never engages.
 - **Redis integration tests require Docker** (testcontainers spins up `redis:7.4-alpine`). The `redis_fixture()` readiness retry is already committed.
@@ -26,9 +26,11 @@
 ### Task 1: Rewrite ADR-0011 for the bounded-hold decision
 
 **Files:**
+
 - Modify: `docs/decisions/0011-local-first-pairing.md` (full rewrite)
 
 **Interfaces:**
+
 - Consumes: nothing.
 - Produces: nothing (documentation only).
 
@@ -99,11 +101,13 @@ git commit -m "docs: rewrite ADR-0011 for bounded-hold pairing"
 ### Task 2: Add `pair_hold_ms` config to `AppState`
 
 **Files:**
+
 - Modify: `backend/tunnel-manager/src/state.rs:8-19` (struct) and `:28-43` (`in_memory_for_test`)
 - Modify: `backend/tunnel-manager/src/main.rs:78-86` (`AppState { … }` construction + env read)
 - Modify: `backend/tunnel-manager/src/routes.rs:36-43` (`test_state` construction)
 
 **Interfaces:**
+
 - Consumes: nothing.
 - Produces: `AppState.pair_hold_ms: u64` — the matchmaking hold in milliseconds, read once at startup from `MP_PAIR_HOLD_MS` (default `750`).
 
@@ -165,6 +169,7 @@ git commit -m "feat(mp): add MP_PAIR_HOLD_MS pairing hold config"
 ### Task 3: Bounded-hold pairing in the store layer
 
 **Files:**
+
 - Modify: `backend/tunnel-manager/src/store/mod.rs:51` (`MpStore::join_or_pair` signature) and `:51-52` (add `fallback_pair`)
 - Modify: `backend/tunnel-manager/src/store/redis.rs:286-298` (`JOIN_OR_PAIR` const + comment), add a `FALLBACK_PAIR` const, `:439-457` (`join_or_pair` impl — add `hold_ms`), and add the `fallback_pair` impl
 - Modify: `backend/tunnel-manager/src/store/memory.rs:172-183` (`join_or_pair` — add `hold_ms`), add `fallback_pair` impl
@@ -172,6 +177,7 @@ git commit -m "feat(mp): add MP_PAIR_HOLD_MS pairing hold config"
 - Test: `backend/tunnel-manager/src/store/redis.rs` (new tests in `mod tests`)
 
 **Interfaces:**
+
 - Consumes: `AppState.pair_hold_ms` (Task 2); `crate::mp::Waiting { wallet, conn: ConnRef { instance_id, conn_id } }`; `redis_fixture()` → `(ContainerAsync<Redis>, RedisPool)`.
 - Produces:
   - `MpStore::join_or_pair(&self, game: &str, me: Waiting, hold_ms: u64) -> Option<Waiting>` — pairs same-instance first, else a past-deadline waiter, else parks with `deadline = now + hold_ms`.
@@ -471,10 +477,12 @@ git commit -m "feat(mp): bounded-hold pairing in the store"
 ### Task 4: Shared match-creation path + per-waiter hold timer (ws.rs)
 
 **Files:**
+
 - Modify: `backend/tunnel-manager/src/mp/ws.rs` — add `create_and_announce_match`; rewrite the `QueueJoin` arm to use it and to arm a hold timer on park; add a `FuturesUnordered` hold-timer arm to the `handle_socket` select loop; thread a pending-holds handle through `handle_message`/`handle_authed`
 - Test: `backend/tunnel-manager/src/mp/ws.rs` (`mod tests`) — a memory-store announce test and a redis-store hold→timer→fallback test
 
 **Interfaces:**
+
 - Consumes: `MpStore::join_or_pair(.., hold_ms)` and `MpStore::fallback_pair(game, wallet)` (Task 3); `state.pair_hold_ms` (Task 2); `Bus::deliver`, `Bus::populate`; `build_quick_match`.
 - Produces: `async fn create_and_announce_match(state: &SharedState, game: &str, seat_a: Waiting, seat_b: Waiting) -> (String, MatchRecord)` — builds the record (seat A = `seat_a`, seat B = `seat_b`), `put_match`, delivers `MatchFound` to both seats, populates both relay caches, and returns `(match_id, rec)`.
 
@@ -668,6 +676,7 @@ git commit -m "feat(mp): hold timer + shared match announce"
 ### Task 5: Co-located vs. split pairing metric
 
 **Files:**
+
 - Modify: `backend/tunnel-manager/src/stats_counter.rs` (add `MatchPairingMetrics`)
 - Modify: `backend/tunnel-manager/src/state.rs` (add `pairing` field) + `in_memory_for_test`
 - Modify: `backend/tunnel-manager/src/main.rs` (`AppState { … }`) + `backend/tunnel-manager/src/routes.rs` (`test_state`)
@@ -676,6 +685,7 @@ git commit -m "feat(mp): hold timer + shared match announce"
 - Test: `backend/tunnel-manager/src/stats_counter.rs` (unit) + `backend/tunnel-manager/src/routes.rs` (render)
 
 **Interfaces:**
+
 - Consumes: `create_and_announce_match`'s `rec.conn_a`/`rec.conn_b` (Task 4); `SharedState`.
 - Produces:
   - `crate::stats_counter::MatchPairingMetrics` with `pub fn observe(&self, colocated: bool)` and `pub fn snapshot(&self) -> (u64, u64)` returning `(colocated, split)`.
@@ -851,11 +861,13 @@ git commit -m "feat(mp): meter co-located vs split pairings"
 ### Task 6: Reconnect affinity cookie
 
 **Files:**
+
 - Modify: `backend/tunnel-manager/src/mp/ws.rs:18-20` (`mp_upgrade`)
 - Modify: `docs/adding-a-tunnel-game.md` OR a new `docs/decisions/` note — add the required LB stickiness deployment note (a short doc block; do not create infra config)
 - Test: `backend/tunnel-manager/src/mp/ws.rs` (`mod tests`) — assert the handshake response carries the affinity cookie
 
 **Interfaces:**
+
 - Consumes: `state.bus.instance_id()`.
 - Produces: `mp_upgrade` responses carry `Set-Cookie: aff=<instance_id>; Path=/; SameSite=Lax` on the WebSocket handshake.
 
@@ -955,4 +967,7 @@ git commit -m "feat(mp): set relay affinity cookie on handshake"
 - **Do not** add per-instance queue sharding, re-homing, redirect-on-resume, or changes to the resume protocol — all out of scope (spec §Out of scope).
 - **Timer cancellation** is structural: the `FuturesUnordered<HoldTimer>` lives in `handle_socket`, so when the connection task ends every pending hold is dropped. A dropped socket also runs `leave_queue` for each joined game, so a late `fallback_pair` finds no self-entry and no-ops.
 - **Match record in Redis** (`put_match`) is unchanged and stays once-per-match, off the per-move path.
+
+```
+
 ```

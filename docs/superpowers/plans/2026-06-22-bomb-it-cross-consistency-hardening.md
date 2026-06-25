@@ -23,10 +23,12 @@
 ### Task 1: Fix the cross equal-score dead-heat (push, not A-win)
 
 **Files:**
+
 - Modify: `sui-tunnel-ts/src/protocol/cross.ts:291-294` (the `aWon && bWon` branch) and the header (lines 1-14)
 - Test: `sui-tunnel-ts/src/protocol/cross.test.ts` (add one test)
 
 **Interfaces:**
+
 - Consumes: `CrossProtocol`, `WIN_LANE`, `MIN_STAKE`, `SPAWN_COL`, `CrossState` — already imported in `cross.test.ts:3-12`; `CTX` already defined at `cross.test.ts:70`.
 - Produces: no new exports. Behavior: `applyMove` returns `winner: null` (push) when both seats reach `WIN_LANE` on the same tick with equal score.
 
@@ -43,8 +45,18 @@ test("simultaneous WIN_LANE arrival with equal score is a push, not an A-win", (
     ...p.initialState(CTX),
     tick: 10n,
     players: [
-      { lane: WIN_LANE - 1, col: SPAWN_COL, score: WIN_LANE - 1, invulnTicks: 0 },
-      { lane: WIN_LANE - 1, col: SPAWN_COL, score: WIN_LANE - 1, invulnTicks: 0 },
+      {
+        lane: WIN_LANE - 1,
+        col: SPAWN_COL,
+        score: WIN_LANE - 1,
+        invulnTicks: 0,
+      },
+      {
+        lane: WIN_LANE - 1,
+        col: SPAWN_COL,
+        score: WIN_LANE - 1,
+        invulnTicks: 0,
+      },
     ],
   };
   const next = p.applyMove(deadHeat, { dirA: "north", dirB: "north" }, "A");
@@ -66,23 +78,23 @@ Expected: FAIL — the new test reports `next.winner` is `"A"` (old code awards 
 In `sui-tunnel-ts/src/protocol/cross.ts`, replace lines 291-294:
 
 ```ts
-    // Simultaneous double-arrival is broken deterministically by higher score, ties to A.
-    // Deterministic (replay-stable) is required so both parties agree; the A-bias is harmless
-    // in self-play (both seats are the same funding wallet). Revisit for PvP fairness.
-    if (aWon && bWon) winner = players[0].score >= players[1].score ? "A" : "B";
+// Simultaneous double-arrival is broken deterministically by higher score, ties to A.
+// Deterministic (replay-stable) is required so both parties agree; the A-bias is harmless
+// in self-play (both seats are the same funding wallet). Revisit for PvP fairness.
+if (aWon && bWon) winner = players[0].score >= players[1].score ? "A" : "B";
 ```
 
 with:
 
 ```ts
-    // Simultaneous double-arrival: higher score wins; an exact dead heat is a PUSH (winner
-    // null), matching the TICK_CAP tie path below. Resolving by score is replay-stable so both
-    // parties agree, and the push removes the old seat-A bias in human-vs-human PvP.
-    if (aWon && bWon) {
-      if (players[0].score > players[1].score) winner = "A";
-      else if (players[1].score > players[0].score) winner = "B";
-      else winner = null;
-    }
+// Simultaneous double-arrival: higher score wins; an exact dead heat is a PUSH (winner
+// null), matching the TICK_CAP tie path below. Resolving by score is replay-stable so both
+// parties agree, and the push removes the old seat-A bias in human-vs-human PvP.
+if (aWon && bWon) {
+  if (players[0].score > players[1].score) winner = "A";
+  else if (players[1].score > players[0].score) winner = "B";
+  else winner = null;
+}
 ```
 
 - [ ] **Step 4: Add the PvP seed-fairness note to the cross.ts header**
@@ -127,6 +139,7 @@ git commit -m "fix(cross): push on equal-score dead heat"
 ### Task 2: Document the deterministic-seed decision (bomb-it header, doc, ADR)
 
 **Files:**
+
 - Modify: `sui-tunnel-ts/src/protocol/bombIt.ts` (header, lines 1-11)
 - Modify: `docs/adding-a-tunnel-game.md` (Invariant 2, line 56)
 - Create: `docs/decisions/0010-deterministic-seed-vs-commit-reveal.md`
@@ -188,14 +201,14 @@ disputer replay identically. Two seeding strategies exist in the repo and a
 new game must pick one:
 
 - **Deterministic** — the seed is a pure function of `(tunnelId, …)`. Blackjack
-  uses this for its card stream (`blackjack.ts` header: *"bias-free without any
-  commit-reveal round-trips"*).
+  uses this for its card stream (`blackjack.ts` header: _"bias-free without any
+  commit-reveal round-trips"_).
 - **Commit-reveal** — both parties commit to secret randomness, then reveal.
   Used by battleship (0003), quantum poker (0008), and Super Auto Pets (0009).
 
 The ambiguity: chicken-cross and bomb-it ship PvP and both seed from
 `seedFromTunnelId(tunnelId)`. `docs/adding-a-tunnel-game.md` previously said PvP
-*should* use commit-reveal, which no shipped game does.
+_should_ use commit-reveal, which no shipped game does.
 
 ## Decision
 
@@ -213,8 +226,8 @@ card stream.
 
 - No commit-reveal handshake or SDK surface is added for cross/bomb-it (YAGNI),
   and they stay consistent with the blackjack precedent.
-- The distinguishing test for future games: *does any party hold hidden state it
-  could bias?* If yes → commit-reveal (0003/0008/0009). If the field is public
+- The distinguishing test for future games: _does any party hold hidden state it
+  could bias?_ If yes → commit-reveal (0003/0008/0009). If the field is public
   and symmetric → deterministic `tunnelId` seed.
 - A separate, real bias (chicken-cross's equal-score dead-heat awarding seat A)
   is fixed independently to a push; it was a tiebreak bug, not a seeding one.
@@ -237,6 +250,7 @@ git commit -m "docs: deterministic-seed rationale + ADR 0010"
 ### Task 3: Delete the dead `.arena-win-banner` rule
 
 **Files:**
+
 - Modify: `frontend/src/styles/index.css:406-410` (remove comment + rule; keep `@keyframes arena-win-pop`)
 
 **Interfaces:** CSS only. `@keyframes arena-win-pop` is retained — `.arcade-card` (`index.css:446`) still references it.
@@ -277,10 +291,12 @@ git commit -m "chore(css): remove dead arena-win-banner"
 ### Task 4: Fix test comment + add bounded settleability tests
 
 **Files:**
+
 - Modify: `frontend/src/games/chickenCross/session-core.test.ts:3-4` (comment) + import + add one test
 - Modify: `frontend/src/games/bombIt/session-core.test.ts` (import + add one test)
 
 **Interfaces:**
+
 - Consumes: `verifyCoSignedUpdate` from `../../../../sui-tunnel-ts/src/core/tunnel.ts`; `tunnel.latest`, `tunnel.partyA.{publicKey,scheme}`, `tunnel.partyB.{publicKey,scheme}` on `OffchainTunnel` (same surface used by `blackjack/session-core.test.ts:57-70`). `freshTunnel()` already exists in both files and returns `{ protocol, tunnel }`.
 - Produces: no new exports.
 
@@ -295,7 +311,10 @@ import { OffchainTunnel } from "../../../../sui-tunnel-ts/src/core/tunnel.ts";
 to:
 
 ```ts
-import { OffchainTunnel, verifyCoSignedUpdate } from "../../../../sui-tunnel-ts/src/core/tunnel.ts";
+import {
+  OffchainTunnel,
+  verifyCoSignedUpdate,
+} from "../../../../sui-tunnel-ts/src/core/tunnel.ts";
 ```
 
 Then append this test:
@@ -349,7 +368,10 @@ import { OffchainTunnel } from "../../../../sui-tunnel-ts/src/core/tunnel.ts";
 to:
 
 ```ts
-import { OffchainTunnel, verifyCoSignedUpdate } from "../../../../sui-tunnel-ts/src/core/tunnel.ts";
+import {
+  OffchainTunnel,
+  verifyCoSignedUpdate,
+} from "../../../../sui-tunnel-ts/src/core/tunnel.ts";
 ```
 
 Then append this test:
@@ -392,6 +414,7 @@ git commit -m "test(games): bomb-it/cross settleability"
 ### Task 5: Add per-game READMEs
 
 **Files:**
+
 - Create: `frontend/src/games/bombIt/README.md`
 - Create: `frontend/src/games/chickenCross/README.md`
 
@@ -401,7 +424,7 @@ git commit -m "test(games): bomb-it/cross settleability"
 
 Create `frontend/src/games/bombIt/README.md`:
 
-```markdown
+````markdown
 # Bomb It (tunnel PvP + self-play)
 
 A two-party Bomberman-style grid duel that settles over a real Sui tunnel.
@@ -438,7 +461,9 @@ cd sui-tunnel-ts && node --import tsx --test src/protocol/bombIt.test.ts
 cd frontend && node --import tsx --test "src/games/bombIt/session-core.test.ts"
 cd frontend && pnpm typecheck && pnpm build
 ```
-```
+````
+
+````
 
 - [ ] **Step 2: Create the chicken-cross README**
 
@@ -481,8 +506,9 @@ PvP because the field is public and identical for both seats (see
 cd sui-tunnel-ts && node --import tsx --test src/protocol/cross.test.ts
 cd frontend && node --import tsx --test "src/games/chickenCross/session-core.test.ts"
 cd frontend && pnpm typecheck && pnpm build
-```
-```
+````
+
+````
 
 - [ ] **Step 3: Verify both READMEs exist**
 
@@ -494,7 +520,7 @@ Expected: both paths listed (no "No such file").
 ```bash
 git add frontend/src/games/bombIt/README.md frontend/src/games/chickenCross/README.md
 git commit -m "docs(games): add bomb-it/cross READMEs"
-```
+````
 
 ---
 
@@ -534,6 +560,7 @@ Expected: empty (all changes committed across Tasks 1-5).
 ## Self-Review
 
 **1. Spec coverage:**
+
 - #1 deterministic-seed docs → Task 1 (cross header), Task 2 (bomb-it header, doc:56, ADR 0010). ✓
 - #1 cross tiebreak fix + test → Task 1. ✓
 - #2 delete dead `.arena-win-banner` (keep keyframe) → Task 3. ✓
@@ -544,4 +571,7 @@ Expected: empty (all changes committed across Tasks 1-5).
 **2. Placeholder scan:** No TBD/TODO/"appropriate"/"similar to Task N". Every code/CSS/doc step shows the exact content and every command shows expected output. ✓
 
 **3. Type consistency:** `freshTunnel()` returns `{ protocol, tunnel }` (matches both existing test files); `verifyCoSignedUpdate(update, partyAPub, partyBPub)` and `tunnel.latest` / `tunnel.partyA` / `tunnel.partyB` match `blackjack/session-core.test.ts:57-70`; `CrossState` field names (`lane`, `col`, `score`, `invulnTicks`, `winner`, `balanceA/B`, `total`) match `cross.ts`; `WIN_LANE`, `SPAWN_COL`, `MIN_STAKE`, `CTX` are already in `cross.test.ts` scope. ✓
+
+```
+
 ```

@@ -17,6 +17,7 @@
 **Conventions:** Conventional Commits, subject ≤ 50 chars, lowercase after type, no trailing period, **no AI attribution / no Co-Authored-By**. One logical change per commit; the commit is always the final step of its task. Do **not** `git add -A`; stage only the files listed in that task. The new SAP files live under `sui-tunnel-ts/**` and `sui_tunnel/**`, so stage them **by exact path** — never `git add sui-tunnel-ts` / `git add sui_tunnel` / `git add -A` (no wholesale staging of those framework dirs). Do not push. Rebase over merge.
 
 **Invariants (must hold after every task):**
+
 1. The battle is a PURE deterministic function of `(teamA, teamB, battleSeed)` — no wall-clock, no unseeded RNG; all in-battle randomness comes from the seed via `core/randomness` (byte-identical to `randomness.move`).
 2. `balances()` always sums to the locked total (`total = a + b`); the engine throws otherwise.
 3. The per-tunnel nonce is strictly increasing and engine-owned — the protocol never touches keys, signing, nonces, replay, or wire bytes.
@@ -24,6 +25,7 @@
 5. No ZK on the hot path (dispute re-derivation only).
 
 **Paths (relative to repo root):**
+
 - Engine: `sui-tunnel-ts/src/protocol/sapEngine.ts` (+ `sapEngine.test.ts`)
 - Protocol: `sui-tunnel-ts/src/protocol/superAutoPets.ts` (+ `superAutoPets.test.ts`), registered in `sui-tunnel-ts/src/protocol/index.ts`
 - Shop: `sui-tunnel-ts/src/protocol/sapShop.ts` (+ `sapShop.test.ts`)
@@ -46,6 +48,7 @@ This plan stays entirely on `feat/super-auto-pets` (branched off `dev`) and push
 ---
 
 **How to run tests:**
+
 - All TS: `cd sui-tunnel-ts && pnpm test`
 - One TS file: `cd sui-tunnel-ts && node --import tsx --test src/protocol/superAutoPets.test.ts` (swap the path for `sapEngine.test.ts` / `sapShop.test.ts`)
 - Move: `cd sui_tunnel && sui move test example_super_auto_pets`
@@ -61,6 +64,7 @@ This plan stays entirely on `feat/super-auto-pets` (branched off `dev`) and push
 ## Task 1: Battle engine core (`sapEngine.ts`)
 
 **Files:**
+
 - Create: `sui-tunnel-ts/src/protocol/sapEngine.ts`
 - Test: `sui-tunnel-ts/src/protocol/sapEngine.test.ts`
 
@@ -75,7 +79,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { runBattle, makePet, encodeTeam, SPECIES, type Pet } from "./sapEngine";
 
-const seed = (n: number) => Uint8Array.from({ length: 32 }, (_, i) => (i + n) & 0xff);
+const seed = (n: number) =>
+  Uint8Array.from({ length: 32 }, (_, i) => (i + n) & 0xff);
 // A plain vanilla body (FISH's trigger is onLevelUp, a shop event — inert in battle).
 const body = (attack: number, health: number): Pet => ({
   species: SPECIES.FISH,
@@ -257,7 +262,14 @@ function summon(world: BattleWorld, side: Side, index: number, pet: Pet): void {
 export function makePet(species: number, level: 1 | 2 | 3 = 1): Pet {
   const def = ROSTER[species];
   if (!def) throw new Error(`sap: unknown species ${species}`);
-  return { species, attack: def.attack, health: def.health, level, xp: 1, shield: 0 };
+  return {
+    species,
+    attack: def.attack,
+    health: def.health,
+    level,
+    xp: 1,
+    shield: 0,
+  };
 }
 
 function clonePet(p: Pet): Pet {
@@ -387,7 +399,12 @@ function removeFainted(world: BattleWorld): void {
   }
 }
 
-function fireAt(world: BattleWorld, side: Side, index: number, trigger: Trigger): void {
+function fireAt(
+  world: BattleWorld,
+  side: Side,
+  index: number,
+  trigger: Trigger,
+): void {
   const team = friends(world, side);
   const pet = team[index];
   if (!pet) return;
@@ -399,7 +416,11 @@ function fireAt(world: BattleWorld, side: Side, index: number, trigger: Trigger)
 
 const MAX_ROUNDS = 200; // pure safety bound; a stalemate resolves as a draw
 
-export function runBattle(teamA: Pet[], teamB: Pet[], battleSeed: Uint8Array): BattleResult {
+export function runBattle(
+  teamA: Pet[],
+  teamB: Pet[],
+  battleSeed: Uint8Array,
+): BattleResult {
   const world: BattleWorld = {
     a: teamA.map(clonePet),
     b: teamB.map(clonePet),
@@ -452,6 +473,7 @@ git commit -m "feat(sap): deterministic battle engine core"
 ## Task 2: SDK protocol vertical slice that settles (`superAutoPets.ts`)
 
 **Files:**
+
 - Create: `sui-tunnel-ts/src/protocol/superAutoPets.ts`
 - Test: `sui-tunnel-ts/src/protocol/superAutoPets.test.ts`
 - Modify: `sui-tunnel-ts/src/protocol/index.ts`
@@ -475,11 +497,20 @@ import { SuperAutoPetsProtocol } from "./superAutoPets";
 import type { SapState, SapMove } from "./superAutoPets";
 
 const kpA = keyPairFromSecret(Uint8Array.from({ length: 32 }, (_, i) => i + 1));
-const kpB = keyPairFromSecret(Uint8Array.from({ length: 32 }, (_, i) => i + 33));
-const ctx = (a: bigint, b: bigint) => ({ tunnelId: "0xtest", initialBalances: { a, b } });
+const kpB = keyPairFromSecret(
+  Uint8Array.from({ length: 32 }, (_, i) => i + 33),
+);
+const ctx = (a: bigint, b: bigint) => ({
+  tunnelId: "0xtest",
+  initialBalances: { a, b },
+});
 
 test("initial state opens in the shop phase with full hearts", () => {
-  const proto = new SuperAutoPetsProtocol({ hearts: 5, wagerPerRound: 10n, roundCap: 15 });
+  const proto = new SuperAutoPetsProtocol({
+    hearts: 5,
+    wagerPerRound: 10n,
+    roundCap: 15,
+  });
   const s = proto.initialState(ctx(100n, 100n));
   assert.equal(s.phase, "shop");
   assert.equal(s.round, 1);
@@ -497,29 +528,42 @@ test("rejects illegal ordering and a tampered reveal", () => {
   const commitment = computeCommitment(encodeTeam(team), salt);
 
   // Reveal before any commit is illegal.
-  assert.throws(() => proto.applyMove(s0, { kind: "revealTeam", team, salt }, "A"));
+  assert.throws(() =>
+    proto.applyMove(s0, { kind: "revealTeam", team, salt }, "A"),
+  );
 
   let s = proto.applyMove(s0, { kind: "commitTeam", commitment }, "A");
-  assert.throws(() => proto.applyMove(s, { kind: "commitTeam", commitment }, "A")); // double commit
+  assert.throws(() =>
+    proto.applyMove(s, { kind: "commitTeam", commitment }, "A"),
+  ); // double commit
   s = proto.applyMove(s, { kind: "commitTeam", commitment }, "B");
   assert.equal(s.phase, "reveal");
 
   // A reveal whose team does not match the commitment is rejected.
   const wrong = [makePet(SPECIES.FISH)];
-  assert.throws(() => proto.applyMove(s, { kind: "revealTeam", team: wrong, salt }, "A"));
+  assert.throws(() =>
+    proto.applyMove(s, { kind: "revealTeam", team: wrong, salt }, "A"),
+  );
 });
 
 test("encodeState is deterministic and changes after a commit", () => {
   const proto = new SuperAutoPetsProtocol();
   const s0 = proto.initialState(ctx(1n, 1n));
   assert.deepEqual(proto.encodeState(s0), proto.encodeState({ ...s0 }));
-  const commitment = computeCommitment(encodeTeam([makePet(SPECIES.PIG)]), new Uint8Array(16));
+  const commitment = computeCommitment(
+    encodeTeam([makePet(SPECIES.PIG)]),
+    new Uint8Array(16),
+  );
   const s1 = proto.applyMove(s0, { kind: "commitTeam", commitment }, "A");
   assert.notDeepEqual(proto.encodeState(s1), proto.encodeState(s0));
 });
 
 test("self-play runs rounds and settles, conserving the locked total", () => {
-  const proto = new SuperAutoPetsProtocol({ hearts: 3, wagerPerRound: 10n, roundCap: 15 });
+  const proto = new SuperAutoPetsProtocol({
+    hearts: 3,
+    wagerPerRound: 10n,
+    roundCap: 15,
+  });
   const t = OffchainTunnel.selfPlay<SapState, SapMove>(
     proto,
     "0x" + "ab".repeat(32),
@@ -569,7 +613,11 @@ Expected: FAIL — `Cannot find module './superAutoPets'`.
  * both sides commit before either reveals.
  */
 
-import { computeCommitment, verifyCommitment, combineReveals } from "../core/commitment";
+import {
+  computeCommitment,
+  verifyCommitment,
+  combineReveals,
+} from "../core/commitment";
 import { concatBytes } from "../core/bytes";
 import { u64ToBeBytes } from "../core/wire";
 import { blake2b256 } from "../core/crypto";
@@ -763,7 +811,10 @@ export class SuperAutoPetsProtocol implements Protocol<SapState, SapMove> {
     if (state.phase === "shop") {
       const mine = by === "A" ? state.teamCommitA : state.teamCommitB;
       if (mine) return null;
-      return { kind: "commitTeam", commitment: computeCommitment(encodeTeam(team), salt) };
+      return {
+        kind: "commitTeam",
+        commitment: computeCommitment(encodeTeam(team), salt),
+      };
     }
     const mine = by === "A" ? state.revealA : state.revealB;
     if (mine) return null;
@@ -779,7 +830,13 @@ function simTeam(by: Party): Pet[] {
     : [makePet(SPECIES.FISH)];
 }
 function simSalt(round: number, by: Party): Uint8Array {
-  return blake2b256(concatBytes([DOMAIN, u64ToBeBytes(round), Uint8Array.from([by === "A" ? 1 : 2])]));
+  return blake2b256(
+    concatBytes([
+      DOMAIN,
+      u64ToBeBytes(round),
+      Uint8Array.from([by === "A" ? 1 : 2]),
+    ]),
+  );
 }
 ```
 
@@ -811,6 +868,7 @@ git commit -m "feat(sap): protocol vertical slice that settles"
 ## Task 3: Fair shop RNG — commit-reveal seed (`superAutoPets.ts`)
 
 **Files:**
+
 - Modify: `sui-tunnel-ts/src/protocol/superAutoPets.ts`
 - Test: `sui-tunnel-ts/src/protocol/superAutoPets.test.ts` (append cases)
 
@@ -833,12 +891,30 @@ test("fair shop seed: both commit before either reveals, joint seed is unbiasabl
   const shareB = Uint8Array.from({ length: 16 }, () => 0xb2);
   const saltB = Uint8Array.from({ length: 16 }, () => 0x0b);
 
-  let s = proto.applyMove(s0, { kind: "commitSeed", commitment: computeCommitment(shareA, saltA) }, "A");
+  let s = proto.applyMove(
+    s0,
+    { kind: "commitSeed", commitment: computeCommitment(shareA, saltA) },
+    "A",
+  );
   // Cannot reveal before both have committed (privacy of the share).
-  assert.throws(() => proto.applyMove(s, { kind: "revealSeed", share: shareA, salt: saltA }, "A"));
-  s = proto.applyMove(s, { kind: "commitSeed", commitment: computeCommitment(shareB, saltB) }, "B");
-  s = proto.applyMove(s, { kind: "revealSeed", share: shareA, salt: saltA }, "A");
-  s = proto.applyMove(s, { kind: "revealSeed", share: shareB, salt: saltB }, "B");
+  assert.throws(() =>
+    proto.applyMove(s, { kind: "revealSeed", share: shareA, salt: saltA }, "A"),
+  );
+  s = proto.applyMove(
+    s,
+    { kind: "commitSeed", commitment: computeCommitment(shareB, saltB) },
+    "B",
+  );
+  s = proto.applyMove(
+    s,
+    { kind: "revealSeed", share: shareA, salt: saltA },
+    "A",
+  );
+  s = proto.applyMove(
+    s,
+    { kind: "revealSeed", share: shareB, salt: saltB },
+    "B",
+  );
 
   assert.equal(s.phase, "shop");
   assert.ok(s.shopSeed);
@@ -882,7 +958,12 @@ export type SapMove =
 ```
 
 ```ts
-const PHASE_CODE: Record<SapPhase, number> = { seed: 0, shop: 1, reveal: 2, done: 3 };
+const PHASE_CODE: Record<SapPhase, number> = {
+  seed: 0,
+  shop: 1,
+  reveal: 2,
+  done: 3,
+};
 ```
 
 - `initialState` starts `phase: "seed"` and sets the five new fields to `null`.
@@ -890,45 +971,45 @@ const PHASE_CODE: Record<SapPhase, number> = { seed: 0, shop: 1, reveal: 2, done
 - In `applyMove`, handle the two new move kinds before the existing ones:
 
 ```ts
-    if (move.kind === "commitSeed") {
-      if (state.phase !== "seed") throw new Error("sap: not in seed phase");
-      const mine = by === "A" ? state.seedCommitA : state.seedCommitB;
-      if (mine) throw new Error("sap: seed already committed");
-      return {
-        ...state,
-        seedCommitA: by === "A" ? move.commitment : state.seedCommitA,
-        seedCommitB: by === "B" ? move.commitment : state.seedCommitB,
-      };
-    }
-    if (move.kind === "revealSeed") {
-      if (state.phase !== "seed") throw new Error("sap: not in seed phase");
-      if (!state.seedCommitA || !state.seedCommitB) {
-        throw new Error("sap: both must commit a seed share before any reveal");
-      }
-      const commit = by === "A" ? state.seedCommitA : state.seedCommitB;
-      if (by === "A" ? state.seedRevealA : state.seedRevealB) {
-        throw new Error("sap: seed already revealed");
-      }
-      if (!verifyCommitment(commit, move.share, move.salt)) {
-        throw new Error("sap: seed reveal does not match commitment");
-      }
-      const r = { share: move.share, salt: move.salt };
-      const next: SapState = {
-        ...state,
-        seedRevealA: by === "A" ? r : state.seedRevealA,
-        seedRevealB: by === "B" ? r : state.seedRevealB,
-      };
-      if (next.seedRevealA && next.seedRevealB) {
-        next.shopSeed = combineReveals(
-          next.seedRevealA.share,
-          next.seedRevealA.salt,
-          next.seedRevealB.share,
-          next.seedRevealB.salt,
-        );
-        next.phase = "shop";
-      }
-      return next;
-    }
+if (move.kind === "commitSeed") {
+  if (state.phase !== "seed") throw new Error("sap: not in seed phase");
+  const mine = by === "A" ? state.seedCommitA : state.seedCommitB;
+  if (mine) throw new Error("sap: seed already committed");
+  return {
+    ...state,
+    seedCommitA: by === "A" ? move.commitment : state.seedCommitA,
+    seedCommitB: by === "B" ? move.commitment : state.seedCommitB,
+  };
+}
+if (move.kind === "revealSeed") {
+  if (state.phase !== "seed") throw new Error("sap: not in seed phase");
+  if (!state.seedCommitA || !state.seedCommitB) {
+    throw new Error("sap: both must commit a seed share before any reveal");
+  }
+  const commit = by === "A" ? state.seedCommitA : state.seedCommitB;
+  if (by === "A" ? state.seedRevealA : state.seedRevealB) {
+    throw new Error("sap: seed already revealed");
+  }
+  if (!verifyCommitment(commit, move.share, move.salt)) {
+    throw new Error("sap: seed reveal does not match commitment");
+  }
+  const r = { share: move.share, salt: move.salt };
+  const next: SapState = {
+    ...state,
+    seedRevealA: by === "A" ? r : state.seedRevealA,
+    seedRevealB: by === "B" ? r : state.seedRevealB,
+  };
+  if (next.seedRevealA && next.seedRevealB) {
+    next.shopSeed = combineReveals(
+      next.seedRevealA.share,
+      next.seedRevealA.salt,
+      next.seedRevealB.share,
+      next.seedRevealB.salt,
+    );
+    next.phase = "shop";
+  }
+  return next;
+}
 ```
 
 - Update `randomMove` to drive the seed phase first (commit a deterministic share, then reveal), mirroring the team-phase logic.
@@ -953,6 +1034,7 @@ git commit -m "feat(sap): commit-reveal fair shop seed"
 ## Task 4: Shop economy module (`sapShop.ts`)
 
 **Files:**
+
 - Create: `sui-tunnel-ts/src/protocol/sapShop.ts`
 - Test: `sui-tunnel-ts/src/protocol/sapShop.test.ts`
 - Modify: `sui-tunnel-ts/src/protocol/index.ts`
@@ -986,7 +1068,8 @@ import {
 } from "./sapShop";
 import { SPECIES, ROSTER } from "./sapEngine";
 
-const seed = (n: number) => Uint8Array.from({ length: 32 }, (_, i) => (i + n) & 0xff);
+const seed = (n: number) =>
+  Uint8Array.from({ length: 32 }, (_, i) => (i + n) & 0xff);
 
 test("tier unlock schedule matches SAP", () => {
   assert.equal(tierForRound(1), 1);
@@ -1011,7 +1094,10 @@ test("shop pool excludes tokens and respects the unlocked tier", () => {
   assert.ok(pool.every((id) => ROSTER[id].tier <= 1));
   assert.ok(pool.includes(SPECIES.ANT));
   // canonical ordering: ascending by id
-  assert.deepEqual(pool, [...pool].sort((a, b) => a - b));
+  assert.deepEqual(
+    pool,
+    [...pool].sort((a, b) => a - b),
+  );
 });
 
 test("currentShop is deterministic from the seed and within the pool", () => {
@@ -1116,7 +1202,11 @@ export function newPlayer(): PlayerState {
 }
 
 /** The current pet offers: a Fisher–Yates shuffle of the pool from shopSeed chained `rerolls` times, first N taken. */
-export function currentShop(shopSeed: Uint8Array, round: number, p: PlayerState): number[] {
+export function currentShop(
+  shopSeed: Uint8Array,
+  round: number,
+  p: PlayerState,
+): number[] {
   let seed = seedFromBytes(shopSeed);
   for (let i = 0; i < p.rerolls; i++) seed = nextSeed(seed);
   const pool = shopPool(round); // fresh array; shuffled in place
@@ -1167,6 +1257,7 @@ git commit -m "feat(sap): fair shop economy with verifiable rolls"
 ## Task 5: Leveling & combine (`sapShop.ts` + `sapEngine.ts`)
 
 **Files:**
+
 - Modify: `sui-tunnel-ts/src/protocol/sapShop.ts` (add `combine`)
 - Test: `sui-tunnel-ts/src/protocol/sapShop.test.ts` (append cases)
 
@@ -1238,7 +1329,8 @@ export function combine(p: PlayerState, i: number, j: number): PlayerState {
   const a = p.team[i];
   const b = p.team[j];
   if (!a || !b) throw new Error("sap shop: missing pet to combine");
-  if (a.species !== b.species) throw new Error("sap shop: cannot combine different species");
+  if (a.species !== b.species)
+    throw new Error("sap shop: cannot combine different species");
   const xp = a.xp + b.xp;
   const merged: Pet = {
     species: a.species,
@@ -1272,6 +1364,7 @@ git commit -m "feat(sap): combine-to-level pets"
 ## Task 6: Food items (`sapShop.ts` + `sapEngine.ts`)
 
 **Files:**
+
 - Modify: `sui-tunnel-ts/src/protocol/sapEngine.ts` (food effects in battle **and** food bound into `encodeTeam`)
 - Modify: `sui-tunnel-ts/src/protocol/sapShop.ts` (`applyFood` + food table)
 - Test: `sui-tunnel-ts/src/protocol/sapShop.test.ts` (append) and `sapEngine.test.ts` (append)
@@ -1309,8 +1402,29 @@ Append to `sapEngine.test.ts` (add `import { computeCommitment } from "../core/c
 ```ts
 test("garlic reduces incoming damage by 2 (min 1)", () => {
   // A garlic 1/10 body soaks a 5-attack hit as 3 instead of 5.
-  const garlic = { species: SPECIES.FISH, attack: 1, health: 10, level: 1 as const, xp: 1, shield: 0, food: "garlic" };
-  const r = runBattle([garlic], [{ species: SPECIES.FISH, attack: 5, health: 10, level: 1, xp: 1, shield: 0 }], seed(9));
+  const garlic = {
+    species: SPECIES.FISH,
+    attack: 1,
+    health: 10,
+    level: 1 as const,
+    xp: 1,
+    shield: 0,
+    food: "garlic",
+  };
+  const r = runBattle(
+    [garlic],
+    [
+      {
+        species: SPECIES.FISH,
+        attack: 5,
+        health: 10,
+        level: 1,
+        xp: 1,
+        shield: 0,
+      },
+    ],
+    seed(9),
+  );
   // After round 1 the garlic pet should have 10 - 3 = 7 hp; assert it outlives a no-garlic mirror.
   assert.ok(r.rounds >= 1);
 });
@@ -1357,7 +1471,11 @@ Then **bind food into the canonical team encoding** by adding a stable food-code
 ```ts
 // stable food ids for canonical encoding (0 = none); only battle-time foods tag a pet.
 export const FOOD_CODE: Record<string, number> = {
-  garlic: 1, melon: 2, meat_bone: 3, honey: 4, mushroom: 5,
+  garlic: 1,
+  melon: 2,
+  meat_bone: 3,
+  honey: 4,
+  mushroom: 5,
 };
 
 export function encodeTeam(team: Pet[]): Uint8Array {
@@ -1395,7 +1513,11 @@ export const FOOD = {
 export const COST_FOOD = 3;
 
 /** Buy a food onto the pet at `index`. Immediate buffs resolve now; battle-time foods tag the pet. */
-export function applyFood(p: PlayerState, index: number, food: string): PlayerState {
+export function applyFood(
+  p: PlayerState,
+  index: number,
+  food: string,
+): PlayerState {
   if (p.gold < COST_FOOD) throw new Error("sap shop: not enough gold for food");
   const pet = p.team[index];
   if (!pet) throw new Error("sap shop: no pet at index");
@@ -1436,6 +1558,7 @@ git commit -m "feat(sap): food items and battle effects"
 ## Task 7: Roster expansion to ~30 pets + full trigger set (`sapEngine.ts`)
 
 **Files:**
+
 - Modify: `sui-tunnel-ts/src/protocol/sapEngine.ts` (extend `ROSTER` + dispatch `onHurt` / `onBeforeAttack` / `onFriendFaint` / `onFriendSummoned`)
 - Test: `sui-tunnel-ts/src/protocol/sapEngine.test.ts` (append cases)
 
@@ -1459,7 +1582,15 @@ test("onFaint: hedgehog damages all pets on both teams", () => {
 });
 
 test("onBeforeAttack: a Meat Bone pet adds +3 to its hit", () => {
-  const boned = { species: SPECIES.FISH, attack: 1, health: 9, level: 1 as const, xp: 1, shield: 0, food: "meat_bone" };
+  const boned = {
+    species: SPECIES.FISH,
+    attack: 1,
+    health: 9,
+    level: 1 as const,
+    xp: 1,
+    shield: 0,
+    food: "meat_bone",
+  };
   const r = runBattle([boned], [body(1, 3)], seed(13));
   assert.equal(r.outcome, 1); // 1 + 3 = 4 dmg kills a 3-hp body in round 1
 });
@@ -1525,6 +1656,7 @@ git commit -m "feat(sap): expand roster to tiers 1-3"
 > **Reference:** `sui_tunnel/sources/quantum_poker.move` (on-chain commit-reveal game, present on `dev`). Every `tunnel::*` function this task calls already exists on `dev`/HEAD — see "Reference modules" above.
 
 **Files:**
+
 - Create: `sui_tunnel/sources/examples/example_super_auto_pets.move`
 - Test: `sui_tunnel/tests/example_super_auto_pets_tests.move`
 
@@ -1562,6 +1694,7 @@ Follow `quantum_poker.move`'s session structure. Provide: structs `Scoreboard { 
   `u64be(4) || [phase, hearts_a, hearts_b, last_outcome]  ||  u64be(8) || u64be(round)  ||  u64be(8) || u64be(balance_a)  ||  u64be(8) || u64be(balance_b)  ||  u64be(8) || u64be(wager)  ||  u64be(32) || team_commit_a  ||  u64be(32) || team_commit_b`
 
   then `blake2b256(&data)`. The TS `encodeState` array is the **single source of truth**; do NOT add `tunnel_id` and do NOT reorder. (`team_commit_a/b` are the 32-byte opaque commitments; their team CONTENTS — including each pet's food code from Task 6's `encodeTeam` — are bound inside the commitment off-chain, so any on-chain dispute re-derivation of a team encoding must append the food code exactly as `encodeTeam` does.)
+
 - `record_round_result<T>(session, phase, hearts_a, hearts_b, last_outcome, round, balance_a, balance_b, team_commit_a, team_commit_b, nonce, timestamp, sig_a, sig_b, clock)` — recompute the hash via `compute_session_hash(phase, hearts_a, hearts_b, last_outcome, round, balance_a, balance_b, session.wager_per_round, team_commit_a, team_commit_b)`, call `tunnel::update_state(...)`, update the scoreboard + balances + `SessionState`, emit `RoundResultRecorded`.
 - `settle_session<T>(session, player_a_balance, player_b_balance, sig_a, sig_b, timestamp, clock, ctx)` — `tunnel::close_cooperative_and_transfer(...)`.
 - `raise_dispute` / `resolve_dispute` / `agree_to_dispute` / `force_close_after_timeout` — delegate to the matching `tunnel::*` funcs.
@@ -1585,6 +1718,7 @@ git commit -m "feat(sap): on-chain session-channel example"
 ## Task 9: Golden cross-check (TS ↔ Move byte parity)
 
 **Files:**
+
 - Modify: `sui-tunnel-ts/src/core/golden.gen.ts` (print SAP vectors)
 - Test: `sui_tunnel/tests/example_super_auto_pets_tests.move` (assert against the pasted vectors) — or a dedicated xcheck test mirroring `randomness_xcheck_tests.move`
 
@@ -1598,8 +1732,15 @@ Append to `sui-tunnel-ts/src/core/golden.gen.ts` (after the existing `console.lo
 import { SuperAutoPetsProtocol } from "../protocol/superAutoPets";
 import { currentShop, newPlayer } from "../protocol/sapShop";
 
-const sap = new SuperAutoPetsProtocol({ hearts: 5, wagerPerRound: 1n, roundCap: 15 });
-const sapState = sap.initialState({ tunnelId: "0xab", initialBalances: { a: 1000n, b: 2000n } });
+const sap = new SuperAutoPetsProtocol({
+  hearts: 5,
+  wagerPerRound: 1n,
+  roundCap: 15,
+});
+const sapState = sap.initialState({
+  tunnelId: "0xab",
+  initialBalances: { a: 1000n, b: 2000n },
+});
 console.log("SAP_STATE_HASH ", toHex(blake2b256(sap.encodeState(sapState))));
 
 const shopSeed = Uint8Array.from({ length: 32 }, (_, i) => i + 1); // 0x01..0x20
@@ -1636,6 +1777,7 @@ git commit -m "test(sap): golden ts-move byte parity"
 ## Task 10: Frontend game folder + registration
 
 **Files:**
+
 - Create: `frontend/src/games/superAutoPets/index.ts`
 - Create: `frontend/src/games/superAutoPets/SuperAutoPetsWindow.tsx`
 - Create: `frontend/src/games/superAutoPets/usePvpSuperAutoPets.ts`
@@ -1723,6 +1865,7 @@ cd sui-tunnel-ts && pnpm test
 cd sui_tunnel && sui move test example_super_auto_pets
 cd frontend && pnpm typecheck && pnpm build
 ```
+
 Expected: all TS tests pass (`sapEngine`, `superAutoPets`, `sapShop`, plus the unchanged suite); all SAP Move tests pass; frontend typecheck + build clean.
 
 - [ ] **Step 2: Manual PvP smoke (testnet, two funded wallets)**

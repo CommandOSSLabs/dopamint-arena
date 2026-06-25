@@ -117,14 +117,14 @@ hook mount
 
 ### Units and boundaries
 
-| Unit | Location | Responsibility | Depends on |
-|---|---|---|---|
-| `ResumeRecord` (+`selfEphemeralSecretHex`) | `resume.ts` | durable per-tunnel state incl. per-match key | — |
-| `keypairFromSecretHex` | `resume.ts` | rebuild a `KeyPair` from the persisted secret | `@noble/curves`, `bytes` |
-| `RebuildSpec<State,Move>` | `resumeSession.ts` | the thin per-game inputs reconstruction can't derive | — |
-| `rebuildTunnel` | `resumeSession.ts` | reconstruct one tunnel from a record + spec; warm-attach it | `DistributedTunnel`, `MpClient`, `restoreInto`, `attachResume` |
-| `resumeActiveTunnels` | `resumeSession.ts` | evict + rebuild every active tunnel for a game | `resume.ts` index, `rebuildTunnel` |
-| per-game `RebuildSpec` factory + adapter | each hook / adapter file | proto, codec, secret handlers, UI hydration | the game's protocol |
+| Unit                                       | Location                 | Responsibility                                              | Depends on                                                     |
+| ------------------------------------------ | ------------------------ | ----------------------------------------------------------- | -------------------------------------------------------------- |
+| `ResumeRecord` (+`selfEphemeralSecretHex`) | `resume.ts`              | durable per-tunnel state incl. per-match key                | —                                                              |
+| `keypairFromSecretHex`                     | `resume.ts`              | rebuild a `KeyPair` from the persisted secret               | `@noble/curves`, `bytes`                                       |
+| `RebuildSpec<State,Move>`                  | `resumeSession.ts`       | the thin per-game inputs reconstruction can't derive        | —                                                              |
+| `rebuildTunnel`                            | `resumeSession.ts`       | reconstruct one tunnel from a record + spec; warm-attach it | `DistributedTunnel`, `MpClient`, `restoreInto`, `attachResume` |
+| `resumeActiveTunnels`                      | `resumeSession.ts`       | evict + rebuild every active tunnel for a game              | `resume.ts` index, `rebuildTunnel`                             |
+| per-game `RebuildSpec` factory + adapter   | each hook / adapter file | proto, codec, secret handlers, UI hydration                 | the game's protocol                                            |
 
 `rebuildTunnel`/`resumeActiveTunnels` are the only new shared surface. A game provides a
 `RebuildSpec` and calls `resumeActiveTunnels` once on mount — it never writes
@@ -146,14 +146,14 @@ interface ResumeIdentity {
 }
 
 interface RebuildSpec<State, Move> {
-  proto: Protocol<State, Move>;                 // same proto object the hook builds for a live match
-  moveCodec?: MoveCodec<Move>;                   // games with binary moves (battleship, poker)
-  adapter: ResumeAdapter<State, Move>;           // full-state + secret (de)serialization + onReconciled
+  proto: Protocol<State, Move>; // same proto object the hook builds for a live match
+  moveCodec?: MoveCodec<Move>; // games with binary moves (battleship, poker)
+  adapter: ResumeAdapter<State, Move>; // full-state + secret (de)serialization + onReconciled
   balancesFromRecord?(record: ResumeRecord): { a: bigint; b: bigint }; // default: from latest checkpoint balances
 }
 
 interface ResumeContext {
-  selfWallet: string;                            // current connected wallet at mount
+  selfWallet: string; // current connected wallet at mount
 }
 
 interface RestoredSession<State, Move> {
@@ -163,11 +163,17 @@ interface RestoredSession<State, Move> {
 }
 
 function rebuildTunnel<State, Move>(
-  mp: MpClient, record: ResumeRecord, spec: RebuildSpec<State, Move>, ctx: ResumeContext,
+  mp: MpClient,
+  record: ResumeRecord,
+  spec: RebuildSpec<State, Move>,
+  ctx: ResumeContext,
 ): RestoredSession<State, Move>;
 
 function resumeActiveTunnels<State, Move>(
-  mp: MpClient, gameId: string, spec: RebuildSpec<State, Move>, ctx: ResumeContext,
+  mp: MpClient,
+  gameId: string,
+  spec: RebuildSpec<State, Move>,
+  ctx: ResumeContext,
 ): RestoredSession<State, Move>[];
 
 // mpClient.ts — PeerMessage gains:
@@ -184,6 +190,7 @@ separate stake persistence — the asymmetric split is recovered from the checkp
 ## Data flow details
 
 ### Cold-load ordering
+
 `resumeActiveTunnels` runs **before** `mp.connect()`. `mp.channel()` only registers
 local relay handlers (no socket needed), and `attachResume` only subscribes to events,
 so both are safe pre-connect. `markActive` registers each match in the registry before
@@ -193,6 +200,7 @@ change to the Task 3 handshake, which currently gates resume behind an `isReconn
 flag).
 
 ### Warm vs cold
+
 - **Warm** (socket dropped, no reload): the live tunnel object survives in memory;
   reconnect → `resume` → `resync` → reconcile. Unchanged.
 - **Cold** (reload): the tunnel object is gone; `rebuildTunnel` reconstructs it from the
@@ -202,6 +210,7 @@ Both converge through `attachResume`/`decideReconcile`; cold-load only adds the
 reconstruction step.
 
 ### UI hydration
+
 `rebuildTunnel` returns the live tunnel; the hook hydrates its rendered state from
 `tunnel.snapshot().state` immediately (so the board shows before the peer answers), and
 `adapter.onReconciled` re-hydrates after the handshake resolves any ≤1-move gap.
@@ -210,15 +219,15 @@ reconstruction step.
 
 ## Per-game specifics
 
-| Aspect | ttt/caro | battleship | poker | blackjack |
-|---|---|---|---|---|
-| Transport | MpClient ✓ | MpClient ✓ | MpClient ✓ | **bjRelay → MpClient (migrate)** |
-| Balances | const symmetric | const symmetric | const symmetric | **asymmetric (from checkpoint)** |
-| Move codec | JSON-native | `battleshipMoveCodec` | `pokerMoveCodec` | JSON-native |
-| Secret | none | fleet (board+salts) | hole cards + slot secrets | none |
-| Opener | role A | role A | role A | **role B (preserve)** |
-| Warm `attachResume` | wired ✓ | wired ✓ | wired ✓ | **add (currently missing)** |
-| This work adds | cold-load + persist key | cold-load + persist key | cold-load + persist key | migration + `stake` + warm + cold |
+| Aspect              | ttt/caro                | battleship              | poker                     | blackjack                         |
+| ------------------- | ----------------------- | ----------------------- | ------------------------- | --------------------------------- |
+| Transport           | MpClient ✓              | MpClient ✓              | MpClient ✓                | **bjRelay → MpClient (migrate)**  |
+| Balances            | const symmetric         | const symmetric         | const symmetric           | **asymmetric (from checkpoint)**  |
+| Move codec          | JSON-native             | `battleshipMoveCodec`   | `pokerMoveCodec`          | JSON-native                       |
+| Secret              | none                    | fleet (board+salts)     | hole cards + slot secrets | none                              |
+| Opener              | role A                  | role A                  | role A                    | **role B (preserve)**             |
+| Warm `attachResume` | wired ✓                 | wired ✓                 | wired ✓                   | **add (currently missing)**       |
+| This work adds      | cold-load + persist key | cold-load + persist key | cold-load + persist key   | migration + `stake` + warm + cold |
 
 - **ttt/caro:** `RebuildSpec` with no secret + JSON move + const balances. The shared hook
   serves both games; filter `listActiveTunnels()` by the per-game id ("tictactoe"/"caro"
@@ -246,7 +255,7 @@ reconstruction step.
   `clearResumeRecord`. Schema stays `v1`; the field is additive and optional-at-read,
   records lacking it are simply evicted.
 - **Equivocation** (`decideReconcile` → `settle`): surfaced via `adapter.onReconciled
-  (tunnel, "settle")`. The actual settle UI/flow is Task 7; here it's surfaced only.
+(tunnel, "settle")`. The actual settle UI/flow is Task 7; here it's surfaced only.
 - **Opponent absent on cold-load:** rebuild succeeds, `resume` is sent, no `resync`
   arrives; the seat sits at its restored checkpoint. The warm grace timer (Task 7)
   governs settlement; this work just restores and waits.
@@ -261,6 +270,7 @@ All `node:test` via tsx; reuse the fake-relay-pair harness from `mpClientFramePa
 `resumeSession` tests.
 
 **Foundation (`resumeSession.test.ts`, `resume.test.ts`):**
+
 - `keypairFromSecretHex` round-trips a generated key (sign with restored == sign with
   original).
 - `rebuildTunnel` reconstructs a tunnel from a persisted record that co-signs the next
@@ -271,6 +281,7 @@ All `node:test` via tsx; reuse the fake-relay-pair harness from `mpClientFramePa
   stringify/parse round-trip.
 
 **Per-game cold-load integration (one per game):**
+
 - Drive two `MpClient`s over the fake relay to nonce N; persist seat A's record; **drop
   and "reload"** seat A by constructing a fresh `MpClient` + `rebuildTunnel` from the
   persisted record (fresh objects, same persisted secret); reconnect; run the resync;
@@ -311,6 +322,7 @@ A living how-to for adding resume to any **future** game. Contents:
 ## File structure
 
 **Modified**
+
 - `frontend/src/pvp/resume.ts` — `ResumeRecord.selfEphemeralSecretHex`;
   `keypairFromSecretHex`.
 - `frontend/src/pvp/resumeSession.ts` — `RebuildSpec`, `ResumeContext`,
@@ -325,6 +337,7 @@ A living how-to for adding resume to any **future** game. Contents:
 - The four adapter files as needed (secret handlers for battleship/poker).
 
 **Created**
+
 - `docs/resume-adapter-guide.md` — the integration guide.
 - Per-game cold-load test files (co-located: `src/pvp/*.test.ts` and the game dirs).
 

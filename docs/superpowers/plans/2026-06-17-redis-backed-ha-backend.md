@@ -21,25 +21,25 @@
 
 ## File structure
 
-| File | Responsibility | Phase |
-|---|---|---|
-| `backend/tunnel-manager/src/store/mod.rs` | **Create.** Trait defs (`ControlStore`, `MpStore`, `Bus`), `ConnRef`, a `Stores` bundle. | 1 |
-| `backend/tunnel-manager/src/store/memory.rs` | **Create.** In-memory impls (today's `RwLock` maps / atomics, lifted here) + the pairing/relay/stats unit tests moved from `mp/*`. | 1 |
-| `backend/tunnel-manager/src/store/redis.rs` | **Create.** `fred` setup + Redis impls of all three traits + the Lua scripts. | 2 |
-| `backend/tunnel-manager/src/state.rs` | **Modify.** `AppState` holds `Arc<dyn …>` + `instance_id`; add `Serialize/Deserialize` to wire/state types. | 1 |
-| `backend/tunnel-manager/src/mp/mod.rs` | **Modify.** `Waiting`/`DirectedInvite`/`MatchRecord` seats become `ConnRef`; derive `Serialize/Deserialize`. | 1, 3 |
-| `backend/tunnel-manager/src/mp/matchmaking.rs` | **Delete** (logic moves into `MpStore` impls). | 1 |
-| `backend/tunnel-manager/src/mp/relay.rs` | **Delete** (logic moves into `MpStore` impls). | 1 |
-| `backend/tunnel-manager/src/mp/ws.rs` | **Modify.** Keep the local conns map via `Bus::register`; add the `mp:inst:<self>` subscription; call `MpStore`/`Bus`. | 3 |
-| `backend/tunnel-manager/src/mp/protocol.rs` | **Unchanged.** | — |
-| `backend/tunnel-manager/src/mp/auth.rs` | **Unchanged.** | — |
-| `backend/tunnel-manager/src/routes.rs` | **Modify.** Handlers `.await` the store; add `/health/live` + `/health/ready`. | 1, 5 |
-| `backend/tunnel-manager/src/stats.rs` | **Modify.** Broadcaster reads `ControlStore::snapshot()` and diffs locally. | 2 |
-| `backend/tunnel-manager/src/sui.rs` | **Modify.** Address-balance gas (placeholder-then-clear); drop `pick_gas_coin`/`gas_lock`; indexer writes via `ControlStore`. | 4 |
-| `backend/tunnel-manager/src/config.rs` | **Modify.** Add `REDIS_CACHE_URL`, `REDIS_PUBSUB_URL`, `INSTANCE_ID`; impl selection. | 5 |
-| `backend/tunnel-manager/src/main.rs` | **Modify.** Build `Stores` from config; wire `instance_id`; routes. | 1, 5 |
-| `backend/tunnel-manager/Dockerfile` | **Create.** Multi-stage build; runtime `debian:bookworm-slim` + `curl`. Build context = repo root. | 5 |
-| `Cargo.toml` (workspace) + crate `Cargo.toml` | **Modify.** Add `async-trait`, `fred`; dev-dep `testcontainers`. | 0 |
+| File                                           | Responsibility                                                                                                                     | Phase |
+| ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ----- |
+| `backend/tunnel-manager/src/store/mod.rs`      | **Create.** Trait defs (`ControlStore`, `MpStore`, `Bus`), `ConnRef`, a `Stores` bundle.                                           | 1     |
+| `backend/tunnel-manager/src/store/memory.rs`   | **Create.** In-memory impls (today's `RwLock` maps / atomics, lifted here) + the pairing/relay/stats unit tests moved from `mp/*`. | 1     |
+| `backend/tunnel-manager/src/store/redis.rs`    | **Create.** `fred` setup + Redis impls of all three traits + the Lua scripts.                                                      | 2     |
+| `backend/tunnel-manager/src/state.rs`          | **Modify.** `AppState` holds `Arc<dyn …>` + `instance_id`; add `Serialize/Deserialize` to wire/state types.                        | 1     |
+| `backend/tunnel-manager/src/mp/mod.rs`         | **Modify.** `Waiting`/`DirectedInvite`/`MatchRecord` seats become `ConnRef`; derive `Serialize/Deserialize`.                       | 1, 3  |
+| `backend/tunnel-manager/src/mp/matchmaking.rs` | **Delete** (logic moves into `MpStore` impls).                                                                                     | 1     |
+| `backend/tunnel-manager/src/mp/relay.rs`       | **Delete** (logic moves into `MpStore` impls).                                                                                     | 1     |
+| `backend/tunnel-manager/src/mp/ws.rs`          | **Modify.** Keep the local conns map via `Bus::register`; add the `mp:inst:<self>` subscription; call `MpStore`/`Bus`.             | 3     |
+| `backend/tunnel-manager/src/mp/protocol.rs`    | **Unchanged.**                                                                                                                     | —     |
+| `backend/tunnel-manager/src/mp/auth.rs`        | **Unchanged.**                                                                                                                     | —     |
+| `backend/tunnel-manager/src/routes.rs`         | **Modify.** Handlers `.await` the store; add `/health/live` + `/health/ready`.                                                     | 1, 5  |
+| `backend/tunnel-manager/src/stats.rs`          | **Modify.** Broadcaster reads `ControlStore::snapshot()` and diffs locally.                                                        | 2     |
+| `backend/tunnel-manager/src/sui.rs`            | **Modify.** Address-balance gas (placeholder-then-clear); drop `pick_gas_coin`/`gas_lock`; indexer writes via `ControlStore`.      | 4     |
+| `backend/tunnel-manager/src/config.rs`         | **Modify.** Add `REDIS_CACHE_URL`, `REDIS_PUBSUB_URL`, `INSTANCE_ID`; impl selection.                                              | 5     |
+| `backend/tunnel-manager/src/main.rs`           | **Modify.** Build `Stores` from config; wire `instance_id`; routes.                                                                | 1, 5  |
+| `backend/tunnel-manager/Dockerfile`            | **Create.** Multi-stage build; runtime `debian:bookworm-slim` + `curl`. Build context = repo root.                                 | 5     |
+| `Cargo.toml` (workspace) + crate `Cargo.toml`  | **Modify.** Add `async-trait`, `fred`; dev-dep `testcontainers`.                                                                   | 0     |
 
 **Canonical type signatures** (defined in Task 1.1; later tasks must match these names exactly):
 
@@ -97,6 +97,7 @@ pub struct Stores {
 ### Task 0.1: Add crate dependencies
 
 **Files:**
+
 - Modify: `Cargo.toml` (workspace `[workspace.dependencies]`)
 - Modify: `backend/tunnel-manager/Cargo.toml`
 
@@ -146,6 +147,7 @@ Goal: introduce the three traits + an in-memory impl that is byte-for-byte today
 ### Task 1.1: Define the traits and `ConnRef`
 
 **Files:**
+
 - Create: `backend/tunnel-manager/src/store/mod.rs`
 - Modify: `backend/tunnel-manager/src/main.rs` (add `mod store;`)
 
@@ -178,6 +180,7 @@ Expected: FAIL — `memory` module not found. That's expected; Task 1.2 creates 
 ### Task 1.2: Make state/mp types serializable and seat-on-`ConnRef`
 
 **Files:**
+
 - Modify: `backend/tunnel-manager/src/state.rs:14-28` (`SessionRecord`, `TunnelStatus`)
 - Modify: `backend/tunnel-manager/src/mp/mod.rs:20-62` (`Waiting`, `DirectedInvite`, `Checkpoint`, `MatchRecord`)
 
@@ -239,6 +242,7 @@ Expected: FAIL only on callers of the changed types (matchmaking/relay/ws/state)
 ### Task 1.3: Implement `InMemoryControlStore` (lift today's stats/session/registry logic)
 
 **Files:**
+
 - Modify: `backend/tunnel-manager/src/store/memory.rs`
 
 - [ ] **Step 1: Write the in-memory `ControlStore` impl**
@@ -364,6 +368,7 @@ Expected: PASS (2 tests). They encode the same invariants as the originals — c
 ### Task 1.4: Implement `InMemoryMpStore` (lift matchmaking + relay logic)
 
 **Files:**
+
 - Modify: `backend/tunnel-manager/src/store/memory.rs`
 - Delete: `backend/tunnel-manager/src/mp/matchmaking.rs`, `backend/tunnel-manager/src/mp/relay.rs` (after moving logic + tests)
 
@@ -474,6 +479,7 @@ Expected: PASS. (`ws.rs` still references the deleted modules — fixed in Task 
 ### Task 1.5: Implement the single-instance `Bus`, rewire `AppState`, `main.rs`, handlers, `ws.rs`
 
 **Files:**
+
 - Modify: `backend/tunnel-manager/src/store/memory.rs` (add `LocalBus`)
 - Modify: `backend/tunnel-manager/src/state.rs` (AppState)
 - Modify: `backend/tunnel-manager/src/main.rs`
@@ -602,6 +608,7 @@ Goal: a Redis impl of `ControlStore` + `MpStore` (the `Bus` Redis impl is Phase 
 ### Task 2.1: `fred` client setup + `RedisControlStore`
 
 **Files:**
+
 - Create: `backend/tunnel-manager/src/store/redis.rs`
 - Modify: `backend/tunnel-manager/src/store/mod.rs` (`pub mod redis;`)
 
@@ -723,6 +730,7 @@ git commit -m "feat(backend): redis ControlStore impl"
 ### Task 2.2: `RedisMpStore` + the atomic `join_or_pair` Lua
 
 **Files:**
+
 - Modify: `backend/tunnel-manager/src/store/redis.rs`
 
 - [ ] **Step 1: Write the concurrency integration test first**
@@ -851,6 +859,7 @@ Goal: the Redis `Bus` (`SPUBLISH` to `mp:inst:<id>` when the target is remote) +
 ### Task 3.1: `RedisBus` + the subscription loop
 
 **Files:**
+
 - Modify: `backend/tunnel-manager/src/store/redis.rs`
 
 - [ ] **Step 1: Integration test — deliver from instance X reaches a socket on instance Y**
@@ -950,6 +959,7 @@ git commit -m "feat(backend): redis Bus cross-instance deliver"
 ### Task 3.2: Final `ws.rs` over `Bus`/`MpStore`
 
 **Files:**
+
 - Modify: `backend/tunnel-manager/src/mp/ws.rs`
 
 - [ ] **Step 1: Rewrite `ws.rs`** (full file)
@@ -1117,6 +1127,7 @@ Goal: submit closes concurrently with no shared gas coin → no equivocation. Re
 ### Task 4.1: Build closes with address-balance gas
 
 **Files:**
+
 - Modify: `backend/tunnel-manager/src/sui.rs`
 
 - [ ] **Step 1: Write the failing unit test**
@@ -1173,6 +1184,7 @@ Expected: PASS (3 tests) — including the empty-gas assertion.
 ### Task 4.2: Drop gas-coin selection + the gas lock from `submit_close`
 
 **Files:**
+
 - Modify: `backend/tunnel-manager/src/sui.rs`
 
 - [ ] **Step 1: Remove `pick_gas_coin`, the `gas_lock` mutex, and the gas `OwnedRef` resolution**
@@ -1204,12 +1216,14 @@ git commit -m "feat(backend): address-balance gas for concurrent settle"
 ```
 
 > **Deferred (gated, not built here):**
+>
 > - **E2e node acceptance** on a protocol-v125+ network (localnet/testnet pinned to a `sui` ≥ the address-balance release): submit a real `close_cooperative_with_root` with empty gas payment and assert `effects.status == success`. If it fails, switch to the Redis-leased gas-coin pool (spec §Concurrent settlement fallback). Add this as a `#[ignore]` e2e mirroring the existing localnet settle harness.
 > - **PTB batching** of self-play closes (optional throughput optimization) — pre-validate + bisect-retry; PvP stays single. Add when settle volume justifies it.
 
 ### Task 4.3: Indexer writes through `ControlStore`
 
 **Files:**
+
 - Modify: `backend/tunnel-manager/src/sui.rs`
 
 - [ ] **Step 1: Rewrite `spawn_event_indexer` to fold events via the store**
@@ -1247,6 +1261,7 @@ git commit -m "refactor(backend): indexer folds events via ControlStore"
 ### Task 5.1: Health endpoints (`/health/live`, `/health/ready` cache-gated)
 
 **Files:**
+
 - Modify: `backend/tunnel-manager/src/routes.rs`
 - Modify: `backend/tunnel-manager/src/main.rs`
 
@@ -1303,6 +1318,7 @@ git commit -m "feat(backend): /health/live + cache-gated /health/ready"
 ### Task 5.2: Config + impl selection
 
 **Files:**
+
 - Modify: `backend/tunnel-manager/src/config.rs`
 - Modify: `backend/tunnel-manager/src/main.rs`
 
@@ -1358,6 +1374,7 @@ git commit -m "feat(backend): redis impl selection by env"
 ### Task 5.3: Dockerfile
 
 **Files:**
+
 - Create: `backend/tunnel-manager/Dockerfile`
 - Create: `.dockerignore` (repo root, if absent)
 
@@ -1395,6 +1412,7 @@ Expected: image builds; the binary is present.
 - [ ] **Step 4: Verify the container health probe works**
 
 Run:
+
 ```bash
 docker run --rm -d --name dbtest -p 8080:8080 \
   -e SUI_RPC_URL=http://127.0.0.1:1 -e TUNNEL_PACKAGE_ID=0x2 \
@@ -1405,6 +1423,7 @@ sleep 2
 docker exec dbtest curl -fs http://localhost:8080/health/live && echo OK
 docker rm -f dbtest
 ```
+
 Expected: `ok` then `OK` (live is always 200; the settler key is a dummy 32-byte base64). Spec success criterion #4.
 
 - [ ] **Step 5: Commit**
@@ -1423,6 +1442,7 @@ Goal: a CI-runnable integration suite that spins a `redis:7` container and exerc
 ### Task 6.1: testcontainers harness
 
 **Files:**
+
 - Create: `backend/tunnel-manager/tests/redis_integration.rs`
 
 - [ ] **Step 1: Write the harness + the four invariants**
@@ -1473,6 +1493,7 @@ git commit -m "test(backend): redis integration suite + CI job"
 ### Task 7.1: Record the infra delta for Max
 
 **Files:**
+
 - The infra delta already lives in `docs/decisions/0005-redis-backed-ha-control-plane.md` (§ Infra delta). This task is the hand-off note, not new infra code (infra is a separate repo/owner).
 
 - [ ] **Step 1: Open a tracking issue / PR comment to infra** summarizing the § Infra delta: drop Aurora + RDS Proxy + migration task + DB secrets + DB-restore runbook; keep both Redis clusters (pubsub cluster-mode-enabled); leave Pulumi `Database`/`DatabaseProxy` components dormant; fix the task def env (`REDIS_*` + `SUI_*`/`WALRUS_*`/`TUNNEL_*` + `SUI_SETTLER_KEY` secret); `/health/ready` cache-gated + a pubsub alarm; Docker build context = repo root.
@@ -1484,6 +1505,7 @@ git commit -m "test(backend): redis integration suite + CI job"
 ## Self-Review
 
 **Spec coverage:**
+
 - Storage seam (in-memory + Redis): Phases 1–2 ✓
 - `Bus::deliver` + per-instance subscription: Phase 3 ✓
 - Atomic `join_or_pair` Lua: Task 2.2 ✓
@@ -1499,6 +1521,7 @@ git commit -m "test(backend): redis integration suite + CI job"
 **Type consistency:** `ConnRef { instance_id, conn_id }`, `Waiting { wallet, conn: ConnRef }`, `MatchRecord` seats on `ConnRef`, trait method names (`join_or_pair`, `clear_presence_if`, `deliver`, `register`/`unregister`/`instance_id`, `set_tunnel_status`, `add_actions`, `snapshot`, `ready`) are used identically across Tasks 1.1 → 6. `StatsSnapshot.tps` is filled by the broadcaster (stores return tps=0).
 
 **Known judgment calls (flagged, not placeholders):**
+
 - `fred` pub/sub method names are version-sensitive — pinned by compile + the Phase-3 integration test (Task 0.1 note, Task 3.1 note).
 - Per-game tunnel count is maintained at register time (`stats:tunnels:game:<g>` counter) instead of the old per-tick session scan — a deliberate read/write-model fix, noted in Task 1.3.
 - Integration tests run via `#[ignore]` + `TEST_REDIS_URL` + a CI Redis service (Task 6.1 step 2) rather than forcing a lib-target refactor — simpler; lib target deferred.

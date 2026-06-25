@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ChatProtocol, ChatState } from "./chat";
+import { ChatProtocol, ChatStateData } from "./chat";
 import { toHex } from "../core/bytes";
 import { OffchainTunnel, verifyCoSignedUpdate } from "../core/tunnel";
 import { generateKeyPair, ed25519Address } from "../core/crypto";
@@ -140,7 +140,7 @@ test("end-to-end self-play tunnel: latest co-signed update verifies", () => {
   t.step({ kind: "msg", text: "np" }, "A");
   t.step({ kind: "msg", text: "tipping back", tip: 20n }, "A");
 
-  const s = t.state as ChatState;
+  const s = t.state as ChatStateData;
   assert.equal(s.messageCount, 4n);
   assert.equal(s.balanceA + s.balanceB, 2000n);
   assert.equal(s.balanceA, 1000n - 20n + 50n);

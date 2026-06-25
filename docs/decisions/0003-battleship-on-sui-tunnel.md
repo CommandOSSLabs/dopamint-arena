@@ -9,7 +9,7 @@ Battleship is the first arena game with **hidden information**: each player's
 fleet must stay secret until a hit is revealed. TicTacToe (the PvP template) is
 fully observable — both clients hold the same board and hash it identically for
 the co-sign. Battleship cannot: if the co-signed state hash covered the secret
-boards, each client would need the *opponent's* fleet to compute it, defeating
+boards, each client would need the _opponent's_ fleet to compute it, defeating
 the secrecy. We also will not edit the upstream SDK (`sui-tunnel-ts/`), so a new
 protocol lives frontend-side and reuses the generic engine.
 
@@ -17,7 +17,7 @@ Three forces: (1) the off-chain engine co-signs `blake2b256(encodeState(state))`
 every move and both parties MUST agree on those bytes; (2) ship placement is
 private and a malicious peer must not be able to lie about a hit or field an
 illegal fleet undetected; (3) we want a demoable vs-bot mode and real PvP from
-the *same* protocol.
+the _same_ protocol.
 
 ## Decision
 
@@ -25,7 +25,7 @@ the *same* protocol.
 can agree on: each side's 32-byte board **commitment** (a Merkle root), the shot
 history with revealed hit/miss results, hit counters, turn/phase, balances.
 `encodeState` hashes only these public fields, so two PvP clients holding
-*different* secret boards still produce identical co-sign bytes. Secret boards
+_different_ secret boards still produce identical co-sign bytes. Secret boards
 (ships + per-cell salts) live in the session driver/hook, never in protocol state.
 
 **Fairness via commit-reveal (Tier 1, no ZK, no per-game Move module).** At
@@ -51,7 +51,7 @@ so PvP needs no backend change.
   **driver-led** (the hook computes moves from the fleets it holds and calls
   `tunnel.step`), not `randomMove`-led. Battleship is not wired into the SDK's
   bulk simulator.
-- A stalling cheater is *penalized*, not *prevented* (timeout path). Illegal
+- A stalling cheater is _penalized_, not _prevented_ (timeout path). Illegal
   fleets are caught at end-reveal, not at commit. **Tier 2** (deferred): a Groth16
   legal-placement proof at commit via `zk_verifier.move`, removing the end-reveal
   and enabling on-chain proof replay during disputes.

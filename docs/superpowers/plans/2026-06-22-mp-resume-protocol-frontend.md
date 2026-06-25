@@ -50,6 +50,7 @@ These apply to every task. Exact values copied from the spec/design/ADR.
 ## File structure
 
 **Created**
+
 - `sui-tunnel-ts/src/core/reconcile.ts` — pure `decideReconcile` + decision types (Layer A).
 - `sui-tunnel-ts/src/core/reconcile.test.ts` — decision-table units.
 - `frontend/src/pvp/resume.ts` — `ResumeRecord`, wire conversions, bigint JSON, debounced `localStorage` persistence, active-tunnel index, TTL eviction (Layer C persistence).
@@ -65,6 +66,7 @@ These apply to every task. Exact values copied from the spec/design/ADR.
 - `frontend/src/games/quantumPoker/pokerResumeAdapter.ts` — quantum poker adapter.
 
 **Modified**
+
 - `sui-tunnel-ts/src/core/distributedTunnel.ts` — add `adoptCheckpoint`, `snapshot`, `seatPending`, `resendPending`; `propose` refactored onto `seatPending`; `PendingProposal` gains `move`/`timestamp`.
 - `sui-tunnel-ts/src/core/distributedTunnel.test.ts` — resume-primitive units.
 - `sui-tunnel-ts/src/core/index.ts` — `export * from "./reconcile"`.
@@ -81,10 +83,12 @@ These apply to every task. Exact values copied from the spec/design/ADR.
 Seat a tunnel at a verified both-signed checkpoint, expose a read-only snapshot, prepare a pending proposal without sending, and re-send the current pending frame. These are the genuinely-missing tunnel capabilities resume needs; everything else (the reconcile decision, persistence, wire) builds on them.
 
 **Files:**
+
 - Modify: `sui-tunnel-ts/src/core/distributedTunnel.ts`
 - Test: `sui-tunnel-ts/src/core/distributedTunnel.test.ts` (extend; co-located, `node:test`)
 
 **Interfaces:**
+
 - Consumes: `CoSignedUpdate`, `verifyCoSignedUpdate` (`./tunnel`), `StateUpdate`, `serializeStateUpdate` (`./wire`), `blake2b256` (`./crypto`), `bytesEqual` (`./bytes`), `MoveFrame`/`encodeFrame` (`./distributedFrame`); existing private `_state`/`_nonce`/`_latest`/`pending`/`total`/`self`/`opponent`/`selfParty`/`protocol`/`codec`/`transport`/`selfIsA()`.
 - Produces:
   - `interface TunnelSnapshot<State, Move> { state: State; nonce: bigint; latest: CoSignedUpdate | null; pending: { move: Move; timestamp: bigint } | null }`
@@ -101,107 +105,255 @@ Append to `sui-tunnel-ts/src/core/distributedTunnel.test.ts`. Reuse the file's e
 ```ts
 test("adoptCheckpoint seats a valid both-signed checkpoint and clears stale pending", () => {
   const tunnelId = `0x${"22".repeat(32)}`;
-  const ka = generateKeyPair(), kb = generateKeyPair();
+  const ka = generateKeyPair(),
+    kb = generateKeyPair();
   // Produce a co-signed update at nonce 2 via self-play.
-  const sp = OffchainTunnel.selfPlay(counterProtocol, tunnelId, ka, kb, "0xA", "0xB", BAL);
-  sp.step(1, "A"); sp.step(1, "B");
-  const checkpoint = sp.latest!;          // CoSignedUpdate at nonce 2
-  const state = sp.state;                 // CounterState at nonce 2
+  const sp = OffchainTunnel.selfPlay(
+    counterProtocol,
+    tunnelId,
+    ka,
+    kb,
+    "0xA",
+    "0xB",
+    BAL,
+  );
+  sp.step(1, "A");
+  sp.step(1, "B");
+  const checkpoint = sp.latest!; // CoSignedUpdate at nonce 2
+  const state = sp.state; // CounterState at nonce 2
 
   const backend = defaultBackend();
   const dt = new DistributedTunnel<typeof state, number>(
     counterProtocol,
     {
       tunnelId,
-      self: makeEndpoint(backend, "0xA", { publicKey: ka.publicKey, scheme: 0, secretKey: ka.secretKey }, true),
-      opponent: makeEndpoint(backend, "0xB", { publicKey: kb.publicKey, scheme: 0 }, false),
+      self: makeEndpoint(
+        backend,
+        "0xA",
+        { publicKey: ka.publicKey, scheme: 0, secretKey: ka.secretKey },
+        true,
+      ),
+      opponent: makeEndpoint(
+        backend,
+        "0xB",
+        { publicKey: kb.publicKey, scheme: 0 },
+        false,
+      ),
       selfParty: "A",
     },
     { send() {}, onFrame() {} },
     BAL,
   );
-  dt.seatPending(1, 5n);                   // a stale pending at nonce 1
+  dt.seatPending(1, 5n); // a stale pending at nonce 1
   dt.adoptCheckpoint(state, checkpoint);
 
   assert.equal(dt.nonce, 2n);
   assert.equal(dt.latest, checkpoint);
-  assert.equal(dt.snapshot().pending, null, "pending <= adopted nonce is cleared");
+  assert.equal(
+    dt.snapshot().pending,
+    null,
+    "pending <= adopted nonce is cleared",
+  );
   assert.deepEqual(dt.state, state);
 });
 
 test("adoptCheckpoint rejects a tampered signature", () => {
   const tunnelId = `0x${"23".repeat(32)}`;
-  const ka = generateKeyPair(), kb = generateKeyPair();
-  const sp = OffchainTunnel.selfPlay(counterProtocol, tunnelId, ka, kb, "0xA", "0xB", BAL);
+  const ka = generateKeyPair(),
+    kb = generateKeyPair();
+  const sp = OffchainTunnel.selfPlay(
+    counterProtocol,
+    tunnelId,
+    ka,
+    kb,
+    "0xA",
+    "0xB",
+    BAL,
+  );
   sp.step(1, "A");
   const bad = { ...sp.latest!, sigB: new Uint8Array(sp.latest!.sigB.length) };
   const backend = defaultBackend();
-  const dt = new DistributedTunnel<ReturnType<typeof counterProtocol.initialState>, number>(
+  const dt = new DistributedTunnel<
+    ReturnType<typeof counterProtocol.initialState>,
+    number
+  >(
     counterProtocol,
-    { tunnelId, self: makeEndpoint(backend, "0xA", { publicKey: ka.publicKey, scheme: 0, secretKey: ka.secretKey }, true),
-      opponent: makeEndpoint(backend, "0xB", { publicKey: kb.publicKey, scheme: 0 }, false), selfParty: "A" },
-    { send() {}, onFrame() {} }, BAL,
+    {
+      tunnelId,
+      self: makeEndpoint(
+        backend,
+        "0xA",
+        { publicKey: ka.publicKey, scheme: 0, secretKey: ka.secretKey },
+        true,
+      ),
+      opponent: makeEndpoint(
+        backend,
+        "0xB",
+        { publicKey: kb.publicKey, scheme: 0 },
+        false,
+      ),
+      selfParty: "A",
+    },
+    { send() {}, onFrame() {} },
+    BAL,
   );
   assert.throws(() => dt.adoptCheckpoint(sp.state, bad), /signature|verif/i);
 });
 
 test("adoptCheckpoint rejects wrong tunnelId, hash mismatch, and balance-sum mismatch; ignores lower nonce", () => {
   const tunnelId = `0x${"24".repeat(32)}`;
-  const ka = generateKeyPair(), kb = generateKeyPair();
-  const sp = OffchainTunnel.selfPlay(counterProtocol, tunnelId, ka, kb, "0xA", "0xB", BAL);
-  sp.step(1, "A"); sp.step(1, "B");
+  const ka = generateKeyPair(),
+    kb = generateKeyPair();
+  const sp = OffchainTunnel.selfPlay(
+    counterProtocol,
+    tunnelId,
+    ka,
+    kb,
+    "0xA",
+    "0xB",
+    BAL,
+  );
+  sp.step(1, "A");
+  sp.step(1, "B");
   const cp = sp.latest!;
   const backend = defaultBackend();
-  const mk = (tid: string) => new DistributedTunnel<ReturnType<typeof counterProtocol.initialState>, number>(
-    counterProtocol,
-    { tunnelId: tid, self: makeEndpoint(backend, "0xA", { publicKey: ka.publicKey, scheme: 0, secretKey: ka.secretKey }, true),
-      opponent: makeEndpoint(backend, "0xB", { publicKey: kb.publicKey, scheme: 0 }, false), selfParty: "A" },
-    { send() {}, onFrame() {} }, BAL,
-  );
+  const mk = (tid: string) =>
+    new DistributedTunnel<
+      ReturnType<typeof counterProtocol.initialState>,
+      number
+    >(
+      counterProtocol,
+      {
+        tunnelId: tid,
+        self: makeEndpoint(
+          backend,
+          "0xA",
+          { publicKey: ka.publicKey, scheme: 0, secretKey: ka.secretKey },
+          true,
+        ),
+        opponent: makeEndpoint(
+          backend,
+          "0xB",
+          { publicKey: kb.publicKey, scheme: 0 },
+          false,
+        ),
+        selfParty: "A",
+      },
+      { send() {}, onFrame() {} },
+      BAL,
+    );
   // wrong tunnelId
-  assert.throws(() => mk(`0x${"99".repeat(32)}`).adoptCheckpoint(sp.state, cp), /tunnelId/i);
+  assert.throws(
+    () => mk(`0x${"99".repeat(32)}`).adoptCheckpoint(sp.state, cp),
+    /tunnelId/i,
+  );
   // hash mismatch: a different state under the signed hash
-  const wrongState = { ...sp.state, count: (sp.state as { count: number }).count + 1 };
-  assert.throws(() => mk(tunnelId).adoptCheckpoint(wrongState as typeof sp.state, cp), /hash/i);
+  const wrongState = {
+    ...sp.state,
+    count: (sp.state as { count: number }).count + 1,
+  };
+  assert.throws(
+    () => mk(tunnelId).adoptCheckpoint(wrongState as typeof sp.state, cp),
+    /hash/i,
+  );
   // balance-sum mismatch: a checkpoint whose balances do not sum to total
-  const badBal = { ...cp, update: { ...cp.update, partyABalance: cp.update.partyABalance + 1n } };
-  assert.throws(() => mk(tunnelId).adoptCheckpoint(sp.state, badBal), /balance/i);
+  const badBal = {
+    ...cp,
+    update: { ...cp.update, partyABalance: cp.update.partyABalance + 1n },
+  };
+  assert.throws(
+    () => mk(tunnelId).adoptCheckpoint(sp.state, badBal),
+    /balance/i,
+  );
   // lower nonce is a silent no-op
   const dt = mk(tunnelId);
-  dt.adoptCheckpoint(sp.state, cp);                 // now at nonce 2
-  const older = OffchainTunnel.selfPlay(counterProtocol, tunnelId, ka, kb, "0xA", "0xB", BAL);
-  older.step(1, "A");                                // nonce 1
-  dt.adoptCheckpoint(older.state, older.latest!);    // ignored
+  dt.adoptCheckpoint(sp.state, cp); // now at nonce 2
+  const older = OffchainTunnel.selfPlay(
+    counterProtocol,
+    tunnelId,
+    ka,
+    kb,
+    "0xA",
+    "0xB",
+    BAL,
+  );
+  older.step(1, "A"); // nonce 1
+  dt.adoptCheckpoint(older.state, older.latest!); // ignored
   assert.equal(dt.nonce, 2n);
 });
 
 test("seatPending does not send; resendPending re-emits the byte-identical MOVE frame", () => {
   const tunnelId = `0x${"25".repeat(32)}`;
-  const ka = generateKeyPair(), kb = generateKeyPair();
+  const ka = generateKeyPair(),
+    kb = generateKeyPair();
   const sent: Uint8Array[] = [];
   const backend = defaultBackend();
-  const dt = new DistributedTunnel<ReturnType<typeof counterProtocol.initialState>, number>(
+  const dt = new DistributedTunnel<
+    ReturnType<typeof counterProtocol.initialState>,
+    number
+  >(
     counterProtocol,
-    { tunnelId, self: makeEndpoint(backend, "0xA", { publicKey: ka.publicKey, scheme: 0, secretKey: ka.secretKey }, true),
-      opponent: makeEndpoint(backend, "0xB", { publicKey: kb.publicKey, scheme: 0 }, false), selfParty: "A" },
-    { send: (b) => sent.push(b), onFrame() {} }, BAL,
+    {
+      tunnelId,
+      self: makeEndpoint(
+        backend,
+        "0xA",
+        { publicKey: ka.publicKey, scheme: 0, secretKey: ka.secretKey },
+        true,
+      ),
+      opponent: makeEndpoint(
+        backend,
+        "0xB",
+        { publicKey: kb.publicKey, scheme: 0 },
+        false,
+      ),
+      selfParty: "A",
+    },
+    { send: (b) => sent.push(b), onFrame() {} },
+    BAL,
   );
   dt.seatPending(1, 7n);
   assert.equal(sent.length, 0, "seatPending must not touch the transport");
   dt.resendPending();
   dt.resendPending();
   assert.equal(sent.length, 2);
-  assert.deepEqual(sent[0], sent[1], "re-sends are deterministic and identical");
+  assert.deepEqual(
+    sent[0],
+    sent[1],
+    "re-sends are deterministic and identical",
+  );
   // and identical to what propose() would have produced
   const sent2: Uint8Array[] = [];
-  const dt2 = new DistributedTunnel<ReturnType<typeof counterProtocol.initialState>, number>(
+  const dt2 = new DistributedTunnel<
+    ReturnType<typeof counterProtocol.initialState>,
+    number
+  >(
     counterProtocol,
-    { tunnelId, self: makeEndpoint(backend, "0xA", { publicKey: ka.publicKey, scheme: 0, secretKey: ka.secretKey }, true),
-      opponent: makeEndpoint(backend, "0xB", { publicKey: kb.publicKey, scheme: 0 }, false), selfParty: "A" },
-    { send: (b) => sent2.push(b), onFrame() {} }, BAL,
+    {
+      tunnelId,
+      self: makeEndpoint(
+        backend,
+        "0xA",
+        { publicKey: ka.publicKey, scheme: 0, secretKey: ka.secretKey },
+        true,
+      ),
+      opponent: makeEndpoint(
+        backend,
+        "0xB",
+        { publicKey: kb.publicKey, scheme: 0 },
+        false,
+      ),
+      selfParty: "A",
+    },
+    { send: (b) => sent2.push(b), onFrame() {} },
+    BAL,
   );
   dt2.propose(1, 7n);
-  assert.deepEqual(sent[0], sent2[0], "seatPending+resendPending == propose frame");
+  assert.deepEqual(
+    sent[0],
+    sent2[0],
+    "seatPending+resendPending == propose frame",
+  );
 });
 ```
 
@@ -218,7 +370,13 @@ Expected: FAIL — `adoptCheckpoint`/`snapshot`/`seatPending`/`resendPending` ar
 In `distributedTunnel.ts`, extend the `./tunnel` import to include `verifyCoSignedUpdate`:
 
 ```ts
-import { CoSignedSettlement, CoSignedSettlementWithRoot, CoSignedUpdate, PartyEndpoint, verifyCoSignedUpdate } from "./tunnel";
+import {
+  CoSignedSettlement,
+  CoSignedSettlementWithRoot,
+  CoSignedUpdate,
+  PartyEndpoint,
+  verifyCoSignedUpdate,
+} from "./tunnel";
 ```
 
 Add near the other exported interfaces (after `Transport`):
@@ -247,6 +405,7 @@ interface PendingProposal<State, Move> {
   timestamp: bigint;
 }
 ```
+
 ```ts
   private pending: PendingProposal<State, Move> | null;
 ```
@@ -356,6 +515,7 @@ Then: `pnpm -C sui-tunnel-ts test` → PASS (no regressions across the SDK).
 - [ ] **Step 8: Typecheck, format, commit**
 
 Run: `pnpm -C sui-tunnel-ts typecheck && pnpm -C sui-tunnel-ts exec prettier --write src/core/distributedTunnel.ts src/core/distributedTunnel.test.ts`
+
 ```bash
 git add sui-tunnel-ts/src/core/distributedTunnel.ts sui-tunnel-ts/src/core/distributedTunnel.test.ts
 git commit -m "feat(tunnel): add resume primitives"
@@ -368,11 +528,13 @@ git commit -m "feat(tunnel): add resume primitives"
 A pure function that maps the two seats' resync views to one action. No IO, no crypto (verification lives in `adoptCheckpoint`). This is the audited decision table all four games share.
 
 **Files:**
+
 - Create: `sui-tunnel-ts/src/core/reconcile.ts`
 - Modify: `sui-tunnel-ts/src/core/index.ts` (barrel export)
 - Test: `sui-tunnel-ts/src/core/reconcile.test.ts` (new, `node:test`)
 
 **Interfaces:**
+
 - Consumes: `CoSignedUpdate` (`./tunnel`), `bytesEqual` (`./bytes`).
 - Produces:
   - `type ReconcileAction = "adopt" | "wait" | "re-propose" | "noop" | "settle"`
@@ -402,26 +564,52 @@ const cp = (nonce: bigint, hashByte: number): CoSignedUpdate => ({
   sigA: new Uint8Array(64),
   sigB: new Uint8Array(64),
 });
-const view = (nonce: bigint, hasPending: boolean, checkpoint: CoSignedUpdate | null): ResyncView =>
-  ({ nonce, hasPending, checkpoint });
+const view = (
+  nonce: bigint,
+  hasPending: boolean,
+  checkpoint: CoSignedUpdate | null,
+): ResyncView => ({ nonce, hasPending, checkpoint });
 
 test("peer ahead -> adopt", () => {
-  assert.equal(decideReconcile(view(1n, false, cp(1n, 1)), view(2n, false, cp(2n, 2))).action, "adopt");
+  assert.equal(
+    decideReconcile(view(1n, false, cp(1n, 1)), view(2n, false, cp(2n, 2)))
+      .action,
+    "adopt",
+  );
 });
 test("self ahead -> wait (peer adopts mine)", () => {
-  assert.equal(decideReconcile(view(2n, false, cp(2n, 2)), view(1n, false, cp(1n, 1))).action, "wait");
+  assert.equal(
+    decideReconcile(view(2n, false, cp(2n, 2)), view(1n, false, cp(1n, 1)))
+      .action,
+    "wait",
+  );
 });
 test("equal nonce + self has pending -> re-propose", () => {
-  assert.equal(decideReconcile(view(3n, true, cp(3n, 3)), view(3n, false, cp(3n, 3))).action, "re-propose");
+  assert.equal(
+    decideReconcile(view(3n, true, cp(3n, 3)), view(3n, false, cp(3n, 3)))
+      .action,
+    "re-propose",
+  );
 });
 test("equal nonce + no pending -> noop", () => {
-  assert.equal(decideReconcile(view(3n, false, cp(3n, 3)), view(3n, false, cp(3n, 3))).action, "noop");
+  assert.equal(
+    decideReconcile(view(3n, false, cp(3n, 3)), view(3n, false, cp(3n, 3)))
+      .action,
+    "noop",
+  );
 });
 test("equal nonce + conflicting stateHash -> settle (equivocation)", () => {
-  assert.equal(decideReconcile(view(3n, true, cp(3n, 3)), view(3n, false, cp(3n, 9))).action, "settle");
+  assert.equal(
+    decideReconcile(view(3n, true, cp(3n, 3)), view(3n, false, cp(3n, 9)))
+      .action,
+    "settle",
+  );
 });
 test("equal at nonce 0 with no checkpoints -> noop, not settle", () => {
-  assert.equal(decideReconcile(view(0n, false, null), view(0n, false, null)).action, "noop");
+  assert.equal(
+    decideReconcile(view(0n, false, null), view(0n, false, null)).action,
+    "noop",
+  );
 });
 ```
 
@@ -445,7 +633,12 @@ Create `sui-tunnel-ts/src/core/reconcile.ts`:
 import { bytesEqual } from "./bytes";
 import { CoSignedUpdate } from "./tunnel";
 
-export type ReconcileAction = "adopt" | "wait" | "re-propose" | "noop" | "settle";
+export type ReconcileAction =
+  | "adopt"
+  | "wait"
+  | "re-propose"
+  | "noop"
+  | "settle";
 export interface ReconcileDecision {
   action: ReconcileAction;
 }
@@ -465,13 +658,19 @@ export interface ResyncView {
  *  - equal, self pending   -> "re-propose" (re-send my in-flight MOVE through the normal transport)
  *  - equal, no pending     -> "noop"       (already converged; resume play)
  */
-export function decideReconcile(self: ResyncView, peer: ResyncView): ReconcileDecision {
+export function decideReconcile(
+  self: ResyncView,
+  peer: ResyncView,
+): ReconcileDecision {
   if (peer.nonce > self.nonce) return { action: "adopt" };
   if (self.nonce > peer.nonce) return { action: "wait" };
   if (
     self.checkpoint &&
     peer.checkpoint &&
-    !bytesEqual(self.checkpoint.update.stateHash, peer.checkpoint.update.stateHash)
+    !bytesEqual(
+      self.checkpoint.update.stateHash,
+      peer.checkpoint.update.stateHash,
+    )
   ) {
     return { action: "settle" };
   }
@@ -496,6 +695,7 @@ Then: `pnpm -C sui-tunnel-ts test` → PASS.
 - [ ] **Step 6: Typecheck, format, commit**
 
 Run: `pnpm -C sui-tunnel-ts typecheck && pnpm -C sui-tunnel-ts exec prettier --write src/core/reconcile.ts src/core/reconcile.test.ts src/core/index.ts`
+
 ```bash
 git add sui-tunnel-ts/src/core/reconcile.ts src/core/reconcile.test.ts src/core/index.ts
 git commit -m "feat(reconcile): add resume decision engine"
@@ -510,11 +710,13 @@ git commit -m "feat(reconcile): add resume decision engine"
 Make `MpClient` reconnect-capable: on an unexpected socket close, reconnect to the LB with capped exponential backoff + jitter, re-run the `challenge→connect` handshake, then `resume { matchId }` for every active match (and re-issue `queue.join` if only queued). Surface `resume.ok` / `peer.resumed` / `peer.dropped` as typed events. The relay-handler map, match queue/waiters, active-match registry, and queued-game list all survive the socket swap.
 
 **Files:**
+
 - Modify: `frontend/src/pvp/mpClient.ts`
 - Modify: `frontend/package.json` (add `"src/pvp/**/*.test.ts"` to the `test` glob so the new tests run)
 - Test: `frontend/src/pvp/mpClient.test.ts` (new, mocked `WebSocket`, `node:test`)
 
 **Interfaces:**
+
 - Consumes: existing handshake, `#relayHandlers`, `#matchQueue`, `#matchWaiters`, `wrapInnerFrameJson`.
 - Produces (new public surface):
   - `interface ResumeOkEvent { matchId: string; role: Role; opponentWallet: string; game: string; peerOnline: boolean }`
@@ -548,13 +750,25 @@ class FakeWebSocket {
     this.url = url;
     FakeWebSocket.instances.push(this);
   }
-  send(s: string) { this.sent.push(s); }
-  close() { this.closed = true; this.onclose?.(); }
+  send(s: string) {
+    this.sent.push(s);
+  }
+  close() {
+    this.closed = true;
+    this.onclose?.();
+  }
   // test helpers
-  open() { this.onopen?.(); }
-  recv(obj: unknown) { this.onmessage?.({ data: JSON.stringify(obj) }); }
+  open() {
+    this.onopen?.();
+  }
+  recv(obj: unknown) {
+    this.onmessage?.({ data: JSON.stringify(obj) });
+  }
   // drive the challenge so connect() resolves
-  handshake() { this.open(); this.recv({ type: "challenge", nonce: "n1" }); }
+  handshake() {
+    this.open();
+    this.recv({ type: "challenge", nonce: "n1" });
+  }
 }
 
 function mkClient() {
@@ -563,7 +777,7 @@ function mkClient() {
   const mp = new MpClient("ws://x/v1/mp", "0xwallet", eph as never, {
     WebSocketCtor: FakeWebSocket as unknown as typeof WebSocket,
     reconnect: { baseMs: 1, maxMs: 4, jitter: 0 },
-    scheduler: (fn) => fn(),       // run reconnect synchronously
+    scheduler: (fn) => fn(), // run reconnect synchronously
     rand: () => 0,
   });
   return { mp };
@@ -571,11 +785,20 @@ function mkClient() {
 
 test("nextBackoffDelay grows exponentially, caps, and stays within the jitter band", () => {
   const cfg = { baseMs: 500, maxMs: 10_000, jitter: 0.2 };
-  assert.equal(nextBackoffDelay(0, cfg, () => 0.5), 500);          // base, mid-jitter == base
-  assert.equal(nextBackoffDelay(1, cfg, () => 0.5), 1000);
-  assert.equal(nextBackoffDelay(10, cfg, () => 0.5), 10_000);      // capped
-  const lo = nextBackoffDelay(2, cfg, () => 0);                    // 2000 * (1 - 0.2)
-  const hi = nextBackoffDelay(2, cfg, () => 1);                    // 2000 * (1 + 0.2)
+  assert.equal(
+    nextBackoffDelay(0, cfg, () => 0.5),
+    500,
+  ); // base, mid-jitter == base
+  assert.equal(
+    nextBackoffDelay(1, cfg, () => 0.5),
+    1000,
+  );
+  assert.equal(
+    nextBackoffDelay(10, cfg, () => 0.5),
+    10_000,
+  ); // capped
+  const lo = nextBackoffDelay(2, cfg, () => 0); // 2000 * (1 - 0.2)
+  const hi = nextBackoffDelay(2, cfg, () => 1); // 2000 * (1 + 0.2)
   assert.ok(lo >= 1600 && hi <= 2400, `band [${lo}, ${hi}]`);
 });
 
@@ -584,24 +807,31 @@ test("unexpected close reconnects, re-runs connect, and resumes each active matc
   await connect(mp);
   mp.markActive("m1");
   mp.markActive("m2");
-  FakeWebSocket.instances[0].close();                  // unexpected drop
+  FakeWebSocket.instances[0].close(); // unexpected drop
   // a new socket was created and re-handshaked by the loop
   const fresh = FakeWebSocket.instances[1];
   assert.ok(fresh, "reconnected with a new socket");
   fresh.handshake();
-  const resumes = fresh.sent.map((s) => JSON.parse(s)).filter((m) => m.type === "resume");
+  const resumes = fresh.sent
+    .map((s) => JSON.parse(s))
+    .filter((m) => m.type === "resume");
   assert.deepEqual(resumes.map((r) => r.matchId).sort(), ["m1", "m2"]);
 });
 
 test("queued-only client re-issues queue.join on reconnect", async () => {
   const { mp } = mkClient();
   await connect(mp);
-  void mp.quickMatch("ttt");                            // queued, no match yet
+  void mp.quickMatch("ttt"); // queued, no match yet
   FakeWebSocket.instances[0].close();
   const fresh = FakeWebSocket.instances[1];
   fresh.handshake();
-  const joins = fresh.sent.map((s) => JSON.parse(s)).filter((m) => m.type === "queue.join");
-  assert.deepEqual(joins.map((j) => j.game), ["ttt"]);
+  const joins = fresh.sent
+    .map((s) => JSON.parse(s))
+    .filter((m) => m.type === "queue.join");
+  assert.deepEqual(
+    joins.map((j) => j.game),
+    ["ttt"],
+  );
 });
 
 test("relay handlers and match waiters survive the socket swap", async () => {
@@ -609,11 +839,17 @@ test("relay handlers and match waiters survive the socket swap", async () => {
   await connect(mp);
   const ch = mp.channel("m1");
   let got: Uint8Array | null = null;
-  ch.transport.onFrame((b) => { got = b; });
+  ch.transport.onFrame((b) => {
+    got = b;
+  });
   FakeWebSocket.instances[0].close();
   FakeWebSocket.instances[1].handshake();
   // a relay for m1 still routes to the same handler after reconnect
-  FakeWebSocket.instances[1].recv({ type: "relay", matchId: "m1", payload: JSON.stringify({ t: "frame", data: "hi" }) });
+  FakeWebSocket.instances[1].recv({
+    type: "relay",
+    matchId: "m1",
+    payload: JSON.stringify({ t: "frame", data: "hi" }),
+  });
   assert.equal(new TextDecoder().decode(got!), "hi");
 });
 
@@ -621,7 +857,11 @@ test("explicit close() does not reconnect", async () => {
   const { mp } = mkClient();
   await connect(mp);
   mp.close();
-  assert.equal(FakeWebSocket.instances.length, 1, "no new socket after explicit close");
+  assert.equal(
+    FakeWebSocket.instances.length,
+    1,
+    "no new socket after explicit close",
+  );
 });
 
 test("typed events dispatch resume.ok / peer.resumed / peer.dropped", async () => {
@@ -632,8 +872,20 @@ test("typed events dispatch resume.ok / peer.resumed / peer.dropped", async () =
   mp.onPeerResumed((e) => seen.push(`res:${e.matchId}:${e.seat}`));
   mp.onPeerDropped((e) => seen.push(`drop:${e.matchId}`));
   const ws = FakeWebSocket.instances[0];
-  ws.recv({ type: "resume.ok", matchId: "m1", role: "A", opponentWallet: "0xb", game: "ttt", peerOnline: true });
-  ws.recv({ type: "peer.resumed", matchId: "m1", seat: "B", connRef: { x: 1 } });
+  ws.recv({
+    type: "resume.ok",
+    matchId: "m1",
+    role: "A",
+    opponentWallet: "0xb",
+    game: "ttt",
+    peerOnline: true,
+  });
+  ws.recv({
+    type: "peer.resumed",
+    matchId: "m1",
+    seat: "B",
+    connRef: { x: 1 },
+  });
   ws.recv({ type: "peer.dropped", matchId: "m1" });
   assert.deepEqual(seen, ["ok:m1:true", "res:m1:B", "drop:m1"]);
 });
@@ -684,10 +936,18 @@ export interface ReconnectConfig {
   maxMs: number;
   jitter: number;
 }
-const DEFAULT_RECONNECT: ReconnectConfig = { baseMs: 500, maxMs: 10_000, jitter: 0.2 };
+const DEFAULT_RECONNECT: ReconnectConfig = {
+  baseMs: 500,
+  maxMs: 10_000,
+  jitter: 0.2,
+};
 
 /** Capped exponential backoff with symmetric jitter. `attempt` is 0-based. `rand` ∈ [0,1). */
-export function nextBackoffDelay(attempt: number, cfg: ReconnectConfig, rand: () => number): number {
+export function nextBackoffDelay(
+  attempt: number,
+  cfg: ReconnectConfig,
+  rand: () => number,
+): number {
   const capped = Math.min(cfg.maxMs, cfg.baseMs * 2 ** attempt);
   const spread = capped * cfg.jitter;
   return Math.round(capped - spread + rand() * spread * 2);
@@ -862,6 +1122,7 @@ Update `quickMatch` to record the queued game, and `releaseMatch`/`close` to mai
     return new Promise((resolve, reject) => this.#matchWaiters.push({ resolve, reject }));
   }
 ```
+
 ```ts
   releaseMatch(matchId: string) {
     this.#relayHandlers.delete(matchId);
@@ -886,6 +1147,7 @@ Then: `pnpm -C frontend test` → PASS (the new pvp glob runs alongside the exis
 - [ ] **Step 8: Typecheck, format, commit**
 
 Run: `pnpm -C frontend typecheck && pnpm -C frontend format`
+
 ```bash
 git add frontend/src/pvp/mpClient.ts frontend/src/pvp/mpClient.test.ts frontend/package.json
 git commit -m "feat(mp): add reconnect loop and resume wire"
@@ -898,6 +1160,7 @@ git commit -m "feat(mp): add reconnect loop and resume wire"
 Swap the ttt/caro hook's transport from `RelayClient` to the now-reconnect-capable `MpClient`, reconciling the one real divergence (the engine-frame envelope key: `RelayClient`'s `{t:"frame", f}` vs `MpClient`'s `{t:"frame", data}`). Map the hook's app messages onto `MpClient`'s peer channel by extending the `PeerMessage` union with the variants ttt/caro already use (their handler bodies stay identical). Mark `RelayClient` (and its `packages/client/` copy) `@deprecated` — keep, don't delete.
 
 **Files:**
+
 - Modify: `frontend/src/pvp/mpClient.ts` (extend `PeerMessage` with `opened`/`settle`/`closed`/`stop`)
 - Modify: `frontend/src/games/ticTacToe/app/hooks/usePvpTicTacToe.ts`
 - Modify: `frontend/src/games/ticTacToe/app/lib/pvpRelay.ts` (`@deprecated`)
@@ -905,6 +1168,7 @@ Swap the ttt/caro hook's transport from `RelayClient` to the now-reconnect-capab
 - Test: `frontend/src/pvp/mpClientFrameParity.test.ts` (new — the migration gate)
 
 **Interfaces:**
+
 - Consumes: `MpClient.connect`, `quickMatch`, `channel`, `announceTunnel`, `releaseMatch`, `onResumeOk`/`onPeerResumed`/`onPeerDropped`; the extended `PeerMessage`.
 - Produces: ttt/caro running on `MpClient`; `RelayClient` `@deprecated`. No change to the engine, the protocol, or the on-chain path.
 
@@ -928,39 +1192,70 @@ function fakeRelayPair() {
     onmessage: ((ev: { data: string }) => void) | null = null;
     onerror: (() => void) | null = null;
     onclose: (() => void) | null = null;
-    constructor(_url: string) { peers.push(this); }
+    constructor(_url: string) {
+      peers.push(this);
+    }
     send(s: string) {
       const m = JSON.parse(s);
       if (m.type === "relay") {
         const other = peers.find((p) => p !== this);
-        other?.onmessage?.({ data: JSON.stringify({ type: "relay", matchId: m.matchId, payload: m.payload }) });
+        other?.onmessage?.({
+          data: JSON.stringify({
+            type: "relay",
+            matchId: m.matchId,
+            payload: m.payload,
+          }),
+        });
       }
     }
-    close() { this.onclose?.(); }
-    handshake() { this.onopen?.(); this.onmessage?.({ data: JSON.stringify({ type: "challenge", nonce: "n" }) }); }
+    close() {
+      this.onclose?.();
+    }
+    handshake() {
+      this.onopen?.();
+      this.onmessage?.({
+        data: JSON.stringify({ type: "challenge", nonce: "n" }),
+      });
+    }
   }
   return { FakeWS, peers };
 }
 
 test("engine frames and peer messages round-trip across two MpClients (envelope parity)", async () => {
   const { FakeWS, peers } = fakeRelayPair();
-  const opts = { WebSocketCtor: FakeWS as unknown as typeof WebSocket } as never;
+  const opts = {
+    WebSocketCtor: FakeWS as unknown as typeof WebSocket,
+  } as never;
   const a = new MpClient("ws://x", "0xa", generateKeyPair() as never, opts);
   const b = new MpClient("ws://x", "0xb", generateKeyPair() as never, opts);
-  const pa = a.connect(); peers[0].handshake(); await pa;
-  const pb = b.connect(); peers[1].handshake(); await pb;
+  const pa = a.connect();
+  peers[0].handshake();
+  await pa;
+  const pb = b.connect();
+  peers[1].handshake();
+  await pb;
 
   const chA = a.channel("m1");
   const chB = b.channel("m1");
   let frame: Uint8Array | null = null;
   let peerMsg: unknown = null;
-  chB.transport.onFrame((bytes) => { frame = bytes; });
-  chB.onPeer((m) => { peerMsg = m; });
+  chB.transport.onFrame((bytes) => {
+    frame = bytes;
+  });
+  chB.onPeer((m) => {
+    peerMsg = m;
+  });
 
-  chA.transport.send(new TextEncoder().encode(JSON.stringify({ kind: "move", nonce: "1" })));
+  chA.transport.send(
+    new TextEncoder().encode(JSON.stringify({ kind: "move", nonce: "1" })),
+  );
   chA.sendPeer({ t: "hello", ephemeralPubkey: "deadbeef" } as never);
 
-  assert.equal(JSON.parse(new TextDecoder().decode(frame!)).kind, "move", "frame survives the {t:frame,data} envelope");
+  assert.equal(
+    JSON.parse(new TextDecoder().decode(frame!)).kind,
+    "move",
+    "frame survives the {t:frame,data} envelope",
+  );
   assert.deepEqual(peerMsg, { t: "hello", ephemeralPubkey: "deadbeef" });
 });
 ```
@@ -989,21 +1284,21 @@ In `mpClient.ts`, add the ttt/caro variants to `PeerMessage` (keep the existing 
 
 In `usePvpTicTacToe.ts`, replace the `RelayClient` wiring with `MpClient`. The mapping (apply at each call site):
 
-| RelayClient (today) | MpClient (after) |
-|---|---|
-| `import { RelayClient } from "@/games/ticTacToe/app/lib/pvpRelay"` | `import { MpClient, resolveMpWsUrl, type MatchInfo, type PeerMessage } from "@/pvp/mpClient"` |
-| `new RelayClient(MP_URL, w.address, eph.coreKey)` | `new MpClient(resolveMpWsUrl(MP_URL), w.address, eph.coreKey)` |
-| `await relay.ready` | `await mp.connect()` |
-| `relay.on("error", …)` | wrap `quickMatch` in try/catch (it rejects with the error) |
-| `relay.on("match.found", cb)` + `relay.queueJoin(game)` | `const m = await mp.quickMatch(game)` then call the existing `onMatch(mp, m)` |
-| `relay.transport(matchId)` | `mp.channel(matchId).transport` |
-| `relay.onApp(matchId, cb)` | `mp.channel(matchId).onPeer(cb)` — keep the `mm.t === "opened" | "settle" | "closed" | "stop"` body unchanged |
-| `relay.sendApp(matchId, {t:"opened",tunnelId})` etc. | `channel.sendPeer({t:"opened",tunnelId})` etc. (hold the `channel` from `mp.channel(matchId)` in a ref) |
-| `relay.partyHello(matchId, eph.pubkeyHex, "")` | `channel.sendPeer({ t: "hello", ephemeralPubkey: eph.pubkeyHex })` |
-| `relay.on("party.hello", cb)` (reads `h.ephemeralPubkey`) | handle `{t:"hello"}` inside the same `onPeer` dispatcher: `if (mm.t === "hello") { … mm.ephemeralPubkey … }` |
-| `relay.tunnelOpened(matchId, tunnelId)` | `mp.announceTunnel(matchId, tunnelId)` |
-| `relay.close()` | `mp.close()` |
-| `relayRef` type/usages | `mpRef: useRef<MpClient | null>` + a `channelRef: useRef<PvpChannel | null>` |
+| RelayClient (today)                                                | MpClient (after)                                                                                             |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ | --------------------------------------- | -------- | ---------------------- |
+| `import { RelayClient } from "@/games/ticTacToe/app/lib/pvpRelay"` | `import { MpClient, resolveMpWsUrl, type MatchInfo, type PeerMessage } from "@/pvp/mpClient"`                |
+| `new RelayClient(MP_URL, w.address, eph.coreKey)`                  | `new MpClient(resolveMpWsUrl(MP_URL), w.address, eph.coreKey)`                                               |
+| `await relay.ready`                                                | `await mp.connect()`                                                                                         |
+| `relay.on("error", …)`                                             | wrap `quickMatch` in try/catch (it rejects with the error)                                                   |
+| `relay.on("match.found", cb)` + `relay.queueJoin(game)`            | `const m = await mp.quickMatch(game)` then call the existing `onMatch(mp, m)`                                |
+| `relay.transport(matchId)`                                         | `mp.channel(matchId).transport`                                                                              |
+| `relay.onApp(matchId, cb)`                                         | `mp.channel(matchId).onPeer(cb)` — keep the `mm.t === "opened"                                               | "settle"                                | "closed" | "stop"` body unchanged |
+| `relay.sendApp(matchId, {t:"opened",tunnelId})` etc.               | `channel.sendPeer({t:"opened",tunnelId})` etc. (hold the `channel` from `mp.channel(matchId)` in a ref)      |
+| `relay.partyHello(matchId, eph.pubkeyHex, "")`                     | `channel.sendPeer({ t: "hello", ephemeralPubkey: eph.pubkeyHex })`                                           |
+| `relay.on("party.hello", cb)` (reads `h.ephemeralPubkey`)          | handle `{t:"hello"}` inside the same `onPeer` dispatcher: `if (mm.t === "hello") { … mm.ephemeralPubkey … }` |
+| `relay.tunnelOpened(matchId, tunnelId)`                            | `mp.announceTunnel(matchId, tunnelId)`                                                                       |
+| `relay.close()`                                                    | `mp.close()`                                                                                                 |
+| `relayRef` type/usages                                             | `mpRef: useRef<MpClient                                                                                      | null>`+ a`channelRef: useRef<PvpChannel | null>`   |
 
 Key detail: `MpClient.channel(matchId)` must be called **once** per match and the returned `PvpChannel` held in a ref — both the engine transport and `sendPeer`/`onPeer` come from that one object, and calling `channel` again re-binds the relay handler. Build the channel in `onMatch`, store it, and pass `channel.transport` to `new core.DistributedTunnel(...)` (replacing `relay.transport(m.matchId)` at line ~452).
 
@@ -1017,6 +1312,7 @@ At the top of `frontend/src/games/ticTacToe/app/lib/pvpRelay.ts`, above `export 
  * migrated off `RelayClient`; this class is kept (not deleted) for reference and lower-risk rollback.
  */
 ```
+
 Apply the identical doc comment to `frontend/src/games/ticTacToe/packages/client/src/lib/pvpRelay.ts`.
 
 - [ ] **Step 6: Run the parity test + typecheck**
@@ -1032,6 +1328,7 @@ The engine-only bun e2e (`ticTacToe/app/lib/pvpEngine.e2e.test.ts` and the `pack
 - [ ] **Step 8: Format, commit**
 
 Run: `pnpm -C frontend format`
+
 ```bash
 git add frontend/src/pvp/mpClient.ts frontend/src/pvp/mpClientFrameParity.test.ts \
   frontend/src/games/ticTacToe/app/hooks/usePvpTicTacToe.ts \
@@ -1047,10 +1344,12 @@ git commit -m "refactor(pvp): migrate ttt/caro to MpClient"
 The reload-grade layer: a compact `ResumeRecord` per tunnel in `localStorage`, written debounced/coalesced on each confirmed move and flushed synchronously on `pagehide`. Includes bigint-safe JSON, `CoSignedUpdate`↔wire conversions, a persisted active-tunnel index, and 6h TTL eviction. This task is pure persistence + wire plumbing; the adapter/handshake driver that calls it lands in Task 6.
 
 **Files:**
+
 - Create: `frontend/src/pvp/resume.ts`
 - Test: `frontend/src/pvp/resume.test.ts` (new, `node:test`)
 
 **Interfaces:**
+
 - Consumes: `CoSignedUpdate`, `StateUpdate` (`sui-tunnel-ts/core/tunnel`, `…/core/wire`), `toHex`/`fromHex` (`sui-tunnel-ts/core/bytes`).
 - Produces:
   - `type JsonValue` (re-exported alias for `unknown`-ish JSON), `WireStateUpdate`, `WireCoSigned`, `ResumeRecord`.
@@ -1070,19 +1369,33 @@ import assert from "node:assert/strict";
 // Minimal localStorage + window fakes (must exist before importing resume.ts).
 class FakeStorage {
   map = new Map<string, string>();
-  getItem(k: string) { return this.map.has(k) ? this.map.get(k)! : null; }
-  setItem(k: string, v: string) { this.map.set(k, v); }
-  removeItem(k: string) { this.map.delete(k); }
+  getItem(k: string) {
+    return this.map.has(k) ? this.map.get(k)! : null;
+  }
+  setItem(k: string, v: string) {
+    this.map.set(k, v);
+  }
+  removeItem(k: string) {
+    this.map.delete(k);
+  }
 }
 (globalThis as Record<string, unknown>).localStorage = new FakeStorage();
 (globalThis as Record<string, unknown>).window = { addEventListener() {} };
 
 const {
-  stringifyWithBigint, parseWithBigint, toWireCoSigned, fromWireCoSigned,
-  writeResumeRecord, flushResumeWrites, readResumeRecord, clearResumeRecord,
-  listActiveTunnels, evictExpiredRecords,
+  stringifyWithBigint,
+  parseWithBigint,
+  toWireCoSigned,
+  fromWireCoSigned,
+  writeResumeRecord,
+  flushResumeWrites,
+  readResumeRecord,
+  clearResumeRecord,
+  listActiveTunnels,
+  evictExpiredRecords,
 } = await import("./resume");
-const { OffchainTunnel, makeEndpoint } = await import("sui-tunnel-ts/core/tunnel");
+const { OffchainTunnel, makeEndpoint } =
+  await import("sui-tunnel-ts/core/tunnel");
 const { defaultBackend } = await import("sui-tunnel-ts/core/crypto-native");
 const { generateKeyPair } = await import("sui-tunnel-ts/core/crypto");
 
@@ -1092,9 +1405,18 @@ test("bigint round-trips through stringify/parse", () => {
 });
 
 test("CoSignedUpdate survives the wire conversion byte-for-byte", () => {
-  const ka = generateKeyPair(), kb = generateKeyPair();
+  const ka = generateKeyPair(),
+    kb = generateKeyPair();
   const tid = `0x${"31".repeat(32)}`;
-  const sp = OffchainTunnel.selfPlay(counterProto(), tid, ka, kb, "0xA", "0xB", { a: 1000n, b: 1000n });
+  const sp = OffchainTunnel.selfPlay(
+    counterProto(),
+    tid,
+    ka,
+    kb,
+    "0xA",
+    "0xB",
+    { a: 1000n, b: 1000n },
+  );
   sp.step(1, "A");
   const u = sp.latest!;
   const back = fromWireCoSigned(toWireCoSigned(u));
@@ -1106,14 +1428,22 @@ test("CoSignedUpdate survives the wire conversion byte-for-byte", () => {
 });
 
 test("writes are coalesced; flush forces one setItem; read round-trips; index + TTL", () => {
-  const ls = (globalThis as Record<string, unknown>).localStorage as FakeStorage;
+  const ls = (globalThis as Record<string, unknown>)
+    .localStorage as FakeStorage;
   let sets = 0;
   const realSet = ls.setItem.bind(ls);
-  ls.setItem = (k: string, v: string) => { sets++; realSet(k, v); };
+  ls.setItem = (k: string, v: string) => {
+    sets++;
+    realSet(k, v);
+  };
 
   const rec = (tunnelId: string, updatedAt: number) => ({
-    matchId: "m", tunnelId, role: "A" as const, game: "ttt",
-    opponentWallet: "0xb", opponentPubkeyHex: "ab",
+    matchId: "m",
+    tunnelId,
+    role: "A" as const,
+    game: "ttt",
+    opponentWallet: "0xb",
+    opponentPubkeyHex: "ab",
     latestCoSigned: toWireCoSigned(sampleCoSigned(tunnelId)),
     latestState: { board: [0], balanceA: 1000n, balanceB: 1000n },
     updatedAt,
@@ -1125,10 +1455,14 @@ test("writes are coalesced; flush forces one setItem; read round-trips; index + 
   assert.ok(sets > before, "flush performed the deferred write");
 
   const got = readResumeRecord("0xT1");
-  assert.equal(got?.latestState && (got.latestState as { balanceA: bigint }).balanceA, 1000n);
+  assert.equal(
+    got?.latestState && (got.latestState as { balanceA: bigint }).balanceA,
+    1000n,
+  );
   assert.deepEqual(listActiveTunnels(), ["0xT1"]);
 
-  writeResumeRecord(rec("0xT2", 1)); flushResumeWrites();
+  writeResumeRecord(rec("0xT2", 1));
+  flushResumeWrites();
   evictExpiredRecords(0); // everything is "older than 0ms"
   assert.equal(readResumeRecord("0xT1"), null);
   assert.deepEqual(listActiveTunnels(), []);
@@ -1141,15 +1475,27 @@ function counterProto() {
   return {
     name: "counter-test",
     initialState: () => ({ count: 0, turn: "A" as const }),
-    applyMove: (s: { count: number; turn: "A" | "B" }) => ({ count: s.count + 1, turn: s.turn === "A" ? "B" as const : "A" as const }),
+    applyMove: (s: { count: number; turn: "A" | "B" }) => ({
+      count: s.count + 1,
+      turn: s.turn === "A" ? ("B" as const) : ("A" as const),
+    }),
     encodeState: (s: { count: number }) => new Uint8Array([s.count & 0xff]),
     balances: () => ({ a: 1000n, b: 1000n }),
     isTerminal: () => false,
   };
 }
 function sampleCoSigned(tunnelId: string) {
-  const ka = generateKeyPair(), kb = generateKeyPair();
-  const sp = OffchainTunnel.selfPlay(counterProto(), tunnelId, ka, kb, "0xA", "0xB", { a: 1000n, b: 1000n });
+  const ka = generateKeyPair(),
+    kb = generateKeyPair();
+  const sp = OffchainTunnel.selfPlay(
+    counterProto(),
+    tunnelId,
+    ka,
+    kb,
+    "0xA",
+    "0xB",
+    { a: 1000n, b: 1000n },
+  );
   sp.step(1, "A");
   return sp.latest!;
 }
@@ -1248,7 +1594,11 @@ export function stringifyWithBigint(v: unknown): string {
 }
 export function parseWithBigint(s: string): unknown {
   return JSON.parse(s, (_k, val) => {
-    if (val && typeof val === "object" && typeof (val as Record<string, unknown>)[BIGINT_TAG] === "string") {
+    if (
+      val &&
+      typeof val === "object" &&
+      typeof (val as Record<string, unknown>)[BIGINT_TAG] === "string"
+    ) {
       return BigInt((val as Record<string, string>)[BIGINT_TAG]);
     }
     return val;
@@ -1265,7 +1615,11 @@ function ls(): Storage | null {
 function readIndex(): string[] {
   const raw = ls()?.getItem(INDEX_KEY);
   if (!raw) return [];
-  try { return JSON.parse(raw) as string[]; } catch { return []; }
+  try {
+    return JSON.parse(raw) as string[];
+  } catch {
+    return [];
+  }
 }
 function writeIndex(ids: string[]): void {
   ls()?.setItem(INDEX_KEY, JSON.stringify([...new Set(ids)]));
@@ -1279,7 +1633,10 @@ export function writeResumeRecord(r: ResumeRecord): void {
   dirty.set(r.tunnelId, r);
   if (scheduled) return;
   scheduled = true;
-  const flush = () => { scheduled = false; flushResumeWrites(); };
+  const flush = () => {
+    scheduled = false;
+    flushResumeWrites();
+  };
   // Coalesce a burst of confirmed moves into one write; microtask if available, else timer.
   if (typeof queueMicrotask === "function") queueMicrotask(flush);
   else setTimeout(flush, 0);
@@ -1287,7 +1644,10 @@ export function writeResumeRecord(r: ResumeRecord): void {
 
 export function flushResumeWrites(): void {
   const store = ls();
-  if (!store) { dirty.clear(); return; }
+  if (!store) {
+    dirty.clear();
+    return;
+  }
   if (dirty.size === 0) return;
   const ids = readIndex();
   for (const [tunnelId, rec] of dirty) {
@@ -1301,7 +1661,11 @@ export function flushResumeWrites(): void {
 export function readResumeRecord(tunnelId: string): ResumeRecord | null {
   const raw = ls()?.getItem(KEY_PREFIX + tunnelId);
   if (!raw) return null;
-  try { return parseWithBigint(raw) as ResumeRecord; } catch { return null; }
+  try {
+    return parseWithBigint(raw) as ResumeRecord;
+  } catch {
+    return null;
+  }
 }
 
 export function clearResumeRecord(tunnelId: string): void {
@@ -1326,12 +1690,17 @@ let installed = false;
 /** Register synchronous flush on tab hide/close. Idempotent; safe to call on app mount. */
 export function installResumePersistence(): void {
   if (installed) return;
-  const w = (globalThis as { window?: { addEventListener?: (t: string, cb: () => void) => void } }).window;
+  const w = (
+    globalThis as {
+      window?: { addEventListener?: (t: string, cb: () => void) => void };
+    }
+  ).window;
   if (!w?.addEventListener) return;
   installed = true;
   w.addEventListener("pagehide", flushResumeWrites);
   w.addEventListener("visibilitychange", () => {
-    const doc = (globalThis as { document?: { visibilityState?: string } }).document;
+    const doc = (globalThis as { document?: { visibilityState?: string } })
+      .document;
     if (doc?.visibilityState === "hidden") flushResumeWrites();
   });
 }
@@ -1345,6 +1714,7 @@ Then: `pnpm -C frontend test` → PASS.
 - [ ] **Step 5: Typecheck, format, commit**
 
 Run: `pnpm -C frontend typecheck && pnpm -C frontend format`
+
 ```bash
 git add frontend/src/pvp/resume.ts frontend/src/pvp/resume.test.ts
 git commit -m "feat(pvp): add resume-record persistence"
@@ -1359,16 +1729,19 @@ Tie Layers A/B/C together: add the `resync` `PeerMessage` variant, a shared `att
 This task has two halves: **6A** the shared driver + integration test (one TDD cycle), **6B** the four per-game adapters wired into their hooks (one TDD cycle each, parallel structure). Blackjack's wiring also migrates `bjRelay → MpClient`.
 
 **Files (6A):**
+
 - Modify: `frontend/src/pvp/mpClient.ts` (add the `resync` `PeerMessage` variant)
 - Create: `frontend/src/pvp/resumeSession.ts`
 - Test: `frontend/src/pvp/resumeSession.test.ts`
 
 **Files (6B):**
+
 - Create: `…/ticTacToe/app/lib/tttResumeAdapter.ts`, `…/blackjack/app/lib/bjResumeAdapter.ts`, `…/battleship/battleshipResumeAdapter.ts`, `…/quantumPoker/pokerResumeAdapter.ts`
 - Modify: the four hooks (wire `attachResume` + cold-load `restoreInto`); `usePvpBlackjack.ts` also swaps `bjRelay → MpClient` (apply the Task 4 mapping)
 - Test: `frontend/src/games/battleship/battleshipResumeAdapter.test.ts`
 
 **Interfaces:**
+
 - Consumes: `decideReconcile`, `ResyncView`, `ReconcileAction` (`sui-tunnel-ts/core/reconcile`); `DistributedTunnel`, `TunnelSnapshot`, `CoSignedUpdate` (SDK); `MpClient`, `PvpChannel`, the resume events; `resume.ts` (`ResumeRecord`, `toWireCoSigned`/`fromWireCoSigned`, `writeResumeRecord`, `readResumeRecord`, `listActiveTunnels`).
 - Produces:
   - In `mpClient.ts`: `| { t: "resync"; nonce: string; hasPending: boolean; checkpoint?: WireCoSigned; fullState?: JsonValue }` (import `WireCoSigned`/`JsonValue` types from `./resume`).
@@ -1384,24 +1757,46 @@ Create `frontend/src/pvp/resumeSession.test.ts`. Use the fake-relay pair from Ta
 import test from "node:test";
 import assert from "node:assert/strict";
 // localStorage/window fakes must exist before importing resume modules.
-(globalThis as Record<string, unknown>).localStorage = new (class { m = new Map<string,string>();
-  getItem(k:string){return this.m.has(k)?this.m.get(k)!:null;} setItem(k:string,v:string){this.m.set(k,v);}
-  removeItem(k:string){this.m.delete(k);} })();
+(globalThis as Record<string, unknown>).localStorage = new (class {
+  m = new Map<string, string>();
+  getItem(k: string) {
+    return this.m.has(k) ? this.m.get(k)! : null;
+  }
+  setItem(k: string, v: string) {
+    this.m.set(k, v);
+  }
+  removeItem(k: string) {
+    this.m.delete(k);
+  }
+})();
 (globalThis as Record<string, unknown>).window = { addEventListener() {} };
 
 const { decideReconcile } = await import("sui-tunnel-ts/core/reconcile");
 const { restoreInto } = await import("./resumeSession");
-const { writeResumeRecord, flushResumeWrites, readResumeRecord, toWireCoSigned } = await import("./resume");
-const { DistributedTunnel } = await import("sui-tunnel-ts/core/distributedTunnel");
-const { makeEndpoint, OffchainTunnel } = await import("sui-tunnel-ts/core/tunnel");
+const {
+  writeResumeRecord,
+  flushResumeWrites,
+  readResumeRecord,
+  toWireCoSigned,
+} = await import("./resume");
+const { DistributedTunnel } =
+  await import("sui-tunnel-ts/core/distributedTunnel");
+const { makeEndpoint, OffchainTunnel } =
+  await import("sui-tunnel-ts/core/tunnel");
 const { defaultBackend } = await import("sui-tunnel-ts/core/crypto-native");
 const { generateKeyPair } = await import("sui-tunnel-ts/core/crypto");
 
 const proto = {
   name: "counter-test",
   initialState: () => ({ count: 0, turn: "A" as const }),
-  applyMove: (s: { count: number; turn: "A" | "B" }, _m: number, by: "A" | "B") =>
-    ({ count: s.count + 1, turn: by === "A" ? "B" as const : "A" as const }),
+  applyMove: (
+    s: { count: number; turn: "A" | "B" },
+    _m: number,
+    by: "A" | "B",
+  ) => ({
+    count: s.count + 1,
+    turn: by === "A" ? ("B" as const) : ("A" as const),
+  }),
   encodeState: (s: { count: number }) => new Uint8Array([s.count & 0xff]),
   balances: () => ({ a: 1000n, b: 1000n }),
   isTerminal: () => false,
@@ -1413,46 +1808,86 @@ const adapter = {
 };
 
 test("restoreInto reconstructs a tunnel that co-signs the next move byte-identically", () => {
-  const ka = generateKeyPair(), kb = generateKeyPair();
+  const ka = generateKeyPair(),
+    kb = generateKeyPair();
   const tid = `0x${"41".repeat(32)}`;
   // Self-play to nonce 2 to get a real checkpoint + state.
-  const sp = OffchainTunnel.selfPlay(proto as never, tid, ka, kb, "0xA", "0xB", { a: 1000n, b: 1000n });
-  sp.step(0, "A"); sp.step(0, "B");
+  const sp = OffchainTunnel.selfPlay(
+    proto as never,
+    tid,
+    ka,
+    kb,
+    "0xA",
+    "0xB",
+    { a: 1000n, b: 1000n },
+  );
+  sp.step(0, "A");
+  sp.step(0, "B");
   const record = {
-    matchId: "m", tunnelId: tid, role: "A" as const, game: "counter",
-    opponentWallet: "0xB", opponentPubkeyHex: "ab",
+    matchId: "m",
+    tunnelId: tid,
+    role: "A" as const,
+    game: "counter",
+    opponentWallet: "0xB",
+    opponentPubkeyHex: "ab",
     latestCoSigned: toWireCoSigned(sp.latest!),
     latestState: adapter.serializeState(sp.state),
     updatedAt: Date.now(),
   };
-  writeResumeRecord(record); flushResumeWrites();
+  writeResumeRecord(record);
+  flushResumeWrites();
 
   const backend = defaultBackend();
   const sent: Uint8Array[] = [];
   const restored = new DistributedTunnel(
     proto as never,
-    { tunnelId: tid,
-      self: makeEndpoint(backend, "0xA", { publicKey: ka.publicKey, scheme: 0, secretKey: ka.secretKey }, true),
-      opponent: makeEndpoint(backend, "0xB", { publicKey: kb.publicKey, scheme: 0 }, false), selfParty: "A" },
-    { send: (b) => sent.push(b), onFrame() {} }, { a: 1000n, b: 1000n },
+    {
+      tunnelId: tid,
+      self: makeEndpoint(
+        backend,
+        "0xA",
+        { publicKey: ka.publicKey, scheme: 0, secretKey: ka.secretKey },
+        true,
+      ),
+      opponent: makeEndpoint(
+        backend,
+        "0xB",
+        { publicKey: kb.publicKey, scheme: 0 },
+        false,
+      ),
+      selfParty: "A",
+    },
+    { send: (b) => sent.push(b), onFrame() {} },
+    { a: 1000n, b: 1000n },
   );
   restoreInto(restored, readResumeRecord(tid)!, adapter as never);
   assert.equal(restored.nonce, 2n);
   // The restored tunnel proposes move 3 with the exact bytes a never-dropped tunnel would.
   restored.propose(0, 9n);
-  assert.equal(restored.nonce, 2n);          // unconfirmed
+  assert.equal(restored.nonce, 2n); // unconfirmed
   assert.ok(sent.length === 1);
 });
 
 test("decideReconcile + adopt path: a peer-ahead resync seats the missed move", () => {
   // Drive the same fixtures: self at nonce 1, peer at nonce 2 with a checkpoint+fullState.
-  const ka = generateKeyPair(), kb = generateKeyPair();
+  const ka = generateKeyPair(),
+    kb = generateKeyPair();
   const tid = `0x${"42".repeat(32)}`;
-  const sp = OffchainTunnel.selfPlay(proto as never, tid, ka, kb, "0xA", "0xB", { a: 1000n, b: 1000n });
+  const sp = OffchainTunnel.selfPlay(
+    proto as never,
+    tid,
+    ka,
+    kb,
+    "0xA",
+    "0xB",
+    { a: 1000n, b: 1000n },
+  );
   sp.step(0, "A"); // nonce 1 — what self has
-  const selfState = sp.state, selfCp = sp.latest!;
+  const selfState = sp.state,
+    selfCp = sp.latest!;
   sp.step(0, "B"); // nonce 2 — what peer has
-  const peerState = sp.state, peerCp = sp.latest!;
+  const peerState = sp.state,
+    peerCp = sp.latest!;
 
   const self = { nonce: 1n, hasPending: false, checkpoint: selfCp };
   const peer = { nonce: 2n, hasPending: false, checkpoint: peerCp };
@@ -1461,13 +1896,27 @@ test("decideReconcile + adopt path: a peer-ahead resync seats the missed move", 
   const backend = defaultBackend();
   const t = new DistributedTunnel(
     proto as never,
-    { tunnelId: tid,
-      self: makeEndpoint(backend, "0xA", { publicKey: ka.publicKey, scheme: 0, secretKey: ka.secretKey }, true),
-      opponent: makeEndpoint(backend, "0xB", { publicKey: kb.publicKey, scheme: 0 }, false), selfParty: "A" },
-    { send() {}, onFrame() {} }, { a: 1000n, b: 1000n },
+    {
+      tunnelId: tid,
+      self: makeEndpoint(
+        backend,
+        "0xA",
+        { publicKey: ka.publicKey, scheme: 0, secretKey: ka.secretKey },
+        true,
+      ),
+      opponent: makeEndpoint(
+        backend,
+        "0xB",
+        { publicKey: kb.publicKey, scheme: 0 },
+        false,
+      ),
+      selfParty: "A",
+    },
+    { send() {}, onFrame() {} },
+    { a: 1000n, b: 1000n },
   );
-  t.adoptCheckpoint(selfState, selfCp);   // self restored at 1
-  t.adoptCheckpoint(peerState, peerCp);   // adopt the peer-ahead checkpoint
+  t.adoptCheckpoint(selfState, selfCp); // self restored at 1
+  t.adoptCheckpoint(peerState, peerCp); // adopt the peer-ahead checkpoint
   assert.equal(t.nonce, 2n);
 });
 ```
@@ -1484,6 +1933,7 @@ In `mpClient.ts`, import the wire types from `./resume` and add the variant to `
 ```ts
 import type { WireCoSigned, JsonValue } from "./resume";
 ```
+
 ```ts
   | {
       t: "resync";
@@ -1510,10 +1960,18 @@ Create `frontend/src/pvp/resumeSession.ts`:
  */
 import type { DistributedTunnel } from "sui-tunnel-ts/core/distributedTunnel";
 import type { CoSignedUpdate } from "sui-tunnel-ts/core/tunnel";
-import { decideReconcile, ReconcileAction, ResyncView } from "sui-tunnel-ts/core/reconcile";
+import {
+  decideReconcile,
+  ReconcileAction,
+  ResyncView,
+} from "sui-tunnel-ts/core/reconcile";
 import type { MpClient, PvpChannel, PeerMessage } from "./mpClient";
 import {
-  JsonValue, ResumeRecord, fromWireCoSigned, toWireCoSigned, writeResumeRecord,
+  JsonValue,
+  ResumeRecord,
+  fromWireCoSigned,
+  toWireCoSigned,
+  writeResumeRecord,
 } from "./resume";
 
 export type ReconcileOutcome = ReconcileAction;
@@ -1528,7 +1986,10 @@ export interface ResumeAdapter<State, Move> {
   deserializeMove?(j: JsonValue): Move;
   captureSecret?(): JsonValue;
   restoreSecret?(j: JsonValue): void;
-  onReconciled(tunnel: DistributedTunnel<State, Move>, outcome: ReconcileOutcome): void;
+  onReconciled(
+    tunnel: DistributedTunnel<State, Move>,
+    outcome: ReconcileOutcome,
+  ): void;
 }
 
 /** Static record fields the driver cannot derive from the tunnel snapshot. */
@@ -1557,13 +2018,17 @@ function buildRecord<State, Move>(
 ): ResumeRecord | null {
   const snap = tunnel.snapshot();
   if (!snap.latest) return null; // nothing co-signed yet — nothing to resume to
-  const serMove = adapter.serializeMove ?? ((m: Move) => m as unknown as JsonValue);
+  const serMove =
+    adapter.serializeMove ?? ((m: Move) => m as unknown as JsonValue);
   return {
     ...identity,
     latestCoSigned: toWireCoSigned(snap.latest),
     latestState: adapter.serializeState(snap.state),
     pending: snap.pending
-      ? { move: serMove(snap.pending.move), timestamp: snap.pending.timestamp.toString() }
+      ? {
+          move: serMove(snap.pending.move),
+          timestamp: snap.pending.timestamp.toString(),
+        }
       : undefined,
     secret: adapter.captureSecret ? adapter.captureSecret() : undefined,
     updatedAt: Date.now(),
@@ -1577,11 +2042,19 @@ export function restoreInto<State, Move>(
   record: ResumeRecord,
   adapter: ResumeAdapter<State, Move>,
 ): void {
-  tunnel.adoptCheckpoint(adapter.deserializeState(record.latestState), fromWireCoSigned(record.latestCoSigned));
-  if (record.secret !== undefined && adapter.restoreSecret) adapter.restoreSecret(record.secret);
+  tunnel.adoptCheckpoint(
+    adapter.deserializeState(record.latestState),
+    fromWireCoSigned(record.latestCoSigned),
+  );
+  if (record.secret !== undefined && adapter.restoreSecret)
+    adapter.restoreSecret(record.secret);
   if (record.pending) {
-    const deMove = adapter.deserializeMove ?? ((j: JsonValue) => j as unknown as Move);
-    tunnel.seatPending(deMove(record.pending.move), BigInt(record.pending.timestamp));
+    const deMove =
+      adapter.deserializeMove ?? ((j: JsonValue) => j as unknown as Move);
+    tunnel.seatPending(
+      deMove(record.pending.move),
+      BigInt(record.pending.timestamp),
+    );
   }
 }
 
@@ -1603,13 +2076,26 @@ function onResync<State, Move>(
   msg: Extract<PeerMessage, { t: "resync" }>,
 ): void {
   const snap = args.tunnel.snapshot();
-  const self: ResyncView = { nonce: snap.nonce, hasPending: snap.pending !== null, checkpoint: snap.latest };
-  const peerCp: CoSignedUpdate | null = msg.checkpoint ? fromWireCoSigned(msg.checkpoint) : null;
-  const peer: ResyncView = { nonce: BigInt(msg.nonce), hasPending: msg.hasPending, checkpoint: peerCp };
+  const self: ResyncView = {
+    nonce: snap.nonce,
+    hasPending: snap.pending !== null,
+    checkpoint: snap.latest,
+  };
+  const peerCp: CoSignedUpdate | null = msg.checkpoint
+    ? fromWireCoSigned(msg.checkpoint)
+    : null;
+  const peer: ResyncView = {
+    nonce: BigInt(msg.nonce),
+    hasPending: msg.hasPending,
+    checkpoint: peerCp,
+  };
   const { action } = decideReconcile(self, peer);
   try {
     if (action === "adopt" && peerCp && msg.fullState !== undefined) {
-      args.tunnel.adoptCheckpoint(args.adapter.deserializeState(msg.fullState), peerCp);
+      args.tunnel.adoptCheckpoint(
+        args.adapter.deserializeState(msg.fullState),
+        peerCp,
+      );
     } else if (action === "re-propose") {
       args.tunnel.resendPending();
     }
@@ -1626,7 +2112,9 @@ function onResync<State, Move>(
  * resync when the peer is reachable (`resume.ok` with peerOnline, or `peer.resumed`), and reacts to
  * the peer's resync. Returns a detach fn (unsubscribes; does not close the socket).
  */
-export function attachResume<State, Move>(args: AttachResumeArgs<State, Move>): () => void {
+export function attachResume<State, Move>(
+  args: AttachResumeArgs<State, Move>,
+): () => void {
   const { mp, channel, tunnel, identity } = args;
 
   // Persist on confirm, preserving any game-set onConfirmed.
@@ -1639,15 +2127,21 @@ export function attachResume<State, Move>(args: AttachResumeArgs<State, Move>): 
 
   // Route the peer's resync through the channel's existing onPeer; preserve any prior handler.
   const peerHandler = (m: Exclude<PeerMessage, { t: "frame" }>) => {
-    if ((m as { t: string }).t === "resync") onResync(args, m as Extract<PeerMessage, { t: "resync" }>);
+    if ((m as { t: string }).t === "resync")
+      onResync(args, m as Extract<PeerMessage, { t: "resync" }>);
   };
   channel.addPeerListener(peerHandler);
 
-  const offOk = mp.onResumeOk((e) => { if (e.matchId === identity.matchId && e.peerOnline) sendResync(args); });
-  const offRes = mp.onPeerResumed((e) => { if (e.matchId === identity.matchId) sendResync(args); });
+  const offOk = mp.onResumeOk((e) => {
+    if (e.matchId === identity.matchId && e.peerOnline) sendResync(args);
+  });
+  const offRes = mp.onPeerResumed((e) => {
+    if (e.matchId === identity.matchId) sendResync(args);
+  });
 
   return () => {
-    offOk(); offRes();
+    offOk();
+    offRes();
     channel.removePeerListener(peerHandler);
     if (tunnel.onConfirmed) tunnel.onConfirmed = prevConfirmed;
   };
@@ -1682,6 +2176,7 @@ In `mpClient.ts`, change `channel()` to keep a `Set` of peer listeners and fan o
     };
   }
 ```
+
 and extend the `PvpChannel` interface with `addPeerListener`/`removePeerListener`.
 
 - [ ] **Step 5: Run the integration test + suite**
@@ -1692,6 +2187,7 @@ Then: `pnpm -C frontend test` → PASS.
 - [ ] **Step 6: Typecheck, format, commit (6A)**
 
 Run: `pnpm -C frontend typecheck && pnpm -C frontend format`
+
 ```bash
 git add frontend/src/pvp/mpClient.ts frontend/src/pvp/resumeSession.ts frontend/src/pvp/resumeSession.test.ts
 git commit -m "feat(pvp): add resync handshake driver"
@@ -1718,19 +2214,37 @@ test("the fleet secret round-trips locally and never enters a resync/serializeSt
   const secret = randomFleetSecret(() => 0.5);
   const adapter = makeBattleshipResumeAdapter({
     getSecret: () => secret,
-    setSecret: (s) => { stored = s; },
+    setSecret: (s) => {
+      stored = s;
+    },
   });
   // A representative public state (no fleet).
   const state = {
-    phase: "playing", turn: "A", pendingShot: null, commitA: null, commitB: null,
-    shotsAtA: [], shotsAtB: [], hitsOnA: 0, hitsOnB: 0, winner: 0,
-    balanceA: 500n, balanceB: 500n, total: 1000n, stake: 100n,
+    phase: "playing",
+    turn: "A",
+    pendingShot: null,
+    commitA: null,
+    commitB: null,
+    shotsAtA: [],
+    shotsAtB: [],
+    hitsOnA: 0,
+    hitsOnB: 0,
+    winner: 0,
+    balanceA: 500n,
+    balanceB: 500n,
+    total: 1000n,
+    stake: 100n,
   };
   const serialized = adapter.serializeState(state as never);
-  const blob = JSON.stringify(serialized, (_k, v) => (typeof v === "bigint" ? v.toString() : v));
+  const blob = JSON.stringify(serialized, (_k, v) =>
+    typeof v === "bigint" ? v.toString() : v,
+  );
   // No fleet cell / salt leaks into the wire-bound state.
   for (const cell of secret.placements ?? []) {
-    assert.ok(!blob.includes(String(cell)), "fleet placement leaked into serializeState");
+    assert.ok(
+      !blob.includes(String(cell)),
+      "fleet placement leaked into serializeState",
+    );
   }
   // captureSecret is the ONLY carrier of the secret; restoreSecret round-trips it.
   const cap = adapter.captureSecret!();
@@ -1749,6 +2263,7 @@ Expected: FAIL — `./battleshipResumeAdapter` does not exist.
 - [ ] **Step 3: Implement the four adapter modules**
 
 `frontend/src/games/ticTacToe/app/lib/tttResumeAdapter.ts` — full public state, no secret, JSON-native move (`{cell}`):
+
 ```ts
 import type { ResumeAdapter } from "@/pvp/resumeSession";
 // AnyState/CellMove mirror the hook's tunnel generics (board/turn/winner/balances + gamesPlayed).
@@ -1756,7 +2271,7 @@ export function makeTttResumeAdapter<AnyState, CellMove>(
   onReconciled: ResumeAdapter<AnyState, CellMove>["onReconciled"],
 ): ResumeAdapter<AnyState, CellMove> {
   return {
-    serializeState: (s) => s as unknown as never,           // plain JSON (bigint balances via resume.ts)
+    serializeState: (s) => s as unknown as never, // plain JSON (bigint balances via resume.ts)
     deserializeState: (j) => j as AnyState,
     // move is JSON-native ({cell}); identity move (de)serialization is the default
     onReconciled,
@@ -1765,6 +2280,7 @@ export function makeTttResumeAdapter<AnyState, CellMove>(
 ```
 
 `frontend/src/games/blackjack/app/lib/bjResumeAdapter.ts` — full `BetBlackjackState`, no secret, JSON-native move:
+
 ```ts
 import type { ResumeAdapter } from "@/pvp/resumeSession";
 import type { BetBlackjackState, BlackjackMove } from "./bjBetProtocol"; // adjust import to the actual path
@@ -1772,7 +2288,7 @@ export function makeBlackjackResumeAdapter(
   onReconciled: ResumeAdapter<BetBlackjackState, BlackjackMove>["onReconciled"],
 ): ResumeAdapter<BetBlackjackState, BlackjackMove> {
   return {
-    serializeState: (s) => ({ ...s }) as unknown as never,  // numeric arrays + bigint balances
+    serializeState: (s) => ({ ...s }) as unknown as never, // numeric arrays + bigint balances
     deserializeState: (j) => j as BetBlackjackState,
     onReconciled,
   };
@@ -1780,9 +2296,14 @@ export function makeBlackjackResumeAdapter(
 ```
 
 `frontend/src/games/battleship/battleshipResumeAdapter.ts` — public state + **fleet secret** via capture/restore + binary move codec:
+
 ```ts
 import type { ResumeAdapter } from "@/pvp/resumeSession";
-import { battleshipMoveCodec, type BattleshipState, type BattleshipMove } from "./protocol";
+import {
+  battleshipMoveCodec,
+  type BattleshipState,
+  type BattleshipMove,
+} from "./protocol";
 import type { FleetSecret } from "./engine/selfPlay";
 
 export function makeBattleshipResumeAdapter(args: {
@@ -1792,11 +2313,12 @@ export function makeBattleshipResumeAdapter(args: {
 }): ResumeAdapter<BattleshipState, BattleshipMove> {
   return {
     // serializeState carries ONLY public state. commits are Uint8Array → hex-able plain arrays.
-    serializeState: (s) => ({
-      ...s,
-      commitA: s.commitA ? Array.from(s.commitA) : null,
-      commitB: s.commitB ? Array.from(s.commitB) : null,
-    }) as unknown as never,
+    serializeState: (s) =>
+      ({
+        ...s,
+        commitA: s.commitA ? Array.from(s.commitA) : null,
+        commitB: s.commitB ? Array.from(s.commitB) : null,
+      }) as unknown as never,
     deserializeState: (j) => {
       const o = j as Record<string, unknown>;
       return {
@@ -1815,11 +2337,17 @@ export function makeBattleshipResumeAdapter(args: {
 ```
 
 `frontend/src/games/quantumPoker/pokerResumeAdapter.ts` — public state + **slot-secret/hole-card** via capture/restore + poker move codec. `serializeState` strips the local-only fields (`localSecretsA/B`, `holeA/B`):
+
 ```ts
 import type { ResumeAdapter } from "@/pvp/resumeSession";
 import { pokerMoveCodec, type PokerState, type PokerMove } from "./protocol"; // adjust to actual path
 
-type PokerSecret = { localSecretsA: unknown; localSecretsB: unknown; holeA: unknown; holeB: unknown };
+type PokerSecret = {
+  localSecretsA: unknown;
+  localSecretsB: unknown;
+  holeA: unknown;
+  holeB: unknown;
+};
 
 export function makePokerResumeAdapter(args: {
   getSecret: () => PokerSecret;
@@ -1829,8 +2357,18 @@ export function makePokerResumeAdapter(args: {
   return {
     serializeState: (s) => {
       // Drop local-only secret fields; encode Uint8Array commit/reveal arrays as plain arrays.
-      const { localSecretsA: _a, localSecretsB: _b, holeA: _ha, holeB: _hb, ...pub } = s as never;
-      return JSON.parse(JSON.stringify(pub, (_k, v) => (v instanceof Uint8Array ? Array.from(v) : v))) as never;
+      const {
+        localSecretsA: _a,
+        localSecretsB: _b,
+        holeA: _ha,
+        holeB: _hb,
+        ...pub
+      } = s as never;
+      return JSON.parse(
+        JSON.stringify(pub, (_k, v) =>
+          v instanceof Uint8Array ? Array.from(v) : v,
+        ),
+      ) as never;
     },
     deserializeState: (j) => j as PokerState, // hook re-hydrates Uint8Arrays where the protocol needs them
     serializeMove: (m) => pokerMoveCodec.encode(m) as never,
@@ -1849,10 +2387,14 @@ export function makePokerResumeAdapter(args: {
 In each hook, after the live `DistributedTunnel` is constructed and the channel is available, add the three wirings. ttt/blackjack: `onReconciled` calls the hook's existing re-render (`onAdvance`/`sync`). For blackjack, ALSO apply the Task 4 `bjRelay → MpClient` mapping first.
 
 Concrete shape (battleship shown; the others are identical minus the secret args):
+
 ```ts
 import { attachResume, restoreInto } from "@/pvp/resumeSession";
 import {
-  installResumePersistence, listActiveTunnels, readResumeRecord, evictExpiredRecords,
+  installResumePersistence,
+  listActiveTunnels,
+  readResumeRecord,
+  evictExpiredRecords,
 } from "@/pvp/resume";
 import { makeBattleshipResumeAdapter } from "./battleshipResumeAdapter";
 
@@ -1863,14 +2405,23 @@ evictExpiredRecords();
 // after building `dt` (the live DistributedTunnel) and `channel`:
 const adapter = makeBattleshipResumeAdapter({
   getSecret: () => secretRef.current!,
-  setSecret: (s) => { secretRef.current = s; },
+  setSecret: (s) => {
+    secretRef.current = s;
+  },
   onReconciled: () => this.sync(),
 });
 const detach = attachResume({
-  mp, channel, tunnel: dt, adapter,
+  mp,
+  channel,
+  tunnel: dt,
+  adapter,
   identity: {
-    matchId: match.matchId, tunnelId, role: match.role, game: "battleship",
-    opponentWallet: match.opponentWallet, opponentPubkeyHex: toHex(opp.publicKey),
+    matchId: match.matchId,
+    tunnelId,
+    role: match.role,
+    game: "battleship",
+    opponentWallet: match.opponentWallet,
+    opponentPubkeyHex: toHex(opp.publicKey),
   },
 });
 // call detach() on match teardown (alongside mp.releaseMatch(matchId)).
@@ -1880,10 +2431,25 @@ const detach = attachResume({
 for (const tunnelId of listActiveTunnels()) {
   const rec = readResumeRecord(tunnelId);
   if (!rec || rec.game !== "battleship") continue;
-  const restored = new DistributedTunnel(proto, cfgFromRecord(rec), channelFor(rec.matchId).transport, BALANCES);
-  restoreInto(restored, rec, makeBattleshipResumeAdapter({ getSecret, setSecret }));
+  const restored = new DistributedTunnel(
+    proto,
+    cfgFromRecord(rec),
+    channelFor(rec.matchId).transport,
+    BALANCES,
+  );
+  restoreInto(
+    restored,
+    rec,
+    makeBattleshipResumeAdapter({ getSecret, setSecret }),
+  );
   mp.markActive(rec.matchId);
-  attachResume({ mp, channel: channelFor(rec.matchId), tunnel: restored, adapter, identity: identityFromRecord(rec) });
+  attachResume({
+    mp,
+    channel: channelFor(rec.matchId),
+    tunnel: restored,
+    adapter,
+    identity: identityFromRecord(rec),
+  });
 }
 ```
 
@@ -1898,6 +2464,7 @@ Run: `pnpm -C frontend test` → PASS.
 - [ ] **Step 6: Format, commit (6B)**
 
 Run: `pnpm -C frontend format`
+
 ```bash
 git add frontend/src/games/ticTacToe/app/lib/tttResumeAdapter.ts \
   frontend/src/games/blackjack/app/lib/bjResumeAdapter.ts \
@@ -1918,11 +2485,13 @@ git commit -m "feat(pvp): add per-game resume adapters"
 When the peer never returns (or equivocates), the present seat settles on-chain from the last co-signed checkpoint it holds. Surface the SDK's existing unilateral `raise_dispute` → `force_close` builders in `frontend/src/onchain/tunnelTx.ts` (today wires cooperative close only), and add the 1h FE grace timer to `attachResume` so `peer.dropped` → grace → settle offer.
 
 **Files:**
+
 - Modify: `frontend/src/onchain/tunnelTx.ts` (add `raiseDisputeUnilateral` + `forceCloseAfterTimeout`)
 - Modify: `frontend/src/pvp/resumeSession.ts` (grace timer in `attachResume`)
 - Test: `frontend/src/pvp/resumeSession.test.ts` (extend — grace-timer unit with injected timers)
 
 **Interfaces:**
+
 - Consumes: `buildRaiseDisputeFromUpdate`, `buildForceClose` (`sui-tunnel-ts/onchain/txbuilders`); `CoSignedUpdate`, `Party`; `SignExec`; `MpClient.onPeerDropped`/`onResumeOk`/`onPeerResumed`.
 - Produces:
   - `raiseDisputeUnilateral(opts: { signExec: SignExec; tunnelId: string; update: CoSignedUpdate; role: Party }): Promise<string>` — stakes the both-signed latest state on-chain (opens the dispute/timeout window).
@@ -1937,25 +2506,73 @@ Append to `frontend/src/pvp/resumeSession.test.ts`. Inject a fake `setTimeout`/`
 test("peer.dropped starts a grace timer; peer return cancels it; expiry offers settle", async () => {
   const { attachResume } = await import("./resumeSession");
   // Minimal fake MpClient: capture subscribers, expose triggers.
-  const subs: Record<string, ((e: { matchId: string; peerOnline?: boolean }) => void)[]> = { drop: [], ok: [], res: [] };
+  const subs: Record<
+    string,
+    ((e: { matchId: string; peerOnline?: boolean }) => void)[]
+  > = { drop: [], ok: [], res: [] };
   const fakeMp = {
-    onPeerDropped: (cb: never) => { subs.drop.push(cb as never); return () => {}; },
-    onResumeOk: (cb: never) => { subs.ok.push(cb as never); return () => {}; },
-    onPeerResumed: (cb: never) => { subs.res.push(cb as never); return () => {}; },
+    onPeerDropped: (cb: never) => {
+      subs.drop.push(cb as never);
+      return () => {};
+    },
+    onResumeOk: (cb: never) => {
+      subs.ok.push(cb as never);
+      return () => {};
+    },
+    onPeerResumed: (cb: never) => {
+      subs.res.push(cb as never);
+      return () => {};
+    },
   };
-  const channel = { addPeerListener() {}, removePeerListener() {}, sendPeer() {}, transport: { send() {}, onFrame() {} }, onPeer() {} };
+  const channel = {
+    addPeerListener() {},
+    removePeerListener() {},
+    sendPeer() {},
+    transport: { send() {}, onFrame() {} },
+    onPeer() {},
+  };
   let fire: (() => void) | null = null;
-  const sched = { set: (fn: () => void) => { fire = fn; return 1 as never; }, clear: () => { fire = null; } };
+  const sched = {
+    set: (fn: () => void) => {
+      fire = fn;
+      return 1 as never;
+    },
+    clear: () => {
+      fire = null;
+    },
+  };
 
   // No latest yet → onGraceExpired receives null but still fires.
-  const tunnel = { snapshot: () => ({ state: {}, nonce: 0n, latest: null, pending: null }), onConfirmed: undefined } as never;
+  const tunnel = {
+    snapshot: () => ({ state: {}, nonce: 0n, latest: null, pending: null }),
+    onConfirmed: undefined,
+  } as never;
   let expired: unknown = "unset";
   attachResume({
-    mp: fakeMp as never, channel: channel as never, tunnel,
-    adapter: { serializeState: (s: unknown) => s, deserializeState: (j: unknown) => j, onReconciled() {} } as never,
-    identity: { matchId: "m1", tunnelId: "0xT", role: "A", game: "g", opponentWallet: "0xb", opponentPubkeyHex: "ab" },
-    graceMs: 3_600_000, onGraceExpired: (l) => { expired = l; },
-    timers: { setTimeout: sched.set as never, clearTimeout: sched.clear as never },
+    mp: fakeMp as never,
+    channel: channel as never,
+    tunnel,
+    adapter: {
+      serializeState: (s: unknown) => s,
+      deserializeState: (j: unknown) => j,
+      onReconciled() {},
+    } as never,
+    identity: {
+      matchId: "m1",
+      tunnelId: "0xT",
+      role: "A",
+      game: "g",
+      opponentWallet: "0xb",
+      opponentPubkeyHex: "ab",
+    },
+    graceMs: 3_600_000,
+    onGraceExpired: (l) => {
+      expired = l;
+    },
+    timers: {
+      setTimeout: sched.set as never,
+      clearTimeout: sched.clear as never,
+    },
   } as never);
 
   // peer drops → timer armed
@@ -1969,7 +2586,11 @@ test("peer.dropped starts a grace timer; peer return cancels it; expiry offers s
   // drop again, then let it expire
   subs.drop.forEach((cb) => cb({ matchId: "m1" }));
   fire!();
-  assert.equal(expired, null, "grace expiry offered settle from the held checkpoint (null here)");
+  assert.equal(
+    expired,
+    null,
+    "grace expiry offered settle from the held checkpoint (null here)",
+  );
 });
 ```
 
@@ -1992,29 +2613,41 @@ export interface AttachResumeArgs<State, Move> {
   graceMs?: number;
   onGraceExpired?: (latest: CoSignedUpdate | null) => void;
   /** Injectable for tests; defaults to the globals. */
-  timers?: { setTimeout: (fn: () => void, ms: number) => unknown; clearTimeout: (h: unknown) => void };
+  timers?: {
+    setTimeout: (fn: () => void, ms: number) => unknown;
+    clearTimeout: (h: unknown) => void;
+  };
 }
 ```
 
 Inside `attachResume`, after the existing subscriptions, add:
 
 ```ts
-  const graceMs = args.graceMs ?? 3_600_000;
-  const timers = args.timers ?? { setTimeout, clearTimeout };
-  let graceHandle: unknown = null;
-  const cancelGrace = () => { if (graceHandle != null) { timers.clearTimeout(graceHandle); graceHandle = null; } };
+const graceMs = args.graceMs ?? 3_600_000;
+const timers = args.timers ?? { setTimeout, clearTimeout };
+let graceHandle: unknown = null;
+const cancelGrace = () => {
+  if (graceHandle != null) {
+    timers.clearTimeout(graceHandle);
+    graceHandle = null;
+  }
+};
 
-  const offDrop = mp.onPeerDropped((e) => {
-    if (e.matchId !== identity.matchId) return;
-    cancelGrace();
-    graceHandle = timers.setTimeout(() => {
-      graceHandle = null;
-      args.onGraceExpired?.(tunnel.snapshot().latest);
-    }, graceMs);
-  });
-  // a peer return cancels the grace timer (handshake handles convergence instead)
-  const offOkCancel = mp.onResumeOk((e) => { if (e.matchId === identity.matchId && e.peerOnline) cancelGrace(); });
-  const offResCancel = mp.onPeerResumed((e) => { if (e.matchId === identity.matchId) cancelGrace(); });
+const offDrop = mp.onPeerDropped((e) => {
+  if (e.matchId !== identity.matchId) return;
+  cancelGrace();
+  graceHandle = timers.setTimeout(() => {
+    graceHandle = null;
+    args.onGraceExpired?.(tunnel.snapshot().latest);
+  }, graceMs);
+});
+// a peer return cancels the grace timer (handshake handles convergence instead)
+const offOkCancel = mp.onResumeOk((e) => {
+  if (e.matchId === identity.matchId && e.peerOnline) cancelGrace();
+});
+const offResCancel = mp.onPeerResumed((e) => {
+  if (e.matchId === identity.matchId) cancelGrace();
+});
 ```
 
 Add `offDrop(); offOkCancel(); offResCancel(); cancelGrace();` to the returned detach fn.
@@ -2032,10 +2665,14 @@ import type { CoSignedUpdate } from "sui-tunnel-ts/core/tunnel";
 import type { Party } from "sui-tunnel-ts/protocol/Protocol";
 
 const buildRaiseDisputeFromUpdate = sdkRaiseDisputeFromUpdate as unknown as (
-  tx: Transaction, tunnelId: string, u: CoSignedUpdate, raiser: Party,
+  tx: Transaction,
+  tunnelId: string,
+  u: CoSignedUpdate,
+  raiser: Party,
 ) => void;
 const buildForceClose = sdkForceClose as unknown as (
-  tx: Transaction, p: { tunnelId: string },
+  tx: Transaction,
+  p: { tunnelId: string },
 ) => void;
 
 /**
@@ -2080,6 +2717,7 @@ Run: `pnpm -C frontend test` → PASS.
 - [ ] **Step 7: Format, commit**
 
 Run: `pnpm -C frontend format`
+
 ```bash
 git add frontend/src/onchain/tunnelTx.ts frontend/src/pvp/resumeSession.ts frontend/src/pvp/resumeSession.test.ts \
   frontend/src/games/ticTacToe/app/hooks/usePvpTicTacToe.ts \

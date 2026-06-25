@@ -37,8 +37,8 @@ services:
       retries: 30
 
   relay-a:
-    build: &relay-build
-      # The Dockerfile needs the workspace root (Cargo.toml + Cargo.lock live there).
+    build:
+      &relay-build # The Dockerfile needs the workspace root (Cargo.toml + Cargo.lock live there).
       context: ../../..
       dockerfile: backend/tunnel-manager/Dockerfile
     image: tunnel-manager-smoke:latest

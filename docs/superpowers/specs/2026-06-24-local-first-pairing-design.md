@@ -15,7 +15,7 @@
 ## Problem
 
 When two players connect to the **same** relay instance, every move between them
-*can* be relayed entirely in-process — `Bus::deliver`
+_can_ be relayed entirely in-process — `Bus::deliver`
 (`backend/tunnel-manager/src/store/redis.rs`) routes a frame to the peer's socket
 directly when the target seat is on this instance, and only `SPUBLISH`es across
 instances. The local channel already exists; the win is real and free **when a
@@ -32,7 +32,7 @@ time, and **keep** it across reconnects.
 The obvious change — "prefer a same-instance waiter, else pair the FIFO front" —
 is a **no-op**. Under immediate pairing the queue holds **at most one waiter at
 any instant**: every `join_or_pair` either removes a waiter (pair) or adds one
-(park), and with distinct wallets it always pairs when *any* waiter is present.
+(park), and with distinct wallets it always pairs when _any_ waiter is present.
 So a joiner never sees two waiters to choose between, and "prefer same-instance"
 never has a second candidate. Co-location stays at chance (~1/N for N
 instances) — exactly today's rate. (The existing concurrency test's "25 parked"
@@ -41,14 +41,14 @@ counts call return values, not simultaneous queue depth; max depth is still 1.)
 The only way to raise co-location above chance is for a joiner to **sometimes
 decline an available cross-instance opponent and wait** for a same-instance one.
 That waiting is the essential ingredient; it is what lets the queue accumulate
-multiple waiters so the preference has teeth. The design axis is simply *how long
-to wait*:
+multiple waiters so the preference has teeth. The design axis is simply _how long
+to wait_:
 
-| Hold T | Behavior | Co-location | Liveness |
-|--------|----------|-------------|----------|
-| T=0 (immediate fallback) | pair with anyone present | chance — **no-op** | fine |
-| T=∞ (local-only) | only ever pair same-instance | guaranteed | **starves** cross-instance-only players |
-| 0<T<∞ (bounded hold) | wait up to T for local, then fall back | **> chance** | fine, +bounded latency |
+| Hold T                   | Behavior                               | Co-location        | Liveness                                |
+| ------------------------ | -------------------------------------- | ------------------ | --------------------------------------- |
+| T=0 (immediate fallback) | pair with anyone present               | chance — **no-op** | fine                                    |
+| T=∞ (local-only)         | only ever pair same-instance           | guaranteed         | **starves** cross-instance-only players |
+| 0<T<∞ (bounded hold)     | wait up to T for local, then fall back | **> chance**       | fine, +bounded latency                  |
 
 Per-instance queue sharding does **not** remove this requirement — it makes the
 local lookup cheaper but a joiner that finds its shard empty must still either
@@ -65,15 +65,15 @@ hold or fall back. So the design is the **bounded hold**.
 2. **Reconnect affinity via LB session stickiness.** The relay sets a per-client
    affinity cookie on the WebSocket handshake; the load balancer routes reconnects
    back to the same instance, so a co-located match that drops returns co-located.
-   The resume protocol (ADR-0010) is unchanged — affinity only influences *which
-   instance* the resumer lands on, never correctness.
+   The resume protocol (ADR-0010) is unchanged — affinity only influences _which
+   instance_ the resumer lands on, never correctness.
 
 3. **Observability.** Per-instance counters for co-located vs. split matches,
    exported on `/metrics`.
 
 Correctness never depends on co-location: a split match still forms and works over
-the existing pub/sub fallback. The hold only delays *which* opponent a player
-gets, never *whether* a valid match forms.
+the existing pub/sub fallback. The hold only delays _which_ opponent a player
+gets, never _whether_ a valid match forms.
 
 ## Component 1 — Bounded-hold matchmaking
 
@@ -172,10 +172,10 @@ disconnect (`ws.rs`). This design preserves that because nothing keys on
   one instance, and match creation + `rebind_match_conn` both stamp this seat with
   `here(state, conn_id)` = the socket's instance, identically for every match. So
   **a socket's own seats never diverge across instances**: all its matches (all
-  games) share instance I. On reconnect they move *together* — the socket re-lands
+  games) share instance I. On reconnect they move _together_ — the socket re-lands
   on some J and `#resumeActive` rebinds every active match to J (transient mix
   during resume, converging to J). There is no per-match "home instance."
-- **Co-location is per *match*, decided by the *opponent's* instance.** With this
+- **Co-location is per _match_, decided by the _opponent's_ instance.** With this
   side pinned to I, match X is co-located iff opponent X's socket is also on I. So
   one socket can be co-located in game A (opponent on I) and split in game B
   (opponent on J) at once — `deliver` routes per target ConnRef, both correct. The
@@ -229,26 +229,26 @@ problem affinity solves.
 
 **Mechanism (chosen): per-browser affinity cookie.**
 
-- *App:* `mp_upgrade` sets `Set-Cookie: aff=<instance_id>` on the WebSocket
+- _App:_ `mp_upgrade` sets `Set-Cookie: aff=<instance_id>` on the WebSocket
   handshake response. Keyed per browser/origin (not per socket), so **all** of that
   browser's game-sockets route to one instance and stop rotating. No other app
   change; resume logic is untouched. (Browsers send stored cookies on the WS
   handshake and honor `Set-Cookie` on the 101 response for same-origin; if the
   relay is a different origin than the webapp the cookie needs `SameSite=None;
-  Secure`. An LB-native stickiness cookie is an equivalent zero-app-change
+Secure`. An LB-native stickiness cookie is an equivalent zero-app-change
   alternative.)
-- *Cold-start race:* two game-sockets opened near-simultaneously before the first
+- _Cold-start race:_ two game-sockets opened near-simultaneously before the first
   `Set-Cookie` lands may be split across instances initially. It self-heals on the
   next reconnect (both converge to the cookie's instance), and fresh matchmaking
   co-location is unaffected (the hold runs per join regardless). Minor, bounded.
-- *Ops (outside this repo):* enable cookie-based stickiness on the load balancer
+- _Ops (outside this repo):_ enable cookie-based stickiness on the load balancer
   so a reconnect carrying `aff` is routed to that instance. Documented as a
   required deployment step.
-- *Why it works:* the cookie pins a browser to **its own** instance, so every
+- _Why it works:_ the cookie pins a browser to **its own** instance, so every
   socket and every reconnect returns there. For a co-located match both players'
   instance is the same → both return → still co-located. For a split match each
   returns to its own → unchanged. It never makes co-location worse.
-- *Failure mode — instance death:* the cookie points at a dead instance; the LB
+- _Failure mode — instance death:_ the cookie points at a dead instance; the LB
   reroutes to a live one; players scatter; resume keeps the match **correct** over
   the Redis fallback (exactly today's behavior). This scatter is inherent — you
   cannot route to a dead pod — and is **not** something this design tries to beat.
@@ -262,7 +262,7 @@ because of the socket-as-affinity-unit invariant (§Component 1):
 - A socket is **one** instance at all times; reconnect re-lands it on a single
   instance and `#resumeActive` rebinds **every** active match there together. They
   move as a unit; they cannot split across instances on this side.
-- All of a socket's **co-located** matches were co-located on the *same* instance —
+- All of a socket's **co-located** matches were co-located on the _same_ instance —
   this socket's. So a single sticky reconnect back to instance I (via the `aff`
   cookie) restores co-location for **all** of them simultaneously. There is no
   match that prefers a different instance: a match whose opponent is elsewhere was
@@ -274,7 +274,7 @@ because of the socket-as-affinity-unit invariant (§Component 1):
   existing resume `evict`/`populate`; this side stays unified on I.
 
 **Rejected / deferred — per-instance addressing + redirect-on-resume.** Precise
-enough to send a player to the *peer's* instance even if the player's own instance
+enough to send a player to the _peer's_ instance even if the player's own instance
 moved, but it requires per-pod public DNS + TLS (the per-task addressing ADR-0009
 deferred) plus an app redirect path and FE redial logic. Its extra precision only
 matters when a player's own instance dies mid-match — which scatters under both
@@ -308,7 +308,7 @@ sums across scraped instances. Incremented in `create_and_announce_match`.
 
 ## Consequences
 
-- **Co-location now scales with traffic *and* the hold.** Under load, same-instance
+- **Co-location now scales with traffic _and_ the hold.** Under load, same-instance
   partners arrive within T and matches co-locate; at low load the hold expires and
   matches form cross-instance (no worse than today, plus up to T latency).
 - **Bounded added matchmaking latency.** A cross-instance match costs up to `T`

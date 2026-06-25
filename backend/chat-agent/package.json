@@ -1,0 +1,26 @@
+{
+  "name": "chat-agent",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "bin": "./dist/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node --import tsx src/main.ts",
+    "start:prod": "node dist/main.js",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test 'src/**/*.test.ts'",
+    "test:e2e": "node --import tsx --test 'e2e/**/*.test.ts'"
+  },
+  "dependencies": {
+    "@mysten/sui": "1.28.1",
+    "dotenv": "^16.6.1",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.43",
+    "@types/ws": "^8.5.12",
+    "tsx": "^4.22.4",
+    "typescript": "^5.9.3"
+  }
+}

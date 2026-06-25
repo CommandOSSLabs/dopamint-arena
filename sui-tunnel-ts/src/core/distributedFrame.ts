@@ -102,6 +102,25 @@ export function encodeFrame<M>(
   return textEncoder.encode(JSON.stringify(obj));
 }
 
+/**
+ * Extract the inner frame JSON bytes from a relay envelope.
+ * Returns `null` if the bytes do not parse as a frame envelope.
+ */
+export function innerFrameJsonFromRawBytes(bytes: Uint8Array): Uint8Array | null {
+  try {
+    const o = JSON.parse(textDecoder.decode(bytes)) as {
+      t?: string;
+      data?: string;
+    };
+    if (o.t === "frame" && typeof o.data === "string") {
+      return textEncoder.encode(o.data);
+    }
+  } catch {
+    // fall through to null
+  }
+  return null;
+}
+
 export function decodeFrame<M>(
   bytes: Uint8Array,
   codec: MoveCodec<M>

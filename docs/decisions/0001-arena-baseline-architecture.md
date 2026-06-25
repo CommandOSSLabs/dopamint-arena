@@ -17,7 +17,7 @@ with ephemeral keys competing against each other** — no wallet popups mid-game
 `sui-tunnel-ts/core/tunnel.ts` is explicit: the per-update hot path is an
 in-memory engine where the process **holding both keypairs co-signs and
 verifies each transition locally** (`OffchainTunnel.selfPlay`). Throughput
-comes from running *many* tunnels, not from a server mediating each move.
+comes from running _many_ tunnels, not from a server mediating each move.
 
 ## Decision
 
@@ -31,7 +31,7 @@ Three planes, with clear ownership of the throughput-critical path:
    what lets it scale to 1M effective TPS.
 
 2. **Control plane = Rust tunnel backend (DOP-170)** — the demo's
-   *measure / prove / display* spine, **never on the per-move path**. Greenfield
+   _measure / prove / display_ spine, **never on the per-move path**. Greenfield
    axum over the Sui Rust SDK. Jobs: (a) **tunnel registry/assignment** by
    indexing on-chain `TunnelCreated`/`Activated`/`Closed` events (opens are the
    user's wallet PTB; the backend observes them); (b) **settlement + proof** —
@@ -49,7 +49,7 @@ Three planes, with clear ownership of the throughput-critical path:
    settlement, and replay protection. The shared client runtime (DOP-181)
    writes key-gen + tunnel-client + action-loop once for all games.
 
-4. **One generic `sui_tunnel` Move package + per-game TS protocols** — *not*
+4. **One generic `sui_tunnel` Move package + per-game TS protocols** — _not_
    per-game Move tunnel modules (the `black_jack::tunnel` reference pattern).
    This preserves the cross-language golden parity and "written once, not seven
    times."
@@ -62,7 +62,7 @@ Three planes, with clear ownership of the throughput-critical path:
   Code constraint (`tunnel.move`): `create`/`create_and_share` take parties as
   params with **no sender check** (a wallet PTB can batch-open N tunnels for
   ephemeral parties), but `deposit_party_a/b` **assert `sender == party`** and
-  activation needs **both** deposits — so a single wallet PTB can *open* but
+  activation needs **both** deposits — so a single wallet PTB can _open_ but
   **cannot fund** tunnels whose parties are the ephemeral keys. Resolutions:
   (A) add a `create_and_fund` entry to the fork that credits both deposits from
   the sender's coins (one wallet PTB opens+funds+activates N tunnels; off-chain
