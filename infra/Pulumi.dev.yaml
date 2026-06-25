@@ -16,6 +16,7 @@ config:
   dopamint:benchmark-max-size: "2"
   dopamint:settler-key:
     secure: AAABAJh+ACo2yp6b8S9CVYe/VuZyCoRpJyWjME2aJxsKOITpdDIPVug3sqII0+sGj6dA6tzjElGaCMModIVyrvvH0OOd6HNQqDB7+g==
+  dopamint:backend-image-tag: 4bde1e4
   # Ollama sidecar for the chat-v2 feature. Disabled with `pulumi config set dopamint:ollama-enabled false`.
   dopamint:ollama-enabled: "true"
   dopamint:ollama-model: qwen2.5:1.8b
