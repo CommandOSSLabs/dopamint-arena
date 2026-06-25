@@ -52,7 +52,7 @@ class RegularPaymentsBot implements GameBot<PaymentsState, PaymentMove> {
 }
 
 export function createRegularPaymentsKit(
-  paymentAmount: bigint = MICRO_UNIT,
+  paymentAmount: bigint,
 ): GameKit<PaymentsState, PaymentMove> {
   const protocol = new PaymentsProtocol();
 
