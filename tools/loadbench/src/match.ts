@@ -2,7 +2,7 @@ import type { Transport } from "../../../sui-tunnel-ts/src/core/distributedTunne
 import { DistributedTunnel } from "../../../sui-tunnel-ts/src/core/distributedTunnel";
 import { makeEndpoint, type CoSignedSettlementWithRoot } from "../../../sui-tunnel-ts/src/core/tunnel";
 import { defaultBackend } from "../../../sui-tunnel-ts/src/core/crypto-native";
-import { createParticipant } from "../../../sui-tunnel-ts/src/core/keys";
+import { nativeParticipant } from "./nativeKeys";
 import { blake2b256 } from "../../../sui-tunnel-ts/src/core/crypto";
 import { toHex, fromHex } from "../../../sui-tunnel-ts/src/core/bytes";
 import { mulberry32 } from "../../../sui-tunnel-ts/src/sim/rng";
@@ -10,7 +10,7 @@ import type { Party } from "../../../sui-tunnel-ts/src/protocol/Protocol";
 import type { MoveCodec } from "../../../sui-tunnel-ts/src/core/distributedFrame";
 import type { GameKit, GameBot, BotContext } from "../../../frontend/src/agent/gameKit";
 
-export type Participant = ReturnType<typeof createParticipant>;
+export type Participant = ReturnType<typeof nativeParticipant>;
 export interface Seats {
   tunnelId: string;
   balances: { a: bigint; b: bigint };
@@ -41,8 +41,8 @@ export function makeSeats(label: string, balances: { a: bigint; b: bigint }, cre
     tunnelId,
     balances,
     createdAt,
-    partyA: createParticipant(`${label}-A`),
-    partyB: createParticipant(`${label}-B`),
+    partyA: nativeParticipant(`${label}-A`),
+    partyB: nativeParticipant(`${label}-B`),
   };
 }
 
