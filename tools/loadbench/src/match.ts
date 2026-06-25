@@ -8,6 +8,7 @@ import { toHex, fromHex } from "../../../sui-tunnel-ts/src/core/bytes";
 import { mulberry32 } from "../../../sui-tunnel-ts/src/sim/rng";
 import type { Protocol, Party } from "../../../sui-tunnel-ts/src/protocol/Protocol";
 import type { MoveCodec } from "../../../sui-tunnel-ts/src/core/distributedFrame";
+import type { GameKit, GameBot, BotContext } from "../../../frontend/src/agent/gameKit";
 
 export type Participant = ReturnType<typeof createParticipant>;
 export interface Seats {
@@ -87,11 +88,12 @@ function proposeAndAwait(dt: DistributedTunnel<unknown, unknown>, move: unknown,
 }
 
 export async function playMatch(
-  protocol: Protocol<unknown, unknown>,
+  kit: GameKit<unknown, unknown>,
   seats: Seats,
   transports: [Transport, Transport],
   opts: { seed?: number; maxMoves?: number } = {},
 ): Promise<MatchResult> {
+  const protocol = kit.protocol;
   const backend = defaultBackend();
   const aEnd = makeEndpoint(backend, seats.partyA.address, seats.partyA.keyPair, true);
   const aOpp = makeEndpoint(backend, seats.partyB.address, seats.partyB.keyPair, false);
@@ -104,26 +106,41 @@ export async function playMatch(
   const dtB = new DistributedTunnel(protocol, { tunnelId: seats.tunnelId, self: bEnd, opponent: bOpp, selfParty: "B", moveCodec: bigintSafeCodec }, tB, seats.balances);
   const seatOf: Record<Party, DistributedTunnel<unknown, unknown>> = { A: dtA, B: dtB };
 
-  const rng = mulberry32(opts.seed ?? 1);
+  const seed = opts.seed ?? 1;
+  const ctx: BotContext = {
+    rngForSeat: (seat) => mulberry32(seed ^ (seat === "A" ? 0x9e3779b9 : 0x85ebca77)),
+  };
+  const botOf: Record<Party, GameBot<unknown, unknown>> = {
+    A: kit.createBot("A", ctx),
+    B: kit.createBot("B", ctx),
+  };
+
   const maxMoves = opts.maxMoves ?? 1000;
   const latenciesMs: number[] = [];
   let moves = 0;
   let ts = seats.createdAt;
   const order: Party[] = ["A", "B"];
-  while (moves < maxMoves && !protocol.isTerminal(dtA.state)) {
-    let progressed = false;
-    for (const p of order) {
-      if (protocol.isTerminal(dtA.state)) break;
-      const dt = seatOf[p];
-      const move = protocol.randomMove?.(dt.state, p, rng) ?? null;
-      if (move === null) continue;
-      ts += 1n;
-      latenciesMs.push(await proposeAndAwait(dt, move, ts));
-      moves++;
-      progressed = true;
-      if (moves >= maxMoves) break;
+  try {
+    while (moves < maxMoves && !protocol.isTerminal(dtA.state)) {
+      let progressed = false;
+      for (const p of order) {
+        if (protocol.isTerminal(dtA.state)) break;
+        const dt = seatOf[p];
+        const move = botOf[p].plan(dt.state);
+        if (move === null) continue;
+        ts += 1n;
+        latenciesMs.push(await proposeAndAwait(dt, move, ts));
+        botOf[p].confirm(dt.state, move);
+        moves++;
+        progressed = true;
+        if (moves >= maxMoves) break;
+      }
+      if (!progressed) break;
     }
-    if (!progressed) break;
+  } catch (e) {
+    botOf.A.abort();
+    botOf.B.abort();
+    throw e;
   }
 
   const root = blake2b256(new TextEncoder().encode(`dopamint:${seats.tunnelId}`));
