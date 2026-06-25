@@ -49,6 +49,10 @@ const PENCIL_CURSOR = `url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.or
 const STROKE_GAP_CELLS = 4;
 /** Stroke width (cells) for agent art; the human's width tracks the brush-size selector. */
 const AGENT_STROKE_SIZE = 1.7;
+/** Synced-erase stroke width multiplier (× brush). The eraser co-signs only a centerline
+ *  (like the pen), so the cleared swath comes from a FAT render — matching the local eraser
+ *  nib (3× brush) so a remote erase covers the same area, with pen-level cell volume. */
+const ERASER_STROKE_SIZE = 3;
 /** Cap on retained finalized strokes — constant memory for an endless wall (oldest evicted). */
 const MAX_STROKES = 12_000;
 
@@ -394,9 +398,12 @@ export function WorldCanvas({
         gx + 0.5,
         gy + 0.5,
         cell.color,
-        // Bot stroke width follows YOUR brush size (render-only — no extra co-signed cells):
-        // pick a fatter nib and the bots draw thicker too.
-        AGENT_STROKE_SIZE * brushSizeRef.current,
+        // Render-only width (no extra co-signed cells). Ink follows YOUR brush size; an erase
+        // renders FAT (its full nib) so a centerline-only co-signed erase still clears the
+        // whole swath on the peer — erase syncs like draw, just thicker.
+        (cell.color === ERASER_COLOR
+          ? ERASER_STROKE_SIZE
+          : AGENT_STROKE_SIZE) * brushSizeRef.current,
         cell.seq,
       );
     }
@@ -717,11 +724,13 @@ export function WorldCanvas({
 
   // Stamp the brush footprint (an N×N block) centered on a cell. Each cell is an
   // independent dedup'd co-signed move, so a bigger brush is just more cells/TPS.
-  // The eraser stamps a WIDER footprint to match its fat nib (live size = 3×brush): the
-  // co-signed cells must cover the same swath the local stroke clears, or the opponent only
-  // sees a thin erase from the narrow centerline (a wide local erase → thin remote erase).
+  // The eraser co-signs the SAME centerline footprint as the pen (NOT a fat ×3 block): a
+  // wide erase would otherwise emit ~9× the cells and overflow the turn-based batch on a
+  // drag, dropping its tail (a remote erase that's patchy past the first stretch). The full
+  // erase swath comes from rendering the erase stroke WIDE (see {@link ERASER_STROKE_SIZE}),
+  // not from extra cells — so erase syncs exactly like draw, just thicker.
   const stampBrush = (center: GlobalCell) => {
-    const n = brushSizeRef.current * (erasingRef.current ? 3 : 1);
+    const n = brushSizeRef.current;
     const off = Math.floor(n / 2);
     for (let dy = 0; dy < n; dy++) {
       for (let dx = 0; dx < n; dx++) {
