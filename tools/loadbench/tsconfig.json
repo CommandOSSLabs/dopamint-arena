@@ -1,7 +1,15 @@
 {
   "compilerOptions": {
     "target": "ESNext", "module": "ESNext", "moduleResolution": "bundler",
-    "strict": true, "skipLibCheck": true, "types": ["bun-types"], "allowJs": false
+    "strict": true, "skipLibCheck": true, "types": ["bun-types"], "allowJs": false,
+    "baseUrl": ".",
+    "paths": {
+      "sui-tunnel-ts": ["../../sui-tunnel-ts/src/index.ts"],
+      "sui-tunnel-ts/*": ["../../sui-tunnel-ts/src/*"],
+      "@/*": ["../../frontend/src/*"],
+      "@ttt/shared": ["../../frontend/src/games/ticTacToe/packages/shared/src/index.ts"],
+      "@ttt/shared/*": ["../../frontend/src/games/ticTacToe/packages/shared/src/*"]
+    }
   },
   "include": ["src"]
 }
