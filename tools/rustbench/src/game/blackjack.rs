@@ -288,3 +288,62 @@ mod tests {
         assert!(apply_move(&s, BjMove::Bet { amount: 25 }, Party::B).is_err());
     }
 }
+
+/// loadbench `BlackjackBot.plan`: deterministic basic strategy. Returns `None` when it
+/// is not `seat`'s turn. Bet = the first `BET_OPTIONS` entry within `[MIN_BET, max_bet]`
+/// (always 25 when affordable); player hits while `hand_value < 17`, else stands; dealer
+/// stands. Mirrors `frontend/src/agent/games/blackjack/kit.ts::BlackjackBot`.
+pub fn plan(s: &BjState, seat: Party) -> Option<BjMove> {
+    if is_terminal(s) { return None; }
+    if actor_for(s) != seat { return None; }
+    match s.phase {
+        Phase::RoundOver => {
+            let cap = max_bet(s);
+            let amount = BET_OPTIONS.iter().copied().find(|&o| o >= MIN_BET && o <= cap).unwrap_or(MIN_BET);
+            // fixedBetMove clamps to [MIN_BET, cap]; amount is already in range when cap >= MIN_BET.
+            let amount = amount.clamp(MIN_BET, cap);
+            Some(BjMove::Bet { amount })
+        }
+        Phase::Player => {
+            if seat != player_party(s.round) { return None; }
+            Some(if hand_value(&s.player_hand) < 17 { BjMove::Hit } else { BjMove::Stand })
+        }
+        Phase::Dealer => {
+            if seat != dealer_party(s.round) { return None; }
+            Some(BjMove::Stand)
+        }
+    }
+}
+
+#[cfg(test)]
+mod bot_tests {
+    use super::*;
+
+    #[test]
+    fn round_over_player_bets_min_option() {
+        let s = initial_state(200, 200);
+        // round 1 player is A; A bets 25 (first BET_OPTIONS entry that fits).
+        assert!(matches!(plan(&s, Party::A), Some(BjMove::Bet { amount: 25 })));
+        // B is not the next player -> None.
+        assert!(plan(&s, Party::B).is_none());
+    }
+
+    #[test]
+    fn player_hits_below_17_then_stands() {
+        let s = initial_state(200, 200);
+        let s1 = apply_move(&s, BjMove::Bet { amount: 25 }, Party::A).unwrap();
+        // player hand [10,7] = 17 -> stand; dealer's seat plans None here.
+        assert!(matches!(plan(&s1, Party::A), Some(BjMove::Stand)));
+        assert!(plan(&s1, Party::B).is_none());
+    }
+
+    #[test]
+    fn dealer_only_stands() {
+        let mut s = initial_state(200, 200);
+        s = apply_move(&s, BjMove::Bet { amount: 25 }, Party::A).unwrap();
+        s = apply_move(&s, BjMove::Stand, Party::A).unwrap(); // -> dealer phase
+        let dealer = dealer_party(s.round);
+        assert!(matches!(plan(&s, dealer), Some(BjMove::Stand)));
+        assert!(plan(&s, dealer.other()).is_none());
+    }
+}
