@@ -4,7 +4,6 @@ import { WorldCanvas } from "./WorldCanvas";
 import {
   FloatingToolbar,
   AutoToggle,
-  LiveReadout,
   MostPainted,
   type ToolId,
 } from "./FloatingToolbar";
@@ -96,29 +95,21 @@ export function CanvasView() {
         erasing={tool === "erase"}
       />
 
-      {/* One consolidated top bar: the toolbar + Auto toggle share row 1; the live
-          Bot-vs-Bot · TPS · View readout sits on row 2 beneath. Most-painted stays a corner
-          card. The bar is click-through — only its panels catch pointer events, so the gaps
-          pass through to the wall (you can still paint/pan under it). */}
+      {/* Compact top bar — ONE row: the toolbar at the left, the Auto toggle at the right.
+          The live TPS · View readout lives in the Most-painted card (bottom-right) so the
+          bar stays a thin strip and the canvas is clear. Click-through; panels catch events. */}
       <div style={topBarStyle}>
         <div style={topRowStyle}>
           {toolbar}
           <AutoToggle auto={engine.auto} onToggleAuto={engine.toggleAuto} />
         </div>
-        <div style={readoutSlotStyle}>
-          <LiveReadout
-            auto={engine.auto}
-            tps={tps}
-            onViewNext={engine.viewNextAgent}
-            game={engine.game}
-            movesThisGame={engine.movesThisGame}
-            movesPerGame={engine.movesPerGame}
-            centered
-          />
-        </div>
       </div>
 
-      <MostPainted painters={engine.painters} />
+      <MostPainted
+        painters={engine.painters}
+        tps={tps}
+        onViewNext={engine.viewNextAgent}
+      />
     </div>
   );
 }
@@ -130,33 +121,30 @@ export function CanvasView() {
 const topBarStyle: CSSProperties = {
   position: "absolute",
   top: 14,
-  left: "50%",
-  transform: "translateX(-50%)",
+  // Anchored to the RIGHT of the window-owned "← Menu" button (top-left) so the bar never
+  // overlaps it; spans to the right edge so the toolbar lays out on one row (no shrink-wrap
+  // pile) with the Auto pill pushed to the far right.
+  left: 112,
+  right: 14,
   zIndex: 60,
   display: "flex",
   flexDirection: "column",
-  alignItems: "center",
+  alignItems: "flex-start",
   gap: 8,
-  maxWidth: "calc(100% - 16px)",
   pointerEvents: "none",
 };
 
-/** Row 1 — the toolbar island + the Auto pill, wrapping to stay one tidy strip at any
- *  width. Click-through between panels; each panel re-enables its own pointer events. */
+/** The single bar row — toolbar at the left, Auto toggle pushed to the right; wraps only
+ *  when truly out of room. Click-through; the toolbar island + the Auto button each catch
+ *  their own pointer events (the Auto button sets pointer-events:auto so it's always clickable). */
 const topRowStyle: CSSProperties = {
   display: "flex",
   alignItems: "flex-start",
-  justifyContent: "center",
+  justifyContent: "space-between",
   flexWrap: "wrap",
   gap: 8,
-  maxWidth: "100%",
+  width: "100%",
   pointerEvents: "none",
-};
-
-/** Row 2 — the live readout; re-enables pointer events inside the click-through bar. */
-const readoutSlotStyle: CSSProperties = {
-  maxWidth: "100%",
-  pointerEvents: "auto",
 };
 
 /** Derive a live throughput number from the monotonic co-signed paint count via a
