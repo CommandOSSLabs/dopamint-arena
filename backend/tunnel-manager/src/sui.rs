@@ -324,6 +324,23 @@ impl SuiSettler {
         Ok((tx_b64, sig.to_base64()))
     }
 
+    /// Decode + validate a base64 tx KIND against the SAME anti-abuse allowlist the settler path
+    /// uses, and return its de-duplicated `pkg::module::fn` move-call targets — for Enoki's
+    /// `allowedMoveCallTargets`. The sponsor handler calls this FIRST so an off-allowlist tx is
+    /// rejected before any provider is asked to pay (ADR-0014). Pure (no I/O); the settler's
+    /// `sponsor_open_fund` re-validates independently, so this never weakens that path.
+    pub fn validate_kind(&self, kind_b64: &str) -> anyhow::Result<Vec<String>> {
+        let kind_bytes = base64::engine::general_purpose::STANDARD
+            .decode(kind_b64.trim())
+            .context("txKindBytes is not valid base64")?;
+        validate_kind_inner(
+            &kind_bytes,
+            self.package_id,
+            &self.coin_type,
+            self.agent_allowance_package_id,
+        )
+    }
+
     /// Dry-run the built close tx so the real `close_cooperative_with_root` runs (re-verifying
     /// both seat sigs against the on-chain pubkeys and the balance sum) WITHOUT executing — an
     /// invalid settlement is rejected here, before any gas is sponsored (ADR-0007). The seat sigs
@@ -810,6 +827,51 @@ fn validate_sponsorable_inner(
     Ok(())
 }
 
+/// Decode a sponsorable tx KIND (raw bytes), run the SAME allowlist as the settler path
+/// (`validate_sponsorable_inner`), and collect its move-call targets `pkg::module::fn`,
+/// de-duplicated, first-seen order. Used by `SuiSettler::validate_kind` to gate BOTH providers and
+/// to feed Enoki's `allowedMoveCallTargets`. Reusing `validate_sponsorable_inner` keeps the single
+/// source of truth for what is sponsorable — the Enoki path can never sponsor more than the settler.
+fn validate_kind_inner(
+    kind_bytes: &[u8],
+    package_id: Address,
+    coin_type: &TypeTag,
+    agent_allowance_pkg: Option<Address>,
+) -> anyhow::Result<Vec<String>> {
+    let kind: TransactionKind = bcs::from_bytes(kind_bytes).context("decode tx kind")?;
+    let ptb = match &kind {
+        TransactionKind::ProgrammableTransaction(ptb) => ptb,
+        _ => anyhow::bail!("only programmable transactions can be sponsored"),
+    };
+    validate_sponsorable_inner(ptb, package_id, coin_type, agent_allowance_pkg)?;
+    let mut targets: Vec<String> = Vec::new();
+    for cmd in &ptb.commands {
+        if let Command::MoveCall(mc) = cmd {
+            let target = format!(
+                "{}::{}::{}",
+                mc.package,
+                mc.module.as_str(),
+                mc.function.as_str()
+            );
+            if !targets.contains(&target) {
+                targets.push(target);
+            }
+        }
+    }
+    Ok(targets)
+}
+
+/// Test-only shim: extract targets with NO example packages configured (mirrors the
+/// `validate_sponsorable` shim shape), so existing PTB fixtures drive these tests unchanged.
+#[cfg(test)]
+fn validate_kind_targets(
+    kind_bytes: &[u8],
+    package_id: Address,
+    coin_type: &TypeTag,
+) -> anyhow::Result<Vec<String>> {
+    validate_kind_inner(kind_bytes, package_id, coin_type, None)
+}
+
 /// Decode the settler's ed25519 secret: 32 raw bytes, or 33 with the Sui ed25519 flag
 /// (`0x00`) prefix, base64-encoded.
 fn load_ed25519(b64: &str) -> anyhow::Result<Ed25519PrivateKey> {
@@ -1269,6 +1331,62 @@ mod tests {
         .unwrap_err()
         .to_string();
         assert!(err.contains("refuses"), "got: {err}");
+    }
+
+    // validate_kind extracts the de-duplicated move-call targets from a valid open/fund KIND, in the
+    // `pkg::module::fn` form Enoki's allowedMoveCallTargets wants (ADR-0014). The duplicate `create`
+    // proves de-duplication; the framework share proves cross-package targets are included.
+    #[test]
+    fn validate_kind_extracts_dedup_targets() {
+        let pkg = Address::from_str("0xabc").unwrap();
+        let framework = Address::from_str(SUI_FRAMEWORK_ADDRESS).unwrap();
+        let share = Command::MoveCall(sui_sdk_types::MoveCall {
+            package: framework,
+            module: Identifier::new("transfer").unwrap(),
+            function: Identifier::new("public_share_object").unwrap(),
+            type_arguments: vec![],
+            arguments: vec![],
+        });
+        let kind = TransactionKind::ProgrammableTransaction(ptb(vec![
+            tunnel_call(pkg, "create"),
+            tunnel_call(pkg, "deposit_party_a"),
+            tunnel_call(pkg, "create"), // duplicate — must collapse to one target
+            share,
+        ]));
+        let bytes = bcs::to_bytes(&kind).unwrap();
+        let targets = validate_kind_targets(&bytes, pkg, &sui_coin()).unwrap();
+        assert_eq!(
+            targets,
+            vec![
+                format!("{pkg}::tunnel::create"),
+                format!("{pkg}::tunnel::deposit_party_a"),
+                format!("{framework}::transfer::public_share_object"),
+            ]
+        );
+    }
+
+    // A KIND that fails the allowlist (foreign package) returns Err — targets are never produced for
+    // an unsponsorable tx, so neither provider can be asked to pay for it.
+    #[test]
+    fn validate_kind_rejects_unsponsorable() {
+        let pkg = Address::from_str("0xabc").unwrap();
+        let evil = Command::MoveCall(sui_sdk_types::MoveCall {
+            package: Address::from_str("0xdead").unwrap(),
+            module: Identifier::new("rug").unwrap(),
+            function: Identifier::new("drain").unwrap(),
+            type_arguments: vec![],
+            arguments: vec![],
+        });
+        let kind = TransactionKind::ProgrammableTransaction(ptb(vec![evil]));
+        let bytes = bcs::to_bytes(&kind).unwrap();
+        assert!(validate_kind_targets(&bytes, pkg, &sui_coin()).is_err());
+    }
+
+    // Bytes that are not a decodable tx KIND are rejected at decode, never sponsored.
+    #[test]
+    fn validate_kind_rejects_undecodable_bytes() {
+        let pkg = Address::from_str("0xabc").unwrap();
+        assert!(validate_kind_targets(&[0xff, 0xff, 0xff], pkg, &sui_coin()).is_err());
     }
 
     // The indexer must lift payout + transcript root + tx digest out of a real suix_queryEvents

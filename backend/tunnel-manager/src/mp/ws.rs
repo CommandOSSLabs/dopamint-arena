@@ -1250,6 +1250,7 @@ mod tests {
             mp: mp.clone(),
             bus: bus.clone(),
             settler: crate::sui::SuiSettler::noop(),
+            enoki: None,
             walrus: crate::walrus::WalrusClient::noop(),
             actions: crate::stats_counter::LocalActionCounter::default(),
             pair_hold_ms: 10_000, // long hold — neither expires via the join path
@@ -1392,6 +1393,7 @@ mod tests {
             mp,
             bus,
             settler: crate::sui::SuiSettler::noop(),
+            enoki: None,
             walrus: crate::walrus::WalrusClient::noop(),
             actions: crate::stats_counter::LocalActionCounter::default(),
             pair_hold_ms,

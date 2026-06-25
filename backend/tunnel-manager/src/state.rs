@@ -9,6 +9,9 @@ pub struct AppState {
     pub mp: std::sync::Arc<dyn crate::store::MpStore>,
     pub bus: std::sync::Arc<dyn crate::store::Bus>,
     pub settler: crate::sui::SuiSettler,
+    /// Enoki sponsored-tx client when configured (ADR-0014): the primary gas sponsor, with
+    /// `settler` as the fallback. `None` = settler-only.
+    pub enoki: Option<crate::enoki::EnokiClient>,
     pub walrus: crate::walrus::WalrusClient,
     /// Per-instance move counter; flushed to `control` once/sec (see stats_counter).
     pub actions: crate::stats_counter::LocalActionCounter,
@@ -36,6 +39,7 @@ impl AppState {
             mp: Arc::new(InMemoryMpStore::default()),
             bus: Arc::new(LocalBus::new("test-instance".to_owned())),
             settler: crate::sui::SuiSettler::noop(),
+            enoki: None,
             walrus: crate::walrus::WalrusClient::noop(),
             actions: crate::stats_counter::LocalActionCounter::default(),
             pair_hold_ms: 750,

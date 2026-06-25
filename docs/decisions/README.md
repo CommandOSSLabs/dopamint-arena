@@ -49,3 +49,7 @@ that depends on them. An ADR captures the decision and the reasoning so the
   `Coin<T>`, so concurrent reload opens stop equivocating. Sponsor allowlist gains
   `redeem_funds`/`send_funds` + a mandatory `WithdrawFrom::Sender` input guard
   (anti settler-drain). Behind `VITE_MTPS_ADDRESS_BALANCE`; no Move redeploy.
+- [0014](0014-enoki-sponsor-with-settler-fallback.md) — Enoki sponsored
+  transactions as the primary gas source with the settler wallet as fallback:
+  validate-first, `provider`-tagged response, stateless two-call Enoki execute,
+  settler path unchanged. Refines ADR-0009.
