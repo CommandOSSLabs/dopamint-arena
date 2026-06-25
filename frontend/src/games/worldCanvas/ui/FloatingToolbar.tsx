@@ -5,7 +5,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
-import { PALETTE, WC, FONT_DISPLAY, FONT_MONO, shortAddress } from "./tokens";
+import { PALETTE, WC, FONT_MONO, shortAddress } from "./tokens";
 import type { PainterInfo } from "../useWorldCanvasOnchain";
 
 /** The three lean tools: freehand draw, eraser (paints white), and pan/hand. */
@@ -50,7 +50,10 @@ export function FloatingToolbar({
   collapse?: boolean;
 }) {
   return (
-    <div style={stacked ? { ...islandStyle, ...islandStackedStyle } : islandStyle}>
+    <div
+      className="sketch-stroke sketch-panel"
+      style={stacked ? { ...islandStyle, ...islandStackedStyle } : islandStyle}
+    >
       <div style={toolGroupStyle}>
         <ToolButton
           label="Draw"
@@ -121,15 +124,13 @@ export function FloatingToolbar({
               aria-label={`Brush size ${n}`}
               aria-pressed={on}
               onClick={() => onBrushSize(n)}
+              className={`sketch-btn ${on ? "sketch-btn--go" : "sketch-btn--ghost"}`}
               style={{
-                width: 28,
-                height: 28,
-                borderRadius: 0,
+                width: 30,
+                height: 30,
+                padding: 0,
                 display: "grid",
                 placeItems: "center",
-                cursor: "pointer",
-                border: "none",
-                background: on ? WC.accentFill : "transparent",
               }}
             >
               <span
@@ -138,7 +139,7 @@ export function FloatingToolbar({
                   width: 4 + n * 3,
                   height: 4 + n * 3,
                   borderRadius: "50%",
-                  background: on ? WC.accent : WC.muted,
+                  background: on ? "var(--sketch-accent)" : "var(--sketch-ink-soft)",
                 }}
               />
             </button>
@@ -193,7 +194,7 @@ function ColorPalettePopover({
       {open && (
         <>
           <div style={popoverBackdropStyle} onClick={() => setOpen(false)} />
-          <div style={popoverStyle}>
+          <div className="sketch-stroke sketch-panel" style={popoverStyle}>
             {SWATCHES.map((idx) => (
               <button
                 key={idx}
@@ -275,6 +276,7 @@ export function AutoToggle({
           ? "Two bots are co-painting — click to take the wheel (paint seat A)"
           : "You're painting seat A — click to hand back to the bots (watch)"
       }
+      className="sketch-stroke sketch-panel"
       style={autoToggleStyle}
     >
       <span style={autoToggleLabelStyle}>
@@ -314,6 +316,7 @@ export function LiveReadout({
 }) {
   return (
     <div
+      className="sketch-stroke sketch-panel"
       style={
         centered ? { ...readoutStyle, justifyContent: "center" } : readoutStyle
       }
@@ -341,7 +344,7 @@ export function LiveReadout({
         type="button"
         onClick={onViewNext}
         title="Jump the camera to the next bot"
-        style={pillButtonStyle}
+        className="sketch-btn sketch-btn--ghost"
       >
         View
       </button>
@@ -365,8 +368,16 @@ export function MostPainted({
   const top = useTopPainters(painters, 5);
   if (top.length === 0) return null;
   return (
-    <div style={mostPaintedStyle}>
-      <div style={mostPaintedHeaderStyle}>
+    <div className="sketch-stroke sketch-panel" style={mostPaintedStyle}>
+      <div
+        className="sketch-eyebrow"
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          marginBottom: 3,
+        }}
+      >
         <BrushIcon size={12} />
         Most painted
       </div>
@@ -458,7 +469,6 @@ function ToolButton({
   onClick: () => void;
   children: ReactNode;
 }) {
-  const [hover, setHover] = useState(false);
   return (
     <button
       type="button"
@@ -466,19 +476,14 @@ function ToolButton({
       aria-label={label}
       aria-pressed={active}
       onClick={onClick}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
+      className={`sketch-btn ${active ? "sketch-btn--go" : "sketch-btn--ghost"}`}
       style={{
         width: 34,
         height: 34,
-        borderRadius: 0,
+        padding: 0,
         display: "grid",
         placeItems: "center",
-        cursor: "pointer",
-        border: "none",
-        color: active ? WC.accent : hover ? WC.text : WC.muted,
-        background: active ? WC.accentFill : hover ? WC.softFill : "transparent",
-        transition: "background .1s, color .1s",
+        color: active ? "var(--sketch-accent)" : "var(--sketch-ink)",
       }}
     >
       {children}
@@ -514,14 +519,7 @@ const islandStyle: CSSProperties = {
   gap: 6,
   rowGap: 6,
   maxWidth: "calc(100% - 16px)",
-  padding: 6,
-  borderRadius: 0,
-  background: WC.toolbar,
-  border: `1px solid ${WC.toolbarBorder}`,
-  boxShadow: WC.glow,
-  backdropFilter: "blur(12px)",
-  WebkitBackdropFilter: "blur(12px)",
-  fontFamily: FONT_DISPLAY,
+  padding: 8,
 };
 
 /** Stacked override: drop the absolute float so the parent's top bar lays the island out
@@ -572,7 +570,6 @@ const autoWrapStyle: CSSProperties = {
   alignItems: "flex-end",
   gap: 8,
   maxWidth: "calc(100% - 28px)",
-  fontFamily: FONT_DISPLAY,
 };
 
 /** The collapsed current-color/background swatch shown in the narrow toolbar — tapping it
@@ -615,12 +612,6 @@ const popoverStyle: CSSProperties = {
   gridTemplateColumns: "repeat(3, auto)",
   gap: 6,
   padding: 8,
-  borderRadius: 0,
-  background: WC.toolbar,
-  border: `1px solid ${WC.toolbarBorder}`,
-  boxShadow: WC.glow,
-  backdropFilter: "blur(12px)",
-  WebkitBackdropFilter: "blur(12px)",
 };
 
 /** The single Auto toggle pill (faded glass): a label + a sliding switch — "take the
@@ -631,15 +622,10 @@ const autoToggleStyle: CSSProperties = {
   gap: 10,
   height: 40,
   maxWidth: "100%",
-  padding: "0 12px",
-  borderRadius: 0,
-  border: `1px solid ${WC.glassBorder}`,
+  padding: "0 14px",
   cursor: "pointer",
-  background: WC.glass,
-  boxShadow: WC.glow,
-  backdropFilter: "blur(8px)",
-  WebkitBackdropFilter: "blur(8px)",
-  fontFamily: FONT_DISPLAY,
+  border: "none",
+  background: "transparent",
 };
 
 const autoToggleLabelStyle: CSSProperties = {
@@ -684,17 +670,10 @@ const readoutStyle: CSSProperties = {
   rowGap: 4,
   minHeight: 36,
   maxWidth: "100%",
-  padding: "5px 12px",
-  borderRadius: 0,
+  padding: "5px 14px",
   fontSize: 12.5,
   fontWeight: 700,
   color: WC.text,
-  fontFamily: FONT_MONO,
-  background: WC.glass,
-  border: `1px solid ${WC.glassBorder}`,
-  boxShadow: WC.glow,
-  backdropFilter: "blur(8px)",
-  WebkitBackdropFilter: "blur(8px)",
 };
 
 const readoutDividerStyle: CSSProperties = {
@@ -705,20 +684,8 @@ const readoutDividerStyle: CSSProperties = {
   flex: "0 0 auto",
 };
 
-const pillButtonStyle: CSSProperties = {
-  height: 26,
-  padding: "0 10px",
-  borderRadius: 0,
-  border: `1px solid ${WC.glassBorder}`,
-  cursor: "pointer",
-  fontFamily: "inherit",
-  fontSize: 12,
-  fontWeight: 700,
-  color: WC.text,
-  background: WC.softFill,
-};
-
-/** Bottom-right "most painted" leaderboard card (faded glass, lightweight). */
+/** Bottom-right "most painted" leaderboard card — positioning only; the ink-stroke
+ *  frame + Gochi Hand text come from the `.sketch-stroke .sketch-panel` skin. */
 const mostPaintedStyle: CSSProperties = {
   position: "absolute",
   right: 14,
@@ -729,28 +696,7 @@ const mostPaintedStyle: CSSProperties = {
   display: "flex",
   flexDirection: "column",
   gap: 3,
-  padding: "9px 11px",
-  borderRadius: 0,
-  background: WC.glass,
-  border: `1px solid ${WC.glassBorder}`,
-  boxShadow: WC.glow,
-  backdropFilter: "blur(8px)",
-  WebkitBackdropFilter: "blur(8px)",
-  fontFamily: FONT_DISPLAY,
-};
-
-// Arena `.wal-eyebrow` language: mono, uppercase, wide tracking, muted ink.
-const mostPaintedHeaderStyle: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 6,
-  marginBottom: 3,
-  fontSize: 10,
-  fontWeight: 700,
-  letterSpacing: ".14em",
-  textTransform: "uppercase",
-  color: WC.muted,
-  fontFamily: FONT_MONO,
+  padding: "11px 13px",
 };
 
 const leaderRowStyle: CSSProperties = {

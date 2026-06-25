@@ -9,7 +9,7 @@ import {
   MostPainted,
   type ToolId,
 } from "./FloatingToolbar";
-import { WC, FONT_DISPLAY, ERASER_COLOR } from "./tokens";
+import { WC, ERASER_COLOR } from "./tokens";
 
 /** Below this container width the centered toolbar and the top-right arena cluster can't
  *  float side-by-side without overlapping, so they reflow into a stacked top bar instead:
@@ -87,7 +87,6 @@ export function CanvasView() {
         position: "relative",
         overflow: "hidden",
         background: WC.bg,
-        fontFamily: FONT_DISPLAY,
       }}
     >
       <WorldCanvas

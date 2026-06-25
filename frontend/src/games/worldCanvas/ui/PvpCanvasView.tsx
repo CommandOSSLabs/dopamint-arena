@@ -8,7 +8,7 @@ import {
   type AgentMarker,
   type CanvasFocus,
 } from "../useWorldCanvasOnchain";
-import { WC, FONT_DISPLAY, ERASER_COLOR } from "./tokens";
+import { WC, ERASER_COLOR } from "./tokens";
 
 const CHUNK = 256;
 /** Fixed canvas backdrop (matches solo) — Excalidraw-style white, passed to WorldCanvas so
@@ -61,17 +61,21 @@ function Status({ m }: { m: ReturnType<typeof usePvpWorldCanvas> }) {
             : "Connecting…";
   const busy = m.status === "matching" || m.status === "funding";
   return (
-    <div style={wrapStyle}>
-      <div style={cardStyle}>
+    <div className="sketch-welcome">
+      <div className="sketch-welcome__card sketch-panel sketch-stroke">
         {busy && <div style={spinnerStyle} />}
-        <div style={titleStyle}>{text}</div>
-        <div style={subStyle}>
+        <div className="sketch-title">{text}</div>
+        <p className="sketch-note">
           Online PvP — co-draw one shared canvas with another human over a genuine
           2-party tunnel. Open this game in a second browser and pick “Paint vs Player”
           to match.
-        </div>
+        </p>
         {m.status === "error" && (
-          <button type="button" style={retryStyle} onClick={m.findMatch}>
+          <button
+            type="button"
+            className="sketch-btn sketch-btn--go"
+            onClick={m.findMatch}
+          >
             Try again
           </button>
         )}
@@ -217,7 +221,7 @@ function Board({ m }: { m: ReturnType<typeof usePvpWorldCanvas> }) {
 
       {/* PvP control (bottom-right) — one slim bar: Auto toggle · clickable You/Opp chips
           (each jumps the camera to that painter's latest cell). */}
-      <div style={controlBarStyle}>
+      <div className="sketch-stroke sketch-panel" style={controlBarStyle}>
         <button
           type="button"
           role="switch"
@@ -278,19 +282,13 @@ function ParticipantChip({
   title: string;
   onClick: () => void;
 }) {
-  const [hover, setHover] = useState(false);
   return (
     <button
       type="button"
       onClick={onClick}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
       title={title}
-      style={{
-        ...participantChipStyle,
-        background: hover ? WC.softFillHover : WC.softFill,
-        borderColor: hover ? WC.hairline : WC.glassBorder,
-      }}
+      className="sketch-btn sketch-btn--ghost"
+      style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
     >
       <SeatDot tint={tint} />
       {label}
@@ -312,25 +310,7 @@ function SeatDot({ tint }: { tint: string }) {
   );
 }
 
-const wrapStyle: CSSProperties = {
-  height: "100%",
-  width: "100%",
-  display: "grid",
-  placeItems: "center",
-  background:
-    "radial-gradient(120% 100% at 50% -10%, color-mix(in srgb, var(--primary) 8%, var(--background)) 0%, var(--background) 60%)",
-  fontFamily: FONT_DISPLAY,
-};
-const cardStyle: CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  alignItems: "center",
-  gap: 12,
-  textAlign: "center",
-  color: WC.text,
-  maxWidth: 380,
-  padding: 24,
-};
+/** The pre-game spinner — a thin ring spun in the brand violet (literal accent ok here). */
 const spinnerStyle: CSSProperties = {
   width: 28,
   height: 28,
@@ -339,27 +319,12 @@ const spinnerStyle: CSSProperties = {
   borderTopColor: WC.accent,
   animation: "spin 0.9s linear infinite",
 };
-const titleStyle: CSSProperties = { fontSize: 18, fontWeight: 800, color: WC.text };
-const subStyle: CSSProperties = { fontSize: 13, lineHeight: 1.55, color: WC.muted };
-const retryStyle: CSSProperties = {
-  marginTop: 6,
-  height: 38,
-  padding: "0 18px",
-  borderRadius: 0,
-  border: "none",
-  cursor: "pointer",
-  fontWeight: 800,
-  color: "var(--primary-foreground)",
-  background: WC.accent,
-  boxShadow: WC.glow,
-};
 const boardWrapStyle: CSSProperties = {
   height: "100%",
   width: "100%",
   position: "relative",
   overflow: "hidden",
   background: WC.bg,
-  fontFamily: FONT_DISPLAY,
 };
 const controlBarStyle: CSSProperties = {
   position: "absolute",
@@ -369,17 +334,11 @@ const controlBarStyle: CSSProperties = {
   display: "flex",
   alignItems: "center",
   gap: 8,
-  height: 34,
-  padding: "0 10px",
-  borderRadius: 0,
-  fontFamily: FONT_DISPLAY,
+  height: 36,
+  padding: "0 12px",
   fontSize: 12,
   fontWeight: 700,
   color: WC.text,
-  background: WC.glass,
-  border: `1px solid ${WC.glassBorder}`,
-  backdropFilter: "blur(8px)",
-  boxShadow: WC.glow,
 };
 const ctlButtonStyle: CSSProperties = {
   display: "flex",
@@ -394,22 +353,6 @@ const ctlButtonStyle: CSSProperties = {
   fontSize: 12,
   fontWeight: 700,
   color: WC.text,
-};
-const participantChipStyle: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 5,
-  height: 24,
-  padding: "0 9px",
-  borderRadius: 0,
-  border: `1px solid ${WC.glassBorder}`,
-  background: WC.softFill,
-  cursor: "pointer",
-  fontFamily: "inherit",
-  fontSize: 12,
-  fontWeight: 700,
-  color: WC.text,
-  transition: "background .12s, border-color .12s",
 };
 const ctlDividerStyle: CSSProperties = {
   width: 1,

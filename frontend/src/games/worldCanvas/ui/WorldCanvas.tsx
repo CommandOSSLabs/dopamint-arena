@@ -12,7 +12,6 @@ import {
   WC,
   ZOOM,
   TAP_SLOP,
-  FONT_MONO,
   FONT_DISPLAY,
   shortAddress,
 } from "./tokens";
@@ -805,22 +804,18 @@ export function WorldCanvas({
       {/* Floating per-cell owner label ("owner EThL…KwRE" / "You"). */}
       {hud.owner && (
         <div
+          className="sketch-stroke sketch-panel"
           style={{
             position: "absolute",
             left: hud.owner.sx,
             top: hud.owner.sy,
             transform: "translate(-50%, calc(-100% - 8px))",
             pointerEvents: "none",
-            padding: "3px 8px",
-            borderRadius: 0,
-            fontSize: 10.5,
+            padding: "3px 9px",
+            fontSize: 11,
             fontWeight: 700,
             whiteSpace: "nowrap",
             color: WC.text,
-            fontFamily: FONT_MONO,
-            background: "color-mix(in srgb, var(--card) 92%, transparent)",
-            border: `1px solid ${WC.panelBorder}`,
-            boxShadow: WC.glow,
             zIndex: 5,
           }}
         >
@@ -830,19 +825,13 @@ export function WorldCanvas({
       {/* Zoom HUD (bottom-left) — capped to the canvas width and wrap-friendly so it never
           runs off-screen in a narrow window. */}
       <div
-        className="absolute bottom-[18px] left-4 flex flex-wrap items-center gap-2 px-2.5 py-1.5 rounded-none"
-        style={{
-          maxWidth: "calc(100% - 32px)",
-          background: WC.glass,
-          border: `1px solid ${WC.glassBorder}`,
-          boxShadow: WC.glow,
-          backdropFilter: "blur(8px)",
-        }}
+        className="sketch-stroke sketch-panel absolute bottom-[18px] left-4 flex flex-wrap items-center gap-2 px-2.5 py-1.5"
+        style={{ maxWidth: "calc(100% - 32px)" }}
       >
         <ZoomButton label="−" onClick={() => zoomBy(1 / ZOOM.step)} />
         <span
           className="min-w-[46px] text-center text-xs font-bold tabular-nums"
-          style={{ color: WC.text, fontFamily: FONT_MONO }}
+          style={{ color: "var(--sketch-ink)" }}
         >
           {Math.round((hud.zoom / 10) * 100)}%
         </span>
@@ -855,8 +844,10 @@ export function WorldCanvas({
 function ZoomButton({ label, onClick }: { label: string; onClick: () => void }) {
   return (
     <button
+      type="button"
       onClick={onClick}
-      className="flex h-[26px] w-[26px] items-center justify-center rounded-none text-[15px] font-bold leading-none text-foreground bg-foreground/5 transition-colors hover:bg-primary/20"
+      className="sketch-btn sketch-btn--ghost flex h-[26px] w-[26px] items-center justify-center text-[15px] font-bold leading-none"
+      style={{ color: "var(--sketch-ink)", padding: 0 }}
     >
       {label}
     </button>
