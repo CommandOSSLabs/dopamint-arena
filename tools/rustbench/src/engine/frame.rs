@@ -22,9 +22,17 @@ pub struct AckFrame {
     pub sig_responder: [u8; 64],
 }
 
-pub enum Frame { Move(MoveFrame), Ack(AckFrame) }
+pub enum Frame {
+    Move(MoveFrame),
+    Ack(AckFrame),
+}
 
-fn party_str(p: Party) -> &'static str { match p { Party::A => "A", Party::B => "B" } }
+fn party_str(p: Party) -> &'static str {
+    match p {
+        Party::A => "A",
+        Party::B => "B",
+    }
+}
 
 fn move_json(mv: &BjMove) -> String {
     match mv {
@@ -53,31 +61,88 @@ pub fn encode_frame(f: &Frame) -> Vec<u8> {
 /// Parse a frame. Uses serde_json's Value for tolerance (key order irrelevant on decode).
 pub fn decode_frame(bytes: &[u8]) -> Result<Frame, String> {
     let v: serde_json::Value = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
-    let kind = v.get("kind").and_then(|k| k.as_str()).ok_or("missing kind")?;
-    let nonce: u64 = v.get("nonce").and_then(|n| n.as_str()).ok_or("missing nonce")?.parse().map_err(|_| "bad nonce")?;
+    let kind = v
+        .get("kind")
+        .and_then(|k| k.as_str())
+        .ok_or("missing kind")?;
+    let nonce: u64 = v
+        .get("nonce")
+        .and_then(|n| n.as_str())
+        .ok_or("missing nonce")?
+        .parse()
+        .map_err(|_| "bad nonce")?;
     match kind {
         "ack" => {
-            let sig = parse_sig64(v.get("sigResponder").and_then(|s| s.as_str()).ok_or("missing sigResponder")?)?;
-            Ok(Frame::Ack(AckFrame { nonce, sig_responder: sig }))
+            let sig = parse_sig64(
+                v.get("sigResponder")
+                    .and_then(|s| s.as_str())
+                    .ok_or("missing sigResponder")?,
+            )?;
+            Ok(Frame::Ack(AckFrame {
+                nonce,
+                sig_responder: sig,
+            }))
         }
         "move" => {
             let by = match v.get("by").and_then(|b| b.as_str()).ok_or("missing by")? {
-                "A" => Party::A, "B" => Party::B, other => return Err(format!("bad party {other}")),
+                "A" => Party::A,
+                "B" => Party::B,
+                other => return Err(format!("bad party {other}")),
             };
             let mv_obj = v.get("move").ok_or("missing move")?;
-            let action = mv_obj.get("action").and_then(|a| a.as_str()).ok_or("missing action")?;
+            let action = mv_obj
+                .get("action")
+                .and_then(|a| a.as_str())
+                .ok_or("missing action")?;
             let mv = match action {
-                "bet" => BjMove::Bet { amount: mv_obj.get("amount").and_then(|a| a.as_u64()).ok_or("missing amount")? },
+                "bet" => BjMove::Bet {
+                    amount: mv_obj
+                        .get("amount")
+                        .and_then(|a| a.as_u64())
+                        .ok_or("missing amount")?,
+                },
                 "hit" => BjMove::Hit,
                 "stand" => BjMove::Stand,
                 other => return Err(format!("bad action {other}")),
             };
-            let timestamp: u64 = v.get("timestamp").and_then(|t| t.as_str()).ok_or("missing timestamp")?.parse().map_err(|_| "bad timestamp")?;
-            let state_hash = parse_hash32(v.get("stateHash").and_then(|s| s.as_str()).ok_or("missing stateHash")?)?;
-            let party_a_balance: u64 = v.get("partyABalance").and_then(|s| s.as_str()).ok_or("missing partyABalance")?.parse().map_err(|_| "bad balA")?;
-            let party_b_balance: u64 = v.get("partyBBalance").and_then(|s| s.as_str()).ok_or("missing partyBBalance")?.parse().map_err(|_| "bad balB")?;
-            let sig_proposer = parse_sig64(v.get("sigProposer").and_then(|s| s.as_str()).ok_or("missing sigProposer")?)?;
-            Ok(Frame::Move(MoveFrame { nonce, by, mv, timestamp, state_hash, party_a_balance, party_b_balance, sig_proposer }))
+            let timestamp: u64 = v
+                .get("timestamp")
+                .and_then(|t| t.as_str())
+                .ok_or("missing timestamp")?
+                .parse()
+                .map_err(|_| "bad timestamp")?;
+            let state_hash = parse_hash32(
+                v.get("stateHash")
+                    .and_then(|s| s.as_str())
+                    .ok_or("missing stateHash")?,
+            )?;
+            let party_a_balance: u64 = v
+                .get("partyABalance")
+                .and_then(|s| s.as_str())
+                .ok_or("missing partyABalance")?
+                .parse()
+                .map_err(|_| "bad balA")?;
+            let party_b_balance: u64 = v
+                .get("partyBBalance")
+                .and_then(|s| s.as_str())
+                .ok_or("missing partyBBalance")?
+                .parse()
+                .map_err(|_| "bad balB")?;
+            let sig_proposer = parse_sig64(
+                v.get("sigProposer")
+                    .and_then(|s| s.as_str())
+                    .ok_or("missing sigProposer")?,
+            )?;
+            Ok(Frame::Move(MoveFrame {
+                nonce,
+                by,
+                mv,
+                timestamp,
+                state_hash,
+                party_a_balance,
+                party_b_balance,
+                sig_proposer,
+            }))
         }
         other => Err(format!("unknown frame kind: {other}")),
     }
@@ -103,9 +168,13 @@ mod tests {
     #[test]
     fn move_frame_encodes_to_exact_json() {
         let f = Frame::Move(MoveFrame {
-            nonce: 1, by: Party::A, mv: BjMove::Bet { amount: 25 }, timestamp: 1234567890,
+            nonce: 1,
+            by: Party::A,
+            mv: BjMove::Bet { amount: 25 },
+            timestamp: 1234567890,
             state_hash: std::array::from_fn(|i| (i + 1) as u8),
-            party_a_balance: 200, party_b_balance: 200,
+            party_a_balance: 200,
+            party_b_balance: 200,
             sig_proposer: [0xab; 64],
         });
         let json = String::from_utf8(encode_frame(&f)).unwrap();
@@ -120,8 +189,14 @@ mod tests {
     #[test]
     fn hit_move_has_no_amount_field() {
         let f = Frame::Move(MoveFrame {
-            nonce: 2, by: Party::B, mv: BjMove::Hit, timestamp: 0,
-            state_hash: [0; 32], party_a_balance: 1, party_b_balance: 2, sig_proposer: [0; 64],
+            nonce: 2,
+            by: Party::B,
+            mv: BjMove::Hit,
+            timestamp: 0,
+            state_hash: [0; 32],
+            party_a_balance: 1,
+            party_b_balance: 2,
+            sig_proposer: [0; 64],
         });
         let json = String::from_utf8(encode_frame(&f)).unwrap();
         assert!(json.contains("\"move\":{\"action\":\"hit\"}"));
@@ -130,12 +205,23 @@ mod tests {
 
     #[test]
     fn ack_frame_round_trips() {
-        let f = Frame::Ack(AckFrame { nonce: 7, sig_responder: [0xcd; 64] });
+        let f = Frame::Ack(AckFrame {
+            nonce: 7,
+            sig_responder: [0xcd; 64],
+        });
         let bytes = encode_frame(&f);
-        assert_eq!(String::from_utf8(bytes.clone()).unwrap(),
-            format!("{{\"kind\":\"ack\",\"nonce\":\"7\",\"sigResponder\":\"{}\"}}", hex::encode([0xcd; 64])));
+        assert_eq!(
+            String::from_utf8(bytes.clone()).unwrap(),
+            format!(
+                "{{\"kind\":\"ack\",\"nonce\":\"7\",\"sigResponder\":\"{}\"}}",
+                hex::encode([0xcd; 64])
+            )
+        );
         match decode_frame(&bytes).unwrap() {
-            Frame::Ack(a) => { assert_eq!(a.nonce, 7); assert_eq!(a.sig_responder, [0xcd; 64]); }
+            Frame::Ack(a) => {
+                assert_eq!(a.nonce, 7);
+                assert_eq!(a.sig_responder, [0xcd; 64]);
+            }
             _ => panic!("expected ack"),
         }
     }
@@ -143,9 +229,14 @@ mod tests {
     #[test]
     fn move_frame_round_trips() {
         let f = Frame::Move(MoveFrame {
-            nonce: 9, by: Party::A, mv: BjMove::Stand, timestamp: 5,
+            nonce: 9,
+            by: Party::A,
+            mv: BjMove::Stand,
+            timestamp: 5,
             state_hash: std::array::from_fn(|i| i as u8),
-            party_a_balance: 10, party_b_balance: 20, sig_proposer: [1; 64],
+            party_a_balance: 10,
+            party_b_balance: 20,
+            sig_proposer: [1; 64],
         });
         let bytes = encode_frame(&f);
         match decode_frame(&bytes).unwrap() {

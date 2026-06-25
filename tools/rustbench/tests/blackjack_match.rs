@@ -31,16 +31,35 @@ fn fixed_match_matches_ts_golden() {
     let sb: [u8; 32] = std::array::from_fn(|i| (i + 33) as u8);
 
     // sanity: our keys are the golden keys
-    assert_eq!(hex::encode(keypair_from_secret(&sa).public_key()), field(json, "pk_a"));
-    assert_eq!(hex::encode(keypair_from_secret(&sb).public_key()), field(json, "pk_b"));
+    assert_eq!(
+        hex::encode(keypair_from_secret(&sa).public_key()),
+        field(json, "pk_a")
+    );
+    assert_eq!(
+        hex::encode(keypair_from_secret(&sb).public_key()),
+        field(json, "pk_b")
+    );
 
     let r = play_fixed_match("0xab", &sa, &sb, 200, 200, 1234567890, 500);
 
     assert_eq!(r.moves.to_string(), field(json, "moves"), "move count");
-    assert_eq!(r.bytes.to_string(), field(json, "bytes"), "total frame bytes");
-    assert_eq!(r.final_balance_a.to_string(), field(json, "final_balance_a"));
-    assert_eq!(r.final_balance_b.to_string(), field(json, "final_balance_b"));
-    assert_eq!(r.settlement.final_nonce.to_string(), field(json, "final_nonce"));
+    assert_eq!(
+        r.bytes.to_string(),
+        field(json, "bytes"),
+        "total frame bytes"
+    );
+    assert_eq!(
+        r.final_balance_a.to_string(),
+        field(json, "final_balance_a")
+    );
+    assert_eq!(
+        r.final_balance_b.to_string(),
+        field(json, "final_balance_b")
+    );
+    assert_eq!(
+        r.settlement.final_nonce.to_string(),
+        field(json, "final_nonce")
+    );
     assert_eq!(r.settlement.timestamp.to_string(), field(json, "timestamp"));
 
     let root: [u8; 32] = {
@@ -48,7 +67,10 @@ fn fixed_match_matches_ts_golden() {
         hex::decode_to_slice(field(json, "transcript_root"), &mut o).unwrap();
         o
     };
-    assert_eq!(hex::encode(serialize_settlement_with_root(&r.settlement, &root)), field(json, "settle_msg"));
+    assert_eq!(
+        hex::encode(serialize_settlement_with_root(&r.settlement, &root)),
+        field(json, "settle_msg")
+    );
     assert_eq!(hex::encode(r.sig_a), field(json, "sig_a"));
     assert_eq!(hex::encode(r.sig_b), field(json, "sig_b"));
 }

@@ -17,23 +17,43 @@ const ROUND_CAP: u64 = 1000;
 const DOMAIN: &[u8] = b"sui_tunnel::proto::blackjack.bet.v1";
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Phase { RoundOver, Player, Dealer }
+pub enum Phase {
+    RoundOver,
+    Player,
+    Dealer,
+}
 
 impl Phase {
     fn code(self) -> u8 {
-        match self { Phase::RoundOver => 0, Phase::Player => 1, Phase::Dealer => 2 }
+        match self {
+            Phase::RoundOver => 0,
+            Phase::Player => 1,
+            Phase::Dealer => 2,
+        }
     }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Party { A, B }
+pub enum Party {
+    A,
+    B,
+}
 
 impl Party {
-    pub fn other(self) -> Party { match self { Party::A => Party::B, Party::B => Party::A } }
+    pub fn other(self) -> Party {
+        match self {
+            Party::A => Party::B,
+            Party::B => Party::A,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
-pub enum BjMove { Bet { amount: u64 }, Hit, Stand }
+pub enum BjMove {
+    Bet { amount: u64 },
+    Hit,
+    Stand,
+}
 
 #[derive(Clone, Debug)]
 pub struct BjState {
@@ -53,10 +73,16 @@ pub fn player_party(round: u64) -> Party {
     // round - 1, then floor(/2) % 2; round 0 is treated like the TS Number(round)-1 = -1
     // path only via actor_for(round+1), so round >= 1 here in practice.
     let r = (round as i64) - 1;
-    if (r.div_euclid(2)) % 2 == 0 { Party::A } else { Party::B }
+    if (r.div_euclid(2)) % 2 == 0 {
+        Party::A
+    } else {
+        Party::B
+    }
 }
 
-pub fn dealer_party(round: u64) -> Party { player_party(round).other() }
+pub fn dealer_party(round: u64) -> Party {
+    player_party(round).other()
+}
 
 /// The seat the protocol expects to act next. In `round_over` the NEXT round's player bets.
 pub fn actor_for(s: &BjState) -> Party {
@@ -87,7 +113,13 @@ fn draw_rank(round: u64, draw_index: u64) -> u8 {
 
 /// Map a rank (1..13) to its blackjack value (Ace = 11; downgraded later).
 fn rank_value(rank: u8) -> u8 {
-    if rank == 1 { 11 } else if rank >= 11 { 10 } else { rank }
+    if rank == 1 {
+        11
+    } else if rank >= 11 {
+        10
+    } else {
+        rank
+    }
 }
 
 /// Hand total with soft-ace handling: downgrade an 11 to 1 per ace while busting.
@@ -96,16 +128,25 @@ pub fn hand_value(hand: &[u8]) -> u32 {
     let mut aces: u32 = 0;
     for &v in hand {
         total += v as u32;
-        if v == 11 { aces += 1; }
+        if v == 11 {
+            aces += 1;
+        }
     }
-    while total > BUST_AT && aces > 0 { total -= 10; aces -= 1; }
+    while total > BUST_AT && aces > 0 {
+        total -= 10;
+        aces -= 1;
+    }
     total
 }
 
-fn is_bust(hand: &[u8]) -> bool { hand_value(hand) > BUST_AT }
+fn is_bust(hand: &[u8]) -> bool {
+    hand_value(hand) > BUST_AT
+}
 
 /// Largest bet both sides can cover this round.
-pub fn max_bet(s: &BjState) -> u64 { s.balance_a.min(s.balance_b) }
+pub fn max_bet(s: &BjState) -> u64 {
+    s.balance_a.min(s.balance_b)
+}
 
 pub fn initial_state(balance_a: u64, balance_b: u64) -> BjState {
     BjState {
@@ -135,9 +176,21 @@ fn deal_round(s: &BjState, bet: u64) -> BjState {
     let mut draw_index = 0u64;
     let mut player_hand = Vec::new();
     let mut dealer_hand = Vec::new();
-    for _ in 0..2 { draw_index = draw_to(&mut player_hand, round, draw_index); }
-    for _ in 0..2 { draw_index = draw_to(&mut dealer_hand, round, draw_index); }
-    BjState { phase: Phase::Player, round, draw_index, player_hand, dealer_hand, bet, ..s.clone() }
+    for _ in 0..2 {
+        draw_index = draw_to(&mut player_hand, round, draw_index);
+    }
+    for _ in 0..2 {
+        draw_index = draw_to(&mut dealer_hand, round, draw_index);
+    }
+    BjState {
+        phase: Phase::Player,
+        round,
+        draw_index,
+        player_hand,
+        dealer_hand,
+        bet,
+        ..s.clone()
+    }
 }
 
 fn resolve_dealer(s: &BjState) -> BjState {
@@ -168,38 +221,70 @@ fn settle(s: &BjState, winner: Option<Party>) -> BjState {
     let mut balance_a = s.balance_a;
     let mut balance_b = s.balance_b;
     match winner {
-        Some(Party::A) => { let amt = s.bet.min(balance_b); balance_a += amt; balance_b -= amt; }
-        Some(Party::B) => { let amt = s.bet.min(balance_a); balance_b += amt; balance_a -= amt; }
+        Some(Party::A) => {
+            let amt = s.bet.min(balance_b);
+            balance_a += amt;
+            balance_b -= amt;
+        }
+        Some(Party::B) => {
+            let amt = s.bet.min(balance_a);
+            balance_b += amt;
+            balance_a -= amt;
+        }
         None => {}
     }
-    BjState { phase: Phase::RoundOver, balance_a, balance_b, ..s.clone() }
+    BjState {
+        phase: Phase::RoundOver,
+        balance_a,
+        balance_b,
+        ..s.clone()
+    }
 }
 
 pub fn apply_move(s: &BjState, mv: BjMove, by: Party) -> Result<BjState, String> {
     match s.phase {
         Phase::RoundOver => {
-            let BjMove::Bet { amount } = mv else { return Err("place a bet to start the round".into()); };
+            let BjMove::Bet { amount } = mv else {
+                return Err("place a bet to start the round".into());
+            };
             let next_player = player_party(s.round + 1);
-            if by != next_player { return Err(format!("only the player ({next_player:?}) sets the bet")); }
-            if is_terminal(s) { return Err("game over: a side cannot fund another bet".into()); }
+            if by != next_player {
+                return Err(format!("only the player ({next_player:?}) sets the bet"));
+            }
+            if is_terminal(s) {
+                return Err("game over: a side cannot fund another bet".into());
+            }
             let cap = max_bet(s);
-            if amount < MIN_BET || amount > cap { return Err(format!("bet must be {MIN_BET}..{cap}")); }
+            if amount < MIN_BET || amount > cap {
+                return Err(format!("bet must be {MIN_BET}..{cap}"));
+            }
             Ok(deal_round(s, amount))
         }
         Phase::Player => {
-            if by != player_party(s.round) { return Err("not the player's turn".into()); }
+            if by != player_party(s.round) {
+                return Err("not the player's turn".into());
+            }
             match mv {
                 BjMove::Hit => {
                     let mut next = s.clone();
                     next.draw_index = draw_to(&mut next.player_hand, s.round, s.draw_index);
-                    if is_bust(&next.player_hand) { Ok(settle(&next, Some(dealer_party(s.round)))) } else { Ok(next) }
+                    if is_bust(&next.player_hand) {
+                        Ok(settle(&next, Some(dealer_party(s.round))))
+                    } else {
+                        Ok(next)
+                    }
                 }
-                BjMove::Stand => Ok(BjState { phase: Phase::Dealer, ..s.clone() }),
+                BjMove::Stand => Ok(BjState {
+                    phase: Phase::Dealer,
+                    ..s.clone()
+                }),
                 BjMove::Bet { .. } => Err("invalid player action".into()),
             }
         }
         Phase::Dealer => {
-            if by != dealer_party(s.round) { return Err("not the dealer's turn".into()); }
+            if by != dealer_party(s.round) {
+                return Err("not the dealer's turn".into());
+            }
             match mv {
                 BjMove::Stand => Ok(resolve_dealer(s)),
                 _ => Err("the dealer only stands (auto-play)".into()),
@@ -236,8 +321,10 @@ mod tests {
         let s = initial_state(200, 200);
         assert_eq!(hex::encode(encode_state(&s)),
             "7375695f74756e6e656c3a3a70726f746f3a3a626c61636b6a61636b2e6265742e763100000000000000c800000000000000c80000000000000000000000000000000000000000000000000000000000000000000000000000000000");
-        assert_eq!(hex::encode(blake2b256(&encode_state(&s))),
-            "9af0532be79ef5264245875dacee60321f2d1ae4c1920cf37eb841d8e2da68eb");
+        assert_eq!(
+            hex::encode(blake2b256(&encode_state(&s))),
+            "9af0532be79ef5264245875dacee60321f2d1ae4c1920cf37eb841d8e2da68eb"
+        );
     }
 
     #[test]
@@ -252,13 +339,15 @@ mod tests {
         assert_eq!(s1.bet, 25);
         assert_eq!(hex::encode(encode_state(&s1)),
             "7375695f74756e6e656c3a3a70726f746f3a3a626c61636b6a61636b2e6265742e763100000000000000c800000000000000c80000000000000001000000000000000401000000000000001900000000000000020a0700000000000000020a03");
-        assert_eq!(hex::encode(blake2b256(&encode_state(&s1))),
-            "c217301ef203ccbe2a1f946e6a420cd8a7853cace315bfc9adca56d7162d9219");
+        assert_eq!(
+            hex::encode(blake2b256(&encode_state(&s1))),
+            "c217301ef203ccbe2a1f946e6a420cd8a7853cace315bfc9adca56d7162d9219"
+        );
     }
 
     #[test]
     fn hand_value_soft_ace() {
-        assert_eq!(hand_value(&[11, 7]), 18);     // soft 18
+        assert_eq!(hand_value(&[11, 7]), 18); // soft 18
         assert_eq!(hand_value(&[11, 7, 10]), 18); // ace downgraded once: 1+7+10
         assert_eq!(hand_value(&[10, 3]), 13);
     }
@@ -268,11 +357,19 @@ mod tests {
         // Play a full match's worth of moves via basic strategy; sum is invariant.
         let mut s = initial_state(200, 200);
         for _ in 0..400 {
-            if is_terminal(&s) { break; }
+            if is_terminal(&s) {
+                break;
+            }
             let by = actor_for(&s);
             let mv = match s.phase {
                 Phase::RoundOver => BjMove::Bet { amount: 25 },
-                Phase::Player => if hand_value(&s.player_hand) < 17 { BjMove::Hit } else { BjMove::Stand },
+                Phase::Player => {
+                    if hand_value(&s.player_hand) < 17 {
+                        BjMove::Hit
+                    } else {
+                        BjMove::Stand
+                    }
+                }
                 Phase::Dealer => BjMove::Stand,
             };
             s = apply_move(&s, mv, by).unwrap();
@@ -294,22 +391,38 @@ mod tests {
 /// (always 25 when affordable); player hits while `hand_value < 17`, else stands; dealer
 /// stands. Mirrors `frontend/src/agent/games/blackjack/kit.ts::BlackjackBot`.
 pub fn plan(s: &BjState, seat: Party) -> Option<BjMove> {
-    if is_terminal(s) { return None; }
-    if actor_for(s) != seat { return None; }
+    if is_terminal(s) {
+        return None;
+    }
+    if actor_for(s) != seat {
+        return None;
+    }
     match s.phase {
         Phase::RoundOver => {
             let cap = max_bet(s);
-            let amount = BET_OPTIONS.iter().copied().find(|&o| o >= MIN_BET && o <= cap).unwrap_or(MIN_BET);
+            let amount = BET_OPTIONS
+                .iter()
+                .copied()
+                .find(|&o| o >= MIN_BET && o <= cap)
+                .unwrap_or(MIN_BET);
             // fixedBetMove clamps to [MIN_BET, cap]; amount is already in range when cap >= MIN_BET.
             let amount = amount.clamp(MIN_BET, cap);
             Some(BjMove::Bet { amount })
         }
         Phase::Player => {
-            if seat != player_party(s.round) { return None; }
-            Some(if hand_value(&s.player_hand) < 17 { BjMove::Hit } else { BjMove::Stand })
+            if seat != player_party(s.round) {
+                return None;
+            }
+            Some(if hand_value(&s.player_hand) < 17 {
+                BjMove::Hit
+            } else {
+                BjMove::Stand
+            })
         }
         Phase::Dealer => {
-            if seat != dealer_party(s.round) { return None; }
+            if seat != dealer_party(s.round) {
+                return None;
+            }
             Some(BjMove::Stand)
         }
     }
@@ -323,7 +436,10 @@ mod bot_tests {
     fn round_over_player_bets_min_option() {
         let s = initial_state(200, 200);
         // round 1 player is A; A bets 25 (first BET_OPTIONS entry that fits).
-        assert!(matches!(plan(&s, Party::A), Some(BjMove::Bet { amount: 25 })));
+        assert!(matches!(
+            plan(&s, Party::A),
+            Some(BjMove::Bet { amount: 25 })
+        ));
         // B is not the next player -> None.
         assert!(plan(&s, Party::B).is_none());
     }
