@@ -18,18 +18,15 @@ function turnOf(tick: bigint): Party {
  * start the next race, while the session can still fund another. Mirrors ttt's multi-game bot so
  * the in-game solo loop and the agent harness share ONE move source (the kit).
  */
-class ChickenCrossBot
-  implements GameBot<MultiGameCrossState, MultiGameCrossMove>
-{
+class ChickenCrossBot implements GameBot<
+  MultiGameCrossState,
+  MultiGameCrossMove
+> {
   private readonly seat: Party;
   private readonly protocol: MultiGameCrossProtocol;
   private readonly rng: () => number;
 
-  constructor(
-    seat: Party,
-    protocol: MultiGameCrossProtocol,
-    ctx: BotContext,
-  ) {
+  constructor(seat: Party, protocol: MultiGameCrossProtocol, ctx: BotContext) {
     this.seat = seat;
     this.protocol = protocol;
     this.rng = ctx.rngForSeat(seat);

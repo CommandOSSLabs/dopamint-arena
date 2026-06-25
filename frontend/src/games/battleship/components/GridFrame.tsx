@@ -55,9 +55,7 @@ export function GridFrame({
 function FrameRow({ label, children }: { label: number; children: ReactNode }) {
   return (
     <>
-      <span className="bs-coord flex items-center justify-center">
-        {label}
-      </span>
+      <span className="bs-coord flex items-center justify-center">{label}</span>
       {children}
     </>
   );

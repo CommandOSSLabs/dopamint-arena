@@ -41,7 +41,9 @@ export function CardDisplay({
   });
 
   return (
-    <div className={`flex flex-col w-full relative ${className || "items-center"}`}>
+    <div
+      className={`flex flex-col w-full relative ${className || "items-center"}`}
+    >
       {/* Title */}
       <h3 className="text-sm uppercase font-semibold tracking-wider text-emerald-200/60 mb-2">
         {title}

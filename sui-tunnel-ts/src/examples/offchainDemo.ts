@@ -9,12 +9,12 @@
  */
 
 import { AgentSwarm } from "../agents/Agent";
-import { Transcript } from "../proof/transcript";
-import { rateReport } from "../telemetry/metrics";
-import { reportToJSON } from "../telemetry/export";
-import { serializeSettlementWithRoot } from "../core/wire";
-import { verify } from "../core/crypto";
 import { toHex } from "../core/bytes";
+import { verify } from "../core/crypto";
+import { serializeSettlementWithRoot } from "../core/wire";
+import { Transcript } from "../proof/transcript";
+import { reportToJSON } from "../telemetry/export";
+import { rateReport } from "../telemetry/metrics";
 
 export function runOffchainDemo(): void {
   // 1. A swarm of autonomous agents across all five protocols, matchmade into tunnels.
@@ -38,7 +38,7 @@ export function runOffchainDemo(): void {
   // 4. Proof-of-existence: the transcript Merkle root anchors the tracked tunnel's history.
   const root = transcript.root();
   console.log(
-    `\ntranscript for ${tracked.tunnelId}: ${transcript.length} updates`,
+    `\ntranscript for ${tracked.tunnelId}: ${transcript.length} updates`
   );
   console.log(`transcript root (anchored on-chain at close): 0x${toHex(root)}`);
 
@@ -54,7 +54,7 @@ export function runOffchainDemo(): void {
   swarm.settleAll(BigInt(Date.now()));
   console.log(
     `settlement success across ${swarm.tunnels.length} tunnels: ` +
-      `${(swarm.settlementSuccessRate() * 100).toFixed(1)}%`,
+      `${(swarm.settlementSuccessRate() * 100).toFixed(1)}%`
   );
 }
 

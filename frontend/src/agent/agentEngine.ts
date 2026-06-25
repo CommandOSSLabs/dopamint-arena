@@ -151,9 +151,7 @@ async function playOneMatch(
           actionsDelta,
           windowMs: Math.max(1, windowMs),
         })
-        .catch((e) =>
-          console.error("[agent] heartbeat failed:", e),
-        );
+        .catch((e) => console.error("[agent] heartbeat failed:", e));
     };
 
     if (match.role === "A") {
@@ -200,7 +198,11 @@ async function playOneMatch(
     ) as any;
     const transcript = new Transcript(tunnelId);
     let lastActedHash: StateHash | null = null;
-    let pendingSelfMove: { state: unknown; move: unknown; hash: StateHash } | null = null;
+    let pendingSelfMove: {
+      state: unknown;
+      move: unknown;
+      hash: StateHash;
+    } | null = null;
     let rejectMatch: ((e: unknown) => void) | null = null;
 
     // Auto-play: propose the bot kit's next legal move as soon as the prior update confirms.
@@ -372,7 +374,8 @@ export async function runAgent(
   const games = gameFilter
     ? AGENT_GAMES.filter((g) => g.id === gameFilter || g.kitId === gameFilter)
     : AGENT_GAMES;
-  if (games.length === 0) throw new Error(`unknown agent game filter: ${gameFilter}`);
+  if (games.length === 0)
+    throw new Error(`unknown agent game filter: ${gameFilter}`);
 
   const slot = async (i: number) => {
     let gi = i % games.length; // stagger starts so the fleet spreads across games

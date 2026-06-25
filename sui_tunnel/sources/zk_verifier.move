@@ -329,13 +329,10 @@ public fun register_circuit(registry: &mut CircuitRegistry, circuit: Circuit, ct
     assert!(ctx.sender() == registry.owner, ENotAuthorized);
 
     // Check for duplicate IDs
-    let len = registry.circuits.length();
-    let mut i = 0;
-    while (i < len) {
-        let existing = &registry.circuits[i];
-        assert!(existing.id != circuit.id, ECircuitAlreadyRegistered);
-        i = i + 1;
-    };
+    assert!(
+        !registry.circuits.any!(|existing| existing.id == circuit.id),
+        ECircuitAlreadyRegistered,
+    );
 
     registry.circuits.push_back(circuit);
 
@@ -355,19 +352,10 @@ public fun deactivate_circuit(
 ) {
     assert!(ctx.sender() == registry.owner, ENotAuthorized);
 
-    let len = registry.circuits.length();
-    let mut i = 0;
-    while (i < len) {
-        let circuit = &mut registry.circuits[i];
-        if (&circuit.id == circuit_id) {
-            circuit.active = false;
-            event::emit(CircuitDeactivated { circuit_id: *circuit_id });
-            return
-        };
-        i = i + 1;
-    };
-
-    abort ECircuitNotRegistered
+    let idx = registry.circuits.find_index!(|circuit| &circuit.id == circuit_id);
+    assert!(idx.is_some(), ECircuitNotRegistered);
+    registry.circuits[idx.destroy_some()].active = false;
+    event::emit(CircuitDeactivated { circuit_id: *circuit_id });
 }
 
 /// Reactivates a previously deactivated circuit
@@ -378,48 +366,27 @@ public fun reactivate_circuit(
 ) {
     assert!(ctx.sender() == registry.owner, ENotAuthorized);
 
-    let len = registry.circuits.length();
-    let mut i = 0;
-    while (i < len) {
-        let circuit = &mut registry.circuits[i];
-        if (&circuit.id == circuit_id) {
-            circuit.active = true;
-            return
-        };
-        i = i + 1;
-    };
-
-    abort ECircuitNotRegistered
+    let idx = registry.circuits.find_index!(|circuit| &circuit.id == circuit_id);
+    assert!(idx.is_some(), ECircuitNotRegistered);
+    registry.circuits[idx.destroy_some()].active = true;
 }
 
 /// Gets a circuit from the registry by ID
 public fun get_circuit(registry: &CircuitRegistry, circuit_id: &vector<u8>): &Circuit {
-    let len = registry.circuits.length();
-    let mut i = 0;
-    while (i < len) {
-        let circuit = &registry.circuits[i];
-        if (&circuit.id == circuit_id) {
-            return circuit
-        };
-        i = i + 1;
-    };
+    let idx = registry.circuits.find_index!(|circuit| &circuit.id == circuit_id);
+    assert!(idx.is_some(), ECircuitNotRegistered);
+    &registry.circuits[idx.destroy_some()]
+}
 
-    abort ECircuitNotRegistered
+/// Returns whether a circuit with this id is registered, active or not.
+public fun is_circuit_registered(registry: &CircuitRegistry, circuit_id: &vector<u8>): bool {
+    registry.circuits.any!(|circuit| &circuit.id == circuit_id)
 }
 
 /// Checks if a circuit is registered and active
 public fun is_circuit_active(registry: &CircuitRegistry, circuit_id: &vector<u8>): bool {
-    let len = registry.circuits.length();
-    let mut i = 0;
-    while (i < len) {
-        let circuit = &registry.circuits[i];
-        if (&circuit.id == circuit_id) {
-            return circuit.active
-        };
-        i = i + 1;
-    };
-
-    false
+    let idx = registry.circuits.find_index!(|circuit| &circuit.id == circuit_id);
+    if (idx.is_some()) registry.circuits[idx.destroy_some()].active else false
 }
 
 // ============================================

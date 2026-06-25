@@ -112,9 +112,6 @@ const VIOLATION_FORGERY: u8 = 3;
 /// One hour in milliseconds
 const ONE_HOUR_MS: u64 = 3600000;
 
-// One day in milliseconds
-// const ONE_DAY_MS: u64 = 86400000;
-
 // ============================================
 // STRUCTS
 // ============================================
@@ -600,6 +597,11 @@ public fun can_auto_resolve(dispute: &Dispute, clock: &Clock): bool {
     now >= dispute.response_deadline
 }
 
+/// Returns whether the dispute is in a resolvable state (raised or under review).
+public fun can_resolve(dispute: &Dispute): bool {
+    dispute.status == DISPUTE_STATUS_RAISED || dispute.status == DISPUTE_STATUS_UNDER_REVIEW
+}
+
 /// Resolves a dispute in favor of party A.
 /// Caller must ensure the dispute is in an active state before resolving.
 public fun resolve_for_a(
@@ -609,10 +611,7 @@ public fun resolve_for_a(
     penalty: u64,
     clock: &Clock,
 ) {
-    assert!(
-        dispute.status == DISPUTE_STATUS_RAISED || dispute.status == DISPUTE_STATUS_UNDER_REVIEW,
-        ENoActiveDispute,
-    );
+    assert!(can_resolve(dispute), ENoActiveDispute);
     dispute.status = DISPUTE_STATUS_RESOLVED_A;
     dispute.resolved_at = clock.timestamp_ms();
     dispute.resolution = create_resolution(party_a_amount, party_b_amount, penalty, 1);
@@ -634,10 +633,7 @@ public fun resolve_for_b(
     penalty: u64,
     clock: &Clock,
 ) {
-    assert!(
-        dispute.status == DISPUTE_STATUS_RAISED || dispute.status == DISPUTE_STATUS_UNDER_REVIEW,
-        ENoActiveDispute,
-    );
+    assert!(can_resolve(dispute), ENoActiveDispute);
     dispute.status = DISPUTE_STATUS_RESOLVED_B;
     dispute.resolved_at = clock.timestamp_ms();
     dispute.resolution = create_resolution(party_a_amount, party_b_amount, penalty, 2);
@@ -659,10 +655,7 @@ public fun resolve_split(
     penalty: u64,
     clock: &Clock,
 ) {
-    assert!(
-        dispute.status == DISPUTE_STATUS_RAISED || dispute.status == DISPUTE_STATUS_UNDER_REVIEW,
-        ENoActiveDispute,
-    );
+    assert!(can_resolve(dispute), ENoActiveDispute);
     dispute.status = DISPUTE_STATUS_RESOLVED_SPLIT;
     dispute.resolved_at = clock.timestamp_ms();
     dispute.resolution = create_resolution(party_a_amount, party_b_amount, penalty, 3);
@@ -803,17 +796,13 @@ public fun add_committee_member(committee: &mut Committee, member_address: addre
 
 /// Removes a member from the committee
 public fun remove_committee_member(committee: &mut Committee, member_address: address) {
-    let len = committee.members.length();
-    let mut i = 0;
-
-    while (i < len) {
-        let member = &mut committee.members[i];
-        if (member.address == member_address && member.active) {
-            member.active = false;
-            committee.total_weight = committee.total_weight - member.weight;
-            return
-        };
-        i = i + 1;
+    let found = committee.members.find_index!(|member| {
+        member.address == member_address && member.active
+    });
+    if (found.is_some()) {
+        let member = &mut committee.members[found.destroy_some()];
+        member.active = false;
+        committee.total_weight = committee.total_weight - member.weight;
     };
 }
 

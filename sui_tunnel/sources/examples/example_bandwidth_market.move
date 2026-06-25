@@ -240,7 +240,7 @@ public fun compute_meter_hash_with_id(
 public fun calculate_cost(total_bytes: u64, rate_per_mb: u64): u64 {
     // Use u128 to avoid overflow on large byte counts
     let cost = (total_bytes as u128) * (rate_per_mb as u128) / (BYTES_PER_MB as u128);
-    assert!(cost <= 18446744073709551615u128, EOverflow);
+    assert!(cost <= std::u64::max_value!() as u128, EOverflow);
     (cost as u64)
 }
 

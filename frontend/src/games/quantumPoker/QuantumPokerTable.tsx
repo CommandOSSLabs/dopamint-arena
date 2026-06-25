@@ -1,5 +1,8 @@
 import type { JSX } from "react";
-import type { PokerPhase, PokerState } from "sui-tunnel-ts/protocol/quantumPoker";
+import type {
+  PokerPhase,
+  PokerState,
+} from "sui-tunnel-ts/protocol/quantumPoker";
 import type { Party } from "sui-tunnel-ts/protocol/Protocol";
 import "./quantumPoker.css";
 
@@ -20,7 +23,19 @@ export const PHASE_LABEL: Record<PokerPhase, string> = {
 
 export const SUITS = ["♠", "♥", "♦", "♣"] as const;
 export const RANKS = [
-  "2", "3", "4", "5", "6", "7", "8", "9", "T", "J", "Q", "K", "A",
+  "2",
+  "3",
+  "4",
+  "5",
+  "6",
+  "7",
+  "8",
+  "9",
+  "T",
+  "J",
+  "Q",
+  "K",
+  "A",
 ];
 
 // ---------------------------------------------------------------------------
@@ -52,7 +67,11 @@ function Card({
   hole?: boolean;
 }) {
   if (hidden || card === null) {
-    return <span className={`qp-card qp-card--back${hole ? " qp-card--hole" : ""}`} />;
+    return (
+      <span
+        className={`qp-card qp-card--back${hole ? " qp-card--hole" : ""}`}
+      />
+    );
   }
   const suit = SUITS[Math.floor(card / 13)];
   const red = suit === "♥" || suit === "♦";

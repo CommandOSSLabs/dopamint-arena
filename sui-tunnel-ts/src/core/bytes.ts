@@ -28,7 +28,7 @@ export function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
 }
 
 const HEX: string[] = Array.from({ length: 256 }, (_, i) =>
-  i.toString(16).padStart(2, "0"),
+  i.toString(16).padStart(2, "0")
 );
 
 /** Lowercase hex without 0x prefix. */

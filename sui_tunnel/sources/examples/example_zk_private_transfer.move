@@ -13,15 +13,28 @@
 /// - `range_proof`: Proves a value is within a range without revealing it
 /// - `ownership_proof`: Proves ownership of an address without revealing it
 ///
-/// ## Note:
-/// Actual Groth16 verification requires real proving keys and proofs from a
-/// trusted setup. This example focuses on the data pipeline: registry
-/// management, public input construction, and verification result tracking.
+/// ## Two paths:
+/// - `PrivateTransfer` (record-only): the verification data pipeline — registry
+///   management, public-input construction, and result tracking. Moves no funds.
+/// - `ZkTransfer<T>` (real funds): escrows `Coin<T>` in a `Tunnel<T>` and releases it
+///   to the receiver via a Groth16-gated, dual-signed cooperative close, with a
+///   pre-activation refund for the payer.
+///
+/// ## Limitations:
+/// Actual Groth16 verification requires a real trusted-setup verifying key registered
+/// via `zk_verifier::register_circuit`; this example ships none, so the proof gate is
+/// only as strong as the registered circuit. Settlement is also on a public chain: the
+/// final balance split and party addresses are public. ZK can hide the proof witness,
+/// not the on-chain settled amounts or recipient. Real amount privacy would need a
+/// shielded-pool design the two-party tunnel does not provide.
 module sui_tunnel::example_zk_private_transfer;
 
 use sui::clock::Clock;
+use sui::coin::Coin;
 use sui::event;
 use sui::hash;
+use sui_tunnel::signature;
+use sui_tunnel::tunnel::{Self, Tunnel};
 use sui_tunnel::zk_verifier;
 
 // === Error definitions (see sui_tunnel::errors for the canonical registry) ===
@@ -37,6 +50,12 @@ const EEmptyInput: vector<u8> = b"Input is empty where a non-empty value was req
 
 #[error]
 const EInvalidParties: vector<u8> = b"The tunnel parties are invalid (for example, both parties share the same address).";
+
+#[error]
+const EInvalidZkProof: vector<u8> = b"The zero-knowledge proof is invalid.";
+
+#[error]
+const ECircuitNotRegistered: vector<u8> = b"The circuit id is not registered.";
 
 // ============================================
 // CONSTANTS
@@ -508,8 +527,210 @@ public fun log_timestamp(log: &VerificationLog): u64 {
 }
 
 // ============================================
+// PROOF-GATED TRANSFER (REAL FUND MOVEMENT)
+// ============================================
+//
+// `PrivateTransfer` above is a record-only verification pipeline: it runs the real
+// `zk_verifier` but moves no funds. `ZkTransfer<T>` below is the production-capable
+// path. It escrows real `Coin<T>` in a two-party `Tunnel<T>` (payer = party A,
+// receiver = party B) and releases it to the receiver only through
+// `settle_with_proof`, which verifies a Groth16 proof against a registered circuit
+// and then performs the tunnel's dual-signed cooperative close. All fund-movement
+// security (balance-sum invariant, settlement-signature domain separation, the
+// pre-activation refund exit) is enforced inside the tunnel.
+//
+// Limitations (see the module header): a production deployment must register a real
+// trusted-setup verifying key via `zk_verifier::register_circuit`; this example
+// cannot ship one, so the proof gate is only as strong as the registered circuit.
+// More fundamentally, settlement is on a public chain: the `payer_balance` /
+// `receiver_balance` split and the party addresses are public. ZK here can hide the
+// proof witness, not the on-chain settlement amounts or recipient.
+
+/// A proof-gated transfer backed by a real funded tunnel. The tunnel custodies the
+/// payer's escrowed `Balance<T>`; a verified proof plus a dual-signed settlement
+/// releases it to the receiver.
+public struct ZkTransfer<phantom T> has key, store {
+    id: UID,
+    /// The two-party tunnel custodying the escrowed funds.
+    tunnel: Tunnel<T>,
+    /// Circuit the release proof must satisfy.
+    circuit_id: vector<u8>,
+    /// Payer (party A / depositor).
+    payer: address,
+    /// Receiver (party B / beneficiary).
+    receiver: address,
+    /// Transfer status (`TRANSFER_*`).
+    status: u8,
+}
+
+/// Escrows `deposit` in a fresh tunnel for a proof-gated transfer. The caller is the
+/// payer (party A); `receiver` is party B. The tunnel stays pre-activation (only the
+/// payer funds it), so the payer can reclaim via `cancel_transfer` until release.
+/// Aborts if payer and receiver are the same address or the deposit is empty.
+public fun create_zk_transfer<T>(
+    receiver: address,
+    payer_pk: vector<u8>,
+    receiver_pk: vector<u8>,
+    circuit_id: vector<u8>,
+    deposit: Coin<T>,
+    timeout_ms: u64,
+    clock: &Clock,
+    ctx: &mut TxContext,
+): ZkTransfer<T> {
+    let payer = ctx.sender();
+    assert!(payer != receiver, EInvalidParties);
+    assert!(deposit.value() > 0, EEmptyInput);
+
+    let mut tun = tunnel::create<T>(
+        payer,
+        payer_pk,
+        signature::ed25519(),
+        receiver,
+        receiver_pk,
+        signature::ed25519(),
+        timeout_ms,
+        0,
+        clock,
+        ctx,
+    );
+    tun.deposit_party_a(deposit, clock, ctx);
+
+    let transfer = ZkTransfer {
+        id: object::new(ctx),
+        tunnel: tun,
+        circuit_id,
+        payer,
+        receiver,
+        status: TRANSFER_PENDING,
+    };
+
+    event::emit(TransferSubmitted {
+        transfer_id: object::id(&transfer),
+        sender: payer,
+        receiver,
+        circuit_id: transfer.circuit_id,
+    });
+
+    transfer
+}
+
+/// Releases the escrowed funds with the agreed `payer_balance` / `receiver_balance`
+/// split after verifying the Groth16 proof against the registered circuit. The split
+/// must be dual-signed (the proof is an additional release condition over the
+/// signed settlement) and sum to the tunnel balance. Aborts `ECircuitNotRegistered`
+/// if the circuit is inactive, `EInvalidZkProof` if the proof fails, or in the tunnel
+/// on a bad signature / balance split.
+public fun settle_with_proof<T>(
+    transfer: &mut ZkTransfer<T>,
+    registry: &zk_verifier::CircuitRegistry,
+    public_inputs: vector<u8>,
+    proof_bytes: vector<u8>,
+    payer_balance: u64,
+    receiver_balance: u64,
+    sig_a: vector<u8>,
+    sig_b: vector<u8>,
+    timestamp: u64,
+    clock: &Clock,
+    ctx: &mut TxContext,
+) {
+    assert!(transfer.status == TRANSFER_PENDING, EInvalidState);
+    assert!(zk_verifier::is_circuit_active(registry, &transfer.circuit_id), ECircuitNotRegistered);
+    assert!(
+        zk_verifier::verify_circuit_proof(
+            registry,
+            &transfer.circuit_id,
+            &public_inputs,
+            &proof_bytes,
+        ),
+        EInvalidZkProof,
+    );
+
+    transfer
+        .tunnel
+        .close_cooperative_and_transfer(
+            payer_balance,
+            receiver_balance,
+            sig_a,
+            sig_b,
+            timestamp,
+            clock,
+            ctx,
+        );
+    transfer.status = TRANSFER_VERIFIED;
+
+    event::emit(TransferVerified {
+        transfer_id: object::id(transfer),
+        success: true,
+        timestamp: clock.timestamp_ms(),
+    });
+}
+
+/// Refunds the full escrowed deposit to the payer before release. Returns the coin so
+/// the payer can route it in a PTB. Reuses the tunnel's pre-activation withdrawal, so
+/// only the payer (the sole depositor) can reclaim. Aborts if already settled.
+public fun cancel_transfer<T>(
+    transfer: &mut ZkTransfer<T>,
+    clock: &Clock,
+    ctx: &mut TxContext,
+): Coin<T> {
+    assert!(transfer.status == TRANSFER_PENDING, EInvalidState);
+    transfer.status = TRANSFER_FAILED;
+    transfer.tunnel.withdraw_before_active(clock, ctx)
+}
+
+/// Read-only access to the escrow's underlying tunnel.
+public fun zk_transfer_tunnel<T>(transfer: &ZkTransfer<T>): &Tunnel<T> { &transfer.tunnel }
+
+/// The transfer's status (`TRANSFER_*`).
+public fun zk_transfer_status<T>(transfer: &ZkTransfer<T>): u8 { transfer.status }
+
+/// The escrowed balance currently held by the tunnel.
+public fun zk_transfer_total_balance<T>(transfer: &ZkTransfer<T>): u64 {
+    transfer.tunnel.total_balance()
+}
+
+/// The payer (depositor) address.
+public fun zk_transfer_payer<T>(transfer: &ZkTransfer<T>): address { transfer.payer }
+
+/// The receiver (beneficiary) address.
+public fun zk_transfer_receiver<T>(transfer: &ZkTransfer<T>): address { transfer.receiver }
+
+/// The circuit the release proof must satisfy.
+public fun zk_transfer_circuit_id<T>(transfer: &ZkTransfer<T>): &vector<u8> {
+    &transfer.circuit_id
+}
+
+// ============================================
 // TEST HELPERS
 // ============================================
+
+#[test_only]
+public fun destroy_zk_transfer_for_testing<T>(transfer: ZkTransfer<T>) {
+    let ZkTransfer { id, tunnel, .. } = transfer;
+    id.delete();
+    tunnel.destroy_for_testing();
+}
+
+/// Exercises the real circuit-active gate and the real on-chain receiver payout while
+/// bypassing the Groth16 proof and settlement signatures, which need a trusted-setup
+/// circuit and SDK-produced signatures unavailable in unit tests. The proof and
+/// signature checks are covered independently by the zk_verifier and signature suites.
+#[test_only]
+public fun settle_release_no_proof_for_testing<T>(
+    transfer: &mut ZkTransfer<T>,
+    registry: &zk_verifier::CircuitRegistry,
+    payer_balance: u64,
+    receiver_balance: u64,
+    clock: &Clock,
+    ctx: &mut TxContext,
+) {
+    assert!(transfer.status == TRANSFER_PENDING, EInvalidState);
+    assert!(zk_verifier::is_circuit_active(registry, &transfer.circuit_id), ECircuitNotRegistered);
+    transfer
+        .tunnel
+        .close_cooperative_no_sig_for_testing(payer_balance, receiver_balance, clock, ctx);
+    transfer.status = TRANSFER_VERIFIED;
+}
 
 #[test_only]
 public fun destroy_transfer_for_testing(transfer: PrivateTransfer) {

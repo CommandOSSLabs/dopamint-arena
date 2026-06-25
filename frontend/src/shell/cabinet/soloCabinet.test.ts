@@ -4,7 +4,10 @@ import { soloCabinetController } from "./soloCabinet";
 
 test("controller.active mirrors offerable", () => {
   const verbs = { pause() {}, resume() {}, goManual() {}, goHome() {} };
-  assert.equal(soloCabinetController({ offerable: true, ...verbs }).active, true);
+  assert.equal(
+    soloCabinetController({ offerable: true, ...verbs }).active,
+    true,
+  );
   assert.equal(
     soloCabinetController({ offerable: false, ...verbs }).active,
     false,

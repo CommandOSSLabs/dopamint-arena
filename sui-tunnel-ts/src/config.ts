@@ -14,8 +14,7 @@ dotenv.config();
  * The deployed package ID for sui_tunnel
  * Set this via environment variable or update directly
  */
-export const PACKAGE_ID =
-  process.env.PACKAGE_ID || process.env.SUI_TUNNEL_PACKAGE_ID || "";
+export const PACKAGE_ID = process.env.PACKAGE_ID || "";
 
 /**
  * The module names in the sui_tunnel package
@@ -28,8 +27,6 @@ export const MODULES = {
   SUI_RANDOMNESS: "sui_randomness",
   REFEREE: "referee",
   ZK_VERIFIER: "zk_verifier",
-  QUANTUM_POKER: "quantum_poker",
-  QUANTUM_POKER_REFEREE: "quantum_poker_referee",
   HOP: "hop",
   // Example modules
   EXAMPLE_ESCROW: "example_escrow",
@@ -43,6 +40,7 @@ export const MODULES = {
   EXAMPLE_TUNNEL_LIFECYCLE: "example_tunnel_lifecycle",
   EXAMPLE_DISPUTE_RESOLUTION: "example_dispute_resolution",
   EXAMPLE_ZK_PRIVATE_TRANSFER: "example_zk_private_transfer",
+  EXAMPLE_AGENT_ALLOWANCE: "example_agent_allowance",
 } as const;
 
 // ============================================
@@ -59,6 +57,18 @@ export const RANDOM_ID = "0x8";
  */
 export const SUI_COIN_TYPE = SUI_TYPE_ARG;
 
+/**
+ * Native USDC (Circle) coin types on Sui.
+ * Source: https://developers.circle.com/stablecoins/usdc-contract-addresses
+ */
+export const USDC_COIN_TYPE_MAINNET =
+  "0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC";
+export const USDC_COIN_TYPE_TESTNET =
+  "0xa1ec7fc00a6f40db9693ad1415d0c193ad3906494428cf252621037bd7117e29::usdc::USDC";
+
+/** USDC has 6 decimals (1 USDC = 1_000_000 base units). */
+export const USDC_DECIMALS = 6;
+
 // ============================================
 // NETWORK CONFIGURATION
 // ============================================
@@ -74,6 +84,15 @@ export function getNetwork(): SuiNetwork {
     throw new Error(`Invalid network: ${network}`);
   }
   return network as SuiNetwork;
+}
+
+/**
+ * Resolve the native USDC coin type for a network (defaults to the configured
+ * network). devnet/localnet have no canonical USDC, so the testnet type is returned.
+ */
+export function getUsdcCoinType(network?: SuiNetwork): string {
+  const target = network || getNetwork();
+  return target === "mainnet" ? USDC_COIN_TYPE_MAINNET : USDC_COIN_TYPE_TESTNET;
 }
 
 // ============================================
@@ -137,6 +156,15 @@ export const StreamStatus = {
   ACTIVE: 0,
   COMPLETED: 1,
   CANCELLED: 2,
+} as const;
+
+/**
+ * Agent allowance status values (matching example_agent_allowance Move constants)
+ */
+export const AllowanceStatus = {
+  ACTIVE: 0,
+  PAUSED: 1,
+  REVOKED: 2,
 } as const;
 
 /**
@@ -226,13 +254,12 @@ export const MIN_AUCTION_DURATION_MS = 600000;
 // HELPER FUNCTIONS
 // ============================================
 
+/**
+ * Build a Move call target string
+ */
 export function buildTarget(module: string, func: string): string {
-  // Prioritize the dynamic environment variable first to allow runtime/test overrides.
-  const pkg =
-    process.env.PACKAGE_ID ||
-    process.env.SUI_TUNNEL_PACKAGE_ID ||
-    PACKAGE_ID ||
-    "";
+  // Prefer the load-time constant; fall back to the current env (set after load).
+  const pkg = PACKAGE_ID || process.env.PACKAGE_ID || "";
   if (!pkg) {
     throw new Error(
       "PACKAGE_ID not set. Please set it in environment variables or config."

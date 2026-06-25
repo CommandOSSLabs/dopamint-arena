@@ -14,7 +14,7 @@ export const BombItWindow = createArenaWindow<BombItSession, PvpBombIt>({
   Lobby: BombLobby,
   screen: {
     style: BOMB_IT_STYLE,
-    rootClass: "bomb-lobby sketch",
+    rootClass: "bomb-lobby bomb-lobby--center sketch",
     cardClass:
       "bomb-lobby__card bomb-lobby__card--compact sketch-stroke sketch-panel",
     backBtnClass: `${BOMB_BTN} bomb-cta bomb-cta--full sketch-btn sketch-btn--ghost`,

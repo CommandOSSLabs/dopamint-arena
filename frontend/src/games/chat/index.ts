@@ -1,12 +1,14 @@
 import { register } from "../registry";
-import { makePlaceholder } from "../GamePlaceholder";
+import { ChatWindow } from "./ChatWindow";
 
-// A default floating widget, not a catalog game (catalog: false).
+// A chat-workspace surface — kept out of the games catalog (catalog: false),
+// surfaced instead under the Add dialog's Chat group. More chats can be added.
 register({
   id: "chat",
   name: "Chat",
   catalog: false,
+  workspace: "chat",
   icon: "💬",
   image: "/games/chat-app.png",
-  Window: makePlaceholder("Chat"),
+  Window: ChatWindow,
 });

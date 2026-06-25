@@ -1,8 +1,8 @@
 import { useCurrentAccount } from "@mysten/dapp-kit";
-import type { GameWindowProps } from "../types";
 import { SketchDefs } from "../sketch";
-import { useQuantumPokerAuto } from "./useQuantumPokerAuto";
+import type { GameWindowProps } from "../types";
 import { QuantumPokerTable } from "./QuantumPokerTable";
+import { useQuantumPokerAuto } from "./useQuantumPokerAuto";
 
 function Stat({ n, l }: { n: number | string; l: string }) {
   return (
@@ -48,7 +48,11 @@ export function QuantumPokerBotVsBotWindow({
           </div>
         </div>
         {running ? (
-          <button type="button" className="sketch-btn sketch-btn--stop" onClick={s.stopAuto}>
+          <button
+            type="button"
+            className="sketch-btn sketch-btn--stop"
+            onClick={s.stopAuto}
+          >
             Stop
           </button>
         ) : (

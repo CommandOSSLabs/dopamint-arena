@@ -20,7 +20,6 @@ import { BattleView } from "./components/BattleView";
 import { useBattleship } from "./useBattleship";
 import { useBattleshipPvp } from "./useBattleshipPvp";
 import { SketchDefs } from "../sketch";
-import "../quantumPoker/quantumPoker.css";
 import "./battleship.css";
 
 type Mode = "bot" | "pvp";
@@ -33,9 +32,9 @@ const modeStore = new Map<string, Mode | null>();
 // amber-inked "go" for the primary, plain ink outline for the secondary. The
 // `qp-btn` class carries the wobble border + cqmin sizing; we add layout utilities.
 const BTN_PRIMARY =
-  "qp-btn qp-btn--go inline-flex w-full items-center justify-center gap-2";
+  "sketch-btn sketch-btn--go inline-flex w-full items-center justify-center gap-2";
 const BTN_SECONDARY =
-  "qp-btn inline-flex w-full items-center justify-center gap-2";
+  "sketch-btn inline-flex w-full items-center justify-center gap-2";
 
 /**
  * Battleship over a REAL Sui tunnel. Both modes require a connected wallet (gas is
@@ -65,7 +64,7 @@ export function BattleshipWindow({ windowId }: GameWindowProps) {
   // width AND height (container queries + cqh units), not the viewport — correct
   // in a small floating window on a big screen, or full-width on mobile.
   return (
-    <div className="qp-sketch relative h-full min-h-0 overflow-hidden">
+    <div className="sketch relative h-full min-h-0 overflow-hidden">
       {/* The roughen filter every `.qp-*` / `.bs-*` border references — rendered once. */}
       <SketchDefs />
 
@@ -88,11 +87,11 @@ function ModeChooser({ onPick }: { onPick: (m: Mode) => void }) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-5 p-5 text-center">
       <div className="flex flex-col items-center gap-1">
-        <span className="qp-eyebrow">You vs the sea</span>
-        <h2 className="qp-title text-[clamp(26px,9cqmin,40px)]">Battleship</h2>
-        <p className="qp-note mt-1 max-w-xs">
+        <span className="sketch-eyebrow">You vs the sea</span>
+        <h2 className="sketch-title text-[clamp(26px,9cqmin,40px)]">Battleship</h2>
+        <p className="sketch-note mt-1 max-w-xs">
           Hide your fleet, then sink your foe's. Every shot is{" "}
-          <span className="text-[var(--qp-amber)]">commit-revealed</span> and
+          <span className="text-[var(--sketch-accent)]">commit-revealed</span> and
           co-signed in the tunnel — the winner settles on-chain.
         </p>
       </div>
@@ -110,7 +109,7 @@ function ModeChooser({ onPick }: { onPick: (m: Mode) => void }) {
 
 function Centered({ children }: { children: ReactNode }) {
   return (
-    <div className="qp-note flex h-full flex-col items-center justify-center gap-3 p-4 text-center">
+    <div className="sketch-note flex h-full flex-col items-center justify-center gap-3 p-4 text-center">
       {children}
     </div>
   );
@@ -122,11 +121,11 @@ function ConnectWalletPane({ note }: { note: string }) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-4 p-5 text-center">
       <div className="flex flex-col items-center gap-1">
-        <span className="qp-eyebrow">Wallet required</span>
-        <h3 className="qp-title text-[clamp(20px,7cqmin,30px)]">
+        <span className="sketch-eyebrow">Wallet required</span>
+        <h3 className="sketch-title text-[clamp(20px,7cqmin,30px)]">
           Connect to play
         </h3>
-        <p className="qp-note mt-1 max-w-xs">{note}</p>
+        <p className="sketch-note mt-1 max-w-xs">{note}</p>
       </div>
       <ConnectModal
         walletFilter={isEnokiWallet}
@@ -156,8 +155,8 @@ function AutoToggle({
       onClick={() => onChange(!on)}
       title="Let the bot play your shots too"
       className={cn(
-        "qp-btn inline-flex items-center gap-1",
-        on && "qp-btn--go",
+        "sketch-btn inline-flex items-center gap-1",
+        on && "sketch-btn--go",
       )}
     >
       <span className="grid size-[1.1em] place-items-center">
@@ -175,7 +174,7 @@ function SettleButton({ onSettle }: { onSettle: () => void }) {
       type="button"
       onClick={onSettle}
       title="Settle and close the tunnel now (cash out)"
-      className="qp-btn qp-btn--go"
+      className="sketch-btn sketch-btn--go"
     >
       Settle
     </button>
@@ -197,15 +196,15 @@ function SettledPane({
   return (
     <div className="flex h-full flex-col items-center justify-center gap-4 p-5 text-center">
       <div className="flex flex-col items-center gap-1">
-        <span className="qp-eyebrow">
+        <span className="sketch-eyebrow">
           {settling ? "Settling" : "Session settled"}
         </span>
-        <h3 className="qp-title text-[clamp(20px,7cqmin,30px)]">
+        <h3 className="sketch-title text-[clamp(20px,7cqmin,30px)]">
           {settling ? "Closing tunnel…" : "Settled ✓"}
         </h3>
-        <p className="qp-note mt-1 max-w-xs">
-          You <span className="text-[var(--qp-felt)]">{score.you}</span> –{" "}
-          <span className="text-[var(--qp-red)]">{score.foe}</span> Bot over{" "}
+        <p className="sketch-note mt-1 max-w-xs">
+          You <span className="text-[var(--sketch-felt)]">{score.you}</span> –{" "}
+          <span className="text-[var(--sketch-red)]">{score.foe}</span> Bot over{" "}
           {games} game{games === 1 ? "" : "s"} on one tunnel.
         </p>
       </div>
@@ -234,8 +233,11 @@ function ModeFrame({
     <div className="flex h-full w-full flex-col">
       {/* A thin in-game control strip. The window chrome above already shows the title,
           so this carries only the game actions (Back / Auto / Settle), kept compact. */}
-      <header className="qp-head shrink-0 py-[clamp(4px,1.4cqmin,9px)]">
-        <button onClick={onBack} className="qp-btn inline-flex items-center gap-1">
+      <header className="bs-head shrink-0 py-[clamp(4px,1.4cqmin,9px)]">
+        <button
+          onClick={onBack}
+          className="sketch-btn inline-flex items-center gap-1"
+        >
           <ArrowLeft className="size-[1em]" /> Back
         </button>
         {headerExtra && <div className="ml-auto shrink-0">{headerExtra}</div>}
@@ -256,8 +258,8 @@ function ErrorPane({
 }) {
   return (
     <Centered>
-      <p className="text-[var(--qp-red)]">{error ?? "something went wrong"}</p>
-      <button onClick={onBack} className="qp-btn">
+      <p className="text-[var(--sketch-red)]">{error ?? "something went wrong"}</p>
+      <button onClick={onBack} className="sketch-btn">
         Back
       </button>
     </Centered>

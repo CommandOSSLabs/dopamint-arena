@@ -105,7 +105,7 @@ export function lengthPrefixedConcat(parts: Uint8Array[]): Uint8Array {
 export function rollingDigest(
   blake2b256: (d: Uint8Array) => Uint8Array,
   prevDigest: Uint8Array,
-  delta: Uint8Array,
+  delta: Uint8Array
 ): Uint8Array {
   return blake2b256(concatBytes([prevDigest, delta]));
 }

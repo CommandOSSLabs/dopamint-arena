@@ -30,6 +30,7 @@ export interface StateCommitment {
  */
 export interface Tunnel {
   id: string;
+  version: bigint;
   partyA: PartyConfig;
   partyB: PartyConfig;
   balance: bigint;
@@ -42,6 +43,8 @@ export interface Tunnel {
   timeoutMs: bigint;
   penaltyAmount: bigint;
   disputeRaiser: string | null;
+  /** Highest disputed nonce plus one; enforces monotonic dispute progress. */
+  lastDisputedNonce: bigint;
 }
 
 // ============================================
@@ -165,6 +168,27 @@ export interface CancellationReceipt {
   refundedAmount: bigint;
   recipientReceived: bigint;
   timestampMs: bigint;
+}
+
+// ============================================
+// AGENT ALLOWANCE TYPES
+// ============================================
+
+/**
+ * Agent spending allowance object representation
+ */
+export interface Allowance {
+  id: string;
+  principal: string;
+  payee: string;
+  delegate: string | null;
+  escrowBalance: bigint;
+  ratePerSecond: bigint;
+  spendCap: bigint;
+  spent: bigint;
+  authorizedTotal: bigint;
+  expiryMs: bigint;
+  status: number;
 }
 
 // ============================================
@@ -492,6 +516,14 @@ export interface CreateGameResult {
  */
 export interface CreateStreamResult {
   streamId: string;
+  digest: string;
+}
+
+/**
+ * Result of creating an agent spending allowance
+ */
+export interface CreateAllowanceResult {
+  allowanceId: string;
   digest: string;
 }
 

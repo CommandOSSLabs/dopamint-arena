@@ -111,5 +111,5 @@
     "skipLibCheck": true /* Skip type checking all .d.ts files. */
   },
   "include": ["src"],
-  "exclude": ["node_modules", "dist", "src/**/*.gen.ts"]
+  "exclude": ["node_modules", "dist", "**/*.test.ts", "src/**/*.gen.ts"]
 }

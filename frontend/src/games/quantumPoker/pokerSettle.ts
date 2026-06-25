@@ -6,10 +6,7 @@
 import type { Transcript } from "sui-tunnel-ts/proof/transcript";
 import { getControlPlaneClient } from "@/backend/controlPlane";
 import { coSignedToSettleBody } from "@/backend/settleRequest";
-import {
-  closeCooperativeWithRoot,
-  type SignExec,
-} from "@/onchain/tunnelTx";
+import { closeCooperativeWithRoot, type SignExec } from "@/onchain/tunnelTx";
 import type { PokerTunnel } from "./pokerSelfPlay";
 
 export interface PokerSettleResult {

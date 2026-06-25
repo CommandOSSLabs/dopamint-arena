@@ -48,6 +48,7 @@ close, not a payout.
 ## Layout
 
 Bun workspace, two TS packages (the game is **client-only** — no server, no database):
+
 - `packages/shared` (`@ttt/shared`) — game rules + the tunnel wire helpers
   (`encodeStateHash`, `buildStateUpdateMsg`, `buildSettlementMsg`, in `src/tunnel/state.ts`).
 - `packages/client` (`@ttt/client`) — Vite + React:
@@ -63,6 +64,7 @@ The SDK is consumed as a `file:` dep from `../reference/sui-tunnel-ts`. If its `
 or stale, build it there: `cd ../reference/sui-tunnel-ts && ./node_modules/.bin/tsc`.
 
 ## Prerequisites
+
 - Bun (1.3.x).
 - A **Slush wallet** (or Google/Enoki login) with a little **testnet SUI** — used once to fund the
   bots. (Or use the testnet faucet button, which may be rate-limited.)
@@ -76,6 +78,7 @@ cp -n packages/client/.env.example packages/client/.env   # if not already prese
 ```
 
 `packages/client/.env`:
+
 ```
 VITE_API_URL="/api"
 VITE_SUI_NETWORK="https://fullnode.testnet.sui.io:443"
@@ -89,6 +92,7 @@ VITE_TTT_PACKAGE_ID="0x8fd369d75838721d56b47b302e5eb85ff9c77cdb1182e81a08bdee546
 ```bash
 bun run dev          # client at http://localhost:3100
 ```
+
 Open http://localhost:3100 → **Connect wallet** → **Fund bots from wallet** (one tx sends a little
 SUI to each bot) → **New Game** (one game) or **▶ Auto-play** (loops until a bot is low on gas or
 you press **⏹ Stop**). Use **⇄ Even out bots** to move gas from the richer bot to the poorer one.
@@ -108,6 +112,7 @@ SUI_FUNDER_KEY=<suiprivkey…> bun run packages/client/scripts/bot-vs-bot.ts
 ```
 
 ## Notes
+
 - **No server, no DB.** Two persistent bot keypairs live in `localStorage`; each uses one ed25519
   seed both off-chain (state co-signing) and on-chain (`Ed25519Keypair`, signs its own txs).
 - **Per-move signing is instant and free** (off-chain). Only the 4 on-chain txs per game

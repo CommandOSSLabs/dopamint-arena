@@ -45,7 +45,6 @@ origin, wallet flow, and relay path a human uses. Spec:
   §Numbers#1 number must be measured **co-located in us-east-1** (spec §4) — run
   `loadtestRelay.mjs` from an EC2 instance in-region, then compare to `R_min`.
 
-
 ## Known follow-ups (deferred)
 
 - **Backend `POST /v1/tunnels/{id}/settle` → 404:** the engine falls back to an on-chain

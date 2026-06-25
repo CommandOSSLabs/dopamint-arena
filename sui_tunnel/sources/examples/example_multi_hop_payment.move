@@ -19,6 +19,7 @@ use sui::clock::Clock;
 use sui::event;
 use sui::hash;
 use sui_tunnel::hop;
+use sui_tunnel::tunnel::Tunnel;
 
 // === Error definitions (see sui_tunnel::errors for the canonical registry) ===
 
@@ -30,6 +31,9 @@ const EInvalidState: vector<u8> = b"The operation is not allowed in the current 
 
 #[error]
 const EInvalidHop: vector<u8> = b"The hop is invalid.";
+
+#[error]
+const EHopTunnelMismatch: vector<u8> = b"The hop's tunnel id does not match the provided tunnel.";
 
 // ============================================
 // CONSTANTS
@@ -199,24 +203,11 @@ public fun invoice_memo(invoice: &PaymentInvoice): &vector<u8> { &invoice.memo }
 
 /// Creates a payment ID
 fun create_payment_id(payment_hash: &vector<u8>, sender: address, timestamp: u64): vector<u8> {
-    let mut data = vector<u8>[];
+    let mut data = vector[];
+    data.append(*payment_hash);
+    data.append(sender.to_bytes());
 
-    // Add payment hash
-    let mut i = 0;
-    while (i < payment_hash.length()) {
-        data.push_back(payment_hash[i]);
-        i = i + 1;
-    };
-
-    // Add sender
-    let sender_bytes = sender.to_bytes();
-    i = 0;
-    while (i < sender_bytes.length()) {
-        data.push_back(sender_bytes[i]);
-        i = i + 1;
-    };
-
-    // Add timestamp
+    // Timestamp as little-endian u64.
     data.push_back((timestamp & 0xFF) as u8);
     data.push_back(((timestamp >> 8) & 0xFF) as u8);
     data.push_back(((timestamp >> 16) & 0xFF) as u8);
@@ -281,7 +272,12 @@ public fun validate_payment(payment: &MultiHopPayment): bool {
 
 /// Sets up HTLCs along the route (makes payment "in flight").
 /// Only the route sender can set up HTLCs.
-public fun setup_htlcs(payment: &mut MultiHopPayment, base_timeout_ms: u64, ctx: &TxContext) {
+public fun setup_htlcs(
+    payment: &mut MultiHopPayment,
+    base_timeout_ms: u64,
+    clock: &Clock,
+    ctx: &TxContext,
+) {
     assert!(ctx.sender() == hop::route_sender(&payment.route), ENotAuthorized);
     assert!(payment.status == PAYMENT_CREATED, EInvalidState);
 
@@ -289,7 +285,9 @@ public fun setup_htlcs(payment: &mut MultiHopPayment, base_timeout_ms: u64, ctx:
     let hop_count = hop::route_hop_count(route);
     assert!(hop_count > 0, EInvalidHop);
 
-    // Create cascading timeouts
+    // Cascading timeouts are relative durations; anchor them to the current
+    // clock so HTLC expiry_ms is the absolute timestamp tunnel.lock_htlc expects.
+    let now = clock.timestamp_ms();
     let timeouts = hop::create_cascading_timeouts(
         base_timeout_ms,
         hop_count,
@@ -328,7 +326,7 @@ public fun setup_htlcs(payment: &mut MultiHopPayment, base_timeout_ms: u64, ctx:
             htlc_amount,
             sender_addr,
             hop::hop_node_address(hop_ref),
-            timeouts[i],
+            now + timeouts[i],
         );
 
         payment.htlcs.push_back(htlc);
@@ -498,6 +496,147 @@ public fun can_retry(payment: &MultiHopPayment): bool {
 }
 
 // ============================================
+// ON-CHAIN HTLC ROUTING (REAL FUND MOVEMENT)
+// ============================================
+//
+// Everything above operates on `hop::HTLC` value structs: pure off-chain routing
+// math that moves no funds. The functions below execute the SAME plan against real
+// funded `Tunnel<T>` channels using the tunnel's in-tunnel HTLCs. Each route edge is
+// an independent, already-funded, active two-party tunnel; the orchestrator locks an
+// HTLC per edge (forward), the receiver claims with the preimage, and that preimage
+// propagates upstream so each node claims its incoming HTLC — moving real `Coin<T>`.
+// On timeout, each locker reclaims via `expire_hop_htlc`. Cascading timeouts make the
+// chain safe exactly as in Lightning; atomicity is economic, not transactional.
+//
+// All on-chain enforcement (32-byte payment hash, amount <= locker balance, the
+// `party_a + party_b == balance` invariant, preimage/expiry checks, domain-separated
+// HTLC signatures) lives in `tunnel`, not here. This module only binds each plan hop
+// to its real tunnel and drives the tunnel primitives.
+
+/// Emitted when a hop's HTLC is locked on-chain.
+public struct HopHTLCLocked has copy, drop {
+    payment_hash: vector<u8>,
+    tunnel_id: ID,
+    hop_index: u64,
+    amount: u64,
+    receiver: address,
+}
+
+/// Emitted when a hop's HTLC is claimed on-chain with the preimage.
+public struct HopHTLCClaimed has copy, drop {
+    payment_hash: vector<u8>,
+    tunnel_id: ID,
+    hop_index: u64,
+}
+
+/// Emitted when a hop's HTLC is reclaimed by its locker after expiry.
+public struct HopHTLCExpired has copy, drop {
+    payment_hash: vector<u8>,
+    tunnel_id: ID,
+    hop_index: u64,
+}
+
+/// The canonical route label for a funded tunnel. Pass this as a hop's `tunnel_id`
+/// when building the route so the on-chain orchestration can bind the hop to the real
+/// channel.
+public fun tunnel_route_id<T>(tunnel: &Tunnel<T>): vector<u8> {
+    object::id(tunnel).to_bytes()
+}
+
+/// Asserts the route hop at `hop_index` references `tunnel`.
+fun assert_hop_bound<T>(payment: &MultiHopPayment, tunnel: &Tunnel<T>, hop_index: u64) {
+    let route = &payment.route;
+    assert!(hop_index < hop::route_hop_count(route), EInvalidHop);
+    let hop_ref = hop::route_get_hop(route, hop_index);
+    assert!(*hop::hop_tunnel_id(hop_ref) == tunnel_route_id(tunnel), EHopTunnelMismatch);
+}
+
+/// Locks the on-chain HTLC for hop `hop_index` in its funded tunnel, carving the hop
+/// amount out of the locker's tunnel balance. The route hop must reference this tunnel
+/// and the counterparty must have signed the HTLC terms. The same payment hash is
+/// reused on every edge so one preimage settles the whole route.
+public fun lock_hop_htlc<T>(
+    payment: &MultiHopPayment,
+    tunnel: &mut Tunnel<T>,
+    hop_index: u64,
+    counterparty_sig: vector<u8>,
+    clock: &Clock,
+    ctx: &TxContext,
+) {
+    assert!(payment.status == PAYMENT_IN_FLIGHT, EInvalidState);
+    assert_hop_bound(payment, tunnel, hop_index);
+
+    let htlc = &payment.htlcs[hop_index];
+    let amount = hop::htlc_amount(htlc);
+    let receiver = hop::htlc_receiver(htlc);
+    let expiry_ms = hop::htlc_expiry_ms(htlc);
+    let tunnel_id = object::id(tunnel);
+
+    tunnel.lock_htlc(
+        payment.payment_hash,
+        amount,
+        receiver,
+        expiry_ms,
+        counterparty_sig,
+        clock,
+        ctx,
+    );
+
+    event::emit(HopHTLCLocked {
+        payment_hash: payment.payment_hash,
+        tunnel_id,
+        hop_index,
+        amount,
+        receiver,
+    });
+}
+
+/// Claims the on-chain HTLC for hop `hop_index` with the preimage, transferring the
+/// hop amount to the receiver. Reveals the preimage so the upstream node can claim its
+/// own incoming HTLC. Only the HTLC receiver can call it (enforced by the tunnel).
+public fun claim_hop_htlc<T>(
+    payment: &MultiHopPayment,
+    tunnel: &mut Tunnel<T>,
+    hop_index: u64,
+    preimage: vector<u8>,
+    clock: &Clock,
+    ctx: &mut TxContext,
+) {
+    assert_hop_bound(payment, tunnel, hop_index);
+    let tunnel_id = object::id(tunnel);
+
+    tunnel.claim_htlc_in_tunnel(payment.payment_hash, preimage, clock, ctx);
+
+    event::emit(HopHTLCClaimed {
+        payment_hash: payment.payment_hash,
+        tunnel_id,
+        hop_index,
+    });
+}
+
+/// Reclaims the on-chain HTLC for hop `hop_index` after its expiry, returning the
+/// locked amount to the locker. Only the HTLC sender can call it (enforced by the
+/// tunnel). Cascading timeouts guarantee an upstream locker can always reclaim.
+public fun expire_hop_htlc<T>(
+    payment: &MultiHopPayment,
+    tunnel: &mut Tunnel<T>,
+    hop_index: u64,
+    clock: &Clock,
+    ctx: &mut TxContext,
+) {
+    assert_hop_bound(payment, tunnel, hop_index);
+    let tunnel_id = object::id(tunnel);
+
+    tunnel.expire_htlc_in_tunnel(payment.payment_hash, clock, ctx);
+
+    event::emit(HopHTLCExpired {
+        payment_hash: payment.payment_hash,
+        tunnel_id,
+        hop_index,
+    });
+}
+
+// ============================================
 // TEST HELPERS
 // ============================================
 
@@ -505,4 +644,27 @@ public fun can_retry(payment: &MultiHopPayment): bool {
 public fun destroy_for_testing(payment: MultiHopPayment) {
     let MultiHopPayment { id, .. } = payment;
     id.delete();
+}
+
+/// Locks a hop's HTLC without a counterparty signature, exercising the real on-chain
+/// HTLC fund movement. Signature verification is covered by the signature suite.
+#[test_only]
+public fun lock_hop_htlc_no_sig_for_testing<T>(
+    payment: &MultiHopPayment,
+    tunnel: &mut Tunnel<T>,
+    hop_index: u64,
+    clock: &Clock,
+    ctx: &TxContext,
+) {
+    assert!(payment.status == PAYMENT_IN_FLIGHT, EInvalidState);
+    assert_hop_bound(payment, tunnel, hop_index);
+    let htlc = &payment.htlcs[hop_index];
+    tunnel.lock_htlc_no_sig_for_testing(
+        payment.payment_hash,
+        hop::htlc_amount(htlc),
+        hop::htlc_receiver(htlc),
+        hop::htlc_expiry_ms(htlc),
+        clock,
+        ctx,
+    );
 }

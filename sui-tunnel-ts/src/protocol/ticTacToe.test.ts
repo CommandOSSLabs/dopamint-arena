@@ -12,7 +12,7 @@ const ctx = { tunnelId: "0xab", initialBalances: { a: 1000n, b: 1000n } };
 function play(
   proto: TicTacToeProtocol,
   s: TicTacToeState,
-  cells: number[],
+  cells: number[]
 ): TicTacToeState {
   let cur = s;
   for (const cell of cells) {
@@ -180,7 +180,7 @@ test("end-to-end self-play tunnel: latest co-signed update verifies", () => {
     b,
     ed25519Address(a.publicKey),
     ed25519Address(b.publicKey),
-    { a: 1000n, b: 1000n },
+    { a: 1000n, b: 1000n }
   );
   // A wins the top row: cells 0,3,1,4,2 alternating A/B.
   const cells = [0, 3, 1, 4, 2];
@@ -196,7 +196,7 @@ test("end-to-end self-play tunnel: latest co-signed update verifies", () => {
     verifyCoSignedUpdate(
       t.latest!,
       { publicKey: t.partyA.publicKey, scheme: t.partyA.scheme },
-      { publicKey: t.partyB.publicKey, scheme: t.partyB.scheme },
-    ),
+      { publicKey: t.partyB.publicKey, scheme: t.partyB.scheme }
+    )
   );
 });

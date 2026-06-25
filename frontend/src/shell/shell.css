@@ -10,7 +10,9 @@
   height: 100%;
   width: 100%;
   /* Smooth dim transition to avoid jarring opacity jumps. */
-  transition: opacity 0.14s ease, filter 0.14s ease;
+  transition:
+    opacity 0.14s ease,
+    filter 0.14s ease;
 }
 
 /* Board recedes behind glass while the overlay is up — still legible (you must

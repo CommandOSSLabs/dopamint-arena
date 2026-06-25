@@ -11,6 +11,7 @@ import { createBattleshipKit } from "./games/battleship/kit";
 import { createQuantumPokerKit } from "./games/quantumPoker/kit";
 import { createBombItKit } from "./games/bombIt/kit";
 import { createChickenCrossKit } from "./games/chickenCross/kit";
+import { createWorldCanvasKit } from "./games/worldCanvas/kit";
 import { defaultStateHash, type StateHash } from "./stateHash";
 import { QUANTUM_POKER_STAKE } from "@/games/quantumPoker/constants";
 
@@ -20,7 +21,8 @@ export type GameId =
   | "battleship"
   | "quantum-poker"
   | "bomb-it"
-  | "chicken-cross";
+  | "chicken-cross"
+  | "world-canvas";
 export type { StateHash };
 export { defaultStateHash };
 
@@ -60,4 +62,5 @@ export const GAME_KITS: GameKitRegistry = {
   "quantum-poker": createQuantumPokerKit(QUANTUM_POKER_STAKE),
   "bomb-it": createBombItKit(100n),
   "chicken-cross": createChickenCrossKit(100n),
+  "world-canvas": createWorldCanvasKit(100n),
 };

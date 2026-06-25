@@ -80,7 +80,7 @@ import { createEscrow, markDelivered, confirmAndRelease } from "sui-tunnel-ts";
 const { escrowId } = await createEscrow(
   sellerAddress, // seller address
   "Purchase item", // description
-  paymentCoinId, // payment coin object ID
+  paymentCoinId // payment coin object ID
 );
 
 // Seller marks as delivered
@@ -108,7 +108,7 @@ const { swapId: aliceSwapId } = await createSwapLock(
   bobAddress,
   amount,
   hash,
-  expiresAt,
+  expiresAt
 );
 
 // Bob locks funds with same hash (shorter timeout)
@@ -117,7 +117,7 @@ const { swapId: bobSwapId } = await createSwapLock(
   aliceAddress,
   amount,
   hash,
-  expiresAt - buffer,
+  expiresAt - buffer
 );
 
 // Alice claims Bob's lock (reveals secret)

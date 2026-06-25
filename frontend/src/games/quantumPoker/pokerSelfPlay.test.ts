@@ -48,8 +48,20 @@ function newTunnel() {
 test("two personas self-play a full poker tunnel to done, balance conserved", () => {
   const tunnel = newTunnel();
   const ctx: BotContext = { rngForSeat: (s) => mulberry32(s === "A" ? 1 : 2) };
-  const botA = makeSeatBot("A", STAKE, HAND_CAP, { name: "Nari", persona: "tight" }, ctx);
-  const botB = makeSeatBot("B", STAKE, HAND_CAP, { name: "Jules", persona: "loose" }, ctx);
+  const botA = makeSeatBot(
+    "A",
+    STAKE,
+    HAND_CAP,
+    { name: "Nari", persona: "tight" },
+    ctx,
+  );
+  const botB = makeSeatBot(
+    "B",
+    STAKE,
+    HAND_CAP,
+    { name: "Jules", persona: "loose" },
+    ctx,
+  );
 
   const steps = runPokerSelfPlayToEnd(tunnel, botA, botB, 5000);
 
@@ -61,8 +73,20 @@ test("two personas self-play a full poker tunnel to done, balance conserved", ()
 test("stepPokerAuto returns null at terminal", () => {
   const tunnel = newTunnel();
   const ctx: BotContext = { rngForSeat: (s) => mulberry32(s === "A" ? 1 : 2) };
-  const botA = makeSeatBot("A", STAKE, HAND_CAP, { name: "Nari", persona: "tight" }, ctx);
-  const botB = makeSeatBot("B", STAKE, HAND_CAP, { name: "Jules", persona: "loose" }, ctx);
+  const botA = makeSeatBot(
+    "A",
+    STAKE,
+    HAND_CAP,
+    { name: "Nari", persona: "tight" },
+    ctx,
+  );
+  const botB = makeSeatBot(
+    "B",
+    STAKE,
+    HAND_CAP,
+    { name: "Jules", persona: "loose" },
+    ctx,
+  );
   runPokerSelfPlayToEnd(tunnel, botA, botB, 5000);
   assert.equal(stepPokerAuto(tunnel, botA, botB, 1n), null);
 });
@@ -70,8 +94,20 @@ test("stepPokerAuto returns null at terminal", () => {
 test("legalPokerActions allows check when nobody has bet this street", () => {
   const tunnel = newTunnel();
   const ctx: BotContext = { rngForSeat: (s) => mulberry32(s === "A" ? 1 : 2) };
-  const botA = makeSeatBot("A", STAKE, HAND_CAP, { name: "Nari", persona: "tight" }, ctx);
-  const botB = makeSeatBot("B", STAKE, HAND_CAP, { name: "Jules", persona: "loose" }, ctx);
+  const botA = makeSeatBot(
+    "A",
+    STAKE,
+    HAND_CAP,
+    { name: "Nari", persona: "tight" },
+    ctx,
+  );
+  const botB = makeSeatBot(
+    "B",
+    STAKE,
+    HAND_CAP,
+    { name: "Jules", persona: "loose" },
+    ctx,
+  );
   // Advance until a betting phase with equal street bets is reached.
   let ts = 1n;
   for (let i = 0; i < 200; i++) {
@@ -93,8 +129,20 @@ test("legalPokerActions allows check when nobody has bet this street", () => {
 test("human router pauses on the human's betting turn but auto-runs everything else", () => {
   const tunnel = newTunnel();
   const ctx: BotContext = { rngForSeat: (s) => mulberry32(s === "A" ? 1 : 2) };
-  const botA = makeSeatBot("A", STAKE, HAND_CAP, { name: "You", persona: "balanced" }, ctx);
-  const botB = makeSeatBot("B", STAKE, HAND_CAP, { name: "Jules", persona: "loose" }, ctx);
+  const botA = makeSeatBot(
+    "A",
+    STAKE,
+    HAND_CAP,
+    { name: "You", persona: "balanced" },
+    ctx,
+  );
+  const botB = makeSeatBot(
+    "B",
+    STAKE,
+    HAND_CAP,
+    { name: "Jules", persona: "loose" },
+    ctx,
+  );
 
   let ts = 1n;
   let awaited = false;

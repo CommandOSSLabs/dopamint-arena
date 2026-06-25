@@ -70,7 +70,7 @@ export async function openSession(
   memo: string,
   minUpdateIntervalMs: bigint = 0n,
   client?: SuiClient,
-  keypair?: Ed25519Keypair,
+  keypair?: Ed25519Keypair
 ): Promise<{ sessionId: string; digest: string }> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -98,7 +98,7 @@ export async function openSession(
   const result = await signAndExecute(suiClient, tx, signer);
   const sessionId = getCreatedObjectId(
     result.objectChanges,
-    "MicropaymentSession",
+    "MicropaymentSession"
   );
 
   if (!sessionId) {
@@ -123,7 +123,7 @@ export async function joinSession(
   sessionId: string,
   depositCoinId: string,
   client?: SuiClient,
-  keypair?: Ed25519Keypair,
+  keypair?: Ed25519Keypair
 ): Promise<string> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -168,7 +168,7 @@ export async function recordStateUpdate(
   sigA: Uint8Array = new Uint8Array(0),
   sigB: Uint8Array = new Uint8Array(0),
   client?: SuiClient,
-  keypair?: Ed25519Keypair,
+  keypair?: Ed25519Keypair
 ): Promise<string> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -178,7 +178,7 @@ export async function recordStateUpdate(
   tx.moveCall({
     target: buildTarget(
       MODULES.EXAMPLE_TUNNEL_LIFECYCLE,
-      "record_state_update",
+      "record_state_update"
     ),
     typeArguments: [SUI_COIN_TYPE],
     arguments: [
@@ -217,7 +217,7 @@ export async function closeCooperative(
   sigA: Uint8Array,
   sigB: Uint8Array,
   client?: SuiClient,
-  keypair?: Ed25519Keypair,
+  keypair?: Ed25519Keypair
 ): Promise<string> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -265,7 +265,7 @@ export async function raiseDispute(
   timestamp: bigint,
   otherPartySig: Uint8Array,
   client?: SuiClient,
-  keypair?: Ed25519Keypair,
+  keypair?: Ed25519Keypair
 ): Promise<string> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -307,7 +307,7 @@ export async function forceClose(
   partyABalance: bigint,
   partyBBalance: bigint,
   client?: SuiClient,
-  keypair?: Ed25519Keypair,
+  keypair?: Ed25519Keypair
 ): Promise<string> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -341,7 +341,7 @@ export function calculateFinalBalances(
   depositA: bigint,
   depositB: bigint,
   totalAToB: bigint,
-  totalBToA: bigint,
+  totalBToA: bigint
 ): { finalA: bigint; finalB: bigint } {
   const finalA = depositA + totalBToA - totalAToB;
   const finalB = depositB + totalAToB - totalBToA;
@@ -416,7 +416,7 @@ export async function exampleTunnelLifecycleFlow(): Promise<void> {
 
     console.log("\n=== Tunnel lifecycle flow complete! ===");
     console.log(
-      "\nNote: Uncomment the actual calls after setting up keypairs and coin IDs.",
+      "\nNote: Uncomment the actual calls after setting up keypairs and coin IDs."
     );
   } catch (error) {
     logError(error, "exampleTunnelLifecycleFlow");

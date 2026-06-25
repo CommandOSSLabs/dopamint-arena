@@ -26,14 +26,14 @@ test("buildPublicInputs matches Move concat_scalars golden", () => {
   const deckRoot = Uint8Array.from({ length: 32 }, (_, i) => i + 1);
   assert.equal(
     toHex(buildPublicInputs({ deckRoot, position: 5, card: 42 })),
-    G_PUBLIC_INPUTS,
+    G_PUBLIC_INPUTS
   );
 });
 
 test("concatScalars rejects non-32-byte and >8 scalars", () => {
   assert.throws(() => concatScalars([new Uint8Array(31)]));
   assert.throws(() =>
-    concatScalars(Array.from({ length: 9 }, () => new Uint8Array(32))),
+    concatScalars(Array.from({ length: 9 }, () => new Uint8Array(32)))
   );
 });
 
@@ -42,8 +42,8 @@ test("deck Merkle root + inclusion proof verify; tamper fails", () => {
     cardLeaf(
       i,
       i,
-      Uint8Array.from({ length: 16 }, () => i & 0xff),
-    ),
+      Uint8Array.from({ length: 16 }, () => i & 0xff)
+    )
   );
   const root = deckMerkleRoot(leaves);
   for (const idx of [0, 7, 25, 51]) {
@@ -67,8 +67,8 @@ test("UnavailableProver throws with deployment guidance", async () => {
     () =>
       new UnavailableProver().prove(
         { deckRoot: new Uint8Array(32), position: 0, card: 0 },
-        { salt: new Uint8Array(16), proof: { path: [], indexBits: [] } },
+        { salt: new Uint8Array(16), proof: { path: [], indexBits: [] } }
       ),
-    /trusted setup/,
+    /trusted setup/
   );
 });
