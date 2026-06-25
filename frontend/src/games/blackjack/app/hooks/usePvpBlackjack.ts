@@ -41,6 +41,8 @@ import {
   evictExpiredRecords,
   readResumeRecord,
   clearResumeRecord,
+  transcriptToWire,
+  appendAdoptedCheckpoint,
 } from "@/pvp/resume";
 import {
   BlackjackBetProtocol,
@@ -458,11 +460,27 @@ export function usePvpBlackjack(): PvpView {
       };
       // Resume wiring: persist on confirm + run the resync handshake on reconnect.
       detachResumeRef.current?.();
+      const baseAdapter = makeBlackjackResumeAdapter(() => onAdvance());
+      const baseOnReconciled = baseAdapter.onReconciled;
       detachResumeRef.current = attachResume({
         mp,
         channel,
         tunnel: t,
-        adapter: makeBlackjackResumeAdapter(() => onAdvance()),
+        adapter: {
+          ...baseAdapter,
+          captureTranscript: () =>
+            transcriptRef.current
+              ? transcriptToWire(transcriptRef.current)
+              : [],
+          onReconciled: (rt, outcome) => {
+            if (outcome === "adopt" && transcriptRef.current)
+              appendAdoptedCheckpoint(
+                transcriptRef.current,
+                rt.snapshot().latest,
+              );
+            baseOnReconciled(rt, outcome);
+          },
+        },
         identity: {
           matchId: info.matchId,
           tunnelId: t.tunnelId,
@@ -525,7 +543,8 @@ export function usePvpBlackjack(): PvpView {
           { selfWallet: walletAddress },
         );
         if (restored.length > 0) {
-          const { tunnel, channel } = restored[0];
+          const { tunnel, channel, transcript } = restored[0];
+          transcriptRef.current = transcript;
           const rec = readResumeRecord(tunnel.tunnelId)!;
           matchIdRef.current = rec.matchId;
           roleRef.current = rec.role;
