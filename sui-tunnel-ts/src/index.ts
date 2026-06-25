@@ -143,6 +143,17 @@ export type {
 } from "./types";
 
 // ============================================
+// RE-EXPORTED SUI PRIMITIVES
+// These live in the SDK's own @mysten/sui dependency so downstream code can
+// build PTBs and manage keypairs without importing a second, possibly conflicting
+// version of the Sui SDK.
+// ============================================
+
+export { Transaction } from "@mysten/sui/transactions";
+export { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
+export { decodeSuiPrivateKey } from "@mysten/sui/cryptography";
+
+// ============================================
 // UTILITIES
 // ============================================
 

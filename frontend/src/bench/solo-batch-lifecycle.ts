@@ -16,6 +16,9 @@
  *   BACKEND_URL           — tunnel-manager ALB base URL
  *   SUI_NETWORK           — "testnet" | "mainnet" | "localnet" (default "testnet")
  *   PACKAGE_ID            — deployed sui_tunnel package (optional, falls back to env default)
+ *   MTPS_PACKAGE_ID       — MTPS package (optional, dev testnet default)
+ *   MTPS_FAUCET_ID        — MTPS faucet object (optional, dev testnet default)
+ *   MTPS_COIN_TYPE        — MTPS coin type (optional, dev testnet default)
  *
  * Args: <gameId> <mode> <durationMs> <tunnelCount> <seed>
  */
@@ -23,17 +26,12 @@ import { GAME_KITS, type BotContext, type GameId, type Party } from "@/agent/gam
 import { OffchainTunnel, type SignMode } from "sui-tunnel-ts/core/tunnel";
 import { ParticipantRegistry } from "sui-tunnel-ts/core/keys";
 import { mulberry32 } from "sui-tunnel-ts/sim/rng";
-import { toHex } from "sui-tunnel-ts/core/bytes";
-import { blake2b256 } from "sui-tunnel-ts/core/crypto";
 import { nativeBackend } from "sui-tunnel-ts/core/crypto-native";
 import type { Balances } from "sui-tunnel-ts/protocol/Protocol";
 import { Transcript } from "sui-tunnel-ts/proof/transcript";
 import { buildOpenAndFundMany } from "sui-tunnel-ts/onchain/createAndFund";
-import { parseTunnelId } from "sui-tunnel-ts/onchain/lifecycle";
 import { createSuiClient } from "sui-tunnel-ts/utils";
-import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
-import { decodeSuiPrivateKey } from "@mysten/sui/cryptography";
-import { Transaction } from "@mysten/sui/transactions";
+import { Transaction, Ed25519Keypair, decodeSuiPrivateKey } from "sui-tunnel-ts";
 import { createControlPlaneClient } from "@/backend/controlPlane";
 import { coSignedToSettleBody } from "@/backend/settleRequest";
 
@@ -47,6 +45,16 @@ const backendUrl = process.env.BACKEND_URL ?? "http://localhost:8080";
 const network = (process.env.SUI_NETWORK as "testnet" | "mainnet" | "localnet") ?? "testnet";
 const packageId = process.env.PACKAGE_ID ?? "0x0b89fe86e42cdbfd1e614757a83d014b455d12923d0dded58842ab18f8a5a22b";
 process.env.PACKAGE_ID ??= packageId;
+
+const mtpsPackageId =
+  process.env.MTPS_PACKAGE_ID ??
+  "0x62e31a8b5105c16c67936fe129e3db17e5977a8667a3464db583baa89c04272c";
+const mtpsFaucetId =
+  process.env.MTPS_FAUCET_ID ??
+  "0x65df0b7d94cd1ef65f15324d5917b46a01d1964bcaa27c313fd04fd1394b5c8a";
+const mtpsCoinType =
+  process.env.MTPS_COIN_TYPE ??
+  "0x62e31a8b5105c16c67936fe129e3db17e5977a8667a3464db583baa89c04272c::mtps::MTPS";
 
 const controlPlane = createControlPlaneClient(backendUrl);
 const client = createSuiClient(network);
@@ -74,9 +82,9 @@ interface TunnelSlot {
   statsToken: string;
 }
 
-function makeBotPair(): BotPair {
-  const coreA = registry.create(`s${seed}-a`);
-  const coreB = registry.create(`s${seed}-b`);
+function makeBotPair(index: number): BotPair {
+  const coreA = registry.create(`s${seed}-${index}-a`);
+  const coreB = registry.create(`s${seed}-${index}-b`);
   const suiA = Ed25519Keypair.fromSecretKey(coreA.keyPair.secretKey);
   const suiB = Ed25519Keypair.fromSecretKey(coreB.keyPair.secretKey);
   return { coreA, coreB, suiA, suiB };
@@ -97,10 +105,45 @@ function parseAllTunnelIds(objectChanges: unknown): string[] {
   return ids;
 }
 
+async function ensureMtpsCoin(funder: Ed25519Keypair, need: bigint): Promise<string> {
+  const funderAddr = funder.getPublicKey().toSuiAddress();
+  const coins = await client.getCoins({ owner: funderAddr, coinType: mtpsCoinType });
+  const bigEnough = coins.data.find((c) => BigInt(c.balance) >= need);
+  if (bigEnough) return bigEnough.coinObjectId;
+
+  console.log(`[batch-lifecycle] minting MTPS to funder (need ${need} raw)`);
+  const tx = new Transaction();
+  tx.moveCall({
+    target: `${mtpsPackageId}::mtps::mint`,
+    arguments: [tx.object(mtpsFaucetId), tx.pure.u64(need * 2n), tx.pure.address(funderAddr)],
+  });
+  const res = await client.signAndExecuteTransaction({
+    signer: funder,
+    transaction: tx,
+    options: { showEffects: true },
+  });
+  if (res.effects?.status?.status !== "success") {
+    throw new Error(`MTPS faucet failed: ${res.effects?.status?.error ?? "unknown"}`);
+  }
+  await client.waitForTransaction({ digest: res.digest });
+
+  // Poll briefly for indexer lag.
+  for (let i = 0; i < 10; i++) {
+    const fresh = await client.getCoins({ owner: funderAddr, coinType: mtpsCoinType });
+    const found = fresh.data.find((c) => BigInt(c.balance) >= need);
+    if (found) return found.coinObjectId;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  throw new Error("MTPS faucet mint did not become indexable");
+}
+
 async function openPhase(funder: Ed25519Keypair): Promise<TunnelSlot[]> {
   const stake = kit.defaultStake;
+  const totalStake = stake * BigInt(tunnelCount) * 2n;
+  const sourceCoinId = await ensureMtpsCoin(funder, totalStake);
+
   const pairs: BotPair[] = [];
-  for (let i = 0; i < tunnelCount; i++) pairs.push(makeBotPair());
+  for (let i = 0; i < tunnelCount; i++) pairs.push(makeBotPair(i));
 
   const specs = pairs.map((p) => ({
     partyA: {
@@ -120,7 +163,8 @@ async function openPhase(funder: Ed25519Keypair): Promise<TunnelSlot[]> {
   }));
 
   const openTx = new Transaction();
-  buildOpenAndFundMany(openTx, specs);
+  // Use the funder's MTPS coin as the stake source; gas stays SUI.
+  buildOpenAndFundMany(openTx, specs, { coinType: mtpsCoinType, sourceCoin: openTx.object(sourceCoinId) });
   const openRes = await client.signAndExecuteTransaction({
     signer: funder,
     transaction: openTx,
@@ -186,6 +230,7 @@ async function openPhase(funder: Ed25519Keypair): Promise<TunnelSlot[]> {
 }
 
 async function sendHeartbeat(slot: TunnelSlot, actionsDelta: number, windowMs: number): Promise<void> {
+  if (actionsDelta === 0) return;
   try {
     await controlPlane.sendHeartbeat(slot.sessionId, slot.statsToken, {
       tunnelId: slot.tunnelId,
@@ -257,9 +302,7 @@ async function main() {
     const now = Date.now();
     if (now - heartbeatStart >= heartbeatWindowMs) {
       await Promise.all(
-        slots.map((slot, i) =>
-          sendHeartbeat(slot, actionsSinceHeartbeat[i], now - heartbeatStart)
-        )
+        slots.map((slot, i) => sendHeartbeat(slot, actionsSinceHeartbeat[i], now - heartbeatStart))
       );
       actionsSinceHeartbeat.fill(0);
       heartbeatStart = now;
@@ -268,7 +311,9 @@ async function main() {
 
   const tPlay1 = Date.now();
   const playDt = (tPlay1 - tPlay0) / 1000;
-  console.log(`PLAY done: ${steps} steps in ${playDt.toFixed(1)}s -> STEPS_PER_S=${Math.round(steps / playDt)}`);
+  console.log(
+    `PLAY done: ${steps} steps in ${playDt.toFixed(1)}s -> STEPS_PER_S=${Math.round(steps / playDt)}`
+  );
 
   // Final heartbeat flush.
   const finalWindow = Date.now() - heartbeatStart;
@@ -279,7 +324,9 @@ async function main() {
   const settleResults = await Promise.all(slots.map(settleOne));
   const settledCount = settleResults.filter((r) => r.ok).length;
   const tSettle1 = Date.now();
-  console.log(`SETTLE done in ${((tSettle1 - tSettle0) / 1000).toFixed(1)}s: ${settledCount}/${tunnelCount} succeeded`);
+  console.log(
+    `SETTLE done in ${((tSettle1 - tSettle0) / 1000).toFixed(1)}s: ${settledCount}/${tunnelCount} succeeded`
+  );
 }
 
 main().catch((e) => {
