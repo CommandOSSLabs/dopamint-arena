@@ -13,7 +13,7 @@ export interface GameWindowProps {
 
 /**
  * A pluggable game. Adding one = create a folder under games/, implement a
- * `Window` component, and call `register()` (see games/regularPayments for the
+ * `Window` component, and call `register()` (see games/microPayments for the
  * reference template). The catalog lists modules and launching renders `Window`
  * inside the desktop window chrome — no edits to Desktop/Catalog/panels needed.
  */

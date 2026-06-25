@@ -6,7 +6,6 @@ import {
 } from "sui-tunnel-ts/protocol/payments";
 import { defaultStateHash } from "@/agent/stateHash";
 import { type BotContext, type GameBot, type GameKit } from "@/agent/gameKit";
-import { MICRO_UNIT } from "@/games/regularPayments/constants";
 
 /**
  * Regular Payments payer bot (seat A).
@@ -34,7 +33,7 @@ class RegularPaymentsBot implements GameBot<PaymentsState, PaymentMove> {
   }
 
   plan(state: PaymentsState): PaymentMove | null {
-    // Only the payer (A) initiates micro-payments in the regular-payments model.
+    // Only the payer (A) initiates micro-payments in the micro-payments model.
     if (this.seat !== "A") return null;
 
     if (state.balanceA < this.paymentAmount) return null;
@@ -57,7 +56,7 @@ export function createRegularPaymentsKit(
   const protocol = new PaymentsProtocol();
 
   return {
-    id: "regular-payments",
+    id: "micro-payments",
     protocol,
     stateHash: (state) => defaultStateHash(protocol, state),
     createBot: (seat: Party, ctx: BotContext) =>

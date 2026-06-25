@@ -11,7 +11,7 @@ plays a human against a **server** (axios + BLS dealer signatures + on-chain
 moves + IndexedDB). This diverges from every sibling game in the arena, which is
 a single self-contained folder that registers one `Window` component and is meant
 to drive a `sui-tunnel-ts` `Protocol` with a **bot self-play** loop (see the stub
-text in `games/GamePlaceholder.tsx` and `games/regularPayments/PaymentsWindow.tsx`).
+text in `games/GamePlaceholder.tsx` and `games/microPayments/PaymentsWindow.tsx`).
 
 We want Blackjack to match that model: **the player only provides a bet; two bots
 play each other over a tunnel**, with no server.
