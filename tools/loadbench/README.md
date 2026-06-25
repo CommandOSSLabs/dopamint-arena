@@ -262,9 +262,11 @@ Key details:
 
 - **CPU/memory limits**: the service defaults to `cpus: "4"` and `memory: 4g`
   via `deploy.resources.limits`; override per run with `--cpus` / `--memory`.
-- **RPC**: the service resolves the env-derived RPC URL from the host's `.env.local`
-  so the container reaches the localnet on the same env's port. The container
-  and host share the same Docker network and env name.
+- **RPC**: the service hardcodes `SUI_RPC_URL=http://sui-localnet:9000` — the
+  internal docker-network hostname and port (always 9000 inside the network,
+  regardless of the host-side offset port). It joins the env's compose project
+  (`-p loadbench-<name>`) so it reaches the same localnet as the host stack.
+  `.env.local`'s host-port URL is only used by host processes, not the container.
 - **`--channel relay` is host-only**: the relay process (`cargo run -p tunnel-manager`) is not included in the image, so relay benchmarks must run from the host without `--container`.
 
 ## Relay specifics

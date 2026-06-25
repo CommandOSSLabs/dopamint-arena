@@ -233,7 +233,8 @@ function seedSuiConfig(configDir: string, rpc: string, kp: Ed25519Keypair): stri
     Buffer.concat([Buffer.from([0x00]), Buffer.from(bytes)]).toString("base64");
   const { secretKey } = decodeSuiPrivateKey(kp.getSecretKey());
   const addr = kp.toSuiAddress();
-  writeFileSync(`${configDir}/sui.keystore`, JSON.stringify([flagged(secretKey)], null, 2));
+  // mode 0o600: keystore holds an unencrypted private key; restrict to owner-only, matching the real sui CLI.
+  writeFileSync(`${configDir}/sui.keystore`, JSON.stringify([flagged(secretKey)], null, 2), { mode: 0o600 });
   writeFileSync(
     `${configDir}/sui.aliases`,
     JSON.stringify([{ alias: "publisher", public_key_base64: flagged(kp.getPublicKey().toRawBytes()) }], null, 2),
