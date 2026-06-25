@@ -45,6 +45,7 @@ pub(crate) mod test_support {
             mp: std::sync::Arc::new(crate::store::memory::InMemoryMpStore::default()),
             bus: std::sync::Arc::new(crate::store::memory::LocalBus::new("test-instance".into())),
             settler,
+            enoki: None,
             walrus,
             ollama,
             stats_tx,
@@ -359,10 +360,17 @@ pub(crate) struct SponsorRequest {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SponsorResponse {
-    /// Base64 of the full sponsored transaction the user must co-sign and submit.
+    /// Which gas source sponsored this tx — `"enoki"` or `"settler"`. The client uses it to pick how
+    /// to execute: Enoki via `POST /v1/sponsor/execute`, settler by submitting both sigs itself.
+    provider: &'static str,
+    /// Base64 of the sponsored transaction the user must sign.
     tx_bytes: String,
-    /// The settler's gas signature (base64), to submit alongside the user's sender signature.
-    sponsor_signature: String,
+    /// Settler only: the settler's gas signature (base64), submitted with the user's sender sig.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sponsor_signature: Option<String>,
+    /// Enoki only: the sponsored-tx handle, passed back to `/v1/sponsor/execute` with the signature.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    digest: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -383,23 +391,66 @@ pub(crate) struct ChatResponse {
     content: String,
 }
 
-/// Sponsor gas (only) for a user's open/fund tx (ADR-0009). Wraps the client-built tx KIND in
-/// SIP-58 gas owned by the settler, dry-runs it (verify-before-gas), and returns the bytes + the
-/// settler's gas signature. The user co-signs the SAME bytes and submits with both signatures;
-/// the stake comes from the user's own coin, never the sponsor. No session/bearer gate — the
-/// allowlist + budget cap + dry-run are the only thing standing between this and a gas faucet.
+/// Sponsor gas (only) for a user's open/fund tx (ADR-0009, ADR-0014). Validates the client-built tx
+/// KIND against the shared allowlist FIRST (so neither provider is ever asked to sponsor abuse),
+/// then tries Enoki (the primary gas source); on ANY Enoki error it falls back to the settler, which
+/// wraps the KIND in its own SIP-58 gas + dry-runs. The stake always comes from the user's own coin,
+/// never the sponsor. No session/bearer gate — the allowlist + dry-run are the only thing standing
+/// between this and a gas faucet.
 pub(crate) async fn sponsor(
     State(state): State<SharedState>,
     Json(req): Json<SponsorRequest>,
 ) -> Response {
+    // Validate FIRST against the shared anti-abuse allowlist; the returned move-call targets feed
+    // Enoki's allowedMoveCallTargets. A rejection here means no provider should pay — fail loud.
+    let targets = match state.settler.validate_kind(&req.tx_kind_bytes) {
+        Ok(targets) => targets,
+        Err(e) => {
+            tracing::warn!(sender = %req.sender, error = %e, "sponsor refused (validation)");
+            return ApiError::resp(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "sponsor_refused",
+                &e.to_string(),
+            )
+            .into_response();
+        }
+    };
+
+    // Enoki first when configured: it owns the gas AND executes, returning a handle the client
+    // redeems via /v1/sponsor/execute. On any Enoki error (misconfig, 4xx/5xx, timeout) fall through
+    // to the settler — the user's stated order. Execute-step failures are NOT recoverable here (the
+    // signed bytes commit to Enoki's gas owner); the client surfaces those.
+    if let Some(enoki) = &state.enoki {
+        match enoki
+            .sponsor(&req.sender, &req.tx_kind_bytes, &targets)
+            .await
+        {
+            Ok((tx_bytes, digest)) => {
+                return Json(SponsorResponse {
+                    provider: "enoki",
+                    tx_bytes,
+                    sponsor_signature: None,
+                    digest: Some(digest),
+                })
+                .into_response();
+            }
+            Err(e) => {
+                tracing::warn!(sender = %req.sender, error = %e, "enoki sponsor failed; falling back to settler");
+            }
+        }
+    }
+
+    // Settler fallback: wrap in settler-owned SIP-58 gas + dry-run; the client submits both sigs.
     match state
         .settler
         .sponsor_open_fund(&req.sender, &req.tx_kind_bytes)
         .await
     {
         Ok((tx_bytes, sponsor_signature)) => Json(SponsorResponse {
+            provider: "settler",
             tx_bytes,
-            sponsor_signature,
+            sponsor_signature: Some(sponsor_signature),
+            digest: None,
         })
         .into_response(),
         Err(e) => {
@@ -452,6 +503,51 @@ pub(crate) async fn chat_live(
             .map(|json| Ok::<_, Infallible>(Event::default().data(json)))
     });
     Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SponsorExecuteRequest {
+    /// The Enoki sponsored-tx handle returned by `POST /v1/sponsor` (provider `"enoki"`).
+    digest: String,
+    /// The user's signature (base64) over the sponsored bytes.
+    signature: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SponsorExecuteResponse {
+    /// The executed transaction digest.
+    digest: String,
+}
+
+/// Execute an Enoki-sponsored tx (ADR-0014): hand Enoki the user's signature so it submits with its
+/// own gas signature. Settler-sponsored txs do NOT use this route — the client submits those itself.
+/// Returns 422 when Enoki is not configured, since no Enoki handle can exist in that case.
+pub(crate) async fn sponsor_execute(
+    State(state): State<SharedState>,
+    Json(req): Json<SponsorExecuteRequest>,
+) -> Response {
+    let Some(enoki) = &state.enoki else {
+        return ApiError::resp(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "enoki_not_configured",
+            "enoki is not configured; settler-sponsored transactions execute client-side",
+        )
+        .into_response();
+    };
+    match enoki.execute(&req.digest, &req.signature).await {
+        Ok(digest) => Json(SponsorExecuteResponse { digest }).into_response(),
+        Err(e) => {
+            tracing::warn!(digest = %req.digest, error = %e, "enoki execute failed");
+            ApiError::resp(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "enoki_execute_failed",
+                &e.to_string(),
+            )
+            .into_response()
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]

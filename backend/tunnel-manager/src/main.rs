@@ -3,6 +3,7 @@
 
 mod chat_store;
 mod config;
+mod enoki;
 mod error;
 mod mp;
 mod ollama;
@@ -50,6 +51,28 @@ async fn main() -> anyhow::Result<()> {
         config.streaming_payment_package_id.as_deref(),
         Config::require("SUI_SETTLER_KEY", &config.settler_key)?,
     )?;
+    // Enoki is the primary gas sponsor when configured; the settler above is the fallback (ADR-0014).
+    // The settler's close/fallback path pins a hard-coded testnet genesis digest (`sui.rs`), so guard
+    // against a mainnet-Enoki / testnet-settler split-brain until that digest is config-driven.
+    let enoki = match config.enoki_api_key.clone() {
+        Some(key) => {
+            anyhow::ensure!(
+                config.sui_network == "testnet",
+                "SUI_NETWORK must be 'testnet' (the settler fallback's chain digest is testnet-pinned); got {}",
+                config.sui_network
+            );
+            tracing::info!(network = %config.sui_network, "enoki sponsor enabled (settler is the fallback)");
+            Some(enoki::EnokiClient::new(
+                key,
+                config.sui_network.clone(),
+                enoki::ENOKI_BASE_URL,
+            )?)
+        }
+        None => {
+            tracing::info!("enoki not configured; using settler-only gas sponsorship");
+            None
+        }
+    };
     let walrus = walrus::WalrusClient::new(
         Config::require("WALRUS_PUBLISHER_URL", &config.walrus_publisher_url)?.to_string(),
         Config::require("WALRUS_AGGREGATOR_URL", &config.walrus_aggregator_url)?.to_string(),
@@ -101,6 +124,7 @@ async fn main() -> anyhow::Result<()> {
         mp,
         bus,
         settler,
+        enoki,
         walrus,
         ollama,
         stats_tx,
@@ -148,6 +172,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/chat/live/publish", post(routes::chat_publish))
         .route("/v1/chat/live", get(routes::chat_live))
         .route("/v1/stats/live", get(routes::stats_live))
+        .route("/v1/sponsor/execute", post(routes::sponsor_execute))
         .route("/v1/mp", get(crate::mp::ws::mp_upgrade))
         .layer(TraceLayer::new_for_http())
         .layer(cors_layer())
