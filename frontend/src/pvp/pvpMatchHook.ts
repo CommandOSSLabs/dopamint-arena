@@ -7,8 +7,9 @@
  * how a per-seat "intent" maps to a `Move`. The previous per-game hooks were ~600-line copies of
  * this body; collapsing them here makes relay/staking/auto-mode parity hold by construction.
  *
- * Scope: JSON-native, no-hidden-secret games (ADR-0010) — no `moveCodec`/secret hooks. Hidden-info
- * games (battleship/poker) are a richer superset and are intentionally NOT driven by this engine.
+ * Scope: public-state, no-hidden-secret games (ADR-0010) with JSON-native moves — they ride the
+ * relay with the identity codec, no per-game move (de)serializer. Hidden-info games (battleship/
+ * poker) are a richer superset (binary moves + secret hooks) and are NOT driven by this engine.
  */
 import { useEffect, useSyncExternalStore } from "react";
 import {
@@ -74,7 +75,7 @@ export type PvpStatus =
  * games whose control flow is otherwise identical.
  *
  * @typeParam State  protocol state; must carry a `winner` the board reads.
- * @typeParam Move   protocol move (JSON-native — no codec).
+ * @typeParam Move   protocol move; JSON-native (carried over the relay with the identity codec).
  * @typeParam Intent a single seat's per-tick input (a direction, an action) before it becomes a Move.
  * @typeParam View   the flattened, render-ready snapshot the board consumes.
  */
@@ -555,7 +556,8 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
           });
         }
 
-        // 3) build the distributed engine over the relay transport (no moveCodec — JSON-native).
+        // 3) build the distributed engine over the relay transport. Moves are JSON-native, so
+        //    the tunnel carries them with its identity codec (no per-game (de)serializer).
         const backend = defaultBackend();
         const self = makeEndpoint(backend, wallet, ephemeral, true);
         const opp = makeEndpoint(
