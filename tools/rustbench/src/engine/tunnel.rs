@@ -29,6 +29,16 @@ impl Endpoint {
             signing: None,
         }
     }
+
+    /// Like `controlled`, but reuses an already-expanded keypair and its known
+    /// public key (avoids re-deriving the public key per match in the bench).
+    pub fn controlled_with_pk(kp: KeyPair, public_key: [u8; 32]) -> Endpoint {
+        Endpoint {
+            public_key,
+            signing: Some(kp),
+        }
+    }
+
     fn sign(&self, msg: &[u8]) -> [u8; 64] {
         self.signing
             .as_ref()

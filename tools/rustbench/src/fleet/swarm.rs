@@ -6,6 +6,7 @@
 //! mode.
 
 use crate::driver::play_fixed_match;
+use crate::driver::{play_prepared, SeatKit};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
@@ -63,6 +64,19 @@ pub fn run_simple(workers: usize, duration_secs: u64, matches: Option<u64>) -> S
             &tunnel_id, &SEAT_A, &SEAT_B, 200, 200, CREATED_AT, MAX_MOVES,
         );
         (r.moves, r.bytes as u64)
+    })
+}
+
+/// Optimized fleet: each worker caches one `SeatKit` and runs `play_prepared`.
+pub fn run_optimized(workers: usize, duration_secs: u64, matches: Option<u64>) -> SwarmOutcome {
+    run_with(workers, duration_secs, matches, |tunnel_id| {
+        thread_local! {
+            static KIT: SeatKit = SeatKit::new(&SEAT_A, &SEAT_B);
+        }
+        KIT.with(|kit| {
+            let r = play_prepared(kit, &tunnel_id, 200, 200, CREATED_AT, MAX_MOVES);
+            (r.moves, r.bytes as u64)
+        })
     })
 }
 
@@ -137,6 +151,15 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn optimized_runner_matches_simple_totals() {
+        let simple = run_simple(2, 3600, Some(8));
+        let optimized = run_optimized(2, 3600, Some(8));
+        assert_eq!(optimized.moves, simple.moves);
+        assert_eq!(optimized.bytes, simple.bytes);
+        assert_eq!(optimized.tunnels_settled, simple.tunnels_settled);
+    }
 
     #[test]
     fn tunnel_ids_are_distinct_and_hex() {

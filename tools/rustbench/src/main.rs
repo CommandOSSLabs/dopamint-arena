@@ -1,7 +1,5 @@
 //! `rustbench` swarm bench binary. Parses flags, runs the rayon fleet under a
-//! resource sampler, and prints the loadbench-shaped report. Optimized runner is
-//! wired in Task 6; until then `--runner optimized|both` runs the simple fleet
-//! and reports it as the simple figure.
+//! resource sampler, and prints the loadbench-shaped report.
 
 use rustbench::cli::{self, Runner};
 use rustbench::fleet::{resources, swarm};
@@ -16,12 +14,29 @@ fn main() {
         }
     };
 
-    // Simple runner window (the honest baseline). Sampler brackets the run.
-    let sampler = resources::start(250);
-    let simple = swarm::run_simple(opts.workers, opts.duration_secs, opts.matches);
-    let res = sampler.stop();
-
-    // Optimized runner is added in Task 6; for now report only the simple figure.
-    let _ = Runner::Both;
-    print!("{}", report::render(&opts, &simple, None, &res));
+    let (simple, optimized, res) = match opts.runner {
+        Runner::Simple => {
+            let sampler = resources::start(250);
+            let simple = swarm::run_simple(opts.workers, opts.duration_secs, opts.matches);
+            (simple, None, sampler.stop())
+        }
+        Runner::Optimized => {
+            let sampler = resources::start(250);
+            let optimized = swarm::run_optimized(opts.workers, opts.duration_secs, opts.matches);
+            // Report the optimized window as the headline; no parenthetical.
+            (optimized, None, sampler.stop())
+        }
+        Runner::Both => {
+            // Simple window first (the resources line describes it), then optimized.
+            let sampler = resources::start(250);
+            let simple = swarm::run_simple(opts.workers, opts.duration_secs, opts.matches);
+            let res = sampler.stop();
+            let optimized = swarm::run_optimized(opts.workers, opts.duration_secs, opts.matches);
+            (simple, Some(optimized), res)
+        }
+    };
+    print!(
+        "{}",
+        report::render(&opts, &simple, optimized.as_ref(), &res)
+    );
 }

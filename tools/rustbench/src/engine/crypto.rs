@@ -14,6 +14,7 @@ pub fn blake2b256(data: &[u8]) -> [u8; 32] {
 }
 
 /// An ed25519 keypair derived from a 32-byte seed (deterministic, RFC-8032).
+#[derive(Clone)]
 pub struct KeyPair {
     signing: SigningKey,
 }

@@ -4,6 +4,7 @@
 
 use crate::engine::crypto::blake2b256;
 use crate::engine::crypto::keypair_from_secret;
+use crate::engine::crypto::KeyPair;
 use crate::engine::tunnel::{DistTunnel, Endpoint};
 use crate::engine::wire::Settlement;
 use crate::game::blackjack::{plan, Party};
@@ -45,34 +46,15 @@ fn deliver(proposer: &mut DistTunnel, responder: &mut DistTunnel, first: Vec<Vec
     bytes
 }
 
-pub fn play_fixed_match(
+/// Shared move-pumping loop and settlement used by both `play_fixed_match` and
+/// `play_prepared`. Pure extract-function: verbatim move of the post-construction body.
+fn play_loop(
+    dt_a: &mut DistTunnel,
+    dt_b: &mut DistTunnel,
     tunnel_id: &str,
-    secret_a: &[u8; 32],
-    secret_b: &[u8; 32],
-    balance_a: u64,
-    balance_b: u64,
     created_at: u64,
     max_moves: u64,
 ) -> MatchResult {
-    let pka = keypair_from_secret(secret_a).public_key();
-    let pkb = keypair_from_secret(secret_b).public_key();
-    let mut dt_a = DistTunnel::new(
-        tunnel_id,
-        Party::A,
-        Endpoint::controlled(secret_a),
-        Endpoint::observer(pkb),
-        balance_a,
-        balance_b,
-    );
-    let mut dt_b = DistTunnel::new(
-        tunnel_id,
-        Party::B,
-        Endpoint::controlled(secret_b),
-        Endpoint::observer(pka),
-        balance_a,
-        balance_b,
-    );
-
     let mut moves = 0u64;
     let mut bytes = 0usize;
     let mut ts = created_at;
@@ -103,8 +85,8 @@ pub fn play_fixed_match(
                 Party::B => dt_b.propose(mv, ts),
             };
             bytes += match p {
-                Party::A => deliver(&mut dt_a, &mut dt_b, first),
-                Party::B => deliver(&mut dt_b, &mut dt_a, first),
+                Party::A => deliver(dt_a, dt_b, first),
+                Party::B => deliver(dt_b, dt_a, first),
             };
             moves += 1;
             progressed = true;
@@ -136,6 +118,89 @@ pub fn play_fixed_match(
     }
 }
 
+pub fn play_fixed_match(
+    tunnel_id: &str,
+    secret_a: &[u8; 32],
+    secret_b: &[u8; 32],
+    balance_a: u64,
+    balance_b: u64,
+    created_at: u64,
+    max_moves: u64,
+) -> MatchResult {
+    let pka = keypair_from_secret(secret_a).public_key();
+    let pkb = keypair_from_secret(secret_b).public_key();
+    let mut dt_a = DistTunnel::new(
+        tunnel_id,
+        Party::A,
+        Endpoint::controlled(secret_a),
+        Endpoint::observer(pkb),
+        balance_a,
+        balance_b,
+    );
+    let mut dt_b = DistTunnel::new(
+        tunnel_id,
+        Party::B,
+        Endpoint::controlled(secret_b),
+        Endpoint::observer(pka),
+        balance_a,
+        balance_b,
+    );
+    play_loop(&mut dt_a, &mut dt_b, tunnel_id, created_at, max_moves)
+}
+
+/// Per-worker cached seat material: expanded signing keys + their public keys,
+/// derived once so the per-match path skips key expansion and public-key derivation.
+pub struct SeatKit {
+    kp_a: KeyPair,
+    pk_a: [u8; 32],
+    kp_b: KeyPair,
+    pk_b: [u8; 32],
+}
+
+impl SeatKit {
+    pub fn new(secret_a: &[u8; 32], secret_b: &[u8; 32]) -> SeatKit {
+        let kp_a = keypair_from_secret(secret_a);
+        let kp_b = keypair_from_secret(secret_b);
+        let pk_a = kp_a.public_key();
+        let pk_b = kp_b.public_key();
+        SeatKit {
+            kp_a,
+            pk_a,
+            kp_b,
+            pk_b,
+        }
+    }
+}
+
+/// Byte-identical to `play_fixed_match`, but seats are built from cached key
+/// material (no per-call key expansion / public-key derivation).
+pub fn play_prepared(
+    kit: &SeatKit,
+    tunnel_id: &str,
+    balance_a: u64,
+    balance_b: u64,
+    created_at: u64,
+    max_moves: u64,
+) -> MatchResult {
+    let mut dt_a = DistTunnel::new(
+        tunnel_id,
+        Party::A,
+        Endpoint::controlled_with_pk(kit.kp_a.clone(), kit.pk_a),
+        Endpoint::observer(kit.pk_b),
+        balance_a,
+        balance_b,
+    );
+    let mut dt_b = DistTunnel::new(
+        tunnel_id,
+        Party::B,
+        Endpoint::controlled_with_pk(kit.kp_b.clone(), kit.pk_b),
+        Endpoint::observer(kit.pk_a),
+        balance_a,
+        balance_b,
+    );
+    play_loop(&mut dt_a, &mut dt_b, tunnel_id, created_at, max_moves)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -148,5 +213,24 @@ mod tests {
         assert_eq!(r.final_balance_a + r.final_balance_b, 400);
         assert!(r.moves > 0);
         assert!(r.bytes > 0);
+    }
+
+    #[test]
+    fn play_prepared_is_byte_identical_to_play_fixed_match() {
+        let sa: [u8; 32] = std::array::from_fn(|i| (i + 1) as u8);
+        let sb: [u8; 32] = std::array::from_fn(|i| (i + 33) as u8);
+        let baseline = play_fixed_match("0xab", &sa, &sb, 200, 200, 1234567890, 500);
+        let kit = SeatKit::new(&sa, &sb);
+        let prepared = play_prepared(&kit, "0xab", 200, 200, 1234567890, 500);
+        assert_eq!(prepared.moves, baseline.moves);
+        assert_eq!(prepared.bytes, baseline.bytes);
+        assert_eq!(prepared.final_balance_a, baseline.final_balance_a);
+        assert_eq!(prepared.final_balance_b, baseline.final_balance_b);
+        assert_eq!(
+            prepared.settlement.final_nonce,
+            baseline.settlement.final_nonce
+        );
+        assert_eq!(prepared.sig_a, baseline.sig_a);
+        assert_eq!(prepared.sig_b, baseline.sig_b);
     }
 }
