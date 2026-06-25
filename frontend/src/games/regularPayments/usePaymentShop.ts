@@ -238,25 +238,35 @@ class MachineRuntime {
       this.flushCounters(deps);
       deps.report.bumpCounters({ tunnelsClosed: 1, settlements: 1 });
 
-      const [settleDigest, mintDigest] = await Promise.all([
-        settlePaymentTunnel({
-          tunnel,
-          transcript,
-          tunnelId,
-          createdAt,
-          coinType: isMtpsConfigured ? MTPS_COIN_TYPE : undefined,
-          fallbackSignExec: isMtpsConfigured
-            ? deps.sponsoredSignExec
-            : deps.signExec,
-        }),
+      const settleP = settlePaymentTunnel({
+        tunnel,
+        transcript,
+        tunnelId,
+        createdAt,
+        coinType: isMtpsConfigured ? MTPS_COIN_TYPE : undefined,
+        fallbackSignExec: isMtpsConfigured
+          ? deps.sponsoredSignExec
+          : deps.signExec,
+      }).catch((e) => {
+        console.warn("[regular-payments] settle failed:", e);
+        return undefined;
+      });
+
+      const mintP =
         isMtpsConfigured && this.reward
           ? mintNftRewardToMiner({
               sponsoredSignExec: deps.sponsoredSignExec,
               walletSignExec: deps.signExec,
               reward: this.reward,
-            }).then((r) => r.digest)
-          : Promise.resolve(undefined),
-      ]);
+            })
+              .then((r) => r.digest)
+              .catch((e) => {
+                console.warn("[regular-payments] mint failed:", e);
+                return undefined;
+              })
+          : Promise.resolve(undefined);
+
+      const [settleDigest, mintDigest] = await Promise.all([settleP, mintP]);
       if (this.gen !== myGen) return;
 
       this.digest = mintDigest || null;
