@@ -40,16 +40,64 @@ infra at all — start there.
 - Apple Silicon: the compose file uses an arm64 Sui image; first relay run
   compiles `tunnel-manager` via `cargo` and can take a few minutes.
 
+## Env isolation
+
+Each worktree or git branch runs its own **isolated stack** — no port conflicts,
+no shared state, and parallel benches are fully independent.
+
+**Env name:** Set `$LOADBENCH_ENV` to a stable name, or the system will use the
+slugified git branch name (e.g. `feat-foo` from `feat/foo`), or fall back to
+`default`. This name is used to:
+- Name the Docker Compose project (`loadbench-<name>`).
+- Route per-env Sui config to `~/.loadbench/<name>/sui_config`.
+- Determine host ports via deterministic allocation (see below).
+
+**Ports (deterministic, non-overlapping):** Each env's stack runs on an isolated
+port band:
+```
+rpc    = 9000 + slot
+valkey = 9200 + slot
+relay  = 9300 + slot
+faucet = 9400 + slot
+```
+where `slot = hash($LOADBENCH_ENV) % 100`. The actual RPC and relay URLs are
+written to `.env.local` on stack bring-up — read them from there rather than
+assuming `:9000`. If two active envs collide on a port (rare; the hash spreads
+to 100 slots), `bun run stack` will fail with "port already allocated" — set
+`LOADBENCH_ENV` to a different name to move one env to a new slot.
+
+**Parallel stacks:** Two worktrees can run `bun run stack` and benches
+simultaneously; each publishes under its own `SUI_CONFIG_DIR` and never touches
+the global `~/.sui`, so there is no contention.
+
+**Container joins the current env:** `bun run bench --container …` automatically
+uses the same env name, project, and ports as the host from which you invoke it.
+No additional setup needed.
+
+**Multi-arch support:** The localnet image runs on both arm64 and x86_64. The
+host-`sui` fallback (when Docker is unavailable) is single-stack and uses the
+default `9000`/`9123` ports.
+
+**Migration from single stack:** If you had a legacy single-stack setup before
+this change, the old stack runs under the Docker project `loadbench` (no env
+suffix). Remove it with:
+```bash
+docker compose -f docker-compose.yml -p loadbench down
+```
+New stacks use per-env names (`loadbench-<name>`). Sui configs now live in
+`~/.loadbench/` (per-env subdirs) instead of the global `~/.sui`.
+
 ## Commands
 
 All commands run from `tools/loadbench/`.
 
 ### `bun run stack` — stand up the local infra (once per session)
 
-Brings up Docker compose (Sui localnet on `:9000`/`:9123`, Valkey on `:6379`),
+Brings up Docker compose (Sui localnet, Valkey, and relay on env-derived ports),
 waits for health, publishes the `sui_tunnel` Move package, funds a settler + N
 bench keys via the faucet, and writes `.env.local` + `keys.json` (both
-gitignored). Set `N` to change the key count (default 8):
+gitignored). The actual RPC and relay URLs are recorded in `.env.local`; read
+them from there. Set `N` to change the key count (default 8):
 
 ```bash
 bun run stack          # default 8 keys
@@ -97,7 +145,7 @@ bun run bench --game blackjack --offchain --channel local --matches 50
 # onchain swarm against a local stack you brought up with `bun run stack`:
 bun run bench --channel local --matches 40
 
-# onchain against an explicit endpoint:
+# onchain against an explicit endpoint (use the port from .env.local):
 bun run bench --channel local --rpc-url http://127.0.0.1:9000 \
   --package-id 0x… --settler-key suiprivkey… --matches 40
 
@@ -212,8 +260,9 @@ Key details:
 
 - **CPU/memory limits**: the service defaults to `cpus: "4"` and `memory: 4g`
   via `deploy.resources.limits`; override per run with `--cpus` / `--memory`.
-- **RPC**: `SUI_RPC_URL=http://sui-localnet:9000` is baked into the service
-  environment so the container reaches the localnet by name.
+- **RPC**: the service resolves the env-derived RPC URL from the host's `.env.local`
+  so the container reaches the localnet on the same env's port. The container
+  and host share the same Docker network and env name.
 - **`--channel relay` is host-only**: the relay process (`cargo run -p tunnel-manager`) is not included in the image, so relay benchmarks must run from the host without `--container`.
 
 ## Relay specifics
