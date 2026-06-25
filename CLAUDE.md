@@ -18,7 +18,7 @@ anchored on Sui) and builds Dopamint on top of it.
 `sui-tunnel-ts/` are upstream MystenLabs code. Keep them on their existing
 toolchain (pnpm / prettier / `node:test`) and avoid gratuitous edits so the
 framework can be re-synced from upstream later. Do **not** convert them to
-bun/biome. The conventions below apply to all code; the *tooling* choices
+bun/biome. The conventions below apply to all code; the _tooling_ choices
 match whatever package the file lives in.
 
 **Adding a new arena game** (self-play or PvP over a tunnel): follow
@@ -34,7 +34,7 @@ checklist, wiring patterns, and gate.
   or a `BREAKING CHANGE:` footer for breaking changes.
 - **Short messages**: subject ≤ 50 chars, imperative, lowercase after the type,
   no trailing period. Skip the body unless a single line can't carry the
-  meaning (then ≤ ~5 lines on *why*, not *what*). One logical change per commit.
+  meaning (then ≤ ~5 lines on _why_, not _what_). One logical change per commit.
   Push rationale, alternatives, and test plans into the PR description.
 
 ## Code Convention
@@ -46,13 +46,14 @@ familiar. When the official docs, standard library, or framework examples show
 a way of doing something, that's the way — deviate only with a clear reason.
 
 Codex will review your output once you are done
+
 ### Naming
 
 Names (types, functions, variables, modules, files) must describe the target's
 purpose and meaning — not just its category. A reader should infer what a thing
 is and why it exists from the name alone.
 
-- **Specific over generic**: pin down *which* thing. Replace category-only names
+- **Specific over generic**: pin down _which_ thing. Replace category-only names
   (`Result`, `Data`, `Config`, `Item`) with names that say what kind.
 - **Consistent prefixes within a subsystem** so cross-file references stay
   grep-able. Pick the prefix once and stick to it.
@@ -61,21 +62,21 @@ is and why it exists from the name alone.
 - **A few extra tokens for clarity is the right trade**: avoid one/two-letter
   identifiers outside tight local scopes, and vague suffixes like `Handler`,
   `Manager`, `Helper`, `Util`, `Info`, `Data`.
-- **Don't ramble**: the name carries the *meaning*; a doc comment carries the
-  *mechanism*. Don't encode implementation details in the name.
+- **Don't ramble**: the name carries the _meaning_; a doc comment carries the
+  _mechanism_. Don't encode implementation details in the name.
 - **Match the language's conventions** for casing, file naming, pluralization.
 - **Renames are atomic**: update every call site, import, and doc reference in
   the same change.
 
 ### Doc comments
 
-A name says *what*. A comment captures what the name can't: *why* it exists,
-*how* it works when non-obvious, and the constraints a caller must respect. If a
+A name says _what_. A comment captures what the name can't: _why_ it exists,
+_how_ it works when non-obvious, and the constraints a caller must respect. If a
 comment only restates the name or signature, delete it.
 
 - **Document the non-obvious**: rationale, invariants, gotchas, edge cases, the
   reason a surprising choice was made. Skip narration of what the code says.
-- **Explain *why*, then *how*; never *what*.**
+- **Explain _why_, then _how_; never _what_.**
 - **Document contracts at the boundary**: on exported APIs, state pre/post
   conditions, error modes, and side effects. Internal helpers usually don't.
 - **Keep them short and load-bearing.** Prefer a tight 1–3 line block.
@@ -101,5 +102,5 @@ the stack — `node:test` (via `tsx`) for the TS SDK, `sui move test` for Move.
 ## Architecture decisions
 
 Non-trivial or contested decisions are recorded as short ADRs under
-`docs/decisions/` *before* the code that depends on them. See
+`docs/decisions/` _before_ the code that depends on them. See
 `docs/decisions/README.md` for the convention and template.

@@ -38,6 +38,7 @@ Out (→ P2): HA relay / local-matching scale-out, full fleet runner + autoscali
 ### Task 1: Add the `@mysten/wallet-standard` dependency
 
 **Files:**
+
 - Modify: `frontend/package.json`
 
 - [ ] **Step 1: Add the dependency**
@@ -65,9 +66,10 @@ git commit -m "build(frontend): add wallet-standard dep for agent wallet"
 
 ### Task 2: Programmatic Wallet-Standard wallet
 
-A headless wallet whose accounts come from an injected `Ed25519Keypair`. Signing is in-page (no UI). It must satisfy `SignExec = (tx: Transaction) => Promise<{ digest: string }>` *through* dapp-kit's `useSignAndExecuteTransaction`.
+A headless wallet whose accounts come from an injected `Ed25519Keypair`. Signing is in-page (no UI). It must satisfy `SignExec = (tx: Transaction) => Promise<{ digest: string }>` _through_ dapp-kit's `useSignAndExecuteTransaction`.
 
 **Files:**
+
 - Create: `frontend/src/wallet/programmaticWallet.ts`
 - Test: `frontend/src/wallet/programmaticWallet.test.ts`
 
@@ -82,7 +84,11 @@ import { ProgrammaticWallet } from "./programmaticWallet";
 
 test("exposes one account matching the injected keypair", async () => {
   const kp = new Ed25519Keypair();
-  const w = new ProgrammaticWallet(kp, /* client */ undefined as never, "sui:testnet");
+  const w = new ProgrammaticWallet(
+    kp,
+    /* client */ undefined as never,
+    "sui:testnet",
+  );
   assert.equal(w.accounts.length, 1);
   assert.equal(w.accounts[0].address, kp.getPublicKey().toSuiAddress());
 });
@@ -161,7 +167,11 @@ export class ProgrammaticWallet implements Wallet {
       },
       "sui:signTransaction": {
         version: "2.0.0" as const,
-        signTransaction: async ({ transaction }: { transaction: { toJSON(): Promise<string> } }) => {
+        signTransaction: async ({
+          transaction,
+        }: {
+          transaction: { toJSON(): Promise<string> };
+        }) => {
           const tx = Transaction.from(await transaction.toJSON());
           const bytes = await tx.build({ client: this.client });
           const { signature } = await this.keypair.signTransaction(bytes);
@@ -170,7 +180,11 @@ export class ProgrammaticWallet implements Wallet {
       },
       "sui:signAndExecuteTransaction": {
         version: "2.0.0" as const,
-        signAndExecuteTransaction: async ({ transaction }: { transaction: { toJSON(): Promise<string> } }) => {
+        signAndExecuteTransaction: async ({
+          transaction,
+        }: {
+          transaction: { toJSON(): Promise<string> };
+        }) => {
           const tx = Transaction.from(await transaction.toJSON());
           const bytes = await tx.build({ client: this.client });
           const { signature } = await this.keypair.signTransaction(bytes);
@@ -192,7 +206,10 @@ export class ProgrammaticWallet implements Wallet {
   }
 }
 
-export function programmaticWalletFromHex(secretKeyHex: string, client: SuiClient) {
+export function programmaticWalletFromHex(
+  secretKeyHex: string,
+  client: SuiClient,
+) {
   const kp = Ed25519Keypair.fromSecretKey(fromBase64(secretKeyHex));
   return new ProgrammaticWallet(kp, client);
 }
@@ -215,6 +232,7 @@ git commit -m "feat(frontend): programmatic wallet-standard wallet for agents"
 ### Task 3: Agent-mode config from the URL
 
 **Files:**
+
 - Create: `frontend/src/agent/agentConfig.ts`
 - Test: `frontend/src/agent/agentConfig.test.ts`
 
@@ -296,6 +314,7 @@ git commit -m "feat(frontend): agent-mode url config"
 dapp-kit `autoConnect` only re-picks a wallet whose name is already in `localStorage`, so the **first** connect must be explicit (`useConnectWallet`). `AgentBoot` does this once, then renders children.
 
 **Files:**
+
 - Create: `frontend/src/agent/AgentBoot.tsx`
 - Modify: `frontend/src/providers/SuiProviders.tsx:18-26`
 
@@ -304,7 +323,7 @@ dapp-kit `autoConnect` only re-picks a wallet whose name is already in `localSto
 In `frontend/src/providers/SuiProviders.tsx`, change line 22 from `<WalletProvider autoConnect>` to:
 
 ```tsx
-      <WalletProvider autoConnect={true}>{children}</WalletProvider>
+<WalletProvider autoConnect={true}>{children}</WalletProvider>
 ```
 
 - [ ] **Step 2: Implement `AgentBoot`**
@@ -316,7 +335,11 @@ In `frontend/src/providers/SuiProviders.tsx`, change line 22 from `<WalletProvid
 // on first load). Human mode renders children untouched.
 import { useEffect, useMemo, useRef, type ReactNode } from "react";
 import { getWallets } from "@mysten/wallet-standard";
-import { useConnectWallet, useCurrentAccount, useSuiClient } from "@mysten/dapp-kit";
+import {
+  useConnectWallet,
+  useCurrentAccount,
+  useSuiClient,
+} from "@mysten/dapp-kit";
 import { fromBase64 } from "@mysten/sui/utils";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import { ProgrammaticWallet } from "../wallet/programmaticWallet";
@@ -340,7 +363,8 @@ export function AgentBoot({ children }: { children: ReactNode }) {
     connect({ wallet: w as never });
   }, [cfg, client, connect]);
 
-  if (cfg.enabled && !account) return <div data-agent="connecting">agent connecting…</div>;
+  if (cfg.enabled && !account)
+    return <div data-agent="connecting">agent connecting…</div>;
   return <>{children}</>;
 }
 ```
@@ -364,6 +388,7 @@ git commit -m "feat(frontend): register+autoconnect programmatic wallet in agent
 One engine drives **all** tunnel games. It generalizes `sui-tunnel-ts/scripts/pvpTttBot.mjs` (same relay handshake + settlement) by selecting the protocol with `createBehaviorProtocol(game)` and the move with `proto.randomMove`. A thin React adapter (`AgentRunner`) supplies the dapp-kit `signExec` and runs the engine.
 
 **Files:**
+
 - Create: `frontend/src/agent/agentEngine.ts`
 - Create: `frontend/src/agent/AgentRunner.tsx`
 - Test: `frontend/src/agent/rotation.test.ts`
@@ -407,7 +432,11 @@ import { generateKeyPair, type KeyPair } from "sui-tunnel-ts/core/crypto";
 import { makeEndpoint, defaultBackend } from "sui-tunnel-ts/core/tunnel";
 import { toHex, fromHex } from "sui-tunnel-ts/core/bytes";
 import {
-  openAndFundSharedTunnel, depositStake, closeCooperative, readCreatedAt, type SignExec,
+  openAndFundSharedTunnel,
+  depositStake,
+  closeCooperative,
+  readCreatedAt,
+  type SignExec,
 } from "../onchain/tunnelTx";
 import { AGENT_GAMES, type GameSpec } from "./agentConfig";
 
@@ -416,23 +445,37 @@ export function nextGameIndex(i: number, len: number): number {
 }
 
 export interface AgentDeps {
-  wallet: string;                                   // programmatic wallet address
-  signExec: SignExec;                               // dapp-kit wrapper -> programmatic wallet
-  reads: Parameters<typeof readCreatedAt>[0];       // SuiClient (cast)
+  wallet: string; // programmatic wallet address
+  signExec: SignExec; // dapp-kit wrapper -> programmatic wallet
+  reads: Parameters<typeof readCreatedAt>[0]; // SuiClient (cast)
   backendUrl: string;
-  concurrency: number;                              // M: concurrent tunnel slots per agent
+  concurrency: number; // M: concurrent tunnel slots per agent
   onStatus?: (s: string) => void;
 }
 
 // One match, any game. Mirrors pvpTttBot.mjs step-for-step; `proto` is the only difference.
 // Each match gets its OWN ephemeral move-signing key (independent of the shared WS connect key).
 async function playOneMatch(mp: MpClient, deps: AgentDeps, spec: GameSpec) {
-  const eph: KeyPair = generateKeyPair();                     // per-slot tunnel key
-  const match = await mp.quickMatch(spec.id);                 // resolves on match.found
+  const eph: KeyPair = generateKeyPair(); // per-slot tunnel key
+  const match = await mp.quickMatch(spec.id); // resolves on match.found
   const ch = mp.channel(match.matchId);
-  const inbox = new Map<string, any>(), waiters = new Map<string, (m: any) => void>();
-  ch.onPeer((m: any) => { const w = waiters.get(m.t); if (w) { waiters.delete(m.t); w(m); } else inbox.set(m.t, m); });
-  const waitPeer = (t: string) => new Promise<any>((res) => { const b = inbox.get(t); if (b) { inbox.delete(t); res(b); } else waiters.set(t, res); });
+  const inbox = new Map<string, any>(),
+    waiters = new Map<string, (m: any) => void>();
+  ch.onPeer((m: any) => {
+    const w = waiters.get(m.t);
+    if (w) {
+      waiters.delete(m.t);
+      w(m);
+    } else inbox.set(m.t, m);
+  });
+  const waitPeer = (t: string) =>
+    new Promise<any>((res) => {
+      const b = inbox.get(t);
+      if (b) {
+        inbox.delete(t);
+        res(b);
+      } else waiters.set(t, res);
+    });
 
   ch.sendPeer({ t: "hello", ephemeralPubkey: toHex(eph.publicKey) });
   const oppPub = fromHex((await waitPeer("hello")).ephemeralPubkey);
@@ -440,64 +483,124 @@ async function playOneMatch(mp: MpClient, deps: AgentDeps, spec: GameSpec) {
   let tunnelId: string;
   if (match.role === "A") {
     tunnelId = await openAndFundSharedTunnel({
-      reads: deps.reads, signExec: deps.signExec,
+      reads: deps.reads,
+      signExec: deps.signExec,
       partyA: { address: deps.wallet, publicKey: eph.publicKey },
-      partyB: { address: match.opponentWallet, publicKey: oppPub }, amount: spec.stake,
+      partyB: { address: match.opponentWallet, publicKey: oppPub },
+      amount: spec.stake,
     });
     mp.announceTunnel(match.matchId, tunnelId);
     ch.sendPeer({ t: "open", tunnelId });
   } else {
     tunnelId = (await waitPeer("open")).tunnelId;
-    await depositStake({ signExec: deps.signExec, tunnelId, amount: spec.stake });
+    await depositStake({
+      signExec: deps.signExec,
+      tunnelId,
+      amount: spec.stake,
+    });
   }
   const createdAt = await readCreatedAt(deps.reads, tunnelId);
 
   const proto: any = createBehaviorProtocol(spec.behavior);
   const backend = defaultBackend();
   const self = makeEndpoint(backend, deps.wallet, eph, true);
-  const opp = makeEndpoint(backend, match.opponentWallet, { publicKey: oppPub, scheme: eph.scheme }, false);
-  const dt: any = new DistributedTunnel(proto, { tunnelId, self, opponent: opp, selfParty: match.role }, ch.transport, { a: spec.stake, b: spec.stake });
+  const opp = makeEndpoint(
+    backend,
+    match.opponentWallet,
+    { publicKey: oppPub, scheme: eph.scheme },
+    false,
+  );
+  const dt: any = new DistributedTunnel(
+    proto,
+    { tunnelId, self, opponent: opp, selfParty: match.role },
+    ch.transport,
+    { a: spec.stake, b: spec.stake },
+  );
 
   const move = () => {
     if (proto.isTerminal(dt.state)) return;
-    if (dt.state.turn === match.role) { const m = proto.randomMove?.(dt.state, match.role, Math.random); if (m) dt.propose(m, createdAt); }
+    if (dt.state.turn === match.role) {
+      const m = proto.randomMove?.(dt.state, match.role, Math.random);
+      if (m) dt.propose(m, createdAt);
+    }
   };
-  const done = new Promise<void>((resolve) => { dt.onConfirmed = () => { if (proto.isTerminal(dt.state)) resolve(); else move(); }; });
-  if (match.role === "A") await waitPeer("ready"); else ch.sendPeer({ t: "ready" });
+  const done = new Promise<void>((resolve) => {
+    dt.onConfirmed = () => {
+      if (proto.isTerminal(dt.state)) resolve();
+      else move();
+    };
+  });
+  if (match.role === "A") await waitPeer("ready");
+  else ch.sendPeer({ t: "ready" });
   move();
   await done;
 
   const half = dt.buildSettlementHalf(createdAt, 0n);
-  ch.sendPeer({ t: "settleHalf", partyABalance: half.settlement.partyABalance.toString(), partyBBalance: half.settlement.partyBBalance.toString(), finalNonce: half.settlement.finalNonce.toString(), timestamp: half.settlement.timestamp.toString(), sig: toHex(half.sigSelf) });
+  ch.sendPeer({
+    t: "settleHalf",
+    partyABalance: half.settlement.partyABalance.toString(),
+    partyBBalance: half.settlement.partyBBalance.toString(),
+    finalNonce: half.settlement.finalNonce.toString(),
+    timestamp: half.settlement.timestamp.toString(),
+    sig: toHex(half.sigSelf),
+  });
   const other = await waitPeer("settleHalf");
-  const co = dt.combineSettlement(half.settlement, half.sigSelf, fromHex(other.sig));
-  if (match.role === "A") await closeCooperative({ signExec: deps.signExec, tunnelId, settlement: co });
+  const co = dt.combineSettlement(
+    half.settlement,
+    half.sigSelf,
+    fromHex(other.sig),
+  );
+  if (match.role === "A")
+    await closeCooperative({
+      signExec: deps.signExec,
+      tunnelId,
+      settlement: co,
+    });
 }
 
-export async function runAgent(deps: AgentDeps, shouldStop: () => boolean): Promise<void> {
-  const connectKey = generateKeyPair();                       // authenticates the one shared WS
-  const mp = new MpClient(resolveMpWsUrl(deps.backendUrl), deps.wallet, connectKey);
+export async function runAgent(
+  deps: AgentDeps,
+  shouldStop: () => boolean,
+): Promise<void> {
+  const connectKey = generateKeyPair(); // authenticates the one shared WS
+  const mp = new MpClient(
+    resolveMpWsUrl(deps.backendUrl),
+    deps.wallet,
+    connectKey,
+  );
   await mp.connect();
 
   // Serialize this wallet's on-chain txs (one gas coin -> no Sui equivocation).
   let chain: Promise<unknown> = Promise.resolve();
   const slotDeps: AgentDeps = {
     ...deps,
-    signExec: (tx) => { const p = chain.then(() => deps.signExec(tx)); chain = p.catch(() => {}); return p; },
+    signExec: (tx) => {
+      const p = chain.then(() => deps.signExec(tx));
+      chain = p.catch(() => {});
+      return p;
+    },
   };
 
   // M concurrent slots share the one WS + wallet; each loops independently and never idles.
   const slot = async (i: number) => {
-    let gi = i % AGENT_GAMES.length;                          // stagger starts so the fleet spreads across games
+    let gi = i % AGENT_GAMES.length; // stagger starts so the fleet spreads across games
     while (!shouldStop()) {
       const spec = AGENT_GAMES[gi];
       deps.onStatus?.(`slot${i}:queue:${spec.id}`);
-      try { await playOneMatch(mp, slotDeps, spec); deps.onStatus?.(`slot${i}:settled:${spec.id}`); }
-      catch (e) { deps.onStatus?.(`slot${i}:error:${spec.id}:${String((e as Error)?.message ?? e)}`); }
+      try {
+        await playOneMatch(mp, slotDeps, spec);
+        deps.onStatus?.(`slot${i}:settled:${spec.id}`);
+      } catch (e) {
+        deps.onStatus?.(
+          `slot${i}:error:${spec.id}:${String((e as Error)?.message ?? e)}`,
+        );
+      }
       gi = nextGameIndex(gi, AGENT_GAMES.length);
     }
   };
-  await Promise.all(Array.from({ length: Math.max(1, deps.concurrency) }, (_, i) => slot(i)));
+  await Promise.all(
+    Array.from({ length: Math.max(1, deps.concurrency) }, (_, i) => slot(i)),
+  );
   mp.close();
 }
 ```
@@ -516,7 +619,11 @@ Expected: PASS (2 tests).
 ```tsx
 // frontend/src/agent/AgentRunner.tsx
 import { useEffect, useRef, useState } from "react";
-import { useCurrentAccount, useSignAndExecuteTransaction, useSuiClient } from "@mysten/dapp-kit";
+import {
+  useCurrentAccount,
+  useSignAndExecuteTransaction,
+  useSuiClient,
+} from "@mysten/dapp-kit";
 import { runAgent } from "./agentEngine";
 import { resolveBackendUrl } from "../backend/controlPlane";
 
@@ -531,16 +638,29 @@ export function AgentRunner() {
     if (!account || started.current) return;
     started.current = true;
     const stop = { v: false };
-    const signExec = async (tx: Parameters<typeof mutateAsync>[0]["transaction"]) => {
+    const signExec = async (
+      tx: Parameters<typeof mutateAsync>[0]["transaction"],
+    ) => {
       const r = await mutateAsync({ transaction: tx });
       return { digest: r.digest };
     };
-    const M = Number(new URL(window.location.href).searchParams.get("m") ?? "1"); // P1 proof: M=1; bump to measure
+    const M = Number(
+      new URL(window.location.href).searchParams.get("m") ?? "1",
+    ); // P1 proof: M=1; bump to measure
     void runAgent(
-      { wallet: account.address, signExec, reads: client as never, backendUrl: resolveBackendUrl(), concurrency: M, onStatus: setStatus },
+      {
+        wallet: account.address,
+        signExec,
+        reads: client as never,
+        backendUrl: resolveBackendUrl(),
+        concurrency: M,
+        onStatus: setStatus,
+      },
       () => stop.v,
     );
-    return () => { stop.v = true; };
+    return () => {
+      stop.v = true;
+    };
   }, [account]);
 
   return <div data-agent-status={status}>agent: {status}</div>;
@@ -585,6 +705,7 @@ git commit -m "feat(frontend): game-agnostic agent engine + agent-mode route"
 Generate N agent keypairs and fund each (gas + the 500 MIST stake) from a treasury wallet in **one PTB** fan-out. Reuses the `@mysten/sui` Transaction patterns already in `tunnelTx.ts`.
 
 **Files:**
+
 - Create: `frontend/agent/fundTreasury.mjs`
 
 - [ ] **Step 1: Implement the funding script**
@@ -603,21 +724,44 @@ import { toBase64 } from "@mysten/sui/utils";
 const N = Number(process.env.N ?? 20);
 const PER = BigInt(process.env.PER_MIST ?? 50_000_000); // gas + stake headroom per agent
 const client = new SuiClient({ url: getFullnodeUrl("testnet") });
-const treasury = Ed25519Keypair.fromSecretKey(decodeSuiPrivateKey(process.env.SUI_TREASURY_KEY).secretKey);
+const treasury = Ed25519Keypair.fromSecretKey(
+  decodeSuiPrivateKey(process.env.SUI_TREASURY_KEY).secretKey,
+);
 
 const agents = Array.from({ length: N }, () => {
   const kp = new Ed25519Keypair();
-  return { kp, address: kp.getPublicKey().toSuiAddress(), secretKeyB64: toBase64(kp.getSecretKey()) };
+  return {
+    kp,
+    address: kp.getPublicKey().toSuiAddress(),
+    secretKeyB64: toBase64(kp.getSecretKey()),
+  };
 });
 
 const tx = new Transaction();
-const coins = tx.splitCoins(tx.gas, agents.map(() => tx.pure.u64(PER)));
-agents.forEach((a, i) => tx.transferObjects([coins[i]], tx.pure.address(a.address)));
-const res = await client.signAndExecuteTransaction({ signer: treasury, transaction: tx, options: { showEffects: true } });
+const coins = tx.splitCoins(
+  tx.gas,
+  agents.map(() => tx.pure.u64(PER)),
+);
+agents.forEach((a, i) =>
+  tx.transferObjects([coins[i]], tx.pure.address(a.address)),
+);
+const res = await client.signAndExecuteTransaction({
+  signer: treasury,
+  transaction: tx,
+  options: { showEffects: true },
+});
 await client.waitForTransaction({ digest: res.digest });
-if (res.effects?.status?.status !== "success") throw new Error(`fan-out failed: ${res.effects?.status?.error}`);
+if (res.effects?.status?.status !== "success")
+  throw new Error(`fan-out failed: ${res.effects?.status?.error}`);
 
-writeFileSync(new URL("./keys.json", import.meta.url), JSON.stringify(agents.map(({ address, secretKeyB64 }) => ({ address, secretKeyB64 })), null, 2));
+writeFileSync(
+  new URL("./keys.json", import.meta.url),
+  JSON.stringify(
+    agents.map(({ address, secretKeyB64 }) => ({ address, secretKeyB64 })),
+    null,
+    2,
+  ),
+);
 console.log(`funded ${N} agents @ ${PER} MIST each | digest ${res.digest}`);
 ```
 
@@ -643,6 +787,7 @@ git commit -m "feat(agent): treasury PTB fan-out funding for agent wallets"
 Two agent contexts, each with a funded key, must match each other, play to terminal, and settle — through the real app, no human, no popup. This is P1's core success criterion.
 
 **Files:**
+
 - Create: `frontend/agent/runAgents.mjs`
 - Modify: `frontend/package.json` (add `playwright` devDep + a script)
 
@@ -689,11 +834,17 @@ for (let i = 0; i < K; i++) {
 // Two agents should reach a settled status within the timeout.
 const settled = await Promise.all(
   pages.slice(0, 2).map((p) =>
-    p.waitForSelector('[data-agent-status="settled"]', { timeout: 120_000 }).then(() => true).catch(() => false),
+    p
+      .waitForSelector('[data-agent-status="settled"]', { timeout: 120_000 })
+      .then(() => true)
+      .catch(() => false),
   ),
 );
 console.log("settled:", settled);
-if (!settled.every(Boolean)) { await browser.close(); process.exit(1); }
+if (!settled.every(Boolean)) {
+  await browser.close();
+  process.exit(1);
+}
 console.log("PASS: two real-app agents matched, played, and settled");
 await browser.close();
 ```
@@ -718,6 +869,7 @@ git commit -m "test(agent): playwright 2-context end-to-end proof"
 Measure one relay instance's sustained frame-forward rate and p99 — the single number that sizes the P2 fleet. No game logic: two raw WS peers ping opaque frames as fast as the relay forwards them.
 
 **Files:**
+
 - Create: `frontend/agent/loadtestRelay.mjs`
 - Create: `frontend/agent/README.md`
 
@@ -730,7 +882,7 @@ Measure one relay instance's sustained frame-forward rate and p99 — the single
 // how many relay instances P2 needs. Run: MP_WS_URL=ws://<alb>/v1/mp T=50 D=20 node loadtestRelay.mjs
 import { WebSocket } from "ws";
 const URL = process.env.MP_WS_URL ?? "ws://localhost:8080/v1/mp";
-const T = Number(process.env.T ?? 50);      // tunnels (paired sockets)
+const T = Number(process.env.T ?? 50); // tunnels (paired sockets)
 const D = Number(process.env.D ?? 20) * 1000;
 let frames = 0;
 const lat = [];
@@ -747,7 +899,9 @@ for (let i = 0; i < T; i++) pair();
 setTimeout(() => {
   const secs = (Date.now() - start) / 1000;
   lat.sort((a, b) => a - b);
-  console.log(`frames/sec ~ ${Math.round(frames / secs)} | p99 rtt ${lat[Math.floor(lat.length * 0.99)] ?? "n/a"}ms | tunnels ${T}`);
+  console.log(
+    `frames/sec ~ ${Math.round(frames / secs)} | p99 rtt ${lat[Math.floor(lat.length * 0.99)] ?? "n/a"}ms | tunnels ${T}`,
+  );
   process.exit(0);
 }, D);
 ```
@@ -784,6 +938,7 @@ git commit -m "test(agent): single-relay frame-rate load-test harness"
 ## Self-review
 
 **Spec coverage (P1 slice):**
+
 - Agent mode + programmatic wallet (spec §1, §2) → Tasks 2, 4, 5. ✓
 - Real-app path, not headless (spec §Why #2) → Tasks 5, 7 (drives the published page). ✓
 - Funding via gated deposit + treasury fan-out (spec §3) → Task 6 (funds wallets; the gated `deposit_party_*` happens inside the engine's `openAndFundSharedTunnel`/`depositStake` calls in Task 5, reusing the unchanged `tunnelTx` builders). ✓

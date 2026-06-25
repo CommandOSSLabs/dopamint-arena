@@ -7,10 +7,10 @@
 ## 1. Vision
 
 Connect the wallet and you don't land on a menu — you land on a **living arcade
-floor**. Every game window is a cabinet already mid-match, playing *itself*. The
+floor**. Every game window is a cabinet already mid-match, playing _itself_. The
 moment you show interest in one, it **pauses on the frame** and offers you the
 controls. Take them, and you continue against the bot. The behavior is identical
-on every game, so the *common part* lives in **one shared shell**, not per-game
+on every game, so the _common part_ lives in **one shared shell**, not per-game
 code.
 
 ## 2. The three layers (and who owns each)
@@ -19,13 +19,13 @@ code.
    (rules) + `createBot(seat).plan(state) → move | null` (the JS bot). The
    **auto move source** and single source of truth, shared with the agent test
    harness. See the [canonical game-bot kit](2026-06-19-canonical-game-bot-kit-design.md).
-   *Game-owned.*
+   _Game-owned._
 2. **In-game engine + UI** — each game's hook/scene: `auto` / `setAuto` /
    `myTurn` / `playCell` plus the board. **Auto on → the kit plays both seats;
-   auto off → you play your seat via the board.** *Game-owned.*
+   auto off → you play your seat via the board.** _Game-owned._
 3. **Common cabinet** — `src/shell/cabinet/`: a shared `GameCabinet` wrapping
    **every** desktop window. It owns hover → **pause** → the take-over overlay →
-   the `attract → inviting → live` state machine. *Shell-owned, written once.*
+   the `attract → inviting → live` state machine. _Shell-owned, written once._
 
 ## 3. Canonical pattern — "auto is a config; the kit is the brain"
 
@@ -90,11 +90,11 @@ What each game's App registers (`useRegisterCabinet`) so the shell can drive it:
 
 ```ts
 interface CabinetController {
-  active: boolean;        // true while auto-playing (offerable) — gates hover/overlay
-  pause(): void;          // freeze the auto-play loop (hover)
-  resume(): void;         // unfreeze (unhover / keep watching)
-  takeOver(): void;       // hand the seat to the human (manual mode)
-  returnHome(): void;     // stop auto + send the game to its own home screen
+  active: boolean; // true while auto-playing (offerable) — gates hover/overlay
+  pause(): void; // freeze the auto-play loop (hover)
+  resume(): void; // unfreeze (unhover / keep watching)
+  takeOver(): void; // hand the seat to the human (manual mode)
+  returnHome(): void; // stop auto + send the game to its own home screen
 }
 ```
 
@@ -118,12 +118,18 @@ has the `auto`/manual/`startAuto`/`stopAuto` + poll-loop shape this needs.)
    const [paused, setPaused] = useState(false);
 
    const tick = () => {
-     if (pausedRef.current) return;        // hover-paused: skip this frame
+     if (pausedRef.current) return; // hover-paused: skip this frame
      /* …one game step (manual mode returns early here until the user moves)… */
    };
 
-   const pause  = useCallback(() => { pausedRef.current = true;  setPaused(true);  }, []);
-   const resume = useCallback(() => { pausedRef.current = false; setPaused(false); }, []);
+   const pause = useCallback(() => {
+     pausedRef.current = true;
+     setPaused(true);
+   }, []);
+   const resume = useCallback(() => {
+     pausedRef.current = false;
+     setPaused(false);
+   }, []);
    // expose { paused, pause, resume } on the hook's view (required, not optional)
    ```
 
@@ -134,12 +140,25 @@ has the `auto`/manual/`startAuto`/`stopAuto` + poll-loop shape this needs.)
 
    ```ts
    const { setAuto, pause, resume, stopAuto } = g;
-   const offerable  = scene === "game" && g.auto;                  // offer only while auto-playing
-   const takeOver   = useCallback(() => { setAuto(false); resume(); }, [setAuto, resume]);
-   const returnHome = useCallback(() => { stopAuto(); setScene("home"); }, [stopAuto]); // your title scene
-   const cabinet = useMemo<CabinetController>(() => ({
-     active: offerable, pause, resume, takeOver, returnHome,
-   }), [offerable, pause, resume, takeOver, returnHome]);
+   const offerable = scene === "game" && g.auto; // offer only while auto-playing
+   const takeOver = useCallback(() => {
+     setAuto(false);
+     resume();
+   }, [setAuto, resume]);
+   const returnHome = useCallback(() => {
+     stopAuto();
+     setScene("home");
+   }, [stopAuto]); // your title scene
+   const cabinet = useMemo<CabinetController>(
+     () => ({
+       active: offerable,
+       pause,
+       resume,
+       takeOver,
+       returnHome,
+     }),
+     [offerable, pause, resume, takeOver, returnHome],
+   );
    useRegisterCabinet(cabinet);
    ```
 

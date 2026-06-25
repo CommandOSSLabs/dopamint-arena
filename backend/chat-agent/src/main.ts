@@ -4,7 +4,10 @@ import { fromB64 } from "@mysten/sui/utils";
 import { setTimeout as sleep } from "node:timers/promises";
 import { runBotVsBot } from "./botVsBot.ts";
 import { loadConfig } from "./config.ts";
-import { ensureDopamintBalance, ensureDopamintBalanceForAddress } from "./funding.ts";
+import {
+  ensureDopamintBalance,
+  ensureDopamintBalanceForAddress,
+} from "./funding.ts";
 import { MpClient, resolveMpWsUrl } from "./mpClient.ts";
 import { OllamaBackendClient } from "./ollama.ts";
 
@@ -19,8 +22,13 @@ function createSuiClient(rpcUrl: string): SuiClient {
 export async function main(): Promise<void> {
   console.log("[chat-agent] loading config...");
   const cfg = loadConfig();
-  console.log("[chat-agent] config loaded, operator=", cfg.operatorAddress ?? "derived");
-  const operatorKeypair = Ed25519Keypair.fromSecretKey(fromB64(cfg.operatorKey));
+  console.log(
+    "[chat-agent] config loaded, operator=",
+    cfg.operatorAddress ?? "derived",
+  );
+  const operatorKeypair = Ed25519Keypair.fromSecretKey(
+    fromB64(cfg.operatorKey),
+  );
   const operatorAddress = operatorKeypair.toSuiAddress();
   const bobKeypair = Ed25519Keypair.generate();
   const bobAddress = bobKeypair.toSuiAddress();
@@ -32,14 +40,18 @@ export async function main(): Promise<void> {
   const botNeed = BigInt(cfg.stakeRaw) * 2n;
   console.log("[chat-agent] ensuring DOPAMINT balance...");
   await ensureDopamintBalance(sui, cfg, operatorKeypair, botNeed);
-  await ensureDopamintBalanceForAddress(sui, cfg, operatorKeypair, bobAddress, botNeed);
+  await ensureDopamintBalanceForAddress(
+    sui,
+    cfg,
+    operatorKeypair,
+    bobAddress,
+    botNeed,
+  );
   console.log("[chat-agent] balance ok");
 
   const aliceWallet = operatorAddress;
   const bobWallet = bobAddress;
-  const intervalMs = Number(
-    process.env.CHAT_BOT_VS_BOT_INTERVAL_MS ?? "30000",
-  );
+  const intervalMs = Number(process.env.CHAT_BOT_VS_BOT_INTERVAL_MS ?? "30000");
 
   let tunnelCounter = 0;
   const tunnelIdProvider = () => {

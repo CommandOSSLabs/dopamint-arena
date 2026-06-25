@@ -58,7 +58,7 @@ graph TB
     style RL fill:#ffcc99
 ```
 
-The **green box is the hot path**: the per-move *logic* lives entirely in the two
+The **green box is the hot path**: the per-move _logic_ lives entirely in the two
 parties' engines. The relay is a **dumb opaque pipe** on the path — it forwards
 frames between the two seats but does no per-move computation, holds no game state,
 and cannot read or forge a frame — so it is never a counterparty or a signer, and it
@@ -69,15 +69,15 @@ the relay from the path entirely; see [Identity, custody & trust](#identity-cust
 
 ## Components
 
-| Component | Responsibility | Never does |
-|---|---|---|
-| **Browser client** | Wallet connect; mint ephemeral session key; per-game UI; run the off-chain engine; render the activity wall | — |
-| **Agent fleet** | Headless parties (own wallet + ephemeral key) that matchmake, fund, play at machine speed, and settle — identical path to a human | Hold a privileged role; bypass the protocol |
-| **Off-chain engine** | Drive the per-move loop: `propose` a move; on `receive`, re-derive then co-sign; advance state on confirmation; emit the transcript and its Merkle root | — |
-| **Per-game `Protocol`** | Domain logic only: `initialState`, `applyMove`, `encodeState`, `balances`, `isTerminal` | Re-implement signing / settlement / replay protection |
+| Component                          | Responsibility                                                                                                                                          | Never does                                                             |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| **Browser client**                 | Wallet connect; mint ephemeral session key; per-game UI; run the off-chain engine; render the activity wall                                             | —                                                                      |
+| **Agent fleet**                    | Headless parties (own wallet + ephemeral key) that matchmake, fund, play at machine speed, and settle — identical path to a human                       | Hold a privileged role; bypass the protocol                            |
+| **Off-chain engine**               | Drive the per-move loop: `propose` a move; on `receive`, re-derive then co-sign; advance state on confirmation; emit the transcript and its Merkle root | —                                                                      |
+| **Per-game `Protocol`**            | Domain logic only: `initialState`, `applyMove`, `encodeState`, `balances`, `isTerminal`                                                                 | Re-implement signing / settlement / replay protection                  |
 | **tunnel-manager** (control plane) | Matchmaking + presence, opaque-frame relay, watchtower, event-indexed tunnel registry, cooperative settlement, Walrus archival, stats aggregation → SSE | Sign a move · mediate gameplay · hold a bankroll · act as counterparty |
-| **Sui chain** | Custody and settlement: open+fund, cooperative/forced close, payouts | See a single in-game move |
-| **Walrus** | Host the static page; store full transcripts as proof-of-existence (root anchored on-chain) | Hold funds |
+| **Sui chain**                      | Custody and settlement: open+fund, cooperative/forced close, payouts                                                                                    | See a single in-game move                                              |
+| **Walrus**                         | Host the static page; store full transcripts as proof-of-existence (root anchored on-chain)                                                             | Hold funds                                                             |
 
 A new game is a new `Protocol` + UI with **zero control-plane change** — the
 backend is game-agnostic, keyed only on a `game` id.
@@ -94,7 +94,7 @@ instances — so **all cross-instance state lives in Valkey**, never in process 
 - A **cache cluster** holds the ephemeral key-value state: sessions, presence,
   matchmaking queues, invites, live matches, and the stats counters. Pairing is an
   atomic server-side (Lua) script, so two instances never pair the same waiter.
-- A **pub/sub cluster** carries server→client delivery *across* instances: when a
+- A **pub/sub cluster** carries server→client delivery _across_ instances: when a
   relayed frame (or a `match.found`) must reach a socket owned by another instance, it
   is published to that instance's channel and delivered locally there. Frames stay
   opaque end to end.
@@ -119,24 +119,24 @@ two are stored **independently and never bound**. The wallet locks stakes and
 receives payouts; the ephemeral key signs every move. So play is **popup-free**
 while funds never leave the wallet's control: the signed state/settlement bytes
 carry **no address**, verification uses only the `public_key`, deposits and
-unilateral withdrawals are sender-gated to `address`, and payouts are *directed to*
+unilateral withdrawals are sender-gated to `address`, and payouts are _directed to_
 `address` regardless of who submits the closing tx.
 
 The relay is **untrusted**. Because every update is dual-signed and verified by
 both parties against the counterparty's `public_key`, a faulty or malicious relay
 can only **censor or delay** frames — never forge or alter them. The connect handshake
-proves a client controls its ephemeral key (it signs a server-issued nonce); *binding
+proves a client controls its ephemeral key (it signs a server-issued nonce); _binding
 that key to the claimed wallet — the **wallet attestation** that closes the relay's
-key-exchange MITM window — is planned and not yet in v1*. Transport is swappable
+key-exchange MITM window — is planned and not yet in v1_. Transport is swappable
 (WebSocket first; WebRTC / libp2p later) behind one interface; security does not depend
 on it.
 
 Abandonment and stale-state attacks are absorbed by the **dispute + timeout** path,
 not by trust. The relay captures **both signature halves** of every frame and retains
 the latest co-signed checkpoint — the material a **watchtower** needs to finalize the
-true latest state instead of an opponent's stale one. *In v1 the backend captures these
+true latest state instead of an opponent's stale one. _In v1 the backend captures these
 checkpoints; submitting the dispute / force-close on an offline party's behalf is a
-follow-up* — today the staying player drives the one-tap claim themselves. The signed
+follow-up_ — today the staying player drives the one-tap claim themselves. The signed
 wire format is **byte-identical to the on-chain verifier**:
 any update could be submitted and would verify exactly as the chain expects — it
 simply isn't, until close.
@@ -186,7 +186,7 @@ addition, not part of this design.
 
 ## Play topology — genuine two-party only
 
-Every tunnel is **two independent parties**, each holding only its *own* ephemeral
+Every tunnel is **two independent parties**, each holding only its _own_ ephemeral
 key and neither able to forge the other; they exchange opaque co-signed frames
 through the relay (or a swappable P2P transport). There is **no self-play** — one
 process holding both keys and signing to itself proves volume, not tunnels, and the
@@ -198,10 +198,10 @@ ephemeral key signs each move, payout directed to the wallet.
 
 **A game's "house" role is a real counterparty, not a self seat.** Blackjack's dealer
 follows a fixed policy and quantum poker's shuffle is dealerless — neither implies a
-second *human*, but each is run by an **independent counterparty agent** with its own
+second _human_, but each is run by an **independent counterparty agent** with its own
 key, so the tunnel still has two parties who genuinely co-sign. Tic-tac-toe is the
 symmetric case: two parties, perfect information. Across all of them the engine, wire
-format, and on-chain lifecycle are identical — only *who holds the second key* differs.
+format, and on-chain lifecycle are identical — only _who holds the second key_ differs.
 Each client or agent therefore mints exactly **one** ephemeral key, for its own seat.
 
 ---
@@ -211,13 +211,13 @@ Each client or agent therefore mints exactly **one** ephemeral key, for its own 
 Each game is a `Protocol<State, Move>` over the shared tunnel engine; the
 framework supplies signing, settlement, and replay protection.
 
-| Game | Off-chain interaction |
-|---|---|
-| **Blackjack** | Turn-based dealer/player rounds, stake settled at hand end |
-| **Regular payments** | Bidirectional balance updates (payment-channel semantics) |
-| **Quantum poker** | Dealerless commit-reveal shuffle + hidden hole cards; a Groth16 fairness circuit is available at dispute time |
-| **Tic-tac-toe** | Alternating moves with terminal-state payout |
-| **Chat** | High-frequency signed messages (no stake movement; pure off-chain volume) |
+| Game                 | Off-chain interaction                                                                                         |
+| -------------------- | ------------------------------------------------------------------------------------------------------------- |
+| **Blackjack**        | Turn-based dealer/player rounds, stake settled at hand end                                                    |
+| **Regular payments** | Bidirectional balance updates (payment-channel semantics)                                                     |
+| **Quantum poker**    | Dealerless commit-reveal shuffle + hidden hole cards; a Groth16 fairness circuit is available at dispute time |
+| **Tic-tac-toe**      | Alternating moves with terminal-state payout                                                                  |
+| **Chat**             | High-frequency signed messages (no stake movement; pure off-chain volume)                                     |
 
 ---
 
@@ -236,21 +236,21 @@ effective TPS  =  (concurrent channels)  ×  (moves/sec per channel)
   **many genuine two-party channels in parallel** across the agent fleet, not from any
   single fast channel. Human channels are a handful of slower lanes and the ideal
   source; the fleet supplies the bulk, each lane still two distinct keys.
-- **≥1M effective TPS is the aspiration, set by *real* scale — not asserted.** It is
+- **≥1M effective TPS is the aspiration, set by _real_ scale — not asserted.** It is
   reached only by enough genuine two-party lanes running at once, and the achievable
   figure is **measured, never manufactured** (concrete rates are bench-gated; see
   DEMO-STRATEGY "Numbers — TBD"). A real round-trip per move makes each lane slower
-  than an in-process loop would — that is the price of *not fakeable*, and the point.
+  than an in-process loop would — that is the price of _not fakeable_, and the point.
 - Capacity therefore scales **linearly with fleet cores** — each added lane adds
   its full rate to the aggregate.
 - **Aggregate at the edge, sum at the center.** Each party counts its own moves and
   reports coarse periodic deltas (~1/s); the control plane sums a handful of
   numbers into the live figure and fans out one snapshot over SSE. It records the
-  *rate*, never the firehose — transcripts live on Walrus and on-chain roots.
-- On-chain *cost* scales with **tunnel count × settle frequency**, not with TPS. The
+  _rate_, never the firehose — transcripts live on Walrus and on-chain roots.
+- On-chain _cost_ scales with **tunnel count × settle frequency**, not with TPS. The
   dials: how many channels, how many moves packed per channel, how often to settle,
   and root-only vs. full-transcript Walrus archival.
-- The binding on-chain *constraint* is therefore not per-move gas but the **open /
+- The binding on-chain _constraint_ is therefore not per-move gas but the **open /
   close op-rate** in the minutes around the peak — thousands of channels × ~3–4
   non-batchable txs must fit real RPC/consensus capacity. The mitigation is to
   **pre-stage the agent fleet's tunnels before the window** so the live peak is
@@ -271,15 +271,15 @@ fleet behind it.
 
 Two notions of "real," with very different costs:
 
-- **Cryptographic realism** is free and *verifiable*: ed25519 signatures are
+- **Cryptographic realism** is free and _verifiable_: ed25519 signatures are
   byte-identical whether produced by a browser or a headless agent, and every move
   verifies through the same on-chain path. A block explorer shows thousands of
   independent wallets running genuine tunnel lifecycles — **two independent parties
   per tunnel, never one operator signing to itself** — so any transaction pulled
   checks out. This is the realism that "not fakeable" buys: not that a human typed
   it, but that two keys that cannot forge each other genuinely co-signed.
-- **Human provenance** — proof a real person generated the traffic — is *not*
+- **Human provenance** — proof a real person generated the traffic — is _not_
   recoverable from the bytes. So it is supplied off-band: small **airdrop prizes**
   for participants who **record their screen on a phone and post it to social**.
   That, not the bytes, is what advertises real user-generated traffic.
-</content>
+  </content>

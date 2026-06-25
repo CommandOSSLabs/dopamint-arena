@@ -32,7 +32,13 @@ export async function ensureDopamintBalance(
   need: bigint,
 ): Promise<void> {
   const owner = operatorKeypair.getPublicKey().toSuiAddress();
-  await ensureDopamintBalanceForAddress(client, cfg, operatorKeypair, owner, need);
+  await ensureDopamintBalanceForAddress(
+    client,
+    cfg,
+    operatorKeypair,
+    owner,
+    need,
+  );
 }
 
 export async function ensureDopamintBalanceForAddress(
@@ -64,7 +70,10 @@ export async function getStakeCoin(
   owner: string,
   need: bigint,
 ): Promise<string> {
-  const coins = await client.getCoins({ owner, coinType: cfg.dopamintCoinType });
+  const coins = await client.getCoins({
+    owner,
+    coinType: cfg.dopamintCoinType,
+  });
   const coin = coins.data.find((c) => BigInt(c.balance) >= need);
   if (!coin) throw new Error("no DOPAMINT coin large enough to stake");
   return coin.coinObjectId;

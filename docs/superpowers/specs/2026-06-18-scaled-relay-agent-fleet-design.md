@@ -18,7 +18,7 @@ match at any time, because to the relay an agent and a human are the same peer.
 The throughput claim is **off-chain effective TPS** per `DEMO-STRATEGY.md` §1:
 each co-signed, mutually-verified relayed message is a real, settleable
 transaction, anchored by a real on-chain open/settle and archived to Walrus.
-The headline target is **≈1M effective TPS**; the *published* figure is whatever
+The headline target is **≈1M effective TPS**; the _published_ figure is whatever
 the scaled relay **sustains under load test** (§ Numbers — TBD).
 
 ## Why this shape (the decisions behind it)
@@ -32,7 +32,7 @@ they are not silently reopened:
    so every move flows over the relay. This caps per-tunnel rate at the network
    round-trip and makes the relay the throughput bottleneck — accepted.
 2. **Agents run the real app, not a headless bot.** A headless Node client over
-   raw WS would test a *synthetic* path and undercut the "real user traffic"
+   raw WS would test a _synthetic_ path and undercut the "real user traffic"
    claim. Agents load the same page, same origin, same `mpClient` /
    `DistributedTunnel` / wallet flow as a human — only the driver differs.
 3. **Full-render agent mode; no headless/no-render variant up front.** The
@@ -48,7 +48,7 @@ they are not silently reopened:
 5. **Humans never wait — agent-vs-agent yields to a reserve floor, not the
    reverse.** Agents pairing each other (across all queues) is the throughput
    engine, not a bug; the constraint is that a human — or a batch-open request
-   for N games — must always find free *local* agents instantly. So agent-fill is
+   for N games — must always find free _local_ agents instantly. So agent-fill is
    admission-gated to leave a reserve floor of idle agents per instance,
    maintained **at the pairing decision** — never a runtime scan (§6.1).
 6. **Concurrent tunnel pool per agent — the efficiency multiplier.** One agent
@@ -57,10 +57,10 @@ they are not silently reopened:
    idles. The relay stays the throughput ceiling (concurrency doesn't raise it),
    but you **reach** it with **M× fewer browser contexts/hosts (§5)** and **M×
    fewer wallets** (less faucet/provisioning/gas-headroom, §3). Honest caveat:
-   total **staked + storage** SUI scales with concurrent *tunnel* count, so M
+   total **staked + storage** SUI scales with concurrent _tunnel_ count, so M
    shrinks wallet count and gas overhead, **not** the per-tunnel stake/storage.
    Cost: a wallet cannot fire concurrent on-chain txs on one gas coin (Sui
-   *equivocation* locks the coin), so each wallet's open/deposit/settle run
+   _equivocation_ locks the coin), so each wallet's open/deposit/settle run
    through a **per-wallet serial queue**; off-chain moves stay fully concurrent
    (§2). M is a measured knob (§Numbers#2).
 
@@ -176,7 +176,7 @@ auto-connects it. It signs the wallet transactions in the happy path — the gat
 deposit (and seat-A's cooperative close) — without UI. With **M concurrent
 tunnels** per wallet (decision #6) that is M deposits/closes, so they run through
 a **per-wallet serial queue**: one in-flight tx per gas coin, because Sui
-*equivocation* locks an owned object (the gas coin) used by two conflicting txs.
+_equivocation_ locks an owned object (the gas coin) used by two conflicting txs.
 Off-chain move-signing uses a **per-slot ephemeral key**, is separate, popup-free
 (ADR-0004 §1), and fully concurrent across slots. The injected wallet key is
 provided per context by the fleet runner from the funded pool (§3).
@@ -206,7 +206,7 @@ human-vs-agent economics + anti-farming are out of scope (ADR-0004).
 > **Long-pole risk — testnet SUI supply.** Concurrency (decision #6) cuts the
 > **wallet count** to concurrent-tunnels ÷ M (≈500 wallets at 10k tunnels, M≈20)
 > — shrinking faucet calls, provisioning, and gas-headroom. But the **staked +
-> storage** SUI is **per concurrent tunnel** and M does *not* reduce it: 10k
+> storage** SUI is **per concurrent tunnel** and M does _not_ reduce it: 10k
 > concurrent tunnels lock ~10k × (stake + storage) regardless of how few wallets
 > hold them. Faucets are rate/amount-limited, so **acquiring that SUI may be the
 > actual critical path, ahead of any code.** Mitigations (decide early): keep
@@ -215,7 +215,7 @@ human-vs-agent economics + anti-farming are out of scope (ADR-0004).
 > days; or fall back to mainnet (bounded-by-tunnel-count cost). This gates fleet
 > size as hard as the relay does.
 
-> Read note: this is the *only* unbounded-cost axis. On-chain txns scale with
+> Read note: this is the _only_ unbounded-cost axis. On-chain txns scale with
 > **tunnel count** (~4 per tunnel: create + 2 deposits + settle), not with TPS.
 > Keep tunnel lifetimes long (many moves per tunnel) so the chain op-rate and
 > faucet stay within testnet limits (§9).
@@ -236,7 +236,7 @@ both are designed for explicitly:
   **local** agent — guaranteed available by the per-instance reserve floor (§6.1).
   The **Redis global queue is the fallback**, not the hot path — used only for
   challenge-by-wallet or when an instance's local pool is empty. (A cross-shard
-  Redis hop *per move* is forbidden.)
+  Redis hop _per move_ is forbidden.)
 - **Co-location**: the agent fleet runs in the **same region/AZ** as the relay so
   the round-trip is sub-millisecond — required to reach ~100+ moves/sec/tunnel.
   This trades away "agents from everywhere"; real humans connect from anywhere
@@ -267,14 +267,15 @@ A supervisor that:
   **showcase cohort** (fully visible, for recordings) — same app, same path.
 
 **Density unit + two browser gotchas (decide in P1, measure in §Numbers#2):**
-- **One browser *context* per agent**, not multiple agents sharing tabs of one
+
+- **One browser _context_ per agent**, not multiple agents sharing tabs of one
   context — tabs in the same context share origin `localStorage`/`IndexedDB`, so
   two agents would collide on dapp-kit wallet state and the app's stored keys.
   Many contexts per process is the density win.
 - **Disable background-tab throttling** or packed agents idle: Chrome throttles
   non-foreground timers to ~1/sec. Launch Chromium with
   `--disable-background-timer-throttling --disable-renderer-backgrounding
-  --disable-backgrounding-occluded-windows` (Playwright `args`); headless also
+--disable-backgrounding-occluded-windows` (Playwright `args`); headless also
   sidesteps it.
 
 ## 6. Human drop-in (first-class)
@@ -291,12 +292,12 @@ it is the **human-priority reserve pool** (§6.1).
 the standard pattern for priority access to a shared fleet (min-idle in a
 connection pool, warm reserve in a worker pool). Agents pairing **each other is
 the default and desired** use of idle capacity — it is the throughput engine — so
-the policy does not stop it; it **caps** it so a human always finds a free *local*
+the policy does not stop it; it **caps** it so a human always finds a free _local_
 agent.
 
 **Unit = free seats, not whole agents.** With the concurrent pool (decision #6)
 the reservable resource is a **free tunnel slot waiting in a queue**, and one
-agent contributes several — so the reserve is *capacity*, not idle processes, and
+agent contributes several — so the reserve is _capacity_, not idle processes, and
 is far cheaper to hold (an agent giving a human a seat just plays the human in one
 of its M slots).
 
@@ -309,7 +310,7 @@ waiter"), keyed on a per-instance free-seat counter:
 - **Human request** (a drop-in, or a batch-open `reserve N`) pairs against free
   seats **down to zero** — absolute priority.
 - **Agent-vs-agent fill** is admitted **only while `local_free > K`** — it may
-  consume seats only *above* the floor, and can never cross it.
+  consume seats only _above_ the floor, and can never cross it.
 
 Because matching is **local** (§4), the reserve is **per-instance**: a free seat
 on another instance cannot serve this human without a forbidden cross-shard move
@@ -317,21 +318,22 @@ hop. And because agents rotate across all game queues (§1) while a human plays 
 **specific** `gameId`, the floor is keyed **per (instance, human-joinable game)**:
 the matchmaker must hold K seats queued on — or rotating on `queue.timeout` to —
 the human's game on that instance. Agents still rotate
-**uncoordinated** (§1); the **matchmaker** — not the agent — biases *pairing*
+**uncoordinated** (§1); the **matchmaker** — not the agent — biases _pairing_
 toward human-joinable queues to hold the floor.
 
 Two control loops keep the floor intact under load:
+
 - **Backpressure:** when `local_free` for a human-joinable game falls below a
   low-water mark, **pause new agent-fill** that would drain it and let slots
   finishing their loops replenish it (they return continuously, so refill is fast).
 - **Autoscale / rebalance:** a sustained low floor signals the fleet runner (§5)
-  to ramp more contexts and/or **rebalance agents across instances** so *every*
+  to ramp more contexts and/or **rebalance agents across instances** so _every_
   instance holds ≥K — the floor is meaningless if satisfied only in aggregate.
 
 **Policy of record — dynamic floor + a small dedicated reserve (hybrid).** The
 dynamic floor (above) is the mechanism; a small **dedicated** standby cohort that
 never pairs AI-vs-AI guarantees instant availability through a cold start or a
-burst before the dynamic loop catches up. Rejected as *sole* mechanisms: a pure
+burst before the dynamic loop catches up. Rejected as _sole_ mechanisms: a pure
 dynamic floor (no cold-start guarantee) and a pure dedicated cohort (simple, but
 those agents produce zero TPS). For **single drop-in**, humans are a small, slow
 cohort (ARCHITECTURE §Throughput), so the reserve costs a rounding error of the
@@ -344,7 +346,7 @@ humans grow numerous enough that idle dedicated agents cost meaningful TPS. Do
 not build the full dynamic machinery for the first event.
 
 > **Batch-open interaction.** A human launching N games at once consumes **N
-> reserve slots atomically** from *their* instance's floor. This is a **real cost,
+> reserve slots atomically** from _their_ instance's floor. This is a **real cost,
 > not free**: either hold **K ≥ peak(concurrent humans × max-N)** idle per instance
 > — non-trivial once batch-open is actually used (the drop-in "rounding error" does
 > **not** extend to large batches) — **or** cap N and **partial-fill** (open the
@@ -356,7 +358,7 @@ not build the full dynamic machinery for the first event.
 > **What "many games" means today.** A human matches an agent only on a game with
 > a **human PvP UI** (§ Game coverage — tic-tac-toe today; blackjack if/when
 > wired). So a batch today is **N simultaneous tic-tac-toe matches**, not N
-> *different* games; the multi-variety version the user pictured is gated on
+> _different_ games; the multi-variety version the user pictured is gated on
 > building those PvP UIs, not on this matchmaking change.
 >
 > Batch-open's human-side flow (one gated-deposit PTB over N pre-shared tunnels,
@@ -460,6 +462,7 @@ code, because each `Protocol` supplies `randomMove`. So the **volume fleet
 covers every game** out of the box — it rotates all of them, no selection.
 
 Two caveats, not blockers:
+
 - **Render split.** Only **tic-tac-toe** and **blackjack** have board UIs
   (`useBotGame`/`useBlackjackBot`). The volume fleet shows a status UI, not a
   board; the **recordable showcase cohort** that paints a board is therefore

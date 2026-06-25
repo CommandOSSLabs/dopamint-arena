@@ -3,6 +3,7 @@
 How `dopamint-web` integrates with the backend (`tunnel-manager`) and the
 `sui-tunnel-ts` SDK across its **two FE roles** (watching the live number, and
 playing a match). Grounded in the merged code:
+
 - WS protocol → `backend/tunnel-manager/src/mp/protocol.rs`
 - Control-plane HTTP → `backend/tunnel-manager/src/routes.rs` (ADR-0002)
 - PvP engine → `sui-tunnel-ts/src/core/distributedTunnel.ts`
@@ -16,13 +17,13 @@ playing a match). Grounded in the merged code:
 
 ## 1. Two FE roles, one model
 
-Every tunnel is **genuine two-party** (ADR-0006); the self-play *mode* is gone. The FE plays
+Every tunnel is **genuine two-party** (ADR-0006); the self-play _mode_ is gone. The FE plays
 one of two roles over that single model:
 
-| Role | What the FE does |
-|---|---|
+| Role                                  | What the FE does                                                                                                                                                                                                                                   |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Stats dashboard** (the live number) | Read-only: the FE only **displays stats** — subscribe to the SSE feed. The headless **agent fleet** (each agent an independent party playing another) produces the moves and pushes heartbeats; the FE does **not** drive moves or call heartbeat. |
-| **Player client** (human in a match) | The FE is one **party**: generate an ephemeral key, connect the matchmaking/relay WebSocket, run the `DistributedTunnel` engine, drive the wallet for open/fund/settle. |
+| **Player client** (human in a match)  | The FE is one **party**: generate an ephemeral key, connect the matchmaking/relay WebSocket, run the `DistributedTunnel` engine, drive the wallet for open/fund/settle.                                                                            |
 
 Both are the same two-party path; they differ only in whether the FE watches the
 aggregate or plays a single match.
@@ -45,7 +46,7 @@ Each event `data:` is a `StatsSnapshot` (camelCase):
   "totalActions": 0,
   "activeTunnels": 0,
   "settledTunnels": 0,
-  "perGame": { "<gameId>": { "tps": 0, "tunnels": 0, "totalActions": 0 } }
+  "perGame": { "<gameId>": { "tps": 0, "tunnels": 0, "totalActions": 0 } },
 }
 ```
 
@@ -101,30 +102,30 @@ One WebSocket per player. JSON control messages are externally tagged on a `type
 
 ### Client → Server
 
-| `type` | fields | purpose |
-|---|---|---|
-| `connect` | `wallet, pubkey, sig, nonce` | authenticate (see handshake below) |
-| `queue.join` | `game` | Quick-Match |
-| `queue.leave` | — | leave the queue |
-| `challenge.create` | `targetWallet, game` | directed invite |
-| `challenge.accept` | `matchId` | accept an invite |
-| `challenge.decline` | `matchId` | decline an invite |
-| `party.hello` | `matchId, ephemeralPubkey, walletSig` | exchange wallet-attested ephemeral key |
-| `tunnel.opened` | `matchId, tunnelId` | opener announces the shared tunnel |
-| `relay` | `matchId, payload` | **opaque** MOVE/ACK frame for the other seat |
-| `watchtower.checkpoint` | `matchId, nonce, partyABalance, partyBBalance, stateHash, sigA, sigB` | latest co-signed update for the watchtower |
+| `type`                  | fields                                                                | purpose                                      |
+| ----------------------- | --------------------------------------------------------------------- | -------------------------------------------- |
+| `connect`               | `wallet, pubkey, sig, nonce`                                          | authenticate (see handshake below)           |
+| `queue.join`            | `game`                                                                | Quick-Match                                  |
+| `queue.leave`           | —                                                                     | leave the queue                              |
+| `challenge.create`      | `targetWallet, game`                                                  | directed invite                              |
+| `challenge.accept`      | `matchId`                                                             | accept an invite                             |
+| `challenge.decline`     | `matchId`                                                             | decline an invite                            |
+| `party.hello`           | `matchId, ephemeralPubkey, walletSig`                                 | exchange wallet-attested ephemeral key       |
+| `tunnel.opened`         | `matchId, tunnelId`                                                   | opener announces the shared tunnel           |
+| `relay`                 | `matchId, payload`                                                    | **opaque** MOVE/ACK frame for the other seat |
+| `watchtower.checkpoint` | `matchId, nonce, partyABalance, partyBBalance, stateHash, sigA, sigB` | latest co-signed update for the watchtower   |
 
 ### Server → Client
 
-| `type` | fields | notes |
-|---|---|---|
-| `challenge` | `nonce` | sent immediately on connect; sign it |
-| `match.found` | `matchId, role, opponentWallet, game` | `role` is `"A"` or `"B"` |
-| `challenge.incoming` | `matchId, fromWallet, game` | inbound directed invite |
-| `relay` | `matchId, payload` | forwarded opaque frame |
-| `error` | `code, message` | see error codes below |
-| `queue.timeout` | `matchId` | **defined but not emitted in v1** (timer deferred — don't wait on it) |
-| `match.active` | `matchId` | **defined but not emitted in v1** (indexer wiring deferred — detect activation yourself, see §7) |
+| `type`               | fields                                | notes                                                                                            |
+| -------------------- | ------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `challenge`          | `nonce`                               | sent immediately on connect; sign it                                                             |
+| `match.found`        | `matchId, role, opponentWallet, game` | `role` is `"A"` or `"B"`                                                                         |
+| `challenge.incoming` | `matchId, fromWallet, game`           | inbound directed invite                                                                          |
+| `relay`              | `matchId, payload`                    | forwarded opaque frame                                                                           |
+| `error`              | `code, message`                       | see error codes below                                                                            |
+| `queue.timeout`      | `matchId`                             | **defined but not emitted in v1** (timer deferred — don't wait on it)                            |
+| `match.active`       | `matchId`                             | **defined but not emitted in v1** (indexer wiring deferred — detect activation yourself, see §7) |
 
 **Error `code`s the backend can send:** `bad_message`, `bad_nonce`, `bad_signature`,
 `not_authenticated`, `target_offline`, `unknown_invite`, `bad_checkpoint`,
@@ -173,27 +174,41 @@ function makeRelayTransport(ws: WebSocket, matchId: string) {
   });
   return {
     send: (frame: Uint8Array) =>
-      ws.send(JSON.stringify({
-        type: "relay",
-        matchId,
-        payload: new TextDecoder().decode(frame),
-      })),
-    onFrame: (cb: (f: Uint8Array) => void) => { onFrame = cb; },
+      ws.send(
+        JSON.stringify({
+          type: "relay",
+          matchId,
+          payload: new TextDecoder().decode(frame),
+        }),
+      ),
+    onFrame: (cb: (f: Uint8Array) => void) => {
+      onFrame = cb;
+    },
   };
 }
 
 const cryptoBackend = defaultBackend();
 const tunnel = new DistributedTunnel(
-  protocol,                            // your game's TS Protocol<State, Move>
+  protocol, // your game's TS Protocol<State, Move>
   {
-    tunnelId,                          // from `tunnel.opened`
-    self:     makeEndpoint(cryptoBackend, myWalletAddress, myEphemeralKeyPair, /*controlled*/ true),
-    opponent: makeEndpoint(cryptoBackend, opponentWalletAddress, { publicKey: opponentEphemeralPubkey, scheme: 0 }, /*controlled*/ false),
-    selfParty: role,                   // "A" or "B" from `match.found`
+    tunnelId, // from `tunnel.opened`
+    self: makeEndpoint(
+      cryptoBackend,
+      myWalletAddress,
+      myEphemeralKeyPair,
+      /*controlled*/ true,
+    ),
+    opponent: makeEndpoint(
+      cryptoBackend,
+      opponentWalletAddress,
+      { publicKey: opponentEphemeralPubkey, scheme: 0 },
+      /*controlled*/ false,
+    ),
+    selfParty: role, // "A" or "B" from `match.found`
     // moveCodec: optional; default identity codec works when Move is a JSON-native value
   },
   makeRelayTransport(ws, matchId),
-  initialBalances,                     // { a: stakeA, b: stakeB } — must sum to the locked total
+  initialBalances, // { a: stakeA, b: stakeB } — must sum to the locked total
 );
 
 // Make a move (your turn). The engine signs your half, emits a MOVE; state advances on ACK.
@@ -207,6 +222,7 @@ tunnel.onConfirmed = (u) => {
 ```
 
 Engine guarantees you can rely on:
+
 - The receiver **re-applies** every move on its own state and signs only if the re-derived
   `{stateHash, nonce, balances}` match the frame — so an illegal/out-of-turn move from the
   other side (or a tampering relay) is rejected, it never advances state.
@@ -222,6 +238,7 @@ Build PTBs with the SDK's `onchain/txbuilders.ts`, sign with the **wallet** (not
 ephemeral key), submit via your wallet adapter. `signatureType` is `0` for ed25519.
 
 ### Open (once per match — the opener / seat A, or the arena)
+
 ```ts
 import { buildCreateAndShare } from "sui-tunnel-ts/onchain/txbuilders";
 const tx = new Transaction();
@@ -229,20 +246,26 @@ buildCreateAndShare(tx, {
   partyA: { address: walletA, publicKey: ephPubkeyA, signatureType: 0 },
   partyB: { address: walletB, publicKey: ephPubkeyB, signatureType: 0 },
   timeoutMs: TIMEOUT_MS,
-  penaltyAmount: STAKE,          // penalty = stake → abandonment forfeits the pot
+  penaltyAmount: STAKE, // penalty = stake → abandonment forfeits the pot
 });
 // submit; read the shared Tunnel object id from tx effects → that is `tunnelId`
 // then announce: ws.send({ type: "tunnel.opened", matchId, tunnelId })
 ```
+
 > `create` binds nothing to the sender, so whoever pays the (trivial) create gas is fine.
 
 ### Fund (each player funds its OWN seat — gated)
+
 ```ts
-import { buildDeposit, buildDepositFromGas } from "sui-tunnel-ts/onchain/txbuilders";
+import {
+  buildDeposit,
+  buildDepositFromGas,
+} from "sui-tunnel-ts/onchain/txbuilders";
 const tx = new Transaction();
-buildDepositFromGas(tx, { tunnelId, amount: STAKE });   // SUI; or buildDeposit with a Coin<T>
+buildDepositFromGas(tx, { tunnelId, amount: STAKE }); // SUI; or buildDeposit with a Coin<T>
 // sender MUST be this player's wallet (deposit is gated to party.address)
 ```
+
 The **second** deposit auto-activates the tunnel on-chain (`TunnelActivated`).
 
 > **Detect activation yourself in v1** (the server's `match.active` is not emitted yet):
@@ -250,6 +273,7 @@ The **second** deposit auto-activates the tunnel on-chain (`TunnelActivated`).
 > activation event. Don't block on a `match.active` message.
 
 ### Before depositing — verify the seat (the real security)
+
 Read the on-chain tunnel and confirm **your** seat names **your** wallet + **your** attested
 ephemeral pubkey, status `CREATED`, before you deposit. Combined with the opponent's
 `party.hello.walletSig` — the opponent **wallet's** Sui personal-message signature over
@@ -260,9 +284,11 @@ signature is used and checked in v1; it's verified in the browser, so the raw-vs
 mismatch from §5 doesn't apply.)
 
 ### Settle — win by play / genuine tie (both co-sign)
+
 Terminal state → both ephemeral keys co-sign the settlement (collect the other half over the
 relay), then `POST` it. The backend submits `close_cooperative_with_root` + archives the
 transcript to Walrus. Same settle endpoint the fleet uses:
+
 ```
 POST /v1/sessions/{sessionId}/settle      Authorization: Bearer <statsToken>
 {
@@ -271,28 +297,42 @@ POST /v1/sessions/{sessionId}/settle      Authorization: Bearer <statsToken>
   "transcript": [ /* the off-chain move log for Walrus */ ]
 }
 ```
+
 Collect the two halves with the engine:
+
 ```ts
 const half = tunnel.buildSettlementHalf(BigInt(Date.now())); // { settlement, sigSelf }
 // exchange halves over relay, then:
-const settled = tunnel.combineSettlement(half.settlement, half.sigSelf, otherHalfSig);
+const settled = tunnel.combineSettlement(
+  half.settlement,
+  half.sigSelf,
+  otherHalfSig,
+);
 // → settled.sigA / settled.sigB / settled.settlement feed the /settle body
 ```
+
 (`finalNonce = onchainNonce + 1`, default `onchainNonce = 0` for a tunnel that never
 checkpointed on-chain — the normal case.)
 
 ### Win by forfeit (opponent abandons) — one player, two wallet txs
+
 The staying player claims the pot directly (no backend needed):
+
 ```ts
-import { buildRaiseDisputeCurrentState, buildForceClose } from "sui-tunnel-ts/onchain/txbuilders";
+import {
+  buildRaiseDisputeCurrentState,
+  buildForceClose,
+} from "sui-tunnel-ts/onchain/txbuilders";
 // tx1: buildRaiseDisputeCurrentState(tx, { tunnelId })   // starts the timeout
 // ...wait for the timeout...
 // tx2: buildForceClose(tx, { tunnelId })                 // penalty = stake → claimant takes the pot
 ```
+
 Surface this as a single **"Claim winnings"** button (it costs two wallet txs with a wait
 between — set expectations in the UI).
 
 ### No-show refund (opponent never funded)
+
 ```ts
 import { buildWithdrawBeforeActive } from "sui-tunnel-ts/onchain/txbuilders";
 // buildWithdrawBeforeActive(tx, { tunnelId, recipient: myWallet })   // other side still zero
@@ -332,28 +372,28 @@ abandonment:  stayer: raise_dispute_current_state → (timeout) → force_close 
 
 ## 10. Known v1 limitations the FE must account for
 
-| Limitation | FE impact / what to do |
-|---|---|
-| `pubkey ↔ wallet` binding not enforced server-side | Don't trust lobby presence as identity proof; rely on the on-chain seat check (§7) before depositing. Sign `connect` with the wallet for forward-compat. |
-| `match.active` not emitted | Detect tunnel activation on-chain after both deposits; don't await the message. |
-| `queue.timeout` not emitted | Implement your own client-side queue-wait timeout/retry UI. |
-| Reconnect can evict a newer presence entry | Avoid opening two sockets for one wallet; on reconnect, re-`connect` and re-`queue.join` / resume by `matchId` from IndexedDB. |
-| Disconnect doesn't drain the queue | A stale opponent can appear "matched but absent"; give the user a leave/re-queue path. |
-| Watchtower captures but does not yet auto-submit on-chain | For a v1 flat-balance game this is moot; don't rely on server-side dispute defense. |
-| New PvP game | Needs a new TS `Protocol` + UI and **zero backend change** — the relay is game-agnostic (keyed on the `game` string). |
+| Limitation                                                | FE impact / what to do                                                                                                                                   |
+| --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pubkey ↔ wallet` binding not enforced server-side        | Don't trust lobby presence as identity proof; rely on the on-chain seat check (§7) before depositing. Sign `connect` with the wallet for forward-compat. |
+| `match.active` not emitted                                | Detect tunnel activation on-chain after both deposits; don't await the message.                                                                          |
+| `queue.timeout` not emitted                               | Implement your own client-side queue-wait timeout/retry UI.                                                                                              |
+| Reconnect can evict a newer presence entry                | Avoid opening two sockets for one wallet; on reconnect, re-`connect` and re-`queue.join` / resume by `matchId` from IndexedDB.                           |
+| Disconnect doesn't drain the queue                        | A stale opponent can appear "matched but absent"; give the user a leave/re-queue path.                                                                   |
+| Watchtower captures but does not yet auto-submit on-chain | For a v1 flat-balance game this is moot; don't rely on server-side dispute defense.                                                                      |
+| New PvP game                                              | Needs a new TS `Protocol` + UI and **zero backend change** — the relay is game-agnostic (keyed on the `game` string).                                    |
 
 ---
 
 ## 11. Quick reference — what the FE calls
 
-| Need | Mechanism |
-|---|---|
-| Live stats dashboard | `GET /v1/stats/live` (SSE) |
-| Find/start a match | `ws /v1/mp`: `connect` → `queue.join` or `challenge.create` |
-| Exchange ephemeral keys | `party.hello` (verify the opponent's `walletSig`) |
-| Open the tunnel | wallet PTB `buildCreateAndShare` → `tunnel.opened` |
-| Fund | wallet PTB `buildDeposit` / `buildDepositFromGas` (own seat) |
-| Play | `DistributedTunnel.propose()` ↔ `relay` frames ↔ `onConfirmed` |
-| Settle (win/tie) | engine `buildSettlementHalf`/`combineSettlement` → `POST /sessions/{id}/settle` |
-| Claim a forfeit | wallet PTB `buildRaiseDisputeCurrentState` → (timeout) → `buildForceClose` |
-| Refund a no-show | wallet PTB `buildWithdrawBeforeActive` / `buildWithdrawTimeout` |
+| Need                    | Mechanism                                                                       |
+| ----------------------- | ------------------------------------------------------------------------------- |
+| Live stats dashboard    | `GET /v1/stats/live` (SSE)                                                      |
+| Find/start a match      | `ws /v1/mp`: `connect` → `queue.join` or `challenge.create`                     |
+| Exchange ephemeral keys | `party.hello` (verify the opponent's `walletSig`)                               |
+| Open the tunnel         | wallet PTB `buildCreateAndShare` → `tunnel.opened`                              |
+| Fund                    | wallet PTB `buildDeposit` / `buildDepositFromGas` (own seat)                    |
+| Play                    | `DistributedTunnel.propose()` ↔ `relay` frames ↔ `onConfirmed`                  |
+| Settle (win/tie)        | engine `buildSettlementHalf`/`combineSettlement` → `POST /sessions/{id}/settle` |
+| Claim a forfeit         | wallet PTB `buildRaiseDisputeCurrentState` → (timeout) → `buildForceClose`      |
+| Refund a no-show        | wallet PTB `buildWithdrawBeforeActive` / `buildWithdrawTimeout`                 |

@@ -5,7 +5,11 @@ import { chatProtocol } from "sui-tunnel-ts/protocol/chat";
 import type { MatchInfo, MpChannel, MpClient } from "./mpClient.ts";
 import type { OllamaBackendClient } from "./ollama.ts";
 
-const fakeClient = (name: string, role: "A" | "B", opponent: string): MpClient => {
+const fakeClient = (
+  name: string,
+  role: "A" | "B",
+  opponent: string,
+): MpClient => {
   return {
     connect: () => Promise.resolve(),
     quickMatch: () =>
@@ -46,9 +50,14 @@ test("runBotVsBot returns transcript", async () => {
   } as unknown as OllamaBackendClient;
 
   const tunnelIdProvider = () => "0xTUNNEL";
-  const result = await runBotVsBot(
-    { alice, bob, ollama, topic: "weather", tunnelIdProvider, maxMoves: 2 },
-  );
+  const result = await runBotVsBot({
+    alice,
+    bob,
+    ollama,
+    topic: "weather",
+    tunnelIdProvider,
+    maxMoves: 2,
+  });
   assert.equal(result.messages.length > 0, true);
   assert.equal(publishTranscriptMock.mock.callCount(), 1);
 });

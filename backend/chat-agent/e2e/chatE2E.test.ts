@@ -13,14 +13,20 @@ const BACKEND_URL = `http://127.0.0.1:${BACKEND_PORT}`;
 const WS_URL = `${resolveMpWsUrl(BACKEND_URL)}/v1/mp`;
 const SETTLER_KEY = Buffer.from(new Uint8Array(32)).toString("base64");
 
-function startMockOllama(): Promise<{ server: http.Server; url: string; close: () => void }> {
+function startMockOllama(): Promise<{
+  server: http.Server;
+  url: string;
+  close: () => void;
+}> {
   return new Promise((resolve, reject) => {
     const server = http.createServer((req, res) => {
       let body = "";
       req.on("data", (c) => (body += c));
       req.on("end", () => {
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ message: { role: "assistant", content: "hello" } }));
+        res.end(
+          JSON.stringify({ message: { role: "assistant", content: "hello" } }),
+        );
       });
     });
     server.listen(0, "127.0.0.1", () => {
@@ -99,7 +105,10 @@ function startBackend(ollamaUrl: string): Promise<{ stop: () => void }> {
   });
 }
 
-function subscribeLive(): Promise<{ messages: { sender: string; text: string }[]; stop: () => void }> {
+function subscribeLive(): Promise<{
+  messages: { sender: string; text: string }[];
+  stop: () => void;
+}> {
   return new Promise((resolve, reject) => {
     const controller = new AbortController();
     const messages: { sender: string; text: string }[] = [];
@@ -183,7 +192,11 @@ test(
 
       console.log("[e2e] live messages:", live.messages);
       assert.equal(result.messages.length > 0, true, "transcript has messages");
-      assert.equal(live.messages.length > 0, true, "SSE delivered at least one message");
+      assert.equal(
+        live.messages.length > 0,
+        true,
+        "SSE delivered at least one message",
+      );
       assert.equal(live.messages[0].text, "hello");
     } finally {
       console.log("[e2e] tearing down");

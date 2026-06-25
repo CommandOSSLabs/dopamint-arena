@@ -50,36 +50,48 @@ frontend/
 ### Task 1: Dependencies, sound assets, and sound module
 
 **Files:**
+
 - Modify: `frontend/package.json`
 - Create: `frontend/public/sounds/{hop,splat,splash,win,room-join,click}.mp3`
 - Create: `frontend/src/games/chickenCross/scene/crossSounds.ts`
 
 **Interfaces:**
+
 - Produces: `class CrossSounds { play(name: CrossSoundName): void; setMuted(b:boolean): void }`, `type CrossSoundName = "hop"|"splat"|"splash"|"win"|"room-join"|"click"`.
 
 - [ ] **Step 1: Add Three.js dependency**
 
 Run:
+
 ```bash
 cd frontend && pnpm add three@^0.184.0 && pnpm add -D @types/three@^0.184.1
 ```
+
 Expected: `package.json` gains `three` (deps) and `@types/three` (devDeps); `pnpm-lock.yaml` updates.
 
 - [ ] **Step 2: Copy the 6 sound files**
 
 Run:
+
 ```bash
 mkdir -p frontend/public/sounds
 SRC=/Users/realestzan/Projects/code/dopamint/games/chicken-cross/ui/public/sounds
 cp "$SRC/hop.mp3" "$SRC/splat.mp3" "$SRC/splash.mp3" "$SRC/win.mp3" "$SRC/room-join.mp3" "$SRC/click.mp3" frontend/public/sounds/
 ls -1 frontend/public/sounds
 ```
+
 Expected: 6 files listed. (Original `toast.mp3` is intentionally absent — unused.)
 
 - [ ] **Step 3: Write `crossSounds.ts`**
 
 ```ts
-export type CrossSoundName = "hop" | "splat" | "splash" | "win" | "room-join" | "click";
+export type CrossSoundName =
+  | "hop"
+  | "splat"
+  | "splash"
+  | "win"
+  | "room-join"
+  | "click";
 
 const FILES: Record<CrossSoundName, string> = {
   hop: "/sounds/hop.mp3",
@@ -133,11 +145,13 @@ git commit -m "build(web): add three + chicken-cross sound assets"
 ### Task 2: Scene wire types + pure adapter (`crossViewToSnapshot`)
 
 **Files:**
+
 - Create: `frontend/src/games/chickenCross/scene/crossSceneTypes.ts`
 - Create: `frontend/src/games/chickenCross/scene/crossViewToSnapshot.ts`
 - Test: `frontend/src/games/chickenCross/scene/crossViewToSnapshot.test.ts`
 
 **Interfaces:**
+
 - Consumes: `CrossView` from `../session-core.ts`; `hazardsAt, laneKind, COLUMN_COUNT, SPAWN_COL, WIN_LANE` from `../../../../../sui-tunnel-ts/src/protocol/cross.ts`.
 - Produces:
   - `crossViewToSnapshot(view, prev, role, feeder) => { snapshot: CrossSnapshot; feeder: FeederState; events: SoundEvents }`
@@ -206,7 +220,12 @@ export type CrossSnapshot = {
 ```ts
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { COLUMN_COUNT, SPAWN_COL, WIN_LANE, laneKind } from "../../../../../sui-tunnel-ts/src/protocol/cross.ts";
+import {
+  COLUMN_COUNT,
+  SPAWN_COL,
+  WIN_LANE,
+  laneKind,
+} from "../../../../../sui-tunnel-ts/src/protocol/cross.ts";
 import { crossViewToSnapshot, initialFeeder } from "./crossViewToSnapshot.ts";
 import type { CrossView } from "../session-core.ts";
 
@@ -226,7 +245,12 @@ function view(partial: Partial<CrossView>): CrossView {
 }
 
 test("lanes cover 0..WIN_LANE with arena lane kinds", () => {
-  const { snapshot } = crossViewToSnapshot(view({}), null, "A", initialFeeder());
+  const { snapshot } = crossViewToSnapshot(
+    view({}),
+    null,
+    "A",
+    initialFeeder(),
+  );
   assert.equal(snapshot.world.minLane, 0);
   assert.equal(snapshot.world.maxLane, WIN_LANE);
   assert.equal(snapshot.world.lanes.length, WIN_LANE + 1);
@@ -236,7 +260,12 @@ test("lanes cover 0..WIN_LANE with arena lane kinds", () => {
 });
 
 test("grass lanes carry no hazards; non-grass map kind to mesh kind", () => {
-  const { snapshot } = crossViewToSnapshot(view({}), null, "A", initialFeeder());
+  const { snapshot } = crossViewToSnapshot(
+    view({}),
+    null,
+    "A",
+    initialFeeder(),
+  );
   const kindOf = { road: "car", water: "log", rails: "train" } as const;
   for (const lane of snapshot.world.lanes) {
     if (lane.kind === "grass") {
@@ -261,10 +290,12 @@ test("hazard ids are stable across consecutive ticks", () => {
 });
 
 test("players keep A/B positional identity", () => {
-  const v = view({ players: [
-    { lane: 3, col: 2, score: 3 },
-    { lane: 1, col: 6, score: 1 },
-  ]});
+  const v = view({
+    players: [
+      { lane: 3, col: 2, score: 3 },
+      { lane: 1, col: 6, score: 1 },
+    ],
+  });
   const { snapshot } = crossViewToSnapshot(v, null, "A", initialFeeder());
   assert.equal(snapshot.players[0].id, "A");
   assert.equal(snapshot.players[0].laneIndex, 3);
@@ -273,44 +304,101 @@ test("players keep A/B positional identity", () => {
 });
 
 test("hop event fires when a player advances a lane", () => {
-  const prev = view({ tick: 1, players: [{ lane: 2, col: 4, score: 2 }, { lane: 1, col: 4, score: 1 }] });
-  const next = view({ tick: 2, players: [{ lane: 3, col: 4, score: 3 }, { lane: 1, col: 4, score: 1 }] });
+  const prev = view({
+    tick: 1,
+    players: [
+      { lane: 2, col: 4, score: 2 },
+      { lane: 1, col: 4, score: 1 },
+    ],
+  });
+  const next = view({
+    tick: 2,
+    players: [
+      { lane: 3, col: 4, score: 3 },
+      { lane: 1, col: 4, score: 1 },
+    ],
+  });
   const { events } = crossViewToSnapshot(next, prev, "A", initialFeeder());
   assert.equal(events.hop, true);
 });
 
 test("death increments deaths, resets facing north, emits splat/splash by lane kind", () => {
   // find a water lane and a road lane to test both branches
-  let waterLane = -1, roadLane = -1;
+  let waterLane = -1,
+    roadLane = -1;
   for (let l = 2; l <= WIN_LANE; l++) {
     if (laneKind(l) === "water" && waterLane < 0) waterLane = l;
     if (laneKind(l) === "road" && roadLane < 0) roadLane = l;
   }
   // water death -> splash
-  const prevW = view({ tick: 1, players: [{ lane: waterLane, col: 4, score: waterLane }, { lane: 0, col: 4, score: 0 }] });
-  const nextW = view({ tick: 2, players: [{ lane: 0, col: SPAWN_COL, score: waterLane }, { lane: 0, col: 4, score: 0 }] });
+  const prevW = view({
+    tick: 1,
+    players: [
+      { lane: waterLane, col: 4, score: waterLane },
+      { lane: 0, col: 4, score: 0 },
+    ],
+  });
+  const nextW = view({
+    tick: 2,
+    players: [
+      { lane: 0, col: SPAWN_COL, score: waterLane },
+      { lane: 0, col: 4, score: 0 },
+    ],
+  });
   const rW = crossViewToSnapshot(nextW, prevW, "A", initialFeeder());
   assert.deepEqual(rW.events.deaths, ["splash"]);
   assert.equal(rW.feeder.deaths[0], 1);
   assert.equal(rW.snapshot.players[0].deaths, 1);
   assert.equal(rW.snapshot.players[0].facing, "north");
   // road death -> splat
-  const prevR = view({ tick: 1, players: [{ lane: roadLane, col: 4, score: roadLane }, { lane: 0, col: 4, score: 0 }] });
-  const nextR = view({ tick: 2, players: [{ lane: 0, col: SPAWN_COL, score: roadLane }, { lane: 0, col: 4, score: 0 }] });
+  const prevR = view({
+    tick: 1,
+    players: [
+      { lane: roadLane, col: 4, score: roadLane },
+      { lane: 0, col: 4, score: 0 },
+    ],
+  });
+  const nextR = view({
+    tick: 2,
+    players: [
+      { lane: 0, col: SPAWN_COL, score: roadLane },
+      { lane: 0, col: 4, score: 0 },
+    ],
+  });
   const rR = crossViewToSnapshot(nextR, prevR, "A", initialFeeder());
   assert.deepEqual(rR.events.deaths, ["splat"]);
 });
 
 test("facing derives from movement delta", () => {
-  const prev = view({ tick: 1, players: [{ lane: 2, col: 4, score: 2 }, { lane: 0, col: 4, score: 0 }] });
+  const prev = view({
+    tick: 1,
+    players: [
+      { lane: 2, col: 4, score: 2 },
+      { lane: 0, col: 4, score: 0 },
+    ],
+  });
   const east = crossViewToSnapshot(
-    view({ tick: 2, players: [{ lane: 2, col: 5, score: 2 }, { lane: 0, col: 4, score: 0 }] }),
-    prev, "A", initialFeeder());
+    view({
+      tick: 2,
+      players: [
+        { lane: 2, col: 5, score: 2 },
+        { lane: 0, col: 4, score: 0 },
+      ],
+    }),
+    prev,
+    "A",
+    initialFeeder(),
+  );
   assert.equal(east.snapshot.players[0].facing, "east");
 });
 
 test("winner passes through to winnerId", () => {
-  const { snapshot } = crossViewToSnapshot(view({ winner: "B" }), null, "A", initialFeeder());
+  const { snapshot } = crossViewToSnapshot(
+    view({ winner: "B" }),
+    null,
+    "A",
+    initialFeeder(),
+  );
   assert.equal(snapshot.winnerId, "B");
 });
 ```
@@ -418,7 +506,10 @@ export function crossViewToSnapshot(
 ): { snapshot: CrossSnapshot; feeder: FeederState; events: SoundEvents } {
   const ids = ["A", "B"] as const;
   const deaths: [number, number] = [feeder.deaths[0], feeder.deaths[1]];
-  const facing: [CrossDirection, CrossDirection] = [feeder.facing[0], feeder.facing[1]];
+  const facing: [CrossDirection, CrossDirection] = [
+    feeder.facing[0],
+    feeder.facing[1],
+  ];
   const events: SoundEvents = { hop: false, deaths: [] };
 
   const players: CrossPlayerState[] = view.players.map((p, i) => {
@@ -453,7 +544,11 @@ export function crossViewToSnapshot(
     roomCode: "",
     phase: "playing",
     serverTime: view.tick,
-    world: { minLane: 0, maxLane: WIN_LANE, lanes: lanesFor(view.seed, view.tick) },
+    world: {
+      minLane: 0,
+      maxLane: WIN_LANE,
+      lanes: lanesFor(view.seed, view.tick),
+    },
     players,
     winnerId: view.winner,
   };
@@ -471,6 +566,7 @@ Expected: PASS (8 tests). If a hazard-kind test fails because a chosen lane has 
 
 Run: `cd frontend && pnpm typecheck`
 Expected: PASS.
+
 ```bash
 git add frontend/src/games/chickenCross/scene/crossSceneTypes.ts frontend/src/games/chickenCross/scene/crossViewToSnapshot.ts frontend/src/games/chickenCross/scene/crossViewToSnapshot.test.ts
 git commit -m "feat(web): add chicken-cross view-to-scene adapter"
@@ -481,16 +577,18 @@ git commit -m "feat(web): add chicken-cross view-to-scene adapter"
 ### Task 3: Pure input mapping + canvas binding
 
 **Files:**
+
 - Create: `frontend/src/games/chickenCross/scene/crossInput.ts`
 - Test: `frontend/src/games/chickenCross/scene/crossInput.test.ts`
 
 **Interfaces:**
+
 - Produces:
   - `keyToScreenDir(code: string): CrossDirection | null`
   - `swipeToScreenDir(dx: number, dy: number, threshold?: number): CrossDirection | null`
   - `bindCrossInput(target: HTMLElement, onScreenDir: (dir: CrossDirection) => void): () => void`
 
-These return a *screen-relative* direction (expressed in the `CrossDirection` union: up=`north`, down=`south`, left=`west`, right=`east`). `CrossCanvas` passes it through `scene.worldDirectionFromScreenInput` to get the actual world direction before calling `onDir`.
+These return a _screen-relative_ direction (expressed in the `CrossDirection` union: up=`north`, down=`south`, left=`west`, right=`east`). `CrossCanvas` passes it through `scene.worldDirectionFromScreenInput` to get the actual world direction before calling `onDir`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -552,7 +650,11 @@ export function keyToScreenDir(code: string): CrossDirection | null {
 }
 
 /** Swipe vector → screen-relative direction; null if neither axis clears `threshold`. */
-export function swipeToScreenDir(dx: number, dy: number, threshold = 28): CrossDirection | null {
+export function swipeToScreenDir(
+  dx: number,
+  dy: number,
+  threshold = 28,
+): CrossDirection | null {
   if (Math.abs(dx) < threshold && Math.abs(dy) < threshold) return null;
   if (Math.abs(dx) >= Math.abs(dy)) return dx > 0 ? "east" : "west";
   return dy > 0 ? "south" : "north";
@@ -616,6 +718,7 @@ git commit -m "feat(web): add scoped chicken-cross input mapping"
 ### Task 4: Port the Three.js scene (scoped resize + full dispose)
 
 **Files:**
+
 - Create (copy + edit): `frontend/src/games/chickenCross/scene/CrossScene.ts`, `facing.ts`, `screenInput.ts`
 - Reference (read-only): OG `ui/src/cross/CrossScene.ts`, `facing.ts`, `screen-input.ts`
 
@@ -624,6 +727,7 @@ The original scene is all procedural geometry — no model/image files to move. 
 - [ ] **Step 1: Copy the three source files**
 
 Run:
+
 ```bash
 SRC=/Users/realestzan/Projects/code/dopamint/games/chicken-cross/ui/src/cross
 DEST=frontend/src/games/chickenCross/scene
@@ -639,6 +743,7 @@ Read `frontend/src/games/chickenCross/scene/CrossScene.ts`. Note every `import` 
 - [ ] **Step 3: Rewire type + sibling imports**
 
 In `CrossScene.ts`:
+
 - Change the snapshot/sim type import(s) to: `import type { CrossSnapshot, CrossPlayerState, CrossDirection, CrossLaneType } from "./crossSceneTypes.ts";` (add only the names actually referenced).
 - Change `from "./screen-input"` to `from "./screenInput.ts"`.
 - Ensure `./facing` import resolves (`./facing.ts`).
@@ -649,6 +754,7 @@ Run after each change: `cd frontend && pnpm typecheck` and resolve errors until 
 - [ ] **Step 4: Make sizing container-scoped**
 
 In `CrossScene.ts`:
+
 - Find the constructor's initial size + the `window.addEventListener("resize", ...)` registration and the `resize()` method that reads `window.innerWidth/innerHeight`.
 - **Remove** the `window.addEventListener("resize", ...)` line entirely (the container drives resize now).
 - Change the `resize` method signature to accept explicit dimensions and use them:
@@ -669,7 +775,9 @@ resize(width: number, height: number): void {
   this.camera.updateProjectionMatrix();
 }
 ```
+
 (Match the exact field names already in the file — `this.renderer`, `this.camera`, `CAMERA_FRUSTUM`. If the original `resize()` already recomputes the frustum, keep that formula and only swap `window.innerWidth/Height` for the `width`/`height` params.)
+
 - In the constructor, replace the initial `this.renderer.setSize(window.innerWidth, window.innerHeight)` with `this.renderer.setSize(1, 1, false)` (CrossCanvas calls `resize()` immediately after construction via its ResizeObserver).
 
 - [ ] **Step 5: Add full disposal**
@@ -697,6 +805,7 @@ dispose(): void {
   this.renderer.dispose();
 }
 ```
+
 (Match the actual Map field names in the file — they may be `laneMeshes`/`hazardMeshes`/`playerVisuals` or similar; clear each Map the scene holds. Also dispose any other CanvasTexture fields besides `grassTexture` — e.g. a sand/dim-grass texture if stored as a field.)
 
 - [ ] **Step 6: Snap hazards on column wrap**
@@ -711,6 +820,7 @@ if (Math.abs(targetX - mesh.position.x) > (COLUMN_COUNT * TILE) / 2) {
   mesh.position.x += (targetX - mesh.position.x) * HAZARD_LERP; // keep existing lerp factor/name
 }
 ```
+
 (Use the file's existing `TILE` and lerp constant; import `COLUMN_COUNT` from the protocol — `import { COLUMN_COUNT } from "../../../../../sui-tunnel-ts/src/protocol/cross.ts";` — or reuse the scene's own column count if it already defines one with the same value 9.)
 
 - [ ] **Step 7: Typecheck**
@@ -732,9 +842,11 @@ git commit -m "feat(web): port chicken-cross 3d scene, scoped + disposable"
 ### Task 5: `CrossCanvas` — canvas lifecycle, feeding, sounds, teardown
 
 **Files:**
+
 - Create: `frontend/src/games/chickenCross/components/CrossCanvas.tsx`
 
 **Interfaces:**
+
 - Consumes: `CrossScene` (`new CrossScene(canvas)`, `applySnapshot(snapshot, localPlayerId)`, `render()`, `setCameraMode`, `setLocalPlayerId`, `worldDirectionFromScreenInput`, `resize(w,h)`, `dispose()`); `crossViewToSnapshot`/`initialFeeder`/`FeederState`; `bindCrossInput`; `CrossSounds`; `CrossView`, `CrossDir`.
 - Produces: `function CrossCanvas(props: { view: CrossView; role: "A"|"B"|null; winner: "A"|"B"|null; onDir: (d: CrossDir) => void }): JSX.Element`
 
@@ -745,7 +857,11 @@ import { useEffect, useRef } from "react";
 import type { CrossView } from "../session-core.ts";
 import type { CrossDir } from "../../../../../sui-tunnel-ts/src/protocol/cross.ts";
 import { CrossScene } from "../scene/CrossScene.ts";
-import { crossViewToSnapshot, initialFeeder, type FeederState } from "../scene/crossViewToSnapshot.ts";
+import {
+  crossViewToSnapshot,
+  initialFeeder,
+  type FeederState,
+} from "../scene/crossViewToSnapshot.ts";
 import { bindCrossInput } from "../scene/crossInput.ts";
 import { CrossSounds } from "../scene/crossSounds.ts";
 import type { CrossDirection } from "../scene/crossSceneTypes.ts";
@@ -757,7 +873,12 @@ type CrossCanvasProps = {
   onDir: (dir: CrossDir) => void;
 };
 
-const SCREEN_DIRS: Array<{ dir: CrossDirection; glyph: string; col: string; row: string }> = [
+const SCREEN_DIRS: Array<{
+  dir: CrossDirection;
+  glyph: string;
+  col: string;
+  row: string;
+}> = [
   { dir: "north", glyph: "▲", col: "2", row: "1" },
   { dir: "west", glyph: "◀", col: "1", row: "2" },
   { dir: "east", glyph: "▶", col: "3", row: "2" },
@@ -835,7 +956,10 @@ export function CrossCanvas({ view, role, winner, onDir }: CrossCanvasProps) {
     const sounds = soundsRef.current;
     if (!scene || !sounds) return;
     const { snapshot, feeder, events } = crossViewToSnapshot(
-      view, prevViewRef.current, role, feederRef.current,
+      view,
+      prevViewRef.current,
+      role,
+      feederRef.current,
     );
     scene.applySnapshot(snapshot, role);
     feederRef.current = feeder;
@@ -851,7 +975,9 @@ export function CrossCanvas({ view, role, winner, onDir }: CrossCanvasProps) {
   }, [winner]);
 
   const press = (dir: CrossDirection) => {
-    const canvas = canvasRef.current as (HTMLCanvasElement & { __emit?: (d: CrossDirection) => void }) | null;
+    const canvas = canvasRef.current as
+      | (HTMLCanvasElement & { __emit?: (d: CrossDirection) => void })
+      | null;
     soundsRef.current?.play("click");
     canvas?.__emit?.(dir);
   };
@@ -895,11 +1021,13 @@ git commit -m "feat(web): add chicken-cross canvas lifecycle component"
 ### Task 6: Swap `CrossBoard` internals, trim CSS, lobby click sound
 
 **Files:**
+
 - Modify: `frontend/src/games/chickenCross/components/CrossBoard.tsx`
 - Modify: `frontend/src/games/chickenCross/cross.css`
 - Modify: `frontend/src/games/chickenCross/components/CrossLobby.tsx`
 
 **Interfaces:**
+
 - Consumes: `CrossCanvas` from `./CrossCanvas.tsx`.
 - `CrossBoard` keeps its exact prop signature (Global Constraints).
 
@@ -914,6 +1042,7 @@ Keep the prop signature, the HUD header (balanceA/balanceB), and the result over
 ```tsx
 <CrossCanvas view={view} role={role} winner={winner} onDir={onDir} />
 ```
+
 Add the import at the top: `import { CrossCanvas } from "./CrossCanvas.tsx";`
 Remove now-unused imports (`hazardsAt`, `laneKind`, emoji/lane helpers, `seed` usage inside the grid). `seed` stays in the prop list (still passed by `ChickenCrossWindow`); if it becomes unused, prefix `_seed` is NOT allowed since the prop name is fixed — instead keep destructuring it and add a `void seed;` is unnecessary; simply leave it destructured and unreferenced (TS `noUnusedLocals` is off for props in this codebase — confirm via typecheck; if it errors, reference it harmlessly or drop it from destructuring while keeping the type).
 
@@ -960,15 +1089,18 @@ Remove the `.cross-grid`, `.cross-lane`, `.cross-cell` rules (emoji grid is gone
   background: rgba(0, 0, 0, 0.7);
 }
 ```
+
 (Keep any existing HUD/header/overlay rules in the file untouched.)
 
 - [ ] **Step 4: Add the lobby click sound**
 
 In `CrossLobby.tsx`, import the sound module and play `click` on the create/join button handlers:
+
 ```tsx
 import { CrossSounds } from "../scene/crossSounds.ts";
 const lobbySounds = new CrossSounds();
 ```
+
 At the top of each button's `onClick` (create and join), add: `lobbySounds.play("click");` before calling the existing `onCreate`/`onJoin` handler. Do not change the existing handler logic.
 
 - [ ] **Step 5: Typecheck + build**
@@ -992,14 +1124,17 @@ git commit -m "feat(web): render chicken-cross with ported 3d scene"
 - [ ] **Step 1: Run unit tests + gate**
 
 Run:
+
 ```bash
 cd frontend && node --import tsx --test "src/games/chickenCross/scene/*.test.ts" && pnpm typecheck && pnpm build
 ```
+
 Expected: all adapter + input tests PASS; typecheck + build green.
 
 - [ ] **Step 2: Manual E2E (browser)**
 
 Run `cd frontend && pnpm dev`, open the app, launch Chicken Cross PvP (two sessions or the existing lobby flow). Verify:
+
 - the original low-poly 3D scene renders inside the desktop tile (chicken, lanes, cars/logs/train, scenery, shadows);
 - it scales cleanly when the window/viewport changes (looks right at the ~256 px tile and when enlarged toward 400×400+) — no stretching, no clipping of the play area;
 - **hop** on advance, **splat/splash** on death (road vs water), **win** on game end, **room-join** on entering play, **click** on D-pad/lobby buttons;
@@ -1015,6 +1150,7 @@ Expected: PASS (CrossView/deriveView unchanged). Confirm `git diff --stat main..
 - [ ] **Step 4: Final state**
 
 Working tree clean, branch pushed:
+
 ```bash
 git -C . status --short   # expect empty
 git push -u origin feat/chicken-cross-ui

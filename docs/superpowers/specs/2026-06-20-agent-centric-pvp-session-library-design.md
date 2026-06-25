@@ -1,12 +1,12 @@
 # Agent-centric PvP game session library — design
 
-**Date:** 2026-06-20 · **Status:** proposed · **Scope:** the PvP tunnel *session*
+**Date:** 2026-06-20 · **Status:** proposed · **Scope:** the PvP tunnel _session_
 layer for tic-tac-toe + blackjack (the layer above the PR #28 game-bot kit).
 
 ## Problem
 
 The UI feedback (Daniel Lam, 2026-06-20) asks us to make games **agent-centric**:
-package game logic + interaction into a library, have the UI *reactively* consume
+package game logic + interaction into a library, have the UI _reactively_ consume
 it, run the same logic **headless** at max throughput for a backend bot fleet, and
 keep manual clicks low. Today the PvP logic for each game is trapped inside one
 giant React hook — `usePvpTicTacToe` (~685 lines), `usePvpBlackjack` (~829 lines) —
@@ -20,7 +20,7 @@ settlements do not match human play.
 canonical `GameKit`/`GameBot` contract, four per-game kits, a `GAME_KITS` registry,
 a self-play harness, and an import-hygiene boundary (`frontend/src/agent/**`). It is
 verified to be a **pure Core layer** — zero references to `DistributedTunnel`,
-transport, or settlement — so it slots cleanly *under* a session layer.
+transport, or settlement — so it slots cleanly _under_ a session layer.
 
 This spec covers **only that session layer**: a headless `PvpGameSession` that wraps
 the SDK tunnel engine, consumes a `GameKit`, drives a real co-signed two-party game
@@ -58,13 +58,13 @@ The off-chain engine is `core.DistributedTunnel<S,M>`
    `party.hello` exchange). Built by `makeEndpoint(...)` (`core/tunnel.ts`). The
    frontend holds **only its own** seat key. Per-move co-sign is **Ed25519 over the
    wire-serialized `StateUpdate`** (`domain | tunnelId | blake2b(encodeState) |
-   nonce | timestamp | balances`, `core/wire.ts`) — *not* a bare hash, so the
+nonce | timestamp | balances`, `core/wire.ts`) — _not_ a bare hash, so the
    identity seam must hand the engine a key+sign, never a `signState(hash)`.
 3. **On-chain** is entirely outside the engine: `SignExec = (tx) => Promise<{digest}>`
    (`frontend/src/onchain/tunnelTx.ts`), with `buildOpenAndFundSeatA`
    (`onchain/createAndFund.ts`), `depositStake`, `buildCloseWithRootFromSettlement` /
    `closeCooperativeWithRoot`, and the dual settle path (backend `POST /v1/tunnels/
-   {id}/settle` → wallet `close_cooperative_with_root` fallback, `agentEngine.ts`).
+{id}/settle` → wallet `close_cooperative_with_root` fallback, `agentEngine.ts`).
 
 Engine API the session uses: `.propose(move, ts)`, `.state` (confirmed),
 `.onConfirmed` (a **single settable callback**, not multi-subscriber),
@@ -76,8 +76,8 @@ transcript root** or the on-chain cooperative close fails — there is a runtime
 **`agentEngine.ts playOneMatch` is already a working headless session** — it does
 `makeEndpoint` + `new DistributedTunnel` + `propose` on `onConfirmed` + settle. It
 just drives `createBehaviorProtocol(behavior).randomMove` instead of a kit. So
-`PvpGameSession` is largely *`playOneMatch` refactored to drive the kit and expose a
-reactive store*, not greenfield.
+`PvpGameSession` is largely _`playOneMatch` refactored to drive the kit and expose a
+reactive store_, not greenfield.
 
 **PR #28 contract** (`frontend/src/agent/gameKit.ts`): `GameKit<S,M> { id, protocol,
 stateHash, createBot(seat, ctx), defaultStake }` and `GameBot<S,M> { plan(state): M
@@ -216,7 +216,7 @@ set `error` + transition + notify, never throw to the caller.
    handshake/settle into it; swap its `createBehaviorProtocol().randomMove` for
    `GAME_KITS["tictactoe"].protocol` + `kit.createBot(seat).plan/confirm`.
 2. **Thin** `usePvpTicTacToe` to `useSyncExternalStore(session.subscribe,
-   session.getSnapshot)` + imperative pass-throughs. **Parity gate:** the PvP ttt
+session.getSnapshot)` + imperative pass-throughs. **Parity gate:** the PvP ttt
    page behaves identically and produces byte-identical settlements.
 3. **Headless integration test** (see Testing) proving the kit composes with a real
    (loopback) tunnel end-to-end.
@@ -282,7 +282,7 @@ The kit harness only covers single-process `applyMove`; the session is where the
   digests, lastBet) or rebuilding the snapshot every tick breaks UI parity or loops
   `useSyncExternalStore`; mitigated by pinning the snapshot to the current hook
   return surface and a stable-reference test.
-- **Kickoff handshake** — ttt currently does *no* handshake (both seats call advance,
+- **Kickoff handshake** — ttt currently does _no_ handshake (both seats call advance,
   try/catch swallows the race loser) while `agentEngine` uses an explicit race-free
   `ready` handshake. The session standardizes on the `ready` handshake; this changes
   ttt's current start behavior and needs a kickoff-sequence parity test.

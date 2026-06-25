@@ -45,13 +45,14 @@ kit, funded by the player.
 
 ### Modes (mode window keeps its 3 buttons)
 
-| Mode | Player plays? | Opponent | Funding pattern | Close |
-|---|---|---|---|---|
-| **Play vs Bot** | Yes — bets/calls/folds; commit/reveal automated | persona bot (random) | **Pattern 1**: connected wallet opens directly, **ephemeral** seats | `/settle` (sponsored) + fallback wallet-submitted |
-| **Auto** | No (watch) | two persona bots (random) | **Pattern 2**: **persistent** localStorage bots, bot A self-signs, player pre-funds | `/settle` (sponsored) + fallback bot-A submitted |
-| **PvP** | unchanged (relay quickMatch) | — | each wallet funds its own seat | unchanged |
+| Mode            | Player plays?                                   | Opponent                  | Funding pattern                                                                     | Close                                             |
+| --------------- | ----------------------------------------------- | ------------------------- | ----------------------------------------------------------------------------------- | ------------------------------------------------- |
+| **Play vs Bot** | Yes — bets/calls/folds; commit/reveal automated | persona bot (random)      | **Pattern 1**: connected wallet opens directly, **ephemeral** seats                 | `/settle` (sponsored) + fallback wallet-submitted |
+| **Auto**        | No (watch)                                      | two persona bots (random) | **Pattern 2**: **persistent** localStorage bots, bot A self-signs, player pre-funds | `/settle` (sponsored) + fallback bot-A submitted  |
+| **PvP**         | unchanged (relay quickMatch)                    | —                         | each wallet funds its own seat                                                      | unchanged                                         |
 
 Both lanes match the existing reference exactly:
+
 - Play vs Bot = Battleship **bot** lane (`useBattleship`): `createParticipant`
   makes fresh random ephemeral seats per session; the connected wallet signs the
   single `openAndFundSelfPlay`.
@@ -69,7 +70,7 @@ randomizes both seats.
 ### Engine (shared by both lanes)
 
 - `OffchainTunnel.selfPlay(protocol, tunnelId, keyA, keyB, addrA, addrB,
-  {a: stake, b: stake})`. `selfPlay` applies moves **in-process**
+{a: stake, b: stake})`. `selfPlay` applies moves **in-process**
   (`protocol.applyMove`), so poker's byte-bearing moves (commit/salt) need **no**
   `moveCodec` — same as Battleship, whose moves also carry bytes. `moveCodec`
   remains only for the relay path (PvP/agent).
@@ -122,6 +123,7 @@ the relay). Update the `index.ts` lane comment.
 ## Architecture / files
 
 **New** (`frontend/src/games/quantumPoker/`):
+
 - `bots.ts` — persistent bot keypairs + funding + balance reads, used **only by
   Auto**. Mirrors `ticTacToe/botKeys.ts` + `battleship/engine/bots.ts`:
   `loadOrCreateQuantumPokerBots()` → `{ a, b }` (localStorage `qp_bots.v1`; each
@@ -135,6 +137,7 @@ the relay). Update the `index.ts` lane comment.
   (`AutoSession`). Persistent bots + loop + scoreboard.
 
 **Rewrite:**
+
 - `QuantumPokerWindow.tsx` — reuse the existing table (seats/board/pot/log) and
   add a human action bar (Fold / Check / Call / Bet[amount]); drive via
   `useQuantumPokerBot`.

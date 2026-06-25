@@ -1,8 +1,4 @@
-import {
-  generateKeyPair,
-  sign,
-  type KeyPair,
-} from "sui-tunnel-ts/core/crypto";
+import { generateKeyPair, sign, type KeyPair } from "sui-tunnel-ts/core/crypto";
 import { toHex } from "sui-tunnel-ts/core/bytes";
 import type { Transport } from "sui-tunnel-ts/core/distributedTunnel";
 import { wrapInnerFrameJson } from "sui-tunnel-ts/core/distributedFrame";
@@ -109,7 +105,9 @@ export class MpClient {
     let engineOnFrame: ((bytes: Uint8Array) => void) | null = null;
 
     this.relayHandlers.set(matchId, (payload) => {
-      const o = JSON.parse(payload) as PeerMessage | { t: "frame"; data: string };
+      const o = JSON.parse(payload) as
+        | PeerMessage
+        | { t: "frame"; data: string };
       if (o.t === "frame") {
         const bytes = new TextEncoder().encode(o.data);
         if (engineOnFrame) engineOnFrame(bytes);

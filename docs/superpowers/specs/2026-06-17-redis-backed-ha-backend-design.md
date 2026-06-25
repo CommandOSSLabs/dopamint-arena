@@ -95,7 +95,7 @@ pub struct ConnRef { pub instance_id: String, pub conn_id: ConnId }
 ```
 
 `MatchRecord` now stores each seat as a `ConnRef` (so the relay knows the owning instance).
-The pairing decision (seat A = earlier waiter / inviter) is unchanged — only *where* the
+The pairing decision (seat A = earlier waiter / inviter) is unchanged — only _where_ the
 queue lives moves.
 
 ## `Bus::deliver` semantics (the crux)
@@ -117,22 +117,22 @@ The in-memory `Bus` impl (single instance) is just the local-socket branch.
 
 **Disconnect cleanup** (folds in the ADR-0004 cuts, since this rewrites the path): on socket
 close, `clear_presence_if(wallet, conn)` (compare-and-delete — only removes presence if it
-still points at *this* conn, so a reconnect's newer entry survives) and `leave_queue(game,
+still points at _this_ conn, so a reconnect's newer entry survives) and `leave_queue(game,
 wallet)` for any game the wallet was queued in (no ghost `Waiting`). Both are store ops, so
 they work across instances.
 
 ## Redis key schema (cache cluster)
 
-| Key | Type | Value | TTL |
-|---|---|---|---|
-| `session:<id>` | string | JSON `SessionRecord` | 24h |
-| `tunnel:<id>` | string | `created\|active\|closed` | none (idempotent indexer replay) |
-| `stats:actions:total` / `stats:actions:game:<g>` | counter | `INCRBY` (each heartbeat hits one task → counted once) | none |
-| `stats:tunnels:active` / `stats:tunnels:settled` | **set** of tunnelIds | `SADD` on activate, `SREM` active + `SADD` settled on close; count = `SCARD` | none |
-| `presence:<wallet>` | string | JSON `ConnRef` | refreshed; cleared on disconnect |
-| `queue:<game>` | list | JSON `Waiting` per element | none (drained by pairing) |
-| `invite:<matchId>` | string | JSON `DirectedInvite` | 60s |
-| `match:<matchId>` | string | JSON `MatchRecord` | refreshed; e.g. 6h |
+| Key                                              | Type                 | Value                                                                        | TTL                              |
+| ------------------------------------------------ | -------------------- | ---------------------------------------------------------------------------- | -------------------------------- |
+| `session:<id>`                                   | string               | JSON `SessionRecord`                                                         | 24h                              |
+| `tunnel:<id>`                                    | string               | `created\|active\|closed`                                                    | none (idempotent indexer replay) |
+| `stats:actions:total` / `stats:actions:game:<g>` | counter              | `INCRBY` (each heartbeat hits one task → counted once)                       | none                             |
+| `stats:tunnels:active` / `stats:tunnels:settled` | **set** of tunnelIds | `SADD` on activate, `SREM` active + `SADD` settled on close; count = `SCARD` | none                             |
+| `presence:<wallet>`                              | string               | JSON `ConnRef`                                                               | refreshed; cleared on disconnect |
+| `queue:<game>`                                   | list                 | JSON `Waiting` per element                                                   | none (drained by pairing)        |
+| `invite:<matchId>`                               | string               | JSON `DirectedInvite`                                                        | 60s                              |
+| `match:<matchId>`                                | string               | JSON `MatchRecord`                                                           | refreshed; e.g. 6h               |
 
 Pub/sub channel (pubsub cluster): `mp:inst:<instanceId>` via **sharded** `SSUBSCRIBE`/`SPUBLISH`.
 
@@ -173,7 +173,7 @@ numbers. (`stats_tx` broadcast stays per-task for local fan-out.)
 
 ## Concurrent settlement (gas, not a lock)
 
-At the 1M-effective-TPS target the on-chain *close* rate is bounded by tunnel count, so `/settle`
+At the 1M-effective-TPS target the on-chain _close_ rate is bounded by tunnel count, so `/settle`
 must submit concurrently across instances. Do **not** add a global settle-lock — it caps
 finalization at one tx per round-trip. Equivocation is purely a **gas-coin** hazard (two
 conflicting in-flight txs sharing a coin version lock it until epoch end); the tunnel is a
@@ -213,7 +213,7 @@ a same-process guard only.
 
 ## Config (`config.rs`)
 
-Add (required at boot, fail-loud like the SUI_* vars **when running the Valkey impl**):
+Add (required at boot, fail-loud like the SUI\_\* vars **when running the Valkey impl**):
 `REDIS_CACHE_URL`, `REDIS_PUBSUB_URL` (both `rediss://`). `INSTANCE_ID` optional → else a
 boot-time uuid. **Impl selection:** if `REDIS_CACHE_URL` is set → Valkey impls; else the
 in-memory impls (local dev / tests). No DB vars. Drop nothing else.

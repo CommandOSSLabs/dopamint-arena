@@ -24,11 +24,13 @@
 ### Task 1: Seam interfaces + loopback transport
 
 **Files:**
+
 - Create: `frontend/src/agent/session/seams.ts`
 - Create: `frontend/src/agent/session/loopbackTransport.ts`
 - Test: `frontend/src/agent/session/loopbackTransport.test.ts`
 
 **Interfaces:**
+
 - Consumes: SDK `Transport` (`{ send(frame: Uint8Array): void; onFrame(cb: (f: Uint8Array) => void): void }`) from `sui-tunnel-ts`.
 - Produces: `SessionTransport` (SDK `Transport` + `onClose(cb)`, `onError(cb)`, `close()`); `PartyEndpointFactory`; `SettlementSigner`; `linkedLoopback(): { a: SessionTransport; b: SessionTransport }`.
 
@@ -98,7 +100,10 @@ export interface PartyEndpointFactory {
 export interface SettlementSigner {
   openAndFundSeatA(args: { stake: bigint }): Promise<{ tunnelId: string }>;
   depositSeatB(args: { tunnelId: string; stake: bigint }): Promise<void>;
-  submitCooperativeClose(args: { tunnelId: string; coSigned: unknown }): Promise<{ digest: string }>;
+  submitCooperativeClose(args: {
+    tunnelId: string;
+    coSigned: unknown;
+  }): Promise<{ digest: string }>;
   closeOnTimeout(args: { tunnelId: string }): Promise<{ digest: string }>;
 }
 ```
@@ -117,17 +122,27 @@ class LoopbackEnd implements SessionTransport {
     // Deliver a copy so the receiver can't mutate the sender's buffer.
     this.peer.frameCb?.(Uint8Array.from(frame));
   }
-  onFrame(cb: (f: Uint8Array) => void): void { this.frameCb = cb; }
-  onClose(cb: () => void): void { this.closeCb = cb; }
-  onError(_cb: (err: unknown) => void): void { /* loopback never errors */ }
-  close(): void { this.closeCb?.(); this.peer.closeCb?.(); }
+  onFrame(cb: (f: Uint8Array) => void): void {
+    this.frameCb = cb;
+  }
+  onClose(cb: () => void): void {
+    this.closeCb = cb;
+  }
+  onError(_cb: (err: unknown) => void): void {
+    /* loopback never errors */
+  }
+  close(): void {
+    this.closeCb?.();
+    this.peer.closeCb?.();
+  }
 }
 
 /** Two in-process transports wired to each other — for tests and self-play. */
 export function linkedLoopback(): { a: SessionTransport; b: SessionTransport } {
   const a = new LoopbackEnd();
   const b = new LoopbackEnd();
-  a.peer = b; b.peer = a;
+  a.peer = b;
+  b.peer = a;
   return { a, b };
 }
 ```
@@ -149,10 +164,12 @@ git commit -m "feat(agent): session seam interfaces + loopback transport"
 ### Task 2: Snapshot store (subscribe / getSnapshot, frozen + stable ref)
 
 **Files:**
+
 - Create: `frontend/src/agent/session/snapshotStore.ts`
 - Test: `frontend/src/agent/session/snapshotStore.test.ts`
 
 **Interfaces:**
+
 - Produces: `SnapshotStore<T>` with `get(): Readonly<T>`, `set(next: T): void`, `subscribe(cb: () => void): () => void`. `get()` returns the SAME frozen object until `set` is called with a value that differs by structural compare.
 
 - [ ] **Step 1: Write the failing test**
@@ -168,7 +185,11 @@ describe("SnapshotStore", () => {
     const store = new SnapshotStore({ phase: "idle", n: 0 });
     const first = store.get();
     store.set({ phase: "idle", n: 0 }); // structurally identical
-    assert.strictEqual(store.get(), first, "no-op set must not change the reference");
+    assert.strictEqual(
+      store.get(),
+      first,
+      "no-op set must not change the reference",
+    );
     store.set({ phase: "idle", n: 1 });
     assert.notStrictEqual(store.get(), first);
   });
@@ -198,8 +219,12 @@ Expected: FAIL — `Cannot find module './snapshotStore'`.
 export class SnapshotStore<T extends object> {
   private current: Readonly<T>;
   private readonly listeners = new Set<() => void>();
-  constructor(initial: T) { this.current = Object.freeze({ ...initial }); }
-  get(): Readonly<T> { return this.current; }
+  constructor(initial: T) {
+    this.current = Object.freeze({ ...initial });
+  }
+  get(): Readonly<T> {
+    return this.current;
+  }
   set(next: T): void {
     if (sameShallow(this.current, next)) return;
     this.current = Object.freeze({ ...next });
@@ -211,8 +236,12 @@ export class SnapshotStore<T extends object> {
   }
 }
 
-function sameShallow(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
-  const ak = Object.keys(a), bk = Object.keys(b);
+function sameShallow(
+  a: Record<string, unknown>,
+  b: Record<string, unknown>,
+): boolean {
+  const ak = Object.keys(a),
+    bk = Object.keys(b);
   if (ak.length !== bk.length) return false;
   return ak.every((k) => Object.is(a[k], b[k]));
 }
@@ -239,10 +268,12 @@ git commit -m "feat(agent): reference-stable snapshot store"
 ### Task 3: `PvpGameSession` engine loop (auto mode) over loopback — the core proof
 
 **Files:**
+
 - Create: `frontend/src/agent/session/pvpGameSession.ts`
 - Test: `frontend/src/agent/session/pvpGameSession.e2e.test.ts`
 
 **Interfaces:**
+
 - Consumes: `GameKit`/`GameBot`/`BotContext` (`@/agent/gameKit`); `SessionTransport` (Task 1); SDK `core.DistributedTunnel`, `makeEndpoint` (`sui-tunnel-ts`); `SnapshotStore` (Task 2).
 - Produces: `class PvpGameSession<S,M>` with `attachTunnel(deps)` (test seam that injects an already-built `DistributedTunnel`), `setAuto(on)`, `getSnapshot()`, `subscribe(cb)`; `SessionSnapshot<S>` = `{ phase: SessionPhase; state: S | null; balances: {a:bigint;b:bigint} | null; terminal: boolean; error: string | null }`. `SessionPhase = "idle"|"connecting"|"queuing"|"opening"|"funding"|"playing"|"settling"|"done"|"error"|"opponent-abandoned"`.
 
@@ -264,7 +295,14 @@ import { linkedLoopback } from "./loopbackTransport";
 import { PvpGameSession } from "./pvpGameSession";
 
 // Two independent sessions, EACH HOLDING ONLY ITS OWN KEY, driven to settlement.
-function seeded(seed: number) { return () => () => { /* mulberry32 */ let t=(seed+=0x6d2b79f5); t=Math.imul(t^(t>>>15),t|1); t^=t+Math.imul(t^(t>>>7),t|61); return ((t^(t>>>14))>>>0)/4294967296; }; }
+function seeded(seed: number) {
+  return () => () => {
+    /* mulberry32 */ let t = (seed += 0x6d2b79f5);
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
 
 describe("PvpGameSession (two-endpoint loopback)", () => {
   it("drives ttt to terminal; both seats agree on the transcript root", async () => {
@@ -274,30 +312,60 @@ describe("PvpGameSession (two-endpoint loopback)", () => {
     const keyB = core.generateKeyPair();
     const ctx = { tunnelId: "ttt-e2e", initialBalances: { a: 100n, b: 100n } };
 
-    const dtA = new core.DistributedTunnel(kit.protocol as never, {
-      tunnelId: ctx.tunnelId, selfParty: "A",
-      self: core.makeEndpoint("self", "0xA", keyA, true),
-      opponent: core.makeEndpoint("opp", "0xB", { publicKey: keyB.publicKey }, false),
-    }, txA, ctx.initialBalances);
-    const dtB = new core.DistributedTunnel(kit.protocol as never, {
-      tunnelId: ctx.tunnelId, selfParty: "B",
-      self: core.makeEndpoint("self", "0xB", keyB, true),
-      opponent: core.makeEndpoint("opp", "0xA", { publicKey: keyA.publicKey }, false),
-    }, txB, ctx.initialBalances);
+    const dtA = new core.DistributedTunnel(
+      kit.protocol as never,
+      {
+        tunnelId: ctx.tunnelId,
+        selfParty: "A",
+        self: core.makeEndpoint("self", "0xA", keyA, true),
+        opponent: core.makeEndpoint(
+          "opp",
+          "0xB",
+          { publicKey: keyB.publicKey },
+          false,
+        ),
+      },
+      txA,
+      ctx.initialBalances,
+    );
+    const dtB = new core.DistributedTunnel(
+      kit.protocol as never,
+      {
+        tunnelId: ctx.tunnelId,
+        selfParty: "B",
+        self: core.makeEndpoint("self", "0xB", keyB, true),
+        opponent: core.makeEndpoint(
+          "opp",
+          "0xA",
+          { publicKey: keyA.publicKey },
+          false,
+        ),
+      },
+      txB,
+      ctx.initialBalances,
+    );
 
     const sA = new PvpGameSession(kit, "A", { rngForSeat: seeded(1) });
     const sB = new PvpGameSession(kit, "B", { rngForSeat: seeded(2) });
-    sA.attachTunnel({ tunnel: dtA as never, initialState: kit.protocol.initialState(ctx) });
-    sB.attachTunnel({ tunnel: dtB as never, initialState: kit.protocol.initialState(ctx) });
-    sA.setAuto(true); sB.setAuto(true);
+    sA.attachTunnel({
+      tunnel: dtA as never,
+      initialState: kit.protocol.initialState(ctx),
+    });
+    sB.attachTunnel({
+      tunnel: dtB as never,
+      initialState: kit.protocol.initialState(ctx),
+    });
+    sA.setAuto(true);
+    sB.setAuto(true);
 
-    await sA.kickoff();   // seat A proposes first; B reacts via onConfirmed
+    await sA.kickoff(); // seat A proposes first; B reacts via onConfirmed
     await waitFor(() => sA.getSnapshot().terminal && sB.getSnapshot().terminal);
 
     const bal = sA.getSnapshot().balances!;
     assert.strictEqual(bal.a + bal.b, 200n, "balances conserved");
     assert.strictEqual(
-      sA.transcriptRootHex(), sB.transcriptRootHex(),
+      sA.transcriptRootHex(),
+      sB.transcriptRootHex(),
       "both seats must derive the same transcript root",
     );
   });
@@ -307,8 +375,13 @@ function waitFor(p: () => boolean): Promise<void> {
   return new Promise((res, rej) => {
     const t0 = Date.now();
     const i = setInterval(() => {
-      if (p()) { clearInterval(i); res(); }
-      else if (Date.now() - t0 > 5000) { clearInterval(i); rej(new Error("timeout")); }
+      if (p()) {
+        clearInterval(i);
+        res();
+      } else if (Date.now() - t0 > 5000) {
+        clearInterval(i);
+        rej(new Error("timeout"));
+      }
     }, 1);
   });
 }
@@ -328,8 +401,16 @@ import type { GameKit, GameBot, BotContext } from "@/agent/gameKit";
 import { SnapshotStore } from "./snapshotStore";
 
 export type SessionPhase =
-  | "idle" | "connecting" | "queuing" | "opening" | "funding"
-  | "playing" | "settling" | "done" | "error" | "opponent-abandoned";
+  | "idle"
+  | "connecting"
+  | "queuing"
+  | "opening"
+  | "funding"
+  | "playing"
+  | "settling"
+  | "done"
+  | "error"
+  | "opponent-abandoned";
 
 export interface SessionSnapshot<S> {
   phase: SessionPhase;
@@ -354,10 +435,18 @@ export class PvpGameSession<S, M> {
   private auto = false;
   private readonly transcript: unknown[] = [];
 
-  constructor(private readonly kit: GameKit<S, M>, private readonly seat: Party, ctx: BotContext) {
+  constructor(
+    private readonly kit: GameKit<S, M>,
+    private readonly seat: Party,
+    ctx: BotContext,
+  ) {
     this.bot = kit.createBot(seat, ctx);
     this.store = new SnapshotStore<SessionSnapshot<S>>({
-      phase: "idle", state: null, balances: null, terminal: false, error: null,
+      phase: "idle",
+      state: null,
+      balances: null,
+      terminal: false,
+      error: null,
     });
   }
 
@@ -368,14 +457,24 @@ export class PvpGameSession<S, M> {
     this.publish("playing", deps.initialState);
   }
 
-  setAuto(on: boolean): void { this.auto = on; }
+  setAuto(on: boolean): void {
+    this.auto = on;
+  }
 
-  getSnapshot(): Readonly<SessionSnapshot<S>> { return this.store.get(); }
-  subscribe(cb: () => void): () => void { return this.store.subscribe(cb); }
-  transcriptRootHex(): string { return this.kit.stateHash(this.tunnel!.state); } // replaced by real root in Task 5
+  getSnapshot(): Readonly<SessionSnapshot<S>> {
+    return this.store.get();
+  }
+  subscribe(cb: () => void): () => void {
+    return this.store.subscribe(cb);
+  }
+  transcriptRootHex(): string {
+    return this.kit.stateHash(this.tunnel!.state);
+  } // replaced by real root in Task 5
 
   /** Seat A makes the opening proposal; both seats then react on confirmation. */
-  async kickoff(): Promise<void> { this.drive(); }
+  async kickoff(): Promise<void> {
+    this.drive();
+  }
 
   private onConfirmed(): void {
     const t = this.tunnel!;
@@ -386,7 +485,10 @@ export class PvpGameSession<S, M> {
 
   private drive(): void {
     const t = this.tunnel!;
-    if (this.kit.protocol.isTerminal(t.state)) { this.publish("settling", t.state); return; }
+    if (this.kit.protocol.isTerminal(t.state)) {
+      this.publish("settling", t.state);
+      return;
+    }
     if (!this.auto) return;
     const move = this.bot.plan(t.state);
     if (move == null) return;
@@ -410,7 +512,11 @@ export class PvpGameSession<S, M> {
 
   private fail(e: unknown): void {
     const cur = this.store.get();
-    this.store.set({ ...cur, phase: "error", error: e instanceof Error ? e.message : String(e) });
+    this.store.set({
+      ...cur,
+      phase: "error",
+      error: e instanceof Error ? e.message : String(e),
+    });
   }
 }
 ```
@@ -437,10 +543,12 @@ git commit -m "feat(agent): PvpGameSession engine loop over loopback tunnel"
 ### Task 4: `start()` startup state machine (matchmaking → fund → activate)
 
 **Files:**
+
 - Modify: `frontend/src/agent/session/pvpGameSession.ts`
 - Test: `frontend/src/agent/session/pvpGameSession.start.test.ts`
 
 **Interfaces:**
+
 - Consumes: an injected `relay` client capability `{ queueJoin(game); onMatch(cb); channel(matchId): { transport: SessionTransport; partyHello(pubkey); onPeerHello(cb); announceOpened(tunnelId); onOpened(cb) } }` (adapter over the real `RelayClient`/`MpClient`; faked in the test); `PartyEndpointFactory`, `SettlementSigner` (Task 1); `makeEndpoint`, `core.DistributedTunnel`.
 - Produces: `start(args: { game: string; stake: bigint }): Promise<void>` that walks phases `connecting → queuing → opening → funding → playing`, building the `DistributedTunnel` once `opponentPublicKey` arrives.
 
@@ -480,10 +588,12 @@ git commit -m "feat(agent): PvpGameSession start() handshake state machine"
 ### Task 5: Cooperative close + transcript root (role-A submit, dual-path)
 
 **Files:**
+
 - Modify: `frontend/src/agent/session/pvpGameSession.ts`
 - Test: `frontend/src/agent/session/pvpGameSession.settle.test.ts`
 
 **Interfaces:**
+
 - Consumes: SDK `buildSettlementHalfWithRoot(timestamp, transcriptRoot, onchainNonce)` / `combineSettlementWithRoot` on the tunnel; a `Transcript` builder (mirror `agentEngine.ts:191` usage); the relay app-channel `settleHalf` exchange; `SettlementSigner.submitCooperativeClose`.
 - Produces: on `settling`, build this seat's half + transcript root, exchange halves over the app channel, assert root equality (throw → `error`), `combineSettlementWithRoot`, seat A `submitCooperativeClose` (backend → wallet fallback), phase `done` with `digests`. `transcriptRootHex()` now returns the real root.
 
@@ -520,10 +630,12 @@ git commit -m "feat(agent): cooperative close + transcript-root agreement"
 ### Task 6: Robustness — disconnect, abandonment, timeouts
 
 **Files:**
+
 - Modify: `frontend/src/agent/session/pvpGameSession.ts`
 - Test: `frontend/src/agent/session/pvpGameSession.robustness.test.ts`
 
 **Interfaces:**
+
 - Consumes: `SessionTransport.onClose`/`onError` (Task 1); `SettlementSigner.closeOnTimeout`.
 - Produces: `transport.onClose → phase "opponent-abandoned"`; a configurable move-timeout and settle-half timeout that escalate to `closeOnTimeout`; both-settle-paths-fail → `error`.
 
@@ -550,10 +662,12 @@ git commit -m "feat(agent): session disconnect/abandon/timeout handling"
 ### Task 7: Real relay + endpoint + settlement adapters for tic-tac-toe
 
 **Files:**
+
 - Create: `frontend/src/games/ticTacToe/agent/sessionAdapters.ts`
 - Test: `frontend/src/games/ticTacToe/agent/sessionAdapters.test.ts`
 
 **Interfaces:**
+
 - Consumes: existing `ttt pvpRelay.ts` (`queueJoin`/`on('match.found')`/`partyHello`/`tunnelOpened`/`transport`), `ttt pvpIdentity.ts` (per-browser ephemeral, `localStorage`), `makeEndpoint`, and `frontend/src/onchain/tunnelTx.ts` (`openAndFundSharedTunnel`/`depositStake`/`closeCooperativeWithRoot` + `SignExec`).
 - Produces: `makeTttRelay(client)`, `makeTttEndpointFactory(eph)`, `makeTttSettlementSigner(signExec)` — each implementing the Task-1/Task-4 seam shapes by delegating to the existing code. These files MAY touch `localStorage`/`import.meta.env` because they are adapter-side, NOT imported by the session core.
 
@@ -577,10 +691,12 @@ git commit -m "feat(ttt): relay/endpoint/settlement session adapters"
 ### Task 8: Thin `usePvpTicTacToe` onto the session (parity)
 
 **Files:**
+
 - Modify: `frontend/src/games/ticTacToe/app/hooks/usePvpTicTacToe.ts`
 - Test: `frontend/src/games/ticTacToe/app/hooks/usePvpTicTacToe.parity.test.ts`
 
 **Interfaces:**
+
 - Consumes: `PvpGameSession`, the Task-7 adapters, the existing `PvpTttView` return type (27 fields).
 - Produces: the hook becomes `useSyncExternalStore(session.subscribe, session.getSnapshot)` plus a `mapSnapshotToView(snapshot)` that reproduces `PvpTttView`, and imperative pass-throughs (`queue`→`start`, `play`→`proposeManual`, `setAuto`, `leave`). Cumulative `score`/`games`/`digests` live as session accumulators (added to `SessionSnapshot` here).
 

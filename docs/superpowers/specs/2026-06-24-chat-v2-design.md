@@ -11,16 +11,16 @@ Add a playable **Chat** window to the arena desktop. Every chat message is a sig
 
 ## Decisions already made
 
-| Topic | Decision |
-|---|---|
-| Bot location | Headless backend agent (genuine two-party tunnel, not browser self-play). |
-| Bot-vs-bot mode | Server-side continuous loop; frontend is a spectator. |
-| Bot funding | Reuse the operator wallet derived from `SUI_SETTLER_KEY`; top up DOPAMINT via the existing `dopamint::mint` faucet. |
-| Stake | 1 DOPAMINT per seat, no tips, refunded on close. Matches the battleship PvP stake. |
-| LLM | Local: `qwen2.5:1.8b`. Production: override via `OLLAMA_MODEL`. |
-| Ollama proxy | New `/v1/chat` endpoint in `tunnel-manager` forwards to the local Ollama `/api/chat`. |
-| Agent language | TypeScript package `backend/chat-agent/` reusing `sui-tunnel-ts`. |
-| Frontend shape | New catalog game module `frontend/src/games/chat/` with two tabs: *Chat with Bot* and *Bot vs Bot*. |
+| Topic           | Decision                                                                                                            |
+| --------------- | ------------------------------------------------------------------------------------------------------------------- |
+| Bot location    | Headless backend agent (genuine two-party tunnel, not browser self-play).                                           |
+| Bot-vs-bot mode | Server-side continuous loop; frontend is a spectator.                                                               |
+| Bot funding     | Reuse the operator wallet derived from `SUI_SETTLER_KEY`; top up DOPAMINT via the existing `dopamint::mint` faucet. |
+| Stake           | 1 DOPAMINT per seat, no tips, refunded on close. Matches the battleship PvP stake.                                  |
+| LLM             | Local: `qwen2.5:1.8b`. Production: override via `OLLAMA_MODEL`.                                                     |
+| Ollama proxy    | New `/v1/chat` endpoint in `tunnel-manager` forwards to the local Ollama `/api/chat`.                               |
+| Agent language  | TypeScript package `backend/chat-agent/` reusing `sui-tunnel-ts`.                                                   |
+| Frontend shape  | New catalog game module `frontend/src/games/chat/` with two tabs: _Chat with Bot_ and _Bot vs Bot_.                 |
 
 ## Architecture
 
@@ -49,7 +49,7 @@ Add a playable **Chat** window to the arena desktop. Every chat message is a sig
 
 ### Mode 1 — user chats with bot
 
-1. The user opens the **Chat** game window and clicks *Chat with Bot*.
+1. The user opens the **Chat** game window and clicks _Chat with Bot_.
 2. The browser mints a fresh ephemeral ed25519 key, connects to `/v1/mp`, and calls `queue.join("chat")`.
 3. A chat-agent instance is also connected to `/v1/mp` and joins the same queue.
 4. The relay pairs them. Both parties exchange wallet-attested ephemeral pubkeys via `party.hello`.
@@ -69,7 +69,7 @@ Add a playable **Chat** window to the arena desktop. Every chat message is a sig
    - Build a cooperative settlement and close the tunnel.
    - Start the next loop immediately.
 2. The agent publishes each bot-vs-bot move to tunnel-manager via `POST /v1/chat/live/publish` (internal control-plane endpoint).
-3. The frontend's *Bot vs Bot* tab opens an SSE stream to `/v1/chat/live` and renders the active conversation.
+3. The frontend's _Bot vs Bot_ tab opens an SSE stream to `/v1/chat/live` and renders the active conversation.
 
 ## Protocol
 

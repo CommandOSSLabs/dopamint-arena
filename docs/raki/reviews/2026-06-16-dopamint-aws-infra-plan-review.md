@@ -15,6 +15,7 @@ The plan covers the right components and maps to the approved design, but it is 
 Ranked by execution-blocking impact.
 
 ### 1. ALB HTTPS listener has no certificate; Route 53/ACM missing
+
 - **Task ref**: Task 3 / Task 4 / Task 10
 - **Category**: interface-change
 - **Issue**: The ALB HTTPS listener is created without a `certificateArn`, CloudFront uses the default `*.cloudfront.net` certificate, and `dopamint:domain` is never used. AWS will reject the HTTPS listener.
@@ -22,6 +23,7 @@ Ranked by execution-blocking impact.
 - **Fix**: Add `infra/src/components/Dns.ts` to request an ACM certificate in `us-east-1` (required for CloudFront), create Route 53 alias records, pass `certificateArn` to the ALB listener, and configure CloudFront aliases + `acmCertificateArn`.
 
 ### 2. ECS task execution role cannot read the DB secret
+
 - **Task ref**: Task 7
 - **Category**: missing-contract-test
 - **Issue**: The task definition injects `DATABASE_PASSWORD` from Secrets Manager, but the task execution role only has `AmazonECSTaskExecutionRolePolicy`, which does not grant `secretsmanager:GetSecretValue`. Fargate tasks will fail to start.
@@ -29,6 +31,7 @@ Ranked by execution-blocking impact.
 - **Fix**: Attach a least-privilege policy to the task execution role allowing `secretsmanager:GetSecretValue` (and `kms:Decrypt` if a CMK is used) on the DB secret ARN.
 
 ### 3. RDS Proxy target is wired to cluster resource ID instead of cluster identifier
+
 - **Task ref**: Task 5 / Task 7
 - **Category**: interface-change
 - **Issue**: `aws.rds.ProxyTarget.dbClusterIdentifier` expects the cluster identifier, but the plan passes `cluster.resourceId`. Proxy target registration will fail.
@@ -36,6 +39,7 @@ Ranked by execution-blocking impact.
 - **Fix**: Return and pass `cluster.id` (or `cluster.clusterIdentifier`) instead.
 
 ### 4. Redis TLS and cluster mode are enabled but backend connects with plain `redis://`
+
 - **Task ref**: Task 6 / Task 7
 - **Category**: interface-change
 - **Issue**: `transitEncryptionEnabled: true` requires `rediss://`, and sharded pub/sub / cluster-mode cache require cluster-aware endpoints. The backend URLs are plain `redis://` and non-clustered.
@@ -43,6 +47,7 @@ Ranked by execution-blocking impact.
 - **Fix**: Enable `clusterMode` / `numNodeGroups` for the pub/sub group, use the cluster configuration endpoint, and switch URLs to `rediss://`. Add a smoke test for `SSUBSCRIBE`/`SPUBLISH`.
 
 ### 5. ALB/container health checks use `/health` but the backend contract requires `/health/live` and `/health/ready`
+
 - **Task ref**: Task 3 / Task 7
 - **Category**: interface-change
 - **Issue**: The spec mandates split health endpoints. If the backend team implements only the spec, the ALB will mark all tasks unhealthy.
@@ -50,6 +55,7 @@ Ranked by execution-blocking impact.
 - **Fix**: Change ALB target group to `/health/ready` and container health check to `/health/live`, or coordinate with the backend team to expose a legacy `/health` route.
 
 ### 6. Backend service is updated before database migrations run
+
 - **Task ref**: Task 10
 - **Category**: unsafe-order / race-condition
 - **Issue**: The `deploy-backend` job pushes the image and calls `aws ecs update-service` with no migration step, violating the spec's required ordering.
@@ -57,6 +63,7 @@ Ranked by execution-blocking impact.
 - **Fix**: Add a `run-migrations` job that runs the migration as a one-off Fargate task and exits 0 before `deploy-backend` updates the service.
 
 ### 7. No rollback strategy
+
 - **Task ref**: general
 - **Category**: no-rollback
 - **Issue**: The only rollback reference is a runbook snippet that re-deploys the current task definition (`force-new-deployment`). There are no triggers, no known-good revision pinning, no DB rollback, and no rehearsed steps.
@@ -64,6 +71,7 @@ Ranked by execution-blocking impact.
 - **Fix**: Add a Rollback task with triggers (5xx rate, health-check failures, migration failure), ECS rollback to previous task-definition revision / SHA-tagged image, Pulumi rollback via previous git ref, frontend rollback via versioned S3 artifact, and DB restore from pre-migration snapshot.
 
 ### 8. Database migrations have no snapshot/rollback safety
+
 - **Task ref**: Task 10
 - **Category**: irreversible-migration
 - **Issue**: Migrations run as a one-off task with no pre-migration snapshot, no idempotency requirement, and no rollback script.
@@ -71,6 +79,7 @@ Ranked by execution-blocking impact.
 - **Fix**: Before migrations, create an Aurora snapshot `pre-migration-<git-sha>-<timestamp>`. Use idempotent migrations and keep rollback scripts. Run smoke tests from a canary task before updating the service.
 
 ### 9. Image Builder launch template references a non-existent first image
+
 - **Task ref**: Task 9
 - **Category**: external-dep
 - **Issue**: `aws.imagebuilder.getImageOutput` queries the most recent image from a newly created pipeline, which has not produced an image yet. First `pulumi up` will fail.
@@ -78,6 +87,7 @@ Ranked by execution-blocking impact.
 - **Fix**: Bootstrap with a base AMI and trigger the first image build separately, or use a conditional fallback to the base AMI when no pipeline image exists.
 
 ### 10. No testing task or CI test job
+
 - **Task ref**: general
 - **Category**: no-test-section
 - **Issue**: The spec mandates "Typecheck & test (`pnpm typecheck`, `pnpm test`, `sui move test`)". The plan has no `test` script, no testing task, and the CI workflow omits tests.
@@ -85,6 +95,7 @@ Ranked by execution-blocking impact.
 - **Fix**: Add a Testing task: `test` script in `infra/package.json` (vitest/node:test), CI test job, and include `sui move test` if Move changes are detected.
 
 ### 11. Task 10 (CI/CD) is one oversized checkbox
+
 - **Task ref**: Task 10 Step 1
 - **Category**: oversized
 - **Issue**: A single step writes a 130-line multi-job workflow with OIDC, path filtering, Pulumi, frontend build, backend Docker build, and ECS update. Far exceeds the 30-minute decomposition threshold.
@@ -92,6 +103,7 @@ Ranked by execution-blocking impact.
 - **Fix**: Decompose into: provision OIDC role/GitHub env vars, path-filter job, Pulumi infra job, frontend deploy job, backend build/push job, migration job, and workflow dry-run.
 
 ### 12. Task 9 (Golden AMI) is one oversized checkbox
+
 - **Task ref**: Task 9 Step 1
 - **Category**: oversized
 - **Issue**: One step adds IAM role, instance profile, component, recipe, distribution config, infrastructure config, pipeline, and launch-template change.
@@ -99,6 +111,7 @@ Ranked by execution-blocking impact.
 - **Fix**: Decompose into: IAM/instance profile, component/recipe, distribution/infrastructure config, pipeline, launch-template update.
 
 ### 13. Task 7 (Backend component) is one oversized checkbox
+
 - **Task ref**: Task 7 Step 1
 - **Category**: oversized
 - **Issue**: One step creates ECR repo, ECS cluster, two IAM roles, CloudWatch log group, task definition, and ECS service/ALB attachment.

@@ -13,6 +13,7 @@
 ### Task 1: Chat session core (frame interceptor)
 
 **Files:**
+
 - Create: `frontend/src/games/chat/session-core.ts`
 - Create: `frontend/src/games/chat/session-core.test.ts`
 
@@ -23,7 +24,10 @@ Create `frontend/src/games/chat/session-core.test.ts`:
 ```ts
 import test from "node:test";
 import assert from "node:assert/strict";
-import { encodeFrame, identityMoveCodec } from "sui-tunnel-ts/core/distributedFrame";
+import {
+  encodeFrame,
+  identityMoveCodec,
+} from "sui-tunnel-ts/core/distributedFrame";
 import { interceptChatFrames, type ChatLine } from "./session-core.ts";
 import type { ChatMove } from "sui-tunnel-ts/protocol/chat";
 import type { Transport } from "sui-tunnel-ts/core/distributedTunnel";
@@ -79,7 +83,10 @@ Expected: FAIL with `interceptChatFrames` not found.
 Create `frontend/src/games/chat/session-core.ts`:
 
 ```ts
-import { decodeFrame, identityMoveCodec } from "sui-tunnel-ts/core/distributedFrame";
+import {
+  decodeFrame,
+  identityMoveCodec,
+} from "sui-tunnel-ts/core/distributedFrame";
 import type { Transport } from "sui-tunnel-ts/core/distributedTunnel";
 import type { ChatMove } from "sui-tunnel-ts/protocol/chat";
 
@@ -105,7 +112,10 @@ export function interceptChatFrames(
     onFrame: (cb) => {
       transport.onFrame((bytes) => {
         try {
-          const frame = decodeFrame<ChatMove>(bytes, identityMoveCodec as never);
+          const frame = decodeFrame<ChatMove>(
+            bytes,
+            identityMoveCodec as never,
+          );
           if (frame.kind === "move" && frame.move.kind === "msg") {
             onMove({ by: frame.by, text: frame.move.text });
           }
@@ -150,6 +160,7 @@ git commit -m "feat(chat): add chat frame interceptor"
 ### Task 2: Chat backend client
 
 **Files:**
+
 - Create: `frontend/src/backend/chat.ts`
 - Create: `frontend/src/backend/chat.test.ts`
 
@@ -163,8 +174,14 @@ import assert from "node:assert/strict";
 import { resolveChatLiveUrl } from "./chat.ts";
 
 test("resolveChatLiveUrl builds SSE endpoint from backend base", () => {
-  assert.equal(resolveChatLiveUrl("http://localhost:8080"), "http://localhost:8080/v1/chat/live");
-  assert.equal(resolveChatLiveUrl("http://localhost:8080/"), "http://localhost:8080/v1/chat/live");
+  assert.equal(
+    resolveChatLiveUrl("http://localhost:8080"),
+    "http://localhost:8080/v1/chat/live",
+  );
+  assert.equal(
+    resolveChatLiveUrl("http://localhost:8080/"),
+    "http://localhost:8080/v1/chat/live",
+  );
 });
 ```
 
@@ -261,6 +278,7 @@ git commit -m "feat(chat): add chat backend client"
 ### Task 3: useChatSession hook
 
 **Files:**
+
 - Create: `frontend/src/games/chat/useChatSession.ts`
 - Create: `frontend/src/games/chat/useChatSession.test.ts`
 - Modify: `frontend/src/lib/windowSessions.ts` (no change needed; hook registers a disposer)
@@ -300,23 +318,44 @@ Create `frontend/src/games/chat/useChatSession.ts`:
 
 ```ts
 import { useEffect, useMemo, useSyncExternalStore } from "react";
-import { useCurrentAccount, useSignAndExecuteTransaction, useSuiClient } from "@mysten/dapp-kit";
+import {
+  useCurrentAccount,
+  useSignAndExecuteTransaction,
+  useSuiClient,
+} from "@mysten/dapp-kit";
 import { generateKeyPair, type KeyPair } from "sui-tunnel-ts/core/crypto";
 import { defaultBackend } from "sui-tunnel-ts/core/crypto-native";
 import { makeEndpoint } from "sui-tunnel-ts/core/tunnel";
 import { toHex, fromHex } from "sui-tunnel-ts/core/bytes";
 import { DistributedTunnel } from "sui-tunnel-ts/core/distributedTunnel";
 import { Transcript } from "sui-tunnel-ts/proof/transcript";
-import { ChatProtocol, type ChatState, type ChatMove } from "sui-tunnel-ts/protocol/chat";
-import { MpClient, resolveMpWsUrl, type MatchInfo, type PvpChannel } from "@/pvp/mpClient";
-import { openSharedTunnelStaked, depositStakeStaked } from "@/onchain/stakeTunnel";
+import {
+  ChatProtocol,
+  type ChatState,
+  type ChatMove,
+} from "sui-tunnel-ts/protocol/chat";
+import {
+  MpClient,
+  resolveMpWsUrl,
+  type MatchInfo,
+  type PvpChannel,
+} from "@/pvp/mpClient";
+import {
+  openSharedTunnelStaked,
+  depositStakeStaked,
+} from "@/onchain/stakeTunnel";
 import { useSponsoredSignExec } from "@/onchain/useSponsoredSignExec";
 import { DOPAMINT_COIN_TYPE, isDopamintConfigured } from "@/onchain/dopamint";
 import { settleViaBackend } from "@/backend/settle";
 import { closeCooperativeWithRoot, readCreatedAt } from "@/onchain/tunnelTx";
 import { coSignedToSettleRequest } from "@/backend/settleRequest";
 import { registerWindowDisposer } from "@/lib/windowSessions";
-import { interceptChatFrames, otherParty, turnAt, type ChatLine } from "./session-core";
+import {
+  interceptChatFrames,
+  otherParty,
+  turnAt,
+  type ChatLine,
+} from "./session-core";
 
 export type ChatStatus =
   | "idle"
@@ -477,7 +516,10 @@ class ChatSession {
         this.channel = channel;
         const waitPeer = makeInbox(channel);
 
-        channel.sendPeer({ t: "hello", ephemeralPubkey: toHex(ephemeral.publicKey) });
+        channel.sendPeer({
+          t: "hello",
+          ephemeralPubkey: toHex(ephemeral.publicKey),
+        });
         const hello = await waitPeer<{ ephemeralPubkey: string }>("hello");
         const oppPub = fromHex(hello.ephemeralPubkey);
 
@@ -521,19 +563,31 @@ class ChatSession {
         this.createdAt = await readCreatedAt(reads, tunnelId);
 
         const backend = defaultBackend();
-        const interceptedTransport = interceptChatFrames(channel.transport, (m) => {
-          if (m.by !== this.role) {
-            this.messages.push({ id: `${Date.now()}-${m.by}`, from: "them", text: m.text });
-            this.emit();
-          }
-        });
+        const interceptedTransport = interceptChatFrames(
+          channel.transport,
+          (m) => {
+            if (m.by !== this.role) {
+              this.messages.push({
+                id: `${Date.now()}-${m.by}`,
+                from: "them",
+                text: m.text,
+              });
+              this.emit();
+            }
+          },
+        );
 
         const tunnel = new DistributedTunnel<ChatState, ChatMove>(
           new ChatProtocol(),
           {
             tunnelId,
             self: makeEndpoint(backend, wallet, ephemeral, true),
-            opponent: makeEndpoint(backend, match.opponentWallet, { publicKey: oppPub, scheme: ephemeral.scheme }, false),
+            opponent: makeEndpoint(
+              backend,
+              match.opponentWallet,
+              { publicKey: oppPub, scheme: ephemeral.scheme },
+              false,
+            ),
             selfParty: match.role,
           },
           interceptedTransport,
@@ -570,11 +624,19 @@ class ChatSession {
         try {
           const sig = fromHex(String(msg.sig));
           const root = fromHex(String(msg.root));
-          const half = tunnel.buildSettlementHalfWithRoot(this.createdAt, root, 0n);
+          const half = tunnel.buildSettlementHalfWithRoot(
+            this.createdAt,
+            root,
+            0n,
+          );
           if (toHex(half.settlement.transcriptRoot) !== toHex(root)) {
             throw new Error("settlement root mismatch");
           }
-          const coSigned = tunnel.combineSettlementWithRoot(half.settlement, half.sigSelf, sig);
+          const coSigned = tunnel.combineSettlementWithRoot(
+            half.settlement,
+            half.sigSelf,
+            sig,
+          );
           this.closed = true;
           this.status = "settling";
           this.emit();
@@ -624,7 +686,12 @@ class ChatSession {
   }
 
   private maybeSendQueued() {
-    if (this.queuedText && this.tunnel && this.role && turnAt(this.tunnel.nonce) === this.role) {
+    if (
+      this.queuedText &&
+      this.tunnel &&
+      this.role &&
+      turnAt(this.tunnel.nonce) === this.role
+    ) {
       this.proposeText(this.queuedText);
     }
   }
@@ -637,7 +704,11 @@ class ChatSession {
     try {
       const root = transcript.root();
       const half = tunnel.buildSettlementHalfWithRoot(this.createdAt, root, 0n);
-      channel.sendPeer({ t: "settle", sig: toHex(half.sigSelf), root: toHex(root) });
+      channel.sendPeer({
+        t: "settle",
+        sig: toHex(half.sigSelf),
+        root: toHex(root),
+      });
       this.status = "settling";
       this.emit();
     } catch (e) {
@@ -658,7 +729,9 @@ class ChatSession {
       label: GAME_KEY,
       fallbackClose: async () => {
         return closeCooperativeWithRoot({
-          signExec: isDopamintConfigured ? (deps.sponsoredSignExec as never) : (deps.signExec as never),
+          signExec: isDopamintConfigured
+            ? (deps.sponsoredSignExec as never)
+            : (deps.signExec as never),
           tunnelId,
           settlement: coSigned as never,
           coinType: isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined,
@@ -776,6 +849,7 @@ git commit -m "feat(chat): add useChatSession hook"
 ### Task 4: Chat UI components
 
 **Files:**
+
 - Create: `frontend/src/games/chat/ChatThread.tsx`
 - Create: `frontend/src/games/chat/ChatWindow.tsx`
 - Modify: `frontend/src/games/chat/index.ts`
@@ -806,22 +880,29 @@ export function ChatThread({
 }: ChatThreadProps) {
   const [draft, setDraft] = useState("");
 
-  const isBusy = status === "matching" || status === "funding" || status === "settling";
+  const isBusy =
+    status === "matching" || status === "funding" || status === "settling";
   const isLive = status === "playing";
 
   return (
     <div className="flex h-full flex-col gap-2 p-3">
       <div className="flex items-center justify-between text-[11px] uppercase tracking-wider text-arena-muted">
         <span className="flex items-center gap-1.5">
-          {isLive && <span className="size-1.5 animate-pulse rounded-full bg-arena-accent" />}
+          {isLive && (
+            <span className="size-1.5 animate-pulse rounded-full bg-arena-accent" />
+          )}
           {status}
         </span>
-        {error && <span className="text-destructive truncate max-w-[60%]">{error}</span>}
+        {error && (
+          <span className="text-destructive truncate max-w-[60%]">{error}</span>
+        )}
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto rounded-md border border-arena-edge/60 bg-arena-bg/40 p-2">
         {messages.length === 0 && status === "idle" && (
-          <span className="text-[11px] text-arena-muted">Click Find Match to start chatting.</span>
+          <span className="text-[11px] text-arena-muted">
+            Click Find Match to start chatting.
+          </span>
         )}
         {messages.map((m) => (
           <div
@@ -858,14 +939,23 @@ export function ChatThread({
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
         />
-        <Button type="submit" size="icon" disabled={!isLive || !canSend || isBusy}>
+        <Button
+          type="submit"
+          size="icon"
+          disabled={!isLive || !canSend || isBusy}
+        >
           <Send className="size-4" />
         </Button>
       </form>
 
       <div className="flex gap-2">
         {status === "idle" || status === "error" ? (
-          <Button className="flex-1" size="sm" onClick={findMatch} disabled={isBusy}>
+          <Button
+            className="flex-1"
+            size="sm"
+            onClick={findMatch}
+            disabled={isBusy}
+          >
             {isBusy ? <Loader2 className="mr-1 size-3 animate-spin" /> : null}
             Find Match
           </Button>
@@ -912,10 +1002,16 @@ export function ChatWindow({ windowId }: GameWindowProps) {
         <TabsTrigger value="play">Play</TabsTrigger>
         <TabsTrigger value="spectate">Spectator</TabsTrigger>
       </TabsList>
-      <TabsContent value="play" className="min-h-0 flex-1 data-[state=inactive]:hidden">
+      <TabsContent
+        value="play"
+        className="min-h-0 flex-1 data-[state=inactive]:hidden"
+      >
         <ChatThread {...session} />
       </TabsContent>
-      <TabsContent value="spectate" className="min-h-0 flex-1 data-[state=inactive]:hidden">
+      <TabsContent
+        value="spectate"
+        className="min-h-0 flex-1 data-[state=inactive]:hidden"
+      >
         <ChatSpectator />
       </TabsContent>
     </Tabs>
@@ -964,6 +1060,7 @@ git commit -m "feat(chat): add ChatThread and ChatWindow"
 ### Task 5: Bot-vs-bot spectator tab
 
 **Files:**
+
 - Create: `frontend/src/games/chat/useChatSpectator.ts`
 - Create: `frontend/src/games/chat/ChatSpectator.tsx`
 
@@ -973,7 +1070,12 @@ Create `frontend/src/games/chat/useChatSpectator.ts`:
 
 ```ts
 import { useEffect, useState } from "react";
-import { resolveChatBackendUrl, subscribeChatLive, fetchChatTopic, type ChatTranscriptMessage } from "@/backend/chat";
+import {
+  resolveChatBackendUrl,
+  subscribeChatLive,
+  fetchChatTopic,
+  type ChatTranscriptMessage,
+} from "@/backend/chat";
 
 export interface ChatSpectatorView {
   messages: ChatTranscriptMessage[];
@@ -1024,7 +1126,9 @@ export function ChatSpectator() {
     <div className="flex h-full flex-col gap-2 p-3">
       <div className="flex items-center justify-between text-[11px] uppercase tracking-wider text-arena-muted">
         <span className="flex items-center gap-1.5">
-          <span className={`size-1.5 rounded-full ${connected ? "bg-arena-accent animate-pulse" : "bg-arena-muted"}`} />
+          <span
+            className={`size-1.5 rounded-full ${connected ? "bg-arena-accent animate-pulse" : "bg-arena-muted"}`}
+          />
           {connected ? "live feed" : "connecting…"}
         </span>
         {topic && <span className="truncate max-w-[60%]">Topic: {topic}</span>}
@@ -1032,7 +1136,9 @@ export function ChatSpectator() {
 
       <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto rounded-md border border-arena-edge/60 bg-arena-bg/40 p-2">
         {messages.length === 0 && (
-          <span className="text-[11px] text-arena-muted">Waiting for bot-vs-bot messages…</span>
+          <span className="text-[11px] text-arena-muted">
+            Waiting for bot-vs-bot messages…
+          </span>
         )}
         {messages.map((m, i) => (
           <div
@@ -1075,6 +1181,7 @@ git commit -m "feat(chat): add bot-vs-bot spectator tab"
 ### Task 6: Wire chat tests into the test runner
 
 **Files:**
+
 - Modify: `frontend/package.json`
 
 - [ ] **Step 1: Add chat test globs**
@@ -1127,6 +1234,7 @@ pnpm run dev
 ```
 
 Then open the app, launch **Chat** from the catalog, and:
+
 1. Click **Find Match** in the Play tab (requires a connected wallet and the backend/agent running).
 2. Type a message and confirm it appears in the tunnel transcript.
 3. Switch to the **Spectator** tab and confirm bot-vs-bot messages stream in.

@@ -27,6 +27,7 @@ The cabinet code (`frontend/src/shell/cabinet/`, the Desktop `<GameCabinet>` wra
 **Files:** none created/modified by hand; this is a git operation that may require conflict resolution.
 
 **Interfaces:**
+
 - Produces (for all later tasks): `@/shell/cabinet/CabinetController` (`CabinetController` interface), `@/shell/cabinet/CabinetContext` (`useRegisterCabinet`), `@/shell/cabinet/GameCabinet` (already rendered by Desktop), `@/shell/seatControlState`.
 
 - [ ] **Step 1: Confirm starting point**
@@ -42,10 +43,11 @@ Expected: either "Successfully rebased" or a conflict to resolve.
 - [ ] **Step 3: Resolve conflicts if any (preserve BOTH sides)**
 
 Likely conflict points and the resolution rule:
+
 - `frontend/src/desktop/Desktop.tsx` — keep dev's `<GameCabinet>` wrap **and** this branch's bomb-it/cross window registration/auto-start.
 - `docs/adding-a-tunnel-game.md` (or the new-game checklist) — keep both the cabinet pointer (dev) and any branch additions.
 - `docs/decisions/` — both sides only add files; keep all.
-For each conflict: edit to include both intents, then `git add <file>` and `git rebase --continue`.
+  For each conflict: edit to include both intents, then `git add <file>` and `git rebase --continue`.
 
 - [ ] **Step 4: Verify the cabinet is present and the tree builds**
 
@@ -63,9 +65,11 @@ Rebase already rewrote history; there is nothing to commit here. Proceed.
 The `frontend` `test` script globs omit `src/shell/**`, `src/games/bombIt/**`, and `src/games/chickenCross/**`, so the existing `seatControlState.test.ts` (PR #46) and the two `session-core.test.ts` files (PR #43) never run in CI — and neither would the new tests in Task 3. Fix the glob.
 
 **Files:**
+
 - Modify: `frontend/package.json:12` (the `test` script)
 
 **Interfaces:**
+
 - Produces: a `pnpm test` that runs `src/shell/**`, `src/games/bombIt/**`, `src/games/chickenCross/**`.
 
 - [ ] **Step 1: Show the orphaned tests are not run today**
@@ -106,10 +110,12 @@ git commit -m "test(frontend): run shell + bomb-it + cross suites"
 Both windows need identical controller logic. Extract it into one tested module so the wiring is proven once and DRY.
 
 **Files:**
+
 - Create: `frontend/src/shell/cabinet/soloCabinet.ts`
 - Test: `frontend/src/shell/cabinet/soloCabinet.test.ts`
 
 **Interfaces:**
+
 - Consumes: `CabinetController` from `./CabinetController`, `useRegisterCabinet` from `./CabinetContext`.
 - Produces (used by Tasks 5 & 7):
   - `isSoloOfferable(mode: "solo" | "pvp" | null, status: string, auto: boolean): boolean`
@@ -306,9 +312,11 @@ git commit -m "feat(cabinet): shared solo controller + offerable gate"
 Add the freeze primitive to `BombBotSession` and expose `pause`/`resume` on the hook.
 
 **Files:**
+
 - Modify: `frontend/src/games/bombIt/useBombItSession.ts` (interface ~77–95, field block ~167–174, `advance` while-loop ~315, after `toggleAuto` ~590, `start` reset block ~388–393, hook return ~643–657)
 
 **Interfaces:**
+
 - Consumes: nothing new.
 - Produces: `BombItSession.pause(): void` and `BombItSession.resume(): void` (used by Task 5). Session field `private paused` (internal).
 
@@ -349,7 +357,7 @@ In `advance`, the loop header is `while (tunnel && protocol) {`. Make its first 
 In `start`, in the reset block that sets `this.pendingAction = undefined;`, add on the next line:
 
 ```ts
-    this.paused = false;
+this.paused = false;
 ```
 
 - [ ] **Step 5: Add the `pause`/`resume` methods**
@@ -357,16 +365,16 @@ In `start`, in the reset block that sets `this.pendingAction = undefined;`, add 
 Immediately after the `toggleAuto = () => { … };` method, add:
 
 ```ts
-  pause = () => {
-    if (this.status !== "playing") return;
-    this.paused = true;
-  };
+pause = () => {
+  if (this.status !== "playing") return;
+  this.paused = true;
+};
 
-  resume = () => {
-    if (!this.paused) return;
-    this.paused = false;
-    if (this.status === "playing") void this.advance();
-  };
+resume = () => {
+  if (!this.paused) return;
+  this.paused = false;
+  if (this.status === "playing") void this.advance();
+};
 ```
 
 - [ ] **Step 6: Expose on the hook return**
@@ -397,9 +405,11 @@ git commit -m "feat(bomb-it): pausable solo session for cabinet"
 Wire the bomb-it window into the cabinet via the shared helper. The Desktop already provides the `<GameCabinet>`, so this is registration only. Auto-start already runs solo with `auto = true` (session default), so the attract state is already correct — confirm, don't re-add.
 
 **Files:**
+
 - Modify: `frontend/src/games/bombIt/BombItWindow.tsx` (imports line 1–10, body ~25–61)
 
 **Interfaces:**
+
 - Consumes: `useSoloCabinet` from `@/shell/cabinet/soloCabinet` (Task 3); `useBombItSession` already exposes `pause`/`resume` (Task 4).
 
 - [ ] **Step 1: Import the helper and `useCallback`**
@@ -421,16 +431,16 @@ import { useSoloCabinet } from "@/shell/cabinet/soloCabinet";
 Immediately after the `backToMenu` definition (the `const backToMenu = () => { … };` block, ~line 49), add:
 
 ```ts
-  // Cabinet "Return to Home": stop solo + show the chooser. Stable (module-const
-  // modeStore + stable setModeState + session.reset) so the controller doesn't
-  // re-register every render.
-  const goHome = useCallback(() => {
-    solo.reset();
-    modeStore.delete(windowId);
-    setModeState(null);
-  }, [solo.reset, windowId]);
+// Cabinet "Return to Home": stop solo + show the chooser. Stable (module-const
+// modeStore + stable setModeState + session.reset) so the controller doesn't
+// re-register every render.
+const goHome = useCallback(() => {
+  solo.reset();
+  modeStore.delete(windowId);
+  setModeState(null);
+}, [solo.reset, windowId]);
 
-  useSoloCabinet(solo, mode, goHome);
+useSoloCabinet(solo, mode, goHome);
 ```
 
 (`useSoloCabinet` must run every render before the early returns — placing it here satisfies that.)
@@ -454,9 +464,11 @@ git commit -m "feat(bomb-it): register take-over cabinet"
 Symmetric to Task 4, on `CrossBotSession`.
 
 **Files:**
+
 - Modify: `frontend/src/games/chickenCross/useChickenCrossSession.ts` (interface `export interface ChickenCrossSession` ~74–92, field block near `private advancing`, `advance` while-loop ~310, after `toggleAuto` ~574–580, `start` reset block, hook return ~633–646)
 
 **Interfaces:**
+
 - Produces: `ChickenCrossSession.pause(): void`, `ChickenCrossSession.resume(): void` (used by Task 7).
 
 - [ ] **Step 1: Add `pause`/`resume` to the `ChickenCrossSession` interface**
@@ -494,7 +506,7 @@ In `advance`, make the first statement inside `while (tunnel && protocol) {`:
 In `start`, in the reset block (where `this.pendingDir` / score are reset), add:
 
 ```ts
-    this.paused = false;
+this.paused = false;
 ```
 
 (Place it beside the other field resets that run on each `start`.)
@@ -504,16 +516,16 @@ In `start`, in the reset block (where `this.pendingDir` / score are reset), add:
 Immediately after the `toggleAuto = () => { … };` method, add:
 
 ```ts
-  pause = () => {
-    if (this.status !== "playing") return;
-    this.paused = true;
-  };
+pause = () => {
+  if (this.status !== "playing") return;
+  this.paused = true;
+};
 
-  resume = () => {
-    if (!this.paused) return;
-    this.paused = false;
-    if (this.status === "playing") void this.advance();
-  };
+resume = () => {
+  if (!this.paused) return;
+  this.paused = false;
+  if (this.status === "playing") void this.advance();
+};
 ```
 
 - [ ] **Step 6: Expose on the hook return**
@@ -540,9 +552,11 @@ git commit -m "feat(cross): pausable solo session for cabinet"
 Symmetric to Task 5.
 
 **Files:**
+
 - Modify: `frontend/src/games/chickenCross/ChickenCrossWindow.tsx` (imports, body ~25–61)
 
 **Interfaces:**
+
 - Consumes: `useSoloCabinet` (Task 3); `useChickenCrossSession` `pause`/`resume` (Task 6).
 
 - [ ] **Step 1: Import the helper and `useCallback`**
@@ -558,13 +572,13 @@ import { useSoloCabinet } from "@/shell/cabinet/soloCabinet";
 Immediately after the `backToMenu` definition (~line 49), add:
 
 ```ts
-  const goHome = useCallback(() => {
-    solo.reset();
-    modeStore.delete(windowId);
-    setModeState(null);
-  }, [solo.reset, windowId]);
+const goHome = useCallback(() => {
+  solo.reset();
+  modeStore.delete(windowId);
+  setModeState(null);
+}, [solo.reset, windowId]);
 
-  useSoloCabinet(solo, mode, goHome);
+useSoloCabinet(solo, mode, goHome);
 ```
 
 - [ ] **Step 3: Typecheck**
@@ -586,6 +600,7 @@ git commit -m "feat(cross): register take-over cabinet"
 Record the cosmetic-take-over decision for these two games and list them as cabinet adopters.
 
 **Files:**
+
 - Create: `frontend`-adjacent `docs/decisions/0013-bomb-it-cross-takeover-cabinet.md`
 - Modify: the new-game checklist that PR #46 pointed at the cabinet (find it in Step 2)
 
@@ -653,6 +668,7 @@ Expected: typecheck 0 · build OK · all tests pass (including soloCabinet, seat
 - [ ] **Step 2: In-browser walk — bomb-it**
 
 Run the app (`cd frontend && pnpm dev`), connect a wallet, open the Bomb It window. Verify:
+
 - On open it auto-plays itself (bot-vs-bot, attract).
 - Hovering the window freezes the frame and shows the take-over overlay.
 - Moving the mouse away resumes the demo.
@@ -673,6 +689,7 @@ Confirm the gate output and both in-browser walks are green. Do not claim comple
 ## Self-Review
 
 **Spec coverage:**
+
 - Step-0 rebase → Task 1. ✓
 - Pausable engine (the one new primitive) → Tasks 4 & 6. ✓
 - Attract on open → already satisfied by `auto=true` default; confirmed in Task 5 Step 0 note + Task 9 walk. ✓
@@ -685,6 +702,7 @@ Confirm the gate output and both in-browser walks are green. Do not claim comple
 - Out of scope (SDK/Move/Desktop/PvP/board) → Global Constraints forbid; no task touches them. ✓
 
 **Deviations from spec, intentional:**
+
 - Spec said "wrap the Window in `<GameCabinet>`"; investigation showed Desktop already wraps every window, so games only call `useRegisterCabinet`. Less code, same result.
 - Spec said expose `paused` on the session interface; dropped as YAGNI — the cabinet tracks state via its own reducer and never reads `paused`. Only `pause()`/`resume()` are exposed.
 - Spec proposed per-session pause unit tests; replaced with pure `soloCabinet` controller tests (the genuinely new logic) + enabling the existing suites, because a session-class test would have to fake the tunnel boundary (discouraged by CLAUDE.md) and ttt/PR #46 set the precedent of testing the reducer + verifying the verb glue in-browser.

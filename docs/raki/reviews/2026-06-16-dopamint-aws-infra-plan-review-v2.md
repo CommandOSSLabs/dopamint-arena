@@ -13,6 +13,7 @@ The revised plan fixes most of the first review's HARD-GATE findings, but a seco
 ## HARD-GATE Findings
 
 ### 1. BACKEND_URL uses ALB DNS name but the certificate only covers the custom domain
+
 - **Task ref**: Task 16 / Task 20 / Task 7
 - **Category**: interface-change
 - **Issue**: `github.ts` exports `BACKEND_URL: https://<alb-dns-name>`, but the ACM certificate only covers `dopamint.example.com` and `*.dopamint.example.com`. Browsers will hit a TLS hostname mismatch when the frontend calls the backend.
@@ -20,6 +21,7 @@ The revised plan fixes most of the first review's HARD-GATE findings, but a seco
 - **Fix**: Export `BACKEND_URL: https://${cfg.domain}` (after adding a Route 53 alias record for the ALB), or export the ALB DNS name and add it to the certificate SANs. Prefer the custom domain.
 
 ### 2. Benchmark fleet launch template has no IAM instance profile for SSM
+
 - **Task ref**: Task 17 / Task 21
 - **Category**: coordination-gap
 - **Issue**: The benchmark ASG launch template does not attach an instance profile, but the benchmark workflow uses `aws ssm send-command` to trigger the harness. SSM requires an instance profile with `AmazonSSMManagedInstanceCore`.
@@ -27,6 +29,7 @@ The revised plan fixes most of the first review's HARD-GATE findings, but a seco
 - **Fix**: Create a benchmark EC2 instance role/profile with `AmazonSSMManagedInstanceCore` and CloudWatch logs permissions; pass it into the launch template.
 
 ### 3. Migration job uses literal placeholders for subnets and security group
+
 - **Task ref**: Task 20 / Task 16
 - **Category**: coordination-gap
 - **Issue**: The `run-task` network configuration contains `[<private-subnets>]` and `[<backend-sg>]`. These values are not exported to GitHub environment variables, so the migration task cannot be scheduled.
@@ -34,6 +37,7 @@ The revised plan fixes most of the first review's HARD-GATE findings, but a seco
 - **Fix**: Add `PRIVATE_SUBNET_IDS` and `BACKEND_SECURITY_GROUP_ID` to `githubEnvOutputs`; reference them via `${{ vars.* }}` in the workflow.
 
 ### 4. ECS task definition uses `:latest` but CI references a SHA-named revision
+
 - **Task ref**: Task 13 / Task 14 / Task 20
 - **Category**: interface-change
 - **Issue**: Pulumi registers a task definition with `image: <ecr>:latest`. CI then runs `aws ecs update-service --task-definition dopamint-<env>-backend:${{ github.sha }}`. ECS revisions are numeric, not SHA strings, and no SHA-named revision is created.
@@ -41,6 +45,7 @@ The revised plan fixes most of the first review's HARD-GATE findings, but a seco
 - **Fix**: Drive the image tag from a Pulumi config value (e.g., `cfg.backendImageTag`) that CI sets to the git SHA before `pulumi up`. Remove the direct `aws ecs update-service` task-definition mutation from CI.
 
 ### 5. CI and Pulumi both mutate the same ECS service
+
 - **Task ref**: Task 20 / Task 14
 - **Category**: race-condition
 - **Issue**: `pulumi up` owns the ECS service and reconciles `taskDefinition`. CI also calls `aws ecs update-service` with a different task-definition revision. They will fight on every deploy. No workflow `concurrency` group exists.
@@ -48,6 +53,7 @@ The revised plan fixes most of the first review's HARD-GATE findings, but a seco
 - **Fix**: Add `ignoreChanges: ["taskDefinition"]` to the ECS service so Pulumi manages desired count and network config while CI manages the task-definition revision. Add a workflow `concurrency` group per environment.
 
 ### 6. Migration task definition `...-backend-migrate` does not exist
+
 - **Task ref**: Task 20 / Tasks 12–14
 - **Category**: interface-change
 - **Issue**: The migrate job references `dopamint-<env>-backend-migrate`, but Pulumi only creates the `dopamint-<env>-backend` task definition family.
@@ -55,6 +61,7 @@ The revised plan fixes most of the first review's HARD-GATE findings, but a seco
 - **Fix**: Add a Pulumi-managed migration task definition (or reuse the backend task definition with `--overrides` to run the migration command). Align the CI job to the actual family/revision.
 
 ### 7. Frontend S3 bucket is not versioned, making rollback impossible
+
 - **Task ref**: Task 7 / Task 20 / Task 22
 - **Category**: missing-backup
 - **Issue**: The frontend bucket has no versioning, and `aws s3 sync --delete` overwrites/deletes previous artifacts. The rollback runbook's "re-sync previous versioned S3 artifact" cannot work.
@@ -62,6 +69,7 @@ The revised plan fixes most of the first review's HARD-GATE findings, but a seco
 - **Fix**: Enable S3 versioning on the frontend bucket, and/or archive each build to a versioned artifacts bucket with a SHA prefix before sync.
 
 ### 8. Migration job does not wait for the Aurora snapshot to become available
+
 - **Task ref**: Task 20
 - **Category**: unsafe-order
 - **Issue**: `aws rds create-db-cluster-snapshot` is asynchronous, but the migration task runs immediately afterward. A fast migration failure could leave the snapshot unusable.
@@ -69,6 +77,7 @@ The revised plan fixes most of the first review's HARD-GATE findings, but a seco
 - **Fix**: Wait for the snapshot to reach `available` before launching the migration task.
 
 ### 9. `createIam` signature is missing `dbSecretArn` but the body uses it
+
 - **Task ref**: Task 6
 - **Category**: branch-order
 - **Issue**: Task 6's `createIam` declares `args: { githubOrg; githubRepo }` but immediately references `args.dbSecretArn`. TypeScript will fail until Task 10 adds the argument.
@@ -76,6 +85,7 @@ The revised plan fixes most of the first review's HARD-GATE findings, but a seco
 - **Fix**: Remove the DB-secret policy from Task 6 and add it only in Task 10 when the secret ARN is available.
 
 ### 10. GitHub environment variables are incomplete
+
 - **Task ref**: Task 16
 - **Category**: missing-prereq
 - **Issue**: `githubEnvOutputs` does not export `AWS_DEPLOY_ROLE_ARN` or `BENCHMARK_ASG_NAME`, but both workflows read them from `vars`.
@@ -83,6 +93,7 @@ The revised plan fixes most of the first review's HARD-GATE findings, but a seco
 - **Fix**: Add `AWS_DEPLOY_ROLE_ARN` and `BENCHMARK_ASG_NAME` (plus `PRIVATE_SUBNET_IDS` and `BACKEND_SECURITY_GROUP_ID` per finding #3) to `githubEnvOutputs`.
 
 ### 11. Image Builder launch template references a pipeline with no initial image
+
 - **Task ref**: Task 17
 - **Category**: external-dep
 - **Issue**: `aws.imagebuilder.getImageOutput` queries a newly created pipeline with no builds. The data-source lookup itself can fail before the base-AMI fallback applies.
@@ -91,6 +102,7 @@ The revised plan fixes most of the first review's HARD-GATE findings, but a seco
 - **Fix**: Either trigger an initial image build and wait before creating the launch template, or initially create the ASG with the base AMI and update the launch template after the first Golden AMI build succeeds.
 
 ### 12. No post-migration schema verification
+
 - **Task ref**: Task 20
 - **Category**: data-validation-gap
 - **Issue**: The migration job only checks the ECS task exit code. It does not verify schema version or integrity.

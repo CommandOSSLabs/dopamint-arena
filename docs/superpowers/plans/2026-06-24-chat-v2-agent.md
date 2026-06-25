@@ -13,6 +13,7 @@
 ### Task 1: Create the agent package
 
 **Files:**
+
 - Create: `backend/chat-agent/package.json`
 - Create: `backend/chat-agent/tsconfig.json`
 - Create: `backend/chat-agent/.env.example`
@@ -103,6 +104,7 @@ git commit -m "build(chat-agent): create package skeleton"
 ### Task 2: Add runtime config
 
 **Files:**
+
 - Create: `backend/chat-agent/src/config.ts`
 - Test: `backend/chat-agent/src/config.test.ts`
 
@@ -193,6 +195,7 @@ git commit -m "feat(chat-agent): add runtime config"
 ### Task 3: Add Ollama backend client
 
 **Files:**
+
 - Create: `backend/chat-agent/src/ollama.ts`
 - Test: `backend/chat-agent/src/ollama.test.ts`
 
@@ -206,7 +209,10 @@ import assert from "node:assert/strict";
 import { OllamaBackendClient } from "./ollama.ts";
 
 test("chat sends messages and returns assistant text", async () => {
-  const client = new OllamaBackendClient("http://localhost:8080", "qwen2.5:1.8b");
+  const client = new OllamaBackendClient(
+    "http://localhost:8080",
+    "qwen2.5:1.8b",
+  );
   // This test is integration-only; unit test is left lightweight by mocking fetch in a follow-up.
   assert.equal(client.backendUrl, "http://localhost:8080");
 });
@@ -251,7 +257,9 @@ export class OllamaBackendClient {
       body: JSON.stringify({ messages, model: this.model, stream: false }),
     });
     if (!resp.ok) {
-      throw new Error(`ollama proxy returned ${resp.status}: ${await resp.text()}`);
+      throw new Error(
+        `ollama proxy returned ${resp.status}: ${await resp.text()}`,
+      );
     }
     const data = (await resp.json()) as ChatResponse;
     return data.content;
@@ -261,13 +269,17 @@ export class OllamaBackendClient {
     const url = `${this.backendUrl}/v1/chat/topic`;
     const resp = await fetch(url);
     if (!resp.ok) {
-      throw new Error(`topic proxy returned ${resp.status}: ${await resp.text()}`);
+      throw new Error(
+        `topic proxy returned ${resp.status}: ${await resp.text()}`,
+      );
     }
     const data = (await resp.json()) as TopicResponse;
     return data.topic;
   }
 
-  async publishTranscript(messages: { sender: string; text: string }[]): Promise<void> {
+  async publishTranscript(
+    messages: { sender: string; text: string }[],
+  ): Promise<void> {
     const url = `${this.backendUrl}/v1/chat/live/publish`;
     const resp = await fetch(url, {
       method: "POST",
@@ -299,6 +311,7 @@ git commit -m "feat(chat-agent): add Ollama backend client"
 ### Task 4: Add on-chain funding helpers
 
 **Files:**
+
 - Create: `backend/chat-agent/src/funding.ts`
 - Test: `backend/chat-agent/src/funding.test.ts`
 
@@ -382,7 +395,10 @@ export async function getStakeCoin(
   owner: string,
   need: bigint,
 ): Promise<string> {
-  const coins = await client.getCoins({ owner, coinType: cfg.dopamintCoinType });
+  const coins = await client.getCoins({
+    owner,
+    coinType: cfg.dopamintCoinType,
+  });
   const coin = coins.data.find((c) => BigInt(c.balance) >= need);
   if (!coin) throw new Error("no DOPAMINT coin large enough to stake");
   return coin.coinObjectId;
@@ -407,6 +423,7 @@ git commit -m "feat(chat-agent): add DOPAMINT funding helpers"
 ### Task 5: Add raw /v1/mp WebSocket client
 
 **Files:**
+
 - Create: `backend/chat-agent/src/mpClient.ts`
 - Test: `backend/chat-agent/src/mpClient.test.ts`
 
@@ -435,7 +452,12 @@ Expected: FAIL with `MpClient` not found.
 Create `backend/chat-agent/src/mpClient.ts`:
 
 ```ts
-import { generateKeyPair, toHex, sign, type KeyPair } from "sui-tunnel-ts/core/crypto";
+import {
+  generateKeyPair,
+  toHex,
+  sign,
+  type KeyPair,
+} from "sui-tunnel-ts/core/crypto";
 import type { Transport } from "sui-tunnel-ts/core/distributedTunnel";
 import { wrapInnerFrameJson } from "sui-tunnel-ts/core/distributedFrame";
 import WebSocket from "ws";
@@ -539,7 +561,9 @@ export class MpClient {
     this.relayHandlers.set(matchId, (payload) => {
       const o = JSON.parse(payload) as PeerMessage & { t?: string };
       if (o.t === "frame") {
-        const bytes = new TextEncoder().encode((o as unknown as { data: string }).data);
+        const bytes = new TextEncoder().encode(
+          (o as unknown as { data: string }).data,
+        );
         if (engineOnFrame) engineOnFrame(bytes);
         else frameBuffer.push(bytes);
       } else {
@@ -623,6 +647,7 @@ git commit -m "feat(chat-agent): add raw /v1/mp WebSocket client"
 ### Task 6: Add the chat agent match driver
 
 **Files:**
+
 - Create: `backend/chat-agent/src/agent.ts`
 - Test: `backend/chat-agent/src/agent.test.ts`
 
@@ -710,7 +735,10 @@ export class ChatAgent {
     const ephemeral = core.generateKeyPair();
     const selfWallet = this.operatorAddress();
 
-    channel.sendPeer({ t: "hello", ephemeralPubkey: bytesToHex(ephemeral.publicKey) });
+    channel.sendPeer({
+      t: "hello",
+      ephemeralPubkey: bytesToHex(ephemeral.publicKey),
+    });
 
     const oppPubHex = await new Promise<string>((resolve) => {
       channel.onPeer((msg) => {
@@ -762,16 +790,31 @@ export class ChatAgent {
 
     await this.deposit(tunnelId);
 
-    const obj = await this.client.getObject({ id: tunnelId, options: { showContent: true } });
-    const fields = (obj.data?.content as { fields?: Record<string, unknown> } | undefined)?.fields;
+    const obj = await this.client.getObject({
+      id: tunnelId,
+      options: { showContent: true },
+    });
+    const fields = (
+      obj.data?.content as { fields?: Record<string, unknown> } | undefined
+    )?.fields;
     const createdAt = BigInt((fields?.created_at as string) ?? 0);
 
     const tunnel = new core.DistributedTunnel<protocols.ChatState, ChatMove>(
       this.proto,
       {
         tunnelId,
-        self: core.makeEndpoint(this.backend, selfWallet, { ...ephemeral, scheme: 0 }, true),
-        opponent: core.makeEndpoint(this.backend, m.opponentWallet, { publicKey: oppPubkey, scheme: 0 }, false),
+        self: core.makeEndpoint(
+          this.backend,
+          selfWallet,
+          { ...ephemeral, scheme: 0 },
+          true,
+        ),
+        opponent: core.makeEndpoint(
+          this.backend,
+          m.opponentWallet,
+          { publicKey: oppPubkey, scheme: 0 },
+          false,
+        ),
         selfParty: m.role,
       },
       channel.transport,
@@ -790,8 +833,13 @@ export class ChatAgent {
         const sig = hexToBytes(msg.sig);
         const root = hexToBytes(msg.root);
         const half = tunnel.buildSettlementHalfWithRoot(createdAt, root, 0n);
-        if (bytesToHex(half.settlement.transcriptRoot) !== bytesToHex(root)) return;
-        const coSigned = tunnel.combineSettlementWithRoot(half.settlement, half.sigSelf, sig);
+        if (bytesToHex(half.settlement.transcriptRoot) !== bytesToHex(root))
+          return;
+        const coSigned = tunnel.combineSettlementWithRoot(
+          half.settlement,
+          half.sigSelf,
+          sig,
+        );
         await this.submitClose(tunnelId, coSigned, transcript);
         done = true;
       }
@@ -799,7 +847,12 @@ export class ChatAgent {
 
     tunnel.onConfirmed = (u) => {
       transcript.append(u);
-      if (!done && this.proto.balances(tunnel.state).a + this.proto.balances(tunnel.state).b !== this.cfg.stakeRaw * 2n) {
+      if (
+        !done &&
+        this.proto.balances(tunnel.state).a +
+          this.proto.balances(tunnel.state).b !==
+          this.cfg.stakeRaw * 2n
+      ) {
         // balance invariant would indicate a bug; close safely
         void this.closeCooperatively(tunnel, channel, transcript, createdAt);
       }
@@ -820,9 +873,16 @@ export class ChatAgent {
   private async deposit(tunnelId: string): Promise<void> {
     await this.ensureFunds();
     const owner = this.operatorAddress();
-    const coinId = await getStakeCoin(this.client, this.cfg, owner, this.cfg.stakeRaw);
+    const coinId = await getStakeCoin(
+      this.client,
+      this.cfg,
+      owner,
+      this.cfg.stakeRaw,
+    );
     const tx = new Transaction();
-    const [coin] = tx.splitCoins(tx.object(coinId), [tx.pure.u64(this.cfg.stakeRaw)]);
+    const [coin] = tx.splitCoins(tx.object(coinId), [
+      tx.pure.u64(this.cfg.stakeRaw),
+    ]);
     onchain.buildDeposit(tx, {
       tunnelId,
       coin,
@@ -844,7 +904,11 @@ export class ChatAgent {
   ): Promise<void> {
     const root = transcript.root();
     const half = tunnel.buildSettlementHalfWithRoot(createdAt, root, 0n);
-    channel.sendPeer({ t: "settle", sig: bytesToHex(half.sigSelf), root: bytesToHex(root) });
+    channel.sendPeer({
+      t: "settle",
+      sig: bytesToHex(half.sigSelf),
+      root: bytesToHex(root),
+    });
   }
 
   private async submitClose(
@@ -853,7 +917,12 @@ export class ChatAgent {
     transcript: proof.Transcript,
   ): Promise<void> {
     const tx = new Transaction();
-    onchain.buildCloseWithRootFromSettlement(tx, tunnelId, coSigned, this.cfg.dopamintCoinType);
+    onchain.buildCloseWithRootFromSettlement(
+      tx,
+      tunnelId,
+      coSigned,
+      this.cfg.dopamintCoinType,
+    );
     const res = await this.client.signAndExecuteTransaction({
       signer: this.operatorKeypair,
       transaction: tx,
@@ -865,7 +934,9 @@ export class ChatAgent {
 
 export function loadOperatorKeypair(b64OrBech32: string): Ed25519Keypair {
   try {
-    return Ed25519Keypair.fromSecretKey(decodeSuiPrivateKey(b64OrBech32).secretKey);
+    return Ed25519Keypair.fromSecretKey(
+      decodeSuiPrivateKey(b64OrBech32).secretKey,
+    );
   } catch {
     // Fallback: treat as base64 raw 32-byte seed.
     const raw = Buffer.from(b64OrBech32.trim(), "base64");
@@ -875,7 +946,9 @@ export function loadOperatorKeypair(b64OrBech32: string): Ed25519Keypair {
     if (raw.length === 32) {
       return Ed25519Keypair.fromSecretKey(raw);
     }
-    throw new Error("OPERATOR_KEY must be a Sui private key or base64 ed25519 seed");
+    throw new Error(
+      "OPERATOR_KEY must be a Sui private key or base64 ed25519 seed",
+    );
   }
 }
 ```
@@ -898,6 +971,7 @@ git commit -m "feat(chat-agent): add match driver"
 ### Task 7: Add bot-vs-bot loop
 
 **Files:**
+
 - Create: `backend/chat-agent/src/botVsBot.ts`
 
 - [ ] **Step 1: Implement botVsBot.ts**
@@ -933,10 +1007,20 @@ export async function runBotVsBotLoop(
     const addrA = core.ed25519Address(a.publicKey);
     const addrB = core.ed25519Address(b.publicKey);
 
-    await ensureDopamintBalance(client, cfg, operatorKeypair, cfg.stakeRaw * 2n);
+    await ensureDopamintBalance(
+      client,
+      cfg,
+      operatorKeypair,
+      cfg.stakeRaw * 2n,
+    );
 
     const tx = new Transaction();
-    const coinId = await getStakeCoin(client, cfg, operatorKeypair.getPublicKey().toSuiAddress(), cfg.stakeRaw * 2n);
+    const coinId = await getStakeCoin(
+      client,
+      cfg,
+      operatorKeypair.getPublicKey().toSuiAddress(),
+      cfg.stakeRaw * 2n,
+    );
     const [coinA, coinB] = tx.splitCoins(tx.object(coinId), [
       tx.pure.u64(cfg.stakeRaw),
       tx.pure.u64(cfg.stakeRaw),
@@ -958,12 +1042,19 @@ export async function runBotVsBotLoop(
     });
     await client.waitForTransaction({ digest: openRes.digest });
     const tunnelId = openRes.objectChanges?.find(
-      (c) => c.type === "created" && (c.objectType ?? "").includes("::tunnel::Tunnel"),
+      (c) =>
+        c.type === "created" &&
+        (c.objectType ?? "").includes("::tunnel::Tunnel"),
     )?.objectId;
     if (!tunnelId) throw new Error("bot-vs-bot tunnel id not found");
 
-    const obj = await client.getObject({ id: tunnelId, options: { showContent: true } });
-    const fields = (obj.data?.content as { fields?: Record<string, unknown> } | undefined)?.fields;
+    const obj = await client.getObject({
+      id: tunnelId,
+      options: { showContent: true },
+    });
+    const fields = (
+      obj.data?.content as { fields?: Record<string, unknown> } | undefined
+    )?.fields;
     const createdAt = BigInt((fields?.created_at as string) ?? 0);
 
     const tunnelA = new core.OffchainTunnel<protocols.ChatState, ChatMove>(
@@ -979,11 +1070,17 @@ export async function runBotVsBotLoop(
     const transcript: { sender: "A" | "B"; text: string }[] = [
       { sender: "A", text: `Let's talk about: ${topic}` },
     ];
-    tunnelA.step({ kind: "msg", text: `Let's talk about: ${topic}` }, "A", { mode: "full", timestamp: createdAt });
+    tunnelA.step({ kind: "msg", text: `Let's talk about: ${topic}` }, "A", {
+      mode: "full",
+      timestamp: createdAt,
+    });
 
     let by: "A" | "B" = "B";
     const history: { role: "user" | "assistant"; content: string }[] = [
-      { role: "user", content: `You are discussing: ${topic}. Reply briefly as bot ${by}.` },
+      {
+        role: "user",
+        content: `You are discussing: ${topic}. Reply briefly as bot ${by}.`,
+      },
     ];
 
     for (let i = 0; i < ROUNDS - 1; i++) {
@@ -994,13 +1091,21 @@ export async function runBotVsBotLoop(
       await ollama.publishTranscript(transcript);
       history.push({ role: by === "A" ? "assistant" : "user", content: reply });
       by = by === "A" ? "B" : "A";
-      history.push({ role: by === "A" ? "assistant" : "user", content: "Continue the conversation briefly." });
+      history.push({
+        role: by === "A" ? "assistant" : "user",
+        content: "Continue the conversation briefly.",
+      });
     }
 
     const root = new proof.Transcript(tunnelId).root();
     const settlement = tunnelA.buildSettlementWithRoot(createdAt, root, 0n);
     const closeTx = new Transaction();
-    onchain.buildCloseWithRootFromSettlement(closeTx, tunnelId, settlement, cfg.dopamintCoinType);
+    onchain.buildCloseWithRootFromSettlement(
+      closeTx,
+      tunnelId,
+      settlement,
+      cfg.dopamintCoinType,
+    );
     const closeRes = await client.signAndExecuteTransaction({
       signer: operatorKeypair,
       transaction: closeTx,
@@ -1029,6 +1134,7 @@ git commit -m "feat(chat-agent): add continuous bot-vs-bot loop"
 ### Task 8: Wire entry point
 
 **Files:**
+
 - Create: `backend/chat-agent/src/index.ts`
 
 - [ ] **Step 1: Implement index.ts**
@@ -1049,7 +1155,10 @@ async function main() {
   const operatorKeypair = loadOperatorKeypair(cfg.operatorKey);
   const ollama = new OllamaBackendClient(cfg.backendUrl, "qwen2.5:1.8b");
 
-  console.log("chat-agent operator:", operatorKeypair.getPublicKey().toSuiAddress());
+  console.log(
+    "chat-agent operator:",
+    operatorKeypair.getPublicKey().toSuiAddress(),
+  );
 
   if (cfg.botVsBotEnabled) {
     runBotVsBotLoop(cfg, client, operatorKeypair, ollama).catch((e) => {
@@ -1073,7 +1182,10 @@ async function runUserBot(
   const wallet = operatorKeypair.getPublicKey().toSuiAddress();
   while (true) {
     try {
-      const mp = new MpClient(resolveMpWsUrl(cfg.backendUrl + "/v1/mp"), wallet);
+      const mp = new MpClient(
+        resolveMpWsUrl(cfg.backendUrl + "/v1/mp"),
+        wallet,
+      );
       await mp.connect();
       console.log(`bot ${idx}: connected`);
       const agent = new ChatAgent({ cfg, client, operatorKeypair, ollama });

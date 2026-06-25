@@ -51,6 +51,7 @@ the self-play path.
 > (Implemented in `usePvpBlackjack.ts`, `PvpBlackjack.tsx`.)
 
 ### Decisions locked (brainstorming)
+
 - **Game model:** ~~symmetric duel, shared auto-dealer, head-to-head pot (option 1A)~~ →
   superseded by Revision 2: classic player-vs-dealer, multi-round, settle-on-stop.
 - **On-chain identity:** the **connected Sui wallet** via dapp-kit (option 2B; see the
@@ -62,6 +63,7 @@ the self-play path.
   enhancement.
 
 ### Non-goals (first cut)
+
 - Backend `/v1/sessions/{id}/settle` + Walrus archival; watchtower-driven dispute.
 - Forfeit/no-show recovery (`raise_dispute` / `force_close` / `withdraw_*`).
 - Directed challenges (Quick-Match only). Real dapp-kit wallet signing. Multi-round matches.
@@ -88,6 +90,7 @@ settle: both ephemeral keys co-sign (buildSettlementHalf ↔ relay ↔ combineSe
 ```
 
 Components (all game-side in the blackjack client unless noted):
+
 - **Duel protocol** — `BlackjackDuelProtocol` (implements the SDK `Protocol`).
 - **Identity** — faucet-funded wallet keypair + per-match ephemeral keypair + attestation.
 - **Relay client** — WS handshake, matchmaking, and a `Transport` adapter for the engine.
@@ -113,10 +116,10 @@ interface DuelState {
   handA: number[];
   handB: number[];
   phase: DuelPhase;
-  drawCount: number;    // next index into the deterministic card stream
+  drawCount: number; // next index into the deterministic card stream
   balanceA: bigint;
   balanceB: bigint;
-  wager: bigint;        // the pot stake; == each seat's deposit
+  wager: bigint; // the pot stake; == each seat's deposit
 }
 ```
 
@@ -140,8 +143,8 @@ interface DuelState {
 - **`isTerminal(state)`:** `phase === "over"`.
 - **`balances(state)`:** `{ a: balanceA, b: balanceB }` (sums to `2 × STAKE` always).
 - **`encodeState(state)`:** `protocolDomain("blackjack.duel.v1") ||
-  lengthPrefixedConcat([dealerHand, handA, handB, [phaseByte], u64be(drawCount),
-  u64be(balanceA), u64be(balanceB), u64be(wager)])` — deterministic, canonical, distinct
+lengthPrefixedConcat([dealerHand, handA, handB, [phaseByte], u64be(drawCount),
+u64be(balanceA), u64be(balanceB), u64be(wager)])` — deterministic, canonical, distinct
   domain (no collision with `blackjack.v1` or the caro/ttt domains).
 - **`randomMove(state, by, rng)`:** basic strategy for the side to move — hit while
   `handValue < 17` (using the dealer upcard for a light basic-strategy refinement), else stand;
@@ -186,9 +189,9 @@ A thin WS client over `GET ${VITE_MP_URL}/v1/mp` (default `ws://127.0.0.1:8080/v
 Externally-tagged JSON on `type` (camelCase fields), exactly matching `mp/protocol.rs`.
 
 - **Handshake:** open → receive `challenge {nonce}` → send `connect {wallet, pubkey, sig,
-  nonce}` (sig = ephemeral raw-ed25519 over `nonce` bytes, hex).
+nonce}` (sig = ephemeral raw-ed25519 over `nonce` bytes, hex).
 - **Matchmaking:** `queue.join {game:"blackjack"}`; handle `match.found {matchId, role,
-  opponentWallet, game}`. Implement a **client-side queue timeout** (server `queue.timeout` is
+opponentWallet, game}`. Implement a **client-side queue timeout** (server `queue.timeout` is
   not emitted in v1).
 - **Key exchange:** send/handle `party.hello {matchId, ephemeralPubkey, walletSig}`; verify the
   opponent's attestation (§4).
@@ -199,10 +202,19 @@ Externally-tagged JSON on `type` (camelCase fields), exactly matching `mp/protoc
 ```ts
 function makeRelayTransport(relay, matchId) {
   let onFrame = () => {};
-  relay.onRelay(matchId, (payloadStr) => onFrame(new TextEncoder().encode(payloadStr)));
+  relay.onRelay(matchId, (payloadStr) =>
+    onFrame(new TextEncoder().encode(payloadStr)),
+  );
   return {
-    send: (frame) => relay.send({ type: "relay", matchId, payload: new TextDecoder().decode(frame) }),
-    onFrame: (cb) => { onFrame = cb; },
+    send: (frame) =>
+      relay.send({
+        type: "relay",
+        matchId,
+        payload: new TextDecoder().decode(frame),
+      }),
+    onFrame: (cb) => {
+      onFrame = cb;
+    },
   };
 }
 ```
@@ -219,16 +231,32 @@ function makeRelayTransport(relay, matchId) {
 **Engine** (`hooks/usePvpBlackjack.ts`): SDK `DistributedTunnel` over the relay transport.
 
 ```ts
-const tunnel = new DistributedTunnel(duelProtocol, {
-  tunnelId,
-  self:     makeEndpoint(defaultBackend(), myWallet, myEphemeralKeyPair, /*controlled*/ true),
-  opponent: makeEndpoint(defaultBackend(), oppWallet, { publicKey: oppEphPubkey, scheme: 0 }, false),
-  selfParty: role,                 // "A" | "B" from match.found
-}, makeRelayTransport(relay, matchId), { a: STAKE, b: STAKE });
+const tunnel = new DistributedTunnel(
+  duelProtocol,
+  {
+    tunnelId,
+    self: makeEndpoint(
+      defaultBackend(),
+      myWallet,
+      myEphemeralKeyPair,
+      /*controlled*/ true,
+    ),
+    opponent: makeEndpoint(
+      defaultBackend(),
+      oppWallet,
+      { publicKey: oppEphPubkey, scheme: 0 },
+      false,
+    ),
+    selfParty: role, // "A" | "B" from match.found
+  },
+  makeRelayTransport(relay, matchId),
+  { a: STAKE, b: STAKE },
+);
 
 tunnel.onConfirmed = (u) => renderTable(tunnel.state);
-tunnel.propose({ action }, BigInt(timestamp));  // your turn only; advances on ACK
+tunnel.propose({ action }, BigInt(timestamp)); // your turn only; advances on ACK
 ```
+
 Engine guarantees (relied on): the receiver re-applies + only co-signs when the re-derived
 `{stateHash,nonce,balances}` match (illegal/tampered frames never advance state); `propose`
 advances only on a valid ACK; `propose` throws off-turn or with a proposal in flight (surface
@@ -236,8 +264,9 @@ as UI guards).
 
 **On-chain** (`lib/bjPvpOnchain.ts`, reuse `onchain/txbuilders.ts`; sign with the **wallet**
 key; `signatureType = 0`):
+
 - **Open** (seat A): `buildCreateAndShare(tx, { partyA:{walletA, ephPubA, 0}, partyB:{walletB,
-  ephPubB, 0}, timeoutMs, penaltyAmount: STAKE })` → read the shared `Tunnel` id from effects →
+ephPubB, 0}, timeoutMs, penaltyAmount: STAKE })` → read the shared `Tunnel` id from effects →
   `tunnel.opened`.
 - **Verify seat** (before deposit, the real security): read the on-chain tunnel; assert my seat
   names my wallet + my ephemeral pubkey and status is `CREATED`.
@@ -254,14 +283,15 @@ key; `signatureType = 0`):
 ## 7. Per-seat bot toggle
 
 Each browser controls **only its own seat**. A boolean "Auto (bot)" toggle:
+
 - **On:** whenever it becomes this seat's turn (and not terminal), the hook calls
   `duelProtocol.randomMove(state, mySeat, Math.random)` and `tunnel.propose(move, ts)` after a
   short delay (so the human can watch). Flipping it on mid-hand resumes auto-play from the
   current state.
 - **Off:** the human drives `Hit`/`Stand` buttons (enabled only on their turn).
-The opponent's seat is driven independently on their side; locally we only render their
-confirmed moves via `onConfirmed`. This is the "play yourself or let your bot play for you"
-requirement.
+  The opponent's seat is driven independently on their side; locally we only render their
+  confirmed moves via `onConfirmed`. This is the "play yourself or let your bot play for you"
+  requirement.
 
 ---
 
@@ -271,14 +301,15 @@ The client consumes the SDK's compiled `dist`. `core/index.ts` **already** expor
 `makeEndpoint` (via `./tunnel`) and `defaultBackend` (via `./crypto-native`) — the **only**
 missing symbol is `DistributedTunnel` (its module `./distributedTunnel` is not re-exported).
 So the single SDK-source touch is:
+
 - `src/core/index.ts`: add `export * from "./distributedTunnel";` (exposes `DistributedTunnel`
-  + its `Settlement`/`CoSignedSettlement`/`Transport` types). `makeEndpoint`/`defaultBackend`
-  need no change.
+  - its `Settlement`/`CoSignedSettlement`/`Transport` types). `makeEndpoint`/`defaultBackend`
+    need no change.
 - Rebuild `dist` via `npx tsc` and **verify `dist/core/distributedTunnel.js` is emitted** and
   re-exported by `dist/core/index.js` (the current `dist` predates this and lacks it). `dist`
   is gitignored → no repo churn.
-This mirrors how the integration doc already references these symbols and leaves the upstream
-files otherwise untouched.
+  This mirrors how the integration doc already references these symbols and leaves the upstream
+  files otherwise untouched.
 
 ---
 
@@ -338,6 +369,7 @@ frontend/src/games/blackjack/packages/client/src/
 ---
 
 ## 12. v1 limitations handled
+
 - `match.active` not emitted → detect activation on-chain after both deposits.
 - `queue.timeout` not emitted → client-side queue-wait timeout/retry.
 - Lobby `pubkey↔wallet` not bound server-side → don't trust presence; the on-chain seat check
@@ -347,6 +379,7 @@ frontend/src/games/blackjack/packages/client/src/
   dispute reliance.
 
 ## 13. Edge cases & risks
+
 - **Opponent disconnects mid-hand:** first cut surfaces a "match interrupted" state and lets the
   player re-queue; funds are safe (pre-activation refund / post-activation the staying player
   can recover later — recovery UI is a follow-up, not in this cut).

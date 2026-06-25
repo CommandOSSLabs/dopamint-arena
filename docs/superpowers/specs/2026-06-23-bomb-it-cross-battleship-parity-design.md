@@ -18,20 +18,20 @@ A parity review against the arena's two fully-built reference games — **battle
 — found three gaps in bomb-it + chicken-cross **solo** play. Measured across the six
 real tunnel games:
 
-| Game | Sponsor funding | Multi-game tunnel | Survives min/maximize (solo) |
-|------|:---:|:---:|:---:|
-| battleship | ✓ | ✓ | ✓ (out-of-React `BotSession`) |
-| ttt | ✓ | ✓ | ✓ (resume adapter) |
-| quantum poker | ✓ | ✗ | ✓ (out-of-React) |
-| blackjack | ✓ | ✗ | ✗ |
-| chicken-cross | ✓ | ✗ | ✗ |
-| **bomb-it** | **✗** | ✗ | ✗ |
+| Game          | Sponsor funding | Multi-game tunnel | Survives min/maximize (solo)  |
+| ------------- | :-------------: | :---------------: | :---------------------------: |
+| battleship    |        ✓        |         ✓         | ✓ (out-of-React `BotSession`) |
+| ttt           |        ✓        |         ✓         |      ✓ (resume adapter)       |
+| quantum poker |        ✓        |         ✗         |       ✓ (out-of-React)        |
+| blackjack     |        ✓        |         ✗         |               ✗               |
+| chicken-cross |        ✓        |         ✗         |               ✗               |
+| **bomb-it**   |      **✗**      |         ✗         |               ✗               |
 
 Findings that scope this work:
 
 1. **bomb-it funding is a unique regression.** `useBombItSession.ts` still funds from
    the raw wallet (`openAndFundSelfPlay(signExec=wallet)` + `closeCooperative`), so a
-   0-SUI / zkLogin player hits *"No valid gas coins."* It is the **only** tunnel game
+   0-SUI / zkLogin player hits _"No valid gas coins."_ It is the **only** tunnel game
    missing the sponsor path; chicken-cross already has it. Must fix regardless.
 2. **Multi-game + survival are reference-tier**, held by battleship + ttt only. Closing
    them makes bomb-it/cross the #2/#3 games, not merely "caught up." The user has
@@ -40,7 +40,7 @@ Findings that scope this work:
    the React component **without a page reload**; an out-of-React object in a
    module-scope map survives it. That is battleship's solo `BotSession` mechanism and is
    independent of the `frontend/src/pvp/resume.ts` cold-load system (which handles PvP
-   *page reload*). bomb-it/cross **PvP** already survives via its out-of-React engine;
+   _page reload_). bomb-it/cross **PvP** already survives via its out-of-React engine;
    only **solo** (in-React `refs`+`setInterval`) does not.
 
 ### What stays out of scope
@@ -67,9 +67,9 @@ Findings that scope this work:
   `*.test.ts`. Consistent with ttt (`packages/shared/src/ttt/multiGameProtocol.ts`,
   colocated) and with where `bombIt.ts`/`cross.ts` already live. Adds the two files + a
   barrel export to `index.ts`; the base protocols are unchanged. (`docs/adding-a-tunnel-
-  game.md` explicitly blesses "add a protocol following the existing protocol files.")
+game.md` explicitly blesses "add a protocol following the existing protocol files.")
 - **Per-game seed derivation, deterministic (extends ADR 0010).** A naive multi-game
-  reset re-derives `seedFromTunnelId(tunnelId)` → the *identical* board/race every game.
+  reset re-derives `seedFromTunnelId(tunnelId)` → the _identical_ board/race every game.
   The wrapper instead resets the inner game with a **synthetic per-game id**
   `` `${tunnelId}:g${gamesPlayed}` ``. Because `gamesPlayed` is part of the co-signed
   multi-game state (and of `encodeState`), both parties and an on-chain replay derive the
@@ -135,17 +135,17 @@ balance flip; a reset carries `inner.balanceA/balanceB` forward verbatim.
 A `BotSession`-shaped class per game (`bombIt/botSession.ts`, `chickenCross/botSession.ts`
 or kept inside the rewritten hook file, matching battleship's single-file layout):
 
-| Concern | Mirrors battleship |
-|---|---|
-| State out of React | class fields + `emit()` to `useSyncExternalStore` listeners |
-| Window survival | `windowId`-keyed `Map`; `registerWindowDisposer(windowId, …)` on close |
-| Funding | `isDopamintConfigured` ? DOPAMINT-staked sponsored open : `withSponsorFallback` SUI |
-| Advance loop | drive bot ticks at the game's cadence; on inner-terminal → record + score + (auto ? rematch : stop) |
-| Multi-game | one tunnel, `MultiGame*Protocol`, `gamesPlayed` from `tunnel.state` |
-| Settle anytime | `settleNow()` stops the loop, builds settlement-with-root, `settleViaBackend` |
-| Score | `{ you, foe }` tallied once per finished game (`lastScoredGames` guard) |
-| Telemetry | `bumpCounters` per co-signed update; throttled control-plane heartbeat + tail flush |
-| Autopilot | `auto` default **on**; toggling on while idle kicks the advance loop |
+| Concern            | Mirrors battleship                                                                                  |
+| ------------------ | --------------------------------------------------------------------------------------------------- |
+| State out of React | class fields + `emit()` to `useSyncExternalStore` listeners                                         |
+| Window survival    | `windowId`-keyed `Map`; `registerWindowDisposer(windowId, …)` on close                              |
+| Funding            | `isDopamintConfigured` ? DOPAMINT-staked sponsored open : `withSponsorFallback` SUI                 |
+| Advance loop       | drive bot ticks at the game's cadence; on inner-terminal → record + score + (auto ? rematch : stop) |
+| Multi-game         | one tunnel, `MultiGame*Protocol`, `gamesPlayed` from `tunnel.state`                                 |
+| Settle anytime     | `settleNow()` stops the loop, builds settlement-with-root, `settleViaBackend`                       |
+| Score              | `{ you, foe }` tallied once per finished game (`lastScoredGames` guard)                             |
+| Telemetry          | `bumpCounters` per co-signed update; throttled control-plane heartbeat + tail flush                 |
+| Autopilot          | `auto` default **on**; toggling on while idle kicks the advance loop                                |
 
 The advance loop keeps each game's pacing: chicken-cross batches under
 `FRAME_BUDGET_MS`/`MAX_STEPS_PER_FRAME`; bomb-it steps one tick per `SOLO_STEP_MS`. The
@@ -165,15 +165,15 @@ as battleship guards `advance()`.
 
 ## Per-game specifics
 
-| Aspect | bomb-it | chicken-cross |
-|---|---|---|
-| Base protocol | `BombItProtocol` (`bomb_it.v1`) | `CrossProtocol` (`cross.v1`) |
-| Multi-game name | `bomb_it.multi.v1` | `cross.multi.v1` |
-| Cadence | 1 tick / `SOLO_STEP_MS` (reaction) | batched / frame budget (throughput) |
-| Kickoff move | `{ a: hunterAction(fresh,"A") }` | `{ dirA: greedyDir(fresh,0) }` |
-| Funding before | **raw wallet (bug)** → sponsor path | already sponsor path |
-| Winner type | `"A" \| "B" \| "draw" \| null` | `"A" \| "B" \| null` (push) |
-| Score on draw/push | no tally; "again"/auto continues | no tally; "again"/auto continues |
+| Aspect             | bomb-it                             | chicken-cross                       |
+| ------------------ | ----------------------------------- | ----------------------------------- |
+| Base protocol      | `BombItProtocol` (`bomb_it.v1`)     | `CrossProtocol` (`cross.v1`)        |
+| Multi-game name    | `bomb_it.multi.v1`                  | `cross.multi.v1`                    |
+| Cadence            | 1 tick / `SOLO_STEP_MS` (reaction)  | batched / frame budget (throughput) |
+| Kickoff move       | `{ a: hunterAction(fresh,"A") }`    | `{ dirA: greedyDir(fresh,0) }`      |
+| Funding before     | **raw wallet (bug)** → sponsor path | already sponsor path                |
+| Winner type        | `"A" \| "B" \| "draw" \| null`      | `"A" \| "B" \| null` (push)         |
+| Score on draw/push | no tally; "again"/auto continues    | no tally; "again"/auto continues    |
 
 bomb-it carries a `"draw"` terminal and chicken-cross a `null`/push terminal — neither
 moves balances, both are fundable-next, so multi-game treats them as a played-but-
@@ -198,6 +198,7 @@ Lowest tier that proves each behavior; runners idiomatic to each package.
 
 **SDK multi-game protocols** (`node:test` via tsx, co-located), mirroring
 `multiGameBattleship.test.ts`:
+
 - balance **conservation** across a game boundary (reset carries balances; sum == total);
 - **`encodeState` determinism + domain separation** (multi state never collides with the
   inner single-game encoding; same state ⇒ same bytes);
@@ -207,6 +208,7 @@ Lowest tier that proves each behavior; runners idiomatic to each package.
 - **draw/push continuation** (bomb-it draw, cross push): played, unscored, fundable-next.
 
 **Frontend session** (`session-core.test.ts` updates + a bounded session test):
+
 - extend `stepSession`/`deriveView` to the multi-game state shape; keep the existing
   bounded settleability test (`verifyCoSignedUpdate` after ~50 ticks) green;
 - a bounded **multi-game** test: play game 1 to terminal, drive one rematch, assert
@@ -215,6 +217,7 @@ Lowest tier that proves each behavior; runners idiomatic to each package.
 **Re-verify** PvP unchanged (existing PvP tests) and battleship untouched.
 
 **Gate** (per `docs/adding-a-tunnel-game.md` §Gate + the consistency-hardening spec):
+
 ```
 cd sui-tunnel-ts && node --import tsx --test src/protocol/cross.test.ts src/protocol/bombIt.test.ts
 cd sui-tunnel-ts && node --import tsx --test src/protocol/multiGameCross.test.ts src/protocol/multiGameBombIt.test.ts
@@ -226,11 +229,13 @@ cd frontend && pnpm build
 ## File structure
 
 **Created**
+
 - `sui-tunnel-ts/src/protocol/multiGameBombIt.ts` + `multiGameBombIt.test.ts`
 - `sui-tunnel-ts/src/protocol/multiGameCross.ts` + `multiGameCross.test.ts`
 - `docs/decisions/00NN-multi-game-self-play-per-game-seed.md` (ADR, extends 0010)
 
 **Modified**
+
 - `sui-tunnel-ts/src/protocol/index.ts` — barrel-export the two wrappers
 - `frontend/src/games/bombIt/useBombItSession.ts` — out-of-React `BotSession`; multi-game;
   sponsor/DOPAMINT/backend-settle; score; settle-anytime; heartbeat throttle
@@ -245,6 +250,7 @@ cd frontend && pnpm build
 - `frontend/src/games/*/session-core.test.ts` — multi-game bounded test
 
 **Unchanged (re-verified)**
+
 - `usePvpBombIt.ts`, `usePvpChickenCross.ts`, `pvp/pvpMatchHook.ts`, all battleship files.
 
 ## Self-review notes (coverage)
@@ -259,5 +265,5 @@ cd frontend && pnpm build
 - ADR 0010 alignment → per-game seed stays deterministic/public/symmetric; recorded as an
   extending ADR.
 - Cadence preserved → bomb-it 1-tick/step, cross frame-budget; no battleship TPS retrofit.
-</content>
-</invoke>
+  </content>
+  </invoke>

@@ -22,6 +22,7 @@
 ## File Structure
 
 Phase A (contract + client):
+
 - Modify `backend/tunnel-manager/src/main.rs` — route `/v1/sessions/:id/settle` → `/v1/tunnels/:tunnel_id/settle`.
 - Modify `backend/tunnel-manager/src/routes.rs` — de-authed `settle` handler + node-free guard tests.
 - Modify `frontend/src/backend/controlPlane.ts` — `settle(tunnelId, body)` (drop session/token).
@@ -29,6 +30,7 @@ Phase A (contract + client):
 - Modify `frontend/src/games/ticTacToe/usePvpTicTacToe.ts` — drop `registerSession`/`sessionRef`; `settle(tunnelId, …)`.
 
 Phase B (verify-before-gas):
+
 - Modify `backend/tunnel-manager/src/sui.rs` — `dryrun_effects_ok` (pure, tested) + `dry_run` wired into `submit_close`.
 
 ---
@@ -38,6 +40,7 @@ Phase B (verify-before-gas):
 ### Task 1: De-auth `/settle`, move to the tunnel resource
 
 **Files:**
+
 - Modify: `backend/tunnel-manager/src/main.rs:95`
 - Modify: `backend/tunnel-manager/src/routes.rs` (the `settle` handler + tests)
 
@@ -242,6 +245,7 @@ git commit -m "feat(be): settle by tunnel, drop session token"
 ### Task 2: `controlPlane.settle(tunnelId, body)` client change
 
 **Files:**
+
 - Modify: `frontend/src/backend/controlPlane.ts`
 - Test: `frontend/src/backend/controlPlane.test.ts`
 
@@ -259,7 +263,11 @@ test("settle posts to the tunnel settle path with no auth and returns the proof"
   globalThis.fetch = (async (url: string | URL, init: RequestInit) => {
     calls.push({ url: String(url), init });
     return new Response(
-      JSON.stringify({ txDigest: "DiG", walrusBlobId: "blob1", proofUrl: "https://agg/v1/blobs/blob1" }),
+      JSON.stringify({
+        txDigest: "DiG",
+        walrusBlobId: "blob1",
+        proofUrl: "https://agg/v1/blobs/blob1",
+      }),
       { status: 200, headers: { "content-type": "application/json" } },
     );
   }) as typeof fetch;
@@ -345,6 +353,7 @@ git commit -m "feat(fe): settle by tunnelId, drop session token"
 ### Task 3: PvP lane drops `registerSession`
 
 **Files:**
+
 - Modify: `frontend/src/games/ticTacToe/usePvpTicTacToe.ts`
 
 **Read the file first** (it carries pre-existing telemetry + the Task-8/9 settle wiring from a prior plan). Use the canonical-case path for git.
@@ -364,7 +373,10 @@ import {
 with:
 
 ```ts
-import { getControlPlaneClient, resolveBackendUrl } from "../../backend/controlPlane";
+import {
+  getControlPlaneClient,
+  resolveBackendUrl,
+} from "../../backend/controlPlane";
 ```
 
 - [ ] **Step 2: Remove the `sessionRef`**
@@ -372,7 +384,7 @@ import { getControlPlaneClient, resolveBackendUrl } from "../../backend/controlP
 Delete this line (next to `transcriptRef`):
 
 ```ts
-  const sessionRef = useRef<RegisterSessionResult | null>(null);
+const sessionRef = useRef<RegisterSessionResult | null>(null);
 ```
 
 - [ ] **Step 3: Remove the `sessionRef` reset**
@@ -380,7 +392,7 @@ Delete this line (next to `transcriptRef`):
 In `reset`, delete the line:
 
 ```ts
-    sessionRef.current = null;
+sessionRef.current = null;
 ```
 
 (Keep `transcriptRef.current = null;`.)
@@ -458,16 +470,28 @@ async function settle(
     transcriptRoot: toHex(root),
     sig: toHex(half.sigSelf),
   });
-  const other = await waitPeer<{ sig: string; transcriptRoot: string }>("settleHalf");
+  const other = await waitPeer<{ sig: string; transcriptRoot: string }>(
+    "settleHalf",
+  );
   if (other.transcriptRoot !== toHex(root)) {
     throw new Error("settlement transcript-root mismatch between parties");
   }
-  const co = dt.combineSettlementWithRoot(half.settlement, half.sigSelf, fromHex(other.sig));
+  const co = dt.combineSettlementWithRoot(
+    half.settlement,
+    half.sigSelf,
+    fromHex(other.sig),
+  );
   if (role !== "A") return; // single submitter, mirrors the cooperative-close pattern
   try {
-    await cp.settle(tunnelId, coSignedToSettleRequest(co, transcript.toRecord().entries));
+    await cp.settle(
+      tunnelId,
+      coSignedToSettleRequest(co, transcript.toRecord().entries),
+    );
   } catch (e) {
-    console.error("[tictactoe] backend settle failed; falling back to wallet close:", e);
+    console.error(
+      "[tictactoe] backend settle failed; falling back to wallet close:",
+      e,
+    );
     await closeCooperativeWithRoot({ signExec, tunnelId, settlement: co });
   }
 }
@@ -492,6 +516,7 @@ git commit -m "feat(pvp): drop registerSession from settle"
 ### Task 4: `dryrun_effects_ok` pure parser
 
 **Files:**
+
 - Modify: `backend/tunnel-manager/src/sui.rs` (the helper + its tests)
 
 - [ ] **Step 1: Write the failing tests**
@@ -569,6 +594,7 @@ git commit -m "feat(be): add dry-run effects parser"
 ### Task 5: Dry-run the close before sponsoring gas
 
 **Files:**
+
 - Modify: `backend/tunnel-manager/src/sui.rs` (`dry_run` method + wire into `submit_close`)
 
 No new unit test — the parse logic is covered by Task 4; this wires the (e2e-deferred) RPC call. Build-verified.
@@ -621,11 +647,13 @@ git commit -m "feat(be): dry-run close before sponsoring gas"
 ## Success criteria
 
 Unit-tested (must pass):
+
 - `/settle` handler: `422` on path/body tunnel mismatch; `409` when the registry shows the tunnel closed — **no auth path remains** (Task 1, cargo).
 - `dryrun_effects_ok`: `Ok` on `success` effects, `Err` on `failure`/missing (Task 4, cargo).
 - Client `settle(tunnelId, body)` POSTs to `/v1/tunnels/{id}/settle`, **no `authorization` header**, body round-trips, parses the proof (Task 2, tsx).
 
 Build-verified (must compile/bundle):
+
 - Backend compiles with the de-authed handler + dry-run wired into `submit_close` (`cargo test`).
 - PvP lane compiles + bundles with `registerSession` removed and `settle(tunnelId, …)` (`pnpm typecheck` + `pnpm build`, Task 3).
 

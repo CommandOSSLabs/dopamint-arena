@@ -16,8 +16,8 @@ correctly once pushed to Redis, without a relational store and without touching 
 per-move hot path?**
 
 A surface-by-surface audit of `store/redis.rs` (cross-checked against `store/memory.rs`
-and the per-move relay in `mp/ws.rs`) found the *counting* surfaces already correct, but
-several *owned* surfaces use a non-atomic GET→mutate→SET — the read-modify-write that
+and the per-move relay in `mp/ws.rs`) found the _counting_ surfaces already correct, but
+several _owned_ surfaces use a non-atomic GET→mutate→SET — the read-modify-write that
 breaks under concurrent instances — plus two slow resource leaks.
 
 ## The principle
@@ -26,11 +26,11 @@ breaks under concurrent instances — plus two slow resource leaks.
 a structure that merges associatively or idempotently; never read-modify-write a shared
 aggregate from an instance.** Three legal shapes, one rule:
 
-| Shape | Primitive | Why it merges | Surfaces |
-|---|---|---|---|
-| **Count** | `INCRBY` (grow-only counter) | commutative + associative; instance-count independent | move counter, per-game counts |
-| **Membership** | `SADD`/`SREM` (set union) | idempotent; retries & duplicate instances are free | active/settled tunnels |
-| **Owned / last-writer** | single key + CAS / atomic field write | not *merged* — *owned*; conflict resolved by CAS, not summed | match record, presence, invite |
+| Shape                   | Primitive                             | Why it merges                                                | Surfaces                       |
+| ----------------------- | ------------------------------------- | ------------------------------------------------------------ | ------------------------------ |
+| **Count**               | `INCRBY` (grow-only counter)          | commutative + associative; instance-count independent        | move counter, per-game counts  |
+| **Membership**          | `SADD`/`SREM` (set union)             | idempotent; retries & duplicate instances are free           | active/settled tunnels         |
+| **Owned / last-writer** | single key + CAS / atomic field write | not _merged_ — _owned_; conflict resolved by CAS, not summed | match record, presence, invite |
 
 The move counter is already a correct distributed G-counter: `LocalActionCounter`
 (`stats_counter.rs`) emits non-overlapping deltas via a per-game watermark, and `INCRBY`
@@ -97,7 +97,7 @@ simplification, not added machinery.
 
 - **Defect**: `set_presence` (`redis.rs:325–354`) writes two keys (`presence:<wallet>` for
   the CAS, `presence:ref:<wallet>` for the full ConnRef). `clear_presence_if` Lua deletes the
-  primary then a *separate* `DEL` clears the mirror — if that second `DEL` fails the mirror
+  primary then a _separate_ `DEL` clears the mirror — if that second `DEL` fails the mirror
   orphans, and presence keys have no TTL, so orphans accumulate unbounded.
 - **Fix**: one key `presence:<wallet>` holding the full ConnRef JSON. `set_presence` →
   one `SET`. `clear_presence_if` Lua → `cjson.decode` the stored value, compare `conn_id`,
@@ -138,14 +138,14 @@ ADR-0009's "throughput scales by adding instances" property is fully preserved.
 
 Every fix is perf-neutral-to-positive on its (cold, control-plane) path:
 
-| Change | Redis round-trips | Effect |
-|---|---|---|
-| F1 | `set_tunnel_id`/`record_checkpoint` 2→1 | off hot path; fewer round-trips |
-| F2 | 2→1 | per-match; fewer |
-| F3 | `set_presence` 2→1, `clear` up-to-2→1 | per-connection; fewer + less memory |
-| F4 | `add_actions` 2→1 INCRBY | removes the one universally-write-contended key; distributes stats writes across shards |
-| F5 | unchanged | bounds a memory leak |
-| shutdown flush | +1 batch at SIGTERM | negligible |
+| Change         | Redis round-trips                       | Effect                                                                                  |
+| -------------- | --------------------------------------- | --------------------------------------------------------------------------------------- |
+| F1             | `set_tunnel_id`/`record_checkpoint` 2→1 | off hot path; fewer round-trips                                                         |
+| F2             | 2→1                                     | per-match; fewer                                                                        |
+| F3             | `set_presence` 2→1, `clear` up-to-2→1   | per-connection; fewer + less memory                                                     |
+| F4             | `add_actions` 2→1 INCRBY                | removes the one universally-write-contended key; distributes stats writes across shards |
+| F5             | unchanged                               | bounds a memory leak                                                                    |
+| shutdown flush | +1 batch at SIGTERM                     | negligible                                                                              |
 
 Watch-items: keep all new Lua O(1) (no `LRANGE`/loops) so they never block the shard; fold
 F1's `HSET`+`EXPIRE` into one Lua/pipeline so `put_match` stays a single round-trip.

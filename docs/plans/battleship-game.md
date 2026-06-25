@@ -22,7 +22,7 @@ These are confirmed by reading the code — they shape the whole plan:
 - **No `battleship` protocol exists** in the SDK (`sui-tunnel-ts/src/protocol/`
   has blackjack/chat/payments/quantumPoker/ticTacToe only). We build it.
 - **PvP needs no backend change.** The Rust matchmaker
-  (`backend/tunnel-manager/src/mp/ws.rs`) keys its queue on an *arbitrary* game
+  (`backend/tunnel-manager/src/mp/ws.rs`) keys its queue on an _arbitrary_ game
   string (`QueueJoin { game }` → `join_or_pair(&game, …)`); nothing special-cases
   `"tictactoe"`. `mp.quickMatch("battleship")` pairs two battleship players.
 - **On-chain helpers are game-agnostic** (`frontend/src/onchain/tunnelTx.ts`):
@@ -37,7 +37,7 @@ These are confirmed by reading the code — they shape the whole plan:
 
 **Constraint:** `sui-tunnel-ts/` is upstream-authoritative — do **not** add the
 protocol there. The `BattleshipProtocol` lives in the frontend game folder and
-*imports* the `Protocol` interface from the SDK. (Precedent: ticTacToe's
+_imports_ the `Protocol` interface from the SDK. (Precedent: ticTacToe's
 `packages/shared/.../multiGameProtocol.ts` wraps an SDK protocol game-side.)
 
 ---
@@ -53,6 +53,7 @@ exactly the pattern the framework's `example_rock_paper_scissors.move`
 demonstrates (commit a hash, reveal later, verify against the commitment).
 
 **Per player, at placement (commit):**
+
 - Build a 10×10 board (1 = ship cell, 0 = water). Standard fleet = 17 ship cells:
   Carrier 5, Battleship 4, Cruiser 3, Submarine 3, Destroyer 2.
 - For each of the 100 cells, leaf = `blake2b256(cellIndex ‖ isShip ‖ cellSalt)`
@@ -61,16 +62,18 @@ demonstrates (commit a hash, reveal later, verify against the commitment).
   size). The opponent now has a binding commitment but learns nothing.
 
 **Per shot (reveal-with-proof):**
+
 - Shooter co-signs `shoot(cell)`. Defender answers with `reveal(cell, isShip,
-  cellSalt, merkleProof)`. Both verify `merkleProof` against the defender's
+cellSalt, merkleProof)`. Both verify `merkleProof` against the defender's
   committed root → proves the hit/miss is truthful **for that one cell** without
   exposing any other cell. Both co-sign the resulting state (records the cell +
   result, bumps the hit counter).
 
 **Win / settle:**
+
 - A player loses when all 17 of their ship cells have been revealed as hits.
 - At settlement both reveal their **full board + salts**; the protocol checks
-  (a) every per-shot reveal matched, and (b) the fleet was *legal* (exactly the
+  (a) every per-shot reveal matched, and (b) the fleet was _legal_ (exactly the
   right ships, no overlaps, in-bounds). A cheat is caught here and resolved via
   the cooperative-close balances, or — if a cheater stalls/refuses to reveal —
   the on-chain **dispute + timeout penalty** path (`raise_dispute` /
@@ -78,12 +81,13 @@ demonstrates (commit a hash, reveal later, verify against the commitment).
   honest player whole. No ZK required.
 
 **Fairness tiers** (build Tier 1; record Tier 2 as future in the ADR):
+
 - **Tier 1 (MVP, no ZK, no new Move module):** Merkle-root commit + per-shot
   Merkle-proof reveal + full reveal & legality check at settlement, backed by the
   existing dispute/penalty path. Robust and shippable.
 - **Tier 2 (hardened, ADR-gated, future):** a Groth16 circuit
-  (`sui_tunnel/sources/zk_verifier.move` already verifies Groth16) proving *legal
-  fleet placement* at commit so the end-reveal is unnecessary, plus on-chain
+  (`sui_tunnel/sources/zk_verifier.move` already verifies Groth16) proving _legal
+  fleet placement_ at commit so the end-reveal is unnecessary, plus on-chain
   replay of Merkle proofs during disputes. Explicitly out of scope for v1.
 
 > vs-bot self-play (Milestone 1) runs both seats in one process, so it knows both
@@ -98,35 +102,47 @@ Implements `Protocol<BattleshipState, BattleshipMove>`. All encodings must be
 **canonical** (same state → same bytes on both clients — the co-sign hashes it).
 
 ```ts
-type Party = "A" | "B";                 // from sui-tunnel-ts/protocol/Protocol
-type Cell = number;                     // 0..99, row-major (row*10 + col)
-type Winner = 0 | 1 | 2;                // 0 none, 1 A wins, 2 B wins
+type Party = "A" | "B"; // from sui-tunnel-ts/protocol/Protocol
+type Cell = number; // 0..99, row-major (row*10 + col)
+type Winner = 0 | 1 | 2; // 0 none, 1 A wins, 2 B wins
 
-interface ShotResult { cell: Cell; isHit: boolean; }
+interface ShotResult {
+  cell: Cell;
+  isHit: boolean;
+}
 
 interface BattleshipState {
   phase: "awaitingCommits" | "playing" | "over";
-  turn: Party;                          // whose shot it is (A first)
+  turn: Party; // whose shot it is (A first)
   pendingShot: { by: Party; cell: Cell } | null; // set after a shoot, cleared by reveal
-  commitA: Uint8Array | null;           // 32-byte Merkle root; null until committed
+  commitA: Uint8Array | null; // 32-byte Merkle root; null until committed
   commitB: Uint8Array | null;
-  shotsAtA: ShotResult[];               // shots B fired at A (≤100)
-  shotsAtB: ShotResult[];               // shots A fired at B
-  hitsOnA: number;                      // A loses at FLEET_CELLS (17)
+  shotsAtA: ShotResult[]; // shots B fired at A (≤100)
+  shotsAtB: ShotResult[]; // shots A fired at B
+  hitsOnA: number; // A loses at FLEET_CELLS (17)
   hitsOnB: number;
   winner: Winner;
-  balanceA: bigint; balanceB: bigint; total: bigint; stake: bigint;
+  balanceA: bigint;
+  balanceB: bigint;
+  total: bigint;
+  stake: bigint;
 }
 
 type BattleshipMove =
-  | { type: "commit"; root: Uint8Array }                                   // place fleet (commit only)
-  | { type: "shoot"; cell: Cell }                                          // fire at the foe
-  | { type: "reveal"; cell: Cell; isShip: boolean;                         // answer the incoming shot
-      salt: Uint8Array; proof: Uint8Array[] }
-  | { type: "revealBoard"; ships: number[]; salts: Uint8Array[] };         // settlement full reveal
+  | { type: "commit"; root: Uint8Array } // place fleet (commit only)
+  | { type: "shoot"; cell: Cell } // fire at the foe
+  | {
+      type: "reveal";
+      cell: Cell;
+      isShip: boolean; // answer the incoming shot
+      salt: Uint8Array;
+      proof: Uint8Array[];
+    }
+  | { type: "revealBoard"; ships: number[]; salts: Uint8Array[] }; // settlement full reveal
 ```
 
 **Required methods (mirror `ticTacToe.ts`):**
+
 - `name = "battleship.v1"` — also the state-encoding domain tag.
 - `initialState(ctx)` — empty boards, `phase: "awaitingCommits"`, `turn: "A"`,
   balances from `ctx.initialBalances`, `stake` clamped to the smaller balance.
@@ -154,6 +170,7 @@ type BattleshipMove =
 ## 3. Engine (pure, unit-tested, no React/IO)
 
 `frontend/src/games/battleship/engine/`
+
 - `fleet.ts` — `FLEET` spec (5/4/3/3/2 = 17 cells), `placeFleetRandom(rng)`,
   `isLegalFleet(board)` (right ships, no overlap, in-bounds, contiguous),
   `boardToCells` / `cellsToBoard`, coord helpers (`0..99 ↔ {row,col}`, A–J/1–10).
@@ -216,32 +233,42 @@ One hook exposing both modes (mirror `usePvpTicTacToe.ts` for PvP and
 
 ```ts
 interface BattleshipSession {
-  status; mode: "bot" | "pvp" | null; role: Party | null;
-  phase; myTurn: boolean; winner: Winner; opponentWallet: string | null;
-  myBoard; enemyView; fleetRoster; pendingShot; error;
-  playBot(): void;            // self-play: openAndFundSelfPlay + OffchainTunnel.selfPlay + timer
-  findMatch(): void;          // PvP: MpClient.quickMatch("battleship") + DistributedTunnel
-  place(ship, cell, orient): void;  // placement edits (local, pre-commit)
-  autoPlace(): void; randomize(): void;
-  commit(): void;             // compute root, propose {type:"commit"}
-  fire(cell): void;           // propose {type:"shoot"}; defender side auto-reveals
+  status;
+  mode: "bot" | "pvp" | null;
+  role: Party | null;
+  phase;
+  myTurn: boolean;
+  winner: Winner;
+  opponentWallet: string | null;
+  myBoard;
+  enemyView;
+  fleetRoster;
+  pendingShot;
+  error;
+  playBot(): void; // self-play: openAndFundSelfPlay + OffchainTunnel.selfPlay + timer
+  findMatch(): void; // PvP: MpClient.quickMatch("battleship") + DistributedTunnel
+  place(ship, cell, orient): void; // placement edits (local, pre-commit)
+  autoPlace(): void;
+  randomize(): void;
+  commit(): void; // compute root, propose {type:"commit"}
+  fire(cell): void; // propose {type:"shoot"}; defender side auto-reveals
   reset(): void;
 }
 ```
 
 - **vs-bot (Milestone 1):** `openAndFundSelfPlay({reads, signExec, partyA, partyB,
-  aAmount, bAmount})` → `OffchainTunnel.selfPlay(proto, tunnelId, aKey, bKey,
-  aAddr, bAddr, {a,b})`. A `setInterval` steps the bot via `proto.randomMove`
+aAmount, bAmount})` → `OffchainTunnel.selfPlay(proto, tunnelId, aKey, bKey,
+aAddr, bAddr, {a,b})`. A `setInterval` steps the bot via `proto.randomMove`
   (it answers reveals truthfully from the locally-known board). Settle with
   `tunnel.buildSettlement(createdAt)` + `closeCooperative`. The human plays seat A
   (their fires go through `propose`); the bot drives seat B + all reveals.
 - **PvP (Milestone 2):** copy ttt's flow exactly — ephemeral keypair, `MpClient`,
   `quickMatch("battleship")`, peer hello/pubkey exchange, role A
   `openAndFundSharedTunnel` / role B `depositStake`, `DistributedTunnel<
-  BattleshipState, BattleshipMove>` over `channel.transport`, `dt.onConfirmed`
+BattleshipState, BattleshipMove>` over `channel.transport`, `dt.onConfirmed`
   → sync + detect terminal → `settle()` with `buildSettlementHalf` /
   `combineSettlement` / `closeCooperative` (role A submits). The extra peer
-  messages vs ttt: exchanging the per-shot reveal happens *inside* the tunnel
+  messages vs ttt: exchanging the per-shot reveal happens _inside_ the tunnel
   moves (shoot → reveal), so the relay transport carries it natively — no new
   side-channel needed beyond ttt's hello/open/ready/settleHalf.
 
@@ -250,9 +277,10 @@ interface BattleshipSession {
 ## 6. Files
 
 **New:**
+
 - `frontend/src/games/battleship/index.ts` — `register({ id:"battleship",
-  name:"Battleship", icon:"🚢", image:"/games/battleship.png", Window:
-  BattleshipWindow })`.
+name:"Battleship", icon:"🚢", image:"/games/battleship.png", Window:
+BattleshipWindow })`.
 - `frontend/src/games/battleship/BattleshipWindow.tsx` — orchestrator/status.
 - `frontend/src/games/battleship/useBattleship.ts` — session hook.
 - `frontend/src/games/battleship/components/{PlacementBoard,FleetRoster,FiringBoard,OwnBoard,GridFrame,CellButton}.tsx`
@@ -263,6 +291,7 @@ interface BattleshipSession {
 - `docs/decisions/0003-battleship-on-sui-tunnel.md` — the ADR (§9).
 
 **Modify:**
+
 - `frontend/src/games/index.ts` — add `import "./battleship";`.
 - `frontend/package.json` — extend the test glob with
   `"src/games/battleship/**/*.test.ts"`.
@@ -277,7 +306,7 @@ interface BattleshipSession {
 ## 7. Milestones (ship incrementally; stop for review at each)
 
 - **M0 — logic only (no UI):** ADR + asset + `engine/*` + `protocol/battleship.ts`
-  + all unit tests green. Provable correctness with zero UI risk.
+  - all unit tests green. Provable correctness with zero UI risk.
 - **M1 — vs-bot e2e (demoable):** `BattleshipWindow` + `useBattleship` bot path +
   placement/battle/over UI. One browser, one wallet, real tunnel open + co-signed
   play + on-chain settle, telemetry rows appear. **This is the demo deliverable.**
@@ -310,6 +339,7 @@ interface BattleshipSession {
 ## 9. ADR to author first — `docs/decisions/0003-battleship-on-sui-tunnel.md`
 
 Per CLAUDE.md, record the decision before the code. Key points to capture:
+
 - **Decision:** Battleship is a generic-tunnel game with game logic in a
   frontend-side `BattleshipProtocol` (SDK stays upstream-clean); two modes
   (vs-bot self-play, PvP over relay) reusing the ttt/blackjack patterns.
@@ -333,5 +363,5 @@ Per CLAUDE.md, record the decision before the code. Key points to capture:
 - pnpm only in `frontend/`; never edit `sui-tunnel-ts/` or `sui_tunnel/`.
 - Conventional Commits, ≤50-char subject, **no AI attribution**, human-authored.
 - Rebase over merge; one logical change per commit; PR base = `dev`.
-- Names describe purpose (no `Manager`/`Helper`/`Data`); comments explain *why*.
+- Names describe purpose (no `Manager`/`Helper`/`Data`); comments explain _why_.
 - Tests named by behavior; co-locate `*.test.ts`.

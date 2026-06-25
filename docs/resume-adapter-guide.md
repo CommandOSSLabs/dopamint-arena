@@ -29,13 +29,13 @@ write. All reconstruction happens at mount/resume time.
 
 ## Source map
 
-| Unit | Location |
-|---|---|
-| `ResumeRecord`, persistence, `keypairFromSecretHex` | `frontend/src/pvp/resume.ts` |
-| `ResumeAdapter`, `attachResume`, `restoreInto` (warm) | `frontend/src/pvp/resumeSession.ts` |
-| `RebuildSpec`, `rebuildTunnel`, `resumeActiveTunnels` (cold) | `frontend/src/pvp/resumeSession.ts` |
-| `MpClient`, `PvpChannel`, first-connect resume | `frontend/src/pvp/mpClient.ts` |
-| Worked adapters | `…/ticTacToe/app/lib/tttResumeAdapter.ts`, `…/battleship/battleshipResumeAdapter.ts` |
+| Unit                                                         | Location                                                                             |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
+| `ResumeRecord`, persistence, `keypairFromSecretHex`          | `frontend/src/pvp/resume.ts`                                                         |
+| `ResumeAdapter`, `attachResume`, `restoreInto` (warm)        | `frontend/src/pvp/resumeSession.ts`                                                  |
+| `RebuildSpec`, `rebuildTunnel`, `resumeActiveTunnels` (cold) | `frontend/src/pvp/resumeSession.ts`                                                  |
+| `MpClient`, `PvpChannel`, first-connect resume               | `frontend/src/pvp/mpClient.ts`                                                       |
+| Worked adapters                                              | `…/ticTacToe/app/lib/tttResumeAdapter.ts`, `…/battleship/battleshipResumeAdapter.ts` |
 
 ## The three wirings every hook needs
 
@@ -68,11 +68,11 @@ const detach = attachResume({
   identity: {
     matchId,
     tunnelId,
-    role,                              // "A" | "B"
+    role, // "A" | "B"
     game: GAME_ID,
     opponentWallet,
     opponentPubkeyHex,
-    selfEphemeralSecretHex,            // hex of THIS seat's ephemeral secret — required
+    selfEphemeralSecretHex, // hex of THIS seat's ephemeral secret — required
   },
   // Optional: settlement floor after the grace window (defaults to 1h).
   onGraceExpired: (latest) => {
@@ -131,13 +131,13 @@ The adapter is the only game-specific serialization the driver needs.
 
 ```ts
 interface ResumeAdapter<State, Move> {
-  serializeState(s: State): JsonValue;   // FULL public state; MUST exclude the hidden secret
+  serializeState(s: State): JsonValue; // FULL public state; MUST exclude the hidden secret
   deserializeState(j: JsonValue): State;
-  serializeMove?(m: Move): JsonValue;    // omit for JSON-native moves (identity default)
+  serializeMove?(m: Move): JsonValue; // omit for JSON-native moves (identity default)
   deserializeMove?(j: JsonValue): Move;
-  captureSecret?(): JsonValue;           // hidden state the peer can never supply
+  captureSecret?(): JsonValue; // hidden state the peer can never supply
   restoreSecret?(j: JsonValue): void;
-  onReconciled(tunnel, outcome): void;   // re-render; `outcome === "settle"` → settlement floor
+  onReconciled(tunnel, outcome): void; // re-render; `outcome === "settle"` → settlement floor
 }
 ```
 
@@ -148,7 +148,7 @@ Rules:
   `blake2b256(encodeState(deserializeState(json))) === stateHash`. Round-trip any
   non-JSON field (e.g. `Uint8Array` ⇄ number arrays) yourself.
 - **`serializeState` must never include the hidden secret.** It feeds the
-  persisted record *and* the `resync` payload sent to the peer. Hidden state goes
+  persisted record _and_ the `resync` payload sent to the peer. Hidden state goes
   through `captureSecret`/`restoreSecret` only.
 - **Binary moves need a codec.** Provide `serializeMove`/`deserializeMove`
   (typically your `moveCodec.encode`/`.decode`); JSON-native moves omit them.
@@ -161,9 +161,9 @@ The cold path needs the few inputs it can't read from a record:
 
 ```ts
 interface RebuildSpec<State, Move> {
-  proto: Protocol<State, Move>;          // the SAME proto object a live match builds
-  moveCodec?: MoveCodec<Move>;           // binary-move games only (battleship, poker)
-  adapter: ResumeAdapter<State, Move>;   // same adapter as the warm path
+  proto: Protocol<State, Move>; // the SAME proto object a live match builds
+  moveCodec?: MoveCodec<Move>; // binary-move games only (battleship, poker)
+  adapter: ResumeAdapter<State, Move>; // same adapter as the warm path
   balancesFromRecord?(record): { a: bigint; b: bigint }; // default: checkpoint A/B split
 }
 ```
@@ -186,7 +186,7 @@ export function makeTttResumeAdapter<AnyState, CellMove>(
   return {
     serializeState: (s) => s as unknown as never, // public state is structural JSON
     deserializeState: (j) => j as AnyState,
-    onReconciled,                                  // no secret, no move codec
+    onReconciled, // no secret, no move codec
   };
 }
 

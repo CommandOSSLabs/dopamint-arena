@@ -37,5 +37,5 @@ through one uniform Pointer Events path, plus keyboard move/resize for a11y.
   our semantic tokens so it fits both the arena and walrus themes.
 - We own ongoing maintenance of layout behaviour (no upstream to inherit fixes
   from) and ship keyboard a11y ourselves rather than getting it from dnd-kit.
-- We explicitly chose *not* to depend on react-grid-layout, dnd-kit, or
+- We explicitly chose _not_ to depend on react-grid-layout, dnd-kit, or
   gridstack for this component.

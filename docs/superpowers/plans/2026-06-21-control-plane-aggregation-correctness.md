@@ -20,6 +20,7 @@
 - **Hot path is out of scope.** Do not modify `mp/ws.rs` relay, `LocalActionCounter::incr`, or the per-move path except the shutdown-flush wiring in Task 6.
 
 **Running tests:**
+
 - Fast (memory + pure): `cargo test -p tunnel-manager`
 - Redis integration (needs Redis): start one with `docker run --rm -p 6379:6379 redis:7`, then
   `TEST_REDIS_URL=redis://localhost:6379 cargo test -p tunnel-manager -- --ignored --test-threads=1`
@@ -32,11 +33,13 @@
 Remove the redundant, universally-contended `stats:actions:total` key. Each instance already increments `stats:actions:game:<game>`; the total is the sum of those. Single source of truth, and it drops the one key every instance writes every second.
 
 **Files:**
+
 - Modify: `backend/tunnel-manager/src/store/redis.rs:150-162` (`add_actions`), `:164-206` (`snapshot`)
 - Modify: `backend/tunnel-manager/src/store/memory.rs:21` (struct field), `:69-77` (`add_actions`), `:79-111` (`snapshot`)
 - Test: `backend/tunnel-manager/src/store/memory.rs` (existing `heartbeats_attribute_actions_per_game` must stay green), `backend/tunnel-manager/src/store/redis.rs` (new ignored test)
 
 **Interfaces:**
+
 - Consumes: nothing new.
 - Produces: no signature change. `snapshot().total_actions` now equals `Σ per_game[*].total_actions`. `add_actions` writes only `stats:actions:game:<game>`.
 
@@ -214,10 +217,12 @@ git commit -m "refactor(store): derive total actions from per-game"
 `GET`→check→`DEL` lets two concurrent accepts both return `Some` (a retried/double-clicked accept creates two matches). Collapse to one Lua: get, check recipient, del, return — single winner.
 
 **Files:**
+
 - Modify: `backend/tunnel-manager/src/store/redis.rs` (add a `TAKE_INVITE` const near the other scripts ~`:321`; rewrite `take_invite` `:441-462`)
 - Test: `backend/tunnel-manager/src/store/redis.rs` (new ignored concurrency test)
 
 **Interfaces:**
+
 - Consumes: nothing new.
 - Produces: `take_invite(match_id, accepter) -> Option<DirectedInvite>` unchanged; now atomic (exactly one of N concurrent equal calls returns `Some`).
 
@@ -329,10 +334,12 @@ git commit -m "fix(store): make take_invite atomic"
 `set_presence` writes two keys (`presence:<wallet>` + `presence:ref:<wallet>`) and `clear_presence_if` deletes them in two ops — the mirror orphans if the second `DEL` fails, and presence has no TTL, so orphans accumulate. Store the full `ConnRef` JSON under one key; the CAS Lua decodes it to compare `conn_id`.
 
 **Files:**
+
 - Modify: `backend/tunnel-manager/src/store/redis.rs` (`CLEAR_PRESENCE_IF` const `:299-308`; `set_presence` `:325-354`; `get_presence` `:356-364`; `clear_presence_if` `:366-389`)
 - Test: `backend/tunnel-manager/src/store/redis.rs` (new ignored test)
 
 **Interfaces:**
+
 - Consumes: `ConnRef { instance_id: String, conn_id: ConnId }` (already serde).
 - Produces: `set_presence`/`get_presence`/`clear_presence_if` signatures unchanged. On-disk: one key `presence:<wallet>` holding `ConnRef` JSON. No `presence:ref:` key exists.
 
@@ -471,10 +478,12 @@ git commit -m "fix(store): collapse presence to one key"
 `set_tunnel_id` and `record_checkpoint` do `get_match`→mutate→`put_match`, so concurrent writes to different fields clobber each other. Store the record as a HASH with independent fields. Keep the checkpoint as an **opaque JSON string** plus a separate integer `checkpoint_nonce` for the monotonic CAS, so the Lua never `cjson`-touches a `u64` balance.
 
 **Files:**
+
 - Modify: `backend/tunnel-manager/src/store/redis.rs` (add `PUT_MATCH` + `RECORD_CHECKPOINT` consts near the other scripts; rewrite `put_match` `:471-485`, `get_match` `:487-495`, `set_tunnel_id` `:497-502`, `record_checkpoint` `:504-514`)
 - Test: `backend/tunnel-manager/src/store/redis.rs` (new ignored tests); existing `record_checkpoint_keeps_highest_nonce` in `memory.rs` stays green
 
 **Interfaces:**
+
 - Consumes: `MatchRecord { game, seat_a, seat_b, conn_a: ConnRef, conn_b: ConnRef, tunnel_id: Option<String>, latest_checkpoint: Option<Checkpoint> }`; `Checkpoint { nonce: u64, .. }`.
 - Produces: `put_match`/`get_match`/`set_tunnel_id`/`record_checkpoint` signatures unchanged. On-disk: HASH `match:<id>` with string fields `game`, `seat_a`, `seat_b`, `conn_a` (JSON), `conn_b` (JSON), optional `tunnel_id`, optional `latest_checkpoint` (JSON), optional `checkpoint_nonce` (integer). 6h TTL on the key.
 
@@ -725,11 +734,13 @@ git commit -m "refactor(store): store match as a redis hash"
 `events:seen` is a SET that's never pruned → slow unbounded growth. Replace the membership check with a per-digest key carrying a TTL, so the dedup window self-expires. Keep it inside the existing atomic `PUSH_RECENT_EVENT` script.
 
 **Files:**
+
 - Modify: `backend/tunnel-manager/src/store/redis.rs` (`PUSH_RECENT_EVENT` const `:32-54`; the `eval` call in `push_recent_event` `:208-225`)
 - Add: `SEEN_TTL` const near `:18`
 - Test: `backend/tunnel-manager/src/store/redis.rs` (new ignored test; existing `recent_events_ring_dedupes_and_caps` stays green)
 
 **Interfaces:**
+
 - Consumes: nothing new.
 - Produces: `push_recent_event` signature unchanged. On-disk: dedup is now per-digest keys `events:seen:<digest>` with a TTL (no `events:seen` SET).
 
@@ -849,10 +860,12 @@ git commit -m "fix(store): self-cleaning recent-events dedup"
 `shutdown_signal()` returns and the runtime drops the flusher, losing the last ≤1s of counted moves even on a clean SIGTERM rollout. Extract the flush body into a reusable async fn and call it once on shutdown. Keeps at-most-once semantics (no retries).
 
 **Files:**
+
 - Modify: `backend/tunnel-manager/src/main.rs:113-126` (`spawn_action_flusher`), `:88` (startup), and the shutdown path around `:107-110`/`:128-147`
 - Test: `backend/tunnel-manager/src/main.rs` (new unit test on the extracted fn) — or co-locate in `stats_counter.rs` if `main.rs` has no test module
 
 **Interfaces:**
+
 - Consumes: `state.actions: LocalActionCounter` (has `drain_deltas() -> Vec<(String, u64)>`), `state.control: Arc<dyn ControlStore>` (has `add_actions(&str, u64)`).
 - Produces: `async fn flush_actions(state: &SharedState)` — drains the per-game deltas once and pushes them to the control store. Idempotent across calls (the watermark means a second call with no new moves is a no-op).
 
@@ -945,9 +958,10 @@ git commit -m "fix(stats): flush action counter on shutdown"
 
 ### Task 7: Document the aggregation invariant and fix ADR drift
 
-Record *why* the design is correct (so no one "fixes" the at-most-once counter into a double-counter) and reconcile ADR-0009 with the code.
+Record _why_ the design is correct (so no one "fixes" the at-most-once counter into a double-counter) and reconcile ADR-0009 with the code.
 
 **Files:**
+
 - Modify: `backend/tunnel-manager/src/store/mod.rs` (doc comments on `ControlStore`/`MpStore`)
 - Modify: `backend/tunnel-manager/src/stats_counter.rs:1-5` (tighten the loss-semantics comment)
 - Modify: `docs/decisions/0009-data-plane-local-control-plane-redis.md`
@@ -970,7 +984,7 @@ At the top of `store/mod.rs` (after the module doc at `:1-2`), add:
 
 - [ ] **Step 2: Tighten the counter comment**
 
-In `stats_counter.rs:1-5`, replace "At-most-once on a crash (lose ≤1 flush interval ...)" wording so it states the real scope: a failed flush (crash *or* a Redis error) drops that interval's delta permanently because the watermark already advanced; this is deliberate (undercount-safe), and a final drain runs on graceful shutdown (see `flush_actions`).
+In `stats_counter.rs:1-5`, replace "At-most-once on a crash (lose ≤1 flush interval ...)" wording so it states the real scope: a failed flush (crash _or_ a Redis error) drops that interval's delta permanently because the watermark already advanced; this is deliberate (undercount-safe), and a final drain runs on graceful shutdown (see `flush_actions`).
 
 ```rust
 //! At-most-once: `drain_deltas` advances the watermark before the push, so a failed flush
@@ -1004,7 +1018,7 @@ git commit -m "docs(store): record aggregation invariant"
 
 - [ ] **Fast suite green:** `cargo test -p tunnel-manager` (all non-ignored pass)
 - [ ] **Redis suite green:** `docker run --rm -p 6379:6379 redis:7` then
-  `TEST_REDIS_URL=redis://localhost:6379 cargo test -p tunnel-manager -- --ignored --test-threads=1`
+      `TEST_REDIS_URL=redis://localhost:6379 cargo test -p tunnel-manager -- --ignored --test-threads=1`
 - [ ] **Lint/format:** `cargo clippy -p tunnel-manager --all-targets` and `cargo fmt --check`
 - [ ] **Hot path untouched:** `git diff main -- backend/tunnel-manager/src/mp/ws.rs` is empty (except any unrelated pre-existing changes).
 

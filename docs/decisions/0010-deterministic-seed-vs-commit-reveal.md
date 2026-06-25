@@ -11,14 +11,14 @@ disputer replay identically. Two seeding strategies exist in the repo and a
 new game must pick one:
 
 - **Deterministic** — the seed is a pure function of `(tunnelId, …)`. Blackjack
-  uses this for its card stream (`blackjack.ts` header: *"bias-free without any
-  commit-reveal round-trips"*).
+  uses this for its card stream (`blackjack.ts` header: _"bias-free without any
+  commit-reveal round-trips"_).
 - **Commit-reveal** — both parties commit to secret randomness, then reveal.
   Used by battleship (0003), quantum poker (0008), and Super Auto Pets (0009).
 
 The ambiguity: chicken-cross and bomb-it ship PvP and both seed from
 `seedFromTunnelId(tunnelId)`. `docs/adding-a-tunnel-game.md` previously said PvP
-*should* use commit-reveal, which no shipped game does.
+_should_ use commit-reveal, which no shipped game does.
 
 ## Decision
 
@@ -36,8 +36,8 @@ card stream.
 
 - No commit-reveal handshake or SDK surface is added for cross/bomb-it (YAGNI),
   and they stay consistent with the blackjack precedent.
-- The distinguishing test for future games: *does any party hold hidden state it
-  could bias?* If yes → commit-reveal (0003/0008/0009). If the field is public
+- The distinguishing test for future games: _does any party hold hidden state it
+  could bias?_ If yes → commit-reveal (0003/0008/0009). If the field is public
   and symmetric → deterministic `tunnelId` seed.
 - A separate, real bias (chicken-cross's equal-score dead-heat awarding seat A)
   is fixed independently to a push; it was a tiebreak bug, not a seeding one.

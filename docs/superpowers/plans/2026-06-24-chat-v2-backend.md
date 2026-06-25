@@ -13,6 +13,7 @@
 ### Task 1: Add Ollama env vars to Config
 
 **Files:**
+
 - Modify: `backend/tunnel-manager/.env.example`
 - Modify: `backend/tunnel-manager/src/config.rs`
 - Test: `backend/tunnel-manager/src/config.rs` (existing unit tests)
@@ -94,6 +95,7 @@ git commit -m "build(chat): add OLLAMA_URL and OLLAMA_MODEL config"
 ### Task 2: Implement OllamaClient
 
 **Files:**
+
 - Create: `backend/tunnel-manager/src/ollama.rs`
 - Modify: `backend/tunnel-manager/src/main.rs` (mod declaration)
 - Test: `backend/tunnel-manager/src/ollama.rs`
@@ -232,6 +234,7 @@ git commit -m "feat(chat): add Ollama client"
 ### Task 3: Wire OllamaClient into AppState
 
 **Files:**
+
 - Modify: `backend/tunnel-manager/src/state.rs`
 - Modify: `backend/tunnel-manager/src/main.rs`
 - Modify: `backend/tunnel-manager/src/routes.rs` (test_support builder)
@@ -298,6 +301,7 @@ git commit -m "feat(chat): wire OllamaClient into AppState"
 ### Task 4: Add POST /v1/chat
 
 **Files:**
+
 - Modify: `backend/tunnel-manager/src/routes.rs`
 - Modify: `backend/tunnel-manager/src/main.rs`
 
@@ -399,6 +403,7 @@ git commit -m "feat(chat): add POST /v1/chat Ollama proxy"
 ### Task 5: Add GET /v1/chat/topic
 
 **Files:**
+
 - Modify: `backend/tunnel-manager/src/routes.rs`
 - Modify: `backend/tunnel-manager/src/main.rs`
 
@@ -482,6 +487,7 @@ git commit -m "feat(chat): add GET /v1/chat/topic"
 ### Task 6: Add bot-vs-bot transcript SSE
 
 **Files:**
+
 - Create: `backend/tunnel-manager/src/chat_store.rs`
 - Modify: `backend/tunnel-manager/src/main.rs`
 - Modify: `backend/tunnel-manager/src/state.rs`

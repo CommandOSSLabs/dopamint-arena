@@ -6,7 +6,7 @@
 
 ## 1. Goal
 
-Add **Chicken Cross** as a fully-wired arena game that plays over a *real* on-chain Sui
+Add **Chicken Cross** as a fully-wired arena game that plays over a _real_ on-chain Sui
 tunnel, parity with the existing self-play game (Blackjack). A wallet opens+funds two bot
 seats in one signature; two bot chickens race across a lane grid; every tick is a
 dual-signed off-chain state update; the winner is paid on-chain at cooperative close.
@@ -20,12 +20,14 @@ is **not** ported. Chicken Cross bends to the arena; never the reverse.
 ## 2. Scope
 
 **In scope (this build):**
+
 - One SDK protocol class `CrossProtocol` in `sui-tunnel-ts/src/protocol/cross.ts`.
 - One frontend game folder `frontend/src/games/chickenCross/` (self-play, blackjack-shaped).
 - One import line in `frontend/src/games/index.ts`.
 - Unit tests for the protocol and the pure session core.
 
 **Out of scope (explicitly deferred):**
+
 - **Human PvP** (the tic-tac-toe `DistributedTunnel` + `MpClient` path). Designed for in §11,
   built later as an additive second hook reusing the same `CrossProtocol`.
 - **Casino cashout / multiplier economy** (Stake-style "Chicken"). Different `applyMove`/
@@ -39,7 +41,7 @@ is **not** ported. Chicken Cross bends to the arena; never the reverse.
 ## 3. Constraints (load-bearing arena facts)
 
 - **`OffchainTunnel.step(move, by)` asserts `balanceA + balanceB === total` every step.** The
-  protocol must conserve the locked total in *every* reachable state.
+  protocol must conserve the locked total in _every_ reachable state.
 - **Settlement balances come from `protocol.balances(finalState)`.** To pay the winner, the
   terminal state's balances must be `(total, 0)` or `(0, total)`.
 - **`buildSettlement(createdAt)` uses `finalNonce = onchainNonce + 1` with `onchainNonce = 0`**
@@ -87,18 +89,18 @@ hazard positions**, so it fits the turn-based dual-signed channel.
 
 ```ts
 export interface CrossPlayer {
-  lane: number;        // 0 = spawn, increasing = forward; furthest progress is `score`
-  col: number;         // integer column 0..COLUMN_COUNT-1
-  alive: boolean;      // false only transiently within a tick; respawns same tick
-  score: number;       // max lane reached this run (survives respawn)
+  lane: number; // 0 = spawn, increasing = forward; furthest progress is `score`
+  col: number; // integer column 0..COLUMN_COUNT-1
+  alive: boolean; // false only transiently within a tick; respawns same tick
+  score: number; // max lane reached this run (survives respawn)
   invulnTicks: number; // post-respawn collision immunity, counts down
 }
 
 export interface CrossState {
-  tick: bigint;            // advances by 1 each applyMove; drives hazard positions
-  seed: bigint;            // hazard RNG seed, derived from tunnelId at initialState
+  tick: bigint; // advances by 1 each applyMove; drives hazard positions
+  seed: bigint; // hazard RNG seed, derived from tunnelId at initialState
   players: [CrossPlayer, CrossPlayer]; // index 0 = A, 1 = B
-  winner: Party | null;    // set when a player reaches WIN_LANE (or tick cap → furthest)
+  winner: Party | null; // set when a player reaches WIN_LANE (or tick cap → furthest)
   balanceA: bigint;
   balanceB: bigint;
   total: bigint;
@@ -106,17 +108,18 @@ export interface CrossState {
 
 // One tick command. Each side's intended hop for this tick (or undefined = stay).
 export interface CrossMove {
-  dirA?: CrossDir;   // "north" | "south" | "east" | "west"
+  dirA?: CrossDir; // "north" | "south" | "east" | "west"
   dirB?: CrossDir;
 }
 ```
 
 **`applyMove(state, move, by)`** (pure) advances the world exactly one tick:
+
 1. `tick' = tick + 1`.
 2. For each player, if a `dir` is given and the destination cell is **not** known-lethal at
    `tick'` and the player is not invuln-blocked, apply the hop (clamp col to `0..8`, lane `>= 0`).
-   *(Mirrors the reference: you cannot voluntarily hop into a known-lethal cell.)*
-3. **Log carry** on water lanes runs *before* the death check (a log can rescue you that tick):
+   _(Mirrors the reference: you cannot voluntarily hop into a known-lethal cell.)_
+3. **Log carry** on water lanes runs _before_ the death check (a log can rescue you that tick):
    a player standing on an overlapping log is carried by the log's per-tick column delta.
 4. **Collision / respawn:** for each player past invuln, if its cell is lethal at `tick'`
    (grass safe; road/rails lethal on hazard overlap; **water inverted** — open water kills,
@@ -130,6 +133,7 @@ export interface CrossMove {
 players) deterministically — self-play alternates/loops `by` like blackjack.
 
 **Hazard function** `hazardsAt(seed, laneIndex, tick) → occupied spans`, pure:
+
 - `laneKind(L)`: `L < 2` → grass; else `(L-2) % 6` → `{0,1: road, 2: water, 3: rails, 4,5: grass}`
   (exactly the reference cycle).
 - Per hazardous lane, a seeded `mulberry32(seed ⊕ laneIndex)` fixes phase/speed/width/count;
@@ -152,17 +156,17 @@ to `(total, 0)` / `(0, total)` only at the winning tick. Always sums to `total`.
 
 **Determinism:** state is a pure function of `(seed, ordered move list)`. `seed` lives in
 state and in `encodeState`, so an on-chain disputer (or the PvP counterparty later) replays
-identically. *This is the property that makes the game tunnel-settleable.*
+identically. _This is the property that makes the game tunnel-settleable._
 
 ## 6. Game → tunnel mapping
 
-| Game concept | Tunnel mechanism |
-| --- | --- |
-| One world tick (hazards advance + both bots may hop) | one `tunnel.step(move, by)` → one dual-signed `state_update` |
-| Both bots stake `S` | `openAndFundSelfPlay({ aAmount: S, bAmount: S })` → locked total `2S` |
-| Race in progress | `balances = (S, S)`, conserved every tick |
-| A bot reaches `WIN_LANE` | terminal state with `balances = (2S, 0)` to the winner |
-| Settle | `buildSettlement(createdAt)` (finalNonce 1) → `closeCooperative` → winner's seat holds `2S` |
+| Game concept                                         | Tunnel mechanism                                                                            |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| One world tick (hazards advance + both bots may hop) | one `tunnel.step(move, by)` → one dual-signed `state_update`                                |
+| Both bots stake `S`                                  | `openAndFundSelfPlay({ aAmount: S, bAmount: S })` → locked total `2S`                       |
+| Race in progress                                     | `balances = (S, S)`, conserved every tick                                                   |
+| A bot reaches `WIN_LANE`                             | terminal state with `balances = (2S, 0)` to the winner                                      |
+| Settle                                               | `buildSettlement(createdAt)` (finalNonce 1) → `closeCooperative` → winner's seat holds `2S` |
 
 Each tick is a real co-signed update — so a Chicken Cross session contributes genuine
 throughput to the live TPS panel, same as blackjack rounds.
@@ -172,16 +176,16 @@ throughput to the live TPS panel, same as blackjack rounds.
 1. `start(stake)`: guard `useCurrentAccount()`; `signExec` wraps `useSignAndExecuteTransaction`;
    `reads = client`.
 2. `a = createParticipant("chicken-a"); b = createParticipant("chicken-b");
-   protocol = new CrossProtocol()`.
+protocol = new CrossProtocol()`.
 3. `status = "funding"`: `tunnelId = await openAndFundSelfPlay({ reads, signExec, partyA, partyB,
-   aAmount: stakeBig, bAmount: stakeBig })`; `createdAt = await readCreatedAt(reads, tunnelId)`.
+aAmount: stakeBig, bAmount: stakeBig })`; `createdAt = await readCreatedAt(reads, tunnelId)`.
 4. `tunnel = OffchainTunnel.selfPlay(protocol, tunnelId, a.keyPair, b.keyPair, a.address,
-   b.address, { a: stakeBig, b: stakeBig })`; wire `tunnel.onUpdate = (_u, bytes) =>
-   report.bumpCounters({ updates:1, signatures:2, verifications:2, bytes })` **before** the first step.
+b.address, { a: stakeBig, b: stakeBig })`; wire `tunnel.onUpdate = (_u, bytes) =>
+report.bumpCounters({ updates:1, signatures:2, verifications:2, bytes })` **before** the first step.
 5. `report.setActive(2)`, `report.bumpCounters({ tunnelsOpened:1 })`, `setView(deriveView(tunnel.state))`,
    `status = "playing"`.
 6. Best-effort `getControlPlaneClient().registerSession({ userAddress, game:"chicken-cross",
-   tunnels:[{ tunnelId, partyA:a.address, partyB:b.address }] })` (`.catch(log)`); aggregated
+tunnels:[{ tunnelId, partyA:a.address, partyB:b.address }] })` (`.catch(log)`); aggregated
    `sendHeartbeat` ~1/s (windows `< 1000ms` skipped, force-flush before settle).
 7. `setInterval(STEP_MS)`: `stepSession(protocol, tunnel, Math.random)` →
    `protocol.randomMove(state, by, rng)` then `tunnel.step(move, by)`; re-derive view; on a
@@ -189,14 +193,15 @@ throughput to the live TPS panel, same as blackjack rounds.
    `protocol.isTerminal(state)` (or no move): stop timer, `flushHeartbeat(true)`, settle.
 8. `settleOnChain`: `status="settling"`; `setResult(sessionResult(...))`;
    `settlement = tunnel.buildSettlement(createdAt)`; `await closeCooperative({ signExec,
-   tunnelId, settlement })`; `status="settled"`; `report.bumpCounters({ tunnelsClosed:1,
-   settlements:1 })`, `report.setActive(0)`. Wrapped in try/catch → `status="error"`.
+tunnelId, settlement })`; `status="settled"`; `report.bumpCounters({ tunnelsClosed:1,
+settlements:1 })`, `report.setActive(0)`. Wrapped in try/catch → `status="error"`.
 
 `STEP_MS` ~ 250–400 ms (faster than blackjack's 900 ms — chicken hops are quick).
 
 ## 8. Rendering
 
 `CrossBoard` is pure presentation over `deriveView(state)`:
+
 - A vertical strip of lanes (`WIN_LANE + a few` rows), newest/forward lane at top.
 - Each lane row colored by kind (grass/road/water/rails) with hazard cells marked at their
   `tick` positions; two chicken tokens (🐔) at `(lane, col)`, distinct accent per side.
@@ -233,7 +238,7 @@ and the game appears in the dashboard automatically. Every backend call is best-
 ## 11. Faithfulness & deferred PvP
 
 **Refactor vs reference (authorized):** we drop continuous real-time hazard motion for
-per-tick deterministic positions; game *feel* is preserved by cosmetic animation, game *truth*
+per-tick deterministic positions; game _feel_ is preserved by cosmetic animation, game _truth_
 is discrete, replayable, and dual-signable. We drop the WS server, rooms, and Three.js
 entirely. We keep: lane cycle, hazard kinds, water-inverted + log-carry semantics, "can't hop
 into a known-lethal cell", respawn+invuln, furthest-lane scoring, race-to-a-fixed-lane win.
@@ -252,5 +257,8 @@ and a new game-id queue string (already supported by the backend).
 - **`encodeState` growth:** state is fixed-size (2 players), so per-update cost is O(1); no
   rolling digest needed (unlike chat/poker).
 - **@mysten/sui version skew / PACKAGE_ID:** already handled by the shared `onchain/tunnelTx.ts`
-  + vite `dedupe`/`define`; we add no new on-chain glue, so we inherit the working setup.
+  - vite `dedupe`/`define`; we add no new on-chain glue, so we inherit the working setup.
+
+```
+
 ```

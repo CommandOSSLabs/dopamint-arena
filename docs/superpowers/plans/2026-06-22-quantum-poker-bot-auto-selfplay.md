@@ -40,10 +40,12 @@
 ## Task 1: Persistent poker bot wallets (`bots.ts`)
 
 **Files:**
+
 - Create: `frontend/src/games/quantumPoker/bots.ts`
 - Test: `frontend/src/games/quantumPoker/bots.test.ts`
 
 **Interfaces:**
+
 - Consumes: `sui-tunnel-ts/core/crypto` (`generateKeyPair`, `keyPairFromSecret`, `KeyPair`), `@mysten/sui` keypair/tx/faucet utils.
 - Produces:
   - `interface QuantumPokerBot { coreKey: KeyPair; keypair: Ed25519Keypair; address: string; publicKey: Uint8Array }`
@@ -244,10 +246,12 @@ git commit -m "feat(poker): add persistent self-play bot wallets"
 ## Task 2: Pure self-play engine (`pokerSelfPlay.ts`)
 
 **Files:**
+
 - Create: `frontend/src/games/quantumPoker/pokerSelfPlay.ts`
 - Test: `frontend/src/games/quantumPoker/pokerSelfPlay.test.ts`
 
 **Interfaces:**
+
 - Consumes: `OffchainTunnel` (`sui-tunnel-ts/core/tunnel`), `PokerState`/`PokerMove`/`PokerPhase`/`QuantumPokerProtocol` (`sui-tunnel-ts/protocol/quantumPoker`), `Party`/`otherParty` (`sui-tunnel-ts/protocol/Protocol`), `createQuantumPokerKit` (`@/agent/games/quantumPoker/kit`), `BotContext`/`GameBot` (`@/agent/gameKit`), `DEFAULT_QUANTUM_POKER_BOT_PROFILES`/`QuantumPokerBotProfile` (`sui-tunnel-ts/protocol/quantumPokerPersona`).
 - Produces:
   - `type PokerTunnel = OffchainTunnel<PokerState, PokerMove>`
@@ -312,8 +316,20 @@ function newTunnel() {
 test("two personas self-play a full poker tunnel to done, balance conserved", () => {
   const tunnel = newTunnel();
   const ctx: BotContext = { rngForSeat: (s) => mulberry32(s === "A" ? 1 : 2) };
-  const botA = makeSeatBot("A", STAKE, HAND_CAP, { name: "Nari", persona: "tight" }, ctx);
-  const botB = makeSeatBot("B", STAKE, HAND_CAP, { name: "Jules", persona: "loose" }, ctx);
+  const botA = makeSeatBot(
+    "A",
+    STAKE,
+    HAND_CAP,
+    { name: "Nari", persona: "tight" },
+    ctx,
+  );
+  const botB = makeSeatBot(
+    "B",
+    STAKE,
+    HAND_CAP,
+    { name: "Jules", persona: "loose" },
+    ctx,
+  );
 
   const steps = runPokerSelfPlayToEnd(tunnel, botA, botB, 5000);
 
@@ -325,8 +341,20 @@ test("two personas self-play a full poker tunnel to done, balance conserved", ()
 test("stepPokerAuto returns null at terminal", () => {
   const tunnel = newTunnel();
   const ctx: BotContext = { rngForSeat: (s) => mulberry32(s === "A" ? 1 : 2) };
-  const botA = makeSeatBot("A", STAKE, HAND_CAP, { name: "Nari", persona: "tight" }, ctx);
-  const botB = makeSeatBot("B", STAKE, HAND_CAP, { name: "Jules", persona: "loose" }, ctx);
+  const botA = makeSeatBot(
+    "A",
+    STAKE,
+    HAND_CAP,
+    { name: "Nari", persona: "tight" },
+    ctx,
+  );
+  const botB = makeSeatBot(
+    "B",
+    STAKE,
+    HAND_CAP,
+    { name: "Jules", persona: "loose" },
+    ctx,
+  );
   runPokerSelfPlayToEnd(tunnel, botA, botB, 5000);
   assert.equal(stepPokerAuto(tunnel, botA, botB, 1n), null);
 });
@@ -334,8 +362,20 @@ test("stepPokerAuto returns null at terminal", () => {
 test("legalPokerActions allows check when nobody has bet this street", () => {
   const tunnel = newTunnel();
   const ctx: BotContext = { rngForSeat: (s) => mulberry32(s === "A" ? 1 : 2) };
-  const botA = makeSeatBot("A", STAKE, HAND_CAP, { name: "Nari", persona: "tight" }, ctx);
-  const botB = makeSeatBot("B", STAKE, HAND_CAP, { name: "Jules", persona: "loose" }, ctx);
+  const botA = makeSeatBot(
+    "A",
+    STAKE,
+    HAND_CAP,
+    { name: "Nari", persona: "tight" },
+    ctx,
+  );
+  const botB = makeSeatBot(
+    "B",
+    STAKE,
+    HAND_CAP,
+    { name: "Jules", persona: "loose" },
+    ctx,
+  );
   // Advance until a betting phase with equal street bets is reached.
   let ts = 1n;
   for (let i = 0; i < 200; i++) {
@@ -511,10 +551,12 @@ git commit -m "feat(poker): add pure self-play engine and legal actions"
 ## Task 3: Human router step (extend `pokerSelfPlay.ts`)
 
 **Files:**
+
 - Modify: `frontend/src/games/quantumPoker/pokerSelfPlay.ts`
 - Test: `frontend/src/games/quantumPoker/pokerSelfPlay.test.ts` (append)
 
 **Interfaces:**
+
 - Consumes: everything from Task 2.
 - Produces:
   - `type PokerHumanStep = { kind: "applied"; by: Party; move: PokerMove } | { kind: "await-human" } | { kind: "idle" }`
@@ -529,8 +571,20 @@ import { stepPokerWithHuman, applyHumanMove } from "./pokerSelfPlay";
 test("human router pauses on the human's betting turn but auto-runs everything else", () => {
   const tunnel = newTunnel();
   const ctx: BotContext = { rngForSeat: (s) => mulberry32(s === "A" ? 1 : 2) };
-  const botA = makeSeatBot("A", STAKE, HAND_CAP, { name: "You", persona: "balanced" }, ctx);
-  const botB = makeSeatBot("B", STAKE, HAND_CAP, { name: "Jules", persona: "loose" }, ctx);
+  const botA = makeSeatBot(
+    "A",
+    STAKE,
+    HAND_CAP,
+    { name: "You", persona: "balanced" },
+    ctx,
+  );
+  const botB = makeSeatBot(
+    "B",
+    STAKE,
+    HAND_CAP,
+    { name: "Jules", persona: "loose" },
+    ctx,
+  );
 
   let ts = 1n;
   let awaited = false;
@@ -618,9 +672,11 @@ git commit -m "feat(poker): add human-vs-bot move router"
 ## Task 4: Shared settle helper (`pokerSettle.ts`)
 
 **Files:**
+
 - Create: `frontend/src/games/quantumPoker/pokerSettle.ts`
 
 **Interfaces:**
+
 - Consumes: `Transcript` (`sui-tunnel-ts/proof/transcript`), `getControlPlaneClient` (`@/backend/controlPlane`), `coSignedToSettleRequest` (`@/backend/settleRequest`), `closeCooperativeWithRoot`/`SignExec`/`SuiReads`/`readCreatedAt` (`@/onchain/tunnelTx`), `PokerTunnel` (Task 2).
 - Produces: `settlePokerTunnel(opts): Promise<void>` where `opts = { tunnel: PokerTunnel; transcript: Transcript; tunnelId: string; createdAt: bigint; fallbackSignExec: SignExec }`.
 
@@ -635,10 +691,7 @@ git commit -m "feat(poker): add human-vs-bot move router"
 import type { Transcript } from "sui-tunnel-ts/proof/transcript";
 import { getControlPlaneClient } from "@/backend/controlPlane";
 import { coSignedToSettleRequest } from "@/backend/settleRequest";
-import {
-  closeCooperativeWithRoot,
-  type SignExec,
-} from "@/onchain/tunnelTx";
+import { closeCooperativeWithRoot, type SignExec } from "@/onchain/tunnelTx";
 import type { PokerTunnel } from "./pokerSelfPlay";
 
 export async function settlePokerTunnel(opts: {
@@ -686,9 +739,11 @@ git commit -m "feat(poker): add shared root-anchored settle helper"
 ## Task 5: Auto session hook (`useQuantumPokerAuto.ts`)
 
 **Files:**
+
 - Create: `frontend/src/games/quantumPoker/useQuantumPokerAuto.ts`
 
 **Interfaces:**
+
 - Consumes: `bots.ts` (Task 1), `pokerSelfPlay.ts` (Tasks 2–3), `pokerSettle.ts` (Task 4), `OffchainTunnel.selfPlay`, `Transcript`, `openAndFundSelfPlay`/`readCreatedAt`/`SignExec` (`@/onchain/tunnelTx`), `registerWindowDisposer` (`@/lib/windowSessions`), dapp-kit hooks, `QUANTUM_POKER_STAKE`/`QUANTUM_POKER_HAND_CAP` (`./constants`).
 - Produces: `useQuantumPokerAuto(windowId): QuantumPokerAutoSession` with snapshot fields `{ status: "idle"|"funding"|"running"|"ended"|"error"; personas: { a: string; b: string } | null; score: { a: number; b: number }; tunnels: number; actions: number; balances: { a: bigint; b: bigint }; funded: boolean; canFundFromWallet: boolean; error: string | null }` and actions `{ fund(); fundFromWallet(); startAuto(); stopAuto(); reset() }`.
 
@@ -748,8 +803,20 @@ import { settlePokerTunnel } from "./pokerSettle";
 const personaA = randomPokerPersona(Math.random);
 const personaB = randomPokerPersona(Math.random);
 this.personas = { a: personaA.name, b: personaB.name };
-const botA: PokerSeatBot = makeSeatBot("A", STAKE, HAND_CAP, personaA, LIVE_BOT_CONTEXT);
-const botB: PokerSeatBot = makeSeatBot("B", STAKE, HAND_CAP, personaB, LIVE_BOT_CONTEXT);
+const botA: PokerSeatBot = makeSeatBot(
+  "A",
+  STAKE,
+  HAND_CAP,
+  personaA,
+  LIVE_BOT_CONTEXT,
+);
+const botB: PokerSeatBot = makeSeatBot(
+  "B",
+  STAKE,
+  HAND_CAP,
+  personaB,
+  LIVE_BOT_CONTEXT,
+);
 ```
 
 5. Open + tunnel (replace battleship's `openAndFundSelfPlay` call args with equal `STAKE` and poker keys):
@@ -776,7 +843,12 @@ const tunnel: PokerTunnel = OffchainTunnel.selfPlay(
 );
 tunnel.onUpdate = (u, bytes) => {
   transcript.append(u);
-  this.deps?.report.bumpCounters({ updates: 1, signatures: 2, verifications: 2, bytes });
+  this.deps?.report.bumpCounters({
+    updates: 1,
+    signatures: 2,
+    verifications: 2,
+    bytes,
+  });
 };
 ```
 
@@ -840,9 +912,11 @@ git commit -m "feat(poker): add auto self-play session hook"
 ## Task 6: Auto window (`QuantumPokerBotVsBotWindow.tsx`)
 
 **Files:**
+
 - Rewrite: `frontend/src/games/quantumPoker/QuantumPokerBotVsBotWindow.tsx`
 
 **Interfaces:**
+
 - Consumes: `useQuantumPokerAuto` (Task 5), `GameWindowProps` (`../types`).
 - Produces: default-shaped `QuantumPokerBotVsBotWindow({ windowId, onExit })` component.
 
@@ -921,7 +995,8 @@ export function QuantumPokerBotVsBotWindow({
         {!s.funded && (
           <section className="rounded-md border border-white/10 bg-white/[0.04] p-2 text-[10px]">
             <div className="mb-1 text-slate-400">
-              Fund both bots once (stakes are refunded each close; only gas is spent).
+              Fund both bots once (stakes are refunded each close; only gas is
+              spent).
             </div>
             <div className="flex gap-1.5">
               <button
@@ -970,11 +1045,15 @@ export function QuantumPokerBotVsBotWindow({
         <section className="grid grid-cols-3 gap-1.5 rounded-md border border-white/10 bg-black/20 p-2 text-center">
           <div>
             <div className="text-[9px] uppercase text-slate-500">Tunnels</div>
-            <div className="text-[12px] font-semibold tabular-nums">{s.tunnels}</div>
+            <div className="text-[12px] font-semibold tabular-nums">
+              {s.tunnels}
+            </div>
           </div>
           <div>
             <div className="text-[9px] uppercase text-slate-500">Actions</div>
-            <div className="text-[12px] font-semibold tabular-nums">{s.actions}</div>
+            <div className="text-[12px] font-semibold tabular-nums">
+              {s.actions}
+            </div>
           </div>
           <div>
             <div className="text-[9px] uppercase text-slate-500">Status</div>
@@ -1010,10 +1089,12 @@ git commit -m "feat(poker): rebuild auto window on local self-play"
 ## Task 7: Play-vs-Bot session + window
 
 **Files:**
+
 - Create: `frontend/src/games/quantumPoker/useQuantumPokerBot.ts`
 - Rewrite: `frontend/src/games/quantumPoker/QuantumPokerWindow.tsx`
 
 **Interfaces:**
+
 - `useQuantumPokerBot.ts` consumes: `createParticipant` (`sui-tunnel-ts/core/keys`), `OffchainTunnel.selfPlay`, `Transcript`, `QuantumPokerProtocol`/`PokerMove`/`PokerState`, `openAndFundSelfPlay`/`readCreatedAt`/`SignExec`/`SuiReads` (`@/onchain/tunnelTx`), `pokerSelfPlay.ts` (Task 2–3), `pokerSettle.ts` (Task 4), `registerWindowDisposer`, dapp-kit hooks, `QUANTUM_POKER_STAKE`/`QUANTUM_POKER_HAND_CAP`.
 - `useQuantumPokerBot.ts` produces: `useQuantumPokerBot(windowId): QuantumPokerBotSession` with snapshot `{ status: "idle"|"funding"|"playing"|"awaitHuman"|"settling"|"settled"|"error"; state: PokerState | null; humanHoles: number[]; legal: PokerLegalActions | null; error: string | null }` and actions `{ open(); act(move: PokerMove); reset() }`.
 - `QuantumPokerWindow.tsx` consumes `useQuantumPokerBot`; keeps its existing presentational sub-components (`Card`, `CardRow`, `PlayerSeat`, `ChipStack`) verbatim.
@@ -1135,7 +1216,12 @@ class BotSession {
     this.snap = {
       status: this.status,
       state: s,
-      humanHoles: s && this.botA ? (this.botA as unknown as { /* kit bot */ }) && knownHoles(this.botA, s) : [],
+      humanHoles:
+        s && this.botA
+          ? (this.botA as unknown as {
+              /* kit bot */
+            }) && knownHoles(this.botA, s)
+          : [],
       legal:
         this.status === "awaitHuman" && s ? legalPokerActions(s, HUMAN) : null,
       error: this.error,
@@ -1170,7 +1256,12 @@ class BotSession {
   open = () => {
     const deps = this.deps;
     if (!deps) return;
-    if (this.status !== "idle" && this.status !== "settled" && this.status !== "error") return;
+    if (
+      this.status !== "idle" &&
+      this.status !== "settled" &&
+      this.status !== "error"
+    )
+      return;
     if (!deps.account) {
       this.fail("connect a wallet to stake the tunnel");
       return;
@@ -1215,8 +1306,20 @@ class BotSession {
         this.tunnelId = tunnelId;
         this.createdAt = createdAt;
         this.ts = 1n;
-        this.botA = makeSeatBot("A", STAKE, HAND_CAP, randomPokerPersona(Math.random), LIVE_BOT_CONTEXT);
-        this.botB = makeSeatBot("B", STAKE, HAND_CAP, randomPokerPersona(Math.random), LIVE_BOT_CONTEXT);
+        this.botA = makeSeatBot(
+          "A",
+          STAKE,
+          HAND_CAP,
+          randomPokerPersona(Math.random),
+          LIVE_BOT_CONTEXT,
+        );
+        this.botB = makeSeatBot(
+          "B",
+          STAKE,
+          HAND_CAP,
+          randomPokerPersona(Math.random),
+          LIVE_BOT_CONTEXT,
+        );
         this.status = "playing";
         this.emit();
         void this.drive(myGen);
@@ -1543,15 +1646,18 @@ git commit -m "feat(poker): rebuild bot lane as human-vs-bot self-play"
 ## Task 8: Delete the server and wire-up cleanup
 
 **Files:**
+
 - Delete: `frontend/src/games/quantumPoker/serverClient.ts`, `serverRuntime.ts`, `runtime.ts`, `packages/server/` (whole dir).
 - Modify: `frontend/src/games/quantumPoker/index.ts` (lane comment), `QuantumPokerModeWindow.tsx` (props passed unchanged; confirm it still compiles).
 
 - [ ] **Step 1: Confirm nothing else imports the deleted modules**
 
 Run:
+
 ```bash
 cd frontend && grep -rnE "serverClient|serverRuntime|\\./runtime|QuantumPokerServerClient|runBotVsBot" src --include="*.ts" --include="*.tsx" | grep -v node_modules
 ```
+
 Expected: only matches inside the files being deleted/rewritten (none in `QuantumPokerWindow.tsx`/`QuantumPokerBotVsBotWindow.tsx` after Tasks 6–7). If `QuantumPokerWindow.tsx` still references `serverRuntime`/`runtime`, those are leftovers — remove them.
 
 - [ ] **Step 2: Delete the files**
@@ -1578,10 +1684,12 @@ Replace the comment block above `register(...)` with:
 - [ ] **Step 4: Typecheck + run all poker unit tests**
 
 Run:
+
 ```bash
 cd frontend && npx tsc --noEmit && \
   npx tsx --test src/games/quantumPoker/bots.test.ts src/games/quantumPoker/pokerSelfPlay.test.ts
 ```
+
 Expected: typecheck clean; all tests PASS.
 
 - [ ] **Step 5: Lint the changed package**
@@ -1601,6 +1709,7 @@ git commit -m "refactor(poker): delete poker node server and shims"
 ## Self-Review
 
 **Spec coverage:**
+
 - Modes (Bot/Auto/PvP) — Tasks 5–7 (Bot/Auto), PvP untouched. ✓
 - Persona random per tunnel — `randomPokerPersona` (Task 2), used in Tasks 5 & 7. ✓
 - Engine `OffchainTunnel.selfPlay` + kit bots, no moveCodec — Task 2. ✓

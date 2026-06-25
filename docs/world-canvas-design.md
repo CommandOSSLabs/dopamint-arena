@@ -2,7 +2,7 @@
 
 > **Status:** Research / design foundation (pre-ADR). Read-only study; no code changed.
 > **Author:** design spike. **Date:** 2026-06-23.
-> **Scope:** A *new, separate* arena game — an **infinite**, N-painter collaborative pixel canvas,
+> **Scope:** A _new, separate_ arena game — an **infinite**, N-painter collaborative pixel canvas,
 > driven by an "Agent AI" button that spawns bots painting forever alongside humans, optionally
 > layered on an OpenStreetMap basemap. Does **not** touch pixel-duel (the 2-party fog-of-war duel),
 > which stays as-is.
@@ -13,7 +13,7 @@
 
 **Wplace** (https://wplace.live) is a single, global, real-time **collaborative** pixel canvas
 painted over the world map: anyone places a pixel, a per-pixel/per-painter **cooldown** rate-limits
-them, and the art accretes globally and permanently. There is no winner — the wall *is* the artifact.
+them, and the art accretes globally and permanently. There is no winner — the wall _is_ the artifact.
 
 **The World is Your Canvas** is that, on the Sui tunnel arena, with one north-star reframing: **1 painted
 pixel = 1 co-signed tunnel move = 1 TPS.** This is the standard Sui **state-channel** model — the same one
@@ -21,7 +21,7 @@ every other arena game (tic-tac-toe, battleship, blackjack, …) runs on: paints
 hot path** for throughput, but each is a real dual-signed state transition **secured and settled on-chain** —
 the tunnel **opens on-chain** and **periodically anchors its co-signed state root on-chain** via
 `close_cooperative_with_root`. "On-chain game, off-chain execution," not "off-chain game." The whole point
-is to turn a crowd of painters — human *and* agent — into a fleet of high-frequency tunnels and show the
+is to turn a crowd of painters — human _and_ agent — into a fleet of high-frequency tunnels and show the
 throughput live on the arena dashboard. The canvas is **infinite / unbounded**: it grows in every direction,
 stored sparsely (only painted cells), so play never hits a wall.
 
@@ -36,15 +36,15 @@ The product is built around one button. The canvas is shared and infinite; two k
   shared canvas. The agents never stop until explicitly closed → an endless stream of co-signed pixels →
   **endless TPS**.
 
-Humans and agents paint the *same* canvas at the same time; every paint from either side is one co-signed
+Humans and agents paint the _same_ canvas at the same time; every paint from either side is one co-signed
 tunnel tx. The TPS dial is literally driven by how many Agent-AI bots are live and how fast they stroke —
 spawn more agents, the number climbs. This is the demo: a human paints a few deliberate pixels while a
 fleet of clicked-into-existence agents floods the wall around them, and the dashboard shows the throughput.
 
 **Relation to pixel-duel / the deferred Paint Wall.** pixel-duel (on `feat/pixel-duel`) is a strict
 **2-party** game: two players, fog-of-war, deterministic turns, settle to a winner. Its ADR explicitly
-**deferred** the "Paint Wall" — an N-painter shared canvas — noting it is only reachable *"by composing
-2-party tunnels."* The World is Your Canvas is that deferred game, built as a **separate** game package. It
+**deferred** the "Paint Wall" — an N-painter shared canvas — noting it is only reachable _"by composing
+2-party tunnels."_ The World is Your Canvas is that deferred game, built as a **separate** game package. It
 shares patterns and infra with pixel-duel but **none of its rules**: no fog, no turns, no winner, unlimited
 painters, transparent global state.
 
@@ -52,7 +52,7 @@ The hard constraint that makes this a design problem (not a copy-paste) is in
 [`sui_tunnel/sources/tunnel.move`](../sui_tunnel/sources/tunnel.move): a tunnel has exactly
 `party_a` and `party_b`, and `close_cooperative_with_root<T>` (L1065) settles on exactly **two**
 signatures `sig_a`, `sig_b`. **There is no N-party tunnel.** Everything below is about getting an
-N-painter wall out of a 2-party primitive *without forking the Move contract*.
+N-painter wall out of a 2-party primitive _without forking the Move contract_.
 
 ---
 
@@ -61,12 +61,12 @@ N-painter wall out of a 2-party primitive *without forking the Move contract*.
 A tunnel is two parties co-signing a shared state. A wall is N painters (humans + agents) sharing one
 canvas. The two do not line up. Four ways to bridge them:
 
-| # | Architecture | Move change | Per-pixel TPS | Settlement | Verdict |
-|---|---|---|---|---|---|
-| **A** | **Hub-and-spoke** — each painter holds a 2-party tunnel with a Canvas Hub agent | **none** | 1 / pixel | per-painter cooperative close | **RECOMMENDED** |
-| B | Region-sharded — one 2-party tunnel per map tile, painters pair into it | none | ~1/N (idle seats) | tile-consensus (not 2-party) | no — reintroduces N-party at the tile |
-| C | Relay-broadcast — relay fans every move to all painters; all co-sign one wall | **yes** (N-sig close) | N on one tx (bad) | N signatures on-chain | no — needs the forked contract this game exists to avoid |
-| D | Compose-per-pixel — a fresh transient tunnel per pixel, then aggregate | none | open/close churn | one settle *per pixel* | no — open/fund/close overhead per pixel kills it |
+| #     | Architecture                                                                    | Move change           | Per-pixel TPS     | Settlement                    | Verdict                                                  |
+| ----- | ------------------------------------------------------------------------------- | --------------------- | ----------------- | ----------------------------- | -------------------------------------------------------- |
+| **A** | **Hub-and-spoke** — each painter holds a 2-party tunnel with a Canvas Hub agent | **none**              | 1 / pixel         | per-painter cooperative close | **RECOMMENDED**                                          |
+| B     | Region-sharded — one 2-party tunnel per map tile, painters pair into it         | none                  | ~1/N (idle seats) | tile-consensus (not 2-party)  | no — reintroduces N-party at the tile                    |
+| C     | Relay-broadcast — relay fans every move to all painters; all co-sign one wall   | **yes** (N-sig close) | N on one tx (bad) | N signatures on-chain         | no — needs the forked contract this game exists to avoid |
+| D     | Compose-per-pixel — a fresh transient tunnel per pixel, then aggregate          | none                  | open/close churn  | one settle _per pixel_        | no — open/fund/close overhead per pixel kills it         |
 
 ### Recommendation: A — Hub-and-spoke
 
@@ -93,7 +93,7 @@ them.
   throughput model. TPS scales ~linearly with painter count (= spawned agents + humans) until the hub's
   signing rate or relay bandwidth saturates.
 - **The shared wall lives in the hub, not in any tunnel's state.** This is the key insight: each
-  painter's tunnel state is *that painter's own stroke list* (proves "painter X co-signed these pixel-
+  painter's tunnel state is _that painter's own stroke list_ (proves "painter X co-signed these pixel-
   ops" — provenance + TPS). The **global** canvas is the hub's aggregate across all tunnels; the hub
   is the ordering authority that merges concurrent writes (per-pixel **last-write-wins by timestamp**,
   cooldown enforced in `applyMove`). No tunnel ever needs to know about another painter.
@@ -105,9 +105,9 @@ them.
   "on-chain": the paints execute off the hot path, but their co-signed state is committed on-chain at every
   checkpoint (and the full transcript is archivable to Walrus, exactly like the finite games' settle).
 
-**Honest caveat on the TPS claim — what's actually shipped.** A painter↔hub tunnel is a *genuine* two-party
+**Honest caveat on the TPS claim — what's actually shipped.** A painter↔hub tunnel is a _genuine_ two-party
 tunnel **only if the hub is a real separate party** (its own key, its own process) co-signing over the real
-relay. **The shipped Phase 0 is self-play**: each painter (human and every Agent-AI) holds *both* seat
+relay. **The shipped Phase 0 is self-play**: each painter (human and every Agent-AI) holds _both_ seat
 keypairs and co-signs both sides locally on its **own** 2-party tunnel. This still respects the framework's
 2-party rule (every tunnel has exactly two seats) and produces real dual-signed, on-chain-settled moves —
 but it is **self-play TPS**, and should be labelled as such (the dashboard chip reads "Self-play"). Phase 1
@@ -125,30 +125,30 @@ pixel. All three lose to A on either Move-change cost or per-pixel overhead.
 **LIGHTWEIGHT is the #1 constraint.** A real-time pixel canvas must stay performant and trivial to run.
 The decision that follows from that: **the map is not in the critical path** — the canvas is a self-
 contained infinite chunked grid that runs with **zero** map dependency (Phase 0), and a basemap is layered
-*under* it only when geographic anchoring is actually wanted (Phase 1). Pick the lightest thing that proves
+_under_ it only when geographic anchoring is actually wanted (Phase 1). Pick the lightest thing that proves
 the behaviour at each phase.
 
 ### 3.1 Map library — lightest-first, Mapbox rejected
 
-| Library | Bundle (gz) | Token / cost | Rendering | Verdict |
-|---|---|---|---|---|
-| **Canvas-only** (no map) | **0 KB** | free | native Canvas2D | **Phase 0** — lightest possible; infinite grid, no basemap |
-| **MapLibre GL** | ~160 KB | free, no token | WebGL vector | **Phase 1 default** — OSS Mapbox fork, drop-in, OSM basemap |
-| **Leaflet** | ~40 KB | free, no token | Canvas2D raster tiles | Phase 1 light-budget alt (raster, less crisp) |
-| **Mapbox GL JS** | ~180 KB | **token + usage pricing** | WebGL vector | **NO** — auth friction, pricing-at-scale risk, bundle bloat for a pixel overlay |
-| deck.gl | 200+ KB | free | WebGL data-viz | NO — over-engineered for a pixel grid |
+| Library                  | Bundle (gz) | Token / cost              | Rendering             | Verdict                                                                         |
+| ------------------------ | ----------- | ------------------------- | --------------------- | ------------------------------------------------------------------------------- |
+| **Canvas-only** (no map) | **0 KB**    | free                      | native Canvas2D       | **Phase 0** — lightest possible; infinite grid, no basemap                      |
+| **MapLibre GL**          | ~160 KB     | free, no token            | WebGL vector          | **Phase 1 default** — OSS Mapbox fork, drop-in, OSM basemap                     |
+| **Leaflet**              | ~40 KB      | free, no token            | Canvas2D raster tiles | Phase 1 light-budget alt (raster, less crisp)                                   |
+| **Mapbox GL JS**         | ~180 KB     | **token + usage pricing** | WebGL vector          | **NO** — auth friction, pricing-at-scale risk, bundle bloat for a pixel overlay |
+| deck.gl                  | 200+ KB     | free                      | WebGL data-viz        | NO — over-engineered for a pixel grid                                           |
 
 **Verdicts:**
 
 - **Phase 0 → canvas-only.** No basemap, 0 KB added, maximum pixel-render perf (direct draw, no layer
   translation), full control over the infinite pan/zoom + chunk math. This is the lightweight MVP.
 - **Phase 1 → MapLibre GL** when the OSM basemap and geo-anchoring land. Identical WebGL performance to
-  Mapbox, **no token, no pricing, no auth** — and if we ever *did* want Mapbox, migration is a one-line
+  Mapbox, **no token, no pricing, no auth** — and if we ever _did_ want Mapbox, migration is a one-line
   import swap. The pixel grid sits on top as a custom layer or a viewport-synced canvas overlay.
 - **Leaflet** is the fallback only if 160 KB is judged too heavy: ~4× lighter, but raster tiles (less
   crisp at zoom extremes) and Canvas2D rather than WebGL. Fine for cooldown-gated UX; choose only if
   load-time telemetry demands it.
-- **Do NOT use Mapbox GL JS** — it is the heaviest *and* the only one with token + usage-pricing friction.
+- **Do NOT use Mapbox GL JS** — it is the heaviest _and_ the only one with token + usage-pricing friction.
   MapLibre is the free, faster-onboarding, drop-in equivalent. There is no scenario in this game where
   Mapbox wins.
 
@@ -163,7 +163,11 @@ tile texel).
 
 ```typescript
 // lat/long → world-pixel (continuous coords at zoom z)
-function latLonToWorldPixel(lat: number, lon: number, z: number): { x: number; y: number } {
+function latLonToWorldPixel(
+  lat: number,
+  lon: number,
+  z: number,
+): { x: number; y: number } {
   const n = 256 * 2 ** z;
   const x = ((lon + 180) / 360) * n;
   const sinLat = Math.sin((lat * Math.PI) / 180);
@@ -172,10 +176,15 @@ function latLonToWorldPixel(lat: number, lon: number, z: number): { x: number; y
 }
 
 // world-pixel → lat/long (inverse, for "what did I just click")
-function worldPixelToLatLon(x: number, y: number, z: number): { lat: number; lon: number } {
+function worldPixelToLatLon(
+  x: number,
+  y: number,
+  z: number,
+): { lat: number; lon: number } {
   const n = 256 * 2 ** z;
   const lon = (x / n) * 360 - 180;
-  const lat = (Math.atan(Math.sinh(Math.PI * (1 - 2 * (y / n)))) * 180) / Math.PI;
+  const lat =
+    (Math.atan(Math.sinh(Math.PI * (1 - 2 * (y / n)))) * 180) / Math.PI;
   return { lat, lon };
 }
 ```
@@ -212,15 +221,19 @@ pipeline:
   capacity. Memory stays ~constant regardless of how big the wall grows.
 - **Dirty-chunk redraw.** One `OffscreenCanvas(256,256)` per resident chunk. Incoming paint deltas mark
   their chunk **dirty**; once per `requestAnimationFrame` tick, only dirty chunks are re-rasterized, then
-  *all* visible chunk canvases are blitted to the screen canvas in a single composite. Redraw cost is
-  bound by *new pixels this frame*, not by total wall size — network-RTT bound, not CPU bound.
+  _all_ visible chunk canvases are blitted to the screen canvas in a single composite. Redraw cost is
+  bound by _new pixels this frame_, not by total wall size — network-RTT bound, not CPU bound.
 - **rAF batching.** A single render loop per viewport (mounted once, torn down on unmount); inbound deltas
   are queued and applied once per frame, never per-message — so a flood of agent pixels still costs one
   composite per frame.
 
 ```typescript
 // one render tick: redraw only dirty chunks, then blit visible ones
-function renderFrame(screen: CanvasRenderingContext2D, cam: Camera, vis: ChunkRange) {
+function renderFrame(
+  screen: CanvasRenderingContext2D,
+  cam: Camera,
+  vis: ChunkRange,
+) {
   for (const key of dirty) redrawChunkOffscreen(key); // rasterize sparse cells → 256×256 canvas
   dirty.clear();
   for (let cx = vis.minX; cx <= vis.maxX; cx++)
@@ -264,7 +277,8 @@ Presence rides the relay/SSE the arena already runs.
 ## 4. TPS story and economy
 
 ### TPS — driven by the Agent-AI fleet
-The throughput model is fleet-of-tunnels, not loops-on-one-tunnel — and the "Agent AI" button *is* the
+
+The throughput model is fleet-of-tunnels, not loops-on-one-tunnel — and the "Agent AI" button _is_ the
 throttle the user controls:
 
 ```
@@ -285,13 +299,14 @@ effective TPS = (live Agent-AI bots + human painters) × (pixels/sec per tunnel)
   action counter on a 500 ms tick, per game (`per_game` map keyed by the game id string). The dashboard
   log-normalizes (`log10(tps)/6`) over an SSE feed.
 - **Reporting contract** ([`docs/adding-a-tunnel-game.md`](adding-a-tunnel-game.md) §Reporting TPS):
-  - *Self-play (Phase 0 Agent-AI bots):* the client sends throttled **action deltas** via `flushHeartbeat` —
+  - _Self-play (Phase 0 Agent-AI bots):_ the client sends throttled **action deltas** via `flushHeartbeat` —
     one action per verified `tunnel.step()`, never per render/retry; force-flush the tail on settle.
-  - *PvP / human-vs-hub (Phase 1):* the **relay counts server-side** as it ingests co-signed frames,
+  - _PvP / human-vs-hub (Phase 1):_ the **relay counts server-side** as it ingests co-signed frames,
     so the client must **not** send `actionsDelta` (double-count). This split is mandatory — do not copy
     the self-play heartbeat into the human hook.
 
 ### Economy — free to play, no SUI required
+
 - **Gas sponsorship** ([ADR-0009](decisions/0009-sponsor-create-and-fund-gas.md)): the settler pays all
   gas in SUI; the player pays nothing. Painters never hold SUI.
 - **DOPAMINT stake** ([ADR-0010 stake token](decisions/0010-dopamint-stake-token.md)): an unlimited
@@ -300,7 +315,7 @@ effective TPS = (live Agent-AI bots + human painters) × (pixels/sec per tunnel)
   faucet mints (sponsored) → open/fund stakes DOPAMINT (sponsored) → paints. Fully free.
 - **Per-game flat stake, no per-pixel cost.** A pixel is an off-chain move — it costs nothing on-chain.
   On-chain cost is **open/fund/close only** (~3 txs per painter session), and is independent of TPS;
-  it scales with *tunnel count × settle frequency*, not pixels. Free mode = balances never shift =
+  it scales with _tunnel count × settle frequency_, not pixels. Free mode = balances never shift =
   every close is a draw = zero dispute surface. The only finite resource under load is the **settler's
   SUI for gas** — monitor/refill it (the deferred rate-limit/budget from ADR-0010 applies here too).
 
@@ -308,13 +323,14 @@ effective TPS = (live Agent-AI bots + human painters) × (pixels/sec per tunnel)
 
 ## 5. Phased MVP (each phase shippable on its own)
 
-**Lightweight-first ordering.** Phase 0 ships the *lightest thing that proves the loop*: a canvas-only
+**Lightweight-first ordering.** Phase 0 ships the _lightest thing that proves the loop_: a canvas-only
 infinite chunked wall painted by Agent-AI bots — **no map, no humans, 0 KB of map dependency.** The map
 (MapLibre/OSM), human painters, and geo-anchoring are deliberately deferred to Phase 1, because none of
 them are needed to prove "Agent-AI click → endless co-signed pixels → live TPS." Add weight only when the
 prior phase has earned it.
 
 ### Phase 0 — Prove the TPS: canvas-only infinite chunked wall, Agent-AI bots, no map, no humans
+
 **Goal:** a live, growing **infinite** shared grid driven entirely by Agent-AI bots, rendered with the
 256×256 chunked-grid + viewport-culling + dirty-chunk-redraw pipeline (§3.3) on a **plain Canvas2D camera —
 no basemap, no map library**. The dashboard shows real per-game TPS. No OSM, no cooldown, no human UI.
@@ -342,6 +358,7 @@ no basemap, no map library**. The dashboard shows real per-game TPS. No OSM, no 
   caveat.)
 
 ### Phase 1 — Real wall: add the map (MapLibre/OSM), cooldown, human painters
+
 - Layer an **OSM basemap under the existing chunked grid** — **MapLibre GL** (free, no token; §3.1), with
   Leaflet as the light-budget fallback. The Phase 0 canvas becomes a custom map layer / viewport-synced
   overlay; the chunk math is unchanged, now driven by the map camera. Coordinate mapping per §3.2 locks
@@ -355,6 +372,7 @@ no basemap, no map library**. The dashboard shows real per-game TPS. No OSM, no 
   Walrus snapshots.
 
 ### Phase 2 — Scale out: region sharding
+
 - Split the world into regions; one hub per region (or multi-hop composition via the framework's `hop`
   module for cross-region strokes). Paint stays off-chain per shard; periodic shard roots anchored to
   Walrus. This is where "thousands of concurrent painters" actually lands. Deferred to its own ADR.
@@ -368,10 +386,10 @@ no basemap, no map library**. The dashboard shows real per-game TPS. No OSM, no 
    accordingly. A self-signing hub is fine for a showcase but must not be sold as genuine-tunnel TPS.
 2. **N-party settlement is sidestepped, not solved.** Hub-and-spoke keeps each settle 2-party; the
    global wall has no single on-chain owner — it is the hub's merged artifact, anchored by Walrus roots.
-   If we ever want the *wall itself* trustlessly settled, that needs the contract fork (architecture C)
+   If we ever want the _wall itself_ trustlessly settled, that needs the contract fork (architecture C)
    and a fresh ADR.
 3. **Hub trust / censorship.** The hub orders cross-painter writes and can in principle drop or reorder
-   them. Mitigation: each painter's tunnel transcript root proves *their* co-signed strokes (dispute
+   them. Mitigation: each painter's tunnel transcript root proves _their_ co-signed strokes (dispute
    floor), and the hub can later decentralize via multisig/threshold co-signing. Out of scope for MVP.
 4. **Persistent global state.** Redis-only (resets on restart) for MVP; periodic Walrus snapshots +
    chain anchor for production. Where the canonical wall lives long-term is an ADR.
@@ -390,30 +408,32 @@ no basemap, no map library**. The dashboard shows real per-game TPS. No OSM, no 
 
 ## 7. What it reuses from the arena
 
-| Layer | Reused as-is | New / adapted |
-|---|---|---|
-| **Move contract** | `tunnel` (`create`/`deposit`/`close_cooperative_with_root`), generic over coin `T` | none |
-| **Stake / gas** | ADR-0009 sponsor (gas-only), ADR-0010 DOPAMINT faucet + invisible auto-faucet | none |
-| **Relay** | opaque `match_id`/`game` frame forwarder (`mp/ws.rs`), `quickMatch`, `Connect`/`Resume` | none |
-| **Protocol SDK** | `Protocol<State,Move>` interface, `rollingDigest`, `chat.ts` as the template | `worldCanvas.ts` |
-| **TPS / dashboard** | `stats.rs` 5 s `RateWindow` derivative, `per_game` bucket, SSE log-scale chart | a `"world-canvas"` id |
-| **Heartbeat** | `flushHeartbeat` self-play contract; relay-side counting for human-vs-hub | obey the split (§4) |
-| **Agent fleet** | `?agent&m=N` runner, `AGENT_GAMES` rotation, `GameSpec` | one `GameSpec` entry + "Agent AI" button |
-| **Frontend game shape** | blackjack self-play package layout; `useBlackjackSession` / `session-core` patterns; `onchain/tunnelTx.ts` `openAndFundSelfPlay` | `worldCanvas/` package |
-| **Render** | pixel-duel `PixelCanvas` core (rAF, zoom/pan, snap, cull, ghost) | strip fog/turns; infinite 256×256 chunked grid; Phase 1 OSM Mercator under MapLibre |
-| **Resilience** | ADR-0010 MP resume (rebind + peer-reconcile) for dropped painters | none |
+| Layer                   | Reused as-is                                                                                                                     | New / adapted                                                                       |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| **Move contract**       | `tunnel` (`create`/`deposit`/`close_cooperative_with_root`), generic over coin `T`                                               | none                                                                                |
+| **Stake / gas**         | ADR-0009 sponsor (gas-only), ADR-0010 DOPAMINT faucet + invisible auto-faucet                                                    | none                                                                                |
+| **Relay**               | opaque `match_id`/`game` frame forwarder (`mp/ws.rs`), `quickMatch`, `Connect`/`Resume`                                          | none                                                                                |
+| **Protocol SDK**        | `Protocol<State,Move>` interface, `rollingDigest`, `chat.ts` as the template                                                     | `worldCanvas.ts`                                                                    |
+| **TPS / dashboard**     | `stats.rs` 5 s `RateWindow` derivative, `per_game` bucket, SSE log-scale chart                                                   | a `"world-canvas"` id                                                               |
+| **Heartbeat**           | `flushHeartbeat` self-play contract; relay-side counting for human-vs-hub                                                        | obey the split (§4)                                                                 |
+| **Agent fleet**         | `?agent&m=N` runner, `AGENT_GAMES` rotation, `GameSpec`                                                                          | one `GameSpec` entry + "Agent AI" button                                            |
+| **Frontend game shape** | blackjack self-play package layout; `useBlackjackSession` / `session-core` patterns; `onchain/tunnelTx.ts` `openAndFundSelfPlay` | `worldCanvas/` package                                                              |
+| **Render**              | pixel-duel `PixelCanvas` core (rAF, zoom/pan, snap, cull, ghost)                                                                 | strip fog/turns; infinite 256×256 chunked grid; Phase 1 OSM Mercator under MapLibre |
+| **Resilience**          | ADR-0010 MP resume (rebind + peer-reconcile) for dropped painters                                                                | none                                                                                |
 
 ---
 
 ### Bottom line
+
 Build **hub-and-spoke**: N genuine 2-party painter↔hub tunnels — one per human, one per **Agent-AI** click
 — with the global infinite wall as the hub's merged artifact anchored to Walrus, **zero** Move/relay
 changes. Stay **lightweight-first**: Phase 0 is a canvas-only (0 KB map) infinite 256×256-chunked wall
 painted by Agent-AI bots with live TPS, on the existing self-play + heartbeat + stats path. Phase 1 layers
 an **OSM basemap via MapLibre** (free, no token — **never Mapbox**), Web-Mercator geo-locked coordinates,
 cooldown, and human-vs-hub tunnels; Phase 2 shards for scale. Model the protocol on `chat.ts` (append-only
-+ `rollingDigest`, free-mode draw). The one thing to keep honest throughout: only call it genuine-tunnel
-TPS when the hub is a real co-signing party over the relay.
+
+- `rollingDigest`, free-mode draw). The one thing to keep honest throughout: only call it genuine-tunnel
+  TPS when the hub is a real co-signing party over the relay.
 
 ## 8. Build references
 
@@ -425,12 +445,12 @@ TPS when the hub is a real co-signing party over the relay.
 ## 10. Smooth brush + modes + templates (TPS)
 
 > **This section supersedes the directions above where they conflict.** Specifically it
-> retires (a) the **r/place pixel-grid aesthetic** — World Canvas is now a *smooth,
-> anti-aliased brush-painting* game, no visible grid — and (b) the **on-chain canvas
+> retires (a) the **r/place pixel-grid aesthetic** — World Canvas is now a _smooth,
+> anti-aliased brush-painting_ game, no visible grid — and (b) the **on-chain canvas
 > object / Walrus persistence / OSM-map / region-shard** roadmap (§3 map, §5 Phases 1–2,
 > §6 persistence). On-chain stays **minimal: tunnel open + optional cooperative settle
 > only** — no canvas object, no deploy, no map. Everything else below reuses the
-> *already-built* path verbatim: per-painter self-play tunnels, the chunked render store,
+> _already-built_ path verbatim: per-painter self-play tunnels, the chunked render store,
 > click+drag smooth paint, Agent-AI bots, speed controls, owner-hover, Players/Activity +
 > Leaderboard. **No Move / SDK / protocol changes** — the signed move is frozen.
 
@@ -442,7 +462,7 @@ hard-rejected if non-integer/out-of-range (`sui-tunnel-ts/src/protocol/worldCanv
 with a `GOLDEN_DIGEST` byte-parity test. **There is no float / sub-pixel / alpha channel on
 the wire.** Therefore:
 
-> **Smoothness is a *render-layer* property, never a *data* property.** Every "smooth"
+> **Smoothness is a _render-layer_ property, never a _data_ property.** Every "smooth"
 > stroke is computed in float path-space, **rasterized to integer cells as the final step**,
 > and the renderer manufactures the soft, anti-aliased look. The grid never leaves the data
 > model; it only leaves the screen.
@@ -455,7 +475,7 @@ The chain is already in place and must stay byte-identical:
 
 - **Gate:** only `r.verified` (both signatures check) books a move —
   `coSignPaint()` (`useWorldCanvasOnchain.ts:563-583`): `run.moveCount++ → run.actions++ →
-  totalMovesRef++ → paintCell → recordPaint → flushHeartbeat`.
+totalMovesRef++ → paintCell → recordPaint → flushHeartbeat`.
 - **No no-op:** the rolling digest folds the painter byte + coordinate, so every paint
   strictly mutates the co-signed state hash (overpaint is a legal, counted move).
 - **Stroke decomposition (built, do not re-derive):** a drag emits pointer samples →
@@ -469,7 +489,7 @@ The chain is already in place and must stay byte-identical:
   N+1 independent co-signing pairs ⇒ additive TPS, no nonce contention.
 - **The TPS levers** stay: brush size (cells/sample = N²), stroke speed (samples × line
   length), agent count, agent paint interval (`AGENT_SPEED_INTERVALS` 240/120/50 ms), and —
-  **new in §10.4** — per-agent *batch* (cells co-signed per tick).
+  **new in §10.4** — per-agent _batch_ (cells co-signed per tick).
 
 > **Risk already mitigated:** stroke-overlap double-co-signs (which would corrupt the
 > tunnel nonce) are prevented by the active `strokeSet` dedupe — keep it; never co-sign a
@@ -481,7 +501,7 @@ The blockiness comes from three lines, all in the renderer, none on the wire:
 `ctx.imageSmoothingEnabled = false` (`WorldCanvas.tsx:315`), `imageRendering:"pixelated"`
 (`:651`), and the `v.scale >= 8` per-cell grid draw (`:374-391`). The data model — per-chunk
 `buf:Uint8Array` of `color+1`, `writeCell` O(1) raster, eviction, hover/ownership — stays
-**100% unchanged** (it is the canonical color truth). We render that same truth *softly* in
+**100% unchanged** (it is the canonical color truth). We render that same truth _softly_ in
 three composited layers:
 
 1. **Soft color field (the static substrate).** Keep `writeCell` and the 256-res per-chunk
@@ -501,7 +521,7 @@ three composited layers:
    get the same look from a short **per-agent recent-dab trail** (last K co-signed cells,
    soft round dabs in the agent tint, fading).
 3. **(Optional, perf-gated) soft-dab field finish.** To make even the static field painterly
-   rather than bilinear-blocky, re-raster *dirty + visible* tiles by stamping a small
+   rather than bilinear-blocky, re-raster _dirty + visible_ tiles by stamping a small
    radial-gradient dab per cell into a modestly **supersampled (×2 → 512²) offscreen tile**,
    under an LRU cap on resident supersampled tiles. Ship only if Layer 1+2 don't read smooth
    enough; gate behind a per-frame budget.
@@ -524,16 +544,24 @@ generator** + make density a real TPS lever:
 
 ```ts
 // designs.ts — the mode becomes a registry entry, not a union member
-export interface ModeContext { width: number; height: number; rng: () => number; numColors: number; }
+export interface ModeContext {
+  width: number;
+  height: number;
+  rng: () => number;
+  numColors: number;
+}
 export interface AgentDrawMode {
-  id: AgentModeId; label: string;
-  group: "art" | "gesture" | "structure" | "fluid";  // groups the pills
-  footprint: { width: number; height: number };       // sizes this mode's placement slot
-  density: "sparse" | "medium" | "dense";             // TPS class → batch factor + tooltip
+  id: AgentModeId;
+  label: string;
+  group: "art" | "gesture" | "structure" | "fluid"; // groups the pills
+  footprint: { width: number; height: number }; // sizes this mode's placement slot
+  density: "sparse" | "medium" | "dense"; // TPS class → batch factor + tooltip
   /** Lazy iterator of integer cells in reveal order (finite = a flag; endless = a flow field). */
   strokes(ctx: ModeContext): Iterator<DesignCell>;
 }
-export const AGENT_MODES: Record<AgentModeId, AgentDrawMode> = { /* registry */ };
+export const AGENT_MODES: Record<AgentModeId, AgentDrawMode> = {
+  /* registry */
+};
 ```
 
 The **only float→integer funnel** is one shared `rasterizeStroke(points: {x,y}[], radius,
@@ -543,18 +571,18 @@ so all modes are **smooth-by-construction and the wire stays integer**. `artist/
 survive by wrapping their existing arrays in an iterator. Promote `inPolygon`/`starPolygon`
 (`designs.ts:42-74`) into a shared `geometry.ts` for reuse.
 
-| Mode (group) | Generator | Visual character | TPS profile |
-|---|---|---|---|
-| **Artist** (art) *exists* | Pre-baked flag/template cells, field-then-emblem reveal | Recognizable flag/logo; exercises overpaint | medium, finite |
-| **Scatter** (fluid) *exists* | Uniform random cells/colors | Noise spray | medium |
-| **Filler** (fluid) *exists* | BFS flood from center, 1 color | Expanding diamond blob | dense |
-| **Sweep — vẽ dài** (gesture) | Start + heading; long arcs, `heading += small_noise`; len 200–600; slow color drift; r≈3 | Long smooth ribbon gestures | **high burst**, large footprint |
-| **Scribble — nguệch ngoạc** (gesture) | Momentum random-walk; bounce in a loose box; r≈1–2 | Energetic organic doodle | medium-high, continuous |
-| **Calligraphy** (art) | Catmull-Rom/Bézier through few control pts; **radius modulated by path speed** (nib) | Tapered swooshes — purest "no-pixel" showcase | medium, bursty at thick joints |
-| **Geometric — cấu trúc** (structure) | grid/lattice · Archimedean spiral · rings+starburst; thin brush, 1–2 colors | Clean architectural / mathematical | grid=high, spiral=steady medium |
-| **Flow field** (fluid) | Perlin vector field; K particles trace streamlines; color by field angle; respawn → **endless** | Silky parallel currents — the modern headline | **high, sustained** (K streamlines) |
-| **Wash / Gradient** (fluid) | Filler upgraded: row/radial fill following a palette ramp + dithered edge | Soft gradient color field | **very high** (a fill) |
-| **Stipple** (art) | Poisson-disc dabs, density falloff toward center | Airy pointillist cloud | low-medium (contrast mode) |
+| Mode (group)                          | Generator                                                                                       | Visual character                              | TPS profile                         |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------- | --------------------------------------------- | ----------------------------------- |
+| **Artist** (art) _exists_             | Pre-baked flag/template cells, field-then-emblem reveal                                         | Recognizable flag/logo; exercises overpaint   | medium, finite                      |
+| **Scatter** (fluid) _exists_          | Uniform random cells/colors                                                                     | Noise spray                                   | medium                              |
+| **Filler** (fluid) _exists_           | BFS flood from center, 1 color                                                                  | Expanding diamond blob                        | dense                               |
+| **Sweep — vẽ dài** (gesture)          | Start + heading; long arcs, `heading += small_noise`; len 200–600; slow color drift; r≈3        | Long smooth ribbon gestures                   | **high burst**, large footprint     |
+| **Scribble — nguệch ngoạc** (gesture) | Momentum random-walk; bounce in a loose box; r≈1–2                                              | Energetic organic doodle                      | medium-high, continuous             |
+| **Calligraphy** (art)                 | Catmull-Rom/Bézier through few control pts; **radius modulated by path speed** (nib)            | Tapered swooshes — purest "no-pixel" showcase | medium, bursty at thick joints      |
+| **Geometric — cấu trúc** (structure)  | grid/lattice · Archimedean spiral · rings+starburst; thin brush, 1–2 colors                     | Clean architectural / mathematical            | grid=high, spiral=steady medium     |
+| **Flow field** (fluid)                | Perlin vector field; K particles trace streamlines; color by field angle; respawn → **endless** | Silky parallel currents — the modern headline | **high, sustained** (K streamlines) |
+| **Wash / Gradient** (fluid)           | Filler upgraded: row/radial fill following a palette ramp + dithered edge                       | Soft gradient color field                     | **very high** (a fill)              |
+| **Stipple** (art)                     | Poisson-disc dabs, density falloff toward center                                                | Airy pointillist cloud                        | low-medium (contrast mode)          |
 
 **Make density a real TPS dial (the key mechanism).** Change `tickAgent` to co-sign a **batch
 per tick** instead of one cell: `batch = clamp(round(densityFactor(mode) × speedFactor(speed)),
@@ -582,15 +610,22 @@ vectors, colors pre-quantized to the 16-index palette:
 
 ```ts
 export interface StrokeTemplate {
-  id: string; name: string;
+  id: string;
+  name: string;
   category: "logo" | "vietnam" | "shape" | "text";
-  aspect: { w: number; h: number };          // unit box; placement maps it to world cells
-  paths: TemplatePath[];                       // REVEAL ORDER (fills first, emblem strokes last)
-  dedupe?: boolean;                            // default true; false keeps deliberate overpaint
+  aspect: { w: number; h: number }; // unit box; placement maps it to world cells
+  paths: TemplatePath[]; // REVEAL ORDER (fills first, emblem strokes last)
+  dedupe?: boolean; // default true; false keeps deliberate overpaint
 }
 export type TemplatePath =
-  | { kind: "stroke"; color: number; points: Vec2[]; closed?: boolean; radius: number } // smooth band
-  | { kind: "fill";   color: number; rings: Vec2[][] };                                  // even-odd region(s)
+  | {
+      kind: "stroke";
+      color: number;
+      points: Vec2[];
+      closed?: boolean;
+      radius: number;
+    } // smooth band
+  | { kind: "fill"; color: number; rings: Vec2[][] }; // even-odd region(s)
 ```
 
 **Bridge (the only new hot-path logic):** `rasterizeTemplate(tpl, scale): PixelDesign` —
@@ -633,7 +668,7 @@ visible `estimateMoves` guard. The human becomes a stamper / TPS-burster.
   optionally add the arena's scrolling-bar TPS histogram (`/src/panels/TpsChart.tsx`) so brush
   bursts show as visible spikes.
 - **On-chain surface:** identical to the arena's sponsored self-play path — `makeKeypairSponsored
-  SignExec` + `withSponsorFallback` open, per-tunnel `flushHeartbeat`, demo fallback. **No Move
+SignExec` + `withSponsorFallback` open, per-tunnel `flushHeartbeat`, demo fallback. **No Move
   changes, no canvas object, no map, no Walrus** (this section retires those).
 
 ### 10.7 Phased build plan (over the existing `frontend/src/games/worldCanvas/` files)
@@ -641,7 +676,8 @@ visible `estimateMoves` guard. The human becomes a stamper / TPS-burster.
 > Reuse the already-built smooth-drag + per-agent-tunnel + chunk-render work. No Move/SDK edits.
 > Each phase is shippable on its own; **Phase R is the mandate and unblocks the look first.**
 
-**Phase R — Smooth render (no pixel grid).** *Files: `ui/tokens.ts`, `ui/WorldCanvas.tsx`.*
+**Phase R — Smooth render (no pixel grid).** _Files: `ui/tokens.ts`, `ui/WorldCanvas.tsx`._
+
 1. `tokens.ts`: add a `BRUSH` token block — `radiusForSize(size,scale)`, glow inner/outer alphas,
    `trailOpacity`, `cap/join = "round"`, field-smoothing flag, fade-ms.
 2. `WorldCanvas.tsx`: flip `imageSmoothingEnabled = true` on the field blit; drop
@@ -650,11 +686,12 @@ visible `estimateMoves` guard. The human becomes a stamper / TPS-burster.
 3. `WorldCanvas.tsx`: add a screen-space stroke buffer in the pointer handlers + `drawSmoothStroke`
    (round caps/joins, two-pass glow) overlaid for the active stroke with a short fade; replace the
    square hover ghost with a soft round brush preview; add the per-agent recent-dab trail.
-   *Gate (exit):* 60 FPS at default zoom on a fast drag; the wall reads as soft paint, not squares;
+   _Gate (exit):_ 60 FPS at default zoom on a fast drag; the wall reads as soft paint, not squares;
    co-signed move count unchanged for an identical stroke (render-only change proven).
 
-**Phase M — Agent modes + TPS-burst batching.** *Files: `designs.ts`, `useWorldCanvasOnchain.ts`,
-`ui/CanvasView.tsx`.*
+**Phase M — Agent modes + TPS-burst batching.** _Files: `designs.ts`, `useWorldCanvasOnchain.ts`,
+`ui/CanvasView.tsx`._
+
 1. `designs.ts`: add `AgentDrawMode` + `ModeContext` + `rasterizeStroke` + `geometry.ts`; implement
    the catalog generators (sweep, scribble, calligraphy, geometric, flow, wash, stipple); wrap
    artist/scatter/filler as iterators; export `AGENT_MODES` and replace the `AgentMode` union.
@@ -662,18 +699,19 @@ visible `estimateMoves` guard. The human becomes a stamper / TPS-burster.
    (density × speed); size placement slots from `mode.footprint`; `maxCellsPerRegion` for endless
    modes.
 3. `CanvasView.tsx`: render the Intelligence selector grouped by `mode.group` (rows/dropdown); add
-   a per-agent Brush/Density pill. *Gate:* dense modes visibly burst more TPS than sparse ones at
+   a per-agent Brush/Density pill. _Gate:_ dense modes visibly burst more TPS than sparse ones at
    the same Speed; no double-counted moves; placement never overlaps.
 
-**Phase T — Template library + stamp.** *Files: new `templates/`, `ui/WorldCanvas.tsx`,
-`ui/PaletteDock.tsx` (+ new `ui/StampDock.tsx`), `ui/CanvasView.tsx`.*
+**Phase T — Template library + stamp.** _Files: new `templates/`, `ui/WorldCanvas.tsx`,
+`ui/PaletteDock.tsx` (+ new `ui/StampDock.tsx`), `ui/CanvasView.tsx`._
+
 1. `templates/`: `StrokeTemplate` types + `rasterizeTemplate` + `estimateMoves` + seeds (vn-flag,
    vn-star, commandoss placeholder, lotus, dong-ho, heart, star, text); Artist mode consumes
    `rasterizeTemplate(template, scale)`.
 2. `WorldCanvas.tsx`: human stamp mode — armed-template ghost → click → rasterize → enqueue via
    `submitHumanPaint`, chunked across rAF, capped by `estimateMoves`.
 3. UI: agent template strip (when Artist) + a `StampDock` mirroring `PaletteDock`, vector
-   thumbnails, grouped by category. *Gate:* one template object → appears in both surfaces with a
+   thumbnails, grouped by category. _Gate:_ one template object → appears in both surfaces with a
    free thumbnail; a stamp produces an instant, bounded TPS spike; CommandOSS + a Vietnam-arts seed
    render recognizably.
 
@@ -681,12 +719,12 @@ visible `estimateMoves` guard. The human becomes a stamper / TPS-burster.
 
 1. **`ui/tokens.ts` — add the `BRUSH` render-token block** (`radiusForSize`, glow inner/outer
    alphas, `trailOpacity`, round `cap/join`, field-smoothing flag, fade-ms). Pure additive; no
-   behavior change yet. *(Phase R.1)*
+   behavior change yet. _(Phase R.1)_
 2. **`ui/WorldCanvas.tsx` — flip to smooth + kill the grid:** set `imageSmoothingEnabled = true` on
    the field blit, remove `imageRendering:"pixelated"`, and delete the `scale>=8` per-cell grid
    block (`:373-391`). This single change retires the pixel aesthetic with zero protocol impact.
-   *(Phase R.2)*
+   _(Phase R.2)_
 3. **`ui/WorldCanvas.tsx` — live vector stroke ribbon + soft hover:** capture a screen-space stroke
    buffer in the existing `onPointerDown/Move/Up` handlers and overlay `drawSmoothStroke` (round
    caps/joins + two-pass glow) for the active stroke with a ~250 ms fade; replace the square hover
-   ghost (`:406-425`) with a soft round radial-gradient brush preview. *(Phase R.3)*
+   ghost (`:406-425`) with a soft round radial-gradient brush preview. _(Phase R.3)_

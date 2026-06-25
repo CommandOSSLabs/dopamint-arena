@@ -44,7 +44,7 @@ secret is sent. Each slot's deck seed is
 `combineReveals(shareA_i, saltA_i, shareB_i, saltB_i)` — unbiased because both
 sides commit before any reveal.
 
-Privacy comes from **asymmetric reveal**: a slot's seed needs *both* shares, so
+Privacy comes from **asymmetric reveal**: a slot's seed needs _both_ shares, so
 revealing one share is useless alone.
 
 - `open_private_holes`: B reveals its shares for slots `0,1`; A reveals its
@@ -91,7 +91,7 @@ not as the settlement architecture for Quantum Poker.
 
 **A single full "result proof" is NOT feasible this milestone**, because card
 derivation re-runs blake2b-based Fisher-Yates (seed chaining + rejection
-sampling, ~50+ blake2b invocations *per slot*, ×9). blake2b is not
+sampling, ~50+ blake2b invocations _per slot_, ×9). blake2b is not
 SNARK-friendly; proving it in Groth16 is enormous and would force the whole
 randomness layer onto a SNARK hash (Poseidon), breaking byte-parity with
 `randomness.move`.
@@ -99,7 +99,7 @@ randomness layer onto a SNARK hash (Poseidon), breaking byte-parity with
 So ZK is **not required** for the playable protocol milestone:
 
 - **MVP:** the dealerless-fairness + no-substitution
-  guarantee is already trustless *without* ZK — both parties derive identical
+  guarantee is already trustless _without_ ZK — both parties derive identical
   cards from committed shares, and any lie fails the cheap blake2b commitment
   check. Happy-path settlement needs only the latest dual-signed tunnel state.
 - **Optional dispute adapter:** if a party withholds a final signature after
@@ -112,7 +112,7 @@ So ZK is **not required** for the playable protocol milestone:
 
 The Move verifier path is the **real** native `sui::groth16` (via
 `zk_verifier::verify_circuit_proof`), never a mock. As in the framework's own
-`zk_verifier_tests.move`, an end-to-end *passing* proof needs the trusted-setup
+`zk_verifier_tests.move`, an end-to-end _passing_ proof needs the trusted-setup
 artifacts and is a deploy-time integration test; in-repo tests cover binding,
 schema, gating order, and settlement math up to and including the native call.
 
@@ -127,20 +127,20 @@ the referee module (app code — we do **not** edit upstream `zk_verifier.move`)
 
 Canonical order (index → name → encoding):
 
-| # | scalar           | encoding                                   |
-|---|------------------|--------------------------------------------|
-| 0 | `rules_hash`     | fieldSafe(blake2b256(rules descriptor))    |
-| 1 | `tunnel_id_hash` | fieldSafe(blake2b256(tunnel id bytes))     |
-| 2 | `state_hash`     | fieldSafe(tunnel disputed `state_hash`)    |
-| 3 | `hand_id`        | u64 little-endian, zero-padded             |
-| 4 | `winner`         | u64 LE (0 = A, 1 = B, 2 = tie)             |
-| 5 | `party_a_balance`| u64 LE                                     |
-| 6 | `party_b_balance`| u64 LE                                     |
-| 7 | `result_hash`    | fieldSafe(blake2b256(result descriptor))   |
+| #   | scalar            | encoding                                 |
+| --- | ----------------- | ---------------------------------------- |
+| 0   | `rules_hash`      | fieldSafe(blake2b256(rules descriptor))  |
+| 1   | `tunnel_id_hash`  | fieldSafe(blake2b256(tunnel id bytes))   |
+| 2   | `state_hash`      | fieldSafe(tunnel disputed `state_hash`)  |
+| 3   | `hand_id`         | u64 little-endian, zero-padded           |
+| 4   | `winner`          | u64 LE (0 = A, 1 = B, 2 = tie)           |
+| 5   | `party_a_balance` | u64 LE                                   |
+| 6   | `party_b_balance` | u64 LE                                   |
+| 7   | `result_hash`     | fieldSafe(blake2b256(result descriptor)) |
 
 `input_schema_hash = blake2b256(canonical layout descriptor)` can be stored on
 the optional circuit/session and checked on dispute settlement. The **minimal sound
-subset** for the first *compiled* circuit is `{rules_hash, tunnel_id_hash,
+subset** for the first _compiled_ circuit is `{rules_hash, tunnel_id_hash,
 state_hash, party_a_balance, party_b_balance}` (5 scalars) — `winner`,
 `hand_id`, and `result_hash` are bindings/auditing and can be dropped to leave
 headroom. The wire format pins all 8 so it is forward-compatible.
@@ -176,7 +176,7 @@ poker: those trust an address that could settle any split without a proof.
   with duplicates, burns, and Five of a Kind; gameplay that uses the same
   `Protocol + OffchainTunnel` path as the rest of the arena; a forward-compatible
   public-input wire format for later disputes.
-- **Harder / committed to**: card derivation uses blake2b, so a *derivation* ZK
+- **Harder / committed to**: card derivation uses blake2b, so a _derivation_ ZK
   proof later needs a Poseidon-committed parallel path (documented, not built).
   The result circuit's compiled artifacts + trusted setup are a deploy step;
   until then the prover is `Unavailable*` and the happy-path proof test is

@@ -28,7 +28,9 @@ export class OllamaBackendClient {
       body: JSON.stringify({ messages, model: this.model, stream: false }),
     });
     if (!resp.ok) {
-      throw new Error(`ollama proxy returned ${resp.status}: ${await resp.text()}`);
+      throw new Error(
+        `ollama proxy returned ${resp.status}: ${await resp.text()}`,
+      );
     }
     const data = (await resp.json()) as ChatResponse;
     return data.content;
@@ -38,13 +40,17 @@ export class OllamaBackendClient {
     const url = `${this.backendUrl}/v1/chat/topic`;
     const resp = await fetch(url);
     if (!resp.ok) {
-      throw new Error(`topic proxy returned ${resp.status}: ${await resp.text()}`);
+      throw new Error(
+        `topic proxy returned ${resp.status}: ${await resp.text()}`,
+      );
     }
     const data = (await resp.json()) as TopicResponse;
     return data.topic;
   }
 
-  async publishTranscript(messages: { sender: string; text: string }[]): Promise<void> {
+  async publishTranscript(
+    messages: { sender: string; text: string }[],
+  ): Promise<void> {
     const url = `${this.backendUrl}/v1/chat/live/publish`;
     const resp = await fetch(url, {
       method: "POST",

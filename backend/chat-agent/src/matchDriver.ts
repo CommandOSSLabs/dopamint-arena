@@ -1,6 +1,9 @@
 import type { OllamaBackendClient } from "./ollama.ts";
 import type { MpChannel } from "./mpClient.ts";
-import type { ChatMessage, StatefulChatProtocol } from "sui-tunnel-ts/protocol/chat";
+import type {
+  ChatMessage,
+  StatefulChatProtocol,
+} from "sui-tunnel-ts/protocol/chat";
 
 export interface ChatDriverDeps {
   ollama: OllamaBackendClient;
@@ -63,9 +66,10 @@ export class ChatMatchDriver {
           },
           {
             role: "user",
-            content: `Topic: ${topic}\nChat so far:\n${history
-              .map((m) => `${m.sender}: ${m.text}`)
-              .join("\n") || "(empty)"}\nReply briefly.`,
+            content: `Topic: ${topic}\nChat so far:\n${
+              history.map((m) => `${m.sender}: ${m.text}`).join("\n") ||
+              "(empty)"
+            }\nReply briefly.`,
           },
         ]);
         const move = protocol.createMove(answer);

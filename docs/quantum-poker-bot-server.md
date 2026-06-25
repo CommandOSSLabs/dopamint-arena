@@ -162,7 +162,7 @@ Later work can use `close_cooperative_with_root` and transcript archival.
 - [x] Sui-seeded bot RNG derivation added
 - [x] Sponsored real open/deposit route stores Sui randomness seed into sessions
 - [x] Server open/settle use configurable `$BUCK`/`Coin<T>` stake type instead
-  of hard-coded SUI
+      of hard-coded SUI
 - [x] Core `sui_tunnel` package deployed on Sui testnet
 - [x] Real `/open` smoke verified against deployed tunnel package + BUCK
 - [ ] Sui-randomness-backed bot move generation manually verified end-to-end

@@ -29,6 +29,7 @@ also per-process. That is correct at **one** instance.
 
 The infra runs the backend at **desired count ≥ 2 behind an ALB**. With round-robin
 routing, in-process state breaks three ways:
+
 - **PvP relay/matchmaking**: two players can land on different tasks; the relay
   can't reach a socket in another task's memory, and queues don't pair across tasks.
 - **Sessions**: register on task 1, settle on task 2 → 404 (the session lives only
@@ -67,7 +68,7 @@ Make the backend horizontally scalable on **Redis only** — no Postgres.
    No stats pub/sub needed.
 6. **Storage behind a trait (`MpStore` / control-plane store).** The current in-memory
    maps become the **in-memory impl** (fast unit tests, local dev); a **Redis impl**
-   ships for prod. Pairing/routing *logic* is unit-tested against the in-memory impl;
+   ships for prod. Pairing/routing _logic_ is unit-tested against the in-memory impl;
    the Redis impl gets a focused integration test.
 7. **Deploy contract:** add `GET /health/live` (always 200) and `GET /health/ready`
    (200 iff the **cache** cluster answers — the HTTP path's only hard dependency; pubsub is a
@@ -79,12 +80,12 @@ Make the backend horizontally scalable on **Redis only** — no Postgres.
    **Drop the migration task** (no DB).
 8. **Settle for concurrency, never by serializing.** Self-play closes are high-volume and bursty
    (~one per tunnel) — at the 1M-effective-TPS target the on-chain close rate is bounded only by
-   tunnel count, so the settle path must submit *concurrently*. A global lock would cap
+   tunnel count, so the settle path must submit _concurrently_. A global lock would cap
    finalization at one tx per RPC round-trip and is rejected. Equivocation is purely a **gas-coin**
    (owned-object) hazard — a coin used by two conflicting in-flight txs is locked until the epoch
    boundary; the **tunnel is a shared object** (consensus-sequenced) and never equivocates. So the
-   single rule is: *no two in-flight txs share a gas-coin version.*
-   - **Primary: address-balance gas (SIP-58).** Pay gas from the settler's SUI *address balance*
+   single rule is: _no two in-flight txs share a gas-coin version._
+   - **Primary: address-balance gas (SIP-58).** Pay gas from the settler's SUI _address balance_
      (empty `gas_payment.objects` → an implicit `FundsWithdrawal`), so there is **no gas coin to
      lock** — concurrent single closes are equivocation-free with no pool, lease, or refill to
      operate. Verified against the vendored SDK (both 0.3.1, latest): `try_build` rejects empty gas
@@ -108,7 +109,7 @@ Make the backend horizontally scalable on **Redis only** — no Postgres.
   failure-prone step (migration ordering + pre-migration snapshot + DB-restore runbook all go).
 - **Settlement is concurrency-safe, not serialized**: PTB-batched self-play closes + non-shared
   gas (address balance, or a Redis-leased coin pool) keep many closes in flight without sharing a
-  gas-coin version — so no equivocation *and* no throughput cap. PvP closes settle singly.
+  gas-coin version — so no equivocation _and_ no throughput cap. PvP closes settle singly.
 - **Readiness scoped to the cache cluster**: a pubsub failover degrades PvP delivery only;
   stats/settle keep serving. Trade-off: PvP frames can drop silently during a pubsub blip —
   covered by a dedicated pubsub alarm, not by pulling the task.
@@ -167,4 +168,4 @@ root, not `backend/tunnel-manager/`.
   Redis-leased coin pool. Batch size vs gas budget + bisect-retry is an optimization, deferred to
   implementation.
 - **Carryovers from ADR-0004** (unchanged by this ADR): server-side pubkey↔wallet binding;
-  on-chain watchtower *submission* of the captured checkpoint; disconnect queue/presence cleanup.
+  on-chain watchtower _submission_ of the captured checkpoint; disconnect queue/presence cleanup.
