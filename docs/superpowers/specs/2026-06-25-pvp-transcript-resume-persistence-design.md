@@ -251,11 +251,13 @@ fresh match its own transcript, so nothing to reset.
 
 - **Cleanup**: the transcript lives inside the record, so `clearResumeRecord`
   (on settle/done) and `evictExpiredRecords` (6h TTL) drop it with no new code.
-- **Size**: `HAND_CAP` (PvP) = 50; ~19 entries/hand × ~547 B ≈ **~520 KB** worst
-  case, well under the ~5 MB `localStorage` budget. Writes are debounced and
-  poker moves are seconds apart, so re-serializing the record per confirmed move
-  is cheap. If `HAND_CAP` is ever raised by a large factor, revisit (IndexedDB
-  supports incremental appends).
+- **Size & per-move cost**: `HAND_CAP` (PvP) = 50; ~19 entries/hand × ~547 B ≈
+  **~520 KB** worst case, well under the ~5 MB `localStorage` budget. Note
+  `captureTranscript` re-serializes the **whole** transcript on every confirmed
+  move, so the per-match CPU cost is O(history²) (~520 KB hex-encoded ~950×) —
+  but writes are debounced/coalesced and poker moves are seconds apart, so it is
+  cheap at this cap. If `HAND_CAP` is ever raised by a large factor, revisit both
+  the size and this per-move cost (IndexedDB supports incremental appends).
 - **Quota failure**: the existing record write already swallows `setItem`
   errors; worst case the transcript isn't saved and the old mismatch reappears on
   that reload — no crash.

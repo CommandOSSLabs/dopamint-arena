@@ -269,8 +269,8 @@ hooks; a `private transcript: Transcript | null` field for class hooks).
 5. **Clear** — set `T = null` in `dispose`/`reset` so a fresh live match
    starts with an empty transcript.
 
-Primitives: `transcriptToWire`, `rebuildTranscript`, `appendAdoptedCheckpoint`
-(`pvp/resume.ts`); `ResumeRecord.transcript`, `ResumeAdapter.captureTranscript`,
+Primitives: `transcriptToWire`, `rebuildTranscript`, `appendAdoptedCheckpoint`,
+`ResumeRecord.transcript` (`pvp/resume.ts`); `ResumeAdapter.captureTranscript`,
 `RestoredSession.transcript` (`pvp/resumeSession.ts`).
 
 ### §4b three-edit pattern (functional-ref hooks, live-only creation)
