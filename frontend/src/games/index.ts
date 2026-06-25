@@ -13,6 +13,10 @@ import "./chat";
 // of the catalog; the desktop opens them centered in the default/reset layout.
 import "./chat";
 import "./microrPayments";
+import "./agentAllowance";
+import "./streamingPayment";
+import "./agentMicropayments";
+import "./apiCredits";
 // Hidden for now — re-enable by uncommenting.
 // import "./coinFlip";
 // import "./dice";
