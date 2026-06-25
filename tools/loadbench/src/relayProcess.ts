@@ -1,12 +1,13 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { readEnvLocal } from "./env";
+import { ports } from "./benchEnv";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** WebSocket URL for the relay multiplexer.
  *  Override with MP_WS_URL when pointing at a remote relay. */
 export function relayWsUrl(): string {
-  return process.env.MP_WS_URL ?? "ws://127.0.0.1:8080/v1/mp";
+  return process.env.MP_WS_URL ?? `ws://127.0.0.1:${ports().relay}/v1/mp`;
 }
 
 /** Derive the relay's HTTP origin (for /healthz) from its ws(s) URL. */
@@ -54,7 +55,8 @@ export async function ensureRelay(
     return { alreadyRunning: true, stop() {} };
   }
 
-  const httpBase = opts.httpBase ?? "http://127.0.0.1:8080";
+  const relayPort = ports().relay;
+  const httpBase = opts.httpBase ?? `http://127.0.0.1:${relayPort}`;
   try {
     if ((await f(`${httpBase}/healthz`)).ok) {
       return { alreadyRunning: true, stop() {} };
@@ -66,7 +68,7 @@ export async function ensureRelay(
   const env: Record<string, string> = {
     ...(process.env as Record<string, string>),
     ...readEnvLocal(),
-    TUNNEL_MANAGER_ADDR: "127.0.0.1:8080",
+    TUNNEL_MANAGER_ADDR: `127.0.0.1:${relayPort}`,
   };
   delete env.REDIS_CACHE_URL;
   delete env.REDIS_PUBSUB_URL;

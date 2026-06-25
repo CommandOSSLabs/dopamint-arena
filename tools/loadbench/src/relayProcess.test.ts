@@ -1,5 +1,6 @@
 import { test, expect } from "bun:test";
-import { waitHealthy, httpBaseFromWs, ensureRelay } from "./relayProcess";
+import { waitHealthy, httpBaseFromWs, ensureRelay, relayWsUrl } from "./relayProcess";
+import { ports } from "./benchEnv";
 
 test("waitHealthy resolves once health returns ok", async () => {
   let calls = 0;
@@ -28,4 +29,18 @@ test("ensureRelay with wsUrl connects to that relay and never spawns", async () 
   expect(probed).toBe("http://remote:9090/healthz");
   expect(handle.alreadyRunning).toBe(true);
   handle.stop(); // no-op, must not throw
+});
+
+test("relayWsUrl default uses the env relay port", () => {
+  const prev = process.env.MP_WS_URL;
+  const prevEnv = process.env.LOADBENCH_ENV;
+  delete process.env.MP_WS_URL;
+  process.env.LOADBENCH_ENV = "relaytest";
+  try {
+    expect(relayWsUrl()).toBe(`ws://127.0.0.1:${ports("relaytest").relay}/v1/mp`);
+  } finally {
+    if (prev !== undefined) process.env.MP_WS_URL = prev;
+    if (prevEnv === undefined) delete process.env.LOADBENCH_ENV;
+    else process.env.LOADBENCH_ENV = prevEnv;
+  }
 });
