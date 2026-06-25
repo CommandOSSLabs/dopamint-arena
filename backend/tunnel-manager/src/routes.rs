@@ -23,6 +23,7 @@ pub(crate) mod test_support {
             "http://127.0.0.1:9999".into(),
             "0x2",
             "0x2::sui::SUI",
+            None,
             &key,
         )
         .expect("test settler");

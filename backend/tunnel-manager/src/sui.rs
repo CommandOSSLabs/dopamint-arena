@@ -59,6 +59,21 @@ const SPONSOR_TUNNEL_FNS: &[&str] = &[
     "entry_close_cooperative",
     "entry_close_cooperative_with_root",
 ];
+
+/// The `example_agent_allowance` calls a 0-SUI player may have gas-sponsored. Same safety model as
+/// the tunnel allowlist: the escrow comes from the user's OWN input coins (the gas guard rejects any
+/// command touching the settler's gas), so the settler only ever pays gas. The mandate is funded,
+/// retuned, and revoked by these calls; none can move the settler's funds. Lives in its own package
+/// (the slim agent-allowance publish), passed to the validator as `agent_allowance_pkg`.
+const SPONSOR_AGENT_ALLOWANCE_FNS: &[&str] = &[
+    "entry_create_and_share",
+    "entry_claim",
+    "entry_top_up",
+    "entry_revoke",
+    "pause",
+    "resume",
+    "set_rate",
+];
 /// Testnet genesis checkpoint digest — the chain identifier `ValidDuring` uses for cross-chain
 /// replay protection (its first 4 bytes are the `4c78adac` testnet chain id). SIP-58
 /// address-balance gas requires this in the transaction expiration.
@@ -89,6 +104,9 @@ pub struct SuiSettler {
     rpc_url: String,
     package_id: Address,
     coin_type: TypeTag,
+    /// Optional agent-allowance package (the slim publish). When set, its mandate ops are
+    /// gas-sponsorable; when `None`, agent-allowance calls are refused like any other package.
+    agent_allowance_package_id: Option<Address>,
     signer: Ed25519PrivateKey,
     sender: Address,
     /// Per-sponsorship nonce source for the `ValidDuring` FundsWithdrawal replay guard. Seeded
@@ -184,10 +202,14 @@ impl SuiSettler {
         rpc_url: String,
         package_id: &str,
         coin_type: &str,
+        agent_allowance_package_id: Option<&str>,
         settler_key_b64: &str,
     ) -> anyhow::Result<Self> {
         let signer = load_ed25519(settler_key_b64)?;
         let sender = signer.public_key().derive_address();
+        let agent_allowance_package_id = agent_allowance_package_id
+            .map(|s| Address::from_str(s).context("bad AGENT_ALLOWANCE_PACKAGE_ID"))
+            .transpose()?;
         // Seed the per-sponsorship nonce from the full wall clock (secs mixed with nanos), not
         // just subsec_nanos, so two restarts in the same epoch are very unlikely to pick colliding
         // seeds (a collision is a liveness hiccup — the node rejects the replayed withdrawal — not
@@ -206,6 +228,7 @@ impl SuiSettler {
             rpc_url,
             package_id: Address::from_str(package_id).context("bad TUNNEL_PACKAGE_ID")?,
             coin_type: TypeTag::from_str(coin_type).context("bad TUNNEL_COIN_TYPE")?,
+            agent_allowance_package_id,
             signer,
             sender,
             sponsor_nonce: AtomicU32::new(nonce_seed),
@@ -223,6 +246,7 @@ impl SuiSettler {
             rpc_url: String::new(),
             package_id: Address::ZERO,
             coin_type: "0x2::sui::SUI".parse().expect("static coin type"),
+            agent_allowance_package_id: None,
             signer,
             sender,
             sponsor_nonce: AtomicU32::new(0),
@@ -276,6 +300,7 @@ impl SuiSettler {
         let tx = build_sponsored_tx(
             self.package_id,
             &self.coin_type,
+            self.agent_allowance_package_id,
             user_addr,
             self.sender,
             &kind_bytes,
@@ -594,6 +619,7 @@ fn build_close_tx(
 fn build_sponsored_tx(
     package_id: Address,
     coin_type: &TypeTag,
+    agent_allowance_pkg: Option<Address>,
     sender: Address,
     gas_owner: Address,
     kind_bytes: &[u8],
@@ -605,7 +631,7 @@ fn build_sponsored_tx(
     let kind: TransactionKind = bcs::from_bytes(kind_bytes).context("decode tx kind")?;
     match &kind {
         TransactionKind::ProgrammableTransaction(ptb) => {
-            validate_sponsorable(ptb, package_id, coin_type)?
+            validate_sponsorable_inner(ptb, package_id, coin_type, agent_allowance_pkg)?
         }
         _ => anyhow::bail!("only programmable transactions can be sponsored"),
     }
@@ -660,21 +686,35 @@ fn coin_type_address(coin_type: &TypeTag) -> Option<Address> {
     }
 }
 
-/// The anti-abuse gate (ADR-0009): the settler pays gas, so it sponsors ONLY the tunnel open/fund
-/// move calls (+ the framework `public_share_object`) plus benign coin/object plumbing over the
-/// user's OWN inputs. Three invariants make this safe rather than an open faucet:
-///   1. No command may reference the gas coin (`Argument::Gas`) — else it could move the settler's
-///      funds out (H1). The stake comes from the user's input coins only.
-///   2. Every move call must be an allowlisted `tunnel::*` open/fund fn (or the framework share);
-///      Publish/Upgrade and any other package/module/function are refused.
-///   3. Tunnel calls must use the settler's configured coin type, not an arbitrary `T` (M1).
-///
-/// NOTE: this does NOT rate-limit or cap a global spend — a flood of valid sponsorships can still
-/// burn the settler's balance via gas. Add per-sender rate limiting + a daily budget before prod.
+/// Test-only 3-arg shim: validate with NO agent-allowance package configured (the default), so the
+/// large tunnel/coin test suite keeps its existing call shape. Production always goes through
+/// `validate_sponsorable_inner` with the settler's configured agent-allowance package.
+#[cfg(test)]
 fn validate_sponsorable(
     ptb: &ProgrammableTransaction,
     package_id: Address,
     coin_type: &TypeTag,
+) -> anyhow::Result<()> {
+    validate_sponsorable_inner(ptb, package_id, coin_type, None)
+}
+
+/// The anti-abuse gate (ADR-0009): the settler pays gas, so it sponsors ONLY the tunnel open/fund
+/// move calls (+ the framework `public_share_object`), the configured agent-allowance package's
+/// mandate ops, plus benign coin/object plumbing over the user's OWN inputs. Three invariants make
+/// this safe rather than an open faucet:
+///   1. No command may reference the gas coin (`Argument::Gas`) — else it could move the settler's
+///      funds out (H1). The stake comes from the user's input coins only.
+///   2. Every move call must be allowlisted — a `tunnel::*` open/fund fn, the framework share, a
+///      coin/faucet op, or `example_agent_allowance::*`; Publish/Upgrade and anything else refused.
+///   3. Tunnel / agent-allowance / coin calls must use the settler's configured coin type (M1).
+///
+/// NOTE: this does NOT rate-limit or cap a global spend — a flood of valid sponsorships can still
+/// burn the settler's balance via gas. Add per-sender rate limiting + a daily budget before prod.
+fn validate_sponsorable_inner(
+    ptb: &ProgrammableTransaction,
+    package_id: Address,
+    coin_type: &TypeTag,
+    agent_allowance_pkg: Option<Address>,
 ) -> anyhow::Result<()> {
     let framework = Address::from_str(SUI_FRAMEWORK_ADDRESS).expect("static 0x2 address");
     for cmd in &ptb.commands {
@@ -707,17 +747,28 @@ fn validate_sponsorable(
                         mc.function.as_str(),
                         "redeem_funds" | "send_funds" | "destroy_zero"
                     );
+                // Agent-allowance mandate ops (own package): create/claim/top-up/revoke/pause/
+                // resume/set-rate. Escrow comes from the user's input coins, so as with the tunnel
+                // calls the settler only pays gas. Skipped entirely when no agent-allowance package
+                // is configured (`agent_allowance_pkg` is None).
+                let agent_allowance_call = Some(mc.package) == agent_allowance_pkg
+                    && mc.module.as_str() == "example_agent_allowance"
+                    && SPONSOR_AGENT_ALLOWANCE_FNS.contains(&mc.function.as_str());
                 anyhow::ensure!(
-                    tunnel_call || framework_share || faucet_mint || coin_balance_op,
+                    tunnel_call
+                        || framework_share
+                        || faucet_mint
+                        || coin_balance_op
+                        || agent_allowance_call,
                     "sponsor refuses move call {}::{}::{}",
                     mc.package,
                     mc.module.as_str(),
                     mc.function.as_str(),
                 );
-                // The tunnel fns and the coin balance ops are generic over the coin `T`; only
-                // sponsor the configured type. (The framework share's type arg is `Tunnel<T>`, a
-                // different shape — skip it.)
-                if tunnel_call || coin_balance_op {
+                // The tunnel fns, coin balance ops, and agent-allowance calls are generic over the
+                // coin `T`; only sponsor the configured type. (The framework share's type arg is
+                // `Tunnel<T>`, a different shape — skip it.)
+                if tunnel_call || coin_balance_op || agent_allowance_call {
                     anyhow::ensure!(
                         mc.type_arguments.as_slice() == std::slice::from_ref(coin_type),
                         "sponsor refuses move call with an unexpected coin type",
@@ -1004,6 +1055,52 @@ mod tests {
         assert!(validate_sponsorable(&ptb(vec![other]), pkg, &sui_coin()).is_err());
     }
 
+    // Agent-allowance mandate ops are sponsorable only when the settler is configured with that
+    // package AND the call targets the configured coin type — same safety envelope as tunnel calls.
+    #[test]
+    fn validate_agent_allowance_calls() {
+        let coin: TypeTag = "0xabc::mtps::MTPS".parse().unwrap();
+        let tunnel_pkg = Address::from_str("0xabc").unwrap();
+        let agent_pkg = Address::from_str("0xa9e").unwrap();
+        let agent_call = |package: Address, function: &str, type_args: Vec<TypeTag>| {
+            Command::MoveCall(sui_sdk_types::MoveCall {
+                package,
+                module: Identifier::new("example_agent_allowance").unwrap(),
+                function: Identifier::new(function).unwrap(),
+                type_arguments: type_args,
+                arguments: vec![],
+            })
+        };
+        let check = |cmd: Command, agent: Option<Address>| {
+            validate_sponsorable_inner(&ptb(vec![cmd]), tunnel_pkg, &coin, agent)
+        };
+        // Create + claim over the configured coin type are accepted with the package configured.
+        assert!(check(
+            agent_call(agent_pkg, "entry_create_and_share", vec![coin.clone()]),
+            Some(agent_pkg)
+        )
+        .is_ok());
+        assert!(check(agent_call(agent_pkg, "entry_claim", vec![coin.clone()]), Some(agent_pkg)).is_ok());
+        // No configured agent-allowance package => the same call is refused.
+        assert!(check(agent_call(agent_pkg, "entry_claim", vec![coin.clone()]), None).is_err());
+        // A non-allowlisted fn (e.g. a test-only helper) is refused.
+        assert!(check(
+            agent_call(agent_pkg, "destroy_for_testing", vec![coin.clone()]),
+            Some(agent_pkg)
+        )
+        .is_err());
+        // Wrong coin type is refused.
+        let usdc: TypeTag = "0xabc::usdc::USDC".parse().unwrap();
+        assert!(check(agent_call(agent_pkg, "entry_claim", vec![usdc]), Some(agent_pkg)).is_err());
+        // A DIFFERENT package with the same module name is refused — the package must match.
+        let other_pkg = Address::from_str("0xbad").unwrap();
+        assert!(check(
+            agent_call(other_pkg, "entry_claim", vec![coin.clone()]),
+            Some(agent_pkg)
+        )
+        .is_err());
+    }
+
     // The MTPS faucet `mint` (in the coin type's own package) is sponsorable, so a 0-token
     // player can faucet their stake gaslessly.
     #[test]
@@ -1124,6 +1221,7 @@ mod tests {
         let tx = build_sponsored_tx(
             pkg,
             &sui_coin(),
+            None,
             user,
             settler,
             &kind_bytes,
@@ -1159,6 +1257,7 @@ mod tests {
         let err = build_sponsored_tx(
             pkg,
             &sui_coin(),
+            None,
             Address::ZERO,
             Address::ZERO,
             &kind_bytes,

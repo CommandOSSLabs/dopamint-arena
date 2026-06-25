@@ -43,6 +43,7 @@ async fn main() -> anyhow::Result<()> {
         Config::require("SUI_RPC_URL", &config.sui_rpc_url)?.to_string(),
         Config::require("TUNNEL_PACKAGE_ID", &config.package_id)?,
         &config.coin_type,
+        config.agent_allowance_package_id.as_deref(),
         Config::require("SUI_SETTLER_KEY", &config.settler_key)?,
     )?;
     let walrus = walrus::WalrusClient::new(

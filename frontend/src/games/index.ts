@@ -12,6 +12,7 @@ import "./worldCanvas";
 // of the catalog; the desktop opens them centered in the default/reset layout.
 import "./chat";
 import "./regularPayments";
+import "./agentAllowance";
 // Hidden for now — re-enable by uncommenting.
 // import "./coinFlip";
 // import "./dice";

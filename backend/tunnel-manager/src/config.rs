@@ -16,6 +16,9 @@ pub struct Config {
     pub coin_type: String,
     pub sui_rpc_url: Option<String>,
     pub package_id: Option<String>,
+    /// Slim agent-allowance package (the `example_agent_allowance` publish). When set, its mandate
+    /// ops become gas-sponsorable; unset disables sponsored agent-allowance entirely.
+    pub agent_allowance_package_id: Option<String>,
     pub settler_key: Option<String>, // base64 ed25519 secret of the gas/settler account
     pub walrus_publisher_url: Option<String>,
     pub walrus_aggregator_url: Option<String>,
@@ -38,6 +41,7 @@ impl Config {
             coin_type: std::env::var("TUNNEL_COIN_TYPE").unwrap_or_else(|_| "0x2::sui::SUI".into()),
             sui_rpc_url: opt("SUI_RPC_URL"),
             package_id: opt("TUNNEL_PACKAGE_ID"),
+            agent_allowance_package_id: opt("AGENT_ALLOWANCE_PACKAGE_ID"),
             settler_key: opt("SUI_SETTLER_KEY"),
             walrus_publisher_url: opt("WALRUS_PUBLISHER_URL"),
             walrus_aggregator_url: opt("WALRUS_AGGREGATOR_URL"),
