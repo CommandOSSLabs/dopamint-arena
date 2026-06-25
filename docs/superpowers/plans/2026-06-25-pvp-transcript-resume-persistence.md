@@ -801,7 +801,185 @@ git commit -m "fix(pvp): replay transcript on reload in shared hook"
 
 ---
 
-### Task 6: Document the standard step (`docs/`)
+### Task 6: Wire the tic-tac-toe lane (`games/ticTacToe/app/hooks/usePvpTicTacToe.ts`)
+
+**Files:**
+- Modify: `src/games/ticTacToe/app/hooks/usePvpTicTacToe.ts`
+
+**Interfaces:**
+- Consumes (Tasks 1-2): `transcriptToWire`, `appendAdoptedCheckpoint`, `RestoredSession.transcript`.
+
+ttt is a functional-ref hook (`transcriptRef`) that builds the transcript (`transcriptRef.current = new proof.Transcript(tunnelId)`) in the **live-only** path, *outside* the shared `activateTttSession`. Cold-load re-enters the shared activate without re-creating it, so the rebuilt transcript installed in `resume` is never clobbered — only **three** edits are needed (no reuse-`??`, no reset-null). ttt settles by transcript root (`"Transcript root mismatch between players"`), so it has the same reload bug.
+
+- [ ] **Step 1: Import the two helpers**
+
+Add `transcriptToWire` and `appendAdoptedCheckpoint` to the existing `} from "@/pvp/resume";` import block (the one containing `installResumePersistence`).
+
+- [ ] **Step 2: Capture + adopt-append at the `attachResume` site**
+
+Replace:
+
+```ts
+      detachResumeRef.current?.();
+      detachResumeRef.current = attachResume({
+        mp,
+        channel,
+        tunnel: t,
+        adapter: makeTttResumeAdapter<AnyState, CellMove>(() => onAdvance()),
+```
+
+with:
+
+```ts
+      detachResumeRef.current?.();
+      const baseAdapter = makeTttResumeAdapter<AnyState, CellMove>(() =>
+        onAdvance(),
+      );
+      const baseOnReconciled = baseAdapter.onReconciled;
+      detachResumeRef.current = attachResume({
+        mp,
+        channel,
+        tunnel: t,
+        adapter: {
+          ...baseAdapter,
+          captureTranscript: () =>
+            transcriptRef.current
+              ? transcriptToWire(transcriptRef.current)
+              : [],
+          onReconciled: (rt, outcome) => {
+            if (outcome === "adopt" && transcriptRef.current)
+              appendAdoptedCheckpoint(
+                transcriptRef.current,
+                rt.snapshot().latest,
+              );
+            baseOnReconciled(rt, outcome);
+          },
+        },
+```
+
+- [ ] **Step 3: Install the restored transcript in `resume`**
+
+Replace (the line with the `// one active match per game in practice` comment):
+
+```ts
+            const { tunnel, channel } = restored[0]; // one active match per game in practice
+```
+
+with:
+
+```ts
+            const { tunnel, channel, transcript } = restored[0]; // one active match per game in practice
+            transcriptRef.current = transcript;
+```
+
+- [ ] **Step 4: Typecheck + run the ttt/pvp suites**
+
+Run: `npx tsc --noEmit`
+Expected: exit 0.
+
+Run: `node --import tsx --test "src/pvp/**/*.test.ts" "src/games/ticTacToe/tttColdLoad.test.ts"`
+Expected: PASS.
+
+- [ ] **Step 5: Format, then commit**
+
+```bash
+npx prettier --write "src/games/ticTacToe/app/hooks/usePvpTicTacToe.ts"
+git add src/games/ticTacToe/app/hooks/usePvpTicTacToe.ts
+git commit -m "fix(tictactoe): replay transcript on PvP reload"
+```
+
+---
+
+### Task 7: Wire the blackjack lane (`games/blackjack/app/hooks/usePvpBlackjack.ts`)
+
+**Files:**
+- Modify: `src/games/blackjack/app/hooks/usePvpBlackjack.ts`
+
+**Interfaces:**
+- Consumes (Tasks 1-2): `transcriptToWire`, `appendAdoptedCheckpoint`, `RestoredSession.transcript`.
+
+Same three-edit functional-ref pattern as ttt (Task 6): transcript built live-only at `transcriptRef.current = new proof.Transcript(tunnelId)`, shared `activateSession`, settles by transcript root.
+
+- [ ] **Step 1: Import the two helpers**
+
+Add `transcriptToWire` and `appendAdoptedCheckpoint` to the existing `} from "@/pvp/resume";` import block.
+
+- [ ] **Step 2: Capture + adopt-append at the `attachResume` site**
+
+Replace:
+
+```ts
+      detachResumeRef.current?.();
+      detachResumeRef.current = attachResume({
+        mp,
+        channel,
+        tunnel: t,
+        adapter: makeBlackjackResumeAdapter(() => onAdvance()),
+```
+
+with:
+
+```ts
+      detachResumeRef.current?.();
+      const baseAdapter = makeBlackjackResumeAdapter(() => onAdvance());
+      const baseOnReconciled = baseAdapter.onReconciled;
+      detachResumeRef.current = attachResume({
+        mp,
+        channel,
+        tunnel: t,
+        adapter: {
+          ...baseAdapter,
+          captureTranscript: () =>
+            transcriptRef.current
+              ? transcriptToWire(transcriptRef.current)
+              : [],
+          onReconciled: (rt, outcome) => {
+            if (outcome === "adopt" && transcriptRef.current)
+              appendAdoptedCheckpoint(
+                transcriptRef.current,
+                rt.snapshot().latest,
+              );
+            baseOnReconciled(rt, outcome);
+          },
+        },
+```
+
+- [ ] **Step 3: Install the restored transcript in `resume`**
+
+Replace:
+
+```ts
+          const { tunnel, channel } = restored[0];
+```
+
+with:
+
+```ts
+          const { tunnel, channel, transcript } = restored[0];
+          transcriptRef.current = transcript;
+```
+
+(Note: `const { tunnel, channel } = restored[0];` also appears in the resumeSession test — this edit is in `usePvpBlackjack.ts` only. Match the one in the `resume`/`resumeActiveTunnels` block of this hook.)
+
+- [ ] **Step 4: Typecheck + run the full suite**
+
+Run: `npx tsc --noEmit`
+Expected: exit 0.
+
+Run: `npm test`
+Expected: PASS (regression across all lanes).
+
+- [ ] **Step 5: Format, then commit**
+
+```bash
+npx prettier --write "src/games/blackjack/app/hooks/usePvpBlackjack.ts"
+git add src/games/blackjack/app/hooks/usePvpBlackjack.ts
+git commit -m "fix(blackjack): replay transcript on PvP reload"
+```
+
+---
+
+### Task 8: Document the standard step (`docs/`)
 
 **Files:**
 - Modify: `docs/resume-adapter-guide.md`
@@ -833,6 +1011,6 @@ git commit -m "docs(pvp): document transcript resume persistence"
 
 ## Self-Review
 
-- **Spec coverage:** §1 data model → Task 1 (`transcript?` field). §2 write/restore seam → Task 2 (`captureTranscript`, `RestoredSession.transcript`, `rebuildTunnel`). §3 replay → Task 1 (`rebuildTranscript`) + Task 2 (surfaced) + Tasks 3-5 (reuse on activate). §4 adopt gap → Task 1 (`appendAdoptedCheckpoint`) + Tasks 3-5 (`onReconciled`). §4a five edits → Tasks 3 (poker), 4 (battleship), 5 (pvpMatchHook). §5 cleanup → Tasks 3-5 (reset nulls). Rollout table → Tasks 3-5 + Task 6 (docs). Testing #1-#5 → Tasks 1-2. ttt/blackjack unaffected → not touched. ✓
+- **Spec coverage:** §1 data model → Task 1 (`transcript?` field). §2 write/restore seam → Task 2 (`captureTranscript`, `RestoredSession.transcript`, `rebuildTunnel`). §3 replay → Task 1 (`rebuildTranscript`) + Task 2 (surfaced) + Tasks 3-7 (reuse/install). §4 adopt gap → Task 1 (`appendAdoptedCheckpoint`) + Tasks 3-7 (`onReconciled`). §4a five edits → Tasks 3 (poker), 4 (battleship), 5 (pvpMatchHook). §4b three edits → Tasks 6 (ttt), 7 (blackjack). §5 cleanup → Tasks 3-5 (reset nulls); ttt/blackjack need none (§4b). Rollout table (all 5 PvP lanes) → Tasks 3-7. soloSessionHook (self-play) → out of scope. Docs → Task 8. Testing #1-#5 → Tasks 1-2. ✓
 - **Placeholder scan:** none — every step shows exact code/commands.
-- **Type consistency:** `transcriptToWire`/`rebuildTranscript`/`transcriptLastNonce`/`appendAdoptedCheckpoint` and `WireTranscriptEntry`/`RestoredSession.transcript` are named identically across Tasks 1-5. The class hooks use `t` as the `onReconciled` tunnel param; poker uses `_tunnel` + outer `dt` (both valid). ✓
+- **Type consistency:** `transcriptToWire`/`rebuildTranscript`/`transcriptLastNonce`/`appendAdoptedCheckpoint` and `WireTranscriptEntry`/`RestoredSession.transcript` are named identically across Tasks 1-7. The class hooks use `t`; ttt/blackjack use `rt` as the `onReconciled` tunnel param (avoids shadowing their outer `t` tunnel); poker uses `_tunnel` + outer `dt`. All valid. ✓

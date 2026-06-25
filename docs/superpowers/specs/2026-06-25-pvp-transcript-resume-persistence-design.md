@@ -51,8 +51,9 @@ peer-to-peer transcript transfer (that was the rejected Option 2).
 - **Standardize across every affected lane.** The persistence/replay primitives
   live in the generic resume layer; the per-hook wiring is one uniform pattern
   applied to *every* PvP lane that builds a `Transcript` and resumes — poker,
-  battleship, and the shared `pvpMatchHook` (→ bombIt, chickenCross,
-  worldCanvas) — plus a documented standard step for new tunnel games.
+  battleship, the shared `pvpMatchHook` (→ bombIt, chickenCross, worldCanvas),
+  tic-tac-toe, and blackjack — plus a documented standard step for new tunnel
+  games.
 - No edits to upstream `sui-tunnel-ts` (framework is re-synced from upstream;
   `CLAUDE.md`).
 - Reuse the existing resume lifecycle (write debounce, pagehide flush, index,
@@ -62,15 +63,22 @@ peer-to-peer transcript transfer (that was the rejected Option 2).
 
 | Lane | Hook | Builds `Transcript`? | Fix |
 | --- | --- | --- | --- |
-| Quantum poker | `usePvpQuantumPoker.ts` | yes | wire |
-| Battleship | `useBattleshipPvp.ts` | yes | wire |
-| bombIt / chickenCross / worldCanvas | shared `pvp/pvpMatchHook.ts` | yes | wire once |
-| Tic-tac-toe / blackjack | `usePvpTicTacToe.ts` / `usePvpBlackjack.ts` | **no** | unaffected — no change |
+| Quantum poker | `usePvpQuantumPoker.ts` | yes (`transcriptRef`) | wire (5 edits, §4a) |
+| Battleship | `useBattleshipPvp.ts` | yes (class field) | wire (5 edits, §4a) |
+| bombIt / chickenCross / worldCanvas | shared `pvp/pvpMatchHook.ts` | yes (class field) | wire once (5 edits, §4a) |
+| Tic-tac-toe | `games/ticTacToe/app/hooks/usePvpTicTacToe.ts` | yes (`new proof.Transcript`) | wire (3 edits, §4b) |
+| Blackjack | `games/blackjack/app/hooks/usePvpBlackjack.ts` | yes (`new proof.Transcript`) | wire (3 edits, §4b) |
 
-The three hooks are structurally identical (a `new Transcript(tunnelId)` in
-`activateSession`, `transcript.append(u)` in `onConfirmed`, `attachResume`,
-`resumeActiveTunnels` in `resume`), so the wiring is the same five edits each
-(§4a).
+**All five PvP lanes are affected.** ttt and blackjack settle by transcript root
+(`buildSettlementHalfWithRoot`, with a `"Transcript root mismatch between
+players"` guard) exactly like poker — an earlier scope pass missed them because
+they construct the transcript as the namespace-qualified `new proof.Transcript(…)`,
+which a `new Transcript(` grep does not match. They are NOT exempt.
+
+`_shared/soloSessionHook.ts` also builds a transcript + root, but it is
+**self-play** (one client signs both halves), so its root is always
+self-consistent and cooperative close never fails on a reloaded seat — only the
+Walrus proof archive would miss entries. Out of scope here.
 
 **Non-goals**
 - Bot / Auto / watch-bots lanes — `useQuantumPokerAuto.ts` writes no resume
@@ -218,6 +226,27 @@ For the class hooks the adapter is built by `makeAdapter()` (poker builds it
 inline at the `attachResume` site); edits 2–3 spread the two methods onto that
 adapter and wrap its `onReconciled`.
 
+### 4b. The ttt/blackjack variant (3 edits, not 5)
+
+ttt and blackjack are functional-ref hooks (`transcriptRef`), but unlike poker
+they create the transcript (`transcriptRef.current = new proof.Transcript(id)`)
+in the **live-only** path, *outside* the shared `activate*Session`. Cold-load
+re-enters the shared activate without re-creating it, so the rebuilt transcript
+installed in `resume` is never clobbered — no reuse-`??` and no reset-null edit
+is needed. Three edits each:
+
+1. **Capture + adopt-append** — at the `attachResume` site (inside the shared
+   activate), build the base adapter, then spread `captureTranscript` and wrap
+   `onReconciled` to call `appendAdoptedCheckpoint(transcriptRef.current,
+   tunnel.snapshot().latest)` on `"adopt"` (the `make*ResumeAdapter` factory
+   takes a single `() => void` callback, so wrap at the spread, not through it).
+2. **Install on resume** — destructure `const { tunnel, channel, transcript } =
+   restored[0]` and set `transcriptRef.current = transcript`.
+3. **Import** `transcriptToWire` + `appendAdoptedCheckpoint`.
+
+The live path's unconditional `= new proof.Transcript(id)` already gives each
+fresh match its own transcript, so nothing to reset.
+
 ### 5. Cleanup, size, failure
 
 - **Cleanup**: the transcript lives inside the record, so `clearResumeRecord`
@@ -289,10 +318,10 @@ fakes + the `counterProto`/`OffchainTunnel.selfPlay` fixtures):
    record with `transcript` set yields `RestoredSession.transcript` whose root
    matches; a record without it yields `null`.
 
-The per-hook wiring (poker, battleship, pvpMatchHook) is thin glue over
-already-tested primitives; verify each by `pnpm typecheck` + the full `pnpm test`
-suite (regression: existing `pokerColdLoad` / `tttColdLoad` / `resumeSession`
-tests stay green). Acceptance for the representative lane (poker): two tabs, play
+The per-hook wiring (poker, battleship, pvpMatchHook, ttt, blackjack) is thin
+glue over already-tested primitives; verify each by `pnpm typecheck` + the full
+`pnpm test` suite (regression: existing `pokerColdLoad` / `tttColdLoad` /
+`resumeSession` tests stay green). Acceptance for the representative lane (poker): two tabs, play
 past one co-signed hand, reload one seat, play to match end → cooperative close
 succeeds (no `transcript-root mismatch`).
 
@@ -310,5 +339,7 @@ succeeds (no `transcript-root mismatch`).
   `private transcript: Transcript | null` field.
 - `pvp/pvpMatchHook.ts` — the five edits (§4a) + a `private transcript` field;
   fixes bombIt / chickenCross / worldCanvas in one place.
+- `games/ticTacToe/app/hooks/usePvpTicTacToe.ts` — the three edits (§4b).
+- `games/blackjack/app/hooks/usePvpBlackjack.ts` — the three edits (§4b).
 - `docs/resume-adapter-guide.md`, `docs/adding-a-tunnel-game.md` — document
   transcript persistence as the standard resume step.
