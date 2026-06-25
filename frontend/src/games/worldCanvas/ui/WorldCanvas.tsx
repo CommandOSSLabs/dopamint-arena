@@ -824,10 +824,7 @@ export function WorldCanvas({
       )}
       {/* Zoom HUD (bottom-left) — capped to the canvas width and wrap-friendly so it never
           runs off-screen in a narrow window. */}
-      <div
-        className="sketch-stroke sketch-panel absolute bottom-[18px] left-4 flex flex-wrap items-center gap-2 px-2.5 py-1.5"
-        style={{ maxWidth: "calc(100% - 32px)" }}
-      >
+      <div className="sketch-stroke sketch-panel absolute bottom-3 left-3 inline-flex w-fit items-center gap-1.5 px-2 py-1">
         <ZoomButton label="−" onClick={() => zoomBy(1 / ZOOM.step)} />
         <span
           className="min-w-[46px] text-center text-xs font-bold tabular-nums"
