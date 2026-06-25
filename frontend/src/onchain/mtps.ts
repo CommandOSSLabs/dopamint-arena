@@ -6,12 +6,9 @@ import type { SignExec } from "./tunnelTx";
 
 // `import.meta.env?.` (not `.env.`) so the module also loads under node:test, where Vite's
 // `import.meta.env` injection is absent — the ids are empty there, which is fine for unit tests.
-export const MTPS_PACKAGE_ID =
-  import.meta.env?.VITE_MTPS_PACKAGE_ID ?? "";
-export const MTPS_FAUCET_ID =
-  import.meta.env?.VITE_MTPS_FAUCET_ID ?? "";
-export const MTPS_COIN_TYPE =
-  import.meta.env?.VITE_MTPS_COIN_TYPE ?? "";
+export const MTPS_PACKAGE_ID = import.meta.env?.VITE_MTPS_PACKAGE_ID ?? "";
+export const MTPS_FAUCET_ID = import.meta.env?.VITE_MTPS_FAUCET_ID ?? "";
+export const MTPS_COIN_TYPE = import.meta.env?.VITE_MTPS_COIN_TYPE ?? "";
 
 /** True when all three MTPS ids are set — gates the MTPS stake path off a missing env. */
 export const isMtpsConfigured = Boolean(

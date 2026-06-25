@@ -42,10 +42,7 @@ import {
   depositStakeStaked,
   type StakeStrategy,
 } from "../../onchain/stakeTunnel";
-import {
-  MTPS_COIN_TYPE,
-  isMtpsConfigured,
-} from "../../onchain/mtps";
+import { MTPS_COIN_TYPE, isMtpsConfigured } from "../../onchain/mtps";
 import { coSignedToSettleBody } from "../../backend/settleRequest";
 import { attachResume, resumeActiveTunnels } from "@/pvp/resumeSession";
 import {

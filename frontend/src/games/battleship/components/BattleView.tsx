@@ -131,8 +131,9 @@ export function BattleView({
             </div>
             {score ? (
               <p className="qp-note">
-                Session <span className="text-[var(--qp-felt)]">{score.you}</span>{" "}
-                – <span className="text-[var(--qp-red)]">{score.foe}</span> ·
+                Session{" "}
+                <span className="text-[var(--qp-felt)]">{score.you}</span> –{" "}
+                <span className="text-[var(--qp-red)]">{score.foe}</span> ·
                 settle to cash out, or play on.
               </p>
             ) : (
@@ -158,10 +159,7 @@ export function BattleView({
               <button
                 onClick={onPlayAgain}
                 disabled={playAgainDisabled}
-                className={cn(
-                  "qp-btn w-full",
-                  !onSettle && "qp-btn--go",
-                )}
+                className={cn("qp-btn w-full", !onSettle && "qp-btn--go")}
               >
                 {playAgainLabel ?? "Play Again"}
               </button>

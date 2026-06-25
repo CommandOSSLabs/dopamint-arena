@@ -50,7 +50,9 @@ function heuristicCell(
   if (win >= 0) return win;
   const block = findFinish(opp);
   if (block >= 0) return block;
-  return empties[fastIndex(fastSeed, innerProtocol.encodeState(state), empties.length)];
+  return empties[
+    fastIndex(fastSeed, innerProtocol.encodeState(state), empties.length)
+  ];
 }
 
 export interface TicTacToeBotConfig {

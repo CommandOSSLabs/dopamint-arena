@@ -51,7 +51,13 @@ export const SPAWN_A = { row: 1, col: 1 };
 /** 180°-mirror corner of SPAWN_A; odd,odd ⇒ floor (not a pillar). */
 export const SPAWN_B = { row: GRID_H - 2, col: GRID_W - 2 };
 
-export type BombItAction = "north" | "south" | "east" | "west" | "bomb" | "stay";
+export type BombItAction =
+  | "north"
+  | "south"
+  | "east"
+  | "west"
+  | "bomb"
+  | "stay";
 
 export interface BombItPlayer {
   row: number;
@@ -124,8 +130,14 @@ export function isPillar(row: number, col: number): boolean {
 export function inSpawnSafe(row: number, col: number): boolean {
   const br = GRID_H - 2;
   const bc = GRID_W - 2;
-  const a = (row === 1 && col === 1) || (row === 1 && col === 2) || (row === 2 && col === 1);
-  const b = (row === br && col === bc) || (row === br && col === bc - 1) || (row === br - 1 && col === bc);
+  const a =
+    (row === 1 && col === 1) ||
+    (row === 1 && col === 2) ||
+    (row === 2 && col === 1);
+  const b =
+    (row === br && col === bc) ||
+    (row === br && col === bc - 1) ||
+    (row === br - 1 && col === bc);
   return a || b;
 }
 
@@ -149,7 +161,8 @@ export function buildGrid(seed: bigint): Uint8Array {
       const mi = idx(GRID_H - 1 - r, GRID_W - 1 - c);
       if (i >= mi) continue; // canonical half only
       if (grid[i] !== CELL_FLOOR) continue;
-      if (inSpawnSafe(r, c) || inSpawnSafe(GRID_H - 1 - r, GRID_W - 1 - c)) continue;
+      if (inSpawnSafe(r, c) || inSpawnSafe(GRID_H - 1 - r, GRID_W - 1 - c))
+        continue;
       if (rng() < CRATE_DENSITY) {
         grid[i] = CELL_CRATE;
         grid[mi] = CELL_CRATE;
@@ -162,7 +175,11 @@ export function buildGrid(seed: bigint): Uint8Array {
 // ============================================
 // MOVEMENT + BLAST (pure)
 // ============================================
-export function dest(row: number, col: number, action: BombItAction): [number, number] {
+export function dest(
+  row: number,
+  col: number,
+  action: BombItAction
+): [number, number] {
   if (action === "north") return [row - 1, col];
   if (action === "south") return [row + 1, col];
   if (action === "east") return [row, col + 1];
@@ -176,7 +193,7 @@ export function canMoveTo(
   bombs: BombItBomb[],
   other: BombItPlayer,
   nr: number,
-  nc: number,
+  nc: number
 ): boolean {
   if (nr < 0 || nr >= GRID_H || nc < 0 || nc >= GRID_W) return false;
   const cell = grid[idx(nr, nc)];
@@ -189,7 +206,12 @@ export function canMoveTo(
 /** Cells one bomb's `+` blast covers: stops at walls; includes and stops at the first crate. */
 export function blastCellsFor(grid: Uint8Array, bomb: BombItBomb): number[] {
   const out: number[] = [idx(bomb.row, bomb.col)];
-  const dirs: Array<[number, number]> = [[-1, 0], [1, 0], [0, 1], [0, -1]];
+  const dirs: Array<[number, number]> = [
+    [-1, 0],
+    [1, 0],
+    [0, 1],
+    [0, -1],
+  ];
   for (const [dr, dc] of dirs) {
     for (let step = 1; step <= BLAST_RADIUS; step++) {
       const r = bomb.row + dr * step;
@@ -212,17 +234,19 @@ export function blastCellsFor(grid: Uint8Array, bomb: BombItBomb): number[] {
  */
 export function resolveExplosions(
   grid: Uint8Array,
-  bombs: BombItBomb[],
+  bombs: BombItBomb[]
 ): { cells: Set<number>; remaining: BombItBomb[] } {
   const detonating = new Set<number>();
-  for (let i = 0; i < bombs.length; i++) if (bombs[i].fuse <= 0) detonating.add(i);
+  for (let i = 0; i < bombs.length; i++)
+    if (bombs[i].fuse <= 0) detonating.add(i);
 
   const cells = new Set<number>();
   let changed = true;
   while (changed) {
     changed = false;
     cells.clear();
-    for (const di of detonating) for (const ci of blastCellsFor(grid, bombs[di])) cells.add(ci);
+    for (const di of detonating)
+      for (const ci of blastCellsFor(grid, bombs[di])) cells.add(ci);
     for (let i = 0; i < bombs.length; i++) {
       if (!detonating.has(i) && cells.has(idx(bombs[i].row, bombs[i].col))) {
         detonating.add(i);
@@ -246,7 +270,7 @@ function applyAction(
   players: [BombItPlayer, BombItPlayer],
   bombs: BombItBomb[],
   i: number,
-  action: BombItAction,
+  action: BombItAction
 ): void {
   const p = players[i];
   if (!p.alive || action === "stay") return;
@@ -286,13 +310,17 @@ function adjacentDanger(danger: Set<number>): Set<number> {
     const col = ci % GRID_W;
     for (const d of dirs) {
       const [nr, nc] = dest(row, col, d);
-      if (nr >= 0 && nr < GRID_H && nc >= 0 && nc < GRID_W) adj.add(idx(nr, nc));
+      if (nr >= 0 && nr < GRID_H && nc >= 0 && nc < GRID_W)
+        adj.add(idx(nr, nc));
     }
   }
   return adj;
 }
 
-function manhattan(a: { row: number; col: number }, b: { row: number; col: number }): number {
+function manhattan(
+  a: { row: number; col: number },
+  b: { row: number; col: number }
+): number {
   return Math.abs(a.row - b.row) + Math.abs(a.col - b.col);
 }
 
@@ -300,7 +328,11 @@ function manhattan(a: { row: number; col: number }, b: { row: number; col: numbe
  * Survival-first self-play policy: dodge live blasts, rarely plant bombs, and only bomb when
  * an opponent is clearly in line or a crate fully blocks pursuit — with a verified escape.
  */
-function hunterAction(s: BombItState, by: Party, rng: () => number): BombItAction {
+function hunterAction(
+  s: BombItState,
+  by: Party,
+  rng: () => number
+): BombItAction {
   const i = by === "A" ? 0 : 1;
   const p = s.players[i];
   const other = s.players[i === 0 ? 1 : 0];
@@ -336,7 +368,9 @@ function hunterAction(s: BombItState, by: Party, rng: () => number): BombItActio
   const hereBomb = s.bombs.some((b) => b.row === p.row && b.col === p.col);
   const canBomb = liveOwn < MAX_BOMBS_PER_PLAYER && !hereBomb;
   const hasEscape = () => {
-    const future = new Set(blastCellsFor(s.grid, { row: p.row, col: p.col, fuse: 0, owner: by }));
+    const future = new Set(
+      blastCellsFor(s.grid, { row: p.row, col: p.col, fuse: 0, owner: by })
+    );
     const lethal = (i: number) => future.has(i) || danger.has(i);
     const budget = Math.max(2, Math.floor(FUSE_TICKS / 2));
     const seen = new Set<number>([idx(p.row, p.col)]);
@@ -360,7 +394,13 @@ function hunterAction(s: BombItState, by: Party, rng: () => number): BombItActio
   };
   const crateInDir = (d: BombItAction) => {
     const [nr, nc] = dest(p.row, p.col, d);
-    return nr >= 0 && nr < GRID_H && nc >= 0 && nc < GRID_W && s.grid[idx(nr, nc)] === CELL_CRATE;
+    return (
+      nr >= 0 &&
+      nr < GRID_H &&
+      nc >= 0 &&
+      nc < GRID_W &&
+      s.grid[idx(nr, nc)] === CELL_CRATE
+    );
   };
 
   const dist = manhattan(p, other);
@@ -372,14 +412,22 @@ function hunterAction(s: BombItState, by: Party, rng: () => number): BombItActio
 
   // 2) Rare attack bomb — only on a clear line within blast reach.
   const inLine =
-    other.alive && (p.row === other.row || p.col === other.col) && dist <= BLAST_RADIUS;
+    other.alive &&
+    (p.row === other.row || p.col === other.col) &&
+    dist <= BLAST_RADIUS;
   if (canBomb && inLine && hasEscape() && rng() < 0.28) return "bomb";
 
   // 3) Pursue when safe.
   if (towardSafe.length) return pick(towardSafe);
 
   // 4) Crate blocks all pursuit paths → bomb it open (still rare).
-  if (canBomb && towardSafe.length === 0 && toward.some(crateInDir) && hasEscape() && rng() < 0.35) {
+  if (
+    canBomb &&
+    towardSafe.length === 0 &&
+    toward.some(crateInDir) &&
+    hasEscape() &&
+    rng() < 0.35
+  ) {
     return "bomb";
   }
 
@@ -398,7 +446,10 @@ export class BombItProtocol implements Protocol<BombItState, BombItMove> {
       tick: 0n,
       seed,
       grid: buildGrid(seed),
-      players: [spawn(SPAWN_A.row, SPAWN_A.col), spawn(SPAWN_B.row, SPAWN_B.col)],
+      players: [
+        spawn(SPAWN_A.row, SPAWN_A.col),
+        spawn(SPAWN_B.row, SPAWN_B.col),
+      ],
       bombs: [],
       winner: null,
       balanceA: ctx.initialBalances.a,
@@ -412,8 +463,10 @@ export class BombItProtocol implements Protocol<BombItState, BombItMove> {
       throw new Error("game over: bomb-it is already decided");
     }
     // Integrity: a seat may only carry its OWN action (hardens vs a forged opponent move).
-    if (by === "A" && move.b !== undefined) throw new Error("A cannot submit B's action");
-    if (by === "B" && move.a !== undefined) throw new Error("B cannot submit A's action");
+    if (by === "A" && move.b !== undefined)
+      throw new Error("A cannot submit B's action");
+    if (by === "B" && move.a !== undefined)
+      throw new Error("B cannot submit A's action");
 
     const grid = Uint8Array.from(state.grid);
     const players: [BombItPlayer, BombItPlayer] = [
@@ -451,7 +504,17 @@ export class BombItProtocol implements Protocol<BombItState, BombItMove> {
       balanceB = state.total;
     }
 
-    return { tick, seed: state.seed, grid, players, bombs, winner, balanceA, balanceB, total: state.total };
+    return {
+      tick,
+      seed: state.seed,
+      grid,
+      players,
+      bombs,
+      winner,
+      balanceA,
+      balanceB,
+      total: state.total,
+    };
   }
 
   encodeState(s: BombItState): Uint8Array {
@@ -464,7 +527,11 @@ export class BombItProtocol implements Protocol<BombItState, BombItMove> {
       s.grid,
     ];
     for (const p of s.players) {
-      parts.push(u64ToBeBytes(p.row), u64ToBeBytes(p.col), new Uint8Array([p.alive ? 1 : 0]));
+      parts.push(
+        u64ToBeBytes(p.row),
+        u64ToBeBytes(p.col),
+        new Uint8Array([p.alive ? 1 : 0])
+      );
     }
     // Two slots indexed by owner (slot 0 = A's live bomb or empty, slot 1 = B's).
     for (let slot = 0; slot < 2; slot++) {
@@ -475,11 +542,19 @@ export class BombItProtocol implements Protocol<BombItState, BombItMove> {
         u64ToBeBytes(b ? b.row : 0),
         u64ToBeBytes(b ? b.col : 0),
         u64ToBeBytes(b ? b.fuse : 0),
-        new Uint8Array([slot]),
+        new Uint8Array([slot])
       );
     }
     parts.push(
-      new Uint8Array([s.winner === "A" ? 1 : s.winner === "B" ? 2 : s.winner === "draw" ? 3 : 0]),
+      new Uint8Array([
+        s.winner === "A"
+          ? 1
+          : s.winner === "B"
+          ? 2
+          : s.winner === "draw"
+          ? 3
+          : 0,
+      ])
     );
     return concatBytes(parts);
   }

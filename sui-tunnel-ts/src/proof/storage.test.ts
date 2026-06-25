@@ -30,7 +30,7 @@ test("WalrusStore uses injected publish/read hooks (Walrus optional)", async () 
       blobs.set(ref, bytes);
       return { ref };
     },
-    async (ref) => blobs.get(ref) ?? null,
+    async (ref) => blobs.get(ref) ?? null
   );
   const { ref } = await store.put(record);
   assert.ok(ref.startsWith("blob:"));

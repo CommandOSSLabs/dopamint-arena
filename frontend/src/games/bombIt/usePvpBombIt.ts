@@ -34,8 +34,10 @@ const usePvpMatch = createPvpMatchHook<
   readIntent: (role: Role, move) => (role === "A" ? move?.a : move?.b),
 });
 
-export interface PvpBombIt
-  extends Omit<PvpMatch<BombItState, BombItAction, BombItView>, "setIntent"> {
+export interface PvpBombIt extends Omit<
+  PvpMatch<BombItState, BombItAction, BombItView>,
+  "setIntent"
+> {
   queueAction: (a: BombItAction) => void;
 }
 

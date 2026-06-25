@@ -11,9 +11,9 @@
  */
 
 import os from "node:os";
-import { runCluster } from "../sim/cluster";
 import { AgentSwarm } from "../agents/Agent";
 import { BehaviorName } from "../agents/behaviors";
+import { runCluster } from "../sim/cluster";
 
 export interface BenchConfig {
   agents: number;
@@ -146,13 +146,21 @@ export function formatReport(rep: BenchReport): string {
   return [
     `Sui Tunnel benchmark`,
     `  config         : ${rep.tunnels} tunnels, ${rep.activeParticipants} agents, ` +
-      `${rep.workers}/${rep.cores} workers, signMode=${rep.signMode}, behaviors=${rep.behaviors.join("+")}`,
+      `${rep.workers}/${rep.cores} workers, signMode=${
+        rep.signMode
+      }, behaviors=${rep.behaviors.join("+")}`,
     `  elapsed        : ${(rep.elapsedMs / 1000).toFixed(2)}s`,
     `  interactions   : ${n(rep.totalInteractions)}`,
-    `  effective TPS  : avg ${n(rep.avgTps)}  peak ${n(rep.peakTps)}  (per-core ${n(rep.perCoreTps)})`,
+    `  effective TPS  : avg ${n(rep.avgTps)}  peak ${n(
+      rep.peakTps
+    )}  (per-core ${n(rep.perCoreTps)})`,
     `  signatures/sec : ${n(rep.signaturesPerSec)}`,
     `  verifies/sec   : ${n(rep.verificationsPerSec)}`,
-    `  bandwidth      : ${n(rep.bytesPerSec)} B/s (${rep.bytesPerUpdate.toFixed(0)} B/update)`,
-    `  settlement     : ${(rep.settlementSuccessRate * 100).toFixed(1)}% success (sample)`,
+    `  bandwidth      : ${n(rep.bytesPerSec)} B/s (${rep.bytesPerUpdate.toFixed(
+      0
+    )} B/update)`,
+    `  settlement     : ${(rep.settlementSuccessRate * 100).toFixed(
+      1
+    )}% success (sample)`,
   ].join("\n");
 }

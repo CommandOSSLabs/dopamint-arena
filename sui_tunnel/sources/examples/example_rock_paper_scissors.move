@@ -31,9 +31,6 @@ const ENotAuthorized: vector<u8> = b"The caller is not authorized to perform thi
 const EInvalidState: vector<u8> = b"The operation is not allowed in the current state.";
 
 #[error]
-const EEmptyInput: vector<u8> = b"Input is empty where a non-empty value was required.";
-
-#[error]
 const EAlreadyCommitted: vector<u8> = b"A value has already been committed and cannot be committed again.";
 
 #[error]
@@ -52,13 +49,19 @@ const EInvalidCommitment: vector<u8> = b"The commitment is invalid or has the wr
 const EInvalidParties: vector<u8> = b"The tunnel parties are invalid (for example, both parties share the same address).";
 
 #[error]
-const ERandomnessNotAvailable: vector<u8> = b"The randomness is not available yet.";
-
-#[error]
 const ETimeoutNotReached: vector<u8> = b"The timeout has not been reached yet.";
 
 #[error]
 const EInvalidDepositAmount: vector<u8> = b"The deposit amount is invalid.";
+
+#[error]
+const ENotJoined: vector<u8> = b"A required participant has not joined yet.";
+
+#[error]
+const EInvalidMove: vector<u8> = b"The submitted move is invalid or out of range.";
+
+#[error]
+const EPotMismatch: vector<u8> = b"The staked pot does not equal the expected total.";
 
 // ============================================
 // CONSTANTS
@@ -106,6 +109,8 @@ public struct RPSGame<phantom T> has key, store {
     stake_amount: u64,
     /// Combined stakes
     pot: Balance<T>,
+    /// Player 2 has staked via `join_game`
+    player2_joined: bool,
     /// Player 1's commit (hash of move + salt)
     player1_commit: vector<u8>,
     /// Player 2's commit
@@ -124,12 +129,10 @@ public struct RPSGame<phantom T> has key, store {
     created_at: u64,
     /// Commits complete timestamp
     commits_at: u64,
-    /// Player 1's tiebreak entropy contribution
-    player1_entropy: vector<u8>,
-    /// Player 2's tiebreak entropy contribution
-    player2_entropy: vector<u8>,
-    /// Randomness seed for tie-breaking (created when both players contribute)
-    tiebreak_seed: Option<randomness::Seed>,
+    /// Player 1's revealed salt, used as commitment-bound tie-break entropy
+    player1_salt: vector<u8>,
+    /// Player 2's revealed salt, used as commitment-bound tie-break entropy
+    player2_salt: vector<u8>,
 }
 
 /// Result of the game
@@ -219,6 +222,7 @@ public fun create_game<T>(player2: address, stake: Coin<T>, clock: &Clock, ctx: 
         player2,
         stake_amount,
         pot: stake.into_balance(),
+        player2_joined: false,
         player1_commit: vector[],
         player2_commit: vector[],
         player1_move: 255, // Invalid placeholder
@@ -228,9 +232,8 @@ public fun create_game<T>(player2: address, stake: Coin<T>, clock: &Clock, ctx: 
         status: STATUS_WAITING_COMMITS,
         created_at: now,
         commits_at: 0,
-        player1_entropy: vector[],
-        player2_entropy: vector[],
-        tiebreak_seed: option::none(),
+        player1_salt: vector[],
+        player2_salt: vector[],
     };
 
     event::emit(RPSGameCreated { player1, player2, stake_amount, created_at: now });
@@ -245,6 +248,7 @@ public fun join_game<T>(game: &mut RPSGame<T>, stake: Coin<T>, ctx: &TxContext) 
     assert!(stake.value() == game.stake_amount, EInvalidDepositAmount);
 
     game.pot.join(stake.into_balance());
+    game.player2_joined = true;
 }
 
 /// Player commits their move (hash of move byte + salt bytes)
@@ -262,6 +266,7 @@ public fun commit_move<T>(
         assert!(game.player1_commit.is_empty(), EAlreadyCommitted);
         game.player1_commit = commitment;
     } else if (sender == game.player2) {
+        assert!(game.player2_joined, ENotJoined);
         assert!(game.player2_commit.is_empty(), EAlreadyCommitted);
         game.player2_commit = commitment;
     } else {
@@ -287,23 +292,21 @@ public fun reveal_move<T>(
 ) {
     let sender = ctx.sender();
     assert!(game.status == STATUS_WAITING_REVEALS, EInvalidState);
-    assert!(move_choice <= MOVE_SCISSORS, EInvalidState);
+    assert!(move_choice <= MOVE_SCISSORS, EInvalidMove);
 
-    // Compute commitment
-    let mut data = vector<u8>[];
-    data.push_back(move_choice);
-    data.append(salt);
-    let computed_hash = hash::blake2b256(&data);
+    let computed_hash = move_commitment(move_choice, &salt);
 
     if (sender == game.player1) {
         assert!(!game.player1_revealed, EAlreadyRevealed);
         assert!(computed_hash == game.player1_commit, ECommitmentMismatch);
         game.player1_move = move_choice;
+        game.player1_salt = salt;
         game.player1_revealed = true;
     } else if (sender == game.player2) {
         assert!(!game.player2_revealed, EAlreadyRevealed);
         assert!(computed_hash == game.player2_commit, ECommitmentMismatch);
         game.player2_move = move_choice;
+        game.player2_salt = salt;
         game.player2_revealed = true;
     } else {
         abort ENotAuthorized
@@ -319,6 +322,8 @@ public fun settle_game<T>(game: &mut RPSGame<T>, ctx: &mut TxContext): GameResul
     assert!(sender == game.player1 || sender == game.player2, ENotAuthorized);
     assert!(game.status == STATUS_WAITING_REVEALS, EInvalidState);
     assert!(game.player1_revealed && game.player2_revealed, ENotRevealed);
+    // No player can win the pot unless both stakes are present.
+    assert!(game.pot.value() == 2 * game.stake_amount, EPotMismatch);
 
     let (winner, was_tiebreaker) = determine_winner(game);
 
@@ -402,58 +407,54 @@ public fun claim_reveal_timeout<T>(game: &mut RPSGame<T>, clock: &Clock, ctx: &m
     };
 }
 
-/// Contribute entropy for tiebreak randomness.
-/// Both players must contribute before a tiebreak seed is created.
-/// This prevents either player from unilaterally controlling the outcome.
-/// The final seed is derived from the combination of both contributions.
-public fun contribute_tiebreak_entropy<T>(
-    game: &mut RPSGame<T>,
-    entropy: vector<u8>,
-    ctx: &TxContext,
-) {
-    let sender = ctx.sender();
-    assert!(sender == game.player1 || sender == game.player2, ENotAuthorized);
-    assert!(option::is_none(&game.tiebreak_seed), EAlreadyCommitted);
-    assert!(!entropy.is_empty(), EEmptyInput);
-
-    if (sender == game.player1) {
-        assert!(game.player1_entropy.is_empty(), EAlreadyCommitted);
-        game.player1_entropy = entropy;
-    } else {
-        assert!(game.player2_entropy.is_empty(), EAlreadyCommitted);
-        game.player2_entropy = entropy;
-    };
-
-    // Create seed only when both players have contributed
-    if (!game.player1_entropy.is_empty() && !game.player2_entropy.is_empty()) {
-        let mut combined = game.player1_entropy;
-        combined.append(game.player2_entropy);
-        game.tiebreak_seed = option::some(randomness::from_bytes(combined));
-    };
-}
-
 // ============================================
 // INTERNAL HELPERS
 // ============================================
 
-/// Determine the winner based on moves
+/// Recompute a move commitment `blake2b256(move_byte || salt)` without consuming `salt`.
+fun move_commitment(move_choice: u8, salt: &vector<u8>): vector<u8> {
+    let mut data = vector[move_choice];
+    salt.do_ref!(|b| data.push_back(*b));
+    hash::blake2b256(&data)
+}
+
+/// Derive the tie-break seed from both players' revealed salts.
+///
+/// Each salt is bound by that player's move commitment, which is fixed during the
+/// commit phase before any salt is revealed. Neither player can therefore choose a salt
+/// after observing the other's, so the seed (and thus the tie-break parity) is not
+/// grindable by the last revealer. `combine_reveals` length-prefixes both fields.
+fun tiebreak_seed<T>(game: &RPSGame<T>): randomness::Seed {
+    let reveal_1 = randomness::create_reveal(
+        vector[game.player1_move],
+        clone_bytes(&game.player1_salt),
+    );
+    let reveal_2 = randomness::create_reveal(
+        vector[game.player2_move],
+        clone_bytes(&game.player2_salt),
+    );
+    randomness::combine_reveals(&reveal_1, &reveal_2)
+}
+
+/// Copy a byte vector behind a reference (Move vectors are not `copy`).
+fun clone_bytes(bytes: &vector<u8>): vector<u8> {
+    let mut out = vector[];
+    bytes.do_ref!(|b| out.push_back(*b));
+    out
+}
+
+/// Determine the winner based on moves. Ties are broken by `tiebreak_seed`.
 fun determine_winner<T>(game: &RPSGame<T>): (address, bool) {
     let p1 = game.player1_move;
     let p2 = game.player2_move;
 
     if (p1 == p2) {
-        // Tie - use randomness if available
-        if (option::is_some(&game.tiebreak_seed)) {
-            let seed = option::borrow(&game.tiebreak_seed);
-            let random_byte = randomness::seed_bytes(seed)[0];
-            if (random_byte % 2 == 0) {
-                (game.player1, true)
-            } else {
-                (game.player2, true)
-            }
+        let seed = tiebreak_seed(game);
+        let random_byte = randomness::seed_bytes(&seed)[0];
+        if (random_byte % 2 == 0) {
+            (game.player1, true)
         } else {
-            // No randomness seed set — ties cannot be resolved fairly
-            abort ERandomnessNotAvailable
+            (game.player2, true)
         }
     } else if (beats(p1, p2)) {
         (game.player1, false)

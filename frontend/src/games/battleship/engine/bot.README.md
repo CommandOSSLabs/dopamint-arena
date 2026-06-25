@@ -20,11 +20,11 @@ Every turn is one of two modes:
 
 Difficulty swaps how each mode behaves (`BOT_CONFIGS`, default `normal`):
 
-| Tier   | Hunt                | Target                                  |
-| ------ | ------------------- | --------------------------------------- |
-| Easy   | random cell         | fire the hit's open neighbours          |
-| Normal | parity (see below)  | follow the line — fire the run's ends   |
-| Hard   | probability density | probability density (same pass)         |
+| Tier   | Hunt                | Target                                |
+| ------ | ------------------- | ------------------------------------- |
+| Easy   | random cell         | fire the hit's open neighbours        |
+| Normal | parity (see below)  | follow the line — fire the run's ends |
+| Hard   | probability density | probability density (same pass)       |
 
 - **Parity hunt** — fire only one colour of the board's checkerboard. The
   smallest ship is 2 cells, so it always covers a cell of each colour: searching

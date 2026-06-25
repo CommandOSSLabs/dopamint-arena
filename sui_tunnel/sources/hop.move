@@ -87,6 +87,7 @@ const RV_INVALID_PARAMETER: u64 = 2;
 const RV_INVALID_TIMEOUT: u64 = 510;
 const RV_INVALID_HOP: u64 = 700;
 const RV_MAX_HOPS_EXCEEDED: u64 = 707;
+const RV_INSUFFICIENT_AMOUNT: u64 = 800;
 
 // ============================================
 // CONSTANTS
@@ -130,9 +131,6 @@ const ROUTE_STATUS_COMPLETED: u8 = 2;
 
 /// Route status: Failed (timeout or cancellation)
 const ROUTE_STATUS_FAILED: u8 = 3;
-
-// One hour in milliseconds
-// const ONE_HOUR_MS: u64 = 3600000;
 
 // ============================================
 // STRUCTS
@@ -401,6 +399,8 @@ public fun add_hop(
 ) {
     assert!(route.status == ROUTE_STATUS_PLANNING, EInvalidHop);
     assert!(route.hops.length() < MAX_HOPS, EMaxHopsExceeded);
+    // A single hop cannot charge a fee that meets or exceeds the routed amount.
+    assert!(fee < route.amount, EInvalidHop);
 
     let index = route.hops.length();
     let hop = create_hop(tunnel_id, node_address, fee, timeout_ms, index);
@@ -473,6 +473,36 @@ public fun validate_route(route: &Route): RouteValidation {
             error_message: b"Final hop must go to receiver",
             total_amount_needed: 0,
         }
+    };
+
+    // Check route economics: total fees must be strictly less than the amount,
+    // and every hop's fee must be less than the amount that actually reaches it
+    // (route.amount minus the fees taken by all prior hops). Computed in u128 so
+    // the running sum cannot overflow; an invalid economic split is reported via
+    // the result struct rather than aborting.
+    if ((route.total_fees as u128) >= (route.amount as u128)) {
+        return RouteValidation {
+            valid: false,
+            error_code: RV_INSUFFICIENT_AMOUNT,
+            error_message: b"Total fees must be less than route amount",
+            total_amount_needed: 0,
+        }
+    };
+    let amount_u128 = route.amount as u128;
+    let mut fees_so_far: u128 = 0;
+    let mut j = 0;
+    while (j < num_hops) {
+        let hop_fee = route.hops[j].fee as u128;
+        if (hop_fee >= amount_u128 - fees_so_far) {
+            return RouteValidation {
+                valid: false,
+                error_code: RV_INSUFFICIENT_AMOUNT,
+                error_message: b"Hop fee exceeds amount reaching the hop",
+                total_amount_needed: 0,
+            }
+        };
+        fees_so_far = fees_so_far + hop_fee;
+        j = j + 1;
     };
 
     // Calculate total amount needed. Compute in u128 so the add cannot abort on
@@ -824,9 +854,14 @@ public fun current_version(): u64 { CURRENT_VERSION }
 /// Get a node's version
 public fun node_version(node: &RoutingNode): u64 { node.version }
 
+/// Returns whether the node is at the current module version.
+public fun is_current_version(node: &RoutingNode): bool {
+    node.version == CURRENT_VERSION
+}
+
 /// Assert that a node is at the current version
 public fun assert_current_version(node: &RoutingNode) {
-    assert!(node.version == CURRENT_VERSION, EInvalidVersion);
+    assert!(is_current_version(node), EInvalidVersion);
 }
 
 /// Adds a tunnel to a routing node
@@ -842,14 +877,9 @@ public fun remove_tunnel_from_node(
     ctx: &TxContext,
 ) {
     assert!(ctx.sender() == node.address, ENotAuthorized);
-    let len = node.tunnel_ids.length();
-    let mut i = 0;
-    while (i < len) {
-        if (&node.tunnel_ids[i] == tunnel_id) {
-            node.tunnel_ids.swap_remove(i);
-            return
-        };
-        i = i + 1;
+    let found = node.tunnel_ids.find_index!(|id| id == tunnel_id);
+    if (found.is_some()) {
+        node.tunnel_ids.swap_remove(*found.borrow());
     };
 }
 
@@ -947,17 +977,7 @@ public fun create_cascading_timeouts(
     // returning a centralized error instead of a raw arithmetic abort mid-loop.
     assert!((base_timeout_ms as u128) >= (delta_ms as u128) * (num_hops as u128), EInvalidTimeout);
 
-    let mut timeouts = vector<u64>[];
-    let mut current = base_timeout_ms;
-
-    let mut i = 0;
-    while (i < num_hops) {
-        timeouts.push_back(current);
-        current = current - delta_ms;
-        i = i + 1;
-    };
-
-    timeouts
+    vector::tabulate!(num_hops, |i| base_timeout_ms - i * delta_ms)
 }
 
 /// Estimates the total fee for a route given hop count and average fee

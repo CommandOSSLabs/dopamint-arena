@@ -74,7 +74,10 @@ async function runSponsoredFlow(opts: {
   const res = await fetch(`${root}/v1/sponsor`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ sender: opts.sender, txKindBytes: toBase64(kindBytes) }),
+    body: JSON.stringify({
+      sender: opts.sender,
+      txKindBytes: toBase64(kindBytes),
+    }),
   });
   if (!res.ok) {
     const detail = await res.text().catch(() => "");
@@ -86,7 +89,9 @@ async function runSponsoredFlow(opts: {
   try {
     userSignature = await opts.signSponsoredBytes(txBytes);
   } catch (e) {
-    throw new Error(`sponsor: sign sponsored bytes failed: ${String((e as Error)?.message ?? e)}`);
+    throw new Error(
+      `sponsor: sign sponsored bytes failed: ${String((e as Error)?.message ?? e)}`,
+    );
   }
   // 4) Submit with both sigs: the node verifies the sender and the gas owner (settler).
   let result: Awaited<ReturnType<SponsorSuiClient["executeTransactionBlock"]>>;
@@ -98,7 +103,9 @@ async function runSponsoredFlow(opts: {
       requestType: "WaitForLocalExecution",
     });
   } catch (e) {
-    throw new Error(`sponsor: executeTransactionBlock failed: ${String((e as Error)?.message ?? e)}`);
+    throw new Error(
+      `sponsor: executeTransactionBlock failed: ${String((e as Error)?.message ?? e)}`,
+    );
   }
   // Surface an on-chain failure (e.g. the faucet aborted) loudly, instead of a later "no coin".
   const status = result.effects?.status?.status;

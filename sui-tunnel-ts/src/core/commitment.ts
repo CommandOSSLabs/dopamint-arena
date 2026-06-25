@@ -14,15 +14,15 @@
  * `sui_tunnel/tests/wire_format_tests.move`.
  */
 
+import { bytesEqual, concatBytes } from "./bytes";
 import { blake2b256 } from "./crypto";
-import { concatBytes, bytesEqual } from "./bytes";
 import { u64ToBeBytes } from "./wire";
 
 const enc = new TextEncoder();
 
 /** `b"sui_tunnel::randomness::commit_reveal"`. Matches `DOMAIN_COMMIT_REVEAL`. */
 export const DOMAIN_COMMIT_REVEAL = enc.encode(
-  "sui_tunnel::randomness::commit_reveal",
+  "sui_tunnel::randomness::commit_reveal"
 );
 
 /** Minimum salt length enforced by `randomness::create_commitment` (>= 16 bytes). */
@@ -36,31 +36,40 @@ function lengthPrefixed(x: Uint8Array): Uint8Array[] {
  * Compute a commit-reveal commitment hash. Mirrors `randomness::create_commitment`
  * (only the hash; committer/timestamp are stored alongside but are NOT hashed).
  */
-export function computeCommitment(
-  value: Uint8Array,
-  salt: Uint8Array,
-): Uint8Array {
-  if (salt.length < MIN_SALT_LEN) {
-    throw new Error(
-      `salt must be >= ${MIN_SALT_LEN} bytes, got ${salt.length}`,
-    );
-  }
+function hashCommitment(value: Uint8Array, salt: Uint8Array): Uint8Array {
   return blake2b256(
     concatBytes([
       DOMAIN_COMMIT_REVEAL,
       ...lengthPrefixed(value),
       ...lengthPrefixed(salt),
-    ]),
+    ])
   );
 }
 
-/** Verify a reveal `(value, salt)` against a commitment hash. */
+export function computeCommitment(
+  value: Uint8Array,
+  salt: Uint8Array
+): Uint8Array {
+  if (salt.length < MIN_SALT_LEN) {
+    throw new Error(
+      `salt must be >= ${MIN_SALT_LEN} bytes, got ${salt.length}`
+    );
+  }
+  return hashCommitment(value, salt);
+}
+
+/**
+ * Verify a reveal `(value, salt)` against a commitment hash. Returns `false` for
+ * any non-matching reveal, including a salt shorter than 16 bytes, mirroring Move
+ * `randomness::verify_commitment`, which never aborts. Only `create_commitment`
+ * (the commit path, here `computeCommitment`) enforces the `>= 16`-byte salt.
+ */
 export function verifyCommitment(
   commitmentHash: Uint8Array,
   value: Uint8Array,
-  salt: Uint8Array,
+  salt: Uint8Array
 ): boolean {
-  return bytesEqual(computeCommitment(value, salt), commitmentHash);
+  return bytesEqual(hashCommitment(value, salt), commitmentHash);
 }
 
 /**
@@ -72,7 +81,7 @@ export function combineReveals(
   valueA: Uint8Array,
   saltA: Uint8Array,
   valueB: Uint8Array,
-  saltB: Uint8Array,
+  saltB: Uint8Array
 ): Uint8Array {
   return blake2b256(
     concatBytes([
@@ -81,6 +90,6 @@ export function combineReveals(
       ...lengthPrefixed(saltA),
       ...lengthPrefixed(valueB),
       ...lengthPrefixed(saltB),
-    ]),
+    ])
   );
 }

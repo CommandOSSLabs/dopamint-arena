@@ -64,7 +64,7 @@ test("rules and tunnel hashes are deterministic", () => {
   assert.equal(toHex(quantumPokerRulesHash()), toHex(quantumPokerRulesHash()));
   assert.equal(
     toHex(tunnelIdHash("0x" + "22".repeat(32))),
-    toHex(tunnelIdHash("0x" + "22".repeat(32))),
+    toHex(tunnelIdHash("0x" + "22".repeat(32)))
   );
 });
 
@@ -82,8 +82,8 @@ test("UnavailableQuantumPokerResultProver throws with deployment guidance", asyn
           partyBBalance: 1000,
           resultHash: new Uint8Array(32),
         },
-        {},
+        {}
       ),
-    /trusted setup/,
+    /trusted setup/
   );
 });

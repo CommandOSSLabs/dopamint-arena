@@ -41,10 +41,7 @@ import {
   depositStakeStaked,
   type StakeStrategy,
 } from "../../onchain/stakeTunnel";
-import {
-  MTPS_COIN_TYPE,
-  isMtpsConfigured,
-} from "../../onchain/mtps";
+import { MTPS_COIN_TYPE, isMtpsConfigured } from "../../onchain/mtps";
 import { coSignedToSettleBody } from "../../backend/settleRequest";
 import { type FleetSecret, makeFleetSecret } from "./engine/selfPlay";
 import { type Placement, placementsToBoard } from "./engine/fleet";

@@ -33,7 +33,8 @@ import {
  */
 function selfPlayBots(protocol: MultiGameBombItProtocol) {
   const mk = (seat: "A" | "B") => ({
-    plan: (s: MultiGameBombItState) => protocol.randomMove(s, seat, Math.random),
+    plan: (s: MultiGameBombItState) =>
+      protocol.randomMove(s, seat, Math.random),
     confirm: () => {},
     abort: () => {},
   });

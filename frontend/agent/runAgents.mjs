@@ -31,7 +31,9 @@ function readAgentKeys() {
   }
 
   const keysFile = process.env.AGENT_KEYS_FILE ?? "keys.json";
-  const keysPath = isAbsolute(keysFile) ? keysFile : resolve(agentDir, keysFile);
+  const keysPath = isAbsolute(keysFile)
+    ? keysFile
+    : resolve(agentDir, keysFile);
   if (!existsSync(keysPath)) {
     throw new Error(
       `missing ${keysPath}; run fundTreasury.mjs or set AGENT_KEYS/AGENT_KEYS_FILE`,
@@ -69,7 +71,9 @@ for (let i = 0; i < K; i++) {
       console.log(`[agent ${i}] ${t}`);
     }
   });
-  page.on("pageerror", (e) => console.log(`[agent ${i}] PAGEERROR ${e.message}`));
+  page.on("pageerror", (e) =>
+    console.log(`[agent ${i}] PAGEERROR ${e.message}`),
+  );
   const url = new URL(BASE);
   url.searchParams.set("agent", "");
   url.searchParams.set("m", String(M));
@@ -82,7 +86,9 @@ const start = Date.now();
 while (Date.now() - start < DURATION) {
   await new Promise((r) => setTimeout(r, 5000));
   const s = Math.round((Date.now() - start) / 1000);
-  console.log(`[t+${s}s] settled tunnels: ${settleCount} | distinct agents settled: ${settledAgents.size}/${K}`);
+  console.log(
+    `[t+${s}s] settled tunnels: ${settleCount} | distinct agents settled: ${settledAgents.size}/${K}`,
+  );
 }
 const secs = (Date.now() - start) / 1000;
 console.log(

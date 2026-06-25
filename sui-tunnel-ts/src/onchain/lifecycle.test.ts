@@ -41,7 +41,7 @@ const emptyTx = {} as unknown as Parameters<typeof execute>[2];
 test("REPRO #2: execute() throws when the transaction aborts on-chain (effects.status = failure)", async () => {
   await assert.rejects(
     () => execute(fakeClient("failure"), noSigner, emptyTx),
-    /failed on-chain/,
+    /failed on-chain/
   );
 });
 
@@ -59,7 +59,7 @@ test("REPRO #10: raise_dispute executor with no latest update throws instead of 
   });
   await assert.rejects(
     () => exec("t1", "raise_dispute"),
-    /latest co-signed update/,
+    /latest co-signed update/
   );
 });
 
@@ -116,7 +116,7 @@ test("resolve_dispute executor with no latest update throws (no silent no-op)", 
   });
   await assert.rejects(
     () => exec("t1", "resolve_dispute"),
-    /latest co-signed update/,
+    /latest co-signed update/
   );
 });
 
@@ -164,7 +164,7 @@ test("REPRO #12: sampleClose round-robins a signer pool (independent gas coins) 
     6,
     {},
     undefined,
-    signers,
+    signers
   );
   assert.equal(digests.length, 6);
   assert.deepEqual(used, ["s0", "s1", "s2", "s0", "s1", "s2"]); // round-robin, not one signer

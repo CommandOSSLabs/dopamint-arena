@@ -70,7 +70,7 @@ export async function createStream(
   durationMs: bigint,
   memo: string = "",
   client?: SuiClient,
-  keypair?: Ed25519Keypair,
+  keypair?: Ed25519Keypair
 ): Promise<CreateStreamResult> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -78,8 +78,8 @@ export async function createStream(
   if (durationMs < BigInt(MIN_STREAM_DURATION_MS)) {
     throw new Error(
       `Duration must be at least ${formatDuration(
-        BigInt(MIN_STREAM_DURATION_MS),
-      )}`,
+        BigInt(MIN_STREAM_DURATION_MS)
+      )}`
     );
   }
 
@@ -105,7 +105,7 @@ export async function createStream(
     typeArguments: [
       `${buildTarget(
         MODULES.EXAMPLE_STREAMING_PAYMENT,
-        "PaymentStream",
+        "PaymentStream"
       )}<${SUI_COIN_TYPE}>`,
     ],
     arguments: [stream],
@@ -143,7 +143,7 @@ export async function createStream(
 export async function withdraw(
   streamId: string,
   client?: SuiClient,
-  keypair?: Ed25519Keypair,
+  keypair?: Ed25519Keypair
 ): Promise<{ digest: string; coinId: string | null }> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -160,7 +160,7 @@ export async function withdraw(
 
   tx.transferObjects(
     [coin],
-    tx.pure.address(signer.getPublicKey().toSuiAddress()),
+    tx.pure.address(signer.getPublicKey().toSuiAddress())
   );
 
   const result = await signAndExecute(suiClient, tx, signer);
@@ -193,7 +193,7 @@ export async function withdrawAmount(
   streamId: string,
   amount: bigint,
   client?: SuiClient,
-  keypair?: Ed25519Keypair,
+  keypair?: Ed25519Keypair
 ): Promise<{ digest: string; coinId: string | null }> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -214,7 +214,7 @@ export async function withdrawAmount(
 
   tx.transferObjects(
     [coin],
-    tx.pure.address(signer.getPublicKey().toSuiAddress()),
+    tx.pure.address(signer.getPublicKey().toSuiAddress())
   );
 
   const result = await signAndExecute(suiClient, tx, signer);
@@ -245,7 +245,7 @@ export async function withdrawAmount(
 export async function cancelStream(
   streamId: string,
   client?: SuiClient,
-  keypair?: Ed25519Keypair,
+  keypair?: Ed25519Keypair
 ): Promise<{
   digest: string;
   recipientCoinId: string | null;
@@ -267,14 +267,14 @@ export async function cancelStream(
   // Transfer both coins to the caller - in practice, recipient coin would go to recipient
   tx.transferObjects(
     [recipientCoin, refundCoin],
-    tx.pure.address(signer.getPublicKey().toSuiAddress()),
+    tx.pure.address(signer.getPublicKey().toSuiAddress())
   );
 
   const result = await signAndExecute(suiClient, tx, signer);
   const coinIds =
     result.objectChanges
       ?.filter(
-        (c: any) => c.type === "created" && c.objectType?.includes("Coin"),
+        (c: any) => c.type === "created" && c.objectType?.includes("Coin")
       )
       .map((c: any) => c.objectId) || [];
 
@@ -308,7 +308,7 @@ export async function topUpStream(
   additionalCoinId: string,
   additionalDurationMs: bigint = 0n,
   client?: SuiClient,
-  keypair?: Ed25519Keypair,
+  keypair?: Ed25519Keypair
 ): Promise<string> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -345,7 +345,7 @@ export function calculateUnlocked(
   totalAmount: bigint,
   startTime: bigint,
   endTime: bigint,
-  currentTime: bigint,
+  currentTime: bigint
 ): bigint {
   if (currentTime <= startTime) return 0n;
   if (currentTime >= endTime) return totalAmount;
@@ -363,13 +363,13 @@ export function calculateAvailable(
   withdrawnAmount: bigint,
   startTime: bigint,
   endTime: bigint,
-  currentTime: bigint,
+  currentTime: bigint
 ): bigint {
   const unlocked = calculateUnlocked(
     totalAmount,
     startTime,
     endTime,
-    currentTime,
+    currentTime
   );
   return unlocked > withdrawnAmount ? unlocked - withdrawnAmount : 0n;
 }
@@ -417,11 +417,11 @@ export async function exampleStreamingPaymentFlow(): Promise<void> {
     console.log("How it works:");
     console.log("1. Sender creates stream with total amount and duration");
     console.log(
-      "2. Funds unlock linearly: unlocked = total * (elapsed / duration)",
+      "2. Funds unlock linearly: unlocked = total * (elapsed / duration)"
     );
     console.log("3. Recipient can withdraw unlocked funds anytime");
     console.log(
-      "4. Sender can cancel (recipient gets earned, sender gets refund)\n",
+      "4. Sender can cancel (recipient gets earned, sender gets refund)\n"
     );
 
     console.log("Example:");
@@ -458,7 +458,7 @@ await topUpStream(stream.streamId, additionalCoinId, 7n * 24n * 60n * 60n * 1000
     console.log(
       "- Day 0:  " +
         calculateUnlocked(totalAmount, startTime, endTime, 0n) +
-        " MIST unlocked",
+        " MIST unlocked"
     );
     console.log(
       "- Day 7:  " +
@@ -466,9 +466,9 @@ await topUpStream(stream.streamId, additionalCoinId, 7n * 24n * 60n * 60n * 1000
           totalAmount,
           startTime,
           endTime,
-          7n * 24n * 60n * 60n * 1000n,
+          7n * 24n * 60n * 60n * 1000n
         ) +
-        " MIST unlocked",
+        " MIST unlocked"
     );
     console.log(
       "- Day 15: " +
@@ -476,9 +476,9 @@ await topUpStream(stream.streamId, additionalCoinId, 7n * 24n * 60n * 60n * 1000
           totalAmount,
           startTime,
           endTime,
-          15n * 24n * 60n * 60n * 1000n,
+          15n * 24n * 60n * 60n * 1000n
         ) +
-        " MIST unlocked",
+        " MIST unlocked"
     );
     console.log(
       "- Day 30: " +
@@ -486,9 +486,9 @@ await topUpStream(stream.streamId, additionalCoinId, 7n * 24n * 60n * 60n * 1000
           totalAmount,
           startTime,
           endTime,
-          30n * 24n * 60n * 60n * 1000n,
+          30n * 24n * 60n * 60n * 1000n
         ) +
-        " MIST unlocked",
+        " MIST unlocked"
     );
   } catch (error) {
     logError(error, "exampleStreamingPaymentFlow");

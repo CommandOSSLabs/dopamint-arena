@@ -34,8 +34,10 @@ const usePvpMatch = createPvpMatchHook<
   readIntent: (role: Role, move) => (role === "A" ? move?.dirA : move?.dirB),
 });
 
-export interface PvpChickenCross
-  extends Omit<PvpMatch<CrossState, CrossDir | undefined, CrossView>, "setIntent"> {
+export interface PvpChickenCross extends Omit<
+  PvpMatch<CrossState, CrossDir | undefined, CrossView>,
+  "setIntent"
+> {
   setDir: (dir: CrossDir) => void;
 }
 

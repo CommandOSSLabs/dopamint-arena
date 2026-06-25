@@ -113,7 +113,10 @@ export function verifyTranscript(
   }
 
   const decoded = decodeSettleBody(blob);
-  const norm = { root: toHex(decoded.transcriptRoot), entries: decoded.entries };
+  const norm = {
+    root: toHex(decoded.transcriptRoot),
+    entries: decoded.entries,
+  };
 
   const failures: string[] = [];
   const steps: TranscriptVerification["steps"] = [];

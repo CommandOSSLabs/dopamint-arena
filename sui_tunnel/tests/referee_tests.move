@@ -253,7 +253,7 @@ fun votes_meet_threshold() {
     // No votes against A, doesn't meet 50 threshold
     assert!(!referee::votes_meet_threshold(&committee, &votes, false));
 
-    clock::destroy_for_testing(clock);
+    clock.destroy_for_testing();
 }
 
 /// Exercises one-vote-per-member dedup across DISTINCT voters.
@@ -292,7 +292,7 @@ fun votes_meet_threshold_distinct_voters() {
     let three_votes = vector[v_a1, v_a2, v_a3];
     assert!(referee::votes_meet_threshold(&committee, &three_votes, true));
 
-    clock::destroy_for_testing(clock);
+    clock.destroy_for_testing();
     scenario.end();
 }
 
@@ -327,7 +327,7 @@ fun votes_meet_threshold_dedups_same_voter() {
     let mixed_votes = vector[v1, v2, v3];
     assert!(referee::votes_meet_threshold(&committee, &mixed_votes, true));
 
-    clock::destroy_for_testing(clock);
+    clock.destroy_for_testing();
     scenario.end();
 }
 
@@ -351,7 +351,7 @@ fun votes_meet_threshold_ignores_non_members() {
     let votes = vector[v_member, v_outsider];
     assert!(!referee::votes_meet_threshold(&committee, &votes, true));
 
-    clock::destroy_for_testing(clock);
+    clock.destroy_for_testing();
     scenario.end();
 }
 
@@ -378,7 +378,7 @@ fun votes_meet_threshold_excludes_removed_member() {
     referee::remove_committee_member(&mut committee, @0x2);
     assert!(!referee::votes_meet_threshold(&committee, &votes, true));
 
-    clock::destroy_for_testing(clock);
+    clock.destroy_for_testing();
     scenario.end();
 }
 
@@ -392,7 +392,7 @@ fun vote_accessors() {
     assert_eq!(referee::vote_in_favor_of_a(&vote), true);
     assert_eq!(referee::vote_suggested_penalty(&vote), 1000);
 
-    clock::destroy_for_testing(clock);
+    clock.destroy_for_testing();
 }
 
 // ============================================
@@ -513,7 +513,7 @@ fun resolve_for_a_on_resolved_dispute_aborts() {
     // Second resolution must abort: no longer an active dispute.
     referee::resolve_for_a(&mut dispute, 100, 0, 0, &clock);
 
-    clock::destroy_for_testing(clock);
+    clock.destroy_for_testing();
     scenario.end();
 }
 
@@ -545,7 +545,7 @@ fun auto_resolve_before_deadline_aborts() {
     // Still before the deadline -> can_auto_resolve is false -> abort.
     referee::auto_resolve_timeout(&mut dispute, 1000, 0, @0x1, &clock);
 
-    clock::destroy_for_testing(clock);
+    clock.destroy_for_testing();
     scenario.end();
 }
 
@@ -582,7 +582,7 @@ fun is_response_too_fast_disabled_when_min_zero() {
     let mut ctx = sui::tx_context::dummy();
     let config = referee::create_timeout_config(ONE_HOUR_MS); // min_response_time_ms = 0
     let c = clock_at(0, &mut ctx);
-    assert!(!referee::is_response_too_fast(&config, u64_max(), &c));
+    assert!(!referee::is_response_too_fast(&config, std::u64::max_value!(), &c));
     destroy(c);
 }
 
@@ -592,7 +592,7 @@ fun is_response_too_fast_disabled_when_min_zero() {
 fun timeout_helpers_no_overflow_on_huge_last_activity() {
     let mut ctx = sui::tx_context::dummy();
     let config = referee::create_timeout_config(ONE_HOUR_MS);
-    let huge = u64_max() - 10; // last_activity + timeout would overflow u64
+    let huge = std::u64::max_value!() - 10; // last_activity + timeout would overflow u64
 
     let c = clock_at(ONE_HOUR_MS, &mut ctx);
     // Deadline far in the future -> not reached, full time remaining, no elapsed.
@@ -612,7 +612,7 @@ fun timeout_helpers_no_overflow_on_huge_last_activity() {
 fun create_dispute_saturates_deadline() {
     let mut scenario = test_scenario::begin(@0x1);
     let mut clock = clock::create_for_testing(scenario.ctx());
-    clock.set_for_testing(u64_max() - 5); // now near u64::MAX
+    clock.set_for_testing(std::u64::max_value!() - 5); // now near u64::MAX
     let config = referee::create_timeout_config(ONE_HOUR_MS);
 
     let dispute = referee::create_dispute(
@@ -627,13 +627,8 @@ fun create_dispute_saturates_deadline() {
     );
 
     // now + 1h overflows u64 -> deadline saturated to u64::MAX.
-    assert_eq!(referee::dispute_response_deadline(&dispute), u64_max());
+    assert_eq!(referee::dispute_response_deadline(&dispute), std::u64::max_value!());
 
-    clock::destroy_for_testing(clock);
+    clock.destroy_for_testing();
     scenario.end();
-}
-
-/// Largest u64 value, mirroring `std::u64::max_value!()` used in the source.
-fun u64_max(): u64 {
-    18446744073709551615
 }

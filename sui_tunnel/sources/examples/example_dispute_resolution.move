@@ -17,8 +17,11 @@
 module sui_tunnel::example_dispute_resolution;
 
 use sui::clock::Clock;
+use sui::coin::Coin;
 use sui::event;
 use sui_tunnel::referee::{Self, Committee, Dispute, DisputeHistory, RefereeConfig, Vote};
+use sui_tunnel::signature;
+use sui_tunnel::tunnel::{Self, Tunnel};
 
 // === Error definitions (see sui_tunnel::errors for the canonical registry) ===
 
@@ -562,8 +565,289 @@ public fun result_resolution_method(result: &ArbitrationResult): u8 {
 }
 
 // ============================================
+// ON-CHAIN ARBITRATION (REAL FUND MOVEMENT)
+// ============================================
+//
+// The functions above are a pure off-chain arbitration model: every resolution is
+// a numeric calculation and no `Coin<T>` ever moves. The functions below are the
+// production-capable path. They wrap a real two-party `Tunnel<T>` that custodies
+// the disputed funds and let the assigned referee drive an on-chain settlement via
+// `tunnel::resolve_dispute_external`, which transfers `Coin<T>` straight to the
+// party addresses. All fund-movement security (balance-sum invariant, referee
+// authorization, timeout exit) is enforced inside the tunnel, not re-implemented
+// here.
+
+/// A dispute case backed by a real funded tunnel. The tunnel holds the disputed
+/// `Balance<T>`; the referee resolution drives the on-chain split.
+public struct FundedDisputeCase<phantom T> has key, store {
+    id: UID,
+    /// The two-party tunnel custodying the disputed funds.
+    tunnel: Tunnel<T>,
+    /// The underlying referee dispute record (off-chain bookkeeping).
+    dispute: Dispute,
+    /// The referee config used (drives the tunnel timeout).
+    config: RefereeConfig,
+    /// Service level of the case.
+    service_level: u8,
+    /// Application-level case status (`CASE_*`).
+    status: u8,
+    /// Description of the dispute.
+    description: vector<u8>,
+    /// Dispute history of the respondent.
+    respondent_history: DisputeHistory,
+}
+
+/// Emitted when a funded case is settled on-chain and funds are transferred.
+public struct CaseSettledOnChain has copy, drop {
+    case_number: u64,
+    tunnel_id: ID,
+    party_a_amount: u64,
+    party_b_amount: u64,
+    resolution_method: u8,
+}
+
+/// Opens a dispute case backed by a real funded tunnel. The caller becomes party A:
+/// they fund their side, assign the referee, and create the dispute record. Party B
+/// joins with `join_funded_case`. The tunnel timeout is taken from the service-level
+/// config (always > 0), so a dispute/timeout exit always exists. Aborts
+/// (`EInvalidParameter`) only if the service level is unknown.
+public fun open_funded_case<T>(
+    case_number: u64,
+    party_a_pk: vector<u8>,
+    party_b_address: address,
+    party_b_pk: vector<u8>,
+    against: address,
+    violation_type: u8,
+    evidence_hash: vector<u8>,
+    state_nonce: u64,
+    description: vector<u8>,
+    service_level: u8,
+    respondent_history: DisputeHistory,
+    referee: address,
+    party_a_coin: Coin<T>,
+    clock: &Clock,
+    ctx: &mut TxContext,
+): FundedDisputeCase<T> {
+    let config = get_config_for_level(service_level);
+    let party_a_address = ctx.sender();
+    let timeout_ms = referee::config_timeout_ms(&config);
+
+    let mut tun = tunnel::create<T>(
+        party_a_address,
+        party_a_pk,
+        signature::ed25519(),
+        party_b_address,
+        party_b_pk,
+        signature::ed25519(),
+        timeout_ms,
+        0,
+        clock,
+        ctx,
+    );
+    tun.set_referee(referee, ctx);
+    tun.deposit_party_a(party_a_coin, clock, ctx);
+
+    let dispute = referee::create_dispute(
+        case_number,
+        against,
+        violation_type,
+        evidence_hash,
+        state_nonce,
+        &config,
+        clock,
+        ctx,
+    );
+
+    event::emit(CaseOpened {
+        case_number,
+        raised_by: party_a_address,
+        against,
+        service_level,
+    });
+
+    FundedDisputeCase {
+        id: object::new(ctx),
+        tunnel: tun,
+        dispute,
+        config,
+        service_level,
+        status: CASE_OPEN,
+        description,
+        respondent_history,
+    }
+}
+
+/// Refunds party A's escrowed deposit before party B ever joins. Returns the coin so
+/// party A can route it in a PTB. Reuses the tunnel's pre-activation withdrawal, so only
+/// party A (the sole depositor) can reclaim while the tunnel is still STATUS_CREATED.
+/// Aborts `EInvalidState` if the case is not open.
+public fun cancel_funded_case<T>(
+    case: &mut FundedDisputeCase<T>,
+    clock: &Clock,
+    ctx: &mut TxContext,
+): Coin<T> {
+    assert!(case.status == CASE_OPEN, EInvalidState);
+    case.status = CASE_RESOLVED;
+    case.tunnel.withdraw_before_active(clock, ctx)
+}
+
+/// Party B funds their side of the case, activating the underlying tunnel. Aborts
+/// (`ENotAuthorized` in the tunnel) if the caller is not party B.
+public fun join_funded_case<T>(
+    case: &mut FundedDisputeCase<T>,
+    party_b_coin: Coin<T>,
+    clock: &Clock,
+    ctx: &TxContext,
+) {
+    case.tunnel.deposit_party_b(party_b_coin, clock, ctx);
+}
+
+/// Escalates the case on-chain by disputing over the tunnel's current balances,
+/// which is the precondition for referee settlement. Either tunnel party may call it.
+public fun escalate_to_chain<T>(case: &mut FundedDisputeCase<T>, clock: &Clock, ctx: &TxContext) {
+    assert!(case.status == CASE_OPEN, EInvalidState);
+    case.tunnel.raise_dispute_current_state(clock, ctx);
+}
+
+/// Shared settlement path: records the resolution method, transfers funds via the
+/// tunnel's referee resolution, and emits. The tunnel enforces that the caller is the
+/// assigned referee and that the amounts sum to the tunnel balance.
+fun settle_external<T>(
+    case: &mut FundedDisputeCase<T>,
+    party_a_amount: u64,
+    party_b_amount: u64,
+    resolution_method: u8,
+    clock: &Clock,
+    ctx: &mut TxContext,
+) {
+    let case_number = referee::dispute_id(&case.dispute);
+    let tunnel_id = case.tunnel.id();
+    case.tunnel.resolve_dispute_external(party_a_amount, party_b_amount, clock, ctx);
+    case.status = CASE_RESOLVED;
+
+    event::emit(CaseSettledOnChain {
+        case_number,
+        tunnel_id,
+        party_a_amount,
+        party_b_amount,
+        resolution_method,
+    });
+}
+
+/// Referee resolves in favor of party A (the raiser) and settles real funds. The
+/// caller must be the assigned referee and the amounts must sum to the tunnel balance.
+public fun resolve_for_raiser_and_settle<T>(
+    case: &mut FundedDisputeCase<T>,
+    party_a_amount: u64,
+    party_b_amount: u64,
+    penalty: u64,
+    clock: &Clock,
+    ctx: &mut TxContext,
+) {
+    assert!(case.status == CASE_OPEN, EInvalidState);
+    referee::resolve_for_a(&mut case.dispute, party_a_amount, party_b_amount, penalty, clock);
+    settle_external(case, party_a_amount, party_b_amount, 1, clock, ctx);
+}
+
+/// Referee resolves in favor of party B (the respondent) and settles real funds.
+public fun resolve_for_respondent_and_settle<T>(
+    case: &mut FundedDisputeCase<T>,
+    party_a_amount: u64,
+    party_b_amount: u64,
+    penalty: u64,
+    clock: &Clock,
+    ctx: &mut TxContext,
+) {
+    assert!(case.status == CASE_OPEN, EInvalidState);
+    referee::resolve_for_b(&mut case.dispute, party_a_amount, party_b_amount, penalty, clock);
+    settle_external(case, party_a_amount, party_b_amount, 2, clock, ctx);
+}
+
+/// Referee resolves with a split between both parties and settles real funds.
+public fun resolve_split_and_settle<T>(
+    case: &mut FundedDisputeCase<T>,
+    party_a_amount: u64,
+    party_b_amount: u64,
+    penalty: u64,
+    clock: &Clock,
+    ctx: &mut TxContext,
+) {
+    assert!(case.status == CASE_OPEN, EInvalidState);
+    referee::resolve_split(&mut case.dispute, party_a_amount, party_b_amount, penalty, clock);
+    settle_external(case, party_a_amount, party_b_amount, 3, clock, ctx);
+}
+
+/// Referee settles a timed-out case after the dispute deadline. The unresponsive party
+/// forfeits the full balance to the raiser on-chain (funds must be conserved), while the
+/// graduated penalty is recorded in the off-chain referee resolution for auditability.
+/// Aborts (`ETimeoutNotReached` in the referee) if the deadline has not passed.
+public fun auto_resolve_timeout_and_settle<T>(
+    case: &mut FundedDisputeCase<T>,
+    clock: &Clock,
+    ctx: &mut TxContext,
+) {
+    assert!(case.status == CASE_OPEN, EInvalidState);
+
+    let total = case.tunnel.total_balance();
+    let raiser = referee::dispute_raised_by(&case.dispute);
+    let party_a_addr = case.tunnel.party_a().party_address();
+    let penalty = referee::calculate_graduated_penalty(
+        &case.config,
+        &case.respondent_history,
+        referee::dispute_raised_at(&case.dispute),
+        clock,
+    );
+
+    referee::auto_resolve_timeout(&mut case.dispute, total, penalty, party_a_addr, clock);
+    referee::record_timeout(&mut case.respondent_history, penalty);
+
+    let (party_a_amount, party_b_amount) = if (raiser == party_a_addr) {
+        (total, 0)
+    } else {
+        (0, total)
+    };
+    settle_external(case, party_a_amount, party_b_amount, 4, clock, ctx);
+}
+
+/// Trust-minimized fallback: if the referee never settles, the party that escalated
+/// can force-close the tunnel after its timeout, distributing the disputed-state
+/// balances. Reuses the tunnel's own timeout exit, so funds are never trapped.
+public fun force_close_fallback<T>(
+    case: &mut FundedDisputeCase<T>,
+    clock: &Clock,
+    ctx: &mut TxContext,
+) {
+    assert!(case.status == CASE_OPEN, EInvalidState);
+    case.tunnel.force_close_after_timeout(clock, ctx);
+    case.status = CASE_TIMED_OUT;
+}
+
+/// Read-only access to the funded case's underlying tunnel.
+public fun funded_case_tunnel<T>(case: &FundedDisputeCase<T>): &Tunnel<T> { &case.tunnel }
+
+/// The funded case's application-level status (`CASE_*`).
+public fun funded_case_status<T>(case: &FundedDisputeCase<T>): u8 { case.status }
+
+/// The disputed funds currently custodied by the tunnel.
+public fun funded_case_total_balance<T>(case: &FundedDisputeCase<T>): u64 {
+    case.tunnel.total_balance()
+}
+
+/// True when the escalating party can force-close (tunnel disputed and past timeout).
+public fun can_force_close<T>(case: &FundedDisputeCase<T>, clock: &Clock): bool {
+    case.tunnel.is_disputed() && case.tunnel.can_claim_timeout(clock)
+}
+
+// ============================================
 // TEST HELPERS
 // ============================================
+
+#[test_only]
+public fun destroy_funded_case_for_testing<T>(case: FundedDisputeCase<T>) {
+    let FundedDisputeCase { id, tunnel, .. } = case;
+    id.delete();
+    tunnel.destroy_for_testing();
+}
 
 #[test_only]
 public fun destroy_case_for_testing(case: DisputeCase) {

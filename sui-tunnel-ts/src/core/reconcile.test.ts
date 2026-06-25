@@ -1,5 +1,5 @@
-import test from "node:test";
 import assert from "node:assert/strict";
+import test from "node:test";
 import { decideReconcile, ResyncView } from "./reconcile";
 import { CoSignedUpdate } from "./tunnel";
 

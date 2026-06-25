@@ -9,8 +9,8 @@
  * `sui_tunnel/tests/randomness_xcheck_tests.move`.
  */
 
-import { blake2b256 } from "./crypto";
 import { concatBytes } from "./bytes";
+import { blake2b256 } from "./crypto";
 import { u64ToBeBytes } from "./wire";
 
 const DOMAIN_CHAIN = new TextEncoder().encode("sui_tunnel::randomness::chain");
@@ -31,7 +31,7 @@ export function seedFromBytes(bytes: Uint8Array): Seed {
 export function nextSeed(seed: Seed): Seed {
   return {
     bytes: blake2b256(
-      concatBytes([DOMAIN_CHAIN, seed.bytes, u64ToBeBytes(seed.counter)]),
+      concatBytes([DOMAIN_CHAIN, seed.bytes, u64ToBeBytes(seed.counter)])
     ),
     counter: 0n,
   };
@@ -56,7 +56,7 @@ export function nextU64(seed: Seed): [bigint, Seed] {
 export function nextU64InRange(
   seed: Seed,
   min: bigint,
-  max: bigint,
+  max: bigint
 ): [bigint, Seed] {
   if (min >= max) throw new Error("invalid randomness range");
   const range = max - min;

@@ -52,6 +52,9 @@ const ENoActiveDispute: vector<u8> = b"There is no active dispute to act on.";
 #[error]
 const EInsufficientBalance: vector<u8> = b"Insufficient balance for this operation.";
 
+#[error]
+const EOverflow: vector<u8> = b"The operation would cause an arithmetic overflow.";
+
 // ============================================
 // CONSTANTS
 // ============================================
@@ -169,8 +172,9 @@ public fun create_contract<T>(
     assert!(amount_per_milestone > 0, EInvalidParameter);
 
     let budget_amount = budget.value();
-    let required_budget = total_milestones * amount_per_milestone;
-    assert!(budget_amount >= required_budget, EInsufficientBalance);
+    let required_budget = (total_milestones as u128) * (amount_per_milestone as u128);
+    assert!(required_budget <= std::u64::max_value!() as u128, EOverflow);
+    assert!(budget_amount >= (required_budget as u64), EInsufficientBalance);
 
     let mut tun = tunnel::create<T>(
         client_address,
@@ -256,6 +260,9 @@ public fun compute_milestone_hash_with_id(
     total_earned: u64,
     nonce: u64,
 ): vector<u8> {
+    let expected_earned = (completed_milestones as u128) * (amount_per_milestone as u128);
+    assert!(expected_earned == (total_earned as u128), EInvalidParameter);
+
     let mut data = b"freelance::milestone";
     data.append(tunnel_id.to_bytes());
     data.append(signature::u64_to_be_bytes(total_milestones));
@@ -288,7 +295,10 @@ public fun record_milestone<T>(
     assert!(completed_milestones > contract.latest_state.completed_milestones, EInvalidParameter);
     assert!(completed_milestones <= contract.latest_state.total_milestones, EInvalidParameter);
 
-    let total_earned = completed_milestones * contract.latest_state.amount_per_milestone;
+    let earned =
+        (completed_milestones as u128) * (contract.latest_state.amount_per_milestone as u128);
+    assert!(earned <= std::u64::max_value!() as u128, EOverflow);
+    let total_earned = earned as u64;
 
     // Ensure earned amount doesn't exceed available funds
     assert!(total_earned <= contract.tunnel.total_balance(), EInsufficientBalance);
@@ -405,6 +415,20 @@ public fun cancel_contract<T>(
         );
 
     contract.status = CONTRACT_CANCELLED;
+}
+
+/// Reclaim the full budget to the client before the freelancer joins. Returns the coin so
+/// the client can route it in a PTB. Reuses the tunnel's pre-activation withdrawal, so only
+/// the client (the sole depositor) can reclaim and only while the freelancer's deposit is
+/// still zero. Aborts `EInvalidState` if the contract is no longer active.
+public fun reclaim_budget_before_join<T>(
+    contract: &mut FreelanceContract<T>,
+    clock: &Clock,
+    ctx: &mut TxContext,
+): Coin<T> {
+    assert!(contract.status == CONTRACT_ACTIVE, EInvalidState);
+    contract.status = CONTRACT_CANCELLED;
+    contract.tunnel.withdraw_before_active(clock, ctx)
 }
 
 /// Raise a dispute — the freelancer proves completed work.

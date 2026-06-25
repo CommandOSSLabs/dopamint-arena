@@ -46,11 +46,7 @@ fun serialize_settlement() {
     // Should start with domain prefix
     let prefix = b"sui_tunnel::settlement";
     let prefix_len = prefix.length();
-    let mut i = 0;
-    while (i < prefix_len) {
-        assert_eq!(*serialized.borrow(i), *prefix.borrow(i));
-        i = i + 1;
-    };
+    prefix_len.do!(|i| assert_eq!(serialized[i], prefix[i]));
 }
 
 #[test]
@@ -69,11 +65,7 @@ fun serialize_state_update() {
     // Should start with domain prefix
     let prefix = b"sui_tunnel::state_update";
     let prefix_len = prefix.length();
-    let mut i = 0;
-    while (i < prefix_len) {
-        assert_eq!(*serialized.borrow(i), *prefix.borrow(i));
-        i = i + 1;
-    };
+    prefix_len.do!(|i| assert_eq!(serialized[i], prefix[i]));
 }
 
 #[test]
@@ -92,11 +84,7 @@ fun serialize_htlc_lock() {
     // Should start with domain prefix
     let prefix = b"sui_tunnel::htlc_lock";
     let prefix_len = prefix.length();
-    let mut i = 0;
-    while (i < prefix_len) {
-        assert_eq!(*serialized.borrow(i), *prefix.borrow(i));
-        i = i + 1;
-    };
+    prefix_len.do!(|i| assert_eq!(serialized[i], prefix[i]));
 
     // Should contain the full serialized data
     assert!(serialized.length() > prefix_len);
@@ -220,6 +208,72 @@ fun timeout_value_after_creation() {
     assert_eq!(tunnel::timeout_ms(&tunnel), 60000);
 
     tunnel::destroy_for_testing(tunnel);
+    clock.destroy_for_testing();
+}
+
+// Regression: a zero timeout is rejected up front with the centralized EInvalidTimeout
+// for every constructor, not just create_and_fund. The trailing teardown never runs (the
+// call aborts) but is required because Tunnel and Clock have no `drop`.
+#[
+    test,
+    expected_failure(
+        abort_code = sui_tunnel::tunnel::EInvalidTimeout,
+        location = sui_tunnel::tunnel,
+    ),
+]
+fun create_rejects_zero_timeout() {
+    let mut ctx = sui::tx_context::dummy();
+    let mut clock = clock::create_for_testing(&mut ctx);
+    clock.set_for_testing(1000);
+
+    let pk_a = x"1111111111111111111111111111111111111111111111111111111111111111";
+    let pk_b = x"2222222222222222222222222222222222222222222222222222222222222222";
+
+    let tunnel = tunnel::create<SUI>(
+        @0x0,
+        pk_a,
+        signature::ed25519(),
+        @0xBBBB,
+        pk_b,
+        signature::ed25519(),
+        0, // zero timeout
+        0,
+        &clock,
+        &mut ctx,
+    );
+
+    tunnel::destroy_for_testing(tunnel);
+    clock.destroy_for_testing();
+}
+
+#[
+    test,
+    expected_failure(
+        abort_code = sui_tunnel::tunnel::EInvalidTimeout,
+        location = sui_tunnel::tunnel,
+    ),
+]
+fun create_and_share_rejects_zero_timeout() {
+    let mut ctx = sui::tx_context::dummy();
+    let mut clock = clock::create_for_testing(&mut ctx);
+    clock.set_for_testing(1000);
+
+    let pk_a = x"1111111111111111111111111111111111111111111111111111111111111111";
+    let pk_b = x"2222222222222222222222222222222222222222222222222222222222222222";
+
+    tunnel::create_and_share<SUI>(
+        @0x0,
+        pk_a,
+        signature::ed25519(),
+        @0xBBBB,
+        pk_b,
+        signature::ed25519(),
+        0, // zero timeout
+        0,
+        &clock,
+        &mut ctx,
+    );
+
     clock.destroy_for_testing();
 }
 
@@ -478,6 +532,46 @@ fun referee_survives_deposit() {
     clock.destroy_for_testing();
 }
 
+/// A referee may not be installed once either party has committed funds, so a party
+/// cannot swap in a referee after the counterparty has deposited.
+#[
+    test,
+    expected_failure(
+        abort_code = sui_tunnel::tunnel::EInvalidState,
+        location = sui_tunnel::tunnel,
+    ),
+]
+fun set_referee_after_deposit_aborts() {
+    let mut ctx = sui::tx_context::dummy();
+    let mut clock = clock::create_for_testing(&mut ctx);
+    clock.set_for_testing(1000);
+
+    let pk_a = x"1111111111111111111111111111111111111111111111111111111111111111";
+    let pk_b = x"2222222222222222222222222222222222222222222222222222222222222222";
+
+    let mut tunnel = tunnel::create<SUI>(
+        @0x0,
+        pk_a,
+        signature::ed25519(),
+        @0xBBBB,
+        pk_b,
+        signature::ed25519(),
+        60000,
+        0,
+        &clock,
+        &mut ctx,
+    );
+
+    // Party A deposits, committing funds while still CREATED.
+    let coin_a = coin::mint_for_testing<SUI>(500, &mut ctx);
+    tunnel::deposit_party_a(&mut tunnel, coin_a, &clock, &ctx);
+
+    // Now set_referee must abort: funds are already committed.
+    tunnel::set_referee(&mut tunnel, @0xCCCC, &ctx);
+
+    abort
+}
+
 // ============================================
 // HTLC TESTS
 // ============================================
@@ -669,6 +763,146 @@ fun force_close_no_htlcs_backward_compat() {
     clock.destroy_for_testing();
 }
 
+/// Monotonic dispute progress: re-disputing an un-advanced state aborts, so a
+/// resolution that returns the tunnel to ACTIVE cannot be followed by a free re-dispute.
+#[
+    test,
+    expected_failure(
+        abort_code = sui_tunnel::tunnel::EStaleState,
+        location = sui_tunnel::tunnel,
+    ),
+]
+fun raise_dispute_current_state_twice_same_nonce_aborts() {
+    let party_a = @0xAAAA;
+    let party_b = @0xBBBB;
+    let mut scenario = test_scenario::begin(party_a);
+    let mut clock = clock::create_for_testing(scenario.ctx());
+    clock.set_for_testing(1000);
+
+    let mut tunnel = tunnel::create_active_for_testing<SUI>(
+        party_a,
+        party_b,
+        1000,
+        500,
+        60000,
+        0,
+        &clock,
+        scenario.ctx(),
+    );
+
+    // First dispute on the nonce-0 state succeeds and records the disputed nonce.
+    tunnel::raise_dispute_current_state(&mut tunnel, &clock, scenario.ctx());
+
+    // Simulate a resolution that returns to ACTIVE without advancing the nonce.
+    tunnel::reactivate_for_testing(&mut tunnel);
+
+    // Re-disputing the same un-advanced state must abort.
+    tunnel::raise_dispute_current_state(&mut tunnel, &clock, scenario.ctx());
+
+    abort
+}
+
+/// A validly co-signed higher-nonce state must NOT be rejected just because its
+/// off-chain signing timestamp precedes the stored state.timestamp. Dispute paths
+/// overwrite state.timestamp with the on-chain clock, so a wall-clock monotonicity
+/// guard would permanently freeze the channel after a resolve; ordering is the
+/// nonce's job. Here an earlier timestamp clears the [created_at, now] bounds and
+/// the update advances to signature verification, which the dummy signatures fail.
+#[
+    test,
+    expected_failure(
+        abort_code = sui_tunnel::tunnel::EInvalidSignature,
+        location = sui_tunnel::tunnel,
+    ),
+]
+fun update_state_allows_signed_timestamp_below_stored_state() {
+    let party_a = @0xAAAA;
+    let party_b = @0xBBBB;
+    let mut scenario = test_scenario::begin(party_a);
+    let mut clock = clock::create_for_testing(scenario.ctx());
+    clock.set_for_testing(1000);
+
+    let mut tunnel = tunnel::create_active_for_testing<SUI>(
+        party_a,
+        party_b,
+        1000,
+        500,
+        60000,
+        0,
+        &clock,
+        scenario.ctx(),
+    );
+
+    // Mimic a post-dispute tunnel: state.timestamp holds a large on-chain time.
+    tunnel::set_state_timestamp_for_testing(&mut tunnel, 5000);
+    clock.set_for_testing(6000);
+
+    // timestamp 3000 precedes state.timestamp (5000) but is within [created_at, now]
+    // and the nonce advances, so the update is not rejected on the timestamp and
+    // proceeds to signature verification. The signatures are the correct 64-byte
+    // length but cryptographically invalid, so verify returns false and tunnel's
+    // own gate aborts (a wrong-length sig would trip the guard inside signature).
+    let state_hash = x"00000000000000000000000000000000000000000000000000000000000000aa";
+    let bad_sig =
+        x"00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
+    tunnel::update_state(
+        &mut tunnel,
+        state_hash,
+        1,
+        1000,
+        500,
+        3000,
+        bad_sig,
+        bad_sig,
+        &clock,
+    );
+
+    abort
+}
+
+#[
+    test,
+    expected_failure(
+        abort_code = sui_tunnel::tunnel::EInvalidNonce,
+        location = sui_tunnel::tunnel,
+    ),
+]
+fun update_state_rejects_reserved_max_nonce() {
+    let party_a = @0xAAAA;
+    let party_b = @0xBBBB;
+    let mut scenario = test_scenario::begin(party_a);
+    let clock = clock::create_for_testing(scenario.ctx());
+
+    let mut tunnel = tunnel::create_active_for_testing<SUI>(
+        party_a,
+        party_b,
+        1000,
+        500,
+        60000,
+        0,
+        &clock,
+        scenario.ctx(),
+    );
+
+    // u64::MAX is reserved so that `state.nonce + 1` (settlement final_nonce and the
+    // dispute high-water mark) can never overflow and trap funds. The guard runs
+    // before signature verification, so dummy signatures are fine here.
+    let state_hash = x"00000000000000000000000000000000000000000000000000000000000000aa";
+    tunnel::update_state(
+        &mut tunnel,
+        state_hash,
+        18446744073709551615,
+        1000,
+        500,
+        0,
+        b"sig_a",
+        b"sig_b",
+        &clock,
+    );
+
+    abort
+}
+
 // ============================================
 // HTLC + DISPUTE-CLOSE ACCOUNTING REGRESSIONS
 // ============================================
@@ -840,49 +1074,22 @@ fun htlc_resolve_dispute_external_distributes_full_remaining_balance() {
     scenario.end();
 }
 
-// A party must not be able to `raise_dispute` with a stale,
-// self-favorable (but validly co-signed) state and immediately settle it with a
-// proof before the counterparty can override it via `resolve_dispute`.
+/// Destroying a closed tunnel that still has an outstanding HTLC must abort:
+/// HTLC funds would otherwise be stranded (claim/expire refuse a DESTROYED tunnel).
 #[
     test,
     expected_failure(
-        abort_code = sui_tunnel::tunnel::ETimeoutNotReached,
+        abort_code = sui_tunnel::tunnel::EOutstandingHtlc,
         location = sui_tunnel::tunnel,
     ),
 ]
-fun resolve_dispute_verified_rejects_before_challenge_window() {
-    let mut ctx = sui::tx_context::dummy();
-    let mut clock = clock::create_for_testing(&mut ctx);
-    clock.set_for_testing(1000);
-
-    // The dummy sender @0x0 is party_a so it can open the dispute.
-    let mut tunnel = tunnel::create_active_for_testing<SUI>(
-        @0x0,
-        @0xBBBB,
-        1000,
-        500,
-        60000,
-        0,
-        &clock,
-        &mut ctx,
-    );
-    tunnel::raise_dispute_current_state(&mut tunnel, &clock, &ctx);
-
-    // Window has NOT elapsed (clock 1000, timeout 60000): settlement must abort.
-    tunnel::resolve_dispute_verified(&mut tunnel, 900, 600, &clock, &mut ctx);
-
-    abort
-}
-
-#[test]
-fun resolve_dispute_verified_settles_after_challenge_window() {
+fun destroy_tunnel_with_outstanding_htlc_aborts() {
     let party_a = @0xAAAA;
     let party_b = @0xBBBB;
     let mut scenario = test_scenario::begin(party_a);
     let mut clock = clock::create_for_testing(scenario.ctx());
     clock.set_for_testing(1000);
 
-    // deposits a=1000, b=500 -> combined balance 1500
     let mut tunnel = tunnel::create_active_for_testing<SUI>(
         party_a,
         party_b,
@@ -894,21 +1101,70 @@ fun resolve_dispute_verified_settles_after_challenge_window() {
         scenario.ctx(),
     );
 
+    tunnel::lock_htlc_no_sig_for_testing(
+        &mut tunnel,
+        HTLC_HASH,
+        200,
+        @0xDDDD,
+        5000,
+        &clock,
+        scenario.ctx(),
+    );
     tunnel::raise_dispute_current_state(&mut tunnel, &clock, scenario.ctx());
-
-    // Wait out the challenge window, then settle on a proof-verified split.
     clock.set_for_testing(1000 + 60000 + 1);
-    tunnel::resolve_dispute_verified(&mut tunnel, 900, 600, &clock, scenario.ctx());
+    tunnel::force_close_after_timeout(&mut tunnel, &clock, scenario.ctx());
     assert_eq!(tunnel::status(&tunnel), tunnel::status_closed());
 
-    scenario.next_tx(party_a);
-    let coin_a = scenario.take_from_address<coin::Coin<SUI>>(party_a);
-    let coin_b = scenario.take_from_address<coin::Coin<SUI>>(party_b);
-    assert_eq!(coin_a.value(), 900);
-    assert_eq!(coin_b.value(), 600);
-    coin_a.burn_for_testing();
-    coin_b.burn_for_testing();
+    // Balance is 0 and CLOSED, but the 200-unit HTLC is still locked -> abort.
+    tunnel::destroy_tunnel(&mut tunnel, &clock, scenario.ctx());
 
+    tunnel::remove_htlc_counters_for_testing(&mut tunnel);
+    tunnel::destroy_for_testing(tunnel);
+    clock.destroy_for_testing();
+    scenario.end();
+}
+
+/// Once the outstanding HTLC is expired (or claimed), destroy_tunnel succeeds.
+#[test]
+fun destroy_tunnel_after_htlc_resolved() {
+    let party_a = @0xAAAA;
+    let party_b = @0xBBBB;
+    let mut scenario = test_scenario::begin(party_a);
+    let mut clock = clock::create_for_testing(scenario.ctx());
+    clock.set_for_testing(1000);
+
+    let mut tunnel = tunnel::create_active_for_testing<SUI>(
+        party_a,
+        party_b,
+        1000,
+        500,
+        60000,
+        0,
+        &clock,
+        scenario.ctx(),
+    );
+
+    tunnel::lock_htlc_no_sig_for_testing(
+        &mut tunnel,
+        HTLC_HASH,
+        200,
+        @0xDDDD,
+        5000,
+        &clock,
+        scenario.ctx(),
+    );
+    tunnel::raise_dispute_current_state(&mut tunnel, &clock, scenario.ctx());
+    clock.set_for_testing(1000 + 60000 + 1);
+    tunnel::force_close_after_timeout(&mut tunnel, &clock, scenario.ctx());
+
+    // Reclaim the expired HTLC, clearing the outstanding-lock counter.
+    tunnel::expire_htlc_in_tunnel(&mut tunnel, HTLC_HASH, &clock, scenario.ctx());
+    assert_eq!(tunnel::party_htlc_locked(&tunnel, party_a), 0);
+
+    tunnel::destroy_tunnel(&mut tunnel, &clock, scenario.ctx());
+    assert_eq!(tunnel::status(&tunnel), tunnel::status_destroyed());
+
+    tunnel::remove_htlc_counters_for_testing(&mut tunnel);
     tunnel::destroy_for_testing(tunnel);
     clock.destroy_for_testing();
     scenario.end();

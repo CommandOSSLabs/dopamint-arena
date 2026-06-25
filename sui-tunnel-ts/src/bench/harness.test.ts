@@ -1,6 +1,6 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
-import { runBenchmark, formatReport } from "./harness";
+import { test } from "node:test";
+import { formatReport, runBenchmark } from "./harness";
 
 test("runBenchmark produces a complete report from a small cluster run", async () => {
   const rep = await runBenchmark({
@@ -17,7 +17,7 @@ test("runBenchmark produces a complete report from a small cluster run", async (
   assert.equal(rep.tunnels, 16);
   assert.ok(
     rep.totalInteractions >= 3500,
-    `interactions=${rep.totalInteractions}`,
+    `interactions=${rep.totalInteractions}`
   );
   assert.ok(rep.avgTps > 0);
   assert.ok(rep.peakTps > 0);

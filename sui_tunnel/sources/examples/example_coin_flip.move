@@ -39,10 +39,12 @@ const EAlreadyExists: vector<u8> = b"The resource already exists and cannot be c
 const ENotFound: vector<u8> = b"The requested resource was not found.";
 
 #[error]
-const EInvalidParties: vector<u8> = b"The tunnel parties are invalid (for example, both parties share the same address).";
+const EInvalidParties: vector<u8> =
+    b"The tunnel parties are invalid (for example, both parties share the same address).";
 
 #[error]
-const ERandomnessCommitmentMismatch: vector<u8> = b"The revealed randomness does not match its commitment.";
+const ERandomnessCommitmentMismatch: vector<u8> =
+    b"The revealed randomness does not match its commitment.";
 
 #[error]
 const ETimeoutNotReached: vector<u8> = b"The timeout has not been reached yet.";
@@ -398,6 +400,31 @@ public fun claim_no_reveal<T>(game: &mut CoinFlipGame<T>, clock: &Clock, ctx: &m
 
     let coins = coin::from_balance(total, ctx);
     transfer::public_transfer(coins, sender);
+}
+
+/// Refund both stakes if neither player revealed before the timeout.
+/// Either player can call this; each stake is returned to its owner so no pot is trapped.
+public fun cancel_no_reveal<T>(game: &mut CoinFlipGame<T>, clock: &Clock, ctx: &mut TxContext) {
+    let sender = ctx.sender();
+    assert!(sender == game.player_1 || sender == game.player_2, ENotAuthorized);
+
+    assert!(game.status == STATUS_AWAITING_REVEALS, EInvalidState);
+    assert!(game.reveal_1.is_none() && game.reveal_2.is_none(), EInvalidState);
+
+    let now = clock.timestamp_ms();
+    assert!(now > game.created_at + TIMEOUT_MS, ETimeoutNotReached);
+
+    game.status = STATUS_CANCELLED;
+
+    event::emit(GameCancelled { player1: game.player_1, player2: game.player_2 });
+
+    let stake_1_amount = game.stake_1.value();
+    let refund_1 = coin::from_balance(game.stake_1.split(stake_1_amount), ctx);
+    transfer::public_transfer(refund_1, game.player_1);
+
+    let stake_2_amount = game.stake_2.value();
+    let refund_2 = coin::from_balance(game.stake_2.split(stake_2_amount), ctx);
+    transfer::public_transfer(refund_2, game.player_2);
 }
 
 // ============================================

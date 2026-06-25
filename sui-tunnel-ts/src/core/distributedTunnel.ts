@@ -11,9 +11,17 @@
  * byte-identical to `OffchainTunnel`, so any co-signed artifact settles on-chain
  * exactly as a self-play one does.
  */
+import { Balances, Party, Protocol } from "../protocol/Protocol";
 import { bytesEqual } from "./bytes";
 import { blake2b256 } from "./crypto";
-import { Balances, Party, Protocol } from "../protocol/Protocol";
+import {
+  AckFrame,
+  decodeFrame,
+  encodeFrame,
+  identityMoveCodec,
+  MoveCodec,
+  MoveFrame,
+} from "./distributedFrame";
 import {
   CoSignedSettlement,
   CoSignedSettlementWithRoot,
@@ -29,14 +37,6 @@ import {
   SettlementWithRoot,
   StateUpdate,
 } from "./wire";
-import {
-  AckFrame,
-  decodeFrame,
-  encodeFrame,
-  identityMoveCodec,
-  MoveCodec,
-  MoveFrame,
-} from "./distributedFrame";
 
 /** Opaque byte transport between the two seats. The relay forwards frames blindly. */
 export interface Transport {

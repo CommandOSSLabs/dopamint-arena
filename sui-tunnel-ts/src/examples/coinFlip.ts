@@ -73,7 +73,7 @@ export async function createCoinFlipGame(
   choice: number,
   stakeCoinId: string,
   client?: SuiClient,
-  keypair?: Ed25519Keypair,
+  keypair?: Ed25519Keypair
 ): Promise<CreateGameResult & { salt: Uint8Array; commitment: Uint8Array }> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -134,7 +134,7 @@ export async function joinCoinFlipGame(
   choice: number,
   stakeCoinId: string,
   client?: SuiClient,
-  keypair?: Ed25519Keypair,
+  keypair?: Ed25519Keypair
 ): Promise<{ salt: Uint8Array; commitment: Uint8Array; digest: string }> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -189,7 +189,7 @@ export async function revealChoice(
   salt: Uint8Array,
   playerNumber: 1 | 2 = 1,
   client?: SuiClient,
-  keypair?: Ed25519Keypair,
+  keypair?: Ed25519Keypair
 ): Promise<string> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -225,7 +225,7 @@ export async function revealChoice(
 export async function claimWinnings(
   gameId: string,
   client?: SuiClient,
-  keypair?: Ed25519Keypair,
+  keypair?: Ed25519Keypair
 ): Promise<{ digest: string; coinId: string | null }> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -241,7 +241,7 @@ export async function claimWinnings(
 
   tx.transferObjects(
     [coin],
-    tx.pure.address(signer.getPublicKey().toSuiAddress()),
+    tx.pure.address(signer.getPublicKey().toSuiAddress())
   );
 
   const txResult = await signAndExecute(suiClient, tx, signer);
@@ -266,7 +266,7 @@ export async function claimWinnings(
 export async function cancelTimeout(
   gameId: string,
   client?: SuiClient,
-  keypair?: Ed25519Keypair,
+  keypair?: Ed25519Keypair
 ): Promise<{ digest: string; coinId: string | null }> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -282,7 +282,7 @@ export async function cancelTimeout(
 
   tx.transferObjects(
     [coin],
-    tx.pure.address(signer.getPublicKey().toSuiAddress()),
+    tx.pure.address(signer.getPublicKey().toSuiAddress())
   );
 
   const result = await signAndExecute(suiClient, tx, signer);
@@ -307,7 +307,7 @@ export async function cancelTimeout(
 export async function claimNoReveal(
   gameId: string,
   client?: SuiClient,
-  keypair?: Ed25519Keypair,
+  keypair?: Ed25519Keypair
 ): Promise<{ digest: string; coinId: string | null }> {
   const suiClient = client || createSuiClient();
   const signer = keypair || getKeypairFromEnv();
@@ -323,7 +323,7 @@ export async function claimNoReveal(
 
   tx.transferObjects(
     [coin],
-    tx.pure.address(signer.getPublicKey().toSuiAddress()),
+    tx.pure.address(signer.getPublicKey().toSuiAddress())
   );
 
   const result = await signAndExecute(suiClient, tx, signer);
@@ -387,10 +387,10 @@ export async function exampleCoinFlipFlow(): Promise<void> {
 
     console.log("Fairness guarantee:");
     console.log(
-      "- Player 1 can't change their value after seeing Player 2's commit",
+      "- Player 1 can't change their value after seeing Player 2's commit"
     );
     console.log(
-      "- Player 2 can't change their value after seeing Player 1's reveal",
+      "- Player 2 can't change their value after seeing Player 1's reveal"
     );
     console.log("- Combined randomness is unpredictable to both\n");
 
