@@ -382,7 +382,9 @@ export function GameScene({
         <div className="ttt-board-area flex-1 min-h-0 w-full grid place-items-center">
           <div className="ttt-board-square">{board}</div>
         </div>
-        <div className="text-center qp-title text-xl min-h-[24px]">{status}</div>
+        <div className="text-center qp-title text-xl min-h-[24px]">
+          {status}
+        </div>
         <div className="w-full max-w-[480px] flex flex-col items-center gap-2 border-t-2 border-[var(--qp-ink-soft)] pt-2">
           <div className="flex items-stretch gap-3 w-full">{controls}</div>
           {tunnelControl}
@@ -434,7 +436,9 @@ export function GameScene({
         </div>
         {resetDraws}
         <div className="w-full border-t-2 border-[var(--qp-ink-soft)]/40 pt-2">
-          <div className="qp-eyebrow text-[11px] opacity-80 mb-1.5">On-chain</div>
+          <div className="qp-eyebrow text-[11px] opacity-80 mb-1.5">
+            On-chain
+          </div>
           <OnchainLogStrip g={g} vertical />
         </div>
       </aside>

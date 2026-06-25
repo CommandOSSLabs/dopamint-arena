@@ -254,51 +254,51 @@ function AppContent() {
             )}
 
             {scene === "setup" &&
-            (g.phase === "error" ? (
-              <div className="w-full h-full flex flex-col items-center justify-center gap-6 p-8">
-                <p className="text-sm text-rose-400 text-center break-words max-w-md">
-                  {/* The real failure (e.g. "sponsor request failed (422): …"), not the bare
+              (g.phase === "error" ? (
+                <div className="w-full h-full flex flex-col items-center justify-center gap-6 p-8">
+                  <p className="text-sm text-rose-400 text-center break-words max-w-md">
+                    {/* The real failure (e.g. "sponsor request failed (422): …"), not the bare
                       "error" phase — so the cause is visible instead of hidden. */}
-                  {g.error ?? "Something went wrong."}
-                </p>
-                <button
-                  onClick={() => {
-                    // Resume the attract demo: clear the one-shot latches and restart in watch.
-                    // (Without this the latches stayed set and Retry did nothing.)
-                    autoFundRef.current = false;
-                    autoEvenedRef.current = false;
-                    autoStartedRef.current = true;
-                    setScene("game");
-                    g.startAuto(true);
-                  }}
-                  className="px-4 py-2 text-xs font-bold uppercase tracking-widest border border-secondary text-on-surface hover:bg-secondary/20 rounded transition-colors"
-                >
-                  Retry
-                </button>
-              </div>
-            ) : (
-              <SetupScene
-                funded={funded && !preparing}
-                maxGames={g.maxGames}
-                setMaxGames={g.setMaxGames}
-                difficulty={difficulty}
-                setDifficulty={setDifficulty}
-                gameType={gameType}
-                setGameType={setGameType}
-                boardSize={boardSize}
-                setBoardSize={setBoardSize}
-                onStart={handleStart}
-                onBack={() => setScene("login")}
-                isPortrait={isPortrait}
-                preparingLabel={
-                  preparing
-                    ? "Setting up bots…"
-                    : g.rebalancing
-                      ? "Preparing bots…"
-                      : undefined
-                }
-              />
-            ))}
+                    {g.error ?? "Something went wrong."}
+                  </p>
+                  <button
+                    onClick={() => {
+                      // Resume the attract demo: clear the one-shot latches and restart in watch.
+                      // (Without this the latches stayed set and Retry did nothing.)
+                      autoFundRef.current = false;
+                      autoEvenedRef.current = false;
+                      autoStartedRef.current = true;
+                      setScene("game");
+                      g.startAuto(true);
+                    }}
+                    className="px-4 py-2 text-xs font-bold uppercase tracking-widest border border-secondary text-on-surface hover:bg-secondary/20 rounded transition-colors"
+                  >
+                    Retry
+                  </button>
+                </div>
+              ) : (
+                <SetupScene
+                  funded={funded && !preparing}
+                  maxGames={g.maxGames}
+                  setMaxGames={g.setMaxGames}
+                  difficulty={difficulty}
+                  setDifficulty={setDifficulty}
+                  gameType={gameType}
+                  setGameType={setGameType}
+                  boardSize={boardSize}
+                  setBoardSize={setBoardSize}
+                  onStart={handleStart}
+                  onBack={() => setScene("login")}
+                  isPortrait={isPortrait}
+                  preparingLabel={
+                    preparing
+                      ? "Setting up bots…"
+                      : g.rebalancing
+                        ? "Preparing bots…"
+                        : undefined
+                  }
+                />
+              ))}
           </GameCardScale>
         )}
       </div>
