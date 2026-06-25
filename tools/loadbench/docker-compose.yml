@@ -30,3 +30,24 @@ services:
       interval: 3s
       timeout: 3s
       retries: 10
+
+  loadbench:
+    profiles: ["bench"]
+    build:
+      context: ../..
+      dockerfile: tools/loadbench/Dockerfile
+    environment:
+      SUI_RPC_URL: "http://sui-localnet:9000"
+    volumes:
+      - ./.env.local:/app/tools/loadbench/.env.local:ro
+      - ./keys.json:/app/tools/loadbench/keys.json:ro
+    networks:
+      default: {}
+    deploy:
+      resources:
+        limits:
+          cpus: "4"
+          memory: 4g
+    # Default: offchain burst. Override per run (e.g. --channel local --anchor onchain).
+    # --channel relay is unsupported in-container (relay process runs host-side).
+    command: ["--offchain", "--channel", "local", "--workers", "auto", "--duration", "10"]
