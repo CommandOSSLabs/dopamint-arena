@@ -6,6 +6,7 @@ const config = new pulumi.Config("dopamint");
 export interface InfraConfig {
   environment: string;
   domain: string;
+  backendDomain: string;
   route53ZoneId?: string;
   certificateArn?: string; // existing ACM certificate ARN (Cloudflare DNS scenario)
   dbInstanceClass: string;
@@ -36,6 +37,7 @@ export function getConfig(): InfraConfig {
   return {
     environment: config.require("environment"),
     domain: config.require("domain"),
+    backendDomain: config.require("backend-domain"),
     route53ZoneId: config.get("route53-zone-id") || undefined,
     certificateArn: config.get("certificate-arn") || undefined,
     dbInstanceClass: config.require("db-instance-class"),

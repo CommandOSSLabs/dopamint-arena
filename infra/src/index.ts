@@ -43,6 +43,7 @@ const alb = createAlb(`dopamint-${cfg.environment}`, {
 
 const frontend = createFrontend(`dopamint-${cfg.environment}`, {
   domain: cfg.domain,
+  backendDomain: cfg.backendDomain,
   albDnsName: alb.alb.dnsName,
   certificateArn: dns.certificateArn,
   zoneId: dns.zoneId,
@@ -163,7 +164,7 @@ const explorer = createExplorerServices({
 
 createBackendAlias({
   name: `dopamint-${cfg.environment}`,
-  domain: cfg.domain,
+  backendDomain: cfg.backendDomain,
   zoneId: dns.zoneId,
   albDnsName: alb.alb.dnsName,
   albHostedZoneId: alb.alb.zoneId,
@@ -205,9 +206,8 @@ export const dbSubnetGroupName = database.dbSubnetGroupName;
 export const dbSecurityGroupId = sgs.db.id;
 export const dbProxyName = dbProxy.proxyName;
 
-const backendApiDomain = pulumi.interpolate`api.${cfg.domain}`;
 export const backendUrl = dns.certificateArn
-  ? pulumi.interpolate`https://${backendApiDomain}`
+  ? pulumi.interpolate`https://${cfg.backendDomain}`
   : pulumi.interpolate`http://${alb.alb.dnsName}`;
 
 const benchmarkFleet = createBenchmarkFleet({
