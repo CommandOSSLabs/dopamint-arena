@@ -9,6 +9,7 @@ import { OffchainTunnel } from "sui-tunnel-ts/core/tunnel";
 import {
   PaymentsProtocol,
   type PaymentMove,
+  type PaymentsState,
 } from "sui-tunnel-ts/protocol/payments";
 import { Transcript } from "sui-tunnel-ts/proof/transcript";
 import { registerWindowDisposer } from "@/lib/windowSessions";
@@ -36,12 +37,14 @@ import {
 import { openPaymentTunnel } from "./openPaymentTunnel";
 import { mintNftRewardToMiner, pickNftReward } from "./nftReward";
 import { settlePaymentTunnel, type PaymentTunnel } from "./paymentSettle";
+import { createRegularPaymentsKit } from "@/agent/games/regularPayments/kit";
 import type {
   MachinePhase,
   MachineSessionView,
   NftReward,
   NftTier,
 } from "./types";
+import type { GameBot } from "@/agent/gameKit";
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -97,6 +100,8 @@ class MachineRuntime {
   private sessionId: string | null = null;
   private statsToken: string | null = null;
   private pending = { updates: 0, signatures: 0, verifications: 0, bytes: 0 };
+
+  private payerBot: GameBot<PaymentsState, PaymentMove> | null = null;
 
   constructor(id: string, label: string) {
     this.id = id;
@@ -203,6 +208,9 @@ class MachineRuntime {
       this.moveCount = 0;
       this.heartbeatActions = 0;
       this.phase = "running";
+
+      const kit = createRegularPaymentsKit(MICRO_UNIT);
+      this.payerBot = kit.createBot("A", { rngForSeat: () => Math.random });
       onChange();
 
       deps.report.bumpCounters({ tunnelsOpened: 1 });
@@ -339,13 +347,21 @@ class MachineRuntime {
 
       const frameDeadline = performance.now() + FRAME_BUDGET_MS;
       while (this.tickCount < TICK_COUNT && performance.now() < frameDeadline) {
-        const r = tunnel.step(
-          { from: "A", amount: MICRO_UNIT } satisfies PaymentMove,
-          "A",
-          { timestamp: this.ts++ },
-        );
+        const preState = tunnel.state;
+        const move = this.payerBot
+          ? this.payerBot.plan(preState)
+          : ({ from: "A", amount: MICRO_UNIT } satisfies PaymentMove);
+        if (!move) {
+          // Payer exhausted its budget — stop the stream early
+          break;
+        }
+        const r = tunnel.step(move, "A", { timestamp: this.ts++ });
         if (!r.verified)
           throw new Error("micro-payment step failed verification");
+
+        if (this.payerBot) {
+          this.payerBot.confirm(preState, move);
+        }
 
         this.tickCount += 1;
         this.recordTps();
