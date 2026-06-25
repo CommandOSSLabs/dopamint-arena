@@ -1,5 +1,6 @@
 import { formatCompactCount } from "@/lib/formatCompactCount";
 import { useEffect, useRef } from "react";
+import { ArrowLeft } from "lucide-react";
 import type { CrossDir, HazardSpan } from "sui-tunnel-ts/protocol/cross";
 import {
   COLUMN_COUNT,
@@ -82,6 +83,7 @@ export function CrossBoard({
   score,
   gamesPlayed,
   onSettle,
+  onBack,
 }: {
   view: CrossView;
   winner: "A" | "B" | null;
@@ -99,6 +101,8 @@ export function CrossBoard({
   gamesPlayed?: number;
   /** Cash out the tunnel at the current state — solo only, shown while live. */
   onSettle?: () => void;
+  /** Leave the live race and return to the lobby. Shown in-pane during play. */
+  onBack?: () => void;
 }) {
   const settled = winner !== null || done;
   const spectating = role === null;
@@ -196,6 +200,16 @@ export function CrossBoard({
         </div>
 
         <div className="cross-pane__bottom">
+          {onBack && !settled && (
+            <button
+              type="button"
+              className="cross-back sketch-btn sketch-btn--ghost"
+              onClick={onBack}
+              title="Leave the race — return to the lobby"
+            >
+              <ArrowLeft className="size-[1em]" /> back
+            </button>
+          )}
           {onToggleAuto && !settled && (
             <button
               type="button"
