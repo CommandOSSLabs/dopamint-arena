@@ -3,7 +3,7 @@ config:
   dopamint:environment: production
   dopamint:domain: millionstps.io
   dopamint:backend-domain: relay.millionstps.io
-  dopamint:certificate-arn: arn:aws:acm:us-east-1:123456789012:certificate/REPLACE_WITH_REAL_CERT_ARN
+  dopamint:certificate-arn: arn:aws:acm:us-east-1:129671602944:certificate/cffc1c65-b146-498e-9e48-eca08bd55164
   dopamint:route53-zone-id: "ZYYYYYYYYYYYYY"
   dopamint:db-instance-class: db.r6g.2xlarge
   dopamint:db-serverless: "false"
