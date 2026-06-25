@@ -22,10 +22,10 @@ import {
 import { useSponsoredSignExec } from "@/onchain/useSponsoredSignExec";
 import { withSponsorFallback } from "@/onchain/sponsor";
 import {
-  DOPAMINT_COIN_TYPE,
-  isDopamintAddressBalance,
-  isDopamintConfigured,
-} from "@/onchain/dopamint";
+  MTPS_COIN_TYPE,
+  isMtpsAddressBalance,
+  isMtpsConfigured,
+} from "@/onchain/mtps";
 import {
   createChatProtocol,
   toChatApiMessages,
@@ -205,7 +205,7 @@ class ChatSession {
 
     void (async () => {
       try {
-        const fundedPerSeat = isDopamintConfigured
+        const fundedPerSeat = isMtpsConfigured
           ? LOCKED_PER_SEAT
           : SUI_PER_SEAT;
 
@@ -219,13 +219,13 @@ class ChatSession {
         // DOPAMINT path: stake a user-owned DOPAMINT coin, sponsored gas first with a wallet-pays
         // fallback (the local backend settler may be unfunded). SUI path: same pattern.
         const stakeCoinId =
-          isDopamintConfigured && !isDopamintAddressBalance
+          isMtpsConfigured && !isMtpsAddressBalance
             ? await deps.prepareStake(2n * fundedPerSeat)
             : undefined;
-        if (isDopamintConfigured && isDopamintAddressBalance)
+        if (isMtpsConfigured && isMtpsAddressBalance)
           await deps.ensureStakeBalance(2n * fundedPerSeat);
 
-        const tunnelId = isDopamintConfigured
+        const tunnelId = isMtpsConfigured
           ? await withSponsorFallback(
               async () =>
                 openAndFundSelfPlay({
@@ -235,12 +235,12 @@ class ChatSession {
                   partyB,
                   aAmount: fundedPerSeat,
                   bAmount: fundedPerSeat,
-                  coinType: DOPAMINT_COIN_TYPE,
-                  ...(isDopamintAddressBalance
+                  coinType: MTPS_COIN_TYPE,
+                  ...(isMtpsAddressBalance
                     ? {
                         stakeFromBalance: {
                           amount: 2n * fundedPerSeat,
-                          coinType: DOPAMINT_COIN_TYPE,
+                          coinType: MTPS_COIN_TYPE,
                         },
                       }
                     : { stakeCoinId: stakeCoinId! }),
@@ -253,7 +253,7 @@ class ChatSession {
                   partyB,
                   aAmount: fundedPerSeat,
                   bAmount: fundedPerSeat,
-                  coinType: DOPAMINT_COIN_TYPE,
+                  coinType: MTPS_COIN_TYPE,
                   stakeCoinId: stakeCoinId!,
                 }),
               "chat open/fund",
@@ -395,7 +395,7 @@ class ChatSession {
         transcript ? transcript.root() : new Uint8Array(32),
         0n,
       );
-      const coinType = isDopamintConfigured ? DOPAMINT_COIN_TYPE : undefined;
+      const coinType = isMtpsConfigured ? MTPS_COIN_TYPE : undefined;
       const digest = await settleViaBackend({
         tunnelId: this.tunnelId,
         settlement,
@@ -403,7 +403,7 @@ class ChatSession {
         label: "chat",
         fallbackClose: () =>
           closeCooperativeWithRoot({
-            signExec: (isDopamintConfigured
+            signExec: (isMtpsConfigured
               ? deps.sponsoredSignExec
               : deps.signExec) as never,
             tunnelId: this.tunnelId,
