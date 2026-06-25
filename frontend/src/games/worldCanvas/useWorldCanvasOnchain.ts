@@ -336,6 +336,14 @@ export interface UseWorldCanvasOnchain {
   /** Flip between watch (bots vs bots) and take-the-wheel (you vs the seat-B bot). The
    *  seat-A bot pauses/resumes in place; the tunnel is never reopened. */
   toggleAuto(): void;
+  /** Set Auto deterministically (idempotent). The cabinet's take-over calls `setAuto(false)`
+   *  to hand seat A to the human; same in-place seat-A pause/resume as {@link toggleAuto}. */
+  setAuto(value: boolean): void;
+  /** Cabinet hover-freeze: stop the bots co-signing paints in place (the rAF loop keeps
+   *  running). Resume with {@link resumeAgents}; the tunnel and game state are untouched. */
+  pauseAgents(): void;
+  /** Resume bot painting after a {@link pauseAgents} freeze that didn't lead to a take-over. */
+  resumeAgents(): void;
   /** Live seat-bot markers — both seats when Auto is on, seat B only when you hold the wheel. */
   agents: AgentMarker[];
   /** Latest camera-jump request; null until first view/jump. */
@@ -614,13 +622,19 @@ const EMPTY_STATUS: WorldCanvasOnchainStatus = {
   error: null,
 };
 
-export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
+export function useWorldCanvasOnchain(
+  opts: { botColor?: number } = {},
+): UseWorldCanvasOnchain {
   // A stable "You" display identity (never co-signs — the funded seat-A keypair does
   // the signing; this address only TAGS the human's own cells for the "You" label).
   const { report } = useTelemetry();
   const bots = useMemo(() => loadOrCreateBots(), []);
   const client = useMemo(() => getSuiClient(), []);
   const humanAddress = bots.x.address;
+  // The toolbar's current paint color — the bots paint in YOUR chosen color too (you set
+  // the palette, they follow). A ref so the rAF paintFrame reads it without re-subscribing.
+  const botColorRef = useRef(opts.botColor ?? 13);
+  botColorRef.current = opts.botColor ?? 13;
   // One protocol instance shared by the tunnel (and its reopens).
   const proto = useMemo(
     () =>
@@ -689,6 +703,9 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
   // cells land on the render cadence (smooth, frame-aligned) instead of two competing
   // setTimeout chains that the busy canvas rAF loop starves to a crawl.
   const agentRafRef = useRef<number | null>(null);
+  // Cabinet hover-freeze flag the rAF loop reads each frame: while paused it keeps scheduling
+  // frames but submits no co-signed paints (resumable mid-stream; never closes the tunnel).
+  const pausedRef = useRef(false);
   // Frame counter that paces freestyle marker re-syncs (head-follow) off the per-frame path.
   const agentMarkerTickRef = useRef(0);
   // Auto mirrored into a ref so the paint loop + paint sink read it without re-subscribing.
@@ -1478,6 +1495,12 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
   const paintFrame = useCallback(
     function frame() {
       const run = runRef.current;
+      // Cabinet hover-freeze: keep the loop alive so it resumes mid-stream, but submit no
+      // paints while paused. Purely a co-sign freeze — the tunnel and game state are untouched.
+      if (pausedRef.current) {
+        agentRafRef.current = requestAnimationFrame(frame);
+        return;
+      }
       let markersDirty = false;
       if (run && !run.closed && run.ready && run.tunnel) {
         for (const st of agentStatesRef.current.values()) {
@@ -1514,7 +1537,9 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
               moveAtGlobal(
                 st.originGx + cell.dx,
                 st.originGy + cell.dy,
-                cell.color,
+                // The bots paint in YOUR currently-selected color (the toolbar drives the
+                // whole canvas's palette), not the design mode's own color.
+                botColorRef.current,
               ),
               st.seat,
               st.painter,
@@ -1583,14 +1608,36 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
     [registerPainter, nextPlacement],
   );
 
-  // Public: flip Auto. ON = both seats bot-driven (watch, bot vs bot). OFF = the seat-A
-  // bot idles and you author seat A vs the seat-B bot — on the SAME tunnel, no reopen.
-  // The seat-A marker appears/disappears with the flip.
+  // Public: set Auto deterministically. ON = both seats bot-driven (watch, bot vs bot). OFF =
+  // the seat-A bot idles and you author seat A vs the seat-B bot — on the SAME tunnel, no reopen.
+  // Idempotent (a no-op when already at `value`), so the cabinet's `setAuto(false)` take-over is
+  // safe to call twice. The seat-A marker appears/disappears with the flip.
+  const setAuto = useCallback(
+    (value: boolean) => {
+      if (autoRef.current === value) return;
+      autoRef.current = value;
+      setAutoState(value);
+      syncAgentMarkers();
+    },
+    [syncAgentMarkers],
+  );
+
+  // Public: flip Auto (the in-canvas toggle). Reads the live ref, so it stays correct after a
+  // cabinet take-over has forced Auto off.
   const toggleAuto = useCallback(() => {
-    autoRef.current = !autoRef.current;
-    setAutoState(autoRef.current);
-    syncAgentMarkers();
-  }, [syncAgentMarkers]);
+    setAuto(!autoRef.current);
+  }, [setAuto]);
+
+  // Public (cabinet seam): freeze the bot rAF paint loop in place on hover. The loop keeps
+  // scheduling frames but submits no co-signed paints until resumeAgents(); the tunnel stays
+  // open and the game is untouched, so painting resumes mid-stream when the pointer leaves.
+  const pauseAgents = useCallback(() => {
+    pausedRef.current = true;
+  }, []);
+
+  const resumeAgents = useCallback(() => {
+    pausedRef.current = false;
+  }, []);
 
   // Public: set the agent paint speed — for both seat bots (the self-rescheduling timer
   // picks up the new interval on its next tick).
@@ -1743,6 +1790,9 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
     movesPerGame: MOVES_PER_GAME,
     auto,
     toggleAuto,
+    setAuto,
+    pauseAgents,
+    resumeAgents,
     agents,
     focus,
     painters: paintersRef.current,

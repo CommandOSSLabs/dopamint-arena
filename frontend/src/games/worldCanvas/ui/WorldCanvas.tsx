@@ -394,7 +394,9 @@ export function WorldCanvas({
         gx + 0.5,
         gy + 0.5,
         cell.color,
-        AGENT_STROKE_SIZE,
+        // Bot stroke width follows YOUR brush size (render-only — no extra co-signed cells):
+        // pick a fatter nib and the bots draw thicker too.
+        AGENT_STROKE_SIZE * brushSizeRef.current,
         cell.seq,
       );
     }

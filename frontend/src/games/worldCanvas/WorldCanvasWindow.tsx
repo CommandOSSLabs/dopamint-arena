@@ -1,4 +1,4 @@
-import { useState, type CSSProperties } from "react";
+import { useCallback, useState, type CSSProperties } from "react";
 import type { GameWindowProps } from "../types";
 import { SketchDefs } from "../sketch";
 import { CanvasView } from "./ui/CanvasView";
@@ -33,6 +33,11 @@ export function WorldCanvasWindow({ windowId }: GameWindowProps) {
   // one tap away via the floating "← Menu".
   const [mode, setMode] = useState<Mode>("solo");
 
+  // Cabinet "Return to Home" (the shared GameCabinet Desktop wraps every window in): send the
+  // solo canvas back to this lobby. Stable (setMode is stable) so the controller CanvasView
+  // registers doesn't re-register every render.
+  const goHome = useCallback(() => setMode("menu"), []);
+
   return (
     <div
       className="wc-sketch sketch"
@@ -44,7 +49,7 @@ export function WorldCanvasWindow({ windowId }: GameWindowProps) {
       ) : (
         <>
           {mode === "solo" ? (
-            <CanvasView />
+            <CanvasView onHome={goHome} />
           ) : (
             <PvpCanvasView windowId={windowId} />
           )}

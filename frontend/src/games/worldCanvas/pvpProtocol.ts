@@ -37,9 +37,17 @@ export const MAX_BATCH_CELLS = 128;
  * reconnect-overlay countdown (PvpCanvasView) and the engine's `graceMs` (usePvpWorldCanvas) both
  * read it, so the on-screen countdown and the actual settle deadline can never drift apart.
  */
-export const GRACE_MS = 60_000;
+export const GRACE_MS = 15_000;
 /** Cells the bot lays down per co-sign — a short flowing run, not a single dot. */
 const BOT_RUN = 8;
+
+/**
+ * Live palette index the autopilot paints in — set from THIS player's toolbar (see
+ * usePvpWorldCanvas), so your seat's bot follows your chosen color, just like solo. Only
+ * `randomMove` (your seat's local move generation) reads it; the co-signed move carries the
+ * color to the opponent, so it never affects replay/parity. Each client sets its own.
+ */
+export const botColorHint = { current: 13 };
 
 /**
  * One painted cell, in (chunk, in-chunk) coords: `cx`/`cy` are signed chunk indices (the canvas
@@ -278,7 +286,7 @@ export class WorldCanvasPvpProtocol implements Protocol<
       dx = 1;
       dy = 0;
     }
-    const color = by === "A" ? 13 : 15; // Sui blue vs light purple, like the solo seats
+    const color = botColorHint.current; // YOUR toolbar color (set by usePvpWorldCanvas)
     // Continue this seat's seq from the co-signed cursor so the run is always fresh and
     // strictly increasing — never overlapping a prior run (it would be skipped as a re-send).
     let seq = by === "A" ? state.appliedSeqA : state.appliedSeqB;

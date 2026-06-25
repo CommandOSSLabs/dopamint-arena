@@ -468,16 +468,35 @@ export function LiveReadout({
 export function MostPainted({
   painters,
   tps,
-  onViewNext,
+  auto,
+  onViewPainter,
 }: {
   /** Per-painter tallies, keyed by address (stable identity, mutated in place). */
   painters: ReadonlyMap<string, PainterInfo>;
   /** Live co-signed throughput (the TPS dial) — shown in the header. */
   tps: number;
-  /** Cycle the camera to the next live painter (engine.viewNextAgent). */
-  onViewNext: () => void;
+  /** Auto on → seat A is bot-driven ("Bot A"); off → you drive it ("You"). */
+  auto: boolean;
+  /** Jump the camera to a painter's latest cell (engine.focusOnAgent). */
+  onViewPainter: (address: string) => void;
 }) {
-  const top = useTopPainters(painters, 5);
+  const top = useTopPainters(painters, 8);
+  // The wall is a 2-party tunnel, so the board is exactly the two SEATS — never a 3rd row.
+  // Seat A reflects whoever's driving it: YOU while Auto is off, the Bot-A autopilot while on
+  // (so taking the wheel shows "You vs Bot B", not a lost row). Seat B is always Bot B.
+  const human = top.find((p) => !p.isAgent);
+  const botA = top.find((p) => p.label === "Bot A");
+  const botB = top.find((p) => p.label === "Bot B");
+  // Seat A is ONE seat: its tally ACCUMULATES your strokes + the Bot-A autopilot's (you and
+  // the bot share the seat over time). The driver only sets the label/tint/View target —
+  // "You" while Auto is off, "Bot A" while on — so the count never resets when you toggle.
+  const seatADriver = auto ? (botA ?? human) : (human ?? botA);
+  const seatA: PainterInfo | undefined = seatADriver && {
+    ...seatADriver,
+    label: auto ? "Bot A" : "You",
+    cells: (human?.cells ?? 0) + (botA?.cells ?? 0),
+  };
+  const rows = [seatA, botB].filter((p): p is PainterInfo => Boolean(p));
   return (
     <div className="sketch-stroke sketch-panel" style={mostPaintedStyle}>
       <div
@@ -491,28 +510,24 @@ export function MostPainted({
       >
         <BrushIcon size={12} />
         Most painted
-        {/* The live readout rides here (not the top bar) so the canvas stays clear:
-            • TPS · View. */}
         <span style={{ flex: 1 }} />
         <LiveDot />
         <span style={{ color: WC.text }}>{Math.round(tps)} TPS</span>
-        <button
-          type="button"
-          onClick={onViewNext}
-          title="Jump the camera to the next painter"
-          className="sketch-btn sketch-btn--ghost"
-          style={{ height: 22, padding: "0 8px", fontSize: 11 }}
-        >
-          View
-        </button>
       </div>
-      {top.map((p) => (
-        <div key={p.address} style={leaderRowStyle}>
+      {rows.map((p) => (
+        <button
+          key={p.address}
+          type="button"
+          onClick={() => onViewPainter(p.address)}
+          title={`Jump to where ${p.label} is painting`}
+          className="sketch-btn sketch-btn--ghost"
+          style={{ ...leaderRowStyle, width: "100%", cursor: "pointer" }}
+        >
           <SeatDot tint={p.tint} />
           <span style={leaderLabelStyle}>{p.label}</span>
           <span style={leaderAddrStyle}>{shortAddress(p.address)}</span>
           <span style={leaderCountStyle}>{formatCount(p.cells)}</span>
-        </div>
+        </button>
       ))}
     </div>
   );
@@ -744,10 +759,11 @@ const popoverStyle: CSSProperties = {
 const autoToggleStyle: CSSProperties = {
   display: "flex",
   alignItems: "center",
-  gap: 10,
-  height: 40,
-  maxWidth: "100%",
-  padding: "0 14px",
+  // A compact corner pill: label ("Auto") + switch, sized to content (NOT stretched), about
+  // the toolbar's button height so it reads as a small control, not a wide box.
+  gap: 8,
+  height: 34,
+  padding: "0 10px",
   cursor: "pointer",
   border: "none",
   background: "transparent",

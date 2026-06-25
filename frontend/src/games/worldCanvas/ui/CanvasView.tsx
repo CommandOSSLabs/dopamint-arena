@@ -1,4 +1,11 @@
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
+import { useSoloCabinet } from "@/shell/cabinet/soloCabinet";
 import { useWorldCanvasOnchain } from "../useWorldCanvasOnchain";
 import { WorldCanvas } from "./WorldCanvas";
 import {
@@ -25,11 +32,27 @@ const CANVAS_BACKGROUND = "#ffffff";
  * Every painted cell is one co-signed off-chain move on the ONE strictly-2-party tunnel;
  * free/draw, so the only score is who painted the most.
  */
-export function CanvasView() {
-  const engine = useWorldCanvasOnchain();
+export function CanvasView({ onHome }: { onHome: () => void }) {
   const [tool, setTool] = useState<ToolId>("draw");
   const [color, setColor] = useState(13); // Sui blue
   const [brushSize, setBrushSize] = useState(1);
+  // Feed the toolbar's color to the engine so the BOTS paint in your selected color too
+  // (you set the palette; they follow while they draw).
+  const engine = useWorldCanvasOnchain({ botColor: color });
+
+  // Shared arcade-cabinet seam (Desktop wraps every window in <GameCabinet>). The shell owns
+  // hover → pause → "Play vs Bot" overlay; here we map the verbs onto the canvas engine.
+  // Offerable only while the bots auto-paint (engine.auto); take-over hands seat A to the human
+  // (Auto off → you paint vs the seat-B bot on the same tunnel). Verbs are stable (engine
+  // callbacks + onHome are useCallback'd), so the controller rebuilds only when `auto` flips.
+  const goManual = useCallback(() => engine.setAuto(false), [engine.setAuto]);
+  useSoloCabinet({
+    offerable: engine.auto,
+    pause: engine.pauseAgents,
+    resume: engine.resumeAgents,
+    goManual,
+    goHome: onHome,
+  });
 
   // The canvas lives inside a freely-resizable window, so responsiveness keys off the
   // CONTAINER (not the viewport): a ResizeObserver flips the layout flags only when the
@@ -95,55 +118,46 @@ export function CanvasView() {
         erasing={tool === "erase"}
       />
 
-      {/* Compact top bar — ONE row: the toolbar at the left, the Auto toggle at the right.
-          The live TPS · View readout lives in the Most-painted card (bottom-right) so the
-          bar stays a thin strip and the canvas is clear. Click-through; panels catch events. */}
-      <div style={topBarStyle}>
-        <div style={topRowStyle}>
-          {toolbar}
-          <AutoToggle auto={engine.auto} onToggleAuto={engine.toggleAuto} />
-        </div>
+      {/* Toolbar top-left (right of the window-owned "← Menu"); the Auto toggle is a small
+          pill pinned to the top-RIGHT corner — same height as the toolbar, not a wide box.
+          The live TPS · View readout lives in the Most-painted card (bottom-right). */}
+      <div style={topBarStyle}>{toolbar}</div>
+      <div style={autoCornerStyle}>
+        <AutoToggle auto={engine.auto} onToggleAuto={engine.toggleAuto} />
       </div>
 
       <MostPainted
         painters={engine.painters}
         tps={tps}
-        onViewNext={engine.viewNextAgent}
+        auto={engine.auto}
+        onViewPainter={engine.focusOnAgent}
       />
     </div>
   );
 }
 
-/** The single consolidated top bar — a click-through column anchored top-center (clear of
- *  the window-owned "← Menu" at top-left). Row 1 (toolbar + Auto) and row 2 (live readout)
- *  each catch their own pointer events; the bar + the gaps between rows stay click-through
- *  so painting/panning under the bar still works. */
+/** The top-left control cluster — a click-through column anchored right of the window-owned
+ *  "← Menu" (top-left). The toolbar is its only child now (the Auto toggle moved to the
+ *  top-right corner), so it just sizes to the toolbar. Click-through; the island sets its own
+ *  pointer-events so painting/panning under it still works. */
 const topBarStyle: CSSProperties = {
   position: "absolute",
   top: 14,
-  // Anchored to the RIGHT of the window-owned "← Menu" button (top-left) so the bar never
-  // overlaps it; spans to the right edge so the toolbar lays out on one row (no shrink-wrap
-  // pile) with the Auto pill pushed to the far right.
   left: 112,
-  right: 14,
   zIndex: 60,
   display: "flex",
-  flexDirection: "column",
-  alignItems: "flex-start",
-  gap: 8,
+  width: "fit-content",
+  maxWidth: "calc(100% - 126px)", // never overflow the window (126 = 112 left + 14 right gutter)
   pointerEvents: "none",
 };
 
-/** The single bar row — toolbar at the left, Auto toggle pushed to the right; wraps only
- *  when truly out of room. Click-through; the toolbar island + the Auto button each catch
- *  their own pointer events (the Auto button sets pointer-events:auto so it's always clickable). */
-const topRowStyle: CSSProperties = {
-  display: "flex",
-  alignItems: "flex-start",
-  justifyContent: "space-between",
-  flexWrap: "wrap",
-  gap: 8,
-  width: "100%",
+/** The Auto toggle, pinned to the top-RIGHT corner as a small pill (same height as the
+ *  toolbar) — not stretched under it. Click-through wrapper; the button catches its own events. */
+const autoCornerStyle: CSSProperties = {
+  position: "absolute",
+  top: 14,
+  right: 14,
+  zIndex: 60,
   pointerEvents: "none",
 };
 

@@ -6,6 +6,7 @@ import {
   type CSSProperties,
 } from "react";
 import { usePvpWorldCanvas } from "../usePvpWorldCanvas";
+import { botColorHint } from "../pvpProtocol";
 import { WorldCanvas } from "./WorldCanvas";
 import { FloatingToolbar, type ToolId } from "./FloatingToolbar";
 import {
@@ -15,7 +16,7 @@ import {
   type CanvasFocus,
 } from "../useWorldCanvasOnchain";
 import { GRACE_MS } from "../pvpProtocol";
-import { WC, ERASER_COLOR } from "./tokens";
+import { WC, ERASER_COLOR, PALETTE } from "./tokens";
 
 const CHUNK = 256;
 /** Fixed canvas backdrop (matches solo) — Excalidraw-style white, passed to WorldCanvas so
@@ -102,6 +103,13 @@ function Board({ m }: { m: ReturnType<typeof usePvpWorldCanvas> }) {
   const [color, setColor] = useState(13);
   const [brushSize, setBrushSize] = useState(1);
   const [revision, setRevision] = useState(0);
+
+  // Your toolbar color drives YOUR seat's bot too (like solo): the autopilot's randomMove
+  // reads this hint, so toggling Auto on paints in your chosen color. (Brush size already
+  // flows through to bot stroke width via WorldCanvas.)
+  useEffect(() => {
+    botColorHint.current = color;
+  }, [color]);
 
   // Reconnect overlay countdown: when the opponent drops mid-match, count the shared GRACE_MS down
   // to zero so the player sees exactly how long until the canvas auto-closes as a draw. The same
@@ -196,6 +204,18 @@ function Board({ m }: { m: ReturnType<typeof usePvpWorldCanvas> }) {
     }
   };
 
+  // The opponent's CURRENT color — their latest cell's palette color — so their chip + marker
+  // show what THEY are painting (not a fixed seat tint), mirroring "You" = your color.
+  const opponentColor = useMemo(() => {
+    const cells = m.view ?? [];
+    for (let i = cells.length - 1; i >= 0; i--) {
+      if (cells[i].by === opponentSeat) {
+        return PALETTE[cells[i].color] ?? SEAT_TINT[opponentSeat];
+      }
+    }
+    return SEAT_TINT[opponentSeat];
+  }, [m.view, opponentSeat]);
+
   const agents: AgentMarker[] = useMemo(() => {
     const cells = m.view ?? [];
     for (let i = cells.length - 1; i >= 0; i--) {
@@ -207,7 +227,7 @@ function Board({ m }: { m: ReturnType<typeof usePvpWorldCanvas> }) {
             label: `Opponent · ${opponentSeat}`,
             painter: opponentSeat,
             flagName: "co-draw",
-            tint: SEAT_TINT[opponentSeat],
+            tint: PALETTE[c.color] ?? SEAT_TINT[opponentSeat],
             gx: c.gx,
             gy: c.gy,
             h: 6,
@@ -281,14 +301,14 @@ function Board({ m }: { m: ReturnType<typeof usePvpWorldCanvas> }) {
         </button>
         <span style={ctlDividerStyle} />
         <ParticipantChip
-          tint={SEAT_TINT[m.role ?? "A"]}
+          tint={PALETTE[color]}
           label="You"
           title="Jump to where you're painting"
           onClick={() => viewParticipant("you")}
         />
         <span style={{ opacity: 0.45, fontSize: 11 }}>vs</span>
         <ParticipantChip
-          tint={SEAT_TINT[opponentSeat]}
+          tint={opponentColor}
           label="Opp"
           title="Jump to where your opponent is painting"
           onClick={() => viewParticipant("opp")}
