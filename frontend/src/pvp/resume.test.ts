@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import type { CoSignedUpdate } from "sui-tunnel-ts/core/tunnel";
 
 // Minimal localStorage + window fakes (must exist before importing resume.ts).
 class FakeStorage {
@@ -29,11 +30,16 @@ const {
   listActiveTunnels,
   evictExpiredRecords,
   hasResumableMatch,
+  transcriptToWire,
+  rebuildTranscript,
+  transcriptLastNonce,
+  appendAdoptedCheckpoint,
   keypairFromSecretHex,
 } = await import("./resume");
 const { OffchainTunnel } = await import("sui-tunnel-ts/core/tunnel");
 const { generateKeyPair } = await import("sui-tunnel-ts/core/crypto");
 const { toHex } = await import("sui-tunnel-ts/core/bytes");
+const { Transcript } = await import("sui-tunnel-ts/proof/transcript");
 
 test("keypairFromSecretHex rebuilds a key that signs identically to the original", () => {
   const kp = generateKeyPair();
@@ -177,6 +183,93 @@ test("hasResumableMatch is true only when a record for that game is persisted", 
     "cleared the only quantum-poker record",
   );
   clearResumeRecord(tA);
+});
+
+// Build n co-signed updates (nonces 1..n) by alternating self-play steps on the counter proto.
+function counterUpdates(n: number): { tid: string; out: CoSignedUpdate[] } {
+  const ka = generateKeyPair(),
+    kb = generateKeyPair();
+  const tid = `0x${"31".repeat(32)}`;
+  const sp = OffchainTunnel.selfPlay(
+    counterProto(),
+    tid,
+    ka,
+    kb,
+    "0xA",
+    "0xB",
+    {
+      a: 1000n,
+      b: 1000n,
+    },
+  );
+  const out: CoSignedUpdate[] = [];
+  for (let i = 0; i < n; i++) {
+    sp.step(0, i % 2 === 0 ? "A" : "B");
+    out.push(sp.latest!);
+  }
+  return { tid, out };
+}
+
+test("transcriptToWire + rebuildTranscript reproduce the root byte-for-byte", () => {
+  const { tid, out } = counterUpdates(5);
+  const orig = new Transcript(tid);
+  out.forEach((u) => orig.append(u));
+  const rebuilt = rebuildTranscript(tid, transcriptToWire(orig));
+  assert.equal(rebuilt.length, 5);
+  assert.deepEqual(
+    Uint8Array.from(rebuilt.root()),
+    Uint8Array.from(orig.root()),
+    "rebuilt transcript yields the same Merkle root",
+  );
+});
+
+test("appendAdoptedCheckpoint fills exactly the next entry to match the natural root", () => {
+  const { tid, out } = counterUpdates(5);
+  const ref = new Transcript(tid);
+  out.forEach((u) => ref.append(u)); // 1..5 naturally
+
+  const t = new Transcript(tid);
+  out.slice(0, 4).forEach((u) => t.append(u)); // 1..4
+  assert.equal(appendAdoptedCheckpoint(t, out[4]), "appended"); // nonce 5 === 4+1
+  assert.deepEqual(
+    Uint8Array.from(t.root()),
+    Uint8Array.from(ref.root()),
+    "adopt-appended transcript matches the never-dropped one",
+  );
+});
+
+test("appendAdoptedCheckpoint guards a >1 gap and a present/absent nonce", () => {
+  const { tid, out } = counterUpdates(5);
+  const t = new Transcript(tid);
+  out.slice(0, 3).forEach((u) => t.append(u)); // 1..3, last = 3
+  assert.equal(appendAdoptedCheckpoint(t, out[4]), "gap"); // nonce 5 > 3+1
+  assert.equal(t.length, 3, "gap is never appended");
+  assert.equal(appendAdoptedCheckpoint(t, out[1]), "noop"); // nonce 2 <= 3
+  assert.equal(appendAdoptedCheckpoint(t, null), "noop");
+  assert.equal(t.length, 3);
+});
+
+test("a record carrying a transcript is removed by clearResumeRecord", () => {
+  const { tid, out } = counterUpdates(2);
+  const built = new Transcript(tid);
+  out.forEach((u) => built.append(u));
+  writeResumeRecord({
+    matchId: "m",
+    tunnelId: tid,
+    role: "A",
+    game: "g",
+    opponentWallet: "0xb",
+    opponentPubkeyHex: "ab",
+    selfEphemeralSecretHex: toHex(generateKeyPair().secretKey),
+    latestCoSigned: toWireCoSigned(out[1]),
+    latestState: {},
+    transcript: transcriptToWire(built),
+    updatedAt: 1,
+  });
+  flushResumeWrites();
+  assert.equal(readResumeRecord(tid)?.transcript?.length, 2);
+  clearResumeRecord(tid);
+  assert.equal(readResumeRecord(tid), null);
 });
 
 // --- tiny fixtures local to the test ---

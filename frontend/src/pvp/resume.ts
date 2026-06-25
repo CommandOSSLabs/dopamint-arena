@@ -10,7 +10,8 @@
 import { toHex, fromHex } from "sui-tunnel-ts/core/bytes";
 import { keyPairFromSecret, type KeyPair } from "sui-tunnel-ts/core/crypto";
 import type { CoSignedUpdate } from "sui-tunnel-ts/core/tunnel";
-import type { StateUpdate } from "sui-tunnel-ts/core/wire";
+import { parseStateUpdate, type StateUpdate } from "sui-tunnel-ts/core/wire";
+import { Transcript } from "sui-tunnel-ts/proof/transcript";
 
 export type JsonValue = unknown;
 
@@ -33,6 +34,14 @@ export interface WireCoSigned {
   sigB: string;
 }
 
+/** localStorage-safe transcript entry: the signed StateUpdate bytes + both sigs (hex; nonce decimal). */
+export interface WireTranscriptEntry {
+  nonce: string;
+  message: string;
+  sigA: string;
+  sigB: string;
+}
+
 /** Compact per-tunnel resume state. `latestState`/`pending.move`/`secret` are adapter-serialized. */
 export interface ResumeRecord {
   matchId: string;
@@ -49,6 +58,10 @@ export interface ResumeRecord {
   latestState: JsonValue;
   pending?: { move: JsonValue; timestamp: string };
   secret?: JsonValue;
+  /** Full co-signed transcript from tunnel-open to `latestCoSigned`, hex-encoded. Persisted in the
+   *  SAME record so it is written atomically with the checkpoint; replayed on cold-load to recompute
+   *  the Merkle root the peer holds, so cooperative close does not hit a transcript-root mismatch. */
+  transcript?: WireTranscriptEntry[];
   updatedAt: number;
 }
 
@@ -181,6 +194,57 @@ export function listActiveTunnels(): string[] {
  *  records whose state is terminal. */
 export function hasResumableMatch(game: string): boolean {
   return listActiveTunnels().some((id) => readResumeRecord(id)?.game === game);
+}
+
+/** Serialize a live transcript to its localStorage form. */
+export function transcriptToWire(t: Transcript): WireTranscriptEntry[] {
+  return t.rawEntries().map((e) => ({
+    nonce: e.nonce.toString(),
+    message: toHex(e.message),
+    sigA: toHex(e.sigA),
+    sigB: toHex(e.sigB),
+  }));
+}
+
+/** Replay persisted entries into a Transcript. `root()` matches the pre-reload root because the
+ *  Transcript derives each leaf from the (canonical) message + sigs, not from any live engine state. */
+export function rebuildTranscript(
+  tunnelId: string,
+  entries: WireTranscriptEntry[],
+): Transcript {
+  const t = new Transcript(tunnelId);
+  for (const e of entries) {
+    t.append({
+      update: parseStateUpdate(fromHex(e.message)),
+      sigA: fromHex(e.sigA),
+      sigB: fromHex(e.sigB),
+    });
+  }
+  return t;
+}
+
+/** Highest nonce currently in the transcript, or 0 when empty. */
+export function transcriptLastNonce(t: Transcript): bigint {
+  const n = t.length;
+  return n === 0 ? 0n : t.rawEntries()[n - 1].nonce;
+}
+
+/** On a resync "adopt" the SDK advances `_latest` WITHOUT firing onConfirmed, so the adopted
+ *  checkpoint is missing from the transcript. Append it IFF it is exactly the next entry. A >1 gap
+ *  ("gap") cannot happen without tampering and is never appended — the existing settle-time root
+ *  check then rejects the close safely. An already-present nonce / null is a "noop". */
+export function appendAdoptedCheckpoint(
+  t: Transcript,
+  latest: CoSignedUpdate | null,
+): "appended" | "noop" | "gap" {
+  if (!latest) return "noop";
+  const last = transcriptLastNonce(t);
+  if (latest.update.nonce === last + 1n) {
+    t.append(latest);
+    return "appended";
+  }
+  if (latest.update.nonce > last + 1n) return "gap";
+  return "noop";
 }
 
 export function evictExpiredRecords(maxAgeMs: number = DEFAULT_TTL_MS): void {
