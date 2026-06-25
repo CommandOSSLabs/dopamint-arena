@@ -147,14 +147,23 @@ cd /opt/dopamint/repo/sui-tunnel-ts || true
     },
   });
 
-  const asg = new aws.autoscaling.Group(`${args.name}-benchmark`, {
-    vpcZoneIdentifiers: args.subnetIds,
-    minSize: args.minSize,
-    maxSize: args.maxSize,
-    desiredCapacity: args.minSize,
-    launchTemplate: { id: launchTemplate.id, version: "$Latest" },
-    tags: [{ key: "Name", value: `${args.name}-benchmark`, propagateAtLaunch: true }],
-  });
+  const asg = new aws.autoscaling.Group(
+    `${args.name}-benchmark`,
+    {
+      vpcZoneIdentifiers: args.subnetIds,
+      minSize: args.minSize,
+      maxSize: args.maxSize,
+      desiredCapacity: args.minSize,
+      launchTemplate: { id: launchTemplate.id, version: "$Latest" },
+      tags: [{ key: "Name", value: `${args.name}-benchmark`, propagateAtLaunch: true }],
+    },
+    {
+      // The benchmark fleet is scaled up/down manually (or via the benchmark workflow).
+      // Do not let `pulumi up` reconcile the ASG size, otherwise CI/CD deployments
+      // overwrite manual scale-downs and leave expensive instances running.
+      ignoreChanges: ["minSize", "maxSize", "desiredCapacity"],
+    }
+  );
 
   return {
     asgName: asg.name,
