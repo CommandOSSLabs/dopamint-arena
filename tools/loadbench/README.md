@@ -10,6 +10,10 @@ between those bookends are the throughput. It measures two things:
 It swaps only the **transport** under a fixed engine path, so the numbers are
 comparable across two channels and two anchor modes (below).
 
+The bench drives the **real frontend protocol classes** via the game kits
+(`frontend/src/agent/gameKit.ts`). On-chain settlements are byte-identical to
+the shipped games — not synthetic SDK behaviors.
+
 > Toolchain: this is a **bun** package. Do not convert it (or `sui-tunnel-ts/`)
 > to anything else. It imports engine code from `../../sui-tunnel-ts/src` via
 > relative paths.
@@ -59,7 +63,7 @@ state with `docker compose ps` (both services should be `healthy`).
 
 ```bash
 # pure engine ceiling — no chain, no relay (start here):
-bun run bench:game payments --channel local --offchain
+bun run bench:game ticTacToe --channel local --offchain
 
 # real on-chain match on the localnet (onchain is the default anchor):
 bun run bench:game blackjack --channel local
@@ -77,18 +81,21 @@ Defaults: `--channel relay`, `--anchor onchain`, `--matches 1`, `--concurrency 1
 
 ```bash
 # pure-burst engine TPS, no infra:
-bun run swarm --offchain --channel local --concurrency 16 --duration 10
+bun run swarm --offchain --channel local --duration 10
 
 # fixed match count, on-chain, default game rotation:
-bun run swarm --channel local --concurrency 8 --matches 40
+bun run swarm --channel local --matches 40
 
 # pick games and run for a duration:
-bun run swarm --offchain --channel local --games blackjack,chat --duration 15
+bun run swarm --offchain --channel local --games blackjack,quantumPoker --duration 15
+
+# explicit fleet size:
+bun run swarm --offchain --channel local --workers 4 --concurrency 6 --duration 10
 ```
 
-Defaults: `--channel relay`, `--anchor onchain`, `--concurrency 8`, all playable
-games. If you pass neither `--matches` nor `--duration`, it runs for 15s. The
-`tunnels settled/s` line prints only for `--anchor onchain`.
+Defaults: `--channel relay`, `--anchor onchain`, `--workers auto`, `--concurrency
+auto`, all playable games. If you pass neither `--matches` nor `--duration`, it
+runs for 15s. The `tunnels settled/s` line prints only for `--anchor onchain`.
 
 ### `bun test` — the unit + smoke suite
 
@@ -110,12 +117,85 @@ suite green with no infra. The offchain smoke always runs.
 | `--channel local\|relay` | yes | yes | default `relay` |
 | `--offchain` / `--anchor offchain\|onchain` | yes | yes | default `onchain` |
 | `--matches N` | yes | yes | swarm: stops at this count |
-| `--concurrency N` | yes | yes | matches in flight at once |
+| `--concurrency N` | yes | yes | async matches in flight per worker |
 | `--duration S` | — | yes | swarm: stop after S seconds |
+| `--workers N\|auto` | — | yes | OS worker threads (true multi-core) |
+| `--mem-budget-mb N` | — | yes | memory cap for auto concurrency (io mode) |
+| `--per-match-kb N` | — | yes | per-match RSS estimate for auto concurrency |
 
-**Playable games:** `payments, blackjack, ticTacToe, chat, quantumPoker, bombIt,
-cross`. The games `battleship, coinFlip, dice, slots` have no engine protocol and
-are rejected with a message.
+**Playable games:** `ticTacToe, blackjack, battleship, quantumPoker, bombIt,
+cross`. These map to the real frontend kit classes; any other name is rejected
+with a message listing the valid options.
+
+## Fleet sizing (`--workers` and `--concurrency`)
+
+`swarm` distributes work across a fleet of OS worker threads:
+
+- **`--workers`** = number of Node.js `worker_threads`. Each thread runs on its
+  own OS core, giving **true multi-core parallelism**. `auto` resolves to
+  `round(1.5 × availableCores)`.
+
+- **`--concurrency`** = async matches in flight **per worker**. This overlaps
+  I/O waiting within a thread but does not add cores. `auto` is mode-aware:
+
+  | mode | when | auto concurrency |
+  |---|---|---|
+  | cpu | `--offchain --channel local` | 2/worker — cores already saturated; more async tasks only thrash |
+  | io | onchain or relay | memory-capped: `floor(budgetBytes / perMatchBytes) / workers`, min 1 |
+
+  Pass `--mem-budget-mb` and `--per-match-kb` to tune the io-mode cap; defaults
+  are 70 % of system RAM and 512 KB/match.
+
+  Explicit `--workers N` or `--concurrency N` always overrides `auto`.
+
+The swarm prints the resolved fleet on every run:
+
+```
+[local/offchain] fleet: workers=6 concurrency=2 (auto)
+```
+
+## Resources line
+
+Every run prints a `resources:` line after the final result:
+
+```
+resources: cpu avg=3.8 cores (380%) peak=5.2 cores (520%), rss avg=312MB peak=401MB, samples=22
+```
+
+CPU is derived from `process.cpuUsage()` (user + system, all threads); RSS from
+`process.memoryUsage().rss`, sampled every 500 ms. Both avg and peak are
+reported for CPU (cores + %) and RSS.
+
+## Container
+
+The `loadbench` service in `docker-compose.yml` (profile `bench`) runs the
+bench inside Docker, sharing the same `sui-localnet` network:
+
+```bash
+# build the image (once, or after code changes):
+docker compose --profile bench build loadbench
+
+# offchain burst — no chain needed:
+docker compose --profile bench run --rm loadbench \
+  --offchain --channel local --workers auto --duration 10
+
+# onchain — stack must be up first (bun run stack):
+docker compose --profile bench run --rm loadbench \
+  --channel local --anchor onchain --workers auto --duration 10
+```
+
+Key details:
+
+- **CPU/memory limits**: the service defaults to `cpus: "4"` and `memory: 4g`
+  via `deploy.resources.limits`. Override per run with
+  `docker run --cpus N --memory Ng`.
+- **RPC**: `SUI_RPC_URL=http://sui-localnet:9000` is baked into the service
+  environment so the container reaches the localnet by name.
+- **Secrets**: `.env.local` and `keys.json` are mounted read-only from
+  `tools/loadbench/` into the container.
+- **`--channel relay` is host-only**: the relay process (`cargo run -p
+  tunnel-manager`) is not included in the image. Run relay benchmarks from the
+  host with `bun run swarm`.
 
 ## Relay specifics
 
@@ -145,12 +225,15 @@ path.
 | `src/channels/relayChannel.ts` | headless relay WS transport |
 | `src/channels/relayEnvelope.ts` | engine frame ↔ relay payload |
 | `src/match.ts` | channel-agnostic match driver (`makeSeats`, `playMatch`) |
-| `src/games.ts` | game → behavior registry |
+| `src/games.ts` | game → kit registry (6 games; drives real FE protocol classes) |
+| `src/resourceMonitor.ts` | process CPU + RSS sampling; `resources:` line |
 | `src/onchain.ts` | open / settle bookends |
 | `src/stack.ts` + `docker-compose.yml` | localnet + valkey + publish + funding |
 | `src/relayProcess.ts` | relay spawn + health gate |
 | `src/runMatch.ts` | composes channel + anchor into one full match |
 | `src/benchGame.ts` | `bench:game` entrypoint |
-| `src/swarm.ts` | `swarm` entrypoint |
+| `src/swarm.ts` | `swarm` entrypoint (fleet, resource monitor) |
+| `src/worker.ts` | per-thread swarm worker |
+| `Dockerfile` | `loadbench` container image (bun + frontend kits; no cargo) |
 
 Secrets (`.env.local`, `keys.json`) are localnet-only and gitignored.
