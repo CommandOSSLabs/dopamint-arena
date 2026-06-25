@@ -142,4 +142,79 @@ describe("backend component", () => {
       "no settler secret entry when the ARN is absent",
     );
   });
+
+  it("does not include an Ollama sidecar by default", async () => {
+    const backend = createBackend(makeBackendArgs());
+
+    const defs = JSON.parse(
+      await awaitOutput(backend.taskDefinition.containerDefinitions),
+    );
+
+    assert.strictEqual(
+      defs.find((c: { name: string }) => c.name === "ollama"),
+      undefined,
+      "ollama container must not be present by default",
+    );
+    const backendEnv = defs[0].environment;
+    assert.ok(
+      !backendEnv.some((e: { name: string }) => e.name === "OLLAMA_URL"),
+      "OLLAMA_URL must not be set when sidecar is disabled",
+    );
+    assert.strictEqual(await awaitOutput(backend.taskDefinition.cpu), "1024");
+    assert.strictEqual(
+      await awaitOutput(backend.taskDefinition.memory),
+      "2048",
+    );
+  });
+
+  it("adds an Ollama sidecar and scales the task when enabled", async () => {
+    const backend = createBackend(
+      makeBackendArgs({
+        ollamaEnabled: true,
+        ollamaModel: "qwen2.5:1.8b",
+        ollamaImageTag: "0.6.2",
+      }),
+    );
+
+    const defs = JSON.parse(
+      await awaitOutput(backend.taskDefinition.containerDefinitions),
+    );
+    const backendContainer = defs.find(
+      (c: { name: string }) => c.name === "backend",
+    );
+    const ollamaContainer = defs.find(
+      (c: { name: string }) => c.name === "ollama",
+    );
+
+    assert.ok(ollamaContainer, "ollama container must be present");
+    assert.ok(
+      ollamaContainer.image.startsWith("ollama/ollama:"),
+      "ollama image must use the ollama registry",
+    );
+    assert.ok(
+      ollamaContainer.command.some((c: string) =>
+        c.includes("qwen2.5:1.8b"),
+      ),
+      "ollama command must pull the configured model",
+    );
+    assert.ok(
+      backendContainer.environment.some(
+        (e: { name: string; value: string }) =>
+          e.name === "OLLAMA_URL" && e.value === "http://localhost:11434",
+      ),
+      "backend must point OLLAMA_URL at the sidecar",
+    );
+    assert.ok(
+      backendContainer.environment.some(
+        (e: { name: string; value: string }) =>
+          e.name === "OLLAMA_MODEL" && e.value === "qwen2.5:1.8b",
+      ),
+      "backend must receive the configured OLLAMA_MODEL",
+    );
+    assert.strictEqual(await awaitOutput(backend.taskDefinition.cpu), "2048");
+    assert.strictEqual(
+      await awaitOutput(backend.taskDefinition.memory),
+      "4096",
+    );
+  });
 });
