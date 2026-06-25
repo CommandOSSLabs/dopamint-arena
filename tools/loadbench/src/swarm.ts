@@ -45,18 +45,26 @@ export function parseSwarmArgs(argv: string[]): {
 }
 
 const DEFAULT_PER_MATCH_KB = 512;
+// Low concurrency for CPU-bound (offchain/local) runs: more in-flight coroutines
+// on a saturated core only thrash without increasing throughput.
+const CPU_AUTO_CONCURRENCY = 2;
 
 export function resolveFleet(
   args: { workers: number | "auto"; concurrency: number | "auto"; memBudgetMb: number | null; perMatchKb: number | null },
   sys: { cores: number; totalMem: number },
+  mode: "cpu" | "io",
 ): { workers: number; concurrency: number } {
-  const workers = args.workers === "auto" ? Math.max(1, sys.cores) : args.workers;
+  const workers = args.workers === "auto" ? Math.max(1, Math.round(sys.cores * 1.5)) : args.workers;
   let concurrency: number;
   if (args.concurrency === "auto") {
-    const budgetBytes = args.memBudgetMb !== null ? args.memBudgetMb * 1_048_576 : sys.totalMem * 0.7;
-    const perMatchBytes = (args.perMatchKb ?? DEFAULT_PER_MATCH_KB) * 1024;
-    const maxInFlight = Math.max(workers, Math.floor(budgetBytes / perMatchBytes));
-    concurrency = Math.max(1, Math.floor(maxInFlight / workers));
+    if (mode === "cpu") {
+      concurrency = CPU_AUTO_CONCURRENCY;
+    } else {
+      const budgetBytes = args.memBudgetMb !== null ? args.memBudgetMb * 1_048_576 : sys.totalMem * 0.7;
+      const perMatchBytes = (args.perMatchKb ?? DEFAULT_PER_MATCH_KB) * 1024;
+      const maxInFlight = Math.max(workers, Math.floor(budgetBytes / perMatchBytes));
+      concurrency = Math.max(1, Math.floor(maxInFlight / workers));
+    }
   } else {
     concurrency = args.concurrency;
   }
@@ -121,6 +129,9 @@ function runWorker(input: Record<string, unknown>): Promise<{ ok: boolean; moves
     const w = new Worker(new URL("./worker.ts", import.meta.url), { workerData: input });
     w.once("message", (m) => resolve(m));
     w.once("error", (e) => resolve({ ok: false, error: String(e?.stack ?? e) }));
+    // Safety net: a normal worker posts a message before exiting, so this only
+    // fires on abnormal termination (OOM kill, uncaught crash) that skips the message.
+    w.once("exit", (code) => resolve({ ok: false, error: `worker exited without result (code ${code})` }));
   });
 }
 
@@ -129,7 +140,8 @@ async function main() {
   if (args.matches === null && args.durationS === null) args.durationS = 15;
 
   const sys = { cores: os.availableParallelism?.() ?? os.cpus().length, totalMem: os.totalmem() };
-  const { workers, concurrency } = resolveFleet(args, sys);
+  const mode = args.anchor === "offchain" && args.channel === "local" ? "cpu" : "io";
+  const { workers, concurrency } = resolveFleet(args, sys, mode);
 
   const env: Record<string, string> = {};
   if (args.anchor === "onchain") {

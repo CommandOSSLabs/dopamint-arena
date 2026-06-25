@@ -17,32 +17,41 @@ test("parseSwarmArgs reads explicit workers/concurrency and budgets", () => {
   expect(a.perMatchKb).toBe(256);
 });
 
-test("resolveFleet: workers auto = all cores; concurrency auto is memory-capped", () => {
-  // 8 cores, 8 GiB total -> budget 70% = ~5.7 GiB; per-match 512 KiB default.
+test("resolveFleet io mode: workers = round(1.5*cores); concurrency memory-capped", () => {
   const r = resolveFleet(
     { workers: "auto", concurrency: "auto", memBudgetMb: null, perMatchKb: null },
     { cores: 8, totalMem: 8 * 1024 * 1024 * 1024 },
+    "io",
   );
-  expect(r.workers).toBe(8);
-  expect(r.concurrency).toBeGreaterThan(0);
-  // maxInFlight = floor(0.7*8GiB / 512KiB) ; per-worker = that / 8.
+  expect(r.workers).toBe(12); // round(8 * 1.5)
   const maxInFlight = Math.floor((0.7 * 8 * 1024 * 1024 * 1024) / (512 * 1024));
-  expect(r.concurrency).toBe(Math.max(1, Math.floor(maxInFlight / 8)));
+  expect(r.concurrency).toBe(Math.max(1, Math.floor(maxInFlight / 12)));
 });
 
-test("resolveFleet respects explicit values", () => {
+test("resolveFleet cpu mode: concurrency is the low CPU-bound constant", () => {
+  const r = resolveFleet(
+    { workers: "auto", concurrency: "auto", memBudgetMb: null, perMatchKb: null },
+    { cores: 10, totalMem: 8 * 1024 * 1024 * 1024 },
+    "cpu",
+  );
+  expect(r.workers).toBe(15); // round(10 * 1.5)
+  expect(r.concurrency).toBe(2);
+});
+
+test("resolveFleet respects explicit values regardless of mode", () => {
   const r = resolveFleet(
     { workers: 4, concurrency: 10, memBudgetMb: null, perMatchKb: null },
     { cores: 64, totalMem: 999 },
+    "cpu",
   );
   expect(r).toEqual({ workers: 4, concurrency: 10 });
 });
 
-test("resolveFleet uses an explicit memory budget for the concurrency cap", () => {
-  // 4 workers, explicit 1024 MiB budget, 512 KiB per match.
+test("resolveFleet io mode uses an explicit memory budget for the cap", () => {
   const r = resolveFleet(
     { workers: 4, concurrency: "auto", memBudgetMb: 1024, perMatchKb: 512 },
     { cores: 99, totalMem: 1 },
+    "io",
   );
   const maxInFlight = Math.floor((1024 * 1_048_576) / (512 * 1024));
   expect(r.workers).toBe(4);
