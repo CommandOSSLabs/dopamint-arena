@@ -148,15 +148,16 @@ export async function ensureMtpsStakeCoin(opts: {
 /**
  * SIP-58 address-balance stake path (ADR-0013): fund the stake by withdrawing from the player's
  * MTPS *address balance* instead of a version-pinned coin object, so concurrent opens (every
- * game auto-opening on a reload) never equivocate. ON by default whenever MTPS is configured;
- * set `VITE_MTPS_ADDRESS_BALANCE=false` as a kill switch back to the coin-object path.
+ * game auto-opening on a reload) never equivocate. OFF by default: the address-balance path hits
+ * Sui's per-epoch withdrawal cap on testnet (`Invalid withdraw reservation`), so the coin-object
+ * path is more reliable for dev/human play. Set `VITE_MTPS_ADDRESS_BALANCE=true` to opt back in.
  *
  * REQUIRES a backend whose sponsor allowlists `coin::redeem_funds`/`coin::send_funds` (ADR-0013) —
  * an older settler refuses those calls (`sponsor refuses move call …::coin::send_funds`).
  */
 export const isMtpsAddressBalance =
   isMtpsConfigured &&
-  String(import.meta.env?.VITE_MTPS_ADDRESS_BALANCE ?? "true") !== "false";
+  String(import.meta.env?.VITE_MTPS_ADDRESS_BALANCE ?? "false") === "true";
 
 /** Read surface for the address-balance funding path: coins (to sweep) + per-type balance (to know
  *  how much already sits in the address balance). Satisfied by dapp-kit's SuiClient. */
