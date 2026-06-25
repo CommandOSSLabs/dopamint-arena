@@ -100,10 +100,18 @@ export function QuantumPokerBotVsBotWindow({
           </button>
         ) : running ? (
           <div className="flex items-center gap-[clamp(6px,2.2cqmin,14px)]">
-            <button type="button" className="sketch-btn sketch-btn--go" onClick={s.takeOver}>
+            <button
+              type="button"
+              className="sketch-btn sketch-btn--go"
+              onClick={s.takeOver}
+            >
               Play vs Bot
             </button>
-            <button type="button" className="sketch-btn sketch-btn--stop" onClick={s.stopAuto}>
+            <button
+              type="button"
+              className="sketch-btn sketch-btn--stop"
+              onClick={s.stopAuto}
+            >
               Stop
             </button>
           </div>

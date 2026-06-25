@@ -45,31 +45,55 @@ export function PokerActionBar({
           {secondsLeft}s
         </span>
       )}
-      <button type="button" className="sketch-btn sketch-btn--stop" onClick={() => onAct({ kind: "fold" })}>
+      <button
+        type="button"
+        className="sketch-btn sketch-btn--stop"
+        onClick={() => onAct({ kind: "fold" })}
+      >
         Fold
       </button>
       {legal.canCheck && (
-        <button type="button" className="sketch-btn" onClick={() => onAct({ kind: "check" })}>
+        <button
+          type="button"
+          className="sketch-btn"
+          onClick={() => onAct({ kind: "check" })}
+        >
           Check
         </button>
       )}
       {legal.canCall && (
-        <button type="button" className="sketch-btn sketch-btn--call" onClick={() => onAct({ kind: "call" })}>
+        <button
+          type="button"
+          className="sketch-btn sketch-btn--call"
+          onClick={() => onAct({ kind: "call" })}
+        >
           Call {legal.callAmount.toString()}
         </button>
       )}
       {sizes.showHalf && (
-        <button type="button" className="sketch-btn" onClick={() => raise(sizes.half)}>
+        <button
+          type="button"
+          className="sketch-btn"
+          onClick={() => raise(sizes.half)}
+        >
           ½ Pot · {sizes.half.toString()}
         </button>
       )}
       {sizes.showFull && (
-        <button type="button" className="sketch-btn" onClick={() => raise(sizes.full)}>
+        <button
+          type="button"
+          className="sketch-btn"
+          onClick={() => raise(sizes.full)}
+        >
           Pot · {sizes.full.toString()}
         </button>
       )}
       {sizes.showAllIn && (
-        <button type="button" className="sketch-btn sketch-btn--go" onClick={() => raise(sizes.allIn)}>
+        <button
+          type="button"
+          className="sketch-btn sketch-btn--go"
+          onClick={() => raise(sizes.allIn)}
+        >
           All-in · {sizes.allIn.toString()}
         </button>
       )}

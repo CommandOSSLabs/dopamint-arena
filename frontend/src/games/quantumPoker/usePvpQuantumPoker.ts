@@ -429,7 +429,8 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
     // Tell the opponent we're LEAVING (not just ending) so they become the close submitter.
     channelRef.current?.sendPeer({ t: "endMatch", leaving: true });
     // Already between hands → publish our half now; otherwise auto-fold to reach hand_over first.
-    if (dtRef.current?.state.phase === "hand_over") settleNowRef.current?.(true);
+    if (dtRef.current?.state.phase === "hand_over")
+      settleNowRef.current?.(true);
     else maybeAutoPropose();
   }, [maybeAutoPropose]);
 

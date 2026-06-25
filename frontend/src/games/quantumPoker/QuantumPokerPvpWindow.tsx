@@ -29,8 +29,8 @@ export function QuantumPokerPvpWindow({
           <span className="sketch-eyebrow">heads-up · no dealer</span>
           <div className="qp-title mb-1 mt-1">Quantum Poker</div>
           <p className="sketch-note mb-3">
-            Each seat stakes {POKER_BUYIN.toString()} chips on-chain. The deck is
-            dealt by a two-party commit-reveal — no dealer — and chips move
+            Each seat stakes {POKER_BUYIN.toString()} chips on-chain. The deck
+            is dealt by a two-party commit-reveal — no dealer — and chips move
             off-chain over a Sui tunnel for up to {HAND_CAP.toString()} hands,
             paid out at cooperative close.
           </p>
@@ -59,7 +59,9 @@ export function QuantumPokerPvpWindow({
         <SketchDefs />
         <div className="sketch-panel sketch-stroke max-w-[min(22rem,92%)] p-[clamp(14px,4cqmin,26px)]">
           <div className="qp-title mb-1">
-            {g.status === "matching" ? "Finding an opponent…" : "Opening tunnel…"}
+            {g.status === "matching"
+              ? "Finding an opponent…"
+              : "Opening tunnel…"}
           </div>
           <p className="sketch-note">
             {g.status === "matching"
@@ -105,8 +107,8 @@ export function QuantumPokerPvpWindow({
   // opponent's stay face-down (empty → hidden) until showdown reveals them.
   const oppShown = self === "A" ? s.shownHoleB : s.shownHoleA;
   const myHole = g.myHole ?? [];
-  const holesA = self === "A" ? myHole : oppShown ?? [];
-  const holesB = self === "B" ? myHole : oppShown ?? [];
+  const holesA = self === "A" ? myHole : (oppShown ?? []);
+  const holesB = self === "B" ? myHole : (oppShown ?? []);
   const nameA = self === "A" ? "You" : "Opponent";
   const nameB = self === "B" ? "You" : "Opponent";
 
@@ -192,7 +194,9 @@ export function QuantumPokerPvpWindow({
           {g.status === "playing" &&
             !terminal &&
             (g.endRequested ? (
-              <span className="sketch-eyebrow whitespace-nowrap">ends after hand</span>
+              <span className="sketch-eyebrow whitespace-nowrap">
+                ends after hand
+              </span>
             ) : (
               <button
                 type="button"
@@ -222,7 +226,9 @@ export function QuantumPokerPvpWindow({
           <div
             className={`flex flex-col gap-[clamp(4px,1.4cqmin,10px)]${g.auto ? " opacity-40" : ""}`}
           >
-            {g.auto && <span className="sketch-note">🤖 Bot is playing your hand</span>}
+            {g.auto && (
+              <span className="sketch-note">🤖 Bot is playing your hand</span>
+            )}
             <PokerActionBar
               legal={g.legal}
               pot={pot}
