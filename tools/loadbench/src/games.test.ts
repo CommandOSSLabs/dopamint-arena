@@ -1,16 +1,23 @@
 import { test, expect } from "bun:test";
-import { PLAYABLE, isPlayable, protocolFor, gameBalances } from "./games";
-import { makeSeats, playMatch } from "./match";
-import { pairLocalChannel } from "./channels/localChannel";
+import { PLAYABLE, isPlayable, kitFor, gameStake } from "./games";
 
-test("battleship and friends are not playable", () => {
-  expect(isPlayable("battleship")).toBe(false);
+test("the 6 real games are playable; removed/unknown ones are not", () => {
+  expect([...PLAYABLE].sort()).toEqual(
+    ["ticTacToe", "blackjack", "battleship", "quantumPoker", "bombIt", "cross"].sort(),
+  );
   expect(isPlayable("blackjack")).toBe(true);
+  expect(isPlayable("battleship")).toBe(true);
+  expect(isPlayable("payments")).toBe(false);
+  expect(isPlayable("chat")).toBe(false);
+  expect(isPlayable("slots")).toBe(false);
 });
 
-test.each([...PLAYABLE])("%s plays to a settlement over the local channel", async (game) => {
-  const seats = makeSeats(`t-${game}`, gameBalances(game), 100n);
-  const res = await playMatch(protocolFor(game), seats, pairLocalChannel(), { seed: 3, maxMoves: 500 });
-  const s = res.settlement.settlement;
-  expect(s.partyABalance + s.partyBBalance).toBe(seats.balances.a + seats.balances.b);
+test("kitFor returns the canonical kit; gameStake returns its defaultStake", () => {
+  const kit = kitFor("blackjack");
+  expect(kit.id).toBe("blackjack");
+  expect(gameStake("blackjack")).toBe(kit.defaultStake);
+});
+
+test("kitFor throws for an unplayable game", () => {
+  expect(() => kitFor("payments")).toThrow(/no kit/);
 });

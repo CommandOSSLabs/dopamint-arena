@@ -1,31 +1,28 @@
-import { createBehaviorProtocol, type BehaviorName } from "../../../sui-tunnel-ts/src/agents/behaviors";
-import type { Protocol } from "../../../sui-tunnel-ts/src/protocol/Protocol";
+import { GAME_KITS, type GameKit, type GameId } from "../../../frontend/src/agent/gameKit";
 
-const GAME_TO_BEHAVIOR: Record<string, BehaviorName> = {
-  payments: "payment",
-  poker: "poker",
-  quantumPoker: "poker",
-  blackjack: "blackjack",
+/** Bench id -> canonical kit id. The bench drives the real FE protocol class. */
+const GAME_TO_KIT: Record<string, GameId> = {
   ticTacToe: "tictactoe",
-  chat: "chat",
-  bombIt: "bombIt",
-  cross: "cross",
+  blackjack: "blackjack",
+  battleship: "battleship",
+  quantumPoker: "quantum-poker",
+  bombIt: "bomb-it",
+  cross: "chicken-cross",
 };
 
-export const PLAYABLE = ["payments", "blackjack", "ticTacToe", "chat", "quantumPoker", "bombIt", "cross"] as const;
+export const PLAYABLE = ["ticTacToe", "blackjack", "battleship", "quantumPoker", "bombIt", "cross"] as const;
 
 export function isPlayable(game: string): boolean {
-  return game in GAME_TO_BEHAVIOR;
+  return game in GAME_TO_KIT;
 }
 
-export function protocolFor(game: string): Protocol<unknown, unknown> {
-  const behavior = GAME_TO_BEHAVIOR[game];
-  if (!behavior) {
-    throw new Error(`game "${game}" has no engine protocol (playable: ${PLAYABLE.join(", ")})`);
-  }
-  return createBehaviorProtocol(behavior);
+export function kitFor(game: string): GameKit<unknown, unknown> {
+  const id = GAME_TO_KIT[game];
+  if (!id) throw new Error(`game "${game}" has no kit (playable: ${PLAYABLE.join(", ")})`);
+  return GAME_KITS[id];
 }
 
-export function gameBalances(_game: string): { a: bigint; b: bigint } {
-  return { a: 1_000_000n, b: 1_000_000n };
+/** Per-seat stake = the kit's default stake; balances are { a: stake, b: stake }. */
+export function gameStake(game: string): bigint {
+  return kitFor(game).defaultStake;
 }
