@@ -16,7 +16,7 @@ fn push_length_prefixed(out: &mut Vec<u8>, x: &[u8]) {
 }
 
 fn hash_commitment(value: &[u8], salt: &[u8]) -> [u8; 32] {
-    let mut buf = Vec::with_capacity(DOMAIN_COMMIT_REVEAL.len() + 16 + value.len() + salt.len());
+    let mut buf = Vec::with_capacity(DOMAIN_COMMIT_REVEAL.len() + 2 * 8 + value.len() + salt.len());
     buf.extend_from_slice(DOMAIN_COMMIT_REVEAL);
     push_length_prefixed(&mut buf, value);
     push_length_prefixed(&mut buf, salt);
@@ -39,7 +39,7 @@ pub fn verify_commitment(commitment: &[u8; 32], value: &[u8], salt: &[u8]) -> bo
 
 /// Combine two reveals into a 32-byte joint seed neither party can bias.
 pub fn combine_reveals(value_a: &[u8], salt_a: &[u8], value_b: &[u8], salt_b: &[u8]) -> [u8; 32] {
-    let mut buf = Vec::with_capacity(DOMAIN_COMMIT_REVEAL.len() + 32 + value_a.len() + salt_a.len() + value_b.len() + salt_b.len());
+    let mut buf = Vec::with_capacity(DOMAIN_COMMIT_REVEAL.len() + 4 * 8 + value_a.len() + salt_a.len() + value_b.len() + salt_b.len());
     buf.extend_from_slice(DOMAIN_COMMIT_REVEAL);
     push_length_prefixed(&mut buf, value_a);
     push_length_prefixed(&mut buf, salt_a);

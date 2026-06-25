@@ -25,7 +25,7 @@ pub struct StateUpdate {
 /// Order: domain, id, state_hash, nonce, timestamp, balA, balB.
 pub fn serialize_state_update(u: &StateUpdate) -> Vec<u8> {
     let id = address_to_bytes32(&u.tunnel_id).expect("valid tunnel id");
-    let mut out = Vec::with_capacity(DOMAIN_STATE_UPDATE.len() + 32 + 32 + 32);
+    let mut out = Vec::with_capacity(DOMAIN_STATE_UPDATE.len() + 32 + 32 + 4 * 8);
     out.extend_from_slice(DOMAIN_STATE_UPDATE);
     out.extend_from_slice(&id);
     out.extend_from_slice(&u.state_hash);
@@ -48,7 +48,7 @@ pub struct Settlement {
 /// Order: domain, id, balA, balB, final_nonce, timestamp.
 pub fn serialize_settlement(s: &Settlement) -> Vec<u8> {
     let id = address_to_bytes32(&s.tunnel_id).expect("valid tunnel id");
-    let mut out = Vec::with_capacity(DOMAIN_SETTLEMENT.len() + 32 + 32);
+    let mut out = Vec::with_capacity(DOMAIN_SETTLEMENT.len() + 32 + 4 * 8);
     out.extend_from_slice(DOMAIN_SETTLEMENT);
     out.extend_from_slice(&id);
     out.extend_from_slice(&u64_to_be_bytes(s.party_a_balance));
@@ -62,7 +62,7 @@ pub fn serialize_settlement(s: &Settlement) -> Vec<u8> {
 /// plus a trailing 32-byte transcript root, under the v2 domain.
 pub fn serialize_settlement_with_root(s: &Settlement, transcript_root: &[u8; 32]) -> Vec<u8> {
     let id = address_to_bytes32(&s.tunnel_id).expect("valid tunnel id");
-    let mut out = Vec::with_capacity(DOMAIN_SETTLEMENT_V2.len() + 32 + 32 + 32);
+    let mut out = Vec::with_capacity(DOMAIN_SETTLEMENT_V2.len() + 32 + 4 * 8 + 32);
     out.extend_from_slice(DOMAIN_SETTLEMENT_V2);
     out.extend_from_slice(&id);
     out.extend_from_slice(&u64_to_be_bytes(s.party_a_balance));
@@ -88,7 +88,7 @@ pub fn serialize_htlc_lock(h: &HtlcLock) -> Vec<u8> {
     let id = address_to_bytes32(&h.tunnel_id).expect("valid tunnel id");
     let sender = address_to_bytes32(&h.sender).expect("valid sender");
     let receiver = address_to_bytes32(&h.receiver).expect("valid receiver");
-    let mut out = Vec::with_capacity(DOMAIN_HTLC_LOCK.len() + 32 * 4 + 16);
+    let mut out = Vec::with_capacity(DOMAIN_HTLC_LOCK.len() + 4 * 32 + 2 * 8);
     out.extend_from_slice(DOMAIN_HTLC_LOCK);
     out.extend_from_slice(&id);
     out.extend_from_slice(&h.payment_hash);

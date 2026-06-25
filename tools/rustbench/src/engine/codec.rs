@@ -17,7 +17,7 @@ pub fn address_to_bytes32(addr: &str) -> Result<[u8; 32], String> {
     }
     let padded = format!("{:0>64}", h);
     let mut out = [0u8; 32];
-    hex::decode_to_slice(&padded, &mut out).map_err(|e| e.to_string())?;
+    hex::decode_to_slice(&padded, &mut out).expect("guards above ensure valid even-length hex");
     Ok(out)
 }
 

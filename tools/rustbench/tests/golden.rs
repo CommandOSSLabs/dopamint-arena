@@ -10,6 +10,7 @@ use rustbench::engine::wire::{
 };
 
 fn field(json: &str, key: &str) -> String {
+    // Deliberately minimal, dependency-free string scan: needle includes closing quote so "settlement" won't collide with "settlement_v2".
     let needle = format!("\"{key}\"");
     let start = json.find(&needle).expect("key present");
     let after = &json[start + needle.len()..];
