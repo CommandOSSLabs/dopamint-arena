@@ -498,7 +498,7 @@ class PaymentShopController {
       `machine-${Date.now()}-${this.seq}`,
       `Random NFT #${this.seq}`,
     );
-    this.machines = [...this.machines, runtime];
+    this.machines = [runtime, ...this.machines];
     this.emit();
     void runtime.run(deps, () => this.emit());
   };
