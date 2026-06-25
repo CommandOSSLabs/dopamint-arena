@@ -8,7 +8,10 @@ pub fn u64_to_be_bytes(v: u64) -> [u8; 8] {
 /// 32-byte left-zero-padded big-endian address/object-id, matching
 /// `wire.ts::addressToBytes32` / Move `address.to_bytes()`. Accepts `0x` prefix.
 pub fn address_to_bytes32(addr: &str) -> Result<[u8; 32], String> {
-    let h = addr.strip_prefix("0x").or_else(|| addr.strip_prefix("0X")).unwrap_or(addr);
+    let h = addr
+        .strip_prefix("0x")
+        .or_else(|| addr.strip_prefix("0X"))
+        .unwrap_or(addr);
     if !h.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err(format!("invalid hex address: {addr}"));
     }
@@ -42,6 +45,9 @@ mod tests {
 
     #[test]
     fn u64_be_is_big_endian() {
-        assert_eq!(u64_to_be_bytes(0x499602d2), [0, 0, 0, 0, 0x49, 0x96, 0x02, 0xd2]);
+        assert_eq!(
+            u64_to_be_bytes(0x499602d2),
+            [0, 0, 0, 0, 0x49, 0x96, 0x02, 0xd2]
+        );
     }
 }

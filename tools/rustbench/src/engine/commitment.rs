@@ -26,7 +26,10 @@ fn hash_commitment(value: &[u8], salt: &[u8]) -> [u8; 32] {
 /// Commit path. Enforces the >= 16-byte salt, mirroring `create_commitment`.
 pub fn compute_commitment(value: &[u8], salt: &[u8]) -> Result<[u8; 32], String> {
     if salt.len() < MIN_SALT_LEN {
-        return Err(format!("salt must be >= {MIN_SALT_LEN} bytes, got {}", salt.len()));
+        return Err(format!(
+            "salt must be >= {MIN_SALT_LEN} bytes, got {}",
+            salt.len()
+        ));
     }
     Ok(hash_commitment(value, salt))
 }
@@ -39,7 +42,14 @@ pub fn verify_commitment(commitment: &[u8; 32], value: &[u8], salt: &[u8]) -> bo
 
 /// Combine two reveals into a 32-byte joint seed neither party can bias.
 pub fn combine_reveals(value_a: &[u8], salt_a: &[u8], value_b: &[u8], salt_b: &[u8]) -> [u8; 32] {
-    let mut buf = Vec::with_capacity(DOMAIN_COMMIT_REVEAL.len() + 4 * 8 + value_a.len() + salt_a.len() + value_b.len() + salt_b.len());
+    let mut buf = Vec::with_capacity(
+        DOMAIN_COMMIT_REVEAL.len()
+            + 4 * 8
+            + value_a.len()
+            + salt_a.len()
+            + value_b.len()
+            + salt_b.len(),
+    );
     buf.extend_from_slice(DOMAIN_COMMIT_REVEAL);
     push_length_prefixed(&mut buf, value_a);
     push_length_prefixed(&mut buf, salt_a);
@@ -57,8 +67,10 @@ mod tests {
         // valueA = [7], saltA = 1..16
         let salt_a: Vec<u8> = (1u8..=16).collect();
         let got = compute_commitment(&[7], &salt_a).unwrap();
-        assert_eq!(hex::encode(got),
-            "9c5d7de7c93e176f232424794b460112bbc1e3edad6af9da200a121e7033f9f9");
+        assert_eq!(
+            hex::encode(got),
+            "9c5d7de7c93e176f232424794b460112bbc1e3edad6af9da200a121e7033f9f9"
+        );
         assert!(verify_commitment(&got, &[7], &salt_a));
     }
 
@@ -72,7 +84,9 @@ mod tests {
         let salt_a: Vec<u8> = (1u8..=16).collect();
         let salt_b: Vec<u8> = (17u8..=32).collect();
         let seed = combine_reveals(&[7], &salt_a, &[42], &salt_b);
-        assert_eq!(hex::encode(seed),
-            "3783060fbc9a59b74485cbd081355de0b78609fb6db3b76d0c97f937dac4b795");
+        assert_eq!(
+            hex::encode(seed),
+            "3783060fbc9a59b74485cbd081355de0b78609fb6db3b76d0c97f937dac4b795"
+        );
     }
 }

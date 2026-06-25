@@ -5,6 +5,6 @@
 //! `sui-tunnel-ts/src/core/wire.ts`. Verified by `tests/golden.rs`.
 
 pub mod codec;
+pub mod commitment;
 pub mod crypto;
 pub mod wire;
-pub mod commitment;

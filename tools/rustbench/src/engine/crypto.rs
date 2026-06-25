@@ -20,7 +20,9 @@ pub struct KeyPair {
 
 /// Derive a keypair from a 32-byte ed25519 seed (deterministic, RFC-8032).
 pub fn keypair_from_secret(secret: &[u8; 32]) -> KeyPair {
-    KeyPair { signing: SigningKey::from_bytes(secret) }
+    KeyPair {
+        signing: SigningKey::from_bytes(secret),
+    }
 }
 
 impl KeyPair {
@@ -35,7 +37,9 @@ impl KeyPair {
 
 /// Verify an ed25519 signature over the RAW message (no pre-hash).
 pub fn verify(pk: &[u8; 32], msg: &[u8], sig: &[u8; 64]) -> bool {
-    let Ok(vk) = VerifyingKey::from_bytes(pk) else { return false };
+    let Ok(vk) = VerifyingKey::from_bytes(pk) else {
+        return false;
+    };
     vk.verify(msg, &Signature::from_bytes(sig)).is_ok()
 }
 
@@ -43,13 +47,17 @@ pub fn verify(pk: &[u8; 32], msg: &[u8], sig: &[u8; 64]) -> bool {
 mod tests {
     use super::*;
 
-    fn h(s: &str) -> Vec<u8> { hex::decode(s).unwrap() }
+    fn h(s: &str) -> Vec<u8> {
+        hex::decode(s).unwrap()
+    }
 
     #[test]
     fn blake2b256_matches_golden_hello() {
         let got = blake2b256(b"hello");
-        assert_eq!(hex::encode(got),
-            "324dcf027dd4a30a932c441f365a25e86b173defa4b8e58948253471b81b72cf");
+        assert_eq!(
+            hex::encode(got),
+            "324dcf027dd4a30a932c441f365a25e86b173defa4b8e58948253471b81b72cf"
+        );
     }
 
     #[test]
@@ -57,8 +65,10 @@ mod tests {
         // secretA = 0x01..0x20
         let secret: [u8; 32] = std::array::from_fn(|i| (i + 1) as u8);
         let kp = keypair_from_secret(&secret);
-        assert_eq!(hex::encode(kp.public_key()),
-            "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664");
+        assert_eq!(
+            hex::encode(kp.public_key()),
+            "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664"
+        );
     }
 
     #[test]

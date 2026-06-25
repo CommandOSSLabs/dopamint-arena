@@ -103,7 +103,9 @@ pub fn serialize_htlc_lock(h: &HtlcLock) -> Vec<u8> {
 mod tests {
     use super::*;
 
-    fn state_hash_1_to_32() -> [u8; 32] { std::array::from_fn(|i| (i + 1) as u8) }
+    fn state_hash_1_to_32() -> [u8; 32] {
+        std::array::from_fn(|i| (i + 1) as u8)
+    }
 
     #[test]
     fn state_update_matches_golden() {
