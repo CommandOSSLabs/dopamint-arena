@@ -48,19 +48,46 @@ function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
             essential: true,
             portMappings: [{ containerPort: 8080, protocol: "tcp" }],
             environment: [
-              { name: "REDIS_PUBSUB_URL", value: `rediss://${pubSubEndpoint}:6379` },
-              { name: "REDIS_CACHE_URL", value: `rediss://${cacheEndpoint}:6379` },
-              { name: "SUI_RPC_URL", value: "https://fullnode.testnet.sui.io:443" },
-              { name: "TUNNEL_PACKAGE_ID", value: "0x0b89fe86e42cdbfd1e614757a83d014b455d12923d0dded58842ab18f8a5a22b" },
+              {
+                name: "REDIS_PUBSUB_URL",
+                value: `rediss://${pubSubEndpoint}:6379`,
+              },
+              {
+                name: "REDIS_CACHE_URL",
+                value: `rediss://${cacheEndpoint}:6379`,
+              },
+              {
+                name: "SUI_RPC_URL",
+                value: "https://fullnode.testnet.sui.io:443",
+              },
+              {
+                name: "TUNNEL_PACKAGE_ID",
+                value:
+                  "0x0b89fe86e42cdbfd1e614757a83d014b455d12923d0dded58842ab18f8a5a22b",
+              },
               // The sponsor only gas-funds MTPS faucet mints + staked tunnel opens whose coin
               // type matches this; without it config defaults to 0x2::sui::SUI and /v1/sponsor 422s.
-              { name: "TUNNEL_COIN_TYPE", value: "0x62e31a8b5105c16c67936fe129e3db17e5977a8667a3464db583baa89c04272c::mtps::MTPS" },
-              { name: "WALRUS_PUBLISHER_URL", value: "https://publisher.walrus-testnet.walrus.space" },
-              { name: "WALRUS_AGGREGATOR_URL", value: "https://aggregator.walrus-testnet.walrus.space" },
+              {
+                name: "TUNNEL_COIN_TYPE",
+                value:
+                  "0x62e31a8b5105c16c67936fe129e3db17e5977a8667a3464db583baa89c04272c::mtps::MTPS",
+              },
+              {
+                name: "WALRUS_PUBLISHER_URL",
+                value: "https://publisher.walrus-testnet.walrus.space",
+              },
+              {
+                name: "WALRUS_AGGREGATOR_URL",
+                value: "https://aggregator.walrus-testnet.walrus.space",
+              },
             ],
             // Private key: injected from Secrets Manager, never inlined as plaintext env.
             ...(settlerKeySecretArn
-              ? { secrets: [{ name: "SUI_SETTLER_KEY", valueFrom: settlerKeySecretArn }] }
+              ? {
+                  secrets: [
+                    { name: "SUI_SETTLER_KEY", valueFrom: settlerKeySecretArn },
+                  ],
+                }
               : {}),
             logConfiguration: {
               logDriver: "awslogs",
@@ -71,7 +98,10 @@ function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
               },
             },
             healthCheck: {
-              command: ["CMD-SHELL", "curl -f http://localhost:8080/health/live || exit 1"],
+              command: [
+                "CMD-SHELL",
+                "curl -f http://localhost:8080/health/live || exit 1",
+              ],
               interval: 30,
               timeout: 5,
               retries: 3,
@@ -79,11 +109,13 @@ function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
             },
             stopTimeout: 30,
           },
-        ])
+        ]),
     );
 }
 
-function makeMigrationContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
+function makeMigrationContainerDefinitions(
+  args: BackendArgs,
+): pulumi.Output<string> {
   return pulumi
     .all([args.repositoryUrl, args.imageTag, args.logGroupName])
     .apply(([repositoryUrl, imageTag, logGroupName]) =>
@@ -102,7 +134,7 @@ function makeMigrationContainerDefinitions(args: BackendArgs): pulumi.Output<str
             },
           },
         },
-      ])
+      ]),
     );
 }
 
@@ -117,23 +149,32 @@ export function createBackend(args: BackendArgs): BackendOutputs {
     requiresCompatibilities: ["FARGATE"],
     cpu: "1024",
     memory: "2048",
-    runtimePlatform: { cpuArchitecture: "ARM64", operatingSystemFamily: "LINUX" },
+    runtimePlatform: {
+      cpuArchitecture: "ARM64",
+      operatingSystemFamily: "LINUX",
+    },
     executionRoleArn: args.taskExecutionRoleArn,
     taskRoleArn: args.taskRoleArn,
     containerDefinitions,
   });
 
-  const migrationTaskDefinition = new aws.ecs.TaskDefinition(`${name}-backend-migrate-td`, {
-    family: `${name}-backend-migrate`,
-    networkMode: "awsvpc",
-    requiresCompatibilities: ["FARGATE"],
-    cpu: "1024",
-    memory: "2048",
-    runtimePlatform: { cpuArchitecture: "ARM64", operatingSystemFamily: "LINUX" },
-    executionRoleArn: args.taskExecutionRoleArn,
-    taskRoleArn: args.taskRoleArn,
-    containerDefinitions: migrationContainerDefinitions,
-  });
+  const migrationTaskDefinition = new aws.ecs.TaskDefinition(
+    `${name}-backend-migrate-td`,
+    {
+      family: `${name}-backend-migrate`,
+      networkMode: "awsvpc",
+      requiresCompatibilities: ["FARGATE"],
+      cpu: "1024",
+      memory: "2048",
+      runtimePlatform: {
+        cpuArchitecture: "ARM64",
+        operatingSystemFamily: "LINUX",
+      },
+      executionRoleArn: args.taskExecutionRoleArn,
+      taskRoleArn: args.taskRoleArn,
+      containerDefinitions: migrationContainerDefinitions,
+    },
+  );
 
   return {
     taskDefinition,

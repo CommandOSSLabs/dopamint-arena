@@ -60,13 +60,19 @@ const database = createDatabase(`dopamint-${cfg.environment}`, {
 // inlined into the task definition. Created only when the stack configures it.
 let settlerKeySecretArn: pulumi.Output<string> | undefined;
 if (cfg.settlerKey) {
-  const settlerKeySecret = new aws.secretsmanager.Secret(`dopamint-${cfg.environment}-settler-key`, {
-    description: `Sui settler signing key for dopamint-${cfg.environment}`,
-  });
-  new aws.secretsmanager.SecretVersion(`dopamint-${cfg.environment}-settler-key-version`, {
-    secretId: settlerKeySecret.id,
-    secretString: cfg.settlerKey,
-  });
+  const settlerKeySecret = new aws.secretsmanager.Secret(
+    `dopamint-${cfg.environment}-settler-key`,
+    {
+      description: `Sui settler signing key for dopamint-${cfg.environment}`,
+    },
+  );
+  new aws.secretsmanager.SecretVersion(
+    `dopamint-${cfg.environment}-settler-key-version`,
+    {
+      secretId: settlerKeySecret.id,
+      secretString: cfg.settlerKey,
+    },
+  );
   settlerKeySecretArn = settlerKeySecret.arn;
 }
 
@@ -82,13 +88,19 @@ const dbProxy = createDatabaseProxy(`dopamint-${cfg.environment}`, {
 
 // Full Postgres URL over the RDS Proxy, stored as a secret (password never in plaintext
 // env). Injected into the explorer services via ECS `secrets` as DATABASE_URL.
-const databaseUrlSecret = new aws.secretsmanager.Secret(`dopamint-${cfg.environment}-database-url`, {
-  description: `Postgres DATABASE_URL (via RDS Proxy) for dopamint-${cfg.environment}`,
-});
-new aws.secretsmanager.SecretVersion(`dopamint-${cfg.environment}-database-url-version`, {
-  secretId: databaseUrlSecret.id,
-  secretString: pulumi.interpolate`postgresql://dopamint:${database.dbPassword}@${dbProxy.proxyEndpoint}:5432/dopamint`,
-});
+const databaseUrlSecret = new aws.secretsmanager.Secret(
+  `dopamint-${cfg.environment}-database-url`,
+  {
+    description: `Postgres DATABASE_URL (via RDS Proxy) for dopamint-${cfg.environment}`,
+  },
+);
+new aws.secretsmanager.SecretVersion(
+  `dopamint-${cfg.environment}-database-url-version`,
+  {
+    secretId: databaseUrlSecret.id,
+    secretString: pulumi.interpolate`postgresql://dopamint:${database.dbPassword}@${dbProxy.proxyEndpoint}:5432/dopamint`,
+  },
+);
 
 const iam = createIam(`dopamint-${cfg.environment}`, {
   githubOrg: "CommandOSSLabs",

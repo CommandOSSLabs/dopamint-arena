@@ -17,7 +17,7 @@ export interface GithubEnvInputs {
 }
 
 export function githubEnvOutputs(
-  inputs: GithubEnvInputs
+  inputs: GithubEnvInputs,
 ): Record<string, pulumi.Input<string>> {
   return {
     BACKEND_URL: inputs.backendUrl,
@@ -30,7 +30,9 @@ export function githubEnvOutputs(
     ECS_MIGRATION_TASK_DEF: inputs.migrationTaskDef,
     ECS_BACKEND_TASK_DEF: inputs.backendTaskDefArn,
     AWS_DEPLOY_ROLE_ARN: inputs.githubDeployRoleArn,
-    PRIVATE_SUBNET_IDS: pulumi.output(inputs.privateSubnetIds).apply((ids) => ids.join(",")),
+    PRIVATE_SUBNET_IDS: pulumi
+      .output(inputs.privateSubnetIds)
+      .apply((ids) => ids.join(",")),
     BACKEND_SECURITY_GROUP_ID: inputs.backendSecurityGroupId,
     BENCHMARK_ASG_NAME: inputs.benchmarkAsgName,
   };

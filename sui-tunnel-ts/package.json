@@ -27,7 +27,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "npx tsc",
+    "build": "npx tsc --project tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test --test-isolation=none \"src/**/*.test.ts\"",
     "init": "node dist/init.js",
@@ -42,7 +42,7 @@
   "devDependencies": {
     "@types/node": "^20.19.43",
     "env-cmd": "^10.1.0",
-    "prettier": "2.8.8",
+    "prettier": "^3.8.4",
     "tsx": "^4.22.4",
     "typescript": "^5.9.3"
   },

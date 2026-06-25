@@ -106,7 +106,11 @@ test("same ordered co-signed stream yields an identical digest on both seats", (
 
 test("a re-sent overlapping batch folds only its fresh tail, matching the fresh-only path", () => {
   const proto = new WorldCanvasPvpProtocol();
-  const base = proto.applyMove(proto.initialState(ctx), { cells: seqRun(1, 8) }, "A");
+  const base = proto.applyMove(
+    proto.initialState(ctx),
+    { cells: seqRun(1, 8) },
+    "A",
+  );
 
   // Path X: an at-least-once re-send overlaps the cursor (5..8 already folded) then extends (9..12).
   const overlapped = proto.applyMove(base, { cells: seqRun(5, 12) }, "A");
@@ -137,7 +141,11 @@ test("a re-sent overlapping batch folds only its fresh tail, matching the fresh-
 
 test("a genuinely fresh higher seq still folds: the gate is not over-skipping", () => {
   const proto = new WorldCanvasPvpProtocol();
-  const base = proto.applyMove(proto.initialState(ctx), { cells: seqRun(1, 8) }, "A");
+  const base = proto.applyMove(
+    proto.initialState(ctx),
+    { cells: seqRun(1, 8) },
+    "A",
+  );
   const before = hex(proto.encodeState(base));
 
   const advanced = proto.applyMove(base, { cells: [cellForSeq(9)] }, "A");
@@ -151,7 +159,10 @@ test("a batch larger than MAX_BATCH_CELLS is rejected as an illegal batch", () =
   const s = proto.initialState(ctx);
   const tooMany = seqRun(1, MAX_BATCH_CELLS + 1); // 129 otherwise-well-formed cells
   assert.equal(tooMany.length, MAX_BATCH_CELLS + 1);
-  assert.throws(() => proto.applyMove(s, { cells: tooMany }, "A"), /illegal batch/);
+  assert.throws(
+    () => proto.applyMove(s, { cells: tooMany }, "A"),
+    /illegal batch/,
+  );
   // The boundary itself (exactly MAX_BATCH_CELLS) is accepted.
   assert.doesNotThrow(() =>
     proto.applyMove(s, { cells: seqRun(1, MAX_BATCH_CELLS) }, "A"),
@@ -163,11 +174,29 @@ test("a malformed cell (out-of-range or non-integer coord/color) is rejected as 
   const s = proto.initialState(ctx);
   const ok = cellForSeq(1);
   // x/y outside [0, CHUNK_SIZE) and color outside [0, NUM_COLORS) each throw.
-  assert.throws(() => proto.applyMove(s, { cells: [{ ...ok, x: -1 }] }, "A"), /illegal paint/);
-  assert.throws(() => proto.applyMove(s, { cells: [{ ...ok, x: CHUNK_SIZE }] }, "A"), /illegal paint/);
-  assert.throws(() => proto.applyMove(s, { cells: [{ ...ok, y: CHUNK_SIZE }] }, "A"), /illegal paint/);
-  assert.throws(() => proto.applyMove(s, { cells: [{ ...ok, color: 16 }] }, "A"), /illegal paint/);
-  assert.throws(() => proto.applyMove(s, { cells: [{ ...ok, color: -1 }] }, "A"), /illegal paint/);
+  assert.throws(
+    () => proto.applyMove(s, { cells: [{ ...ok, x: -1 }] }, "A"),
+    /illegal paint/,
+  );
+  assert.throws(
+    () => proto.applyMove(s, { cells: [{ ...ok, x: CHUNK_SIZE }] }, "A"),
+    /illegal paint/,
+  );
+  assert.throws(
+    () => proto.applyMove(s, { cells: [{ ...ok, y: CHUNK_SIZE }] }, "A"),
+    /illegal paint/,
+  );
+  assert.throws(
+    () => proto.applyMove(s, { cells: [{ ...ok, color: 16 }] }, "A"),
+    /illegal paint/,
+  );
+  assert.throws(
+    () => proto.applyMove(s, { cells: [{ ...ok, color: -1 }] }, "A"),
+    /illegal paint/,
+  );
   // A non-integer coordinate is just as illegal as an out-of-range one.
-  assert.throws(() => proto.applyMove(s, { cells: [{ ...ok, x: 1.5 }] }, "A"), /illegal paint/);
+  assert.throws(
+    () => proto.applyMove(s, { cells: [{ ...ok, x: 1.5 }] }, "A"),
+    /illegal paint/,
+  );
 });
