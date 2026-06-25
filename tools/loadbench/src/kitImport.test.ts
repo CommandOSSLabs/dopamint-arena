@@ -1,10 +1,10 @@
 import { test, expect } from "bun:test";
 import { GAME_KITS } from "../../../frontend/src/agent/gameKit";
 
-test("all 6 game kits import under bun with no browser coupling", () => {
+test("all game kits import under bun with no browser coupling", () => {
   const ids = Object.keys(GAME_KITS).sort();
   expect(ids).toEqual(
-    ["blackjack", "bomb-it", "battleship", "chicken-cross", "quantum-poker", "tictactoe"].sort(),
+    ["blackjack", "bomb-it", "battleship", "chicken-cross", "quantum-poker", "tictactoe", "world-canvas"].sort(),
   );
   for (const id of ids) {
     const kit = (GAME_KITS as Record<string, { protocol: unknown; defaultStake: bigint; createBot: unknown }>)[id];
