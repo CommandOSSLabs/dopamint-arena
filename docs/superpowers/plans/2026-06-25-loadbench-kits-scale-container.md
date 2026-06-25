@@ -60,12 +60,17 @@ Edit `tools/loadbench/tsconfig.json` `compilerOptions` to add `baseUrl` + `paths
     "baseUrl": ".",
     "paths": {
       "sui-tunnel-ts": ["../../sui-tunnel-ts/src/index.ts"],
-      "sui-tunnel-ts/*": ["../../sui-tunnel-ts/src/*"]
+      "sui-tunnel-ts/*": ["../../sui-tunnel-ts/src/*"],
+      "@/*": ["../../frontend/src/*"],
+      "@ttt/shared": ["../../frontend/src/games/ticTacToe/packages/shared/src/index.ts"],
+      "@ttt/shared/*": ["../../frontend/src/games/ticTacToe/packages/shared/src/*"]
     }
   },
   "include": ["src"]
 }
 ```
+
+The frontend kits import via three alias families: `sui-tunnel-ts/*`, `@/*` (→ `frontend/src`), and `@ttt/shared` (the tic-tac-toe shared package). All three are mapped above. The Step 2 import gate is the backstop: if a kit pulls in a further alias or a browser-only shim (the frontend's vite config stubs `node:crypto` and falls back to `@noble` in-browser — under bun the real `node:crypto` is present, so this should resolve natively), the gate fails loudly and the missing `paths` entry is added (or the offending game is escalated, not stubbed).
 
 - [ ] **Step 2: Write the failing test (kit import gate)**
 
