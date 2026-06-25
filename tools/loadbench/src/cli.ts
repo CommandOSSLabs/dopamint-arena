@@ -161,49 +161,79 @@ function run(cmd: string, cmdArgs: string[], extraEnv: Record<string, string>): 
 }
 const HELP = `loadbench — benchmark real off-chain games on the sui-tunnel engine.
 
+A "match" opens a tunnel, plays many moves, then cooperatively settles it. The
+moves are the throughput; opening/settling are the bookends. Two independent
+axes control a run: the CHANNEL (how moves are transported) and the ANCHOR
+(whether the bookends touch the chain). Moves are always off-chain.
+
 Usage: bun run bench [flags]
 
-Modes (pick one; default = swarm):
-  (no --game)            swarm: many concurrent matches across games; aggregate move-TPS
-  --game <name>          latency: one game, per-move p50/p99 (single-stream)
-  --game all             multi-core report: every game through the worker fleet,
-                         one at a time, aggregated (TPS + Matches/s + CPU utilization)
+MODES (pick one; default = swarm)
+  (no --game)        swarm: many concurrent matches across all games at once;
+                     reports aggregate move-TPS (and tunnels-settled/s onchain).
+  --game <name>      latency: one game only, single-stream, reports per-move
+                     p50/p99. Playable: ticTacToe, blackjack, battleship,
+                     quantumPoker, bombIt, cross.
+  --game all         multi-core report: runs every game in turn through the
+                     worker fleet, then writes an aggregated markdown report
+                     (per-game TPS, Matches/s, and CPU utilization %).
 
-Channel & anchor:
-  --channel local|relay  transport (default local)
-  --offchain             no chain; synthetic tunnel id, pure move loop
-  --anchor onchain|offchain   default onchain
+CHANNEL — how moves travel
+  --channel local    (default) two transports paired in memory; no network.
+                     This is the pure engine/signing ceiling.
+  --channel relay    headless WebSocket client through the tunnel-manager relay
+                     (real networking). Auto-spawns a relay unless --relay-url
+                     is given. Not supported with --container.
 
-Cap (how much work):
-  --duration S           run S seconds (swarm; per-game budget for --game all, default 10s)
-  --matches N            run N matches (swarm cap / latency count / --game all fixed count)
-  --concurrency N        in-flight matches per worker
+ANCHOR — whether tunnel open/settle hit the Sui chain
+  --anchor onchain   (default) real on-chain open (create_and_fund) + cooperative
+                     settle (close_cooperative_with_root) on a Sui localnet.
+                     Requires a published package + funded settler -> run
+                     'bun run stack' first, or pass --package-id/--settler-key.
+  --anchor offchain  no chain: synthetic tunnel id, pure move loop. No infra.
+  --offchain         shorthand for --anchor offchain.
 
-Fleet (swarm and --game all):
-  --workers N|auto       OS worker threads (default auto = ~1.5x cores)
-  --mem-budget-mb N      memory cap for auto concurrency (io mode)
-  --per-match-kb N       per-match RSS estimate for auto concurrency
-  --games a,b,c          swarm game filter (default: all)
+CAP — how much work per run
+  --duration S       run for S seconds. Swarm: total run length. --game all:
+                     per-game time budget (default 10s) — the fair way to compare
+                     games with different move counts.
+  --matches N        swarm: stop after N matches. --game/--game all: run exactly
+                     N matches (mutually exclusive with --duration in latency mode).
+  --concurrency N    matches kept in flight at once per worker (default auto).
 
-Onchain infra (flag -> .env.local -> process env):
-  --rpc-url <url>        Sui RPC endpoint
-  --package-id <id>      published tunnel package id
-  --settler-key <key>    settler private key
-  --relay-url <ws-url>   connect to a running relay (else it auto-spawns)
+FLEET — multi-core sizing (swarm and --game all)
+  --workers N|auto   OS worker threads for true multi-core (default auto ≈ 1.5×
+                     cores). This is what drives CPU toward full utilization.
+  --mem-budget-mb N  memory ceiling used to auto-pick concurrency (io runs).
+  --per-match-kb N   per-match RSS estimate used by auto concurrency.
+  --games a,b,c      swarm only: restrict to these games (default: all).
 
-Container (re-exec inside the loadbench compose service):
-  --container            run isolated in Docker; joins this env's project
-  --cpus N               CPU limit for the container run
-  --memory Ng            memory limit for the container run
+ONCHAIN INFRA — resolved as flag -> .env.local -> process env
+  --rpc-url <url>    Sui RPC endpoint (e.g. http://127.0.0.1:9000).
+  --package-id <id>  published tunnel package object id.
+  --settler-key <k>  settler private key (suiprivkey…) that funds/settles.
+  --relay-url <ws>   ws URL of a relay you're already running (else auto-spawn).
 
-  -h, --help             show this help
+CONTAINER — run isolated inside the loadbench Docker service
+  --container        re-exec this run in Docker; joins this env's compose project.
+                     CPU % is then measured against the container's assigned cores.
+  --cpus N           CPU limit for the container run.
+  --memory Ng        memory limit for the container run.
 
-Examples:
+  -h, --help         show this help and exit.
+
+EXAMPLES
+  # no infra, pure engine burst:
   bun run bench --offchain --channel local --duration 10
+  # one game's latency (no infra):
   bun run bench --game blackjack --offchain --channel local --matches 50
+  # every game, multi-core, aggregated report (30s each):
   bun run bench --game all --channel local --duration 30
+  # onchain swarm against a local stack (run 'bun run stack' first):
+  bun run bench --channel local --duration 15
+  # all-games report isolated in a container capped at 8 cores:
   bun run bench --game all --container --cpus 8 --offchain --channel local
-`;
+`;;
 
 function main(): void {
   const argv = process.argv.slice(2);
