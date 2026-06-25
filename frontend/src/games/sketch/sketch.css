@@ -26,7 +26,7 @@
   --sketch-filter: url(#skRough);
 
   container-type: size;
-  font-family: "Gochi Hand", "Comic Sans MS", cursive;
+  font-family: var(--font-wal-gochi);
   color: var(--sketch-ink);
   background-color: var(--sketch-paper);
   background-image: radial-gradient(
@@ -249,7 +249,7 @@
 .bomb-shell.sketch,
 .cross-lobby.sketch,
 .cross-shell.sketch {
-  font-family: "Gochi Hand", "Comic Sans MS", cursive;
+  font-family: var(--font-wal-gochi);
 }
 
 .bomb-lobby.sketch :where(button, input, textarea, select),

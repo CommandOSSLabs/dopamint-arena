@@ -45,6 +45,7 @@
   --wal-font-sans:
     "Outfit", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --wal-font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --wal-font-gochi: "Gochi Hand", "Comic Sans MS", cursive;
 
   /* ---- semantic tokens — light (cream canvas) ---- */
   --background: #faf8f5;
@@ -243,6 +244,10 @@
   --color-on-primary: var(--on-primary);
   --color-surface-dim: var(--surface-dim);
   --color-primary-fixed-dim: var(--primary-fixed-dim);
+
+  --font-wal-sans: var(--wal-font-sans);
+  --font-wal-mono: var(--wal-font-mono);
+  --font-wal-gochi: var(--wal-font-gochi);
 }
 
 @layer base {

@@ -87,7 +87,7 @@ export function PaymentsWindow({ windowId }: GameWindowProps) {
 
   const gridCols =
     visible.length >= 3
-      ? "grid-cols-2 @min-[520px]:grid-cols-3"
+      ? "grid-cols-2 @min-[640px]:grid-cols-3"
       : "grid-cols-2";
 
   if (!entered) {
@@ -98,12 +98,7 @@ export function PaymentsWindow({ windowId }: GameWindowProps) {
         <SketchDefs />
         <div className="relative isolate max-w-[min(22rem,92%)] rounded-[10px] p-[clamp(14px,4cqmin,26px)]">
           <span
-            className={`${SKETCH_INK} -z-10 rounded-[10px]`}
-            style={{
-              backgroundColor: "#fffefb",
-              borderColor: "#23221f",
-              borderWidth: 2.5,
-            }}
+            className={`${SKETCH_INK} -z-10 rounded-[10px] bg-[#fffefb] border-[#23221f] border-[2.5px]`}
           />
           <span className="text-[clamp(9px,2.4cqmin,14px)] tracking-widest text-[#e8920c]">
             Self-play vending
@@ -112,21 +107,15 @@ export function PaymentsWindow({ windowId }: GameWindowProps) {
             Regular Payments
           </div>
           <p className="mb-3 text-[clamp(11px,3cqmin,17px)] leading-snug text-[rgba(35,34,31,0.6)]">
-            Deposit 10 MTPS, stream 500 co-signed payments over 5 s, then settle
-            on-chain. NFT mint comes later — for now the shop closes the tunnel
-            when the stream finishes.
+            Deposit 10 MTPS, stream 500 co-signed payments over 5 s, settle
+            on-chain, then mint a random NFT reward to your wallet.
           </p>
           <button
             className="relative isolate text-[clamp(11px,3cqmin,18px)] leading-none px-[clamp(8px,2.6cqmin,18px)] py-[clamp(4px,1.4cqmin,9px)] transition-transform hover:-translate-y-px hover:-rotate-[0.4deg] active:translate-y-px"
             onClick={() => setEntered(true)}
           >
             <span
-              className={`${SKETCH_INK} -z-10 rounded-[9px]`}
-              style={{
-                backgroundColor: "#ffe9bd",
-                borderColor: "#e8920c",
-                borderWidth: 2.5,
-              }}
+              className={`${SKETCH_INK} -z-10 rounded-[9px] bg-[#ffe9bd] border-[#e8920c] border-[2.5px]`}
             />
             Enter shop
           </button>
@@ -151,8 +140,6 @@ export function PaymentsWindow({ windowId }: GameWindowProps) {
             ] as const
           ).map(([key, label]) => {
             const active = filter === key;
-            const btnFill = active ? "#eaf8ee" : "#fffefb";
-            const btnStroke = active ? "#2f9e44" : "#23221f";
             return (
               <button
                 key={key}
@@ -160,12 +147,7 @@ export function PaymentsWindow({ windowId }: GameWindowProps) {
                 onClick={() => setFilter(key)}
               >
                 <span
-                  className={`${SKETCH_INK} -z-10 rounded-[9px]`}
-                  style={{
-                    backgroundColor: btnFill,
-                    borderColor: btnStroke,
-                    borderWidth: 2.5,
-                  }}
+                  className={`${SKETCH_INK} -z-10 rounded-[9px] ${active ? "bg-[#eaf8ee] border-[#2f9e44]" : "bg-[#fffefb] border-[#23221f]"} border-[2.5px]`}
                 />
                 {label}
               </button>
@@ -187,12 +169,7 @@ export function PaymentsWindow({ windowId }: GameWindowProps) {
             }
           >
             <span
-              className={`${SKETCH_INK} -z-10 rounded-[9px]`}
-              style={{
-                backgroundColor: autoMintEnabled ? "#eaf8ee" : "#fffefb",
-                borderColor: autoMintEnabled ? "#2f9e44" : "#23221f",
-                borderWidth: 2.5,
-              }}
+              className={`${SKETCH_INK} -z-10 rounded-[9px] ${autoMintEnabled ? "bg-[#eaf8ee] border-[#2f9e44]" : "bg-[#fffefb] border-[#23221f]"} border-[2.5px]`}
             />
             <Repeat className="size-3.5" strokeWidth={2.25} />
             Auto mode
@@ -213,12 +190,7 @@ export function PaymentsWindow({ windowId }: GameWindowProps) {
             }
           >
             <span
-              className={`${SKETCH_INK} -z-10 rounded-[9px]`}
-              style={{
-                backgroundColor: "#ffe9bd",
-                borderColor: "#e8920c",
-                borderWidth: 2.5,
-              }}
+              className={`${SKETCH_INK} -z-10 rounded-[9px] bg-[#ffe9bd] border-[#e8920c] border-[2.5px]`}
             />
             <Sparkles className="size-3.5" strokeWidth={2.25} />
             Mint NFT
