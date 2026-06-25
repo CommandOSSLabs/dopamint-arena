@@ -12,39 +12,45 @@ export function createCache(
     subnetIds: pulumi.Input<string[]>;
     securityGroupId: pulumi.Input<string>;
     nodeType: string;
-  }
+  },
 ): CacheOutputs {
   const subnetGroup = new aws.elasticache.SubnetGroup(`${name}-cache-subnets`, {
     subnetIds: args.subnetIds,
   });
 
-  const pubSubCluster = new aws.elasticache.ReplicationGroup(`${name}-pubsub-cmd`, {
-    description: "Pub/Sub Valkey for TPS stream",
-    engine: "valkey",
-    engineVersion: "7.2",
-    parameterGroupName: "default.valkey7",
-    nodeType: args.nodeType,
-    numCacheClusters: 2,
-    automaticFailoverEnabled: true,
-    subnetGroupName: subnetGroup.name,
-    securityGroupIds: [args.securityGroupId],
-    atRestEncryptionEnabled: true,
-    transitEncryptionEnabled: true,
-  });
+  const pubSubCluster = new aws.elasticache.ReplicationGroup(
+    `${name}-pubsub-cmd`,
+    {
+      description: "Pub/Sub Valkey for TPS stream",
+      engine: "valkey",
+      engineVersion: "7.2",
+      parameterGroupName: "default.valkey7",
+      nodeType: args.nodeType,
+      numCacheClusters: 2,
+      automaticFailoverEnabled: true,
+      subnetGroupName: subnetGroup.name,
+      securityGroupIds: [args.securityGroupId],
+      atRestEncryptionEnabled: true,
+      transitEncryptionEnabled: true,
+    },
+  );
 
-  const cacheCluster = new aws.elasticache.ReplicationGroup(`${name}-cache-cmd`, {
-    description: "Cache Valkey for sessions and counters",
-    engine: "valkey",
-    engineVersion: "7.2",
-    parameterGroupName: "default.valkey7",
-    nodeType: args.nodeType,
-    numCacheClusters: 2,
-    automaticFailoverEnabled: true,
-    subnetGroupName: subnetGroup.name,
-    securityGroupIds: [args.securityGroupId],
-    atRestEncryptionEnabled: true,
-    transitEncryptionEnabled: true,
-  });
+  const cacheCluster = new aws.elasticache.ReplicationGroup(
+    `${name}-cache-cmd`,
+    {
+      description: "Cache Valkey for sessions and counters",
+      engine: "valkey",
+      engineVersion: "7.2",
+      parameterGroupName: "default.valkey7",
+      nodeType: args.nodeType,
+      numCacheClusters: 2,
+      automaticFailoverEnabled: true,
+      subnetGroupName: subnetGroup.name,
+      securityGroupIds: [args.securityGroupId],
+      atRestEncryptionEnabled: true,
+      transitEncryptionEnabled: true,
+    },
+  );
 
   return {
     pubSubEndpoint: pubSubCluster.primaryEndpointAddress,

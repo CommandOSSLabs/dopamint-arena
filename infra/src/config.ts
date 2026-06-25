@@ -54,7 +54,9 @@ export function getConfig(): InfraConfig {
  * case the caller must set the tag explicitly:
  *   pulumi config set dopamint:backend-image-tag <sha>
  */
-export function resolveBackendImageTag(environment: string): pulumi.Output<string> {
+export function resolveBackendImageTag(
+  environment: string,
+): pulumi.Output<string> {
   const family = `dopamint-${environment}-backend`;
   const taskDef = aws.ecs.getTaskDefinitionOutput({ taskDefinition: family });
   return taskDef.containerDefinitions.apply((defsJson) => {
@@ -65,7 +67,7 @@ export function resolveBackendImageTag(environment: string): pulumi.Output<strin
       throw new Error(
         `Could not resolve backend image tag from the latest task definition (family: ${family}). ` +
           `Either deploy the backend first, or set the tag explicitly with: ` +
-          `pulumi config set dopamint:backend-image-tag <tag>`
+          `pulumi config set dopamint:backend-image-tag <tag>`,
       );
     }
     return tag;

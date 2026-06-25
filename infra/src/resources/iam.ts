@@ -30,7 +30,9 @@ export function createIam(name: string, args: IamInputs): IamOutputs {
         },
       ],
     }),
-    managedPolicyArns: ["arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"],
+    managedPolicyArns: [
+      "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy",
+    ],
   });
 
   if (args.taskExecSecretArns && args.taskExecSecretArns.length > 0) {
@@ -46,7 +48,7 @@ export function createIam(name: string, args: IamInputs): IamOutputs {
               Resource: secretArns,
             },
           ],
-        })
+        }),
       ),
     });
   }
@@ -65,11 +67,14 @@ export function createIam(name: string, args: IamInputs): IamOutputs {
     managedPolicyArns: ["arn:aws:iam::aws:policy/CloudWatchFullAccess"],
   });
 
-  const githubProvider = new aws.iam.OpenIdConnectProvider(`${name}-github-oidc`, {
-    url: "https://token.actions.githubusercontent.com",
-    clientIdLists: ["sts.amazonaws.com"],
-    thumbprintLists: ["6938fd4e98bab03faadb97b34396831e3780aea1"],
-  });
+  const githubProvider = new aws.iam.OpenIdConnectProvider(
+    `${name}-github-oidc`,
+    {
+      url: "https://token.actions.githubusercontent.com",
+      clientIdLists: ["sts.amazonaws.com"],
+      thumbprintLists: ["6938fd4e98bab03faadb97b34396831e3780aea1"],
+    },
+  );
 
   const githubDeployRole = new aws.iam.Role(`${name}-github-deploy-role`, {
     assumeRolePolicy: pulumi
@@ -83,12 +88,17 @@ export function createIam(name: string, args: IamInputs): IamOutputs {
               Principal: { Federated: providerArn },
               Action: "sts:AssumeRoleWithWebIdentity",
               Condition: {
-                StringLike: { "token.actions.githubusercontent.com:sub": `repo:${org}/${repo}:*` },
-                StringEquals: { "token.actions.githubusercontent.com:aud": "sts.amazonaws.com" },
+                StringLike: {
+                  "token.actions.githubusercontent.com:sub": `repo:${org}/${repo}:*`,
+                },
+                StringEquals: {
+                  "token.actions.githubusercontent.com:aud":
+                    "sts.amazonaws.com",
+                },
               },
             },
           ],
-        })
+        }),
       ),
   });
 
@@ -125,8 +135,16 @@ export function createIam(name: string, args: IamInputs): IamOutputs {
     assumeRolePolicy: JSON.stringify({
       Version: "2012-10-17",
       Statement: [
-        { Effect: "Allow", Principal: { Service: "ec2.amazonaws.com" }, Action: "sts:AssumeRole" },
-        { Effect: "Allow", Principal: { Service: "imagebuilder.amazonaws.com" }, Action: "sts:AssumeRole" },
+        {
+          Effect: "Allow",
+          Principal: { Service: "ec2.amazonaws.com" },
+          Action: "sts:AssumeRole",
+        },
+        {
+          Effect: "Allow",
+          Principal: { Service: "imagebuilder.amazonaws.com" },
+          Action: "sts:AssumeRole",
+        },
       ],
     }),
     managedPolicyArns: [
@@ -135,15 +153,22 @@ export function createIam(name: string, args: IamInputs): IamOutputs {
     ],
   });
 
-  const imageBuilderProfile = new aws.iam.InstanceProfile(`${name}-image-builder-profile`, {
-    role: imageBuilderRole.name,
-  });
+  const imageBuilderProfile = new aws.iam.InstanceProfile(
+    `${name}-image-builder-profile`,
+    {
+      role: imageBuilderRole.name,
+    },
+  );
 
   const benchmarkRole = new aws.iam.Role(`${name}-benchmark-role`, {
     assumeRolePolicy: JSON.stringify({
       Version: "2012-10-17",
       Statement: [
-        { Effect: "Allow", Principal: { Service: "ec2.amazonaws.com" }, Action: "sts:AssumeRole" },
+        {
+          Effect: "Allow",
+          Principal: { Service: "ec2.amazonaws.com" },
+          Action: "sts:AssumeRole",
+        },
       ],
     }),
     managedPolicyArns: [
@@ -152,9 +177,12 @@ export function createIam(name: string, args: IamInputs): IamOutputs {
     ],
   });
 
-  const benchmarkInstanceProfile = new aws.iam.InstanceProfile(`${name}-benchmark-profile`, {
-    role: benchmarkRole.name,
-  });
+  const benchmarkInstanceProfile = new aws.iam.InstanceProfile(
+    `${name}-benchmark-profile`,
+    {
+      role: benchmarkRole.name,
+    },
+  );
 
   return {
     taskExecutionRole,

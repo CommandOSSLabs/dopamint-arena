@@ -42,7 +42,10 @@ function intentToMove(_role: Role, i: PaintIntent): PvpPaintMove {
   return i;
 }
 
-function readIntent(_role: Role, m: PvpPaintMove | null): PaintIntent | undefined {
+function readIntent(
+  _role: Role,
+  m: PvpPaintMove | null,
+): PaintIntent | undefined {
   return m ?? undefined;
 }
 
@@ -65,8 +68,10 @@ const usePvpMatch = createPvpMatchHook<
 
 export type { PvpStatus };
 
-export interface PvpWorldCanvas
-  extends Omit<PvpMatch<PvpCanvasState, PaintIntent, PvpCell[]>, "setIntent"> {
+export interface PvpWorldCanvas extends Omit<
+  PvpMatch<PvpCanvasState, PaintIntent, PvpCell[]>,
+  "setIntent"
+> {
   /** Queue a painted cell (global-pixel coords). Buffered + co-signed as a run on your turn. */
   paint: (gx: number, gy: number, color: number) => void;
 }

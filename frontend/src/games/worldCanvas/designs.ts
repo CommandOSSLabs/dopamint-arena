@@ -181,7 +181,8 @@ function buildVietnam(): FlagDesign {
   for (let dy = 0; dy < height; dy++) {
     for (let dx = 0; dx < width; dx++) {
       field.push({ dx, dy, color: RED });
-      if (inPolygon(dx + 0.5, dy + 0.5, star)) emblem.push({ dx, dy, color: YELLOW });
+      if (inPolygon(dx + 0.5, dy + 0.5, star))
+        emblem.push({ dx, dy, color: YELLOW });
     }
   }
   return { name: "Vietnam", width, height, cells: [...field, ...emblem] };
@@ -401,12 +402,28 @@ function* geometricStrokes(ctx: ModeContext): Generator<DesignCell> {
   if (variant === 0) {
     const gap = 4;
     for (let gx = 2; gx < w - 1; gx += gap) {
-      for (const c of rasterizeStroke([{ x: gx, y: 2 }, { x: gx, y: h - 2 }], r, spacing, c1)) {
+      for (const c of rasterizeStroke(
+        [
+          { x: gx, y: 2 },
+          { x: gx, y: h - 2 },
+        ],
+        r,
+        spacing,
+        c1,
+      )) {
         if (inBox(c, w, h)) yield c;
       }
     }
     for (let gy = 2; gy < h - 1; gy += gap) {
-      for (const c of rasterizeStroke([{ x: 2, y: gy }, { x: w - 2, y: gy }], r, spacing, c2)) {
+      for (const c of rasterizeStroke(
+        [
+          { x: 2, y: gy },
+          { x: w - 2, y: gy },
+        ],
+        r,
+        spacing,
+        c2,
+      )) {
         if (inBox(c, w, h)) yield c;
       }
     }
@@ -434,8 +451,16 @@ function* geometricStrokes(ctx: ModeContext): Generator<DesignCell> {
     }
     for (let k = 0; k < 12; k++) {
       const ang = (k / 12) * Math.PI * 2;
-      const end = { x: cx + Math.cos(ang) * (w / 2), y: cy + Math.sin(ang) * (h / 2) };
-      for (const c of rasterizeStroke([{ x: cx, y: cy }, end], r, spacing, c2)) {
+      const end = {
+        x: cx + Math.cos(ang) * (w / 2),
+        y: cy + Math.sin(ang) * (h / 2),
+      };
+      for (const c of rasterizeStroke(
+        [{ x: cx, y: cy }, end],
+        r,
+        spacing,
+        c2,
+      )) {
         if (inBox(c, w, h)) yield c;
       }
     }
@@ -447,10 +472,14 @@ function* geometricStrokes(ctx: ModeContext): Generator<DesignCell> {
 function* flowStrokes(ctx: ModeContext): Generator<DesignCell> {
   const { width: w, height: h } = ctx;
   const noise = makeValueNoise2D(ctx.rng);
-  const angleAt = (x: number, y: number) => noise(x * 0.06, y * 0.06) * Math.PI * 4;
+  const angleAt = (x: number, y: number) =>
+    noise(x * 0.06, y * 0.06) * Math.PI * 4;
   const colorAt = (a: number) => {
-    const t = (((a % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)) / (Math.PI * 2);
-    return FLOW_WHEEL[Math.min(FLOW_WHEEL.length - 1, Math.floor(t * FLOW_WHEEL.length))];
+    const t =
+      (((a % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)) / (Math.PI * 2);
+    return FLOW_WHEEL[
+      Math.min(FLOW_WHEEL.length - 1, Math.floor(t * FLOW_WHEEL.length))
+    ];
   };
   const K = 6;
   const parts = Array.from({ length: K }, () => ({
@@ -463,7 +492,15 @@ function* flowStrokes(ctx: ModeContext): Generator<DesignCell> {
       const a = angleAt(p.x, p.y);
       const nx = p.x + Math.cos(a) * 1.4;
       const ny = p.y + Math.sin(a) * 1.4;
-      for (const c of rasterizeStroke([{ x: p.x, y: p.y }, { x: nx, y: ny }], 1, 1.0, colorAt(a))) {
+      for (const c of rasterizeStroke(
+        [
+          { x: p.x, y: p.y },
+          { x: nx, y: ny },
+        ],
+        1,
+        1.0,
+        colorAt(a),
+      )) {
         if (inBox(c, w, h)) yield c;
       }
       p.x = nx;
@@ -492,7 +529,11 @@ function* washStrokes(ctx: ModeContext): Generator<DesignCell> {
       for (let dx = 0; dx < w; dx++) {
         const d = Math.hypot(dx - cx, dy - cy) / maxR;
         const bump = ctx.rng() < 0.12 ? 1 : 0;
-        const ci = clamp(Math.floor(d * ramp.length) + bump, 0, ramp.length - 1);
+        const ci = clamp(
+          Math.floor(d * ramp.length) + bump,
+          0,
+          ramp.length - 1,
+        );
         yield { dx, dy, color: ramp[ci] };
       }
     }
@@ -500,7 +541,8 @@ function* washStrokes(ctx: ModeContext): Generator<DesignCell> {
     for (let dy = 0; dy < h; dy++) {
       const ci = clamp(Math.floor((dy / h) * ramp.length), 0, ramp.length - 1);
       for (let dx = 0; dx < w; dx++) {
-        const cc = ctx.rng() < 0.12 ? ramp[clamp(ci + 1, 0, ramp.length - 1)] : ramp[ci];
+        const cc =
+          ctx.rng() < 0.12 ? ramp[clamp(ci + 1, 0, ramp.length - 1)] : ramp[ci];
         yield { dx, dy, color: cc };
       }
     }

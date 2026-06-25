@@ -36,12 +36,20 @@ function logConfig(logGroupName: pulumi.Input<string>, prefix: string) {
   };
 }
 
-export function createExplorerServices(args: ExplorerServicesArgs): ExplorerServicesOutputs {
+export function createExplorerServices(
+  args: ExplorerServicesArgs,
+): ExplorerServicesOutputs {
   const n = args.name;
 
   // --- indexer (single writer, no inbound) ---
   const indexerDefs = pulumi
-    .all([args.repositoryUrl, args.imageTag, args.pubSubEndpoint, args.logGroupName, args.databaseUrlSecretArn])
+    .all([
+      args.repositoryUrl,
+      args.imageTag,
+      args.pubSubEndpoint,
+      args.logGroupName,
+      args.databaseUrlSecretArn,
+    ])
     .apply(([repo, tag, pubsub, logGroup, dbUrlArn]) =>
       JSON.stringify([
         {
@@ -62,7 +70,11 @@ export function createExplorerServices(args: ExplorerServicesArgs): ExplorerServ
             "351650000",
           ],
           environment: [
-            { name: "TUNNEL_PACKAGE_ID", value: "0x0b89fe86e42cdbfd1e614757a83d014b455d12923d0dded58842ab18f8a5a22b" },
+            {
+              name: "TUNNEL_PACKAGE_ID",
+              value:
+                "0x0b89fe86e42cdbfd1e614757a83d014b455d12923d0dded58842ab18f8a5a22b",
+            },
             { name: "REDIS_PUBSUB_URL", value: `rediss://${pubsub}:6379` },
             // Framework subscriber honors RUST_LOG; without it the indexer is silent (no
             // ingestion progress, no errors) — see the 11h dark-running incident.
@@ -72,7 +84,7 @@ export function createExplorerServices(args: ExplorerServicesArgs): ExplorerServ
           logConfiguration: logConfig(logGroup, "indexer"),
           stopTimeout: 30,
         },
-      ])
+      ]),
     );
 
   const indexerTd = new aws.ecs.TaskDefinition(`${n}-indexer-td`, {
@@ -81,7 +93,10 @@ export function createExplorerServices(args: ExplorerServicesArgs): ExplorerServ
     requiresCompatibilities: ["FARGATE"],
     cpu: "512",
     memory: "1024",
-    runtimePlatform: { cpuArchitecture: "ARM64", operatingSystemFamily: "LINUX" },
+    runtimePlatform: {
+      cpuArchitecture: "ARM64",
+      operatingSystemFamily: "LINUX",
+    },
     executionRoleArn: args.taskExecutionRoleArn,
     taskRoleArn: args.taskRoleArn,
     containerDefinitions: indexerDefs,
@@ -127,12 +142,27 @@ export function createExplorerServices(args: ExplorerServicesArgs): ExplorerServ
     priority: 10,
     actions: [{ type: "forward", targetGroupArn: apiTg.arn }],
     conditions: [
-      { pathPattern: { values: ["/v1/settlements", "/v1/settlements/*", "/v1/explorer/*", "/v1/stats/*"] } },
+      {
+        pathPattern: {
+          values: [
+            "/v1/settlements",
+            "/v1/settlements/*",
+            "/v1/explorer/*",
+            "/v1/stats/*",
+          ],
+        },
+      },
     ],
   });
 
   const apiDefs = pulumi
-    .all([args.repositoryUrl, args.imageTag, args.pubSubEndpoint, args.logGroupName, args.databaseUrlSecretArn])
+    .all([
+      args.repositoryUrl,
+      args.imageTag,
+      args.pubSubEndpoint,
+      args.logGroupName,
+      args.databaseUrlSecretArn,
+    ])
     .apply(([repo, tag, pubsub, logGroup, dbUrlArn]) =>
       JSON.stringify([
         {
@@ -142,13 +172,19 @@ export function createExplorerServices(args: ExplorerServicesArgs): ExplorerServ
           command: ["/usr/local/bin/api"],
           portMappings: [{ containerPort: 8080, protocol: "tcp" }],
           environment: [
-            { name: "WALRUS_AGGREGATOR_URL", value: "https://aggregator.walrus-testnet.walrus.space" },
+            {
+              name: "WALRUS_AGGREGATOR_URL",
+              value: "https://aggregator.walrus-testnet.walrus.space",
+            },
             { name: "REDIS_PUBSUB_URL", value: `rediss://${pubsub}:6379` },
           ],
           secrets: [{ name: "DATABASE_URL", valueFrom: dbUrlArn }],
           logConfiguration: logConfig(logGroup, "explorer-api"),
           healthCheck: {
-            command: ["CMD-SHELL", "curl -f http://localhost:8080/health/ready || exit 1"],
+            command: [
+              "CMD-SHELL",
+              "curl -f http://localhost:8080/health/ready || exit 1",
+            ],
             interval: 30,
             timeout: 5,
             retries: 3,
@@ -156,7 +192,7 @@ export function createExplorerServices(args: ExplorerServicesArgs): ExplorerServ
           },
           stopTimeout: 30,
         },
-      ])
+      ]),
     );
 
   const apiTd = new aws.ecs.TaskDefinition(`${n}-explorer-api-td`, {
@@ -165,7 +201,10 @@ export function createExplorerServices(args: ExplorerServicesArgs): ExplorerServ
     requiresCompatibilities: ["FARGATE"],
     cpu: "512",
     memory: "1024",
-    runtimePlatform: { cpuArchitecture: "ARM64", operatingSystemFamily: "LINUX" },
+    runtimePlatform: {
+      cpuArchitecture: "ARM64",
+      operatingSystemFamily: "LINUX",
+    },
     executionRoleArn: args.taskExecutionRoleArn,
     taskRoleArn: args.taskRoleArn,
     containerDefinitions: apiDefs,
@@ -186,9 +225,15 @@ export function createExplorerServices(args: ExplorerServicesArgs): ExplorerServ
         subnets: args.subnetIds,
         securityGroups: [args.securityGroupId],
       },
-      loadBalancers: [{ targetGroupArn: apiTg.arn, containerName: "api", containerPort: 8080 }],
+      loadBalancers: [
+        {
+          targetGroupArn: apiTg.arn,
+          containerName: "api",
+          containerPort: 8080,
+        },
+      ],
     },
-    { dependsOn: [args.listener] }
+    { dependsOn: [args.listener] },
   );
 
   // Autoscale the api on CPU (readers scale with CCU, independent of the control plane).
@@ -206,7 +251,9 @@ export function createExplorerServices(args: ExplorerServicesArgs): ExplorerServ
     serviceNamespace: scaleTarget.serviceNamespace,
     targetTrackingScalingPolicyConfiguration: {
       targetValue: 60,
-      predefinedMetricSpecification: { predefinedMetricType: "ECSServiceAverageCPUUtilization" },
+      predefinedMetricSpecification: {
+        predefinedMetricType: "ECSServiceAverageCPUUtilization",
+      },
       scaleInCooldown: 120,
       scaleOutCooldown: 60,
     },

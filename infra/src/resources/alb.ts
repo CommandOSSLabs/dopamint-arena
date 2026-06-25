@@ -14,7 +14,7 @@ export function createAlb(
     subnetIds: pulumi.Input<string[]>;
     securityGroupId: pulumi.Input<string>;
     certificateArn?: pulumi.Input<string>;
-  }
+  },
 ): AlbOutputs {
   const alb = new aws.lb.LoadBalancer(`${name}-alb`, {
     loadBalancerType: "application",

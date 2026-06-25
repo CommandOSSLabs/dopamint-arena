@@ -20,7 +20,7 @@ export function createDatabase(
     serverless: boolean;
     minCapacity?: number;
     maxCapacity?: number;
-  }
+  },
 ): DatabaseOutputs {
   const dbPassword = new random.RandomPassword(`${name}-db-password`, {
     length: 32,
@@ -34,13 +34,16 @@ export function createDatabase(
   new aws.secretsmanager.SecretVersion(`${name}-db-secret-version`, {
     secretId: dbSecret.id,
     secretString: dbPassword.result.apply((pwd) =>
-      JSON.stringify({ username: "dopamint", password: pwd })
+      JSON.stringify({ username: "dopamint", password: pwd }),
     ),
   });
 
-  const dbPasswordSecret = new aws.secretsmanager.Secret(`${name}-db-password-secret`, {
-    description: `Database password for ${name}`,
-  });
+  const dbPasswordSecret = new aws.secretsmanager.Secret(
+    `${name}-db-password-secret`,
+    {
+      description: `Database password for ${name}`,
+    },
+  );
 
   new aws.secretsmanager.SecretVersion(`${name}-db-password-secret-version`, {
     secretId: dbPasswordSecret.id,
@@ -51,7 +54,9 @@ export function createDatabase(
     subnetIds: args.subnetIds,
   });
 
-  const snapshotSuffix = new random.RandomPet(`${name}-snapshot-suffix`, { length: 2 });
+  const snapshotSuffix = new random.RandomPet(`${name}-snapshot-suffix`, {
+    length: 2,
+  });
 
   const cluster = new aws.rds.Cluster(`${name}-aurora`, {
     engine: "aurora-postgresql",
@@ -62,12 +67,18 @@ export function createDatabase(
     dbSubnetGroupName: subnetGroup.name,
     vpcSecurityGroupIds: [args.securityGroupId],
     skipFinalSnapshot: false,
-    finalSnapshotIdentifier: pulumi.interpolate`${name}-final-${snapshotSuffix.id}`.apply((s) => s.slice(0, 63)),
+    finalSnapshotIdentifier:
+      pulumi.interpolate`${name}-final-${snapshotSuffix.id}`.apply((s) =>
+        s.slice(0, 63),
+      ),
     backupRetentionPeriod: 7,
     preferredBackupWindow: "03:00-04:00",
     storageEncrypted: true,
     serverlessv2ScalingConfiguration: args.serverless
-      ? { minCapacity: args.minCapacity ?? 0.5, maxCapacity: args.maxCapacity ?? 4 }
+      ? {
+          minCapacity: args.minCapacity ?? 0.5,
+          maxCapacity: args.maxCapacity ?? 4,
+        }
       : undefined,
   });
 
