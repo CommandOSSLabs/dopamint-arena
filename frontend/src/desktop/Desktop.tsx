@@ -1,27 +1,18 @@
-import { memo, useCallback, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import type {
   CSSProperties,
   KeyboardEvent as ReactKeyboardEvent,
   PointerEvent as ReactPointerEvent,
+  SetStateAction,
 } from "react";
-import {
-  ChevronDown,
-  Eye,
-  LayoutGrid,
-  PanelBottom,
-  PanelRight,
-  Plus,
-  Trash2,
-  X,
-  type LucideIcon,
-} from "lucide-react";
+import { ChevronDown, Eye, Plus, X } from "lucide-react";
 import type { PanelImperativeHandle } from "react-resizable-panels";
 
 import "../games"; // register all game modules (side-effect import)
 import { GameIcon } from "../games/GameIcon";
-import { get, list } from "../games/registry";
+import { get, listByWorkspace } from "../games/registry";
+import type { GameModule, Workspace } from "../games/types";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -30,14 +21,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  CommandDialog,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
-} from "@/components/ui/command";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -51,11 +34,6 @@ import {
   type GridItem,
 } from "@/components/ui/grid-layout";
 import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
-import {
   ResizableHandle,
   ResizablePanel,
   ResizablePanelGroup,
@@ -67,13 +45,17 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { disposeWindow } from "@/lib/windowSessions";
-import { forgetWindow, markWindowActive } from "@/lib/activeWindows";
+import {
+  forgetWindow,
+  lastActiveGame,
+  markWindowActive,
+  resolveWindowId,
+} from "@/lib/activeWindows";
 import { flyFromDock, flyToDock } from "@/lib/dockFlight";
 import { useTelemetry } from "@/telemetry/TelemetryProvider";
 import { useLocalStorageState } from "@/lib/useLocalStorageState";
 import { useMediaQuery } from "@/lib/useMediaQuery";
-import { useSearch } from "@tanstack/react-router";
-import { ChatPanel } from "../panels/ChatPanel";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import { LiveTransactionsFeed } from "../panels/LiveTransactionsFeed";
 import { LocalTransactionsFeed } from "../panels/LocalTransactionsFeed";
 import { SystemDashboard } from "../panels/SystemDashboard";
@@ -81,9 +63,10 @@ import { TpsChart } from "../panels/TpsChart";
 import { GameWindow } from "./GameWindow";
 import { GameCabinet } from "@/shell/cabinet/GameCabinet";
 import { MobileArena } from "./MobileArena";
+import { AddAppDialog } from "./AddAppDialog";
+import { WorkspaceTabs } from "./WorkspaceTabs";
 import type { MobileSection } from "./AppShell";
 
-type GameModule = ReturnType<typeof list>[number];
 type DockSide = "bottom" | "right";
 
 /** One entry per open/hidden window instance. */
@@ -181,42 +164,31 @@ const FLOAT_HANDLES = [
   { dir: "se", cls: "right-0 bottom-0 size-3 cursor-nwse-resize" },
 ] as const;
 
-// Community Chat is built but hidden for now — flip to re-enable everywhere.
-const SHOW_CHAT = false;
-
-/** One tiled window per catalog game (floating-widget modules are excluded by `list()`). */
-function seedLayout(): GridItem[] {
-  return tile(list().map((mod) => ({ id: mod.id, x: 0, y: 0, ...TILE })));
+// Each workspace (Games / Payment / Chat) is its own window floor with independent
+// state, so switching never disturbs another's windows. A floor seeds one tiled
+// window per module registered to that workspace.
+function seedLayoutFor(workspace: Workspace): GridItem[] {
+  return tile(
+    listByWorkspace(workspace).map((mod) => ({
+      id: mod.id,
+      x: 0,
+      y: 0,
+      ...TILE,
+    })),
+  );
 }
-
-// Utility surfaces opened as centered floating widgets in the first-run / reset
-// layout (registered with catalog: false, so they never tile or show in the picker).
-const FLOATING_DEFAULTS = ["regular-payments", "chat"] as const;
-
-/** Floating widgets spread across the screen `space-around` for the default layout —
- *  each centered in its 1/n slice of the width, so the gap to either edge is equal
- *  and they sit toward the middle. Vertically centered. */
-function seedFloating(): Record<string, FloatState> {
-  if (typeof window === "undefined") return {};
-  const out: Record<string, FloatState> = {};
-  const margin = 24;
-  const n = FLOATING_DEFAULTS.length;
-  FLOATING_DEFAULTS.forEach((id, i) => {
-    if (!get(id)) return; // not registered → skip
-    const w = Math.min(360, window.innerWidth - 2 * margin);
-    const h = Math.min(440, window.innerHeight - 2 * margin);
-    const x = ((2 * i + 1) / (2 * n)) * window.innerWidth - w / 2;
-    const y = (window.innerHeight - h) / 2;
-    out[id] = {
-      x: clampNum(x, 0, window.innerWidth - w),
-      y: clampNum(y, 0, window.innerHeight - h),
-      w,
-      h,
-      z: 100 + i,
-      item: { id, x: 0, y: 0, ...TILE },
-    };
-  });
-  return out;
+function seedLayouts(): Record<Workspace, GridItem[]> {
+  return {
+    games: seedLayoutFor("games"),
+    payment: seedLayoutFor("payment"),
+    chat: seedLayoutFor("chat"),
+  };
+}
+function emptyHidden(): Record<Workspace, Record<string, GridItem>> {
+  return { games: {}, payment: {}, chat: {} };
+}
+function emptyFloating(): Record<Workspace, Record<string, FloatState>> {
+  return { games: {}, payment: {}, chat: {} };
 }
 
 /**
@@ -237,91 +209,27 @@ function Dock({ side }: { side: DockSide }) {
           snapshot={snapshot}
           className="min-h-72 flex-1"
         />
-        {SHOW_CHAT && <ChatPanel className="h-72 shrink-0" />}
       </div>
     );
   }
   // Invisible (transparent) handles read as gaps; col-resize cursor is the cue.
   return (
     <ResizablePanelGroup orientation="horizontal" className="h-full p-2">
-      <ResizablePanel
-        defaultSize={SHOW_CHAT ? "24%" : "32%"}
-        minSize="15%"
-        className="min-w-0"
-      >
+      <ResizablePanel defaultSize="32%" minSize="15%" className="min-w-0">
         <div className="flex h-full flex-col gap-2 overflow-y-auto">
           <SystemDashboard snapshot={snapshot} />
           <TpsChart snapshot={snapshot} />
         </div>
       </ResizablePanel>
       <ResizableHandle className="w-2 bg-transparent transition-colors hover:bg-border" />
-      <ResizablePanel
-        defaultSize={SHOW_CHAT ? "26%" : "34%"}
-        minSize="16%"
-        className="min-w-0"
-      >
+      <ResizablePanel defaultSize="34%" minSize="16%" className="min-w-0">
         <LiveTransactionsFeed snapshot={snapshot} className="h-full" />
       </ResizablePanel>
       <ResizableHandle className="w-2 bg-transparent transition-colors hover:bg-border" />
-      <ResizablePanel
-        defaultSize={SHOW_CHAT ? "24%" : "34%"}
-        minSize="16%"
-        className="min-w-0"
-      >
+      <ResizablePanel defaultSize="34%" minSize="16%" className="min-w-0">
         <LocalTransactionsFeed snapshot={snapshot} className="h-full" />
       </ResizablePanel>
-      {SHOW_CHAT && (
-        <>
-          <ResizableHandle className="w-2 bg-transparent transition-colors hover:bg-border" />
-          <ResizablePanel defaultSize="26%" minSize="16%" className="min-w-0">
-            <ChatPanel className="h-full" />
-          </ResizablePanel>
-        </>
-      )}
     </ResizablePanelGroup>
-  );
-}
-
-/** A command palette (⌘-style) for adding a game window to the floor. */
-function AddGameCommand({
-  open,
-  onOpenChange,
-  games,
-  onAdd,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  games: GameModule[];
-  onAdd: (id: string) => void;
-}) {
-  return (
-    <CommandDialog
-      open={open}
-      onOpenChange={onOpenChange}
-      title="Add a game"
-      description="Search and add a game window to the floor."
-    >
-      <CommandInput placeholder="Search games…" />
-      <CommandList>
-        <CommandEmpty>No games to add.</CommandEmpty>
-        <CommandGroup heading="Games">
-          {games.map((g) => (
-            <CommandItem
-              key={g.id}
-              value={g.name}
-              data-testid={`launch-${g.id}`}
-              onSelect={() => {
-                onAdd(g.id);
-                onOpenChange(false);
-              }}
-            >
-              <GameIcon game={g} className="size-5" />
-              {g.name}
-            </CommandItem>
-          ))}
-        </CommandGroup>
-      </CommandList>
-    </CommandDialog>
   );
 }
 
@@ -406,126 +314,6 @@ function MacDock({
   );
 }
 
-/** A row action in the layout-tools popover. */
-function ToolItem({
-  icon: Icon,
-  label,
-  onClick,
-  danger,
-}: {
-  icon: LucideIcon;
-  label: string;
-  onClick: () => void;
-  danger?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors",
-        danger
-          ? "text-destructive hover:bg-destructive/10"
-          : "text-foreground hover:bg-secondary",
-      )}
-    >
-      <Icon className="size-4" />
-      {label}
-    </button>
-  );
-}
-
-/**
- * Floor overlays: a layout-tools popover (arrange / add all / dock side / remove
- * all) and a prominent Add-game trigger. `side` is the edge the menus open
- * toward — flipped when the column itself moves to the left.
- */
-function FloorControls({
-  className,
-  side,
-  dockSide,
-  onOpenAdd,
-  onArrange,
-  onAddAll,
-  onRemoveAll,
-  onToggleDock,
-}: {
-  className?: string;
-  side: "left" | "right";
-  dockSide: DockSide;
-  onOpenAdd: () => void;
-  onArrange: () => void;
-  onAddAll: () => void;
-  onRemoveAll: () => void;
-  onToggleDock: () => void;
-}) {
-  const [toolsOpen, setToolsOpen] = useState(false);
-  const tool = (fn: () => void) => () => {
-    fn();
-    setToolsOpen(false);
-  };
-  return (
-    <div className={cn("flex flex-col items-end gap-2", className)}>
-      <Popover open={toolsOpen} onOpenChange={setToolsOpen}>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <PopoverTrigger asChild>
-              <Button
-                size="icon"
-                variant="secondary"
-                aria-label="Layout tools"
-                className="size-10 border border-border shadow-lg"
-              >
-                <LayoutGrid className="size-4" />
-              </Button>
-            </PopoverTrigger>
-          </TooltipTrigger>
-          <TooltipContent side={side}>Layout tools</TooltipContent>
-        </Tooltip>
-        <PopoverContent align="end" side={side} className="w-48 p-1">
-          <ToolItem
-            icon={LayoutGrid}
-            label="Auto-arrange"
-            onClick={tool(onArrange)}
-          />
-          <ToolItem
-            icon={Plus}
-            label="Add all games"
-            onClick={tool(onAddAll)}
-          />
-          <ToolItem
-            icon={dockSide === "bottom" ? PanelRight : PanelBottom}
-            label={dockSide === "bottom" ? "Dock to right" : "Dock to bottom"}
-            onClick={tool(onToggleDock)}
-          />
-          <div className="my-1 border-t border-border" />
-          <ToolItem
-            icon={Trash2}
-            label="Remove all"
-            danger
-            onClick={tool(onRemoveAll)}
-          />
-        </PopoverContent>
-      </Popover>
-
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            size="icon"
-            onClick={onOpenAdd}
-            aria-label="Add game"
-            data-testid="add-game"
-            className="size-12 shadow-lg [&_svg]:size-5"
-          >
-            <Plus />
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent side={side}>Add game</TooltipContent>
-      </Tooltip>
-    </div>
-  );
-}
-
 /**
  * The game's content subtree (cabinet shell + the game's own Window), isolated in a
  * memo so a floor re-render — dragging another window, a telemetry tick — does NOT
@@ -554,25 +342,17 @@ const GameContent = memo(function GameContent({
   );
 });
 
-/** Phone "Stats" section. Owns its telemetry subscription so a snapshot tick re-renders
- *  only this panel, never the arena floor. */
-function MobileStats() {
+/** Phone "Live" section: stats + activity merged into one scroll (desktop keeps these
+ *  in the persistent bottom dock). Owns its telemetry subscription so a snapshot tick
+ *  re-renders only this panel, never the arena floor. */
+function MobileLive() {
   const { snapshot } = useTelemetry();
   return (
     <div className="flex flex-col gap-2 p-2">
       <SystemDashboard snapshot={snapshot} />
       <TpsChart snapshot={snapshot} />
-    </div>
-  );
-}
-
-/** Phone "Activity" section — see {@link MobileStats} for why it owns its subscription. */
-function MobileActivity() {
-  const { snapshot } = useTelemetry();
-  return (
-    <div className="flex h-full flex-col gap-2 p-2">
-      <LiveTransactionsFeed snapshot={snapshot} className="min-h-0 flex-1" />
-      <LocalTransactionsFeed snapshot={snapshot} className="min-h-0 flex-1" />
+      <LiveTransactionsFeed snapshot={snapshot} className="min-h-96" />
+      <LocalTransactionsFeed snapshot={snapshot} className="min-h-96" />
     </div>
   );
 }
@@ -585,37 +365,105 @@ function MobileActivity() {
  * tab bar live in AppShell so this view swaps without remounting the chrome.
  */
 export function ArenaView() {
-  const [layout, setLayout] = useLocalStorageState<GridItem[]>(
-    // v5: raised the per-window floor to 4×5 (TILE) — older v4 layouts hold the 3×3 floor
-    // that let games shrink into a broken sliver, so reseed at the new uniform footprint.
-    "mtps.desktop.layout.v5",
-    seedLayout,
-  );
-  // Minimized windows: id → saved geometry, restored from the right-edge dock.
-  const [hidden, setHidden] = useLocalStorageState<Record<string, GridItem>>(
-    "mtps.desktop.hidden.v2",
-    {},
-  );
-  // Popped-out windows: free-floating over the desktop, click-to-front z-order.
-  // v7: reseed alongside the tiled layout (v5) so entering lands the latest default —
-  // any window a prior session floated + shrank below the new 4×5 floor returns as a
-  // properly-sized tiled window instead of persisting as a stale sliver.
-  const [floating, setFloating] = useLocalStorageState<
-    Record<string, FloatState>
-  >("mtps.desktop.floating.v7", seedFloating);
+  // Each workspace keeps its own floor (tiled + minimized + floating windows), all held
+  // here so switching workspaces — or adding a window to one you're not on — never resets
+  // another. v1: per-workspace shape (replaces the old single-floor layout/hidden/floating).
+  const [layouts, setLayouts] = useLocalStorageState<
+    Record<Workspace, GridItem[]>
+  >("mtps.desktop.layouts.v1", seedLayouts);
+  const [hiddens, setHiddens] = useLocalStorageState<
+    Record<Workspace, Record<string, GridItem>>
+  >("mtps.desktop.hiddens.v1", emptyHidden);
+  const [floatings, setFloatings] = useLocalStorageState<
+    Record<Workspace, Record<string, FloatState>>
+  >("mtps.desktop.floatings.v1", emptyFloating);
   const floatZ = useRef(100);
   const [addOpen, setAddOpen] = useState(false);
   const [removeOpen, setRemoveOpen] = useState(false);
-  const [resetDefault, setResetDefault] = useState(false);
-  // The phone section is driven by the shell's bottom tabs via the `section` search param.
+  const [resetOpen, setResetOpen] = useState(false);
+  // The active workspace/section is driven by the `section` search param — the desktop
+  // tab bar and the phone's bottom tabs both just set it (so refresh keeps the workspace).
+  const navigate = useNavigate();
   const section =
     (useSearch({ strict: false }) as { section?: MobileSection }).section ??
     "games";
+  // Which floor is on screen. `live`/`explorer` aren't floors, so they fall back to games
+  // (the desktop never shows them as a floor; telemetry is the persistent bottom dock).
+  const floorWs: Workspace =
+    section === "payment" || section === "chat" ? section : "games";
+  // Active-floor slices + setters scoped to it. The setters are stable while `floorWs`
+  // holds, so `close` (memoized below) stays stable and per-window memoization survives.
+  const layout = layouts[floorWs];
+  const hidden = hiddens[floorWs];
+  const floating = floatings[floorWs];
+  const setLayout = useCallback(
+    (action: SetStateAction<GridItem[]>) =>
+      setLayouts((prev) => ({
+        ...prev,
+        [floorWs]:
+          typeof action === "function"
+            ? (action as (p: GridItem[]) => GridItem[])(prev[floorWs])
+            : action,
+      })),
+    [floorWs, setLayouts],
+  );
+  const setHidden = useCallback(
+    (action: SetStateAction<Record<string, GridItem>>) =>
+      setHiddens((prev) => ({
+        ...prev,
+        [floorWs]:
+          typeof action === "function"
+            ? (
+                action as (
+                  p: Record<string, GridItem>,
+                ) => Record<string, GridItem>
+              )(prev[floorWs])
+            : action,
+      })),
+    [floorWs, setHiddens],
+  );
+  const setFloating = useCallback(
+    (action: SetStateAction<Record<string, FloatState>>) =>
+      setFloatings((prev) => ({
+        ...prev,
+        [floorWs]:
+          typeof action === "function"
+            ? (
+                action as (
+                  p: Record<string, FloatState>,
+                ) => Record<string, FloatState>
+              )(prev[floorWs])
+            : action,
+      })),
+    [floorWs, setFloatings],
+  );
   const [dockSide, setDockSide] = useLocalStorageState<DockSide>(
     "mtps.desktop.dockSide.v1",
     "bottom",
   );
   const isDesktop = useMediaQuery("(min-width: 1024px)");
+  // Detect a desktop→mobile reflow so the phone resumes the game you were just playing
+  // (a session-backed game continues across the breakpoint); a tab tap, by contrast,
+  // keeps `isDesktop` false and lands on the picker.
+  const wasDesktop = useRef(isDesktop);
+  const resumeOnMobile = wasDesktop.current && !isDesktop;
+  useEffect(() => {
+    wasDesktop.current = isDesktop;
+  }, [isDesktop]);
+  // On mobile, only the resumed game is on screen — but every other floor window's
+  // session (bots, sockets, timers) keeps running off-screen. Tear them all down except
+  // the active one so the phone isn't paying for a dozen background games. They re-seed
+  // fresh when you reflow back to the desktop floor.
+  useEffect(() => {
+    if (isDesktop) return;
+    const keep = resolveWindowId(lastActiveGame() ?? "");
+    const ids = [
+      ...Object.values(layouts).flatMap((ws) => ws.map((w) => w.id)),
+      ...Object.values(hiddens).flatMap((ws) => Object.keys(ws)),
+      ...Object.values(floatings).flatMap((ws) => Object.keys(ws)),
+    ];
+    for (const id of ids) if (id !== keep) disposeWindow(id);
+  }, [isDesktop, layouts, hiddens, floatings]);
   // Dock collapse — a no-drag alternative to the resize handle.
   const bottomRef = useRef<PanelImperativeHandle>(null);
   const [bottomCollapsed, setBottomCollapsed] = useState(false);
@@ -693,29 +541,48 @@ export function ArenaView() {
         ?.scrollIntoView({ behavior: "smooth", block: "nearest" }),
     );
 
-  // Add a fresh window for a game — duplicates allowed; the floor re-tiles so the new
-  // window fills the first free slot (right-of-row before opening a new row), then
-  // scrolls into view.
-  const addGame = (gameId: string) => {
+  // Switch to a section/workspace, mirroring the tab links (games → no param).
+  const goToSection = (target: MobileSection) =>
+    navigate({
+      to: "/",
+      search: target === "games" ? {} : { section: target },
+    });
+
+  // Add a fresh window to a given workspace's floor — duplicates allowed; that floor
+  // re-tiles so the new window fills the first free slot. Targets the workspace by key,
+  // so it works even when that floor isn't the one on screen.
+  const addWindowTo = (workspace: Workspace, gameId: string) => {
     const id = newInstanceId(gameId);
-    setLayout((cur) => tile([...cur, { id, x: 0, y: 0, ...TILE }]));
+    setLayouts((prev) => ({
+      ...prev,
+      [workspace]: tile([...prev[workspace], { id, x: 0, y: 0, ...TILE }]),
+    }));
+    return id;
+  };
+
+  // Open a picked app: add a window to its workspace's floor and switch there. The
+  // workspace you came from keeps its windows — nothing resets.
+  const openApp = (module: GameModule) => {
+    setAddOpen(false);
+    const workspace = module.workspace ?? "games";
+    const id = addWindowTo(workspace, module.id);
+    goToSection(workspace);
     revealWindow(id);
   };
 
-  // One window per game not already on the floor.
+  // One window per workspace module not already on this floor.
   const addAll = () =>
     setLayout((cur) => {
       const present = new Set(cur.map((w) => gameOf(w.id)));
-      const adds = list()
+      const adds = listByWorkspace(floorWs)
         .filter((m) => !present.has(m.id))
         .map((m) => ({ id: newInstanceId(m.id), x: 0, y: 0, ...TILE }));
       return tile([...cur, ...adds]);
     });
 
-  // Confirmed from the Remove-all dialog: clear everything, optionally reseeding
-  // the default layout (all games) instead of an empty floor.
-  const confirmRemove = () => {
-    // Dispose every open/hidden/floating window's session before clearing.
+  // Tear down every open/hidden/floating window's live session (sockets, timers) —
+  // shared by both the Reset-layout and Remove-all confirmations before they clear.
+  const disposeAllSessions = () => {
     for (const id of [
       ...layout.map((w) => w.id),
       ...Object.keys(hidden),
@@ -723,10 +590,23 @@ export function ArenaView() {
     ]) {
       disposeWindow(id);
     }
-    setLayout(resetDefault ? seedLayout() : []);
+  };
+
+  // Reset layout: re-seed this workspace's default floor (its modules, tidy grid).
+  const confirmReset = () => {
+    disposeAllSessions();
+    setLayout(seedLayoutFor(floorWs));
     setHidden({});
-    setFloating(resetDefault ? seedFloating() : {});
-    setResetDefault(false);
+    setFloating({});
+    setResetOpen(false);
+  };
+
+  // Remove all: clear the floor to empty (no re-seed).
+  const confirmRemoveAll = () => {
+    disposeAllSessions();
+    setLayout([]);
+    setHidden({});
+    setFloating({});
     setRemoveOpen(false);
   };
 
@@ -949,14 +829,15 @@ export function ArenaView() {
   });
   const hiddenEntries = layerEntries.filter((e) => e.hidden);
 
-  const renderFloorControls = (className: string, side: "left" | "right") => (
-    <FloorControls
-      className={className}
-      side={side}
+  // The floor's tools now live in the workspace tab bar (top), so the floor stays clear.
+  const workspaceTabs = (
+    <WorkspaceTabs
+      active={floorWs}
       dockSide={dockSide}
-      onOpenAdd={() => setAddOpen(true)}
+      onAdd={() => setAddOpen(true)}
       onArrange={arrange}
       onAddAll={addAll}
+      onResetLayout={() => setResetOpen(true)}
       onRemoveAll={() => setRemoveOpen(true)}
       onToggleDock={toggleDockSide}
     />
@@ -989,9 +870,9 @@ export function ArenaView() {
   const floor =
     allWindows.length === 0 ? (
       <div className="flex h-full min-h-64 flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
-        No games on the floor.
+        Nothing open here.
         <Button variant="outline" size="sm" onClick={() => setAddOpen(true)}>
-          <Plus /> Add a game
+          <Plus /> Add an app
         </Button>
       </div>
     ) : (
@@ -1058,13 +939,14 @@ export function ArenaView() {
       />
     );
 
-  // Floor + its overlays (controls column + the minimized-windows dock).
-  const floorArea = (controlsClass: string, side: "left" | "right") => (
-    <div className="relative h-full">
+  // Floor + its overlays (controls column + the minimized-windows dock). Keyed by
+  // workspace so switching tabs mounts that floor's own windows fresh, never bleeding
+  // one workspace's grid into another.
+  const floorArea = (
+    <div key={floorWs} className="relative h-full">
       <div data-floor className="bg-dot-grid h-full overflow-auto p-2">
         {floor}
       </div>
-      {renderFloorControls(controlsClass, side)}
       <MacDock
         entries={hiddenEntries}
         side={macDockSide}
@@ -1111,69 +993,109 @@ export function ArenaView() {
   return (
     <>
       {isDesktop ? (
-        dockSide === "bottom" ? (
-          <ResizablePanelGroup
-            orientation="vertical"
-            className="h-full min-h-0"
-          >
-            <ResizablePanel defaultSize="58%" minSize="20%" className="min-h-0">
-              {floorArea("absolute bottom-3 right-3 z-20", "left")}
-            </ResizablePanel>
-            <ResizableHandle>{collapseButton}</ResizableHandle>
-            <ResizablePanel
-              panelRef={bottomRef}
-              collapsible
-              collapsedSize="0%"
-              defaultSize="42%"
-              minSize="14%"
-              className="min-h-0"
-            >
-              <Dock side="bottom" />
-            </ResizablePanel>
-          </ResizablePanelGroup>
-        ) : (
-          <ResizablePanelGroup
-            orientation="horizontal"
-            className="h-full min-h-0"
-          >
-            <ResizablePanel defaultSize="68%" minSize="35%" className="min-w-0">
-              {floorArea("absolute bottom-3 right-3 z-20 items-end", "right")}
-            </ResizablePanel>
-            <ResizableHandle>{collapseButton}</ResizableHandle>
-            <ResizablePanel
-              panelRef={bottomRef}
-              collapsible
-              collapsedSize="0%"
-              defaultSize="32%"
-              minSize="18%"
-              className="min-w-0"
-            >
-              <Dock side="right" />
-            </ResizablePanel>
-          </ResizablePanelGroup>
-        )
+        <div className="flex h-full min-h-0 flex-col">
+          {workspaceTabs}
+          <div className="min-h-0 flex-1">
+            {dockSide === "bottom" ? (
+              <ResizablePanelGroup
+                orientation="vertical"
+                className="h-full min-h-0"
+              >
+                <ResizablePanel
+                  defaultSize="58%"
+                  minSize="20%"
+                  className="min-h-0"
+                >
+                  {floorArea}
+                </ResizablePanel>
+                <ResizableHandle>{collapseButton}</ResizableHandle>
+                <ResizablePanel
+                  panelRef={bottomRef}
+                  collapsible
+                  collapsedSize="0%"
+                  defaultSize="42%"
+                  minSize="14%"
+                  className="min-h-0"
+                >
+                  <Dock side="bottom" />
+                </ResizablePanel>
+              </ResizablePanelGroup>
+            ) : (
+              <ResizablePanelGroup
+                orientation="horizontal"
+                className="h-full min-h-0"
+              >
+                <ResizablePanel
+                  defaultSize="68%"
+                  minSize="35%"
+                  className="min-w-0"
+                >
+                  {floorArea}
+                </ResizablePanel>
+                <ResizableHandle>{collapseButton}</ResizableHandle>
+                <ResizablePanel
+                  panelRef={bottomRef}
+                  collapsible
+                  collapsedSize="0%"
+                  defaultSize="32%"
+                  minSize="18%"
+                  className="min-w-0"
+                >
+                  <Dock side="right" />
+                </ResizablePanel>
+              </ResizablePanelGroup>
+            )}
+          </div>
+        </div>
       ) : (
         <main className="h-full overflow-auto">
-          {section === "games" && <MobileArena />}
-          {section === "stats" && <MobileStats />}
-          {section === "activity" && <MobileActivity />}
+          {/* Key by workspace so each tab is a fresh picker — switching never carries
+              the previous tab's open app over. `autoResume` continues the game across a
+              desktop→mobile reflow. */}
+          {section === "payment" ? (
+            <MobileArena
+              key="payment"
+              workspace="payment"
+              autoResume={resumeOnMobile}
+            />
+          ) : section === "chat" ? (
+            <MobileArena
+              key="chat"
+              workspace="chat"
+              autoResume={resumeOnMobile}
+            />
+          ) : section === "live" ? (
+            <MobileLive />
+          ) : (
+            <MobileArena
+              key="games"
+              workspace="games"
+              autoResume={resumeOnMobile}
+            />
+          )}
         </main>
       )}
 
-      <AddGameCommand
-        open={addOpen}
-        onOpenChange={setAddOpen}
-        games={list()}
-        onAdd={addGame}
-      />
+      <AddAppDialog open={addOpen} onOpenChange={setAddOpen} onOpen={openApp} />
 
-      <Dialog
-        open={removeOpen}
-        onOpenChange={(o) => {
-          setRemoveOpen(o);
-          if (!o) setResetDefault(false);
-        }}
-      >
+      <Dialog open={resetOpen} onOpenChange={setResetOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Reset layout?</DialogTitle>
+            <DialogDescription>
+              Re-opens all games and restores the default arrangement.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setResetOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={confirmReset}>Reset layout</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={removeOpen} onOpenChange={setRemoveOpen}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
             <DialogTitle>Clear the floor?</DialogTitle>
@@ -1181,19 +1103,12 @@ export function ArenaView() {
               Removes every open and minimized window.
             </DialogDescription>
           </DialogHeader>
-          <label className="flex items-center gap-2 text-sm">
-            <Checkbox
-              checked={resetDefault}
-              onCheckedChange={(v) => setResetDefault(v === true)}
-            />
-            Reset to default — re-open all games
-          </label>
           <DialogFooter>
             <Button variant="outline" onClick={() => setRemoveOpen(false)}>
               Cancel
             </Button>
-            <Button variant="destructive" onClick={confirmRemove}>
-              {resetDefault ? "Reset to default" : "Remove all"}
+            <Button variant="destructive" onClick={confirmRemoveAll}>
+              Remove all
             </Button>
           </DialogFooter>
         </DialogContent>

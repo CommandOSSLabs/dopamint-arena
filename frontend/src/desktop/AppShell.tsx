@@ -1,8 +1,9 @@
 import {
+  Activity,
   Compass,
   Gamepad2,
-  Gauge,
-  ReceiptText,
+  MessagesSquare,
+  Wallet,
   type LucideIcon,
 } from "lucide-react";
 import { Link, Outlet, useRouterState } from "@tanstack/react-router";
@@ -12,11 +13,14 @@ import { WalletButton } from "@/wallet/WalletButton";
 import { useMediaQuery } from "@/lib/useMediaQuery";
 import { cn } from "@/lib/utils";
 
-/** Which arena section the phone shows; carried in the `/` route's `section` search param. */
-export type MobileSection = "games" | "stats" | "activity";
+/** Which arena section/workspace is shown; carried in the `/` route's `section`
+ *  search param (drives the desktop workspace tabs and the phone bottom tabs).
+ *  `live` is the merged stats+activity telemetry, shown only on the phone — on
+ *  desktop telemetry is the persistent bottom dock. */
+export type MobileSection = "games" | "payment" | "chat" | "live";
 
-// Phone bottom tabs. Arena/Stats/Activity select an arena section (a search param on
-// `/`); Explorer is a sibling route. Both live in this shell so navigating to the
+// Phone bottom tabs. Arena/Payment/Chat/Live select an arena section (a search param
+// on `/`); Explorer is a sibling route. Both live in this shell so navigating to the
 // explorer never tears the navbar down — the body swaps, the chrome stays.
 const MOBILE_NAV: {
   section: MobileSection;
@@ -24,8 +28,9 @@ const MOBILE_NAV: {
   icon: LucideIcon;
 }[] = [
   { section: "games", label: "Arena", icon: Gamepad2 },
-  { section: "stats", label: "Stats", icon: Gauge },
-  { section: "activity", label: "Activity", icon: ReceiptText },
+  { section: "payment", label: "Payment", icon: Wallet },
+  { section: "chat", label: "Chat", icon: MessagesSquare },
+  { section: "live", label: "Live", icon: Activity },
 ];
 
 const tabClass =
