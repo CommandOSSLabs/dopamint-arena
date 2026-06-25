@@ -209,7 +209,7 @@ export function MachineCard({ session }: MachineCardProps) {
             <span className="text-[clamp(9px,2.4cqmin,13px)] font-bold tracking-wide text-[rgba(35,34,31,0.6)] uppercase">
               Progress
             </span>
-            <span className="font-Space-Mono text-[clamp(9px,2.5cqmin,14px)] font-bold">
+            <span className="font-wal-sans text-[clamp(9px,2.5cqmin,14px)] font-bold">
               {tickCount}/{tickMax}
             </span>
           </div>
@@ -245,7 +245,7 @@ export function MachineCard({ session }: MachineCardProps) {
               <span className="block text-[clamp(8px,2.2cqmin,12px)] tracking-wide text-[rgba(35,34,31,0.6)] uppercase">
                 {label}
               </span>
-              <span className="block font-Space-Mono text-[clamp(11px,3cqmin,17px)] leading-tight">
+              <span className="block text-[clamp(11px,3cqmin,17px)] leading-tight font-wal-sans font-semibold">
                 {value}
               </span>
             </div>

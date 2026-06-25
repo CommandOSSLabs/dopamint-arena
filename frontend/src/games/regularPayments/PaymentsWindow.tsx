@@ -11,7 +11,6 @@ import {
 } from "./constants";
 import { usePaymentShop } from "./usePaymentShop";
 import type { MachinePhase } from "./types";
-import "./regularpayments.css";
 
 type Filter = "all" | "running" | "settled";
 
