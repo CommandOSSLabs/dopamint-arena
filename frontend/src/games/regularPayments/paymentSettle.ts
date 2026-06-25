@@ -1,5 +1,8 @@
 import type { OffchainTunnel } from "sui-tunnel-ts/core/tunnel";
-import type { PaymentMove, PaymentsState } from "sui-tunnel-ts/protocol/payments";
+import type {
+  PaymentMove,
+  PaymentsState,
+} from "sui-tunnel-ts/protocol/payments";
 import type { Transcript } from "sui-tunnel-ts/proof/transcript";
 import { settleViaBackend } from "@/backend/settle";
 import { closeCooperativeWithRoot, type SignExec } from "@/onchain/tunnelTx";

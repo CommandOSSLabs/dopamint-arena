@@ -11,11 +11,12 @@ export interface ChatWindowProps {
 }
 
 export function ChatWindow({ api, transport, myName }: ChatWindowProps) {
-  const { topic, input, setInput, messages, send, loading, error } = useChatSession({
-    api,
-    transport,
-    myName,
-  });
+  const { topic, input, setInput, messages, send, loading, error } =
+    useChatSession({
+      api,
+      transport,
+      myName,
+    });
 
   return (
     <div className="flex flex-col h-full border rounded-lg overflow-hidden">
@@ -28,7 +29,12 @@ export function ChatWindow({ api, transport, myName }: ChatWindowProps) {
           <ChatMessage key={i} sender={m.sender} text={m.text} isMe={m.isMe} />
         ))}
       </div>
-      <ChatInput value={input} onChange={setInput} onSend={send} loading={loading} />
+      <ChatInput
+        value={input}
+        onChange={setInput}
+        onSend={send}
+        loading={loading}
+      />
     </div>
   );
 }

@@ -1,4 +1,10 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import { usePvpWorldCanvas } from "../usePvpWorldCanvas";
 import { WorldCanvas } from "./WorldCanvas";
 import { FloatingToolbar, type ToolId } from "./FloatingToolbar";
@@ -43,7 +49,8 @@ export function PvpCanvasView({ windowId }: { windowId: string }) {
     m.findMatch();
   }, [m]);
 
-  if (m.status !== "playing" && m.status !== "settling") return <Status m={m} />;
+  if (m.status !== "playing" && m.status !== "settling")
+    return <Status m={m} />;
   return <Board m={m} />;
 }
 
@@ -66,9 +73,9 @@ function Status({ m }: { m: ReturnType<typeof usePvpWorldCanvas> }) {
         {busy && <div style={spinnerStyle} />}
         <div style={titleStyle}>{text}</div>
         <div style={subStyle}>
-          Online PvP — co-draw one shared canvas with another human over a genuine
-          2-party tunnel. Open this game in a second browser and pick “Paint vs Player”
-          to match.
+          Online PvP — co-draw one shared canvas with another human over a
+          genuine 2-party tunnel. Open this game in a second browser and pick
+          “Paint vs Player” to match.
         </div>
         {m.status === "error" && (
           <button type="button" style={retryStyle} onClick={m.findMatch}>
@@ -339,8 +346,16 @@ const spinnerStyle: CSSProperties = {
   borderTopColor: WC.accent,
   animation: "spin 0.9s linear infinite",
 };
-const titleStyle: CSSProperties = { fontSize: 18, fontWeight: 800, color: WC.text };
-const subStyle: CSSProperties = { fontSize: 13, lineHeight: 1.55, color: WC.muted };
+const titleStyle: CSSProperties = {
+  fontSize: 18,
+  fontWeight: 800,
+  color: WC.text,
+};
+const subStyle: CSSProperties = {
+  fontSize: 13,
+  lineHeight: 1.55,
+  color: WC.muted,
+};
 const retryStyle: CSSProperties = {
   marginTop: 6,
   height: 38,

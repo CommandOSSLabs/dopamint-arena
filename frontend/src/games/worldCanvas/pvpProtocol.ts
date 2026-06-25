@@ -159,9 +159,10 @@ function toCellMove(
   };
 }
 
-export class WorldCanvasPvpProtocol
-  implements Protocol<PvpCanvasState, PvpPaintMove>
-{
+export class WorldCanvasPvpProtocol implements Protocol<
+  PvpCanvasState,
+  PvpPaintMove
+> {
   readonly name = NAME;
 
   initialState(ctx: ProtocolContext): PvpCanvasState {
@@ -216,7 +217,14 @@ export class WorldCanvasPvpProtocol
       cells.length > MAX_RENDER_CELLS
         ? cells.slice(cells.length - MAX_RENDER_CELLS)
         : cells;
-    return { ...state, digest, cells: capped, paintCount, appliedSeqA, appliedSeqB };
+    return {
+      ...state,
+      digest,
+      cells: capped,
+      paintCount,
+      appliedSeqA,
+      appliedSeqB,
+    };
   }
 
   encodeState(state: PvpCanvasState): Uint8Array {

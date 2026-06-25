@@ -8,7 +8,12 @@ export interface ChatInputProps {
   loading?: boolean;
 }
 
-export function ChatInput({ value, onChange, onSend, loading }: ChatInputProps) {
+export function ChatInput({
+  value,
+  onChange,
+  onSend,
+  loading,
+}: ChatInputProps) {
   return (
     <div className="flex gap-2 p-2 border-t">
       <Input

@@ -15,7 +15,12 @@ function TunnelStats({
   txDigest,
   network,
 }: {
-  stats: { updates: number; signatures: number; verifications: number; bytes: number };
+  stats: {
+    updates: number;
+    signatures: number;
+    verifications: number;
+    bytes: number;
+  };
   txDigest?: string | null;
   network: string;
 }) {

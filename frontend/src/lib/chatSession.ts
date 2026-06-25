@@ -16,7 +16,11 @@ export function interceptChatFrames(
   transport.onFrame((bytes) => {
     try {
       const json = JSON.parse(new TextDecoder().decode(bytes));
-      if (json?.type === "chat/text" && typeof json.sender === "string" && typeof json.text === "string") {
+      if (
+        json?.type === "chat/text" &&
+        typeof json.sender === "string" &&
+        typeof json.text === "string"
+      ) {
         handlers.onMessage(json.sender, json.text);
       }
     } catch {

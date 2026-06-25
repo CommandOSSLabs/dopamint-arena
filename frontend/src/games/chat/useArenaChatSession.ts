@@ -114,7 +114,12 @@ class ChatSession {
   private settleRequested = false;
   private starting = false;
   private gen = 0;
-  private stats: ChatStats = { updates: 0, signatures: 0, verifications: 0, bytes: 0 };
+  private stats: ChatStats = {
+    updates: 0,
+    signatures: 0,
+    verifications: 0,
+    bytes: 0,
+  };
   private txDigest: string | null = null;
 
   private api = new ChatApiClient(import.meta.env.VITE_BACKEND_URL ?? "");
@@ -135,7 +140,9 @@ class ChatSession {
       topic: this.topic,
       error: this.error,
       canSend:
-        this.status === "playing" && !this.settleRequested && lastSender !== "You",
+        this.status === "playing" &&
+        !this.settleRequested &&
+        lastSender !== "You",
       stats: { ...this.stats },
       txDigest: this.txDigest,
     };
@@ -205,9 +212,7 @@ class ChatSession {
 
     void (async () => {
       try {
-        const fundedPerSeat = isMtpsConfigured
-          ? LOCKED_PER_SEAT
-          : SUI_PER_SEAT;
+        const fundedPerSeat = isMtpsConfigured ? LOCKED_PER_SEAT : SUI_PER_SEAT;
 
         const reads = deps.client as unknown as Parameters<
           typeof openAndFundSelfPlay

@@ -14,7 +14,9 @@ export function BotVsBotSpectator({ api }: BotVsBotSpectatorProps) {
       {error && <div className="p-2 text-destructive text-sm">{error}</div>}
       <div className="flex-1 p-3 overflow-y-auto space-y-2">
         {messages.length === 0 && (
-          <div className="text-muted-foreground text-sm">Waiting for bots to start chatting...</div>
+          <div className="text-muted-foreground text-sm">
+            Waiting for bots to start chatting...
+          </div>
         )}
         {messages.map((m, i) => (
           <div key={i} className="rounded-lg bg-muted px-3 py-2">

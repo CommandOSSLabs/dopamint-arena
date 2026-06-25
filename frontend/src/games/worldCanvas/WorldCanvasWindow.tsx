@@ -27,7 +27,9 @@ export function WorldCanvasWindow({ windowId }: GameWindowProps) {
   const [mode, setMode] = useState<Mode>("menu");
 
   if (mode === "menu") {
-    return <Lobby onSolo={() => setMode("solo")} onPvp={() => setMode("pvp")} />;
+    return (
+      <Lobby onSolo={() => setMode("solo")} onPvp={() => setMode("pvp")} />
+    );
   }
 
   return (

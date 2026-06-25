@@ -12,7 +12,11 @@ test("interceptor extracts chat text and forwards frame", () => {
     onFrame: (cb: (bytes: Uint8Array) => void) => {
       // simulate receiving a frame later
       setTimeout(() => {
-        cb(new TextEncoder().encode(JSON.stringify({ type: "chat/text", sender: "bot", text: "hello" })));
+        cb(
+          new TextEncoder().encode(
+            JSON.stringify({ type: "chat/text", sender: "bot", text: "hello" }),
+          ),
+        );
       }, 0);
     },
   };
@@ -21,7 +25,9 @@ test("interceptor extracts chat text and forwards frame", () => {
     onMessage: (sender, text) => messages.push({ sender, text }),
   });
 
-  const move = new TextEncoder().encode(JSON.stringify({ type: "chat/text", sender: "me", text: "hi" }));
+  const move = new TextEncoder().encode(
+    JSON.stringify({ type: "chat/text", sender: "me", text: "hi" }),
+  );
   wrapped.send(move);
 
   return new Promise<void>((resolve) => {

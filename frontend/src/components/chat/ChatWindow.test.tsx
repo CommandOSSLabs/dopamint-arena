@@ -21,7 +21,9 @@ test("ChatWindow renders topic and sends message", async () => {
     subscribeLive: () => () => {},
   } as unknown as ChatApiClient;
 
-  render(<ChatWindow api={fakeApi} transport={fakeTransport} myName="player" />);
+  render(
+    <ChatWindow api={fakeApi} transport={fakeTransport} myName="player" />,
+  );
 
   await waitFor(() => screen.getByText("Topic: weather"));
 

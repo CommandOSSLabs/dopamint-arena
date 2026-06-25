@@ -18,8 +18,15 @@ test("BotVsBotSpectator renders live messages", async () => {
 
   render(<BotVsBotSpectator api={fakeApi} />);
 
-  assert.equal(screen.getByText("Bot vs Bot Spectator").textContent, "Bot vs Bot Spectator");
-  assert.equal(screen.getByText("Waiting for bots to start chatting...").textContent?.length > 0, true);
+  assert.equal(
+    screen.getByText("Bot vs Bot Spectator").textContent,
+    "Bot vs Bot Spectator",
+  );
+  assert.equal(
+    screen.getByText("Waiting for bots to start chatting...").textContent
+      ?.length > 0,
+    true,
+  );
 
   liveRef.cb?.({ sender: "bot-a", text: "hello" });
 
