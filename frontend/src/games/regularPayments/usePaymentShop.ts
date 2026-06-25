@@ -208,7 +208,7 @@ class MachineRuntime {
       deps.report.bumpCounters({ tunnelsOpened: 1 });
       deps.report.pushLocalTxn({
         id: 0,
-        game: "regular-payments",
+        game: "Regular payments",
         time: new Date().toLocaleTimeString("en-GB"),
         bot: "You",
         type: "Opening",
@@ -266,7 +266,7 @@ class MachineRuntime {
         if (settleDigest) {
           deps.report.pushTxn({
             id: 0,
-            game: "regular-payments",
+            game: "Regular payments",
             digest: settleDigest,
             address: deps.account.address,
             time,
@@ -277,7 +277,7 @@ class MachineRuntime {
           });
           deps.report.pushLocalTxn({
             id: 0,
-            game: "regular-payments",
+            game: "Regular payments",
             time,
             bot: "You",
             type: "Settled",
@@ -289,7 +289,7 @@ class MachineRuntime {
         if (mintDigest && this.reward) {
           deps.report.pushTxn({
             id: 0,
-            game: "regular-payments",
+            game: "Regular payments",
             digest: mintDigest,
             address: deps.account.address,
             time,
@@ -300,7 +300,7 @@ class MachineRuntime {
           });
           deps.report.pushLocalTxn({
             id: 0,
-            game: "regular-payments",
+            game: "Regular payments",
             time,
             bot: "You",
             type: "Mint NFT",
