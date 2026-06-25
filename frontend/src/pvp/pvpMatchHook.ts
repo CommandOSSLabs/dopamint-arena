@@ -31,6 +31,7 @@ import {
   type PvpChannel,
   type Role,
 } from "@/pvp/mpClient";
+import { proposePlan } from "@/pvp/proposePlan";
 import {
   getControlPlaneClient,
   resolveBackendUrl,
@@ -248,18 +249,34 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
     this.emit();
   };
 
-  /** Schedule a propose for this seat if it's our turn. Clears any existing timer first. */
+  /**
+   * (Re)schedule this seat's next propose. A bot/idle seat is paced by `stepMs`; a manual seat
+   * with real queued input proposes immediately (`proposePlan`), so a keypress isn't taxed by the
+   * bot-watchability clock. Always cancels any stale timer first — when the turn flips or a
+   * proposal is mid-flight the plan is "don't propose", and a scheduled idle tick must be dropped.
+   * A pending proposal is read off the tunnel: `displayState` is ahead of `state` only while one
+   * awaits its ACK.
+   */
   private maybePropose = () => {
     const dt = this.dt;
     const myRole = this.role;
     if (!dt || !myRole) return;
-    if (dt.protocol.isTerminal(dt.state)) return;
-    if (turn(dt.nonce) !== myRole) return;
+
+    const plan = proposePlan({
+      myRole,
+      turnRole: turn(dt.nonce),
+      terminal: dt.protocol.isTerminal(dt.state),
+      hasPending: dt.displayState !== dt.state,
+      auto: this.auto,
+      hasInput: !this.auto && this.intent !== this.spec.idleIntent,
+      stepMs: this.spec.stepMs,
+    });
 
     if (this.proposeTimer !== null) {
       clearTimeout(this.proposeTimer);
       this.proposeTimer = null;
     }
+    if (plan.delayMs === null) return;
 
     this.proposeTimer = setTimeout(() => {
       this.proposeTimer = null;
@@ -268,6 +285,7 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
       if (!dtNow || !myRoleNow) return;
       if (dtNow.protocol.isTerminal(dtNow.state)) return;
       if (turn(dtNow.nonce) !== myRoleNow) return;
+      if (dtNow.displayState !== dtNow.state) return; // a proposal is mid-flight
 
       // Auto → a bot proposes this seat's move; manual → your queued intent (idle once consumed).
       let intent: Intent;
@@ -283,10 +301,14 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
       }
       try {
         dtNow.propose(this.spec.intentToMove(myRoleNow, intent), 0n);
+        // Render the move NOW from the optimistic `displayState` instead of waiting a full ACK
+        // round-trip — this is what makes manual play feel responsive (the tunnel already holds
+        // the locally-applied, already-signed next state).
+        this.sync();
       } catch {
         // Proposal already pending or other transient error — safe to ignore here.
       }
-    }, this.spec.stepMs);
+    }, plan.delayMs);
   };
 
   reset = () => {
@@ -602,6 +624,10 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
 
   setIntent = (intent: Intent) => {
     this.intent = intent;
+    // A human keypress preempts the idle pacing clock: try to propose at once on our turn
+    // (no-op while it's the opponent's turn or a proposal is mid-flight — the intent stays
+    // queued and fires the moment our turn returns).
+    if (!this.auto) this.maybePropose();
   };
 
   toggleAuto = () => {
