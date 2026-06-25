@@ -47,6 +47,15 @@ test("resolveFleet respects explicit values regardless of mode", () => {
   expect(r).toEqual({ workers: 4, concurrency: 10 });
 });
 
+test("resolveFleet passes explicit values through in io mode too", () => {
+  const r = resolveFleet(
+    { workers: 6, concurrency: 20, memBudgetMb: null, perMatchKb: null },
+    { cores: 64, totalMem: 999 },
+    "io",
+  );
+  expect(r).toEqual({ workers: 6, concurrency: 20 });
+});
+
 test("resolveFleet io mode uses an explicit memory budget for the cap", () => {
   const r = resolveFleet(
     { workers: 4, concurrency: "auto", memBudgetMb: 1024, perMatchKb: 512 },

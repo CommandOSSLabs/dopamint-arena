@@ -127,11 +127,15 @@ export async function runSwarm(
 function runWorker(input: Record<string, unknown>): Promise<{ ok: boolean; moves?: number; matches?: number; error?: string }> {
   return new Promise((resolve) => {
     const w = new Worker(new URL("./worker.ts", import.meta.url), { workerData: input });
-    w.once("message", (m) => resolve(m));
-    w.once("error", (e) => resolve({ ok: false, error: String(e?.stack ?? e) }));
+    let settled = false;
+    const settle = (v: { ok: boolean; moves?: number; matches?: number; error?: string }) => {
+      if (!settled) { settled = true; resolve(v); }
+    };
+    w.once("message", (m) => settle(m));
+    w.once("error", (e) => settle({ ok: false, error: String(e?.stack ?? e) }));
     // Safety net: a normal worker posts a message before exiting, so this only
     // fires on abnormal termination (OOM kill, uncaught crash) that skips the message.
-    w.once("exit", (code) => resolve({ ok: false, error: `worker exited without result (code ${code})` }));
+    w.once("exit", (code) => settle({ ok: false, error: `worker exited without result (code ${code})` }));
   });
 }
 
