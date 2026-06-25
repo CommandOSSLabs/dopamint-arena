@@ -73,6 +73,9 @@ const usePvpMatch = createPvpMatchHook<
   stepMs: 80,
   stake: 1n, // 1 MIST per seat — free/draw, never shifts (each human funds its own seat)
   graceMs: GRACE_MS,
+  // A matched PvP player paints THEMSELVES from the start — don't auto-hand their seat to a bot.
+  // Auto is opt-in via the toggle (take a break / let the bot paint). Solo (vs Bot) still auto-runs.
+  initialAuto: false,
   makeProtocol: () => new WorldCanvasPvpProtocol(),
   deriveView: (s) => s.cells,
   makeResumeAdapter: makeWorldCanvasPvpResumeAdapter,

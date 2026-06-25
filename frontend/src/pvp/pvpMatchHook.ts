@@ -102,6 +102,10 @@ export interface PvpMatchSpec<
   intentToMove: (role: Role, intent: Intent) => Move;
   /** Read this seat's intent out of a bot-proposed Move (undefined ⇒ apply `idleIntent`). */
   readIntent: (role: Role, move: Move | null) => Intent | undefined;
+  /** Initial Auto state when a match starts. Unset ⇒ true (the auto-bot plays this seat —
+   *  the existing "watching bots" default). Set false to start with the human at the wheel,
+   *  so a matched player paints/plays themselves until they opt into Auto. */
+  initialAuto?: boolean;
   /** Reconnect grace before the settlement floor (ms). Unset ⇒ the engine's 1h default. */
   graceMs?: number;
   /**
@@ -215,7 +219,7 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
 
   private status: PvpStatus = "idle";
   private role: Role | null = null;
-  private auto = true;
+  private auto: boolean;
   private view: View | null = null;
   private winner: State["winner"] = null as State["winner"];
   private error: string | null = null;
@@ -231,11 +235,12 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
 
   constructor(private readonly spec: PvpMatchSpec<State, Move, Intent, View>) {
     this.intent = spec.idleIntent;
+    this.auto = spec.initialAuto ?? true;
     this.snap = {
       status: "idle",
       role: null,
       stake: Number(spec.stake),
-      auto: true,
+      auto: this.auto,
       view: null,
       winner: null as State["winner"],
       error: null,
@@ -332,7 +337,7 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
     this.dt = null;
     this.role = null;
     this.intent = this.spec.idleIntent;
-    this.auto = true;
+    this.auto = this.spec.initialAuto ?? true;
     this.winner = null as State["winner"];
     this.status = "idle";
     this.view = null;
