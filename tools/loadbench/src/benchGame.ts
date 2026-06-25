@@ -6,6 +6,7 @@ import { readEnvLocal } from "./env";
 import { ensureRelay } from "./relayProcess";
 import { runFullMatch } from "./runMatch";
 import { summarize, ratePerSec } from "./metrics";
+import { startResourceMonitor, formatResources } from "./resourceMonitor";
 
 export function parseBenchArgs(argv: string[]) {
   const out = {
@@ -72,15 +73,17 @@ async function main() {
     if (!env.TUNNEL_PACKAGE_ID) throw new Error("run `bun run stack` first (.env.local missing PACKAGE_ID)");
     process.env.PACKAGE_ID = env.TUNNEL_PACKAGE_ID;
     process.env.SUI_NETWORK = env.SUI_NETWORK;
-    ctx.client = new SuiClient({ url: getFullnodeUrl("localnet") });
+    ctx.client = new SuiClient({ url: env.SUI_RPC_URL || getFullnodeUrl("localnet") });
     ctx.funder = funderFromEnv(env);
   }
   let relay: { stop(): void } | null = null;
   if (args.channel === "relay") relay = await ensureRelay();
+  const monitor = startResourceMonitor();
   try {
     for (const g of games) await benchOne(g, args, ctx);
   } finally {
     relay?.stop();
+    console.log(`resources: ${formatResources(monitor.stop())}`);
   }
 }
 
