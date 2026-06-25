@@ -87,7 +87,7 @@ export function PaymentsWindow({ windowId }: GameWindowProps) {
 
   const gridCols =
     visible.length >= 3
-      ? "grid-cols-2 @min-[520px]:grid-cols-3"
+      ? "grid-cols-2 @min-[640px]:grid-cols-3"
       : "grid-cols-2";
 
   if (!entered) {
@@ -112,9 +112,8 @@ export function PaymentsWindow({ windowId }: GameWindowProps) {
             Regular Payments
           </div>
           <p className="mb-3 text-[clamp(11px,3cqmin,17px)] leading-snug text-[rgba(35,34,31,0.6)]">
-            Deposit 10 MTPS, stream 500 co-signed payments over 5 s, then settle
-            on-chain. NFT mint comes later — for now the shop closes the tunnel
-            when the stream finishes.
+            Deposit 10 MTPS, stream 500 co-signed payments over 5 s, settle
+            on-chain, then mint a random NFT reward to your wallet.
           </p>
           <button
             className="relative isolate text-[clamp(11px,3cqmin,18px)] leading-none px-[clamp(8px,2.6cqmin,18px)] py-[clamp(4px,1.4cqmin,9px)] transition-transform hover:-translate-y-px hover:-rotate-[0.4deg] active:translate-y-px"

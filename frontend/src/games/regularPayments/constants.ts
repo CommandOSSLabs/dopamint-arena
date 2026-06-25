@@ -1,4 +1,4 @@
-import { mtps } from "@/onchain/mtps";
+import { MTPS_DECIMALS, mtps } from "@/onchain/mtps";
 
 /**
  * User (party A) — 10 MTPS purchase budget per mint. All micro-payments stream A → shop B.
@@ -23,6 +23,21 @@ export const TICK_COUNT = 500;
 
 /** Per tick — budget / tick count. */
 export const MICRO_UNIT = DEPOSIT_A / BigInt(TICK_COUNT);
+
+/** Human-readable MTPS amount for a raw micro-unit (shown on machine cards). */
+export function formatMicroUnit(raw: bigint = MICRO_UNIT): string {
+  const scale = 10n ** BigInt(MTPS_DECIMALS);
+  const whole = raw / scale;
+  const frac = raw % scale;
+  if (frac === 0n) return whole.toString();
+  const digits = frac
+    .toString()
+    .padStart(MTPS_DECIMALS, "0")
+    .replace(/0+$/, "")
+    .slice(0, 2)
+    .replace(/0+$/, "");
+  return digits ? `${whole}.${digits}` : whole.toString();
+}
 
 /** Wall-clock mint stream length. */
 export const MINT_DURATION_MS = 5_000;
