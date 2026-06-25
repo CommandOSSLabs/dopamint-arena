@@ -11,12 +11,12 @@
 ## Global Constraints
 
 > **DESIGN CORRECTION (surfaced by Task 2's tests):** chicken-cross and bomb-it are
-> *winner-takes-all* (the inner game flips the whole pot to the winner), unlike
+> _winner-takes-all_ (the inner game flips the whole pot to the winner), unlike
 > battleship which swaps a small fixed stake. A wrapper that delegated balances to the
 > inner game would zero the loser after one decisive game → no rematch ever. So the
 > multi-game wrapper **owns the real carried balances** and swaps a fixed `stakePerGame`
-> loser→winner per *decided* game (push swaps nothing); the inner game runs with
-> *symbolic* per-game balances `{stakePerGame, stakePerGame}` purely to crown a winner.
+> loser→winner per _decided_ game (push swaps nothing); the inner game runs with
+> _symbolic_ per-game balances `{stakePerGame, stakePerGame}` purely to crown a winner.
 > The solo session **funds a large balance per seat** (battleship's `LOCKED_PER_SEAT` =
 > 1 DOPAMINT, `SUI_PER_SEAT` fallback) with `stakePerGame` = the lobby stake (≥ MIN), so
 > many games fit. The corrected protocol + tests live in the task briefs
@@ -37,6 +37,7 @@
 ## File Structure
 
 **Created**
+
 - `sui-tunnel-ts/src/protocol/multiGameBombIt.ts` — `MultiGameBombItProtocol` (compose `BombItProtocol`).
 - `sui-tunnel-ts/src/protocol/multiGameBombIt.test.ts` — protocol unit/golden tests.
 - `sui-tunnel-ts/src/protocol/multiGameCross.ts` — `MultiGameCrossProtocol` (compose `CrossProtocol`).
@@ -44,6 +45,7 @@
 - `docs/decisions/0011-multi-game-self-play-per-game-seed.md` — ADR (extends 0010).
 
 **Modified**
+
 - `sui-tunnel-ts/src/protocol/index.ts` — barrel-export the two wrappers.
 - `frontend/src/games/chickenCross/session-core.ts` — add `stepMultiGame`, `kickoffNextGame`, `deriveMultiView`; keep single-game exports.
 - `frontend/src/games/chickenCross/session-core.test.ts` — multi-game bounded test.
@@ -57,6 +59,7 @@
 - `frontend/src/games/bombIt/components/BombBoard.tsx` — score, settle control, rematch beat.
 
 **Unchanged (re-verified at the gate)**
+
 - `usePvpBombIt.ts`, `usePvpChickenCross.ts`, `pvp/*`, all `battleship/*`.
 
 ---
@@ -64,6 +67,7 @@
 ## Task 1: ADR — multi-game self-play + per-game seed
 
 **Files:**
+
 - Create: `docs/decisions/0011-multi-game-self-play-per-game-seed.md`
 
 - [ ] **Step 1: Write the ADR**
@@ -120,11 +124,13 @@ git commit -m "docs(adr): multi-game self-play + per-game seed"
 Chicken-cross first — it already has the sponsor path, so it isolates the multi-game change.
 
 **Files:**
+
 - Create: `sui-tunnel-ts/src/protocol/multiGameCross.ts`
 - Create: `sui-tunnel-ts/src/protocol/multiGameCross.test.ts`
 - Modify: `sui-tunnel-ts/src/protocol/index.ts`
 
 **Interfaces:**
+
 - Consumes: `CrossProtocol`, `CrossState`, `CrossMove` from `./cross`; `Protocol`, `Party`, `Balances`, `ProtocolContext`, `protocolDomain`, `lengthPrefixedConcat` from `./Protocol`; `concatBytes` from `../core/bytes`; `u64ToBeBytes` from `../core/wire`.
 - Produces:
   - `interface MultiGameCrossState { inner: CrossState; gamesPlayed: number }`
@@ -179,10 +185,16 @@ test("plays many games on one tunnel, conserving balances every step", () => {
   const proto = new MultiGameCrossProtocol("0xt", 100n);
   const total = 200n;
   const rng = rngFrom(42);
-  let state = proto.initialState({ tunnelId: "0xt", initialBalances: { a: 100n, b: 100n } });
+  let state = proto.initialState({
+    tunnelId: "0xt",
+    initialBalances: { a: 100n, b: 100n },
+  });
   for (let g = 0; g < 3; g++) {
     state = playOneGame(proto, state, rng, total);
-    assert.ok(proto.isGameOver(state), "each game reached a terminal inner state");
+    assert.ok(
+      proto.isGameOver(state),
+      "each game reached a terminal inner state",
+    );
     if (proto.isTerminal(state)) break; // stake-exhausted (a decisive game moved all funds)
     // Rematch: the first move after terminal resets the inner board and starts game g+2.
     const by = state.inner.tick % 2n === 0n ? "A" : "B";
@@ -195,14 +207,21 @@ test("plays many games on one tunnel, conserving balances every step", () => {
 test("rematch re-seeds the inner game to a DIFFERENT board", () => {
   const proto = new MultiGameCrossProtocol("0xt", 100n);
   const rng = rngFrom(7);
-  let state = proto.initialState({ tunnelId: "0xt", initialBalances: { a: 100n, b: 100n } });
+  let state = proto.initialState({
+    tunnelId: "0xt",
+    initialBalances: { a: 100n, b: 100n },
+  });
   const seedG1 = state.inner.seed;
   state = playOneGame(proto, state, rng, 200n);
   // A push (winner null) keeps both fundable, guaranteeing a rematch is possible.
   if (!proto.isTerminal(state)) {
     state = proto.applyMove(state, { dirA: undefined }, "A");
     assert.equal(state.gamesPlayed, 1, "gamesPlayed bumped on the rematch");
-    assert.notEqual(state.inner.seed, seedG1, "game 2 uses a different per-game seed");
+    assert.notEqual(
+      state.inner.seed,
+      seedG1,
+      "game 2 uses a different per-game seed",
+    );
   }
 });
 
@@ -210,17 +229,27 @@ test("a finished game is not terminal while both sides can fund the next", () =>
   // A push (equal-score dead heat / tick cap tie) leaves balances at (100,100).
   const proto = new MultiGameCrossProtocol("0xt", 100n);
   // Construct a terminal-but-funded state directly: winner null, balances intact.
-  const base = new CrossProtocol().initialState({ tunnelId: "0xt:g1", initialBalances: { a: 100n, b: 100n } });
+  const base = new CrossProtocol().initialState({
+    tunnelId: "0xt:g1",
+    initialBalances: { a: 100n, b: 100n },
+  });
   const pushed = { ...base, tick: 5400n, winner: null as null }; // tick cap reached, no winner
   const state: MultiGameCrossState = { inner: pushed, gamesPlayed: 0 };
   assert.equal(proto.isGameOver(state), true, "inner game over (tick cap)");
-  assert.equal(proto.isTerminal(state), false, "session continues — both can fund");
+  assert.equal(
+    proto.isTerminal(state),
+    false,
+    "session continues — both can fund",
+  );
 });
 
 test("session IS terminal once a side cannot fund the next stake", () => {
   // Stake equals a seat's whole balance: after a decisive game a side is at 0.
   const proto = new MultiGameCrossProtocol("0xt", 100n);
-  const base = new CrossProtocol().initialState({ tunnelId: "0xt:g1", initialBalances: { a: 100n, b: 100n } });
+  const base = new CrossProtocol().initialState({
+    tunnelId: "0xt:g1",
+    initialBalances: { a: 100n, b: 100n },
+  });
   const aWon = { ...base, winner: "A" as const, balanceA: 200n, balanceB: 0n };
   const state: MultiGameCrossState = { inner: aWon, gamesPlayed: 0 };
   assert.equal(proto.isTerminal(state), true, "B at 0 cannot fund a 100 stake");
@@ -229,7 +258,10 @@ test("session IS terminal once a side cannot fund the next stake", () => {
 test("encodeState is deterministic and distinguishes gamesPlayed + domain", () => {
   const proto = new MultiGameCrossProtocol("0xt", 100n);
   const inner = new CrossProtocol();
-  const s = proto.initialState({ tunnelId: "0xt", initialBalances: { a: 100n, b: 100n } });
+  const s = proto.initialState({
+    tunnelId: "0xt",
+    initialBalances: { a: 100n, b: 100n },
+  });
   assert.deepEqual(proto.encodeState(s), proto.encodeState(s));
   const bumped: MultiGameCrossState = { inner: s.inner, gamesPlayed: 1 };
   assert.notDeepEqual(proto.encodeState(s), proto.encodeState(bumped));
@@ -267,7 +299,12 @@ import {
 } from "./Protocol";
 import { concatBytes } from "../core/bytes";
 import { u64ToBeBytes } from "../core/wire";
-import { CrossProtocol, MIN_STAKE, type CrossState, type CrossMove } from "./cross";
+import {
+  CrossProtocol,
+  MIN_STAKE,
+  type CrossState,
+  type CrossMove,
+} from "./cross";
 
 export interface MultiGameCrossState {
   /** The current single race (positions, scores, carried balances). */
@@ -279,9 +316,10 @@ export interface MultiGameCrossState {
 /** A move is a normal inner move; the first one after a game ends starts the next. */
 export type MultiGameCrossMove = CrossMove;
 
-export class MultiGameCrossProtocol
-  implements Protocol<MultiGameCrossState, MultiGameCrossMove>
-{
+export class MultiGameCrossProtocol implements Protocol<
+  MultiGameCrossState,
+  MultiGameCrossMove
+> {
   readonly name = "cross.multi.v1";
 
   private readonly domain = protocolDomain("cross.multi.v1");
@@ -298,11 +336,17 @@ export class MultiGameCrossProtocol
 
   /** Synthetic per-game id so each game's seed (and board) differs deterministically. */
   private gameCtx(gameNumber: number, balances: Balances): ProtocolContext {
-    return { tunnelId: `${this.tunnelId}:g${gameNumber}`, initialBalances: balances };
+    return {
+      tunnelId: `${this.tunnelId}:g${gameNumber}`,
+      initialBalances: balances,
+    };
   }
 
   initialState(ctx: ProtocolContext): MultiGameCrossState {
-    return { inner: this.inner.initialState(this.gameCtx(1, ctx.initialBalances)), gamesPlayed: 0 };
+    return {
+      inner: this.inner.initialState(this.gameCtx(1, ctx.initialBalances)),
+      gamesPlayed: 0,
+    };
   }
 
   /** Whether the CURRENT inner game is over (terminal), regardless of session funding. */
@@ -310,7 +354,11 @@ export class MultiGameCrossProtocol
     return this.inner.isTerminal(state.inner);
   }
 
-  applyMove(state: MultiGameCrossState, move: MultiGameCrossMove, by: Party): MultiGameCrossState {
+  applyMove(
+    state: MultiGameCrossState,
+    move: MultiGameCrossMove,
+    by: Party,
+  ): MultiGameCrossState {
     // Mid-game: delegate to the inner protocol (throws on an illegal move).
     if (!this.inner.isTerminal(state.inner)) {
       return { ...state, inner: this.inner.applyMove(state.inner, move, by) };
@@ -323,9 +371,15 @@ export class MultiGameCrossProtocol
     // game number, carry balances forward, bump gamesPlayed, and apply the move to it.
     const nextGame = state.gamesPlayed + 2; // game 1 used :g1; the running one is gamesPlayed+1
     const fresh = this.inner.initialState(
-      this.gameCtx(nextGame, { a: state.inner.balanceA, b: state.inner.balanceB }),
+      this.gameCtx(nextGame, {
+        a: state.inner.balanceA,
+        b: state.inner.balanceB,
+      }),
     );
-    return { inner: this.inner.applyMove(fresh, move, by), gamesPlayed: state.gamesPlayed + 1 };
+    return {
+      inner: this.inner.applyMove(fresh, move, by),
+      gamesPlayed: state.gamesPlayed + 1,
+    };
   }
 
   encodeState(state: MultiGameCrossState): Uint8Array {
@@ -347,16 +401,23 @@ export class MultiGameCrossProtocol
     return !this.canFundNextGame(state.inner); // between games: terminal only at exhaustion
   }
 
-  randomMove(state: MultiGameCrossState, by: Party, rng: () => number): MultiGameCrossMove | null {
+  randomMove(
+    state: MultiGameCrossState,
+    by: Party,
+    rng: () => number,
+  ): MultiGameCrossMove | null {
     // Mid-game, defer to the inner bot. Between games, return null — the session decides
     // whether to rematch (kickoff move) or settle; the simulator never auto-rematches.
-    if (!this.inner.isTerminal(state.inner)) return this.inner.randomMove(state.inner, by, rng);
+    if (!this.inner.isTerminal(state.inner))
+      return this.inner.randomMove(state.inner, by, rng);
     return null;
   }
 
   private canFundNextGame(inner: CrossState): boolean {
     if (this.stakePerSeat === 0n) return true;
-    return inner.balanceA >= this.stakePerSeat && inner.balanceB >= this.stakePerSeat;
+    return (
+      inner.balanceA >= this.stakePerSeat && inner.balanceB >= this.stakePerSeat
+    );
   }
 }
 ```
@@ -391,11 +452,13 @@ git commit -m "feat(sdk): multi-game chicken-cross protocol"
 ## Task 3: `MultiGameBombItProtocol` (SDK)
 
 **Files:**
+
 - Create: `sui-tunnel-ts/src/protocol/multiGameBombIt.ts`
 - Create: `sui-tunnel-ts/src/protocol/multiGameBombIt.test.ts`
 - Modify: `sui-tunnel-ts/src/protocol/index.ts`
 
 **Interfaces:**
+
 - Consumes: `BombItProtocol`, `BombItState`, `BombItMove`, `BOMB_IT_MIN_STATE`… use `BOMB_IT_MIN_STAKE` from `./bombIt`; same `Protocol` helpers as Task 2.
 - Produces: `MultiGameBombItState`, `MultiGameBombItMove`, `class MultiGameBombItProtocol` ctor `(tunnelId, stakePerSeat?)`, `isGameOver(state)`.
 
@@ -444,7 +507,10 @@ function playOneGame(
 test("plays many games on one tunnel, conserving balances every step", () => {
   const proto = new MultiGameBombItProtocol("0xb", 100n);
   const rng = rngFrom(42);
-  let state = proto.initialState({ tunnelId: "0xb", initialBalances: { a: 100n, b: 100n } });
+  let state = proto.initialState({
+    tunnelId: "0xb",
+    initialBalances: { a: 100n, b: 100n },
+  });
   for (let g = 0; g < 3; g++) {
     state = playOneGame(proto, state, rng, 200n);
     assert.ok(proto.isGameOver(state), "inner game terminal");
@@ -458,28 +524,49 @@ test("plays many games on one tunnel, conserving balances every step", () => {
 test("rematch re-seeds the inner game to a DIFFERENT grid", () => {
   const proto = new MultiGameBombItProtocol("0xb", 100n);
   const rng = rngFrom(7);
-  let state = proto.initialState({ tunnelId: "0xb", initialBalances: { a: 100n, b: 100n } });
+  let state = proto.initialState({
+    tunnelId: "0xb",
+    initialBalances: { a: 100n, b: 100n },
+  });
   const seedG1 = state.inner.seed;
   state = playOneGame(proto, state, rng, 200n);
   if (!proto.isTerminal(state)) {
     state = proto.applyMove(state, { a: "stay" }, "A");
     assert.equal(state.gamesPlayed, 1);
-    assert.notEqual(state.inner.seed, seedG1, "game 2 uses a different per-game seed");
+    assert.notEqual(
+      state.inner.seed,
+      seedG1,
+      "game 2 uses a different per-game seed",
+    );
   }
 });
 
 test("a DRAW is played-but-unscored and fundable-next (continues)", () => {
   const proto = new MultiGameBombItProtocol("0xb", 100n);
-  const base = new BombItProtocol().initialState({ tunnelId: "0xb:g1", initialBalances: { a: 100n, b: 100n } });
+  const base = new BombItProtocol().initialState({
+    tunnelId: "0xb:g1",
+    initialBalances: { a: 100n, b: 100n },
+  });
   const drawn = { ...base, winner: "draw" as const }; // both dead / tick cap ⇒ draw, balances intact
   const state: MultiGameBombItState = { inner: drawn, gamesPlayed: 0 };
-  assert.equal(proto.isGameOver(state), true, "draw is terminal for the inner game");
-  assert.equal(proto.isTerminal(state), false, "session continues — a draw moved no funds");
+  assert.equal(
+    proto.isGameOver(state),
+    true,
+    "draw is terminal for the inner game",
+  );
+  assert.equal(
+    proto.isTerminal(state),
+    false,
+    "session continues — a draw moved no funds",
+  );
 });
 
 test("session IS terminal once a side cannot fund the next stake", () => {
   const proto = new MultiGameBombItProtocol("0xb", 100n);
-  const base = new BombItProtocol().initialState({ tunnelId: "0xb:g1", initialBalances: { a: 100n, b: 100n } });
+  const base = new BombItProtocol().initialState({
+    tunnelId: "0xb:g1",
+    initialBalances: { a: 100n, b: 100n },
+  });
   const aWon = { ...base, winner: "A" as const, balanceA: 200n, balanceB: 0n };
   const state: MultiGameBombItState = { inner: aWon, gamesPlayed: 0 };
   assert.equal(proto.isTerminal(state), true);
@@ -488,7 +575,10 @@ test("session IS terminal once a side cannot fund the next stake", () => {
 test("encodeState is deterministic and distinguishes gamesPlayed + domain", () => {
   const proto = new MultiGameBombItProtocol("0xb", 100n);
   const inner = new BombItProtocol();
-  const s = proto.initialState({ tunnelId: "0xb", initialBalances: { a: 100n, b: 100n } });
+  const s = proto.initialState({
+    tunnelId: "0xb",
+    initialBalances: { a: 100n, b: 100n },
+  });
   assert.deepEqual(proto.encodeState(s), proto.encodeState(s));
   const bumped: MultiGameBombItState = { inner: s.inner, gamesPlayed: 1 };
   assert.notDeepEqual(proto.encodeState(s), proto.encodeState(bumped));
@@ -524,7 +614,12 @@ import {
 } from "./Protocol";
 import { concatBytes } from "../core/bytes";
 import { u64ToBeBytes } from "../core/wire";
-import { BombItProtocol, BOMB_IT_MIN_STAKE, type BombItState, type BombItMove } from "./bombIt";
+import {
+  BombItProtocol,
+  BOMB_IT_MIN_STAKE,
+  type BombItState,
+  type BombItMove,
+} from "./bombIt";
 
 export interface MultiGameBombItState {
   inner: BombItState;
@@ -532,9 +627,10 @@ export interface MultiGameBombItState {
 }
 export type MultiGameBombItMove = BombItMove;
 
-export class MultiGameBombItProtocol
-  implements Protocol<MultiGameBombItState, MultiGameBombItMove>
-{
+export class MultiGameBombItProtocol implements Protocol<
+  MultiGameBombItState,
+  MultiGameBombItMove
+> {
   readonly name = "bomb_it.multi.v1";
 
   private readonly domain = protocolDomain("bomb_it.multi.v1");
@@ -546,18 +642,28 @@ export class MultiGameBombItProtocol
   ) {}
 
   private gameCtx(gameNumber: number, balances: Balances): ProtocolContext {
-    return { tunnelId: `${this.tunnelId}:g${gameNumber}`, initialBalances: balances };
+    return {
+      tunnelId: `${this.tunnelId}:g${gameNumber}`,
+      initialBalances: balances,
+    };
   }
 
   initialState(ctx: ProtocolContext): MultiGameBombItState {
-    return { inner: this.inner.initialState(this.gameCtx(1, ctx.initialBalances)), gamesPlayed: 0 };
+    return {
+      inner: this.inner.initialState(this.gameCtx(1, ctx.initialBalances)),
+      gamesPlayed: 0,
+    };
   }
 
   isGameOver(state: MultiGameBombItState): boolean {
     return this.inner.isTerminal(state.inner);
   }
 
-  applyMove(state: MultiGameBombItState, move: MultiGameBombItMove, by: Party): MultiGameBombItState {
+  applyMove(
+    state: MultiGameBombItState,
+    move: MultiGameBombItMove,
+    by: Party,
+  ): MultiGameBombItState {
     if (!this.inner.isTerminal(state.inner)) {
       return { ...state, inner: this.inner.applyMove(state.inner, move, by) };
     }
@@ -566,9 +672,15 @@ export class MultiGameBombItProtocol
     }
     const nextGame = state.gamesPlayed + 2;
     const fresh = this.inner.initialState(
-      this.gameCtx(nextGame, { a: state.inner.balanceA, b: state.inner.balanceB }),
+      this.gameCtx(nextGame, {
+        a: state.inner.balanceA,
+        b: state.inner.balanceB,
+      }),
     );
-    return { inner: this.inner.applyMove(fresh, move, by), gamesPlayed: state.gamesPlayed + 1 };
+    return {
+      inner: this.inner.applyMove(fresh, move, by),
+      gamesPlayed: state.gamesPlayed + 1,
+    };
   }
 
   encodeState(state: MultiGameBombItState): Uint8Array {
@@ -590,14 +702,21 @@ export class MultiGameBombItProtocol
     return !this.canFundNextGame(state.inner);
   }
 
-  randomMove(state: MultiGameBombItState, by: Party, rng: () => number): MultiGameBombItMove | null {
-    if (!this.inner.isTerminal(state.inner)) return this.inner.randomMove(state.inner, by, rng);
+  randomMove(
+    state: MultiGameBombItState,
+    by: Party,
+    rng: () => number,
+  ): MultiGameBombItMove | null {
+    if (!this.inner.isTerminal(state.inner))
+      return this.inner.randomMove(state.inner, by, rng);
     return null;
   }
 
   private canFundNextGame(inner: BombItState): boolean {
     if (this.stakePerSeat === 0n) return true;
-    return inner.balanceA >= this.stakePerSeat && inner.balanceB >= this.stakePerSeat;
+    return (
+      inner.balanceA >= this.stakePerSeat && inner.balanceB >= this.stakePerSeat
+    );
   }
 }
 ```
@@ -622,10 +741,12 @@ git commit -m "feat(sdk): multi-game bomb-it protocol"
 ## Task 4: chicken-cross session-core — multi-game helpers
 
 **Files:**
+
 - Modify: `frontend/src/games/chickenCross/session-core.ts`
 - Test: `frontend/src/games/chickenCross/session-core.test.ts`
 
 **Interfaces:**
+
 - Consumes: `MultiGameCrossProtocol`, `MultiGameCrossState`, `MultiGameCrossMove` (type-only import); existing `HumanSeat`, `deriveView`, `CrossView`.
 - Produces:
   - `type StepOutcome = "stepped" | "game-over" | "session-over"`
@@ -637,7 +758,11 @@ git commit -m "feat(sdk): multi-game bomb-it protocol"
 
 ```ts
 import { MultiGameCrossProtocol } from "../../../../sui-tunnel-ts/src/protocol/multiGameCross.ts";
-import { stepMultiGame, kickoffNextGame, deriveMultiView } from "./session-core.ts";
+import {
+  stepMultiGame,
+  kickoffNextGame,
+  deriveMultiView,
+} from "./session-core.ts";
 
 function freshMultiTunnel() {
   const a = createParticipant("a");
@@ -711,7 +836,10 @@ Expected: FAIL — `stepMultiGame` not exported.
 Add type-only imports and the functions (keep the existing single-game exports unchanged):
 
 ```ts
-import type { MultiGameCrossProtocol, MultiGameCrossState } from "sui-tunnel-ts/protocol/multiGameCross";
+import type {
+  MultiGameCrossProtocol,
+  MultiGameCrossState,
+} from "sui-tunnel-ts/protocol/multiGameCross";
 import type { CrossMove } from "sui-tunnel-ts/protocol/cross";
 
 export type StepOutcome = "stepped" | "game-over" | "session-over";
@@ -783,10 +911,13 @@ git commit -m "feat(cross): multi-game session-core helpers"
 Rewrite `useChickenCrossSession` to battleship's out-of-React `BotSession` shape, driving the multi-game protocol. **Copy `frontend/src/games/battleship/useBattleship.ts` as the structural template** and apply the deltas below; the funding/sponsor/heartbeat/settle bodies are lifted from the CURRENT `useChickenCrossSession.ts` (which already has the correct sponsor path) and from battleship.
 
 **Files:**
+
 - Modify (rewrite): `frontend/src/games/chickenCross/useChickenCrossSession.ts`
 
 **Interfaces:**
+
 - Produces (the hook's return — superset of today's, additive so the window/board can adopt incrementally):
+
   ```ts
   interface ChickenCrossSession {
     status: "idle" | "funding" | "playing" | "settling" | "settled" | "error";
@@ -794,16 +925,16 @@ Rewrite `useChickenCrossSession` to battleship's out-of-React `BotSession` shape
     result: SessionResult | null;
     stake: number;
     error: string | null;
-    auto: boolean;                 // default true
-    score: { you: number; foe: number };   // NEW
-    gamesPlayed: number;                    // NEW
+    auto: boolean; // default true
+    score: { you: number; foe: number }; // NEW
+    gamesPlayed: number; // NEW
     start: (stake: number) => void;
     reset: () => void;
     setDir: (dir: CrossDir) => void;
     toggleAuto: () => void;
-    settleNow: () => void;          // NEW — settle the tunnel now (cash out)
+    settleNow: () => void; // NEW — settle the tunnel now (cash out)
   }
-  function useChickenCrossSession(windowId: string): ChickenCrossSession;  // NEW param
+  function useChickenCrossSession(windowId: string): ChickenCrossSession; // NEW param
   ```
 
 - [ ] **Step 1: Build the `CrossBotSession` class skeleton**
@@ -884,6 +1015,7 @@ Add module constants near the top: `const sleep = (ms:number)=>new Promise<void>
 - [ ] **Step 5: `start` — fund (sponsor path) + build the MULTI-game tunnel**
 
 Lift the funding block VERBATIM from the current `useChickenCrossSession.ts:124-211` (the `isDopamintConfigured` / `withSponsorFallback` open, `readCreatedAt`, transcript `onUpdate`, control-plane register, `flushHeartbeat`). Apply exactly these deltas:
+
 1. `const protocol = new MultiGameCrossProtocol(tunnelId, stakeBig);` — **after** `tunnelId` is known (funding returns it), not before.
 2. `const tunnel = OffchainTunnel.selfPlay(protocol, tunnelId, a.keyPair, b.keyPair, a.address, b.address, { a: stakeBig, b: stakeBig });`
 3. After `setStatus("playing"); this.pushView();` call `void this.advance();` (battleship-style) instead of the old `setInterval`.
@@ -917,6 +1049,7 @@ git commit -m "feat(cross): out-of-React multi-game solo session"
 ## Task 6: chicken-cross — window + board wiring (survival, score, settle)
 
 **Files:**
+
 - Modify: `frontend/src/games/chickenCross/ChickenCrossWindow.tsx`
 - Modify: `frontend/src/games/chickenCross/components/CrossBoard.tsx`
 
@@ -943,20 +1076,30 @@ git commit -m "feat(cross): solo survives remount; score + settle UI"
 Identical shape to Task 4, for bomb-it's action-based moves.
 
 **Files:**
+
 - Modify: `frontend/src/games/bombIt/session-core.ts`
 - Test: `frontend/src/games/bombIt/session-core.test.ts`
 
 **Interfaces:**
+
 - Produces: `StepOutcome`, `stepMultiGame(protocol: MultiGameBombItProtocol, tunnel, rng, human?)`, `kickoffNextGame(tunnel)` (steps `{ a: "stay" }`, "A"), `deriveMultiView(state): BombItView`.
 
 - [ ] **Step 1: Write the failing test** (append to `bombIt/session-core.test.ts`, mirroring Task 4's two new tests but with `MultiGameBombItProtocol`, `getAction`, and `{ a:"stay" }` kickoff). Assert `stepMultiGame` makes progress + `verifyCoSignedUpdate`, and `kickoffNextGame` bumps `gamesPlayed` to 1.
 
 ```ts
 import { MultiGameBombItProtocol } from "../../../../sui-tunnel-ts/src/protocol/multiGameBombIt.ts";
-import { stepMultiGame, kickoffNextGame, deriveMultiView } from "./session-core.ts";
+import {
+  stepMultiGame,
+  kickoffNextGame,
+  deriveMultiView,
+} from "./session-core.ts";
 // ...freshMultiTunnel() mirrors Task 4 with BombItProtocol's MIN stake (BOMB_IT_MIN_STAKE)
-test("stepMultiGame advances a multi-game duel and stays settleable", () => { /* mirror Task 4 */ });
-test("kickoffNextGame starts game 2 after a duel ends", () => { /* mirror Task 4, { a:'stay' } */ });
+test("stepMultiGame advances a multi-game duel and stays settleable", () => {
+  /* mirror Task 4 */
+});
+test("kickoffNextGame starts game 2 after a duel ends", () => {
+  /* mirror Task 4, { a:'stay' } */
+});
 ```
 
 (Repeat the full bodies from Task 4 with the bomb-it imports — do not abbreviate when writing the file.)
@@ -966,7 +1109,10 @@ test("kickoffNextGame starts game 2 after a duel ends", () => { /* mirror Task 4
 - [ ] **Step 3: Add helpers** to `bombIt/session-core.ts`:
 
 ```ts
-import type { MultiGameBombItProtocol, MultiGameBombItState } from "sui-tunnel-ts/protocol/multiGameBombIt";
+import type {
+  MultiGameBombItProtocol,
+  MultiGameBombItState,
+} from "sui-tunnel-ts/protocol/multiGameBombIt";
 import type { BombItMove } from "sui-tunnel-ts/protocol/bombIt";
 
 export type StepOutcome = "stepped" | "game-over" | "session-over";
@@ -1013,10 +1159,13 @@ export function deriveMultiView(state: MultiGameBombItState): BombItView {
 The biggest task: bomb-it gains BOTH the out-of-React multi-game session AND the sponsor/DOPAMINT/backend-settle path it lacks. **Copy `useChickenCrossSession.ts` AS REWRITTEN IN TASK 5** (it now has the exact shape AND the sponsor path) and swap the protocol/cadence/move type.
 
 **Files:**
+
 - Modify (rewrite): `frontend/src/games/bombIt/useBombItSession.ts`
 
 **Interfaces:**
+
 - Produces:
+
   ```ts
   interface BombItSession {
     status: "idle" | "funding" | "playing" | "settling" | "settled" | "error";
@@ -1024,16 +1173,16 @@ The biggest task: bomb-it gains BOTH the out-of-React multi-game session AND the
     result: BombItResult | null;
     stake: number;
     error: string | null;
-    auto: boolean;                        // default true
-    score: { you: number; foe: number };  // NEW
-    gamesPlayed: number;                   // NEW
+    auto: boolean; // default true
+    score: { you: number; foe: number }; // NEW
+    gamesPlayed: number; // NEW
     start: (stake: number) => void;
     reset: () => void;
     queueAction: (a: BombItAction) => void;
     toggleAuto: () => void;
-    settleNow: () => void;                 // NEW
+    settleNow: () => void; // NEW
   }
-  function useBombItSession(windowId: string): BombItSession;  // NEW param
+  function useBombItSession(windowId: string): BombItSession; // NEW param
   ```
 
 - [ ] **Step 1: Port the sponsor imports** — add to the top (these are the imports bomb-it is MISSING today; copy from chicken-cross): `Transcript`, `settleViaBackend`, `closeCooperativeWithRoot`, `useSponsoredSignExec`, `withSponsorFallback`, `DOPAMINT_COIN_TYPE`, `isDopamintConfigured`. Replace `closeCooperative` usage.
@@ -1044,18 +1193,35 @@ The biggest task: bomb-it gains BOTH the out-of-React multi-game session AND the
   - **Cadence:** bomb-it steps ONE tick per `SOLO_STEP_MS`, so the advance loop body is the single-step form (not the frame-budget batch):
     ```ts
     while (tunnel && protocol) {
-      const human = this.auto ? null : { seat: HUMAN_SEAT, getAction: () => { const a = this.pendingAction ?? "stay"; this.pendingAction = undefined; return a; } };
+      const human = this.auto
+        ? null
+        : {
+            seat: HUMAN_SEAT,
+            getAction: () => {
+              const a = this.pendingAction ?? "stay";
+              this.pendingAction = undefined;
+              return a;
+            },
+          };
       const boundary = stepMultiGame(protocol, tunnel, Math.random, human);
       if (boundary === "stepped") {
-        this.moveCount += 1; this.actions += 1; this.pushView(); this.flushHeartbeat(false);
-        await sleep(SOLO_STEP_MS); if (this.gen !== myGen || this.tunnel !== tunnel) return; continue;
+        this.moveCount += 1;
+        this.actions += 1;
+        this.pushView();
+        this.flushHeartbeat(false);
+        await sleep(SOLO_STEP_MS);
+        if (this.gen !== myGen || this.tunnel !== tunnel) return;
+        continue;
       }
       this.pushView();
       if (boundary === "session-over") break;
-      this.recordGameResult(); this.pushView();
+      this.recordGameResult();
+      this.pushView();
       if (!this.auto || this.settleRequested) break;
-      await sleep(BOMB_REMATCH_MS); if (this.gen !== myGen || this.tunnel !== tunnel) return;
-      kickoffNextGame(tunnel); this.pushView();
+      await sleep(BOMB_REMATCH_MS);
+      if (this.gen !== myGen || this.tunnel !== tunnel) return;
+      kickoffNextGame(tunnel);
+      this.pushView();
     }
     ```
     Add `const BOMB_REMATCH_MS = 700;`. Keep `SOLO_STEP_MS` imported from session-core.
@@ -1081,6 +1247,7 @@ git commit -m "feat(bomb-it): sponsored out-of-React multi-game session"
 ## Task 9: bomb-it — window + board wiring (survival, score, settle)
 
 **Files:**
+
 - Modify: `frontend/src/games/bombIt/BombItWindow.tsx`
 - Modify: `frontend/src/games/bombIt/components/BombBoard.tsx`
 
@@ -1107,6 +1274,7 @@ git commit -m "feat(bomb-it): solo survives remount; score + settle UI"
 ```bash
 cd sui-tunnel-ts && node --import tsx --test src/protocol/cross.test.ts src/protocol/bombIt.test.ts src/protocol/multiGameCross.test.ts src/protocol/multiGameBombIt.test.ts
 ```
+
 Expected: all PASS.
 
 - [ ] **Step 2: Frontend session-core suites**
@@ -1114,6 +1282,7 @@ Expected: all PASS.
 ```bash
 cd frontend && node --import tsx --test "src/games/bombIt/session-core.test.ts" "src/games/chickenCross/session-core.test.ts"
 ```
+
 Expected: all PASS.
 
 - [ ] **Step 3: Typecheck + build**
@@ -1121,11 +1290,13 @@ Expected: all PASS.
 ```bash
 cd frontend && pnpm typecheck && pnpm build
 ```
+
 Expected: 0 errors; build OK.
 
 - [ ] **Step 4: Run the app, manually verify the parity (per `superpowers:verification-before-completion`)**
 
 Use the `/run` flow. Confirm, for BOTH games:
+
 1. Open with a wallet connected → solo funds (sponsored — no "No valid gas coins" for bomb-it) and auto-plays.
 2. A finished game flashes a result, bumps the running score, and auto-rematches on the SAME tunnel (no second wallet prompt) with a visibly DIFFERENT board.
 3. Minimize then maximize (or resize) mid-match → the live match is still there (not back at the lobby).

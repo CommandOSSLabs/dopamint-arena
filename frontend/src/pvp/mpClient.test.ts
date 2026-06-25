@@ -167,6 +167,33 @@ test("typed events dispatch resume.ok / peer.resumed / peer.dropped", async () =
   assert.deepEqual(seen, ["ok:m1:true", "res:m1:B", "drop:m1"]);
 });
 
+test("channel side-channel round-trips a resync carrying bigint fullState", async () => {
+  const { mp } = mkClient();
+  await connect(mp);
+  const ch = mp.channel("m1");
+  let got: { fullState?: { balanceA?: unknown } } | null = null;
+  ch.onPeer((m) => {
+    got = m as never;
+  });
+  // resync's fullState is opaque adapter state; every game leaves bigint balances in it.
+  ch.sendPeer({
+    t: "resync",
+    nonce: "7",
+    hasPending: false,
+    fullState: { balanceA: 6100n, balanceB: 3900n },
+  } as never);
+  const ws = FakeWebSocket.instances[0];
+  const relayed = JSON.parse(ws.sent[ws.sent.length - 1]) as {
+    type: string;
+    matchId: string;
+    payload: string;
+  };
+  assert.equal(relayed.type, "relay");
+  // Feed the exact wire payload back: the receiver must revive the bigint, not a tagged object.
+  ws.recv({ type: "relay", matchId: "m1", payload: relayed.payload });
+  assert.equal(got!.fullState!.balanceA, 6100n);
+});
+
 // connect() resolves after the challenge; the FakeWebSocket created synchronously is instances[0].
 async function connect(mp: MpClient) {
   const p = mp.connect();

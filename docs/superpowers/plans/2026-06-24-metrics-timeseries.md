@@ -4,7 +4,7 @@
 
 **Goal:** Persist the TPS time-series in Aurora, serve **all** `/v1/stats/*` from the explorer service, and surface five headline metrics (current TPS, peak TPS, open tunnels, total transactions, total tunnels) plus a TPS graph on the explorer page — while making the counting paths stable for large CCU.
 
-**Architecture (CQRS read/write split):** **tunnel-manager** stays the write/aggregation engine — it owns the Valkey counters, computes the snapshot (tps via the rate window, peak, totals) and **publishes** it on Redis pub/sub `stats:snapshot`. The **explorer** becomes the single stats *read* API: it relays `/v1/stats/live` (SSE), persists samples to an Aurora `metric_bucket` and serves `/v1/stats/history`, alongside the existing `/v1/stats/explorer`. This removes the SSE broadcast fan-out from the latency-critical relay service and keeps tunnel-manager Valkey-only (ADR-0005/0009).
+**Architecture (CQRS read/write split):** **tunnel-manager** stays the write/aggregation engine — it owns the Valkey counters, computes the snapshot (tps via the rate window, peak, totals) and **publishes** it on Redis pub/sub `stats:snapshot`. The **explorer** becomes the single stats _read_ API: it relays `/v1/stats/live` (SSE), persists samples to an Aurora `metric_bucket` and serves `/v1/stats/history`, alongside the existing `/v1/stats/explorer`. This removes the SSE broadcast fan-out from the latency-critical relay service and keeps tunnel-manager Valkey-only (ADR-0005/0009).
 
 **Tech Stack:** Rust (axum, fred/Valkey, Diesel-async + sqlx/Postgres), Pulumi (TS), React/TS, `node:test` via tsx.
 
@@ -31,6 +31,7 @@
 ---
 
 ## Test commands (repo quirks)
+
 - Rust single test: `cargo test -p tunnel-manager <name>` / `cargo test -p explorer <name>` / `cargo test -p shared <name>` (run from `backend/`).
 - Frontend single test: `node --import tsx --test frontend/src/backend/useTpsHistory.test.ts` (`pnpm test` is broken on this Node — no `--test-isolation`).
 
@@ -116,6 +117,7 @@ if newly.is_some() {
     let _: Result<i64, _> = self.pool.incr("stats:tunnels:settled_count").await;
 }
 ```
+
 ```rust
 // in snapshot(): replace the settled SCARD with the counter GET
 let settled: i64 = self.pool.get("stats:tunnels:settled_count").await.ok().flatten().unwrap_or(0);
@@ -440,7 +442,11 @@ import { capSeries } from "./useTpsHistory";
 
 test("capSeries keeps the newest points within the window length", () => {
   const pts = Array.from({ length: 5 }, (_, i) => ({ t: i, v: i }));
-  assert.deepEqual(capSeries(pts, 3), [{ t: 2, v: 2 }, { t: 3, v: 3 }, { t: 4, v: 4 }]);
+  assert.deepEqual(capSeries(pts, 3), [
+    { t: 2, v: 2 },
+    { t: 3, v: 3 },
+    { t: 4, v: 4 },
+  ]);
 });
 ```
 
@@ -455,7 +461,9 @@ import { useBackendStats } from "./useBackendStats";
 export type TpsPoint = { t: number; v: number };
 
 export function capSeries(points: TpsPoint[], maxLen: number): TpsPoint[] {
-  return points.length <= maxLen ? points : points.slice(points.length - maxLen);
+  return points.length <= maxLen
+    ? points
+    : points.slice(points.length - maxLen);
 }
 
 /** Historical seed (one fetch) + live tail from each new SSE tps sample. */
@@ -465,17 +473,24 @@ export function useTpsHistory(windowSecs: number): TpsPoint[] {
   const lastT = useRef(0);
   useEffect(() => {
     let alive = true;
-    getControlPlaneClient().fetchStatsHistory(windowSecs)
-      .then((seed) => { if (alive) setSeries(seed); })
+    getControlPlaneClient()
+      .fetchStatsHistory(windowSecs)
+      .then((seed) => {
+        if (alive) setSeries(seed);
+      })
       .catch(() => {});
-    return () => { alive = false; };
+    return () => {
+      alive = false;
+    };
   }, [windowSecs]);
   useEffect(() => {
     if (!snapshot) return;
     const t = Math.floor(Date.now() / 1000);
     if (t === lastT.current) return;
     lastT.current = t;
-    setSeries((prev) => capSeries([...prev, { t, v: snapshot.tps }], windowSecs));
+    setSeries((prev) =>
+      capSeries([...prev, { t, v: snapshot.tps }], windowSecs),
+    );
   }, [snapshot, windowSecs]);
   return series;
 }
@@ -503,8 +518,11 @@ export function MetricsStrip() {
   const { snapshot, status } = useBackendStats();
   const s = status === "live" ? snapshot : null;
   const cards = [
-    ["Current TPS", s?.tps], ["Peak TPS", s?.peakTps], ["Open tunnels", s?.activeTunnels],
-    ["Total transactions", s?.totalActions], ["Total tunnels", s?.settledTunnels],
+    ["Current TPS", s?.tps],
+    ["Peak TPS", s?.peakTps],
+    ["Open tunnels", s?.activeTunnels],
+    ["Total transactions", s?.totalActions],
+    ["Total tunnels", s?.settledTunnels],
   ] as const;
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
@@ -526,14 +544,24 @@ import { useState } from "react";
 import { Panel, PanelHeader, PanelTitle } from "@/components/ui/panel";
 import { useTpsHistory, type TpsPoint } from "@/backend/useTpsHistory";
 
-const WINDOWS = [["15m", 900], ["1h", 3600], ["6h", 21600]] as const;
+const WINDOWS = [
+  ["15m", 900],
+  ["1h", 3600],
+  ["6h", 21600],
+] as const;
 
 function path(points: TpsPoint[], w: number, h: number): string {
   if (points.length < 2) return "";
   const xs = points.map((p) => p.t);
-  const minX = Math.min(...xs), maxX = Math.max(...xs), maxV = Math.max(...points.map((p) => p.v), 1);
-  return points.map((p, i) =>
-    `${i ? "L" : "M"}${((p.t - minX) / (maxX - minX || 1)) * w},${h - (p.v / maxV) * h}`).join(" ");
+  const minX = Math.min(...xs),
+    maxX = Math.max(...xs),
+    maxV = Math.max(...points.map((p) => p.v), 1);
+  return points
+    .map(
+      (p, i) =>
+        `${i ? "L" : "M"}${((p.t - minX) / (maxX - minX || 1)) * w},${h - (p.v / maxV) * h}`,
+    )
+    .join(" ");
 }
 
 export function TpsGraph() {
@@ -545,13 +573,29 @@ export function TpsGraph() {
         <PanelTitle>Throughput (TPS)</PanelTitle>
         <div className="ml-auto flex gap-1">
           {WINDOWS.map(([label, secs]) => (
-            <button key={secs} type="button" onClick={() => setWin(secs)}
-              className={`px-2 text-xs ${win === secs ? "text-primary" : "text-muted-foreground"}`}>{label}</button>
+            <button
+              key={secs}
+              type="button"
+              onClick={() => setWin(secs)}
+              className={`px-2 text-xs ${win === secs ? "text-primary" : "text-muted-foreground"}`}
+            >
+              {label}
+            </button>
           ))}
         </div>
       </PanelHeader>
-      <svg viewBox="0 0 600 120" className="h-32 w-full" preserveAspectRatio="none">
-        <path d={path(series, 600, 120)} fill="none" stroke="currentColor" strokeWidth={1.5} className="text-primary" />
+      <svg
+        viewBox="0 0 600 120"
+        className="h-32 w-full"
+        preserveAspectRatio="none"
+      >
+        <path
+          d={path(series, 600, 120)}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={1.5}
+          className="text-primary"
+        />
       </svg>
     </Panel>
   );

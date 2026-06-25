@@ -4,7 +4,7 @@
 
 **Goal:** Let a dropped player reconnect (to any instance) and re-attach to their in-flight match — by atomically rebinding the seat's `ConnRef`, notifying the peer, and invalidating the peer's relay cache — without adding a single Redis or on-chain op to the per-move hot path.
 
-**Architecture:** All server-side. A new atomic `rebind_match_conn` store primitive rebinds a seat's `ConnRef` in the match HASH. Four new wire messages (`resume`, `resume.ok`, `peer.resumed`, `peer.dropped`) carry the control flow. The peer's *backend* relay cache (the per-connection `matches` map in `handle_socket`) is invalidated via a new bus **eviction** path — a parallel per-connection control channel that routes an evict signal locally or cross-instance, leaving the hot-path client channel untouched. Live game-state reconciliation is client-side and is the **frontend follow-up plan**, not this one.
+**Architecture:** All server-side. A new atomic `rebind_match_conn` store primitive rebinds a seat's `ConnRef` in the match HASH. Four new wire messages (`resume`, `resume.ok`, `peer.resumed`, `peer.dropped`) carry the control flow. The peer's _backend_ relay cache (the per-connection `matches` map in `handle_socket`) is invalidated via a new bus **eviction** path — a parallel per-connection control channel that routes an evict signal locally or cross-instance, leaving the hot-path client channel untouched. Live game-state reconciliation is client-side and is the **frontend follow-up plan**, not this one.
 
 **Tech Stack:** Rust, `tokio`, `async-trait`, `fred` 9.x (Redis), `serde_json`. Redis integration tests use the `testcontainers` crate (ephemeral Redis per test) — see Task 0; they run as part of the normal suite and need Docker available.
 
@@ -22,13 +22,14 @@
 - **MATCH_TTL** already exists in `store/redis.rs` (6h). Rebind refreshes it.
 
 **Running tests:**
+
 - All tests (memory + pure + Redis integration): `cargo test -p tunnel-manager`. The Redis
   integration tests spin up their own ephemeral Redis via `testcontainers` (Task 0) — no manual
   container, no `TEST_REDIS_URL`, no `--test-threads=1`. **Docker must be available** at run time;
   if it is not, those tests fail (they no longer skip silently — that is the intended trade for
   hermetic, isolated runs).
 
-**Out of scope (frontend follow-up plan):** the `mpClient` reconnect loop, peer co-signed-state re-send, signature verification, and per-game checkpoint reconciliation (highest both-signed nonce wins). This plan establishes and tests the *server wire contract and mechanics* those will consume.
+**Out of scope (frontend follow-up plan):** the `mpClient` reconnect loop, peer co-signed-state re-send, signature verification, and per-game checkpoint reconciliation (highest both-signed nonce wins). This plan establishes and tests the _server wire contract and mechanics_ those will consume.
 
 ---
 
@@ -37,10 +38,12 @@
 Replace the legacy `#[ignore]` + `TEST_REDIS_URL` + manual-`docker` integration-test pattern with a `testcontainers`-based fixture that starts an ephemeral Redis per test. This makes the suite hermetic and per-test isolated (no shared global Redis → no `--test-threads=1`, no global-key collisions). Do this first so every new integration test in later tasks uses the fixture.
 
 **Files:**
+
 - Modify: `backend/tunnel-manager/Cargo.toml` (`[dev-dependencies]`: `testcontainers`, `testcontainers-modules`)
 - Modify: `backend/tunnel-manager/src/store/redis.rs` (`mod tests`: add `redis_fixture`; migrate existing ignored tests; remove `test_url`/`#[ignore]` gating)
 
 **Interfaces:**
+
 - Produces: `async fn redis_fixture() -> (ContainerAsync<Redis>, RedisPool)` in `store::redis::tests` — starts a Redis container, builds a pool from its mapped port, returns both (caller holds the container alive for the test). Every integration test calls `let (_redis, pool) = redis_fixture().await;`.
 
 - [ ] **Step 1: Add the dev-dependencies**
@@ -82,11 +85,13 @@ For each existing test in `store/redis.rs` `mod tests` marked `#[ignore = "requi
     let Some(url) = test_url() else { return };
     let pool = connect(&url).await.unwrap();      // or: ...connect(&url).await.unwrap() inline
 ```
+
 with
 
 ```rust
     let (_redis, pool) = redis_fixture().await;
 ```
+
 Keep the rest of each test body unchanged (they already use unique uuid keys). Tests that previously cleared a legacy global key (e.g. `del("stats:actions:total")`) no longer need to — each container is fresh — but leaving the `del` is harmless; remove it only if trivial. Delete the now-unused `test_url` helper once no test references it.
 
 - [ ] **Step 4: Run the full suite (now includes the migrated integration tests)**
@@ -97,6 +102,7 @@ Expected: PASS — the previously-ignored Redis tests now run (each on its own c
 - [ ] **Step 5: Lint + commit**
 
 Run: `cargo fmt && cargo clippy -p tunnel-manager --all-targets`
+
 ```bash
 git add backend/tunnel-manager/Cargo.toml backend/tunnel-manager/src/store/redis.rs
 git commit -m "test(store): use testcontainers for redis tests"
@@ -109,6 +115,7 @@ git commit -m "test(store): use testcontainers for redis tests"
 The foundation: rebind one seat's `ConnRef` in the match record atomically, authorized by seat ownership, identical in both store impls.
 
 **Files:**
+
 - Modify: `backend/tunnel-manager/src/mp/mod.rs` (add `Seat` enum near `MatchRecord`)
 - Modify: `backend/tunnel-manager/src/store/mod.rs` (add `rebind_match_conn` to the `MpStore` trait)
 - Modify: `backend/tunnel-manager/src/store/memory.rs` (impl on the in-memory `MpStore`)
@@ -116,6 +123,7 @@ The foundation: rebind one seat's `ConnRef` in the match record atomically, auth
 - Test: `backend/tunnel-manager/src/store/memory.rs` (unit), `backend/tunnel-manager/src/store/redis.rs` (ignored integration)
 
 **Interfaces:**
+
 - Consumes: existing `ConnRef`, `MatchRecord`, `MATCH_TTL`.
 - Produces: `pub enum Seat { A, B }`; `async fn rebind_match_conn(&self, match_id: &str, wallet: &str, at: ConnRef) -> Option<Seat>` on `MpStore`. Returns `Some(Seat)` for the rebound seat, `None` if the match is absent or `wallet` owns no seat.
 
@@ -187,7 +195,6 @@ async fn rebind_match_conn_rebinds_owning_seat_and_noops_otherwise() {
     assert_eq!(s.rebind_match_conn("nope", "0xa", cr("i4")).await, None);
 }
 ```
-
 
 - [ ] **Step 4: Run it to verify it fails**
 
@@ -320,6 +327,7 @@ Expected: both the memory unit test and the testcontainers-backed Redis test PAS
 - [ ] **Step 11: Lint + commit**
 
 Run: `cargo fmt && cargo clippy -p tunnel-manager --all-targets`
+
 ```bash
 git add backend/tunnel-manager/src/mp/mod.rs backend/tunnel-manager/src/store/mod.rs backend/tunnel-manager/src/store/memory.rs backend/tunnel-manager/src/store/redis.rs
 git commit -m "feat(store): add atomic rebind_match_conn"
@@ -332,9 +340,11 @@ git commit -m "feat(store): add atomic rebind_match_conn"
 Add the four messages and lock their exact wire shapes with round-trip tests (the FE contract).
 
 **Files:**
+
 - Modify: `backend/tunnel-manager/src/mp/protocol.rs` (add one `ClientMsg` + three `ServerMsg` variants; add round-trip tests)
 
 **Interfaces:**
+
 - Consumes: nothing new.
 - Produces: `ClientMsg::Resume { match_id }`; `ServerMsg::ResumeOk { match_id, role, opponent_wallet, game, peer_online }`, `ServerMsg::PeerResumed { match_id, seat, conn_ref }`, `ServerMsg::PeerDropped { match_id }`. `conn_ref` serializes the existing `ConnRef`.
 
@@ -431,6 +441,7 @@ Expected: PASS.
 - [ ] **Step 6: Lint + commit**
 
 Run: `cargo fmt && cargo clippy -p tunnel-manager --all-targets`
+
 ```bash
 git add backend/tunnel-manager/src/mp/protocol.rs
 git commit -m "feat(mp): add resume protocol messages"
@@ -440,9 +451,10 @@ git commit -m "feat(mp): add resume protocol messages"
 
 ### Task 3: Bus eviction path (peer relay-cache invalidation)
 
-Give the bus a way to tell a peer's *connection task* to drop a match from its relay cache, routed locally or cross-instance — without touching the hot-path client channel. A parallel per-connection **control** channel carries match-ids to evict; the connection loop drains it and removes the entry, so the next relay re-reads the match once (rare, post-resume) and picks up the rebound `ConnRef`.
+Give the bus a way to tell a peer's _connection task_ to drop a match from its relay cache, routed locally or cross-instance — without touching the hot-path client channel. A parallel per-connection **control** channel carries match-ids to evict; the connection loop drains it and removes the entry, so the next relay re-reads the match once (rare, post-resume) and picks up the rebound `ConnRef`.
 
 **Files:**
+
 - Modify: `backend/tunnel-manager/src/store/mod.rs` (`Bus` trait: `register` gains a ctrl sender; add `evict`)
 - Modify: `backend/tunnel-manager/src/store/memory.rs` (`LocalBus`: ctrl map, `evict`)
 - Modify: `backend/tunnel-manager/src/store/redis.rs` (`RedisBus`: ctrl map, `evict`, `WireMsg` enum, subscriber routing)
@@ -450,6 +462,7 @@ Give the bus a way to tell a peer's *connection task* to drop a match from its r
 - Test: `backend/tunnel-manager/src/store/redis.rs` (ignored), `backend/tunnel-manager/src/mp/ws.rs` (behavioral, if a harness exists)
 
 **Interfaces:**
+
 - Consumes: existing `Bus`, `ConnRef`, the per-connection `matches` cache.
 - Produces: `Bus::register(&self, conn, client_tx, ctrl_tx)` (ctrl carries `String` match-ids); `async fn Bus::evict(&self, target: &ConnRef, match_id: &str)`. After `evict`, the target connection removes `match_id` from its relay cache.
 
@@ -490,6 +503,7 @@ pub struct LocalBus {
     ctrls: RwLock<HashMap<ConnId, mpsc::UnboundedSender<String>>>,
 }
 ```
+
 Update `LocalBus::new` to init `ctrls: RwLock::new(HashMap::new())`. Then in `impl Bus for LocalBus`:
 
 ```rust
@@ -515,6 +529,7 @@ Update `LocalBus::new` to init `ctrls: RwLock::new(HashMap::new())`. Then in `im
         }
     }
 ```
+
 Leave `deliver` unchanged.
 
 - [ ] **Step 3: Update `RedisBus` — fields, register/unregister, WireMsg**
@@ -539,6 +554,7 @@ Add a `ctrls` field to `RedisBus` alongside `conns`:
 ```rust
     ctrls: std::sync::Arc<RwLock<HashMap<ConnId, mpsc::UnboundedSender<String>>>>,
 ```
+
 Initialize it in `RedisBus::new` (mirror `conns`: `let ctrls: ... = Default::default();` and `ctrls: ctrls.clone()` … wait — clone the Arc into the subscriber task, store the original in the struct; mirror exactly how `conns`/`conns_arc` is handled). Update `register`/`unregister` to insert/remove both maps with the new two-tx signature (same bodies as `LocalBus`).
 
 - [ ] **Step 4: Update the `RedisBus` subscriber loop to route `WireMsg`**
@@ -562,6 +578,7 @@ In `RedisBus::new`, the inbound task currently decodes `Wire` and sends `w.text`
                             }
                         }
 ```
+
 (Clone a `ctrls_arc = ctrls.clone()` into the task alongside `conns_arc`.)
 
 - [ ] **Step 5: Update `RedisBus::deliver` and add `evict`**
@@ -618,6 +635,7 @@ In `ws.rs` `handle_socket` (`:77`), after the client channel (`:80`), add a ctrl
     let (tx, mut rx) = mpsc::unbounded_channel::<String>();
     let (ctrl_tx, mut ctrl_rx) = mpsc::unbounded_channel::<String>();
 ```
+
 Find the `state.bus.register(conn_id, tx.clone())` site (inside `handle_message`'s `Connect`, `:195`, and the test harness at `:517`) — update both calls to the new two-arg form `register(conn_id, tx.clone(), ctrl_tx.clone())`. The `ctrl_tx` must be threaded into `handle_message`/`handle_authed` the same way `tx` is (add a `ctrl_tx: &mpsc::UnboundedSender<String>` param), OR register inside `handle_socket` instead — simplest: register in `handle_socket` right after creating the channels is NOT possible (registration happens on `Connect` to gate on auth). Thread `ctrl_tx` through `handle_message` → the `Connect` arm calls `register(conn_id, tx.clone(), ctrl_tx.clone())`. Update the `handle_message` signature and its call site (`:143-152`) accordingly.
 
 Then add a `select!` arm in the loop (`:102`) to drain evictions:
@@ -672,6 +690,7 @@ Expected: PASS. Confirm `relay_to_other` itself is unchanged (only the loop and 
 - [ ] **Step 9: Lint + commit**
 
 Run: `cargo fmt && cargo clippy -p tunnel-manager --all-targets`
+
 ```bash
 git add backend/tunnel-manager/src/store/mod.rs backend/tunnel-manager/src/store/memory.rs backend/tunnel-manager/src/store/redis.rs backend/tunnel-manager/src/mp/ws.rs
 git commit -m "feat(bus): add peer relay-cache eviction path"
@@ -684,10 +703,12 @@ git commit -m "feat(bus): add peer relay-cache eviction path"
 Handle `ClientMsg::Resume`: rebind the seat, compute `peer_online` from presence, warm this connection's relay cache, reply `ResumeOk`, deliver `PeerResumed` to the opponent, and `evict` the opponent's stale relay-cache entry.
 
 **Files:**
+
 - Modify: `backend/tunnel-manager/src/mp/ws.rs` (`handle_authed`: add the `ClientMsg::Resume` arm; the arm needs the per-connection `matches` cache and `conn_id`)
 - Test: `backend/tunnel-manager/src/mp/ws.rs` (behavioral, using the existing in-file test harness)
 
 **Interfaces:**
+
 - Consumes: `MpStore::rebind_match_conn`, `MpStore::get_match`, `MpStore::get_presence`, `Bus::deliver`, `Bus::evict`, the `matches` cache, `here(state, conn_id)`.
 - Produces: server emits `ResumeOk` to the resumer and `PeerResumed` + an evict signal to the opponent. On failure emits `Error("not_a_seat" | "match_gone")`.
 
@@ -812,7 +833,7 @@ In `ws.rs` `handle_authed` (`:207`), add an arm. **Important:** `handle_authed` 
         }
 ```
 
-Note: `as_role()` returns the *resumer's* seat. `PeerResumed.seat` is the resumer's seat (so the opponent knows which seat's `ConnRef` changed). `PeerResumed.conn_ref` is the resumer's new `ConnRef` (`me`).
+Note: `as_role()` returns the _resumer's_ seat. `PeerResumed.seat` is the resumer's seat (so the opponent knows which seat's `ConnRef` changed). `PeerResumed.conn_ref` is the resumer's new `ConnRef` (`me`).
 
 - [ ] **Step 4: Run the test to verify it passes**
 
@@ -827,6 +848,7 @@ Expected: PASS (no regressions).
 - [ ] **Step 6: Lint + commit**
 
 Run: `cargo fmt && cargo clippy -p tunnel-manager --all-targets`
+
 ```bash
 git add backend/tunnel-manager/src/mp/ws.rs
 git commit -m "feat(mp): handle resume re-attach"
@@ -839,10 +861,12 @@ git commit -m "feat(mp): handle resume re-attach"
 Notify the still-present seat when an opponent drops, so the FE can start its 60s grace timer. Make it robust (fires even if the dropper never relayed) by populating the per-connection `matches` cache at match creation, then iterating it on disconnect. Zero per-move cost.
 
 **Files:**
+
 - Modify: `backend/tunnel-manager/src/mp/ws.rs` (`handle_authed`: insert the created `MatchRecord` into `matches` at `QueueJoin`/`ChallengeAccept`; extract a `notify_peers_dropped` fn; call it from `handle_socket` on disconnect)
 - Test: `backend/tunnel-manager/src/mp/ws.rs` (behavioral)
 
 **Interfaces:**
+
 - Consumes: the per-connection `matches` cache, `Bus::deliver`, `conn_id`.
 - Produces: `async fn notify_peers_dropped(state: &SharedState, conn_id: ConnId, matches: &HashMap<String, MatchRecord>)` — for each cached match where `conn_id` is a seat, delivers `PeerDropped{match_id}` to the other seat. Called from `handle_socket` on disconnect.
 
@@ -886,6 +910,7 @@ In `ws.rs` `handle_authed`, at the two match-creation sites, insert the record i
 ```rust
                 matches.insert(match_id.clone(), rec.clone());
 ```
+
 Do the same after `build_challenge_match` (`:298`) once `match_id`/`rec` are known and persisted. (These are control-plane, per-match — not the hot path.)
 
 - [ ] **Step 4: Extract `notify_peers_dropped` and call it on disconnect**
@@ -924,6 +949,7 @@ Then call it in `handle_socket`'s disconnect cleanup (`:161-167`), before `bus.u
 ```rust
     notify_peers_dropped(&state, conn_id, &matches).await;
 ```
+
 Keep the existing `clear_presence_if` + `leave_queue` as-is.
 
 - [ ] **Step 5: Run the test to verify it passes**
@@ -939,6 +965,7 @@ Expected: PASS.
 - [ ] **Step 7: Lint + commit**
 
 Run: `cargo fmt && cargo clippy -p tunnel-manager --all-targets`
+
 ```bash
 git add backend/tunnel-manager/src/mp/ws.rs
 git commit -m "feat(mp): notify peer on disconnect"
@@ -951,6 +978,7 @@ git commit -m "feat(mp): notify peer on disconnect"
 Record the decision so the design is discoverable and the affinity/re-homing boundary is explicit.
 
 **Files:**
+
 - Create: `docs/decisions/0010-mp-resume-protocol.md`
 - Modify: `docs/decisions/0009-data-plane-local-control-plane-redis.md` (point its deferred "resume protocol" mention at ADR-0010)
 

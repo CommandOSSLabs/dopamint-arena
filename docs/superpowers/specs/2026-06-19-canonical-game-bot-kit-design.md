@@ -8,7 +8,7 @@ We want a flow of **bot-vs-bot** matches, generated on our server, whose on-chai
 and relay footprint **looks exactly like humans playing the real shipped game**.
 Four games (tic-tac-toe, blackjack, battleship, quantum-poker) were each built by
 a different person, so the bot/auto-play surface diverges per game. A future
-dev-server script must drive *any* game in a pool of tunnels uniformly — so the
+dev-server script must drive _any_ game in a pool of tunnels uniformly — so the
 per-game divergence has to be hidden behind one canonical contract first.
 
 This spec covers **only that preparation** — the contract each game conforms to,
@@ -19,19 +19,19 @@ AWS/Playwright/Node infra (deferred by request).
 ### What "looks exactly like human" reduces to
 
 The relay counts move frames opaquely (`relay_payload_is_move`, `kind:"move"`),
-so the live TPS *number* is already identical whether a bot or a human produces a
+so the live TPS _number_ is already identical whether a bot or a human produces a
 move. Two things actually matter — and timing is not one of them:
 
 1. **Settlement footprint.** Each protocol's `encodeState()` begins with a
    domain-separation tag (e.g. `tic_tac_toe.multi.v1`). That tag is hashed into
    the co-signed state hash on every move and anchored on-chain at cooperative
-   close. If the bot drives a *different* protocol class than the human frontend,
+   close. If the bot drives a _different_ protocol class than the human frontend,
    its settlements carry a different stamp and are bucketable by anyone auditing
    on-chain — even though the TPS counter looks perfect.
 2. **Move ordering.** Each tunnel must be a well-formed real game: moves emitted
    in the legal sequence a real game follows (turn alternation, commit→reveal→
    shoot, bet→play→settle), every one accepted by the protocol. Correct move
-   *order* — not timing — is what makes a tunnel indistinguishable from human play.
+   _order_ — not timing — is what makes a tunnel indistinguishable from human play.
 
 **Speed is deliberately not a fidelity constraint.** Throughput is the whole
 point, and a human could never produce the target TPS — so there is no artificial
@@ -43,17 +43,17 @@ realism comes from the correct move sequence, not wall-clock cadence.
 **Byte-identical to the deployed game.** The bot must drive the **same protocol
 class the human `usePvp*` hook uses**, so settlements are indistinguishable. The
 frontend protocol is the source of truth — **not** the SDK base protocols, which
-are treated as a parallel/preference implementation and are *not* authoritative
+are treated as a parallel/preference implementation and are _not_ authoritative
 for the fleet.
 
 ### Verified starting state
 
-| Game | Real wire protocol (human hook) | Headless bot brain that exists | Bot vs human settlement today |
-|---|---|---|---|
-| quantum-poker | `QuantumPokerProtocol` (SDK, shared by hook) | `QuantumPokerPersonaDriver` (per-seat, full betting + plumbing) | **byte-identical** ✅ |
-| tic-tac-toe | `MultiGameTicTacToeProtocol` (`…multi.v1`) | `optimalMoves`/`pickCell` minimax | distinguishable (fleet drives SDK `…v1`) |
-| blackjack | `BlackjackBetProtocol` (`…bet.v1`, variable bet) | basic strategy + `handValue` | distinguishable (fleet drives SDK `…v1`) |
-| battleship | `BattleshipProtocol` (`…v1`) | `pickShot` + `selfPlay.ts` (owns **both** fleets) | no headless bot exists |
+| Game          | Real wire protocol (human hook)                  | Headless bot brain that exists                                  | Bot vs human settlement today            |
+| ------------- | ------------------------------------------------ | --------------------------------------------------------------- | ---------------------------------------- |
+| quantum-poker | `QuantumPokerProtocol` (SDK, shared by hook)     | `QuantumPokerPersonaDriver` (per-seat, full betting + plumbing) | **byte-identical** ✅                    |
+| tic-tac-toe   | `MultiGameTicTacToeProtocol` (`…multi.v1`)       | `optimalMoves`/`pickCell` minimax                               | distinguishable (fleet drives SDK `…v1`) |
+| blackjack     | `BlackjackBetProtocol` (`…bet.v1`, variable bet) | basic strategy + `handValue`                                    | distinguishable (fleet drives SDK `…v1`) |
+| battleship    | `BattleshipProtocol` (`…v1`)                     | `pickShot` + `selfPlay.ts` (owns **both** fleets)               | no headless bot exists                   |
 
 All four FE protocol classes are **pure TypeScript** (no React) and already
 `implement` the SDK `Protocol<State, Move>` interface. The blocker was never React
@@ -63,12 +63,12 @@ and a both-fleets-only driver.
 
 ## Stakeholders
 
-| Stakeholder | Interest in this spec | Approval needed |
-|---|---|---|
+| Stakeholder                                         | Interest in this spec                                                   | Approval needed          |
+| --------------------------------------------------- | ----------------------------------------------------------------------- | ------------------------ |
 | Game authors (ttt / blackjack / battleship / poker) | Own `frontend/src/games/<game>/agent/kit.ts` and keep bot logic correct | Yes — per-kit acceptance |
-| Fleet/driver author | Consumes `GAME_KITS` registry in the future driver | Yes — contract is usable |
-| Protocol/audit reviewer | Verifies on-chain settlements are indistinguishable from human play | Yes — domain-tag parity |
-| `sui-tunnel-ts` upstream maintainer | Confirms the SDK stays untouched | Advisory |
+| Fleet/driver author                                 | Consumes `GAME_KITS` registry in the future driver                      | Yes — contract is usable |
+| Protocol/audit reviewer                             | Verifies on-chain settlements are indistinguishable from human play     | Yes — domain-tag parity  |
+| `sui-tunnel-ts` upstream maintainer                 | Confirms the SDK stays untouched                                        | Advisory                 |
 
 ## Success metrics
 
@@ -80,8 +80,8 @@ and a both-fleets-only driver.
 
 ## Decision — Approach A: per-game `GameKit` adapter + registry
 
-Each game exports one small, pure-TS **adapter** that wraps its *existing* FE
-protocol and *existing* AI behind a uniform contract. A central registry maps a
+Each game exports one small, pure-TS **adapter** that wraps its _existing_ FE
+protocol and _existing_ AI behind a uniform contract. A central registry maps a
 game id to its kit. A future driver — browser or Node — consumes only the
 registry and stays game-agnostic.
 
@@ -94,17 +94,17 @@ code owned by four people, over-built for "preparation".
 
 ```ts
 type GameId = "tictactoe" | "blackjack" | "battleship" | "quantum-poker";
-type StateHash = string;   // opaque digest of a protocol state; used for idempotency
+type StateHash = string; // opaque digest of a protocol state; used for idempotency
 
 interface BotContext {
-  rngForSeat(seat: Party): () => number;   // per-seat, seeded, reproducible stream
+  rngForSeat(seat: Party): () => number; // per-seat, seeded, reproducible stream
   // (per-game tuning — difficulty, persona — may be added by a kit as needed)
 }
 
 interface GameKit<S, M> {
   id: GameId;
-  protocol: Protocol<S, M>;                       // the REAL FE class the human hook uses
-  stateHash(state: S): StateHash;                 // stable digest for idempotency checks
+  protocol: Protocol<S, M>; // the REAL FE class the human hook uses
+  stateHash(state: S): StateHash; // stable digest for idempotency checks
   createBot(seat: Party, ctx: BotContext): GameBot<S, M>;
   defaultStake: bigint;
 }
@@ -139,7 +139,7 @@ fields.
 
 - **`protocol` is the FE class.** Never the SDK base class. A test asserts each
   kit's `protocol.name`/domain equals the domain the human `usePvp*` hook drives.
-- **`createBot` is per-seat and stateful.** It generates and holds *only its own*
+- **`createBot` is per-seat and stateful.** It generates and holds _only its own_
   secret (battleship fleet, poker slots) and memory (battleship targeting). It
   must never need the opponent's secret — that is what lets one bot instance be
   one seat in a genuine `wallet_i` vs `wallet_j` tunnel ([ADR-0006](../../decisions/0006-genuine-two-party-only-drop-self-play.md)).
@@ -162,7 +162,7 @@ Frontend-side — **not** the SDK (matches "don't rely on the SDK"; keeps upstre
 - `frontend/src/agent/gameKit.ts` — the `GameKit` / `GameBot` / `BotContext`
   types and the `GAME_KITS` registry.
 - `frontend/src/agent/games/<game>/kit.ts` — each game owns its adapter in a
-  dedicated, import-hygienic directory. The adapter only *wraps* existing code;
+  dedicated, import-hygienic directory. The adapter only _wraps_ existing code;
   it does not modify game internals.
 
 **Boundary rule:** a kit module and everything it transitively imports may only
@@ -182,12 +182,12 @@ under `tsx`.
 
 ## Per-game adapter plan
 
-| Game | Effort | `protocol` | Wraps | Adapter work |
-|---|---|---|---|---|
-| quantum-poker | near-zero | `QuantumPokerProtocol` | `QuantumPokerPersonaDriver.chooseMove(state, rng)` | wrap `chooseMove` as `plan`. Driver already per-seat, covers betting + plumbing + `next_hand`, returns `null` off-turn. `confirm` advances any internal hand/round memory only after the move co-signs. |
-| tic-tac-toe | low | `MultiGameTicTacToeProtocol` | `optimalMoves`/`pickCell` | `plan`: inner not terminal → `{cell: pickCell(...)}`; inner terminal & session not terminal → any `TicTacToeMove` to advance (value ignored by `applyMove`). `confirm` is a no-op because there is no retained memory. |
-| blackjack | low | `BlackjackBetProtocol` | basic strategy + `handValue` | `plan`: betting phase → pick a plausible bet from `BET_OPTIONS` clamped to balance; player phase → hit `< 17` else stand; handle next-round. Play whichever seat is to act (`getPlayerParty(round)`). `confirm` updates the bot's copy of the round only after the move is accepted. |
-| battleship | **moderate** | `BattleshipProtocol` | `pickShot`, `merkle`, `fleet` | refactor `selfPlay.ts` from owning **both** fleets to a **per-seat** bot: generate only this seat's fleet, hold its secret + targeting memory; `plan` emits `commit` (if not committed), truthful `reveal` (if a shot is pending against me), or `{type:"shoot", cell: pickShot(...)}`; else `null`. `confirm` advances targeting memory only after the move co-signs. No new algorithms; reuses the commit-reveal design in `battleship/protocol/battleship.ts`. |
+| Game          | Effort       | `protocol`                   | Wraps                                              | Adapter work                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| ------------- | ------------ | ---------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| quantum-poker | near-zero    | `QuantumPokerProtocol`       | `QuantumPokerPersonaDriver.chooseMove(state, rng)` | wrap `chooseMove` as `plan`. Driver already per-seat, covers betting + plumbing + `next_hand`, returns `null` off-turn. `confirm` advances any internal hand/round memory only after the move co-signs.                                                                                                                                                                                                                                                           |
+| tic-tac-toe   | low          | `MultiGameTicTacToeProtocol` | `optimalMoves`/`pickCell`                          | `plan`: inner not terminal → `{cell: pickCell(...)}`; inner terminal & session not terminal → any `TicTacToeMove` to advance (value ignored by `applyMove`). `confirm` is a no-op because there is no retained memory.                                                                                                                                                                                                                                            |
+| blackjack     | low          | `BlackjackBetProtocol`       | basic strategy + `handValue`                       | `plan`: betting phase → pick a plausible bet from `BET_OPTIONS` clamped to balance; player phase → hit `< 17` else stand; handle next-round. Play whichever seat is to act (`getPlayerParty(round)`). `confirm` updates the bot's copy of the round only after the move is accepted.                                                                                                                                                                              |
+| battleship    | **moderate** | `BattleshipProtocol`         | `pickShot`, `merkle`, `fleet`                      | refactor `selfPlay.ts` from owning **both** fleets to a **per-seat** bot: generate only this seat's fleet, hold its secret + targeting memory; `plan` emits `commit` (if not committed), truthful `reveal` (if a shot is pending against me), or `{type:"shoot", cell: pickShot(...)}`; else `null`. `confirm` advances targeting memory only after the move co-signs. No new algorithms; reuses the commit-reveal design in `battleship/protocol/battleship.ts`. |
 
 The shared one-time cost is `gameKit.ts` (types + registry) plus a local two-bot
 test harness.
@@ -232,7 +232,7 @@ when protocol.isTerminal(state): settle root-anchored, exactly as a human
   only the harness differs. The production fleet driver is still deferred.
 - **No cadence.** Bots emit the next move as soon as the prior one co-signs, so a
   lane runs at max throughput — a human pace could never hit the target TPS.
-  Realism is the *correct move order*, which per-seat `plan` + protocol legality
+  Realism is the _correct move order_, which per-seat `plan` + protocol legality
   already guarantee; timing is intentionally not modeled.
 
 ## Failure modes & timeouts
@@ -273,7 +273,7 @@ are not two competing answers to "what does a bot drive".
 
 ## Testing (verifies intent, not just behavior)
 
-- **Domain-tag parity** *(the important one)*: each kit's `protocol` produces the
+- **Domain-tag parity** _(the important one)_: each kit's `protocol` produces the
   same domain / `encodeState` shape as the corresponding human `usePvp*` hook.
   Fails loudly if a kit is pointed at an SDK base class.
 - **Move legality**: two local bots driven to terminal never produce a move that

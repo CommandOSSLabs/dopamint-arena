@@ -20,17 +20,36 @@ export interface BackendArgs {
   // Secrets Manager ARN holding the base64 ed25519 settler key, injected as
   // SUI_SETTLER_KEY via ECS `secrets`. Omitted => the env var is simply absent.
   settlerKeySecretArn?: pulumi.Input<string>;
+  // Ollama sidecar for the chat-v2 feature. Defaults off so existing tests and
+  // small environments keep the current 1024/2048 task size.
+  ollamaEnabled?: pulumi.Input<boolean>;
+  // Model to pull and proxy (e.g. qwen2.5:1.8b). Only used when ollamaEnabled.
+  ollamaModel?: pulumi.Input<string>;
+  // Tag of the ollama/ollama image to run as the sidecar.
+  ollamaImageTag?: pulumi.Input<string>;
 }
 
 function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
+  const repositoryUrl = pulumi.output(args.repositoryUrl);
+  const imageTag = pulumi.output(args.imageTag);
+  const pubSubEndpoint = pulumi.output(args.pubSubEndpoint);
+  const cacheEndpoint = pulumi.output(args.cacheEndpoint);
+  const logGroupName = pulumi.output(args.logGroupName);
+  const settlerKeySecretArn = pulumi.output(
+    args.settlerKeySecretArn ?? undefined,
+  );
+  const ollamaEnabled = pulumi.output(args.ollamaEnabled ?? false);
+  const ollamaModel = pulumi.output(args.ollamaModel ?? "qwen2.5:1.8b");
+  const ollamaImageTag = pulumi.output(args.ollamaImageTag ?? "0.6.2");
+
   return pulumi
     .all([
-      args.repositoryUrl,
-      args.imageTag,
-      args.pubSubEndpoint,
-      args.cacheEndpoint,
-      args.logGroupName,
-      args.settlerKeySecretArn ?? pulumi.output(undefined),
+      repositoryUrl,
+      imageTag,
+      pubSubEndpoint,
+      cacheEndpoint,
+      logGroupName,
+      settlerKeySecretArn,
     ])
     .apply(
       ([
@@ -41,13 +60,10 @@ function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
         logGroupName,
         settlerKeySecretArn,
       ]) =>
-        JSON.stringify([
-          {
-            name: "backend",
-            image: `${repositoryUrl}:${imageTag}`,
-            essential: true,
-            portMappings: [{ containerPort: 8080, protocol: "tcp" }],
-            environment: [
+        pulumi
+          .all([ollamaEnabled, ollamaModel, ollamaImageTag])
+          .apply(([ollamaEnabled, ollamaModel, ollamaImageTag]) => {
+            const backendEnv = [
               {
                 name: "REDIS_PUBSUB_URL",
                 value: `rediss://${pubSubEndpoint}:6379`,
@@ -80,36 +96,91 @@ function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
                 name: "WALRUS_AGGREGATOR_URL",
                 value: "https://aggregator.walrus-testnet.walrus.space",
               },
-            ],
-            // Private key: injected from Secrets Manager, never inlined as plaintext env.
-            ...(settlerKeySecretArn
-              ? {
-                  secrets: [
-                    { name: "SUI_SETTLER_KEY", valueFrom: settlerKeySecretArn },
-                  ],
-                }
-              : {}),
-            logConfiguration: {
-              logDriver: "awslogs",
-              options: {
-                "awslogs-group": logGroupName,
-                "awslogs-region": aws.config.region ?? "us-east-1",
-                "awslogs-stream-prefix": "backend",
+            ];
+
+            if (ollamaEnabled) {
+              backendEnv.push(
+                { name: "OLLAMA_URL", value: "http://localhost:11434" },
+                { name: "OLLAMA_MODEL", value: ollamaModel },
+              );
+            }
+
+            const backendContainer = {
+              name: "backend",
+              image: `${repositoryUrl}:${imageTag}`,
+              essential: true,
+              portMappings: [{ containerPort: 8080, protocol: "tcp" }],
+              environment: backendEnv,
+              // Private key: injected from Secrets Manager, never inlined as plaintext env.
+              ...(settlerKeySecretArn
+                ? {
+                    secrets: [
+                      {
+                        name: "SUI_SETTLER_KEY",
+                        valueFrom: settlerKeySecretArn,
+                      },
+                    ],
+                  }
+                : {}),
+              logConfiguration: {
+                logDriver: "awslogs",
+                options: {
+                  "awslogs-group": logGroupName,
+                  "awslogs-region": aws.config.region ?? "us-east-1",
+                  "awslogs-stream-prefix": "backend",
+                },
               },
-            },
-            healthCheck: {
-              command: [
-                "CMD-SHELL",
-                "curl -f http://localhost:8080/health/live || exit 1",
-              ],
-              interval: 30,
-              timeout: 5,
-              retries: 3,
-              startPeriod: 60,
-            },
-            stopTimeout: 30,
-          },
-        ]),
+              healthCheck: {
+                command: [
+                  "CMD-SHELL",
+                  "curl -f http://localhost:8080/health/live || exit 1",
+                ],
+                interval: 30,
+                timeout: 5,
+                retries: 3,
+                startPeriod: 60,
+              },
+              stopTimeout: 30,
+            };
+
+            const containers: unknown[] = [backendContainer];
+
+            if (ollamaEnabled) {
+              containers.push({
+                name: "ollama",
+                image: `ollama/ollama:${ollamaImageTag}`,
+                essential: false,
+                portMappings: [{ containerPort: 11434, protocol: "tcp" }],
+                environment: [{ name: "OLLAMA_KEEP_ALIVE", value: "-1" }],
+                // Override the image entrypoint so we can pull the model before serving.
+                entryPoint: ["/bin/sh", "-c"],
+                command: [
+                  `ollama serve & sleep 5 && ollama pull ${ollamaModel} && wait`,
+                ],
+                logConfiguration: {
+                  logDriver: "awslogs",
+                  options: {
+                    "awslogs-group": logGroupName,
+                    "awslogs-region": aws.config.region ?? "us-east-1",
+                    "awslogs-stream-prefix": "ollama",
+                  },
+                },
+                healthCheck: {
+                  command: [
+                    "CMD-SHELL",
+                    "ollama list >/dev/null 2>&1 || exit 1",
+                  ],
+                  interval: 30,
+                  timeout: 10,
+                  retries: 5,
+                  startPeriod: 180,
+                },
+                stopTimeout: 30,
+              });
+            }
+
+            return JSON.stringify(containers);
+          }),
     );
 }
 
@@ -143,12 +214,18 @@ export function createBackend(args: BackendArgs): BackendOutputs {
   const containerDefinitions = makeContainerDefinitions(args);
   const migrationContainerDefinitions = makeMigrationContainerDefinitions(args);
 
+  const ollamaEnabled = pulumi.output(args.ollamaEnabled ?? false);
+  const taskCpu = ollamaEnabled.apply((enabled) => (enabled ? "2048" : "1024"));
+  const taskMemory = ollamaEnabled.apply((enabled) =>
+    enabled ? "4096" : "2048",
+  );
+
   const taskDefinition = new aws.ecs.TaskDefinition(`${name}-backend-td`, {
     family: `${name}-backend`,
     networkMode: "awsvpc",
     requiresCompatibilities: ["FARGATE"],
-    cpu: "1024",
-    memory: "2048",
+    cpu: taskCpu,
+    memory: taskMemory,
     runtimePlatform: {
       cpuArchitecture: "ARM64",
       operatingSystemFamily: "LINUX",

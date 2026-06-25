@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-17
 **Status:** Approved (design); pending implementation plan
-**Scope:** Add a *Caro* (Gomoku / five-in-a-row) play style to the existing TicTacToe
+**Scope:** Add a _Caro_ (Gomoku / five-in-a-row) play style to the existing TicTacToe
 game, alongside the current 3×3 board, settled on-chain through the same tunnel flow.
 
 ---
@@ -25,7 +25,7 @@ self-play → `update_state` → `close_cooperative_with_root`).
   wins (overlines count). A full board with no winner is a **draw**.
 - **Play mode:** **bot-vs-bot only** (auto-loop + single game), matching today's TTT. No
   human-vs-bot mode (TTT has none today; out of scope).
-- **Stake:** 0 (like TTT). The board *is* the state; per-game results are tracked as a
+- **Stake:** 0 (like TTT). The board _is_ the state; per-game results are tracked as a
   local score, balances stay constant.
 
 ### Non-goals
@@ -77,11 +77,19 @@ export type CaroBoard = number[]; // length size*size, values 0|1|2
 
 // 5+ consecutive `mark` through `idx` in any of the 4 axes -> mark, else 0.
 // O(1): only scans outward from the move just played.
-export function winnerAround(board: CaroBoard, size: number, idx: number): number;
+export function winnerAround(
+  board: CaroBoard,
+  size: number,
+  idx: number,
+): number;
 
-export function isFull(board: CaroBoard): boolean;          // no empty cell -> draw
+export function isFull(board: CaroBoard): boolean; // no empty cell -> draw
 export function inBounds(size: number, r: number, c: number): boolean;
-export function applyMark(board: CaroBoard, idx: number, mark: number): CaroBoard; // pure copy
+export function applyMark(
+  board: CaroBoard,
+  idx: number,
+  mark: number,
+): CaroBoard; // pure copy
 ```
 
 `winnerAround` checks directions `(0,1) (1,0) (1,1) (1,-1)`; for each it counts contiguous
@@ -91,16 +99,16 @@ same-mark cells in both directions from `idx`; if `1 + forward + backward >= 5` 
 
 ```ts
 export interface CaroState {
-  board: number[];        // length size*size
-  size: number;           // board edge length (9..29)
-  turn: "A" | "B";        // side to move
-  winner: number;         // 0 none | 1 A | 2 B | 3 draw
-  lastMove: number;       // last placed index, -1 at start (for UI highlight + O(1) win-check)
-  balanceA: bigint;       // carried for multi-game parity; constant at stake 0
+  board: number[]; // length size*size
+  size: number; // board edge length (9..29)
+  turn: "A" | "B"; // side to move
+  winner: number; // 0 none | 1 A | 2 B | 3 draw
+  lastMove: number; // last placed index, -1 at start (for UI highlight + O(1) win-check)
+  balanceA: bigint; // carried for multi-game parity; constant at stake 0
   balanceB: bigint;
-  stake: bigint;          // 0 for caro
+  stake: bigint; // 0 for caro
 }
-export type CaroMove = { cell: number };  // flat board index (same shape as TTT move)
+export type CaroMove = { cell: number }; // flat board index (same shape as TTT move)
 ```
 
 - `initialState(ctx)`: empty `size*size` board, `turn:"A"`, `winner:0`, `lastMove:-1`,
@@ -150,14 +158,17 @@ Minimax cannot scale to an N×N caro board, so the bot uses a **threat-scoring h
 
 ```ts
 export function pickCaroMove(
-  state: CaroState, by: "A" | "B", rng: () => number, strength: "strong" | "weak",
-): number;  // returns a flat board index (a legal empty cell)
+  state: CaroState,
+  by: "A" | "B",
+  rng: () => number,
+  strength: "strong" | "weak",
+): number; // returns a flat board index (a legal empty cell)
 ```
 
 - **Candidates:** empty cells within Chebyshev distance `R` of any placed stone
   (`R = 2` for `strong`, `1` for `weak`). First move (empty board) → center index.
-- **Scoring:** for each candidate, score the runs it *makes for me* and *blocks for the
-  opponent* across the 4 axes, with priority:
+- **Scoring:** for each candidate, score the runs it _makes for me_ and _blocks for the
+  opponent_ across the 4 axes, with priority:
   `make 5 (win) ≫ block opponent 5 ≫ make open-4 > block open-4 > make/own open-3 > …`.
   `weak` uses only own-extension + immediate block (greedy); `strong` adds open-4/open-3
   threat weighting and a larger radius.

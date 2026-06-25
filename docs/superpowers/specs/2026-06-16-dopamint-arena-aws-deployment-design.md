@@ -41,11 +41,11 @@ The 1M TPS target is **not a backend throughput requirement**. It is generated b
 
 Local benchmark results on a 12-core laptop:
 
-| Run | Tunnels | Workers | Avg TPS | Peak TPS |
-|---|---|---|---|---|
-| Default | 1,000 | 11/12 | 58,309 | 381,058 |
-| Larger | 10,000 | 11/12 | 61,694 | 909,090 |
-| Spread | 20,000 | 6/12 | 41,506 | **1,197,605** |
+| Run     | Tunnels | Workers | Avg TPS | Peak TPS      |
+| ------- | ------- | ------- | ------- | ------------- |
+| Default | 1,000   | 11/12   | 58,309  | 381,058       |
+| Larger  | 10,000  | 11/12   | 61,694  | 909,090       |
+| Spread  | 20,000  | 6/12    | 41,506  | **1,197,605** |
 
 Observed scaling: roughly **5,000 TPS per physical core** for sustained throughput. Peak samples already exceed 1M on modest hardware because the harness samples aggregate progress over short windows.
 
@@ -53,7 +53,7 @@ Observed scaling: roughly **5,000 TPS per physical core** for sustained throughp
 
 > "**1M+ Ed25519 operations per second** demonstrated on c7i.48xlarge instances using the Sui Tunnel off-chain state channel SDK."
 
-**Implication:** To *guarantee* 1M TPS on AWS we must provision a **dedicated CPU-heavy compute fleet** (EC2) to run the benchmark harness. The control-plane backend and frontend do not need to carry this load.
+**Implication:** To _guarantee_ 1M TPS on AWS we must provision a **dedicated CPU-heavy compute fleet** (EC2) to run the benchmark harness. The control-plane backend and frontend do not need to carry this load.
 
 ## Architecture Overview
 
@@ -140,9 +140,10 @@ Redis Cluster mode classic pub/sub broadcasts every message to all nodes, which 
 - **Session cache / counters**: Redis Cluster mode enabled for horizontal scaling of cache reads/writes.
 
 Used for:
-  - Real-time TPS counter aggregation.
-  - WebSocket / publish-subscribe fan-out for the live dashboard.
-  - Session/state caching.
+
+- Real-time TPS counter aggregation.
+- WebSocket / publish-subscribe fan-out for the live dashboard.
+- Session/state caching.
 
 ### 5. Object Storage — S3
 
@@ -189,23 +190,23 @@ This is the only component that guarantees the 1M TPS number.
 
 ## AWS Services Used
 
-| Service | Purpose |
-|---|---|
-| S3 | Frontend hosting, transcript archives, build artifacts |
-| CloudFront | CDN + HTTPS for frontend |
-| Route 53 | DNS + alias records |
-| ACM | TLS certificates |
-| ALB | Ingress to backend Fargate service |
-| ECS Fargate | Rust backend containers |
-| ECR | Container images |
-| EC2 Auto Scaling | Benchmark runner fleet |
-| Aurora PostgreSQL | Primary database (provisioned in prod/staging) |
-| RDS Proxy | Connection pooling between Fargate and Aurora |
-| ElastiCache Valkey | Caching, real-time aggregation, pub/sub |
-| EC2 Image Builder | Golden AMI pipeline for benchmark fleet |
-| CloudWatch | Logs, metrics, alarms |
-| Secrets Manager / SSM | Secrets and config |
-| WAF (optional) | ALB-level rate limiting / bot control |
+| Service               | Purpose                                                |
+| --------------------- | ------------------------------------------------------ |
+| S3                    | Frontend hosting, transcript archives, build artifacts |
+| CloudFront            | CDN + HTTPS for frontend                               |
+| Route 53              | DNS + alias records                                    |
+| ACM                   | TLS certificates                                       |
+| ALB                   | Ingress to backend Fargate service                     |
+| ECS Fargate           | Rust backend containers                                |
+| ECR                   | Container images                                       |
+| EC2 Auto Scaling      | Benchmark runner fleet                                 |
+| Aurora PostgreSQL     | Primary database (provisioned in prod/staging)         |
+| RDS Proxy             | Connection pooling between Fargate and Aurora          |
+| ElastiCache Valkey    | Caching, real-time aggregation, pub/sub                |
+| EC2 Image Builder     | Golden AMI pipeline for benchmark fleet                |
+| CloudWatch            | Logs, metrics, alarms                                  |
+| Secrets Manager / SSM | Secrets and config                                     |
+| WAF (optional)        | ALB-level rate limiting / bot control                  |
 
 ## Pulumi Project Structure
 
@@ -354,42 +355,42 @@ Cost is explicitly not a constraint. The largest cost driver will be the benchma
 
 ## Risks & Mitigations
 
-| Risk | Mitigation |
-|---|---|
-| Backend team changes container contract | Keep backend interface in `config.ts`; version images by git sha |
-| `c7i.48xlarge` unavailable in chosen region | Use `m7i.48xlarge` or `c7a.48xlarge` fallback; Pulumi can pick first available |
-| Aurora Serverless v2 cold start / latency spike | Use provisioned Aurora I/O-Optimized for prod/staging; RDS Proxy for connection pooling |
-| Redis pub/sub broadcast storm | Use Redis 7.0+ Sharded Pub/Sub or a standalone pub/sub instance |
-| Benchmark fleet slow boot | Golden AMI via EC2 Image Builder; optional ASG warm pool |
+| Risk                                                           | Mitigation                                                                                     |
+| -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| Backend team changes container contract                        | Keep backend interface in `config.ts`; version images by git sha                               |
+| `c7i.48xlarge` unavailable in chosen region                    | Use `m7i.48xlarge` or `c7a.48xlarge` fallback; Pulumi can pick first available                 |
+| Aurora Serverless v2 cold start / latency spike                | Use provisioned Aurora I/O-Optimized for prod/staging; RDS Proxy for connection pooling        |
+| Redis pub/sub broadcast storm                                  | Use Redis 7.0+ Sharded Pub/Sub or a standalone pub/sub instance                                |
+| Benchmark fleet slow boot                                      | Golden AMI via EC2 Image Builder; optional ASG warm pool                                       |
 | Fargate task termination drops requests / leaks DB connections | Backend implements SIGTERM drain, split `/health/live` and `/health/ready`, `stopTimeout: 30s` |
-| Aurora becomes bottleneck for stats writes | Buffer writes in Redis, flush in batches; add Aurora writer scale |
-| Frontend build env vars change | Centralize in Pulumi config and GitHub environment variables |
-| Pulumi state loss | Use Pulumi Cloud backend or self-managed S3/DynamoDB backend |
+| Aurora becomes bottleneck for stats writes                     | Buffer writes in Redis, flush in batches; add Aurora writer scale                              |
+| Frontend build env vars change                                 | Centralize in Pulumi config and GitHub environment variables                                   |
+| Pulumi state loss                                              | Use Pulumi Cloud backend or self-managed S3/DynamoDB backend                                   |
 
 ## Post-Demo Hardening (Not Required for June 19)
 
 Items identified during review that improve production readiness but can wait until after the demo:
 
-| Priority | Item | Rationale |
-|---|---|---|
-| P1 | VPC Interface Endpoints for SSM/CloudWatch/ECR | Reduce NAT Gateway data-processing cost; keep traffic on AWS backbone |
-| P1 | WebSocket reconnection logic in frontend | Resilient dashboard during Fargate scale-in |
-| P1 | Security scanning in CI/CD (ECR image scan, `cargo audit`, secrets scan) | Security baseline |
-| P1 | CloudWatch deployment alarms + automatic rollback | Catch bad deployments |
-| P1 | Prometheus metrics export from Rust backend | Industry-standard observability |
-| P1 | Runbooks for common failures | Team self-sufficiency |
-| P1 | Weekly Pulumi drift detection | Infrastructure consistency |
-| P2 | Evaluate `c8g.48xlarge` (Graviton4) | Potential 10.6% cost reduction + 36% CoreMark improvement |
-| P2 | Blue/green backend deployment | Zero-downtime updates |
-| P2 | WAF with rate limiting and AWS Core Rule Set | Basic DDoS/bot protection |
-| P2 | Infracost in CI | Cost visibility on PRs |
+| Priority | Item                                                                     | Rationale                                                             |
+| -------- | ------------------------------------------------------------------------ | --------------------------------------------------------------------- |
+| P1       | VPC Interface Endpoints for SSM/CloudWatch/ECR                           | Reduce NAT Gateway data-processing cost; keep traffic on AWS backbone |
+| P1       | WebSocket reconnection logic in frontend                                 | Resilient dashboard during Fargate scale-in                           |
+| P1       | Security scanning in CI/CD (ECR image scan, `cargo audit`, secrets scan) | Security baseline                                                     |
+| P1       | CloudWatch deployment alarms + automatic rollback                        | Catch bad deployments                                                 |
+| P1       | Prometheus metrics export from Rust backend                              | Industry-standard observability                                       |
+| P1       | Runbooks for common failures                                             | Team self-sufficiency                                                 |
+| P1       | Weekly Pulumi drift detection                                            | Infrastructure consistency                                            |
+| P2       | Evaluate `c8g.48xlarge` (Graviton4)                                      | Potential 10.6% cost reduction + 36% CoreMark improvement             |
+| P2       | Blue/green backend deployment                                            | Zero-downtime updates                                                 |
+| P2       | WAF with rate limiting and AWS Core Rule Set                             | Basic DDoS/bot protection                                             |
+| P2       | Infracost in CI                                                          | Cost visibility on PRs                                                |
 
 ## Open Questions
 
 1. **Demo mode**: Will the June 19 demo run browser-based agents only, or do we also need the EC2 benchmark fleet live?
-   - *Recommendation*: Run both. Browser agents show the user-facing product; the EC2 fleet provides the reproducible 1M TPS proof.
+   - _Recommendation_: Run both. Browser agents show the user-facing product; the EC2 fleet provides the reproducible 1M TPS proof.
 2. **Region / domain**: Which AWS region and domain will be used for each environment?
-   - *Recommendation*: `us-east-1` for broad instance availability; `dev.dopamint.io`, `staging.dopamint.io`, `dopamint.io`.
+   - _Recommendation_: `us-east-1` for broad instance availability; `dev.dopamint.io`, `staging.dopamint.io`, `dopamint.io`.
 3. **WebSocket vs polling**: Use **ALB WebSocket** for live TPS streaming. It is native, zero extra cost, and avoids polling overhead. Requires graceful shutdown and client reconnection logic.
 4. **Prometheus metrics**: Yes, add after the demo as P1. CloudWatch is sufficient for June 19.
 5. **Secrets management**: Use **Pulumi ESC** instead of MailGate's GitHub sync or static GitHub secrets. It gives dynamic secrets and native AWS Secrets Manager integration.

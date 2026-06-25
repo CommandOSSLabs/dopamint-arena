@@ -27,14 +27,14 @@ protocol, the backend, and Move are untouched.
 
 ## Invariants (must not change)
 
-Verified against the code; the renderer is the *only* thing that moves.
+Verified against the code; the renderer is the _only_ thing that moves.
 
 - **`CrossView`** = `{ tick:number; seed:number; players:{lane:number; col:number;
-  score:number}[]; winner:"A"|"B"|null; balanceA:number; balanceB:number }`.
+score:number}[]; winner:"A"|"B"|null; balanceA:number; balanceB:number }`.
   `players[0]` = party A, `players[1]` = party B (positional identity; no id field).
 - **`CrossBoard` prop signature stays identical** so `ChickenCrossWindow` is
   unchanged: `{ view:CrossView; winner:"A"|"B"|null; role:"A"|"B"|null;
-  onDir:(d:CrossDir)=>void; onPlayAgain:()=>void; seed:number }`.
+onDir:(d:CrossDir)=>void; onPlayAgain:()=>void; seed:number }`.
 - **`setDir` stays a thin write** with auto-forward (default `"north"`, resets to
   `"north"` after each propose). Input capture must not debounce/batch/hold it
   differently — that would leak presentation into game outcome.
@@ -68,6 +68,7 @@ frontend/
 ```
 
 Each unit has one job:
+
 - **`crossViewToSnapshot`** — pure data mapping; the only place that knows both
   the arena view and the scene wire shape. Unit-tested.
 - **`CrossScene`** — render the scene from a snapshot. Ported as-is except scoped
@@ -101,17 +102,21 @@ CrossPlayerState = { id; name; column; laneIndex; score; deaths; alive; connecte
 ```
 
 ### Lanes
+
 `minLane=0`, `maxLane=WIN_LANE` (20). For each lane `L` in `0..WIN_LANE`:
+
 - `kind = laneKind(L)` (arena's — same archetype as the original: 0–1 grass, then
   `(L-2)%6` → road,road,water,rails,grass,grass).
 - `hazards = hazardsAt(BigInt(seed), L, BigInt(tick))` → spans `{center,half}`,
   mapped below. `grass` → no hazards.
 
 ### Hazards (the subtle part)
+
 `hazardsAt` returns `HazardSpan[] {center, half}` — **no id, no velocity**. But the
 generator is seeded by `(seed, lane)` only (tick-independent count/phase/dir/speed;
 only `center` advances with `tick`). So per lane the **array length and per-index
 identity are stable across ticks**. Therefore:
+
 - **`id = `${L}:${ordinal}`** — stable, lets the scene persist & lerp a mesh
   instead of destroy/recreate each tick.
 - **`x = center`**, **`width = half * 2`** (column units; cars half 0.9→w1.8,
@@ -124,7 +129,9 @@ identity are stable across ticks**. Therefore:
   that frame — flagged for the CrossScene adaptation, else a car zips across.
 
 ### Players
+
 Two players, `players[0]`→A, `players[1]`→B. For party `i`:
+
 - `id = "A"|"B"`, `name = "A"|"B"` (local seat may show "You" via `setLocalPlayerId`).
 - `column = col`, `laneIndex = lane`, `score = score`.
 - `alive = true`, `connected = true` (arena respawns instantly; no eliminated state).
@@ -136,11 +143,13 @@ Two players, `players[0]`→A, `players[1]`→B. For party `i`:
   `feeder.facing[i]`). Cosmetic yaw only.
 
 ### Winner / terminal
+
 `winnerId` mirrors `view.winner` for the scene's banner, **but** the win **sound**
 and settle UI are driven by the hook's `winner` prop transition, not re-derived
 from `view`.
 
 ### Stub fields
+
 `type='cross:snapshot'`, `protocol`=scene's version constant, `roomCode=""`,
 `phase='playing'` (constant — `CrossBoard` only renders during play and the scene
 ignores `phase`), `serverTime = tick` — the scene reads `world`/`players`/
@@ -150,6 +159,7 @@ ignores `phase`), `serverTime = tick` — the scene reads `world`/`players`/
 
 Lift the original `CrossScene.ts` (33 KB, all-procedural geometry — no model/image
 files) with three changes:
+
 1. **Container-scoped sizing.** Replace `window.innerWidth/innerHeight`,
    `window.devicePixelRatio`, and the construction-time `window` resize listener
    with measurements of the canvas's parent via a `ResizeObserver` owned by
@@ -172,11 +182,12 @@ binds keyboard/swipe to the canvas element instead.
 ## CrossCanvas lifecycle
 
 A focused React component:
+
 - On mount: create `<canvas>`, `new CrossScene(canvas)`,
   `setCameraMode('3d')`, `setLocalPlayerId(role)`; attach `ResizeObserver` to the
   wrapper; bind `crossInput` to the canvas; start the RAF loop (`scene.render()`).
 - On `view` change (every 300 ms tick): `crossViewToSnapshot(view, prevRef, role,
-  feederRef)` → `scene.applySnapshot(snapshot, role)`; the per-frame RAF lerps
+feederRef)` → `scene.applySnapshot(snapshot, role)`; the per-frame RAF lerps
   positions between snapshots (smooths the 300 ms cadence — an upgrade over the
   stepped emoji board); update `prevRef`/`feederRef`; fire sounds (below).
 - Input path: `crossInput` emits a logical screen dir →
@@ -198,14 +209,14 @@ maximize/resize feature works for free.
 6 mp3s → `frontend/public/sounds/` (served at `/sounds/*.mp3`). `crossSounds.ts`
 ported (silent-on-missing). Triggers (presentation-only — read state, never mutate):
 
-| sound      | trigger (in `CrossCanvas`/`CrossLobby`)                              |
-|------------|---------------------------------------------------------------------|
-| hop        | any player's `lane` increased vs prev view                          |
-| splat      | death (`prev>0 → now===0`) and `laneKind(prevLane) !== "water"`      |
-| splash     | death and `laneKind(prevLane) === "water"`                          |
-| win        | `winner` prop transitions `null → "A"|"B"`                          |
-| room-join  | `CrossBoard` first mount (match has started)                        |
-| click      | lobby create/join buttons + D-pad presses                           |
+| sound     | trigger (in `CrossCanvas`/`CrossLobby`)                         |
+| --------- | --------------------------------------------------------------- | ---- |
+| hop       | any player's `lane` increased vs prev view                      |
+| splat     | death (`prev>0 → now===0`) and `laneKind(prevLane) !== "water"` |
+| splash    | death and `laneKind(prevLane) === "water"`                      |
+| win       | `winner` prop transitions `null → "A"                           | "B"` |
+| room-join | `CrossBoard` first mount (match has started)                    |
+| click     | lobby create/join buttons + D-pad presses                       |
 
 Death detection is view-only (`invulnTicks` is not in `CrossView`); `prev>0 →
 now===0`, corroborated by `col===SPAWN_COL`, is the reliable signal.
@@ -225,7 +236,7 @@ as in the original 0.184 build.
   hazard `id`/`x`/`width`/`kind` from a known `(seed,lane,tick)`; A/B positional
   order; `deaths` increments on `prev>0→0`; `facing` from deltas and reset on
   death; `winner` passthrough. Run: `node --import tsx --test
-  "src/games/chickenCross/*.test.ts"` (the default `test` script globs blackjack
+"src/games/chickenCross/*.test.ts"` (the default `test` script globs blackjack
   only — note this; do not change the script in this work).
 - **Smoke** — `CrossCanvas` mount→unmount throws nothing and `dispose()` runs
   (guard against the teardown regression).
@@ -238,15 +249,15 @@ as in the original 0.184 build.
 ## Risks
 
 - **Color management** — recent three default sRGB/ColorManagement may shift the
-  palette; verify output color space. *Mitigation: pin 0.184, eyeball vs original.*
+  palette; verify output color space. _Mitigation: pin 0.184, eyeball vs original._
 - **Hazard wrap** — must snap-not-lerp on `mod` wrap or cars teleport-slide.
-  *Mitigation: threshold check in `applySnapshot`.*
+  _Mitigation: threshold check in `applySnapshot`._
 - **Teardown** — leaks across PvP re-matches if disposal is incomplete (known
-  prior bug). *Mitigation: full graph dispose + scoped listeners; smoke test.*
-- **Bundle weight** — +135 KB gz. *Accepted; single isolated game dep.*
+  prior bug). _Mitigation: full graph dispose + scoped listeners; smoke test._
+- **Bundle weight** — +135 KB gz. _Accepted; single isolated game dep._
 - **Death-sound edge** — if death and a hop coincide, `laneKind(prevLane)` vs the
   exact death lane may differ by one; only affects splat-vs-splash choice on a
-  sound. *Accepted.*
+  sound. _Accepted._
 
 ## Out of scope (future)
 

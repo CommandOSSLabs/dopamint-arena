@@ -56,6 +56,7 @@ entry[1]: msgLen=120, message=0x66 × 120, entrySigA=0x77 × 64, entrySigB=0x88 
 ## Task 1: Canonical moves/tunnel constant
 
 **Files:**
+
 - Create: `sui-tunnel-ts/src/proof/limits.ts`
 - Test: `sui-tunnel-ts/src/proof/limits.test.ts`
 - Modify: `sui-tunnel-ts/src/proof/index.ts` (or the proof barrel; grep the existing export style)
@@ -104,6 +105,7 @@ export function shouldRotateTunnel(updateCount: number): boolean {
 - [ ] **Step 4: Add the barrel export**
 
 In the proof barrel (match the existing `export * from "./..."` style):
+
 ```ts
 export * from "./limits";
 ```
@@ -125,6 +127,7 @@ git commit -m "feat(proof): canonical MAX_MOVES_PER_TUNNEL + shouldRotateTunnel"
 ## Task 2: v2 binary settle-body codec
 
 **Files:**
+
 - Create: `sui-tunnel-ts/src/proof/settleBinary.ts`
 - Test: `sui-tunnel-ts/src/proof/settleBinary.test.ts`
 - Reference (read): `sui-tunnel-ts/src/core/bytes.ts` (`concatBytes`, `toHex`, `fromHex`), `sui-tunnel-ts/src/core/wire.ts` (`u64ToBeBytes`, `u64FromBeBytes`)
@@ -135,7 +138,11 @@ git commit -m "feat(proof): canonical MAX_MOVES_PER_TUNNEL + shouldRotateTunnel"
 import test from "node:test";
 import assert from "node:assert/strict";
 import { fromHex, toHex } from "../core/bytes";
-import { encodeSettleBodyV2, decodeSettleBodyV2, SETTLE_V2_VERSION } from "./settleBinary";
+import {
+  encodeSettleBodyV2,
+  decodeSettleBodyV2,
+  SETTLE_V2_VERSION,
+} from "./settleBinary";
 
 function rep(byte: number, n: number): Uint8Array {
   return new Uint8Array(n).fill(byte);
@@ -178,7 +185,8 @@ test("version byte is 0x02 and header layout is stable (GOLDEN)", () => {
   assert.equal(bytes.length, 729);
   // PIN this once from the implementation's own output, then keep it identical
   // in Rust (Task 4). If this assertion ever changes, the wire contract changed.
-  const GOLDEN_HEX = "<fill from `toHex(encodeSettleBodyV2(INPUT))` on first green run>";
+  const GOLDEN_HEX =
+    "<fill from `toHex(encodeSettleBodyV2(INPUT))` on first green run>";
   assert.equal(toHex(bytes), GOLDEN_HEX);
 });
 
@@ -241,8 +249,10 @@ function u32(n: number): Uint8Array {
 }
 
 export function encodeSettleBodyV2(b: SettleBodyV2): Uint8Array {
-  if (b.transcriptRoot.length !== 32) throw new Error("transcriptRoot must be 32 bytes");
-  if (b.sigA.length !== 64 || b.sigB.length !== 64) throw new Error("settlement sigs must be 64 bytes");
+  if (b.transcriptRoot.length !== 32)
+    throw new Error("transcriptRoot must be 32 bytes");
+  if (b.sigA.length !== 64 || b.sigB.length !== 64)
+    throw new Error("settlement sigs must be 64 bytes");
   const parts: Uint8Array[] = [
     new Uint8Array([SETTLE_V2_VERSION]),
     id32(b.tunnelId),
@@ -256,7 +266,8 @@ export function encodeSettleBodyV2(b: SettleBodyV2): Uint8Array {
     u32(b.entries.length),
   ];
   for (const e of b.entries) {
-    if (e.sigA.length !== 64 || e.sigB.length !== 64) throw new Error("entry sigs must be 64 bytes");
+    if (e.sigA.length !== 64 || e.sigB.length !== 64)
+      throw new Error("entry sigs must be 64 bytes");
     parts.push(u16(e.message.length), e.message, e.sigA, e.sigB);
   }
   return concatBytes(parts);
@@ -264,7 +275,8 @@ export function encodeSettleBodyV2(b: SettleBodyV2): Uint8Array {
 
 export function decodeSettleBodyV2(bytes: Uint8Array): SettleBodyV2 {
   if (bytes.length < HEADER_LEN) throw new Error("settle body too short");
-  if (bytes[0] !== SETTLE_V2_VERSION) throw new Error(`unexpected settle version: ${bytes[0]}`);
+  if (bytes[0] !== SETTLE_V2_VERSION)
+    throw new Error(`unexpected settle version: ${bytes[0]}`);
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const tunnelId = "0x" + toHex(bytes.slice(1, 33));
   const partyABalance = u64FromBeBytes(bytes, 33);
@@ -288,7 +300,17 @@ export function decodeSettleBodyV2(bytes: Uint8Array): SettleBodyV2 {
     off += 64;
     entries.push({ message, sigA: eSigA, sigB: eSigB });
   }
-  return { tunnelId, partyABalance, partyBBalance, finalNonce, timestamp, transcriptRoot, sigA, sigB, entries };
+  return {
+    tunnelId,
+    partyABalance,
+    partyBBalance,
+    finalNonce,
+    timestamp,
+    transcriptRoot,
+    sigA,
+    sigB,
+    entries,
+  };
 }
 ```
 
@@ -310,6 +332,7 @@ git commit -m "feat(proof): v2 binary settle-body codec + golden vector"
 ## Task 3: verifyTranscript v1/v2 dispatch
 
 **Files:**
+
 - Modify: `sui-tunnel-ts/src/proof/transcript.ts` (`verifyTranscript`, line 95; add `rawEntries` accessor to `Transcript`, near line 190)
 - Test: `sui-tunnel-ts/src/proof/transcript.test.ts` (extend)
 
@@ -321,23 +344,43 @@ Add to `transcript.test.ts` (reuse the file's existing key/transcript helpers �
 test("verifyTranscript accepts a v2 binary blob and verifies it ok", () => {
   // Build a real signed transcript with the file's existing helpers, then:
   const v2 = encodeSettleBodyV2({
-    tunnelId, partyABalance, partyBBalance, finalNonce, timestamp,
-    transcriptRoot: t.root(), sigA: coSigA, sigB: coSigB,
+    tunnelId,
+    partyABalance,
+    partyBBalance,
+    finalNonce,
+    timestamp,
+    transcriptRoot: t.root(),
+    sigA: coSigA,
+    sigB: coSigB,
     entries: t.rawEntries(),
   });
-  const res = verifyTranscript(v2, { partyA, partyB, onchainRoot: toHex(t.root()) });
+  const res = verifyTranscript(v2, {
+    partyA,
+    partyB,
+    onchainRoot: toHex(t.root()),
+  });
   assert.equal(res.ok, true);
 });
 
 test("verifyTranscript on a tampered v2 entry sig reports not ok", () => {
-  const v2 = encodeSettleBodyV2({ /* …as above… */ });
+  const v2 = encodeSettleBodyV2({
+    /* …as above… */
+  });
   v2[v2.length - 1] ^= 0xff; // flip a byte in the last entry sig
-  const res = verifyTranscript(v2, { partyA, partyB, onchainRoot: toHex(t.root()) });
+  const res = verifyTranscript(v2, {
+    partyA,
+    partyB,
+    onchainRoot: toHex(t.root()),
+  });
   assert.equal(res.ok, false);
 });
 
 test("verifyTranscript still verifies a legacy v1 JSON ProofRecord", () => {
-  const res = verifyTranscript(t.toRecord(), { partyA, partyB, onchainRoot: toHex(t.root()) });
+  const res = verifyTranscript(t.toRecord(), {
+    partyA,
+    partyB,
+    onchainRoot: toHex(t.root()),
+  });
   assert.equal(res.ok, true);
 });
 ```
@@ -350,6 +393,7 @@ Expected: FAIL (`verifyTranscript` rejects bytes / `rawEntries` undefined).
 - [ ] **Step 3: Implement**
 
 Add the accessor to `Transcript` (after `get length()`):
+
 ```ts
   /** Raw co-signed entries (Uint8Array message + sigs) for v2 binary settle encoding. */
   rawEntries(): TranscriptEntry[] {
@@ -359,27 +403,38 @@ Add the accessor to `Transcript` (after `get length()`):
 
 Change `verifyTranscript` to dispatch. Replace its signature + the `record.entries`
 loop source so it works on a normalized `{ root, entries:[{message,sigA,sigB}(bytes)] }`:
+
 ```ts
 export function verifyTranscript(
   input: ProofRecord | Uint8Array,
-  params: { partyA: {publicKey: Uint8Array; scheme: number};
-            partyB: {publicKey: Uint8Array; scheme: number};
-            onchainRoot: string; lockedTotal?: bigint },
+  params: {
+    partyA: { publicKey: Uint8Array; scheme: number };
+    partyB: { publicKey: Uint8Array; scheme: number };
+    onchainRoot: string;
+    lockedTotal?: bigint;
+  },
 ): TranscriptVerification {
   // v2 binary blob (first byte 0x02) vs legacy v1 JSON record.
   const norm =
     input instanceof Uint8Array
-      ? (() => { const d = decodeSettleBodyV2(input);
-                 return { root: toHex(d.transcriptRoot),
-                          entries: d.entries }; })()
-      : { root: input.root,
+      ? (() => {
+          const d = decodeSettleBodyV2(input);
+          return { root: toHex(d.transcriptRoot), entries: d.entries };
+        })()
+      : {
+          root: input.root,
           entries: input.entries.map((e) => ({
-            message: fromHex(e.message), sigA: fromHex(e.sigA), sigB: fromHex(e.sigB) })) };
+            message: fromHex(e.message),
+            sigA: fromHex(e.sigA),
+            sigB: fromHex(e.sigB),
+          })),
+        };
   // …existing scheme guard…
   // loop over `norm.entries` (already Uint8Array — drop the per-entry fromHex);
   // use `norm.root` where `record.root` was used; stepCount = norm.entries.length.
 }
 ```
+
 Add `import { decodeSettleBodyV2 } from "./settleBinary";` at the top. Keep all the
 existing verification logic (sig verify, nonce monotonic, balance conservation, root match).
 
@@ -400,12 +455,14 @@ git commit -m "feat(proof): verifyTranscript v1/v2 dispatch + Transcript.rawEntr
 ## Task 4: Backend — parse v2 binary `/settle`, store blob
 
 **Files:**
+
 - Modify: `backend/tunnel-manager/src/routes.rs` (`SettleRequest` struct ~line 87; `settle` handler ~line 186)
 - Reference (read): the settle handler keeps `CloseArgs` + `submit_close` + the Walrus upload unchanged — only the parse + blob source change.
 
 - [ ] **Step 1: Write the failing test (golden vector)**
 
 Add to `routes.rs` tests (or a new `#[cfg(test)] mod settle_v2`):
+
 ```rust
 #[test]
 fn parse_settle_v2_reads_header_from_golden_vector() {
@@ -439,6 +496,7 @@ Expected: FAIL (`parse_settle_v2` not defined).
 - [ ] **Step 3: Implement the parser + switch the handler to `Bytes`**
 
 Add a fixed-offset parser (big-endian, layout from the plan header):
+
 ```rust
 struct SettleV2 {
     tunnel_id: String,
@@ -503,6 +561,7 @@ git commit -m "feat(settle): parse v2 binary body, archive raw blob"
 ## Task 5: FE — encode + POST v2; switch callers
 
 **Files:**
+
 - Modify: `frontend/src/backend/settleRequest.ts` (replace `coSignedToSettleRequest`)
 - Modify: `frontend/src/backend/controlPlane.ts` (`settle()` signature + interface; the HTTP impl in this file)
 - Modify callers (grep `coSignedToSettleRequest`): `frontend/src/agent/agentEngine.ts`, `frontend/src/pvp/pvpMatchHook.ts`
@@ -511,6 +570,7 @@ git commit -m "feat(settle): parse v2 binary body, archive raw blob"
 - [ ] **Step 1: Write the failing test**
 
 Rewrite `settleRequest.test.ts` to assert the binary body decodes back:
+
 ```ts
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -526,6 +586,7 @@ test("coSignedToSettleBodyV2 emits a v2 body that decodes to the settlement + en
   assert.equal(d.entries.length, 1);
 });
 ```
+
 Update `controlPlane.test.ts` settle test: assert the fetch was called with
 `method: "POST"`, header `Content-Type: application/octet-stream`, and a `Uint8Array`/
 `ArrayBuffer` body (no JSON.stringify).
@@ -538,6 +599,7 @@ Expected: FAIL.
 - [ ] **Step 3: Implement**
 
 `settleRequest.ts` — replace the JSON mapper with:
+
 ```ts
 import type { CoSignedSettlementWithRoot } from "../../../sui-tunnel-ts/src/core/tunnel.ts";
 import type { TranscriptEntry } from "../../../sui-tunnel-ts/src/proof/transcript.ts";
@@ -558,7 +620,11 @@ export function coSignedToSettleBodyV2(
     transcriptRoot: s.transcriptRoot,
     sigA: coSigned.sigA,
     sigB: coSigned.sigB,
-    entries: entries.map((e) => ({ message: e.message, sigA: e.sigA, sigB: e.sigB })),
+    entries: entries.map((e) => ({
+      message: e.message,
+      sigA: e.sigA,
+      sigB: e.sigB,
+    })),
   });
 }
 ```
@@ -589,6 +655,7 @@ git commit -m "feat(settle): POST v2 binary body from the FE"
 ## Task 6: FE — read the binary blob in the verifier
 
 **Files:**
+
 - Modify: `frontend/src/backend/explorerClient.ts` (`getTranscript`, ~line 76)
 - Modify: `frontend/src/explorer/VerifyPanel.tsx` (~line 56, the `verifyTranscript` call)
 - Test: `frontend/src/backend/explorerClient.test.ts` (extend)
@@ -663,6 +730,6 @@ Summarize pass/fail counts for each suite. Any red that is NOT pre-existing on `
 
 ## Self-review checklist (run after the plan executes)
 
-- **Spec coverage:** binary v2 body (T2/T4), verify dispatch v1+v2 (T3/T6), FE encode+POST (T5), FE read (T6), canonical cap constant (T1), e2e retest (T7). Cap *enforcement* is out of scope (PR #43 multi-game loops) — documented in the spec.
+- **Spec coverage:** binary v2 body (T2/T4), verify dispatch v1+v2 (T3/T6), FE encode+POST (T5), FE read (T6), canonical cap constant (T1), e2e retest (T7). Cap _enforcement_ is out of scope (PR #43 multi-game loops) — documented in the spec.
 - **Type consistency:** `encodeSettleBodyV2`/`decodeSettleBodyV2`/`SettleBodyV2` (T2) used identically in T3/T5; `coSignedToSettleBodyV2` (T5) matches the `TranscriptEntry` shape from T3's `rawEntries()`; Rust `parse_settle_v2` offsets match the TS layout via `GOLDEN_HEX`.
 - **Money path:** close path (`CloseArgs` → dry-run → `submit_close`) is unchanged; a mis-parse fails the dry-run. Golden vector guards byte parity.

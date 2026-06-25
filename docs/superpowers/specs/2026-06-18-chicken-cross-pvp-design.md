@@ -52,10 +52,10 @@ variant is a future refinement; it needs a `mpClient` peer-message addition.)
 
 No directed-challenge API exists; use a **per-match private queue name**. No backend change.
 
-| Action | Flow |
-| --- | --- |
+| Action | Flow                                                                                                                                                    |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Create | generate a short code; `quickMatch("chicken-cross:" + code)` parks first ⇒ this seat is `A` (opener/funder); show the code while awaiting `match.found` |
-| Join | enter the code; `quickMatch("chicken-cross:" + code)` ⇒ seat `B` |
+| Join   | enter the code; `quickMatch("chicken-cross:" + code)` ⇒ seat `B`                                                                                        |
 
 Same machine = two tabs (one creates, one joins). Distinct on-chain stakes need two wallet accounts
 (same wallet ⇒ the wager round-trips — fine for a demo).
@@ -85,13 +85,13 @@ so no stake-shift parameter is needed (unlike ttt).
 
 ## 6. Files
 
-| File | Change |
-| --- | --- |
-| `frontend/src/games/chickenCross/usePvpChickenCross.ts` | NEW — the PvP hook (this spec) |
-| `frontend/src/games/chickenCross/components/CrossLobby.tsx` | NEW — create/join-code screen |
-| `frontend/src/games/chickenCross/ChickenCrossWindow.tsx` | EDIT — route to PvP: lobby → board; statuses idle/matching/funding/playing/settling/settled/error |
+| File                                                        | Change                                                                                                   |
+| ----------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `frontend/src/games/chickenCross/usePvpChickenCross.ts`     | NEW — the PvP hook (this spec)                                                                           |
+| `frontend/src/games/chickenCross/components/CrossLobby.tsx` | NEW — create/join-code screen                                                                            |
+| `frontend/src/games/chickenCross/ChickenCrossWindow.tsx`    | EDIT — route to PvP: lobby → board; statuses idle/matching/funding/playing/settling/settled/error        |
 | `frontend/src/games/chickenCross/components/CrossBoard.tsx` | REUSE — render `deriveView(dt.displayState)`; add this seat's input (arrows + on-screen D-pad) → `myDir` |
-| `frontend/src/games/chickenCross/index.ts` | UNCHANGED — same `register({ id: "chicken-cross", ... })` |
+| `frontend/src/games/chickenCross/index.ts`                  | UNCHANGED — same `register({ id: "chicken-cross", ... })`                                                |
 
 `CrossProtocol`, `session-core.ts` (`deriveView`) reused. The self-play hook
 (`useChickenCrossSession.ts`) and `session-core` stepSession stay in-tree (no longer wired into the

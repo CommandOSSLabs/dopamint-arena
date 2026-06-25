@@ -64,6 +64,36 @@ export async function faucetMtps(opts: {
   return opts.signExec(tx);
 }
 
+const utf8 = (s: string) => Array.from(new TextEncoder().encode(s));
+
+/** Permissionless collectible mint — NFT is transferred to the transaction sender. */
+export function buildMintMtpsNft(
+  tx: Transaction,
+  title: string,
+  description: string,
+  imageUrl: string,
+): void {
+  tx.moveCall({
+    target: `${MTPS_PACKAGE_ID}::mtps::mint_nft`,
+    arguments: [
+      tx.pure.vector("u8", utf8(title)),
+      tx.pure.vector("u8", utf8(description)),
+      tx.pure.vector("u8", utf8(imageUrl)),
+    ],
+  });
+}
+
+export async function mintMtpsNft(opts: {
+  signExec: SignExec;
+  title: string;
+  description: string;
+  imageUrl: string;
+}): Promise<{ digest: string }> {
+  const tx = new Transaction();
+  buildMintMtpsNft(tx, opts.title, opts.description, opts.imageUrl);
+  return opts.signExec(tx);
+}
+
 /** Minimal `getCoins` surface — satisfied by dapp-kit's SuiClient. */
 interface MtpsCoinReader {
   getCoins(input: {

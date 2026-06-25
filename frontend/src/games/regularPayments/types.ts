@@ -7,6 +7,12 @@ export type MachinePhase =
 
 export type NftTier = "common" | "rare" | "epic" | "unknown";
 
+export type NftReward = {
+  title: string;
+  description: string;
+  imageUrl: string;
+};
+
 export type MachineSessionView = {
   id: string;
   label: string;
@@ -16,4 +22,6 @@ export type MachineSessionView = {
   tickMax: number;
   tps: number;
   tier: NftTier;
+  reward: NftReward | null;
+  digest: string | null;
 };

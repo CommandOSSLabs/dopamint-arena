@@ -102,11 +102,11 @@ export function PlacementBoard({
       }}
     >
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">
-        <span className="qp-eyebrow text-[clamp(9px,2.4cqmin,14px)] uppercase">
+        <span className="sketch-eyebrow text-[clamp(9px,2.4cqmin,14px)] uppercase">
           Place your fleet
         </span>
         <div className="flex gap-1.5">
-          <button type="button" onClick={rotate} className="qp-btn">
+          <button type="button" onClick={rotate} className="sketch-btn">
             Rotate (R) · {orient === "H" ? "→" : "↓"}
           </button>
           <button
@@ -115,7 +115,7 @@ export function PlacementBoard({
               setPlacements(placeFleetRandom(Math.random));
               setSelected(null);
             }}
-            className="qp-btn"
+            className="sketch-btn"
           >
             Randomize
           </button>
@@ -124,7 +124,7 @@ export function PlacementBoard({
             type="button"
             disabled={!legal}
             onClick={() => onReady(placements)}
-            className="qp-btn qp-btn--go"
+            className="sketch-btn sketch-btn--go"
           >
             {ctaLabel}
           </button>
@@ -139,7 +139,7 @@ export function PlacementBoard({
             onClick={() => pickUp(ship.id)}
             className={cn("bs-pill", selected === ship.id && "bs-pill--on")}
           >
-            <Check className="size-[1em] text-[var(--qp-felt)]" />
+            <Check className="size-[1em] text-[var(--sketch-felt)]" />
             {ship.name} · {ship.size}
           </button>
         ))}
@@ -175,10 +175,10 @@ export function PlacementBoard({
                     "bs-cell",
                     inPreview
                       ? preview!.valid
-                        ? "!border-[var(--qp-amber)] !bg-[var(--qp-amber-fill)]"
-                        : "!border-[var(--qp-red)] !bg-[rgba(224,49,49,0.16)]"
+                        ? "!border-[var(--sketch-accent)] !bg-[var(--sketch-accent-fill)]"
+                        : "!border-[var(--sketch-red)] !bg-[rgba(224,49,49,0.16)]"
                       : showAsOccupied && isSelected
-                        ? "!border-[var(--qp-amber)]"
+                        ? "!border-[var(--sketch-accent)]"
                         : showAsOccupied
                           ? "border-transparent" // placed ship: inked overlay shows through
                           : "",
@@ -267,7 +267,7 @@ export function PlacementBoard({
         </div>
       </div>
 
-      <div className="qp-note mt-auto shrink-0 text-[clamp(10px,2.4cqmin,14px)]">
+      <div className="sketch-note mt-auto shrink-0 text-[clamp(10px,2.4cqmin,14px)]">
         {legal
           ? selected
             ? "Click to drop the ship; R rotates."

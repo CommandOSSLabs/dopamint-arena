@@ -20,7 +20,7 @@
   --qp-amber-fill: #ffe9bd;
 
   container-type: size;
-  font-family: "Gochi Hand", "Comic Sans MS", cursive;
+  font-family: var(--font-wal-gochi);
   color: var(--qp-ink);
   background-color: var(--qp-paper);
   background-image: radial-gradient(
@@ -31,7 +31,7 @@
   background-position: -8px -8px;
 
   & * {
-    font-family: "Gochi Hand", "Comic Sans MS", cursive;
+    font-family: var(--font-wal-gochi);
   }
 
   /* SVG filter defs holder — zero-size, out of flow */

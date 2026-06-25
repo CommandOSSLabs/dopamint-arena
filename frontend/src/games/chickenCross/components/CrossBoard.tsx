@@ -20,16 +20,15 @@ import {
   CrossTree,
 } from "./crossSprites";
 
+/** Column indices 0..COLUMN_COUNT-1, allocated once (was `Array.from({length})` per lane/render). */
+const COLUMNS = Array.from({ length: COLUMN_COUNT }, (_, i) => i);
+
 function trainSegment(span: HazardSpan, col: number): "head" | "mid" | "tail" {
   const left = Math.ceil(span.center - span.half);
   const right = Math.floor(span.center + span.half) - 1;
   if (col <= left) return "head";
   if (col >= right) return "tail";
   return "mid";
-}
-
-function hazardOrdinal(hazards: HazardSpan[], col: number): number {
-  return hazards.findIndex((s) => spanCoversCol(s, col));
 }
 
 function SeatRail({
@@ -293,8 +292,15 @@ export function CrossBoard({
               const finish = L === WIN_LANE;
               return (
                 <div key={L} className="cross-lane">
-                  {Array.from({ length: COLUMN_COUNT }).map((_, col) => {
-                    const onHaz = hazards.some((s) => spanCoversCol(s, col));
+                  {COLUMNS.map((col) => {
+                    // One scan finds the covering hazard span + its ordinal; onHaz/hazSpan/ord
+                    // all derive from it (previously three spanCoversCol scans per cell).
+                    const hazIdx = hazards.findIndex((s) =>
+                      spanCoversCol(s, col),
+                    );
+                    const onHaz = hazIdx >= 0;
+                    const hazSpan = onHaz ? hazards[hazIdx] : undefined;
+                    const ord = onHaz ? hazIdx : 0;
                     const aHere =
                       view.players[0]?.lane === L &&
                       view.players[0]?.col === col;
@@ -308,10 +314,6 @@ export function CrossBoard({
                       !here &&
                       !onHaz &&
                       grassHasTree(seed, L, col);
-                    const hazSpan = onHaz
-                      ? hazards.find((s) => spanCoversCol(s, col))
-                      : undefined;
-                    const ord = hazSpan ? hazardOrdinal(hazards, col) : 0;
 
                     const isMyLane =
                       myIndex !== null && view.players[myIndex]?.lane === L;

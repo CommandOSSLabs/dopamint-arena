@@ -26,10 +26,12 @@
 ## File structure
 
 **Create:**
+
 - `frontend/src/agent/ProgrammaticWalletGate.tsx` — reusable wallet-injection wrapper.
 - `frontend/agent/arena.mjs` — the Playwright arena bot.
 
 **Modify:**
+
 - `frontend/src/agent/agentConfig.ts` (+ `agentConfig.test.ts`) — parse `arena`.
 - `frontend/src/agent/AgentBoot.tsx` — re-use the gate (no behavior change).
 - `frontend/src/main.tsx` — `?arena` branch renders `<App/>` inside the gate.
@@ -45,10 +47,12 @@
 ## Task 1: Parse the `arena` flag
 
 **Files:**
+
 - Modify: `frontend/src/agent/agentConfig.ts`
 - Test: `frontend/src/agent/agentConfig.test.ts`
 
 **Interfaces:**
+
 - Produces: `AgentConfig` gains `arena: boolean`. `parseAgentConfig(href)` sets `arena = ?arena present`, reusing the existing `secretKey` (`?key`).
 
 - [ ] **Step 1: Write the failing test** (append to `agentConfig.test.ts`)
@@ -107,10 +111,12 @@ git commit -m "feat(agent): parse ?arena flag"
 ## Task 2: Reusable wallet gate + `?arena` desktop mode
 
 **Files:**
+
 - Create: `frontend/src/agent/ProgrammaticWalletGate.tsx`
 - Modify: `frontend/src/agent/AgentBoot.tsx`, `frontend/src/main.tsx`
 
 **Interfaces:**
+
 - Consumes: `AgentConfig.arena`/`secretKey` (Task 1), existing `programmaticWalletFromSecret`.
 - Produces: `<ProgrammaticWalletGate secretKey={string|null}>` — registers + connects the programmatic wallet, renders children once an account exists. `?arena&key=` renders `<App/>` inside it.
 
@@ -120,7 +126,11 @@ git commit -m "feat(agent): parse ?arena flag"
 // frontend/src/agent/ProgrammaticWalletGate.tsx
 import { useEffect, useRef, type ReactNode } from "react";
 import { getWallets } from "@mysten/wallet-standard";
-import { useConnectWallet, useCurrentAccount, useSuiClient } from "@mysten/dapp-kit";
+import {
+  useConnectWallet,
+  useCurrentAccount,
+  useSuiClient,
+} from "@mysten/dapp-kit";
 import { programmaticWalletFromSecret } from "../wallet/programmaticWallet";
 
 /** Registers a programmatic wallet from `secretKey` with the Wallet Standard and connects it
@@ -159,7 +169,11 @@ import { ProgrammaticWalletGate } from "./ProgrammaticWalletGate";
 
 export function AgentBoot({ children }: { children: ReactNode }) {
   const cfg = parseAgentConfig(window.location.href);
-  return <ProgrammaticWalletGate secretKey={cfg.secretKey}>{children}</ProgrammaticWalletGate>;
+  return (
+    <ProgrammaticWalletGate secretKey={cfg.secretKey}>
+      {children}
+    </ProgrammaticWalletGate>
+  );
 }
 ```
 
@@ -171,13 +185,19 @@ import { ProgrammaticWalletGate } from "./agent/ProgrammaticWalletGate";
 // ...
 const cfg = parseAgentConfig(window.location.href);
 // render:
-{cfg.enabled ? (
-  <AgentBoot><AgentRunner /></AgentBoot>
-) : cfg.arena ? (
-  <ProgrammaticWalletGate secretKey={cfg.secretKey}><App /></ProgrammaticWalletGate>
-) : (
-  <App />
-)}
+{
+  cfg.enabled ? (
+    <AgentBoot>
+      <AgentRunner />
+    </AgentBoot>
+  ) : cfg.arena ? (
+    <ProgrammaticWalletGate secretKey={cfg.secretKey}>
+      <App />
+    </ProgrammaticWalletGate>
+  ) : (
+    <App />
+  );
+}
 ```
 
 - [ ] **Step 4: Verify build**
@@ -195,6 +215,7 @@ git commit -m "feat(agent): inject wallet into desktop via ?arena"
 ## Task 3: `data-testid`s on the arena controls
 
 **Files (add one attribute each — do not change logic/text):**
+
 - `frontend/src/desktop/Desktop.tsx`: the "+" Add-game button → `data-testid="add-game"`; the command item → `data-testid={`launch-${g.id}`}` (yields `launch-tic-tac-toe`, `launch-blackjack`).
 - `frontend/src/games/ticTacToe/app/scenes/SetupScene.tsx`: the **Bots** tab button → `data-testid="ttt-tab-bots"`; the **Start playing** button → `data-testid="ttt-start"`.
 - `frontend/src/games/ticTacToe/app/components/BotPanel.tsx`: the **Fund bots from wallet** button → `data-testid="ttt-fund-wallet"`.
@@ -202,6 +223,7 @@ git commit -m "feat(agent): inject wallet into desktop via ?arena"
 - `frontend/src/games/blackjack/app/pages/PlayerBot.tsx`: the wallet **Top Up SUI** button → `data-testid="bj-fund-wallet"`; the **Auto** button → `data-testid="bj-auto"`.
 
 **Interfaces:**
+
 - Produces: the testid contract in Global Constraints. The Start (`ttt-start`) and Auto (`bj-auto`) buttons keep their existing `disabled` when unfunded — the script reads that to decide whether to fund.
 
 - [ ] **Step 1: Add each `data-testid`** at the exact elements above (read each file; attach the attribute to the existing `<button>`/`CommandItem`, leaving `onClick`, text, and `disabled` untouched).
@@ -209,9 +231,11 @@ git commit -m "feat(agent): inject wallet into desktop via ?arena"
 - [ ] **Step 3: Grep-verify the contract is present**
 
 Run:
+
 ```bash
 cd frontend && grep -rl "add-game\|launch-\${g.id}\|ttt-tab-bots\|ttt-fund-wallet\|ttt-start\|bj-watch-bots\|bj-fund-wallet\|bj-auto" src | sort -u
 ```
+
 Expected: the 5 modified files listed.
 
 - [ ] **Step 4: Commit**
@@ -224,9 +248,11 @@ git commit -m "test(ui): add data-testids for arena bot"
 ## Task 4: The `arena.mjs` Playwright bot
 
 **Files:**
+
 - Create: `frontend/agent/arena.mjs`
 
 **Interfaces:**
+
 - Consumes: the `?arena&key=` mode (Task 2) + the testid contract (Task 3).
 - Produces: a runnable script. Env: `KEY` (required), `GAMES=ttt,blackjack`, `DURATION_MS=60000`, `HEADLESS=false`, `BASE_URL=http://localhost:5173`.
 
@@ -242,8 +268,11 @@ import { chromium } from "playwright";
 
 const BASE = process.env.BASE_URL ?? "http://localhost:5173";
 const KEY = process.env.KEY;
-if (!KEY) throw new Error("set KEY=<suiprivkey1…> (a funded testnet wallet secret)");
-const GAMES = (process.env.GAMES ?? "ttt,blackjack").split(",").map((s) => s.trim());
+if (!KEY)
+  throw new Error("set KEY=<suiprivkey1…> (a funded testnet wallet secret)");
+const GAMES = (process.env.GAMES ?? "ttt,blackjack")
+  .split(",")
+  .map((s) => s.trim());
 const DURATION = Number(process.env.DURATION_MS ?? 60_000);
 const HEADLESS = process.env.HEADLESS === "true";
 
@@ -260,7 +289,9 @@ page.on("pageerror", (e) => console.log(`PAGEERROR ${e.message}`));
 
 await page.goto(`${BASE}/?arena&key=${encodeURIComponent(KEY)}`);
 // Wallet connected when the desktop dock renders the add-game button.
-await page.getByTestId("add-game").waitFor({ state: "visible", timeout: 30_000 });
+await page
+  .getByTestId("add-game")
+  .waitFor({ state: "visible", timeout: 30_000 });
 console.log("[arena] wallet connected, desktop ready");
 
 /** Open a game window from the command palette. */
@@ -288,14 +319,14 @@ async function fundIfLow(fundTestId, startTestId) {
 
 if (GAMES.includes("ttt")) {
   await launch("tic-tac-toe");
-  await page.getByTestId("ttt-tab-bots").click();           // bot-vs-bot funding tab
+  await page.getByTestId("ttt-tab-bots").click(); // bot-vs-bot funding tab
   await fundIfLow("ttt-fund-wallet", "ttt-start");
   await page.getByTestId("ttt-start").click();
   console.log("[arena] ttt auto-play started");
 }
 if (GAMES.includes("blackjack")) {
   await launch("blackjack");
-  await page.getByTestId("bj-watch-bots").click();          // → PlayerBot (bot-vs-bot)
+  await page.getByTestId("bj-watch-bots").click(); // → PlayerBot (bot-vs-bot)
   await fundIfLow("bj-fund-wallet", "bj-auto");
   await page.getByTestId("bj-auto").click();
   console.log("[arena] blackjack auto-play started");
@@ -323,6 +354,7 @@ git commit -m "feat(agent): arena ui auto-pilot for ttt + blackjack"
 ## Task 5: Smoke-verify + document
 
 **Files:**
+
 - Modify: `frontend/agent/README.md`
 
 **Interfaces:** consumes Tasks 1–4. This is a manual/CI smoke (like `runAgents.mjs`), not a unit test.
@@ -338,6 +370,7 @@ git commit -m "feat(agent): arena ui auto-pilot for ttt + blackjack"
      DURATION_MS=60000 node agent/arena.mjs
    # HEADLESS=true to hide the browser; GAMES=ttt or GAMES=blackjack to run one.
    ```
+
    Requires the dev server up (`BASE_URL`, default :5173) and the `KEY` wallet funded on testnet.
 ````
 
@@ -376,6 +409,7 @@ New env (arena.mjs): `TTT_WINDOWS`/`BJ_WINDOWS` (default `1`); `TTT_MAX_GAMES`/`
 ### Task 6: testids for per-window scoping + count controls
 
 **Files (attribute-only, no logic change):**
+
 - `frontend/src/desktop/Desktop.tsx`: tag each window's CONTENT container (the element that renders the game module for an `instanceId`, e.g. `tic-tac-toe#1`) with `data-game-window={instanceId}`. Find where the grid renders each open window's body (not the dock item) and attach there.
 - `frontend/src/games/ticTacToe/app/scenes/SetupScene.tsx`: the games-per-tunnel `<input>` (`aria-label="Custom games per tunnel"`) → `data-testid="ttt-max-games"`.
 - `frontend/src/games/blackjack/app/pages/PlayerBot.tsx`: the "Rounds per tunnel" `<select>` → `data-testid="bj-max-rounds"`.

@@ -50,6 +50,7 @@ pulumi up -y
 ```
 
 After the update finishes, verify the stack outputs:
+
 ```bash
 pulumi stack output
 ```
@@ -65,9 +66,35 @@ pulumi config set dopamint:backend-image-tag <git-sha>
 pulumi up -y
 ```
 
+## Ollama sidecar (chat-v2)
+
+The backend task can run an Ollama sidecar container for the chat-v2 feature. It is controlled by Pulumi config:
+
+```bash
+cd infra
+pulumi stack select dev
+# Enable/disable the sidecar (default: true)
+pulumi config set dopamint:ollama-enabled true
+# Model pulled and proxied by the backend (default: qwen2.5:1.8b)
+pulumi config set dopamint:ollama-model qwen2.5:1.8b
+# Sidecar image tag (default: 0.6.2)
+pulumi config set dopamint:ollama-image-tag 0.6.2
+pulumi up -y
+```
+
+When enabled, the backend task size increases from `1024 CPU / 2048 MiB` to `2048 CPU / 4096 MiB` to accommodate the model. The sidecar pulls the model at startup, so the first deployment may take 1–2 minutes before `/v1/chat` is healthy. The backend receives `OLLAMA_URL=http://localhost:11434` and `OLLAMA_MODEL` automatically.
+
+To disable chat and revert to the smaller task size:
+
+```bash
+pulumi config set dopamint:ollama-enabled false
+pulumi up -y
+```
+
 ## Snapshot the database before risky changes
 
 Before running migrations or schema changes, create a manual snapshot:
+
 ```bash
 aws rds create-db-cluster-snapshot \
   --db-cluster-identifier $(pulumi stack output dbClusterIdentifier) \
@@ -87,6 +114,7 @@ aws ecs run-task \
 ```
 
 Watch the migration logs until it exits:
+
 ```bash
 aws logs tail $(pulumi stack output backendLogGroup) --prefix migrate --follow
 ```
@@ -105,11 +133,17 @@ If the migration task exits with a non-zero status, stop and follow the [AWS Rol
    ```bash
    curl -fsS $(pulumi stack output backendUrl)/health/ready
    ```
-3. Check the frontend is reachable:
+3. If the Ollama sidecar is enabled, verify the model is loaded:
+   ```bash
+   aws logs tail $(pulumi stack output backendLogGroup) --prefix ollama --follow
+   # In another terminal, check the chat topic endpoint responds:
+   curl -fsS $(pulumi stack output backendUrl)/v1/chat/topic
+   ```
+4. Check the frontend is reachable:
    ```bash
    curl -fsSI https://$(pulumi stack output frontendDomain)
    ```
-4. Review ALB target health:
+5. Review ALB target health:
    ```bash
    aws elbv2 describe-target-health \
      --target-group-arn $(pulumi stack output backendTargetGroupArn)

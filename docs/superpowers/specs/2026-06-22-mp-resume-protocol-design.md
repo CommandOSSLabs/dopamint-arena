@@ -38,7 +38,7 @@ rejoin" to its own ADR. This is that work.
   client noticing). That is the **affinity ADR** (future ADR-0011), per ADR-0009:104-109.
 - **Server-side game-state storage / a watchtower checkpoint store for resume.** Live state is
   client-held; the server stores no game state to resume (see "State ownership"). The existing
-  `record_checkpoint` / `latest_checkpoint` machinery may stay for an *independent* watchtower
+  `record_checkpoint` / `latest_checkpoint` machinery may stay for an _independent_ watchtower
   role, but **resume does not depend on it** and this spec does not extend it.
 - **Adjudicating disputes.** Conflicting co-signed states at the same nonce (equivocation) are
   a settlement concern (on-chain referee / ZK, ADR-0008), not resume's job.
@@ -56,12 +56,12 @@ rejoin" to its own ADR. This is that work.
 
 ## State ownership (why the server stores nothing new)
 
-| State | Lives where | Durable across a drop? |
-|---|---|---|
-| Match identity (game, seats, tunnel_id) | Redis match HASH `match:<id>` | yes (6h TTL) — already built |
-| Seat → socket binding (`conn_a`/`conn_b` = `ConnRef`) | Redis match HASH | yes, but **stale** after a drop → this is what resume rebinds |
-| Latest co-signed game state (the live "checkpoint") | **the two clients** (off-chain, co-signed) | yes — each client holds its own latest |
-| Settlement floor (last co-signed state) | **on-chain** (submitted only at close/dispute) | yes — the trust layer |
+| State                                                 | Lives where                                    | Durable across a drop?                                        |
+| ----------------------------------------------------- | ---------------------------------------------- | ------------------------------------------------------------- |
+| Match identity (game, seats, tunnel_id)               | Redis match HASH `match:<id>`                  | yes (6h TTL) — already built                                  |
+| Seat → socket binding (`conn_a`/`conn_b` = `ConnRef`) | Redis match HASH                               | yes, but **stale** after a drop → this is what resume rebinds |
+| Latest co-signed game state (the live "checkpoint")   | **the two clients** (off-chain, co-signed)     | yes — each client holds its own latest                        |
+| Settlement floor (last co-signed state)               | **on-chain** (submitted only at close/dispute) | yes — the trust layer                                         |
 
 The server never holds live game state. Resume only fixes the **seat→socket binding** (control
 plane) and lets the clients re-exchange their own state (data plane, peer-to-peer).
@@ -74,7 +74,7 @@ Three planes, mirroring ADR-0009. Resume touches only the control plane and the
 reconnect-time edge of the data plane:
 
 1. **Control plane (Redis, rare/per-reconnect rate):** rebind the seat `ConnRef` in the match
-   HASH; re-assert presence. A handful of ops *per reconnect* — never per move.
+   HASH; re-assert presence. A handful of ops _per reconnect_ — never per move.
 2. **Data plane (in-process / bus, per move):** unchanged. After a rebind, the peer's in-memory
    match cache is corrected by an **event** (the rebind signal), not a poll — so steady-state
    moves still never read Redis.
@@ -121,7 +121,7 @@ async fn rebind_match_conn(&self, match_id: &str, wallet: &str, at: ConnRef) -> 
 ```
 
 - **Redis impl:** one Lua script `REBIND_MATCH_CONN`. `HGET seat_a/seat_b`; if `wallet ==
-  seat_a` → `HSET conn_a = <ConnRef json>`; elif `wallet == seat_b` → `HSET conn_b`; else
+seat_a` → `HSET conn_a = <ConnRef json>`; elif `wallet == seat_b` → `HSET conn_b`; else
   return nil. `EXPIRE` refresh (6h). Return the matched seat ("a"/"b"). O(1), no loops, no
   read-modify-write, no `cjson` of any balance (ConnRef carries no numbers). Mirrors the
   atomic-primitive discipline established by the aggregation-correctness work.
@@ -136,13 +136,15 @@ async fn rebind_match_conn(&self, match_id: &str, wallet: &str, at: ConnRef) -> 
 ### C2. Protocol additions (`mp/protocol.rs`)
 
 Client → Server:
+
 - `Resume { match_id: String }` (`#[serde(rename = "resume")]`) — sent **after** `connect`
   succeeds. Re-attach to an existing match.
 
 Server → Client:
+
 - `ResumeOk { match_id, role, opponent_wallet, game, peer_online: bool }`
   (`"resume.ok"`) — re-attach confirmed.
-- `PeerResumed { match_id, seat, conn_ref }` (`"peer.resumed"`) — delivered to the *peer*; it
+- `PeerResumed { match_id, seat, conn_ref }` (`"peer.resumed"`) — delivered to the _peer_; it
   both (a) invalidates/updates the peer's cached `ConnRef` for that seat and (b) cues the peer
   to re-send its latest co-signed state over the relay. Carrying `conn_ref` avoids a Redis
   read on the peer.
@@ -162,7 +164,7 @@ is an integration break — see the `protocol.rs` round-trip tests).
   Determine **peer_online** as `get_presence(opponent_wallet).is_some()` — presence is
   set on connect and cleared on disconnect (`clear_presence_if`), so it is the cross-instance
   liveness signal (one Redis read, at resume only). Reply `ResumeOk{ ..., peer_online }`, then
-  `bus.deliver(peer_conn_ref, PeerResumed{...})` using the match's *other-seat* `ConnRef`
+  `bus.deliver(peer_conn_ref, PeerResumed{...})` using the match's _other-seat_ `ConnRef`
   (delivery is harmless if the peer is offline — it's dropped by the bus). On `None`:
   `Error("not_a_seat" | "match_gone")`.
 - **Disconnect path:** when the socket loop ends, for each match this conn is a seat in,
@@ -184,7 +186,7 @@ The hot path caches `MatchRecord` per connection (`ws.rs:405-435`) to stay off R
 receiving `PeerResumed{ match_id, seat, conn_ref }`, the peer updates
 `cache[match_id].conn_<seat> = conn_ref` in place. **No Redis read is added to the move path** —
 the cache is corrected by the event. (This is ADR-0009:93's "targeted bus rebind signal".)
-Note: `PeerResumed` is a server→client control message *and* the peer's local cache update is
+Note: `PeerResumed` is a server→client control message _and_ the peer's local cache update is
 server-side state on the peer's connection task — both live on the peer's instance; the rebind
 ConnRef rides in the message so neither side re-reads Redis.
 
@@ -192,6 +194,7 @@ ConnRef rides in the message so neither side re-reads Redis.
 
 Largely a **client** concern; the backend only delivers the relay frames. Over the existing
 peer-message side channel (`mpClient.ts:23`, multiplexed on the relay):
+
 - On `PeerResumed` (peer side) or `ResumeOk` with `peerOnline` (resumer side), the online
   party re-sends its **latest co-signed checkpoint** as a peer-message.
 - The receiver **verifies both signatures** against the known peer pubkey, then adopts the
@@ -219,7 +222,7 @@ crypto, no new token. A wallet that owns no seat in the match gets `not_a_seat`.
 
 ## Grace window & abandonment
 
-- The match record's 6h TTL bounds how long re-attach is *technically* possible; a returning
+- The match record's 6h TTL bounds how long re-attach is _technically_ possible; a returning
   player can rebind any time within it.
 - The **peer's** willingness to wait is a shorter, product-level grace window of **60s**
   (configurable) after which the present party may trigger on-chain settlement

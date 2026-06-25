@@ -14,33 +14,39 @@
 
 ## File structure
 
-| File | Responsibility |
-|---|---|
-| `frontend/src/agent/gameKit.ts` | `GameKit`, `GameBot`, `BotContext` types; `GAME_KITS` registry; `StateHash` helper. |
-| `frontend/src/agent/gameKit.test.ts` | Smoke tests for the registry, type imports, and `GAME_KITS` completeness. |
-| `frontend/src/agent/games/ticTacToe/kit.ts` | Tic-tac-toe adapter wrapping `MultiGameTicTacToeProtocol` and `pickCell`. |
-| `frontend/src/agent/games/ticTacToe/kit.test.ts` | Tic-tac-toe kit tests: domain parity, full game, idempotency. |
-| `frontend/src/agent/games/blackjack/kit.ts` | Blackjack adapter wrapping `BlackjackBetProtocol` and basic strategy. |
-| `frontend/src/agent/games/blackjack/kit.test.ts` | Blackjack kit tests: domain parity, full game, conserved balances. |
-| `frontend/src/agent/games/battleship/kit.ts` | Battleship adapter wrapping `BattleshipProtocol` and per-seat fleet logic. |
-| `frontend/src/agent/games/battleship/kit.test.ts` | Battleship kit tests: domain parity, full game, truthful reveals. |
-| `frontend/src/agent/games/quantumPoker/kit.ts` | Quantum poker adapter wrapping `QuantumPokerProtocol` and `QuantumPokerPersonaDriver`. |
-| `frontend/src/agent/games/quantumPoker/kit.test.ts` | Quantum poker kit tests: domain parity, full hand to `done`. |
-| `frontend/src/agent/testHarness.ts` | Local two-bot loopback harness used by kit tests. |
-| `frontend/src/agent/testHarness.test.ts` | Harness self-tests. |
-| `frontend/package.json` | Add `src/agent/**/*.test.ts` to the `test` script so agent tests run in CI. |
+| File                                                | Responsibility                                                                         |
+| --------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `frontend/src/agent/gameKit.ts`                     | `GameKit`, `GameBot`, `BotContext` types; `GAME_KITS` registry; `StateHash` helper.    |
+| `frontend/src/agent/gameKit.test.ts`                | Smoke tests for the registry, type imports, and `GAME_KITS` completeness.              |
+| `frontend/src/agent/games/ticTacToe/kit.ts`         | Tic-tac-toe adapter wrapping `MultiGameTicTacToeProtocol` and `pickCell`.              |
+| `frontend/src/agent/games/ticTacToe/kit.test.ts`    | Tic-tac-toe kit tests: domain parity, full game, idempotency.                          |
+| `frontend/src/agent/games/blackjack/kit.ts`         | Blackjack adapter wrapping `BlackjackBetProtocol` and basic strategy.                  |
+| `frontend/src/agent/games/blackjack/kit.test.ts`    | Blackjack kit tests: domain parity, full game, conserved balances.                     |
+| `frontend/src/agent/games/battleship/kit.ts`        | Battleship adapter wrapping `BattleshipProtocol` and per-seat fleet logic.             |
+| `frontend/src/agent/games/battleship/kit.test.ts`   | Battleship kit tests: domain parity, full game, truthful reveals.                      |
+| `frontend/src/agent/games/quantumPoker/kit.ts`      | Quantum poker adapter wrapping `QuantumPokerProtocol` and `QuantumPokerPersonaDriver`. |
+| `frontend/src/agent/games/quantumPoker/kit.test.ts` | Quantum poker kit tests: domain parity, full hand to `done`.                           |
+| `frontend/src/agent/testHarness.ts`                 | Local two-bot loopback harness used by kit tests.                                      |
+| `frontend/src/agent/testHarness.test.ts`            | Harness self-tests.                                                                    |
+| `frontend/package.json`                             | Add `src/agent/**/*.test.ts` to the `test` script so agent tests run in CI.            |
 
 ---
 
 ## Task 1: Core contract types
 
 **Files:**
+
 - Create: `frontend/src/agent/gameKit.ts`
 
 - [ ] **Step 1: Write `gameKit.ts`**
 
 ```ts
-import type { Protocol, Party, ProtocolContext, Balances } from "sui-tunnel-ts/protocol/Protocol";
+import type {
+  Protocol,
+  Party,
+  ProtocolContext,
+  Balances,
+} from "sui-tunnel-ts/protocol/Protocol";
 
 export type GameId = "tictactoe" | "blackjack" | "battleship" | "quantum-poker";
 export type StateHash = string;
@@ -75,7 +81,10 @@ export type GameKitRegistry = Record<GameId, GameKit<unknown, unknown>>;
 export const GAME_KITS: GameKitRegistry = {} as GameKitRegistry;
 
 /** Default state hash: hex of protocol.encodeState. */
-export function defaultStateHash<S, M>(protocol: Protocol<S, M>, state: S): StateHash {
+export function defaultStateHash<S, M>(
+  protocol: Protocol<S, M>,
+  state: S,
+): StateHash {
   return Buffer.from(protocol.encodeState(state)).toString("hex");
 }
 ```
@@ -97,6 +106,7 @@ git commit -m "feat(agent): add GameKit contract types"
 ## Task 2: Test harness for local two-bot play
 
 **Files:**
+
 - Create: `frontend/src/agent/testHarness.ts`
 - Create: `frontend/src/agent/testHarness.test.ts`
 
@@ -155,7 +165,9 @@ export function driveToTerminal<S, M>(
     }
 
     if (!progressThisRound) {
-      throw new Error(`No progress in ${kit.id} at round ${round}; game is not terminal.`);
+      throw new Error(
+        `No progress in ${kit.id} at round ${round}; game is not terminal.`,
+      );
     }
   }
 
@@ -192,10 +204,12 @@ describe("testHarness", () => {
     const kit: GameKit<unknown, unknown> = {
       id: "tictactoe",
       protocol: protocol as never,
-      stateHash: (s) => Buffer.from(protocol.encodeState(s as never)).toString("hex"),
+      stateHash: (s) =>
+        Buffer.from(protocol.encodeState(s as never)).toString("hex"),
       createBot: (seat) =>
         ({
-          plan: (state) => protocol.randomMove(state as never, seat, Math.random),
+          plan: (state) =>
+            protocol.randomMove(state as never, seat, Math.random),
           confirm: () => {},
           abort: () => {},
         }) as GameBot<unknown, unknown>,
@@ -229,6 +243,7 @@ git commit -m "feat(agent): add local two-bot test harness"
 ## Task 3: Tic-tac-toe kit
 
 **Files:**
+
 - Create: `frontend/src/agent/games/ticTacToe/kit.ts`
 - Create: `frontend/src/agent/games/ticTacToe/kit.test.ts`
 
@@ -243,12 +258,13 @@ import {
   type MultiGameTicTacToeMove,
 } from "@ttt/shared/ttt/multiGameProtocol";
 import { optimalMoves } from "@ttt/shared/ttt/minimax";
+import { CELL_EMPTY, CELL_SERVER, CELL_PLAYER } from "@ttt/shared/constants";
 import {
-  CELL_EMPTY,
-  CELL_SERVER,
-  CELL_PLAYER,
-} from "@ttt/shared/constants";
-import { defaultStateHash, type BotContext, type GameBot, type GameKit } from "@/agent/gameKit";
+  defaultStateHash,
+  type BotContext,
+  type GameBot,
+  type GameKit,
+} from "@/agent/gameKit";
 
 export type TicTacToeDifficulty = "perfect" | "fast";
 
@@ -281,13 +297,21 @@ function pickCell(
   return moves.length > 0 ? moves[0] : empties[0];
 }
 
-class TicTacToeBot implements GameBot<MultiGameTicTacToeState, MultiGameTicTacToeMove> {
+class TicTacToeBot implements GameBot<
+  MultiGameTicTacToeState,
+  MultiGameTicTacToeMove
+> {
   private readonly seat: Party;
   private readonly difficulty: TicTacToeDifficulty;
   private readonly innerProtocol: protocols.TicTacToeProtocol;
   private readonly rng: () => number;
 
-  constructor(seat: Party, stake: bigint, ctx: BotContext, config: TicTacToeBotConfig) {
+  constructor(
+    seat: Party,
+    stake: bigint,
+    ctx: BotContext,
+    config: TicTacToeBotConfig,
+  ) {
     this.seat = seat;
     this.difficulty = config.difficulty ?? "perfect";
     this.innerProtocol = new protocols.TicTacToeProtocol(stake);
@@ -329,7 +353,8 @@ export function createTicTacToeKit(
     id: "tictactoe",
     protocol,
     stateHash: (state) => defaultStateHash(protocol, state),
-    createBot: (seat: Party, ctx: BotContext) => new TicTacToeBot(seat, stake, ctx, config),
+    createBot: (seat: Party, ctx: BotContext) =>
+      new TicTacToeBot(seat, stake, ctx, config),
     defaultStake: stake,
   };
 }
@@ -354,7 +379,10 @@ describe("ticTacToe kit", () => {
   it("uses the multi-game frontend protocol domain", () => {
     const kit = createTicTacToeKit(3, 10n);
     assert.strictEqual(kit.protocol.name, "tic_tac_toe.multi.v1");
-    assert.notStrictEqual(kit.protocol.name, new protocols.TicTacToeProtocol(10n).name);
+    assert.notStrictEqual(
+      kit.protocol.name,
+      new protocols.TicTacToeProtocol(10n).name,
+    );
   });
 
   it("drives a full multi-game session to terminal with conserved balances", () => {
@@ -365,7 +393,10 @@ describe("ticTacToe kit", () => {
 
     assert.ok(kit.protocol.isTerminal(result.finalState));
     const balances = kit.protocol.balances(result.finalState);
-    assert.strictEqual(balances.a + balances.b, ctx.initialBalances.a + ctx.initialBalances.b);
+    assert.strictEqual(
+      balances.a + balances.b,
+      ctx.initialBalances.a + ctx.initialBalances.b,
+    );
   });
 
   it("is deterministic and idempotent on replayed state", () => {
@@ -396,6 +427,7 @@ git commit -m "feat(agent): add tic-tac-toe game kit"
 ## Task 4: Blackjack kit
 
 **Files:**
+
 - Create: `frontend/src/agent/games/blackjack/kit.ts`
 - Create: `frontend/src/agent/games/blackjack/kit.test.ts`
 
@@ -415,7 +447,12 @@ import {
   type BetBlackjackMove,
 } from "@/games/blackjack/app/lib/bjBetProtocol";
 import { handValue } from "@/games/blackjack/app/lib/bjCards";
-import { defaultStateHash, type BotContext, type GameBot, type GameKit } from "@/agent/gameKit";
+import {
+  defaultStateHash,
+  type BotContext,
+  type GameBot,
+  type GameKit,
+} from "@/agent/gameKit";
 
 class BlackjackBot implements GameBot<BetBlackjackState, BetBlackjackMove> {
   private readonly seat: Party;
@@ -429,8 +466,11 @@ class BlackjackBot implements GameBot<BetBlackjackState, BetBlackjackMove> {
     if (actorFor(state) !== this.seat) return null;
 
     if (state.phase === "round_over") {
-      const cap = state.balanceA < state.balanceB ? state.balanceA : state.balanceB;
-      const options = BET_OPTIONS.filter((o) => BigInt(o) >= MIN_BET && BigInt(o) <= cap);
+      const cap =
+        state.balanceA < state.balanceB ? state.balanceA : state.balanceB;
+      const options = BET_OPTIONS.filter(
+        (o) => BigInt(o) >= MIN_BET && BigInt(o) <= cap,
+      );
       const amount = options.length > 0 ? options[0] : Number(MIN_BET);
       return fixedBetMove(amount, state);
     }
@@ -457,7 +497,9 @@ class BlackjackBot implements GameBot<BetBlackjackState, BetBlackjackMove> {
   }
 }
 
-export function createBlackjackKit(stake: bigint): GameKit<BetBlackjackState, BetBlackjackMove> {
+export function createBlackjackKit(
+  stake: bigint,
+): GameKit<BetBlackjackState, BetBlackjackMove> {
   const protocol = new BlackjackBetProtocol(stake);
 
   return {
@@ -489,7 +531,10 @@ describe("blackjack kit", () => {
   it("uses the variable-bet frontend protocol domain", () => {
     const kit = createBlackjackKit(100n);
     assert.strictEqual(kit.protocol.name, "blackjack.bet.v1");
-    assert.notStrictEqual(kit.protocol.name, new protocols.BlackjackProtocol(100n).name);
+    assert.notStrictEqual(
+      kit.protocol.name,
+      new protocols.BlackjackProtocol(100n).name,
+    );
   });
 
   it("drives a full game to terminal with conserved balances", () => {
@@ -500,7 +545,10 @@ describe("blackjack kit", () => {
 
     assert.ok(kit.protocol.isTerminal(result.finalState));
     const balances = kit.protocol.balances(result.finalState);
-    assert.strictEqual(balances.a + balances.b, ctx.initialBalances.a + ctx.initialBalances.b);
+    assert.strictEqual(
+      balances.a + balances.b,
+      ctx.initialBalances.a + ctx.initialBalances.b,
+    );
   });
 });
 ```
@@ -522,6 +570,7 @@ git commit -m "feat(agent): add blackjack game kit"
 ## Task 5: Battleship kit
 
 **Files:**
+
 - Create: `frontend/src/agent/games/battleship/kit.ts`
 - Create: `frontend/src/agent/games/battleship/kit.test.ts`
 
@@ -546,7 +595,12 @@ import {
   type FleetSecret,
 } from "@/games/battleship/engine/selfPlay";
 import { proveCell } from "@/games/battleship/engine/merkle";
-import { defaultStateHash, type BotContext, type GameBot, type GameKit } from "@/agent/gameKit";
+import {
+  defaultStateHash,
+  type BotContext,
+  type GameBot,
+  type GameKit,
+} from "@/agent/gameKit";
 
 export interface BattleshipBotConfig {
   difficulty?: BotDifficulty;
@@ -612,7 +666,8 @@ export function createBattleshipKit(
     id: "battleship",
     protocol,
     stateHash: (state) => defaultStateHash(protocol, state),
-    createBot: (seat: Party, ctx: BotContext) => new BattleshipBot(seat, ctx, config),
+    createBot: (seat: Party, ctx: BotContext) =>
+      new BattleshipBot(seat, ctx, config),
     defaultStake: stake,
   };
 }
@@ -646,7 +701,10 @@ describe("battleship kit", () => {
 
     assert.ok(kit.protocol.isTerminal(result.finalState));
     const balances = kit.protocol.balances(result.finalState);
-    assert.strictEqual(balances.a + balances.b, ctx.initialBalances.a + ctx.initialBalances.b);
+    assert.strictEqual(
+      balances.a + balances.b,
+      ctx.initialBalances.a + ctx.initialBalances.b,
+    );
   });
 });
 ```
@@ -668,6 +726,7 @@ git commit -m "feat(agent): add battleship game kit"
 ## Task 6: Quantum poker kit
 
 **Files:**
+
 - Create: `frontend/src/agent/games/quantumPoker/kit.ts`
 - Create: `frontend/src/agent/games/quantumPoker/kit.test.ts`
 
@@ -684,7 +743,12 @@ import {
   QuantumPokerPersonaDriver,
   type QuantumPokerBotProfile,
 } from "sui-tunnel-ts/protocol/quantumPokerPersona";
-import { defaultStateHash, type BotContext, type GameBot, type GameKit } from "@/agent/gameKit";
+import {
+  defaultStateHash,
+  type BotContext,
+  type GameBot,
+  type GameKit,
+} from "@/agent/gameKit";
 
 export interface QuantumPokerBotConfig {
   profile?: QuantumPokerBotProfile;
@@ -695,7 +759,10 @@ class QuantumPokerBot implements GameBot<PokerState, PokerMove> {
   private readonly rng: () => number;
 
   constructor(seat: Party, ctx: BotContext, config: QuantumPokerBotConfig) {
-    this.driver = new QuantumPokerPersonaDriver(seat, config.profile ?? "balanced");
+    this.driver = new QuantumPokerPersonaDriver(
+      seat,
+      config.profile ?? "balanced",
+    );
     this.rng = ctx.rngForSeat(seat);
   }
 
@@ -722,7 +789,8 @@ export function createQuantumPokerKit(
     id: "quantum-poker",
     protocol,
     stateHash: (state) => defaultStateHash(protocol, state),
-    createBot: (seat: Party, ctx: BotContext) => new QuantumPokerBot(seat, ctx, config),
+    createBot: (seat: Party, ctx: BotContext) =>
+      new QuantumPokerBot(seat, ctx, config),
     defaultStake: stake,
   };
 }
@@ -756,7 +824,10 @@ describe("quantum poker kit", () => {
 
     assert.ok(kit.protocol.isTerminal(result.finalState));
     const balances = kit.protocol.balances(result.finalState);
-    assert.strictEqual(balances.a + balances.b, ctx.initialBalances.a + ctx.initialBalances.b);
+    assert.strictEqual(
+      balances.a + balances.b,
+      ctx.initialBalances.a + ctx.initialBalances.b,
+    );
   });
 });
 ```
@@ -778,6 +849,7 @@ git commit -m "feat(agent): add quantum poker game kit"
 ## Task 7: Populate the registry and add registry tests
 
 **Files:**
+
 - Modify: `frontend/src/agent/gameKit.ts`
 - Modify: `frontend/src/agent/gameKit.test.ts`
 
@@ -819,10 +891,16 @@ describe("GAME_KITS registry", () => {
   });
 
   it("exposes the human-hook protocol domains", () => {
-    assert.strictEqual(GAME_KITS.tictactoe.protocol.name, "tic_tac_toe.multi.v1");
+    assert.strictEqual(
+      GAME_KITS.tictactoe.protocol.name,
+      "tic_tac_toe.multi.v1",
+    );
     assert.strictEqual(GAME_KITS.blackjack.protocol.name, "blackjack.bet.v1");
     assert.strictEqual(GAME_KITS.battleship.protocol.name, "battleship.v1");
-    assert.strictEqual(GAME_KITS["quantum-poker"].protocol.name, "quantum_poker.v2");
+    assert.strictEqual(
+      GAME_KITS["quantum-poker"].protocol.name,
+      "quantum_poker.v2",
+    );
   });
 
   it("imports cleanly under tsx", () => {
@@ -849,6 +927,7 @@ git commit -m "feat(agent): populate GAME_KITS registry"
 ## Task 8: Wire agent tests into the frontend test script
 
 **Files:**
+
 - Modify: `frontend/package.json`
 
 - [ ] **Step 1: Update the `test` script**
@@ -882,6 +961,7 @@ git commit -m "build(agent): include agent tests in frontend test script"
 ## Task 9: Add import-hygiene boundary enforcement
 
 **Files:**
+
 - Create: `frontend/src/agent/.eslintrc-import-boundary.json` (or add a rule block to `.eslintrc` if one exists)
 
 - [ ] **Step 1: Check existing eslint config**
@@ -921,6 +1001,7 @@ git commit -m "build(agent): enforce import-hygiene boundary for agent kits"
 ## Task 10: Final verification and typecheck
 
 **Files:**
+
 - All of the above
 
 - [ ] **Step 1: Run frontend typecheck**
@@ -944,23 +1025,23 @@ Expected: branch pushed.
 
 ### Spec coverage
 
-| Spec requirement | Task(s) |
-|---|---|
-| `GameKit` / `GameBot` / `BotContext` types | Task 1 |
-| Per-seat RNG factory | Task 1 (`BotContext.rngForSeat`) |
-| `plan()` / `confirm()` / `abort()` split | Task 1, all kit tasks |
-| Tic-tac-toe adapter | Task 3 |
-| Blackjack adapter | Task 4 |
-| Battleship per-seat refactor | Task 5 |
-| Quantum poker adapter | Task 6 |
-| `GAME_KITS` registry | Task 7 |
-| Domain-tag parity tests | Tasks 3–7 |
-| Move legality + balance conservation | Tasks 3–6 kit tests |
-| Full game to settlement | `driveToTerminal` in Tasks 3–6 |
-| Import hygiene under tsx | Tasks 3–7 (tests run under tsx), Task 9 |
-| Idempotency on replayed state | Task 3 test, `lastActedHash` in harness |
-| Rejected-move safety | `driveToTerminal` does not confirm on error |
-| Boundary rule against browser-only imports | Task 9 |
+| Spec requirement                           | Task(s)                                     |
+| ------------------------------------------ | ------------------------------------------- |
+| `GameKit` / `GameBot` / `BotContext` types | Task 1                                      |
+| Per-seat RNG factory                       | Task 1 (`BotContext.rngForSeat`)            |
+| `plan()` / `confirm()` / `abort()` split   | Task 1, all kit tasks                       |
+| Tic-tac-toe adapter                        | Task 3                                      |
+| Blackjack adapter                          | Task 4                                      |
+| Battleship per-seat refactor               | Task 5                                      |
+| Quantum poker adapter                      | Task 6                                      |
+| `GAME_KITS` registry                       | Task 7                                      |
+| Domain-tag parity tests                    | Tasks 3–7                                   |
+| Move legality + balance conservation       | Tasks 3–6 kit tests                         |
+| Full game to settlement                    | `driveToTerminal` in Tasks 3–6              |
+| Import hygiene under tsx                   | Tasks 3–7 (tests run under tsx), Task 9     |
+| Idempotency on replayed state              | Task 3 test, `lastActedHash` in harness     |
+| Rejected-move safety                       | `driveToTerminal` does not confirm on error |
+| Boundary rule against browser-only imports | Task 9                                      |
 
 ### Placeholder scan
 

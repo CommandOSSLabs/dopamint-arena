@@ -9,6 +9,7 @@ import { OffchainTunnel } from "sui-tunnel-ts/core/tunnel";
 import {
   PaymentsProtocol,
   type PaymentMove,
+  type PaymentsState,
 } from "sui-tunnel-ts/protocol/payments";
 import { Transcript } from "sui-tunnel-ts/proof/transcript";
 import { registerWindowDisposer } from "@/lib/windowSessions";
@@ -34,8 +35,16 @@ import {
   TICK_COUNT,
 } from "./constants";
 import { openPaymentTunnel } from "./openPaymentTunnel";
+import { mintNftRewardToMiner, pickNftReward } from "./nftReward";
 import { settlePaymentTunnel, type PaymentTunnel } from "./paymentSettle";
-import type { MachinePhase, MachineSessionView, NftTier } from "./types";
+import { createRegularPaymentsKit } from "@/agent/games/regularPayments/kit";
+import type {
+  MachinePhase,
+  MachineSessionView,
+  NftReward,
+  NftTier,
+} from "./types";
+import type { GameBot } from "@/agent/gameKit";
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -75,6 +84,8 @@ class MachineRuntime {
   error: string | null = null;
   tickCount = 0;
   tier: NftTier = "unknown";
+  reward: NftReward | null = null;
+  digest: string | null = null;
   private tickTimes: number[] = [];
 
   private gen = 0;
@@ -89,6 +100,8 @@ class MachineRuntime {
   private sessionId: string | null = null;
   private statsToken: string | null = null;
   private pending = { updates: 0, signatures: 0, verifications: 0, bytes: 0 };
+
+  private payerBot: GameBot<PaymentsState, PaymentMove> | null = null;
 
   constructor(id: string, label: string) {
     this.id = id;
@@ -107,6 +120,7 @@ class MachineRuntime {
   }
 
   toView(): MachineSessionView {
+    const revealed = this.phase === "closed";
     return {
       id: this.id,
       label: this.label,
@@ -115,7 +129,9 @@ class MachineRuntime {
       tickCount: this.tickCount,
       tickMax: TICK_COUNT,
       tps: this.readTps(),
-      tier: this.tier,
+      tier: revealed ? this.tier : "unknown",
+      reward: revealed ? this.reward : null,
+      digest: this.digest,
     };
   }
 
@@ -127,6 +143,7 @@ class MachineRuntime {
     const myGen = ++this.gen;
     this.phase = "spawning";
     this.error = null;
+    this.digest = null;
     onChange();
 
     if (!deps.account) {
@@ -191,12 +208,15 @@ class MachineRuntime {
       this.moveCount = 0;
       this.heartbeatActions = 0;
       this.phase = "running";
+
+      const kit = createRegularPaymentsKit(MICRO_UNIT);
+      this.payerBot = kit.createBot("A", { rngForSeat: () => Math.random });
       onChange();
 
       deps.report.bumpCounters({ tunnelsOpened: 1 });
       deps.report.pushLocalTxn({
         id: 0,
-        game: "regular-payments",
+        game: "Regular payments",
         time: new Date().toLocaleTimeString("en-GB"),
         bot: "You",
         type: "Opening",
@@ -226,7 +246,7 @@ class MachineRuntime {
       this.flushCounters(deps);
       deps.report.bumpCounters({ tunnelsClosed: 1, settlements: 1 });
 
-      const digest = await settlePaymentTunnel({
+      const settleP = settlePaymentTunnel({
         tunnel,
         transcript,
         tunnelId,
@@ -235,32 +255,78 @@ class MachineRuntime {
         fallbackSignExec: isMtpsConfigured
           ? deps.sponsoredSignExec
           : deps.signExec,
+      }).catch((e) => {
+        console.warn("[regular-payments] settle failed:", e);
+        return undefined;
       });
+
+      const mintP =
+        isMtpsConfigured && this.reward
+          ? mintNftRewardToMiner({
+              sponsoredSignExec: deps.sponsoredSignExec,
+              walletSignExec: deps.signExec,
+              reward: this.reward,
+            })
+              .then((r) => r.digest)
+              .catch((e) => {
+                console.warn("[regular-payments] mint failed:", e);
+                return undefined;
+              })
+          : Promise.resolve(undefined);
+
+      const [settleDigest, mintDigest] = await Promise.all([settleP, mintP]);
       if (this.gen !== myGen) return;
 
-      if (digest && deps.account) {
+      this.digest = mintDigest || null;
+
+      if (deps.account) {
         const time = new Date().toLocaleTimeString("en-GB");
-        deps.report.pushTxn({
-          id: 0,
-          game: "regular-payments",
-          digest,
-          address: deps.account.address,
-          time,
-          bot: deps.account.address,
-          type: "Settle",
-          status: "Success",
-          amount: "",
-        });
-        deps.report.pushLocalTxn({
-          id: 0,
-          game: "regular-payments",
-          time,
-          bot: "You",
-          type: "Settled",
-          status: "Success",
-          amount: "",
-          digest,
-        });
+        if (settleDigest) {
+          deps.report.pushTxn({
+            id: 0,
+            game: "Regular payments",
+            digest: settleDigest,
+            address: deps.account.address,
+            time,
+            bot: deps.account.address,
+            type: "Settle",
+            status: "Success",
+            amount: "",
+          });
+          deps.report.pushLocalTxn({
+            id: 0,
+            game: "Regular payments",
+            time,
+            bot: "You",
+            type: "Settled",
+            status: "Success",
+            amount: "",
+            digest: settleDigest,
+          });
+        }
+        if (mintDigest && this.reward) {
+          deps.report.pushTxn({
+            id: 0,
+            game: "Regular payments",
+            digest: mintDigest,
+            address: deps.account.address,
+            time,
+            bot: deps.account.address,
+            type: "Mint NFT",
+            status: "Success",
+            amount: this.reward.title,
+          });
+          deps.report.pushLocalTxn({
+            id: 0,
+            game: "Regular payments",
+            time,
+            bot: "You",
+            type: "Mint NFT",
+            status: "Success",
+            amount: this.reward.title,
+            digest: mintDigest,
+          });
+        }
       }
 
       this.phase = "closed";
@@ -281,13 +347,21 @@ class MachineRuntime {
 
       const frameDeadline = performance.now() + FRAME_BUDGET_MS;
       while (this.tickCount < TICK_COUNT && performance.now() < frameDeadline) {
-        const r = tunnel.step(
-          { from: "A", amount: MICRO_UNIT } satisfies PaymentMove,
-          "A",
-          { timestamp: this.ts++ },
-        );
+        const preState = tunnel.state;
+        const move = this.payerBot
+          ? this.payerBot.plan(preState)
+          : ({ from: "A", amount: MICRO_UNIT } satisfies PaymentMove);
+        if (!move) {
+          // Payer exhausted its budget — stop the stream early
+          break;
+        }
+        const r = tunnel.step(move, "A", { timestamp: this.ts++ });
         if (!r.verified)
           throw new Error("micro-payment step failed verification");
+
+        if (this.payerBot) {
+          this.payerBot.confirm(preState, move);
+        }
 
         this.tickCount += 1;
         this.recordTps();
@@ -306,6 +380,7 @@ class MachineRuntime {
 
     this.flushCounters(deps);
     this.tier = nextTier(this.id, this.tickCount);
+    this.reward = pickNftReward();
   }
 
   private flushCounters(deps: ShopDeps) {

@@ -12,12 +12,12 @@ self-authenticating), ADR-0008 (dispute/ZK path).
 
 ## Problem
 
-The backend half of the resume protocol ships the *control-plane* mechanics: a dropped player
+The backend half of the resume protocol ships the _control-plane_ mechanics: a dropped player
 reconnects to any instance, re-runs the `connect` handshake, sends `resume { matchId }`, and the
 server atomically rebinds the seat's `ConnRef`, notifies the peer (`peer.resumed` / `peer.dropped`),
 and invalidates the peer's relay cache. **The server stores no game state for resume.**
 
-That leaves the *data plane* — the live, co-signed game state — entirely to the client, and the
+That leaves the _data plane_ — the live, co-signed game state — entirely to the client, and the
 client does not yet do any of it. Today:
 
 - `MpClient` (`frontend/src/pvp/mpClient.ts`) has a one-shot `connect()` with no reconnect loop:
@@ -29,7 +29,7 @@ client does not yet do any of it. Today:
   seat a tunnel at nonce N** after the in-memory tunnel is gone.
 - The tunnel's game state lives only in an in-memory React ref. The ephemeral co-signer key
   survives a reload (`pvpIdentity.ts` persists it in `localStorage`), **but the game state does
-  not** — a page refresh keeps the ability to *sign* and loses *what we are signing over*.
+  not** — a page refresh keeps the ability to _sign_ and loses _what we are signing over_.
 - The FE on-chain code (`onchain/tunnelTx.ts`) wires **cooperative close only** (both parties
   co-sign a fresh `Settlement`). When the peer is gone, that path cannot complete.
 
@@ -58,7 +58,7 @@ flow, and the settlement floor.
 - **Self-play modes** (e.g. self-play blackjack via `OffchainTunnel`) — no relay, no peer, state is
   deterministically replayable; not part of the PvP resume path.
 - **New on-chain / dispute logic.** The unilateral settle path already exists in the SDK
-  (`onchain/lifecycle.ts`); this spec only *surfaces* it in the FE.
+  (`onchain/lifecycle.ts`); this spec only _surfaces_ it in the FE.
 
 ---
 
@@ -74,12 +74,12 @@ flow, and the settlement floor.
 
 ## Decisions (locked in brainstorming)
 
-| Decision | Choice | Why |
-|---|---|---|
-| Failure-mode scope | **Reload-grade (full)** | The spec's problem statement lists "page refresh"; the tunnel ref is lost on reload, so we must reconstruct from persistence, not just re-attach the socket. |
-| Architecture | **Generic core + thin per-game adapters** | The `CoSignedUpdate` shape, ed25519 verification, nonce ordering, hash-binds-state, adoption, and persistence are all game-agnostic. Per-game impls would be 4× the bug surface on the trust-sensitive path. |
-| Trust model | **Local-authoritative + peer gap-fill** | Each seat restores its own tunnel from local persistence (and its own hidden secret, which the peer can never supply); the peer's re-send only resolves the ≤1 in-flight move and recovers a client whose local storage is gone. Robust to peer-offline. |
-| Client split | **Migrate ttt/caro onto `MpClient`; deprecate `RelayClient` (keep, don't delete)** | The reconnect loop must live in the socket-owning client; building it twice is waste. `RelayClient` is marked `@deprecated` and left in the tree for now — lower-risk and reversible — rather than removed. |
+| Decision           | Choice                                                                             | Why                                                                                                                                                                                                                                                      |
+| ------------------ | ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Failure-mode scope | **Reload-grade (full)**                                                            | The spec's problem statement lists "page refresh"; the tunnel ref is lost on reload, so we must reconstruct from persistence, not just re-attach the socket.                                                                                             |
+| Architecture       | **Generic core + thin per-game adapters**                                          | The `CoSignedUpdate` shape, ed25519 verification, nonce ordering, hash-binds-state, adoption, and persistence are all game-agnostic. Per-game impls would be 4× the bug surface on the trust-sensitive path.                                             |
+| Trust model        | **Local-authoritative + peer gap-fill**                                            | Each seat restores its own tunnel from local persistence (and its own hidden secret, which the peer can never supply); the peer's re-send only resolves the ≤1 in-flight move and recovers a client whose local storage is gone. Robust to peer-offline. |
+| Client split       | **Migrate ttt/caro onto `MpClient`; deprecate `RelayClient` (keep, don't delete)** | The reconnect loop must live in the socket-owning client; building it twice is waste. `RelayClient` is marked `@deprecated` and left in the tree for now — lower-risk and reversible — rather than removed.                                              |
 
 ---
 
@@ -110,9 +110,10 @@ No other tunnel internals change. `propose` regenerates an identical MOVE frame 
 (ed25519 over identical bytes), which is how a restored pending proposal is re-sent.
 
 > **Framework discipline (CLAUDE.md):** `sui-tunnel-ts` is upstream-authoritative. `adoptCheckpoint`
-> + `snapshot` are additive, minimal, and the genuinely-missing capability resume needs — not a
-> refactor. Keep them on the existing toolchain (pnpm, prettier, `node:test` via tsx) and co-locate
-> `*.test.ts`.
+>
+> - `snapshot` are additive, minimal, and the genuinely-missing capability resume needs — not a
+>   refactor. Keep them on the existing toolchain (pnpm, prettier, `node:test` via tsx) and co-locate
+>   `*.test.ts`.
 
 ### Layer B — reconnect loop + resume wire (`frontend/src/pvp/mpClient.ts`)
 
@@ -148,11 +149,14 @@ A small interface each PvP game implements, plus a shared persistence helper.
 
 ```ts
 interface ResumeAdapter<State> {
-  serializeState(s: State): JsonValue;      // full app state — NOT encodeState (may be a digest)
+  serializeState(s: State): JsonValue; // full app state — NOT encodeState (may be a digest)
   deserializeState(j: JsonValue): State;
-  captureSecret?(): JsonValue;              // hidden info the peer cannot supply (e.g. fleet)
+  captureSecret?(): JsonValue; // hidden info the peer cannot supply (e.g. fleet)
   restoreSecret?(j: JsonValue): void;
-  onReconciled(tunnel: DistributedTunnel<State, Move>, outcome: ReconcileOutcome): void;
+  onReconciled(
+    tunnel: DistributedTunnel<State, Move>,
+    outcome: ReconcileOutcome,
+  ): void;
 }
 ```
 
@@ -180,16 +184,16 @@ and (for the gap-fill / lost-storage case) its checkpoint + full state.
 
 Decision table for the receiver:
 
-| Condition | Action |
-|---|---|
-| `peer.nonce > my.nonce` | Peer already co-signed the move I lacked. `adoptCheckpoint(deserialize(peer.fullState), peer.checkpoint)`. Adoption clears my pending. I do **not** re-send. |
-| `my.nonce > peer.nonce` | Symmetric — my `resync` lets the peer adopt mine. |
-| equal **and** I hold a pending proposal | Re-`propose(pending.move, pending.timestamp)` — re-sends the MOVE through the normal transport; peer applies + ACKs. |
-| equal, no pending | Nothing to do; resume play. |
-| peer's both-signed checkpoint at **my** nonce has a different `stateHash` | **Equivocation** → settlement floor; do not adopt. |
+| Condition                                                                 | Action                                                                                                                                                       |
+| ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `peer.nonce > my.nonce`                                                   | Peer already co-signed the move I lacked. `adoptCheckpoint(deserialize(peer.fullState), peer.checkpoint)`. Adoption clears my pending. I do **not** re-send. |
+| `my.nonce > peer.nonce`                                                   | Symmetric — my `resync` lets the peer adopt mine.                                                                                                            |
+| equal **and** I hold a pending proposal                                   | Re-`propose(pending.move, pending.timestamp)` — re-sends the MOVE through the normal transport; peer applies + ACKs.                                         |
+| equal, no pending                                                         | Nothing to do; resume play.                                                                                                                                  |
+| peer's both-signed checkpoint at **my** nonce has a different `stateHash` | **Equivocation** → settlement floor; do not adopt.                                                                                                           |
 
 The explicit nonce-exchange is exactly what avoids the "re-send a MOVE the peer already applied →
-nonce-gap throw" hazard: we decide *adopt vs. re-propose* **before** touching the transport.
+nonce-gap throw" hazard: we decide _adopt vs. re-propose_ **before** touching the transport.
 Verification (`adoptCheckpoint`) is client-side and resume-time only.
 
 When the local tunnel survived (transient WS drop, no reload), the same handshake runs against the
@@ -204,12 +208,16 @@ Reload destroys the in-memory tunnel, so each seat persists a compact **resume r
 
 ```ts
 interface ResumeRecord {
-  matchId: string; tunnelId: string; role: "A" | "B"; game: string;
-  opponentWallet: string; opponentPubkeyHex: string;   // to verify a peer re-send if local is lost
+  matchId: string;
+  tunnelId: string;
+  role: "A" | "B";
+  game: string;
+  opponentWallet: string;
+  opponentPubkeyHex: string; // to verify a peer re-send if local is lost
   latestCoSigned: { update: WireStateUpdate; sigA: string; sigB: string }; // settle floor (both sigs)
-  latestState: JsonValue;                              // adapter-serialized full app state
-  pending?: { move: JsonValue; timestamp: string };    // re-proposed deterministically on restore
-  secret?: JsonValue;                                  // adapter hidden secret (fleet, hole salt)
+  latestState: JsonValue; // adapter-serialized full app state
+  pending?: { move: JsonValue; timestamp: string }; // re-proposed deterministically on restore
+  secret?: JsonValue; // adapter hidden secret (fleet, hole salt)
   updatedAt: number;
 }
 ```
@@ -263,12 +271,12 @@ Dopamint opens tunnels with and adjusts only if it is shorter than 60s.
 
 ## Per-game integration
 
-| Game | Client today | State serialization | Hidden secret | Notes |
-|---|---|---|---|---|
-| ttt / caro | `RelayClient` → **migrate to `MpClient`** | `AnyState` is plain JSON (board, turn, balances, size, lastMove) | none | `RelayClient` + its `packages/client/` copy left `@deprecated`, not deleted |
-| blackjack-pvp | `MpClient` | `BlackjackState` serializer | none | **self-play** blackjack out of scope (no relay, deterministic) |
-| battleship | `MpClient` | public state JSON | **fleet secret — local-only, never sent to peer** | the canonical reason local-authoritative was chosen |
-| quantum poker | `MpClient` | state JSON | hole-card salt (if any) as `secret` | ZK dispute path unchanged, separate from resume |
+| Game          | Client today                              | State serialization                                              | Hidden secret                                     | Notes                                                                       |
+| ------------- | ----------------------------------------- | ---------------------------------------------------------------- | ------------------------------------------------- | --------------------------------------------------------------------------- |
+| ttt / caro    | `RelayClient` → **migrate to `MpClient`** | `AnyState` is plain JSON (board, turn, balances, size, lastMove) | none                                              | `RelayClient` + its `packages/client/` copy left `@deprecated`, not deleted |
+| blackjack-pvp | `MpClient`                                | `BlackjackState` serializer                                      | none                                              | **self-play** blackjack out of scope (no relay, deterministic)              |
+| battleship    | `MpClient`                                | public state JSON                                                | **fleet secret — local-only, never sent to peer** | the canonical reason local-authoritative was chosen                         |
+| quantum poker | `MpClient`                                | state JSON                                                       | hole-card salt (if any) as `secret`               | ZK dispute path unchanged, separate from resume                             |
 
 Each game keeps its existing tunnel + channel wiring; the adapter adds (de)serialization, secret
 capture/restore, and an `onReconciled` re-render. No game re-implements verification or adoption.

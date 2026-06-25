@@ -26,11 +26,14 @@
 ### Task 1: Extract QuantumPokerTable component
 
 **Files:**
+
 - Create: `frontend/src/games/quantumPoker/QuantumPokerTable.tsx`
 - Modify: `frontend/src/games/quantumPoker/QuantumPokerWindow.tsx`
 
 **Interfaces:**
+
 - Produces:
+
   ```tsx
   export function QuantumPokerTable(props: {
     state: PokerState;
@@ -38,8 +41,9 @@
     holesB: number[];
     nameA: string;
     nameB: string;
-  }): JSX.Element
+  }): JSX.Element;
   ```
+
   Exported from `frontend/src/games/quantumPoker/QuantumPokerTable.tsx`.
 
 - [ ] **Step 1: Create `QuantumPokerTable.tsx`**
@@ -73,7 +77,19 @@
 
   export const SUITS = ["♠", "♥", "♦", "♣"] as const;
   export const RANKS = [
-    "2", "3", "4", "5", "6", "7", "8", "9", "T", "J", "Q", "K", "A",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9",
+    "T",
+    "J",
+    "Q",
+    "K",
+    "A",
   ];
 
   export const HEADS_UP_STYLE: CSSProperties & Record<`--${string}`, string> = {
@@ -282,6 +298,7 @@
   - Add: `import { QuantumPokerTable, HEADS_UP_STYLE } from "./QuantumPokerTable";`
 
   Replace the felt section in the JSX (inside `<main>`) — the `<section className="relative flex min-h-0...">` block that contains both `PlayerSeat` calls and the board — with:
+
   ```tsx
   <QuantumPokerTable
     state={s}
@@ -309,11 +326,14 @@
 ### Task 2: Wire heartbeat + snapshot table state in `useQuantumPokerAuto.ts`
 
 **Files:**
+
 - Modify: `frontend/src/games/quantumPoker/useQuantumPokerAuto.ts`
 
 **Interfaces:**
+
 - Consumes: `RegisterSessionResult`, `getControlPlaneClient` from `@/backend/controlPlane`; `PokerState` from `sui-tunnel-ts/protocol/quantumPoker`
 - Produces (on `QuantumPokerAutoSession` and `AutoSnapshot`):
+
   ```ts
   state: PokerState | null;
   holesA: number[];
@@ -323,6 +343,7 @@
 - [ ] **Step 1: Add imports**
 
   At the top of `useQuantumPokerAuto.ts`, add these imports:
+
   ```ts
   import type { PokerState } from "sui-tunnel-ts/protocol/quantumPoker";
   import {
@@ -334,6 +355,7 @@
 - [ ] **Step 2: Extend `QuantumPokerAutoSession` interface**
 
   Add three fields after `error: string | null;`:
+
   ```ts
   /** Live poker table state (null before the first tunnel opens). */
   state: PokerState | null;
@@ -346,6 +368,7 @@
 - [ ] **Step 3: Extend `AutoSnapshot` interface**
 
   Add the same three fields to `AutoSnapshot` (after `error: string | null;`):
+
   ```ts
   state: PokerState | null;
   holesA: number[];
@@ -355,6 +378,7 @@
 - [ ] **Step 4: Initialize the snap with the new fields**
 
   In the `snap` initializer inside the `AutoSession` class (the `private snap: AutoSnapshot = { ... }` block), add:
+
   ```ts
   state: null,
   holesA: [],
@@ -364,6 +388,7 @@
 - [ ] **Step 5: Add heartbeat fields to `AutoSession`**
 
   Inside `class AutoSession`, add these private fields (after the `private gen = 0;` line):
+
   ```ts
   private session: RegisterSessionResult | null = null;
   private heartbeatActions = 0;
@@ -374,6 +399,7 @@
 - [ ] **Step 6: Update `emit()` to populate table state**
 
   Replace the `emit()` method's `this.snap = { ... }` assignment so it includes the new fields (add after `error: this.error,`):
+
   ```ts
   state: this.tunnel?.state ?? null,
   holesA: this.tunnel?.state.holeA ?? [],
@@ -385,6 +411,7 @@
 - [ ] **Step 7: Add `flushHeartbeat` method to `AutoSession`**
 
   Add this method to the `AutoSession` class (before `runMatch`):
+
   ```ts
   private flushHeartbeat(tunnelId: string, force: boolean) {
     const session = this.session;
@@ -423,7 +450,9 @@
     this.session = await getControlPlaneClient().registerSession({
       userAddress: this.deps?.account?.address ?? this.bots.A.address,
       game: "quantum-poker",
-      tunnels: [{ tunnelId, partyA: this.bots.A.address, partyB: this.bots.B.address }],
+      tunnels: [
+        { tunnelId, partyA: this.bots.A.address, partyB: this.bots.B.address },
+      ],
     });
   } catch (e) {
     console.error("[poker auto] registerSession failed:", e);
@@ -435,7 +464,11 @@
   const FLUSH_MS = 80;
   const flush = async () => {
     if (pending > 0) {
-      this.deps?.report.bumpCounters({ updates: pending, signatures: pending * 2, verifications: pending * 2 });
+      this.deps?.report.bumpCounters({
+        updates: pending,
+        signatures: pending * 2,
+        verifications: pending * 2,
+      });
       pending = 0;
     }
     this.flushHeartbeat(tunnelId, false);
@@ -455,7 +488,11 @@
   }
   // Final flush — force the heartbeat so the last window is never dropped.
   if (pending > 0) {
-    this.deps?.report.bumpCounters({ updates: pending, signatures: pending * 2, verifications: pending * 2 });
+    this.deps?.report.bumpCounters({
+      updates: pending,
+      signatures: pending * 2,
+      verifications: pending * 2,
+    });
     pending = 0;
   }
   this.flushHeartbeat(tunnelId, true);
@@ -463,16 +500,19 @@
   ```
 
   Also delete the `tunnel.onUpdate` callback's old `this.deps?.report.bumpCounters(...)` call (the one inside `tunnel.onUpdate = (u, bytes) => { ... }`). Keep only `transcript.append(u)` there:
+
   ```ts
   tunnel.onUpdate = (u) => {
     transcript.append(u);
   };
   ```
+
   The `bytes` parameter can be dropped since it's no longer used.
 
 - [ ] **Step 9: Remove the now-unused `SPACE_MS` constant**
 
   Delete this line from the top of the file:
+
   ```ts
   /** Spectator pacing per off-chain move (ms). */
   const SPACE_MS = 60;
@@ -481,6 +521,7 @@
 - [ ] **Step 10: Update the `useQuantumPokerAuto` hook's return object**
 
   In the `return { ... }` block of `useQuantumPokerAuto`, add:
+
   ```ts
   state: snap.state,
   holesA: snap.holesA,
@@ -500,9 +541,11 @@
 ### Task 3: Render table in Auto window + commit
 
 **Files:**
+
 - Modify: `frontend/src/games/quantumPoker/QuantumPokerBotVsBotWindow.tsx`
 
 **Interfaces:**
+
 - Consumes:
   - `s.state: PokerState | null` from `useQuantumPokerAuto`
   - `s.holesA: number[]`, `s.holesB: number[]` from `useQuantumPokerAuto`
@@ -513,6 +556,7 @@
 - [ ] **Step 1: Add imports to `QuantumPokerBotVsBotWindow.tsx`**
 
   Add at the top (after the existing imports):
+
   ```tsx
   import { QuantumPokerTable, HEADS_UP_STYLE } from "./QuantumPokerTable";
   ```
@@ -520,6 +564,7 @@
 - [ ] **Step 2: Apply `HEADS_UP_STYLE` to the root div**
 
   The existing root `<div style={STYLE} ...>` uses the local `STYLE` const. Merge both styles:
+
   ```tsx
   <div
     style={{ ...STYLE, ...HEADS_UP_STYLE }}
@@ -532,16 +577,19 @@
 - [ ] **Step 3: Render the table when state is available**
 
   Inside `<main>`, after the fund gate section (`{!s.funded && ...}`) and BEFORE the scoreboard section, add:
+
   ```tsx
-  {s.state && (
-    <QuantumPokerTable
-      state={s.state}
-      holesA={s.holesA}
-      holesB={s.holesB}
-      nameA={s.personas?.a ?? "Bot A"}
-      nameB={s.personas?.b ?? "Bot B"}
-    />
-  )}
+  {
+    s.state && (
+      <QuantumPokerTable
+        state={s.state}
+        holesA={s.holesA}
+        holesB={s.holesB}
+        nameA={s.personas?.a ?? "Bot A"}
+        nameB={s.personas?.b ?? "Bot B"}
+      />
+    );
+  }
   ```
 
 - [ ] **Step 4: Full typecheck**
@@ -567,6 +615,7 @@
   ```
 
   Then commit:
+
   ```bash
   cd /Users/aaronphan/Documents/projects/quantum_poker/dopamint-arena && git commit -m "feat(poker): show table + report off-chain throughput"
   ```
@@ -587,24 +636,24 @@
 
 ### Spec coverage
 
-| Spec requirement | Task |
-|---|---|
-| Extract `Card`, `CardRow`, `ChipStack`, `PlayerSeat`, `PHASE_LABEL`, `SUITS`, `RANKS`, `cardText` | Task 1, Step 1 |
-| Export `QuantumPokerTable` with exact signature | Task 1, Step 1 |
-| `QuantumPokerWindow.tsx` imports and uses `<QuantumPokerTable>` | Task 1, Step 2 |
-| `SPACE_MS` removed | Task 2, Step 9 |
-| `bumpCounters` no longer called per-move | Task 2, Step 8 |
-| Batched flush every 80ms | Task 2, Step 8 |
-| `registerSession` after tunnel opens | Task 2, Step 8 |
-| `flushHeartbeat` method | Task 2, Step 7 |
-| `state`, `holesA`, `holesB` in `AutoSnapshot` + `QuantumPokerAutoSession` | Task 2, Steps 2-4, 10 |
-| Both holes shown in auto (spectator) | Task 2, Step 6 (`holeA`/`holeB` directly) |
-| `QuantumPokerBotVsBotWindow` renders table | Task 3, Steps 3 |
-| CSS vars passed to table component | Task 3, Step 2 |
-| typecheck clean | Tasks 1-3, verify steps |
-| Tests pass | Task 3, Step 5 |
-| Single commit, four files staged | Task 3, Steps 6 |
-| Report written | Task 3, Step 7 |
+| Spec requirement                                                                                  | Task                                      |
+| ------------------------------------------------------------------------------------------------- | ----------------------------------------- |
+| Extract `Card`, `CardRow`, `ChipStack`, `PlayerSeat`, `PHASE_LABEL`, `SUITS`, `RANKS`, `cardText` | Task 1, Step 1                            |
+| Export `QuantumPokerTable` with exact signature                                                   | Task 1, Step 1                            |
+| `QuantumPokerWindow.tsx` imports and uses `<QuantumPokerTable>`                                   | Task 1, Step 2                            |
+| `SPACE_MS` removed                                                                                | Task 2, Step 9                            |
+| `bumpCounters` no longer called per-move                                                          | Task 2, Step 8                            |
+| Batched flush every 80ms                                                                          | Task 2, Step 8                            |
+| `registerSession` after tunnel opens                                                              | Task 2, Step 8                            |
+| `flushHeartbeat` method                                                                           | Task 2, Step 7                            |
+| `state`, `holesA`, `holesB` in `AutoSnapshot` + `QuantumPokerAutoSession`                         | Task 2, Steps 2-4, 10                     |
+| Both holes shown in auto (spectator)                                                              | Task 2, Step 6 (`holeA`/`holeB` directly) |
+| `QuantumPokerBotVsBotWindow` renders table                                                        | Task 3, Steps 3                           |
+| CSS vars passed to table component                                                                | Task 3, Step 2                            |
+| typecheck clean                                                                                   | Tasks 1-3, verify steps                   |
+| Tests pass                                                                                        | Task 3, Step 5                            |
+| Single commit, four files staged                                                                  | Task 3, Steps 6                           |
+| Report written                                                                                    | Task 3, Step 7                            |
 
 ### Placeholder scan
 

@@ -75,7 +75,7 @@
   --qp-amber-fill: #ffe9bd;
 
   container-type: size;
-  font-family: "Gochi Hand", "Comic Sans MS", cursive;
+  font-family: var(--font-wal-gochi);
   color: var(--qp-ink);
   background-color: var(--qp-paper);
   background-image: radial-gradient(
@@ -84,6 +84,140 @@
   );
   background-size: 16px 16px;
   background-position: -8px -8px;
+}
+
+/* ---- qp-sketch primitives (ttt-scoped) -----------------------------------
+   The hand-drawn button/panel/input skin Tic-Tac-Toe shares with Quantum Poker
+   & Blackjack. Defined here (not borrowed from blackjack.css) so the styles are
+   owned by ttt and can't leak across games. Borders wobble via `#qpRough` (the
+   shared <SketchDefs/> ttt renders). NOTE: deliberately NO blanket `* { font }`
+   rule — that would override the Material Symbols icon font and render icons as
+   literal text. The root already pins Gochi Hand; buttons inherit it. */
+.ttt-root.qp-sketch .qp-stroke {
+  position: relative;
+  isolation: isolate;
+}
+.ttt-root.qp-sketch .qp-stroke::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--qp-fill, transparent);
+  border: 2.5px solid var(--qp-ink);
+  border-radius: 10px;
+  filter: url(#qpRough);
+  pointer-events: none;
+  z-index: -1;
+}
+.ttt-root.qp-sketch .qp-panel {
+  --qp-fill: #fffefb;
+  border-radius: 10px;
+}
+
+.ttt-root.qp-sketch .qp-btn {
+  position: relative;
+  isolation: isolate;
+  font-family: inherit;
+  line-height: 1;
+  --qp-fill: #fffefb;
+  color: var(--qp-ink);
+  cursor: pointer;
+  transition: transform 0.1s ease;
+  border: none;
+  background: none;
+}
+.ttt-root.qp-sketch .qp-btn::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--qp-fill);
+  border: 2.5px solid var(--qp-ink);
+  border-radius: 9px;
+  filter: url(#qpRough);
+  z-index: -1;
+}
+.ttt-root.qp-sketch .qp-btn:hover:not(:disabled) {
+  transform: translateY(-1px) rotate(-0.5deg);
+}
+.ttt-root.qp-sketch .qp-btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+.ttt-root.qp-sketch .qp-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.ttt-root.qp-sketch .qp-btn--go {
+  --qp-fill: var(--qp-amber-fill);
+}
+.ttt-root.qp-sketch .qp-btn--go::before {
+  border-color: var(--qp-amber);
+}
+.ttt-root.qp-sketch .qp-btn--stop {
+  --qp-fill: #ffe9e9;
+}
+.ttt-root.qp-sketch .qp-btn--stop::before {
+  border-color: var(--qp-red);
+}
+.ttt-root.qp-sketch .qp-btn--call {
+  --qp-fill: #e7f1fb;
+}
+.ttt-root.qp-sketch .qp-btn--call::before {
+  border-color: var(--qp-blue);
+}
+
+.ttt-root.qp-sketch .qp-input {
+  background: #fffdf6;
+  border: 2px solid var(--qp-ink);
+  border-radius: 6px;
+  color: var(--qp-ink);
+  padding: 4px 8px;
+  outline: none;
+}
+.ttt-root.qp-sketch .qp-input:focus {
+  border-color: var(--qp-amber);
+}
+
+.ttt-root.qp-sketch .qp-title {
+  line-height: 1.1;
+  font-weight: 950;
+  letter-spacing: 0.05em;
+}
+.ttt-root.qp-sketch .qp-eyebrow {
+  letter-spacing: 0.1em;
+  color: var(--qp-amber);
+  text-transform: uppercase;
+  font-weight: bold;
+}
+.ttt-root.qp-sketch .qp-note {
+  line-height: 1.4;
+  color: var(--qp-ink-soft);
+}
+
+/* ---- board-dominant landscape: responsive side panes (Bomb It-style) --------
+   The two control/info panes must SHRINK with the window so the centre board stays
+   the hero on small tiles (fixed-width panes pinch the board). `cqw` resolves to
+   `.ttt-root` (container-type: size = the window), so panes track the window width.
+   Buttons scale the same way so labels never overflow a narrow pane. */
+.ttt-root.qp-sketch .ttt-pane {
+  width: clamp(92px, 20cqw, 210px);
+  padding: clamp(6px, 1.5cqw, 14px);
+  gap: clamp(8px, 2cqw, 16px);
+}
+.ttt-root.qp-sketch .ttt-ctl-btn {
+  font-size: clamp(11px, 2.7cqw, 16px);
+  padding: clamp(7px, 1.7cqw, 12px) clamp(6px, 1.4cqw, 14px);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+/* Board stays a perfect square at any scale: the centre area is its own size container, and the
+   board is the largest square that fits — min(area width, area height). No title above it to skew
+   the aspect, so it grows/shrinks square whether the window is wide or tall. */
+.ttt-root.qp-sketch .ttt-board-area {
+  container-type: size;
+}
+.ttt-root.qp-sketch .ttt-board-square {
+  width: min(100cqw, 100cqh);
+  height: min(100cqw, 100cqh);
 }
 
 /* Custom Notebook Styling */

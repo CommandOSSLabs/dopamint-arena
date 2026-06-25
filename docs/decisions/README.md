@@ -1,8 +1,8 @@
 # Architecture Decision Records
 
-Short records of non-trivial or contested decisions, written *before* the code
+Short records of non-trivial or contested decisions, written _before_ the code
 that depends on them. An ADR captures the decision and the reasoning so the
-*why* survives after the people involved have moved on.
+_why_ survives after the people involved have moved on.
 
 ## Convention
 
@@ -15,7 +15,7 @@ that depends on them. An ADR captures the decision and the reasoning so the
 ## Index
 
 - [0001](0001-arena-baseline-architecture.md) — Baseline architecture: Rust
-  control-plane backend, per-game `Protocol`. *(§1 self-play hot path superseded by 0006.)*
+  control-plane backend, per-game `Protocol`. _(§1 self-play hot path superseded by 0006.)_
 - [0002](0002-grid-layout-engine.md) — Owned grid-layout engine over a
   drag-and-drop library (React 19 + shadcn-style ownership).
 - [0003](0003-battleship-on-sui-tunnel.md) — Battleship on the tunnel:

@@ -15,10 +15,12 @@
 **Marks convention:** `0` = empty, `1` = party A (Bot X), `2` = party B (Bot O). `winner`: `0` none, `1` A, `2` B, `3` draw.
 
 **Paths (relative to repo root):**
+
 - Shared: `frontend/src/games/ticTacToe/packages/shared/src/caro/`
 - Client: `frontend/src/games/ticTacToe/packages/client/src/`
 
 **How to run shared tests:**
+
 - All: `cd frontend/src/games/ticTacToe/packages/shared && bun test`
 - One file: `cd frontend/src/games/ticTacToe/packages/shared && bun test src/caro/board.test.ts`
 
@@ -27,6 +29,7 @@
 ## Task 1: Caro board logic (`caro/board.ts`)
 
 **Files:**
+
 - Create: `frontend/src/games/ticTacToe/packages/shared/src/caro/board.ts`
 - Test: `frontend/src/games/ticTacToe/packages/shared/src/caro/board.test.ts`
 
@@ -36,7 +39,13 @@ Create `caro/board.test.ts`:
 
 ```ts
 import { describe, expect, it } from "bun:test";
-import { winnerAround, winningLine, isFull, inBounds, applyMark } from "./board";
+import {
+  winnerAround,
+  winningLine,
+  isFull,
+  inBounds,
+  applyMark,
+} from "./board";
 
 // Helper: empty size*size board.
 const empty = (size: number) => new Array(size * size).fill(0) as number[];
@@ -166,7 +175,11 @@ export function inBounds(size: number, r: number, c: number): boolean {
 }
 
 /** Pure: a copy of `board` with `idx` set to `mark`. */
-export function applyMark(board: CaroBoard, idx: number, mark: number): CaroBoard {
+export function applyMark(
+  board: CaroBoard,
+  idx: number,
+  mark: number,
+): CaroBoard {
   const next = board.slice();
   next[idx] = mark;
   return next;
@@ -181,7 +194,11 @@ export function isFull(board: CaroBoard): boolean {
  * return that mark; otherwise 0. Only scans around `idx`, so cost is O(1) per move.
  * Returns 0 if `idx` is out of range or empty.
  */
-export function winnerAround(board: CaroBoard, size: number, idx: number): number {
+export function winnerAround(
+  board: CaroBoard,
+  size: number,
+  idx: number,
+): number {
   if (idx < 0 || idx >= size * size) return 0;
   const mark = board[idx];
   if (mark === 0) return 0;
@@ -213,7 +230,11 @@ export function winnerAround(board: CaroBoard, size: number, idx: number): numbe
  * `idx` does not complete a five. Naturally empty mid-game (a non-winning last move has no
  * 5-run), so the UI can call it every render and only highlights once a game is won.
  */
-export function winningLine(board: CaroBoard, size: number, idx: number): number[] {
+export function winningLine(
+  board: CaroBoard,
+  size: number,
+  idx: number,
+): number[] {
   if (idx < 0 || idx >= size * size) return [];
   const mark = board[idx];
   if (mark === 0) return [];
@@ -259,6 +280,7 @@ git commit -m "feat(caro): board with O(1) five-in-a-row check"
 ## Task 2: Single-game `CaroProtocol` (`caro/protocol.ts`)
 
 **Files:**
+
 - Create: `frontend/src/games/ticTacToe/packages/shared/src/caro/protocol.ts`
 - Test: `frontend/src/games/ticTacToe/packages/shared/src/caro/protocol.test.ts`
 
@@ -330,9 +352,15 @@ describe("CaroProtocol", () => {
     const proto = new CaroProtocol(3);
     let s = proto.initialState(ctx(1n, 1n));
     const order: Array<[number, "A" | "B"]> = [
-      [0, "A"], [1, "B"], [2, "A"],
-      [4, "B"], [3, "A"], [5, "B"],
-      [7, "A"], [6, "B"], [8, "A"],
+      [0, "A"],
+      [1, "B"],
+      [2, "A"],
+      [4, "B"],
+      [3, "A"],
+      [5, "B"],
+      [7, "A"],
+      [6, "B"],
+      [8, "A"],
     ];
     for (const [cell, by] of order) s = proto.applyMove(s, { cell }, by);
     expect(s.winner).toBe(3);
@@ -348,7 +376,9 @@ describe("CaroProtocol", () => {
   it("encodeState is deterministic, changes with the board, and bakes in size", () => {
     const p15 = new CaroProtocol(15);
     const s0 = p15.initialState(ctx(1n, 1n));
-    expect(p15.encodeState(s0)).toEqual(p15.encodeState({ ...s0, board: s0.board.slice() }));
+    expect(p15.encodeState(s0)).toEqual(
+      p15.encodeState({ ...s0, board: s0.board.slice() }),
+    );
     const s1 = p15.applyMove(s0, { cell: 0 }, "A");
     expect(p15.encodeState(s1)).not.toEqual(p15.encodeState(s0));
 
@@ -443,7 +473,11 @@ export class CaroProtocol implements Protocol<CaroState, CaroMove> {
     if (state.winner !== 0) throw new Error("caro: game already over");
     if (by !== state.turn) throw new Error("caro: not this party's turn");
     const { cell } = move;
-    if (!Number.isInteger(cell) || cell < 0 || cell >= state.size * state.size) {
+    if (
+      !Number.isInteger(cell) ||
+      cell < 0 ||
+      cell >= state.size * state.size
+    ) {
       throw new Error("caro: cell out of range");
     }
     if (state.board[cell] !== 0) throw new Error("caro: cell occupied");
@@ -506,6 +540,7 @@ git commit -m "feat(caro): single-game CaroProtocol over the tunnel"
 ## Task 3: `MultiGameCaroProtocol` (N games per tunnel)
 
 **Files:**
+
 - Modify: `frontend/src/games/ticTacToe/packages/shared/src/caro/protocol.ts` (append the class)
 - Test: `frontend/src/games/ticTacToe/packages/shared/src/caro/multiGame.test.ts`
 
@@ -609,9 +644,10 @@ export type MultiGameCaroMove = CaroMove;
 const MULTI_DOMAIN = protocols.protocolDomain("caro.multi.v1");
 
 /** Plays `maxGames` Caro games over one tunnel, composing `CaroProtocol`. */
-export class MultiGameCaroProtocol
-  implements Protocol<MultiGameCaroState, MultiGameCaroMove>
-{
+export class MultiGameCaroProtocol implements Protocol<
+  MultiGameCaroState,
+  MultiGameCaroMove
+> {
   readonly name = "caro.multi.v1";
   private readonly inner: CaroProtocol;
   private readonly maxGames: number;
@@ -629,7 +665,11 @@ export class MultiGameCaroProtocol
   }
 
   initialState(ctx: ProtocolContext): MultiGameCaroState {
-    return { inner: this.inner.initialState(ctx), gamesPlayed: 0, maxGames: this.maxGames };
+    return {
+      inner: this.inner.initialState(ctx),
+      gamesPlayed: 0,
+      maxGames: this.maxGames,
+    };
   }
 
   applyMove(
@@ -648,7 +688,11 @@ export class MultiGameCaroProtocol
       tunnelId: "",
       initialBalances: { a: state.inner.balanceA, b: state.inner.balanceB },
     });
-    return { inner: carried, gamesPlayed: state.gamesPlayed + 1, maxGames: state.maxGames };
+    return {
+      inner: carried,
+      gamesPlayed: state.gamesPlayed + 1,
+      maxGames: state.maxGames,
+    };
   }
 
   encodeState(state: MultiGameCaroState): Uint8Array {
@@ -677,7 +721,8 @@ export class MultiGameCaroProtocol
   ): MultiGameCaroMove | null {
     if (this.isTerminal(state)) return null;
     // Between games only A drives the advance (mirrors TTT); mid-game the hook supplies moves.
-    if (this.inner.isTerminal(state.inner)) return by === "A" ? { cell: 0 } : null;
+    if (this.inner.isTerminal(state.inner))
+      return by === "A" ? { cell: 0 } : null;
     // Mid-game fallback: first empty cell (the real bot uses caro/bot.ts instead).
     const i = state.inner.board.findIndex((c) => c === 0);
     return i >= 0 ? { cell: i } : null;
@@ -703,6 +748,7 @@ git commit -m "feat(caro): multi-game protocol for N games per tunnel"
 ## Task 4: Heuristic bot (`caro/bot.ts`)
 
 **Files:**
+
 - Create: `frontend/src/games/ticTacToe/packages/shared/src/caro/bot.ts`
 - Test: `frontend/src/games/ticTacToe/packages/shared/src/caro/bot.test.ts`
 
@@ -841,7 +887,12 @@ function patternValue(run: number, openEnds: number): number {
 }
 
 // Best single-axis pattern value for placing `mark` at `idx`.
-function moveScore(board: number[], size: number, idx: number, mark: number): number {
+function moveScore(
+  board: number[],
+  size: number,
+  idx: number,
+  mark: number,
+): number {
   let best = 0;
   for (const [dr, dc] of DIRS) {
     const { run, openEnds } = lineInfo(board, size, idx, dr, dc, mark);
@@ -894,13 +945,15 @@ export function pickCaroMove(
   const radius = strength === "strong" ? 2 : 1;
   const defenseWeight = strength === "strong" ? 0.95 : 0.85;
   let cells = candidates(board, size, radius);
-  if (cells.length === 0) cells = board.map((_, i) => i).filter((i) => board[i] === 0);
+  if (cells.length === 0)
+    cells = board.map((_, i) => i).filter((i) => board[i] === 0);
 
   let bestCell = cells[0];
   let bestScore = -Infinity;
   for (const i of cells) {
     const score =
-      moveScore(board, size, i, me) + defenseWeight * moveScore(board, size, i, opp);
+      moveScore(board, size, i, me) +
+      defenseWeight * moveScore(board, size, i, opp);
     // Tie-break with a small rng jitter so identical scores diversify.
     const jittered = score + rng() * 0.5;
     if (jittered > bestScore) {
@@ -930,6 +983,7 @@ git commit -m "feat(caro): threat-scoring heuristic bot"
 ## Task 5: Export the caro module from `@ttt/shared`
 
 **Files:**
+
 - Modify: `frontend/src/games/ticTacToe/packages/shared/src/index.ts`
 
 - [ ] **Step 1: Add the exports**
@@ -959,6 +1013,7 @@ git commit -m "feat(caro): export caro module from shared"
 ## Task 6: `CaroBoard` component
 
 **Files:**
+
 - Create: `frontend/src/games/ticTacToe/packages/client/src/components/CaroBoard.tsx`
 
 A fit-to-card `size×size` grid. Marks render as `✕` (1, Bot X) / `◯` (2, Bot O). The last move
@@ -1002,7 +1057,11 @@ export function CaroBoard({
           <div
             key={i}
             className={`flex items-center justify-center border border-primary/15 ${
-              win.has(i) ? "bg-secondary/40" : i === lastMove ? "bg-tertiary/30" : ""
+              win.has(i)
+                ? "bg-secondary/40"
+                : i === lastMove
+                  ? "bg-tertiary/30"
+                  : ""
             }`}
             style={{ fontSize: Math.floor(cell * 0.7), lineHeight: 1 }}
           >
@@ -1036,6 +1095,7 @@ git commit -m "feat(caro): CaroBoard grid component"
 ## Task 7: `useCaroBotGame` hook
 
 **Files:**
+
 - Create: `frontend/src/games/ticTacToe/packages/client/src/hooks/useCaroBotGame.ts`
 
 Parallel to `useBotGame.ts` (read that file as the template). Same orchestration
@@ -1146,7 +1206,10 @@ export function useCaroBotGame(
   const [phase, setPhase] = useState<BotPhase>("idle");
   const [error, setError] = useState<string | null>(null);
   const [digests, setDigests] = useState<BotDigests>({});
-  const [balances, setBalances] = useState<{ x: bigint; o: bigint }>({ x: 0n, o: 0n });
+  const [balances, setBalances] = useState<{ x: bigint; o: bigint }>({
+    x: 0n,
+    o: 0n,
+  });
   const [score, setScore] = useState<BotScore>(loadScore);
   const [auto, setAuto] = useState(false);
   const [rebalancing, setRebalancing] = useState(false);
@@ -1163,12 +1226,18 @@ export function useCaroBotGame(
   const maxGamesRef = useRef<number>(DEFAULT_MAX_GAMES);
   maxGamesRef.current = maxGames;
   const boardSizeRef = useRef<number>(boardSize);
-  boardSizeRef.current = Math.max(MIN_BOARD_SIZE, Math.min(MAX_BOARD_SIZE, Math.floor(boardSize)));
+  boardSizeRef.current = Math.max(
+    MIN_BOARD_SIZE,
+    Math.min(MAX_BOARD_SIZE, Math.floor(boardSize)),
+  );
 
   const setMaxGames = useCallback((n: number) => {
     const clamped = Math.max(
       MIN_MAX_GAMES,
-      Math.min(MAX_MAX_GAMES, Math.floor(Number.isFinite(n) ? n : DEFAULT_MAX_GAMES)),
+      Math.min(
+        MAX_MAX_GAMES,
+        Math.floor(Number.isFinite(n) ? n : DEFAULT_MAX_GAMES),
+      ),
     );
     setMaxGamesState(clamped);
   }, []);
@@ -1207,7 +1276,9 @@ export function useCaroBotGame(
         options: { showObjectChanges: true, showEffects: true },
       });
       if (res.effects?.status?.status !== "success") {
-        throw new Error(`tx ${res.digest} failed: ${res.effects?.status?.error ?? "unknown"}`);
+        throw new Error(
+          `tx ${res.digest} failed: ${res.effects?.status?.error ?? "unknown"}`,
+        );
       }
       await client.waitForTransaction({ digest: res.digest });
       return res;
@@ -1233,7 +1304,10 @@ export function useCaroBotGame(
   // Run ONE tunnel that plays `maxGames` caro games and settles once.
   const runGame = useCallback(() => {
     stopTimer();
-    if (balancesRef.current.x < MIN_PLAY_MIST || balancesRef.current.o < MIN_PLAY_MIST) {
+    if (
+      balancesRef.current.x < MIN_PLAY_MIST ||
+      balancesRef.current.o < MIN_PLAY_MIST
+    ) {
       autoRef.current = false;
       setAuto(false);
       setError("Fund the bots first");
@@ -1259,19 +1333,31 @@ export function useCaroBotGame(
 
         // 1) open + fund (both 1-MIST stakes) + activate in ONE tx (bot X signs).
         setPhase("opening");
-        const createRes = await submit(buildCreateAndFundTx(partyX, partyO, 1n), bots.x.keypair);
+        const createRes = await submit(
+          buildCreateAndFundTx(partyX, partyO, 1n),
+          bots.x.keypair,
+        );
         const tunnelId = parseTunnelId(createRes.objectChanges);
         if (!tunnelId) throw new Error("could not find created Tunnel id");
         setDigests((d) => ({ ...d, create: createRes.digest }));
 
         // 2) read created_at for the settlement timestamp.
-        const obj = await client.getObject({ id: tunnelId, options: { showContent: true } });
-        const fields = (obj.data?.content as { fields?: Record<string, unknown> } | undefined)
-          ?.fields;
-        const createdAt = BigInt((fields?.created_at as string | undefined) ?? 0);
+        const obj = await client.getObject({
+          id: tunnelId,
+          options: { showContent: true },
+        });
+        const fields = (
+          obj.data?.content as { fields?: Record<string, unknown> } | undefined
+        )?.fields;
+        const createdAt = BigInt(
+          (fields?.created_at as string | undefined) ?? 0,
+        );
 
         // 3) off-chain self-play tunnel (both keys local), driving MultiGameCaroProtocol.
-        const tunnel = core.OffchainTunnel.selfPlay<MultiGameCaroState, { cell: number }>(
+        const tunnel = core.OffchainTunnel.selfPlay<
+          MultiGameCaroState,
+          { cell: number }
+        >(
           proto,
           tunnelId,
           bots.x.coreKey,
@@ -1314,18 +1400,28 @@ export function useCaroBotGame(
                 resolve();
                 return;
               }
-              if (steps++ >= MAX_STEPS) throw new Error("caro self-play exceeded step bound");
+              if (steps++ >= MAX_STEPS)
+                throw new Error("caro self-play exceeded step bound");
               const inner = tunnel.state.inner;
               const innerOver = inner.winner !== 0;
               // Between games, A drives the advance with any cell; mid-game, the heuristic picks.
               const by: "A" | "B" = innerOver ? "A" : (inner.turn as "A" | "B");
               const cell = innerOver
                 ? 0
-                : pickCaroMove(inner, by, Math.random, strengthFor(difficultyRef.current, by));
+                : pickCaroMove(
+                    inner,
+                    by,
+                    Math.random,
+                    strengthFor(difficultyRef.current, by),
+                  );
               // Sign each update with the on-chain created_at so update_state's timestamp
               // check passes regardless of local clock skew.
-              const r = tunnel.step({ cell }, by, { mode: "full", timestamp: createdAt });
-              if (!r.verified) throw new Error(`state ${r.nonce} failed dual-verify`);
+              const r = tunnel.step({ cell }, by, {
+                mode: "full",
+                timestamp: createdAt,
+              });
+              if (!r.verified)
+                throw new Error(`state ${r.nonce} failed dual-verify`);
 
               const next = tunnel.state;
               setBoard([...next.inner.board]);
@@ -1334,7 +1430,8 @@ export function useCaroBotGame(
               setTurn(next.inner.turn as "A" | "B");
               setWinner(next.inner.winner);
               setCurrentGame(next.gamesPlayed + 1);
-              if (next.inner.winner !== 0) recordGame(next.gamesPlayed, next.inner.winner);
+              if (next.inner.winner !== 0)
+                recordGame(next.gamesPlayed, next.inner.winner);
 
               if (proto.isTerminal(next)) {
                 stopTimer();
@@ -1356,7 +1453,10 @@ export function useCaroBotGame(
         setPhase("settling");
         const latest = tunnel.latest;
         if (latest) {
-          const ures = await submit(buildUpdateStateTx(tunnelId, latest), bots.x.keypair);
+          const ures = await submit(
+            buildUpdateStateTx(tunnelId, latest),
+            bots.x.keypair,
+          );
           setDigests((d) => ({ ...d, update: ures.digest }));
         }
 
@@ -1364,8 +1464,15 @@ export function useCaroBotGame(
         const root = transcript.root();
         const onchainNonce = latest ? latest.update.nonce : 0n;
         const s = tunnel.buildSettlementWithRoot(createdAt, root, onchainNonce);
-        const closeRes = await submit(buildSettleWithRootTx(tunnelId, s), bots.x.keypair);
-        setDigests((d) => ({ ...d, close: closeRes.digest, root: `0x${bytesToHex(root)}` }));
+        const closeRes = await submit(
+          buildSettleWithRootTx(tunnelId, s),
+          bots.x.keypair,
+        );
+        setDigests((d) => ({
+          ...d,
+          close: closeRes.digest,
+          root: `0x${bytesToHex(root)}`,
+        }));
 
         const b = await refreshBalances();
         setPhase("done");
@@ -1379,7 +1486,9 @@ export function useCaroBotGame(
           } else {
             autoRef.current = false;
             setAuto(false);
-            setError("A bot is low on gas — auto-play stopped. Fund the bots to continue.");
+            setError(
+              "A bot is low on gas — auto-play stopped. Fund the bots to continue.",
+            );
           }
         }
       } catch (e) {
@@ -1403,7 +1512,10 @@ export function useCaroBotGame(
   }, [runGame]);
 
   const startAuto = useCallback(() => {
-    if (balancesRef.current.x < MIN_PLAY_MIST || balancesRef.current.o < MIN_PLAY_MIST) {
+    if (
+      balancesRef.current.x < MIN_PLAY_MIST ||
+      balancesRef.current.o < MIN_PLAY_MIST
+    ) {
       setError("Fund the bots first");
       setPhase("error");
       return;
@@ -1488,8 +1600,14 @@ export function useCaroBotGame(
 `useCaroBotGame` imports `BotPhase`, `BotScore`, `BotDigests`, `Difficulty` from `@/hooks/useBotGame`. Confirm `useBotGame.ts` exports each (it already exports `Difficulty`, `BotPhase`, `BotDigests`, `BotScore` as interfaces/types). If `BotScore` or `BotDigests` are declared but not `export`ed, add `export` to their declarations:
 
 ```ts
-export interface BotDigests { /* …unchanged… */ }
-export interface BotScore { x: number; o: number; draws: number }
+export interface BotDigests {
+  /* …unchanged… */
+}
+export interface BotScore {
+  x: number;
+  o: number;
+  draws: number;
+}
 ```
 
 - [ ] **Step 3: Typecheck**
@@ -1510,6 +1628,7 @@ git commit -m "feat(caro): useCaroBotGame tunnel arena hook"
 ## Task 8: Setup screen — game type + board size
 
 **Files:**
+
 - Modify: `frontend/src/games/ticTacToe/packages/client/src/scenes/SetupScene.tsx`
 
 Add a `GameType = "ttt" | "caro"` toggle and (when caro) a board-size selector. Thread new
@@ -1620,22 +1739,30 @@ Then in the `activeTab === "mode"` block, render the game-type + size controls a
 existing `PlayModeChoice`:
 
 ```tsx
-          {activeTab === "mode" && (
-            <div className="space-y-3">
-              <h2 className="font-headline-lg-mobile text-base text-primary">Select Game</h2>
-              <div className="py-1">
-                <GameTypeChoice value={gameType} onChange={setGameType} />
-              </div>
-              {gameType === "caro" && (
-                <BoardSizeChoice value={boardSize} onChange={setBoardSize} />
-              )}
-              <h2 className="font-headline-lg-mobile text-base text-primary pt-2">Play Mode</h2>
-              <p className="text-xs text-outline -mt-1.5">Choose how the bot matches are run.</p>
-              <div className="py-2">
-                <PlayModeChoice value={mode} onChange={setMode} />
-              </div>
-            </div>
-          )}
+{
+  activeTab === "mode" && (
+    <div className="space-y-3">
+      <h2 className="font-headline-lg-mobile text-base text-primary">
+        Select Game
+      </h2>
+      <div className="py-1">
+        <GameTypeChoice value={gameType} onChange={setGameType} />
+      </div>
+      {gameType === "caro" && (
+        <BoardSizeChoice value={boardSize} onChange={setBoardSize} />
+      )}
+      <h2 className="font-headline-lg-mobile text-base text-primary pt-2">
+        Play Mode
+      </h2>
+      <p className="text-xs text-outline -mt-1.5">
+        Choose how the bot matches are run.
+      </p>
+      <div className="py-2">
+        <PlayModeChoice value={mode} onChange={setMode} />
+      </div>
+    </div>
+  );
+}
 ```
 
 - [ ] **Step 3: Typecheck**
@@ -1655,6 +1782,7 @@ git commit -m "feat(caro): setup game-type + board-size controls"
 ## Task 9: Wire `App.tsx` (game type, board size, active hook)
 
 **Files:**
+
 - Modify: `frontend/src/games/ticTacToe/packages/client/src/App.tsx`
 
 App calls **both** hooks (rules-of-hooks) and selects the active view by `gameType`. The
@@ -1700,16 +1828,26 @@ export default function App() {
 In the `setup` branch, add to `<SetupScene … />`:
 
 ```tsx
-              gameType={gameType}
-              setGameType={setGameType}
-              boardSize={boardSize}
-              setBoardSize={setBoardSize}
+gameType = { gameType };
+setGameType = { setGameType };
+boardSize = { boardSize };
+setBoardSize = { setBoardSize };
 ```
 
 In the `game` branch, pass `gameType`:
 
 ```tsx
-          {scene === "game" && <GameScene g={g} mode={mode} gameType={gameType} onBack={backToSetup} isPortrait={isPortrait} />}
+{
+  scene === "game" && (
+    <GameScene
+      g={g}
+      mode={mode}
+      gameType={gameType}
+      onBack={backToSetup}
+      isPortrait={isPortrait}
+    />
+  );
+}
 ```
 
 - [ ] **Step 3: Stop both loops on disconnect / back**
@@ -1717,21 +1855,21 @@ In the `game` branch, pass `gameType`:
 In the disconnect effect and `backToSetup`, stop both games so the idle one can't keep a timer:
 
 ```tsx
-  useEffect(() => {
-    if (!isConnected && scene !== "login") {
-      tttGame.stopAuto();
-      caroGame.stopAuto();
-      setScene("login");
-    }
-  }, [isConnected, scene, tttGame, caroGame]);
+useEffect(() => {
+  if (!isConnected && scene !== "login") {
+    tttGame.stopAuto();
+    caroGame.stopAuto();
+    setScene("login");
+  }
+}, [isConnected, scene, tttGame, caroGame]);
 ```
 
 ```tsx
-  const backToSetup = () => {
-    tttGame.stopAuto();
-    caroGame.stopAuto();
-    setScene("setup");
-  };
+const backToSetup = () => {
+  tttGame.stopAuto();
+  caroGame.stopAuto();
+  setScene("setup");
+};
 ```
 
 - [ ] **Step 4: Typecheck**
@@ -1751,6 +1889,7 @@ git commit -m "feat(caro): wire game-type selection in App"
 ## Task 10: Render caro in `GameScene`
 
 **Files:**
+
 - Modify: `frontend/src/games/ticTacToe/packages/client/src/scenes/GameScene.tsx`
 
 Add a `gameType` prop; render `CaroBoard` when caro, else the existing `Board`. Widen the `g`
@@ -1788,23 +1927,31 @@ export function GameScene({
 Replace the "Grid board" block:
 
 ```tsx
-          {/* Grid board */}
-          <div className="flex justify-center my-4">
-            <Board board={uiBoard(g.board)} onPlay={() => {}} disabled />
-          </div>
+{
+  /* Grid board */
+}
+<div className="flex justify-center my-4">
+  <Board board={uiBoard(g.board)} onPlay={() => {}} disabled />
+</div>;
 ```
 
 with:
 
 ```tsx
-          {/* Board: 3×3 grid for TTT, N×N grid for caro */}
-          <div className="flex justify-center my-4">
-            {gameType === "caro" ? (
-              <CaroBoard board={g.board} size={g.boardSize ?? 15} lastMove={g.lastMove ?? -1} />
-            ) : (
-              <Board board={uiBoard(g.board)} onPlay={() => {}} disabled />
-            )}
-          </div>
+{
+  /* Board: 3×3 grid for TTT, N×N grid for caro */
+}
+<div className="flex justify-center my-4">
+  {gameType === "caro" ? (
+    <CaroBoard
+      board={g.board}
+      size={g.boardSize ?? 15}
+      lastMove={g.lastMove ?? -1}
+    />
+  ) : (
+    <Board board={uiBoard(g.board)} onPlay={() => {}} disabled />
+  )}
+</div>;
 ```
 
 - [ ] **Step 3: Caro-aware title + win text**
@@ -1813,9 +1960,9 @@ Replace the header title text (the `<h1>` containing `Tic-Tac-Toe Journal`) with
 `gameType`-aware label:
 
 ```tsx
-        <h1 className="font-headline-xl text-3xl text-primary underline decoration-secondary decoration-2 truncate tracking-tight">
-          {gameType === "caro" ? "Caro Journal" : "Tic-Tac-Toe Journal"}
-        </h1>
+<h1 className="font-headline-xl text-3xl text-primary underline decoration-secondary decoration-2 truncate tracking-tight">
+  {gameType === "caro" ? "Caro Journal" : "Tic-Tac-Toe Journal"}
+</h1>
 ```
 
 Update `statusText` so the win line reads naturally for caro. Change its signature and the
@@ -1833,7 +1980,9 @@ function statusText(phase: BotPhase, turn: "A" | "B", winner: number, gameType: 
 And update the call site:
 
 ```tsx
-            {statusText(g.phase, g.turn, g.winner, gameType)}
+{
+  statusText(g.phase, g.turn, g.winner, gameType);
+}
 ```
 
 - [ ] **Step 4: Typecheck**
@@ -1860,6 +2009,7 @@ git commit -m "feat(caro): render caro board in game scene"
 cd frontend/src/games/ticTacToe/packages/shared && bun test
 cd frontend/src/games/ticTacToe && bun run build
 ```
+
 Expected: all shared tests pass; `bun run build` completes (the pre-existing @noble PURE-annotation warning and the chunk-size warning are benign).
 
 - [ ] **Step 2: Manual smoke (dev server)**
@@ -1867,6 +2017,7 @@ Expected: all shared tests pass; `bun run build` completes (the pre-existing @no
 ```bash
 cd frontend/src/games/ticTacToe && bun run dev
 ```
+
 In the browser: continue past login → setup → **Play Mode** tab → choose **Caro**, pick a
 board size (e.g. 19), **Single game**, fund the bots, **Start playing**. Verify: an N×N board
 renders, two bots place ✕/◯ alternately, a game ends on 5-in-a-row (status shows

@@ -16,4 +16,4 @@ The choice we made, in one or two sentences. Active voice: "We do X."
 ## Consequences
 
 What becomes easier, what becomes harder, what we're now committed to, and what
-we explicitly chose *not* to do.
+we explicitly chose _not_ to do.

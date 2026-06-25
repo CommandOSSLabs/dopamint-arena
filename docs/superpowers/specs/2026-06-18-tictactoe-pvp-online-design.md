@@ -15,7 +15,7 @@ turns. This is a separate mode that leaves the existing bot-vs-bot self-play
 untouched.
 
 This mirrors the already-working blackjack PvP, adapted to tic-tac-toe's
-*symmetric, alternating-turn* nature (no player-vs-dealer asymmetry).
+_symmetric, alternating-turn_ nature (no player-vs-dealer asymmetry).
 
 ## Decisions (settled during brainstorming)
 
@@ -24,7 +24,7 @@ This mirrors the already-working blackjack PvP, adapted to tic-tac-toe's
 - **Stakes:** **minimal — 1 MIST per game**, fixed bankroll per seat. The point is
   the win/loss record, not gambling. A decisive game shifts the 1-MIST stake
   loser→winner; a draw pushes. No custom buy-in, no variable per-game betting.
-- **Auto + loop:** auto = a local strategy bot plays *your* turns; play **many
+- **Auto + loop:** auto = a local strategy bot plays _your_ turns; play **many
   games in one tunnel until one side hits "Stop & settle"** (blackjack-style
   multi-game loop), then one cooperative close.
 - **Engine acquisition:** **Approach 1** — point ttt's `sui-tunnel-ts` dependency
@@ -125,7 +125,7 @@ New, in `frontend/src/games/ticTacToe/packages/client/src/`:
 - **`hooks/usePvpTicTacToe.ts`** — the PvP engine hook. Takes the chosen variant;
   selects the protocol + bot; owns match/open/fund/play/auto/turn/settle; returns a
   view: `{ board, size, turn, role, isMyTurn, winner/draw, score {x,o,draws},
-  games log, settle history, phase, auto, digests, error }` + actions
+games log, settle history, phase, auto, digests, error }` + actions
   `{ play(cell), setAuto(on), next(), stop(), queue(), leave() }`.
 - **`scenes/PvpScene.tsx`** — the lobby (identity + faucet + variant select + Find
   match) **and** the table (interactive board + turn/role badge + score + per-game
@@ -135,7 +135,7 @@ New, in `frontend/src/games/ticTacToe/packages/client/src/`:
 Modified:
 
 - **`components/CaroBoard.tsx`** — add `onPlay?(cell)` + `disabled` props so it is
-  *interactive* for PvP (it is currently render-only). `Board.tsx` (3×3) already has
+  _interactive_ for PvP (it is currently render-only). `Board.tsx` (3×3) already has
   `onPlay`/`disabled`.
 - **`App.tsx`** — add a `"pvp"` scene to the scene state machine and a "Play online"
   entry (from SetupScene or LoginScene).
@@ -144,7 +144,7 @@ Modified:
 
 - **My turn:** `inner.turn === myParty` and the inner game is not terminal → the
   board accepts clicks → `play(cell)` proposes the move.
-- **Auto:** a local *strategy* bot (not random) plays my turns —
+- **Auto:** a local _strategy_ bot (not random) plays my turns —
   `pickCell(inner, by, "perfect")` (minimax) for 3×3,
   `pickCaroMove(inner, by, rng, "strong")` for caro. Auto applies to **me only**;
   the opponent drives their own seat.

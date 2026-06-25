@@ -9,7 +9,7 @@ Sponsored open/fund (ADR-0009) pays gas from the settler's **SIP-58
 address-balance** (empty `gas_payment.objects` + `ValidDuring` nonce), so
 concurrent sponsored closes/opens never equivocate on a gas coin. The **stake**,
 however, still comes from a user-owned `Coin<T>` object: the open PTB does
-`tx.object(stakeCoinId)` → `splitCoins`. Building pins that coin's *version*.
+`tx.object(stakeCoinId)` → `splitCoins`. Building pins that coin's _version_.
 
 When several games auto-open on a page reload, they all fund their stake from the
 **same** user coin at the **same** version. One commits (bumping the version),
@@ -20,7 +20,7 @@ the rest are rejected non-retriably:
 
 i.e. owned-object equivocation — the same failure SIP-58 already removes for gas.
 A retry-with-rebuild (re-resolving the coin's current version every 5 s) was
-added as the immediate unblock, but it only *serializes* the contention: one open
+added as the immediate unblock, but it only _serializes_ the contention: one open
 succeeds per round, so N games take ~N rounds to all open.
 
 The framework deployed under DOPAMINT supports SIP-58 (`0x2::coin::send_funds` /
@@ -39,7 +39,7 @@ on the sponsored path:
   `tx.object(coin)`, so nothing version-pinned. Concurrent opens each draw their
   own reservation from the one balance; they do not equivocate (replay guard is
   the per-tx `ValidDuring` nonce the settler already sets).
-- **Funding** keeps the player's DOPAMINT *address balance* above a threshold via
+- **Funding** keeps the player's DOPAMINT _address balance_ above a threshold via
   the background top-up: faucet-mint a coin (`dopamint::mint`, unchanged) then
   sweep it into the address balance with `coin::send_funds(coin, sender)`. Both
   are serialized off the hot path, so their coin-object use never contends with
@@ -50,7 +50,7 @@ on the sponsored path:
      `0x2::coin::send_funds<T>` for the configured `T`;
   2. **reject any `FundsWithdrawal` input whose source is not
      `WithdrawFrom::Sender`.** A sponsored PTB that withdrew from
-     `Sponsor` (the gas owner) would drain the *settler's* address balance —
+     `Sponsor` (the gas owner) would drain the _settler's_ address balance —
      an H1-class settler-drain, the address-balance analogue of the existing
      `Argument::Gas` guard. The user may only withdraw their **own** funds.
 
@@ -64,9 +64,9 @@ unblock stays as a belt-and-suspenders safety net regardless.
   in parallel on reload, not one-per-retry-round. The stake joins gas on the
   contention-free SIP-58 path; the retry becomes a rare fallback, not the norm.
 - **Harder / committed to**: the sponsor allowlist is now security-load-bearing
-  for fund *withdrawals*, not just move calls — the `WithdrawFrom::Sender` check
+  for fund _withdrawals_, not just move calls — the `WithdrawFrom::Sender` check
   is mandatory and unit-tested. Funding has an extra invariant (keep the
-  *address balance* topped up, not the coin balance); reads use the SIP-58
+  _address balance_ topped up, not the coin balance); reads use the SIP-58
   `fundsInAddressBalance`/`addressBalance` field.
 - **Scope**: cutover is behind a flag and verified on testnet (the open path
   can't be exercised locally). Games adopt it one call site at a time

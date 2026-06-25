@@ -27,6 +27,7 @@
 ## File structure (created / modified / deleted)
 
 **Created:**
+
 - `frontend/src/shims/node-crypto.ts` — Vite stub for `node:crypto`.
 - `frontend/src/telemetry/TelemetryProvider.tsx` — live `TelemetrySnapshot` context.
 - `frontend/src/games/blackjack/cards.ts` — pure card-value→display helpers (no SDK runtime, no Vite-only APIs).
@@ -43,6 +44,7 @@
 - `frontend/src/games/blackjack/assets/**` — salvaged card SVGs + table images.
 
 **Modified:**
+
 - `frontend/vite.config.ts` — add `node:crypto` alias.
 - `frontend/package.json` — add `tsx` devDep + `test` script.
 - `frontend/src/App.tsx` — wrap `Desktop` in `TelemetryProvider`.
@@ -50,6 +52,7 @@
 - `frontend/src/games/blackjack/index.ts` — register the real `BlackjackWindow`.
 
 **Deleted (after assets salvaged):**
+
 - `frontend/src/games/blackjack/packages/**`, `docker-compose.yaml`, `bun.lock`, `package.json` (the nested one), `tsconfig.base.json`, `.gitignore` (the nested one), `index.ts`/`README.md` retained.
 
 ---
@@ -57,6 +60,7 @@
 ## Task 1: Vite `node:crypto` stub (unblock browser bundling)
 
 **Files:**
+
 - Create: `frontend/src/shims/node-crypto.ts`
 - Modify: `frontend/vite.config.ts`
 
@@ -73,7 +77,9 @@
  * loud rather than silently wrong. Keeps the SDK itself untouched (upstream re-sync).
  */
 function unavailable(): never {
-  throw new Error("node:crypto is not available in the browser (sui-tunnel-ts falls back to @noble)");
+  throw new Error(
+    "node:crypto is not available in the browser (sui-tunnel-ts falls back to @noble)",
+  );
 }
 export const createPrivateKey = unavailable;
 export const createPublicKey = unavailable;
@@ -99,8 +105,12 @@ export default defineConfig({
       // The off-chain engine statically imports node:crypto in crypto-native.ts but
       // falls back to @noble at runtime in the browser. Map node:crypto to a stub so
       // the bundle resolves; the native path is never taken here.
-      "node:crypto": fileURLToPath(new URL("./src/shims/node-crypto.ts", import.meta.url)),
-      "sui-tunnel-ts": fileURLToPath(new URL("../sui-tunnel-ts/src", import.meta.url)),
+      "node:crypto": fileURLToPath(
+        new URL("./src/shims/node-crypto.ts", import.meta.url),
+      ),
+      "sui-tunnel-ts": fileURLToPath(
+        new URL("../sui-tunnel-ts/src", import.meta.url),
+      ),
     },
   },
 });
@@ -118,6 +128,7 @@ git commit -m "build(frontend): stub node:crypto for browser engine"
 ## Task 2: Frontend test tooling
 
 **Files:**
+
 - Modify: `frontend/package.json`
 
 - [ ] **Step 1: Add `tsx` devDependency and a `test` script**
@@ -158,6 +169,7 @@ git commit -m "test(frontend): add tsx node:test runner"
 These map the protocol's card VALUES to display card indices (0–51) for the ported `CardDisplay`. No SDK runtime imports, no `import.meta.glob` — so they run under `tsx`.
 
 **Files:**
+
 - Create: `frontend/src/games/blackjack/cards.ts`
 - Test: `frontend/src/games/blackjack/cards.test.ts`
 
@@ -187,7 +199,11 @@ test("valueToCardIndex yields a 0..51 index whose rank value matches", () => {
       const idx = valueToCardIndex(value, seq);
       assert.ok(idx >= 0 && idx < 52, `index ${idx} in range`);
       const rankIdx = idx % 13;
-      assert.equal(rankIndexValue(rankIdx), value, `rank value matches for ${value}`);
+      assert.equal(
+        rankIndexValue(rankIdx),
+        value,
+        `rank value matches for ${value}`,
+      );
     }
   }
 });
@@ -196,7 +212,8 @@ test("value 11 is always an Ace; value 10 varies across 10/J/Q/K", () => {
   assert.equal(valueToCardIndex(11, 3) % 13, 0); // Ace rank index
   const faces = new Set([0, 1, 2, 3].map((s) => valueToCardIndex(10, s) % 13));
   assert.ok(faces.size > 1, "ten-valued cards vary by seq");
-  for (const r of faces) assert.ok(r >= 9 && r <= 12, "ten-valued rank is 10/J/Q/K");
+  for (const r of faces)
+    assert.ok(r >= 9 && r <= 12, "ten-valued rank is 10/J/Q/K");
 });
 
 test("handToCardIndices is stable for the same inputs and preserves length", () => {
@@ -259,7 +276,7 @@ function valueToRankIndex(value: number, seq: number): number {
 
 /** Map a protocol value to a display card index 0..51 (suit rotates with seq). */
 export function valueToCardIndex(value: number, seq: number): number {
-  const suit = (((seq % 4) + 4) % 4);
+  const suit = ((seq % 4) + 4) % 4;
   return suit * 13 + valueToRankIndex(value, seq);
 }
 
@@ -288,6 +305,7 @@ git commit -m "feat(blackjack): add card value-to-face display helpers"
 Pure functions over the SDK engine: which party moves, how to step once, how to derive the view-state. Production imports SDK **types only** (erased at runtime); the test imports SDK **runtime** values by relative path so it runs under `tsx` without path-alias config.
 
 **Files:**
+
 - Create: `frontend/src/games/blackjack/session-core.ts`
 - Test: `frontend/src/games/blackjack/session-core.test.ts`
 
@@ -300,10 +318,18 @@ import assert from "node:assert/strict";
 
 // Relative SDK imports (runtime): tsx needs no path-alias config this way.
 import { createParticipant } from "../../../../sui-tunnel-ts/src/core/keys.ts";
-import { OffchainTunnel, verifyCoSignedUpdate } from "../../../../sui-tunnel-ts/src/core/tunnel.ts";
+import {
+  OffchainTunnel,
+  verifyCoSignedUpdate,
+} from "../../../../sui-tunnel-ts/src/core/tunnel.ts";
 import { BlackjackProtocol } from "../../../../sui-tunnel-ts/src/protocol/blackjack.ts";
 
-import { partyForPhase, stepSession, deriveView, sessionResult } from "./session-core.ts";
+import {
+  partyForPhase,
+  stepSession,
+  deriveView,
+  sessionResult,
+} from "./session-core.ts";
 
 function newTunnel(stake: bigint) {
   const a = createParticipant("player-bot");
@@ -360,7 +386,9 @@ test("deriveView and sessionResult report the bankroll outcome", () => {
   while (stepSession(protocol, tunnel, Math.random)) {}
   const view = deriveView(tunnel.state, stake);
   assert.equal(view.playerCards.length, view.playerCardCount);
-  assert.ok(["win", "lose", "push"].includes(sessionResult(tunnel.state, stake)));
+  assert.ok(
+    ["win", "lose", "push"].includes(sessionResult(tunnel.state, stake)),
+  );
 });
 ```
 
@@ -415,7 +443,10 @@ export function stepSession(
 /** Player-bankroll outcome relative to the starting stake. */
 export type SessionResult = "win" | "lose" | "push";
 
-export function sessionResult(state: BlackjackState, stake: bigint): SessionResult {
+export function sessionResult(
+  state: BlackjackState,
+  stake: bigint,
+): SessionResult {
   if (state.balanceA > stake) return "win";
   if (state.balanceA < stake) return "lose";
   return "push";
@@ -436,7 +467,10 @@ export interface BlackjackView {
   isTerminal: boolean;
 }
 
-export function deriveView(state: BlackjackState, stake: bigint): BlackjackView {
+export function deriveView(
+  state: BlackjackState,
+  stake: bigint,
+): BlackjackView {
   const round = Number(state.round);
   return {
     playerCards: handToCardIndices(state.playerHand, round * 2),
@@ -451,7 +485,9 @@ export function deriveView(state: BlackjackState, stake: bigint): BlackjackView 
     phase: state.phase,
     isTerminal:
       state.phase === "round_over" &&
-      (state.balanceA < stake || state.balanceB < stake || Number(state.round) >= 1000),
+      (state.balanceA < stake ||
+        state.balanceB < stake ||
+        Number(state.round) >= 1000),
   };
 }
 ```
@@ -475,6 +511,7 @@ git commit -m "feat(blackjack): add pure tunnel session driver"
 ## Task 5: Telemetry provider feeding the live panels
 
 **Files:**
+
 - Create: `frontend/src/telemetry/TelemetryProvider.tsx`
 - Modify: `frontend/src/App.tsx`
 - Modify: `frontend/src/desktop/Desktop.tsx`
@@ -520,8 +557,12 @@ const TelemetryContext = createContext<TelemetryContextValue | null>(null);
 export function TelemetryProvider({ children }: { children: ReactNode }) {
   // Seed from the placeholder so the shell looks populated before any play.
   const [txns, setTxns] = useState<TxnRow[]>(PLACEHOLDER_SNAPSHOT.txns);
-  const [tpsSeries, setTpsSeries] = useState<number[]>(PLACEHOLDER_SNAPSHOT.tpsSeries);
-  const [botsRunning, setBotsRunning] = useState<number>(PLACEHOLDER_SNAPSHOT.botsRunning);
+  const [tpsSeries, setTpsSeries] = useState<number[]>(
+    PLACEHOLDER_SNAPSHOT.tpsSeries,
+  );
+  const [botsRunning, setBotsRunning] = useState<number>(
+    PLACEHOLDER_SNAPSHOT.botsRunning,
+  );
   const [hasActivity, setHasActivity] = useState(false);
 
   const counters = useRef<Counters>(newCounters());
@@ -561,7 +602,10 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
       tpsSeries,
       botsRunning,
       totalBalance: PLACEHOLDER_SNAPSHOT.totalBalance,
-      successRate: rate.errors === 0 ? 100 : (rate.updates / (rate.updates + rate.errors)) * 100,
+      successRate:
+        rate.errors === 0
+          ? 100
+          : (rate.updates / (rate.updates + rate.errors)) * 100,
     };
   }, [hasActivity, txns, tpsSeries, botsRunning]);
 
@@ -570,12 +614,17 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
     [snapshot, pushTxn, bumpCounters, setActive],
   );
 
-  return <TelemetryContext.Provider value={value}>{children}</TelemetryContext.Provider>;
+  return (
+    <TelemetryContext.Provider value={value}>
+      {children}
+    </TelemetryContext.Provider>
+  );
 }
 
 export function useTelemetry(): TelemetryContextValue {
   const ctx = useContext(TelemetryContext);
-  if (!ctx) throw new Error("useTelemetry must be used within a TelemetryProvider");
+  if (!ctx)
+    throw new Error("useTelemetry must be used within a TelemetryProvider");
   return ctx;
 }
 ```
@@ -605,7 +654,7 @@ export function App() {
 In `frontend/src/desktop/Desktop.tsx`: remove the import `import { PLACEHOLDER_SNAPSHOT } from "../placeholders";`, add `import { useTelemetry } from "../telemetry/TelemetryProvider";`, and replace `const snapshot = PLACEHOLDER_SNAPSHOT;` with:
 
 ```tsx
-  const { snapshot } = useTelemetry();
+const { snapshot } = useTelemetry();
 ```
 
 - [ ] **Step 4: Verify typecheck**
@@ -627,6 +676,7 @@ git commit -m "feat(frontend): live telemetry provider for panels"
 Owns keypairs, the self-play tunnel, the stepping timer, and telemetry emission.
 
 **Files:**
+
 - Create: `frontend/src/games/blackjack/useBlackjackSession.ts`
 
 - [ ] **Step 1: Implement the hook**
@@ -637,7 +687,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createParticipant } from "sui-tunnel-ts/core/keys";
 import { OffchainTunnel } from "sui-tunnel-ts/core/tunnel";
 import { BlackjackProtocol, WAGER } from "sui-tunnel-ts/protocol/blackjack";
-import type { BlackjackState, BlackjackMove } from "sui-tunnel-ts/protocol/blackjack";
+import type {
+  BlackjackState,
+  BlackjackMove,
+} from "sui-tunnel-ts/protocol/blackjack";
 import { useTelemetry } from "../../telemetry/TelemetryProvider";
 import {
   deriveView,
@@ -669,7 +722,10 @@ export function useBlackjackSession(): BlackjackSession {
   const [stake, setStake] = useState<number>(0);
 
   const protocolRef = useRef<BlackjackProtocol | null>(null);
-  const tunnelRef = useRef<OffchainTunnel<BlackjackState, BlackjackMove> | null>(null);
+  const tunnelRef = useRef<OffchainTunnel<
+    BlackjackState,
+    BlackjackMove
+  > | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const stakeRef = useRef<bigint>(0n);
 
@@ -703,7 +759,10 @@ export function useBlackjackSession(): BlackjackSession {
       const b = createParticipant("dealer-bot");
       const protocol = new BlackjackProtocol();
       const tunnelId =
-        "0x" + a.address.slice(2, 10) + b.address.slice(2, 10) + Date.now().toString(16);
+        "0x" +
+        a.address.slice(2, 10) +
+        b.address.slice(2, 10) +
+        Date.now().toString(16);
       const tunnel = OffchainTunnel.selfPlay(
         protocol,
         tunnelId,
@@ -715,7 +774,12 @@ export function useBlackjackSession(): BlackjackSession {
       );
       // Feed each co-signed update into the live panels.
       tunnel.onUpdate = (_u, bytes) =>
-        report.bumpCounters({ updates: 1, signatures: 2, verifications: 2, bytes });
+        report.bumpCounters({
+          updates: 1,
+          signatures: 2,
+          verifications: 2,
+          bytes,
+        });
 
       protocolRef.current = protocol;
       tunnelRef.current = tunnel;
@@ -734,7 +798,11 @@ export function useBlackjackSession(): BlackjackSession {
         setView(deriveView(t.state, stakeRef.current));
 
         // A settled round (now round_over with a balance change) => a panel txn.
-        if (moved && t.state.phase === "round_over" && t.state.balanceA !== prevBalanceA) {
+        if (
+          moved &&
+          t.state.phase === "round_over" &&
+          t.state.balanceA !== prevBalanceA
+        ) {
           const delta = t.state.balanceA - prevBalanceA;
           report.pushTxn({
             time: new Date().toLocaleTimeString("en-GB"),
@@ -782,6 +850,7 @@ git commit -m "feat(blackjack): tunnel self-play session hook"
 ## Task 7: Salvage assets + port pure presentational components
 
 **Files:**
+
 - Create: `frontend/src/games/blackjack/assets/**` (copied)
 - Create: `frontend/src/games/blackjack/components/{LoadingModal,PageLoader,GameCardScale,SuitSpinner,Spinner}.tsx` (copied)
 - Create: `frontend/src/games/blackjack/blackjack.css` (ported casino classes)
@@ -808,7 +877,21 @@ cp packages/client/public/card-back.png assets/
  * — never import this from a test.
  */
 const SUITS = ["clubs", "diamonds", "hearts", "spades"] as const;
-const NAMES = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"] as const;
+const NAMES = [
+  "A",
+  "2",
+  "3",
+  "4",
+  "5",
+  "6",
+  "7",
+  "8",
+  "9",
+  "10",
+  "J",
+  "Q",
+  "K",
+] as const;
 
 const urls = import.meta.glob("./assets/cards/**/*.svg", {
   eager: true,
@@ -842,17 +925,23 @@ cp packages/client/src/components/general/Spinner.tsx components/
 - [ ] **Step 4: Fix imports/assets in the copied components**
 
 Open each copied file under `components/` and:
+
 - Replace any `@/` path-alias imports with correct relative paths within `components/`.
 - In `PageLoader.tsx`, replace the `dealer-desk.png` / `menu-background.png` background references (previously `/dealer-desk.png` etc.) with imported URLs:
   ```ts
   import dealerDesk from "../assets/dealer-desk.png";
   import menuBackground from "../assets/menu-background.png";
   ```
-  and use `style={{ backgroundImage: \`url(${dealerDesk})\` }}` (and `menuBackground` for the lobby theme) instead of the literal `/...png` path.
+  and use `style={{ backgroundImage: \`url(${dealerDesk})\` }}`(and`menuBackground`for the lobby theme) instead of the literal`/...png` path.
 - Remove any `lucide-react` import in `Spinner.tsx` if `lucide-react` is not a frontend dependency; replace with a minimal inline spinner:
+
   ```tsx
   export function Spinner({ className = "" }: { className?: string }) {
-    return <span className={`inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent ${className}`} />;
+    return (
+      <span
+        className={`inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent ${className}`}
+      />
+    );
   }
   ```
 
@@ -878,6 +967,7 @@ git commit -m "feat(blackjack): salvage assets and port pure components"
 ## Task 8: Port `CardDisplay` (sum-as-prop + game-local art)
 
 **Files:**
+
 - Create: `frontend/src/games/blackjack/components/CardDisplay.tsx` (ported + edited)
 
 - [ ] **Step 1: Copy the file**
@@ -890,6 +980,7 @@ cp packages/client/src/components/app/CardDisplay.tsx components/CardDisplay.tsx
 - [ ] **Step 2: Edit the copied `CardDisplay.tsx`**
 
 Apply these precise changes (keep all layout/markup otherwise):
+
 - Remove the `getCardSum` import from `@poc/shared`.
 - Add to the component props an explicit total: change the props interface to include `sum: number` and render that instead of `getCardSum(cards)`.
 - Replace the inline SVG path construction `` `/cards/${suit}/${suit}-${name}.svg` `` with the bundled URL:
@@ -901,10 +992,11 @@ Apply these precise changes (keep all layout/markup otherwise):
   (The card index→suit/name math already lives in the component; feed `cardUrlFromIndex(cardIndex)` the index it already computes.)
 
 The resulting prop shape is:
+
 ```tsx
 interface CardDisplayProps {
-  cards: number[];      // display indices 0..51
-  sum: number;          // authoritative total from the SDK (handValue)
+  cards: number[]; // display indices 0..51
+  sum: number; // authoritative total from the SDK (handValue)
   title: string;
   isWinning?: boolean;
   isPlayer?: boolean;
@@ -929,6 +1021,7 @@ git commit -m "feat(blackjack): port CardDisplay to SDK sum and local art"
 ## Task 9: `BetPanel` + `BlackjackTable` (ported layout, fed by the session)
 
 **Files:**
+
 - Create: `frontend/src/games/blackjack/components/BetPanel.tsx`
 - Create: `frontend/src/games/blackjack/components/BlackjackTable.tsx`
 
@@ -943,7 +1036,9 @@ export function BetPanel({ onDeal }: { onDeal: (stake: number) => void }) {
   const [stake, setStake] = useState<number>(500);
   return (
     <div className="flex h-full flex-col items-center justify-center gap-3 p-4 text-center">
-      <p className="text-sm text-arena-text">Set a stake — two bots play it out.</p>
+      <p className="text-sm text-arena-text">
+        Set a stake — two bots play it out.
+      </p>
       <label className="flex flex-col gap-1">
         <span className="text-[11px] uppercase text-arena-muted">Stake</span>
         <input
@@ -964,7 +1059,8 @@ export function BetPanel({ onDeal }: { onDeal: (stake: number) => void }) {
         Deal
       </button>
       <p className="text-[11px] text-arena-muted">
-        Bots co-sign each move over a Sui tunnel; play runs until one is out of chips.
+        Bots co-sign each move over a Sui tunnel; play runs until one is out of
+        chips.
       </p>
     </div>
   );
@@ -988,7 +1084,12 @@ interface BlackjackTableProps {
   onPlayAgain: () => void;
 }
 
-export function BlackjackTable({ view, result, settled, onPlayAgain }: BlackjackTableProps) {
+export function BlackjackTable({
+  view,
+  result,
+  settled,
+  onPlayAgain,
+}: BlackjackTableProps) {
   return (
     <div
       className="relative flex h-full w-full flex-col justify-between bg-cover bg-center p-3 text-gold"
@@ -1003,7 +1104,9 @@ export function BlackjackTable({ view, result, settled, onPlayAgain }: Blackjack
 
       <div className="flex items-center justify-between text-xs">
         <span>Round {view.round}</span>
-        <span>Player ${view.playerBalance} · Dealer ${view.dealerBalance}</span>
+        <span>
+          Player ${view.playerBalance} · Dealer ${view.dealerBalance}
+        </span>
       </div>
 
       <CardDisplay
@@ -1017,7 +1120,11 @@ export function BlackjackTable({ view, result, settled, onPlayAgain }: Blackjack
       {settled && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/60">
           <p className="text-lg font-semibold text-gold">
-            {result === "win" ? "Player Bot wins" : result === "lose" ? "Dealer Bot wins" : "Push"}
+            {result === "win"
+              ? "Player Bot wins"
+              : result === "lose"
+                ? "Dealer Bot wins"
+                : "Push"}
           </p>
           <button
             onClick={onPlayAgain}
@@ -1051,6 +1158,7 @@ git commit -m "feat(blackjack): bet panel and self-play table view"
 ## Task 10: `BlackjackWindow` + register the real game
 
 **Files:**
+
 - Create: `frontend/src/games/blackjack/BlackjackWindow.tsx`
 - Modify: `frontend/src/games/blackjack/index.ts`
 
@@ -1119,6 +1227,7 @@ git commit -m "feat(blackjack): register tunnel self-play window"
 ## Task 11: Delete the standalone monorepo + final verification
 
 **Files:**
+
 - Delete: `frontend/src/games/blackjack/packages/**` and the standalone tooling.
 
 - [ ] **Step 1: Confirm nothing outside the game folder imports the old packages**
@@ -1172,4 +1281,7 @@ git commit -m "refactor(blackjack): remove standalone server app"
 - **Terminal decision** is made by `protocol.isTerminal(tunnel.state)` in the hook (authoritative); `deriveView.isTerminal` is display-only and documented as such.
 - **Type consistency**: `BlackjackView`/`SessionResult` defined in `session-core.ts` (Task 4) and consumed unchanged in Tasks 6/9; `TelemetryWriter` defined in Task 5 and used in Task 6; `cardUrlFromIndex` defined in Task 7 and used in Task 8.
 - **Known limitation**: the casino table renders small in the ~16rem desktop tile until drag/resize lands (`GameCardScale` keeps it legible).
+
+```
+
 ```

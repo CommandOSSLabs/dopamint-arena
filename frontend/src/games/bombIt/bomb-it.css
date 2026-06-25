@@ -36,6 +36,11 @@
     var(--bi-ink, #0a090d);
 }
 
+.bomb-lobby--center {
+  justify-content: center;
+  align-items: center;
+}
+
 .bomb-lobby__scene {
   position: absolute;
   inset: 0;
@@ -704,7 +709,7 @@
 }
 .bomb-auto:hover {
   border-color: rgba(148, 163, 184, 0.45);
-  color: #f8fafc;
+  color: var(--sketch-ink, #23221f);
 }
 .bomb-auto--on {
   border-color: color-mix(in srgb, var(--bi-ember, #f97316) 70%, #fff);

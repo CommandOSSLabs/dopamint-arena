@@ -24,30 +24,32 @@ Spec: `docs/superpowers/specs/2026-06-19-bomb-it-pvp-design.md`.
 
 ## File Structure
 
-| File | Responsibility |
-| --- | --- |
-| `sui-tunnel-ts/src/protocol/bombIt.ts` | The protocol: constants, types, deterministic board, movement/blast helpers, `BombItProtocol` class. |
-| `sui-tunnel-ts/src/protocol/bombIt.test.ts` | `tsx` unit tests for board, blast/chain, and the protocol class. |
-| `sui-tunnel-ts/src/protocol/index.ts` | EDIT — re-export `bombIt`. |
-| `frontend/src/games/bombIt/session-core.ts` | Pure `deriveView` + view types (type-only SDK import). |
-| `frontend/src/games/bombIt/session-core.test.ts` | `tsx` unit test for `deriveView`/`sessionResult`. |
-| `frontend/src/games/bombIt/usePvpBombIt.ts` | PvP hook: matchmaking, funding, engine, STEP_MS propose timer, scoped input, teardown, settlement. |
-| `frontend/src/games/bombIt/components/BombLobby.tsx` | Create/join match-code screen. |
-| `frontend/src/games/bombIt/components/BombBoard.tsx` | 9×9 grid render + keyboard/D-pad input. |
-| `frontend/src/games/bombIt/bomb-it.css` | Grid/board styles. |
-| `frontend/src/games/bombIt/BombItWindow.tsx` | Status router: lobby → board → result. |
-| `frontend/src/games/bombIt/index.ts` | `register({ id: "bomb-it", … })`. |
-| `frontend/src/games/index.ts` | EDIT — `import "./bombIt"` (side-effect registration). |
+| File                                                 | Responsibility                                                                                       |
+| ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `sui-tunnel-ts/src/protocol/bombIt.ts`               | The protocol: constants, types, deterministic board, movement/blast helpers, `BombItProtocol` class. |
+| `sui-tunnel-ts/src/protocol/bombIt.test.ts`          | `tsx` unit tests for board, blast/chain, and the protocol class.                                     |
+| `sui-tunnel-ts/src/protocol/index.ts`                | EDIT — re-export `bombIt`.                                                                           |
+| `frontend/src/games/bombIt/session-core.ts`          | Pure `deriveView` + view types (type-only SDK import).                                               |
+| `frontend/src/games/bombIt/session-core.test.ts`     | `tsx` unit test for `deriveView`/`sessionResult`.                                                    |
+| `frontend/src/games/bombIt/usePvpBombIt.ts`          | PvP hook: matchmaking, funding, engine, STEP_MS propose timer, scoped input, teardown, settlement.   |
+| `frontend/src/games/bombIt/components/BombLobby.tsx` | Create/join match-code screen.                                                                       |
+| `frontend/src/games/bombIt/components/BombBoard.tsx` | 9×9 grid render + keyboard/D-pad input.                                                              |
+| `frontend/src/games/bombIt/bomb-it.css`              | Grid/board styles.                                                                                   |
+| `frontend/src/games/bombIt/BombItWindow.tsx`         | Status router: lobby → board → result.                                                               |
+| `frontend/src/games/bombIt/index.ts`                 | `register({ id: "bomb-it", … })`.                                                                    |
+| `frontend/src/games/index.ts`                        | EDIT — `import "./bombIt"` (side-effect registration).                                               |
 
 ---
 
 ## Task 1: Board generation + layout helpers
 
 **Files:**
+
 - Create: `sui-tunnel-ts/src/protocol/bombIt.ts`
 - Test: `sui-tunnel-ts/src/protocol/bombIt.test.ts`
 
 **Interfaces:**
+
 - Consumes: `protocolDomain`, `Party`, `Balances`, `ProtocolContext` from `./Protocol`; `concatBytes` from `../core/bytes`; `u64ToBeBytes` from `../core/wire`.
 - Produces: constants (`GRID_W`, `GRID_H`, `CELL_COUNT`, `CELL_FLOOR`, `CELL_WALL`, `CELL_CRATE`, `FUSE_TICKS`, `BLAST_RADIUS`, `MAX_BOMBS_PER_PLAYER`, `CRATE_DENSITY`, `BOMB_IT_TICK_CAP`, `BOMB_IT_MIN_STAKE`, `SPAWN_A`, `SPAWN_B`); types (`BombItAction`, `BombItPlayer`, `BombItBomb`, `BombItState`, `BombItMove`); functions `idx(row,col)`, `isBorder(row,col)`, `isPillar(row,col)`, `inSpawnSafe(row,col)`, `buildGrid(seed: bigint): Uint8Array`.
 
@@ -92,7 +94,14 @@ test("buildGrid: border + lattice are walls, spawns are floor", () => {
 
 test("buildGrid keeps the spawn escape L crate-free", () => {
   const g = buildGrid(987654n);
-  for (const [r, c] of [[1, 1], [1, 2], [2, 1], [7, 7], [7, 6], [6, 7]]) {
+  for (const [r, c] of [
+    [1, 1],
+    [1, 2],
+    [2, 1],
+    [7, 7],
+    [7, 6],
+    [6, 7],
+  ]) {
     assert.notEqual(g[idx(r, c)], CELL_CRATE, `(${r},${c}) must be crate-free`);
   }
 });
@@ -101,7 +110,11 @@ test("buildGrid is 180°-rotationally symmetric and seed-deterministic", () => {
   const g = buildGrid(42n);
   for (let r = 0; r < GRID_H; r++) {
     for (let c = 0; c < GRID_W; c++) {
-      assert.equal(g[idx(r, c)], g[idx(GRID_H - 1 - r, GRID_W - 1 - c)], `(${r},${c}) mirror`);
+      assert.equal(
+        g[idx(r, c)],
+        g[idx(GRID_H - 1 - r, GRID_W - 1 - c)],
+        `(${r},${c}) mirror`,
+      );
     }
   }
   assert.deepEqual(Array.from(buildGrid(42n)), Array.from(buildGrid(42n)));
@@ -161,7 +174,13 @@ export const BOMB_IT_MIN_STAKE = 100n;
 export const SPAWN_A = { row: 1, col: 1 };
 export const SPAWN_B = { row: 7, col: 7 };
 
-export type BombItAction = "north" | "south" | "east" | "west" | "bomb" | "stay";
+export type BombItAction =
+  | "north"
+  | "south"
+  | "east"
+  | "west"
+  | "bomb"
+  | "stay";
 
 export interface BombItPlayer {
   row: number;
@@ -232,8 +251,14 @@ export function isPillar(row: number, col: number): boolean {
 }
 /** Spawn escape cells kept crate-free (A's, plus B's 180° mirror). */
 export function inSpawnSafe(row: number, col: number): boolean {
-  const a = (row === 1 && col === 1) || (row === 1 && col === 2) || (row === 2 && col === 1);
-  const b = (row === 7 && col === 7) || (row === 7 && col === 6) || (row === 6 && col === 7);
+  const a =
+    (row === 1 && col === 1) ||
+    (row === 1 && col === 2) ||
+    (row === 2 && col === 1);
+  const b =
+    (row === 7 && col === 7) ||
+    (row === 7 && col === 6) ||
+    (row === 6 && col === 7);
   return a || b;
 }
 
@@ -257,7 +282,8 @@ export function buildGrid(seed: bigint): Uint8Array {
       const mi = idx(GRID_H - 1 - r, GRID_W - 1 - c);
       if (i >= mi) continue; // canonical half only
       if (grid[i] !== CELL_FLOOR) continue;
-      if (inSpawnSafe(r, c) || inSpawnSafe(GRID_H - 1 - r, GRID_W - 1 - c)) continue;
+      if (inSpawnSafe(r, c) || inSpawnSafe(GRID_H - 1 - r, GRID_W - 1 - c))
+        continue;
       if (rng() < CRATE_DENSITY) {
         grid[i] = CELL_CRATE;
         grid[mi] = CELL_CRATE;
@@ -287,10 +313,12 @@ git commit -m "feat(sdk): bomb-it board + layout helpers"
 ## Task 2: Movement + blast helpers
 
 **Files:**
+
 - Modify: `sui-tunnel-ts/src/protocol/bombIt.ts`
 - Test: `sui-tunnel-ts/src/protocol/bombIt.test.ts`
 
 **Interfaces:**
+
 - Consumes: Task 1's constants, `BombItPlayer`, `BombItBomb`, `idx`.
 - Produces: `dest(row,col,action): [number,number]`; `canMoveTo(grid, bombs, other, nr, nc): boolean`; `blastCellsFor(grid, bomb): number[]`; `resolveExplosions(grid, bombs): { cells: Set<number>; remaining: BombItBomb[] }` (mutates `grid`: crate→floor).
 
@@ -398,7 +426,11 @@ Append to `sui-tunnel-ts/src/protocol/bombIt.ts` (after `buildGrid`):
 // ============================================
 // MOVEMENT + BLAST (pure)
 // ============================================
-export function dest(row: number, col: number, action: BombItAction): [number, number] {
+export function dest(
+  row: number,
+  col: number,
+  action: BombItAction,
+): [number, number] {
   if (action === "north") return [row - 1, col];
   if (action === "south") return [row + 1, col];
   if (action === "east") return [row, col + 1];
@@ -425,7 +457,12 @@ export function canMoveTo(
 /** Cells one bomb's `+` blast covers: stops at walls; includes and stops at the first crate. */
 export function blastCellsFor(grid: Uint8Array, bomb: BombItBomb): number[] {
   const out: number[] = [idx(bomb.row, bomb.col)];
-  const dirs: Array<[number, number]> = [[-1, 0], [1, 0], [0, 1], [0, -1]];
+  const dirs: Array<[number, number]> = [
+    [-1, 0],
+    [1, 0],
+    [0, 1],
+    [0, -1],
+  ];
   for (const [dr, dc] of dirs) {
     for (let step = 1; step <= BLAST_RADIUS; step++) {
       const r = bomb.row + dr * step;
@@ -451,14 +488,16 @@ export function resolveExplosions(
   bombs: BombItBomb[],
 ): { cells: Set<number>; remaining: BombItBomb[] } {
   const detonating = new Set<number>();
-  for (let i = 0; i < bombs.length; i++) if (bombs[i].fuse <= 0) detonating.add(i);
+  for (let i = 0; i < bombs.length; i++)
+    if (bombs[i].fuse <= 0) detonating.add(i);
 
   const cells = new Set<number>();
   let changed = true;
   while (changed) {
     changed = false;
     cells.clear();
-    for (const di of detonating) for (const ci of blastCellsFor(grid, bombs[di])) cells.add(ci);
+    for (const di of detonating)
+      for (const ci of blastCellsFor(grid, bombs[di])) cells.add(ci);
     for (let i = 0; i < bombs.length; i++) {
       if (!detonating.has(i) && cells.has(idx(bombs[i].row, bombs[i].col))) {
         detonating.add(i);
@@ -490,10 +529,12 @@ git commit -m "feat(sdk): bomb-it movement + blast helpers"
 ## Task 3: BombItProtocol — state, encode, balances, terminal
 
 **Files:**
+
 - Modify: `sui-tunnel-ts/src/protocol/bombIt.ts`, `sui-tunnel-ts/src/protocol/index.ts`
 - Test: `sui-tunnel-ts/src/protocol/bombIt.test.ts`
 
 **Interfaces:**
+
 - Consumes: Task 1/2 helpers, `DOMAIN`, `seedFromTunnelId`, `concatBytes`, `u64ToBeBytes`, `Protocol`/`Party`/`Balances`/`ProtocolContext`.
 - Produces: `class BombItProtocol implements Protocol<BombItState, BombItMove>` with `name="bomb_it.v1"`, real `initialState`/`encodeState`/`balances`/`isTerminal` and stubbed `applyMove`/`randomMove` (filled in Task 4). `sui-tunnel-ts/src/protocol/index.ts` re-exports `bombIt`.
 
@@ -504,7 +545,10 @@ Append to `sui-tunnel-ts/src/protocol/bombIt.test.ts`:
 ```ts
 import { BombItProtocol, BOMB_IT_TICK_CAP } from "./bombIt.ts";
 
-const CTX = { tunnelId: "0xabc123", initialBalances: { a: BOMB_IT_MIN_STAKE, b: BOMB_IT_MIN_STAKE } };
+const CTX = {
+  tunnelId: "0xabc123",
+  initialBalances: { a: BOMB_IT_MIN_STAKE, b: BOMB_IT_MIN_STAKE },
+};
 // BOMB_IT_MIN_STAKE is imported in the next line if not already:
 import { BOMB_IT_MIN_STAKE } from "./bombIt.ts";
 
@@ -527,20 +571,32 @@ test("encodeState is canonical and starts with the domain tag", () => {
   const b = p.initialState(CTX);
   assert.deepEqual(Array.from(p.encodeState(a)), Array.from(p.encodeState(b)));
   const tag = new TextEncoder().encode("sui_tunnel::proto::bomb_it.v1");
-  assert.deepEqual(Array.from(p.encodeState(a).slice(0, tag.length)), Array.from(tag));
+  assert.deepEqual(
+    Array.from(p.encodeState(a).slice(0, tag.length)),
+    Array.from(tag),
+  );
 });
 
 test("encodeState differs when a player position differs", () => {
   const p = new BombItProtocol();
   const s = p.initialState(CTX);
-  const moved = { ...s, players: [{ ...s.players[0], col: 2 }, s.players[1]] as typeof s.players };
-  assert.notDeepEqual(Array.from(p.encodeState(s)), Array.from(p.encodeState(moved)));
+  const moved = {
+    ...s,
+    players: [{ ...s.players[0], col: 2 }, s.players[1]] as typeof s.players,
+  };
+  assert.notDeepEqual(
+    Array.from(p.encodeState(s)),
+    Array.from(p.encodeState(moved)),
+  );
 });
 
 test("balances return the stored split; isTerminal tracks winner", () => {
   const p = new BombItProtocol();
   const s = p.initialState(CTX);
-  assert.deepEqual(p.balances(s), { a: BOMB_IT_MIN_STAKE, b: BOMB_IT_MIN_STAKE });
+  assert.deepEqual(p.balances(s), {
+    a: BOMB_IT_MIN_STAKE,
+    b: BOMB_IT_MIN_STAKE,
+  });
   assert.equal(p.isTerminal(s), false);
   assert.equal(p.isTerminal({ ...s, winner: "A" }), true);
   assert.equal(p.isTerminal({ ...s, winner: "draw" }), true);
@@ -575,7 +631,10 @@ export class BombItProtocol implements Protocol<BombItState, BombItMove> {
       tick: 0n,
       seed,
       grid: buildGrid(seed),
-      players: [spawn(SPAWN_A.row, SPAWN_A.col), spawn(SPAWN_B.row, SPAWN_B.col)],
+      players: [
+        spawn(SPAWN_A.row, SPAWN_A.col),
+        spawn(SPAWN_B.row, SPAWN_B.col),
+      ],
       bombs: [],
       winner: null,
       balanceA: ctx.initialBalances.a,
@@ -598,7 +657,11 @@ export class BombItProtocol implements Protocol<BombItState, BombItMove> {
       s.grid,
     ];
     for (const p of s.players) {
-      parts.push(u64ToBeBytes(p.row), u64ToBeBytes(p.col), new Uint8Array([p.alive ? 1 : 0]));
+      parts.push(
+        u64ToBeBytes(p.row),
+        u64ToBeBytes(p.col),
+        new Uint8Array([p.alive ? 1 : 0]),
+      );
     }
     // Two slots indexed by owner (slot 0 = A's live bomb or empty, slot 1 = B's).
     for (let slot = 0; slot < 2; slot++) {
@@ -613,7 +676,15 @@ export class BombItProtocol implements Protocol<BombItState, BombItMove> {
       );
     }
     parts.push(
-      new Uint8Array([s.winner === "A" ? 1 : s.winner === "B" ? 2 : s.winner === "draw" ? 3 : 0]),
+      new Uint8Array([
+        s.winner === "A"
+          ? 1
+          : s.winner === "B"
+            ? 2
+            : s.winner === "draw"
+              ? 3
+              : 0,
+      ]),
     );
     return concatBytes(parts);
   }
@@ -656,10 +727,12 @@ git commit -m "feat(sdk): bomb-it protocol state + encoding"
 ## Task 4: BombItProtocol — applyMove + randomMove
 
 **Files:**
+
 - Modify: `sui-tunnel-ts/src/protocol/bombIt.ts`
 - Test: `sui-tunnel-ts/src/protocol/bombIt.test.ts`
 
 **Interfaces:**
+
 - Consumes: all prior helpers + the `BombItProtocol` class.
 - Produces: real `applyMove(state, move, by)` (one actor per call; world advance; terminal + balance flip; throws on terminal state or a move carrying the non-actor's field) and `randomMove(state, by, rng)` (fills only `by`'s field; legal action or `"stay"`). These are the contract later frontend tasks rely on via `dt.propose`.
 
@@ -671,7 +744,11 @@ Append to `sui-tunnel-ts/src/protocol/bombIt.test.ts`:
 import type { BombItMove, BombItState } from "./bombIt.ts";
 
 /** Run the world forward applying the SAME move object both seats would (only one field set). */
-function advance(p: BombItProtocol, s: BombItState, m: BombItMove): BombItState {
+function advance(
+  p: BombItProtocol,
+  s: BombItState,
+  m: BombItMove,
+): BombItState {
   const by = m.a !== undefined ? "A" : "B";
   return p.applyMove(s, m, by);
 }
@@ -919,10 +996,12 @@ git commit -m "feat(sdk): bomb-it applyMove + random agent"
 ## Task 5: Frontend view-core (`deriveView`)
 
 **Files:**
+
 - Create: `frontend/src/games/bombIt/session-core.ts`
 - Test: `frontend/src/games/bombIt/session-core.test.ts`
 
 **Interfaces:**
+
 - Consumes: `BombItState` (type-only) from `sui-tunnel-ts/protocol/bombIt`; in the test, `BombItProtocol`, `BOMB_IT_MIN_STAKE` via relative `.ts` path.
 - Produces: `interface BombItView`; `type BombItResult = "A" | "B" | "draw"`; `deriveView(state): BombItView`; `sessionResult(state): BombItResult`. The board and hook consume `BombItView`.
 
@@ -934,10 +1013,16 @@ Create `frontend/src/games/bombIt/session-core.test.ts`:
 import { test } from "node:test";
 import assert from "node:assert/strict";
 // Runtime SDK imports use RELATIVE .ts paths (tsx ignores the vite alias / tsconfig paths).
-import { BombItProtocol, BOMB_IT_MIN_STAKE } from "../../../../sui-tunnel-ts/src/protocol/bombIt.ts";
+import {
+  BombItProtocol,
+  BOMB_IT_MIN_STAKE,
+} from "../../../../sui-tunnel-ts/src/protocol/bombIt.ts";
 import { deriveView, sessionResult } from "./session-core.ts";
 
-const CTX = { tunnelId: "0xfeed", initialBalances: { a: BOMB_IT_MIN_STAKE, b: BOMB_IT_MIN_STAKE } };
+const CTX = {
+  tunnelId: "0xfeed",
+  initialBalances: { a: BOMB_IT_MIN_STAKE, b: BOMB_IT_MIN_STAKE },
+};
 
 test("deriveView flattens grid, players, bombs, and balances to plain values", () => {
   const p = new BombItProtocol();
@@ -992,8 +1077,17 @@ export function deriveView(state: BombItState): BombItView {
   return {
     tick: Number(state.tick),
     grid: Array.from(state.grid),
-    players: state.players.map((p) => ({ row: p.row, col: p.col, alive: p.alive })),
-    bombs: state.bombs.map((b) => ({ row: b.row, col: b.col, fuse: b.fuse, owner: b.owner })),
+    players: state.players.map((p) => ({
+      row: p.row,
+      col: p.col,
+      alive: p.alive,
+    })),
+    bombs: state.bombs.map((b) => ({
+      row: b.row,
+      col: b.col,
+      fuse: b.fuse,
+      owner: b.owner,
+    })),
     winner: state.winner,
     balanceA: Number(state.balanceA),
     balanceB: Number(state.balanceB),
@@ -1024,9 +1118,11 @@ git commit -m "feat(web): bomb-it view-core"
 ## Task 6: PvP hook (`usePvpBombIt`)
 
 **Files:**
+
 - Create: `frontend/src/games/bombIt/usePvpBombIt.ts`
 
 **Interfaces:**
+
 - Consumes: SDK + framework via bare specifiers (mirrors `usePvpChickenCross`): `generateKeyPair`/`KeyPair` (`sui-tunnel-ts/core/crypto`), `defaultBackend` (`…/core/crypto-native`), `makeEndpoint` (`…/core/tunnel`), `fromHex`/`toHex` (`…/core/bytes`), `DistributedTunnel` (`…/core/distributedTunnel`), `BombItProtocol`/`BombItState`/`BombItMove`/`BombItAction` (`…/protocol/bombIt`), `MpClient`/`resolveMpWsUrl`/`PvpChannel`/`Role` (`../../pvp/mpClient`), `resolveBackendUrl` (`../../backend/controlPlane`), `closeCooperative`/`depositStake`/`openAndFundSharedTunnel`/`readCreatedAt` (`../../onchain/tunnelTx`), `deriveView`/`BombItView` (`./session-core`).
 - Produces: `usePvpBombIt(): PvpBombIt` where `PvpBombIt = { status: PvpStatus; role: Role | null; view: BombItView | null; winner: "A"|"B"|"draw"|null; error: string | null; create(code): void; join(code): void; queueAction(a: BombItAction): void; reset(): void }`. The Window (Task 8) consumes this.
 
@@ -1038,22 +1134,48 @@ Create `frontend/src/games/bombIt/usePvpBombIt.ts`:
 
 ```ts
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useCurrentAccount, useSignAndExecuteTransaction, useSuiClient } from "@mysten/dapp-kit";
+import {
+  useCurrentAccount,
+  useSignAndExecuteTransaction,
+  useSuiClient,
+} from "@mysten/dapp-kit";
 import { generateKeyPair, type KeyPair } from "sui-tunnel-ts/core/crypto";
 import { defaultBackend } from "sui-tunnel-ts/core/crypto-native";
 import { makeEndpoint } from "sui-tunnel-ts/core/tunnel";
 import { fromHex, toHex } from "sui-tunnel-ts/core/bytes";
 import { DistributedTunnel } from "sui-tunnel-ts/core/distributedTunnel";
-import { BombItProtocol, type BombItState, type BombItMove, type BombItAction } from "sui-tunnel-ts/protocol/bombIt";
-import { MpClient, resolveMpWsUrl, type PvpChannel, type Role } from "../../pvp/mpClient";
+import {
+  BombItProtocol,
+  type BombItState,
+  type BombItMove,
+  type BombItAction,
+} from "sui-tunnel-ts/protocol/bombIt";
+import {
+  MpClient,
+  resolveMpWsUrl,
+  type PvpChannel,
+  type Role,
+} from "../../pvp/mpClient";
 import { resolveBackendUrl } from "../../backend/controlPlane";
-import { closeCooperative, depositStake, openAndFundSharedTunnel, readCreatedAt } from "../../onchain/tunnelTx";
+import {
+  closeCooperative,
+  depositStake,
+  openAndFundSharedTunnel,
+  readCreatedAt,
+} from "../../onchain/tunnelTx";
 import { deriveView, type BombItView } from "./session-core";
 
 const STAKE = 500n; // per-seat MIST
 const STEP_MS = 250; // pacing between ticks (ms)
 
-export type PvpStatus = "idle" | "matching" | "funding" | "playing" | "settling" | "settled" | "error";
+export type PvpStatus =
+  | "idle"
+  | "matching"
+  | "funding"
+  | "playing"
+  | "settling"
+  | "settled"
+  | "error";
 
 export interface PvpBombIt {
   status: PvpStatus;
@@ -1138,7 +1260,8 @@ export function usePvpBombIt(): PvpBombIt {
 
       const action = nextActionRef.current;
       nextActionRef.current = "stay"; // consume; idle default is stay
-      const move: BombItMove = myRoleNow === "A" ? { a: action } : { b: action };
+      const move: BombItMove =
+        myRoleNow === "A" ? { a: action } : { b: action };
       try {
         dtNow.propose(move, 0n);
       } catch {
@@ -1186,18 +1309,26 @@ export function usePvpBombIt(): PvpBombIt {
         return;
       }
       const wallet = account.address;
-      const signExec = async (tx: Parameters<typeof signAndExecute>[0]["transaction"]) => {
+      const signExec = async (
+        tx: Parameters<typeof signAndExecute>[0]["transaction"],
+      ) => {
         const r = await signAndExecute({ transaction: tx });
         return { digest: r.digest };
       };
-      const reads = client as unknown as Parameters<typeof openAndFundSharedTunnel>[0]["reads"];
+      const reads = client as unknown as Parameters<
+        typeof openAndFundSharedTunnel
+      >[0]["reads"];
 
       (async () => {
         try {
           setError(null);
           setStatus("matching");
           const ephemeral: KeyPair = generateKeyPair();
-          const mp = new MpClient(resolveMpWsUrl(resolveBackendUrl()), wallet, ephemeral);
+          const mp = new MpClient(
+            resolveMpWsUrl(resolveBackendUrl()),
+            wallet,
+            ephemeral,
+          );
           mpRef.current = mp;
           await mp.connect();
 
@@ -1210,7 +1341,10 @@ export function usePvpBombIt(): PvpBombIt {
           const waitPeer = makeInbox(channel);
 
           // 1) exchange ephemeral pubkeys
-          channel.sendPeer({ t: "hello", ephemeralPubkey: toHex(ephemeral.publicKey) });
+          channel.sendPeer({
+            t: "hello",
+            ephemeralPubkey: toHex(ephemeral.publicKey),
+          });
           const hello = await waitPeer<{ ephemeralPubkey: string }>("hello");
           const oppPub = fromHex(hello.ephemeralPubkey);
 
@@ -1258,7 +1392,15 @@ export function usePvpBombIt(): PvpBombIt {
 
             if (proto.isTerminal(dt.state) && !settlingRef.current) {
               settlingRef.current = true;
-              void settle(dt, match.role, channel, waitPeer, reads, signExec, tunnelId).then(
+              void settle(
+                dt,
+                match.role,
+                channel,
+                waitPeer,
+                reads,
+                signExec,
+                tunnelId,
+              ).then(
                 () => setStatus("settled"),
                 (e) => {
                   setError(String((e as Error)?.message ?? e));
@@ -1294,7 +1436,17 @@ export function usePvpBombIt(): PvpBombIt {
     nextActionRef.current = a;
   }, []);
 
-  return { status, role, view, winner, error, create, join, queueAction, reset };
+  return {
+    status,
+    role,
+    view,
+    winner,
+    error,
+    create,
+    join,
+    queueAction,
+    reset,
+  };
 }
 
 /** Exchange settlement halves over the relay; seat A submits the cooperative close. */
@@ -1318,7 +1470,11 @@ async function settle(
     sig: toHex(half.sigSelf),
   });
   const other = await waitPeer<{ sig: string }>("settleHalf");
-  const co = dt.combineSettlement(half.settlement, half.sigSelf, fromHex(other.sig));
+  const co = dt.combineSettlement(
+    half.settlement,
+    half.sigSelf,
+    fromHex(other.sig),
+  );
   if (role === "A") {
     await closeCooperative({ signExec, tunnelId, settlement: co });
   }
@@ -1342,11 +1498,13 @@ git commit -m "feat(web): bomb-it pvp hook"
 ## Task 7: Lobby + board + styles
 
 **Files:**
+
 - Create: `frontend/src/games/bombIt/components/BombLobby.tsx`
 - Create: `frontend/src/games/bombIt/components/BombBoard.tsx`
 - Create: `frontend/src/games/bombIt/bomb-it.css`
 
 **Interfaces:**
+
 - Consumes: `BombItView` (`../session-core`); `GRID_W`/`GRID_H`/`CELL_WALL`/`CELL_CRATE`/`BombItAction` (`sui-tunnel-ts/protocol/bombIt`, bare specifier — these are Vite-bundled components).
 - Produces: `BombLobby({ onCreate, onJoin })`; `BombBoard({ view, winner, role, onAction, onPlayAgain })`. Consumed by the Window (Task 8). `onAction` is wired to the hook's `queueAction`.
 
@@ -1384,7 +1542,8 @@ import "../bomb-it.css";
 function randomCode(): string {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
   let code = "";
-  for (let i = 0; i < 4; i++) code += chars[Math.floor(Math.random() * chars.length)];
+  for (let i = 0; i < 4; i++)
+    code += chars[Math.floor(Math.random() * chars.length)];
   return code;
 }
 
@@ -1413,21 +1572,31 @@ export function BombLobby({
 
   return (
     <div className="flex h-full w-full flex-col items-center justify-center gap-4 bg-arena-bg p-4 text-center">
-      <h2 className="text-gold text-lg font-extrabold uppercase tracking-widest">Bomb It PvP</h2>
+      <h2 className="text-gold text-lg font-extrabold uppercase tracking-widest">
+        Bomb It PvP
+      </h2>
       <p className="max-w-xs text-sm text-arena-muted">
         Create a match, share the code; opponent joins with it (2nd tab works).
       </p>
 
       {activeCode && (
         <div className="flex flex-col items-center gap-1 rounded border border-amber-500 bg-arena-accent/10 px-6 py-3">
-          <span className="text-[11px] uppercase tracking-wider text-arena-muted">Your match code</span>
-          <span className="font-mono text-2xl font-extrabold tracking-[0.25em] text-gold">{activeCode}</span>
-          <span className="text-[11px] text-arena-muted">Share this with your opponent</span>
+          <span className="text-[11px] uppercase tracking-wider text-arena-muted">
+            Your match code
+          </span>
+          <span className="font-mono text-2xl font-extrabold tracking-[0.25em] text-gold">
+            {activeCode}
+          </span>
+          <span className="text-[11px] text-arena-muted">
+            Share this with your opponent
+          </span>
         </div>
       )}
 
       <label className="flex flex-col gap-1">
-        <span className="text-[11px] uppercase tracking-wider text-arena-muted">Match Code</span>
+        <span className="text-[11px] uppercase tracking-wider text-arena-muted">
+          Match Code
+        </span>
         <input
           type="text"
           maxLength={8}
@@ -1464,7 +1633,12 @@ Create `frontend/src/games/bombIt/components/BombBoard.tsx`:
 
 ```tsx
 import { useEffect, useRef } from "react";
-import { GRID_W, GRID_H, CELL_WALL, CELL_CRATE } from "sui-tunnel-ts/protocol/bombIt";
+import {
+  GRID_W,
+  GRID_H,
+  CELL_WALL,
+  CELL_CRATE,
+} from "sui-tunnel-ts/protocol/bombIt";
 import type { BombItAction } from "sui-tunnel-ts/protocol/bombIt";
 import "../bomb-it.css";
 import type { BombItView } from "../session-core";
@@ -1525,10 +1699,21 @@ export function BombBoard({
     }
   };
 
-  const bombAt = (r: number, c: number) => view.bombs.some((b) => b.row === r && b.col === c);
+  const bombAt = (r: number, c: number) =>
+    view.bombs.some((b) => b.row === r && b.col === c);
   const playerAt = (r: number, c: number): "A" | "B" | null => {
-    if (view.players[0]?.alive && view.players[0].row === r && view.players[0].col === c) return "A";
-    if (view.players[1]?.alive && view.players[1].row === r && view.players[1].col === c) return "B";
+    if (
+      view.players[0]?.alive &&
+      view.players[0].row === r &&
+      view.players[0].col === c
+    )
+      return "A";
+    if (
+      view.players[1]?.alive &&
+      view.players[1].row === r &&
+      view.players[1].col === c
+    )
+      return "B";
     return null;
   };
 
@@ -1541,14 +1726,22 @@ export function BombBoard({
     >
       <div className="flex items-center justify-between text-[11px] text-arena-muted">
         <span>
-          {role === "A" ? <span className="font-bold text-gold">🤖 A (you)</span> : <span>🤖 A</span>} · $
-          {view.balanceA}
+          {role === "A" ? (
+            <span className="font-bold text-gold">🤖 A (you)</span>
+          ) : (
+            <span>🤖 A</span>
+          )}{" "}
+          · ${view.balanceA}
           {view.players[0]?.alive ? "" : " 💀"}
         </span>
         <span>tick {view.tick}</span>
         <span>
-          {role === "B" ? <span className="font-bold text-gold">👾 B (you)</span> : <span>👾 B</span>} · $
-          {view.balanceB}
+          {role === "B" ? (
+            <span className="font-bold text-gold">👾 B (you)</span>
+          ) : (
+            <span>👾 B</span>
+          )}{" "}
+          · ${view.balanceB}
           {view.players[1]?.alive ? "" : " 💀"}
         </span>
       </div>
@@ -1629,7 +1822,11 @@ export function BombBoard({
       {settled && (
         <div className="flex flex-col items-center gap-2 py-1">
           <p className="text-gold text-sm font-bold uppercase tracking-widest">
-            {winner === "draw" ? "Draw — stakes returned" : winner === role ? "You win the pot!" : "Opponent wins"}
+            {winner === "draw"
+              ? "Draw — stakes returned"
+              : winner === role
+                ? "You win the pot!"
+                : "Opponent wins"}
           </p>
           <button
             onClick={onPlayAgain}
@@ -1661,11 +1858,13 @@ git commit -m "feat(web): bomb-it lobby + board"
 ## Task 8: Window + registration + gate
 
 **Files:**
+
 - Create: `frontend/src/games/bombIt/BombItWindow.tsx`
 - Create: `frontend/src/games/bombIt/index.ts`
 - Modify: `frontend/src/games/index.ts`
 
 **Interfaces:**
+
 - Consumes: `GameWindowProps` (`../types`); `usePvpBombIt` (`./usePvpBombIt`); `BombLobby`/`BombBoard` (`./components/…`); `register` (`../registry`).
 - Produces: `BombItWindow` component; the registered game module `{ id: "bomb-it", name: "Bomb It", icon: "💣", Window: BombItWindow }`; the side-effect import in `frontend/src/games/index.ts`.
 
@@ -1681,13 +1880,28 @@ import { BombBoard } from "./components/BombBoard";
 
 /** PvP Bomb It: two players bomb each other on a shared grid over a Sui tunnel. */
 export function BombItWindow(_props: GameWindowProps) {
-  const { status, role, view, winner, error, create, join, queueAction, reset } = usePvpBombIt();
+  const {
+    status,
+    role,
+    view,
+    winner,
+    error,
+    create,
+    join,
+    queueAction,
+    reset,
+  } = usePvpBombIt();
 
   if (status === "error") {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 p-4 text-center">
-        <p className="text-sm text-red-400">{error ?? "something went wrong"}</p>
-        <button onClick={reset} className="rounded border border-arena-edge px-3 py-1.5 text-sm">
+        <p className="text-sm text-red-400">
+          {error ?? "something went wrong"}
+        </p>
+        <button
+          onClick={reset}
+          className="rounded border border-arena-edge px-3 py-1.5 text-sm"
+        >
           Back
         </button>
       </div>
@@ -1714,9 +1928,18 @@ export function BombItWindow(_props: GameWindowProps) {
     );
   }
 
-  if ((status === "playing" || status === "settling" || status === "settled") && view !== null) {
+  if (
+    (status === "playing" || status === "settling" || status === "settled") &&
+    view !== null
+  ) {
     return (
-      <BombBoard view={view} winner={winner} role={role} onAction={queueAction} onPlayAgain={reset} />
+      <BombBoard
+        view={view}
+        winner={winner}
+        role={role}
+        onAction={queueAction}
+        onPlayAgain={reset}
+      />
     );
   }
 
@@ -1786,6 +2009,7 @@ git commit -m "feat(web): register bomb-it in the arena"
 ## Self-Review (completed during plan authoring)
 
 **Spec coverage:**
+
 - Spec §2 protocol (state/move/encodeState/board/mechanics/win/balances) → Tasks 1–4.
 - Spec §2 180° symmetry + tunnelId seed → Task 1 (`buildGrid` test).
 - Spec §2 blast/chain/crate-stop → Task 2; soft-invalid no-op + throw-on-terminal/non-actor → Task 4.

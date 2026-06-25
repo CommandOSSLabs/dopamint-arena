@@ -38,12 +38,12 @@ play each other over a tunnel**, with no server.
 ## Decisions (locked with the user)
 
 1. **Scope** — Replace the standalone client/server/shared/move packages with one
-   self-contained game folder. Keep the game's own assets *inside* the folder.
+   self-contained game folder. Keep the game's own assets _inside_ the folder.
 2. **Settlement realism** — Off-chain, client-side simulation. The bet is a number
    the player sets; nothing touches the chain.
 3. **Session length** — Bots play round after round until one side can't cover the
    next wager (or `ROUND_CAP`), i.e. the protocol's natural terminal state.
-4. **Bet model** — Symmetric: the single stake is the starting balance for *both*
+4. **Bet model** — Symmetric: the single stake is the starting balance for _both_
    bots (`initialBalances = { a: stake, b: stake }`). The player "wins" iff bot A
    (the player-bot) ends at or above its starting stake.
 5. **Engine driving** — Use the full `OffchainTunnel.selfPlay` so each transition is
@@ -57,6 +57,7 @@ play each other over a tunnel**, with no server.
 The Explore inventory classified the existing `packages/client/src` cleanly.
 
 **Port as-is (pure / props-driven):**
+
 - `components/app/CardDisplay.tsx` (one minor edit, see "Card model bridge")
 - `components/general/{LoadingModal,PageLoader,GameCardScale,SuitSpinner,Spinner}.tsx`
 - `styles/globals.css` casino styles (`.casino-felt`, `.casino-chip`, `.text-gold`,
@@ -68,6 +69,7 @@ The Explore inventory classified the existing `packages/client/src` cleanly.
   Moved into `games/blackjack/assets/` and imported via Vite (game-local).
 
 **Delete (server/chain-coupled):**
+
 - `packages/server/**`, `packages/shared/**`, `packages/move/**`
 - `hooks/useBlackJack.ts` (~885 lines: axios, BLS, chain, IndexedDB)
 - `contexts/{CustomWallet,Balance,Authentication}.tsx`, all auth/lobby/admin pages,
@@ -75,6 +77,7 @@ The Explore inventory classified the existing `packages/client/src` cleanly.
   `tsconfig*`, `node_modules`, `dist`).
 
 **Rewrite (keep markup, swap data source):**
+
 - `pages/PlayerGame.tsx` → `BlackjackTable.tsx`: keep the layout (dealer-desk
   background, dealer hand top, player hand lower, bottom HUD, confetti on win) but
   read from `useBlackjackSession` instead of `useBlackJack`. Remove Hit/Stand/Settle.
@@ -145,6 +148,7 @@ SVG). The SDK `BlackjackState.{playerHand,dealerHand}` are arrays of card **valu
 (Ace=11 pre-reduction, J/Q/K=10, else face), with no suit/rank.
 
 `cards.ts` adds a pure `valueToCardIndex(value, drawSeq)`:
+
 - picks a real **rank whose blackjack value equals `value`** (value 11 → Ace; value
   10 → one of 10/J/Q/K chosen by `drawSeq` for variety; 2–9 → that rank),
 - picks a **suit** by `drawSeq % 4` (rotating).
@@ -155,6 +159,7 @@ The faces are cosmetic — a faithful rendering of the SDK's values, not a shuff
 deck.
 
 `CardDisplay` gets two minimal edits, both to remove deleted dependencies:
+
 1. It takes the hand total as a **prop** (the SDK's `handValue`) instead of importing
    the deleted `getCardSum`.
 2. Because assets are now game-local (under `assets/cards/`, not the shared

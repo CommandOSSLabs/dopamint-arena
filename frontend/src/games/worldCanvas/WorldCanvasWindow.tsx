@@ -3,10 +3,7 @@ import type { GameWindowProps } from "../types";
 import { SketchDefs } from "../sketch";
 import { CanvasView } from "./ui/CanvasView";
 import { PvpCanvasView } from "./ui/PvpCanvasView";
-import {
-  MOVES_PER_GAME,
-  MIN_MOVES_PER_GAME,
-} from "./useWorldCanvasOnchain";
+import { MOVES_PER_GAME, MIN_MOVES_PER_GAME } from "./useWorldCanvasOnchain";
 import "./ui/worldCanvas.sketch.css";
 
 type Mode = "menu" | "solo" | "pvp";

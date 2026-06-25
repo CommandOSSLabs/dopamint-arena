@@ -37,10 +37,12 @@ auto-plays; (4) delete the `?arena` mode and `agent/arena.mjs`.
 ### Task 1: Blackjack auto-play on open (bot-vs-bot)
 
 **Files:**
+
 - Modify: `frontend/src/games/blackjack/app/pages/Home.tsx`
 - Modify: `frontend/src/games/blackjack/app/pages/PlayerBot.tsx`
 
 **Interfaces (existing, consume as-is):**
+
 - `Home`: `account = useCurrentAccount()`, `navigate = useGameNavigate()`.
   `navigate("/bot")` opens the bot-vs-bot arena (PlayerBot).
 - `PlayerBot`: `account = useCurrentAccount()`; `fundFromWallet()` (async, funds both
@@ -51,8 +53,9 @@ auto-plays; (4) delete the `?arena` mode and `agent/arena.mjs`.
 **Changes:**
 
 - [ ] **Home.tsx** — auto-navigate to the bot arena instead of `/play`, once per
-  window (per-instance ref, not `sessionStorage`). Drop the `parseAgentConfig` arena
-  guard and the import. Replace the redirect effect with:
+      window (per-instance ref, not `sessionStorage`). Drop the `parseAgentConfig` arena
+      guard and the import. Replace the redirect effect with:
+
 ```tsx
 const autoNavRef = useRef(false);
 useEffect(() => {
@@ -62,11 +65,13 @@ useEffect(() => {
   }
 }, [account, navigate]);
 ```
-  (add `useRef` to the React import; remove the now-unused `parseAgentConfig` import and
-  the `sessionStorage` "blackjack_auto_navigated" logic.)
+
+(add `useRef` to the React import; remove the now-unused `parseAgentConfig` import and
+the `sessionStorage` "blackjack_auto_navigated" logic.)
 
 - [ ] **PlayerBot.tsx** — auto fund-if-low then auto-start, once per window. Add near
-  the other effects (after `fundFromWallet`/`running`/`unfunded` are defined):
+      the other effects (after `fundFromWallet`/`running`/`unfunded` are defined):
+
 ```tsx
 const autoPilotRef = useRef(false);
 const autoStartedRef = useRef(false);
@@ -85,22 +90,25 @@ useEffect(() => {
   }
 }, [account, running, unfunded, game]);
 ```
-  (`useRef` is already imported.)
+
+(`useRef` is already imported.)
 
 - [ ] **Verify:** `pnpm -C frontend tsc --noEmit` clean. Manually confirm the effect
-  reads `unfunded`/`running` from the same names defined in the file.
+      reads `unfunded`/`running` from the same names defined in the file.
 
 - [ ] **Commit:** `git add frontend/src/games/blackjack/app/pages/Home.tsx frontend/src/games/blackjack/app/pages/PlayerBot.tsx`
-  → `feat(blackjack): auto-play bot arena on open`
+      → `feat(blackjack): auto-play bot arena on open`
 
 ---
 
 ### Task 2: ttt auto-play funds from wallet (not faucet)
 
 **Files:**
+
 - Modify: `frontend/src/games/ticTacToe/app/App.tsx`
 
 **Interfaces (existing):**
+
 - `useCustomWallet()` exposes `isConnected` and `executeTransaction({ tx })`.
 - `g.refresh()` re-reads bot balances; `g.startAuto()` starts the self-play loop;
   `funded = g.balances.x > 0n && g.balances.o > 0n`.
@@ -109,10 +117,11 @@ useEffect(() => {
 **Changes:**
 
 - [ ] Pull `executeTransaction` from `useCustomWallet()` (currently only `isConnected`
-  is destructured). Import `loadOrCreateBots`, `buildFundTx` from the bots lib.
+      is destructured). Import `loadOrCreateBots`, `buildFundTx` from the bots lib.
 - [ ] Replace the auto-pilot effect (the `?arena` branch + faucet `g.fund()`) with a
-  single in-app path: per-instance refs for navigate-once and fund-once; on `setup`,
-  wallet-fund if not funded (once), else `startAuto`:
+      single in-app path: per-instance refs for navigate-once and fund-once; on `setup`,
+      wallet-fund if not funded (once), else `startAuto`:
+
 ```tsx
 const autoNavRef = useRef(false);
 const autoFundRef = useRef(false);
@@ -160,20 +169,22 @@ useEffect(() => {
   }
 }, [isConnected, scene, funded, g, executeTransaction]);
 ```
-  Remove the `parseAgentConfig` import if it becomes unused. Keep the existing
-  disconnect→login effect unchanged. The faucet `onFund={g.fund}` prop on `SetupScene`
-  stays (manual button) — only the auto-path stops calling it.
+
+Remove the `parseAgentConfig` import if it becomes unused. Keep the existing
+disconnect→login effect unchanged. The faucet `onFund={g.fund}` prop on `SetupScene`
+stays (manual button) — only the auto-path stops calling it.
 
 - [ ] **Verify:** `pnpm -C frontend tsc --noEmit` clean.
 
 - [ ] **Commit:** `git add frontend/src/games/ticTacToe/app/App.tsx`
-  → `feat(ttt): auto-fund bots from wallet on open`
+      → `feat(ttt): auto-fund bots from wallet on open`
 
 ---
 
 ### Task 3: Remove the Playwright arena (`?arena` + arena.mjs)
 
 **Files:**
+
 - Delete: `frontend/agent/arena.mjs`; `frontend/agent/arena-fund-fail-*.png` (if present)
 - Modify: `frontend/src/main.tsx` (drop `?arena` branch + `ProgrammaticWalletGate` import)
 - Modify: `frontend/src/agent/agentConfig.ts` (remove `arena` field + parse)
@@ -183,20 +194,21 @@ useEffect(() => {
 - Modify: `frontend/agent/README.md` (remove the "Arena auto-pilot" section, restore to the fleet-only doc)
 
 **Changes:**
+
 - [ ] `main.tsx`: remove the `cfg.arena ? (<ProgrammaticWalletGate…><App/></…>) :`
-  branch and the `ProgrammaticWalletGate` import — keep `cfg.enabled ? <AgentBoot> : <App/>`.
+      branch and the `ProgrammaticWalletGate` import — keep `cfg.enabled ? <AgentBoot> : <App/>`.
 - [ ] `agentConfig.ts`: remove the `arena: boolean` field and `arena: p.get("arena") !== null,`.
 - [ ] `agentConfig.test.ts`: remove the two arena tests; run `pnpm -C frontend exec tsx --test src/agent/agentConfig.test.ts` (or the package's test cmd) → green.
 - [ ] `Desktop.tsx`: `useLocalStorageState<GridItem[]>("dopamint.desktop.layout.v3", seedLayout)`;
-  delete the `const arena = …` line; remove `parseAgentConfig` import if now unused.
-  The "arena desktop" doc comment may stay (it describes the self-playing floor concept).
+      delete the `const arena = …` line; remove `parseAgentConfig` import if now unused.
+      The "arena desktop" doc comment may stay (it describes the self-playing floor concept).
 - [ ] `GameWindow.tsx`: remove `data-game-window={domId}` (it existed only for the
-  Playwright window locator). Leave the rest of the element.
+      Playwright window locator). Leave the rest of the element.
 - [ ] `README.md`: delete the Arena auto-pilot section (items 4 + env table + smoke).
 - [ ] **Verify:** `grep -rn "arena" frontend/src` shows no `?arena`/`cfg.arena`
-  references (the Desktop concept comment is acceptable); `pnpm -C frontend tsc --noEmit` clean.
+      references (the Desktop concept comment is acceptable); `pnpm -C frontend tsc --noEmit` clean.
 - [ ] **Commit:** `git add frontend/src/main.tsx frontend/src/agent/agentConfig.ts frontend/src/agent/agentConfig.test.ts frontend/src/desktop/Desktop.tsx frontend/src/desktop/GameWindow.tsx frontend/agent/README.md && git rm frontend/agent/arena.mjs`
-  → `chore(agent): remove playwright arena auto-pilot`
+      → `chore(agent): remove playwright arena auto-pilot`
 
 (Leave the in-game `data-testid`s on real controls — inert, harmless, and useful for
 future tests. Leave the arena spec/plan docs as historical record.)

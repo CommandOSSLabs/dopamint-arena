@@ -1,9 +1,11 @@
 //! tunnel-manager — Dopamint Arena control-plane backend (DOP-170).
 //! Off the per-move path (ADR-0001): registry + settlement + Walrus + stats only.
 
+mod chat_store;
 mod config;
 mod error;
 mod mp;
+mod ollama;
 mod routes;
 mod state;
 mod stats;
@@ -17,6 +19,7 @@ use std::sync::Arc;
 use axum::extract::DefaultBodyLimit;
 use axum::routing::{get, post};
 use axum::Router;
+use tokio::sync::broadcast;
 use tower::limit::GlobalConcurrencyLimitLayer;
 use tower::ServiceBuilder;
 use tower_http::cors::CorsLayer;
@@ -49,11 +52,22 @@ async fn main() -> anyhow::Result<()> {
         Config::require("WALRUS_PUBLISHER_URL", &config.walrus_publisher_url)?.to_string(),
         Config::require("WALRUS_AGGREGATOR_URL", &config.walrus_aggregator_url)?.to_string(),
     );
+    let ollama = crate::ollama::OllamaClient::new(
+        config
+            .ollama_url
+            .clone()
+            .unwrap_or_else(|| "http://localhost:11434".into()),
+        config
+            .ollama_model
+            .clone()
+            .unwrap_or_else(|| "qwen2.5:1.8b".into()),
+    )?;
 
     let instance_id = config
         .instance_id
         .clone()
         .unwrap_or_else(|| Uuid::new_v4().to_string());
+    let (stats_tx, _) = broadcast::channel::<String>(16);
 
     let (control, mp, bus): (
         Arc<dyn store::ControlStore>,
@@ -86,9 +100,12 @@ async fn main() -> anyhow::Result<()> {
         bus,
         settler,
         walrus,
+        ollama,
+        stats_tx,
         actions: crate::stats_counter::LocalActionCounter::default(),
         pair_hold_ms,
         pairing: crate::stats_counter::MatchPairingMetrics::default(),
+        chat: crate::chat_store::ChatTranscriptStore::new(),
     });
     stats::spawn_stats_broadcaster(state.clone());
     spawn_action_flusher(state.clone());
@@ -124,6 +141,11 @@ async fn main() -> anyhow::Result<()> {
             ),
         )
         .route("/v1/sponsor", post(routes::sponsor))
+        .route("/v1/chat", post(routes::chat))
+        .route("/v1/chat/topic", get(routes::chat_topic))
+        .route("/v1/chat/live/publish", post(routes::chat_publish))
+        .route("/v1/chat/live", get(routes::chat_live))
+        .route("/v1/stats/live", get(routes::stats_live))
         .route("/v1/mp", get(crate::mp::ws::mp_upgrade))
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())

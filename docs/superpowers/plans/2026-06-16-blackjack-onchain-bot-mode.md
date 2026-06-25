@@ -7,11 +7,13 @@
 **Proven foundation:** the on-chain flow already works end-to-end on testnet — see `sui-tunnel-ts/scripts/blackjackBotVsBot.ts` (ran: create→deposit×2→117 signed moves→close, coins moved). Deployed `sui_tunnel` PACKAGE_ID (testnet): `0x8b6cc035bc3d8c4defc27e80a398db428dde98bfdc669e5012bd80adb38af2d4`.
 
 **Reference (copy + adapt these):** the ticTacToe client at `frontend/src/games/ticTacToe/packages/client/src`:
+
 - `lib/bots.ts` — persistent bot identities (localStorage seed → `@mysten` keypair + SDK `coreKey`, asserts pubkey match), **faucet self-funding** (`fundBots` via `requestSuiFromFaucetV2`), `botBalances`, `transferBetweenBots`.
 - `lib/tunnel.ts` — tx builders over `onchain.*`, with the @mysten/sui version cast (`tx as unknown as SdkTx`) because the client pins `@mysten/sui` 1.45.2 while the SDK uses 1.28.1.
 - `hooks/useBotGame.ts` — the full state machine: fund → create → deposit×2 → animated `OffchainTunnel.selfPlay` (each `step` dual-signs+verifies) → `buildSettlement` → `closeCooperative`; auto-play loop, gas guard, score.
 
 **Key facts:**
+
 - Funding = **faucet self-fund** (no player wallet needed), per user "tự fund cho 2 bot như tictactoe".
 - Coin = **SUI** for v1.
 - Blackjack differs from TTT: balances VARY (TTT was stake 0, fixed 1/1). So deposit `STAKE` (>= protocol `WAGER`=100; use e.g. 500n) and settle with the protocol's actual final balances via `onchain.buildCloseFromSettlement(tx, tunnelId, settlement, coinType)` (NOT hardcoded balances).
@@ -62,6 +64,7 @@
 - [ ] Commit any fixes.
 
 ## Risks
+
 - Getting the existing bun client to build (it references `@poc/shared`, enoki, etc.). The bot route is isolated and must not require the auth/server stack. If the whole client won't build due to other pages, consider gating those imports or a minimal bot-only entry.
 - @mysten/sui 1.45.2 (client) vs 1.28.1 (SDK) — use the type-only cast at the builder boundary (TTT pattern). Built tx bytes are identical.
 - Faucet rate limits on testnet — `fundBots` already returns statuses instead of throwing; surface them in the UI.

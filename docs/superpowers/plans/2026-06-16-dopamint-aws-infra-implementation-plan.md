@@ -13,35 +13,35 @@
 
 ## File Map
 
-| File | Responsibility |
-|---|---|
-| `infra/package.json` | Node dependencies and scripts |
-| `infra/tsconfig.json` | TypeScript config |
-| `infra/Pulumi.yaml` | Pulumi project metadata |
-| `infra/Pulumi.{dev,staging,production}.yaml` | Per-stack config |
-| `infra/src/config.ts` | Read and validate stack configuration |
-| `infra/src/components/Network.ts` | VPC, public/private subnets, NATs, endpoints |
-| `infra/src/components/Dns.ts` | ACM certificate, Route 53 records for ALB + CloudFront |
-| `infra/src/resources/security-groups.ts` | Security groups for each tier |
-| `infra/src/resources/alb.ts` | Shared ALB, HTTPS listener, target group |
-| `infra/src/resources/iam.ts` | IAM roles, policies, CI deployer role, GitHub OIDC, benchmark instance profile |
-| `infra/src/components/Frontend.ts` | S3 bucket with versioning, CloudFront distribution |
-| `infra/src/components/Database.ts` | Aurora PostgreSQL cluster, subnet group, secrets |
-| `infra/src/components/DatabaseProxy.ts` | RDS Proxy for Aurora |
-| `infra/src/components/Cache.ts` | ElastiCache Redis (cluster mode + TLS) |
-| `infra/src/components/Backend.ts` | ECR repo, ECS cluster, backend service, migration task definition |
-| `infra/src/components/Monitoring.ts` | CloudWatch alarms and dashboards |
-| `infra/src/components/BenchmarkFleet.ts` | EC2 Image Builder pipeline, launch template, ASG |
-| `infra/src/github.ts` | Export stack outputs for GitHub environment variables |
-| `infra/src/index.ts` | Stack entry point; wires components together |
-| `.github/workflows/test.yml` | PR checks: typecheck, unit tests, sui move test |
-| `.github/workflows/deploy-infra.yml` | Pulumi up for infra changes |
-| `.github/workflows/deploy-frontend.yml` | Build and sync frontend to S3 + invalidate CloudFront |
-| `.github/workflows/deploy-backend.yml` | Build/push backend image, run migrations, update ECS service |
-| `.github/workflows/benchmark.yml` | Scale ASG, run 1M TPS benchmark, report |
-| `docs/runbooks/aws-deploy.md` | Human runbook for deploy and benchmark |
-| `docs/runbooks/aws-rollback.md` | Human runbook for rollback |
-| `docs/contracts/backend-deployment-contract.md` | Backend team's operational contract |
+| File                                            | Responsibility                                                                 |
+| ----------------------------------------------- | ------------------------------------------------------------------------------ |
+| `infra/package.json`                            | Node dependencies and scripts                                                  |
+| `infra/tsconfig.json`                           | TypeScript config                                                              |
+| `infra/Pulumi.yaml`                             | Pulumi project metadata                                                        |
+| `infra/Pulumi.{dev,staging,production}.yaml`    | Per-stack config                                                               |
+| `infra/src/config.ts`                           | Read and validate stack configuration                                          |
+| `infra/src/components/Network.ts`               | VPC, public/private subnets, NATs, endpoints                                   |
+| `infra/src/components/Dns.ts`                   | ACM certificate, Route 53 records for ALB + CloudFront                         |
+| `infra/src/resources/security-groups.ts`        | Security groups for each tier                                                  |
+| `infra/src/resources/alb.ts`                    | Shared ALB, HTTPS listener, target group                                       |
+| `infra/src/resources/iam.ts`                    | IAM roles, policies, CI deployer role, GitHub OIDC, benchmark instance profile |
+| `infra/src/components/Frontend.ts`              | S3 bucket with versioning, CloudFront distribution                             |
+| `infra/src/components/Database.ts`              | Aurora PostgreSQL cluster, subnet group, secrets                               |
+| `infra/src/components/DatabaseProxy.ts`         | RDS Proxy for Aurora                                                           |
+| `infra/src/components/Cache.ts`                 | ElastiCache Redis (cluster mode + TLS)                                         |
+| `infra/src/components/Backend.ts`               | ECR repo, ECS cluster, backend service, migration task definition              |
+| `infra/src/components/Monitoring.ts`            | CloudWatch alarms and dashboards                                               |
+| `infra/src/components/BenchmarkFleet.ts`        | EC2 Image Builder pipeline, launch template, ASG                               |
+| `infra/src/github.ts`                           | Export stack outputs for GitHub environment variables                          |
+| `infra/src/index.ts`                            | Stack entry point; wires components together                                   |
+| `.github/workflows/test.yml`                    | PR checks: typecheck, unit tests, sui move test                                |
+| `.github/workflows/deploy-infra.yml`            | Pulumi up for infra changes                                                    |
+| `.github/workflows/deploy-frontend.yml`         | Build and sync frontend to S3 + invalidate CloudFront                          |
+| `.github/workflows/deploy-backend.yml`          | Build/push backend image, run migrations, update ECS service                   |
+| `.github/workflows/benchmark.yml`               | Scale ASG, run 1M TPS benchmark, report                                        |
+| `docs/runbooks/aws-deploy.md`                   | Human runbook for deploy and benchmark                                         |
+| `docs/runbooks/aws-rollback.md`                 | Human runbook for rollback                                                     |
+| `docs/contracts/backend-deployment-contract.md` | Backend team's operational contract                                            |
 
 ---
 
@@ -55,9 +55,11 @@
 ---
 
 ## Task 1: Bootstrap the `infra` project
-*Estimate: 20 min*
+
+_Estimate: 20 min_
 
 **Files:**
+
 - Create: `infra/package.json`
 - Create: `infra/tsconfig.json`
 - Create: `infra/Pulumi.yaml`
@@ -128,6 +130,7 @@ description: Dopamint Arena AWS infrastructure
 - [ ] **Step 4: Create stack config files**
 
 `infra/Pulumi.dev.yaml`:
+
 ```yaml
 config:
   aws:region: us-east-1
@@ -145,6 +148,7 @@ config:
 ```
 
 `infra/Pulumi.staging.yaml`:
+
 ```yaml
 config:
   aws:region: us-east-1
@@ -160,6 +164,7 @@ config:
 ```
 
 `infra/Pulumi.production.yaml`:
+
 ```yaml
 config:
   aws:region: us-east-1
@@ -234,9 +239,11 @@ git commit -m "chore(infra): bootstrap pulumi project"
 ---
 
 ## Task 2: VPC and network foundation
-*Estimate: 20 min*
+
+_Estimate: 20 min_
 
 **Files:**
+
 - Create: `infra/src/components/Network.ts`
 - Modify: `infra/src/index.ts`
 
@@ -304,9 +311,11 @@ git commit -m "feat(infra): add vpc and network component"
 ---
 
 ## Task 3: ACM certificate and Route 53 zone
-*Estimate: 15 min*
+
+_Estimate: 15 min_
 
 **Files:**
+
 - Create: `infra/src/components/Dns.ts`
 - Modify: `infra/src/index.ts`
 
@@ -324,7 +333,7 @@ export interface DnsOutputs {
 
 export function createDns(
   name: string,
-  args: { domain: string; route53ZoneId?: string }
+  args: { domain: string; route53ZoneId?: string },
 ): DnsOutputs {
   const zone = args.route53ZoneId
     ? aws.route53.Zone.get(`${name}-zone`, args.route53ZoneId)
@@ -345,10 +354,13 @@ export function createDns(
     allowOverwrite: true,
   });
 
-  const validatedCert = new aws.acm.CertificateValidation(`${name}-cert-validated`, {
-    certificateArn: certificate.arn,
-    validationRecordFqdns: [validationRecord.fqdn],
-  });
+  const validatedCert = new aws.acm.CertificateValidation(
+    `${name}-cert-validated`,
+    {
+      certificateArn: certificate.arn,
+      validationRecordFqdns: [validationRecord.fqdn],
+    },
+  );
 
   return {
     certificateArn: validatedCert.certificateArn,
@@ -389,9 +401,11 @@ git commit -m "feat(infra): add acm and route53 dns component"
 ---
 
 ## Task 4: Security groups
-*Estimate: 15 min*
+
+_Estimate: 15 min_
 
 **Files:**
+
 - Create: `infra/src/resources/security-groups.ts`
 - Modify: `infra/src/index.ts`
 
@@ -411,32 +425,51 @@ export interface SecurityGroupSet {
 
 export function createSecurityGroups(
   name: string,
-  vpcId: pulumi.Input<string>
+  vpcId: pulumi.Input<string>,
 ): SecurityGroupSet {
   const alb = new aws.ec2.SecurityGroup(`${name}-alb-sg`, {
     vpcId,
     description: "ALB ingress",
     ingress: [
       { protocol: "tcp", fromPort: 80, toPort: 80, cidrBlocks: ["0.0.0.0/0"] },
-      { protocol: "tcp", fromPort: 443, toPort: 443, cidrBlocks: ["0.0.0.0/0"] },
+      {
+        protocol: "tcp",
+        fromPort: 443,
+        toPort: 443,
+        cidrBlocks: ["0.0.0.0/0"],
+      },
     ],
-    egress: [{ protocol: "-1", fromPort: 0, toPort: 0, cidrBlocks: ["0.0.0.0/0"] }],
+    egress: [
+      { protocol: "-1", fromPort: 0, toPort: 0, cidrBlocks: ["0.0.0.0/0"] },
+    ],
   });
 
   const backend = new aws.ec2.SecurityGroup(`${name}-backend-sg`, {
     vpcId,
     description: "Backend Fargate tasks",
     ingress: [
-      { protocol: "tcp", fromPort: 8080, toPort: 8080, securityGroups: [alb.id] },
+      {
+        protocol: "tcp",
+        fromPort: 8080,
+        toPort: 8080,
+        securityGroups: [alb.id],
+      },
     ],
-    egress: [{ protocol: "-1", fromPort: 0, toPort: 0, cidrBlocks: ["0.0.0.0/0"] }],
+    egress: [
+      { protocol: "-1", fromPort: 0, toPort: 0, cidrBlocks: ["0.0.0.0/0"] },
+    ],
   });
 
   const db = new aws.ec2.SecurityGroup(`${name}-db-sg`, {
     vpcId,
     description: "Aurora PostgreSQL",
     ingress: [
-      { protocol: "tcp", fromPort: 5432, toPort: 5432, securityGroups: [backend.id] },
+      {
+        protocol: "tcp",
+        fromPort: 5432,
+        toPort: 5432,
+        securityGroups: [backend.id],
+      },
     ],
   });
 
@@ -444,15 +477,27 @@ export function createSecurityGroups(
     vpcId,
     description: "ElastiCache Redis",
     ingress: [
-      { protocol: "tcp", fromPort: 6379, toPort: 6379, securityGroups: [backend.id] },
-      { protocol: "tcp", fromPort: 6379, toPort: 6379, securityGroups: [benchmark.id] },
+      {
+        protocol: "tcp",
+        fromPort: 6379,
+        toPort: 6379,
+        securityGroups: [backend.id],
+      },
+      {
+        protocol: "tcp",
+        fromPort: 6379,
+        toPort: 6379,
+        securityGroups: [benchmark.id],
+      },
     ],
   });
 
   const benchmark = new aws.ec2.SecurityGroup(`${name}-benchmark-sg`, {
     vpcId,
     description: "Benchmark fleet",
-    egress: [{ protocol: "-1", fromPort: 0, toPort: 0, cidrBlocks: ["0.0.0.0/0"] }],
+    egress: [
+      { protocol: "-1", fromPort: 0, toPort: 0, cidrBlocks: ["0.0.0.0/0"] },
+    ],
   });
 
   return { alb, backend, db, cache, benchmark };
@@ -478,9 +523,11 @@ git commit -m "feat(infra): add security groups"
 ---
 
 ## Task 5: Application Load Balancer
-*Estimate: 15 min*
+
+_Estimate: 15 min_
 
 **Files:**
+
 - Create: `infra/src/resources/alb.ts`
 - Modify: `infra/src/index.ts`
 
@@ -503,7 +550,7 @@ export function createAlb(
     subnetIds: pulumi.Input<string[]>;
     securityGroupId: pulumi.Input<string>;
     certificateArn: pulumi.Input<string>;
-  }
+  },
 ): AlbOutputs {
   const alb = new aws.lb.LoadBalancer(`${name}-alb`, {
     loadBalancerType: "application",
@@ -581,9 +628,11 @@ git commit -m "feat(infra): add alb with https and certificate"
 ---
 
 ## Task 6: IAM — task roles and GitHub OIDC
-*Estimate: 25 min*
+
+_Estimate: 25 min_
 
 **Files:**
+
 - Create: `infra/src/resources/iam.ts`
 - Modify: `infra/src/index.ts`
 
@@ -604,7 +653,7 @@ export interface IamOutputs {
 
 export function createIam(
   name: string,
-  args: { githubOrg: string; githubRepo: string }
+  args: { githubOrg: string; githubRepo: string },
 ): IamOutputs {
   const taskExecutionRole = new aws.iam.Role(`${name}-task-exec-role`, {
     assumeRolePolicy: JSON.stringify({
@@ -617,7 +666,9 @@ export function createIam(
         },
       ],
     }),
-    managedPolicyArns: ["arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"],
+    managedPolicyArns: [
+      "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy",
+    ],
   });
 
   const taskRole = new aws.iam.Role(`${name}-task-role`, {
@@ -634,11 +685,14 @@ export function createIam(
     managedPolicyArns: ["arn:aws:iam::aws:policy/CloudWatchFullAccess"],
   });
 
-  const githubProvider = new aws.iam.OpenIdConnectProvider(`${name}-github-oidc`, {
-    url: "https://token.actions.githubusercontent.com",
-    clientIdLists: ["sts.amazonaws.com"],
-    thumbprintLists: ["6938fd4e98bab03faadb97b34396831e3780aea1"],
-  });
+  const githubProvider = new aws.iam.OpenIdConnectProvider(
+    `${name}-github-oidc`,
+    {
+      url: "https://token.actions.githubusercontent.com",
+      clientIdLists: ["sts.amazonaws.com"],
+      thumbprintLists: ["6938fd4e98bab03faadb97b34396831e3780aea1"],
+    },
+  );
 
   const githubDeployRole = new aws.iam.Role(`${name}-github-deploy-role`, {
     assumeRolePolicy: pulumi
@@ -652,12 +706,17 @@ export function createIam(
               Principal: { Federated: providerArn },
               Action: "sts:AssumeRoleWithWebIdentity",
               Condition: {
-                StringLike: { "token.actions.githubusercontent.com:sub": `repo:${org}/${repo}:*` },
-                StringEquals: { "token.actions.githubusercontent.com:aud": "sts.amazonaws.com" },
+                StringLike: {
+                  "token.actions.githubusercontent.com:sub": `repo:${org}/${repo}:*`,
+                },
+                StringEquals: {
+                  "token.actions.githubusercontent.com:aud":
+                    "sts.amazonaws.com",
+                },
               },
             },
           ],
-        })
+        }),
       ),
   });
 
@@ -690,8 +749,16 @@ export function createIam(
     assumeRolePolicy: JSON.stringify({
       Version: "2012-10-17",
       Statement: [
-        { Effect: "Allow", Principal: { Service: "ec2.amazonaws.com" }, Action: "sts:AssumeRole" },
-        { Effect: "Allow", Principal: { Service: "imagebuilder.amazonaws.com" }, Action: "sts:AssumeRole" },
+        {
+          Effect: "Allow",
+          Principal: { Service: "ec2.amazonaws.com" },
+          Action: "sts:AssumeRole",
+        },
+        {
+          Effect: "Allow",
+          Principal: { Service: "imagebuilder.amazonaws.com" },
+          Action: "sts:AssumeRole",
+        },
       ],
     }),
     managedPolicyArns: [
@@ -700,15 +767,22 @@ export function createIam(
     ],
   });
 
-  const imageBuilderProfile = new aws.iam.InstanceProfile(`${name}-image-builder-profile`, {
-    role: imageBuilderRole.name,
-  });
+  const imageBuilderProfile = new aws.iam.InstanceProfile(
+    `${name}-image-builder-profile`,
+    {
+      role: imageBuilderRole.name,
+    },
+  );
 
   const benchmarkRole = new aws.iam.Role(`${name}-benchmark-role`, {
     assumeRolePolicy: JSON.stringify({
       Version: "2012-10-17",
       Statement: [
-        { Effect: "Allow", Principal: { Service: "ec2.amazonaws.com" }, Action: "sts:AssumeRole" },
+        {
+          Effect: "Allow",
+          Principal: { Service: "ec2.amazonaws.com" },
+          Action: "sts:AssumeRole",
+        },
       ],
     }),
     managedPolicyArns: [
@@ -717,9 +791,12 @@ export function createIam(
     ],
   });
 
-  const benchmarkInstanceProfile = new aws.iam.InstanceProfile(`${name}-benchmark-profile`, {
-    role: benchmarkRole.name,
-  });
+  const benchmarkInstanceProfile = new aws.iam.InstanceProfile(
+    `${name}-benchmark-profile`,
+    {
+      role: benchmarkRole.name,
+    },
+  );
 
   return {
     taskExecutionRole,
@@ -758,9 +835,11 @@ git commit -m "feat(infra): add iam roles oidc and instance profiles"
 ---
 
 ## Task 7: Frontend — S3 + CloudFront + Route 53 alias
-*Estimate: 25 min*
+
+_Estimate: 25 min_
 
 **Files:**
+
 - Create: `infra/src/components/Frontend.ts`
 - Modify: `infra/src/index.ts`
 
@@ -782,7 +861,7 @@ export function createFrontend(
     domain: string;
     certificateArn: pulumi.Input<string>;
     zoneId?: pulumi.Input<string>;
-  }
+  },
 ): FrontendOutputs {
   const bucket = new aws.s3.BucketV2(`${name}-frontend`, {
     bucket: `${name}-frontend-${pulumi.getStack()}`,
@@ -801,26 +880,31 @@ export function createFrontend(
     restrictPublicBuckets: true,
   });
 
-  const originAccessIdentity = new aws.cloudfront.OriginAccessIdentity(`${name}-oai`, {
-    comment: `OAI for ${name}`,
-  });
+  const originAccessIdentity = new aws.cloudfront.OriginAccessIdentity(
+    `${name}-oai`,
+    {
+      comment: `OAI for ${name}`,
+    },
+  );
 
   new aws.s3.BucketPolicy(`${name}-frontend-policy`, {
     bucket: bucket.id,
-    policy: pulumi.all([bucket.arn, originAccessIdentity.iamArn]).apply(([arn, oaiArn]) =>
-      JSON.stringify({
-        Version: "2012-10-17",
-        Statement: [
-          {
-            Sid: "AllowCloudFrontOAI",
-            Effect: "Allow",
-            Principal: { CanonicalUser: oaiArn },
-            Action: "s3:GetObject",
-            Resource: `${arn}/*`,
-          },
-        ],
-      })
-    ),
+    policy: pulumi
+      .all([bucket.arn, originAccessIdentity.iamArn])
+      .apply(([arn, oaiArn]) =>
+        JSON.stringify({
+          Version: "2012-10-17",
+          Statement: [
+            {
+              Sid: "AllowCloudFrontOAI",
+              Effect: "Allow",
+              Principal: { CanonicalUser: oaiArn },
+              Action: "s3:GetObject",
+              Resource: `${arn}/*`,
+            },
+          ],
+        }),
+      ),
   });
 
   const distribution = new aws.cloudfront.Distribution(`${name}-cdn`, {
@@ -830,7 +914,10 @@ export function createFrontend(
       {
         domainName: bucket.bucketRegionalDomainName,
         originId: "s3-origin",
-        s3OriginConfig: { originAccessIdentity: originAccessIdentity.cloudfrontAccessIdentityPath },
+        s3OriginConfig: {
+          originAccessIdentity:
+            originAccessIdentity.cloudfrontAccessIdentityPath,
+        },
       },
     ],
     defaultRootObject: "index.html",
@@ -908,9 +995,11 @@ git commit -m "feat(infra): add s3 cloudfront frontend with versioning"
 ---
 
 ## Task 8: Aurora PostgreSQL + RDS Proxy
-*Estimate: 25 min*
+
+_Estimate: 25 min_
 
 **Files:**
+
 - Create: `infra/src/components/Database.ts`
 - Create: `infra/src/components/DatabaseProxy.ts`
 - Modify: `infra/src/index.ts`
@@ -938,7 +1027,7 @@ export function createDatabase(
     serverless: boolean;
     minCapacity?: number;
     maxCapacity?: number;
-  }
+  },
 ): DatabaseOutputs {
   const dbPassword = new random.RandomPassword(`${name}-db-password`, {
     length: 32,
@@ -951,9 +1040,11 @@ export function createDatabase(
 
   new aws.secretsmanager.SecretVersion(`${name}-db-secret-version`, {
     secretId: secret.id,
-    secretString: pulumi.all([dbPassword.result]).apply(([pwd]) =>
-      JSON.stringify({ username: "dopamint", password: pwd })
-    ),
+    secretString: pulumi
+      .all([dbPassword.result])
+      .apply(([pwd]) =>
+        JSON.stringify({ username: "dopamint", password: pwd }),
+      ),
   });
 
   const subnetGroup = new aws.rds.SubnetGroup(`${name}-db-subnets`, {
@@ -969,12 +1060,18 @@ export function createDatabase(
     dbSubnetGroupName: subnetGroup.name,
     vpcSecurityGroupIds: [args.securityGroupId],
     skipFinalSnapshot: false,
-    finalSnapshotIdentifier: pulumi.interpolate`${name}-final-${Date.now()}`.apply((s) => s.slice(0, 63)),
+    finalSnapshotIdentifier:
+      pulumi.interpolate`${name}-final-${Date.now()}`.apply((s) =>
+        s.slice(0, 63),
+      ),
     backupRetentionPeriod: 7,
     preferredBackupWindow: "03:00-04:00",
     storageEncrypted: true,
     serverlessv2ScalingConfiguration: args.serverless
-      ? { minCapacity: args.minCapacity ?? 0.5, maxCapacity: args.maxCapacity ?? 4 }
+      ? {
+          minCapacity: args.minCapacity ?? 0.5,
+          maxCapacity: args.maxCapacity ?? 4,
+        }
       : undefined,
   });
 
@@ -1012,7 +1109,7 @@ export function createDatabaseProxy(
     securityGroupId: pulumi.Input<string>;
     dbClusterIdentifier: pulumi.Input<string>;
     secretArn: pulumi.Input<string>;
-  }
+  },
 ): DatabaseProxyOutputs {
   const role = new aws.iam.Role(`${name}-rds-proxy-role`, {
     assumeRolePolicy: JSON.stringify({
@@ -1039,7 +1136,7 @@ export function createDatabaseProxy(
             Resource: secretArn,
           },
         ],
-      })
+      }),
     ),
   });
 
@@ -1107,9 +1204,11 @@ git commit -m "feat(infra): add aurora and rds proxy"
 ---
 
 ## Task 9: ElastiCache Redis
-*Estimate: 20 min*
+
+_Estimate: 20 min_
 
 **Files:**
+
 - Create: `infra/src/components/Cache.ts`
 - Modify: `infra/src/index.ts`
 
@@ -1131,7 +1230,7 @@ export function createCache(
     subnetIds: pulumi.Input<string[]>;
     securityGroupId: pulumi.Input<string>;
     nodeType: string;
-  }
+  },
 ): CacheOutputs {
   const subnetGroup = new aws.elasticache.SubnetGroup(`${name}-cache-subnets`, {
     subnetIds: args.subnetIds,
@@ -1201,9 +1300,11 @@ git commit -m "feat(infra): add elasticache redis cluster mode"
 ---
 
 ## Task 10: Wire DB secret into task execution role
-*Estimate: 10 min*
+
+_Estimate: 10 min_
 
 **Files:**
+
 - Modify: `infra/src/resources/iam.ts`
 - Modify: `infra/src/index.ts`
 
@@ -1232,7 +1333,7 @@ if (args.dbSecretArn) {
             Resource: secretArn,
           },
         ],
-      })
+      }),
     ),
   });
 }
@@ -1261,11 +1362,13 @@ git commit -m "feat(infra): add secrets manager access for ecs task exec role"
 ---
 
 ## Task 11: ECR repository
-*Estimate: 10 min*
+
+_Estimate: 10 min_
 
 **Prerequisite:** Backend deployment contract (Task 23) must be approved before implementing backend-dependent infra. If the contract changes after this task, update the task definitions in Task 13 accordingly.
 
 **Files:**
+
 - Modify: `infra/src/components/Backend.ts`
 
 - [ ] **Step 1: Add ECR repository with lifecycle policy**
@@ -1283,7 +1386,11 @@ new aws.ecr.LifecyclePolicy(`${name}-backend-lifecycle`, {
       {
         rulePriority: 1,
         description: "Keep last 30 images",
-        selection: { tagStatus: "any", countType: "imageCountMoreThan", countNumber: 30 },
+        selection: {
+          tagStatus: "any",
+          countType: "imageCountMoreThan",
+          countNumber: 30,
+        },
         action: { type: "expire" },
       },
     ],
@@ -1301,9 +1408,11 @@ git commit -m "feat(infra): add ecr repository with lifecycle policy"
 ---
 
 ## Task 12: ECS cluster and CloudWatch log group
-*Estimate: 10 min*
+
+_Estimate: 10 min_
 
 **Files:**
+
 - Modify: `infra/src/components/Backend.ts`
 
 - [ ] **Step 1: Create cluster and log group**
@@ -1326,9 +1435,11 @@ git commit -m "feat(infra): add ecs cluster and backend log group"
 ---
 
 ## Task 13: Fargate task definition and migration task definition
-*Estimate: 25 min*
+
+_Estimate: 25 min_
 
 **Files:**
+
 - Modify: `infra/src/components/Backend.ts`
 
 - [ ] **Step 1: Create backend task definition**
@@ -1351,37 +1462,49 @@ const taskDefinition = new aws.ecs.TaskDefinition(`${name}-backend-task`, {
       args.pubSubEndpoint,
       args.cacheEndpoint,
     ])
-    .apply(([imageUrl, imageTag, logGroupName, dbHost, pubSubHost, cacheHost]) =>
-      JSON.stringify([
-        {
-          name: "backend",
-          image: `${imageUrl}:${imageTag}`,
-          portMappings: [{ containerPort: 8080 }],
-          essential: true,
-          logConfiguration: {
-            logDriver: "awslogs",
-            options: {
-              "awslogs-group": logGroupName,
-              "awslogs-region": aws.config.region ?? "us-east-1",
-              "awslogs-stream-prefix": "backend",
+    .apply(
+      ([imageUrl, imageTag, logGroupName, dbHost, pubSubHost, cacheHost]) =>
+        JSON.stringify([
+          {
+            name: "backend",
+            image: `${imageUrl}:${imageTag}`,
+            portMappings: [{ containerPort: 8080 }],
+            essential: true,
+            logConfiguration: {
+              logDriver: "awslogs",
+              options: {
+                "awslogs-group": logGroupName,
+                "awslogs-region": aws.config.region ?? "us-east-1",
+                "awslogs-stream-prefix": "backend",
+              },
             },
+            environment: [
+              {
+                name: "DATABASE_URL",
+                value: `postgres://dopamint@${dbHost}:5432/dopamint`,
+              },
+              {
+                name: "REDIS_PUBSUB_URL",
+                value: `rediss://${pubSubHost}:6379`,
+              },
+              { name: "REDIS_CACHE_URL", value: `rediss://${cacheHost}:6379` },
+            ],
+            secrets: [
+              { name: "DATABASE_PASSWORD", valueFrom: args.dbSecretArn },
+            ],
+            healthCheck: {
+              command: [
+                "CMD-SHELL",
+                "curl -f http://localhost:8080/health/live || exit 1",
+              ],
+              interval: 30,
+              timeout: 5,
+              retries: 3,
+              startPeriod: 60,
+            },
+            stopTimeout: 30,
           },
-          environment: [
-            { name: "DATABASE_URL", value: `postgres://dopamint@${dbHost}:5432/dopamint` },
-            { name: "REDIS_PUBSUB_URL", value: `rediss://${pubSubHost}:6379` },
-            { name: "REDIS_CACHE_URL", value: `rediss://${cacheHost}:6379` },
-          ],
-          secrets: [{ name: "DATABASE_PASSWORD", valueFrom: args.dbSecretArn }],
-          healthCheck: {
-            command: ["CMD-SHELL", "curl -f http://localhost:8080/health/live || exit 1"],
-            interval: 30,
-            timeout: 5,
-            retries: 3,
-            startPeriod: 60,
-          },
-          stopTimeout: 30,
-        },
-      ])
+        ]),
     ),
 });
 ```
@@ -1389,44 +1512,52 @@ const taskDefinition = new aws.ecs.TaskDefinition(`${name}-backend-task`, {
 - [ ] **Step 2: Create migration task definition**
 
 ```typescript
-const migrationTaskDefinition = new aws.ecs.TaskDefinition(`${name}-backend-migrate-task`, {
-  family: `${name}-backend-migrate`,
-  cpu: "1024",
-  memory: "2048",
-  networkMode: "awsvpc",
-  requiresCompatibilities: ["FARGATE"],
-  executionRoleArn: args.taskExecutionRoleArn,
-  taskRoleArn: args.taskRoleArn,
-  containerDefinitions: pulumi
-    .all([
-      repo.repositoryUrl,
-      args.imageTag,
-      logGroup.name,
-      args.dbProxyEndpoint,
-    ])
-    .apply(([imageUrl, imageTag, logGroupName, dbHost]) =>
-      JSON.stringify([
-        {
-          name: "migrate",
-          image: `${imageUrl}:${imageTag}`,
-          essential: true,
-          command: ["./scripts/migrate.sh"],
-          logConfiguration: {
-            logDriver: "awslogs",
-            options: {
-              "awslogs-group": logGroupName,
-              "awslogs-region": aws.config.region ?? "us-east-1",
-              "awslogs-stream-prefix": "migrate",
-            },
-          },
-          environment: [
-            { name: "DATABASE_URL", value: `postgres://dopamint@${dbHost}:5432/dopamint` },
-          ],
-          secrets: [{ name: "DATABASE_PASSWORD", valueFrom: args.dbSecretArn }],
-        },
+const migrationTaskDefinition = new aws.ecs.TaskDefinition(
+  `${name}-backend-migrate-task`,
+  {
+    family: `${name}-backend-migrate`,
+    cpu: "1024",
+    memory: "2048",
+    networkMode: "awsvpc",
+    requiresCompatibilities: ["FARGATE"],
+    executionRoleArn: args.taskExecutionRoleArn,
+    taskRoleArn: args.taskRoleArn,
+    containerDefinitions: pulumi
+      .all([
+        repo.repositoryUrl,
+        args.imageTag,
+        logGroup.name,
+        args.dbProxyEndpoint,
       ])
-    ),
-});
+      .apply(([imageUrl, imageTag, logGroupName, dbHost]) =>
+        JSON.stringify([
+          {
+            name: "migrate",
+            image: `${imageUrl}:${imageTag}`,
+            essential: true,
+            command: ["./scripts/migrate.sh"],
+            logConfiguration: {
+              logDriver: "awslogs",
+              options: {
+                "awslogs-group": logGroupName,
+                "awslogs-region": aws.config.region ?? "us-east-1",
+                "awslogs-stream-prefix": "migrate",
+              },
+            },
+            environment: [
+              {
+                name: "DATABASE_URL",
+                value: `postgres://dopamint@${dbHost}:5432/dopamint`,
+              },
+            ],
+            secrets: [
+              { name: "DATABASE_PASSWORD", valueFrom: args.dbSecretArn },
+            ],
+          },
+        ]),
+      ),
+  },
+);
 ```
 
 - [ ] **Step 3: Commit**
@@ -1439,9 +1570,11 @@ git commit -m "feat(infra): add fargate and migration task definitions"
 ---
 
 ## Task 14: ECS service with ALB attachment
-*Estimate: 20 min*
+
+_Estimate: 20 min_
 
 **Files:**
+
 - Modify: `infra/src/components/Backend.ts`
 - Modify: `infra/src/index.ts`
 
@@ -1510,9 +1643,11 @@ git commit -m "feat(infra): add ecs fargate backend service"
 ---
 
 ## Task 15: Route 53 alias for ALB backend domain
-*Estimate: 10 min*
+
+_Estimate: 10 min_
 
 **Files:**
+
 - Modify: `infra/src/components/Dns.ts` or `infra/src/resources/alb.ts`
 
 - [ ] **Step 1: Add backend alias record**
@@ -1526,7 +1661,7 @@ export function createBackendAlias(
     domain: string;
     zoneId?: pulumi.Input<string>;
     alb: aws.lb.LoadBalancer;
-  }
+  },
 ) {
   if (!args.zoneId) return;
   new aws.route53.Record(`${name}-backend-alias`, {
@@ -1571,9 +1706,11 @@ git commit -m "feat(infra): add route53 alias for backend"
 ---
 
 ## Task 16: CloudWatch monitoring and alarms
-*Estimate: 20 min*
+
+_Estimate: 20 min_
 
 **Files:**
+
 - Create: `infra/src/components/Monitoring.ts`
 - Modify: `infra/src/index.ts`
 
@@ -1595,7 +1732,7 @@ export function createMonitoring(
     targetGroup: aws.lb.TargetGroup;
     ecsClusterName: pulumi.Input<string>;
     ecsServiceName: pulumi.Input<string>;
-  }
+  },
 ): MonitoringOutputs {
   const topic = new aws.sns.Topic(`${name}-alarms`, {});
 
@@ -1677,9 +1814,11 @@ git commit -m "feat(infra): add cloudwatch alarms and sns topic"
 ---
 
 ## Task 17: GitHub environment variable export
-*Estimate: 15 min*
+
+_Estimate: 15 min_
 
 **Files:**
+
 - Create: `infra/src/github.ts`
 - Modify: `infra/src/index.ts`
 
@@ -1703,7 +1842,7 @@ export interface GithubEnvInputs {
 }
 
 export function githubEnvOutputs(
-  inputs: GithubEnvInputs
+  inputs: GithubEnvInputs,
 ): Record<string, pulumi.Input<string>> {
   return {
     BACKEND_URL: pulumi.interpolate`https://${inputs.backendUrl}`,
@@ -1715,7 +1854,9 @@ export function githubEnvOutputs(
     ECS_SERVICE: inputs.ecsService,
     ECS_MIGRATION_TASK_DEF: inputs.migrationTaskDef,
     AWS_DEPLOY_ROLE_ARN: inputs.githubDeployRoleArn,
-    PRIVATE_SUBNET_IDS: pulumi.output(inputs.privateSubnetIds).apply((ids) => ids.join(",")),
+    PRIVATE_SUBNET_IDS: pulumi
+      .output(inputs.privateSubnetIds)
+      .apply((ids) => ids.join(",")),
     BACKEND_SECURITY_GROUP_ID: inputs.backendSecurityGroupId,
   };
 }
@@ -1751,9 +1892,11 @@ git commit -m "feat(infra): export github environment variables"
 ---
 
 ## Task 18: Image Builder IAM and component
-*Estimate: 20 min*
+
+_Estimate: 20 min_
 
 **Files:**
+
 - Modify: `infra/src/components/BenchmarkFleet.ts`
 
 - [ ] **Step 1: Create Image Builder component**
@@ -1798,9 +1941,11 @@ git commit -m "feat(infra): add image builder component"
 ---
 
 ## Task 19: Image Builder recipe, distribution, infrastructure config, pipeline
-*Estimate: 20 min*
+
+_Estimate: 20 min_
 
 **Files:**
+
 - Modify: `infra/src/components/BenchmarkFleet.ts`
 
 - [ ] **Step 1: Create recipe, distribution, infrastructure config, pipeline**
@@ -1815,33 +1960,47 @@ const baseAmi = aws.ec2.getAmiOutput({
   ],
 });
 
-const imageRecipe = new aws.imagebuilder.ImageRecipe(`${name}-benchmark-recipe`, {
-  parentImage: baseAmi.id,
-  version: "1.0.0",
-  components: [{ componentArn: recipe.arn }],
-});
+const imageRecipe = new aws.imagebuilder.ImageRecipe(
+  `${name}-benchmark-recipe`,
+  {
+    parentImage: baseAmi.id,
+    version: "1.0.0",
+    components: [{ componentArn: recipe.arn }],
+  },
+);
 
-const distribution = new aws.imagebuilder.DistributionConfiguration(`${name}-benchmark-dist`, {
-  distributions: [
-    {
-      region: aws.config.region ?? "us-east-1",
-      amiDistributionConfiguration: { name: `${name}-benchmark-{{ imagebuilder:buildDate }}` },
-    },
-  ],
-});
+const distribution = new aws.imagebuilder.DistributionConfiguration(
+  `${name}-benchmark-dist`,
+  {
+    distributions: [
+      {
+        region: aws.config.region ?? "us-east-1",
+        amiDistributionConfiguration: {
+          name: `${name}-benchmark-{{ imagebuilder:buildDate }}`,
+        },
+      },
+    ],
+  },
+);
 
-const infraConfig = new aws.imagebuilder.InfrastructureConfiguration(`${name}-benchmark-infra`, {
-  instanceProfileName: args.imageBuilderProfileName,
-  instanceTypes: [args.instanceType],
-  securityGroupIds: [args.securityGroupId],
-  subnetId: pulumi.output(args.subnetIds).apply((ids) => ids[0]),
-});
+const infraConfig = new aws.imagebuilder.InfrastructureConfiguration(
+  `${name}-benchmark-infra`,
+  {
+    instanceProfileName: args.imageBuilderProfileName,
+    instanceTypes: [args.instanceType],
+    securityGroupIds: [args.securityGroupId],
+    subnetId: pulumi.output(args.subnetIds).apply((ids) => ids[0]),
+  },
+);
 
-const pipeline = new aws.imagebuilder.ImagePipeline(`${name}-benchmark-pipeline`, {
-  imageRecipeArn: imageRecipe.arn,
-  infrastructureConfigurationArn: infraConfig.arn,
-  distributionConfigurationArn: distribution.arn,
-});
+const pipeline = new aws.imagebuilder.ImagePipeline(
+  `${name}-benchmark-pipeline`,
+  {
+    imageRecipeArn: imageRecipe.arn,
+    infrastructureConfigurationArn: infraConfig.arn,
+    distributionConfigurationArn: distribution.arn,
+  },
+);
 ```
 
 - [ ] **Step 2: Commit**
@@ -1854,9 +2013,11 @@ git commit -m "feat(infra): add image builder pipeline"
 ---
 
 ## Task 20: Benchmark launch template and ASG
-*Estimate: 20 min*
+
+_Estimate: 20 min_
 
 **Files:**
+
 - Modify: `infra/src/components/BenchmarkFleet.ts`
 - Modify: `infra/src/index.ts`
 
@@ -1921,20 +2082,24 @@ git commit -m "feat(infra): add benchmark asg and launch template"
 ---
 
 ## Task 21: Add benchmark ASG name to GitHub environment variables
-*Estimate: 10 min*
+
+_Estimate: 10 min_
 
 **Files:**
+
 - Modify: `infra/src/github.ts`
 - Modify: `infra/src/index.ts`
 
 - [ ] **Step 1: Update `infra/src/github.ts` to accept benchmark ASG name**
 
 Add to `GithubEnvInputs`:
+
 ```typescript
-  benchmarkAsgName: pulumi.Input<string>;
+benchmarkAsgName: pulumi.Input<string>;
 ```
 
 Add to returned record:
+
 ```typescript
     BENCHMARK_ASG_NAME: inputs.benchmarkAsgName,
 ```
@@ -1971,19 +2136,24 @@ git commit -m "feat(infra): add benchmark asg name to github env"
 ---
 
 ## Task 22: Trigger first Golden AMI build and wire launch template
-*Estimate: 20 min*
+
+_Estimate: 20 min_
 
 **Files:**
+
 - Modify: `infra/src/components/BenchmarkFleet.ts`
 
 - [ ] **Step 1: Trigger an initial `aws.imagebuilder.Image` build**
 
 ```typescript
-const initialBuild = new aws.imagebuilder.Image(`${name}-benchmark-initial-image`, {
-  imageRecipeArn: imageRecipe.arn,
-  infrastructureConfigurationArn: infraConfig.arn,
-  distributionConfigurationArn: distribution.arn,
-});
+const initialBuild = new aws.imagebuilder.Image(
+  `${name}-benchmark-initial-image`,
+  {
+    imageRecipeArn: imageRecipe.arn,
+    infrastructureConfigurationArn: infraConfig.arn,
+    distributionConfigurationArn: distribution.arn,
+  },
+);
 ```
 
 - [ ] **Step 2: Use the resulting AMI in the launch template**
@@ -2015,9 +2185,11 @@ git commit -m "feat(infra): wire golden ami to benchmark launch template"
 ---
 
 ## Task 23: Backend team deployment contract
-*Estimate: 15 min*
+
+_Estimate: 15 min_
 
 **Files:**
+
 - Create: `docs/contracts/backend-deployment-contract.md`
 
 - [ ] **Step 1: Write contract**
@@ -2026,19 +2198,23 @@ git commit -m "feat(infra): wire golden ami to benchmark launch template"
 # Backend Deployment Contract
 
 ## Environment variables
+
 - `DATABASE_URL` — postgres://dopamint@<proxy>:5432/dopamint
 - `DATABASE_PASSWORD` — injected via Secrets Manager
 - `REDIS_PUBSUB_URL` — rediss://<cluster-config-endpoint>:6379
 - `REDIS_CACHE_URL` — rediss://<cluster-config-endpoint>:6379
 
 ## Health endpoints
+
 - `GET /health/live` — liveness, always 200
 - `GET /health/ready` — readiness, 503 during shutdown
 
 ## Graceful shutdown
+
 - On SIGTERM, stop accepting new connections, drain active requests within 25s, close DB/Redis pools.
 
 ## Migrations
+
 - Run as a one-off Fargate task using the same Docker image before the service update.
 - Migrations must be idempotent and backward-compatible (expand/contract).
 - Container entrypoint for migration task: `./scripts/migrate.sh`.
@@ -2060,9 +2236,11 @@ git commit -m "docs: add backend deployment contract"
 ---
 
 ## Task 24: Unit tests for config and backend contract
-*Estimate: 20 min*
+
+_Estimate: 20 min_
 
 **Files:**
+
 - Create: `infra/src/config.test.ts`
 - Create: `infra/src/components/Backend.test.ts`
 
@@ -2096,7 +2274,8 @@ describe("backend component", () => {
       vpcId: "vpc-123",
       subnetIds: ["subnet-1"],
       securityGroupId: "sg-1",
-      targetGroupArn: "arn:aws:elasticloadbalancing:us-east-1:123:targetgroup/test",
+      targetGroupArn:
+        "arn:aws:elasticloadbalancing:us-east-1:123:targetgroup/test",
       dbProxyEndpoint: "proxy.host",
       pubSubEndpoint: "pubsub.host",
       cacheEndpoint: "cache.host",
@@ -2106,17 +2285,26 @@ describe("backend component", () => {
       imageTag: "abc123",
     });
 
-    const defs = JSON.parse(backend.taskDefinition.apply((t) => t.containerDefinitions).toString());
+    const defs = JSON.parse(
+      backend.taskDefinition.apply((t) => t.containerDefinitions).toString(),
+    );
     const container = defs[0];
-    assert.ok(container.image.endsWith(":abc123"), "image tag must match configured SHA");
     assert.ok(
-      container.healthCheck.command.some((c: string) => c.includes("/health/live")),
-      "liveness probe must target /health/live"
+      container.image.endsWith(":abc123"),
+      "image tag must match configured SHA",
+    );
+    assert.ok(
+      container.healthCheck.command.some((c: string) =>
+        c.includes("/health/live"),
+      ),
+      "liveness probe must target /health/live",
     );
     assert.strictEqual(container.stopTimeout, 30);
     assert.ok(
-      container.secrets.some((s: { name: string }) => s.name === "DATABASE_PASSWORD"),
-      "must inject DATABASE_PASSWORD from Secrets Manager"
+      container.secrets.some(
+        (s: { name: string }) => s.name === "DATABASE_PASSWORD",
+      ),
+      "must inject DATABASE_PASSWORD from Secrets Manager",
     );
   });
 });
@@ -2132,9 +2320,11 @@ git commit -m "test(infra): add config and backend contract tests"
 ---
 
 ## Task 25: PR checks workflow
-*Estimate: 15 min*
+
+_Estimate: 15 min_
 
 **Files:**
+
 - Create: `.github/workflows/test.yml`
 
 - [ ] **Step 1: Create test workflow**
@@ -2181,9 +2371,11 @@ git commit -m "ci: add pr test workflow"
 ---
 
 ## Task 26: Deploy infra workflow
-*Estimate: 20 min*
+
+_Estimate: 20 min_
 
 **Files:**
+
 - Create: `.github/workflows/deploy-infra.yml`
 
 - [ ] **Step 1: Create workflow**
@@ -2252,9 +2444,11 @@ git commit -m "ci: add deploy infra workflow"
 ---
 
 ## Task 27: Deploy frontend workflow
-*Estimate: 15 min*
+
+_Estimate: 15 min_
 
 **Files:**
+
 - Create: `.github/workflows/deploy-frontend.yml`
 
 - [ ] **Step 1: Create workflow**
@@ -2321,9 +2515,11 @@ git commit -m "ci: add deploy frontend workflow"
 ---
 
 ## Task 28: Deploy backend workflow
-*Estimate: 30 min*
+
+_Estimate: 30 min_
 
 **Files:**
+
 - Create: `.github/workflows/deploy-backend.yml`
 
 **Ordering:** build/push image → set SHA in Pulumi config → `pulumi up` to register new task definitions → run migration against new task definition → update ECS service → smoke test.
@@ -2374,111 +2570,111 @@ jobs:
 - [ ] **Step 2: Register new Pulumi task definitions with SHA**
 
 ```yaml
-  update-pulumi:
-    needs: build-push
-    runs-on: ubuntu-latest
-    environment: ${{ github.event.inputs.environment || 'dev' }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: 20 }
-      - uses: pnpm/action-setup@v4
-        with: { version: 9 }
-      - uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: us-east-1
-      - name: Set backend image tag
-        run: |
-          cd infra
-          pulumi config set dopamint:backend-image-tag ${{ github.sha }} --stack ${{ github.event.inputs.environment || 'dev' }}
-      - name: Pulumi up
-        uses: pulumi/actions@v5
-        with:
-          command: up
-          stack-name: ${{ github.event.inputs.environment || 'dev' }}
-          work-dir: infra
+update-pulumi:
+  needs: build-push
+  runs-on: ubuntu-latest
+  environment: ${{ github.event.inputs.environment || 'dev' }}
+  steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-node@v4
+      with: { node-version: 20 }
+    - uses: pnpm/action-setup@v4
+      with: { version: 9 }
+    - uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+        aws-region: us-east-1
+    - name: Set backend image tag
+      run: |
+        cd infra
+        pulumi config set dopamint:backend-image-tag ${{ github.sha }} --stack ${{ github.event.inputs.environment || 'dev' }}
+    - name: Pulumi up
+      uses: pulumi/actions@v5
+      with:
+        command: up
+        stack-name: ${{ github.event.inputs.environment || 'dev' }}
+        work-dir: infra
 ```
 
 - [ ] **Step 3: Create migration job**
 
 ```yaml
-  migrate:
-    needs: update-pulumi
-    runs-on: ubuntu-latest
-    environment: ${{ github.event.inputs.environment || 'dev' }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: us-east-1
-      - name: Snapshot DB
-        run: |
-          SNAPSHOT_ID=pre-migration-${{ github.sha }}-$(date +%s)
-          echo "SNAPSHOT_ID=$SNAPSHOT_ID" >> "$GITHUB_ENV"
-          aws rds create-db-cluster-snapshot \
-            --db-cluster-identifier dopamint-${{ github.event.inputs.environment || 'dev' }}-aurora \
-            --db-cluster-snapshot-identifier $SNAPSHOT_ID
-          aws rds wait db-cluster-snapshot-available \
-            --db-cluster-snapshot-identifier $SNAPSHOT_ID
-      - name: Run migration
-        run: |
-          LATEST_MIGRATION_TASK_DEF=$(aws ecs describe-task-definition \
-            --task-definition ${{ vars.ECS_MIGRATION_TASK_DEF }} \
-            --query 'taskDefinition.taskDefinitionArn' --output text)
-          TASK_ARN=$(aws ecs run-task \
-            --cluster ${{ vars.ECS_CLUSTER }} \
-            --task-definition "$LATEST_MIGRATION_TASK_DEF" \
-            --launch-type FARGATE \
-            --network-configuration "awsvpcConfiguration={subnets=[${{ vars.PRIVATE_SUBNET_IDS }}],securityGroups=[${{ vars.BACKEND_SECURITY_GROUP_ID }}],assignPublicIp=DISABLED}" \
-            --started-by github-actions-migrate-${{ github.sha }} \
-            --query 'tasks[0].taskArn' --output text)
-          aws ecs wait tasks-stopped --cluster ${{ vars.ECS_CLUSTER }} --tasks $TASK_ARN
-          EXIT_CODE=$(aws ecs describe-tasks --cluster ${{ vars.ECS_CLUSTER }} --tasks $TASK_ARN --query 'tasks[0].containers[0].exitCode' --output text)
-          if [ "$EXIT_CODE" != "0" ]; then exit 1; fi
-      - name: Verify schema
-        run: |
-          LATEST_PROXY=$(pulumi stack output dbProxyEndpoint --stack ${{ github.event.inputs.environment || 'dev' }} --cwd infra)
-          PGPASSWORD=$(aws secretsmanager get-secret-value --secret-id $(pulumi stack output dbPasswordSecretArn --stack ${{ github.event.inputs.environment || 'dev' }} --cwd infra) --query 'SecretString' --output text | jq -r '.password')
-          EXPECTED_VERSION=${{ github.sha }}
-          ACTUAL_VERSION=$(PGPASSWORD="$PGPASSWORD" psql -h "$LATEST_PROXY" -U dopamint -d dopamint -t -c "SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1;" | xargs)
-          if [ "$ACTUAL_VERSION" != "$EXPECTED_VERSION" ]; then
-            echo "Expected schema_migrations version $EXPECTED_VERSION but got $ACTUAL_VERSION"
-            exit 1
-          fi
+migrate:
+  needs: update-pulumi
+  runs-on: ubuntu-latest
+  environment: ${{ github.event.inputs.environment || 'dev' }}
+  steps:
+    - uses: actions/checkout@v4
+    - uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+        aws-region: us-east-1
+    - name: Snapshot DB
+      run: |
+        SNAPSHOT_ID=pre-migration-${{ github.sha }}-$(date +%s)
+        echo "SNAPSHOT_ID=$SNAPSHOT_ID" >> "$GITHUB_ENV"
+        aws rds create-db-cluster-snapshot \
+          --db-cluster-identifier dopamint-${{ github.event.inputs.environment || 'dev' }}-aurora \
+          --db-cluster-snapshot-identifier $SNAPSHOT_ID
+        aws rds wait db-cluster-snapshot-available \
+          --db-cluster-snapshot-identifier $SNAPSHOT_ID
+    - name: Run migration
+      run: |
+        LATEST_MIGRATION_TASK_DEF=$(aws ecs describe-task-definition \
+          --task-definition ${{ vars.ECS_MIGRATION_TASK_DEF }} \
+          --query 'taskDefinition.taskDefinitionArn' --output text)
+        TASK_ARN=$(aws ecs run-task \
+          --cluster ${{ vars.ECS_CLUSTER }} \
+          --task-definition "$LATEST_MIGRATION_TASK_DEF" \
+          --launch-type FARGATE \
+          --network-configuration "awsvpcConfiguration={subnets=[${{ vars.PRIVATE_SUBNET_IDS }}],securityGroups=[${{ vars.BACKEND_SECURITY_GROUP_ID }}],assignPublicIp=DISABLED}" \
+          --started-by github-actions-migrate-${{ github.sha }} \
+          --query 'tasks[0].taskArn' --output text)
+        aws ecs wait tasks-stopped --cluster ${{ vars.ECS_CLUSTER }} --tasks $TASK_ARN
+        EXIT_CODE=$(aws ecs describe-tasks --cluster ${{ vars.ECS_CLUSTER }} --tasks $TASK_ARN --query 'tasks[0].containers[0].exitCode' --output text)
+        if [ "$EXIT_CODE" != "0" ]; then exit 1; fi
+    - name: Verify schema
+      run: |
+        LATEST_PROXY=$(pulumi stack output dbProxyEndpoint --stack ${{ github.event.inputs.environment || 'dev' }} --cwd infra)
+        PGPASSWORD=$(aws secretsmanager get-secret-value --secret-id $(pulumi stack output dbPasswordSecretArn --stack ${{ github.event.inputs.environment || 'dev' }} --cwd infra) --query 'SecretString' --output text | jq -r '.password')
+        EXPECTED_VERSION=${{ github.sha }}
+        ACTUAL_VERSION=$(PGPASSWORD="$PGPASSWORD" psql -h "$LATEST_PROXY" -U dopamint -d dopamint -t -c "SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1;" | xargs)
+        if [ "$ACTUAL_VERSION" != "$EXPECTED_VERSION" ]; then
+          echo "Expected schema_migrations version $EXPECTED_VERSION but got $ACTUAL_VERSION"
+          exit 1
+        fi
 ```
 
 - [ ] **Step 4: Update ECS service**
 
 ```yaml
-  deploy-service:
-    needs: migrate
-    runs-on: ubuntu-latest
-    environment: ${{ github.event.inputs.environment || 'dev' }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: us-east-1
-      - name: Update service to latest backend task definition
-        run: |
-          LATEST_BACKEND_TASK_DEF=$(aws ecs describe-task-definition \
-            --task-definition ${{ vars.ECS_SERVICE }} \
-            --query 'taskDefinition.taskDefinitionArn' --output text)
-          aws ecs update-service \
-            --cluster ${{ vars.ECS_CLUSTER }} \
-            --service ${{ vars.ECS_SERVICE }} \
-            --task-definition "$LATEST_BACKEND_TASK_DEF" \
-            --force-new-deployment
-      - name: Wait for service stability
-        run: |
-          aws ecs wait services-stable --cluster ${{ vars.ECS_CLUSTER }} --services ${{ vars.ECS_SERVICE }}
-      - name: Smoke test
-        run: |
-          curl -fsS https://${{ vars.BACKEND_URL }}/health/live
-          curl -fsS https://${{ vars.BACKEND_URL }}/health/ready
+deploy-service:
+  needs: migrate
+  runs-on: ubuntu-latest
+  environment: ${{ github.event.inputs.environment || 'dev' }}
+  steps:
+    - uses: actions/checkout@v4
+    - uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+        aws-region: us-east-1
+    - name: Update service to latest backend task definition
+      run: |
+        LATEST_BACKEND_TASK_DEF=$(aws ecs describe-task-definition \
+          --task-definition ${{ vars.ECS_SERVICE }} \
+          --query 'taskDefinition.taskDefinitionArn' --output text)
+        aws ecs update-service \
+          --cluster ${{ vars.ECS_CLUSTER }} \
+          --service ${{ vars.ECS_SERVICE }} \
+          --task-definition "$LATEST_BACKEND_TASK_DEF" \
+          --force-new-deployment
+    - name: Wait for service stability
+      run: |
+        aws ecs wait services-stable --cluster ${{ vars.ECS_CLUSTER }} --services ${{ vars.ECS_SERVICE }}
+    - name: Smoke test
+      run: |
+        curl -fsS https://${{ vars.BACKEND_URL }}/health/live
+        curl -fsS https://${{ vars.BACKEND_URL }}/health/ready
 ```
 
 - [ ] **Step 5: Validate and commit**
@@ -2492,9 +2688,11 @@ git commit -m "ci: add deploy backend workflow with migrations"
 ---
 
 ## Task 29: Benchmark workflow
-*Estimate: 25 min*
+
+_Estimate: 25 min_
 
 **Files:**
+
 - Create: `.github/workflows/benchmark.yml`
 
 - [ ] **Step 1: Create workflow with TPS parsing**
@@ -2583,9 +2781,11 @@ git commit -m "ci: add benchmark workflow with tps assertion"
 ---
 
 ## Task 30: Deploy and rollback runbooks
-*Estimate: 20 min*
+
+_Estimate: 20 min_
 
 **Files:**
+
 - Create: `docs/runbooks/aws-deploy.md`
 - Create: `docs/runbooks/aws-rollback.md`
 
@@ -2595,11 +2795,13 @@ git commit -m "ci: add benchmark workflow with tps assertion"
 # AWS Deploy Runbook
 
 ## Prerequisites
+
 - AWS CLI authenticated
 - Pulumi CLI logged in
 - pnpm installed
 
 ## First-time setup
+
 1. Create the Pulumi stack:
    \`\`\`bash
    cd infra
@@ -2614,6 +2816,7 @@ git commit -m "ci: add benchmark workflow with tps assertion"
    Set these in the GitHub environment `dev`.
 
 ## Deploy from local
+
 \`\`\`bash
 cd infra
 pulumi stack select dev
@@ -2621,22 +2824,24 @@ pulumi up -y
 \`\`\`
 
 ## Run 1M TPS benchmark
+
 \`\`\`bash
 aws autoscaling set-desired-capacity \
-  --auto-scaling-group-name $(pulumi stack output benchmarkAsgName) \
-  --desired-capacity 2
+ --auto-scaling-group-name $(pulumi stack output benchmarkAsgName) \
+ --desired-capacity 2
 aws ssm start-session --target <instance-id>
 cd /opt/dopamint/repo/sui-tunnel-ts
 numactl --interleave=all UV_THREADPOOL_SIZE=128 \
-  node --import tsx src/bench/cli.ts \
-  --tunnels 20000 --updates-per-tunnel 50 --agents 2000 --workers 95
+ node --import tsx src/bench/cli.ts \
+ --tunnels 20000 --updates-per-tunnel 50 --agents 2000 --workers 95
 \`\`\`
 
 ## Teardown
+
 \`\`\`bash
 aws autoscaling set-desired-capacity \
-  --auto-scaling-group-name $(pulumi stack output benchmarkAsgName) \
-  --desired-capacity 0
+ --auto-scaling-group-name $(pulumi stack output benchmarkAsgName) \
+ --desired-capacity 0
 pulumi destroy -y
 \`\`\`
 ```
@@ -2647,12 +2852,14 @@ pulumi destroy -y
 # AWS Rollback Runbook
 
 ## Triggers
+
 - ALB 5xx rate > 1% for 2 minutes
 - `/health/ready` failing on >50% of tasks
 - Migration job exits non-zero
 - CloudWatch alarm breach
 
 ## Frontend rollback
+
 1. Find previous S3 version:
    \`\`\`bash
    aws s3api list-object-versions --bucket <bucket> --prefix index.html
@@ -2660,6 +2867,7 @@ pulumi destroy -y
 2. Restore previous version and invalidate CloudFront.
 
 ## Backend rollback
+
 1. Set previous image tag in Pulumi:
    \`\`\`bash
    cd infra
@@ -2672,13 +2880,15 @@ pulumi destroy -y
    \`\`\`
 
 ## Database rollback
+
 If migration caused data corruption:
+
 1. Restore cluster from pre-migration snapshot:
    \`\`\`bash
    aws rds restore-db-cluster-from-snapshot \
-     --db-cluster-identifier dopamint-<env>-aurora-rollback \
-     --snapshot-identifier <pre-migration-snapshot> \
-     --engine aurora-postgresql
+    --db-cluster-identifier dopamint-<env>-aurora-rollback \
+    --snapshot-identifier <pre-migration-snapshot> \
+    --engine aurora-postgresql
    \`\`\`
 2. Update RDS Proxy target to new cluster.
 3. Roll back backend to compatible image.
@@ -2694,7 +2904,8 @@ git commit -m "docs: add deploy and rollback runbooks"
 ---
 
 ## Task 31: Final verification
-*Estimate: 15 min*
+
+_Estimate: 15 min_
 
 - [ ] **Step 1: Typecheck and test**
 
@@ -2734,22 +2945,22 @@ git commit -m "docs: final verification checklist"
 
 ## Spec Coverage Check
 
-| Spec Section | Implementing Tasks |
-|---|---|
-| Frontend — S3 + CloudFront + Route 53 | Tasks 3, 7, 15 |
-| Backend — ECS Fargate + ALB | Tasks 4, 5, 11–14 |
-| Database — Aurora + RDS Proxy | Task 8 |
-| Cache — Redis cluster mode + TLS | Task 9 |
-| Benchmark Fleet — EC2 ASG + Golden AMI | Tasks 6, 18–22 |
-| Networking & Security | Tasks 2, 4 |
-| DNS & TLS | Task 3, 15 |
-| IAM & GitHub OIDC | Task 6, 10 |
-| Observability — CloudWatch Alarms + SNS | Task 16 |
-| CI/CD | Tasks 25–29 |
-| Testing | Tasks 24, 25 |
-| Rollback | Task 30 |
-| Backend Contracts | Task 23 |
-| GitHub Env Sync | Tasks 17, 21 |
+| Spec Section                            | Implementing Tasks |
+| --------------------------------------- | ------------------ |
+| Frontend — S3 + CloudFront + Route 53   | Tasks 3, 7, 15     |
+| Backend — ECS Fargate + ALB             | Tasks 4, 5, 11–14  |
+| Database — Aurora + RDS Proxy           | Task 8             |
+| Cache — Redis cluster mode + TLS        | Task 9             |
+| Benchmark Fleet — EC2 ASG + Golden AMI  | Tasks 6, 18–22     |
+| Networking & Security                   | Tasks 2, 4         |
+| DNS & TLS                               | Task 3, 15         |
+| IAM & GitHub OIDC                       | Task 6, 10         |
+| Observability — CloudWatch Alarms + SNS | Task 16            |
+| CI/CD                                   | Tasks 25–29        |
+| Testing                                 | Tasks 24, 25       |
+| Rollback                                | Task 30            |
+| Backend Contracts                       | Task 23            |
+| GitHub Env Sync                         | Tasks 17, 21       |
 
 ## Placeholder Scan
 
