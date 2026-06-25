@@ -54,7 +54,7 @@ export function resolveFleet(
   const workers = args.workers === "auto" ? Math.max(1, sys.cores) : args.workers;
   let concurrency: number;
   if (args.concurrency === "auto") {
-    const budgetBytes = (args.memBudgetMb ?? Math.floor((sys.totalMem * 0.7) / 1_048_576)) * 1_048_576;
+    const budgetBytes = args.memBudgetMb !== null ? args.memBudgetMb * 1_048_576 : sys.totalMem * 0.7;
     const perMatchBytes = (args.perMatchKb ?? DEFAULT_PER_MATCH_KB) * 1024;
     const maxInFlight = Math.max(workers, Math.floor(budgetBytes / perMatchBytes));
     concurrency = Math.max(1, Math.floor(maxInFlight / workers));

@@ -38,6 +38,17 @@ test("resolveFleet respects explicit values", () => {
   expect(r).toEqual({ workers: 4, concurrency: 10 });
 });
 
+test("resolveFleet uses an explicit memory budget for the concurrency cap", () => {
+  // 4 workers, explicit 1024 MiB budget, 512 KiB per match.
+  const r = resolveFleet(
+    { workers: 4, concurrency: "auto", memBudgetMb: 1024, perMatchKb: 512 },
+    { cores: 99, totalMem: 1 },
+  );
+  const maxInFlight = Math.floor((1024 * 1_048_576) / (512 * 1024));
+  expect(r.workers).toBe(4);
+  expect(r.concurrency).toBe(Math.max(1, Math.floor(maxInFlight / 4)));
+});
+
 test("sliceMatches distributes a cap across workers and sums to the total", () => {
   expect(sliceMatches(20, 4)).toEqual([5, 5, 5, 5]);
   expect(sliceMatches(21, 4)).toEqual([6, 6, 6, 3]);
