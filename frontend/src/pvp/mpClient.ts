@@ -11,6 +11,7 @@ import type { KeyPair } from "sui-tunnel-ts/core/crypto";
 import type { Transport } from "sui-tunnel-ts/core/distributedTunnel";
 import { wrapInnerFrameJson } from "sui-tunnel-ts/core/distributedFrame";
 import type { WireCoSigned, JsonValue } from "./resume";
+import { stringifyWithBigint, parseWithBigint } from "./resume";
 
 export type Role = "A" | "B";
 
@@ -348,15 +349,17 @@ export class MpClient {
       (msg: Exclude<PeerMessage, { t: "frame" }>) => void
     >();
     this.#relayHandlers.set(matchId, (payload) => {
-      const o = JSON.parse(payload) as PeerMessage;
+      const o = parseWithBigint(payload) as PeerMessage;
       if (o.t === "frame") {
         const bytes = te.encode(o.data);
         if (engineOnFrame) engineOnFrame(bytes);
         else frameBuffer.push(bytes);
       } else peerCbs.forEach((cb) => cb(o));
     });
+    // resync's `fullState` is opaque adapter state and (by every game's design) keeps raw
+    // bigint balances — tag them with the same codec persistence uses, or JSON.stringify throws.
     const relaySend = (obj: PeerMessage) =>
-      this.#send({ type: "relay", matchId, payload: JSON.stringify(obj) });
+      this.#send({ type: "relay", matchId, payload: stringifyWithBigint(obj) });
     return {
       transport: {
         send: (bytes: Uint8Array) => {

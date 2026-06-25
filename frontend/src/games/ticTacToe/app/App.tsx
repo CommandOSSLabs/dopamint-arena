@@ -205,31 +205,55 @@ function AppContent() {
   // scene resizing to its own target. Sized to the tallest scene (caro board / pvp) so nothing is
   // clipped; lighter scenes (login/setup) just center within it.
   const targetWidth = isPortrait ? 500 : 1024;
-  const targetHeight = isPortrait ? 850 : 900;
+  // Login is a centered content card → use Blackjack's shorter 1024×640 landscape box so it scales
+  // up to the same size (a 900-tall box shrinks it ~30%). Setup/PvP fill the box (`h-[98%]`) and
+  // were sized for 900, so keep theirs.
+  const targetHeight = isPortrait ? 850 : scene === "login" ? 640 : 900;
 
   return (
     <div
-      className={`ttt-root qp-sketch h-full w-full relative flex items-center justify-center overflow-hidden select-none ${isPortrait ? "p-0" : "p-4"}`}
+      className={`ttt-root qp-sketch h-full w-full relative flex items-center justify-center overflow-hidden select-none ${isPortrait ? "p-0" : scene === "game" ? "p-1" : "p-4"}`}
     >
       <SketchDefs />
 
       <div
         ref={containerRef}
-        className={`w-full h-full flex items-center justify-center z-10 ${isPortrait ? "pl-0" : "pl-[20px] md:pl-[32px]"}`}
+        className={`w-full h-full flex items-center justify-center z-10 ${
+          // The game & pvp scenes lay themselves out responsively (3 panes + a flex-1 board) and
+          // must fill the real window — wrapping them in the fixed 1024×900 GameCardScale
+          // letterboxes them and pinches the board. Only login/setup use the fixed design box.
+          scene === "game" || scene === "pvp"
+            ? ""
+            : isPortrait
+              ? "pl-0"
+              : "pl-[20px] md:pl-[32px]"
+        }`}
       >
-        <GameCardScale
-          targetWidth={targetWidth}
-          targetHeight={targetHeight}
-          isPortrait={isPortrait}
-        >
-          {scene === "login" && (
-            <LoginScene
-              onContinue={() => setScene("setup")}
-              onPlayOnline={() => setScene("pvp")}
-            />
-          )}
+        {scene === "game" ? (
+          <GameScene
+            g={g}
+            mode={mode}
+            gameType={gameType}
+            onBack={backToSetup}
+            onMenu={goToGameHome}
+            isPortrait={isPortrait}
+          />
+        ) : scene === "pvp" ? (
+          <PvpScene onBack={() => setScene("login")} isPortrait={isPortrait} />
+        ) : (
+          <GameCardScale
+            targetWidth={targetWidth}
+            targetHeight={targetHeight}
+            isPortrait={isPortrait}
+          >
+            {scene === "login" && (
+              <LoginScene
+                onContinue={() => setScene("setup")}
+                onPlayOnline={() => setScene("pvp")}
+              />
+            )}
 
-          {scene === "setup" &&
+            {scene === "setup" &&
             (g.phase === "error" ? (
               <div className="w-full h-full flex flex-col items-center justify-center gap-6 p-8">
                 <p className="text-sm text-rose-400 text-center break-words max-w-md">
@@ -275,24 +299,8 @@ function AppContent() {
                 }
               />
             ))}
-
-          {scene === "game" && (
-            <GameScene
-              g={g}
-              mode={mode}
-              gameType={gameType}
-              onBack={backToSetup}
-              onMenu={goToGameHome}
-              isPortrait={isPortrait}
-            />
-          )}
-          {scene === "pvp" && (
-            <PvpScene
-              onBack={() => setScene("login")}
-              isPortrait={isPortrait}
-            />
-          )}
-        </GameCardScale>
+          </GameCardScale>
+        )}
       </div>
     </div>
   );

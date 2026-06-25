@@ -85,9 +85,11 @@ function GamesPerTunnel({
   disabled: boolean;
 }) {
   return (
-    <div className="flex flex-col items-center gap-2 my-3 w-full max-w-md">
-      <span className="qp-eyebrow text-xs opacity-80">Games per tunnel</span>
-      <div className="flex flex-wrap items-center justify-center gap-2">
+    <div className="flex flex-col items-center gap-1.5">
+      <span className="qp-eyebrow text-[11px] opacity-80 whitespace-nowrap">
+        Games / tunnel
+      </span>
+      <div className="flex flex-wrap items-center justify-center gap-1.5">
         {GAME_PRESETS.map((n) => (
           <button
             key={n}
@@ -96,7 +98,7 @@ function GamesPerTunnel({
             disabled={disabled}
             className={`qp-btn transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
               value === n ? "qp-btn--go" : ""
-            } !px-3 !py-1 !text-sm`}
+            } !px-2.5 !py-1 !text-xs`}
           >
             {n}
           </button>
@@ -109,9 +111,109 @@ function GamesPerTunnel({
           disabled={disabled}
           onChange={(e) => onChange(Number(e.target.value))}
           aria-label="Custom games per tunnel"
-          className="qp-input w-16 px-2 py-1 bg-[#fffdf6] border-2 border-[var(--qp-ink)] focus:border-[var(--qp-amber)] rounded-md font-mono text-center tabular-nums outline-none disabled:opacity-40 disabled:cursor-not-allowed text-sm"
+          className="qp-input w-14 px-2 py-1 bg-[#fffdf6] border-2 border-[var(--qp-ink)] focus:border-[var(--qp-amber)] rounded-md font-mono text-center tabular-nums outline-none disabled:opacity-40 disabled:cursor-not-allowed text-xs"
         />
       </div>
+    </div>
+  );
+}
+
+const SUISCAN_TX = "https://suiscan.xyz/testnet/tx/";
+function shortDigest(d: string): string {
+  return `${d.slice(0, 6)}…${d.slice(-4)}`;
+}
+
+/** One on-chain step in the log: a linked digest chip, or a dim placeholder. All sizes are
+ *  em-relative so the chip scales with the parent OnchainLogStrip's base font-size. */
+function LogChip({
+  step,
+  label,
+  digest,
+  link = true,
+}: {
+  step: number;
+  label: string;
+  digest?: string;
+  /** Root has no own tx — render as a plain hash, not a suiscan link. */
+  link?: boolean;
+}) {
+  return (
+    <span className="inline-flex items-center gap-[0.4em] whitespace-nowrap">
+      <span className="grid h-[1.5em] w-[1.5em] shrink-0 place-items-center rounded-full bg-[var(--qp-ink)] text-[0.72em] font-bold text-[var(--qp-paper)]">
+        {step}
+      </span>
+      <span className="text-[0.92em] uppercase tracking-wide opacity-70">
+        {label}
+      </span>
+      {digest ? (
+        link ? (
+          <a
+            href={`${SUISCAN_TX}${digest}`}
+            target="_blank"
+            rel="noreferrer"
+            className="font-mono text-[0.92em] text-primary underline hover:text-secondary"
+          >
+            {shortDigest(digest)}
+          </a>
+        ) : (
+          <span title={digest} className="font-mono text-[0.92em] text-primary">
+            {shortDigest(digest)}
+          </span>
+        )
+      ) : (
+        <span className="font-mono text-[0.92em] text-outline/40">—</span>
+      )}
+    </span>
+  );
+}
+
+/** The four-step on-chain trail + a running settled-tunnel count. Lays out as a wrapping row
+ *  (portrait footer) or a vertical list (the right side pane). The vertical variant scales its
+ *  base font with the window (cqw) so it always fits the narrow pane. */
+function OnchainLogStrip({
+  g,
+  vertical = false,
+}: {
+  g: BotGameView & { tunnels?: TunnelRecord[] };
+  vertical?: boolean;
+}) {
+  const latest = g.tunnels?.[0];
+  return (
+    <div
+      style={{ fontSize: vertical ? "clamp(8px, 1.9cqw, 11px)" : "11px" }}
+      className={
+        vertical
+          ? "flex flex-col items-start gap-[0.5em]"
+          : "flex flex-wrap items-center justify-center gap-x-4 gap-y-1"
+      }
+    >
+      <LogChip step={1} label="Open" digest={g.digests.create} />
+      <LogChip step={2} label="Root" digest={g.digests.root} link={false} />
+      <LogChip step={3} label="State" digest={g.digests.update} />
+      <LogChip step={4} label="Settle" digest={g.digests.close} />
+      {g.tunnels && g.tunnels.length > 0 && (
+        <span
+          className={`inline-flex items-center gap-[0.4em] whitespace-nowrap ${
+            vertical
+              ? "mt-[0.3em] border-t border-[var(--qp-ink-soft)]/40 pt-[0.5em]"
+              : "border-l border-[var(--qp-ink-soft)]/40 pl-4"
+          }`}
+        >
+          <span className="text-[0.92em] uppercase tracking-wide opacity-70">
+            Settled {g.tunnels.length}
+          </span>
+          {latest?.closeDigest && (
+            <a
+              href={`${SUISCAN_TX}${latest.closeDigest}`}
+              target="_blank"
+              rel="noreferrer"
+              className="font-mono text-[0.92em] text-[var(--qp-ink-soft)] underline hover:text-[var(--qp-ink)]"
+            >
+              {shortDigest(latest.closeDigest)}
+            </a>
+          )}
+        </span>
+      )}
     </div>
   );
 }
@@ -141,17 +243,19 @@ export function GameScene({
 
   // Auto toggle: ticked = bots auto-play (watch); unticked hands X's turn to you (the bot keeps
   // playing O). Replaces the old "Stop Playing" — unticking pauses auto so you can play yourself.
+  // Sizing comes from `.ttt-ctl-btn` (cqw-scaled) so the side panes can shrink on small windows
+  // without the buttons overflowing — Bomb It-style responsive controls.
   const autoToggle = (
     <button
       onClick={() => g.setAuto(!g.auto)}
       aria-pressed={g.auto}
       data-testid="ttt-auto"
-      className={`qp-btn flex-1 !px-4 !py-2.5 !text-base flex items-center justify-center gap-2 ${
+      className={`qp-btn ttt-ctl-btn w-full flex items-center justify-center gap-2 ${
         g.auto ? "qp-btn--go" : ""
       }`}
     >
       <span
-        className={`grid h-4 w-4 place-items-center border-[2px] border-[var(--qp-ink)] text-xs rounded-sm ${g.auto ? "bg-[var(--qp-ink)] text-[var(--qp-paper)]" : "bg-[var(--qp-paper)]"}`}
+        className={`grid h-4 w-4 shrink-0 place-items-center border-[2px] border-[var(--qp-ink)] text-xs rounded-sm ${g.auto ? "bg-[var(--qp-ink)] text-[var(--qp-paper)]" : "bg-[var(--qp-paper)]"}`}
       >
         {g.auto ? "✓" : ""}
       </span>
@@ -159,352 +263,181 @@ export function GameScene({
     </button>
   );
   const menuBtn = (
-    <button onClick={onMenu} className="qp-btn flex-1 !px-4 !py-2.5 !text-base">
-      ← Main menu
+    <button onClick={onMenu} className="qp-btn ttt-ctl-btn w-full">
+      ← Menu
     </button>
   );
-
-  return (
-    <div
-      className={`w-full h-full overflow-hidden flex flex-col ${isPortrait ? "gap-1 p-1" : "gap-2 p-2 md:p-4"}`}
-    >
-      {/* Header */}
-      {!isPortrait && (
-        <header className="flex justify-between items-center border-b-2 border-[var(--qp-ink-soft)] pb-3">
-          <h1 className="qp-title text-3xl truncate">
-            {gameType === "caro" ? "Caro" : "Tic-Tac-Toe"}
-          </h1>
-          <button
-            onClick={onBack}
-            className="text-xs font-bold text-[var(--qp-ink-soft)] hover:text-[var(--qp-ink)] uppercase tracking-widest flex items-center gap-1 transition-colors"
-          >
-            <span className="material-symbols-outlined text-sm">
-              arrow_back
-            </span>
-            setup
-          </button>
-        </header>
-      )}
-
-      {/* Main Body Grid - switch from side-by-side to stacked dynamically in portrait */}
-      <div
-        className={`flex flex-1 min-h-0 ${isPortrait ? "flex-col items-center gap-2" : "flex-row gap-4 items-stretch justify-between"} mt-1 w-full`}
-      >
-        {/* Left Column: Game Area */}
-        <section
-          className={`${isPortrait ? "w-full max-w-[480px]" : "flex-1"} flex flex-col items-center min-h-0`}
+  const controls =
+    mode === "auto" ? (
+      <>
+        {menuBtn}
+        {autoToggle}
+      </>
+    ) : (
+      <>
+        <button onClick={onBack} className="qp-btn ttt-ctl-btn w-full">
+          ← Setup
+        </button>
+        <button
+          onClick={g.newGame}
+          disabled={busy}
+          className="qp-btn qp-btn--go ttt-ctl-btn w-full disabled:opacity-40 disabled:cursor-not-allowed"
         >
-          {/* Scoreboard */}
-          <div className="w-full max-w-[800px] flex justify-between items-end mb-6 px-4 border-b-2 border-[var(--qp-ink-soft)] pb-4">
-            <div className="text-center">
-              <div className="qp-eyebrow text-lg">
-                {g.auto ? "Bot X (X)" : "You (X)"}
-              </div>
-              <div className="font-bold text-3xl mt-1 min-h-[30px] flex items-center justify-center">
-                {g.score.x}
-              </div>
-              {/* MTPS mode: play is free + auto-funded — hide the SUI gas balance. */}
-              {!isMtpsConfigured && (
-                <div className="font-mono text-[10px] opacity-60 mt-1">
-                  {fmtSui(g.balances.x)} SUI
-                </div>
-              )}
-            </div>
-            <div className="text-center">
-              <button
-                onClick={g.resetScore}
-                title="Reset scores"
-                className="hover:bg-[var(--qp-ink-soft)]/20 p-1 rounded-full text-[var(--qp-ink-soft)] hover:text-[var(--qp-ink)] transition-colors mb-2"
-              >
-                <span className="material-symbols-outlined text-lg">
-                  autorenew
-                </span>
-              </button>
-              <div className="font-bold text-[var(--qp-ink-soft)] text-base">
-                Draws: {g.score.draws}
-              </div>
-            </div>
-            <div className="text-center">
-              <div className="qp-eyebrow text-lg">
-                {g.auto ? "Bot O (O)" : "Bot (O)"}
-              </div>
-              <div className="font-bold text-3xl mt-1 min-h-[30px] flex items-center justify-center">
-                {g.score.o}
-              </div>
-              {!isMtpsConfigured && (
-                <div className="font-mono text-[10px] opacity-60 mt-1">
-                  {fmtSui(g.balances.o)} SUI
-                </div>
-              )}
-            </div>
-          </div>
+          New game
+        </button>
+      </>
+    );
 
-          {/* Board: 3×3 grid for TTT, N×N grid for caro */}
-          <div className="flex justify-center flex-1 min-h-0 w-full mb-2">
-            {gameType === "caro" ? (
-              <CaroBoard
-                board={g.board}
-                size={g.boardSize ?? 15}
-                lastMove={g.lastMove ?? -1}
-                onPlay={g.playCell}
-                disabled={!g.myTurn}
-              />
-            ) : (
-              <Board
-                board={uiBoard(g.board)}
-                onPlay={g.playCell}
-                disabled={!g.myTurn}
-              />
-            )}
-          </div>
+  const title = gameType === "caro" ? "Caro" : "Tic-Tac-Toe";
+  const status = statusText(g.phase, g.turn, g.winner, gameType, !g.auto);
+  const progress =
+    g.phase === "playing" || g.phase === "settling"
+      ? `Game ${Math.min(g.currentGame, g.maxGames)} / ${g.maxGames}`
+      : `${g.maxGames} game${g.maxGames === 1 ? "" : "s"} / tunnel`;
 
-          {/* Status text */}
-          <div className="text-center qp-title text-2xl my-4 min-h-[28px]">
-            {statusText(g.phase, g.turn, g.winner, gameType, !g.auto)}
-          </div>
+  // A scoreboard "seat" (one player's eyebrow + score + optional SUI balance).
+  const seat = (label: string, score: number, balance: bigint) => (
+    <div className="text-center leading-tight">
+      <div className="qp-eyebrow text-sm">{label}</div>
+      <div className="font-bold text-4xl tabular-nums">{score}</div>
+      {/* MTPS mode: play is free + auto-funded — hide the SUI gas balance. */}
+      {!isMtpsConfigured && (
+        <div className="font-mono text-[10px] opacity-60">
+          {fmtSui(balance)} SUI
+        </div>
+      )}
+    </div>
+  );
+  // Compact seat for the right pane's two-up score row — sizes scale with the window (cqw)
+  // so both seats fit one row even on a narrow pane.
+  const seatMini = (label: string, score: number, balance: bigint) => (
+    <div className="flex-1 min-w-0 text-center leading-tight">
+      <div className="qp-eyebrow text-[0.62rem] truncate">{label}</div>
+      <div className="font-bold text-[clamp(20px,6cqw,34px)] tabular-nums">
+        {score}
+      </div>
+      {!isMtpsConfigured && (
+        <div className="font-mono text-[0.55rem] opacity-60 truncate">
+          {fmtSui(balance)}
+        </div>
+      )}
+    </div>
+  );
+  const resetDraws = (
+    <div className="flex flex-col items-center gap-0.5">
+      <button
+        onClick={g.resetScore}
+        title="Reset scores"
+        className="hover:bg-[var(--qp-ink-soft)]/20 p-1 rounded-full text-[var(--qp-ink-soft)] hover:text-[var(--qp-ink)] transition-colors"
+      >
+        <span className="material-symbols-outlined text-lg">autorenew</span>
+      </button>
+      <div className="font-bold text-[var(--qp-ink-soft)] text-sm">
+        Draws {g.score.draws}
+      </div>
+    </div>
+  );
+  const tunnelControl = (
+    <div className="flex flex-col items-center gap-2 w-full">
+      <span className="qp-eyebrow text-[11px] opacity-80 text-center">
+        {progress}
+      </span>
+      <GamesPerTunnel
+        value={g.maxGames}
+        onChange={g.setMaxGames}
+        disabled={busy || g.auto}
+      />
+    </div>
+  );
 
-          {/* Portrait Controls */}
-          {isPortrait && (
-            <div className="mt-4 flex flex-wrap gap-4 justify-center w-full max-w-[480px]">
-              {mode === "auto" ? (
-                <>
-                  {autoToggle}
-                  {menuBtn}
-                </>
-              ) : (
-                <>
-                  <button
-                    onClick={onBack}
-                    className="qp-btn flex-1 !px-2 !py-2.5 !text-sm"
-                  >
-                    ← Setup
-                  </button>
-                  <button
-                    onClick={g.newGame}
-                    disabled={busy}
-                    className="qp-btn qp-btn--go flex-1 !px-2 !py-2.5 !text-sm disabled:opacity-40 disabled:cursor-not-allowed"
-                  >
-                    New Game
-                  </button>
-                </>
-              )}
+  const board =
+    gameType === "caro" ? (
+      <CaroBoard
+        board={g.board}
+        size={g.boardSize ?? 15}
+        lastMove={g.lastMove ?? -1}
+        onPlay={g.playCell}
+        disabled={!g.myTurn}
+      />
+    ) : (
+      <Board
+        board={uiBoard(g.board)}
+        onPlay={g.playCell}
+        disabled={!g.myTurn}
+      />
+    );
+
+  // Portrait: too narrow for side panes — stack board over a compact control/log block.
+  if (isPortrait) {
+    return (
+      <div className="w-full h-full overflow-hidden flex flex-col items-center gap-1 p-1">
+        <header className="w-full flex items-center justify-between gap-3 border-b-2 border-[var(--qp-ink-soft)] pb-2">
+          <h1 className="qp-title text-2xl truncate shrink-0">{title}</h1>
+          <div className="flex items-center gap-5">
+            {seat(g.auto ? "Bot X (X)" : "You (X)", g.score.x, g.balances.x)}
+            {resetDraws}
+            {seat("Bot (O)", g.score.o, g.balances.o)}
+          </div>
+        </header>
+        <div className="ttt-board-area flex-1 min-h-0 w-full grid place-items-center">
+          <div className="ttt-board-square">{board}</div>
+        </div>
+        <div className="text-center qp-title text-xl min-h-[24px]">{status}</div>
+        <div className="w-full max-w-[480px] flex flex-col items-center gap-2 border-t-2 border-[var(--qp-ink-soft)] pt-2">
+          <div className="flex items-stretch gap-3 w-full">{controls}</div>
+          {tunnelControl}
+          <OnchainLogStrip g={g} />
+          {g.error && (
+            <div className="text-[11px] text-secondary italic">
+              * Error: {g.error}
             </div>
           )}
-        </section>
-
-        {/* Right Column: Game Log / Info */}
-        {!isPortrait && (
-          <aside className="w-[280px] lg:w-[320px] xl:w-[360px] shrink-0 flex flex-col gap-4 overflow-y-auto pr-2 pb-2">
-            {/* Setup and Actions block */}
-            <div className="qp-panel qp-stroke p-4 w-full flex flex-col items-center">
-              <h2 className="qp-title text-xl mb-2 self-start flex items-center gap-2">
-                <span className="material-symbols-outlined">settings</span>
-                Controls
-              </h2>
-
-              {/* Per-tunnel progress: game k / N */}
-              <div className="text-center qp-eyebrow text-xs mb-2 min-h-[16px] opacity-80">
-                {g.phase === "playing" || g.phase === "settling"
-                  ? `Game ${Math.min(g.currentGame, g.maxGames)} / ${g.maxGames} in this tunnel`
-                  : `${g.maxGames} game${g.maxGames === 1 ? "" : "s"} per tunnel, one settle`}
-              </div>
-
-              {/* Games-per-tunnel control (presets + custom), disabled while playing */}
-              <GamesPerTunnel
-                value={g.maxGames}
-                onChange={g.setMaxGames}
-                disabled={busy || g.auto}
-              />
-
-              {/* Actions */}
-              <div className="mt-4 flex flex-wrap gap-4 justify-center w-full">
-                {mode === "auto" ? (
-                  <>
-                    {autoToggle}
-                    {menuBtn}
-                  </>
-                ) : (
-                  <>
-                    <button
-                      onClick={onBack}
-                      className="qp-btn flex-1 !px-2 !py-2.5 !text-sm"
-                    >
-                      ← Setup
-                    </button>
-                    <button
-                      onClick={g.newGame}
-                      disabled={busy}
-                      className="qp-btn qp-btn--go flex-1 !px-2 !py-2.5 !text-sm disabled:opacity-40 disabled:cursor-not-allowed"
-                    >
-                      New Game
-                    </button>
-                  </>
-                )}
-              </div>
-            </div>
-
-            <h2 className="qp-title text-2xl mt-2 mb-1 flex items-center gap-2">
-              <span className="material-symbols-outlined">edit_note</span>
-              Game Log
-            </h2>
-
-            <div className="qp-panel qp-stroke p-6 w-full">
-              <ul className="space-y-4 pt-2 text-xs font-bold font-mono">
-                <li className="flex justify-between items-center border-b border-[var(--qp-ink-soft)] pb-2">
-                  <span className="font-bold text-outline uppercase text-[10px]">
-                    Step
-                  </span>
-                  <span className="font-bold text-outline uppercase text-[10px]">
-                    Tx Digest
-                  </span>
-                </li>
-
-                <li className="flex justify-between items-center py-1 border-b border-[var(--qp-ink-soft)]/40">
-                  <span className="flex items-center gap-1.5">
-                    <span className="text-secondary font-bold">1</span> Open
-                    &amp; Fund
-                  </span>
-                  {g.digests.create ? (
-                    <a
-                      href={`https://suiscan.xyz/testnet/tx/${g.digests.create}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="font-mono text-primary underline hover:text-secondary"
-                    >
-                      {g.digests.create.slice(0, 6)}…
-                      {g.digests.create.slice(-4)}
-                    </a>
-                  ) : (
-                    <span className="text-outline/40">—</span>
-                  )}
-                </li>
-
-                <li className="flex justify-between items-center py-1 border-b border-[var(--qp-ink-soft)]/40">
-                  <span className="flex items-center gap-1.5">
-                    <span className="text-secondary font-bold">2</span>{" "}
-                    Transcript Root
-                  </span>
-                  {g.digests.root ? (
-                    <span
-                      title={g.digests.root}
-                      className="font-mono text-primary"
-                    >
-                      {g.digests.root.slice(0, 8)}…{g.digests.root.slice(-4)}
-                    </span>
-                  ) : (
-                    <span className="text-outline/40">—</span>
-                  )}
-                </li>
-
-                <li className="flex justify-between items-center py-1 border-b border-[var(--qp-ink-soft)]/40">
-                  <span className="flex items-center gap-1.5">
-                    <span className="text-secondary font-bold">3</span> State
-                    Checkpoint
-                  </span>
-                  {g.digests.update ? (
-                    <a
-                      href={`https://suiscan.xyz/testnet/tx/${g.digests.update}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="font-mono text-primary underline hover:text-secondary"
-                    >
-                      {g.digests.update.slice(0, 6)}…
-                      {g.digests.update.slice(-4)}
-                    </a>
-                  ) : (
-                    <span className="text-outline/40">—</span>
-                  )}
-                </li>
-
-                <li className="flex justify-between items-center py-1 border-b border-[var(--qp-ink-soft)]/40">
-                  <span className="flex items-center gap-1.5">
-                    <span className="text-secondary font-bold">4</span> Settle &
-                    Close
-                  </span>
-                  {g.digests.close ? (
-                    <a
-                      href={`https://suiscan.xyz/testnet/tx/${g.digests.close}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="font-mono text-primary underline hover:text-secondary"
-                    >
-                      {g.digests.close.slice(0, 6)}…{g.digests.close.slice(-4)}
-                    </a>
-                  ) : (
-                    <span className="text-outline/40">—</span>
-                  )}
-                </li>
-              </ul>
-
-              {g.auto && (
-                <div className="mt-6 text-xs text-[var(--qp-amber)] italic font-bold text-center leading-tight">
-                  * Auto-play enabled *
-                </div>
-              )}
-
-              {g.error && (
-                <div className="mt-4 text-xs text-secondary font-label-sm border border-secondary/20 bg-secondary/5 p-2 rounded-sm italic">
-                  * Error: {g.error}
-                </div>
-              )}
-
-              {/* Scribbled notes */}
-              <div className="mt-8 text-[var(--qp-ink-soft)] font-body-lg text-lg text-center transform -rotate-3 select-none leading-tight border-t border-dashed border-[var(--qp-ink-soft)] pt-4">
-                Watch out for the diagonal trick!
-              </div>
-            </div>
-
-            {/* Settled-tunnel history (caro): one row per on-chain close, newest first. The
-                scoreboard resets each settle; this is the running record of past tunnels. */}
-            {g.tunnels && g.tunnels.length > 0 && (
-              <div className="qp-panel qp-stroke p-4 w-full">
-                <h3 className="qp-title text-base mb-2 flex items-center gap-2">
-                  <span className="material-symbols-outlined text-base">
-                    history
-                  </span>
-                  Settled Tunnels
-                </h3>
-                <ul className="space-y-2 font-mono text-xs max-h-[220px] overflow-auto">
-                  {g.tunnels.map((t, i) => (
-                    <li
-                      key={`${t.tunnelId}-${i}`}
-                      className="flex justify-between items-center border-b border-[var(--qp-ink-soft)] pb-1.5"
-                    >
-                      <span className="flex items-center gap-2 tabular-nums">
-                        <span className="text-outline">{t.games}g</span>
-                        <span className="font-bold text-[var(--qp-red)]">
-                          ✕{t.x}
-                        </span>
-                        <span className="font-bold text-[var(--qp-ink)]">
-                          ◯{t.o}
-                        </span>
-                        <span className="opacity-75">={t.draws}</span>
-                      </span>
-                      {t.closeDigest ? (
-                        <a
-                          href={`https://suiscan.xyz/testnet/tx/${t.closeDigest}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          title={
-                            t.rootHex
-                              ? `transcript root ${t.rootHex}`
-                              : undefined
-                          }
-                          className="font-mono text-[var(--qp-ink-soft)] underline hover:text-[var(--qp-ink)]"
-                        >
-                          {t.closeDigest.slice(0, 6)}…{t.closeDigest.slice(-4)}
-                        </a>
-                      ) : (
-                        <span className="text-outline/40">—</span>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </aside>
-        )}
+        </div>
       </div>
+    );
+  }
+
+  // Landscape: Bomb It-style three columns — controls pane | board hero | info pane.
+  return (
+    <div className="w-full h-full overflow-hidden flex flex-row items-stretch gap-3 px-1 py-2">
+      {/* Left pane (top→bottom): Menu, Auto, game progress, status, games-per-tunnel. */}
+      <aside className="ttt-pane qp-panel qp-stroke shrink-0 flex flex-col items-center gap-3 overflow-y-auto">
+        <div className="w-full flex flex-col gap-2">{controls}</div>
+        <span className="qp-eyebrow text-[11px] opacity-80 text-center">
+          {progress}
+        </span>
+        <div className="qp-title text-base leading-tight text-center min-h-[2.4em] flex items-center">
+          {status}
+        </div>
+        <GamesPerTunnel
+          value={g.maxGames}
+          onChange={g.setMaxGames}
+          disabled={busy || g.auto}
+        />
+        {g.error && (
+          <div className="text-[11px] text-secondary italic w-full text-center">
+            * Error: {g.error}
+          </div>
+        )}
+      </aside>
+
+      {/* Center: board hero only — no title, so the playfield is a square that fills the area. */}
+      <main className="ttt-board-area flex-1 min-w-0 grid place-items-center">
+        <div className="ttt-board-square">{board}</div>
+      </main>
+
+      {/* Right pane: both scores on one row, then draws + the condensed on-chain trail. */}
+      <aside className="ttt-pane qp-panel qp-stroke shrink-0 flex flex-col items-center gap-3 overflow-y-auto">
+        <div className="w-full flex items-start justify-between gap-1">
+          {seatMini(g.auto ? "Bot X (X)" : "You (X)", g.score.x, g.balances.x)}
+          {seatMini("Bot (O)", g.score.o, g.balances.o)}
+        </div>
+        {resetDraws}
+        <div className="w-full border-t-2 border-[var(--qp-ink-soft)]/40 pt-2">
+          <div className="qp-eyebrow text-[11px] opacity-80 mb-1.5">On-chain</div>
+          <OnchainLogStrip g={g} vertical />
+        </div>
+      </aside>
     </div>
   );
 }

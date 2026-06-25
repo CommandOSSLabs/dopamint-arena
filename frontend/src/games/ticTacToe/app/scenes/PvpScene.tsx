@@ -8,7 +8,6 @@ import { CaroBoard } from "@/games/ticTacToe/app/components/CaroBoard";
 import { isMtpsConfigured } from "@/onchain/mtps";
 
 const SUISCAN_TX = "https://suiscan.xyz/testnet/tx/";
-const fmtSui = (mist: bigint) => (Number(mist) / 1e9).toFixed(4);
 const CARO_SIZES = [9, 15, 19];
 
 // The 3×3 Cell renders value 1 ("O") / 2 ("X"), but the protocol marks seat A (X) as 1 and
@@ -24,7 +23,7 @@ function Digest({ label, digest }: { label: string; digest?: string }) {
       href={`${SUISCAN_TX}${digest}`}
       target="_blank"
       rel="noreferrer"
-      className="text-xs font-mono text-tertiary underline underline-offset-2"
+      className="font-mono text-tertiary underline underline-offset-2 break-all"
     >
       {label} {digest.slice(0, 6)}…
     </a>
@@ -65,117 +64,53 @@ export function PvpScene({
   const funded = isMtpsConfigured || g.balance > 10_000_000n;
   const locked = g.phase !== "idle" && g.phase !== "error";
 
-  return (
-    <div className="qp-panel qp-stroke w-[98%] max-w-[120rem] h-[98%] max-h-none p-6 md:p-12 flex flex-col mx-auto text-left relative">
-      {(!isPortrait || !playing) && (
-        <div
-          className={`flex justify-between border-[var(--qp-ink-soft)] shrink-0 ${
-            isPortrait
-              ? "border-b-2 pb-2 items-center"
-              : "border-b-4 pb-4 items-center"
-          }`}
-        >
-          {isPortrait ? (
-            <div className="flex flex-col items-start gap-1">
-              <span className="qp-title !text-3xl uppercase tracking-widest">
-                PvP Matchmaking
-              </span>
-              <button
-                onClick={() => {
-                  g.leave();
-                  onBack();
-                }}
-                className="!text-sm md:!text-base font-bold text-[var(--qp-ink-soft)] hover:text-[var(--qp-ink)] transition-colors flex items-center gap-1 uppercase tracking-widest"
-              >
-                <span className="material-symbols-outlined !text-lg">
-                  arrow_back
-                </span>{" "}
-                Return
-              </button>
-            </div>
-          ) : (
+  const leave = () => {
+    g.leave();
+    onBack();
+  };
+
+  // ---- Lobby / matchmaking (fills the window; sizes scale with the window via cqw) ----------
+  if (!playing) {
+    return (
+      <div className="w-full h-full overflow-y-auto flex flex-col items-center justify-center p-4">
+        <section className="qp-panel qp-stroke @container w-[95%] max-w-2xl my-auto p-6 md:p-10 flex flex-col items-center gap-5 text-center mx-auto">
+          <div className="w-full flex items-center justify-between">
             <button
-              onClick={() => {
-                g.leave();
-                onBack();
-              }}
-              className="!text-2xl font-bold text-[var(--qp-ink-soft)] hover:text-[var(--qp-ink)] transition-colors flex items-center gap-1 uppercase tracking-widest"
+              onClick={leave}
+              className="text-sm font-bold text-[var(--qp-ink-soft)] hover:text-[var(--qp-ink)] transition-colors flex items-center gap-1 uppercase tracking-widest"
             >
-              <span className="material-symbols-outlined !text-3xl">
+              <span className="material-symbols-outlined text-lg">
                 arrow_back
-              </span>{" "}
+              </span>
               Return
             </button>
-          )}
-
-          {!isPortrait && (
-            <span className="qp-title !text-5xl md:!text-6xl uppercase tracking-widest">
+            <span className="qp-eyebrow !text-sm md:!text-base">
               PvP Matchmaking
             </span>
-          )}
-        </div>
-      )}
-
-      {!playing ? (
-        <div
-          className={`flex-1 flex flex-col items-center pb-4 pt-4 ${isPortrait ? "gap-3" : "gap-6"}`}
-        >
-          <div
-            className={`font-mono text-on-surface/80 bg-surface rounded-2xl shadow-sm border-primary/20 ${
-              isPortrait
-                ? "text-sm px-4 py-3 border-2"
-                : "text-2xl md:text-3xl px-8 py-6 border-[4px]"
-            }`}
-          >
-            Wallet: <span className="font-bold">{g.address.slice(0, 8)}…</span>
-            {/* MTPS mode: play is free + auto-funded — hide the SUI balance. */}
-            {!isMtpsConfigured && (
-              <>
-                {" "}
-                &nbsp;·&nbsp; Balance:{" "}
-                <span className="font-bold text-primary">
-                  {fmtSui(g.balance)} SUI
-                </span>
-              </>
-            )}
           </div>
 
-          <div
-            className={`flex flex-col items-center qp-panel w-[90%] max-w-4xl mt-2 ${
-              isPortrait ? "gap-3 p-4" : "gap-8 p-10 md:p-14"
-            }`}
-          >
-            <span
-              className={`text-[var(--qp-amber)] tracking-[0.08em] uppercase font-bold ${isPortrait ? "text-lg" : "text-3xl"}`}
-            >
-              Game Variant
-            </span>
-            <div className={`flex w-full ${isPortrait ? "gap-2" : "gap-4"}`}>
+          <div className="w-full flex flex-col items-center gap-3">
+            <span className="qp-eyebrow text-sm">Game Variant</span>
+            <div className="flex w-full gap-3">
               {(["ttt", "caro"] as const).map((v) => (
                 <button
                   key={v}
                   disabled={locked}
                   onClick={() => setVariant(v)}
-                  className={`qp-btn flex-1 transition-colors disabled:opacity-40 ${
-                    isPortrait ? "!py-3 !text-base" : "!py-8 !text-4xl"
-                  } ${variant === v ? "qp-btn--go" : ""}`}
+                  className={`qp-btn ttt-ctl-btn flex-1 disabled:opacity-40 ${variant === v ? "qp-btn--go" : ""}`}
                 >
                   {v === "ttt" ? "3×3 Classic" : "Caro"}
                 </button>
               ))}
             </div>
             {variant === "caro" && (
-              <div className={`flex mt-2 ${isPortrait ? "gap-3" : "gap-6"}`}>
+              <div className="flex gap-2 justify-center">
                 {CARO_SIZES.map((sz) => (
                   <button
                     key={sz}
                     disabled={locked}
                     onClick={() => setBoardSize(sz)}
-                    className={`qp-btn transition-colors disabled:opacity-40 ${
-                      isPortrait
-                        ? "!px-4 !py-2 !text-base"
-                        : "!px-10 !py-5 !text-4xl"
-                    } ${boardSize === sz ? "qp-btn--go" : ""}`}
+                    className={`qp-btn ttt-ctl-btn disabled:opacity-40 ${boardSize === sz ? "qp-btn--go" : ""}`}
                   >
                     {sz}×{sz}
                   </button>
@@ -185,292 +120,220 @@ export function PvpScene({
           </div>
 
           {!funded && !isMtpsConfigured && (
-            <div
-              className={`text-secondary font-bold text-center w-[90%] max-w-4xl bg-secondary/10 rounded-2xl mt-4 ${
-                isPortrait ? "text-xs p-3 mt-1" : "text-2xl p-6"
-              }`}
-            >
+            <div className="text-secondary font-bold text-sm bg-secondary/10 rounded-xl p-3 w-full">
               Your wallet needs SUI to play (gas + deposit).
             </div>
           )}
 
-          <div className="mt-auto w-full flex flex-col items-center gap-4">
-            <button
-              onClick={g.queue}
-              disabled={!funded || locked}
-              className={`qp-btn qp-btn--go w-[80%] max-w-3xl uppercase tracking-widest disabled:opacity-40 flex items-center justify-center font-black ${
-                isPortrait
-                  ? "!px-6 !py-4 !text-xl gap-2"
-                  : "!px-12 !py-8 !text-4xl gap-4"
-              }`}
-            >
-              <span
-                className={`material-symbols-outlined ${isPortrait ? "text-2xl" : "text-5xl"}`}
-              >
-                {g.phase === "queuing"
-                  ? "search"
-                  : g.phase === "connecting"
-                    ? "sync"
-                    : "sports_esports"}
-              </span>
-              <span>
-                {g.phase === "connecting"
-                  ? "Connecting…"
-                  : g.phase === "queuing"
-                    ? "Finding Opponent…"
-                    : g.phase === "opening"
-                      ? "Opening tunnel…"
-                      : g.phase === "funding"
-                        ? "Funding seat…"
-                        : "Find Match"}
-              </span>
-            </button>
-
-            {(g.phase === "queuing" || g.phase === "connecting") && (
-              <button
-                onClick={g.leave}
-                className={`text-outline font-bold underline hover:text-secondary transition-colors pb-2 ${
-                  isPortrait ? "text-sm" : "text-2xl"
-                }`}
-              >
-                Cancel Search
-              </button>
-            )}
-            {g.error && (
-              <div
-                className={`font-bold text-red-500 text-center w-[90%] max-w-4xl bg-red-50 rounded-2xl pb-2 ${
-                  isPortrait
-                    ? "text-xs p-3 border-2 border-red-200"
-                    : "text-2xl p-6 border-4 border-red-200"
-                }`}
-              >
-                {g.error}
-              </div>
-            )}
-          </div>
-        </div>
-      ) : (
-        <div
-          className={`flex ${isPortrait ? "flex-col items-center gap-6" : "flex-row gap-8 items-start justify-between"} mt-2 w-full flex-1 min-h-0`}
-        >
-          {/* Left Column: Game Area */}
-          <section
-            className={`${isPortrait ? "w-full max-w-[480px]" : "flex-1 min-w-[560px]"} flex flex-col items-center min-h-0`}
+          <button
+            onClick={g.queue}
+            disabled={!funded || locked}
+            className="qp-btn qp-btn--go ttt-ctl-btn w-full uppercase tracking-widest disabled:opacity-40 flex items-center justify-center gap-2 font-black"
           >
-            <div className="flex flex-col items-center gap-1 mb-6">
-              <span className="text-lg font-bold text-primary">
-                You are:{" "}
-                <span className="font-black text-2xl">
-                  {g.myMark === 1 ? "✕ (X)" : "◯ (O)"}
-                </span>
-              </span>
-              <div className="flex items-center gap-4 text-sm font-mono text-[var(--qp-ink-soft)] px-4 py-1.5 rounded-md border border-[var(--qp-ink-soft)] mt-1">
-                <span>Game {g.currentGame}</span>
-                <span className="border-l-2 border-[var(--qp-ink-soft)] pl-4">
-                  X: {g.score.x} &nbsp; O: {g.score.o} &nbsp; D: {g.score.draws}
-                </span>
-              </div>
-            </div>
+            <span className="material-symbols-outlined text-xl">
+              {g.phase === "queuing"
+                ? "search"
+                : g.phase === "connecting"
+                  ? "sync"
+                  : "sports_esports"}
+            </span>
+            {g.phase === "connecting"
+              ? "Connecting…"
+              : g.phase === "queuing"
+                ? "Finding Opponent…"
+                : g.phase === "opening"
+                  ? "Opening tunnel…"
+                  : g.phase === "funding"
+                    ? "Funding seat…"
+                    : "Find Match"}
+          </button>
 
-            <div className="flex justify-center flex-1 min-h-0 w-full mb-2">
-              {g.variant === "caro" ? (
-                <CaroBoard
-                  board={g.board}
-                  size={g.size}
-                  lastMove={g.lastMove}
-                  disabled={!g.isMyTurn || g.auto}
-                  onPlay={g.play}
-                />
-              ) : (
-                <Board
-                  board={uiBoard(g.board)}
-                  disabled={!g.isMyTurn || g.auto}
-                  onPlay={g.play}
-                />
-              )}
-            </div>
-
-            <div className="qp-title text-2xl mt-4 min-h-[28px]">
-              {statusText(g)}
-            </div>
-
-            {/* Portrait Controls */}
-            {isPortrait && (
-              <div className="mt-4 flex flex-col gap-3 w-full max-w-[480px]">
-                <div className="flex gap-4 w-full">
-                  {g.phase === "playing" &&
-                    g.innerOver &&
-                    !g.terminal &&
-                    g.role === "A" && (
-                      <button
-                        onClick={g.next}
-                        disabled={g.auto}
-                        className="qp-btn qp-btn--go flex-1 !px-4 !py-3 !text-sm disabled:opacity-40 uppercase tracking-wider"
-                      >
-                        Next Game →
-                      </button>
-                    )}
-                  {g.innerOver && g.phase === "playing" && (
-                    <button
-                      onClick={g.stop}
-                      className="qp-btn flex-1 !px-4 !py-3 !text-sm uppercase tracking-wider"
-                    >
-                      Stop &amp; Settle
-                    </button>
-                  )}
-                  {g.phase === "done" && (
-                    <button
-                      onClick={g.requeue}
-                      className="qp-btn qp-btn--go flex-1 !px-4 !py-3 !text-sm uppercase tracking-wider"
-                    >
-                      Find New Match
-                    </button>
-                  )}
-                </div>
-
-                <div className="flex gap-4 items-center justify-between w-full">
-                  <button
-                    onClick={() => {
-                      g.leave();
-                      onBack();
-                    }}
-                    className="qp-btn flex-1 !px-4 !py-2.5 !text-sm"
-                  >
-                    ← Leave
-                  </button>
-
-                  <button
-                    onClick={() => g.setAuto(!g.auto)}
-                    className={`qp-btn flex-1 !px-4 !py-2.5 !text-sm flex items-center justify-center gap-2 ${g.auto ? "qp-btn--go" : ""}`}
-                  >
-                    <span
-                      className={`grid h-4 w-4 place-items-center border-[2px] border-[var(--qp-ink)] text-xs rounded-sm ${g.auto ? "bg-[var(--qp-ink)] text-[var(--qp-paper)]" : "bg-[var(--qp-paper)]"}`}
-                    >
-                      {g.auto ? "✓" : ""}
-                    </span>
-                    Auto-Play
-                  </button>
-                </div>
-              </div>
-            )}
-          </section>
-
-          {/* Right Column: Game Log / Info */}
-          {!isPortrait && (
-            <aside className="w-[340px] shrink-0 flex flex-col gap-4">
-              <div className="qp-panel qp-stroke p-4 w-full flex flex-col items-center">
-                <h2 className="qp-title text-xl mb-4 self-start flex items-center gap-2">
-                  <span className="material-symbols-outlined">settings</span>
-                  Controls
-                </h2>
-
-                <div className="flex flex-col items-stretch w-full gap-3">
-                  {g.phase === "playing" &&
-                    g.innerOver &&
-                    !g.terminal &&
-                    g.role === "A" && (
-                      <button
-                        onClick={g.next}
-                        disabled={g.auto}
-                        className="qp-btn qp-btn--go w-full !px-4 !py-3 !text-sm disabled:opacity-40 uppercase tracking-wider"
-                      >
-                        Next Game →
-                      </button>
-                    )}
-                  {g.innerOver && g.phase === "playing" && (
-                    <button
-                      onClick={g.stop}
-                      className="qp-btn w-full !px-4 !py-3 !text-sm uppercase tracking-wider"
-                    >
-                      Stop &amp; Settle
-                    </button>
-                  )}
-                  {g.phase === "done" && (
-                    <button
-                      onClick={g.requeue}
-                      className="qp-btn qp-btn--go w-full !px-4 !py-3 !text-sm uppercase tracking-wider"
-                    >
-                      Find New Match
-                    </button>
-                  )}
-                </div>
-
-                <div className="flex gap-4 items-center justify-between w-full mt-3">
-                  <button
-                    onClick={() => {
-                      g.leave();
-                      onBack();
-                    }}
-                    className="qp-btn flex-1 !px-4 !py-2.5 !text-sm"
-                  >
-                    ← Leave
-                  </button>
-                  <button
-                    onClick={() => g.setAuto(!g.auto)}
-                    className={`qp-btn flex-1 !px-4 !py-2.5 !text-sm flex items-center justify-center gap-2 ${g.auto ? "qp-btn--go" : ""}`}
-                  >
-                    <span
-                      className={`grid h-4 w-4 place-items-center border-[2px] border-[var(--qp-ink)] text-xs rounded-sm ${g.auto ? "bg-[var(--qp-ink)] text-[var(--qp-paper)]" : "bg-[var(--qp-paper)]"}`}
-                    >
-                      {g.auto ? "✓" : ""}
-                    </span>
-                    Auto-Play
-                  </button>
-                </div>
-              </div>
-
-              <h2 className="qp-title text-2xl mt-2 mb-1 flex items-center gap-2">
-                <span className="material-symbols-outlined">edit_note</span>
-                Game Log
-              </h2>
-
-              <div className="qp-panel qp-stroke p-6 w-full">
-                <ul className="space-y-4 pt-2 font-mono font-bold text-xs">
-                  {g.games.length > 0 && (
-                    <div className="w-full max-h-40 overflow-y-auto flex flex-col gap-1 text-sm font-mono mb-4 bg-[var(--qp-paper)] p-3 rounded-lg border border-[var(--qp-ink-soft)]/20 shadow-inner">
-                      {[...g.games].reverse().map((r) => (
-                        <div
-                          key={r.game}
-                          className="flex justify-between text-on-surface/80 px-2 py-1 hover:bg-primary/5 rounded"
-                        >
-                          <span className="font-bold">Game {r.game}</span>
-                          <span
-                            className={`font-bold ${r.winner === 1 ? "text-primary" : r.winner === 2 ? "text-secondary" : "text-outline"}`}
-                          >
-                            {r.winner === 1
-                              ? "X WON"
-                              : r.winner === 2
-                                ? "O WON"
-                                : "DRAW"}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  <div className="flex flex-col gap-2 mt-4 text-xs font-mono border-t border-[var(--qp-ink-soft)]/40 pt-4">
-                    <Digest label="OPEN:" digest={g.digests.create} />
-                    <Digest label="DEPOSIT:" digest={g.digests.deposit} />
-                    <Digest label="CLOSE:" digest={g.digests.close} />
-                  </div>
-
-                  {g.error && (
-                    <div className="mt-4 text-xs font-bold text-red-500 bg-red-50 p-3 rounded-lg border border-red-200 w-full break-words">
-                      {g.error}
-                    </div>
-                  )}
-                </ul>
-
-                {g.auto && (
-                  <div className="mt-6 text-xs text-[var(--qp-amber)] italic font-bold text-center leading-tight">
-                    * Auto-play enabled *
-                  </div>
-                )}
-              </div>
-            </aside>
+          {(g.phase === "queuing" || g.phase === "connecting") && (
+            <button
+              onClick={g.leave}
+              className="text-outline text-sm font-bold underline hover:text-secondary transition-colors"
+            >
+              Cancel Search
+            </button>
           )}
+          {g.error && (
+            <div className="font-bold text-sm text-red-500 bg-red-50 rounded-xl p-3 border-2 border-red-200 w-full break-words">
+              {g.error}
+            </div>
+          )}
+        </section>
+      </div>
+    );
+  }
+
+  // ---- Playing view -------------------------------------------------------------------------
+  const board =
+    g.variant === "caro" ? (
+      <CaroBoard
+        board={g.board}
+        size={g.size}
+        lastMove={g.lastMove}
+        disabled={!g.isMyTurn || g.auto}
+        onPlay={g.play}
+      />
+    ) : (
+      <Board
+        board={uiBoard(g.board)}
+        disabled={!g.isMyTurn || g.auto}
+        onPlay={g.play}
+      />
+    );
+
+  const autoToggle = (
+    <button
+      onClick={() => g.setAuto(!g.auto)}
+      aria-pressed={g.auto}
+      className={`qp-btn ttt-ctl-btn w-full flex items-center justify-center gap-2 ${g.auto ? "qp-btn--go" : ""}`}
+    >
+      <span
+        className={`grid h-4 w-4 shrink-0 place-items-center border-[2px] border-[var(--qp-ink)] text-xs rounded-sm ${g.auto ? "bg-[var(--qp-ink)] text-[var(--qp-paper)]" : "bg-[var(--qp-paper)]"}`}
+      >
+        {g.auto ? "✓" : ""}
+      </span>
+      Auto
+    </button>
+  );
+  // Match-flow actions (next / stop / requeue) — only the relevant one shows.
+  const actions = (
+    <>
+      {g.phase === "playing" &&
+        g.innerOver &&
+        !g.terminal &&
+        g.role === "A" && (
+          <button
+            onClick={g.next}
+            disabled={g.auto}
+            className="qp-btn qp-btn--go ttt-ctl-btn w-full disabled:opacity-40 uppercase tracking-wider"
+          >
+            Next →
+          </button>
+        )}
+      {g.innerOver && g.phase === "playing" && (
+        <button
+          onClick={g.stop}
+          className="qp-btn ttt-ctl-btn w-full uppercase tracking-wider"
+        >
+          Stop &amp; settle
+        </button>
+      )}
+      {g.phase === "done" && (
+        <button
+          onClick={g.requeue}
+          className="qp-btn qp-btn--go ttt-ctl-btn w-full uppercase tracking-wider"
+        >
+          New match
+        </button>
+      )}
+    </>
+  );
+
+  const youAre = (
+    <div className="text-center leading-tight">
+      <div className="qp-eyebrow text-[11px]">You are</div>
+      <div className="font-bold text-2xl">
+        {g.myMark === 1 ? "✕ (X)" : "◯ (O)"}
+      </div>
+    </div>
+  );
+  const scoreRow = (
+    <div className="w-full flex items-center justify-center gap-3 font-bold text-lg tabular-nums">
+      <span className="text-[var(--qp-red)]">✕ {g.score.x}</span>
+      <span className="text-[var(--qp-ink)]">◯ {g.score.o}</span>
+      <span className="text-[var(--qp-ink-soft)]">= {g.score.draws}</span>
+    </div>
+  );
+  const gameLog = (
+    <div className="w-full border-t-2 border-[var(--qp-ink-soft)]/40 pt-2">
+      <div className="qp-eyebrow text-[11px] opacity-80 mb-1.5">On-chain</div>
+      {g.games.length > 0 && (
+        <div className="max-h-28 overflow-y-auto flex flex-col gap-0.5 font-mono text-[10px] mb-2">
+          {[...g.games].reverse().map((r) => (
+            <div key={r.game} className="flex justify-between">
+              <span>Game {r.game}</span>
+              <span
+                className={`font-bold ${r.winner === 1 ? "text-primary" : r.winner === 2 ? "text-secondary" : "text-outline"}`}
+              >
+                {r.winner === 1 ? "X" : r.winner === 2 ? "O" : "draw"}
+              </span>
+            </div>
+          ))}
         </div>
       )}
+      <div className="flex flex-col gap-1 text-[10px] font-mono">
+        <Digest label="OPEN:" digest={g.digests.create} />
+        <Digest label="DEPOSIT:" digest={g.digests.deposit} />
+        <Digest label="CLOSE:" digest={g.digests.close} />
+      </div>
+    </div>
+  );
+
+  // Portrait: stack board over a compact control/log block.
+  if (isPortrait) {
+    return (
+      <div className="w-full h-full overflow-hidden flex flex-col items-center gap-1 p-1">
+        <div className="w-full flex items-center justify-between gap-2 border-b-2 border-[var(--qp-ink-soft)] pb-2">
+          {youAre}
+          {scoreRow}
+        </div>
+        <div className="ttt-board-area flex-1 min-h-0 w-full grid place-items-center">
+          <div className="ttt-board-square">{board}</div>
+        </div>
+        <div className="text-center qp-title text-xl min-h-[24px]">
+          {statusText(g)}
+        </div>
+        <div className="w-full max-w-[480px] flex flex-col items-center gap-2 border-t-2 border-[var(--qp-ink-soft)] pt-2">
+          <div className="flex items-stretch gap-3 w-full">
+            <button onClick={leave} className="qp-btn ttt-ctl-btn flex-1">
+              ← Leave
+            </button>
+            {autoToggle}
+          </div>
+          <div className="flex items-stretch gap-3 w-full">{actions}</div>
+          {gameLog}
+        </div>
+      </div>
+    );
+  }
+
+  // Landscape: Bomb It-style three columns — controls pane | board hero | info pane.
+  return (
+    <div className="w-full h-full overflow-hidden flex flex-row items-stretch gap-3 px-1 py-2">
+      {/* Left pane: leave, auto, match-flow actions, status. */}
+      <aside className="ttt-pane qp-panel qp-stroke shrink-0 flex flex-col items-center gap-3 overflow-y-auto">
+        <button onClick={leave} className="qp-btn ttt-ctl-btn w-full">
+          ← Leave
+        </button>
+        {autoToggle}
+        <div className="w-full flex flex-col gap-2">{actions}</div>
+        <span className="qp-eyebrow text-[11px] opacity-80 text-center">
+          Game {g.currentGame}
+        </span>
+        <div className="qp-title text-base leading-tight text-center min-h-[2.4em] flex items-center">
+          {statusText(g)}
+        </div>
+      </aside>
+
+      {/* Center: board hero (square). */}
+      <main className="ttt-board-area flex-1 min-w-0 grid place-items-center">
+        <div className="ttt-board-square">{board}</div>
+      </main>
+
+      {/* Right pane: you-are + scores + on-chain log. */}
+      <aside className="ttt-pane qp-panel qp-stroke shrink-0 flex flex-col items-center gap-3 overflow-y-auto">
+        {youAre}
+        {scoreRow}
+        {gameLog}
+        {g.error && (
+          <div className="text-[11px] text-secondary italic w-full text-center break-words">
+            {g.error}
+          </div>
+        )}
+      </aside>
     </div>
   );
 }
