@@ -1,0 +1,62 @@
+import { parentPort, workerData } from "node:worker_threads";
+import { SuiClient, getFullnodeUrl } from "@mysten/sui/client";
+import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
+import { decodeSuiPrivateKey } from "@mysten/sui/cryptography";
+import { runSwarm } from "./swarm";
+import { runFullMatch } from "./runMatch";
+
+interface WorkerInput {
+  workerId: number;
+  channel: "local" | "relay";
+  anchor: "onchain" | "offchain";
+  concurrency: number;
+  env: Record<string, string>;
+}
+
+/** Build the match context once — onchain needs an RPC client + funded settler. */
+function buildCtx(d: WorkerInput): { client?: SuiClient; funder?: Ed25519Keypair } {
+  const ctx: { client?: SuiClient; funder?: Ed25519Keypair } = {};
+  if (d.anchor === "onchain") {
+    process.env.PACKAGE_ID = d.env.PACKAGE_ID;
+    process.env.SUI_NETWORK = d.env.SUI_NETWORK;
+    ctx.client = new SuiClient({ url: d.env.SUI_RPC_URL || getFullnodeUrl("localnet") });
+    const { secretKey } = decodeSuiPrivateKey(d.env.SUI_SETTLER_KEY);
+    ctx.funder = Ed25519Keypair.fromSecretKey(secretKey);
+  }
+  return ctx;
+}
+
+/** Warm worker: build ctx once, then run each "run" command (round-robin over
+ *  its games list) until "done". Spawning + engine import + ctx build all
+ *  complete before the "ready" signal, so the controller can start its CPU/timer
+ *  measurement only once every worker is warm — startup is never measured. */
+function warmLoop(d: WorkerInput): void {
+  const ctx = buildCtx(d);
+  let g = 0;
+  parentPort!.on(
+    "message",
+    async (cmd: { type: "run" | "done"; games?: string[]; matches?: number | null; durationMs?: number | null }) => {
+      if (cmd.type === "done") {
+        parentPort!.close();
+        return;
+      }
+      try {
+        const games = cmd.games!;
+        const nextGame = () => games[g++ % games.length];
+        const res = await runSwarm(() => runFullMatch(nextGame(), d.channel, d.anchor, ctx), {
+          concurrency: d.concurrency,
+          matches: cmd.matches ?? null,
+          durationMs: cmd.durationMs ?? null,
+          now: () => performance.now(),
+        });
+        parentPort!.postMessage({ ok: true, moves: res.moves, matches: res.matches });
+      } catch (e) {
+        parentPort!.postMessage({ ok: false, error: String((e as Error)?.stack ?? e) });
+      }
+    },
+  );
+  // Imports + ctx are done; signal the parent the worker is warm and idle.
+  parentPort!.postMessage({ ready: true });
+}
+
+warmLoop(workerData as WorkerInput);

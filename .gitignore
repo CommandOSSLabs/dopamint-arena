@@ -177,9 +177,14 @@ vite.config.ts.timestamp-*
 # Temp files
 temp/
 
-# Sui Move build artifact — resolved fresh per build; dev does not commit it
+# Sui Move build artifacts — resolved fresh per build; devs do not commit them
 Move.lock
+Published.toml
 sui-tunnel-ts/pnpm-workspace.yaml
+
+tools/loadbench/.env.local
+tools/loadbench/keys.json
+tools/loadbench/reports/
 
 # Subagent-driven-development scratch (ledger, task briefs, reports, review diffs)
 .superpowers/

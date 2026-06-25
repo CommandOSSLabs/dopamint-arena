@@ -1,0 +1,11 @@
+{
+  "name": "loadbench",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "bench": "bun run src/cli.ts",
+    "stack": "bun run src/stack.ts",
+    "test": "bun test"
+  },
+  "dependencies": { "@mysten/sui": "1.28.1" }
+}

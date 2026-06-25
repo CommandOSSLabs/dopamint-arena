@@ -5148,6 +5148,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustbench"
+version = "0.1.0"
+dependencies = [
+ "blake2",
+ "ed25519-dalek",
+ "hex",
+]
+
+[[package]]
 name = "rustc-hash"
 version = "2.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

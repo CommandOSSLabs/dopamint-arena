@@ -1,0 +1,7 @@
+# This file documents what must NOT enter the image when building from
+# tools/loadbench/ as the context.  In practice the compose service builds
+# from the repo root (context: ../..); the authoritative exclusions live in
+# the root .dockerignore — keep both in sync.
+node_modules
+.env.local
+keys.json
