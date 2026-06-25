@@ -682,8 +682,11 @@ export function WorldCanvas({
 
   // Stamp the brush footprint (an N×N block) centered on a cell. Each cell is an
   // independent dedup'd co-signed move, so a bigger brush is just more cells/TPS.
+  // The eraser stamps a WIDER footprint to match its fat nib (live size = 3×brush): the
+  // co-signed cells must cover the same swath the local stroke clears, or the opponent only
+  // sees a thin erase from the narrow centerline (a wide local erase → thin remote erase).
   const stampBrush = (center: GlobalCell) => {
-    const n = brushSizeRef.current;
+    const n = brushSizeRef.current * (erasingRef.current ? 3 : 1);
     const off = Math.floor(n / 2);
     for (let dy = 0; dy < n; dy++) {
       for (let dx = 0; dx < n; dx++) {
@@ -822,9 +825,13 @@ export function WorldCanvas({
           {hud.owner.label}
         </div>
       )}
-      {/* Zoom HUD (bottom-left) — capped to the canvas width and wrap-friendly so it never
-          runs off-screen in a narrow window. */}
-      <div className="sketch-stroke sketch-panel absolute bottom-3 left-3 inline-flex w-fit items-center gap-1.5 px-2 py-1">
+      {/* Zoom HUD (bottom-left). `.sketch-stroke` forces position:relative for its ::before
+          border, which would override a Tailwind `absolute` class — so pin the corner via
+          inline style (wins over the class) or the HUD falls out of place below the window. */}
+      <div
+        className="sketch-stroke sketch-panel flex w-fit items-center gap-1.5 px-2 py-1"
+        style={{ position: "absolute", bottom: 12, left: 12, zIndex: 5 }}
+      >
         <ZoomButton label="−" onClick={() => zoomBy(1 / ZOOM.step)} />
         <span
           className="min-w-[46px] text-center text-xs font-bold tabular-nums"
