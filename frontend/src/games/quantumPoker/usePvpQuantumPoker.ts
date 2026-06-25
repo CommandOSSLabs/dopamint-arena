@@ -51,6 +51,8 @@ import {
   readResumeRecord,
   listActiveTunnels,
   clearResumeRecord,
+  transcriptToWire,
+  appendAdoptedCheckpoint,
 } from "@/pvp/resume";
 import { makePokerResumeAdapter } from "./pokerResumeAdapter";
 import {
@@ -463,7 +465,7 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
       >[0]["reads"];
       const coinType = isMtpsConfigured ? MTPS_COIN_TYPE : undefined;
       const proto = new QuantumPokerProtocol(HAND_CAP);
-      const transcript = new Transcript(dt.tunnelId);
+      const transcript = transcriptRef.current ?? new Transcript(dt.tunnelId);
       transcriptRef.current = transcript;
 
       dtRef.current = dt;
@@ -582,30 +584,41 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
         mp,
         channel,
         tunnel: dt,
-        adapter: makePokerResumeAdapter({
-          getSecret: () => {
-            const s = dt.state;
-            return {
-              localSecretsA: s.localSecretsA,
-              localSecretsB: s.localSecretsB,
-              holeA: s.holeA,
-              holeB: s.holeB,
-            };
-          },
-          setSecret: (sec) => {
-            const s = dt.state;
-            s.localSecretsA = sec.localSecretsA;
-            s.localSecretsB = sec.localSecretsB;
-            s.holeA = sec.holeA;
-            s.holeB = sec.holeB;
-          },
-          onReconciled: () => {
-            // A resync may have advanced our state (adopt) — re-fire the plumbing/auto loop so the
-            // next move (commit/reveal/next_hand, or the persona bot's bet in Auto) isn't stranded.
-            sync();
-            maybeAutoPropose();
-          },
-        }),
+        adapter: {
+          ...makePokerResumeAdapter({
+            getSecret: () => {
+              const s = dt.state;
+              return {
+                localSecretsA: s.localSecretsA,
+                localSecretsB: s.localSecretsB,
+                holeA: s.holeA,
+                holeB: s.holeB,
+              };
+            },
+            setSecret: (sec) => {
+              const s = dt.state;
+              s.localSecretsA = sec.localSecretsA;
+              s.localSecretsB = sec.localSecretsB;
+              s.holeA = sec.holeA;
+              s.holeB = sec.holeB;
+            },
+            onReconciled: (_tunnel, outcome) => {
+              // A resync "adopt" advanced our state without onConfirmed → append the missed entry,
+              // else settle would see a short transcript. Then re-fire the plumbing/auto loop.
+              if (outcome === "adopt" && transcriptRef.current)
+                appendAdoptedCheckpoint(
+                  transcriptRef.current,
+                  dt.snapshot().latest,
+                );
+              sync();
+              maybeAutoPropose();
+            },
+          }),
+          captureTranscript: () =>
+            transcriptRef.current
+              ? transcriptToWire(transcriptRef.current)
+              : [],
+        },
         identity: {
           matchId: info.matchId,
           tunnelId: dt.tunnelId,
@@ -826,7 +839,7 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
           mp.close();
           return;
         }
-        const { tunnel, channel } = restored[0];
+        const { tunnel, channel, transcript } = restored[0];
         // A restored "done" tunnel is a finished match whose settle never cleared its record. Nothing
         // would advance it (no incoming moves; no plumbing proposer for "done"), so restoring it
         // strands the player in the old busted tunnel. Drop the record and fall through to idle.
@@ -849,6 +862,7 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
         setRole(rec.role);
         setOpponentWallet(rec.opponentWallet);
         channelRef.current = channel;
+        transcriptRef.current = transcript;
         const waitPeer = makeInbox(channel);
         activatePokerSession(mp, channel, tunnel, waitPeer, {
           matchId: rec.matchId,
