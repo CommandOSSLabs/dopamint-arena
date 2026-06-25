@@ -1,11 +1,10 @@
-import { SuiClient, getFullnodeUrl } from "@mysten/sui/client";
-import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
-import { decodeSuiPrivateKey } from "@mysten/sui/cryptography";
+import os from "node:os";
+import { Worker } from "node:worker_threads";
 import { PLAYABLE } from "./games";
 import { readEnvLocal } from "./env";
 import { ensureRelay } from "./relayProcess";
-import { runFullMatch } from "./runMatch";
 import { ratePerSec } from "./metrics";
+import { startResourceMonitor, formatResources } from "./resourceMonitor";
 
 export function parseSwarmArgs(argv: string[]): {
   channel: "local" | "relay";
@@ -117,47 +116,66 @@ export async function runSwarm(
   return { moves: totalMoves, matches: totalMatches, elapsedMs: opts.now() - start };
 }
 
+function runWorker(input: Record<string, unknown>): Promise<{ ok: boolean; moves?: number; matches?: number; error?: string }> {
+  return new Promise((resolve) => {
+    const w = new Worker(new URL("./worker.ts", import.meta.url), { workerData: input });
+    w.once("message", (m) => resolve(m));
+    w.once("error", (e) => resolve({ ok: false, error: String(e?.stack ?? e) }));
+  });
+}
+
 async function main() {
   const args = parseSwarmArgs(process.argv.slice(2));
-  // Default to a 15-second burst when neither stop condition is given.
   if (args.matches === null && args.durationS === null) args.durationS = 15;
 
-  const ctx: { client?: SuiClient; funder?: Ed25519Keypair } = {};
+  const sys = { cores: os.availableParallelism?.() ?? os.cpus().length, totalMem: os.totalmem() };
+  const { workers, concurrency } = resolveFleet(args, sys);
+
+  const env: Record<string, string> = {};
   if (args.anchor === "onchain") {
-    const env = readEnvLocal();
-    if (!env.TUNNEL_PACKAGE_ID) throw new Error("run `bun run stack` first (.env.local missing PACKAGE_ID)");
-    process.env.PACKAGE_ID = env.TUNNEL_PACKAGE_ID;
-    process.env.SUI_NETWORK = env.SUI_NETWORK;
-    ctx.client = new SuiClient({ url: getFullnodeUrl("localnet") });
-    const { secretKey } = decodeSuiPrivateKey(env.SUI_SETTLER_KEY);
-    ctx.funder = Ed25519Keypair.fromSecretKey(secretKey);
+    const e = readEnvLocal();
+    if (!e.TUNNEL_PACKAGE_ID) throw new Error("run `bun run stack` first");
+    env.PACKAGE_ID = e.TUNNEL_PACKAGE_ID;
+    env.SUI_NETWORK = e.SUI_NETWORK ?? "";
+    env.SUI_RPC_URL = e.SUI_RPC_URL ?? "";
+    env.SUI_SETTLER_KEY = e.SUI_SETTLER_KEY;
   }
 
   const relay = args.channel === "relay" ? await ensureRelay() : null;
-
-  let gameIdx = 0;
-  const nextGame = () => args.games[gameIdx++ % args.games.length];
+  const slices = args.matches !== null ? sliceMatches(args.matches, workers) : null;
+  const durationMs = args.durationS !== null ? args.durationS * 1000 : null;
   const tag = `${args.channel}/${args.anchor}`;
 
+  const monitor = startResourceMonitor();
+  const start = performance.now();
   try {
-    const res = await runSwarm(
-      () => runFullMatch(nextGame(), args.channel, args.anchor, ctx),
-      {
-        concurrency: args.concurrency,
-        matches: args.matches,
-        durationMs: args.durationS !== null ? args.durationS * 1000 : null,
-        now: () => performance.now(),
-      },
-    );
-    console.log(
-      `[${tag}] swarm: ${res.moves} moves over ${res.matches} matches in ${(res.elapsedMs / 1000).toFixed(1)}s`,
-    );
-    console.log(`[${tag}] aggregate move-TPS: ${ratePerSec(res.moves, res.elapsedMs).toFixed(1)}`);
+    const inputs = Array.from({ length: workers }, (_, i) => ({
+      workerId: i,
+      channel: args.channel,
+      anchor: args.anchor,
+      games: args.games,
+      concurrency,
+      matches: slices ? slices[i] : null,
+      durationMs,
+      env,
+    })).filter((inp) => inp.matches === null || inp.matches > 0);
+
+    const results = await Promise.all(inputs.map(runWorker));
+    const elapsedMs = performance.now() - start;
+    const ok = results.filter((r) => r.ok);
+    const failed = results.length - ok.length;
+    const moves = ok.reduce((a, r) => a + (r.moves ?? 0), 0);
+    const matches = ok.reduce((a, r) => a + (r.matches ?? 0), 0);
+    const res = monitor.stop();
+
+    console.log(`[${tag}] fleet: workers=${workers} concurrency=${concurrency}${args.workers === "auto" || args.concurrency === "auto" ? " (auto)" : ""}${failed ? ` (${failed} worker(s) failed)` : ""}`);
+    console.log(`[${tag}] swarm: ${moves} moves over ${matches} matches in ${(elapsedMs / 1000).toFixed(1)}s`);
+    console.log(`[${tag}] aggregate move-TPS: ${ratePerSec(moves, elapsedMs).toFixed(1)}`);
     if (args.anchor === "onchain") {
-      console.log(
-        `[${tag}] tunnels settled/s: ${ratePerSec(res.matches, res.elapsedMs).toFixed(2)} (on-chain-finality-bound)`,
-      );
+      console.log(`[${tag}] tunnels settled/s: ${ratePerSec(matches, elapsedMs).toFixed(2)} (on-chain-finality-bound)`);
     }
+    console.log(`[${tag}] resources: ${formatResources(res)}`);
+    for (const r of results.filter((x) => !x.ok)) console.error(`[${tag}] worker error: ${r.error}`);
   } finally {
     relay?.stop();
   }
