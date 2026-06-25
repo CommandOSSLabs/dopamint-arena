@@ -47,6 +47,7 @@ const frontend = createFrontend(`dopamint-${cfg.environment}`, {
   albDnsName: alb.alb.dnsName,
   certificateArn: dns.certificateArn,
   zoneId: dns.zoneId,
+  corsAllowedOrigins: cfg.frontendCorsOrigins,
 });
 
 const database = createDatabase(`dopamint-${cfg.environment}`, {

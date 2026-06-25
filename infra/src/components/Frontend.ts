@@ -15,6 +15,7 @@ export function createFrontend(
     albDnsName: pulumi.Input<string>;
     certificateArn?: pulumi.Input<string>;
     zoneId?: pulumi.Input<string>;
+    corsAllowedOrigins?: string[];
   },
 ): FrontendOutputs {
   const bucket = new aws.s3.BucketV2(`${name}-frontend`, {
@@ -61,6 +62,25 @@ export function createFrontend(
       ),
   });
 
+  // Cross-origin static assets: S3 only returns CORS headers when the request carries an
+  // Origin header and the bucket has a matching rule. CloudFront must forward Origin and
+  // the preflight request headers for this to work (Managed-CORS-S3Origin policies).
+  const corsAllowedOrigins = args.corsAllowedOrigins ?? [];
+  const corsEnabled = corsAllowedOrigins.length > 0;
+  if (corsEnabled) {
+    new aws.s3.BucketCorsConfigurationV2(`${name}-frontend-cors`, {
+      bucket: bucket.id,
+      corsRules: [
+        {
+          allowedHeaders: ["*"],
+          allowedMethods: ["GET", "HEAD", "OPTIONS"],
+          allowedOrigins: corsAllowedOrigins,
+          maxAgeSeconds: 3000,
+        },
+      ],
+    });
+  }
+
   // Same-origin backend: CloudFront proxies /v1/* to the ALB so the SPA, its SSE feed
   // (/v1/stats/live) and the PvP WebSocket (/v1/mp) all share one HTTPS origin
   // (ADR-0002/0004). Without this the SPA 403->/index.html fallback answers every
@@ -81,6 +101,16 @@ export function createFrontend(
   const allViewer = aws.cloudfront.getOriginRequestPolicyOutput({
     name: "Managed-AllViewer",
   });
+  // CORS-aware policies for the S3 origin: include Origin in the cache key and forward
+  // Origin + Access-Control-Request-* headers so S3 can respond with the right CORS headers.
+  const corsS3CachePolicy = aws.cloudfront.getCachePolicyOutput({
+    name: "Managed-CORS-S3Origin",
+  });
+  const corsS3OriginRequestPolicy = aws.cloudfront.getOriginRequestPolicyOutput(
+    {
+      name: "Managed-CORS-S3Origin",
+    },
+  );
 
   const distribution = new aws.cloudfront.Distribution(`${name}-cdn`, {
     enabled: true,
@@ -128,16 +158,25 @@ export function createFrontend(
       },
     ],
     defaultRootObject: "index.html",
-    defaultCacheBehavior: {
-      allowedMethods: ["GET", "HEAD", "OPTIONS"],
-      cachedMethods: ["GET", "HEAD"],
-      targetOriginId: "s3-origin",
-      forwardedValues: { queryString: false, cookies: { forward: "none" } },
-      viewerProtocolPolicy: "redirect-to-https",
-      minTtl: 0,
-      defaultTtl: 3600,
-      maxTtl: 86400,
-    },
+    defaultCacheBehavior: corsEnabled
+      ? {
+          allowedMethods: ["GET", "HEAD", "OPTIONS"],
+          cachedMethods: ["GET", "HEAD"],
+          targetOriginId: "s3-origin",
+          cachePolicyId: corsS3CachePolicy.id,
+          originRequestPolicyId: corsS3OriginRequestPolicy.id,
+          viewerProtocolPolicy: "redirect-to-https",
+        }
+      : {
+          allowedMethods: ["GET", "HEAD", "OPTIONS"],
+          cachedMethods: ["GET", "HEAD"],
+          targetOriginId: "s3-origin",
+          forwardedValues: { queryString: false, cookies: { forward: "none" } },
+          viewerProtocolPolicy: "redirect-to-https",
+          minTtl: 0,
+          defaultTtl: 3600,
+          maxTtl: 86400,
+        },
     restrictions: { geoRestriction: { restrictionType: "none" } },
     viewerCertificate: args.certificateArn
       ? {

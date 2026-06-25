@@ -67,6 +67,25 @@ describe("config", () => {
     assert.strictEqual(cfg.benchmarkImageVersion, "1.0.1");
   });
 
+  it("defaults frontend CORS origins to an empty list", () => {
+    setPulumiConfig(baseConfig);
+
+    const cfg = getConfig();
+
+    assert.deepStrictEqual(cfg.frontendCorsOrigins, []);
+  });
+
+  it("parses frontend CORS origins from JSON config", () => {
+    setPulumiConfig({
+      ...baseConfig,
+      "dopamint:frontend-cors-origins": '["http://localhost:5173"]',
+    });
+
+    const cfg = getConfig();
+
+    assert.deepStrictEqual(cfg.frontendCorsOrigins, ["http://localhost:5173"]);
+  });
+
   // The settler key is sourced from secret config (never hardcoded), so it can be
   // wired into Secrets Manager instead of the task definition.
   it("exposes the settler key from secret config", async () => {

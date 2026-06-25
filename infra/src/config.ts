@@ -32,6 +32,10 @@ export interface InfraConfig {
   ollamaEnabled: boolean;
   ollamaModel: string;
   ollamaImageTag: string;
+  // Origins allowed to fetch static frontend assets cross-origin from the S3/CloudFront
+  // origin (e.g. ["http://localhost:5173"] for local dev against the dev deployment).
+  // Empty by default so staging/production do not widen CORS unless explicitly configured.
+  frontendCorsOrigins: string[];
 }
 
 export function getConfig(): InfraConfig {
@@ -56,6 +60,8 @@ export function getConfig(): InfraConfig {
     ollamaEnabled: config.getBoolean("ollama-enabled") ?? true,
     ollamaModel: config.get("ollama-model") ?? "qwen2.5:1.8b",
     ollamaImageTag: config.get("ollama-image-tag") ?? "0.6.2",
+    frontendCorsOrigins:
+      config.getObject<string[]>("frontend-cors-origins") ?? [],
   };
 }
 
