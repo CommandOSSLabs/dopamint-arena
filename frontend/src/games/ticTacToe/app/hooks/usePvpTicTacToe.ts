@@ -48,6 +48,8 @@ import {
   evictExpiredRecords,
   readResumeRecord,
   clearResumeRecord,
+  transcriptToWire,
+  appendAdoptedCheckpoint,
 } from "@/pvp/resume";
 import { makeTttResumeAdapter } from "@/games/ticTacToe/app/lib/tttResumeAdapter";
 import { useSponsoredSignExec } from "@/onchain/useSponsoredSignExec";
@@ -460,11 +462,29 @@ export function usePvpTicTacToe(
       };
       // Resume wiring: persist on confirm + run the resync handshake on reconnect.
       detachResumeRef.current?.();
+      const baseAdapter = makeTttResumeAdapter<AnyState, CellMove>(() =>
+        onAdvance(),
+      );
+      const baseOnReconciled = baseAdapter.onReconciled;
       detachResumeRef.current = attachResume({
         mp,
         channel,
         tunnel: t,
-        adapter: makeTttResumeAdapter<AnyState, CellMove>(() => onAdvance()),
+        adapter: {
+          ...baseAdapter,
+          captureTranscript: () =>
+            transcriptRef.current
+              ? transcriptToWire(transcriptRef.current)
+              : [],
+          onReconciled: (rt, outcome) => {
+            if (outcome === "adopt" && transcriptRef.current)
+              appendAdoptedCheckpoint(
+                transcriptRef.current,
+                rt.snapshot().latest,
+              );
+            baseOnReconciled(rt, outcome);
+          },
+        },
         identity: {
           matchId: info.matchId,
           tunnelId: t.tunnelId,
@@ -539,7 +559,8 @@ export function usePvpTicTacToe(
             { selfWallet: w.address },
           );
           if (restored.length > 0) {
-            const { tunnel, channel } = restored[0]; // one active match per game in practice
+            const { tunnel, channel, transcript } = restored[0]; // one active match per game in practice
+            transcriptRef.current = transcript;
             const rec = readResumeRecord(tunnel.tunnelId)!;
             activateTttSession(mp, channel, tunnel, {
               matchId: rec.matchId,
