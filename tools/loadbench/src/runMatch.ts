@@ -5,7 +5,7 @@ import { Ed25519Keypair as KP } from "@mysten/sui/keypairs/ed25519";
 import { makeSeats, playMatch, type MatchResult } from "./match";
 import { pairLocalChannel } from "./channels/localChannel";
 import { connectRelaySeat } from "./channels/relayChannel";
-import { protocolFor, gameBalances } from "./games";
+import { kitFor, gameStake } from "./games";
 import { openSpec, openTunnels, settleTunnel } from "./onchain";
 import { relayWsUrl } from "./relayProcess";
 import type { Transport } from "../../../sui-tunnel-ts/src/core/distributedTunnel";
@@ -19,7 +19,7 @@ export async function runFullMatch(
   ctx: { client?: SuiClient; funder?: Ed25519Keypair },
 ): Promise<Phased> {
   const id = randomUUID();
-  const seats = makeSeats(id, gameBalances(game), 0n);
+  const seats = makeSeats(id, { a: gameStake(game), b: gameStake(game) }, 0n);
   let openMs = 0;
   if (anchor === "onchain") {
     if (!ctx.client || !ctx.funder) throw new Error("onchain anchor requires client+funder");
@@ -54,7 +54,7 @@ export async function runFullMatch(
   }
 
   const t1 = performance.now();
-  const res = await playMatch(protocolFor(game), seats, transports, { maxMoves: 1000 });
+  const res = await playMatch(kitFor(game), seats, transports, { maxMoves: 1000 });
   const playMs = performance.now() - t1;
   for (const c of closers) c();
 
