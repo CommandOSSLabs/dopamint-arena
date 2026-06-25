@@ -152,6 +152,20 @@ const REGION_FILL_FACTOR = 3;
 const AGENT_TEMPLATE_W = MAX_FOOTPRINT_W - 8;
 const AGENT_TEMPLATE_H = MAX_FOOTPRINT_H - 8;
 
+/** Freestyle seat line colors — palette indices, matching the PvP bot (seat A Sui blue,
+ *  seat B light purple) so each seat draws ONE distinct continuous line. */
+const FREESTYLE_COLOR_A = 13;
+const FREESTYLE_COLOR_B = 15;
+/** Per-step chance a freestyle walk turns (mirrors pvpProtocol.randomMove's 0.35). */
+const FREESTYLE_TURN_CHANCE = 0.35;
+/** Nominal marker anchor height for a freestyle bot (it draws a line, not a footprint box). */
+const FREESTYLE_MARKER_H = 4;
+/** Frames between freestyle marker re-syncs, so the on-canvas marker follows the wandering
+ *  head a few times/second without per-frame React churn. */
+const MARKER_SYNC_EVERY_FRAMES = 24;
+/** Placeholder RNG for a template placement (its walk fields are unused). */
+const NOOP_RNG = () => 0;
+
 export type Seat = "A" | "B";
 
 /** Display tints: the human seat (A, while you hold the wheel) is Sui blue; the
@@ -471,8 +485,29 @@ interface CanvasRun {
   coinType?: string;
 }
 
-/** A live seat bot streaming one mode's strokes across a world region. Each bot
- *  authors as exactly one seat (A or B) of the single shared tunnel. */
+/** A fresh region/walk handed to a seat bot (initial spawn, relocate, or mode switch). */
+interface AgentPlacement {
+  /** "template" = an Artist picture region; "freestyle" = a wandering momentum walk. */
+  kind: "template" | "freestyle";
+  /** Template path only: the region's lazy cell stream (null for a freestyle walk). */
+  iter: Iterator<DesignCell> | null;
+  regionName: string;
+  footprintH: number;
+  maxCells: number;
+  originGx: number;
+  originGy: number;
+  centerGx: number;
+  centerGy: number;
+  walkGx: number;
+  walkGy: number;
+  walkDx: number;
+  walkDy: number;
+  rng: () => number;
+  color: number;
+}
+
+/** A live seat bot. Each bot authors as exactly one seat (A or B) of the single shared
+ *  tunnel and either draws an Artist picture region OR walks one continuous freestyle line. */
 interface AgentState {
   id: string;
   /** The seat this bot authors as (its distinct funded identity on the tunnel). */
@@ -484,22 +519,76 @@ interface AgentState {
   /** Captured at spawn, live-updatable: paint interval tier + drawing intelligence. */
   speed: AgentSpeed;
   mode: AgentModeId;
-  /** Lazy cell stream for the CURRENT region (the mode's stroke generator). */
-  iter: Iterator<DesignCell>;
-  /** Label shown on the marker for the current region (the mode's name). */
+  /** Drawing strategy for the current run: an Artist picture region vs a freestyle walk. */
+  kind: "template" | "freestyle";
+  /** Template path only: the region's lazy cell stream (null while freestyle-walking). */
+  iter: Iterator<DesignCell> | null;
+  /** Label shown on the marker for the current region / walk (the mode or picture name). */
   regionName: string;
-  /** Current region footprint height in cells (anchors the marker above the art). */
+  /** Marker anchor height in cells (region height, or a nominal value for a walk). */
   footprintH: number;
-  /** Top-left global-pixel origin of the current region. */
+  /** Top-left global-pixel origin: a region's corner, or a freestyle walk's spawn. */
   originGx: number;
   originGy: number;
-  /** Global-pixel center of the current region (camera/marker anchor). */
+  /** Global-pixel marker anchor — a region center, or the live freestyle walk head. */
   centerGx: number;
   centerGy: number;
-  /** Cells co-signed in the current region so far (drives the endless-mode relocate). */
+  /** Freestyle momentum walk: global-pixel cursor + heading + per-bot RNG + fixed line
+   *  color — a bounded random walk mirroring pvpProtocol.randomMove. Unused for templates. */
+  walkGx: number;
+  walkGy: number;
+  walkDx: number;
+  walkDy: number;
+  rng: () => number;
+  color: number;
+  /** Cells co-signed in the current region so far (drives the template relocate). */
   painted: number;
-  /** Soft cap: relocate once `painted` reaches this (bounds endless modes per region). */
+  /** Soft cap: relocate a template once `painted` reaches this (Infinity for a walk). */
   maxCells: number;
+}
+
+/** Clamp a per-step delta so the freestyle walk stays a tight, legible line (mirrors
+ *  pvpProtocol's clampStep — no big jumps). */
+function clampStep(n: number): number {
+  return Math.max(-2, Math.min(2, n));
+}
+
+/** Advance a freestyle bot's momentum random walk by ONE cell and return it (origin-relative
+ *  so the shared `moveAtGlobal(origin + cell)` paint path is unchanged). Mirrors the inner
+ *  loop of pvpProtocol.randomMove: occasionally turn, clamp the heading, never stall — a
+ *  coherent wandering line continued from the bot's last painted cell. */
+function stepFreestyle(st: AgentState): DesignCell {
+  const rng = st.rng;
+  if (rng() < FREESTYLE_TURN_CHANCE) {
+    st.walkDx += Math.floor(rng() * 3) - 1;
+    st.walkDy += Math.floor(rng() * 3) - 1;
+  }
+  st.walkDx = clampStep(st.walkDx);
+  st.walkDy = clampStep(st.walkDy);
+  if (st.walkDx === 0 && st.walkDy === 0) st.walkDx = 1;
+  st.walkGx += st.walkDx;
+  st.walkGy += st.walkDy;
+  return { dx: st.walkGx - st.originGx, dy: st.walkGy - st.originGy, color: st.color };
+}
+
+/** Copy a fresh placement onto a live bot (initial spawn, relocate, or mode-kind switch). */
+function applyPlacement(st: AgentState, p: AgentPlacement): void {
+  st.kind = p.kind;
+  st.iter = p.iter;
+  st.regionName = p.regionName;
+  st.footprintH = p.footprintH;
+  st.maxCells = p.maxCells;
+  st.originGx = p.originGx;
+  st.originGy = p.originGy;
+  st.centerGx = p.centerGx;
+  st.centerGy = p.centerGy;
+  st.walkGx = p.walkGx;
+  st.walkGy = p.walkGy;
+  st.walkDx = p.walkDx;
+  st.walkDy = p.walkDy;
+  st.rng = p.rng;
+  st.color = p.color;
+  st.painted = 0;
 }
 
 const EMPTY_STATUS: WorldCanvasOnchainStatus = {
@@ -576,6 +665,8 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
   // cells land on the render cadence (smooth, frame-aligned) instead of two competing
   // setTimeout chains that the busy canvas rAF loop starves to a crawl.
   const agentRafRef = useRef<number | null>(null);
+  // Frame counter that paces freestyle marker re-syncs (head-follow) off the per-frame path.
+  const agentMarkerTickRef = useRef(0);
   // Auto mirrored into a ref so the paint loop + paint sink read it without re-subscribing.
   const autoRef = useRef(true);
   // Current speed/mode for the seat bots, mirrored into refs so the paint loop can read
@@ -1182,62 +1273,104 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
     [submitPaint, humanAddress, flushHumanStroke],
   );
 
-  // Allocate the next region for a seat bot: a fresh stroke stream (per the given mode)
-  // on a non-overlapping spiral slot, sized from the mode's own footprint. Each region
-  // is seeded by its index so its art is varied yet reproducible.
-  const nextPlacement = useCallback((modeId: AgentModeId) => {
-    const i = regionIndexRef.current++;
-
-    // Artist mode with a chosen template: stamp the rasterized template's cells (in
-    // reveal order) instead of the flag rotation. The template is fit into a box under
-    // the max mode footprint, so its region still drops on the shared slot lattice and
-    // never overlaps a neighbour. Each cell is still one co-signed move.
-    const tplId = modeId === "artist" ? agentTemplateRef.current : null;
-    const tpl = tplId ? TEMPLATES_BY_ID[tplId] : undefined;
-    if (tpl) {
-      const scale = fitScale(tpl.aspect, AGENT_TEMPLATE_W, AGENT_TEMPLATE_H);
-      const rast = rasterizeTemplate(tpl, scale);
-      const fw = Math.max(1, rast.width);
-      const fh = Math.max(1, rast.height);
+  // Seed the next region/walk for a seat bot. Artist is the deliberate "draw a picture"
+  // intelligence and keeps its bounded region (a chosen template, else the flag rotation);
+  // EVERY OTHER intelligence is a FREESTYLE momentum walk that wanders the open canvas from
+  // a distinct per-seat spawn, drawing one continuous single-color line (no footprint box).
+  const nextPlacement = useCallback(
+    (modeId: AgentModeId, seat: Seat): AgentPlacement => {
+      const i = regionIndexRef.current++;
       const { col, row } = spiralSlot(i);
-      const originGx = Math.round(col * SLOT_W - fw / 2);
-      const originGy = Math.round(row * SLOT_H - fh / 2);
-      return {
-        iter: rast.cells[Symbol.iterator]() as Iterator<DesignCell>,
-        regionName: tpl.name,
-        footprintH: fh,
-        maxCells: Math.max(1, rast.cells.length),
-        originGx,
-        originGy,
-        centerGx: originGx + fw / 2,
-        centerGy: originGy + fh / 2,
-      };
-    }
 
-    const mode = AGENT_MODES[modeId];
-    const fw = mode.footprint.width;
-    const fh = mode.footprint.height;
-    const iter = mode.strokes({
-      width: fw,
-      height: fh,
-      rng: mulberry32(REGION_SEED ^ Math.imul(i + 1, 2654435761)),
-      numColors: NUM_COLORS,
-      index: i,
-    });
-    const { col, row } = spiralSlot(i);
-    const originGx = Math.round(col * SLOT_W - fw / 2);
-    const originGy = Math.round(row * SLOT_H - fh / 2);
-    return {
-      iter,
-      regionName: mode.label,
-      footprintH: fh,
-      maxCells: Math.round(fw * fh * REGION_FILL_FACTOR),
-      originGx,
-      originGy,
-      centerGx: originGx + fw / 2,
-      centerGy: originGy + fh / 2,
-    };
-  }, []);
+      if (modeId === "artist") {
+        // Artist + chosen template: stamp the rasterized template's cells in reveal order.
+        // The template is fit into a box under the max mode footprint, so its region drops on
+        // the shared slot lattice and never overlaps a neighbour. Each cell is one co-signed
+        // move; with no template it falls through to the flag rotation below.
+        const tplId = agentTemplateRef.current;
+        const tpl = tplId ? TEMPLATES_BY_ID[tplId] : undefined;
+        if (tpl) {
+          const scale = fitScale(tpl.aspect, AGENT_TEMPLATE_W, AGENT_TEMPLATE_H);
+          const rast = rasterizeTemplate(tpl, scale);
+          const fw = Math.max(1, rast.width);
+          const fh = Math.max(1, rast.height);
+          const originGx = Math.round(col * SLOT_W - fw / 2);
+          const originGy = Math.round(row * SLOT_H - fh / 2);
+          return {
+            kind: "template",
+            iter: rast.cells[Symbol.iterator]() as Iterator<DesignCell>,
+            regionName: tpl.name,
+            footprintH: fh,
+            maxCells: Math.max(1, rast.cells.length),
+            originGx,
+            originGy,
+            centerGx: originGx + fw / 2,
+            centerGy: originGy + fh / 2,
+            walkGx: originGx,
+            walkGy: originGy,
+            walkDx: 1,
+            walkDy: 0,
+            rng: NOOP_RNG,
+            color: 0,
+          };
+        }
+        const mode = AGENT_MODES.artist;
+        const fw = mode.footprint.width;
+        const fh = mode.footprint.height;
+        const iter = mode.strokes({
+          width: fw,
+          height: fh,
+          rng: mulberry32(REGION_SEED ^ Math.imul(i + 1, 2654435761)),
+          numColors: NUM_COLORS,
+          index: i,
+        });
+        const originGx = Math.round(col * SLOT_W - fw / 2);
+        const originGy = Math.round(row * SLOT_H - fh / 2);
+        return {
+          kind: "template",
+          iter,
+          regionName: mode.label,
+          footprintH: fh,
+          maxCells: Math.round(fw * fh * REGION_FILL_FACTOR),
+          originGx,
+          originGy,
+          centerGx: originGx + fw / 2,
+          centerGy: originGy + fh / 2,
+          walkGx: originGx,
+          walkGy: originGy,
+          walkDx: 1,
+          walkDy: 0,
+          rng: NOOP_RNG,
+          color: 0,
+        };
+      }
+
+      // Freestyle: a bounded momentum random walk (mirroring pvpProtocol.randomMove). Spawn
+      // at a distinct slot center and walk forever from the last painted cell — no per-region
+      // cap (maxCells = ∞ ⇒ it never relocates), so the line wanders freely across the canvas.
+      const rng = mulberry32(REGION_SEED ^ Math.imul(i + 1, 2654435761));
+      const spawnGx = col * SLOT_W;
+      const spawnGy = row * SLOT_H;
+      return {
+        kind: "freestyle",
+        iter: null,
+        regionName: AGENT_MODES[modeId].label,
+        footprintH: FREESTYLE_MARKER_H,
+        maxCells: Number.POSITIVE_INFINITY,
+        originGx: spawnGx,
+        originGy: spawnGy,
+        centerGx: spawnGx,
+        centerGy: spawnGy,
+        walkGx: spawnGx,
+        walkGy: spawnGy,
+        walkDx: rng() < 0.5 ? 1 : -1,
+        walkDy: Math.floor(rng() * 3) - 1,
+        rng,
+        color: seat === "A" ? FREESTYLE_COLOR_A : FREESTYLE_COLOR_B,
+      };
+    },
+    [],
+  );
 
   // Publish the live seat-bot markers from the internal agent states. Seat B always
   // shows; seat A shows only while Auto is on (when you hold the wheel, seat A is yours,
@@ -1262,17 +1395,17 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
   // The single paint frame for BOTH seat bots, driven by requestAnimationFrame (~60fps)
   // so painting rides the render cadence — smooth and frame-aligned, never bursty, and
   // bounded by the refresh rate so it can't run away. Each active bot pulls a clamped
-  // per-frame BATCH from its mode's stream and co-signs each cell (one verified step =
-  // one action = one TPS). On stream end / region cap it relocates and KEEPS PAINTING
-  // from the fresh region in the SAME frame (no wasted frame), bounded per frame so a
-  // near-empty stream can't spin. The seat-A bot paints only while Auto is ON — when you
-  // hold the wheel it idles and your submitHumanPaint drives seat A instead; the seat-B
-  // bot always paints. Speed/mode/density are read live each frame (refs), so the Speed
-  // pills + Density lever take effect on the very next frame.
+  // per-frame BATCH and co-signs each cell (one verified step = one action = one TPS).
+  // A FREESTYLE bot walks one continuous line (stepFreestyle, never exhausted); an Artist
+  // picture pulls from its region stream and relocates to a fresh slot on end/cap, KEEPING
+  // PAINTING from the fresh region in the SAME frame (bounded per frame so it can't spin).
+  // The seat-A bot paints only while Auto is ON — when you hold the wheel it idles and your
+  // submitHumanPaint drives seat A instead; the seat-B bot always paints. Speed/mode/density
+  // are read live each frame (refs), so the Speed pills + Density lever take effect at once.
   const paintFrame = useCallback(
     function frame() {
       const run = runRef.current;
-      let relocated = false;
+      let markersDirty = false;
       if (run && !run.closed && run.ready && run.tunnel) {
         for (const st of agentStatesRef.current.values()) {
           const seatActive = st.seat === "B" || autoRef.current;
@@ -1286,42 +1419,46 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
           let painted = 0;
           while (painted < batch) {
             let cell: DesignCell | null = null;
-            if (st.painted < st.maxCells) {
+            if (st.kind === "freestyle") {
+              // Endless walk: always the next cell of the continuous line (never relocates).
+              cell = stepFreestyle(st);
+            } else if (st.painted < st.maxCells && st.iter) {
               const nx = st.iter.next();
               if (!nx.done) cell = nx.value;
             }
             if (cell === null) {
-              // Stream exhausted (finite) or region cap reached (endless) → relocate and
-              // immediately continue painting from the fresh region THIS frame (no wasted
-              // frame). Bounded per frame so a pathological near-empty stream can't spin.
+              // Artist stream exhausted / region cap reached → relocate the picture to a
+              // fresh slot and keep painting THIS frame (freestyle never reaches here).
+              // Bounded per frame so a pathological near-empty stream can't spin.
               if (relocates >= MAX_RELOCATES_PER_FRAME) break;
               relocates += 1;
-              const next = nextPlacement(st.mode);
-              st.iter = next.iter;
-              st.regionName = next.regionName;
-              st.footprintH = next.footprintH;
-              st.maxCells = next.maxCells;
-              st.originGx = next.originGx;
-              st.originGy = next.originGy;
-              st.centerGx = next.centerGx;
-              st.centerGy = next.centerGy;
-              st.painted = 0;
-              relocated = true;
+              applyPlacement(st, nextPlacement(st.mode, st.seat));
+              markersDirty = true;
               continue;
             }
             st.painted += 1;
-            const mv = moveAtGlobal(
-              st.originGx + cell.dx,
-              st.originGy + cell.dy,
-              cell.color,
+            submitPaint(
+              moveAtGlobal(st.originGx + cell.dx, st.originGy + cell.dy, cell.color),
+              st.seat,
+              st.painter,
             );
-            submitPaint(mv, st.seat, st.painter);
+            // Freestyle: track the wandering head so View/marker jumps land on the live line.
+            if (st.kind === "freestyle") {
+              st.centerGx = st.walkGx;
+              st.centerGy = st.walkGy;
+            }
             painted += 1;
           }
         }
       }
-      // One marker sync per frame if any bot moved to a fresh region (not per relocate).
-      if (relocated) syncAgentMarkers();
+      // Re-sync markers when an Artist picture relocated, and periodically so a freestyle
+      // marker follows its wandering head a few times/second (off the per-frame React path).
+      agentMarkerTickRef.current += 1;
+      if (agentMarkerTickRef.current >= MARKER_SYNC_EVERY_FRAMES) {
+        agentMarkerTickRef.current = 0;
+        markersDirty = true;
+      }
+      if (markersDirty) syncAgentMarkers();
       agentRafRef.current = requestAnimationFrame(frame);
     },
     [nextPlacement, syncAgentMarkers, submitPaint],
@@ -1337,7 +1474,7 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
       registerPainter(params.painter, params.label, true, params.tint);
       const speed = agentSpeedRef.current;
       const mode = agentModeRef.current;
-      const place = nextPlacement(mode);
+      const place = nextPlacement(mode, params.seat);
       const id = `bot_${params.seat}_${Date.now()}`;
       const st: AgentState = {
         id,
@@ -1347,6 +1484,7 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
         tint: params.tint,
         speed,
         mode,
+        kind: place.kind,
         iter: place.iter,
         regionName: place.regionName,
         footprintH: place.footprintH,
@@ -1355,6 +1493,12 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
         originGy: place.originGy,
         centerGx: place.centerGx,
         centerGy: place.centerGy,
+        walkGx: place.walkGx,
+        walkGy: place.walkGy,
+        walkDx: place.walkDx,
+        walkDy: place.walkDy,
+        rng: place.rng,
+        color: place.color,
         painted: 0,
       };
       agentStatesRef.current.set(id, st);
@@ -1379,13 +1523,22 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
     for (const st of agentStatesRef.current.values()) st.speed = speed;
   }, []);
 
-  // Public: set the agent drawing intelligence — for both seat bots (each switches at
-  // its next region, so the current stream finishes cleanly).
-  const setAgentMode = useCallback((mode: AgentModeId) => {
-    agentModeRef.current = mode;
-    setAgentModeState(mode);
-    for (const st of agentStatesRef.current.values()) st.mode = mode;
-  }, []);
+  // Public: set the agent drawing intelligence — for both seat bots. A freestyle walk never
+  // relocates, so a switch ACROSS the Artist boundary (freestyle ↔ picture) re-seeds the bot
+  // now; switches within a kind take effect at the next region (Artist) or just relabel.
+  const setAgentMode = useCallback(
+    (mode: AgentModeId) => {
+      agentModeRef.current = mode;
+      setAgentModeState(mode);
+      const nextKind = mode === "artist" ? "template" : "freestyle";
+      for (const st of agentStatesRef.current.values()) {
+        st.mode = mode;
+        if (st.kind !== nextKind) applyPlacement(st, nextPlacement(mode, st.seat));
+      }
+      syncAgentMarkers();
+    },
+    [nextPlacement, syncAgentMarkers],
+  );
 
   // Public: set the global Density lever (1/2/3) — a per-tick batch multiplier read
   // live by both seat bots' next tick, so the TPS burst changes immediately.
