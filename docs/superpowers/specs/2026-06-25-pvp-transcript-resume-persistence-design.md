@@ -48,10 +48,29 @@ peer-to-peer transcript transfer (that was the rejected Option 2).
 **Goals**
 - A reloaded PvP seat rebuilds a transcript whose `root()` is byte-identical to
   its pre-reload root, so cooperative close succeeds.
+- **Standardize across every affected lane.** The persistence/replay primitives
+  live in the generic resume layer; the per-hook wiring is one uniform pattern
+  applied to *every* PvP lane that builds a `Transcript` and resumes — poker,
+  battleship, and the shared `pvpMatchHook` (→ bombIt, chickenCross,
+  worldCanvas) — plus a documented standard step for new tunnel games.
 - No edits to upstream `sui-tunnel-ts` (framework is re-synced from upstream;
   `CLAUDE.md`).
 - Reuse the existing resume lifecycle (write debounce, pagehide flush, index,
   clear, TTL eviction) with no new storage key.
+
+### Affected lanes (rollout)
+
+| Lane | Hook | Builds `Transcript`? | Fix |
+| --- | --- | --- | --- |
+| Quantum poker | `usePvpQuantumPoker.ts` | yes | wire |
+| Battleship | `useBattleshipPvp.ts` | yes | wire |
+| bombIt / chickenCross / worldCanvas | shared `pvp/pvpMatchHook.ts` | yes | wire once |
+| Tic-tac-toe / blackjack | `usePvpTicTacToe.ts` / `usePvpBlackjack.ts` | **no** | unaffected — no change |
+
+The three hooks are structurally identical (a `new Transcript(tunnelId)` in
+`activateSession`, `transcript.append(u)` in `onConfirmed`, `attachResume`,
+`resumeActiveTunnels` in `resume`), so the wiring is the same five edits each
+(§4a).
 
 **Non-goals**
 - Bot / Auto / watch-bots lanes — `useQuantumPokerAuto.ts` writes no resume
@@ -86,27 +105,32 @@ key: the transcript rides inside the same JSON blob as the checkpoint, so one
 fills exactly one entry (§4) — no "trim transcript to checkpoint nonce"
 reconciliation is needed.
 
-### 2. Write/restore seam — through the `ResumeAdapter` (mirrors secret)
+### 2. Write/restore seam — asymmetric, generic both ends
 
-The transcript is owned by the poker hook (`transcriptRef`), not by the generic
-`DistributedTunnel` snapshot. The generic record writer (`buildRecord`) reaches
-it the same way it already reaches hidden secrets — via optional adapter hooks.
+The transcript is owned by the game hook (poker's `transcriptRef`; the class
+hooks' local `transcript`), not by the generic `DistributedTunnel` snapshot.
 
-`ResumeAdapter<State, Move>` (`pvp/resumeSession.ts`) gains:
+- **Write** — through the adapter, mirroring `captureSecret`. `ResumeAdapter`
+  gains one optional hook:
+  ```ts
+  captureTranscript?(): WireTranscriptEntry[];
+  ```
+  `buildRecord` sets `record.transcript = adapter.captureTranscript?.()`. The
+  hook supplies a `captureTranscript` that serializes its live transcript.
 
-```ts
-captureTranscript?(): WireTranscriptEntry[];        // serialize current transcript
-restoreTranscript?(entries: WireTranscriptEntry[]): void; // rebuild + install it
-```
+- **Restore** — through the return value, NOT a second adapter hook. `Transcript`
+  is a generic tunnel artifact, so the generic `rebuildTunnel` rebuilds it from
+  `record.transcript` and returns it; `RestoredSession` gains
+  `transcript: Transcript | null`. The hook installs it into its own
+  `transcriptRef`/field before `activateSession`.
 
-- `buildRecord` sets `record.transcript = adapter.captureTranscript?.()`.
-- `rebuildTunnel`/`restoreInto` calls
-  `adapter.restoreTranscript?.(record.transcript)` when present.
-
-The generic layer stays game-agnostic (it only calls optional hooks); the poker
-adapter (`makePokerResumeAdapter`) implements them over the hook's
-`transcriptRef`. This is symmetric with the existing `captureSecret` /
-`restoreSecret`, and generalizes to other tunnel games unchanged.
+Why restore via the return value rather than a `restoreTranscript` adapter hook:
+`resumeActiveTunnels` rebuilds *every* record with one shared adapter, so an
+adapter that mutated a shared ref would clobber it across multiple rebuilds.
+Returning the transcript per `RestoredSession` keeps each match's transcript with
+its tunnel; the hook (which already uses `restored[0]`) installs exactly the one
+it activates. `restoreInto` stays untouched (the `pokerColdLoad` test that calls
+it directly is unaffected).
 
 ### 3. Replay on cold-load
 
@@ -132,17 +156,17 @@ replayed transcript yields the identical root. `parseStateUpdate` →
 `serializeStateUpdate` is canonical (the same wire codec the live path co-signs
 through; the existing `pokerColdLoad` test already relies on its byte-stability).
 
-The poker adapter's `restoreTranscript` installs the rebuilt transcript into
-`transcriptRef.current`. `activatePokerSession` then uses the already-installed
-transcript instead of unconditionally creating an empty one:
+`rebuildTunnel` calls `rebuildTranscript` and returns it as
+`RestoredSession.transcript`; the hook's `resume` installs it into its own
+`transcriptRef`/field, and `activateSession` reuses it instead of
+unconditionally creating an empty one:
 
 ```ts
-const transcript = transcriptRef.current ?? new Transcript(dt.tunnelId);
-transcriptRef.current = transcript;
+const transcript = T ?? new Transcript(dt.tunnelId); // T = transcriptRef.current / this.transcript
+T = transcript;
 ```
 
-`dispose()` already nulls `transcriptRef` (`usePvpQuantumPoker.ts:303`), so a
-fresh live match still starts empty.
+`reset`/`dispose` nulls `T`, so a fresh live match still starts empty.
 
 ### 4. Close the adopt gap (decision b-1)
 
@@ -153,24 +177,46 @@ pending MOVE and lands through the normal `onAck → onConfirmed` path, so its
 entry is appended automatically; `wait`/`noop`/`settle` need nothing.
 
 So the seat that performs `adopt` (always the one exactly one nonce behind, per
-the reconcile invariant) must append the adopted checkpoint itself. The hook
-passes an `onReconciled` into the poker adapter; `attachResume` already invokes
-`adapter.onReconciled(tunnel, action)` after acting on a resync
-(`resumeSession.ts:270`). On `"adopt"`:
+the reconcile invariant) must append the adopted checkpoint itself. Each hook's
+`onReconciled` (already invoked by `attachResume` as
+`adapter.onReconciled(tunnel, action)`, `resumeSession.ts:270`) calls one pure
+helper on `"adopt"`:
 
 ```ts
-const latest = tunnel.snapshot().latest;
-if (latest && latest.update.nonce === transcriptLastNonce(transcript) + 1n) {
-  transcript.append(latest);               // fills the one missing entry
-} else if (latest && latest.update.nonce > transcriptLastNonce(transcript) + 1n) {
-  triggerSettle();                          // gap > 1 is impossible; never fabricate a root
-}
+appendAdoptedCheckpoint(transcript, tunnel.snapshot().latest);
 ```
 
-The strict `+1` guard: a >1 gap cannot happen (the peer can't advance the tunnel
-alone), so if it ever appears the record is corrupt/tampered — bail to the
-settlement floor rather than produce a wrong transcript. An equal nonce (double
-delivery) is a no-op.
+`appendAdoptedCheckpoint(t, latest)` appends `latest` **iff** its nonce is
+exactly `transcriptLastNonce(t) + 1` (returns `"appended"`); an already-present
+nonce is a `"noop"`; a `>1` gap is a `"gap"` and is **not** appended. The `>1`
+gap cannot happen (the peer can't advance the tunnel alone), so the helper never
+fabricates a root; if a corrupt/tampered record ever produced one, not appending
+leaves the transcript short and the **existing** settle-time root-mismatch guard
+(`"transcript-root mismatch between parties"`) rejects the close safely — no new
+bail path is needed.
+
+### 4a. The uniform per-hook wiring (poker, battleship, pvpMatchHook)
+
+Every affected hook gets the **same five edits** (poker uses `transcriptRef`; the
+class hooks use a `private transcript: Transcript | null` field — call it `T`):
+
+1. **Reuse on activate** — in `activateSession`, replace
+   `const transcript = new Transcript(dt.tunnelId)` with
+   `const transcript = T ?? new Transcript(dt.tunnelId); T = transcript;`.
+2. **Capture** — spread onto the `attachResume` adapter:
+   `captureTranscript: () => T ? transcriptToWire(T) : []`.
+3. **Adopt-append** — in the adapter's `onReconciled(tunnel, outcome)`, add
+   `if (outcome === "adopt" && T) appendAdoptedCheckpoint(T, tunnel.snapshot().latest);`
+   before the existing `sync()`.
+4. **Install on resume** — in `resume`, destructure
+   `const { tunnel, channel, transcript } = restored[0]` and set `T = transcript`
+   before `activateSession`.
+5. **Clear** — in `dispose`/`reset`, set `T = null` (poker's `reset` already
+   nulls `transcriptRef`; the class hooks add the null).
+
+For the class hooks the adapter is built by `makeAdapter()` (poker builds it
+inline at the `attachResume` site); edits 2–3 spread the two methods onto that
+adapter and wrap its `onReconciled`.
 
 ### 5. Cleanup, size, failure
 
@@ -193,11 +239,12 @@ Live play (per confirmed update u):
     buildRecord -> record.transcript = adapter.captureTranscript()   // atomic with latestCoSigned
 
 Reload (cold-load):
-  resumeActiveTunnels -> rebuildTunnel -> restoreInto
-    adapter.restoreTranscript(record.transcript): transcriptRef.current = rebuildTranscript(...)
-  activatePokerSession: transcript = transcriptRef.current ?? new Transcript()   // reuse rebuilt
+  resumeActiveTunnels -> rebuildTunnel: restoreInto + transcript = rebuildTranscript(record.transcript)
+    returns RestoredSession { tunnel, channel, transcript }
+  resume: T = restored[0].transcript
+  activateSession: transcript = T ?? new Transcript()              // reuse rebuilt
   resync handshake:
-    action "adopt"      -> adapter.onReconciled: transcript.append(latest)  [guard +1]
+    action "adopt"      -> onReconciled: appendAdoptedCheckpoint(T, latest)  [append iff +1]
     action "re-propose" -> resendPending -> onAck -> onConfirmed -> transcript.append (automatic)
   settle: transcript.root() == peer's root  -> close succeeds
 ```
@@ -223,27 +270,45 @@ Reload (cold-load):
 
 ## Testing (TDD)
 
-Co-located `node:test`, mirroring `pokerColdLoad.test.ts` (localStorage/window
-fakes):
+The correctness lives in the generic primitives — test them as pure `node:test`
+units (`resume.test.ts` / `resumeSession.test.ts`, existing localStorage/window
+fakes + the `counterProto`/`OffchainTunnel.selfPlay` fixtures):
 
-1. **Round-trip root parity** — drive a distributed pair to N co-signed entries,
-   capture `original.root()`; persist via the record; `rebuildTranscript` from
-   the persisted entries; assert `rebuilt.root()` byte-identical. (Also proves
-   the `parse → serialize` round-trip is canonical.)
-2. **Adopt gap fill** — seat one nonce behind; after the adopt `onReconciled`,
-   assert its transcript root equals the ahead seat's root.
-3. **Guard** — a >1 nonce gap does NOT append (no fabricated root); equal nonce
-   is a no-op.
-4. **Lifecycle** — `clearResumeRecord` / TTL eviction remove the embedded
-   transcript with the record.
+1. **Round-trip root parity** (`resume.test.ts`) — build a `Transcript` of N
+   co-signed updates, `transcriptToWire` → `rebuildTranscript`, assert
+   `rebuilt.root()` byte-identical. (Also proves `parse → serialize` is
+   canonical.)
+2. **Adopt-append** (`resume.test.ts`) — `appendAdoptedCheckpoint(t, uK1)` on a
+   transcript ending at nonce K returns `"appended"` and yields the same root as
+   a transcript that had K+1 naturally.
+3. **Guard** (`resume.test.ts`) — `appendAdoptedCheckpoint` returns `"gap"`
+   (no append) for a >1 nonce, `"noop"` for an already-present nonce / null.
+4. **Lifecycle** (`resume.test.ts`) — a record *with* a transcript is removed by
+   `clearResumeRecord` / TTL eviction.
+5. **`rebuildTunnel` surfaces the transcript** (`resumeSession.test.ts`) — a
+   record with `transcript` set yields `RestoredSession.transcript` whose root
+   matches; a record without it yields `null`.
+
+The per-hook wiring (poker, battleship, pvpMatchHook) is thin glue over
+already-tested primitives; verify each by `pnpm typecheck` + the full `pnpm test`
+suite (regression: existing `pokerColdLoad` / `tttColdLoad` / `resumeSession`
+tests stay green). Acceptance for the representative lane (poker): two tabs, play
+past one co-signed hand, reload one seat, play to match end → cooperative close
+succeeds (no `transcript-root mismatch`).
 
 ## Files touched (all frontend; no upstream edits)
 
-- `pvp/resume.ts` — `transcript?` field + `WireTranscriptEntry`; encode/decode
-  helpers.
-- `pvp/resumeSession.ts` — `captureTranscript`/`restoreTranscript` on
-  `ResumeAdapter`; `buildRecord`/`rebuildTunnel` wiring.
-- `games/quantumPoker/pokerResumeAdapter.ts` — implement the two hooks over
-  `transcriptRef`; `onReconciled` adopt-append with the `+1` guard.
-- `games/quantumPoker/usePvpQuantumPoker.ts` — `rebuildTranscript`; reuse
-  `transcriptRef.current` in `activatePokerSession`; pass `onReconciled`.
+- `pvp/resume.ts` — `transcript?` field + `WireTranscriptEntry`;
+  `transcriptToWire` / `rebuildTranscript` / `transcriptLastNonce` /
+  `appendAdoptedCheckpoint` (+ tests in `resume.test.ts`).
+- `pvp/resumeSession.ts` — `captureTranscript?` on `ResumeAdapter`;
+  `transcript: Transcript | null` on `RestoredSession`; `buildRecord` +
+  `rebuildTunnel` wiring (+ test in `resumeSession.test.ts`).
+- `games/quantumPoker/usePvpQuantumPoker.ts` — the five edits (§4a); `reset`
+  already nulls `transcriptRef`.
+- `games/battleship/useBattleshipPvp.ts` — the five edits (§4a) + a
+  `private transcript: Transcript | null` field.
+- `pvp/pvpMatchHook.ts` — the five edits (§4a) + a `private transcript` field;
+  fixes bombIt / chickenCross / worldCanvas in one place.
+- `docs/resume-adapter-guide.md`, `docs/adding-a-tunnel-game.md` — document
+  transcript persistence as the standard resume step.
