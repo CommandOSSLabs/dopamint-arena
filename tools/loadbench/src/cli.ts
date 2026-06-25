@@ -130,3 +130,34 @@ export function planRun(argv: string[], composeFile: string): RunPlan {
   }
   return { kind: "host", mode, innerArgv, childEnv: env };
 }
+
+// ── executor ────────────────────────────────────────────────────────────────
+import { spawn } from "node:child_process";
+
+function run(cmd: string, cmdArgs: string[], extraEnv: Record<string, string>): void {
+  const child = spawn(cmd, cmdArgs, { stdio: "inherit", env: { ...process.env, ...extraEnv } });
+  child.on("exit", (code) => process.exit(code ?? 0));
+  child.on("error", (err) => { console.error(String(err?.message ?? err)); process.exit(1); });
+}
+
+function main(): void {
+  const argv = process.argv.slice(2);
+  const composeFile = new URL("../docker-compose.yml", import.meta.url).pathname;
+  const plan = planRun(argv, composeFile);
+
+  if (plan.kind === "container") {
+    run("docker", plan.dockerArgs, plan.composeEnv);
+  } else {
+    const target = plan.mode === "game" ? "src/benchGame.ts" : "src/swarm.ts";
+    run("bun", ["run", target, ...plan.innerArgv], plan.childEnv);
+  }
+}
+
+if (import.meta.main) {
+  try {
+    main();
+  } catch (e: unknown) {
+    console.error(String((e as Error)?.message ?? e));
+    process.exit(1);
+  }
+}
