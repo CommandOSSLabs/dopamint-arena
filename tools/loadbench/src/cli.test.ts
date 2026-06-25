@@ -2,9 +2,10 @@ import { test, expect } from "bun:test";
 import { planRun } from "./cli";
 
 const COMPOSE = "/repo/tools/loadbench/docker-compose.yml";
+const PROJECT = "loadbench-feat-x";
 
 test("defaults to a host swarm run, local+onchain, no infra env", () => {
-  expect(planRun([], COMPOSE)).toEqual({
+  expect(planRun([], COMPOSE, PROJECT)).toEqual({
     kind: "host",
     mode: "swarm",
     innerArgv: ["--channel", "local", "--anchor", "onchain"],
@@ -14,7 +15,7 @@ test("defaults to a host swarm run, local+onchain, no infra env", () => {
 
 test("offchain local swarm forwards swarm tuning, no infra env", () => {
   expect(
-    planRun(["--offchain", "--channel", "local", "--workers", "auto", "--duration", "10"], COMPOSE),
+    planRun(["--offchain", "--channel", "local", "--workers", "auto", "--duration", "10"], COMPOSE, PROJECT),
   ).toEqual({
     kind: "host",
     mode: "swarm",
@@ -27,6 +28,7 @@ test("infra flags become childEnv, not inner argv", () => {
   const plan = planRun(
     ["--channel", "local", "--rpc-url", "http://h:9000", "--package-id", "0xpkg", "--settler-key", "suipriv1"],
     COMPOSE,
+    PROJECT,
   );
   expect(plan).toEqual({
     kind: "host",
@@ -42,7 +44,7 @@ test("infra flags become childEnv, not inner argv", () => {
 });
 
 test("--relay-url maps to MP_WS_URL in childEnv", () => {
-  const plan = planRun(["--channel", "relay", "--relay-url", "ws://r:8080/v1/mp"], COMPOSE) as Extract<
+  const plan = planRun(["--channel", "relay", "--relay-url", "ws://r:8080/v1/mp"], COMPOSE, PROJECT) as Extract<
     ReturnType<typeof planRun>,
     { kind: "host" }
   >;
@@ -51,7 +53,7 @@ test("--relay-url maps to MP_WS_URL in childEnv", () => {
 
 test("--game selects latency mode and emits a positional game name", () => {
   expect(
-    planRun(["--game", "blackjack", "--offchain", "--channel", "local", "--matches", "5"], COMPOSE),
+    planRun(["--game", "blackjack", "--offchain", "--channel", "local", "--matches", "5"], COMPOSE, PROJECT),
   ).toEqual({
     kind: "host",
     mode: "game",
@@ -61,7 +63,7 @@ test("--game selects latency mode and emits a positional game name", () => {
 });
 
 test("--game all emits --all instead of a positional", () => {
-  const plan = planRun(["--game", "all", "--offchain"], COMPOSE) as Extract<
+  const plan = planRun(["--game", "all", "--offchain"], COMPOSE, PROJECT) as Extract<
     ReturnType<typeof planRun>,
     { kind: "host" }
   >;
@@ -69,16 +71,17 @@ test("--game all emits --all instead of a positional", () => {
   expect(plan.innerArgv).toEqual(["--all", "--channel", "local", "--anchor", "offchain"]);
 });
 
-test("--container re-execs in compose with resource env, -e infra, stripped inner argv", () => {
+test("--container re-execs in the env project with -p, resource env, -e infra, stripped inner argv", () => {
   const plan = planRun(
     ["--container", "--cpus", "8", "--memory", "8g", "--rpc-url", "http://sui:9000", "--duration", "10"],
     COMPOSE,
+    PROJECT,
   );
   expect(plan).toEqual({
     kind: "container",
     innerArgv: ["--channel", "local", "--anchor", "onchain", "--duration", "10"],
     dockerArgs: [
-      "compose", "-f", COMPOSE, "--profile", "bench", "run", "--rm",
+      "compose", "-f", COMPOSE, "-p", PROJECT, "--profile", "bench", "run", "--rm",
       "-e", "SUI_RPC_URL=http://sui:9000",
       "loadbench",
       "--channel", "local", "--anchor", "onchain", "--duration", "10",
@@ -88,21 +91,21 @@ test("--container re-execs in compose with resource env, -e infra, stripped inne
 });
 
 test("rejects swarm-only flags in --game mode", () => {
-  expect(() => planRun(["--game", "blackjack", "--workers", "4"], COMPOSE)).toThrow(
+  expect(() => planRun(["--game", "blackjack", "--workers", "4"], COMPOSE, PROJECT)).toThrow(
     /--workers is not valid in --game/,
   );
 });
 
 test("rejects --cpus without --container", () => {
-  expect(() => planRun(["--cpus", "4"], COMPOSE)).toThrow(/--cpus only applies with --container/);
+  expect(() => planRun(["--cpus", "4"], COMPOSE, PROJECT)).toThrow(/--cpus only applies with --container/);
 });
 
 test("rejects --container with relay", () => {
-  expect(() => planRun(["--container", "--channel", "relay"], COMPOSE)).toThrow(
+  expect(() => planRun(["--container", "--channel", "relay"], COMPOSE, PROJECT)).toThrow(
     /relay is not supported in --container/,
   );
 });
 
 test("rejects unknown flags", () => {
-  expect(() => planRun(["--frobnicate"], COMPOSE)).toThrow(/unknown flag: --frobnicate/);
+  expect(() => planRun(["--frobnicate"], COMPOSE, PROJECT)).toThrow(/unknown flag: --frobnicate/);
 });

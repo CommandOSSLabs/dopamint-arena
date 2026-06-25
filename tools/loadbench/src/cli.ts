@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import os from "node:os";
+import { project as benchProject } from "./benchEnv";
 
 export type RunMode = "swarm" | "game";
 
@@ -102,7 +103,7 @@ function buildInner(p: Parsed): { mode: RunMode; innerArgv: string[] } {
   return { mode: "swarm", innerArgv: ["--channel", p.channel, "--anchor", p.anchor, ...tail] };
 }
 
-export function planRun(argv: string[], composeFile: string): RunPlan {
+export function planRun(argv: string[], composeFile: string, project: string): RunPlan {
   const p = parse(argv);
 
   if (p.game !== null) {
@@ -126,7 +127,7 @@ export function planRun(argv: string[], composeFile: string): RunPlan {
     if (p.memory !== null) composeEnv.BENCH_MEMORY = p.memory;
     const eArgs = Object.entries(env).flatMap(([k, v]) => ["-e", `${k}=${v}`]);
     const dockerArgs = [
-      "compose", "-f", composeFile, "--profile", "bench", "run", "--rm",
+      "compose", "-f", composeFile, "-p", project, "--profile", "bench", "run", "--rm",
       ...eArgs, "loadbench", ...innerArgv,
     ];
     return { kind: "container", innerArgv, dockerArgs, composeEnv };
@@ -148,7 +149,7 @@ function run(cmd: string, cmdArgs: string[], extraEnv: Record<string, string>): 
 function main(): void {
   const argv = process.argv.slice(2);
   const composeFile = new URL("../docker-compose.yml", import.meta.url).pathname;
-  const plan = planRun(argv, composeFile);
+  const plan = planRun(argv, composeFile, benchProject());
 
   if (plan.kind === "container") {
     run("docker", plan.dockerArgs, plan.composeEnv);
