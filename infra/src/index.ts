@@ -31,6 +31,7 @@ const sgs = createSecurityGroups(`dopamint-${cfg.environment}`, network.vpcId);
 const dns = createDns(`dopamint-${cfg.environment}`, {
   domain: cfg.domain,
   route53ZoneId: cfg.route53ZoneId,
+  certificateArn: cfg.certificateArn,
 });
 
 const alb = createAlb(`dopamint-${cfg.environment}`, {

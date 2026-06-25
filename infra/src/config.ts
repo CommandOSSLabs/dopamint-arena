@@ -7,6 +7,7 @@ export interface InfraConfig {
   environment: string;
   domain: string;
   route53ZoneId?: string;
+  certificateArn?: string; // existing ACM certificate ARN (Cloudflare DNS scenario)
   dbInstanceClass: string;
   dbServerless: boolean;
   dbMinCapacity?: number;
@@ -36,6 +37,7 @@ export function getConfig(): InfraConfig {
     environment: config.require("environment"),
     domain: config.require("domain"),
     route53ZoneId: config.get("route53-zone-id") || undefined,
+    certificateArn: config.get("certificate-arn") || undefined,
     dbInstanceClass: config.require("db-instance-class"),
     dbServerless: config.requireBoolean("db-serverless"),
     dbMinCapacity: config.getNumber("db-min-capacity"),
