@@ -14,10 +14,12 @@ interface WorkerInput {
   matches: number | null;
   durationMs: number | null;
   env: Record<string, string>;
+  /** Pool mode: stay alive and run one game per "run" command (warm across games). */
+  pool?: boolean;
 }
 
-async function run() {
-  const d = workerData as WorkerInput;
+/** Build the match context once — onchain needs an RPC client + funded settler. */
+function buildCtx(d: WorkerInput): { client?: SuiClient; funder?: Ed25519Keypair } {
   const ctx: { client?: SuiClient; funder?: Ed25519Keypair } = {};
   if (d.anchor === "onchain") {
     process.env.PACKAGE_ID = d.env.PACKAGE_ID;
@@ -26,6 +28,12 @@ async function run() {
     const { secretKey } = decodeSuiPrivateKey(d.env.SUI_SETTLER_KEY);
     ctx.funder = Ed25519Keypair.fromSecretKey(secretKey);
   }
+  return ctx;
+}
+
+/** One-shot: run the swarm once over the games list, post the result, exit. */
+async function oneShot(d: WorkerInput): Promise<void> {
+  const ctx = buildCtx(d);
   let g = 0;
   const nextGame = () => d.games[g++ % d.games.length];
   const res = await runSwarm(() => runFullMatch(nextGame(), d.channel, d.anchor, ctx), {
@@ -37,4 +45,30 @@ async function run() {
   parentPort!.postMessage({ ok: true, moves: res.moves, matches: res.matches });
 }
 
-run().catch((e) => parentPort!.postMessage({ ok: false, error: String(e?.stack ?? e) }));
+/** Pool: build ctx once (warm), then run one game per "run" command until "done". */
+function poolLoop(d: WorkerInput): void {
+  const ctx = buildCtx(d);
+  parentPort!.on("message", async (cmd: { type: "run" | "done"; game?: string; matches?: number | null; durationMs?: number | null }) => {
+    if (cmd.type === "done") {
+      parentPort!.close();
+      return;
+    }
+    try {
+      const res = await runSwarm(() => runFullMatch(cmd.game!, d.channel, d.anchor, ctx), {
+        concurrency: d.concurrency,
+        matches: cmd.matches ?? null,
+        durationMs: cmd.durationMs ?? null,
+        now: () => performance.now(),
+      });
+      parentPort!.postMessage({ ok: true, moves: res.moves, matches: res.matches });
+    } catch (e) {
+      parentPort!.postMessage({ ok: false, error: String((e as Error)?.stack ?? e) });
+    }
+  });
+  // Imports + ctx are done; signal the parent the worker is warm and idle.
+  parentPort!.postMessage({ ready: true });
+}
+
+const d = workerData as WorkerInput;
+if (d.pool) poolLoop(d);
+else oneShot(d).catch((e) => parentPort!.postMessage({ ok: false, error: String(e?.stack ?? e) }));

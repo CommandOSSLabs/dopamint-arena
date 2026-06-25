@@ -180,3 +180,4 @@ sui-tunnel-ts/pnpm-workspace.yaml
 
 tools/loadbench/.env.local
 tools/loadbench/keys.json
+tools/loadbench/reports/

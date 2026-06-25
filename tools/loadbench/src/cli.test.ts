@@ -62,13 +62,31 @@ test("--game selects latency mode and emits a positional game name", () => {
   });
 });
 
-test("--game all emits --all instead of a positional", () => {
+test("--game all routes to the multi-core swarm with --all", () => {
   const plan = planRun(["--game", "all", "--offchain"], COMPOSE, PROJECT) as Extract<
     ReturnType<typeof planRun>,
     { kind: "host" }
   >;
-  expect(plan.mode).toBe("game");
+  expect(plan.mode).toBe("swarm");
   expect(plan.innerArgv).toEqual(["--all", "--channel", "local", "--anchor", "offchain"]);
+});
+
+test("--game all forwards fleet + duration tuning to the swarm", () => {
+  const plan = planRun(
+    ["--game", "all", "--offchain", "--workers", "8", "--duration", "10"],
+    COMPOSE,
+    PROJECT,
+  ) as Extract<ReturnType<typeof planRun>, { kind: "host" }>;
+  expect(plan.mode).toBe("swarm");
+  expect(plan.innerArgv).toEqual([
+    "--all", "--channel", "local", "--anchor", "offchain", "--workers", "8", "--duration", "10",
+  ]);
+});
+
+test("rejects --duration in single-game latency mode", () => {
+  expect(() => planRun(["--game", "blackjack", "--duration", "10"], COMPOSE, PROJECT)).toThrow(
+    /--duration is not valid in --game/,
+  );
 });
 
 test("--container re-execs in the env project with -p, resource env, -e infra, stripped inner argv", () => {

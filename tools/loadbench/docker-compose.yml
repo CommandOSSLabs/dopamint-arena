@@ -41,6 +41,8 @@ services:
     volumes:
       - ./.env.local:/app/tools/loadbench/.env.local:ro
       - ./keys.json:/app/tools/loadbench/keys.json:ro
+      # read-write so an all-games `--container` run lands its report on the host
+      - ./reports:/app/tools/loadbench/reports
     networks:
       default: {}
     deploy:

@@ -116,7 +116,8 @@ selected by flag:
 - **Default (no `--game`)**: aggregate move-TPS swarm — many concurrent matches
   across games, prints `tunnels settled/s`.
 - **`--game <name>`**: per-game latency — open → play → settle for the named
-  game, prints per-move p50/p99. Use `--game all` to run every playable game.
+  game, prints per-move p50/p99. Use `--game all` to run every playable game
+  sequentially and emit an aggregated report (see below).
 
 **Defaults:** `--channel local`, `--anchor onchain`, swarm mode.
 
@@ -156,7 +157,56 @@ bun run bench --channel relay --relay-url ws://127.0.0.1:8080/v1/mp --duration 1
 
 # isolated in a container, capped at 8 cores / 8 GB:
 bun run bench --container --cpus 8 --memory 8g --offchain --channel local --duration 10
+
+# every game, one after another, with an aggregated report (10s each by default):
+bun run bench --game all --channel local
+# give each game a longer budget:
+bun run bench --game all --channel local --duration 30
 ```
+
+#### All-games report (`--game all`)
+
+`--game all` runs every playable game **through the multi-core worker-thread
+fleet, one game at a time**, then aggregates the data. Each game gets the full
+fleet (so it saturates the cores the way the swarm benchmark does), and the
+report shows each game's throughput and CPU utilization side by side. It reuses
+the swarm tuning flags — `--channel` / `--offchain` / `--anchor` / `--workers` /
+`--concurrency`.
+
+**Each game is capped by time, not match count** — different games have very
+different moves-per-match, so a per-game **time budget** is what makes their
+throughput comparable. The budget is `--duration S` seconds per game, defaulting
+to **10s per game** when you pass neither `--duration` nor `--matches`. Pass
+`--matches N` for a fixed match count instead. The report's `Matches` column is
+then *matches completed*.
+
+After the per-game lines stream, it prints a summary table and writes a Markdown
+report:
+
+- **Stdout**: each game's live line, then a `Game | Status | Workers | Matches |
+  Moves | TPS (moves/s) | Matches/s | CPU avg % | CPU pk %` table with a `TOTAL`
+  row. **CPU %** is true CPU utilization — how busy the cores actually are, not
+  just the bench process — so you can see whether the cores assigned to the
+  benchmark were driven to full extent (≈100% = maxed). On the host it's
+  busy-time / (busy + idle) across all cores from the OS scheduler; **inside a
+  `--container --cpus N` run it's cgroup-accurate** — CPU time the container
+  consumed / (wall × N assigned cores) — so the % reflects saturation of the
+  *assigned* cores, not the host. The report header notes which (`CPU measured
+  vs: N cores (host|container quota)`). The aggregate reports busiest sustained
+  and peak instantaneous utilization.
+- **File**: `reports/bench-<env>-<channel>-<anchor>-<YYYYMMDD-HHMMSS>.md`
+  (gitignored), with run metadata (incl. host cores), the per-game table, and the
+  aggregate. The relative path is printed at the end.
+- **Failures don't abort the run**: a game whose whole fleet errors is recorded
+  as `FAILED` and the rest still run; the process exits non-zero if any failed.
+- **In a container** (`--game all --container …`): the `reports/` dir is
+  bind-mounted, so the report lands on the host at `tools/loadbench/reports/`;
+  the table also streams live to your terminal.
+- **Warm worker pool**: the fleet is spawned **once** and the workers import the
+  engine + build their context before any timing starts; each game then runs on
+  the already-warm workers. CPU and throughput are measured **only around each
+  game's run window**, so fleet spin-up (heavy SDK/kit imports) is excluded from
+  the numbers and isn't paid per game.
 
 ### `bun test` — the unit + smoke suite
 
@@ -182,9 +232,9 @@ All flags hang off `bun run bench`.
 | `--package-id <id>` | yes | yes | onchain: published tunnel package id |
 | `--settler-key <key>` | yes | yes | onchain: settler private key |
 | `--relay-url <ws-url>` | yes | yes | relay: WS URL of a running relay |
-| `--matches N` | yes | yes | stop after N matches (swarm) / run N matches (latency) |
+| `--matches N` | yes | yes | stop after N matches (swarm) / fixed-count cap (latency); mutually exclusive with `--duration` in latency mode |
 | `--concurrency N` | yes | yes | async matches in flight per worker |
-| `--duration S` | yes | — | swarm: stop after S seconds |
+| `--duration S` | yes | yes | stop after S seconds; in latency mode it's the per-game budget (default 10s/game when no `--matches`) |
 | `--workers N\|auto` | yes | — | OS worker threads (true multi-core) |
 | `--mem-budget-mb N` | yes | — | memory cap for auto concurrency (io mode) |
 | `--per-match-kb N` | yes | — | per-match RSS estimate for auto concurrency |
@@ -295,6 +345,7 @@ the redis path.
 | file | role |
 |---|---|
 | `src/metrics.ts` | percentile / summarize / rate |
+| `src/report.ts` | `--game all` aggregate + table/markdown rendering |
 | `src/channels/localChannel.ts` | in-process transport pair |
 | `src/channels/relayChannel.ts` | headless relay WS transport |
 | `src/channels/relayEnvelope.ts` | engine frame ↔ relay payload |

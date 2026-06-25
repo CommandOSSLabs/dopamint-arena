@@ -1,5 +1,20 @@
 import { test, expect } from "bun:test";
-import { summarizeResources, startResourceMonitor } from "./resourceMonitor";
+import { summarizeResources, startResourceMonitor, cpuUtilPct, parseCgroupV2Quota } from "./resourceMonitor";
+
+test("parseCgroupV2Quota reads assigned cores from cpu.max, null when unlimited", () => {
+  expect(parseCgroupV2Quota("800000 100000")).toBe(8); // --cpus 8
+  expect(parseCgroupV2Quota("250000 100000")).toBe(2.5);
+  expect(parseCgroupV2Quota("max 100000")).toBeNull();
+  expect(parseCgroupV2Quota("  150000   100000  ")).toBeCloseTo(1.5, 5);
+});
+
+test("cpuUtilPct is busy-time over total-time between two snapshots", () => {
+  // 80 of 100 ticks busy across the window → 80% utilization.
+  expect(cpuUtilPct({ busy: 0, total: 0 }, { busy: 80, total: 100 })).toBe(80);
+  // fully idle window → 0%; no time elapsed → 0% (no divide-by-zero).
+  expect(cpuUtilPct({ busy: 50, total: 100 }, { busy: 50, total: 200 })).toBe(0);
+  expect(cpuUtilPct({ busy: 5, total: 10 }, { busy: 5, total: 10 })).toBe(0);
+});
 
 test("summarizeResources computes avg from total cpu-time and peak from intervals", () => {
   // 4 cpu-seconds over 1 wall-second => 400% avg => 4 cores.

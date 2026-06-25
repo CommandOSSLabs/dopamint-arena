@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { mkdirSync } from "node:fs";
 import os from "node:os";
 import { project as benchProject } from "./benchEnv";
 
@@ -55,6 +56,7 @@ function parse(argv: string[]): Parsed {
         p.anchor = v; break;
       }
       case "--game": p.game = need(argv, ++i, a); break;
+      case "--all": p.game = "all"; break;
       case "--container": p.container = true; break;
       case "--cpus": p.cpus = need(argv, ++i, a); break;
       case "--memory": p.memory = need(argv, ++i, a); break;
@@ -87,11 +89,21 @@ function infraEnv(p: Parsed): Record<string, string> {
 function buildInner(p: Parsed): { mode: RunMode; innerArgv: string[] } {
   const tail: string[] = [];
   const push = (flag: string, v: string | null) => { if (v !== null) tail.push(flag, v); };
+  // --game all: multi-core per-game report, driven by the swarm worker fleet.
+  if (p.game === "all") {
+    push("--workers", p.workers);
+    push("--concurrency", p.concurrency);
+    push("--matches", p.matches);
+    push("--duration", p.duration);
+    push("--mem-budget-mb", p.memBudgetMb);
+    push("--per-match-kb", p.perMatchKb);
+    return { mode: "swarm", innerArgv: ["--all", "--channel", p.channel, "--anchor", p.anchor, ...tail] };
+  }
+  // single game: latency mode (single-stream).
   if (p.game !== null) {
     push("--matches", p.matches);
     push("--concurrency", p.concurrency);
-    const head = p.game === "all" ? ["--all"] : [p.game];
-    return { mode: "game", innerArgv: [...head, "--channel", p.channel, "--anchor", p.anchor, ...tail] };
+    return { mode: "game", innerArgv: [p.game, "--channel", p.channel, "--anchor", p.anchor, ...tail] };
   }
   push("--workers", p.workers);
   push("--concurrency", p.concurrency);
@@ -106,7 +118,9 @@ function buildInner(p: Parsed): { mode: RunMode; innerArgv: string[] } {
 export function planRun(argv: string[], composeFile: string, project: string): RunPlan {
   const p = parse(argv);
 
-  if (p.game !== null) {
+  // Single-game latency mode is single-stream + matches-based; --game all is the
+  // multi-core per-game report and accepts the swarm tuning flags.
+  if (p.game !== null && p.game !== "all") {
     if (p.workers !== null) throw new Error("--workers is not valid in --game (latency) mode");
     if (p.duration !== null) throw new Error("--duration is not valid in --game (latency) mode");
     if (p.games !== null) throw new Error("--games is not valid in --game (latency) mode");
@@ -152,6 +166,9 @@ function main(): void {
   const plan = planRun(argv, composeFile, benchProject());
 
   if (plan.kind === "container") {
+    // Create the bind-mount source on the host first, so Docker doesn't create
+    // it as root; the container writes its all-games report here.
+    mkdirSync(new URL("../reports", import.meta.url).pathname, { recursive: true });
     run("docker", plan.dockerArgs, plan.composeEnv);
   } else {
     const target = plan.mode === "game" ? "src/benchGame.ts" : "src/swarm.ts";

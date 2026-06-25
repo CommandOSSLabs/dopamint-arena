@@ -1,10 +1,16 @@
 import os from "node:os";
 import { Worker } from "node:worker_threads";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { PLAYABLE } from "./games";
 import { readEnvLocal } from "./env";
+import { envName } from "./benchEnv";
 import { ensureRelay } from "./relayProcess";
 import { ratePerSec } from "./metrics";
-import { startResourceMonitor, formatResources } from "./resourceMonitor";
+import { startResourceMonitor, formatResources, startCpuUtilMonitor, cpuBudget } from "./resourceMonitor";
+import { aggregate, renderTable, renderMarkdown, reportBasename, type GameResult } from "./report";
+
+/** Default per-game time budget for `--all` when neither --duration nor --matches is given. */
+const DEFAULT_ALL_GAME_DURATION_S = 10;
 
 export function parseSwarmArgs(argv: string[]): {
   channel: "local" | "relay";
@@ -16,6 +22,7 @@ export function parseSwarmArgs(argv: string[]): {
   memBudgetMb: number | null;
   perMatchKb: number | null;
   games: string[];
+  all: boolean;
 } {
   const out = {
     channel: "relay" as "local" | "relay",
@@ -27,6 +34,7 @@ export function parseSwarmArgs(argv: string[]): {
     memBudgetMb: null as number | null,
     perMatchKb: null as number | null,
     games: [...PLAYABLE] as string[],
+    all: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -40,6 +48,7 @@ export function parseSwarmArgs(argv: string[]): {
     else if (a === "--mem-budget-mb") out.memBudgetMb = Number(argv[++i]);
     else if (a === "--per-match-kb") out.perMatchKb = Number(argv[++i]);
     else if (a === "--games") out.games = argv[++i].split(",").map((s) => s.trim()).filter(Boolean);
+    else if (a === "--all") out.all = true;
   }
   return out;
 }
@@ -139,34 +148,164 @@ function runWorker(input: Record<string, unknown>): Promise<{ ok: boolean; moves
   });
 }
 
+/** Onchain runs need the published package + a funded settler; offchain needs nothing. */
+function buildOnchainEnv(args: ReturnType<typeof parseSwarmArgs>): Record<string, string> {
+  const env: Record<string, string> = {};
+  if (args.anchor !== "onchain") return env;
+  const e = readEnvLocal();
+  const pkg = process.env.TUNNEL_PACKAGE_ID ?? e.TUNNEL_PACKAGE_ID;
+  if (!pkg) throw new Error("onchain run needs a package id: pass --package-id or run `bun run stack`");
+  env.PACKAGE_ID = pkg;
+  env.SUI_NETWORK = process.env.SUI_NETWORK ?? e.SUI_NETWORK ?? "";
+  env.SUI_RPC_URL = process.env.SUI_RPC_URL ?? e.SUI_RPC_URL ?? "";
+  env.SUI_SETTLER_KEY = process.env.SUI_SETTLER_KEY ?? e.SUI_SETTLER_KEY;
+  if (!env.SUI_SETTLER_KEY) throw new Error("onchain run needs a settler key: pass --settler-key or run `bun run stack`");
+  return env;
+}
+
+interface WorkerResult { ok: boolean; moves?: number; matches?: number; error?: string }
+
+interface PoolWorker {
+  ready: Promise<void>;
+  run(cmd: { game: string; matches: number | null; durationMs: number | null }): Promise<WorkerResult>;
+  done(): void;
+}
+
+/** Spawn a warm worker: it imports the engine + builds its match context once,
+ *  signals ready, then runs one game per `run()` call. The (heavy) import/setup
+ *  cost is paid once, before any measurement — so per-game CPU/throughput reflect
+ *  only the game's run window, not fleet spin-up. */
+function spawnPoolWorker(init: {
+  workerId: number;
+  channel: "local" | "relay";
+  anchor: "onchain" | "offchain";
+  concurrency: number;
+  env: Record<string, string>;
+}): PoolWorker {
+  const w = new Worker(new URL("./worker.ts", import.meta.url), { workerData: { ...init, pool: true } });
+  let pending: ((v: WorkerResult) => void) | null = null;
+  let resolveReady!: () => void;
+  const ready = new Promise<void>((res) => { resolveReady = res; });
+  const fail = (error: string) => { const p = pending; pending = null; p?.({ ok: false, error }); };
+  w.on("message", (m: WorkerResult & { ready?: boolean }) => {
+    if (m?.ready) { resolveReady(); return; }
+    const p = pending; pending = null; p?.(m);
+  });
+  w.on("error", (e) => fail(String(e?.stack ?? e)));
+  w.on("exit", (code) => { if (pending) fail(`worker exited without result (code ${code})`); });
+  return {
+    ready,
+    run(cmd) {
+      return new Promise<WorkerResult>((res) => { pending = res; w.postMessage({ type: "run", ...cmd }); });
+    },
+    // Terminate the thread so the process can exit; the worker is idle here (all runs done).
+    done() { void w.terminate(); },
+  };
+}
+
+/** Run every game through the fleet sequentially, then print a table and write a markdown report. */
+async function runAllGamesReport(
+  args: ReturnType<typeof parseSwarmArgs>,
+  fleet: { workers: number; concurrency: number },
+  env: Record<string, string>,
+  durationMs: number | null,
+): Promise<void> {
+  const startedAtIso = new Date().toISOString();
+  const tag = `${args.channel}/${args.anchor}`;
+
+  // Spawn the fleet once; wait until every worker has imported the engine and
+  // built its context. This warm-up is deliberately outside all measurement.
+  const pool = Array.from({ length: fleet.workers }, (_, i) =>
+    spawnPoolWorker({ workerId: i, channel: args.channel, anchor: args.anchor, concurrency: fleet.concurrency, env }),
+  );
+  await Promise.all(pool.map((p) => p.ready));
+
+  const overall = startResourceMonitor();
+  const results: GameResult[] = [];
+  try {
+    for (const game of args.games) {
+      const slices = args.matches !== null ? sliceMatches(args.matches, fleet.workers) : null;
+      // Workers are warm: the CPU monitor + timer now bracket only the run itself.
+      const cpu = startCpuUtilMonitor();
+      const start = performance.now();
+      const wr = await Promise.all(
+        pool.map((p, i) => p.run({ game, matches: slices ? slices[i] : null, durationMs })),
+      );
+      const elapsedMs = performance.now() - start;
+      const cpuSummary = cpu.stop();
+      const ok = wr.filter((r) => r.ok);
+      const failed = wr.filter((r) => !r.ok);
+      const r: GameResult = {
+        game,
+        status: ok.length > 0 ? "ok" : "failed",
+        workers: pool.length,
+        matches: ok.reduce((a, x) => a + (x.matches ?? 0), 0),
+        moves: ok.reduce((a, x) => a + (x.moves ?? 0), 0),
+        elapsedMs,
+        cpuUtilAvgPct: cpuSummary.utilAvgPct,
+        cpuUtilPeakPct: cpuSummary.utilPeakPct,
+        error: failed.length ? failed.map((x) => x.error).join("; ") : undefined,
+      };
+      console.log(
+        `[${tag}] ${game}: ${r.moves} moves over ${r.matches} matches, ${ratePerSec(r.moves, r.elapsedMs).toFixed(1)} moves/s, cpu util avg=${r.cpuUtilAvgPct.toFixed(0)}%${r.error ? ` (worker error: ${r.error})` : ""}`,
+      );
+      results.push(r);
+    }
+  } finally {
+    pool.forEach((p) => p.done());
+  }
+  const resources = formatResources(overall.stop());
+
+  const budget = cpuBudget();
+  const meta = {
+    env: envName(),
+    channel: args.channel,
+    anchor: args.anchor,
+    workers: fleet.workers,
+    concurrency: fleet.concurrency,
+    totalCores: budget.cores,
+    cpuBasis: budget.basis,
+    durationSec: args.matches === null && durationMs !== null ? durationMs / 1000 : undefined,
+    matches: args.matches ?? undefined,
+    packageId: args.anchor === "onchain" ? env.PACKAGE_ID : undefined,
+    startedAtIso,
+    resources,
+  };
+  const agg = aggregate(results);
+  console.log("\n" + renderTable(results, agg));
+  // `../reports` resolves to tools/loadbench/reports on the host and to the
+  // bind-mounted dir inside the container; the printed path is relative so it
+  // is meaningful in both contexts.
+  const dir = new URL("../reports", import.meta.url).pathname;
+  mkdirSync(dir, { recursive: true });
+  const base = reportBasename(meta);
+  writeFileSync(`${dir}/${base}`, renderMarkdown(meta, results, agg));
+  console.log(`report: reports/${base}`);
+  if (results.some((r) => r.status === "failed")) process.exitCode = 1;
+}
+
 async function main() {
   const args = parseSwarmArgs(process.argv.slice(2));
-  if (args.matches === null && args.durationS === null) args.durationS = 15;
+  if (args.matches === null && args.durationS === null) args.durationS = args.all ? DEFAULT_ALL_GAME_DURATION_S : 15;
 
   const sys = { cores: os.availableParallelism?.() ?? os.cpus().length, totalMem: os.totalmem() };
   const mode = args.anchor === "offchain" && args.channel === "local" ? "cpu" : "io";
   const { workers, concurrency } = resolveFleet(args, sys, mode);
 
-  const env: Record<string, string> = {};
-  if (args.anchor === "onchain") {
-    const e = readEnvLocal();
-    const pkg = process.env.TUNNEL_PACKAGE_ID ?? e.TUNNEL_PACKAGE_ID;
-    if (!pkg) throw new Error("onchain run needs a package id: pass --package-id or run `bun run stack`");
-    env.PACKAGE_ID = pkg;
-    env.SUI_NETWORK = process.env.SUI_NETWORK ?? e.SUI_NETWORK ?? "";
-    env.SUI_RPC_URL = process.env.SUI_RPC_URL ?? e.SUI_RPC_URL ?? "";
-    env.SUI_SETTLER_KEY = process.env.SUI_SETTLER_KEY ?? e.SUI_SETTLER_KEY;
-    if (!env.SUI_SETTLER_KEY) throw new Error("onchain run needs a settler key: pass --settler-key or run `bun run stack`");
-  }
-
+  const env = buildOnchainEnv(args);
   const relay = args.channel === "relay" ? await ensureRelay({ wsUrl: process.env.MP_WS_URL }) : null;
-  const slices = args.matches !== null ? sliceMatches(args.matches, workers) : null;
   const durationMs = args.durationS !== null ? args.durationS * 1000 : null;
   const tag = `${args.channel}/${args.anchor}`;
 
-  const monitor = startResourceMonitor();
-  const start = performance.now();
   try {
+    if (args.all) {
+      await runAllGamesReport(args, { workers, concurrency }, env, durationMs);
+      return;
+    }
+
+    const slices = args.matches !== null ? sliceMatches(args.matches, workers) : null;
+    const monitor = startResourceMonitor();
+    const start = performance.now();
     const inputs = Array.from({ length: workers }, (_, i) => ({
       workerId: i,
       channel: args.channel,
