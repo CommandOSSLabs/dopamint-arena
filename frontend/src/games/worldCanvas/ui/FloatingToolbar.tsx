@@ -237,6 +237,9 @@ export function ArenaControl({
   tps,
   onToggleAuto,
   onViewNext,
+  game,
+  movesThisGame,
+  movesPerGame,
 }: {
   /** True = both seats bot-driven (watch). False = you author seat A vs the seat-B bot. */
   auto: boolean;
@@ -246,11 +249,24 @@ export function ArenaControl({
   onToggleAuto: () => void;
   /** Cycle the camera to the next live seat bot (engine.viewNextAgent). */
   onViewNext: () => void;
+  /** Current bounded-game number (engine.game). */
+  game: number;
+  /** Co-signed moves this game (engine.movesThisGame). */
+  movesThisGame: number;
+  /** Per-game co-signed-move cap (engine.movesPerGame). */
+  movesPerGame: number;
 }) {
   return (
     <div style={autoWrapStyle}>
       <AutoToggle auto={auto} onToggleAuto={onToggleAuto} />
-      <LiveReadout auto={auto} tps={tps} onViewNext={onViewNext} />
+      <LiveReadout
+        auto={auto}
+        tps={tps}
+        onViewNext={onViewNext}
+        game={game}
+        movesThisGame={movesThisGame}
+        movesPerGame={movesPerGame}
+      />
     </div>
   );
 }
@@ -308,11 +324,20 @@ export function LiveReadout({
   auto,
   tps,
   onViewNext,
+  game,
+  movesThisGame,
+  movesPerGame,
   centered = false,
 }: {
   auto: boolean;
   tps: number;
   onViewNext: () => void;
+  /** Current bounded-game number (the wall runs as discrete MOVES_PER_GAME games). */
+  game: number;
+  /** Co-signed moves on the current tunnel since the last game boundary. */
+  movesThisGame: number;
+  /** Per-game co-signed-move cap (the bound at which the canvas wipes for a new game). */
+  movesPerGame: number;
   /** Center the contents (narrow stacked layout) instead of right-aligning them. */
   centered?: boolean;
 }) {
@@ -341,6 +366,13 @@ export function LiveReadout({
       </span>
       <span style={{ color: WC.muted }}>·</span>
       <span style={{ color: WC.text }}>{Math.round(tps)} TPS</span>
+      <span style={{ color: WC.muted }}>·</span>
+      {/* Bounded-game progress: which game + how far into its MOVES_PER_GAME cap (the canvas
+          wipes at the cap and a new game starts) — like Blackjack "Round X" / Battleship "Game N". */}
+      <span style={{ color: WC.text }}>
+        Game {game} · {movesThisGame.toLocaleString("en-US")} /{" "}
+        {movesPerGame.toLocaleString("en-US")}
+      </span>
       <span style={readoutDividerStyle} />
       <button
         type="button"

@@ -140,6 +140,7 @@ function interpolateCells(
 export function WorldCanvas({
   paints,
   revision,
+  generation = 1,
   selectedColor,
   brushSize,
   panOnly,
@@ -155,6 +156,10 @@ export function WorldCanvas({
   paints: ReadonlyMap<string, PaintedCell>;
   /** Bumps whenever `paints` changes; gates the incremental chunk sync. */
   revision: number;
+  /** Bounded-game counter (solo): a change marks a game boundary and triggers a full render
+   *  reset (drop cached strokes + the sync cursor, re-fit the blank canvas). Defaults to 1
+   *  for callers without bounded games (PvP), so the reset only ever fires once on mount. */
+  generation?: number;
   /** Palette index `[0, 16)` placed on drag. */
   selectedColor: number;
   /** Brush footprint edge in cells (1/2/3): each sampled point paints an N×N block. */
@@ -226,6 +231,23 @@ export function WorldCanvas({
   paintsRef.current = paints;
   const revisionRef = useRef(revision);
   revisionRef.current = revision;
+
+  // On a game boundary (generation change) wipe the render caches so the prior game's ink
+  // can't bleed into the new one: the engine clears its `paints` map, but these caches are
+  // INDEPENDENT (finalized + open strokes, the paints→strokes sync cursor, the live drag),
+  // so they must be cleared here too. Re-fit the camera to the blank origin and clear the
+  // canvas pixels. Skipped on the first mount in practice (caches already empty).
+  useEffect(() => {
+    strokes.current = [];
+    openStrokes.current.clear();
+    liveStroke.current = null;
+    appliedSeq.current = 0;
+    syncedRevision.current = -1;
+    fitted.current = false;
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext("2d");
+    if (canvas && ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+  }, [generation]);
 
   // Cells already painted in the active pointer stroke. A drag interpolates and
   // overlaps brush blocks, so this set keeps every cell to exactly ONE co-signed

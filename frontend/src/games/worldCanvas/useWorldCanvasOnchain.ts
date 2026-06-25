@@ -32,10 +32,11 @@
  * OVERPAINT is legal: re-painting a cell is a full co-signed move whose owner/color
  * updates to the latest painter.
  *
- * Periodic on-chain CHECKPOINT: every CHECKPOINT_EVERY co-signed paints the real
- * tunnel cooperatively closes (anchoring its transcript root via the SAME backend
- * `/settle` path every finite game uses — stakes return, NO winner) and a fresh
- * tunnel reopens so painting never stops.
+ * Bounded GAMES: the wall runs as discrete games of MOVES_PER_GAME co-signed paints.
+ * At each boundary the tunnel cooperatively closes (on-chain: anchoring its transcript
+ * root via the SAME backend `/settle` path every finite game uses — stakes return, NO
+ * winner; demo: no chain), a fresh tunnel reopens, the canvas is WIPED, the bots re-seed
+ * from the origin, and a game counter bumps — continuous "new game, clear canvas" rounds.
  *
  * Opening tries the gas SPONSOR first, so the seats (fresh bot keys with ZERO SUI)
  * open for free, faucet-minting their MTPS stake:
@@ -128,11 +129,13 @@ const HUMAN_STROKE_DEBOUNCE_MS = 400;
  *  whole window into one row) keeps Auto-mode activity legible without flooding the feed.
  *  Bot-only — the human seat uses HUMAN_STROKE_DEBOUNCE_MS (a debounce) instead. */
 const BOT_ACTIVITY_THROTTLE_MS = 1500;
-/** Co-signed paints between on-chain checkpoints. At each boundary the tunnel
- *  cooperatively closes (anchoring its transcript root on-chain, like every finite
- *  game's settle) and a fresh tunnel reopens so painting never stops. Only the real
- *  (on-chain) tunnel checkpoints; the demo tunnel skips it (no chain). */
-const CHECKPOINT_EVERY = 50000;
+/** The single config constant: co-signed paints in ONE bounded game. At the cap the
+ *  tunnel cooperatively closes (on-chain: anchoring its transcript root, like every
+ *  finite game's settle; demo: no chain), the canvas wipes, the bots re-seed, a fresh
+ *  tunnel reopens, and the game counter bumps — so the wall runs as discrete games
+ *  ("New game, clear canvas") rather than one endless stream. BOTH the on-chain and the
+ *  demo tunnel bound at this cap; only the on-chain path also settles + anchors a root. */
+const MOVES_PER_GAME = 50_000;
 /** Gap (cells) between adjacent agent regions so their art never touches. */
 const REGION_GAP = 14;
 /** World slot size (cells) — sized to the LARGEST mode footprint so any mode fits a
@@ -320,6 +323,13 @@ export interface UseWorldCanvasOnchain {
   paints: ReadonlyMap<string, PaintedCell>;
   /** Bumps (throttled) whenever the canvas changes, so consumers redraw. */
   revision: number;
+  /** Current game number — starts at 1, increments at each {@link movesPerGame} boundary
+   *  (canvas wipe + fresh tunnel). Drives the "Game N" readout and the canvas reset. */
+  game: number;
+  /** Co-signed moves on the current tunnel since the last game boundary (0 → movesPerGame). */
+  movesThisGame: number;
+  /** Per-game co-signed-move cap (the bound at which a game ends and the canvas wipes). */
+  movesPerGame: number;
   /** Auto mode: ON (default) = both seats bot-driven (bot vs bot). OFF = you author
    *  seat A ({@link submitHumanPaint}) while the seat-B bot plays on — same tunnel. */
   auto: boolean;
@@ -629,12 +639,17 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
   const [agentDensity, setAgentDensityState] =
     useState<number>(DEFAULT_DENSITY);
   const [agentTemplate, setAgentTemplateState] = useState<string | null>(null);
+  // The current game number — bumps at each MOVES_PER_GAME boundary (see resetGameState).
+  const [game, setGame] = useState(1);
 
   // The single tunnel (swapped out on each checkpoint reopen) and the two seats.
   const runRef = useRef<CanvasRun | null>(null);
   const identitiesRef = useRef<{ a: BotIdentity; b: BotIdentity } | null>(null);
   // Co-signed paints on the tunnel (the dashboard numerator + the window TPS dial).
   const totalMovesRef = useRef(0);
+  // Co-signed paints since the last game boundary (0 → MOVES_PER_GAME); the "Game N · M /
+  // cap" readout numerator. Reset in resetGameState; totalMovesRef stays cumulative (TPS).
+  const movesThisGameRef = useRef(0);
   // Live canvas data: stable identity, mutated in place; React re-reads on `revision`.
   const paintsRef = useRef<Map<string, PaintedCell>>(new Map());
   // Per-painter tallies + recent-activity ring: same "mutate + bump revision" pattern.
@@ -883,6 +898,7 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
         });
         if (!r.verified) return;
         run.moveCount += 1;
+        movesThisGameRef.current += 1;
         run.actions += 1;
         totalMovesRef.current += 1;
         paintCell(mv, by, totalMovesRef.current, painter);
@@ -892,12 +908,13 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
         // painter here to avoid a duplicate row.
         if (painter !== humanAddress) accumulateBotPaint(painter);
         flushHeartbeat(run, false);
-        // On a real tunnel, anchor the transcript root on-chain every CHECKPOINT_EVERY
-        // co-signed paints (cooperative close-and-reopen). The demo tunnel never does this.
+        // Game boundary at the cap: every MOVES_PER_GAME co-signed paints, end the game —
+        // close the tunnel (on-chain: settle + anchor root; demo: no settle), wipe the
+        // canvas, re-seed the bots, and reopen a fresh tunnel. BOTH tunnels bound here; the
+        // settle is gated inside checkpointRun, so demo bounds without touching the chain.
         if (
-          run.onchain &&
           !run.checkpointing &&
-          run.moveCount - run.lastCheckpoint >= CHECKPOINT_EVERY
+          run.moveCount - run.lastCheckpoint >= MOVES_PER_GAME
         ) {
           checkpointRef.current?.(run);
         }
@@ -1157,41 +1174,49 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
     [client, proto, submit, coSignPaint, registerPainter, humanAddress, report],
   );
 
-  // Checkpoint the tunnel on-chain: cooperatively close it (anchoring its transcript
-  // root via the SAME backend `/settle` path every finite game uses), then reopen a
-  // fresh tunnel so painting continues seamlessly. The reopen is synchronous up to its
-  // `runRef.current = run`, so paints route to the new tunnel with no gap (buffered
-  // until live). On-chain only; the demo run never reaches here.
+  // End the current game at the cap: cooperatively close the tunnel, reopen a fresh one,
+  // WIPE the canvas + re-seed the bots (resetGameState), and bump the game counter — so
+  // the wall runs as discrete games. The reopen is synchronous up to startRun's first
+  // await (paints route to the new tunnel with no gap, buffered until live), so the
+  // boundary is instant. BOTH tunnels bound here; the on-chain path ALSO anchors the
+  // retired tunnel's transcript root via the SAME backend `/settle` path every finite
+  // game uses (stakes return, NO winner) + pushes the "settled" feed rows. The demo
+  // tunnel bounds the game WITHOUT touching the chain. resetGameState is reached via a
+  // ref because it's defined later (it needs nextPlacement / syncAgentMarkers).
   const checkpointRef = useRef<((run: CanvasRun) => void) | null>(null);
+  const resetGameRef = useRef<(() => void) | null>(null);
   const checkpointRun = useCallback(
     async (run: CanvasRun) => {
-      if (
-        run.checkpointing ||
-        run.closed ||
-        !run.onchain ||
-        !run.tunnel ||
-        !run.transcript
-      )
+      if (run.checkpointing || run.closed || !run.tunnel || !run.transcript)
         return;
       run.checkpointing = true;
       const { tunnel, transcript } = run;
-      let settlement: core.CoSignedSettlementWithRoot;
-      try {
-        settlement = tunnel.buildSettlementWithRoot(
-          run.createdAt,
-          transcript.root(),
-          0n,
-        );
-      } catch (e) {
-        console.warn("[world-canvas] checkpoint build skipped:", e);
-        run.checkpointing = false;
-        run.lastCheckpoint = run.moveCount;
-        return;
+      // On-chain games anchor the retired tunnel's transcript root; build that settlement
+      // BEFORE retiring the tunnel. A build failure is transient — abort the boundary and
+      // retry at the next cap, leaving the tunnel running. The demo tunnel never anchors,
+      // so it skips this and always bounds the game.
+      let settlement: core.CoSignedSettlementWithRoot | null = null;
+      if (run.onchain) {
+        try {
+          settlement = tunnel.buildSettlementWithRoot(
+            run.createdAt,
+            transcript.root(),
+            0n,
+          );
+        } catch (e) {
+          console.warn("[world-canvas] checkpoint build skipped:", e);
+          run.checkpointing = false;
+          run.lastCheckpoint = run.moveCount;
+          return;
+        }
       }
-      // Retire the old tunnel and reopen immediately so paints keep flowing, then
-      // anchor the closed tunnel's root on-chain in the background.
+      // Retire the old tunnel and reopen immediately so paints keep flowing, then wipe the
+      // canvas + re-seed the bots for the new game. On-chain: anchor the closed tunnel's
+      // root in the background below. Demo stops at the boundary (no chain).
       run.closed = true;
       void startRun(true);
+      resetGameRef.current?.();
+      if (!run.onchain || !settlement) return;
       const sponsoredClose = makeKeypairSponsoredSignExec({
         address: run.identities.a.address,
         keypair: run.identities.a.keypair,
@@ -1412,6 +1437,33 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
         })),
     );
   }, []);
+
+  // Wipe the world for a fresh game at a MOVES_PER_GAME boundary: clear the canvas cells,
+  // the leaderboard, and the activity ring; re-seed BOTH bots from the spiral origin
+  // (region 0/1) so the new game starts clean; reset the per-game move counter; and bump
+  // the game counter. Called right AFTER checkpointRun reopens the fresh tunnel — and it
+  // runs with no concurrent paintFrame writes (the old run is `closed`, the new one not
+  // yet `ready`), so iterating the bots here is race-free. The human painter is
+  // re-registered (startRun just added it, then this clear would have dropped it) so "You"
+  // survives the wipe; totalMovesRef stays cumulative (the global TPS dial is unaffected).
+  const resetGameState = useCallback(() => {
+    paintsRef.current.clear();
+    paintersRef.current.clear();
+    activityRef.current.length = 0;
+    registerPainter(humanAddress, "You", false, TINT_HUMAN);
+    // Re-seed both bots from the origin: spiral slots restart at 0 so the new game's art
+    // begins centered, not wherever the prior game's relocations had wandered to.
+    regionIndexRef.current = 0;
+    for (const st of agentStatesRef.current.values()) {
+      registerPainter(st.painter, st.label, true, st.tint);
+      applyPlacement(st, nextPlacement(st.mode, st.seat));
+    }
+    syncAgentMarkers();
+    movesThisGameRef.current = 0;
+    setGame((g) => g + 1);
+    setRevision((v) => v + 1);
+  }, [registerPainter, humanAddress, nextPlacement, syncAgentMarkers]);
+  resetGameRef.current = resetGameState;
 
   // The single paint frame for BOTH seat bots, driven by requestAnimationFrame (~60fps)
   // so painting rides the render cadence — smooth and frame-aligned, never bursty, and
@@ -1686,6 +1738,9 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
     status,
     paints: paintsRef.current,
     revision,
+    game,
+    movesThisGame: movesThisGameRef.current,
+    movesPerGame: MOVES_PER_GAME,
     auto,
     toggleAuto,
     agents,
