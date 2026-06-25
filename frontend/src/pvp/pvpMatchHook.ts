@@ -60,6 +60,8 @@ import {
   evictExpiredRecords,
   readResumeRecord,
   listActiveTunnels,
+  transcriptToWire,
+  appendAdoptedCheckpoint,
 } from "@/pvp/resume";
 
 export type PvpStatus =
@@ -197,6 +199,7 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
 
   private mp: MpClient | null = null;
   private dt: DistributedTunnel<State, Move> | null = null;
+  private transcript: Transcript | null = null;
   private detachResume: (() => void) | null = null;
   private proposeTimer: ReturnType<typeof setTimeout> | null = null;
   private intent: Intent;
@@ -321,6 +324,7 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
     this.mp?.close();
     this.mp = null;
     this.dt = null;
+    this.transcript = null;
     this.role = null;
     this.intent = this.spec.idleIntent;
     this.auto = true;
@@ -376,7 +380,8 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
       typeof openAndFundSharedTunnel
     >[0]["reads"];
     const proto = this.spec.makeProtocol();
-    const transcript = new Transcript(dt.tunnelId);
+    const transcript = this.transcript ?? new Transcript(dt.tunnelId);
+    this.transcript = transcript;
     let settling = false;
     dt.onConfirmed = (u) => {
       transcript.append(u);
@@ -410,11 +415,22 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
     };
 
     this.detachResume?.();
+    const baseAdapter = this.makeAdapter();
+    const baseOnReconciled = baseAdapter.onReconciled;
     this.detachResume = attachResume({
       mp,
       channel,
       tunnel: dt,
-      adapter: this.makeAdapter(),
+      adapter: {
+        ...baseAdapter,
+        captureTranscript: () =>
+          this.transcript ? transcriptToWire(this.transcript) : [],
+        onReconciled: (t, outcome) => {
+          if (outcome === "adopt" && this.transcript)
+            appendAdoptedCheckpoint(this.transcript, t.snapshot().latest);
+          baseOnReconciled(t, outcome);
+        },
+      },
       identity: {
         matchId: info.matchId,
         tunnelId: dt.tunnelId,
@@ -475,7 +491,8 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
           mp.close();
           return;
         }
-        const { tunnel, channel } = restored[0];
+        const { tunnel, channel, transcript } = restored[0];
+        this.transcript = transcript;
         const rec = readResumeRecord(tunnel.tunnelId)!;
         this.role = rec.role;
         const waitPeer = makeInbox(channel);
