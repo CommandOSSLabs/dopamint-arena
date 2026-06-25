@@ -20,6 +20,7 @@ import {
 import { generateKeyPair, type KeyPair } from "sui-tunnel-ts/core/crypto";
 import { defaultBackend } from "sui-tunnel-ts/core/crypto-native";
 import { makeEndpoint } from "sui-tunnel-ts/core/tunnel";
+import type { CoSignedUpdate } from "sui-tunnel-ts/core/tunnel";
 import { fromHex, toHex } from "sui-tunnel-ts/core/bytes";
 import { DistributedTunnel } from "sui-tunnel-ts/core/distributedTunnel";
 import type { Protocol } from "sui-tunnel-ts/protocol/Protocol";
@@ -40,6 +41,7 @@ import {
   openAndFundSharedTunnel,
   raiseDisputeUnilateral,
   readCreatedAt,
+  type SignExec,
 } from "@/onchain/tunnelTx";
 import {
   openSharedTunnelStaked,
@@ -100,6 +102,28 @@ export interface PvpMatchSpec<
   intentToMove: (role: Role, intent: Intent) => Move;
   /** Read this seat's intent out of a bot-proposed Move (undefined ⇒ apply `idleIntent`). */
   readIntent: (role: Role, move: Move | null) => Intent | undefined;
+  /** Reconnect grace before the settlement floor (ms). Unset ⇒ the engine's 1h default. */
+  graceMs?: number;
+  /**
+   * Free/draw OVERRIDE for the post-grace settlement floor. When set, the engine hands the close
+   * to the GAME on grace-expiry instead of running the wagered default (stake the checkpoint via
+   * `raiseDisputeUnilateral` only). The game owns the whole close (raise + force-close after the
+   * on-chain window) so a dropped peer leaves a refund/draw, not a stranded tunnel. Unset ⇒ the
+   * wagered default runs UNCHANGED — other games behave identically.
+   */
+  onGraceSettle?: (args: {
+    /** Latest BOTH-signed checkpoint to stake on-chain (null ⇒ nothing co-signed yet). */
+    latest: CoSignedUpdate | null;
+    role: Role;
+    tunnelId: string;
+    /** Resolved signer (sponsored in MTPS mode, else wallet) for the on-chain settle txs. */
+    signExec: SignExec;
+    /** Poll at force-close time: has the peer reconnected since grace expired (peerDropped flipped
+     *  false)? Guards the force-close so a resumed match is never force-closed. */
+    peerReturned: () => boolean;
+    /** Mark the engine status settled once the on-chain close lands (settling → settled). */
+    markSettled: () => void;
+  }) => void;
 }
 
 /** The hook's reactive surface. Game wrappers rename `setIntent` to their domain control. */
@@ -114,6 +138,9 @@ export interface PvpMatch<State extends { winner: unknown }, Intent, View> {
   view: View | null;
   winner: State["winner"];
   error: string | null;
+  /** True while the opponent is dropped mid-match (within the reconnect grace window). Games may
+   *  surface a reconnect overlay; flips back false the moment the peer resumes. */
+  peerDropped: boolean;
   /** Join the public queue; paired with the next player who also clicks Find Match. */
   findMatch: () => void;
   /** Queue this seat's next intent (consumed on the next propose; resets to idle after). */
@@ -145,6 +172,7 @@ interface PvpSnapshot<State extends { winner: unknown }, View> {
   view: View | null;
   winner: State["winner"];
   error: string | null;
+  peerDropped: boolean;
 }
 
 /** Buffer peer messages so a waiter never misses one that arrived early. */
@@ -191,6 +219,7 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
   private view: View | null = null;
   private winner: State["winner"] = null as State["winner"];
   private error: string | null = null;
+  private peerDropped = false;
   private snap: PvpSnapshot<State, View>;
   private listeners = new Set<() => void>();
 
@@ -210,6 +239,7 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
       view: null,
       winner: null as State["winner"],
       error: null,
+      peerDropped: false,
     };
   }
 
@@ -230,6 +260,7 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
       view: this.view,
       winner: this.winner,
       error: this.error,
+      peerDropped: this.peerDropped,
     };
     for (const l of this.listeners) l();
   }
@@ -306,6 +337,7 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
     this.status = "idle";
     this.view = null;
     this.error = null;
+    this.peerDropped = false;
     this.emit();
   };
 
@@ -402,8 +434,33 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
         opponentPubkeyHex: info.opponentPubkeyHex,
         selfEphemeralSecretHex: info.selfEphemeralSecretHex,
       },
-      // Settlement floor: after the 1h grace, settle from the held checkpoint.
+      graceMs: this.spec.graceMs,
+      // Surface peer presence so a game can show a reconnect overlay; the snapshot drives the UI.
+      onPeerState: (dropped) => {
+        this.peerDropped = dropped;
+        this.emit();
+      },
+      // Settlement floor on grace-expiry. A free/draw game (onGraceSettle) OWNS the whole close
+      // (raise + force-close → refund/draw); otherwise the wagered default stakes the checkpoint.
       onGraceExpired: (latest) => {
+        if (this.spec.onGraceSettle) {
+          this.status = "settling";
+          this.emit();
+          this.spec.onGraceSettle({
+            latest,
+            role: info.role,
+            tunnelId: dt.tunnelId,
+            signExec: (isMtpsConfigured
+              ? sponsoredSignExec
+              : signExec) as never,
+            peerReturned: () => !this.peerDropped,
+            markSettled: () => {
+              this.status = "settled";
+              this.emit();
+            },
+          });
+          return;
+        }
         if (latest)
           void raiseDisputeUnilateral({
             signExec: signExec as never,
@@ -679,6 +736,7 @@ export function createPvpMatchHook<
       view: snap.view,
       winner: snap.winner,
       error: snap.error,
+      peerDropped: snap.peerDropped,
       findMatch: session.findMatch,
       setIntent: session.setIntent,
       toggleAuto: session.toggleAuto,

@@ -15,6 +15,7 @@ import {
   FONT_DISPLAY,
   shortAddress,
 } from "./tokens";
+import { liveStrokePersistSeq } from "./liveStroke";
 
 /** Camera zoom used when jumping to a freshly spawned agent's flag. */
 const FOCUS_SCALE = 12;
@@ -679,21 +680,16 @@ export function WorldCanvas({
   const liveFinalize = () => {
     const s = liveStroke.current;
     if (!s) return;
-    if (humanRef.current) {
-      // Solo: this seat's cells DON'T return via `syncPaints` (the human painter is skipped
-      // there), so the live drag is the only record → keep it on top (seq MAX), as before.
-      finalizeStroke(s);
-    } else if (s.erase) {
-      // PvP: a PAINT live-stroke is dropped — it returns through `syncPaints` with its real
-      // co-signed `seq`, and keeping the live copy would double-draw and pin your ink on top
-      // forever (defeating the opponent's erase). An ERASE, though, must not VANISH in the
-      // round-trip window between pointer-up and its synced cell landing — that gap is the
-      // "it reverts the instant I let go" flash. Persist the erase at a FINITE seq just above
-      // all ink currently on the wall so it holds the cleared look until the synced erase (a
-      // harmless, idempotent `destination-out` dup) arrives — finite (not MAX) so a later
-      // higher-seq repaint from either seat can still cover it.
-      finalizeStroke({ ...s, seq: appliedSeq.current + 0.5 });
-    }
+    // Solo keeps its own ink pinned on top (its cells never return via `syncPaints`). PvP persists
+    // BOTH a paint AND an erase at a finite seq just above the applied cursor, so the optimistic
+    // stroke holds across the co-sign round-trip instead of vanishing at pointer-up — the painter's
+    // ink no longer flickers out until its co-signed cell lands. The real higher-seq cell then
+    // overdraws it idempotently (same pos/color → invisible), and the finite seq lets a later repaint
+    // or the opponent's erase still cover it. Render-only: see `liveStrokePersistSeq`.
+    finalizeStroke({
+      ...s,
+      seq: liveStrokePersistSeq(!!humanRef.current, appliedSeq.current),
+    });
     liveStroke.current = null;
   };
 
