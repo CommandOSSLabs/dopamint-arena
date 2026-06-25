@@ -3,3 +3,9 @@ target/
 **/node_modules/
 .env
 .claude/
+
+# loadbench localnet secrets — never send to the Docker build context
+tools/loadbench/.env.local
+tools/loadbench/keys.json
+**/.env.local
+**/keys.json
