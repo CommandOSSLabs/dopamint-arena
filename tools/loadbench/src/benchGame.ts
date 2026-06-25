@@ -69,15 +69,19 @@ async function main() {
   // offchain needs no chain; onchain needs the published package + funded settler.
   const ctx: { client?: SuiClient; funder?: Ed25519Keypair } = {};
   if (args.anchor === "onchain") {
-    const env = readEnvLocal();
-    if (!env.TUNNEL_PACKAGE_ID) throw new Error("run `bun run stack` first (.env.local missing PACKAGE_ID)");
-    process.env.PACKAGE_ID = env.TUNNEL_PACKAGE_ID;
-    process.env.SUI_NETWORK = env.SUI_NETWORK;
-    ctx.client = new SuiClient({ url: env.SUI_RPC_URL || getFullnodeUrl("localnet") });
-    ctx.funder = funderFromEnv(env);
+    const e = readEnvLocal();
+    const pkg = process.env.TUNNEL_PACKAGE_ID ?? e.TUNNEL_PACKAGE_ID;
+    if (!pkg) throw new Error("onchain run needs a package id: pass --package-id or run `bun run stack`");
+    process.env.PACKAGE_ID = pkg;
+    process.env.TUNNEL_PACKAGE_ID = pkg;
+    process.env.SUI_NETWORK = process.env.SUI_NETWORK ?? e.SUI_NETWORK ?? "";
+    const rpc = process.env.SUI_RPC_URL ?? e.SUI_RPC_URL ?? "";
+    ctx.client = new SuiClient({ url: rpc || getFullnodeUrl("localnet") });
+    const settlerKey = process.env.SUI_SETTLER_KEY ?? e.SUI_SETTLER_KEY;
+    ctx.funder = funderFromEnv({ SUI_SETTLER_KEY: settlerKey });
   }
   let relay: { stop(): void } | null = null;
-  if (args.channel === "relay") relay = await ensureRelay();
+  if (args.channel === "relay") relay = await ensureRelay({ wsUrl: process.env.MP_WS_URL });
   const monitor = startResourceMonitor();
   try {
     for (const g of games) await benchOne(g, args, ctx);

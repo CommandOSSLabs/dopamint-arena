@@ -150,14 +150,15 @@ async function main() {
   const env: Record<string, string> = {};
   if (args.anchor === "onchain") {
     const e = readEnvLocal();
-    if (!e.TUNNEL_PACKAGE_ID) throw new Error("run `bun run stack` first");
-    env.PACKAGE_ID = e.TUNNEL_PACKAGE_ID;
-    env.SUI_NETWORK = e.SUI_NETWORK ?? "";
-    env.SUI_RPC_URL = e.SUI_RPC_URL ?? "";
-    env.SUI_SETTLER_KEY = e.SUI_SETTLER_KEY;
+    const pkg = process.env.TUNNEL_PACKAGE_ID ?? e.TUNNEL_PACKAGE_ID;
+    if (!pkg) throw new Error("onchain run needs a package id: pass --package-id or run `bun run stack`");
+    env.PACKAGE_ID = pkg;
+    env.SUI_NETWORK = process.env.SUI_NETWORK ?? e.SUI_NETWORK ?? "";
+    env.SUI_RPC_URL = process.env.SUI_RPC_URL ?? e.SUI_RPC_URL ?? "";
+    env.SUI_SETTLER_KEY = process.env.SUI_SETTLER_KEY ?? e.SUI_SETTLER_KEY;
   }
 
-  const relay = args.channel === "relay" ? await ensureRelay() : null;
+  const relay = args.channel === "relay" ? await ensureRelay({ wsUrl: process.env.MP_WS_URL }) : null;
   const slices = args.matches !== null ? sliceMatches(args.matches, workers) : null;
   const durationMs = args.durationS !== null ? args.durationS * 1000 : null;
   const tag = `${args.channel}/${args.anchor}`;

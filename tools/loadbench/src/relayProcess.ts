@@ -9,6 +9,13 @@ export function relayWsUrl(): string {
   return process.env.MP_WS_URL ?? "ws://127.0.0.1:8080/v1/mp";
 }
 
+/** Derive the relay's HTTP origin (for /healthz) from its ws(s) URL. */
+export function httpBaseFromWs(wsUrl: string): string {
+  const u = new URL(wsUrl);
+  const proto = u.protocol === "wss:" ? "https:" : "http:";
+  return `${proto}//${u.host}`;
+}
+
 /** Poll GET <httpBase>/healthz until the relay is up or tries are exhausted.
  *  fetchImpl is injectable so unit tests never touch the network. */
 export async function waitHealthy(
@@ -31,16 +38,23 @@ export async function waitHealthy(
 
 /** Return a running relay handle, spawning one if none is up.
  *
- *  If the relay is already healthy the returned handle has alreadyRunning:true
- *  and stop() is a no-op.  Otherwise `cargo run -q -p tunnel-manager` is
- *  launched from the repo root with env from .env.local, with REDIS_* vars
- *  stripped so the relay defaults to its in-memory store. */
+ *  When `wsUrl` is supplied the relay is assumed to be externally managed:
+ *  probe its health and return immediately — never spawn.  Without `wsUrl`
+ *  the existing behaviour applies: probe localhost, then cargo-spawn as
+ *  fallback with REDIS_* stripped so tunnel-manager uses its in-memory store. */
 export async function ensureRelay(
-  opts: { httpBase?: string; fetchImpl?: typeof fetch } = {},
+  opts: { wsUrl?: string; httpBase?: string; fetchImpl?: typeof fetch } = {},
 ): Promise<{ alreadyRunning: boolean; stop(): void }> {
-  const httpBase = opts.httpBase ?? "http://127.0.0.1:8080";
   const f = opts.fetchImpl ?? fetch;
 
+  // Explicit relay URL: connect to it, never spawn a local one.
+  if (opts.wsUrl) {
+    const httpBase = opts.httpBase ?? httpBaseFromWs(opts.wsUrl);
+    await waitHealthy(httpBase, { fetchImpl: f });
+    return { alreadyRunning: true, stop() {} };
+  }
+
+  const httpBase = opts.httpBase ?? "http://127.0.0.1:8080";
   try {
     if ((await f(`${httpBase}/healthz`)).ok) {
       return { alreadyRunning: true, stop() {} };
@@ -49,8 +63,6 @@ export async function ensureRelay(
     // not running yet — fall through to spawn
   }
 
-  // Build child env: process env + .env.local overrides, bound to localhost,
-  // REDIS_* absent so tunnel-manager selects the in-memory store.
   const env: Record<string, string> = {
     ...(process.env as Record<string, string>),
     ...readEnvLocal(),
@@ -60,12 +72,9 @@ export async function ensureRelay(
   delete env.REDIS_PUBSUB_URL;
 
   const repoRoot = new URL("../../..", import.meta.url).pathname;
-  const child: ChildProcess = spawn(
-    "cargo",
-    ["run", "-q", "-p", "tunnel-manager"],
-    { cwd: repoRoot, env, stdio: "inherit" },
-  );
-
+  const child: ChildProcess = spawn("cargo", ["run", "-q", "-p", "tunnel-manager"], {
+    cwd: repoRoot, env, stdio: "inherit",
+  });
   child.on("error", (err) => {
     console.error(`failed to spawn tunnel-manager via cargo: ${err.message}`);
   });
