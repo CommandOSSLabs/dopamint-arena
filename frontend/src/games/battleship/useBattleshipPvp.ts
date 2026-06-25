@@ -56,6 +56,8 @@ import {
   readResumeRecord,
   listActiveTunnels,
   clearResumeRecord,
+  transcriptToWire,
+  appendAdoptedCheckpoint,
 } from "@/pvp/resume";
 import { makeBattleshipResumeAdapter } from "./battleshipResumeAdapter";
 
@@ -171,6 +173,7 @@ class PvpSession {
 
   private mp: MpClient | null = null;
   private dt: BattleshipTunnel | null = null;
+  private transcript: Transcript | null = null;
   private secret: FleetSecret | null = null;
   private detachResume: (() => void) | null = null;
   private placements: Placement[] = []; // your fleet layout, for ship-status display
@@ -260,6 +263,7 @@ class PvpSession {
     this.mp?.close();
     this.mp = null;
     this.dt = null;
+    this.transcript = null;
     this.secret = null;
     this.role = null;
     this.lastYourShot = null;
@@ -323,7 +327,8 @@ class PvpSession {
     >[0]["reads"];
     const coinType = isMtpsConfigured ? MTPS_COIN_TYPE : undefined;
     const proto = new BattleshipProtocol(STAKE_SHIFT);
-    const transcript = new Transcript(dt.tunnelId);
+    const transcript = this.transcript ?? new Transcript(dt.tunnelId);
+    this.transcript = transcript;
     let settling = false;
     dt.onConfirmed = (u) => {
       transcript.append(u); // verifiable move log, root-anchored at settle
@@ -378,11 +383,22 @@ class PvpSession {
     // Resume wiring: persist on confirm + run the resync handshake on reconnect.
     // The fleet secret round-trips only through capture/restore, never the wire.
     this.detachResume?.();
+    const baseAdapter = this.makeAdapter();
+    const baseOnReconciled = baseAdapter.onReconciled;
     this.detachResume = attachResume({
       mp,
       channel,
       tunnel: dt,
-      adapter: this.makeAdapter(),
+      adapter: {
+        ...baseAdapter,
+        captureTranscript: () =>
+          this.transcript ? transcriptToWire(this.transcript) : [],
+        onReconciled: (t, outcome) => {
+          if (outcome === "adopt" && this.transcript)
+            appendAdoptedCheckpoint(this.transcript, t.snapshot().latest);
+          baseOnReconciled(t, outcome);
+        },
+      },
       identity: {
         matchId: info.matchId,
         tunnelId: dt.tunnelId,
@@ -445,7 +461,8 @@ class PvpSession {
           mp.close();
           return;
         }
-        const { tunnel, channel } = restored[0];
+        const { tunnel, channel, transcript } = restored[0];
+        this.transcript = transcript;
         const rec = readResumeRecord(tunnel.tunnelId)!;
         this.role = rec.role;
         this.opponentWallet = rec.opponentWallet;
