@@ -5,6 +5,9 @@ import type {
   Balances,
 } from "sui-tunnel-ts/protocol/Protocol";
 import type { MoveCodec } from "sui-tunnel-ts/core/distributedFrame";
+
+export type { Party };
+
 import { createTicTacToeKit } from "./games/ticTacToe/kit";
 import { createBlackjackKit } from "./games/blackjack/kit";
 import { createBattleshipKit } from "./games/battleship/kit";
