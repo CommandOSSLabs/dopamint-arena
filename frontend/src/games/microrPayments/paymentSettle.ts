@@ -27,7 +27,7 @@ export async function settlePaymentTunnel(opts: {
     tunnelId: opts.tunnelId,
     settlement,
     transcript: opts.transcript.rawEntries(),
-    label: "regular-payments",
+    label: "micro-payments",
     fallbackClose: () =>
       closeCooperativeWithRoot({
         signExec: opts.fallbackSignExec,

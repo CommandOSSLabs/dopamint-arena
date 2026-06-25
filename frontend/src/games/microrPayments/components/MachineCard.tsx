@@ -159,10 +159,9 @@ export function MachineCard({ session }: MachineCardProps) {
       </header>
 
       <div
-        className={`relative isolate mb-1 rounded-[10px] px-[clamp(8px,2.4cqmin,16px)] py-[clamp(6px,2cqmin,14px)] text-center ${
-          isNearComplete ? "pshop-complete-blink" : ""
-        }
-
+        className={`relative isolate mb-1 rounded-[10px] px-[clamp(8px,2.4cqmin,16px)] py-[clamp(6px,2cqmin,14px)] text-center 
+        ${isNearComplete ? "pshop-complete-blink" : ""}
+        min-h-[10rem]
         flex flex-col flex-1 justify-center
       `}
       >

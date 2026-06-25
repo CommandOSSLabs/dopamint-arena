@@ -692,7 +692,7 @@ fn validate_sponsorable(
                 // The MTPS stake token's faucet lives in the coin type's own package
                 // (`<pkg>::mtps`). Sponsor the free `mint`/`mint_default` so a 0-token player
                 // can faucet their stake (gas-sponsored) before opening a game. Also sponsor
-                // `mint_nft` so the regular-payments shop can gaslessly reward the miner.
+                // `mint_nft` so the micro-payments shop can gaslessly reward the miner.
                 let mtps_package_call = coin_type_address(coin_type) == Some(mc.package)
                     && mc.module.as_str() == "mtps"
                     && matches!(mc.function.as_str(), "mint" | "mint_default" | "mint_nft");
@@ -1005,7 +1005,7 @@ mod tests {
         assert!(validate_sponsorable(&ptb(vec![other]), pkg, &sui_coin()).is_err());
     }
 
-    // The regular-payments shop reward path: `mint_nft` in the MTPS package is sponsorable so
+    // The micro-payments shop reward path: `mint_nft` in the MTPS package is sponsorable so
     // the miner receives the collectible gaslessly (emits `NftMinted` on-chain).
     #[test]
     fn validate_accepts_mtps_mint_nft() {

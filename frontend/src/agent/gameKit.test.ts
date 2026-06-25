@@ -8,8 +8,8 @@ describe("GAME_KITS registry", () => {
     assert.ok(GAME_KITS.blackjack);
     assert.ok(GAME_KITS.battleship);
     assert.ok(GAME_KITS["quantum-poker"]);
-    // extras (including regular-payments) are also present via the same registry
-    assert.ok(GAME_KITS["regular-payments"]);
+    // extras (including micro-payments) are also present via the same registry
+    assert.ok(GAME_KITS["micro-payments"]);
   });
 
   it("exposes the human-hook protocol domains", () => {

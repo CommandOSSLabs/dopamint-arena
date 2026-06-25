@@ -76,7 +76,7 @@ const FLAVORS: Record<string, SelfPlayFlavor> = {
  * Builds a mock self-playing window for a game whose real engine isn't wired
  * yet: a bot "plays" on an interval, streaming recent results and a running
  * P/L so the desktop looks alive in a demo. Swap for a real `Window` component
- * (see regularPayments) when the protocol is connected.
+ * (see microPayments) when the protocol is connected.
  */
 export function makePlaceholder(name: string) {
   const flavor = FLAVORS[name] ?? GENERIC;
