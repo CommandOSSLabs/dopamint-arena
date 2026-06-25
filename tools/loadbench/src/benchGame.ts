@@ -78,6 +78,7 @@ async function main() {
     const rpc = process.env.SUI_RPC_URL ?? e.SUI_RPC_URL ?? "";
     ctx.client = new SuiClient({ url: rpc || getFullnodeUrl("localnet") });
     const settlerKey = process.env.SUI_SETTLER_KEY ?? e.SUI_SETTLER_KEY;
+    if (!settlerKey) throw new Error("onchain run needs a settler key: pass --settler-key or run `bun run stack`");
     ctx.funder = funderFromEnv({ SUI_SETTLER_KEY: settlerKey });
   }
   let relay: { stop(): void } | null = null;

@@ -1,3 +1,6 @@
+import { spawn } from "node:child_process";
+import os from "node:os";
+
 export type RunMode = "swarm" | "game";
 
 export type RunPlan =
@@ -132,11 +135,13 @@ export function planRun(argv: string[], composeFile: string): RunPlan {
 }
 
 // ── executor ────────────────────────────────────────────────────────────────
-import { spawn } from "node:child_process";
 
 function run(cmd: string, cmdArgs: string[], extraEnv: Record<string, string>): void {
   const child = spawn(cmd, cmdArgs, { stdio: "inherit", env: { ...process.env, ...extraEnv } });
-  child.on("exit", (code) => process.exit(code ?? 0));
+  child.on("exit", (code, signal) => {
+    if (signal) process.exit(128 + (os.constants.signals[signal] ?? 1));
+    process.exit(code ?? 1);
+  });
   child.on("error", (err) => { console.error(String(err?.message ?? err)); process.exit(1); });
 }
 

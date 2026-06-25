@@ -156,6 +156,7 @@ async function main() {
     env.SUI_NETWORK = process.env.SUI_NETWORK ?? e.SUI_NETWORK ?? "";
     env.SUI_RPC_URL = process.env.SUI_RPC_URL ?? e.SUI_RPC_URL ?? "";
     env.SUI_SETTLER_KEY = process.env.SUI_SETTLER_KEY ?? e.SUI_SETTLER_KEY;
+    if (!env.SUI_SETTLER_KEY) throw new Error("onchain run needs a settler key: pass --settler-key or run `bun run stack`");
   }
 
   const relay = args.channel === "relay" ? await ensureRelay({ wsUrl: process.env.MP_WS_URL }) : null;
