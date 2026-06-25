@@ -1,12 +1,14 @@
 import { register } from "../registry";
-import ChatIcon from "./ChatGameWindow";
+import { ChatWindow } from "./ChatWindow";
 
+// A chat-workspace surface — kept out of the games catalog (catalog: false),
+// surfaced instead under the Add dialog's Chat group. More chats can be added.
 register({
   id: "chat",
   name: "Chat",
-  description: "Chat with a bot or watch bots chat",
-  catalog: true,
+  catalog: false,
+  workspace: "chat",
   icon: "💬",
   image: "/games/chat-app.png",
-  Window: ChatIcon,
+  Window: ChatWindow,
 });

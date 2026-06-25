@@ -80,7 +80,7 @@ export function createMonitoring(args: MonitoringArgs): void {
   });
 
   new aws.cloudwatch.LogMetricFilter(`${args.name}-backend-errors`, {
-    pattern: "{ $.level = \"error\" }",
+    pattern: '{ $.level = "error" }',
     logGroupName: args.logGroupName,
     metricTransformation: {
       name: `${args.name}-error-count`,

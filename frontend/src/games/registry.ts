@@ -1,4 +1,4 @@
-import type { GameModule } from "./types";
+import type { GameModule, Workspace } from "./types";
 
 const modules = new Map<string, GameModule>();
 
@@ -18,4 +18,13 @@ export function list(): GameModule[] {
 
 export function get(id: string): GameModule | undefined {
   return modules.get(id);
+}
+
+/** Every module in a workspace, catalog flag aside — the Add dialog groups by this.
+ *  Modules default to the `games` workspace, so games stay together while the
+ *  `payment`/`chat` widgets surface under their own headings. */
+export function listByWorkspace(workspace: Workspace): GameModule[] {
+  return [...modules.values()].filter(
+    (m) => (m.workspace ?? "games") === workspace,
+  );
 }

@@ -13,7 +13,7 @@ export function createDatabaseProxy(
     securityGroupId: pulumi.Input<string>;
     dbClusterIdentifier: pulumi.Input<string>;
     secretArn: pulumi.Input<string>;
-  }
+  },
 ): DatabaseProxyOutputs {
   const role = new aws.iam.Role(`${name}-rds-proxy-role`, {
     assumeRolePolicy: JSON.stringify({
@@ -40,7 +40,7 @@ export function createDatabaseProxy(
             Resource: secretArn,
           },
         ],
-      })
+      }),
     ),
   });
 

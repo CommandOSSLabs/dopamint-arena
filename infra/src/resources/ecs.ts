@@ -16,5 +16,9 @@ export function createEcs(name: string): EcsOutputs {
     retentionInDays: 7,
   });
 
-  return { clusterName: cluster.name, clusterArn: cluster.arn, logGroupName: logGroup.name };
+  return {
+    clusterName: cluster.name,
+    clusterArn: cluster.arn,
+    logGroupName: logGroup.name,
+  };
 }
