@@ -490,6 +490,58 @@ test("a replayed ACK on reconnect is ignored, not thrown", () => {
   assert.equal(dtA.nonce, 1n, "replayed ACK does not change state");
 });
 
+// A reconnect/cold-load can re-flush a buffered ACK for a move we PROPOSED but never confirmed: the
+// pending isn't persisted (only confirmed states are), so the rebuilt tunnel sits a nonce behind with
+// NO pending to match. Unlike the replayed-ACK case above, this ACK is AHEAD of our confirmed nonce.
+// We can't apply it alone (no pending => no co-signable update); the resync handshake's adopt of the
+// peer's higher checkpoint is the authoritative recovery. So it must be a no-op, not an "unexpected
+// ACK" throw (which crashed live play).
+test("a forward ACK with no matching pending (lost pending on reconnect) is ignored, not thrown", () => {
+  const keyA = generateKeyPair();
+  const keyB = generateKeyPair();
+  const e = endpoints(keyA, keyB, "0xa11ce", "0xb0b");
+  const m = makeManual();
+  const dtA = new DistributedTunnel(
+    counterProtocol,
+    {
+      tunnelId: "0x7",
+      self: e.aSelf,
+      opponent: e.aOpp,
+      selfParty: "A" as Party,
+    },
+    m.transport,
+    BAL
+  );
+  // dtA is at nonce 0 with NO pending — its pre-reload pending at nonce 1 was never persisted.
+  const update = {
+    tunnelId: "0x7",
+    stateHash: blakeOfCount1(),
+    nonce: 1n,
+    timestamp: 100n,
+    partyABalance: 1000n,
+    partyBBalance: 1000n,
+  };
+  const ack = encodeFrame(
+    {
+      kind: "ack",
+      nonce: 1n,
+      sigResponder: edSign(serializeStateUpdate(update), keyB.secretKey),
+    },
+    identityMoveCodec
+  );
+
+  assert.doesNotThrow(
+    () => m.deliver(ack),
+    "a forward ACK with no pending is a no-op (resync adopt recovers it)"
+  );
+  assert.equal(dtA.nonce, 0n, "the un-appliable ACK does not advance state");
+  assert.equal(
+    dtA.latest,
+    null,
+    "no co-signed update from an un-matchable ACK"
+  );
+});
+
 test("engine pair over a relay-shaped transport reaches a settleable terminal state", () => {
   // A transport that mimics the backend relay: send() routes to the OTHER seat verbatim.
   const { dtA, dtB } = makePair();

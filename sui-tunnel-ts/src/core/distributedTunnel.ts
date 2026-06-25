@@ -322,7 +322,8 @@ export class DistributedTunnel<State, Move> {
     this._nonce = frame.nonce;
     // A confirmed move at/past our pending's nonce supersedes it (mirror adoptCheckpoint): drop the
     // stale proposal so displayState renders the confirmed state, not a frozen `pending.next`.
-    if (this.pending && this.pending.update.nonce <= this._nonce) this.pending = null;
+    if (this.pending && this.pending.update.nonce <= this._nonce)
+      this.pending = null;
     const ack: AckFrame = { kind: "ack", nonce: frame.nonce, sigResponder };
     this.transport.send(encodeFrame(ack, this.codec));
     this.onConfirmed?.(this._latest);
@@ -335,7 +336,13 @@ export class DistributedTunnel<State, Move> {
     if (frame.nonce <= this._nonce) return;
     const p = this.pending;
     if (!p || frame.nonce !== p.update.nonce) {
-      throw new Error(`unexpected ACK for nonce ${frame.nonce}`);
+      // Forward ACK with no live pending to match: a reconnect/cold-load re-flushed the ACK for a move
+      // we proposed but never confirmed — the pending isn't persisted (only confirmed states are), so the
+      // rebuilt tunnel sits a nonce behind with no pending. We can't apply the ACK alone (no pending => no
+      // co-signable update); the resync handshake's adopt of the peer's higher checkpoint is the
+      // authoritative recovery. Drop it (mirror the <=nonce idempotent no-op) instead of throwing and
+      // crashing live play.
+      return;
     }
     if (!this.opponent.verify(p.msg, frame.sigResponder)) {
       throw new Error("responder signature failed verification");
