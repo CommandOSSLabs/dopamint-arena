@@ -748,10 +748,11 @@ fn validate_sponsorable_inner(
                     && mc.function.as_str() == "public_share_object";
                 // The MTPS stake token's faucet lives in the coin type's own package
                 // (`<pkg>::mtps`). Sponsor the free `mint`/`mint_default` so a 0-token player
-                // can faucet their stake (gas-sponsored) before opening a game.
-                let faucet_mint = coin_type_address(coin_type) == Some(mc.package)
+                // can faucet their stake (gas-sponsored) before opening a game. Also sponsor
+                // `mint_nft` so the regular-payments shop can gaslessly reward the miner.
+                let mtps_package_call = coin_type_address(coin_type) == Some(mc.package)
                     && mc.module.as_str() == "mtps"
-                    && matches!(mc.function.as_str(), "mint" | "mint_default");
+                    && matches!(mc.function.as_str(), "mint" | "mint_default" | "mint_nft");
                 // SIP-58 stake path (ADR-0013): `redeem_funds` turns the sender's address-balance
                 // withdrawal into the stake `Coin<T>` for the open; `send_funds` is the funding
                 // sweep that deposits a faucet coin into the player's address balance;
@@ -774,7 +775,7 @@ fn validate_sponsorable_inner(
                 anyhow::ensure!(
                     tunnel_call
                         || framework_share
-                        || faucet_mint
+                        || mtps_package_call
                         || coin_balance_op
                         || agent_allowance_call,
                     "sponsor refuses move call {}::{}::{}",
@@ -1161,6 +1162,22 @@ mod tests {
             Some(agent_pkg)
         )
         .is_err());
+    }
+
+    // The regular-payments shop reward path: `mint_nft` in the MTPS package is sponsorable so
+    // the miner receives the collectible gaslessly (emits `NftMinted` on-chain).
+    #[test]
+    fn validate_accepts_mtps_mint_nft() {
+        let coin: TypeTag = "0xabc::mtps::MTPS".parse().unwrap();
+        let mint_nft = Command::MoveCall(sui_sdk_types::MoveCall {
+            package: Address::from_str("0xabc").unwrap(),
+            module: Identifier::new("mtps").unwrap(),
+            function: Identifier::new("mint_nft").unwrap(),
+            type_arguments: vec![],
+            arguments: vec![Argument::Input(0), Argument::Input(1), Argument::Input(2)],
+        });
+        let tunnel_pkg = Address::from_str("0xfff").unwrap();
+        assert!(validate_sponsorable(&ptb(vec![mint_nft]), tunnel_pkg, &coin).is_ok());
     }
 
     // The MTPS faucet `mint` (in the coin type's own package) is sponsorable, so a 0-token
