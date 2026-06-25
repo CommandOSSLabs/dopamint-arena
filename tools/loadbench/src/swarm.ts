@@ -10,17 +10,23 @@ import { ratePerSec } from "./metrics";
 export function parseSwarmArgs(argv: string[]): {
   channel: "local" | "relay";
   anchor: "onchain" | "offchain";
-  concurrency: number;
+  workers: number | "auto";
+  concurrency: number | "auto";
   matches: number | null;
   durationS: number | null;
+  memBudgetMb: number | null;
+  perMatchKb: number | null;
   games: string[];
 } {
   const out = {
     channel: "relay" as "local" | "relay",
     anchor: "onchain" as "onchain" | "offchain",
-    concurrency: 8,
+    workers: "auto" as number | "auto",
+    concurrency: "auto" as number | "auto",
     matches: null as number | null,
     durationS: null as number | null,
+    memBudgetMb: null as number | null,
+    perMatchKb: null as number | null,
     games: [...PLAYABLE] as string[],
   };
   for (let i = 0; i < argv.length; i++) {
@@ -28,10 +34,45 @@ export function parseSwarmArgs(argv: string[]): {
     if (a === "--channel") out.channel = argv[++i] as "local" | "relay";
     else if (a === "--offchain") out.anchor = "offchain";
     else if (a === "--anchor") out.anchor = argv[++i] as "onchain" | "offchain";
-    else if (a === "--concurrency") out.concurrency = Number(argv[++i]);
+    else if (a === "--workers") { i++; out.workers = argv[i] === "auto" ? "auto" : Number(argv[i]); }
+    else if (a === "--concurrency") { i++; out.concurrency = argv[i] === "auto" ? "auto" : Number(argv[i]); }
     else if (a === "--matches") out.matches = Number(argv[++i]);
     else if (a === "--duration") out.durationS = Number(argv[++i]);
+    else if (a === "--mem-budget-mb") out.memBudgetMb = Number(argv[++i]);
+    else if (a === "--per-match-kb") out.perMatchKb = Number(argv[++i]);
     else if (a === "--games") out.games = argv[++i].split(",").map((s) => s.trim()).filter(Boolean);
+  }
+  return out;
+}
+
+const DEFAULT_PER_MATCH_KB = 512;
+
+export function resolveFleet(
+  args: { workers: number | "auto"; concurrency: number | "auto"; memBudgetMb: number | null; perMatchKb: number | null },
+  sys: { cores: number; totalMem: number },
+): { workers: number; concurrency: number } {
+  const workers = args.workers === "auto" ? Math.max(1, sys.cores) : args.workers;
+  let concurrency: number;
+  if (args.concurrency === "auto") {
+    const budgetBytes = (args.memBudgetMb ?? Math.floor((sys.totalMem * 0.7) / 1_048_576)) * 1_048_576;
+    const perMatchBytes = (args.perMatchKb ?? DEFAULT_PER_MATCH_KB) * 1024;
+    const maxInFlight = Math.max(workers, Math.floor(budgetBytes / perMatchBytes));
+    concurrency = Math.max(1, Math.floor(maxInFlight / workers));
+  } else {
+    concurrency = args.concurrency;
+  }
+  return { workers, concurrency };
+}
+
+/** Split `total` matches across `workers`; sums to total, length = workers. */
+export function sliceMatches(total: number, workers: number): number[] {
+  const base = Math.ceil(total / workers);
+  const out: number[] = [];
+  let rem = total;
+  for (let i = 0; i < workers; i++) {
+    const n = Math.min(base, Math.max(0, rem));
+    out.push(n);
+    rem -= n;
   }
   return out;
 }
