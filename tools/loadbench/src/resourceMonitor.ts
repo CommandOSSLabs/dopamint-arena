@@ -37,6 +37,7 @@ export function startResourceMonitor(opts: { intervalMs?: number } = {}): { stop
   let lastT = startT;
   const intervalPcts: number[] = [];
   const rssBytes: number[] = [];
+  rssBytes.push(process.memoryUsage().rss);
   const timer = setInterval(() => {
     const t = performance.now();
     const c = cpuUs();

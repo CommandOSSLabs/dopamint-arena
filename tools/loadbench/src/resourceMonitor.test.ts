@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { summarizeResources } from "./resourceMonitor";
+import { summarizeResources, startResourceMonitor } from "./resourceMonitor";
 
 test("summarizeResources computes avg from total cpu-time and peak from intervals", () => {
   // 4 cpu-seconds over 1 wall-second => 400% avg => 4 cores.
@@ -18,4 +18,11 @@ test("summarizeResources is safe with no samples", () => {
   expect(s.cpu.avgPct).toBe(0);
   expect(s.mem.peakRssMb).toBe(0);
   expect(s.samples).toBe(0);
+});
+
+test("startResourceMonitor captures at least one sample even on a sub-interval run", () => {
+  const h = startResourceMonitor({ intervalMs: 10_000 }); // interval longer than the run
+  const s = h.stop();
+  expect(s.samples).toBeGreaterThanOrEqual(1);
+  expect(s.mem.peakRssMb).toBeGreaterThan(0);
 });
