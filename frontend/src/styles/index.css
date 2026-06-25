@@ -584,3 +584,7 @@ html:not(.dark) .wal-aurora::before {
   border-color: transparent;
   box-shadow: 0 0 14px rgba(253, 224, 71, 0.4);
 }
+
+button {
+  cursor: pointer;
+}

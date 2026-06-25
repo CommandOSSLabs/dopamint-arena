@@ -5,7 +5,6 @@ import { PaymentsWindow } from "./PaymentsWindow";
 register({
   id: "regular-payments",
   name: "Regular Payments",
-  catalog: false,
   icon: "💸",
   image: "/games/payment.png",
   Window: PaymentsWindow,
