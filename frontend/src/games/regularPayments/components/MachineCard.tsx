@@ -30,38 +30,33 @@ const TIER_ICON: Record<NftTier, string> = {
 
 const STATUS_STYLE: Record<
   MachinePhase,
-  { fill: string; stroke: string; text: string; led: string; pulse?: boolean }
+  { paper: string; text: string; led: string; pulse?: boolean }
 > = {
   spawning: {
-    fill: "#ffe9bd",
-    stroke: "#e8920c",
+    paper: "bg-[#ffe9bd] border-[#e8920c]",
     text: "text-[#e8920c]",
     led: "bg-[#e8920c]",
     pulse: true,
   },
   running: {
-    fill: "#e7f1fb",
-    stroke: "#1971c2",
+    paper: "bg-[#e7f1fb] border-[#1971c2]",
     text: "text-[#1971c2]",
     led: "bg-[#1971c2]",
     pulse: true,
   },
   settling: {
-    fill: "#ffe9bd",
-    stroke: "#e8920c",
+    paper: "bg-[#ffe9bd] border-[#e8920c]",
     text: "text-[#e8920c]",
     led: "bg-[#e8920c]",
     pulse: true,
   },
   closed: {
-    fill: "#eaf8ee",
-    stroke: "#2f9e44",
+    paper: "bg-[#eaf8ee] border-[#2f9e44]",
     text: "text-[#2f9e44]",
     led: "bg-[#2f9e44]",
   },
   error: {
-    fill: "#ffe9e9",
-    stroke: "#e03131",
+    paper: "bg-[#ffe9e9] border-[#e03131]",
     text: "text-[#e03131]",
     led: "bg-[#e03131]",
   },
@@ -136,27 +131,17 @@ export function MachineCard({ session }: MachineCardProps) {
   const isNearComplete = (phase === "running" && pct >= 90) || isSettling;
   const status = STATUS_STYLE[phase];
 
-  const prizeFill = isStreaming
-    ? "#eef4fb"
+  const prizePaper = isStreaming
+    ? "bg-[#eef4fb] border-[#1971c2]"
     : isSettling
-      ? "#ffe9bd"
-      : "#eaf8ee";
-  const prizeStroke = isStreaming
-    ? "#1971c2"
-    : isSettling
-      ? "#e8920c"
-      : "#2f9e44";
-  const prizeBorder = 3;
+      ? "bg-[#ffe9bd] border-[#e8920c]"
+      : "bg-[#eaf8ee] border-[#2f9e44]";
+  const prizeBorderClass = "border-[3px]";
 
   return (
     <article className="relative isolate min-w-0 rounded-[11px] p-[clamp(6px,2cqmin,12px)] flex flex-col">
       <span
-        className={`${SKETCH_INK} -z-10 rounded-[11px]`}
-        style={{
-          backgroundColor: "#fffefb",
-          borderColor: "#23221f",
-          borderWidth: 2.5,
-        }}
+        className={`${SKETCH_INK} -z-10 rounded-[11px] bg-[#fffefb] border-[#23221f] border-[2.5px]`}
       />
 
       <header className="mb-1.5 flex items-center justify-end">
@@ -164,12 +149,7 @@ export function MachineCard({ session }: MachineCardProps) {
           className={`relative isolate inline-flex items-center gap-[0.35em] px-[clamp(6px,1.8cqmin,12px)] py-[clamp(1px,0.6cqmin,4px)] text-[clamp(9px,2.4cqmin,13px)] leading-none tracking-wide uppercase ${status.text}`}
         >
           <span
-            className={`${SKETCH_INK} -z-10 rounded-full`}
-            style={{
-              backgroundColor: status.fill,
-              borderColor: status.stroke,
-              borderWidth: 2,
-            }}
+            className={`${SKETCH_INK} -z-10 rounded-full border-2 ${status.paper}`}
           />
           <span
             className={`size-[0.45em] rounded-full ${status.led} ${status.pulse ? "animate-pulse" : ""}`}
@@ -187,12 +167,7 @@ export function MachineCard({ session }: MachineCardProps) {
       `}
       >
         <span
-          className={`${SKETCH_INK} -z-10 rounded-[10px]`}
-          style={{
-            backgroundColor: prizeFill,
-            borderColor: isNearComplete ? "#2f9e44" : prizeStroke,
-            borderWidth: prizeBorder,
-          }}
+          className={`${SKETCH_INK} -z-10 rounded-[10px] ${prizePaper} ${isNearComplete ? "border-[#2f9e44]" : ""} ${prizeBorderClass}`}
         />
 
         {showRewardImage ? (
@@ -234,19 +209,14 @@ export function MachineCard({ session }: MachineCardProps) {
             <span className="text-[clamp(9px,2.4cqmin,13px)] font-bold tracking-wide text-[rgba(35,34,31,0.6)] uppercase">
               Progress
             </span>
-            <span className="font-['Space_Mono',_ui-monospace,_monospace] text-[clamp(9px,2.5cqmin,14px)] font-bold">
+            <span className="font-Space-Mono text-[clamp(9px,2.5cqmin,14px)] font-bold">
               {tickCount}/{tickMax}
             </span>
           </div>
 
           <div className="relative isolate h-[clamp(8px,2.4cqmin,14px)] overflow-hidden rounded-full bg-[rgba(35,34,31,0.06)]">
             <span
-              className={`${SKETCH_INK} z-10 rounded-full`}
-              style={{
-                backgroundColor: "transparent",
-                borderColor: "#e8920c",
-                borderWidth: 2,
-              }}
+              className={`${SKETCH_INK} z-10 rounded-full border-2 border-[#e8920c] bg-transparent`}
             />
             <div
               className={`h-full rounded-full bg-gradient-to-r from-[#d97706] via-[#e8920c] to-[#ffe9bd] transition-[width] duration-200 ease-out ${
@@ -270,17 +240,12 @@ export function MachineCard({ session }: MachineCardProps) {
               className="relative isolate rounded-lg px-[clamp(4px,1.4cqmin,10px)] py-[clamp(3px,1.2cqmin,8px)] text-center"
             >
               <span
-                className={`${SKETCH_INK} -z-10 rounded-lg`}
-                style={{
-                  backgroundColor: "#fffefb",
-                  borderColor: "#23221f",
-                  borderWidth: 2.5,
-                }}
+                className={`${SKETCH_INK} -z-10 rounded-lg bg-[#fffefb] border-[#23221f] border-[2.5px]`}
               />
               <span className="block text-[clamp(8px,2.2cqmin,12px)] tracking-wide text-[rgba(35,34,31,0.6)] uppercase">
                 {label}
               </span>
-              <span className="block font-['Space_Mono',_ui-monospace,_monospace] text-[clamp(11px,3cqmin,17px)] leading-tight">
+              <span className="block font-Space-Mono text-[clamp(11px,3cqmin,17px)] leading-tight">
                 {value}
               </span>
             </div>
