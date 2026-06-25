@@ -133,7 +133,7 @@ with a message listing the valid options.
 
 - **`--workers`** = number of Node.js `worker_threads`. Each thread runs on its
   own OS core, giving **true multi-core parallelism**. `auto` resolves to
-  `round(1.5 × availableCores)`.
+  `round(1.5 × os.availableParallelism())`.
 
 - **`--concurrency`** = async matches in flight **per worker**. This overlaps
   I/O waiting within a thread but does not add cores. `auto` is mode-aware:

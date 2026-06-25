@@ -6,7 +6,7 @@ import { createParticipant } from "../../../sui-tunnel-ts/src/core/keys";
 import { blake2b256 } from "../../../sui-tunnel-ts/src/core/crypto";
 import { toHex, fromHex } from "../../../sui-tunnel-ts/src/core/bytes";
 import { mulberry32 } from "../../../sui-tunnel-ts/src/sim/rng";
-import type { Protocol, Party } from "../../../sui-tunnel-ts/src/protocol/Protocol";
+import type { Party } from "../../../sui-tunnel-ts/src/protocol/Protocol";
 import type { MoveCodec } from "../../../sui-tunnel-ts/src/core/distributedFrame";
 import type { GameKit, GameBot, BotContext } from "../../../frontend/src/agent/gameKit";
 
