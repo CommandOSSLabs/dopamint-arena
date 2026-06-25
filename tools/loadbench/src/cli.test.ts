@@ -1,8 +1,17 @@
 import { test, expect } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { planRun } from "./cli";
 
 const COMPOSE = "/repo/tools/loadbench/docker-compose.yml";
 const PROJECT = "loadbench-feat-x";
+const CLI = new URL("./cli.ts", import.meta.url).pathname;
+
+test("--help prints usage and exits 0 without running a benchmark", () => {
+  const out = execFileSync("bun", ["run", CLI, "--help"], { encoding: "utf8" });
+  expect(out).toContain("Usage: bun run bench");
+  expect(out).toContain("--game all");
+  expect(out).toContain("--container");
+});
 
 test("defaults to a host swarm run, local+onchain, no infra env", () => {
   expect(planRun([], COMPOSE, PROJECT)).toEqual({

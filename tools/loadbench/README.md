@@ -241,6 +241,7 @@ All flags hang off `bun run bench`.
 | `--container` | yes | yes | re-exec this run inside the `loadbench` compose service |
 | `--cpus N` | yes | yes | override compose CPU limit for `--container` run |
 | `--memory Ng` | yes | yes | override compose memory limit for `--container` run |
+| `-h`, `--help` | yes | yes | print usage (modes, flags, examples) and exit |
 
 **Playable games:** `ticTacToe, blackjack, battleship, quantumPoker, bombIt,
 cross`. These map to the real frontend kit classes; any other name is rejected

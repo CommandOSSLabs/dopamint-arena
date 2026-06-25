@@ -159,9 +159,58 @@ function run(cmd: string, cmdArgs: string[], extraEnv: Record<string, string>): 
   });
   child.on("error", (err) => { console.error(String(err?.message ?? err)); process.exit(1); });
 }
+const HELP = `loadbench — benchmark real off-chain games on the sui-tunnel engine.
+
+Usage: bun run bench [flags]
+
+Modes (pick one; default = swarm):
+  (no --game)            swarm: many concurrent matches across games; aggregate move-TPS
+  --game <name>          latency: one game, per-move p50/p99 (single-stream)
+  --game all             multi-core report: every game through the worker fleet,
+                         one at a time, aggregated (TPS + Matches/s + CPU utilization)
+
+Channel & anchor:
+  --channel local|relay  transport (default local)
+  --offchain             no chain; synthetic tunnel id, pure move loop
+  --anchor onchain|offchain   default onchain
+
+Cap (how much work):
+  --duration S           run S seconds (swarm; per-game budget for --game all, default 10s)
+  --matches N            run N matches (swarm cap / latency count / --game all fixed count)
+  --concurrency N        in-flight matches per worker
+
+Fleet (swarm and --game all):
+  --workers N|auto       OS worker threads (default auto = ~1.5x cores)
+  --mem-budget-mb N      memory cap for auto concurrency (io mode)
+  --per-match-kb N       per-match RSS estimate for auto concurrency
+  --games a,b,c          swarm game filter (default: all)
+
+Onchain infra (flag -> .env.local -> process env):
+  --rpc-url <url>        Sui RPC endpoint
+  --package-id <id>      published tunnel package id
+  --settler-key <key>    settler private key
+  --relay-url <ws-url>   connect to a running relay (else it auto-spawns)
+
+Container (re-exec inside the loadbench compose service):
+  --container            run isolated in Docker; joins this env's project
+  --cpus N               CPU limit for the container run
+  --memory Ng            memory limit for the container run
+
+  -h, --help             show this help
+
+Examples:
+  bun run bench --offchain --channel local --duration 10
+  bun run bench --game blackjack --offchain --channel local --matches 50
+  bun run bench --game all --channel local --duration 30
+  bun run bench --game all --container --cpus 8 --offchain --channel local
+`;
 
 function main(): void {
   const argv = process.argv.slice(2);
+  if (argv.includes("--help") || argv.includes("-h")) {
+    console.log(HELP);
+    return;
+  }
   const composeFile = new URL("../docker-compose.yml", import.meta.url).pathname;
   const plan = planRun(argv, composeFile, benchProject());
 
