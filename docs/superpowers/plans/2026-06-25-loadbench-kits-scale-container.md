@@ -12,7 +12,7 @@
 
 - **Toolchain:** `tools/loadbench/` is a bun package — `bun test`, co-located `*.test.ts`. Do NOT convert `sui-tunnel-ts/` or `frontend/` off their toolchains; both are import-only here.
 - **Kit fidelity:** the bench MUST drive each game through `GAME_KITS` (`frontend/src/agent/gameKit.ts`) — the same FE protocol class the human `usePvp*` hook uses — not `createBehaviorProtocol`. The 6 playable games are `ticTacToe, blackjack, battleship, quantumPoker, bombIt, cross`. `payments`/`chat` are removed.
-- **Alias:** the frontend kits import `sui-tunnel-ts` via bare specifiers; resolve them with a tsconfig `paths` map in loadbench (bun honors tsconfig paths). Existing loadbench files keep their relative `../../../sui-tunnel-ts/src/...` imports.
+- **Alias:** the frontend kits import `sui-tunnel-ts` via bare specifiers; resolve them with a tsconfig `paths` map in loadbench (bun honors tsconfig paths). Existing loadbench files keep their relative `../../../sui-tunnel-ts/src/...` imports. The tic-tac-toe kit also pulls in the nested `@ttt/shared` package, whose own `tsconfig.json` gets a minimal committed `paths` entry for `sui-tunnel-ts` (bun resolves paths per-file from the nearest config). Editing that one config is permitted as the install-free portable fix; no other `frontend/` source is touched.
 - **Do NOT revert** the `sui-tunnel-ts/src/agents/behaviors.ts` `bombIt`/`cross` edit — the kits import `sui-tunnel-ts/agents/behaviors`.
 - **auto/max:** `--workers auto` = all cores; `--concurrency auto` = pushed high but **memory-capped** (`workers × concurrency` bounded by a memory budget, default 70% of `os.totalmem()`), so a 192-vCPU box maxes throughput instead of OOM-ing.
 - **Resource metrics:** process APIs only (`process.cpuUsage()`, `process.memoryUsage().rss`); report avg + peak CPU and RSS.
@@ -43,6 +43,7 @@ From `tools/loadbench/src/`, the frontend kit path is `../../../frontend/src/age
 
 **Files:**
 - Modify: `tools/loadbench/tsconfig.json`
+- Modify: `frontend/src/games/ticTacToe/packages/shared/tsconfig.json` (add `baseUrl`+`paths` so the ttt shared package resolves its own `sui-tunnel-ts` `file:` dep from source — `sui-tunnel-ts`'s `package.json main` points at an unbuilt `dist/`, and bun applies tsconfig `paths` per-file from the nearest config; this is the portable, install-free fix, no node_modules wrapper)
 - Test: `tools/loadbench/src/kitImport.test.ts`
 
 **Interfaces:**
