@@ -231,6 +231,63 @@ const spec = { proto, moveCodec: battleshipMoveCodec, adapter };
 The fleet + placements round-trip into the hook's out-of-React secret store; on
 cold-load they are restored from `record.secret`, never from a `resync` payload.
 
+## Transcript persistence
+
+A tunnel game that builds a `Transcript` and resumes **must** persist it. If it
+does not, a reloaded seat rebuilds a transcript that starts from the first
+co-signed move *after* the reload; its `root()` no longer matches the peer's
+full-history root, and cooperative close throws
+`"settlement transcript-root mismatch between parties"`. Resume restores enough
+state to keep playing, but settlement breaks.
+
+The framework provides persistence through five edits on the game hook (the
+**§4a five-edit pattern**, for class/ref hooks whose transcript is created inside
+the shared `activateSession`; see below). Hooks that create the transcript in the
+**live-only** path, outside the shared activate, need only three edits (the
+**§4b three-edit pattern** — ttt and blackjack). Full spec:
+[`docs/superpowers/specs/2026-06-25-pvp-transcript-resume-persistence-design.md`](superpowers/specs/2026-06-25-pvp-transcript-resume-persistence-design.md).
+
+### §4a five-edit pattern (class/ref hooks)
+
+Call the transcript ref or field `T` (`transcriptRef.current` for functional
+hooks; a `private transcript: Transcript | null` field for class hooks).
+
+1. **Reuse on activate** — replace `const transcript = new Transcript(id)` with
+   `const transcript = T ?? new Transcript(id); T = transcript;` inside
+   `activateSession`. Cold-load installs a rebuilt transcript before calling
+   activate; this reuses it instead of overwriting with an empty one.
+2. **Capture** — spread `captureTranscript: () => T ? transcriptToWire(T) : []`
+   onto the `attachResume` adapter so the record writes the full transcript
+   atomically with `latestCoSigned`.
+3. **Adopt-append** — in the adapter's `onReconciled(tunnel, outcome)`, add
+   `if (outcome === "adopt" && T) appendAdoptedCheckpoint(T, tunnel.snapshot().latest);`
+   before any existing sync call. `adoptCheckpoint` advances the tunnel without
+   firing `onConfirmed` (where `transcript.append` lives); this closes the gap.
+4. **Install on resume** — destructure
+   `const { tunnel, channel, transcript } = restored[0]` and set
+   `T = transcript` before calling `activateSession`.
+5. **Clear** — set `T = null` in `dispose`/`reset` so a fresh live match
+   starts with an empty transcript.
+
+Primitives: `transcriptToWire`, `rebuildTranscript`, `appendAdoptedCheckpoint`
+(`pvp/resume.ts`); `ResumeRecord.transcript`, `ResumeAdapter.captureTranscript`,
+`RestoredSession.transcript` (`pvp/resumeSession.ts`).
+
+### §4b three-edit pattern (functional-ref hooks, live-only creation)
+
+When the transcript is created unconditionally in the live-only path (outside the
+shared activate), the rebuilt transcript installed in `resume` is never clobbered
+— no reuse-`??` or reset-null edit is needed.
+
+1. **Capture + adopt-append** — inside the shared activate, at the `attachResume`
+   site, spread `captureTranscript: () => transcriptToWire(transcriptRef.current)`
+   onto the adapter and wrap `onReconciled` to call
+   `appendAdoptedCheckpoint(transcriptRef.current, tunnel.snapshot().latest)` on
+   `"adopt"`.
+2. **Install on resume** — set `transcriptRef.current = restored[0].transcript`.
+3. **Import** `transcriptToWire` and `appendAdoptedCheckpoint` from
+   `pvp/resume`.
+
 ## Invariants checklist
 
 - [ ] `serializeState` excludes the hidden secret (it feeds both the record and

@@ -133,6 +133,14 @@ Four invariants for a correct count:
 
 Same protocol; the hook differs. Copy `frontend/src/games/ticTacToe/` and its PvP hook (grep `quickMatch`): generate a per-match ephemeral key, `MpClient.quickMatch("<game-id>")`, exchange the seat public keys, seat A `openAndFundSharedTunnel` + seat B `depositStake`, drive moves through `DistributedTunnel` (propose→ACK), seat A submits the cooperative close. Both sides replay the shared seed-driven protocol to agree on outcomes. No backend or Move change — the relay is opaque and matchmaking keys on the game-id string.
 
+**Resume / settle checklist (PvP).** When wiring resume for a PvP game, add these
+to the adapter integration steps (see [resume-adapter-guide.md](resume-adapter-guide.md)):
+
+- [ ] Wire the three resume wirings (persistence install, warm path, cold path).
+- [ ] If the game builds a `Transcript`, wire transcript persistence (the five
+      edits in the resume-adapter guide § "Transcript persistence") so
+      reload-then-settle does not hit a transcript-root mismatch.
+
 ## Import discipline
 
 `tsx` (the test runner) ignores the Vite alias and tsconfig `paths` at runtime; Vite resolves them at build/typecheck. This splits how SDK imports are written.
