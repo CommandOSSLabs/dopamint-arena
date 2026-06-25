@@ -214,9 +214,7 @@ Key details:
   via `deploy.resources.limits`; override per run with `--cpus` / `--memory`.
 - **RPC**: `SUI_RPC_URL=http://sui-localnet:9000` is baked into the service
   environment so the container reaches the localnet by name.
-- **`--channel relay` is host-only**: the relay process (`cargo run -p
-  tunnel-manager`) is not included in the image. Run relay benchmarks from the
-  host without `--container`.
+- **`--channel relay` is host-only**: the relay process (`cargo run -p tunnel-manager`) is not included in the image, so relay benchmarks must run from the host without `--container`.
 
 ## Relay specifics
 
@@ -257,7 +255,7 @@ the redis path.
 | `src/benchGame.ts` | latency mode (`--game`) entrypoint |
 | `src/swarm.ts` | swarm entrypoint (fleet, resource monitor) |
 | `src/worker.ts` | per-thread swarm worker |
-| `src/bench.ts` | `bun run bench` CLI entry; routes to swarm or latency mode |
+| `src/cli.ts` | `bun run bench` CLI entry; routes to swarm or latency mode |
 | `Dockerfile` | `loadbench` container image (bun + frontend kits; no cargo) |
 
 Secrets (`.env.local`, `keys.json`) are localnet-only and gitignored.
