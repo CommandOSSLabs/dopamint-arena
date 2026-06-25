@@ -11,13 +11,19 @@
  *   state dual-signed + verified, basic-strategy bots) -> botA update_state(final) ->
  *   botA close_cooperative_with_root -> coins paid out on-chain.
  */
-import { core, protocols, createSuiClient, onchain, proof } from "../src/index.ts";
+import {
+  core,
+  createSuiClient,
+  onchain,
+  proof,
+  protocols,
+} from "../src/index.ts";
 // create_and_fund lives in its own module (a Dopamint extension); the SDK's own example imports
 // it the same way rather than via the onchain barrel, keeping that upstream file conflict-free.
-import { buildOpenAndFundMany } from "../src/onchain/createAndFund.ts";
-import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import { decodeSuiPrivateKey } from "@mysten/sui/cryptography";
+import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import { Transaction } from "@mysten/sui/transactions";
+import { buildOpenAndFundMany } from "../src/onchain/createAndFund.ts";
 
 // Deployed sui_tunnel framework on testnet (see memory: sui-tunnel-testnet-deployment).
 // This build carries the `create_and_fund` extension used below.
@@ -56,9 +62,12 @@ function partyForPhase(s: State): "A" | "B" {
 
 async function main() {
   const funderKey = process.env.SUI_FUNDER_KEY;
-  if (!funderKey) throw new Error("set SUI_FUNDER_KEY=<suiprivkey…> (funded testnet key)");
+  if (!funderKey)
+    throw new Error("set SUI_FUNDER_KEY=<suiprivkey…> (funded testnet key)");
   const client = createSuiClient("testnet");
-  const funder = Ed25519Keypair.fromSecretKey(decodeSuiPrivateKey(funderKey).secretKey);
+  const funder = Ed25519Keypair.fromSecretKey(
+    decodeSuiPrivateKey(funderKey).secretKey
+  );
 
   const botA = makeBot(); // player-bot
   const botB = makeBot(); // dealer-bot
@@ -103,15 +112,22 @@ async function main() {
     options: { showObjectChanges: true, showEffects: true },
   });
   if (openRes.effects?.status?.status !== "success")
-    throw new Error(`create_and_fund failed: ${openRes.effects?.status?.error ?? "unknown"}`);
+    throw new Error(
+      `create_and_fund failed: ${openRes.effects?.status?.error ?? "unknown"}`
+    );
   await client.waitForTransaction({ digest: openRes.digest });
   const tunnelId = onchain.parseTunnelId(openRes.objectChanges);
   if (!tunnelId) throw new Error("could not find created Tunnel id");
   console.log("create_and_fund:", openRes.digest, "tunnel:", tunnelId);
 
   // Read the on-chain created_at — the settlement message is signed with it.
-  const obj = await client.getObject({ id: tunnelId, options: { showContent: true } });
-  const fields = (obj.data?.content as { fields?: Record<string, unknown> } | undefined)?.fields;
+  const obj = await client.getObject({
+    id: tunnelId,
+    options: { showContent: true },
+  });
+  const fields = (
+    obj.data?.content as { fields?: Record<string, unknown> } | undefined
+  )?.fields;
   const createdAt = BigInt((fields?.created_at as string) ?? 0);
 
   // 3) off-chain self-play: bots co-sign every state update until the game is terminal.
@@ -122,7 +138,7 @@ async function main() {
     botB.coreKey,
     botA.address,
     botB.address,
-    { a: STAKE, b: STAKE },
+    { a: STAKE, b: STAKE }
   );
   // Accumulate EVERY co-signed update into a transcript; its Merkle root commits to
   // the full play history and is anchored on-chain at close.
@@ -143,7 +159,7 @@ async function main() {
   const fin = tunnel.state;
   console.log(
     `played ${steps} signed moves over ${fin.round} rounds | ` +
-      `final off-chain balances A=${fin.balanceA} B=${fin.balanceB}`,
+      `final off-chain balances A=${fin.balanceA} B=${fin.balanceB}`
   );
 
   // 4) checkpoint the FINAL co-signed state on-chain so the tunnel's StateCommitment
@@ -167,14 +183,27 @@ async function main() {
     options: { showEffects: true },
   });
   await client.waitForTransaction({ digest: ures.digest });
-  console.log("update_state:", ures.digest, "(on-chain nonce ->", latest.update.nonce + ")");
+  console.log(
+    "update_state:",
+    ures.digest,
+    "(on-chain nonce ->",
+    latest.update.nonce + ")"
+  );
 
   // 5) settle with the transcript ROOT (close_cooperative_with_root): one tx distributes
   // final balances AND anchors a Merkle root committing to the FULL history. After
   // update_state the on-chain nonce is `latest.nonce`, so finalNonce = latest.nonce + 1.
   const root = transcript.root();
-  console.log("transcript root:", "0x" + Buffer.from(root).toString("hex"), `(${steps} states)`);
-  const settlement = tunnel.buildSettlementWithRoot(createdAt, root, latest.update.nonce);
+  console.log(
+    "transcript root:",
+    "0x" + Buffer.from(root).toString("hex"),
+    `(${steps} states)`
+  );
+  const settlement = tunnel.buildSettlementWithRoot(
+    createdAt,
+    root,
+    latest.update.nonce
+  );
   const ctx = new Transaction();
   onchain.buildCloseWithRootFromSettlement(ctx, tunnelId, settlement);
   const cres = await client.signAndExecuteTransaction({
@@ -184,19 +213,33 @@ async function main() {
   });
   await client.waitForTransaction({ digest: cres.digest });
   console.log("close_with_root:", cres.digest);
-  const rootEvent = cres.events?.find((e) => e.type.endsWith("::TunnelClosedWithRoot"));
-  console.log("on-chain TunnelClosedWithRoot event:", rootEvent ? JSON.stringify(rootEvent.parsedJson) : "(not found)");
+  const rootEvent = cres.events?.find((e) =>
+    e.type.endsWith("::TunnelClosedWithRoot")
+  );
+  console.log(
+    "on-chain TunnelClosedWithRoot event:",
+    rootEvent ? JSON.stringify(rootEvent.parsedJson) : "(not found)"
+  );
 
   // Show coins actually moved on-chain.
   const [ba, bb] = await Promise.all([
     client.getBalance({ owner: botA.address }),
     client.getBalance({ owner: botB.address }),
   ]);
-  console.log(`on-chain bot balances now: A=${ba.totalBalance} MIST  B=${bb.totalBalance} MIST`);
+  console.log(
+    `on-chain bot balances now: A=${ba.totalBalance} MIST  B=${bb.totalBalance} MIST`
+  );
 
   // Show the on-chain StateCommitment field now reflects the played-out final state.
-  const finalObj = await client.getObject({ id: tunnelId, options: { showContent: true } });
-  const sf = (finalObj.data?.content as { fields?: { state?: { fields?: Record<string, unknown> } } } | undefined)?.fields?.state?.fields;
+  const finalObj = await client.getObject({
+    id: tunnelId,
+    options: { showContent: true },
+  });
+  const sf = (
+    finalObj.data?.content as
+      | { fields?: { state?: { fields?: Record<string, unknown> } } }
+      | undefined
+  )?.fields?.state?.fields;
   console.log("on-chain state field:", JSON.stringify(sf));
   console.log("\nBLACKJACK BOT-VS-BOT ON-CHAIN OK");
 }

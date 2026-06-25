@@ -25,13 +25,17 @@ export interface BenchmarkFleetArgs {
   version: pulumi.Input<string>;
 }
 
-export function createBenchmarkFleet(args: BenchmarkFleetArgs): BenchmarkFleetOutputs {
+export function createBenchmarkFleet(
+  args: BenchmarkFleetArgs,
+): BenchmarkFleetOutputs {
   const version = args.version;
 
-  const component = new aws.imagebuilder.Component(`${args.name}-benchmark-component`, {
-    platform: "Linux",
-    version,
-    data: `
+  const component = new aws.imagebuilder.Component(
+    `${args.name}-benchmark-component`,
+    {
+      platform: "Linux",
+      version,
+      data: `
 name: DopamintBenchmarkSetup
 schemaVersion: 1.0
 phases:
@@ -55,8 +59,9 @@ phases:
             - cd repo/sui-tunnel-ts
             - pnpm install --frozen-lockfile
 `,
-    supportedOsVersions: ["Amazon Linux 2023"],
-  });
+      supportedOsVersions: ["Amazon Linux 2023"],
+    },
+  );
 
   const baseAmi = aws.ec2.getAmiOutput({
     mostRecent: true,
@@ -84,56 +89,76 @@ phases:
         },
       ],
     },
-    { ignoreChanges: ["parentImage"] }
+    { ignoreChanges: ["parentImage"] },
   );
 
-  const distribution = new aws.imagebuilder.DistributionConfiguration(`${args.name}-benchmark-dist`, {
-    distributions: [
-      {
-        region: aws.getRegionOutput().name,
-        amiDistributionConfiguration: { name: `${args.name}-benchmark-{{ imagebuilder:buildDate }}` },
-      },
-    ],
-  });
+  const distribution = new aws.imagebuilder.DistributionConfiguration(
+    `${args.name}-benchmark-dist`,
+    {
+      distributions: [
+        {
+          region: aws.getRegionOutput().name,
+          amiDistributionConfiguration: {
+            name: `${args.name}-benchmark-{{ imagebuilder:buildDate }}`,
+          },
+        },
+      ],
+    },
+  );
 
-  const infraConfig = new aws.imagebuilder.InfrastructureConfiguration(`${args.name}-benchmark-infra`, {
-    instanceProfileName: args.imageBuilderProfileName,
-    instanceTypes: [args.instanceType],
-    securityGroupIds: [args.securityGroupId],
-    subnetId: pulumi.output(args.subnetIds).apply((ids) => {
-      if (ids.length === 0) {
-        throw new Error("At least one subnet is required for the benchmark Image Builder infrastructure configuration");
-      }
-      return ids[0];
-    }),
-  });
+  const infraConfig = new aws.imagebuilder.InfrastructureConfiguration(
+    `${args.name}-benchmark-infra`,
+    {
+      instanceProfileName: args.imageBuilderProfileName,
+      instanceTypes: [args.instanceType],
+      securityGroupIds: [args.securityGroupId],
+      subnetId: pulumi.output(args.subnetIds).apply((ids) => {
+        if (ids.length === 0) {
+          throw new Error(
+            "At least one subnet is required for the benchmark Image Builder infrastructure configuration",
+          );
+        }
+        return ids[0];
+      }),
+    },
+  );
 
-  const pipeline = new aws.imagebuilder.ImagePipeline(`${args.name}-benchmark-pipeline`, {
-    imageRecipeArn: imageRecipe.arn,
-    infrastructureConfigurationArn: infraConfig.arn,
-    distributionConfigurationArn: distribution.arn,
-  });
+  const pipeline = new aws.imagebuilder.ImagePipeline(
+    `${args.name}-benchmark-pipeline`,
+    {
+      imageRecipeArn: imageRecipe.arn,
+      infrastructureConfigurationArn: infraConfig.arn,
+      distributionConfigurationArn: distribution.arn,
+    },
+  );
 
-  const initialBuild = new aws.imagebuilder.Image(`${args.name}-benchmark-initial-image`, {
-    imageRecipeArn: imageRecipe.arn,
-    infrastructureConfigurationArn: infraConfig.arn,
-    distributionConfigurationArn: distribution.arn,
-  });
+  const initialBuild = new aws.imagebuilder.Image(
+    `${args.name}-benchmark-initial-image`,
+    {
+      imageRecipeArn: imageRecipe.arn,
+      infrastructureConfigurationArn: infraConfig.arn,
+      distributionConfigurationArn: distribution.arn,
+    },
+  );
 
   const builtAmiId = initialBuild.outputResources.apply((resources) => {
     const ami = resources[0]?.amis?.[0]?.image;
     if (!ami) {
-      throw new Error("Image Builder did not produce an AMI for the benchmark fleet");
+      throw new Error(
+        "Image Builder did not produce an AMI for the benchmark fleet",
+      );
     }
     return ami;
   });
 
-  const launchTemplate = new aws.ec2.LaunchTemplate(`${args.name}-benchmark-lt`, {
-    imageId: builtAmiId,
-    instanceType: args.instanceType,
-    vpcSecurityGroupIds: [args.securityGroupId],
-    iamInstanceProfile: { arn: args.benchmarkInstanceProfileArn },
-    userData: pulumi.interpolate`#!/bin/bash
+  const launchTemplate = new aws.ec2.LaunchTemplate(
+    `${args.name}-benchmark-lt`,
+    {
+      imageId: builtAmiId,
+      instanceType: args.instanceType,
+      vpcSecurityGroupIds: [args.securityGroupId],
+      iamInstanceProfile: { arn: args.benchmarkInstanceProfileArn },
+      userData: pulumi.interpolate`#!/bin/bash
 set -euo pipefail
 # Ensure SSM agent is present and running so the fleet can be managed remotely.
 dnf install -y amazon-ssm-agent || yum install -y amazon-ssm-agent || true
@@ -141,20 +166,36 @@ systemctl enable amazon-ssm-agent || true
 systemctl restart amazon-ssm-agent || true
 cd /opt/dopamint/repo/sui-tunnel-ts || true
 `.apply((data) => Buffer.from(data).toString("base64")),
-    metadataOptions: {
-      httpEndpoint: "enabled",
-      httpTokens: "required",
+      metadataOptions: {
+        httpEndpoint: "enabled",
+        httpTokens: "required",
+      },
     },
-  });
+  );
 
-  const asg = new aws.autoscaling.Group(`${args.name}-benchmark`, {
-    vpcZoneIdentifiers: args.subnetIds,
-    minSize: args.minSize,
-    maxSize: args.maxSize,
-    desiredCapacity: args.minSize,
-    launchTemplate: { id: launchTemplate.id, version: "$Latest" },
-    tags: [{ key: "Name", value: `${args.name}-benchmark`, propagateAtLaunch: true }],
-  });
+  const asg = new aws.autoscaling.Group(
+    `${args.name}-benchmark`,
+    {
+      vpcZoneIdentifiers: args.subnetIds,
+      minSize: args.minSize,
+      maxSize: args.maxSize,
+      desiredCapacity: args.minSize,
+      launchTemplate: { id: launchTemplate.id, version: "$Latest" },
+      tags: [
+        {
+          key: "Name",
+          value: `${args.name}-benchmark`,
+          propagateAtLaunch: true,
+        },
+      ],
+    },
+    {
+      // The benchmark fleet is scaled up/down manually (or via the benchmark workflow).
+      // Do not let `pulumi up` reconcile the ASG size, otherwise CI/CD deployments
+      // overwrite manual scale-downs and leave expensive instances running.
+      ignoreChanges: ["minSize", "maxSize", "desiredCapacity"],
+    },
+  );
 
   return {
     asgName: asg.name,

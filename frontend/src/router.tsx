@@ -6,15 +6,31 @@ import {
   Outlet,
 } from "@tanstack/react-router";
 
-import { Desktop } from "./desktop/Desktop";
+import { AppShell, type MobileSection } from "./desktop/AppShell";
+import { ArenaView } from "./desktop/Desktop";
 
 const rootRoute = createRootRoute({ component: Outlet });
 
-/** Home: the arena desktop (draggable game windows + telemetry rail + chat). */
-const homeRoute = createRoute({
+/** Persistent navbar shell shared by the arena and the explorer so the chrome survives route changes. */
+const shellRoute = createRoute({
   getParentRoute: () => rootRoute,
+  id: "shell",
+  component: AppShell,
+});
+
+/** Home: the arena (draggable game windows + telemetry rail). The phone section is a `section` search param. */
+const homeRoute = createRoute({
+  getParentRoute: () => shellRoute,
   path: "/",
-  component: Desktop,
+  component: ArenaView,
+  validateSearch: (
+    search: Record<string, unknown>,
+  ): { section?: MobileSection } => {
+    const s = search.section;
+    return s === "games" || s === "payment" || s === "chat" || s === "live"
+      ? { section: s }
+      : {};
+  },
 });
 
 /**
@@ -42,13 +58,16 @@ const playgroundRoute = createRoute({
 
 /** Public settlement explorer — paginated list, address filter, live SSE prepend. */
 const explorerRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => shellRoute,
   path: "/explorer",
-  component: lazyRouteComponent(() => import("./explorer/ExplorerPage"), "ExplorerPage"),
+  component: lazyRouteComponent(
+    () => import("./explorer/ExplorerPage"),
+    "ExplorerPage",
+  ),
 });
 
 const explorerDetailRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => shellRoute,
   path: "/explorer/$digest",
   component: lazyRouteComponent(
     () => import("./explorer/ExplorerDetailPage"),
@@ -57,11 +76,9 @@ const explorerDetailRoute = createRoute({
 });
 
 const routeTree = rootRoute.addChildren([
-  homeRoute,
+  shellRoute.addChildren([homeRoute, explorerRoute, explorerDetailRoute]),
   designSystemRoute,
   playgroundRoute,
-  explorerRoute,
-  explorerDetailRoute,
 ]);
 
 export const router = createRouter({ routeTree });

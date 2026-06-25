@@ -8,6 +8,7 @@ use sui::hash;
 use sui::sui::SUI;
 use sui::test_scenario;
 use sui_tunnel::example_rock_paper_scissors as rps;
+use sui_tunnel::randomness;
 
 // ============================================
 // CONSTANTS / HELPERS
@@ -160,8 +161,8 @@ fun full_round_player1_wins() {
     scenario.next_tx(PLAYER1);
     {
         let prize = scenario.take_from_address<Coin<SUI>>(PLAYER1);
-        assert_eq!(coin::value(&prize), 2 * STAKE);
-        coin::burn_for_testing(prize);
+        assert_eq!(prize.value(), 2 * STAKE);
+        prize.burn_for_testing();
     };
     // Player2 must have received nothing.
     assert!(!test_scenario::has_most_recent_for_address<Coin<SUI>>(PLAYER2));
@@ -243,8 +244,8 @@ fun full_round_player2_wins() {
     scenario.next_tx(PLAYER2);
     {
         let prize = scenario.take_from_address<Coin<SUI>>(PLAYER2);
-        assert_eq!(coin::value(&prize), 2 * STAKE);
-        coin::burn_for_testing(prize);
+        assert_eq!(prize.value(), 2 * STAKE);
+        prize.burn_for_testing();
     };
     assert!(!test_scenario::has_most_recent_for_address<Coin<SUI>>(PLAYER1));
 
@@ -256,12 +257,12 @@ fun full_round_player2_wins() {
 // TIE PATH WITH TIEBREAK ENTROPY
 // ============================================
 
-/// Both players play Rock -> tie. Both contribute tiebreak entropy, so the
-/// randomness seed resolves the tie. The winner is determined by the derived
-/// seed (one of the two players), receives the WHOLE pot, and was_tiebreaker
-/// must be true.
+/// Both players play Rock -> tie. The tie-break seed is derived from the
+/// commitment-bound move salts revealed during the reveal phase, so no separate
+/// entropy step is needed. The winner is one of the two players, receives the
+/// WHOLE pot, and was_tiebreaker must be true.
 #[test]
-fun tie_resolved_by_tiebreak_entropy() {
+fun tie_resolved_by_committed_salts() {
     let mut scenario = test_scenario::begin(PLAYER1);
     let clock = clock::create_for_testing(scenario.ctx());
 
@@ -308,28 +309,6 @@ fun tie_resolved_by_tiebreak_entropy() {
         test_scenario::return_shared(game);
     };
 
-    // Both contribute entropy so a tiebreak seed is created.
-    scenario.next_tx(PLAYER1);
-    {
-        let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
-        rps::contribute_tiebreak_entropy<SUI>(
-            &mut game,
-            b"entropy-from-player-one",
-            scenario.ctx(),
-        );
-        test_scenario::return_shared(game);
-    };
-    scenario.next_tx(PLAYER2);
-    {
-        let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
-        rps::contribute_tiebreak_entropy<SUI>(
-            &mut game,
-            b"entropy-from-player-two",
-            scenario.ctx(),
-        );
-        test_scenario::return_shared(game);
-    };
-
     // Settle: tie is broken by randomness; winner is one of the two players.
     scenario.next_tx(PLAYER1);
     let winner = {
@@ -349,8 +328,8 @@ fun tie_resolved_by_tiebreak_entropy() {
     scenario.next_tx(winner);
     {
         let prize = scenario.take_from_address<Coin<SUI>>(winner);
-        assert_eq!(coin::value(&prize), 2 * STAKE);
-        coin::burn_for_testing(prize);
+        assert_eq!(prize.value(), 2 * STAKE);
+        prize.burn_for_testing();
     };
 
     clock.destroy_for_testing();
@@ -397,12 +376,12 @@ fun cancel_commit_timeout_refunds_both() {
     scenario.next_tx(PLAYER1);
     {
         let refund1 = scenario.take_from_address<Coin<SUI>>(PLAYER1);
-        assert_eq!(coin::value(&refund1), STAKE);
-        coin::burn_for_testing(refund1);
+        assert_eq!(refund1.value(), STAKE);
+        refund1.burn_for_testing();
 
         let refund2 = scenario.take_from_address<Coin<SUI>>(PLAYER2);
-        assert_eq!(coin::value(&refund2), STAKE);
-        coin::burn_for_testing(refund2);
+        assert_eq!(refund2.value(), STAKE);
+        refund2.burn_for_testing();
     };
 
     clock.destroy_for_testing();
@@ -438,8 +417,8 @@ fun cancel_commit_timeout_refunds_creator_only() {
     scenario.next_tx(PLAYER1);
     {
         let refund = scenario.take_from_address<Coin<SUI>>(PLAYER1);
-        assert_eq!(coin::value(&refund), STAKE);
-        coin::burn_for_testing(refund);
+        assert_eq!(refund.value(), STAKE);
+        refund.burn_for_testing();
     };
     // Player2 never deposited, so it must receive nothing.
     assert!(!test_scenario::has_most_recent_for_address<Coin<SUI>>(PLAYER2));
@@ -512,8 +491,8 @@ fun claim_reveal_timeout_revealer_wins() {
     scenario.next_tx(PLAYER1);
     {
         let prize = scenario.take_from_address<Coin<SUI>>(PLAYER1);
-        assert_eq!(coin::value(&prize), 2 * STAKE);
-        coin::burn_for_testing(prize);
+        assert_eq!(prize.value(), 2 * STAKE);
+        prize.burn_for_testing();
     };
     assert!(!test_scenario::has_most_recent_for_address<Coin<SUI>>(PLAYER2));
 
@@ -524,6 +503,58 @@ fun claim_reveal_timeout_revealer_wins() {
 // ============================================
 // NEGATIVE PATHS
 // ============================================
+
+/// Revealing an out-of-range move byte (> scissors) aborts with the dedicated
+/// EInvalidMove code; the range guard runs before the commitment comparison.
+#[
+    test,
+    expected_failure(
+        abort_code = sui_tunnel::example_rock_paper_scissors::EInvalidMove,
+        location = sui_tunnel::example_rock_paper_scissors,
+    ),
+]
+fun reveal_out_of_range_move_aborts() {
+    let mut scenario = test_scenario::begin(PLAYER1);
+    let clock = clock::create_for_testing(scenario.ctx());
+
+    let rock = rps::move_rock();
+
+    {
+        let stake = coin::mint_for_testing<SUI>(STAKE, scenario.ctx());
+        rps::create_game<SUI>(PLAYER2, stake, &clock, scenario.ctx());
+    };
+    scenario.next_tx(PLAYER2);
+    {
+        let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
+        let stake = coin::mint_for_testing<SUI>(STAKE, scenario.ctx());
+        rps::join_game<SUI>(&mut game, stake, scenario.ctx());
+        test_scenario::return_shared(game);
+    };
+    scenario.next_tx(PLAYER1);
+    {
+        let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
+        rps::commit_move<SUI>(&mut game, make_commitment(rock, salt_a()), &clock, scenario.ctx());
+        test_scenario::return_shared(game);
+    };
+    scenario.next_tx(PLAYER2);
+    {
+        let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
+        rps::commit_move<SUI>(&mut game, make_commitment(rock, salt_b()), &clock, scenario.ctx());
+        test_scenario::return_shared(game);
+    };
+
+    // Move byte 3 exceeds MOVE_SCISSORS (2), so the range guard fires before the
+    // salt/commitment check.
+    scenario.next_tx(PLAYER1);
+    {
+        let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
+        rps::reveal_move<SUI>(&mut game, 3, salt_a(), scenario.ctx());
+        test_scenario::return_shared(game);
+    };
+
+    clock.destroy_for_testing();
+    scenario.end();
+}
 
 /// Reveal with a salt that does not match the commitment -> commitment_mismatch (13).
 #[
@@ -738,6 +769,52 @@ fun settle_before_reveal_aborts() {
     scenario.end();
 }
 
+/// Player2 commits without staking via join_game -> not_joined.
+/// A player cannot enter the game and win the pot without having staked.
+#[
+    test,
+    expected_failure(
+        abort_code = sui_tunnel::example_rock_paper_scissors::ENotJoined,
+        location = sui_tunnel::example_rock_paper_scissors,
+    ),
+]
+fun player2_commit_without_join_aborts() {
+    let mut scenario = test_scenario::begin(PLAYER1);
+    let clock = clock::create_for_testing(scenario.ctx());
+
+    let rock = rps::move_rock();
+    let scissors = rps::move_scissors();
+
+    {
+        let stake = coin::mint_for_testing<SUI>(STAKE, scenario.ctx());
+        rps::create_game<SUI>(PLAYER2, stake, &clock, scenario.ctx());
+    };
+
+    // Player1 commits.
+    scenario.next_tx(PLAYER1);
+    {
+        let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
+        rps::commit_move<SUI>(&mut game, make_commitment(rock, salt_a()), &clock, scenario.ctx());
+        test_scenario::return_shared(game);
+    };
+
+    // Player2 never staked via join_game; committing must abort.
+    scenario.next_tx(PLAYER2);
+    {
+        let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
+        rps::commit_move<SUI>(
+            &mut game,
+            make_commitment(scissors, salt_b()),
+            &clock,
+            scenario.ctx(),
+        );
+        test_scenario::return_shared(game);
+    };
+
+    clock.destroy_for_testing();
+    scenario.end();
+}
+
 /// Cancelling on the commit timeout before the timeout is reached -> timeout_not_reached (504).
 #[
     test,
@@ -767,19 +844,23 @@ fun cancel_commit_timeout_too_early_aborts() {
     scenario.end();
 }
 
-/// Tie with NO tiebreak entropy contributed -> randomness_not_available (404) on settle.
-#[
-    test,
-    expected_failure(
-        abort_code = sui_tunnel::example_rock_paper_scissors::ERandomnessNotAvailable,
-        location = sui_tunnel::example_rock_paper_scissors,
-    ),
-]
-fun tie_without_entropy_aborts() {
+/// A tie always resolves from the committed move salts, and the winner equals the
+/// value independently derived from `combine_reveals` over both (move, salt) pairs.
+/// This pins the tie-break to commitment-bound data (not grindable post-reveal entropy).
+#[test]
+fun tie_break_winner_is_deterministic() {
     let mut scenario = test_scenario::begin(PLAYER1);
     let clock = clock::create_for_testing(scenario.ctx());
 
     let rock = rps::move_rock();
+
+    // Independently derive the expected winner exactly as the source does.
+    let reveal_1 = randomness::create_reveal(vector[rock], salt_a());
+    let reveal_2 = randomness::create_reveal(vector[rock], salt_b());
+    let seed = randomness::combine_reveals(&reveal_1, &reveal_2);
+    let expected_winner = if (randomness::seed_bytes(&seed)[0] % 2 == 0) { PLAYER1 } else {
+        PLAYER2
+    };
 
     {
         let stake = coin::mint_for_testing<SUI>(STAKE, scenario.ctx());
@@ -817,11 +898,12 @@ fun tie_without_entropy_aborts() {
         test_scenario::return_shared(game);
     };
 
-    // Tie with no tiebreak seed -> settle aborts with randomness_not_available.
     scenario.next_tx(PLAYER1);
     {
         let mut game = scenario.take_shared<rps::RPSGame<SUI>>();
         let result = rps::settle_game<SUI>(&mut game, scenario.ctx());
+        assert_eq!(rps::result_winner(&result), expected_winner);
+        assert!(rps::result_was_tiebreaker(&result));
         destroy(result);
         test_scenario::return_shared(game);
     };

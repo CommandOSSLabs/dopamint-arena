@@ -1,0 +1,310 @@
+/* ============================================================
+   Quantum Poker — layout on top of the shared sketch skin.
+
+   Primitives (paper, ink stroke, buttons) live in ../sketch/sketch.css.
+   Sizing is cqmin-based: the window root carries `container-type:size`, so the
+   felt scales with the WINDOW (not the viewport). Layout is an explicit grid,
+   never flex-fill + justify-between — that is what let seats overflow onto the
+   stats panel. Grid rows can't overlap.
+   ============================================================ */
+
+@import "../sketch/sketch.css";
+
+.sketch {
+  --sketch-felt: #2f9e44;
+  --sketch-felt-fill: #eaf8ee;
+}
+
+/* ---- header ---- */
+.qp-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: clamp(6px, 2cqmin, 14px);
+  padding: clamp(5px, 1.6cqmin, 12px) clamp(8px, 2.4cqmin, 18px);
+}
+.qp-title {
+  font-size: clamp(15px, 4.2cqmin, 28px);
+  line-height: 1;
+}
+.qp-eyebrow {
+  font-size: clamp(9px, 2.4cqmin, 14px);
+  letter-spacing: 0.08em;
+  color: var(--sketch-accent);
+}
+
+/* ---- the felt: explicit 3-row grid so nothing can overlap ---- */
+.qp-felt {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  /* a heads-up table: opponent top-left, hero bottom-right (point-symmetric),
+     big community cards dead center, pot off to the side */
+  grid-template-columns: 1fr 1fr;
+  /* board row never shrinks below the community cards' own height, so the big
+     cards can't spill into the seat rows and clip the player boxes when the
+     window is short (e.g. the PvBot lane with its action bar) */
+  grid-template-rows: auto minmax(min-content, 1fr) auto;
+  grid-template-areas:
+    "opp   ."
+    "board board"
+    ".     hero";
+  gap: clamp(3px, 2cqmin, 18px);
+  min-height: 0;
+  padding: clamp(8px, 2.6cqmin, 22px);
+  /* the felt fill stays on the element (a full-size displacement-filtered fill is
+     far too expensive to repaint every frame); only its thin border is roughened */
+  background: var(--sketch-felt-fill);
+  border-radius: 16px;
+  width: 100%;
+  height: 100%;
+  max-width: 52rem;
+  max-height: 34rem;
+  place-self: center;
+}
+.qp-felt::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 3px solid var(--sketch-felt);
+  border-radius: 16px;
+  filter: var(--sketch-filter);
+  z-index: -1;
+}
+
+/* ---- a player seat: one compact row — [avatar · name/stack] [bet] [cards] ----
+   Sized to its content (the hole cards), not a fat min-height, so the felt's
+   real estate goes to the community board instead of two near-empty boxes. */
+.qp-seat {
+  display: flex;
+  align-items: center;
+  gap: clamp(6px, 2.2cqmin, 16px);
+  padding: clamp(2px, 1.2cqmin, 9px) clamp(8px, 2.2cqmin, 16px);
+  --sketch-fill: #fffefb;
+  border-radius: 11px;
+  max-width: 100%;
+}
+/* a player area = the seat box + its bet chip OUTSIDE the box, so the box keeps a
+   stable width while the bet appears/changes between streets (no width jitter) */
+.qp-player {
+  display: flex;
+  align-items: center;
+  gap: clamp(6px, 2.2cqmin, 18px);
+  min-width: 0;
+}
+.qp-player--opp {
+  grid-area: opp;
+  justify-self: start;
+}
+.qp-player--hero {
+  grid-area: hero;
+  justify-self: end;
+  flex-direction: row-reverse;
+}
+.qp-seat--hero {
+  flex-direction: row-reverse;
+  text-align: right;
+}
+.qp-seat--hero .qp-seat__who {
+  flex-direction: row-reverse;
+}
+.qp-seat__who {
+  display: flex;
+  align-items: center;
+  gap: clamp(5px, 1.8cqmin, 12px);
+  min-width: 0;
+}
+.qp-seat__sub {
+  display: flex;
+  align-items: center;
+  gap: clamp(5px, 1.6cqmin, 11px);
+}
+.qp-seat--hero .qp-seat__sub {
+  justify-content: flex-end;
+}
+.qp-seat__id {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: clamp(1.4rem, 6cqmin, 2.3rem);
+  height: clamp(1.4rem, 6cqmin, 2.3rem);
+  border-radius: 50%;
+  font-size: clamp(11px, 2.9cqmin, 17px);
+  color: #fffefb;
+}
+.qp-seat__id--a {
+  background: var(--sketch-blue);
+}
+.qp-seat__id--b {
+  background: var(--sketch-violet);
+}
+.qp-seat__name {
+  font-size: clamp(12px, 3.2cqmin, 20px);
+  line-height: 1.05;
+}
+.qp-seat__stack {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+  font-size: clamp(13px, 3.6cqmin, 24px);
+  line-height: 1.05;
+}
+/* bet chips pushed "in front" of the seat (fills the dead middle with live info) */
+.qp-bet {
+  position: relative;
+  isolation: isolate;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+  flex: none;
+  padding: clamp(1px, 0.7cqmin, 5px) clamp(6px, 1.9cqmin, 13px);
+  font-size: clamp(11px, 2.9cqmin, 17px);
+  line-height: 1;
+  color: var(--sketch-accent);
+}
+.qp-bet::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 2px dashed var(--sketch-accent);
+  border-radius: 999px;
+  filter: var(--sketch-filter);
+  z-index: -1;
+}
+.qp-win {
+  display: inline-block;
+  margin-left: 0.4em;
+  padding: 0 0.4em;
+  font-size: clamp(9px, 2.4cqmin, 14px);
+  color: #fffefb;
+  background: var(--sketch-felt);
+  border-radius: 6px;
+  transform: rotate(-2deg);
+}
+
+/* ---- a chip (pot / stake marker) ---- */
+.qp-chip {
+  display: inline-grid;
+  place-items: center;
+  width: clamp(0.7rem, 3cqmin, 1.1rem);
+  height: clamp(0.7rem, 3cqmin, 1.1rem);
+  border-radius: 50%;
+  background: var(--sketch-accent);
+  border: 1.5px solid var(--sketch-ink);
+}
+.qp-pot {
+  position: relative;
+  isolation: isolate;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
+  padding: clamp(2px, 0.9cqmin, 6px) clamp(7px, 2.4cqmin, 16px);
+  font-size: clamp(12px, 3.2cqmin, 20px);
+  line-height: 1;
+}
+.qp-pot::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--sketch-accent-fill);
+  border: 2px solid var(--sketch-accent);
+  border-radius: 999px;
+  filter: var(--sketch-filter);
+  z-index: -1;
+}
+
+/* ---- board: pot above, five community cards centered ---- */
+.qp-board {
+  grid-area: board;
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-height: 0;
+}
+.qp-board__pot {
+  position: absolute;
+  left: clamp(2px, 2.5cqmin, 30px);
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 1;
+}
+
+/* ---- hand-drawn playing card ---- */
+.qp-cardrow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(2px, 1cqmin, 8px);
+}
+.qp-card {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: clamp(1.5rem, 12cqmin, 6.2rem);
+  height: clamp(2.05rem, 16.8cqmin, 8.7rem);
+  font-size: clamp(12px, 5cqmin, 40px);
+  line-height: 1;
+  background: #fffdf6;
+  color: var(--sketch-ink);
+}
+.qp-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 2px solid var(--sketch-ink);
+  border-radius: 7px;
+  filter: var(--sketch-filter);
+  z-index: -1;
+}
+.qp-card--red {
+  color: var(--sketch-red);
+}
+.qp-card--hole {
+  width: clamp(1.25rem, 7cqmin, 3rem);
+  height: clamp(1.75rem, 9.9cqmin, 4.2rem);
+  font-size: clamp(11px, 3.1cqmin, 21px);
+}
+.qp-card--back {
+  background:
+    repeating-linear-gradient(
+      45deg,
+      rgba(25, 113, 194, 0.22) 0 4px,
+      rgba(25, 113, 194, 0.05) 4px 8px
+    ),
+    #eef4fb;
+  color: transparent;
+}
+
+/* ---- footer ticker: one hand-drawn line, replaces the two stacked panels ---- */
+.qp-ticker {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: clamp(5px, 2cqmin, 16px);
+  padding: clamp(5px, 1.6cqmin, 12px) clamp(8px, 2.4cqmin, 18px);
+}
+.qp-stat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35em;
+}
+.qp-stat__n {
+  font-size: clamp(13px, 3.6cqmin, 24px);
+  line-height: 1;
+}
+.qp-stat__l {
+  font-size: clamp(9px, 2.4cqmin, 14px);
+  color: var(--sketch-ink-soft);
+}
+.qp-dot {
+  color: var(--sketch-ink-soft);
+}
+
+/* ---- fund / connect callout (pre-funding) ---- */
+.qp-note {
+  font-size: clamp(11px, 3cqmin, 17px);
+  line-height: 1.3;
+  color: var(--sketch-ink-soft);
+}

@@ -7,6 +7,10 @@ interface ImportMetaEnv {
   // zkLogin (Enoki + Google) sign-in. Public client identifiers; both required to enable it.
   readonly VITE_ENOKI_API_KEY?: string;
   readonly VITE_GOOGLE_CLIENT_ID?: string;
+  // MTPS free-faucet stake token (ADR-0010). All three required to stake MTPS.
+  readonly VITE_MTPS_PACKAGE_ID?: string;
+  readonly VITE_MTPS_FAUCET_ID?: string;
+  readonly VITE_MTPS_COIN_TYPE?: string;
 }
 
 interface ImportMeta {

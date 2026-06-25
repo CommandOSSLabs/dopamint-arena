@@ -1,4 +1,3 @@
-// frontend/src/games/ticTacToe/packages/client/src/components/CaroBoard.tsx
 import { winningLine } from "@ttt/shared";
 
 // Caro board: a fit-to-card size×size grid. Marks: 1 = X (✕), 2 = O (◯). The last move is
@@ -17,18 +16,14 @@ export function CaroBoard({
   onPlay?: (cell: number) => void;
   disabled?: boolean;
 }) {
-  const cell = Math.max(14, Math.floor(540 / size));
-  const dim = cell * size;
   const win = new Set(winningLine(board, size, lastMove));
   return (
-    <div className="max-w-full max-h-[620px] overflow-auto border-[2px] border-primary rounded-sm bg-surface p-1">
+    <div className="@container w-full h-full max-h-[90vh] max-w-[90vw] aspect-square overflow-hidden border-[2px] border-[var(--qp-ink)] rounded-sm bg-surface p-1 flex justify-center items-center mx-auto">
       <div
-        className="grid"
+        className="grid w-full h-full"
         style={{
-          gridTemplateColumns: `repeat(${size}, ${cell}px)`,
-          gridTemplateRows: `repeat(${size}, ${cell}px)`,
-          width: dim,
-          height: dim,
+          gridTemplateColumns: `repeat(${size}, minmax(0, 1fr))`,
+          gridTemplateRows: `repeat(${size}, minmax(0, 1fr))`,
         }}
       >
         {board.map((v, i) => {
@@ -37,19 +32,19 @@ export function CaroBoard({
             <div
               key={i}
               onClick={playable ? () => onPlay!(i) : undefined}
-              className={`flex items-center justify-center border border-primary/15 ${
+              className={`flex items-center justify-center border border-[var(--qp-ink-soft)]/20 ${
                 win.has(i)
                   ? "bg-secondary/40"
                   : i === lastMove
                     ? "bg-tertiary/30"
                     : ""
               } ${playable ? "cursor-pointer hover:bg-tertiary/20" : ""}`}
-              style={{ fontSize: Math.floor(cell * 0.7), lineHeight: 1 }}
+              style={{ fontSize: `calc(65cqw / ${size})`, lineHeight: 1 }}
             >
               {v === 1 ? (
-                <span className="text-primary font-bold">✕</span>
+                <span className="text-[var(--qp-red)] font-bold">✕</span>
               ) : v === 2 ? (
-                <span className="text-secondary font-bold">◯</span>
+                <span className="text-[var(--qp-ink)] font-bold">◯</span>
               ) : null}
             </div>
           );

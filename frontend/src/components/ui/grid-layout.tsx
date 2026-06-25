@@ -72,6 +72,9 @@ export interface GridLayoutProps {
    * an item in the grid. This lets a window minimize/float without unmounting.
    */
   styleOverride?: (item: GridItem) => CSSProperties | null;
+  /** Fired when an item is brought to front (pointer-down / drag / resize / arrow) —
+   *  i.e. the user just focused it. Lets the caller track the active window. */
+  onActivate?: (id: string) => void;
 }
 
 /** Live pixel override for the item under the cursor (bypasses cell snapping). */
@@ -108,6 +111,7 @@ export function GridLayout({
   gap = 10,
   className,
   styleOverride,
+  onActivate,
 }: GridLayoutProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
@@ -154,10 +158,13 @@ export function GridLayout({
   // z-order: interacting with a window raises it above its neighbours.
   const [zOrder, setZOrder] = useState<Record<string, number>>({});
   const zCounter = useRef(10);
+  const onActivateRef = useRef(onActivate);
+  onActivateRef.current = onActivate;
   const bringToFront = useCallback((id: string) => {
     zCounter.current += 1;
     const next = zCounter.current;
     setZOrder((prev) => ({ ...prev, [id]: next }));
+    onActivateRef.current?.(id);
   }, []);
 
   // Measure container width before paint, then track it responsively.
@@ -260,10 +267,10 @@ export function GridLayout({
             axis === "y"
               ? origin.w
               : clamp(
-                origin.w + Math.round(dxPx / unit),
-                minW,
-                activeCols - origin.x,
-              );
+                  origin.w + Math.round(dxPx / unit),
+                  minW,
+                  activeCols - origin.x,
+                );
           const tH =
             axis === "x"
               ? origin.h
@@ -286,17 +293,17 @@ export function GridLayout({
             axis === "y"
               ? origin.w * unit - gap
               : clamp(
-                origin.w * unit - gap + dxPx,
-                minW * unit - gap,
-                (activeCols - origin.x) * unit - gap,
-              );
+                  origin.w * unit - gap + dxPx,
+                  minW * unit - gap,
+                  (activeCols - origin.x) * unit - gap,
+                );
           const liveH =
             axis === "x"
               ? origin.h * rowHeight - gap
               : Math.max(
-                minH * rowHeight - gap,
-                origin.h * rowHeight - gap + dyPx,
-              );
+                  minH * rowHeight - gap,
+                  origin.h * rowHeight - gap + dyPx,
+                );
           setLive({ id, mode, dx: 0, dy: 0, w: liveW, h: liveH });
         }
       };
@@ -330,19 +337,19 @@ export function GridLayout({
         mergeDetached(
           resize
             ? resizeItem(
-              dockedOnly(layoutRef.current),
-              id,
-              it.w + dx,
-              it.h + dy,
-              activeCols,
-            )
+                dockedOnly(layoutRef.current),
+                id,
+                it.w + dx,
+                it.h + dy,
+                activeCols,
+              )
             : moveItem(
-              dockedOnly(layoutRef.current),
-              id,
-              it.x + dx,
-              it.y + dy,
-              activeCols,
-            ),
+                dockedOnly(layoutRef.current),
+                id,
+                it.x + dx,
+                it.y + dy,
+                activeCols,
+              ),
         );
 
       let next: GridLayoutValue | null = null;
@@ -384,7 +391,7 @@ export function GridLayout({
       {placeholder && (
         <div
           aria-hidden
-          className="pointer-events-none absolute rounded-none border-2 border-dashed border-primary/40 bg-primary/10 transition-all duration-150 ease-out"
+          className="pointer-events-none absolute rounded-none border-2 border-dashed border-primary/60 bg-primary/10 transition-all duration-150 ease-out"
           style={{ ...pixelBox(placeholder), zIndex: 0 }}
         />
       )}
@@ -407,7 +414,9 @@ export function GridLayout({
           };
           if (isActive && live) {
             if (live.mode === "drag") {
-              style.transform = `translate3d(${live.dx}px, ${live.dy}px, 0)`;
+              // A subtle lift while dragging gives the window a "picked up" feel; it
+              // eases back to scale(1) on release via FRAME_TRANSITION.
+              style.transform = `translate3d(${live.dx}px, ${live.dy}px, 0) scale(1.02)`;
               style.willChange = "transform";
             } else {
               style.width = live.w;
@@ -440,9 +449,10 @@ export function GridLayout({
             {renderItem(item, handle)}
             {!item.static && !detached && (
               <>
-                {/* Right edge → width only. */}
+                {/* Right edge → width only. Insets clear the corner so the two
+                    handles never overlap (which would flicker the resize cursor). */}
                 <div
-                  className="absolute top-1 right-0 bottom-3 w-1.5 cursor-ew-resize touch-none"
+                  className="absolute top-1 right-0 bottom-8 w-3.5 cursor-ew-resize touch-none"
                   onPointerDown={(e) =>
                     startInteraction(e, item.id, "resize", "x")
                   }
@@ -450,15 +460,15 @@ export function GridLayout({
                 />
                 {/* Bottom edge → height only. */}
                 <div
-                  className="absolute right-3 bottom-0 left-1 h-1.5 cursor-ns-resize touch-none"
+                  className="absolute right-8 bottom-0 left-1 h-3.5 cursor-ns-resize touch-none"
                   onPointerDown={(e) =>
                     startInteraction(e, item.id, "resize", "y")
                   }
                   aria-hidden
                 />
-                {/* Corner → both axes. */}
+                {/* Corner → both axes. A roomy 32px grab zone, glyph hugging the corner. */}
                 <div
-                  className="absolute right-0 bottom-0 grid size-5 cursor-nwse-resize touch-none place-items-center text-muted-foreground/70 hover:text-foreground"
+                  className="absolute right-0 bottom-0 grid size-8 place-items-end p-1.5 cursor-nwse-resize touch-none text-muted-foreground/50 transition-colors hover:text-primary"
                   onPointerDown={(e) =>
                     startInteraction(e, item.id, "resize", "both")
                   }

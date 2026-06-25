@@ -217,22 +217,8 @@ public fun is_valid_signature_length(sig_type: u8, signature: &vector<u8>): bool
 // UNIFIED VERIFICATION INTERFACE
 // ============================================
 
-/// Unified signature verification function.
-/// Verifies a signature against a message using the specified signature scheme.
-///
-/// ## Parameters
-/// - `sig_type`: The signature scheme type (use constants like `ed25519()`)
-/// - `public_key`: The signer's public key
-/// - `message`: The message that was signed
-/// - `signature`: The signature to verify
-///
-/// ## Returns
-/// - `true` if the signature is valid
-/// - `false` if the signature is invalid
-///
-/// ## Aborts
-/// - If the signature type is not supported
-/// - If the public key or signature length is invalid
+/// Verifies a signature against a message using the given scheme, returning whether it is valid.
+/// Aborts if the signature type is unsupported or the public key or signature length is invalid.
 public fun verify(
     sig_type: u8,
     public_key: &vector<u8>,
@@ -286,12 +272,8 @@ public fun verify_with_hash(
 // TYPE-SPECIFIC VERIFICATION FUNCTIONS
 // ============================================
 
-/// Verifies an ED25519 signature
-///
-/// ## Parameters
-/// - `public_key`: 32-byte ED25519 public key
-/// - `message`: The message that was signed
-/// - `signature`: 64-byte ED25519 signature
+/// Verifies an ED25519 signature over a message with a 32-byte public key and 64-byte signature.
+/// Aborts if the public key or signature length is invalid.
 public fun verify_ed25519(
     public_key: &vector<u8>,
     message: &vector<u8>,
@@ -303,12 +285,8 @@ public fun verify_ed25519(
     verify_ed25519_internal(public_key, message, signature)
 }
 
-/// Verifies a BLS12381 signature with minimal signature size
-///
-/// ## Parameters
-/// - `public_key`: 96-byte BLS12381 G2 public key
-/// - `message`: The message that was signed
-/// - `signature`: 48-byte BLS12381 G1 signature
+/// Verifies a BLS12381 min-sig signature with a 96-byte G2 public key and 48-byte G1 signature.
+/// Aborts if the public key or signature length is invalid.
 public fun verify_bls12381_min_sig(
     public_key: &vector<u8>,
     message: &vector<u8>,
@@ -320,12 +298,8 @@ public fun verify_bls12381_min_sig(
     verify_bls12381_min_sig_internal(public_key, message, signature)
 }
 
-/// Verifies a BLS12381 signature with minimal public key size
-///
-/// ## Parameters
-/// - `public_key`: 48-byte BLS12381 G1 public key
-/// - `message`: The message that was signed
-/// - `signature`: 96-byte BLS12381 G2 signature
+/// Verifies a BLS12381 min-pk signature with a 48-byte G1 public key and 96-byte G2 signature.
+/// Aborts if the public key or signature length is invalid.
 public fun verify_bls12381_min_pk(
     public_key: &vector<u8>,
     message: &vector<u8>,
@@ -337,15 +311,9 @@ public fun verify_bls12381_min_pk(
     verify_bls12381_min_pk_internal(public_key, message, signature)
 }
 
-/// Verifies a Secp256k1 signature with specified hash function
-///
-/// ## Parameters
-/// - `public_key`: 33-byte (compressed) or 65-byte (uncompressed) Secp256k1 public key
-/// - `message`: The raw message (will be hashed with specified hash function)
-/// - `signature`: 64-byte non-recoverable Secp256k1 signature (r, s).
-///   65-byte recoverable signatures (with recovery id) are NOT accepted, as
-///   Sui's native `ecdsa_k1::secp256k1_verify` rejects them.
-/// - `hash_type`: Hash function to use (HASH_KECCAK256 or HASH_SHA256)
+/// Verifies a Secp256k1 signature, hashing the message with `hash_type` (keccak256 or sha256).
+/// Accepts a 33- or 65-byte public key and a 64-byte non-recoverable (r, s) signature; 65-byte
+/// recoverable signatures are rejected by the native verifier. Aborts on invalid key or signature length.
 public fun verify_secp256k1(
     public_key: &vector<u8>,
     message: &vector<u8>,
@@ -405,36 +373,21 @@ fun verify_secp256k1_internal(
 // MESSAGE CONSTRUCTION HELPERS
 // ============================================
 
-/// Creates a domain-separated message for signing.
-/// This prevents signature reuse across different contexts.
-///
-/// ## Parameters
-/// - `domain`: A unique domain identifier (e.g., "sui_tunnel::payment")
-/// - `message`: The actual message content
-///
-/// ## Returns
-/// A new vector containing: domain_length (1 byte) || domain || message
+/// Builds a domain-separated message `domain_length (1 byte) || domain || message` to prevent
+/// signature reuse across contexts. Aborts if the domain is longer than 255 bytes.
 public fun create_domain_separated_message(domain: vector<u8>, message: vector<u8>): vector<u8> {
     let domain_len = domain.length();
     assert!(domain_len <= 255, EInvalidParameter);
 
-    let mut result = vector<u8>[];
+    let mut result = vector[];
     result.push_back((domain_len as u8));
     result.append(domain);
     result.append(message);
     result
 }
 
-/// Creates a tunnel-specific message for signing.
-/// Includes the tunnel ID for replay protection across tunnels.
-///
-/// ## Parameters
-/// - `tunnel_id`: The tunnel's object ID bytes
-/// - `nonce`: A unique nonce for this message
-/// - `data`: The actual data to sign
-///
-/// ## Returns
-/// A new vector containing: "sui_tunnel::signature::message" || tunnel_id || nonce (8 bytes BE) || data
+/// Builds a tunnel-scoped message `"sui_tunnel::signature::message" || tunnel_id || nonce (8 bytes BE)
+/// || data`, binding the tunnel ID and nonce for replay protection across tunnels.
 public fun create_tunnel_message(tunnel_id: vector<u8>, nonce: u64, data: vector<u8>): vector<u8> {
     let mut result = b"sui_tunnel::signature::message";
     result.append(tunnel_id);
@@ -459,7 +412,7 @@ public fun hash_message(message: &vector<u8>): vector<u8> {
 
 /// Converts a u64 to 8-byte big-endian representation
 public fun u64_to_be_bytes(value: u64): vector<u8> {
-    let mut bytes = vector<u8>[];
+    let mut bytes = vector[];
     bytes.push_back(((value >> 56) & 0xFF) as u8);
     bytes.push_back(((value >> 48) & 0xFF) as u8);
     bytes.push_back(((value >> 40) & 0xFF) as u8);
@@ -490,22 +443,7 @@ public fun be_bytes_to_u64(bytes: &vector<u8>): u64 {
 
 /// Concatenates multiple byte vectors into one
 public fun concat_bytes(vectors: vector<vector<u8>>): vector<u8> {
-    let mut result = vector<u8>[];
-    let len = vectors.length();
-    let mut i = 0;
-
-    while (i < len) {
-        let vec = &vectors[i];
-        let vec_len = vec.length();
-        let mut j = 0;
-
-        while (j < vec_len) {
-            result.push_back(vec[j]);
-            j = j + 1;
-        };
-
-        i = i + 1;
-    };
-
+    let mut result = vector[];
+    vectors.do_ref!(|v| result.append(*v));
     result
 }

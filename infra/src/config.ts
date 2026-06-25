@@ -1,3 +1,4 @@
+import * as aws from "@pulumi/aws";
 import * as pulumi from "@pulumi/pulumi";
 
 const config = new pulumi.Config("dopamint");
@@ -15,7 +16,10 @@ export interface InfraConfig {
   benchmarkMinSize: number;
   benchmarkMaxSize: number;
   benchmarkImageVersion: string;
-  backendImageTag: string;
+  // If omitted, the backend image tag is resolved from the latest deployed ECS task
+  // definition at runtime. This lets `pulumi up` run locally without committing a
+  // specific tag, while CI still pins an exact SHA via config on backend deploys.
+  backendImageTag?: string;
   // base64 ed25519 settler signing key. Optional: the backend boots without it
   // (Phase 0) and fails loud at settler construction if absent. Sourced from secret
   // config so it lands in Secrets Manager, never in the task definition.
@@ -36,9 +40,36 @@ export function getConfig(): InfraConfig {
     benchmarkMinSize: config.requireNumber("benchmark-min-size"),
     benchmarkMaxSize: config.requireNumber("benchmark-max-size"),
     benchmarkImageVersion: config.get("benchmark-image-version") ?? "1.0.1",
-    // Fail loud rather than silently deploying a non-existent `latest` tag (which takes the
-    // ECS services down with CannotPullContainerError). deploy-backend persists a real SHA here.
-    backendImageTag: config.require("backend-image-tag"),
+    backendImageTag: config.get("backend-image-tag") ?? undefined,
     settlerKey: config.getSecret("settler-key"),
   };
+}
+
+/**
+ * Resolve the backend image tag from the latest ACTIVE revision of the backend task
+ * definition family. Used when `backendImageTag` is not set in Pulumi config so local
+ * infra deploys default to "whatever is currently running" instead of a stale baseline.
+ *
+ * Throws if the task definition cannot be found or contains no usable image tag. In that
+ * case the caller must set the tag explicitly:
+ *   pulumi config set dopamint:backend-image-tag <sha>
+ */
+export function resolveBackendImageTag(
+  environment: string,
+): pulumi.Output<string> {
+  const family = `dopamint-${environment}-backend`;
+  const taskDef = aws.ecs.getTaskDefinitionOutput({ taskDefinition: family });
+  return taskDef.containerDefinitions.apply((defsJson) => {
+    const defs = JSON.parse(defsJson) as Array<{ image?: string }>;
+    const image = defs[0]?.image ?? "";
+    const tag = image.split(":").pop() ?? "";
+    if (!tag) {
+      throw new Error(
+        `Could not resolve backend image tag from the latest task definition (family: ${family}). ` +
+          `Either deploy the backend first, or set the tag explicitly with: ` +
+          `pulumi config set dopamint:backend-image-tag <tag>`,
+      );
+    }
+    return tag;
+  });
 }

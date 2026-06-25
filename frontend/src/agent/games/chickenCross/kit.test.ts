@@ -22,7 +22,7 @@ describe("chickenCross kit", () => {
   it("uses the chicken-cross protocol domain", () => {
     const kit = createChickenCrossKit(100n);
     assert.strictEqual(kit.id, "chicken-cross");
-    assert.strictEqual(kit.protocol.name, "cross.v1");
+    assert.strictEqual(kit.protocol.name, "cross.multi.v1");
   });
 
   it("drives a full self-play race to terminal with conserved balances", () => {
@@ -34,7 +34,10 @@ describe("chickenCross kit", () => {
     assert.ok(kit.protocol.isTerminal(result.finalState));
     assert.ok(result.accepted > 0);
     const balances = kit.protocol.balances(result.finalState);
-    assert.strictEqual(balances.a + balances.b, ctx.initialBalances.a + ctx.initialBalances.b);
+    assert.strictEqual(
+      balances.a + balances.b,
+      ctx.initialBalances.a + ctx.initialBalances.b,
+    );
   });
 
   it("a bot proposes only on its own tick (A even, B odd)", () => {

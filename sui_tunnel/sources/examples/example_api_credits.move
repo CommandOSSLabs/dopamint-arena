@@ -250,7 +250,7 @@ public fun record_usage<T>(
     // Validate cost consistency
     // Guard against overflow in total_calls * price_per_call
     if (session.price_per_call > 0) {
-        let max_calls = 18446744073709551615u64 / session.price_per_call;
+        let max_calls = std::u64::max_value!() / session.price_per_call;
         assert!(total_calls <= max_calls, EOverflow);
     };
     let expected_cost = total_calls * session.price_per_call;

@@ -11,6 +11,19 @@
 > The bearer-gated `POST /v1/sessions/{id}/settle` defined below is replaced by
 > `POST /v1/tunnels/{tunnelId}/settle`, authorized by the co-signed settlement
 > itself (no session token). Treat the settle section here as historical.
+>
+> **➕ Metrics extended by [metrics-timeseries-design](../superpowers/specs/2026-06-24-metrics-timeseries-design.md).**
+> Adds `GET /v1/stats/history` (persisted TPS time-series), a `peakTps` field on the
+> `stats/live` snapshot, and a body-token heartbeat variant for `sendBeacon`. The
+> heartbeat/stats contract here is otherwise unchanged.
+>
+> `GET /v1/stats/history` accepts **either** `window=<secs>` (trailing, default 1h) **or**
+> an absolute `from=<epoch>&to=<epoch>` range; `from`/`to` win when both are present. The
+> range is bounded to the 30-day metric retention and **downsampled server-side** to ≤1000
+> points — one per stride-wide bucket carrying the bucket's last cumulative counter, so each
+> derived point is the **average** TPS across its bucket (long ranges are smoothed; the client
+> additionally peak-preserves when decimating the shorter, denser series it renders). Response:
+> `{ "metric": "tps", "points": [{ "t": "<epoch-secs>", "v": <tps> }] }`.
 
 - **Status**: Accepted (v1 draft, target: June-19 demo)
 - **Date**: 2026-06-16

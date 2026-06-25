@@ -69,64 +69,23 @@ fun is_valid_signature_type() {
 #[test]
 fun is_valid_public_key_length() {
     // ED25519: 32 bytes
-    let pk_32 = vector[
-        0u8,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-    ];
+    let pk_32 = vector::tabulate!(32, |_| 0u8);
     assert!(signature::is_valid_public_key_length(signature::ed25519(), &pk_32));
     assert!(!signature::is_valid_public_key_length(signature::ed25519(), &vector[0u8]));
 
     // BLS12381_MIN_PK: 48 bytes
-    let mut pk_48 = vector<u8>[];
-    let mut i = 0u64;
-    while (i < 48) { pk_48.push_back(0); i = i + 1; };
+    let pk_48 = vector::tabulate!(48, |_| 0u8);
     assert!(signature::is_valid_public_key_length(signature::bls12381_min_pk(), &pk_48));
 
     // BLS12381_MIN_SIG: 96 bytes
-    let mut pk_96 = vector<u8>[];
-    i = 0;
-    while (i < 96) { pk_96.push_back(0); i = i + 1; };
+    let pk_96 = vector::tabulate!(96, |_| 0u8);
     assert!(signature::is_valid_public_key_length(signature::bls12381_min_sig(), &pk_96));
 
     // Secp256k1: 33 bytes (compressed) or 65 bytes (uncompressed)
-    let mut pk_33 = vector<u8>[];
-    i = 0;
-    while (i < 33) { pk_33.push_back(0); i = i + 1; };
+    let pk_33 = vector::tabulate!(33, |_| 0u8);
     assert!(signature::is_valid_public_key_length(signature::secp256k1(), &pk_33));
 
-    let mut pk_65 = vector<u8>[];
-    i = 0;
-    while (i < 65) { pk_65.push_back(0); i = i + 1; };
+    let pk_65 = vector::tabulate!(65, |_| 0u8);
     assert!(signature::is_valid_public_key_length(signature::secp256k1(), &pk_65));
 }
 
@@ -163,16 +122,12 @@ fun be_bytes_to_u64() {
 #[test]
 fun u64_roundtrip() {
     let values = vector[0u64, 1, 255, 256, 65535, 65536, 0xDEADBEEF, 0xFFFFFFFFFFFFFFFF];
-    let len = values.length();
-    let mut i = 0;
 
-    while (i < len) {
-        let original = *values.borrow(i);
-        let bytes = signature::u64_to_be_bytes(original);
+    values.do_ref!(|original| {
+        let bytes = signature::u64_to_be_bytes(*original);
         let recovered = signature::be_bytes_to_u64(&bytes);
-        assert_eq!(original, recovered);
-        i = i + 1;
-    };
+        assert_eq!(*original, recovered);
+    });
 }
 
 #[test]
@@ -182,7 +137,7 @@ fun create_domain_separated_message() {
     let result = signature::create_domain_separated_message(domain, message);
 
     // First byte should be domain length
-    assert_eq!(*result.borrow(0), 11); // "test_domain".length() == 11
+    assert_eq!(result[0], 11); // "test_domain".length() == 11
 
     // Check total length: 1 + 11 + 5 = 17
     assert_eq!(result.length(), 17);
@@ -196,11 +151,11 @@ fun create_tunnel_message() {
     let result = signature::create_tunnel_message(tunnel_id, nonce, data);
 
     // Should start with "sui_tunnel::signature::message"
-    assert_eq!(*result.borrow(0), 115); // 's'
-    assert_eq!(*result.borrow(1), 117); // 'u'
-    assert_eq!(*result.borrow(2), 105); // 'i'
-    assert_eq!(*result.borrow(3), 95); // '_'
-    assert_eq!(*result.borrow(4), 116); // 't'
+    assert_eq!(result[0], 115); // 's'
+    assert_eq!(result[1], 117); // 'u'
+    assert_eq!(result[2], 105); // 'i'
+    assert_eq!(result[3], 95); // '_'
+    assert_eq!(result[4], 116); // 't'
 
     // Total length: 30 (prefix) + 4 (id) + 8 (nonce) + 4 (data) = 46
     assert_eq!(result.length(), 46);

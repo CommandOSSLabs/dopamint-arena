@@ -63,6 +63,9 @@ jobs:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: us-east-1
 
+      # The Pulumi program resolves the backend image tag from the latest deployed ECS task
+      # definition when the tag is not configured, so infra-only deploys never roll back to a
+      # stale baseline. deploy-backend still pins an exact SHA when it builds a new image.
       - name: Deploy infrastructure with Pulumi
         uses: pulumi/actions@cd99a7f8865434dd3532b586a26f9ebea596894f # v5.5.1
         env:
@@ -72,7 +75,3 @@ jobs:
           stack-name: CommandOSS/dopamint-arena/${{ github.event.inputs.environment || 'dev' }}
           work-dir: infra
           pulumi-version: 3.243.0
-          # backend-image-tag is owned by deploy-backend (it builds + pushes the image and sets
-          # the tag). Infra deploys must NOT set it: a push has no input, so the old default
-          # clobbered the real SHA with a non-existent `latest` and took the services down.
-          # The committed Pulumi.<stack>.yaml carries a real SHA as the baseline.

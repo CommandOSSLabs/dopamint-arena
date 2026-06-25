@@ -67,12 +67,62 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    // Second bridge: stats:snapshot -> stats_tx, relayed to /v1/stats/live. N tunnel-manager
+    // instances publish ~identical snapshots, so SSE viewers see a few duplicate frames/tick;
+    // the frontend overwrites state idempotently, so this is harmless. `_stats_rx` is held for
+    // the same reason as `_rx` above (keep the channel from reporting zero receivers).
+    let (stats_tx, _stats_rx) = tokio::sync::broadcast::channel::<String>(256);
+    if let Ok(url) = std::env::var("REDIS_PUBSUB_URL") {
+        let sub = Builder::from_config(RedisConfig::from_url(&url)?).build_subscriber_client()?;
+        sub.init().await?;
+        sub.subscribe("stats:snapshot").await?;
+        let mut messages = sub.message_rx();
+        let tx2 = stats_tx.clone();
+        tokio::spawn(async move {
+            use tokio::sync::broadcast::error::RecvError;
+            let _sub = sub;
+            loop {
+                match messages.recv().await {
+                    Ok(msg) => {
+                        if let Some(s) = msg.value.as_string() {
+                            let _ = tx2.send(s);
+                        }
+                    }
+                    Err(RecvError::Lagged(n)) => {
+                        tracing::warn!(
+                            skipped = n,
+                            "stats:snapshot message_rx lagged; live samples dropped"
+                        );
+                    }
+                    Err(RecvError::Closed) => break,
+                }
+            }
+            tracing::warn!(
+                "Redis stats:snapshot subscription closed; SSE live stats silent until restart"
+            );
+        });
+    }
+
     let sse_tx = tx.clone();
+    let stats_sse_tx = stats_tx.clone();
     let app = router(state)
         .route(
             "/v1/explorer/stream",
             get(move || {
                 let rx = sse_tx.subscribe();
+                async move {
+                    let stream = BroadcastStream::new(rx).filter_map(|m| async move {
+                        m.ok()
+                            .map(|json| Ok::<_, Infallible>(Event::default().data(json)))
+                    });
+                    Sse::new(stream).keep_alive(KeepAlive::default())
+                }
+            }),
+        )
+        .route(
+            "/v1/stats/live",
+            get(move || {
+                let rx = stats_sse_tx.subscribe();
                 async move {
                     let stream = BroadcastStream::new(rx).filter_map(|m| async move {
                         m.ok()

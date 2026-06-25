@@ -1,6 +1,6 @@
 import * as aws from "@pulumi/aws";
 import * as pulumi from "@pulumi/pulumi";
-import { getConfig } from "./config.js";
+import { getConfig, resolveBackendImageTag } from "./config.js";
 import { createNetwork } from "./components/Network.js";
 import { createDns } from "./components/Dns.js";
 import { createSecurityGroups } from "./resources/security-groups.js";
@@ -21,6 +21,10 @@ import { createExplorerServices } from "./components/ExplorerServices.js";
 import { githubEnvOutputs } from "./github.js";
 
 const cfg = getConfig();
+const backendImageTag: pulumi.Input<string> = cfg.backendImageTag
+  ? pulumi.output(cfg.backendImageTag)
+  : resolveBackendImageTag(cfg.environment);
+
 const network = createNetwork(`dopamint-${cfg.environment}`);
 const sgs = createSecurityGroups(`dopamint-${cfg.environment}`, network.vpcId);
 
@@ -56,13 +60,19 @@ const database = createDatabase(`dopamint-${cfg.environment}`, {
 // inlined into the task definition. Created only when the stack configures it.
 let settlerKeySecretArn: pulumi.Output<string> | undefined;
 if (cfg.settlerKey) {
-  const settlerKeySecret = new aws.secretsmanager.Secret(`dopamint-${cfg.environment}-settler-key`, {
-    description: `Sui settler signing key for dopamint-${cfg.environment}`,
-  });
-  new aws.secretsmanager.SecretVersion(`dopamint-${cfg.environment}-settler-key-version`, {
-    secretId: settlerKeySecret.id,
-    secretString: cfg.settlerKey,
-  });
+  const settlerKeySecret = new aws.secretsmanager.Secret(
+    `dopamint-${cfg.environment}-settler-key`,
+    {
+      description: `Sui settler signing key for dopamint-${cfg.environment}`,
+    },
+  );
+  new aws.secretsmanager.SecretVersion(
+    `dopamint-${cfg.environment}-settler-key-version`,
+    {
+      secretId: settlerKeySecret.id,
+      secretString: cfg.settlerKey,
+    },
+  );
   settlerKeySecretArn = settlerKeySecret.arn;
 }
 
@@ -78,13 +88,19 @@ const dbProxy = createDatabaseProxy(`dopamint-${cfg.environment}`, {
 
 // Full Postgres URL over the RDS Proxy, stored as a secret (password never in plaintext
 // env). Injected into the explorer services via ECS `secrets` as DATABASE_URL.
-const databaseUrlSecret = new aws.secretsmanager.Secret(`dopamint-${cfg.environment}-database-url`, {
-  description: `Postgres DATABASE_URL (via RDS Proxy) for dopamint-${cfg.environment}`,
-});
-new aws.secretsmanager.SecretVersion(`dopamint-${cfg.environment}-database-url-version`, {
-  secretId: databaseUrlSecret.id,
-  secretString: pulumi.interpolate`postgresql://dopamint:${database.dbPassword}@${dbProxy.proxyEndpoint}:5432/dopamint`,
-});
+const databaseUrlSecret = new aws.secretsmanager.Secret(
+  `dopamint-${cfg.environment}-database-url`,
+  {
+    description: `Postgres DATABASE_URL (via RDS Proxy) for dopamint-${cfg.environment}`,
+  },
+);
+new aws.secretsmanager.SecretVersion(
+  `dopamint-${cfg.environment}-database-url-version`,
+  {
+    secretId: databaseUrlSecret.id,
+    secretString: pulumi.interpolate`postgresql://dopamint:${database.dbPassword}@${dbProxy.proxyEndpoint}:5432/dopamint`,
+  },
+);
 
 const iam = createIam(`dopamint-${cfg.environment}`, {
   githubOrg: "CommandOSSLabs",
@@ -105,7 +121,7 @@ const cache = createCache(`dopamint-${cfg.environment}`, {
 const backend = createBackend({
   name: `dopamint-${cfg.environment}`,
   repositoryUrl: ecr.repositoryUrl,
-  imageTag: cfg.backendImageTag,
+  imageTag: backendImageTag,
   pubSubEndpoint: cache.pubSubEndpoint,
   cacheEndpoint: cache.cacheEndpoint,
   taskExecutionRoleArn: iam.taskExecutionRole.arn,
@@ -129,7 +145,7 @@ const explorer = createExplorerServices({
   clusterId: ecs.clusterArn,
   clusterName: ecs.clusterName,
   repositoryUrl: ecr.repositoryUrl,
-  imageTag: cfg.backendImageTag,
+  imageTag: backendImageTag,
   logGroupName: ecs.logGroupName,
   taskExecutionRoleArn: iam.taskExecutionRole.arn,
   taskRoleArn: iam.taskRole.arn,

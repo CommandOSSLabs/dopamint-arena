@@ -71,10 +71,10 @@ test("applyMove rejects empty text and over-balance / negative tips", () => {
   const s = proto.initialState(ctx);
   assert.throws(() => proto.applyMove(s, { kind: "msg", text: "" }, "A"));
   assert.throws(() =>
-    proto.applyMove(s, { kind: "msg", text: "hi", tip: 101n }, "A"),
+    proto.applyMove(s, { kind: "msg", text: "hi", tip: 101n }, "A")
   );
   assert.throws(() =>
-    proto.applyMove(s, { kind: "msg", text: "hi", tip: -1n }, "A"),
+    proto.applyMove(s, { kind: "msg", text: "hi", tip: -1n }, "A")
   );
 });
 
@@ -102,7 +102,7 @@ test("encodeState is deterministic, fixed-size, and changes with state", () => {
       kind: "msg",
       text: "x".repeat(5000),
     },
-    "B",
+    "B"
   );
   assert.equal(e1.length, proto.encodeState(longMsg).length);
 });
@@ -133,7 +133,7 @@ test("end-to-end self-play tunnel: latest co-signed update verifies", () => {
     b,
     ed25519Address(a.publicKey),
     ed25519Address(b.publicKey),
-    { a: 1000n, b: 1000n },
+    { a: 1000n, b: 1000n }
   );
   t.step({ kind: "msg", text: "gm" }, "A");
   t.step({ kind: "msg", text: "thanks", tip: 50n }, "B");
@@ -151,7 +151,7 @@ test("end-to-end self-play tunnel: latest co-signed update verifies", () => {
     verifyCoSignedUpdate(
       t.latest!,
       { publicKey: t.partyA.publicKey, scheme: t.partyA.scheme },
-      { publicKey: t.partyB.publicKey, scheme: t.partyB.scheme },
-    ),
+      { publicKey: t.partyB.publicKey, scheme: t.partyB.scheme }
+    )
   );
 });

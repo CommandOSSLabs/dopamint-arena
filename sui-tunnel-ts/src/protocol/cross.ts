@@ -11,6 +11,11 @@
  * total is 2S. Balances stay (S, S) for the whole race and flip to (2S, 0) / (0, 2S)
  * only on the winning tick — so the invariant balanceA + balanceB === total holds for
  * every reachable state (required by OffchainTunnel.step).
+ *
+ * PvP fairness: the seed is a deterministic function of the Sui-assigned tunnelId, NOT a
+ * commit-reveal. Safe here because the hazard field is PUBLIC and identical for both seats —
+ * neither party holds hidden state it could bias, and the tunnelId cannot be ground.
+ * Commit-reveal is reserved for hidden-information games (see docs/decisions/0010).
  */
 
 import {
@@ -31,10 +36,14 @@ import { u64ToBeBytes } from "../core/wire";
 export const COLUMN_COUNT = 9;
 /** Spawn / respawn column (center). */
 export const SPAWN_COL = 4;
-/** First chicken to reach this lane wins the pot. */
-export const WIN_LANE = 20;
-/** Hard upper bound on ticks; on reaching it the higher score wins (tie ⇒ push). */
-export const TICK_CAP = 600n;
+/** Finish line — reachable within the tick budget so a race ends DECISIVELY (first chicken to
+ *  cross takes the pot), not in a score-tie push at the cap. One seat hops per tick (2-party
+ *  model), so each chicken advances every other tick; 600 keeps the race ~30s at the self-play
+ *  rate. (Two seats can no longer cross on the same tick, so a finish-line dead heat can't occur.) */
+export const WIN_LANE = 600;
+/** Backstop only: if a race stalls and neither chicken crosses, the higher score wins at this
+ *  cap (tie ⇒ push). Normal races finish well before it. */
+export const TICK_CAP = 5400n;
 /** Ticks of collision immunity after a respawn (also blocks moving, per the reference). */
 export const RESPAWN_INVULN = 3;
 /** Minimum fundable stake per seat (hook clamps to this). */
@@ -91,7 +100,11 @@ function laneRng(seed: bigint, lane: number): () => number {
  * Roads carry narrow cars, water carries wide logs (platforms), rails a very wide train.
  * Positions sweep across the columns at a seeded speed and wrap at COLUMN_COUNT.
  */
-export function hazardsAt(seed: bigint, lane: number, tick: bigint): HazardSpan[] {
+export function hazardsAt(
+  seed: bigint,
+  lane: number,
+  tick: bigint
+): HazardSpan[] {
   const kind = laneKind(lane);
   if (kind === "grass") return [];
   const rng = laneRng(seed, lane);
@@ -105,7 +118,10 @@ export function hazardsAt(seed: bigint, lane: number, tick: bigint): HazardSpan[
       const speed = 0.1 + rng() * 0.1;
       const dir = rng() < 0.5 ? 1 : -1;
       const phase = rng() * COLUMN_COUNT;
-      spans.push({ center: mod(phase + dir * speed * t, COLUMN_COUNT), half: 0.9 });
+      spans.push({
+        center: mod(phase + dir * speed * t, COLUMN_COUNT),
+        half: 0.9,
+      });
     }
   } else if (kind === "water") {
     const count = rng() < 0.5 ? 2 : 1;
@@ -113,14 +129,20 @@ export function hazardsAt(seed: bigint, lane: number, tick: bigint): HazardSpan[
       const speed = 0.06 + rng() * 0.05;
       const dir = rng() < 0.5 ? 1 : -1;
       const phase = rng() * COLUMN_COUNT + i * 3;
-      spans.push({ center: mod(phase + dir * speed * t, COLUMN_COUNT), half: 1.4 });
+      spans.push({
+        center: mod(phase + dir * speed * t, COLUMN_COUNT),
+        half: 1.4,
+      });
     }
   } else {
     // rails
     const speed = 0.2 + rng() * 0.15;
     const dir = rng() < 0.5 ? 1 : -1;
     const phase = rng() * COLUMN_COUNT;
-    spans.push({ center: mod(phase + dir * speed * t, COLUMN_COUNT), half: 3.0 });
+    spans.push({
+      center: mod(phase + dir * speed * t, COLUMN_COUNT),
+      half: 3.0,
+    });
   }
   return spans;
 }
@@ -129,7 +151,8 @@ export function hazardsAt(seed: bigint, lane: number, tick: bigint): HazardSpan[
 export function spanCoversCol(span: HazardSpan, col: number): boolean {
   const c = col + 0.5;
   for (const cc of [c, c - COLUMN_COUNT, c + COLUMN_COUNT]) {
-    if (cc > span.center - span.half && cc < span.center + span.half) return true;
+    if (cc > span.center - span.half && cc < span.center + span.half)
+      return true;
   }
   return false;
 }
@@ -138,17 +161,28 @@ export function spanCoversCol(span: HazardSpan, col: number): boolean {
  * Is the cell (col, lane) lethal at `tick`? grass = safe; road/rails = lethal when a
  * hazard overlaps; water = INVERTED (open water kills; a log saves). Behind spawn = lethal.
  */
-export function isLethal(seed: bigint, col: number, lane: number, tick: bigint): boolean {
+export function isLethal(
+  seed: bigint,
+  col: number,
+  lane: number,
+  tick: bigint
+): boolean {
   if (lane < 0) return true;
   const kind = laneKind(lane);
   if (kind === "grass") return false;
-  const onHazard = hazardsAt(seed, lane, tick).some((s) => spanCoversCol(s, col));
+  const onHazard = hazardsAt(seed, lane, tick).some((s) =>
+    spanCoversCol(s, col)
+  );
   if (kind === "water") return !onHazard;
   return onHazard;
 }
 
 /** Destination cell for a hop, clamped to the board. */
-export function destOf(lane: number, col: number, dir: CrossDir): [number, number] {
+export function destOf(
+  lane: number,
+  col: number,
+  dir: CrossDir
+): [number, number] {
   if (dir === "north") return [lane + 1, col];
   if (dir === "south") return [Math.max(0, lane - 1), col];
   if (dir === "east") return [lane, Math.min(COLUMN_COUNT - 1, col + 1)];
@@ -208,11 +242,16 @@ function stepPlayer(
   seed: bigint,
   p: CrossPlayer,
   dir: CrossDir | undefined,
-  tick: bigint,
+  tick: bigint
 ): CrossPlayer {
   // Post-respawn immunity: no move, no death, just tick down.
   if (p.invulnTicks > 0) {
-    return { lane: p.lane, col: p.col, score: p.score, invulnTicks: p.invulnTicks - 1 };
+    return {
+      lane: p.lane,
+      col: p.col,
+      score: p.score,
+      invulnTicks: p.invulnTicks - 1,
+    };
   }
   let lane = p.lane;
   let col = p.col;
@@ -233,23 +272,29 @@ function stepPlayer(
 }
 
 /** Greedy bot dir for player index `i`: prefer forward, dodge sideways, avoid back, else stay. */
-function greedyDir(s: CrossState, i: number, rng: () => number): CrossDir | undefined {
+function greedyDir(
+  s: CrossState,
+  i: number,
+  rng: () => number
+): CrossDir | undefined {
   const p = s.players[i];
   if (p.invulnTicks > 0) return undefined;
   const tick = s.tick + 1n;
-  const order: CrossDir[] = rng() < 0.5 ? ["north", "east", "west"] : ["north", "west", "east"];
+  // Seat-biased exploration (A drifts east, B drifts west) so the chickens take different hazard
+  // timings and a clear leader emerges — fewer dead-heat pushes. North (forward) always first.
+  const near: CrossDir = i === 0 ? "east" : "west";
+  const far: CrossDir = i === 0 ? "west" : "east";
+  const order: CrossDir[] =
+    rng() < 0.8 ? ["north", near, far] : ["north", far, near];
   for (const d of order) {
     const [nl, nc] = destOf(p.lane, p.col, d);
     if (!isLethal(s.seed, nc, nl, tick)) return d;
   }
-  // Staying put is fine if our current cell survives the next tick.
-  if (!isLethal(s.seed, p.col, p.lane, tick)) return undefined;
-  // Forced: accept any non-lethal cell, including backward.
-  for (const d of ["north", "east", "west", "south"] as CrossDir[]) {
-    const [nl, nc] = destOf(p.lane, p.col, d);
-    if (!isLethal(s.seed, nc, nl, tick)) return d;
-  }
-  return undefined; // doomed this tick; will respawn
+  // Keep moving rather than idle (the chicken never stops): back up if it's safe.
+  const [sl, sc] = destOf(p.lane, p.col, "south");
+  if (!isLethal(s.seed, sc, sl, tick)) return "south";
+  // Every neighbor is lethal: hold if our current cell survives, else we're doomed (respawn).
+  return undefined;
 }
 
 // ============================================
@@ -284,11 +329,14 @@ export class CrossProtocol implements Protocol<CrossState, CrossMove> {
     let winner: Party | null = null;
     const aWon = players[0].lane >= WIN_LANE;
     const bWon = players[1].lane >= WIN_LANE;
-    // Simultaneous double-arrival is broken deterministically by higher score, ties to A.
-    // Deterministic (replay-stable) is required so both parties agree; the A-bias is harmless
-    // in self-play (both seats are the same funding wallet). Revisit for PvP fairness.
-    if (aWon && bWon) winner = players[0].score >= players[1].score ? "A" : "B";
-    else if (aWon) winner = "A";
+    // Simultaneous double-arrival: higher score wins; an exact dead heat is a PUSH (winner
+    // null), matching the TICK_CAP tie path below. Resolving by score is replay-stable so both
+    // parties agree, and the push removes the old seat-A bias in human-vs-human PvP.
+    if (aWon && bWon) {
+      if (players[0].score > players[1].score) winner = "A";
+      else if (players[1].score > players[0].score) winner = "B";
+      else winner = null;
+    } else if (aWon) winner = "A";
     else if (bWon) winner = "B";
     else if (tick >= TICK_CAP) {
       if (players[0].score > players[1].score) winner = "A";
@@ -321,10 +369,12 @@ export class CrossProtocol implements Protocol<CrossState, CrossMove> {
         u64ToBeBytes(p.lane),
         u64ToBeBytes(p.col),
         u64ToBeBytes(p.score),
-        u64ToBeBytes(p.invulnTicks),
+        u64ToBeBytes(p.invulnTicks)
       );
     }
-    parts.push(new Uint8Array([s.winner === "A" ? 1 : s.winner === "B" ? 2 : 0]));
+    parts.push(
+      new Uint8Array([s.winner === "A" ? 1 : s.winner === "B" ? 2 : 0])
+    );
     return concatBytes(parts);
   }
 

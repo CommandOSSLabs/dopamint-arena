@@ -1,16 +1,1762 @@
-.bomb-grid {
-  display: grid;
-  gap: 1px;
-  background: rgba(255, 255, 255, 0.05);
-  aspect-ratio: 1 / 1;
-  max-height: 100%;
-  margin: 0 auto;
+@import "../sketch/sketch.css";
+
+/* ============================================================
+   Bomb It — dual side panes + square arena. Cornerless throughout.
+   ============================================================ */
+
+/* ---- Lobby: bottom HUD dock + floating arena glyphs -------------------- */
+
+.bomb-lobby {
+  position: relative;
+  display: flex;
+  height: 100%;
+  width: 100%;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: stretch;
+  overflow: hidden;
+  container-type: size;
+  padding: 0 10px 12px;
+  background:
+    radial-gradient(
+      120% 90% at 50% 0%,
+      rgba(249, 115, 22, 0.16),
+      transparent 55%
+    ),
+    radial-gradient(
+      70% 55% at 100% 40%,
+      rgba(232, 121, 249, 0.08),
+      transparent 50%
+    ),
+    radial-gradient(
+      65% 50% at 0% 55%,
+      rgba(34, 211, 238, 0.08),
+      transparent 48%
+    ),
+    var(--bi-ink, #0a090d);
 }
+
+.bomb-lobby__scene {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+.bomb-lobby__scene::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.028) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.028) 1px, transparent 1px);
+  background-size: 20px 20px;
+  mask-image: linear-gradient(180deg, #000 0%, #000 55%, transparent 92%);
+}
+.bomb-lobby__arena-hint {
+  position: absolute;
+  top: 14%;
+  left: 50%;
+  width: min(42cqw, 42cqh);
+  height: min(42cqw, 42cqh);
+  transform: translateX(-50%);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  background:
+    linear-gradient(rgba(34, 211, 238, 0.04), transparent 40%),
+    rgba(0, 0, 0, 0.25);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.03),
+    0 0 40px rgba(249, 115, 22, 0.08);
+  opacity: 0.55;
+}
+
+.bomb-lobby__float {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  width: clamp(22px, 7.5cqw, 34px);
+  height: clamp(22px, 7.5cqw, 34px);
+  transform: rotate(var(--bi-float-rot, 0deg)) scale(var(--bi-float-scale, 1));
+}
+.bomb-lobby__float--a {
+  animation: bomb-float-a 5.5s ease-in-out infinite;
+}
+.bomb-lobby__float--b {
+  animation: bomb-float-b 6.2s ease-in-out infinite;
+}
+.bomb-lobby__float--c {
+  animation: bomb-float-c 4.8s ease-in-out infinite;
+}
+
+/* ---- Shared square glyphs (lobby + in-match reuse shapes) -------------- */
+
+.bomb-glyph {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 2px solid rgba(0, 0, 0, 0.55);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.2),
+    0 0 0 1px rgba(0, 0, 0, 0.75);
+}
+.bomb-glyph--sm {
+  width: 1.35rem;
+  height: 1.35rem;
+}
+.bomb-glyph--md {
+  width: 100%;
+  height: 100%;
+}
+.bomb-glyph--lg {
+  width: 2rem;
+  height: 2rem;
+}
+.bomb-glyph--pulse {
+  animation: bomb-pulse 0.55s ease-in-out infinite;
+}
+
+.bomb-glyph--player-a {
+  background: var(--bi-cyan, #22d3ee);
+}
+.bomb-glyph--player-a .bomb-glyph__inner {
+  position: absolute;
+  inset: 22%;
+  border: 1px solid rgba(0, 0, 0, 0.45);
+  background: #67e8f9;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+}
+.bomb-glyph--player-b {
+  background: var(--bi-fuchsia, #e879f9);
+}
+.bomb-glyph--player-b .bomb-glyph__inner {
+  position: absolute;
+  inset: 22%;
+  border: 1px solid rgba(0, 0, 0, 0.45);
+  background: #f0abfc;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+}
+
+.bomb-glyph--bomb {
+  width: 88%;
+  height: 88%;
+  margin: auto;
+  border-color: #450a0a;
+  background: #1c1917;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+    0 0 0 1px #ef4444;
+}
+.bomb-glyph__core {
+  position: absolute;
+  inset: 28%;
+  border: 1px solid #7f1d1d;
+  background: #dc2626;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.15);
+}
+.bomb-glyph__fuse {
+  position: absolute;
+  top: -18%;
+  left: 50%;
+  width: 20%;
+  height: 20%;
+  transform: translateX(-50%);
+  border: 1px solid #92400e;
+  background: #fbbf24;
+  animation: bomb-fuse 0.35s steps(2) infinite;
+}
+
+.bomb-glyph--crate {
+  background: #8b5a2b;
+  border-color: rgba(120, 80, 40, 0.85);
+}
+.bomb-glyph__crate-lines {
+  position: absolute;
+  inset: 14%;
+  border: 1px solid rgba(0, 0, 0, 0.35);
+  background:
+    linear-gradient(
+      90deg,
+      transparent 46%,
+      rgba(0, 0, 0, 0.28) 46%,
+      rgba(0, 0, 0, 0.28) 54%,
+      transparent 54%
+    ),
+    linear-gradient(
+      transparent 46%,
+      rgba(0, 0, 0, 0.28) 46%,
+      rgba(0, 0, 0, 0.28) 54%,
+      transparent 54%
+    ),
+    #a16207;
+}
+
+.bomb-glyph--wall {
+  background: #2a2634;
+  border-color: #3f3a4a;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+
+/* ---- Lobby deck (bottom panel + mode tiles) ----------------------------- */
+
+.bomb-lobby__deck {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  width: 100%;
+  max-width: 32rem;
+  margin: 0 auto;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+  padding: 14px 16px 16px;
+}
+.bomb-lobby__deck-head {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.bomb-lobby__modes {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.bomb-mode-tile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 5.5rem;
+  padding: 10px 8px 8px;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  text-align: center;
+  --sketch-fill: #fff9f0;
+}
+.bomb-mode-tile--on {
+  --sketch-fill: var(--sketch-accent-fill, #ffe9bd);
+}
+.bomb-mode-tile__art {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 1.75rem;
+}
+.bomb-mode-tile__art--versus {
+  gap: 6px;
+}
+.bomb-mode-tile__label {
+  position: relative;
+  z-index: 1;
+  font-size: 0.95rem;
+  line-height: 1.1;
+  color: var(--sketch-ink, #23221f);
+}
+.bomb-mode-tile__hint {
+  position: relative;
+  z-index: 1;
+  margin: 0;
+  font-size: 0.72rem;
+  line-height: 1;
+}
+.bomb-lobby__stake {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+
+/* ---- Lobby card (compact status screens) ------------------------------ */
+
+.bomb-lobby__card {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  width: min(28rem, calc(100% - 16px));
+  flex-direction: column;
+  align-items: stretch;
+  gap: 14px;
+  border: 2px solid
+    color-mix(in srgb, var(--bi-ember, #f97316) 45%, transparent);
+  border-radius: 14px;
+  background: linear-gradient(180deg, #fffef5 0%, #fff 50%, #fef3e8 100%);
+  padding: 20px 18px;
+  text-align: center;
+  box-shadow: 0 5px 0 color-mix(in srgb, var(--bi-ember, #f97316) 35%, #000);
+}
+.bomb-lobby__card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0.3;
+  background-image: radial-gradient(
+    circle at 15% 85%,
+    rgba(255, 255, 255, 0.85) 0 2px,
+    transparent 3px
+  );
+  background-size: 16px 12px;
+}
+.bomb-lobby__card--compact {
+  gap: 12px;
+  padding: 18px 16px;
+}
+.bomb-lobby__head {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.bomb-lobby__brand {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+.bomb-lobby__mascot {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+}
+.bomb-lobby__title {
+  font-size: 1.15rem;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: #f1f5f9;
+  line-height: 1.05;
+  text-align: left;
+}
+.bomb-lobby__action {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  width: 100%;
+  align-items: stretch;
+}
+.bomb-seg {
+  display: inline-flex;
+  flex: none;
+  overflow: hidden;
+  border: 2px solid rgba(148, 163, 184, 0.35);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.35);
+  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.35);
+}
+.bomb-seg__btn {
+  padding: 6px 11px;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(148, 163, 184, 0.9);
+  border-right: 1px solid rgba(148, 163, 184, 0.15);
+}
+.bomb-seg__btn:last-child {
+  border-right: 0;
+}
+.bomb-seg__btn--on {
+  color: #fef3c7;
+  background: linear-gradient(
+    180deg,
+    rgba(249, 115, 22, 0.35),
+    rgba(0, 0, 0, 0.25)
+  );
+}
+
+.bomb-lobby__modes {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.bomb-cta {
+  border: 0;
+  background: var(--bi-ember, #f97316);
+  color: #1a0d04;
+  font-weight: 800;
+  font-size: 0.95rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.bomb-cta--full,
+.bomb-cta--join {
+  min-height: 2.85rem;
+  padding: 0 18px;
+}
+.bomb-cta--full {
+  width: 100%;
+}
+.bomb-cta--join {
+  flex: none;
+  min-width: 4.5rem;
+  align-self: flex-end;
+}
+.bomb-cta:hover {
+  filter: brightness(1.08);
+}
+
+@keyframes bomb-float-a {
+  0%,
+  100% {
+    transform: rotate(var(--bi-float-rot, 0deg)) scale(var(--bi-float-scale, 1))
+      translateY(0);
+  }
+  50% {
+    transform: rotate(calc(var(--bi-float-rot, 0deg) + 4deg))
+      scale(var(--bi-float-scale, 1)) translateY(-6px);
+  }
+}
+@keyframes bomb-float-b {
+  0%,
+  100% {
+    transform: rotate(var(--bi-float-rot, 0deg)) scale(var(--bi-float-scale, 1))
+      translate(0, 0);
+  }
+  50% {
+    transform: rotate(calc(var(--bi-float-rot, 0deg) - 5deg))
+      scale(var(--bi-float-scale, 1)) translate(4px, -5px);
+  }
+}
+@keyframes bomb-float-c {
+  0%,
+  100% {
+    transform: rotate(var(--bi-float-rot, 0deg)) scale(var(--bi-float-scale, 1))
+      translateY(0);
+  }
+  50% {
+    transform: rotate(calc(var(--bi-float-rot, 0deg) + 3deg))
+      scale(var(--bi-float-scale, 1)) translateY(-4px);
+  }
+}
+
+/* ---- In-match: three-column shell -------------------------------------- */
+
+.bomb-shell {
+  position: relative;
+  display: flex;
+  flex-direction: row;
+  height: 100%;
+  width: 100%;
+  min-height: 0;
+  overflow: hidden;
+  container-type: size;
+  background:
+    radial-gradient(
+      90% 70% at 20% 30%,
+      rgba(34, 211, 238, 0.05),
+      transparent 55%
+    ),
+    radial-gradient(
+      90% 70% at 80% 70%,
+      rgba(232, 121, 249, 0.05),
+      transparent 55%
+    ),
+    var(--bi-ink, #0a090d);
+  color: #e2e8f0;
+}
+
+/* ---- Side panes (grow into side margins, capped so arena stays visible) - */
+
+.bomb-pane {
+  position: relative;
+  display: flex;
+  flex: 1 1 0;
+  min-width: 52px;
+  max-width: clamp(52px, 18cqw, 96px);
+  flex-direction: column;
+  overflow: hidden;
+  isolation: isolate;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 22%),
+    linear-gradient(0deg, rgba(0, 0, 0, 0.42), transparent 38%),
+    var(--bi-rail, #1e1a24);
+}
+.bomb-pane::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: repeating-linear-gradient(
+    0deg,
+    rgba(255, 255, 255, 0.018) 0 1px,
+    transparent 1px 5px
+  );
+  opacity: 0.45;
+}
+.bomb-pane--you {
+  border-right: 2px solid var(--bi-cyan, #22d3ee);
+  box-shadow: inset -10px 0 28px -14px rgba(34, 211, 238, 0.28);
+}
+.bomb-pane--you::after {
+  content: "";
+  position: absolute;
+  top: 8%;
+  right: 0;
+  bottom: 8%;
+  width: 1px;
+  background: var(--bi-cyan, #22d3ee);
+  box-shadow: 0 0 10px var(--bi-cyan, #22d3ee);
+  opacity: 0.55;
+  animation: bomb-edge-pulse 2.6s ease-in-out infinite;
+}
+.bomb-pane--opp {
+  border-left: 2px solid var(--bi-fuchsia, #e879f9);
+  box-shadow: inset 10px 0 28px -14px rgba(232, 121, 249, 0.28);
+}
+.bomb-pane--opp::after {
+  content: "";
+  position: absolute;
+  top: 8%;
+  left: 0;
+  bottom: 8%;
+  width: 1px;
+  background: var(--bi-fuchsia, #e879f9);
+  box-shadow: 0 0 10px var(--bi-fuchsia, #e879f9);
+  opacity: 0.55;
+  animation: bomb-edge-pulse 2.6s ease-in-out infinite 0.8s;
+}
+.bomb-pane--live.bomb-pane--you {
+  box-shadow:
+    inset -12px 0 32px -10px rgba(34, 211, 238, 0.38),
+    inset 0 0 24px rgba(34, 211, 238, 0.06);
+}
+.bomb-pane--live.bomb-pane--opp {
+  box-shadow:
+    inset 12px 0 32px -10px rgba(232, 121, 249, 0.32),
+    inset 0 0 24px rgba(232, 121, 249, 0.05);
+}
+
+.bomb-pane__inner {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  gap: 8px;
+  padding: 6px 5px;
+}
+
+.bomb-pane__block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.bomb-pane__grow {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.bomb-pane__eyebrow {
+  font-size: 7px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(148, 163, 184, 0.75);
+}
+.bomb-pane--you .bomb-pane__eyebrow {
+  color: color-mix(in srgb, var(--bi-cyan, #22d3ee) 55%, #94a3b8);
+}
+.bomb-pane--opp .bomb-pane__eyebrow {
+  color: color-mix(in srgb, var(--bi-fuchsia, #e879f9) 55%, #94a3b8);
+}
+
+.bomb-player {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: linear-gradient(160deg, rgba(0, 0, 0, 0.52), rgba(0, 0, 0, 0.22));
+  padding: 8px 4px;
+  transition:
+    box-shadow 0.25s ease,
+    border-color 0.25s ease;
+}
+.bomb-player::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    105deg,
+    transparent 42%,
+    rgba(255, 255, 255, 0.07) 50%,
+    transparent 58%
+  );
+  transform: translateX(-120%);
+  animation: bomb-shimmer 4.5s ease-in-out infinite;
+}
+.bomb-player--a {
+  border-top: 2px solid var(--bi-cyan, #22d3ee);
+}
+.bomb-player--b {
+  border-top: 2px solid var(--bi-fuchsia, #e879f9);
+}
+.bomb-player--mine {
+  box-shadow:
+    inset 0 0 0 1px var(--bi-gold, #fbbf24),
+    0 0 14px rgba(251, 191, 36, 0.14);
+}
+.bomb-player--live {
+  box-shadow:
+    inset 0 0 0 1px var(--bi-gold, #fbbf24),
+    0 0 18px rgba(34, 211, 238, 0.22);
+  animation: bomb-seat-glow 1.8s ease-in-out infinite;
+}
+.bomb-player--rival {
+  box-shadow: 0 0 12px rgba(232, 121, 249, 0.12);
+}
+.bomb-player--dead {
+  opacity: 0.45;
+  filter: grayscale(1);
+  animation: none;
+}
+.bomb-player--dead::before {
+  display: none;
+}
+
+.bomb-player__badge {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  box-shadow: inset 0 -2px 0 rgba(0, 0, 0, 0.18);
+}
+.bomb-player--a .bomb-player__badge {
+  background: linear-gradient(145deg, #67e8f9, var(--bi-cyan, #22d3ee));
+  color: #042f2e;
+}
+.bomb-player--b .bomb-player__badge {
+  background: linear-gradient(145deg, #f0abfc, var(--bi-fuchsia, #e879f9));
+  color: #3b0764;
+}
+
+.bomb-player__bal {
+  position: relative;
+  z-index: 1;
+  font-size: clamp(10px, 2.8cqw, 13px);
+  line-height: 1;
+  color: var(--bi-gold, #fbbf24);
+  text-shadow: 0 0 8px rgba(251, 191, 36, 0.25);
+}
+
+.bomb-player__flag {
+  position: relative;
+  z-index: 1;
+  font-size: 7px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #fca5a5;
+}
+
+.bomb-auto {
+  width: 100%;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.06),
+    rgba(0, 0, 0, 0.45)
+  );
+  color: #cbd5e1;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 6px 4px;
+  line-height: 1.1;
+  transition:
+    background 0.2s ease,
+    border-color 0.2s ease,
+    box-shadow 0.2s ease,
+    color 0.2s ease;
+}
+.bomb-auto:hover {
+  border-color: rgba(148, 163, 184, 0.45);
+  color: #f8fafc;
+}
+.bomb-auto--on {
+  border-color: color-mix(in srgb, var(--bi-ember, #f97316) 70%, #fff);
+  background: linear-gradient(180deg, #fdba74, var(--bi-ember, #f97316));
+  color: #1a0d04;
+  box-shadow: 0 0 16px var(--bi-ember-glow, rgba(249, 115, 22, 0.45));
+}
+
+.bomb-controls {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background:
+    linear-gradient(180deg, rgba(34, 211, 238, 0.06), transparent 40%),
+    rgba(0, 0, 0, 0.38);
+  padding: 5px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+/* WASD pad: 3×3 grid sized to pane width */
+.bomb-actionbar {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: repeat(3, 1fr);
+  gap: 2px;
+  width: 100%;
+  max-width: 88px;
+  margin-inline: auto;
+  aspect-ratio: 1;
+}
+.bomb-pad {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.05),
+    rgba(0, 0, 0, 0.55)
+  );
+  font-size: clamp(8px, 2.4cqw, 10px);
+  font-weight: 700;
+  color: #e2e8f0;
+  padding: 0;
+  line-height: 1;
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease,
+    transform 0.12s ease,
+    box-shadow 0.12s ease;
+}
+.bomb-pad--n {
+  grid-column: 2;
+  grid-row: 1;
+}
+.bomb-pad--w {
+  grid-column: 1;
+  grid-row: 2;
+}
+.bomb-pad--bomb {
+  grid-column: 2;
+  grid-row: 2;
+}
+.bomb-pad--e {
+  grid-column: 3;
+  grid-row: 2;
+}
+.bomb-pad--s {
+  grid-column: 2;
+  grid-row: 3;
+}
+.bomb-pad:hover:not(.bomb-pad--bomb) {
+  border-color: rgba(34, 211, 238, 0.45);
+  box-shadow: 0 0 8px rgba(34, 211, 238, 0.15);
+}
+.bomb-pad:active {
+  transform: scale(0.92);
+  background: rgba(34, 211, 238, 0.28);
+}
+.bomb-pad--bomb {
+  font-size: clamp(9px, 2.6cqw, 11px);
+  font-weight: 800;
+  color: #fff;
+  border-color: var(--bi-blast, #ef4444);
+  background: linear-gradient(180deg, #dc2626, #991b1b);
+  box-shadow: 0 0 10px rgba(239, 68, 68, 0.25);
+}
+.bomb-pad--bomb:hover {
+  box-shadow: 0 0 14px rgba(239, 68, 68, 0.4);
+}
+.bomb-pad--bomb:active {
+  background: linear-gradient(180deg, #ef4444, #b91c1c);
+}
+
+.bomb-spectate {
+  font-size: 7px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  text-align: center;
+  color: rgba(148, 163, 184, 0.65);
+  animation: bomb-breathe 2.2s ease-in-out infinite;
+}
+
+/* ---- Right pane stats (compact telemetry) -------------------------------- */
+
+.bomb-stats {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background:
+    linear-gradient(180deg, rgba(232, 121, 249, 0.05), transparent 35%),
+    rgba(0, 0, 0, 0.3);
+  padding: 4px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+.bomb-stats--live {
+  border-color: color-mix(
+    in srgb,
+    var(--bi-fuchsia, #e879f9) 22%,
+    rgba(255, 255, 255, 0.08)
+  );
+}
+
+.bomb-tx {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid
+    color-mix(in srgb, var(--bi-ember, #f97316) 35%, transparent);
+  background: linear-gradient(
+    90deg,
+    rgba(249, 115, 22, 0.14),
+    rgba(249, 115, 22, 0.04)
+  );
+  padding: 4px 5px;
+  line-height: 1;
+}
+.bomb-tx__label {
+  font-size: 6px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(148, 163, 184, 0.85);
+}
+.bomb-tx__value {
+  font-size: clamp(13px, 3.6cqw, 17px);
+  text-align: right;
+  color: var(--bi-ember, #f97316);
+  animation: bomb-tick-flash 0.32s ease-out;
+}
+.bomb-tx__live {
+  font-size: 8px;
+  color: #34d399;
+  animation: bomb-breathe 1.1s ease-in-out infinite;
+}
+
+.bomb-metrics {
+  margin: 0;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(0, 0, 0, 0.28);
+}
+
+.bomb-metric {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 3px 5px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  transition: background 0.2s ease;
+}
+.bomb-metric:last-child {
+  border-bottom: 0;
+}
+.bomb-metric--hot {
+  background: rgba(239, 68, 68, 0.1);
+}
+.bomb-metric--hot dt {
+  color: #fca5a5;
+}
+.bomb-metric--hot dd {
+  color: #f87171;
+  animation: bomb-value-flash 0.35s ease-out;
+}
+.bomb-metric dt {
+  font-size: 6px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(148, 163, 184, 0.8);
+}
+.bomb-metric dd {
+  margin: 0;
+  font-size: clamp(9px, 2.6cqw, 11px);
+  line-height: 1;
+  color: var(--bi-gold, #fbbf24);
+}
+
+/* ---- Running score chip (solo multi-game) -------------------------------- */
+
+.bomb-score {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  border: 1px solid color-mix(in srgb, var(--bi-gold, #fbbf24) 30%, transparent);
+  background: linear-gradient(
+    180deg,
+    rgba(251, 191, 36, 0.1),
+    rgba(0, 0, 0, 0.28)
+  );
+  padding: 4px 5px;
+  text-align: center;
+}
+
+.bomb-score__tally {
+  font-size: clamp(11px, 3.2cqw, 14px);
+  line-height: 1;
+  color: var(--bi-gold, #fbbf24);
+  text-shadow: 0 0 8px rgba(251, 191, 36, 0.3);
+}
+
+.bomb-score__label {
+  font-size: 6px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(148, 163, 184, 0.75);
+}
+
+/* ---- Settle button (solo, visible while live) ----------------------------- */
+
+.bomb-settle {
+  width: 100%;
+  border: 1px solid
+    color-mix(in srgb, var(--bi-ember, #f97316) 45%, transparent);
+  background: linear-gradient(
+    180deg,
+    rgba(249, 115, 22, 0.14),
+    rgba(0, 0, 0, 0.38)
+  );
+  color: var(--bi-ember, #f97316);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 6px 4px;
+  line-height: 1.1;
+  transition:
+    background 0.2s ease,
+    border-color 0.2s ease,
+    box-shadow 0.2s ease,
+    color 0.2s ease;
+}
+.bomb-settle:hover {
+  border-color: var(--bi-ember, #f97316);
+  background: linear-gradient(
+    180deg,
+    rgba(249, 115, 22, 0.28),
+    rgba(0, 0, 0, 0.38)
+  );
+  color: #fdba74;
+  box-shadow: 0 0 10px rgba(249, 115, 22, 0.2);
+}
+
+@keyframes bomb-edge-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 0.85;
+  }
+}
+@keyframes bomb-shimmer {
+  0%,
+  72% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(120%);
+  }
+}
+@keyframes bomb-seat-glow {
+  0%,
+  100% {
+    box-shadow:
+      inset 0 0 0 1px var(--bi-gold, #fbbf24),
+      0 0 14px rgba(34, 211, 238, 0.18);
+  }
+  50% {
+    box-shadow:
+      inset 0 0 0 1px var(--bi-gold, #fbbf24),
+      0 0 22px rgba(34, 211, 238, 0.32);
+  }
+}
+@keyframes bomb-tick-flash {
+  0% {
+    color: #fff;
+    transform: scale(1.1);
+  }
+  100% {
+    color: var(--bi-ember, #f97316);
+    transform: scale(1);
+  }
+}
+@keyframes bomb-value-flash {
+  0% {
+    transform: scale(1.14);
+    filter: brightness(1.35);
+  }
+  100% {
+    transform: scale(1);
+    filter: brightness(1);
+  }
+}
+
+/* ---- Arena (center — always gets remaining width, square inside) ------- */
+
+.bomb-main {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  align-items: center;
+  justify-content: center;
+  container-type: size;
+}
+
+.bomb-stage {
+  position: relative;
+  flex: none;
+  width: min(100cqw, 100cqh);
+  height: min(100cqw, 100cqh);
+  aspect-ratio: 1;
+  overflow: hidden;
+  box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.12);
+  --bomb-floor: #121018;
+  --bomb-floor-2: #0e0c14;
+  --bomb-wall: #2a2634;
+  --bomb-crate: #5c3b1f;
+  --bomb-line: rgba(148, 163, 184, 0.05);
+}
+
+.bomb-grid {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  gap: 0;
+}
+
 .bomb-cell {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 18px;
-  line-height: 1;
-  transition: background 100ms linear;
+  border-right: 1px solid var(--bomb-line);
+  border-bottom: 1px solid var(--bomb-line);
+}
+.bomb-cell--floor {
+  background: var(--bomb-floor);
+}
+.bomb-cell--floor:nth-child(2n) {
+  background: var(--bomb-floor-2);
+}
+.bomb-cell--wall {
+  background: var(--bomb-wall);
+}
+.bomb-cell--crate {
+  background: var(--bomb-crate);
+}
+.bomb-crate-glyph {
+  width: 68%;
+  height: 68%;
+  border: 1px solid rgba(120, 80, 40, 0.7);
+  background:
+    linear-gradient(
+      90deg,
+      transparent 46%,
+      rgba(0, 0, 0, 0.25) 46%,
+      rgba(0, 0, 0, 0.25) 54%,
+      transparent 54%
+    ),
+    linear-gradient(
+      transparent 46%,
+      rgba(0, 0, 0, 0.25) 46%,
+      rgba(0, 0, 0, 0.25) 54%,
+      transparent 54%
+    ),
+    #8b5a2b;
+}
+
+.bomb-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* ---- Square player tokens ---------------------------------------------- */
+
+.bomb-piece {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: calc(100% / var(--gw));
+  height: calc(100% / var(--gh));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transform: translate(calc(var(--c) * 100%), calc(var(--r) * 100%));
+  transition: transform 90ms linear;
+  will-change: transform;
+}
+
+.bomb-piece__glyph {
+  position: relative;
+  display: block;
+  width: 84%;
+  height: 84%;
+  border: 2px solid rgba(0, 0, 0, 0.55);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.22),
+    0 0 0 1px rgba(0, 0, 0, 0.8);
+}
+
+.bomb-piece__inner {
+  position: absolute;
+  inset: 22%;
+  border: 1px solid rgba(0, 0, 0, 0.45);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+}
+
+.bomb-piece__glyph--a {
+  background: var(--bi-cyan, #22d3ee);
+}
+.bomb-piece__glyph--a .bomb-piece__inner {
+  background: #67e8f9;
+}
+
+.bomb-piece__glyph--b {
+  background: var(--bi-fuchsia, #e879f9);
+}
+.bomb-piece__glyph--b .bomb-piece__inner {
+  background: #f0abfc;
+}
+
+.bomb-piece__glyph--mine {
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.22),
+    0 0 0 2px var(--bi-gold, #fbbf24),
+    0 0 8px rgba(251, 191, 36, 0.55);
+  animation: bomb-breathe 1.1s ease-in-out infinite;
+}
+@keyframes bomb-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.06);
+  }
+}
+
+/* ---- Square bomb ------------------------------------------------------- */
+
+.bomb-piece__glyph--bomb {
+  width: 72%;
+  height: 72%;
+  border: 2px solid #450a0a;
+  background: #1c1917;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+    0 0 0 1px #ef4444;
+  animation: bomb-pulse 0.5s ease-in-out infinite;
+}
+
+.bomb-piece__bomb-core {
+  position: absolute;
+  inset: 28%;
+  border: 1px solid #7f1d1d;
+  background: #dc2626;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.15);
+}
+
+.bomb-piece__fuse {
+  position: absolute;
+  top: -18%;
+  left: 50%;
+  width: 20%;
+  height: 20%;
+  transform: translateX(-50%);
+  border: 1px solid #92400e;
+  background: #fbbf24;
+  animation: bomb-fuse 0.35s steps(2) infinite;
+}
+@keyframes bomb-fuse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+@keyframes bomb-pulse {
+  0%,
+  100% {
+    transform: scale(0.94);
+  }
+  50% {
+    transform: scale(1.04);
+  }
+}
+
+/* ---- Square blast ------------------------------------------------------ */
+
+.bomb-blast {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: calc(100% / var(--gw));
+  height: calc(100% / var(--gh));
+  transform: translate(calc(var(--c) * 100%), calc(var(--r) * 100%));
+}
+
+.bomb-blast__fill {
+  position: absolute;
+  inset: 0;
+  background: #fef3c7;
+  animation: bomb-flash-fill 0.4s ease-out forwards;
+}
+
+.bomb-blast__frame {
+  position: absolute;
+  inset: 0;
+  border: 2px solid #f97316;
+  box-shadow: inset 0 0 0 1px #fff;
+  animation: bomb-flash-frame 0.4s ease-out forwards;
+}
+
+.bomb-blast__cross {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(#ef4444, #ef4444) center / 18% 100% no-repeat,
+    linear-gradient(90deg, #ef4444, #ef4444) center / 100% 18% no-repeat;
+  opacity: 0;
+  animation: bomb-flash-cross 0.4s ease-out forwards;
+}
+
+@keyframes bomb-flash-fill {
+  0% {
+    opacity: 0;
+    background: #fff;
+  }
+  15% {
+    opacity: 1;
+    background: #fff;
+  }
+  40% {
+    opacity: 1;
+    background: #fde68a;
+  }
+  100% {
+    opacity: 0;
+    background: #f97316;
+  }
+}
+@keyframes bomb-flash-frame {
+  0% {
+    opacity: 0;
+    transform: scale(0.7);
+  }
+  20% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.05);
+  }
+}
+@keyframes bomb-flash-cross {
+  0% {
+    opacity: 0;
+    transform: scale(0.5);
+  }
+  25% {
+    opacity: 0.95;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.1);
+  }
+}
+
+/* ---- Result overlay (2×) ----------------------------------------------- */
+
+.bomb-result {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: grid;
+  place-items: center;
+  background: rgba(10, 9, 13, 0.88);
+  padding: 12px;
+}
+.bomb-result__card {
+  display: flex;
+  width: min(22rem, calc(100% - 16px));
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  border: 1px solid
+    color-mix(in srgb, var(--bi-ember, #f97316) 30%, transparent);
+  background: linear-gradient(
+    165deg,
+    rgba(24, 20, 30, 0.96),
+    rgba(12, 10, 16, 0.94)
+  );
+  padding: 28px 24px;
+  text-align: center;
+  box-shadow: 0 0 40px rgba(249, 115, 22, 0.15);
+}
+.bomb-result__title {
+  font-size: clamp(1.5rem, 6cqmin, 1.9rem);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.bomb-result__sub {
+  font-size: 1.1rem;
+  color: rgba(148, 163, 184, 0.9);
+}
+.bomb-result .bomb-cta {
+  min-height: 3.25rem;
+  min-width: 8rem;
+  font-size: 1rem;
+  padding: 0 24px;
+}
+
+/* ---- Sketch skin integration (full whiteboard — match Quantum Poker) ---- */
+
+.bomb-lobby.sketch,
+.bomb-shell.sketch {
+  background: var(--sketch-paper)
+    radial-gradient(rgba(35, 34, 31, 0.09) 1.1px, transparent 1.3px);
+  background-size: 16px 16px;
+  background-position: -8px -8px;
+  color: var(--sketch-ink);
+}
+
+.bomb-lobby.sketch .bomb-lobby__scene {
+  opacity: 0.48;
+}
+
+.bomb-lobby.sketch .bomb-lobby__deck {
+  --sketch-fill: color-mix(in srgb, var(--sketch-accent-fill) 38%, #fff9f0);
+}
+.bomb-lobby.sketch .bomb-lobby__deck.sketch-stroke::before {
+  display: block;
+  background: var(--sketch-fill, #fff9f0);
+  border-color: var(--sketch-accent);
+}
+
+.bomb-lobby.sketch .bomb-mode-tile {
+  border: 0;
+  box-shadow: none;
+  font-family: inherit;
+}
+.bomb-lobby.sketch .bomb-mode-tile.sketch-stroke::before {
+  display: block;
+  background: var(--sketch-fill, #fff9f0);
+}
+.bomb-lobby.sketch .bomb-mode-tile--on.sketch-stroke::before {
+  border-color: var(--sketch-accent);
+  border-width: 3px;
+}
+
+.bomb-lobby.sketch .bomb-lobby__title {
+  color: var(--sketch-ink);
+  text-shadow: none;
+  font-weight: inherit;
+  text-transform: none;
+  text-align: left;
+}
+
+.bomb-lobby.sketch .bomb-lobby__head {
+  text-align: left;
+}
+
+.bomb-lobby.sketch .bomb-lobby__card {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.bomb-lobby.sketch .bomb-lobby__card::before {
+  display: none;
+}
+.bomb-lobby.sketch .bomb-lobby__card.sketch-stroke::before {
+  display: block;
+  background: var(--sketch-fill, #fff9f0);
+}
+
+.bomb-lobby.sketch .bomb-lobby__card--compact {
+  align-items: center;
+  text-align: center;
+}
+
+.bomb-lobby.sketch .bomb-lobby__card--compact .sketch-eyebrow,
+.bomb-lobby.sketch .bomb-lobby__card--compact .sketch-title,
+.bomb-lobby.sketch .bomb-lobby__card--compact .sketch-note {
+  width: 100%;
+}
+
+.bomb-lobby.sketch .bomb-seg {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.bomb-lobby.sketch .bomb-seg__btn {
+  border: 0;
+  background: transparent;
+  font-weight: inherit;
+  text-transform: none;
+  letter-spacing: 0.04em;
+  color: var(--sketch-ink-soft);
+}
+.bomb-lobby.sketch .bomb-seg__btn--on {
+  background: var(--sketch-accent-fill);
+  color: var(--sketch-ink);
+}
+
+.bomb-lobby.sketch .bomb-lobby__scene::before {
+  opacity: 0.15;
+}
+.bomb-lobby.sketch .bomb-lobby__arena-hint {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  opacity: 0.35;
+}
+.bomb-lobby.sketch .bomb-lobby__arena-hint::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 3px dashed var(--sketch-ink-soft);
+  border-radius: 8px;
+  filter: var(--sketch-filter);
+}
+
+.bomb-lobby.sketch .bomb-glyph {
+  position: relative;
+  isolation: isolate;
+  border: 0;
+  box-shadow: none;
+  background: transparent;
+}
+.bomb-lobby.sketch .bomb-glyph::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 2.5px solid var(--sketch-ink);
+  border-radius: 5px;
+  filter: var(--sketch-filter);
+  background: var(--sketch-glyph-fill, transparent);
+  z-index: -1;
+}
+.bomb-lobby.sketch .bomb-glyph--player-a {
+  --sketch-glyph-fill: var(--sketch-blue-fill);
+}
+.bomb-lobby.sketch .bomb-glyph--player-a::before {
+  border-color: var(--sketch-blue);
+}
+.bomb-lobby.sketch .bomb-glyph--player-b {
+  --sketch-glyph-fill: color-mix(in srgb, var(--sketch-violet) 14%, #fffefb);
+}
+.bomb-lobby.sketch .bomb-glyph--player-b::before {
+  border-color: var(--sketch-violet);
+}
+
+.bomb-lobby.sketch .bomb-cta,
+.bomb-shell.sketch .bomb-cta,
+.bomb-shell.sketch .bomb-auto,
+.bomb-shell.sketch .bomb-settle {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  filter: none;
+  font-family: inherit;
+  letter-spacing: 0.04em;
+  text-transform: none;
+}
+
+.bomb-shell.sketch .bomb-main {
+  background: transparent;
+}
+
+.bomb-shell.sketch .sketch-panel,
+.bomb-shell.sketch .sketch-stroke.sketch-panel {
+  --sketch-fill: #fff9f0;
+}
+
+.bomb-shell.sketch .bomb-pane {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.bomb-shell.sketch .bomb-pane::before,
+.bomb-shell.sketch .bomb-pane::after {
+  display: none;
+}
+.bomb-shell.sketch .bomb-pane--you {
+  --sketch-fill: var(--sketch-blue-fill);
+}
+.bomb-shell.sketch .bomb-pane--opp {
+  --sketch-fill: color-mix(in srgb, var(--sketch-violet) 12%, #fff9f0);
+}
+.bomb-shell.sketch .bomb-pane--you.sketch-stroke::before {
+  display: block;
+  border-color: var(--sketch-blue);
+  border-width: 3px;
+  background: var(--sketch-fill, #fff9f0);
+}
+.bomb-shell.sketch .bomb-pane--opp.sketch-stroke::before {
+  display: block;
+  border-color: var(--sketch-violet);
+  border-width: 3px;
+  background: var(--sketch-fill, #fff9f0);
+}
+.bomb-shell.sketch .bomb-pane--live.sketch-stroke--accent::before {
+  border-color: var(--sketch-accent);
+}
+
+.bomb-shell.sketch .bomb-player {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.bomb-shell.sketch .bomb-player::before {
+  display: none;
+}
+.bomb-shell.sketch .bomb-player--live {
+  animation: none;
+}
+
+.bomb-shell.sketch .bomb-player__badge {
+  width: auto;
+  min-width: 1.75rem;
+  height: 1.75rem;
+  padding: 0 0.2em;
+  background: transparent;
+  box-shadow: none;
+  font-family: inherit;
+}
+.bomb-shell.sketch .bomb-player--a .bomb-player__badge {
+  background: var(--sketch-blue);
+}
+.bomb-shell.sketch .bomb-player--b .bomb-player__badge {
+  background: var(--sketch-violet);
+}
+
+.bomb-shell.sketch .bomb-controls,
+.bomb-shell.sketch .bomb-stats,
+.bomb-shell.sketch .bomb-score,
+.bomb-shell.sketch .bomb-tx,
+.bomb-shell.sketch .bomb-metrics {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  --sketch-fill: #fff9f0;
+}
+.bomb-shell.sketch .bomb-controls.sketch-stroke::before,
+.bomb-shell.sketch .bomb-stats.sketch-stroke::before,
+.bomb-shell.sketch .bomb-metrics.sketch-stroke::before {
+  background: var(--sketch-fill, #fff9f0);
+}
+
+.bomb-shell.sketch .bomb-pad {
+  border: 0;
+  background: transparent;
+  color: var(--sketch-ink);
+  box-shadow: none;
+  font-family: inherit;
+}
+.bomb-shell.sketch .bomb-pad--bomb {
+  color: var(--sketch-red);
+}
+
+.bomb-shell.sketch {
+  --bomb-floor: #fffefb;
+  --bomb-floor-2: #f5f0e4;
+  --bomb-wall: #e8e2d6;
+  --bomb-crate: #ffe9bd;
+  --bomb-line: transparent;
+  --sketch-arena-fill: var(--sketch-felt-fill);
+  --sketch-arena-ink: var(--sketch-felt);
+}
+
+.bomb-shell.sketch .bomb-stage {
+  box-shadow: none;
+  --bomb-floor: #fffefb;
+  --bomb-floor-2: #f5f0e4;
+  --bomb-wall: #e8e2d6;
+  --bomb-crate: #ffe9bd;
+  --bomb-line: transparent;
+}
+.bomb-shell.sketch .bomb-stage.sketch-arena::before {
+  border-color: var(--sketch-felt);
+  border-width: 3px;
+}
+.bomb-shell.sketch .bomb-stage.sketch-stroke::before {
+  display: none;
+}
+
+.bomb-shell.sketch .bomb-cell {
+  border: 0;
+}
+.bomb-shell.sketch .bomb-cell--wall {
+  background: color-mix(in srgb, var(--bomb-wall) 88%, #fff);
+}
+.bomb-shell.sketch .bomb-cell--crate {
+  background: color-mix(in srgb, var(--bomb-crate) 90%, #fff);
+}
+.bomb-shell.sketch .bomb-crate-glyph {
+  border: 0;
+  background: transparent;
+  position: relative;
+  isolation: isolate;
+}
+.bomb-shell.sketch .bomb-crate-glyph::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 2px solid var(--sketch-ink);
+  border-radius: 4px;
+  filter: var(--sketch-filter);
+  background: var(--bomb-crate);
+  z-index: -1;
+}
+
+.bomb-shell.sketch .bomb-piece__glyph {
+  border: 0;
+  box-shadow: none;
+  background: transparent;
+}
+.bomb-shell.sketch .bomb-piece__glyph--a {
+  --sketch-glyph-fill: var(--sketch-blue-fill);
+  --sketch-glyph-ink: var(--sketch-blue);
+}
+.bomb-shell.sketch .bomb-piece__glyph--b {
+  --sketch-glyph-fill: color-mix(in srgb, var(--sketch-violet) 14%, #fffefb);
+  --sketch-glyph-ink: var(--sketch-violet);
+}
+.bomb-shell.sketch .bomb-piece__glyph--bomb {
+  --sketch-glyph-fill: #2a2520;
+  --sketch-glyph-ink: var(--sketch-red);
+}
+.bomb-shell.sketch .bomb-piece__inner,
+.bomb-shell.sketch .bomb-piece__bomb-core,
+.bomb-shell.sketch .bomb-piece__fuse {
+  border: 1.5px solid var(--sketch-ink);
+  box-shadow: none;
+  border-radius: 3px;
+}
+.bomb-shell.sketch .bomb-piece__glyph--mine {
+  animation: none;
+  filter: none;
+}
+.bomb-shell.sketch .bomb-piece__glyph--mine::before {
+  border-color: var(--sketch-accent);
+  border-width: 3px;
+}
+
+.bomb-shell.sketch .bomb-blast__frame {
+  border: 2.5px solid var(--sketch-accent);
+  filter: var(--sketch-filter);
+  box-shadow: none;
+}
+
+.bomb-shell.sketch .bomb-result {
+  background: color-mix(in srgb, var(--sketch-paper) 88%, transparent);
+}
+.bomb-shell.sketch .bomb-result__card {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  --sketch-fill: #fff9f0;
+}
+.bomb-shell.sketch .bomb-result__card.sketch-stroke::before {
+  background: var(--sketch-fill, #fff9f0);
+}
+.bomb-shell.sketch .bomb-result__title {
+  letter-spacing: 0.04em;
+  text-transform: none;
+}
+.bomb-shell.sketch .bomb-result__sub {
+  color: var(--sketch-ink-soft);
+}
+
+.bomb-lobby.sketch .bomb-lobby__copy,
+.bomb-shell.sketch .bomb-pane__eyebrow,
+.bomb-shell.sketch .bomb-spectate {
+  color: var(--sketch-ink-soft);
+}
+
+.bomb-lobby.sketch .bomb-field,
+.bomb-lobby.sketch .bomb-mode,
+.bomb-lobby.sketch .bomb-cta,
+.bomb-shell.sketch .bomb-cta,
+.bomb-shell.sketch .bomb-auto,
+.bomb-shell.sketch .bomb-settle,
+.bomb-shell.sketch .bomb-pad,
+.bomb-shell.sketch .bomb-player__badge,
+.bomb-shell.sketch .bomb-result__title,
+.bomb-shell.sketch .bomb-result__sub,
+.bomb-lobby.sketch .bomb-lobby__copy,
+.bomb-shell.sketch .bomb-pane__eyebrow,
+.bomb-shell.sketch .bomb-spectate,
+.bomb-shell.sketch .bomb-player__bal,
+.bomb-shell.sketch .bomb-tx__value,
+.bomb-shell.sketch .bomb-metric dd,
+.bomb-shell.sketch .bomb-metric dt,
+.bomb-shell.sketch .bomb-tx__label,
+.bomb-shell.sketch .bomb-score__tally,
+.bomb-shell.sketch .bomb-score__label,
+.bomb-shell.sketch .bomb-player__flag {
+  font-family: inherit;
+  font-weight: inherit;
+  text-transform: none;
+  letter-spacing: 0.04em;
+}
+
+.bomb-shell.sketch .bomb-player__bal,
+.bomb-shell.sketch .bomb-tx__value,
+.bomb-shell.sketch .bomb-metric dd,
+.bomb-shell.sketch .bomb-score__tally {
+  color: var(--sketch-accent);
+  text-shadow: none;
+}
+
+.bomb-shell.sketch .bomb-metric dt,
+.bomb-shell.sketch .bomb-tx__label,
+.bomb-shell.sketch .bomb-score__label {
+  color: var(--sketch-ink-soft);
+}
+
+.bomb-shell.sketch .bomb-player__flag {
+  color: var(--sketch-red);
 }

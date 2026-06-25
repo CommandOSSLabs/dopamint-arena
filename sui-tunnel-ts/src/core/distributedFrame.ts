@@ -6,8 +6,8 @@
  * SIGNED state-update bytes are produced separately by `wire.serializeStateUpdate`
  * and are byte-identical to self-play; this codec is only the transport envelope.
  */
-import { fromHex, toHex } from "./bytes";
 import type { Party } from "../protocol/Protocol";
+import { fromHex, toHex } from "./bytes";
 
 /** A proposed move + the proposer's signature half over the state_update message. */
 export interface MoveFrame<M> {

@@ -11,10 +11,16 @@ describe("GAME_KITS registry", () => {
   });
 
   it("exposes the human-hook protocol domains", () => {
-    assert.strictEqual(GAME_KITS.tictactoe.protocol.name, "tic_tac_toe.multi.v1");
+    assert.strictEqual(
+      GAME_KITS.tictactoe.protocol.name,
+      "tic_tac_toe.multi.v1",
+    );
     assert.strictEqual(GAME_KITS.blackjack.protocol.name, "blackjack.bet.v1");
     assert.strictEqual(GAME_KITS.battleship.protocol.name, "battleship.v1");
-    assert.strictEqual(GAME_KITS["quantum-poker"].protocol.name, "quantum_poker.v2");
+    assert.strictEqual(
+      GAME_KITS["quantum-poker"].protocol.name,
+      "quantum_poker.v2",
+    );
   });
 
   it("imports cleanly under tsx", () => {

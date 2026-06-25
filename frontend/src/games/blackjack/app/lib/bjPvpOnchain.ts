@@ -2,6 +2,10 @@ process.env.PACKAGE_ID ??= import.meta.env.VITE_TUNNEL_PACKAGE_ID;
 
 import { Transaction } from "@mysten/sui/transactions";
 import { core, onchain } from "sui-tunnel-ts";
+import {
+  redeemStakeFromBalance,
+  type StakeFromBalance,
+} from "@/onchain/tunnelTx";
 
 const SUI = "0x2::sui::SUI";
 type SdkTx = Parameters<typeof onchain.buildCreateAndShare>[0];
@@ -11,11 +15,13 @@ export interface PvpParty {
   ephemeralPubkey: Uint8Array;
 }
 
-/** Open + share the tunnel (seat A pays the trivial create gas). penalty = stake. */
+/** Open + share the tunnel (seat A pays the trivial create gas). penalty = stake.
+ *  `coinType` defaults to SUI; pass MTPS to open a token-staked tunnel. */
 export function buildCreateAndShareTx(
   a: PvpParty,
   b: PvpParty,
   stake: bigint,
+  coinType: string = SUI,
 ): Transaction {
   const tx = new Transaction();
   onchain.buildCreateAndShare(tx as unknown as SdkTx, {
@@ -31,17 +37,47 @@ export function buildCreateAndShareTx(
     },
     timeoutMs: 86_400_000n,
     penaltyAmount: stake,
+    coinType,
   });
   return tx;
 }
 
-/** Fund this seat's stake from the wallet's gas coin (signed by the seat's own wallet). */
-export function buildDepositTx(tunnelId: string, stake: bigint): Transaction {
+/** Fund this seat's stake. With `stakeCoinId` the stake is split off that user coin (the MTPS,
+ *  gas-sponsored path — a sponsored tx has no gas coin); otherwise it splits off the wallet's gas
+ *  coin (SUI fallback). `coinType` defaults to SUI. */
+export function buildDepositTx(
+  tunnelId: string,
+  stake: bigint,
+  opts: {
+    coinType?: string;
+    stakeCoinId?: string;
+    stakeFromBalance?: StakeFromBalance;
+  } = {},
+): Transaction {
   const tx = new Transaction();
-  onchain.buildDepositFromGas(tx as unknown as SdkTx, {
-    tunnelId,
-    amount: stake,
-  });
+  if (opts.stakeFromBalance) {
+    // ADR-0013: the withdrawal is exactly `stake`, so deposit it whole — no split, no remainder.
+    const coin = redeemStakeFromBalance(tx, opts.stakeFromBalance);
+    onchain.buildDeposit(tx as unknown as SdkTx, {
+      tunnelId,
+      coin,
+      coinType: opts.coinType,
+    });
+  } else if (opts.stakeCoinId) {
+    const [coin] = tx.splitCoins(tx.object(opts.stakeCoinId), [
+      tx.pure.u64(stake),
+    ]);
+    onchain.buildDeposit(tx as unknown as SdkTx, {
+      tunnelId,
+      coin,
+      coinType: opts.coinType,
+    });
+  } else {
+    onchain.buildDepositFromGas(tx as unknown as SdkTx, {
+      tunnelId,
+      amount: stake,
+    });
+  }
   return tx;
 }
 
@@ -49,13 +85,14 @@ export function buildDepositTx(tunnelId: string, stake: bigint): Transaction {
 export function buildCloseTx(
   tunnelId: string,
   settlement: core.CoSignedSettlement,
+  coinType: string = SUI,
 ): Transaction {
   const tx = new Transaction();
   onchain.buildCloseFromSettlement(
     tx as unknown as SdkTx,
     tunnelId,
     settlement,
-    SUI,
+    coinType,
   );
   return tx;
 }
@@ -64,13 +101,14 @@ export function buildCloseTx(
 export function buildCloseWithRootTx(
   tunnelId: string,
   settlement: core.CoSignedSettlementWithRoot,
+  coinType: string = SUI,
 ): Transaction {
   const tx = new Transaction();
   onchain.buildCloseWithRootFromSettlement(
     tx as unknown as SdkTx,
     tunnelId,
     settlement,
-    SUI,
+    coinType,
   );
   return tx;
 }

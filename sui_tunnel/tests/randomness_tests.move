@@ -629,6 +629,26 @@ fun from_bls_signature_deterministic() {
     assert!(*randomness::seed_bytes(&s1) != *randomness::seed_bytes(&s_sig));
 }
 
+/// from_tunnel_context is deterministic and its length-prefixed framing keeps
+/// previously-colliding (tunnel_id, nonce, extra_entropy) tuples distinct.
+#[test]
+fun from_tunnel_context_no_collision() {
+    let tunnel_id = vector[1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+    let s1 = randomness::from_tunnel_context(tunnel_id, 42, b"extra");
+    let s2 = randomness::from_tunnel_context(tunnel_id, 42, b"extra");
+
+    // Determinism: identical inputs -> identical 32-byte seed at counter 0.
+    assert_eq!(*randomness::seed_bytes(&s1), *randomness::seed_bytes(&s2));
+    assert_eq!(randomness::seed_bytes(&s1).length(), 32);
+    assert_eq!(randomness::seed_counter(&s1), 0);
+
+    // Without length prefixes these two tuples concatenate identically around
+    // the fixed 8-byte nonce; the framing must now keep them distinct.
+    let a = randomness::from_tunnel_context(vector[0xAA], 5, vector[0xBB, 0xCC]);
+    let b = randomness::from_tunnel_context(vector[0xAA, 0x00], 1467, vector[0xCC]);
+    assert!(*randomness::seed_bytes(&a) != *randomness::seed_bytes(&b));
+}
+
 /// bytes_to_u64 reads exactly the first 8 bytes (big-endian) and ignores the
 /// rest: trailing bytes beyond index 7 must not affect the result.
 #[test]
@@ -645,11 +665,15 @@ fun bytes_to_u64_ignores_trailing() {
     assert_eq!(randomness::bytes_to_u64(&max), 18446744073709551615u64);
 }
 
-/// bytes_to_u64 indexes the first 8 bytes directly; a vector shorter than 8
-/// bytes is out of the public guard's surface and aborts on a native vector
-/// bounds check. This documents that short input is rejected (by abort), even
-/// though the abort is a native runtime check, not a framework #[error].
-#[test, expected_failure]
+/// bytes_to_u64 needs at least 8 bytes and rejects a shorter input with the
+/// typed EInvalidParameter rather than a raw vector-bounds abort.
+#[
+    test,
+    expected_failure(
+        abort_code = sui_tunnel::randomness::EInvalidParameter,
+        location = sui_tunnel::randomness,
+    ),
+]
 fun bytes_to_u64_short_input_aborts() {
     let short = vector[0u8, 1, 2]; // only 3 bytes; bytes_to_u64 needs 8
     let _ = randomness::bytes_to_u64(&short);

@@ -1,63 +1,51 @@
-import { useState } from "react";
-import type { GameWindowProps } from "../types";
-import { usePvpBombIt } from "./usePvpBombIt";
+import { usePvpBombIt, type PvpBombIt } from "./usePvpBombIt";
+import { useBombItSession, type BombItSession } from "./useBombItSession";
 import { BombLobby } from "./components/BombLobby";
 import { BombBoard } from "./components/BombBoard";
-import { BombBench } from "./components/BombBench";
+import { BOMB_BTN, BOMB_IT_STYLE } from "./bombItTheme";
+import { createArenaWindow } from "../_shared/arenaWindow";
+import "./bomb-it.css";
 
-/** PvP Bomb It: two players bomb each other on a shared grid over a Sui tunnel.
- *  Also hosts a bot-vs-bot TPS benchmark (self-play) reachable from the lobby. */
-export function BombItWindow(_props: GameWindowProps) {
-  const [mode, setMode] = useState<"pvp" | "bench">("pvp");
-  const { status, role, view, winner, error, findMatch, queueAction, reset } = usePvpBombIt();
-
-  if (mode === "bench") {
-    return <BombBench onExit={() => setMode("pvp")} />;
-  }
-
-  if (status === "error") {
-    return (
-      <div className="flex h-full flex-col items-center justify-center gap-3 p-4 text-center">
-        <p className="text-sm text-red-400">{error ?? "something went wrong"}</p>
-        <button onClick={reset} className="rounded border border-arena-edge px-3 py-1.5 text-sm">
-          Back
-        </button>
-      </div>
-    );
-  }
-
-  if (status === "idle") {
-    return <BombLobby onFindMatch={findMatch} onBenchmark={() => setMode("bench")} />;
-  }
-
-  if (status === "matching") {
-    return (
-      <div className="flex h-full flex-col items-center justify-center gap-3 p-4 text-center">
-        <p className="text-sm text-arena-muted">Finding an opponent…</p>
-        <button onClick={reset} className="rounded border border-arena-edge px-3 py-1.5 text-sm text-arena-text">
-          Cancel
-        </button>
-      </div>
-    );
-  }
-
-  if (status === "funding") {
-    return (
-      <div className="flex h-full flex-col items-center justify-center gap-2 p-4 text-center text-sm text-arena-muted">
-        Opening + funding the tunnel on-chain… approve in your wallet.
-      </div>
-    );
-  }
-
-  if ((status === "playing" || status === "settling" || status === "settled") && view !== null) {
-    return (
-      <BombBoard view={view} winner={winner} role={role} onAction={queueAction} onPlayAgain={reset} />
-    );
-  }
-
-  return (
-    <div className="flex h-full flex-col items-center justify-center gap-2 p-4 text-center text-sm text-arena-muted">
-      Loading…
-    </div>
-  );
-}
+/** Bomb It: pick Solo (bot-vs-bot self-play) or PvP (human-vs-human over a shared tunnel). */
+export const BombItWindow = createArenaWindow<BombItSession, PvpBombIt>({
+  game: "bomb-it",
+  useSolo: useBombItSession,
+  usePvp: usePvpBombIt,
+  Lobby: BombLobby,
+  screen: {
+    style: BOMB_IT_STYLE,
+    rootClass: "bomb-lobby sketch",
+    cardClass:
+      "bomb-lobby__card bomb-lobby__card--compact sketch-stroke sketch-panel",
+    backBtnClass: `${BOMB_BTN} bomb-cta bomb-cta--full sketch-btn sketch-btn--ghost`,
+  },
+  matchingTitle: "Finding match",
+  errorEyebrow: false,
+  renderSoloBoard: (solo, onPlayAgain) => (
+    <BombBoard
+      view={solo.view!}
+      winner={solo.view!.winner}
+      role="A"
+      stake={solo.stake}
+      auto={solo.auto}
+      onToggleAuto={solo.toggleAuto}
+      onAction={solo.queueAction}
+      onPlayAgain={onPlayAgain}
+      score={solo.score}
+      gamesPlayed={solo.gamesPlayed}
+      onSettle={solo.status === "playing" ? solo.settleNow : undefined}
+    />
+  ),
+  renderPvpBoard: (pvp, onPlayAgain) => (
+    <BombBoard
+      view={pvp.view!}
+      winner={pvp.winner}
+      role={pvp.role}
+      stake={pvp.stake}
+      auto={pvp.auto}
+      onToggleAuto={pvp.toggleAuto}
+      onAction={pvp.queueAction}
+      onPlayAgain={onPlayAgain}
+    />
+  ),
+});

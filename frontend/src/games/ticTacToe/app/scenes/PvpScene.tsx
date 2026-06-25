@@ -1,4 +1,3 @@
-// frontend/src/games/ticTacToe/packages/client/src/scenes/PvpScene.tsx
 import { useState } from "react";
 import {
   usePvpTicTacToe,
@@ -6,10 +5,17 @@ import {
 } from "@/games/ticTacToe/app/hooks/usePvpTicTacToe";
 import { Board } from "@/games/ticTacToe/app/components/Board";
 import { CaroBoard } from "@/games/ticTacToe/app/components/CaroBoard";
+import { isMtpsConfigured } from "@/onchain/mtps";
 
 const SUISCAN_TX = "https://suiscan.xyz/testnet/tx/";
 const fmtSui = (mist: bigint) => (Number(mist) / 1e9).toFixed(4);
 const CARO_SIZES = [9, 15, 19];
+
+// The 3×3 Cell renders value 1 ("O") / 2 ("X"), but the protocol marks seat A (X) as 1 and
+// seat B (O) as 2 — the opposite. Swap 1↔2 so your X shows as X (CaroBoard already maps 1→✕).
+function uiBoard(board: number[]): number[] {
+  return board.map((v) => (v === 1 ? 2 : v === 2 ? 1 : 0));
+}
 
 function Digest({ label, digest }: { label: string; digest?: string }) {
   if (!digest) return null;
@@ -53,65 +59,123 @@ export function PvpScene({
 
   const playing =
     g.phase === "playing" || g.phase === "settling" || g.phase === "done";
-  // The connected zkLogin wallet pays gas + the (tiny) deposit; need a little testnet SUI.
-  const funded = g.balance > 10_000_000n;
+  // SUI mode: the connected wallet pays gas + the (tiny) deposit, so it needs a little testnet
+  // SUI. MTPS mode (ADR-0010): gas is sponsored and the stake is faucet-minted, so play is
+  // free — never gate on the SUI balance.
+  const funded = isMtpsConfigured || g.balance > 10_000_000n;
   const locked = g.phase !== "idle" && g.phase !== "error";
 
   return (
-    <div className="w-[95%] max-w-5xl mx-auto h-full flex flex-col gap-4 pt-0 pb-0 px-6 text-on-surface relative">
-      <div className="flex items-center justify-between border-b-[6px] border-primary/20 pb-4 mt-2 shrink-0">
-        <button
-          onClick={() => {
-            g.leave();
-            onBack();
-          }}
-          className="text-2xl font-bold text-secondary hover:text-primary transition-colors flex items-center gap-2"
+    <div className="qp-panel qp-stroke w-[98%] max-w-[120rem] h-[98%] max-h-none p-6 md:p-12 flex flex-col mx-auto text-left relative">
+      {(!isPortrait || !playing) && (
+        <div
+          className={`flex justify-between border-[var(--qp-ink-soft)] shrink-0 ${
+            isPortrait
+              ? "border-b-2 pb-2 items-center"
+              : "border-b-4 pb-4 items-center"
+          }`}
         >
-          <span className="material-symbols-outlined text-3xl">arrow_back</span>{" "}
-          Back
-        </button>
-        <span className="text-3xl md:text-4xl font-headline-xl uppercase tracking-widest text-primary font-bold">
-          PvP Matchmaking
-        </span>
-        <span className="text-xl font-mono text-on-surface/60 bg-surface px-4 py-2 rounded-lg border-2 border-primary/10 shadow-sm">
-          {g.address.slice(0, 8)}…
-        </span>
-      </div>
+          {isPortrait ? (
+            <div className="flex flex-col items-start gap-1">
+              <span className="qp-title !text-3xl uppercase tracking-widest">
+                PvP Matchmaking
+              </span>
+              <button
+                onClick={() => {
+                  g.leave();
+                  onBack();
+                }}
+                className="!text-sm md:!text-base font-bold text-[var(--qp-ink-soft)] hover:text-[var(--qp-ink)] transition-colors flex items-center gap-1 uppercase tracking-widest"
+              >
+                <span className="material-symbols-outlined !text-lg">
+                  arrow_back
+                </span>{" "}
+                Return
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => {
+                g.leave();
+                onBack();
+              }}
+              className="!text-2xl font-bold text-[var(--qp-ink-soft)] hover:text-[var(--qp-ink)] transition-colors flex items-center gap-1 uppercase tracking-widest"
+            >
+              <span className="material-symbols-outlined !text-3xl">
+                arrow_back
+              </span>{" "}
+              Return
+            </button>
+          )}
+
+          {!isPortrait && (
+            <span className="qp-title !text-5xl md:!text-6xl uppercase tracking-widest">
+              PvP Matchmaking
+            </span>
+          )}
+        </div>
+      )}
 
       {!playing ? (
-        <div className="flex-1 flex flex-col items-center gap-6 pb-4 pt-4">
-          <div className="text-2xl md:text-3xl font-mono text-on-surface/80 bg-surface px-8 py-6 rounded-2xl shadow-sm border-[4px] border-primary/20">
-            Wallet: <span className="font-bold">{g.address.slice(0, 8)}…</span>{" "}
-            &nbsp;·&nbsp; Balance:{" "}
-            <span className="font-bold text-primary">
-              {fmtSui(g.balance)} SUI
-            </span>
+        <div
+          className={`flex-1 flex flex-col items-center pb-4 pt-4 ${isPortrait ? "gap-3" : "gap-6"}`}
+        >
+          <div
+            className={`font-mono text-on-surface/80 bg-surface rounded-2xl shadow-sm border-primary/20 ${
+              isPortrait
+                ? "text-sm px-4 py-3 border-2"
+                : "text-2xl md:text-3xl px-8 py-6 border-[4px]"
+            }`}
+          >
+            Wallet: <span className="font-bold">{g.address.slice(0, 8)}…</span>
+            {/* MTPS mode: play is free + auto-funded — hide the SUI balance. */}
+            {!isMtpsConfigured && (
+              <>
+                {" "}
+                &nbsp;·&nbsp; Balance:{" "}
+                <span className="font-bold text-primary">
+                  {fmtSui(g.balance)} SUI
+                </span>
+              </>
+            )}
           </div>
 
-          <div className="flex flex-col items-center gap-8 bg-surface-container-low p-10 md:p-14 rounded-3xl border-4 border-dashed border-primary/30 w-[90%] max-w-4xl mt-2">
-            <span className="text-2xl md:text-3xl font-bold uppercase tracking-widest text-primary">
+          <div
+            className={`flex flex-col items-center qp-panel w-[90%] max-w-4xl mt-2 ${
+              isPortrait ? "gap-3 p-4" : "gap-8 p-10 md:p-14"
+            }`}
+          >
+            <span
+              className={`text-[var(--qp-amber)] tracking-[0.08em] uppercase font-bold ${isPortrait ? "text-lg" : "text-3xl"}`}
+            >
               Game Variant
             </span>
-            <div className="flex gap-4 w-full">
+            <div className={`flex w-full ${isPortrait ? "gap-2" : "gap-4"}`}>
               {(["ttt", "caro"] as const).map((v) => (
                 <button
                   key={v}
                   disabled={locked}
                   onClick={() => setVariant(v)}
-                  className={`flex-1 py-8 rounded-2xl text-3xl font-bold shadow-sm disabled:opacity-40 transition-all ${variant === v ? "bg-tertiary text-on-tertiary shadow-[6px_6px_0px_#bc0000]" : "bg-surface border-[4px] border-primary/30 hover:border-primary/60"}`}
+                  className={`qp-btn flex-1 transition-colors disabled:opacity-40 ${
+                    isPortrait ? "!py-3 !text-base" : "!py-8 !text-4xl"
+                  } ${variant === v ? "qp-btn--go" : ""}`}
                 >
                   {v === "ttt" ? "3×3 Classic" : "Caro"}
                 </button>
               ))}
             </div>
             {variant === "caro" && (
-              <div className="flex gap-6 mt-4">
+              <div className={`flex mt-2 ${isPortrait ? "gap-3" : "gap-6"}`}>
                 {CARO_SIZES.map((sz) => (
                   <button
                     key={sz}
                     disabled={locked}
                     onClick={() => setBoardSize(sz)}
-                    className={`px-10 py-5 rounded-2xl text-2xl font-bold shadow-sm disabled:opacity-40 transition-all ${boardSize === sz ? "bg-secondary text-on-secondary shadow-[4px_4px_0px_#bc0000]" : "bg-surface border-[4px] border-primary/30 hover:border-primary/60"}`}
+                    className={`qp-btn transition-colors disabled:opacity-40 ${
+                      isPortrait
+                        ? "!px-4 !py-2 !text-base"
+                        : "!px-10 !py-5 !text-4xl"
+                    } ${boardSize === sz ? "qp-btn--go" : ""}`}
                   >
                     {sz}×{sz}
                   </button>
@@ -120,10 +184,13 @@ export function PvpScene({
             )}
           </div>
 
-          {!funded && (
-            <div className="text-2xl text-secondary font-bold text-center w-[90%] max-w-4xl bg-secondary/10 p-6 rounded-2xl mt-4">
-              Your connected wallet needs a little testnet SUI to play (gas +
-              deposit).
+          {!funded && !isMtpsConfigured && (
+            <div
+              className={`text-secondary font-bold text-center w-[90%] max-w-4xl bg-secondary/10 rounded-2xl mt-4 ${
+                isPortrait ? "text-xs p-3 mt-1" : "text-2xl p-6"
+              }`}
+            >
+              Your wallet needs SUI to play (gas + deposit).
             </div>
           )}
 
@@ -131,36 +198,52 @@ export function PvpScene({
             <button
               onClick={g.queue}
               disabled={!funded || locked}
-              className="w-[80%] max-w-3xl px-12 py-8 rounded-xl border-[6px] border-primary bg-surface text-primary font-headline-lg-mobile text-4xl uppercase tracking-widest disabled:opacity-40 shadow-[8px_8px_0px_#001e40] hover:-translate-y-1 hover:translate-x-1 hover:shadow-[10px_10px_0px_#001e40] active:translate-y-0 active:translate-x-0 active:shadow-[4px_4px_0px_#001e40] transition-all flex items-center justify-center gap-4"
+              className={`qp-btn qp-btn--go w-[80%] max-w-3xl uppercase tracking-widest disabled:opacity-40 flex items-center justify-center font-black ${
+                isPortrait
+                  ? "!px-6 !py-4 !text-xl gap-2"
+                  : "!px-12 !py-8 !text-4xl gap-4"
+              }`}
             >
-              <span className="material-symbols-outlined text-5xl">
+              <span
+                className={`material-symbols-outlined ${isPortrait ? "text-2xl" : "text-5xl"}`}
+              >
                 {g.phase === "queuing"
                   ? "search"
                   : g.phase === "connecting"
                     ? "sync"
                     : "sports_esports"}
               </span>
-              {g.phase === "connecting"
-                ? "Connecting…"
-                : g.phase === "queuing"
-                  ? "Finding Opponent…"
-                  : g.phase === "opening"
-                    ? "Opening tunnel…"
-                    : g.phase === "funding"
-                      ? "Funding seat…"
-                      : "Find Match"}
+              <span>
+                {g.phase === "connecting"
+                  ? "Connecting…"
+                  : g.phase === "queuing"
+                    ? "Finding Opponent…"
+                    : g.phase === "opening"
+                      ? "Opening tunnel…"
+                      : g.phase === "funding"
+                        ? "Funding seat…"
+                        : "Find Match"}
+              </span>
             </button>
 
             {(g.phase === "queuing" || g.phase === "connecting") && (
               <button
                 onClick={g.leave}
-                className="text-2xl text-outline font-bold underline hover:text-secondary transition-colors pb-2"
+                className={`text-outline font-bold underline hover:text-secondary transition-colors pb-2 ${
+                  isPortrait ? "text-sm" : "text-2xl"
+                }`}
               >
                 Cancel Search
               </button>
             )}
             {g.error && (
-              <div className="text-2xl font-bold text-red-500 text-center w-[90%] max-w-4xl bg-red-50 p-6 rounded-2xl border-4 border-red-200 pb-2">
+              <div
+                className={`font-bold text-red-500 text-center w-[90%] max-w-4xl bg-red-50 rounded-2xl pb-2 ${
+                  isPortrait
+                    ? "text-xs p-3 border-2 border-red-200"
+                    : "text-2xl p-6 border-4 border-red-200"
+                }`}
+              >
                 {g.error}
               </div>
             )}
@@ -168,11 +251,11 @@ export function PvpScene({
         </div>
       ) : (
         <div
-          className={`flex ${isPortrait ? "flex-col items-center gap-6" : "flex-row gap-8 items-start justify-between"} mt-2 w-full`}
+          className={`flex ${isPortrait ? "flex-col items-center gap-6" : "flex-row gap-8 items-start justify-between"} mt-2 w-full flex-1 min-h-0`}
         >
           {/* Left Column: Game Area */}
           <section
-            className={`${isPortrait ? "w-full max-w-[480px]" : "flex-1 min-w-[560px]"} flex flex-col items-center`}
+            className={`${isPortrait ? "w-full max-w-[480px]" : "flex-1 min-w-[560px]"} flex flex-col items-center min-h-0`}
           >
             <div className="flex flex-col items-center gap-1 mb-6">
               <span className="text-lg font-bold text-primary">
@@ -181,15 +264,15 @@ export function PvpScene({
                   {g.myMark === 1 ? "✕ (X)" : "◯ (O)"}
                 </span>
               </span>
-              <div className="flex items-center gap-4 text-sm font-mono text-on-surface/70 bg-surface px-4 py-1.5 rounded-lg border border-primary/20 shadow-sm mt-1">
+              <div className="flex items-center gap-4 text-sm font-mono text-[var(--qp-ink-soft)] px-4 py-1.5 rounded-md border border-[var(--qp-ink-soft)] mt-1">
                 <span>Game {g.currentGame}</span>
-                <span className="border-l-2 border-primary/20 pl-4">
+                <span className="border-l-2 border-[var(--qp-ink-soft)] pl-4">
                   X: {g.score.x} &nbsp; O: {g.score.o} &nbsp; D: {g.score.draws}
                 </span>
               </div>
             </div>
 
-            <div className="flex justify-center my-4">
+            <div className="flex justify-center flex-1 min-h-0 w-full mb-2">
               {g.variant === "caro" ? (
                 <CaroBoard
                   board={g.board}
@@ -200,116 +283,192 @@ export function PvpScene({
                 />
               ) : (
                 <Board
-                  board={g.board}
+                  board={uiBoard(g.board)}
                   disabled={!g.isMyTurn || g.auto}
                   onPlay={g.play}
                 />
               )}
             </div>
 
-            <div className="px-6 py-2 rounded-sm bg-tertiary/10 border-2 border-tertiary text-tertiary text-base font-bold uppercase tracking-wider mt-4">
+            <div className="qp-title text-2xl mt-4 min-h-[28px]">
               {statusText(g)}
             </div>
-          </section>
 
-          {/* Right Column: Game Log / Info */}
-          <aside
-            className={`${isPortrait ? "w-full max-w-[480px] mt-4" : "w-[340px] shrink-0"} flex flex-col gap-4`}
-          >
-            {/* Controls */}
-            <div className="bg-surface-container-low border-[2px] border-primary p-4 relative rounded-sm shadow-[4px_4px_0px_#00336610] w-full flex flex-col items-center">
-              <h2 className="font-headline-lg text-lg text-primary mb-4 self-start flex items-center gap-2">
-                <span className="material-symbols-outlined">settings</span>
-                Controls
-              </h2>
-
-              <div className="flex flex-col items-stretch w-full gap-3">
-                {g.phase === "playing" &&
-                  g.innerOver &&
-                  !g.terminal &&
-                  g.role === "A" && (
+            {/* Portrait Controls */}
+            {isPortrait && (
+              <div className="mt-4 flex flex-col gap-3 w-full max-w-[480px]">
+                <div className="flex gap-4 w-full">
+                  {g.phase === "playing" &&
+                    g.innerOver &&
+                    !g.terminal &&
+                    g.role === "A" && (
+                      <button
+                        onClick={g.next}
+                        disabled={g.auto}
+                        className="qp-btn qp-btn--go flex-1 !px-4 !py-3 !text-sm disabled:opacity-40 uppercase tracking-wider"
+                      >
+                        Next Game →
+                      </button>
+                    )}
+                  {g.innerOver && g.phase === "playing" && (
                     <button
-                      onClick={g.next}
-                      disabled={g.auto}
-                      className="w-full px-4 py-3 rounded-sm border-[3px] border-primary bg-primary text-surface font-bold disabled:opacity-40 uppercase tracking-wider hover:-translate-y-1 hover:shadow-[4px_4px_0px_#001e40] transition-all"
+                      onClick={g.stop}
+                      className="qp-btn flex-1 !px-4 !py-3 !text-sm uppercase tracking-wider"
                     >
-                      Next Game →
+                      Stop &amp; Settle
                     </button>
                   )}
-                {g.innerOver && g.phase === "playing" && (
-                  <button
-                    onClick={g.stop}
-                    className="w-full px-4 py-3 rounded-sm border-[3px] border-secondary bg-surface text-secondary font-bold uppercase tracking-wider hover:bg-secondary hover:text-on-secondary transition-all shadow-[3px_3px_0px_#bc0000]"
-                  >
-                    Stop &amp; Settle
-                  </button>
-                )}
-                {g.phase === "done" && (
+                  {g.phase === "done" && (
+                    <button
+                      onClick={g.requeue}
+                      className="qp-btn qp-btn--go flex-1 !px-4 !py-3 !text-sm uppercase tracking-wider"
+                    >
+                      Find New Match
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex gap-4 items-center justify-between w-full">
                   <button
                     onClick={() => {
                       g.leave();
-                      g.queue();
+                      onBack();
                     }}
-                    className="w-full px-4 py-3 rounded-sm border-[3px] border-primary bg-surface text-primary font-bold uppercase tracking-wider hover:bg-primary/10 transition-all shadow-[3px_3px_0px_#001e40]"
+                    className="qp-btn flex-1 !px-4 !py-2.5 !text-sm"
                   >
-                    Rematch
+                    ← Leave
                   </button>
-                )}
-                <label className="flex items-center justify-center gap-2 text-base font-bold text-outline cursor-pointer bg-surface px-4 py-3 rounded-sm border-[2px] border-outline hover:border-primary hover:text-primary transition-colors">
-                  <input
-                    type="checkbox"
-                    className="w-5 h-5 accent-primary cursor-pointer"
-                    checked={g.auto}
-                    onChange={(e) => g.setAuto(e.target.checked)}
-                  />{" "}
-                  Auto-Play
-                </label>
-              </div>
-            </div>
 
-            {/* Game Log */}
-            <div className="bg-surface-container-low border-[2px] border-primary p-6 relative rounded-sm shadow-[4px_4px_0px_#00336610] w-full mt-2">
-              <div className="tape-top"></div>
-              <h2 className="font-headline-lg text-xl text-primary mb-4 flex items-center gap-2">
+                  <button
+                    onClick={() => g.setAuto(!g.auto)}
+                    className={`qp-btn flex-1 !px-4 !py-2.5 !text-sm flex items-center justify-center gap-2 ${g.auto ? "qp-btn--go" : ""}`}
+                  >
+                    <span
+                      className={`grid h-4 w-4 place-items-center border-[2px] border-[var(--qp-ink)] text-xs rounded-sm ${g.auto ? "bg-[var(--qp-ink)] text-[var(--qp-paper)]" : "bg-[var(--qp-paper)]"}`}
+                    >
+                      {g.auto ? "✓" : ""}
+                    </span>
+                    Auto-Play
+                  </button>
+                </div>
+              </div>
+            )}
+          </section>
+
+          {/* Right Column: Game Log / Info */}
+          {!isPortrait && (
+            <aside className="w-[340px] shrink-0 flex flex-col gap-4">
+              <div className="qp-panel qp-stroke p-4 w-full flex flex-col items-center">
+                <h2 className="qp-title text-xl mb-4 self-start flex items-center gap-2">
+                  <span className="material-symbols-outlined">settings</span>
+                  Controls
+                </h2>
+
+                <div className="flex flex-col items-stretch w-full gap-3">
+                  {g.phase === "playing" &&
+                    g.innerOver &&
+                    !g.terminal &&
+                    g.role === "A" && (
+                      <button
+                        onClick={g.next}
+                        disabled={g.auto}
+                        className="qp-btn qp-btn--go w-full !px-4 !py-3 !text-sm disabled:opacity-40 uppercase tracking-wider"
+                      >
+                        Next Game →
+                      </button>
+                    )}
+                  {g.innerOver && g.phase === "playing" && (
+                    <button
+                      onClick={g.stop}
+                      className="qp-btn w-full !px-4 !py-3 !text-sm uppercase tracking-wider"
+                    >
+                      Stop &amp; Settle
+                    </button>
+                  )}
+                  {g.phase === "done" && (
+                    <button
+                      onClick={g.requeue}
+                      className="qp-btn qp-btn--go w-full !px-4 !py-3 !text-sm uppercase tracking-wider"
+                    >
+                      Find New Match
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex gap-4 items-center justify-between w-full mt-3">
+                  <button
+                    onClick={() => {
+                      g.leave();
+                      onBack();
+                    }}
+                    className="qp-btn flex-1 !px-4 !py-2.5 !text-sm"
+                  >
+                    ← Leave
+                  </button>
+                  <button
+                    onClick={() => g.setAuto(!g.auto)}
+                    className={`qp-btn flex-1 !px-4 !py-2.5 !text-sm flex items-center justify-center gap-2 ${g.auto ? "qp-btn--go" : ""}`}
+                  >
+                    <span
+                      className={`grid h-4 w-4 place-items-center border-[2px] border-[var(--qp-ink)] text-xs rounded-sm ${g.auto ? "bg-[var(--qp-ink)] text-[var(--qp-paper)]" : "bg-[var(--qp-paper)]"}`}
+                    >
+                      {g.auto ? "✓" : ""}
+                    </span>
+                    Auto-Play
+                  </button>
+                </div>
+              </div>
+
+              <h2 className="qp-title text-2xl mt-2 mb-1 flex items-center gap-2">
                 <span className="material-symbols-outlined">edit_note</span>
                 Game Log
               </h2>
 
-              {g.games.length > 0 && (
-                <div className="w-full max-h-40 overflow-y-auto flex flex-col gap-1 text-sm font-mono mb-4 bg-surface-container-lowest p-3 rounded-lg border border-primary/10 shadow-inner">
-                  {[...g.games].reverse().map((r) => (
-                    <div
-                      key={r.game}
-                      className="flex justify-between text-on-surface/80 px-2 py-1 hover:bg-primary/5 rounded"
-                    >
-                      <span className="font-bold">Game {r.game}</span>
-                      <span
-                        className={`font-bold ${r.winner === 1 ? "text-primary" : r.winner === 2 ? "text-secondary" : "text-outline"}`}
-                      >
-                        {r.winner === 1
-                          ? "X WON"
-                          : r.winner === 2
-                            ? "O WON"
-                            : "DRAW"}
-                      </span>
+              <div className="qp-panel qp-stroke p-6 w-full">
+                <ul className="space-y-4 pt-2 font-mono font-bold text-xs">
+                  {g.games.length > 0 && (
+                    <div className="w-full max-h-40 overflow-y-auto flex flex-col gap-1 text-sm font-mono mb-4 bg-[var(--qp-paper)] p-3 rounded-lg border border-[var(--qp-ink-soft)]/20 shadow-inner">
+                      {[...g.games].reverse().map((r) => (
+                        <div
+                          key={r.game}
+                          className="flex justify-between text-on-surface/80 px-2 py-1 hover:bg-primary/5 rounded"
+                        >
+                          <span className="font-bold">Game {r.game}</span>
+                          <span
+                            className={`font-bold ${r.winner === 1 ? "text-primary" : r.winner === 2 ? "text-secondary" : "text-outline"}`}
+                          >
+                            {r.winner === 1
+                              ? "X WON"
+                              : r.winner === 2
+                                ? "O WON"
+                                : "DRAW"}
+                          </span>
+                        </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
-              )}
+                  )}
 
-              <div className="flex flex-col gap-2 mt-4 text-xs font-mono border-t border-primary/20 pt-4">
-                <Digest label="OPEN:" digest={g.digests.create} />
-                <Digest label="DEPOSIT:" digest={g.digests.deposit} />
-                <Digest label="CLOSE:" digest={g.digests.close} />
+                  <div className="flex flex-col gap-2 mt-4 text-xs font-mono border-t border-[var(--qp-ink-soft)]/40 pt-4">
+                    <Digest label="OPEN:" digest={g.digests.create} />
+                    <Digest label="DEPOSIT:" digest={g.digests.deposit} />
+                    <Digest label="CLOSE:" digest={g.digests.close} />
+                  </div>
+
+                  {g.error && (
+                    <div className="mt-4 text-xs font-bold text-red-500 bg-red-50 p-3 rounded-lg border border-red-200 w-full break-words">
+                      {g.error}
+                    </div>
+                  )}
+                </ul>
+
+                {g.auto && (
+                  <div className="mt-6 text-xs text-[var(--qp-amber)] italic font-bold text-center leading-tight">
+                    * Auto-play enabled *
+                  </div>
+                )}
               </div>
-
-              {g.error && (
-                <div className="mt-4 text-xs font-bold text-red-500 bg-red-50 p-3 rounded-lg border border-red-200 w-full break-words">
-                  {g.error}
-                </div>
-              )}
-            </div>
-          </aside>
+            </aside>
+          )}
         </div>
       )}
     </div>

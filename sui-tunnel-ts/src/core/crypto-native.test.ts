@@ -1,14 +1,14 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
+import { test } from "node:test";
+import { toHex } from "./bytes";
 import {
-  nativeBackend,
-  nobleBackend,
   defaultBackend,
-  nativeBackendSupported,
   keyPairFromSecret,
+  nativeBackend,
+  nativeBackendSupported,
+  nobleBackend,
   verify as nobleVerify,
 } from "./index";
-import { toHex } from "./bytes";
 
 const seed = Uint8Array.from({ length: 32 }, (_, i) => i + 1);
 const kp = keyPairFromSecret(seed);
@@ -60,7 +60,7 @@ test("native-backed tunnel produces updates that verify via noble (on-chain path
     ed25519Address(a.publicKey),
     ed25519Address(b.publicKey),
     { a: 1000n, b: 1000n },
-    nativeBackend,
+    nativeBackend
   );
   t.step({ from: "A", amount: 10n }, "A");
   const u = t.latest!;
@@ -68,7 +68,7 @@ test("native-backed tunnel produces updates that verify via noble (on-chain path
     verifyCoSignedUpdate(
       u,
       { publicKey: t.partyA.publicKey, scheme: t.partyA.scheme },
-      { publicKey: t.partyB.publicKey, scheme: t.partyB.scheme },
-    ),
+      { publicKey: t.partyB.publicKey, scheme: t.partyB.scheme }
+    )
   );
 });

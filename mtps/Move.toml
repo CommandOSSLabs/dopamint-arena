@@ -1,0 +1,8 @@
+[package]
+name = "mtps"
+edition = "2024"
+
+[dependencies]
+
+[addresses]
+mtps = "0x0"

@@ -39,3 +39,13 @@ that depends on them. An ADR captures the decision and the reasoning so the
 - [0010](0010-mp-resume-protocol.md) — MP resume: atomic `ConnRef` rebind,
   event-driven peer-cache eviction, peer-to-peer state reconciliation; on-chain
   settlement is the floor. Affinity/re-homing deferred to ADR-0011.
+- [0012](0012-arena-attract-cabinet-seam.md) — Arena attract mode: one shared
+  cabinet shell (`GameCabinet` + `CabinetController`) owns hover → pause →
+  take-over; auto-play is a config (the kit is the brain); take-over is cosmetic
+  on-chain today (real ephemeral-key you-vs-bot deferred). Applies to every arena
+  game (all share the auto-loop + take-a-seat shape); ttt is the reference.
+- [0013](0013-address-balance-stake.md) — Fund the stake from the player's SIP-58
+  address balance (`coin::redeem_funds`/`tx.withdrawal`) instead of a version-pinned
+  `Coin<T>`, so concurrent reload opens stop equivocating. Sponsor allowlist gains
+  `redeem_funds`/`send_funds` + a mandatory `WithdrawFrom::Sender` input guard
+  (anti settler-drain). Behind `VITE_MTPS_ADDRESS_BALANCE`; no Move redeploy.

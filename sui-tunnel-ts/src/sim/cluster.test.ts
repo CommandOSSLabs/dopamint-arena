@@ -1,13 +1,13 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
-import { runCluster, distribute } from "./cluster";
+import { test } from "node:test";
+import { distribute, runCluster } from "./cluster";
 
 test("distribute splits a total into near-equal parts", () => {
   assert.deepEqual(distribute(10, 3), [4, 3, 3]);
   assert.deepEqual(distribute(9, 3), [3, 3, 3]);
   assert.equal(
     distribute(1000, 7).reduce((a, b) => a + b, 0),
-    1000,
+    1000
   );
   assert.deepEqual(distribute(0, 2), [0, 0]);
 });

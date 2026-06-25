@@ -20,6 +20,8 @@ pub struct InMemoryControlStore {
     tunnels: RwLock<HashMap<String, TunnelStatus>>,
     active_tunnels: AtomicU64,
     settled_tunnels: AtomicU64,
+    // Running max of tps, milli-tps to stay an integer atomic (fetch_max is lock-free).
+    peak_tps_milli: AtomicU64,
     per_game_actions: RwLock<HashMap<String, u64>>,
     // Maintained at put_session time (replaces the old per-tick session scan in stats.rs).
     per_game_tunnels: RwLock<HashMap<String, u64>>,
@@ -75,6 +77,11 @@ impl ControlStore for InMemoryControlStore {
             .or_insert(0) += delta;
     }
 
+    async fn update_peak_tps(&self, tps: f64) {
+        self.peak_tps_milli
+            .fetch_max((tps * 1000.0) as u64, Ordering::Relaxed);
+    }
+
     async fn snapshot(&self) -> StatsSnapshot {
         let actions = self.per_game_actions.read().unwrap();
         let tunnels = self.per_game_tunnels.read().unwrap();
@@ -103,6 +110,7 @@ impl ControlStore for InMemoryControlStore {
         }
         StatsSnapshot {
             tps: 0.0, // filled by the broadcaster from its per-tick diff
+            peak_tps: self.peak_tps_milli.load(Ordering::Relaxed) as f64 / 1000.0,
             total_actions,
             active_tunnels: self.active_tunnels.load(Ordering::Relaxed),
             settled_tunnels: self.settled_tunnels.load(Ordering::Relaxed),
@@ -169,10 +177,11 @@ impl MpStore for InMemoryMpStore {
         }
     }
 
-    async fn join_or_pair(&self, game: &str, me: Waiting) -> Option<Waiting> {
+    async fn join_or_pair(&self, game: &str, me: Waiting, _hold_ms: u64) -> Option<Waiting> {
+        // Single-instance store: every waiter shares this instance, so the same-instance branch
+        // always hits and we pair immediately. The hold never engages (no cross-instance waiters).
         let mut queues = self.queues.write().unwrap();
         let q = queues.entry(game.to_owned()).or_default();
-        // Drop stale self entry so a reconnect re-queues cleanly.
         q.retain(|w| w.wallet != me.wallet);
         if let Some(front) = q.pop_front() {
             Some(front)
@@ -180,6 +189,20 @@ impl MpStore for InMemoryMpStore {
             q.push_back(me);
             None
         }
+    }
+
+    async fn fallback_pair(&self, game: &str, wallet: &str) -> Option<Waiting> {
+        // Reachable only in multi-instance deployments; single-instance pairs at join time. Kept
+        // consistent: if `wallet` is still parked, pair it with the oldest different-wallet waiter.
+        let mut queues = self.queues.write().unwrap();
+        let q = queues.entry(game.to_owned()).or_default();
+        if !q.iter().any(|w| w.wallet == wallet) {
+            return None;
+        }
+        let opp_idx = q.iter().position(|w| w.wallet != wallet)?;
+        let opp = q.remove(opp_idx);
+        q.retain(|w| w.wallet != wallet);
+        opp
     }
 
     async fn leave_queue(&self, game: &str, wallet: &str) {
@@ -419,6 +442,17 @@ mod tests {
         assert_eq!(snap.total_actions, 1450);
     }
 
+    // peak_tps is a maintained running max, not a recomputed aggregate: a later lower reading
+    // never lowers it. The broadcaster folds each tick's tps in via update_peak_tps.
+    #[tokio::test]
+    async fn peak_tps_is_a_running_max() {
+        let s = InMemoryControlStore::default();
+        s.update_peak_tps(10.0).await;
+        s.update_peak_tps(4.0).await;
+        s.update_peak_tps(25.0).await;
+        assert_eq!(s.snapshot().await.peak_tps, 25.0);
+    }
+
     // Created→Active→Closed reduces correctly; replay (cursor restart) is idempotent.
     // Moved from sui.rs::events_reduce_to_terminal_status_and_maintain_counts.
     #[tokio::test]
@@ -454,10 +488,10 @@ mod tests {
             conn: cr(),
         };
         assert!(
-            s.join_or_pair("ttt", a.clone()).await.is_none(),
+            s.join_or_pair("ttt", a.clone(), 0).await.is_none(),
             "first parks"
         );
-        let opp = s.join_or_pair("ttt", b).await.expect("second pairs");
+        let opp = s.join_or_pair("ttt", b, 0).await.expect("second pairs");
         assert_eq!(opp.wallet, "0xa", "opponent is the earlier waiter (seat A)");
     }
 
@@ -471,7 +505,8 @@ mod tests {
                 Waiting {
                     wallet: "0xa".into(),
                     conn: cr()
-                }
+                },
+                0
             )
             .await
             .is_none());
@@ -481,7 +516,8 @@ mod tests {
                 Waiting {
                     wallet: "0xb".into(),
                     conn: cr()
-                }
+                },
+                0
             )
             .await
             .is_none());

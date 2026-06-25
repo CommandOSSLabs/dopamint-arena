@@ -3,8 +3,10 @@ module sui_tunnel::example_multi_party_channel_tests;
 
 use std::unit_test::assert_eq;
 use sui::clock;
+use sui::sui::SUI;
 use sui_tunnel::example_multi_party_channel;
 use sui_tunnel::hop;
+use sui_tunnel::tunnel;
 
 // ============================================
 // CONSTANT TESTS
@@ -469,15 +471,15 @@ fun dispute_isolation() {
     let claimed = example_multi_party_channel::claim_routed_payment(&mut payment, preimage);
     assert!(claimed);
 
-    // Resolve the dispute
+    // Resolve the dispute (finals conserve the link's 80000 capacity sum)
     let settlement = example_multi_party_channel::resolve_link_dispute(
         &mut network,
         1,
-        20000,
-        20000,
+        50000,
+        30000,
         &ctx,
     );
-    assert_eq!(example_multi_party_channel::settlement_party_a_final(&settlement), 20000);
+    assert_eq!(example_multi_party_channel::settlement_party_a_final(&settlement), 50000);
 
     // Link 1 is now settled
     let link1_after = example_multi_party_channel::get_link(&network, 1);
@@ -532,17 +534,17 @@ fun settle_individual_link() {
     let link1 = example_multi_party_channel::get_link(&network, 1);
     assert_eq!(example_multi_party_channel::link_status(link1), 0); // ACTIVE
 
-    // Settle link 0
+    // Settle link 0 (finals conserve the link's 100000 capacity sum)
     let settlement = example_multi_party_channel::settle_link(
         &mut network,
         0,
-        25000,
-        25000,
+        60000,
+        40000,
         &ctx,
     );
     assert_eq!(*example_multi_party_channel::settlement_tunnel_id(&settlement), b"tunnel_ab");
-    assert_eq!(example_multi_party_channel::settlement_party_a_final(&settlement), 25000);
-    assert_eq!(example_multi_party_channel::settlement_party_b_final(&settlement), 25000);
+    assert_eq!(example_multi_party_channel::settlement_party_a_final(&settlement), 60000);
+    assert_eq!(example_multi_party_channel::settlement_party_b_final(&settlement), 40000);
 
     let link0_after = example_multi_party_channel::get_link(&network, 0);
     assert_eq!(example_multi_party_channel::link_status(link0_after), 2); // SETTLED
@@ -579,8 +581,8 @@ fun network_settlement_flow() {
     example_multi_party_channel::begin_network_settlement(&mut network, &ctx);
     assert_eq!(example_multi_party_channel::network_status(&network), 1); // SETTLING
 
-    // Settle the link
-    example_multi_party_channel::settle_link(&mut network, 0, 25000, 25000, &ctx);
+    // Settle the link (finals conserve the link's 100000 capacity sum)
+    example_multi_party_channel::settle_link(&mut network, 0, 50000, 50000, &ctx);
 
     // Close network
     example_multi_party_channel::close_network(&mut network, &ctx);
@@ -732,10 +734,10 @@ fun full_network_lifecycle() {
     // 5. Begin settlement
     example_multi_party_channel::begin_network_settlement(&mut network, &ctx);
 
-    // 6. Settle all links
-    example_multi_party_channel::settle_link(&mut network, 0, 45000, 55000, &ctx);
-    example_multi_party_channel::settle_link(&mut network, 1, 38000, 42000, &ctx);
-    example_multi_party_channel::settle_link(&mut network, 2, 28000, 32000, &ctx);
+    // 6. Settle all links (finals conserve each link's capacity sum)
+    example_multi_party_channel::settle_link(&mut network, 0, 120000, 80000, &ctx);
+    example_multi_party_channel::settle_link(&mut network, 1, 90000, 70000, &ctx);
+    example_multi_party_channel::settle_link(&mut network, 2, 70000, 50000, &ctx);
 
     // 7. Close network
     example_multi_party_channel::close_network(&mut network, &ctx);
@@ -772,8 +774,24 @@ fun fail_routed_payment_unwinds_multi_hop_htlcs() {
         100000,
         &ctx,
     );
-    example_multi_party_channel::add_link(&mut network, b"tun_bc", @0xB, @0xC, 80000, 80000, &ctx);
-    example_multi_party_channel::add_link(&mut network, b"tun_cd", @0xC, @0xD, 60000, 60000, &ctx);
+    example_multi_party_channel::add_link(
+        &mut network,
+        b"tun_bc",
+        @0xB,
+        @0xC,
+        80000,
+        80000,
+        &ctx,
+    );
+    example_multi_party_channel::add_link(
+        &mut network,
+        b"tun_cd",
+        @0xC,
+        @0xD,
+        60000,
+        60000,
+        &ctx,
+    );
 
     let payment_hash = example_multi_party_channel::create_payment_hash(&b"unwind_preimage");
     let mut payment = example_multi_party_channel::create_routed_payment(
@@ -799,6 +817,335 @@ fun fail_routed_payment_unwinds_multi_hop_htlcs() {
     );
 
     example_multi_party_channel::destroy_payment_for_testing(payment);
+    example_multi_party_channel::destroy_network_for_testing(network);
+    clock::destroy_for_testing(clock);
+}
+
+// ============================================
+// REAL-TUNNEL BINDING
+// ============================================
+
+const P_A: address = @0xA;
+const P_B: address = @0xB;
+
+/// A network whose coordinator is the dummy-ctx sender (@0x0), with P_A and P_B
+/// registered as participants.
+fun network_with_participants(
+    clock: &clock::Clock,
+    ctx: &mut TxContext,
+): example_multi_party_channel::ChannelNetwork {
+    let mut network = example_multi_party_channel::create_network(clock, ctx);
+    let fee_policy = hop::default_fee_policy();
+    example_multi_party_channel::register_participant(&mut network, P_A, fee_policy, ctx);
+    example_multi_party_channel::register_participant(&mut network, P_B, fee_policy, ctx);
+    network
+}
+
+#[test]
+fun add_link_for_tunnel_binds_real_tunnel() {
+    let mut ctx = sui::tx_context::dummy();
+    let clock = clock::create_for_testing(&mut ctx);
+
+    let mut network = network_with_participants(&clock, &mut ctx);
+    let tun = tunnel::create_active_for_testing<SUI>(
+        P_A,
+        P_B,
+        1500,
+        500,
+        3600000,
+        0,
+        &clock,
+        &mut ctx,
+    );
+
+    example_multi_party_channel::add_link_for_tunnel(&mut network, &tun, &ctx);
+
+    assert_eq!(example_multi_party_channel::network_link_count(&network), 1);
+    let link = example_multi_party_channel::get_link(&network, 0);
+    assert_eq!(example_multi_party_channel::link_party_a(link), P_A);
+    assert_eq!(example_multi_party_channel::link_party_b(link), P_B);
+    // Capacities are derived from the live tunnel state, not caller input.
+    assert_eq!(example_multi_party_channel::link_capacity_a_to_b(link), 1500);
+    assert_eq!(example_multi_party_channel::link_capacity_b_to_a(link), 500);
+    assert_eq!(*example_multi_party_channel::link_tunnel_id(link), tun.id().to_bytes());
+
+    tunnel::destroy_for_testing(tun);
+    example_multi_party_channel::destroy_network_for_testing(network);
+    clock::destroy_for_testing(clock);
+}
+
+#[
+    test,
+    expected_failure(
+        abort_code = sui_tunnel::example_multi_party_channel::ENotFound,
+        location = sui_tunnel::example_multi_party_channel,
+    ),
+]
+fun add_link_for_tunnel_rejects_unregistered_party() {
+    let mut ctx = sui::tx_context::dummy();
+    let clock = clock::create_for_testing(&mut ctx);
+
+    let mut network = network_with_participants(&clock, &mut ctx);
+    // P_B is registered, @0xE is not.
+    let tun = tunnel::create_active_for_testing<SUI>(
+        P_B,
+        @0xE,
+        1500,
+        500,
+        3600000,
+        0,
+        &clock,
+        &mut ctx,
+    );
+
+    example_multi_party_channel::add_link_for_tunnel(&mut network, &tun, &ctx);
+
+    // Unreachable; present so the test type-checks.
+    tunnel::destroy_for_testing(tun);
+    example_multi_party_channel::destroy_network_for_testing(network);
+    clock::destroy_for_testing(clock);
+}
+
+#[
+    test,
+    expected_failure(
+        abort_code = sui_tunnel::example_multi_party_channel::EAlreadyExists,
+        location = sui_tunnel::example_multi_party_channel,
+    ),
+]
+fun add_link_for_tunnel_rejects_duplicate_link() {
+    let mut ctx = sui::tx_context::dummy();
+    let clock = clock::create_for_testing(&mut ctx);
+
+    let mut network = network_with_participants(&clock, &mut ctx);
+    let first = tunnel::create_active_for_testing<SUI>(
+        P_A,
+        P_B,
+        1500,
+        500,
+        3600000,
+        0,
+        &clock,
+        &mut ctx,
+    );
+    example_multi_party_channel::add_link_for_tunnel(&mut network, &first, &ctx);
+
+    // A second tunnel between the same parties is a duplicate link.
+    let second = tunnel::create_active_for_testing<SUI>(
+        P_A,
+        P_B,
+        1000,
+        1000,
+        3600000,
+        0,
+        &clock,
+        &mut ctx,
+    );
+    example_multi_party_channel::add_link_for_tunnel(&mut network, &second, &ctx);
+
+    // Unreachable; present so the test type-checks.
+    tunnel::destroy_for_testing(first);
+    tunnel::destroy_for_testing(second);
+    example_multi_party_channel::destroy_network_for_testing(network);
+    clock::destroy_for_testing(clock);
+}
+
+#[test]
+fun settle_link_checked_records_conserving_split() {
+    let mut ctx = sui::tx_context::dummy();
+    let clock = clock::create_for_testing(&mut ctx);
+
+    let mut network = network_with_participants(&clock, &mut ctx);
+    let tun = tunnel::create_active_for_testing<SUI>(
+        P_A,
+        P_B,
+        1500,
+        500,
+        3600000,
+        0,
+        &clock,
+        &mut ctx,
+    );
+    example_multi_party_channel::add_link_for_tunnel(&mut network, &tun, &ctx);
+
+    // A split that conserves the 2000 total is accepted (the real transfer would run
+    // inside the tunnel via close_cooperative_and_transfer).
+    let settlement = example_multi_party_channel::settle_link_checked(
+        &mut network,
+        &tun,
+        0,
+        1200,
+        800,
+        &ctx,
+    );
+    assert_eq!(example_multi_party_channel::settlement_party_a_final(&settlement), 1200);
+    assert_eq!(example_multi_party_channel::settlement_party_b_final(&settlement), 800);
+    assert_eq!(
+        example_multi_party_channel::link_status(
+            example_multi_party_channel::get_link(&network, 0),
+        ),
+        example_multi_party_channel::link_settled(),
+    );
+
+    tunnel::destroy_for_testing(tun);
+    example_multi_party_channel::destroy_network_for_testing(network);
+    clock::destroy_for_testing(clock);
+}
+
+#[
+    test,
+    expected_failure(
+        abort_code = sui_tunnel::example_multi_party_channel::EBalanceSumMismatch,
+        location = sui_tunnel::example_multi_party_channel,
+    ),
+]
+fun settle_link_checked_rejects_non_conserving_split() {
+    let mut ctx = sui::tx_context::dummy();
+    let clock = clock::create_for_testing(&mut ctx);
+
+    let mut network = network_with_participants(&clock, &mut ctx);
+    let tun = tunnel::create_active_for_testing<SUI>(
+        P_A,
+        P_B,
+        1500,
+        500,
+        3600000,
+        0,
+        &clock,
+        &mut ctx,
+    );
+    example_multi_party_channel::add_link_for_tunnel(&mut network, &tun, &ctx);
+
+    // 1000 + 500 = 1500, not the 2000 held by the tunnel.
+    let _ = example_multi_party_channel::settle_link_checked(
+        &mut network,
+        &tun,
+        0,
+        1000,
+        500,
+        &ctx,
+    );
+
+    // Unreachable; present so the test type-checks.
+    tunnel::destroy_for_testing(tun);
+    example_multi_party_channel::destroy_network_for_testing(network);
+    clock::destroy_for_testing(clock);
+}
+
+#[
+    test,
+    expected_failure(
+        abort_code = sui_tunnel::example_multi_party_channel::ELinkTunnelMismatch,
+        location = sui_tunnel::example_multi_party_channel,
+    ),
+]
+fun settle_link_checked_rejects_wrong_tunnel() {
+    let mut ctx = sui::tx_context::dummy();
+    let clock = clock::create_for_testing(&mut ctx);
+
+    let mut network = network_with_participants(&clock, &mut ctx);
+    let linked = tunnel::create_active_for_testing<SUI>(
+        P_A,
+        P_B,
+        1500,
+        500,
+        3600000,
+        0,
+        &clock,
+        &mut ctx,
+    );
+    example_multi_party_channel::add_link_for_tunnel(&mut network, &linked, &ctx);
+
+    // A different tunnel with the same parties and total balance, but a different id.
+    let other = tunnel::create_active_for_testing<SUI>(
+        P_A,
+        P_B,
+        1000,
+        1000,
+        3600000,
+        0,
+        &clock,
+        &mut ctx,
+    );
+    let _ = example_multi_party_channel::settle_link_checked(
+        &mut network,
+        &other,
+        0,
+        1500,
+        500,
+        &ctx,
+    );
+
+    // Unreachable; present so the test type-checks.
+    tunnel::destroy_for_testing(linked);
+    tunnel::destroy_for_testing(other);
+    example_multi_party_channel::destroy_network_for_testing(network);
+    clock::destroy_for_testing(clock);
+}
+
+#[
+    test,
+    expected_failure(
+        abort_code = sui_tunnel::example_multi_party_channel::EBalanceSumMismatch,
+        location = sui_tunnel::example_multi_party_channel,
+    ),
+]
+fun settle_link_rejects_non_conserving_split() {
+    let mut ctx = sui::tx_context::dummy();
+    let clock = clock::create_for_testing(&mut ctx);
+
+    let mut network = example_multi_party_channel::create_network(&clock, &mut ctx);
+    let fee_policy = hop::default_fee_policy();
+    example_multi_party_channel::register_participant(&mut network, @0xA, fee_policy, &ctx);
+    example_multi_party_channel::register_participant(&mut network, @0xB, fee_policy, &ctx);
+    example_multi_party_channel::add_link(
+        &mut network,
+        b"tunnel_ab",
+        @0xA,
+        @0xB,
+        50000,
+        50000,
+        &ctx,
+    );
+
+    // 60000 + 50000 = 110000, not the link's 100000 capacity sum.
+    let _ = example_multi_party_channel::settle_link(&mut network, 0, 60000, 50000, &ctx);
+
+    // Unreachable; present so the test type-checks.
+    example_multi_party_channel::destroy_network_for_testing(network);
+    clock::destroy_for_testing(clock);
+}
+
+#[
+    test,
+    expected_failure(
+        abort_code = sui_tunnel::example_multi_party_channel::EBalanceSumMismatch,
+        location = sui_tunnel::example_multi_party_channel,
+    ),
+]
+fun resolve_link_dispute_rejects_non_conserving_split() {
+    let mut ctx = sui::tx_context::dummy();
+    let clock = clock::create_for_testing(&mut ctx);
+
+    let mut network = example_multi_party_channel::create_network(&clock, &mut ctx);
+    let fee_policy = hop::default_fee_policy();
+    example_multi_party_channel::register_participant(&mut network, @0xA, fee_policy, &ctx);
+    example_multi_party_channel::register_participant(&mut network, @0xB, fee_policy, &ctx);
+    example_multi_party_channel::add_link(
+        &mut network,
+        b"tunnel_ab",
+        @0xA,
+        @0xB,
+        40000,
+        40000,
+        &ctx,
+    );
+    example_multi_party_channel::mark_link_disputed(&mut network, 0, &ctx);
+
+    // 20000 + 20000 = 40000, not the link's 80000 capacity sum.
+    let _ = example_multi_party_channel::resolve_link_dispute(&mut network, 0, 20000, 20000, &ctx);
+
+    // Unreachable; present so the test type-checks.
     example_multi_party_channel::destroy_network_for_testing(network);
     clock::destroy_for_testing(clock);
 }

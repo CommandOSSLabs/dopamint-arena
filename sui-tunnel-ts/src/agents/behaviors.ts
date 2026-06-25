@@ -4,11 +4,11 @@
  */
 
 import { Protocol } from "../protocol/Protocol";
-import { PaymentsProtocol } from "../protocol/payments";
 import { BlackjackProtocol } from "../protocol/blackjack";
-import { TicTacToeProtocol } from "../protocol/ticTacToe";
 import { ChatProtocol } from "../protocol/chat";
+import { PaymentsProtocol } from "../protocol/payments";
 import { QuantumPokerProtocol } from "../protocol/quantumPoker";
+import { TicTacToeProtocol } from "../protocol/ticTacToe";
 import { BombItProtocol } from "../protocol/bombIt";
 import { CrossProtocol } from "../protocol/cross";
 
@@ -33,7 +33,7 @@ export const BEHAVIOR_NAMES: BehaviorName[] = [
 
 /** Construct a fresh protocol instance for a behavior. */
 export function createBehaviorProtocol(
-  name: BehaviorName,
+  name: BehaviorName
 ): Protocol<unknown, unknown> {
   switch (name) {
     case "payment":

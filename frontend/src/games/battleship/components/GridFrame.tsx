@@ -30,10 +30,7 @@ export function GridFrame({
       <div className="relative z-10 grid w-full gap-[2px]" style={TEMPLATE}>
         <span />
         {COLS.map((c) => (
-          <span
-            key={`c${c}`}
-            className="text-center text-[9px] leading-4 text-arena-muted"
-          >
+          <span key={`c${c}`} className="bs-coord text-center">
             {c}
           </span>
         ))}
@@ -58,9 +55,7 @@ export function GridFrame({
 function FrameRow({ label, children }: { label: number; children: ReactNode }) {
   return (
     <>
-      <span className="flex items-center justify-center text-[9px] text-arena-muted">
-        {label}
-      </span>
+      <span className="bs-coord flex items-center justify-center">{label}</span>
       {children}
     </>
   );

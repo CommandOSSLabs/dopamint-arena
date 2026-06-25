@@ -16,7 +16,8 @@
 import { CoSignedUpdate } from "../core/tunnel";
 import { serializeStateUpdate, parseStateUpdate } from "../core/wire";
 import { blake2b256, verify, SignatureScheme } from "../core/crypto";
-import { concatBytes, toHex, fromHex } from "../core/bytes";
+import { concatBytes, toHex } from "../core/bytes";
+import { decodeSettleBody } from "./settleBinary";
 
 const LEAF = new TextEncoder().encode("sui_tunnel::transcript::leaf");
 const NODE = new TextEncoder().encode("sui_tunnel::transcript::node");
@@ -91,15 +92,18 @@ function normRoot(hex: string): string {
  * == lockedTotal if given). It does NOT prove game fairness: each step's app state
  * is hashed into stateHash and never revealed. ed25519 only (matches
  * verifyCoSignedUpdate); throws on any other scheme.
+ *
+ * Input is the binary settle body (`decodeSettleBody`) — the same bytes the FE
+ * builds, the backend submits, and the explorer archives to Walrus verbatim.
  */
 export function verifyTranscript(
-  record: ProofRecord,
+  blob: Uint8Array,
   params: {
     partyA: { publicKey: Uint8Array; scheme: number };
     partyB: { publicKey: Uint8Array; scheme: number };
     onchainRoot: string;
     lockedTotal?: bigint;
-  },
+  }
 ): TranscriptVerification {
   if (
     params.partyA.scheme !== SignatureScheme.ED25519 ||
@@ -107,6 +111,12 @@ export function verifyTranscript(
   ) {
     throw new Error("verifyTranscript currently supports ed25519 only");
   }
+
+  const decoded = decodeSettleBody(blob);
+  const norm = {
+    root: toHex(decoded.transcriptRoot),
+    entries: decoded.entries,
+  };
 
   const failures: string[] = [];
   const steps: TranscriptVerification["steps"] = [];
@@ -117,10 +127,10 @@ export function verifyTranscript(
   let prevNonce: bigint | null = null;
   let total: bigint | null = params.lockedTotal ?? null;
 
-  for (const e of record.entries) {
-    const message = fromHex(e.message);
-    const sigA = fromHex(e.sigA);
-    const sigB = fromHex(e.sigB);
+  for (const e of norm.entries) {
+    const message = e.message;
+    const sigA = e.sigA;
+    const sigB = e.sigB;
     const su = parseStateUpdate(message);
 
     const sigAValid = verify(sigA, message, params.partyA.publicKey);
@@ -146,9 +156,11 @@ export function verifyTranscript(
 
   const recomputed = toHex(transcriptRoot(leaves));
   const rootMatches =
-    recomputed === normRoot(record.root) && recomputed === normRoot(params.onchainRoot);
+    recomputed === normRoot(norm.root) &&
+    recomputed === normRoot(params.onchainRoot);
 
-  if (!rootMatches) failures.push("merkle root does not match the on-chain anchor");
+  if (!rootMatches)
+    failures.push("merkle root does not match the on-chain anchor");
   if (!allSigsValid) failures.push("one or more dual signatures are invalid");
   if (!nonceMonotonic) failures.push("nonces are not strictly increasing");
   if (!balancesConserved) failures.push("balance conservation violated");
@@ -159,7 +171,7 @@ export function verifyTranscript(
     allSigsValid,
     nonceMonotonic,
     balancesConserved,
-    stepCount: record.entries.length,
+    stepCount: norm.entries.length,
     steps,
     failures,
   };
@@ -189,6 +201,11 @@ export class Transcript {
 
   get length(): number {
     return this.entries.length;
+  }
+
+  /** Raw co-signed entries (Uint8Array message + sigs) for binary settle encoding. */
+  rawEntries(): TranscriptEntry[] {
+    return this.entries.slice();
   }
 
   /** The 32-byte Merkle root to anchor on-chain at close. */

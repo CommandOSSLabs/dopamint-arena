@@ -53,7 +53,7 @@ Implement the generic interface in `sui-tunnel-ts/src/protocol/Protocol.ts` (gre
 
 > **Invariant 1 — conservation.** `balances(state).a + .b === total` for EVERY reachable state. `OffchainTunnel.step` asserts it and throws otherwise. Move funds toward the winner only at terminal states; keep the split constant during play.
 
-> **Invariant 2 — determinism.** State must be a pure function of `(seed-or-tunnelId, ordered moves)`. Any randomness (shuffles, hazard fields, bomb timers) must be derived from a seed that is part of the state and of `encodeState`, so the counterparty and an on-chain disputer replay identically. Self-play may seed from `tunnelId`; PvP should derive the seed from a two-party commit-reveal for fairness.
+> **Invariant 2 — determinism.** State must be a pure function of `(seed-or-tunnelId, ordered moves)`. Any randomness (shuffles, hazard fields, bomb timers) must be derived from a seed that is part of the state and of `encodeState`, so the counterparty and an on-chain disputer replay identically. Seed from the `tunnelId` when the random field is **public and party-independent** (no seat can bias it and the id can't be ground) — e.g. blackjack's card stream, chicken-cross's hazard field, bomb-it's symmetric grid. Use a two-party **commit-reveal** only when a party holds **hidden state it could bias** (battleship fleets, poker hands — see ADRs 0003/0008/0009 and 0010).
 
 Encoding helpers (`protocolDomain`, `lengthPrefixedConcat`, `rollingDigest`) are exported from `Protocol.ts`. Use a fixed-size `encodeState` when state is bounded; use `rollingDigest` when state grows unbounded.
 
@@ -90,6 +90,16 @@ Copy the reference game directory and adapt. Read the chosen reference under `fr
 5. FE:  index.ts register(...); add `import "./<game>";` to frontend/src/games/index.ts (position = tile order).
 6. Gate (run all): see Gate below.
 ```
+
+**Attract / take-over (canonical for self-play).** To get the arcade
+hover → pause → "Play vs Bot" UX for free, the game opts into the shared cabinet:
+drive auto from your kit (step 3 already does), expose `pause`/`resume` + a manual
+mode on the hook, and register a `CabinetController` in your App
+(`useRegisterCabinet`). The `GameCabinet` wrap in `Desktop` is automatic; a game
+that registers nothing stays inert. Cabinet adopters: tic-tac-toe, bomb-it,
+chicken-cross. Reference: tic-tac-toe's `App.tsx` / `useBotGame.ts`; design in
+[superpowers/specs/2026-06-23-arena-attract-takeover-shell-design.md](superpowers/specs/2026-06-23-arena-attract-takeover-shell-design.md),
+decision in [decisions/0012-arena-attract-cabinet-seam.md](decisions/0012-arena-attract-cabinet-seam.md).
 
 ## Reporting TPS (heartbeat contract)
 
@@ -143,6 +153,32 @@ cd frontend && pnpm build      # tsc + vite; a passing build confirms single reg
 ```
 
 The on-chain self-play/PvP flow needs a wallet + the `sui_tunnel` package deployed at `VITE_TUNNEL_PACKAGE_ID` (grep `VITE_TUNNEL_PACKAGE_ID`) — test it manually in `pnpm dev`; headless tools cannot pass the wallet gate.
+
+## Deployment: relay session stickiness (local-first pairing)
+
+The relay sets `Set-Cookie: aff=<instance_id>` on the `/v1/mp` WebSocket handshake.
+For co-location to survive reconnects, the load balancer MUST be configured for
+cookie-based session affinity on `/v1/mp`, honoring the `aff` cookie (or its own
+stickiness cookie). Without it, reconnects are routed round-robin and co-located
+matches degrade to split (still correct, over the Redis fallback). Cross-origin
+deployments also need `SameSite=None; Secure` on the cookie.
+
+### Verifying stickiness locally
+
+`backend/tunnel-manager/smoke/` holds a self-contained harness that stands in for the
+production load balancer: `docker-compose.affinity-smoke.yml` runs Redis + two relay
+instances (`INSTANCE_ID=inst-a`/`inst-b`) behind haproxy configured for `aff`-cookie
+affinity (`haproxy.cfg`). Run it with:
+
+```bash
+backend/tunnel-manager/smoke/affinity-smoke.sh
+```
+
+The script (Docker required) brings the harness up, then asserts: a reconnect carrying
+`aff=<instance>` is pinned to that instance across repeated handshakes, while cookieless
+traffic load-balances across both. It exits non-zero on any failure and tears the harness
+down on exit. This validates the LB-honors-`aff` path; AWS ALB uses its own stickiness
+cookie, so re-verify affinity there after deploy.
 
 ## Anti-patterns
 

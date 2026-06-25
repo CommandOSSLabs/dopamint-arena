@@ -61,7 +61,7 @@ export class Matchmaker {
   static pair(
     agents: Agent[],
     count: number,
-    behaviors: BehaviorName[],
+    behaviors: BehaviorName[]
   ): { a: Agent; b: Agent; behavior: BehaviorName }[] {
     if (agents.length < 2) throw new Error("need >= 2 agents to form tunnels");
     const out: { a: Agent; b: Agent; behavior: BehaviorName }[] = [];
@@ -119,7 +119,7 @@ export class AgentSwarm {
         pr.b.participant.keyPair,
         pr.a.participant.address,
         pr.b.participant.address,
-        { a: initial, b: initial },
+        { a: initial, b: initial }
       );
       return {
         tunnelId,
@@ -134,19 +134,19 @@ export class AgentSwarm {
   }
 
   activityGenerator(
-    signMode: SignMode = "full",
+    signMode: SignMode = "full"
   ): ActivityGenerator<unknown, unknown> {
     return new ActivityGenerator(
       this.tunnels,
       this.counters,
       this.rng,
-      signMode,
+      signMode
     );
   }
 
   /** Auto-settle: produce a cooperative settlement artifact for every tunnel. */
   settleAll(
-    timestamp: bigint,
+    timestamp: bigint
   ): { tunnelId: string; settlement: CoSignedSettlement }[] {
     const out = this.swarmTunnels.map((s) => ({
       tunnelId: s.tunnelId,
@@ -174,7 +174,7 @@ export class AgentSwarm {
           {
             publicKey: s.tunnel.partyB.publicKey,
             scheme: s.tunnel.partyB.scheme,
-          },
+          }
         )
       ) {
         ok++;

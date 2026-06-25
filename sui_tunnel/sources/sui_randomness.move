@@ -11,8 +11,7 @@ use sui::hash;
 use sui::random::{Self, Random};
 use sui_tunnel::signature;
 
-const DOMAIN_QUANTUM_POKER_SESSION_SEED: vector<u8> =
-    b"sui_tunnel::quantum_poker::session_seed";
+const DOMAIN_QUANTUM_POKER_SESSION_SEED: vector<u8> = b"sui_tunnel::quantum_poker::session_seed";
 
 public struct QuantumPokerRandomnessSeed has copy, drop {
     tunnel_id: ID,

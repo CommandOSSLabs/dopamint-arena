@@ -91,8 +91,8 @@ fun price_decays_start_middle_end() {
     // time_remaining and is_purchasable views.
     assert_eq!(auction::time_remaining(&listing, MID_AT), END_AT - MID_AT);
     assert_eq!(auction::time_remaining(&listing, END_AT), 0);
-    assert_eq!(auction::is_purchasable(&listing, MID_AT), true);
-    assert_eq!(auction::is_purchasable(&listing, END_AT), false);
+    assert!(auction::is_purchasable(&listing, MID_AT));
+    assert!(!auction::is_purchasable(&listing, END_AT));
 
     destroy(listing);
     clock.destroy_for_testing();

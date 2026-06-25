@@ -32,6 +32,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/v1/settlements/:digest", get(detail))
         .route("/v1/settlements/:digest/transcript", get(transcript))
         .route("/v1/stats/explorer", get(stats))
+        .route("/v1/stats/history", get(stats_history))
         .route("/health/ready", get(|| async { StatusCode::OK }))
         .with_state(state)
 }
@@ -95,8 +96,11 @@ async fn transcript(State(s): State<ApiState>, Path(digest): Path<String>) -> Re
         .and_then(|r| r.error_for_status())
     {
         Ok(resp) => match resp.bytes().await {
+            // The blob is opaque to us — v2 transcripts are binary (octet-stream); legacy v1 blobs
+            // are JSON but the in-browser verifier reads them as bytes either way. Advertise the
+            // honest type so non-browser consumers (curl, CDN sniff) don't mishandle binary.
             Ok(body) => (
-                [(axum::http::header::CONTENT_TYPE, "application/json")],
+                [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
                 body,
             )
                 .into_response(),
@@ -111,6 +115,76 @@ async fn stats(State(s): State<ApiState>) -> Response {
         Ok(n) => Json(serde_json::json!({ "settledCount": n })).into_response(),
         Err(e) => {
             tracing::error!(error = %e, "settlement store error");
+            (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response()
+        }
+    }
+}
+
+/// Per-second TPS = the discrete derivative of the cumulative `total_actions` series. Pairs of
+/// adjacent buckets where time advanced; the negative-delta guard tolerates a counter reset.
+pub(crate) fn derive_tps_points(cumulative: &[(i64, i64)]) -> Vec<(i64, f64)> {
+    cumulative
+        .windows(2)
+        .filter_map(|w| {
+            let (t0, v0) = w[0];
+            let (t1, v1) = w[1];
+            let dt = t1 - t0;
+            (dt > 0).then(|| (t1, (v1 - v0).max(0) as f64 / dt as f64))
+        })
+        .collect()
+}
+
+/// metric_bucket is rolled off after 30 days, so that is the furthest back any range can reach.
+const HISTORY_RETENTION_SECS: i64 = 30 * 24 * 3600;
+/// Downsample target: a long range (up to 30d ≈ 2.6M rows) is bucketed to at most this many
+/// points server-side, bounding both the payload and the client's render cost.
+const HISTORY_TARGET_POINTS: i64 = 1000;
+
+#[derive(serde::Deserialize)]
+pub(crate) struct HistoryParams {
+    /// Trailing window in seconds (default 1h). Ignored when an absolute `from`+`to` is given.
+    window: Option<i64>,
+    /// Absolute range in epoch-seconds; both must be present to take effect.
+    from: Option<i64>,
+    to: Option<i64>,
+}
+
+/// Resolve query params to `(from, to, stride)` epoch-seconds. An absolute `from`+`to` wins over
+/// `window`; the result is bounded to the retained 30-day window and `stride` downsamples the
+/// range to ≤ HISTORY_TARGET_POINTS buckets. Pure (takes `now`) so the bounds are unit-testable.
+pub(crate) fn history_query_bounds(p: &HistoryParams, now: i64) -> (i64, i64, i64) {
+    let earliest = now - HISTORY_RETENTION_SECS;
+    let (raw_from, raw_to) = match (p.from, p.to) {
+        (Some(f), Some(t)) => (f, t),
+        _ => {
+            let window = p.window.unwrap_or(3600).clamp(1, HISTORY_RETENTION_SECS);
+            (now - window, now)
+        }
+    };
+    let to = raw_to.clamp(earliest, now);
+    let from = raw_from.clamp(earliest, to);
+    let span = (to - from).max(1);
+    // Ceil-divide so the bucket count never exceeds the target (floor would overshoot by one).
+    let stride = ((span + HISTORY_TARGET_POINTS - 1) / HISTORY_TARGET_POINTS).max(1);
+    (from, to, stride)
+}
+
+async fn stats_history(State(s): State<ApiState>, Query(p): Query<HistoryParams>) -> Response {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let (from, to, stride) = history_query_bounds(&p, now);
+    match s.store.metric_history(from, to, stride).await {
+        Ok(cum) => {
+            let points: Vec<_> = derive_tps_points(&cum)
+                .into_iter()
+                .map(|(t, v)| serde_json::json!({ "t": t.to_string(), "v": v }))
+                .collect();
+            Json(serde_json::json!({ "metric": "tps", "points": points })).into_response()
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "metric_history");
             (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response()
         }
     }
@@ -194,6 +268,52 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn derive_tps_points_is_the_counter_derivative() {
+        let cumulative = vec![(100i64, 10i64), (101, 25), (103, 55)];
+        assert_eq!(
+            derive_tps_points(&cumulative),
+            vec![(101i64, 15.0), (103i64, 15.0)]
+        );
+    }
+
+    fn params(window: Option<i64>, from: Option<i64>, to: Option<i64>) -> HistoryParams {
+        HistoryParams { window, from, to }
+    }
+
+    #[test]
+    fn history_bounds_default_is_trailing_hour() {
+        let now = 1_000_000;
+        let (from, to, stride) = history_query_bounds(&params(None, None, None), now);
+        assert_eq!((from, to), (now - 3600, now));
+        assert_eq!(stride, 4); // ceil(3600 / 1000)
+    }
+
+    #[test]
+    fn history_bounds_absolute_range_overrides_window() {
+        let now = 1_000_000;
+        let (from, to, stride) =
+            history_query_bounds(&params(Some(900), Some(now - 100), Some(now - 10)), now);
+        assert_eq!((from, to), (now - 100, now - 10));
+        assert_eq!(stride, 1); // 90s span ≤ target → full resolution
+    }
+
+    #[test]
+    fn history_bounds_clamp_future_to_now_and_far_past_to_retention() {
+        let now = 5_000_000;
+        let (from, to, _) = history_query_bounds(&params(None, Some(0), Some(now + 99_999)), now);
+        assert_eq!(to, now);
+        assert_eq!(from, now - HISTORY_RETENTION_SECS);
+    }
+
+    #[test]
+    fn history_bounds_downsamples_long_range_within_target() {
+        let now = 5_000_000;
+        let (from, to, stride) =
+            history_query_bounds(&params(Some(HISTORY_RETENTION_SECS), None, None), now);
+        assert!((to - from) / stride <= HISTORY_TARGET_POINTS);
     }
 
     #[tokio::test]

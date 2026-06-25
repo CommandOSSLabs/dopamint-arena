@@ -31,7 +31,8 @@ describe("testHarness", () => {
       stateHash: (s) => defaultStateHash(protocol, s),
       createBot: (seat, ctx) =>
         ({
-          plan: (state) => protocol.randomMove(state, seat, ctx.rngForSeat(seat)),
+          plan: (state) =>
+            protocol.randomMove(state, seat, ctx.rngForSeat(seat)),
           confirm: () => {},
           abort: () => {},
         }) as GameBot<TicTacToeState, TicTacToeMove>,

@@ -1,29 +1,41 @@
-import { describe, it, before, after } from "node:test";
+import { describe, it, afterEach } from "node:test";
 import assert from "node:assert";
+import { setAllConfig } from "@pulumi/pulumi/runtime/config.js";
 import { getConfig } from "./config.js";
 
-describe("config", () => {
-  before(() => {
-    process.env.PULUMI_CONFIG = JSON.stringify({
-      "dopamint:environment": "test",
-      "dopamint:domain": "test.example",
-      "dopamint:db-instance-class": "db.t3.medium",
-      "dopamint:db-serverless": "false",
-      "dopamint:cache-node-type": "cache.t3.micro",
-      "dopamint:benchmark-instance-type": "t3.micro",
-      "dopamint:benchmark-min-size": "0",
-      "dopamint:benchmark-max-size": "1",
-      "dopamint:settler-key": "test-settler-key",
-    });
-    process.env.PULUMI_CONFIG_SECRET_KEYS = JSON.stringify(["dopamint:settler-key"]);
-  });
+function setPulumiConfig(
+  config: Record<string, string>,
+  secrets: string[] = [],
+) {
+  setAllConfig(config, secrets);
+}
 
-  after(() => {
-    delete process.env.PULUMI_CONFIG;
-    delete process.env.PULUMI_CONFIG_SECRET_KEYS;
+function clearPulumiConfig() {
+  setAllConfig({}, []);
+}
+
+const baseConfig: Record<string, string> = {
+  "dopamint:environment": "test",
+  "dopamint:domain": "test.example",
+  "dopamint:db-instance-class": "db.t3.medium",
+  "dopamint:db-serverless": "false",
+  "dopamint:cache-node-type": "cache.t3.micro",
+  "dopamint:benchmark-instance-type": "t3.micro",
+  "dopamint:benchmark-min-size": "0",
+  "dopamint:benchmark-max-size": "1",
+};
+
+describe("config", () => {
+  afterEach(() => {
+    clearPulumiConfig();
   });
 
   it("reads required environment config", () => {
+    setPulumiConfig({
+      ...baseConfig,
+      "dopamint:backend-image-tag": "test-sha",
+    });
+
     const cfg = getConfig();
 
     assert.strictEqual(cfg.environment, "test");
@@ -34,22 +46,43 @@ describe("config", () => {
     assert.strictEqual(cfg.benchmarkInstanceType, "t3.micro");
     assert.strictEqual(cfg.benchmarkMinSize, 0);
     assert.strictEqual(cfg.benchmarkMaxSize, 1);
+    assert.strictEqual(cfg.backendImageTag, "test-sha");
   });
 
-  it("applies default optional values", () => {
+  it("leaves backend image tag unset for live resolution", () => {
+    setPulumiConfig(baseConfig);
+
     const cfg = getConfig();
 
-    assert.strictEqual(cfg.backendImageTag, "latest");
+    assert.strictEqual(cfg.backendImageTag, undefined);
+  });
+
+  it("applies the benchmark image version default", () => {
+    setPulumiConfig(baseConfig);
+
+    const cfg = getConfig();
+
     assert.strictEqual(cfg.benchmarkImageVersion, "1.0.1");
   });
 
   // The settler key is sourced from secret config (never hardcoded), so it can be
   // wired into Secrets Manager instead of the task definition.
   it("exposes the settler key from secret config", async () => {
+    setPulumiConfig(
+      {
+        ...baseConfig,
+        "dopamint:backend-image-tag": "test-sha",
+        "dopamint:settler-key": "test-settler-key",
+      },
+      ["dopamint:settler-key"],
+    );
+
     const cfg = getConfig();
 
     assert.ok(cfg.settlerKey, "settler key must be read from secret config");
-    const value = await (cfg.settlerKey as unknown as { promise(): Promise<string> }).promise();
+    const value = await (
+      cfg.settlerKey as unknown as { promise(): Promise<string> }
+    ).promise();
     assert.strictEqual(value, "test-settler-key");
   });
 });

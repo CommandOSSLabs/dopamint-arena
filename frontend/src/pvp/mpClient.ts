@@ -125,6 +125,12 @@ export class MpClient {
   readonly #ephemeral: KeyPair;
   readonly #sign: (msg: Uint8Array) => Uint8Array;
   #connected = false;
+  #intentionalClose = false;
+
+  /** Fires when the socket closes UNEXPECTEDLY (relay/connection drop), not on our own
+   *  close(). The relay has no rejoin-by-matchId, so a mid-match drop can't be resumed —
+   *  consumers use this only to surface a clear "connection lost" state instead of a stall. */
+  onClose: (() => void) | null = null;
 
   // Multiplexing (spec decision #6): route inbound relay frames by matchId, and hand each
   // match.found to the next waiting quickMatch (FIFO). This lets ONE socket run MANY concurrent
@@ -333,13 +339,21 @@ export class MpClient {
   channel(matchId: string): PvpChannel {
     this.#activeMatches.add(matchId);
     let engineOnFrame: ((bytes: Uint8Array) => void) | null = null;
+    // Frames that arrive before the engine wires onFrame (the tunnel is constructed only after
+    // on-chain activation, which the peer may finish first — slower with sponsored MTPS
+    // funding). Without buffering, the opponent's first MOVE is dropped and never ACKed, leaving
+    // the proposer stuck on "a proposal is already awaiting ACK". Buffer, then flush on wire.
+    const frameBuffer: Uint8Array[] = [];
     const peerCbs = new Set<
       (msg: Exclude<PeerMessage, { t: "frame" }>) => void
     >();
     this.#relayHandlers.set(matchId, (payload) => {
       const o = JSON.parse(payload) as PeerMessage;
-      if (o.t === "frame") engineOnFrame?.(te.encode(o.data));
-      else peerCbs.forEach((cb) => cb(o));
+      if (o.t === "frame") {
+        const bytes = te.encode(o.data);
+        if (engineOnFrame) engineOnFrame(bytes);
+        else frameBuffer.push(bytes);
+      } else peerCbs.forEach((cb) => cb(o));
     });
     const relaySend = (obj: PeerMessage) =>
       this.#send({ type: "relay", matchId, payload: JSON.stringify(obj) });
@@ -355,6 +369,11 @@ export class MpClient {
         },
         onFrame: (cb) => {
           engineOnFrame = cb;
+          // Deliver any frames that arrived before the engine was ready (activation race).
+          if (frameBuffer.length) {
+            const pending = frameBuffer.splice(0);
+            for (const b of pending) cb(b);
+          }
         },
       },
       sendPeer: (msg) => relaySend(msg),

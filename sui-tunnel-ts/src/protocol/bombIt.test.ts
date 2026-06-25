@@ -15,6 +15,7 @@ import {
   BOMB_IT_MIN_STAKE,
   BLAST_RADIUS,
   FUSE_TICKS,
+  SPAWN_B,
   dest,
   canMoveTo,
   blastCellsFor,
@@ -23,11 +24,11 @@ import {
   type BombItPlayer,
   type BombItMove,
   type BombItState,
-} from "./bombIt.ts";
+} from "./bombIt";
 
 test("border ring and interior even-even cells are walls", () => {
   assert.equal(isBorder(0, 3), true);
-  assert.equal(isBorder(8, 8), true);
+  assert.equal(isBorder(GRID_H - 1, GRID_W - 1), true);
   assert.equal(isBorder(4, 4), false);
   assert.equal(isPillar(2, 2), true);
   assert.equal(isPillar(1, 1), false); // spawn cell is floor
@@ -42,12 +43,20 @@ test("buildGrid: border + lattice are walls, spawns are floor", () => {
   }
   assert.equal(g[idx(2, 2)], CELL_WALL); // pillar
   assert.equal(g[idx(1, 1)], CELL_FLOOR); // spawn A
-  assert.equal(g[idx(7, 7)], CELL_FLOOR); // spawn B
+  assert.equal(g[idx(SPAWN_B.row, SPAWN_B.col)], CELL_FLOOR); // spawn B
 });
 
 test("buildGrid keeps the spawn escape L crate-free", () => {
   const g = buildGrid(987654n);
-  for (const [r, c] of [[1, 1], [1, 2], [2, 1], [7, 7], [7, 6], [6, 7]]) {
+  const escapeL: Array<[number, number]> = [
+    [1, 1],
+    [1, 2],
+    [2, 1],
+    [SPAWN_B.row, SPAWN_B.col],
+    [SPAWN_B.row, SPAWN_B.col - 1],
+    [SPAWN_B.row - 1, SPAWN_B.col],
+  ];
+  for (const [r, c] of escapeL) {
     assert.notEqual(g[idx(r, c)], CELL_CRATE, `(${r},${c}) must be crate-free`);
   }
 });
@@ -56,7 +65,11 @@ test("buildGrid is 180°-rotationally symmetric and seed-deterministic", () => {
   const g = buildGrid(42n);
   for (let r = 0; r < GRID_H; r++) {
     for (let c = 0; c < GRID_W; c++) {
-      assert.equal(g[idx(r, c)], g[idx(GRID_H - 1 - r, GRID_W - 1 - c)], `(${r},${c}) mirror`);
+      assert.equal(
+        g[idx(r, c)],
+        g[idx(GRID_H - 1 - r, GRID_W - 1 - c)],
+        `(${r},${c}) mirror`
+      );
     }
   }
   assert.deepEqual(Array.from(buildGrid(42n)), Array.from(buildGrid(42n)));
@@ -136,7 +149,10 @@ test("resolveExplosions leaves un-fused bombs untouched", () => {
   assert.equal(cells.size, 0);
 });
 
-const CTX = { tunnelId: "0xabc123", initialBalances: { a: BOMB_IT_MIN_STAKE, b: BOMB_IT_MIN_STAKE } };
+const CTX = {
+  tunnelId: "0xabc123",
+  initialBalances: { a: BOMB_IT_MIN_STAKE, b: BOMB_IT_MIN_STAKE },
+};
 
 test("initialState locks the total, spawns two living players, no bombs/winner", () => {
   const p = new BombItProtocol();
@@ -148,7 +164,7 @@ test("initialState locks the total, spawns two living players, no bombs/winner",
   assert.equal(s.players[1].alive, true);
   assert.equal(s.bombs.length, 0);
   assert.equal(s.winner, null);
-  assert.equal(s.grid.length, 81);
+  assert.equal(s.grid.length, GRID_W * GRID_H);
 });
 
 test("encodeState is canonical and starts with the domain tag", () => {
@@ -157,27 +173,43 @@ test("encodeState is canonical and starts with the domain tag", () => {
   const b = p.initialState(CTX);
   assert.deepEqual(Array.from(p.encodeState(a)), Array.from(p.encodeState(b)));
   const tag = new TextEncoder().encode("sui_tunnel::proto::bomb_it.v1");
-  assert.deepEqual(Array.from(p.encodeState(a).slice(0, tag.length)), Array.from(tag));
+  assert.deepEqual(
+    Array.from(p.encodeState(a).slice(0, tag.length)),
+    Array.from(tag)
+  );
 });
 
 test("encodeState differs when a player position differs", () => {
   const p = new BombItProtocol();
   const s = p.initialState(CTX);
-  const moved = { ...s, players: [{ ...s.players[0], col: 2 }, s.players[1]] as typeof s.players };
-  assert.notDeepEqual(Array.from(p.encodeState(s)), Array.from(p.encodeState(moved)));
+  const moved = {
+    ...s,
+    players: [{ ...s.players[0], col: 2 }, s.players[1]] as typeof s.players,
+  };
+  assert.notDeepEqual(
+    Array.from(p.encodeState(s)),
+    Array.from(p.encodeState(moved))
+  );
 });
 
 test("balances return the stored split; isTerminal tracks winner", () => {
   const p = new BombItProtocol();
   const s = p.initialState(CTX);
-  assert.deepEqual(p.balances(s), { a: BOMB_IT_MIN_STAKE, b: BOMB_IT_MIN_STAKE });
+  assert.deepEqual(p.balances(s), {
+    a: BOMB_IT_MIN_STAKE,
+    b: BOMB_IT_MIN_STAKE,
+  });
   assert.equal(p.isTerminal(s), false);
   assert.equal(p.isTerminal({ ...s, winner: "A" }), true);
   assert.equal(p.isTerminal({ ...s, winner: "draw" }), true);
 });
 
 /** Run the world forward applying the SAME move object both seats would (only one field set). */
-function advance(p: BombItProtocol, s: BombItState, m: BombItMove): BombItState {
+function advance(
+  p: BombItProtocol,
+  s: BombItState,
+  m: BombItMove
+): BombItState {
   const by = m.a !== undefined ? "A" : "B";
   return p.applyMove(s, m, by);
 }
@@ -258,7 +290,7 @@ test("applyMove throws on a terminal state and on a forged opponent field", () =
   assert.throws(() => p.applyMove(s, { a: "north" }, "B")); // B may not submit A's action
 });
 
-test("the tick cap forces a draw and conserves balances across a full playout", () => {
+test("a full hunter-bot playout terminates (kill or cap) and conserves balances every tick", () => {
   const p = new BombItProtocol();
   let s = p.initialState(CTX);
   const rng = mulberry32ForTest(5);
@@ -273,6 +305,61 @@ test("the tick cap forces a draw and conserves balances across a full playout", 
   assert.equal(p.isTerminal(s), true);
   const { a, b } = p.balances(s);
   assert.equal(a + b, s.total);
+});
+
+test("hunter bot may bomb an in-line opponent when rng allows an attack", () => {
+  const p = new BombItProtocol();
+  const base = p.initialState(CTX);
+  const s: BombItState = {
+    ...base,
+    players: [spawnAt(1, 1), spawnAt(1, 3)],
+    grid: clearInterior(base.grid),
+  };
+  let sawBomb = false;
+  for (let seed = 0; seed < 64; seed++) {
+    const m = p.randomMove(s, "A", mulberry32ForTest(seed)) as BombItMove;
+    if (m.a === "bomb") {
+      sawBomb = true;
+      break;
+    }
+  }
+  assert.ok(sawBomb, "expected at least one seed to bomb an in-line opponent");
+});
+
+test("hunter bot flees an imminent blast instead of bombing", () => {
+  const p = new BombItProtocol();
+  const base = p.initialState(CTX);
+  const s: BombItState = {
+    ...base,
+    players: [spawnAt(1, 1), spawnAt(5, 5)],
+    grid: clearInterior(base.grid),
+    bombs: [{ row: 1, col: 2, fuse: 1, owner: "B" }],
+  };
+  const m = p.randomMove(s, "A", mulberry32ForTest(1)) as BombItMove;
+  assert.notEqual(m.a, "bomb");
+  assert.notEqual(m.a, "stay");
+});
+
+test("a hunter-bot match drops bombs and destroys crates", () => {
+  const p = new BombItProtocol();
+  let s = p.initialState(CTX);
+  const rng = mulberry32ForTest(5);
+  const crates0 = Array.from(s.grid).filter((c) => c === CELL_CRATE).length;
+  let bombs = 0;
+  let guard = 0;
+  while (!p.isTerminal(s) && guard < Number(BOMB_IT_TICK_CAP) + 5) {
+    const by = s.tick % 2n === 0n ? "A" : "B";
+    const m = p.randomMove(s, by, rng) as BombItMove;
+    if (m.a === "bomb" || m.b === "bomb") bombs++;
+    s = p.applyMove(s, m, by);
+    guard++;
+  }
+  const cratesEnd = Array.from(s.grid).filter((c) => c === CELL_CRATE).length;
+  assert.ok(bombs > 0, "bots must drop at least one bomb over a match");
+  assert.ok(
+    crates0 - cratesEnd > 0,
+    "bots must destroy at least one crate over a match"
+  );
 });
 
 // --- local test helpers ---

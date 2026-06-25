@@ -5,6 +5,7 @@ interface GameCardScaleProps {
   className?: string;
   targetWidth?: number;
   targetHeight?: number;
+  isPortrait?: boolean;
 }
 
 export const GameCardScale: React.FC<GameCardScaleProps> = ({
@@ -12,6 +13,7 @@ export const GameCardScale: React.FC<GameCardScaleProps> = ({
   className = "",
   targetWidth = 500,
   targetHeight = 750,
+  isPortrait = targetWidth < targetHeight,
 }) => {
   const [scale, setScale] = useState(1);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -26,9 +28,10 @@ export const GameCardScale: React.FC<GameCardScaleProps> = ({
       const parentW = parent.clientWidth || window.innerWidth;
       const parentH = parent.clientHeight || window.innerHeight;
 
-      // Calculate scale factors to fit within the parent container (with a safety margin)
-      const scaleW = (parentW - 24) / targetWidth;
-      const scaleH = (parentH - 24) / targetHeight;
+      // Calculate scale factors to fit within the parent container (no margin safety on portrait/mobile)
+      const margin = isPortrait ? 0 : 24;
+      const scaleW = (parentW - margin) / targetWidth;
+      const scaleH = (parentH - margin) / targetHeight;
 
       // Scale down to fit, or scale up to 2x maximum
       const factor = Math.min(scaleW, scaleH, 2);

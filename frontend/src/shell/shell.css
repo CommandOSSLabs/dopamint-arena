@@ -1,0 +1,200 @@
+/* Shell layout ------------------------------------------------------------ */
+/* Fills the game window; the wrapped game renders inside .shell-board. */
+.shell-stage {
+  position: relative;
+  height: 100%;
+  width: 100%;
+}
+
+.shell-board {
+  height: 100%;
+  width: 100%;
+  /* Smooth dim transition to avoid jarring opacity jumps. */
+  transition:
+    opacity 0.14s ease,
+    filter 0.14s ease;
+}
+
+/* Board recedes behind glass while the overlay is up — still legible (you must
+   see the frozen cabinet), just clearly "paused behind glass", not erased. */
+.shell-stage.shell-inviting .shell-board {
+  opacity: 0.62;
+  filter: saturate(0.7) blur(2px);
+}
+
+/* Attract screen ---------------------------------------------------------- */
+/* Full-cover CRT scrim (vignette + scanlines) over the frozen frame, with a
+   centered neon console. Sharp corners to match the arcade chrome
+   (--radius: 0). The cabinet's "insert coin" moment. */
+.shell-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  overflow: hidden;
+  animation: shell-overlay-in 0.16s ease-out;
+}
+
+/* Vignette + fine scanlines, drawn behind the console (pointer-transparent). */
+.shell-overlay::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    repeating-linear-gradient(
+      0deg,
+      rgba(0, 0, 0, 0.16) 0px,
+      rgba(0, 0, 0, 0.16) 1px,
+      transparent 1px,
+      transparent 3px
+    ),
+    radial-gradient(
+      ellipse at center,
+      rgba(12, 15, 29, 0.42) 0%,
+      rgba(12, 15, 29, 0.82) 100%
+    );
+}
+
+@keyframes shell-overlay-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* The neon console holding the prompt + actions. */
+.shell-console {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 11px;
+  max-width: calc(100% - 16px);
+  padding: 16px 22px;
+  background: linear-gradient(
+    180deg,
+    rgba(22, 19, 48, 0.94),
+    rgba(12, 12, 26, 0.96)
+  );
+  border: 1px solid rgba(155, 139, 255, 0.55);
+  box-shadow:
+    0 18px 50px rgba(0, 0, 0, 0.5),
+    0 0 40px rgba(97, 61, 255, 0.22);
+  animation: shell-console-in 0.2s cubic-bezier(0.2, 0.9, 0.3, 1.3);
+}
+
+@keyframes shell-console-in {
+  from {
+    transform: translateY(6px) scale(0.96);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+  }
+}
+
+/* Primary CTA: the glowing take-the-seat button. */
+.shell-mode-play {
+  display: inline-flex;
+  align-items: center;
+  gap: 11px;
+  padding: 10px 20px;
+  border: 1px solid rgba(155, 139, 255, 0.6);
+  background: linear-gradient(
+    135deg,
+    rgba(97, 61, 255, 0.92),
+    rgba(176, 107, 255, 0.7) 55%,
+    rgba(246, 164, 255, 0.6)
+  );
+  color: #fff;
+  font-family: var(--wal-font-sans, "Outfit", system-ui, sans-serif);
+  font-weight: 800;
+  font-size: 15px;
+  cursor: pointer;
+  box-shadow:
+    0 6px 20px rgba(97, 61, 255, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.25);
+  transition:
+    transform 0.12s ease,
+    box-shadow 0.12s ease,
+    filter 0.12s ease;
+}
+
+.shell-mode-play:hover {
+  transform: translateY(-1.5px);
+  filter: brightness(1.08);
+  box-shadow:
+    0 10px 28px rgba(97, 61, 255, 0.6),
+    0 0 26px rgba(246, 164, 255, 0.32),
+    inset 0 1px 0 rgba(255, 255, 255, 0.3);
+}
+
+.shell-mode-play:active {
+  transform: translateY(0);
+}
+
+.shell-mode-play .ic {
+  font-size: 16px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.shell-mode-play .txt {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  text-align: left;
+}
+
+.shell-mode-play small {
+  font-weight: 400;
+  font-size: 9.5px;
+  letter-spacing: 0.02em;
+  color: rgba(255, 255, 255, 0.78);
+  font-family: var(--wal-font-mono, "JetBrains Mono", monospace);
+}
+
+/* Secondary: a quiet ghost text link — back to the self-playing floor. */
+.shell-link-home {
+  background: none;
+  border: none;
+  padding: 2px 8px;
+  color: rgba(202, 177, 255, 0.65);
+  font-family: var(--wal-font-mono, "JetBrains Mono", monospace);
+  font-size: 11px;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+  transition: color 0.12s ease;
+}
+
+.shell-link-home:hover {
+  color: var(--wal-lilac, #cab1ff);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* In-game Home button ----------------------------------------------------- */
+.shell-home-btn {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 7px;
+  padding: 4px 9px;
+  font-size: 10px;
+  font-family: var(--wal-font-mono, "JetBrains Mono", monospace);
+  color: var(--foreground, #faf8f5);
+  cursor: pointer;
+}
+
+.shell-home-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+}

@@ -9,6 +9,54 @@ interface CardDisplayProps {
   isPlayer?: boolean;
 }
 
+const SUIT_SYMBOLS: Record<string, string> = {
+  clubs: "♣",
+  diamonds: "♦",
+  hearts: "♥",
+  spades: "♠",
+};
+
+function CssCard({
+  name,
+  suit,
+  size = "md",
+  hidden,
+}: {
+  name: string;
+  suit: string;
+  size?: "sm" | "md";
+  hidden?: boolean;
+}) {
+  if (hidden || !name || !suit) {
+    return (
+      <span
+        className="qp-card qp-card--back"
+        style={{
+          width: size === "sm" ? "3.6rem" : "4.6rem",
+          height: size === "sm" ? "5.0rem" : "6.4rem",
+        }}
+      />
+    );
+  }
+  const symbol = SUIT_SYMBOLS[suit] || "";
+  const isRed = suit === "hearts" || suit === "diamonds";
+  const displayRank = name === "10" ? "T" : name;
+
+  return (
+    <span
+      className={`qp-card${isRed ? " qp-card--red" : ""}`}
+      style={{
+        width: size === "sm" ? "3.6rem" : "4.6rem",
+        height: size === "sm" ? "5.0rem" : "6.4rem",
+        fontSize: size === "sm" ? "22px" : "28px",
+      }}
+    >
+      {displayRank}
+      {symbol}
+    </span>
+  );
+}
+
 export const CardDisplay: React.FC<CardDisplayProps> = ({
   title,
   cards,
@@ -37,90 +85,40 @@ export const CardDisplay: React.FC<CardDisplayProps> = ({
   const cardDetails = cards.map((cardIndex) => {
     const suit = suits[Math.floor(cardIndex / 13)];
     const name = names[cardIndex % 13];
-    return { name, suit, path: `/cards/${suit}/${suit}-${name}.svg` };
+    return { name, suit };
   });
 
   return (
     <div className={"flex flex-col items-center w-full relative " + className}>
       {/* Title */}
-      <h3 className="text-sm uppercase font-semibold tracking-wider text-emerald-200/60 mb-2">
-        {title}
-      </h3>
+      <h3 className="qp-eyebrow mb-2">{title}</h3>
 
-      <div className="relative h-28 md:h-36 flex justify-center items-center">
-        {/* Card Stack Mobile */}
-        <div
-          className="relative md:hidden flex justify-center"
-          style={{ width: `${cards.length * 20 + 80}px`, height: "110px" }}
-        >
-          {cardDetails.map((card, index) => {
-            const centerIndex = (cards.length - 1) / 2;
-            const rotation = isPlayer ? (index - centerIndex) * 6 : 0;
-            const translateY = isPlayer ? Math.abs(index - centerIndex) * 3 : 0;
-            return (
-              <img
-                key={index}
-                src={card.path}
-                alt={`${card.name} of ${card.suit}`}
-                className="absolute w-20 rounded-md transition-all duration-300 hover:-translate-y-2"
-                style={{
-                  left: `${index * 20}px`,
-                  zIndex: index,
-                  filter: "drop-shadow(0px 6px 10px rgba(0,0,0,0.4))",
-                  transform: isPlayer
-                    ? `rotate(${rotation}deg) translateY(${translateY}px)`
-                    : undefined,
-                  transformOrigin: "bottom center",
-                }}
-              />
-            );
-          })}
-          {cards.length > 0 && (
-            <div className="absolute -right-4 top-1/2 -translate-y-1/2 flex items-center justify-center w-8 h-8 rounded-full border-2 border-[#d4af37] bg-[#2a1708] text-[#d4af37] font-bold text-sm shadow-lg z-10">
-              {sum}
-            </div>
-          )}
+      <div className="flex items-center gap-3">
+        <div className="qp-cardrow">
+          {cardDetails.map((card, index) => (
+            <CssCard
+              key={index}
+              name={card.name}
+              suit={card.suit}
+              size={isPlayer ? "md" : "sm"}
+            />
+          ))}
         </div>
 
-        {/* Card Stack Desktop */}
-        <div
-          className="relative hidden md:block"
-          style={{ width: `${cards.length * 24 + 96}px`, height: "140px" }}
-        >
-          {cardDetails.map((card, index) => {
-            const centerIndex = (cards.length - 1) / 2;
-            const rotation = isPlayer ? (index - centerIndex) * 6 : 0;
-            const translateY = isPlayer ? Math.abs(index - centerIndex) * 4 : 0;
-            return (
-              <img
-                key={index}
-                src={card.path}
-                alt={`${card.name} of ${card.suit}`}
-                className="absolute w-24 rounded-lg transition-all duration-300 hover:-translate-y-3"
-                style={{
-                  left: `${index * 24}px`,
-                  zIndex: index,
-                  filter: "drop-shadow(0px 10px 15px rgba(0,0,0,0.5))",
-                  transform: isPlayer
-                    ? `rotate(${rotation}deg) translateY(${translateY}px)`
-                    : undefined,
-                  transformOrigin: "bottom center",
-                }}
-              />
-            );
-          })}
-          {cards.length > 0 && (
-            <div className="absolute -right-5 top-1/2 -translate-y-1/2 flex items-center justify-center w-9 h-9 rounded-full border-2 border-[#d4af37] bg-[#2a1708] text-[#d4af37] font-bold text-base shadow-lg z-10">
-              {sum}
-            </div>
-          )}
-        </div>
+        {cards.length > 0 && (
+          <div
+            className="flex items-center justify-center w-10 h-10 rounded-full border-2 border-[var(--qp-ink)] bg-[#fffdf6] text-[var(--qp-ink)] font-bold text-lg md:text-xl z-10"
+            style={{ filter: "url(#qpRough)" }}
+          >
+            {sum}
+          </div>
+        )}
       </div>
 
       {/* Winning Indicator */}
       {isWinning && (
-        <div className="mt-2 text-xs md:text-sm font-bold text-[#d4af37] flex items-center gap-1 animate-pulse">
-          🏆 Winner
+        <div className="mt-2 text-xs md:text-sm font-bold text-[var(--qp-amber)] flex items-center gap-1 qp-win">
+          Winner
         </div>
       )}
     </div>

@@ -5,11 +5,8 @@ import { BattleshipWindow } from "./BattleshipWindow";
 register({
   id: "battleship",
   name: "Battleship",
+  description: "Hide your fleet, commit-reveal every shot.",
   icon: "🚢",
   image: "/games/battleship.png",
   Window: BattleshipWindow,
-  // Two 10×10 boards: open wide+tall enough to show them side-by-side, and keep a
-  // floor that still fits one board stacked (BattleView reflows via container queries).
-  defaultSize: { w: 6, h: 7 },
-  minSize: { w: 4, h: 5 },
 });

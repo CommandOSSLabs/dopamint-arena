@@ -23,11 +23,23 @@
 /// 4. Route payments between any two parties through intermediaries
 /// 5. Settle links independently
 /// 6. Close the network
+///
+/// ## Funds
+///
+/// This module is a pure orchestration and accounting layer. It never custodies or
+/// moves `Coin`. Real funds live in the underlying two-party `Tunnel<T>` of each link,
+/// and all fund movement is executed there: routed HTLCs via `tunnel::lock_htlc` /
+/// `claim_htlc_in_tunnel` / `expire_htlc_in_tunnel` (see `example_multi_hop_payment`),
+/// and settlement via `tunnel::close_cooperative_and_transfer` or the dispute path.
+/// `add_link_for_tunnel` and `settle_link_checked` bind this layer to those real
+/// tunnels and validate against their invariants without touching the funds. The
+/// `RoutedPayment` / `hop::HTLC` machinery remains off-chain planning data.
 module sui_tunnel::example_multi_party_channel;
 
 use sui::clock::Clock;
 use sui::event;
 use sui_tunnel::hop;
+use sui_tunnel::tunnel::{Self, Tunnel};
 
 // === Error definitions (see sui_tunnel::errors for the canonical registry) ===
 
@@ -53,7 +65,13 @@ const EMaxParticipantsExceeded: vector<u8> = b"The maximum number of participant
 const EInvalidHop: vector<u8> = b"The hop is invalid.";
 
 #[error]
-const EMaxHopsExceeded: vector<u8> = b"The maximum number of hops has been exceeded.";
+const EMaxLinksExceeded: vector<u8> = b"The maximum number of links has been exceeded.";
+
+#[error]
+const ELinkTunnelMismatch: vector<u8> = b"The link's tunnel id does not match the provided tunnel.";
+
+#[error]
+const EBalanceSumMismatch: vector<u8> = b"The party balances do not sum to the total tunnel balance.";
 
 // ============================================
 // CONSTANTS
@@ -332,11 +350,7 @@ public fun register_participant(
 
     // Check not already registered
     let len = network.participants.length();
-    let mut i = 0;
-    while (i < len) {
-        assert!(network.participants[i].address != participant_address, EAlreadyExists);
-        i = i + 1;
-    };
+    assert!(!network.participants.any!(|p| p.address == participant_address), EAlreadyExists);
 
     let index = len;
     let routing_node = hop::create_routing_node(participant_address, fee_policy);
@@ -367,7 +381,7 @@ public fun add_link(
 ) {
     assert!(ctx.sender() == network.coordinator, ENotAuthorized);
     assert!(network.status == NETWORK_OPEN, EInvalidState);
-    assert!(network.links.length() < MAX_LINKS, EMaxHopsExceeded);
+    assert!(network.links.length() < MAX_LINKS, EMaxLinksExceeded);
     assert!(party_a != party_b, EInvalidParameter);
 
     // Both parties must be registered participants
@@ -376,18 +390,10 @@ public fun add_link(
 
     // Check no duplicate link between same parties
     let link_count = network.links.length();
-    let mut i = 0;
-    while (i < link_count) {
-        let link = &network.links[i];
-        assert!(
-            !(
-                (link.party_a == party_a && link.party_b == party_b) ||
-            (link.party_a == party_b && link.party_b == party_a),
-            ),
-            EAlreadyExists,
-        );
-        i = i + 1;
-    };
+    assert!(!network.links.any!(|link| {
+        (link.party_a == party_a && link.party_b == party_b) ||
+            (link.party_a == party_b && link.party_b == party_a)
+    }), EAlreadyExists);
 
     let index = link_count;
     network
@@ -398,6 +404,51 @@ public fun add_link(
             party_b,
             capacity_a_to_b,
             capacity_b_to_a,
+            status: LINK_ACTIVE,
+            total_routed: 0,
+            index,
+        });
+
+    event::emit(LinkAdded { party_a, party_b, tunnel_id });
+}
+
+/// Adds a link bound to a REAL funded `Tunnel<T>`, deriving the parties, capacities,
+/// and tunnel id from the live tunnel rather than caller-supplied numbers. This anchors
+/// the accounting layer to actual on-chain funds. It moves no `Coin`: real fund movement
+/// happens inside the tunnel itself (`tunnel::lock_htlc` for routed HTLCs,
+/// `tunnel::close_cooperative_and_transfer` / the dispute path for settlement). Both
+/// tunnel parties must be registered participants. Coordinator only.
+public fun add_link_for_tunnel<T>(
+    network: &mut ChannelNetwork,
+    tunnel: &Tunnel<T>,
+    ctx: &TxContext,
+) {
+    assert!(ctx.sender() == network.coordinator, ENotAuthorized);
+    assert!(network.status == NETWORK_OPEN, EInvalidState);
+    assert!(network.links.length() < MAX_LINKS, EMaxLinksExceeded);
+
+    let party_a = tunnel.party_a().party_address();
+    let party_b = tunnel.party_b().party_address();
+    assert!(party_a != party_b, EInvalidParameter);
+    assert!(is_participant(network, party_a), ENotFound);
+    assert!(is_participant(network, party_b), ENotFound);
+
+    assert!(!network.links.any!(|link| {
+        (link.party_a == party_a && link.party_b == party_b) ||
+            (link.party_a == party_b && link.party_b == party_a)
+    }), EAlreadyExists);
+
+    let state = tunnel.state();
+    let index = network.links.length();
+    let tunnel_id = tunnel.id().to_bytes();
+    network
+        .links
+        .push_back(ChannelLink {
+            tunnel_id,
+            party_a,
+            party_b,
+            capacity_a_to_b: tunnel::state_party_a_balance(state),
+            capacity_b_to_a: tunnel::state_party_b_balance(state),
             status: LINK_ACTIVE,
             total_routed: 0,
             index,
@@ -644,6 +695,54 @@ public fun settle_link(
     let link = &mut network.links[link_index];
     assert!(link.status == LINK_SETTLING || link.status == LINK_ACTIVE, EInvalidState);
 
+    // Without a tunnel reference, conserve against the link's tracked capacity, which
+    // mirrors the underlying tunnel's total balance (see add_link_for_tunnel).
+    let total = link.capacity_a_to_b + link.capacity_b_to_a;
+    assert!(party_a_final <= total, EBalanceSumMismatch);
+    assert!(party_b_final == total - party_a_final, EBalanceSumMismatch);
+
+    link.status = LINK_SETTLED;
+
+    event::emit(LinkSettledEvent {
+        tunnel_id: link.tunnel_id,
+        party_a: link.party_a,
+        party_b: link.party_b,
+    });
+
+    LinkSettlement {
+        tunnel_id: link.tunnel_id,
+        party_a_final,
+        party_b_final,
+        total_routed: link.total_routed,
+    }
+}
+
+/// Records a link's final split against its bound funded tunnel. Asserts the link
+/// references this exact tunnel and that the split conserves the tunnel's balance, so
+/// the accounting layer cannot record a settlement that violates the tunnel's
+/// balance-sum invariant. The real transfer is executed separately inside the tunnel
+/// (`tunnel::close_cooperative_and_transfer` or the dispute path); this only records
+/// the agreed split. Coordinator only.
+public fun settle_link_checked<T>(
+    network: &mut ChannelNetwork,
+    tunnel: &Tunnel<T>,
+    link_index: u64,
+    party_a_final: u64,
+    party_b_final: u64,
+    ctx: &TxContext,
+): LinkSettlement {
+    assert!(ctx.sender() == network.coordinator, ENotAuthorized);
+    assert!(link_index < network.links.length(), ENotFound);
+
+    // Overflow-safe balance-sum check mirroring the tunnel's own assertion.
+    let total = tunnel.total_balance();
+    assert!(party_a_final <= total, EBalanceSumMismatch);
+    assert!(party_b_final == total - party_a_final, EBalanceSumMismatch);
+
+    let link = &mut network.links[link_index];
+    assert!(link.status == LINK_SETTLING || link.status == LINK_ACTIVE, EInvalidState);
+    assert!(link.tunnel_id == tunnel.id().to_bytes(), ELinkTunnelMismatch);
+
     link.status = LINK_SETTLED;
 
     event::emit(LinkSettledEvent {
@@ -698,6 +797,12 @@ public fun resolve_link_dispute(
 
     let link = &mut network.links[link_index];
     assert!(link.status == LINK_DISPUTED, EInvalidState);
+
+    // Without a tunnel reference, conserve against the link's tracked capacity, which
+    // mirrors the underlying tunnel's total balance (see add_link_for_tunnel).
+    let total = link.capacity_a_to_b + link.capacity_b_to_a;
+    assert!(party_a_final <= total, EBalanceSumMismatch);
+    assert!(party_b_final == total - party_a_final, EBalanceSumMismatch);
 
     link.status = LINK_SETTLED;
 
@@ -876,15 +981,7 @@ public fun create_payment_receipt(
 
 /// Checks if an address is a registered participant
 public fun is_participant(network: &ChannelNetwork, addr: address): bool {
-    let len = network.participants.length();
-    let mut i = 0;
-    while (i < len) {
-        if (network.participants[i].address == addr) {
-            return true
-        };
-        i = i + 1;
-    };
-    false
+    network.participants.any!(|p| p.address == addr)
 }
 
 /// Finds the link index between two addresses (returns option)
@@ -893,60 +990,25 @@ public fun find_link_between(
     addr_a: address,
     addr_b: address,
 ): Option<u64> {
-    let len = network.links.length();
-    let mut i = 0;
-    while (i < len) {
-        let link = &network.links[i];
-        if (
-            (link.party_a == addr_a && link.party_b == addr_b) ||
-            (link.party_a == addr_b && link.party_b == addr_a)
-        ) {
-            return option::some(i)
-        };
-        i = i + 1;
-    };
-    option::none()
+    network.links.find_index!(|link| {
+        (link.party_a == addr_a && link.party_b == addr_b) ||
+        (link.party_a == addr_b && link.party_b == addr_a)
+    })
 }
 
 /// Counts the number of active links
 public fun count_active_links(network: &ChannelNetwork): u64 {
-    let mut count = 0;
-    let len = network.links.length();
-    let mut i = 0;
-    while (i < len) {
-        if (network.links[i].status == LINK_ACTIVE) {
-            count = count + 1;
-        };
-        i = i + 1;
-    };
-    count
+    network.links.count!(|link| link.status == LINK_ACTIVE)
 }
 
 /// Counts the number of settled links
 public fun count_settled_links(network: &ChannelNetwork): u64 {
-    let mut count = 0;
-    let len = network.links.length();
-    let mut i = 0;
-    while (i < len) {
-        if (network.links[i].status == LINK_SETTLED) {
-            count = count + 1;
-        };
-        i = i + 1;
-    };
-    count
+    network.links.count!(|link| link.status == LINK_SETTLED)
 }
 
 /// Checks if all links are settled
 public fun all_links_settled(network: &ChannelNetwork): bool {
-    let len = network.links.length();
-    let mut i = 0;
-    while (i < len) {
-        if (network.links[i].status != LINK_SETTLED) {
-            return false
-        };
-        i = i + 1;
-    };
-    true
+    network.links.all!(|link| link.status == LINK_SETTLED)
 }
 
 /// Creates a payment hash from a preimage (convenience wrapper)

@@ -1,6 +1,10 @@
 # macOS
 .DS_Store
 
+# Bot keypairs (private keys — never commit)
+.poker-bots.json
+**/.poker-bots.json
+
 # Move build artifacts
 **/build/
 
@@ -181,3 +185,6 @@ sui-tunnel-ts/pnpm-workspace.yaml
 tools/loadbench/.env.local
 tools/loadbench/keys.json
 tools/loadbench/reports/
+
+# Subagent-driven-development scratch (ledger, task briefs, reports, review diffs)
+.superpowers/

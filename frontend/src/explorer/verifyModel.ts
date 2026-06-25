@@ -10,10 +10,26 @@ export interface Check {
 
 export function checksOf(v: TranscriptVerification): Check[] {
   return [
-    { key: "sigs", label: "Both parties signed every step", ok: v.allSigsValid },
-    { key: "nonce", label: "Nonces strictly increasing (no replay)", ok: v.nonceMonotonic },
-    { key: "conserve", label: "Balances conserved (no value created)", ok: v.balancesConserved },
-    { key: "root", label: "Transcript matches the on-chain anchor", ok: v.rootMatches },
+    {
+      key: "sigs",
+      label: "Both parties signed every step",
+      ok: v.allSigsValid,
+    },
+    {
+      key: "nonce",
+      label: "Nonces strictly increasing (no replay)",
+      ok: v.nonceMonotonic,
+    },
+    {
+      key: "conserve",
+      label: "Balances conserved (no value created)",
+      ok: v.balancesConserved,
+    },
+    {
+      key: "root",
+      label: "Transcript matches the on-chain anchor",
+      ok: v.rootMatches,
+    },
   ];
 }
 
@@ -31,6 +47,7 @@ export function verdictOf(
   hasTranscript: boolean,
   hasAnchoredRoot: boolean,
 ): Verdict {
-  if (!hasTranscript || !hasAnchoredRoot || !v || v.stepCount === 0) return "unverifiable";
+  if (!hasTranscript || !hasAnchoredRoot || !v || v.stepCount === 0)
+    return "unverifiable";
   return v.ok ? "verified" : "failed";
 }

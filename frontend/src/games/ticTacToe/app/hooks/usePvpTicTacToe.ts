@@ -8,11 +8,7 @@ import {
   type protocols,
 } from "sui-tunnel-ts";
 import { SuiJsonRpcClient } from "@mysten/sui/jsonRpc";
-import {
-  getControlPlaneClient,
-  type RegisterSessionResult,
-} from "@/backend/controlPlane";
-import { coSignedToSettleRequest } from "@/backend/settleRequest";
+import { settleViaBackend } from "@/backend/settle";
 import {
   MultiGameTicTacToeProtocol,
   MultiGameCaroProtocol,
@@ -43,13 +39,24 @@ import {
   type PvpChannel,
 } from "@/pvp/mpClient";
 import { attachResume, resumeActiveTunnels } from "@/pvp/resumeSession";
-import { raiseDisputeUnilateral } from "@/onchain/tunnelTx";
+import {
+  raiseDisputeUnilateral,
+  submitRebuildingOnStale,
+} from "@/onchain/tunnelTx";
 import {
   installResumePersistence,
   evictExpiredRecords,
   readResumeRecord,
+  clearResumeRecord,
 } from "@/pvp/resume";
 import { makeTttResumeAdapter } from "@/games/ticTacToe/app/lib/tttResumeAdapter";
+import { useSponsoredSignExec } from "@/onchain/useSponsoredSignExec";
+import { withSponsorFallback } from "@/onchain/sponsor";
+import {
+  MTPS_COIN_TYPE,
+  isMtpsAddressBalance,
+  isMtpsConfigured,
+} from "@/onchain/mtps";
 
 export type Variant = "ttt" | "caro";
 
@@ -65,10 +72,20 @@ const MP_URL =
       : "http://127.0.0.1:8080")
   ).replace(/^http/, "ws");
 const STAKE = 1n; // MIST per game; caro's protocol forces 0 regardless
-const BANKROLL = 1000n; // MIST deposited per seat
-const MAX_GAMES = 1000; // high cap → play until a side stops or busts
+const BANKROLL = 1000n; // SUI-fallback MIST deposited per seat
+// MTPS mode (ADR-0010): bankroll deposited per seat (1 MTPS, 9 decimals).
+const MTPS_BANKROLL = 1_000_000_000n;
+// One game per tunnel: the match settles on-chain as soon as the game is decided (the winner
+// submits the close — see finishSettle), then players re-queue for the next game. A higher cap
+// would batch many games into a single end-of-session settle instead.
+const MAX_GAMES = 1;
 const MOVE_MS = 600; // auto move cadence
 const NEXT_MS = 800; // pause before auto-advancing to the next game
+// Settle-half exchange: both seats send their half at the same instant, so a single relay drop
+// would hang the close. Resend this often until the peer's half lands, and give up after the
+// timeout so a truly lost peer recovers (auto re-queues) instead of stranding the table forever.
+const SETTLE_RETRY_MS = 600;
+const SETTLE_TIMEOUT_MS = 12000;
 
 export type PvpPhase =
   | "idle"
@@ -126,6 +143,8 @@ export interface PvpTttView {
   stop: () => void;
   setAuto: (on: boolean) => void;
   leave: () => void;
+  /** After a per-game settle: clear the closed match + resume record and find a new match. */
+  requeue: () => void;
 }
 
 // Perfect 3×3 move via @ttt/shared minimax (maps protocol marks 1/2 to CELL_SERVER/CELL_PLAYER).
@@ -146,6 +165,12 @@ export function usePvpTicTacToe(
   const wallet = useCustomWallet();
   const walletRef = useRef(wallet);
   walletRef.current = wallet; // read the latest wallet inside stable callbacks without re-creating them
+  // Backend gas sponsor (ADR-0009/0010): open + deposit route through the settler so a 0-SUI
+  // zkLogin player stakes faucet-minted MTPS and pays no gas. Read inside stable callbacks
+  // via a ref. (The close stays sender-pays as a fallback to the backend /settle route.)
+  const sponsored = useSponsoredSignExec();
+  const sponsoredRef = useRef(sponsored);
+  sponsoredRef.current = sponsored;
   const proto = useMemo(
     () =>
       (variant === "caro"
@@ -165,6 +190,8 @@ export function usePvpTicTacToe(
   // `score` is the authoritative cumulative tally; `games` below is capped at the last 50 entries
   // for display, so after 50 games the two intentionally diverge — do NOT re-derive score from games.
   const [score, setScore] = useState({ x: 0, o: 0, draws: 0 });
+  // Default OFF: PvP is human-vs-human, so you make your own moves; tick Auto to let the bot
+  // play for you.
   const [auto, setAutoState] = useState(false);
   const [balance, setBalance] = useState<bigint>(0n);
   const [digests, setDigests] = useState<{
@@ -180,6 +207,7 @@ export function usePvpTicTacToe(
   );
   const roleRef = useRef<"A" | "B" | null>(null);
   const autoRef = useRef(false);
+  const autoKickedRef = useRef(false);
   const detachResumeRef = useRef<(() => void) | null>(null);
   const createdAtRef = useRef<bigint>(0n);
   const matchIdRef = useRef<string>("");
@@ -188,6 +216,9 @@ export function usePvpTicTacToe(
   const onMatchRef = useRef<
     ((mp: MpClient, m: MatchInfo) => Promise<void>) | undefined
   >(undefined);
+  // Latest `requeue`, called from finishSettle's recovery path (defined later — use a ref to dodge
+  // the declaration-order / dependency cycle, mirroring onMatchRef).
+  const requeueRef = useRef<(() => void) | null>(null);
   const openedResolveRef = useRef<((id: string) => void) | null>(null);
   const settleResolveRef = useRef<
     ((val: { sig: Uint8Array; root: Uint8Array }) => void) | null
@@ -199,30 +230,6 @@ export function usePvpTicTacToe(
   const helloResolveRef = useRef<((pub: string) => void) | null>(null);
   const bufferedHelloRef = useRef<string | null>(null);
   const transcriptRef = useRef<proof.Transcript | null>(null);
-
-  const sessionRef = useRef<RegisterSessionResult | null>(null);
-  const moveCountRef = useRef(0);
-  const actionsRef = useRef(0);
-  const lastHeartbeatRef = useRef(Date.now());
-
-  const flushHeartbeat = useCallback((tunnelId: string, force: boolean) => {
-    const s = sessionRef.current;
-    if (!s || actionsRef.current === 0) return;
-    const now = Date.now();
-    const windowMs = now - lastHeartbeatRef.current;
-    if (!force && windowMs < 1000) return;
-    const actionsDelta = actionsRef.current;
-    actionsRef.current = 0;
-    lastHeartbeatRef.current = now;
-    getControlPlaneClient()
-      .sendHeartbeat(s.sessionId, s.statsToken, {
-        tunnelId,
-        nonce: String(moveCountRef.current),
-        actionsDelta,
-        windowMs: Math.max(1, windowMs),
-      })
-      .catch((e) => console.error("[tictactoe pvp] heartbeat failed:", e));
-  }, []);
 
   const refreshBalance = useCallback(async () => {
     const addr = walletRef.current.address;
@@ -248,6 +255,24 @@ export function usePvpTicTacToe(
     [client],
   );
 
+  // Gas-sponsored submit (ADR-0009): the settler wraps the tx in its own SIP-58 gas, the wallet
+  // co-signs, both are submitted — so a 0-SUI player pays nothing. The sponsored signExec returns
+  // only a digest, so (as in the bot flows) we fetch the block separately for objectChanges.
+  const submitSponsored = useCallback(
+    async (tx: any) => {
+      const { digest } = await sponsoredRef.current.signExec(tx);
+      await client.waitForTransaction({ digest });
+      const res = await client.getTransactionBlock({
+        digest,
+        options: { showObjectChanges: true, showEffects: true },
+      });
+      if (res.effects?.status?.status !== "success")
+        throw new Error(res.effects?.status?.error ?? "tx failed");
+      return res;
+    },
+    [client],
+  );
+
   const finishSettle = useCallback(
     async (
       t: core.DistributedTunnel<AnyState, CellMove>,
@@ -257,61 +282,107 @@ export function usePvpTicTacToe(
       if (settledRef.current) return;
       settledRef.current = true;
       setPhase("settling");
-      flushHeartbeat(t.tunnelId, true);
-      const root = transcriptRef.current
-        ? transcriptRef.current.root()
-        : new Uint8Array(32);
-      const half = t.buildSettlementHalfWithRoot(
-        createdAtRef.current,
-        root,
-        0n,
-      );
-      channel.sendPeer({
-        t: "settle",
-        sig: bytesToHex(half.sigSelf),
-        root: bytesToHex(root),
-      });
-      const other =
-        bufferedSettleRef.current ??
-        (await new Promise<{ sig: Uint8Array; root: Uint8Array }>((res) => {
-          settleResolveRef.current = res;
-        }));
-      if (bytesToHex(other.root) !== bytesToHex(root)) {
-        throw new Error("Transcript root mismatch between players");
-      }
-      const coSigned = t.combineSettlementWithRoot(
-        half.settlement,
-        half.sigSelf,
-        other.sig,
-      );
-      if (roleRef.current === "A") {
-        // X (the opener) submits the cooperative close
-        try {
-          const result = await getControlPlaneClient().settle(
-            t.tunnelId,
-            coSignedToSettleRequest(
-              coSigned as any,
-              transcriptRef.current
-                ? transcriptRef.current.toRecord().entries
-                : [],
-            ),
-          );
-          setDigests((d) => ({ ...d, close: result.txDigest }));
-          channel.sendPeer({ t: "closed", digest: result.txDigest });
-        } catch (e) {
-          console.warn(
-            "[settle] Server-side settle failed, falling back to wallet submission:",
-            e,
-          );
-          const res = await submit(buildCloseWithRootTx(t.tunnelId, coSigned));
-          setDigests((d) => ({ ...d, close: res.digest }));
-          channel.sendPeer({ t: "closed", digest: res.digest });
+      try {
+        const root = transcriptRef.current
+          ? transcriptRef.current.root()
+          : new Uint8Array(32);
+        const half = t.buildSettlementHalfWithRoot(
+          createdAtRef.current,
+          root,
+          0n,
+        );
+        const sendHalf = () =>
+          channel.sendPeer({
+            t: "settle",
+            sig: bytesToHex(half.sigSelf),
+            root: bytesToHex(root),
+          });
+        sendHalf();
+        // Wait for the peer's half. Resend ours every SETTLE_RETRY_MS until it lands (a single
+        // relay drop on this simultaneous exchange would otherwise hang here forever), and reject
+        // after SETTLE_TIMEOUT_MS so the catch below can recover instead of stranding "settling".
+        const other =
+          bufferedSettleRef.current ??
+          (await new Promise<{ sig: Uint8Array; root: Uint8Array }>(
+            (resolve, reject) => {
+              let elapsed = 0;
+              const iv = setInterval(() => {
+                elapsed += SETTLE_RETRY_MS;
+                if (elapsed >= SETTLE_TIMEOUT_MS) {
+                  clearInterval(iv);
+                  settleResolveRef.current = null;
+                  reject(new Error("settle handshake timed out"));
+                  return;
+                }
+                sendHalf();
+              }, SETTLE_RETRY_MS);
+              settleResolveRef.current = (v) => {
+                clearInterval(iv);
+                resolve(v);
+              };
+            },
+          ));
+        bufferedSettleRef.current = null;
+        if (bytesToHex(other.root) !== bytesToHex(root)) {
+          throw new Error("Transcript root mismatch between players");
+        }
+        const coSigned = t.combineSettlementWithRoot(
+          half.settlement,
+          half.sigSelf,
+          other.sig,
+        );
+        // The game's winner submits the cooperative close (X-win or draw → A; O-win → B). The
+        // payout is fixed by the co-signed balances regardless of who submits; this just decides
+        // which seat sends the backend tx so the winner closes out their own game.
+        const decided = t.state.inner.winner; // 1 = X (A) won, 2 = O (B) won, 3/0 = draw/none
+        const submitter: "A" | "B" = decided === 2 ? "B" : "A";
+        if (roleRef.current === submitter) {
+          const closeDigest = await settleViaBackend({
+            tunnelId: t.tunnelId,
+            settlement: coSigned as any,
+            transcript: transcriptRef.current
+              ? transcriptRef.current.rawEntries()
+              : [],
+            label: "tictactoe",
+            fallbackClose: async () => {
+              // Close pays in the same coin the tunnel was funded in (MTPS vs SUI). In MTPS
+              // mode the player holds 0 SUI (gas is sponsored), so the close must route through the
+              // gas sponsor too — a wallet-signed close would throw and strand the staked MTPS.
+              const coinType = isMtpsConfigured ? MTPS_COIN_TYPE : undefined;
+              const res = await (isMtpsConfigured ? submitSponsored : submit)(
+                buildCloseWithRootTx(t.tunnelId, coSigned, coinType),
+              );
+              return res.digest;
+            },
+          });
+          // Record the close + signal the opponent on BOTH paths (backend digest or fallback).
+          if (closeDigest) {
+            setDigests((d) => ({ ...d, close: closeDigest }));
+            channel.sendPeer({ t: "closed", digest: closeDigest });
+          }
+        }
+        await refreshBalance();
+        // The tunnel is now closed on-chain (per-game match). Drop its resume record so it can't be
+        // restored and hijack the next match (the auto-requeue / Find New Match both re-queue).
+        clearResumeRecord(t.tunnelId);
+        setPhase("done");
+      } catch (e) {
+        // Settle handshake/close failed (dropped peer half, root mismatch, close error). Don't
+        // strand the table at "settling": in auto, abandon this game and find a new match (the
+        // on-chain 1h grace floor still protects the stake); manual surfaces it so the player can
+        // Leave / retry.
+        console.error("[ttt pvp] settle failed:", e);
+        settledRef.current = false;
+        settleResolveRef.current = null;
+        if (autoRef.current) {
+          requeueRef.current?.();
+        } else {
+          setError(e instanceof Error ? e.message : String(e));
+          setPhase("error");
         }
       }
-      await refreshBalance();
-      setPhase("done");
     },
-    [submit, refreshBalance, flushHeartbeat],
+    [submit, submitSponsored, refreshBalance],
   );
 
   // Wire the per-move loop + resume onto a freshly built/rebuilt tunnel. Shared by the live
@@ -331,6 +402,11 @@ export function usePvpTicTacToe(
     ) => {
       tunnelRef.current = t;
       channelRef.current = channel;
+      // Single source of the seat role for BOTH the match and resume paths. The resume path
+      // (reconnect / reload of an active match) skips onMatch, so without setting it here roleRef
+      // stays null → myMark 0 → the view shows "◯ (O)" for both seats. A = X, B = O.
+      roleRef.current = info.role;
+      setRole(info.role);
       let lastLoggedGame = 0;
       const onAdvance = () => {
         const st = t.state;
@@ -379,11 +455,8 @@ export function usePvpTicTacToe(
         }
       };
       t.onConfirmed = (u) => {
-        moveCountRef.current += 1;
-        actionsRef.current += 1;
         transcriptRef.current?.append(u);
         onAdvance();
-        flushHeartbeat(t.tunnelId, false);
       };
       // Resume wiring: persist on confirm + run the resync handshake on reconnect.
       detachResumeRef.current?.();
@@ -416,78 +489,93 @@ export function usePvpTicTacToe(
       setState({ ...t.state, inner: { ...t.state.inner } });
       onAdvance();
     },
-    [proto, submit, variant, finishSettle, flushHeartbeat],
+    [proto, submit, variant, finishSettle],
   );
 
-  const queue = useCallback(() => {
-    void (async () => {
-      const w = walletRef.current;
-      if (!w.isConnected || !w.address) {
-        setError("Connect your wallet on the main menu first");
-        setPhase("error");
-        return;
-      }
-      setError(null);
-      setPhase("connecting");
-      settledRef.current = false;
-      stoppingRef.current = false;
-      setGames([]);
-      setScore({ x: 0, o: 0, draws: 0 });
-      autoRef.current = false;
-      setAutoState(false); // fresh game (incl. rematch) starts in manual mode
-      bufferedSettleRef.current = null;
-      bufferedHelloRef.current = null;
-      openedResolveRef.current = null;
-      settleResolveRef.current = null;
-      helloResolveRef.current = null;
-      try {
-        const mp = new MpClient(resolveMpWsUrl(MP_URL), w.address, eph.coreKey);
-        mpRef.current = mp;
-        // Cold-load: before joining a queue, rebuild any persisted in-flight match for this
-        // variant and re-attach to it. The opening handshake then carries resume{matchId}.
-        installResumePersistence();
-        const restored = resumeActiveTunnels<AnyState, CellMove>(
-          mp,
-          variant,
-          {
-            proto,
-            adapter: makeTttResumeAdapter<AnyState, CellMove>(() => {}),
-          },
-          { selfWallet: w.address },
-        );
-        if (restored.length > 0) {
-          const { tunnel, channel } = restored[0]; // one active match per game in practice
-          const rec = readResumeRecord(tunnel.tunnelId)!;
-          activateTttSession(mp, channel, tunnel, {
-            matchId: rec.matchId,
-            role: rec.role,
-            opponentWallet: rec.opponentWallet,
-            opponentPubkeyHex: rec.opponentPubkeyHex,
-            selfEphemeralSecretHex: rec.selfEphemeralSecretHex!,
-          });
-          await mp.connect();
-          return; // skip quickMatch — we are continuing an in-flight match
+  const queue = useCallback(
+    (opts?: { keepAuto?: boolean }) => {
+      void (async () => {
+        const w = walletRef.current;
+        if (!w.isConnected || !w.address) {
+          setError("Connect your wallet on the main menu first");
+          setPhase("error");
+          return;
         }
-        await mp.connect();
-        setPhase("queuing");
-        // The queue key encodes the variant (+ board size for caro) so only players who chose the
-        // SAME setup match — otherwise the two seats would run incompatible protocols and diverge.
-        const m = await mp.quickMatch(
-          variant === "caro" ? `tictactoe:caro:${boardSize}` : "tictactoe:ttt",
-        );
-        await onMatchRef.current?.(mp, m);
-      } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
-        setPhase("error");
-      }
-    })();
-  }, [eph, variant, boardSize, proto, activateTttSession]);
+        setError(null);
+        setPhase("connecting");
+        settledRef.current = false;
+        stoppingRef.current = false;
+        setGames([]);
+        setScore({ x: 0, o: 0, draws: 0 });
+        autoKickedRef.current = false;
+        // Default-off on a fresh queue; auto-requeue passes keepAuto so the Auto loop survives
+        // across per-game matches.
+        if (!opts?.keepAuto) {
+          autoRef.current = false;
+          setAutoState(false);
+        }
+        bufferedSettleRef.current = null;
+        bufferedHelloRef.current = null;
+        openedResolveRef.current = null;
+        settleResolveRef.current = null;
+        helloResolveRef.current = null;
+        try {
+          const mp = new MpClient(
+            resolveMpWsUrl(MP_URL),
+            w.address,
+            eph.coreKey,
+          );
+          mpRef.current = mp;
+          // Cold-load: before joining a queue, rebuild any persisted in-flight match for this
+          // variant and re-attach to it. The opening handshake then carries resume{matchId}.
+          installResumePersistence();
+          const restored = resumeActiveTunnels<AnyState, CellMove>(
+            mp,
+            variant,
+            {
+              proto,
+              adapter: makeTttResumeAdapter<AnyState, CellMove>(() => {}),
+            },
+            { selfWallet: w.address },
+          );
+          if (restored.length > 0) {
+            const { tunnel, channel } = restored[0]; // one active match per game in practice
+            const rec = readResumeRecord(tunnel.tunnelId)!;
+            activateTttSession(mp, channel, tunnel, {
+              matchId: rec.matchId,
+              role: rec.role,
+              opponentWallet: rec.opponentWallet,
+              opponentPubkeyHex: rec.opponentPubkeyHex,
+              selfEphemeralSecretHex: rec.selfEphemeralSecretHex!,
+            });
+            await mp.connect();
+            return; // skip quickMatch — we are continuing an in-flight match
+          }
+          await mp.connect();
+          setPhase("queuing");
+          // The queue key encodes the variant (+ board size for caro) so only players who chose the
+          // SAME setup match — otherwise the two seats would run incompatible protocols and diverge.
+          const m = await mp.quickMatch(
+            variant === "caro"
+              ? `tictactoe:caro:${boardSize}`
+              : "tictactoe:ttt",
+          );
+          await onMatchRef.current?.(mp, m);
+        } catch (e) {
+          setError(e instanceof Error ? e.message : String(e));
+          setPhase("error");
+        }
+      })();
+    },
+    [eph, variant, boardSize, proto, activateTttSession],
+  );
 
   const onMatch = useCallback(
     async (mp: MpClient, m: MatchInfo) => {
       try {
         const w = walletRef.current;
         if (!w.address) throw new Error("wallet disconnected");
+        const selfWallet = w.address; // narrowed (the deferred shareTx closure widens w.address back)
         matchIdRef.current = m.matchId;
         roleRef.current = m.role;
         setRole(m.role);
@@ -528,18 +616,34 @@ export function usePvpTicTacToe(
         // self-asserted in v1); the two are deliberately unrelated keys, so there's no address derivation.
         const oppPubkey = hexToBytes(oppPubHex);
 
+        // MTPS mode (ADR-0010): stake faucet-minted MTPS with gas sponsored — a 0-SUI
+        // player plays free. SUI fallback (env unset): sender-pays SUI stake. The bankroll, coin
+        // type, and the off-chain init balances all follow this choice so deposits reconcile.
+        const mtpsOn = isMtpsConfigured;
+        const coinType = mtpsOn ? MTPS_COIN_TYPE : undefined;
+        const bankroll = mtpsOn ? MTPS_BANKROLL : BANKROLL;
+
         // Roles: A = X (opener), B = O. X opens the tunnel registering partyA = self, partyB = opponent.
         // Party address = the zkLogin wallet (receives funds); party public_key = the ephemeral signer.
+        // The share tx carries no stake (each seat deposits its own), so it's gas-sponsored in
+        // MTPS mode (with a sender-pays fallback), or plain sender-pays in SUI mode.
         let tunnelId: string;
         if (m.role === "A") {
           setPhase("opening");
-          const res = await submit(
+          const shareTx = () =>
             buildCreateAndShareTx(
-              { walletAddress: w.address, publicKey: eph.coreKey.publicKey }, // partyA = X (self)
+              { walletAddress: selfWallet, publicKey: eph.coreKey.publicKey }, // partyA = X (self)
               { walletAddress: m.opponentWallet, publicKey: oppPubkey }, // partyB = O (opponent)
               0n,
-            ),
-          );
+              coinType, // open Tunnel<MTPS> so the seat deposits type-match
+            );
+          const res = mtpsOn
+            ? await withSponsorFallback(
+                () => submitSponsored(shareTx()),
+                () => submit(shareTx()),
+                "tictactoe open",
+              )
+            : await submit(shareTx());
           const id = parseTunnelId(res.objectChanges);
           if (!id) throw new Error("no tunnelId");
           tunnelId = id;
@@ -564,8 +668,48 @@ export function usePvpTicTacToe(
           (fields?.created_at as string | undefined) ?? 0,
         );
 
+        // Each seat funds its own deposit. MTPS: split from a faucet-minted coin via the gas
+        // sponsor (with a sender-pays SUI fallback); SUI fallback: split from the wallet gas coin.
         setPhase("funding");
-        const dep = await submit(buildDepositTx(tunnelId, BANKROLL));
+        const dep = mtpsOn
+          ? await withSponsorFallback(
+              async () => {
+                // ADR-0013: withdraw this seat's deposit from the wallet's address balance. Retry
+                // (rebuild) through checkpoint-settlement lag rather than fall through to the
+                // sender-pays branch (which can't help an address-balance stake).
+                if (isMtpsAddressBalance) {
+                  await sponsoredRef.current.ensureStakeBalance(bankroll);
+                  return submitRebuildingOnStale(
+                    () =>
+                      buildDepositTx(tunnelId, bankroll, {
+                        coinType,
+                        stakeFromBalance: {
+                          amount: bankroll,
+                          coinType: MTPS_COIN_TYPE,
+                        },
+                      }),
+                    submitSponsored,
+                    "tictactoe deposit",
+                  );
+                }
+                return submitSponsored(
+                  buildDepositTx(tunnelId, bankroll, {
+                    coinType,
+                    stakeCoinId:
+                      await sponsoredRef.current.prepareStake(bankroll),
+                  }),
+                );
+              },
+              async () =>
+                submit(
+                  buildDepositTx(tunnelId, bankroll, {
+                    stakeCoinId:
+                      await sponsoredRef.current.selectStakeCoin(bankroll),
+                  }),
+                ),
+              "tictactoe deposit",
+            )
+          : await submit(buildDepositTx(tunnelId, bankroll));
         setDigests((d) => ({ ...d, deposit: dep.digest }));
         let activated = false;
         for (let i = 0; i < 40; i++) {
@@ -615,33 +759,9 @@ export function usePvpTicTacToe(
             selfParty: m.role,
           },
           channel.transport,
-          { a: BANKROLL, b: BANKROLL },
+          { a: bankroll, b: bankroll },
         );
         transcriptRef.current = new proof.Transcript(tunnelId);
-
-        // Register the (real, on-chain) tunnel for stats tracking. Best-effort.
-        sessionRef.current = null;
-        moveCountRef.current = 0;
-        actionsRef.current = 0;
-        lastHeartbeatRef.current = Date.now();
-        getControlPlaneClient()
-          .registerSession({
-            userAddress: w.address,
-            game: "tictactoe",
-            tunnels: [
-              {
-                tunnelId,
-                partyA: m.role === "A" ? w.address : m.opponentWallet,
-                partyB: m.role === "B" ? w.address : m.opponentWallet,
-              },
-            ],
-          })
-          .then((s) => {
-            sessionRef.current = s;
-          })
-          .catch((e) =>
-            console.error("[tictactoe pvp] registerSession failed:", e),
-          );
 
         activateTttSession(mp, channel, t, {
           matchId: m.matchId,
@@ -659,10 +779,10 @@ export function usePvpTicTacToe(
       client,
       proto,
       submit,
+      submitSponsored,
       eph,
       variant,
       finishSettle,
-      flushHeartbeat,
       activateTttSession,
     ],
   );
@@ -741,14 +861,30 @@ export function usePvpTicTacToe(
     [proto, variant],
   );
 
-  const leave = useCallback(() => {
+  // If Auto is enabled when the match becomes playable, kick the resume once (the move loop
+  // otherwise only schedules auto AFTER a confirmed move, so the first move needs this). Auto
+  // defaults OFF now, so this no-ops on entry; it matters if the user ticks Auto pre-play.
+  useEffect(() => {
+    if (autoKickedRef.current) return;
+    if (phase === "playing" && tunnelRef.current && autoRef.current) {
+      autoKickedRef.current = true;
+      setAuto(true);
+    }
+  }, [phase, setAuto]);
+
+  // Tear down the current match: detach resume, drop its resume record (a closed/abandoned tunnel
+  // must never be restored — it would hijack the next match), close the transport, and clear
+  // match state. keepAuto preserves the Auto toggle so an auto loop survives a per-game requeue;
+  // a full leave clears it.
+  const teardownMatch = useCallback((keepAuto: boolean) => {
     detachResumeRef.current?.();
     detachResumeRef.current = null;
+    const tid = tunnelRef.current?.tunnelId;
+    if (tid) clearResumeRecord(tid);
     mpRef.current?.close();
     mpRef.current = null;
     channelRef.current = null;
     tunnelRef.current = null;
-    setPhase("idle");
     setState(null);
     setRole(null);
     setDigests({});
@@ -756,17 +892,83 @@ export function usePvpTicTacToe(
     setScore({ x: 0, o: 0, draws: 0 });
     settledRef.current = false;
     stoppingRef.current = false;
-    autoRef.current = false;
-    setAutoState(false);
+    autoKickedRef.current = false;
+    if (!keepAuto) {
+      autoRef.current = false;
+      setAutoState(false);
+    }
     openedResolveRef.current = null;
     settleResolveRef.current = null;
     bufferedSettleRef.current = null;
     helloResolveRef.current = null;
     bufferedHelloRef.current = null;
-    sessionRef.current = null;
-    moveCountRef.current = 0;
-    actionsRef.current = 0;
   }, []);
+
+  const leave = useCallback(() => {
+    teardownMatch(false);
+    setPhase("idle");
+  }, [teardownMatch]);
+
+  // Find a new match after a per-game settle. Reuse the SAME socket (the relay runs many matches
+  // per connection): release the settled match and re-quickMatch in place. Tearing the socket
+  // down and reconnecting (a 2nd socket for the same wallet) raced the relay's routing and left
+  // the next match's moves un-ACKed. Falls back to a full queue() if the socket is gone.
+  const requeue = useCallback(() => {
+    const mp = mpRef.current;
+    if (!mp) {
+      queue({ keepAuto: true });
+      return;
+    }
+    detachResumeRef.current?.();
+    detachResumeRef.current = null;
+    const tid = tunnelRef.current?.tunnelId;
+    if (tid) clearResumeRecord(tid); // closed tunnel: never restore it
+    if (matchIdRef.current) mp.releaseMatch(matchIdRef.current);
+    channelRef.current = null;
+    tunnelRef.current = null;
+    setState(null);
+    setRole(null);
+    setDigests({});
+    setGames([]);
+    setScore({ x: 0, o: 0, draws: 0 });
+    settledRef.current = false;
+    stoppingRef.current = false;
+    autoKickedRef.current = false;
+    openedResolveRef.current = null;
+    settleResolveRef.current = null;
+    bufferedSettleRef.current = null;
+    helloResolveRef.current = null;
+    bufferedHelloRef.current = null;
+    setError(null);
+    // Keep Auto + the open socket; just join the queue again.
+    setPhase("queuing");
+    void (async () => {
+      try {
+        const m = await mp.quickMatch(
+          variant === "caro" ? `tictactoe:caro:${boardSize}` : "tictactoe:ttt",
+        );
+        await onMatchRef.current?.(mp, m);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+        setPhase("error");
+      }
+    })();
+  }, [queue, variant, boardSize]);
+
+  // Keep the ref finishSettle's recovery path calls in sync with the latest requeue.
+  useEffect(() => {
+    requeueRef.current = requeue;
+  }, [requeue]);
+
+  // After a per-game match settles ("done"), auto-find the next match when Auto is on. A short
+  // pause lets the result show before re-queuing.
+  useEffect(() => {
+    if (phase !== "done" || !autoRef.current) return;
+    const id = setTimeout(() => {
+      if (autoRef.current) requeue();
+    }, NEXT_MS);
+    return () => clearTimeout(id);
+  }, [phase, requeue]);
 
   // Register the pagehide/visibility flush and evict stale records once, on mount.
   useEffect(() => {
@@ -819,5 +1021,6 @@ export function usePvpTicTacToe(
     stop,
     setAuto,
     leave,
+    requeue,
   };
 }

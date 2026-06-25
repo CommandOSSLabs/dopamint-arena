@@ -1,40 +1,55 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { coSignedToSettleRequest } from "./settleRequest.ts";
-// Relative .ts type import: tsx does not resolve the `sui-tunnel-ts/*` alias. `import type`
-// is erased by esbuild, so this never hits the runtime resolver.
+import { coSignedToSettleBody } from "./settleRequest.ts";
+// Relative .ts imports: tsx does not resolve the `sui-tunnel-ts/*` alias. `import type` is
+// erased by esbuild; the value import (decodeSettleBody) is the round-trip oracle.
+import { decodeSettleBody } from "../../../sui-tunnel-ts/src/proof/settleBinary.ts";
 import type { CoSignedSettlementWithRoot } from "../../../sui-tunnel-ts/src/core/tunnel.ts";
+import type { TranscriptEntry } from "../../../sui-tunnel-ts/src/proof/transcript.ts";
 
-// The serializer is the byte-shape boundary to the Rust backend: u64 fields (balances/nonce/
-// timestamp) MUST become decimal strings and 32-byte values (root/sigs) MUST become lowercase
-// hex with no 0x prefix (the backend's decode_hex trims an optional 0x; parse_u64 wants decimal).
-// If this mapping drifts, settle 422s or the close verifies wrong — only money-at-stake reveals it.
-test("coSignedToSettleRequest maps bigints to decimal strings and bytes to hex", () => {
+// The encoder is the byte-shape boundary to the Rust backend: the co-signed settlement +
+// raw transcript entries must round-trip through decodeSettleBody unchanged. If the field
+// mapping drifts, settle 422s or the close verifies wrong — only money-at-stake reveals it.
+test("coSignedToSettleBody emits a body that decodes to the settlement + entries", () => {
   const coSigned: CoSignedSettlementWithRoot = {
     settlement: {
-      tunnelId: "0x1",
+      tunnelId: "0x" + "00".repeat(31) + "01",
       partyABalance: 1500n,
       partyBBalance: 500n,
       finalNonce: 1n,
       timestamp: 1_750_000_000_000n,
-      transcriptRoot: new Uint8Array([0xde, 0xad, 0xbe, 0xef]),
+      transcriptRoot: new Uint8Array(32).fill(0xaa),
     },
-    sigA: new Uint8Array([0xaa, 0xbb]),
-    sigB: new Uint8Array([0x01, 0x02]),
+    sigA: new Uint8Array(64).fill(0x11),
+    sigB: new Uint8Array(64).fill(0x22),
   };
-  const body = coSignedToSettleRequest(coSigned, []);
-  assert.equal(body.settlement.tunnelId, "0x1");
-  assert.equal(body.settlement.partyABalance, "1500");
-  assert.equal(body.settlement.partyBBalance, "500");
-  assert.equal(body.settlement.finalNonce, "1");
-  assert.equal(body.settlement.timestamp, "1750000000000");
-  assert.equal(body.settlement.transcriptRoot, "deadbeef");
-  assert.equal(body.sigA, "aabb");
-  assert.equal(body.sigB, "0102");
-  assert.deepEqual(body.transcript, []);
+  const entries: TranscriptEntry[] = [
+    {
+      nonce: 1n,
+      message: new Uint8Array(120).fill(0x33),
+      sigA: new Uint8Array(64).fill(0x44),
+      sigB: new Uint8Array(64).fill(0x55),
+    },
+  ];
+
+  const body = coSignedToSettleBody(coSigned, entries);
+  const d = decodeSettleBody(body);
+
+  assert.equal(d.tunnelId, coSigned.settlement.tunnelId);
+  assert.equal(d.partyABalance, coSigned.settlement.partyABalance);
+  assert.equal(d.partyBBalance, coSigned.settlement.partyBBalance);
+  assert.equal(d.finalNonce, coSigned.settlement.finalNonce);
+  assert.equal(d.timestamp, coSigned.settlement.timestamp);
+  assert.deepEqual(d.transcriptRoot, coSigned.settlement.transcriptRoot);
+  assert.deepEqual(d.sigA, coSigned.sigA);
+  assert.deepEqual(d.sigB, coSigned.sigB);
+  assert.equal(d.entries.length, 1);
+  assert.deepEqual(d.entries[0].message, entries[0].message);
+  assert.deepEqual(d.entries[0].sigA, entries[0].sigA);
+  assert.deepEqual(d.entries[0].sigB, entries[0].sigB);
 });
 
-test("coSignedToSettleRequest passes transcript entries through verbatim", () => {
+test("coSignedToSettleBody encodes an empty transcript (count 0)", () => {
   const coSigned: CoSignedSettlementWithRoot = {
     settlement: {
       tunnelId: "0x1",
@@ -47,9 +62,7 @@ test("coSignedToSettleRequest passes transcript entries through verbatim", () =>
     sigA: new Uint8Array(64),
     sigB: new Uint8Array(64),
   };
-  const entries = [{ nonce: "1", message: "00", sigA: "aa", sigB: "bb" }];
-  const body = coSignedToSettleRequest(coSigned, entries);
-  assert.equal(body.transcript.length, 1);
-  assert.deepEqual(body.transcript[0], { nonce: "1", message: "00", sigA: "aa", sigB: "bb" });
-  assert.equal(body.settlement.transcriptRoot, "00".repeat(32));
+  const d = decodeSettleBody(coSignedToSettleBody(coSigned, []));
+  assert.equal(d.entries.length, 0);
+  assert.equal(d.partyBBalance, 2000n);
 });

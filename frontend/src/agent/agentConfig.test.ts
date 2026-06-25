@@ -17,6 +17,7 @@ test("on for bare ?agent, with key and default concurrency 1", () => {
   assert.equal(c.enabled, true);
   assert.equal(c.secretKey, "suiprivkey1abc");
   assert.equal(c.concurrency, 1);
+  assert.equal(c.game, null);
 });
 
 test("?m sets concurrency (min 1)", () => {
@@ -24,9 +25,21 @@ test("?m sets concurrency (min 1)", () => {
   assert.equal(parseAgentConfig("https://x/?agent&m=0").concurrency, 1);
 });
 
-test("rotation set is tic-tac-toe only until the move-trigger fix", () => {
+test("?game restricts the agent rotation", () => {
+  assert.equal(
+    parseAgentConfig("https://x/?agent&game=quantum-poker").game,
+    "quantum-poker",
+  );
+});
+
+test("rotation set uses canonical game kits for all bot-ready games", () => {
   assert.deepEqual(
-    AGENT_GAMES.map((g) => g.id),
-    ["tictactoe"],
+    AGENT_GAMES.map((g) => [g.id, g.kitId]),
+    [
+      ["tictactoe", "tictactoe"],
+      ["blackjack", "blackjack"],
+      ["battleship", "battleship"],
+      ["quantum-poker", "quantum-poker"],
+    ],
   );
 });

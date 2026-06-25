@@ -1,0 +1,9 @@
+# Vendored upstream — kept on upstream's own style for re-sync (see CLAUDE.md).
+sui_tunnel/
+sui-tunnel-ts/
+
+# Build output (node_modules and .git are ignored by prettier already).
+**/dist/
+**/build/
+target/
+**/pnpm-lock.yaml

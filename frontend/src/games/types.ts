@@ -1,5 +1,10 @@
 import type { ComponentType } from "react";
 
+/** The arena workspace a module belongs to. The desktop tab bar and the Add dialog
+ *  group modules by this; `games` is the multi-window floor, `payment`/`chat` are
+ *  focused single-surface views. */
+export type Workspace = "games" | "payment" | "chat";
+
 /** Props a game's `Window` component receives (distinct from the GameWindow chrome). */
 export interface GameWindowProps {
   windowId: string;
@@ -16,18 +21,22 @@ export interface GameModule {
   /** Stable kebab-case id, unique across the registry. */
   id: string;
   name: string;
+  /** One-line pitch shown under the name in the mobile game picker. */
+  description?: string;
   /** Short glyph/emoji — fallback when the logo image is unavailable. */
   icon: string;
   /** Logo image path (served from public/, e.g. `/games/blackjack.png`). */
   image: string;
   Window: ComponentType<GameWindowProps>;
-  /**
-   * Opening size in grid units (default 4×4). Pick a size whose on-screen ratio
-   * suits the game — e.g. Battleship's two 10×10 boards want a wider, taller box.
-   */
-  defaultSize?: { w: number; h: number };
-  /** Smallest size the window may resize to, in grid units (default 3×3). */
-  minSize?: { w: number; h: number };
+  /** When false, the module is registered (so `get()` can render it — e.g. as a
+   *  default floating widget) but hidden from the catalog `list()` (picker, mobile
+   *  list, filter tabs, seed). Defaults to true. */
+  catalog?: boolean;
+  /** Which arena workspace this module opens in. Defaults to `games` (the window
+   *  floor). `payment`/`chat` route the Add dialog to their focused workspace view. */
+  workspace?: Workspace;
+  // Window size is uniform across games — the desktop opens every window at the same
+  // tile size (see TILE in Desktop.tsx), so games no longer declare their own footprint.
   // Deferred until games drive the engine:
   //   protocolFactory?: () => Protocol<unknown, unknown>;  // from sui-tunnel-ts
 }

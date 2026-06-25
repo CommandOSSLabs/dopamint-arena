@@ -2,7 +2,6 @@ import { cn } from "@/lib/utils";
 import { FLEET_CELLS } from "../engine/fleet";
 import type { BattleshipView } from "../view";
 import { BoardGrid } from "./BoardGrid";
-import { FleetRoster } from "./FleetRoster";
 
 /**
  * The in-battle screen shared by both modes: enemy waters (where you fire) and
@@ -15,12 +14,32 @@ export function BattleView({
   statusLabel,
   onFire,
   onPlayAgain,
+  auto = false,
+  score,
+  gameNumber,
+  onSettle,
+  playAgainLabel,
+  playAgainDisabled,
 }: {
   view: BattleshipView;
   /** Extra status line shown on the result card (e.g. "settling…", "settled ✓"). */
   statusLabel?: string;
   onFire: (cell: number) => void;
   onPlayAgain: () => void;
+  /** Autopilot is firing your shots too — reflect it in the turn banner, and (since
+   *  finished games rematch automatically) suppress the blocking result overlay. */
+  auto?: boolean;
+  /** Multi-game session tally (bot mode): your wins vs the bot's, across one tunnel. */
+  score?: { you: number; foe: number };
+  /** 1-based number of the game on screen (bot multi-game). */
+  gameNumber?: number;
+  /** Settle + close the tunnel now (bot multi-game). When set, the result card adds
+   *  a Settle action alongside Play Again. */
+  onSettle?: () => void;
+  /** Label for the primary post-game action (e.g. "Find next match" in PvP). */
+  playAgainLabel?: string;
+  /** Disable the post-game action (e.g. while a PvP settle is still in flight). */
+  playAgainDisabled?: boolean;
 }) {
   const accuracy =
     view.yourShots > 0
@@ -28,28 +47,46 @@ export function BattleView({
       : 0;
 
   return (
-    <div className="relative flex h-full flex-col gap-2 p-2 @[26rem]:p-3">
-      <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5 text-[11px] text-arena-muted">
+    <div className="relative flex min-h-full flex-col gap-2 p-2 @[26rem]:p-3 lg:h-full lg:min-h-0 lg:overflow-hidden">
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-2 gap-y-0.5 text-[clamp(10px,2.6cqmin,15px)] text-[var(--qp-ink-soft)]">
         <span>
           Enemy sunk{" "}
-          <span className="text-arena-text">
+          <span className="text-[var(--qp-ink)]">
             {view.hitsOnEnemy}/{FLEET_CELLS}
           </span>{" "}
           · your hull{" "}
-          <span className="text-arena-text">
+          <span className="text-[var(--qp-ink)]">
             {view.hitsOnYou}/{FLEET_CELLS}
           </span>
         </span>
-        <span>{view.onChain ? "on-chain" : "demo · off-chain"}</span>
+        <span>
+          {score ? (
+            <>
+              <span className="uppercase tracking-wider text-[var(--qp-amber)]">
+                Game {gameNumber}
+              </span>{" "}
+              · <span className="text-[var(--qp-felt)]">{score.you}</span>–
+              <span className="text-[var(--qp-red)]">{score.foe}</span>
+            </>
+          ) : view.onChain ? (
+            "on-chain"
+          ) : (
+            "demo · off-chain"
+          )}
+        </span>
       </div>
 
-      <FleetRoster fleet={view.fleet} />
-
-      <div className="grid grid-cols-1 gap-3 @[30rem]:grid-cols-2 @[30rem]:gap-4">
+      {/* Boards are VIEWPORT-driven, not container-driven. Desktop (≥lg, the windowed shell):
+          side-by-side and height-fit — they shrink to fill the window like quantum poker's felt,
+          never restacking into a column and never scrolling. Mobile (<lg): one column of
+          FULL-WIDTH boards (big tap targets), and the page scrolls vertically (ModeFrame owns the
+          overflow-y-auto) since two full-width boards exceed the viewport — far easier to tap than
+          two height-squeezed boards. */}
+      <div className="grid grid-cols-1 gap-3 lg:min-h-0 lg:flex-1 lg:grid-cols-2 lg:gap-4">
         <BoardGrid
           title="Enemy waters"
           cells={view.enemyCells}
-          interactive={view.myTurn}
+          interactive={view.myTurn && !auto}
           onCell={onFire}
           lastShot={view.lastYourShot}
         />
@@ -61,33 +98,52 @@ export function BattleView({
         />
       </div>
 
-      {view.outcome === null && (
-        <div className="mt-auto text-sm font-semibold text-arena-text">
+      {/* Manual play only: a thin turn prompt. Autopilot needs none — the animating
+          boards already show the duel, and dropping it gives the boards more height. */}
+      {view.outcome === null && !auto && (
+        <div className="shrink-0 text-center text-[clamp(13px,3.4cqmin,20px)]">
           <span
-            className={cn(view.myTurn && "animate-pulse text-arena-accent")}
+            className={cn(
+              view.myTurn
+                ? "text-[var(--qp-amber)] motion-safe:animate-pulse"
+                : "text-[var(--qp-ink-soft)]",
+            )}
           >
             {view.myTurn ? "Your turn — fire!" : "Opponent is aiming…"}
           </span>
         </div>
       )}
 
-      {view.outcome !== null && (
-        <div className="absolute inset-0 grid place-items-center bg-black/45 p-2 backdrop-blur-sm @[20rem]:p-4">
-          <div className="flex w-full max-w-xs animate-in flex-col items-center gap-3 rounded-xl border border-arena-edge bg-arena-panel p-4 text-center shadow-2xl zoom-in-95 @[20rem]:p-5">
+      {/* Result card. Suppressed while autopilot is looping (it rematches on its own);
+          shown when a game ends in manual play, with Play Again + (multi-game) Settle. */}
+      {view.outcome !== null && !auto && (
+        <div className="absolute inset-0 grid place-items-center overflow-y-auto bg-[rgba(35,34,31,0.32)] p-2 backdrop-blur-[2px] @[20rem]:p-4">
+          <div className="qp-panel qp-stroke flex w-full max-w-xs animate-in flex-col items-center gap-3 p-4 text-center zoom-in-95 @[20rem]:p-5">
             <div
               className={cn(
-                "text-lg font-bold",
-                view.outcome === "win" ? "text-arena-accent" : "text-red-400",
+                "qp-title text-[clamp(20px,7cqmin,30px)]",
+                view.outcome === "win"
+                  ? "text-[var(--qp-felt)]"
+                  : "text-[var(--qp-red)]",
               )}
             >
               {view.outcome === "win" ? "Victory" : "Defeat"}
             </div>
-            <p className="text-xs text-arena-muted">
-              {view.outcome === "win"
-                ? "You sank the enemy fleet."
-                : "Your fleet was sunk."}
-            </p>
-            <dl className="grid w-full grid-cols-1 gap-y-1.5 text-[11px] @[16rem]:grid-cols-2">
+            {score ? (
+              <p className="qp-note">
+                Session{" "}
+                <span className="text-[var(--qp-felt)]">{score.you}</span> –{" "}
+                <span className="text-[var(--qp-red)]">{score.foe}</span> ·
+                settle to cash out, or play on.
+              </p>
+            ) : (
+              <p className="qp-note">
+                {view.outcome === "win"
+                  ? "You sank the enemy fleet."
+                  : "Your fleet was sunk."}
+              </p>
+            )}
+            <dl className="grid w-full grid-cols-1 gap-y-1.5 text-[clamp(10px,2.6cqmin,15px)] @[16rem]:grid-cols-2">
               <Stat label="Shots fired" value={String(view.yourShots)} />
               <Stat label="Hits" value={String(view.hitsOnEnemy)} />
               <Stat label="Accuracy" value={`${accuracy}%`} />
@@ -96,15 +152,23 @@ export function BattleView({
                 value={`${view.hitsOnYou}/${FLEET_CELLS}`}
               />
             </dl>
-            <div className="text-[11px] text-arena-muted">
+            <div className="text-[clamp(10px,2.4cqmin,14px)] text-[var(--qp-ink-soft)]">
               {statusLabel ?? ""}
             </div>
-            <button
-              onClick={onPlayAgain}
-              className="mt-1 rounded bg-arena-accent px-4 py-1.5 text-sm font-semibold text-black"
-            >
-              Play Again
-            </button>
+            <div className="mt-1 flex w-full flex-col gap-2">
+              <button
+                onClick={onPlayAgain}
+                disabled={playAgainDisabled}
+                className={cn("qp-btn w-full", !onSettle && "qp-btn--go")}
+              >
+                {playAgainLabel ?? "Play Again"}
+              </button>
+              {onSettle && (
+                <button onClick={onSettle} className="qp-btn qp-btn--go w-full">
+                  Settle &amp; cash out
+                </button>
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -115,8 +179,8 @@ export function BattleView({
 function Stat({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-center justify-between gap-2 px-2">
-      <dt className="text-arena-muted">{label}</dt>
-      <dd className="font-semibold text-arena-text">{value}</dd>
+      <dt className="text-[var(--qp-ink-soft)]">{label}</dt>
+      <dd className="text-[var(--qp-ink)]">{value}</dd>
     </div>
   );
 }
