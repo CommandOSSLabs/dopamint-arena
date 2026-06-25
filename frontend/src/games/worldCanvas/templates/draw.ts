@@ -38,7 +38,13 @@ function drawPaths(
       ctx.strokeStyle = hex;
       if (pts.length === 1) {
         ctx.beginPath();
-        ctx.arc(ox + pts[0].x * unitPx, oy + pts[0].y * unitPx, ctx.lineWidth / 2, 0, Math.PI * 2);
+        ctx.arc(
+          ox + pts[0].x * unitPx,
+          oy + pts[0].y * unitPx,
+          ctx.lineWidth / 2,
+          0,
+          Math.PI * 2,
+        );
         ctx.fillStyle = hex;
         ctx.fill();
         continue;

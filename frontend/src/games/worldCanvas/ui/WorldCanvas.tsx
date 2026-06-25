@@ -26,8 +26,7 @@ const FOCUS_SCALE = 12;
  * matching the other games' tool cursors. A dark halo keeps it visible on light ink;
  * the hotspot sits on the pencil's nib (bottom-left). Falls back to `crosshair`.
  */
-const PENCIL_CURSOR =
-  `url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round"><g stroke="%23000" stroke-opacity="0.5" stroke-width="3.6"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></g><g stroke="%23fff" stroke-width="1.8"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></g></svg>') 2 20, crosshair`;
+const PENCIL_CURSOR = `url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round"><g stroke="%23000" stroke-opacity="0.5" stroke-width="3.6"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></g><g stroke="%23fff" stroke-width="1.8"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></g></svg>') 2 20, crosshair`;
 
 /**
  * The infinite vector-ink wall — a single HTML5 canvas with pan (drag),
@@ -166,7 +165,13 @@ export function WorldCanvas({
   /** True while the tunnel is opening — show a grab cursor, swallow paints. */
   disabled: boolean;
   /** Place one cell: chunk (cx,cy) + in-chunk (x,y) + color → one co-signed move. */
-  onPaint: (cx: bigint, cy: bigint, x: number, y: number, color: number) => void;
+  onPaint: (
+    cx: bigint,
+    cy: bigint,
+    x: number,
+    y: number,
+    color: number,
+  ) => void;
   /** Live agents — drawn as small on-canvas pins above the flag each is painting. */
   agents: AgentMarker[];
   /** Latest camera-jump request; the view eases to center this point on change. An
@@ -193,9 +198,11 @@ export function WorldCanvas({
   humanRef.current = humanAddress;
   // Active camera-jump target (global-pixel center + scale); cleared on arrival or
   // when the user pans/zooms, so a jump never fights manual control.
-  const focusTarget = useRef<{ gcx: number; gcy: number; scale: number } | null>(
-    null,
-  );
+  const focusTarget = useRef<{
+    gcx: number;
+    gcy: number;
+    scale: number;
+  } | null>(null);
 
   // Render store: finalized strokes (cached outlines) + each painter's open stroke,
   // built from the co-signed paint stream; plus the highest seq already folded in.
@@ -360,7 +367,14 @@ export function WorldCanvas({
           openStrokes.current.delete(key);
         }
       }
-      extendStroke(cell.painter, gx + 0.5, gy + 0.5, cell.color, AGENT_STROKE_SIZE, cell.seq);
+      extendStroke(
+        cell.painter,
+        gx + 0.5,
+        gy + 0.5,
+        cell.color,
+        AGENT_STROKE_SIZE,
+        cell.seq,
+      );
     }
     appliedSeq.current = maxSeq;
   };
@@ -506,7 +520,8 @@ export function WorldCanvas({
       // keeps this cheap. The human's live drag always rides on top (highest seq).
       const ordered: Array<Stroke | OpenStroke> = [];
       for (const s of strokes.current) if (visible(s)) ordered.push(s);
-      for (const s of openStrokes.current.values()) if (visible(s)) ordered.push(s);
+      for (const s of openStrokes.current.values())
+        if (visible(s)) ordered.push(s);
       ordered.sort((a, b) => a.seq - b.seq);
       for (const s of ordered) strokePath(s.pts, s.color, s.size, s.erase);
       const live = liveStroke.current;
@@ -701,7 +716,8 @@ export function WorldCanvas({
     hover.current = cell;
     // Left button with no Space/hand modifier draws; right/middle button, held
     // Space, or the hand tool pans. A disabled wall never paints, but may pan.
-    const wantsPan = e.button !== 0 || spacePressed.current || panOnlyRef.current;
+    const wantsPan =
+      e.button !== 0 || spacePressed.current || panOnlyRef.current;
     const painting = !wantsPan && !disabled;
     drag.current = {
       lastX: sx,
@@ -852,7 +868,13 @@ export function WorldCanvas({
   );
 }
 
-function ZoomButton({ label, onClick }: { label: string; onClick: () => void }) {
+function ZoomButton({
+  label,
+  onClick,
+}: {
+  label: string;
+  onClick: () => void;
+}) {
   return (
     <button
       onClick={onClick}

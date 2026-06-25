@@ -50,7 +50,9 @@ export function FloatingToolbar({
   collapse?: boolean;
 }) {
   return (
-    <div style={stacked ? { ...islandStyle, ...islandStackedStyle } : islandStyle}>
+    <div
+      style={stacked ? { ...islandStyle, ...islandStackedStyle } : islandStyle}
+    >
       <div style={toolGroupStyle}>
         <ToolButton
           label="Draw"
@@ -477,7 +479,11 @@ function ToolButton({
         cursor: "pointer",
         border: "none",
         color: active ? WC.accent : hover ? WC.text : WC.muted,
-        background: active ? WC.accentFill : hover ? WC.softFill : "transparent",
+        background: active
+          ? WC.accentFill
+          : hover
+            ? WC.softFill
+            : "transparent",
         transition: "background .1s, color .1s",
       }}
     >

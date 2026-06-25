@@ -3,7 +3,10 @@ import assert from "node:assert";
 import { setAllConfig } from "@pulumi/pulumi/runtime/config.js";
 import { getConfig } from "./config.js";
 
-function setPulumiConfig(config: Record<string, string>, secrets: string[] = []) {
+function setPulumiConfig(
+  config: Record<string, string>,
+  secrets: string[] = [],
+) {
   setAllConfig(config, secrets);
 }
 
@@ -71,13 +74,15 @@ describe("config", () => {
         "dopamint:backend-image-tag": "test-sha",
         "dopamint:settler-key": "test-settler-key",
       },
-      ["dopamint:settler-key"]
+      ["dopamint:settler-key"],
     );
 
     const cfg = getConfig();
 
     assert.ok(cfg.settlerKey, "settler key must be read from secret config");
-    const value = await (cfg.settlerKey as unknown as { promise(): Promise<string> }).promise();
+    const value = await (
+      cfg.settlerKey as unknown as { promise(): Promise<string> }
+    ).promise();
     assert.strictEqual(value, "test-settler-key");
   });
 });

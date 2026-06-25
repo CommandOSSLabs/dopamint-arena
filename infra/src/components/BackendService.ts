@@ -17,7 +17,9 @@ export interface BackendServiceArgs {
   listener?: aws.lb.Listener;
 }
 
-export function createBackendService(args: BackendServiceArgs): BackendServiceOutputs {
+export function createBackendService(
+  args: BackendServiceArgs,
+): BackendServiceOutputs {
   const service = new aws.ecs.Service(
     `${args.name}-backend-service`,
     {
@@ -44,7 +46,7 @@ export function createBackendService(args: BackendServiceArgs): BackendServiceOu
     },
     {
       dependsOn: args.listener ? [args.listener] : undefined,
-    }
+    },
   );
 
   return { serviceName: service.name, serviceArn: service.arn };

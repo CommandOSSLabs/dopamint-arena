@@ -106,7 +106,9 @@ export function catmullRomPath(controls: Vec2[], samplesPerSeg = 12): Vec2[] {
   const out: Vec2[] = [];
   for (let i = 1; i < c.length - 2; i++) {
     for (let s = 0; s < samplesPerSeg; s++) {
-      out.push(catmullRom(c[i - 1], c[i], c[i + 1], c[i + 2], s / samplesPerSeg));
+      out.push(
+        catmullRom(c[i - 1], c[i], c[i + 1], c[i + 2], s / samplesPerSeg),
+      );
     }
   }
   out.push(controls[controls.length - 1]);
@@ -118,10 +120,13 @@ export function catmullRomPath(controls: Vec2[], samplesPerSeg = 12): Vec2[] {
  * over a hashed integer lattice — cheap and dependency-free. Flow-field mode reads it
  * as an angle field so K particles trace silky, parallel streamlines.
  */
-export function makeValueNoise2D(rng: () => number): (x: number, y: number) => number {
+export function makeValueNoise2D(
+  rng: () => number,
+): (x: number, y: number) => number {
   const salt = (Math.floor(rng() * 0xffffffff) >>> 0) | 1;
   const hash = (x: number, y: number): number => {
-    let h = (Math.imul(x | 0, 374761393) + Math.imul(y | 0, 668265263) + salt) | 0;
+    let h =
+      (Math.imul(x | 0, 374761393) + Math.imul(y | 0, 668265263) + salt) | 0;
     h = Math.imul(h ^ (h >>> 13), 1274126177);
     return ((h ^ (h >>> 16)) >>> 0) / 4294967295;
   };
