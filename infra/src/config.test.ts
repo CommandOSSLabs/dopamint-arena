@@ -17,6 +17,7 @@ function clearPulumiConfig() {
 const baseConfig: Record<string, string> = {
   "dopamint:environment": "test",
   "dopamint:domain": "test.example",
+  "dopamint:backend-domain": "api.test.example",
   "dopamint:db-instance-class": "db.t3.medium",
   "dopamint:db-serverless": "false",
   "dopamint:cache-node-type": "cache.t3.micro",
@@ -40,6 +41,7 @@ describe("config", () => {
 
     assert.strictEqual(cfg.environment, "test");
     assert.strictEqual(cfg.domain, "test.example");
+    assert.strictEqual(cfg.backendDomain, "api.test.example");
     assert.strictEqual(cfg.dbInstanceClass, "db.t3.medium");
     assert.strictEqual(cfg.dbServerless, false);
     assert.strictEqual(cfg.cacheNodeType, "cache.t3.micro");

@@ -46,6 +46,13 @@ function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
   const ollamaEnabled = pulumi.output(args.ollamaEnabled ?? false);
   const ollamaModel = pulumi.output(args.ollamaModel ?? "qwen2.5:1.8b");
   const ollamaImageTag = pulumi.output(args.ollamaImageTag ?? "0.6.2");
+  // pulumi.all's tuple overloads stop at 8 elements; bundling the ollama trio
+  // into one output keeps the outer all an 8-tuple, so it stays heterogeneously
+  // typed (the boolean enabled flag alongside the string config) rather than
+  // collapsing to the homogeneous-array overload that rejects the boolean.
+  const ollama = pulumi
+    .all([ollamaEnabled, ollamaModel, ollamaImageTag])
+    .apply(([enabled, model, imageTag]) => ({ enabled, model, imageTag }));
 
   return pulumi
     .all([
@@ -56,9 +63,7 @@ function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
       logGroupName,
       settlerKeySecretArn,
       corsAllowedOrigins,
-      ollamaEnabled,
-      ollamaModel,
-      ollamaImageTag,
+      ollama,
     ])
     .apply(
       ([
@@ -69,10 +74,13 @@ function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
         logGroupName,
         settlerKeySecretArn,
         corsAllowedOrigins,
-        ollamaEnabled,
-        ollamaModel,
-        ollamaImageTag,
+        ollama,
       ]) => {
+        const {
+          enabled: ollamaEnabled,
+          model: ollamaModel,
+          imageTag: ollamaImageTag,
+        } = ollama;
         const backendEnv: Array<{ name: string; value: string }> = [
           {
             name: "REDIS_PUBSUB_URL",
@@ -184,10 +192,7 @@ function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
               },
             },
             healthCheck: {
-              command: [
-                "CMD-SHELL",
-                "ollama list >/dev/null 2>&1 || exit 1",
-              ],
+              command: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"],
               interval: 30,
               timeout: 10,
               retries: 5,
