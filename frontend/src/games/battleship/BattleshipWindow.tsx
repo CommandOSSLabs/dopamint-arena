@@ -88,11 +88,13 @@ function ModeChooser({ onPick }: { onPick: (m: Mode) => void }) {
     <div className="flex h-full flex-col items-center justify-center gap-5 p-5 text-center">
       <div className="flex flex-col items-center gap-1">
         <span className="sketch-eyebrow">You vs the sea</span>
-        <h2 className="sketch-title text-[clamp(26px,9cqmin,40px)]">Battleship</h2>
+        <h2 className="sketch-title text-[clamp(26px,9cqmin,40px)]">
+          Battleship
+        </h2>
         <p className="sketch-note mt-1 max-w-xs">
           Hide your fleet, then sink your foe's. Every shot is{" "}
-          <span className="text-[var(--sketch-accent)]">commit-revealed</span> and
-          co-signed in the tunnel — the winner settles on-chain.
+          <span className="text-[var(--sketch-accent)]">commit-revealed</span>{" "}
+          and co-signed in the tunnel — the winner settles on-chain.
         </p>
       </div>
       <div className="flex w-full max-w-xs flex-col gap-2.5">
@@ -258,7 +260,9 @@ function ErrorPane({
 }) {
   return (
     <Centered>
-      <p className="text-[var(--sketch-red)]">{error ?? "something went wrong"}</p>
+      <p className="text-[var(--sketch-red)]">
+        {error ?? "something went wrong"}
+      </p>
       <button onClick={onBack} className="sketch-btn">
         Back
       </button>

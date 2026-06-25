@@ -55,7 +55,9 @@ const BoardCell = memo(function BoardCell({
         <span
           className={cn(
             "bs-mark select-none",
-            v === "miss" ? "text-[var(--sketch-ink-soft)]" : "text-[var(--sketch-red)]",
+            v === "miss"
+              ? "text-[var(--sketch-ink-soft)]"
+              : "text-[var(--sketch-red)]",
             v === "hit" && "motion-safe:animate-pulse",
           )}
         >

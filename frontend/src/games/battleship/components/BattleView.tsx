@@ -159,12 +159,18 @@ export function BattleView({
               <button
                 onClick={onPlayAgain}
                 disabled={playAgainDisabled}
-                className={cn("sketch-btn w-full", !onSettle && "sketch-btn--go")}
+                className={cn(
+                  "sketch-btn w-full",
+                  !onSettle && "sketch-btn--go",
+                )}
               >
                 {playAgainLabel ?? "Play Again"}
               </button>
               {onSettle && (
-                <button onClick={onSettle} className="sketch-btn sketch-btn--go w-full">
+                <button
+                  onClick={onSettle}
+                  className="sketch-btn sketch-btn--go w-full"
+                >
                   Settle &amp; cash out
                 </button>
               )}

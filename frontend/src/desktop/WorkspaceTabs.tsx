@@ -114,7 +114,10 @@ export function WorkspaceTabs({
               key={t.section}
               to="/"
               search={t.section === "games" ? {} : { section: t.section }}
-              className={cn(tab, active === t.section ? tabActive : tabInactive)}
+              className={cn(
+                tab,
+                active === t.section ? tabActive : tabInactive,
+              )}
             >
               <Icon className="size-3.5" />
               {t.label}
