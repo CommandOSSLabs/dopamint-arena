@@ -401,9 +401,8 @@ export function WorldCanvas({
         // Render-only width (no extra co-signed cells). Ink follows YOUR brush size; an erase
         // renders FAT (its full nib) so a centerline-only co-signed erase still clears the
         // whole swath on the peer — erase syncs like draw, just thicker.
-        (cell.color === ERASER_COLOR
-          ? ERASER_STROKE_SIZE
-          : AGENT_STROKE_SIZE) * brushSizeRef.current,
+        (cell.color === ERASER_COLOR ? ERASER_STROKE_SIZE : AGENT_STROKE_SIZE) *
+          brushSizeRef.current,
         cell.seq,
       );
     }
