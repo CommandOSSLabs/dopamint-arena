@@ -165,20 +165,25 @@ yields a sample count.
 | `--workers N\|auto` | rayon threads; default `auto` = core count |
 | `--duration S` | seconds to run; default 15 |
 | `--matches N` | stop after N matches (with duration, first to fire wins) |
-| `--concurrency N` | **accepted for command-line parity, no-op** in the synchronous CPU path; prints a note if set >1 |
 | `--offchain` | accepted; required anchor for this build |
 | `--channel local` | accepted; required transport for this build |
 | `--game blackjack` | accepted; the only game in this build |
 | `--runner simple\|optimized\|both` | which runner(s) to measure; default `both` |
 
-Out-of-scope flags (`--onchain`, `--channel relay`, `--all`, `--pin`,
-`--container`, `--rpc-url`, …) are rejected with a clear "not supported in this
-build (see Plan 4/5/6)" message rather than silently ignored.
+`--concurrency` is **removed**, not accepted: it is meaningless in the
+synchronous CPU path (there is no idle-await time to interleave, unlike TS's
+async worker), so passing it is rejected with a message explaining it does not
+apply to rustbench. The headline `--offchain --channel local --game blackjack`
+line carries no `--concurrency`, so the parity command is unaffected.
+
+Other out-of-scope flags (`--onchain`, `--channel relay`, `--all`, `--pin`,
+`--container`, `--rpc-url`, …) are likewise rejected with a clear "not supported
+in this build (see Plan 4/5/6)" message rather than silently ignored.
 
 ## Output (format-parity, console only)
 
 ```
-[local/offchain] fleet: workers=12 concurrency=1
+[local/offchain] fleet: workers=12
 [local/offchain] swarm: 481234 moves over 3366 matches in 15.0s
 [local/offchain] tunnels settled: 3366 (224.4/s)
 [local/offchain] aggregate move-TPS: 32082.3   (optimized: 41120.7)
