@@ -1,4 +1,4 @@
-# 0009 — Backend sponsors gas (only) for the user's open/fund tx
+# 0014 — Backend sponsors gas (only) for the user's open/fund tx
 
 - **Status**: Accepted
 - **Date**: 2026-06-22

@@ -4,7 +4,7 @@
 - **Date**: 2026-06-20
 - **Refs**: refines [ADR-0005](0005-redis-backed-ha-control-plane.md) (Redis-backed
   HA) and supersedes its _Latency_ consequence; premised on
-  [ADR-0006](0006-genuine-two-party-only-drop-self-play.md) (every move flows
+  [ADR-0001 §1](0001-arena-baseline-architecture.md) (every move flows
   through the server relay). Driven by the `channel-through-server` work.
 
 ## Context
@@ -15,7 +15,7 @@ frame to the owner's channel — **per frame**. That was justified by an explici
 premise: "PvP is human-paced (≈0 TPS), so [a Redis round-trip per relayed frame]
 is immaterial; the 1M-TPS self-play lane never touches it."
 
-ADR-0006 removed self-play. **Every move now flows through the server relay**, so
+Self-play was removed (ADR-0001 §1). **Every move now flows through the server relay**, so
 that premise no longer holds: the relay _is_ the data plane, and a Redis
 round-trip per frame for any cross-instance match becomes the throughput ceiling
 (the "~50k" cap). At the same time, most relay-adjacent state is **not** actually
@@ -71,14 +71,13 @@ settlement, so we persist checkpoints, **not** moves.
   order-independent; SADD/SREM is idempotent; CAS (Lua) is last-writer. The move counter
   is deliberately at-most-once (watermark advances before the push; a failed flush drops
   that interval's delta). Do not add flush retries, which would make it at-least-once and
-  double-count. See `store/mod.rs` module doc and
-  `docs/superpowers/specs/2026-06-21-control-plane-aggregation-correctness-design.md`.
+  double-count. See `store/mod.rs` module doc and the control-plane aggregation-correctness design notes.
 - **Throughput scales by adding instances.** The data plane is shard-local and
   race-free by construction; Redis load is O(matches) + O(seconds), never
   O(moves), so Redis stops being the ceiling. This is the change that lifts the
   ~50k cap.
 - **Supersedes ADR-0005's _Latency_ consequence.** "One Redis round-trip per
-  relayed frame … immaterial" held only under self-play. Under ADR-0006 the
+  relayed frame … immaterial" held only under self-play. Under the two-party-only model the
   per-frame pub/sub path is demoted to a **fallback** for matches that aren't
   co-located; the common path is in-process.
 - **Realizing the local path needs two follow-ups, each its own ADR:** (a) an

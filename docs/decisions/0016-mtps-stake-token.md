@@ -1,22 +1,22 @@
-# 0010 — MTPS free-faucet stake token (SUI-free stakes)
+# 0016 — MTPS free-faucet stake token (SUI-free stakes)
 
 - **Status**: Accepted
 - **Date**: 2026-06-22
 - **Renamed**: 2026-06-24 — the token was renamed **DOPAMINT → MTPS** (ticker + on-chain
   symbol/name) and a fresh package was published to testnet. The decision below is unchanged;
-  only the name, package, and identifiers were updated. (ADR number stays 0010.)
-- **Builds on**: [ADR-0009](0009-sponsor-create-and-fund-gas.md) (gas sponsorship). The faucet and
+  only the name, package, and identifiers were updated. (ADR number stays 0016.)
+- **Builds on**: [ADR-0014](0014-sponsor-create-and-fund-gas.md) (gas sponsorship). The faucet and
   the open/fund are both gas-sponsored, so a player needs no SUI at all.
 
 ## Context
 
-After gas sponsorship (ADR-0009) the settler pays a game's gas in SUI, but the **stake** still came
+After gas sponsorship (ADR-0014) the settler pays a game's gas in SUI, but the **stake** still came
 from the player's own `Coin<SUI>` — so a fresh 0-SUI account (e.g. a Google zkLogin login) still
 couldn't play. We want a fully free experience: no SUI, no funding step, nothing in the UI.
 
 The tunnel framework is generic over the coin `T` (`create<T>`, `deposit<T>`, `close<T>`), and
 quantum-poker already stakes a custom coin (`test_buck`) into tunnels — so a non-SUI stake token
-needs no tunnel change, and the ADR-0009 "stake from a user coin" path is exactly what it needs.
+needs no tunnel change, and the ADR-0014 "stake from a user coin" path is exactly what it needs.
 
 ## Decision
 
@@ -33,7 +33,7 @@ needs no tunnel change, and the ADR-0009 "stake from a user coin" path is exactl
    **auto-faucets invisibly**: before staking, if the player's MTPS balance is short, one
    gas-sponsored `mint` tops them up. No balance, no faucet button — nothing in the UI.
 4. **Battleship first** (PvP + bot). Other games keep SUI until wired. Gated on the MTPS env:
-   unset → the ADR-0009 SUI sponsored path (with sender-pays fallback) still applies.
+   unset → the ADR-0014 SUI sponsored path (with sender-pays fallback) still applies.
 
 ## Consequences
 

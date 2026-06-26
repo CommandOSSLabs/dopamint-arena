@@ -6,7 +6,7 @@
   [ADR-0009](0009-data-plane-local-control-plane-redis.md) §Consequences / §Open
   questions and the affinity follow-up [ADR-0010](0010-mp-resume-protocol.md)
   §Consequences points to. Full design:
-  [`docs/superpowers/specs/2026-06-24-local-first-pairing-design.md`](../superpowers/specs/2026-06-24-local-first-pairing-design.md).
+  the local-first-pairing design notes.
 
 ## Context
 

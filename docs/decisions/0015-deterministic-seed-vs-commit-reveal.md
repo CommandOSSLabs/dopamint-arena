@@ -1,4 +1,4 @@
-# 0010 — Deterministic tunnelId seed vs commit-reveal for game randomness
+# 0015 — Deterministic tunnelId seed vs commit-reveal for game randomness
 
 - **Status**: Accepted
 - **Date**: 2026-06-22
@@ -14,10 +14,10 @@ new game must pick one:
   uses this for its card stream (`blackjack.ts` header: _"bias-free without any
   commit-reveal round-trips"_).
 - **Commit-reveal** — both parties commit to secret randomness, then reveal.
-  Used by battleship (0003), quantum poker (0008), and Super Auto Pets (0009).
+  Used by battleship (0003), quantum poker (0008), and Super Auto Pets.
 
 The ambiguity: chicken-cross and bomb-it ship PvP and both seed from
-`seedFromTunnelId(tunnelId)`. `docs/adding-a-tunnel-game.md` previously said PvP
+`seedFromTunnelId(tunnelId)`. `docs/guide/adding-a-tunnel-game.md` previously said PvP
 _should_ use commit-reveal, which no shipped game does.
 
 ## Decision

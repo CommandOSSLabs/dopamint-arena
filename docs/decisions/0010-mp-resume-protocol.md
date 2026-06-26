@@ -4,7 +4,7 @@
 - **Date**: 2026-06-22
 - **Refs**: implements the deferred "resume protocol" from
   [ADR-0009](0009-data-plane-local-control-plane-redis.md) §Consequences and §Open questions.
-  Full design: [`docs/superpowers/specs/2026-06-22-mp-resume-protocol-design.md`](../superpowers/specs/2026-06-22-mp-resume-protocol-design.md).
+  Full design rationale is kept in the mp-resume-protocol design notes.
 
 ## Context
 

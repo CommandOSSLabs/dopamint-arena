@@ -1,4 +1,4 @@
-# 0011 — Multi-game self-play + per-game seed for bomb-it & chicken-cross
+# 0017 — Multi-game self-play + per-game seed for bomb-it & chicken-cross
 
 - **Status**: Accepted
 - **Date**: 2026-06-23
@@ -21,7 +21,7 @@ inner game from a SYNTHETIC per-game id `` `${tunnelId}:g${gamesPlayed}` ``.
 `gamesPlayed` is part of the co-signed multi-game state and of `encodeState`, so
 both parties and an on-chain disputer derive the same per-game seed.
 
-This stays inside ADR 0010: the field is still public, symmetric, and
+This stays inside ADR 0015: the field is still public, symmetric, and
 party-independent, seeded from an un-grindable id — no commit-reveal is added.
 
 ## Consequences
@@ -32,4 +32,4 @@ party-independent, seeded from an un-grindable id — no commit-reveal is added.
   challenge, not a replay.
 - Single-game PvP is unchanged (still seeds from the plain `tunnelId`).
 - The wrappers live in `sui-tunnel-ts/src/protocol/`, beside the base protocols
-  and ttt's multi-game wrapper, per `docs/adding-a-tunnel-game.md`.
+  and ttt's multi-game wrapper, per `docs/guide/adding-a-tunnel-game.md`.
