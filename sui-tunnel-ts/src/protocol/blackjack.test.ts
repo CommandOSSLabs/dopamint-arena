@@ -270,3 +270,28 @@ test("handValue handles soft aces", () => {
   assert.equal(handValue([11, 10]), 21);
   assert.equal(handValue([11, 5, 10]), 16); // ace downgraded
 });
+
+test("a party that committed can forfeit the round when the opponent does not", () => {
+  let s = fresh(); // round 1, draw_commit, deal player card
+  s = proto.applyMove(s, commitMove(secret(1)), "A"); // A committed, B has not
+  s = proto.applyMove(s, { kind: "forfeit" }, "A"); // A claims B's no-show
+  assert.equal(s.phase, "round_over");
+  assert.equal(s.balanceA, 1000n + WAGER);
+  assert.equal(s.balanceB, 1000n - WAGER);
+});
+
+test("forfeit is rejected when the opponent does not owe the pending step", () => {
+  let s = fresh();
+  // Neither has committed -> A has not done its part, cannot claim.
+  assert.throws(() => proto.applyMove(s, { kind: "forfeit" }, "A"), /opponent does not owe/);
+});
+
+test("forfeit works in the reveal phase too", () => {
+  let s = fresh();
+  s = proto.applyMove(s, commitMove(secret(1)), "A");
+  s = proto.applyMove(s, commitMove(secret(2)), "B"); // -> draw_reveal
+  s = proto.applyMove(s, revealMove(secret(1)), "A"); // A revealed, B has not
+  s = proto.applyMove(s, { kind: "forfeit" }, "A");
+  assert.equal(s.phase, "round_over");
+  assert.equal(s.balanceA, 1000n + WAGER);
+});
