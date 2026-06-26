@@ -42,6 +42,7 @@ export const ChickenCrossWindow = createArenaWindow<
       score={solo.score}
       gamesPlayed={solo.gamesPlayed}
       onSettle={solo.status === "playing" ? solo.settleNow : undefined}
+      onBack={onPlayAgain}
     />
   ),
   renderPvpBoard: (pvp, onPlayAgain) => (
@@ -56,6 +57,7 @@ export const ChickenCrossWindow = createArenaWindow<
       onToggleAuto={pvp.toggleAuto}
       onDir={pvp.setDir}
       onPlayAgain={onPlayAgain}
+      onBack={onPlayAgain}
     />
   ),
 });
