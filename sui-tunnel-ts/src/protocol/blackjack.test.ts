@@ -150,3 +150,52 @@ test("encodeState is stable for the same state", () => {
 function toHex(b: Uint8Array): string {
   return Buffer.from(b).toString("hex");
 }
+
+/** Opening deal with forced cards: player 10+10=20, dealer 5+5=10 (deterministic). */
+function dealtToPlayer(): BlackjackState {
+  let s = fresh();
+  const [ta, tb] = secretsForRank(13); // King -> value 10
+  const [fa, fb] = secretsForRank(5); // value 5
+  s = doDraw(s, ta, tb); // player card 1 = 10
+  s = doDraw(s, ta, tb); // player card 2 = 10  (duplicate rank is fine)
+  s = doDraw(s, fa, fb); // dealer card 1 = 5
+  s = doDraw(s, fa, fb); // dealer card 2 = 5  -> dealer 10 (< 17)
+  return s;
+}
+
+test("hit deals one more player card and returns to player phase", () => {
+  let s = dealtToPlayer();
+  assert.equal(s.phase, "player");
+  s = proto.applyMove(s, { kind: "hit" }, "A");
+  assert.equal(s.phase, "draw_commit");
+  assert.deepEqual(s.draw, { forHand: "player", reason: "hit" });
+  // Force the hit card to an Ace (value 11 -> soft, 10+10+11 busts? no: 31 -> aces down -> 21).
+  const [aa, ab] = secretsForRank(1);
+  s = doDraw(s, aa, ab);
+  assert.equal(s.phase, "player"); // 10 + 10 + Ace = 21, not bust
+  assert.equal(s.playerHand.length, 3);
+});
+
+test("hitting into a bust settles the round to the dealer", () => {
+  let s = dealtToPlayer(); // player has 10 + 10 = 20
+  s = proto.applyMove(s, { kind: "hit" }, "A");
+  const [na, nb] = secretsForRank(5); // value 5 -> 25, bust
+  s = doDraw(s, na, nb);
+  assert.equal(s.phase, "round_over");
+  // Round 1 -> player is A, dealer is B; player busts -> B wins the wager.
+  assert.equal(s.balanceB, 1000n + WAGER);
+  assert.equal(s.balanceA, 1000n - WAGER);
+  assert.equal(s.balanceA + s.balanceB, s.total);
+});
+
+test("stand kicks off the dealer auto-draw", () => {
+  let s = dealtToPlayer();
+  s = proto.applyMove(s, { kind: "stand" }, "A");
+  assert.equal(s.phase, "draw_commit");
+  assert.deepEqual(s.draw, { forHand: "dealer", reason: "dealer_auto" });
+});
+
+test("only the player party may hit", () => {
+  const s = dealtToPlayer(); // round 1 -> player is A
+  assert.throws(() => proto.applyMove(s, { kind: "hit" }, "B"), /player's \(A\) turn/);
+});

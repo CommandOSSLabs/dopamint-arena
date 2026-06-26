@@ -396,6 +396,20 @@ export class BlackjackProtocol implements Protocol<BlackjackState, BlackjackMove
           throw new Error(`expected 'reveal' in draw_reveal, got '${move.kind}'`);
         return applyReveal(state, move, by);
       }
+      case "player": {
+        const playerParty = getPlayerParty(state.round);
+        if (by !== playerParty)
+          throw new Error(`it is the player's (${playerParty}) turn`);
+        if (move.kind === "hit")
+          return beginDraw(state, { forHand: "player", reason: "hit" });
+        if (move.kind === "stand") {
+          // Dealer that is already pat (>= 17) draws nothing — settle immediately.
+          if (handValue(state.dealerHand) >= DEALER_STANDS_AT)
+            return resolveShowdown(state);
+          return beginDraw(state, { forHand: "dealer", reason: "dealer_auto" });
+        }
+        throw new Error(`expected 'hit' or 'stand' in player phase, got '${move.kind}'`);
+      }
       default:
         throw new Error(`phase ${state.phase} not implemented`);
     }
