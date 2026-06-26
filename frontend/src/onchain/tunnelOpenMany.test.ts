@@ -16,10 +16,22 @@ const COIN = "0xabc::mtps::MTPS";
 
 test("findAllTunnelIds returns every created Tunnel object id, skips others", () => {
   const changes = [
-    { type: "created", objectType: `0xpkg::tunnel::Tunnel<${COIN}>`, objectId: "0xt1" },
-    { type: "mutated", objectType: `0xpkg::tunnel::Tunnel<${COIN}>`, objectId: "0xZZZ" },
+    {
+      type: "created",
+      objectType: `0xpkg::tunnel::Tunnel<${COIN}>`,
+      objectId: "0xt1",
+    },
+    {
+      type: "mutated",
+      objectType: `0xpkg::tunnel::Tunnel<${COIN}>`,
+      objectId: "0xZZZ",
+    },
     { type: "created", objectType: "0x2::coin::Coin", objectId: "0xc1" },
-    { type: "created", objectType: `0xpkg::tunnel::Tunnel<${COIN}>`, objectId: "0xt2" },
+    {
+      type: "created",
+      objectType: `0xpkg::tunnel::Tunnel<${COIN}>`,
+      objectId: "0xt2",
+    },
   ];
   assert.deepEqual(findAllTunnelIds(changes), ["0xt1", "0xt2"]);
 });
@@ -64,8 +76,16 @@ test("openAndFundMany builds ONE tx and maps each tunnel to its party-A", async 
     getTransactionBlock: async () => ({
       // order intentionally shuffled vs the specs to prove correlation isn't positional
       objectChanges: [
-        { type: "created", objectType: `0xpkg::tunnel::Tunnel<${COIN}>`, objectId: "0xtB" },
-        { type: "created", objectType: `0xpkg::tunnel::Tunnel<${COIN}>`, objectId: "0xtA" },
+        {
+          type: "created",
+          objectType: `0xpkg::tunnel::Tunnel<${COIN}>`,
+          objectId: "0xtB",
+        },
+        {
+          type: "created",
+          objectType: `0xpkg::tunnel::Tunnel<${COIN}>`,
+          objectId: "0xtA",
+        },
       ],
     }),
     getObject: async (input: { id: string }) => ({
@@ -91,12 +111,26 @@ test("openAndFundMany builds ONE tx and maps each tunnel to its party-A", async 
     coinType: COIN,
     stakeCoinId: "0xstake",
     specs: [
-      { partyA: party("0xA1"), partyB: party("0xA2"), aAmount: 10n, bAmount: 20n },
-      { partyA: party("0xB1"), partyB: party("0xB2"), aAmount: 30n, bAmount: 40n },
+      {
+        partyA: party("0xA1"),
+        partyB: party("0xA2"),
+        aAmount: 10n,
+        bAmount: 20n,
+      },
+      {
+        partyA: party("0xB1"),
+        partyB: party("0xB2"),
+        aAmount: 30n,
+        bAmount: 40n,
+      },
     ],
   });
 
-  assert.equal(signExecCalls, 1, "exactly one signExec (one PTB) for two opens");
+  assert.equal(
+    signExecCalls,
+    1,
+    "exactly one signExec (one PTB) for two opens",
+  );
   assert.equal(map.get(normalizeSuiAddress("0xA1")), "0xtA");
   assert.equal(map.get(normalizeSuiAddress("0xB1")), "0xtB");
   assert.ok(built, "a transaction was built");
@@ -107,11 +141,17 @@ test("openAndFundMany throws when created tunnel count != spec count", async () 
     waitForTransaction: async () => {},
     getTransactionBlock: async () => ({
       objectChanges: [
-        { type: "created", objectType: `0xpkg::tunnel::Tunnel<${COIN}>`, objectId: "0xt1" },
+        {
+          type: "created",
+          objectType: `0xpkg::tunnel::Tunnel<${COIN}>`,
+          objectId: "0xt1",
+        },
       ],
     }),
     getObject: async () => ({
-      data: { content: { fields: { party_a: { fields: { address: "0xA1" } } } } },
+      data: {
+        content: { fields: { party_a: { fields: { address: "0xA1" } } } },
+      },
     }),
   } as unknown as Parameters<typeof openAndFundMany>[0]["reads"];
 
@@ -123,8 +163,18 @@ test("openAndFundMany throws when created tunnel count != spec count", async () 
         coinType: COIN,
         stakeCoinId: "0xstake",
         specs: [
-          { partyA: party("0xA1"), partyB: party("0xA2"), aAmount: 10n, bAmount: 20n },
-          { partyA: party("0xB1"), partyB: party("0xB2"), aAmount: 30n, bAmount: 40n },
+          {
+            partyA: party("0xA1"),
+            partyB: party("0xA2"),
+            aAmount: 10n,
+            bAmount: 20n,
+          },
+          {
+            partyA: party("0xB1"),
+            partyB: party("0xB2"),
+            aAmount: 30n,
+            bAmount: 40n,
+          },
         ],
       }),
     /expected 2 tunnels, got 1/,

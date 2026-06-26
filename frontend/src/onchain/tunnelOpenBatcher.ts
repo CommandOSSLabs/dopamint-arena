@@ -13,11 +13,7 @@ import {
   type TunnelOpenManySpec,
 } from "./tunnelTx";
 import { withSponsorFallback } from "./sponsor";
-import {
-  MTPS_COIN_TYPE,
-  isMtpsAddressBalance,
-  isMtpsConfigured,
-} from "./mtps";
+import { MTPS_COIN_TYPE, isMtpsAddressBalance, isMtpsConfigured } from "./mtps";
 
 export interface TunnelOpenRequest {
   partyA: PartyOnchain;
@@ -68,7 +64,8 @@ function coinTypeOf(req: TunnelOpenRequest): string | undefined {
 
 function chunk<T>(items: T[], size: number): T[][] {
   const out: T[][] = [];
-  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  for (let i = 0; i < items.length; i += size)
+    out.push(items.slice(i, i + size));
   return out;
 }
 
@@ -160,7 +157,9 @@ export class TunnelOpenBatcher {
         `[tunnelOpenBatcher] ${group.length} opens > maxBatch ${this.maxBatch} → ${chunks.length} PTBs`,
       );
     }
-    await Promise.all(chunks.map((c) => this.flushChunk(c, deps, mode, coinType)));
+    await Promise.all(
+      chunks.map((c) => this.flushChunk(c, deps, mode, coinType)),
+    );
   }
 
   private async flushChunk(
@@ -176,7 +175,10 @@ export class TunnelOpenBatcher {
       for (const p of chunkPending) {
         const id = map.get(normalizeSuiAddress(p.req.partyA.address));
         if (id) p.resolve(id);
-        else p.reject(new Error(`no tunnel matched party-A ${p.req.partyA.address}`));
+        else
+          p.reject(
+            new Error(`no tunnel matched party-A ${p.req.partyA.address}`),
+          );
       }
     } catch (batchErr) {
       // Atomic PTB: one bad spec aborts the chunk. Fall back to per-request single opens so one
@@ -210,7 +212,10 @@ export class TunnelOpenBatcher {
         signExec: deps.sponsoredSignExec,
         specs,
         coinType,
-        stakeFromBalance: { amount: total, coinType: coinType ?? MTPS_COIN_TYPE },
+        stakeFromBalance: {
+          amount: total,
+          coinType: coinType ?? MTPS_COIN_TYPE,
+        },
       });
     }
     if (mode === "mtps-coin") {
@@ -261,7 +266,10 @@ export class TunnelOpenBatcher {
         aAmount: req.aAmount,
         bAmount: req.bAmount,
         coinType,
-        stakeFromBalance: { amount: total, coinType: coinType ?? MTPS_COIN_TYPE },
+        stakeFromBalance: {
+          amount: total,
+          coinType: coinType ?? MTPS_COIN_TYPE,
+        },
       });
     }
     if (mode === "mtps-coin") {

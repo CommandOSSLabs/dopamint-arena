@@ -35,10 +35,7 @@ import {
   type SuiReads,
 } from "../../onchain/tunnelTx";
 import { useSponsoredSignExec } from "../../onchain/useSponsoredSignExec";
-import {
-  MTPS_COIN_TYPE,
-  isMtpsConfigured,
-} from "../../onchain/mtps";
+import { MTPS_COIN_TYPE, isMtpsConfigured } from "../../onchain/mtps";
 import {
   configureSharedBatcher,
   requestTunnelOpen,
