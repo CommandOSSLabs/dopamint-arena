@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useGameNavigate } from "@/games/blackjack/app/useGameRouter";
 import { useSoloCabinet } from "@/shell/cabinet/soloCabinet";
+import { useSoloAutoRetry } from "@/lib/useSoloAutoRetry";
 import { useGameScale } from "@/games/blackjack/app/components/app/ScaledWrapper";
 import {
   useCurrentAccount,
@@ -369,7 +370,9 @@ export default function PlayerBot({
   useEffect(() => {
     if (prevAccountRef.current && !account) {
       if (phase === "playing" || phase === "opening") {
-        console.log("[blackjack bot] Wallet disconnected during active game, settling now...");
+        console.log(
+          "[blackjack bot] Wallet disconnected during active game, settling now...",
+        );
         void settleNow().then(() => {
           backToConfig();
           navigate("/");
@@ -405,6 +408,8 @@ export default function PlayerBot({
     goManual,
     goHome,
   });
+
+  useSoloAutoRetry(auto, phase, handleStart);
 
   // Auto toggle: ticked = your bot plays the hand (fast self-play vs the dealer bot); unticked
   // pauses at your decision so you play Hit/Stand. The dealer + betting stay automatic either way.

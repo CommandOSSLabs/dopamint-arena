@@ -35,6 +35,8 @@ function statusText(g: ReturnType<typeof usePvpTicTacToe>): string {
   if (g.phase === "funding") return "Funding your seat…";
   if (g.phase === "settling") return "Ending on-chain…";
   if (g.phase === "done") return "Ended — game over";
+  if (!g.peerOnline && g.phase === "playing")
+    return "Opponent disconnected! Waiting up to 1h…";
   if (g.innerOver) {
     if (g.terminal) return "Session over — ending…";
     return g.role === "A"
@@ -272,10 +274,40 @@ export function PvpScene({
     </div>
   );
 
+  const isOffline = !g.peerOnline && g.phase === "playing";
+
+  const offlineOverlay = isOffline && (
+    <div className="absolute inset-0 bg-black/40 backdrop-blur-[1px] z-50 flex items-center justify-center pointer-events-auto">
+      <div className="bg-[#fffdf6] border-4 border-[var(--qp-ink,black)] px-6 py-5 rounded-lg shadow-xl text-center max-w-sm mx-4">
+        <h3 className="font-extrabold text-[var(--qp-red,red)] text-lg uppercase tracking-wider mb-2">
+          Opponent Disconnected
+        </h3>
+        <p className="text-xs md:text-sm font-semibold text-zinc-700 leading-snug mb-5">
+          Waiting for them to reconnect… Or you can claim chips unilaterally or
+          leave the game.
+        </p>
+        <div className="flex flex-col gap-2">
+          <button
+            onClick={g.settleUnilateral}
+            className="qp-btn qp-btn--go w-full !py-2.5 text-sm font-black uppercase"
+          >
+            Claim Chips (Dispute)
+          </button>
+          <button
+            onClick={leave}
+            className="qp-btn qp-btn--stop w-full !py-2.5 text-sm font-black uppercase"
+          >
+            Leave Game
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
   // Portrait: stack board over a compact control/log block.
   if (isPortrait) {
     return (
-      <div className="w-full h-full overflow-hidden flex flex-col items-center gap-1 p-1">
+      <div className="relative w-full h-full overflow-hidden flex flex-col items-center gap-1 p-1">
         <div className="w-full flex items-center justify-between gap-2 border-b-2 border-[var(--qp-ink-soft)] pb-2">
           {youAre}
           {scoreRow}
@@ -283,7 +315,9 @@ export function PvpScene({
         <div className="ttt-board-area flex-1 min-h-0 w-full grid place-items-center">
           <div className="ttt-board-square">{board}</div>
         </div>
-        <div className="text-center qp-title text-xl min-h-[24px]">
+        <div
+          className={`text-center qp-title text-xl min-h-[24px] ${!g.peerOnline && g.phase === "playing" ? "text-[var(--qp-red)] animate-pulse" : ""}`}
+        >
           {statusText(g)}
         </div>
         <div className="w-full max-w-[480px] flex flex-col items-center gap-2 border-t-2 border-[var(--qp-ink-soft)] pt-2">
@@ -296,13 +330,14 @@ export function PvpScene({
           <div className="flex items-stretch gap-3 w-full">{actions}</div>
           {gameLog}
         </div>
+        {offlineOverlay}
       </div>
     );
   }
 
   // Landscape: Bomb It-style three columns — controls pane | board hero | info pane.
   return (
-    <div className="w-full h-full overflow-hidden flex flex-row items-stretch gap-3 px-1 py-2">
+    <div className="relative w-full h-full overflow-hidden flex flex-row items-stretch gap-3 px-1 py-2">
       {/* Left pane: leave, auto, match-flow actions, status. */}
       <aside className="ttt-pane qp-panel qp-stroke flex flex-col items-center gap-3 overflow-y-auto">
         <button onClick={leave} className="qp-btn ttt-ctl-btn w-full">
@@ -313,7 +348,9 @@ export function PvpScene({
         <span className="qp-eyebrow text-[11px] opacity-80 text-center">
           Game {g.currentGame}
         </span>
-        <div className="qp-title text-base leading-tight text-center min-h-[2.4em] flex items-center">
+        <div
+          className={`qp-title text-base leading-tight text-center min-h-[2.4em] flex items-center ${!g.peerOnline && g.phase === "playing" ? "text-[var(--qp-red)] animate-pulse" : ""}`}
+        >
           {statusText(g)}
         </div>
       </aside>
@@ -334,6 +371,7 @@ export function PvpScene({
           </div>
         )}
       </aside>
+      {offlineOverlay}
     </div>
   );
 }

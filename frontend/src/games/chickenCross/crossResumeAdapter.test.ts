@@ -2,10 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { makeCrossResumeAdapter } from "./crossResumeAdapter.ts";
 import { CrossProtocol } from "../../../../sui-tunnel-ts/src/protocol/cross.ts";
-import {
-  stringifyWithBigint,
-  parseWithBigint,
-} from "../../pvp/resume.ts";
+import { stringifyWithBigint, parseWithBigint } from "../../pvp/resume.ts";
 
 test("serializeState round-trips through JSON and restores bigints", () => {
   const proto = new CrossProtocol();
@@ -37,7 +34,9 @@ test("bigint fields survive a peer round-trip (stringifyWithBigint/parseWithBigi
   });
   const adapter = makeCrossResumeAdapter();
   const serialized = adapter.serializeState(s);
-  const revived = parseWithBigint(stringifyWithBigint(serialized)) as typeof serialized;
+  const revived = parseWithBigint(
+    stringifyWithBigint(serialized),
+  ) as typeof serialized;
   const back = adapter.deserializeState(revived);
   assert.equal(back.tick, s.tick);
   assert.equal(back.seed, s.seed);

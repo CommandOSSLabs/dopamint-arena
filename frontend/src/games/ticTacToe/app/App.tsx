@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSoloCabinet } from "@/shell/cabinet/soloCabinet";
+import { useSoloAutoRetry } from "@/lib/useSoloAutoRetry";
 import {
   useBotGame,
   type Difficulty,
@@ -74,6 +75,14 @@ function AppContent() {
     goHome: goToGameHome,
   });
 
+  const retryTtt = useCallback(() => {
+    autoFundRef.current = false;
+    autoEvenedRef.current = false;
+    autoStartedRef.current = false;
+    setScene("setup");
+  }, []);
+  useSoloAutoRetry(mode === "auto", g.phase, retryTtt);
+
   // Track the actual container element's parent bounds to determine orientation
   useEffect(() => {
     const el = containerRef.current;
@@ -99,7 +108,9 @@ function AppContent() {
   useEffect(() => {
     if (!isConnected && scene !== "login") {
       if (scene === "game") {
-        console.log("[tictactoe bot] Wallet disconnected, settling game in background...");
+        console.log(
+          "[tictactoe bot] Wallet disconnected, settling game in background...",
+        );
         void tttGame.settleNow();
         void caroGame.settleNow();
       } else {
@@ -273,9 +284,8 @@ function AppContent() {
                       // (Without this the latches stayed set and Retry did nothing.)
                       autoFundRef.current = false;
                       autoEvenedRef.current = false;
-                      autoStartedRef.current = true;
-                      setScene("game");
-                      g.startAuto(true);
+                      autoStartedRef.current = false;
+                      setScene("setup");
                     }}
                     className="px-4 py-2 text-xs font-bold uppercase tracking-widest border border-secondary text-on-surface hover:bg-secondary/20 rounded transition-colors"
                   >

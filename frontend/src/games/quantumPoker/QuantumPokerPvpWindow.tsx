@@ -305,17 +305,20 @@ function PvpInner(_props: GameWindowProps) {
   const terminal = s.phase === "done" || s.phase === "hand_over";
   const won = s.winner === self;
   const lost = s.winner === opp;
-  const banner = terminal
-    ? s.winner === "tie"
-      ? "Split pot — stakes returned"
-      : won
-        ? `You win${s.lastResult?.reason === "fold" ? " — opponent folded" : ""}`
-        : lost
-          ? `You lose${s.lastResult?.reason === "fold" ? " — you folded" : ""}`
-          : "Hand over"
-    : g.myTurnToBet
-      ? "Your turn"
-      : `${PHASE_LABEL[s.phase]} · opponent's turn`;
+  const banner =
+    !g.peerOnline && g.status === "playing"
+      ? "Opponent disconnected! Waiting up to 1h…"
+      : terminal
+        ? s.winner === "tie"
+          ? "Split pot — stakes returned"
+          : won
+            ? `You win${s.lastResult?.reason === "fold" ? " — opponent folded" : ""}`
+            : lost
+              ? `You lose${s.lastResult?.reason === "fold" ? " — you folded" : ""}`
+              : "Hand over"
+        : g.myTurnToBet
+          ? "Your turn"
+          : `${PHASE_LABEL[s.phase]} · opponent's turn`;
 
   const legal = g.legal;
   // Pot-relative bet sizing. The protocol's `bet` amount is the increment to THIS seat's
@@ -526,13 +529,15 @@ function PvpInner(_props: GameWindowProps) {
           <div
             className={[
               "text-center text-[12px] font-semibold",
-              terminal
-                ? won
-                  ? "text-[var(--qp-mint)]"
-                  : lost
-                    ? "text-[var(--qp-coral)]"
-                    : "text-slate-200"
-                : "text-slate-300",
+              !g.peerOnline && g.status === "playing"
+                ? "text-[var(--qp-coral)] animate-pulse font-extrabold text-sm"
+                : terminal
+                  ? won
+                    ? "text-[var(--qp-mint)]"
+                    : lost
+                      ? "text-[var(--qp-coral)]"
+                      : "text-slate-200"
+                  : "text-slate-300",
             ].join(" ")}
           >
             {banner}

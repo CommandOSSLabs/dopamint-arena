@@ -81,6 +81,7 @@ export interface BattleshipPvp {
   view: BattleshipView | null;
   opponentWallet: string | null;
   error: string | null;
+  peerOnline: boolean;
   /** Commit the placed fleet and join matchmaking. */
   findMatch: (placements: Placement[]) => void;
   fire: (cell: number) => void;
@@ -118,6 +119,7 @@ interface PvpSnapshot {
   opponentWallet: string | null;
   error: string | null;
   auto: boolean;
+  peerOnline: boolean;
 }
 
 /** Buffer peer messages so a waiter never misses one that arrived early. */
@@ -159,6 +161,7 @@ class PvpSession {
   private view: BattleshipView | null = null;
   private opponentWallet: string | null = null;
   private error: string | null = null;
+  private peerOnline = true;
   private snap: PvpSnapshot = {
     status: "idle",
     role: null,
@@ -166,6 +169,7 @@ class PvpSession {
     opponentWallet: null,
     error: null,
     auto: false,
+    peerOnline: true,
   };
   private listeners = new Set<() => void>();
 
@@ -198,6 +202,7 @@ class PvpSession {
       opponentWallet: this.opponentWallet,
       error: this.error,
       auto: this.auto,
+      peerOnline: this.peerOnline,
     };
     for (const l of this.listeners) l();
   }
@@ -375,10 +380,30 @@ class PvpSession {
       }
     };
 
+    this.peerOnline = true;
+    const offDrop = mp.onPeerDropped((e) => {
+      if (e.matchId === info.matchId) {
+        this.peerOnline = false;
+        this.emit();
+      }
+    });
+    const offOk = mp.onResumeOk((e) => {
+      if (e.matchId === info.matchId && e.peerOnline) {
+        this.peerOnline = true;
+        this.emit();
+      }
+    });
+    const offRes = mp.onPeerResumed((e) => {
+      if (e.matchId === info.matchId) {
+        this.peerOnline = true;
+        this.emit();
+      }
+    });
+
     // Resume wiring: persist on confirm + run the resync handshake on reconnect.
     // The fleet secret round-trips only through capture/restore, never the wire.
     this.detachResume?.();
-    this.detachResume = attachResume({
+    const detach = attachResume({
       mp,
       channel,
       tunnel: dt,
@@ -403,6 +428,12 @@ class PvpSession {
           });
       },
     });
+    this.detachResume = () => {
+      detach();
+      offDrop();
+      offOk();
+      offRes();
+    };
 
     this.status = "playing";
     this.sync();
@@ -721,6 +752,7 @@ export function useBattleshipPvp(windowId: string): BattleshipPvp {
     view: snap.view,
     opponentWallet: snap.opponentWallet,
     error: snap.error,
+    peerOnline: snap.peerOnline,
     findMatch: session.findMatch,
     fire: session.fire,
     auto: snap.auto,

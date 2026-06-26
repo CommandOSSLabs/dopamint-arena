@@ -114,6 +114,7 @@ export interface PvpQuantumPoker {
   legal: PvpPokerLegal | null;
   opponentWallet: string | null;
   error: string | null;
+  peerOnline: boolean;
   findMatch: () => void;
   fold: () => void;
   check: () => void;
@@ -248,6 +249,7 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
   const [secondsLeft, setSecondsLeft] = useState<number | null>(null);
   const [endRequested, setEndRequested] = useState(false);
   const [auto, setAutoState] = useState(false);
+  const [peerOnline, setPeerOnline] = useState<boolean>(true);
 
   const mpRef = useRef<MpClient | null>(null);
   const dtRef = useRef<PokerTunnel | null>(null);
@@ -520,8 +522,19 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
 
       // Resume wiring: persist on confirm + run the resync handshake on reconnect.
       // The slot secrets / hole cards round-trip only through capture/restore, never the wire.
+      setPeerOnline(true);
+      const offDrop = mp.onPeerDropped((e) => {
+        if (e.matchId === info.matchId) setPeerOnline(false);
+      });
+      const offOk = mp.onResumeOk((e) => {
+        if (e.matchId === info.matchId && e.peerOnline) setPeerOnline(true);
+      });
+      const offRes = mp.onPeerResumed((e) => {
+        if (e.matchId === info.matchId) setPeerOnline(true);
+      });
+
       detachResumeRef.current?.();
-      detachResumeRef.current = attachResume({
+      const detach = attachResume({
         mp,
         channel,
         tunnel: dt,
@@ -564,6 +577,12 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
             });
         },
       });
+      detachResumeRef.current = () => {
+        detach();
+        offDrop();
+        offOk();
+        offRes();
+      };
 
       sync();
       setStatus("playing");
@@ -867,6 +886,7 @@ export function usePvpQuantumPoker(): PvpQuantumPoker {
     legal,
     opponentWallet,
     error,
+    peerOnline,
     findMatch,
     fold,
     check,

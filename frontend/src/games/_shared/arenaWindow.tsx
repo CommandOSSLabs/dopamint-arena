@@ -33,6 +33,7 @@ interface ArenaPvp {
   view: unknown;
   reset: () => void;
   findMatch: () => void;
+  peerOnline?: boolean;
 }
 
 export interface ArenaWindowSpec<Solo extends ArenaSolo, Pvp extends ArenaPvp> {
@@ -244,8 +245,26 @@ export function createArenaWindow<Solo extends ArenaSolo, Pvp extends ArenaPvp>(
         pvp.status === "settling" ||
         pvp.status === "settled") &&
       pvp.view !== null
-    )
-      return spec.renderPvpBoard(pvp, backToMenu);
+    ) {
+      const isOffline = pvp.peerOnline === false && pvp.status === "playing";
+      return (
+        <div className="relative w-full h-full flex flex-col items-stretch">
+          {spec.renderPvpBoard(pvp, backToMenu)}
+          {isOffline && (
+            <div className="absolute inset-0 bg-black/40 backdrop-blur-[1px] z-50 flex items-center justify-center pointer-events-auto">
+              <div className="bg-[#fffdf6] border-4 border-[var(--qp-ink,black)] px-6 py-4 rounded-lg shadow-xl text-center max-w-sm mx-4">
+                <h3 className="font-extrabold text-[var(--qp-red,red)] text-lg uppercase tracking-wider mb-1">
+                  Opponent Disconnected
+                </h3>
+                <p className="text-sm font-semibold text-zinc-700 leading-snug">
+                  Waiting up to 1 hour for them to reconnect...
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
     return loading;
   };
 }

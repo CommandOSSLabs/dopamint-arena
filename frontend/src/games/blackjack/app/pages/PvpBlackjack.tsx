@@ -23,6 +23,8 @@ function statusText(g: ReturnType<typeof usePvpBlackjack>): string {
   if (g.phase === "opening") return "Starting game on-chain…";
   if (g.phase === "funding") return "Funding your seat…";
   if (g.phase === "settling") return "Ending…";
+  if (!g.peerOnline && g.phase === "playing")
+    return "Opponent disconnected! Waiting up to 1h…";
   if (g.gamePhase === "player")
     return g.isDealer ? "Player is deciding…" : "Your turn — Hit or Stand";
   if (g.gamePhase === "dealer") return "Dealer drawing…";
@@ -665,6 +667,30 @@ export default function PvpBlackjack() {
                 Rematch
               </button>
             )}
+            {g.phase === "settling" && (
+              <div className="flex items-center justify-center gap-2 px-6 py-3.5 text-base font-black uppercase text-[var(--qp-ink-soft)] opacity-80">
+                <svg
+                  className="animate-spin h-5 w-5"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                >
+                  <circle
+                    className="opacity-25"
+                    cx="12"
+                    cy="12"
+                    r="10"
+                    stroke="currentColor"
+                    strokeWidth="4"
+                  />
+                  <path
+                    className="opacity-75"
+                    fill="currentColor"
+                    d="M4 12a8 8 0 018-8v8z"
+                  />
+                </svg>
+                Ending on-chain…
+              </div>
+            )}
           </div>
 
           {/* Right: Auto Toggle */}
@@ -686,6 +712,39 @@ export default function PvpBlackjack() {
               </span>
               Auto
             </button>
+          </div>
+        </div>
+      )}
+      {playing && !g.peerOnline && g.phase === "playing" && (
+        <div className="fixed inset-0 bg-black/45 backdrop-blur-[1.5px] z-[9999] flex items-center justify-center pointer-events-auto">
+          <div
+            className="bg-[#fffdf6] border-4 border-[var(--qp-ink,black)] px-6 py-5 rounded-lg shadow-xl text-center max-w-sm mx-4"
+            style={{ filter: "url(#qpRough)" }}
+          >
+            <h3 className="font-extrabold text-[var(--qp-red,red)] text-lg uppercase tracking-wider mb-2">
+              Opponent Disconnected
+            </h3>
+            <p className="text-xs md:text-sm font-semibold text-zinc-700 leading-snug mb-5">
+              Waiting for them to reconnect… Or you can claim chips unilaterally
+              or leave the game.
+            </p>
+            <div className="flex flex-col gap-2">
+              <button
+                onClick={g.settleUnilateral}
+                className="qp-btn qp-btn--go w-full !py-2.5 text-sm font-black uppercase"
+              >
+                Claim Chips (Dispute)
+              </button>
+              <button
+                onClick={() => {
+                  g.leave();
+                  navigate("/");
+                }}
+                className="qp-btn qp-btn--stop w-full !py-2.5 text-sm font-black uppercase"
+              >
+                Leave Game
+              </button>
+            </div>
           </div>
         </div>
       )}

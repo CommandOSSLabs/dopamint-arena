@@ -432,6 +432,7 @@ function PvpGame({
     view,
     error,
     opponentWallet,
+    peerOnline,
     findMatch,
     fire,
     auto,
@@ -497,18 +498,33 @@ function PvpGame({
       </Centered>
     );
   } else {
+    const isOffline = peerOnline === false && status === "playing";
     content = (
-      <BattleView
-        view={view}
-        statusLabel={settleLabel(status)}
-        onFire={fire}
-        // "Find next match": after the match settles, reset to placement (stay in PvP)
-        // so the next Find Match is one tap away — not back out to the arena.
-        onPlayAgain={reset}
-        playAgainLabel="Find next match"
-        playAgainDisabled={status === "settling"}
-        auto={auto}
-      />
+      <div className="relative w-full h-full flex flex-col items-stretch">
+        <BattleView
+          view={view}
+          statusLabel={settleLabel(status)}
+          onFire={fire}
+          // "Find next match": after the match settles, reset to placement (stay in PvP)
+          // so the next Find Match is one tap away — not back out to the arena.
+          onPlayAgain={reset}
+          playAgainLabel="Find next match"
+          playAgainDisabled={status === "settling"}
+          auto={auto}
+        />
+        {isOffline && (
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-[1px] z-50 flex items-center justify-center pointer-events-auto">
+            <div className="bg-[#fffdf6] border-4 border-black px-6 py-4 rounded-lg shadow-xl text-center max-w-sm mx-4 animate-bounce">
+              <h3 className="font-extrabold text-[var(--qp-red,red)] text-lg uppercase tracking-wider mb-1">
+                Opponent Disconnected
+              </h3>
+              <p className="text-sm font-semibold text-zinc-700 leading-snug">
+                Waiting up to 1 hour for them to reconnect...
+              </p>
+            </div>
+          </div>
+        )}
+      </div>
     );
   }
   // Autopilot toggle appears once a match is live (a fired shot is possible).

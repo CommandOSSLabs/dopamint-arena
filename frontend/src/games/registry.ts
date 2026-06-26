@@ -5,7 +5,8 @@ const modules = new Map<string, GameModule>();
 /** Register a game module. Throws on duplicate id to catch copy-paste mistakes. */
 export function register(module: GameModule): void {
   if (modules.has(module.id)) {
-    throw new Error(`duplicate game module id: ${module.id}`);
+    console.warn(`duplicate game module id: ${module.id}`);
+    return;
   }
   modules.set(module.id, module);
 }

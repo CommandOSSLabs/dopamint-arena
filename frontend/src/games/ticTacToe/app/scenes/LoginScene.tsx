@@ -1,6 +1,5 @@
 import { useCustomWallet } from "@/games/ticTacToe/app/contexts/CustomWallet";
 
-
 function short(a?: string) {
   return a ? `${a.slice(0, 6)}…${a.slice(-4)}` : "";
 }

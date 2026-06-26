@@ -5,10 +5,7 @@ import {
   BombItProtocol,
   CELL_COUNT,
 } from "../../../../sui-tunnel-ts/src/protocol/bombIt.ts";
-import {
-  stringifyWithBigint,
-  parseWithBigint,
-} from "../../pvp/resume.ts";
+import { stringifyWithBigint, parseWithBigint } from "../../pvp/resume.ts";
 
 test("serializeState round-trips through JSON: bigints + grid Uint8Array", () => {
   const proto = new BombItProtocol();
@@ -19,7 +16,9 @@ test("serializeState round-trips through JSON: bigints + grid Uint8Array", () =>
   const s1 = proto.applyMove(s0, { a: "bomb" }, "A"); // tick=1n + a live bomb
   const adapter = makeBombItResumeAdapter();
   // Use the codec that the persist layer uses (not plain JSON — bigints are native now).
-  const revived = parseWithBigint(stringifyWithBigint(adapter.serializeState(s1)));
+  const revived = parseWithBigint(
+    stringifyWithBigint(adapter.serializeState(s1)),
+  );
   const back = adapter.deserializeState(revived);
   assert.equal(back.tick, s1.tick);
   assert.equal(back.seed, s1.seed);
@@ -42,7 +41,9 @@ test("bigint fields survive a stringifyWithBigint/parseWithBigint round-trip", (
   });
   const adapter = makeBombItResumeAdapter();
   const serialized = adapter.serializeState(s);
-  const revived = parseWithBigint(stringifyWithBigint(serialized)) as typeof serialized;
+  const revived = parseWithBigint(
+    stringifyWithBigint(serialized),
+  ) as typeof serialized;
   const back = adapter.deserializeState(revived);
   assert.equal(back.tick, s.tick);
   assert.equal(back.seed, s.seed);

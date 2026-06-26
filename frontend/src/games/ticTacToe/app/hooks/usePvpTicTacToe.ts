@@ -137,12 +137,14 @@ export interface PvpTttView {
   address: string; // the connected zkLogin wallet (this seat's on-chain party)
   balance: bigint; // the connected wallet's SUI balance (MIST)
   digests: { create?: string; deposit?: string; close?: string };
+  peerOnline: boolean;
   queue: () => void;
   play: (cell: number) => void;
   next: () => void;
   stop: () => void;
   setAuto: (on: boolean) => void;
   leave: () => void;
+  settleUnilateral: () => void;
   /** After a per-game settle: clear the closed match + resume record and find a new match. */
   requeue: () => void;
 }
@@ -199,6 +201,7 @@ export function usePvpTicTacToe(
     deposit?: string;
     close?: string;
   }>({});
+  const [peerOnline, setPeerOnline] = useState<boolean>(true);
 
   const mpRef = useRef<MpClient | null>(null);
   const channelRef = useRef<PvpChannel | null>(null);
@@ -463,8 +466,19 @@ export function usePvpTicTacToe(
         onAdvance();
       };
       // Resume wiring: persist on confirm + run the resync handshake on reconnect.
+      setPeerOnline(true);
+      const offDrop = mp.onPeerDropped((e) => {
+        if (e.matchId === info.matchId) setPeerOnline(false);
+      });
+      const offOk = mp.onResumeOk((e) => {
+        if (e.matchId === info.matchId && e.peerOnline) setPeerOnline(true);
+      });
+      const offRes = mp.onPeerResumed((e) => {
+        if (e.matchId === info.matchId) setPeerOnline(true);
+      });
+
       detachResumeRef.current?.();
-      detachResumeRef.current = attachResume({
+      const detach = attachResume({
         mp,
         channel,
         tunnel: t,
@@ -489,6 +503,12 @@ export function usePvpTicTacToe(
             });
         },
       });
+      detachResumeRef.current = () => {
+        detach();
+        offDrop();
+        offOk();
+        offRes();
+      };
       setPhase("playing");
       setState({ ...t.state, inner: { ...t.state.inner } });
       onAdvance();
@@ -913,6 +933,26 @@ export function usePvpTicTacToe(
     setPhase("idle");
   }, [teardownMatch]);
 
+  const settleUnilateral = useCallback(async () => {
+    const t = tunnelRef.current;
+    if (!t || !t.latest) return;
+    setPhase("settling");
+    try {
+      const signExec = isMtpsConfigured ? submitSponsored : submit;
+      await raiseDisputeUnilateral({
+        signExec,
+        tunnelId: t.tunnelId,
+        update: t.latest,
+        role: roleRef.current!,
+      });
+      clearResumeRecord(t.tunnelId);
+      setPhase("done");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setPhase("error");
+    }
+  }, [submit, submitSponsored]);
+
   // Find a new match after a per-game settle. Reuse the SAME socket (the relay runs many matches
   // per connection): release the settled match and re-quickMatch in place. Tearing the socket
   // down and reconnecting (a 2nd socket for the same wallet) raced the relay's routing and left
@@ -1019,12 +1059,14 @@ export function usePvpTicTacToe(
     address: wallet.address ?? "",
     balance,
     digests,
+    peerOnline,
     queue,
     play,
     next,
     stop,
     setAuto,
     leave,
+    settleUnilateral,
     requeue,
   };
 }

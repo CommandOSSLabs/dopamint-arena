@@ -115,10 +115,7 @@ export function restoreInto<State, Move>(
   if (record.pending) {
     const deMove =
       adapter.deserializeMove ?? ((j: JsonValue) => j as unknown as Move);
-    tunnel.seatPending(
-      deMove(record.pending.move),
-      record.pending.timestamp,
-    );
+    tunnel.seatPending(deMove(record.pending.move), record.pending.timestamp);
   }
 }
 

@@ -800,10 +800,14 @@ export function createSoloSessionHook<
     useEffect(() => {
       if (!account) {
         if (snap.status === "playing") {
-          console.log(`[${spec.game}] Wallet disconnected during active game, settling now...`);
+          console.log(
+            `[${spec.game}] Wallet disconnected during active game, settling now...`,
+          );
           session.settleNow();
         } else if (snap.status === "settled" || snap.status === "error") {
-          console.log(`[${spec.game}] Wallet disconnected and session is ${snap.status}, resetting to idle...`);
+          console.log(
+            `[${spec.game}] Wallet disconnected and session is ${snap.status}, resetting to idle...`,
+          );
           session.reset();
         }
       }

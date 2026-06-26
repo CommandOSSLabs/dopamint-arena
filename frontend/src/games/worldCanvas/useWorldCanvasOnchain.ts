@@ -1608,7 +1608,9 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
     if (!account) {
       const run = runRef.current;
       if (run && !run.closed) {
-        console.log("[world-canvas] Wallet disconnected, settling game in background...");
+        console.log(
+          "[world-canvas] Wallet disconnected, settling game in background...",
+        );
         void settleNow();
       }
     }

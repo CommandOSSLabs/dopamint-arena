@@ -232,7 +232,9 @@ export function useBlackjackBot(): BlackjackBotGame {
   const { report } = useTelemetry();
   const account = useCurrentAccount();
 
-  const tunnelRef = useRef<core.OffchainTunnel<State, BetBlackjackMove> | null>(null);
+  const tunnelRef = useRef<core.OffchainTunnel<State, BetBlackjackMove> | null>(
+    null,
+  );
   const transcriptRef = useRef<proof.Transcript | null>(null);
   const createdAtRef = useRef<bigint>(0n);
   const tunnelIdRef = useRef<string | null>(null);
@@ -911,7 +913,7 @@ export function useBlackjackBot(): BlackjackBotGame {
 
       const rootHex = `0x${bytesToHex(root)}`;
       setDigests((d) => ({ ...d, close: closeDigest, root: rootHex }));
-      
+
       report.pushTxn({
         id: actionsRef.current,
         game: "blackjack",
@@ -940,7 +942,9 @@ export function useBlackjackBot(): BlackjackBotGame {
         result: finalResult,
         finalBalanceA: Number(finalA),
       };
-      setTunnels((prev) => [tunnelRecord, ...prev].slice(0, MAX_TUNNELS_LOGGED));
+      setTunnels((prev) =>
+        [tunnelRecord, ...prev].slice(0, MAX_TUNNELS_LOGGED),
+      );
 
       await refreshBalances();
       setPhase("done");
@@ -970,7 +974,9 @@ export function useBlackjackBot(): BlackjackBotGame {
   useEffect(() => {
     if (!account) {
       if (phase === "playing") {
-        console.log("[blackjack bot] Wallet disconnected during active game, settling now...");
+        console.log(
+          "[blackjack bot] Wallet disconnected during active game, settling now...",
+        );
         void settleNow();
       }
     }

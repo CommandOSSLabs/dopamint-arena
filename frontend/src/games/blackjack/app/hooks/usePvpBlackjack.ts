@@ -139,6 +139,7 @@ export interface PvpView {
   walletAddress: string;
   walletBalance: bigint;
   digests: { create?: string; deposit?: string; close?: string };
+  peerOnline: boolean;
   fund: () => void;
   setStake: (amount: bigint) => void;
   queue: () => void;
@@ -148,6 +149,7 @@ export interface PvpView {
   stop: () => void;
   setAuto: (on: boolean) => void;
   leave: () => void;
+  settleUnilateral: () => void;
 }
 
 export function usePvpBlackjack(): PvpView {
@@ -173,6 +175,7 @@ export function usePvpBlackjack(): PvpView {
     deposit?: string;
     close?: string;
   }>({});
+  const [peerOnline, setPeerOnline] = useState<boolean>(true);
 
   const mpRef = useRef<MpClient | null>(null);
   const channelRef = useRef<PvpChannel | null>(null);
@@ -461,8 +464,19 @@ export function usePvpBlackjack(): PvpView {
         onAdvance();
       };
       // Resume wiring: persist on confirm + run the resync handshake on reconnect.
+      setPeerOnline(true);
+      const offDrop = mp.onPeerDropped((e) => {
+        if (e.matchId === info.matchId) setPeerOnline(false);
+      });
+      const offOk = mp.onResumeOk((e) => {
+        if (e.matchId === info.matchId && e.peerOnline) setPeerOnline(true);
+      });
+      const offRes = mp.onPeerResumed((e) => {
+        if (e.matchId === info.matchId) setPeerOnline(true);
+      });
+
       detachResumeRef.current?.();
-      detachResumeRef.current = attachResume({
+      const detach = attachResume({
         mp,
         channel,
         tunnel: t,
@@ -487,6 +501,12 @@ export function usePvpBlackjack(): PvpView {
             });
         },
       });
+      detachResumeRef.current = () => {
+        detach();
+        offDrop();
+        offOk();
+        offRes();
+      };
       setPhase("playing");
       setState({ ...t.state });
       onAdvance(); // kick off (deal already dealt round 1 -> player phase)
@@ -794,6 +814,7 @@ export function usePvpBlackjack(): PvpView {
       return;
     try {
       t.propose({ action }, BigInt(Date.now()));
+      setState({ ...t.displayState });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -815,6 +836,7 @@ export function usePvpBlackjack(): PvpView {
       lastBetRef.current = amount; // remember it so auto reuses this stake next round
       try {
         t.propose({ action: "bet", amount }, BigInt(Date.now()));
+        setState({ ...t.displayState });
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       }
@@ -933,6 +955,25 @@ export function usePvpBlackjack(): PvpView {
     helloResolveRef.current = null;
     bufferedHelloRef.current = null;
   }, []);
+
+  const settleUnilateral = useCallback(async () => {
+    const t = tunnelRef.current;
+    if (!t || !t.latest) return;
+    setPhase("settling");
+    try {
+      await raiseDisputeUnilateral({
+        signExec: isMtpsConfigured ? submitSponsored : submit,
+        tunnelId: t.tunnelId,
+        update: t.latest,
+        role: roleRef.current!,
+      });
+      clearResumeRecord(t.tunnelId);
+      setPhase("done");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setPhase("error");
+    }
+  }, [submit, submitSponsored]);
 
   // Find a new match after a settle, reusing the SAME socket (the relay runs many matches per
   // connection): release the settled match and re-quickMatch in place — keeping Auto on so the
@@ -1067,6 +1108,7 @@ export function usePvpBlackjack(): PvpView {
     walletAddress,
     walletBalance,
     digests,
+    peerOnline,
     fund,
     setStake,
     queue,
@@ -1076,5 +1118,6 @@ export function usePvpBlackjack(): PvpView {
     stop,
     setAuto,
     leave,
+    settleUnilateral,
   };
 }

@@ -902,10 +902,14 @@ export function useBattleship(windowId: string): BattleshipSession {
   useEffect(() => {
     if (!account) {
       if (snap.status === "playing") {
-        console.log("[battleship bot] wallet disconnected during active game, settling now...");
+        console.log(
+          "[battleship bot] wallet disconnected during active game, settling now...",
+        );
         session.settleNow();
       } else if (snap.status === "settled" || snap.status === "error") {
-        console.log("[battleship bot] wallet disconnected and session is settled/error, resetting...");
+        console.log(
+          "[battleship bot] wallet disconnected and session is settled/error, resetting...",
+        );
         session.reset();
       }
     }

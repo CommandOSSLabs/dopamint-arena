@@ -831,7 +831,9 @@ export function useBotGame(difficulty: Difficulty = "fast"): BotGameView {
   useEffect(() => {
     if (!account) {
       if (phase === "playing") {
-        console.log("[ttt bot] Wallet disconnected during active game, settling now...");
+        console.log(
+          "[ttt bot] Wallet disconnected during active game, settling now...",
+        );
         void settleNow();
       }
     }
@@ -902,8 +904,6 @@ export function useBotGame(difficulty: Difficulty = "fast"): BotGameView {
     },
     [runGame, setAuto],
   );
-
-
 
   const stopAuto = useCallback(() => {
     playingRef.current = false;

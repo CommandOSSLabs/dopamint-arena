@@ -115,6 +115,7 @@ export interface PvpMatch<State extends { winner: unknown }, Intent, View> {
   view: View | null;
   winner: State["winner"];
   error: string | null;
+  peerOnline: boolean;
   /** Join the public queue; paired with the next player who also clicks Find Match. */
   findMatch: () => void;
   /** Queue this seat's next intent (consumed on the next propose; resets to idle after). */
@@ -146,6 +147,7 @@ interface PvpSnapshot<State extends { winner: unknown }, View> {
   view: View | null;
   winner: State["winner"];
   error: string | null;
+  peerOnline: boolean;
 }
 
 /** Buffer peer messages so a waiter never misses one that arrived early. */
@@ -192,6 +194,7 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
   private view: View | null = null;
   private winner: State["winner"] = null as State["winner"];
   private error: string | null = null;
+  private peerOnline = true;
   private snap: PvpSnapshot<State, View>;
   private listeners = new Set<() => void>();
 
@@ -211,6 +214,7 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
       view: null,
       winner: null as State["winner"],
       error: null,
+      peerOnline: true,
     };
   }
 
@@ -231,6 +235,7 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
       view: this.view,
       winner: this.winner,
       error: this.error,
+      peerOnline: this.peerOnline,
     };
     for (const l of this.listeners) l();
   }
@@ -409,8 +414,28 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
       }
     };
 
+    this.peerOnline = true;
+    const offDrop = mp.onPeerDropped((e) => {
+      if (e.matchId === info.matchId) {
+        this.peerOnline = false;
+        this.emit();
+      }
+    });
+    const offOk = mp.onResumeOk((e) => {
+      if (e.matchId === info.matchId && e.peerOnline) {
+        this.peerOnline = true;
+        this.emit();
+      }
+    });
+    const offRes = mp.onPeerResumed((e) => {
+      if (e.matchId === info.matchId) {
+        this.peerOnline = true;
+        this.emit();
+      }
+    });
+
     this.detachResume?.();
-    this.detachResume = attachResume({
+    const detach = attachResume({
       mp,
       channel,
       tunnel: dt,
@@ -435,6 +460,13 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
           });
       },
     });
+
+    this.detachResume = () => {
+      detach();
+      offDrop();
+      offOk();
+      offRes();
+    };
 
     this.status = "playing";
     this.sync();
@@ -712,6 +744,7 @@ export function createPvpMatchHook<
       view: snap.view,
       winner: snap.winner,
       error: snap.error,
+      peerOnline: snap.peerOnline,
       findMatch: session.findMatch,
       setIntent: session.setIntent,
       toggleAuto: session.toggleAuto,

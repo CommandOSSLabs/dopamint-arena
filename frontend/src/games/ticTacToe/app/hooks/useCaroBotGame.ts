@@ -803,7 +803,9 @@ export function useCaroBotGame(
   useEffect(() => {
     if (!account) {
       if (phase === "playing") {
-        console.log("[caro bot] Wallet disconnected during active game, settling now...");
+        console.log(
+          "[caro bot] Wallet disconnected during active game, settling now...",
+        );
         void settleNow();
       }
     }
@@ -874,8 +876,6 @@ export function useCaroBotGame(
     },
     [runGame, setAuto],
   );
-
-
 
   const stopAuto = useCallback(() => {
     playingRef.current = false;
