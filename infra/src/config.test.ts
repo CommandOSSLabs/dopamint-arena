@@ -67,6 +67,40 @@ describe("config", () => {
     assert.strictEqual(cfg.benchmarkImageVersion, "1.0.1");
   });
 
+  it("derives CORS allowed origins from the domain by default", () => {
+    setPulumiConfig(baseConfig);
+
+    const cfg = getConfig();
+
+    assert.strictEqual(cfg.corsAllowedOrigins, "https://test.example");
+  });
+
+  it("includes the Vite dev server in the default dev CORS origins", () => {
+    setPulumiConfig({
+      ...baseConfig,
+      "dopamint:environment": "dev",
+      "dopamint:domain": "dev.example",
+    });
+
+    const cfg = getConfig();
+
+    assert.strictEqual(
+      cfg.corsAllowedOrigins,
+      "https://dev.example,http://localhost:5173",
+    );
+  });
+
+  it("allows CORS origins to be overridden explicitly", () => {
+    setPulumiConfig({
+      ...baseConfig,
+      "dopamint:cors-allowed-origins": "https://override.example",
+    });
+
+    const cfg = getConfig();
+
+    assert.strictEqual(cfg.corsAllowedOrigins, "https://override.example");
+  });
+
   // The settler key is sourced from secret config (never hardcoded), so it can be
   // wired into Secrets Manager instead of the task definition.
   it("exposes the settler key from secret config", async () => {

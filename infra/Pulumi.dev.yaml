@@ -4,7 +4,6 @@ config:
   dopamint:domain: dev.millionstps.io
   dopamint:backend-domain: relay-dev.millionstps.io
   dopamint:certificate-arn: arn:aws:acm:us-east-1:129671602944:certificate/cffc1c65-b146-498e-9e48-eca08bd55164
-  dopamint:cors-allowed-origins: http://localhost:5173,https://dev.millionstps.io
   dopamint:route53-zone-id: ""
   dopamint:db-instance-class: db.r6g.large
   dopamint:db-min-capacity: "0.5"

@@ -34,14 +34,28 @@ export interface InfraConfig {
   ollamaImageTag: string;
 }
 
+function defaultCorsOrigins(environment: string, domain: string): string {
+  // Default to the configured frontend domain so each stack (dev/staging/prod)
+  // does not have to repeat it. Include the Vite dev server for local dev work.
+  const origins = [`https://${domain}`];
+  if (environment === "dev") {
+    origins.push("http://localhost:5173");
+  }
+  return origins.join(",");
+}
+
 export function getConfig(): InfraConfig {
+  const environment = config.require("environment");
+  const domain = config.require("domain");
   return {
-    environment: config.require("environment"),
-    domain: config.require("domain"),
+    environment,
+    domain,
     backendDomain: config.require("backend-domain"),
     route53ZoneId: config.get("route53-zone-id") || undefined,
     certificateArn: config.get("certificate-arn") || undefined,
-    corsAllowedOrigins: config.get("cors-allowed-origins") || undefined,
+    corsAllowedOrigins:
+      config.get("cors-allowed-origins") ||
+      defaultCorsOrigins(environment, domain),
     dbInstanceClass: config.require("db-instance-class"),
     dbServerless: config.requireBoolean("db-serverless"),
     dbMinCapacity: config.getNumber("db-min-capacity"),
