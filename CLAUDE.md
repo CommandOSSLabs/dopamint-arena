@@ -22,8 +22,28 @@ bun/biome. The conventions below apply to all code; the _tooling_ choices
 match whatever package the file lives in.
 
 **Adding a new arena game** (self-play or PvP over a tunnel): follow
-[docs/adding-a-tunnel-game.md](docs/adding-a-tunnel-game.md) — the per-layer
-checklist, wiring patterns, and gate.
+[docs/guide/adding-a-tunnel-game.md](docs/guide/adding-a-tunnel-game.md) — the
+per-layer checklist, wiring patterns, and gate.
+
+## Documentation
+
+Docs live under `docs/`, split by purpose:
+
+- `docs/design/` — **curated, human-readable technical design.** The consolidated
+  source of truth for how a subsystem works and _why_. AI may draft these, but
+  the result must be distilled and solid — not raw model output. One subsystem
+  per doc; treat the AI working artifacts (below) as _inputs_, not the product.
+- `docs/guide/` — how-to / integration guides (adding a game, frontend wiring,
+  resume adapters). Task-oriented: "how do I do X."
+- `docs/runbooks/` — operational procedures (deploy, rollback, the deployment
+  contract). Step-by-step, for running the system.
+- `docs/decisions/` — Architecture Decision Records (see _Architecture
+  decisions_ below).
+
+**AI working artifacts are not committed docs.** `.superpowers/`, `.raki/`,
+`docs/superpowers/`, and `docs/plans/` are git-ignored local scratch (specs,
+plans, reviews). They are raw inputs; anything worth keeping gets distilled into
+`docs/design/` or `docs/guide/`.
 
 ## Git
 
@@ -101,6 +121,11 @@ the stack — `node:test` (via `tsx`) for the TS SDK, `sui move test` for Move.
 
 ## Architecture decisions
 
-Non-trivial or contested decisions are recorded as short ADRs under
-`docs/decisions/` _before_ the code that depends on them. See
+Record **architecture-level** decisions as short ADRs under `docs/decisions/`
+_before_ the code that depends on them. An ADR is for a decision that shapes
+system structure, crosses a component or team boundary, or is costly to reverse
+(e.g. control-plane topology, settlement auth, randomness strategy, funding
+model). It is **not** for implementation details, library or component choices,
+or a game adopting an already-recorded pattern — those belong in a design doc or
+the PR description. Numbers are monotonic and unique; never reuse one. See
 `docs/decisions/README.md` for the convention and template.

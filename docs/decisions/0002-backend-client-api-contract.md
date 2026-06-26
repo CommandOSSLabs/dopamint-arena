@@ -1,6 +1,6 @@
 # 0002 — Backend ↔ client API contract (control plane, v1)
 
-> **⚠️ Premise updated by [ADR-0006](0006-genuine-two-party-only-drop-self-play.md).**
+> **⚠️ Premise updated by [ADR-0001 §1](0001-arena-baseline-architecture.md).**
 > This contract assumed the per-move loop was client-local self-play with no
 > matchmaking. Self-play is dropped — every tunnel is now genuine two-party, so the
 > backend also runs **matchmaking + an opaque relay** (a separate WS surface). The
@@ -12,7 +12,7 @@
 > `POST /v1/tunnels/{tunnelId}/settle`, authorized by the co-signed settlement
 > itself (no session token). Treat the settle section here as historical.
 >
-> **➕ Metrics extended by [metrics-timeseries-design](../superpowers/specs/2026-06-24-metrics-timeseries-design.md).**
+> **➕ Metrics extended by the metrics-timeseries design.**
 > Adds `GET /v1/stats/history` (persisted TPS time-series), a `peakTps` field on the
 > `stats/live` snapshot, and a body-token heartbeat variant for `sendBeacon`. The
 > heartbeat/stats contract here is otherwise unchanged.
