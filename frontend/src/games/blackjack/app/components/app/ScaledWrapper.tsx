@@ -14,8 +14,8 @@ interface ScaleContextType {
 }
 
 const ScaleContext = createContext<ScaleContextType>({
-  width: 500,
-  height: 800,
+  width: 580,
+  height: 880,
   isPortrait: true,
 });
 
@@ -27,8 +27,8 @@ export function ScaledWrapper({ children }: { children: ReactNode }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1);
   const [dimensions, setDimensions] = useState({
-    width: 500,
-    height: 800,
+    width: 580,
+    height: 880,
     isPortrait: true,
   });
 
@@ -45,8 +45,8 @@ export function ScaledWrapper({ children }: { children: ReactNode }) {
       if (w === 0 || h === 0) return;
 
       const isPortrait = w < h;
-      const dWidth = isPortrait ? 500 : 1024;
-      const dHeight = isPortrait ? 800 : 640;
+      const dWidth = isPortrait ? 580 : 1024;
+      const dHeight = isPortrait ? 880 : 640;
 
       const scaleW = w / dWidth;
       const scaleH = h / dHeight;
