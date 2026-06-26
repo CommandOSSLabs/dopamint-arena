@@ -93,8 +93,13 @@ mod tests {
             moves,
             bytes: 75982 * matches,
             tunnels_settled: matches,
+            tunnels_opened: matches,
             matches_claimed: matches,
             elapsed_ms: ms,
+            play_ns_total: 0,
+            total_ns_total: 0,
+            moves_dist: crate::fleet::stats::Distribution::default(),
+            play_ns_dist: crate::fleet::stats::Distribution::default(),
         }
     }
 
