@@ -8,6 +8,15 @@ export interface LiveMessage {
   text: string;
 }
 
+function expectJson(res: Response, endpoint: string): void {
+  const contentType = res.headers.get("content-type") ?? "";
+  if (!contentType.includes("application/json")) {
+    throw new Error(
+      `${endpoint} failed: backend returned ${contentType || "an empty"} response instead of JSON; is /v1/chat deployed?`,
+    );
+  }
+}
+
 export class ChatApiClient {
   private baseUrl: string;
   private fetch: typeof globalThis.fetch;
@@ -28,6 +37,7 @@ export class ChatApiClient {
       body: JSON.stringify({ messages }),
     });
     if (!res.ok) throw new Error(`chat failed: ${res.status}`);
+    expectJson(res, "chat");
     const json = (await res.json()) as { content: string };
     return json.content;
   }
@@ -35,6 +45,7 @@ export class ChatApiClient {
   async topic(): Promise<string> {
     const res = await this.fetch(`${this.baseUrl}/v1/chat/topic`);
     if (!res.ok) throw new Error(`topic failed: ${res.status}`);
+    expectJson(res, "topic");
     const json = (await res.json()) as { topic: string };
     return json.topic;
   }

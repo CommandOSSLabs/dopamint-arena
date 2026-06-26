@@ -150,3 +150,11 @@ jobs:
           set -euo pipefail
           curl -fsS "${BACKEND_URL}/health/live"
           curl -fsS "${BACKEND_URL}/health/ready"
+          curl -fsS "${BACKEND_URL}/v1/chat/topic"
+
+      - name: Invalidate CloudFront /v1 cache
+        env:
+          CLOUDFRONT_ID: ${{ vars.CLOUDFRONT_ID }}
+        run: |
+          set -euo pipefail
+          aws cloudfront create-invalidation --distribution-id "${CLOUDFRONT_ID}" --paths "/v1/*"
