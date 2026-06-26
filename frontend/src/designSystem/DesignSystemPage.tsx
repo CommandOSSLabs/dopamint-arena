@@ -745,7 +745,7 @@ export function DesignSystemPage() {
 
         <footer className="border-t border-border">
           <div className="wal-mono mx-auto max-w-5xl px-6 py-6 text-xs text-muted-foreground">
-            dopamint arena · walrus memory design language · shadcn/ui on
+            MillionTPS · walrus design language · shadcn/ui on
             tailwind v4
           </div>
         </footer>
