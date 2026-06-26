@@ -59,6 +59,33 @@ const SPONSOR_TUNNEL_FNS: &[&str] = &[
     "entry_close_cooperative",
     "entry_close_cooperative_with_root",
 ];
+
+/// `example_agent_allowance` ops a 0-SUI player may have gas-sponsored. Same safety model as the
+/// tunnel allowlist: the escrow comes from the user's OWN input coins, so the settler only pays gas.
+const SPONSOR_AGENT_ALLOWANCE_FNS: &[&str] = &[
+    "entry_create_and_share",
+    "entry_claim",
+    "entry_top_up",
+    "entry_revoke",
+    "pause",
+    "resume",
+    "set_rate",
+];
+
+/// `example_streaming_payment` ops sponsorable for a 0-SUI sender — the stream is funded from the
+/// user's OWN input coins, so the settler only pays gas.
+const SPONSOR_STREAMING_PAYMENT_FNS: &[&str] = &[
+    "create_stream",
+    "withdraw",
+    "withdraw_amount",
+    "cancel_stream",
+    "top_up",
+];
+
+/// A sponsorable example-app module: package, module name, allowlisted fns. Each new payment example
+/// is one more entry, built from config in `SuiSettler::new` — a config + one-line change, not a new
+/// validator parameter every time.
+type ExampleModule = (Address, &'static str, &'static [&'static str]);
 /// Testnet genesis checkpoint digest — the chain identifier `ValidDuring` uses for cross-chain
 /// replay protection (its first 4 bytes are the `4c78adac` testnet chain id). SIP-58
 /// address-balance gas requires this in the transaction expiration.
@@ -89,6 +116,9 @@ pub struct SuiSettler {
     rpc_url: String,
     package_id: Address,
     coin_type: TypeTag,
+    /// Sponsorable example-app modules (agent allowance, streaming payment, …), built from config.
+    /// Empty = only the tunnel/coin/faucet allowlist applies.
+    example_packages: Vec<ExampleModule>,
     signer: Ed25519PrivateKey,
     sender: Address,
     /// Per-sponsorship nonce source for the `ValidDuring` FundsWithdrawal replay guard. Seeded
@@ -184,10 +214,26 @@ impl SuiSettler {
         rpc_url: String,
         package_id: &str,
         coin_type: &str,
+        agent_allowance_package_id: Option<&str>,
+        streaming_payment_package_id: Option<&str>,
         settler_key_b64: &str,
     ) -> anyhow::Result<Self> {
         let signer = load_ed25519(settler_key_b64)?;
         let sender = signer.public_key().derive_address();
+        // Build the sponsorable example-app set from whatever packages are configured.
+        let mut example_packages: Vec<ExampleModule> = Vec::new();
+        if let Some(s) = agent_allowance_package_id {
+            let pkg = Address::from_str(s).context("bad AGENT_ALLOWANCE_PACKAGE_ID")?;
+            example_packages.push((pkg, "example_agent_allowance", SPONSOR_AGENT_ALLOWANCE_FNS));
+        }
+        if let Some(s) = streaming_payment_package_id {
+            let pkg = Address::from_str(s).context("bad STREAMING_PAYMENT_PACKAGE_ID")?;
+            example_packages.push((
+                pkg,
+                "example_streaming_payment",
+                SPONSOR_STREAMING_PAYMENT_FNS,
+            ));
+        }
         // Seed the per-sponsorship nonce from the full wall clock (secs mixed with nanos), not
         // just subsec_nanos, so two restarts in the same epoch are very unlikely to pick colliding
         // seeds (a collision is a liveness hiccup — the node rejects the replayed withdrawal — not
@@ -206,6 +252,7 @@ impl SuiSettler {
             rpc_url,
             package_id: Address::from_str(package_id).context("bad TUNNEL_PACKAGE_ID")?,
             coin_type: TypeTag::from_str(coin_type).context("bad TUNNEL_COIN_TYPE")?,
+            example_packages,
             signer,
             sender,
             sponsor_nonce: AtomicU32::new(nonce_seed),
@@ -223,6 +270,7 @@ impl SuiSettler {
             rpc_url: String::new(),
             package_id: Address::ZERO,
             coin_type: "0x2::sui::SUI".parse().expect("static coin type"),
+            example_packages: Vec::new(),
             signer,
             sender,
             sponsor_nonce: AtomicU32::new(0),
@@ -276,6 +324,7 @@ impl SuiSettler {
         let tx = build_sponsored_tx(
             self.package_id,
             &self.coin_type,
+            &self.example_packages,
             user_addr,
             self.sender,
             &kind_bytes,
@@ -297,6 +346,23 @@ impl SuiSettler {
             .sign_transaction(&tx)
             .map_err(|e| anyhow!("sign sponsor tx: {e}"))?;
         Ok((tx_b64, sig.to_base64()))
+    }
+
+    /// Decode + validate a base64 tx KIND against the SAME anti-abuse allowlist the settler path
+    /// uses, and return its de-duplicated `pkg::module::fn` move-call targets — for Enoki's
+    /// `allowedMoveCallTargets`. The sponsor handler calls this FIRST so an off-allowlist tx is
+    /// rejected before any provider is asked to pay (ADR-0014). Pure (no I/O); the settler's
+    /// `sponsor_open_fund` re-validates independently, so this never weakens that path.
+    pub fn validate_kind(&self, kind_b64: &str) -> anyhow::Result<Vec<String>> {
+        let kind_bytes = base64::engine::general_purpose::STANDARD
+            .decode(kind_b64.trim())
+            .context("txKindBytes is not valid base64")?;
+        validate_kind_inner(
+            &kind_bytes,
+            self.package_id,
+            &self.coin_type,
+            &self.example_packages,
+        )
     }
 
     /// Dry-run the built close tx so the real `close_cooperative_with_root` runs (re-verifying
@@ -594,6 +660,7 @@ fn build_close_tx(
 fn build_sponsored_tx(
     package_id: Address,
     coin_type: &TypeTag,
+    example_packages: &[ExampleModule],
     sender: Address,
     gas_owner: Address,
     kind_bytes: &[u8],
@@ -605,7 +672,7 @@ fn build_sponsored_tx(
     let kind: TransactionKind = bcs::from_bytes(kind_bytes).context("decode tx kind")?;
     match &kind {
         TransactionKind::ProgrammableTransaction(ptb) => {
-            validate_sponsorable(ptb, package_id, coin_type)?
+            validate_sponsorable_inner(ptb, package_id, coin_type, example_packages)?
         }
         _ => anyhow::bail!("only programmable transactions can be sponsored"),
     }
@@ -671,10 +738,25 @@ fn coin_type_address(coin_type: &TypeTag) -> Option<Address> {
 ///
 /// NOTE: this does NOT rate-limit or cap a global spend — a flood of valid sponsorships can still
 /// burn the settler's balance via gas. Add per-sender rate limiting + a daily budget before prod.
+///
+/// Test-only 3-arg shim: validate with NO example-app packages (the default), so the large
+/// tunnel/coin test suite keeps its existing call shape. Production goes through the inner.
+#[cfg(test)]
 fn validate_sponsorable(
     ptb: &ProgrammableTransaction,
     package_id: Address,
     coin_type: &TypeTag,
+) -> anyhow::Result<()> {
+    validate_sponsorable_inner(ptb, package_id, coin_type, &[])
+}
+
+/// As {@link validate_sponsorable}, plus the configured example-app packages whose allowlisted fns
+/// are also sponsorable (over the configured coin type).
+fn validate_sponsorable_inner(
+    ptb: &ProgrammableTransaction,
+    package_id: Address,
+    coin_type: &TypeTag,
+    example_packages: &[ExampleModule],
 ) -> anyhow::Result<()> {
     let framework = Address::from_str(SUI_FRAMEWORK_ADDRESS).expect("static 0x2 address");
     for cmd in &ptb.commands {
@@ -692,7 +774,7 @@ fn validate_sponsorable(
                 // The MTPS stake token's faucet lives in the coin type's own package
                 // (`<pkg>::mtps`). Sponsor the free `mint`/`mint_default` so a 0-token player
                 // can faucet their stake (gas-sponsored) before opening a game. Also sponsor
-                // `mint_nft` so the regular-payments shop can gaslessly reward the miner.
+                // `mint_nft` so the micro-payments shop can gaslessly reward the miner.
                 let mtps_package_call = coin_type_address(coin_type) == Some(mc.package)
                     && mc.module.as_str() == "mtps"
                     && matches!(mc.function.as_str(), "mint" | "mint_default" | "mint_nft");
@@ -708,17 +790,29 @@ fn validate_sponsorable(
                         mc.function.as_str(),
                         "redeem_funds" | "send_funds" | "destroy_zero"
                     );
+                // Example-app calls (agent allowance, streaming payment, …) in their own packages.
+                // Funds come from the user's input coins, so the settler only pays gas. Empty
+                // `example_packages` (none configured) matches nothing.
+                let example_call = example_packages.iter().any(|(pkg, module, fns)| {
+                    mc.package == *pkg
+                        && mc.module.as_str() == *module
+                        && fns.contains(&mc.function.as_str())
+                });
                 anyhow::ensure!(
-                    tunnel_call || framework_share || mtps_package_call || coin_balance_op,
+                    tunnel_call
+                        || framework_share
+                        || mtps_package_call
+                        || coin_balance_op
+                        || example_call,
                     "sponsor refuses move call {}::{}::{}",
                     mc.package,
                     mc.module.as_str(),
                     mc.function.as_str(),
                 );
-                // The tunnel fns and the coin balance ops are generic over the coin `T`; only
-                // sponsor the configured type. (The framework share's type arg is `Tunnel<T>`, a
+                // The tunnel fns, coin balance ops, and example-app calls are generic over the coin
+                // `T`; only sponsor the configured type. (The framework share's type arg is a
                 // different shape — skip it.)
-                if tunnel_call || coin_balance_op {
+                if tunnel_call || coin_balance_op || example_call {
                     anyhow::ensure!(
                         mc.type_arguments.as_slice() == std::slice::from_ref(coin_type),
                         "sponsor refuses move call with an unexpected coin type",
@@ -758,6 +852,51 @@ fn validate_sponsorable(
         }
     }
     Ok(())
+}
+
+/// Decode a sponsorable tx KIND (raw bytes), run the SAME allowlist as the settler path
+/// (`validate_sponsorable_inner`), and collect its move-call targets `pkg::module::fn`,
+/// de-duplicated, first-seen order. Used by `SuiSettler::validate_kind` to gate BOTH providers and
+/// to feed Enoki's `allowedMoveCallTargets`. Reusing `validate_sponsorable_inner` keeps the single
+/// source of truth for what is sponsorable — the Enoki path can never sponsor more than the settler.
+fn validate_kind_inner(
+    kind_bytes: &[u8],
+    package_id: Address,
+    coin_type: &TypeTag,
+    example_packages: &[ExampleModule],
+) -> anyhow::Result<Vec<String>> {
+    let kind: TransactionKind = bcs::from_bytes(kind_bytes).context("decode tx kind")?;
+    let ptb = match &kind {
+        TransactionKind::ProgrammableTransaction(ptb) => ptb,
+        _ => anyhow::bail!("only programmable transactions can be sponsored"),
+    };
+    validate_sponsorable_inner(ptb, package_id, coin_type, example_packages)?;
+    let mut targets: Vec<String> = Vec::new();
+    for cmd in &ptb.commands {
+        if let Command::MoveCall(mc) = cmd {
+            let target = format!(
+                "{}::{}::{}",
+                mc.package,
+                mc.module.as_str(),
+                mc.function.as_str()
+            );
+            if !targets.contains(&target) {
+                targets.push(target);
+            }
+        }
+    }
+    Ok(targets)
+}
+
+/// Test-only shim: extract targets with NO example packages configured (mirrors the
+/// `validate_sponsorable` shim shape), so existing PTB fixtures drive these tests unchanged.
+#[cfg(test)]
+fn validate_kind_targets(
+    kind_bytes: &[u8],
+    package_id: Address,
+    coin_type: &TypeTag,
+) -> anyhow::Result<Vec<String>> {
+    validate_kind_inner(kind_bytes, package_id, coin_type, &[])
 }
 
 /// Decode the settler's ed25519 secret: 32 raw bytes, or 33 with the Sui ed25519 flag
@@ -1005,7 +1144,7 @@ mod tests {
         assert!(validate_sponsorable(&ptb(vec![other]), pkg, &sui_coin()).is_err());
     }
 
-    // The regular-payments shop reward path: `mint_nft` in the MTPS package is sponsorable so
+    // The micro-payments shop reward path: `mint_nft` in the MTPS package is sponsorable so
     // the miner receives the collectible gaslessly (emits `NftMinted` on-chain).
     #[test]
     fn validate_accepts_mtps_mint_nft() {
@@ -1129,6 +1268,91 @@ mod tests {
         );
     }
 
+    // Example-app calls are sponsorable only when the settler is configured with that package AND
+    // the call targets the configured coin type — same safety envelope as tunnel calls.
+    #[test]
+    fn validate_example_app_calls() {
+        let coin: TypeTag = "0xabc::mtps::MTPS".parse().unwrap();
+        let tunnel_pkg = Address::from_str("0xabc").unwrap();
+        let agent_pkg = Address::from_str("0xa9e").unwrap();
+        let stream_pkg = Address::from_str("0x57ea").unwrap();
+        let agent_mods: Vec<ExampleModule> = vec![(
+            agent_pkg,
+            "example_agent_allowance",
+            SPONSOR_AGENT_ALLOWANCE_FNS,
+        )];
+        let stream_mods: Vec<ExampleModule> = vec![(
+            stream_pkg,
+            "example_streaming_payment",
+            SPONSOR_STREAMING_PAYMENT_FNS,
+        )];
+        let call = |package: Address, module: &str, function: &str, type_args: Vec<TypeTag>| {
+            Command::MoveCall(sui_sdk_types::MoveCall {
+                package,
+                module: Identifier::new(module).unwrap(),
+                function: Identifier::new(function).unwrap(),
+                type_arguments: type_args,
+                arguments: vec![],
+            })
+        };
+        let check = |cmd: Command, mods: &[ExampleModule]| {
+            validate_sponsorable_inner(&ptb(vec![cmd]), tunnel_pkg, &coin, mods)
+        };
+        let agent = |f: &str, ta: Vec<TypeTag>| call(agent_pkg, "example_agent_allowance", f, ta);
+
+        // Agent allowance create + claim accepted with the package configured.
+        assert!(check(
+            agent("entry_create_and_share", vec![coin.clone()]),
+            &agent_mods
+        )
+        .is_ok());
+        assert!(check(agent("entry_claim", vec![coin.clone()]), &agent_mods).is_ok());
+        // No configured example packages => refused.
+        assert!(check(agent("entry_claim", vec![coin.clone()]), &[]).is_err());
+        // A non-allowlisted fn is refused.
+        assert!(check(
+            agent("destroy_for_testing", vec![coin.clone()]),
+            &agent_mods
+        )
+        .is_err());
+        // Wrong coin type is refused.
+        let usdc: TypeTag = "0xabc::usdc::USDC".parse().unwrap();
+        assert!(check(agent("entry_claim", vec![usdc]), &agent_mods).is_err());
+        // A different package with the same module name is refused.
+        let other = Address::from_str("0xbad").unwrap();
+        assert!(check(
+            call(
+                other,
+                "example_agent_allowance",
+                "entry_claim",
+                vec![coin.clone()]
+            ),
+            &agent_mods
+        )
+        .is_err());
+        // Streaming create_stream accepted only under the streaming config.
+        assert!(check(
+            call(
+                stream_pkg,
+                "example_streaming_payment",
+                "create_stream",
+                vec![coin.clone()]
+            ),
+            &stream_mods
+        )
+        .is_ok());
+        assert!(check(
+            call(
+                stream_pkg,
+                "example_streaming_payment",
+                "create_stream",
+                vec![coin.clone()]
+            ),
+            &agent_mods
+        )
+        .is_err());
+    }
+
     // The end-to-end wrap: a valid kind yields a sponsored tx where the USER is the sender and the
     // SETTLER owns the empty (SIP-58 address-balance) gas — i.e. the settler pays the user's gas.
     #[test]
@@ -1141,6 +1365,7 @@ mod tests {
         let tx = build_sponsored_tx(
             pkg,
             &sui_coin(),
+            &[],
             user,
             settler,
             &kind_bytes,
@@ -1176,6 +1401,7 @@ mod tests {
         let err = build_sponsored_tx(
             pkg,
             &sui_coin(),
+            &[],
             Address::ZERO,
             Address::ZERO,
             &kind_bytes,
@@ -1187,6 +1413,62 @@ mod tests {
         .unwrap_err()
         .to_string();
         assert!(err.contains("refuses"), "got: {err}");
+    }
+
+    // validate_kind extracts the de-duplicated move-call targets from a valid open/fund KIND, in the
+    // `pkg::module::fn` form Enoki's allowedMoveCallTargets wants (ADR-0014). The duplicate `create`
+    // proves de-duplication; the framework share proves cross-package targets are included.
+    #[test]
+    fn validate_kind_extracts_dedup_targets() {
+        let pkg = Address::from_str("0xabc").unwrap();
+        let framework = Address::from_str(SUI_FRAMEWORK_ADDRESS).unwrap();
+        let share = Command::MoveCall(sui_sdk_types::MoveCall {
+            package: framework,
+            module: Identifier::new("transfer").unwrap(),
+            function: Identifier::new("public_share_object").unwrap(),
+            type_arguments: vec![],
+            arguments: vec![],
+        });
+        let kind = TransactionKind::ProgrammableTransaction(ptb(vec![
+            tunnel_call(pkg, "create"),
+            tunnel_call(pkg, "deposit_party_a"),
+            tunnel_call(pkg, "create"), // duplicate — must collapse to one target
+            share,
+        ]));
+        let bytes = bcs::to_bytes(&kind).unwrap();
+        let targets = validate_kind_targets(&bytes, pkg, &sui_coin()).unwrap();
+        assert_eq!(
+            targets,
+            vec![
+                format!("{pkg}::tunnel::create"),
+                format!("{pkg}::tunnel::deposit_party_a"),
+                format!("{framework}::transfer::public_share_object"),
+            ]
+        );
+    }
+
+    // A KIND that fails the allowlist (foreign package) returns Err — targets are never produced for
+    // an unsponsorable tx, so neither provider can be asked to pay for it.
+    #[test]
+    fn validate_kind_rejects_unsponsorable() {
+        let pkg = Address::from_str("0xabc").unwrap();
+        let evil = Command::MoveCall(sui_sdk_types::MoveCall {
+            package: Address::from_str("0xdead").unwrap(),
+            module: Identifier::new("rug").unwrap(),
+            function: Identifier::new("drain").unwrap(),
+            type_arguments: vec![],
+            arguments: vec![],
+        });
+        let kind = TransactionKind::ProgrammableTransaction(ptb(vec![evil]));
+        let bytes = bcs::to_bytes(&kind).unwrap();
+        assert!(validate_kind_targets(&bytes, pkg, &sui_coin()).is_err());
+    }
+
+    // Bytes that are not a decodable tx KIND are rejected at decode, never sponsored.
+    #[test]
+    fn validate_kind_rejects_undecodable_bytes() {
+        let pkg = Address::from_str("0xabc").unwrap();
+        assert!(validate_kind_targets(&[0xff, 0xff, 0xff], pkg, &sui_coin()).is_err());
     }
 
     // The indexer must lift payout + transcript root + tx digest out of a real suix_queryEvents

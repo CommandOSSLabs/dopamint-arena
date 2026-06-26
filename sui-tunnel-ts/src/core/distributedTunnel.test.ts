@@ -389,6 +389,107 @@ function blakeOfCount1(): Uint8Array {
   return blake2b256(counterProtocol.encodeState({ count: 1, turn: "B" }));
 }
 
+// Reconnect re-delivers a MOVE we already applied+ACKed (the relay re-flushes a buffered frame, or
+// the proposer re-sends one whose ACK was lost on the dropped socket). It must be idempotent — not a
+// "nonce gap" throw — and must re-ACK so a proposer still awaiting the lost ACK can retire its pending.
+test("a replayed MOVE on reconnect is ignored and re-ACKed, not thrown", () => {
+  const keyA = generateKeyPair();
+  const keyB = generateKeyPair();
+  const e = endpoints(keyA, keyB, "0xa11ce", "0xb0b");
+  const m = makeManual();
+  const dtB = new DistributedTunnel(
+    counterProtocol,
+    {
+      tunnelId: "0x7",
+      self: e.bSelf,
+      opponent: e.bOpp,
+      selfParty: "B" as Party,
+    },
+    m.transport,
+    BAL
+  );
+  // A valid MOVE A would send at nonce 1 (count 0 -> 1, turn A -> B).
+  const update = {
+    tunnelId: "0x7",
+    stateHash: blakeOfCount1(),
+    nonce: 1n,
+    timestamp: 100n,
+    partyABalance: 1000n,
+    partyBBalance: 1000n,
+  };
+  const frame: MoveFrame<number> = {
+    kind: "move",
+    nonce: 1n,
+    by: "A",
+    move: 0,
+    timestamp: 100n,
+    stateHash: blakeOfCount1(),
+    partyABalance: 1000n,
+    partyBBalance: 1000n,
+    sigProposer: edSign(serializeStateUpdate(update), keyA.secretKey),
+  };
+  const wire = encodeFrame(frame, identityMoveCodec);
+
+  m.deliver(wire); // first delivery: applied + ACKed
+  assert.equal(dtB.nonce, 1n, "first MOVE advances to nonce 1");
+  assert.equal(m.sent.length, 1, "one ACK sent");
+
+  // The reconnect replay must NOT throw, must NOT advance, and must re-ACK byte-identically.
+  assert.doesNotThrow(() => m.deliver(wire), "replayed MOVE is idempotent");
+  assert.equal(dtB.nonce, 1n, "replayed MOVE does not advance state");
+  assert.equal(
+    m.sent.length,
+    2,
+    "ACK re-sent so a waiting proposer can retire its pending"
+  );
+  assert.deepEqual(m.sent[0], m.sent[1], "the re-ACK is byte-identical");
+});
+
+// The mirror of the replayed-MOVE case, on the proposer side: a reconnect re-delivers an ACK we
+// already applied (the relay re-flushes it, or the responder re-ACKs our replayed MOVE). The pending
+// is already retired, so the strict guard would throw "unexpected ACK"; it must be a no-op instead.
+test("a replayed ACK on reconnect is ignored, not thrown", () => {
+  const keyA = generateKeyPair();
+  const keyB = generateKeyPair();
+  const e = endpoints(keyA, keyB, "0xa11ce", "0xb0b");
+  const m = makeManual();
+  const dtA = new DistributedTunnel(
+    counterProtocol,
+    {
+      tunnelId: "0x7",
+      self: e.aSelf,
+      opponent: e.aOpp,
+      selfParty: "A" as Party,
+    },
+    m.transport,
+    BAL
+  );
+  dtA.propose(0, 100n); // pending at nonce 1, awaiting the ACK
+  const update = {
+    tunnelId: "0x7",
+    stateHash: blakeOfCount1(),
+    nonce: 1n,
+    timestamp: 100n,
+    partyABalance: 1000n,
+    partyBBalance: 1000n,
+  };
+  const ack = encodeFrame(
+    {
+      kind: "ack",
+      nonce: 1n,
+      sigResponder: edSign(serializeStateUpdate(update), keyB.secretKey),
+    },
+    identityMoveCodec
+  );
+
+  m.deliver(ack); // valid ACK confirms nonce 1 and retires the pending
+  assert.equal(dtA.nonce, 1n, "valid ACK advances");
+
+  // The reconnect replay must NOT throw and must NOT mutate state.
+  assert.doesNotThrow(() => m.deliver(ack), "replayed ACK is idempotent");
+  assert.equal(dtA.nonce, 1n, "replayed ACK does not change state");
+});
+
 test("engine pair over a relay-shaped transport reaches a settleable terminal state", () => {
   // A transport that mimics the backend relay: send() routes to the OTHER seat verbatim.
   const { dtA, dtB } = makePair();

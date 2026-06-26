@@ -34,6 +34,7 @@ export const BombItWindow = createArenaWindow<BombItSession, PvpBombIt>({
       score={solo.score}
       gamesPlayed={solo.gamesPlayed}
       onSettle={solo.status === "playing" ? solo.settleNow : undefined}
+      onBack={onPlayAgain}
     />
   ),
   renderPvpBoard: (pvp, onPlayAgain) => (
@@ -46,6 +47,7 @@ export const BombItWindow = createArenaWindow<BombItSession, PvpBombIt>({
       onToggleAuto={pvp.toggleAuto}
       onAction={pvp.queueAction}
       onPlayAgain={onPlayAgain}
+      onBack={onPlayAgain}
     />
   ),
 });

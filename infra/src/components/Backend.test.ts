@@ -171,7 +171,7 @@ describe("backend component", () => {
     const backend = createBackend(
       makeBackendArgs({
         ollamaEnabled: true,
-        ollamaModel: "qwen2.5:1.8b",
+        ollamaModel: "qwen2.5:1.5b",
         ollamaImageTag: "0.6.2",
       }),
     );
@@ -192,7 +192,7 @@ describe("backend component", () => {
       "ollama image must use the ollama registry",
     );
     assert.ok(
-      ollamaContainer.command.some((c: string) => c.includes("qwen2.5:1.8b")),
+      ollamaContainer.command.some((c: string) => c.includes("qwen2.5:1.5b")),
       "ollama command must pull the configured model",
     );
     assert.ok(
@@ -205,7 +205,7 @@ describe("backend component", () => {
     assert.ok(
       backendContainer.environment.some(
         (e: { name: string; value: string }) =>
-          e.name === "OLLAMA_MODEL" && e.value === "qwen2.5:1.8b",
+          e.name === "OLLAMA_MODEL" && e.value === "qwen2.5:1.5b",
       ),
       "backend must receive the configured OLLAMA_MODEL",
     );

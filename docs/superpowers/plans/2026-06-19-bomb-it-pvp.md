@@ -1978,7 +1978,7 @@ import "./bombIt";
 import "./quantumPoker";
 import "./ticTacToe";
 import "./chat";
-import "./regularPayments";
+import "./microPayments";
 import "./coinFlip";
 import "./dice";
 import "./slots";

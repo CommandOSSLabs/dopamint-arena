@@ -59,7 +59,7 @@ export function AppShell() {
       <header className="relative z-10 flex shrink-0 items-center justify-between gap-3 border-b border-border bg-background/70 px-3 py-2.5 backdrop-blur-xl">
         <div className="flex items-center gap-2.5">
           <span className="wal-display text-sm sm:text-base">
-            Dopamint<span className="wal-gradient-text">Arena</span>
+            Million<span className="wal-gradient-text">TPS</span>
           </span>
           <nav className="hidden items-center gap-1 lg:flex">
             <Link to="/" className={cn(navTab, onArena && navTabActive)}>

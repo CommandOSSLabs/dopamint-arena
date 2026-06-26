@@ -32,10 +32,11 @@
  * OVERPAINT is legal: re-painting a cell is a full co-signed move whose owner/color
  * updates to the latest painter.
  *
- * Periodic on-chain CHECKPOINT: every CHECKPOINT_EVERY co-signed paints the real
- * tunnel cooperatively closes (anchoring its transcript root via the SAME backend
- * `/settle` path every finite game uses — stakes return, NO winner) and a fresh
- * tunnel reopens so painting never stops.
+ * Bounded GAMES: the wall runs as discrete games of MOVES_PER_GAME co-signed paints.
+ * At each boundary the tunnel cooperatively closes (on-chain: anchoring its transcript
+ * root via the SAME backend `/settle` path every finite game uses — stakes return, NO
+ * winner; demo: no chain), a fresh tunnel reopens, the canvas is WIPED, the bots re-seed
+ * from the origin, and a game counter bumps — continuous "new game, clear canvas" rounds.
  *
  * Opening tries the gas SPONSOR first, so the seats (fresh bot keys with ZERO SUI)
  * open for free, faucet-minting their MTPS stake:
@@ -95,7 +96,7 @@ import {
 } from "./designs";
 import { rasterizeTemplate, fitScale, TEMPLATES_BY_ID } from "./templates";
 import { mulberry32 } from "./geometry";
-import { WC } from "./ui/tokens";
+import { WC, ZOOM } from "./ui/tokens";
 
 export type { AgentModeId } from "./designs";
 
@@ -128,13 +129,28 @@ const HUMAN_STROKE_DEBOUNCE_MS = 400;
  *  whole window into one row) keeps Auto-mode activity legible without flooding the feed.
  *  Bot-only — the human seat uses HUMAN_STROKE_DEBOUNCE_MS (a debounce) instead. */
 const BOT_ACTIVITY_THROTTLE_MS = 1500;
-/** Co-signed paints between on-chain checkpoints. At each boundary the tunnel
- *  cooperatively closes (anchoring its transcript root on-chain, like every finite
- *  game's settle) and a fresh tunnel reopens so painting never stops. Only the real
- *  (on-chain) tunnel checkpoints; the demo tunnel skips it (no chain). */
-const CHECKPOINT_EVERY = 50000;
+/** The single config constant: co-signed paints in ONE bounded game. At the cap the
+ *  tunnel cooperatively closes (on-chain: anchoring its transcript root, like every
+ *  finite game's settle; demo: no chain), the canvas wipes, the bots re-seed, a fresh
+ *  tunnel reopens, and the game counter bumps — so the wall runs as discrete games
+ *  ("New game, clear canvas") rather than one endless stream. BOTH the on-chain and the
+ *  demo tunnel bound at this cap; only the on-chain path also settles + anchors a root. */
+/** Default + hard MAX co-signed-move cap per game (the lobby slider tops out here). */
+export const MOVES_PER_GAME = 50_000;
+/** Floor for the configurable cap — below this a game would settle near-instantly and
+ *  re-open in a storm, so the lobby slider bottoms out here (not 0). */
+export const MIN_MOVES_PER_GAME = 1_000;
+/** Clamp a requested per-game cap into the allowed range. */
+export function clampMovesPerGame(n: number): number {
+  if (!Number.isFinite(n)) return MOVES_PER_GAME;
+  return Math.max(MIN_MOVES_PER_GAME, Math.min(MOVES_PER_GAME, Math.round(n)));
+}
 /** Gap (cells) between adjacent agent regions so their art never touches. */
 const REGION_GAP = 14;
+/** Auto-follow cadence (ms): while Auto is on, how often the spectator camera re-centers on
+ *  seat A's bot. Lazy enough to read as a smooth trailing follow (the canvas eases each step),
+ *  not a per-frame jerk. */
+const AUTO_FOLLOW_MS = 1_000;
 /** World slot size (cells) — sized to the LARGEST mode footprint so any mode fits a
  *  slot on the shared spiral lattice and regions never overlap regardless of mode. */
 const SLOT_W = MAX_FOOTPRINT_W + REGION_GAP;
@@ -151,6 +167,20 @@ const REGION_FILL_FACTOR = 3;
  *  max mode footprint so a template region never overflows its spiral slot. */
 const AGENT_TEMPLATE_W = MAX_FOOTPRINT_W - 8;
 const AGENT_TEMPLATE_H = MAX_FOOTPRINT_H - 8;
+
+/** Freestyle seat line colors — palette indices, matching the PvP bot (seat A Sui blue,
+ *  seat B light purple) so each seat draws ONE distinct continuous line. */
+const FREESTYLE_COLOR_A = 13;
+const FREESTYLE_COLOR_B = 15;
+/** Per-step chance a freestyle walk turns (mirrors worldCanvasPvp.randomMove's 0.35). */
+const FREESTYLE_TURN_CHANCE = 0.35;
+/** Nominal marker anchor height for a freestyle bot (it draws a line, not a footprint box). */
+const FREESTYLE_MARKER_H = 4;
+/** Frames between freestyle marker re-syncs, so the on-canvas marker follows the wandering
+ *  head a few times/second without per-frame React churn. */
+const MARKER_SYNC_EVERY_FRAMES = 24;
+/** Placeholder RNG for a template placement (its walk fields are unused). */
+const NOOP_RNG = () => 0;
 
 export type Seat = "A" | "B";
 
@@ -279,11 +309,14 @@ export interface AgentMarker {
   h: number;
 }
 
-/** A camera-jump request: center this global-pixel point; `seq` bumps per request. */
+/** A camera-jump request: center this global-pixel point; `seq` bumps per request. An
+ *  optional `scale` overrides the camera zoom on arrival (px per cell); omit to keep the
+ *  view's default focus zoom. */
 export interface CanvasFocus {
   gx: number;
   gy: number;
   seq: number;
+  scale?: number;
 }
 
 /** On-chain progress surfaced to the canvas HUD (driven by the single tunnel). */
@@ -306,12 +339,27 @@ export interface UseWorldCanvasOnchain {
   paints: ReadonlyMap<string, PaintedCell>;
   /** Bumps (throttled) whenever the canvas changes, so consumers redraw. */
   revision: number;
+  /** Current game number — starts at 1, increments at each {@link movesPerGame} boundary
+   *  (canvas wipe + fresh tunnel). Drives the "Game N" readout and the canvas reset. */
+  game: number;
+  /** Co-signed moves on the current tunnel since the last game boundary (0 → movesPerGame). */
+  movesThisGame: number;
+  /** Per-game co-signed-move cap (the bound at which a game ends and the canvas wipes). */
+  movesPerGame: number;
   /** Auto mode: ON (default) = both seats bot-driven (bot vs bot). OFF = you author
    *  seat A ({@link submitHumanPaint}) while the seat-B bot plays on — same tunnel. */
   auto: boolean;
   /** Flip between watch (bots vs bots) and take-the-wheel (you vs the seat-B bot). The
    *  seat-A bot pauses/resumes in place; the tunnel is never reopened. */
   toggleAuto(): void;
+  /** Set Auto deterministically (idempotent). The cabinet's take-over calls `setAuto(false)`
+   *  to hand seat A to the human; same in-place seat-A pause/resume as {@link toggleAuto}. */
+  setAuto(value: boolean): void;
+  /** Cabinet hover-freeze: stop the bots co-signing paints in place (the rAF loop keeps
+   *  running). Resume with {@link resumeAgents}; the tunnel and game state are untouched. */
+  pauseAgents(): void;
+  /** Resume bot painting after a {@link pauseAgents} freeze that didn't lead to a take-over. */
+  resumeAgents(): void;
   /** Live seat-bot markers — both seats when Auto is on, seat B only when you hold the wheel. */
   agents: AgentMarker[];
   /** Latest camera-jump request; null until first view/jump. */
@@ -471,8 +519,29 @@ interface CanvasRun {
   coinType?: string;
 }
 
-/** A live seat bot streaming one mode's strokes across a world region. Each bot
- *  authors as exactly one seat (A or B) of the single shared tunnel. */
+/** A fresh region/walk handed to a seat bot (initial spawn, relocate, or mode switch). */
+interface AgentPlacement {
+  /** "template" = an Artist picture region; "freestyle" = a wandering momentum walk. */
+  kind: "template" | "freestyle";
+  /** Template path only: the region's lazy cell stream (null for a freestyle walk). */
+  iter: Iterator<DesignCell> | null;
+  regionName: string;
+  footprintH: number;
+  maxCells: number;
+  originGx: number;
+  originGy: number;
+  centerGx: number;
+  centerGy: number;
+  walkGx: number;
+  walkGy: number;
+  walkDx: number;
+  walkDy: number;
+  rng: () => number;
+  color: number;
+}
+
+/** A live seat bot. Each bot authors as exactly one seat (A or B) of the single shared
+ *  tunnel and either draws an Artist picture region OR walks one continuous freestyle line. */
 interface AgentState {
   id: string;
   /** The seat this bot authors as (its distinct funded identity on the tunnel). */
@@ -484,22 +553,80 @@ interface AgentState {
   /** Captured at spawn, live-updatable: paint interval tier + drawing intelligence. */
   speed: AgentSpeed;
   mode: AgentModeId;
-  /** Lazy cell stream for the CURRENT region (the mode's stroke generator). */
-  iter: Iterator<DesignCell>;
-  /** Label shown on the marker for the current region (the mode's name). */
+  /** Drawing strategy for the current run: an Artist picture region vs a freestyle walk. */
+  kind: "template" | "freestyle";
+  /** Template path only: the region's lazy cell stream (null while freestyle-walking). */
+  iter: Iterator<DesignCell> | null;
+  /** Label shown on the marker for the current region / walk (the mode or picture name). */
   regionName: string;
-  /** Current region footprint height in cells (anchors the marker above the art). */
+  /** Marker anchor height in cells (region height, or a nominal value for a walk). */
   footprintH: number;
-  /** Top-left global-pixel origin of the current region. */
+  /** Top-left global-pixel origin: a region's corner, or a freestyle walk's spawn. */
   originGx: number;
   originGy: number;
-  /** Global-pixel center of the current region (camera/marker anchor). */
+  /** Global-pixel marker anchor — a region center, or the live freestyle walk head. */
   centerGx: number;
   centerGy: number;
-  /** Cells co-signed in the current region so far (drives the endless-mode relocate). */
+  /** Freestyle momentum walk: global-pixel cursor + heading + per-bot RNG + fixed line
+   *  color — a bounded random walk mirroring worldCanvasPvp.randomMove. Unused for templates. */
+  walkGx: number;
+  walkGy: number;
+  walkDx: number;
+  walkDy: number;
+  rng: () => number;
+  color: number;
+  /** Cells co-signed in the current region so far (drives the template relocate). */
   painted: number;
-  /** Soft cap: relocate once `painted` reaches this (bounds endless modes per region). */
+  /** Soft cap: relocate a template once `painted` reaches this (Infinity for a walk). */
   maxCells: number;
+}
+
+/** Clamp a per-step delta so the freestyle walk stays a tight, legible line (mirrors
+ *  worldCanvasPvp's clampStep — no big jumps). */
+function clampStep(n: number): number {
+  return Math.max(-2, Math.min(2, n));
+}
+
+/** Advance a freestyle bot's momentum random walk by ONE cell and return it (origin-relative
+ *  so the shared `moveAtGlobal(origin + cell)` paint path is unchanged). Mirrors the inner
+ *  loop of worldCanvasPvp.randomMove: occasionally turn, clamp the heading, never stall — a
+ *  coherent wandering line continued from the bot's last painted cell. */
+function stepFreestyle(st: AgentState): DesignCell {
+  const rng = st.rng;
+  if (rng() < FREESTYLE_TURN_CHANCE) {
+    st.walkDx += Math.floor(rng() * 3) - 1;
+    st.walkDy += Math.floor(rng() * 3) - 1;
+  }
+  st.walkDx = clampStep(st.walkDx);
+  st.walkDy = clampStep(st.walkDy);
+  if (st.walkDx === 0 && st.walkDy === 0) st.walkDx = 1;
+  st.walkGx += st.walkDx;
+  st.walkGy += st.walkDy;
+  return {
+    dx: st.walkGx - st.originGx,
+    dy: st.walkGy - st.originGy,
+    color: st.color,
+  };
+}
+
+/** Copy a fresh placement onto a live bot (initial spawn, relocate, or mode-kind switch). */
+function applyPlacement(st: AgentState, p: AgentPlacement): void {
+  st.kind = p.kind;
+  st.iter = p.iter;
+  st.regionName = p.regionName;
+  st.footprintH = p.footprintH;
+  st.maxCells = p.maxCells;
+  st.originGx = p.originGx;
+  st.originGy = p.originGy;
+  st.centerGx = p.centerGx;
+  st.centerGy = p.centerGy;
+  st.walkGx = p.walkGx;
+  st.walkGy = p.walkGy;
+  st.walkDx = p.walkDx;
+  st.walkDy = p.walkDy;
+  st.rng = p.rng;
+  st.color = p.color;
+  st.painted = 0;
 }
 
 const EMPTY_STATUS: WorldCanvasOnchainStatus = {
@@ -511,13 +638,25 @@ const EMPTY_STATUS: WorldCanvasOnchainStatus = {
   error: null,
 };
 
-export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
+export function useWorldCanvasOnchain(
+  opts: { botColor?: number; movesPerGame?: number } = {},
+): UseWorldCanvasOnchain {
   // A stable "You" display identity (never co-signs — the funded seat-A keypair does
   // the signing; this address only TAGS the human's own cells for the "You" label).
   const { report } = useTelemetry();
   const bots = useMemo(() => loadOrCreateBots(), []);
   const client = useMemo(() => getSuiClient(), []);
   const humanAddress = bots.x.address;
+  // The toolbar's current paint color — the bots paint in YOUR chosen color too (you set
+  // the palette, they follow). A ref so the rAF paintFrame reads it without re-subscribing.
+  const botColorRef = useRef(opts.botColor ?? 13);
+  botColorRef.current = opts.botColor ?? 13;
+  // Per-game co-signed-move cap (the canvas wipes + the tunnel settles at this many paints).
+  // User-configurable in the lobby; clamped to [MIN_MOVES_PER_GAME, MOVES_PER_GAME], default
+  // MOVES_PER_GAME. A ref so the live cap-check reads the latest without re-subscribing.
+  const movesPerGame = clampMovesPerGame(opts.movesPerGame ?? MOVES_PER_GAME);
+  const movesPerGameRef = useRef(movesPerGame);
+  movesPerGameRef.current = movesPerGame;
   // One protocol instance shared by the tunnel (and its reopens).
   const proto = useMemo(
     () =>
@@ -536,12 +675,17 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
   const [agentDensity, setAgentDensityState] =
     useState<number>(DEFAULT_DENSITY);
   const [agentTemplate, setAgentTemplateState] = useState<string | null>(null);
+  // The current game number — bumps at each MOVES_PER_GAME boundary (see resetGameState).
+  const [game, setGame] = useState(1);
 
   // The single tunnel (swapped out on each checkpoint reopen) and the two seats.
   const runRef = useRef<CanvasRun | null>(null);
   const identitiesRef = useRef<{ a: BotIdentity; b: BotIdentity } | null>(null);
   // Co-signed paints on the tunnel (the dashboard numerator + the window TPS dial).
   const totalMovesRef = useRef(0);
+  // Co-signed paints since the last game boundary (0 → MOVES_PER_GAME); the "Game N · M /
+  // cap" readout numerator. Reset in resetGameState; totalMovesRef stays cumulative (TPS).
+  const movesThisGameRef = useRef(0);
   // Live canvas data: stable identity, mutated in place; React re-reads on `revision`.
   const paintsRef = useRef<Map<string, PaintedCell>>(new Map());
   // Per-painter tallies + recent-activity ring: same "mutate + bump revision" pattern.
@@ -581,6 +725,11 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
   // cells land on the render cadence (smooth, frame-aligned) instead of two competing
   // setTimeout chains that the busy canvas rAF loop starves to a crawl.
   const agentRafRef = useRef<number | null>(null);
+  // Cabinet hover-freeze flag the rAF loop reads each frame: while paused it keeps scheduling
+  // frames but submits no co-signed paints (resumable mid-stream; never closes the tunnel).
+  const pausedRef = useRef(false);
+  // Frame counter that paces freestyle marker re-syncs (head-follow) off the per-frame path.
+  const agentMarkerTickRef = useRef(0);
   // Auto mirrored into a ref so the paint loop + paint sink read it without re-subscribing.
   const autoRef = useRef(true);
   // Current speed/mode for the seat bots, mirrored into refs so the paint loop can read
@@ -788,6 +937,7 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
         });
         if (!r.verified) return;
         run.moveCount += 1;
+        movesThisGameRef.current += 1;
         run.actions += 1;
         totalMovesRef.current += 1;
         paintCell(mv, by, totalMovesRef.current, painter);
@@ -797,12 +947,13 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
         // painter here to avoid a duplicate row.
         if (painter !== humanAddress) accumulateBotPaint(painter);
         flushHeartbeat(run, false);
-        // On a real tunnel, anchor the transcript root on-chain every CHECKPOINT_EVERY
-        // co-signed paints (cooperative close-and-reopen). The demo tunnel never does this.
+        // Game boundary at the cap: every MOVES_PER_GAME co-signed paints, end the game —
+        // close the tunnel (on-chain: settle + anchor root; demo: no settle), wipe the
+        // canvas, re-seed the bots, and reopen a fresh tunnel. BOTH tunnels bound here; the
+        // settle is gated inside checkpointRun, so demo bounds without touching the chain.
         if (
-          run.onchain &&
           !run.checkpointing &&
-          run.moveCount - run.lastCheckpoint >= CHECKPOINT_EVERY
+          run.moveCount - run.lastCheckpoint >= movesPerGameRef.current
         ) {
           checkpointRef.current?.(run);
         }
@@ -1025,19 +1176,19 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
         game: GAME,
         time: new Date().toLocaleTimeString("en-GB"),
         bot: shortTunnelId(run.tunnelId),
-        type: "open tunnel",
+        type: "Start",
         status: "Success",
         amount: "",
       });
       // Also surface the open in LIVE TRANSACTIONS (snapshot.txns) under this game's tab,
-      // mirroring the "Opened" row every other game's on-chain feed uses. BOTH feeds get it:
+      // mirroring the "Start" row every other game's on-chain feed uses. BOTH feeds get it:
       // MY ACTIVITY (above) and LIVE TRANSACTIONS (here).
       report.pushTxn({
         id: feedRowId(run.tunnelId),
         game: GAME,
         time: new Date().toLocaleTimeString("en-GB"),
         bot: shortTunnelId(run.tunnelId),
-        type: "Opened",
+        type: "Start",
         status: "Success",
         amount: "",
       });
@@ -1062,41 +1213,49 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
     [client, proto, submit, coSignPaint, registerPainter, humanAddress, report],
   );
 
-  // Checkpoint the tunnel on-chain: cooperatively close it (anchoring its transcript
-  // root via the SAME backend `/settle` path every finite game uses), then reopen a
-  // fresh tunnel so painting continues seamlessly. The reopen is synchronous up to its
-  // `runRef.current = run`, so paints route to the new tunnel with no gap (buffered
-  // until live). On-chain only; the demo run never reaches here.
+  // End the current game at the cap: cooperatively close the tunnel, reopen a fresh one,
+  // WIPE the canvas + re-seed the bots (resetGameState), and bump the game counter — so
+  // the wall runs as discrete games. The reopen is synchronous up to startRun's first
+  // await (paints route to the new tunnel with no gap, buffered until live), so the
+  // boundary is instant. BOTH tunnels bound here; the on-chain path ALSO anchors the
+  // retired tunnel's transcript root via the SAME backend `/settle` path every finite
+  // game uses (stakes return, NO winner) + pushes the "settled" feed rows. The demo
+  // tunnel bounds the game WITHOUT touching the chain. resetGameState is reached via a
+  // ref because it's defined later (it needs nextPlacement / syncAgentMarkers).
   const checkpointRef = useRef<((run: CanvasRun) => void) | null>(null);
+  const resetGameRef = useRef<(() => void) | null>(null);
   const checkpointRun = useCallback(
     async (run: CanvasRun) => {
-      if (
-        run.checkpointing ||
-        run.closed ||
-        !run.onchain ||
-        !run.tunnel ||
-        !run.transcript
-      )
+      if (run.checkpointing || run.closed || !run.tunnel || !run.transcript)
         return;
       run.checkpointing = true;
       const { tunnel, transcript } = run;
-      let settlement: core.CoSignedSettlementWithRoot;
-      try {
-        settlement = tunnel.buildSettlementWithRoot(
-          run.createdAt,
-          transcript.root(),
-          0n,
-        );
-      } catch (e) {
-        console.warn("[world-canvas] checkpoint build skipped:", e);
-        run.checkpointing = false;
-        run.lastCheckpoint = run.moveCount;
-        return;
+      // On-chain games anchor the retired tunnel's transcript root; build that settlement
+      // BEFORE retiring the tunnel. A build failure is transient — abort the boundary and
+      // retry at the next cap, leaving the tunnel running. The demo tunnel never anchors,
+      // so it skips this and always bounds the game.
+      let settlement: core.CoSignedSettlementWithRoot | null = null;
+      if (run.onchain) {
+        try {
+          settlement = tunnel.buildSettlementWithRoot(
+            run.createdAt,
+            transcript.root(),
+            0n,
+          );
+        } catch (e) {
+          console.warn("[world-canvas] checkpoint build skipped:", e);
+          run.checkpointing = false;
+          run.lastCheckpoint = run.moveCount;
+          return;
+        }
       }
-      // Retire the old tunnel and reopen immediately so paints keep flowing, then
-      // anchor the closed tunnel's root on-chain in the background.
+      // Retire the old tunnel and reopen immediately so paints keep flowing, then wipe the
+      // canvas + re-seed the bots for the new game. On-chain: anchor the closed tunnel's
+      // root in the background below. Demo stops at the boundary (no chain).
       run.closed = true;
       void startRun(true);
+      resetGameRef.current?.();
+      if (!run.onchain || !settlement) return;
       const sponsoredClose = makeKeypairSponsoredSignExec({
         address: run.identities.a.address,
         keypair: run.identities.a.keypair,
@@ -1117,7 +1276,7 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
           },
         });
         // Anchored: close the prior tunnel in the dashboard like every other game — bump the
-        // closed/settlement counters and push a MY-ACTIVITY "settled" row. We DON'T setActive(0)
+        // closed/settlement counters and push a MY-ACTIVITY "End" row. We DON'T setActive(0)
         // here: the reopen (startRun above) already re-marked both seats active, so the wall
         // keeps running. (Guarded inside this try so it can never throw into the settle path.)
         report.bumpCounters({ tunnelsClosed: 1, settlements: 1 });
@@ -1126,18 +1285,18 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
           game: GAME,
           time: new Date().toLocaleTimeString("en-GB"),
           bot: shortTunnelId(run.tunnelId),
-          type: "settled",
+          type: "End",
           status: "Success",
           amount: "closed",
         });
-        // Mirror the close into LIVE TRANSACTIONS (snapshot.txns) as a "Settled" row, the
-        // on-chain-feed counterpart of the MY-ACTIVITY "settled" row above. BOTH feeds get it.
+        // Mirror the close into LIVE TRANSACTIONS (snapshot.txns) as an "End" row, the
+        // on-chain-feed counterpart of the MY-ACTIVITY "End" row above. BOTH feeds get it.
         report.pushTxn({
           id: feedRowId(`${run.tunnelId}:${run.moveCount}`),
           game: GAME,
           time: new Date().toLocaleTimeString("en-GB"),
           bot: shortTunnelId(run.tunnelId),
-          type: "Settled",
+          type: "End",
           status: "Success",
           amount: "closed",
         });
@@ -1195,62 +1354,108 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
     [submitPaint, humanAddress, flushHumanStroke],
   );
 
-  // Allocate the next region for a seat bot: a fresh stroke stream (per the given mode)
-  // on a non-overlapping spiral slot, sized from the mode's own footprint. Each region
-  // is seeded by its index so its art is varied yet reproducible.
-  const nextPlacement = useCallback((modeId: AgentModeId) => {
-    const i = regionIndexRef.current++;
-
-    // Artist mode with a chosen template: stamp the rasterized template's cells (in
-    // reveal order) instead of the flag rotation. The template is fit into a box under
-    // the max mode footprint, so its region still drops on the shared slot lattice and
-    // never overlaps a neighbour. Each cell is still one co-signed move.
-    const tplId = modeId === "artist" ? agentTemplateRef.current : null;
-    const tpl = tplId ? TEMPLATES_BY_ID[tplId] : undefined;
-    if (tpl) {
-      const scale = fitScale(tpl.aspect, AGENT_TEMPLATE_W, AGENT_TEMPLATE_H);
-      const rast = rasterizeTemplate(tpl, scale);
-      const fw = Math.max(1, rast.width);
-      const fh = Math.max(1, rast.height);
+  // Seed the next region/walk for a seat bot. Artist is the deliberate "draw a picture"
+  // intelligence and keeps its bounded region (a chosen template, else the flag rotation);
+  // EVERY OTHER intelligence is a FREESTYLE momentum walk that wanders the open canvas from
+  // a distinct per-seat spawn, drawing one continuous single-color line (no footprint box).
+  const nextPlacement = useCallback(
+    (modeId: AgentModeId, seat: Seat): AgentPlacement => {
+      const i = regionIndexRef.current++;
       const { col, row } = spiralSlot(i);
-      const originGx = Math.round(col * SLOT_W - fw / 2);
-      const originGy = Math.round(row * SLOT_H - fh / 2);
-      return {
-        iter: rast.cells[Symbol.iterator]() as Iterator<DesignCell>,
-        regionName: tpl.name,
-        footprintH: fh,
-        maxCells: Math.max(1, rast.cells.length),
-        originGx,
-        originGy,
-        centerGx: originGx + fw / 2,
-        centerGy: originGy + fh / 2,
-      };
-    }
 
-    const mode = AGENT_MODES[modeId];
-    const fw = mode.footprint.width;
-    const fh = mode.footprint.height;
-    const iter = mode.strokes({
-      width: fw,
-      height: fh,
-      rng: mulberry32(REGION_SEED ^ Math.imul(i + 1, 2654435761)),
-      numColors: NUM_COLORS,
-      index: i,
-    });
-    const { col, row } = spiralSlot(i);
-    const originGx = Math.round(col * SLOT_W - fw / 2);
-    const originGy = Math.round(row * SLOT_H - fh / 2);
-    return {
-      iter,
-      regionName: mode.label,
-      footprintH: fh,
-      maxCells: Math.round(fw * fh * REGION_FILL_FACTOR),
-      originGx,
-      originGy,
-      centerGx: originGx + fw / 2,
-      centerGy: originGy + fh / 2,
-    };
-  }, []);
+      if (modeId === "artist") {
+        // Artist + chosen template: stamp the rasterized template's cells in reveal order.
+        // The template is fit into a box under the max mode footprint, so its region drops on
+        // the shared slot lattice and never overlaps a neighbour. Each cell is one co-signed
+        // move; with no template it falls through to the flag rotation below.
+        const tplId = agentTemplateRef.current;
+        const tpl = tplId ? TEMPLATES_BY_ID[tplId] : undefined;
+        if (tpl) {
+          const scale = fitScale(
+            tpl.aspect,
+            AGENT_TEMPLATE_W,
+            AGENT_TEMPLATE_H,
+          );
+          const rast = rasterizeTemplate(tpl, scale);
+          const fw = Math.max(1, rast.width);
+          const fh = Math.max(1, rast.height);
+          const originGx = Math.round(col * SLOT_W - fw / 2);
+          const originGy = Math.round(row * SLOT_H - fh / 2);
+          return {
+            kind: "template",
+            iter: rast.cells[Symbol.iterator]() as Iterator<DesignCell>,
+            regionName: tpl.name,
+            footprintH: fh,
+            maxCells: Math.max(1, rast.cells.length),
+            originGx,
+            originGy,
+            centerGx: originGx + fw / 2,
+            centerGy: originGy + fh / 2,
+            walkGx: originGx,
+            walkGy: originGy,
+            walkDx: 1,
+            walkDy: 0,
+            rng: NOOP_RNG,
+            color: 0,
+          };
+        }
+        const mode = AGENT_MODES.artist;
+        const fw = mode.footprint.width;
+        const fh = mode.footprint.height;
+        const iter = mode.strokes({
+          width: fw,
+          height: fh,
+          rng: mulberry32(REGION_SEED ^ Math.imul(i + 1, 2654435761)),
+          numColors: NUM_COLORS,
+          index: i,
+        });
+        const originGx = Math.round(col * SLOT_W - fw / 2);
+        const originGy = Math.round(row * SLOT_H - fh / 2);
+        return {
+          kind: "template",
+          iter,
+          regionName: mode.label,
+          footprintH: fh,
+          maxCells: Math.round(fw * fh * REGION_FILL_FACTOR),
+          originGx,
+          originGy,
+          centerGx: originGx + fw / 2,
+          centerGy: originGy + fh / 2,
+          walkGx: originGx,
+          walkGy: originGy,
+          walkDx: 1,
+          walkDy: 0,
+          rng: NOOP_RNG,
+          color: 0,
+        };
+      }
+
+      // Freestyle: a bounded momentum random walk (mirroring worldCanvasPvp.randomMove). Spawn
+      // at a distinct slot center and walk forever from the last painted cell — no per-region
+      // cap (maxCells = ∞ ⇒ it never relocates), so the line wanders freely across the canvas.
+      const rng = mulberry32(REGION_SEED ^ Math.imul(i + 1, 2654435761));
+      const spawnGx = col * SLOT_W;
+      const spawnGy = row * SLOT_H;
+      return {
+        kind: "freestyle",
+        iter: null,
+        regionName: AGENT_MODES[modeId].label,
+        footprintH: FREESTYLE_MARKER_H,
+        maxCells: Number.POSITIVE_INFINITY,
+        originGx: spawnGx,
+        originGy: spawnGy,
+        centerGx: spawnGx,
+        centerGy: spawnGy,
+        walkGx: spawnGx,
+        walkGy: spawnGy,
+        walkDx: rng() < 0.5 ? 1 : -1,
+        walkDy: Math.floor(rng() * 3) - 1,
+        rng,
+        color: seat === "A" ? FREESTYLE_COLOR_A : FREESTYLE_COLOR_B,
+      };
+    },
+    [],
+  );
 
   // Publish the live seat-bot markers from the internal agent states. Seat B always
   // shows; seat A shows only while Auto is on (when you hold the wheel, seat A is yours,
@@ -1272,20 +1477,53 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
     );
   }, []);
 
+  // Wipe the world for a fresh game at a MOVES_PER_GAME boundary: clear the canvas cells,
+  // the leaderboard, and the activity ring; re-seed BOTH bots from the spiral origin
+  // (region 0/1) so the new game starts clean; reset the per-game move counter; and bump
+  // the game counter. Called right AFTER checkpointRun reopens the fresh tunnel — and it
+  // runs with no concurrent paintFrame writes (the old run is `closed`, the new one not
+  // yet `ready`), so iterating the bots here is race-free. The human painter is
+  // re-registered (startRun just added it, then this clear would have dropped it) so "You"
+  // survives the wipe; totalMovesRef stays cumulative (the global TPS dial is unaffected).
+  const resetGameState = useCallback(() => {
+    paintsRef.current.clear();
+    paintersRef.current.clear();
+    activityRef.current.length = 0;
+    registerPainter(humanAddress, "You", false, TINT_HUMAN);
+    // Re-seed both bots from the origin: spiral slots restart at 0 so the new game's art
+    // begins centered, not wherever the prior game's relocations had wandered to.
+    regionIndexRef.current = 0;
+    for (const st of agentStatesRef.current.values()) {
+      registerPainter(st.painter, st.label, true, st.tint);
+      applyPlacement(st, nextPlacement(st.mode, st.seat));
+    }
+    syncAgentMarkers();
+    movesThisGameRef.current = 0;
+    setGame((g) => g + 1);
+    setRevision((v) => v + 1);
+  }, [registerPainter, humanAddress, nextPlacement, syncAgentMarkers]);
+  resetGameRef.current = resetGameState;
+
   // The single paint frame for BOTH seat bots, driven by requestAnimationFrame (~60fps)
   // so painting rides the render cadence — smooth and frame-aligned, never bursty, and
   // bounded by the refresh rate so it can't run away. Each active bot pulls a clamped
-  // per-frame BATCH from its mode's stream and co-signs each cell (one verified step =
-  // one action = one TPS). On stream end / region cap it relocates and KEEPS PAINTING
-  // from the fresh region in the SAME frame (no wasted frame), bounded per frame so a
-  // near-empty stream can't spin. The seat-A bot paints only while Auto is ON — when you
-  // hold the wheel it idles and your submitHumanPaint drives seat A instead; the seat-B
-  // bot always paints. Speed/mode/density are read live each frame (refs), so the Speed
-  // pills + Density lever take effect on the very next frame.
+  // per-frame BATCH and co-signs each cell (one verified step = one action = one TPS).
+  // A FREESTYLE bot walks one continuous line (stepFreestyle, never exhausted); an Artist
+  // picture pulls from its region stream and relocates to a fresh slot on end/cap, KEEPING
+  // PAINTING from the fresh region in the SAME frame (bounded per frame so it can't spin).
+  // The seat-A bot paints only while Auto is ON — when you hold the wheel it idles and your
+  // submitHumanPaint drives seat A instead; the seat-B bot always paints. Speed/mode/density
+  // are read live each frame (refs), so the Speed pills + Density lever take effect at once.
   const paintFrame = useCallback(
     function frame() {
       const run = runRef.current;
-      let relocated = false;
+      // Cabinet hover-freeze: keep the loop alive so it resumes mid-stream, but submit no
+      // paints while paused. Purely a co-sign freeze — the tunnel and game state are untouched.
+      if (pausedRef.current) {
+        agentRafRef.current = requestAnimationFrame(frame);
+        return;
+      }
+      let markersDirty = false;
       if (run && !run.closed && run.ready && run.tunnel) {
         for (const st of agentStatesRef.current.values()) {
           const seatActive = st.seat === "B" || autoRef.current;
@@ -1299,42 +1537,52 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
           let painted = 0;
           while (painted < batch) {
             let cell: DesignCell | null = null;
-            if (st.painted < st.maxCells) {
+            if (st.kind === "freestyle") {
+              // Endless walk: always the next cell of the continuous line (never relocates).
+              cell = stepFreestyle(st);
+            } else if (st.painted < st.maxCells && st.iter) {
               const nx = st.iter.next();
               if (!nx.done) cell = nx.value;
             }
             if (cell === null) {
-              // Stream exhausted (finite) or region cap reached (endless) → relocate and
-              // immediately continue painting from the fresh region THIS frame (no wasted
-              // frame). Bounded per frame so a pathological near-empty stream can't spin.
+              // Artist stream exhausted / region cap reached → relocate the picture to a
+              // fresh slot and keep painting THIS frame (freestyle never reaches here).
+              // Bounded per frame so a pathological near-empty stream can't spin.
               if (relocates >= MAX_RELOCATES_PER_FRAME) break;
               relocates += 1;
-              const next = nextPlacement(st.mode);
-              st.iter = next.iter;
-              st.regionName = next.regionName;
-              st.footprintH = next.footprintH;
-              st.maxCells = next.maxCells;
-              st.originGx = next.originGx;
-              st.originGy = next.originGy;
-              st.centerGx = next.centerGx;
-              st.centerGy = next.centerGy;
-              st.painted = 0;
-              relocated = true;
+              applyPlacement(st, nextPlacement(st.mode, st.seat));
+              markersDirty = true;
               continue;
             }
             st.painted += 1;
-            const mv = moveAtGlobal(
-              st.originGx + cell.dx,
-              st.originGy + cell.dy,
-              cell.color,
+            submitPaint(
+              moveAtGlobal(
+                st.originGx + cell.dx,
+                st.originGy + cell.dy,
+                // The bots paint in YOUR currently-selected color (the toolbar drives the
+                // whole canvas's palette), not the design mode's own color.
+                botColorRef.current,
+              ),
+              st.seat,
+              st.painter,
             );
-            submitPaint(mv, st.seat, st.painter);
+            // Freestyle: track the wandering head so View/marker jumps land on the live line.
+            if (st.kind === "freestyle") {
+              st.centerGx = st.walkGx;
+              st.centerGy = st.walkGy;
+            }
             painted += 1;
           }
         }
       }
-      // One marker sync per frame if any bot moved to a fresh region (not per relocate).
-      if (relocated) syncAgentMarkers();
+      // Re-sync markers when an Artist picture relocated, and periodically so a freestyle
+      // marker follows its wandering head a few times/second (off the per-frame React path).
+      agentMarkerTickRef.current += 1;
+      if (agentMarkerTickRef.current >= MARKER_SYNC_EVERY_FRAMES) {
+        agentMarkerTickRef.current = 0;
+        markersDirty = true;
+      }
+      if (markersDirty) syncAgentMarkers();
       agentRafRef.current = requestAnimationFrame(frame);
     },
     [nextPlacement, syncAgentMarkers, submitPaint],
@@ -1350,7 +1598,7 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
       registerPainter(params.painter, params.label, true, params.tint);
       const speed = agentSpeedRef.current;
       const mode = agentModeRef.current;
-      const place = nextPlacement(mode);
+      const place = nextPlacement(mode, params.seat);
       const id = `bot_${params.seat}_${Date.now()}`;
       const st: AgentState = {
         id,
@@ -1360,6 +1608,7 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
         tint: params.tint,
         speed,
         mode,
+        kind: place.kind,
         iter: place.iter,
         regionName: place.regionName,
         footprintH: place.footprintH,
@@ -1368,6 +1617,12 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
         originGy: place.originGy,
         centerGx: place.centerGx,
         centerGy: place.centerGy,
+        walkGx: place.walkGx,
+        walkGy: place.walkGy,
+        walkDx: place.walkDx,
+        walkDy: place.walkDy,
+        rng: place.rng,
+        color: place.color,
         painted: 0,
       };
       agentStatesRef.current.set(id, st);
@@ -1375,14 +1630,36 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
     [registerPainter, nextPlacement],
   );
 
-  // Public: flip Auto. ON = both seats bot-driven (watch, bot vs bot). OFF = the seat-A
-  // bot idles and you author seat A vs the seat-B bot — on the SAME tunnel, no reopen.
-  // The seat-A marker appears/disappears with the flip.
+  // Public: set Auto deterministically. ON = both seats bot-driven (watch, bot vs bot). OFF =
+  // the seat-A bot idles and you author seat A vs the seat-B bot — on the SAME tunnel, no reopen.
+  // Idempotent (a no-op when already at `value`), so the cabinet's `setAuto(false)` take-over is
+  // safe to call twice. The seat-A marker appears/disappears with the flip.
+  const setAuto = useCallback(
+    (value: boolean) => {
+      if (autoRef.current === value) return;
+      autoRef.current = value;
+      setAutoState(value);
+      syncAgentMarkers();
+    },
+    [syncAgentMarkers],
+  );
+
+  // Public: flip Auto (the in-canvas toggle). Reads the live ref, so it stays correct after a
+  // cabinet take-over has forced Auto off.
   const toggleAuto = useCallback(() => {
-    autoRef.current = !autoRef.current;
-    setAutoState(autoRef.current);
-    syncAgentMarkers();
-  }, [syncAgentMarkers]);
+    setAuto(!autoRef.current);
+  }, [setAuto]);
+
+  // Public (cabinet seam): freeze the bot rAF paint loop in place on hover. The loop keeps
+  // scheduling frames but submits no co-signed paints until resumeAgents(); the tunnel stays
+  // open and the game is untouched, so painting resumes mid-stream when the pointer leaves.
+  const pauseAgents = useCallback(() => {
+    pausedRef.current = true;
+  }, []);
+
+  const resumeAgents = useCallback(() => {
+    pausedRef.current = false;
+  }, []);
 
   // Public: set the agent paint speed — for both seat bots (the self-rescheduling timer
   // picks up the new interval on its next tick).
@@ -1392,13 +1669,23 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
     for (const st of agentStatesRef.current.values()) st.speed = speed;
   }, []);
 
-  // Public: set the agent drawing intelligence — for both seat bots (each switches at
-  // its next region, so the current stream finishes cleanly).
-  const setAgentMode = useCallback((mode: AgentModeId) => {
-    agentModeRef.current = mode;
-    setAgentModeState(mode);
-    for (const st of agentStatesRef.current.values()) st.mode = mode;
-  }, []);
+  // Public: set the agent drawing intelligence — for both seat bots. A freestyle walk never
+  // relocates, so a switch ACROSS the Artist boundary (freestyle ↔ picture) re-seeds the bot
+  // now; switches within a kind take effect at the next region (Artist) or just relabel.
+  const setAgentMode = useCallback(
+    (mode: AgentModeId) => {
+      agentModeRef.current = mode;
+      setAgentModeState(mode);
+      const nextKind = mode === "artist" ? "template" : "freestyle";
+      for (const st of agentStatesRef.current.values()) {
+        st.mode = mode;
+        if (st.kind !== nextKind)
+          applyPlacement(st, nextPlacement(mode, st.seat));
+      }
+      syncAgentMarkers();
+    },
+    [nextPlacement, syncAgentMarkers],
+  );
 
   // Public: set the global Density lever (1/2/3) — a per-tick batch multiplier read
   // live by both seat bots' next tick, so the TPS burst changes immediately.
@@ -1432,6 +1719,32 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
       }
     }
   }, []);
+
+  // Auto-follow (spectator cam): while Auto is on, lazily ease the camera to seat A's bot so
+  // you WATCH it paint instead of staring at a blank wall while it draws off-screen — the
+  // arena's other games auto-frame their bots the same way. Re-centers on a timer (the bot's
+  // center moves as it walks) at the WIDEST zoom (ZOOM.min), so you see the whole picture
+  // forming rather than nose-to-the-pixels — never zooming in. Stops the instant you take the
+  // wheel (Auto off), handing camera + zoom control back to you.
+  useEffect(() => {
+    if (!auto) return;
+    const followSeatA = () => {
+      for (const st of agentStatesRef.current.values()) {
+        if (st.seat === "A") {
+          setFocus({
+            gx: st.centerGx,
+            gy: st.centerGy,
+            seq: ++focusSeqRef.current,
+            scale: ZOOM.min,
+          });
+          return;
+        }
+      }
+    };
+    followSeatA();
+    const id = setInterval(followSeatA, AUTO_FOLLOW_MS);
+    return () => clearInterval(id);
+  }, [auto]);
 
   // Public: cycle the camera through the live seat bots ("View" button).
   const viewNextAgent = useCallback(() => {
@@ -1520,8 +1833,14 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
     status,
     paints: paintsRef.current,
     revision,
+    game,
+    movesThisGame: movesThisGameRef.current,
+    movesPerGame: movesPerGameRef.current,
     auto,
     toggleAuto,
+    setAuto,
+    pauseAgents,
+    resumeAgents,
     agents,
     focus,
     painters: paintersRef.current,

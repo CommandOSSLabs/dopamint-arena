@@ -2,7 +2,7 @@
 
 Date: 2026-06-24  
 Status: Approved (design)  
-Scope: `frontend/src/games/regularPayments/`, `sui-tunnel-ts/src/protocol/`, `dopamint` Move (new module)
+Scope: `frontend/src/games/microPayments/`, `sui-tunnel-ts/src/protocol/`, `dopamint` Move (new module)
 
 ## Problem
 
@@ -45,7 +45,7 @@ then settle once on-chain. The primary metric is **effective TPS**
 
 ## Concept
 
-**Payment Shop** is a floating arena widget (`regular-payments`, `catalog: false`).
+**Payment Shop** is a floating arena widget (`micro-payments`, `catalog: false`).
 Users spawn **machine sessions** from the toolbar. Each session is an independent
 bilateral tunnel where the user streams tiny balance shifts to the shop until a
 fixed **price target** is paid. Every micro-transfer is one dual-signed off-chain
@@ -378,14 +378,14 @@ micro-payment history.
 | History toggle | Collapsed by default; expands last ~24 ticks                 |
 | Actions        | Start / Pause / Claim NFT / dismiss                          |
 
-Prototype: `frontend/src/games/regularPayments/` (Tailwind + `SketchDefs` ink spans).
+Prototype: `frontend/src/games/microPayments/` (Tailwind + `SketchDefs` ink spans).
 
 ---
 
 ## File layout
 
 ```
-frontend/src/games/regularPayments/
+frontend/src/games/microPayments/
 ├── index.ts
 ├── PaymentsWindow.tsx
 ├── usePaymentShop.ts

@@ -311,23 +311,30 @@ function shouldBet(
 ): boolean {
   if (profile.available <= 0n) return false;
   if (profile.preflop) {
-    return profile.strength >= 0.82 + tuning.raiseThreshold - roll * 0.025;
+    return profile.strength >= 0.72 + tuning.raiseThreshold - roll * 0.025;
   }
-  const valueThreshold = profile.river ? 0.42 : 0.34;
+  // Riskier: value-bet a wider range (was 0.34 / 0.42-river) and semi-bluff draws sooner (was 0.52),
+  // so a > 50%-equity hand keeps betting instead of checking — more off-chain action per street.
+  const valueThreshold = profile.river ? 0.38 : 0.3;
   const valueBet =
     profile.strength >= valueThreshold + tuning.raiseThreshold - roll * 0.02;
   const semiBluff =
     profile.strongDraw &&
-    profile.strength >= 0.52 + tuning.semiBluffThreshold - roll * 0.02;
+    profile.strength >= 0.48 + tuning.semiBluffThreshold - roll * 0.02;
   return valueBet || semiBluff;
 }
 
 function betAmount(profile: StrengthProfile): bigint {
   const pot = profile.pot > 0n ? profile.pot : 100n;
+  // Riskier sizing: a made hand with > 50% equity bets bigger to build the pot — more co-signed
+  // call/raise rounds → more off-chain tx. Premium overbets; draws stay pot-controlled. The deep
+  // 5000 stake (QUANTUM_POKER_STAKE) absorbs the extra variance without an early all-in.
   const fraction = profile.premiumValue
-    ? 0.72
+    ? 0.9
+    : profile.strength >= 0.5
+    ? 0.7
     : profile.strongDraw
-    ? 0.42
+    ? 0.45
     : 0.5;
   const target = BigInt(Math.max(50, Math.floor(Number(pot) * fraction)));
   const capped = target < profile.available ? target : profile.available;

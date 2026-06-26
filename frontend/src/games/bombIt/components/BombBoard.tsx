@@ -1,5 +1,6 @@
 import { formatCompactCount } from "@/lib/formatCompactCount";
 import { memo, useEffect, useRef, useState } from "react";
+import { ArrowLeft } from "lucide-react";
 import type { BombItAction } from "sui-tunnel-ts/protocol/bombIt";
 import {
   CELL_CRATE,
@@ -68,6 +69,7 @@ export function BombBoard({
   score,
   gamesPlayed,
   onSettle,
+  onBack,
 }: {
   view: BombItView;
   winner: "A" | "B" | "draw" | null;
@@ -83,6 +85,8 @@ export function BombBoard({
   gamesPlayed?: number;
   /** Cash out the tunnel at the current state — solo only, shown while live. */
   onSettle?: () => void;
+  /** Leave the live game and return to the lobby. Shown in-pane during play. */
+  onBack?: () => void;
 }) {
   const settled = winner !== null;
   const spectating = role === null;
@@ -229,6 +233,16 @@ export function BombBoard({
           </div>
 
           <div className="bomb-pane__grow">
+            {onBack && !settled && (
+              <button
+                type="button"
+                className={`${BOMB_BTN} bomb-back sketch-btn sketch-btn--ghost`}
+                onClick={onBack}
+                title="Leave the game — return to the lobby"
+              >
+                <ArrowLeft className="size-[1em]" /> back
+              </button>
+            )}
             {onToggleAuto && !settled && (
               <button
                 type="button"

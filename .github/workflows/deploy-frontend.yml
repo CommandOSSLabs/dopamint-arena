@@ -69,8 +69,21 @@ jobs:
         # Same-origin: leave VITE_BACKEND_URL empty so the bundle calls /v1 on its own
         # origin (CloudFront routes /v1/* to the ALB). A non-empty http ALB here bakes
         # ws://<alb> into the build, which the https site rejects (insecure WebSocket).
+        #
+        # The rest of the VITE_* build config comes from GitHub Secrets instead of a
+        # committed .env.production: Vite exposes VITE_-prefixed process.env vars on
+        # import.meta.env, so these reach the bundle at build time.
         env:
           VITE_BACKEND_URL: ""
+          VITE_TUNNEL_PACKAGE_ID: ${{ secrets.VITE_TUNNEL_PACKAGE_ID }}
+          VITE_TTT_PACKAGE_ID: ${{ secrets.VITE_TTT_PACKAGE_ID }}
+          VITE_SUI_NETWORK: ${{ secrets.VITE_SUI_NETWORK }}
+          VITE_SUI_NETWORK_NAME: ${{ secrets.VITE_SUI_NETWORK_NAME }}
+          VITE_ENOKI_API_KEY: ${{ secrets.VITE_ENOKI_API_KEY }}
+          VITE_GOOGLE_CLIENT_ID: ${{ secrets.VITE_GOOGLE_CLIENT_ID }}
+          VITE_MTPS_PACKAGE_ID: ${{ secrets.VITE_MTPS_PACKAGE_ID }}
+          VITE_MTPS_FAUCET_ID: ${{ secrets.VITE_MTPS_FAUCET_ID }}
+          VITE_MTPS_COIN_TYPE: ${{ secrets.VITE_MTPS_COIN_TYPE }}
         run: pnpm build
 
       - name: Deploy to S3

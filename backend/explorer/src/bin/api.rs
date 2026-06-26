@@ -135,6 +135,13 @@ async fn main() -> anyhow::Result<()> {
         )
         .layer(cors_layer());
 
+    let addr = std::env::var("EXPLORER_API_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".into());
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    tracing::info!(%addr, "explorer-api listening");
+    axum::serve(listener, app).await?;
+    Ok(())
+}
+
 /// Build a CORS layer from `CORS_ALLOWED_ORIGINS`. When the env var is set, only the listed
 /// comma-separated origins are allowed; otherwise the layer remains permissive for local dev.
 fn cors_layer() -> CorsLayer {
@@ -142,7 +149,11 @@ fn cors_layer() -> CorsLayer {
         Ok(origins) if !origins.is_empty() => {
             let origins: Vec<http::HeaderValue> = origins
                 .split(',')
-                .map(|s| s.trim().parse().expect("invalid CORS_ALLOWED_ORIGINS value"))
+                .map(|s| {
+                    s.trim()
+                        .parse()
+                        .expect("invalid CORS_ALLOWED_ORIGINS value")
+                })
                 .collect();
             CorsLayer::new()
                 .allow_origin(origins)
@@ -151,11 +162,4 @@ fn cors_layer() -> CorsLayer {
         }
         _ => CorsLayer::permissive(),
     }
-}
-
-    let addr = std::env::var("EXPLORER_API_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".into());
-    let listener = tokio::net::TcpListener::bind(&addr).await?;
-    tracing::info!(%addr, "explorer-api listening");
-    axum::serve(listener, app).await?;
-    Ok(())
 }

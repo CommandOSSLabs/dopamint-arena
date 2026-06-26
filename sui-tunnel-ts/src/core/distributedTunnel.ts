@@ -133,7 +133,13 @@ export class DistributedTunnel<State, Move> {
    * Never use this for settlement or security decisions — use `state` (confirmed) for those.
    */
   get displayState(): State {
-    return this.pending ? this.pending.next : this._state;
+    // Show the proposer's own in-flight move instantly — but ONLY while it's still ahead of the
+    // confirmed nonce. A pending re-seated on resume can already be superseded (the peer confirmed it
+    // / moved past it while we were offline); rendering its `.next` then freezes the UI on a stale
+    // hand. Once `_nonce` reaches/passes the pending, fall back to the confirmed state.
+    return this.pending && this.pending.update.nonce > this._nonce
+      ? this.pending.next
+      : this._state;
   }
   get nonce(): bigint {
     return this._nonce;
@@ -262,6 +268,25 @@ export class DistributedTunnel<State, Move> {
   private onMove(frame: MoveFrame<Move>): void {
     if (frame.by === this.selfParty)
       throw new Error("received a MOVE attributed to self");
+    // Idempotent replay: a reconnect can re-deliver a MOVE we already applied — the relay re-flushes a
+    // buffered frame, or the proposer re-sends one whose ACK was lost on the dropped socket. Mirror
+    // adoptCheckpoint's stale-nonce no-op instead of throwing. If it is our current nonce, re-send the
+    // ACK (the proposer may still be awaiting it) by re-signing the co-signed update we already hold.
+    if (frame.nonce <= this._nonce) {
+      if (
+        frame.nonce === this._nonce &&
+        this._latest &&
+        this._latest.update.nonce === frame.nonce &&
+        this.self.sign
+      ) {
+        const sigResponder = this.self.sign(
+          serializeStateUpdate(this._latest.update)
+        );
+        const ack: AckFrame = { kind: "ack", nonce: frame.nonce, sigResponder };
+        this.transport.send(encodeFrame(ack, this.codec));
+      }
+      return;
+    }
     if (frame.nonce !== this._nonce + 1n) {
       throw new Error(
         `nonce gap: got ${frame.nonce}, expected ${this._nonce + 1n}`
@@ -295,12 +320,19 @@ export class DistributedTunnel<State, Move> {
     this._latest = this.coSign(update, sigResponder, frame.sigProposer);
     this._state = next;
     this._nonce = frame.nonce;
+    // A confirmed move at/past our pending's nonce supersedes it (mirror adoptCheckpoint): drop the
+    // stale proposal so displayState renders the confirmed state, not a frozen `pending.next`.
+    if (this.pending && this.pending.update.nonce <= this._nonce) this.pending = null;
     const ack: AckFrame = { kind: "ack", nonce: frame.nonce, sigResponder };
     this.transport.send(encodeFrame(ack, this.codec));
     this.onConfirmed?.(this._latest);
   }
 
   private onAck(frame: AckFrame): void {
+    // Idempotent: a reconnect can re-deliver an ACK we already applied — the relay re-flushes it, or
+    // the responder re-ACKs our replayed MOVE (see onMove). Once we've confirmed that nonce the pending
+    // is gone, so the stale ACK would trip the guard below; treat it as a no-op instead of throwing.
+    if (frame.nonce <= this._nonce) return;
     const p = this.pending;
     if (!p || frame.nonce !== p.update.nonce) {
       throw new Error(`unexpected ACK for nonce ${frame.nonce}`);

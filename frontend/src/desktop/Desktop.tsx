@@ -202,7 +202,7 @@ function Dock({ side }: { side: DockSide }) {
   if (side === "right") {
     return (
       <div className="flex h-full flex-col gap-2 overflow-y-auto p-2">
-        <SystemDashboard snapshot={snapshot} />
+        <SystemDashboard />
         <TpsChart snapshot={snapshot} />
         <LiveTransactionsFeed snapshot={snapshot} className="min-h-72 flex-1" />
         <LocalTransactionsFeed
@@ -217,7 +217,7 @@ function Dock({ side }: { side: DockSide }) {
     <ResizablePanelGroup orientation="horizontal" className="h-full p-2">
       <ResizablePanel defaultSize="32%" minSize="15%" className="min-w-0">
         <div className="flex h-full flex-col gap-2 overflow-y-auto">
-          <SystemDashboard snapshot={snapshot} />
+          <SystemDashboard />
           <TpsChart snapshot={snapshot} />
         </div>
       </ResizablePanel>
@@ -349,7 +349,7 @@ function MobileLive() {
   const { snapshot } = useTelemetry();
   return (
     <div className="flex flex-col gap-2 p-2">
-      <SystemDashboard snapshot={snapshot} />
+      <SystemDashboard />
       <TpsChart snapshot={snapshot} />
       <LiveTransactionsFeed snapshot={snapshot} className="min-h-96" />
       <LocalTransactionsFeed snapshot={snapshot} className="min-h-96" />

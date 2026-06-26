@@ -3,6 +3,7 @@
 
 mod chat_store;
 mod config;
+mod enoki;
 mod error;
 mod mp;
 mod ollama;
@@ -46,8 +47,32 @@ async fn main() -> anyhow::Result<()> {
         Config::require("SUI_RPC_URL", &config.sui_rpc_url)?.to_string(),
         Config::require("TUNNEL_PACKAGE_ID", &config.package_id)?,
         &config.coin_type,
+        config.agent_allowance_package_id.as_deref(),
+        config.streaming_payment_package_id.as_deref(),
         Config::require("SUI_SETTLER_KEY", &config.settler_key)?,
     )?;
+    // Enoki is the primary gas sponsor when configured; the settler above is the fallback (ADR-0014).
+    // The settler's close/fallback path pins a hard-coded testnet genesis digest (`sui.rs`), so guard
+    // against a mainnet-Enoki / testnet-settler split-brain until that digest is config-driven.
+    let enoki = match config.enoki_api_key.clone() {
+        Some(key) => {
+            anyhow::ensure!(
+                config.sui_network == "testnet",
+                "SUI_NETWORK must be 'testnet' (the settler fallback's chain digest is testnet-pinned); got {}",
+                config.sui_network
+            );
+            tracing::info!(network = %config.sui_network, "enoki sponsor enabled (settler is the fallback)");
+            Some(enoki::EnokiClient::new(
+                key,
+                config.sui_network.clone(),
+                enoki::ENOKI_BASE_URL,
+            )?)
+        }
+        None => {
+            tracing::info!("enoki not configured; using settler-only gas sponsorship");
+            None
+        }
+    };
     let walrus = walrus::WalrusClient::new(
         Config::require("WALRUS_PUBLISHER_URL", &config.walrus_publisher_url)?.to_string(),
         Config::require("WALRUS_AGGREGATOR_URL", &config.walrus_aggregator_url)?.to_string(),
@@ -60,7 +85,7 @@ async fn main() -> anyhow::Result<()> {
         config
             .ollama_model
             .clone()
-            .unwrap_or_else(|| "qwen2.5:1.8b".into()),
+            .unwrap_or_else(|| "qwen2.5:1.5b".into()),
     )?;
 
     let instance_id = config
@@ -99,6 +124,7 @@ async fn main() -> anyhow::Result<()> {
         mp,
         bus,
         settler,
+        enoki,
         walrus,
         ollama,
         stats_tx,
@@ -146,6 +172,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/chat/live/publish", post(routes::chat_publish))
         .route("/v1/chat/live", get(routes::chat_live))
         .route("/v1/stats/live", get(routes::stats_live))
+        .route("/v1/sponsor/execute", post(routes::sponsor_execute))
         .route("/v1/mp", get(crate::mp::ws::mp_upgrade))
         .layer(TraceLayer::new_for_http())
         .layer(cors_layer())
@@ -169,7 +196,11 @@ fn cors_layer() -> CorsLayer {
         Ok(origins) if !origins.is_empty() => {
             let origins: Vec<http::HeaderValue> = origins
                 .split(',')
-                .map(|s| s.trim().parse().expect("invalid CORS_ALLOWED_ORIGINS value"))
+                .map(|s| {
+                    s.trim()
+                        .parse()
+                        .expect("invalid CORS_ALLOWED_ORIGINS value")
+                })
                 .collect();
             CorsLayer::new()
                 .allow_origin(origins)
