@@ -118,3 +118,35 @@ test("non-deal move is rejected in round_over", () => {
   const over: BlackjackState = { ...fresh(), phase: "round_over", round: 2n, draw: null };
   assert.throws(() => proto.applyMove(over, { kind: "hit" }, "A"), /expected 'deal'/);
 });
+
+test("a full opening deal lands in player phase with 2+2 cards", () => {
+  let s = fresh();
+  for (let i = 0; i < 4; i++) {
+    assert.equal(s.phase, "draw_commit", `card ${i} should start in draw_commit`);
+    s = doDraw(s, secret(i * 2 + 1), secret(i * 2 + 2));
+  }
+  assert.equal(s.phase, "player");
+  assert.equal(s.playerHand.length, 2);
+  assert.equal(s.dealerHand.length, 2);
+  assert.equal(s.drawCount, 4n);
+  assert.equal(s.draw, null);
+});
+
+test("a reveal that does not match its commitment is rejected", () => {
+  let s = fresh();
+  s = proto.applyMove(s, commitMove(secret(1)), "A");
+  s = proto.applyMove(s, commitMove(secret(2)), "B");
+  assert.equal(s.phase, "draw_reveal");
+  // Reveal a DIFFERENT secret than A committed.
+  assert.throws(() => proto.applyMove(s, revealMove(secret(99)), "A"), /does not match commitment/);
+});
+
+test("encodeState is stable for the same state", () => {
+  let s = fresh();
+  s = doDraw(s, secret(1), secret(2));
+  assert.equal(toHex(proto.encodeState(s)), toHex(proto.encodeState(s)));
+});
+
+function toHex(b: Uint8Array): string {
+  return Buffer.from(b).toString("hex");
+}

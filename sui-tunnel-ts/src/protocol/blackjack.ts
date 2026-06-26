@@ -390,6 +390,12 @@ export class BlackjackProtocol implements Protocol<BlackjackState, BlackjackMove
           throw new Error(`expected 'commit' in draw_commit, got '${move.kind}'`);
         return applyCommit(state, move, by);
       }
+      case "draw_reveal": {
+        if (move.kind === "forfeit") return claimForfeit(state, by);
+        if (move.kind !== "reveal")
+          throw new Error(`expected 'reveal' in draw_reveal, got '${move.kind}'`);
+        return applyReveal(state, move, by);
+      }
       default:
         throw new Error(`phase ${state.phase} not implemented`);
     }
