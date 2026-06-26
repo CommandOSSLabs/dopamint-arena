@@ -1,13 +1,17 @@
 //! Cross-platform CPU + RSS sampling for the bench run (sysinfo). "cores" is
-//! process CPU time over wall (a process pegging 4 cores reads ~4.0); "%" is
-//! system-wide utilization. Started before the clock, stopped after, so startup
-//! is excluded. Never panics the run: on an unavailable metric it records 0.
+//! process CPU time over wall (a process pegging 4 cores reads ~4.0); utilization%
+//! is against the cgroup-aware CPU budget so container runs report correctly.
+//! Started before the clock, stopped after, so startup is excluded.
+//! Never panics the run: on an unavailable metric it records 0.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
 use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
+
+use crate::fleet::cgroup::cpu_budget;
+use crate::fleet::stats::summarize;
 
 #[derive(Clone, Debug, Default)]
 pub struct ResourceSummary {
@@ -18,6 +22,14 @@ pub struct ResourceSummary {
     pub rss_avg_bytes: f64,
     pub rss_peak_bytes: u64,
     pub samples: u64,
+    // cgroup-aware CPU utilization percentiles
+    pub threads: u64,
+    pub cpu_util_avg_pct: f64,
+    pub cpu_util_p50_pct: f64,
+    pub cpu_util_p99_pct: f64,
+    pub cpu_util_peak_pct: f64,
+    pub rss_p50_bytes: f64,
+    pub basis: &'static str,
 }
 
 pub struct ResourceSampler {
@@ -25,10 +37,10 @@ pub struct ResourceSampler {
     handle: JoinHandle<ResourceSummary>,
 }
 
-pub fn start(interval_ms: u64) -> ResourceSampler {
+pub fn start(interval_ms: u64, threads: usize) -> ResourceSampler {
     let stop = Arc::new(AtomicBool::new(false));
     let stop_thread = stop.clone();
-    let handle = std::thread::spawn(move || sample_loop(interval_ms, stop_thread));
+    let handle = std::thread::spawn(move || sample_loop(interval_ms, threads, stop_thread));
     ResourceSampler { stop, handle }
 }
 
@@ -39,22 +51,32 @@ impl ResourceSampler {
     }
 }
 
-fn sample_loop(interval_ms: u64, stop: Arc<AtomicBool>) -> ResourceSummary {
+fn sample_loop(interval_ms: u64, threads: usize, stop: Arc<AtomicBool>) -> ResourceSummary {
     let pid = match sysinfo::get_current_pid() {
         Ok(p) => p,
         Err(_) => return ResourceSummary::default(),
     };
-    let ncores = std::thread::available_parallelism()
-        .map(|n| n.get() as f64)
-        .unwrap_or(1.0);
+    let budget = cpu_budget();
+    let basis: &'static str = match budget.basis {
+        crate::fleet::cgroup::CpuBasis::Cgroup => "cgroup",
+        crate::fleet::cgroup::CpuBasis::System => "system",
+    };
+
     let mut sys = System::new_with_specifics(
         RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
     );
 
-    let mut summary = ResourceSummary::default();
+    let mut summary = ResourceSummary {
+        threads: threads as u64,
+        basis,
+        ..Default::default()
+    };
     let mut cores_sum = 0.0f64;
     let mut pct_sum = 0.0f64;
     let mut rss_sum = 0.0f64;
+
+    let mut util_pct_samples: Vec<f64> = Vec::new();
+    let mut rss_samples: Vec<f64> = Vec::new();
 
     // sysinfo needs two refreshes to compute CPU%; prime once, then loop.
     sys.refresh_cpu_all();
@@ -70,6 +92,8 @@ fn sample_loop(interval_ms: u64, stop: Arc<AtomicBool>) -> ResourceSummary {
             None => (0.0, 0),
         };
         let pct = system_cpu_pct(&sys);
+        // utilization% against the cgroup-assigned budget (cores / budget cores * 100)
+        let util_pct = cores / budget.cores * 100.0;
 
         summary.samples += 1;
         cores_sum += cores;
@@ -84,7 +108,8 @@ fn sample_loop(interval_ms: u64, stop: Arc<AtomicBool>) -> ResourceSummary {
         if rss > summary.rss_peak_bytes {
             summary.rss_peak_bytes = rss;
         }
-        let _ = ncores; // reserved for cgroup-aware denominator (see spec)
+        util_pct_samples.push(util_pct);
+        rss_samples.push(rss as f64);
     }
 
     if summary.samples > 0 {
@@ -92,6 +117,15 @@ fn sample_loop(interval_ms: u64, stop: Arc<AtomicBool>) -> ResourceSummary {
         summary.cpu_cores_avg = cores_sum / n;
         summary.cpu_pct_avg = pct_sum / n;
         summary.rss_avg_bytes = rss_sum / n;
+
+        let util_dist = summarize(&util_pct_samples);
+        summary.cpu_util_avg_pct = util_dist.avg;
+        summary.cpu_util_p50_pct = util_dist.p50;
+        summary.cpu_util_p99_pct = util_dist.p99;
+        summary.cpu_util_peak_pct = util_dist.peak;
+
+        let rss_dist = summarize(&rss_samples);
+        summary.rss_p50_bytes = rss_dist.p50;
     }
     summary
 }
@@ -107,7 +141,7 @@ mod tests {
 
     #[test]
     fn sampler_yields_a_sane_summary() {
-        let sampler = start(50);
+        let sampler = start(50, 4);
         // do a little CPU work so at least one interval elapses
         let mut acc = 0u64;
         for i in 0..50_000_000u64 {
@@ -121,5 +155,7 @@ mod tests {
         assert!(s.cpu_cores_peak >= s.cpu_cores_avg - 1e-9);
         assert!(s.rss_peak_bytes >= 1);
         assert!(s.rss_avg_bytes > 0.0);
+        assert_eq!(s.threads, 4);
+        assert!(s.cpu_util_avg_pct >= 0.0 && s.cpu_util_avg_pct.is_finite());
     }
 }

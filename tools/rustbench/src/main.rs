@@ -27,7 +27,7 @@ fn main() {
 
     let (simple, optimized, res) = match opts.runner {
         Runner::Simple => {
-            let sampler = resources::start(250);
+            let sampler = resources::start(250, opts.workers);
             let simple = run_headline(
                 opts.workers,
                 opts.duration_secs,
@@ -37,7 +37,7 @@ fn main() {
             (simple, None, sampler.stop())
         }
         Runner::Optimized => {
-            let sampler = resources::start(250);
+            let sampler = resources::start(250, opts.workers);
             let optimized = swarm::run_optimized(
                 opts.workers,
                 opts.duration_secs,
@@ -49,7 +49,7 @@ fn main() {
         }
         Runner::Both => {
             // Simple window first (the resources line describes it), then optimized.
-            let sampler = resources::start(250);
+            let sampler = resources::start(250, opts.workers);
             let simple = run_headline(
                 opts.workers,
                 opts.duration_secs,

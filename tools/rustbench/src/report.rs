@@ -112,6 +112,7 @@ mod tests {
             rss_avg_bytes: 58.0 * 1_048_576.0,
             rss_peak_bytes: 63 * 1_048_576,
             samples: 30,
+            ..Default::default()
         }
     }
 
