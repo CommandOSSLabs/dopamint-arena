@@ -15,6 +15,5 @@ pub use frame::{decode_frame, encode_frame, AckFrame, Frame, MoveFrame, WireSeat
 pub mod signer;
 pub use signer::{local::LocalSigner, Signer};
 
-// pub mod seat;
-// pub use seat::TunnelSeat;
-// Uncommented in Task 7 when seat.rs is created.
+pub mod seat;
+pub use seat::TunnelSeat;
