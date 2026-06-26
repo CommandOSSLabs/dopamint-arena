@@ -31,16 +31,19 @@ import {
 import { settleViaBackend } from "../../backend/settle";
 import {
   closeCooperativeWithRoot,
-  openAndFundSelfPlay,
   readCreatedAt,
+  type SuiReads,
 } from "../../onchain/tunnelTx";
 import { useSponsoredSignExec } from "../../onchain/useSponsoredSignExec";
-import { withSponsorFallback } from "../../onchain/sponsor";
 import {
   MTPS_COIN_TYPE,
-  isMtpsAddressBalance,
   isMtpsConfigured,
 } from "../../onchain/mtps";
+import {
+  configureSharedBatcher,
+  requestTunnelOpen,
+} from "../../onchain/sharedTunnelOpenBatcher";
+import type { TunnelOpenRequest } from "../../onchain/tunnelOpenBatcher";
 
 /** Autopilot throughput loop (shared across games): co-sign up to MAX_STEPS_PER_FRAME ticks per
  *  FRAME_BUDGET_MS, then yield one frame — a fixed ~20% CPU duty so TPS is high yet the CPU cool. */
@@ -168,6 +171,8 @@ interface SoloDeps {
   prepareStake: (minAmount: bigint) => Promise<string>;
   /** ADR-0013: ensure the player's MTPS address balance covers the stake. No-op once funded. */
   ensureStakeBalance: (minAmount: bigint) => Promise<void>;
+  /** ADR-0014: enroll the open/fund in the shared coalescing batcher (one PTB per connect). */
+  requestTunnelOpen: (req: TunnelOpenRequest) => Promise<string>;
 }
 
 interface SoloSnapshot<View, Result> {
@@ -510,63 +515,20 @@ class SoloBotSession<
         // swaps `stakePerGame` per duel off this bank, so it survives MANY duels (not one).
         const fundedPerSeat = isMtpsConfigured ? LOCKED_PER_SEAT : SUI_PER_SEAT;
 
-        const reads = deps.client as unknown as Parameters<
-          typeof openAndFundSelfPlay
-        >[0]["reads"];
+        const reads = deps.client as unknown as SuiReads;
         this.setStatus("funding");
         const partyA = { address: a.address, publicKey: a.keyPair.publicKey };
         const partyB = { address: b.address, publicKey: b.keyPair.publicKey };
-        // MTPS (ADR-0010): faucet both seats' bank invisibly (gas-sponsored) and stake MTPS — free
-        // for a 0-SUI player. SUI path (MTPS env unset): sponsored SUI stake with a sender-pays
-        // fallback (ADR-0009). ADR-0013 (usesAddressBalance): top up the player's MTPS address
-        // balance first, then the open withdraws from it (no version-pinned coin → concurrent
-        // opens across games never equivocate).
-        if (
-          this.spec.usesAddressBalance &&
-          isMtpsConfigured &&
-          isMtpsAddressBalance
-        )
-          await deps.ensureStakeBalance(2n * fundedPerSeat);
-        const tunnelId = isMtpsConfigured
-          ? await openAndFundSelfPlay({
-              reads,
-              signExec: deps.sponsoredSignExec as never,
-              partyA,
-              partyB,
-              aAmount: fundedPerSeat,
-              bAmount: fundedPerSeat,
-              coinType: MTPS_COIN_TYPE,
-              ...(this.spec.usesAddressBalance && isMtpsAddressBalance
-                ? {
-                    stakeFromBalance: {
-                      amount: 2n * fundedPerSeat,
-                      coinType: MTPS_COIN_TYPE,
-                    },
-                  }
-                : { stakeCoinId: await deps.prepareStake(2n * fundedPerSeat) }),
-            })
-          : await withSponsorFallback(
-              async () =>
-                openAndFundSelfPlay({
-                  reads,
-                  signExec: deps.sponsoredSignExec as never,
-                  partyA,
-                  partyB,
-                  aAmount: fundedPerSeat,
-                  bAmount: fundedPerSeat,
-                  stakeCoinId: await deps.selectStakeCoin(2n * fundedPerSeat),
-                }),
-              () =>
-                openAndFundSelfPlay({
-                  reads,
-                  signExec: deps.signExec as never,
-                  partyA,
-                  partyB,
-                  aAmount: fundedPerSeat,
-                  bAmount: fundedPerSeat,
-                }),
-              `${this.spec.game} open/fund`,
-            );
+        // ADR-0014: all funding-mode branching (MTPS balance / MTPS coin / SUI fallback) now lives
+        // in the shared batcher so concurrent opens across game windows coalesce into one PTB.
+        const tunnelId = await deps.requestTunnelOpen({
+          partyA,
+          partyB,
+          aAmount: fundedPerSeat,
+          bAmount: fundedPerSeat,
+          coinType: isMtpsConfigured ? MTPS_COIN_TYPE : undefined,
+          usesAddressBalance: this.spec.usesAddressBalance,
+        });
         const createdAt = await readCreatedAt(reads, tunnelId);
 
         // Multi-game: many duels on one funded tunnel; the player settles once. The per-game
@@ -778,21 +740,31 @@ export function createSoloSessionHook<
     const sponsored = useSponsoredSignExec();
 
     const session = getSession(windowId);
+    const walletSignExec = (async (
+      tx: Parameters<typeof signAndExecute>[0]["transaction"],
+    ) => {
+      const r = await signAndExecute({ transaction: tx });
+      return { digest: r.digest };
+    }) as never;
     session.deps = {
       report,
       account,
       client,
-      signExec: (async (
-        tx: Parameters<typeof signAndExecute>[0]["transaction"],
-      ) => {
-        const r = await signAndExecute({ transaction: tx });
-        return { digest: r.digest };
-      }) as never,
+      signExec: walletSignExec,
       sponsoredSignExec: sponsored.signExec as never,
       selectStakeCoin: sponsored.selectStakeCoin,
       prepareStake: sponsored.prepareStake,
       ensureStakeBalance: sponsored.ensureStakeBalance,
+      requestTunnelOpen,
     };
+    configureSharedBatcher({
+      reads: client as never,
+      sponsoredSignExec: sponsored.signExec as never,
+      signExec: walletSignExec,
+      ensureStakeBalance: sponsored.ensureStakeBalance,
+      prepareStake: sponsored.prepareStake,
+      selectStakeCoin: sponsored.selectStakeCoin,
+    });
 
     const snap = useSyncExternalStore(session.subscribe, session.getSnapshot);
     return {
