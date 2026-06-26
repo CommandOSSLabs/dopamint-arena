@@ -261,13 +261,13 @@ export default function PvpBlackjack() {
           {/* Round / role badge */}
           {playing && (
             <div
-              className="absolute top-4 left-1/2 -translate-x-1/2 px-4 py-1 bg-[#fffefb] border-2 border-[var(--qp-ink)] rounded-full shadow-md z-10 flex items-center gap-2"
+              className={`absolute top-4 left-1/2 -translate-x-1/2 bg-[#fffefb] border-2 border-[var(--qp-ink)] rounded-full shadow-md z-10 flex items-center whitespace-nowrap ${isPortrait ? "px-2.5 py-1 gap-1.5" : "px-4 py-1 gap-2"}`}
               style={{ filter: "url(#qpRough)" }}
             >
-              <span className="text-[10px] md:text-xs text-[var(--qp-amber)] font-extrabold uppercase tracking-widest">
+              <span className={`text-[var(--qp-amber)] font-extrabold uppercase tracking-widest whitespace-nowrap ${isPortrait ? "text-[10px] md:text-xs" : "text-xs md:text-sm"}`}>
                 Round {g.round}
               </span>
-              <span className="text-[10px] text-[var(--qp-ink-soft)] uppercase tracking-widest">
+              <span className={`text-[var(--qp-ink-soft)] uppercase tracking-widest whitespace-nowrap ${isPortrait ? "text-[9px] md:text-xs" : "text-[10px] md:text-xs"}`}>
                 · you are the {g.isDealer ? "dealer" : "player"}
               </span>
             </div>
@@ -302,13 +302,13 @@ export default function PvpBlackjack() {
               className="absolute top-[54%] left-1/2 -translate-x-1/2 z-20 flex items-center justify-center pointer-events-none fade-in-up"
             >
               <div
-                className="px-5 py-2 bg-[#fffefb] border-2 border-[var(--qp-ink)] rounded-full shadow-md flex items-center gap-3 font-mono text-sm md:text-base text-[var(--qp-ink)]"
+                className={`bg-[#fffefb] border-2 border-[var(--qp-ink)] rounded-full shadow-md flex items-center font-mono text-[var(--qp-ink)] whitespace-nowrap ${isPortrait ? "px-3 py-1 gap-2 text-[10px]" : "px-5 py-2 gap-3 text-sm md:text-base"}`}
                 style={{ filter: "url(#qpRough)" }}
               >
-                <span className="text-zinc-400 font-bold">
+                <span className="text-zinc-400 font-bold whitespace-nowrap">
                   R{latestRound.round + 1}
                 </span>
-                <span className="text-zinc-700 font-semibold">
+                <span className="text-zinc-700 font-semibold whitespace-nowrap">
                   You:
                   {g.isDealer
                     ? latestRound.dealerSum
@@ -317,7 +317,7 @@ export default function PvpBlackjack() {
                   {g.isDealer ? latestRound.playerSum : latestRound.dealerSum}
                 </span>
                 <span
-                  className={`font-extrabold text-base md:text-lg ${
+                  className={`font-extrabold whitespace-nowrap ${isPortrait ? "text-xs" : "text-base md:text-lg"} ${
                     latestMine === "win"
                       ? "text-emerald-600"
                       : latestMine === "lose"
