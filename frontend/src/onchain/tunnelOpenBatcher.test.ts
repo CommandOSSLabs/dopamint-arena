@@ -106,12 +106,15 @@ test("chunks a batch larger than maxBatch into ceil(N/maxBatch) signed PTBs", as
     data: { content: { fields: { party_a: { fields: { address: i.id } } } } },
   });
   // Default getTransactionBlock returns [] → openAndFundMany throws count mismatch → per-request
-  // fallback fires (signs per chunk: 1 batch + N single opens via withSponsorFallback).
-  // With 5 requests at maxBatch 2 → 3 chunks → at least 3 PTBs signed.
+  // fallback fires (signs per chunk: 1 batch PTB + N single-open PTBs via withSponsorFallback).
+  // With 5 requests at maxBatch 2 → 3 chunks (sizes 2/2/1) → 3 batch calls + 5 single-open
+  // calls = 8 total sponsoredSignExec calls. An unchunked single-PTB run would yield 1 + 5 = 6
+  // and must fail this test, proving chunking actually occurred.
   const batcher = new TunnelOpenBatcher(() => deps, { flushDelayMs: 0, maxBatch: 2 });
   const reqs = ["0x1", "0x2", "0x3", "0x4", "0x5"].map((a) => batcher.request(req(a)));
   await Promise.allSettled(reqs);
-  assert.ok(signs >= 3, "5 requests at maxBatch 2 → at least 3 PTBs");
+  // 3 batch PTBs (2+2+1) + 5 single-open fallbacks = 8; unchunked (1 batch + 5 singles) = 6.
+  assert.equal(signs, 8, "5 requests at maxBatch 2 → 3 batch PTBs + 5 fallback opens = 8 signs");
 });
 
 test("falls back to single opens when a chunk's batched PTB fails", async () => {
