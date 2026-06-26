@@ -221,14 +221,22 @@ test("rejects all requests with BatchCommittedError on post-commit failure, no f
   const [settled] = result;
 
   // The request must reject with BatchCommittedError.
-  assert.equal(settled.status, "rejected", "request should reject on post-commit failure");
+  assert.equal(
+    settled.status,
+    "rejected",
+    "request should reject on post-commit failure",
+  );
   const err = (settled as PromiseRejectedResult).reason;
   assert.ok(
     err instanceof BatchCommittedError,
     `expected BatchCommittedError, got ${(err as Error)?.constructor?.name}: ${(err as Error)?.message}`,
   );
   // Exactly one sign: the batch PTB. No fallback single-open fires.
-  assert.equal(signs, 1, "only one sign (the committed batch PTB); no fallback opens");
+  assert.equal(
+    signs,
+    1,
+    "only one sign (the committed batch PTB); no fallback opens",
+  );
 });
 
 test("rejects all pending when no wallet deps are available", async () => {
