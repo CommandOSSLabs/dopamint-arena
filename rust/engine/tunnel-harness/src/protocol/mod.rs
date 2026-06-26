@@ -1,5 +1,6 @@
-//! The Protocol seam: rules over a tunnel (Payments, Blackjack, ...). Async where
-//! flexibility helps; the three settlement-critical methods stay sync + pure.
+//! The Protocol seam: rules over a tunnel (Payments, Blackjack, ...). Sans-IO:
+//! every method is synchronous and pure — no futures, no IO, no ambient clock/RNG.
+//! Deciding a move (which may be IO-bound) is the Policy seam's job, not this one.
 
 use crate::{Balances, ProtocolError, Seat, TunnelContext};
 use serde::{de::DeserializeOwned, Serialize};
@@ -12,10 +13,7 @@ pub trait Protocol: Send + Sync + 'static {
     fn name(&self) -> &str;
 
     /// Deterministic initial state for a freshly opened tunnel.
-    fn initial_state(
-        &self,
-        ctx: &TunnelContext,
-    ) -> impl std::future::Future<Output = Self::State> + Send;
+    fn initial_state(&self, ctx: &TunnelContext) -> Self::State;
 
     /// Validate + apply `mv` by seat `by`. MUST be pure; MUST err on an illegal move.
     fn apply_move(
@@ -23,7 +21,7 @@ pub trait Protocol: Send + Sync + 'static {
         s: &Self::State,
         mv: &Self::Move,
         by: Seat,
-    ) -> impl std::future::Future<Output = Result<Self::State, ProtocolError>> + Send;
+    ) -> Result<Self::State, ProtocolError>;
 
     /// Canonical byte encoding hashed into the tunnel state_hash. Pure, deterministic.
     fn encode_state(&self, s: &Self::State) -> Vec<u8>;
