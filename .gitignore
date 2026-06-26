@@ -188,3 +188,9 @@ tools/loadbench/reports/
 
 # Subagent-driven-development scratch (ledger, task briefs, reports, review diffs)
 .superpowers/
+
+# AI working artifacts (specs/plans/reviews) — local scratch & inputs, not committed docs.
+# Curated, human-readable design docs live in docs/design/ instead.
+docs/superpowers/
+docs/raki/
+docs/plans/
