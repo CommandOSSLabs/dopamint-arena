@@ -8,7 +8,8 @@ import { AgentAllowanceWindow } from "./AgentAllowanceWindow";
 register({
   id: "agent-allowance",
   name: "Agent Allowance",
-  description: "Fund an AI agent to pay a metered API — capped, streamed, revocable.",
+  description:
+    "Fund an AI agent to pay a metered API — capped, streamed, revocable.",
   catalog: false,
   workspace: "payment",
   icon: "🤖",

@@ -17,7 +17,8 @@ export const isStreamingPaymentConfigured = Boolean(
 );
 
 const MODULE = "example_streaming_payment";
-const target = (fn: string) => `${STREAMING_PAYMENT_PACKAGE_ID}::${MODULE}::${fn}`;
+const target = (fn: string) =>
+  `${STREAMING_PAYMENT_PACKAGE_ID}::${MODULE}::${fn}`;
 const STREAM_TYPE = () =>
   `${STREAMING_PAYMENT_PACKAGE_ID}::${MODULE}::PaymentStream<${MTPS_COIN_TYPE}>`;
 
@@ -208,7 +209,11 @@ export async function findCreatedStreamId(
         options: { showObjectChanges: true },
       });
       for (const c of tb.objectChanges ?? []) {
-        const ch = c as { type?: string; objectType?: string; objectId?: string };
+        const ch = c as {
+          type?: string;
+          objectType?: string;
+          objectId?: string;
+        };
         if (
           ch.type === "created" &&
           typeof ch.objectType === "string" &&

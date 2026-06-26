@@ -1301,30 +1301,53 @@ mod tests {
         let agent = |f: &str, ta: Vec<TypeTag>| call(agent_pkg, "example_agent_allowance", f, ta);
 
         // Agent allowance create + claim accepted with the package configured.
-        assert!(check(agent("entry_create_and_share", vec![coin.clone()]), &agent_mods).is_ok());
+        assert!(check(
+            agent("entry_create_and_share", vec![coin.clone()]),
+            &agent_mods
+        )
+        .is_ok());
         assert!(check(agent("entry_claim", vec![coin.clone()]), &agent_mods).is_ok());
         // No configured example packages => refused.
         assert!(check(agent("entry_claim", vec![coin.clone()]), &[]).is_err());
         // A non-allowlisted fn is refused.
-        assert!(check(agent("destroy_for_testing", vec![coin.clone()]), &agent_mods).is_err());
+        assert!(check(
+            agent("destroy_for_testing", vec![coin.clone()]),
+            &agent_mods
+        )
+        .is_err());
         // Wrong coin type is refused.
         let usdc: TypeTag = "0xabc::usdc::USDC".parse().unwrap();
         assert!(check(agent("entry_claim", vec![usdc]), &agent_mods).is_err());
         // A different package with the same module name is refused.
         let other = Address::from_str("0xbad").unwrap();
         assert!(check(
-            call(other, "example_agent_allowance", "entry_claim", vec![coin.clone()]),
+            call(
+                other,
+                "example_agent_allowance",
+                "entry_claim",
+                vec![coin.clone()]
+            ),
             &agent_mods
         )
         .is_err());
         // Streaming create_stream accepted only under the streaming config.
         assert!(check(
-            call(stream_pkg, "example_streaming_payment", "create_stream", vec![coin.clone()]),
+            call(
+                stream_pkg,
+                "example_streaming_payment",
+                "create_stream",
+                vec![coin.clone()]
+            ),
             &stream_mods
         )
         .is_ok());
         assert!(check(
-            call(stream_pkg, "example_streaming_payment", "create_stream", vec![coin.clone()]),
+            call(
+                stream_pkg,
+                "example_streaming_payment",
+                "create_stream",
+                vec![coin.clone()]
+            ),
             &agent_mods
         )
         .is_err());

@@ -19,7 +19,8 @@ export const isAgentAllowanceConfigured = Boolean(
 );
 
 const MODULE = "example_agent_allowance";
-const target = (fn: string) => `${AGENT_ALLOWANCE_PACKAGE_ID}::${MODULE}::${fn}`;
+const target = (fn: string) =>
+  `${AGENT_ALLOWANCE_PACKAGE_ID}::${MODULE}::${fn}`;
 
 /** Lifecycle status codes (mirror the Move `STATUS_*` constants). */
 export const AllowanceStatus = { ACTIVE: 0, PAUSED: 1, REVOKED: 2 } as const;
@@ -67,7 +68,10 @@ export function buildCreateAllowanceTx(opts: {
     arguments: [
       tx.pure.address(opts.payee),
       tx.pure.option("address", opts.delegate ?? null),
-      tx.pure.vector("u8", Array.from(opts.principalPublicKey ?? new Uint8Array(0))),
+      tx.pure.vector(
+        "u8",
+        Array.from(opts.principalPublicKey ?? new Uint8Array(0)),
+      ),
       tx.pure.u8(opts.signatureType ?? 0),
       funds,
       tx.pure.u64(opts.ratePerSecond),
@@ -143,7 +147,8 @@ export const buildPauseTx = (id: string) => buildClockOnlyTx(id, "pause");
 /** Resume a paused allowance; the paused interval is not credited (principal only). */
 export const buildResumeTx = (id: string) => buildClockOnlyTx(id, "resume");
 /** Settle the payee's earned amount, refund the rest, mark terminal (principal only). */
-export const buildRevokeTx = (id: string) => buildClockOnlyTx(id, "entry_revoke");
+export const buildRevokeTx = (id: string) =>
+  buildClockOnlyTx(id, "entry_revoke");
 
 // ============================================
 // READS
@@ -247,7 +252,11 @@ export async function findCreatedAllowanceId(
         options: { showObjectChanges: true },
       });
       for (const c of tb.objectChanges ?? []) {
-        const ch = c as { type?: string; objectType?: string; objectId?: string };
+        const ch = c as {
+          type?: string;
+          objectType?: string;
+          objectId?: string;
+        };
         if (
           ch.type === "created" &&
           typeof ch.objectType === "string" &&
@@ -288,7 +297,8 @@ function rateVested(s: AccrualState, nowMs: bigint): bigint {
     return minBig(s.vestedFloor, s.spendCap);
   }
   const deadline = s.expiryMs === 0n ? nowMs : minBig(s.expiryMs, nowMs);
-  const elapsedSecs = deadline > s.anchorMs ? (deadline - s.anchorMs) / 1000n : 0n;
+  const elapsedSecs =
+    deadline > s.anchorMs ? (deadline - s.anchorMs) / 1000n : 0n;
   const accrued = s.vestedFloor + s.ratePerSecond * elapsedSecs;
   return minBig(accrued, s.spendCap);
 }

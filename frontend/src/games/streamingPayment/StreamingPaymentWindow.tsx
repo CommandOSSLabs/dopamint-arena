@@ -204,7 +204,9 @@ export function StreamingPaymentWindow({ windowId }: GameWindowProps) {
 
   const recipientName =
     meta?.recipientName ??
-    (stream ? recipientNameFor(stream.recipient) : RECIPIENTS[recipientIdx].name);
+    (stream
+      ? recipientNameFor(stream.recipient)
+      : RECIPIENTS[recipientIdx].name);
 
   // Derived rate hint for the form.
   const formRate = useMemo(() => {
@@ -269,7 +271,12 @@ export function StreamingPaymentWindow({ windowId }: GameWindowProps) {
           addedDurationMs: TOPUP_MS,
         }),
       );
-      pushLedger({ kind: "topup", amount: addedAmount.toString(), digest, at: Date.now() });
+      pushLedger({
+        kind: "topup",
+        amount: addedAmount.toString(),
+        digest,
+        at: Date.now(),
+      });
       setStream(await fetchStream(client, streamId));
     });
 
@@ -300,7 +307,9 @@ export function StreamingPaymentWindow({ windowId }: GameWindowProps) {
       <Shell>
         <p className="text-sm text-arena-muted">
           Streaming Payment isn't configured. Set{" "}
-          <code className="text-arena-text">VITE_STREAMING_PAYMENT_PACKAGE_ID</code>{" "}
+          <code className="text-arena-text">
+            VITE_STREAMING_PAYMENT_PACKAGE_ID
+          </code>{" "}
           and the MTPS env vars.
         </p>
       </Shell>
@@ -337,8 +346,8 @@ export function StreamingPaymentWindow({ windowId }: GameWindowProps) {
         ) : (
           <p className="text-[11px] leading-relaxed text-arena-muted">
             Pay someone over time — a salary or subscription. The money unlocks
-            every second; they withdraw what they've earned, and you can top up or
-            cancel anytime (you get the unused part back).
+            every second; they withdraw what they've earned, and you can top up
+            or cancel anytime (you get the unused part back).
           </p>
         )}
         <Field label="Pay to">
@@ -359,7 +368,12 @@ export function StreamingPaymentWindow({ windowId }: GameWindowProps) {
         </Field>
         <div className="grid grid-cols-2 gap-2">
           <Field label="Total amount">
-            <NumberInput value={totalInput} onChange={setTotalInput} suffix="MTPS" min="0" />
+            <NumberInput
+              value={totalInput}
+              onChange={setTotalInput}
+              suffix="MTPS"
+              min="0"
+            />
           </Field>
           <Field label="Over">
             <select
@@ -379,7 +393,11 @@ export function StreamingPaymentWindow({ windowId }: GameWindowProps) {
           ≈ {formatMtps(formRate)} MTPS / sec
         </span>
         {error && <ErrorNote>{error}</ErrorNote>}
-        <Button onClick={onStart} disabled={Boolean(busy)} className="mt-1 gap-1.5">
+        <Button
+          onClick={onStart}
+          disabled={Boolean(busy)}
+          className="mt-1 gap-1.5"
+        >
           <Send className="size-4" />
           {busy ?? "Start stream"}
         </Button>
@@ -459,7 +477,11 @@ export function StreamingPaymentWindow({ windowId }: GameWindowProps) {
 
       {/* Sender controls */}
       <div className="grid grid-cols-2 gap-2">
-        <CtrlButton onClick={onTopUp} disabled={Boolean(busy) || !isActive} icon={Plus}>
+        <CtrlButton
+          onClick={onTopUp}
+          disabled={Boolean(busy) || !isActive}
+          icon={Plus}
+        >
           {busy === "Adding funds…" ? "Adding…" : "Add 1 hour"}
         </CtrlButton>
         <CtrlButton
@@ -544,7 +566,13 @@ function Shell({ children }: { children: React.ReactNode }) {
   return <div className="flex flex-col gap-3 p-4">{children}</div>;
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
   return (
     <label className="flex flex-col gap-1">
       <span className="text-[11px] uppercase tracking-wide text-arena-muted">
@@ -600,7 +628,9 @@ function StatusBadge({ status }: { status: number }) {
         ? "text-sky-400 border-sky-400/40"
         : "text-rose-400 border-rose-400/40";
   return (
-    <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${tone}`}>
+    <span
+      className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${tone}`}
+    >
       {streamStatusName(status)}
     </span>
   );

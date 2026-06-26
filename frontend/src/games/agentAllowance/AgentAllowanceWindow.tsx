@@ -253,7 +253,9 @@ export function AgentAllowanceWindow({ windowId }: GameWindowProps) {
 
   const providerName =
     meta?.providerName ??
-    (allowance ? providerNameFor(allowance.payee) : PROVIDERS[providerIdx].name);
+    (allowance
+      ? providerNameFor(allowance.payee)
+      : PROVIDERS[providerIdx].name);
   const displayAgent = meta?.agentName ?? agentName;
 
   // "Observable lifecycle": the policy's time bound, shown live.
@@ -307,9 +309,13 @@ export function AgentAllowanceWindow({ windowId }: GameWindowProps) {
       });
       const { digest } = await signExec(tx);
       const id = await findCreatedAllowanceId(client, digest);
-      if (!id) throw new Error("Agent deployed but its mandate id wasn't found yet");
+      if (!id)
+        throw new Error("Agent deployed but its mandate id wasn't found yet");
       setAllowanceId(id);
-      setMeta({ agentName: agentName.trim() || "Agent", providerName: provider.name });
+      setMeta({
+        agentName: agentName.trim() || "Agent",
+        providerName: provider.name,
+      });
       pushLedger({ kind: "create", digest, at: Date.now() });
       setAllowance(await fetchAllowance(client, id));
     });
@@ -325,9 +331,15 @@ export function AgentAllowanceWindow({ windowId }: GameWindowProps) {
         allowance.escrowBalance,
         BigInt(Date.now()) - CLAIM_SKEW_MS,
       );
-      if (amount <= 0n) throw new Error("Nothing to pay yet — give it a moment");
+      if (amount <= 0n)
+        throw new Error("Nothing to pay yet — give it a moment");
       const { digest } = await signExec(buildClaimTx(allowanceId, amount));
-      pushLedger({ kind: "pull", amount: amount.toString(), digest, at: Date.now() });
+      pushLedger({
+        kind: "pull",
+        amount: amount.toString(),
+        digest,
+        at: Date.now(),
+      });
       setAllowance(await fetchAllowance(client, allowanceId));
     });
 
@@ -393,7 +405,9 @@ export function AgentAllowanceWindow({ windowId }: GameWindowProps) {
       <Shell>
         <p className="text-sm text-arena-muted">
           Agent Allowance isn't configured. Set{" "}
-          <code className="text-arena-text">VITE_AGENT_ALLOWANCE_PACKAGE_ID</code>{" "}
+          <code className="text-arena-text">
+            VITE_AGENT_ALLOWANCE_PACKAGE_ID
+          </code>{" "}
           and the MTPS env vars.
         </p>
       </Shell>
@@ -423,8 +437,8 @@ export function AgentAllowanceWindow({ windowId }: GameWindowProps) {
       <Shell>
         {isRevoked ? (
           <div className="rounded-md border border-arena-edge bg-arena-bg/60 px-3 py-2 text-xs text-arena-muted">
-            Agent stopped. The service kept what it earned; the unused budget was
-            refunded to you. Start a new one below.
+            Agent stopped. The service kept what it earned; the unused budget
+            was refunded to you. Start a new one below.
           </div>
         ) : (
           <p className="text-[11px] leading-relaxed text-arena-muted">
@@ -463,10 +477,20 @@ export function AgentAllowanceWindow({ windowId }: GameWindowProps) {
         </Field>
         <div className="grid grid-cols-2 gap-2">
           <Field label="Budget">
-            <NumberInput value={capInput} onChange={setCapInput} suffix="MTPS" min="0" />
+            <NumberInput
+              value={capInput}
+              onChange={setCapInput}
+              suffix="MTPS"
+              min="0"
+            />
           </Field>
           <Field label="Per second">
-            <NumberInput value={rateInput} onChange={setRateInput} suffix="MTPS" min="0" />
+            <NumberInput
+              value={rateInput}
+              onChange={setRateInput}
+              suffix="MTPS"
+              min="0"
+            />
           </Field>
         </div>
         <Field label="Expires">
@@ -483,7 +507,11 @@ export function AgentAllowanceWindow({ windowId }: GameWindowProps) {
           </select>
         </Field>
         {error && <ErrorNote>{error}</ErrorNote>}
-        <Button onClick={onDeploy} disabled={Boolean(busy)} className="mt-1 gap-1.5">
+        <Button
+          onClick={onDeploy}
+          disabled={Boolean(busy)}
+          className="mt-1 gap-1.5"
+        >
           <Bot className="size-4" />
           {busy ?? "Start agent"}
         </Button>
@@ -561,9 +589,15 @@ export function AgentAllowanceWindow({ windowId }: GameWindowProps) {
 
       {/* Stats */}
       <div className="grid grid-cols-3 gap-2 text-center">
-        <Stat label="Budget left" value={formatMtps(allowance?.escrowBalance ?? 0n)} />
+        <Stat
+          label="Budget left"
+          value={formatMtps(allowance?.escrowBalance ?? 0n)}
+        />
         <Stat label="Paid" value={formatMtps(allowance?.spent ?? 0n)} />
-        <Stat label="Per sec" value={formatMtps(allowance?.ratePerSecond ?? 0n)} />
+        <Stat
+          label="Per sec"
+          value={formatMtps(allowance?.ratePerSecond ?? 0n)}
+        />
       </div>
 
       {/* Pay + controls */}
@@ -669,7 +703,13 @@ function Shell({ children }: { children: React.ReactNode }) {
   return <div className="flex flex-col gap-3 p-4">{children}</div>;
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
   return (
     <label className="flex flex-col gap-1">
       <span className="text-[11px] uppercase tracking-wide text-arena-muted">
@@ -726,7 +766,9 @@ function StatusBadge({ status }: { status: number }) {
       ? "text-amber-400 border-amber-400/40"
       : "text-rose-400 border-rose-400/40";
   return (
-    <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${color}`}>
+    <span
+      className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${color}`}
+    >
       {allowanceStatusName(status)}
     </span>
   );
