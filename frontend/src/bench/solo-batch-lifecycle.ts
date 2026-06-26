@@ -21,10 +21,14 @@
  *
  * Usage:
  *   npx vite-node --config vite.bench.config.ts src/bench/solo-batch-lifecycle.ts -- \
- *     <gameId> <mode> <durationMs> <tunnelCount> <seed> [--skip-settle] [--duration=<ms|s|m|h>]
+ *     <gameId> <mode> <durationMs> <tunnelCount> <seed> \
+ *     [--skip-settle] [--sustain] [--duration=<n>[smh]]
  *
  * Flags:
  *   --skip-settle           Skip the on-chain settle/close phase.
+ *   --sustain               When a tunnel reaches a terminal state, reset it off-chain and keep
+ *                           playing the same on-chain tunnel. Use this to maintain TPS over a long
+ *                           duration with terminating games like blackjack.
  *   --duration=<n>[smh]     Override the positional duration. e.g. --duration=30s, --duration=5m, --duration=1h
  */
 import { GAME_KITS, type BotContext, type GameId } from "@/agent/gameKit";
@@ -63,11 +67,14 @@ function parseDuration(value: string): number {
 function parseArgs(argv: string[]) {
   const positionals: string[] = [];
   let skipSettle = false;
+  let sustain = false;
   let durationOverride: number | undefined;
 
   for (const arg of argv) {
     if (arg === "--skip-settle") {
       skipSettle = true;
+    } else if (arg === "--sustain") {
+      sustain = true;
     } else if (arg.startsWith("--duration=")) {
       durationOverride = parseDuration(arg.slice("--duration=".length));
     } else if (arg === "--duration" || arg === "-d") {
@@ -88,6 +95,7 @@ function parseArgs(argv: string[]) {
     tunnelCount: Number(positionals[3] ?? 50),
     seed: Number(positionals[4] ?? 1),
     skipSettle,
+    sustain,
   };
 }
 
@@ -98,6 +106,7 @@ const durationMs = args.durationMs;
 const tunnelCount = args.tunnelCount;
 const seed = args.seed;
 const skipSettle = args.skipSettle;
+const sustain = args.sustain;
 
 const backendUrl = process.env.BACKEND_URL ?? "http://localhost:8080";
 const network = (process.env.SUI_NETWORK as "testnet" | "mainnet" | "localnet") ?? "testnet";
@@ -149,6 +158,8 @@ interface BotPair {
 interface TunnelSlot {
   tunnelId: string;
   createdAt: bigint;
+  coreA: ReturnType<typeof registry.create>;
+  coreB: ReturnType<typeof registry.create>;
   tunnel: OffchainTunnel<unknown, unknown>;
   botA: ReturnType<typeof kit.createBot>;
   botB: ReturnType<typeof kit.createBot>;
@@ -157,6 +168,10 @@ interface TunnelSlot {
   sessionId: string;
   statsToken: string;
   settled: boolean;
+  /** Cumulative nonces from previous off-chain resets; keeps heartbeat nonce monotonic. */
+  nonceOffset: bigint;
+  /** How many times this tunnel has been reset in sustain mode. */
+  resets: number;
 }
 
 function makeBotPair(index: number): BotPair {
@@ -295,6 +310,8 @@ async function openPhase(funder: Ed25519Keypair): Promise<TunnelSlot[]> {
     return {
       tunnelId,
       createdAt: createdAts[i],
+      coreA: p.coreA,
+      coreB: p.coreB,
       tunnel,
       botA: kit.createBot("A", ctx),
       botB: kit.createBot("B", ctx),
@@ -303,8 +320,39 @@ async function openPhase(funder: Ed25519Keypair): Promise<TunnelSlot[]> {
       sessionId: sessionResults[i].sessionId,
       statsToken: sessionResults[i].statsToken,
       settled: false,
+      nonceOffset: 0n,
+      resets: 0,
     };
   });
+}
+
+function resetSlot(slot: TunnelSlot, index: number): void {
+  // Preserve the cumulative nonce so the backend sees monotonic progression across resets.
+  slot.nonceOffset += slot.tunnel.nonce;
+  slot.resets++;
+
+  const bal: Balances = { a: kit.defaultStake, b: kit.defaultStake };
+  const tunnel = OffchainTunnel.selfPlay(
+    kit.protocol,
+    slot.tunnelId,
+    slot.coreA.keyPair,
+    slot.coreB.keyPair,
+    slot.coreA.address,
+    slot.coreB.address,
+    bal,
+    nativeBackend,
+  );
+  const transcript = new Transcript(slot.tunnelId);
+  tunnel.onUpdate = (u) => transcript.append(u);
+
+  // Vary the bot seed per reset so hands differ across lifetimes.
+  const ctx: BotContext = { rngForSeat: () => mulberry32(seed + index + 1 + slot.resets) };
+
+  slot.tunnel = tunnel as OffchainTunnel<unknown, unknown>;
+  slot.transcript = transcript;
+  slot.botA = kit.createBot("A", ctx);
+  slot.botB = kit.createBot("B", ctx);
+  slot.last = { A: null, B: null };
 }
 
 async function sendHeartbeat(
@@ -314,9 +362,10 @@ async function sendHeartbeat(
 ): Promise<void> {
   if (actionsDelta === 0) return;
   try {
+    const reportedNonce = (slot.tunnel.latest?.update.nonce ?? 0n) + slot.nonceOffset;
     await controlPlane.sendHeartbeat(slot.sessionId, slot.statsToken, {
       tunnelId: slot.tunnelId,
-      nonce: String(slot.tunnel.latest?.update.nonce ?? 0),
+      nonce: String(reportedNonce),
       actionsDelta,
       windowMs,
     });
@@ -407,6 +456,10 @@ async function main() {
 
     while (Date.now() < deadline) {
       if (kit.protocol.isTerminal(slot.tunnel.state)) {
+        if (sustain) {
+          resetSlot(slot, i);
+          continue;
+        }
         // Yield briefly so terminal tunnels don't spin.
         await new Promise((r) => setImmediate(r));
         continue;
@@ -456,8 +509,10 @@ async function main() {
 
   const tPlay1 = Date.now();
   const playDt = (tPlay1 - tPlay0) / 1000;
+  const totalResets = slots.reduce((sum, s) => sum + s.resets, 0);
   console.log(
-    `PLAY done: ${steps} steps in ${playDt.toFixed(1)}s -> STEPS_PER_S=${Math.round(steps / playDt)}`,
+    `PLAY done: ${steps} steps in ${playDt.toFixed(1)}s -> STEPS_PER_S=${Math.round(steps / playDt)}` +
+      (sustain ? ` (resets=${totalResets})` : ""),
   );
 
   const finalWindow = Date.now() - heartbeatStart;

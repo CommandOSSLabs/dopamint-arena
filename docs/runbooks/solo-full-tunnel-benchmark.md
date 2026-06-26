@@ -109,12 +109,13 @@ cd frontend
 export BACKEND_URL=https://relay-dev.millionstps.io
 export SUI_FUNDER_KEY=...
 
-npx vite-node --config vite.bench.config.ts src/bench/solo-batch-lifecycle.ts -- <gameId> <mode> <durationMs> <tunnelCount> <seed> [--skip-settle] [--duration=<n>[smh]]
+npx vite-node --config vite.bench.config.ts src/bench/solo-batch-lifecycle.ts -- <gameId> <mode> <durationMs> <tunnelCount> <seed> [--skip-settle] [--sustain] [--duration=<n>[smh]]
 ```
 
 Flags:
 
 - `--skip-settle` — skip the on-chain settle/close phase. Use this to keep the benchmark running for a long time without spending gas on closes.
+- `--sustain` — when a tunnel reaches a terminal state, reset it off-chain and keep playing. This is required for long runs with terminating games like blackjack; without it, average TPS collapses once all hands finish.
 - `--duration=<n>[smh]` — override the positional duration. e.g. `--duration=30s`, `--duration=5m`, `--duration=1h`.
 
 Example (blackjack, full crypto, 10s play, 100 tunnels):
@@ -123,21 +124,28 @@ Example (blackjack, full crypto, 10s play, 100 tunnels):
 npx vite-node --config vite.bench.config.ts src/bench/solo-batch-lifecycle.ts -- blackjack full 10000 100 1
 ```
 
-Long-running play without closing tunnels:
+Long-running sustained play (best for backend dashboard TPS):
 
 ```bash
-npx vite-node --config vite.bench.config.ts src/bench/solo-batch-lifecycle.ts -- blackjack full 0 100 1 --skip-settle --duration=30m
+npx vite-node --config vite.bench.config.ts src/bench/solo-batch-lifecycle.ts -- blackjack full 0 10 1 --skip-settle --sustain --duration=30m
 ```
 
 Observed on this setup:
 
-| Tunnels | Mode | Duration | Play TPS |
-|---------|------|----------|----------|
-| 10 | full | 5s | ~68 |
-| 50 | full | 10s | ~143 |
-| 100 | full | 10s | ~289 |
+| Tunnels | Mode | Duration | Sustain | Play TPS |
+|---------|------|----------|---------|----------|
+| 10 | full | 5s | no | ~68 |
+| 50 | full | 10s | no | ~143 |
+| 100 | full | 10s | no | ~289 |
+| 10 | full | 15s | yes | ~5,750 |
+| 20 | full | 15s | yes | ~6,240 |
+| 50 | full | 15s | yes | ~4,050 |
+| 100 | full | 15s | yes | ~2,460 |
+| 10 | full | 2m | yes | ~6,525 |
 
-Higher tunnel counts raise single-process TPS until CPU is saturated. The practical cap here is the funder's SUI gas balance: a 200-tunnel open exhausted the test funder.
+With `--sustain`, peak single-process throughput is **~6,200 steps/s** using 10–20 tunnels. Higher tunnel counts add event-loop overhead and lower total TPS on one Node process. To scale further, fan out multiple processes with distinct seeds (each opens its own pool).
+
+The practical cap without sustain is the funder's SUI gas balance: a 200-tunnel open exhausted the test funder.
 
 To go higher, fan out multiple processes with distinct seeds (each opens its own tunnel pool).
 
