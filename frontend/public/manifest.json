@@ -1,6 +1,6 @@
 {
-  "name": "MillionTPS",
-  "short_name": "MillionTPS",
+  "name": "MillionsTPS",
+  "short_name": "MillionsTPS",
   "description": "Wallet-gated desktop of self-playing tunnel games on Sui",
   "start_url": "/",
   "display": "standalone",
