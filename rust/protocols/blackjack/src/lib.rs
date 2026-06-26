@@ -363,11 +363,11 @@ impl Protocol for Blackjack {
         "blackjack.bet.v1"
     }
 
-    async fn initial_state(&self, ctx: &TunnelContext) -> BjState {
+    fn initial_state(&self, ctx: &TunnelContext) -> BjState {
         initial_state(ctx.initial.a, ctx.initial.b, None)
     }
 
-    async fn apply_move(
+    fn apply_move(
         &self,
         s: &BjState,
         mv: &BjMove,
@@ -498,15 +498,15 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn protocol_initial_state_matches_free_fn() {
+    #[test]
+    fn protocol_initial_state_matches_free_fn() {
         use tunnel_harness::{Balances, Protocol, Seat, TunnelContext};
         let ctx = TunnelContext {
             tunnel_id: "0xab".into(),
             initial: Balances { a: 200, b: 200 },
             seat: Seat::A,
         };
-        let via_trait = Blackjack.initial_state(&ctx).await;
+        let via_trait = Blackjack.initial_state(&ctx);
         let via_fn = initial_state(200, 200, None);
         assert_eq!(encode_state(&via_trait), encode_state(&via_fn));
     }
