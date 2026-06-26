@@ -17,7 +17,7 @@ Add a playable **Chat** window to the arena desktop. Every chat message is a sig
 | Bot-vs-bot mode | Server-side continuous loop; frontend is a spectator.                                                               |
 | Bot funding     | Reuse the operator wallet derived from `SUI_SETTLER_KEY`; top up DOPAMINT via the existing `dopamint::mint` faucet. |
 | Stake           | 1 DOPAMINT per seat, no tips, refunded on close. Matches the battleship PvP stake.                                  |
-| LLM             | Local: `qwen2.5:1.8b`. Production: override via `OLLAMA_MODEL`.                                                     |
+| LLM             | Local: `qwen2.5:1.5b`. Production: override via `OLLAMA_MODEL`.                                                     |
 | Ollama proxy    | New `/v1/chat` endpoint in `tunnel-manager` forwards to the local Ollama `/api/chat`.                               |
 | Agent language  | TypeScript package `backend/chat-agent/` reusing `sui-tunnel-ts`.                                                   |
 | Frontend shape  | New catalog game module `frontend/src/games/chat/` with two tabs: _Chat with Bot_ and _Bot vs Bot_.                 |
@@ -36,7 +36,7 @@ Add a playable **Chat** window to the arena desktop. Every chat message is a sig
          │                                           │ http /v1/chat
 ┌─────────────────┐      wss /v1/mp      ┌──────────┴───────────────────┐
 │  Chat agent     │ ◄──────────────────► │        Ollama (local)        │
-│  (seat B pool)  │   co-signed moves    │    qwen2.5:1.8b / qwen2.5:7b │
+│  (seat B pool)  │   co-signed moves    │    qwen2.5:1.5b / qwen2.5:7b │
 └─────────────────┘                      └──────────────────────────────┘
          │
          │ on-chain open/fund/close
@@ -164,7 +164,7 @@ frontend/src/lib/useMockChat.ts               (remove or leave unused)
 
 ## Local setup
 
-1. Pull the local model: `ollama pull qwen2.5:1.8b`
+1. Pull the local model: `ollama pull qwen2.5:1.5b`
 2. Start Ollama: `ollama serve`
 3. Start tunnel-manager: `cargo run -p tunnel-manager`
 4. Start the chat-agent: `cd backend/chat-agent && node --import tsx src/index.ts`

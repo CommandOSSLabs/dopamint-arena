@@ -80,7 +80,7 @@ export type PeerMessage =
   | { t: "hello"; ephemeralPubkey: string }
   | { t: "open"; tunnelId: string }
   | { t: "ready" }
-  | { t: "endMatch" }
+  | { t: "endMatch"; leaving?: boolean }
   | {
       t: "settleHalf";
       partyABalance: bigint;
@@ -355,6 +355,8 @@ export class MpClient {
       (msg: Exclude<PeerMessage, { t: "frame" }>) => void
     >();
     this.#relayHandlers.set(matchId, (payload) => {
+      // parseWithBigint: peer messages can carry bigint-tagged values (e.g. a resync's fullState
+      // balances) — mirror the persistence reviver so the receiver gets real bigints back.
       const o = parseWithBigint(payload) as PeerMessage;
       if (o.t === "frame") {
         const bytes = te.encode(o.data);
@@ -362,9 +364,9 @@ export class MpClient {
         else frameBuffer.push(bytes);
       } else peerCbs.forEach((cb) => cb(o));
     });
-    // resync's `fullState` is opaque adapter state and (by every game's design) keeps raw
-    // bigint balances — tag them with the same codec persistence uses, or JSON.stringify throws.
     const relaySend = (obj: PeerMessage) =>
+      // stringifyWithBigint: a resync's fullState carries bigint balances (balanceA/totalBet…); plain
+      // JSON.stringify throws "Do not know how to serialize a BigInt". Tag bigints like persistence does.
       this.#send({ type: "relay", matchId, payload: stringifyWithBigint(obj) });
     return {
       transport: {

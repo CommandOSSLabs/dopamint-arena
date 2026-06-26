@@ -28,6 +28,7 @@ const {
   clearResumeRecord,
   listActiveTunnels,
   evictExpiredRecords,
+  hasResumableMatch,
   keypairFromSecretHex,
 } = await import("./resume");
 const { OffchainTunnel } = await import("sui-tunnel-ts/core/tunnel");
@@ -133,6 +134,49 @@ test("writes are coalesced; flush forces one setItem; read round-trips; index + 
   assert.deepEqual(listActiveTunnels(), []);
 
   clearResumeRecord("0xT2");
+});
+
+test("hasResumableMatch is true only when a record for that game is persisted", () => {
+  const tA = `0x${"a1".repeat(32)}`;
+  const tB = `0x${"b2".repeat(32)}`;
+  const mk = (tunnelId: string, game: string) => ({
+    matchId: "m",
+    tunnelId,
+    role: "A" as const,
+    game,
+    opponentWallet: "0xb",
+    opponentPubkeyHex: "ab",
+    selfEphemeralSecretHex: toHex(generateKeyPair().secretKey),
+    latestCoSigned: toWireCoSigned(sampleCoSigned(tunnelId)),
+    latestState: { board: [0] },
+    updatedAt: 1,
+  });
+
+  assert.equal(hasResumableMatch("quantum-poker"), false, "no records yet");
+
+  writeResumeRecord(mk(tA, "ttt"));
+  flushResumeWrites();
+  assert.equal(
+    hasResumableMatch("quantum-poker"),
+    false,
+    "only an unrelated game is persisted",
+  );
+
+  writeResumeRecord(mk(tB, "quantum-poker"));
+  flushResumeWrites();
+  assert.equal(
+    hasResumableMatch("quantum-poker"),
+    true,
+    "a quantum-poker record is now persisted",
+  );
+
+  clearResumeRecord(tB);
+  assert.equal(
+    hasResumableMatch("quantum-poker"),
+    false,
+    "cleared the only quantum-poker record",
+  );
+  clearResumeRecord(tA);
 });
 
 // --- tiny fixtures local to the test ---

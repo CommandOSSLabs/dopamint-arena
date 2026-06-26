@@ -256,10 +256,21 @@ function onResync<State, Move>(
   const { action } = decideReconcile(self, peer);
   try {
     if (action === "adopt" && peerCp && msg.fullState !== undefined) {
+      // adoptCheckpoint swaps in the peer's PUBLIC fullState, which carries none of our local secrets
+      // (hole cards / slot secrets are stripped on serialize). Capture them first and re-apply after —
+      // mirroring restoreInto's cold-load path — so adopting the peer's checkpoint never blanks our hand.
+      const secret = args.adapter.captureSecret?.();
       args.tunnel.adoptCheckpoint(
         args.adapter.deserializeState(msg.fullState),
         peerCp,
       );
+      if (secret !== undefined && args.adapter.restoreSecret)
+        args.adapter.restoreSecret(secret);
+      // We jumped to the peer's CONFIRMED checkpoint. If it also holds a pending move beyond that
+      // (it proposed N+1 but we hadn't ACKed before the drop), this single round strands us at the
+      // checkpoint — the peer "waited" on our older nonce and never re-sent. Now that we're caught up,
+      // resync again so the peer re-proposes its pending and we both reach it.
+      if (msg.hasPending) sendResync(args);
     } else if (action === "re-propose") {
       args.tunnel.resendPending();
     }

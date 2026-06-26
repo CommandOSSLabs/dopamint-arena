@@ -1,21 +1,28 @@
 import { useEffect, useState } from "react";
 import { registerWindowDisposer } from "@/lib/windowSessions";
+import { hasResumableMatch } from "@/pvp/resume";
 import type { GameWindowProps } from "../types";
-import { SketchDefs } from "../sketch";
 import { QuantumPokerBotVsBotWindow } from "./QuantumPokerBotVsBotWindow";
 import { QuantumPokerPvpWindow } from "./QuantumPokerPvpWindow";
-import { QuantumPokerWindow } from "./QuantumPokerWindow";
+import { SketchDefs } from "../sketch";
 
-type Mode = "bot" | "pvp" | "auto";
+type Mode = "play" | "pvp" | "auto";
 
 const modeStore = new Map<string, Mode | null>();
 
 export function QuantumPokerModeWindow(props: GameWindowProps) {
   const { windowId } = props;
   // Default to "auto" (watch bots) on load; Back from any mode returns to the menu (null).
-  const [mode, setModeState] = useState<Mode | null>(
-    () => modeStore.get(windowId) ?? "auto",
-  );
+  // Exception: a page reload wipes the in-memory modeStore, so if an in-flight PvP match is
+  // persisted, reopen the PvP lane — its hook's resume() then continues the table instead of the
+  // player landing on watch-bots. A finished/unrestorable record self-heals: resume() clears it
+  // and falls back to the PvP idle screen.
+  const [mode, setModeState] = useState<Mode | null>(() => {
+    const stored = modeStore.get(windowId);
+    if (stored !== undefined) return stored;
+    if (hasResumableMatch("quantum-poker")) return "pvp";
+    return "auto";
+  });
 
   useEffect(() => {
     registerWindowDisposer(windowId, "quantum-poker-mode", () => {
@@ -33,15 +40,13 @@ export function QuantumPokerModeWindow(props: GameWindowProps) {
     return <QuantumPokerPvpWindow {...props} onExit={() => setMode(null)} />;
   }
 
-  if (mode === "bot") {
+  if (mode === "auto" || mode === "play") {
     return (
-      <QuantumPokerWindow {...props} lane="bot" onExit={() => setMode(null)} />
-    );
-  }
-
-  if (mode === "auto") {
-    return (
-      <QuantumPokerBotVsBotWindow {...props} onExit={() => setMode(null)} />
+      <QuantumPokerBotVsBotWindow
+        {...props}
+        onExit={() => setMode(null)}
+        autoTakeOver={mode === "play"}
+      />
     );
   }
 
@@ -59,7 +64,7 @@ export function QuantumPokerModeWindow(props: GameWindowProps) {
         <div className="flex w-fit flex-col gap-[clamp(8px,2.4cqmin,14px)]">
           <button
             type="button"
-            onClick={() => setMode("bot")}
+            onClick={() => setMode("play")}
             className="sketch-btn sketch-btn--go"
           >
             Play vs Bot
@@ -67,16 +72,15 @@ export function QuantumPokerModeWindow(props: GameWindowProps) {
           <button
             type="button"
             onClick={() => setMode("pvp")}
-            className="sketch-btn"
+            className="sketch-btn sketch-btn--go"
           >
             Find PvP Match
           </button>
         </div>
 
         <p className="sketch-note">
-          Play a persona bot in your own tunnel, or find a live PvP match over
-          the relay. Watch Bots runs by default — press Back from it to reach
-          this menu.
+          Take a seat against a bot, or find a live PvP match over the relay.
+          Watch Bots runs by default — Back to reach this menu.
         </p>
       </div>
     </div>

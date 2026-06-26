@@ -177,6 +177,14 @@ export function listActiveTunnels(): string[] {
   return readIndex().filter((id) => ls()?.getItem(KEY_PREFIX + id) != null);
 }
 
+/** Whether an in-flight match for `game` is persisted — the signal a game's mode/lane UI uses on a
+ *  fresh load (a reload wipes in-memory mode) to reopen the PvP lane so its hook can resume, instead
+ *  of dropping to a default lane. A lingering finished record self-heals: the lane's resume clears
+ *  records whose state is terminal. */
+export function hasResumableMatch(game: string): boolean {
+  return listActiveTunnels().some((id) => readResumeRecord(id)?.game === game);
+}
+
 export function evictExpiredRecords(maxAgeMs: number = DEFAULT_TTL_MS): void {
   const now = Date.now();
   for (const id of readIndex()) {
