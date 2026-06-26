@@ -11,7 +11,7 @@ import { useEffect } from "react";
  * `retry` should reset the session to idle and start it again; pass it stable
  * (useCallback) so the interval isn't rebuilt every render.
  *
- * Storm-safety (ADR-0014): each window's retry calls `solo.start` → the shared
+ * Storm-safety (ADR-0019): each window's retry calls `solo.start` → the shared
  * `TunnelOpenBatcher`, whose debounce merges a near-simultaneous retry wave (all
  * windows entered "error" from the same failed batch, so their 5 s timers fire
  * within a few ms) into ONE coalesced PTB. So N windows retrying is still one

@@ -168,7 +168,7 @@ interface SoloDeps {
   prepareStake: (minAmount: bigint) => Promise<string>;
   /** ADR-0013: ensure the player's MTPS address balance covers the stake. No-op once funded. */
   ensureStakeBalance: (minAmount: bigint) => Promise<void>;
-  /** ADR-0014: enroll the open/fund in the shared coalescing batcher (one PTB per connect). */
+  /** ADR-0019: enroll the open/fund in the shared coalescing batcher (one PTB per connect). */
   requestTunnelOpen: (req: TunnelOpenRequest) => Promise<string>;
 }
 
@@ -516,7 +516,7 @@ class SoloBotSession<
         this.setStatus("funding");
         const partyA = { address: a.address, publicKey: a.keyPair.publicKey };
         const partyB = { address: b.address, publicKey: b.keyPair.publicKey };
-        // ADR-0014: all funding-mode branching (MTPS balance / MTPS coin / SUI fallback) now lives
+        // ADR-0019: all funding-mode branching (MTPS balance / MTPS coin / SUI fallback) now lives
         // in the shared batcher so concurrent opens across game windows coalesce into one PTB.
         const tunnelId = await deps.requestTunnelOpen({
           partyA,

@@ -1,4 +1,4 @@
-# 0014 — Batch connect-time self-play tunnel opens into one PTB
+# 0019 — Batch connect-time self-play tunnel opens into one PTB
 
 - **Status**: Proposed
 - **Date**: 2026-06-26

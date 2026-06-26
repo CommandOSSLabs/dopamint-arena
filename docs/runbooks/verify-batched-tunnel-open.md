@@ -1,4 +1,4 @@
-# Verify: batched tunnel open (ADR-0014)
+# Verify: batched tunnel open (ADR-0019)
 
 The unit tests prove coalescing/correlation/chunking/fallback with fakes. The
 sponsor-quota fix itself is only observable against the real backend + chain.

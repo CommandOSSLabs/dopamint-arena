@@ -1,4 +1,4 @@
-// Connect-time coalescing coordinator (ADR-0014). Every self-play window funds its tunnel through
+// Connect-time coalescing coordinator (ADR-0019). Every self-play window funds its tunnel through
 // ONE shared batcher: requests issued in the same connect tick are debounced into a single flush,
 // the summed stake is funded once, and one `openAndFundMany` PTB opens them all — so the gas
 // sponsor sees ~2 calls per connect instead of one per window. A batch of size 1 is exactly the
