@@ -629,9 +629,6 @@ export function useBlackjackBot(): BlackjackBotGame {
                 resolve();
                 return;
               }
-              if (steps++ >= MAX_STEPS) {
-                throw new Error("self-play exceeded step bound");
-              }
               // Move as whoever the protocol expects this phase — the player alternates
               // A,A,B,B across rounds, so a fixed party would make randomMove return null the
               // moment it flips, which a naive loop misreads as "game over" (it would settle
@@ -676,6 +673,9 @@ export function useBlackjackBot(): BlackjackBotGame {
               // that first lands on `round_over` is when this round's outcome is known.
               const prevPhase = tunnel.state.phase;
               const prevBalanceA = tunnel.state.balanceA;
+              if (steps++ >= MAX_STEPS) {
+                throw new Error("self-play exceeded step bound");
+              }
               // Sign each update with the on-chain created_at (a validator timestamp,
               // always >= created_at and <= now) so the final co-signed state passes
               // update_state's timestamp check regardless of local clock skew.

@@ -275,7 +275,7 @@ export default function PvpBlackjack() {
 
           {/* Action toasts (hit / stand / round result), from your perspective */}
           {playing && (
-            <div className="absolute z-30 flex flex-col items-end gap-2 pointer-events-none top-4 right-4 md:top-8 md:right-8">
+            <div className={`absolute z-30 flex flex-col items-end gap-2 pointer-events-none ${isPortrait ? "top-14 right-4" : "top-4 right-4 md:top-8 md:right-8"}`}>
               {toasts.map((t) => (
                 <div
                   key={t.id}
@@ -378,14 +378,14 @@ export default function PvpBlackjack() {
                   className="qp-seat qp-stroke flex items-center justify-center"
                   style={{ filter: "url(#qpRough)" }}
                 >
-                  <div className="qp-seat__who">
+                  <div className={`flex ${isPortrait ? "flex-col items-center gap-1" : "items-center gap-3"}`}>
                     <span
                       className={`qp-seat__id ${g.isDealer ? "qp-seat__id--a" : "qp-seat__id--b"}`}
                     >
                       {g.isDealer ? "P" : "D"}
                     </span>
-                    <div>
-                      <div className="qp-seat__name">{oppTitle}</div>
+                    <div className={isPortrait ? "text-center" : ""}>
+                      {!isPortrait && <div className="qp-seat__name">{oppTitle}</div>}
                       <div className="qp-seat__stack">
                         <span className="qp-chip" />{" "}
                         {oppBalance.toLocaleString()}
@@ -415,14 +415,14 @@ export default function PvpBlackjack() {
                   className="qp-seat qp-stroke flex items-center justify-center"
                   style={{ filter: "url(#qpRough)" }}
                 >
-                  <div className="qp-seat__who">
+                  <div className={`flex ${isPortrait ? "flex-col items-center gap-1" : "items-center gap-3"}`}>
                     <span
                       className={`qp-seat__id ${g.isDealer ? "qp-seat__id--b" : "qp-seat__id--a"}`}
                     >
                       {g.isDealer ? "D" : "P"}
                     </span>
-                    <div>
-                      <div className="qp-seat__name">{selfTitle}</div>
+                    <div className={isPortrait ? "text-center" : ""}>
+                      {!isPortrait && <div className="qp-seat__name">{selfTitle}</div>}
                       <div className="qp-seat__stack">
                         <span className="qp-chip" />{" "}
                         {selfBalance.toLocaleString()}

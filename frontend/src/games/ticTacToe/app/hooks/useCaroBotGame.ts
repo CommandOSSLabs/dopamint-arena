@@ -496,8 +496,6 @@ export function useCaroBotGame(
                 finish();
                 return;
               }
-              if (steps++ >= maxSteps)
-                throw new Error("caro self-play exceeded step bound");
               const inner = tunnel.state.inner;
               const innerOver = inner.winner !== 0;
               // Between games, A drives the advance with any cell; mid-game, the heuristic picks.
@@ -531,6 +529,8 @@ export function useCaroBotGame(
                         strengthFor(difficultyRef.current, by),
                       );
               }
+              if (steps++ >= maxSteps)
+                throw new Error("caro self-play exceeded step bound");
               // Sign each update with the on-chain created_at so update_state's timestamp
               // check passes regardless of local clock skew.
               const r = tunnel.step({ cell }, by, {

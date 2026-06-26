@@ -312,6 +312,13 @@ export default function PlayerBot({
     setStartNonce((n) => n + 1);
   }, []);
 
+  const isAutoRetryingRef = useRef(false);
+
+  const handleAutoRetry = useCallback(() => {
+    isAutoRetryingRef.current = true;
+    handleStart();
+  }, [handleStart]);
+
   useEffect(() => {
     if (!account || running) return;
     if (!balancesLoaded) return;
@@ -349,9 +356,9 @@ export default function PlayerBot({
     if (!autoStartedRef.current) {
       autoStartedRef.current = true;
       autoStarted.current = true;
-      // Fresh window (auto-piloted, startNonce 0) starts in watch; from the main menu the user
-      // pressed Start (startNonce > 0) → start in manual so they play the hands.
-      game.startAuto(startNonce === 0);
+      const startInAuto = isAutoRetryingRef.current || startNonce === 0;
+      isAutoRetryingRef.current = false; // reset
+      game.startAuto(startInAuto);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
@@ -409,7 +416,7 @@ export default function PlayerBot({
     goHome,
   });
 
-  useSoloAutoRetry(auto, phase, handleStart);
+  useSoloAutoRetry(auto, phase, handleAutoRetry);
 
   // Auto toggle: ticked = your bot plays the hand (fast self-play vs the dealer bot); unticked
   // pauses at your decision so you play Hit/Stand. The dealer + betting stay automatic either way.
@@ -648,7 +655,7 @@ export default function PlayerBot({
 
           {/* Toasts overlay */}
           <div
-            className={`absolute z-30 flex flex-col items-end gap-2 pointer-events-none top-4 right-4 md:top-8 md:right-8`}
+            className={`absolute z-30 flex flex-col items-end gap-2 pointer-events-none ${isPortrait ? "top-14 right-4" : "top-4 right-4 md:top-8 md:right-8"}`}
           >
             {toasts.map((t) => (
               <div
@@ -709,10 +716,10 @@ export default function PlayerBot({
               className="qp-seat qp-stroke flex items-center justify-center"
               style={{ filter: "url(#qpRough)" }}
             >
-              <div className="qp-seat__who">
+              <div className={`flex ${isPortrait ? "flex-col items-center gap-1" : "items-center gap-3"}`}>
                 <span className="qp-seat__id qp-seat__id--b">D</span>
-                <div>
-                  <div className="qp-seat__name">Dealer Bot</div>
+                <div className={isPortrait ? "text-center" : ""}>
+                  {!isPortrait && <div className="qp-seat__name">Dealer Bot</div>}
                   <div className="qp-seat__stack">
                     <span className="qp-chip" />{" "}
                     {view.dealerBalance.toLocaleString()}
@@ -794,10 +801,10 @@ export default function PlayerBot({
               className="qp-seat qp-stroke flex items-center justify-center"
               style={{ filter: "url(#qpRough)" }}
             >
-              <div className="qp-seat__who">
+              <div className={`flex ${isPortrait ? "flex-col items-center gap-1" : "items-center gap-3"}`}>
                 <span className="qp-seat__id qp-seat__id--a">P</span>
-                <div>
-                  <div className="qp-seat__name">Player Bot</div>
+                <div className={isPortrait ? "text-center" : ""}>
+                  {!isPortrait && <div className="qp-seat__name">Player Bot</div>}
                   <div className="qp-seat__stack">
                     <span className="qp-chip" />{" "}
                     {view.playerBalance.toLocaleString()}
