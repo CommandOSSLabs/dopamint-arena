@@ -643,12 +643,16 @@ export default function PlayerBot({
             className={`absolute top-4 left-1/2 -translate-x-1/2 bg-[#fffefb] border-2 border-[var(--qp-ink)] rounded-full shadow-md z-10 flex items-center whitespace-nowrap ${isPortrait ? "px-2.5 py-1 gap-1.5" : "px-4 py-1.5 gap-2"}`}
             style={{ filter: "url(#qpRough)" }}
           >
-            <span className={`text-[var(--qp-amber)] font-extrabold uppercase tracking-widest whitespace-nowrap ${isPortrait ? "text-[10px] md:text-xs" : "text-lg md:text-xl"}`}>
+            <span
+              className={`text-[var(--qp-amber)] font-extrabold uppercase tracking-widest whitespace-nowrap ${isPortrait ? "text-[10px] md:text-xs" : "text-lg md:text-xl"}`}
+            >
               Round{" "}
               {Math.min(Math.max(view.round, terminal ? 0 : 1), maxRounds)} /{" "}
               {maxRounds}
             </span>
-            <span className={`text-[var(--qp-ink-soft)] uppercase tracking-widest whitespace-nowrap ${isPortrait ? "text-[9px] md:text-xs" : "text-lg"}`}>
+            <span
+              className={`text-[var(--qp-ink-soft)] uppercase tracking-widest whitespace-nowrap ${isPortrait ? "text-[9px] md:text-xs" : "text-lg"}`}
+            >
               · {phaseLabel[phase]}
             </span>
           </div>
@@ -716,10 +720,14 @@ export default function PlayerBot({
               className="qp-seat qp-stroke flex items-center justify-center"
               style={{ filter: "url(#qpRough)" }}
             >
-              <div className={`flex ${isPortrait ? "flex-col items-center gap-1" : "items-center gap-3"}`}>
+              <div
+                className={`flex ${isPortrait ? "flex-col items-center gap-1" : "items-center gap-3"}`}
+              >
                 <span className="qp-seat__id qp-seat__id--b">D</span>
                 <div className={isPortrait ? "text-center" : ""}>
-                  {!isPortrait && <div className="qp-seat__name">Dealer Bot</div>}
+                  {!isPortrait && (
+                    <div className="qp-seat__name">Dealer Bot</div>
+                  )}
                   <div className="qp-seat__stack">
                     <span className="qp-chip" />{" "}
                     {view.dealerBalance.toLocaleString()}
@@ -801,10 +809,14 @@ export default function PlayerBot({
               className="qp-seat qp-stroke flex items-center justify-center"
               style={{ filter: "url(#qpRough)" }}
             >
-              <div className={`flex ${isPortrait ? "flex-col items-center gap-1" : "items-center gap-3"}`}>
+              <div
+                className={`flex ${isPortrait ? "flex-col items-center gap-1" : "items-center gap-3"}`}
+              >
                 <span className="qp-seat__id qp-seat__id--a">P</span>
                 <div className={isPortrait ? "text-center" : ""}>
-                  {!isPortrait && <div className="qp-seat__name">Player Bot</div>}
+                  {!isPortrait && (
+                    <div className="qp-seat__name">Player Bot</div>
+                  )}
                   <div className="qp-seat__stack">
                     <span className="qp-chip" />{" "}
                     {view.playerBalance.toLocaleString()}

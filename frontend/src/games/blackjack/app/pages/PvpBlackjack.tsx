@@ -264,10 +264,14 @@ export default function PvpBlackjack() {
               className={`absolute top-4 left-1/2 -translate-x-1/2 bg-[#fffefb] border-2 border-[var(--qp-ink)] rounded-full shadow-md z-10 flex items-center whitespace-nowrap ${isPortrait ? "px-2.5 py-1 gap-1.5" : "px-4 py-1 gap-2"}`}
               style={{ filter: "url(#qpRough)" }}
             >
-              <span className={`text-[var(--qp-amber)] font-extrabold uppercase tracking-widest whitespace-nowrap ${isPortrait ? "text-[10px] md:text-xs" : "text-xs md:text-sm"}`}>
+              <span
+                className={`text-[var(--qp-amber)] font-extrabold uppercase tracking-widest whitespace-nowrap ${isPortrait ? "text-[10px] md:text-xs" : "text-xs md:text-sm"}`}
+              >
                 Round {g.round}
               </span>
-              <span className={`text-[var(--qp-ink-soft)] uppercase tracking-widest whitespace-nowrap ${isPortrait ? "text-[9px] md:text-xs" : "text-[10px] md:text-xs"}`}>
+              <span
+                className={`text-[var(--qp-ink-soft)] uppercase tracking-widest whitespace-nowrap ${isPortrait ? "text-[9px] md:text-xs" : "text-[10px] md:text-xs"}`}
+              >
                 · you are the {g.isDealer ? "dealer" : "player"}
               </span>
             </div>
@@ -275,7 +279,9 @@ export default function PvpBlackjack() {
 
           {/* Action toasts (hit / stand / round result), from your perspective */}
           {playing && (
-            <div className={`absolute z-30 flex flex-col items-end gap-2 pointer-events-none ${isPortrait ? "top-14 right-4" : "top-4 right-4 md:top-8 md:right-8"}`}>
+            <div
+              className={`absolute z-30 flex flex-col items-end gap-2 pointer-events-none ${isPortrait ? "top-14 right-4" : "top-4 right-4 md:top-8 md:right-8"}`}
+            >
               {toasts.map((t) => (
                 <div
                   key={t.id}
@@ -378,14 +384,18 @@ export default function PvpBlackjack() {
                   className="qp-seat qp-stroke flex items-center justify-center"
                   style={{ filter: "url(#qpRough)" }}
                 >
-                  <div className={`flex ${isPortrait ? "flex-col items-center gap-1" : "items-center gap-3"}`}>
+                  <div
+                    className={`flex ${isPortrait ? "flex-col items-center gap-1" : "items-center gap-3"}`}
+                  >
                     <span
                       className={`qp-seat__id ${g.isDealer ? "qp-seat__id--a" : "qp-seat__id--b"}`}
                     >
                       {g.isDealer ? "P" : "D"}
                     </span>
                     <div className={isPortrait ? "text-center" : ""}>
-                      {!isPortrait && <div className="qp-seat__name">{oppTitle}</div>}
+                      {!isPortrait && (
+                        <div className="qp-seat__name">{oppTitle}</div>
+                      )}
                       <div className="qp-seat__stack">
                         <span className="qp-chip" />{" "}
                         {oppBalance.toLocaleString()}
@@ -415,14 +425,18 @@ export default function PvpBlackjack() {
                   className="qp-seat qp-stroke flex items-center justify-center"
                   style={{ filter: "url(#qpRough)" }}
                 >
-                  <div className={`flex ${isPortrait ? "flex-col items-center gap-1" : "items-center gap-3"}`}>
+                  <div
+                    className={`flex ${isPortrait ? "flex-col items-center gap-1" : "items-center gap-3"}`}
+                  >
                     <span
                       className={`qp-seat__id ${g.isDealer ? "qp-seat__id--b" : "qp-seat__id--a"}`}
                     >
                       {g.isDealer ? "D" : "P"}
                     </span>
                     <div className={isPortrait ? "text-center" : ""}>
-                      {!isPortrait && <div className="qp-seat__name">{selfTitle}</div>}
+                      {!isPortrait && (
+                        <div className="qp-seat__name">{selfTitle}</div>
+                      )}
                       <div className="qp-seat__stack">
                         <span className="qp-chip" />{" "}
                         {selfBalance.toLocaleString()}
