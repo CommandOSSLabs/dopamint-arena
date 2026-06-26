@@ -1251,6 +1251,7 @@ mod tests {
             mp: mp.clone(),
             bus: bus.clone(),
             settler: crate::sui::SuiSettler::noop(),
+            enoki: None,
             walrus: crate::walrus::WalrusClient::noop(),
             ollama: crate::ollama::OllamaClient::new(
                 "http://localhost:11434".into(),
@@ -1401,6 +1402,7 @@ mod tests {
             mp,
             bus,
             settler: crate::sui::SuiSettler::noop(),
+            enoki: None,
             walrus: crate::walrus::WalrusClient::noop(),
             ollama: crate::ollama::OllamaClient::new(
                 "http://localhost:11434".into(),

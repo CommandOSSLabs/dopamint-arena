@@ -1176,19 +1176,19 @@ export function useWorldCanvasOnchain(
         game: GAME,
         time: new Date().toLocaleTimeString("en-GB"),
         bot: shortTunnelId(run.tunnelId),
-        type: "open tunnel",
+        type: "Start",
         status: "Success",
         amount: "",
       });
       // Also surface the open in LIVE TRANSACTIONS (snapshot.txns) under this game's tab,
-      // mirroring the "Opened" row every other game's on-chain feed uses. BOTH feeds get it:
+      // mirroring the "Start" row every other game's on-chain feed uses. BOTH feeds get it:
       // MY ACTIVITY (above) and LIVE TRANSACTIONS (here).
       report.pushTxn({
         id: feedRowId(run.tunnelId),
         game: GAME,
         time: new Date().toLocaleTimeString("en-GB"),
         bot: shortTunnelId(run.tunnelId),
-        type: "Opened",
+        type: "Start",
         status: "Success",
         amount: "",
       });
@@ -1276,7 +1276,7 @@ export function useWorldCanvasOnchain(
           },
         });
         // Anchored: close the prior tunnel in the dashboard like every other game — bump the
-        // closed/settlement counters and push a MY-ACTIVITY "settled" row. We DON'T setActive(0)
+        // closed/settlement counters and push a MY-ACTIVITY "End" row. We DON'T setActive(0)
         // here: the reopen (startRun above) already re-marked both seats active, so the wall
         // keeps running. (Guarded inside this try so it can never throw into the settle path.)
         report.bumpCounters({ tunnelsClosed: 1, settlements: 1 });
@@ -1285,18 +1285,18 @@ export function useWorldCanvasOnchain(
           game: GAME,
           time: new Date().toLocaleTimeString("en-GB"),
           bot: shortTunnelId(run.tunnelId),
-          type: "settled",
+          type: "End",
           status: "Success",
           amount: "closed",
         });
-        // Mirror the close into LIVE TRANSACTIONS (snapshot.txns) as a "Settled" row, the
-        // on-chain-feed counterpart of the MY-ACTIVITY "settled" row above. BOTH feeds get it.
+        // Mirror the close into LIVE TRANSACTIONS (snapshot.txns) as an "End" row, the
+        // on-chain-feed counterpart of the MY-ACTIVITY "End" row above. BOTH feeds get it.
         report.pushTxn({
           id: feedRowId(`${run.tunnelId}:${run.moveCount}`),
           game: GAME,
           time: new Date().toLocaleTimeString("en-GB"),
           bot: shortTunnelId(run.tunnelId),
-          type: "Settled",
+          type: "End",
           status: "Success",
           amount: "closed",
         });
