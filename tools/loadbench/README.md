@@ -208,6 +208,25 @@ report:
   game's run window**, so fleet spin-up (heavy SDK/kit imports) is excluded from
   the numbers and isn't paid per game.
 
+### `bun run bench --ablation` — explain the gap vs rustbench
+
+Attributes loadbench's real per-move cost to each structural JS overhead
+(JSON envelope + move codec, native crypto sign/verify hop, Promise/await
+wrapper), with a residual that absorbs engine logic, microtask delivery, and
+JIT-vs-AOT. Single-thread, offchain, local channel, `blackjack` by default.
+
+```bash
+bun run bench --ablation                 # blackjack, 5 trials
+bun run bench --ablation --trials 11     # more replay trials
+```
+
+It runs two deterministic real matches — one clean (per-move wall budget +
+aggregate GC), one recording (real frames + real signed messages) — then times
+the real engine functions over the captured artifacts. Prints an
+`[local/offchain]` table and writes `reports/ablation-<env>-<stamp>.md`.
+Informational sub-measures (move-codec share, bigint-vs-number delta, GC pause,
+native-vs-noble crypto) overlap the buckets and are not added to the subtotal.
+
 ### `bun test` — the unit + smoke suite
 
 ```bash
