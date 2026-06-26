@@ -1,0 +1,57 @@
+services:
+  sui-localnet:
+    # Multi-arch image — runs natively on both arm64 (Apple Silicon) and x86_64.
+    # stack.ts still detects an unhealthy container and falls back to the host
+    # `sui` binary, so the bench stack also works on hosts without a usable Docker.
+    #
+    # sui ≥ 1.74 requires `sui genesis -f --with-faucet` before `sui start`
+    # when starting fresh — `--force-regenesis` alone does not seed a funded wallet.
+    image: mysten/sui-tools:testnet-v1.74.0
+    command:
+      - /bin/sh
+      - -c
+      - "sui genesis -f --with-faucet && sui start --with-faucet"
+    ports: ["${SUI_RPC_PORT:-9000}:9000", "${SUI_FAUCET_PORT:-9123}:9123"]
+    environment:
+      SUI_PROTOCOL_CONFIG_OVERRIDE_ENABLE: "1"
+      SUI_PROTOCOL_CONFIG_OVERRIDE_max_move_package_size: "512000"
+    healthcheck:
+      # curl is not in the image; probe the RPC TCP port via bash.
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/127.0.0.1/9000"]
+      interval: 5s
+      timeout: 5s
+      retries: 80
+
+  valkey:
+    image: valkey/valkey:8-alpine
+    ports: ["${VALKEY_PORT:-6379}:6379"]
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  loadbench:
+    profiles: ["bench"]
+    build:
+      context: ../..
+      dockerfile: tools/loadbench/Dockerfile
+    environment:
+      SUI_RPC_URL: "http://sui-localnet:9000"
+    volumes:
+      - ./.env.local:/app/tools/loadbench/.env.local:ro
+      - ./keys.json:/app/tools/loadbench/keys.json:ro
+      # read-write so an all-games `--container` run lands its report on the host
+      - ./reports:/app/tools/loadbench/reports
+    networks:
+      default: {}
+    deploy:
+      resources:
+        limits:
+          # Overridden per run by the host cli via `--cpus` / `--memory`
+          # (exported as BENCH_CPUS / BENCH_MEMORY before `docker compose run`).
+          cpus: "${BENCH_CPUS:-4}"
+          memory: "${BENCH_MEMORY:-4g}"
+    # Default when run with no args: offchain burst. The host `bench --container …`
+    # path passes explicit inner args. --channel relay is unsupported in-container.
+    command: ["--channel", "local", "--tunnel-anchor", "offchain", "--workers", "auto", "--duration", "10"]

@@ -11,6 +11,7 @@ export function createFrontend(
   name: string,
   args: {
     domain: string;
+    backendDomain: string;
     albDnsName: pulumi.Input<string>;
     certificateArn?: pulumi.Input<string>;
     zoneId?: pulumi.Input<string>;
@@ -69,7 +70,7 @@ export function createFrontend(
   // No cert (dev): the ALB only has an HTTP:80 listener, so connect over http.
   // The HTTPS branch is unverified in dev (no cert exists there).
   const albOriginDomain = args.certificateArn
-    ? `api.${args.domain}`
+    ? args.backendDomain
     : args.albDnsName;
 
   // Managed policies: disable caching (required for SSE streaming and WS) and forward the

@@ -22,7 +22,7 @@ use axum::Router;
 use tokio::sync::broadcast;
 use tower::limit::GlobalConcurrencyLimitLayer;
 use tower::ServiceBuilder;
-use tower_http::cors::CorsLayer;
+use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use uuid::Uuid;
 
@@ -60,7 +60,7 @@ async fn main() -> anyhow::Result<()> {
         config
             .ollama_model
             .clone()
-            .unwrap_or_else(|| "qwen2.5:1.8b".into()),
+            .unwrap_or_else(|| "qwen2.5:1.5b".into()),
     )?;
 
     let instance_id = config
@@ -148,7 +148,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/stats/live", get(routes::stats_live))
         .route("/v1/mp", get(crate::mp::ws::mp_upgrade))
         .layer(TraceLayer::new_for_http())
-        .layer(CorsLayer::permissive())
+        .layer(cors_layer())
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
@@ -160,6 +160,28 @@ async fn main() -> anyhow::Result<()> {
     // rollout doesn't drop them (the 1 Hz flusher is gone with the runtime by now).
     flush_actions(&flush_state).await;
     Ok(())
+}
+
+/// Build a CORS layer from `CORS_ALLOWED_ORIGINS`. When the env var is set, only the listed
+/// comma-separated origins are allowed; otherwise the layer remains permissive for local dev.
+fn cors_layer() -> CorsLayer {
+    match std::env::var("CORS_ALLOWED_ORIGINS") {
+        Ok(origins) if !origins.is_empty() => {
+            let origins: Vec<http::HeaderValue> = origins
+                .split(',')
+                .map(|s| {
+                    s.trim()
+                        .parse()
+                        .expect("invalid CORS_ALLOWED_ORIGINS value")
+                })
+                .collect();
+            CorsLayer::new()
+                .allow_origin(origins)
+                .allow_methods(Any)
+                .allow_headers(Any)
+        }
+        _ => CorsLayer::permissive(),
+    }
 }
 
 /// Drain the per-instance move counter into ControlStore once. At-most-once by design: the

@@ -55,7 +55,7 @@ function startBackend(ollamaUrl: string): Promise<{ stop: () => void }> {
         ...process.env,
         TUNNEL_MANAGER_ADDR: `127.0.0.1:${BACKEND_PORT}`,
         OLLAMA_URL: ollamaUrl,
-        OLLAMA_MODEL: "qwen2.5:1.8b",
+        OLLAMA_MODEL: "qwen2.5:1.5b",
         SUI_RPC_URL: "http://127.0.0.1:9000",
         TUNNEL_PACKAGE_ID: "0x2",
         SUI_SETTLER_KEY: SETTLER_KEY,

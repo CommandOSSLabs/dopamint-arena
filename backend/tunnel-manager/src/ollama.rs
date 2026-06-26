@@ -99,7 +99,7 @@ mod tests {
             "message": { "role": "assistant", "content": "hello back" }
         });
         let expected_req = serde_json::json!({
-            "model": "qwen2.5:1.8b",
+            "model": "qwen2.5:1.5b",
             "messages": [{ "role": "user", "content": "hi" }],
             "stream": false,
         });
@@ -110,7 +110,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = OllamaClient::new(server.uri(), "qwen2.5:1.8b".into()).unwrap();
+        let client = OllamaClient::new(server.uri(), "qwen2.5:1.5b".into()).unwrap();
         let reply = client
             .chat(&[OllamaMessage {
                 role: "user".into(),
@@ -137,7 +137,7 @@ mod tests {
             .await;
 
         let base = format!("{}/ollama/", server.uri());
-        let client = OllamaClient::new(base, "qwen2.5:1.8b".into()).unwrap();
+        let client = OllamaClient::new(base, "qwen2.5:1.5b".into()).unwrap();
         let reply = client
             .chat(&[OllamaMessage {
                 role: "user".into(),
@@ -157,7 +157,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = OllamaClient::new(server.uri(), "qwen2.5:1.8b".into()).unwrap();
+        let client = OllamaClient::new(server.uri(), "qwen2.5:1.5b".into()).unwrap();
         let err = client
             .chat(&[OllamaMessage {
                 role: "user".into(),
@@ -177,7 +177,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = OllamaClient::new(server.uri(), "qwen2.5:1.8b".into()).unwrap();
+        let client = OllamaClient::new(server.uri(), "qwen2.5:1.5b".into()).unwrap();
         let err = client
             .chat(&[OllamaMessage {
                 role: "user".into(),
@@ -190,7 +190,7 @@ mod tests {
 
     #[tokio::test]
     async fn new_rejects_invalid_url() {
-        let err = OllamaClient::new("not a url".into(), "qwen2.5:1.8b".into()).unwrap_err();
+        let err = OllamaClient::new("not a url".into(), "qwen2.5:1.5b".into()).unwrap_err();
         assert!(err.to_string().contains("invalid Ollama base URL"));
     }
 }

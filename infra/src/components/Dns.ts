@@ -9,8 +9,15 @@ export interface DnsOutputs {
 
 export function createDns(
   name: string,
-  args: { domain: string; route53ZoneId?: string },
+  args: { domain: string; route53ZoneId?: string; certificateArn?: string },
 ): DnsOutputs {
+  if (args.certificateArn) {
+    return {
+      certificateArn: pulumi.output(args.certificateArn),
+      domain: args.domain,
+    };
+  }
+
   const zone = args.route53ZoneId
     ? aws.route53.Zone.get(`${name}-zone`, args.route53ZoneId)
     : undefined;

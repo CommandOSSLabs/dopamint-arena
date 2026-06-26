@@ -104,7 +104,7 @@ export function PaymentsWindow({ windowId }: GameWindowProps) {
             Self-play vending
           </span>
           <div className="mt-1 mb-1 text-[clamp(15px,4.2cqmin,28px)] leading-none">
-            Regular Payments
+            Micro Payments
           </div>
           <p className="mb-3 text-[clamp(11px,3cqmin,17px)] leading-snug text-[rgba(35,34,31,0.6)]">
             Deposit 10 MTPS, stream 500 co-signed payments over 5 s, settle

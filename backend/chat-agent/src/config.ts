@@ -30,7 +30,7 @@ export function loadConfig(): ChatAgentConfig {
     dopamintFaucetId: getEnv("DOPAMINT_FAUCET_ID"),
     dopamintCoinType: getEnv("DOPAMINT_COIN_TYPE"),
     operatorKey: getEnv("SUI_SETTLER_KEY"),
-    ollamaModel: process.env.CHAT_OLLAMA_MODEL ?? "qwen2.5:1.8b",
+    ollamaModel: process.env.CHAT_OLLAMA_MODEL ?? "qwen2.5:1.5b",
     stakeRaw: whole * 10n ** 9n, // 9 decimals
     botPoolSize: Number(process.env.CHAT_BOT_POOL_SIZE ?? "3"),
     botVsBotEnabled: (process.env.CHAT_BOT_VS_BOT_ENABLED ?? "true") === "true",
