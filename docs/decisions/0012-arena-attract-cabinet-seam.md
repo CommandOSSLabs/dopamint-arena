@@ -12,7 +12,7 @@ re-implementing it per game would duplicate UX and drift. Two questions had to
 be resolved the same way for all games: where the auto-play moves come from, and
 what "you vs the bot" actually means on-chain.
 
-The [canonical game-bot kit](../superpowers/specs/2026-06-19-canonical-game-bot-kit-design.md)
+The canonical game-bot kit
 already gives each game a pure `protocol` + `createBot(seat).plan(state)` as the
 single source of auto-play moves (shared with the agent test harness).
 
@@ -49,7 +49,7 @@ single source of auto-play moves (shared with the agent test harness).
   (1) driving its auto from its kit, (2) exposing `pause`/`resume` + a manual
   mode, (3) registering a `CabinetController`. No per-game overlay code.
 - **Committed to:** the `CabinetController` contract and kit-as-auto-source.
-  Genuine two-party settlement remains the on-chain model ([ADR-0006](0006-genuine-two-party-only-drop-self-play.md)).
+  Genuine two-party settlement remains the on-chain model ([ADR-0001 §1](0001-arena-baseline-architecture.md)).
 - **Adopted so far:** tic-tac-toe (reference) and blackjack — each registers a
   `CabinetController` and exposes a hover-pause latch on its bot hook; take-over
   reuses the existing in-game manual mode (ttt's auto flag, blackjack's Hit/Stand).

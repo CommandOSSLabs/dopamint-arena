@@ -1,4 +1,4 @@
-# 0002 — Quantum Poker: protocol-first model, optional ZK dispute adapter
+# 0008 — Quantum Poker: protocol-first model, optional ZK dispute adapter
 
 - **Status**: Accepted
 - **Date**: 2026-06-16
