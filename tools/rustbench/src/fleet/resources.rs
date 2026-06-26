@@ -7,10 +7,10 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
 
-use crate::fleet::cgroup::cpu_budget;
+use crate::fleet::cgroup::{cgroup_cpu_usage_usec, consumed_cores, cpu_budget, CpuBasis};
 use crate::fleet::stats::summarize;
 
 #[derive(Clone, Debug, Default)]
@@ -58,8 +58,8 @@ fn sample_loop(interval_ms: u64, threads: usize, stop: Arc<AtomicBool>) -> Resou
     };
     let budget = cpu_budget();
     let basis: &'static str = match budget.basis {
-        crate::fleet::cgroup::CpuBasis::Cgroup => "cgroup",
-        crate::fleet::cgroup::CpuBasis::System => "system",
+        CpuBasis::Cgroup => "cgroup",
+        CpuBasis::System => "system",
     };
 
     let mut sys = System::new_with_specifics(
@@ -78,6 +78,13 @@ fn sample_loop(interval_ms: u64, threads: usize, stop: Arc<AtomicBool>) -> Resou
     let mut util_pct_samples: Vec<f64> = Vec::new();
     let mut rss_samples: Vec<f64> = Vec::new();
 
+    // Seed the cgroup CPU-time baseline so the first interval has a delta.
+    let mut prev_cgroup: Option<(u64, Instant)> = if budget.basis == CpuBasis::Cgroup {
+        cgroup_cpu_usage_usec().map(|u| (u, Instant::now()))
+    } else {
+        None
+    };
+
     // sysinfo needs two refreshes to compute CPU%; prime once, then loop.
     sys.refresh_cpu_all();
     sys.refresh_processes(ProcessesToUpdate::Some(&[pid]), false);
@@ -92,8 +99,22 @@ fn sample_loop(interval_ms: u64, threads: usize, stop: Arc<AtomicBool>) -> Resou
             None => (0.0, 0),
         };
         let pct = system_cpu_pct(&sys);
-        // utilization% against the cgroup-assigned budget (cores / budget cores * 100)
-        let util_pct = cores / budget.cores * 100.0;
+        // In-container: derive util from cgroup cpu.stat delta (accurate under Docker).
+        // On macOS/system: fall back to per-process sysinfo reading.
+        let util_pct = if let Some((prev_usage, prev_at)) = prev_cgroup {
+            match cgroup_cpu_usage_usec() {
+                Some(now_usage) => {
+                    let now = Instant::now();
+                    let wall_us = now.duration_since(prev_at).as_micros();
+                    let delta = now_usage.saturating_sub(prev_usage);
+                    prev_cgroup = Some((now_usage, now));
+                    consumed_cores(delta, wall_us) / budget.cores * 100.0
+                }
+                None => cores / budget.cores * 100.0,
+            }
+        } else {
+            cores / budget.cores * 100.0
+        };
 
         summary.samples += 1;
         cores_sum += cores;
