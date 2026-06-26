@@ -75,8 +75,9 @@ impl DistTunnel {
         opp_ep: Endpoint,
         balance_a: u64,
         balance_b: u64,
+        card_seed: Option<u64>,
     ) -> DistTunnel {
-        let state = crate::game::blackjack::initial_state(balance_a, balance_b);
+        let state = crate::game::blackjack::initial_state(balance_a, balance_b, card_seed);
         DistTunnel {
             tunnel_id: tunnel_id.to_string(),
             self_party,
@@ -247,6 +248,7 @@ mod tests {
             Endpoint::observer(pkb),
             200,
             200,
+            None,
         );
         let b = DistTunnel::new(
             "0xab",
@@ -255,6 +257,7 @@ mod tests {
             Endpoint::observer(pka),
             200,
             200,
+            None,
         );
         (a, b)
     }

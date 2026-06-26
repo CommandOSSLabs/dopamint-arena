@@ -127,6 +127,23 @@ pub fn play_fixed_match(
     created_at: u64,
     max_moves: u64,
 ) -> MatchResult {
+    play_fixed_match_seeded(
+        None, tunnel_id, secret_a, secret_b, balance_a, balance_b, created_at, max_moves,
+    )
+}
+
+// The seed parameter is mandatory for the seeded API; the arity matches `play_fixed_match` + 1.
+#[allow(clippy::too_many_arguments)]
+pub fn play_fixed_match_seeded(
+    card_seed: Option<u64>,
+    tunnel_id: &str,
+    secret_a: &[u8; 32],
+    secret_b: &[u8; 32],
+    balance_a: u64,
+    balance_b: u64,
+    created_at: u64,
+    max_moves: u64,
+) -> MatchResult {
     let pka = keypair_from_secret(secret_a).public_key();
     let pkb = keypair_from_secret(secret_b).public_key();
     let mut dt_a = DistTunnel::new(
@@ -136,6 +153,7 @@ pub fn play_fixed_match(
         Endpoint::observer(pkb),
         balance_a,
         balance_b,
+        card_seed,
     );
     let mut dt_b = DistTunnel::new(
         tunnel_id,
@@ -144,6 +162,7 @@ pub fn play_fixed_match(
         Endpoint::observer(pka),
         balance_a,
         balance_b,
+        card_seed,
     );
     play_loop(&mut dt_a, &mut dt_b, tunnel_id, created_at, max_moves)
 }
@@ -182,6 +201,20 @@ pub fn play_prepared(
     created_at: u64,
     max_moves: u64,
 ) -> MatchResult {
+    play_prepared_seeded(
+        None, kit, tunnel_id, balance_a, balance_b, created_at, max_moves,
+    )
+}
+
+pub fn play_prepared_seeded(
+    card_seed: Option<u64>,
+    kit: &SeatKit,
+    tunnel_id: &str,
+    balance_a: u64,
+    balance_b: u64,
+    created_at: u64,
+    max_moves: u64,
+) -> MatchResult {
     let mut dt_a = DistTunnel::new(
         tunnel_id,
         Party::A,
@@ -189,6 +222,7 @@ pub fn play_prepared(
         Endpoint::observer(kit.pk_b),
         balance_a,
         balance_b,
+        card_seed,
     );
     let mut dt_b = DistTunnel::new(
         tunnel_id,
@@ -197,6 +231,7 @@ pub fn play_prepared(
         Endpoint::observer(kit.pk_a),
         balance_a,
         balance_b,
+        card_seed,
     );
     play_loop(&mut dt_a, &mut dt_b, tunnel_id, created_at, max_moves)
 }

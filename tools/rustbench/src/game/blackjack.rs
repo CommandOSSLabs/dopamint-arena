@@ -66,6 +66,9 @@ pub struct BjState {
     pub balance_b: u64,
     pub total: u64,
     pub bet: u64,
+    /// Per-match card-stream seed. `None` = the legacy deterministic stream
+    /// (golden). Never serialized — `encode_state` must ignore it.
+    pub card_seed: Option<u64>,
 }
 
 /// Seat holding the PLAYER role in `round` (1-based). Swaps every two rounds.
@@ -93,11 +96,16 @@ pub fn actor_for(s: &BjState) -> Party {
     }
 }
 
-/// Deterministic card stream: `seed = blake2b256(DOMAIN || u64be(round))`, one byte per
-/// draw, advancing a fresh digest every 32 draws via `blake2b256(digest || u64be(block))`.
-fn draw_rank(round: u64, draw_index: u64) -> u8 {
-    let mut buf = Vec::with_capacity(DOMAIN.len() + 8);
+/// Deterministic card stream: `seed = blake2b256(DOMAIN || [u64be(card_seed)] || u64be(round))`,
+/// one byte per draw, advancing a fresh digest every 32 draws via
+/// `blake2b256(digest || u64be(block))`. When `card_seed` is `None` the byte layout is
+/// identical to the legacy stream (no extra bytes), preserving the golden parity gate.
+fn draw_rank(card_seed: Option<u64>, round: u64, draw_index: u64) -> u8 {
+    let mut buf = Vec::with_capacity(DOMAIN.len() + 16);
     buf.extend_from_slice(DOMAIN);
+    if let Some(seed) = card_seed {
+        buf.extend_from_slice(&u64_to_be_bytes(seed));
+    }
     buf.extend_from_slice(&u64_to_be_bytes(round));
     let mut digest = blake2b256(&buf);
     let idx = draw_index as usize;
@@ -148,7 +156,7 @@ pub fn max_bet(s: &BjState) -> u64 {
     s.balance_a.min(s.balance_b)
 }
 
-pub fn initial_state(balance_a: u64, balance_b: u64) -> BjState {
+pub fn initial_state(balance_a: u64, balance_b: u64, card_seed: Option<u64>) -> BjState {
     BjState {
         phase: Phase::RoundOver,
         round: 0,
@@ -159,6 +167,7 @@ pub fn initial_state(balance_a: u64, balance_b: u64) -> BjState {
         balance_b,
         total: balance_a + balance_b,
         bet: 0,
+        card_seed,
     }
 }
 
@@ -166,8 +175,8 @@ pub fn is_terminal(s: &BjState) -> bool {
     s.round >= ROUND_CAP || (s.phase == Phase::RoundOver && max_bet(s) < MIN_BET)
 }
 
-fn draw_to(hand: &mut Vec<u8>, round: u64, draw_index: u64) -> u64 {
-    hand.push(rank_value(draw_rank(round, draw_index)));
+fn draw_to(hand: &mut Vec<u8>, card_seed: Option<u64>, round: u64, draw_index: u64) -> u64 {
+    hand.push(rank_value(draw_rank(card_seed, round, draw_index)));
     draw_index + 1
 }
 
@@ -177,10 +186,10 @@ fn deal_round(s: &BjState, bet: u64) -> BjState {
     let mut player_hand = Vec::new();
     let mut dealer_hand = Vec::new();
     for _ in 0..2 {
-        draw_index = draw_to(&mut player_hand, round, draw_index);
+        draw_index = draw_to(&mut player_hand, s.card_seed, round, draw_index);
     }
     for _ in 0..2 {
-        draw_index = draw_to(&mut dealer_hand, round, draw_index);
+        draw_index = draw_to(&mut dealer_hand, s.card_seed, round, draw_index);
     }
     BjState {
         phase: Phase::Player,
@@ -197,7 +206,7 @@ fn resolve_dealer(s: &BjState) -> BjState {
     let mut hand = s.dealer_hand.clone();
     let mut draw_index = s.draw_index;
     while hand_value(&hand) < DEALER_STANDS_AT {
-        draw_index = draw_to(&mut hand, s.round, draw_index);
+        draw_index = draw_to(&mut hand, s.card_seed, s.round, draw_index);
     }
     let mut resolved = s.clone();
     resolved.dealer_hand = hand;
@@ -267,7 +276,8 @@ pub fn apply_move(s: &BjState, mv: BjMove, by: Party) -> Result<BjState, String>
             match mv {
                 BjMove::Hit => {
                     let mut next = s.clone();
-                    next.draw_index = draw_to(&mut next.player_hand, s.round, s.draw_index);
+                    next.draw_index =
+                        draw_to(&mut next.player_hand, s.card_seed, s.round, s.draw_index);
                     if is_bust(&next.player_hand) {
                         Ok(settle(&next, Some(dealer_party(s.round))))
                     } else {
@@ -318,7 +328,7 @@ mod tests {
     // tunnelId/keys are irrelevant to the protocol; balances 200/200.
     #[test]
     fn initial_state_encodes_to_golden() {
-        let s = initial_state(200, 200);
+        let s = initial_state(200, 200, None);
         assert_eq!(hex::encode(encode_state(&s)),
             "7375695f74756e6e656c3a3a70726f746f3a3a626c61636b6a61636b2e6265742e763100000000000000c800000000000000c80000000000000000000000000000000000000000000000000000000000000000000000000000000000");
         assert_eq!(
@@ -330,7 +340,7 @@ mod tests {
     #[test]
     fn first_round_deal_matches_golden() {
         // round_over -> player A bets 25 -> deal round 1.
-        let s = initial_state(200, 200);
+        let s = initial_state(200, 200, None);
         let s1 = apply_move(&s, BjMove::Bet { amount: 25 }, Party::A).unwrap();
         assert_eq!(s1.player_hand, vec![10, 7]);
         assert_eq!(s1.dealer_hand, vec![10, 3]);
@@ -355,7 +365,7 @@ mod tests {
     #[test]
     fn balances_always_sum_to_total() {
         // Play a full match's worth of moves via basic strategy; sum is invariant.
-        let mut s = initial_state(200, 200);
+        let mut s = initial_state(200, 200, None);
         for _ in 0..400 {
             if is_terminal(&s) {
                 break;
@@ -380,9 +390,30 @@ mod tests {
 
     #[test]
     fn wrong_turn_is_rejected() {
-        let s = initial_state(200, 200);
+        let s = initial_state(200, 200, None);
         // round 1 player is A; B may not bet.
         assert!(apply_move(&s, BjMove::Bet { amount: 25 }, Party::B).is_err());
+    }
+
+    #[test]
+    fn seed_none_reproduces_legacy_card_stream() {
+        // The deterministic (None) stream is unchanged: first dealt rank is stable.
+        assert_eq!(draw_rank(None, 1, 0), draw_rank(None, 1, 0));
+        // A seed changes the stream for at least one early draw.
+        let any_diff = (0..8u64).any(|i| draw_rank(Some(7), 1, i) != draw_rank(None, 1, i));
+        assert!(any_diff, "a seed must perturb the card stream");
+    }
+
+    #[test]
+    fn seed_is_not_encoded_into_state() {
+        let a = initial_state(200, 200, None);
+        let mut b = initial_state(200, 200, Some(42));
+        b.card_seed = Some(99); // any seed
+        assert_eq!(
+            encode_state(&a),
+            encode_state(&b),
+            "card_seed must not affect encode_state"
+        );
     }
 }
 
@@ -434,7 +465,7 @@ mod bot_tests {
 
     #[test]
     fn round_over_player_bets_min_option() {
-        let s = initial_state(200, 200);
+        let s = initial_state(200, 200, None);
         // round 1 player is A; A bets 25 (first BET_OPTIONS entry that fits).
         assert!(matches!(
             plan(&s, Party::A),
@@ -446,7 +477,7 @@ mod bot_tests {
 
     #[test]
     fn player_hits_below_17_then_stands() {
-        let s = initial_state(200, 200);
+        let s = initial_state(200, 200, None);
         let s1 = apply_move(&s, BjMove::Bet { amount: 25 }, Party::A).unwrap();
         // player hand [10,7] = 17 -> stand; dealer's seat plans None here.
         assert!(matches!(plan(&s1, Party::A), Some(BjMove::Stand)));
@@ -455,7 +486,7 @@ mod bot_tests {
 
     #[test]
     fn dealer_only_stands() {
-        let mut s = initial_state(200, 200);
+        let mut s = initial_state(200, 200, None);
         s = apply_move(&s, BjMove::Bet { amount: 25 }, Party::A).unwrap();
         s = apply_move(&s, BjMove::Stand, Party::A).unwrap(); // -> dealer phase
         let dealer = dealer_party(s.round);
