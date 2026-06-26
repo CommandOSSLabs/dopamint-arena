@@ -23,7 +23,7 @@ export interface BackendArgs {
   // Ollama sidecar for the chat-v2 feature. Defaults off so existing tests and
   // small environments keep the current 1024/2048 task size.
   ollamaEnabled?: pulumi.Input<boolean>;
-  // Model to pull and proxy (e.g. qwen2.5:1.8b). Only used when ollamaEnabled.
+  // Model to pull and proxy (e.g. qwen2.5:1.5b). Only used when ollamaEnabled.
   ollamaModel?: pulumi.Input<string>;
   // Tag of the ollama/ollama image to run as the sidecar.
   ollamaImageTag?: pulumi.Input<string>;
@@ -44,7 +44,7 @@ function makeContainerDefinitions(args: BackendArgs): pulumi.Output<string> {
     args.corsAllowedOrigins ?? undefined,
   );
   const ollamaEnabled = pulumi.output(args.ollamaEnabled ?? false);
-  const ollamaModel = pulumi.output(args.ollamaModel ?? "qwen2.5:1.8b");
+  const ollamaModel = pulumi.output(args.ollamaModel ?? "qwen2.5:1.5b");
   const ollamaImageTag = pulumi.output(args.ollamaImageTag ?? "0.6.2");
   // pulumi.all's tuple overloads stop at 8 elements; bundling the ollama trio
   // into one output keeps the outer all an 8-tuple, so it stays heterogeneously

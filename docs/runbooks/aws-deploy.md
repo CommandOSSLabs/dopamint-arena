@@ -75,8 +75,8 @@ cd infra
 pulumi stack select dev
 # Enable/disable the sidecar (default: true)
 pulumi config set dopamint:ollama-enabled true
-# Model pulled and proxied by the backend (default: qwen2.5:1.8b)
-pulumi config set dopamint:ollama-model qwen2.5:1.8b
+# Model pulled and proxied by the backend (default: qwen2.5:1.5b)
+pulumi config set dopamint:ollama-model qwen2.5:1.5b
 # Sidecar image tag (default: 0.6.2)
 pulumi config set dopamint:ollama-image-tag 0.6.2
 pulumi up -y
