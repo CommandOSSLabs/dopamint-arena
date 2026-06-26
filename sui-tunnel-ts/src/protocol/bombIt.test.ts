@@ -362,6 +362,63 @@ test("a hunter-bot match drops bombs and destroys crates", () => {
   );
 });
 
+test("self-play bots survive their own bombs and play cagier than the old suicide hunter", () => {
+  // Runs the watched bot-vs-bot self-play to its natural end and attributes each death to the bomb
+  // that caused it. The old hunter bot died to its OWN bomb ~80% of the time and ended duels in
+  // ~190 ticks (a broken escape under the alternating-tick cadence + a random flee). A cagey
+  // survivor must (a) make self-kills a minority of deaths and (b) survive far longer per duel.
+  const DUELS = 150;
+  let resolved = 0;
+  let totalTicks = 0;
+  let selfKills = 0;
+  let oppKills = 0;
+  for (let g = 0; g < DUELS; g++) {
+    const p = new BombItProtocol();
+    let s = p.initialState({
+      tunnelId: `survive:${g}`,
+      initialBalances: { a: 1000n, b: 1000n },
+    });
+    const rngA = mulberry32ForTest(0x5000 + g);
+    const rngB = mulberry32ForTest(0x9000 + g);
+    while (!p.isTerminal(s)) {
+      const by = s.tick % 2n === 0n ? "A" : "B";
+      const m = p.randomMove(s, by, by === "A" ? rngA : rngB) as BombItMove;
+      // Cells each about-to-detonate bomb will cover, keyed by owner — for death attribution.
+      const blastByOwner = new Map<string, Set<number>>();
+      for (const b of s.bombs)
+        if (b.fuse <= 1)
+          blastByOwner.set(
+            b.owner,
+            new Set(blastCellsFor(s.grid, { ...b, fuse: 0 }))
+          );
+      const before = [s.players[0].alive, s.players[1].alive];
+      s = p.applyMove(s, m, by);
+      for (let i = 0; i < 2; i++) {
+        if (before[i] && !s.players[i].alive) {
+          const who = i === 0 ? "A" : "B";
+          const cell = idx(s.players[i].row, s.players[i].col);
+          if (blastByOwner.get(who)?.has(cell)) selfKills++;
+          else oppKills++;
+        }
+      }
+    }
+    if (!s.players[0].alive || !s.players[1].alive) {
+      resolved++;
+      totalTicks += Number(s.tick);
+    }
+  }
+  const totalKills = selfKills + oppKills;
+  assert.ok(
+    totalKills === 0 || selfKills / totalKills < 0.35,
+    `self-kills should be a minority of deaths, got ${selfKills}/${totalKills}`
+  );
+  const avgTicks = resolved ? totalTicks / resolved : 0;
+  assert.ok(
+    avgTicks > 400,
+    `cagey duels should far outlast the old ~190-tick suicide bot, avg=${avgTicks.toFixed(0)}`
+  );
+});
+
 // --- local test helpers ---
 function spawnAt(row: number, col: number) {
   return { row, col, alive: true };

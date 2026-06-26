@@ -93,7 +93,7 @@ export function MobileArena({
     <div className="bg-dot-grid flex h-full min-h-0 flex-col">
       <div className="shrink-0 px-4 pt-4 pb-1">
         <span className="wal-eyebrow text-muted-foreground">
-          Dopamint · {workspace}
+          MillionTPS · {workspace}
         </span>
         <h1 className="wal-display text-xl">
           {workspace === "games" ? "Pick a game" : WORKSPACE_LABEL[workspace]}

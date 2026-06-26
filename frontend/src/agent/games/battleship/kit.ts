@@ -2,6 +2,7 @@ import type { Party } from "sui-tunnel-ts/protocol/Protocol";
 import { otherParty } from "sui-tunnel-ts/protocol/Protocol";
 import {
   BattleshipProtocol,
+  battleshipMoveCodec,
   type BattleshipState,
   type BattleshipMove,
 } from "@/games/battleship/protocol/battleship";
@@ -90,6 +91,7 @@ export function createBattleshipKit(
   return {
     id: "battleship",
     protocol,
+    moveCodec: battleshipMoveCodec,
     stateHash: (state) => defaultStateHash(protocol, state),
     createBot: (seat: Party, ctx: BotContext) =>
       new BattleshipBot(seat, ctx, config),

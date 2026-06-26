@@ -635,7 +635,7 @@ export function useCaroBotGame(
           address: bots.x.address,
           time: new Date().toLocaleTimeString("en-GB"),
           bot: bots.x.address,
-          type: "Settle",
+          type: "End",
           status: "Success",
           amount: "",
         });

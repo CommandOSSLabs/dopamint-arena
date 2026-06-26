@@ -6,7 +6,11 @@
  * coords), so it needs no (de)serializer. No hidden secret — the wall is public.
  */
 import type { ResumeAdapter } from "@/pvp/resumeSession";
-import type { PvpCanvasState, PvpPaintMove } from "./pvpProtocol";
+import type { JsonValue } from "@/pvp/resume";
+import type {
+  PvpCanvasState,
+  PvpPaintMove,
+} from "sui-tunnel-ts/protocol/worldCanvasPvp";
 
 const toHex = (b: Uint8Array): string =>
   Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");

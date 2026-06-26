@@ -793,7 +793,7 @@ export function useBlackjackBot(): BlackjackBotGame {
           address: bots.a.address,
           time: new Date().toLocaleTimeString("en-GB"),
           bot: bots.a.address,
-          type: "Settle",
+          type: "End",
           status: "Success",
           amount: "",
         });

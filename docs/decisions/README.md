@@ -52,3 +52,8 @@ _why_ survives after the people involved have moved on.
 - [0014](0014-bigint-wire-boundary.md) — bigint wire boundary: balances/nonces/timestamps
   are native `bigint` end-to-end; `stringifyWithBigint`/`parseWithBigint` in the transport
   is the single JSON boundary. Adapters and peer-message constructors must not strip.
+- [0014](0014-enoki-sponsor-with-settler-fallback.md) — Enoki sponsored
+  transactions as the primary gas source with the settler wallet as fallback:
+  validate-first, `provider`-tagged response, stateless two-call Enoki execute,
+  settler path unchanged. Refines ADR-0009.
+

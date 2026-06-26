@@ -5,7 +5,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
-import { PALETTE, WC, FONT_DISPLAY, FONT_MONO, shortAddress } from "./tokens";
+import { PALETTE, WC, FONT_MONO, shortAddress } from "./tokens";
 import type { PainterInfo } from "../useWorldCanvasOnchain";
 
 /** The three lean tools: freehand draw, eraser (paints white), and pan/hand. */
@@ -51,6 +51,7 @@ export function FloatingToolbar({
 }) {
   return (
     <div
+      className="sketch-stroke sketch-panel"
       style={stacked ? { ...islandStyle, ...islandStackedStyle } : islandStyle}
     >
       <div style={toolGroupStyle}>
@@ -112,41 +113,121 @@ export function FloatingToolbar({
 
       {!collapse && <Divider />}
 
-      <div style={brushGroupStyle}>
-        {SIZES.map((n) => {
-          const on = brushSize === n;
-          return (
-            <button
-              key={n}
-              type="button"
-              title={`Brush ${n}×${n}`}
-              aria-label={`Brush size ${n}`}
-              aria-pressed={on}
-              onClick={() => onBrushSize(n)}
-              style={{
-                width: 28,
-                height: 28,
-                borderRadius: 0,
-                display: "grid",
-                placeItems: "center",
-                cursor: "pointer",
-                border: "none",
-                background: on ? WC.accentFill : "transparent",
-              }}
-            >
-              <span
+      {/* Wide: the three brush dots inline. Narrow: one current-size dot + popover, so the
+          toolbar stays a single compact row (leaving the wall visible) — matching the palette. */}
+      {collapse ? (
+        <BrushSizePopover brushSize={brushSize} onBrushSize={onBrushSize} />
+      ) : (
+        <div style={brushGroupStyle}>
+          {SIZES.map((n) => {
+            const on = brushSize === n;
+            return (
+              <button
+                key={n}
+                type="button"
+                title={`Brush ${n}×${n}`}
+                aria-label={`Brush size ${n}`}
+                aria-pressed={on}
+                onClick={() => onBrushSize(n)}
+                className={`sketch-btn ${on ? "sketch-btn--go" : "sketch-btn--ghost"}`}
                 style={{
-                  display: "block",
-                  width: 4 + n * 3,
-                  height: 4 + n * 3,
-                  borderRadius: "50%",
-                  background: on ? WC.accent : WC.muted,
+                  width: 30,
+                  height: 30,
+                  padding: 0,
+                  display: "grid",
+                  placeItems: "center",
                 }}
-              />
-            </button>
-          );
-        })}
-      </div>
+              >
+                <span
+                  style={{
+                    display: "block",
+                    width: 4 + n * 3,
+                    height: 4 + n * 3,
+                    borderRadius: "50%",
+                    background: on
+                      ? "var(--sketch-accent)"
+                      : "var(--sketch-ink-soft)",
+                  }}
+                />
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Narrow-width brush control: one current-size dot that opens a popover of the three
+ *  sizes — the {@link ColorPalettePopover} sibling for brush size, so the collapsed toolbar
+ *  stays one row. */
+function BrushSizePopover({
+  brushSize,
+  onBrushSize,
+}: {
+  brushSize: number;
+  onBrushSize: (n: number) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const dot = (n: number, on: boolean) => (
+    <span
+      style={{
+        display: "block",
+        width: 4 + n * 3,
+        height: 4 + n * 3,
+        borderRadius: "50%",
+        background: on ? "var(--sketch-accent)" : "var(--sketch-ink-soft)",
+      }}
+    />
+  );
+  return (
+    <div style={{ position: "relative", display: "flex" }}>
+      <button
+        type="button"
+        title="Brush size"
+        aria-label="Brush size"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+        className="sketch-btn sketch-btn--ghost"
+        style={{
+          width: 30,
+          height: 30,
+          padding: 0,
+          display: "grid",
+          placeItems: "center",
+        }}
+      >
+        {dot(brushSize, true)}
+      </button>
+      {open && (
+        <>
+          <div style={popoverBackdropStyle} onClick={() => setOpen(false)} />
+          <div style={popoverStyle}>
+            {SIZES.map((n) => (
+              <button
+                key={n}
+                type="button"
+                title={`Brush ${n}×${n}`}
+                aria-label={`Brush size ${n}`}
+                onClick={() => {
+                  onBrushSize(n);
+                  setOpen(false);
+                }}
+                className={`sketch-btn ${brushSize === n ? "sketch-btn--go" : "sketch-btn--ghost"}`}
+                style={{
+                  width: 30,
+                  height: 30,
+                  padding: 0,
+                  display: "grid",
+                  placeItems: "center",
+                }}
+              >
+                {dot(n, brushSize === n)}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -195,7 +276,7 @@ function ColorPalettePopover({
       {open && (
         <>
           <div style={popoverBackdropStyle} onClick={() => setOpen(false)} />
-          <div style={popoverStyle}>
+          <div className="sketch-stroke sketch-panel" style={popoverStyle}>
             {SWATCHES.map((idx) => (
               <button
                 key={idx}
@@ -236,6 +317,9 @@ export function ArenaControl({
   tps,
   onToggleAuto,
   onViewNext,
+  game,
+  movesThisGame,
+  movesPerGame,
 }: {
   /** True = both seats bot-driven (watch). False = you author seat A vs the seat-B bot. */
   auto: boolean;
@@ -245,11 +329,24 @@ export function ArenaControl({
   onToggleAuto: () => void;
   /** Cycle the camera to the next live seat bot (engine.viewNextAgent). */
   onViewNext: () => void;
+  /** Current bounded-game number (engine.game). */
+  game: number;
+  /** Co-signed moves this game (engine.movesThisGame). */
+  movesThisGame: number;
+  /** Per-game co-signed-move cap (engine.movesPerGame). */
+  movesPerGame: number;
 }) {
   return (
     <div style={autoWrapStyle}>
       <AutoToggle auto={auto} onToggleAuto={onToggleAuto} />
-      <LiveReadout auto={auto} tps={tps} onViewNext={onViewNext} />
+      <LiveReadout
+        auto={auto}
+        tps={tps}
+        onViewNext={onViewNext}
+        game={game}
+        movesThisGame={movesThisGame}
+        movesPerGame={movesPerGame}
+      />
     </div>
   );
 }
@@ -277,11 +374,12 @@ export function AutoToggle({
           ? "Two bots are co-painting — click to take the wheel (paint seat A)"
           : "You're painting seat A — click to hand back to the bots (watch)"
       }
+      className="sketch-stroke sketch-panel"
       style={autoToggleStyle}
     >
       <span style={autoToggleLabelStyle}>
         <BrushIcon size={14} />
-        {auto ? "Auto · watch" : "You paint"}
+        {auto ? "Auto" : "Draw"}
       </span>
       <span
         style={{
@@ -306,44 +404,53 @@ export function LiveReadout({
   auto,
   tps,
   onViewNext,
+  game,
+  movesThisGame,
+  movesPerGame,
   centered = false,
+  compact = false,
 }: {
-  auto: boolean;
+  auto?: boolean;
   tps: number;
   onViewNext: () => void;
+  /** Current bounded-game number (the wall runs as discrete MOVES_PER_GAME games). */
+  game: number;
+  /** Co-signed moves on the current tunnel since the last game boundary. */
+  movesThisGame: number;
+  /** Per-game co-signed-move cap (the bound at which the canvas wipes for a new game). */
+  movesPerGame: number;
   /** Center the contents (narrow stacked layout) instead of right-aligning them. */
   centered?: boolean;
+  /** Drop the Game/progress detail (keep TPS + View) so the row fits at narrow widths. */
+  compact?: boolean;
 }) {
   return (
     <div
+      className="sketch-stroke sketch-panel"
       style={
         centered ? { ...readoutStyle, justifyContent: "center" } : readoutStyle
       }
     >
       <LiveDot />
-      <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
-        {auto ? (
-          <>
-            <SeatDot tint={TINT_BOT_A} /> Bot A
-            <span style={{ color: WC.muted, margin: "0 1px" }}>vs</span>
-            <SeatDot tint={WC.seatB} /> Bot B
-          </>
-        ) : (
-          <>
-            <SeatDot tint={WC.seatA} /> You
-            <span style={{ color: WC.muted, margin: "0 1px" }}>vs</span>
-            <SeatDot tint={WC.seatB} /> Bot B
-          </>
-        )}
-      </span>
-      <span style={{ color: WC.muted }}>·</span>
       <span style={{ color: WC.text }}>{Math.round(tps)} TPS</span>
+      {/* Bounded-game progress: which game + how far into its MOVES_PER_GAME cap (the canvas
+          wipes at the cap and a new game starts) — like Blackjack "Round X" / Battleship "Game N".
+          Dropped at narrow widths (`compact`) so the row stays one tidy line. */}
+      {!compact && (
+        <>
+          <span style={{ color: WC.muted }}>·</span>
+          <span style={{ color: WC.text }}>
+            Game {game} · {movesThisGame.toLocaleString("en-US")} /{" "}
+            {movesPerGame.toLocaleString("en-US")}
+          </span>
+        </>
+      )}
       <span style={readoutDividerStyle} />
       <button
         type="button"
         onClick={onViewNext}
         title="Jump the camera to the next bot"
-        style={pillButtonStyle}
+        className="sketch-btn sketch-btn--ghost"
       >
         View
       </button>
@@ -360,25 +467,67 @@ export function LiveReadout({
  */
 export function MostPainted({
   painters,
+  tps,
+  auto,
+  onViewPainter,
 }: {
   /** Per-painter tallies, keyed by address (stable identity, mutated in place). */
   painters: ReadonlyMap<string, PainterInfo>;
+  /** Live co-signed throughput (the TPS dial) — shown in the header. */
+  tps: number;
+  /** Auto on → seat A is bot-driven ("Bot A"); off → you drive it ("You"). */
+  auto: boolean;
+  /** Jump the camera to a painter's latest cell (engine.focusOnAgent). */
+  onViewPainter: (address: string) => void;
 }) {
-  const top = useTopPainters(painters, 5);
-  if (top.length === 0) return null;
+  const top = useTopPainters(painters, 8);
+  // The wall is a 2-party tunnel, so the board is exactly the two SEATS — never a 3rd row.
+  // Seat A reflects whoever's driving it: YOU while Auto is off, the Bot-A autopilot while on
+  // (so taking the wheel shows "You vs Bot B", not a lost row). Seat B is always Bot B.
+  const human = top.find((p) => !p.isAgent);
+  const botA = top.find((p) => p.label === "Bot A");
+  const botB = top.find((p) => p.label === "Bot B");
+  // Seat A is ONE seat: its tally ACCUMULATES your strokes + the Bot-A autopilot's (you and
+  // the bot share the seat over time). The driver only sets the label/tint/View target —
+  // "You" while Auto is off, "Bot A" while on — so the count never resets when you toggle.
+  const seatADriver = auto ? (botA ?? human) : (human ?? botA);
+  const seatA: PainterInfo | undefined = seatADriver && {
+    ...seatADriver,
+    label: auto ? "Bot A" : "You",
+    cells: (human?.cells ?? 0) + (botA?.cells ?? 0),
+  };
+  const rows = [seatA, botB].filter((p): p is PainterInfo => Boolean(p));
   return (
-    <div style={mostPaintedStyle}>
-      <div style={mostPaintedHeaderStyle}>
+    <div className="sketch-stroke sketch-panel" style={mostPaintedStyle}>
+      <div
+        className="sketch-eyebrow"
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          marginBottom: 3,
+        }}
+      >
         <BrushIcon size={12} />
         Most painted
+        <span style={{ flex: 1 }} />
+        <LiveDot />
+        <span style={{ color: WC.text }}>{Math.round(tps)} TPS</span>
       </div>
-      {top.map((p) => (
-        <div key={p.address} style={leaderRowStyle}>
+      {rows.map((p) => (
+        <button
+          key={p.address}
+          type="button"
+          onClick={() => onViewPainter(p.address)}
+          title={`Jump to where ${p.label} is painting`}
+          className="sketch-btn sketch-btn--ghost"
+          style={{ ...leaderRowStyle, width: "100%", cursor: "pointer" }}
+        >
           <SeatDot tint={p.tint} />
           <span style={leaderLabelStyle}>{p.label}</span>
           <span style={leaderAddrStyle}>{shortAddress(p.address)}</span>
           <span style={leaderCountStyle}>{formatCount(p.cells)}</span>
-        </div>
+        </button>
       ))}
     </div>
   );
@@ -460,7 +609,6 @@ function ToolButton({
   onClick: () => void;
   children: ReactNode;
 }) {
-  const [hover, setHover] = useState(false);
   return (
     <button
       type="button"
@@ -468,23 +616,14 @@ function ToolButton({
       aria-label={label}
       aria-pressed={active}
       onClick={onClick}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
+      className={`sketch-btn ${active ? "sketch-btn--go" : "sketch-btn--ghost"}`}
       style={{
         width: 34,
         height: 34,
-        borderRadius: 0,
+        padding: 0,
         display: "grid",
         placeItems: "center",
-        cursor: "pointer",
-        border: "none",
-        color: active ? WC.accent : hover ? WC.text : WC.muted,
-        background: active
-          ? WC.accentFill
-          : hover
-            ? WC.softFill
-            : "transparent",
-        transition: "background .1s, color .1s",
+        color: active ? "var(--sketch-accent)" : "var(--sketch-ink)",
       }}
     >
       {children}
@@ -520,14 +659,7 @@ const islandStyle: CSSProperties = {
   gap: 6,
   rowGap: 6,
   maxWidth: "calc(100% - 16px)",
-  padding: 6,
-  borderRadius: 0,
-  background: WC.toolbar,
-  border: `1px solid ${WC.toolbarBorder}`,
-  boxShadow: WC.glow,
-  backdropFilter: "blur(12px)",
-  WebkitBackdropFilter: "blur(12px)",
-  fontFamily: FONT_DISPLAY,
+  padding: 8,
 };
 
 /** Stacked override: drop the absolute float so the parent's top bar lays the island out
@@ -578,7 +710,6 @@ const autoWrapStyle: CSSProperties = {
   alignItems: "flex-end",
   gap: 8,
   maxWidth: "calc(100% - 28px)",
-  fontFamily: FONT_DISPLAY,
 };
 
 /** The collapsed current-color/background swatch shown in the narrow toolbar — tapping it
@@ -621,12 +752,6 @@ const popoverStyle: CSSProperties = {
   gridTemplateColumns: "repeat(3, auto)",
   gap: 6,
   padding: 8,
-  borderRadius: 0,
-  background: WC.toolbar,
-  border: `1px solid ${WC.toolbarBorder}`,
-  boxShadow: WC.glow,
-  backdropFilter: "blur(12px)",
-  WebkitBackdropFilter: "blur(12px)",
 };
 
 /** The single Auto toggle pill (faded glass): a label + a sliding switch — "take the
@@ -634,18 +759,17 @@ const popoverStyle: CSSProperties = {
 const autoToggleStyle: CSSProperties = {
   display: "flex",
   alignItems: "center",
-  gap: 10,
-  height: 40,
-  maxWidth: "100%",
-  padding: "0 12px",
-  borderRadius: 0,
-  border: `1px solid ${WC.glassBorder}`,
+  // A compact corner pill: label ("Auto") + switch, sized to content (NOT stretched), about
+  // the toolbar's button height so it reads as a small control, not a wide box.
+  gap: 8,
+  height: 34,
+  padding: "0 10px",
   cursor: "pointer",
-  background: WC.glass,
-  boxShadow: WC.glow,
-  backdropFilter: "blur(8px)",
-  WebkitBackdropFilter: "blur(8px)",
-  fontFamily: FONT_DISPLAY,
+  border: "none",
+  background: "transparent",
+  // Always catch clicks even when a click-through (pointer-events:none) bar wraps it —
+  // otherwise the toggle inherits `none` and you can't flip Auto off to draw.
+  pointerEvents: "auto",
 };
 
 const autoToggleLabelStyle: CSSProperties = {
@@ -690,17 +814,10 @@ const readoutStyle: CSSProperties = {
   rowGap: 4,
   minHeight: 36,
   maxWidth: "100%",
-  padding: "5px 12px",
-  borderRadius: 0,
+  padding: "5px 14px",
   fontSize: 12.5,
   fontWeight: 700,
   color: WC.text,
-  fontFamily: FONT_MONO,
-  background: WC.glass,
-  border: `1px solid ${WC.glassBorder}`,
-  boxShadow: WC.glow,
-  backdropFilter: "blur(8px)",
-  WebkitBackdropFilter: "blur(8px)",
 };
 
 const readoutDividerStyle: CSSProperties = {
@@ -711,20 +828,8 @@ const readoutDividerStyle: CSSProperties = {
   flex: "0 0 auto",
 };
 
-const pillButtonStyle: CSSProperties = {
-  height: 26,
-  padding: "0 10px",
-  borderRadius: 0,
-  border: `1px solid ${WC.glassBorder}`,
-  cursor: "pointer",
-  fontFamily: "inherit",
-  fontSize: 12,
-  fontWeight: 700,
-  color: WC.text,
-  background: WC.softFill,
-};
-
-/** Bottom-right "most painted" leaderboard card (faded glass, lightweight). */
+/** Bottom-right "most painted" leaderboard card — positioning only; the ink-stroke
+ *  frame + Gochi Hand text come from the `.sketch-stroke .sketch-panel` skin. */
 const mostPaintedStyle: CSSProperties = {
   position: "absolute",
   right: 14,
@@ -735,28 +840,7 @@ const mostPaintedStyle: CSSProperties = {
   display: "flex",
   flexDirection: "column",
   gap: 3,
-  padding: "9px 11px",
-  borderRadius: 0,
-  background: WC.glass,
-  border: `1px solid ${WC.glassBorder}`,
-  boxShadow: WC.glow,
-  backdropFilter: "blur(8px)",
-  WebkitBackdropFilter: "blur(8px)",
-  fontFamily: FONT_DISPLAY,
-};
-
-// Arena `.wal-eyebrow` language: mono, uppercase, wide tracking, muted ink.
-const mostPaintedHeaderStyle: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 6,
-  marginBottom: 3,
-  fontSize: 10,
-  fontWeight: 700,
-  letterSpacing: ".14em",
-  textTransform: "uppercase",
-  color: WC.muted,
-  fontFamily: FONT_MONO,
+  padding: "11px 13px",
 };
 
 const leaderRowStyle: CSSProperties = {

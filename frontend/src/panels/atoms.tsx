@@ -92,6 +92,26 @@ export function HashLink({
   );
 }
 
+/** Pulsing "LIVE" indicator: the backend SSE feed is connected and pushing frames. */
+export function LiveBadge() {
+  return (
+    <span className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-success">
+      <span className="size-1.5 animate-pulse rounded-full bg-success" />
+      LIVE
+    </span>
+  );
+}
+
+/** Muted "Offline" indicator: no live backend frame yet (connecting or backend down). */
+export function OfflineBadge() {
+  return (
+    <span className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+      <span className="size-1.5 rounded-full bg-muted-foreground" />
+      Offline
+    </span>
+  );
+}
+
 /** Signed currency string: success for credits, destructive for debits. */
 export function Amount({ value }: { value: string }) {
   const negative = value.trim().startsWith("-");
