@@ -103,7 +103,7 @@ class MachineRuntime {
 
   private payerBot: GameBot<PaymentsState, PaymentMove> | null = null;
 
-  constructor(id: string, label: string) {
+  constructor(id: string, label: string, number: number) {
     this.id = id;
     this.label = label;
   }
@@ -219,7 +219,7 @@ class MachineRuntime {
         game: "Micro Payments",
         time: new Date().toLocaleTimeString("en-GB"),
         bot: "You",
-        type: "Opening",
+        type: "Start",
         status: "Success",
         amount: "",
       });
@@ -289,7 +289,7 @@ class MachineRuntime {
             address: deps.account.address,
             time,
             bot: deps.account.address,
-            type: "Settle",
+            type: "End",
             status: "Success",
             amount: "",
           });
@@ -298,7 +298,7 @@ class MachineRuntime {
             game: "Micro Payments",
             time,
             bot: "You",
-            type: "Settled",
+            type: "End",
             status: "Success",
             amount: "",
             digest: settleDigest,
@@ -496,7 +496,8 @@ class PaymentShopController {
     this.seq += 1;
     const runtime = new MachineRuntime(
       `machine-${Date.now()}-${this.seq}`,
-      `Random NFT #${this.seq}`,
+      `Machine #${this.seq}`,
+      this.seq,
     );
     this.machines = [runtime, ...this.machines];
     this.emit();

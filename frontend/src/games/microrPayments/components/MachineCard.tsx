@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useSuiClientContext } from "@mysten/dapp-kit";
 import { ExternalLink } from "lucide-react";
 import { suivisionTxUrl } from "@/lib/suivision";
@@ -93,6 +93,11 @@ function prizeHint(phase: MachinePhase, error?: string | null): string {
 
 export type MachineCardProps = {
   session: MachineSessionView;
+  isNewlyAdded?: boolean;
+  isPushing?: boolean;
+  listIndex?: number;
+  isLingering?: boolean;
+  removeAt?: number;
 };
 
 function TxLink({
@@ -117,15 +122,39 @@ function TxLink({
   );
 }
 
-export function MachineCard({ session }: MachineCardProps) {
+export function MachineCard({
+  session,
+  isNewlyAdded,
+  isPushing,
+  listIndex,
+  isLingering,
+  removeAt,
+}: MachineCardProps) {
   const { phase, error, tickCount, tickMax, tps, tier, reward, digest } =
     session;
   const { network } = useSuiClientContext();
   const [imageFailed, setImageFailed] = useState(false);
 
+  // Live countdown for cards that will be auto-removed after settle (shown only in running linger)
+  const [closeSecs, setCloseSecs] = useState<number | null>(null);
+  useEffect(() => {
+    if (!removeAt) {
+      setCloseSecs(null);
+      return;
+    }
+    const update = () => {
+      const left = Math.max(0, Math.ceil((removeAt - Date.now()) / 1000));
+      setCloseSecs(left);
+    };
+    update();
+    const id = setInterval(update, 180);
+    return () => clearInterval(id);
+  }, [removeAt]);
+
   const pct = tickMax > 0 ? Math.min(100, (tickCount / tickMax) * 100) : 0;
   const revealed = phase === "closed";
-  const showRewardImage = revealed && !!reward?.imageUrl && !imageFailed;
+  const showRewardImage =
+    (revealed || isLingering) && !!reward?.imageUrl && !imageFailed;
   const isStreaming = phase === "running";
   const isSettling = phase === "settling";
   const isNearComplete = (phase === "running" && pct >= 90) || isSettling;
@@ -138,13 +167,32 @@ export function MachineCard({ session }: MachineCardProps) {
       : "bg-[#eaf8ee] border-[#2f9e44]";
   const prizeBorderClass = "border-[3px]";
 
+  const rootClasses = [
+    "relative isolate min-w-0 rounded-[11px] p-[clamp(6px,2cqmin,12px)] flex flex-col h-full",
+    isNewlyAdded ? "pshop-card-enter" : "",
+    isPushing ? "pshop-domino-push" : "",
+    isLingering ? "pshop-linger" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
   return (
-    <article className="relative isolate min-w-0 rounded-[11px] p-[clamp(6px,2cqmin,12px)] flex flex-col">
+    <article
+      className={rootClasses}
+      style={
+        isPushing && typeof listIndex === "number"
+          ? { animationDelay: `${Math.min(listIndex, 14) * 23}ms` }
+          : undefined
+      }
+    >
       <span
         className={`${SKETCH_INK} -z-10 rounded-[11px] bg-[#fffefb] border-[#23221f] border-[2.5px]`}
       />
 
-      <header className="mb-1.5 flex items-center justify-end">
+      <header className="mb-1.5 flex items-center justify-between gap-2">
+        <span className="font-mono text-[clamp(10px,2.4cqmin,13px)] tabular-nums text-[rgba(35,34,31,0.42)]">
+          {session.label}
+        </span>
         <span
           className={`relative isolate inline-flex items-center gap-[0.35em] px-[clamp(6px,1.8cqmin,12px)] py-[clamp(1px,0.6cqmin,4px)] text-[clamp(9px,2.4cqmin,13px)] leading-none tracking-wide uppercase ${status.text}`}
         >
@@ -161,7 +209,7 @@ export function MachineCard({ session }: MachineCardProps) {
       <div
         className={`relative isolate mb-1 rounded-[10px] px-[clamp(8px,2.4cqmin,16px)] py-[clamp(6px,2cqmin,14px)] text-center 
         ${isNearComplete ? "pshop-complete-blink" : ""}
-        min-h-[10rem]
+        min-h-[13.375rem]
         flex flex-col flex-1 justify-center
       `}
       >
@@ -173,7 +221,7 @@ export function MachineCard({ session }: MachineCardProps) {
           <img
             src={reward.imageUrl}
             alt={reward.title}
-            className="mx-auto h-[clamp(4.5rem,20cqmin,7.5rem)] w-[clamp(4.5rem,20cqmin,7.5rem)] rounded-lg object-cover"
+            className={`mx-auto rounded-lg object-cover transition-all ${isLingering ? "h-[clamp(5.1rem,23cqmin,8.2rem)] w-[clamp(5.1rem,23cqmin,8.2rem)] ring-1 ring-[#2f9e44]/60" : "h-[clamp(4.5rem,20cqmin,7.5rem)] w-[clamp(4.5rem,20cqmin,7.5rem)]"}`}
             loading="lazy"
             onError={() => setImageFailed(true)}
           />
@@ -229,7 +277,7 @@ export function MachineCard({ session }: MachineCardProps) {
         <div className="mb-2 grid grid-cols-3 gap-1.5">
           {(
             [
-              ["Ticks", String(tickCount)],
+              ["Paid", `${tickCount}`],
               ["TPS", phase === "running" ? formatTps(tps) : "—"],
               ["Unit", formatMicroUnit()],
             ] as const
@@ -250,6 +298,12 @@ export function MachineCard({ session }: MachineCardProps) {
             </div>
           ))}
         </div>
+
+        {closeSecs != null && closeSecs > 0 ? (
+          <div className="mt-0.5 mb-1 text-center text-[clamp(8px,2.1cqmin,11px)] tracking-[0.5px] text-[#e8920c]">
+            will automatically close in {closeSecs}s
+          </div>
+        ) : null}
       </div>
     </article>
   );

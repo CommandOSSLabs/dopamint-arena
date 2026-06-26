@@ -26,8 +26,14 @@ export interface SponsorSuiClient {
 }
 
 interface SponsorResponse {
+  /** Which gas source sponsored the tx (ADR-0014) — selects the execution path below. */
+  provider: "enoki" | "settler";
+  /** Base64 of the sponsored tx the user signs (settler-wrapped, or Enoki's sponsored bytes). */
   txBytes: string;
-  sponsorSignature: string;
+  /** Settler only: the settler's gas signature, submitted alongside the user's sender signature. */
+  sponsorSignature?: string;
+  /** Enoki only: the sponsored-tx handle, redeemed via POST /v1/sponsor/execute with the signature. */
+  digest?: string;
 }
 
 /**
@@ -83,8 +89,9 @@ async function runSponsoredFlow(opts: {
     const detail = await res.text().catch(() => "");
     throw new Error(`sponsor request failed (${res.status}): ${detail}`);
   }
-  const { txBytes, sponsorSignature } = (await res.json()) as SponsorResponse;
-  // 3) The sender co-signs the settler-returned bytes (sender authorization).
+  const { provider, txBytes, sponsorSignature, digest } =
+    (await res.json()) as SponsorResponse;
+  // 3) The sender signs the sponsor-returned bytes (sender authorization). Same for both providers.
   let userSignature: string;
   try {
     userSignature = await opts.signSponsoredBytes(txBytes);
@@ -93,7 +100,36 @@ async function runSponsoredFlow(opts: {
       `sponsor: sign sponsored bytes failed: ${String((e as Error)?.message ?? e)}`,
     );
   }
-  // 4) Submit with both sigs: the node verifies the sender and the gas owner (settler).
+  // 4) Execute — the two providers submit differently:
+  //  - enoki owns the gas AND executes: hand it our signature via /v1/sponsor/execute. We can NOT
+  //    fall back to the settler here — the signed bytes commit to Enoki's gas owner; the outer
+  //    withSponsorFallback (sender-pays, fresh tx) stays the last resort.
+  if (provider === "enoki") {
+    if (!digest) throw new Error("sponsor: enoki response missing digest");
+    let execRes: Response;
+    try {
+      execRes = await fetch(`${root}/v1/sponsor/execute`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ digest, signature: userSignature }),
+      });
+    } catch (e) {
+      throw new Error(
+        `sponsor: enoki execute request failed: ${String((e as Error)?.message ?? e)}`,
+      );
+    }
+    if (!execRes.ok) {
+      const detail = await execRes.text().catch(() => "");
+      throw new Error(`enoki execute failed (${execRes.status}): ${detail}`);
+    }
+    const executed = (await execRes.json()) as { digest: string };
+    return { digest: executed.digest };
+  }
+
+  //  - settler: WE submit the bytes with BOTH sigs (sender + settler gas) to the node.
+  if (!sponsorSignature) {
+    throw new Error("sponsor: settler response missing sponsorSignature");
+  }
   let result: Awaited<ReturnType<SponsorSuiClient["executeTransactionBlock"]>>;
   try {
     result = await opts.client.executeTransactionBlock({
