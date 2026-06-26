@@ -243,6 +243,15 @@ function main(): void {
     console.log(HELP);
     return;
   }
+  if (argv.includes("--ablation")) {
+    import("./ablationRun")
+      .then((m) => m.runAblation(argv))
+      .catch((e: unknown) => {
+        console.error(String((e as Error)?.message ?? e));
+        process.exit(1);
+      });
+    return;
+  }
   const composeFile = new URL("../docker-compose.yml", import.meta.url).pathname;
   const plan = planRun(argv, composeFile, benchProject());
 

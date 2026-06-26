@@ -52,7 +52,7 @@ export function makeSeats(label: string, balances: { a: bigint; b: bigint }, cre
  * Uint8Arrays as `{ "__bytes__": "<hex>" }` so both survive JSON serialization
  * inside the frame envelope (needed by quantumPoker's commitment arrays).
  */
-const bigintSafeCodec: MoveCodec<unknown> = {
+export const bigintSafeCodec: MoveCodec<unknown> = {
   encode(m: unknown): unknown {
     return JSON.parse(
       JSON.stringify(m, (_k, v) => {
@@ -77,7 +77,7 @@ function countingTransport(t: Transport, onBytes: (n: number) => void): Transpor
   return { send: (f) => { onBytes(f.length); t.send(f); }, onFrame: (cb) => t.onFrame(cb) };
 }
 
-function proposeAndAwait(dt: DistributedTunnel<unknown, unknown>, move: unknown, ts: bigint): Promise<number> {
+export function proposeAndAwait(dt: DistributedTunnel<unknown, unknown>, move: unknown, ts: bigint): Promise<number> {
   const start = performance.now();
   return new Promise<number>((resolve, reject) => {
     let done = false;
