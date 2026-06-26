@@ -1,4 +1,4 @@
-# 0015 — MTPS token hardening (admin-only mint, coin_registry, NFT split)
+# 0015 — MTPS token hardening (admin-only mint, coin_registry)
 
 - **Status**: Accepted
 - **Date**: 2026-06-26
@@ -12,7 +12,7 @@ shared faucet holding the `TreasuryCap` with a fully permissionless `mint(amount
 `set_can_mint` kill switch, the deprecated `coin::create_currency`, and no burn. A contract review
 flagged this as a griefing/brick risk in a public demo: an unbounded permissionless mint can be
 driven to the u64 ceiling and brick the faucet; the kill switch is troll-accessible; the currency
-standard is deprecated; and a free-form `MtpsNFT` lived inside the coin contract.
+standard is deprecated; and a free-form `MtpsNFT` was bundled into the coin contract.
 
 We considered keeping a bounded public mint (a supply cap + per-call cap), but settled on a simpler,
 stronger answer: **the backend faucets each player the exact amount they need.** With no public
@@ -32,16 +32,14 @@ are follow-ups.)
 2. **`coin_registry` migration** (`new_currency_with_otw` + `finalize_and_delete_metadata_cap`,
    then a one-time post-publish `finalize_registration`), dropping the deprecated
    `coin::create_currency`.
-3. **NFT split into its own standalone `mtps_nft` package.** `mint_nft` is free and permissionless
-   (a mini-game can let players mint directly), but validates fields — non-empty title/image,
-   bounded lengths — so it isn't a free-form data dump. No fee, no `mtps` dependency: it's a
-   self-contained collectible package.
+3. **NFT dropped from the coin contract.** The `MtpsNFT` is removed entirely, leaving a
+   single-purpose coin package. If a collectible is needed later it ships as its own standalone
+   package — it does not belong in the token contract.
 
 ## Consequences
 
 - **Easier**: the u64 brick and mint abuse are structurally impossible (no public mint); metadata
-  uses the current standard; the coin contract is single-purpose; the NFT is an independent,
-  self-contained package.
+  uses the current standard; the coin contract is single-purpose.
 - **Committed / harder**: the backend must custody the `AdminCap` key and pay gas for faucet txs.
 - **Follow-ups (NOT in this change)**: the backend HTTP faucet endpoint (mints via `admin_mint`,
   rate-limited per address); the frontend swap from the sponsored in-line `mtps::mint` PTB to that

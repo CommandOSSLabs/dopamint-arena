@@ -1,8 +1,0 @@
-[package]
-name = "mtps_nft"
-edition = "2024"
-
-[dependencies]
-
-[addresses]
-mtps_nft = "0x0"

@@ -5,8 +5,7 @@
 /// exactly the amount they need (an off-chain HTTP faucet — see the backend). Because there is no
 /// public mint path, there is no griefing/abuse vector and no u64-ceiling brick risk, so the token
 /// needs no supply cap, per-call cap, or kill switch — the only authority is who holds the cap.
-/// Coin metadata is registered via the modern `coin_registry`. The collectible NFT lives in its
-/// own `mtps_nft` package.
+/// Coin metadata is registered via the modern `coin_registry`.
 module mtps::mtps {
     use sui::coin::{Self, Coin, TreasuryCap};
     use sui::coin_registry;
