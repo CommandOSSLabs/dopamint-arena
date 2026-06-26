@@ -122,9 +122,9 @@ mod tests {
         let _url = EnvGuard("OLLAMA_URL");
         let _model = EnvGuard("OLLAMA_MODEL");
         std::env::set_var("OLLAMA_URL", "http://ollama:11434");
-        std::env::set_var("OLLAMA_MODEL", "qwen2.5:1.8b");
+        std::env::set_var("OLLAMA_MODEL", "qwen2.5:1.5b");
         let c = Config::from_env().unwrap();
         assert_eq!(c.ollama_url.as_deref(), Some("http://ollama:11434"));
-        assert_eq!(c.ollama_model.as_deref(), Some("qwen2.5:1.8b"));
+        assert_eq!(c.ollama_model.as_deref(), Some("qwen2.5:1.5b"));
     }
 }
