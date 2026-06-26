@@ -21,7 +21,7 @@ impl Signer for LocalSigner {
         self.pk
     }
 
-    async fn sign(&self, msg: &[u8]) -> [u8; 64] {
+    fn sign(&self, msg: &[u8]) -> [u8; 64] {
         self.kp.sign(msg)
     }
 }
@@ -31,11 +31,11 @@ mod tests {
     use super::*;
     use tunnel_core::crypto::verify;
 
-    #[tokio::test]
-    async fn signs_a_verifiable_signature() {
+    #[test]
+    fn signs_a_verifiable_signature() {
         let secret: [u8; 32] = std::array::from_fn(|i| (i + 1) as u8);
         let signer = LocalSigner::from_secret(&secret);
-        let sig = signer.sign(b"hello").await;
+        let sig = signer.sign(b"hello");
         assert!(verify(&signer.public_key(), b"hello", &sig));
         assert!(!verify(&signer.public_key(), b"tampered", &sig));
     }

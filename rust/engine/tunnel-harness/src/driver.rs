@@ -35,7 +35,7 @@ impl<P: Protocol, Pol: Policy<P>, Ch: Channel, S: Signer> SeatDriver<P, Pol, Ch,
         opponent_pk: [u8; 32],
         ctx: TunnelContext,
     ) -> SeatDriver<P, Pol, Ch, S> {
-        let state = protocol.initial_state(&ctx).await;
+        let state = protocol.initial_state(&ctx);
         SeatDriver {
             protocol,
             policy,
@@ -85,12 +85,11 @@ impl<P: Protocol, Pol: Policy<P>, Ch: Channel, S: Signer> SeatDriver<P, Pol, Ch,
             if let Some(mv) = self.policy.plan_move(&self.state, self.seat, &ctx).await {
                 let next = self
                     .protocol
-                    .apply_move(&self.state, &mv, self.seat)
-                    .await?;
+                    .apply_move(&self.state, &mv, self.seat)?;
                 let nonce = self.nonce + 1;
                 let ts = now();
                 let (update, msg) = self.build_update(&next, nonce, ts);
-                let sig = self.signer.sign(&msg).await;
+                let sig = self.signer.sign(&msg);
                 let frame: Frame<P::Move> = Frame::Move(MoveFrame {
                     nonce,
                     by: self.seat.into(),
@@ -158,7 +157,7 @@ impl<P: Protocol, Pol: Policy<P>, Ch: Channel, S: Signer> SeatDriver<P, Pol, Ch,
         if m.nonce != self.nonce + 1 {
             return Err(HarnessError::Verification("nonce gap".into()));
         }
-        let next = self.protocol.apply_move(&self.state, &m.mv, by).await?;
+        let next = self.protocol.apply_move(&self.state, &m.mv, by)?;
         let bals = self.protocol.balances(&next);
         if bals.a != m.party_a_balance || bals.b != m.party_b_balance {
             return Err(HarnessError::Verification("frame balances mismatch".into()));
@@ -181,7 +180,7 @@ impl<P: Protocol, Pol: Policy<P>, Ch: Channel, S: Signer> SeatDriver<P, Pol, Ch,
         if !verify(&self.opponent_pk, &msg, &m.sig_proposer) {
             return Err(HarnessError::Verification("proposer sig failed".into()));
         }
-        let sig_responder = self.signer.sign(&msg).await;
+        let sig_responder = self.signer.sign(&msg);
         self.state = next;
         self.nonce = m.nonce;
         let ack: Frame<P::Move> = Frame::Ack(AckFrame {
