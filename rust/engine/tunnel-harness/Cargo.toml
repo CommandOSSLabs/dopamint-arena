@@ -8,9 +8,6 @@ publish.workspace = true
 
 [dependencies]
 tunnel-core = { path = "../tunnel-core" }
-tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-blake2.workspace = true
-ed25519-dalek.workspace = true
 hex.workspace = true

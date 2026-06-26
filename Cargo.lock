@@ -7375,12 +7375,9 @@ dependencies = [
 name = "tunnel-harness"
 version = "0.1.0"
 dependencies = [
- "blake2",
- "ed25519-dalek",
  "hex",
  "serde",
  "serde_json",
- "tokio",
  "tunnel-core",
 ]
 
