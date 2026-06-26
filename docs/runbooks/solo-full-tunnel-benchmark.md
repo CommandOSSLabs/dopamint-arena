@@ -100,7 +100,38 @@ STEPS_PER_S=4
 | `settle failed: 409 tunnel already closed on-chain` | Harmless duplicate settle after a terminal state. The script now skips already-settled tunnels. | No action needed. |
 | Low `STEPS_PER_S` | Each tunnel lifecycle includes two on-chain transactions. | Increase `durationMs` so more off-chain moves amortize the open/settle cost, or fan out across cores. |
 
+## High-TPS variant: batch lifecycle
+
+For peak off-chain TPS, use `frontend/src/bench/solo-batch-lifecycle.ts`. It opens a pool of tunnels in **one** on-chain PTB, runs every tunnel in its own async play loop, then settles sequentially.
+
+```bash
+cd frontend
+export BACKEND_URL=https://relay-dev.millionstps.io
+export SUI_FUNDER_KEY=...
+
+npx vite-node --config vite.bench.config.ts src/bench/solo-batch-lifecycle.ts -- <gameId> <mode> <durationMs> <tunnelCount> <seed>
+```
+
+Example (blackjack, full crypto, 10s play, 100 tunnels):
+
+```bash
+npx vite-node --config vite.bench.config.ts src/bench/solo-batch-lifecycle.ts -- blackjack full 10000 100 1
+```
+
+Observed on this setup:
+
+| Tunnels | Mode | Duration | Play TPS |
+|---------|------|----------|----------|
+| 10 | full | 5s | ~68 |
+| 50 | full | 10s | ~143 |
+| 100 | full | 10s | ~289 |
+
+Higher tunnel counts raise single-process TPS until CPU is saturated. The practical cap here is the funder's SUI gas balance: a 200-tunnel open exhausted the test funder.
+
+To go higher, fan out multiple processes with distinct seeds (each opens its own tunnel pool).
+
 ## Files involved
 
-- `frontend/src/bench/solo-full-tunnel.ts` — benchmark driver.
+- `frontend/src/bench/solo-full-tunnel.ts` — single-tunnel lifecycle benchmark.
+- `frontend/src/bench/solo-batch-lifecycle.ts` — high-TPS batch benchmark.
 - `frontend/vite.bench.config.ts` — Vite config for `vite-node`; keeps the v1/v2 SDK shims but does **not** stub `node:crypto`, so the SDK can use the native crypto backend in Node.
