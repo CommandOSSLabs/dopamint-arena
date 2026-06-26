@@ -1,0 +1,16 @@
+[package]
+name = "tunnel-payments"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+tunnel-core = { path = "../../crates/tunnel-core" }
+tunnel-harness = { path = "../../crates/tunnel-harness" }
+serde = { workspace = true }
+
+[dev-dependencies]
+hex.workspace = true
+tokio = { workspace = true }
