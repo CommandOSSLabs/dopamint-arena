@@ -109,13 +109,24 @@ cd frontend
 export BACKEND_URL=https://relay-dev.millionstps.io
 export SUI_FUNDER_KEY=...
 
-npx vite-node --config vite.bench.config.ts src/bench/solo-batch-lifecycle.ts -- <gameId> <mode> <durationMs> <tunnelCount> <seed>
+npx vite-node --config vite.bench.config.ts src/bench/solo-batch-lifecycle.ts -- <gameId> <mode> <durationMs> <tunnelCount> <seed> [--skip-settle] [--duration=<n>[smh]]
 ```
+
+Flags:
+
+- `--skip-settle` — skip the on-chain settle/close phase. Use this to keep the benchmark running for a long time without spending gas on closes.
+- `--duration=<n>[smh]` — override the positional duration. e.g. `--duration=30s`, `--duration=5m`, `--duration=1h`.
 
 Example (blackjack, full crypto, 10s play, 100 tunnels):
 
 ```bash
 npx vite-node --config vite.bench.config.ts src/bench/solo-batch-lifecycle.ts -- blackjack full 10000 100 1
+```
+
+Long-running play without closing tunnels:
+
+```bash
+npx vite-node --config vite.bench.config.ts src/bench/solo-batch-lifecycle.ts -- blackjack full 0 100 1 --skip-settle --duration=30m
 ```
 
 Observed on this setup:

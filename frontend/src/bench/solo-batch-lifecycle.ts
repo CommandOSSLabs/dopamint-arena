@@ -19,7 +19,13 @@
  *   MTPS_FAUCET_ID        — MTPS faucet object (testnet default)
  *   MTPS_COIN_TYPE        — MTPS coin type (testnet default)
  *
- * Usage: npx vite-node --config vite.bench.config.ts src/bench/solo-batch-lifecycle.ts -- <gameId> <mode> <durationMs> <tunnelCount> <seed>
+ * Usage:
+ *   npx vite-node --config vite.bench.config.ts src/bench/solo-batch-lifecycle.ts -- \
+ *     <gameId> <mode> <durationMs> <tunnelCount> <seed> [--skip-settle] [--duration=<ms|s|m|h>]
+ *
+ * Flags:
+ *   --skip-settle           Skip the on-chain settle/close phase.
+ *   --duration=<n>[smh]     Override the positional duration. e.g. --duration=30s, --duration=5m, --duration=1h
  */
 import { GAME_KITS, type BotContext, type GameId } from "@/agent/gameKit";
 import type { Party } from "sui-tunnel-ts/protocol/Protocol";
@@ -42,11 +48,56 @@ import { decodeSuiPrivateKey } from "@mysten/sui/cryptography";
 import { createControlPlaneClient } from "@/backend/controlPlane";
 import { coSignedToSettleBody } from "@/backend/settleRequest";
 
-const gameId = (process.argv[2] as GameId) ?? "blackjack";
-const mode = (process.argv[3] as SignMode) ?? "full";
-const durationMs = Number(process.argv[4] ?? 20000);
-const tunnelCount = Number(process.argv[5] ?? 50);
-const seed = Number(process.argv[6] ?? 1);
+function parseDuration(value: string): number {
+  const trimmed = value.trim();
+  const match = trimmed.match(/^(\d+(?:\.\d+)?)\s*([smh]?)$/i);
+  if (!match) throw new Error(`Invalid duration: ${value}`);
+  const n = Number(match[1]);
+  const unit = match[2].toLowerCase();
+  if (unit === "s") return Math.round(n * 1000);
+  if (unit === "m") return Math.round(n * 60 * 1000);
+  if (unit === "h") return Math.round(n * 60 * 60 * 1000);
+  return Math.round(n);
+}
+
+function parseArgs(argv: string[]) {
+  const positionals: string[] = [];
+  let skipSettle = false;
+  let durationOverride: number | undefined;
+
+  for (const arg of argv) {
+    if (arg === "--skip-settle") {
+      skipSettle = true;
+    } else if (arg.startsWith("--duration=")) {
+      durationOverride = parseDuration(arg.slice("--duration=".length));
+    } else if (arg === "--duration" || arg === "-d") {
+      // Allow --duration <value> in next arg; handled by peeking would complicate loop.
+      // We treat this as needing value in same arg; user can use --duration=...
+      throw new Error("Use --duration=<value> with an equals sign");
+    } else if (arg.startsWith("-")) {
+      throw new Error(`Unknown flag: ${arg}`);
+    } else {
+      positionals.push(arg);
+    }
+  }
+
+  return {
+    gameId: (positionals[0] as GameId) ?? "blackjack",
+    mode: (positionals[1] as SignMode) ?? "full",
+    durationMs: durationOverride ?? Number(positionals[2] ?? 20000),
+    tunnelCount: Number(positionals[3] ?? 50),
+    seed: Number(positionals[4] ?? 1),
+    skipSettle,
+  };
+}
+
+const args = parseArgs(process.argv.slice(2));
+const gameId = args.gameId;
+const mode = args.mode;
+const durationMs = args.durationMs;
+const tunnelCount = args.tunnelCount;
+const seed = args.seed;
+const skipSettle = args.skipSettle;
 
 const backendUrl = process.env.BACKEND_URL ?? "http://localhost:8080";
 const network = (process.env.SUI_NETWORK as "testnet" | "mainnet" | "localnet") ?? "testnet";
@@ -414,20 +465,24 @@ async function main() {
     slots.map((slot, i) => sendHeartbeat(slot, actionsSinceHeartbeat[i], finalWindow)),
   );
 
-  console.log(`SETTLE phase: ${tunnelCount} tunnels`);
-  const tSettle0 = Date.now();
-  // Settle sequentially: the backend /settle route is flaky under concurrency (RPC-view skew),
-  // and the settle phase is not the TPS target. Fall back to a direct on-chain close when the
-  // backend rejects it.
-  const settleResults: { ok: boolean; digest?: string }[] = [];
-  for (const slot of slots) {
-    settleResults.push(await settleOne(slot, funder));
+  if (skipSettle) {
+    console.log("SETTLE phase skipped (--skip-settle)");
+  } else {
+    console.log(`SETTLE phase: ${tunnelCount} tunnels`);
+    const tSettle0 = Date.now();
+    // Settle sequentially: the backend /settle route is flaky under concurrency (RPC-view skew),
+    // and the settle phase is not the TPS target. Fall back to a direct on-chain close when the
+    // backend rejects it.
+    const settleResults: { ok: boolean; digest?: string }[] = [];
+    for (const slot of slots) {
+      settleResults.push(await settleOne(slot, funder));
+    }
+    const settledCount = settleResults.filter((r) => r.ok).length;
+    const tSettle1 = Date.now();
+    console.log(
+      `SETTLE done in ${((tSettle1 - tSettle0) / 1000).toFixed(1)}s: ${settledCount}/${tunnelCount} succeeded`,
+    );
   }
-  const settledCount = settleResults.filter((r) => r.ok).length;
-  const tSettle1 = Date.now();
-  console.log(
-    `SETTLE done in ${((tSettle1 - tSettle0) / 1000).toFixed(1)}s: ${settledCount}/${tunnelCount} succeeded`,
-  );
 }
 
 main().catch((e) => {
