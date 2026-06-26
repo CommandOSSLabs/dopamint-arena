@@ -18,6 +18,8 @@
   --qp-violet: #6741d9;
   --qp-amber: #e8920c;
   --qp-amber-fill: #ffe9bd;
+  --sketch-felt: var(--qp-felt);
+  --sketch-felt-fill: var(--qp-felt-fill);
 
   container-type: size;
   font-family: var(--font-wal-gochi);
@@ -328,6 +330,10 @@
   }
 
   /* ---- other custom styles ---- */
+  & .qp-win {
+    background: var(--qp-felt);
+    color: #fffefb;
+  }
   & .fade-in-up {
     opacity: 0;
     animation: fadeInUp 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;

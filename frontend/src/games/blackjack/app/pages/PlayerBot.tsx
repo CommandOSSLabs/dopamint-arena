@@ -767,7 +767,15 @@ export default function PlayerBot({
             {terminal && result && (
               <div
                 className="select-none qp-win text-sm font-black px-6 py-2 shadow-lg"
-                style={{ filter: "url(#qpRough)" }}
+                style={{
+                  filter: "url(#qpRough)",
+                  backgroundColor:
+                    result === "win"
+                      ? "var(--qp-felt)"
+                      : result === "lose"
+                        ? "var(--qp-red)"
+                        : "var(--qp-amber)",
+                }}
               >
                 {result === "win"
                   ? "Player Bot wins"
