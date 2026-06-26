@@ -101,6 +101,21 @@ export interface PartyOnchain {
   publicKey: Uint8Array;
 }
 
+/** Thrown by openAndFundMany when the batch PTB ALREADY committed on-chain but a post-commit
+ *  step (wait/read/correlate) failed. Signals callers MUST NOT retry the open — the tunnels
+ *  exist; retrying would double-open and double-consume stake. `digest` identifies the committed tx. */
+export class BatchCommittedError extends Error {
+  constructor(
+    readonly digest: string,
+    readonly cause: unknown,
+  ) {
+    super(
+      `openAndFundMany: batch committed (digest ${digest}) but post-commit step failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+    );
+    this.name = "BatchCommittedError";
+  }
+}
+
 function findTunnelId(changes: unknown): string | null {
   if (!Array.isArray(changes)) return null;
   for (const c of changes) {
@@ -113,6 +128,51 @@ function findTunnelId(changes: unknown): string | null {
     }
   }
   return null;
+}
+
+/** Every created `::tunnel::Tunnel` object id in a tx's objectChanges, in change order. The batch
+ *  opener reads N ids here (vs {@link findTunnelId}'s single id) and correlates them by party-A. */
+export function findAllTunnelIds(changes: unknown): string[] {
+  if (!Array.isArray(changes)) return [];
+  const ids: string[] = [];
+  for (const c of changes) {
+    if (
+      c?.type === "created" &&
+      typeof c.objectType === "string" &&
+      c.objectType.includes("::tunnel::Tunnel")
+    ) {
+      ids.push(c.objectId as string);
+    }
+  }
+  return ids;
+}
+
+/** Canonical Sui address: lower-case, `0x`-prefixed, left-padded to 32 bytes. Created-tunnel party
+ *  addresses (read from chain) and ephemeral key addresses must be compared in this form, since the
+ *  two sources differ in padding. */
+export function normalizeSuiAddress(addr: string): string {
+  return "0x" + addr.toLowerCase().replace(/^0x/, "").padStart(64, "0");
+}
+
+/** Read a created tunnel's party-A address from its on-chain fields. Used to map batch-opened
+ *  tunnels back to their requesters — `objectChanges` order is unspecified, but each tunnel's
+ *  party-A (a distinct ephemeral bot key) is a unique key. */
+export async function readTunnelPartyA(
+  reads: SuiReads,
+  tunnelId: string,
+): Promise<string> {
+  const obj = await reads.getObject({
+    id: tunnelId,
+    options: { showContent: true },
+  });
+  const fields = obj.data?.content?.fields as
+    | { party_a?: { fields?: { address?: unknown } } }
+    | undefined;
+  const addr = fields?.party_a?.fields?.address;
+  if (typeof addr !== "string") {
+    throw new Error(`tunnel ${tunnelId}: missing party_a.address in content`);
+  }
+  return addr;
 }
 
 /**
@@ -339,6 +399,83 @@ export async function openAndFundSelfPlay(opts: {
   const tunnelId = findTunnelId(txb.objectChanges);
   if (!tunnelId) throw new Error("could not find created tunnel id");
   return tunnelId;
+}
+
+/** One self-play tunnel's open spec for {@link openAndFundMany}: both ephemeral seats + each
+ *  seat's stake (the staked coin's base units). */
+export interface TunnelOpenManySpec {
+  partyA: PartyOnchain;
+  partyB: PartyOnchain;
+  aAmount: bigint;
+  bAmount: bigint;
+  timeoutMs?: bigint;
+  penaltyAmount?: bigint;
+}
+
+/**
+ * Open + fund + activate N self-play tunnels in ONE PTB and return each tunnel id keyed by its
+ * normalized party-A address. The whole batch is one `splitCoins` of the summed 2N stakes off a
+ * single source coin (an address-balance withdrawal of `stakeFromBalance.amount`, or one
+ * `stakeCoinId`, or the gas coin), then one `create_and_fund` per spec (SDK `buildOpenAndFundMany`).
+ *
+ * The stake source MUST cover the sum of all specs' `aAmount + bAmount`; on the address-balance
+ * path `stakeFromBalance.amount` MUST equal that sum (the leftover zero coin is destroyed). The
+ * caller correlates results by party-A because `objectChanges` order is unspecified.
+ */
+export async function openAndFundMany(opts: {
+  reads: SuiReads;
+  signExec: SignExec;
+  specs: TunnelOpenManySpec[];
+  coinType?: string;
+  stakeFromBalance?: StakeFromBalance;
+  stakeCoinId?: string;
+}): Promise<Map<string, string>> {
+  const { digest } = await submitRebuildingOnStale(
+    () => {
+      const tx = new Transaction();
+      const source = stakeCoinArg(tx, opts);
+      buildOpenAndFundMany(
+        tx,
+        opts.specs.map((s) => ({
+          partyA: { ...s.partyA, signatureType: SignatureScheme.ED25519 },
+          partyB: { ...s.partyB, signatureType: SignatureScheme.ED25519 },
+          aAmount: s.aAmount,
+          bAmount: s.bAmount,
+          timeoutMs: s.timeoutMs ?? 86_400_000n,
+          penaltyAmount: s.penaltyAmount ?? 0n,
+        })),
+        { coinType: opts.coinType, sourceCoin: source },
+      );
+      consumeStakeRemainder(tx, opts, source);
+      return tx;
+    },
+    opts.signExec,
+    "openAndFundMany",
+  );
+  // POST-COMMIT: everything below runs after the PTB has already landed on-chain. Any failure here
+  // means the N tunnels exist and their stake is consumed — callers must not retry the open.
+  try {
+    await opts.reads.waitForTransaction({ digest });
+    const txb = await opts.reads.getTransactionBlock({
+      digest,
+      options: { showObjectChanges: true },
+    });
+    const ids = findAllTunnelIds(txb.objectChanges);
+    if (ids.length !== opts.specs.length) {
+      throw new Error(
+        `openAndFundMany: expected ${opts.specs.length} tunnels, got ${ids.length} (digest ${digest})`,
+      );
+    }
+    const byPartyA = new Map<string, string>();
+    for (const id of ids) {
+      const partyA = await readTunnelPartyA(opts.reads, id);
+      byPartyA.set(normalizeSuiAddress(partyA), id);
+    }
+    return byPartyA;
+  } catch (err) {
+    if (err instanceof BatchCommittedError) throw err; // already wrapped, pass through
+    throw new BatchCommittedError(digest, err);
+  }
 }
 
 /**

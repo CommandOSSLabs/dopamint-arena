@@ -1,8 +1,8 @@
 # 0005 — Redis-backed, horizontally-scalable control-plane + mp lane
 
-> **⚠️ Latency consequence revised by [ADR-0009](0009-data-plane-local-control-plane-redis.md).**
+> **⚠️ Latency consequence revised by [ADR-0015](0015-data-plane-local-control-plane-redis.md).**
 > This ADR assumed "PvP is ≈0 TPS, so a Redis round-trip per relayed frame is
-> immaterial." Once self-play is dropped ([ADR-0006](0006-genuine-two-party-only-drop-self-play.md))
+> immaterial." Once self-play is dropped ([ADR-0001 §1](0001-arena-baseline-architecture.md))
 > every move flows through the relay, so the per-frame `SPUBLISH` path is demoted
 > to a **fallback** and the per-move data plane moves in-process. The Redis-only,
 > no-Postgres decision below is unchanged.
@@ -10,10 +10,8 @@
 - **Status**: Proposed
 - **Date**: 2026-06-17
 - **Refs**: builds on [ADR-0002](0002-backend-client-api-contract.md) (stateless
-  control-plane) and [ADR-0004](0004-multiplayer-pvp-experience-lane.md) (the
-  stateful PvP lane). Driven by the AWS infra design (Max Mai), which runs the
-  backend as ≥2 Fargate tasks behind an ALB. Design spec:
-  `docs/superpowers/specs/2026-06-17-redis-backed-ha-backend-design.md`.
+  control-plane) and the stateful PvP lane. Driven by the AWS infra design (Max Mai), which runs the
+  backend as ≥2 Fargate tasks behind an ALB. Design rationale is kept in local design notes.
 
 > **Engine amendment (2026-06-22):** The two ElastiCache clusters are provisioned
 > with the **Valkey 7.2** engine rather than Redis OSS. Valkey is a Redis-protocol
@@ -22,7 +20,7 @@
 
 ## Context
 
-ADR-0004 made the backend **stateful**: presence, matchmaking queues, invites,
+An earlier decision made the backend **stateful**: presence, matchmaking queues, invites,
 matches, and per-connection socket handles all live in process memory
 (`AppState`'s `RwLock<HashMap>`s). The control-plane (sessions, stats counters) is
 also per-process. That is correct at **one** instance.
@@ -167,5 +165,5 @@ root, not `backend/tunnel-manager/`.
   on a protocol-**v125+** network confirming node acceptance; if it fails, fall back to the
   Redis-leased coin pool. Batch size vs gas budget + bisect-retry is an optimization, deferred to
   implementation.
-- **Carryovers from ADR-0004** (unchanged by this ADR): server-side pubkey↔wallet binding;
+- **Carryovers from the prior stateful-backend decision** (unchanged by this ADR): server-side pubkey↔wallet binding;
   on-chain watchtower _submission_ of the captured checkpoint; disconnect queue/presence cleanup.

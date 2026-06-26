@@ -27,7 +27,7 @@ pub async fn mp_upgrade(State(state): State<SharedState>, ws: WebSocketUpgrade) 
     let mut resp = ws.on_upgrade(move |socket| handle_socket(socket, state));
     // `SameSite=Lax` is correct for a same-origin relay. A cross-origin frontend needs
     // `SameSite=None; Secure` instead (see "relay session stickiness" in
-    // docs/adding-a-tunnel-game.md) — fold that in via config if/when the relay is cross-origin.
+    // docs/guide/adding-a-tunnel-game.md) — fold that in via config if/when the relay is cross-origin.
     if let Ok(value) =
         axum::http::HeaderValue::from_str(&format!("aff={instance}; Path=/; SameSite=Lax"))
     {
