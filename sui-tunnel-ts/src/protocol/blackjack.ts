@@ -142,6 +142,11 @@ function canStartRound(s: BlackjackState): boolean {
   return s.balanceA >= s.wager && s.balanceB >= s.wager;
 }
 
+/** Exposed for tests/tools: hand total with soft-ace handling. */
+export function blackjackHandValue(hand: number[]): number {
+  return handValue(hand);
+}
+
 /** Derive a rank 1..13 from two reveals (rejection-sampled, unbiased). */
 export function deriveRank(a: SlotReveal, b: SlotReveal): number {
   const seed = seedFromBytes(combineReveals(a.value, a.salt, b.value, b.salt));

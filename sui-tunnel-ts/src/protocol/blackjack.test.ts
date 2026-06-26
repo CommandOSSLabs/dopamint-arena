@@ -9,6 +9,7 @@ import {
   deriveRank,
   getPlayerParty,
   getDealerParty,
+  blackjackHandValue as handValue,
 } from "./blackjack";
 import { computeCommitment } from "../core/commitment";
 
@@ -198,4 +199,74 @@ test("stand kicks off the dealer auto-draw", () => {
 test("only the player party may hit", () => {
   const s = dealtToPlayer(); // round 1 -> player is A
   assert.throws(() => proto.applyMove(s, { kind: "hit" }, "B"), /player's \(A\) turn/);
+});
+
+/** From a player-phase state, stand and run dealer auto-draws (all forced to `rank`). */
+function standAndResolve(s: BlackjackState, dealerRank: number): BlackjackState {
+  s = proto.applyMove(s, { kind: "stand" }, "A");
+  const [da, db] = secretsForRank(dealerRank);
+  let guard = 0;
+  while (s.phase !== "round_over") {
+    if (guard++ > 100) throw new Error("dealer loop did not terminate");
+    s = doDraw(s, da, db);
+  }
+  return s;
+}
+
+test("dealer draws until reaching at least 17, then settles", () => {
+  let s = dealtToPlayer(); // player 20, dealer 10
+  s = standAndResolve(s, 5); // dealer 10 -> 15 -> 20, stops at >= 17
+  assert.equal(s.phase, "round_over");
+  assert.ok(handValue(s.dealerHand) >= 17);
+});
+
+test("player 20 beats dealer 19 -> player (A) wins", () => {
+  let s = dealtToPlayer(); // player 20, dealer 10
+  s = standAndResolve(s, 9); // dealer 10 -> 19, stops; 20 > 19 -> A wins
+  assert.equal(s.balanceA, 1000n + WAGER);
+  assert.equal(s.balanceB, 1000n - WAGER);
+  assert.equal(s.balanceA + s.balanceB, s.total);
+});
+
+test("dealer busts -> player (A) wins", () => {
+  let s = fresh();
+  const [k1, k2] = secretsForRank(13); // value 10
+  const [s6a, s6b] = secretsForRank(6); // value 6
+  s = doDraw(s, k1, k2); // player 10
+  s = doDraw(s, k1, k2); // player 20
+  s = doDraw(s, s6a, s6b); // dealer 6
+  s = doDraw(s, k1, k2); // dealer 16 (< 17)
+  s = standAndResolve(s, 13); // dealer 16 + 10 = 26 -> bust -> A wins
+  assert.equal(s.phase, "round_over");
+  assert.equal(s.balanceA, 1000n + WAGER);
+  assert.equal(s.balanceB, 1000n - WAGER);
+});
+
+test("equal final totals push (no transfer)", () => {
+  let s = dealtToPlayer(); // player 20, dealer 10
+  s = standAndResolve(s, 10); // dealer 10 -> 20, stops; 20 == 20 -> push
+  assert.equal(s.phase, "round_over");
+  assert.equal(s.balanceA, 1000n);
+  assert.equal(s.balanceB, 1000n);
+});
+
+test("a dealer already pat (>= 17) draws no card on stand", () => {
+  let s = fresh();
+  const [k1, k2] = secretsForRank(13); // value 10
+  const [n9a, n9b] = secretsForRank(9); // value 9
+  s = doDraw(s, k1, k2); // player 10
+  s = doDraw(s, k1, k2); // player 20
+  s = doDraw(s, k1, k2); // dealer 10
+  s = doDraw(s, n9a, n9b); // dealer 19 (>= 17)
+  const before = s.drawCount;
+  s = proto.applyMove(s, { kind: "stand" }, "A");
+  assert.equal(s.phase, "round_over"); // settled immediately, no extra draw
+  assert.equal(s.drawCount, before);
+  assert.equal(s.balanceA, 1000n + WAGER); // 20 > 19 -> A wins
+});
+
+test("handValue handles soft aces", () => {
+  assert.equal(handValue([11, 11]), 12); // A + A = 12, not 22
+  assert.equal(handValue([11, 10]), 21);
+  assert.equal(handValue([11, 5, 10]), 16); // ace downgraded
 });
