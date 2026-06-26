@@ -35,12 +35,10 @@ impl FleetSupervisor {
         let mut m = Metrics::default();
         for h in handles {
             m.tunnels += 1;
-            match h.await {
-                Ok(Ok(outcome)) => {
-                    m.total_moves += outcome.moves;
-                    m.settled += 1;
-                }
-                Ok(Err(_)) | Err(_) => {}
+            // A unit that errors or panics counts toward `tunnels` but not `settled`.
+            if let Ok(Ok(outcome)) = h.await {
+                m.total_moves += outcome.moves;
+                m.settled += 1;
             }
         }
         m

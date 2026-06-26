@@ -10,6 +10,3 @@ publish.workspace = true
 blake2.workspace = true
 ed25519-dalek.workspace = true
 hex.workspace = true
-
-[dev-dependencies]
-hex.workspace = true

@@ -1,6 +1,6 @@
-//! The per-seat harness loop: plan -> deliver -> sign -> (settle is the caller's job
-//! via build_settlement). Generic over all four runtime seams. One seat per driver;
-//! self-play wires two drivers through an InMemoryChannel.
+//! The per-seat harness loop: plan -> deliver -> sign. Settling a terminal
+//! `DriverOutcome` is the caller's job. Generic over all four runtime seams. One seat
+//! per driver; self-play wires two drivers through an InMemoryChannel.
 
 use crate::frame::{decode_frame, encode_frame, AckFrame, Frame, MoveFrame};
 use crate::{
@@ -121,7 +121,7 @@ impl<P: Protocol, Pol: Policy<P>, Ch: Channel, S: Signer> SeatDriver<P, Pol, Ch,
             // --- not our turn: receive the opponent's MOVE, verify, apply, ACK ---
             match self.recv_frame().await? {
                 Some(Frame::Move(m)) => {
-                    self.on_move(m, now()).await?;
+                    self.on_move(m).await?;
                     moves += 1;
                 }
                 Some(Frame::Ack(_)) => {
@@ -141,7 +141,7 @@ impl<P: Protocol, Pol: Policy<P>, Ch: Channel, S: Signer> SeatDriver<P, Pol, Ch,
         }
     }
 
-    async fn on_move(&mut self, m: MoveFrame<P::Move>, _now: u64) -> Result<(), HarnessError> {
+    async fn on_move(&mut self, m: MoveFrame<P::Move>) -> Result<(), HarnessError> {
         let by: Seat = m.by.into();
         if by == self.seat {
             return Err(HarnessError::Verification("move attributed to self".into()));
