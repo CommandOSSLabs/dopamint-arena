@@ -40,6 +40,11 @@ export default defineConfig(({ mode }) => {
         "@ttt/shared": fileURLToPath(
           new URL("./src/games/ticTacToe/packages/shared/src", import.meta.url),
         ),
+        // sui-tunnel-ts expects @noble/hashes v1.8.0 (has ./blake2b), but frontend
+        // depends on v2.2.0 (does not). Force the sui-tunnel-ts copy for benchmarks.
+        "@noble/hashes/blake2b": fileURLToPath(
+          new URL("../sui-tunnel-ts/node_modules/@noble/hashes/blake2b.js", import.meta.url),
+        ),
       },
     },
   };
