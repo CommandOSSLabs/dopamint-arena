@@ -20,6 +20,7 @@ fn binary_runs_and_prints_report_lines() {
             "3",
             "--runner",
             "simple",
+            "--deterministic",
         ])
         .output()
         .expect("run rustbench");

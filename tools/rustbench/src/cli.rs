@@ -21,6 +21,8 @@ pub struct BenchOpts {
     /// Generate two fresh ed25519 keypairs per match (mirrors loadbench's
     /// per-match `generateKeyPairSync`) for an apples-to-apples harness number.
     pub fresh_keys: bool,
+    /// Card distribution mode for the swarm (`Varied` by default).
+    pub card_mode: crate::fleet::swarm::CardMode,
 }
 
 /// Raw clap layout. Validated and lowered into `BenchOpts` by `parse`.
@@ -35,9 +37,12 @@ struct Raw {
     matches: Option<u64>,
     #[arg(long, default_value = "both")]
     runner: String,
-    /// Generate fresh keys per match (apples-to-apples with loadbench's harness).
+    /// Use fixed seat keys (opt out of the default fresh-per-match keygen).
     #[arg(long)]
-    fresh_keys: bool,
+    fixed_keys: bool,
+    /// Replay the fixed golden 143-move match every time (opt out of varied cards).
+    #[arg(long)]
+    deterministic: bool,
     /// Accepted and ignored — `--offchain` is the only supported anchor mode.
     #[allow(dead_code)]
     #[arg(long)]
@@ -111,7 +116,12 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
         duration_secs: raw.duration,
         matches: raw.matches,
         runner,
-        fresh_keys: raw.fresh_keys,
+        fresh_keys: !raw.fixed_keys,
+        card_mode: if raw.deterministic {
+            crate::fleet::swarm::CardMode::Deterministic
+        } else {
+            crate::fleet::swarm::CardMode::Varied
+        },
     })
 }
 
@@ -152,12 +162,27 @@ mod tests {
     }
 
     #[test]
-    fn fresh_keys_flag_parses_and_defaults_off() {
-        assert!(!parse_v(&["--runner", "simple"]).unwrap().fresh_keys);
+    fn fresh_keys_is_default_on_and_fixed_keys_opts_out() {
+        assert!(parse_v(&["--runner", "simple"]).unwrap().fresh_keys);
         assert!(
-            parse_v(&["--runner", "simple", "--fresh-keys"])
+            !parse_v(&["--runner", "simple", "--fixed-keys"])
                 .unwrap()
                 .fresh_keys
+        );
+    }
+
+    #[test]
+    fn gameplay_is_varied_by_default_and_deterministic_opts_in() {
+        use crate::fleet::swarm::CardMode;
+        assert_eq!(
+            parse_v(&["--runner", "simple"]).unwrap().card_mode,
+            CardMode::Varied
+        );
+        assert_eq!(
+            parse_v(&["--runner", "simple", "--deterministic"])
+                .unwrap()
+                .card_mode,
+            CardMode::Deterministic
         );
     }
 

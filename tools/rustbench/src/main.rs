@@ -17,7 +17,6 @@ fn main() {
     // Headline runner: fresh per-match keys (apples-to-apples with loadbench's
     // harness) or the fixed-key simple runner. fn-pointer annotation coerces
     // both fn items to one type.
-    // TODO(task-6): replace CardMode::Deterministic with opts.card_mode.
     let run_headline: fn(usize, u64, Option<u64>, swarm::CardMode) -> swarm::SwarmOutcome =
         if opts.fresh_keys {
             swarm::run_fresh_keys
@@ -32,7 +31,7 @@ fn main() {
                 opts.workers,
                 opts.duration_secs,
                 opts.matches,
-                swarm::CardMode::Deterministic,
+                opts.card_mode,
             );
             (simple, None, sampler.stop())
         }
@@ -42,7 +41,7 @@ fn main() {
                 opts.workers,
                 opts.duration_secs,
                 opts.matches,
-                swarm::CardMode::Deterministic,
+                opts.card_mode,
             );
             // Report the optimized window as the headline; no parenthetical.
             (optimized, None, sampler.stop())
@@ -54,14 +53,14 @@ fn main() {
                 opts.workers,
                 opts.duration_secs,
                 opts.matches,
-                swarm::CardMode::Deterministic,
+                opts.card_mode,
             );
             let res = sampler.stop();
             let optimized = swarm::run_optimized(
                 opts.workers,
                 opts.duration_secs,
                 opts.matches,
-                swarm::CardMode::Deterministic,
+                opts.card_mode,
             );
             (simple, Some(optimized), res)
         }
