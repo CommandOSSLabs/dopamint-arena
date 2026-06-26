@@ -42,7 +42,7 @@ impl Protocol for Payments {
         "payments.v1"
     }
 
-    async fn initial_state(&self, ctx: &TunnelContext) -> PayState {
+    fn initial_state(&self, ctx: &TunnelContext) -> PayState {
         PayState {
             a: ctx.initial.a,
             b: ctx.initial.b,
@@ -52,7 +52,7 @@ impl Protocol for Payments {
         }
     }
 
-    async fn apply_move(
+    fn apply_move(
         &self,
         s: &PayState,
         mv: &PayMove,
@@ -119,24 +119,18 @@ impl Protocol for Payments {
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn transfer_moves_value_and_conserves_total() {
+    #[test]
+    fn transfer_moves_value_and_conserves_total() {
         let p = Payments { max_transfers: 2 };
         let ctx = TunnelContext {
             tunnel_id: "0xab".into(),
             initial: Balances { a: 100, b: 100 },
             seat: Seat::A,
         };
-        let s0 = p.initial_state(&ctx).await;
-        let s1 = p
-            .apply_move(&s0, &PayMove { amount: 5 }, Seat::A)
-            .await
-            .unwrap();
+        let s0 = p.initial_state(&ctx);
+        let s1 = p.apply_move(&s0, &PayMove { amount: 5 }, Seat::A).unwrap();
         assert_eq!((s1.a, s1.b), (95, 105));
         assert_eq!(s1.a + s1.b, 200);
-        assert!(p
-            .apply_move(&s1, &PayMove { amount: 5 }, Seat::A)
-            .await
-            .is_err()); // wrong turn
+        assert!(p.apply_move(&s1, &PayMove { amount: 5 }, Seat::A).is_err()); // wrong turn
     }
 }
