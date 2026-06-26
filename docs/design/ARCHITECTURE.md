@@ -213,7 +213,7 @@ framework supplies signing, settlement, and replay protection.
 | Game                 | Off-chain interaction                                                                                         |
 | -------------------- | ------------------------------------------------------------------------------------------------------------- |
 | **Blackjack**        | Turn-based dealer/player rounds, stake settled at hand end                                                    |
-| **Regular payments** | Bidirectional balance updates (payment-channel semantics)                                                     |
+| **Micro payments** | Bidirectional balance updates (payment-channel semantics)                                                     |
 | **Quantum poker**    | Dealerless commit-reveal shuffle + hidden hole cards; a Groth16 fairness circuit is available at dispute time |
 | **Tic-tac-toe**      | Alternating moves with terminal-state payout                                                                  |
 | **Chat**             | High-frequency signed messages (no stake movement; pure off-chain volume)                                     |

@@ -12,10 +12,10 @@ import {
   WC,
   ZOOM,
   TAP_SLOP,
-  FONT_MONO,
   FONT_DISPLAY,
   shortAddress,
 } from "./tokens";
+import { liveStrokePersistSeq } from "./liveStroke";
 
 /** Camera zoom used when jumping to a freshly spawned agent's flag. */
 const FOCUS_SCALE = 12;
@@ -49,6 +49,10 @@ const PENCIL_CURSOR = `url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.or
 const STROKE_GAP_CELLS = 4;
 /** Stroke width (cells) for agent art; the human's width tracks the brush-size selector. */
 const AGENT_STROKE_SIZE = 1.7;
+/** Synced-erase stroke width multiplier (× brush). The eraser co-signs only a centerline
+ *  (like the pen), so the cleared swath comes from a FAT render — matching the local eraser
+ *  nib (3× brush) so a remote erase covers the same area, with pen-level cell volume. */
+const ERASER_STROKE_SIZE = 3;
 /** Cap on retained finalized strokes — constant memory for an endless wall (oldest evicted). */
 const MAX_STROKES = 12_000;
 
@@ -141,6 +145,7 @@ function interpolateCells(
 export function WorldCanvas({
   paints,
   revision,
+  generation = 1,
   selectedColor,
   brushSize,
   panOnly,
@@ -156,6 +161,10 @@ export function WorldCanvas({
   paints: ReadonlyMap<string, PaintedCell>;
   /** Bumps whenever `paints` changes; gates the incremental chunk sync. */
   revision: number;
+  /** Bounded-game counter (solo): a change marks a game boundary and triggers a full render
+   *  reset (drop cached strokes + the sync cursor, re-fit the blank canvas). Defaults to 1
+   *  for callers without bounded games (PvP), so the reset only ever fires once on mount. */
+  generation?: number;
   /** Palette index `[0, 16)` placed on drag. */
   selectedColor: number;
   /** Brush footprint edge in cells (1/2/3): each sampled point paints an N×N block. */
@@ -227,6 +236,23 @@ export function WorldCanvas({
   paintsRef.current = paints;
   const revisionRef = useRef(revision);
   revisionRef.current = revision;
+
+  // On a game boundary (generation change) wipe the render caches so the prior game's ink
+  // can't bleed into the new one: the engine clears its `paints` map, but these caches are
+  // INDEPENDENT (finalized + open strokes, the paints→strokes sync cursor, the live drag),
+  // so they must be cleared here too. Re-fit the camera to the blank origin and clear the
+  // canvas pixels. Skipped on the first mount in practice (caches already empty).
+  useEffect(() => {
+    strokes.current = [];
+    openStrokes.current.clear();
+    liveStroke.current = null;
+    appliedSeq.current = 0;
+    syncedRevision.current = -1;
+    fitted.current = false;
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext("2d");
+    if (canvas && ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+  }, [generation]);
 
   // Cells already painted in the active pointer stroke. A drag interpolates and
   // overlaps brush blocks, so this set keeps every cell to exactly ONE co-signed
@@ -372,7 +398,11 @@ export function WorldCanvas({
         gx + 0.5,
         gy + 0.5,
         cell.color,
-        AGENT_STROKE_SIZE,
+        // Render-only width (no extra co-signed cells). Ink follows YOUR brush size; an erase
+        // renders FAT (its full nib) so a centerline-only co-signed erase still clears the
+        // whole swath on the peer — erase syncs like draw, just thicker.
+        (cell.color === ERASER_COLOR ? ERASER_STROKE_SIZE : AGENT_STROKE_SIZE) *
+          brushSizeRef.current,
         cell.seq,
       );
     }
@@ -658,21 +688,16 @@ export function WorldCanvas({
   const liveFinalize = () => {
     const s = liveStroke.current;
     if (!s) return;
-    if (humanRef.current) {
-      // Solo: this seat's cells DON'T return via `syncPaints` (the human painter is skipped
-      // there), so the live drag is the only record → keep it on top (seq MAX), as before.
-      finalizeStroke(s);
-    } else if (s.erase) {
-      // PvP: a PAINT live-stroke is dropped — it returns through `syncPaints` with its real
-      // co-signed `seq`, and keeping the live copy would double-draw and pin your ink on top
-      // forever (defeating the opponent's erase). An ERASE, though, must not VANISH in the
-      // round-trip window between pointer-up and its synced cell landing — that gap is the
-      // "it reverts the instant I let go" flash. Persist the erase at a FINITE seq just above
-      // all ink currently on the wall so it holds the cleared look until the synced erase (a
-      // harmless, idempotent `destination-out` dup) arrives — finite (not MAX) so a later
-      // higher-seq repaint from either seat can still cover it.
-      finalizeStroke({ ...s, seq: appliedSeq.current + 0.5 });
-    }
+    // Solo keeps its own ink pinned on top (its cells never return via `syncPaints`). PvP persists
+    // BOTH a paint AND an erase at a finite seq just above the applied cursor, so the optimistic
+    // stroke holds across the co-sign round-trip instead of vanishing at pointer-up — the painter's
+    // ink no longer flickers out until its co-signed cell lands. The real higher-seq cell then
+    // overdraws it idempotently (same pos/color → invisible), and the finite seq lets a later repaint
+    // or the opponent's erase still cover it. Render-only: see `liveStrokePersistSeq`.
+    finalizeStroke({
+      ...s,
+      seq: liveStrokePersistSeq(!!humanRef.current, appliedSeq.current),
+    });
     liveStroke.current = null;
   };
 
@@ -698,6 +723,11 @@ export function WorldCanvas({
 
   // Stamp the brush footprint (an N×N block) centered on a cell. Each cell is an
   // independent dedup'd co-signed move, so a bigger brush is just more cells/TPS.
+  // The eraser co-signs the SAME centerline footprint as the pen (NOT a fat ×3 block): a
+  // wide erase would otherwise emit ~9× the cells and overflow the turn-based batch on a
+  // drag, dropping its tail (a remote erase that's patchy past the first stretch). The full
+  // erase swath comes from rendering the erase stroke WIDE (see {@link ERASER_STROKE_SIZE}),
+  // not from extra cells — so erase syncs exactly like draw, just thicker.
   const stampBrush = (center: GlobalCell) => {
     const n = brushSizeRef.current;
     const off = Math.floor(n / 2);
@@ -821,44 +851,35 @@ export function WorldCanvas({
       {/* Floating per-cell owner label ("owner EThL…KwRE" / "You"). */}
       {hud.owner && (
         <div
+          className="sketch-stroke sketch-panel"
           style={{
             position: "absolute",
             left: hud.owner.sx,
             top: hud.owner.sy,
             transform: "translate(-50%, calc(-100% - 8px))",
             pointerEvents: "none",
-            padding: "3px 8px",
-            borderRadius: 0,
-            fontSize: 10.5,
+            padding: "3px 9px",
+            fontSize: 11,
             fontWeight: 700,
             whiteSpace: "nowrap",
             color: WC.text,
-            fontFamily: FONT_MONO,
-            background: "color-mix(in srgb, var(--card) 92%, transparent)",
-            border: `1px solid ${WC.panelBorder}`,
-            boxShadow: WC.glow,
             zIndex: 5,
           }}
         >
           {hud.owner.label}
         </div>
       )}
-      {/* Zoom HUD (bottom-left) — capped to the canvas width and wrap-friendly so it never
-          runs off-screen in a narrow window. */}
+      {/* Zoom HUD (bottom-left). `.sketch-stroke` forces position:relative for its ::before
+          border, which would override a Tailwind `absolute` class — so pin the corner via
+          inline style (wins over the class) or the HUD falls out of place below the window. */}
       <div
-        className="absolute bottom-[18px] left-4 flex flex-wrap items-center gap-2 px-2.5 py-1.5 rounded-none"
-        style={{
-          maxWidth: "calc(100% - 32px)",
-          background: WC.glass,
-          border: `1px solid ${WC.glassBorder}`,
-          boxShadow: WC.glow,
-          backdropFilter: "blur(8px)",
-        }}
+        className="sketch-stroke sketch-panel flex w-fit items-center gap-1.5 px-2 py-1"
+        style={{ position: "absolute", bottom: 12, left: 12, zIndex: 5 }}
       >
         <ZoomButton label="−" onClick={() => zoomBy(1 / ZOOM.step)} />
         <span
           className="min-w-[46px] text-center text-xs font-bold tabular-nums"
-          style={{ color: WC.text, fontFamily: FONT_MONO }}
+          style={{ color: "var(--sketch-ink)" }}
         >
           {Math.round((hud.zoom / 10) * 100)}%
         </span>
@@ -877,8 +898,10 @@ function ZoomButton({
 }) {
   return (
     <button
+      type="button"
       onClick={onClick}
-      className="flex h-[26px] w-[26px] items-center justify-center rounded-none text-[15px] font-bold leading-none text-foreground bg-foreground/5 transition-colors hover:bg-primary/20"
+      className="sketch-btn sketch-btn--ghost flex h-[26px] w-[26px] items-center justify-center text-[15px] font-bold leading-none"
+      style={{ color: "var(--sketch-ink)", padding: 0 }}
     >
       {label}
     </button>

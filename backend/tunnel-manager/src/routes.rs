@@ -34,7 +34,7 @@ pub(crate) mod test_support {
         let walrus = crate::walrus::WalrusClient::new("http://pub".into(), "http://agg".into());
         let ollama = crate::ollama::OllamaClient::new(
             "http://localhost:11434".into(),
-            "qwen2.5:1.8b".into(),
+            "qwen2.5:1.5b".into(),
         )
         .expect("test ollama client");
         let (stats_tx, _) = tokio::sync::broadcast::channel(4);
@@ -767,7 +767,7 @@ mod tests {
             .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(body))
             .mount(&server)
             .await;
-        let ollama = OllamaClient::new(server.uri(), "qwen2.5:1.8b".into()).unwrap();
+        let ollama = OllamaClient::new(server.uri(), "qwen2.5:1.5b".into()).unwrap();
         std::sync::Arc::get_mut(&mut state)
             .expect("unique test arc")
             .ollama = ollama;
@@ -796,7 +796,7 @@ mod tests {
             .respond_with(wiremock::ResponseTemplate::new(500))
             .mount(&server)
             .await;
-        let ollama = OllamaClient::new(server.uri(), "qwen2.5:1.8b".into()).unwrap();
+        let ollama = OllamaClient::new(server.uri(), "qwen2.5:1.5b".into()).unwrap();
         std::sync::Arc::get_mut(&mut state)
             .expect("unique test arc")
             .ollama = ollama;
@@ -826,7 +826,7 @@ mod tests {
             .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(body))
             .mount(&server)
             .await;
-        let ollama = OllamaClient::new(server.uri(), "qwen2.5:1.8b".into()).unwrap();
+        let ollama = OllamaClient::new(server.uri(), "qwen2.5:1.5b".into()).unwrap();
         std::sync::Arc::get_mut(&mut state)
             .expect("unique test arc")
             .ollama = ollama;

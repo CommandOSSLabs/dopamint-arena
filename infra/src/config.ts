@@ -54,7 +54,7 @@ export function getConfig(): InfraConfig {
     backendImageTag: config.get("backend-image-tag") ?? undefined,
     settlerKey: config.getSecret("settler-key"),
     ollamaEnabled: config.getBoolean("ollama-enabled") ?? true,
-    ollamaModel: config.get("ollama-model") ?? "qwen2.5:1.8b",
+    ollamaModel: config.get("ollama-model") ?? "qwen2.5:1.5b",
     ollamaImageTag: config.get("ollama-image-tag") ?? "0.6.2",
   };
 }

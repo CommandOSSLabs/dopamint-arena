@@ -17,7 +17,7 @@ import {
   CHUNK_SIZE,
   MAX_BATCH_CELLS,
   type PvpCellMove,
-} from "./pvpProtocol";
+} from "./worldCanvasPvp";
 
 type Seat = "A" | "B";
 

@@ -28,7 +28,7 @@ import {
   type PvpCell,
   type PvpCellMove,
   type PvpPaintMove,
-} from "./pvpProtocol";
+} from "sui-tunnel-ts/protocol/worldCanvasPvp";
 import { makeWorldCanvasPvpResumeAdapter } from "./pvpResumeAdapter";
 import { useTelemetry } from "@/telemetry/TelemetryProvider";
 

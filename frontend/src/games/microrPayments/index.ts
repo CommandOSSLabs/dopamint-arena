@@ -4,8 +4,8 @@ import { PaymentsWindow } from "./PaymentsWindow";
 // The payment workspace's surface — kept out of the games catalog (catalog: false),
 // surfaced instead under the Add dialog's Payment group.
 register({
-  id: "regular-payments",
-  name: "Regular Payments",
+  id: "micro-payments",
+  name: "Micro Payments",
   catalog: false,
   workspace: "payment",
   icon: "💸",

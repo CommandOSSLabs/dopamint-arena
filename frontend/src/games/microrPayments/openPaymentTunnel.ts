@@ -83,6 +83,6 @@ export async function openPaymentTunnel(
         ...base,
         signExec: deps.signExec,
       }),
-    "regular-payments open",
+    "micro-payments open",
   );
 }

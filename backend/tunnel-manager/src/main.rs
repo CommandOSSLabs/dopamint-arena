@@ -60,7 +60,7 @@ async fn main() -> anyhow::Result<()> {
         config
             .ollama_model
             .clone()
-            .unwrap_or_else(|| "qwen2.5:1.8b".into()),
+            .unwrap_or_else(|| "qwen2.5:1.5b".into()),
     )?;
 
     let instance_id = config
@@ -169,7 +169,11 @@ fn cors_layer() -> CorsLayer {
         Ok(origins) if !origins.is_empty() => {
             let origins: Vec<http::HeaderValue> = origins
                 .split(',')
-                .map(|s| s.trim().parse().expect("invalid CORS_ALLOWED_ORIGINS value"))
+                .map(|s| {
+                    s.trim()
+                        .parse()
+                        .expect("invalid CORS_ALLOWED_ORIGINS value")
+                })
                 .collect();
             CorsLayer::new()
                 .allow_origin(origins)

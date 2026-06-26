@@ -7,7 +7,10 @@ import {
 import { OffchainTunnel } from "sui-tunnel-ts/core/tunnel";
 import { Transcript } from "sui-tunnel-ts/proof/transcript";
 import { QuantumPokerProtocol } from "sui-tunnel-ts/protocol/quantumPoker";
-import type { PokerState } from "sui-tunnel-ts/protocol/quantumPoker";
+import type {
+  PokerState,
+  PokerMove,
+} from "sui-tunnel-ts/protocol/quantumPoker";
 import { registerWindowDisposer } from "@/lib/windowSessions";
 import {
   getControlPlaneClient,
@@ -45,20 +48,31 @@ import {
   makeSeatBot,
   randomPokerPersona,
   stepPokerAuto,
+  stepPokerWithHuman,
+  applyHumanMove,
+  legalPokerActions,
+  isHumanBettingTurn,
   LIVE_BOT_CONTEXT,
   type PokerSeatBot,
   type PokerTunnel,
+  type PokerLegalActions,
 } from "./pokerSelfPlay";
 import { settlePokerTunnel } from "./pokerSettle";
 
 const STAKE = QUANTUM_POKER_STAKE;
-const MTPS_PER_SEAT = 1_000_000_000n; // 1 MTPS per seat (9 decimals)
+const MTPS_PER_SEAT = 1_000_000n; // 0.001 MTPS/seat → a clean 1.0M-chip stack; still deep enough to run a full HAND_CAP without busting
 const HAND_CAP = QUANTUM_POKER_HANDS_PER_TUNNEL;
 
 /** Pause between matches (ms). */
 const NEXT_MATCH_MS = 1200;
 /** Brief delay before the on-load auto-start so the window/table mounts first. */
 const AUTO_START_DELAY_MS = 300;
+/** Seconds the human has to act on take-over before the turn auto-checks (else folds). */
+const TURN_SECONDS = 10;
+/** Per-move pacing while a human is at the table, so the run-out is watchable (not instant). */
+const MANUAL_PACE_MS = 320;
+/** Idle poll cadence while parked waiting for the human to act. */
+const POLL_MS = 110;
 
 export type AutoStatus = "idle" | "funding" | "running" | "ended" | "error";
 
@@ -80,6 +94,16 @@ export interface QuantumPokerAutoSession {
   holesA: number[];
   /** Party B hole cards to display. */
   holesB: number[];
+  /** True when a human is playing seat A (take-over / live); false = bot-vs-bot attract. */
+  manual: boolean;
+  /** During take-over, true = a bot auto-plays seat A for the human (the 🤖 Auto toggle). */
+  autoSeat: boolean;
+  /** Legal betting options for seat A, non-null only when it's the human's turn to act. */
+  legal: PokerLegalActions | null;
+  /** Seconds left on the human's turn timer (null when it isn't the player's turn). */
+  secondsLeft: number | null;
+  /** Hover-freeze latch state (attract only). */
+  paused: boolean;
   /** Faucet-fund both bots (testnet). */
   fund: () => void;
   /** Fund both bots 0.1 SUI each from the connected wallet (one approval). */
@@ -88,6 +112,18 @@ export interface QuantumPokerAutoSession {
   startAuto: () => void;
   /** Stop looping; the current match finishes, then no new one starts. */
   stopAuto: () => void;
+  /** Hand seat A to the human at the next hand boundary (the in-flight hand finishes bot-driven). */
+  takeOver: () => void;
+  /** Return seat A to the bot (back to attract); the tunnel keeps recycling. */
+  returnHome: () => void;
+  /** During take-over, hand seat A to a bot (on) or take it back (off) — the 🤖 Auto toggle. */
+  setAutoSeat: (on: boolean) => void;
+  /** Queue the human's betting move (consumed by the play loop). */
+  act: (move: PokerMove) => void;
+  /** Hover-freeze the attract loop (latch). */
+  pause: () => void;
+  /** Unfreeze the attract loop. */
+  resume: () => void;
   /** Back to the setup screen, clearing the scoreboard. */
   reset: () => void;
 }
@@ -130,6 +166,11 @@ interface AutoSnapshot {
   state: PokerState | null;
   holesA: number[];
   holesB: number[];
+  manual: boolean;
+  autoSeat: boolean;
+  legal: PokerLegalActions | null;
+  secondsLeft: number | null;
+  paused: boolean;
 }
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -173,6 +214,11 @@ class AutoSession {
     state: null,
     holesA: [],
     holesB: [],
+    manual: false,
+    autoSeat: false,
+    legal: null,
+    secondsLeft: null,
+    paused: false,
   };
   private listeners = new Set<() => void>();
   private balancesLoaded = false;
@@ -181,7 +227,27 @@ class AutoSession {
   private txnId = 0;
 
   private auto = false;
+  // Take-over sub-mode: true = a bot auto-plays the human's seat A (🤖 Auto); false = the human plays.
+  private autoSeat = false;
   private stage: "opening" | "playing" | "settling" = "opening";
+
+  // Take-over mode: false = bot plays seat A (attract); true = a human plays seat A (live). The
+  // tunnel stays selfPlay either way — the human's moves are co-signed as seat A's bot key (ADR-0012).
+  private manual = false;
+  // Take-over requested; flips `manual=true` at the next hand boundary so the in-flight hand finishes
+  // bot-driven (the human starts the NEXT hand).
+  private takeoverPending = false;
+  // The hand number at which take-over was requested; `manual` latches once handNo advances past it.
+  private takeoverFromHand: bigint | null = null;
+  // Hover-freeze latch (attract only — when live the shell is inert, so pause is a no-op there).
+  private paused = false;
+  // The human's queued betting move, consumed by the play loop and then cleared.
+  private pendingMove: PokerMove | null = null;
+  // Human turn timer: counts down from TURN_SECONDS while it's the player's turn; at 0 it auto-checks
+  // (else folds) so an idle player can't stall the hand. `secondsLeft` is null when it isn't our turn.
+  private secondsLeft: number | null = null;
+  private turnTimer: ReturnType<typeof setTimeout> | null = null;
+  private turnTick: ReturnType<typeof setInterval> | null = null;
 
   private nextTimer: ReturnType<typeof setTimeout> | null = null;
   // Bumped on reset/dispose so an in-flight loop knows to abandon ship.
@@ -211,6 +277,16 @@ class AutoSession {
   }
 
   private emit() {
+    const state = this.tunnel?.state ?? null;
+    // Seat A (the human when manual) always shows its own holes. Seat B stays HIDDEN in manual mode
+    // until showdown (only `shownHoleB` is revealed) — a human must not see the bot's cards live; in
+    // attract both seats are shown (spectator view).
+    const holesA = this.manual
+      ? (state?.holeA ?? state?.shownHoleA ?? [])
+      : (state?.holeA ?? []);
+    const holesB = this.manual
+      ? (state?.shownHoleB ?? [])
+      : (state?.holeB ?? []);
     this.snap = {
       status: this.status,
       personas: this.personas,
@@ -222,9 +298,17 @@ class AutoSession {
       funded: this.funded,
       canFundFromWallet: this.deps?.account != null,
       error: this.error,
-      state: this.tunnel?.state ?? null,
-      holesA: this.tunnel?.state.holeA ?? [],
-      holesB: this.tunnel?.state.holeB ?? [],
+      state,
+      holesA,
+      holesB,
+      manual: this.manual,
+      autoSeat: this.autoSeat,
+      legal:
+        this.manual && !this.autoSeat && state && isHumanBettingTurn(state, "A")
+          ? legalPokerActions(state, "A")
+          : null,
+      secondsLeft: this.secondsLeft,
+      paused: this.paused,
     };
     for (const l of this.listeners) l();
   }
@@ -397,11 +481,100 @@ class AutoSession {
     this.endRun();
   };
 
+  /** Request take-over: the human takes seat A at the next hand boundary (the in-flight hand finishes
+   *  bot-driven). Records the current handNo; the loop flips `manual=true` once handNo advances past
+   *  it. Unfreezes a hover-pause so the loop resumes and can latch the take-over. */
+  takeOver = () => {
+    if (!this.manual) {
+      this.takeoverPending = true;
+      this.takeoverFromHand = this.tunnel?.state.handNo ?? null;
+    }
+    this.resume();
+  };
+
+  /** Return seat A to the bot (back to attract). The tunnel keeps recycling — take-over is cosmetic, so
+   *  the channel is never abandoned. */
+  returnHome = () => {
+    this.manual = false;
+    this.autoSeat = false;
+    this.takeoverPending = false;
+    this.takeoverFromHand = null;
+    this.pendingMove = null;
+    this.clearTurn();
+    this.emit();
+  };
+
+  /** During take-over, hand seat A to a bot (on) or take it back (off). The tunnel is untouched —
+   *  only who supplies seat A's moves flips. Switching to the bot drops any half-armed human turn. */
+  setAutoSeat = (on: boolean) => {
+    if (!this.manual || this.autoSeat === on) return;
+    this.autoSeat = on;
+    if (on) {
+      this.pendingMove = null;
+      this.clearTurn();
+    }
+    this.emit();
+  };
+
+  /** Queue the human's betting move (consumed by the play loop). No-op in attract. */
+  act = (move: PokerMove) => {
+    if (!this.manual || this.autoSeat) return;
+    this.pendingMove = move;
+    this.clearTurn();
+  };
+
+  pause = () => {
+    this.paused = true;
+    this.emit();
+  };
+
+  resume = () => {
+    this.paused = false;
+    this.emit();
+  };
+
+  /** Arm the per-turn countdown for the human's seat. At 0 the turn auto-checks if legal (else
+   *  folds) by queueing the move; the loop then applies it. */
+  private armTurn() {
+    if (this.secondsLeft !== null) return; // already armed for this turn
+    this.secondsLeft = TURN_SECONDS;
+    this.emit();
+    this.turnTick = setInterval(() => {
+      this.secondsLeft = this.secondsLeft != null ? this.secondsLeft - 1 : null;
+      this.emit();
+    }, 1000);
+    this.turnTimer = setTimeout(() => {
+      if (!this.manual || !this.tunnel) return;
+      const legal = legalPokerActions(this.tunnel.state, "A");
+      this.pendingMove = legal.canCheck ? { kind: "check" } : { kind: "fold" };
+      this.clearTurn();
+    }, TURN_SECONDS * 1000);
+  }
+
+  private clearTurn() {
+    if (this.turnTimer) {
+      clearTimeout(this.turnTimer);
+      this.turnTimer = null;
+    }
+    if (this.turnTick) {
+      clearInterval(this.turnTick);
+      this.turnTick = null;
+    }
+    this.secondsLeft = null;
+  }
+
   reset = () => {
     this.gen += 1;
     this.stopRequested = false;
     this.clearNext();
+    this.clearTurn();
     this.auto = false;
+    this.manual = false;
+    this.autoSeat = false;
+    this.takeoverPending = false;
+    this.takeoverFromHand = null;
+    this.pendingMove = null;
+    this.paused = false;
     this.tunnel = null;
     this.personas = null;
     this.score = { a: 0, b: 0 };
@@ -418,7 +591,9 @@ class AutoSession {
   dispose = () => {
     this.gen += 1;
     this.clearNext();
+    this.clearTurn();
     this.auto = false;
+    this.manual = false;
     this.deps?.report.setActive(0);
     this.tunnel = null;
     this.listeners.clear();
@@ -557,15 +732,6 @@ class AutoSession {
       this.tunnel = tunnel;
       this.deps.report.bumpCounters({ tunnelsOpened: 1 });
       this.deps.report.setActive(2);
-      this.deps.report.pushLocalTxn({
-        id: ++this.txnId,
-        game: "quantum-poker",
-        time: new Date().toLocaleTimeString("en-GB"),
-        bot: `${this.personas?.a ?? "Bot A"} vs ${this.personas?.b ?? "Bot B"}`,
-        type: "open tunnel",
-        status: "Success",
-        amount: "",
-      });
 
       this.stage = "playing";
       this.pushView();
@@ -616,11 +782,69 @@ class AutoSession {
         lastFlush = Date.now();
       };
       let prevHandNo = tunnel.state.handNo;
+      // One "My Activity" row per finished hand (mirroring blackjack's per-round rows). A hand
+      // settles its net into balanceA at `hand_over` (bets ride in totalBet until then), so the
+      // delta since the last hand is this hand's result from seat A's perspective — the seat a
+      // human takes over. `prevHandPhase` makes the push fire once, on the transition INTO hand_over.
+      let prevHandPhase = tunnel.state.phase;
+      let prevHandBalanceA = tunnel.state.balanceA;
       while (tunnel.state.phase !== "done") {
         if (this.gen !== myGen) return;
         if (this.stopRequested) break; // Back/Stop → leave play, settle this tunnel below, then stop
-        const r = stepPokerAuto(tunnel, botA, botB, ts++);
-        if (!r) break;
+        // Hover-freeze (attract only — when live the shell is inert, so the latch is ignored). Hold
+        // here without tearing down the loop; keep the heartbeat/view alive while parked.
+        while (
+          this.paused &&
+          !this.manual &&
+          this.gen === myGen &&
+          !this.stopRequested
+        ) {
+          this.flushHeartbeat(tunnelId, true);
+          this.pushView();
+          await sleep(90);
+        }
+        if (this.gen !== myGen) return;
+        if (this.stopRequested) break;
+        // Take-over latches at the hand boundary: the in-flight bot-driven hand finishes, then the human
+        // takes seat A from the NEXT hand (handNo has advanced past the value recorded in takeOver()).
+        if (
+          this.takeoverPending &&
+          (this.takeoverFromHand === null ||
+            tunnel.state.handNo > this.takeoverFromHand)
+        ) {
+          this.manual = true;
+          this.takeoverPending = false;
+          this.takeoverFromHand = null;
+          this.deps?.report.setActive(1);
+          this.pushView();
+        }
+        if (this.manual && !this.autoSeat) {
+          const step = stepPokerWithHuman(tunnel, botA, botB, "A", ts);
+          if (step.kind === "await-human") {
+            // Park for the human: arm the countdown and poll until act() (or the timer) queues a move.
+            // CRUCIAL: do NOT bump `ts` and do NOT count an action here — no move was applied. The same
+            // timestamp is reused once the human's move lands below.
+            if (this.pendingMove === null) {
+              this.armTurn();
+              this.pushView();
+              await sleep(POLL_MS);
+              continue;
+            }
+            applyHumanMove(tunnel, botA, "A", this.pendingMove, ts++);
+            this.pendingMove = null;
+            this.clearTurn();
+          } else if (step.kind === "idle") {
+            break; // terminal
+          } else {
+            // A non-betting/bot move was applied (commit/reveal/next_hand or seat B). stepPokerWithHuman
+            // consumed `ts` internally for the applied step, so advance it here to match.
+            ts++;
+          }
+        } else {
+          // Attract, or take-over with 🤖 Auto on — a bot drives seat A (and seat B).
+          const r = stepPokerAuto(tunnel, botA, botB, ts++);
+          if (!r) break;
+        }
         this.actions += 1;
         this.moveCount += 1;
         this.heartbeatActions += 1;
@@ -630,6 +854,28 @@ class AutoSession {
           this.hands += Number(hn - prevHandNo);
           prevHandNo = hn;
         }
+        if (
+          tunnel.state.phase === "hand_over" &&
+          prevHandPhase !== "hand_over"
+        ) {
+          const delta = tunnel.state.balanceA - prevHandBalanceA;
+          prevHandBalanceA = tunnel.state.balanceA;
+          this.deps?.report.pushLocalTxn({
+            id: ++this.txnId,
+            game: "quantum-poker",
+            time: new Date().toLocaleTimeString("en-GB"),
+            bot: this.manual
+              ? "You"
+              : `${this.personas?.a ?? "Bot A"} vs ${this.personas?.b ?? "Bot B"}`,
+            type: delta > 0n ? "Poker Win" : delta < 0n ? "Poker Loss" : "Push",
+            status: "Success",
+            amount: delta > 0n ? `+${delta}` : delta < 0n ? `${delta}` : "0",
+          });
+        }
+        prevHandPhase = tunnel.state.phase;
+        // Watchable pacing only while a human actually plays the seat; attract — and Auto, where a bot
+        // drives the seat — stay on the 16ms render-throttle, i.e. full watch-bots speed.
+        if (this.manual && !this.autoSeat) await sleep(MANUAL_PACE_MS);
         if (Date.now() - lastFlush >= FLUSH_MS) await flush();
       }
       // Final flush — force the heartbeat so the last window is never dropped.
@@ -663,14 +909,20 @@ class AutoSession {
           ? this.botSponsoredSignExec(this.bots.A)
           : this.botSignExec(this.bots.A),
       });
-      this.deps?.report.pushLocalTxn({
+      // One "Settle" row per tunnel close on the Live Transactions feed — same shape as
+      // tic-tac-toe/blackjack (id, digest, settler address, type "Settle"), plus the Walrus
+      // proof poker uniquely produces. Per-hand results already went to My Activity above.
+      this.deps?.report.pushTxn({
         id: ++this.txnId,
         game: "quantum-poker",
+        digest: settled.txDigest,
+        address: this.bots.A.address,
+        proofUrl: settled.proofUrl ?? undefined,
         time: new Date().toLocaleTimeString("en-GB"),
-        bot: `${this.personas?.a ?? "Bot A"} vs ${this.personas?.b ?? "Bot B"}`,
-        type: `settled · ${HAND_CAP} hands`,
+        bot: this.bots.A.address,
+        type: "Settle",
         status: "Success",
-        amount: settled.proofUrl ? "walrus ✓" : "closed",
+        amount: "",
       });
       if (this.gen !== myGen) return;
 
@@ -690,6 +942,10 @@ class AutoSession {
     if (st && st.balanceA > st.balanceB) this.score.a += 1;
     else if (st && st.balanceB > st.balanceA) this.score.b += 1;
     // ties: no increment
+    // The match settled: drop any queued human move and stop the turn timer so a stale act() can't
+    // apply against the closed tunnel before the next match opens.
+    this.pendingMove = null;
+    this.clearTurn();
     this.pushView();
 
     if (!this.auto) {
@@ -766,10 +1022,21 @@ export function useQuantumPokerAuto(windowId: string): QuantumPokerAutoSession {
     state: snap.state,
     holesA: snap.holesA,
     holesB: snap.holesB,
+    manual: snap.manual,
+    autoSeat: snap.autoSeat,
+    legal: snap.legal,
+    secondsLeft: snap.secondsLeft,
+    paused: snap.paused,
     fund: session.fund,
     fundFromWallet: session.fundFromWallet,
     startAuto: session.startAuto,
     stopAuto: session.stopAuto,
+    takeOver: session.takeOver,
+    returnHome: session.returnHome,
+    act: session.act,
+    setAutoSeat: session.setAutoSeat,
+    pause: session.pause,
+    resume: session.resume,
     reset: session.reset,
   };
 }

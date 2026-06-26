@@ -216,7 +216,7 @@ class MachineRuntime {
       deps.report.bumpCounters({ tunnelsOpened: 1 });
       deps.report.pushLocalTxn({
         id: 0,
-        game: "Regular payments",
+        game: "Micro Payments",
         time: new Date().toLocaleTimeString("en-GB"),
         bot: "You",
         type: "Opening",
@@ -227,14 +227,14 @@ class MachineRuntime {
       try {
         const reg = await getControlPlaneClient().registerSession({
           userAddress: deps.account.address,
-          game: "regular-payments",
+          game: "micro-payments",
           tunnels: [{ tunnelId, partyA: user.address, partyB: shop.address }],
         });
         this.sessionId = reg.sessionId;
         this.statsToken = reg.statsToken;
         this.lastHeartbeatAt = Date.now();
       } catch (e) {
-        console.error("[regular-payments] registerSession failed:", e);
+        console.error("[micro-payments] registerSession failed:", e);
       }
 
       await this.stream(myGen, deps, onChange);
@@ -256,7 +256,7 @@ class MachineRuntime {
           ? deps.sponsoredSignExec
           : deps.signExec,
       }).catch((e) => {
-        console.warn("[regular-payments] settle failed:", e);
+        console.warn("[micro-payments] settle failed:", e);
         return undefined;
       });
 
@@ -269,7 +269,7 @@ class MachineRuntime {
             })
               .then((r) => r.digest)
               .catch((e) => {
-                console.warn("[regular-payments] mint failed:", e);
+                console.warn("[micro-payments] mint failed:", e);
                 return undefined;
               })
           : Promise.resolve(undefined);
@@ -284,7 +284,7 @@ class MachineRuntime {
         if (settleDigest) {
           deps.report.pushTxn({
             id: 0,
-            game: "Regular payments",
+            game: "Micro Payments",
             digest: settleDigest,
             address: deps.account.address,
             time,
@@ -295,7 +295,7 @@ class MachineRuntime {
           });
           deps.report.pushLocalTxn({
             id: 0,
-            game: "Regular payments",
+            game: "Micro Payments",
             time,
             bot: "You",
             type: "Settled",
@@ -307,7 +307,7 @@ class MachineRuntime {
         if (mintDigest && this.reward) {
           deps.report.pushTxn({
             id: 0,
-            game: "Regular payments",
+            game: "Micro Payments",
             digest: mintDigest,
             address: deps.account.address,
             time,
@@ -318,7 +318,7 @@ class MachineRuntime {
           });
           deps.report.pushLocalTxn({
             id: 0,
-            game: "Regular payments",
+            game: "Micro Payments",
             time,
             bot: "You",
             type: "Mint NFT",
@@ -409,7 +409,7 @@ class MachineRuntime {
         actionsDelta,
         windowMs: Math.max(1, windowMs),
       })
-      .catch((e) => console.error("[regular-payments] heartbeat failed:", e));
+      .catch((e) => console.error("[micro-payments] heartbeat failed:", e));
   }
 
   private fail(e: unknown, onChange: () => void) {
@@ -498,7 +498,7 @@ class PaymentShopController {
       `machine-${Date.now()}-${this.seq}`,
       `Random NFT #${this.seq}`,
     );
-    this.machines = [...this.machines, runtime];
+    this.machines = [runtime, ...this.machines];
     this.emit();
     void runtime.run(deps, () => this.emit());
   };
@@ -511,7 +511,7 @@ function getController(windowId: string): PaymentShopController {
   if (!c) {
     c = new PaymentShopController();
     controllers.set(windowId, c);
-    registerWindowDisposer(windowId, "regular-payments", () => {
+    registerWindowDisposer(windowId, "micro-payments", () => {
       c!.dispose();
       controllers.delete(windowId);
     });
