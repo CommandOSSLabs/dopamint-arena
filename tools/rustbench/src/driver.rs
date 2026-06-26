@@ -8,6 +8,7 @@ use crate::engine::crypto::KeyPair;
 use crate::engine::tunnel::{DistTunnel, Endpoint};
 use crate::engine::wire::Settlement;
 use crate::game::blackjack::{plan, Party};
+use std::time::Instant;
 
 pub struct MatchResult {
     pub moves: u64,
@@ -17,6 +18,7 @@ pub struct MatchResult {
     pub settlement: Settlement,
     pub sig_a: [u8; 64],
     pub sig_b: [u8; 64],
+    pub play_ns: u128,
 }
 
 /// Pump one seat's proposal to the other and back until quiescent; returns bytes sent.
@@ -55,6 +57,7 @@ fn play_loop(
     created_at: u64,
     max_moves: u64,
 ) -> MatchResult {
+    let started = Instant::now();
     let mut moves = 0u64;
     let mut bytes = 0usize;
     let mut ts = created_at;
@@ -115,6 +118,7 @@ fn play_loop(
         settlement,
         sig_a,
         sig_b,
+        play_ns: started.elapsed().as_nanos(),
     }
 }
 
@@ -267,5 +271,13 @@ mod tests {
         );
         assert_eq!(prepared.sig_a, baseline.sig_a);
         assert_eq!(prepared.sig_b, baseline.sig_b);
+    }
+
+    #[test]
+    fn match_result_reports_play_ns() {
+        let sa: [u8; 32] = std::array::from_fn(|i| (i + 1) as u8);
+        let sb: [u8; 32] = std::array::from_fn(|i| (i + 33) as u8);
+        let r = play_fixed_match("0xab", &sa, &sb, 200, 200, 1234567890, 500);
+        assert!(r.play_ns > 0, "play loop must take measurable time");
     }
 }
