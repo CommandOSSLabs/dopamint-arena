@@ -150,3 +150,25 @@ test("rejects all pending when no wallet deps are available", async () => {
   const batcher = new TunnelOpenBatcher(() => null, { flushDelayMs: 0 });
   await assert.rejects(() => batcher.request(req("0xA")), /no wallet/i);
 });
+
+test("requests arriving within the debounce window share one flush", async () => {
+  let signs = 0;
+  const deps = fakeDeps({ onSign: () => (signs += 1) });
+  (deps.reads as any).getTransactionBlock = async () => ({
+    objectChanges: ["0xA", "0xB"].map((a) => ({
+      type: "created",
+      objectType: "0xpkg::tunnel::Tunnel<0x2::sui::SUI>",
+      objectId: "tunnel-for-" + a,
+    })),
+  });
+  (deps.reads as any).getObject = async (i: { id: string }) => ({
+    data: { content: { fields: { party_a: { fields: { address: i.id.replace("tunnel-for-", "") } } } } },
+  });
+  const batcher = new TunnelOpenBatcher(() => deps, { flushDelayMs: 20, maxBatch: 16 });
+  const p1 = batcher.request(req("0xA"));
+  // second request 5ms later — still inside the 20ms debounce → same flush
+  await new Promise((r) => setTimeout(r, 5));
+  const p2 = batcher.request(req("0xB"));
+  await Promise.all([p1, p2]);
+  assert.equal(signs, 1, "staggered-but-close requests coalesce into one PTB");
+});
