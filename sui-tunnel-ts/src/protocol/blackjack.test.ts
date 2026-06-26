@@ -4,7 +4,7 @@ import {
   BlackjackProtocol,
   BlackjackState,
   BlackjackMove,
-  SlotSecret,
+  BlackjackSlotSecret,
   WAGER,
   deriveRank,
   getPlayerParty,
@@ -18,27 +18,27 @@ const ctx = { tunnelId: "0xab", initialBalances: { a: 1000n, b: 1000n } };
 const fresh = (): BlackjackState => proto.initialState(ctx);
 
 // ---- shared test helpers (used by later tasks too) ----
-function secret(valueByte: number, saltByte = valueByte): SlotSecret {
+function secret(valueByte: number, saltByte = valueByte): BlackjackSlotSecret {
   return {
     value: Uint8Array.from([valueByte & 0xff]),
     salt: new Uint8Array(16).fill(saltByte & 0xff),
   };
 }
-function commitMove(s: SlotSecret): BlackjackMove {
+function commitMove(s: BlackjackSlotSecret): BlackjackMove {
   return {
     kind: "commit",
     commitment: computeCommitment(s.value, s.salt),
     localSecret: s,
   };
 }
-function revealMove(s: SlotSecret): BlackjackMove {
+function revealMove(s: BlackjackSlotSecret): BlackjackMove {
   return { kind: "reveal", reveal: s };
 }
 /** Run one full card draw (both commit, both reveal) on an in-progress draw. */
 function doDraw(
   s: BlackjackState,
-  sa: SlotSecret,
-  sb: SlotSecret,
+  sa: BlackjackSlotSecret,
+  sb: BlackjackSlotSecret,
 ): BlackjackState {
   s = proto.applyMove(s, commitMove(sa), "A");
   s = proto.applyMove(s, commitMove(sb), "B");
@@ -47,7 +47,9 @@ function doDraw(
   return s;
 }
 /** Find a secret pair whose derived rank equals `rank` (for deterministic hands). */
-function secretsForRank(rank: number): [SlotSecret, SlotSecret] {
+function secretsForRank(
+  rank: number,
+): [BlackjackSlotSecret, BlackjackSlotSecret] {
   for (let i = 0; i < 1 << 16; i++) {
     const a = secret(i & 0xff, (i >> 4) & 0xff);
     const b = secret((i >> 8) & 0xff, (i >> 12) & 0xff);

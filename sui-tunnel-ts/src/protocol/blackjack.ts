@@ -29,6 +29,7 @@ import {
   combineReveals,
   computeCommitment,
   verifyCommitment,
+  MIN_SALT_LEN,
 } from "../core/commitment";
 import { nextU64InRange, seedFromBytes } from "../core/randomness";
 
@@ -53,11 +54,11 @@ export type BlackjackPhase =
   | "player"
   | "round_over";
 
-export interface SlotReveal {
+export interface BlackjackSlotReveal {
   value: Uint8Array;
   salt: Uint8Array;
 }
-export type SlotSecret = SlotReveal;
+export type BlackjackSlotSecret = BlackjackSlotReveal;
 
 export type DrawReason = "deal" | "hit" | "dealer_auto";
 export interface DrawContext {
@@ -78,11 +79,11 @@ export interface BlackjackState {
   draw: DrawContext | null;
   pendingCommitA: Uint8Array | null;
   pendingCommitB: Uint8Array | null;
-  pendingRevealA: SlotReveal | null;
-  pendingRevealB: SlotReveal | null;
+  pendingRevealA: BlackjackSlotReveal | null;
+  pendingRevealB: BlackjackSlotReveal | null;
   /** Local-only seat secrets. NEVER encoded into signed state; the relay codec omits them. */
-  localSecretA: SlotSecret | null;
-  localSecretB: SlotSecret | null;
+  localSecretA: BlackjackSlotSecret | null;
+  localSecretB: BlackjackSlotSecret | null;
   balanceA: bigint;
   balanceB: bigint;
   total: bigint;
@@ -91,8 +92,12 @@ export interface BlackjackState {
 
 export type BlackjackMove =
   | { kind: "deal" }
-  | { kind: "commit"; commitment: Uint8Array; localSecret?: SlotSecret }
-  | { kind: "reveal"; reveal: SlotReveal }
+  | {
+      kind: "commit";
+      commitment: Uint8Array;
+      localSecret?: BlackjackSlotSecret;
+    }
+  | { kind: "reveal"; reveal: BlackjackSlotReveal }
   | { kind: "hit" }
   | { kind: "stand" }
   | { kind: "forfeit" };
@@ -155,7 +160,10 @@ export function blackjackHandValue(hand: number[]): number {
 }
 
 /** Derive a rank 1..13 from two reveals (rejection-sampled, unbiased). */
-export function deriveRank(a: SlotReveal, b: SlotReveal): number {
+export function deriveRank(
+  a: BlackjackSlotReveal,
+  b: BlackjackSlotReveal,
+): number {
   const seed = seedFromBytes(combineReveals(a.value, a.salt, b.value, b.salt));
   const [v] = nextU64InRange(seed, 0n, 13n);
   return Number(v) + 1;
@@ -286,7 +294,7 @@ function applyCommit(
   if (move.commitment.length !== 32)
     throw new Error("commitment must be 32 bytes");
   const commit = move.commitment.slice();
-  const secret: SlotSecret | null = move.localSecret
+  const secret: BlackjackSlotSecret | null = move.localSecret
     ? {
         value: move.localSecret.value.slice(),
         salt: move.localSecret.salt.slice(),
@@ -316,7 +324,7 @@ function applyReveal(
   if (!commit) throw new Error(`party ${by} has no commitment to reveal`);
   if (!verifyCommitment(commit, move.reveal.value, move.reveal.salt))
     throw new Error(`reveal does not match commitment for party ${by}`);
-  const reveal: SlotReveal = {
+  const reveal: BlackjackSlotReveal = {
     value: move.reveal.value.slice(),
     salt: move.reveal.salt.slice(),
   };
@@ -351,11 +359,11 @@ function claimForfeit(s: BlackjackState, by: Party): BlackjackState {
   return settle(s, by);
 }
 
-function randomSecret(rng: () => number): SlotSecret {
+function randomSecret(rng: () => number): BlackjackSlotSecret {
   const b = () => Math.floor(rng() * 256) & 0xff;
   return {
     value: Uint8Array.from([b()]),
-    salt: Uint8Array.from({ length: 16 }, b),
+    salt: Uint8Array.from({ length: MIN_SALT_LEN }, b),
   };
 }
 
