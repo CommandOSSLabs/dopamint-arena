@@ -1,4 +1,4 @@
-# 0015 — Deterministic tunnelId seed vs commit-reveal for game randomness
+# 0017 — Deterministic tunnelId seed vs commit-reveal for game randomness
 
 - **Status**: Accepted
 - **Date**: 2026-06-22

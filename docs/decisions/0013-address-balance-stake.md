@@ -5,7 +5,7 @@
 
 ## Context
 
-Sponsored open/fund (ADR-0014) pays gas from the settler's **SIP-58
+Sponsored open/fund (ADR-0009) pays gas from the settler's **SIP-58
 address-balance** (empty `gas_payment.objects` + `ValidDuring` nonce), so
 concurrent sponsored closes/opens never equivocate on a gas coin. The **stake**,
 however, still comes from a user-owned `Coin<T>` object: the open PTB does

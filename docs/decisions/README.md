@@ -12,7 +12,7 @@ _why_ survives after the people involved have moved on.
   It is **not** for implementation details, library/component choices, or a game
   adopting an already-recorded pattern — those belong in a design doc or the PR.
 - One file per decision: `NNNN-kebab-case-title.md` (zero-padded, monotonic and
-  **unique** — never reuse a number).
+  **unique** — never reuse a number). Numbers match the references in the code.
 - Copy `0000-template.md` to start.
 - Status moves `Proposed → Accepted → (Superseded by NNNN)`. Never delete a
   superseded ADR — mark it and link forward, so the history stays readable.
@@ -38,13 +38,12 @@ _why_ survives after the people involved have moved on.
 - [0008](0008-quantum-poker-protocol-zk.md) — Quantum Poker: protocol-first
   tunnel model, per-slot asymmetric commit-reveal, n-deck/burn/Five-of-a-Kind
   rules, and optional ZK dispute adapter.
-- [0009](0009-data-plane-local-control-plane-redis.md) — Partition by ownership:
-  single-owned per-move state (relay, counters, routing cache) in-process; shared
-  state (matchmaking, presence, match record, checkpoints, stats) on atomic Redis.
-  Refines 0005; demotes its per-frame `SPUBLISH` to a fallback.
-- [0010](0010-mp-resume-protocol.md) — MP resume: atomic `ConnRef` rebind,
-  event-driven peer-cache eviction, peer-to-peer state reconciliation; on-chain
-  settlement is the floor. Affinity/re-homing deferred to ADR-0011.
+- [0009](0009-sponsor-create-and-fund-gas.md) — Backend sponsors gas (only) for
+  the user's open/fund tx via SIP-58 address balance; the user's stake stays
+  user-owned. Enables 0-SUI zkLogin onboarding.
+- [0010](0010-mtps-stake-token.md) — Free faucet-minted MTPS token for stakes
+  (not SUI), auto-minted before stake; gas still sponsored in SUI. (Token renamed
+  DOPAMINT → MTPS.)
 - [0011](0011-local-first-pairing.md) — Local-first pairing: bounded-hold
   matchmaking (same-instance preferred, ≤750 ms hold before cross-instance
   fallback) plus a reconnect affinity cookie for co-location.
@@ -58,15 +57,24 @@ _why_ survives after the people involved have moved on.
   `Coin<T>`, so concurrent reload opens stop equivocating. Sponsor allowlist gains
   `redeem_funds`/`send_funds` + a mandatory `WithdrawFrom::Sender` input guard
   (anti settler-drain). Behind `VITE_MTPS_ADDRESS_BALANCE`; no Move redeploy.
-- [0014](0014-sponsor-create-and-fund-gas.md) — Backend sponsors gas (only) for
-  the user's open/fund tx via SIP-58 address balance; the user's stake stays
-  user-owned. Enables 0-SUI zkLogin onboarding.
-- [0015](0015-deterministic-seed-vs-commit-reveal.md) — Derive randomness from a
+- [0014](0014-enoki-sponsor-with-settler-fallback.md) — Enoki sponsored
+  transactions as the primary gas source with the settler wallet as fallback:
+  validate-first, `provider`-tagged response, stateless two-call Enoki execute,
+  settler path unchanged. Refines 0009.
+- [0015](0015-data-plane-local-control-plane-redis.md) — Partition by ownership:
+  single-owned per-move state (relay, counters, routing cache) in-process; shared
+  state (matchmaking, presence, match record, checkpoints, stats) on atomic Redis.
+  Refines 0005; demotes its per-frame `SPUBLISH` to a fallback.
+- [0016](0016-mp-resume-protocol.md) — MP resume: atomic `ConnRef` rebind,
+  event-driven peer-cache eviction, peer-to-peer state reconciliation; on-chain
+  settlement is the floor. Affinity/re-homing deferred to ADR-0011.
+- [0017](0017-deterministic-seed-vs-commit-reveal.md) — Derive randomness from a
   deterministic `tunnelId` seed for public symmetric fields (blackjack, bomb-it,
   chicken-cross); reserve commit-reveal for hidden-state games.
-- [0016](0016-mtps-stake-token.md) — Free faucet-minted MTPS token for stakes
-  (not SUI), auto-minted before stake; gas still sponsored in SUI. (Token renamed
-  DOPAMINT → MTPS.)
-- [0017](0017-multi-game-self-play-per-game-seed.md) — Multi-game wrappers with a
+- [0018](0018-multi-game-self-play-per-game-seed.md) — Multi-game wrappers with a
   synthetic per-game seed (`` `${tunnelId}:g${gamesPlayed}` ``) for bomb-it &
   chicken-cross, mirroring battleship's many-games-per-tunnel shape.
+
+> Numbers 0004 (multiplayer experience lane) and 0006 have no record file: 0004
+> predates this directory (still referenced from code/specs), and 0006 was
+> dropped. The numbers are retired, not reused.

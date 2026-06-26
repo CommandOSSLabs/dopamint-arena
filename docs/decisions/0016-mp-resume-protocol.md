@@ -1,19 +1,19 @@
-# 0010 — MP resume protocol: rebind, peer-reconcile, on-chain floor
+# 0016 — MP resume protocol: rebind, peer-reconcile, on-chain floor
 
 - **Status**: Accepted
 - **Date**: 2026-06-22
 - **Refs**: implements the deferred "resume protocol" from
-  [ADR-0009](0009-data-plane-local-control-plane-redis.md) §Consequences and §Open questions.
+  [ADR-0015](0015-data-plane-local-control-plane-redis.md) §Consequences and §Open questions.
   Full design rationale is kept in the mp-resume-protocol design notes.
 
 ## Context
 
 A dropped WebSocket abandons a live match. The match record survives in Redis (6h TTL) but both
 seat `ConnRef`s are stale — any relayed frame goes into the void and there is no path for the
-returning player to re-attach. ADR-0009 deferred the resume protocol to its own ADR. This is it.
+returning player to re-attach. ADR-0015 deferred the resume protocol to its own ADR. This is it.
 
 The core tension: a correct resume path must not add Redis or on-chain ops to the per-move
-relay path (ADR-0009's central invariant), yet it must handle the returning client's need for
+relay path (ADR-0015's central invariant), yet it must handle the returning client's need for
 a fresh socket binding and the peer's need for an up-to-date routing cache entry.
 
 ## Decision
@@ -56,7 +56,7 @@ contestable by a late-returning peer.
 - **Per-move path is unchanged.** `relay_to_other` issues no new Redis or on-chain ops; it reads
   the match from its per-connection cache. Resume invalidates that cache via `evict`, costing one
   `get_match` GET on the peer's first post-resume relay — never per move. Performance invariant
-  from ADR-0009 holds.
+  from ADR-0015 holds.
 - **`peer.dropped` is robust for both seats.** Both seats' relay caches are warm at `match.found`:
   the match-creating connection inserts the record locally, and the waiter (the seat paired by the
   other player's action) is warmed at match creation via the bus `populate` ctrl signal (local or

@@ -1,4 +1,4 @@
-# 0009 — Data plane local, control plane on Redis: partition by ownership
+# 0015 — Data plane local, control plane on Redis: partition by ownership
 
 - **Status**: Proposed
 - **Date**: 2026-06-20
@@ -83,7 +83,7 @@ settlement, so we persist checkpoints, **not** moves.
 - **Realizing the local path needs two follow-ups, each its own ADR:** (a) an
   **affinity mechanism** to co-locate both seats (local-first matchmaking and/or an
   owner-home routing token), and (b) a **resume protocol** so a dropped socket
-  reattaches to its match (now specified in [ADR-0010](0010-mp-resume-protocol.md);
+  reattaches to its match (now specified in [ADR-0016](0016-mp-resume-protocol.md);
   affinity/re-homing remains deferred to a future ADR-0011). Both are _optimizations
   and robustness_ layered on this partition, not preconditions for it: until they
   land, a split match still works correctly over the pub/sub fallback.
@@ -103,7 +103,7 @@ settlement, so we persist checkpoints, **not** moves.
 - **Affinity mechanism** (own ADR): local-first pairing vs owner-home routing
   token vs hybrid; and the ingress it pins against (plain ALB app-cookie stickiness
   vs a WS gateway we control).
-- **Resume protocol** (specified in [ADR-0010](0010-mp-resume-protocol.md)):
+- **Resume protocol** (specified in [ADR-0016](0016-mp-resume-protocol.md)):
   `ConnRef` rebind, peer-cache invalidation, FE reconnect loop. Owner-death
   re-homing via a Redis CAS on `owner_instance_id` is deferred to a future
   ADR-0011 (affinity).

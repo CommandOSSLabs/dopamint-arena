@@ -307,9 +307,9 @@ effective TPS = (live Agent-AI bots + human painters) × (pixels/sec per tunnel)
 
 ### Economy — free to play, no SUI required
 
-- **Gas sponsorship** ([ADR-0014](../decisions/0014-sponsor-create-and-fund-gas.md)): the settler pays all
+- **Gas sponsorship** ([ADR-0009](../decisions/0009-sponsor-create-and-fund-gas.md)): the settler pays all
   gas in SUI; the player pays nothing. Painters never hold SUI.
-- **DOPAMINT stake** ([ADR-0016 stake token](../decisions/0016-mtps-stake-token.md)): an unlimited
+- **DOPAMINT stake** ([ADR-0010 stake token](../decisions/0010-mtps-stake-token.md)): an unlimited
   faucet-minted token. Before staking, if a painter's balance is short, one gas-sponsored `mint` tops
   them up **invisibly** (no balance UI, no faucet button). A 0-SUI / 0-DOPAMINT visitor connects →
   faucet mints (sponsored) → open/fund stakes DOPAMINT (sponsored) → paints. Fully free.
@@ -317,7 +317,7 @@ effective TPS = (live Agent-AI bots + human painters) × (pixels/sec per tunnel)
   On-chain cost is **open/fund/close only** (~3 txs per painter session), and is independent of TPS;
   it scales with _tunnel count × settle frequency_, not pixels. Free mode = balances never shift =
   every close is a draw = zero dispute surface. The only finite resource under load is the **settler's
-  SUI for gas** — monitor/refill it (the deferred rate-limit/budget from ADR-0016 applies here too).
+  SUI for gas** — monitor/refill it (the deferred rate-limit/budget from ADR-0010 applies here too).
 
 ---
 
@@ -394,7 +394,7 @@ no basemap, no map library**. The dashboard shows real per-game TPS. No OSM, no 
 4. **Persistent global state.** Redis-only (resets on restart) for MVP; periodic Walrus snapshots +
    chain anchor for production. Where the canonical wall lives long-term is an ADR.
 5. **Settler SUI drain.** Every close burns settler gas; under fleet load this is the real bottleneck.
-   Rate-limit + spend-budget (deferred in ADR-0016) become load-bearing here.
+   Rate-limit + spend-budget (deferred in ADR-0010) become load-bearing here.
 6. **Agent-AI spawn caps.** Each click spawns a forever-painting agent; unbounded clicks can saturate the
    hub signer / relay / settler. Need a per-client spawn cap + a global concurrency ceiling, decided under
    load testing.
@@ -411,7 +411,7 @@ no basemap, no map library**. The dashboard shows real per-game TPS. No OSM, no 
 | Layer                   | Reused as-is                                                                                                                     | New / adapted                                                                       |
 | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
 | **Move contract**       | `tunnel` (`create`/`deposit`/`close_cooperative_with_root`), generic over coin `T`                                               | none                                                                                |
-| **Stake / gas**         | ADR-0014 sponsor (gas-only), ADR-0016 DOPAMINT faucet + invisible auto-faucet                                                    | none                                                                                |
+| **Stake / gas**         | ADR-0009 sponsor (gas-only), ADR-0010 DOPAMINT faucet + invisible auto-faucet                                                    | none                                                                                |
 | **Relay**               | opaque `match_id`/`game` frame forwarder (`mp/ws.rs`), `quickMatch`, `Connect`/`Resume`                                          | none                                                                                |
 | **Protocol SDK**        | `Protocol<State,Move>` interface, `rollingDigest`, `chat.ts` as the template                                                     | `worldCanvas.ts`                                                                    |
 | **TPS / dashboard**     | `stats.rs` 5 s `RateWindow` derivative, `per_game` bucket, SSE log-scale chart                                                   | a `"world-canvas"` id                                                               |
@@ -419,7 +419,7 @@ no basemap, no map library**. The dashboard shows real per-game TPS. No OSM, no 
 | **Agent fleet**         | `?agent&m=N` runner, `AGENT_GAMES` rotation, `GameSpec`                                                                          | one `GameSpec` entry + "Agent AI" button                                            |
 | **Frontend game shape** | blackjack self-play package layout; `useBlackjackSession` / `session-core` patterns; `onchain/tunnelTx.ts` `openAndFundSelfPlay` | `worldCanvas/` package                                                              |
 | **Render**              | pixel-duel `PixelCanvas` core (rAF, zoom/pan, snap, cull, ghost)                                                                 | strip fog/turns; infinite 256×256 chunked grid; Phase 1 OSM Mercator under MapLibre |
-| **Resilience**          | ADR-0010 MP resume (rebind + peer-reconcile) for dropped painters                                                                | none                                                                                |
+| **Resilience**          | ADR-0016 MP resume (rebind + peer-reconcile) for dropped painters                                                                | none                                                                                |
 
 ---
 
