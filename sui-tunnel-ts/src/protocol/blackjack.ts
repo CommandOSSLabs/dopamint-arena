@@ -105,8 +105,15 @@ const PHASE_CODE: Record<BlackjackPhase, number> = {
   player: 2,
   round_over: 3,
 };
-const FORHAND_CODE: Record<DrawContext["forHand"], number> = { player: 0, dealer: 1 };
-const REASON_CODE: Record<DrawReason, number> = { deal: 0, hit: 1, dealer_auto: 2 };
+const FORHAND_CODE: Record<DrawContext["forHand"], number> = {
+  player: 0,
+  dealer: 1,
+};
+const REASON_CODE: Record<DrawReason, number> = {
+  deal: 0,
+  hit: 1,
+  dealer_auto: 2,
+};
 
 // ============================================
 // PURE HELPERS
@@ -272,7 +279,7 @@ function afterDraw(s: BlackjackState, rank: number): BlackjackState {
 function applyCommit(
   s: BlackjackState,
   move: Extract<BlackjackMove, { kind: "commit" }>,
-  by: Party
+  by: Party,
 ): BlackjackState {
   const already = by === "A" ? s.pendingCommitA : s.pendingCommitB;
   if (already) throw new Error(`party ${by} already committed`);
@@ -280,7 +287,10 @@ function applyCommit(
     throw new Error("commitment must be 32 bytes");
   const commit = move.commitment.slice();
   const secret: SlotSecret | null = move.localSecret
-    ? { value: move.localSecret.value.slice(), salt: move.localSecret.salt.slice() }
+    ? {
+        value: move.localSecret.value.slice(),
+        salt: move.localSecret.salt.slice(),
+      }
     : null;
   const next: BlackjackState = {
     ...s,
@@ -298,7 +308,7 @@ function applyCommit(
 function applyReveal(
   s: BlackjackState,
   move: Extract<BlackjackMove, { kind: "reveal" }>,
-  by: Party
+  by: Party,
 ): BlackjackState {
   const already = by === "A" ? s.pendingRevealA : s.pendingRevealB;
   if (already) throw new Error(`party ${by} already revealed`);
@@ -343,7 +353,10 @@ function claimForfeit(s: BlackjackState, by: Party): BlackjackState {
 
 function randomSecret(rng: () => number): SlotSecret {
   const b = () => Math.floor(rng() * 256) & 0xff;
-  return { value: Uint8Array.from([b()]), salt: Uint8Array.from({ length: 16 }, b) };
+  return {
+    value: Uint8Array.from([b()]),
+    salt: Uint8Array.from({ length: 16 }, b),
+  };
 }
 
 function lengthPrefixed(bytes: Uint8Array): Uint8Array[] {
@@ -354,7 +367,10 @@ function lengthPrefixed(bytes: Uint8Array): Uint8Array[] {
 // PROTOCOL
 // ============================================
 
-export class BlackjackProtocol implements Protocol<BlackjackState, BlackjackMove> {
+export class BlackjackProtocol implements Protocol<
+  BlackjackState,
+  BlackjackMove
+> {
   readonly name = "blackjack.v2";
 
   initialState(ctx: ProtocolContext): BlackjackState {
@@ -380,7 +396,11 @@ export class BlackjackProtocol implements Protocol<BlackjackState, BlackjackMove
     return base;
   }
 
-  applyMove(state: BlackjackState, move: BlackjackMove, by: Party): BlackjackState {
+  applyMove(
+    state: BlackjackState,
+    move: BlackjackMove,
+    by: Party,
+  ): BlackjackState {
     switch (state.phase) {
       case "round_over": {
         if (move.kind !== "deal")
@@ -392,13 +412,17 @@ export class BlackjackProtocol implements Protocol<BlackjackState, BlackjackMove
       case "draw_commit": {
         if (move.kind === "forfeit") return claimForfeit(state, by);
         if (move.kind !== "commit")
-          throw new Error(`expected 'commit' in draw_commit, got '${move.kind}'`);
+          throw new Error(
+            `expected 'commit' in draw_commit, got '${move.kind}'`,
+          );
         return applyCommit(state, move, by);
       }
       case "draw_reveal": {
         if (move.kind === "forfeit") return claimForfeit(state, by);
         if (move.kind !== "reveal")
-          throw new Error(`expected 'reveal' in draw_reveal, got '${move.kind}'`);
+          throw new Error(
+            `expected 'reveal' in draw_reveal, got '${move.kind}'`,
+          );
         return applyReveal(state, move, by);
       }
       case "player": {
@@ -413,7 +437,9 @@ export class BlackjackProtocol implements Protocol<BlackjackState, BlackjackMove
             return resolveShowdown(state);
           return beginDraw(state, { forHand: "dealer", reason: "dealer_auto" });
         }
-        throw new Error(`expected 'hit' or 'stand' in player phase, got '${move.kind}'`);
+        throw new Error(
+          `expected 'hit' or 'stand' in player phase, got '${move.kind}'`,
+        );
       }
       default:
         throw new Error(`phase ${state.phase} not implemented`);
@@ -436,7 +462,11 @@ export class BlackjackProtocol implements Protocol<BlackjackState, BlackjackMove
     if (s.draw === null) parts.push(new Uint8Array([0xff]));
     else
       parts.push(
-        new Uint8Array([1, FORHAND_CODE[s.draw.forHand], REASON_CODE[s.draw.reason]])
+        new Uint8Array([
+          1,
+          FORHAND_CODE[s.draw.forHand],
+          REASON_CODE[s.draw.reason],
+        ]),
       );
     parts.push(...lengthPrefixed(s.pendingCommitA ?? new Uint8Array(0)));
     parts.push(...lengthPrefixed(s.pendingCommitB ?? new Uint8Array(0)));
@@ -463,7 +493,7 @@ export class BlackjackProtocol implements Protocol<BlackjackState, BlackjackMove
   randomMove(
     s: BlackjackState,
     by: Party,
-    rng: () => number
+    rng: () => number,
   ): BlackjackMove | null {
     if (this.isTerminal(s)) return null;
     switch (s.phase) {
@@ -491,7 +521,9 @@ export class BlackjackProtocol implements Protocol<BlackjackState, BlackjackMove
       }
       case "player": {
         if (by !== getPlayerParty(s.round)) return null;
-        return { kind: blackjackHandValue(s.playerHand) < 17 ? "hit" : "stand" };
+        return {
+          kind: blackjackHandValue(s.playerHand) < 17 ? "hit" : "stand",
+        };
       }
     }
   }

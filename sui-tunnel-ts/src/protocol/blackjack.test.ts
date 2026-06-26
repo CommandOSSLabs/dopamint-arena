@@ -25,13 +25,21 @@ function secret(valueByte: number, saltByte = valueByte): SlotSecret {
   };
 }
 function commitMove(s: SlotSecret): BlackjackMove {
-  return { kind: "commit", commitment: computeCommitment(s.value, s.salt), localSecret: s };
+  return {
+    kind: "commit",
+    commitment: computeCommitment(s.value, s.salt),
+    localSecret: s,
+  };
 }
 function revealMove(s: SlotSecret): BlackjackMove {
   return { kind: "reveal", reveal: s };
 }
 /** Run one full card draw (both commit, both reveal) on an in-progress draw. */
-function doDraw(s: BlackjackState, sa: SlotSecret, sb: SlotSecret): BlackjackState {
+function doDraw(
+  s: BlackjackState,
+  sa: SlotSecret,
+  sb: SlotSecret,
+): BlackjackState {
   s = proto.applyMove(s, commitMove(sa), "A");
   s = proto.applyMove(s, commitMove(sb), "B");
   s = proto.applyMove(s, revealMove(sa), "A");
@@ -48,10 +56,20 @@ function secretsForRank(rank: number): [SlotSecret, SlotSecret] {
   throw new Error(`no secrets found for rank ${rank}`);
 }
 
-export { proto, ctx, fresh, secret, commitMove, revealMove, doDraw, secretsForRank };
+export {
+  proto,
+  ctx,
+  fresh,
+  secret,
+  commitMove,
+  revealMove,
+  doDraw,
+  secretsForRank,
+};
 
 test("deriveRank is deterministic and within 1..13", () => {
-  const a = secret(7), b = secret(42);
+  const a = secret(7),
+    b = secret(42);
   const r1 = deriveRank(a, b);
   const r2 = deriveRank(a, b);
   assert.equal(r1, r2);
@@ -60,9 +78,13 @@ test("deriveRank is deterministic and within 1..13", () => {
 
 test("deriveRank needs both shares (swapping a share changes the rank space)", () => {
   const ranks = new Set<number>();
-  for (let i = 0; i < 200; i++) ranks.add(deriveRank(secret(i), secret(255 - i)));
+  for (let i = 0; i < 200; i++)
+    ranks.add(deriveRank(secret(i), secret(255 - i)));
   // Over many independent pairs we see a healthy spread of ranks, not a constant.
-  assert.ok(ranks.size > 5, `expected spread, got ${ranks.size} distinct ranks`);
+  assert.ok(
+    ranks.size > 5,
+    `expected spread, got ${ranks.size} distinct ranks`,
+  );
 });
 
 test("initialState begins the opening deal in draw_commit", () => {
@@ -78,7 +100,10 @@ test("initialState begins the opening deal in draw_commit", () => {
 });
 
 test("initialState is terminal when a round cannot be funded", () => {
-  const s = proto.initialState({ tunnelId: "0xab", initialBalances: { a: 50n, b: 1000n } });
+  const s = proto.initialState({
+    tunnelId: "0xab",
+    initialBalances: { a: 50n, b: 1000n },
+  });
   assert.equal(s.phase, "round_over");
   assert.ok(proto.isTerminal(s));
 });
@@ -103,12 +128,20 @@ test("both commits advance draw_commit -> draw_reveal", () => {
 test("a party cannot commit twice for the same card", () => {
   let s = fresh();
   s = proto.applyMove(s, commitMove(secret(1)), "A");
-  assert.throws(() => proto.applyMove(s, commitMove(secret(9)), "A"), /already committed/);
+  assert.throws(
+    () => proto.applyMove(s, commitMove(secret(9)), "A"),
+    /already committed/,
+  );
 });
 
 test("deal from round_over starts the next round", () => {
   // Build a round_over state both can fund.
-  const over: BlackjackState = { ...fresh(), phase: "round_over", round: 2n, draw: null };
+  const over: BlackjackState = {
+    ...fresh(),
+    phase: "round_over",
+    round: 2n,
+    draw: null,
+  };
   const s = proto.applyMove(over, { kind: "deal" }, "A");
   assert.equal(s.phase, "draw_commit");
   assert.equal(s.round, 3n);
@@ -116,14 +149,26 @@ test("deal from round_over starts the next round", () => {
 });
 
 test("non-deal move is rejected in round_over", () => {
-  const over: BlackjackState = { ...fresh(), phase: "round_over", round: 2n, draw: null };
-  assert.throws(() => proto.applyMove(over, { kind: "hit" }, "A"), /expected 'deal'/);
+  const over: BlackjackState = {
+    ...fresh(),
+    phase: "round_over",
+    round: 2n,
+    draw: null,
+  };
+  assert.throws(
+    () => proto.applyMove(over, { kind: "hit" }, "A"),
+    /expected 'deal'/,
+  );
 });
 
 test("a full opening deal lands in player phase with 2+2 cards", () => {
   let s = fresh();
   for (let i = 0; i < 4; i++) {
-    assert.equal(s.phase, "draw_commit", `card ${i} should start in draw_commit`);
+    assert.equal(
+      s.phase,
+      "draw_commit",
+      `card ${i} should start in draw_commit`,
+    );
     s = doDraw(s, secret(i * 2 + 1), secret(i * 2 + 2));
   }
   assert.equal(s.phase, "player");
@@ -139,7 +184,10 @@ test("a reveal that does not match its commitment is rejected", () => {
   s = proto.applyMove(s, commitMove(secret(2)), "B");
   assert.equal(s.phase, "draw_reveal");
   // Reveal a DIFFERENT secret than A committed.
-  assert.throws(() => proto.applyMove(s, revealMove(secret(99)), "A"), /does not match commitment/);
+  assert.throws(
+    () => proto.applyMove(s, revealMove(secret(99)), "A"),
+    /does not match commitment/,
+  );
 });
 
 test("encodeState is stable for the same state", () => {
@@ -198,11 +246,17 @@ test("stand kicks off the dealer auto-draw", () => {
 
 test("only the player party may hit", () => {
   const s = dealtToPlayer(); // round 1 -> player is A
-  assert.throws(() => proto.applyMove(s, { kind: "hit" }, "B"), /player's \(A\) turn/);
+  assert.throws(
+    () => proto.applyMove(s, { kind: "hit" }, "B"),
+    /player's \(A\) turn/,
+  );
 });
 
 /** From a player-phase state, stand and run dealer auto-draws (all forced to `rank`). */
-function standAndResolve(s: BlackjackState, dealerRank: number): BlackjackState {
+function standAndResolve(
+  s: BlackjackState,
+  dealerRank: number,
+): BlackjackState {
   s = proto.applyMove(s, { kind: "stand" }, "A");
   const [da, db] = secretsForRank(dealerRank);
   let guard = 0;
@@ -283,7 +337,10 @@ test("a party that committed can forfeit the round when the opponent does not", 
 test("forfeit is rejected when the opponent does not owe the pending step", () => {
   let s = fresh();
   // Neither has committed -> A has not done its part, cannot claim.
-  assert.throws(() => proto.applyMove(s, { kind: "forfeit" }, "A"), /opponent does not owe/);
+  assert.throws(
+    () => proto.applyMove(s, { kind: "forfeit" }, "A"),
+    /opponent does not owe/,
+  );
 });
 
 test("forfeit works in the reveal phase too", () => {
@@ -324,7 +381,10 @@ test("randomMove drives a full game to a terminal state with conserved balances"
     const by = owed(s);
     if (!by) break;
     const move = proto.randomMove(s, by, rng);
-    assert.ok(move, `randomMove returned null for owed party ${by} in ${s.phase}`);
+    assert.ok(
+      move,
+      `randomMove returned null for owed party ${by} in ${s.phase}`,
+    );
     s = proto.applyMove(s, move, by);
     steps++;
   }
@@ -337,7 +397,10 @@ test("replaying the same moves yields identical encodeState", () => {
   const moves: Array<{ move: BlackjackMove; by: "A" | "B" }> = [];
   // Record a short scripted hand.
   let s = fresh();
-  const record = (move: BlackjackMove, by: "A" | "B") => { moves.push({ move, by }); s = proto.applyMove(s, move, by); };
+  const record = (move: BlackjackMove, by: "A" | "B") => {
+    moves.push({ move, by });
+    s = proto.applyMove(s, move, by);
+  };
   for (let i = 0; i < 4; i++) {
     record(commitMove(secret(i + 1)), "A");
     record(commitMove(secret(i + 50)), "B");

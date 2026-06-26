@@ -78,7 +78,7 @@ async function main() {
     throw new Error("set SUI_FUNDER_KEY=<suiprivkey…> (funded testnet key)");
   const client = createSuiClient("testnet");
   const funder = Ed25519Keypair.fromSecretKey(
-    decodeSuiPrivateKey(funderKey).secretKey
+    decodeSuiPrivateKey(funderKey).secretKey,
   );
 
   const botA = makeBot(); // player-bot
@@ -125,7 +125,7 @@ async function main() {
   });
   if (openRes.effects?.status?.status !== "success")
     throw new Error(
-      `create_and_fund failed: ${openRes.effects?.status?.error ?? "unknown"}`
+      `create_and_fund failed: ${openRes.effects?.status?.error ?? "unknown"}`,
     );
   await client.waitForTransaction({ digest: openRes.digest });
   const tunnelId = onchain.parseTunnelId(openRes.objectChanges);
@@ -150,7 +150,7 @@ async function main() {
     botB.coreKey,
     botA.address,
     botB.address,
-    { a: STAKE, b: STAKE }
+    { a: STAKE, b: STAKE },
   );
   // Accumulate EVERY co-signed update into a transcript; its Merkle root commits to
   // the full play history and is anchored on-chain at close.
@@ -172,7 +172,7 @@ async function main() {
   const fin = tunnel.state;
   console.log(
     `played ${steps} signed moves over ${fin.round} rounds | ` +
-      `final off-chain balances A=${fin.balanceA} B=${fin.balanceB}`
+      `final off-chain balances A=${fin.balanceA} B=${fin.balanceB}`,
   );
 
   // 4) checkpoint the FINAL co-signed state on-chain so the tunnel's StateCommitment
@@ -200,7 +200,7 @@ async function main() {
     "update_state:",
     ures.digest,
     "(on-chain nonce ->",
-    latest.update.nonce + ")"
+    latest.update.nonce + ")",
   );
 
   // 5) settle with the transcript ROOT (close_cooperative_with_root): one tx distributes
@@ -210,12 +210,12 @@ async function main() {
   console.log(
     "transcript root:",
     "0x" + Buffer.from(root).toString("hex"),
-    `(${steps} states)`
+    `(${steps} states)`,
   );
   const settlement = tunnel.buildSettlementWithRoot(
     createdAt,
     root,
-    latest.update.nonce
+    latest.update.nonce,
   );
   const ctx = new Transaction();
   onchain.buildCloseWithRootFromSettlement(ctx, tunnelId, settlement);
@@ -227,11 +227,11 @@ async function main() {
   await client.waitForTransaction({ digest: cres.digest });
   console.log("close_with_root:", cres.digest);
   const rootEvent = cres.events?.find((e) =>
-    e.type.endsWith("::TunnelClosedWithRoot")
+    e.type.endsWith("::TunnelClosedWithRoot"),
   );
   console.log(
     "on-chain TunnelClosedWithRoot event:",
-    rootEvent ? JSON.stringify(rootEvent.parsedJson) : "(not found)"
+    rootEvent ? JSON.stringify(rootEvent.parsedJson) : "(not found)",
   );
 
   // Show coins actually moved on-chain.
@@ -240,7 +240,7 @@ async function main() {
     client.getBalance({ owner: botB.address }),
   ]);
   console.log(
-    `on-chain bot balances now: A=${ba.totalBalance} MIST  B=${bb.totalBalance} MIST`
+    `on-chain bot balances now: A=${ba.totalBalance} MIST  B=${bb.totalBalance} MIST`,
   );
 
   // Show the on-chain StateCommitment field now reflects the played-out final state.
