@@ -12,7 +12,7 @@ import {
   type BatcherDeps,
   type TunnelOpenRequest,
 } from "./tunnelOpenBatcher.ts";
-import { normalizeSuiAddress } from "./tunnelTx.ts";
+import { normalizeSuiAddress, BatchCommittedError } from "./tunnelTx.ts";
 
 const party = (address: string) => ({ address, publicKey: new Uint8Array(32) });
 // A fixed valid 32-byte Sui address for partyB; tests only correlate by partyA so sharing is fine.
@@ -116,16 +116,42 @@ test("coalesces concurrent requests into ONE signed PTB", async () => {
 });
 
 test("chunks a batch larger than maxBatch into ceil(N/maxBatch) signed PTBs", async () => {
+  // 5 requests at maxBatch 2 → 3 chunks (sizes 2/2/1) → 3 sponsored PTBs.
+  // Each chunk's sponsoredSignExec returns a digest that getTransactionBlock maps back to the
+  // right tunnels, so all batches succeed without fallback. An unchunked run would sign once (1
+  // PTB for all 5) and must fail this test, proving the chunking path was taken.
   let signs = 0;
   const deps = fakeDeps({ onSign: () => (signs += 1) });
-  (deps.reads as any).getObject = async (i: { id: string }) => ({
-    data: { content: { fields: { party_a: { fields: { address: i.id } } } } },
+
+  // fakeDeps sponsoredSignExec returns "0xd1", "0xd2", "0xd3" for calls 1/2/3 respectively.
+  // Chunks run concurrently in Promise.all; JS single-thread + microtask FIFO ordering makes
+  // the first chunk always sign first, so the digest-to-address mapping is deterministic.
+  const digestToAddrs: Record<string, string[]> = {
+    "0xd1": ["0x1", "0x2"],
+    "0xd2": ["0x3", "0x4"],
+    "0xd3": ["0x5"],
+  };
+  (deps.reads as any).getTransactionBlock = async ({
+    digest,
+  }: {
+    digest: string;
+  }) => ({
+    objectChanges: (digestToAddrs[digest] ?? []).map((a) => ({
+      type: "created",
+      objectType: "0xpkg::tunnel::Tunnel<0x2::sui::SUI>",
+      objectId: "tunnel-for-" + a,
+    })),
   });
-  // Default getTransactionBlock returns [] → openAndFundMany throws count mismatch → per-request
-  // fallback fires (signs per chunk: 1 batch PTB + N single-open PTBs via withSponsorFallback).
-  // With 5 requests at maxBatch 2 → 3 chunks (sizes 2/2/1) → 3 batch calls + 5 single-open
-  // calls = 8 total sponsoredSignExec calls. An unchunked single-PTB run would yield 1 + 5 = 6
-  // and must fail this test, proving chunking actually occurred.
+  (deps.reads as any).getObject = async (i: { id: string }) => ({
+    data: {
+      content: {
+        fields: {
+          party_a: { fields: { address: i.id.replace("tunnel-for-", "") } },
+        },
+      },
+    },
+  });
+
   const batcher = new TunnelOpenBatcher(() => deps, {
     flushDelayMs: 0,
     maxBatch: 2,
@@ -133,13 +159,13 @@ test("chunks a batch larger than maxBatch into ceil(N/maxBatch) signed PTBs", as
   const reqs = ["0x1", "0x2", "0x3", "0x4", "0x5"].map((a) =>
     batcher.request(req(a)),
   );
-  await Promise.allSettled(reqs);
-  // 3 batch PTBs (2+2+1) + 5 single-open fallbacks = 8; unchunked (1 batch + 5 singles) = 6.
-  assert.equal(
-    signs,
-    8,
-    "5 requests at maxBatch 2 → 3 batch PTBs + 5 fallback opens = 8 signs",
-  );
+  const results = await Promise.all(reqs);
+  // One sponsored sign per chunk (3 chunks); no fallback should fire.
+  assert.equal(signs, 3, "5 requests at maxBatch 2 → 3 chunks → 3 signed PTBs");
+  // All requests resolve to a tunnel id.
+  for (const id of results) {
+    assert.ok(typeof id === "string" && id.length > 0, "each request resolves");
+  }
 });
 
 test("falls back to single opens when a chunk's batched PTB fails", async () => {
@@ -175,6 +201,34 @@ test("falls back to single opens when a chunk's batched PTB fails", async () => 
     "request still resolves via fallback",
   );
   assert.ok(signs >= 2, "one failed batch + at least one fallback open");
+});
+
+test("rejects all requests with BatchCommittedError on post-commit failure, no fallback", async () => {
+  // Proves the PRE- vs POST-commit distinction: when signExec SUCCEEDS (batch committed) but
+  // getTransactionBlock returns a wrong tunnel count, openAndFundMany throws BatchCommittedError.
+  // flushChunk must propagate it to all pending requests and MUST NOT fire the single-open fallback —
+  // the tunnels already exist; a fallback would double-open and double-consume stake.
+  let signs = 0;
+  const deps = fakeDeps({ onSign: () => (signs += 1) });
+  // Default getTransactionBlock returns [] → count mismatch → BatchCommittedError (post-commit).
+  // Leave it as-is (no override) to trigger the mismatch on the batched PTB.
+
+  const batcher = new TunnelOpenBatcher(() => deps, {
+    flushDelayMs: 0,
+    maxBatch: 16,
+  });
+  const result = await Promise.allSettled([batcher.request(req("0xA"))]);
+  const [settled] = result;
+
+  // The request must reject with BatchCommittedError.
+  assert.equal(settled.status, "rejected", "request should reject on post-commit failure");
+  const err = (settled as PromiseRejectedResult).reason;
+  assert.ok(
+    err instanceof BatchCommittedError,
+    `expected BatchCommittedError, got ${(err as Error)?.constructor?.name}: ${(err as Error)?.message}`,
+  );
+  // Exactly one sign: the batch PTB. No fallback single-open fires.
+  assert.equal(signs, 1, "only one sign (the committed batch PTB); no fallback opens");
 });
 
 test("rejects all pending when no wallet deps are available", async () => {

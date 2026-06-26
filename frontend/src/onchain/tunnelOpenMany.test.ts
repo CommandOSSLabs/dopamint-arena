@@ -9,6 +9,7 @@ import {
   normalizeSuiAddress,
   openAndFundMany,
   readTunnelPartyA,
+  BatchCommittedError,
 } from "./tunnelTx.ts";
 import { Transaction } from "@mysten/sui/transactions";
 
@@ -178,5 +179,66 @@ test("openAndFundMany throws when created tunnel count != spec count", async () 
         ],
       }),
     /expected 2 tunnels, got 1/,
+  );
+});
+
+test("openAndFundMany rejects with BatchCommittedError when a post-commit step fails", async () => {
+  // signExec returns a digest — the PTB committed on-chain. But getTransactionBlock returns only
+  // one tunnel for a two-spec call (count mismatch), which is a post-commit failure. The function
+  // must throw BatchCommittedError (not a plain Error) so callers know the tunnels exist and must
+  // not retry the open.
+  const reads = {
+    waitForTransaction: async () => {},
+    getTransactionBlock: async () => ({
+      objectChanges: [
+        {
+          type: "created",
+          objectType: `0xpkg::tunnel::Tunnel<${COIN}>`,
+          objectId: "0xt1",
+        },
+      ],
+    }),
+    getObject: async () => ({
+      data: {
+        content: { fields: { party_a: { fields: { address: "0xA1" } } } },
+      },
+    }),
+  } as unknown as Parameters<typeof openAndFundMany>[0]["reads"];
+
+  const THE_DIGEST = "0xcommitted-digest";
+  let caught: unknown;
+  try {
+    await openAndFundMany({
+      reads,
+      signExec: async () => ({ digest: THE_DIGEST }),
+      coinType: COIN,
+      stakeCoinId: "0xstake",
+      specs: [
+        {
+          partyA: party("0xA1"),
+          partyB: party("0xA2"),
+          aAmount: 10n,
+          bAmount: 20n,
+        },
+        {
+          partyA: party("0xB1"),
+          partyB: party("0xB2"),
+          aAmount: 30n,
+          bAmount: 40n,
+        },
+      ],
+    });
+    assert.fail("expected openAndFundMany to throw");
+  } catch (e) {
+    caught = e;
+  }
+  assert.ok(
+    caught instanceof BatchCommittedError,
+    `expected BatchCommittedError, got ${(caught as Error)?.constructor?.name}: ${(caught as Error)?.message}`,
+  );
+  assert.equal(
+    (caught as BatchCommittedError).digest,
+    THE_DIGEST,
+    "BatchCommittedError must carry the committed digest",
   );
 });

@@ -754,6 +754,8 @@ export function createSoloSessionHook<
       ensureStakeBalance: sponsored.ensureStakeBalance,
       requestTunnelOpen,
     };
+    // Called every render so the shared singleton always holds the current signer (latest-wins;
+    // safe because start() already guards `if (!deps.account) return`).
     configureSharedBatcher({
       reads: client as never,
       sponsoredSignExec: sponsored.signExec as never,

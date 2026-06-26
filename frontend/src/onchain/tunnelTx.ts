@@ -101,6 +101,21 @@ export interface PartyOnchain {
   publicKey: Uint8Array;
 }
 
+/** Thrown by openAndFundMany when the batch PTB ALREADY committed on-chain but a post-commit
+ *  step (wait/read/correlate) failed. Signals callers MUST NOT retry the open — the tunnels
+ *  exist; retrying would double-open and double-consume stake. `digest` identifies the committed tx. */
+export class BatchCommittedError extends Error {
+  constructor(
+    readonly digest: string,
+    readonly cause: unknown,
+  ) {
+    super(
+      `openAndFundMany: batch committed (digest ${digest}) but post-commit step failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+    );
+    this.name = "BatchCommittedError";
+  }
+}
+
 function findTunnelId(changes: unknown): string | null {
   if (!Array.isArray(changes)) return null;
   for (const c of changes) {
@@ -437,23 +452,30 @@ export async function openAndFundMany(opts: {
     opts.signExec,
     "openAndFundMany",
   );
-  await opts.reads.waitForTransaction({ digest });
-  const txb = await opts.reads.getTransactionBlock({
-    digest,
-    options: { showObjectChanges: true },
-  });
-  const ids = findAllTunnelIds(txb.objectChanges);
-  if (ids.length !== opts.specs.length) {
-    throw new Error(
-      `openAndFundMany: expected ${opts.specs.length} tunnels, got ${ids.length}`,
-    );
+  // POST-COMMIT: everything below runs after the PTB has already landed on-chain. Any failure here
+  // means the N tunnels exist and their stake is consumed — callers must not retry the open.
+  try {
+    await opts.reads.waitForTransaction({ digest });
+    const txb = await opts.reads.getTransactionBlock({
+      digest,
+      options: { showObjectChanges: true },
+    });
+    const ids = findAllTunnelIds(txb.objectChanges);
+    if (ids.length !== opts.specs.length) {
+      throw new Error(
+        `openAndFundMany: expected ${opts.specs.length} tunnels, got ${ids.length} (digest ${digest})`,
+      );
+    }
+    const byPartyA = new Map<string, string>();
+    for (const id of ids) {
+      const partyA = await readTunnelPartyA(opts.reads, id);
+      byPartyA.set(normalizeSuiAddress(partyA), id);
+    }
+    return byPartyA;
+  } catch (err) {
+    if (err instanceof BatchCommittedError) throw err; // already wrapped, pass through
+    throw new BatchCommittedError(digest, err);
   }
-  const byPartyA = new Map<string, string>();
-  for (const id of ids) {
-    const partyA = await readTunnelPartyA(opts.reads, id);
-    byPartyA.set(normalizeSuiAddress(partyA), id);
-  }
-  return byPartyA;
 }
 
 /**

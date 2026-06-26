@@ -7,6 +7,7 @@ import {
   openAndFundMany,
   openAndFundSelfPlay,
   normalizeSuiAddress,
+  BatchCommittedError,
   type PartyOnchain,
   type SignExec,
   type SuiReads,
@@ -181,8 +182,15 @@ export class TunnelOpenBatcher {
           );
       }
     } catch (batchErr) {
-      // Atomic PTB: one bad spec aborts the chunk. Fall back to per-request single opens so one
-      // failure can't strand its siblings (createAndFundBatch teardown pattern).
+      // POST-COMMIT failure: the batch PTB already landed on-chain — tunnels exist and stake is
+      // consumed. Retrying via single opens would double-open and double-consume stake. Reject all
+      // pending requests immediately without any fallback.
+      if (batchErr instanceof BatchCommittedError) {
+        for (const p of chunkPending) p.reject(batchErr);
+        return;
+      }
+      // PRE-COMMIT failure: atomic PTB rejected before landing (one bad spec aborts the chunk).
+      // Fall back to per-request single opens so one failure can't strand its siblings.
       console.warn(
         `[tunnelOpenBatcher] batched open failed (${(batchErr as Error)?.message}); ` +
           `falling back to ${chunkPending.length} single opens`,
@@ -199,7 +207,7 @@ export class TunnelOpenBatcher {
     }
   }
 
-  private openChunk(
+  private async openChunk(
     deps: BatcherDeps,
     mode: FundingMode,
     coinType: string | undefined,
@@ -230,24 +238,39 @@ export class TunnelOpenBatcher {
       );
     }
     // SUI: sponsored open off a user coin, falling back to a wallet-signed gas-funded open.
-    return withSponsorFallback(
-      async () =>
-        openAndFundMany({
-          reads: deps.reads,
-          signExec: deps.sponsoredSignExec,
-          specs,
-          coinType,
-          stakeCoinId: await deps.selectStakeCoin(total),
-        }),
-      () =>
-        openAndFundMany({
-          reads: deps.reads,
-          signExec: deps.signExec,
-          specs,
-          coinType,
-        }),
-      "batched open/fund",
+    // We inline the sponsor fallback here (rather than delegating to withSponsorFallback) so that
+    // BatchCommittedError can propagate immediately — if the sponsored PTB already committed,
+    // retrying via sender-pays would double-open and double-consume stake.
+    let sponsorErr: unknown;
+    try {
+      return await openAndFundMany({
+        reads: deps.reads,
+        signExec: deps.sponsoredSignExec,
+        specs,
+        coinType,
+        stakeCoinId: await deps.selectStakeCoin(total),
+      });
+    } catch (err) {
+      if (err instanceof BatchCommittedError) throw err; // committed: never retry
+      sponsorErr = err;
+    }
+    console.warn(
+      `[sponsor] batched open/fund: sponsor failed, falling back to sender-pays`,
+      sponsorErr,
     );
+    try {
+      return await openAndFundMany({
+        reads: deps.reads,
+        signExec: deps.signExec,
+        specs,
+        coinType,
+      });
+    } catch (payErr) {
+      if (payErr instanceof BatchCommittedError) throw payErr; // committed: never retry
+      throw new Error(
+        `batched open/fund: sponsored path failed [${String((sponsorErr as Error)?.message ?? sponsorErr)}]; sender-pays fallback failed [${String((payErr as Error)?.message ?? payErr)}]`,
+      );
+    }
   }
 
   private async openSingle(
