@@ -386,6 +386,76 @@ export async function openAndFundSelfPlay(opts: {
   return tunnelId;
 }
 
+/** One self-play tunnel's open spec for {@link openAndFundMany}: both ephemeral seats + each
+ *  seat's stake (the staked coin's base units). */
+export interface TunnelOpenManySpec {
+  partyA: PartyOnchain;
+  partyB: PartyOnchain;
+  aAmount: bigint;
+  bAmount: bigint;
+  timeoutMs?: bigint;
+  penaltyAmount?: bigint;
+}
+
+/**
+ * Open + fund + activate N self-play tunnels in ONE PTB and return each tunnel id keyed by its
+ * normalized party-A address. The whole batch is one `splitCoins` of the summed 2N stakes off a
+ * single source coin (an address-balance withdrawal of `stakeFromBalance.amount`, or one
+ * `stakeCoinId`, or the gas coin), then one `create_and_fund` per spec (SDK `buildOpenAndFundMany`).
+ *
+ * The stake source MUST cover the sum of all specs' `aAmount + bAmount`; on the address-balance
+ * path `stakeFromBalance.amount` MUST equal that sum (the leftover zero coin is destroyed). The
+ * caller correlates results by party-A because `objectChanges` order is unspecified.
+ */
+export async function openAndFundMany(opts: {
+  reads: SuiReads;
+  signExec: SignExec;
+  specs: TunnelOpenManySpec[];
+  coinType?: string;
+  stakeFromBalance?: StakeFromBalance;
+  stakeCoinId?: string;
+}): Promise<Map<string, string>> {
+  const { digest } = await submitRebuildingOnStale(
+    () => {
+      const tx = new Transaction();
+      const source = stakeCoinArg(tx, opts);
+      buildOpenAndFundMany(
+        tx,
+        opts.specs.map((s) => ({
+          partyA: { ...s.partyA, signatureType: SignatureScheme.ED25519 },
+          partyB: { ...s.partyB, signatureType: SignatureScheme.ED25519 },
+          aAmount: s.aAmount,
+          bAmount: s.bAmount,
+          timeoutMs: s.timeoutMs ?? 86_400_000n,
+          penaltyAmount: s.penaltyAmount ?? 0n,
+        })),
+        { coinType: opts.coinType, sourceCoin: source },
+      );
+      consumeStakeRemainder(tx, opts, source);
+      return tx;
+    },
+    opts.signExec,
+    "openAndFundMany",
+  );
+  await opts.reads.waitForTransaction({ digest });
+  const txb = await opts.reads.getTransactionBlock({
+    digest,
+    options: { showObjectChanges: true },
+  });
+  const ids = findAllTunnelIds(txb.objectChanges);
+  if (ids.length !== opts.specs.length) {
+    throw new Error(
+      `openAndFundMany: expected ${opts.specs.length} tunnels, got ${ids.length}`,
+    );
+  }
+  const byPartyA = new Map<string, string>();
+  for (const id of ids) {
+    const partyA = await readTunnelPartyA(opts.reads, id);
+    byPartyA.set(normalizeSuiAddress(partyA), id);
+  }
+  return byPartyA;
+}
+
 /**
  * Self-play open via the returnless `tunnel::create_and_fund` (no ID return; the tunnel id is
  * read from object changes). Same one-signature flow as {@link openAndFundSelfPlay}; used by
