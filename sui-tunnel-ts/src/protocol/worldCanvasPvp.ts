@@ -1,27 +1,21 @@
 /**
- * The 2-party PvP protocol for "The World is Your Canvas" — used ONLY by online PvP
- * (two real humans co-signing ONE shared tunnel), separate from the solo wall.
+ * The 2-party PvP protocol for "The World is Your Canvas" — two real humans co-signing ONE
+ * shared tunnel (the solo wall is the sibling {@link ./worldCanvas WorldCanvasProtocol}).
+ * It lives in the SDK alongside every other protocol so the off-chain engine, the agent
+ * harness, and an on-chain disputer can all REPLAY it (see protocol/Protocol.ts).
  *
- * Co-sign parity (the hard constraint): both clients must compute the SAME state hash
- * from the SAME ordered cells. Every painted cell folds into a fixed-size ROLLING DIGEST
- * ({@link encodeState}), exactly like the solo protocol — the digest is the co-signed
- * truth. A `cells` array rides along PURELY for rendering ({@link deriveView}); it is NOT
- * encoded, so capping it can never desync the two parties. Free/draw: no winner.
+ * Co-sign parity (the hard constraint): both clients must compute the SAME state hash from
+ * the SAME ordered cells. Every painted cell folds into a fixed-size ROLLING DIGEST
+ * ({@link WorldCanvasPvpProtocol.encodeState}) — the digest is the co-signed truth. A `cells`
+ * array rides along PURELY for rendering; it is NOT encoded, so capping it never desyncs the
+ * two parties. Free/draw: balances never move, there is never a winner.
  *
- * BATCHED moves: one co-signed move carries a RUN of cells (a stroke segment), not a
- * single pixel — so a drag crosses the tunnel in ONE co-sign (smooth, and the opponent
- * gets the whole stroke instead of sparse per-turn samples). Cells fold in array order,
- * keeping both parties byte-identical.
+ * BATCHED moves: one co-signed move carries a RUN of cells (a stroke segment), not a single
+ * pixel — so a drag crosses the tunnel in ONE co-sign. Cells fold in array order.
  */
-import { blake2b256 } from "sui-tunnel-ts";
-import {
-  rollingDigest,
-  protocolDomain,
-  type Protocol,
-  type Party,
-  type Balances,
-  type ProtocolContext,
-} from "sui-tunnel-ts/protocol/Protocol";
+import { rollingDigest, protocolDomain } from "./Protocol";
+import type { Protocol, Party, Balances, ProtocolContext } from "./Protocol";
+import { blake2b256 } from "../core/crypto";
 
 const NAME = "world-canvas-pvp";
 const NUM_COLORS = 16;
@@ -33,6 +27,14 @@ const MAX_RENDER_CELLS = 8000;
 export const MAX_BATCH_CELLS = 128;
 /** Cells the bot lays down per co-sign — a short flowing run, not a single dot. */
 const BOT_RUN = 8;
+
+/**
+ * Live palette index the autopilot paints in — set from THIS player's toolbar (see
+ * usePvpWorldCanvas), so your seat's bot follows your chosen color, just like solo. Only
+ * `randomMove` (your seat's local move generation) reads it; the co-signed move carries the
+ * color to the opponent, so it never affects replay/parity. Each client sets its own.
+ */
+export const botColorHint = { current: 13 };
 
 /**
  * One painted cell, in (chunk, in-chunk) coords: `cx`/`cy` are signed chunk indices (the canvas
@@ -242,8 +244,7 @@ export class WorldCanvasPvpProtocol implements Protocol<
 
   /** Bot autopilot: continue THIS seat's stroke as a bounded random WALK, emitting a short
    *  RUN of cells per co-sign — a coherent wandering line near wherever the seat last drew
-   *  (including right where you handed the wheel back), instead of scattered dots. Seat A
-   *  draws blue, seat B light purple. */
+   *  (including right where you handed the wheel back), instead of scattered dots. */
   randomMove(
     state: PvpCanvasState,
     by: Party,
@@ -271,7 +272,7 @@ export class WorldCanvasPvpProtocol implements Protocol<
       dx = 1;
       dy = 0;
     }
-    const color = by === "A" ? 13 : 15; // Sui blue vs light purple, like the solo seats
+    const color = botColorHint.current; // YOUR toolbar color (set by usePvpWorldCanvas)
     // Continue this seat's seq from the co-signed cursor so the run is always fresh and
     // strictly increasing — never overlapping a prior run (it would be skipped as a re-send).
     let seq = by === "A" ? state.appliedSeqA : state.appliedSeqB;

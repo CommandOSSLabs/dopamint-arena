@@ -1,0 +1,18 @@
+/* ============================================================
+   World Canvas chrome on the shared hand-drawn "sketch" skin.
+
+   Only the floating CHROME (lobby, toolbar, Auto/You-Opp bars, MostPainted card,
+   zoom HUD, owner marker, back button) wears the ink-stroke borders + Gochi Hand
+   text. The drawing <canvas> stays a plain white 2D surface — it gets no `.sketch`
+   class and never references the `#skRough` roughen filter, so painting is untouched.
+
+   Primitives (paper, ink stroke, buttons, panels) live in ../../sketch/sketch.css;
+   here we only re-tint the amber accent to the World-Canvas brand violet.
+   ============================================================ */
+
+@import "../../sketch/sketch.css";
+
+.wc-sketch.sketch {
+  --sketch-accent: #613dff; /* WC brand violet (was amber #e8920c) */
+  --sketch-accent-fill: #e9e3ff; /* light-violet wash for `--go` buttons / active tools */
+}
