@@ -25,13 +25,6 @@ export const CHUNK_SIZE = 256;
 const MAX_RENDER_CELLS = 8000;
 /** Max cells in one co-signed batch — bounds the relay frame size for a stroke segment. */
 export const MAX_BATCH_CELLS = 128;
-/**
- * Disconnect grace window (ms): how long a dropped opponent has to reconnect before the match
- * auto-settles as a free/draw refund (ADR-0010). This is the SINGLE source of truth — the
- * reconnect-overlay countdown (PvpCanvasView) and the engine's `graceMs` (usePvpWorldCanvas) both
- * read it, so the on-screen countdown and the actual settle deadline can never drift apart.
- */
-export const GRACE_MS = 15_000;
 /** Cells the bot lays down per co-sign — a short flowing run, not a single dot. */
 const BOT_RUN = 8;
 
