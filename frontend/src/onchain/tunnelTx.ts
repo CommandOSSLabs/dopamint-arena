@@ -115,6 +115,51 @@ function findTunnelId(changes: unknown): string | null {
   return null;
 }
 
+/** Every created `::tunnel::Tunnel` object id in a tx's objectChanges, in change order. The batch
+ *  opener reads N ids here (vs {@link findTunnelId}'s single id) and correlates them by party-A. */
+export function findAllTunnelIds(changes: unknown): string[] {
+  if (!Array.isArray(changes)) return [];
+  const ids: string[] = [];
+  for (const c of changes) {
+    if (
+      c?.type === "created" &&
+      typeof c.objectType === "string" &&
+      c.objectType.includes("::tunnel::Tunnel")
+    ) {
+      ids.push(c.objectId as string);
+    }
+  }
+  return ids;
+}
+
+/** Canonical Sui address: lower-case, `0x`-prefixed, left-padded to 32 bytes. Created-tunnel party
+ *  addresses (read from chain) and ephemeral key addresses must be compared in this form, since the
+ *  two sources differ in padding. */
+export function normalizeSuiAddress(addr: string): string {
+  return "0x" + addr.toLowerCase().replace(/^0x/, "").padStart(64, "0");
+}
+
+/** Read a created tunnel's party-A address from its on-chain fields. Used to map batch-opened
+ *  tunnels back to their requesters — `objectChanges` order is unspecified, but each tunnel's
+ *  party-A (a distinct ephemeral bot key) is a unique key. */
+export async function readTunnelPartyA(
+  reads: SuiReads,
+  tunnelId: string,
+): Promise<string> {
+  const obj = await reads.getObject({
+    id: tunnelId,
+    options: { showContent: true },
+  });
+  const fields = obj.data?.content?.fields as
+    | { party_a?: { fields?: { address?: unknown } } }
+    | undefined;
+  const addr = fields?.party_a?.fields?.address;
+  if (typeof addr !== "string") {
+    throw new Error(`tunnel ${tunnelId}: missing party_a.address in content`);
+  }
+  return addr;
+}
+
 /**
  * Errors a fresh REBUILD can clear: owned-object/gas equivocation. Another tx consumed the same
  * coin/object version first, so this tx's build-time–pinned version is "unavailable for
