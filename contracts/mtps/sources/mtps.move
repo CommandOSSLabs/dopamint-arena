@@ -18,7 +18,7 @@ module mtps::mtps {
     /// The mint authority. Holding it is the sole permission to mint or burn MTPS; the backend
     /// faucet custodies it. It wraps the `TreasuryCap`, so there is no shared faucet object and no
     /// public mint — minting only happens in a tx signed by the cap's owner.
-    public struct AdminCap has key, store {
+    public struct AdminCap has key {
         id: UID,
         treasury_cap: TreasuryCap<MTPS>,
     }
@@ -42,7 +42,7 @@ module mtps::mtps {
         initializer.finalize_and_delete_metadata_cap(ctx);
 
         // The AdminCap (with the treasury) goes to the deployer; the backend faucet custodies it.
-        transfer::public_transfer(AdminCap { id: object::new(ctx), treasury_cap }, ctx.sender());
+        transfer::transfer(AdminCap { id: object::new(ctx), treasury_cap }, ctx.sender());
     }
 
     /// Mint `amount` MTPS to `recipient`. Authorized solely by holding the `AdminCap`; the backend
