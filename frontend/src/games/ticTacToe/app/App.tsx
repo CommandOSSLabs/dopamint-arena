@@ -95,11 +95,17 @@ function AppContent() {
     return () => observer.disconnect();
   }, []);
 
-  // If the wallet disconnects, fall back to the login scene (and stop any loop).
+  // If the wallet disconnects, settle the active game if any, and fall back to the login scene
   useEffect(() => {
     if (!isConnected && scene !== "login") {
-      tttGame.stopAuto();
-      caroGame.stopAuto();
+      if (scene === "game") {
+        console.log("[tictactoe bot] Wallet disconnected, settling game in background...");
+        void tttGame.settleNow();
+        void caroGame.settleNow();
+      } else {
+        tttGame.stopAuto();
+        caroGame.stopAuto();
+      }
       setScene("login");
     }
   }, [isConnected, scene, tttGame, caroGame]);

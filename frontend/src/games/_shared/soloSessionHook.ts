@@ -12,7 +12,7 @@
  * Scope: multi-game self-play over `OffchainTunnel.selfPlay` (one funded tunnel, many duels). The
  * single-game PvP path is the sibling engine; hidden-info games are excluded from both.
  */
-import { useSyncExternalStore } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 import {
   useCurrentAccount,
   useSignAndExecuteTransaction,
@@ -795,6 +795,19 @@ export function createSoloSessionHook<
     };
 
     const snap = useSyncExternalStore(session.subscribe, session.getSnapshot);
+
+    // Auto settle and reset when wallet disconnects
+    useEffect(() => {
+      if (!account) {
+        if (snap.status === "playing") {
+          console.log(`[${spec.game}] Wallet disconnected during active game, settling now...`);
+          session.settleNow();
+        } else if (snap.status === "settled" || snap.status === "error") {
+          console.log(`[${spec.game}] Wallet disconnected and session is ${snap.status}, resetting to idle...`);
+          session.reset();
+        }
+      }
+    }, [account, snap.status, session]);
     return {
       status: snap.status,
       view: snap.view,

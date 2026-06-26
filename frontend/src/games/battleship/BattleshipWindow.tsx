@@ -311,6 +311,14 @@ function BotGame({
     if (!placingNext) autoStartOnLoad();
   }, [autoStartOnLoad, account?.address, status, placingNext]);
 
+  // Wallet disconnected during active Battleship bot session → go back to chooser/main menu without reset immediately
+  useEffect(() => {
+    if (!account && status !== "idle" && status !== "placing") {
+      setPlacingNext(false);
+      onExit();
+    }
+  }, [account, status, onExit]);
+
   // Stable refs so the cabinet controller below doesn't re-register every render.
   const onExitRef = useRef(onExit);
   onExitRef.current = onExit;

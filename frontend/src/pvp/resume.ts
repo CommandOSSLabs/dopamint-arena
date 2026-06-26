@@ -2,10 +2,10 @@
  * Reload-grade resume persistence. Each seat persists a compact ResumeRecord per tunnel to
  * localStorage (the same synchronous, reload-surviving home as the ephemeral signer, pvpIdentity).
  * Writes are debounced/coalesced off the move hot path; a synchronous pagehide/visibilitychange
- * flush guarantees durability before a reload. bigints are tagged through a JSON replacer/reviver;
- * the signed wire fields persist as hex / decimal strings so a record reconstructs a settleable
- * CoSignedUpdate. Losing the latest checkpoint to the debounce window is safe — restore lands at
- * most one move behind, which the reconciliation handshake closes.
+ * flush guarantees durability before a reload. bigints survive the JSON boundary via
+ * stringifyWithBigint/parseWithBigint (tagged `{"__bigint__":"…"}`); stateHash/sigs are hex
+ * strings. Losing the latest checkpoint to the debounce window is safe — restore lands at most
+ * one move behind, which the reconciliation handshake closes.
  */
 import { toHex, fromHex } from "sui-tunnel-ts/core/bytes";
 import { keyPairFromSecret, type KeyPair } from "sui-tunnel-ts/core/crypto";
@@ -18,14 +18,16 @@ const KEY_PREFIX = "mp_resume.v1:";
 const INDEX_KEY = "mp_resume.v1.index";
 const DEFAULT_TTL_MS = 6 * 3600_000;
 
-/** localStorage-safe form of a signed StateUpdate (stateHash hex; u64s decimal strings). */
+/** Persisted form of a signed StateUpdate. stateHash/sigs are hex strings; numeric u64 fields
+ *  are native bigint — stringifyWithBigint tags them on write, parseWithBigint revives them
+ *  on read. DO NOT convert these fields to/from string in application code. */
 export interface WireStateUpdate {
   tunnelId: string;
   stateHash: string;
-  nonce: string;
-  timestamp: string;
-  partyABalance: string;
-  partyBBalance: string;
+  nonce: bigint;
+  timestamp: bigint;
+  partyABalance: bigint;
+  partyBBalance: bigint;
 }
 export interface WireCoSigned {
   update: WireStateUpdate;
@@ -47,7 +49,7 @@ export interface ResumeRecord {
   selfEphemeralSecretHex?: string;
   latestCoSigned: WireCoSigned;
   latestState: JsonValue;
-  pending?: { move: JsonValue; timestamp: string };
+  pending?: { move: JsonValue; timestamp: bigint };
   secret?: JsonValue;
   updatedAt: number;
 }
@@ -62,10 +64,10 @@ export function toWireCoSigned(u: CoSignedUpdate): WireCoSigned {
     update: {
       tunnelId: u.update.tunnelId,
       stateHash: toHex(u.update.stateHash),
-      nonce: u.update.nonce.toString(),
-      timestamp: u.update.timestamp.toString(),
-      partyABalance: u.update.partyABalance.toString(),
-      partyBBalance: u.update.partyBBalance.toString(),
+      nonce: u.update.nonce,
+      timestamp: u.update.timestamp,
+      partyABalance: u.update.partyABalance,
+      partyBBalance: u.update.partyBBalance,
     },
     sigA: toHex(u.sigA),
     sigB: toHex(u.sigB),
@@ -75,10 +77,10 @@ export function fromWireCoSigned(w: WireCoSigned): CoSignedUpdate {
   const update: StateUpdate = {
     tunnelId: w.update.tunnelId,
     stateHash: fromHex(w.update.stateHash),
-    nonce: BigInt(w.update.nonce),
-    timestamp: BigInt(w.update.timestamp),
-    partyABalance: BigInt(w.update.partyABalance),
-    partyBBalance: BigInt(w.update.partyBBalance),
+    nonce: w.update.nonce,
+    timestamp: w.update.timestamp,
+    partyABalance: w.update.partyABalance,
+    partyBBalance: w.update.partyBBalance,
   };
   return { update, sigA: fromHex(w.sigA), sigB: fromHex(w.sigB) };
 }

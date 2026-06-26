@@ -303,9 +303,13 @@ export function usePvpBlackjack(): PvpView {
         0n,
       );
       channel.sendPeer({
-        t: "settle",
+        t: "settleHalf",
+        partyABalance: half.settlement.partyABalance,
+        partyBBalance: half.settlement.partyBBalance,
+        finalNonce: half.settlement.finalNonce,
+        timestamp: half.settlement.timestamp,
+        transcriptRoot: bytesToHex(root),
         sig: bytesToHex(half.sigSelf),
-        root: bytesToHex(root),
       });
       const other =
         bufferedSettleRef.current ??
@@ -568,9 +572,9 @@ export function usePvpBlackjack(): PvpView {
             else bufferedHelloRef.current = pub;
           } else if (mm.t === "opened")
             openedResolveRef.current?.(String(mm.tunnelId));
-          else if (mm.t === "settle") {
+          else if (mm.t === "settleHalf") {
             const sig = hexToBytes(String(mm.sig));
-            const rt = hexToBytes(String(mm.root));
+            const rt = hexToBytes(String(mm.transcriptRoot));
             if (settleResolveRef.current)
               settleResolveRef.current({ sig, root: rt });
             else bufferedSettleRef.current = { sig, root: rt };

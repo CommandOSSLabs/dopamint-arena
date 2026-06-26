@@ -906,10 +906,10 @@ async function settle(
   const half = dt.buildSettlementHalfWithRoot(createdAt, root, 0n);
   channel.sendPeer({
     t: "settleHalf",
-    partyABalance: half.settlement.partyABalance.toString(),
-    partyBBalance: half.settlement.partyBBalance.toString(),
-    finalNonce: half.settlement.finalNonce.toString(),
-    timestamp: half.settlement.timestamp.toString(),
+    partyABalance: half.settlement.partyABalance,
+    partyBBalance: half.settlement.partyBBalance,
+    finalNonce: half.settlement.finalNonce,
+    timestamp: half.settlement.timestamp,
     transcriptRoot: toHex(root),
     sig: toHex(half.sigSelf),
   });

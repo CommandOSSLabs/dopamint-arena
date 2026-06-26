@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { core, proof, bytesToHex } from "sui-tunnel-ts";
+import { useCurrentAccount } from "@mysten/dapp-kit";
 import type { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import type { Transaction } from "@mysten/sui/transactions";
 import {
@@ -157,6 +158,7 @@ export interface BlackjackBotGame {
   resume: () => void;
   /** Stop play and return to the idle/config screen (does not auto-restart). */
   backToConfig: () => void;
+  settleNow: () => Promise<void>;
   newGame: () => void;
   refresh: () => Promise<{ a: bigint; b: bigint } | null>;
   pollBalances: (prev?: { a: bigint; b: bigint }) => Promise<void>;
@@ -228,6 +230,13 @@ const EMPTY_VIEW: BlackjackBotView = {
 
 export function useBlackjackBot(): BlackjackBotGame {
   const { report } = useTelemetry();
+  const account = useCurrentAccount();
+
+  const tunnelRef = useRef<core.OffchainTunnel<State, BetBlackjackMove> | null>(null);
+  const transcriptRef = useRef<proof.Transcript | null>(null);
+  const createdAtRef = useRef<bigint>(0n);
+  const tunnelIdRef = useRef<string | null>(null);
+  const funderRef = useRef<BotIdentity | null>(null);
   // Canonical bot kit (one source of truth, shared with the agent harness — like ttt's useBotGame):
   // the live auto-play drives its hit/stand from the SAME kit bot the harness uses, instead of a
   // second copy. Pin the player to seat A (no role rotation) so "Play vs Bot" stays one human vs
@@ -565,6 +574,12 @@ export function useBlackjackBot(): BlackjackBotGame {
         const transcript = new proof.Transcript(tunnelId);
         tunnel.onUpdate = (u) => transcript.append(u);
 
+        tunnelRef.current = tunnel;
+        transcriptRef.current = transcript;
+        createdAtRef.current = createdAt;
+        tunnelIdRef.current = tunnelId;
+        funderRef.current = funder;
+
         // Register the (real, on-chain) tunnel for stats tracking. Best-effort.
         sessionRef.current = null;
         moveCountRef.current = 0;
@@ -828,6 +843,12 @@ export function useBlackjackBot(): BlackjackBotGame {
         playingRef.current = false; // never loop on errors
         setError(e instanceof Error ? e.message : String(e));
         setPhase("error");
+      } finally {
+        tunnelRef.current = null;
+        transcriptRef.current = null;
+        tunnelIdRef.current = null;
+        createdAtRef.current = 0n;
+        funderRef.current = null;
       }
     })();
   }, [
@@ -839,6 +860,121 @@ export function useBlackjackBot(): BlackjackBotGame {
     refreshBalances,
     stopTimer,
   ]);
+
+  const settleNow = useCallback(async () => {
+    const tunnel = tunnelRef.current;
+    const tunnelId = tunnelIdRef.current;
+    const createdAt = createdAtRef.current;
+    const transcript = transcriptRef.current;
+    const funder = funderRef.current;
+    if (!tunnel || !tunnelId || !transcript || !funder) return;
+
+    stopTimer();
+    if (nextRef.current !== null) {
+      clearTimeout(nextRef.current);
+      nextRef.current = null;
+    }
+    playingRef.current = false;
+
+    setPhase("settling");
+    flushHeartbeat(tunnelId, true);
+
+    try {
+      const root = transcript.root();
+      const s = tunnel.buildSettlementWithRoot(createdAt, root, 0n);
+      const coinType = isMtpsConfigured ? MTPS_COIN_TYPE : undefined;
+
+      let closeDigest = "";
+      const backendDigest = await settleViaBackend({
+        tunnelId,
+        settlement: s,
+        transcript: transcript.rawEntries(),
+        label: "blackjack",
+        fallbackClose: async () => {
+          if (isMtpsConfigured) {
+            const { digest } = await sponsoredSignExec(funder)(
+              buildSettleWithRootTx(tunnelId, s, coinType),
+            );
+            await client.waitForTransaction({ digest });
+            closeDigest = digest;
+          } else {
+            const closeRes = await submit(
+              buildSettleWithRootTx(tunnelId, s),
+              bots.a.keypair,
+            );
+            closeDigest = closeRes.digest;
+          }
+        },
+      });
+
+      if (backendDigest) closeDigest = backendDigest;
+
+      const rootHex = `0x${bytesToHex(root)}`;
+      setDigests((d) => ({ ...d, close: closeDigest, root: rootHex }));
+      
+      report.pushTxn({
+        id: actionsRef.current,
+        game: "blackjack",
+        digest: closeDigest,
+        address: bots.a.address,
+        time: new Date().toLocaleTimeString("en-GB"),
+        bot: bots.a.address,
+        type: "Settle",
+        status: "Success",
+        amount: "",
+      });
+      report.bumpCounters({ tunnelsClosed: 1, settlements: 1 });
+      report.setActive(0);
+
+      const finalA = tunnel.state.balanceA;
+      const finalResult: BlackjackResult =
+        finalA > BUY_IN ? "win" : finalA < BUY_IN ? "lose" : "push";
+      setResult(finalResult);
+
+      const tunnelRecord: TunnelRecord = {
+        tunnelId,
+        createDigest: digests.create,
+        closeDigest,
+        rootHex,
+        rounds: Number(tunnel.state.round),
+        result: finalResult,
+        finalBalanceA: Number(finalA),
+      };
+      setTunnels((prev) => [tunnelRecord, ...prev].slice(0, MAX_TUNNELS_LOGGED));
+
+      await refreshBalances();
+      setPhase("done");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setPhase("error");
+    } finally {
+      tunnelRef.current = null;
+      transcriptRef.current = null;
+      tunnelIdRef.current = null;
+      createdAtRef.current = 0n;
+      funderRef.current = null;
+    }
+  }, [
+    client,
+    bots,
+    submit,
+    sponsoredSignExec,
+    refreshBalances,
+    stopTimer,
+    flushHeartbeat,
+    report,
+    digests.create,
+  ]);
+
+  // Auto settle when wallet disconnects
+  useEffect(() => {
+    if (!account) {
+      if (phase === "playing") {
+        console.log("[blackjack bot] Wallet disconnected during active game, settling now...");
+        void settleNow();
+      }
+    }
+  }, [account, phase, settleNow]);
 
   // keep a ref to the latest runGame so the auto-play timeout always calls the current one.
   useEffect(() => {
@@ -1017,7 +1153,8 @@ export function useBlackjackBot(): BlackjackBotGame {
     paused,
     pause,
     resume,
-    backToConfig: stopTimer,
+    settleNow,
+    backToConfig,
     newGame,
     refresh: refreshBalances,
     pollBalances,

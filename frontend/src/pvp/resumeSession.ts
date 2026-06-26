@@ -91,7 +91,7 @@ function buildRecord<State, Move>(
     pending: snap.pending
       ? {
           move: serMove(snap.pending.move),
-          timestamp: snap.pending.timestamp.toString(),
+          timestamp: snap.pending.timestamp,
         }
       : undefined,
     secret: adapter.captureSecret ? adapter.captureSecret() : undefined,
@@ -117,7 +117,7 @@ export function restoreInto<State, Move>(
       adapter.deserializeMove ?? ((j: JsonValue) => j as unknown as Move);
     tunnel.seatPending(
       deMove(record.pending.move),
-      BigInt(record.pending.timestamp),
+      record.pending.timestamp,
     );
   }
 }
@@ -150,8 +150,8 @@ function balancesFromCheckpoint(record: ResumeRecord): {
   b: bigint;
 } {
   return {
-    a: BigInt(record.latestCoSigned.update.partyABalance),
-    b: BigInt(record.latestCoSigned.update.partyBBalance),
+    a: record.latestCoSigned.update.partyABalance,
+    b: record.latestCoSigned.update.partyBBalance,
   };
 }
 
@@ -230,7 +230,7 @@ function sendResync<State, Move>(args: AttachResumeArgs<State, Move>): void {
   const snap = args.tunnel.snapshot();
   args.channel.sendPeer({
     t: "resync",
-    nonce: snap.nonce.toString(),
+    nonce: snap.nonce,
     hasPending: snap.pending !== null,
     checkpoint: snap.latest ? toWireCoSigned(snap.latest) : undefined,
     fullState: args.adapter.serializeState(snap.state),
@@ -252,7 +252,7 @@ function onResync<State, Move>(
     ? fromWireCoSigned(msg.checkpoint)
     : null;
   const peer: ResyncView = {
-    nonce: BigInt(msg.nonce),
+    nonce: msg.nonce,
     hasPending: msg.hasPending,
     checkpoint: peerCp,
   };

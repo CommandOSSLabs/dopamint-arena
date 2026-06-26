@@ -1,4 +1,5 @@
-import { useState, type CSSProperties } from "react";
+import { useState, useEffect, type CSSProperties } from "react";
+import { useCurrentAccount } from "@mysten/dapp-kit";
 import type { GameWindowProps } from "../types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -25,10 +26,22 @@ type Mode = "menu" | "solo" | "pvp";
  */
 export function WorldCanvasWindow({ windowId }: GameWindowProps) {
   const [mode, setMode] = useState<Mode>("menu");
+  const account = useCurrentAccount();
+
+  // Return to lobby on wallet disconnect
+  useEffect(() => {
+    if (!account && mode !== "menu") {
+      setMode("menu");
+    }
+  }, [account, mode]);
 
   if (mode === "menu") {
     return (
-      <Lobby onSolo={() => setMode("solo")} onPvp={() => setMode("pvp")} />
+      <Lobby
+        connected={!!account}
+        onSolo={() => setMode("solo")}
+        onPvp={() => setMode("pvp")}
+      />
     );
   }
 
@@ -53,7 +66,15 @@ export function WorldCanvasWindow({ windowId }: GameWindowProps) {
  * the shared components follow the app's light/dark toggle (light → white card, ink
  * title, violet CTA), matching the arena dashboard.
  */
-function Lobby({ onSolo, onPvp }: { onSolo: () => void; onPvp: () => void }) {
+function Lobby({
+  connected,
+  onSolo,
+  onPvp,
+}: {
+  connected: boolean;
+  onSolo: () => void;
+  onPvp: () => void;
+}) {
   return (
     <div style={lobbyWrapStyle}>
       <Card
@@ -68,6 +89,7 @@ function Lobby({ onSolo, onPvp }: { onSolo: () => void; onPvp: () => void }) {
         <CardContent className="flex w-full flex-col gap-3 px-6">
           <Button
             onClick={onSolo}
+            disabled={!connected}
             className="h-[54px] w-full text-base font-bold shadow-[var(--wal-glow)]"
           >
             🤖 Paint vs Bot
@@ -75,10 +97,16 @@ function Lobby({ onSolo, onPvp }: { onSolo: () => void; onPvp: () => void }) {
           <Button
             variant="secondary"
             onClick={onPvp}
+            disabled={!connected}
             className="h-[50px] w-full text-[15px] font-bold"
           >
             🌐 Paint vs Player (Online)
           </Button>
+          {!connected && (
+            <p className="text-center text-sm font-bold text-destructive pt-2 uppercase tracking-wide">
+              Please connect your Sui wallet in the top bar to paint.
+            </p>
+          )}
         </CardContent>
       </Card>
     </div>

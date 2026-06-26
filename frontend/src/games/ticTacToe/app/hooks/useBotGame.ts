@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { core, proof, protocols, bytesToHex } from "sui-tunnel-ts";
+import { useCurrentAccount } from "@mysten/dapp-kit";
 import type { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import {
   getControlPlaneClient,
@@ -113,6 +114,7 @@ export interface BotGameView {
   refresh: () => Promise<{ x: bigint; o: bigint } | null>;
   resetScore: () => void;
   newGame: () => void;
+  settleNow: () => Promise<void>;
   /** Begin a session. autoOn = start in watch (both bots); false = start in manual (you play X). */
   startAuto: (autoOn?: boolean) => void;
   stopAuto: () => void;
@@ -152,7 +154,24 @@ function loadScore(): BotScore {
 
 export function useBotGame(difficulty: Difficulty = "fast"): BotGameView {
   const { report } = useTelemetry();
+  const account = useCurrentAccount();
   const bots = useMemo(() => loadOrCreateBots(), []);
+
+  const tunnelRef = useRef<core.OffchainTunnel<any, any> | null>(null);
+  const transcriptRef = useRef<proof.Transcript | null>(null);
+  const createdAtRef = useRef<bigint>(0n);
+  const tunnelIdRef = useRef<string | null>(null);
+  const tallyRef = useRef<BotScore>({ x: 0, o: 0, draws: 0 });
+
+  const resetScore = useCallback(() => {
+    const zero: BotScore = { x: 0, o: 0, draws: 0 };
+    setScore(zero);
+    try {
+      localStorage.setItem(SCORE_KEY, JSON.stringify(zero));
+    } catch {
+      /* ignore */
+    }
+  }, []);
   const client = useMemo(() => getSuiClient(), []);
 
   const [board, setBoard] = useState<number[]>(EMPTY_BOARD);
@@ -455,6 +474,11 @@ export function useBotGame(difficulty: Difficulty = "fast"): BotGameView {
         const transcript = new proof.Transcript(tunnelId);
         tunnel.onUpdate = (u) => transcript.append(u);
 
+        tunnelRef.current = tunnel as any;
+        transcriptRef.current = transcript;
+        createdAtRef.current = createdAt;
+        tunnelIdRef.current = tunnelId;
+
         // Register the (real, on-chain) tunnel for stats tracking. Best-effort.
         sessionRef.current = null;
         moveCountRef.current = 0;
@@ -482,6 +506,7 @@ export function useBotGame(difficulty: Difficulty = "fast"): BotGameView {
         // handler can read the final tally without a stale-state read; mirrored into `score`
         // for the live scoreboard. Track the inner game we last counted so we score each once.
         const tally: BotScore = { x: 0, o: 0, draws: 0 };
+        tallyRef.current = tally;
         let lastScoredGame = -1;
         const recordGame = (gameIndex: number, gameWinner: number) => {
           if (gameIndex === lastScoredGame) return;
@@ -690,9 +715,127 @@ export function useBotGame(difficulty: Difficulty = "fast"): BotGameView {
         playingRef.current = false; // never loop on errors
         setError(e instanceof Error ? e.message : String(e));
         setPhase("error");
+      } finally {
+        tunnelRef.current = null;
+        transcriptRef.current = null;
+        tunnelIdRef.current = null;
+        createdAtRef.current = 0n;
       }
     })();
   }, [bots, client, submit, botSponsoredSignExec, refreshBalances, stopTimer]);
+
+  const settleNow = useCallback(async () => {
+    const tunnel = tunnelRef.current;
+    const tunnelId = tunnelIdRef.current;
+    const createdAt = createdAtRef.current;
+    const transcript = transcriptRef.current;
+    const tally = tallyRef.current;
+    if (!tunnel || !tunnelId || !transcript) return;
+
+    stopTimer();
+    if (nextRef.current !== null) {
+      clearTimeout(nextRef.current);
+      nextRef.current = null;
+    }
+    playingRef.current = false;
+
+    setPhase("settling");
+    flushHeartbeat(tunnelId, true);
+
+    try {
+      const root = transcript.root();
+      const s = tunnel.buildSettlementWithRoot(createdAt, root, 0n);
+      const coinType = isMtpsConfigured ? MTPS_COIN_TYPE : undefined;
+
+      let closeDigest = "";
+      const backendDigest = await settleViaBackend({
+        tunnelId,
+        settlement: s,
+        transcript: transcript.rawEntries(),
+        label: "tictactoe",
+        fallbackClose: async () => {
+          if (isMtpsConfigured) {
+            const { digest } = await botSponsoredSignExec(bots.x)(
+              buildSettleWithRootTx(tunnelId, s, coinType),
+            );
+            await client.waitForTransaction({ digest });
+            closeDigest = digest;
+          } else {
+            const closeRes = await submit(
+              buildSettleWithRootTx(tunnelId, s),
+              bots.x.keypair,
+            );
+            closeDigest = closeRes.digest;
+          }
+        },
+      });
+
+      if (backendDigest) closeDigest = backendDigest;
+
+      setDigests((d) => ({
+        ...d,
+        close: closeDigest,
+        root: `0x${bytesToHex(root)}`,
+      }));
+
+      report.pushTxn({
+        id: actionsRef.current,
+        game: "tic-tac-toe",
+        digest: closeDigest,
+        address: bots.x.address,
+        time: new Date().toLocaleTimeString("en-GB"),
+        bot: bots.x.address,
+        type: "Settle",
+        status: "Success",
+        amount: "",
+      });
+      report.bumpCounters({ tunnelsClosed: 1, settlements: 1 });
+      report.setActive(0);
+
+      const record: TunnelRecord = {
+        tunnelId,
+        closeDigest,
+        rootHex: `0x${bytesToHex(root)}`,
+        games: tally.x + tally.o + tally.draws,
+        x: tally.x,
+        o: tally.o,
+        draws: tally.draws,
+      };
+      setTunnels((prev) => [record, ...prev].slice(0, MAX_TUNNELS_LOGGED));
+      resetScore();
+
+      await refreshBalances();
+      setPhase("done");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setPhase("error");
+    } finally {
+      tunnelRef.current = null;
+      transcriptRef.current = null;
+      tunnelIdRef.current = null;
+      createdAtRef.current = 0n;
+    }
+  }, [
+    client,
+    bots,
+    submit,
+    botSponsoredSignExec,
+    refreshBalances,
+    stopTimer,
+    flushHeartbeat,
+    report,
+    resetScore,
+  ]);
+
+  // Auto settle when wallet disconnects
+  useEffect(() => {
+    if (!account) {
+      if (phase === "playing") {
+        console.log("[ttt bot] Wallet disconnected during active game, settling now...");
+        void settleNow();
+      }
+    }
+  }, [account, phase, settleNow]);
 
   // keep a ref to the latest runGame so the auto-play timeout always calls the current one.
   useEffect(() => {
@@ -760,15 +903,7 @@ export function useBotGame(difficulty: Difficulty = "fast"): BotGameView {
     [runGame, setAuto],
   );
 
-  const resetScore = useCallback(() => {
-    const zero: BotScore = { x: 0, o: 0, draws: 0 };
-    setScore(zero);
-    try {
-      localStorage.setItem(SCORE_KEY, JSON.stringify(zero));
-    } catch {
-      /* ignore */
-    }
-  }, []);
+
 
   const stopAuto = useCallback(() => {
     playingRef.current = false;
@@ -830,6 +965,7 @@ export function useBotGame(difficulty: Difficulty = "fast"): BotGameView {
     refresh: refreshBalances,
     resetScore,
     newGame,
+    settleNow,
     startAuto,
     stopAuto,
     paused,

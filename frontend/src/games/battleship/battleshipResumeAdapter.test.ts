@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { makeBattleshipResumeAdapter } from "./battleshipResumeAdapter";
 import { randomFleetSecret } from "./engine/selfPlay";
+import { stringifyWithBigint } from "../../pvp/resume.ts";
 
 test("the fleet secret round-trips locally and never enters a resync/serializeState payload", () => {
   let stored: unknown = null;
@@ -44,9 +45,7 @@ test("the fleet secret round-trips locally and never enters a resync/serializeSt
     stake: 100n,
   };
   const serialized = adapter.serializeState(state as never);
-  const blob = JSON.stringify(serialized, (_k, v) =>
-    typeof v === "bigint" ? v.toString() : v,
-  );
+  const blob = stringifyWithBigint(serialized);
   // No fleet salt bytes leak into the wire-bound state.
   for (const salt of secret.salts) {
     assert.ok(

@@ -29,6 +29,13 @@ function AppContent() {
     }
   }, [account, navigate]);
 
+  // Redirect to "/" on wallet disconnect only for PvP. Bot mode handles its own transition.
+  useEffect(() => {
+    if (!account && currentRoute === "/pvp") {
+      navigate("/");
+    }
+  }, [account, currentRoute, navigate]);
+
   // Per-window auto-start latch (see PlayerBot): App-scoped so each blackjack window auto-starts
   // its watch independently, and survives the back-to-menu → re-enter remount of PlayerBot.
   const autoStartedRef = useRef(false);

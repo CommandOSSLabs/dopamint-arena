@@ -1,5 +1,5 @@
 import { useCustomWallet } from "@/games/ticTacToe/app/contexts/CustomWallet";
-import { ConnectButton } from "@mysten/dapp-kit";
+
 
 function short(a?: string) {
   return a ? `${a.slice(0, 6)}…${a.slice(-4)}` : "";
@@ -12,7 +12,7 @@ export function LoginScene({
   onContinue: () => void;
   onPlayOnline?: () => void;
 }) {
-  const { isConnected, address, login, logout } = useCustomWallet();
+  const { isConnected } = useCustomWallet();
 
   return (
     <section className="qp-panel qp-stroke @container w-[95%] max-w-2xl p-6 md:p-10 flex flex-col items-center gap-6 text-center mx-auto">
@@ -36,47 +36,36 @@ export function LoginScene({
 
       {/* Connection Status / Form Actions */}
       <div className="flex flex-col items-center gap-4 w-full mt-2">
-        {isConnected ? (
-          <div className="flex flex-col gap-4 items-center w-full">
+        <div className="flex flex-col gap-4 items-center w-full">
+          <button
+            onClick={onContinue}
+            disabled={!isConnected}
+            className="qp-btn qp-btn--go w-[90%] max-w-lg mx-auto flex items-center justify-center gap-4 !px-8 !py-6 md:!py-8 uppercase tracking-widest font-black disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <span className="material-symbols-outlined text-4xl md:text-5xl">
+              smart_toy
+            </span>
+            <span className="text-2xl md:text-3xl">Play vs Bot</span>
+          </button>
+
+          {onPlayOnline && (
             <button
-              onClick={onContinue}
-              className="qp-btn qp-btn--go w-[90%] max-w-lg mx-auto flex items-center justify-center gap-4 !px-8 !py-6 md:!py-8 uppercase tracking-widest font-black"
+              onClick={onPlayOnline}
+              disabled={!isConnected}
+              className="qp-btn w-[90%] max-w-lg mx-auto flex items-center justify-center gap-4 !px-8 !py-6 md:!py-8 uppercase tracking-widest font-black mt-2 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <span className="material-symbols-outlined text-4xl md:text-5xl">
-                smart_toy
+                sports_esports
               </span>
-              <span className="text-2xl md:text-3xl">Play vs Bot</span>
+              <span className="text-2xl md:text-3xl">Play Online</span>
             </button>
+          )}
+        </div>
 
-            {onPlayOnline && (
-              <button
-                onClick={onPlayOnline}
-                className="qp-btn w-[90%] max-w-lg mx-auto flex items-center justify-center gap-4 !px-8 !py-6 md:!py-8 uppercase tracking-widest font-black mt-2"
-              >
-                <span className="material-symbols-outlined text-4xl md:text-5xl">
-                  sports_esports
-                </span>
-                <span className="text-2xl md:text-3xl">Play Online</span>
-              </button>
-            )}
-          </div>
-        ) : (
-          <div className="flex flex-col items-center gap-4 w-full max-w-sm mt-4">
-            <div className="w-full flex justify-center [&_button]:w-full [&_button]:py-4 [&_button]:px-6 [&_button]:border-[3px] [&_button]:border-[var(--qp-ink)] [&_button]:rounded-md [&_button]:font-bold [&_button]:text-[var(--qp-ink)] [&_button]:bg-[#fffdf6] [&_button]:hover:bg-[#f2f0e6] [&_button]:transition-colors [&_button]:text-xl">
-              <ConnectButton connectText="Connect Wallet" />
-            </div>
-
-            <span className="text-lg md:text-xl font-bold text-[var(--qp-ink-soft)] italic uppercase">
-              or
-            </span>
-
-            <button
-              onClick={login}
-              className="qp-btn !px-6 !py-4 !text-xl w-full uppercase"
-            >
-              Login with Google
-            </button>
-          </div>
+        {!isConnected && (
+          <p className="text-center text-xl md:text-2xl text-[var(--qp-red)] font-bold pt-3 uppercase tracking-widest">
+            Please connect your Sui wallet in the top bar to play.
+          </p>
         )}
       </div>
     </section>

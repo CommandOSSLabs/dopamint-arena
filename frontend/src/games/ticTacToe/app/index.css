@@ -198,13 +198,33 @@
    `.ttt-root` (container-type: size = the window), so panes track the window width.
    Buttons scale the same way so labels never overflow a narrow pane. */
 .ttt-root.qp-sketch .ttt-pane {
-  width: clamp(92px, 20cqw, 210px);
-  padding: clamp(6px, 1.5cqw, 14px);
-  gap: clamp(8px, 2cqw, 16px);
+  flex: 1 1 0;
+  min-width: 52px;
+  max-width: clamp(52px, 20cqw, 210px);
+  padding: clamp(4px, 1.5cqw, 14px);
+  gap: clamp(6px, 1.5cqw, 16px);
+}
+.ttt-root.qp-sketch .ttt-pane .qp-eyebrow {
+  font-size: clamp(8px, 1.6cqw, 11px);
+}
+.ttt-root.qp-sketch .ttt-pane .qp-title {
+  font-size: clamp(10px, 2.2cqw, 18px);
+}
+.ttt-root.qp-sketch .ttt-pane .text-sm {
+  font-size: clamp(8px, 1.8cqw, 14px);
+}
+.ttt-root.qp-sketch .ttt-pane .text-base {
+  font-size: clamp(9px, 2cqw, 16px);
+}
+.ttt-root.qp-sketch .ttt-pane .text-lg {
+  font-size: clamp(10px, 2.2cqw, 18px);
+}
+.ttt-root.qp-sketch .ttt-pane .text-2xl {
+  font-size: clamp(12px, 3cqw, 24px);
 }
 .ttt-root.qp-sketch .ttt-ctl-btn {
-  font-size: clamp(11px, 2.7cqw, 16px);
-  padding: clamp(7px, 1.7cqw, 12px) clamp(6px, 1.4cqw, 14px);
+  font-size: clamp(9px, 2.7cqw, 16px);
+  padding: clamp(5px, 1.7cqw, 12px) clamp(4px, 1.4cqw, 14px);
   line-height: 1;
   white-space: nowrap;
 }

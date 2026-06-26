@@ -147,6 +147,16 @@ export function createArenaWindow<Solo extends ArenaSolo, Pvp extends ArenaPvp>(
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [account, mode, solo.status, windowId]);
 
+    // Auto out to lobby/chooser when wallet disconnects
+    useEffect(() => {
+      if (!account && mode !== null) {
+        if (mode === "pvp") {
+          pvp.reset();
+        }
+        setMode(null);
+      }
+    }, [account, mode, pvp]);
+
     const screen = (
       children: ReactNode,
       onBack?: () => void,

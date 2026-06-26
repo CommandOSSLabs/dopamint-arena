@@ -20,7 +20,7 @@ const chipsToSui = (chips: bigint) =>
   (Number(chips) / 1e9).toLocaleString("en-US", { maximumFractionDigits: 9 });
 
 function statusText(g: ReturnType<typeof usePvpBlackjack>): string {
-  if (g.phase === "opening") return "Opening tunnel on-chain…";
+  if (g.phase === "opening") return "Starting game on-chain…";
   if (g.phase === "funding") return "Funding your seat…";
   if (g.phase === "settling") return "Ending…";
   if (g.gamePhase === "player")
@@ -29,8 +29,8 @@ function statusText(g: ReturnType<typeof usePvpBlackjack>): string {
   if (g.gamePhase === "round_over") {
     if (g.terminal)
       return g.outOfChips
-        ? `${g.outOfChips === "player" ? "Player" : "Dealer"} is out of chips — settling…`
-        : "Round cap reached — settling…";
+        ? `${g.outOfChips === "player" ? "Player" : "Dealer"} is out of chips — ending…`
+        : "Round cap reached — ending…";
     return g.isDealer
       ? "Waiting for the player's bet…"
       : "Place your bet for the next round";
@@ -650,7 +650,7 @@ export default function PvpBlackjack() {
                   onClick={g.stop}
                   className="qp-btn qp-btn--stop !px-6 !py-3.5 !text-base font-black uppercase"
                 >
-                  Stop &amp; settle
+                  Stop &amp; end
                 </button>
               </>
             )}

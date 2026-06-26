@@ -68,7 +68,14 @@ interface MpClientOptions {
   rand?: () => number;
 }
 
-/** A peer message tunneled through the relay (everything that isn't a MOVE/ACK frame). */
+/**
+ * A peer message tunneled through the relay (everything that isn't a MOVE/ACK frame).
+ *
+ * Contract: balances/nonces/timestamps are **bigint** throughout. The transport codec
+ * (`stringifyWithBigint`/`parseWithBigint`) in `sendPeer`/`onPeer` is the single JSON
+ * boundary. Adapters and peer-message constructors MUST NOT call `.toString()` on these
+ * fields — doing so defeats the reviver and produces string values on the receive side.
+ */
 export type PeerMessage =
   | { t: "hello"; ephemeralPubkey: string }
   | { t: "open"; tunnelId: string }
@@ -76,21 +83,20 @@ export type PeerMessage =
   | { t: "endMatch" }
   | {
       t: "settleHalf";
-      partyABalance: string;
-      partyBBalance: string;
-      finalNonce: string;
-      timestamp: string;
+      partyABalance: bigint;
+      partyBBalance: bigint;
+      finalNonce: bigint;
+      timestamp: bigint;
       transcriptRoot: string;
       sig: string;
     }
   | { t: "opened"; tunnelId: string }
-  | { t: "settle"; sig: string; root: string }
   | { t: "closed"; digest: string }
   | { t: "stop" }
   | { t: "stake"; amount: number }
   | {
       t: "resync";
-      nonce: string;
+      nonce: bigint;
       hasPending: boolean;
       checkpoint?: WireCoSigned;
       fullState?: JsonValue;

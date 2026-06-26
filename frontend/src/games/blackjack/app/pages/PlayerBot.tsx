@@ -90,6 +90,7 @@ export default function PlayerBot({
     stand,
     pause: gPause,
     resume: gResume,
+    settleNow,
     backToConfig,
     maxRounds,
     setMaxRounds,
@@ -363,6 +364,24 @@ export default function PlayerBot({
     startNonce,
   ]);
 
+  // Auto settle and navigate home when wallet disconnects during a live game
+  const prevAccountRef = useRef(account);
+  useEffect(() => {
+    if (prevAccountRef.current && !account) {
+      if (phase === "playing" || phase === "opening") {
+        console.log("[blackjack bot] Wallet disconnected during active game, settling now...");
+        void settleNow().then(() => {
+          backToConfig();
+          navigate("/");
+        });
+      } else {
+        backToConfig();
+        navigate("/");
+      }
+    }
+    prevAccountRef.current = account;
+  }, [account, phase, backToConfig, settleNow, navigate]);
+
   // The hook seeds an empty view; treat "no cards yet, no game in flight" as the start screen.
   const started =
     view.playerCards.length > 0 || view.dealerCards.length > 0 || inGame;
@@ -581,7 +600,7 @@ export default function PlayerBot({
   const phaseLabel: Record<BotPhase, string> = {
     idle: "Idle",
     funding: "Funding bots…",
-    opening: "Opening tunnel…",
+    opening: "Starting game…",
     playing: "Playing…",
     settling: "Ending…",
     done: "Round complete",

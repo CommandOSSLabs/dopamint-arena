@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ConnectButton } from "@mysten/dapp-kit";
+
 import { useCustomWallet } from "@/games/ticTacToe/app/contexts/CustomWallet";
 import {
   loadOrCreateBots,
@@ -163,22 +163,9 @@ export function BotPanel({
             </button>
           )
         ) : (
-          <div
-            className={`flex flex-col sm:flex-row mt-4 [&_button]:w-full [&_button]:bg-[var(--qp-paper)] [&_button]:hover:bg-[var(--qp-ink)]/5 [&_button]:transition-all [&_button]:shadow-[4px_4px_0px_var(--qp-ink)] ${isPortrait ? "gap-3 mt-2 [&_button]:py-3 [&_button]:px-4 [&_button]:border-4 [&_button]:rounded-lg [&_button]:font-bold [&_button]:text-lg" : "gap-6 [&_button]:py-6 [&_button]:px-8 [&_button]:border-[4px] [&_button]:border-[var(--qp-ink)] [&_button]:rounded-xl [&_button]:font-bold [&_button]:text-3xl [&_button]:text-[var(--qp-ink)]"}`}
-          >
-            <ConnectButton connectText="Connect wallet" />
-            <button
-              onClick={login}
-              className={`w-full bg-surface text-primary font-headline-lg-mobile hover:bg-primary/5 transition-all rounded-xl flex items-center justify-center gap-4 shadow-[4px_4px_0px_#001e40] ${isPortrait ? "py-3 px-4 border-4 text-lg rounded-lg" : "py-6 px-8 border-[6px] text-3xl rounded-xl"}`}
-            >
-              <span
-                className={`material-symbols-outlined ${isPortrait ? "text-xl" : "text-4xl"}`}
-              >
-                login
-              </span>
-              Google
-            </button>
-          </div>
+          <p className="text-center text-lg md:text-xl text-[var(--qp-red)] font-bold pt-3 uppercase tracking-widest mt-4">
+            Please connect your Sui wallet in the top bar to fund bots.
+          </p>
         )}
       </div>
 

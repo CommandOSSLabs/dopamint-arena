@@ -54,6 +54,7 @@
  * cells — DISPLAY ONLY, no money, no winner.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCurrentAccount } from "@mysten/dapp-kit";
 import { core, proof } from "sui-tunnel-ts";
 import {
   WorldCanvasProtocol,
@@ -353,6 +354,8 @@ export interface UseWorldCanvasOnchain {
   /** PvP over the relay — Find Match between two distinct HUMANS. Stub for now: the
    *  relay matchmaking is not yet wired, so this surfaces a note and no-ops. */
   findMatch(): void;
+  /** Cooperatively settle the active tunnel on-chain. */
+  settleNow(): Promise<void>;
 }
 
 /** Stable cell key for the live canvas map. */
@@ -515,6 +518,7 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
   // A stable "You" display identity (never co-signs — the funded seat-A keypair does
   // the signing; this address only TAGS the human's own cells for the "You" label).
   const { report } = useTelemetry();
+  const account = useCurrentAccount();
   const bots = useMemo(() => loadOrCreateBots(), []);
   const client = useMemo(() => getSuiClient(), []);
   const humanAddress = bots.x.address;
@@ -1516,6 +1520,100 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
     };
   }, [startRun, startSeatBot, syncAgentMarkers, flushHeartbeat, paintFrame]);
 
+  const settleNow = useCallback(async () => {
+    const run = runRef.current;
+    if (!run || run.closed) return;
+
+    // Mark as closed and stop loops
+    run.closed = true;
+    if (agentRafRef.current !== null) {
+      cancelAnimationFrame(agentRafRef.current);
+      agentRafRef.current = null;
+    }
+    agentStatesRef.current.clear();
+    if (redrawTimerRef.current !== null) {
+      clearTimeout(redrawTimerRef.current);
+      redrawTimerRef.current = null;
+    }
+    if (humanStrokeTimerRef.current !== null) {
+      clearTimeout(humanStrokeTimerRef.current);
+      humanStrokeTimerRef.current = null;
+    }
+    for (const t of botActivityTimersRef.current.values()) clearTimeout(t);
+    botActivityTimersRef.current.clear();
+
+    flushHeartbeat(run, true);
+
+    const { tunnel, transcript } = run;
+    if (!run.onchain || !tunnel || !transcript) {
+      runRef.current = null;
+      return;
+    }
+
+    try {
+      const root = transcript.root();
+      const settlement = tunnel.buildSettlementWithRoot(
+        run.createdAt,
+        root,
+        0n,
+      );
+      const sponsoredClose = makeKeypairSponsoredSignExec({
+        address: run.identities.a.address,
+        keypair: run.identities.a.keypair,
+        client: client as never,
+      });
+
+      await settleViaBackend({
+        tunnelId: run.tunnelId,
+        settlement,
+        transcript: transcript.rawEntries(),
+        label: "world-canvas",
+        fallbackClose: async () => {
+          const { digest } = await sponsoredClose(
+            buildSettleWithRootTx(run.tunnelId, settlement, run.coinType),
+          );
+          await client.waitForTransaction({ digest });
+          return digest;
+        },
+      });
+
+      report.bumpCounters({ tunnelsClosed: 1, settlements: 1 });
+      report.pushLocalTxn({
+        id: feedRowId(`${run.tunnelId}:${run.moveCount}`),
+        game: GAME,
+        time: new Date().toLocaleTimeString("en-GB"),
+        bot: shortTunnelId(run.tunnelId),
+        type: "settled",
+        status: "Success",
+        amount: "closed",
+      });
+      report.pushTxn({
+        id: feedRowId(`${run.tunnelId}:${run.moveCount}`),
+        game: GAME,
+        time: new Date().toLocaleTimeString("en-GB"),
+        bot: shortTunnelId(run.tunnelId),
+        type: "Settled",
+        status: "Success",
+        amount: "closed",
+      });
+    } catch (e) {
+      console.warn("[world-canvas] final settle failed:", e);
+    } finally {
+      runRef.current = null;
+    }
+  }, [client, report, flushHeartbeat]);
+
+  // Auto settle when wallet disconnects during a live game
+  useEffect(() => {
+    if (!account) {
+      const run = runRef.current;
+      if (run && !run.closed) {
+        console.log("[world-canvas] Wallet disconnected, settling game in background...");
+        void settleNow();
+      }
+    }
+  }, [account, settleNow]);
+
   return {
     status,
     paints: paintsRef.current,
@@ -1539,5 +1637,6 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
     viewNextAgent,
     focusOnAgent,
     findMatch,
+    settleNow,
   };
 }

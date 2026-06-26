@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 import {
   useCurrentAccount,
   useSignAndExecuteTransaction,
@@ -897,6 +897,19 @@ export function useBattleship(windowId: string): BattleshipSession {
   };
 
   const snap = useSyncExternalStore(session.subscribe, session.getSnapshot);
+
+  // Auto settle and reset when wallet disconnects
+  useEffect(() => {
+    if (!account) {
+      if (snap.status === "playing") {
+        console.log("[battleship bot] wallet disconnected during active game, settling now...");
+        session.settleNow();
+      } else if (snap.status === "settled" || snap.status === "error") {
+        console.log("[battleship bot] wallet disconnected and session is settled/error, resetting...");
+        session.reset();
+      }
+    }
+  }, [account, snap.status, session]);
   return {
     status: snap.status,
     view: snap.view,

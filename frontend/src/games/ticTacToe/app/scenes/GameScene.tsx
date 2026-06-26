@@ -56,12 +56,12 @@ function statusText(
   if (winner === 3) return "Draw match.";
   switch (phase) {
     case "opening":
-      return "Opening tunnel on-chain…";
+      return "Starting game on-chain…";
     case "playing":
       if (turn === "A") return manual ? "Your move ❌" : "Bot X is thinking…";
       return manual ? "Bot is thinking… ⭕" : "Bot O is thinking…";
     case "settling":
-      return "Settling on-chain…";
+      return "Ending on-chain…";
     case "done":
       return "Game over.";
     case "error":
@@ -190,7 +190,7 @@ function OnchainLogStrip({
       <LogChip step={1} label="Open" digest={g.digests.create} />
       <LogChip step={2} label="Root" digest={g.digests.root} link={false} />
       <LogChip step={3} label="State" digest={g.digests.update} />
-      <LogChip step={4} label="Settle" digest={g.digests.close} />
+      <LogChip step={4} label="Ended" digest={g.digests.close} />
       {g.tunnels && g.tunnels.length > 0 && (
         <span
           className={`inline-flex items-center gap-[0.4em] whitespace-nowrap ${
@@ -200,7 +200,7 @@ function OnchainLogStrip({
           }`}
         >
           <span className="text-[0.92em] uppercase tracking-wide opacity-70">
-            Settled {g.tunnels.length}
+            Ended {g.tunnels.length}
           </span>
           {latest?.closeDigest && (
             <a
@@ -403,7 +403,7 @@ export function GameScene({
   return (
     <div className="w-full h-full overflow-hidden flex flex-row items-stretch gap-3 px-1 py-2">
       {/* Left pane (top→bottom): Menu, Auto, game progress, status, games-per-tunnel. */}
-      <aside className="ttt-pane qp-panel qp-stroke shrink-0 flex flex-col items-center gap-3 overflow-y-auto">
+      <aside className="ttt-pane qp-panel qp-stroke flex flex-col items-center gap-3 overflow-y-auto">
         <div className="w-full flex flex-col gap-2">{controls}</div>
         <span className="qp-eyebrow text-[11px] opacity-80 text-center">
           {progress}
@@ -429,7 +429,7 @@ export function GameScene({
       </main>
 
       {/* Right pane: both scores on one row, then draws + the condensed on-chain trail. */}
-      <aside className="ttt-pane qp-panel qp-stroke shrink-0 flex flex-col items-center gap-3 overflow-y-auto">
+      <aside className="ttt-pane qp-panel qp-stroke flex flex-col items-center gap-3 overflow-y-auto">
         <div className="w-full flex items-start justify-between gap-1">
           {seatMini(g.auto ? "Bot X (X)" : "You (X)", g.score.x, g.balances.x)}
           {seatMini("Bot (O)", g.score.o, g.balances.o)}

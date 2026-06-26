@@ -49,3 +49,6 @@ _why_ survives after the people involved have moved on.
   `Coin<T>`, so concurrent reload opens stop equivocating. Sponsor allowlist gains
   `redeem_funds`/`send_funds` + a mandatory `WithdrawFrom::Sender` input guard
   (anti settler-drain). Behind `VITE_MTPS_ADDRESS_BALANCE`; no Move redeploy.
+- [0014](0014-bigint-wire-boundary.md) — bigint wire boundary: balances/nonces/timestamps
+  are native `bigint` end-to-end; `stringifyWithBigint`/`parseWithBigint` in the transport
+  is the single JSON boundary. Adapters and peer-message constructors must not strip.

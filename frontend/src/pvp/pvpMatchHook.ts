@@ -696,6 +696,13 @@ export function createPvpMatchHook<
       session.resume();
     }, [session, account?.address]);
 
+    // Auto reset when wallet disconnects
+    useEffect(() => {
+      if (!account) {
+        session.reset();
+      }
+    }, [account, session]);
+
     const snap = useSyncExternalStore(session.subscribe, session.getSnapshot);
     return {
       status: snap.status,
@@ -741,10 +748,10 @@ async function settle<State, Move>(
   const half = dt.buildSettlementHalfWithRoot(createdAt, root, 0n);
   channel.sendPeer({
     t: "settleHalf",
-    partyABalance: half.settlement.partyABalance.toString(),
-    partyBBalance: half.settlement.partyBBalance.toString(),
-    finalNonce: half.settlement.finalNonce.toString(),
-    timestamp: half.settlement.timestamp.toString(),
+    partyABalance: half.settlement.partyABalance,
+    partyBBalance: half.settlement.partyBBalance,
+    finalNonce: half.settlement.finalNonce,
+    timestamp: half.settlement.timestamp,
     transcriptRoot: toHex(root),
     sig: toHex(half.sigSelf),
   });

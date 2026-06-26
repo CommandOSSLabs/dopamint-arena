@@ -1,12 +1,11 @@
 /**
  * Resume adapter for World Canvas PvP: round-trips {@link PvpCanvasState} through localStorage
  * so a cold reload re-syncs the match. The digest is the co-signed truth (hex), cells are
- * render-only, and the balances are bigints (decimal strings — localStorage can't hold bigints).
- * The pending move is JSON-native (number chunk coords), so it needs no (de)serializer — the
- * resume layer's default identity pass-through carries it. No hidden secret — the wall is public.
+ * render-only. bigint fields (balanceA/balanceB/total) are tagged by `stringifyWithBigint` on
+ * persist and revived by `parseWithBigint` on read. The pending move is JSON-native (number chunk
+ * coords), so it needs no (de)serializer. No hidden secret — the wall is public.
  */
 import type { ResumeAdapter } from "@/pvp/resumeSession";
-import type { JsonValue } from "@/pvp/resume";
 import type { PvpCanvasState, PvpPaintMove } from "./pvpProtocol";
 
 const toHex = (b: Uint8Array): string =>
@@ -31,10 +30,10 @@ export function makeWorldCanvasPvpResumeAdapter(
         // already folded (it isn't recoverable from the digest alone).
         appliedSeqA: s.appliedSeqA,
         appliedSeqB: s.appliedSeqB,
-        balanceA: s.balanceA.toString(),
-        balanceB: s.balanceB.toString(),
-        total: s.total.toString(),
-      }) as unknown as JsonValue,
+        balanceA: s.balanceA,
+        balanceB: s.balanceB,
+        total: s.total,
+      }) as unknown as never,
     deserializeState: (j) => {
       const o = j as Record<string, unknown>;
       return {
@@ -44,9 +43,9 @@ export function makeWorldCanvasPvpResumeAdapter(
         appliedSeqA: (o.appliedSeqA as number) ?? 0,
         appliedSeqB: (o.appliedSeqB as number) ?? 0,
         winner: null,
-        balanceA: BigInt(o.balanceA as string),
-        balanceB: BigInt(o.balanceB as string),
-        total: BigInt(o.total as string),
+        balanceA: o.balanceA as bigint,
+        balanceB: o.balanceB as bigint,
+        total: o.total as bigint,
       };
     },
     // The pending move is JSON-native (a batch of number-coord cells), so serializeMove/

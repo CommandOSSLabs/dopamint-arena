@@ -31,12 +31,12 @@ function Digest({ label, digest }: { label: string; digest?: string }) {
 }
 
 function statusText(g: ReturnType<typeof usePvpTicTacToe>): string {
-  if (g.phase === "opening") return "Opening tunnel on-chain…";
+  if (g.phase === "opening") return "Starting game on-chain…";
   if (g.phase === "funding") return "Funding your seat…";
-  if (g.phase === "settling") return "Settling on-chain…";
-  if (g.phase === "done") return "Settled — game over";
+  if (g.phase === "settling") return "Ending on-chain…";
+  if (g.phase === "done") return "Ended — game over";
   if (g.innerOver) {
-    if (g.terminal) return "Session over — settling…";
+    if (g.terminal) return "Session over — ending…";
     return g.role === "A"
       ? "You won/lost/drew — start the next game"
       : "Waiting for X to start the next game…";
@@ -142,7 +142,7 @@ export function PvpScene({
               : g.phase === "queuing"
                 ? "Finding Opponent…"
                 : g.phase === "opening"
-                  ? "Opening tunnel…"
+                  ? "Starting game…"
                   : g.phase === "funding"
                     ? "Funding seat…"
                     : "Find Match"}
@@ -218,7 +218,7 @@ export function PvpScene({
           onClick={g.stop}
           className="qp-btn ttt-ctl-btn w-full uppercase tracking-wider"
         >
-          Stop &amp; settle
+          Stop &amp; end
         </button>
       )}
       {g.phase === "done" && (
@@ -304,7 +304,7 @@ export function PvpScene({
   return (
     <div className="w-full h-full overflow-hidden flex flex-row items-stretch gap-3 px-1 py-2">
       {/* Left pane: leave, auto, match-flow actions, status. */}
-      <aside className="ttt-pane qp-panel qp-stroke shrink-0 flex flex-col items-center gap-3 overflow-y-auto">
+      <aside className="ttt-pane qp-panel qp-stroke flex flex-col items-center gap-3 overflow-y-auto">
         <button onClick={leave} className="qp-btn ttt-ctl-btn w-full">
           ← Leave
         </button>
@@ -324,7 +324,7 @@ export function PvpScene({
       </main>
 
       {/* Right pane: you-are + scores + on-chain log. */}
-      <aside className="ttt-pane qp-panel qp-stroke shrink-0 flex flex-col items-center gap-3 overflow-y-auto">
+      <aside className="ttt-pane qp-panel qp-stroke flex flex-col items-center gap-3 overflow-y-auto">
         {youAre}
         {scoreRow}
         {gameLog}
