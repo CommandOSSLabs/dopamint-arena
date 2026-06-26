@@ -156,7 +156,8 @@ export function createArenaWindow<Solo extends ArenaSolo, Pvp extends ArenaPvp>(
         }
         setMode(null);
       }
-    }, [account, mode, pvp]);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [account, mode, pvp.reset]);
 
     const screen = (
       children: ReactNode,
