@@ -49,7 +49,7 @@ shares patterns and infra with pixel-duel but **none of its rules**: no fog, no 
 painters, transparent global state.
 
 The hard constraint that makes this a design problem (not a copy-paste) is in
-[`sui_tunnel/sources/tunnel.move`](../sui_tunnel/sources/tunnel.move): a tunnel has exactly
+[`sui_tunnel/sources/tunnel.move`](../../sui_tunnel/sources/tunnel.move): a tunnel has exactly
 `party_a` and `party_b`, and `close_cooperative_with_root<T>` (L1065) settles on exactly **two**
 signatures `sig_a`, `sig_b`. **There is no N-party tunnel.** Everything below is about getting an
 N-painter wall out of a 2-party primitive _without forking the Move contract_.
@@ -86,7 +86,7 @@ them.
 **Why A, concretely:**
 
 - **Zero Move changes, zero relay changes.** Each painter↔hub link is an ordinary 2-party tunnel.
-  The relay ([`backend/tunnel-manager/src/mp/ws.rs`](../backend/tunnel-manager/src/mp/ws.rs)) is an
+  The relay ([`backend/tunnel-manager/src/mp/ws.rs`](../../backend/tunnel-manager/src/mp/ws.rs)) is an
   **opaque frame forwarder** keyed by `match_id`/`game` — it never sees state, never signs. N painters
   = N matches it already multiplexes. It does not learn the word "canvas."
 - **Parallelism is by tunnel count, not concurrency on one tunnel** — exactly the framework's
@@ -286,7 +286,7 @@ effective TPS = (live Agent-AI bots + human painters) × (pixels/sec per tunnel)
 ```
 
 - **Concurrent tunnels:** every Agent-AI click adds a spoke. The agent runner is already URL-driven —
-  [`frontend/src/agent/agentConfig.ts`](../frontend/src/agent/agentConfig.ts): `?agent` turns the real
+  [`frontend/src/agent/agentConfig.ts`](../../frontend/src/agent/agentConfig.ts): `?agent` turns the real
   app into a self-driving agent, `?m=N` sets concurrent tunnel slots, `AGENT_GAMES` is the rotation set
   (currently **tic-tac-toe only** — the others are commented out because only its move-trigger is
   protocol-driven; re-adding a game means making its trigger protocol-driven, then adding a `GameSpec`).
@@ -294,11 +294,11 @@ effective TPS = (live Agent-AI bots + human painters) × (pixels/sec per tunnel)
 - **Pixels/sec per tunnel:** network-RTT bound, not CPU bound. Agent-vs-hub ~10–100 ops/s; humans
   ~1 every cooldown. 100 Agent-AI tunnels × ~20 ops/s ≈ 2 000 effective TPS — and it composes upward
   with more agent processes / more clicks.
-- **Measurement is already built.** [`backend/tunnel-manager/src/stats.rs`](../backend/tunnel-manager/src/stats.rs):
+- **Measurement is already built.** [`backend/tunnel-manager/src/stats.rs`](../../backend/tunnel-manager/src/stats.rs):
   a `RateWindow` computes a **5 s sliding-window derivative** (Prometheus-`rate()` style) of a monotonic
   action counter on a 500 ms tick, per game (`per_game` map keyed by the game id string). The dashboard
   log-normalizes (`log10(tps)/6`) over an SSE feed.
-- **Reporting contract** ([`docs/adding-a-tunnel-game.md`](adding-a-tunnel-game.md) §Reporting TPS):
+- **Reporting contract** ([`docs/guide/adding-a-tunnel-game.md`](../guide/adding-a-tunnel-game.md) §Reporting TPS):
   - _Self-play (Phase 0 Agent-AI bots):_ the client sends throttled **action deltas** via `flushHeartbeat` —
     one action per verified `tunnel.step()`, never per render/retry; force-flush the tail on settle.
   - _PvP / human-vs-hub (Phase 1):_ the **relay counts server-side** as it ingests co-signed frames,
@@ -307,9 +307,9 @@ effective TPS = (live Agent-AI bots + human painters) × (pixels/sec per tunnel)
 
 ### Economy — free to play, no SUI required
 
-- **Gas sponsorship** ([ADR-0009](decisions/0009-sponsor-create-and-fund-gas.md)): the settler pays all
+- **Gas sponsorship** ([ADR-0014](../decisions/0014-sponsor-create-and-fund-gas.md)): the settler pays all
   gas in SUI; the player pays nothing. Painters never hold SUI.
-- **DOPAMINT stake** ([ADR-0010 stake token](decisions/0010-dopamint-stake-token.md)): an unlimited
+- **DOPAMINT stake** ([ADR-0016 stake token](../decisions/0016-mtps-stake-token.md)): an unlimited
   faucet-minted token. Before staking, if a painter's balance is short, one gas-sponsored `mint` tops
   them up **invisibly** (no balance UI, no faucet button). A 0-SUI / 0-DOPAMINT visitor connects →
   faucet mints (sponsored) → open/fund stakes DOPAMINT (sponsored) → paints. Fully free.
@@ -317,7 +317,7 @@ effective TPS = (live Agent-AI bots + human painters) × (pixels/sec per tunnel)
   On-chain cost is **open/fund/close only** (~3 txs per painter session), and is independent of TPS;
   it scales with _tunnel count × settle frequency_, not pixels. Free mode = balances never shift =
   every close is a draw = zero dispute surface. The only finite resource under load is the **settler's
-  SUI for gas** — monitor/refill it (the deferred rate-limit/budget from ADR-0010 applies here too).
+  SUI for gas** — monitor/refill it (the deferred rate-limit/budget from ADR-0016 applies here too).
 
 ---
 
@@ -394,7 +394,7 @@ no basemap, no map library**. The dashboard shows real per-game TPS. No OSM, no 
 4. **Persistent global state.** Redis-only (resets on restart) for MVP; periodic Walrus snapshots +
    chain anchor for production. Where the canonical wall lives long-term is an ADR.
 5. **Settler SUI drain.** Every close burns settler gas; under fleet load this is the real bottleneck.
-   Rate-limit + spend-budget (deferred in ADR-0010) become load-bearing here.
+   Rate-limit + spend-budget (deferred in ADR-0016) become load-bearing here.
 6. **Agent-AI spawn caps.** Each click spawns a forever-painting agent; unbounded clicks can saturate the
    hub signer / relay / settler. Need a per-client spawn cap + a global concurrency ceiling, decided under
    load testing.
@@ -411,7 +411,7 @@ no basemap, no map library**. The dashboard shows real per-game TPS. No OSM, no 
 | Layer                   | Reused as-is                                                                                                                     | New / adapted                                                                       |
 | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
 | **Move contract**       | `tunnel` (`create`/`deposit`/`close_cooperative_with_root`), generic over coin `T`                                               | none                                                                                |
-| **Stake / gas**         | ADR-0009 sponsor (gas-only), ADR-0010 DOPAMINT faucet + invisible auto-faucet                                                    | none                                                                                |
+| **Stake / gas**         | ADR-0014 sponsor (gas-only), ADR-0016 DOPAMINT faucet + invisible auto-faucet                                                    | none                                                                                |
 | **Relay**               | opaque `match_id`/`game` frame forwarder (`mp/ws.rs`), `quickMatch`, `Connect`/`Resume`                                          | none                                                                                |
 | **Protocol SDK**        | `Protocol<State,Move>` interface, `rollingDigest`, `chat.ts` as the template                                                     | `worldCanvas.ts`                                                                    |
 | **TPS / dashboard**     | `stats.rs` 5 s `RateWindow` derivative, `per_game` bucket, SSE log-scale chart                                                   | a `"world-canvas"` id                                                               |
@@ -470,7 +470,7 @@ the wire.** Therefore:
 ### 10.2 The brush → co-signed-move → TPS contract (already true; keep it exact)
 
 `1 newly-painted cell = 1 verified `tunnel.step()` = 1 action = ~1 TPS` — the same
-denominator as a Sui on-chain function call (`docs/adding-a-tunnel-game.md` "Reporting TPS").
+denominator as a Sui on-chain function call (`docs/guide/adding-a-tunnel-game.md` "Reporting TPS").
 The chain is already in place and must stay byte-identical:
 
 - **Gate:** only `r.verified` (both signatures check) books a move —

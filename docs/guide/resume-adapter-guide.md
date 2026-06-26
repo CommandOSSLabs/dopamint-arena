@@ -7,7 +7,7 @@ shared, audited driver does verification, adoption, persistence, and
 reconstruction. No game re-implements crypto or reconciliation.
 
 Design rationale and the cross-game decisions live in
-[`specs/2026-06-22-6b-per-game-resume-design.md`](specs/2026-06-22-6b-per-game-resume-design.md).
+[`design/2026-06-22-6b-per-game-resume-design.md`](../design/2026-06-22-6b-per-game-resume-design.md).
 This file is the how-to; read it when wiring a game.
 
 ## What resume gives you

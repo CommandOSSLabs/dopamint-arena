@@ -137,7 +137,7 @@ class BotSession {
   private gen = 0;
   private looping = false;
   // Self-play TPS heartbeat: send counts (never a rate); the backend derives windowed TPS. See
-  // adding-a-tunnel-game.md "Reporting TPS". (PvP must NOT do this — the relay counts there.)
+  // docs/guide/adding-a-tunnel-game.md "Reporting TPS". (PvP must NOT do this — the relay counts there.)
   private session: RegisterSessionResult | null = null;
   private heartbeatActions = 0;
   private moveCount = 0;

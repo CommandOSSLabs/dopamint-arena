@@ -1,7 +1,7 @@
 # 6B — Per-Game Cold-Load Resume + Blackjack Migration — Design
 
-**Status:** Approved (design). Supersedes the partial Task 6B from
-`docs/superpowers/plans/2026-06-22-mp-resume-protocol-frontend.md` (commit `ed490ca`).
+**Status:** Approved (design). Supersedes the partial Task 6B from the
+mp-resume-protocol frontend plan (commit `ed490ca`).
 
 **Goal:** Finish PvP resume for all four games so a dropped player — **including a
 full page reload** — re-attaches to their in-flight match and resumes from the last
@@ -56,7 +56,7 @@ Layers A/B/C from the parent plan are in place and committed (Tasks 1–6A + a p
 - **Cold-load locus:** **centralized driver + thin per-game `RebuildSpec`** (approach A).
   One audited reconstruction path; the integration guide becomes "implement an adapter +
   a `RebuildSpec`," not "write a cold-load loop."
-- **Integration guide:** standalone living doc at `docs/resume-adapter-guide.md`.
+- **Integration guide:** standalone living doc at `docs/guide/resume-adapter-guide.md`.
 - **Plan structure:** one implementation plan — a shared foundation task, then one
   phase per game.
 
@@ -301,7 +301,7 @@ clean after each task; stage only the task's files.
 
 ---
 
-## Integration guide (`docs/resume-adapter-guide.md`)
+## Integration guide (`docs/guide/resume-adapter-guide.md`)
 
 A living how-to for adding resume to any **future** game. Contents:
 
@@ -342,7 +342,7 @@ A living how-to for adding resume to any **future** game. Contents:
 
 **Created**
 
-- `docs/resume-adapter-guide.md` — the integration guide.
+- `docs/guide/resume-adapter-guide.md` — the integration guide.
 - Per-game cold-load test files (co-located: `src/pvp/*.test.ts` and the game dirs).
 
 ## Self-review notes (coverage)

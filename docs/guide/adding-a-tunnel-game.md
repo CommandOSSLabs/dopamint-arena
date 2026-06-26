@@ -3,7 +3,7 @@
 > **Type:** implementation
 > **Scope:** The end-to-end procedure to add a new playable game that settles over a real Sui tunnel (a wagered self-play or PvP game in the arena desktop).
 > **Read when:** Building a new game (e.g. bomb-it) or wiring an existing placeholder game to the engine.
-> **Does NOT cover:** How tunnels / state channels / settlement work internally — see [ARCHITECTURE.md](ARCHITECTURE.md) and the per-game design spec under [superpowers/specs/](superpowers/specs/). Backend (`tunnel-manager`) and Move (`sui_tunnel`) internals.
+> **Does NOT cover:** How tunnels / state channels / settlement work internally — see [ARCHITECTURE.md](../design/ARCHITECTURE.md) and the per-game design notes. Backend (`tunnel-manager`) and Move (`sui_tunnel`) internals.
 > **Prerequisites:** None.
 > **Owns:** The file-layout contract for an arena game package; the self-play-vs-PvP wiring decision; the per-layer "what a new game must add" checklist.
 
@@ -18,11 +18,11 @@ A new game is almost entirely a frontend package plus ONE SDK protocol class. Th
 | `backend/tunnel-manager`      | Nothing — just a new `game` string        | Generic control-plane + opaque relay; keys stats/matchmaking by string                  |
 | `sui_tunnel` (Move)           | Nothing                                   | `tunnel` is a generic 2-party state channel (state_hash + nonce + balances + dual sigs) |
 
-`sui_tunnel/` and `sui-tunnel-ts/` are **upstream-vendored** (see [CLAUDE.md](../CLAUDE.md) § Repository layout). Add a protocol following the existing protocol files; keep the SDK on its pnpm / `node:test` toolchain — do not convert it to bun/biome or restructure it.
+`sui_tunnel/` and `sui-tunnel-ts/` are **upstream-vendored** (see [CLAUDE.md](../../CLAUDE.md) § Repository layout). Add a protocol following the existing protocol files; keep the SDK on its pnpm / `node:test` toolchain — do not convert it to bun/biome or restructure it.
 
 ## Pick the wiring pattern
 
-> **Default: PvP** for any game two humans can play (race, board, shooter). Self-play is for games with no real two-human form (Blackjack vs a dealer, single-player Poker) or pure bot/stats showcases. Solo policy for PvP games is **invite / 2-tabs** (a private match code), not a bot fallback — see [superpowers/specs/2026-06-18-chicken-cross-pvp-design.md](superpowers/specs/2026-06-18-chicken-cross-pvp-design.md) § 3–4.
+> **Default: PvP** for any game two humans can play (race, board, shooter). Self-play is for games with no real two-human form (Blackjack vs a dealer, single-player Poker) or pure bot/stats showcases. Solo policy for PvP games is **invite / 2-tabs** (a private match code), not a bot fallback (see the chicken-cross PvP design notes § 3–4).
 
 The pattern is fixed by **which signing keys the browser holds**, which selects the engine class. Copy the matching reference game wholesale, then swap the protocol.
 
@@ -36,7 +36,7 @@ The pattern is fixed by **which signing keys the browser holds**, which selects 
 | Reference to copy | `frontend/src/games/blackjack/`                                                   | `frontend/src/games/ticTacToe/`                                                                 |
 | Hardest part      | The protocol                                                                      | The protocol + real-time determinism over a turn-based channel                                  |
 
-Funding builders live in `frontend/src/onchain/tunnelTx.ts` (grep `openAndFundSelfPlay`). Worked example: Chicken Cross (self-play) — design rationale in [superpowers/specs/2026-06-18-chicken-cross-tunnel-design.md](superpowers/specs/2026-06-18-chicken-cross-tunnel-design.md), step-by-step in [superpowers/plans/2026-06-18-chicken-cross-game-mode.md](superpowers/plans/2026-06-18-chicken-cross-game-mode.md).
+Funding builders live in `frontend/src/onchain/tunnelTx.ts` (grep `openAndFundSelfPlay`). Worked example: Chicken Cross (self-play) — design rationale in the chicken-cross tunnel design notes, step-by-step in the chicken-cross game-mode plan.
 
 ## The protocol contract
 
@@ -53,7 +53,7 @@ Implement the generic interface in `sui-tunnel-ts/src/protocol/Protocol.ts` (gre
 
 > **Invariant 1 — conservation.** `balances(state).a + .b === total` for EVERY reachable state. `OffchainTunnel.step` asserts it and throws otherwise. Move funds toward the winner only at terminal states; keep the split constant during play.
 
-> **Invariant 2 — determinism.** State must be a pure function of `(seed-or-tunnelId, ordered moves)`. Any randomness (shuffles, hazard fields, bomb timers) must be derived from a seed that is part of the state and of `encodeState`, so the counterparty and an on-chain disputer replay identically. Seed from the `tunnelId` when the random field is **public and party-independent** (no seat can bias it and the id can't be ground) — e.g. blackjack's card stream, chicken-cross's hazard field, bomb-it's symmetric grid. Use a two-party **commit-reveal** only when a party holds **hidden state it could bias** (battleship fleets, poker hands — see ADRs 0003/0008/0009 and 0010).
+> **Invariant 2 — determinism.** State must be a pure function of `(seed-or-tunnelId, ordered moves)`. Any randomness (shuffles, hazard fields, bomb timers) must be derived from a seed that is part of the state and of `encodeState`, so the counterparty and an on-chain disputer replay identically. Seed from the `tunnelId` when the random field is **public and party-independent** (no seat can bias it and the id can't be ground) — e.g. blackjack's card stream, chicken-cross's hazard field, bomb-it's symmetric grid. Use a two-party **commit-reveal** only when a party holds **hidden state it could bias** (battleship fleets, poker hands — see ADRs 0003, 0008, and 0015).
 
 Encoding helpers (`protocolDomain`, `lengthPrefixedConcat`, `rollingDigest`) are exported from `Protocol.ts`. Use a fixed-size `encodeState` when state is bounded; use `rollingDigest` when state grows unbounded.
 
@@ -98,8 +98,8 @@ mode on the hook, and register a `CabinetController` in your App
 (`useRegisterCabinet`). The `GameCabinet` wrap in `Desktop` is automatic; a game
 that registers nothing stays inert. Cabinet adopters: tic-tac-toe, bomb-it,
 chicken-cross. Reference: tic-tac-toe's `App.tsx` / `useBotGame.ts`; design in
-[superpowers/specs/2026-06-23-arena-attract-takeover-shell-design.md](superpowers/specs/2026-06-23-arena-attract-takeover-shell-design.md),
-decision in [decisions/0012-arena-attract-cabinet-seam.md](decisions/0012-arena-attract-cabinet-seam.md).
+the arena-attract takeover-shell design notes,
+decision in [decisions/0012-arena-attract-cabinet-seam.md](../decisions/0012-arena-attract-cabinet-seam.md).
 
 ## Reporting TPS (heartbeat contract)
 

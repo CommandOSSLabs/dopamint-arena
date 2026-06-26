@@ -7,7 +7,7 @@
  * float path becomes integer cells is the shared {@link rasterizeStroke} funnel, so
  * every mode is smooth-by-construction while the wire stays a frozen integer move.
  *
- * Two layers (world-canvas-design.md §10.4):
+ * Two layers (docs/design/world-canvas-design.md §10.4):
  *   1. A generator produces float points (lines, splines, spirals, flow streamlines)
  *      in REGION-LOCAL cell space, clamped to the mode's footprint box.
  *   2. `rasterizeStroke` walks each polyline at sub-cell spacing and stamps a round

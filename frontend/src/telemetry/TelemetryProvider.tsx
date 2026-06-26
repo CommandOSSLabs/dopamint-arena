@@ -96,7 +96,7 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
     c.errors += delta.errors ?? 0;
     // No local rate is derived here: the backend is the single authoritative TPS clock
     // (ADR-0002). Self-play reports raw counts via the heartbeat; the backend owns the rate
-    // (see docs/adding-a-tunnel-game.md § Reporting TPS). These counters feed only totals and
+    // (see docs/guide/adding-a-tunnel-game.md § Reporting TPS). These counters feed only totals and
     // the offline fallback below.
   }, []);
 

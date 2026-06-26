@@ -190,8 +190,7 @@ Every tunnel is **two independent parties**, each holding only its _own_ ephemer
 key and neither able to forge the other; they exchange opaque co-signed frames
 through the relay (or a swappable P2P transport). There is **no self-play** — one
 process holding both keys and signing to itself proves volume, not tunnels, and the
-volume it produces is fakeable (see [Live event & provenance](#live-event--provenance)
-and [ADR-0006](decisions/0006-genuine-two-party-only-drop-self-play.md)). A party is
+volume it produces is fakeable (see [Live event & provenance](#live-event--provenance)). A party is
 a **real human** (browser + wallet) or an **independent agent** (own wallet + key,
 playing at machine speed) — both take the identical path: gated deposit per seat,
 ephemeral key signs each move, payout directed to the wallet.
@@ -229,7 +228,7 @@ effective TPS  =  (concurrent channels)  ×  (moves/sec per channel)
 
 - Every channel is **two independent parties** — agent-vs-agent, or a human against
   either — never one process self-signing, which is what makes the volume genuine
-  (see [ADR-0006](decisions/0006-genuine-two-party-only-drop-self-play.md)). A channel
+  (genuine two-party play only — self-play was dropped). A channel
   is **sequential** — one tunnel's moves are strictly ordered by a per-tunnel nonce —
   and its per-move rate is bounded by the real **network round-trip between the two
   co-signers**, not an in-process call. So the headline volume comes from running

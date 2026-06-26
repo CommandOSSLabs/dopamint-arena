@@ -17,7 +17,7 @@ playing a match). Grounded in the merged code:
 
 ## 1. Two FE roles, one model
 
-Every tunnel is **genuine two-party** (ADR-0006); the self-play _mode_ is gone. The FE plays
+Every tunnel is **genuine two-party** (ADR-0001 §1); the self-play _mode_ is gone. The FE plays
 one of two roles over that single model:
 
 | Role                                  | What the FE does                                                                                                                                                                                                                                   |
