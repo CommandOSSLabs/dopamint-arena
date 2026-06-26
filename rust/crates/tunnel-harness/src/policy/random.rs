@@ -13,11 +13,16 @@ pub struct RandomPolicy<P: Protocol> {
 
 impl<P: Protocol> RandomPolicy<P> {
     pub fn new(protocol: Arc<P>, seed: u64) -> RandomPolicy<P> {
-        RandomPolicy { protocol, state: AtomicU64::new(seed) }
+        RandomPolicy {
+            protocol,
+            state: AtomicU64::new(seed),
+        }
     }
 
     fn next_f64(&self) -> f64 {
-        let mut z = self.state.fetch_add(0x9E37_79B9_7F4A_7C15, Ordering::Relaxed);
+        let mut z = self
+            .state
+            .fetch_add(0x9E37_79B9_7F4A_7C15, Ordering::Relaxed);
         z = z.wrapping_add(0x9E37_79B9_7F4A_7C15);
         z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
         z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);

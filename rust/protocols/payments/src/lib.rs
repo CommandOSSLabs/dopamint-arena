@@ -128,9 +128,15 @@ mod tests {
             seat: Seat::A,
         };
         let s0 = p.initial_state(&ctx).await;
-        let s1 = p.apply_move(&s0, &PayMove { amount: 5 }, Seat::A).await.unwrap();
+        let s1 = p
+            .apply_move(&s0, &PayMove { amount: 5 }, Seat::A)
+            .await
+            .unwrap();
         assert_eq!((s1.a, s1.b), (95, 105));
         assert_eq!(s1.a + s1.b, 200);
-        assert!(p.apply_move(&s1, &PayMove { amount: 5 }, Seat::A).await.is_err()); // wrong turn
+        assert!(p
+            .apply_move(&s1, &PayMove { amount: 5 }, Seat::A)
+            .await
+            .is_err()); // wrong turn
     }
 }

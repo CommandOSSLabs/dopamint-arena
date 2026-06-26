@@ -22,8 +22,7 @@ impl Metrics {
     }
 }
 
-pub type DriverUnit =
-    Pin<Box<dyn Future<Output = Result<DriverOutcome, HarnessError>> + Send>>;
+pub type DriverUnit = Pin<Box<dyn Future<Output = Result<DriverOutcome, HarnessError>> + Send>>;
 
 pub struct FleetSupervisor;
 
@@ -52,7 +51,10 @@ mod tests {
 
     fn ok_unit(moves: u64) -> DriverUnit {
         Box::pin(async move {
-            Ok(DriverOutcome { moves, final_balances: Balances { a: 1, b: 1 } })
+            Ok(DriverOutcome {
+                moves,
+                final_balances: Balances { a: 1, b: 1 },
+            })
         })
     }
     fn err_unit() -> DriverUnit {

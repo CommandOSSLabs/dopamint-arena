@@ -4,10 +4,10 @@
 
 use std::sync::Arc;
 use tunnel_blackjack::Blackjack;
+use tunnel_core::crypto::keypair_from_secret;
 use tunnel_harness::{
     Balances, InMemoryChannel, LocalSigner, RandomPolicy, Seat, SeatDriver, TunnelContext,
 };
-use tunnel_core::crypto::keypair_from_secret;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn self_play_match_conserves_balances() {
@@ -60,6 +60,9 @@ async fn self_play_match_conserves_balances() {
     let b = rb.expect("seat B runs cleanly");
     assert_eq!(a.final_balances.sum(), 400, "balances conserved for A");
     assert_eq!(b.final_balances.sum(), 400, "balances conserved for B");
-    assert_eq!(a.final_balances, b.final_balances, "both seats agree on outcome");
+    assert_eq!(
+        a.final_balances, b.final_balances,
+        "both seats agree on outcome"
+    );
     assert!(a.moves > 0, "match made progress");
 }

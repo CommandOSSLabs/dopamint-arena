@@ -70,7 +70,10 @@ impl<P: Protocol, Pol: Policy<P>, Ch: Channel, S: Signer> SeatDriver<P, Pol, Ch,
         max_moves: u64,
         mut now: impl FnMut() -> u64 + Send,
     ) -> Result<DriverOutcome, HarnessError> {
-        let ctx = PolicyContext { tunnel_id: self.tunnel_id.clone(), seat: self.seat };
+        let ctx = PolicyContext {
+            tunnel_id: self.tunnel_id.clone(),
+            seat: self.seat,
+        };
         let mut moves = 0u64;
 
         loop {
@@ -80,7 +83,10 @@ impl<P: Protocol, Pol: Policy<P>, Ch: Channel, S: Signer> SeatDriver<P, Pol, Ch,
 
             // --- our turn? plan + deliver a MOVE, then await the ACK ---
             if let Some(mv) = self.policy.plan_move(&self.state, self.seat, &ctx).await {
-                let next = self.protocol.apply_move(&self.state, &mv, self.seat).await?;
+                let next = self
+                    .protocol
+                    .apply_move(&self.state, &mv, self.seat)
+                    .await?;
                 let nonce = self.nonce + 1;
                 let ts = now();
                 let (update, msg) = self.build_update(&next, nonce, ts);
@@ -131,7 +137,10 @@ impl<P: Protocol, Pol: Policy<P>, Ch: Channel, S: Signer> SeatDriver<P, Pol, Ch,
             }
         }
 
-        Ok(DriverOutcome { moves, final_balances: self.protocol.balances(&self.state) })
+        Ok(DriverOutcome {
+            moves,
+            final_balances: self.protocol.balances(&self.state),
+        })
     }
 
     async fn recv_frame(&self) -> Result<Option<Frame<P::Move>>, HarnessError> {
@@ -156,7 +165,9 @@ impl<P: Protocol, Pol: Policy<P>, Ch: Channel, S: Signer> SeatDriver<P, Pol, Ch,
         }
         let state_hash = blake2b256(&self.protocol.encode_state(&next));
         if state_hash != m.state_hash {
-            return Err(HarnessError::Verification("frame state_hash mismatch".into()));
+            return Err(HarnessError::Verification(
+                "frame state_hash mismatch".into(),
+            ));
         }
         let update = StateUpdate {
             tunnel_id: self.tunnel_id.clone(),
@@ -173,7 +184,10 @@ impl<P: Protocol, Pol: Policy<P>, Ch: Channel, S: Signer> SeatDriver<P, Pol, Ch,
         let sig_responder = self.signer.sign(&msg).await;
         self.state = next;
         self.nonce = m.nonce;
-        let ack: Frame<P::Move> = Frame::Ack(AckFrame { nonce: m.nonce, sig_responder });
+        let ack: Frame<P::Move> = Frame::Ack(AckFrame {
+            nonce: m.nonce,
+            sig_responder,
+        });
         self.channel.send(encode_frame(&ack)).await?;
         Ok(())
     }

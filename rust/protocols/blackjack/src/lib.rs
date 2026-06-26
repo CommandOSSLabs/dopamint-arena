@@ -381,7 +381,10 @@ impl Protocol for Blackjack {
     }
 
     fn balances(&self, s: &BjState) -> Balances {
-        Balances { a: s.balance_a, b: s.balance_b }
+        Balances {
+            a: s.balance_a,
+            b: s.balance_b,
+        }
     }
 
     fn is_terminal(&self, s: &BjState) -> bool {

@@ -10,7 +10,9 @@ pub struct NoopAnchor;
 
 impl Anchor for NoopAnchor {
     async fn open(&self, p: OpenParams) -> Result<TunnelHandle, AnchorError> {
-        Ok(TunnelHandle { tunnel_id: p.tunnel_id })
+        Ok(TunnelHandle {
+            tunnel_id: p.tunnel_id,
+        })
     }
     async fn settle(&self, s: &CoSignedSettlement) -> Result<TxDigest, AnchorError> {
         Ok(TxDigest(format!("noop-settle:{}", s.settlement.tunnel_id)))
@@ -31,7 +33,10 @@ mod tests {
     #[tokio::test]
     async fn open_echoes_tunnel_id() {
         let h = NoopAnchor
-            .open(OpenParams { tunnel_id: "0xab".into(), initial: Balances { a: 1, b: 1 } })
+            .open(OpenParams {
+                tunnel_id: "0xab".into(),
+                initial: Balances { a: 1, b: 1 },
+            })
             .await
             .unwrap();
         assert_eq!(h.tunnel_id, "0xab");

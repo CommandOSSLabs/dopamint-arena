@@ -43,8 +43,14 @@ async fn payments_self_play_conserves_total() {
     let mut ca = 0u64;
     let mut cb = 0u64;
     let (ra, rb) = tokio::join!(
-        driver_a.run(1000, move || { ca += 1; ca }),
-        driver_b.run(1000, move || { cb += 1; cb }),
+        driver_a.run(1000, move || {
+            ca += 1;
+            ca
+        }),
+        driver_b.run(1000, move || {
+            cb += 1;
+            cb
+        }),
     );
     let a = ra.unwrap();
     let b = rb.unwrap();

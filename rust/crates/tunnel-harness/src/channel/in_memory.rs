@@ -15,8 +15,14 @@ impl InMemoryChannel {
     pub fn pair() -> (InMemoryChannel, InMemoryChannel) {
         let (tx_ab, rx_ab) = unbounded_channel();
         let (tx_ba, rx_ba) = unbounded_channel();
-        let a = InMemoryChannel { outbound: tx_ab, inbound: Mutex::new(rx_ba) };
-        let b = InMemoryChannel { outbound: tx_ba, inbound: Mutex::new(rx_ab) };
+        let a = InMemoryChannel {
+            outbound: tx_ab,
+            inbound: Mutex::new(rx_ba),
+        };
+        let b = InMemoryChannel {
+            outbound: tx_ba,
+            inbound: Mutex::new(rx_ab),
+        };
         (a, b)
     }
 }

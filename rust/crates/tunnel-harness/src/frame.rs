@@ -129,7 +129,10 @@ mod tests {
 
     #[test]
     fn ack_frame_round_trips() {
-        let f: Frame<TestMove> = Frame::Ack(AckFrame { nonce: 7, sig_responder: [0xcd; 64] });
+        let f: Frame<TestMove> = Frame::Ack(AckFrame {
+            nonce: 7,
+            sig_responder: [0xcd; 64],
+        });
         let back: Frame<TestMove> = decode_frame(&encode_frame(&f)).unwrap();
         match back {
             Frame::Ack(a) => assert_eq!(a.nonce, 7),
