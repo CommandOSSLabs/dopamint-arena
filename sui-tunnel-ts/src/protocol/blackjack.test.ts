@@ -88,3 +88,33 @@ test("getPlayerParty / getDealerParty alternate by round", () => {
   assert.equal(getPlayerParty(3n), "B");
   assert.equal(getDealerParty(3n), "A");
 });
+
+test("both commits advance draw_commit -> draw_reveal", () => {
+  let s = fresh();
+  s = proto.applyMove(s, commitMove(secret(1)), "A");
+  assert.equal(s.phase, "draw_commit");
+  assert.ok(s.pendingCommitA && !s.pendingCommitB);
+  s = proto.applyMove(s, commitMove(secret(2)), "B");
+  assert.equal(s.phase, "draw_reveal");
+  assert.ok(s.pendingCommitA && s.pendingCommitB);
+});
+
+test("a party cannot commit twice for the same card", () => {
+  let s = fresh();
+  s = proto.applyMove(s, commitMove(secret(1)), "A");
+  assert.throws(() => proto.applyMove(s, commitMove(secret(9)), "A"), /already committed/);
+});
+
+test("deal from round_over starts the next round", () => {
+  // Build a round_over state both can fund.
+  const over: BlackjackState = { ...fresh(), phase: "round_over", round: 2n, draw: null };
+  const s = proto.applyMove(over, { kind: "deal" }, "A");
+  assert.equal(s.phase, "draw_commit");
+  assert.equal(s.round, 3n);
+  assert.deepEqual(s.draw, { forHand: "player", reason: "deal" });
+});
+
+test("non-deal move is rejected in round_over", () => {
+  const over: BlackjackState = { ...fresh(), phase: "round_over", round: 2n, draw: null };
+  assert.throws(() => proto.applyMove(over, { kind: "hit" }, "A"), /expected 'deal'/);
+});

@@ -376,7 +376,23 @@ export class BlackjackProtocol implements Protocol<BlackjackState, BlackjackMove
   }
 
   applyMove(state: BlackjackState, move: BlackjackMove, by: Party): BlackjackState {
-    throw new Error(`phase ${state.phase} not implemented`);
+    switch (state.phase) {
+      case "round_over": {
+        if (move.kind !== "deal")
+          throw new Error(`expected 'deal' in round_over, got '${move.kind}'`);
+        if (this.isTerminal(state))
+          throw new Error("game over: no more rounds can be played");
+        return beginRound(state);
+      }
+      case "draw_commit": {
+        if (move.kind === "forfeit") return claimForfeit(state, by);
+        if (move.kind !== "commit")
+          throw new Error(`expected 'commit' in draw_commit, got '${move.kind}'`);
+        return applyCommit(state, move, by);
+      }
+      default:
+        throw new Error(`phase ${state.phase} not implemented`);
+    }
   }
 
   encodeState(s: BlackjackState): Uint8Array {
