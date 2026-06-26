@@ -465,6 +465,34 @@ export class BlackjackProtocol implements Protocol<BlackjackState, BlackjackMove
     by: Party,
     rng: () => number
   ): BlackjackMove | null {
-    return null;
+    if (this.isTerminal(s)) return null;
+    switch (s.phase) {
+      case "round_over": {
+        const nextPlayer = getPlayerParty(s.round + 1n);
+        if (by !== nextPlayer) return null;
+        return { kind: "deal" };
+      }
+      case "draw_commit": {
+        const mine = by === "A" ? s.pendingCommitA : s.pendingCommitB;
+        if (mine) return null;
+        const secret = randomSecret(rng);
+        return {
+          kind: "commit",
+          commitment: computeCommitment(secret.value, secret.salt),
+          localSecret: secret,
+        };
+      }
+      case "draw_reveal": {
+        const revealed = by === "A" ? s.pendingRevealA : s.pendingRevealB;
+        if (revealed) return null;
+        const secret = by === "A" ? s.localSecretA : s.localSecretB;
+        if (!secret) return null;
+        return { kind: "reveal", reveal: secret };
+      }
+      case "player": {
+        if (by !== getPlayerParty(s.round)) return null;
+        return { kind: blackjackHandValue(s.playerHand) < 17 ? "hit" : "stand" };
+      }
+    }
   }
 }

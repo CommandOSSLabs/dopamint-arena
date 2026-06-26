@@ -55,9 +55,21 @@ function makeBot() {
   };
 }
 
-/** Whose turn from the protocol phase: dealer -> B, otherwise A. */
-function partyForPhase(s: State): "A" | "B" {
-  return s.phase === "dealer" ? "B" : "A";
+/** Which party owes the next move; the self-play loop applies exactly one per step. */
+function nextActor(s: State): "A" | "B" | null {
+  if (proto.isTerminal(s)) return null;
+  switch (s.phase) {
+    case "round_over":
+      return protocols.getPlayerParty(s.round + 1n);
+    case "draw_commit":
+      return !s.pendingCommitA ? "A" : !s.pendingCommitB ? "B" : null;
+    case "draw_reveal":
+      return !s.pendingRevealA ? "A" : !s.pendingRevealB ? "B" : null;
+    case "player":
+      return protocols.getPlayerParty(s.round);
+    default:
+      return null;
+  }
 }
 
 async function main() {
@@ -146,7 +158,8 @@ async function main() {
   tunnel.onUpdate = (u) => transcript.append(u);
   let steps = 0;
   while (!proto.isTerminal(tunnel.state) && steps < 5000) {
-    const by = partyForPhase(tunnel.state);
+    const by = nextActor(tunnel.state);
+    if (!by) break;
     const move = proto.randomMove(tunnel.state, by, Math.random);
     if (!move) break;
     // Sign each update with the tunnel's on-chain created_at (a validator timestamp,

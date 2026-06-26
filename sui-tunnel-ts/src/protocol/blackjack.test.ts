@@ -295,3 +295,59 @@ test("forfeit works in the reveal phase too", () => {
   assert.equal(s.phase, "round_over");
   assert.equal(s.balanceA, 1000n + WAGER);
 });
+
+/** Which party owes the next move in the current phase, or null if none/terminal. */
+function owed(s: BlackjackState): "A" | "B" | null {
+  if (proto.isTerminal(s)) return null;
+  switch (s.phase) {
+    case "round_over":
+      return getPlayerParty(s.round + 1n);
+    case "draw_commit":
+      return !s.pendingCommitA ? "A" : !s.pendingCommitB ? "B" : null;
+    case "draw_reveal":
+      return !s.pendingRevealA ? "A" : !s.pendingRevealB ? "B" : null;
+    case "player":
+      return getPlayerParty(s.round);
+  }
+}
+
+test("randomMove drives a full game to a terminal state with conserved balances", () => {
+  let s = fresh();
+  let rngState = 12345;
+  const rng = () => {
+    // deterministic LCG so the test is reproducible
+    rngState = (1103515245 * rngState + 12345) & 0x7fffffff;
+    return rngState / 0x7fffffff;
+  };
+  let steps = 0;
+  while (!proto.isTerminal(s) && steps < 200000) {
+    const by = owed(s);
+    if (!by) break;
+    const move = proto.randomMove(s, by, rng);
+    assert.ok(move, `randomMove returned null for owed party ${by} in ${s.phase}`);
+    s = proto.applyMove(s, move, by);
+    steps++;
+  }
+  assert.ok(proto.isTerminal(s));
+  assert.equal(s.balanceA + s.balanceB, s.total);
+  assert.ok(s.balanceA >= 0n && s.balanceB >= 0n);
+});
+
+test("replaying the same moves yields identical encodeState", () => {
+  const moves: Array<{ move: BlackjackMove; by: "A" | "B" }> = [];
+  // Record a short scripted hand.
+  let s = fresh();
+  const record = (move: BlackjackMove, by: "A" | "B") => { moves.push({ move, by }); s = proto.applyMove(s, move, by); };
+  for (let i = 0; i < 4; i++) {
+    record(commitMove(secret(i + 1)), "A");
+    record(commitMove(secret(i + 50)), "B");
+    record(revealMove(secret(i + 1)), "A");
+    record(revealMove(secret(i + 50)), "B");
+  }
+  const encoded1 = Buffer.from(proto.encodeState(s)).toString("hex");
+  // Replay from scratch.
+  let r = fresh();
+  for (const { move, by } of moves) r = proto.applyMove(r, move, by);
+  const encoded2 = Buffer.from(proto.encodeState(r)).toString("hex");
+  assert.equal(encoded1, encoded2);
+});
