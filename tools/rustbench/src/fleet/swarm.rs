@@ -67,6 +67,25 @@ pub fn run_simple(workers: usize, duration_secs: u64, matches: Option<u64>) -> S
     })
 }
 
+/// Apples-to-apples-with-loadbench fleet: generates two fresh ed25519 keypairs
+/// per match (mirroring loadbench's per-match `generateKeyPairSync`) inside the
+/// timed window, then derives their public keys via `play_fixed_match`. The
+/// efficient binary codec and native crypto stay; only the *harness* shape
+/// (fresh per-match key setup) is matched to loadbench. Gameplay is unchanged
+/// (cards derive from `round`), so totals stay 143*N moves / 75982*N bytes.
+pub fn run_fresh_keys(workers: usize, duration_secs: u64, matches: Option<u64>) -> SwarmOutcome {
+    run_with(workers, duration_secs, matches, |tunnel_id| {
+        let mut secret_a = [0u8; 32];
+        let mut secret_b = [0u8; 32];
+        getrandom::getrandom(&mut secret_a).expect("os rng");
+        getrandom::getrandom(&mut secret_b).expect("os rng");
+        let r = play_fixed_match(
+            &tunnel_id, &secret_a, &secret_b, 200, 200, CREATED_AT, MAX_MOVES,
+        );
+        (r.moves, r.bytes as u64)
+    })
+}
+
 /// Optimized fleet: each worker caches one `SeatKit` and runs `play_prepared`.
 pub fn run_optimized(workers: usize, duration_secs: u64, matches: Option<u64>) -> SwarmOutcome {
     run_with(workers, duration_secs, matches, |tunnel_id| {
@@ -151,6 +170,17 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fresh_keys_runner_conserves_totals() {
+        // Fresh per-match keys don't change gameplay (cards derive from round),
+        // so the deterministic gate holds: exactly 143*N moves, 75982*N bytes.
+        let out = run_fresh_keys(2, 3600, Some(6));
+        assert_eq!(out.matches_claimed, 6);
+        assert_eq!(out.tunnels_settled, 6);
+        assert_eq!(out.moves, 143 * 6);
+        assert_eq!(out.bytes, 75982 * 6);
+    }
 
     #[test]
     fn optimized_runner_matches_simple_totals() {

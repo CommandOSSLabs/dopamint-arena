@@ -18,6 +18,9 @@ pub struct BenchOpts {
     pub duration_secs: u64,
     pub matches: Option<u64>,
     pub runner: Runner,
+    /// Generate two fresh ed25519 keypairs per match (mirrors loadbench's
+    /// per-match `generateKeyPairSync`) for an apples-to-apples harness number.
+    pub fresh_keys: bool,
 }
 
 /// Raw clap layout. Validated and lowered into `BenchOpts` by `parse`.
@@ -32,6 +35,9 @@ struct Raw {
     matches: Option<u64>,
     #[arg(long, default_value = "both")]
     runner: String,
+    /// Generate fresh keys per match (apples-to-apples with loadbench's harness).
+    #[arg(long)]
+    fresh_keys: bool,
     /// Accepted and ignored — `--offchain` is the only supported anchor mode.
     #[allow(dead_code)]
     #[arg(long)]
@@ -105,6 +111,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
         duration_secs: raw.duration,
         matches: raw.matches,
         runner,
+        fresh_keys: raw.fresh_keys,
     })
 }
 
@@ -142,6 +149,16 @@ mod tests {
         assert_eq!(o.workers, 1);
         assert_eq!(o.matches, Some(10));
         assert_eq!(o.runner, Runner::Simple);
+    }
+
+    #[test]
+    fn fresh_keys_flag_parses_and_defaults_off() {
+        assert!(!parse_v(&["--runner", "simple"]).unwrap().fresh_keys);
+        assert!(
+            parse_v(&["--runner", "simple", "--fresh-keys"])
+                .unwrap()
+                .fresh_keys
+        );
     }
 
     #[test]

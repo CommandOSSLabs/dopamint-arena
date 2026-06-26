@@ -84,6 +84,7 @@ mod tests {
             duration_secs: 15,
             matches: None,
             runner,
+            fresh_keys: false,
         }
     }
 
