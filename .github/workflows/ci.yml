@@ -64,6 +64,22 @@ jobs:
       - run: cargo build --locked
       - run: cargo test --locked
 
+  rust-tunnel:
+    name: Rust tunnel crates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      # Scoped to the tunnel-harness crates so they are gated independently of the
+      # libpq/sui backend toolchain (faster, and green even if that build breaks).
+      - run: cargo fmt --check -p tunnel-core -p tunnel-harness -p tunnel-blackjack -p tunnel-payments
+      - run: cargo clippy --locked --all-targets -p tunnel-core -p tunnel-harness -p tunnel-blackjack -p tunnel-payments -- -D warnings
+      - run: cargo build --locked -p tunnel-core -p tunnel-harness -p tunnel-blackjack -p tunnel-payments
+      - run: cargo test --locked -p tunnel-core -p tunnel-harness -p tunnel-blackjack -p tunnel-payments
+
   frontend:
     name: Frontend
     runs-on: ubuntu-latest

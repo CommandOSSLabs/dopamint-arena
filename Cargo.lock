@@ -7352,6 +7352,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "tunnel-blackjack"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "serde",
+ "tokio",
+ "tunnel-core",
+ "tunnel-harness",
+]
+
+[[package]]
+name = "tunnel-core"
+version = "0.1.0"
+dependencies = [
+ "blake2",
+ "ed25519-dalek",
+ "hex",
+]
+
+[[package]]
+name = "tunnel-harness"
+version = "0.1.0"
+dependencies = [
+ "blake2",
+ "ed25519-dalek",
+ "hex",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tunnel-core",
+]
+
+[[package]]
 name = "tunnel-manager"
 version = "0.1.0"
 dependencies = [
@@ -7383,6 +7416,17 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "wiremock",
+]
+
+[[package]]
+name = "tunnel-payments"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "serde",
+ "tokio",
+ "tunnel-core",
+ "tunnel-harness",
 ]
 
 [[package]]
