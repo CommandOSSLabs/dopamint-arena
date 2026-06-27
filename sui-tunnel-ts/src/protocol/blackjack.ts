@@ -44,7 +44,7 @@ export function getDealerParty(round: bigint): Party {
   return getPlayerParty(round) === "A" ? "B" : "A";
 }
 
-export const WAGER = 100n;
+export const MIN_BET = 25n;
 export const ROUND_CAP = 1000n;
 const DEALER_STANDS_AT = 17;
 const BUST_AT = 21;
@@ -88,11 +88,12 @@ export interface BlackjackState {
   balanceA: bigint;
   balanceB: bigint;
   total: bigint;
-  wager: bigint;
+  /** The current round's wager (chosen by the player at round start). */
+  bet: bigint;
 }
 
 export type BlackjackMove =
-  | { kind: "deal" }
+  | { kind: "bet"; amount: bigint }
   | {
       kind: "commit";
       commitment: Uint8Array;
@@ -151,8 +152,13 @@ function isBust(hand: number[]): boolean {
   return handValue(hand) > BUST_AT;
 }
 
+/** Largest bet both sides can cover this round. */
+export function maxBet(s: BlackjackState): bigint {
+  return s.balanceA < s.balanceB ? s.balanceA : s.balanceB;
+}
+
 function canStartRound(s: BlackjackState): boolean {
-  return s.balanceA >= s.wager && s.balanceB >= s.wager;
+  return maxBet(s) >= MIN_BET;
 }
 
 /** Exposed for tests/tools: hand total with soft-ace handling. */
@@ -219,11 +225,11 @@ function settle(s: BlackjackState, winner: Party | null): BlackjackState {
   let balanceA = s.balanceA;
   let balanceB = s.balanceB;
   if (winner === "A") {
-    const amt = s.wager <= balanceB ? s.wager : balanceB;
+    const amt = s.bet <= balanceB ? s.bet : balanceB;
     balanceA += amt;
     balanceB -= amt;
   } else if (winner === "B") {
-    const amt = s.wager <= balanceA ? s.wager : balanceA;
+    const amt = s.bet <= balanceA ? s.bet : balanceA;
     balanceB += amt;
     balanceA -= amt;
   }
@@ -395,9 +401,8 @@ export class BlackjackProtocol implements Protocol<
       balanceA: ctx.initialBalances.a,
       balanceB: ctx.initialBalances.b,
       total: ctx.initialBalances.a + ctx.initialBalances.b,
-      wager: WAGER,
+      bet: 0n,
     };
-    if (canStartRound(base)) return beginRound(base);
     return base;
   }
 
@@ -408,11 +413,17 @@ export class BlackjackProtocol implements Protocol<
   ): BlackjackState {
     switch (state.phase) {
       case "round_over": {
-        if (move.kind !== "deal")
-          throw new Error(`expected 'deal' in round_over, got '${move.kind}'`);
+        if (move.kind !== "bet")
+          throw new Error(`expected 'bet' in round_over, got '${move.kind}'`);
         if (this.isTerminal(state))
           throw new Error("game over: no more rounds can be played");
-        return beginRound(state);
+        const nextPlayer = getPlayerParty(state.round + 1n);
+        if (by !== nextPlayer)
+          throw new Error(`only the player (${nextPlayer}) sets the bet`);
+        const cap = maxBet(state);
+        if (move.amount < MIN_BET || move.amount > cap)
+          throw new Error(`bet must be in [${MIN_BET}, ${cap}]`);
+        return beginRound({ ...state, bet: move.amount });
       }
       case "draw_commit": {
         if (move.kind === "forfeit") return claimForfeit(state, by);
@@ -463,6 +474,7 @@ export class BlackjackProtocol implements Protocol<
       Uint8Array.from(s.playerHand),
       u64ToBeBytes(s.dealerHand.length),
       Uint8Array.from(s.dealerHand),
+      u64ToBeBytes(s.bet),
     ];
     if (s.draw === null) parts.push(new Uint8Array([0xff]));
     else
@@ -505,7 +517,8 @@ export class BlackjackProtocol implements Protocol<
       case "round_over": {
         const nextPlayer = getPlayerParty(s.round + 1n);
         if (by !== nextPlayer) return null;
-        return { kind: "deal" };
+        if (maxBet(s) < MIN_BET) return null;
+        return { kind: "bet", amount: MIN_BET };
       }
       case "draw_commit": {
         const mine = by === "A" ? s.pendingCommitA : s.pendingCommitB;
