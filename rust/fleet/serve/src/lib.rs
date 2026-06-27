@@ -6,3 +6,9 @@ pub use channel::{in_memory::InMemoryChannel, Channel};
 
 pub mod policy;
 pub use policy::{random::RandomPolicy, Policy};
+
+pub mod driver;
+pub use driver::{AsyncSeatDriver, DriverOutcome};
+
+pub mod supervisor;
+pub use supervisor::{DriverUnit, FleetSupervisor, Metrics};
