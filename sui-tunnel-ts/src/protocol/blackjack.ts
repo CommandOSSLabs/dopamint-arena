@@ -2,7 +2,7 @@
  * Blackjack protocol (v2): two-party, dealerless Blackjack over a tunnel with
  * per-card commit-reveal randomness.
  *
- * Party A is the "player", Party B the "dealer" (roles alternate per round). Neither
+ * Party A is the "player", Party B the "dealer" (roles alternate every two rounds). Neither
  * controls the cards: EVERY card is produced by an independent two-party commit-reveal,
  * drawn on demand at the moment that card is dealt. Both commit a fresh secret share,
  * both reveal, then a rank is derived via combineReveals + rejection sampling. Because
@@ -15,23 +15,24 @@
  * clamped settlement) are unchanged from v1.
  */
 
-import {
-  Protocol,
-  Party,
-  Balances,
-  ProtocolContext,
-  protocolDomain,
-  otherParty,
-} from "./Protocol";
 import { concatBytes } from "../core/bytes";
-import { u64ToBeBytes } from "../core/wire";
 import {
   combineReveals,
   computeCommitment,
-  verifyCommitment,
   MIN_SALT_LEN,
+  verifyCommitment,
 } from "../core/commitment";
 import { nextU64InRange, seedFromBytes } from "../core/randomness";
+import { u64ToBeBytes } from "../core/wire";
+import {
+  Balances,
+  lengthPrefixedConcat,
+  otherParty,
+  Party,
+  Protocol,
+  ProtocolContext,
+  protocolDomain,
+} from "./Protocol";
 
 /** Helper to determine who is the Player based on the round. */
 export function getPlayerParty(round: bigint): Party {
@@ -367,10 +368,6 @@ function randomSecret(rng: () => number): BlackjackSlotSecret {
   };
 }
 
-function lengthPrefixed(bytes: Uint8Array): Uint8Array[] {
-  return [u64ToBeBytes(bytes.length), bytes];
-}
-
 // ============================================
 // PROTOCOL
 // ============================================
@@ -476,14 +473,14 @@ export class BlackjackProtocol implements Protocol<
           REASON_CODE[s.draw.reason],
         ]),
       );
-    parts.push(...lengthPrefixed(s.pendingCommitA ?? new Uint8Array(0)));
-    parts.push(...lengthPrefixed(s.pendingCommitB ?? new Uint8Array(0)));
+    parts.push(lengthPrefixedConcat([s.pendingCommitA ?? new Uint8Array(0)]));
+    parts.push(lengthPrefixedConcat([s.pendingCommitB ?? new Uint8Array(0)]));
     for (const r of [s.pendingRevealA, s.pendingRevealB]) {
       if (r === null) parts.push(new Uint8Array([0]));
       else {
         parts.push(new Uint8Array([1]));
-        parts.push(...lengthPrefixed(r.value));
-        parts.push(...lengthPrefixed(r.salt));
+        parts.push(lengthPrefixedConcat([r.value]));
+        parts.push(lengthPrefixedConcat([r.salt]));
       }
     }
     return concatBytes(parts);

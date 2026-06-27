@@ -1,17 +1,17 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
+import { test } from "node:test";
+import { computeCommitment } from "../core/commitment";
 import {
-  BlackjackProtocol,
-  BlackjackState,
   BlackjackMove,
+  BlackjackProtocol,
   BlackjackSlotSecret,
+  BlackjackState,
   WAGER,
   deriveRank,
-  getPlayerParty,
   getDealerParty,
+  getPlayerParty,
   blackjackHandValue as handValue,
 } from "./blackjack";
-import { computeCommitment } from "../core/commitment";
 
 const proto = new BlackjackProtocol();
 const ctx = { tunnelId: "0xab", initialBalances: { a: 1000n, b: 1000n } };
@@ -59,14 +59,7 @@ function secretsForRank(
 }
 
 export {
-  proto,
-  ctx,
-  fresh,
-  secret,
-  commitMove,
-  revealMove,
-  doDraw,
-  secretsForRank,
+  commitMove, ctx, doDraw, fresh, proto, revealMove, secret, secretsForRank
 };
 
 test("deriveRank is deterministic and within 1..13", () => {
@@ -78,14 +71,22 @@ test("deriveRank is deterministic and within 1..13", () => {
   assert.ok(r1 >= 1 && r1 <= 13, `rank ${r1} out of range`);
 });
 
-test("deriveRank needs both shares (swapping a share changes the rank space)", () => {
-  const ranks = new Set<number>();
+test("deriveRank depends on both shares (neither can be ignored)", () => {
+  // Hold A fixed and vary B: a derivation that ignored B would yield one constant rank.
+  const ranksFixedA = new Set<number>();
   for (let i = 0; i < 200; i++)
-    ranks.add(deriveRank(secret(i), secret(255 - i)));
-  // Over many independent pairs we see a healthy spread of ranks, not a constant.
+    ranksFixedA.add(deriveRank(secret(7), secret(i)));
   assert.ok(
-    ranks.size > 5,
-    `expected spread, got ${ranks.size} distinct ranks`,
+    ranksFixedA.size > 1,
+    `rank ignores share B: ${ranksFixedA.size} distinct ranks for a fixed A`,
+  );
+  // Symmetrically, hold B fixed and vary A.
+  const ranksFixedB = new Set<number>();
+  for (let i = 0; i < 200; i++)
+    ranksFixedB.add(deriveRank(secret(i), secret(7)));
+  assert.ok(
+    ranksFixedB.size > 1,
+    `rank ignores share A: ${ranksFixedB.size} distinct ranks for a fixed B`,
   );
 });
 
@@ -196,6 +197,26 @@ test("encodeState is stable for the same state", () => {
   let s = fresh();
   s = doDraw(s, secret(1), secret(2));
   assert.equal(toHex(proto.encodeState(s)), toHex(proto.encodeState(s)));
+});
+
+test("encodeState distinguishes states differing in a single field", () => {
+  const base = fresh();
+  const enc = (s: BlackjackState) => toHex(proto.encodeState(s));
+  // Every field the per-card draw machinery added must affect the encoding, or two
+  // distinct states could collide to the same co-signed state hash.
+  assert.notEqual(enc(base), enc({ ...base, drawCount: base.drawCount + 1n }));
+  assert.notEqual(
+    enc(base),
+    enc({ ...base, playerHand: [...base.playerHand, 10] }),
+  );
+  assert.notEqual(
+    enc(base),
+    enc({ ...base, pendingCommitA: new Uint8Array(32).fill(1) }),
+  );
+  assert.notEqual(
+    enc(base),
+    enc({ ...base, draw: { forHand: "dealer", reason: "hit" } }),
+  );
 });
 
 function toHex(b: Uint8Array): string {
