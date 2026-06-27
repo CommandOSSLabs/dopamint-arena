@@ -63,7 +63,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
     let raw = Raw::try_parse_from(args).map_err(|e| e.to_string())?;
 
     if raw.concurrency.is_some() {
-        return Err("--concurrency is not supported: rustbench runs matches \
+        return Err("--concurrency is not supported: fleet-bench runs matches \
                     synchronously per thread, so there is no per-worker concurrency \
                     to set (drop the flag)."
             .to_string());
