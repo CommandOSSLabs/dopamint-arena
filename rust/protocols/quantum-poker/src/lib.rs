@@ -564,16 +564,15 @@ impl QuantumPoker {
             PokerPhase::RevealRiver => {
                 self.try_reveal_board_then_bet(&mut next, &RIVER_SLOTS, PokerPhase::RiverBet)?;
             }
-            PokerPhase::Showdown => {
+            PokerPhase::Showdown
                 if has_revealed(&next, Seat::A, &A_HOLE_SLOTS)
-                    && has_revealed(&next, Seat::B, &B_HOLE_SLOTS)
-                {
-                    next.shown_a = true;
-                    next.shown_b = true;
-                    next.shown_hole_a = self.derive_hole_cards(&next, Seat::A, false);
-                    next.shown_hole_b = self.derive_hole_cards(&next, Seat::B, false);
-                    self.resolve_showdown(&mut next)?;
-                }
+                    && has_revealed(&next, Seat::B, &B_HOLE_SLOTS) =>
+            {
+                next.shown_a = true;
+                next.shown_b = true;
+                next.shown_hole_a = self.derive_hole_cards(&next, Seat::A, false);
+                next.shown_hole_b = self.derive_hole_cards(&next, Seat::B, false);
+                self.resolve_showdown(&mut next)?;
             }
             _ => {}
         }
@@ -1194,7 +1193,7 @@ pub fn best_poker_hand(cards: &[u8]) -> Result<BestHand, String> {
                     for e in d + 1..cards.len() {
                         let hand = vec![cards[a], cards[b], cards[c], cards[d], cards[e]];
                         let score = evaluate5(&hand)?;
-                        if best.as_ref().is_none_or(|best| score > best.score) {
+                        if best.as_ref().map_or(true, |best| score > best.score) {
                             best = Some(BestHand { score, cards: hand });
                         }
                     }

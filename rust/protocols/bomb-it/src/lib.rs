@@ -142,9 +142,8 @@ pub fn is_pillar(row: i64, col: i64) -> bool {
 fn in_spawn_safe(row: i64, col: i64) -> bool {
     let br = GRID_H - 2;
     let bc = GRID_W - 2;
-    let a = (row == 1 && col == 1) || (row == 1 && col == 2) || (row == 2 && col == 1);
-    let b =
-        (row == br && col == bc) || (row == br && col == bc - 1) || (row == br - 1 && col == bc);
+    let a = row == 1 && (col == 1 || col == 2) || (row == 2 && col == 1);
+    let b = row == br && (col == bc || col == bc - 1) || (row == br - 1 && col == bc);
     a || b
 }
 
@@ -195,7 +194,7 @@ pub fn can_move_to(
     row: i64,
     col: i64,
 ) -> bool {
-    if row < 0 || row >= GRID_H || col < 0 || col >= GRID_W {
+    if !(0..GRID_H).contains(&row) || !(0..GRID_W).contains(&col) {
         return false;
     }
     let cell = grid[idx(row, col)];
@@ -218,7 +217,7 @@ pub fn blast_cells_for(grid: &[u8], bomb: &BombItBomb) -> Vec<usize> {
         for step in 1..=BLAST_RADIUS {
             let row = bomb.row + dr * step;
             let col = bomb.col + dc * step;
-            if row < 0 || row >= GRID_H || col < 0 || col >= GRID_W {
+            if !(0..GRID_H).contains(&row) || !(0..GRID_W).contains(&col) {
                 break;
             }
             let cell = grid[idx(row, col)];

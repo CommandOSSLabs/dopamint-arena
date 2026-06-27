@@ -117,7 +117,7 @@ impl Protocol for Chat {
         mv: &ChatMove,
         by: Seat,
     ) -> Result<ChatState, ProtocolError> {
-        if mv.text.as_bytes().is_empty() {
+        if mv.text.is_empty() {
             return Err(ProtocolError("chat message must be non-empty".into()));
         }
 

@@ -359,17 +359,16 @@ impl Protocol for WorldCanvasStroke {
         by: Seat,
         rng: &mut dyn FnMut() -> f64,
     ) -> Option<StrokePaintMove> {
-        let mut seq = match by {
+        let start_seq = match by {
             Seat::A => state.applied_seq_a,
             Seat::B => state.applied_seq_b,
         };
         let mut cells = Vec::new();
         let mut gx = if by == Seat::A { 0 } else { 70 };
         let mut gy = 0i64;
-        for _ in 0..8 {
+        for seq in (start_seq + 1..).take(8) {
             gx += ((rng() * 3.0).floor() as i64 - 1).clamp(-2, 2);
             gy += ((rng() * 3.0).floor() as i64 - 1).clamp(-2, 2);
-            seq += 1;
             let cx = gx.div_euclid(CHUNK_SIZE as i64);
             let cy = gy.div_euclid(CHUNK_SIZE as i64);
             cells.push(StrokeCellMove {

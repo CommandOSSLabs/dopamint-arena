@@ -100,7 +100,7 @@ fn encode_state_is_fixed_size_and_domain_tagged() {
         .apply_move(&initial, &ChatMove::plain("hi"), Seat::A)
         .unwrap();
     let long = protocol
-        .apply_move(&next, &ChatMove::plain(&"x".repeat(5000)), Seat::B)
+        .apply_move(&next, &ChatMove::plain("x".repeat(5000)), Seat::B)
         .unwrap();
 
     let e0 = protocol.encode_state(&initial);
