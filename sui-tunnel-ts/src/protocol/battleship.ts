@@ -394,6 +394,8 @@ export class BattleshipProtocol implements Protocol<
   }
 
   isTerminal(state: BattleshipState): boolean {
-    return state.phase === "over" && state.winner !== undefined;
+    // "over" is reached only via settle/finalize/resign, so it is the sole
+    // terminal signal — including a push (winner 0), which is still settled.
+    return state.phase === "over";
   }
 }
