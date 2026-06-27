@@ -217,6 +217,7 @@ test("encodeState distinguishes states differing in a single field", () => {
   // Every field the per-card draw machinery added must affect the encoding, or two
   // distinct states could collide to the same co-signed state hash.
   assert.notEqual(enc(base), enc({ ...base, drawCount: base.drawCount + 1n }));
+  assert.notEqual(enc(base), enc({ ...base, bet: base.bet + 1n }));
   assert.notEqual(
     enc(base),
     enc({ ...base, playerHand: [...base.playerHand, 10] }),
