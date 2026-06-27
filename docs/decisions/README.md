@@ -21,8 +21,9 @@ _why_ survives after the people involved have moved on.
 ## Index
 
 - [0001](0001-arena-baseline-architecture.md) — Baseline architecture: Rust
-  control-plane backend, per-game `Protocol`. _(§1 self-play hot path retired —
-  genuine two-party play is the only model.)_
+  control-plane backend, per-game `Protocol`. _(§1 self-play hot path retired by
+  0020 — users compete against our bots; genuine two-party play is the only
+  model.)_
 - [0002](0002-backend-client-api-contract.md) — Backend ↔ client REST/SSE
   contract: sessions, heartbeat, settle, live stats. _(Settle-auth portion
   superseded by 0007.)_
@@ -74,6 +75,15 @@ _why_ survives after the people involved have moved on.
 - [0018](0018-multi-game-self-play-per-game-seed.md) — Multi-game wrappers with a
   synthetic per-game seed (`` `${tunnelId}:g${gamesPlayed}` ``) for bomb-it &
   chicken-cross, mirroring battleship's many-games-per-tunnel shape.
+- [0019](0019-batched-tunnel-open.md) — Batch connect-time self-play tunnel opens
+  into one PTB instead of one sponsored open+fund per window.
+- [0020](0020-bot-fleet-topology-shared-core.md) — Two bot fleets over one
+  sans-IO core: a user-serving fleet (async/tokio, real PvP counterparty) and a
+  local self-competing bench fleet (sync/rayon), differing only in seam
+  implementations and runtime. Supersedes ADR-0001's self-play hot path.
+- [0021](0021-sans-io-synchronous-protocol-core.md) — Adopt sans-IO: the protocol
+  core is synchronous and pure (no futures in the transition); async is confined
+  to the IO seams (Channel, Policy, future remote-KMS Signer). Required by 0020.
 
 > Numbers 0004 (multiplayer experience lane) and 0006 have no record file: 0004
 > predates this directory (still referenced from code/specs), and 0006 was
