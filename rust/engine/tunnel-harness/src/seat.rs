@@ -80,6 +80,13 @@ impl<P: Protocol, S: Signer, C: FrameCodec<P::Move>> TunnelSeat<P, S, C> {
         self.signer.sign(msg)
     }
 
+    /// Mutate the committed state in place. Intended ONLY for pre-play setup (e.g.
+    /// seeding a card stream) before the first `propose`/`handle_frame`; mutating
+    /// mid-match would desync the nonce/state across seats.
+    pub fn with_state_mut(&mut self, f: impl FnOnce(&mut P::State)) {
+        f(&mut self.state);
+    }
+
     fn build_update(&self, next: &P::State, nonce: u64, timestamp: u64) -> (StateUpdate, Vec<u8>) {
         let bals = self.protocol.balances(next);
         let update = StateUpdate {
@@ -273,6 +280,14 @@ mod tests {
         let a = TunnelSeat::new(Tiny { cap: 4 }, LocalSigner::from_secret(&sa), pkb, ctx(Seat::A));
         let b = TunnelSeat::new(Tiny { cap: 4 }, LocalSigner::from_secret(&sb), pka, ctx(Seat::B));
         (a, b)
+    }
+
+    #[test]
+    fn with_state_mut_edits_committed_state() {
+        let (mut a, _b) = seats();
+        assert_eq!(a.state().n, 0);
+        a.with_state_mut(|s| s.n = 3);
+        assert_eq!(a.state().n, 3);
     }
 
     #[test]

@@ -2449,6 +2449,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "fleet-bench"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "getrandom 0.2.17",
+ "hex",
+ "rayon",
+ "sysinfo",
+ "tunnel-blackjack",
+ "tunnel-core",
+ "tunnel-harness",
+]
+
+[[package]]
 name = "fleet-serve"
 version = "0.1.0"
 dependencies = [

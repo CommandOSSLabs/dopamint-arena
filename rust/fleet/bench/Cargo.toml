@@ -1,0 +1,23 @@
+[package]
+name = "fleet-bench"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "fleet-bench"
+path = "src/main.rs"
+
+[dependencies]
+tunnel-core = { path = "../../engine/tunnel-core" }
+tunnel-harness = { path = "../../engine/tunnel-harness" }
+tunnel-blackjack = { path = "../../protocols/blackjack" }
+rayon.workspace = true
+clap = { workspace = true }
+sysinfo.workspace = true
+getrandom.workspace = true
+
+[dev-dependencies]
+hex.workspace = true
