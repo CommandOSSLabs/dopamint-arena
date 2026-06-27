@@ -50,7 +50,10 @@ export type PlayerPartyFor = (round: bigint) => Party;
 /** Pin the player to seat A every round (single-player "vs bot"; the table never inverts). */
 export const FIXED_PLAYER_A: PlayerPartyFor = () => "A";
 
-function dealerPartyForWith(round: bigint, playerPartyFor: PlayerPartyFor): Party {
+function dealerPartyForWith(
+  round: bigint,
+  playerPartyFor: PlayerPartyFor,
+): Party {
   return playerPartyFor(round) === "A" ? "B" : "A";
 }
 
@@ -424,7 +427,9 @@ export class BlackjackProtocol implements Protocol<
 > {
   readonly name = "blackjack.v2";
 
-  constructor(private readonly playerPartyFor: PlayerPartyFor = getPlayerParty) {}
+  constructor(
+    private readonly playerPartyFor: PlayerPartyFor = getPlayerParty,
+  ) {}
 
   initialState(ctx: ProtocolContext): BlackjackState {
     const base: BlackjackState = {

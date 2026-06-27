@@ -28,7 +28,11 @@ function expectString(value: unknown, label: string): string {
   return value;
 }
 
-function bytesFromHex(value: unknown, label: string, length?: number): Uint8Array {
+function bytesFromHex(
+  value: unknown,
+  label: string,
+  length?: number,
+): Uint8Array {
   const bytes = fromHex(expectString(value, label));
   if (length !== undefined && bytes.length !== length) {
     throw new Error(`${label} must be ${length} bytes`);
@@ -40,7 +44,10 @@ function hex(bytes: Uint8Array): string {
   return "0x" + toHex(bytes);
 }
 
-function revealToJson(reveal: BlackjackSlotReveal): { value: string; salt: string } {
+function revealToJson(reveal: BlackjackSlotReveal): {
+  value: string;
+  salt: string;
+} {
   return { value: hex(reveal.value), salt: hex(reveal.salt) };
 }
 
@@ -75,7 +82,10 @@ export function blackjackMoveFromJson(value: unknown): BlackjackMove {
     case "bet":
       return { kind, amount: BigInt(expectString(move.amount, "move.amount")) };
     case "commit":
-      return { kind, commitment: bytesFromHex(move.commitment, "move.commitment", 32) };
+      return {
+        kind,
+        commitment: bytesFromHex(move.commitment, "move.commitment", 32),
+      };
     case "reveal":
       return { kind, reveal: revealFromJson(move.reveal, "move.reveal") };
     case "hit":
