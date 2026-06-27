@@ -506,13 +506,19 @@ test("FIXED_PLAYER_A pins the player to seat A across rounds", () => {
   const s = pinned.applyMove(over, { kind: "bet", amount: 100n }, "A");
   assert.equal(s.phase, "draw_commit");
   assert.equal(s.round, 3n);
-  assert.throws(() => pinned.applyMove(over, { kind: "bet", amount: 100n }, "B"), /only the player/);
+  assert.throws(
+    () => pinned.applyMove(over, { kind: "bet", amount: 100n }, "B"),
+    /only the player/,
+  );
 });
 
 test("default protocol still rotates (B is the player on round 3)", () => {
   const over: BlackjackState = { ...fresh(), phase: "round_over", round: 2n };
   // default proto: getPlayerParty(3) === "B"
-  assert.throws(() => proto.applyMove(over, { kind: "bet", amount: 100n }, "A"), /only the player/);
+  assert.throws(
+    () => proto.applyMove(over, { kind: "bet", amount: 100n }, "A"),
+    /only the player/,
+  );
   const s = proto.applyMove(over, { kind: "bet", amount: 100n }, "B");
   assert.equal(s.round, 3n);
 });
