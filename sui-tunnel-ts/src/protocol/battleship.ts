@@ -157,6 +157,10 @@ export class BattleshipProtocol implements Protocol<
         return this.applyShoot(state, move.cell, by);
       case "answer":
         return this.applyAnswer(state, move, by);
+      case "reveal_board":
+        return this.applyRevealBoard(state, move.board, move.salt, by);
+      case "resign":
+        return this.settle(state, by === "A" ? 2 : 1);
       default:
         throw new Error(`move not handled yet: ${move.kind}`);
     }
@@ -260,6 +264,91 @@ export class BattleshipProtocol implements Protocol<
     }
     if (openCells(next, defender) === 0) next.phase = "revealBoards";
     return next;
+  }
+
+  private applyRevealBoard(
+    state: BattleshipState,
+    board: Uint8Array,
+    salt: Uint8Array,
+    by: Party,
+  ): BattleshipState {
+    if (state.phase !== "revealBoards")
+      throw new Error("not in the reveal phase");
+    const already = by === "A" ? state.revealedA : state.revealedB;
+    if (already) throw new Error("already revealed");
+    const commit = commitFor(state, by);
+    if (!commit) throw new Error("party has not committed");
+    if (!verifyCommitment(commit, board, salt))
+      throw new Error("reveal does not match the commitment");
+    if (!isLegalBoard(board))
+      throw new Error("revealed board is not a legal fleet");
+    for (const shot of shotsAt(state, by)) {
+      const isShip = board[shot.cell] === 1;
+      if (isShip !== shot.isHit)
+        throw new Error(`reveal contradicts answered shot at ${shot.cell}`);
+    }
+    const next: BattleshipState = {
+      ...state,
+      revealedA: by === "A" ? true : state.revealedA,
+      revealedB: by === "B" ? true : state.revealedB,
+    };
+    if (next.revealedA && next.revealedB) return this.finalize(next);
+    return next;
+  }
+
+  /** Decide the winner once BOTH boards are verified legal + consistent. */
+  private finalize(state: BattleshipState): BattleshipState {
+    let winner: BattleshipWinner;
+    const aSunk = state.hitsOnA >= FLEET_CELLS;
+    const bSunk = state.hitsOnB >= FLEET_CELLS;
+    if (bSunk && !aSunk) winner = 1;
+    else if (aSunk && !bSunk) winner = 2;
+    else if (state.hitsOnB > state.hitsOnA) winner = 1;
+    else if (state.hitsOnA > state.hitsOnB) winner = 2;
+    else winner = 0; // push (equal hits at shot-cap)
+    return this.settle(state, winner);
+  }
+
+  /** Apply a decisive (or push) result: shift `stake` loser -> winner, end. */
+  private settle(
+    state: BattleshipState,
+    winner: BattleshipWinner,
+  ): BattleshipState {
+    let { balanceA, balanceB } = state;
+    if (winner !== 0) {
+      const loserBal = winner === 1 ? balanceB : balanceA;
+      const shift = state.stake < loserBal ? state.stake : loserBal;
+      if (winner === 1) {
+        balanceA += shift;
+        balanceB -= shift;
+      } else {
+        balanceA -= shift;
+        balanceB += shift;
+      }
+    }
+    return { ...state, winner, balanceA, balanceB, phase: "over" };
+  }
+
+  /**
+   * Only the secret-free `shoot` move can come from public state (`commit`,
+   * `answer`, `reveal_board` all need the fleet the protocol does not hold), so
+   * self-play is driven by `battleshipSelfPlay`, not this method. Returns a legal
+   * shot when it is `by`'s turn to fire, else null.
+   */
+  randomMove(
+    state: BattleshipState,
+    by: Party,
+    rng: () => number,
+  ): BattleshipMove | null {
+    if (state.phase !== "playing" || state.pendingShot || by !== state.turn)
+      return null;
+    const fired = new Set(shotsAt(state, otherParty(by)).map((x) => x.cell));
+    const open: number[] = [];
+    for (let cell = 0; cell < CELL_COUNT; cell++)
+      if (!fired.has(cell)) open.push(cell);
+    if (open.length === 0) return null;
+    const idx = Math.min(open.length - 1, Math.floor(rng() * open.length));
+    return { kind: "shoot", cell: open[idx] };
   }
 
   encodeState(state: BattleshipState): Uint8Array {
