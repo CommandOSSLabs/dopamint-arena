@@ -1,140 +1,134 @@
 /**
- * Blackjack protocol: a simplified TWO-PARTY, dealerless Blackjack over a tunnel.
+ * Blackjack protocol (v2): two-party, dealerless Blackjack over a tunnel with
+ * per-card commit-reveal randomness.
  *
- * Party A is the "player", Party B is the "dealer" — but neither side controls the
- * cards. Every card is drawn from a DETERMINISTIC stream derived from a per-round
- * seed, so both parties (and an on-chain disputer replaying encodeState) agree on
- * exactly which cards came out. This keeps the game dealerless and bias-free without
- * any commit-reveal round-trips: the seed is a pure function of (tunnelId, round).
+ * Party A is the "player", Party B the "dealer" (roles alternate every two rounds). Neither
+ * controls the cards: EVERY card is produced by an independent two-party commit-reveal,
+ * drawn on demand at the moment that card is dealt. Both commit a fresh secret share,
+ * both reveal, then a rank is derived via combineReveals + rejection sampling. Because
+ * each card's entropy is independent and revealed only when drawn, no party can predict
+ * an undrawn card or bias any card; derivation is deterministic so an on-chain disputer
+ * can replay it.
  *
- * ===== EXACT RULES (internally consistent; perfect casino fidelity not required) =====
- *
- *  Wager: a fixed WAGER (100n) is staked each round. A round can only start while
- *  BOTH parties can cover the wager (balance >= WAGER each); otherwise the game is
- *  terminal. The game is also terminal after ROUND_CAP rounds.
- *
- *  Card stream (deterministic, dealerless):
- *    seed_0 = blake2b256(DOMAIN || u64be(round))                    -- per-round seed
- *    Each draw consumes one byte of the current digest; when a digest's 32 bytes are
- *    exhausted we advance it via rollingDigest(blake2b256, digest, [drawIndex]).
- *    rank = (byte % 13) + 1, then card value:
- *      rank 1        -> Ace, counted as 11 (soft), reduced to 1 if the hand busts
- *      rank 11/12/13 -> 10 (J/Q/K)
- *      rank 2..10    -> face value
- *    Hand value = sum of card values, with each Ace independently downgraded 11->1
- *    while the total exceeds 21 (standard soft-ace handling). Bust = value > 21.
- *
- *  Initial deal: when a round begins, the player draws 2 cards and the dealer draws 2.
- *
- *  Turn structure (phase):
- *    'player'    : only A may move. 'hit' draws one card for the player. If the player
- *                  busts (value > 21) the round resolves immediately as a player loss.
- *                  'stand' ends the player's turn and begins the dealer's.
- *    'dealer'    : only B may move, and the only legal action is 'stand', which triggers
- *                  the dealer's deterministic auto-play: the dealer draws until its hand
- *                  value is >= 17 (or it busts), then the round is settled. (A 'hit' here
- *                  is illegal — the dealer does not take discretionary cards.)
- *    'round_over': either party may move; ANY action (hit or stand) deals a fresh round
- *                  (advancing `round`) provided the game is not terminal. If the game is
- *                  terminal, any move throws (nothing left to play).
- *
- *  Settlement (after a round resolves): compare final hand values.
- *    - player busts                       -> dealer (B) wins the wager
- *    - dealer busts (player did not)      -> player (A) wins the wager
- *    - player value > dealer value        -> player wins
- *    - dealer value > player value        -> dealer wins
- *    - equal                              -> push (no transfer)
- *  The winner gains WAGER from the loser. Transfers are clamped to the loser's balance
- *  (they can always cover it because a round only starts when both have >= WAGER), so
- *  balances NEVER go negative and ALWAYS sum to the locked total.
- *
- *  Balance conservation: money only ever moves between A and B (a +WAGER / -WAGER swap
- *  or a no-op push), so balances(state).a + balances(state).b == initial total for
- *  every reachable state.
+ * Deck: infinite uniform RANK (1..13) with replacement — duplicate ranks are a legal pair,
+ * no dedup, no cap on draws. Rules (soft-ace handValue, dealer draws to 17, fixed wager,
+ * clamped settlement) are unchanged from v1.
  */
 
+import { concatBytes } from "../core/bytes";
 import {
-  Protocol,
-  Party,
+  combineReveals,
+  computeCommitment,
+  MIN_SALT_LEN,
+  verifyCommitment,
+} from "../core/commitment";
+import { nextU64InRange, seedFromBytes } from "../core/randomness";
+import { u64ToBeBytes } from "../core/wire";
+import {
   Balances,
+  lengthPrefixedConcat,
+  otherParty,
+  Party,
+  Protocol,
   ProtocolContext,
   protocolDomain,
 } from "./Protocol";
-import { concatBytes } from "../core/bytes";
-import { u64ToBeBytes } from "../core/wire";
-import { blake2b256 } from "../core/crypto";
 
 /** Helper to determine who is the Player based on the round. */
 export function getPlayerParty(round: bigint): Party {
   const r = Number(round) - 1;
   return Math.floor(r / 2) % 2 === 0 ? "A" : "B";
 }
-
 /** Helper to determine who is the Dealer based on the round. */
 export function getDealerParty(round: bigint): Party {
   return getPlayerParty(round) === "A" ? "B" : "A";
 }
 
-/** Fixed stake per round. */
 export const WAGER = 100n;
-/** Max rounds before the game is forced terminal. */
 export const ROUND_CAP = 1000n;
-/** Dealer draws until reaching at least this hand value. */
 const DEALER_STANDS_AT = 17;
-/** Blackjack bust threshold. */
 const BUST_AT = 21;
 
-export type BlackjackPhase = "player" | "dealer" | "round_over";
+export type BlackjackPhase =
+  | "draw_commit"
+  | "draw_reveal"
+  | "player"
+  | "round_over";
+
+export interface BlackjackSlotReveal {
+  value: Uint8Array;
+  salt: Uint8Array;
+}
+export type BlackjackSlotSecret = BlackjackSlotReveal;
+
+export type DrawReason = "deal" | "hit" | "dealer_auto";
+export interface DrawContext {
+  forHand: "player" | "dealer";
+  reason: DrawReason;
+}
 
 export interface BlackjackState {
   phase: BlackjackPhase;
-  /** 0-based round counter; also seeds the card stream. */
+  /** 1-based round counter. */
   round: bigint;
-  /** Number of cards drawn so far this round (advances the card stream). */
-  drawIndex: bigint;
-  /** Card values held by the player (A). */
+  /** Cards drawn so far this round. */
+  drawCount: bigint;
+  /** Card values held by the player (Ace stored raw as 11). */
   playerHand: number[];
-  /** Card values held by the dealer (B). */
   dealerHand: number[];
+  /** The in-flight card being drawn, or null between draws. */
+  draw: DrawContext | null;
+  pendingCommitA: Uint8Array | null;
+  pendingCommitB: Uint8Array | null;
+  pendingRevealA: BlackjackSlotReveal | null;
+  pendingRevealB: BlackjackSlotReveal | null;
+  /** Local-only seat secrets. NEVER encoded into signed state; the relay codec omits them. */
+  localSecretA: BlackjackSlotSecret | null;
+  localSecretB: BlackjackSlotSecret | null;
   balanceA: bigint;
   balanceB: bigint;
   total: bigint;
   wager: bigint;
 }
 
-export interface BlackjackMove {
-  action: "hit" | "stand";
-}
+export type BlackjackMove =
+  | { kind: "deal" }
+  | {
+      kind: "commit";
+      commitment: Uint8Array;
+      localSecret?: BlackjackSlotSecret;
+    }
+  | { kind: "reveal"; reveal: BlackjackSlotReveal }
+  | { kind: "hit" }
+  | { kind: "stand" }
+  | { kind: "forfeit" };
 
-const DOMAIN = protocolDomain("blackjack.v1");
+const DOMAIN = protocolDomain("blackjack.v2");
 
 const PHASE_CODE: Record<BlackjackPhase, number> = {
+  draw_commit: 0,
+  draw_reveal: 1,
+  player: 2,
+  round_over: 3,
+};
+const FORHAND_CODE: Record<DrawContext["forHand"], number> = {
   player: 0,
   dealer: 1,
-  round_over: 2,
+};
+const REASON_CODE: Record<DrawReason, number> = {
+  deal: 0,
+  hit: 1,
+  dealer_auto: 2,
 };
 
-/**
- * Deterministic card stream for a round. `seed = blake2b256(DOMAIN || round)`; each
- * draw consumes one byte, advancing to a fresh digest every 32 bytes via the rolling
- * digest so the stream is effectively unbounded yet reproducible.
- */
-function drawRank(round: bigint, drawIndex: bigint): number {
-  let digest = blake2b256(concatBytes([DOMAIN, u64ToBeBytes(round)]));
-  const idx = Number(drawIndex);
-  const block = Math.floor(idx / 32);
-  // Advance to the digest block this draw lives in (32 draws per block).
-  for (let b = 0; b < block; b++) {
-    digest = blake2b256(concatBytes([digest, u64ToBeBytes(b)]));
-  }
-  const byte = digest[idx % 32];
-  return (byte % 13) + 1;
-}
+// ============================================
+// PURE HELPERS
+// ============================================
 
 /** Map a rank (1..13) to its raw blackjack value (Ace = 11 here; reduced later). */
 function rankValue(rank: number): number {
-  if (rank === 1) return 11; // Ace, high
-  if (rank >= 11) return 10; // J / Q / K
+  if (rank === 1) return 11;
+  if (rank >= 11) return 10;
   return rank;
 }
 
@@ -147,7 +141,7 @@ function handValue(hand: number[]): number {
     if (v === 11) aces++;
   }
   while (total > BUST_AT && aces > 0) {
-    total -= 10; // count one ace as 1 instead of 11
+    total -= 10;
     aces--;
   }
   return total;
@@ -157,219 +151,70 @@ function isBust(hand: number[]): boolean {
   return handValue(hand) > BUST_AT;
 }
 
-export class BlackjackProtocol
-  implements Protocol<BlackjackState, BlackjackMove>
-{
-  readonly name = "blackjack.v1";
-
-  initialState(ctx: ProtocolContext): BlackjackState {
-    const base: BlackjackState = {
-      phase: "round_over",
-      round: 0n,
-      drawIndex: 0n,
-      playerHand: [],
-      dealerHand: [],
-      balanceA: ctx.initialBalances.a,
-      balanceB: ctx.initialBalances.b,
-      total: ctx.initialBalances.a + ctx.initialBalances.b,
-      wager: WAGER,
-    };
-    // If both parties can afford the wager, deal the opening round; otherwise the
-    // game starts already terminal (an empty round_over with no playable round).
-    if (canStartRound(base)) return dealRound(base);
-    return base;
-  }
-
-  applyMove(
-    state: BlackjackState,
-    move: BlackjackMove,
-    by: Party
-  ): BlackjackState {
-    if (move.action !== "hit" && move.action !== "stand") {
-      throw new Error(`unknown action: ${String(move.action)}`);
-    }
-
-    if (state.phase === "round_over") {
-      // Any move deals a new round, provided the game is not terminal.
-      if (this.isTerminal(state)) {
-        throw new Error("game over: no more rounds can be played");
-      }
-      return dealRound(state);
-    }
-
-    if (state.phase === "player") {
-      const playerParty = getPlayerParty(state.round);
-      if (by !== playerParty)
-        throw new Error(`it is the player's (${playerParty}) turn`);
-      if (move.action === "hit") {
-        const { hand, drawIndex } = drawTo(
-          state.playerHand,
-          state.round,
-          state.drawIndex
-        );
-        const next: BlackjackState = {
-          ...state,
-          playerHand: hand,
-          drawIndex,
-        };
-        if (isBust(hand)) {
-          // Player busts -> dealer wins immediately, round resolves.
-          return settle(next, getDealerParty(state.round));
-        }
-        return next;
-      }
-      // 'stand' -> dealer's turn begins.
-      return { ...state, phase: "dealer" };
-    }
-
-    if (state.phase === "dealer") {
-      const dealerParty = getDealerParty(state.round);
-      if (by !== dealerParty)
-        throw new Error(`it is the dealer's (${dealerParty}) turn`);
-      if (move.action !== "stand") {
-        throw new Error("dealer may only 'stand' (auto-play is deterministic)");
-      }
-      return resolveDealer(state);
-    }
-
-    // Unreachable given the phase union, but keep the function total.
-    throw new Error(`unexpected phase: ${String(state.phase)}`);
-  }
-
-  encodeState(s: BlackjackState): Uint8Array {
-    return concatBytes([
-      DOMAIN,
-      u64ToBeBytes(s.balanceA),
-      u64ToBeBytes(s.balanceB),
-      u64ToBeBytes(s.round),
-      u64ToBeBytes(s.drawIndex),
-      new Uint8Array([PHASE_CODE[s.phase]]),
-      // Length-prefix each hand so two different states can't collide.
-      u64ToBeBytes(s.playerHand.length),
-      Uint8Array.from(s.playerHand),
-      u64ToBeBytes(s.dealerHand.length),
-      Uint8Array.from(s.dealerHand),
-    ]);
-  }
-
-  balances(s: BlackjackState): Balances {
-    return { a: s.balanceA, b: s.balanceB };
-  }
-
-  isTerminal(s: BlackjackState): boolean {
-    if (s.round >= ROUND_CAP) return true;
-    // Terminal only when the table is settled and a fresh round can't be funded.
-    return s.phase === "round_over" && !canStartRound(s);
-  }
-
-  randomMove(
-    s: BlackjackState,
-    by: Party,
-    rng: () => number
-  ): BlackjackMove | null {
-    if (this.isTerminal(s)) return null;
-
-    if (s.phase === "round_over") {
-      // Both parties may start a new round; let the next Player do it to keep play moving.
-      const nextPlayer = getPlayerParty(s.round + 1n);
-      if (by !== nextPlayer) return null;
-      return { action: rng() < 0.5 ? "hit" : "stand" };
-    }
-
-    if (s.phase === "player") {
-      if (by !== getPlayerParty(s.round)) return null;
-      // Basic strategy: hit while soft total < 17, else stand.
-      return { action: handValue(s.playerHand) < 17 ? "hit" : "stand" };
-    }
-
-    if (s.phase === "dealer") {
-      if (by !== getDealerParty(s.round)) return null;
-      return { action: "stand" }; // only legal dealer action
-    }
-
-    return null;
-  }
-}
-
-// ============================================
-// INTERNAL HELPERS (pure)
-// ============================================
-
-/** True iff both parties can each cover the wager (so a round can begin). */
 function canStartRound(s: BlackjackState): boolean {
   return s.balanceA >= s.wager && s.balanceB >= s.wager;
 }
 
-/** Draw one card onto `hand`, returning the new hand and advanced draw index. */
-function drawTo(
-  hand: number[],
-  round: bigint,
-  drawIndex: bigint
-): { hand: number[]; drawIndex: bigint } {
-  const value = rankValue(drawRank(round, drawIndex));
-  return { hand: [...hand, value], drawIndex: drawIndex + 1n };
+/** Exposed for tests/tools: hand total with soft-ace handling. */
+export function blackjackHandValue(hand: number[]): number {
+  return handValue(hand);
 }
 
-/**
- * Deal a fresh round: increment the round, reset the card stream, deal 2 cards to
- * the player and 2 to the dealer, and put the table in 'player' phase. Assumes the
- * caller has verified a round can be funded (canStartRound).
- */
-function dealRound(s: BlackjackState): BlackjackState {
-  const round = s.round + 1n;
-  let drawIndex = 0n;
-  let playerHand: number[] = [];
-  let dealerHand: number[] = [];
-  for (let i = 0; i < 2; i++) {
-    const p = drawTo(playerHand, round, drawIndex);
-    playerHand = p.hand;
-    drawIndex = p.drawIndex;
-  }
-  for (let i = 0; i < 2; i++) {
-    const d = drawTo(dealerHand, round, drawIndex);
-    dealerHand = d.hand;
-    drawIndex = d.drawIndex;
-  }
+/** Derive a rank 1..13 from two reveals (rejection-sampled, unbiased). */
+export function deriveRank(
+  a: BlackjackSlotReveal,
+  b: BlackjackSlotReveal,
+): number {
+  const seed = seedFromBytes(combineReveals(a.value, a.salt, b.value, b.salt));
+  const [v] = nextU64InRange(seed, 0n, 13n);
+  return Number(v) + 1;
+}
+
+// ============================================
+// STATE TRANSITIONS (pure)
+// ============================================
+
+/** Begin a fresh draw: clear all pending commit/reveal/secret state, enter draw_commit. */
+function beginDraw(s: BlackjackState, ctx: DrawContext): BlackjackState {
   return {
     ...s,
-    phase: "player",
-    round,
-    drawIndex,
-    playerHand,
-    dealerHand,
+    phase: "draw_commit",
+    draw: ctx,
+    pendingCommitA: null,
+    pendingCommitB: null,
+    pendingRevealA: null,
+    pendingRevealB: null,
+    localSecretA: null,
+    localSecretB: null,
   };
 }
 
-/** Dealer auto-play: draw to >= DEALER_STANDS_AT, then settle the round. */
-function resolveDealer(s: BlackjackState): BlackjackState {
-  let hand = s.dealerHand;
-  let drawIndex = s.drawIndex;
-  while (handValue(hand) < DEALER_STANDS_AT) {
-    const d = drawTo(hand, s.round, drawIndex);
-    hand = d.hand;
-    drawIndex = d.drawIndex;
-  }
-  const resolved: BlackjackState = { ...s, dealerHand: hand, drawIndex };
-  const playerValue = handValue(resolved.playerHand);
-  const dealerValue = handValue(resolved.dealerHand);
-  let winner: Party | null;
-  if (isBust(resolved.dealerHand)) {
-    winner = getPlayerParty(s.round); // player did not bust (that path resolves earlier), dealer busts
-  } else if (playerValue > dealerValue) {
-    winner = getPlayerParty(s.round);
-  } else if (dealerValue > playerValue) {
-    winner = getDealerParty(s.round);
-  } else {
-    winner = null; // push
-  }
-  return settle(resolved, winner);
+/** Start a new round and kick off the opening deal (first player card). */
+function beginRound(s: BlackjackState): BlackjackState {
+  const round = s.round + 1n;
+  const base: BlackjackState = {
+    ...s,
+    round,
+    drawCount: 0n,
+    playerHand: [],
+    dealerHand: [],
+  };
+  return beginDraw(base, { forHand: "player", reason: "deal" });
 }
 
-/**
- * Settle the current round to `winner` (null = push) and move to 'round_over'.
- * The wager swap is clamped to the loser's balance, so balances never go negative
- * and always sum to the total.
- */
+/** Compare hands and settle (dealer bust / higher value / push). */
+function resolveShowdown(s: BlackjackState): BlackjackState {
+  const pv = handValue(s.playerHand);
+  const dv = handValue(s.dealerHand);
+  let winner: Party | null;
+  if (isBust(s.dealerHand)) winner = getPlayerParty(s.round);
+  else if (pv > dv) winner = getPlayerParty(s.round);
+  else if (dv > pv) winner = getDealerParty(s.round);
+  else winner = null;
+  return settle(s, winner);
+}
+
+/** Settle the round to `winner` (null = push), clearing draw state. */
 function settle(s: BlackjackState, winner: Party | null): BlackjackState {
   let balanceA = s.balanceA;
   let balanceB = s.balanceB;
@@ -382,5 +227,309 @@ function settle(s: BlackjackState, winner: Party | null): BlackjackState {
     balanceB += amt;
     balanceA -= amt;
   }
-  return { ...s, phase: "round_over", balanceA, balanceB };
+  return {
+    ...s,
+    phase: "round_over",
+    draw: null,
+    pendingCommitA: null,
+    pendingCommitB: null,
+    pendingRevealA: null,
+    pendingRevealB: null,
+    localSecretA: null,
+    localSecretB: null,
+    balanceA,
+    balanceB,
+  };
+}
+
+/** Apply a freshly derived rank to the target hand and run the continuation. */
+function afterDraw(s: BlackjackState, rank: number): BlackjackState {
+  const ctx = s.draw!;
+  const value = rankValue(rank);
+  const playerHand =
+    ctx.forHand === "player" ? [...s.playerHand, value] : s.playerHand;
+  const dealerHand =
+    ctx.forHand === "dealer" ? [...s.dealerHand, value] : s.dealerHand;
+  const base: BlackjackState = {
+    ...s,
+    playerHand,
+    dealerHand,
+    drawCount: s.drawCount + 1n,
+    draw: null,
+    pendingCommitA: null,
+    pendingCommitB: null,
+    pendingRevealA: null,
+    pendingRevealB: null,
+    localSecretA: null,
+    localSecretB: null,
+  };
+
+  switch (ctx.reason) {
+    case "deal": {
+      if (playerHand.length < 2)
+        return beginDraw(base, { forHand: "player", reason: "deal" });
+      if (dealerHand.length < 2)
+        return beginDraw(base, { forHand: "dealer", reason: "deal" });
+      return { ...base, phase: "player" };
+    }
+    case "hit": {
+      if (isBust(playerHand)) return settle(base, getDealerParty(base.round));
+      return { ...base, phase: "player" };
+    }
+    case "dealer_auto": {
+      if (handValue(dealerHand) < DEALER_STANDS_AT)
+        return beginDraw(base, { forHand: "dealer", reason: "dealer_auto" });
+      return resolveShowdown(base);
+    }
+  }
+}
+
+/** Record a party's commitment; advance to draw_reveal once both have committed. */
+function applyCommit(
+  s: BlackjackState,
+  move: Extract<BlackjackMove, { kind: "commit" }>,
+  by: Party,
+): BlackjackState {
+  const already = by === "A" ? s.pendingCommitA : s.pendingCommitB;
+  if (already) throw new Error(`party ${by} already committed`);
+  if (move.commitment.length !== 32)
+    throw new Error("commitment must be 32 bytes");
+  const commit = move.commitment.slice();
+  const secret: BlackjackSlotSecret | null = move.localSecret
+    ? {
+        value: move.localSecret.value.slice(),
+        salt: move.localSecret.salt.slice(),
+      }
+    : null;
+  const next: BlackjackState = {
+    ...s,
+    pendingCommitA: by === "A" ? commit : s.pendingCommitA,
+    pendingCommitB: by === "B" ? commit : s.pendingCommitB,
+    localSecretA: by === "A" ? secret : s.localSecretA,
+    localSecretB: by === "B" ? secret : s.localSecretB,
+  };
+  if (next.pendingCommitA && next.pendingCommitB)
+    return { ...next, phase: "draw_reveal" };
+  return next;
+}
+
+/** Verify and record a party's reveal; derive + apply the card once both revealed. */
+function applyReveal(
+  s: BlackjackState,
+  move: Extract<BlackjackMove, { kind: "reveal" }>,
+  by: Party,
+): BlackjackState {
+  const already = by === "A" ? s.pendingRevealA : s.pendingRevealB;
+  if (already) throw new Error(`party ${by} already revealed`);
+  const commit = by === "A" ? s.pendingCommitA : s.pendingCommitB;
+  if (!commit) throw new Error(`party ${by} has no commitment to reveal`);
+  if (!verifyCommitment(commit, move.reveal.value, move.reveal.salt))
+    throw new Error(`reveal does not match commitment for party ${by}`);
+  const reveal: BlackjackSlotReveal = {
+    value: move.reveal.value.slice(),
+    salt: move.reveal.salt.slice(),
+  };
+  const next: BlackjackState = {
+    ...s,
+    pendingRevealA: by === "A" ? reveal : s.pendingRevealA,
+    pendingRevealB: by === "B" ? reveal : s.pendingRevealB,
+  };
+  if (next.pendingRevealA && next.pendingRevealB) {
+    const rank = deriveRank(next.pendingRevealA, next.pendingRevealB);
+    return afterDraw(next, rank);
+  }
+  return next;
+}
+
+/** `by` claims the round because the opponent failed to advance the pending draw. */
+function claimForfeit(s: BlackjackState, by: Party): BlackjackState {
+  const opp = otherParty(by);
+  if (s.phase === "draw_commit") {
+    const mine = by === "A" ? s.pendingCommitA : s.pendingCommitB;
+    const theirs = opp === "A" ? s.pendingCommitA : s.pendingCommitB;
+    if (!mine || theirs)
+      throw new Error("forfeit not claimable: opponent does not owe a commit");
+  } else if (s.phase === "draw_reveal") {
+    const mine = by === "A" ? s.pendingRevealA : s.pendingRevealB;
+    const theirs = opp === "A" ? s.pendingRevealA : s.pendingRevealB;
+    if (!mine || theirs)
+      throw new Error("forfeit not claimable: opponent does not owe a reveal");
+  } else {
+    throw new Error("forfeit only valid during a pending draw");
+  }
+  return settle(s, by);
+}
+
+function randomSecret(rng: () => number): BlackjackSlotSecret {
+  const b = () => Math.floor(rng() * 256) & 0xff;
+  return {
+    value: Uint8Array.from([b()]),
+    salt: Uint8Array.from({ length: MIN_SALT_LEN }, b),
+  };
+}
+
+// ============================================
+// PROTOCOL
+// ============================================
+
+export class BlackjackProtocol implements Protocol<
+  BlackjackState,
+  BlackjackMove
+> {
+  readonly name = "blackjack.v2";
+
+  initialState(ctx: ProtocolContext): BlackjackState {
+    const base: BlackjackState = {
+      phase: "round_over",
+      round: 0n,
+      drawCount: 0n,
+      playerHand: [],
+      dealerHand: [],
+      draw: null,
+      pendingCommitA: null,
+      pendingCommitB: null,
+      pendingRevealA: null,
+      pendingRevealB: null,
+      localSecretA: null,
+      localSecretB: null,
+      balanceA: ctx.initialBalances.a,
+      balanceB: ctx.initialBalances.b,
+      total: ctx.initialBalances.a + ctx.initialBalances.b,
+      wager: WAGER,
+    };
+    if (canStartRound(base)) return beginRound(base);
+    return base;
+  }
+
+  applyMove(
+    state: BlackjackState,
+    move: BlackjackMove,
+    by: Party,
+  ): BlackjackState {
+    switch (state.phase) {
+      case "round_over": {
+        if (move.kind !== "deal")
+          throw new Error(`expected 'deal' in round_over, got '${move.kind}'`);
+        if (this.isTerminal(state))
+          throw new Error("game over: no more rounds can be played");
+        return beginRound(state);
+      }
+      case "draw_commit": {
+        if (move.kind === "forfeit") return claimForfeit(state, by);
+        if (move.kind !== "commit")
+          throw new Error(
+            `expected 'commit' in draw_commit, got '${move.kind}'`,
+          );
+        return applyCommit(state, move, by);
+      }
+      case "draw_reveal": {
+        if (move.kind === "forfeit") return claimForfeit(state, by);
+        if (move.kind !== "reveal")
+          throw new Error(
+            `expected 'reveal' in draw_reveal, got '${move.kind}'`,
+          );
+        return applyReveal(state, move, by);
+      }
+      case "player": {
+        const playerParty = getPlayerParty(state.round);
+        if (by !== playerParty)
+          throw new Error(`it is the player's (${playerParty}) turn`);
+        if (move.kind === "hit")
+          return beginDraw(state, { forHand: "player", reason: "hit" });
+        if (move.kind === "stand") {
+          // Dealer that is already pat (>= 17) draws nothing — settle immediately.
+          if (handValue(state.dealerHand) >= DEALER_STANDS_AT)
+            return resolveShowdown(state);
+          return beginDraw(state, { forHand: "dealer", reason: "dealer_auto" });
+        }
+        throw new Error(
+          `expected 'hit' or 'stand' in player phase, got '${move.kind}'`,
+        );
+      }
+      default:
+        throw new Error(`phase ${state.phase} not implemented`);
+    }
+  }
+
+  encodeState(s: BlackjackState): Uint8Array {
+    const parts: Uint8Array[] = [
+      DOMAIN,
+      u64ToBeBytes(s.balanceA),
+      u64ToBeBytes(s.balanceB),
+      u64ToBeBytes(s.round),
+      u64ToBeBytes(s.drawCount),
+      new Uint8Array([PHASE_CODE[s.phase]]),
+      u64ToBeBytes(s.playerHand.length),
+      Uint8Array.from(s.playerHand),
+      u64ToBeBytes(s.dealerHand.length),
+      Uint8Array.from(s.dealerHand),
+    ];
+    if (s.draw === null) parts.push(new Uint8Array([0xff]));
+    else
+      parts.push(
+        new Uint8Array([
+          1,
+          FORHAND_CODE[s.draw.forHand],
+          REASON_CODE[s.draw.reason],
+        ]),
+      );
+    parts.push(lengthPrefixedConcat([s.pendingCommitA ?? new Uint8Array(0)]));
+    parts.push(lengthPrefixedConcat([s.pendingCommitB ?? new Uint8Array(0)]));
+    for (const r of [s.pendingRevealA, s.pendingRevealB]) {
+      if (r === null) parts.push(new Uint8Array([0]));
+      else {
+        parts.push(new Uint8Array([1]));
+        parts.push(lengthPrefixedConcat([r.value]));
+        parts.push(lengthPrefixedConcat([r.salt]));
+      }
+    }
+    return concatBytes(parts);
+  }
+
+  balances(s: BlackjackState): Balances {
+    return { a: s.balanceA, b: s.balanceB };
+  }
+
+  isTerminal(s: BlackjackState): boolean {
+    if (s.round >= ROUND_CAP) return true;
+    return s.phase === "round_over" && !canStartRound(s);
+  }
+
+  randomMove(
+    s: BlackjackState,
+    by: Party,
+    rng: () => number,
+  ): BlackjackMove | null {
+    if (this.isTerminal(s)) return null;
+    switch (s.phase) {
+      case "round_over": {
+        const nextPlayer = getPlayerParty(s.round + 1n);
+        if (by !== nextPlayer) return null;
+        return { kind: "deal" };
+      }
+      case "draw_commit": {
+        const mine = by === "A" ? s.pendingCommitA : s.pendingCommitB;
+        if (mine) return null;
+        const secret = randomSecret(rng);
+        return {
+          kind: "commit",
+          commitment: computeCommitment(secret.value, secret.salt),
+          localSecret: secret,
+        };
+      }
+      case "draw_reveal": {
+        const revealed = by === "A" ? s.pendingRevealA : s.pendingRevealB;
+        if (revealed) return null;
+        const secret = by === "A" ? s.localSecretA : s.localSecretB;
+        if (!secret) return null;
+        return { kind: "reveal", reveal: secret };
+      }
+      case "player": {
+        if (by !== getPlayerParty(s.round)) return null;
+        return {
+          kind: blackjackHandValue(s.playerHand) < 17 ? "hit" : "stand",
+        };
+      }
+    }
+  }
 }

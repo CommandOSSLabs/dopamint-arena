@@ -1,264 +1,439 @@
-import { test } from "node:test";
 import assert from "node:assert/strict";
+import { test } from "node:test";
+import { computeCommitment } from "../core/commitment";
 import {
+  BlackjackMove,
   BlackjackProtocol,
+  BlackjackSlotSecret,
   BlackjackState,
   WAGER,
-  ROUND_CAP,
-  getPlayerParty,
+  deriveRank,
   getDealerParty,
+  getPlayerParty,
+  blackjackHandValue as handValue,
 } from "./blackjack";
-import { toHex } from "../core/bytes";
-import { OffchainTunnel, verifyCoSignedUpdate } from "../core/tunnel";
-import { generateKeyPair, ed25519Address } from "../core/crypto";
-import { Party } from "./Protocol";
 
 const proto = new BlackjackProtocol();
 const ctx = { tunnelId: "0xab", initialBalances: { a: 1000n, b: 1000n } };
+const fresh = (): BlackjackState => proto.initialState(ctx);
 
-function fresh(): BlackjackState {
-  return proto.initialState(ctx);
+// ---- shared test helpers (used by later tasks too) ----
+function secret(valueByte: number, saltByte = valueByte): BlackjackSlotSecret {
+  return {
+    value: Uint8Array.from([valueByte & 0xff]),
+    salt: new Uint8Array(16).fill(saltByte & 0xff),
+  };
+}
+function commitMove(s: BlackjackSlotSecret): BlackjackMove {
+  return {
+    kind: "commit",
+    commitment: computeCommitment(s.value, s.salt),
+    localSecret: s,
+  };
+}
+function revealMove(s: BlackjackSlotSecret): BlackjackMove {
+  return { kind: "reveal", reveal: s };
+}
+/** Run one full card draw (both commit, both reveal) on an in-progress draw. */
+function doDraw(
+  s: BlackjackState,
+  sa: BlackjackSlotSecret,
+  sb: BlackjackSlotSecret,
+): BlackjackState {
+  s = proto.applyMove(s, commitMove(sa), "A");
+  s = proto.applyMove(s, commitMove(sb), "B");
+  s = proto.applyMove(s, revealMove(sa), "A");
+  s = proto.applyMove(s, revealMove(sb), "B");
+  return s;
+}
+/** Find a secret pair whose derived rank equals `rank` (for deterministic hands). */
+function secretsForRank(
+  rank: number,
+): [BlackjackSlotSecret, BlackjackSlotSecret] {
+  for (let i = 0; i < 1 << 16; i++) {
+    const a = secret(i & 0xff, (i >> 4) & 0xff);
+    const b = secret((i >> 8) & 0xff, (i >> 12) & 0xff);
+    if (deriveRank(a, b) === rank) return [a, b];
+  }
+  throw new Error(`no secrets found for rank ${rank}`);
 }
 
-test("initialState deals the opening round and conserves balances", () => {
+export {
+  commitMove, ctx, doDraw, fresh, proto, revealMove, secret, secretsForRank
+};
+
+test("deriveRank is deterministic and within 1..13", () => {
+  const a = secret(7),
+    b = secret(42);
+  const r1 = deriveRank(a, b);
+  const r2 = deriveRank(a, b);
+  assert.equal(r1, r2);
+  assert.ok(r1 >= 1 && r1 <= 13, `rank ${r1} out of range`);
+});
+
+test("deriveRank depends on both shares (neither can be ignored)", () => {
+  // Hold A fixed and vary B: a derivation that ignored B would yield one constant rank.
+  const ranksFixedA = new Set<number>();
+  for (let i = 0; i < 200; i++)
+    ranksFixedA.add(deriveRank(secret(7), secret(i)));
+  assert.ok(
+    ranksFixedA.size > 1,
+    `rank ignores share B: ${ranksFixedA.size} distinct ranks for a fixed A`,
+  );
+  // Symmetrically, hold B fixed and vary A.
+  const ranksFixedB = new Set<number>();
+  for (let i = 0; i < 200; i++)
+    ranksFixedB.add(deriveRank(secret(i), secret(7)));
+  assert.ok(
+    ranksFixedB.size > 1,
+    `rank ignores share A: ${ranksFixedB.size} distinct ranks for a fixed B`,
+  );
+});
+
+test("initialState begins the opening deal in draw_commit", () => {
   const s = fresh();
-  assert.equal(s.phase, "player");
+  assert.equal(s.phase, "draw_commit");
   assert.equal(s.round, 1n);
-  assert.equal(s.playerHand.length, 2);
-  assert.equal(s.dealerHand.length, 2);
-  assert.equal(s.drawIndex, 4n);
+  assert.deepEqual(s.draw, { forHand: "player", reason: "deal" });
+  assert.equal(s.playerHand.length, 0);
+  assert.equal(s.dealerHand.length, 0);
   assert.equal(s.wager, WAGER);
-  assert.equal(s.balanceA, 1000n);
-  assert.equal(s.balanceB, 1000n);
   assert.equal(s.total, 2000n);
   assert.ok(!proto.isTerminal(s));
 });
 
-test("initialState is already terminal when a round cannot be funded", () => {
+test("initialState is terminal when a round cannot be funded", () => {
   const s = proto.initialState({
     tunnelId: "0xab",
     initialBalances: { a: 50n, b: 1000n },
   });
   assert.equal(s.phase, "round_over");
-  assert.equal(s.round, 0n);
   assert.ok(proto.isTerminal(s));
 });
 
-test("a full round settles, conserves the total, and ends in round_over", () => {
-  let s = fresh();
-  // Player stands immediately, dealer auto-plays and the round settles.
-  s = proto.applyMove(s, { action: "stand" }, "A");
-  assert.equal(s.phase, "dealer");
-  s = proto.applyMove(s, { action: "stand" }, "B");
-  assert.equal(s.phase, "round_over");
-  const bal = proto.balances(s);
-  assert.equal(bal.a + bal.b, 2000n);
-  // Settlement moved at most one wager between the parties.
-  assert.ok(bal.a === 1000n || bal.a === 900n || bal.a === 1100n);
+test("getPlayerParty / getDealerParty alternate by round", () => {
+  assert.equal(getPlayerParty(1n), "A");
+  assert.equal(getDealerParty(1n), "B");
+  assert.equal(getPlayerParty(3n), "B");
+  assert.equal(getDealerParty(3n), "A");
 });
 
-test("player hitting eventually busts or stands without breaking conservation", () => {
+test("both commits advance draw_commit -> draw_reveal", () => {
   let s = fresh();
-  // Keep hitting until the round resolves (bust) or we hit the dealer phase.
-  for (let i = 0; i < 30 && s.phase === "player"; i++) {
-    s = proto.applyMove(s, { action: "hit" }, "A");
-  }
-  const bal = proto.balances(s);
-  assert.equal(bal.a + bal.b, 2000n);
-  assert.ok(bal.a >= 0n && bal.b >= 0n);
+  s = proto.applyMove(s, commitMove(secret(1)), "A");
+  assert.equal(s.phase, "draw_commit");
+  assert.ok(s.pendingCommitA && !s.pendingCommitB);
+  s = proto.applyMove(s, commitMove(secret(2)), "B");
+  assert.equal(s.phase, "draw_reveal");
+  assert.ok(s.pendingCommitA && s.pendingCommitB);
 });
 
-test("applyMove rejects wrong-turn and illegal dealer hit", () => {
+test("a party cannot commit twice for the same card", () => {
   let s = fresh();
-  // Player's turn: dealer (B) cannot move.
-  assert.throws(() => proto.applyMove(s, { action: "hit" }, "B"));
-  s = proto.applyMove(s, { action: "stand" }, "A"); // -> dealer phase
-  // Dealer's turn: player (A) cannot move.
-  assert.throws(() => proto.applyMove(s, { action: "stand" }, "A"));
-  // Dealer may not 'hit' (auto-play only).
-  assert.throws(() => proto.applyMove(s, { action: "hit" }, "B"));
-});
-
-test("applyMove rejects unknown actions", () => {
-  const s = fresh();
-  assert.throws(() =>
-    proto.applyMove(s, { action: "fold" } as unknown as { action: "hit" }, "A")
+  s = proto.applyMove(s, commitMove(secret(1)), "A");
+  assert.throws(
+    () => proto.applyMove(s, commitMove(secret(9)), "A"),
+    /already committed/,
   );
 });
 
-test("round_over deals a fresh round on any move (incrementing round)", () => {
+test("deal from round_over starts the next round", () => {
+  // Build a round_over state both can fund.
+  const over: BlackjackState = {
+    ...fresh(),
+    phase: "round_over",
+    round: 2n,
+    draw: null,
+  };
+  const s = proto.applyMove(over, { kind: "deal" }, "A");
+  assert.equal(s.phase, "draw_commit");
+  assert.equal(s.round, 3n);
+  assert.deepEqual(s.draw, { forHand: "player", reason: "deal" });
+});
+
+test("non-deal move is rejected in round_over", () => {
+  const over: BlackjackState = {
+    ...fresh(),
+    phase: "round_over",
+    round: 2n,
+    draw: null,
+  };
+  assert.throws(
+    () => proto.applyMove(over, { kind: "hit" }, "A"),
+    /expected 'deal'/,
+  );
+});
+
+test("a full opening deal lands in player phase with 2+2 cards", () => {
   let s = fresh();
-  s = proto.applyMove(s, { action: "stand" }, "A");
-  s = proto.applyMove(s, { action: "stand" }, "B");
-  assert.equal(s.phase, "round_over");
-  const prevRound = s.round;
-  s = proto.applyMove(s, { action: "hit" }, "A");
+  for (let i = 0; i < 4; i++) {
+    assert.equal(
+      s.phase,
+      "draw_commit",
+      `card ${i} should start in draw_commit`,
+    );
+    s = doDraw(s, secret(i * 2 + 1), secret(i * 2 + 2));
+  }
   assert.equal(s.phase, "player");
-  assert.equal(s.round, prevRound + 1n);
   assert.equal(s.playerHand.length, 2);
   assert.equal(s.dealerHand.length, 2);
+  assert.equal(s.drawCount, 4n);
+  assert.equal(s.draw, null);
 });
 
-test("applyMove is pure (does not mutate input state or its hands)", () => {
-  const s = fresh();
-  const beforeHand = [...s.playerHand];
-  const beforeDraw = s.drawIndex;
-  proto.applyMove(s, { action: "hit" }, "A");
-  assert.deepEqual(s.playerHand, beforeHand);
-  assert.equal(s.drawIndex, beforeDraw);
+test("a reveal that does not match its commitment is rejected", () => {
+  let s = fresh();
+  s = proto.applyMove(s, commitMove(secret(1)), "A");
+  s = proto.applyMove(s, commitMove(secret(2)), "B");
+  assert.equal(s.phase, "draw_reveal");
+  // Reveal a DIFFERENT secret than A committed.
+  assert.throws(
+    () => proto.applyMove(s, revealMove(secret(99)), "A"),
+    /does not match commitment/,
+  );
+});
+
+test("encodeState is stable for the same state", () => {
+  let s = fresh();
+  s = doDraw(s, secret(1), secret(2));
+  assert.equal(toHex(proto.encodeState(s)), toHex(proto.encodeState(s)));
+});
+
+test("encodeState distinguishes states differing in a single field", () => {
+  const base = fresh();
+  const enc = (s: BlackjackState) => toHex(proto.encodeState(s));
+  // Every field the per-card draw machinery added must affect the encoding, or two
+  // distinct states could collide to the same co-signed state hash.
+  assert.notEqual(enc(base), enc({ ...base, drawCount: base.drawCount + 1n }));
+  assert.notEqual(
+    enc(base),
+    enc({ ...base, playerHand: [...base.playerHand, 10] }),
+  );
+  assert.notEqual(
+    enc(base),
+    enc({ ...base, pendingCommitA: new Uint8Array(32).fill(1) }),
+  );
+  assert.notEqual(
+    enc(base),
+    enc({ ...base, draw: { forHand: "dealer", reason: "hit" } }),
+  );
+});
+
+function toHex(b: Uint8Array): string {
+  return Buffer.from(b).toString("hex");
+}
+
+/** Opening deal with forced cards: player 10+10=20, dealer 5+5=10 (deterministic). */
+function dealtToPlayer(): BlackjackState {
+  let s = fresh();
+  const [ta, tb] = secretsForRank(13); // King -> value 10
+  const [fa, fb] = secretsForRank(5); // value 5
+  s = doDraw(s, ta, tb); // player card 1 = 10
+  s = doDraw(s, ta, tb); // player card 2 = 10  (duplicate rank is fine)
+  s = doDraw(s, fa, fb); // dealer card 1 = 5
+  s = doDraw(s, fa, fb); // dealer card 2 = 5  -> dealer 10 (< 17)
+  return s;
+}
+
+test("hit deals one more player card and returns to player phase", () => {
+  let s = dealtToPlayer();
   assert.equal(s.phase, "player");
+  s = proto.applyMove(s, { kind: "hit" }, "A");
+  assert.equal(s.phase, "draw_commit");
+  assert.deepEqual(s.draw, { forHand: "player", reason: "hit" });
+  // Force the hit card to an Ace (value 11 -> soft, 10+10+11 busts? no: 31 -> aces down -> 21).
+  const [aa, ab] = secretsForRank(1);
+  s = doDraw(s, aa, ab);
+  assert.equal(s.phase, "player"); // 10 + 10 + Ace = 21, not bust
+  assert.equal(s.playerHand.length, 3);
 });
 
-test("encodeState is deterministic and changes with state", () => {
-  const s0 = fresh();
-  const s1 = proto.applyMove(s0, { action: "hit" }, "A");
-  assert.equal(toHex(proto.encodeState(s0)), toHex(proto.encodeState(s0)));
-  assert.notEqual(toHex(proto.encodeState(s0)), toHex(proto.encodeState(s1)));
-});
-
-test("encodeState distinguishes states with the same balances but different hands", () => {
-  // Two different tunnels produce different deterministic deals -> different hands.
-  const sX = proto.initialState({
-    tunnelId: "0x01",
-    initialBalances: { a: 1000n, b: 1000n },
-  });
-  const sY = proto.initialState({
-    tunnelId: "0x02",
-    initialBalances: { a: 1000n, b: 1000n },
-  });
-  // Balances are identical; encodings must still differ because hands differ
-  // (or, if hands coincidentally match, that's still a valid canonical encoding).
-  if (
-    JSON.stringify(sX.playerHand) !== JSON.stringify(sY.playerHand) ||
-    JSON.stringify(sX.dealerHand) !== JSON.stringify(sY.dealerHand)
-  ) {
-    assert.notEqual(toHex(proto.encodeState(sX)), toHex(proto.encodeState(sY)));
-  }
-});
-
-test("balances always sum to total across a long random self-play sequence", () => {
-  let s = fresh();
-  let x = 0.123456789;
-  const rng = () => (x = (x * 16807) % 1) || 0.5;
-  for (let i = 0; i < 5000; i++) {
-    if (proto.isTerminal(s)) break;
-    // Whoever has the move plays; try both, the engine ignores the null one.
-    const order: Party[] = s.phase === "dealer" ? ["B", "A"] : ["A", "B"];
-    let moved = false;
-    for (const by of order) {
-      const m = proto.randomMove(s, by, rng);
-      if (!m) continue;
-      s = proto.applyMove(s, m, by);
-      moved = true;
-      break;
-    }
-    assert.ok(moved, "someone must have a legal move when not terminal");
-    const bal = proto.balances(s);
-    assert.equal(bal.a + bal.b, 2000n);
-    assert.ok(bal.a >= 0n && bal.b >= 0n);
-  }
-});
-
-test("randomMove returns null when it is not the party's turn and when terminal", () => {
-  const s = fresh(); // player phase
-  const rng = () => 0.5;
-  assert.equal(proto.randomMove(s, "B", rng), null); // not dealer's turn
-  assert.ok(proto.randomMove(s, "A", rng)); // player has a move
-
-  const term = proto.initialState({
-    tunnelId: "0xab",
-    initialBalances: { a: 10n, b: 10n },
-  });
-  assert.ok(proto.isTerminal(term));
-  assert.equal(proto.randomMove(term, "A", rng), null);
-  assert.equal(proto.randomMove(term, "B", rng), null);
-});
-
-test("randomMove only ever yields legal moves over many transitions", () => {
-  let s = fresh();
-  let x = 0.987654321;
-  const rng = () => (x = (x * 48271) % 1) || 0.5;
-  for (let i = 0; i < 3000; i++) {
-    if (proto.isTerminal(s)) break;
-    const by: Party =
-      s.phase === "dealer"
-        ? getDealerParty(s.round)
-        : s.phase === "player"
-        ? getPlayerParty(s.round)
-        : getPlayerParty(s.round + 1n);
-    const m = proto.randomMove(s, by, rng);
-    if (!m) {
-      // The only non-mover should be the off-turn party; the on-turn party always moves.
-      assert.fail("on-turn party returned a null move");
-    }
-    // Must not throw — i.e. the move is legal.
-    s = proto.applyMove(s, m, by);
-  }
-});
-
-test("isTerminal becomes true once a party can no longer cover the wager", () => {
-  // Construct a near-broke state by reaching into balances after a settled round.
-  let s = fresh();
-  s = proto.applyMove(s, { action: "stand" }, "A");
-  s = proto.applyMove(s, { action: "stand" }, "B");
+test("hitting into a bust settles the round to the dealer", () => {
+  let s = dealtToPlayer(); // player has 10 + 10 = 20
+  s = proto.applyMove(s, { kind: "hit" }, "A");
+  const [na, nb] = secretsForRank(5); // value 5 -> 25, bust
+  s = doDraw(s, na, nb);
   assert.equal(s.phase, "round_over");
-  const broke: BlackjackState = {
-    ...s,
-    balanceA: 50n,
-    balanceB: s.balanceA + s.balanceB - 50n,
-  };
-  assert.ok(proto.isTerminal(broke));
-  assert.throws(() => proto.applyMove(broke, { action: "hit" }, "A"));
+  // Round 1 -> player is A, dealer is B; player busts -> B wins the wager.
+  assert.equal(s.balanceB, 1000n + WAGER);
+  assert.equal(s.balanceA, 1000n - WAGER);
+  assert.equal(s.balanceA + s.balanceB, s.total);
 });
 
-test("ROUND_CAP forces terminality", () => {
-  const s = fresh();
-  const capped: BlackjackState = {
-    ...s,
-    phase: "round_over",
-    round: ROUND_CAP,
-  };
-  assert.ok(proto.isTerminal(capped));
+test("stand kicks off the dealer auto-draw", () => {
+  let s = dealtToPlayer();
+  s = proto.applyMove(s, { kind: "stand" }, "A");
+  assert.equal(s.phase, "draw_commit");
+  assert.deepEqual(s.draw, { forHand: "dealer", reason: "dealer_auto" });
 });
 
-test("end-to-end self-play tunnel: latest co-signed update verifies", () => {
-  const a = generateKeyPair();
-  const b = generateKeyPair();
-  const t = OffchainTunnel.selfPlay(
-    new BlackjackProtocol(),
-    "0x" + "33".repeat(32),
-    a,
-    b,
-    ed25519Address(a.publicKey),
-    ed25519Address(b.publicKey),
-    { a: 1000n, b: 1000n }
+test("only the player party may hit", () => {
+  const s = dealtToPlayer(); // round 1 -> player is A
+  assert.throws(
+    () => proto.applyMove(s, { kind: "hit" }, "B"),
+    /player's \(A\) turn/,
   );
+});
 
-  // Play several rounds: player stands, dealer stands, then deal again.
-  for (let r = 0; r < 5; r++) {
-    if (proto.isTerminal(t.state)) break;
-    if (t.state.phase === "round_over") {
-      const nextPlayer = getPlayerParty(t.state.round + 1n);
-      t.step({ action: "hit" }, nextPlayer); // deal a new round
-    }
-    if (t.state.phase === "player") {
-      const playerParty = getPlayerParty(t.state.round);
-      t.step({ action: "stand" }, playerParty);
-    }
-    if (t.state.phase === "dealer") {
-      const dealerParty = getDealerParty(t.state.round);
-      t.step({ action: "stand" }, dealerParty);
-    }
+/** From a player-phase state, stand and run dealer auto-draws (all forced to `rank`). */
+function standAndResolve(
+  s: BlackjackState,
+  dealerRank: number,
+): BlackjackState {
+  s = proto.applyMove(s, { kind: "stand" }, "A");
+  const [da, db] = secretsForRank(dealerRank);
+  let guard = 0;
+  while (s.phase !== "round_over") {
+    if (guard++ > 100) throw new Error("dealer loop did not terminate");
+    s = doDraw(s, da, db);
   }
+  return s;
+}
 
-  assert.ok(t.latest, "expected at least one co-signed update");
-  assert.ok(
-    verifyCoSignedUpdate(
-      t.latest!,
-      { publicKey: t.partyA.publicKey, scheme: t.partyA.scheme },
-      { publicKey: t.partyB.publicKey, scheme: t.partyB.scheme }
-    )
+test("dealer draws until reaching at least 17, then settles", () => {
+  let s = dealtToPlayer(); // player 20, dealer 10
+  s = standAndResolve(s, 5); // dealer 10 -> 15 -> 20, stops at >= 17
+  assert.equal(s.phase, "round_over");
+  assert.ok(handValue(s.dealerHand) >= 17);
+});
+
+test("player 20 beats dealer 19 -> player (A) wins", () => {
+  let s = dealtToPlayer(); // player 20, dealer 10
+  s = standAndResolve(s, 9); // dealer 10 -> 19, stops; 20 > 19 -> A wins
+  assert.equal(s.balanceA, 1000n + WAGER);
+  assert.equal(s.balanceB, 1000n - WAGER);
+  assert.equal(s.balanceA + s.balanceB, s.total);
+});
+
+test("dealer busts -> player (A) wins", () => {
+  let s = fresh();
+  const [k1, k2] = secretsForRank(13); // value 10
+  const [s6a, s6b] = secretsForRank(6); // value 6
+  s = doDraw(s, k1, k2); // player 10
+  s = doDraw(s, k1, k2); // player 20
+  s = doDraw(s, s6a, s6b); // dealer 6
+  s = doDraw(s, k1, k2); // dealer 16 (< 17)
+  s = standAndResolve(s, 13); // dealer 16 + 10 = 26 -> bust -> A wins
+  assert.equal(s.phase, "round_over");
+  assert.equal(s.balanceA, 1000n + WAGER);
+  assert.equal(s.balanceB, 1000n - WAGER);
+});
+
+test("equal final totals push (no transfer)", () => {
+  let s = dealtToPlayer(); // player 20, dealer 10
+  s = standAndResolve(s, 10); // dealer 10 -> 20, stops; 20 == 20 -> push
+  assert.equal(s.phase, "round_over");
+  assert.equal(s.balanceA, 1000n);
+  assert.equal(s.balanceB, 1000n);
+});
+
+test("a dealer already pat (>= 17) draws no card on stand", () => {
+  let s = fresh();
+  const [k1, k2] = secretsForRank(13); // value 10
+  const [n9a, n9b] = secretsForRank(9); // value 9
+  s = doDraw(s, k1, k2); // player 10
+  s = doDraw(s, k1, k2); // player 20
+  s = doDraw(s, k1, k2); // dealer 10
+  s = doDraw(s, n9a, n9b); // dealer 19 (>= 17)
+  const before = s.drawCount;
+  s = proto.applyMove(s, { kind: "stand" }, "A");
+  assert.equal(s.phase, "round_over"); // settled immediately, no extra draw
+  assert.equal(s.drawCount, before);
+  assert.equal(s.balanceA, 1000n + WAGER); // 20 > 19 -> A wins
+});
+
+test("handValue handles soft aces", () => {
+  assert.equal(handValue([11, 11]), 12); // A + A = 12, not 22
+  assert.equal(handValue([11, 10]), 21);
+  assert.equal(handValue([11, 5, 10]), 16); // ace downgraded
+});
+
+test("a party that committed can forfeit the round when the opponent does not", () => {
+  let s = fresh(); // round 1, draw_commit, deal player card
+  s = proto.applyMove(s, commitMove(secret(1)), "A"); // A committed, B has not
+  s = proto.applyMove(s, { kind: "forfeit" }, "A"); // A claims B's no-show
+  assert.equal(s.phase, "round_over");
+  assert.equal(s.balanceA, 1000n + WAGER);
+  assert.equal(s.balanceB, 1000n - WAGER);
+});
+
+test("forfeit is rejected when the opponent does not owe the pending step", () => {
+  let s = fresh();
+  // Neither has committed -> A has not done its part, cannot claim.
+  assert.throws(
+    () => proto.applyMove(s, { kind: "forfeit" }, "A"),
+    /opponent does not owe/,
   );
-  const bal = proto.balances(t.state);
-  assert.equal(bal.a + bal.b, 2000n);
+});
+
+test("forfeit works in the reveal phase too", () => {
+  let s = fresh();
+  s = proto.applyMove(s, commitMove(secret(1)), "A");
+  s = proto.applyMove(s, commitMove(secret(2)), "B"); // -> draw_reveal
+  s = proto.applyMove(s, revealMove(secret(1)), "A"); // A revealed, B has not
+  s = proto.applyMove(s, { kind: "forfeit" }, "A");
+  assert.equal(s.phase, "round_over");
+  assert.equal(s.balanceA, 1000n + WAGER);
+});
+
+/** Which party owes the next move in the current phase, or null if none/terminal. */
+function owed(s: BlackjackState): "A" | "B" | null {
+  if (proto.isTerminal(s)) return null;
+  switch (s.phase) {
+    case "round_over":
+      return getPlayerParty(s.round + 1n);
+    case "draw_commit":
+      return !s.pendingCommitA ? "A" : !s.pendingCommitB ? "B" : null;
+    case "draw_reveal":
+      return !s.pendingRevealA ? "A" : !s.pendingRevealB ? "B" : null;
+    case "player":
+      return getPlayerParty(s.round);
+  }
+}
+
+test("randomMove drives a full game to a terminal state with conserved balances", () => {
+  let s = fresh();
+  let rngState = 12345;
+  const rng = () => {
+    // deterministic LCG so the test is reproducible
+    rngState = (1103515245 * rngState + 12345) & 0x7fffffff;
+    return rngState / 0x7fffffff;
+  };
+  let steps = 0;
+  while (!proto.isTerminal(s) && steps < 200000) {
+    const by = owed(s);
+    if (!by) break;
+    const move = proto.randomMove(s, by, rng);
+    assert.ok(
+      move,
+      `randomMove returned null for owed party ${by} in ${s.phase}`,
+    );
+    s = proto.applyMove(s, move, by);
+    steps++;
+  }
+  assert.ok(proto.isTerminal(s));
+  assert.equal(s.balanceA + s.balanceB, s.total);
+  assert.ok(s.balanceA >= 0n && s.balanceB >= 0n);
+});
+
+test("replaying the same moves yields identical encodeState", () => {
+  const moves: Array<{ move: BlackjackMove; by: "A" | "B" }> = [];
+  // Record a short scripted hand.
+  let s = fresh();
+  const record = (move: BlackjackMove, by: "A" | "B") => {
+    moves.push({ move, by });
+    s = proto.applyMove(s, move, by);
+  };
+  for (let i = 0; i < 4; i++) {
+    record(commitMove(secret(i + 1)), "A");
+    record(commitMove(secret(i + 50)), "B");
+    record(revealMove(secret(i + 1)), "A");
+    record(revealMove(secret(i + 50)), "B");
+  }
+  const encoded1 = Buffer.from(proto.encodeState(s)).toString("hex");
+  // Replay from scratch.
+  let r = fresh();
+  for (const { move, by } of moves) r = proto.applyMove(r, move, by);
+  const encoded2 = Buffer.from(proto.encodeState(r)).toString("hex");
+  assert.equal(encoded1, encoded2);
 });
