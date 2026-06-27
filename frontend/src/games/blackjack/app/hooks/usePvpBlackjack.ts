@@ -21,7 +21,7 @@ import {
   buildCreateAndShareTx,
   buildDepositTx,
   buildUpdateStateTx,
-  parseTunnelId
+  parseTunnelId,
 } from "@/games/blackjack/app/lib/bjPvpOnchain";
 import { makeBlackjackResumeAdapter } from "@/games/blackjack/blackjackResumeAdapter";
 import {
@@ -59,10 +59,7 @@ import { bytesToHex, core, hexToBytes, proof } from "sui-tunnel-ts";
 
 type BlackjackState = BetBlackjackState;
 type BlackjackMove = BetBlackjackMove;
-type BlackjackSecret = Pick<
-  BetBlackjackState,
-  "localSecretA" | "localSecretB"
->;
+type BlackjackSecret = Pick<BetBlackjackState, "localSecretA" | "localSecretB">;
 
 // MP relay base (resolveMpWsUrl appends /v1/mp). Prefer an explicit VITE_MP_URL; otherwise derive
 // from the backend base, and when that's empty (same-origin production build) from the page
@@ -1129,7 +1126,9 @@ export function usePvpBlackjack(): PvpView {
     playerHand,
     dealerHand,
     playerSum: handValue(playerHand),
-    dealerSum: dealerRevealed ? handValue(s!.dealerHand) : handValue(dealerHand),
+    dealerSum: dealerRevealed
+      ? handValue(s!.dealerHand)
+      : handValue(dealerHand),
     balancePlayer: s
       ? getPlayerParty(s.round || 1n) === "A"
         ? s.balanceA

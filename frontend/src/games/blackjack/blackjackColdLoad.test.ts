@@ -62,7 +62,9 @@ const moveFor = (s: BetBlackjackState, by: "A" | "B"): BetBlackjackMove => {
   if (s.phase === "draw_commit")
     return commitMoveFromSecret(by === "A" ? DET_A : DET_B);
   if (s.phase === "draw_reveal")
-    return revealMoveFromSecret((by === "A" ? s.localSecretA : s.localSecretB)!);
+    return revealMoveFromSecret(
+      (by === "A" ? s.localSecretA : s.localSecretB)!,
+    );
   if (s.phase === "round_over") return fixedBetMove(50, s)!;
   return { action: handValue(s.playerHand) < 17 ? "hit" : "stand" };
 };

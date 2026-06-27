@@ -87,7 +87,11 @@ export interface BetBlackjackState {
 
 export type BetBlackjackMove =
   | { action: "bet"; amount: number }
-  | { action: "commit"; commitment: Uint8Array; localSecret?: BetBlackjackSecret }
+  | {
+      action: "commit";
+      commitment: Uint8Array;
+      localSecret?: BetBlackjackSecret;
+    }
   | { action: "reveal"; reveal: BetBlackjackReveal }
   | { action: "hit" }
   | { action: "stand" }
@@ -151,7 +155,10 @@ export function commitMoveFromSecret(s: BetBlackjackSecret): BetBlackjackMove {
 
 /** Build a `reveal` move from a secret. */
 export function revealMoveFromSecret(s: BetBlackjackSecret): BetBlackjackMove {
-  return { action: "reveal", reveal: { value: s.value.slice(), salt: s.salt.slice() } };
+  return {
+    action: "reveal",
+    reveal: { value: s.value.slice(), salt: s.salt.slice() },
+  };
 }
 
 function rankValue(rank: number): number {
@@ -265,10 +272,7 @@ function dealRound(s: BetBlackjackState, bet: bigint): BetBlackjackState {
 }
 
 /** Settle the round to `winner` (null = push), clearing draw state. */
-function settle(
-  s: BetBlackjackState,
-  winner: Party | null,
-): BetBlackjackState {
+function settle(s: BetBlackjackState, winner: Party | null): BetBlackjackState {
   let balanceA = s.balanceA;
   let balanceB = s.balanceB;
   if (winner === "A") {
@@ -510,13 +514,17 @@ export class BlackjackBetProtocol implements protocols.Protocol<
       case "draw_commit": {
         if (move.action === "forfeit") return claimForfeit(s, by);
         if (move.action !== "commit")
-          throw new Error(`expected 'commit' in draw_commit, got '${move.action}'`);
+          throw new Error(
+            `expected 'commit' in draw_commit, got '${move.action}'`,
+          );
         return applyCommit(s, move, by);
       }
       case "draw_reveal": {
         if (move.action === "forfeit") return claimForfeit(s, by);
         if (move.action !== "reveal")
-          throw new Error(`expected 'reveal' in draw_reveal, got '${move.action}'`);
+          throw new Error(
+            `expected 'reveal' in draw_reveal, got '${move.action}'`,
+          );
         return applyReveal(s, move, by, this.playerPartyFor);
       }
       case "player": {
@@ -531,7 +539,9 @@ export class BlackjackBetProtocol implements protocols.Protocol<
             return resolveShowdown(s, this.playerPartyFor);
           return beginDraw(s, { forHand: "dealer", reason: "dealer_auto" });
         }
-        throw new Error(`expected 'hit' or 'stand' in player phase, got '${move.action}'`);
+        throw new Error(
+          `expected 'hit' or 'stand' in player phase, got '${move.action}'`,
+        );
       }
       default:
         throw new Error(`unexpected phase: ${String(s.phase)}`);

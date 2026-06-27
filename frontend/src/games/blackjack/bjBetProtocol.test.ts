@@ -34,7 +34,9 @@ function doDraw(
   s = proto.applyMove(s, revealMoveFromSecret(sb), "B");
   return s;
 }
-function secretsForRank(rank: number): [BetBlackjackSecret, BetBlackjackSecret] {
+function secretsForRank(
+  rank: number,
+): [BetBlackjackSecret, BetBlackjackSecret] {
   for (let i = 0; i < 1 << 16; i++) {
     const a = secret(i & 0xff, (i >> 4) & 0xff);
     const b = secret((i >> 8) & 0xff, (i >> 12) & 0xff);
@@ -68,7 +70,10 @@ test("cards are NOT predictable from public (round, drawCount): they depend on t
   // pairs, so neither seat can precompute the shoe from the public round/draw counters.
   const ranks = new Set<number>();
   for (let i = 1; i < 64; i++) ranks.add(deriveRank(secret(i), secret(i + 1)));
-  assert.ok(ranks.size > 5, `deck looks deterministic: only ${ranks.size} ranks`);
+  assert.ok(
+    ranks.size > 5,
+    `deck looks deterministic: only ${ranks.size} ranks`,
+  );
 });
 
 test("secureCommitSecret yields a 16-byte CSPRNG value+salt that verifies", () => {

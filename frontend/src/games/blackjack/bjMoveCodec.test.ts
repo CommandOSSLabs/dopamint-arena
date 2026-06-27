@@ -14,7 +14,10 @@ test("commit encoding DROPS the pre-image (no value/salt/localSecret on the wire
   assert.ok(!text.includes("localSecret"), "localSecret leaked to the wire");
   assert.ok(!text.includes("salt"), "salt leaked to the wire");
   assert.ok(!text.includes("value"), "value leaked to the wire");
-  assert.deepEqual(Object.keys(json as object).sort(), ["action", "commitment"]);
+  assert.deepEqual(Object.keys(json as object).sort(), [
+    "action",
+    "commitment",
+  ]);
 });
 
 test("decoded commit has only the commitment (no recoverable secret)", () => {
@@ -25,10 +28,7 @@ test("decoded commit has only the commitment (no recoverable secret)", () => {
   >;
   assert.equal(decoded.action, "commit");
   assert.equal(decoded.commitment.length, 32);
-  assert.equal(
-    (decoded as { localSecret?: unknown }).localSecret,
-    undefined,
-  );
+  assert.equal((decoded as { localSecret?: unknown }).localSecret, undefined);
 });
 
 test("reveal / bet / hit / stand / forfeit round-trip", () => {
