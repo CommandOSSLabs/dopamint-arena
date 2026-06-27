@@ -21,12 +21,22 @@ async fn payments_self_play_conserves_total() {
         seat,
     };
     let driver_a = AsyncSeatDriver::new(
-        TunnelSeat::new(Payments { max_transfers: 20 }, LocalSigner::from_secret(&sa), pk_b, ctx(Seat::A)),
+        TunnelSeat::new(
+            Payments { max_transfers: 20 },
+            LocalSigner::from_secret(&sa),
+            pk_b,
+            ctx(Seat::A),
+        ),
         RandomPolicy::new(Arc::new(Payments { max_transfers: 20 }), 1),
         ch_a,
     );
     let driver_b = AsyncSeatDriver::new(
-        TunnelSeat::new(Payments { max_transfers: 20 }, LocalSigner::from_secret(&sb), pk_a, ctx(Seat::B)),
+        TunnelSeat::new(
+            Payments { max_transfers: 20 },
+            LocalSigner::from_secret(&sb),
+            pk_a,
+            ctx(Seat::B),
+        ),
         RandomPolicy::new(Arc::new(Payments { max_transfers: 20 }), 2),
         ch_b,
     );

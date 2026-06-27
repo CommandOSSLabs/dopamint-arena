@@ -48,9 +48,9 @@ pub enum BjMove {
 impl tunnel_harness::MoveCodec for BjMove {
     fn encode(&self, out: &mut Vec<u8>) {
         match self {
-            BjMove::Bet { amount } => {
-                out.extend_from_slice(format!("{{\"action\":\"bet\",\"amount\":{amount}}}").as_bytes())
-            }
+            BjMove::Bet { amount } => out.extend_from_slice(
+                format!("{{\"action\":\"bet\",\"amount\":{amount}}}").as_bytes(),
+            ),
             BjMove::Hit => out.extend_from_slice(b"{\"action\":\"hit\"}"),
             BjMove::Stand => out.extend_from_slice(b"{\"action\":\"stand\"}"),
         }
@@ -399,12 +399,7 @@ impl Protocol for Blackjack {
         initial_state(ctx.initial.a, ctx.initial.b, None)
     }
 
-    fn apply_move(
-        &self,
-        s: &BjState,
-        mv: &BjMove,
-        by: Seat,
-    ) -> Result<BjState, ProtocolError> {
+    fn apply_move(&self, s: &BjState, mv: &BjMove, by: Seat) -> Result<BjState, ProtocolError> {
         apply_move(s, *mv, by).map_err(ProtocolError)
     }
 

@@ -45,7 +45,11 @@ impl<P: Protocol, Pol: Policy<P>, Ch: Channel, S: Signer> AsyncSeatDriver<P, Pol
             }
 
             // Our turn? The policy returns Some only when it is.
-            if let Some(mv) = self.policy.plan_move(self.seat.state(), our_seat, &ctx).await {
+            if let Some(mv) = self
+                .policy
+                .plan_move(self.seat.state(), our_seat, &ctx)
+                .await
+            {
                 let frame = self.seat.propose(mv, now())?;
                 self.channel.send(frame).await?;
                 match self.channel.recv().await? {

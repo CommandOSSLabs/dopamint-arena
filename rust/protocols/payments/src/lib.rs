@@ -72,12 +72,7 @@ impl Protocol for Payments {
         }
     }
 
-    fn apply_move(
-        &self,
-        s: &PayState,
-        mv: &PayMove,
-        by: Seat,
-    ) -> Result<PayState, ProtocolError> {
+    fn apply_move(&self, s: &PayState, mv: &PayMove, by: Seat) -> Result<PayState, ProtocolError> {
         if by != actor(s) {
             return Err(ProtocolError("not this seat's turn".into()));
         }

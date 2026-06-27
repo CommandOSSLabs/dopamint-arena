@@ -2,8 +2,8 @@
 //! resource sampler, and prints the loadbench-shaped report.
 
 use fleet_bench::cli::{self, Runner};
-use fleet_bench::{resources, swarm};
 use fleet_bench::report;
+use fleet_bench::{resources, swarm};
 
 fn main() {
     let opts = match cli::parse(std::env::args().skip(1)) {

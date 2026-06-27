@@ -22,12 +22,22 @@ async fn self_play_match_conserves_balances() {
     };
 
     let driver_a = AsyncSeatDriver::new(
-        TunnelSeat::new(Blackjack, LocalSigner::from_secret(&secret_a), pk_b, ctx(Seat::A)),
+        TunnelSeat::new(
+            Blackjack,
+            LocalSigner::from_secret(&secret_a),
+            pk_b,
+            ctx(Seat::A),
+        ),
         RandomPolicy::new(Arc::new(Blackjack), 1),
         ch_a,
     );
     let driver_b = AsyncSeatDriver::new(
-        TunnelSeat::new(Blackjack, LocalSigner::from_secret(&secret_b), pk_a, ctx(Seat::B)),
+        TunnelSeat::new(
+            Blackjack,
+            LocalSigner::from_secret(&secret_b),
+            pk_a,
+            ctx(Seat::B),
+        ),
         RandomPolicy::new(Arc::new(Blackjack), 2),
         ch_b,
     );

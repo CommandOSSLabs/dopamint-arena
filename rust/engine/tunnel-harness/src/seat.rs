@@ -103,7 +103,9 @@ impl<P: Protocol, S: Signer, C: FrameCodec<P::Move>> TunnelSeat<P, S, C> {
 
     pub fn propose(&mut self, mv: P::Move, timestamp: u64) -> Result<Vec<u8>, HarnessError> {
         if self.pending.is_some() {
-            return Err(HarnessError::Verification("a proposal already awaits ack".into()));
+            return Err(HarnessError::Verification(
+                "a proposal already awaits ack".into(),
+            ));
         }
         let next = self.protocol.apply_move(&self.state, &mv, self.seat)?;
         let nonce = self.nonce + 1;
@@ -149,7 +151,9 @@ impl<P: Protocol, S: Signer, C: FrameCodec<P::Move>> TunnelSeat<P, S, C> {
         }
         let state_hash = blake2b256(&self.protocol.encode_state(&next));
         if state_hash != m.state_hash {
-            return Err(HarnessError::Verification("frame state_hash mismatch".into()));
+            return Err(HarnessError::Verification(
+                "frame state_hash mismatch".into(),
+            ));
         }
         let update = StateUpdate {
             tunnel_id: self.tunnel_id.clone(),
@@ -233,7 +237,12 @@ mod tests {
                 cap: self.cap,
             }
         }
-        fn apply_move(&self, s: &TinyState, _mv: &TinyMove, by: Seat) -> Result<TinyState, crate::ProtocolError> {
+        fn apply_move(
+            &self,
+            s: &TinyState,
+            _mv: &TinyMove,
+            by: Seat,
+        ) -> Result<TinyState, crate::ProtocolError> {
             let turn = if s.n % 2 == 0 { Seat::A } else { Seat::B };
             if by != turn {
                 return Err(crate::ProtocolError("wrong turn".into()));
@@ -277,8 +286,18 @@ mod tests {
             initial: Balances { a: 5, b: 5 },
             seat,
         };
-        let a = TunnelSeat::new(Tiny { cap: 4 }, LocalSigner::from_secret(&sa), pkb, ctx(Seat::A));
-        let b = TunnelSeat::new(Tiny { cap: 4 }, LocalSigner::from_secret(&sb), pka, ctx(Seat::B));
+        let a = TunnelSeat::new(
+            Tiny { cap: 4 },
+            LocalSigner::from_secret(&sa),
+            pkb,
+            ctx(Seat::A),
+        );
+        let b = TunnelSeat::new(
+            Tiny { cap: 4 },
+            LocalSigner::from_secret(&sb),
+            pka,
+            ctx(Seat::B),
+        );
         (a, b)
     }
 
@@ -317,7 +336,11 @@ mod tests {
         let raw = String::from_utf8(ack.remove(0)).unwrap();
         let marker = "\"sigResponder\":\"";
         let pos = raw.find(marker).expect("sig_responder field in ack json") + marker.len();
-        let flip = if raw.as_bytes()[pos] == b'0' { b'f' } else { b'0' };
+        let flip = if raw.as_bytes()[pos] == b'0' {
+            b'f'
+        } else {
+            b'0'
+        };
         let mut corrupted = raw.into_bytes();
         corrupted[pos] = flip;
         let err = a.handle_frame(&corrupted).unwrap_err();
@@ -336,7 +359,11 @@ mod tests {
                 Tiny { cap: 4 },
                 LocalSigner::from_secret(&sa),
                 pka,
-                TunnelContext { tunnel_id: "0xab".into(), initial: Balances { a: 5, b: 5 }, seat: Seat::A },
+                TunnelContext {
+                    tunnel_id: "0xab".into(),
+                    initial: Balances { a: 5, b: 5 },
+                    seat: Seat::A,
+                },
             )
         };
         let err = fresh.handle_frame(&mv_frame).unwrap_err();
