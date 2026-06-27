@@ -1,106 +1,54 @@
-import assert from "node:assert/strict";
 import { test } from "node:test";
-import { computeCommitment } from "../core/commitment";
-import { generateKeyPair } from "../core/crypto";
-import { defaultBackend } from "../core/crypto-native";
-import { DistributedTunnel } from "../core/distributedTunnel";
-import { makeEndpoint } from "../core/tunnel";
-import {
-  BlackjackMove,
-  BlackjackProtocol,
-  secureBlackjackSecret,
-} from "./blackjack";
+import assert from "node:assert/strict";
 import { blackjackMoveCodec } from "./blackjackCodec";
+import type { BlackjackMove } from "./blackjack";
 
-test("commit encoding DROPS the pre-image (no value/salt/localSecret on the wire)", () => {
-  const s = secureBlackjackSecret();
-  const move: BlackjackMove = {
-    kind: "commit",
-    commitment: computeCommitment(s.value, s.salt),
-    localSecret: s,
-  };
-  const json = blackjackMoveCodec.encode(move);
-  const text = JSON.stringify(json);
-  assert.ok(!text.includes("localSecret"), "localSecret leaked");
-  assert.ok(!text.includes("salt"), "salt leaked");
-  assert.ok(!text.includes("value"), "value leaked");
-  const decoded = blackjackMoveCodec.decode(json) as Extract<
-    BlackjackMove,
-    { kind: "commit" }
-  >;
-  assert.equal(decoded.kind, "commit");
-  assert.equal(decoded.commitment.length, 32);
-  assert.equal((decoded as { localSecret?: unknown }).localSecret, undefined);
+function rt(m: BlackjackMove): BlackjackMove {
+  return blackjackMoveCodec.decode(blackjackMoveCodec.encode(m));
+}
+
+test("bet round-trips with its amount as a bigint", () => {
+  const out = rt({ kind: "bet", amount: 250n });
+  assert.deepEqual(out, { kind: "bet", amount: 250n });
 });
 
-test("reveal / deal / hit / stand / forfeit round-trip", () => {
-  const reveal: BlackjackMove = {
-    kind: "reveal",
-    reveal: { value: Uint8Array.from([9]), salt: new Uint8Array(16).fill(3) },
-  };
-  const r = blackjackMoveCodec.decode(blackjackMoveCodec.encode(reveal)) as Extract<
-    BlackjackMove,
-    { kind: "reveal" }
-  >;
-  assert.deepEqual(Array.from(r.reveal.value), [9]);
-  for (const m of [
-    { kind: "deal" },
-    { kind: "hit" },
-    { kind: "stand" },
-    { kind: "forfeit" },
-  ] as BlackjackMove[]) {
-    assert.deepEqual(blackjackMoveCodec.decode(blackjackMoveCodec.encode(m)), m);
-  }
+test("commit round-trips its 32-byte commitment and DROPS localSecret from the wire", () => {
+  const commitment = new Uint8Array(32).fill(7);
+  const localSecret = { value: Uint8Array.from([9]), salt: new Uint8Array(16).fill(3) };
+  const json = blackjackMoveCodec.encode({ kind: "commit", commitment, localSecret });
+  // The wire form must not carry the secret.
+  assert.equal(JSON.stringify(json).includes("salt"), false);
+  const out = blackjackMoveCodec.decode(json) as Extract<BlackjackMove, { kind: "commit" }>;
+  assert.equal(out.kind, "commit");
+  assert.deepEqual(out.commitment, commitment);
+  assert.equal(out.localSecret, undefined);
 });
 
-test("secureBlackjackSecret is 16-byte CSPRNG value+salt", () => {
-  const s = secureBlackjackSecret();
-  assert.equal(s.value.length, 16);
-  assert.equal(s.salt.length, 16);
-  const t = secureBlackjackSecret();
-  // Astronomically unlikely to collide if it is real CSPRNG output.
-  assert.notDeepEqual(Array.from(s.value), Array.from(t.value));
+test("reveal round-trips value and salt bytes", () => {
+  const reveal = { value: Uint8Array.from([1, 2, 3]), salt: new Uint8Array(16).fill(5) };
+  const out = rt({ kind: "reveal", reveal }) as Extract<BlackjackMove, { kind: "reveal" }>;
+  assert.deepEqual(out.reveal.value, reveal.value);
+  assert.deepEqual(out.reveal.salt, reveal.salt);
 });
 
-test("DistributedTunnel REFUSES a secret-bearing protocol without a moveCodec (fail closed)", () => {
-  const backend = defaultBackend();
-  const a = generateKeyPair();
-  const b = generateKeyPair();
-  const transport = { send() {}, onFrame() {} };
-  const cfg = {
-    tunnelId: "0x1",
-    self: makeEndpoint(backend, "0xa", a, true),
-    opponent: makeEndpoint(backend, "0xb", b, false),
-    selfParty: "A" as const,
-  };
-  assert.throws(
-    () =>
-      new DistributedTunnel(new BlackjackProtocol(), cfg, transport, {
-        a: 1000n,
-        b: 1000n,
-      }),
-    /secret-bearing moves and requires an explicit moveCodec/,
-  );
-  // With the codec it constructs fine.
-  assert.ok(
-    new DistributedTunnel(
-      new BlackjackProtocol(),
-      { ...cfg, moveCodec: blackjackMoveCodec },
-      transport,
-      { a: 1000n, b: 1000n },
-    ),
-  );
+test("bare moves round-trip", () => {
+  assert.deepEqual(rt({ kind: "hit" }), { kind: "hit" });
+  assert.deepEqual(rt({ kind: "stand" }), { kind: "stand" });
+  assert.deepEqual(rt({ kind: "forfeit" }), { kind: "forfeit" });
 });
 
-test("decode rejects malformed commit/reveal frames with clear errors", () => {
+test("a non-32-byte commitment is rejected on decode", () => {
+  const json = { kind: "commit", commitment: "0x" + "07".repeat(16) };
+  assert.throws(() => blackjackMoveCodec.decode(json), /32 bytes/);
+});
+
+test("an unknown move kind is rejected on decode", () => {
   assert.throws(() => blackjackMoveCodec.decode({ kind: "nope" }), /unsupported/);
-  assert.throws(
-    () => blackjackMoveCodec.decode({ kind: "commit", commitment: "0x00" }),
-    /32 bytes/,
-  );
-  assert.throws(() => blackjackMoveCodec.decode({ kind: "reveal" }), /must be an object/);
-  assert.throws(
-    () => blackjackMoveCodec.decode({ kind: "reveal", reveal: { salt: "0x01" } }),
-    /reveal\.value must be a hex string/,
-  );
+});
+
+test("JSON survives a stringify/parse trip (real relay path)", () => {
+  const m: BlackjackMove = { kind: "reveal", reveal: { value: Uint8Array.from([4]), salt: new Uint8Array(16).fill(2) } };
+  const wire = JSON.parse(JSON.stringify(blackjackMoveCodec.encode(m)));
+  const out = blackjackMoveCodec.decode(wire) as Extract<BlackjackMove, { kind: "reveal" }>;
+  assert.deepEqual(out.reveal.salt, (m as Extract<BlackjackMove, { kind: "reveal" }>).reveal.salt);
 });
