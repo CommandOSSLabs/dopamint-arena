@@ -209,8 +209,12 @@ export default function PlayerBot({
     ) {
       addToast(`${player} ${auto ? "Hits" : "Hit"} (${view.playerSum})`);
     }
-    // Player Stand
-    if (prev.phase === "player" && view.phase === "dealer") {
+    // Player Stand — player was active, phase changed, and no new card was drawn (not a hit).
+    if (
+      prev.phase === "player" &&
+      view.phase !== "player" &&
+      view.playerCards.length === prev.playerCards.length
+    ) {
       addToast(`${player} ${auto ? "Stands" : "Stand"} (${prev.playerSum})`);
     }
     // Dealer Hit
@@ -220,8 +224,8 @@ export default function PlayerBot({
     ) {
       addToast(`Dealer Bot Hits (${view.dealerSum})`);
     }
-    // Dealer Stand
-    if (prev.phase === "dealer" && view.phase === "round_over") {
+    // Dealer Stand — round resolved (no dealer phase in commit-reveal; stands when showdown fires).
+    if (prev.phase !== "round_over" && view.phase === "round_over") {
       addToast(`Dealer Bot Stands (${prev.dealerSum})`);
     }
 
