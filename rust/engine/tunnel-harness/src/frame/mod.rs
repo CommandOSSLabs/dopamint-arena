@@ -16,11 +16,15 @@
 use std::fmt;
 
 use crate::{HarnessError, Seat};
+use serde::{Deserialize, Serialize};
+use serde_big_array::BigArray;
 
+mod bcs;
 mod json;
+pub use bcs::BcsFrameCodec;
 pub use json::JsonFrameCodec;
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum WireSeat {
     A,
     B,
@@ -53,6 +57,7 @@ impl From<WireSeat> for Seat {
 }
 
 /// A proposed move + the proposer's signature half over the state_update message.
+#[derive(Serialize, Deserialize)]
 pub struct MoveFrame<M> {
     pub nonce: u64,
     pub by: WireSeat,
@@ -61,16 +66,20 @@ pub struct MoveFrame<M> {
     pub state_hash: [u8; 32],
     pub party_a_balance: u64,
     pub party_b_balance: u64,
+    #[serde(with = "BigArray")]
     pub sig_proposer: [u8; 64],
 }
 
 /// The responder's co-signature over the same state_update message.
+#[derive(Serialize, Deserialize)]
 pub struct AckFrame {
     pub nonce: u64,
+    #[serde(with = "BigArray")]
     pub sig_responder: [u8; 64],
 }
 
 /// The two off-chain frames exchanged over a tunnel channel.
+#[derive(Serialize, Deserialize)]
 pub enum TunnelFrame<M> {
     Move(MoveFrame<M>),
     Ack(AckFrame),
@@ -234,6 +243,54 @@ mod tests {
     fn decode_rejects_malformed() {
         assert!(matches!(
             FrameCodec::<TestMove>::decode(&JsonFrameCodec, b"not json"),
+            Err(CodecError::Malformed(_))
+        ));
+    }
+
+    #[test]
+    fn bcs_move_and_ack_round_trip() {
+        let mv: TunnelFrame<TestMove> = TunnelFrame::Move(MoveFrame {
+            nonce: 3,
+            by: WireSeat::B,
+            mv: TestMove::Bet { amount: 75 },
+            timestamp: 42,
+            state_hash: [9u8; 32],
+            party_a_balance: 150,
+            party_b_balance: 250,
+            sig_proposer: [0x11; 64],
+        });
+        let bytes = super::bcs::BcsFrameCodec.encode(&mv);
+        let decoded: TunnelFrame<TestMove> = super::bcs::BcsFrameCodec.decode(&bytes).unwrap();
+        match decoded {
+            TunnelFrame::Move(m) => {
+                assert_eq!(m.nonce, 3);
+                assert_eq!(m.mv, TestMove::Bet { amount: 75 });
+                assert_eq!(m.state_hash, [9u8; 32]);
+                assert_eq!(m.sig_proposer, [0x11; 64]);
+                assert_eq!(m.party_b_balance, 250);
+            }
+            _ => panic!("expected move"),
+        }
+
+        let ack: TunnelFrame<TestMove> = TunnelFrame::Ack(AckFrame {
+            nonce: 8,
+            sig_responder: [0x22; 64],
+        });
+        let bytes = super::bcs::BcsFrameCodec.encode(&ack);
+        let decoded: TunnelFrame<TestMove> = super::bcs::BcsFrameCodec.decode(&bytes).unwrap();
+        match decoded {
+            TunnelFrame::Ack(a) => {
+                assert_eq!(a.nonce, 8);
+                assert_eq!(a.sig_responder, [0x22; 64]);
+            }
+            _ => panic!("expected ack"),
+        }
+    }
+
+    #[test]
+    fn bcs_rejects_garbage() {
+        assert!(matches!(
+            FrameCodec::<TestMove>::decode(&super::bcs::BcsFrameCodec, &[0xff, 0xff, 0xff]),
             Err(CodecError::Malformed(_))
         ));
     }
