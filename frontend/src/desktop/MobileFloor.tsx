@@ -43,7 +43,7 @@ export function MobileFloor({
       <div className="flex shrink-0 items-center justify-between gap-2 px-4 pt-4 pb-2">
         <div className="flex min-w-0 flex-col">
           <span className="wal-eyebrow text-muted-foreground">
-            MillionTPS · {workspace}
+            MillionsTPS · {workspace}
           </span>
           <h1 className="wal-display text-xl">{WORKSPACE_LABEL[workspace]}</h1>
         </div>

@@ -82,7 +82,7 @@ export function ExplorerPage() {
     <div className="mx-auto flex h-full max-w-5xl flex-col gap-4 p-4 sm:p-6">
       <header className="flex flex-col gap-1">
         <span className="wal-eyebrow text-muted-foreground">
-          MillionTPS · proof explorer
+          MillionsTPS · proof explorer
         </span>
         <h1 className="wal-display text-2xl">Settlements</h1>
         <p className="text-sm text-muted-foreground">
