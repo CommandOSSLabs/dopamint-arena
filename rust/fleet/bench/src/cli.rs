@@ -12,6 +12,13 @@ pub enum Runner {
     Both,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CodecKind {
+    Json,
+    Bcs,
+    Postcard,
+}
+
 #[derive(Clone, Debug)]
 pub struct BenchOpts {
     pub workers: usize,
@@ -23,6 +30,8 @@ pub struct BenchOpts {
     pub fresh_keys: bool,
     /// Card distribution mode for the swarm (`Varied` by default).
     pub card_mode: crate::swarm::CardMode,
+    /// Wire codec used to serialize tunnel frames (`Json` by default).
+    pub codec: CodecKind,
 }
 
 /// Raw clap layout. Validated and lowered into `BenchOpts` by `parse`.
@@ -37,6 +46,8 @@ struct Raw {
     matches: Option<u64>,
     #[arg(long, default_value = "both")]
     runner: String,
+    #[arg(long, default_value = "json")]
+    codec: String,
     /// Use fixed seat keys (opt out of the default fresh-per-match keygen).
     #[arg(long)]
     fixed_keys: bool,
@@ -111,6 +122,13 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
         }
     };
 
+    let codec = match raw.codec.as_str() {
+        "json" => CodecKind::Json,
+        "bcs" => CodecKind::Bcs,
+        "postcard" => CodecKind::Postcard,
+        other => return Err(format!("--codec must be json|bcs|postcard, got {other}")),
+    };
+
     Ok(BenchOpts {
         workers,
         duration_secs: raw.duration,
@@ -122,6 +140,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
         } else {
             crate::swarm::CardMode::Varied
         },
+        codec,
     })
 }
 
@@ -200,5 +219,31 @@ mod tests {
         assert!(parse_v(&["--onchain"]).is_err());
         assert!(parse_v(&["--channel", "relay"]).is_err());
         assert!(parse_v(&["--game", "poker"]).is_err());
+    }
+
+    #[test]
+    fn codec_defaults_to_json_and_parses_each_variant() {
+        assert_eq!(
+            parse_v(&["--runner", "simple"]).unwrap().codec,
+            CodecKind::Json
+        );
+        assert_eq!(
+            parse_v(&["--runner", "simple", "--codec", "bcs"])
+                .unwrap()
+                .codec,
+            CodecKind::Bcs
+        );
+        assert_eq!(
+            parse_v(&["--runner", "simple", "--codec", "postcard"])
+                .unwrap()
+                .codec,
+            CodecKind::Postcard
+        );
+    }
+
+    #[test]
+    fn unknown_codec_is_rejected_with_explanation() {
+        let err = parse_v(&["--codec", "protobuf"]).unwrap_err();
+        assert!(err.contains("codec"), "message should name the flag: {err}");
     }
 }

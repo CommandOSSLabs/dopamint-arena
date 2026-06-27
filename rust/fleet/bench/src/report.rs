@@ -124,6 +124,7 @@ mod tests {
             runner,
             fresh_keys: true,
             card_mode: crate::swarm::CardMode::Deterministic,
+            codec: crate::cli::CodecKind::Json,
         }
     }
 
