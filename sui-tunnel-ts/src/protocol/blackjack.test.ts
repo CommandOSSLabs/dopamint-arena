@@ -6,7 +6,9 @@ import {
   BlackjackProtocol,
   BlackjackSlotSecret,
   BlackjackState,
+  FIXED_PLAYER_A,
   MIN_BET,
+  actorFor,
   deriveRank,
   getDealerParty,
   getPlayerParty,
@@ -494,6 +496,79 @@ test("randomMove offers a MIN_BET bet for the next player only", () => {
     amount: MIN_BET,
   });
   assert.equal(proto.randomMove(s, dealer, Math.random), null);
+});
+
+test("FIXED_PLAYER_A pins the player to seat A across rounds", () => {
+  const pinned = new BlackjackProtocol(FIXED_PLAYER_A);
+  // Round 3 would normally make B the player (getPlayerParty(3) === "B"); pinned keeps A.
+  const over: BlackjackState = { ...fresh(), phase: "round_over", round: 2n };
+  // With pinning, the next player is A — A may bet, B may not.
+  const s = pinned.applyMove(over, { kind: "bet", amount: 100n }, "A");
+  assert.equal(s.phase, "draw_commit");
+  assert.equal(s.round, 3n);
+  assert.throws(() => pinned.applyMove(over, { kind: "bet", amount: 100n }, "B"), /only the player/);
+});
+
+test("default protocol still rotates (B is the player on round 3)", () => {
+  const over: BlackjackState = { ...fresh(), phase: "round_over", round: 2n };
+  // default proto: getPlayerParty(3) === "B"
+  assert.throws(() => proto.applyMove(over, { kind: "bet", amount: 100n }, "A"), /only the player/);
+  const s = proto.applyMove(over, { kind: "bet", amount: 100n }, "B");
+  assert.equal(s.round, 3n);
+});
+
+test("FIXED_PLAYER_A makes the pinned player win settle to A", () => {
+  // Player (pinned A) 20 vs dealer 19 on round 3 (where default rotation would flip to B).
+  const pinned = new BlackjackProtocol(FIXED_PLAYER_A);
+  let s: BlackjackState = { ...fresh(), phase: "round_over", round: 2n };
+  s = pinned.applyMove(s, { kind: "bet", amount: 100n }, "A"); // round 3, player A pinned
+  const [k1, k2] = secretsForRank(13); // 10
+  const [f5a, f5b] = secretsForRank(5); // 5
+  s = doDraw(s, k1, k2); // A 10
+  s = doDraw(s, k1, k2); // A 20
+  s = doDraw(s, f5a, f5b); // dealer 5
+  s = doDraw(s, f5a, f5b); // dealer 10
+  s = pinned.applyMove(s, { kind: "stand" }, "A");
+  const [n9a, n9b] = secretsForRank(9);
+  let guard = 0;
+  while (s.phase !== "round_over") {
+    if (guard++ > 50) throw new Error("loop");
+    s = pinned.applyMove(s, commitMove(n9a), "A");
+    s = pinned.applyMove(s, commitMove(n9b), "B");
+    s = pinned.applyMove(s, revealMove(n9a), "A");
+    s = pinned.applyMove(s, revealMove(n9b), "B");
+  }
+  // A is the player and won; A gains the bet even though default rotation says B is player on round 3.
+  assert.equal(s.balanceA, 1100n);
+  assert.equal(s.balanceB, 900n);
+});
+
+test("actorFor reports who owes the next move across phases", () => {
+  // round_over -> next player (default rotation, round 0 -> player A)
+  assert.equal(actorFor(fresh()), "A");
+  // draw_commit -> whoever has not committed
+  let s = placeBet(fresh()); // draw_commit
+  assert.equal(actorFor(s), "A");
+  s = proto.applyMove(s, commitMove(secret(1)), "A");
+  assert.equal(actorFor(s), "B");
+  s = proto.applyMove(s, commitMove(secret(2)), "B"); // -> draw_reveal
+  assert.equal(actorFor(s), "A");
+  s = proto.applyMove(s, revealMove(secret(1)), "A");
+  assert.equal(actorFor(s), "B");
+});
+
+test("actorFor honors a playerPartyFor override in the player phase", () => {
+  const pinned = new BlackjackProtocol(FIXED_PLAYER_A);
+  let s: BlackjackState = { ...fresh(), phase: "round_over", round: 2n };
+  s = pinned.applyMove(s, { kind: "bet", amount: 100n }, "A"); // round 3
+  // advance to player phase via the opening deal
+  const [k1, k2] = secretsForRank(13);
+  s = doDraw(s, k1, k2);
+  s = doDraw(s, k1, k2);
+  s = doDraw(s, k1, k2);
+  s = doDraw(s, k1, k2);
+  assert.equal(s.phase, "player");
+  assert.equal(actorFor(s, FIXED_PLAYER_A), "A"); // pinned: A acts on round 3
 });
 
 test("replaying the same moves yields identical encodeState", () => {
