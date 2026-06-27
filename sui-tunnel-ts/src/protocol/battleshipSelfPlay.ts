@@ -14,7 +14,7 @@ import {
   BattleshipState,
 } from "./battleship";
 import {
-  CELL_COUNT,
+  BATTLESHIP_CELL_COUNT,
   placeFleetRandom,
   placementsToBoard,
 } from "./battleshipFleet";
@@ -51,7 +51,7 @@ function openCellsFor(state: BattleshipState, shooter: Party): number[] {
     (shooter === "A" ? state.shotsAtB : state.shotsAtA).map((s) => s.cell),
   );
   const open: number[] = [];
-  for (let cell = 0; cell < CELL_COUNT; cell++)
+  for (let cell = 0; cell < BATTLESHIP_CELL_COUNT; cell++)
     if (!fired.has(cell)) open.push(cell);
   return open;
 }

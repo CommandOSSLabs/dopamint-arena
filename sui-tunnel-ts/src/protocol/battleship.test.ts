@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { toHex } from "../core/bytes";
 import { computeCommitment } from "../core/commitment";
 import {
-  CELL_COUNT,
+  BATTLESHIP_CELL_COUNT,
   FLEET_CELLS as FLEET_CELLS_T,
   placeFleetRandom,
   placementsToBoard,
@@ -21,7 +21,7 @@ const fresh = (): BattleshipState => proto.initialState(ctx);
 
 // A fixed 16-byte salt + a throwaway board commitment for commit-phase tests.
 const SALT = new Uint8Array(16).fill(7);
-const board = (): Uint8Array => new Uint8Array(CELL_COUNT);
+const board = (): Uint8Array => new Uint8Array(BATTLESHIP_CELL_COUNT);
 const commitMove = (b: Uint8Array): BattleshipMove => ({
   kind: "commit",
   commitment: computeCommitment(b, SALT),
@@ -144,7 +144,7 @@ function playToReveal(): {
     "B",
   );
   // A fires at every B ship cell in turn; each is a hit, so A keeps firing.
-  for (let cell = 0; cell < CELL_COUNT && s.phase === "playing"; cell++) {
+  for (let cell = 0; cell < BATTLESHIP_CELL_COUNT && s.phase === "playing"; cell++) {
     if (boardB[cell] !== 1) continue;
     s = proto.applyMove(s, { kind: "shoot", cell }, "A");
     s = proto.applyMove(s, { kind: "answer", isHit: true }, "B");
@@ -175,7 +175,7 @@ test("both honest reveals finalize a 17-hit win for A; stake shifts", () => {
 
 test("an illegal-fleet reveal is rejected (closes the legal-fleet hole)", () => {
   const { s } = playToReveal();
-  const shortBoard = new Uint8Array(CELL_COUNT); // zero ships
+  const shortBoard = new Uint8Array(BATTLESHIP_CELL_COUNT); // zero ships
   // commitment was for boardB, so this also fails the commitment check first;
   // build a matching commitment to isolate the legality failure:
   let s2 = fresh();
@@ -192,7 +192,7 @@ test("an illegal-fleet reveal is rejected (closes the legal-fleet hole)", () => 
   // force into reveal by resign-free path is awkward; assert legality directly:
   assert.throws(
     () =>
-      // @ts-expect-error reach the private check via a crafted revealBoards state
+      // reach the private check via a crafted revealBoards state
       proto["applyRevealBoard"](
         { ...s2, phase: "revealBoards" },
         shortBoard,

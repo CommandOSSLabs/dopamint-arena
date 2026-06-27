@@ -23,7 +23,7 @@ import {
   ProtocolContext,
   protocolDomain,
 } from "./Protocol";
-import { CELL_COUNT, FLEET_CELLS, isLegalBoard } from "./battleshipFleet";
+import { BATTLESHIP_CELL_COUNT, FLEET_CELLS, isLegalBoard } from "./battleshipFleet";
 
 export type BattleshipWinner = 0 | 1 | 2;
 export type BattleshipPhase =
@@ -88,14 +88,14 @@ function shotsAt(s: BattleshipState, defender: Party): BattleshipShotResult[] {
 }
 /** Open (un-fired) cells `shooter` may still target on the opponent's board. */
 function openCells(s: BattleshipState, shooter: Party): number {
-  return CELL_COUNT - shotsAt(s, otherParty(shooter)).length;
+  return BATTLESHIP_CELL_COUNT - shotsAt(s, otherParty(shooter)).length;
 }
 function assertShootable(
   s: BattleshipState,
   shooter: Party,
   cell: number,
 ): void {
-  if (!Number.isInteger(cell) || cell < 0 || cell >= CELL_COUNT) {
+  if (!Number.isInteger(cell) || cell < 0 || cell >= BATTLESHIP_CELL_COUNT) {
     throw new Error(`cell out of range: ${cell}`);
   }
   if (shotsAt(s, otherParty(shooter)).some((x) => x.cell === cell)) {
@@ -162,7 +162,7 @@ export class BattleshipProtocol implements Protocol<
       case "resign":
         return this.settle(state, by === "A" ? 2 : 1);
       default:
-        throw new Error(`move not handled yet: ${move.kind}`);
+        throw new Error(`move not handled yet: ${(move as { kind: string }).kind}`);
     }
   }
 
@@ -344,7 +344,7 @@ export class BattleshipProtocol implements Protocol<
       return null;
     const fired = new Set(shotsAt(state, otherParty(by)).map((x) => x.cell));
     const open: number[] = [];
-    for (let cell = 0; cell < CELL_COUNT; cell++)
+    for (let cell = 0; cell < BATTLESHIP_CELL_COUNT; cell++)
       if (!fired.has(cell)) open.push(cell);
     if (open.length === 0) return null;
     const idx = Math.min(open.length - 1, Math.floor(rng() * open.length));

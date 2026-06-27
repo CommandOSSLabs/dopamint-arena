@@ -11,7 +11,7 @@
  */
 
 export const BOARD_SIZE = 10;
-export const CELL_COUNT = BOARD_SIZE * BOARD_SIZE;
+export const BATTLESHIP_CELL_COUNT = BOARD_SIZE * BOARD_SIZE;
 
 export interface ShipSpec {
   /** Stable id, unique within the fleet (two size-3 ships need distinct ids). */
@@ -129,7 +129,7 @@ export function fleetIsLegal(placements: readonly Placement[]): boolean {
 export function placementsToBoard(
   placements: readonly Placement[],
 ): Uint8Array {
-  const board = new Uint8Array(CELL_COUNT);
+  const board = new Uint8Array(BATTLESHIP_CELL_COUNT);
   for (const p of placements) {
     const cells = placementCells(p);
     if (!cells) throw new Error(`placement ${p.id} is out of bounds`);
@@ -167,11 +167,11 @@ function orthoNeighbors(cell: number): number[] {
  * The non-touching rule means each 4-connected run is exactly one ship.
  */
 export function isLegalBoard(board: Uint8Array): boolean {
-  if (board.length !== CELL_COUNT) return false;
+  if (board.length !== BATTLESHIP_CELL_COUNT) return false;
   if (shipCellCount(board) !== FLEET_CELLS) return false;
 
   // No diagonal contact between any two ship cells (separates ships cleanly).
-  for (let cell = 0; cell < CELL_COUNT; cell++) {
+  for (let cell = 0; cell < BATTLESHIP_CELL_COUNT; cell++) {
     if (!board[cell]) continue;
     for (const d of diagonalNeighbors(cell)) {
       if (board[d]) return false;
@@ -179,9 +179,9 @@ export function isLegalBoard(board: Uint8Array): boolean {
   }
 
   // Flood-fill 4-connected components; each must be a straight line.
-  const seen = new Uint8Array(CELL_COUNT);
+  const seen = new Uint8Array(BATTLESHIP_CELL_COUNT);
   const sizes: number[] = [];
-  for (let start = 0; start < CELL_COUNT; start++) {
+  for (let start = 0; start < BATTLESHIP_CELL_COUNT; start++) {
     if (!board[start] || seen[start]) continue;
     const stack = [start];
     seen[start] = 1;
@@ -216,14 +216,14 @@ export function isLegalBoard(board: Uint8Array): boolean {
 export function placeFleetRandom(rng: () => number): Placement[] {
   for (let attempt = 0; attempt < 200; attempt++) {
     const placements: Placement[] = [];
-    const blocked = new Uint8Array(CELL_COUNT); // ship cells + their 8-neighborhood
+    const blocked = new Uint8Array(BATTLESHIP_CELL_COUNT); // ship cells + their 8-neighborhood
     let ok = true;
 
     for (const spec of FLEET) {
       let placed = false;
       for (let tries = 0; tries < 200 && !placed; tries++) {
         const orient: Orientation = rng() < 0.5 ? "H" : "V";
-        const cell = Math.floor(rng() * CELL_COUNT);
+        const cell = Math.floor(rng() * BATTLESHIP_CELL_COUNT);
         const cells = placementCells({ id: spec.id, cell, orient });
         if (!cells) continue;
         if (cells.some((c) => blocked[c])) continue;

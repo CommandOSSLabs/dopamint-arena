@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { CELL_COUNT } from "./battleshipFleet";
+import { BATTLESHIP_CELL_COUNT } from "./battleshipFleet";
 import { BattleshipMove } from "./battleship";
 import { battleshipMoveCodec } from "./battleshipCodec";
 
@@ -12,7 +12,7 @@ function roundTrip(m: BattleshipMove): BattleshipMove {
 
 test("every move round-trips through the codec", () => {
   const commitment = new Uint8Array(32).fill(9);
-  const board = new Uint8Array(CELL_COUNT).fill(1);
+  const board = new Uint8Array(BATTLESHIP_CELL_COUNT).fill(1);
   const salt = new Uint8Array(16).fill(3);
 
   assert.deepEqual(roundTrip({ kind: "commit", commitment }), {

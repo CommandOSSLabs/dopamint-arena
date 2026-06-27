@@ -17,3 +17,7 @@ export * from "./apiCredits";
 export * from "./multiGameBombIt";
 export * from "./quantumPokerCodec";
 export * from "./quantumPokerPersona";
+export * from "./battleship";
+export * from "./battleshipCodec";
+export * from "./battleshipFleet";
+export * from "./battleshipSelfPlay";
