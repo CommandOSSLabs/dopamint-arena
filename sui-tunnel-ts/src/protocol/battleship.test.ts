@@ -84,10 +84,20 @@ test("a miss passes the turn and pipelines the defender's return shot", () => {
   s = proto.applyMove(s, { kind: "answer", isHit: false, next: 9 }, "B");
   assert.equal(s.turn, "B");
   assert.deepEqual(s.pendingShot, { by: "B", cell: 9 });
-  // B may not pipeline a shot at a cell B already fired at
-  s = proto.applyMove(s, { kind: "answer", isHit: false, next: 9 }, "A"); // A answers B's shot at 9 (miss), fires next
-  // now A re-fires; ensure no-reshoot via pipeline is enforced elsewhere
+  // A answers B's shot at 9 (miss) and pipelines a return shot at a new cell
+  s = proto.applyMove(s, { kind: "answer", isHit: false, next: 3 }, "A");
   assert.equal(s.turn, "A");
+});
+
+test("a pipelined next re-shooting an already-fired cell is rejected", () => {
+  let s = opened();
+  s = proto.applyMove(s, { kind: "shoot", cell: 5 }, "A"); // A fires at 5
+  s = proto.applyMove(s, { kind: "answer", isHit: false, next: 9 }, "B"); // B miss, fires at 9
+  // pendingShot = { by: B, cell: 9 }; A must answer; A pipelining next:5 re-shoots its own prior cell
+  assert.throws(
+    () => proto.applyMove(s, { kind: "answer", isHit: false, next: 5 }, "A"),
+    /already fired/,
+  );
 });
 
 test("the 17th hit ends play and enters revealBoards", () => {
