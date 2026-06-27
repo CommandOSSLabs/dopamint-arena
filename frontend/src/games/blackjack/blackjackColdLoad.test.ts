@@ -98,7 +98,9 @@ test("blackjack cold-load: rebuilt seat keeps asymmetric balances and co-signs b
   }
   const spState = sp.state as never as BlackjackState;
   assert.ok(
-    sp.latest && spState.phase === "player" && actorFor(sp.state as never) === "A",
+    sp.latest &&
+      spState.phase === "player" &&
+      actorFor(sp.state as never) === "A",
     "drove blackjack to a checkpoint where seat A plays next (player phase)",
   );
   // Asymmetric split survived into the checkpoint (the two seats funded 300/700).
@@ -182,9 +184,10 @@ test("blackjack cold-load: rebuilt seat keeps asymmetric balances and co-signs b
     tunnel.latest!.update.partyBBalance,
     sp.latest!.update.partyBBalance,
   );
-  (
-    tunnel as never as { propose(m: BlackjackMove, ts: bigint): void }
-  ).propose(move, MOVE_TS);
+  (tunnel as never as { propose(m: BlackjackMove, ts: bigint): void }).propose(
+    move,
+    MOVE_TS,
+  );
 
   assert.deepEqual(
     Uint8Array.from(sent[0]),

@@ -619,15 +619,26 @@ export function useBlackjackBot(): BlackjackBotGame {
               // (shouldn't happen mid-game, but treat as terminal).
               const cur = tunnel.state;
               const by = actorFor(cur, FIXED_PLAYER_A);
-              if (!by) { stopTimer(); resolve(); return; }
+              if (!by) {
+                stopTimer();
+                resolve();
+                return;
+              }
               // Drive the step loop per SDK phase:
               //   - Manual player's hit/stand: wait for pendingMoveRef.
               //   - Bet (round_over): user-driven via the bet selector (auto reuses last bet).
               //   - commit/reveal/dealer turns: auto-driven by the kit bot, paced in manual mode.
               let move: BlackjackMove | null;
-              if (!autoRef.current && cur.phase === "player" && by === FIXED_PLAYER_A(cur.round)) {
+              if (
+                !autoRef.current &&
+                cur.phase === "player" &&
+                by === FIXED_PLAYER_A(cur.round)
+              ) {
                 // Manual: wait for the human's Hit/Stand.
-                if (!pendingMoveRef.current) { flushHeartbeat(tunnelId, false); return; }
+                if (!pendingMoveRef.current) {
+                  flushHeartbeat(tunnelId, false);
+                  return;
+                }
                 move = pendingMoveRef.current;
                 pendingMoveRef.current = null;
               } else if (cur.phase === "round_over") {
@@ -635,7 +646,8 @@ export function useBlackjackBot(): BlackjackBotGame {
                 move = bjBetMove(betRef.current, cur);
               } else {
                 // commit / reveal / dealer-turn / auto player: paced in manual mode, instant in auto.
-                if (!autoRef.current && Date.now() - lastAutoStepAt < STEP_MS) return;
+                if (!autoRef.current && Date.now() - lastAutoStepAt < STEP_MS)
+                  return;
                 lastAutoStepAt = Date.now();
                 move = botBySeat[by].plan(cur);
               }
