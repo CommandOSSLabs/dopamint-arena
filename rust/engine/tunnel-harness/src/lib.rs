@@ -11,8 +11,8 @@ pub use protocol::Protocol;
 
 pub mod frame;
 pub use frame::{
-    AckFrame, BcsFrameCodec, CodecError, FrameCodec, JsonFrameCodec, MoveFrame, TunnelFrame,
-    PostcardFrameCodec, WireSeat,
+    AckFrame, BcsFrameCodec, CodecError, FrameCodec, JsonFrameCodec, MoveFrame, PostcardFrameCodec,
+    TunnelFrame, WireSeat,
 };
 
 pub mod signer;

@@ -265,13 +265,7 @@ mod tests {
     fn fresh_keys_runner_conserves_totals() {
         // Fresh per-match keys don't change gameplay (cards derive from round),
         // so the deterministic gate holds: exactly 143*N moves, 75982*N bytes.
-        let out = run_fresh_keys(
-            2,
-            3600,
-            Some(6),
-            CardMode::Deterministic,
-            CodecKind::Json,
-        );
+        let out = run_fresh_keys(2, 3600, Some(6), CardMode::Deterministic, CodecKind::Json);
         assert_eq!(out.matches_claimed, 6);
         assert_eq!(out.tunnels_settled, 6);
         assert_eq!(out.moves, 143 * 6);
@@ -280,20 +274,8 @@ mod tests {
 
     #[test]
     fn optimized_runner_matches_simple_totals() {
-        let simple = run_simple(
-            2,
-            3600,
-            Some(8),
-            CardMode::Deterministic,
-            CodecKind::Json,
-        );
-        let optimized = run_optimized(
-            2,
-            3600,
-            Some(8),
-            CardMode::Deterministic,
-            CodecKind::Json,
-        );
+        let simple = run_simple(2, 3600, Some(8), CardMode::Deterministic, CodecKind::Json);
+        let optimized = run_optimized(2, 3600, Some(8), CardMode::Deterministic, CodecKind::Json);
         assert_eq!(optimized.moves, simple.moves);
         assert_eq!(optimized.bytes, simple.bytes);
         assert_eq!(optimized.tunnels_settled, simple.tunnels_settled);
@@ -309,13 +291,7 @@ mod tests {
     #[test]
     fn single_worker_fixed_matches_are_deterministic() {
         // matches-bounded: exactly N matches => 143*N moves, 75982*N bytes, N tunnels.
-        let out = run_simple(
-            1,
-            3600,
-            Some(5),
-            CardMode::Deterministic,
-            CodecKind::Json,
-        );
+        let out = run_simple(1, 3600, Some(5), CardMode::Deterministic, CodecKind::Json);
         assert_eq!(out.matches_claimed, 5);
         assert_eq!(out.tunnels_settled, 5);
         assert_eq!(out.moves, 143 * 5);
@@ -325,13 +301,7 @@ mod tests {
     #[test]
     fn multi_worker_conserves_totals() {
         // Total work is fixed by --matches regardless of worker count.
-        let out = run_simple(
-            4,
-            3600,
-            Some(20),
-            CardMode::Deterministic,
-            CodecKind::Json,
-        );
+        let out = run_simple(4, 3600, Some(20), CardMode::Deterministic, CodecKind::Json);
         assert_eq!(out.matches_claimed, 20);
         assert_eq!(out.tunnels_settled, 20);
         assert_eq!(out.moves, 143 * 20);
@@ -358,13 +328,7 @@ mod tests {
 
     #[test]
     fn deterministic_mode_is_constant_143() {
-        let out = run_simple(
-            2,
-            3600,
-            Some(50),
-            CardMode::Deterministic,
-            CodecKind::Json,
-        );
+        let out = run_simple(2, 3600, Some(50), CardMode::Deterministic, CodecKind::Json);
         assert_eq!(out.moves, 143 * 50);
         assert_eq!(out.moves_dist.min, 143.0);
         assert_eq!(out.moves_dist.peak, 143.0);
@@ -372,20 +336,8 @@ mod tests {
 
     #[test]
     fn codec_choice_is_consensus_invisible() {
-        let json = run_simple(
-            2,
-            3600,
-            Some(8),
-            CardMode::Deterministic,
-            CodecKind::Json,
-        );
-        let bcs = run_simple(
-            2,
-            3600,
-            Some(8),
-            CardMode::Deterministic,
-            CodecKind::Bcs,
-        );
+        let json = run_simple(2, 3600, Some(8), CardMode::Deterministic, CodecKind::Json);
+        let bcs = run_simple(2, 3600, Some(8), CardMode::Deterministic, CodecKind::Bcs);
         let postcard = run_simple(
             2,
             3600,
