@@ -1,6 +1,6 @@
 //! Shared value types for the harness seams.
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Seat {
     A,
     B,
@@ -36,9 +36,9 @@ pub struct TunnelContext {
     pub seat: Seat,
 }
 
-/// Context handed to `Policy::plan_move`.
+/// Context handed to `MoveStrategy::plan_move`.
 #[derive(Clone, Debug)]
-pub struct PolicyContext {
+pub struct MoveStrategyContext {
     pub tunnel_id: String,
     pub seat: Seat,
 }

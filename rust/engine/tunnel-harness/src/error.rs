@@ -4,9 +4,9 @@
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProtocolError(pub String);
 
-/// A transport failure on a `Channel`.
+/// A transport failure on a `FrameTransport`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ChannelError {
+pub enum FrameTransportError {
     Closed,
     Transport(String),
 }
@@ -15,11 +15,11 @@ pub enum ChannelError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnchorError(pub String);
 
-/// Anything that can end a driver's run.
+/// Anything that can end a party driver's run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HarnessError {
     Protocol(ProtocolError),
-    Channel(ChannelError),
+    FrameTransport(FrameTransportError),
     Anchor(AnchorError),
     /// A counterparty signature, hash, or balance check failed.
     Verification(String),
@@ -30,9 +30,9 @@ impl From<ProtocolError> for HarnessError {
         HarnessError::Protocol(e)
     }
 }
-impl From<ChannelError> for HarnessError {
-    fn from(e: ChannelError) -> Self {
-        HarnessError::Channel(e)
+impl From<FrameTransportError> for HarnessError {
+    fn from(e: FrameTransportError) -> Self {
+        HarnessError::FrameTransport(e)
     }
 }
 impl From<AnchorError> for HarnessError {

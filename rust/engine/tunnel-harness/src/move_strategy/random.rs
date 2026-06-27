@@ -1,19 +1,19 @@
-//! A generic random policy: works for ANY protocol that implements `sample_move`.
+//! A generic random move strategy for any protocol that implements `sample_move`.
 //! Uses a deterministic splitmix64-seeded rng so self-play runs reproduce.
 
-use super::Policy;
+use super::MoveStrategy;
+use crate::{MoveStrategyContext, Protocol, Seat};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use tunnel_harness::{PolicyContext, Protocol, Seat};
 
-pub struct RandomPolicy<P: Protocol> {
+pub struct RandomMoveStrategy<P: Protocol> {
     protocol: Arc<P>,
     state: AtomicU64,
 }
 
-impl<P: Protocol> RandomPolicy<P> {
-    pub fn new(protocol: Arc<P>, seed: u64) -> RandomPolicy<P> {
-        RandomPolicy {
+impl<P: Protocol> RandomMoveStrategy<P> {
+    pub fn new(protocol: Arc<P>, seed: u64) -> RandomMoveStrategy<P> {
+        RandomMoveStrategy {
             protocol,
             state: AtomicU64::new(seed),
         }
@@ -31,12 +31,12 @@ impl<P: Protocol> RandomPolicy<P> {
     }
 }
 
-impl<P: Protocol> Policy<P> for RandomPolicy<P> {
+impl<P: Protocol> MoveStrategy<P> for RandomMoveStrategy<P> {
     async fn plan_move(
         &self,
         state: &P::State,
         seat: Seat,
-        _ctx: &PolicyContext,
+        _ctx: &MoveStrategyContext,
     ) -> Option<P::Move> {
         let mut rng = || self.next_f64();
         self.protocol.sample_move(state, seat, &mut rng)

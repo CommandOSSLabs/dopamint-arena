@@ -1,35 +1,37 @@
-//! The per-seat async driver: plan -> propose -> send -> await ack, or recv ->
-//! handle -> send. Owns the IO (Channel) and the decision (Policy); the protocol
-//! transition + verification live in the sans-IO `TunnelSeat`.
+//! Drives one party asynchronously: plan -> propose -> send -> await ack, or
+//! recv -> handle -> send. Owns the IO (`FrameTransport`) and the decision
+//! (`MoveStrategy`); protocol transition and verification live in `PartyRuntime`.
 
-use crate::{Channel, Policy};
-use tunnel_harness::{Balances, HarnessError, PolicyContext, Protocol, Signer, TunnelSeat};
+use crate::{
+    Balances, FrameTransport, HarnessError, MoveStrategy, MoveStrategyContext, PartyRuntime,
+    Protocol, Signer,
+};
 
 pub struct DriverOutcome {
     pub moves: u64,
     pub final_balances: Balances,
 }
 
-pub struct AsyncSeatDriver<P: Protocol, Pol: Policy<P>, Ch: Channel, S: Signer> {
-    seat: TunnelSeat<P, S>,
-    policy: Pol,
-    channel: Ch,
+pub struct PartyDriver<P: Protocol, Pol: MoveStrategy<P>, Ch: FrameTransport, S: Signer> {
+    seat: PartyRuntime<P, S>,
+    move_strategy: Pol,
+    frame_transport: Ch,
 }
 
-impl<P: Protocol, Pol: Policy<P>, Ch: Channel, S: Signer> AsyncSeatDriver<P, Pol, Ch, S> {
-    pub fn new(seat: TunnelSeat<P, S>, policy: Pol, channel: Ch) -> Self {
-        AsyncSeatDriver {
+impl<P: Protocol, Pol: MoveStrategy<P>, Ch: FrameTransport, S: Signer> PartyDriver<P, Pol, Ch, S> {
+    pub fn new(seat: PartyRuntime<P, S>, move_strategy: Pol, frame_transport: Ch) -> Self {
+        PartyDriver {
             seat,
-            policy,
-            channel,
+            move_strategy,
+            frame_transport,
         }
     }
 
     /// Drive until terminal. `now` supplies monotonically increasing timestamps
     /// (inject a clock in tests).
     ///
-    /// `max_moves` is a per-seat runaway guard, NOT a coordinated stop: the only
-    /// safe termination is `is_terminal`, on which both seats break together. If
+    /// `max_moves` is a per-party runaway guard, NOT a coordinated stop: the only
+    /// safe termination is `is_terminal`, on which both parties break together. If
     /// `max_moves` trips mid-match it can leave the peer blocked in `recv`, so set
     /// it high enough to never trip in normal play and keep it equal across seats.
     pub async fn run(
@@ -37,8 +39,8 @@ impl<P: Protocol, Pol: Policy<P>, Ch: Channel, S: Signer> AsyncSeatDriver<P, Pol
         max_moves: u64,
         mut now: impl FnMut() -> u64 + Send,
     ) -> Result<DriverOutcome, HarnessError> {
-        let ctx = PolicyContext {
-            tunnel_id: String::new(), // tunnel_id is not needed by generic policies
+        let ctx = MoveStrategyContext {
+            tunnel_id: String::new(), // generic strategies do not need tunnel_id
             seat: self.seat.seat(),
         };
         let our_seat = self.seat.seat();
@@ -49,19 +51,19 @@ impl<P: Protocol, Pol: Policy<P>, Ch: Channel, S: Signer> AsyncSeatDriver<P, Pol
                 break;
             }
 
-            // Our turn? The policy returns Some only when it is.
+            // Our turn? The strategy returns Some only when it is.
             if let Some(mv) = self
-                .policy
+                .move_strategy
                 .plan_move(self.seat.state(), our_seat, &ctx)
                 .await
             {
                 let frame = self.seat.propose(mv, now())?;
-                self.channel.send(frame).await?;
-                match self.channel.recv().await? {
+                self.frame_transport.send(frame).await?;
+                match self.frame_transport.recv().await? {
                     Some(bytes) => {
                         let out = self.seat.handle_frame(&bytes)?;
                         for f in out {
-                            self.channel.send(f).await?;
+                            self.frame_transport.send(f).await?;
                         }
                         moves += 1;
                     }
@@ -71,11 +73,11 @@ impl<P: Protocol, Pol: Policy<P>, Ch: Channel, S: Signer> AsyncSeatDriver<P, Pol
             }
 
             // Not our turn: receive the opponent's MOVE, verify+apply, send the ACK.
-            match self.channel.recv().await? {
+            match self.frame_transport.recv().await? {
                 Some(bytes) => {
                     let out = self.seat.handle_frame(&bytes)?;
                     for f in out {
-                        self.channel.send(f).await?;
+                        self.frame_transport.send(f).await?;
                     }
                     moves += 1;
                 }

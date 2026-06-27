@@ -27,15 +27,17 @@ signer) and the concurrency runtime — never the protocol rules.
 
 ## Decision
 
-Both fleets drive **one sans-IO protocol core** (the synchronous, pure,
-transport-free state machine of ADR-0021). They differ only in:
+Both fleets drive **one shared Rust tunnel harness**. The harness owns the
+protocol core, party runtime, frame transport seam, move strategy seam, signer
+seam, and generic party driver. The fleets differ only in:
 
-- **Seam implementations** — Channel (network socket vs in-process), Policy
-  (strategy/remote vs local sampler), Signer (managed key vs local ed25519).
+- **Seam implementations** — FrameTransport (network socket vs in-process),
+  MoveStrategy (strategy/remote vs local sampler), Signer (managed key vs local
+  ed25519).
 - **Concurrency runtime** — the serving fleet uses an **async, tokio-based
-  driver** where `await` is justified by real network IO; the bench fleet uses a
-  **synchronous rayon runner** where there is no IO and parallelism across
-  independent tunnels is the goal.
+  supervisor** around the harness `PartyDriver` where `await` is justified by
+  real network IO; the bench fleet uses a **synchronous rayon runner** where
+  there is no IO and parallelism across independent tunnels is the goal.
 
 Async is confined to the edges; the shared core stays synchronous so both
 runtimes can drive it.
@@ -44,10 +46,12 @@ runtimes can drive it.
 
 - Bench numbers are meaningful: the hot-path logic under test is the same code
   that serves users.
-- We maintain two thin runtimes (tokio driver, rayon runner) over one core + one
-  set of seam traits — the cost of honest benchmarking.
+- We maintain two thin fleet runtimes (tokio supervisor, rayon runner) over one
+  `tunnel-harness` API — the cost of honest
+  benchmarking.
 - We commit to never doing IO inside the core; external/oracle/strategy inputs
-  enter through the Policy seam as finished move data (consistent with ADR-0017).
+  enter through the MoveStrategy seam as finished move data (consistent with
+  ADR-0017).
 - `tools/rustbench`'s forked engine becomes redundant and collapses onto the
   shared core (follow-up, not this ADR).
 - We explicitly do **not** put a server on the per-move path for the bench

@@ -83,7 +83,12 @@ _why_ survives after the people involved have moved on.
   implementations and runtime. Supersedes ADR-0001's self-play hot path.
 - [0021](0021-sans-io-synchronous-protocol-core.md) — Adopt sans-IO: the protocol
   core is synchronous and pure (no futures in the transition); async is confined
-  to the IO seams (Channel, Policy, future remote-KMS Signer). Required by 0020.
+  to the IO seams (FrameTransport, MoveStrategy, future remote-KMS Signer).
+  Required by 0020.
+- [0022](0022-canonical-protocol-id-naming.md) — Canonical protocol IDs use
+  snake_case segments separated by dots and an explicit `.vN` suffix; `.series`
+  replaces new `.multi` wrapper IDs, with legacy aliases recorded in the port
+  inventory.
 
 > Numbers 0004 (multiplayer experience lane) and 0006 have no record file: 0004
 > predates this directory (still referenced from code/specs), and 0006 was

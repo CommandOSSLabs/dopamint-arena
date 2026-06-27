@@ -1,10 +1,9 @@
 //! Runs many serving units concurrently on the tokio runtime — one task per unit —
 //! and aggregates a Metrics summary. No shared mutable state across tasks.
 
-use crate::DriverOutcome;
 use std::future::Future;
 use std::pin::Pin;
-use tunnel_harness::HarnessError;
+use tunnel_harness::{DriverOutcome, HarnessError};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Metrics {

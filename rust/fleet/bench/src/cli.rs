@@ -41,7 +41,7 @@ pub struct BenchOpts {
     disable_help_flag = false,
     about = "Run the local off-chain blackjack tunnel fleet benchmark.",
     long_about = "Run the local off-chain blackjack tunnel fleet benchmark.\n\n\
-The bench drives two in-process TunnelSeat instances per match and reports \
+The bench drives two in-process PartyRuntime instances per match and reports \
 throughput, frame bytes, match counts, and resource usage. It is CPU-local: \
 no relay, no chain submission, and no network transport are used.",
     after_help = "Examples:\n  \
@@ -85,9 +85,13 @@ struct Raw {
     offchain: bool,
     #[arg(long, hide = true)]
     onchain: bool,
-    /// Channel transport. Only `local` is implemented in this synchronous bench.
-    #[arg(long, default_value = "local", value_name = "local")]
-    channel: String,
+    /// Frame transport. Only `local` is implemented in this synchronous bench.
+    #[arg(
+        long = "frame-transport",
+        default_value = "local",
+        value_name = "local"
+    )]
+    frame_transport: String,
     /// Game protocol. Only `blackjack` is implemented by fleet-bench.
     #[arg(long, default_value = "blackjack", value_name = "blackjack")]
     game: String,
@@ -117,10 +121,10 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
     if raw.onchain {
         return Err("--onchain is not supported in this build (see Plan 6)".to_string());
     }
-    if raw.channel != "local" {
+    if raw.frame_transport != "local" {
         return Err(format!(
-            "--channel {} is not supported in this build; only 'local' (see Plan 5)",
-            raw.channel
+            "--frame-transport {} is not supported in this build; only 'local' (see Plan 5)",
+            raw.frame_transport
         ));
     }
     if raw.game != "blackjack" {
@@ -189,7 +193,14 @@ mod tests {
 
     #[test]
     fn parses_the_headline_bun_command_line() {
-        let o = parse_v(&["--offchain", "--channel", "local", "--game", "blackjack"]).unwrap();
+        let o = parse_v(&[
+            "--offchain",
+            "--frame-transport",
+            "local",
+            "--game",
+            "blackjack",
+        ])
+        .unwrap();
         assert_eq!(o.duration_secs, 15);
         assert_eq!(o.matches, None);
         assert_eq!(o.runner, Runner::Both);
@@ -252,7 +263,7 @@ mod tests {
     #[test]
     fn onchain_and_relay_are_rejected() {
         assert!(parse_v(&["--onchain"]).is_err());
-        assert!(parse_v(&["--channel", "relay"]).is_err());
+        assert!(parse_v(&["--frame-transport", "relay"]).is_err());
         assert!(parse_v(&["--game", "poker"]).is_err());
     }
 

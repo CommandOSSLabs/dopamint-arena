@@ -1,16 +1,16 @@
 //! The off-chain tunnel frame and its pluggable wire codec.
 //!
-//! `TunnelFrame<M>` is the generic state-channel envelope exchanged between two
+//! `TunnelFrame<M>` is the generic state-frame envelope exchanged between two
 //! seats (nonce, agreed balances, state hash, co-signatures) carrying a single
-//! protocol-specific `move: M`. The core (`TunnelSeat`) builds a `TunnelFrame`
+//! protocol-specific `move: M`. The core (`PartyRuntime`) builds a `TunnelFrame`
 //! and hands it to an injected `FrameCodec`, so the state machine is wire-agnostic;
-//! the `Channel` only ever moves the resulting opaque bytes.
+//! the `FrameTransport` only ever moves the resulting opaque bytes.
 //!
 //! The reference `JsonFrameCodec` is byte-identical to
 //! `sui-tunnel-ts/src/core/distributedFrame.ts`: u64 fields are decimal strings,
 //! byte arrays are lowercase hex, and the per-game `move` sub-object is produced by
 //! the move's serde implementation. That parity is what lets a Rust bot and a TS player
-//! interoperate over the same channel. The SIGNED bytes are the tunnel-core
+//! interoperate over the same frame transport. The SIGNED bytes are the tunnel-core
 //! `StateUpdate` (produced separately and frozen) — this codec is only the envelope.
 
 use std::fmt;
@@ -80,7 +80,7 @@ pub struct AckFrame {
     pub sig_responder: [u8; 64],
 }
 
-/// The two off-chain frames exchanged over a tunnel channel.
+/// The two off-chain frames exchanged over a tunnel frame transport.
 #[derive(Serialize, Deserialize)]
 pub enum TunnelFrame<M> {
     Move(MoveFrame<M>),
@@ -115,8 +115,8 @@ impl From<CodecError> for HarnessError {
     }
 }
 
-/// Whole-frame wire codec, injected into `TunnelSeat` so the core is wire-agnostic.
-/// Both ends of a channel MUST use a compatible codec; `id()` lets a receiver
+/// Whole-frame wire codec, injected into `PartyRuntime` so the core is wire-agnostic.
+/// Both ends of a frame transport MUST use a compatible codec; `id()` lets a receiver
 /// select/validate the right one.
 pub trait FrameCodec<M>: Send + Sync {
     /// Stable identifier for this wire format (e.g. "json.distributed.v1").

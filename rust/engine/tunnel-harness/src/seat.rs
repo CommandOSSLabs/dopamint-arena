@@ -4,9 +4,9 @@
 //! only when the co-signing ACK arrives. No IO, no async, no ambient clock —
 //! timestamps are injected. One seat per machine; two wired together self-play.
 //!
-//! CONTRACT: the core assumes a turn-disciplined driver — at most one seat has an
+//! CONTRACT: the core assumes a turn-disciplined driver — at most one party has an
 //! outstanding `propose` at a time. There is no tie-break for a simultaneous
-//! cross-propose: if both seats propose at once, each rejects the other's MOVE
+//! cross-propose: if both parties propose at once, each rejects the other's MOVE
 //! (`expected ack, got move`) while holding its own pending proposal, so the
 //! exchange cannot complete. Drivers MUST gate proposing on whose turn it is
 //! (e.g. the protocol's `actor_for`), which is what the serve/bench fleets do.
@@ -22,7 +22,7 @@ struct Pending<P: Protocol> {
     nonce: u64,
 }
 
-pub struct TunnelSeat<P: Protocol, S: Signer, C: FrameCodec<P::Move> = JsonFrameCodec> {
+pub struct PartyRuntime<P: Protocol, S: Signer, C: FrameCodec<P::Move> = JsonFrameCodec> {
     protocol: P,
     signer: S,
     codec: C,
@@ -34,16 +34,15 @@ pub struct TunnelSeat<P: Protocol, S: Signer, C: FrameCodec<P::Move> = JsonFrame
     pending: Option<Pending<P>>,
 }
 
-impl<P: Protocol, S: Signer, C: FrameCodec<P::Move> + Default> TunnelSeat<P, S, C> {
-    /// Build a seat using the default wire codec (`JsonFrameCodec`).
+impl<P: Protocol, S: Signer, C: FrameCodec<P::Move> + Default> PartyRuntime<P, S, C> {
+    /// Build a party runtime using the default wire codec (`JsonFrameCodec`).
     pub fn new(protocol: P, signer: S, opponent_pk: [u8; 32], ctx: TunnelContext) -> Self {
         Self::with_codec(protocol, signer, C::default(), opponent_pk, ctx)
     }
 }
 
-impl<P: Protocol, S: Signer, C: FrameCodec<P::Move>> TunnelSeat<P, S, C> {
-    /// Build a seat with an explicit wire codec, so callers can plug in a codec
-    /// other than the default JSON one.
+impl<P: Protocol, S: Signer, C: FrameCodec<P::Move>> PartyRuntime<P, S, C> {
+    /// Build a party runtime with an explicit wire codec.
     pub fn with_codec(
         protocol: P,
         signer: S,
@@ -52,7 +51,7 @@ impl<P: Protocol, S: Signer, C: FrameCodec<P::Move>> TunnelSeat<P, S, C> {
         ctx: TunnelContext,
     ) -> Self {
         let state = protocol.initial_state(&ctx);
-        TunnelSeat {
+        PartyRuntime {
             protocol,
             signer,
             codec,
@@ -274,7 +273,10 @@ mod tests {
         }
     }
 
-    fn seats() -> (TunnelSeat<Tiny, LocalSigner>, TunnelSeat<Tiny, LocalSigner>) {
+    fn seats() -> (
+        PartyRuntime<Tiny, LocalSigner>,
+        PartyRuntime<Tiny, LocalSigner>,
+    ) {
         let sa: [u8; 32] = std::array::from_fn(|i| (i + 1) as u8);
         let sb: [u8; 32] = std::array::from_fn(|i| (i + 33) as u8);
         let pka = keypair_from_secret(&sa).public_key();
@@ -284,13 +286,13 @@ mod tests {
             initial: Balances { a: 5, b: 5 },
             seat,
         };
-        let a = TunnelSeat::new(
+        let a = PartyRuntime::new(
             Tiny { cap: 4 },
             LocalSigner::from_secret(&sa),
             pkb,
             ctx(Seat::A),
         );
-        let b = TunnelSeat::new(
+        let b = PartyRuntime::new(
             Tiny { cap: 4 },
             LocalSigner::from_secret(&sb),
             pka,
@@ -350,10 +352,10 @@ mod tests {
         let (mut a, _b) = seats();
         let mv_frame = a.propose(TinyMove, 1).unwrap();
         // Feeding our own MOVE back to us: by == our seat.
-        let mut fresh: TunnelSeat<Tiny, LocalSigner> = {
+        let mut fresh: PartyRuntime<Tiny, LocalSigner> = {
             let sa: [u8; 32] = std::array::from_fn(|i| (i + 1) as u8);
             let pka = keypair_from_secret(&sa).public_key();
-            TunnelSeat::new(
+            PartyRuntime::new(
                 Tiny { cap: 4 },
                 LocalSigner::from_secret(&sa),
                 pka,

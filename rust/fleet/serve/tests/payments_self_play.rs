@@ -1,10 +1,12 @@
 //! The payments protocol drives end-to-end through the same async driver as
 //! blackjack — proving the seams are protocol-agnostic.
 
-use fleet_serve::{AsyncSeatDriver, InMemoryChannel, RandomPolicy};
 use std::sync::Arc;
 use tunnel_core::crypto::keypair_from_secret;
-use tunnel_harness::{Balances, LocalSigner, Seat, TunnelContext, TunnelSeat};
+use tunnel_harness::{
+    Balances, InMemoryFrameTransport, LocalSigner, PartyDriver, PartyRuntime, RandomMoveStrategy,
+    Seat, TunnelContext,
+};
 use tunnel_payments::Payments;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -13,31 +15,31 @@ async fn payments_self_play_conserves_total() {
     let sb: [u8; 32] = std::array::from_fn(|i| (i + 33) as u8);
     let pk_a = keypair_from_secret(&sa).public_key();
     let pk_b = keypair_from_secret(&sb).public_key();
-    let (ch_a, ch_b) = InMemoryChannel::pair();
+    let (ch_a, ch_b) = InMemoryFrameTransport::pair();
 
     let ctx = |seat| TunnelContext {
         tunnel_id: "0xcd".into(),
         initial: Balances { a: 100, b: 100 },
         seat,
     };
-    let driver_a = AsyncSeatDriver::new(
-        TunnelSeat::new(
+    let driver_a = PartyDriver::new(
+        PartyRuntime::new(
             Payments { max_transfers: 20 },
             LocalSigner::from_secret(&sa),
             pk_b,
             ctx(Seat::A),
         ),
-        RandomPolicy::new(Arc::new(Payments { max_transfers: 20 }), 1),
+        RandomMoveStrategy::new(Arc::new(Payments { max_transfers: 20 }), 1),
         ch_a,
     );
-    let driver_b = AsyncSeatDriver::new(
-        TunnelSeat::new(
+    let driver_b = PartyDriver::new(
+        PartyRuntime::new(
             Payments { max_transfers: 20 },
             LocalSigner::from_secret(&sb),
             pk_a,
             ctx(Seat::B),
         ),
-        RandomPolicy::new(Arc::new(Payments { max_transfers: 20 }), 2),
+        RandomMoveStrategy::new(Arc::new(Payments { max_transfers: 20 }), 2),
         ch_b,
     );
 

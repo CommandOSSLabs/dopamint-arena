@@ -1,6 +1,6 @@
 //! The Protocol seam: rules over a tunnel (Payments, Blackjack, ...). Sans-IO:
 //! every method is synchronous and pure — no futures, no IO, no ambient clock/RNG.
-//! Deciding a move (which may be IO-bound) is the Policy seam's job, not this one.
+//! Deciding a move (which may be IO-bound) is the MoveStrategy seam's job, not this one.
 
 use crate::{Balances, ProtocolError, Seat, TunnelContext};
 use serde::de::DeserializeOwned;
@@ -34,7 +34,7 @@ pub trait Protocol: Send + Sync + 'static {
     fn is_terminal(&self, s: &Self::State) -> bool;
 
     /// Optional: sample a legal move for `seat`, or None. Only the protocol knows its
-    /// own move space, so this is what lets a generic policy drive any protocol.
+    /// own move space, so this is what lets a generic move strategy drive any protocol.
     fn sample_move(
         &self,
         _s: &Self::State,

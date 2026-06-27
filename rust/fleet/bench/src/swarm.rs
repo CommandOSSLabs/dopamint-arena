@@ -7,7 +7,7 @@
 //! the time-bounded throughput mode.
 
 use crate::cli::CodecKind;
-use crate::driver::{play_match_seeded, SeatKit};
+use crate::party_driver::{play_match_seeded, SeatKit};
 use crate::stats::{summarize, Distribution};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -46,7 +46,7 @@ fn play_match_for(
     card_seed: Option<u64>,
     kit: &SeatKit,
     tunnel_id: &str,
-) -> crate::driver::MatchResult {
+) -> crate::party_driver::MatchResult {
     match codec {
         CodecKind::Json => play_match_seeded::<JsonFrameCodec>(
             card_seed, kit, tunnel_id, 200, 200, CREATED_AT, MAX_MOVES,

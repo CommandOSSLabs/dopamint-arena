@@ -3,7 +3,15 @@ resolver = "2"
 members = [
   "backend/tunnel-manager", "backend/explorer", "backend/shared",
   "rust/engine/tunnel-core", "rust/engine/tunnel-harness",
-  "rust/protocols/blackjack", "rust/protocols/payments",
+  "rust/protocols/api-credits", "rust/protocols/blackjack",
+  "rust/protocols/battleship",
+  "rust/protocols/bomb-it",
+  "rust/protocols/caro",
+  "rust/protocols/chat", "rust/protocols/payments",
+  "rust/protocols/cross",
+  "rust/protocols/quantum-poker",
+  "rust/protocols/tic-tac-toe",
+  "rust/protocols/world-canvas",
   "rust/fleet/serve", "rust/fleet/bench",
 ]
 

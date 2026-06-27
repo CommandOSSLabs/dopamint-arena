@@ -1,5 +1,5 @@
-//! The synchronous in-process match driver: two `TunnelSeat`s pumped against each
-//! other with no channel and no async runtime. Mirrors loadbench's `playMatch`
+//! The synchronous in-process match driver: two `PartyRuntime`s pumped against each
+//! other with no frame transport and no async runtime. Mirrors loadbench's `playMatch`
 //! (basic-strategy bots, then a root-anchored cooperative settlement). `bytes`
 //! counts MOVE/ACK frame bytes only — the determinism gate (143*N / 75982*N).
 
@@ -7,9 +7,9 @@ use std::time::Instant;
 use tunnel_blackjack::{plan, BjMove, Blackjack};
 use tunnel_core::crypto::{blake2b256, keypair_from_secret};
 use tunnel_core::wire::{serialize_settlement_with_root, Settlement};
-use tunnel_harness::{Balances, FrameCodec, LocalSigner, Seat, TunnelContext, TunnelSeat};
+use tunnel_harness::{Balances, FrameCodec, LocalSigner, PartyRuntime, Seat, TunnelContext};
 
-type Seats<C> = TunnelSeat<Blackjack, LocalSigner, C>;
+type Seats<C> = PartyRuntime<Blackjack, LocalSigner, C>;
 
 pub struct MatchResult {
     pub moves: u64,
@@ -97,13 +97,13 @@ pub fn play_match_seeded<C: FrameCodec<BjMove> + Default>(
         },
         seat,
     };
-    let mut a: Seats<C> = TunnelSeat::new(
+    let mut a: Seats<C> = PartyRuntime::new(
         Blackjack,
         LocalSigner::from_secret(&kit.secret_a),
         kit.pk_b,
         ctx(Seat::A),
     );
-    let mut b: Seats<C> = TunnelSeat::new(
+    let mut b: Seats<C> = PartyRuntime::new(
         Blackjack,
         LocalSigner::from_secret(&kit.secret_b),
         kit.pk_a,

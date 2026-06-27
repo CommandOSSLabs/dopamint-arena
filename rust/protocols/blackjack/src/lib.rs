@@ -8,6 +8,9 @@ use tunnel_core::codec::u64_to_be_bytes;
 use tunnel_core::crypto::blake2b256;
 use tunnel_harness::Seat;
 
+pub mod duel;
+pub mod v2;
+
 pub type Party = Seat;
 
 pub const MIN_BET: u64 = 25;

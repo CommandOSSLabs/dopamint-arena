@@ -1,5 +1,6 @@
-//! Payments as a tunnel Protocol: the current actor transfers a small amount to the
-//! other seat. Proves the harness drives non-game state. Terminal after `max_transfers`.
+//! Payments as a tunnel Protocol: the signing seat transfers value to the other
+//! seat. This ports the canonical TS `payments.v1` move shape; `max_transfers`
+//! is only a harness cap for bounded self-play tests.
 
 use tunnel_core::codec::u64_to_be_bytes;
 use tunnel_harness::{Balances, Protocol, ProtocolError, Seat, TunnelContext};
@@ -12,25 +13,18 @@ pub struct PayState {
     pub a: u64,
     pub b: u64,
     pub total: u64,
-    pub transfers: u64,
+    pub count: u64,
     pub max_transfers: u64,
 }
 
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PayMove {
+    pub from: Seat,
     pub amount: u64,
 }
 
-/// Whose turn it is: A on even transfer count, B on odd.
-fn actor(s: &PayState) -> Seat {
-    if s.transfers % 2 == 0 {
-        Seat::A
-    } else {
-        Seat::B
-    }
-}
-
 pub struct Payments {
+    /// `0` means unbounded, matching TS `isTerminal() === false`.
     pub max_transfers: u64,
 }
 
@@ -47,20 +41,23 @@ impl Protocol for Payments {
             a: ctx.initial.a,
             b: ctx.initial.b,
             total: ctx.initial.a + ctx.initial.b,
-            transfers: 0,
+            count: 0,
             max_transfers: self.max_transfers,
         }
     }
 
     fn apply_move(&self, s: &PayState, mv: &PayMove, by: Seat) -> Result<PayState, ProtocolError> {
-        if by != actor(s) {
-            return Err(ProtocolError("not this seat's turn".into()));
+        if mv.from != by {
+            return Err(ProtocolError(format!(
+                "move.from ({:?}) must equal signer ({by:?})",
+                mv.from
+            )));
         }
         if mv.amount == 0 {
-            return Err(ProtocolError("amount must be positive".into()));
+            return Err(ProtocolError("payment amount must be positive".into()));
         }
         let mut next = s.clone();
-        match by {
+        match mv.from {
             Seat::A => {
                 if mv.amount > next.a {
                     return Err(ProtocolError("insufficient balance".into()));
@@ -76,7 +73,7 @@ impl Protocol for Payments {
                 next.a += mv.amount;
             }
         }
-        next.transfers += 1;
+        next.count += 1;
         Ok(next)
     }
 
@@ -85,7 +82,7 @@ impl Protocol for Payments {
         out.extend_from_slice(DOMAIN);
         out.extend_from_slice(&u64_to_be_bytes(s.a));
         out.extend_from_slice(&u64_to_be_bytes(s.b));
-        out.extend_from_slice(&u64_to_be_bytes(s.transfers));
+        out.extend_from_slice(&u64_to_be_bytes(s.count));
         out
     }
 
@@ -94,19 +91,32 @@ impl Protocol for Payments {
     }
 
     fn is_terminal(&self, s: &PayState) -> bool {
-        s.transfers >= s.max_transfers
+        s.max_transfers > 0 && s.count >= s.max_transfers
     }
 
     fn sample_move(
         &self,
         s: &PayState,
         seat: Seat,
-        _rng: &mut dyn FnMut() -> f64,
+        rng: &mut dyn FnMut() -> f64,
     ) -> Option<PayMove> {
-        if self.is_terminal(s) || actor(s) != seat {
+        if self.is_terminal(s) {
             return None;
         }
-        Some(PayMove { amount: TRANSFER })
+        let sampled_actor = if s.count % 2 == 0 { Seat::A } else { Seat::B };
+        if seat != sampled_actor {
+            return None;
+        }
+        let balance = if seat == Seat::A { s.a } else { s.b };
+        if balance == 0 {
+            return None;
+        }
+        let cap = balance.min(1000);
+        let amount = 1 + (rng() * cap as f64).floor() as u64;
+        Some(PayMove {
+            from: seat,
+            amount: amount.max(TRANSFER).min(cap),
+        })
     }
 }
 
@@ -123,9 +133,27 @@ mod tests {
             seat: Seat::A,
         };
         let s0 = p.initial_state(&ctx);
-        let s1 = p.apply_move(&s0, &PayMove { amount: 5 }, Seat::A).unwrap();
+        let s1 = p
+            .apply_move(
+                &s0,
+                &PayMove {
+                    from: Seat::A,
+                    amount: 5,
+                },
+                Seat::A,
+            )
+            .unwrap();
         assert_eq!((s1.a, s1.b), (95, 105));
         assert_eq!(s1.a + s1.b, 200);
-        assert!(p.apply_move(&s1, &PayMove { amount: 5 }, Seat::A).is_err()); // wrong turn
+        assert!(p
+            .apply_move(
+                &s1,
+                &PayMove {
+                    from: Seat::B,
+                    amount: 5,
+                },
+                Seat::A,
+            )
+            .is_err());
     }
 }

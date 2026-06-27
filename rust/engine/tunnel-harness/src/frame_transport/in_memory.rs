@@ -1,25 +1,25 @@
-//! In-memory paired channel for self-play. Each end sends into the other's queue.
+//! In-memory paired frame transport for self-play. Each end sends into the other's queue.
 
-use super::Channel;
+use super::FrameTransport;
+use crate::FrameTransportError;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio::sync::Mutex;
-use tunnel_harness::ChannelError;
 
-pub struct InMemoryChannel {
+pub struct InMemoryFrameTransport {
     outbound: UnboundedSender<Vec<u8>>,
     inbound: Mutex<UnboundedReceiver<Vec<u8>>>,
 }
 
-impl InMemoryChannel {
+impl InMemoryFrameTransport {
     /// Two ends wired together: a.send -> b.recv and b.send -> a.recv.
-    pub fn pair() -> (InMemoryChannel, InMemoryChannel) {
+    pub fn pair() -> (InMemoryFrameTransport, InMemoryFrameTransport) {
         let (tx_ab, rx_ab) = unbounded_channel();
         let (tx_ba, rx_ba) = unbounded_channel();
-        let a = InMemoryChannel {
+        let a = InMemoryFrameTransport {
             outbound: tx_ab,
             inbound: Mutex::new(rx_ba),
         };
-        let b = InMemoryChannel {
+        let b = InMemoryFrameTransport {
             outbound: tx_ba,
             inbound: Mutex::new(rx_ab),
         };
@@ -27,12 +27,14 @@ impl InMemoryChannel {
     }
 }
 
-impl Channel for InMemoryChannel {
-    async fn send(&self, bytes: Vec<u8>) -> Result<(), ChannelError> {
-        self.outbound.send(bytes).map_err(|_| ChannelError::Closed)
+impl FrameTransport for InMemoryFrameTransport {
+    async fn send(&self, bytes: Vec<u8>) -> Result<(), FrameTransportError> {
+        self.outbound
+            .send(bytes)
+            .map_err(|_| FrameTransportError::Closed)
     }
 
-    async fn recv(&self) -> Result<Option<Vec<u8>>, ChannelError> {
+    async fn recv(&self) -> Result<Option<Vec<u8>>, FrameTransportError> {
         Ok(self.inbound.lock().await.recv().await)
     }
 }
@@ -43,7 +45,7 @@ mod tests {
 
     #[tokio::test]
     async fn paired_ends_deliver_in_order() {
-        let (a, b) = InMemoryChannel::pair();
+        let (a, b) = InMemoryFrameTransport::pair();
         a.send(b"hello".to_vec()).await.unwrap();
         a.send(b"world".to_vec()).await.unwrap();
         assert_eq!(b.recv().await.unwrap().unwrap(), b"hello");
@@ -52,7 +54,7 @@ mod tests {
 
     #[tokio::test]
     async fn recv_returns_none_when_peer_dropped() {
-        let (a, b) = InMemoryChannel::pair();
+        let (a, b) = InMemoryFrameTransport::pair();
         drop(a);
         assert_eq!(b.recv().await.unwrap(), None);
     }

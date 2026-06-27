@@ -7399,11 +7399,59 @@ dependencies = [
 ]
 
 [[package]]
+name = "tunnel-api-credits"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tunnel-core",
+ "tunnel-harness",
+]
+
+[[package]]
+name = "tunnel-battleship"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "tunnel-core",
+ "tunnel-harness",
+]
+
+[[package]]
 name = "tunnel-blackjack"
 version = "0.1.0"
 dependencies = [
  "bcs 0.2.1",
  "hex",
+ "serde",
+ "serde_json",
+ "tunnel-core",
+ "tunnel-harness",
+]
+
+[[package]]
+name = "tunnel-bomb-it"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tunnel-core",
+ "tunnel-harness",
+]
+
+[[package]]
+name = "tunnel-caro"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "tunnel-core",
+ "tunnel-harness",
+]
+
+[[package]]
+name = "tunnel-chat"
+version = "0.1.0"
+dependencies = [
  "serde",
  "serde_json",
  "tunnel-core",
@@ -7420,6 +7468,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tunnel-cross"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tunnel-core",
+ "tunnel-harness",
+]
+
+[[package]]
 name = "tunnel-harness"
 version = "0.1.0"
 dependencies = [
@@ -7429,6 +7487,7 @@ dependencies = [
  "serde",
  "serde-big-array",
  "serde_json",
+ "tokio",
  "tunnel-core",
 ]
 
@@ -7471,6 +7530,35 @@ name = "tunnel-payments"
 version = "0.1.0"
 dependencies = [
  "hex",
+ "serde",
+ "serde_json",
+ "tunnel-core",
+ "tunnel-harness",
+]
+
+[[package]]
+name = "tunnel-quantum-poker"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "tunnel-core",
+ "tunnel-harness",
+]
+
+[[package]]
+name = "tunnel-tic-tac-toe"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tunnel-core",
+ "tunnel-harness",
+]
+
+[[package]]
+name = "tunnel-world-canvas"
+version = "0.1.0"
+dependencies = [
  "serde",
  "serde_json",
  "tunnel-core",

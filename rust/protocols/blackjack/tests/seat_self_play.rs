@@ -1,14 +1,14 @@
-//! Drive two `TunnelSeat`s through a full blackjack match in-process — no channel,
+//! Drive two `PartyRuntime`s through a full blackjack match in-process — no frame transport,
 //! no async runtime. Proves the sans-IO core runs a real match and conserves value.
 
 use tunnel_blackjack::{plan, Blackjack};
 use tunnel_core::crypto::keypair_from_secret;
-use tunnel_harness::{Balances, LocalSigner, Seat, TunnelContext, TunnelSeat};
+use tunnel_harness::{Balances, LocalSigner, PartyRuntime, Seat, TunnelContext};
 
 /// Pump a proposer's MOVE to the responder and the ACK back until quiescent.
 fn deliver(
-    proposer: &mut TunnelSeat<Blackjack, LocalSigner>,
-    responder: &mut TunnelSeat<Blackjack, LocalSigner>,
+    proposer: &mut PartyRuntime<Blackjack, LocalSigner>,
+    responder: &mut PartyRuntime<Blackjack, LocalSigner>,
     first: Vec<u8>,
 ) {
     let mut to_responder = vec![first];
@@ -42,8 +42,8 @@ fn seat_self_play_match_conserves_balances() {
         initial: Balances { a: 200, b: 200 },
         seat,
     };
-    let mut a = TunnelSeat::new(Blackjack, LocalSigner::from_secret(&sa), pkb, ctx(Seat::A));
-    let mut b = TunnelSeat::new(Blackjack, LocalSigner::from_secret(&sb), pka, ctx(Seat::B));
+    let mut a = PartyRuntime::new(Blackjack, LocalSigner::from_secret(&sa), pkb, ctx(Seat::A));
+    let mut b = PartyRuntime::new(Blackjack, LocalSigner::from_secret(&sb), pka, ctx(Seat::B));
 
     let mut ts = 1u64;
     let mut moves = 0u64;

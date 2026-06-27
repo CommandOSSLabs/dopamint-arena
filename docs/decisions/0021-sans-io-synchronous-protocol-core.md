@@ -25,36 +25,37 @@ neither fleet in ADR-0020 has to redraw it.
 
 ## Decision
 
-We adopt the **sans-IO** pattern: the protocol/state-machine core is an I/O-free,
-synchronous, pure library, and all IO lives in a thin layer outside it that pumps
-bytes and decisions in.
+We adopt the **sans-IO** pattern inside the Rust tunnel harness: the protocol
+transition and `PartyRuntime` state machine are I/O-free, synchronous, and pure.
+IO enters only through explicit harness seams that pump bytes and decisions in.
 
 - **Core is synchronous and pure** — `initial_state`, `apply_move`,
   `encode_state`, `balances`, `is_terminal`, `sample_move` carry no futures, no
   IO, no clock, no RNG of their own. This is the default precisely to avoid the
   over-engineering of speculative async on CPU-bound code.
-- **Async is confined to the seams where IO is real** — `Channel` (transport)
-  and `Policy::plan_move` (may call APIs/LLMs/oracles). The default
-  `Signer::sign` is synchronous (local ed25519); a remote-KMS signer is a future
-  async variant of that seam.
+- **Async is confined to the harness seams where IO is real** —
+  `FrameTransport` (transport), `MoveStrategy::plan_move` (may call
+  APIs/LLMs/oracles), and `PartyDriver` (the generic loop that awaits those
+  seams). The default `Signer::sign` is synchronous (local ed25519); a
+  remote-KMS signer is a future async variant of that seam.
 - **Future async actions extend at the seam, never the core** — when an action
   needs IO (a move whose value comes from an external service, a managed remote
-  key), the IO happens in the Policy or Signer seam and the _result_ — a finished
-  `Move`, a finished signature — is handed to the sync core as plain data.
+  key), the IO happens in the MoveStrategy or Signer seam and the _result_ — a
+  finished `Move`, a finished signature — is handed to the sync core as plain data.
   Randomness and external inputs follow ADR-0017's seed/commit-reveal model. This
   is the documented escape hatch: we are not closing the door on async, we are
   routing it through the edges.
 
 ## Consequences
 
-- The core is drivable with no executor at all (a bare rayon worker) or inside a
-  tokio task — which is what lets ADR-0020's bench and serving fleets share one
-  implementation.
+- The pure runtime is drivable with no executor at all (a bare rayon worker) or
+  through the harness `PartyDriver` inside a tokio task — which is what lets
+  ADR-0020's bench and serving fleets share one implementation.
 - New async requirements are absorbed by the seams without touching the core, so
   the determinism/replay guarantee is structurally protected rather than
   maintained by discipline alone.
 - Cross-language golden parity stays honest: a synchronous, pure transition maps
   1:1 onto the Move `apply`.
 - We accept that anything needing IO must be expressed as a seam
-  (Channel/Policy/Signer) rather than reached for ad hoc inside game logic — the
-  one constraint sans-IO imposes, and the one we want.
+  (FrameTransport/MoveStrategy/Signer) rather than reached for ad hoc inside
+  game logic — the one constraint sans-IO imposes, and the one we want.
