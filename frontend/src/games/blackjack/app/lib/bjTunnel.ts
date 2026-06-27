@@ -2,14 +2,14 @@
 // in the browser there's no process.env, so seed it from the Vite env before any builder runs.
 process.env.PACKAGE_ID ??= import.meta.env.VITE_TUNNEL_PACKAGE_ID;
 
-import { Transaction } from "@mysten/sui/transactions";
-import { SUI_CLOCK_OBJECT_ID } from "@mysten/sui/utils";
-import { core, onchain, protocols } from "sui-tunnel-ts";
 import {
   consumeStakeRemainder,
   stakeCoinArg,
   type StakeFromBalance,
 } from "@/onchain/tunnelTx";
+import { Transaction } from "@mysten/sui/transactions";
+import { SUI_CLOCK_OBJECT_ID } from "@mysten/sui/utils";
+import { core, onchain, protocols } from "sui-tunnel-ts";
 
 export const proto = new protocols.BlackjackProtocol();
 
@@ -67,7 +67,9 @@ export function buildCreateAndFundTx(
       coinA,
       coinB,
       tx.pure.u64(86_400_000n),
-      tx.pure.u64(0n),
+      // M1: non-zero force-close penalty so a seat that abandons a dispute (stalls a draw / goes
+      // offline) forfeits its stake — withholding a reveal to dodge a bad card is never profitable.
+      tx.pure.u64(stake),
       tx.object(SUI_CLOCK_OBJECT_ID),
     ],
   });

@@ -99,6 +99,13 @@ export class DistributedTunnel<State, Move> {
     if (!cfg.self.sign) {
       throw new Error("DistributedTunnel: self endpoint must carry a signer");
     }
+    // Fail closed: a protocol whose moves carry a secret pre-image MUST supply a stripping codec.
+    // Otherwise the identity codec would relay the pre-image to the opponent (a fairness break).
+    if (protocol.movesCarrySecrets && !cfg.moveCodec) {
+      throw new Error(
+        `DistributedTunnel: protocol '${protocol.name}' has secret-bearing moves and requires an explicit moveCodec`
+      );
+    }
     this.tunnelId = cfg.tunnelId;
     this.protocol = protocol;
     this.self = cfg.self;

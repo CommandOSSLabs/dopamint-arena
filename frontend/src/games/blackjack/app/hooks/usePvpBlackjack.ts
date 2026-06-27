@@ -1,28 +1,40 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { core, proof, bytesToHex, hexToBytes } from "sui-tunnel-ts";
 import { settleViaBackend } from "@/backend/settle";
 import {
-  useCurrentAccount,
-  useSignAndExecuteTransaction,
-} from "@mysten/dapp-kit";
-import { SuiJsonRpcClient } from "@mysten/sui/jsonRpc";
+  BET_OPTIONS,
+  BlackjackBetProtocol,
+  MIN_BET,
+  commitMoveFromSecret,
+  getDealerParty,
+  getPlayerParty,
+  revealMoveFromSecret,
+  secureCommitSecret,
+  maxBet as tableMaxBet,
+  type BetBlackjackMove,
+  type BetBlackjackState,
+} from "@/games/blackjack/app/lib/bjBetProtocol";
 import { getSuiClient } from "@/games/blackjack/app/lib/bjBots";
+import { handValue } from "@/games/blackjack/app/lib/bjCards";
+import { bjMoveCodec } from "@/games/blackjack/app/lib/bjMoveCodec";
 import { getOrCreateEphemeral } from "@/games/blackjack/app/lib/bjPvpIdentity";
 import {
+  buildCloseWithRootTx,
   buildCreateAndShareTx,
   buildDepositTx,
-  buildCloseTx,
-  buildCloseWithRootTx,
-  parseTunnelId,
+  buildUpdateStateTx,
+  parseTunnelId
 } from "@/games/blackjack/app/lib/bjPvpOnchain";
-import { useSponsoredSignExec } from "@/onchain/useSponsoredSignExec";
-import { withSponsorFallback } from "@/onchain/sponsor";
+import { makeBlackjackResumeAdapter } from "@/games/blackjack/blackjackResumeAdapter";
 import {
   MTPS_COIN_TYPE,
   isMtpsAddressBalance,
   isMtpsConfigured,
 } from "@/onchain/mtps";
-import { handValue } from "@/games/blackjack/app/lib/bjCards";
+import { withSponsorFallback } from "@/onchain/sponsor";
+import {
+  raiseDisputeUnilateral,
+  submitRebuildingOnStale,
+} from "@/onchain/tunnelTx";
+import { useSponsoredSignExec } from "@/onchain/useSponsoredSignExec";
 import {
   MpClient,
   resolveMpWsUrl,
@@ -30,31 +42,27 @@ import {
   type PeerMessage,
   type PvpChannel,
 } from "@/pvp/mpClient";
+import {
+  clearResumeRecord,
+  evictExpiredRecords,
+  installResumePersistence,
+  readResumeRecord,
+} from "@/pvp/resume";
 import { attachResume, resumeActiveTunnels } from "@/pvp/resumeSession";
 import {
-  raiseDisputeUnilateral,
-  submitRebuildingOnStale,
-} from "@/onchain/tunnelTx";
-import { makeBlackjackResumeAdapter } from "@/games/blackjack/blackjackResumeAdapter";
-import {
-  installResumePersistence,
-  evictExpiredRecords,
-  readResumeRecord,
-  clearResumeRecord,
-} from "@/pvp/resume";
-import {
-  BlackjackBetProtocol,
-  maxBet as tableMaxBet,
-  BET_OPTIONS,
-  MIN_BET,
-  getPlayerParty,
-  getDealerParty,
-  type BetBlackjackState,
-  type BetBlackjackMove,
-} from "@/games/blackjack/app/lib/bjBetProtocol";
+  useCurrentAccount,
+  useSignAndExecuteTransaction,
+} from "@mysten/dapp-kit";
+import { SuiJsonRpcClient } from "@mysten/sui/jsonRpc";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { bytesToHex, core, hexToBytes, proof } from "sui-tunnel-ts";
 
 type BlackjackState = BetBlackjackState;
 type BlackjackMove = BetBlackjackMove;
+type BlackjackSecret = Pick<
+  BetBlackjackState,
+  "localSecretA" | "localSecretB"
+>;
 
 // MP relay base (resolveMpWsUrl appends /v1/mp). Prefer an explicit VITE_MP_URL; otherwise derive
 // from the backend base, and when that's empty (same-origin production build) from the page
@@ -73,7 +81,6 @@ const DEFAULT_STAKE = 5000n;
 /** Buy-in options offered before "Find match" (MIST units, shown 1:1 as chips). */
 const FUND_OPTIONS = [2500, 5000, 10000, 25000] as const;
 const BOT_MOVE_MS = 700; // player auto-bot move cadence
-const DEALER_MS = 600; // dealer reveal pause before auto-drawing
 const NEXT_MS = 900; // pause before auto-dealing the next round
 const DEFAULT_BET = 100; // auto's starting bet until the player picks one
 
@@ -90,6 +97,21 @@ function autoBetMove(
     action: "bet",
     amount: Math.max(Number(MIN_BET), Math.min(lastBet, cap)),
   };
+}
+
+/**
+ * The seat that must propose the next commit/reveal ("plumbing") move, derived purely from the
+ * shared co-signed state so both processes agree. `DistributedTunnel` advances one nonce at a
+ * time with no concurrency arbitration, so the per-card commit-reveal (where BOTH seats act) is
+ * strictly serialized A-then-B. `null` means a human/seat-owned phase (bet, hit/stand) or nothing
+ * to do.
+ */
+function plumbingProposer(s: BetBlackjackState): "A" | "B" | null {
+  if (s.phase === "draw_commit")
+    return !s.pendingCommitA ? "A" : !s.pendingCommitB ? "B" : null;
+  if (s.phase === "draw_reveal")
+    return !s.pendingRevealA ? "A" : !s.pendingRevealB ? "B" : null;
+  return null;
 }
 
 export type PvpPhase =
@@ -184,6 +206,9 @@ export function usePvpBlackjack(): PvpView {
   const roleRef = useRef<"A" | "B" | null>(null);
   const autoRef = useRef(false);
   const autoKickedRef = useRef(false);
+  // "Move generated for this nonce" guard: the commit/reveal driver fires on every confirmation,
+  // so this prevents minting/scheduling two moves for the same target nonce (mirrors poker).
+  const autoNonceRef = useRef<bigint>(-1n);
   const lastBetRef = useRef<number>(DEFAULT_BET); // remembered bet for auto rounds; set on every player bet
   const stakeRef = useRef<bigint>(DEFAULT_STAKE); // chosen buy-in, read inside onMatch without stale closures
   const createdAtRef = useRef<bigint>(0n);
@@ -297,10 +322,17 @@ export function usePvpBlackjack(): PvpView {
       const root = transcriptRef.current
         ? transcriptRef.current.root()
         : new Uint8Array(32);
+      // M2: bind the settlement to the latest co-signed state. Sign with the latest co-signed
+      // nonce (final_nonce = that + 1); the dealer then checkpoints that exact state on-chain
+      // (update_state) before the close, so `close_cooperative_with_root` recomputes the same
+      // final_nonce and a stale, lower-nonce settlement can no longer verify. Both seats derive
+      // the SAME nonce from their own `latest` — the transcript-root match asserted below proves
+      // they share an identical co-signed history (hence the same latest nonce).
+      const settleNonce = t.latest ? t.latest.update.nonce : 0n;
       const half = t.buildSettlementHalfWithRoot(
         createdAtRef.current,
         root,
-        0n,
+        settleNonce,
       );
       channel.sendPeer({
         t: "settle",
@@ -321,30 +353,53 @@ export function usePvpBlackjack(): PvpView {
         other.sig,
       );
       if (roleRef.current === "B") {
-        // the dealer (the opener) submits the cooperative close
-        const closeDigest = await settleViaBackend({
-          tunnelId: t.tunnelId,
-          settlement: coSigned as any,
-          transcript: transcriptRef.current
-            ? transcriptRef.current.rawEntries()
-            : [],
-          label: "blackjack",
-          fallbackClose: async () => {
-            // Wallet-close fallback needs the tunnel's coin type (MTPS when configured); the
-            // /settle path above already sponsored the close server-side. In MTPS mode the dealer
-            // holds 0 SUI (gas is sponsored), so the close must route through the gas sponsor too — a
-            // wallet-signed close would throw and strand the staked MTPS.
-            const coinType = isMtpsConfigured ? MTPS_COIN_TYPE : undefined;
-            const res = await (isMtpsConfigured ? submitSponsored : submit)(
-              buildCloseWithRootTx(t.tunnelId, coSigned, coinType),
+        try {
+          // M2: checkpoint the latest co-signed state on-chain BEFORE the close so the close binds
+          // to `settleNonce`. This must land first — `close_cooperative_with_root` recomputes
+          // final_nonce = state.nonce + 1, which only matches the settlement (signed for
+          // settleNonce + 1) once the on-chain nonce is `settleNonce`. Sponsored in MTPS (the dealer
+          // holds 0 SUI); SUI mode uses the wallet signer. `update_state` requires a strictly higher
+          // nonce, so a stale settlement can never roll the on-chain nonce back.
+          if (t.latest && settleNonce > 0n) {
+            const checkpointCoinType = isMtpsConfigured
+              ? MTPS_COIN_TYPE
+              : undefined;
+            await (isMtpsConfigured ? submitSponsored : submit)(
+              buildUpdateStateTx(t.tunnelId, t.latest, checkpointCoinType),
             );
-            return res.digest;
-          },
-        });
-        // Record the close + signal the opponent on BOTH paths (backend digest or fallback digest).
-        if (closeDigest) {
-          setDigests((d) => ({ ...d, close: closeDigest }));
-          channel.sendPeer({ t: "closed", digest: closeDigest });
+          }
+          // the dealer (the opener) submits the cooperative close
+          const closeDigest = await settleViaBackend({
+            tunnelId: t.tunnelId,
+            settlement: coSigned as any,
+            transcript: transcriptRef.current
+              ? transcriptRef.current.rawEntries()
+              : [],
+            label: "blackjack",
+            fallbackClose: async () => {
+              // Wallet-close fallback needs the tunnel's coin type (MTPS when configured); the
+              // /settle path above already sponsored the close server-side. In MTPS mode the dealer
+              // holds 0 SUI (gas is sponsored), so the close must route through the gas sponsor too — a
+              // wallet-signed close would throw and strand the staked MTPS.
+              const coinType = isMtpsConfigured ? MTPS_COIN_TYPE : undefined;
+              const res = await (isMtpsConfigured ? submitSponsored : submit)(
+                buildCloseWithRootTx(t.tunnelId, coSigned, coinType),
+              );
+              return res.digest;
+            },
+          });
+          // Record the close + signal the opponent on BOTH paths (backend digest or fallback digest).
+          if (closeDigest) {
+            setDigests((d) => ({ ...d, close: closeDigest }));
+            channel.sendPeer({ t: "closed", digest: closeDigest });
+          }
+        } catch (e) {
+          // Cooperative close failed (e.g. the checkpoint was rejected). Reset so a retry — or the
+          // grace/dispute path, which force-closes from the latest co-signed checkpoint after the
+          // timeout — can still recover the staked funds, then surface the error.
+          settledRef.current = false;
+          setError(e instanceof Error ? e.message : String(e));
+          throw e;
         }
       }
       await refreshBalance();
@@ -402,54 +457,51 @@ export function usePvpBlackjack(): PvpView {
           void finishSettle(t, channel, info.matchId);
           return;
         }
-        if (st.phase === "player" && info.role === getPlayerParty(st.round)) {
-          if (autoRef.current) {
-            const mv = proto.randomMove(st, info.role, Math.random);
-            if (mv)
-              setTimeout(
-                () => {
-                  try {
-                    t.propose(mv, BigInt(Date.now()));
-                  } catch {
-                    /* not my turn / in flight */
-                  }
-                },
-                autoRef.current ? 50 : BOT_MOVE_MS,
-              );
+        // Single move generator per target nonce. Three lanes:
+        //  - commit/reveal "plumbing": ALWAYS auto-driven for whichever seat owes it next (strictly
+        //    A-then-B, for BOTH the player's and the dealer's cards). Secrets are minted from the
+        //    CSPRNG here and never leave the client (the relay codec drops the pre-image).
+        //  - player hit/stand: only when Auto is on (manual play uses the Hit/Stand buttons).
+        //  - bet: only when Auto is on (manual play uses the bet buttons).
+        const targetNonce = t.nonce + 1n;
+        if (autoNonceRef.current === targetNonce) return;
+        let move: BlackjackMove | null = null;
+        let delay = autoRef.current ? 30 : 80;
+        if (plumbingProposer(st) === info.role) {
+          if (st.phase === "draw_commit") {
+            move = commitMoveFromSecret(secureCommitSecret());
+          } else if (st.phase === "draw_reveal") {
+            const secret =
+              info.role === "A" ? st.localSecretA : st.localSecretB;
+            if (secret) move = revealMoveFromSecret(secret);
           }
         } else if (
-          st.phase === "dealer" &&
-          info.role === getDealerParty(st.round)
+          st.phase === "player" &&
+          info.role === getPlayerParty(st.round) &&
+          autoRef.current
         ) {
-          // The dealer is deterministic — always auto-stand (triggers draw-to-17), regardless of the toggle.
-          setTimeout(
-            () => {
-              try {
-                t.propose({ action: "stand" }, BigInt(Date.now()));
-              } catch {
-                /* in flight */
-              }
-            },
-            autoRef.current ? 50 : DEALER_MS,
-          );
+          move = proto.randomMove(st, info.role, Math.random);
+          delay = autoRef.current ? 50 : BOT_MOVE_MS;
         } else if (
           st.phase === "round_over" &&
           info.role === getPlayerParty(st.round + 1n) &&
           autoRef.current
         ) {
           // Only the player bets (the bet deals the next round); auto reuses the last bet.
-          const mv = autoBetMove(lastBetRef.current, st);
-          if (mv)
-            setTimeout(
-              () => {
-                try {
-                  t.propose(mv, BigInt(Date.now()));
-                } catch {
-                  /* raced / in flight */
-                }
-              },
-              autoRef.current ? 100 : NEXT_MS,
-            );
+          move = autoBetMove(lastBetRef.current, st);
+          delay = autoRef.current ? 100 : NEXT_MS;
+        }
+        if (move) {
+          autoNonceRef.current = targetNonce;
+          const m = move;
+          setTimeout(() => {
+            if (t.nonce + 1n !== targetNonce || stoppingRef.current) return;
+            try {
+              t.propose(m, BigInt(Date.now()));
+            } catch {
+              /* raced / not my turn / in flight */
+            }
+          }, delay);
         }
       };
       t.onConfirmed = (u) => {
@@ -462,7 +514,17 @@ export function usePvpBlackjack(): PvpView {
         mp,
         channel,
         tunnel: t,
-        adapter: makeBlackjackResumeAdapter(() => onAdvance()),
+        adapter: makeBlackjackResumeAdapter({
+          getSecret: () => ({
+            localSecretA: t.state.localSecretA,
+            localSecretB: t.state.localSecretB,
+          }),
+          setSecret: (sec) => {
+            t.state.localSecretA = sec.localSecretA;
+            t.state.localSecretB = sec.localSecretB;
+          },
+          onReconciled: () => onAdvance(),
+        }),
         identity: {
           matchId: info.matchId,
           tunnelId: t.tunnelId,
@@ -518,14 +580,34 @@ export function usePvpBlackjack(): PvpView {
         mpRef.current = mp;
         // Cold-load: rebuild any persisted in-flight blackjack match before joining a queue.
         installResumePersistence();
+        // `restoredSecret` is filled by `setSecret` synchronously during the rebuild below, then
+        // copied onto the rebuilt tunnel's state (it is local-only, never part of the checkpoint).
+        let restoredSecret: BlackjackSecret | null = null;
         const restored = resumeActiveTunnels<BlackjackState, BlackjackMove>(
           mp,
           "blackjack",
-          { proto, adapter: makeBlackjackResumeAdapter(() => {}) },
+          {
+            proto,
+            moveCodec: bjMoveCodec,
+            adapter: makeBlackjackResumeAdapter({
+              getSecret: () => ({ localSecretA: null, localSecretB: null }),
+              setSecret: (sec) => {
+                restoredSecret = sec;
+              },
+              onReconciled: () => {},
+            }),
+          },
           { selfWallet: walletAddress },
         );
         if (restored.length > 0) {
           const { tunnel, channel } = restored[0];
+          // `as` re-cast: TS can't see the closure mutation above and would narrow the `let` to
+          // `never`, so restore the declared type before reading it.
+          const secret = restoredSecret as BlackjackSecret | null;
+          if (secret) {
+            tunnel.state.localSecretA = secret.localSecretA;
+            tunnel.state.localSecretB = secret.localSecretB;
+          }
           const rec = readResumeRecord(tunnel.tunnelId)!;
           matchIdRef.current = rec.matchId;
           roleRef.current = rec.role;
@@ -747,6 +829,9 @@ export function usePvpBlackjack(): PvpView {
               false,
             ),
             selfParty: m.role, // A = player, B = dealer
+            // CRITICAL: strip the commit pre-image from relayed moves (else the opponent learns
+            // a seat's card secret at commit time and can bias every draw).
+            moveCodec: bjMoveCodec,
           },
           channel.transport,
           { a: stakeA, b: stakeB },
@@ -998,13 +1083,26 @@ export function usePvpBlackjack(): PvpView {
     ? roleRef.current ===
       getDealerParty(s.phase === "round_over" ? s.round + 1n : s.round)
     : roleRef.current === "B";
-  const gamePhase = s ? s.phase : null;
+  // Map the protocol's phases onto the 3-state UI vocabulary. A per-card draw shows as "dealer"
+  // when the dealer's card is being drawn, else "player" (opening deal / player hit).
+  const gamePhase: PvpView["gamePhase"] = s
+    ? s.phase === "round_over"
+      ? "round_over"
+      : s.phase === "player"
+        ? "player"
+        : s.draw?.forHand === "dealer"
+          ? "dealer"
+          : "player"
+    : null;
   const playerHand = s ? s.playerHand : [];
-  // Hide the dealer's hole card during the player's turn (revealed once the dealer acts / round ends).
+  // Reveal the dealer's full hand only once it starts drawing (player stood) or the round is over;
+  // until then the hole card stays hidden (show just the first card).
+  const dealerRevealed =
+    !!s && (s.phase === "round_over" || s.draw?.reason === "dealer_auto");
   const dealerHand = s
-    ? s.phase === "player"
-      ? s.dealerHand.slice(0, 1)
-      : s.dealerHand
+    ? dealerRevealed
+      ? s.dealerHand
+      : s.dealerHand.slice(0, 1)
     : [];
   const terminal = s ? proto.isTerminal(s) : false;
   const myTurn =
@@ -1031,10 +1129,7 @@ export function usePvpBlackjack(): PvpView {
     playerHand,
     dealerHand,
     playerSum: handValue(playerHand),
-    dealerSum:
-      s && s.phase !== "player"
-        ? handValue(s.dealerHand)
-        : handValue(dealerHand),
+    dealerSum: dealerRevealed ? handValue(s!.dealerHand) : handValue(dealerHand),
     balancePlayer: s
       ? getPlayerParty(s.round || 1n) === "A"
         ? s.balanceA

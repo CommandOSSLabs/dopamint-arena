@@ -22,6 +22,7 @@ import {
   MIN_SALT_LEN,
   verifyCommitment,
 } from "../core/commitment";
+import { randomBytes } from "../core/crypto";
 import { nextU64InRange, seedFromBytes } from "../core/randomness";
 import { u64ToBeBytes } from "../core/wire";
 import {
@@ -360,12 +361,25 @@ function claimForfeit(s: BlackjackState, by: Party): BlackjackState {
   return settle(s, by);
 }
 
+/**
+ * NON-cryptographic secret for SIMULATIONS / bots only — seeded by a float `rng` so a
+ * (seed, config) run is reproducible. NEVER use for real funds: `Math.random`-style entropy is
+ * predictable and the opponent could grind reveals. Real play MUST use {@link secureBlackjackSecret}.
+ */
 function randomSecret(rng: () => number): BlackjackSlotSecret {
   const b = () => Math.floor(rng() * 256) & 0xff;
   return {
-    value: Uint8Array.from([b()]),
+    value: Uint8Array.from({ length: 16 }, b),
     salt: Uint8Array.from({ length: MIN_SALT_LEN }, b),
   };
+}
+
+/**
+ * Fresh commit-reveal secret from the platform CSPRNG (`crypto.getRandomValues`). Use this for
+ * real play: full-width 16-byte value + 16-byte salt, unpredictable and not brute-forceable.
+ */
+export function secureBlackjackSecret(): BlackjackSlotSecret {
+  return { value: randomBytes(16), salt: randomBytes(MIN_SALT_LEN) };
 }
 
 // ============================================
@@ -377,6 +391,8 @@ export class BlackjackProtocol implements Protocol<
   BlackjackMove
 > {
   readonly name = "blackjack.v2";
+  /** `commit` moves carry the pre-image — DistributedTunnel must be given a stripping codec. */
+  readonly movesCarrySecrets = true;
 
   initialState(ctx: ProtocolContext): BlackjackState {
     const base: BlackjackState = {
