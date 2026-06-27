@@ -59,7 +59,14 @@ function secretsForRank(
 }
 
 export {
-  commitMove, ctx, doDraw, fresh, proto, revealMove, secret, secretsForRank
+  commitMove,
+  ctx,
+  doDraw,
+  fresh,
+  proto,
+  revealMove,
+  secret,
+  secretsForRank,
 };
 
 /** Fixed bet used by the round-playing tests. */
@@ -154,13 +161,19 @@ test("bet from round_over starts the next round in draw_commit", () => {
 
 test("a non-bet move is rejected in round_over", () => {
   const over: BlackjackState = { ...fresh(), phase: "round_over", round: 2n };
-  assert.throws(() => proto.applyMove(over, { kind: "hit" }, "B"), /expected 'bet'/);
+  assert.throws(
+    () => proto.applyMove(over, { kind: "hit" }, "B"),
+    /expected 'bet'/,
+  );
 });
 
 test("only the next player may place the bet", () => {
   const over: BlackjackState = { ...fresh(), phase: "round_over", round: 2n };
   // next player is B; A attempting to bet is rejected.
-  assert.throws(() => proto.applyMove(over, { kind: "bet", amount: BET }, "A"), /only the player/);
+  assert.throws(
+    () => proto.applyMove(over, { kind: "bet", amount: BET }, "A"),
+    /only the player/,
+  );
 });
 
 test("a full opening deal lands in player phase with 2+2 cards", () => {
@@ -425,15 +438,24 @@ test("a bet below MIN_BET is rejected", () => {
 });
 
 test("a bet above maxBet is rejected", () => {
-  const s = proto.initialState({ tunnelId: "0xab", initialBalances: { a: 300n, b: 1000n } });
+  const s = proto.initialState({
+    tunnelId: "0xab",
+    initialBalances: { a: 300n, b: 1000n },
+  });
   const by = getPlayerParty(s.round + 1n);
   // maxBet = min(300, 1000) = 300; betting 301 is rejected.
-  assert.throws(() => proto.applyMove(s, { kind: "bet", amount: 301n }, by), /bet must be in/);
+  assert.throws(
+    () => proto.applyMove(s, { kind: "bet", amount: 301n }, by),
+    /bet must be in/,
+  );
 });
 
 test("settlement transfers exactly the chosen bet", () => {
   // Player 20 vs dealer 19, bet 250 -> player (A) wins 250.
-  let s = proto.initialState({ tunnelId: "0xab", initialBalances: { a: 1000n, b: 1000n } });
+  let s = proto.initialState({
+    tunnelId: "0xab",
+    initialBalances: { a: 1000n, b: 1000n },
+  });
   s = placeBet(s, 250n);
   const [k1, k2] = secretsForRank(13); // value 10
   const [f5a, f5b] = secretsForRank(5); // value 5
@@ -449,18 +471,27 @@ test("settlement transfers exactly the chosen bet", () => {
 
 test("the game is terminal once neither side can fund MIN_BET", () => {
   // a = 20 (< MIN_BET 25) -> no fundable bet -> terminal at round_over.
-  const s = proto.initialState({ tunnelId: "0xab", initialBalances: { a: 20n, b: 1000n } });
+  const s = proto.initialState({
+    tunnelId: "0xab",
+    initialBalances: { a: 20n, b: 1000n },
+  });
   assert.equal(s.phase, "round_over");
   assert.ok(proto.isTerminal(s));
   const by = getPlayerParty(s.round + 1n);
-  assert.throws(() => proto.applyMove(s, { kind: "bet", amount: MIN_BET }, by), /game over/);
+  assert.throws(
+    () => proto.applyMove(s, { kind: "bet", amount: MIN_BET }, by),
+    /game over/,
+  );
 });
 
 test("randomMove offers a MIN_BET bet for the next player only", () => {
   const s = fresh();
   const player = getPlayerParty(s.round + 1n);
   const dealer = getDealerParty(s.round + 1n);
-  assert.deepEqual(proto.randomMove(s, player, Math.random), { kind: "bet", amount: MIN_BET });
+  assert.deepEqual(proto.randomMove(s, player, Math.random), {
+    kind: "bet",
+    amount: MIN_BET,
+  });
   assert.equal(proto.randomMove(s, dealer, Math.random), null);
 });
 
