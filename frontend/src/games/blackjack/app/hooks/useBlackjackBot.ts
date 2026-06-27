@@ -585,7 +585,8 @@ export function useBlackjackBot(): BlackjackBotGame {
           );
 
         // 4) animate moves; each .step co-signs AND verifies both sigs (mode "full").
-        // The dealer ('dealer' phase) moves as B, everyone else as A.
+        // actorFor(state, FIXED_PLAYER_A) picks whichever seat owes the move this phase
+        // (bet / commit / reveal / hit-stand); the player is pinned to seat A.
         setPhase("playing");
         setView(viewFromState(tunnel.state));
         pendingMoveRef.current = null; // drop any move queued during the inter-tunnel gap
