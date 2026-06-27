@@ -40,7 +40,7 @@ class BlackjackBot implements GameBot<BlackjackState, BlackjackMove> {
     return this.protocol.randomMove(state, this.seat, this.rng);
   }
 
-  confirm(): void {}
+  confirm(_state: BlackjackState, _move: BlackjackMove): void {}
   abort(): void {}
 }
 
