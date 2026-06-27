@@ -5,6 +5,8 @@ import {
   BlackjackBetProtocol,
   commitMoveFromSecret,
   deriveRank,
+  MAX_BET,
+  maxBet,
   MIN_BET,
   revealMoveFromSecret,
   secureCommitSecret,
@@ -92,6 +94,30 @@ test("bet starts the opening deal in draw_commit", () => {
   assert.equal(s.bet, 100n);
 });
 
+test("maxBet is capped at MAX_BET and bets above it are rejected (anti-stall invariant)", () => {
+  // Large balances: affordable is huge, but the per-round stake must not exceed MAX_BET (= the
+  // on-chain force-close penalty), so stalling to dodge a loss can never out-earn the forfeit.
+  const big: BetBlackjackState = {
+    ...fresh(),
+    balanceA: 1_000_000n,
+    balanceB: 1_000_000n,
+  };
+  assert.equal(proto.actorFor(big), "A");
+  assert.equal(maxBet(big), MAX_BET);
+  assert.throws(
+    () =>
+      proto.applyMove(big, { action: "bet", amount: Number(MAX_BET) + 1 }, "A"),
+    /bet must be/,
+  );
+  // Exactly MAX_BET is allowed.
+  const s = proto.applyMove(
+    big,
+    { action: "bet", amount: Number(MAX_BET) },
+    "A",
+  );
+  assert.equal(s.bet, MAX_BET);
+});
+
 test("only the round's player may set the bet", () => {
   assert.throws(
     () => proto.applyMove(fresh(), { action: "bet", amount: 100 }, "B"),
@@ -99,16 +125,18 @@ test("only the round's player may set the bet", () => {
   );
 });
 
-test("a full opening deal lands in player phase with 2+2 cards", () => {
+test("opening deal lands in player phase with 2 player + 1 dealer up-card (hole card deferred)", () => {
   let s = startRound();
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < 3; i++) {
     assert.equal(s.phase, "draw_commit", `card ${i} should be in draw_commit`);
     s = doDraw(s, secret(i * 2 + 1), secret(i * 2 + 2));
   }
   assert.equal(s.phase, "player");
   assert.equal(s.playerHand.length, 2);
-  assert.equal(s.dealerHand.length, 2);
-  assert.equal(s.drawCount, 4n);
+  // Only the dealer up-card is dealt; the hole card is drawn after the player stands so the
+  // player never holds it in state while deciding.
+  assert.equal(s.dealerHand.length, 1);
+  assert.equal(s.drawCount, 3n);
 });
 
 test("both commits advance draw_commit -> draw_reveal; double-commit rejected", () => {
@@ -133,15 +161,14 @@ test("a reveal that does not match its commitment is rejected", () => {
   );
 });
 
-/** Opening deal with forced cards: player 10+10=20, dealer 5+5=10. */
+/** Opening deal with forced cards: player 10+10=20, dealer up-card 5 (hole card drawn on stand). */
 function dealtToPlayer(amount = 100): BetBlackjackState {
   let s = startRound(amount);
   const [ta, tb] = secretsForRank(13); // value 10
   const [fa, fb] = secretsForRank(5);
   s = doDraw(s, ta, tb); // player 10
   s = doDraw(s, ta, tb); // player 20
-  s = doDraw(s, fa, fb); // dealer 5
-  s = doDraw(s, fa, fb); // dealer 10
+  s = doDraw(s, fa, fb); // dealer up-card 5 -> player phase
   return s;
 }
 
@@ -156,15 +183,21 @@ test("hitting into a bust settles to the dealer; variable bet is swung", () => {
   assert.equal(s.balanceA + s.balanceB, s.total);
 });
 
-test("player 20 beats dealer 19 -> player A wins the bet", () => {
-  let s = dealtToPlayer(300);
+test("player 20 beats the dealer -> player A wins the bet", () => {
+  let s = dealtToPlayer(300); // player 20, dealer up-card 5
   s = proto.applyMove(s, { action: "stand" }, "A");
-  const [da, db] = secretsForRank(9); // dealer 10 -> 19
+  // Dealer draws its hole card + to 17 from the up-card 5: 5 -> 11 -> 17 (stands), 17 < 20.
+  const [da, db] = secretsForRank(6); // value 6
   let guard = 0;
   while (s.phase !== "round_over") {
     if (guard++ > 50) throw new Error("dealer loop stuck");
     s = doDraw(s, da, db);
   }
+  // Dealer drew its hole card (deferred from the deal) plus at least one more to reach 17.
+  assert.ok(
+    s.dealerHand.length >= 2,
+    "dealer should have drawn the hole card + to 17",
+  );
   assert.equal(s.balanceA, 1000n + 300n);
   assert.equal(s.balanceB, 1000n - 300n);
 });
@@ -176,6 +209,21 @@ test("forfeit: a committed party claims the round when the opponent stalls (M1)"
   assert.equal(s.phase, "round_over");
   assert.equal(s.balanceA, 1000n + 100n);
   assert.equal(s.balanceB, 1000n - 100n);
+});
+
+test("applyCommit preserves a restored secret when the relayed (stripped) move carries none", () => {
+  // Cold-load resume re-seats a commit whose localSecret was stripped by the relay codec, with the
+  // seat's secret restored onto the state. applyCommit must keep that secret, not null it, or the
+  // resumed seat could never reveal.
+  let s = startRound();
+  const restored = secret(7);
+  s = { ...s, localSecretA: restored };
+  const stripped: BetBlackjackMove = {
+    action: "commit",
+    commitment: core.computeCommitment(restored.value, restored.salt),
+  };
+  s = proto.applyMove(s, stripped, "A");
+  assert.deepEqual(s.localSecretA, restored);
 });
 
 test("forfeit is rejected when the opponent does not owe the pending step", () => {

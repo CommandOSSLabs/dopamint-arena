@@ -44,6 +44,15 @@ export const FIXED_PLAYER_A: PlayerPartyFor = () => "A";
 export const MIN_BET = 25n;
 /** Chip denominations offered as bet buttons (filtered to <= the table max each round). */
 export const BET_OPTIONS = [25, 100, 500, 1000] as const;
+/**
+ * Per-round bet ceiling, and the on-chain force-close `penalty_amount` the tunnel is opened with.
+ * The two MUST match: a seat that stalls a pending draw to dodge a losing round forfeits exactly
+ * `penalty_amount` on the dispute/force-close path, so capping the round's stake at this value
+ * makes stalling never profitable (you can never have more on the line than you'd forfeit). It
+ * also bounds what an offline party can lose to a single round's risk rather than their whole
+ * stake. Callers that open the tunnel pass this as the penalty (see bjPvpOnchain / bjTunnel).
+ */
+export const MAX_BET = 1000n;
 const DEALER_STANDS_AT = 17;
 const BUST_AT = 21;
 const ROUND_CAP = 1000n;
@@ -168,9 +177,14 @@ function rankValue(rank: number): number {
 }
 const isBust = (h: number[]) => handValue(h) > BUST_AT;
 
-/** Largest bet both sides can cover this round. */
+/**
+ * Largest bet this round: what both sides can cover, capped at MAX_BET. The MAX_BET cap is the
+ * anti-stall invariant — the round's stake can never exceed the on-chain force-close penalty, so
+ * withholding a reveal to dodge a loss forfeits at least what the round put at risk.
+ */
 export function maxBet(s: BetBlackjackState): bigint {
-  return s.balanceA < s.balanceB ? s.balanceA : s.balanceB;
+  const affordable = s.balanceA < s.balanceB ? s.balanceA : s.balanceB;
+  return affordable < MAX_BET ? affordable : MAX_BET;
 }
 
 function canStartRound(s: BetBlackjackState): boolean {
@@ -347,7 +361,11 @@ function afterDraw(
     case "deal": {
       if (playerHand.length < 2)
         return beginDraw(base, { forHand: "player", reason: "deal" });
-      if (dealerHand.length < 2)
+      // Deal the dealer only its UP-CARD. The hole card is NOT drawn until the player stands (it
+      // becomes the first dealer_auto draw), so the player never has the dealer's second card in
+      // its co-signed state while deciding hit/stand — closing the see-the-hole-card edge that a
+      // modified client would otherwise get from the plaintext dealerHand.
+      if (dealerHand.length < 1)
         return beginDraw(base, { forHand: "dealer", reason: "deal" });
       return { ...base, phase: "player" };
     }
@@ -374,12 +392,18 @@ function applyCommit(
   if (move.commitment.length !== 32)
     throw new Error("commitment must be 32 bytes");
   const commit = move.commitment.slice();
+  // Fall back to a secret already on the state when the move carries none. The relay codec strips
+  // localSecret, so a re-seated/restored commit (cold-load resume) arrives without it; a secret that
+  // restoreSecret put back on the state for this seat must survive applying that stripped commit, or
+  // the resumed seat could never reveal. The live propose path always carries localSecret, so this
+  // is a no-op there.
+  const existing = by === "A" ? s.localSecretA : s.localSecretB;
   const secret: BetBlackjackSecret | null = move.localSecret
     ? {
         value: move.localSecret.value.slice(),
         salt: move.localSecret.salt.slice(),
       }
-    : null;
+    : existing;
   const next: BetBlackjackState = {
     ...s,
     pendingCommitA: by === "A" ? commit : s.pendingCommitA,

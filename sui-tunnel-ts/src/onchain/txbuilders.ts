@@ -405,9 +405,14 @@ export function buildWithdrawTimeout(
 
 /**
  * Attach a single external-referee address (only while CREATED). BOTH parties must co-sign the
- * referee assignment message (`serialize_referee_assignment`: domain || tunnel_id || referee) — a
- * referee can no longer be installed unilaterally, which previously let one party self-assign and
- * drain the tunnel.
+ * referee assignment, so a referee can no longer be installed unilaterally (which previously let
+ * one party self-assign and drain the tunnel). Build `sigA`/`sigB` by signing the message from
+ * `wire.serializeRefereeAssignment(tunnelId, referee)` with each party's tunnel key, e.g.:
+ *
+ *   const msg = serializeRefereeAssignment(tunnelId, referee);
+ *   const sigA = sign(msg, partyASecretKey);   // core/crypto `sign`
+ *   const sigB = sign(msg, partyBSecretKey);
+ *   buildSetReferee(tx, { tunnelId, referee, sigA, sigB });
  */
 export function buildSetReferee(
   tx: Transaction,

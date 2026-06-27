@@ -7,6 +7,7 @@ import {
   stakeCoinArg,
   type StakeFromBalance,
 } from "@/onchain/tunnelTx";
+import { MAX_BET } from "@/games/blackjack/app/lib/bjBetProtocol";
 import { Transaction } from "@mysten/sui/transactions";
 import { SUI_CLOCK_OBJECT_ID } from "@mysten/sui/utils";
 import { core, onchain, protocols } from "sui-tunnel-ts";
@@ -67,9 +68,11 @@ export function buildCreateAndFundTx(
       coinA,
       coinB,
       tx.pure.u64(86_400_000n),
-      // M1: non-zero force-close penalty so a seat that abandons a dispute (stalls a draw / goes
-      // offline) forfeits its stake — withholding a reveal to dodge a bad card is never profitable.
-      tx.pure.u64(stake),
+      // M1: force-close penalty == the per-round bet ceiling (MAX_BET, clamped to the deposit) so a
+      // seat that abandons a dispute forfeits at least what a round risked — withholding a reveal to
+      // dodge a bad card is never profitable — while an offline party loses at most one round's
+      // worth, not its whole stake. Must match bjBetProtocol.maxBet's MAX_BET cap.
+      tx.pure.u64(stake < MAX_BET ? stake : MAX_BET),
       tx.object(SUI_CLOCK_OBJECT_ID),
     ],
   });

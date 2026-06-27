@@ -33,6 +33,10 @@ export const DOMAIN_HTLC_LOCK = enc.encode("sui_tunnel::htlc_lock");
 export const DOMAIN_SPEND_AUTHORIZATION = enc.encode(
   "sui_tunnel::spend_authorization"
 );
+/** `b"sui_tunnel::referee_assignment"` — 30 bytes (co-signed referee assignment). */
+export const DOMAIN_REFEREE_ASSIGNMENT = enc.encode(
+  "sui_tunnel::referee_assignment"
+);
 
 const U64_MAX = (1n << 64n) - 1n;
 
@@ -85,6 +89,23 @@ export interface StateUpdate {
   timestamp: bigint;
   partyABalance: bigint;
   partyBBalance: bigint;
+}
+
+/**
+ * Serialize the message both parties co-sign to assign an external referee. Byte-exact with
+ * Move `tunnel::serialize_referee_assignment`: `DOMAIN || tunnel_id(32) || referee(32)`, no length
+ * prefixes. Each party signs this with their tunnel key; the two signatures authorize
+ * `set_referee_cosigned` / `entry_set_referee` (see `txbuilders.buildSetReferee`).
+ */
+export function serializeRefereeAssignment(
+  tunnelId: string,
+  referee: string
+): Uint8Array {
+  return concatBytes([
+    DOMAIN_REFEREE_ASSIGNMENT,
+    addressToBytes32(tunnelId),
+    addressToBytes32(referee),
+  ]);
 }
 
 /** Serialize a state update for signing. Mirrors `tunnel::serialize_state_update`. */

@@ -2,6 +2,7 @@ import { settleViaBackend } from "@/backend/settle";
 import {
   BET_OPTIONS,
   BlackjackBetProtocol,
+  MAX_BET,
   MIN_BET,
   commitMoveFromSecret,
   getDealerParty,
@@ -206,6 +207,11 @@ export function usePvpBlackjack(): PvpView {
   // "Move generated for this nonce" guard: the commit/reveal driver fires on every confirmation,
   // so this prevents minting/scheduling two moves for the same target nonce (mirrors poker).
   const autoNonceRef = useRef<bigint>(-1n);
+  // Cold-load only: this seat's commit pre-image restored from the resume record. A resync that
+  // adopts the peer's post-commit checkpoint drops local secrets (they are never in the co-signed
+  // state), so the driver re-injects this onto the adopted state for the matching card so the owed
+  // reveal can proceed. Guarded by a commitment match, so a stale/foreign secret is never applied.
+  const restoredSecretRef = useRef<BlackjackSecret | null>(null);
   const lastBetRef = useRef<number>(DEFAULT_BET); // remembered bet for auto rounds; set on every player bet
   const stakeRef = useRef<bigint>(DEFAULT_STAKE); // chosen buy-in, read inside onMatch without stale closures
   const createdAtRef = useRef<bigint>(0n);
@@ -357,13 +363,30 @@ export function usePvpBlackjack(): PvpView {
           // settleNonce + 1) once the on-chain nonce is `settleNonce`. Sponsored in MTPS (the dealer
           // holds 0 SUI); SUI mode uses the wallet signer. `update_state` requires a strictly higher
           // nonce, so a stale settlement can never roll the on-chain nonce back.
+          // Idempotent: `update_state` requires a STRICTLY higher nonce, so if a prior attempt's
+          // checkpoint already landed (close then failed), re-submitting it would abort EInvalidNonce
+          // and wedge every retry. Read the current on-chain nonce and only checkpoint if it is still
+          // behind `settleNonce`; otherwise the checkpoint is already in place and we proceed to close.
           if (t.latest && settleNonce > 0n) {
-            const checkpointCoinType = isMtpsConfigured
-              ? MTPS_COIN_TYPE
-              : undefined;
-            await (isMtpsConfigured ? submitSponsored : submit)(
-              buildUpdateStateTx(t.tunnelId, t.latest, checkpointCoinType),
+            const obj = await client.getObject({
+              id: t.tunnelId,
+              options: { showContent: true },
+            });
+            const onchainNonce = BigInt(
+              (
+                obj.data?.content as
+                  | { fields?: { state?: { fields?: { nonce?: string } } } }
+                  | undefined
+              )?.fields?.state?.fields?.nonce ?? 0,
             );
+            if (onchainNonce < settleNonce) {
+              const checkpointCoinType = isMtpsConfigured
+                ? MTPS_COIN_TYPE
+                : undefined;
+              await (isMtpsConfigured ? submitSponsored : submit)(
+                buildUpdateStateTx(t.tunnelId, t.latest, checkpointCoinType),
+              );
+            }
           }
           // the dealer (the opener) submits the cooperative close
           const closeDigest = await settleViaBackend({
@@ -454,6 +477,35 @@ export function usePvpBlackjack(): PvpView {
           void finishSettle(t, channel, info.matchId);
           return;
         }
+        // Cold-load recovery (finding 3): if a resync adopted the peer's post-commit checkpoint, this
+        // seat's local commit secret was dropped (secrets never travel in the co-signed state). When
+        // we owe the reveal for a card whose on-chain commitment matches our PERSISTED secret,
+        // re-inject it so the reveal can proceed. The commitment match guards against ever applying a
+        // stale or foreign secret; once applied it is consumed.
+        const restored = restoredSecretRef.current;
+        if (st.phase === "draw_reveal" && restored) {
+          const owe =
+            info.role === "A" ? !st.pendingRevealA : !st.pendingRevealB;
+          const have = info.role === "A" ? st.localSecretA : st.localSecretB;
+          const commit =
+            info.role === "A" ? st.pendingCommitA : st.pendingCommitB;
+          const mine =
+            info.role === "A" ? restored.localSecretA : restored.localSecretB;
+          if (
+            owe &&
+            !have &&
+            commit &&
+            mine &&
+            core.bytesEqual(
+              core.computeCommitment(mine.value, mine.salt),
+              commit,
+            )
+          ) {
+            if (info.role === "A") t.state.localSecretA = mine;
+            else t.state.localSecretB = mine;
+            restoredSecretRef.current = null;
+          }
+        }
         // Single move generator per target nonce. Three lanes:
         //  - commit/reveal "plumbing": ALWAYS auto-driven for whichever seat owes it next (strictly
         //    A-then-B, for BOTH the player's and the dealer's cards). Secrets are minted from the
@@ -512,10 +564,16 @@ export function usePvpBlackjack(): PvpView {
         channel,
         tunnel: t,
         adapter: makeBlackjackResumeAdapter({
-          getSecret: () => ({
-            localSecretA: t.state.localSecretA,
-            localSecretB: t.state.localSecretB,
-          }),
+          // Read displayState, not state: a freshly-proposed commit's secret lives in the pending
+          // proposal (displayState) until the ACK confirms it into state. Capturing from state would
+          // record null for an in-flight commit and lose the pre-image on a reload.
+          getSecret: () => {
+            const s = t.displayState as BlackjackState;
+            return {
+              localSecretA: s.localSecretA,
+              localSecretB: s.localSecretB,
+            };
+          },
           setSecret: (sec) => {
             t.state.localSecretA = sec.localSecretA;
             t.state.localSecretB = sec.localSecretB;
@@ -604,6 +662,9 @@ export function usePvpBlackjack(): PvpView {
           if (secret) {
             tunnel.state.localSecretA = secret.localSecretA;
             tunnel.state.localSecretB = secret.localSecretB;
+            // Keep it for the driver to re-inject after a resync adopts a checkpoint that drops it
+            // (adoptCheckpoint replaces the whole state, so the copy above does not survive a resync).
+            restoredSecretRef.current = secret;
           }
           const rec = readResumeRecord(tunnel.tunnelId)!;
           matchIdRef.current = rec.matchId;
@@ -690,7 +751,13 @@ export function usePvpBlackjack(): PvpView {
         // Party A is always the player, party B the dealer — independent of who deposits which buy-in.
         const stakeA = m.role === "A" ? myStake : oppStake; // player's buy-in
         const stakeB = m.role === "B" ? myStake : oppStake; // dealer's buy-in
-        const penalty = stakeA < stakeB ? stakeA : stakeB; // unused on cooperative close; keep ≤ both deposits
+        // Force-close penalty == the per-round bet ceiling (MAX_BET). The protocol caps every bet at
+        // MAX_BET (bjBetProtocol.maxBet), so a seat that stalls a pending draw to dodge a loss
+        // forfeits at least what the round risked, and an offline party can lose at most one
+        // round's worth — never their whole stake. Clamped to the smaller deposit so the penalty
+        // can always be drawn from the non-raiser's balance. FUND_OPTIONS minimum (2500) >= MAX_BET.
+        const minStake = stakeA < stakeB ? stakeA : stakeB;
+        const penalty = minStake < MAX_BET ? minStake : MAX_BET;
 
         // MTPS path (ADR-0010): open/fund sponsored, staking the faucet token; SUI path keeps a
         // sender-pays fallback. `coinType` also threads into the wallet-close fallback (the backend

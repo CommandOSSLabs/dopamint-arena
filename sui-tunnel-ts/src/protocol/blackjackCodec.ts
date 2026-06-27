@@ -14,6 +14,17 @@ function revealToJson(r: BlackjackSlotReveal) {
   return { value: toHex(r.value), salt: toHex(r.salt) };
 }
 
+/** Decode a hex field with a clear, attributable error at the trust boundary. A hostile/garbled
+ *  peer frame (missing field, non-string, wrong length) is rejected here, not later as a cryptic
+ *  `fromHex(undefined)` or a silent zero-length buffer that only fails commitment verification. */
+function bytesFromHex(value: unknown, label: string, length?: number): Uint8Array {
+  if (typeof value !== "string") throw new Error(`${label} must be a hex string`);
+  const bytes = fromHex(value);
+  if (length !== undefined && bytes.length !== length)
+    throw new Error(`${label} must be ${length} bytes, got ${bytes.length}`);
+  return bytes;
+}
+
 export function blackjackMoveToJson(move: BlackjackMove): unknown {
   switch (move.kind) {
     case "commit":
@@ -36,20 +47,22 @@ export function blackjackMoveFromJson(value: unknown): BlackjackMove {
     reveal?: { value?: string; salt?: string };
   };
   switch (o.kind) {
-    case "commit": {
-      const commitment = fromHex(o.commitment!);
-      if (commitment.length !== 32)
-        throw new Error("commit.commitment must be 32 bytes");
-      return { kind: "commit", commitment };
-    }
-    case "reveal":
+    case "commit":
+      return {
+        kind: "commit",
+        commitment: bytesFromHex(o.commitment, "commit.commitment", 32),
+      };
+    case "reveal": {
+      if (!o.reveal || typeof o.reveal !== "object")
+        throw new Error("reveal.reveal must be an object");
       return {
         kind: "reveal",
         reveal: {
-          value: fromHex(o.reveal!.value!),
-          salt: fromHex(o.reveal!.salt!),
+          value: bytesFromHex(o.reveal.value, "reveal.value"),
+          salt: bytesFromHex(o.reveal.salt, "reveal.salt"),
         },
       };
+    }
     case "deal":
       return { kind: "deal" };
     case "hit":

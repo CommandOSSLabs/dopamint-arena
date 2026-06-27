@@ -91,3 +91,16 @@ test("DistributedTunnel REFUSES a secret-bearing protocol without a moveCodec (f
     ),
   );
 });
+
+test("decode rejects malformed commit/reveal frames with clear errors", () => {
+  assert.throws(() => blackjackMoveCodec.decode({ kind: "nope" }), /unsupported/);
+  assert.throws(
+    () => blackjackMoveCodec.decode({ kind: "commit", commitment: "0x00" }),
+    /32 bytes/,
+  );
+  assert.throws(() => blackjackMoveCodec.decode({ kind: "reveal" }), /must be an object/);
+  assert.throws(
+    () => blackjackMoveCodec.decode({ kind: "reveal", reveal: { salt: "0x01" } }),
+    /reveal\.value must be a hex string/,
+  );
+});

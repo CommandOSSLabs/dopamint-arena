@@ -1465,8 +1465,14 @@ public fun raise_dispute_current_state<T>(
     ENotAuthorized,
   );
 
-  // Monotonic dispute progress: an un-advanced state cannot be re-disputed, so a
-  // resolve that returns the tunnel to ACTIVE cannot be followed by a free re-dispute.
+  // Invariant: ONE dispute per state advance. Each raise requires a nonce >= the high-water and
+  // bumps the high-water to nonce + 1, so a re-dispute needs a STRICTLY higher co-signed nonce
+  // than the previous raise. A resolve advances the state (to a higher nonce) but deliberately
+  // leaves last_disputed_nonce, so the same nonce can never be re-disputed. Alternating
+  // raise/resolve can only walk UP the co-signed history (each step a fresh, higher nonce) — and
+  // new nonces require BOTH parties' co-signatures, which a stalling party cannot mint alone. So
+  // the timeout-clock reset is bounded by genuine state progress, never an indefinite postponement,
+  // and the final settled balances are always the latest co-signed (monotonic) state.
   assert!(tunnel.state.nonce >= tunnel.last_disputed_nonce, EStaleState);
   tunnel.last_disputed_nonce = tunnel.state.nonce + 1;
 
@@ -1523,6 +1529,14 @@ public fun force_close_after_timeout<T>(
   // Apply penalty: the dispute raiser waited through the timeout, so they
   // get compensated from the non-responding party's balance. The penalty
   // is capped at the non-raiser's available balance to prevent underflow.
+  //
+  // By design this rewards the raiser, NOT a provably-wronged party — the standard state-channel
+  // watchtower model: a party (or its watchtower) must come online within `timeout_ms` to
+  // `resolve_dispute`/`agree_to_dispute`, else it is treated as having abandoned the channel.
+  // The mechanism cannot distinguish a malicious staller from a merely-offline party, so callers
+  // MUST size `timeout_ms` to the counterparty's expected availability and `penalty_amount` to the
+  // griefing they want to deter. For blackjack the open builders use timeout_ms = 24h and
+  // penalty = the per-seat stake, so only a >24h-abandoned game forfeits, bounded by that stake.
   if (tunnel.penalty_amount > 0) {
     let raiser = *tunnel.dispute_raiser.borrow();
     if (raiser == tunnel.party_a.address) {

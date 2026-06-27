@@ -63,3 +63,18 @@ test("decode rejects an unknown action and a malformed commitment", () => {
     /32 bytes/,
   );
 });
+
+test("decode rejects a malformed reveal with a clear error (no cryptic fromHex)", () => {
+  assert.throws(
+    () => bjMoveCodec.decode({ action: "reveal" }),
+    /must be an object/,
+  );
+  assert.throws(
+    () => bjMoveCodec.decode({ action: "reveal", reveal: { salt: "0x01" } }),
+    /reveal\.value must be a hex string/,
+  );
+  assert.throws(
+    () => bjMoveCodec.decode({ action: "reveal", reveal: { value: "0x01" } }),
+    /reveal\.salt must be a hex string/,
+  );
+});

@@ -10,6 +10,22 @@ import { fromHex, toHex } from "sui-tunnel-ts/core/bytes";
 import type { MoveCodec } from "sui-tunnel-ts/core/distributedFrame";
 import type { BetBlackjackMove } from "./bjBetProtocol";
 
+/** Decode a hex field with a clear, attributable error at the trust boundary. A hostile/garbled
+ *  peer frame (missing field, non-string, wrong length) is rejected here, not later as a cryptic
+ *  `fromHex(undefined)` or a silent zero-length buffer that only fails commitment verification. */
+function bytesFromHex(
+  value: unknown,
+  label: string,
+  length?: number,
+): Uint8Array {
+  if (typeof value !== "string")
+    throw new Error(`${label} must be a hex string`);
+  const bytes = fromHex(value);
+  if (length !== undefined && bytes.length !== length)
+    throw new Error(`${label} must be ${length} bytes, got ${bytes.length}`);
+  return bytes;
+}
+
 export const bjMoveCodec: MoveCodec<BetBlackjackMove> = {
   encode(m) {
     switch (m.action) {
@@ -41,20 +57,22 @@ export const bjMoveCodec: MoveCodec<BetBlackjackMove> = {
         if (typeof o.amount !== "number" || !Number.isInteger(o.amount))
           throw new Error("bet.amount must be an integer");
         return { action: "bet", amount: o.amount };
-      case "commit": {
-        const commitment = fromHex(o.commitment!);
-        if (commitment.length !== 32)
-          throw new Error("commit.commitment must be 32 bytes");
-        return { action: "commit", commitment };
-      }
-      case "reveal":
+      case "commit":
+        return {
+          action: "commit",
+          commitment: bytesFromHex(o.commitment, "commit.commitment", 32),
+        };
+      case "reveal": {
+        if (!o.reveal || typeof o.reveal !== "object")
+          throw new Error("reveal.reveal must be an object");
         return {
           action: "reveal",
           reveal: {
-            value: fromHex(o.reveal!.value!),
-            salt: fromHex(o.reveal!.salt!),
+            value: bytesFromHex(o.reveal.value, "reveal.value"),
+            salt: bytesFromHex(o.reveal.salt, "reveal.salt"),
           },
         };
+      }
       case "hit":
         return { action: "hit" };
       case "stand":
