@@ -166,7 +166,7 @@ pub fn run_simple(
     run_with(workers, duration_secs, matches, |idx| {
         let t = Instant::now();
         let kit = SeatKit::new(&SEAT_A, &SEAT_B);
-        let r = play_match_seeded(
+        let r = play_match_seeded::<tunnel_harness::JsonFrameCodec>(
             mode.seed(idx),
             &kit,
             &tunnel_id_for(idx),
@@ -204,7 +204,7 @@ pub fn run_fresh_keys(
         getrandom::getrandom(&mut secret_b).expect("os rng");
         let t = Instant::now();
         let kit = SeatKit::new(&secret_a, &secret_b);
-        let r = play_match_seeded(
+        let r = play_match_seeded::<tunnel_harness::JsonFrameCodec>(
             mode.seed(idx),
             &kit,
             &tunnel_id_for(idx),
@@ -236,7 +236,7 @@ pub fn run_optimized(
         }
         KIT.with(|kit| {
             let t = Instant::now();
-            let r = play_match_seeded(
+            let r = play_match_seeded::<tunnel_harness::JsonFrameCodec>(
                 mode.seed(idx),
                 kit,
                 &tunnel_id_for(idx),
