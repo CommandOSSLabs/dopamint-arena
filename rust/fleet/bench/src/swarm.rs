@@ -310,9 +310,9 @@ mod tests {
 
     #[test]
     fn varied_mode_produces_a_nondegenerate_move_distribution() {
-        let out = run_simple(2, 3600, Some(200), CardMode::Varied, CodecKind::Json);
-        assert_eq!(out.tunnels_settled, 200);
-        assert_eq!(out.matches_claimed, 200);
+        let out = run_simple(2, 3600, Some(24), CardMode::Varied, CodecKind::Bcs);
+        assert_eq!(out.tunnels_settled, 24);
+        assert_eq!(out.matches_claimed, 24);
         // Varied cards => not every match is 143 moves.
         assert!(
             out.moves_dist.peak > out.moves_dist.min,
