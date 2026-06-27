@@ -11,8 +11,8 @@
  * can replay it.
  *
  * Deck: infinite uniform RANK (1..13) with replacement — duplicate ranks are a legal pair,
- * no dedup, no cap on draws. Rules (soft-ace handValue, dealer draws to 17, fixed wager,
- * clamped settlement) are unchanged from v1.
+ * no dedup, no cap on draws. The player chooses a variable bet at the start of each round
+ * (soft-ace handValue, dealer draws to 17, clamped settlement otherwise unchanged from v1).
  */
 
 import { concatBytes } from "../core/bytes";
@@ -152,7 +152,11 @@ function isBust(hand: number[]): boolean {
   return handValue(hand) > BUST_AT;
 }
 
-/** Largest bet both sides can cover this round. */
+/**
+ * Largest bet both sides can cover this round (the smaller balance). Betting the full
+ * stack (all-in) is intentionally permitted; the game just turns terminal afterward if a
+ * side drops below MIN_BET.
+ */
 export function maxBet(s: BlackjackState): bigint {
   return s.balanceA < s.balanceB ? s.balanceA : s.balanceB;
 }
