@@ -6,7 +6,13 @@ use fleet_bench::report;
 use fleet_bench::{resources, swarm};
 
 fn main() {
-    let opts = match cli::parse(std::env::args().skip(1)) {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
+        print!("{}", cli::help_text());
+        return;
+    }
+
+    let opts = match cli::parse(args) {
         Ok(o) => o,
         Err(e) => {
             eprintln!("{e}");

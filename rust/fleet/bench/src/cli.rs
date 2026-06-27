@@ -3,7 +3,7 @@
 //! support (relay/onchain/concurrency/…) with explanatory errors rather than
 //! silently ignoring them.
 
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Runner {
@@ -36,17 +36,42 @@ pub struct BenchOpts {
 
 /// Raw clap layout. Validated and lowered into `BenchOpts` by `parse`.
 #[derive(Parser, Debug)]
-#[command(no_binary_name = true, disable_help_flag = false)]
+#[command(
+    no_binary_name = true,
+    disable_help_flag = false,
+    about = "Run the local off-chain blackjack tunnel fleet benchmark.",
+    long_about = "Run the local off-chain blackjack tunnel fleet benchmark.\n\n\
+The bench drives two in-process TunnelSeat instances per match and reports \
+throughput, frame bytes, match counts, and resource usage. It is CPU-local: \
+no relay, no chain submission, and no network transport are used.",
+    after_help = "Examples:\n  \
+fleet-bench --runner simple --matches 50 --deterministic --codec postcard\n  \
+fleet-bench --runner both --duration 15 --codec json\n  \
+fleet-bench --runner optimized --matches 1000 --fixed-keys --codec bcs\n\n\
+Runner values:\n  \
+simple: fresh SeatKit per match unless --fixed-keys is set\n  \
+optimized: cached per-worker SeatKit\n  \
+both: run simple first, then optimized, and report both TPS values\n\n\
+Codec values:\n  \
+json: TS-parity wire for bot-vs-user and regression baselines\n  \
+bcs: fixed-width Sui-native binary wire for bot-vs-bot comparisons\n  \
+postcard: compact default candidate for bot-vs-bot"
+)]
 struct Raw {
-    #[arg(long, default_value = "auto")]
+    /// Number of rayon workers, or `auto` to use available CPU parallelism.
+    #[arg(long, default_value = "auto", value_name = "auto|N")]
     workers: String,
-    #[arg(long, default_value_t = 15)]
+    /// Time-bounded run length in seconds. Ignored once --matches is exhausted.
+    #[arg(long, default_value_t = 15, value_name = "SECONDS")]
     duration: u64,
-    #[arg(long)]
+    /// Stop after exactly this many matches. Useful for deterministic regressions.
+    #[arg(long, value_name = "N")]
     matches: Option<u64>,
-    #[arg(long, default_value = "both")]
+    /// Runner implementation to benchmark: simple, optimized, or both.
+    #[arg(long, default_value = "both", value_name = "simple|optimized|both")]
     runner: String,
-    #[arg(long, default_value = "json")]
+    /// Frame wire codec: json, bcs, or postcard.
+    #[arg(long, default_value = "json", value_name = "json|bcs|postcard")]
     codec: String,
     /// Use fixed seat keys (opt out of the default fresh-per-match keygen).
     #[arg(long)]
@@ -58,16 +83,26 @@ struct Raw {
     #[allow(dead_code)]
     #[arg(long)]
     offchain: bool,
-    #[arg(long)]
+    #[arg(long, hide = true)]
     onchain: bool,
-    #[arg(long, default_value = "local")]
+    /// Channel transport. Only `local` is implemented in this synchronous bench.
+    #[arg(long, default_value = "local", value_name = "local")]
     channel: String,
-    #[arg(long, default_value = "blackjack")]
+    /// Game protocol. Only `blackjack` is implemented by fleet-bench.
+    #[arg(long, default_value = "blackjack", value_name = "blackjack")]
     game: String,
     /// Removed: meaningless in the synchronous CPU path. Present so we can
     /// reject it with a clear message instead of a generic "unexpected arg".
     #[arg(long)]
     concurrency: Option<u64>,
+}
+
+pub fn help_text() -> String {
+    let mut help = Vec::new();
+    Raw::command()
+        .write_long_help(&mut help)
+        .expect("help renders");
+    String::from_utf8(help).expect("clap help is utf8")
 }
 
 pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String> {
@@ -245,5 +280,19 @@ mod tests {
     fn unknown_codec_is_rejected_with_explanation() {
         let err = parse_v(&["--codec", "protobuf"]).unwrap_err();
         assert!(err.contains("codec"), "message should name the flag: {err}");
+    }
+
+    #[test]
+    fn help_documents_common_runs_and_value_meanings() {
+        let help = help_text();
+
+        assert!(help.contains("Run the local off-chain blackjack tunnel fleet benchmark"));
+        assert!(help.contains("Examples:"));
+        assert!(help
+            .contains("fleet-bench --runner simple --matches 50 --deterministic --codec postcard"));
+        assert!(help.contains("json: TS-parity wire for bot-vs-user"));
+        assert!(help.contains("postcard: compact default candidate for bot-vs-bot"));
+        assert!(help.contains("simple|optimized|both"));
+        assert!(help.contains("json|bcs|postcard"));
     }
 }
