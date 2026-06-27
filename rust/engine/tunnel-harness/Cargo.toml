@@ -11,3 +11,6 @@ tunnel-core = { path = "../tunnel-core" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 hex.workspace = true
+bcs.workspace = true
+postcard.workspace = true
+serde-big-array = { workspace = true }

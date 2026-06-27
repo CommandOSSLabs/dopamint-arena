@@ -43,6 +43,8 @@ sui-sdk-types = "0.3"
 sui-transaction-builder = "0.3"
 sui-crypto = { version = "0.3", features = ["ed25519"] }
 bcs = "0.2"
+postcard = { version = "1", default-features = false, features = ["use-std"] }
+serde-big-array = "0.5"
 base64 = "0.22"
 # Postgres read-model for the explorer index (settlement history). rustls to reuse
 # the single ring CryptoProvider already selected for fred/reqwest (no aws-lc/cmake).
