@@ -1,30 +1,25 @@
-import {
-  clearResumeRecord,
-  flushResumeWrites,
-  readResumeRecord,
-  toWireCoSigned,
-  writeResumeRecord,
-} from "@/pvp/resume";
-import { rebuildTunnel, restoreInto } from "@/pvp/resumeSession";
-import assert from "node:assert/strict";
 import test from "node:test";
-import { toHex } from "sui-tunnel-ts/core/bytes";
-import { generateKeyPair } from "sui-tunnel-ts/core/crypto";
-import { defaultBackend } from "sui-tunnel-ts/core/crypto-native";
+import assert from "node:assert/strict";
 import { DistributedTunnel } from "sui-tunnel-ts/core/distributedTunnel";
 import { makeEndpoint, OffchainTunnel } from "sui-tunnel-ts/core/tunnel";
+import { defaultBackend } from "sui-tunnel-ts/core/crypto-native";
+import { generateKeyPair } from "sui-tunnel-ts/core/crypto";
+import { toHex } from "sui-tunnel-ts/core/bytes";
+import { rebuildTunnel, restoreInto } from "@/pvp/resumeSession";
 import {
+  writeResumeRecord,
+  flushResumeWrites,
+  readResumeRecord,
+  clearResumeRecord,
+  toWireCoSigned,
+} from "@/pvp/resume";
+import {
+  BlackjackProtocol,
   actorFor,
-  BlackjackBetProtocol,
-  commitMoveFromSecret,
-  fixedBetMove,
-  revealMoveFromSecret,
-  type BetBlackjackMove,
-  type BetBlackjackSecret,
-  type BetBlackjackState,
-} from "./app/lib/bjBetProtocol";
-import { handValue } from "./app/lib/bjCards";
-import { bjMoveCodec } from "./app/lib/bjMoveCodec";
+  type BlackjackState,
+  type BlackjackMove,
+} from "sui-tunnel-ts/protocol/blackjack";
+import { bjBetMove } from "@/games/blackjack/app/lib/bjBet";
 import { makeBlackjackResumeAdapter } from "./blackjackResumeAdapter";
 
 // localStorage/window fakes (resume modules touch storage lazily, inside the test body).
@@ -42,50 +37,42 @@ import { makeBlackjackResumeAdapter } from "./blackjackResumeAdapter";
 })();
 (globalThis as Record<string, unknown>).window = { addEventListener() {} };
 
-// Deterministic per-seat secrets so the self-play drive is reproducible (this is NOT a fairness
-// path — both seats are local and no pre-image is relayed). Real play uses the CSPRNG.
-const DET_A: BetBlackjackSecret = {
-  value: new Uint8Array(16).fill(1),
-  salt: new Uint8Array(16).fill(2),
-};
-const DET_B: BetBlackjackSecret = {
-  value: new Uint8Array(16).fill(3),
-  salt: new Uint8Array(16).fill(4),
-};
-/** The seat that acts next: plumbing A-then-B for draws, else the protocol's single actor. */
-const actingSeat = (s: BetBlackjackState): "A" | "B" => {
-  if (s.phase === "draw_commit") return !s.pendingCommitA ? "A" : "B";
-  if (s.phase === "draw_reveal") return !s.pendingRevealA ? "A" : "B";
-  return actorFor(s);
-};
-const moveFor = (s: BetBlackjackState, by: "A" | "B"): BetBlackjackMove => {
-  if (s.phase === "draw_commit")
-    return commitMoveFromSecret(by === "A" ? DET_A : DET_B);
-  if (s.phase === "draw_reveal")
-    return revealMoveFromSecret(
-      (by === "A" ? s.localSecretA : s.localSecretB)!,
-    );
-  if (s.phase === "round_over") return fixedBetMove(50, s)!;
-  return { action: handValue(s.playerHand) < 17 ? "hit" : "stand" };
-};
+// Drive one protocol move for the given actor; handles bet, commit, reveal, hit/stand phases.
+function nextMove(
+  proto: BlackjackProtocol,
+  s: BlackjackState,
+): BlackjackMove | null {
+  if (s.phase === "round_over") return bjBetMove(50, s);
+  const by = actorFor(s);
+  if (!by) return null;
+  return proto.randomMove(s, by, Math.random);
+}
 
 // A reloaded blackjack seat must rebuild from localStorage with the SAME asymmetric per-seat
 // buy-ins (recovered from the checkpoint split, not a separate stake message) and co-sign its next
 // move byte-identically to a never-dropped tunnel.
 test("blackjack cold-load: rebuilt seat keeps asymmetric balances and co-signs byte-identically", () => {
-  const proto = new BlackjackBetProtocol() as never;
+  const proto = new BlackjackProtocol() as never;
   const ka = generateKeyPair(),
     kb = generateKeyPair();
   const tid = `0x${"74".repeat(32)}`;
+
+  // Secrets live on the selfPlay tunnel state; the adapter reads/writes them there.
+  let capturedSecretA: BlackjackState["localSecretA"] = null;
+  let capturedSecretB: BlackjackState["localSecretB"] = null;
   const adapter = makeBlackjackResumeAdapter({
-    getSecret: () => ({ localSecretA: null, localSecretB: null }),
-    setSecret: () => {},
+    getSecret: () => ({
+      localSecretA: capturedSecretA,
+      localSecretB: capturedSecretB,
+    }),
+    setSecret: (sec) => {
+      capturedSecretA = sec.localSecretA;
+      capturedSecretB = sec.localSecretB;
+    },
     onReconciled: () => {},
   });
 
-  // Drive a self-play tunnel with ASYMMETRIC buy-ins through the opening commit-reveal deal until
-  // seat A (the player) owes a DETERMINISTIC hit/stand — so the proposed move is byte-identical
-  // across the never-dropped and rebuilt tunnels (a commit's CSPRNG secret would not be).
+  // Drive a self-play tunnel with ASYMMETRIC buy-ins until seat A (the player) owes the next move.
   const sp = OffchainTunnel.selfPlay(
     proto,
     tid,
@@ -96,16 +83,23 @@ test("blackjack cold-load: rebuilt seat keeps asymmetric balances and co-signs b
     { a: 300n, b: 700n },
   );
   let guard = 0;
-  while (
-    !(sp.latest && sp.state.phase === "player" && actorFor(sp.state) === "A") &&
-    guard++ < 200
-  ) {
-    const by = actingSeat(sp.state);
-    sp.step(moveFor(sp.state, by), by);
+  // Advance until we are in a stable "player" phase where A acts — skipping the commit/reveal
+  // ladder of the deal. Guard cap is generous because commit-reveal needs ~6–10 steps per round.
+  while (guard++ < 200) {
+    const by = actorFor(sp.state as never);
+    if (by === "A" && (sp.state as never as BlackjackState).phase === "player")
+      break;
+    const move = nextMove(proto as never, sp.state as never);
+    if (!move) break;
+    sp.step(move, by ?? "A");
+    // Mirror the active secret from tunnel state so the adapter can capture it.
+    capturedSecretA = (sp.state as never as BlackjackState).localSecretA;
+    capturedSecretB = (sp.state as never as BlackjackState).localSecretB;
   }
+  const spState = sp.state as never as BlackjackState;
   assert.ok(
-    sp.latest && sp.state.phase === "player" && actorFor(sp.state) === "A",
-    "drove blackjack to a player-phase checkpoint where seat A acts next",
+    sp.latest && spState.phase === "player" && actorFor(sp.state as never) === "A",
+    "drove blackjack to a checkpoint where seat A plays next (player phase)",
   );
   // Asymmetric split survived into the checkpoint (the two seats funded 300/700).
   assert.notEqual(
@@ -113,7 +107,8 @@ test("blackjack cold-load: rebuilt seat keeps asymmetric balances and co-signs b
     sp.latest!.update.partyBBalance,
   );
 
-  const move = moveFor(sp.state, "A");
+  // Choose the move A will propose from this checkpoint.
+  const move = nextMove(proto as never, sp.state as never)!;
   const MOVE_TS = 9n;
 
   const record = {
@@ -125,7 +120,7 @@ test("blackjack cold-load: rebuilt seat keeps asymmetric balances and co-signs b
     opponentPubkeyHex: toHex(kb.publicKey),
     selfEphemeralSecretHex: toHex(ka.secretKey),
     latestCoSigned: toWireCoSigned(sp.latest!),
-    latestState: adapter.serializeState(sp.state),
+    latestState: adapter.serializeState(sp.state as never),
     updatedAt: Date.now(),
   };
   writeResumeRecord(record);
@@ -151,13 +146,12 @@ test("blackjack cold-load: rebuilt seat keeps asymmetric balances and co-signs b
         false,
       ),
       selfParty: "A",
-      moveCodec: bjMoveCodec,
     },
     { send: (b) => refSent.push(b), onFrame() {} },
     { a: 300n, b: 700n },
   );
   restoreInto(ref as never, readResumeRecord(tid)!, adapter as never);
-  (ref as never as { propose(m: BetBlackjackMove, ts: bigint): void }).propose(
+  (ref as never as { propose(m: BlackjackMove, ts: bigint): void }).propose(
     move,
     MOVE_TS,
   );
@@ -177,7 +171,7 @@ test("blackjack cold-load: rebuilt seat keeps asymmetric balances and co-signs b
   const { tunnel } = rebuildTunnel(
     mp,
     readResumeRecord(tid)!,
-    { proto, adapter, moveCodec: bjMoveCodec } as never,
+    { proto, adapter } as never,
     { selfWallet: "0xA" },
   );
   assert.equal(
@@ -189,7 +183,7 @@ test("blackjack cold-load: rebuilt seat keeps asymmetric balances and co-signs b
     sp.latest!.update.partyBBalance,
   );
   (
-    tunnel as never as { propose(m: BetBlackjackMove, ts: bigint): void }
+    tunnel as never as { propose(m: BlackjackMove, ts: bigint): void }
   ).propose(move, MOVE_TS);
 
   assert.deepEqual(
