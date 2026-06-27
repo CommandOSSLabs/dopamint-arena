@@ -1,22 +1,37 @@
-//! Command-line surface for the swarm bench binary. Parses the loadbench-style
-//! flags, resolves `--workers auto`, and rejects flags this build does not yet
-//! support (relay/onchain/concurrency/…) with explanatory errors rather than
-//! silently ignoring them.
+//! Command-line surface for the swarm bench binary. Parses the local fleet flags,
+//! resolves `--workers auto`, and rejects unsupported transport/anchor modes with
+//! explanatory errors rather than silently ignoring them.
 
 use clap::{CommandFactory, Parser};
+use tunnel_core::protocol_id::{BLACKJACK_BET_V1, PORTED_PROTOCOL_IDS};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Runner {
-    Simple,
-    Optimized,
-    Both,
+pub enum BenchMode {
+    Baseline,
+    CachedSigners,
+    Compare,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum CodecKind {
+pub enum FrameCodecKind {
     Json,
     Bcs,
     Postcard,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ScenarioMode {
+    Varied,
+    Golden,
+}
+
+impl ScenarioMode {
+    pub fn card_seed(self, match_index: u64) -> Option<u64> {
+        match self {
+            ScenarioMode::Varied => Some(match_index),
+            ScenarioMode::Golden => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -24,14 +39,15 @@ pub struct BenchOpts {
     pub workers: usize,
     pub duration_secs: u64,
     pub matches: Option<u64>,
-    pub runner: Runner,
-    /// Generate two fresh ed25519 keypairs per match (mirrors loadbench's
-    /// per-match `generateKeyPairSync`) for an apples-to-apples harness number.
-    pub fresh_keys: bool,
-    /// Card distribution mode for the swarm (`Varied` by default).
-    pub card_mode: crate::swarm::CardMode,
+    pub bench_mode: BenchMode,
+    pub protocol_id: &'static str,
+    /// Reuse one fixed signer pair across baseline matches. The default keeps
+    /// fresh per-match signer generation in the measured path.
+    pub reuse_signers: bool,
+    /// Protocol scenario for generated matches (`Varied` by default).
+    pub scenario: ScenarioMode,
     /// Wire codec used to serialize tunnel frames (`Json` by default).
-    pub codec: CodecKind,
+    pub frame_codec: FrameCodecKind,
 }
 
 /// Raw clap layout. Validated and lowered into `BenchOpts` by `parse`.
@@ -45,14 +61,21 @@ The bench drives two in-process PartyRuntime instances per match and reports \
 throughput, frame bytes, match counts, and resource usage. It is CPU-local: \
 no relay, no chain submission, and no network transport are used.",
     after_help = "Examples:\n  \
-fleet-bench --runner simple --matches 50 --deterministic --codec postcard\n  \
-fleet-bench --runner both --duration 15 --codec json\n  \
-fleet-bench --runner optimized --matches 1000 --fixed-keys --codec bcs\n\n\
-Runner values:\n  \
-simple: fresh SeatKit per match unless --fixed-keys is set\n  \
-optimized: cached per-worker SeatKit\n  \
-both: run simple first, then optimized, and report both TPS values\n\n\
-Codec values:\n  \
+fleet-bench --bench-mode baseline --matches 50 --scenario golden --frame-codec postcard\n  \
+fleet-bench --bench-mode compare --duration 15 --frame-codec json\n  \
+fleet-bench --bench-mode cached-signers --matches 1000 --reuse-signers --frame-codec bcs\n\n\
+Bench mode values:\n  \
+baseline: headline path; fresh signers per match unless --reuse-signers is set\n  \
+cached-signers: cache one signer pair per worker to isolate play-loop throughput\n  \
+compare: run baseline first, then cached-signers, and report both TPS values\n\n\
+Protocol IDs:\n  \
+fleet-bench currently executes blackjack.bet.v1. Ported Rust protocol IDs are:\n  \
+api_credits.v1, battleship.v1, battleship.series.v1, blackjack.bet.v1,\n  \
+blackjack.duel.v1, blackjack.v2, bomb_it.v1, bomb_it.series.v1, caro.v1,\n  \
+caro.series.v1, chat.v1, cross.v1, cross.series.v1, payments.v1,\n  \
+quantum_poker.v2, tic_tac_toe.v1, tic_tac_toe.series.v1,\n  \
+world_canvas.cell.v1, world_canvas.stroke.v1\n\n\
+Frame codec values:\n  \
 json: TS-parity wire for bot-vs-user and regression baselines\n  \
 bcs: fixed-width Sui-native binary wire for bot-vs-bot comparisons\n  \
 postcard: compact default candidate for bot-vs-bot"
@@ -64,21 +87,29 @@ struct Raw {
     /// Time-bounded run length in seconds. Ignored once --matches is exhausted.
     #[arg(long, default_value_t = 15, value_name = "SECONDS")]
     duration: u64,
-    /// Stop after exactly this many matches. Useful for deterministic regressions.
+    /// Stop after exactly this many matches. Useful for golden regressions.
     #[arg(long, value_name = "N")]
     matches: Option<u64>,
-    /// Runner implementation to benchmark: simple, optimized, or both.
-    #[arg(long, default_value = "both", value_name = "simple|optimized|both")]
-    runner: String,
+    /// Measurement mode: baseline, cached-signers, or compare.
+    #[arg(
+        long = "bench-mode",
+        default_value = "compare",
+        value_name = "baseline|cached-signers|compare"
+    )]
+    bench_mode: String,
     /// Frame wire codec: json, bcs, or postcard.
-    #[arg(long, default_value = "json", value_name = "json|bcs|postcard")]
-    codec: String,
-    /// Use fixed seat keys (opt out of the default fresh-per-match keygen).
+    #[arg(
+        long = "frame-codec",
+        default_value = "json",
+        value_name = "json|bcs|postcard"
+    )]
+    frame_codec: String,
+    /// Reuse one fixed signer pair instead of generating fresh signers per match.
     #[arg(long)]
-    fixed_keys: bool,
-    /// Replay the fixed golden 143-move match every time (opt out of varied cards).
-    #[arg(long)]
-    deterministic: bool,
+    reuse_signers: bool,
+    /// Protocol scenario: varied gameplay or the protocol's golden regression case.
+    #[arg(long, default_value = "varied", value_name = "varied|golden")]
+    scenario: String,
     /// Accepted and ignored — `--offchain` is the only supported anchor mode.
     #[allow(dead_code)]
     #[arg(long)]
@@ -92,13 +123,9 @@ struct Raw {
         value_name = "local"
     )]
     frame_transport: String,
-    /// Game protocol. Only `blackjack` is implemented by fleet-bench.
-    #[arg(long, default_value = "blackjack", value_name = "blackjack")]
-    game: String,
-    /// Removed: meaningless in the synchronous CPU path. Present so we can
-    /// reject it with a clear message instead of a generic "unexpected arg".
-    #[arg(long)]
-    concurrency: Option<u64>,
+    /// Protocol ID to execute. Only blackjack.bet.v1 is implemented by fleet-bench.
+    #[arg(long = "protocol-id", default_value = BLACKJACK_BET_V1, value_name = "ID")]
+    protocol_id: String,
 }
 
 pub fn help_text() -> String {
@@ -112,12 +139,6 @@ pub fn help_text() -> String {
 pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String> {
     let raw = Raw::try_parse_from(args).map_err(|e| e.to_string())?;
 
-    if raw.concurrency.is_some() {
-        return Err("--concurrency is not supported: fleet-bench runs matches \
-                    synchronously per thread, so there is no per-worker concurrency \
-                    to set (drop the flag)."
-            .to_string());
-    }
     if raw.onchain {
         return Err("--onchain is not supported in this build (see Plan 6)".to_string());
     }
@@ -127,10 +148,17 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
             raw.frame_transport
         ));
     }
-    if raw.game != "blackjack" {
+    if !PORTED_PROTOCOL_IDS.contains(&raw.protocol_id.as_str()) {
         return Err(format!(
-            "--game {} is not supported in this build; only 'blackjack'",
-            raw.game
+            "--protocol-id {} is not a ported Rust protocol ID; known IDs: {}",
+            raw.protocol_id,
+            PORTED_PROTOCOL_IDS.join(", ")
+        ));
+    }
+    if raw.protocol_id != BLACKJACK_BET_V1 {
+        return Err(format!(
+            "--protocol-id {} is ported but fleet-bench can currently execute only {}",
+            raw.protocol_id, BLACKJACK_BET_V1
         ));
     }
 
@@ -150,36 +178,43 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
         return Err("--workers must be at least 1".to_string());
     }
 
-    let runner = match raw.runner.as_str() {
-        "simple" => Runner::Simple,
-        "optimized" => Runner::Optimized,
-        "both" => Runner::Both,
+    let bench_mode = match raw.bench_mode.as_str() {
+        "baseline" => BenchMode::Baseline,
+        "cached-signers" => BenchMode::CachedSigners,
+        "compare" => BenchMode::Compare,
         other => {
             return Err(format!(
-                "--runner must be simple|optimized|both, got {other}"
+                "--bench-mode must be baseline|cached-signers|compare, got {other}"
             ))
         }
     };
 
-    let codec = match raw.codec.as_str() {
-        "json" => CodecKind::Json,
-        "bcs" => CodecKind::Bcs,
-        "postcard" => CodecKind::Postcard,
-        other => return Err(format!("--codec must be json|bcs|postcard, got {other}")),
+    let frame_codec = match raw.frame_codec.as_str() {
+        "json" => FrameCodecKind::Json,
+        "bcs" => FrameCodecKind::Bcs,
+        "postcard" => FrameCodecKind::Postcard,
+        other => {
+            return Err(format!(
+                "--frame-codec must be json|bcs|postcard, got {other}"
+            ))
+        }
+    };
+
+    let scenario = match raw.scenario.as_str() {
+        "varied" => ScenarioMode::Varied,
+        "golden" => ScenarioMode::Golden,
+        other => return Err(format!("--scenario must be varied|golden, got {other}")),
     };
 
     Ok(BenchOpts {
         workers,
         duration_secs: raw.duration,
         matches: raw.matches,
-        runner,
-        fresh_keys: !raw.fixed_keys,
-        card_mode: if raw.deterministic {
-            crate::swarm::CardMode::Deterministic
-        } else {
-            crate::swarm::CardMode::Varied
-        },
-        codec,
+        bench_mode,
+        protocol_id: BLACKJACK_BET_V1,
+        reuse_signers: raw.reuse_signers,
+        scenario,
+        frame_codec,
     })
 }
 
@@ -197,13 +232,14 @@ mod tests {
             "--offchain",
             "--frame-transport",
             "local",
-            "--game",
-            "blackjack",
+            "--protocol-id",
+            "blackjack.bet.v1",
         ])
         .unwrap();
         assert_eq!(o.duration_secs, 15);
         assert_eq!(o.matches, None);
-        assert_eq!(o.runner, Runner::Both);
+        assert_eq!(o.bench_mode, BenchMode::Compare);
+        assert_eq!(o.protocol_id, "blackjack.bet.v1");
         assert!(o.workers >= 1);
     }
 
@@ -219,40 +255,51 @@ mod tests {
     }
 
     #[test]
-    fn explicit_workers_and_matches_and_runner() {
-        let o = parse_v(&["--workers", "1", "--matches", "10", "--runner", "simple"]).unwrap();
+    fn explicit_workers_matches_and_bench_mode() {
+        let o = parse_v(&[
+            "--workers",
+            "1",
+            "--matches",
+            "10",
+            "--bench-mode",
+            "baseline",
+        ])
+        .unwrap();
         assert_eq!(o.workers, 1);
         assert_eq!(o.matches, Some(10));
-        assert_eq!(o.runner, Runner::Simple);
+        assert_eq!(o.bench_mode, BenchMode::Baseline);
     }
 
     #[test]
-    fn fresh_keys_is_default_on_and_fixed_keys_opts_out() {
-        assert!(parse_v(&["--runner", "simple"]).unwrap().fresh_keys);
+    fn fresh_signers_are_default_and_reuse_signers_opts_out() {
         assert!(
-            !parse_v(&["--runner", "simple", "--fixed-keys"])
+            !parse_v(&["--bench-mode", "baseline"])
                 .unwrap()
-                .fresh_keys
+                .reuse_signers
+        );
+        assert!(
+            parse_v(&["--bench-mode", "baseline", "--reuse-signers"])
+                .unwrap()
+                .reuse_signers
         );
     }
 
     #[test]
-    fn gameplay_is_varied_by_default_and_deterministic_opts_in() {
-        use crate::swarm::CardMode;
+    fn scenario_is_varied_by_default_and_golden_opts_in() {
         assert_eq!(
-            parse_v(&["--runner", "simple"]).unwrap().card_mode,
-            CardMode::Varied
+            parse_v(&["--bench-mode", "baseline"]).unwrap().scenario,
+            ScenarioMode::Varied
         );
         assert_eq!(
-            parse_v(&["--runner", "simple", "--deterministic"])
+            parse_v(&["--bench-mode", "baseline", "--scenario", "golden"])
                 .unwrap()
-                .card_mode,
-            CardMode::Deterministic
+                .scenario,
+            ScenarioMode::Golden
         );
     }
 
     #[test]
-    fn concurrency_is_rejected_with_explanation() {
+    fn removed_concurrency_is_rejected_by_clap() {
         let err = parse_v(&["--concurrency", "2"]).unwrap_err();
         assert!(
             err.contains("concurrency"),
@@ -264,33 +311,37 @@ mod tests {
     fn onchain_and_relay_are_rejected() {
         assert!(parse_v(&["--onchain"]).is_err());
         assert!(parse_v(&["--frame-transport", "relay"]).is_err());
-        assert!(parse_v(&["--game", "poker"]).is_err());
+        assert!(parse_v(&["--protocol-id", "poker.v1"]).is_err());
+        assert!(parse_v(&["--protocol-id", "payments.v1"]).is_err());
     }
 
     #[test]
-    fn codec_defaults_to_json_and_parses_each_variant() {
+    fn frame_codec_defaults_to_json_and_parses_each_variant() {
         assert_eq!(
-            parse_v(&["--runner", "simple"]).unwrap().codec,
-            CodecKind::Json
+            parse_v(&["--bench-mode", "baseline"]).unwrap().frame_codec,
+            FrameCodecKind::Json
         );
         assert_eq!(
-            parse_v(&["--runner", "simple", "--codec", "bcs"])
+            parse_v(&["--bench-mode", "baseline", "--frame-codec", "bcs"])
                 .unwrap()
-                .codec,
-            CodecKind::Bcs
+                .frame_codec,
+            FrameCodecKind::Bcs
         );
         assert_eq!(
-            parse_v(&["--runner", "simple", "--codec", "postcard"])
+            parse_v(&["--bench-mode", "baseline", "--frame-codec", "postcard"])
                 .unwrap()
-                .codec,
-            CodecKind::Postcard
+                .frame_codec,
+            FrameCodecKind::Postcard
         );
     }
 
     #[test]
-    fn unknown_codec_is_rejected_with_explanation() {
-        let err = parse_v(&["--codec", "protobuf"]).unwrap_err();
-        assert!(err.contains("codec"), "message should name the flag: {err}");
+    fn unknown_frame_codec_is_rejected_with_explanation() {
+        let err = parse_v(&["--frame-codec", "protobuf"]).unwrap_err();
+        assert!(
+            err.contains("frame-codec"),
+            "message should name the flag: {err}"
+        );
     }
 
     #[test]
@@ -299,11 +350,13 @@ mod tests {
 
         assert!(help.contains("Run the local off-chain blackjack tunnel fleet benchmark"));
         assert!(help.contains("Examples:"));
-        assert!(help
-            .contains("fleet-bench --runner simple --matches 50 --deterministic --codec postcard"));
+        assert!(help.contains(
+            "fleet-bench --bench-mode baseline --matches 50 --scenario golden --frame-codec postcard"
+        ));
         assert!(help.contains("json: TS-parity wire for bot-vs-user"));
         assert!(help.contains("postcard: compact default candidate for bot-vs-bot"));
-        assert!(help.contains("simple|optimized|both"));
+        assert!(help.contains("baseline|cached-signers|compare"));
+        assert!(help.contains("blackjack.bet.v1"));
         assert!(help.contains("json|bcs|postcard"));
     }
 }

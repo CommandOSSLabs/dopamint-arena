@@ -1,6 +1,6 @@
 //! Console report, format-parity with the loadbench swarm output. Pure string
-//! building — the binary prints the result. Headline lines describe the simple
-//! runner; the optimized runner's TPS is appended on the move-TPS line.
+//! building — the binary prints the result. Headline lines describe the baseline
+//! bench mode; the cached-signers TPS is appended on the move-TPS line.
 
 use crate::cli::BenchOpts;
 use crate::resources::ResourceSummary;
@@ -26,12 +26,12 @@ fn mb(bytes: f64) -> u64 {
     (bytes / 1_048_576.0).round() as u64
 }
 
-pub fn codec_id(codec: crate::cli::CodecKind) -> &'static str {
-    use crate::cli::CodecKind;
+pub fn frame_codec_id(codec: crate::cli::FrameCodecKind) -> &'static str {
+    use crate::cli::FrameCodecKind;
     match codec {
-        CodecKind::Json => "json.distributed.v1",
-        CodecKind::Bcs => "bcs.v1",
-        CodecKind::Postcard => "postcard.v1",
+        FrameCodecKind::Json => "json.distributed.v1",
+        FrameCodecKind::Bcs => "bcs.v1",
+        FrameCodecKind::Postcard => "postcard.v1",
     }
 }
 
@@ -58,7 +58,7 @@ pub fn render(
     let tps = move_tps(simple.moves, simple.elapsed_ms);
     let tps_line = match optimized {
         Some(o) => format!(
-            "{PREFIX} aggregate move-TPS: {:.1}   (optimized: {:.1})",
+            "{PREFIX} aggregate move-TPS: {:.1}   (cached-signers: {:.1})",
             tps,
             move_tps(o.moves, o.elapsed_ms)
         ),
@@ -82,7 +82,8 @@ pub fn render(
 
     format!(
         "{PREFIX} fleet: workers={}\n\
-         {PREFIX} codec: {}\n\
+         {PREFIX} protocol-id: {}\n\
+         {PREFIX} frame-codec: {}\n\
          {PREFIX} swarm: {} moves over {} matches in {:.1}s\n\
          {PREFIX} tunnels settled: {} ({:.1}/s)\n\
          {PREFIX} tunnels opened: {}\n\
@@ -94,7 +95,8 @@ pub fn render(
          {PREFIX} play-loop µs: avg={:.1} p50={:.1} p99={:.1}\n\
          {PREFIX} resources: {}, threads={}, util_p50={:.1}%, util_p99={:.1}%, basis={}\n",
         opts.workers,
-        codec_id(opts.codec),
+        opts.protocol_id,
+        frame_codec_id(opts.frame_codec),
         simple.moves,
         simple.matches_claimed,
         secs,
@@ -123,19 +125,20 @@ pub fn render(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::{BenchOpts, Runner};
+    use crate::cli::{BenchMode, BenchOpts};
     use crate::resources::ResourceSummary;
     use crate::swarm::SwarmOutcome;
 
-    fn opts(workers: usize, runner: Runner) -> BenchOpts {
+    fn opts(workers: usize, bench_mode: BenchMode) -> BenchOpts {
         BenchOpts {
             workers,
             duration_secs: 15,
             matches: None,
-            runner,
-            fresh_keys: true,
-            card_mode: crate::swarm::CardMode::Deterministic,
-            codec: crate::cli::CodecKind::Json,
+            bench_mode,
+            protocol_id: tunnel_core::protocol_id::BLACKJACK_BET_V1,
+            reuse_signers: false,
+            scenario: crate::cli::ScenarioMode::Golden,
+            frame_codec: crate::cli::FrameCodecKind::Json,
         }
     }
 
@@ -182,9 +185,9 @@ mod tests {
     }
 
     #[test]
-    fn render_single_runner_has_no_parenthetical() {
+    fn render_single_mode_has_no_parenthetical() {
         let s = render(
-            &opts(12, Runner::Simple),
+            &opts(12, BenchMode::Baseline),
             &outcome(481234, 3366, 15000),
             None,
             &res(),
@@ -193,7 +196,7 @@ mod tests {
         assert!(s.contains("[local/offchain] swarm: 481234 moves over 3366 matches in 15.0s\n"));
         assert!(s.contains("[local/offchain] tunnels settled: 3366 (224.4/s)\n"));
         assert!(s.contains("[local/offchain] aggregate move-TPS: 32082.3\n"));
-        assert!(!s.contains("optimized:"));
+        assert!(!s.contains("cached-signers:"));
         assert!(s.contains("[local/offchain] resources: cpu avg=11.2 cores"));
     }
 
@@ -201,12 +204,12 @@ mod tests {
     fn render_both_appends_optimized_tps() {
         let opt = outcome(616000, 4308, 15000); // ~41066.7 TPS
         let s = render(
-            &opts(12, Runner::Both),
+            &opts(12, BenchMode::Compare),
             &outcome(481234, 3366, 15000),
             Some(&opt),
             &res(),
         );
-        assert!(s.contains("aggregate move-TPS: 32082.3   (optimized: 41066.7)\n"));
+        assert!(s.contains("aggregate move-TPS: 32082.3   (cached-signers: 41066.7)\n"));
     }
 
     #[test]
@@ -225,7 +228,7 @@ mod tests {
             moves_dist: summarize(&[143.0, 143.0, 143.0]),
             play_ns_dist: summarize(&[266_000_000.0, 267_000_000.0, 267_000_000.0]),
         };
-        let s = render(&opts(1, Runner::Simple), &o, None, &res());
+        let s = render(&opts(1, BenchMode::Baseline), &o, None, &res());
         assert!(
             s.contains("[local/offchain] tunnels opened: 3"),
             "got:\n{s}"
@@ -234,7 +237,7 @@ mod tests {
             s.contains("[local/offchain] matches conducted: 3"),
             "got:\n{s}"
         );
-        // deterministic mode: all matches are 143 moves
+        // golden scenario: all matches are 143 moves
         assert!(
             s.contains("[local/offchain] moves/match: avg=143.0 p50=143.0"),
             "got:\n{s}"
@@ -255,26 +258,30 @@ mod tests {
             "got:\n{s}"
         );
         assert!(
-            s.contains("[local/offchain] codec: json.distributed.v1"),
+            s.contains("[local/offchain] protocol-id: blackjack.bet.v1"),
+            "got:\n{s}"
+        );
+        assert!(
+            s.contains("[local/offchain] frame-codec: json.distributed.v1"),
             "got:\n{s}"
         );
     }
 
     #[test]
-    fn codec_id_matches_codec_impls() {
-        use crate::cli::CodecKind;
+    fn frame_codec_id_matches_codec_impls() {
+        use crate::cli::FrameCodecKind;
         use tunnel_harness::{BcsFrameCodec, FrameCodec, JsonFrameCodec, PostcardFrameCodec};
 
         assert_eq!(
-            codec_id(CodecKind::Json),
+            frame_codec_id(FrameCodecKind::Json),
             FrameCodec::<tunnel_blackjack::BjMove>::id(&JsonFrameCodec)
         );
         assert_eq!(
-            codec_id(CodecKind::Bcs),
+            frame_codec_id(FrameCodecKind::Bcs),
             FrameCodec::<tunnel_blackjack::BjMove>::id(&BcsFrameCodec)
         );
         assert_eq!(
-            codec_id(CodecKind::Postcard),
+            frame_codec_id(FrameCodecKind::Postcard),
             FrameCodec::<tunnel_blackjack::BjMove>::id(&PostcardFrameCodec)
         );
     }

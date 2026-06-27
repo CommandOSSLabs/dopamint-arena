@@ -2,11 +2,11 @@
 //! runs one full match through the gate-verified `play_fixed_match_seeded`, and
 //! folds its measurements into a per-worker Vec; Vecs are merged after the
 //! rayon scope so there is no atomic contention on the hot path.
-//! Total work under `--matches N` with `CardMode::Deterministic` is exact
-//! (143*N moves), which is the deterministic regression gate; `--duration` is
+//! Total work under `--matches N` with `ScenarioMode::Golden` is exact
+//! (143*N moves), which is the golden regression gate; `--duration` is
 //! the time-bounded throughput mode.
 
-use crate::cli::CodecKind;
+use crate::cli::{FrameCodecKind, ScenarioMode};
 use crate::party_driver::{play_match_seeded, SeatKit};
 use crate::stats::{summarize, Distribution};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -42,38 +42,21 @@ const MAX_MOVES: u64 = 1000;
 /// Run one match through the codec selected at the CLI. Static dispatch keeps
 /// codec cost on the measured path with one monomorphized driver per arm.
 fn play_match_for(
-    codec: CodecKind,
+    codec: FrameCodecKind,
     card_seed: Option<u64>,
     kit: &SeatKit,
     tunnel_id: &str,
 ) -> crate::party_driver::MatchResult {
     match codec {
-        CodecKind::Json => play_match_seeded::<JsonFrameCodec>(
+        FrameCodecKind::Json => play_match_seeded::<JsonFrameCodec>(
             card_seed, kit, tunnel_id, 200, 200, CREATED_AT, MAX_MOVES,
         ),
-        CodecKind::Bcs => play_match_seeded::<BcsFrameCodec>(
+        FrameCodecKind::Bcs => play_match_seeded::<BcsFrameCodec>(
             card_seed, kit, tunnel_id, 200, 200, CREATED_AT, MAX_MOVES,
         ),
-        CodecKind::Postcard => play_match_seeded::<PostcardFrameCodec>(
+        FrameCodecKind::Postcard => play_match_seeded::<PostcardFrameCodec>(
             card_seed, kit, tunnel_id, 200, 200, CREATED_AT, MAX_MOVES,
         ),
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum CardMode {
-    Varied,
-    Deterministic,
-}
-
-impl CardMode {
-    /// The per-match card seed: distinct per match when varied, `None` (the
-    /// golden stream) when deterministic.
-    fn seed(self, match_index: u64) -> Option<u64> {
-        match self {
-            CardMode::Varied => Some(match_index),
-            CardMode::Deterministic => None,
-        }
     }
 }
 
@@ -105,7 +88,7 @@ pub fn tunnel_id_for(match_index: u64) -> String {
     format!("0x{:x}", match_index + 1)
 }
 
-/// Core fleet loop, generic over the per-match runner.
+/// Core fleet loop, generic over the per-match executor.
 /// `run_match(match_index)` runs one full match and returns its sample.
 pub(crate) fn run_with<F>(
     workers: usize,
@@ -184,13 +167,13 @@ pub fn run_simple(
     workers: usize,
     duration_secs: u64,
     matches: Option<u64>,
-    mode: CardMode,
-    codec: CodecKind,
+    scenario: ScenarioMode,
+    codec: FrameCodecKind,
 ) -> SwarmOutcome {
     run_with(workers, duration_secs, matches, |idx| {
         let t = Instant::now();
         let kit = SeatKit::new(&SEAT_A, &SEAT_B);
-        let r = play_match_for(codec, mode.seed(idx), &kit, &tunnel_id_for(idx));
+        let r = play_match_for(codec, scenario.card_seed(idx), &kit, &tunnel_id_for(idx));
         MatchSample {
             moves: r.moves,
             bytes: r.bytes as u64,
@@ -205,14 +188,14 @@ pub fn run_simple(
 /// timed window, then derives their public keys via `play_fixed_match_seeded`.
 /// The efficient binary codec and native crypto stay; only the *harness* shape
 /// (fresh per-match key setup) is matched to loadbench. With
-/// `CardMode::Deterministic`, cards derive from `round`, so totals stay
+/// `ScenarioMode::Golden`, cards derive from `round`, so totals stay
 /// 143*N moves / 75982*N bytes.
 pub fn run_fresh_keys(
     workers: usize,
     duration_secs: u64,
     matches: Option<u64>,
-    mode: CardMode,
-    codec: CodecKind,
+    scenario: ScenarioMode,
+    codec: FrameCodecKind,
 ) -> SwarmOutcome {
     run_with(workers, duration_secs, matches, |idx| {
         let mut secret_a = [0u8; 32];
@@ -221,7 +204,7 @@ pub fn run_fresh_keys(
         getrandom::getrandom(&mut secret_b).expect("os rng");
         let t = Instant::now();
         let kit = SeatKit::new(&secret_a, &secret_b);
-        let r = play_match_for(codec, mode.seed(idx), &kit, &tunnel_id_for(idx));
+        let r = play_match_for(codec, scenario.card_seed(idx), &kit, &tunnel_id_for(idx));
         MatchSample {
             moves: r.moves,
             bytes: r.bytes as u64,
@@ -237,8 +220,8 @@ pub fn run_optimized(
     workers: usize,
     duration_secs: u64,
     matches: Option<u64>,
-    mode: CardMode,
-    codec: CodecKind,
+    scenario: ScenarioMode,
+    codec: FrameCodecKind,
 ) -> SwarmOutcome {
     run_with(workers, duration_secs, matches, |idx| {
         thread_local! {
@@ -246,7 +229,7 @@ pub fn run_optimized(
         }
         KIT.with(|kit| {
             let t = Instant::now();
-            let r = play_match_for(codec, mode.seed(idx), kit, &tunnel_id_for(idx));
+            let r = play_match_for(codec, scenario.card_seed(idx), kit, &tunnel_id_for(idx));
             MatchSample {
                 moves: r.moves,
                 bytes: r.bytes as u64,
@@ -262,10 +245,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fresh_keys_runner_conserves_totals() {
+    fn fresh_signers_conserve_totals() {
         // Fresh per-match keys don't change gameplay (cards derive from round),
-        // so the deterministic gate holds: exactly 143*N moves, 75982*N bytes.
-        let out = run_fresh_keys(2, 3600, Some(6), CardMode::Deterministic, CodecKind::Json);
+        // so the golden gate holds: exactly 143*N moves, 75982*N bytes.
+        let out = run_fresh_keys(2, 3600, Some(6), ScenarioMode::Golden, FrameCodecKind::Json);
         assert_eq!(out.matches_claimed, 6);
         assert_eq!(out.tunnels_settled, 6);
         assert_eq!(out.moves, 143 * 6);
@@ -273,9 +256,9 @@ mod tests {
     }
 
     #[test]
-    fn optimized_runner_matches_simple_totals() {
-        let simple = run_simple(2, 3600, Some(8), CardMode::Deterministic, CodecKind::Json);
-        let optimized = run_optimized(2, 3600, Some(8), CardMode::Deterministic, CodecKind::Json);
+    fn cached_signers_match_baseline_totals() {
+        let simple = run_simple(2, 3600, Some(8), ScenarioMode::Golden, FrameCodecKind::Json);
+        let optimized = run_optimized(2, 3600, Some(8), ScenarioMode::Golden, FrameCodecKind::Json);
         assert_eq!(optimized.moves, simple.moves);
         assert_eq!(optimized.bytes, simple.bytes);
         assert_eq!(optimized.tunnels_settled, simple.tunnels_settled);
@@ -289,9 +272,9 @@ mod tests {
     }
 
     #[test]
-    fn single_worker_fixed_matches_are_deterministic() {
+    fn single_worker_golden_matches_are_constant() {
         // matches-bounded: exactly N matches => 143*N moves, 75982*N bytes, N tunnels.
-        let out = run_simple(1, 3600, Some(5), CardMode::Deterministic, CodecKind::Json);
+        let out = run_simple(1, 3600, Some(5), ScenarioMode::Golden, FrameCodecKind::Json);
         assert_eq!(out.matches_claimed, 5);
         assert_eq!(out.tunnels_settled, 5);
         assert_eq!(out.moves, 143 * 5);
@@ -301,7 +284,13 @@ mod tests {
     #[test]
     fn multi_worker_conserves_totals() {
         // Total work is fixed by --matches regardless of worker count.
-        let out = run_simple(4, 3600, Some(20), CardMode::Deterministic, CodecKind::Json);
+        let out = run_simple(
+            4,
+            3600,
+            Some(20),
+            ScenarioMode::Golden,
+            FrameCodecKind::Json,
+        );
         assert_eq!(out.matches_claimed, 20);
         assert_eq!(out.tunnels_settled, 20);
         assert_eq!(out.moves, 143 * 20);
@@ -310,7 +299,7 @@ mod tests {
 
     #[test]
     fn varied_mode_produces_a_nondegenerate_move_distribution() {
-        let out = run_simple(2, 3600, Some(24), CardMode::Varied, CodecKind::Bcs);
+        let out = run_simple(2, 3600, Some(24), ScenarioMode::Varied, FrameCodecKind::Bcs);
         assert_eq!(out.tunnels_settled, 24);
         assert_eq!(out.matches_claimed, 24);
         // Varied cards => not every match is 143 moves.
@@ -327,8 +316,14 @@ mod tests {
     }
 
     #[test]
-    fn deterministic_mode_is_constant_143() {
-        let out = run_simple(2, 3600, Some(50), CardMode::Deterministic, CodecKind::Json);
+    fn golden_scenario_is_constant_143() {
+        let out = run_simple(
+            2,
+            3600,
+            Some(50),
+            ScenarioMode::Golden,
+            FrameCodecKind::Json,
+        );
         assert_eq!(out.moves, 143 * 50);
         assert_eq!(out.moves_dist.min, 143.0);
         assert_eq!(out.moves_dist.peak, 143.0);
@@ -336,14 +331,14 @@ mod tests {
 
     #[test]
     fn codec_choice_is_consensus_invisible() {
-        let json = run_simple(2, 3600, Some(8), CardMode::Deterministic, CodecKind::Json);
-        let bcs = run_simple(2, 3600, Some(8), CardMode::Deterministic, CodecKind::Bcs);
+        let json = run_simple(2, 3600, Some(8), ScenarioMode::Golden, FrameCodecKind::Json);
+        let bcs = run_simple(2, 3600, Some(8), ScenarioMode::Golden, FrameCodecKind::Bcs);
         let postcard = run_simple(
             2,
             3600,
             Some(8),
-            CardMode::Deterministic,
-            CodecKind::Postcard,
+            ScenarioMode::Golden,
+            FrameCodecKind::Postcard,
         );
 
         assert_eq!(bcs.moves, json.moves);

@@ -6,6 +6,48 @@
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProtocolId(String);
 
+pub const API_CREDITS_V1: &str = "api_credits.v1";
+pub const BATTLESHIP_V1: &str = "battleship.v1";
+pub const BATTLESHIP_SERIES_V1: &str = "battleship.series.v1";
+pub const BLACKJACK_BET_V1: &str = "blackjack.bet.v1";
+pub const BLACKJACK_DUEL_V1: &str = "blackjack.duel.v1";
+pub const BLACKJACK_V2: &str = "blackjack.v2";
+pub const BOMB_IT_V1: &str = "bomb_it.v1";
+pub const BOMB_IT_SERIES_V1: &str = "bomb_it.series.v1";
+pub const CARO_V1: &str = "caro.v1";
+pub const CARO_SERIES_V1: &str = "caro.series.v1";
+pub const CHAT_V1: &str = "chat.v1";
+pub const CROSS_V1: &str = "cross.v1";
+pub const CROSS_SERIES_V1: &str = "cross.series.v1";
+pub const PAYMENTS_V1: &str = "payments.v1";
+pub const QUANTUM_POKER_V2: &str = "quantum_poker.v2";
+pub const TIC_TAC_TOE_V1: &str = "tic_tac_toe.v1";
+pub const TIC_TAC_TOE_SERIES_V1: &str = "tic_tac_toe.series.v1";
+pub const WORLD_CANVAS_CELL_V1: &str = "world_canvas.cell.v1";
+pub const WORLD_CANVAS_STROKE_V1: &str = "world_canvas.stroke.v1";
+
+pub const PORTED_PROTOCOL_IDS: &[&str] = &[
+    API_CREDITS_V1,
+    BATTLESHIP_V1,
+    BATTLESHIP_SERIES_V1,
+    BLACKJACK_BET_V1,
+    BLACKJACK_DUEL_V1,
+    BLACKJACK_V2,
+    BOMB_IT_V1,
+    BOMB_IT_SERIES_V1,
+    CARO_V1,
+    CARO_SERIES_V1,
+    CHAT_V1,
+    CROSS_V1,
+    CROSS_SERIES_V1,
+    PAYMENTS_V1,
+    QUANTUM_POKER_V2,
+    TIC_TAC_TOE_V1,
+    TIC_TAC_TOE_SERIES_V1,
+    WORLD_CANVAS_CELL_V1,
+    WORLD_CANVAS_STROKE_V1,
+];
+
 impl ProtocolId {
     pub fn parse(id: impl Into<String>) -> Result<Self, String> {
         let id = id.into();
@@ -79,13 +121,17 @@ mod tests {
 
     #[test]
     fn accepts_canonical_protocol_ids() {
-        for id in [
-            "blackjack.v2",
-            "blackjack.bet.v1",
-            "tic_tac_toe.series.v1",
-            "world_canvas.stroke.v1",
-        ] {
+        for id in PORTED_PROTOCOL_IDS {
             assert!(validate_protocol_id(id).is_ok(), "{id}");
+        }
+    }
+
+    #[test]
+    fn ported_protocol_ids_are_unique() {
+        for (i, a) in PORTED_PROTOCOL_IDS.iter().enumerate() {
+            for b in &PORTED_PROTOCOL_IDS[i + 1..] {
+                assert_ne!(a, b);
+            }
         }
     }
 
