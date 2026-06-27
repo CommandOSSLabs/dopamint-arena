@@ -1,6 +1,5 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { protocols } from "sui-tunnel-ts";
 import { driveToTerminal } from "@/agent/testHarness";
 import { createBlackjackKit } from "./kit";
 import type { ProtocolContext } from "sui-tunnel-ts/protocol/Protocol";
@@ -15,18 +14,29 @@ function mulberry32(seed: number): () => number {
 }
 
 describe("blackjack kit", () => {
+  // Small stacks so the game terminates in a few hands; each card costs 4 moves
+  // (A commit, B commit, A reveal, B reveal) so the total move count per hand is high.
   const ctx: ProtocolContext = {
     tunnelId: "bj-1",
-    initialBalances: { a: 1000n, b: 1000n },
+    initialBalances: { a: 200n, b: 200n },
   };
 
-  it("uses the variable-bet frontend protocol domain", () => {
+  it("uses the SDK commit-reveal protocol", () => {
     const kit = createBlackjackKit(100n);
-    assert.strictEqual(kit.protocol.name, "blackjack.bet.v1");
-    assert.notStrictEqual(
-      kit.protocol.name,
-      new protocols.BlackjackProtocol(100n).name,
-    );
+    assert.strictEqual(kit.id, "blackjack");
+    assert.strictEqual(kit.protocol.name, "blackjack.v2");
+    assert.ok(kit.moveCodec, "moveCodec must be defined");
+    assert.strictEqual(kit.defaultStake, 100n);
+  });
+
+  it("the bot bets to open the first round", () => {
+    const kit = createBlackjackKit(100n);
+    const state = kit.protocol.initialState(ctx);
+    const ctx2 = { rngForSeat: () => mulberry32(1) } as never;
+    // Round 0 round_over -> next player A owes the bet.
+    const move = kit.createBot("A", ctx2).plan(state);
+    assert.ok(move, "bot must return a move");
+    assert.strictEqual(move.kind, "bet");
   });
 
   it("drives a full game to terminal with conserved balances", () => {

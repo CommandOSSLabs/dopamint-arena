@@ -35,20 +35,19 @@ import {
 } from "@/onchain/mtps";
 import { makeKeypairSponsoredSignExec } from "@/onchain/sponsor";
 import {
-  actorFor,
   FIXED_PLAYER_A,
-  fixedBetMove,
-  BET_OPTIONS,
+  actorFor,
   MIN_BET,
-  type BetBlackjackState,
-  type BetBlackjackMove,
-} from "@/games/blackjack/app/lib/bjBetProtocol";
+  type BlackjackState,
+  type BlackjackMove,
+} from "sui-tunnel-ts/protocol/blackjack";
+import { BET_OPTIONS, bjBetMove } from "@/games/blackjack/app/lib/bjBet";
 import { createBlackjackKit } from "@/agent/games/blackjack/kit";
 
 // Re-export so the page imports bet presets from the hook (its single source of game config).
 export { BET_OPTIONS, MIN_BET };
 
-type State = BetBlackjackState;
+type State = BlackjackState;
 
 export type BotPhase =
   | "idle"
@@ -77,7 +76,7 @@ export interface BlackjackBotView {
   playerBalance: number;
   dealerBalance: number;
   round: number;
-  phase: "player" | "dealer" | "round_over";
+  phase: "player" | "draw_commit" | "draw_reveal" | "round_over";
 }
 
 export type BlackjackResult = "win" | "lose" | "push";
@@ -272,7 +271,7 @@ export function useBlackjackBot(): BlackjackBotGame {
   const playingRef = useRef(false);
   // A user-queued manual move (hit/stand) the running interval applies on its next tick, so the
   // manual path reuses the loop's single round-logging/telemetry site (incl. player-bust).
-  const pendingMoveRef = useRef<BetBlackjackMove | null>(null);
+  const pendingMoveRef = useRef<BlackjackMove | null>(null);
   // Hover-pause latch (see useBotGame): read at the top of each tick so a hovered cabinet freezes
   // the loop. The interval keeps firing harmless no-op ticks, so there's no timer to stop/re-arm.
   const pausedRef = useRef(false);
@@ -615,40 +614,29 @@ export function useBlackjackBot(): BlackjackBotGame {
               if (steps++ >= MAX_STEPS) {
                 throw new Error("self-play exceeded step bound");
               }
-              // Move as whoever the protocol expects this phase — the player alternates
-              // A,A,B,B across rounds, so a fixed party would make randomMove return null the
-              // moment it flips, which a naive loop misreads as "game over" (it would settle
-              // after ~2 rounds). In the betting phase, place the chosen fixed bet; otherwise
-              // let the protocol pick (basic strategy for the player, deterministic dealer).
+              // Determine whose move it is. `actorFor` returns null when no seat owes a move
+              // (shouldn't happen mid-game, but treat as terminal).
               const cur = tunnel.state;
               const by = actorFor(cur, FIXED_PLAYER_A);
-              // Manual play (auto off): pause at the player's decision and apply only a
-              // user-queued hit/stand. The dealer is deterministic and betting auto-deals, so
-              // both proceed regardless of the toggle — same split as the PvP mode.
-              let move: BetBlackjackMove | null;
-              if (
-                !autoRef.current &&
-                (cur.phase === "player" || cur.phase === "round_over")
-              ) {
-                if (!pendingMoveRef.current) {
-                  flushHeartbeat(tunnelId, false);
-                  return; // wait for the user's Hit/Stand/Bet
-                }
+              if (!by) { stopTimer(); resolve(); return; }
+              // Drive the step loop per SDK phase:
+              //   - Manual player's hit/stand: wait for pendingMoveRef.
+              //   - Bet (round_over): user-driven via the bet selector (auto reuses last bet).
+              //   - commit/reveal/dealer turns: auto-driven by the kit bot, paced in manual mode.
+              let move: BlackjackMove | null;
+              if (!autoRef.current && cur.phase === "player" && by === FIXED_PLAYER_A(cur.round)) {
+                // Manual: wait for the human's Hit/Stand.
+                if (!pendingMoveRef.current) { flushHeartbeat(tunnelId, false); return; }
                 move = pendingMoveRef.current;
                 pendingMoveRef.current = null;
+              } else if (cur.phase === "round_over") {
+                // Bet stays user-driven via the bet selector (auto reuses the last bet).
+                move = bjBetMove(betRef.current, cur);
               } else {
-                // Dealer reveal + next-round deal: in manual mode pace them so they're watchable
-                // between the player's decisions; in auto mode fire every tick for max throughput.
-                if (!autoRef.current && Date.now() - lastAutoStepAt < STEP_MS) {
-                  return;
-                }
+                // commit / reveal / dealer-turn / auto player: paced in manual mode, instant in auto.
+                if (!autoRef.current && Date.now() - lastAutoStepAt < STEP_MS) return;
                 lastAutoStepAt = Date.now();
-                // The bet stays user-driven (the Bet/round selector); hit/stand + the dealer come
-                // from the shared kit bot — the single brain the agent harness also plays through.
-                move =
-                  cur.phase === "round_over"
-                    ? fixedBetMove(betRef.current, cur)
-                    : botBySeat[by].plan(cur);
+                move = botBySeat[by].plan(cur);
               }
               if (!move) {
                 stopTimer();
@@ -869,11 +857,11 @@ export function useBlackjackBot(): BlackjackBotGame {
   // unless a tunnel is actively waiting on the player in manual mode; a "hit" at 21+ is dropped
   // (illegal — the table only offers Stand there).
   const queuePlayerMove = useCallback(
-    (action: "hit" | "stand") => {
+    (kind: "hit" | "stand") => {
       if (autoRef.current || phase !== "playing" || view.phase !== "player")
         return;
-      if (action === "hit" && view.playerSum >= 21) return;
-      pendingMoveRef.current = { action };
+      if (kind === "hit" && view.playerSum >= 21) return;
+      pendingMoveRef.current = { kind };
     },
     [phase, view.phase, view.playerSum],
   );
@@ -886,16 +874,13 @@ export function useBlackjackBot(): BlackjackBotGame {
   // queue a bet the protocol would reject.
   const placeBet = useCallback(
     (amount: number) => {
-      // Manual betting only — the bet is locked while auto-play runs. setBet keeps the wager UI
-      // (the "Wager" readout + selected chip) and betRef in sync, and betRef is what auto reuses
-      // when you switch back, so the last manual bet carries over. The loop is parked at the
-      // betting phase waiting on pendingMoveRef, so this also deals the next hand.
-      if (autoRef.current || phase !== "playing" || view.phase !== "round_over")
-        return;
+      // Update the selected bet denomination. The step loop auto-fires bjBetMove(betRef.current)
+      // in round_over, so changing the bet before that phase takes effect immediately.
+      // Guard against calling outside an active game to avoid surprising the UI state.
+      if (phase !== "playing") return;
       setBet(amount);
-      pendingMoveRef.current = { action: "bet", amount };
     },
-    [phase, view.phase, setBet],
+    [phase, setBet],
   );
 
   // It's the user's turn exactly when auto is off, a tunnel is playing, and the protocol is
