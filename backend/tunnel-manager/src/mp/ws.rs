@@ -290,11 +290,12 @@ async fn handle_authed(
     holds: &mut FuturesUnordered<HoldTimer>,
 ) -> Result<(), &'static str> {
     match msg {
-        ClientMsg::QueueJoin { game } => {
+        ClientMsg::QueueJoin { game, is_bot } => {
             joined.insert(game.clone());
             let me = Waiting {
                 wallet: wallet.to_owned(),
                 conn: here(state, conn_id),
+                is_bot,
             };
             match state
                 .mp
@@ -753,10 +754,12 @@ mod tests {
         let opponent = Waiting {
             wallet: "0xearly".into(),
             conn: conn_opp.clone(),
+            is_bot: false,
         };
         let joiner = Waiting {
             wallet: "0xlate".into(),
             conn: conn_me.clone(),
+            is_bot: false,
         };
 
         let (_, rec) = create_and_announce_match(&state, "chess", opponent, joiner).await;
@@ -1160,10 +1163,12 @@ mod tests {
         let a = Waiting {
             wallet: "0xa".into(),
             conn: ca,
+            is_bot: false,
         };
         let b = Waiting {
             wallet: "0xb".into(),
             conn: cb,
+            is_bot: false,
         };
         let (_mid, rec) = create_and_announce_match(&state, "ttt", a, b).await;
         assert_eq!(rec.seat_a, "0xa");
@@ -1274,6 +1279,7 @@ mod tests {
         let wa = Waiting {
             wallet: "0xwa".into(),
             conn: conn_wa_ref.clone(),
+            is_bot: false,
         };
 
         // Park wa first (queue empty → parks, no immediate pair).
@@ -1289,6 +1295,7 @@ mod tests {
                 instance_id: "other-instance".to_owned(),
                 conn_id: conn_wb_ref.conn_id,
             },
+            is_bot: false,
         };
         let parked_b = state.mp.join_or_pair(&game, wb_other_inst, 10_000).await;
         assert!(parked_b.is_none(), "wb must also park (different instance)");
@@ -1325,6 +1332,7 @@ mod tests {
         let opp_remapped = Waiting {
             wallet: opp.wallet.clone(),
             conn: conn_wb_ref.clone(),
+            is_bot: false,
         };
         create_and_announce_match(&state, &fired_game, fired_me, opp_remapped).await;
 
@@ -1459,6 +1467,7 @@ mod tests {
         let wa = Waiting {
             wallet: "0xwa".into(),
             conn: conn_wa,
+            is_bot: false,
         };
         assert!(
             state_a
@@ -1472,6 +1481,7 @@ mod tests {
         let wb = Waiting {
             wallet: "0xwb".into(),
             conn: conn_wb,
+            is_bot: false,
         };
         assert!(
             state_b.mp.join_or_pair(&game, wb, 10_000).await.is_none(),
@@ -1527,6 +1537,7 @@ mod tests {
         let wa = Waiting {
             wallet: "0xwa".into(),
             conn: conn_wa,
+            is_bot: false,
         };
         assert!(
             state.mp.join_or_pair(&game, wa.clone(), 50).await.is_none(),
@@ -1539,6 +1550,7 @@ mod tests {
         let wb = Waiting {
             wallet: "0xwb".into(),
             conn: conn_wb,
+            is_bot: false,
         };
         let opp = state
             .mp
@@ -1581,6 +1593,7 @@ mod tests {
         let wa = Waiting {
             wallet: "0xwa".into(),
             conn: conn_wa,
+            is_bot: false,
         };
         assert!(
             state.mp.join_or_pair(&game, wa.clone(), 50).await.is_none(),
@@ -1607,6 +1620,7 @@ mod tests {
         let wc = Waiting {
             wallet: "0xwc".into(),
             conn: conn_wc,
+            is_bot: false,
         };
         assert!(
             state.mp.join_or_pair(&game, wc, 50).await.is_none(),

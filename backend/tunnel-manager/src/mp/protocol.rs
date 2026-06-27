@@ -22,7 +22,13 @@ pub enum ClientMsg {
         nonce: String,
     },
     #[serde(rename = "queue.join")]
-    QueueJoin { game: String },
+    QueueJoin {
+        game: String,
+        /// Set by fleet bots so the matchmaker never pairs two bots. Absent for human
+        /// clients (defaults false).
+        #[serde(default)]
+        is_bot: bool,
+    },
     #[serde(rename = "queue.leave")]
     QueueLeave,
     #[serde(rename = "challenge.create")]
@@ -151,7 +157,13 @@ mod tests {
     #[test]
     fn client_queue_join_deserializes_dotted_name() {
         let m: ClientMsg = serde_json::from_str(r#"{"type":"queue.join","game":"ttt"}"#).unwrap();
-        assert_eq!(m, ClientMsg::QueueJoin { game: "ttt".into() });
+        assert_eq!(
+            m,
+            ClientMsg::QueueJoin {
+                game: "ttt".into(),
+                is_bot: false,
+            }
+        );
     }
 
     // The relay payload is an opaque string the server never parses — an arbitrary

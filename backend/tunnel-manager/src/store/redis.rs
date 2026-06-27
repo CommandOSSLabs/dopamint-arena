@@ -352,6 +352,8 @@ impl RedisMpStore {
 const JOIN_OR_PAIR: &str = r#"
 local t = redis.call('TIME')
 local now = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
+local me = cjson.decode(ARGV[1])
+local me_bot = me.is_bot
 local items = redis.call('LRANGE', KEYS[1], 0, -1)
 local colocated = nil
 local expired = nil
@@ -360,7 +362,8 @@ for _, v in ipairs(items) do
   if ok then
     if w.wallet == ARGV[2] then
       redis.call('LREM', KEYS[1], 1, v)
-    else
+    -- A bot is NEVER paired with another bot; skip a candidate when both are bots.
+    elseif not (me_bot and w.is_bot) then
       if colocated == nil and w.conn and w.conn.instance_id == ARGV[3] then
         colocated = v
       end
@@ -375,7 +378,6 @@ if chosen then
   redis.call('LREM', KEYS[1], 1, chosen)
   return chosen
 end
-local me = cjson.decode(ARGV[1])
 me.deadline = now + tonumber(ARGV[4])
 redis.call('RPUSH', KEYS[1], cjson.encode(me))
 return false
@@ -388,25 +390,27 @@ return false
 const FALLBACK_PAIR: &str = r#"
 local items = redis.call('LRANGE', KEYS[1], 0, -1)
 local self_present = false
-local opp = nil
+local self_bot = false
+-- Pass 1: detect self, capture its is_bot, and drain self entries.
 for _, v in ipairs(items) do
   local ok, w = pcall(cjson.decode, v)
-  if ok then
-    if w.wallet == ARGV[1] then
-      self_present = true
-    elseif opp == nil then
-      opp = v
-    end
+  if ok and w.wallet == ARGV[1] then
+    self_present = true
+    self_bot = w.is_bot
+    redis.call('LREM', KEYS[1], 1, v)
   end
 end
 if not self_present then return false end
-if opp == nil then return false end
+-- Pass 2: pick + remove the oldest different-wallet opponent. A bot is NEVER paired with
+-- another bot, so skip a candidate when both are bots.
 for _, v in ipairs(items) do
   local ok, w = pcall(cjson.decode, v)
-  if ok and w.wallet == ARGV[1] then redis.call('LREM', KEYS[1], 1, v) end
+  if ok and w.wallet ~= ARGV[1] and not (self_bot and w.is_bot) then
+    redis.call('LREM', KEYS[1], 1, v)
+    return v
+  end
 end
-redis.call('LREM', KEYS[1], 1, opp)
-return opp
+return false
 "#;
 
 // Presence compare-and-delete on a single key holding the full ConnRef JSON: delete only if
@@ -1272,6 +1276,7 @@ mod tests {
                     crate::mp::Waiting {
                         wallet: format!("0x{i}"),
                         conn: cr,
+                        is_bot: false,
                     },
                     0,
                 )
@@ -1307,6 +1312,7 @@ mod tests {
                 instance_id: inst.to_owned(),
                 conn_id: uuid::Uuid::new_v4(),
             },
+            is_bot: false,
         };
         // A(ia) and B(ib) both park (no local partner, neither expired).
         assert!(s.join_or_pair(&game, w("wa", "ia"), hold).await.is_none());
@@ -1325,6 +1331,42 @@ mod tests {
         assert_eq!(opp2.wallet, "wa", "front waiter still pairs same-instance");
     }
 
+    // The fleet invariant on the deployed (Lua) path: two bots never pair; a human pairs a bot.
+    #[tokio::test]
+    async fn join_or_pair_never_pairs_two_bots() {
+        let (_redis, pool) = redis_fixture().await;
+        let s = RedisMpStore::new(pool);
+        let game = format!("g{}", uuid::Uuid::new_v4().simple());
+        let hold = 10_000;
+        let seat = |wallet: &str, is_bot: bool| crate::mp::Waiting {
+            wallet: wallet.to_owned(),
+            conn: ConnRef {
+                instance_id: "ia".to_owned(),
+                conn_id: uuid::Uuid::new_v4(),
+            },
+            is_bot,
+        };
+        // Two bots both park — the Lua skips a bot-vs-bot candidate.
+        assert!(
+            s.join_or_pair(&game, seat("bot1", true), hold)
+                .await
+                .is_none(),
+            "first bot parks"
+        );
+        assert!(
+            s.join_or_pair(&game, seat("bot2", true), hold)
+                .await
+                .is_none(),
+            "a second bot must NOT pair the waiting bot"
+        );
+        // A human pairs a waiting (same-instance) bot.
+        let opp = s
+            .join_or_pair(&game, seat("human", false), hold)
+            .await
+            .expect("a human pairs a waiting bot");
+        assert!(opp.is_bot, "the human's opponent is a bot");
+    }
+
     // With a short hold, a parked cross-instance waiter becomes selectable once its deadline
     // passes — the join path's expired branch pairs it.
     #[tokio::test]
@@ -1338,6 +1380,7 @@ mod tests {
                 instance_id: inst.to_owned(),
                 conn_id: uuid::Uuid::new_v4(),
             },
+            is_bot: false,
         };
         assert!(s.join_or_pair(&game, w("wa", "ia"), 30).await.is_none());
         // Before expiry, a cross-instance joiner does NOT take wa — it parks instead.
@@ -1367,6 +1410,7 @@ mod tests {
                 instance_id: inst.to_owned(),
                 conn_id: uuid::Uuid::new_v4(),
             },
+            is_bot: false,
         };
         assert!(s.join_or_pair(&game, w("wa", "ia"), 10_000).await.is_none());
         assert!(s.join_or_pair(&game, w("wb", "ib"), 10_000).await.is_none());
@@ -1388,6 +1432,7 @@ mod tests {
                 instance_id: inst.to_owned(),
                 conn_id: uuid::Uuid::new_v4(),
             },
+            is_bot: false,
         };
         assert!(s.join_or_pair(&game, w("wa", "ia"), 10_000).await.is_none());
         assert!(
@@ -1567,6 +1612,7 @@ mod tests {
                 crate::mp::Waiting {
                     wallet: wallet.clone(),
                     conn: cr1,
+                    is_bot: false,
                 },
                 0,
             )
@@ -1584,6 +1630,7 @@ mod tests {
                 crate::mp::Waiting {
                     wallet: wallet.clone(),
                     conn: cr2,
+                    is_bot: false,
                 },
                 0,
             )

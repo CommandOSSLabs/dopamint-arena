@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use tokio::sync::mpsc;
 
 use super::{Bus, ConnRef, ControlStore, CtrlMsg, MpStore};
-use crate::mp::{Checkpoint, ConnId, DirectedInvite, MatchRecord, Waiting};
+use crate::mp::{pairing_allowed, Checkpoint, ConnId, DirectedInvite, MatchRecord, Waiting};
 use crate::state::{GameStat, SessionRecord, StatsSnapshot, TunnelEvent, TunnelStatus};
 
 // ===== ControlStore =====
@@ -183,23 +183,27 @@ impl MpStore for InMemoryMpStore {
         let mut queues = self.queues.write().unwrap();
         let q = queues.entry(game.to_owned()).or_default();
         q.retain(|w| w.wallet != me.wallet);
-        if let Some(front) = q.pop_front() {
-            Some(front)
-        } else {
-            q.push_back(me);
-            None
+        // A bot is NEVER paired with another bot (see `pairing_allowed`); the oldest pairable
+        // waiter wins.
+        match q.iter().position(|w| pairing_allowed(me.is_bot, w.is_bot)) {
+            Some(i) => q.remove(i),
+            None => {
+                q.push_back(me);
+                None
+            }
         }
     }
 
     async fn fallback_pair(&self, game: &str, wallet: &str) -> Option<Waiting> {
         // Reachable only in multi-instance deployments; single-instance pairs at join time. Kept
-        // consistent: if `wallet` is still parked, pair it with the oldest different-wallet waiter.
+        // consistent: if `wallet` is still parked, pair it with the oldest different-wallet waiter
+        // that is not a bot-vs-bot match.
         let mut queues = self.queues.write().unwrap();
         let q = queues.entry(game.to_owned()).or_default();
-        if !q.iter().any(|w| w.wallet == wallet) {
-            return None;
-        }
-        let opp_idx = q.iter().position(|w| w.wallet != wallet)?;
+        let me_is_bot = q.iter().find(|w| w.wallet == wallet)?.is_bot;
+        let opp_idx = q
+            .iter()
+            .position(|w| w.wallet != wallet && pairing_allowed(me_is_bot, w.is_bot))?;
         let opp = q.remove(opp_idx);
         q.retain(|w| w.wallet != wallet);
         opp
@@ -482,10 +486,12 @@ mod tests {
         let a = Waiting {
             wallet: "0xa".into(),
             conn: cr(),
+            is_bot: false,
         };
         let b = Waiting {
             wallet: "0xb".into(),
             conn: cr(),
+            is_bot: false,
         };
         assert!(
             s.join_or_pair("ttt", a.clone(), 0).await.is_none(),
@@ -493,6 +499,42 @@ mod tests {
         );
         let opp = s.join_or_pair("ttt", b, 0).await.expect("second pairs");
         assert_eq!(opp.wallet, "0xa", "opponent is the earlier waiter (seat A)");
+    }
+
+    // The fleet invariant: a bot is never matched to another bot. Two bot waiters both park;
+    // a human joining pairs with the waiting bot (bot-primary). See spec §7.
+    #[tokio::test]
+    async fn bots_never_pair_with_each_other_but_do_pair_a_human() {
+        let s = InMemoryMpStore::default();
+        let bot1 = Waiting {
+            wallet: "0xbot1".into(),
+            conn: cr(),
+            is_bot: true,
+        };
+        let bot2 = Waiting {
+            wallet: "0xbot2".into(),
+            conn: cr(),
+            is_bot: true,
+        };
+        let human = Waiting {
+            wallet: "0xhuman".into(),
+            conn: cr(),
+            is_bot: false,
+        };
+
+        assert!(
+            s.join_or_pair("blackjack", bot1, 0).await.is_none(),
+            "first bot parks"
+        );
+        assert!(
+            s.join_or_pair("blackjack", bot2, 0).await.is_none(),
+            "a second bot must NOT be paired with the waiting bot"
+        );
+        let opp = s
+            .join_or_pair("blackjack", human, 0)
+            .await
+            .expect("a human pairs with a waiting bot");
+        assert!(opp.is_bot, "the human's opponent is the waiting bot");
     }
 
     // Players queued for different games never pair.
@@ -504,7 +546,8 @@ mod tests {
                 "ttt",
                 Waiting {
                     wallet: "0xa".into(),
-                    conn: cr()
+                    conn: cr(),
+                    is_bot: false,
                 },
                 0
             )
@@ -515,7 +558,8 @@ mod tests {
                 "chess",
                 Waiting {
                     wallet: "0xb".into(),
-                    conn: cr()
+                    conn: cr(),
+                    is_bot: false,
                 },
                 0
             )
