@@ -7357,6 +7357,7 @@ version = "0.1.0"
 dependencies = [
  "hex",
  "serde",
+ "serde_json",
  "tunnel-core",
  "tunnel-harness",
 ]
@@ -7420,6 +7421,7 @@ version = "0.1.0"
 dependencies = [
  "hex",
  "serde",
+ "serde_json",
  "tunnel-core",
  "tunnel-harness",
 ]

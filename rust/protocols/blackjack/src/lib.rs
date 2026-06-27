@@ -43,6 +43,38 @@ pub enum BjMove {
     Stand,
 }
 
+/// Wire encoding for a blackjack move, byte-identical to the TS move codec:
+/// `{"action":"bet","amount":N}` / `{"action":"hit"}` / `{"action":"stand"}`.
+impl tunnel_harness::MoveCodec for BjMove {
+    fn encode(&self, out: &mut Vec<u8>) {
+        match self {
+            BjMove::Bet { amount } => {
+                out.extend_from_slice(format!("{{\"action\":\"bet\",\"amount\":{amount}}}").as_bytes())
+            }
+            BjMove::Hit => out.extend_from_slice(b"{\"action\":\"hit\"}"),
+            BjMove::Stand => out.extend_from_slice(b"{\"action\":\"stand\"}"),
+        }
+    }
+
+    fn decode(fragment: &[u8]) -> Result<Self, tunnel_harness::CodecError> {
+        use tunnel_harness::CodecError;
+        let v: serde_json::Value =
+            serde_json::from_slice(fragment).map_err(|e| CodecError::Malformed(e.to_string()))?;
+        match v.get("action").and_then(|a| a.as_str()) {
+            Some("bet") => Ok(BjMove::Bet {
+                amount: v
+                    .get("amount")
+                    .and_then(|a| a.as_u64())
+                    .ok_or(CodecError::MissingField("amount"))?,
+            }),
+            Some("hit") => Ok(BjMove::Hit),
+            Some("stand") => Ok(BjMove::Stand),
+            Some(_) => Err(CodecError::BadField("action")),
+            None => Err(CodecError::MissingField("action")),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct BjState {
     pub phase: Phase,
@@ -406,6 +438,32 @@ impl Protocol for Blackjack {
 mod tests {
     use super::*;
     use tunnel_core::crypto::blake2b256;
+
+    // A blackjack Bet MoveFrame must encode byte-identically to the TS wire codec
+    // (sui-tunnel-ts distributedFrame.ts): u64 fields as decimal strings, bytes as
+    // lowercase hex, move as {"action":"bet","amount":N}. This is the cross-client
+    // parity gate — a Rust bot and a TS player exchange exactly these bytes.
+    #[test]
+    fn move_frame_encodes_to_golden_ts_json() {
+        use tunnel_harness::{FrameCodec, JsonFrameCodec, MoveFrame, TunnelFrame, WireSeat};
+        let frame: TunnelFrame<BjMove> = TunnelFrame::Move(MoveFrame {
+            nonce: 1,
+            by: WireSeat::A,
+            mv: BjMove::Bet { amount: 25 },
+            timestamp: 1234567890,
+            state_hash: std::array::from_fn(|i| (i + 1) as u8),
+            party_a_balance: 200,
+            party_b_balance: 200,
+            sig_proposer: [0xab; 64],
+        });
+        let json = String::from_utf8(JsonFrameCodec.encode(&frame)).unwrap();
+        let expected = format!(
+            "{{\"kind\":\"move\",\"nonce\":\"1\",\"by\":\"A\",\"move\":{{\"action\":\"bet\",\"amount\":25}},\"timestamp\":\"1234567890\",\"stateHash\":\"{}\",\"partyABalance\":\"200\",\"partyBBalance\":\"200\",\"sigProposer\":\"{}\"}}",
+            hex::encode((1u8..=32).collect::<Vec<u8>>()),
+            hex::encode([0xab; 64]),
+        );
+        assert_eq!(json, expected);
+    }
 
     // tunnelId/keys are irrelevant to the protocol; balances 200/200.
     #[test]

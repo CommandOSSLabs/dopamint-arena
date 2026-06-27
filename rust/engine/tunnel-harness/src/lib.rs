@@ -10,7 +10,9 @@ pub mod protocol;
 pub use protocol::Protocol;
 
 pub mod frame;
-pub use frame::{decode_frame, encode_frame, AckFrame, Frame, MoveFrame, WireSeat};
+pub use frame::{
+    AckFrame, CodecError, FrameCodec, JsonFrameCodec, MoveCodec, MoveFrame, TunnelFrame, WireSeat,
+};
 
 pub mod signer;
 pub use signer::{local::LocalSigner, Signer};

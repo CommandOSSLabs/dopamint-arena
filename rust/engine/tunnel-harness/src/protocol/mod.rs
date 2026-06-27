@@ -2,12 +2,12 @@
 //! every method is synchronous and pure — no futures, no IO, no ambient clock/RNG.
 //! Deciding a move (which may be IO-bound) is the Policy seam's job, not this one.
 
+use crate::frame::MoveCodec;
 use crate::{Balances, ProtocolError, Seat, TunnelContext};
-use serde::{de::DeserializeOwned, Serialize};
 
 pub trait Protocol: Send + Sync + 'static {
     type State: Send + Sync;
-    type Move: Send + Serialize + DeserializeOwned;
+    type Move: Send + MoveCodec;
 
     /// Stable identifier, also the state-encoding domain tag.
     fn name(&self) -> &str;

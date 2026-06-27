@@ -4,7 +4,7 @@
 //! only when the co-signing ACK arrives. No IO, no async, no ambient clock —
 //! timestamps are injected. One seat per machine; two wired together self-play.
 
-use crate::frame::{decode_frame, encode_frame, AckFrame, Frame, MoveFrame};
+use crate::frame::{AckFrame, FrameCodec, JsonFrameCodec, MoveFrame, TunnelFrame};
 use crate::{Balances, HarnessError, Protocol, Seat, Signer, TunnelContext};
 use tunnel_core::crypto::{blake2b256, verify};
 use tunnel_core::wire::{serialize_state_update, StateUpdate};
@@ -15,9 +15,10 @@ struct Pending<P: Protocol> {
     nonce: u64,
 }
 
-pub struct TunnelSeat<P: Protocol, S: Signer> {
+pub struct TunnelSeat<P: Protocol, S: Signer, C: FrameCodec<P::Move> = JsonFrameCodec> {
     protocol: P,
     signer: S,
+    codec: C,
     opponent_pk: [u8; 32],
     tunnel_id: String,
     seat: Seat,
@@ -26,12 +27,28 @@ pub struct TunnelSeat<P: Protocol, S: Signer> {
     pending: Option<Pending<P>>,
 }
 
-impl<P: Protocol, S: Signer> TunnelSeat<P, S> {
+impl<P: Protocol, S: Signer, C: FrameCodec<P::Move> + Default> TunnelSeat<P, S, C> {
+    /// Build a seat using the default wire codec (`JsonFrameCodec`).
     pub fn new(protocol: P, signer: S, opponent_pk: [u8; 32], ctx: TunnelContext) -> Self {
+        Self::with_codec(protocol, signer, C::default(), opponent_pk, ctx)
+    }
+}
+
+impl<P: Protocol, S: Signer, C: FrameCodec<P::Move>> TunnelSeat<P, S, C> {
+    /// Build a seat with an explicit wire codec, so callers can plug in a codec
+    /// other than the default JSON one.
+    pub fn with_codec(
+        protocol: P,
+        signer: S,
+        codec: C,
+        opponent_pk: [u8; 32],
+        ctx: TunnelContext,
+    ) -> Self {
         let state = protocol.initial_state(&ctx);
         TunnelSeat {
             protocol,
             signer,
+            codec,
             opponent_pk,
             tunnel_id: ctx.tunnel_id,
             seat: ctx.seat,
@@ -85,7 +102,7 @@ impl<P: Protocol, S: Signer> TunnelSeat<P, S> {
         let nonce = self.nonce + 1;
         let (update, msg) = self.build_update(&next, nonce, timestamp);
         let sig = self.signer.sign(&msg);
-        let frame: Frame<P::Move> = Frame::Move(MoveFrame {
+        let frame: TunnelFrame<P::Move> = TunnelFrame::Move(MoveFrame {
             nonce,
             by: self.seat.into(),
             mv,
@@ -95,14 +112,15 @@ impl<P: Protocol, S: Signer> TunnelSeat<P, S> {
             party_b_balance: update.party_b_balance,
             sig_proposer: sig,
         });
+        let bytes = self.codec.encode(&frame);
         self.pending = Some(Pending { next, msg, nonce });
-        Ok(encode_frame(&frame))
+        Ok(bytes)
     }
 
     pub fn handle_frame(&mut self, bytes: &[u8]) -> Result<Vec<Vec<u8>>, HarnessError> {
-        match decode_frame::<P::Move>(bytes)? {
-            Frame::Move(m) => self.on_move(m),
-            Frame::Ack(a) => self.on_ack(a),
+        match self.codec.decode(bytes)? {
+            TunnelFrame::Move(m) => self.on_move(m),
+            TunnelFrame::Ack(a) => self.on_ack(a),
         }
     }
 
@@ -141,11 +159,11 @@ impl<P: Protocol, S: Signer> TunnelSeat<P, S> {
         let sig_responder = self.signer.sign(&msg);
         self.state = next;
         self.nonce = m.nonce;
-        let ack: Frame<P::Move> = Frame::Ack(AckFrame {
+        let ack: TunnelFrame<P::Move> = TunnelFrame::Ack(AckFrame {
             nonce: m.nonce,
             sig_responder,
         });
-        Ok(vec![encode_frame(&ack)])
+        Ok(vec![self.codec.encode(&ack)])
     }
 
     fn on_ack(&mut self, a: AckFrame) -> Result<Vec<Vec<u8>>, HarnessError> {
@@ -168,6 +186,7 @@ impl<P: Protocol, S: Signer> TunnelSeat<P, S> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::frame::{CodecError, MoveCodec};
     use crate::LocalSigner;
     use tunnel_core::crypto::keypair_from_secret;
 
@@ -176,8 +195,16 @@ mod tests {
     struct Tiny {
         cap: u64,
     }
-    #[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
+    #[derive(Clone, Copy)]
     struct TinyMove;
+    impl MoveCodec for TinyMove {
+        fn encode(&self, out: &mut Vec<u8>) {
+            out.extend_from_slice(b"{\"action\":\"tiny\"}");
+        }
+        fn decode(_fragment: &[u8]) -> Result<Self, CodecError> {
+            Ok(TinyMove)
+        }
+    }
     #[derive(Clone)]
     struct TinyState {
         a: u64,
@@ -273,7 +300,7 @@ mod tests {
         // nibble of sig_responder. Targeting the field directly is reliable because
         // `.replace("00","ff")` fails when the signature has no 0x00 bytes.
         let raw = String::from_utf8(ack.remove(0)).unwrap();
-        let marker = "\"sig_responder\":\"";
+        let marker = "\"sigResponder\":\"";
         let pos = raw.find(marker).expect("sig_responder field in ack json") + marker.len();
         let flip = if raw.as_bytes()[pos] == b'0' { b'f' } else { b'0' };
         let mut corrupted = raw.into_bytes();
@@ -287,11 +314,8 @@ mod tests {
         let (mut a, _b) = seats();
         let mv_frame = a.propose(TinyMove, 1).unwrap();
         // Feeding our own MOVE back to us: by == our seat.
-        let mut fresh = {
+        let mut fresh: TunnelSeat<Tiny, LocalSigner> = {
             let sa: [u8; 32] = std::array::from_fn(|i| (i + 1) as u8);
-            let sb: [u8; 32] = std::array::from_fn(|i| (i + 33) as u8);
-            let pkb = keypair_from_secret(&sb).public_key();
-            let _ = pkb;
             let pka = keypair_from_secret(&sa).public_key();
             TunnelSeat::new(
                 Tiny { cap: 4 },
