@@ -21,26 +21,6 @@ pub struct PayMove {
     pub amount: u64,
 }
 
-/// Wire encoding for a payment move: `{"amount":N}`. Payments is bot-vs-bot only
-/// (no TS counterpart yet), so any self-consistent canonical form is fine.
-impl tunnel_harness::MoveCodec for PayMove {
-    fn encode(&self, out: &mut Vec<u8>) {
-        out.extend_from_slice(format!("{{\"amount\":{}}}", self.amount).as_bytes());
-    }
-
-    fn decode(fragment: &[u8]) -> Result<Self, tunnel_harness::CodecError> {
-        use tunnel_harness::CodecError;
-        let v: serde_json::Value =
-            serde_json::from_slice(fragment).map_err(|e| CodecError::Malformed(e.to_string()))?;
-        Ok(PayMove {
-            amount: v
-                .get("amount")
-                .and_then(|a| a.as_u64())
-                .ok_or(CodecError::MissingField("amount"))?,
-        })
-    }
-}
-
 /// Whose turn it is: A on even transfer count, B on odd.
 fn actor(s: &PayState) -> Seat {
     if s.transfers % 2 == 0 {

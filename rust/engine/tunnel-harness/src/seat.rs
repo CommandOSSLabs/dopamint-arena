@@ -204,7 +204,6 @@ impl<P: Protocol, S: Signer, C: FrameCodec<P::Move>> TunnelSeat<P, S, C> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::frame::{CodecError, MoveCodec};
     use crate::LocalSigner;
     use tunnel_core::crypto::keypair_from_secret;
 
@@ -213,16 +212,8 @@ mod tests {
     struct Tiny {
         cap: u64,
     }
-    #[derive(Clone, Copy)]
+    #[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
     struct TinyMove;
-    impl MoveCodec for TinyMove {
-        fn encode(&self, out: &mut Vec<u8>) {
-            out.extend_from_slice(b"{\"action\":\"tiny\"}");
-        }
-        fn decode(_fragment: &[u8]) -> Result<Self, CodecError> {
-            Ok(TinyMove)
-        }
-    }
     #[derive(Clone)]
     struct TinyState {
         a: u64,

@@ -116,38 +116,6 @@ impl<'de> serde::Deserialize<'de> for BjMove {
     }
 }
 
-/// Wire encoding for a blackjack move, byte-identical to the TS move codec:
-/// `{"action":"bet","amount":N}` / `{"action":"hit"}` / `{"action":"stand"}`.
-impl tunnel_harness::MoveCodec for BjMove {
-    fn encode(&self, out: &mut Vec<u8>) {
-        match self {
-            BjMove::Bet { amount } => out.extend_from_slice(
-                format!("{{\"action\":\"bet\",\"amount\":{amount}}}").as_bytes(),
-            ),
-            BjMove::Hit => out.extend_from_slice(b"{\"action\":\"hit\"}"),
-            BjMove::Stand => out.extend_from_slice(b"{\"action\":\"stand\"}"),
-        }
-    }
-
-    fn decode(fragment: &[u8]) -> Result<Self, tunnel_harness::CodecError> {
-        use tunnel_harness::CodecError;
-        let v: serde_json::Value =
-            serde_json::from_slice(fragment).map_err(|e| CodecError::Malformed(e.to_string()))?;
-        match v.get("action").and_then(|a| a.as_str()) {
-            Some("bet") => Ok(BjMove::Bet {
-                amount: v
-                    .get("amount")
-                    .and_then(|a| a.as_u64())
-                    .ok_or(CodecError::MissingField("amount"))?,
-            }),
-            Some("hit") => Ok(BjMove::Hit),
-            Some("stand") => Ok(BjMove::Stand),
-            Some(_) => Err(CodecError::BadField("action")),
-            None => Err(CodecError::MissingField("action")),
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub struct BjState {
     pub phase: Phase,

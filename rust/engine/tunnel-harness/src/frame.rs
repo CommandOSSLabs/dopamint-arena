@@ -9,7 +9,7 @@
 //! The reference `JsonFrameCodec` is byte-identical to
 //! `sui-tunnel-ts/src/core/distributedFrame.ts`: u64 fields are decimal strings,
 //! byte arrays are lowercase hex, and the per-game `move` sub-object is produced by
-//! the protocol's `MoveCodec`. That parity is what lets a Rust bot and a TS player
+//! the move's serde implementation. That parity is what lets a Rust bot and a TS player
 //! interoperate over the same channel. The SIGNED bytes are the tunnel-core
 //! `StateUpdate` (produced separately and frozen) — this codec is only the envelope.
 
@@ -102,17 +102,6 @@ impl From<CodecError> for HarnessError {
     }
 }
 
-/// Per-game move ⇄ canonical JSON-fragment bytes. The fragment is embedded
-/// literally inside the frame envelope, so it stays byte-compatible with the TS
-/// move codec (e.g. blackjack `{"action":"bet","amount":25}`). Both ends of a
-/// channel must agree on this mapping.
-pub trait MoveCodec: Sized {
-    /// Append this move's canonical JSON fragment to `out`.
-    fn encode(&self, out: &mut Vec<u8>);
-    /// Parse a move from its raw JSON-fragment bytes.
-    fn decode(fragment: &[u8]) -> Result<Self, CodecError>;
-}
-
 /// Whole-frame wire codec, injected into `TunnelSeat` so the core is wire-agnostic.
 /// Both ends of a channel MUST use a compatible codec; `id()` lets a receiver
 /// select/validate the right one.
@@ -125,11 +114,11 @@ pub trait FrameCodec<M>: Send + Sync {
 
 /// The reference codec: compact JSON byte-identical to `distributedFrame.ts`.
 /// u64 fields are decimal strings, byte arrays lowercase hex, fixed key order; the
-/// `move` sub-object is delegated to `M: MoveCodec`. A zero-sized default codec.
+/// `move` sub-object is delegated to `M`'s serde impl. A zero-sized default codec.
 #[derive(Default, Clone, Copy)]
 pub struct JsonFrameCodec;
 
-impl<M: MoveCodec> FrameCodec<M> for JsonFrameCodec {
+impl<M: serde::Serialize + serde::de::DeserializeOwned> FrameCodec<M> for JsonFrameCodec {
     fn id(&self) -> &str {
         "json.distributed.v1"
     }
@@ -139,7 +128,7 @@ impl<M: MoveCodec> FrameCodec<M> for JsonFrameCodec {
         match frame {
             TunnelFrame::Move(m) => {
                 // Hand-written so key order and string/number typing exactly match
-                // distributedFrame.ts; the move fragment is owned by the MoveCodec.
+                // distributedFrame.ts; the move fragment is owned by serde.
                 write!(
                     out,
                     "{{\"kind\":\"move\",\"nonce\":\"{}\",\"by\":\"{}\",\"move\":",
@@ -147,7 +136,7 @@ impl<M: MoveCodec> FrameCodec<M> for JsonFrameCodec {
                     m.by.as_str()
                 )
                 .unwrap();
-                m.mv.encode(&mut out);
+                serde_json::to_writer(&mut out, &m.mv).expect("move serializes to json");
                 write!(
                     out,
                     ",\"timestamp\":\"{}\",\"stateHash\":\"{}\",\"partyABalance\":\"{}\",\"partyBBalance\":\"{}\",\"sigProposer\":\"{}\"}}",
@@ -196,11 +185,8 @@ impl<M: MoveCodec> FrameCodec<M> for JsonFrameCodec {
                     _ => return Err(CodecError::BadField("by")),
                 };
                 let mv_value = v.get("move").ok_or(CodecError::MissingField("move"))?;
-                // Re-serialize the parsed `move` sub-object back to bytes for the
-                // MoveCodec. Decode reads fields by name, so key order is irrelevant.
-                let mv_bytes = serde_json::to_vec(mv_value)
+                let mv: M = serde_json::from_value(mv_value.clone())
                     .map_err(|e| CodecError::Malformed(e.to_string()))?;
-                let mv = M::decode(&mv_bytes)?;
                 Ok(TunnelFrame::Move(MoveFrame {
                     nonce,
                     by,
@@ -250,37 +236,12 @@ fn hex64_field(v: &serde_json::Value, name: &'static str) -> Result<[u8; 64], Co
 mod tests {
     use super::*;
 
-    // A minimal move with a canonical JSON fragment, to exercise the generic codec.
-    #[derive(PartialEq, Debug)]
+    // A minimal move to exercise the generic codec. Uses derived (externally-tagged)
+    // serde; TS parity is a blackjack-crate concern, not the harness's.
+    #[derive(PartialEq, Debug, serde::Serialize, serde::Deserialize)]
     enum TestMove {
         Bet { amount: u64 },
         Stand,
-    }
-
-    impl MoveCodec for TestMove {
-        fn encode(&self, out: &mut Vec<u8>) {
-            match self {
-                TestMove::Bet { amount } => {
-                    write!(out, "{{\"action\":\"bet\",\"amount\":{amount}}}").unwrap()
-                }
-                TestMove::Stand => out.extend_from_slice(b"{\"action\":\"stand\"}"),
-            }
-        }
-        fn decode(fragment: &[u8]) -> Result<Self, CodecError> {
-            let v: serde_json::Value = serde_json::from_slice(fragment)
-                .map_err(|e| CodecError::Malformed(e.to_string()))?;
-            match v.get("action").and_then(|a| a.as_str()) {
-                Some("bet") => Ok(TestMove::Bet {
-                    amount: v
-                        .get("amount")
-                        .and_then(|a| a.as_u64())
-                        .ok_or(CodecError::MissingField("amount"))?,
-                }),
-                Some("stand") => Ok(TestMove::Stand),
-                Some(_) => Err(CodecError::BadField("action")),
-                None => Err(CodecError::MissingField("action")),
-            }
-        }
     }
 
     #[test]
@@ -347,7 +308,7 @@ mod tests {
             sig_proposer: [0; 64],
         });
         let json = String::from_utf8(JsonFrameCodec.encode(&f)).unwrap();
-        assert!(json.contains("\"move\":{\"action\":\"stand\"}"));
+        assert!(json.contains("\"move\":\"Stand\""));
         assert!(!json.contains("amount"));
         assert!(json.contains("\"by\":\"B\""));
     }
