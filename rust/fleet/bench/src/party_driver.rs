@@ -5,9 +5,11 @@
 
 use std::time::Instant;
 use tunnel_blackjack::{plan, BjMove, Blackjack};
-use tunnel_core::crypto::{blake2b256, keypair_from_secret};
+use tunnel_core::crypto::blake2b256;
 use tunnel_core::wire::{serialize_settlement_with_root, Settlement};
-use tunnel_harness::{Balances, FrameCodec, LocalSigner, PartyRuntime, Seat, TunnelContext};
+use tunnel_harness::{
+    Balances, FrameCodec, LocalSigner, PartyRuntime, Seat, Signer, TunnelContext,
+};
 
 type Seats<C> = PartyRuntime<Blackjack, LocalSigner, C>;
 
@@ -19,22 +21,24 @@ pub struct MatchResult {
     pub play_ns: u128,
 }
 
-/// Per-worker cached seat material: secrets + derived public keys, so the per-match
-/// path skips public-key derivation.
+/// Pre-built signer material for both seats.
+#[derive(Clone)]
 pub struct SeatKit {
-    secret_a: [u8; 32],
-    secret_b: [u8; 32],
+    signer_a: LocalSigner,
+    signer_b: LocalSigner,
     pk_a: [u8; 32],
     pk_b: [u8; 32],
 }
 
 impl SeatKit {
     pub fn new(secret_a: &[u8; 32], secret_b: &[u8; 32]) -> SeatKit {
+        let signer_a = LocalSigner::from_secret(secret_a);
+        let signer_b = LocalSigner::from_secret(secret_b);
         SeatKit {
-            secret_a: *secret_a,
-            secret_b: *secret_b,
-            pk_a: keypair_from_secret(secret_a).public_key(),
-            pk_b: keypair_from_secret(secret_b).public_key(),
+            pk_a: signer_a.public_key(),
+            pk_b: signer_b.public_key(),
+            signer_a,
+            signer_b,
         }
     }
 }
@@ -97,18 +101,10 @@ pub fn play_match_seeded<C: FrameCodec<BjMove> + Default>(
         },
         seat,
     };
-    let mut a: Seats<C> = PartyRuntime::new(
-        Blackjack,
-        LocalSigner::from_secret(&kit.secret_a),
-        kit.pk_b,
-        ctx(Seat::A),
-    );
-    let mut b: Seats<C> = PartyRuntime::new(
-        Blackjack,
-        LocalSigner::from_secret(&kit.secret_b),
-        kit.pk_a,
-        ctx(Seat::B),
-    );
+    let mut a: Seats<C> =
+        PartyRuntime::new(Blackjack, kit.signer_a.clone(), kit.pk_b, ctx(Seat::A));
+    let mut b: Seats<C> =
+        PartyRuntime::new(Blackjack, kit.signer_b.clone(), kit.pk_a, ctx(Seat::B));
     seed_cards(&mut a, card_seed);
     seed_cards(&mut b, card_seed);
 

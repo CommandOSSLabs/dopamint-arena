@@ -20,25 +20,10 @@ fn main() {
         }
     };
 
-    // Headline path: fresh per-match signers (apples-to-apples with loadbench's
-    // harness) or a reused fixed signer pair. fn-pointer annotation coerces both
-    // fn items to one type.
-    let run_headline: fn(
-        usize,
-        u64,
-        Option<u64>,
-        cli::ScenarioMode,
-        cli::FrameCodecKind,
-    ) -> swarm::SwarmOutcome = if opts.reuse_signers {
-        swarm::run_simple
-    } else {
-        swarm::run_fresh_keys
-    };
-
-    let (simple, optimized, res) = match opts.bench_mode {
-        BenchMode::Baseline => {
+    let (simple, preinitialized, res) = match opts.bench_mode {
+        BenchMode::PerMatchSigners => {
             let sampler = resources::start(250, opts.workers);
-            let simple = run_headline(
+            let simple = swarm::run_fresh_keys(
                 opts.workers,
                 opts.duration_secs,
                 opts.matches,
@@ -47,22 +32,23 @@ fn main() {
             );
             (simple, None, sampler.stop())
         }
-        BenchMode::CachedSigners => {
+        BenchMode::PreInitializedSigners => {
             let sampler = resources::start(250, opts.workers);
-            let optimized = swarm::run_optimized(
+            let preinitialized = swarm::run_preinitialized_signers(
                 opts.workers,
                 opts.duration_secs,
-                opts.matches,
+                opts.matches.expect("validated by cli"),
                 opts.scenario,
                 opts.frame_codec,
             );
-            // Report the optimized window as the headline; no parenthetical.
-            (optimized, None, sampler.stop())
+            // Report the steady-state window as the headline; no parenthetical.
+            (preinitialized, None, sampler.stop())
         }
-        BenchMode::Compare => {
-            // Simple window first (the resources line describes it), then optimized.
+        BenchMode::CompareSigners => {
+            // Per-match signer window first (the resources line describes it), then
+            // the steady-state pre-initialized signer window.
             let sampler = resources::start(250, opts.workers);
-            let simple = run_headline(
+            let simple = swarm::run_fresh_keys(
                 opts.workers,
                 opts.duration_secs,
                 opts.matches,
@@ -70,18 +56,18 @@ fn main() {
                 opts.frame_codec,
             );
             let res = sampler.stop();
-            let optimized = swarm::run_optimized(
+            let preinitialized = swarm::run_preinitialized_signers(
                 opts.workers,
                 opts.duration_secs,
-                opts.matches,
+                opts.matches.expect("validated by cli"),
                 opts.scenario,
                 opts.frame_codec,
             );
-            (simple, Some(optimized), res)
+            (simple, Some(preinitialized), res)
         }
     };
     print!(
         "{}",
-        report::render(&opts, &simple, optimized.as_ref(), &res)
+        report::render(&opts, &simple, preinitialized.as_ref(), &res)
     );
 }

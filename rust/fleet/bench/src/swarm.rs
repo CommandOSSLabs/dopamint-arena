@@ -214,29 +214,34 @@ pub fn run_fresh_keys(
     })
 }
 
-/// Optimized fleet: each worker caches one `SeatKit` and runs
-/// `play_prepared_seeded`.
-pub fn run_optimized(
+fn random_seat_kit() -> SeatKit {
+    let mut secret_a = [0u8; 32];
+    let mut secret_b = [0u8; 32];
+    getrandom::getrandom(&mut secret_a).expect("os rng");
+    getrandom::getrandom(&mut secret_b).expect("os rng");
+    SeatKit::new(&secret_a, &secret_b)
+}
+
+/// Steady-state fleet: create every match's signer material before the timed
+/// window, then run exactly that many matches from the pre-built pool.
+pub fn run_preinitialized_signers(
     workers: usize,
     duration_secs: u64,
-    matches: Option<u64>,
+    matches: u64,
     scenario: ScenarioMode,
     codec: FrameCodecKind,
 ) -> SwarmOutcome {
-    run_with(workers, duration_secs, matches, |idx| {
-        thread_local! {
-            static KIT: SeatKit = SeatKit::new(&SEAT_A, &SEAT_B);
+    let kits: Vec<SeatKit> = (0..matches).map(|_| random_seat_kit()).collect();
+    run_with(workers, duration_secs, Some(matches), |idx| {
+        let t = Instant::now();
+        let kit = &kits[idx as usize];
+        let r = play_match_for(codec, scenario.card_seed(idx), kit, &tunnel_id_for(idx));
+        MatchSample {
+            moves: r.moves,
+            bytes: r.bytes as u64,
+            play_ns: r.play_ns,
+            total_ns: t.elapsed().as_nanos(),
         }
-        KIT.with(|kit| {
-            let t = Instant::now();
-            let r = play_match_for(codec, scenario.card_seed(idx), kit, &tunnel_id_for(idx));
-            MatchSample {
-                moves: r.moves,
-                bytes: r.bytes as u64,
-                play_ns: r.play_ns,
-                total_ns: t.elapsed().as_nanos(),
-            }
-        })
     })
 }
 
@@ -256,12 +261,13 @@ mod tests {
     }
 
     #[test]
-    fn cached_signers_match_baseline_totals() {
+    fn preinitialized_signers_match_baseline_totals() {
         let simple = run_simple(2, 3600, Some(8), ScenarioMode::Golden, FrameCodecKind::Json);
-        let optimized = run_optimized(2, 3600, Some(8), ScenarioMode::Golden, FrameCodecKind::Json);
-        assert_eq!(optimized.moves, simple.moves);
-        assert_eq!(optimized.bytes, simple.bytes);
-        assert_eq!(optimized.tunnels_settled, simple.tunnels_settled);
+        let preinitialized =
+            run_preinitialized_signers(2, 3600, 8, ScenarioMode::Golden, FrameCodecKind::Json);
+        assert_eq!(preinitialized.moves, simple.moves);
+        assert_eq!(preinitialized.bytes, simple.bytes);
+        assert_eq!(preinitialized.tunnels_settled, simple.tunnels_settled);
     }
 
     #[test]

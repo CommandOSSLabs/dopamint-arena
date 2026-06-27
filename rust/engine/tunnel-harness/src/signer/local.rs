@@ -3,6 +3,7 @@
 use super::Signer;
 use tunnel_core::crypto::{keypair_from_secret, KeyPair};
 
+#[derive(Clone)]
 pub struct LocalSigner {
     kp: KeyPair,
     pk: [u8; 32],

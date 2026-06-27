@@ -1,6 +1,6 @@
 //! Console report, format-parity with the loadbench swarm output. Pure string
-//! building — the binary prints the result. Headline lines describe the baseline
-//! bench mode; the cached-signers TPS is appended on the move-TPS line.
+//! building — the binary prints the result. Headline lines describe the first
+//! bench window; pre-initialized signer TPS is appended in compare mode.
 
 use crate::cli::BenchOpts;
 use crate::resources::ResourceSummary;
@@ -51,14 +51,14 @@ pub fn format_resources(r: &ResourceSummary) -> String {
 pub fn render(
     opts: &BenchOpts,
     simple: &SwarmOutcome,
-    optimized: Option<&SwarmOutcome>,
+    preinitialized: Option<&SwarmOutcome>,
     res: &ResourceSummary,
 ) -> String {
     let secs = simple.elapsed_ms as f64 / 1000.0;
     let tps = move_tps(simple.moves, simple.elapsed_ms);
-    let tps_line = match optimized {
+    let tps_line = match preinitialized {
         Some(o) => format!(
-            "{PREFIX} aggregate move-TPS: {:.1}   (cached-signers: {:.1})",
+            "{PREFIX} aggregate move-TPS: {:.1}   (pre-initialized-signers: {:.1})",
             tps,
             move_tps(o.moves, o.elapsed_ms)
         ),
@@ -136,7 +136,6 @@ mod tests {
             matches: None,
             bench_mode,
             protocol_id: tunnel_core::protocol_id::BLACKJACK_BET_V1,
-            reuse_signers: false,
             scenario: crate::cli::ScenarioMode::Golden,
             frame_codec: crate::cli::FrameCodecKind::Json,
         }
@@ -187,7 +186,7 @@ mod tests {
     #[test]
     fn render_single_mode_has_no_parenthetical() {
         let s = render(
-            &opts(12, BenchMode::Baseline),
+            &opts(12, BenchMode::PerMatchSigners),
             &outcome(481234, 3366, 15000),
             None,
             &res(),
@@ -196,20 +195,20 @@ mod tests {
         assert!(s.contains("[local/offchain] swarm: 481234 moves over 3366 matches in 15.0s\n"));
         assert!(s.contains("[local/offchain] tunnels settled: 3366 (224.4/s)\n"));
         assert!(s.contains("[local/offchain] aggregate move-TPS: 32082.3\n"));
-        assert!(!s.contains("cached-signers:"));
+        assert!(!s.contains("pre-initialized-signers:"));
         assert!(s.contains("[local/offchain] resources: cpu avg=11.2 cores"));
     }
 
     #[test]
-    fn render_both_appends_optimized_tps() {
+    fn render_compare_appends_preinitialized_tps() {
         let opt = outcome(616000, 4308, 15000); // ~41066.7 TPS
         let s = render(
-            &opts(12, BenchMode::Compare),
+            &opts(12, BenchMode::CompareSigners),
             &outcome(481234, 3366, 15000),
             Some(&opt),
             &res(),
         );
-        assert!(s.contains("aggregate move-TPS: 32082.3   (cached-signers: 41066.7)\n"));
+        assert!(s.contains("aggregate move-TPS: 32082.3   (pre-initialized-signers: 41066.7)\n"));
     }
 
     #[test]
@@ -228,7 +227,7 @@ mod tests {
             moves_dist: summarize(&[143.0, 143.0, 143.0]),
             play_ns_dist: summarize(&[266_000_000.0, 267_000_000.0, 267_000_000.0]),
         };
-        let s = render(&opts(1, BenchMode::Baseline), &o, None, &res());
+        let s = render(&opts(1, BenchMode::PerMatchSigners), &o, None, &res());
         assert!(
             s.contains("[local/offchain] tunnels opened: 3"),
             "got:\n{s}"
