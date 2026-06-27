@@ -1,5 +1,5 @@
-import assert from "node:assert";
 import { describe, it } from "node:test";
+import assert from "node:assert";
 import { GAME_KITS } from "./gameKit";
 
 describe("GAME_KITS registry", () => {
@@ -17,7 +17,7 @@ describe("GAME_KITS registry", () => {
       GAME_KITS.tictactoe.protocol.name,
       "tic_tac_toe.multi.v1",
     );
-    assert.strictEqual(GAME_KITS.blackjack.protocol.name, "blackjack.bet.v2");
+    assert.strictEqual(GAME_KITS.blackjack.protocol.name, "blackjack.v2");
     assert.strictEqual(GAME_KITS.battleship.protocol.name, "battleship.v1");
     assert.strictEqual(
       GAME_KITS["quantum-poker"].protocol.name,
