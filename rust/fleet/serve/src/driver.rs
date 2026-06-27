@@ -25,8 +25,13 @@ impl<P: Protocol, Pol: Policy<P>, Ch: Channel, S: Signer> AsyncSeatDriver<P, Pol
         }
     }
 
-    /// Drive until terminal or `max_moves` co-signed transitions. `now` supplies
-    /// monotonically increasing timestamps (inject a clock in tests).
+    /// Drive until terminal. `now` supplies monotonically increasing timestamps
+    /// (inject a clock in tests).
+    ///
+    /// `max_moves` is a per-seat runaway guard, NOT a coordinated stop: the only
+    /// safe termination is `is_terminal`, on which both seats break together. If
+    /// `max_moves` trips mid-match it can leave the peer blocked in `recv`, so set
+    /// it high enough to never trip in normal play and keep it equal across seats.
     pub async fn run(
         mut self,
         max_moves: u64,

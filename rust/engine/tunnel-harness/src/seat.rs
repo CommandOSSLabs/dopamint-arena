@@ -3,6 +3,13 @@
 //! ingests one inbound frame and returns the frames to send back. State commits
 //! only when the co-signing ACK arrives. No IO, no async, no ambient clock —
 //! timestamps are injected. One seat per machine; two wired together self-play.
+//!
+//! CONTRACT: the core assumes a turn-disciplined driver — at most one seat has an
+//! outstanding `propose` at a time. There is no tie-break for a simultaneous
+//! cross-propose: if both seats propose at once, each rejects the other's MOVE
+//! (`expected ack, got move`) while holding its own pending proposal, so the
+//! exchange cannot complete. Drivers MUST gate proposing on whose turn it is
+//! (e.g. the protocol's `actor_for`), which is what the serve/bench fleets do.
 
 use crate::frame::{AckFrame, FrameCodec, JsonFrameCodec, MoveFrame, TunnelFrame};
 use crate::{Balances, HarnessError, Protocol, Seat, Signer, TunnelContext};
