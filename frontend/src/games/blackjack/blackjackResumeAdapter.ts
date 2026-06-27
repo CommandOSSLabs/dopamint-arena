@@ -21,7 +21,11 @@ export function makeBlackjackResumeAdapter(args: {
 }): ResumeAdapter<BlackjackState, BlackjackMove> {
   return {
     serializeState: (s) => {
-      const { localSecretA: _a, localSecretB: _b, ...pub } = s as BlackjackState;
+      const {
+        localSecretA: _a,
+        localSecretB: _b,
+        ...pub
+      } = s as BlackjackState;
       return bytesToNumberArrays(pub) as never;
     },
     deserializeState: (j) => j as BlackjackState,
@@ -33,7 +37,10 @@ export function makeBlackjackResumeAdapter(args: {
         localSecretB: encodeSecret(args.getSecret().localSecretB),
       }) as unknown as never,
     restoreSecret: (j) => {
-      const o = j as { localSecretA: EncodedSecret; localSecretB: EncodedSecret };
+      const o = j as {
+        localSecretA: EncodedSecret;
+        localSecretB: EncodedSecret;
+      };
       args.setSecret({
         localSecretA: decodeSecret(o.localSecretA),
         localSecretB: decodeSecret(o.localSecretB),
@@ -59,5 +66,7 @@ function encodeSecret(s: BlackjackSlotSecret | null): EncodedSecret {
 }
 
 function decodeSecret(s: EncodedSecret): BlackjackSlotSecret | null {
-  return s ? { value: Uint8Array.from(s.value), salt: Uint8Array.from(s.salt) } : null;
+  return s
+    ? { value: Uint8Array.from(s.value), salt: Uint8Array.from(s.salt) }
+    : null;
 }

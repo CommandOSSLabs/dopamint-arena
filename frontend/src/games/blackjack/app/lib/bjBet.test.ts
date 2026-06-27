@@ -7,7 +7,10 @@ import {
 
 const proto = new BlackjackProtocol();
 const fresh = (): BlackjackState =>
-  proto.initialState({ tunnelId: "0x1", initialBalances: { a: 1000n, b: 1000n } });
+  proto.initialState({
+    tunnelId: "0x1",
+    initialBalances: { a: 1000n, b: 1000n },
+  });
 
 test("offers the standard chip denominations", () => {
   expect(BET_OPTIONS).toEqual([25, 100, 500, 1000]);

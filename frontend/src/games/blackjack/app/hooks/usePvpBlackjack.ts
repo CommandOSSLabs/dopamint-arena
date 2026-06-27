@@ -392,26 +392,57 @@ export function usePvpBlackjack(): PvpView {
         const owed = actorFor(st, getPlayerParty); // PvP: default rotation
         if (!owed) return;
         // Plumbing (commit/reveal) is ALWAYS auto-driven by this seat when it owes it.
-        if ((st.phase === "draw_commit" || st.phase === "draw_reveal") && owed === info.role) {
+        if (
+          (st.phase === "draw_commit" || st.phase === "draw_reveal") &&
+          owed === info.role
+        ) {
           const mv = proto.randomMove(st, info.role, Math.random); // mints commit secret / reveals
           if (mv)
-            setTimeout(() => { try { t.propose(mv, BigInt(Date.now())); } catch { /* in flight */ } },
-              autoRef.current ? 50 : PLUMBING_MS);
+            setTimeout(
+              () => {
+                try {
+                  t.propose(mv, BigInt(Date.now()));
+                } catch {
+                  /* in flight */
+                }
+              },
+              autoRef.current ? 50 : PLUMBING_MS,
+            );
           return;
         }
         // Bet: only the next player bets; auto reuses the remembered bet.
-        if (st.phase === "round_over" && owed === info.role && autoRef.current) {
+        if (
+          st.phase === "round_over" &&
+          owed === info.role &&
+          autoRef.current
+        ) {
           const mv = bjBetMove(lastBetRef.current ?? Number(MIN_BET), st);
-          setTimeout(() => { try { t.propose(mv, BigInt(Date.now())); } catch { /* raced / in flight */ } },
-            autoRef.current ? 100 : NEXT_MS);
+          setTimeout(
+            () => {
+              try {
+                t.propose(mv, BigInt(Date.now()));
+              } catch {
+                /* raced / in flight */
+              }
+            },
+            autoRef.current ? 100 : NEXT_MS,
+          );
           return;
         }
         // Player hit/stand: auto mode lets the bot play this seat.
         if (st.phase === "player" && owed === info.role && autoRef.current) {
           const mv = proto.randomMove(st, info.role, Math.random);
           if (mv)
-            setTimeout(() => { try { t.propose(mv, BigInt(Date.now())); } catch { /* not my turn / in flight */ } },
-              autoRef.current ? 50 : BOT_MOVE_MS);
+            setTimeout(
+              () => {
+                try {
+                  t.propose(mv, BigInt(Date.now()));
+                } catch {
+                  /* not my turn / in flight */
+                }
+              },
+              autoRef.current ? 50 : BOT_MOVE_MS,
+            );
         }
       };
       t.onConfirmed = (u) => {
@@ -425,8 +456,14 @@ export function usePvpBlackjack(): PvpView {
         channel,
         tunnel: t,
         adapter: makeBlackjackResumeAdapter({
-          getSecret: () => ({ localSecretA: t.state.localSecretA, localSecretB: t.state.localSecretB }),
-          setSecret: (sec) => { t.state.localSecretA = sec.localSecretA; t.state.localSecretB = sec.localSecretB; },
+          getSecret: () => ({
+            localSecretA: t.state.localSecretA,
+            localSecretB: t.state.localSecretB,
+          }),
+          setSecret: (sec) => {
+            t.state.localSecretA = sec.localSecretA;
+            t.state.localSecretB = sec.localSecretB;
+          },
           onReconciled: () => onAdvance(),
         }),
         identity: {
@@ -817,16 +854,13 @@ export function usePvpBlackjack(): PvpView {
       if (st.phase === "draw_commit" || st.phase === "draw_reveal") {
         const mv = proto.randomMove(st, roleRef.current, Math.random);
         if (mv)
-          setTimeout(
-            () => {
-              try {
-                t.propose(mv, BigInt(Date.now()));
-              } catch {
-                /* ignore */
-              }
-            },
-            50,
-          );
+          setTimeout(() => {
+            try {
+              t.propose(mv, BigInt(Date.now()));
+            } catch {
+              /* ignore */
+            }
+          }, 50);
       } else if (st.phase === "player") {
         const mv = proto.randomMove(st, roleRef.current, Math.random);
         if (mv)
