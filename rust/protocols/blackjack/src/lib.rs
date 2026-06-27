@@ -36,11 +36,84 @@ impl Phase {
     }
 }
 
-#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug)]
 pub enum BjMove {
     Bet { amount: u64 },
     Hit,
     Stand,
+}
+
+/// Compact derived shadow used only for non-self-describing formats (bcs/postcard),
+/// where the `{"action":...}` JSON shape is wasteful and internally-tagged enums are
+/// unsupported. The human-readable path is hand-written for byte-exact TS parity.
+#[derive(serde::Serialize, serde::Deserialize)]
+enum BjMoveRepr {
+    Bet { amount: u64 },
+    Hit,
+    Stand,
+}
+
+/// Wire encoding for a blackjack move. serde_json (human-readable) yields the
+/// TS-parity shape `{"action":"bet","amount":N}` / `{"action":"hit"}` /
+/// `{"action":"stand"}`; bcs/postcard yield the compact `BjMoveRepr` variant index.
+impl serde::Serialize for BjMove {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        if s.is_human_readable() {
+            match self {
+                BjMove::Bet { amount } => {
+                    let mut m = s.serialize_map(Some(2))?;
+                    m.serialize_entry("action", "bet")?;
+                    m.serialize_entry("amount", amount)?;
+                    m.end()
+                }
+                BjMove::Hit => {
+                    let mut m = s.serialize_map(Some(1))?;
+                    m.serialize_entry("action", "hit")?;
+                    m.end()
+                }
+                BjMove::Stand => {
+                    let mut m = s.serialize_map(Some(1))?;
+                    m.serialize_entry("action", "stand")?;
+                    m.end()
+                }
+            }
+        } else {
+            let repr = match *self {
+                BjMove::Bet { amount } => BjMoveRepr::Bet { amount },
+                BjMove::Hit => BjMoveRepr::Hit,
+                BjMove::Stand => BjMoveRepr::Stand,
+            };
+            repr.serialize(s)
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for BjMove {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        use serde::de::Error as _;
+        if d.is_human_readable() {
+            let v = serde_json::Value::deserialize(d)?;
+            match v.get("action").and_then(|a| a.as_str()) {
+                Some("bet") => {
+                    let amount = v
+                        .get("amount")
+                        .and_then(|a| a.as_u64())
+                        .ok_or_else(|| D::Error::custom("blackjack bet missing amount"))?;
+                    Ok(BjMove::Bet { amount })
+                }
+                Some("hit") => Ok(BjMove::Hit),
+                Some("stand") => Ok(BjMove::Stand),
+                _ => Err(D::Error::custom("unknown blackjack action")),
+            }
+        } else {
+            Ok(match BjMoveRepr::deserialize(d)? {
+                BjMoveRepr::Bet { amount } => BjMove::Bet { amount },
+                BjMoveRepr::Hit => BjMove::Hit,
+                BjMoveRepr::Stand => BjMove::Stand,
+            })
+        }
+    }
 }
 
 /// Wire encoding for a blackjack move, byte-identical to the TS move codec:
@@ -433,6 +506,42 @@ impl Protocol for Blackjack {
 mod tests {
     use super::*;
     use tunnel_core::crypto::blake2b256;
+
+    #[test]
+    fn bjmove_json_is_action_tagged() {
+        assert_eq!(
+            serde_json::to_string(&BjMove::Bet { amount: 25 }).unwrap(),
+            r#"{"action":"bet","amount":25}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&BjMove::Hit).unwrap(),
+            r#"{"action":"hit"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&BjMove::Stand).unwrap(),
+            r#"{"action":"stand"}"#
+        );
+    }
+
+    #[test]
+    fn bjmove_json_round_trips() {
+        for mv in [BjMove::Bet { amount: 500 }, BjMove::Hit, BjMove::Stand] {
+            let s = serde_json::to_string(&mv).unwrap();
+            let back: BjMove = serde_json::from_str(&s).unwrap();
+            assert_eq!(format!("{mv:?}"), format!("{back:?}"));
+        }
+    }
+
+    #[test]
+    fn bjmove_bcs_round_trips_compactly() {
+        for mv in [BjMove::Bet { amount: 1000 }, BjMove::Hit, BjMove::Stand] {
+            let bytes = bcs::to_bytes(&mv).unwrap();
+            let back: BjMove = bcs::from_bytes(&bytes).unwrap();
+            assert_eq!(format!("{mv:?}"), format!("{back:?}"));
+        }
+        // Hit is a unit variant: just the variant index, far smaller than its JSON.
+        assert!(bcs::to_bytes(&BjMove::Hit).unwrap().len() < r#"{"action":"hit"}"#.len());
+    }
 
     // A blackjack Bet MoveFrame must encode byte-identically to the TS wire codec
     // (sui-tunnel-ts distributedFrame.ts): u64 fields as decimal strings, bytes as

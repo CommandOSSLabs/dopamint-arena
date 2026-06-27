@@ -7402,6 +7402,7 @@ dependencies = [
 name = "tunnel-blackjack"
 version = "0.1.0"
 dependencies = [
+ "bcs 0.2.1",
  "hex",
  "serde",
  "serde_json",
