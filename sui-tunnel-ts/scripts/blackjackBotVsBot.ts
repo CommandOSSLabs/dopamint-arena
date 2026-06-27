@@ -31,7 +31,7 @@ const PACKAGE_ID =
   "0x0b89fe86e42cdbfd1e614757a83d014b455d12923d0dded58842ab18f8a5a22b";
 process.env.PACKAGE_ID ??= PACKAGE_ID;
 
-/** Per-party locked stake (MIST). Must be >= the protocol WAGER (100) to play. */
+/** Per-party locked stake (MIST). Must be >= the protocol MIN_BET (25) to play. */
 const STAKE = 500n;
 /** Gas top-up sent to the player bot (MIST) = 0.1 SUI. It signs every on-chain tx; the
  *  dealer bot signs nothing (create_and_fund covers both stakes), so it needs no SUI. */
