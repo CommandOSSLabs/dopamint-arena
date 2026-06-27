@@ -415,6 +415,55 @@ test("randomMove drives a full game to a terminal state with conserved balances"
   assert.ok(s.balanceA >= 0n && s.balanceB >= 0n);
 });
 
+test("a bet below MIN_BET is rejected", () => {
+  const s = fresh();
+  const by = getPlayerParty(s.round + 1n);
+  assert.throws(
+    () => proto.applyMove(s, { kind: "bet", amount: MIN_BET - 1n }, by),
+    /bet must be in/,
+  );
+});
+
+test("a bet above maxBet is rejected", () => {
+  const s = proto.initialState({ tunnelId: "0xab", initialBalances: { a: 300n, b: 1000n } });
+  const by = getPlayerParty(s.round + 1n);
+  // maxBet = min(300, 1000) = 300; betting 301 is rejected.
+  assert.throws(() => proto.applyMove(s, { kind: "bet", amount: 301n }, by), /bet must be in/);
+});
+
+test("settlement transfers exactly the chosen bet", () => {
+  // Player 20 vs dealer 19, bet 250 -> player (A) wins 250.
+  let s = proto.initialState({ tunnelId: "0xab", initialBalances: { a: 1000n, b: 1000n } });
+  s = placeBet(s, 250n);
+  const [k1, k2] = secretsForRank(13); // value 10
+  const [f5a, f5b] = secretsForRank(5); // value 5
+  s = doDraw(s, k1, k2); // player 10
+  s = doDraw(s, k1, k2); // player 20
+  s = doDraw(s, f5a, f5b); // dealer 5
+  s = doDraw(s, f5a, f5b); // dealer 10
+  s = standAndResolve(s, 9); // dealer 10 -> 19; 20 > 19 -> A wins
+  assert.equal(s.balanceA, 1250n);
+  assert.equal(s.balanceB, 750n);
+  assert.equal(s.balanceA + s.balanceB, s.total);
+});
+
+test("the game is terminal once neither side can fund MIN_BET", () => {
+  // a = 20 (< MIN_BET 25) -> no fundable bet -> terminal at round_over.
+  const s = proto.initialState({ tunnelId: "0xab", initialBalances: { a: 20n, b: 1000n } });
+  assert.equal(s.phase, "round_over");
+  assert.ok(proto.isTerminal(s));
+  const by = getPlayerParty(s.round + 1n);
+  assert.throws(() => proto.applyMove(s, { kind: "bet", amount: MIN_BET }, by), /game over/);
+});
+
+test("randomMove offers a MIN_BET bet for the next player only", () => {
+  const s = fresh();
+  const player = getPlayerParty(s.round + 1n);
+  const dealer = getDealerParty(s.round + 1n);
+  assert.deepEqual(proto.randomMove(s, player, Math.random), { kind: "bet", amount: MIN_BET });
+  assert.equal(proto.randomMove(s, dealer, Math.random), null);
+});
+
 test("replaying the same moves yields identical encodeState", () => {
   const moves: Array<{ move: BlackjackMove; by: "A" | "B" }> = [];
   let s = fresh();
