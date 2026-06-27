@@ -130,7 +130,7 @@ export interface BlackjackBotGame {
   hit: () => void;
   /** Stand the player's hand this hand (manual mode only). */
   stand: () => void;
-  /** Place this round's wager (manual mode only, during the betting/round_over phase). */
+  /** Select this round's wager amount; the next round_over tick deals with it (manual mode). */
   placeBet: (amount: number) => void;
   /** True while a rebalance transfer is in flight (disables the control). */
   rebalancing: boolean;
