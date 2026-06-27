@@ -153,6 +153,10 @@ export class BattleshipProtocol implements Protocol<
     switch (move.kind) {
       case "commit":
         return this.applyCommit(state, move.commitment, by);
+      case "shoot":
+        return this.applyShoot(state, move.cell, by);
+      case "answer":
+        return this.applyAnswer(state, move, by);
       default:
         throw new Error(`move not handled yet: ${move.kind}`);
     }
@@ -183,6 +187,78 @@ export class BattleshipProtocol implements Protocol<
       next.phase = "playing";
       next.turn = "A";
     }
+    return next;
+  }
+
+  private applyShoot(
+    state: BattleshipState,
+    cell: number,
+    by: Party,
+  ): BattleshipState {
+    if (state.phase !== "playing") throw new Error("not in the firing phase");
+    if (state.pendingShot) throw new Error("awaiting the previous answer");
+    if (by !== state.turn) throw new Error(`not ${by}'s turn`);
+    assertShootable(state, by, cell);
+    return { ...state, pendingShot: { by, cell } };
+  }
+
+  private applyAnswer(
+    state: BattleshipState,
+    move: { isHit: boolean; next?: number },
+    by: Party,
+  ): BattleshipState {
+    const pending = state.pendingShot;
+    if (state.phase !== "playing" || !pending)
+      throw new Error("no shot to answer");
+    const defender = otherParty(pending.by);
+    if (by !== defender) throw new Error("only the defender answers");
+    if (move.next !== undefined && move.isHit)
+      throw new Error("a hit keeps the shooter's turn; defender cannot fire");
+
+    // Record against the DEFENDER's own board.
+    const result: BattleshipShotResult = {
+      cell: pending.cell,
+      isHit: move.isHit,
+    };
+    const shotsAtA =
+      defender === "A" ? [...state.shotsAtA, result] : state.shotsAtA;
+    const shotsAtB =
+      defender === "B" ? [...state.shotsAtB, result] : state.shotsAtB;
+    const hitsOnA =
+      defender === "A" && move.isHit ? state.hitsOnA + 1 : state.hitsOnA;
+    const hitsOnB =
+      defender === "B" && move.isHit ? state.hitsOnB + 1 : state.hitsOnB;
+
+    const next: BattleshipState = {
+      ...state,
+      shotsAtA,
+      shotsAtB,
+      hitsOnA,
+      hitsOnB,
+      pendingShot: null,
+    };
+
+    // The shooter sank the defender's fleet -> settle by reveal.
+    const defenderHits = defender === "A" ? hitsOnA : hitsOnB;
+    if (defenderHits >= FLEET_CELLS) {
+      next.phase = "revealBoards";
+      return next;
+    }
+
+    const shooter = pending.by;
+    if (move.isHit) {
+      next.turn = shooter; // hit keeps the turn
+      if (openCells(next, shooter) === 0) next.phase = "revealBoards";
+      return next;
+    }
+    // miss -> turn passes to the defender
+    next.turn = defender;
+    if (move.next !== undefined) {
+      assertShootable(next, defender, move.next);
+      next.pendingShot = { by: defender, cell: move.next };
+      return next;
+    }
+    if (openCells(next, defender) === 0) next.phase = "revealBoards";
     return next;
   }
 
