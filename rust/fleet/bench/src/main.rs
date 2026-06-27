@@ -17,12 +17,17 @@ fn main() {
     // Headline runner: fresh per-match keys (apples-to-apples with loadbench's
     // harness) or the fixed-key simple runner. fn-pointer annotation coerces
     // both fn items to one type.
-    let run_headline: fn(usize, u64, Option<u64>, swarm::CardMode) -> swarm::SwarmOutcome =
-        if opts.fresh_keys {
-            swarm::run_fresh_keys
-        } else {
-            swarm::run_simple
-        };
+    let run_headline: fn(
+        usize,
+        u64,
+        Option<u64>,
+        swarm::CardMode,
+        cli::CodecKind,
+    ) -> swarm::SwarmOutcome = if opts.fresh_keys {
+        swarm::run_fresh_keys
+    } else {
+        swarm::run_simple
+    };
 
     let (simple, optimized, res) = match opts.runner {
         Runner::Simple => {
@@ -32,6 +37,7 @@ fn main() {
                 opts.duration_secs,
                 opts.matches,
                 opts.card_mode,
+                opts.codec,
             );
             (simple, None, sampler.stop())
         }
@@ -42,6 +48,7 @@ fn main() {
                 opts.duration_secs,
                 opts.matches,
                 opts.card_mode,
+                opts.codec,
             );
             // Report the optimized window as the headline; no parenthetical.
             (optimized, None, sampler.stop())
@@ -54,6 +61,7 @@ fn main() {
                 opts.duration_secs,
                 opts.matches,
                 opts.card_mode,
+                opts.codec,
             );
             let res = sampler.stop();
             let optimized = swarm::run_optimized(
@@ -61,6 +69,7 @@ fn main() {
                 opts.duration_secs,
                 opts.matches,
                 opts.card_mode,
+                opts.codec,
             );
             (simple, Some(optimized), res)
         }

@@ -6,11 +6,13 @@
 //! (143*N moves), which is the deterministic regression gate; `--duration` is
 //! the time-bounded throughput mode.
 
+use crate::cli::CodecKind;
 use crate::driver::{play_match_seeded, SeatKit};
 use crate::stats::{summarize, Distribution};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
+use tunnel_harness::{BcsFrameCodec, JsonFrameCodec, PostcardFrameCodec};
 
 /// Golden seat A secret: bytes 0x01..0x20.
 pub const SEAT_A: [u8; 32] = {
@@ -36,6 +38,27 @@ pub const SEAT_B: [u8; 32] = {
 
 const CREATED_AT: u64 = 1234567890;
 const MAX_MOVES: u64 = 1000;
+
+/// Run one match through the codec selected at the CLI. Static dispatch keeps
+/// codec cost on the measured path with one monomorphized driver per arm.
+fn play_match_for(
+    codec: CodecKind,
+    card_seed: Option<u64>,
+    kit: &SeatKit,
+    tunnel_id: &str,
+) -> crate::driver::MatchResult {
+    match codec {
+        CodecKind::Json => play_match_seeded::<JsonFrameCodec>(
+            card_seed, kit, tunnel_id, 200, 200, CREATED_AT, MAX_MOVES,
+        ),
+        CodecKind::Bcs => play_match_seeded::<BcsFrameCodec>(
+            card_seed, kit, tunnel_id, 200, 200, CREATED_AT, MAX_MOVES,
+        ),
+        CodecKind::Postcard => play_match_seeded::<PostcardFrameCodec>(
+            card_seed, kit, tunnel_id, 200, 200, CREATED_AT, MAX_MOVES,
+        ),
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CardMode {
@@ -162,19 +185,12 @@ pub fn run_simple(
     duration_secs: u64,
     matches: Option<u64>,
     mode: CardMode,
+    codec: CodecKind,
 ) -> SwarmOutcome {
     run_with(workers, duration_secs, matches, |idx| {
         let t = Instant::now();
         let kit = SeatKit::new(&SEAT_A, &SEAT_B);
-        let r = play_match_seeded::<tunnel_harness::JsonFrameCodec>(
-            mode.seed(idx),
-            &kit,
-            &tunnel_id_for(idx),
-            200,
-            200,
-            CREATED_AT,
-            MAX_MOVES,
-        );
+        let r = play_match_for(codec, mode.seed(idx), &kit, &tunnel_id_for(idx));
         MatchSample {
             moves: r.moves,
             bytes: r.bytes as u64,
@@ -196,6 +212,7 @@ pub fn run_fresh_keys(
     duration_secs: u64,
     matches: Option<u64>,
     mode: CardMode,
+    codec: CodecKind,
 ) -> SwarmOutcome {
     run_with(workers, duration_secs, matches, |idx| {
         let mut secret_a = [0u8; 32];
@@ -204,15 +221,7 @@ pub fn run_fresh_keys(
         getrandom::getrandom(&mut secret_b).expect("os rng");
         let t = Instant::now();
         let kit = SeatKit::new(&secret_a, &secret_b);
-        let r = play_match_seeded::<tunnel_harness::JsonFrameCodec>(
-            mode.seed(idx),
-            &kit,
-            &tunnel_id_for(idx),
-            200,
-            200,
-            CREATED_AT,
-            MAX_MOVES,
-        );
+        let r = play_match_for(codec, mode.seed(idx), &kit, &tunnel_id_for(idx));
         MatchSample {
             moves: r.moves,
             bytes: r.bytes as u64,
@@ -229,6 +238,7 @@ pub fn run_optimized(
     duration_secs: u64,
     matches: Option<u64>,
     mode: CardMode,
+    codec: CodecKind,
 ) -> SwarmOutcome {
     run_with(workers, duration_secs, matches, |idx| {
         thread_local! {
@@ -236,15 +246,7 @@ pub fn run_optimized(
         }
         KIT.with(|kit| {
             let t = Instant::now();
-            let r = play_match_seeded::<tunnel_harness::JsonFrameCodec>(
-                mode.seed(idx),
-                kit,
-                &tunnel_id_for(idx),
-                200,
-                200,
-                CREATED_AT,
-                MAX_MOVES,
-            );
+            let r = play_match_for(codec, mode.seed(idx), kit, &tunnel_id_for(idx));
             MatchSample {
                 moves: r.moves,
                 bytes: r.bytes as u64,
@@ -263,7 +265,13 @@ mod tests {
     fn fresh_keys_runner_conserves_totals() {
         // Fresh per-match keys don't change gameplay (cards derive from round),
         // so the deterministic gate holds: exactly 143*N moves, 75982*N bytes.
-        let out = run_fresh_keys(2, 3600, Some(6), CardMode::Deterministic);
+        let out = run_fresh_keys(
+            2,
+            3600,
+            Some(6),
+            CardMode::Deterministic,
+            CodecKind::Json,
+        );
         assert_eq!(out.matches_claimed, 6);
         assert_eq!(out.tunnels_settled, 6);
         assert_eq!(out.moves, 143 * 6);
@@ -272,8 +280,20 @@ mod tests {
 
     #[test]
     fn optimized_runner_matches_simple_totals() {
-        let simple = run_simple(2, 3600, Some(8), CardMode::Deterministic);
-        let optimized = run_optimized(2, 3600, Some(8), CardMode::Deterministic);
+        let simple = run_simple(
+            2,
+            3600,
+            Some(8),
+            CardMode::Deterministic,
+            CodecKind::Json,
+        );
+        let optimized = run_optimized(
+            2,
+            3600,
+            Some(8),
+            CardMode::Deterministic,
+            CodecKind::Json,
+        );
         assert_eq!(optimized.moves, simple.moves);
         assert_eq!(optimized.bytes, simple.bytes);
         assert_eq!(optimized.tunnels_settled, simple.tunnels_settled);
@@ -289,7 +309,13 @@ mod tests {
     #[test]
     fn single_worker_fixed_matches_are_deterministic() {
         // matches-bounded: exactly N matches => 143*N moves, 75982*N bytes, N tunnels.
-        let out = run_simple(1, 3600, Some(5), CardMode::Deterministic);
+        let out = run_simple(
+            1,
+            3600,
+            Some(5),
+            CardMode::Deterministic,
+            CodecKind::Json,
+        );
         assert_eq!(out.matches_claimed, 5);
         assert_eq!(out.tunnels_settled, 5);
         assert_eq!(out.moves, 143 * 5);
@@ -299,7 +325,13 @@ mod tests {
     #[test]
     fn multi_worker_conserves_totals() {
         // Total work is fixed by --matches regardless of worker count.
-        let out = run_simple(4, 3600, Some(20), CardMode::Deterministic);
+        let out = run_simple(
+            4,
+            3600,
+            Some(20),
+            CardMode::Deterministic,
+            CodecKind::Json,
+        );
         assert_eq!(out.matches_claimed, 20);
         assert_eq!(out.tunnels_settled, 20);
         assert_eq!(out.moves, 143 * 20);
@@ -308,7 +340,7 @@ mod tests {
 
     #[test]
     fn varied_mode_produces_a_nondegenerate_move_distribution() {
-        let out = run_simple(2, 3600, Some(200), CardMode::Varied);
+        let out = run_simple(2, 3600, Some(200), CardMode::Varied, CodecKind::Json);
         assert_eq!(out.tunnels_settled, 200);
         assert_eq!(out.matches_claimed, 200);
         // Varied cards => not every match is 143 moves.
@@ -326,9 +358,46 @@ mod tests {
 
     #[test]
     fn deterministic_mode_is_constant_143() {
-        let out = run_simple(2, 3600, Some(50), CardMode::Deterministic);
+        let out = run_simple(
+            2,
+            3600,
+            Some(50),
+            CardMode::Deterministic,
+            CodecKind::Json,
+        );
         assert_eq!(out.moves, 143 * 50);
         assert_eq!(out.moves_dist.min, 143.0);
         assert_eq!(out.moves_dist.peak, 143.0);
+    }
+
+    #[test]
+    fn codec_choice_is_consensus_invisible() {
+        let json = run_simple(
+            2,
+            3600,
+            Some(8),
+            CardMode::Deterministic,
+            CodecKind::Json,
+        );
+        let bcs = run_simple(
+            2,
+            3600,
+            Some(8),
+            CardMode::Deterministic,
+            CodecKind::Bcs,
+        );
+        let postcard = run_simple(
+            2,
+            3600,
+            Some(8),
+            CardMode::Deterministic,
+            CodecKind::Postcard,
+        );
+
+        assert_eq!(bcs.moves, json.moves);
+        assert_eq!(postcard.moves, json.moves);
+        assert_eq!(bcs.tunnels_settled, json.tunnels_settled);
+        assert_eq!(postcard.tunnels_settled, json.tunnels_settled);
+        assert!(bcs.bytes < json.bytes && postcard.bytes < json.bytes);
     }
 }

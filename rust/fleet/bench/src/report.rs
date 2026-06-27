@@ -26,6 +26,15 @@ fn mb(bytes: f64) -> u64 {
     (bytes / 1_048_576.0).round() as u64
 }
 
+pub fn codec_id(codec: crate::cli::CodecKind) -> &'static str {
+    use crate::cli::CodecKind;
+    match codec {
+        CodecKind::Json => "json.distributed.v1",
+        CodecKind::Bcs => "bcs.v1",
+        CodecKind::Postcard => "postcard.v1",
+    }
+}
+
 pub fn format_resources(r: &ResourceSummary) -> String {
     format!(
         "cpu avg={:.1} cores ({:.0}%) peak={:.1} cores ({:.0}%), rss avg={}MB peak={}MB, samples={}",
@@ -73,6 +82,7 @@ pub fn render(
 
     format!(
         "{PREFIX} fleet: workers={}\n\
+         {PREFIX} codec: {}\n\
          {PREFIX} swarm: {} moves over {} matches in {:.1}s\n\
          {PREFIX} tunnels settled: {} ({:.1}/s)\n\
          {PREFIX} tunnels opened: {}\n\
@@ -84,6 +94,7 @@ pub fn render(
          {PREFIX} play-loop µs: avg={:.1} p50={:.1} p99={:.1}\n\
          {PREFIX} resources: {}, threads={}, util_p50={:.1}%, util_p99={:.1}%, basis={}\n",
         opts.workers,
+        codec_id(opts.codec),
         simple.moves,
         simple.matches_claimed,
         secs,
@@ -242,6 +253,29 @@ mod tests {
         assert!(
             s.contains("[local/offchain] play-loop µs: avg=266666."),
             "got:\n{s}"
+        );
+        assert!(
+            s.contains("[local/offchain] codec: json.distributed.v1"),
+            "got:\n{s}"
+        );
+    }
+
+    #[test]
+    fn codec_id_matches_codec_impls() {
+        use crate::cli::CodecKind;
+        use tunnel_harness::{BcsFrameCodec, FrameCodec, JsonFrameCodec, PostcardFrameCodec};
+
+        assert_eq!(
+            codec_id(CodecKind::Json),
+            FrameCodec::<tunnel_blackjack::BjMove>::id(&JsonFrameCodec)
+        );
+        assert_eq!(
+            codec_id(CodecKind::Bcs),
+            FrameCodec::<tunnel_blackjack::BjMove>::id(&BcsFrameCodec)
+        );
+        assert_eq!(
+            codec_id(CodecKind::Postcard),
+            FrameCodec::<tunnel_blackjack::BjMove>::id(&PostcardFrameCodec)
         );
     }
 }
