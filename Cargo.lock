@@ -2449,6 +2449,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "fleet-serve"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tunnel-blackjack",
+ "tunnel-core",
+ "tunnel-harness",
+ "tunnel-payments",
+]
+
+[[package]]
 name = "float-cmp"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
