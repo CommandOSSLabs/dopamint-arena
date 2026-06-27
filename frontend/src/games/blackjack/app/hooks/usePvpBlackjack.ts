@@ -814,7 +814,20 @@ export function usePvpBlackjack(): PvpView {
       const st = t.state;
       const owed = actorFor(st, getPlayerParty);
       if (!owed || owed !== roleRef.current) return;
-      if (st.phase === "player") {
+      if (st.phase === "draw_commit" || st.phase === "draw_reveal") {
+        const mv = proto.randomMove(st, roleRef.current, Math.random);
+        if (mv)
+          setTimeout(
+            () => {
+              try {
+                t.propose(mv, BigInt(Date.now()));
+              } catch {
+                /* ignore */
+              }
+            },
+            50,
+          );
+      } else if (st.phase === "player") {
         const mv = proto.randomMove(st, roleRef.current, Math.random);
         if (mv)
           setTimeout(
