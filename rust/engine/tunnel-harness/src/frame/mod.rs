@@ -21,8 +21,10 @@ use serde_big_array::BigArray;
 
 mod bcs;
 mod json;
+mod postcard;
 pub use bcs::BcsFrameCodec;
 pub use json::JsonFrameCodec;
+pub use postcard::PostcardFrameCodec;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum WireSeat {
@@ -291,6 +293,46 @@ mod tests {
     fn bcs_rejects_garbage() {
         assert!(matches!(
             FrameCodec::<TestMove>::decode(&super::bcs::BcsFrameCodec, &[0xff, 0xff, 0xff]),
+            Err(CodecError::Malformed(_))
+        ));
+    }
+
+    #[test]
+    fn postcard_move_round_trips_and_is_smaller_than_json() {
+        let f: TunnelFrame<TestMove> = TunnelFrame::Move(MoveFrame {
+            nonce: 5,
+            by: WireSeat::A,
+            mv: TestMove::Bet { amount: 100 },
+            timestamp: 7,
+            state_hash: [1u8; 32],
+            party_a_balance: 200,
+            party_b_balance: 200,
+            sig_proposer: [0x33; 64],
+        });
+        let pc = super::postcard::PostcardFrameCodec.encode(&f);
+        let js = JsonFrameCodec.encode(&f);
+        assert!(
+            pc.len() < js.len(),
+            "postcard {} !< json {}",
+            pc.len(),
+            js.len()
+        );
+        let decoded: TunnelFrame<TestMove> =
+            super::postcard::PostcardFrameCodec.decode(&pc).unwrap();
+        match decoded {
+            TunnelFrame::Move(m) => {
+                assert_eq!(m.nonce, 5);
+                assert_eq!(m.mv, TestMove::Bet { amount: 100 });
+                assert_eq!(m.sig_proposer, [0x33; 64]);
+            }
+            _ => panic!("expected move"),
+        }
+    }
+
+    #[test]
+    fn postcard_rejects_truncated() {
+        assert!(matches!(
+            FrameCodec::<TestMove>::decode(&super::postcard::PostcardFrameCodec, &[0x00]),
             Err(CodecError::Malformed(_))
         ));
     }

@@ -12,7 +12,7 @@ pub use protocol::Protocol;
 pub mod frame;
 pub use frame::{
     AckFrame, BcsFrameCodec, CodecError, FrameCodec, JsonFrameCodec, MoveFrame, TunnelFrame,
-    WireSeat,
+    PostcardFrameCodec, WireSeat,
 };
 
 pub mod signer;
