@@ -172,6 +172,13 @@ mod tests {
         Stand,
     }
 
+    fn decode_move<C: FrameCodec<TestMove>>(c: &C, bytes: &[u8]) -> MoveFrame<TestMove> {
+        match c.decode(bytes).unwrap() {
+            TunnelFrame::Move(m) => m,
+            _ => panic!("expected move"),
+        }
+    }
+
     #[test]
     fn move_frame_round_trips() {
         let f: TunnelFrame<TestMove> = TunnelFrame::Move(MoveFrame {
@@ -335,5 +342,44 @@ mod tests {
             FrameCodec::<TestMove>::decode(&super::postcard::PostcardFrameCodec, &[0x00]),
             Err(CodecError::Malformed(_))
         ));
+    }
+
+    #[test]
+    fn all_codecs_carry_identical_consensus_fields() {
+        let frame: TunnelFrame<TestMove> = TunnelFrame::Move(MoveFrame {
+            nonce: 11,
+            by: WireSeat::A,
+            mv: TestMove::Bet { amount: 500 },
+            timestamp: 1234,
+            state_hash: [0x5a; 32],
+            party_a_balance: 175,
+            party_b_balance: 225,
+            sig_proposer: [0x7e; 64],
+        });
+
+        let j = decode_move(&JsonFrameCodec, &JsonFrameCodec.encode(&frame));
+        let b = decode_move(
+            &super::bcs::BcsFrameCodec,
+            &super::bcs::BcsFrameCodec.encode(&frame),
+        );
+        let p = decode_move(
+            &super::postcard::PostcardFrameCodec,
+            &super::postcard::PostcardFrameCodec.encode(&frame),
+        );
+
+        for got in [&j, &b, &p] {
+            assert_eq!(got.nonce, 11);
+            assert_eq!(got.mv, TestMove::Bet { amount: 500 });
+            assert_eq!(got.timestamp, 1234);
+            assert_eq!(got.state_hash, [0x5a; 32]);
+            assert_eq!(got.party_a_balance, 175);
+            assert_eq!(got.party_b_balance, 225);
+            assert_eq!(got.sig_proposer, [0x7e; 64]);
+        }
+
+        let jb = JsonFrameCodec.encode(&frame).len();
+        let bb = super::bcs::BcsFrameCodec.encode(&frame).len();
+        let pb = super::postcard::PostcardFrameCodec.encode(&frame).len();
+        assert!(bb < jb && pb < jb, "json={jb} bcs={bb} postcard={pb}");
     }
 }
