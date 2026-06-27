@@ -25,7 +25,7 @@ function statusText(g: ReturnType<typeof usePvpBlackjack>): string {
   if (g.phase === "settling") return "Ending…";
   if (g.gamePhase === "player")
     return g.isDealer ? "Player is deciding…" : "Your turn — Hit or Stand";
-  if (g.gamePhase === "dealer") return "Dealer drawing…";
+  if (g.gamePhase === "draw_commit" || g.gamePhase === "draw_reveal") return "Dealer drawing…";
   if (g.gamePhase === "round_over") {
     if (g.terminal)
       return g.outOfChips
@@ -172,15 +172,15 @@ export default function PvpBlackjack() {
       addToast(`You hit (${selfSum})`);
     if (oppCards.length > p.oppLen && p.oppLen > 0)
       addToast(`${oppLabel} hits (${oppSum})`);
-    // Player role (party A) finished → "you" iff you're not the dealer.
-    if (p.phase === "player" && g.gamePhase === "dealer")
+    // Player role finished (stood) → commit/reveal for dealer's auto-draw begins.
+    if (p.phase === "player" && (g.gamePhase === "draw_commit" || g.gamePhase === "draw_reveal"))
       addToast(
         g.isDealer
           ? `${oppLabel} stands (${p.oppSum})`
           : `You stand (${p.selfSum})`,
       );
-    // Dealer role (party B) finished → "you" iff you are the dealer.
-    if (p.phase === "dealer" && g.gamePhase === "round_over")
+    // Dealer auto-draw finished → round resolved.
+    if ((p.phase === "draw_commit" || p.phase === "draw_reveal") && g.gamePhase === "round_over")
       addToast(
         g.isDealer
           ? `You stand (${p.selfSum})`
