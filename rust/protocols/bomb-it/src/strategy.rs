@@ -117,9 +117,9 @@ mod tests {
     #[test]
     fn strategy_rng_matches_ts_mulberry32_stream() {
         let mut strategy = BombItStrategy::new(1);
-        assert_close(strategy.next_f64(), 0.62707394058816135);
-        assert_close(strategy.next_f64(), 0.0027357211802154779);
-        assert_close(strategy.next_f64(), 0.52744703995995224);
+        assert_close(strategy.next_f64(), 0.627_073_940_588_161_3);
+        assert_close(strategy.next_f64(), 0.002_735_721_180_215_478);
+        assert_close(strategy.next_f64(), 0.527_447_039_959_952_2);
     }
 
     #[tokio::test]

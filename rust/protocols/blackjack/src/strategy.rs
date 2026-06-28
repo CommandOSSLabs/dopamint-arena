@@ -1,6 +1,8 @@
-use crate::duel::{BlackjackDuel, DuelMove, DuelState};
-use crate::{plan, BjMove, BjState, Blackjack};
-use tunnel_harness::{MoveStrategy, MoveStrategyContext, Protocol, Seat};
+use crate::duel::{BlackjackDuel, DuelAction, DuelMove, DuelPhase, DuelState};
+use crate::{hand_value, plan, BjMove, BjState, Blackjack};
+use tunnel_harness::{MoveStrategy, MoveStrategyContext, Seat};
+
+const DEALER_STANDS_AT: u32 = 17;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct BlackjackStrategy;
@@ -26,9 +28,25 @@ impl MoveStrategy<BlackjackDuel> for BlackjackDuelStrategy {
         seat: Seat,
         _ctx: &MoveStrategyContext,
     ) -> Option<DuelMove> {
-        if state.phase == crate::duel::DuelPhase::Over {
+        let active = match state.phase {
+            DuelPhase::ATurn => Seat::A,
+            DuelPhase::BTurn => Seat::B,
+            DuelPhase::Over => return None,
+        };
+        if seat != active {
             return None;
         }
-        BlackjackDuel.sample_move(state, seat, &mut || 0.0)
+        let hand = if seat == Seat::A {
+            &state.hand_a
+        } else {
+            &state.hand_b
+        };
+        Some(DuelMove {
+            action: if hand_value(hand) < DEALER_STANDS_AT {
+                DuelAction::Hit
+            } else {
+                DuelAction::Stand
+            },
+        })
     }
 }

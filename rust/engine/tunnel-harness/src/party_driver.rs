@@ -19,7 +19,9 @@ pub struct PartyDriver<P: Protocol, Pol: MoveStrategy<P>, Ch: FrameTransport, S:
     frame_transport: Ch,
 }
 
-impl<P: Protocol, MoveStrat: MoveStrategy<P>, Ch: FrameTransport, S: Signer> PartyDriver<P, MoveStrat, Ch, S> {
+impl<P: Protocol, MoveStrat: MoveStrategy<P>, Ch: FrameTransport, S: Signer>
+    PartyDriver<P, MoveStrat, Ch, S>
+{
     pub fn new(seat: PartyRuntime<P, S>, move_strategy: MoveStrat, frame_transport: Ch) -> Self {
         PartyDriver {
             seat,
