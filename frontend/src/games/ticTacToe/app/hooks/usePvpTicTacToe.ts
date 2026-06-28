@@ -634,7 +634,7 @@ export function usePvpTicTacToe(
             buildCreateAndShareTx(
               { walletAddress: selfWallet, publicKey: eph.coreKey.publicKey }, // partyA = X (self)
               { walletAddress: m.opponentWallet, publicKey: oppPubkey }, // partyB = O (opponent)
-              0n,
+              STAKE, // penalty = buy-in (blackjack model): an abandoner forfeits its stake at force-close (F1)
               coinType, // open Tunnel<MTPS> so the seat deposits type-match
             );
           const res = mtpsOn
