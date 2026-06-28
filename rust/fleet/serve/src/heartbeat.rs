@@ -1,10 +1,10 @@
 //! Telemetry consumer: turns driver `MoveCommitted` events into coarse activity
 //! heartbeats and posts them to `tunnel-manager`. Mirrors the frontend control
-//! plane — the server owns the TPS math; we only report raw deltas, seat-A only,
-//! roughly once a `flush_interval_ms` window, plus a trailing flush on finish.
+//! plane — the server owns the TPS math; we only report raw deltas, session-owner
+//! only, roughly once a `flush_interval_ms` window, plus a trailing flush on finish.
 
 use serde::Serialize;
-use tunnel_harness::{DriverObserver, DriverOutcome, DriverStart, MoveCommitted, Seat};
+use tunnel_harness::{DriverObserver, DriverOutcome, DriverStart, MoveCommitted};
 
 /// Wire-compatible with the server's `HeartbeatRequest` (camelCase; `nonce` is
 /// a decimal string, matching the frontend's `BigInt.toString()`).
@@ -22,11 +22,12 @@ pub struct HeartbeatReporter {
     base_url: String,
     session_id: String,
     stats_token: String,
-    reporting_seat: Seat,
+    /// The structural at-most-once gate: this party registered the session and
+    /// holds its `stats_token`, so it is the tunnel's one and only reporter.
+    owns_session: bool,
     flush_interval_ms: u64,
     // per-run state:
     tunnel_id: String,
-    our_seat: Seat,
     actions: u64,
     last_flush_ms: Option<u64>,
     last_ts_ms: u64,
@@ -45,10 +46,9 @@ impl HeartbeatReporter {
             base_url,
             session_id,
             stats_token,
-            reporting_seat: Seat::A,
+            owns_session: true,
             flush_interval_ms: 1000,
             tunnel_id: String::new(),
-            our_seat: Seat::A,
             actions: 0,
             last_flush_ms: None,
             last_ts_ms: 0,
@@ -56,16 +56,17 @@ impl HeartbeatReporter {
         }
     }
 
-    pub fn with_cadence(mut self, reporting_seat: Seat, flush_interval_ms: u64) -> Self {
-        self.reporting_seat = reporting_seat;
+    /// Override the flush window (default 1000ms). Ownership is fixed at
+    /// construction: holding a `stats_token` means this party registered the
+    /// session and is its sole reporter.
+    pub fn with_cadence(mut self, flush_interval_ms: u64) -> Self {
         self.flush_interval_ms = flush_interval_ms;
         self
     }
 
     /// Seed per-run context and reset accumulation.
-    pub(crate) fn start(&mut self, tunnel_id: &str, our_seat: Seat) {
+    pub(crate) fn start(&mut self, tunnel_id: &str) {
         self.tunnel_id = tunnel_id.to_string();
-        self.our_seat = our_seat;
         self.actions = 0;
         self.last_flush_ms = None;
         self.last_ts_ms = 0;
@@ -74,7 +75,7 @@ impl HeartbeatReporter {
 
     /// Account one committed move; return a payload when the window elapses.
     pub(crate) fn record(&mut self, ev: &MoveCommitted) -> Option<HeartbeatPayload> {
-        if self.our_seat != self.reporting_seat {
+        if !self.owns_session {
             return None;
         }
         self.actions += 1;
@@ -99,7 +100,7 @@ impl HeartbeatReporter {
 
     /// Force-flush a trailing partial window (called on finish/abort).
     pub(crate) fn drain(&mut self) -> Option<HeartbeatPayload> {
-        if self.actions == 0 {
+        if !self.owns_session || self.actions == 0 {
             return None;
         }
         let base = self.last_flush_ms.unwrap_or(self.last_ts_ms);
@@ -151,7 +152,7 @@ impl HeartbeatReporter {
 
 impl DriverObserver for HeartbeatReporter {
     fn on_started(&mut self, start: &DriverStart<'_>) {
-        self.start(start.tunnel_id, start.our_seat);
+        self.start(start.tunnel_id);
     }
     fn on_move_committed(&mut self, ev: &MoveCommitted) {
         if let Some(payload) = self.record(ev) {
@@ -175,15 +176,15 @@ mod tests {
     use super::*;
     use tunnel_harness::{MoveCommitted, Seat};
 
-    fn reporter(seat: Seat) -> HeartbeatReporter {
+    fn reporter() -> HeartbeatReporter {
         let mut r = HeartbeatReporter::new(
             reqwest::Client::new(),
             "http://x".into(),
             "sess".into(),
             "tok".into(),
         )
-        .with_cadence(Seat::A, 1000);
-        r.start("0xabc", seat);
+        .with_cadence(1000);
+        r.start("0xabc");
         r
     }
 
@@ -197,16 +198,19 @@ mod tests {
     }
 
     #[test]
-    fn non_reporting_seat_emits_nothing() {
-        let mut r = reporter(Seat::B);
+    fn non_owner_reports_nothing_even_as_seat_a() {
+        // Ownership, not seat, gates reporting. A non-owner stays silent across a
+        // window that WOULD flush for an owner, and on the trailing drain too.
+        let mut r = reporter();
+        r.owns_session = false; // same-module test pokes the private gate directly
         assert_eq!(r.record(&ev(1, 1, 0)), None);
-        assert_eq!(r.record(&ev(2, 2, 5000)), None);
+        assert_eq!(r.record(&ev(2, 2, 5000)), None); // 5s window: an owner would flush
         assert_eq!(r.drain(), None);
     }
 
     #[test]
     fn flushes_when_window_elapses_and_sums_actions() {
-        let mut r = reporter(Seat::A);
+        let mut r = reporter();
         assert_eq!(r.record(&ev(1, 1, 0)), None); // seeds window base = 0, actions = 1
         assert_eq!(r.record(&ev(2, 2, 500)), None); // actions = 2, window 500 < 1000
         let p = r.record(&ev(3, 3, 1000)).expect("flush at 1000ms");
@@ -220,7 +224,7 @@ mod tests {
 
     #[test]
     fn drain_force_flushes_trailing_window() {
-        let mut r = reporter(Seat::A);
+        let mut r = reporter();
         assert_eq!(r.record(&ev(7, 1, 0)), None);
         assert_eq!(r.record(&ev(8, 2, 300)), None);
         let p = r.drain().expect("trailing flush");
@@ -233,7 +237,7 @@ mod tests {
     #[test]
     fn drain_clamps_single_action_window_to_one_ms() {
         // Single move at ts=0: base = 0, last_ts = 0, window = 0 → must clamp to 1.
-        let mut r = reporter(Seat::A);
+        let mut r = reporter();
         assert_eq!(r.record(&ev(1, 1, 0)), None);
         let p = r.drain().expect("trailing flush");
         assert_eq!(p.actions_delta, 1);
