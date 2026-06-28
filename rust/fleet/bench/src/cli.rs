@@ -3,9 +3,7 @@
 //! explanatory errors rather than silently ignoring them.
 
 use clap::{CommandFactory, Parser};
-use tunnel_core::protocol_id::{BLACKJACK_BET_V1, BLACKJACK_V2, PORTED_PROTOCOL_IDS};
-
-const EXECUTABLE_PROTOCOL_IDS: &[&str] = &[BLACKJACK_BET_V1, BLACKJACK_V2];
+use tunnel_core::protocol_id::{BLACKJACK_BET_V1, PORTED_PROTOCOL_IDS};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum BenchMode {
@@ -54,8 +52,8 @@ pub struct BenchOpts {
 #[command(
     no_binary_name = true,
     disable_help_flag = false,
-    about = "Run the local off-chain blackjack tunnel fleet benchmark.",
-    long_about = "Run the local off-chain blackjack tunnel fleet benchmark.\n\n\
+    about = "Run the local off-chain tunnel fleet benchmark.",
+    long_about = "Run the local off-chain tunnel fleet benchmark.\n\n\
 The bench drives two in-process PartyRuntime instances per match and reports \
 throughput, frame bytes, match counts, and resource usage. It is CPU-local: \
 no relay, no chain submission, and no network transport are used.",
@@ -69,7 +67,7 @@ per-match-signers: create signer material inside each measured match\n  \
 pre-initialized-signers: create all signer material before the timed run\n  \
 compare-signers: run per-match-signers first, then pre-initialized-signers\n\n\
 Protocol IDs:\n  \
-fleet-bench currently executes blackjack.bet.v1 and blackjack.v2. Ported Rust protocol IDs are:\n  \
+fleet-bench executes every ported Rust protocol ID:\n  \
 api_credits.v1, battleship.v1, battleship.series.v1, blackjack.bet.v1,\n  \
 blackjack.duel.v1, blackjack.v2, bomb_it.v1, bomb_it.series.v1, caro.v1,\n  \
 caro.series.v1, chat.v1, cross.v1, cross.series.v1, payments.v1,\n  \
@@ -152,17 +150,11 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
             PORTED_PROTOCOL_IDS.join(", ")
         ));
     }
-    let protocol_id = match raw.protocol_id.as_str() {
-        BLACKJACK_BET_V1 => BLACKJACK_BET_V1,
-        BLACKJACK_V2 => BLACKJACK_V2,
-        _ => {
-            return Err(format!(
-                "--protocol-id {} is ported but fleet-bench can currently execute only {}",
-                raw.protocol_id,
-                EXECUTABLE_PROTOCOL_IDS.join(", ")
-            ));
-        }
-    };
+    let protocol_id = PORTED_PROTOCOL_IDS
+        .iter()
+        .copied()
+        .find(|id| *id == raw.protocol_id)
+        .expect("ported protocol id was validated");
 
     let workers = if raw.workers == "auto" {
         std::thread::available_parallelism()
@@ -318,13 +310,14 @@ mod tests {
         assert!(parse_v(&["--onchain"]).is_err());
         assert!(parse_v(&["--frame-transport", "relay"]).is_err());
         assert!(parse_v(&["--protocol-id", "poker.v1"]).is_err());
-        assert!(parse_v(&["--protocol-id", "payments.v1"]).is_err());
     }
 
     #[test]
-    fn blackjack_v2_protocol_id_is_executable() {
-        let o = parse_v(&["--protocol-id", "blackjack.v2"]).unwrap();
-        assert_eq!(o.protocol_id, "blackjack.v2");
+    fn all_ported_protocol_ids_are_executable() {
+        for id in PORTED_PROTOCOL_IDS {
+            let o = parse_v(&["--protocol-id", id]).unwrap();
+            assert_eq!(o.protocol_id, *id);
+        }
     }
 
     #[test]
@@ -367,7 +360,7 @@ mod tests {
     fn help_documents_common_runs_and_value_meanings() {
         let help = help_text();
 
-        assert!(help.contains("Run the local off-chain blackjack tunnel fleet benchmark"));
+        assert!(help.contains("Run the local off-chain tunnel fleet benchmark"));
         assert!(help.contains("Examples:"));
         assert!(help.contains(
             "fleet-bench --bench-mode per-match-signers --matches 50 --scenario golden --frame-codec postcard"
@@ -375,8 +368,8 @@ mod tests {
         assert!(help.contains("json: TS-parity wire for bot-vs-user"));
         assert!(help.contains("postcard: compact default candidate for bot-vs-bot"));
         assert!(help.contains("per-match-signers|pre-initialized-signers|compare-signers"));
-        assert!(help.contains("fleet-bench currently executes blackjack.bet.v1 and blackjack.v2"));
-        assert!(!help.contains("fleet-bench currently executes blackjack.bet.v1. Ported"));
+        assert!(help.contains("fleet-bench executes every ported Rust protocol ID"));
+        assert!(!help.contains("fleet-bench currently executes"));
         assert!(help.contains("blackjack.bet.v1"));
         assert!(help.contains("json|bcs|postcard"));
     }

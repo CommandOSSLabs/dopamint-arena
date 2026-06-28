@@ -26,6 +26,7 @@ pub struct PayMove {
     pub amount: u64,
 }
 
+#[derive(Clone, Copy, Debug)]
 pub struct Payments {
     /// `0` means unbounded, matching TS `isTerminal() === false`.
     pub max_transfers: u64,

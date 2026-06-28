@@ -2478,9 +2478,19 @@ dependencies = [
  "hex",
  "rayon",
  "sysinfo",
+ "tunnel-api-credits",
+ "tunnel-battleship",
  "tunnel-blackjack",
+ "tunnel-bomb-it",
+ "tunnel-caro",
+ "tunnel-chat",
  "tunnel-core",
+ "tunnel-cross",
  "tunnel-harness",
+ "tunnel-payments",
+ "tunnel-quantum-poker",
+ "tunnel-tic-tac-toe",
+ "tunnel-world-canvas",
 ]
 
 [[package]]

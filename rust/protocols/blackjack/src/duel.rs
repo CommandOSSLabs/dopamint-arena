@@ -2,7 +2,9 @@
 
 use tunnel_core::codec::u64_to_be_bytes;
 use tunnel_core::crypto::blake2b256;
-use tunnel_harness::{Balances, Protocol, ProtocolError, Seat, TunnelContext};
+use tunnel_harness::{
+    Balances, MoveStrategy, MoveStrategyContext, Protocol, ProtocolError, Seat, TunnelContext,
+};
 
 use crate::hand_value;
 
@@ -60,7 +62,23 @@ pub enum DuelOutcome {
     Push,
 }
 
+#[derive(Clone, Copy, Debug)]
 pub struct BlackjackDuel;
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct BlackjackDuelStrategy;
+
+impl MoveStrategy<BlackjackDuel> for BlackjackDuelStrategy {
+    async fn plan_move(
+        &mut self,
+        state: &DuelState,
+        seat: Seat,
+        _ctx: &MoveStrategyContext,
+    ) -> Option<DuelMove> {
+        let mut rng = || 0.0;
+        BlackjackDuel.sample_move(state, seat, &mut rng)
+    }
+}
 
 fn draw_rank(seed: &[u8; 32], draw_index: u64) -> u8 {
     let mut digest = *seed;

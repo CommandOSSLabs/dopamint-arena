@@ -2,7 +2,9 @@
 
 use tunnel_core::codec::u64_to_be_bytes;
 use tunnel_core::crypto::blake2b256;
-use tunnel_harness::{Balances, Protocol, ProtocolError, Seat, TunnelContext};
+use tunnel_harness::{
+    Balances, MoveStrategy, MoveStrategyContext, Protocol, ProtocolError, Seat, TunnelContext,
+};
 
 pub const BOARD_SIZE: usize = 10;
 pub const CELL_COUNT: usize = BOARD_SIZE * BOARD_SIZE;
@@ -94,6 +96,7 @@ pub enum BattleshipMove {
     },
 }
 
+#[derive(Clone, Debug)]
 pub struct Battleship {
     default_stake: u64,
 }
@@ -114,6 +117,7 @@ pub struct BattleshipSeriesState {
     pub balance_b: u64,
 }
 
+#[derive(Clone, Debug)]
 pub struct BattleshipSeries {
     tunnel_id: String,
     stake_per_game: u64,
@@ -164,6 +168,143 @@ impl Default for Battleship {
     fn default() -> Self {
         Self { default_stake: 100 }
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct BattleshipStrategy {
+    board: Vec<u8>,
+    salts: Vec<[u8; 32]>,
+    layers: Vec<Vec<[u8; 32]>>,
+    rng_state: u64,
+}
+
+impl BattleshipStrategy {
+    pub fn new(seed: u64) -> Self {
+        let mut rng_state = seed;
+        let mut board = vec![0u8; CELL_COUNT];
+        for i in 0..FLEET_CELLS as usize {
+            board[i] = 1;
+        }
+        let salts: Vec<[u8; 32]> = (0..CELL_COUNT)
+            .map(|_| {
+                let mut salt = [0u8; 32];
+                for byte in &mut salt {
+                    rng_state = splitmix_next(rng_state);
+                    *byte = (rng_state >> 56) as u8;
+                }
+                salt
+            })
+            .collect();
+        let layers = commit_board(&board, &salts).expect("bench fleet is well-formed");
+        Self {
+            board,
+            salts,
+            layers,
+            rng_state,
+        }
+    }
+
+    fn next_f64(&mut self) -> f64 {
+        self.rng_state = splitmix_next(self.rng_state);
+        (self.rng_state >> 11) as f64 / (1u64 << 53) as f64
+    }
+
+    fn commit_move(&self) -> Option<BattleshipMove> {
+        Some(BattleshipMove::Commit {
+            root: commitment_root(&self.layers)?,
+        })
+    }
+
+    fn reveal_move(&self, cell: u8) -> Option<BattleshipMove> {
+        let idx = cell as usize;
+        Some(BattleshipMove::Reveal {
+            cell,
+            is_ship: self.board.get(idx).copied()? == 1,
+            salt: *self.salts.get(idx)?,
+            proof: prove_cell(&self.layers, cell).ok()?,
+        })
+    }
+
+    fn shoot_move(&mut self, state: &BattleshipState, seat: Seat) -> Option<BattleshipMove> {
+        let defender = seat.other();
+        let fired: std::collections::BTreeSet<u8> =
+            shots_at(state, defender).iter().map(|s| s.cell).collect();
+        let open: Vec<u8> = (0..CELL_COUNT as u8)
+            .filter(|cell| !fired.contains(cell))
+            .collect();
+        if open.is_empty() {
+            return None;
+        }
+        let idx = ((self.next_f64() * open.len() as f64).floor() as usize).min(open.len() - 1);
+        Some(BattleshipMove::Shoot { cell: open[idx] })
+    }
+}
+
+impl MoveStrategy<Battleship> for BattleshipStrategy {
+    async fn plan_move(
+        &mut self,
+        state: &BattleshipState,
+        seat: Seat,
+        _ctx: &MoveStrategyContext,
+    ) -> Option<BattleshipMove> {
+        match state.phase {
+            BattleshipPhase::AwaitingCommits => {
+                if state.commit_a.is_none() && seat == Seat::A {
+                    self.commit_move()
+                } else if state.commit_a.is_some() && state.commit_b.is_none() && seat == Seat::B {
+                    self.commit_move()
+                } else {
+                    None
+                }
+            }
+            BattleshipPhase::Playing => {
+                if let Some(pending) = state.pending_shot {
+                    return (pending.by != seat).then(|| self.reveal_move(pending.cell))?;
+                }
+                (state.turn == seat)
+                    .then(|| self.shoot_move(state, seat))
+                    .flatten()
+            }
+            BattleshipPhase::Over => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct BattleshipSeriesStrategy {
+    inner: BattleshipStrategy,
+}
+
+impl BattleshipSeriesStrategy {
+    pub fn new(seed: u64) -> Self {
+        Self {
+            inner: BattleshipStrategy::new(seed),
+        }
+    }
+}
+
+impl MoveStrategy<BattleshipSeries> for BattleshipSeriesStrategy {
+    async fn plan_move(
+        &mut self,
+        state: &BattleshipSeriesState,
+        seat: Seat,
+        ctx: &MoveStrategyContext,
+    ) -> Option<BattleshipMove> {
+        if state.inner.winner == BattleshipWinner::None {
+            return self.inner.plan_move(&state.inner, seat, ctx).await;
+        }
+        if state.balance_a < 100 || state.balance_b < 100 || seat != Seat::A {
+            return None;
+        }
+        self.inner.commit_move()
+    }
+}
+
+fn splitmix_next(state: u64) -> u64 {
+    let mut z = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
 }
 
 fn leaf_hash(cell: u8, is_ship: bool, salt: &[u8; 32]) -> [u8; 32] {

@@ -49,6 +49,7 @@ pub struct TicTacToeMove {
     pub cell: u8,
 }
 
+#[derive(Clone, Copy, Debug)]
 pub struct TicTacToe {
     default_stake: u64,
 }
@@ -68,6 +69,7 @@ pub struct TicTacToeSeriesState {
     pub max_games: u64,
 }
 
+#[derive(Clone, Copy, Debug)]
 pub struct TicTacToeSeries {
     inner: TicTacToe,
     max_games: u64,

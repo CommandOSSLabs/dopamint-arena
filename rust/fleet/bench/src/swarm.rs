@@ -7,13 +7,12 @@
 //! the time-bounded throughput mode.
 
 use crate::cli::{FrameCodecKind, ScenarioMode};
-use crate::party_driver::{play_blackjack_v2_seeded, play_match_seeded, SeatKit};
+use crate::party_driver::SeatKit;
+use crate::protocols::play_match_for;
 use crate::stats::{summarize, Distribution};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use tunnel_core::protocol_id::{BLACKJACK_BET_V1, BLACKJACK_V2};
-use tunnel_harness::{BcsFrameCodec, JsonFrameCodec, PostcardFrameCodec};
 
 /// Golden seat A secret: bytes 0x01..0x20.
 pub const SEAT_A: [u8; 32] = {
@@ -36,59 +35,6 @@ pub const SEAT_B: [u8; 32] = {
     }
     k
 };
-
-const CREATED_AT: u64 = 1234567890;
-const MAX_MOVES: u64 = 1000;
-
-/// Run one match through the codec selected at the CLI. Static dispatch keeps
-/// codec cost on the measured path with one monomorphized driver per arm.
-fn play_match_for(
-    protocol_id: &'static str,
-    codec: FrameCodecKind,
-    card_seed: Option<u64>,
-    kit: &SeatKit,
-    tunnel_id: &str,
-) -> crate::party_driver::MatchResult {
-    match (protocol_id, codec) {
-        (BLACKJACK_BET_V1, FrameCodecKind::Json) => play_match_seeded::<JsonFrameCodec>(
-            card_seed, kit, tunnel_id, 200, 200, CREATED_AT, MAX_MOVES,
-        ),
-        (BLACKJACK_BET_V1, FrameCodecKind::Bcs) => play_match_seeded::<BcsFrameCodec>(
-            card_seed, kit, tunnel_id, 200, 200, CREATED_AT, MAX_MOVES,
-        ),
-        (BLACKJACK_BET_V1, FrameCodecKind::Postcard) => play_match_seeded::<PostcardFrameCodec>(
-            card_seed, kit, tunnel_id, 200, 200, CREATED_AT, MAX_MOVES,
-        ),
-        (BLACKJACK_V2, FrameCodecKind::Json) => play_blackjack_v2_seeded::<JsonFrameCodec>(
-            card_seed.unwrap_or(0),
-            kit,
-            tunnel_id,
-            200,
-            200,
-            CREATED_AT,
-            MAX_MOVES,
-        ),
-        (BLACKJACK_V2, FrameCodecKind::Bcs) => play_blackjack_v2_seeded::<BcsFrameCodec>(
-            card_seed.unwrap_or(0),
-            kit,
-            tunnel_id,
-            200,
-            200,
-            CREATED_AT,
-            MAX_MOVES,
-        ),
-        (BLACKJACK_V2, FrameCodecKind::Postcard) => play_blackjack_v2_seeded::<PostcardFrameCodec>(
-            card_seed.unwrap_or(0),
-            kit,
-            tunnel_id,
-            200,
-            200,
-            CREATED_AT,
-            MAX_MOVES,
-        ),
-        _ => panic!("unsupported fleet-bench protocol id: {protocol_id}"),
-    }
-}
 
 /// One completed match's measurements.
 #[derive(Clone, Copy)]
@@ -299,6 +245,7 @@ pub fn run_preinitialized_signers(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tunnel_core::protocol_id::BLACKJACK_BET_V1;
 
     #[test]
     fn fresh_signers_conserve_totals() {
@@ -465,6 +412,22 @@ mod tests {
             ScenarioMode::Golden,
             FrameCodecKind::Json,
             tunnel_core::protocol_id::BLACKJACK_V2,
+        );
+        assert_eq!(out.matches_claimed, 3);
+        assert_eq!(out.tunnels_settled, 3);
+        assert!(out.moves > 0);
+        assert!(out.bytes > 0);
+    }
+
+    #[test]
+    fn payments_matches_execute() {
+        let out = run_simple(
+            1,
+            3600,
+            Some(3),
+            ScenarioMode::Golden,
+            FrameCodecKind::Json,
+            tunnel_core::protocol_id::PAYMENTS_V1,
         );
         assert_eq!(out.matches_claimed, 3);
         assert_eq!(out.tunnels_settled, 3);

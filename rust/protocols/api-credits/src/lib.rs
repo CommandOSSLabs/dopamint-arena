@@ -44,6 +44,7 @@ impl<'de> serde::Deserialize<'de> for ApiCreditsMove {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
 pub struct ApiCredits {
     cost_per_call: u64,
 }
