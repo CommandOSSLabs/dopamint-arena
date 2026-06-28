@@ -42,7 +42,7 @@ function playOneGame(
   if (state.inner.phase === "over") {
     state = proto.applyMove(
       state,
-      { type: "commit", root: secrets.A.commitment.root },
+      { kind: "commit", commitment: secrets.A.commitment },
       "A",
     );
     assert.ok(conserved(state, total), "conserved across the rematch commit");
@@ -57,6 +57,10 @@ function playOneGame(
   }
   return state;
 }
+
+test("protocol name is battleship.multi.v2", () => {
+  assert.equal(new MultiGameBattleshipProtocol(100n).name, "battleship.multi.v2");
+});
 
 test("plays many games on one tunnel, conserving balances every step", () => {
   const proto = new MultiGameBattleshipProtocol(100n);
@@ -122,7 +126,7 @@ test("a rematch commit carries balances forward and bumps gamesPlayed", () => {
   const next = freshSecrets(rng);
   state = proto.applyMove(
     state,
-    { type: "commit", root: next.A.commitment.root },
+    { kind: "commit", commitment: next.A.commitment },
     "A",
   );
   assert.equal(state.gamesPlayed, 1, "gamesPlayed bumped on the rematch");
@@ -142,7 +146,7 @@ test("only a commit can start the next game after one ends", () => {
     initialBalances: { a: 1000n, b: 1000n },
   });
   state = playOneGame(proto, state, freshSecrets(rng), rng, 2000n);
-  assert.throws(() => proto.applyMove(state, { type: "shoot", cell: 0 }, "A"));
+  assert.throws(() => proto.applyMove(state, { kind: "shoot", cell: 0 }, "A"));
 });
 
 test("encodeState is deterministic and distinguishes gamesPlayed", () => {
