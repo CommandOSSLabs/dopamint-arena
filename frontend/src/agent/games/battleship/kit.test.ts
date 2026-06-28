@@ -19,9 +19,9 @@ describe("battleship kit", () => {
     initialBalances: { a: 100n, b: 100n },
   };
 
-  it("uses the frontend battleship protocol domain", () => {
+  it("uses the sdk battleship protocol domain", () => {
     const kit = createBattleshipKit(10n);
-    assert.strictEqual(kit.protocol.name, "battleship.v1");
+    assert.strictEqual(kit.protocol.name, "battleship.v2");
   });
 
   it("drives a full game to terminal with conserved balances and no rejected moves", () => {
