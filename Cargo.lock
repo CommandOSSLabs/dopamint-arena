@@ -2498,13 +2498,16 @@ name = "fleet-serve"
 version = "0.1.0"
 dependencies = [
  "hex",
+ "reqwest",
  "serde",
  "serde_json",
  "tokio",
+ "tracing",
  "tunnel-blackjack",
  "tunnel-core",
  "tunnel-harness",
  "tunnel-payments",
+ "wiremock",
 ]
 
 [[package]]

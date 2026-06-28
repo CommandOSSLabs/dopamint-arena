@@ -3,3 +3,6 @@
 
 pub mod supervisor;
 pub use supervisor::{DriverUnit, FleetSupervisor, Metrics};
+
+pub mod heartbeat;
+pub use heartbeat::{HeartbeatPayload, HeartbeatReporter};
