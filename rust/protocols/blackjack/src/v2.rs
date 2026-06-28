@@ -604,6 +604,26 @@ impl BlackjackV2Strategy {
     }
 }
 
+fn draw_commit_actor(state: &BlackjackV2State) -> Option<Seat> {
+    if state.pending_commit_a.is_none() {
+        Some(Seat::A)
+    } else if state.pending_commit_b.is_none() {
+        Some(Seat::B)
+    } else {
+        None
+    }
+}
+
+fn draw_reveal_actor(state: &BlackjackV2State) -> Option<Seat> {
+    if state.pending_reveal_a.is_none() {
+        Some(Seat::A)
+    } else if state.pending_reveal_b.is_none() {
+        Some(Seat::B)
+    } else {
+        None
+    }
+}
+
 impl MoveStrategy<BlackjackV2> for BlackjackV2Strategy {
     async fn plan_move(
         &mut self,
@@ -619,11 +639,7 @@ impl MoveStrategy<BlackjackV2> for BlackjackV2Strategy {
                 (seat == player_party(state.round + 1)).then_some(BlackjackV2Move::Deal)
             }
             Phase::DrawCommit => {
-                let committed = match seat {
-                    Seat::A => state.pending_commit_a.is_some(),
-                    Seat::B => state.pending_commit_b.is_some(),
-                };
-                if committed {
+                if draw_commit_actor(state) != Some(seat) {
                     return None;
                 }
                 let mut rng = || self.next_f64();
@@ -634,11 +650,7 @@ impl MoveStrategy<BlackjackV2> for BlackjackV2Strategy {
                 })
             }
             Phase::DrawReveal => {
-                let revealed = match seat {
-                    Seat::A => state.pending_reveal_a.is_some(),
-                    Seat::B => state.pending_reveal_b.is_some(),
-                };
-                if revealed {
+                if draw_reveal_actor(state) != Some(seat) {
                     return None;
                 }
                 let secret = if seat == Seat::A {
@@ -772,7 +784,10 @@ impl Protocol for BlackjackV2 {
 #[cfg(test)]
 mod strategy_tests {
     use super::*;
-    use tunnel_harness::{MoveStrategy, MoveStrategyContext};
+    use tunnel_harness::{
+        Balances, InMemoryFrameTransport, LocalSigner, MoveStrategy, MoveStrategyContext,
+        PartyDriver, PartyRuntime, Signer, TunnelContext,
+    };
 
     fn strategy_ctx(seat: Seat) -> MoveStrategyContext {
         MoveStrategyContext {
@@ -781,8 +796,23 @@ mod strategy_tests {
         }
     }
 
+    fn secret(byte: u8) -> BlackjackV2Secret {
+        BlackjackV2Secret {
+            value: vec![byte; 16],
+            salt: vec![byte.wrapping_add(1); 16],
+        }
+    }
+
+    fn commit_from_secret(secret: BlackjackV2Secret) -> BlackjackV2Move {
+        BlackjackV2Move::Commit {
+            commitment: compute_slot_commitment(&secret).unwrap(),
+            local_secret: Some(secret),
+        }
+    }
+
     #[tokio::test]
-    async fn draw_commit_allows_either_missing_seat_to_commit() {
+    async fn draw_commit_strategy_serializes_a_before_b_while_protocol_allows_either_missing_seat()
+    {
         let protocol = BlackjackV2;
         let state = initial_state(500, 500);
         assert_eq!(state.phase, Phase::DrawCommit);
@@ -793,10 +823,10 @@ mod strategy_tests {
             .plan_move(&state, Seat::A, &strategy_ctx(Seat::A))
             .await
             .expect("A should commit while its slot is missing");
-        let commit_b_first = b
+        assert!(b
             .plan_move(&state, Seat::B, &strategy_ctx(Seat::B))
             .await
-            .expect("B should also commit while its slot is missing");
+            .is_none());
 
         let state = protocol.apply_move(&state, &commit_a, Seat::A).unwrap();
         assert!(b
@@ -804,7 +834,11 @@ mod strategy_tests {
             .await
             .is_some());
         let state = protocol
-            .apply_move(&initial_state(500, 500), &commit_b_first, Seat::B)
+            .apply_move(
+                &initial_state(500, 500),
+                &commit_from_secret(secret(7)),
+                Seat::B,
+            )
             .unwrap();
         assert!(a
             .plan_move(&state, Seat::A, &strategy_ctx(Seat::A))
@@ -813,17 +847,17 @@ mod strategy_tests {
     }
 
     #[tokio::test]
-    async fn draw_reveal_allows_either_missing_seat_to_reveal() {
+    async fn draw_reveal_strategy_serializes_a_before_b_while_protocol_allows_either_missing_seat()
+    {
         let protocol = BlackjackV2;
         let mut state = initial_state(500, 500);
         let mut a = BlackjackV2Strategy::new(1);
         let mut b = BlackjackV2Strategy::new(2);
 
-        let commit_b = b
-            .plan_move(&state, Seat::B, &strategy_ctx(Seat::B))
-            .await
+        let secret_b = secret(9);
+        state = protocol
+            .apply_move(&state, &commit_from_secret(secret_b.clone()), Seat::B)
             .unwrap();
-        state = protocol.apply_move(&state, &commit_b, Seat::B).unwrap();
         let commit_a = a
             .plan_move(&state, Seat::A, &strategy_ctx(Seat::A))
             .await
@@ -835,10 +869,10 @@ mod strategy_tests {
             .plan_move(&state, Seat::A, &strategy_ctx(Seat::A))
             .await
             .expect("A should reveal while its slot is missing");
-        let reveal_b_first = b
+        assert!(b
             .plan_move(&state, Seat::B, &strategy_ctx(Seat::B))
             .await
-            .expect("B should also reveal while its slot is missing");
+            .is_none());
 
         let state_before_reveal = state.clone();
         state = protocol.apply_move(&state, &reveal_a, Seat::A).unwrap();
@@ -847,12 +881,65 @@ mod strategy_tests {
             .await
             .is_some());
         let state = protocol
-            .apply_move(&state_before_reveal, &reveal_b_first, Seat::B)
+            .apply_move(
+                &state_before_reveal,
+                &BlackjackV2Move::Reveal {
+                    reveal: secret_b.into(),
+                },
+                Seat::B,
+            )
             .unwrap();
         assert!(a
             .plan_move(&state, Seat::A, &strategy_ctx(Seat::A))
             .await
             .is_some());
+    }
+
+    fn runtime(
+        seat: Seat,
+        signer: LocalSigner,
+        opponent_pk: [u8; 32],
+    ) -> PartyRuntime<BlackjackV2, LocalSigner> {
+        PartyRuntime::new(
+            BlackjackV2,
+            signer,
+            opponent_pk,
+            TunnelContext {
+                tunnel_id: "0xb1".into(),
+                initial: Balances { a: 500, b: 500 },
+                seat,
+            },
+        )
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn party_driver_self_play_does_not_cross_propose_in_commit_reveal() {
+        let secret_a: [u8; 32] = std::array::from_fn(|i| (i + 1) as u8);
+        let secret_b: [u8; 32] = std::array::from_fn(|i| (i + 33) as u8);
+        let signer_a = LocalSigner::from_secret(&secret_a);
+        let signer_b = LocalSigner::from_secret(&secret_b);
+        let pk_a = signer_a.public_key();
+        let pk_b = signer_b.public_key();
+        let (ch_a, ch_b) = InMemoryFrameTransport::pair();
+
+        let driver_a = PartyDriver::new(
+            runtime(Seat::A, signer_a, pk_b),
+            BlackjackV2Strategy::new(1),
+            ch_a,
+        );
+        let driver_b = PartyDriver::new(
+            runtime(Seat::B, signer_b, pk_a),
+            BlackjackV2Strategy::new(2),
+            ch_b,
+        );
+
+        let (out_a, out_b) = tokio::join!(driver_a.run(200, || 1), driver_b.run(200, || 1));
+        let out_a = out_a.unwrap();
+        let out_b = out_b.unwrap();
+
+        assert_eq!(out_a.final_balances.sum(), 1000);
+        assert_eq!(out_a.final_balances, out_b.final_balances);
+        assert!(out_a.moves > 0);
     }
 
     #[test]
