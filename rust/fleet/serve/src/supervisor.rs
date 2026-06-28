@@ -3,7 +3,11 @@
 
 use std::future::Future;
 use std::pin::Pin;
-use tunnel_harness::{DriverOutcome, HarnessError};
+
+use crate::heartbeat::HeartbeatReporter;
+use tunnel_harness::{
+    DriverOutcome, FrameTransport, HarnessError, MoveStrategy, PartyDriver, Protocol, Signer,
+};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Metrics {
@@ -41,6 +45,28 @@ impl FleetSupervisor {
         }
         m
     }
+}
+
+/// Build a supervisable serving unit: attach the session owner's `HeartbeatReporter`
+/// as a lifecycle observer, then box the driver's run future as a `DriverUnit`.
+///
+/// This is the one production seam wiring telemetry into a serving driver. The
+/// reporter is fire-and-forget, so a heartbeat failure never blocks the move loop.
+/// Attaching a reporter is the act of claiming ownership: only call this for a
+/// tunnel whose session this party registered (and whose `stats_token` it holds).
+pub fn into_serving_unit<P, Pol, Ch, S>(
+    driver: PartyDriver<P, Pol, Ch, S>,
+    reporter: HeartbeatReporter,
+    max_moves: u64,
+    now: impl FnMut() -> u64 + Send + 'static,
+) -> DriverUnit
+where
+    P: Protocol,
+    Pol: MoveStrategy<P>,
+    Ch: FrameTransport,
+    S: Signer,
+{
+    Box::pin(driver.observe(Box::new(reporter)).run(max_moves, now))
 }
 
 #[cfg(test)]
