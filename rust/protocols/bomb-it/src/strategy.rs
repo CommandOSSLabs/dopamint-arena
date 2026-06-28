@@ -1,25 +1,25 @@
 use crate::{
-    simple_action, BombIt, BombItAction, BombItMove, BombItSeries, BombItSeriesState, BombItState,
+    hunter_action, BombIt, BombItAction, BombItMove, BombItSeries, BombItSeriesState, BombItState,
 };
 use tunnel_harness::{MoveStrategy, MoveStrategyContext, Protocol, Seat};
 
 #[derive(Clone, Copy, Debug)]
 pub struct BombItStrategy {
-    rng_state: u64,
+    rng_state: u32,
 }
 
 impl BombItStrategy {
     pub fn new(seed: u64) -> Self {
-        Self { rng_state: seed }
+        Self {
+            rng_state: seed as u32,
+        }
     }
 
     fn next_f64(&mut self) -> f64 {
-        self.rng_state = self.rng_state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = self.rng_state;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^= z >> 31;
-        (z >> 11) as f64 / (1u64 << 53) as f64
+        self.rng_state = self.rng_state.wrapping_add(0x6d2b_79f5);
+        let mut t = (self.rng_state ^ (self.rng_state >> 15)).wrapping_mul(1 | self.rng_state);
+        t = t.wrapping_add((t ^ (t >> 7)).wrapping_mul(61 | t)) ^ t;
+        ((t ^ (t >> 14)) as f64) / 4_294_967_296.0
     }
 }
 
@@ -34,7 +34,7 @@ impl MoveStrategy<BombIt> for BombItStrategy {
             return None;
         }
         let mut rng = || self.next_f64();
-        let action = simple_action(state, seat, &mut rng);
+        let action = hunter_action(state, seat, &mut rng);
         Some(match seat {
             Seat::A => BombItMove {
                 a: Some(action),
@@ -114,6 +114,14 @@ mod tests {
         }
     }
 
+    #[test]
+    fn strategy_rng_matches_ts_mulberry32_stream() {
+        let mut strategy = BombItStrategy::new(1);
+        assert_close(strategy.next_f64(), 0.62707394058816135);
+        assert_close(strategy.next_f64(), 0.0027357211802154779);
+        assert_close(strategy.next_f64(), 0.52744703995995224);
+    }
+
     #[tokio::test]
     async fn tick_zero_is_only_seat_a_turn() {
         let protocol = BombIt;
@@ -185,6 +193,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn player_in_blast_takes_shortest_escape_step() {
+        let state = BombItState {
+            tick: 0,
+            seed: 0,
+            grid: vec![crate::CELL_FLOOR; crate::CELL_COUNT],
+            players: [
+                crate::BombItPlayer {
+                    row: 5,
+                    col: 5,
+                    alive: true,
+                },
+                crate::BombItPlayer {
+                    row: 10,
+                    col: 10,
+                    alive: true,
+                },
+            ],
+            bombs: vec![crate::BombItBomb {
+                row: 5,
+                col: 5,
+                fuse: 3,
+                owner: Seat::A,
+            }],
+            winner: None,
+            balance_a: 100,
+            balance_b: 100,
+            total: 200,
+        };
+        let mut strategy = BombItStrategy::new(1);
+
+        let planned = strategy
+            .plan_move(&state, Seat::A, &strategy_ctx(Seat::A))
+            .await;
+
+        assert_eq!(
+            planned,
+            Some(BombItMove {
+                a: Some(BombItAction::North),
+                b: None
+            })
+        );
+    }
+
+    #[tokio::test]
     async fn series_kickoff_is_only_seat_a_while_session_live() {
         let protocol = BombItSeries::new("0xabc123", 100);
         let mut state = protocol.initial_state(&ctx());
@@ -233,5 +285,12 @@ mod tests {
         }
 
         assert!(protocol.is_terminal(&state) || state.inner.tick >= crate::BOMB_IT_TICK_CAP);
+    }
+
+    fn assert_close(actual: f64, expected: f64) {
+        assert!(
+            (actual - expected).abs() < f64::EPSILON,
+            "expected {expected}, got {actual}"
+        );
     }
 }

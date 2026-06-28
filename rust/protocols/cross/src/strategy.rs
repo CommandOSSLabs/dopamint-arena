@@ -3,21 +3,21 @@ use tunnel_harness::{MoveStrategy, MoveStrategyContext, Protocol, Seat};
 
 #[derive(Clone, Copy, Debug)]
 pub struct CrossStrategy {
-    rng_state: u64,
+    rng_state: u32,
 }
 
 impl CrossStrategy {
     pub fn new(seed: u64) -> Self {
-        Self { rng_state: seed }
+        Self {
+            rng_state: seed as u32,
+        }
     }
 
     fn next_f64(&mut self) -> f64 {
-        self.rng_state = self.rng_state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = self.rng_state;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^= z >> 31;
-        (z >> 11) as f64 / (1u64 << 53) as f64
+        self.rng_state = self.rng_state.wrapping_add(0x6d2b_79f5);
+        let mut t = (self.rng_state ^ (self.rng_state >> 15)).wrapping_mul(1 | self.rng_state);
+        t = t.wrapping_add((t ^ (t >> 7)).wrapping_mul(61 | t)) ^ t;
+        ((t ^ (t >> 14)) as f64) / 4_294_967_296.0
     }
 }
 
@@ -110,6 +110,14 @@ mod tests {
             tunnel_id: "0xabc123".into(),
             seat,
         }
+    }
+
+    #[test]
+    fn strategy_rng_matches_ts_mulberry32_stream() {
+        let mut strategy = CrossStrategy::new(1);
+        assert_close(strategy.next_f64(), 0.62707394058816135);
+        assert_close(strategy.next_f64(), 0.0027357211802154779);
+        assert_close(strategy.next_f64(), 0.52744703995995224);
     }
 
     #[tokio::test]
@@ -238,5 +246,12 @@ mod tests {
         }
 
         assert!(protocol.is_terminal(&state) || state.inner.tick >= crate::TICK_CAP);
+    }
+
+    fn assert_close(actual: f64, expected: f64) {
+        assert!(
+            (actual - expected).abs() < f64::EPSILON,
+            "expected {expected}, got {actual}"
+        );
     }
 }

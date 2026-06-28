@@ -586,21 +586,21 @@ fn random_secret(rng: &mut dyn FnMut() -> f64) -> BlackjackV2Secret {
 
 #[derive(Clone, Copy, Debug)]
 pub struct BlackjackV2Strategy {
-    rng_state: u64,
+    rng_state: u32,
 }
 
 impl BlackjackV2Strategy {
     pub fn new(seed: u64) -> Self {
-        Self { rng_state: seed }
+        Self {
+            rng_state: seed as u32,
+        }
     }
 
     fn next_f64(&mut self) -> f64 {
-        self.rng_state = self.rng_state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = self.rng_state;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^= z >> 31;
-        (z >> 11) as f64 / (1u64 << 53) as f64
+        self.rng_state = self.rng_state.wrapping_add(0x6d2b_79f5);
+        let mut t = (self.rng_state ^ (self.rng_state >> 15)).wrapping_mul(1 | self.rng_state);
+        t = t.wrapping_add((t ^ (t >> 7)).wrapping_mul(61 | t)) ^ t;
+        ((t ^ (t >> 14)) as f64) / 4_294_967_296.0
     }
 }
 
@@ -619,14 +619,11 @@ impl MoveStrategy<BlackjackV2> for BlackjackV2Strategy {
                 (seat == player_party(state.round + 1)).then_some(BlackjackV2Move::Deal)
             }
             Phase::DrawCommit => {
-                let owed = if state.pending_commit_a.is_none() {
-                    Some(Seat::A)
-                } else if state.pending_commit_b.is_none() {
-                    Some(Seat::B)
-                } else {
-                    None
+                let committed = match seat {
+                    Seat::A => state.pending_commit_a.is_some(),
+                    Seat::B => state.pending_commit_b.is_some(),
                 };
-                if owed != Some(seat) {
+                if committed {
                     return None;
                 }
                 let mut rng = || self.next_f64();
@@ -637,14 +634,11 @@ impl MoveStrategy<BlackjackV2> for BlackjackV2Strategy {
                 })
             }
             Phase::DrawReveal => {
-                let owed = if state.pending_reveal_a.is_none() {
-                    Some(Seat::A)
-                } else if state.pending_reveal_b.is_none() {
-                    Some(Seat::B)
-                } else {
-                    None
+                let revealed = match seat {
+                    Seat::A => state.pending_reveal_a.is_some(),
+                    Seat::B => state.pending_reveal_b.is_some(),
                 };
-                if owed != Some(seat) {
+                if revealed {
                     return None;
                 }
                 let secret = if seat == Seat::A {
@@ -788,7 +782,7 @@ mod strategy_tests {
     }
 
     #[tokio::test]
-    async fn draw_commit_is_serialized_a_then_b() {
+    async fn draw_commit_allows_either_missing_seat_to_commit() {
         let protocol = BlackjackV2;
         let state = initial_state(500, 500);
         assert_eq!(state.phase, Phase::DrawCommit);
@@ -798,52 +792,75 @@ mod strategy_tests {
         let commit_a = a
             .plan_move(&state, Seat::A, &strategy_ctx(Seat::A))
             .await
-            .expect("A owes first commit");
-        assert!(b
+            .expect("A should commit while its slot is missing");
+        let commit_b_first = b
             .plan_move(&state, Seat::B, &strategy_ctx(Seat::B))
             .await
-            .is_none());
+            .expect("B should also commit while its slot is missing");
 
         let state = protocol.apply_move(&state, &commit_a, Seat::A).unwrap();
         assert!(b
             .plan_move(&state, Seat::B, &strategy_ctx(Seat::B))
             .await
             .is_some());
+        let state = protocol
+            .apply_move(&initial_state(500, 500), &commit_b_first, Seat::B)
+            .unwrap();
+        assert!(a
+            .plan_move(&state, Seat::A, &strategy_ctx(Seat::A))
+            .await
+            .is_some());
     }
 
     #[tokio::test]
-    async fn draw_reveal_is_serialized_a_then_b() {
+    async fn draw_reveal_allows_either_missing_seat_to_reveal() {
         let protocol = BlackjackV2;
         let mut state = initial_state(500, 500);
         let mut a = BlackjackV2Strategy::new(1);
         let mut b = BlackjackV2Strategy::new(2);
 
-        let commit_a = a
-            .plan_move(&state, Seat::A, &strategy_ctx(Seat::A))
-            .await
-            .unwrap();
-        state = protocol.apply_move(&state, &commit_a, Seat::A).unwrap();
         let commit_b = b
             .plan_move(&state, Seat::B, &strategy_ctx(Seat::B))
             .await
             .unwrap();
         state = protocol.apply_move(&state, &commit_b, Seat::B).unwrap();
+        let commit_a = a
+            .plan_move(&state, Seat::A, &strategy_ctx(Seat::A))
+            .await
+            .unwrap();
+        state = protocol.apply_move(&state, &commit_a, Seat::A).unwrap();
         assert_eq!(state.phase, Phase::DrawReveal);
 
         let reveal_a = a
             .plan_move(&state, Seat::A, &strategy_ctx(Seat::A))
             .await
-            .expect("A owes first reveal");
-        assert!(b
+            .expect("A should reveal while its slot is missing");
+        let reveal_b_first = b
             .plan_move(&state, Seat::B, &strategy_ctx(Seat::B))
             .await
-            .is_none());
+            .expect("B should also reveal while its slot is missing");
 
+        let state_before_reveal = state.clone();
         state = protocol.apply_move(&state, &reveal_a, Seat::A).unwrap();
         assert!(b
             .plan_move(&state, Seat::B, &strategy_ctx(Seat::B))
             .await
             .is_some());
+        let state = protocol
+            .apply_move(&state_before_reveal, &reveal_b_first, Seat::B)
+            .unwrap();
+        assert!(a
+            .plan_move(&state, Seat::A, &strategy_ctx(Seat::A))
+            .await
+            .is_some());
+    }
+
+    #[test]
+    fn strategy_rng_matches_ts_mulberry32_stream() {
+        let mut strategy = BlackjackV2Strategy::new(1);
+        assert_close(strategy.next_f64(), 0.62707394058816135);
+        assert_close(strategy.next_f64(), 0.0027357211802154779);
+        assert_close(strategy.next_f64(), 0.52744703995995224);
     }
 
     #[tokio::test]
@@ -902,9 +919,9 @@ mod strategy_tests {
             let planned_a = a.plan_move(&state, Seat::A, &strategy_ctx(Seat::A)).await;
             let planned_b = b.plan_move(&state, Seat::B, &strategy_ctx(Seat::B)).await;
             let (seat, mv) = match (planned_a, planned_b) {
-                (Some(mv), None) => (Seat::A, mv),
+                (Some(mv), _) => (Seat::A, mv),
                 (None, Some(mv)) => (Seat::B, mv),
-                other => panic!("expected exactly one planned move, got {other:?}"),
+                (None, None) => panic!("expected at least one planned move"),
             };
             state = protocol.apply_move(&state, &mv, seat).unwrap();
             assert_eq!(protocol.balances(&state).sum(), 1000);
@@ -912,5 +929,12 @@ mod strategy_tests {
 
         assert!(state.round >= 1);
         assert_eq!(protocol.balances(&state).sum(), 1000);
+    }
+
+    fn assert_close(actual: f64, expected: f64) {
+        assert!(
+            (actual - expected).abs() < f64::EPSILON,
+            "expected {expected}, got {actual}"
+        );
     }
 }

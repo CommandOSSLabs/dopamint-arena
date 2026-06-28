@@ -10,14 +10,14 @@ use tunnel_harness::{MoveStrategy, MoveStrategyContext, Seat};
 
 #[derive(Clone, Debug)]
 pub struct QuantumPokerStrategy {
-    rng_state: u64,
+    rng_state: u32,
     secrets_by_hand: BTreeMap<u64, Vec<SlotSecret>>,
 }
 
 impl QuantumPokerStrategy {
     pub fn new(seed: u64) -> Self {
         Self {
-            rng_state: seed,
+            rng_state: seed as u32,
             secrets_by_hand: BTreeMap::new(),
         }
     }
@@ -27,12 +27,10 @@ impl QuantumPokerStrategy {
     }
 
     fn next_f64(&mut self) -> f64 {
-        self.rng_state = self.rng_state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = self.rng_state;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^= z >> 31;
-        (z >> 11) as f64 / (1u64 << 53) as f64
+        self.rng_state = self.rng_state.wrapping_add(0x6d2b_79f5);
+        let mut t = (self.rng_state ^ (self.rng_state >> 15)).wrapping_mul(1 | self.rng_state);
+        t = t.wrapping_add((t ^ (t >> 7)).wrapping_mul(61 | t)) ^ t;
+        ((t ^ (t >> 14)) as f64) / 4_294_967_296.0
     }
 
     fn secrets_for(&mut self, state: &PokerState, seat: Seat) -> Option<Vec<SlotSecret>> {
@@ -54,11 +52,15 @@ impl MoveStrategy<QuantumPoker> for QuantumPokerStrategy {
         seat: Seat,
         _ctx: &MoveStrategyContext,
     ) -> Option<PokerMove> {
-        if actor_for_state(state) != Some(seat) {
-            return None;
-        }
         match state.phase {
             PokerPhase::Commit => {
+                let committed = match seat {
+                    Seat::A => state.commit_a.is_some(),
+                    Seat::B => state.commit_b.is_some(),
+                };
+                if committed {
+                    return None;
+                }
                 let mut rng = || self.next_f64();
                 let secrets = random_slot_secrets(&mut rng);
                 let commitments = commit_slot_secrets(&secrets).ok()?;
@@ -91,6 +93,9 @@ impl MoveStrategy<QuantumPoker> for QuantumPokerStrategy {
             | PokerPhase::FlopBet
             | PokerPhase::TurnBet
             | PokerPhase::RiverBet => {
+                if state.to_act != seat {
+                    return None;
+                }
                 let diff = street_bet(state, seat.other()).saturating_sub(street_bet(state, seat));
                 if diff > 0 {
                     return Some(if self.next_f64() < 0.85 {
@@ -107,7 +112,7 @@ impl MoveStrategy<QuantumPoker> for QuantumPokerStrategy {
                 }
                 Some(PokerMove::Check)
             }
-            PokerPhase::HandOver => Some(PokerMove::NextHand),
+            PokerPhase::HandOver => (seat == Seat::A).then_some(PokerMove::NextHand),
             PokerPhase::Done => None,
         }
     }
@@ -583,7 +588,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn commit_phase_is_serialized_a_then_b() {
+    async fn commit_phase_allows_either_missing_seat_to_commit() {
         let protocol = QuantumPoker::default();
         let state = protocol.initial_state(&ctx());
         let mut a = QuantumPokerStrategy::new(1);
@@ -592,17 +597,28 @@ mod tests {
         let commit_a = a
             .plan_move(&state, Seat::A, &strategy_ctx(Seat::A))
             .await
-            .expect("A should commit first");
-        assert!(b
+            .expect("A should commit while its slot is missing");
+        let commit_b_first = b
             .plan_move(&state, Seat::B, &strategy_ctx(Seat::B))
             .await
-            .is_none());
+            .expect("B should also commit while its slot is missing");
 
         let state = protocol
             .apply_move(&state, &strip_local_secrets(commit_a), Seat::A)
             .unwrap();
         assert!(b
             .plan_move(&state, Seat::B, &strategy_ctx(Seat::B))
+            .await
+            .is_some());
+        let state = protocol
+            .apply_move(
+                &protocol.initial_state(&ctx()),
+                &strip_local_secrets(commit_b_first),
+                Seat::B,
+            )
+            .unwrap();
+        assert!(a
+            .plan_move(&state, Seat::A, &strategy_ctx(Seat::A))
             .await
             .is_some());
     }
@@ -614,19 +630,19 @@ mod tests {
         let mut a = QuantumPokerStrategy::new(1);
         let mut b = QuantumPokerStrategy::new(2);
 
-        let commit_a = a
-            .plan_move(&state, Seat::A, &strategy_ctx(Seat::A))
-            .await
-            .unwrap();
-        state = protocol
-            .apply_move(&state, &strip_local_secrets(commit_a), Seat::A)
-            .unwrap();
         let commit_b = b
             .plan_move(&state, Seat::B, &strategy_ctx(Seat::B))
             .await
             .unwrap();
         state = protocol
             .apply_move(&state, &strip_local_secrets(commit_b), Seat::B)
+            .unwrap();
+        let commit_a = a
+            .plan_move(&state, Seat::A, &strategy_ctx(Seat::A))
+            .await
+            .unwrap();
+        state = protocol
+            .apply_move(&state, &strip_local_secrets(commit_a), Seat::A)
             .unwrap();
         assert_eq!(state.phase, PokerPhase::OpenPrivateHoles);
         assert!(state.local_secrets_a.is_none());
@@ -637,16 +653,32 @@ mod tests {
             .await
             .expect("A should reveal from cache");
         assert!(matches!(reveal_a, PokerMove::RevealSlots { .. }));
-        assert!(b
+        let reveal_b_first = b
             .plan_move(&state, Seat::B, &strategy_ctx(Seat::B))
             .await
-            .is_none());
+            .expect("B should also reveal from cache");
 
+        let state_before_reveal = state.clone();
         state = protocol.apply_move(&state, &reveal_a, Seat::A).unwrap();
         assert!(b
             .plan_move(&state, Seat::B, &strategy_ctx(Seat::B))
             .await
             .is_some());
+        let state = protocol
+            .apply_move(&state_before_reveal, &reveal_b_first, Seat::B)
+            .unwrap();
+        assert!(a
+            .plan_move(&state, Seat::A, &strategy_ctx(Seat::A))
+            .await
+            .is_some());
+    }
+
+    #[test]
+    fn strategy_rng_matches_ts_mulberry32_stream() {
+        let mut strategy = QuantumPokerStrategy::new(1);
+        assert_close(strategy.next_f64(), 0.62707394058816135);
+        assert_close(strategy.next_f64(), 0.0027357211802154779);
+        assert_close(strategy.next_f64(), 0.52744703995995224);
     }
 
     #[tokio::test]
@@ -706,9 +738,9 @@ mod tests {
             let planned_a = a.plan_move(&state, Seat::A, &strategy_ctx(Seat::A)).await;
             let planned_b = b.plan_move(&state, Seat::B, &strategy_ctx(Seat::B)).await;
             let (seat, mv) = match (planned_a, planned_b) {
-                (Some(mv), None) => (Seat::A, mv),
+                (Some(mv), _) => (Seat::A, mv),
                 (None, Some(mv)) => (Seat::B, mv),
-                other => panic!("expected exactly one planned move, got {other:?}"),
+                (None, None) => panic!("expected at least one planned move"),
             };
             state = protocol.apply_move(&state, &mv, seat).unwrap();
             assert_eq!(protocol.balances(&state).sum(), 2000);
@@ -782,9 +814,9 @@ mod tests {
             let planned_a = a.plan_move(&state, Seat::A, &strategy_ctx(Seat::A)).await;
             let planned_b = b.plan_move(&state, Seat::B, &strategy_ctx(Seat::B)).await;
             let (seat, mv) = match (planned_a, planned_b) {
-                (Some(mv), None) => (Seat::A, mv),
+                (Some(mv), _) => (Seat::A, mv),
                 (None, Some(mv)) => (Seat::B, mv),
-                other => panic!("expected exactly one planned move, got {other:?}"),
+                (None, None) => panic!("expected at least one planned move"),
             };
             state = protocol.apply_move(&state, &mv, seat).unwrap();
             assert_eq!(protocol.balances(&state).sum(), 2000);
