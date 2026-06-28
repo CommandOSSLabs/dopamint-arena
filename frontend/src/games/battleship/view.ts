@@ -7,7 +7,7 @@ import {
   placementsToBoard,
   sunkShipCells,
 } from "./engine/fleet";
-import type { BattleshipState } from "./protocol/battleship";
+import type { BattleshipState } from "sui-tunnel-ts/protocol/battleship";
 
 /** What to paint in a single grid square. `sunk` is a hit cell of a fully-sunk ship. */
 export type CellView = "water" | "ship" | "hit" | "miss" | "sunk";
