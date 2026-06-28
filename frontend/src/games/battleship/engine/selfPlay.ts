@@ -1,61 +1,50 @@
 /**
- * Self-play driver: turns two known fleets into a stream of protocol moves.
- *
- * The protocol holds only public state, so it cannot produce `commit`/`reveal`
- * moves (those need the secret fleet). In vs-bot mode one process owns BOTH
- * fleets, so this driver computes the next move for whichever seat must act —
- * committing roots, answering shots with truthful reveals + Merkle proofs, and
- * firing the bot's chosen shot (strategy lives in `bot.ts`). The session hook
- * (M1) calls this on a timer and feeds each move to `OffchainTunnel.step`. See
- * ADR 0003.
+ * Self-play driver (v2): two known fleets → a stream of SDK battleship.v2 moves.
+ * The protocol holds only public state, so this driver (which owns BOTH fleets in
+ * vs-bot mode) answers shots truthfully and reveals each board at game end. It
+ * answers BARE (no pipelined `next`) so the session hook can gate the human's own
+ * shot exactly as in v1; the bench bot (agent kit) pipelines separately. Shot
+ * choice uses the smart bot (`pickShot`).
  */
-
-import type { Party } from "sui-tunnel-ts/protocol/Protocol";
-import { otherParty } from "sui-tunnel-ts/protocol/Protocol";
 import {
   BattleshipProtocol,
   type BattleshipMove,
   type BattleshipState,
-} from "../protocol/battleship";
-import { CELL_COUNT, placeFleetRandom, placementsToBoard } from "./fleet";
-import {
-  type BoardCommitment,
-  SALT_BYTES,
-  commitBoard,
-  proveCell,
-} from "./merkle";
+} from "sui-tunnel-ts/protocol/battleship";
+import { computeCommitment } from "sui-tunnel-ts/core/commitment";
+import { otherParty, type Party } from "sui-tunnel-ts/protocol/Protocol";
 import {
   BOT_CONFIGS,
   type BotDifficulty,
   DEFAULT_BOT_DIFFICULTY,
   pickShot,
 } from "./bot";
+import { CELL_COUNT, placeFleetRandom, placementsToBoard } from "./fleet";
 
-/** A player's secret fleet plus its precomputed commitment. */
+/** A player's secret board + single salt + the board-hash commitment. */
 export interface FleetSecret {
-  /** 100-cell 0/1 board. */
   board: Uint8Array;
-  /** Per-cell salts (100 × {@link SALT_BYTES} bytes). */
-  salts: Uint8Array[];
-  commitment: BoardCommitment;
+  salt: Uint8Array;
+  commitment: Uint8Array;
+}
+
+/** 16 cryptographically-secure random bytes (browser/Node CSPRNG). */
+export function secureSalt(): Uint8Array {
+  return globalThis.crypto.getRandomValues(new Uint8Array(16));
 }
 
 export function makeFleetSecret(
   board: Uint8Array,
-  salts: Uint8Array[],
+  salt: Uint8Array,
 ): FleetSecret {
-  return { board, salts, commitment: commitBoard(board, salts) };
+  return { board, salt, commitment: computeCommitment(board, salt) };
 }
 
-/** A randomly-placed fleet with rng-derived salts — for the bot seat and tests. */
 export function randomFleetSecret(rng: () => number): FleetSecret {
   const board = placementsToBoard(placeFleetRandom(rng));
-  const salts = Array.from({ length: CELL_COUNT }, () => {
-    const s = new Uint8Array(SALT_BYTES);
-    for (let i = 0; i < SALT_BYTES; i++) s[i] = Math.floor(rng() * 256);
-    return s;
-  });
-  return makeFleetSecret(board, salts);
+  const salt = new Uint8Array(16);
+  for (let i = 0; i < salt.length; i++) salt[i] = Math.floor(rng() * 256);
+  return makeFleetSecret(board, salt);
 }
 
 export interface DrivenMove {
@@ -63,74 +52,61 @@ export interface DrivenMove {
   by: Party;
 }
 
-/**
- * The next move for whichever seat must act, or null when the game is over.
- * `secrets` must hold both fleets (vs-bot runs both seats locally). `difficulty`
- * tunes only the bot's shot selection (see `bot.ts`); commits and reveals are
- * forced by the protocol regardless.
- */
 export function nextMove(
   state: BattleshipState,
   secrets: { A: FleetSecret; B: FleetSecret },
   rng: () => number,
   difficulty: BotDifficulty = DEFAULT_BOT_DIFFICULTY,
 ): DrivenMove | null {
-  if (state.winner !== 0 || state.phase === "over") return null;
+  if (state.phase === "over") return null;
 
   if (state.phase === "awaitingCommits") {
-    if (state.commitA === null) {
+    if (state.commitA === null)
+      return { by: "A", move: { kind: "commit", commitment: secrets.A.commitment } };
+    if (state.commitB === null)
+      return { by: "B", move: { kind: "commit", commitment: secrets.B.commitment } };
+    return null;
+  }
+
+  if (state.phase === "revealBoards") {
+    if (!state.revealedA)
       return {
-        move: { type: "commit", root: secrets.A.commitment.root },
         by: "A",
+        move: { kind: "reveal_board", board: secrets.A.board, salt: secrets.A.salt },
       };
-    }
-    if (state.commitB === null) {
+    if (!state.revealedB)
       return {
-        move: { type: "commit", root: secrets.B.commitment.root },
         by: "B",
+        move: { kind: "reveal_board", board: secrets.B.board, salt: secrets.B.salt },
       };
-    }
     return null;
   }
 
   // phase === "playing"
   if (state.pendingShot) {
     const defender = otherParty(state.pendingShot.by);
-    const cell = state.pendingShot.cell;
-    const secret = secrets[defender];
-    return {
-      by: defender,
-      move: {
-        type: "reveal",
-        cell,
-        isShip: secret.board[cell] === 1,
-        salt: secret.salts[cell],
-        proof: proveCell(secret.commitment, cell),
-      },
-    };
+    const isHit = secrets[defender].board[state.pendingShot.cell] === 1;
+    // Bare answer (no pipelined `next`): the next shooter fires as its own move,
+    // preserving v1's per-shot cadence and the session's human-shot gating.
+    return { by: defender, move: { kind: "answer", isHit } };
   }
 
   return {
     by: state.turn,
     move: {
-      type: "shoot",
+      kind: "shoot",
       cell: pickShot(state, state.turn, rng, BOT_CONFIGS[difficulty]),
     },
   };
 }
 
-/**
- * Play an entire game by feeding driver moves through the protocol. Returns the
- * terminal state. Throws if it fails to terminate within `maxMoves` (a bug
- * backstop — random play finishes in a few hundred moves).
- */
 export function playToCompletion(
   protocol: BattleshipProtocol,
   initial: BattleshipState,
   secrets: { A: FleetSecret; B: FleetSecret },
   rng: () => number,
   difficulty: BotDifficulty = DEFAULT_BOT_DIFFICULTY,
-  maxMoves = 2000,
+  maxMoves = 5000,
 ): BattleshipState {
   let state = initial;
   for (let i = 0; i < maxMoves; i++) {
