@@ -4,6 +4,9 @@
 use tunnel_core::codec::u64_to_be_bytes;
 use tunnel_harness::{Balances, Protocol, ProtocolError, Seat, TunnelContext};
 
+pub mod strategy;
+pub use strategy::{TicTacToeDifficulty, TicTacToeSeriesStrategy, TicTacToeStrategy};
+
 pub const EMPTY: u8 = 0;
 pub const MARK_A: u8 = 1;
 pub const MARK_B: u8 = 2;
@@ -46,6 +49,7 @@ pub struct TicTacToeMove {
     pub cell: u8,
 }
 
+#[derive(Clone, Copy, Debug)]
 pub struct TicTacToe {
     default_stake: u64,
 }
@@ -65,6 +69,7 @@ pub struct TicTacToeSeriesState {
     pub max_games: u64,
 }
 
+#[derive(Clone, Copy, Debug)]
 pub struct TicTacToeSeries {
     inner: TicTacToe,
     max_games: u64,
