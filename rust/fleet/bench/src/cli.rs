@@ -62,13 +62,14 @@ no relay, no chain submission, and no network transport are used.",
     after_help = "Examples:\n  \
 fleet-bench --bench-mode per-match-signers --matches 50 --scenario golden --frame-codec postcard\n  \
 fleet-bench --bench-mode compare-signers --matches 1000 --frame-codec json\n  \
-fleet-bench --bench-mode pre-initialized-signers --matches 1000 --frame-codec bcs\n\n\
+fleet-bench --bench-mode pre-initialized-signers --matches 1000 --frame-codec bcs\n  \
+fleet-bench --protocol-id blackjack.v2 --matches 100 --scenario varied\n\n\
 Bench mode values:\n  \
 per-match-signers: create signer material inside each measured match\n  \
 pre-initialized-signers: create all signer material before the timed run\n  \
 compare-signers: run per-match-signers first, then pre-initialized-signers\n\n\
 Protocol IDs:\n  \
-fleet-bench currently executes blackjack.bet.v1. Ported Rust protocol IDs are:\n  \
+fleet-bench currently executes blackjack.bet.v1 and blackjack.v2. Ported Rust protocol IDs are:\n  \
 api_credits.v1, battleship.v1, battleship.series.v1, blackjack.bet.v1,\n  \
 blackjack.duel.v1, blackjack.v2, bomb_it.v1, bomb_it.series.v1, caro.v1,\n  \
 caro.series.v1, chat.v1, cross.v1, cross.series.v1, payments.v1,\n  \
@@ -374,6 +375,8 @@ mod tests {
         assert!(help.contains("json: TS-parity wire for bot-vs-user"));
         assert!(help.contains("postcard: compact default candidate for bot-vs-bot"));
         assert!(help.contains("per-match-signers|pre-initialized-signers|compare-signers"));
+        assert!(help.contains("fleet-bench currently executes blackjack.bet.v1 and blackjack.v2"));
+        assert!(!help.contains("fleet-bench currently executes blackjack.bet.v1. Ported"));
         assert!(help.contains("blackjack.bet.v1"));
         assert!(help.contains("json|bcs|postcard"));
     }
