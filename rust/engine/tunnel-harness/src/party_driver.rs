@@ -17,6 +17,7 @@ pub struct PartyDriver<P: Protocol, Pol: MoveStrategy<P>, Ch: FrameTransport, S:
     seat: PartyRuntime<P, S>,
     move_strategy: Pol,
     frame_transport: Ch,
+    observers: Vec<Box<dyn crate::DriverObserver>>,
 }
 
 impl<P: Protocol, MoveStrat: MoveStrategy<P>, Ch: FrameTransport, S: Signer>
@@ -27,7 +28,15 @@ impl<P: Protocol, MoveStrat: MoveStrategy<P>, Ch: FrameTransport, S: Signer>
             seat,
             move_strategy,
             frame_transport,
+            observers: Vec::new(),
         }
+    }
+
+    /// Register a passive lifecycle observer (see `DriverObserver`). Observers
+    /// are notified in registration order; each receives every event read-only.
+    pub fn observe(mut self, observer: Box<dyn crate::DriverObserver>) -> Self {
+        self.observers.push(observer);
+        self
     }
 
     /// Drive until terminal. `now` supplies monotonically increasing timestamps
@@ -45,6 +54,9 @@ impl<P: Protocol, MoveStrat: MoveStrategy<P>, Ch: FrameTransport, S: Signer>
         let result = self.run_inner(max_moves, &mut now).await;
         if result.is_err() {
             self.move_strategy.abort();
+            for o in &mut self.observers {
+                o.on_aborted();
+            }
         }
         result
     }
@@ -54,11 +66,20 @@ impl<P: Protocol, MoveStrat: MoveStrategy<P>, Ch: FrameTransport, S: Signer>
         max_moves: u64,
         now: &mut (impl FnMut() -> u64 + Send),
     ) -> Result<DriverOutcome, HarnessError> {
+        let our_seat = self.seat.seat();
         let ctx = MoveStrategyContext {
             tunnel_id: String::new(), // generic strategies do not need tunnel_id
-            seat: self.seat.seat(),
+            seat: our_seat,
         };
-        let our_seat = self.seat.seat();
+
+        let start = crate::DriverStart {
+            tunnel_id: self.seat.tunnel_id(),
+            our_seat,
+        };
+        for o in &mut self.observers {
+            o.on_started(&start);
+        }
+
         let mut moves = 0u64;
 
         loop {
@@ -82,6 +103,15 @@ impl<P: Protocol, MoveStrat: MoveStrategy<P>, Ch: FrameTransport, S: Signer>
                             self.frame_transport.send(f).await?;
                         }
                         moves += 1;
+                        let ev = crate::MoveCommitted {
+                            by: our_seat,
+                            nonce: self.seat.nonce(),
+                            move_index: moves,
+                            timestamp_ms: now(),
+                        };
+                        for o in &mut self.observers {
+                            o.on_move_committed(&ev);
+                        }
                     }
                     None => break,
                 }
@@ -96,15 +126,28 @@ impl<P: Protocol, MoveStrat: MoveStrategy<P>, Ch: FrameTransport, S: Signer>
                         self.frame_transport.send(f).await?;
                     }
                     moves += 1;
+                    let ev = crate::MoveCommitted {
+                        by: our_seat.other(),
+                        nonce: self.seat.nonce(),
+                        move_index: moves,
+                        timestamp_ms: now(),
+                    };
+                    for o in &mut self.observers {
+                        o.on_move_committed(&ev);
+                    }
                 }
                 None => break,
             }
         }
 
-        Ok(DriverOutcome {
+        let outcome = DriverOutcome {
             moves,
             final_balances: self.seat.balances(),
-        })
+        };
+        for o in &mut self.observers {
+            o.on_finished(&outcome);
+        }
+        Ok(outcome)
     }
 }
 
@@ -324,5 +367,117 @@ mod tests {
         assert_eq!(planned.load(Ordering::Relaxed), 1);
         assert_eq!(confirmed.load(Ordering::Relaxed), 0);
         assert_eq!(aborted.load(Ordering::Relaxed), 1);
+    }
+
+    use crate::{DriverObserver, DriverStart, MoveCommitted};
+
+    #[derive(Default)]
+    struct CountingObserver {
+        started: Vec<(String, Seat)>,
+        moves: Vec<MoveCommitted>,
+        finished: u64,
+        aborted: u64,
+    }
+    impl DriverObserver for CountingObserver {
+        fn on_started(&mut self, s: &DriverStart<'_>) {
+            self.started.push((s.tunnel_id.to_string(), s.our_seat));
+        }
+        fn on_move_committed(&mut self, ev: &MoveCommitted) {
+            self.moves.push(*ev);
+        }
+        fn on_finished(&mut self, _o: &DriverOutcome) {
+            self.finished += 1;
+        }
+        fn on_aborted(&mut self) {
+            self.aborted += 1;
+        }
+    }
+
+    // A shared recorder so the test can read what the driver fanned out.
+    #[derive(Clone, Default)]
+    struct SharedObserver(Arc<std::sync::Mutex<CountingObserver>>);
+    impl DriverObserver for SharedObserver {
+        fn on_started(&mut self, s: &DriverStart<'_>) {
+            self.0.lock().unwrap().on_started(s);
+        }
+        fn on_move_committed(&mut self, ev: &MoveCommitted) {
+            self.0.lock().unwrap().on_move_committed(ev);
+        }
+        fn on_finished(&mut self, o: &DriverOutcome) {
+            self.0.lock().unwrap().on_finished(o);
+        }
+        fn on_aborted(&mut self) {
+            self.0.lock().unwrap().on_aborted();
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn driver_fans_lifecycle_events_to_observers() {
+        let secret_a: [u8; 32] = std::array::from_fn(|i| (i + 1) as u8);
+        let secret_b: [u8; 32] = std::array::from_fn(|i| (i + 33) as u8);
+        let pk_a = keypair_from_secret(&secret_a).public_key();
+        let pk_b = keypair_from_secret(&secret_b).public_key();
+        let (ch_a, ch_b) = InMemoryFrameTransport::pair();
+        let z = || Arc::new(AtomicU64::new(0));
+
+        let obs_a = SharedObserver::default();
+        let obs_a2 = SharedObserver::default();
+        let driver_a = PartyDriver::new(
+            runtime(Seat::A, &secret_a, pk_b),
+            TrackingStrategy::new(Seat::A, z(), z(), z()),
+            ch_a,
+        )
+        .observe(Box::new(obs_a.clone()))
+        .observe(Box::new(obs_a2.clone()));
+        let driver_b = PartyDriver::new(
+            runtime(Seat::B, &secret_b, pk_a),
+            TrackingStrategy::new(Seat::B, z(), z(), z()),
+            ch_b,
+        );
+
+        let mut ta = 0u64;
+        let (ra, rb) = tokio::join!(
+            driver_a.run(10, move || {
+                ta += 100;
+                ta
+            }),
+            driver_b.run(10, || 1),
+        );
+        ra.unwrap();
+        rb.unwrap();
+
+        let a = obs_a.0.lock().unwrap();
+        assert_eq!(a.started, vec![("0x1".to_string(), Seat::A)]);
+        assert_eq!(a.finished, 1);
+        assert_eq!(a.aborted, 0);
+        // OneMove protocol: exactly one committed move, authored by Seat::A.
+        assert_eq!(a.moves.len(), 1);
+        assert_eq!(a.moves[0].by, Seat::A);
+        assert_eq!(a.moves[0].move_index, 1);
+        assert_eq!(a.moves[0].nonce, 1);
+        assert!(a.moves[0].timestamp_ms >= 100);
+        // Fan-out: the second observer saw the same single move.
+        assert_eq!(obs_a2.0.lock().unwrap().moves.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn driver_notifies_observers_on_abort() {
+        let secret_a: [u8; 32] = std::array::from_fn(|i| (i + 1) as u8);
+        let secret_b: [u8; 32] = std::array::from_fn(|i| (i + 33) as u8);
+        let pk_b = keypair_from_secret(&secret_b).public_key();
+        let z = || Arc::new(AtomicU64::new(0));
+        let obs = SharedObserver::default();
+        let driver = PartyDriver::new(
+            runtime(Seat::A, &secret_a, pk_b),
+            TrackingStrategy::new(Seat::A, z(), z(), z()),
+            FailingSendTransport,
+        )
+        .observe(Box::new(obs.clone()));
+
+        let res = driver.run(10, || 1).await;
+        assert!(res.is_err());
+        let g = obs.0.lock().unwrap();
+        assert_eq!(g.aborted, 1);
+        assert_eq!(g.finished, 0);
     }
 }
