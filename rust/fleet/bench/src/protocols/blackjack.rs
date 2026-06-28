@@ -1,9 +1,9 @@
 use super::{play_with_strategies, CREATED_AT, DEFAULT_BALANCE, MAX_MOVES};
 use crate::cli::FrameCodecKind;
 use crate::party_driver::{play_protocol_match_with_strategies, MatchResult, SeatKit};
-use tunnel_blackjack::duel::{BlackjackDuel, BlackjackDuelStrategy};
+use tunnel_blackjack::duel::BlackjackDuel;
 use tunnel_blackjack::v2::{BlackjackV2, BlackjackV2Strategy};
-use tunnel_blackjack::{BjMove, Blackjack, BlackjackStrategy};
+use tunnel_blackjack::{BjMove, Blackjack, BlackjackDuelStrategy, BlackjackStrategy};
 use tunnel_harness::{BcsFrameCodec, FrameCodec, JsonFrameCodec, PostcardFrameCodec};
 
 pub(crate) fn play_bet(

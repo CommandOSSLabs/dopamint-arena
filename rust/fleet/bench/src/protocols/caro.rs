@@ -1,7 +1,7 @@
 use super::{play_with_strategies, DEFAULT_BALANCE, MAX_MOVES};
 use crate::cli::FrameCodecKind;
 use crate::party_driver::{MatchResult, SeatKit};
-use tunnel_caro::{Caro, CaroSeries, CaroSeriesStrategy, CaroStrategy};
+use tunnel_caro::{Caro, CaroSeries, CaroSeriesStrategy, CaroStrategy, CaroStrength};
 
 pub(crate) fn play_single(
     codec: FrameCodecKind,
@@ -9,12 +9,15 @@ pub(crate) fn play_single(
     kit: &SeatKit,
     tunnel_id: &str,
 ) -> MatchResult {
+    let seed = card_seed.unwrap_or(0);
     play_with_strategies(
         Caro::default(),
-        CaroStrategy::default(),
-        CaroStrategy::default(),
+        CaroStrategy::with_seed(15, CaroStrength::Strong, seed ^ 0xA5A5_5A5A_D0D0_1CE5)
+            .expect("valid caro strategy"),
+        CaroStrategy::with_seed(15, CaroStrength::Strong, seed ^ 0x5A5A_A5A5_CAFE_BABE)
+            .expect("valid caro strategy"),
         codec,
-        card_seed.unwrap_or(0),
+        seed,
         kit,
         tunnel_id,
         DEFAULT_BALANCE,
@@ -29,12 +32,15 @@ pub(crate) fn play_series(
     kit: &SeatKit,
     tunnel_id: &str,
 ) -> MatchResult {
+    let seed = card_seed.unwrap_or(0);
     play_with_strategies(
         CaroSeries::new(3, 15).expect("valid caro series"),
-        CaroSeriesStrategy::new(3, 15).expect("valid caro series strategy"),
-        CaroSeriesStrategy::new(3, 15).expect("valid caro series strategy"),
+        CaroSeriesStrategy::with_seed(3, 15, CaroStrength::Strong, seed ^ 0xA5A5_5A5A_D0D0_1CE5)
+            .expect("valid caro series strategy"),
+        CaroSeriesStrategy::with_seed(3, 15, CaroStrength::Strong, seed ^ 0x5A5A_A5A5_CAFE_BABE)
+            .expect("valid caro series strategy"),
         codec,
-        card_seed.unwrap_or(0),
+        seed,
         kit,
         tunnel_id,
         DEFAULT_BALANCE,
