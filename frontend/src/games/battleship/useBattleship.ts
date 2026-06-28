@@ -479,6 +479,10 @@ class BotSession {
       let frameDeadline = Date.now() + FRAME_BUDGET_MS;
       while (tunnel && protocol && this.secrets) {
         const inner = tunnel.state.inner;
+        // winner !== 0 (not phase === "over") is the game-end detector: a push
+        // (winner 0 at "over") is unreachable here — a side always sinks the
+        // 17-cell fleet before exhausting all 100 shots. Revisit if the board
+        // geometry or fleet size ever changes.
         if (inner.winner !== 0) {
           // A game finished. Tally it once, then decide: loop, roll over, or stop.
           this.recordGameResult();
