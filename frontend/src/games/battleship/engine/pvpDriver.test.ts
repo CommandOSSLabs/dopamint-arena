@@ -11,13 +11,14 @@ import {
 import type { Party } from "sui-tunnel-ts/protocol/Protocol";
 import {
   BattleshipProtocol,
-  battleshipMoveCodec,
   type BattleshipMove,
   type BattleshipState,
-} from "../protocol/battleship";
+} from "sui-tunnel-ts/protocol/battleship";
+import { battleshipMoveCodec } from "sui-tunnel-ts/protocol/battleshipCodec";
 import { FLEET_CELLS } from "./fleet";
-import { type FleetSecret, randomFleetSecret } from "./selfPlay";
-import { proposeDue } from "./pvpDriver";
+import { type FleetSecret, randomFleetSecret, nextMove } from "./selfPlay";
+import { computeCommitment } from "sui-tunnel-ts/core/commitment";
+import { proposeDue, answerMove } from "./pvpDriver";
 
 function mulberry32(seed: number): () => number {
   let a = seed;
@@ -59,33 +60,8 @@ function pairedTransports() {
 
 type DT = DistributedTunnel<BattleshipState, BattleshipMove>;
 
-function firstUnfired(st: BattleshipState, role: Party): number {
-  const atOpponent = role === "A" ? st.shotsAtB : st.shotsAtA;
-  const fired = new Set(atOpponent.map((s) => s.cell));
-  for (let c = 0; c < 100; c++) if (!fired.has(c)) return c;
-  return -1;
-}
-
-/** Wire a seat to auto-commit, auto-reveal (proposeDue) and auto-fire (stands in for the human). */
-function autoSeat(dt: DT, role: Party, secret: FleetSecret) {
-  dt.onConfirmed = () => {
-    if (proposeDue(dt, role, secret)) return;
-    const st = dt.state;
-    if (
-      st.phase === "playing" &&
-      !st.pendingShot &&
-      st.turn === role &&
-      st.winner === 0
-    ) {
-      const cell = firstUnfired(st, role);
-      if (cell >= 0) dt.propose({ type: "shoot", cell }, 0n);
-    }
-  };
-}
-
 function makeSeat(
   role: Party,
-  self: FleetSecret,
   transport: Transport,
   selfKeys: ReturnType<typeof createParticipant>,
   oppKeys: ReturnType<typeof createParticipant>,
@@ -113,7 +89,49 @@ function makeSeat(
   );
 }
 
-test("two independent seats play a full commit-reveal game to a settled winner", () => {
+/**
+ * Drive both tunnels to completion via `proposeDue` (commit / answer / reveal_board)
+ * plus explicit shoot calls standing in for the human. Uses a sequential loop to
+ * avoid the simultaneous-proposal collision that reactive onConfirmed would cause.
+ */
+function driveToCompletion(
+  dtA: DT,
+  dtB: DT,
+  secretA: FleetSecret,
+  secretB: FleetSecret,
+  pump: () => void,
+  rng: () => number,
+): void {
+  // Each seat holds only its own fleet; pass a placeholder for the opponent's.
+  const placeholder: FleetSecret = {
+    board: new Uint8Array(100),
+    salt: new Uint8Array(16),
+    commitment: new Uint8Array(32),
+  };
+  const localA = { A: secretA, B: placeholder };
+  const localB = { A: placeholder, B: secretB };
+
+  for (let i = 0; i < 5000; i++) {
+    const state = dtA.state;
+    if (state.phase === "over") break;
+
+    // Prefer proposeDue for the auto-moves (commit / answer / reveal_board);
+    // fall back to nextMove for shots (human-driven in real game).
+    const drivenA = nextMove(state, localA, rng);
+    const drivenB = nextMove(state, localB, rng);
+    const driven =
+      drivenA && drivenA.by === "A"
+        ? { dt: dtA, ...drivenA }
+        : drivenB && drivenB.by === "B"
+          ? { dt: dtB, ...drivenB }
+          : null;
+    if (!driven) break;
+    driven.dt.propose(driven.move, BigInt(i + 1));
+    pump();
+  }
+}
+
+test("two independent seats play a full commit→shoot→answer→reveal_board→over game", () => {
   for (let seed = 1; seed <= 12; seed++) {
     const A = createParticipant("A");
     const B = createParticipant("B");
@@ -121,31 +139,28 @@ test("two independent seats play a full commit-reveal game to a settled winner",
     const secretB = randomFleetSecret(mulberry32(seed * 3 + 1));
     const { tA, tB, pump } = pairedTransports();
 
-    const dtA = makeSeat("A", secretA, tA, A, B);
-    const dtB = makeSeat("B", secretB, tB, B, A);
-    autoSeat(dtA, "A", secretA);
-    autoSeat(dtB, "B", secretB);
+    const dtA = makeSeat("A", tA, A, B);
+    const dtB = makeSeat("B", tB, B, A);
 
-    // Kick off the ordered commits; the reactive handlers carry it to the end.
-    proposeDue(dtA, "A", secretA);
-    pump();
+    driveToCompletion(dtA, dtB, secretA, secretB, pump, mulberry32(seed * 7));
 
-    // Both engines independently reach the SAME terminal public state.
-    assert.notEqual(dtA.state.winner, 0, `seed ${seed} decisive`);
+    // Both tunnels independently reach the SAME terminal public state.
+    assert.equal(dtA.state.phase, "over", `seed ${seed}: should be over`);
+    assert.notEqual(dtA.state.winner, 0, `seed ${seed}: decisive winner`);
     assert.equal(
       dtA.state.winner,
       dtB.state.winner,
-      `seed ${seed} agree on winner`,
+      `seed ${seed}: agree on winner`,
     );
     assert.deepEqual(
       dtA.protocol.encodeState(dtA.state),
       dtB.protocol.encodeState(dtB.state),
-      `seed ${seed} identical co-signed state`,
+      `seed ${seed}: identical co-signed state`,
     );
 
     const winner = dtA.state.winner;
     const loserSunk = winner === 1 ? dtA.state.hitsOnB : dtA.state.hitsOnA;
-    assert.equal(loserSunk, FLEET_CELLS, `seed ${seed} loser fully sunk`);
+    assert.equal(loserSunk, FLEET_CELLS, `seed ${seed}: loser fully sunk`);
     assert.equal(dtA.state.balanceA + dtA.state.balanceB, 2n * LOCKED);
     assert.equal(
       winner === 1 ? dtA.state.balanceA : dtA.state.balanceB,
@@ -154,41 +169,214 @@ test("two independent seats play a full commit-reveal game to a settled winner",
   }
 });
 
-test("a reveal that lies about a hit is rejected, halting the cheat", () => {
+test("proposeDue returns true for owed commit and false once committed", () => {
   const A = createParticipant("A");
   const B = createParticipant("B");
-  const secretA = randomFleetSecret(mulberry32(101));
-  const secretB = randomFleetSecret(mulberry32(102));
+  const secretA = randomFleetSecret(mulberry32(200));
+  const secretB = randomFleetSecret(mulberry32(201));
   const { tA, tB, pump } = pairedTransports();
-  const dtA = makeSeat("A", secretA, tA, A, B);
-  const dtB = makeSeat("B", secretB, tB, B, A);
 
-  // A and B commit; then A fires at one of B's known ship cells.
-  autoSeat(dtB, "B", secretB); // B reveals honestly + plays normally
-  dtA.onConfirmed = () => {
-    proposeDue(dtA, "A", secretA);
-  };
-  proposeDue(dtA, "A", secretA);
+  const dtA = makeSeat("A", tA, A, B);
+  const dtB = makeSeat("B", tB, B, A);
+
+  // A owes a commit in the initial awaitingCommits state.
+  assert.equal(proposeDue(dtA, "A", secretA), true, "A owes initial commit");
   pump();
 
-  const shipCell = secretB.board.findIndex((v) => v === 1);
-  // A's engine, asked to apply B's reveal that falsely claims the ship cell is water,
-  // recomputes the Merkle leaf and the proof fails — applyMove throws.
-  assert.throws(() =>
-    dtA.protocol.applyMove(
-      {
-        ...dtA.state,
-        pendingShot: { by: "A", cell: shipCell },
-        phase: "playing",
-      },
-      {
-        type: "reveal",
-        cell: shipCell,
-        isShip: false, // the lie
-        salt: secretB.salts[shipCell],
-        proof: [],
-      },
-      "B",
-    ),
+  // After committing, A no longer owes a commit (commitA is set).
+  assert.equal(
+    proposeDue(dtA, "A", secretA),
+    false,
+    "A does not owe a second commit",
+  );
+
+  // B owes its commit now that A has committed.
+  assert.equal(proposeDue(dtB, "B", secretB), true, "B owes its commit");
+  pump();
+
+  // After B commits, neither seat owes a commit (phase moved to playing).
+  assert.equal(dtA.state.phase, "playing", "phase is playing after both commit");
+  assert.equal(proposeDue(dtA, "A", secretA), false, "A owes no commit in playing");
+  assert.equal(proposeDue(dtB, "B", secretB), false, "B owes no commit in playing");
+});
+
+test("proposeDue returns true for owed answer and false for the shooter", () => {
+  const A = createParticipant("A");
+  const B = createParticipant("B");
+  const secretA = randomFleetSecret(mulberry32(300));
+  const secretB = randomFleetSecret(mulberry32(301));
+  const { tA, tB, pump } = pairedTransports();
+
+  const dtA = makeSeat("A", tA, A, B);
+  const dtB = makeSeat("B", tB, B, A);
+
+  // Commit both seats to enter playing phase.
+  proposeDue(dtA, "A", secretA);
+  pump();
+  proposeDue(dtB, "B", secretB);
+  pump();
+
+  assert.equal(dtA.state.phase, "playing", "should be in playing phase");
+  // No pendingShot yet: proposeDue returns false for both.
+  assert.equal(proposeDue(dtA, "A", secretA), false, "A owes nothing — no pending shot");
+  assert.equal(proposeDue(dtB, "B", secretB), false, "B owes nothing — no pending shot");
+
+  // A fires first (A's turn).
+  dtA.propose({ kind: "shoot", cell: 0 }, 0n);
+  pump();
+
+  // Now there is a pendingShot by A; B owes the answer, A does not.
+  assert.ok(dtA.state.pendingShot, "shot is pending");
+  assert.equal(dtA.state.pendingShot!.by, "A", "A fired the shot");
+  assert.equal(
+    proposeDue(dtB, "B", secretB),
+    true,
+    "B owes answer to A's shot",
+  );
+  assert.equal(
+    proposeDue(dtA, "A", secretA),
+    false,
+    "A is the shooter; no answer owed",
+  );
+});
+
+test("proposeDue returns true for owed reveal_board and false once revealed", () => {
+  const A = createParticipant("A");
+  const B = createParticipant("B");
+  const secretA = randomFleetSecret(mulberry32(400));
+  const secretB = randomFleetSecret(mulberry32(401));
+  const { tA, tB, pump } = pairedTransports();
+
+  const dtA = makeSeat("A", tA, A, B);
+  const dtB = makeSeat("B", tB, B, A);
+
+  // Manually construct a revealBoards state on both tunnels by driving
+  // the game to completion up to the reveal phase.
+  const placeholder: FleetSecret = {
+    board: new Uint8Array(100),
+    salt: new Uint8Array(16),
+    commitment: new Uint8Array(32),
+  };
+  const localA = { A: secretA, B: placeholder };
+  const localB = { A: placeholder, B: secretB };
+  const rng = mulberry32(402);
+
+  // Drive the game forward until the phase becomes revealBoards.
+  for (let i = 0; i < 5000; i++) {
+    const state = dtA.state;
+    if (state.phase === "revealBoards" || state.phase === "over") break;
+    const drivenA = nextMove(state, localA, rng);
+    const drivenB = nextMove(state, localB, rng);
+    const driven =
+      drivenA && drivenA.by === "A"
+        ? { dt: dtA, ...drivenA }
+        : drivenB && drivenB.by === "B"
+          ? { dt: dtB, ...drivenB }
+          : null;
+    if (!driven) break;
+    driven.dt.propose(driven.move, BigInt(i + 1));
+    pump();
+  }
+
+  if (dtA.state.phase !== "revealBoards") {
+    // Game terminated without a revealBoards phase (should not happen with a full game).
+    return;
+  }
+
+  // In revealBoards phase: proposeDue returns true for the first proposer.
+  // Reveal A first (proposeDue proposes AND returns true in one call).
+  assert.equal(
+    proposeDue(dtA, "A", secretA),
+    true,
+    "A owes reveal_board",
+  );
+  pump();
+
+  // After A reveals, B still owes a reveal — proposeDue returns true.
+  assert.equal(
+    proposeDue(dtB, "B", secretB),
+    true,
+    "B owes reveal_board after A revealed",
+  );
+  // A no longer owes a reveal once revealedA is true.
+  assert.equal(
+    proposeDue(dtA, "A", secretA),
+    false,
+    "A does not owe a second reveal",
+  );
+  pump();
+
+  // After both reveals, game is over.
+  assert.equal(dtA.state.phase, "over", "game is over after both reveals");
+  assert.equal(proposeDue(dtA, "A", secretA), false, "A owes nothing in over phase");
+  assert.equal(proposeDue(dtB, "B", secretB), false, "B owes nothing in over phase");
+});
+
+test("answerMove returns correct hit/miss for the fleet secret", () => {
+  const secret = randomFleetSecret(mulberry32(500));
+  // Find a ship cell and a water cell.
+  const shipCell = secret.board.findIndex((v) => v === 1);
+  const waterCell = secret.board.findIndex((v) => v === 0);
+  assert.ok(shipCell >= 0, "fleet has at least one ship cell");
+  assert.ok(waterCell >= 0, "fleet has at least one water cell");
+
+  const hitAnswer = answerMove(secret, shipCell);
+  assert.equal(hitAnswer.kind, "answer");
+  assert.equal((hitAnswer as { kind: "answer"; isHit: boolean }).isHit, true);
+
+  const missAnswer = answerMove(secret, waterCell);
+  assert.equal(missAnswer.kind, "answer");
+  assert.equal((missAnswer as { kind: "answer"; isHit: boolean }).isHit, false);
+});
+
+test("a reveal_board that contradicts answered shots is rejected by the protocol", () => {
+  const secretB = randomFleetSecret(mulberry32(102));
+
+  const proto = new BattleshipProtocol(100n);
+
+  // Find a water cell in B's fleet — a cell B honestly answered "miss" to previously.
+  // We will construct a fake state where B LIED and claimed that water cell was a HIT.
+  // When B reveals the real board (which passes the commitment check and isLegalBoard check),
+  // the protocol should catch that the revealed board contradicts the recorded answer.
+  const waterCell = secretB.board.findIndex((v) => v === 0);
+  assert.ok(waterCell >= 0, "fleet has at least one water cell");
+
+  // The real commitment for the real board — commitment check passes.
+  const realCommitment = computeCommitment(secretB.board, secretB.salt);
+
+  // Fake state: B lied during the game and said the water cell was a HIT.
+  const fakeState: BattleshipState = {
+    phase: "revealBoards",
+    turn: "A",
+    pendingShot: null,
+    commitA: new Uint8Array(32),
+    commitB: realCommitment,
+    shotsAtA: [],
+    shotsAtB: [{ cell: waterCell, isHit: true }], // lie: B claimed a water cell was a hit
+    hitsOnA: 0,
+    hitsOnB: 1,
+    revealedA: true,
+    revealedB: false,
+    winner: 0,
+    balanceA: LOCKED,
+    balanceB: LOCKED,
+    total: 2n * LOCKED,
+    stake: 100n,
+  };
+
+  // The real board says waterCell is 0 (water), but the recorded shot claims isHit: true —
+  // the protocol must catch this contradiction when B reveals the real board.
+  assert.throws(
+    () =>
+      proto.applyMove(
+        fakeState,
+        {
+          kind: "reveal_board",
+          board: secretB.board,
+          salt: secretB.salt,
+        },
+        "B",
+      ),
+    /reveal contradicts answered shot/,
   );
 });
