@@ -1,11 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { makeBattleshipResumeAdapter } from "./battleshipResumeAdapter";
-import { makeFleetSecret, randomFleetSecret } from "./engine/selfPlay";
+import { makeFleetSecret, randomFleetSecret, secureSalt } from "./engine/selfPlay";
 import { placementsToBoard, type Placement } from "./engine/fleet";
-import { randomSalts } from "./engine/merkle";
 import { proposeDue } from "./engine/pvpDriver";
-import { BattleshipProtocol, battleshipMoveCodec } from "./protocol/battleship";
+import { BattleshipProtocol } from "sui-tunnel-ts/protocol/battleship";
+import { battleshipMoveCodec } from "sui-tunnel-ts/protocol/battleshipCodec";
 import { rebuildTunnel, restoreInto } from "@/pvp/resumeSession";
 import {
   writeResumeRecord,
@@ -65,7 +65,7 @@ function bsAdapter(store: { secret: unknown; placements: Placement[] }) {
 // placements, captured/restored through the hidden-secret channel (never via serializeState).
 test("battleship secret blob round-trips fleet + placements; serializeState excludes both", () => {
   const placements = [{ id: "carrier", cell: 0, orient: "H" as const }];
-  const fleet = makeFleetSecret(placementsToBoard(placements), randomSalts());
+  const fleet = makeFleetSecret(placementsToBoard(placements), secureSalt());
   let store: { fleet: unknown; placements: unknown } = { fleet, placements };
   const adapter = makeBattleshipResumeAdapter({
     getSecret: () => store.fleet as never,
@@ -86,7 +86,7 @@ test("battleship secret blob round-trips fleet + placements; serializeState excl
     commitA: null,
     commitB: null,
   } as never) as Record<string, unknown>;
-  assert.equal(pub.salts, undefined);
+  assert.equal(pub.salt, undefined);
   assert.equal(pub.placements, undefined);
 });
 
@@ -112,9 +112,9 @@ test("battleship cold-load: rebuilt defender reveals the next move byte-identica
     "0xB",
     { a: 500n, b: 500n },
   );
-  sp.step({ type: "commit", root: secretA.commitment.root }, "A");
-  sp.step({ type: "commit", root: secretB.commitment.root }, "B");
-  sp.step({ type: "shoot", cell: 0 }, "A");
+  sp.step({ kind: "commit", commitment: secretA.commitment }, "A");
+  sp.step({ kind: "commit", commitment: secretB.commitment }, "B");
+  sp.step({ kind: "shoot", cell: 0 }, "A");
 
   // Persist seat B's record; the secret is captured JSON-safe via the adapter.
   const capStore = {

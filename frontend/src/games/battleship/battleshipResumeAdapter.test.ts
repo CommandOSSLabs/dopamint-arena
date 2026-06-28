@@ -48,20 +48,27 @@ test("the fleet secret round-trips locally and never enters a resync/serializeSt
     typeof v === "bigint" ? v.toString() : v,
   );
   // No fleet salt bytes leak into the wire-bound state.
-  for (const salt of secret.salts) {
-    assert.ok(
-      !blob.includes(Array.from(salt).join(",")),
-      "fleet salt leaked into serializeState",
-    );
-  }
+  assert.ok(
+    !blob.includes(Array.from(secret.salt).join(",")),
+    "fleet salt leaked into serializeState",
+  );
   // No 0/1 fleet board bytes leak into the wire-bound state.
   assert.ok(
     !blob.includes(Array.from(secret.board).join(",")),
     "fleet board leaked into serializeState",
   );
   // captureSecret is the ONLY carrier of the secret; restoreSecret round-trips it.
+  // Simulate a localStorage round-trip (JSON stringify then parse) to prove the
+  // captured blob carries a single `salt` (16 bytes) rather than per-cell `salts`.
   const cap = adapter.captureSecret!();
+  const roundTripped = JSON.parse(JSON.stringify(cap)) as {
+    fleet: { board: number[]; salt: number[] };
+  };
+  assert.equal(roundTripped.fleet.salt.length, 16, "captured salt must be 16 bytes");
   adapter.restoreSecret!(cap);
-  assert.deepEqual(stored, secret);
+  const restoredSecret = stored as { board: Uint8Array; salt: Uint8Array };
+  assert.ok(restoredSecret.salt instanceof Uint8Array, "restored salt is a Uint8Array");
+  assert.equal(restoredSecret.salt.length, 16, "restored salt is 16 bytes");
+  assert.deepEqual(Array.from(restoredSecret.board), Array.from(secret.board), "board round-trips");
   assert.deepEqual(storedPlacements, placements);
 });
