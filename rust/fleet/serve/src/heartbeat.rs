@@ -4,7 +4,7 @@
 //! roughly once a `flush_interval_ms` window, plus a trailing flush on finish.
 
 use serde::Serialize;
-use tunnel_harness::{MoveCommitted, Seat};
+use tunnel_harness::{DriverObserver, DriverOutcome, DriverStart, MoveCommitted, Seat};
 
 /// Wire-compatible with the server's `HeartbeatRequest` (camelCase; `nonce` is
 /// a decimal string, matching the frontend's `BigInt.toString()`).
@@ -116,6 +116,60 @@ impl HeartbeatReporter {
     }
 }
 
+async fn post_heartbeat(
+    http: reqwest::Client,
+    base_url: String,
+    session_id: String,
+    stats_token: String,
+    payload: HeartbeatPayload,
+) -> Result<(), reqwest::Error> {
+    let url = format!("{base_url}/v1/sessions/{session_id}/heartbeat");
+    http.post(url)
+        .bearer_auth(stats_token)
+        .json(&payload)
+        .send()
+        .await?
+        .error_for_status()?;
+    Ok(())
+}
+
+impl HeartbeatReporter {
+    /// Fire-and-forget: never block the move loop on network IO. A dropped
+    /// heartbeat is a lost stat, never a stalled game.
+    fn dispatch(&self, payload: HeartbeatPayload) {
+        let http = self.http.clone();
+        let base_url = self.base_url.clone();
+        let session_id = self.session_id.clone();
+        let stats_token = self.stats_token.clone();
+        tokio::spawn(async move {
+            if let Err(e) = post_heartbeat(http, base_url, session_id, stats_token, payload).await {
+                tracing::warn!(error = %e, "heartbeat post failed");
+            }
+        });
+    }
+}
+
+impl DriverObserver for HeartbeatReporter {
+    fn on_started(&mut self, start: &DriverStart<'_>) {
+        self.start(start.tunnel_id, start.our_seat);
+    }
+    fn on_move_committed(&mut self, ev: &MoveCommitted) {
+        if let Some(payload) = self.record(ev) {
+            self.dispatch(payload);
+        }
+    }
+    fn on_finished(&mut self, _outcome: &DriverOutcome) {
+        if let Some(payload) = self.drain() {
+            self.dispatch(payload);
+        }
+    }
+    fn on_aborted(&mut self) {
+        if let Some(payload) = self.drain() {
+            self.dispatch(payload);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -174,5 +228,44 @@ mod tests {
         assert_eq!(p.nonce, "8");
         assert_eq!(p.window_ms, 300);
         assert_eq!(r.drain(), None); // nothing left
+    }
+
+    use wiremock::matchers::{header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn post_heartbeat_sends_camelcase_json_with_bearer() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/sessions/sess-1/heartbeat"))
+            .and(header("authorization", "Bearer tok-1"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let payload = HeartbeatPayload {
+            tunnel_id: "0xabc".into(),
+            nonce: "9".into(),
+            actions_delta: 4,
+            window_ms: 1000,
+        };
+        post_heartbeat(
+            reqwest::Client::new(),
+            server.uri(),
+            "sess-1".into(),
+            "tok-1".into(),
+            payload,
+        )
+        .await
+        .expect("post ok");
+
+        let reqs = server.received_requests().await.unwrap();
+        assert_eq!(reqs.len(), 1);
+        let body: serde_json::Value = serde_json::from_slice(&reqs[0].body).unwrap();
+        assert_eq!(body["tunnelId"], "0xabc");
+        assert_eq!(body["nonce"], "9");
+        assert_eq!(body["actionsDelta"], 4);
+        assert_eq!(body["windowMs"], 1000);
     }
 }
