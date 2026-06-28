@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import { useGameNavigate } from "@/games/blackjack/app/useGameRouter";
 import { useGameScale } from "@/games/blackjack/app/components/app/ScaledWrapper";
 import { useCurrentAccount } from "@mysten/dapp-kit";
 import { CardDisplay } from "@/games/blackjack/app/components/app/CardDisplay";
@@ -40,7 +39,6 @@ function statusText(g: ReturnType<typeof usePvpBlackjack>): string {
 
 export default function PvpBlackjack() {
   const g = usePvpBlackjack();
-  const navigate = useGameNavigate();
   const { isPortrait } = useGameScale();
   const account = useCurrentAccount();
   useEffect(() => {
@@ -245,12 +243,9 @@ export default function PvpBlackjack() {
         <div className="bj-felt w-full h-full relative">
           {playing && (
             <button
-              onClick={() => {
-                g.leave();
-                navigate("/");
-              }}
+              onClick={() => g.leave()}
               className="qp-btn !px-4 !py-2 !absolute !top-4 !left-4 z-30 !text-sm font-semibold cursor-pointer"
-              title="Back to menu"
+              title="Back"
             >
               ← Back
             </button>
@@ -447,16 +442,6 @@ export default function PvpBlackjack() {
           {!playing && (
             <div className="absolute inset-0 z-20 flex items-center justify-center p-4">
               <div className="qp-panel qp-stroke max-w-[min(48rem,95%)] p-10 md:p-12 flex flex-col items-center gap-5 text-center relative">
-                <button
-                  onClick={() => {
-                    g.leave();
-                    navigate("/");
-                  }}
-                  className="qp-btn !px-4 !py-2 !absolute !top-4 !left-4 z-30 !text-sm font-semibold cursor-pointer"
-                  title="Back to menu"
-                >
-                  ← Back to menu
-                </button>
                 <span className="qp-eyebrow">Blackjack · PvP</span>
                 <h2 className="qp-title uppercase text-center mb-1">
                   Blackjack PvP
@@ -557,7 +542,7 @@ export default function PvpBlackjack() {
                         ? "Finding opponent…"
                         : g.phase === "connecting"
                           ? "Connecting…"
-                          : "Find match"}
+                          : "Play"}
                     </button>
                     {g.phase === "queuing" && (
                       <button

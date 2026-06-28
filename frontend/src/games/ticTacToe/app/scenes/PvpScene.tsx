@@ -145,7 +145,7 @@ export function PvpScene({
                   ? "Opening tunnel…"
                   : g.phase === "funding"
                     ? "Funding seat…"
-                    : "Find Match"}
+                    : "Play"}
           </button>
 
           {(g.phase === "queuing" || g.phase === "connecting") && (

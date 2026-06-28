@@ -1,15 +1,13 @@
 import { usePvpBombIt, type PvpBombIt } from "./usePvpBombIt";
-import { useBombItSession, type BombItSession } from "./useBombItSession";
 import { BombLobby } from "./components/BombLobby";
 import { BombBoard } from "./components/BombBoard";
 import { BOMB_BTN, BOMB_IT_STYLE } from "./bombItTheme";
 import { createArenaWindow } from "../_shared/arenaWindow";
 import "./bomb-it.css";
 
-/** Bomb It: pick Solo (bot-vs-bot self-play) or PvP (human-vs-human over a shared tunnel). */
-export const BombItWindow = createArenaWindow<BombItSession, PvpBombIt>({
+/** Bomb It: PvP (human-vs-human over a shared tunnel); Play joins the relay queue. */
+export const BombItWindow = createArenaWindow<PvpBombIt>({
   game: "bomb-it",
-  useSolo: useBombItSession,
   usePvp: usePvpBombIt,
   Lobby: BombLobby,
   screen: {
@@ -20,23 +18,6 @@ export const BombItWindow = createArenaWindow<BombItSession, PvpBombIt>({
     backBtnClass: `${BOMB_BTN} bomb-cta bomb-cta--full sketch-btn sketch-btn--ghost`,
   },
   matchingTitle: "Finding match",
-  errorEyebrow: false,
-  renderSoloBoard: (solo, onPlayAgain) => (
-    <BombBoard
-      view={solo.view!}
-      winner={solo.view!.winner}
-      role="A"
-      stake={solo.stake}
-      auto={solo.auto}
-      onToggleAuto={solo.toggleAuto}
-      onAction={solo.queueAction}
-      onPlayAgain={onPlayAgain}
-      score={solo.score}
-      gamesPlayed={solo.gamesPlayed}
-      onSettle={solo.status === "playing" ? solo.settleNow : undefined}
-      onBack={onPlayAgain}
-    />
-  ),
   renderPvpBoard: (pvp, onPlayAgain) => (
     <BombBoard
       view={pvp.view!}

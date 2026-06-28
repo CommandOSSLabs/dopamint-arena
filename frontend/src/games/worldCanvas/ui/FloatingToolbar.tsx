@@ -6,7 +6,7 @@ import {
   type ReactNode,
 } from "react";
 import { PALETTE, WC, FONT_MONO, shortAddress } from "./tokens";
-import type { PainterInfo } from "../useWorldCanvasOnchain";
+import type { PainterInfo } from "../canvasShared";
 
 /** The three lean tools: freehand draw, eraser (paints white), and pan/hand. */
 export type ToolId = "draw" | "erase" | "hand";

@@ -50,7 +50,7 @@ export const BET_OPTIONS = [25, 100, 500, 1000] as const;
  * `penalty_amount` on the dispute/force-close path, so capping the round's stake at this value
  * makes stalling never profitable (you can never have more on the line than you'd forfeit). It
  * also bounds what an offline party can lose to a single round's risk rather than their whole
- * stake. Callers that open the tunnel pass this as the penalty (see bjPvpOnchain / bjTunnel).
+ * stake. Callers that open the tunnel pass this as the penalty (see bjPvpOnchain).
  */
 export const MAX_BET = 1000n;
 const DEALER_STANDS_AT = 17;

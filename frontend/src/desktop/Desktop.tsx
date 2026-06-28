@@ -848,9 +848,8 @@ export function ArenaView() {
               onRestore={fl ? () => dockFloat(item.id) : undefined}
               onClose={() => close(item.id)}
             >
-              {/* Shared arcade cabinet + the game, isolated in a memo so a floor re-render
-                  (a sibling drag, a telemetry tick) doesn't re-render this game. Inert for
-                  games that don't register a CabinetController yet. */}
+              {/* The game, isolated in a memo so a floor re-render (a sibling drag, a
+                  telemetry tick) doesn't re-render this game. */}
               <GameContent
                 gameId={gameOf(item.id)}
                 windowId={item.id}

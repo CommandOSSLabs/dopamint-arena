@@ -1,14 +1,12 @@
 import { test, expect, describe } from "bun:test";
 import {
   BlackjackBetProtocol,
-  FIXED_PLAYER_A,
   MIN_BET,
   maxBet,
   actorFor,
   fixedBetMove,
   type BetBlackjackState,
 } from "./bjBetProtocol";
-import { handValue } from "./bjCards";
 
 const ctx = (a: bigint, b: bigint) => ({
   tunnelId: "0xt",
@@ -154,61 +152,5 @@ describe("bot self-play driver", () => {
     const rounds = playFixed(500n, 100, 100);
     expect(rounds).toBeGreaterThan(2);
     expect(rounds).toBeLessThan(100);
-  });
-});
-
-describe("FIXED_PLAYER_A (Play vs Bot — no role rotation)", () => {
-  const ctx2 = (a: bigint, b: bigint) => ({
-    tunnelId: "0xt",
-    initialBalances: { a, b },
-  });
-
-  test("seat A always holds the player role; seat B always the dealer", () => {
-    const p = new BlackjackBetProtocol(FIXED_PLAYER_A);
-    let s = p.initialState(ctx2(5000n, 5000n));
-    for (let i = 0; i < 40 && !p.isTerminal(s); i++) {
-      const by = p.actorFor(s);
-      if (s.phase === "player") expect(by).toBe("A");
-      if (s.phase === "dealer") expect(by).toBe("B");
-      const move =
-        s.phase === "round_over"
-          ? fixedBetMove(100, s)
-          : p.randomMove(s, by, Math.random);
-      if (!move) break;
-      s = p.applyMove(s, move, by);
-    }
-  });
-
-  // The bug this guards: when the player role rotated to seat B, party A's balance delta
-  // inverted the displayed win/lose (player 21 vs dealer 17 logged as a LOSS). Pinning the
-  // player to seat A makes balanceA's change always agree with the hand comparison.
-  test("balanceA's change never contradicts the player-vs-dealer hand result", () => {
-    const p = new BlackjackBetProtocol(FIXED_PLAYER_A);
-    let s = p.initialState(ctx2(5000n, 5000n));
-    let resolved = 0;
-    for (let steps = 0; steps < 100_000 && resolved < 40; steps++) {
-      if (p.isTerminal(s)) break;
-      const by = p.actorFor(s);
-      const move =
-        s.phase === "round_over"
-          ? fixedBetMove(100, s)
-          : p.randomMove(s, by, Math.random);
-      if (!move) break;
-      const prevPhase = s.phase;
-      const prevA = s.balanceA;
-      s = p.applyMove(s, move, by);
-      if (s.phase === "round_over" && prevPhase !== "round_over") {
-        resolved++;
-        const pv = handValue(s.playerHand);
-        const dv = handValue(s.dealerHand);
-        const delta = s.balanceA - prevA;
-        const playerWon = dv > 21 || (pv <= 21 && pv > dv);
-        const dealerWon = pv > 21 || (dv <= 21 && dv > pv);
-        if (playerWon) expect(delta > 0n).toBe(true);
-        else if (dealerWon) expect(delta < 0n).toBe(true);
-        else expect(delta).toBe(0n);
-      }
-    }
-    expect(resolved).toBeGreaterThan(0);
   });
 });

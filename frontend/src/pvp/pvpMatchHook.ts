@@ -109,8 +109,8 @@ export interface PvpMatch<State extends { winner: unknown }, Intent, View> {
   role: Role | null;
   /** Per-seat stake (MIST); surfaced in the outcome banner as the on-chain payout. */
   stake: number;
-  /** Auto mode for YOUR seat: on (default) = a bot plays it; off = you play. The opponent toggles
-   *  their own seat independently — both on = bot-vs-bot, both off = human-vs-human. */
+  /** Auto mode for YOUR seat: off (default) = you play; on = a bot plays it for you. The opponent
+   *  toggles their own seat independently — both off = human-vs-human, both on = bot-vs-bot. */
   auto: boolean;
   view: View | null;
   winner: State["winner"];
@@ -188,7 +188,7 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
 
   private status: PvpStatus = "idle";
   private role: Role | null = null;
-  private auto = true;
+  private auto = false;
   private view: View | null = null;
   private winner: State["winner"] = null as State["winner"];
   private error: string | null = null;
@@ -207,7 +207,7 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
       status: "idle",
       role: null,
       stake: Number(spec.stake),
-      auto: true,
+      auto: false,
       view: null,
       winner: null as State["winner"],
       error: null,
@@ -323,7 +323,7 @@ class PvpSession<State extends { winner: unknown }, Move, Intent, View> {
     this.dt = null;
     this.role = null;
     this.intent = this.spec.idleIntent;
-    this.auto = true;
+    this.auto = false;
     this.winner = null as State["winner"];
     this.status = "idle";
     this.view = null;
