@@ -31,16 +31,14 @@ async fn bot_plays_a_full_match_against_a_human_stand_in() {
             &anchor,
             DurableSigner::from_secret(&sa),
             Role::A,
-            "0xbotB",
-            1
+            "0xbotB"
         ),
         play_blackjack(
             chb,
             &anchor,
             DurableSigner::from_secret(&sb),
             Role::B,
-            "0xhumanA",
-            2
+            "0xhumanA"
         ),
     );
 

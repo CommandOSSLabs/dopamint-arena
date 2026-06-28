@@ -12,10 +12,9 @@
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context, Result};
-use tunnel_blackjack::Blackjack;
+use tunnel_blackjack::{Blackjack, BlackjackStrategy};
 use tunnel_harness::{
-    Balances, MoveStrategy, PartyDriver, PartyRuntime, Protocol, RandomMoveStrategy, Signer,
-    TunnelContext,
+    Balances, MoveStrategy, PartyDriver, PartyRuntime, Protocol, Signer, TunnelContext,
 };
 
 use crate::anchor::MatchAnchor;
@@ -138,15 +137,15 @@ pub const BLACKJACK: GameProfile = GameProfile {
     stake_each: 100,
 };
 
-/// Blackjack: a thin wrapper over the generic [`play_match`]. Another game is the same one call
-/// with its profile + protocol, e.g. `play_match(TicTacToe, strat, &TICTACTOE, &info, ch, a, s)`.
+/// Blackjack: a thin wrapper over the generic [`play_match`], driving the real basic-strategy
+/// [`BlackjackStrategy`]. Another game is the same one call with its profile + protocol +
+/// strategy, e.g. `play_match(TicTacToe, TicTacToeStrategy, &TICTACTOE, &info, ch, a, s)`.
 pub async fn play_blackjack<T: RelayTransport, A: MatchAnchor>(
     channel: MatchChannel<T>,
     anchor: &A,
     signer: DurableSigner,
     role: Role,
     opponent_wallet: &str,
-    move_seed: u64,
 ) -> Result<MatchOutcome> {
     let info = MatchInfo {
         match_id: String::new(),
@@ -155,7 +154,7 @@ pub async fn play_blackjack<T: RelayTransport, A: MatchAnchor>(
     };
     play_match(
         Blackjack,
-        RandomMoveStrategy::new(Arc::new(Blackjack), move_seed),
+        BlackjackStrategy,
         &BLACKJACK,
         &info,
         channel,
@@ -166,29 +165,28 @@ pub async fn play_blackjack<T: RelayTransport, A: MatchAnchor>(
 }
 
 /// Generic live runner for ANY game: connect, wait to be matched, play one match over the live WS
-/// using the default `RandomMoveStrategy`. `make_protocol` produces fresh protocol handles (the
-/// protocol structs aren't `Clone`) — one for the runtime, one for the strategy. Adding a game =
-/// call this with that game's `GameProfile` + protocol.
-pub async fn run_live_match<P, S, A>(
+/// driving the supplied `protocol` + `strategy`. Adding a game = call this with that game's
+/// `GameProfile` + protocol + `MoveStrategy` (e.g. `BlackjackStrategy`).
+pub async fn run_live_match<P, S, Strat, A>(
     config: &RelayConfig,
     connect_signer: &S,
     match_signer: DurableSigner,
     anchor: &A,
     profile: &GameProfile,
-    make_protocol: impl Fn() -> P,
-    move_seed: u64,
+    protocol: P,
+    strategy: Strat,
 ) -> Result<MatchOutcome>
 where
     P: Protocol,
     S: Signer,
+    Strat: MoveStrategy<P>,
     A: MatchAnchor,
 {
     let conn = RelayConnection::connect_and_join(config, connect_signer, profile.game_id).await?;
     let info = conn.await_match().await?;
     let channel = MatchChannel::new(WsRelayTransport::new(Arc::new(conn), info.match_id.clone()));
-    let strategy = RandomMoveStrategy::new(Arc::new(make_protocol()), move_seed);
     play_match(
-        make_protocol(),
+        protocol,
         strategy,
         profile,
         &info,
@@ -199,13 +197,12 @@ where
     .await
 }
 
-/// Blackjack live runner — a thin wrapper over [`run_live_match`].
+/// Blackjack live runner — a thin wrapper over [`run_live_match`] driving [`BlackjackStrategy`].
 pub async fn run_live_blackjack<S: Signer, A: MatchAnchor>(
     config: &RelayConfig,
     connect_signer: &S,
     match_signer: DurableSigner,
     anchor: &A,
-    move_seed: u64,
 ) -> Result<MatchOutcome> {
     run_live_match(
         config,
@@ -213,8 +210,8 @@ pub async fn run_live_blackjack<S: Signer, A: MatchAnchor>(
         match_signer,
         anchor,
         &BLACKJACK,
-        || Blackjack,
-        move_seed,
+        Blackjack,
+        BlackjackStrategy,
     )
     .await
 }

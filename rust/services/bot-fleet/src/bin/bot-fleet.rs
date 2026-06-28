@@ -54,8 +54,7 @@ async fn run_bot(idx: u32, ws_url: String) {
 
     loop {
         let match_key = DurableSigner::from_secret(&random_secret());
-        let seed = u64::from_le_bytes(random_secret()[..8].try_into().unwrap());
-        match run_live_blackjack(&config, &identity, match_key, &NoopAnchor, seed).await {
+        match run_live_blackjack(&config, &identity, match_key, &NoopAnchor).await {
             Ok(out) => println!(
                 "[bot {idx}] match {} done: {} moves, balances {:?}, settle {:?}",
                 out.tunnel_id, out.moves, out.final_balances, out.settle_digest
