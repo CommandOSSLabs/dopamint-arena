@@ -45,11 +45,7 @@ impl SeatKit {
 }
 
 /// Pump one seat's MOVE to the other and the ACK back until quiescent; returns bytes sent.
-fn deliver<P, C>(
-    proposer: &mut Seats<P, C>,
-    responder: &mut Seats<P, C>,
-    first: Vec<u8>,
-) -> usize
+fn deliver<P, C>(proposer: &mut Seats<P, C>, responder: &mut Seats<P, C>, first: Vec<u8>) -> usize
 where
     P: Protocol,
     C: FrameCodec<P::Move>,
@@ -252,7 +248,14 @@ pub fn play_blackjack_v2_seeded<C: FrameCodec<BlackjackV2Move> + Default>(
 ) -> MatchResult {
     play_protocol_match_seeded::<BlackjackV2, C>(
         BlackjackV2,
-        move_seed, kit, tunnel_id, balance_a, balance_b, created_at, max_moves, |_, _| {},
+        move_seed,
+        kit,
+        tunnel_id,
+        balance_a,
+        balance_b,
+        created_at,
+        max_moves,
+        |_, _| {},
     )
 }
 
