@@ -195,9 +195,21 @@ test("proposeDue returns true for owed commit and false once committed", () => {
   pump();
 
   // After B commits, neither seat owes a commit (phase moved to playing).
-  assert.equal(dtA.state.phase, "playing", "phase is playing after both commit");
-  assert.equal(proposeDue(dtA, "A", secretA), false, "A owes no commit in playing");
-  assert.equal(proposeDue(dtB, "B", secretB), false, "B owes no commit in playing");
+  assert.equal(
+    dtA.state.phase,
+    "playing",
+    "phase is playing after both commit",
+  );
+  assert.equal(
+    proposeDue(dtA, "A", secretA),
+    false,
+    "A owes no commit in playing",
+  );
+  assert.equal(
+    proposeDue(dtB, "B", secretB),
+    false,
+    "B owes no commit in playing",
+  );
 });
 
 test("proposeDue returns true for owed answer and false for the shooter", () => {
@@ -218,8 +230,16 @@ test("proposeDue returns true for owed answer and false for the shooter", () => 
 
   assert.equal(dtA.state.phase, "playing", "should be in playing phase");
   // No pendingShot yet: proposeDue returns false for both.
-  assert.equal(proposeDue(dtA, "A", secretA), false, "A owes nothing — no pending shot");
-  assert.equal(proposeDue(dtB, "B", secretB), false, "B owes nothing — no pending shot");
+  assert.equal(
+    proposeDue(dtA, "A", secretA),
+    false,
+    "A owes nothing — no pending shot",
+  );
+  assert.equal(
+    proposeDue(dtB, "B", secretB),
+    false,
+    "B owes nothing — no pending shot",
+  );
 
   // A fires first (A's turn).
   dtA.propose({ kind: "shoot", cell: 0 }, 0n);
@@ -314,8 +334,16 @@ test("proposeDue returns true for owed reveal_board and false once revealed", ()
 
   // After both reveals, game is over.
   assert.equal(dtA.state.phase, "over", "game is over after both reveals");
-  assert.equal(proposeDue(dtA, "A", secretA), false, "A owes nothing in over phase");
-  assert.equal(proposeDue(dtB, "B", secretB), false, "B owes nothing in over phase");
+  assert.equal(
+    proposeDue(dtA, "A", secretA),
+    false,
+    "A owes nothing in over phase",
+  );
+  assert.equal(
+    proposeDue(dtB, "B", secretB),
+    false,
+    "B owes nothing in over phase",
+  );
 });
 
 test("answerMove returns correct hit/miss for the fleet secret", () => {

@@ -1,7 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { makeBattleshipResumeAdapter } from "./battleshipResumeAdapter";
-import { makeFleetSecret, randomFleetSecret, secureSalt } from "./engine/selfPlay";
+import {
+  makeFleetSecret,
+  randomFleetSecret,
+  secureSalt,
+} from "./engine/selfPlay";
 import { placementsToBoard, type Placement } from "./engine/fleet";
 import { proposeDue } from "./engine/pvpDriver";
 import { BattleshipProtocol } from "sui-tunnel-ts/protocol/battleship";

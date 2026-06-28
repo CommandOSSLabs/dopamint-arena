@@ -59,7 +59,10 @@ function playOneGame(
 }
 
 test("protocol name is battleship.multi.v2", () => {
-  assert.equal(new MultiGameBattleshipProtocol(100n).name, "battleship.multi.v2");
+  assert.equal(
+    new MultiGameBattleshipProtocol(100n).name,
+    "battleship.multi.v2",
+  );
 });
 
 test("plays many games on one tunnel, conserving balances every step", () => {

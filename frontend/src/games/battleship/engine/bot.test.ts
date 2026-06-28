@@ -4,7 +4,10 @@ import assert from "node:assert/strict";
 import { BOT_CONFIGS, BOT_DIFFICULTIES, pickShot } from "./bot.ts";
 import { CELL_COUNT, cellAt, colOf, rowOf } from "./fleet.ts";
 import { BattleshipProtocol } from "sui-tunnel-ts/protocol/battleship.ts";
-import type { BattleshipState, BattleshipShotResult as ShotResult } from "sui-tunnel-ts/protocol/battleship.ts";
+import type {
+  BattleshipState,
+  BattleshipShotResult as ShotResult,
+} from "sui-tunnel-ts/protocol/battleship.ts";
 import { playToCompletion, randomFleetSecret } from "./selfPlay.ts";
 
 function mulberry32(seed: number): () => number {

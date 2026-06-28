@@ -43,7 +43,11 @@ import {
 } from "../../onchain/stakeTunnel";
 import { MTPS_COIN_TYPE, isMtpsConfigured } from "../../onchain/mtps";
 import { coSignedToSettleBody } from "../../backend/settleRequest";
-import { type FleetSecret, makeFleetSecret, secureSalt } from "./engine/selfPlay";
+import {
+  type FleetSecret,
+  makeFleetSecret,
+  secureSalt,
+} from "./engine/selfPlay";
 import { type Placement, placementsToBoard } from "./engine/fleet";
 import { proposeDue } from "./engine/pvpDriver";
 import { pickShot, BOT_CONFIGS, DEFAULT_BOT_DIFFICULTY } from "./engine/bot";
@@ -513,10 +517,7 @@ class PvpSession {
     installResumePersistence();
     evictExpiredRecords();
     this.placements = placements;
-    const secret = makeFleetSecret(
-      placementsToBoard(placements),
-      secureSalt(),
-    );
+    const secret = makeFleetSecret(placementsToBoard(placements), secureSalt());
     this.secret = secret;
     const signExec = deps.signExec;
     const sponsoredSignExec = deps.sponsoredSignExec;

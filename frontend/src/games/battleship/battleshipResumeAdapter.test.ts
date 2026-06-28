@@ -64,11 +64,22 @@ test("the fleet secret round-trips locally and never enters a resync/serializeSt
   const roundTripped = JSON.parse(JSON.stringify(cap)) as {
     fleet: { board: number[]; salt: number[] };
   };
-  assert.equal(roundTripped.fleet.salt.length, 16, "captured salt must be 16 bytes");
+  assert.equal(
+    roundTripped.fleet.salt.length,
+    16,
+    "captured salt must be 16 bytes",
+  );
   adapter.restoreSecret!(cap);
   const restoredSecret = stored as { board: Uint8Array; salt: Uint8Array };
-  assert.ok(restoredSecret.salt instanceof Uint8Array, "restored salt is a Uint8Array");
+  assert.ok(
+    restoredSecret.salt instanceof Uint8Array,
+    "restored salt is a Uint8Array",
+  );
   assert.equal(restoredSecret.salt.length, 16, "restored salt is 16 bytes");
-  assert.deepEqual(Array.from(restoredSecret.board), Array.from(secret.board), "board round-trips");
+  assert.deepEqual(
+    Array.from(restoredSecret.board),
+    Array.from(secret.board),
+    "board round-trips",
+  );
   assert.deepEqual(storedPlacements, placements);
 });

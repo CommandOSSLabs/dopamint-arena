@@ -62,9 +62,15 @@ export function nextMove(
 
   if (state.phase === "awaitingCommits") {
     if (state.commitA === null)
-      return { by: "A", move: { kind: "commit", commitment: secrets.A.commitment } };
+      return {
+        by: "A",
+        move: { kind: "commit", commitment: secrets.A.commitment },
+      };
     if (state.commitB === null)
-      return { by: "B", move: { kind: "commit", commitment: secrets.B.commitment } };
+      return {
+        by: "B",
+        move: { kind: "commit", commitment: secrets.B.commitment },
+      };
     return null;
   }
 
@@ -72,12 +78,20 @@ export function nextMove(
     if (!state.revealedA)
       return {
         by: "A",
-        move: { kind: "reveal_board", board: secrets.A.board, salt: secrets.A.salt },
+        move: {
+          kind: "reveal_board",
+          board: secrets.A.board,
+          salt: secrets.A.salt,
+        },
       };
     if (!state.revealedB)
       return {
         by: "B",
-        move: { kind: "reveal_board", board: secrets.B.board, salt: secrets.B.salt },
+        move: {
+          kind: "reveal_board",
+          board: secrets.B.board,
+          salt: secrets.B.salt,
+        },
       };
     return null;
   }

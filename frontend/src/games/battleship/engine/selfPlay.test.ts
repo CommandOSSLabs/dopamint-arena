@@ -31,7 +31,12 @@ test("self-play reaches a decisive terminal each game; balances conserved", () =
   for (let seed = 1; seed <= 20; seed++) {
     const rng = seeded(seed);
     const secrets = { A: randomFleetSecret(rng), B: randomFleetSecret(rng) };
-    const final = playToCompletion(proto, proto.initialState(ctx), secrets, rng);
+    const final = playToCompletion(
+      proto,
+      proto.initialState(ctx),
+      secrets,
+      rng,
+    );
     assert.equal(final.phase, "over");
     assert.equal(final.balanceA + final.balanceB, final.total);
     assert.ok(final.hitsOnA === FLEET_CELLS || final.hitsOnB === FLEET_CELLS);
