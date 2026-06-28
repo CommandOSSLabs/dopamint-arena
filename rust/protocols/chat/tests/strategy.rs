@@ -1,4 +1,4 @@
-use tunnel_chat::{strategy::ChatStrategy, Chat, ChatMove};
+use tunnel_chat::{Chat, ChatMove, ChatStrategy};
 use tunnel_harness::{Balances, MoveStrategy, MoveStrategyContext, Protocol, Seat, TunnelContext};
 
 fn ctx(initial: Balances) -> TunnelContext {
@@ -49,4 +49,29 @@ async fn confirm_and_abort_do_not_change_stateless_chat_decision() {
         .await;
 
     assert_eq!(before, after);
+}
+
+#[tokio::test]
+async fn tipped_strategy_move_applies_and_conserves_balances() {
+    let protocol = Chat;
+    let state = protocol.initial_state(&ctx(Balances { a: 100, b: 100 }));
+
+    for seed in 0..1000 {
+        let mut strategy = ChatStrategy::new(seed);
+        let planned = strategy
+            .plan_move(&state, Seat::A, &strategy_ctx(Seat::A))
+            .await
+            .unwrap();
+        if let Some(tip) = planned.tip {
+            assert!((1..=10).contains(&tip));
+            let next = protocol.apply_move(&state, &planned, Seat::A).unwrap();
+
+            assert_eq!(next.balance_a, 100 - tip);
+            assert_eq!(next.balance_b, 100 + tip);
+            assert_eq!(protocol.balances(&next).sum(), 200);
+            return;
+        }
+    }
+
+    panic!("no deterministic seed produced a chat tip");
 }

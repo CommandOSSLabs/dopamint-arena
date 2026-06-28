@@ -2,7 +2,11 @@ use tunnel_caro::{
     Caro, CaroMove, CaroSeries, CaroSeriesState, CaroSeriesStrategy, CaroState, CaroStrategy,
     CaroStrength, MARK_A,
 };
-use tunnel_harness::{Balances, MoveStrategy, MoveStrategyContext, Protocol, Seat, TunnelContext};
+use tunnel_core::crypto::keypair_from_secret;
+use tunnel_harness::{
+    Balances, InMemoryFrameTransport, LocalSigner, MoveStrategy, MoveStrategyContext, PartyDriver,
+    PartyRuntime, Protocol, Seat, TunnelContext,
+};
 
 fn ctx() -> TunnelContext {
     TunnelContext {
@@ -17,6 +21,23 @@ fn strategy_ctx(seat: Seat) -> MoveStrategyContext {
         tunnel_id: "caro-strategy".into(),
         seat,
     }
+}
+
+fn runtime(
+    seat: Seat,
+    secret: &[u8; 32],
+    opponent_pk: [u8; 32],
+) -> PartyRuntime<CaroSeries, LocalSigner> {
+    PartyRuntime::new(
+        CaroSeries::new(2, 15).unwrap(),
+        LocalSigner::from_secret(secret),
+        opponent_pk,
+        TunnelContext {
+            tunnel_id: "0xca70".into(),
+            initial: Balances { a: 100, b: 100 },
+            seat,
+        },
+    )
 }
 
 #[tokio::test]
@@ -78,6 +99,18 @@ async fn series_delegates_mid_game_and_only_a_rolls_between_games() {
         .plan_move(&state, Seat::B, &strategy_ctx(Seat::B))
         .await
         .is_none());
+
+    let rollover = a
+        .plan_move(&state, Seat::A, &strategy_ctx(Seat::A))
+        .await
+        .unwrap();
+    let next = protocol.apply_move(&state, &rollover, Seat::A).unwrap();
+
+    assert_eq!(next.games_played, 1);
+    assert_eq!(next.inner.moves_count, 0);
+    assert_eq!(next.inner.winner, 0);
+    assert!(next.inner.board.iter().all(|&cell| cell == 0));
+    assert_eq!(protocol.balances(&next), Balances { a: 100, b: 100 });
 }
 
 #[tokio::test]
@@ -103,4 +136,32 @@ async fn terminal_series_returns_none() {
         .plan_move(&state, Seat::A, &strategy_ctx(Seat::A))
         .await
         .is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn party_driver_series_self_play_conserves_balances() {
+    let secret_a: [u8; 32] = std::array::from_fn(|i| (i + 1) as u8);
+    let secret_b: [u8; 32] = std::array::from_fn(|i| (i + 33) as u8);
+    let pk_a = keypair_from_secret(&secret_a).public_key();
+    let pk_b = keypair_from_secret(&secret_b).public_key();
+    let (ch_a, ch_b) = InMemoryFrameTransport::pair();
+
+    let driver_a = PartyDriver::new(
+        runtime(Seat::A, &secret_a, pk_b),
+        CaroSeriesStrategy::with_seed(2, 15, CaroStrength::Strong, 1).unwrap(),
+        ch_a,
+    );
+    let driver_b = PartyDriver::new(
+        runtime(Seat::B, &secret_b, pk_a),
+        CaroSeriesStrategy::with_seed(2, 15, CaroStrength::Strong, 2).unwrap(),
+        ch_b,
+    );
+
+    let (out_a, out_b) = tokio::join!(driver_a.run(1000, || 1), driver_b.run(1000, || 1));
+    let out_a = out_a.unwrap();
+    let out_b = out_b.unwrap();
+
+    assert_eq!(out_a.final_balances, Balances { a: 100, b: 100 });
+    assert_eq!(out_a.final_balances, out_b.final_balances);
+    assert!(out_a.moves > 0);
 }

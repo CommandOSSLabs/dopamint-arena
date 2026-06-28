@@ -1,7 +1,7 @@
 use crate::{
     commit_board, commitment_root, prove_cell, shots_at, splitmix_next, Battleship, BattleshipMove,
     BattleshipPhase, BattleshipSeries, BattleshipSeriesState, BattleshipState, BattleshipWinner,
-    ShotResult, BOARD_SIZE, CELL_COUNT, FLEET_CELLS,
+    BOARD_SIZE, CELL_COUNT, FLEET_CELLS,
 };
 use tunnel_harness::{MoveStrategy, MoveStrategyContext, Seat};
 
@@ -19,8 +19,8 @@ impl BattleshipStrategy {
     pub fn new(seed: u64) -> Self {
         let mut rng_state = seed;
         let mut board = vec![0u8; CELL_COUNT];
-        for i in 0..FLEET_CELLS as usize {
-            board[i] = 1;
+        for cell in board.iter_mut().take(FLEET_CELLS as usize) {
+            *cell = 1;
         }
         let salts: Vec<[u8; 32]> = (0..CELL_COUNT)
             .map(|_| {
@@ -76,9 +76,9 @@ impl MoveStrategy<Battleship> for BattleshipStrategy {
     ) -> Option<BattleshipMove> {
         match state.phase {
             BattleshipPhase::AwaitingCommits => {
-                if state.commit_a.is_none() && seat == Seat::A {
-                    self.commit_move()
-                } else if state.commit_a.is_some() && state.commit_b.is_none() && seat == Seat::B {
+                let owes_commit = (state.commit_a.is_none() && seat == Seat::A)
+                    || (state.commit_a.is_some() && state.commit_b.is_none() && seat == Seat::B);
+                if owes_commit {
                     self.commit_move()
                 } else {
                     None
@@ -254,9 +254,4 @@ fn line_extensions(
     out.sort_unstable();
     out.dedup();
     out
-}
-
-#[allow(dead_code)]
-fn _shots_at_board(state: &BattleshipState, defender: Seat) -> &[ShotResult] {
-    shots_at(state, defender)
 }

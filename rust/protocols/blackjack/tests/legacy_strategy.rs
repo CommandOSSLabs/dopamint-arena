@@ -1,7 +1,5 @@
 use tunnel_blackjack::{
-    duel::{BlackjackDuel, BlackjackDuelStrategy},
-    strategy::BlackjackStrategy,
-    BjMove, Blackjack,
+    duel::BlackjackDuel, BjMove, Blackjack, BlackjackDuelStrategy, BlackjackStrategy,
 };
 use tunnel_harness::{Balances, MoveStrategy, MoveStrategyContext, Protocol, Seat, TunnelContext};
 

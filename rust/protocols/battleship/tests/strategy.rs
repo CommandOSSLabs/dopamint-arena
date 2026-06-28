@@ -2,7 +2,11 @@ use tunnel_battleship::{
     Battleship, BattleshipMove, BattleshipPhase, BattleshipSeries, BattleshipSeriesState,
     BattleshipSeriesStrategy, BattleshipState, BattleshipStrategy, BattleshipWinner, PendingShot,
 };
-use tunnel_harness::{Balances, MoveStrategy, MoveStrategyContext, Protocol, Seat, TunnelContext};
+use tunnel_core::crypto::keypair_from_secret;
+use tunnel_harness::{
+    Balances, InMemoryFrameTransport, LocalSigner, MoveStrategy, MoveStrategyContext, PartyDriver,
+    PartyRuntime, Protocol, Seat, TunnelContext,
+};
 
 fn ctx(initial: Balances) -> TunnelContext {
     TunnelContext {
@@ -17,6 +21,23 @@ fn strategy_ctx(seat: Seat) -> MoveStrategyContext {
         tunnel_id: "battleship-strategy".into(),
         seat,
     }
+}
+
+fn runtime(
+    seat: Seat,
+    secret: &[u8; 32],
+    opponent_pk: [u8; 32],
+) -> PartyRuntime<BattleshipSeries, LocalSigner> {
+    PartyRuntime::new(
+        BattleshipSeries::new("party-driver-battleship", 100),
+        LocalSigner::from_secret(secret),
+        opponent_pk,
+        TunnelContext {
+            tunnel_id: "0xba77".into(),
+            initial: Balances { a: 200, b: 200 },
+            seat,
+        },
+    )
 }
 
 fn finished_series_state(balance_a: u64, balance_b: u64, stake: u64) -> BattleshipSeriesState {
@@ -97,6 +118,75 @@ async fn defender_reveals_pending_shot() {
 }
 
 #[tokio::test]
+async fn planned_commit_shoot_and_reveal_apply_cleanly() {
+    let protocol = Battleship::new(100);
+    let mut state = protocol.initial_state(&ctx(Balances { a: 200, b: 200 }));
+    let mut a = BattleshipStrategy::new(1);
+    let mut b = BattleshipStrategy::new(2);
+
+    let commit_a = a
+        .plan_move(&state, Seat::A, &strategy_ctx(Seat::A))
+        .await
+        .expect("seat A should commit first");
+    state = protocol.apply_move(&state, &commit_a, Seat::A).unwrap();
+
+    let commit_b = b
+        .plan_move(&state, Seat::B, &strategy_ctx(Seat::B))
+        .await
+        .expect("seat B should commit after A");
+    state = protocol.apply_move(&state, &commit_b, Seat::B).unwrap();
+    assert_eq!(state.phase, BattleshipPhase::Playing);
+
+    let shoot = a
+        .plan_move(&state, Seat::A, &strategy_ctx(Seat::A))
+        .await
+        .expect("seat A should shoot on turn");
+    state = protocol.apply_move(&state, &shoot, Seat::A).unwrap();
+    assert!(matches!(
+        state.pending_shot,
+        Some(PendingShot { by: Seat::A, .. })
+    ));
+
+    let reveal = b
+        .plan_move(&state, Seat::B, &strategy_ctx(Seat::B))
+        .await
+        .expect("seat B should reveal the pending shot");
+    state = protocol.apply_move(&state, &reveal, Seat::B).unwrap();
+
+    assert!(state.pending_shot.is_none());
+    assert_eq!(state.turn, Seat::B);
+    assert_eq!(protocol.balances(&state).sum(), 400);
+}
+
+#[tokio::test]
+async fn direct_strategy_play_reaches_terminal_and_conserves_balances() {
+    let protocol = Battleship::new(100);
+    let mut state = protocol.initial_state(&ctx(Balances { a: 200, b: 200 }));
+    let mut a = BattleshipStrategy::new(1);
+    let mut b = BattleshipStrategy::new(2);
+
+    for _ in 0..1000 {
+        if state.phase == BattleshipPhase::Over {
+            assert_eq!(protocol.balances(&state).sum(), 400);
+            return;
+        }
+
+        let mut moved = false;
+        if let Some(mv) = a.plan_move(&state, Seat::A, &strategy_ctx(Seat::A)).await {
+            state = protocol.apply_move(&state, &mv, Seat::A).unwrap();
+            moved = true;
+        }
+        if let Some(mv) = b.plan_move(&state, Seat::B, &strategy_ctx(Seat::B)).await {
+            state = protocol.apply_move(&state, &mv, Seat::B).unwrap();
+            moved = true;
+        }
+        assert!(moved, "at least one strategy should advance the game");
+    }
+
+    panic!("strategy self-play did not reach terminal state");
+}
+
+#[tokio::test]
 async fn series_strategy_uses_configured_stake_and_serializes_rollover_commit() {
     let protocol = BattleshipSeries::new("series", 50);
     let state = finished_series_state(75, 125, 50);
@@ -132,4 +222,32 @@ async fn terminal_series_returns_no_rollover_move() {
         .plan_move(&state, Seat::A, &strategy_ctx(Seat::A))
         .await
         .is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn party_driver_series_self_play_conserves_balances() {
+    let secret_a: [u8; 32] = std::array::from_fn(|i| (i + 1) as u8);
+    let secret_b: [u8; 32] = std::array::from_fn(|i| (i + 33) as u8);
+    let pk_a = keypair_from_secret(&secret_a).public_key();
+    let pk_b = keypair_from_secret(&secret_b).public_key();
+    let (ch_a, ch_b) = InMemoryFrameTransport::pair();
+
+    let driver_a = PartyDriver::new(
+        runtime(Seat::A, &secret_a, pk_b),
+        BattleshipSeriesStrategy::new(1, 100),
+        ch_a,
+    );
+    let driver_b = PartyDriver::new(
+        runtime(Seat::B, &secret_b, pk_a),
+        BattleshipSeriesStrategy::new(2, 100),
+        ch_b,
+    );
+
+    let (out_a, out_b) = tokio::join!(driver_a.run(1000, || 1), driver_b.run(1000, || 1));
+    let out_a = out_a.unwrap();
+    let out_b = out_b.unwrap();
+
+    assert_eq!(out_a.final_balances.sum(), 400);
+    assert_eq!(out_a.final_balances, out_b.final_balances);
+    assert!(out_a.moves > 0);
 }

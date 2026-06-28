@@ -11,7 +11,7 @@ use tunnel_harness::Seat;
 pub mod duel;
 pub mod strategy;
 pub mod v2;
-pub use strategy::BlackjackStrategy;
+pub use strategy::{BlackjackDuelStrategy, BlackjackStrategy};
 
 pub type Party = Seat;
 
