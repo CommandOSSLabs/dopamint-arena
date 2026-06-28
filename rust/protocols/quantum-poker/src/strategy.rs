@@ -303,40 +303,51 @@ impl QuantumPokerPersonaStrategy {
         }
         let tuning = self.profile.strategy_tuning();
         let holes = self.known_hole_cards(state, seat).unwrap_or_default();
-        let strength = estimate_strength(state, &holes);
-        let call_amount = street_bet(state, seat.other()).saturating_sub(street_bet(state, seat));
-        let available = balance(state, seat).saturating_sub(total_bet(state, seat));
+        let profile = estimate_strength_profile(state, seat, &holes);
         let roll = self.base.next_f64();
-        if call_amount > 0 {
-            if call_amount > available {
+        if profile.call_amount > 0 {
+            if profile.call_amount > profile.available {
                 return Some(PokerMove::Fold);
             }
-            let pot = state.total_bet_a + state.total_bet_b;
-            let pot_odds = amount_ratio(call_amount, pot + call_amount);
-            let pressure = amount_ratio(call_amount, available + call_amount);
-            let threshold = if state.board.len() >= 5 {
-                pot_odds + 0.08 + pressure * 0.16 + tuning.call_threshold - roll * 0.025
-            } else if state.board.len() < 3 {
-                0.38 + pressure * 0.5 + tuning.call_threshold - roll * 0.035
+            if !profile.preflop
+                && profile.strong_draw
+                && profile.pot_odds <= 0.18 - tuning.call_threshold + roll * 0.015
+            {
+                return Some(PokerMove::Call);
+            }
+            let threshold = if profile.river {
+                profile.pot_odds + 0.08 + profile.pressure * 0.16 + tuning.call_threshold
+                    - roll * 0.025
+            } else if profile.preflop {
+                0.38 + profile.pressure * 0.5 + tuning.call_threshold - roll * 0.035
             } else {
-                pot_odds + 0.055 + pressure * 0.08 + tuning.call_threshold - roll * 0.025
+                profile.pot_odds + 0.055 + profile.pressure * 0.08 + tuning.call_threshold
+                    - roll * 0.025
             };
-            return Some(if strength >= threshold {
+            return Some(if profile.strength >= threshold {
                 PokerMove::Call
             } else {
                 PokerMove::Fold
             });
         }
-        if available > 0 {
-            let threshold = if state.board.len() < 3 {
-                0.72 + tuning.raise_threshold - roll * 0.025
+        if profile.available > 0 {
+            let should_bet = if profile.preflop {
+                profile.strength >= 0.72 + tuning.raise_threshold - roll * 0.025
             } else if state.board.len() >= 5 {
-                0.38 + tuning.raise_threshold - roll * 0.02
+                profile.strength >= 0.38 + tuning.raise_threshold - roll * 0.02
             } else {
-                0.30 + tuning.raise_threshold - roll * 0.02
+                let value_bet = profile.strength >= 0.30 + tuning.raise_threshold - roll * 0.02;
+                let semi_bluff = profile.strong_draw
+                    && profile.strength >= 0.48 + tuning.semi_bluff_threshold - roll * 0.02;
+                value_bet || semi_bluff
             };
-            if strength >= threshold {
-                let amount = persona_bet_amount(state, available, strength);
+            if should_bet {
+                let amount = persona_bet_amount(
+                    state,
+                    profile.available,
+                    profile.strength,
+                    profile.strong_draw,
+                );
                 if amount > 0 {
                     return Some(PokerMove::Bet { amount });
                 }
@@ -389,6 +400,40 @@ fn suited(a: u8, b: u8) -> bool {
     a / 13 == b / 13
 }
 
+#[derive(Clone, Copy, Debug)]
+struct PersonaStrengthProfile {
+    strength: f64,
+    pot_odds: f64,
+    pressure: f64,
+    call_amount: u64,
+    available: u64,
+    preflop: bool,
+    river: bool,
+    strong_draw: bool,
+}
+
+fn estimate_strength_profile(
+    state: &PokerState,
+    seat: Seat,
+    holes: &[u8],
+) -> PersonaStrengthProfile {
+    let call_amount = street_bet(state, seat.other()).saturating_sub(street_bet(state, seat));
+    let available = balance(state, seat).saturating_sub(total_bet(state, seat));
+    let pot = state.total_bet_a + state.total_bet_b;
+    let preflop = state.board.len() < 3;
+    let river = state.board.len() >= 5;
+    PersonaStrengthProfile {
+        strength: estimate_strength(state, holes),
+        pot_odds: amount_ratio(call_amount, pot + call_amount),
+        pressure: amount_ratio(call_amount, available + call_amount),
+        call_amount,
+        available,
+        preflop,
+        river,
+        strong_draw: estimate_strong_draw(holes, &state.board),
+    }
+}
+
 fn preflop_strength(holes: &[u8]) -> f64 {
     if holes.len() < 2 {
         return 0.42;
@@ -416,6 +461,18 @@ fn preflop_strength(holes: &[u8]) -> f64 {
             0.32 + low / 45.0
         };
         ace + suited_boost
+    } else if high == 13.0 && low >= 10.0 {
+        let king = if low == 12.0 {
+            0.66
+        } else if low == 11.0 {
+            0.59
+        } else {
+            0.52
+        };
+        king + suited_boost
+    } else if high == 12.0 && low >= 10.0 {
+        let queen = if low == 11.0 { 0.57 } else { 0.49 };
+        queen + suited_boost
     } else {
         let connector = if gap == 1.0 {
             0.08
@@ -427,6 +484,30 @@ fn preflop_strength(holes: &[u8]) -> f64 {
         0.24 + high / 62.0 + low / 82.0 + connector + suited_boost
     };
     value.clamp(0.0, 1.0)
+}
+
+fn estimate_strong_draw(holes: &[u8], board: &[u8]) -> bool {
+    if board.len() < 3 || board.len() >= 5 {
+        return false;
+    }
+    let mut suit_counts = [0u8; 4];
+    let mut ranks = [false; 15];
+    for card in holes
+        .iter()
+        .filter(|card| !board.contains(card))
+        .chain(board.iter())
+    {
+        suit_counts[(card / 13) as usize] += 1;
+        let rank = rank_value(*card) as usize;
+        ranks[rank] = true;
+        if rank == 14 {
+            ranks[1] = true;
+        }
+    }
+    if suit_counts.iter().any(|count| *count >= 4) {
+        return true;
+    }
+    (1..=10).any(|start| (start..start + 5).filter(|rank| ranks[*rank]).count() >= 4)
 }
 
 fn estimate_strength(state: &PokerState, holes: &[u8]) -> f64 {
@@ -451,12 +532,19 @@ fn estimate_strength(state: &PokerState, holes: &[u8]) -> f64 {
     ((category as f64 / 9.0) * 0.86 + high_card_lift).clamp(0.0, 1.0)
 }
 
-fn persona_bet_amount(state: &PokerState, available: u64, strength: f64) -> u64 {
+fn persona_bet_amount(state: &PokerState, available: u64, strength: f64, strong_draw: bool) -> u64 {
     let pot = (state.total_bet_a + state.total_bet_b).max(100);
-    let fraction = if strength >= 0.84 {
+    let premium_value = if state.board.len() < 3 {
+        strength >= 0.84
+    } else {
+        strength >= if state.board.len() >= 5 { 0.62 } else { 0.58 }
+    };
+    let fraction = if premium_value {
         0.9
     } else if strength >= 0.5 {
         0.7
+    } else if strong_draw {
+        0.45
     } else {
         0.5
     };
@@ -653,6 +741,33 @@ mod tests {
         assert!(loose.raise_threshold < 0.0);
     }
 
+    #[test]
+    fn persona_preflop_strength_matches_broadway_special_cases() {
+        assert_close(preflop_strength(&[11, 10]), 0.705);
+        assert_close(preflop_strength(&[11, 22]), 0.59);
+        assert_close(preflop_strength(&[10, 9]), 0.615);
+        assert_close(preflop_strength(&[10, 21]), 0.49);
+    }
+
+    #[test]
+    fn persona_detects_strong_flush_and_straight_draws_only_before_river() {
+        assert!(estimate_strong_draw(&[0, 2], &[4, 6, 20]));
+        assert!(estimate_strong_draw(&[3, 4], &[5, 6, 20]));
+        assert!(!estimate_strong_draw(&[0, 2], &[4, 20]));
+        assert!(!estimate_strong_draw(&[0, 2], &[4, 6, 8, 20, 22]));
+    }
+
+    #[test]
+    fn persona_draw_bet_sizing_uses_ts_pot_control_fraction() {
+        let mut state = QuantumPoker::default().initial_state(&ctx());
+        state.phase = PokerPhase::TurnBet;
+        state.board = vec![0, 2, 4, 20];
+        state.total_bet_a = 100;
+        state.total_bet_b = 100;
+
+        assert_eq!(persona_bet_amount(&state, 1000, 0.49, true), 90);
+    }
+
     #[tokio::test]
     async fn persona_strategy_reuses_commit_reveal_and_can_complete_hand() {
         let protocol = QuantumPoker::new(1);
@@ -676,5 +791,12 @@ mod tests {
         }
 
         assert!(protocol.is_terminal(&state));
+    }
+
+    fn assert_close(actual: f64, expected: f64) {
+        assert!(
+            (actual - expected).abs() < 0.000_001,
+            "expected {expected}, got {actual}"
+        );
     }
 }
