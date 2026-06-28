@@ -16,7 +16,8 @@ import {
 } from "sui-tunnel-ts/protocol/battleship";
 import { battleshipMoveCodec } from "sui-tunnel-ts/protocol/battleshipCodec";
 import { FLEET_CELLS } from "./fleet";
-import { type FleetSecret, randomFleetSecret, nextMove } from "./selfPlay";
+import { type FleetSecret, randomFleetSecret } from "./selfPlay";
+import { pickShot, BOT_CONFIGS } from "./bot";
 import { computeCommitment } from "sui-tunnel-ts/core/commitment";
 import { proposeDue, answerMove } from "./pvpDriver";
 
@@ -102,32 +103,36 @@ function driveToCompletion(
   pump: () => void,
   rng: () => number,
 ): void {
-  // Each seat holds only its own fleet; pass a placeholder for the opponent's.
-  const placeholder: FleetSecret = {
-    board: new Uint8Array(100),
-    salt: new Uint8Array(16),
-    commitment: new Uint8Array(32),
-  };
-  const localA = { A: secretA, B: placeholder };
-  const localB = { A: placeholder, B: secretB };
-
   for (let i = 0; i < 5000; i++) {
     const state = dtA.state;
     if (state.phase === "over") break;
 
-    // Prefer proposeDue for the auto-moves (commit / answer / reveal_board);
-    // fall back to nextMove for shots (human-driven in real game).
-    const drivenA = nextMove(state, localA, rng);
-    const drivenB = nextMove(state, localB, rng);
-    const driven =
-      drivenA && drivenA.by === "A"
-        ? { dt: dtA, ...drivenA }
-        : drivenB && drivenB.by === "B"
-          ? { dt: dtB, ...drivenB }
-          : null;
-    if (!driven) break;
-    driven.dt.propose(driven.move, BigInt(i + 1));
-    pump();
+    // proposeDue handles commit / answer / reveal_board; shots are picked here.
+    if (proposeDue(dtA, "A", secretA)) {
+      pump();
+      continue;
+    }
+    if (proposeDue(dtB, "B", secretB)) {
+      pump();
+      continue;
+    }
+
+    // Neither seat owes an auto-move — it must be a shot turn.
+    if (state.phase === "playing" && !state.pendingShot) {
+      const shooter = state.turn;
+      const dt = shooter === "A" ? dtA : dtB;
+      dt.propose(
+        {
+          kind: "shoot",
+          cell: pickShot(state, shooter, rng, BOT_CONFIGS["hard"]),
+        },
+        BigInt(i + 1),
+      );
+      pump();
+      continue;
+    }
+
+    break;
   }
 }
 
@@ -272,30 +277,37 @@ test("proposeDue returns true for owed reveal_board and false once revealed", ()
 
   // Manually construct a revealBoards state on both tunnels by driving
   // the game to completion up to the reveal phase.
-  const placeholder: FleetSecret = {
-    board: new Uint8Array(100),
-    salt: new Uint8Array(16),
-    commitment: new Uint8Array(32),
-  };
-  const localA = { A: secretA, B: placeholder };
-  const localB = { A: placeholder, B: secretB };
   const rng = mulberry32(402);
 
   // Drive the game forward until the phase becomes revealBoards.
   for (let i = 0; i < 5000; i++) {
     const state = dtA.state;
     if (state.phase === "revealBoards" || state.phase === "over") break;
-    const drivenA = nextMove(state, localA, rng);
-    const drivenB = nextMove(state, localB, rng);
-    const driven =
-      drivenA && drivenA.by === "A"
-        ? { dt: dtA, ...drivenA }
-        : drivenB && drivenB.by === "B"
-          ? { dt: dtB, ...drivenB }
-          : null;
-    if (!driven) break;
-    driven.dt.propose(driven.move, BigInt(i + 1));
-    pump();
+
+    if (proposeDue(dtA, "A", secretA)) {
+      pump();
+      continue;
+    }
+    if (proposeDue(dtB, "B", secretB)) {
+      pump();
+      continue;
+    }
+
+    if (state.phase === "playing" && !state.pendingShot) {
+      const shooter = state.turn;
+      const dt = shooter === "A" ? dtA : dtB;
+      dt.propose(
+        {
+          kind: "shoot",
+          cell: pickShot(state, shooter, rng, BOT_CONFIGS["hard"]),
+        },
+        BigInt(i + 1),
+      );
+      pump();
+      continue;
+    }
+
+    break;
   }
 
   if (dtA.state.phase !== "revealBoards") {
