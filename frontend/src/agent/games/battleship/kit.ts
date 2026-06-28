@@ -22,6 +22,8 @@ export interface BattleshipBotConfig {
   difficulty?: BotDifficulty;
   /** Use this fleet instead of a fresh random one (spectator / human-fleet bot). */
   secret?: FleetSecret;
+  /** Miss-answer carries the return shot (bench TPS). Default true; false = bare. */
+  pipeline?: boolean;
 }
 
 class BattleshipBot implements GameBot<BattleshipState, BattleshipMove> {
@@ -29,12 +31,14 @@ class BattleshipBot implements GameBot<BattleshipState, BattleshipMove> {
   private readonly secret: FleetSecret;
   private readonly rng: () => number;
   private readonly difficulty: BotDifficulty;
+  private readonly pipeline: boolean;
 
   constructor(seat: Party, ctx: BotContext, config: BattleshipBotConfig) {
     this.seat = seat;
     this.rng = ctx.rngForSeat(seat);
     this.secret = config.secret ?? randomFleetSecret(this.rng);
     this.difficulty = config.difficulty ?? DEFAULT_BOT_DIFFICULTY;
+    this.pipeline = config.pipeline ?? true;
   }
 
   plan(state: BattleshipState): BattleshipMove | null {
@@ -63,8 +67,10 @@ class BattleshipBot implements GameBot<BattleshipState, BattleshipMove> {
       if (otherParty(state.pendingShot.by) !== this.seat) return null;
       const isHit = this.secret.board[state.pendingShot.cell] === 1;
       if (isHit) return { kind: "answer", isHit: true };
-      // Miss: this seat takes the turn. Pipeline the return shot for bench TPS.
-      // pickShot always returns an unfired cell (see its JSDoc), so no fired-set guard needed.
+      // Miss: this seat takes the turn. When pipelining (bench / bot seat) fold the
+      // return shot into the answer for fewer co-signed messages; bare otherwise so
+      // a human seat fires its own shot. pickShot never returns a fired cell.
+      if (!this.pipeline) return { kind: "answer", isHit: false };
       const next = pickShot(
         state,
         this.seat,
