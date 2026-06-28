@@ -108,7 +108,7 @@ impl HeartbeatReporter {
             tunnel_id: self.tunnel_id.clone(),
             nonce: self.last_nonce.to_string(),
             actions_delta: self.actions,
-            window_ms: window,
+            window_ms: window.max(1),
         };
         self.actions = 0;
         self.last_flush_ms = Some(self.last_ts_ms);
@@ -228,6 +228,17 @@ mod tests {
         assert_eq!(p.nonce, "8");
         assert_eq!(p.window_ms, 300);
         assert_eq!(r.drain(), None); // nothing left
+    }
+
+    #[test]
+    fn drain_clamps_single_action_window_to_one_ms() {
+        // Single move at ts=0: base = 0, last_ts = 0, window = 0 → must clamp to 1.
+        let mut r = reporter(Seat::A);
+        assert_eq!(r.record(&ev(1, 1, 0)), None);
+        let p = r.drain().expect("trailing flush");
+        assert_eq!(p.actions_delta, 1);
+        assert_eq!(p.window_ms, 1);
+        assert_eq!(r.drain(), None);
     }
 
     use wiremock::matchers::{header, method, path};
