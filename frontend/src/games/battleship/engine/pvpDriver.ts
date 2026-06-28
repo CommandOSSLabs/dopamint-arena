@@ -46,8 +46,12 @@ export function proposeDue(
   }
 
   if (st.phase === "revealBoards") {
-    const revealed = role === "A" ? st.revealedA : st.revealedB;
-    if (revealed) return false;
+    const myRevealed = role === "A" ? st.revealedA : st.revealedB;
+    if (myRevealed) return false;
+    // Reveals are ordered A-then-B (like commits) so the two seats never propose
+    // at the same nonce — B reveals only once A's reveal is confirmed.
+    const myTurnToReveal = role === "A" ? !st.revealedA : st.revealedA;
+    if (!myTurnToReveal) return false;
     dt.propose(
       { kind: "reveal_board", board: secret.board, salt: secret.salt },
       0n,

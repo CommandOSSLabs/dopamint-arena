@@ -283,16 +283,22 @@ test("proposeDue returns true for owed reveal_board and false once revealed", ()
     return;
   }
 
-  // In revealBoards phase: proposeDue returns true for the first proposer.
-  // Reveal A first (proposeDue proposes AND returns true in one call).
+  // Ordering: A goes first, B waits until A's reveal is confirmed.
   assert.equal(
     proposeDue(dtA, "A", secretA),
     true,
-    "A owes reveal_board",
+    "A owes reveal_board — A's turn first",
   );
+  assert.equal(
+    proposeDue(dtB, "B", secretB),
+    false,
+    "B does not propose yet — must wait for A's reveal to be confirmed",
+  );
+
+  // Confirm A's reveal; now B's turn.
   pump();
 
-  // After A reveals, B still owes a reveal — proposeDue returns true.
+  // After A reveals, B owes its reveal.
   assert.equal(
     proposeDue(dtB, "B", secretB),
     true,
