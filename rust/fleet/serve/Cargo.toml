@@ -1,0 +1,19 @@
+[package]
+name = "fleet-serve"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+tunnel-core = { path = "../../engine/tunnel-core" }
+tunnel-harness = { path = "../../engine/tunnel-harness" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tunnel-blackjack = { path = "../../protocols/blackjack" }
+tunnel-payments = { path = "../../protocols/payments" }
+hex.workspace = true

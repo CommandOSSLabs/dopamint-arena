@@ -1328,6 +1328,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c9ea0ac24bc397ab3c98583a3c9ba74fa56b09a4449bbe172b9b1ddb016027a"
 
 [[package]]
+name = "cobs"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0fa961b519f0b462e3a3b4a34b64d119eeaca1d59af726fe450bbba07a9fc0a1"
+dependencies = [
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "colorchoice"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2112,6 +2121,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "embedded-io"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ef1a6892d9eef45c8fa6b9e0086428a2cca8491aca8f787c534a3d6d0bcb3ced"
+
+[[package]]
+name = "embedded-io"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "edd0f118536f44f5ccd48bcb8b111bdc3de888b58c74639dfb034a357d0f206d"
+
+[[package]]
 name = "enum-compat-util"
 version = "0.1.0"
 source = "git+https://github.com/MystenLabs/sui.git?branch=testnet#ff1fe0ec455153707136cffd0dc77dfb77ba9ad5"
@@ -2446,6 +2467,34 @@ checksum = "843fba2746e448b37e26a819579957415c8cef339bf08564fe8b7ddbd959573c"
 dependencies = [
  "crc32fast",
  "miniz_oxide",
+]
+
+[[package]]
+name = "fleet-bench"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "getrandom 0.2.17",
+ "hex",
+ "rayon",
+ "sysinfo",
+ "tunnel-blackjack",
+ "tunnel-core",
+ "tunnel-harness",
+]
+
+[[package]]
+name = "fleet-serve"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tunnel-blackjack",
+ "tunnel-core",
+ "tunnel-harness",
+ "tunnel-payments",
 ]
 
 [[package]]
@@ -4510,6 +4559,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c33a9471896f1c69cecef8d20cbe2f7accd12527ce60845ff44c153bb2a21b49"
 
 [[package]]
+name = "postcard"
+version = "1.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6764c3b5dd454e283a30e6dfe78e9b31096d9e32036b5d1eaac7a6119ccb9a24"
+dependencies = [
+ "cobs",
+ "embedded-io 0.4.0",
+ "embedded-io 0.6.1",
+ "serde",
+]
+
+[[package]]
 name = "postgres-protocol"
 version = "0.6.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5193,20 +5254,6 @@ dependencies = [
  "spki",
  "subtle",
  "zeroize",
-]
-
-[[package]]
-name = "rustbench"
-version = "0.1.0"
-dependencies = [
- "blake2",
- "clap",
- "ed25519-dalek",
- "getrandom 0.2.17",
- "hex",
- "rayon",
- "serde_json",
- "sysinfo",
 ]
 
 [[package]]
@@ -7352,6 +7399,99 @@ dependencies = [
 ]
 
 [[package]]
+name = "tunnel-api-credits"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tunnel-core",
+ "tunnel-harness",
+]
+
+[[package]]
+name = "tunnel-battleship"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "tunnel-core",
+ "tunnel-harness",
+]
+
+[[package]]
+name = "tunnel-blackjack"
+version = "0.1.0"
+dependencies = [
+ "bcs 0.2.1",
+ "hex",
+ "serde",
+ "serde_json",
+ "tunnel-core",
+ "tunnel-harness",
+]
+
+[[package]]
+name = "tunnel-bomb-it"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tunnel-core",
+ "tunnel-harness",
+]
+
+[[package]]
+name = "tunnel-caro"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "tunnel-core",
+ "tunnel-harness",
+]
+
+[[package]]
+name = "tunnel-chat"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tunnel-core",
+ "tunnel-harness",
+]
+
+[[package]]
+name = "tunnel-core"
+version = "0.1.0"
+dependencies = [
+ "blake2",
+ "ed25519-dalek",
+ "hex",
+]
+
+[[package]]
+name = "tunnel-cross"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tunnel-core",
+ "tunnel-harness",
+]
+
+[[package]]
+name = "tunnel-harness"
+version = "0.1.0"
+dependencies = [
+ "bcs 0.2.1",
+ "hex",
+ "postcard",
+ "serde",
+ "serde-big-array",
+ "serde_json",
+ "tokio",
+ "tunnel-core",
+]
+
+[[package]]
 name = "tunnel-manager"
 version = "0.1.0"
 dependencies = [
@@ -7383,6 +7523,46 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "wiremock",
+]
+
+[[package]]
+name = "tunnel-payments"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "serde",
+ "serde_json",
+ "tunnel-core",
+ "tunnel-harness",
+]
+
+[[package]]
+name = "tunnel-quantum-poker"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "tunnel-core",
+ "tunnel-harness",
+]
+
+[[package]]
+name = "tunnel-tic-tac-toe"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tunnel-core",
+ "tunnel-harness",
+]
+
+[[package]]
+name = "tunnel-world-canvas"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tunnel-core",
+ "tunnel-harness",
 ]
 
 [[package]]

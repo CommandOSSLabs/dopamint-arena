@@ -1,0 +1,12 @@
+[package]
+name = "tunnel-core"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+blake2.workspace = true
+ed25519-dalek.workspace = true
+hex.workspace = true

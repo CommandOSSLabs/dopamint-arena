@@ -40,6 +40,13 @@ Funding builders live in `frontend/src/onchain/tunnelTx.ts` (grep `openAndFundSe
 
 ## The protocol contract
 
+Pick the canonical protocol ID before writing code. Canonical IDs follow
+[ADR-0022](../decisions/0022-canonical-protocol-id-naming.md): use `snake_case`
+inside a segment, `.` between semantic segments, and always end with `.vN`.
+Use `.series.vN` for repeated rounds over one tunnel; do not introduce new
+`.multi.v1` IDs. Examples: `tic_tac_toe.v1`, `bomb_it.series.v1`,
+`world_canvas.stroke.v1`.
+
 Implement the generic interface in `sui-tunnel-ts/src/protocol/Protocol.ts` (grep `interface Protocol`). Copy an existing protocol file in `sui-tunnel-ts/src/protocol/` as the structural template; read `sui-tunnel-ts/src/protocol/index.ts` for the current set and the barrel export to add to.
 
 | Method                       | Contract                                                                       |
@@ -153,6 +160,22 @@ cd frontend && pnpm build      # tsc + vite; a passing build confirms single reg
 ```
 
 The on-chain self-play/PvP flow needs a wallet + the `sui_tunnel` package deployed at `VITE_TUNNEL_PACKAGE_ID` (grep `VITE_TUNNEL_PACKAGE_ID`) — test it manually in `pnpm dev`; headless tools cannot pass the wallet gate.
+
+## Rust port checklist
+
+New canonical protocols should have a Rust design note under
+`docs/design/protocol-ports/` before porting. The generic Rust boundary lives in
+`rust/engine/tunnel-harness` and should keep the same names across ports:
+
+- `Protocol`: pure deterministic rules and state encoding.
+- `PartyRuntime`: one party's signed state-channel runtime.
+- `MoveStrategy`: bot or external planner that chooses moves.
+- `FrameTransport`: opaque encoded-frame transport.
+- `PartyDriver`: async serving loop that wires runtime, strategy, and transport.
+
+At minimum, add Rust tests for byte-exact state encoding, balance conservation,
+illegal move rejection, and self-play through `PartyRuntime`. Add
+cross-language golden tests when TS state bytes are already canonical.
 
 ## Deployment: relay session stickiness (local-first pairing)
 
