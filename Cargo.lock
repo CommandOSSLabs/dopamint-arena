@@ -7424,6 +7424,7 @@ name = "tunnel-battleship"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "tokio",
  "tunnel-core",
  "tunnel-harness",
 ]
@@ -7457,6 +7458,7 @@ name = "tunnel-caro"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "tokio",
  "tunnel-core",
  "tunnel-harness",
 ]

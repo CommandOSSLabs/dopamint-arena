@@ -1,9 +1,10 @@
 //! Caro (five-in-a-row) protocols, ported from the TS arena package.
 
 use tunnel_core::codec::u64_to_be_bytes;
-use tunnel_harness::{
-    Balances, MoveStrategy, MoveStrategyContext, Protocol, ProtocolError, Seat, TunnelContext,
-};
+use tunnel_harness::{Balances, Protocol, ProtocolError, Seat, TunnelContext};
+
+pub mod strategy;
+pub use strategy::{CaroSeriesStrategy, CaroStrategy, CaroStrength};
 
 pub const EMPTY: u8 = 0;
 pub const MARK_A: u8 = 1;
@@ -76,64 +77,6 @@ impl CaroSeries {
             inner: Caro::new(size)?,
             max_games,
         })
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct CaroStrategy {
-    protocol: Caro,
-}
-
-impl CaroStrategy {
-    pub fn new(size: usize) -> Result<Self, ProtocolError> {
-        Ok(Self {
-            protocol: Caro::new(size)?,
-        })
-    }
-}
-
-impl Default for CaroStrategy {
-    fn default() -> Self {
-        Self {
-            protocol: Caro::default(),
-        }
-    }
-}
-
-impl MoveStrategy<Caro> for CaroStrategy {
-    async fn plan_move(
-        &mut self,
-        state: &CaroState,
-        seat: Seat,
-        _ctx: &MoveStrategyContext,
-    ) -> Option<CaroMove> {
-        let mut rng = || 0.0;
-        self.protocol.sample_move(state, seat, &mut rng)
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct CaroSeriesStrategy {
-    protocol: CaroSeries,
-}
-
-impl CaroSeriesStrategy {
-    pub fn new(max_games: u64, size: usize) -> Result<Self, ProtocolError> {
-        Ok(Self {
-            protocol: CaroSeries::new(max_games, size)?,
-        })
-    }
-}
-
-impl MoveStrategy<CaroSeries> for CaroSeriesStrategy {
-    async fn plan_move(
-        &mut self,
-        state: &CaroSeriesState,
-        seat: Seat,
-        _ctx: &MoveStrategyContext,
-    ) -> Option<CaroMove> {
-        let mut rng = || 0.0;
-        self.protocol.sample_move(state, seat, &mut rng)
     }
 }
 

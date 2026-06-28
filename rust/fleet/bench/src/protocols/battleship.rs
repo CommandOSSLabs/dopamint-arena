@@ -35,8 +35,8 @@ pub(crate) fn play_series(
     let seed = card_seed.unwrap_or(0);
     play_with_strategies(
         BattleshipSeries::new(tunnel_id, 100),
-        BattleshipSeriesStrategy::new(seed ^ 0xA5A5_5A5A_D0D0_1CE5),
-        BattleshipSeriesStrategy::new(seed ^ 0x5A5A_A5A5_CAFE_BABE),
+        BattleshipSeriesStrategy::new(seed ^ 0xA5A5_5A5A_D0D0_1CE5, 100),
+        BattleshipSeriesStrategy::new(seed ^ 0x5A5A_A5A5_CAFE_BABE, 100),
         codec,
         seed,
         kit,
