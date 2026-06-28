@@ -1,25 +1,30 @@
-import test from "node:test";
-import assert from "node:assert/strict";
-import { DistributedTunnel } from "sui-tunnel-ts/core/distributedTunnel";
-import { makeEndpoint, OffchainTunnel } from "sui-tunnel-ts/core/tunnel";
-import { defaultBackend } from "sui-tunnel-ts/core/crypto-native";
-import { generateKeyPair } from "sui-tunnel-ts/core/crypto";
-import { toHex } from "sui-tunnel-ts/core/bytes";
-import { rebuildTunnel, restoreInto } from "@/pvp/resumeSession";
 import {
-  writeResumeRecord,
+  clearResumeRecord,
   flushResumeWrites,
   readResumeRecord,
-  clearResumeRecord,
   toWireCoSigned,
+  writeResumeRecord,
 } from "@/pvp/resume";
+import { rebuildTunnel, restoreInto } from "@/pvp/resumeSession";
+import assert from "node:assert/strict";
+import test from "node:test";
+import { toHex } from "sui-tunnel-ts/core/bytes";
+import { generateKeyPair } from "sui-tunnel-ts/core/crypto";
+import { defaultBackend } from "sui-tunnel-ts/core/crypto-native";
+import { DistributedTunnel } from "sui-tunnel-ts/core/distributedTunnel";
+import { makeEndpoint, OffchainTunnel } from "sui-tunnel-ts/core/tunnel";
 import {
-  BlackjackBetProtocol,
   actorFor,
+  BlackjackBetProtocol,
+  commitMoveFromSecret,
   fixedBetMove,
-  type BetBlackjackState,
+  revealMoveFromSecret,
   type BetBlackjackMove,
+  type BetBlackjackSecret,
+  type BetBlackjackState,
 } from "./app/lib/bjBetProtocol";
+import { handValue } from "./app/lib/bjCards";
+import { bjMoveCodec } from "./app/lib/bjMoveCodec";
 import { makeBlackjackResumeAdapter } from "./blackjackResumeAdapter";
 
 // localStorage/window fakes (resume modules touch storage lazily, inside the test body).
@@ -37,14 +42,32 @@ import { makeBlackjackResumeAdapter } from "./blackjackResumeAdapter";
 })();
 (globalThis as Record<string, unknown>).window = { addEventListener() {} };
 
-type Proto = BlackjackBetProtocol;
-const nextMove = (
-  proto: Proto,
-  s: BetBlackjackState,
-): BetBlackjackMove | null =>
-  s.phase === "round_over"
-    ? fixedBetMove(50, s)
-    : proto.randomMove(s as never, actorFor(s), () => 0);
+// Deterministic per-seat secrets so the self-play drive is reproducible (this is NOT a fairness
+// path — both seats are local and no pre-image is relayed). Real play uses the CSPRNG.
+const DET_A: BetBlackjackSecret = {
+  value: new Uint8Array(16).fill(1),
+  salt: new Uint8Array(16).fill(2),
+};
+const DET_B: BetBlackjackSecret = {
+  value: new Uint8Array(16).fill(3),
+  salt: new Uint8Array(16).fill(4),
+};
+/** The seat that acts next: plumbing A-then-B for draws, else the protocol's single actor. */
+const actingSeat = (s: BetBlackjackState): "A" | "B" => {
+  if (s.phase === "draw_commit") return !s.pendingCommitA ? "A" : "B";
+  if (s.phase === "draw_reveal") return !s.pendingRevealA ? "A" : "B";
+  return actorFor(s);
+};
+const moveFor = (s: BetBlackjackState, by: "A" | "B"): BetBlackjackMove => {
+  if (s.phase === "draw_commit")
+    return commitMoveFromSecret(by === "A" ? DET_A : DET_B);
+  if (s.phase === "draw_reveal")
+    return revealMoveFromSecret(
+      (by === "A" ? s.localSecretA : s.localSecretB)!,
+    );
+  if (s.phase === "round_over") return fixedBetMove(50, s)!;
+  return { action: handValue(s.playerHand) < 17 ? "hit" : "stand" };
+};
 
 // A reloaded blackjack seat must rebuild from localStorage with the SAME asymmetric per-seat
 // buy-ins (recovered from the checkpoint split, not a separate stake message) and co-sign its next
@@ -54,9 +77,15 @@ test("blackjack cold-load: rebuilt seat keeps asymmetric balances and co-signs b
   const ka = generateKeyPair(),
     kb = generateKeyPair();
   const tid = `0x${"74".repeat(32)}`;
-  const adapter = makeBlackjackResumeAdapter(() => {});
+  const adapter = makeBlackjackResumeAdapter({
+    getSecret: () => ({ localSecretA: null, localSecretB: null }),
+    setSecret: () => {},
+    onReconciled: () => {},
+  });
 
-  // Drive a self-play tunnel with ASYMMETRIC buy-ins until seat A (the player) owes the next move.
+  // Drive a self-play tunnel with ASYMMETRIC buy-ins through the opening commit-reveal deal until
+  // seat A (the player) owes a DETERMINISTIC hit/stand — so the proposed move is byte-identical
+  // across the never-dropped and rebuilt tunnels (a commit's CSPRNG secret would not be).
   const sp = OffchainTunnel.selfPlay(
     proto,
     tid,
@@ -67,15 +96,16 @@ test("blackjack cold-load: rebuilt seat keeps asymmetric balances and co-signs b
     { a: 300n, b: 700n },
   );
   let guard = 0;
-  while (!(sp.latest && actorFor(sp.state) === "A") && guard++ < 30) {
-    const by = actorFor(sp.state);
-    const move = nextMove(proto, sp.state);
-    if (!move) break;
-    sp.step(move, by);
+  while (
+    !(sp.latest && sp.state.phase === "player" && actorFor(sp.state) === "A") &&
+    guard++ < 200
+  ) {
+    const by = actingSeat(sp.state);
+    sp.step(moveFor(sp.state, by), by);
   }
   assert.ok(
-    sp.latest && actorFor(sp.state) === "A",
-    "drove blackjack to a checkpoint where seat A acts next",
+    sp.latest && sp.state.phase === "player" && actorFor(sp.state) === "A",
+    "drove blackjack to a player-phase checkpoint where seat A acts next",
   );
   // Asymmetric split survived into the checkpoint (the two seats funded 300/700).
   assert.notEqual(
@@ -83,7 +113,7 @@ test("blackjack cold-load: rebuilt seat keeps asymmetric balances and co-signs b
     sp.latest!.update.partyBBalance,
   );
 
-  const move = nextMove(proto, sp.state)!;
+  const move = moveFor(sp.state, "A");
   const MOVE_TS = 9n;
 
   const record = {
@@ -121,6 +151,7 @@ test("blackjack cold-load: rebuilt seat keeps asymmetric balances and co-signs b
         false,
       ),
       selfParty: "A",
+      moveCodec: bjMoveCodec,
     },
     { send: (b) => refSent.push(b), onFrame() {} },
     { a: 300n, b: 700n },
@@ -146,7 +177,7 @@ test("blackjack cold-load: rebuilt seat keeps asymmetric balances and co-signs b
   const { tunnel } = rebuildTunnel(
     mp,
     readResumeRecord(tid)!,
-    { proto, adapter } as never,
+    { proto, adapter, moveCodec: bjMoveCodec } as never,
     { selfWallet: "0xA" },
   );
   assert.equal(

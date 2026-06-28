@@ -303,6 +303,17 @@ export function attachResume<State, Move>(
     if (rec) writeResumeRecord(rec);
   };
 
+  // Persist on PROPOSE too, preserving any game-set onProposed. A commit-reveal seat's fresh secret
+  // lives only in the pending proposal until the ACK; persisting here (captureSecret reads the
+  // pending/display state) means a reload in the propose→ACK window doesn't lose it and strand the
+  // seat at draw_reveal with no matching pre-image.
+  const prevProposed = tunnel.onProposed;
+  tunnel.onProposed = () => {
+    prevProposed?.();
+    const rec = buildRecord(tunnel, args.adapter, identity);
+    if (rec) writeResumeRecord(rec);
+  };
+
   // Route the peer's resync through the channel's existing onPeer; preserve any prior handler.
   const peerHandler = (m: Exclude<PeerMessage, { t: "frame" }>) => {
     if ((m as { t: string }).t === "resync")

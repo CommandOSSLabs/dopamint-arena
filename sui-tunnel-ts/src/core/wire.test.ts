@@ -4,6 +4,7 @@ import { toHex } from "./bytes";
 import {
   addressToBytes32,
   serializeHtlcLock,
+  serializeRefereeAssignment,
   serializeSettlement,
   serializeSettlementWithRoot,
   serializeSpendAuthorization,
@@ -22,6 +23,9 @@ const G_HTLC_LOCK =
 // Shared with example_agent_allowance_tests::spend_authorization_wire_format.
 const G_SPEND_AUTH =
   "7375695f74756e6e656c3a3a7370656e645f617574686f72697a6174696f6e00000000000000000000000000000000000000000000000000000000000000ab00000000000003e8";
+// Shared with tunnel_tests::referee_assignment_wire_format (tunnel_id @0xab, referee @0xcd).
+const G_REFEREE_ASSIGNMENT =
+  "7375695f74756e6e656c3a3a726566657265655f61737369676e6d656e7400000000000000000000000000000000000000000000000000000000000000ab00000000000000000000000000000000000000000000000000000000000000cd";
 
 const stateHash = Uint8Array.from({ length: 32 }, (_, i) => i + 1);
 const paymentHash = Uint8Array.from({ length: 32 }, (_, i) => i + 1);
@@ -97,6 +101,10 @@ test("serializeSpendAuthorization matches Move golden", () => {
   });
   assert.equal(bytes.length, 71);
   assert.equal(toHex(bytes), G_SPEND_AUTH);
+});
+
+test("serializeRefereeAssignment matches Move golden", () => {
+  assert.equal(toHex(serializeRefereeAssignment("0xab", "0xcd")), G_REFEREE_ASSIGNMENT);
 });
 
 test("u64ToBeBytes is big-endian (NOT BCS little-endian)", () => {

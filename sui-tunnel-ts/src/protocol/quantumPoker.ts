@@ -11,7 +11,7 @@
  * board, and hidden cards equal to board cards are burned at showdown.
  */
 
-import { concatBytes, bytesEqual } from "../core/bytes";
+import { bytesEqual, concatBytes } from "../core/bytes";
 import {
   combineReveals,
   computeCommitment,
@@ -20,8 +20,8 @@ import {
 import { blake2b256 } from "../core/crypto";
 import { seedFromBytes, shuffle } from "../core/randomness";
 import { u64ToBeBytes } from "../core/wire";
-import { otherParty, protocolDomain } from "./Protocol";
 import type { Balances, Party, Protocol, ProtocolContext } from "./Protocol";
+import { otherParty, protocolDomain } from "./Protocol";
 
 const DOMAIN = protocolDomain("quantum_poker.v2");
 const ANTE = 50n;
@@ -370,6 +370,10 @@ export function deriveQuantumCard(
 
 export class QuantumPokerProtocol implements Protocol<PokerState, PokerMove> {
   readonly name = "quantum_poker.v2";
+  /** `commit_slots` moves carry the slot pre-images — DistributedTunnel must be given a stripping
+   *  codec (pokerMoveCodec). Without this the guard would not fire and the identity codec would
+   *  relay the hole-card pre-images to the opponent. */
+  readonly movesCarrySecrets = true;
   private readonly randomDrivers = new Map<Party, QuantumPokerSeatDriver>();
 
   constructor(private readonly handCap: bigint = DEFAULT_HAND_CAP) {}
