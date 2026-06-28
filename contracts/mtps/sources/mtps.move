@@ -1,67 +1,87 @@
-/// MTPS — the free stake token for Dopamint Arena games. Stakes are paid in MTPS (gas stays
-/// sponsored in SUI), so a 0-SUI player can fund a game for free.
+/// MTPS — the free stake token for MillionsTPS, lightning-speed games and apps on Sui. Stakes are
+/// paid in MTPS (gas stays sponsored in SUI), so a 0-SUI player can fund a game for free.
 ///
 /// Minting is NOT permissionless: the backend faucet holds the `AdminCap` and mints each player
-/// exactly the amount they need (an off-chain HTTP faucet — see the backend). Because there is no
-/// public mint path, there is no griefing/abuse vector and no u64-ceiling brick risk, so the token
-/// needs no supply cap, per-call cap, or kill switch — the only authority is who holds the cap.
-/// Coin metadata is registered via the modern `coin_registry`.
-module mtps::mtps {
-    use sui::coin::{Self, Coin, TreasuryCap};
-    use sui::coin_registry;
-    use std::string;
+/// exactly the amount they need (an off-chain HTTP faucet — see the backend). Admin-only minting
+/// removes the attacker brick vector, so there is no supply cap and no kill switch; `admin_mint`
+/// keeps only a per-call sanity bound (`MAX_MINT_PER_CALL`) to cap the blast radius of a backend
+/// bug. Coin metadata is registered via the modern `coin_registry`, and the `MetadataCap` is kept
+/// (not burned) so symbol/name/icon stay updatable post-deploy without a redeploy.
+module mtps::mtps;
 
-    /// One-time witness: guarantees a single `TreasuryCap<MTPS>` for this currency.
-    public struct MTPS has drop {}
+use sui::coin::{Self, Coin, TreasuryCap};
+use sui::coin_registry;
 
-    /// The mint authority. Holding it is the sole permission to mint or burn MTPS; the backend
-    /// faucet custodies it. It wraps the `TreasuryCap`, so there is no shared faucet object and no
-    /// public mint — minting only happens in a tx signed by the cap's owner.
-    public struct AdminCap has key {
-        id: UID,
-        treasury_cap: TreasuryCap<MTPS>,
-    }
+/// One-time witness: guarantees a single `TreasuryCap<MTPS>` for this currency.
+public struct MTPS has drop {}
 
-    const DECIMALS: u8 = 9;
-
-    fun init(witness: MTPS, ctx: &mut TxContext) {
-        // Register metadata via coin_registry (replaces the deprecated `coin::create_currency`).
-        // The OTW path sends the `Currency` to the registry for a one-time post-publish
-        // `finalize_registration`; we keep the `TreasuryCap` inside the AdminCap.
-        let (initializer, treasury_cap) = coin_registry::new_currency_with_otw(
-            witness,
-            DECIMALS,
-            string::utf8(b"MTPS"),
-            string::utf8(b"MTPS"),
-            string::utf8(b"Free testnet stake token for Dopamint Arena games (gas is sponsored)."),
-            string::utf8(b""),
-            ctx,
-        );
-        // Metadata is immutable (no UI reads it; standard hygiene) — drop the MetadataCap.
-        initializer.finalize_and_delete_metadata_cap(ctx);
-
-        // The AdminCap (with the treasury) goes to the deployer; the backend faucet custodies it.
-        transfer::transfer(AdminCap { id: object::new(ctx), treasury_cap }, ctx.sender());
-    }
-
-    /// Mint `amount` MTPS to `recipient`. Authorized solely by holding the `AdminCap`; the backend
-    /// faucet calls this to fund each player exactly what they need for a game.
-    public fun admin_mint(
-        cap: &mut AdminCap,
-        amount: u64,
-        recipient: address,
-        ctx: &mut TxContext,
-    ) {
-        coin::mint_and_transfer<MTPS>(&mut cap.treasury_cap, amount, recipient, ctx);
-    }
-
-    /// Burn MTPS back out of supply (AdminCap-only).
-    public fun burn(cap: &mut AdminCap, coin: Coin<MTPS>) {
-        coin::burn(&mut cap.treasury_cap, coin);
-    }
-
-    #[test_only]
-    public fun test_init(ctx: &mut TxContext) {
-        init(MTPS {}, ctx);
-    }
+/// The mint authority. Holding it is the sole permission to mint or burn MTPS; the backend
+/// faucet custodies it. It wraps the `TreasuryCap`, so there is no shared faucet object and no
+/// public mint — minting only happens in a tx signed by the cap's owner.
+public struct AdminCap has key {
+    id: UID,
+    treasury_cap: TreasuryCap<MTPS>,
 }
+
+/// 0 decimals: MTPS is an indivisible whole-token stake, so a 1-token tunnel deposit is the
+/// integer `1` (not `1e9`). Decimals are fixed at creation — not even the `MetadataCap` can
+/// change them — so this is permanent for the deployment.
+const DECIMALS: u8 = 0;
+
+/// Per-call sanity bound on `admin_mint`. NOT an attacker defense — minting is already
+/// AdminCap-only — but a guardrail bounding a backend bug (a stray large value) minting an
+/// absurd amount. 1M MTPS is ~100x the biggest real faucet pull (10k MTPS).
+const MAX_MINT_PER_CALL: u64 = 1_000_000; // 1M MTPS (0 decimals → whole tokens)
+
+/// `admin_mint` was called with `amount` above `MAX_MINT_PER_CALL`.
+const EAmountTooLarge: u64 = 0;
+
+fun init(witness: MTPS, ctx: &mut TxContext) {
+    // Register metadata via coin_registry (replaces the deprecated `coin::create_currency`).
+    // OTW path: `init` only parks the `Currency` at the registry; a one-time post-publish
+    // `coin_registry::finalize_registration` tx promotes it (see docs/runbooks/mtps-deploy.md).
+    // We keep the `TreasuryCap` inside the AdminCap.
+    let (initializer, treasury_cap) = coin_registry::new_currency_with_otw(
+        witness,
+        DECIMALS,
+        b"MTPS".to_string(),
+        b"MTPS".to_string(),
+        b"Lightning speed games and apps on Sui".to_string(),
+        b"https://dev.millionstps.io/favicons/favicon.svg".to_string(),
+        ctx,
+    );
+    // Keep the MetadataCap (hand it to the deployer) so symbol/name/icon stay updatable
+    // post-deploy — wallets/explorers render a public token's metadata.
+    let metadata_cap = initializer.finalize(ctx);
+    transfer::public_transfer(metadata_cap, ctx.sender());
+
+    // The AdminCap (with the treasury) goes to the deployer; the backend faucet custodies it.
+    // It is `key`-only (no `store`), so it cannot be transferred after this — the deploy MUST
+    // be signed by the backend faucet's key (see docs/runbooks/mtps-deploy.md).
+    transfer::transfer(AdminCap { id: object::new(ctx), treasury_cap }, ctx.sender());
+}
+
+/// Mint `amount` MTPS to `recipient`. Authorized solely by holding the `AdminCap`; the backend
+/// faucet calls this to fund each player exactly what they need for a game.
+public fun admin_mint(
+    cap: &mut AdminCap,
+    amount: u64,
+    recipient: address,
+    ctx: &mut TxContext,
+) {
+    assert!(amount <= MAX_MINT_PER_CALL, EAmountTooLarge);
+    coin::mint_and_transfer<MTPS>(&mut cap.treasury_cap, amount, recipient, ctx);
+}
+
+/// Burn MTPS back out of supply (AdminCap-only).
+public fun burn(cap: &mut AdminCap, coin: Coin<MTPS>) {
+    coin::burn(&mut cap.treasury_cap, coin);
+}
+
+#[test_only]
+public fun test_init(ctx: &mut TxContext) {
+    init(MTPS {}, ctx);
+}
+
+#[test_only]
+public fun max_mint_per_call(): u64 { MAX_MINT_PER_CALL }
