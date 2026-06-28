@@ -17,14 +17,17 @@ pub struct HeartbeatPayload {
     pub window_ms: u64,
 }
 
+/// Posts activity heartbeats for one served tunnel. Holding a `stats_token` is
+/// what makes a party the session's reporter (the server mints exactly one token
+/// per registration), so the at-most-once guarantee is structural: a reporter is
+/// only ever constructed and attached for a tunnel this party registered. There
+/// is deliberately no internal seat/ownership flag — possessing the token and
+/// attaching the reporter *is* the gate.
 pub struct HeartbeatReporter {
     http: reqwest::Client,
     base_url: String,
     session_id: String,
     stats_token: String,
-    /// The structural at-most-once gate: this party registered the session and
-    /// holds its `stats_token`, so it is the tunnel's one and only reporter.
-    owns_session: bool,
     flush_interval_ms: u64,
     // per-run state:
     tunnel_id: String,
@@ -46,7 +49,6 @@ impl HeartbeatReporter {
             base_url,
             session_id,
             stats_token,
-            owns_session: true,
             flush_interval_ms: 1000,
             tunnel_id: String::new(),
             actions: 0,
@@ -56,9 +58,7 @@ impl HeartbeatReporter {
         }
     }
 
-    /// Override the flush window (default 1000ms). Ownership is fixed at
-    /// construction: holding a `stats_token` means this party registered the
-    /// session and is its sole reporter.
+    /// Override the flush window (default 1000ms).
     pub fn with_cadence(mut self, flush_interval_ms: u64) -> Self {
         self.flush_interval_ms = flush_interval_ms;
         self
@@ -75,9 +75,6 @@ impl HeartbeatReporter {
 
     /// Account one committed move; return a payload when the window elapses.
     pub(crate) fn record(&mut self, ev: &MoveCommitted) -> Option<HeartbeatPayload> {
-        if !self.owns_session {
-            return None;
-        }
         self.actions += 1;
         self.last_ts_ms = ev.timestamp_ms;
         self.last_nonce = ev.nonce;
@@ -100,7 +97,7 @@ impl HeartbeatReporter {
 
     /// Force-flush a trailing partial window (called on finish/abort).
     pub(crate) fn drain(&mut self) -> Option<HeartbeatPayload> {
-        if !self.owns_session || self.actions == 0 {
+        if self.actions == 0 {
             return None;
         }
         let base = self.last_flush_ms.unwrap_or(self.last_ts_ms);
@@ -195,17 +192,6 @@ mod tests {
             move_index: idx,
             timestamp_ms: ts,
         }
-    }
-
-    #[test]
-    fn non_owner_reports_nothing_even_as_seat_a() {
-        // Ownership, not seat, gates reporting. A non-owner stays silent across a
-        // window that WOULD flush for an owner, and on the trailing drain too.
-        let mut r = reporter();
-        r.owns_session = false; // same-module test pokes the private gate directly
-        assert_eq!(r.record(&ev(1, 1, 0)), None);
-        assert_eq!(r.record(&ev(2, 2, 5000)), None); // 5s window: an owner would flush
-        assert_eq!(r.drain(), None);
     }
 
     #[test]

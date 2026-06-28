@@ -79,16 +79,26 @@ async fn serve_unit_attaches_reporter() {
     assert_eq!(metrics.tunnels, 2);
 
     // The reporter's POSTs are fire-and-forget; poll briefly for the trailing flush.
-    let mut got = 0usize;
+    let mut reqs = Vec::new();
     for _ in 0..100 {
-        got = server.received_requests().await.unwrap().len();
-        if got > 0 {
+        reqs = server.received_requests().await.unwrap();
+        if !reqs.is_empty() {
             break;
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    assert!(
-        got >= 1,
-        "expected at least one heartbeat POST from the attached reporter"
+
+    // At-most-once is structural: only seat A holds a reporter, so exactly one
+    // party reports. The whole game stays under the 1000ms window, so the single
+    // POST is the trailing drain — never a mid-game flush, never a B-side report.
+    assert_eq!(
+        reqs.len(),
+        1,
+        "exactly one party (the session owner, seat A) should report"
+    );
+    let body: serde_json::Value = serde_json::from_slice(&reqs[0].body).unwrap();
+    assert_eq!(
+        body["tunnelId"], "0xcd",
+        "heartbeat carries the owned tunnel"
     );
 }

@@ -55,4 +55,16 @@ fn telemetry_surface_is_public() {
         actions_delta: 1,
         window_ms: 1,
     };
+
+    // The headline production export: the serving construction seam. Coercing it
+    // to a concrete fn pointer pins its name and full signature shape, keeping the
+    // whole telemetry surface pinned in one place. (`fn() -> u64` is a concrete
+    // stand-in for the seam's `impl FnMut() -> u64` clock parameter.)
+    type SeamFn = fn(
+        PartyDriver<Blackjack, RandomMoveStrategy<Blackjack>, InMemoryFrameTransport, LocalSigner>,
+        fleet_serve::HeartbeatReporter,
+        u64,
+        fn() -> u64,
+    ) -> fleet_serve::DriverUnit;
+    let _seam: SeamFn = fleet_serve::into_serving_unit;
 }
