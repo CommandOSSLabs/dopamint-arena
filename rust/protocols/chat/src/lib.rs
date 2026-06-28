@@ -3,9 +3,10 @@
 
 use tunnel_core::codec::u64_to_be_bytes;
 use tunnel_core::crypto::blake2b256;
-use tunnel_harness::{
-    Balances, MoveStrategy, MoveStrategyContext, Protocol, ProtocolError, Seat, TunnelContext,
-};
+use tunnel_harness::{Balances, Protocol, ProtocolError, Seat, TunnelContext};
+
+pub mod strategy;
+pub use strategy::ChatStrategy;
 
 const DOMAIN: &[u8] = b"sui_tunnel::proto::chat.v1";
 
@@ -73,38 +74,6 @@ impl<'de> serde::Deserialize<'de> for ChatMove {
 
 #[derive(Clone, Copy, Debug)]
 pub struct Chat;
-
-#[derive(Clone, Copy, Debug)]
-pub struct ChatStrategy {
-    rng_state: u64,
-}
-
-impl ChatStrategy {
-    pub fn new(seed: u64) -> Self {
-        Self { rng_state: seed }
-    }
-
-    fn next_f64(&mut self) -> f64 {
-        self.rng_state = self.rng_state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = self.rng_state;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^= z >> 31;
-        (z >> 11) as f64 / (1u64 << 53) as f64
-    }
-}
-
-impl MoveStrategy<Chat> for ChatStrategy {
-    async fn plan_move(
-        &mut self,
-        state: &ChatState,
-        seat: Seat,
-        _ctx: &MoveStrategyContext,
-    ) -> Option<ChatMove> {
-        let mut rng = || self.next_f64();
-        Chat.sample_move(state, seat, &mut rng)
-    }
-}
 
 fn party_byte(seat: Seat) -> u8 {
     match seat {

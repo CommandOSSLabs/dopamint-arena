@@ -4,9 +4,10 @@
 
 use tunnel_core::codec::u64_to_be_bytes;
 use tunnel_core::crypto::blake2b256;
-use tunnel_harness::{
-    Balances, MoveStrategy, MoveStrategyContext, Protocol, ProtocolError, Seat, TunnelContext,
-};
+use tunnel_harness::{Balances, Protocol, ProtocolError, Seat, TunnelContext};
+
+pub mod strategy;
+pub use strategy::{WorldCanvasCellStrategy, WorldCanvasStrokeStrategy};
 
 pub const CHUNK_SIZE: u64 = 256;
 pub const NUM_COLORS: u64 = 16;
@@ -98,43 +99,6 @@ impl Default for WorldCanvasCell {
             num_colors: NUM_COLORS,
             cap: DEFAULT_CAP,
         }
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct WorldCanvasCellStrategy {
-    protocol: WorldCanvasCell,
-    rng_state: u64,
-}
-
-impl WorldCanvasCellStrategy {
-    pub fn new(protocol: WorldCanvasCell, seed: u64) -> Self {
-        Self {
-            protocol,
-            rng_state: seed,
-        }
-    }
-
-    fn next_f64(&mut self) -> f64 {
-        self.rng_state = self.rng_state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = self.rng_state;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^= z >> 31;
-        (z >> 11) as f64 / (1u64 << 53) as f64
-    }
-}
-
-impl MoveStrategy<WorldCanvasCell> for WorldCanvasCellStrategy {
-    async fn plan_move(
-        &mut self,
-        state: &CellCanvasState,
-        seat: Seat,
-        _ctx: &MoveStrategyContext,
-    ) -> Option<CellPaintMove> {
-        let protocol = self.protocol;
-        let mut rng = || self.next_f64();
-        protocol.sample_move(state, seat, &mut rng)
     }
 }
 
@@ -280,38 +244,6 @@ pub struct StrokeCanvasState {
 
 #[derive(Clone, Copy, Debug)]
 pub struct WorldCanvasStroke;
-
-#[derive(Clone, Copy, Debug)]
-pub struct WorldCanvasStrokeStrategy {
-    rng_state: u64,
-}
-
-impl WorldCanvasStrokeStrategy {
-    pub fn new(seed: u64) -> Self {
-        Self { rng_state: seed }
-    }
-
-    fn next_f64(&mut self) -> f64 {
-        self.rng_state = self.rng_state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = self.rng_state;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^= z >> 31;
-        (z >> 11) as f64 / (1u64 << 53) as f64
-    }
-}
-
-impl MoveStrategy<WorldCanvasStroke> for WorldCanvasStrokeStrategy {
-    async fn plan_move(
-        &mut self,
-        state: &StrokeCanvasState,
-        seat: Seat,
-        _ctx: &MoveStrategyContext,
-    ) -> Option<StrokePaintMove> {
-        let mut rng = || self.next_f64();
-        WorldCanvasStroke.sample_move(state, seat, &mut rng)
-    }
-}
 
 fn cell_delta(cell: &StrokeCellMove, by: Seat) -> Vec<u8> {
     format!(
