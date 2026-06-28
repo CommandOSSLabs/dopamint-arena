@@ -32,8 +32,7 @@ async fn bot_plays_a_full_match_against_a_human_stand_in() {
             DurableSigner::from_secret(&sa),
             Role::A,
             "0xbotB",
-            200,
-            1,
+            1
         ),
         play_blackjack(
             chb,
@@ -41,15 +40,15 @@ async fn bot_plays_a_full_match_against_a_human_stand_in() {
             DurableSigner::from_secret(&sb),
             Role::B,
             "0xhumanA",
-            200,
-            2,
+            2
         ),
     );
 
     let a = ra.expect("role A (player) completes the match");
     let b = rb.expect("role B (dealer) completes the match");
 
-    assert_eq!(a.final_balances.sum(), 400, "stakes conserved");
+    let total = 2 * bot_fleet::play_match::BLACKJACK.stake_each;
+    assert_eq!(a.final_balances.sum(), total, "stakes conserved");
     assert_eq!(
         a.final_balances, b.final_balances,
         "both seats agree on outcome"

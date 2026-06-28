@@ -20,9 +20,9 @@ pub struct OpenedTunnel {
 
 /// The on-chain lifecycle a bot match depends on. All methods are async (real impls hit Sui RPC).
 pub trait MatchAnchor: Send + Sync {
-    /// Role B only: create+fund the shared tunnel for `(my, opponent)` ephemeral pubkeys and
-    /// return its id. Role A never calls this — it receives the id via the `opened` peer message.
-    fn open_as_dealer(
+    /// Host role only: create+fund the shared tunnel for `(my, opponent)` ephemeral pubkeys and
+    /// return its id. The guest never calls this — it receives the id via the `opened` peer message.
+    fn open(
         &self,
         my_eph_pubkey: [u8; 32],
         opp_eph_pubkey: [u8; 32],
@@ -51,7 +51,7 @@ pub trait MatchAnchor: Send + Sync {
 pub struct NoopAnchor;
 
 impl MatchAnchor for NoopAnchor {
-    async fn open_as_dealer(
+    async fn open(
         &self,
         _my_eph_pubkey: [u8; 32],
         _opp_eph_pubkey: [u8; 32],
