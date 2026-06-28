@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { BOT_CONFIGS, BOT_DIFFICULTIES, pickShot } from "./bot.ts";
-import { CELL_COUNT, cellAt, colOf, rowOf } from "./fleet.ts";
+import { CELL_COUNT, FLEET_CELLS, cellAt, colOf, rowOf } from "./fleet.ts";
 import type {
   BattleshipState,
   BattleshipShotResult as ShotResult,
@@ -197,5 +197,9 @@ test("a hard self-play game still terminates with a decisive, conserved result",
     );
     assert.equal(final.phase, "over");
     assert.equal(final.balanceA + final.balanceB, final.total);
+    assert.ok(
+      final.hitsOnA === FLEET_CELLS || final.hitsOnB === FLEET_CELLS,
+      `seed ${seed}: a fleet must be fully sunk (17 hits)`,
+    );
   }
 });
