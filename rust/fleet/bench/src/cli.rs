@@ -3,7 +3,9 @@
 //! explanatory errors rather than silently ignoring them.
 
 use clap::{CommandFactory, Parser};
-use tunnel_core::protocol_id::{BLACKJACK_BET_V1, PORTED_PROTOCOL_IDS};
+use tunnel_core::protocol_id::{BLACKJACK_BET_V1, BLACKJACK_V2, PORTED_PROTOCOL_IDS};
+
+const EXECUTABLE_PROTOCOL_IDS: &[&str] = &[BLACKJACK_BET_V1, BLACKJACK_V2];
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum BenchMode {
@@ -117,7 +119,7 @@ struct Raw {
         value_name = "local"
     )]
     frame_transport: String,
-    /// Protocol ID to execute. Only blackjack.bet.v1 is implemented by fleet-bench.
+    /// Protocol ID to execute.
     #[arg(long = "protocol-id", default_value = BLACKJACK_BET_V1, value_name = "ID")]
     protocol_id: String,
 }
@@ -149,12 +151,17 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
             PORTED_PROTOCOL_IDS.join(", ")
         ));
     }
-    if raw.protocol_id != BLACKJACK_BET_V1 {
-        return Err(format!(
-            "--protocol-id {} is ported but fleet-bench can currently execute only {}",
-            raw.protocol_id, BLACKJACK_BET_V1
-        ));
-    }
+    let protocol_id = match raw.protocol_id.as_str() {
+        BLACKJACK_BET_V1 => BLACKJACK_BET_V1,
+        BLACKJACK_V2 => BLACKJACK_V2,
+        _ => {
+            return Err(format!(
+                "--protocol-id {} is ported but fleet-bench can currently execute only {}",
+                raw.protocol_id,
+                EXECUTABLE_PROTOCOL_IDS.join(", ")
+            ));
+        }
+    };
 
     let workers = if raw.workers == "auto" {
         std::thread::available_parallelism()
@@ -215,7 +222,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<BenchOpts, String
         duration_secs: raw.duration,
         matches: raw.matches,
         bench_mode,
-        protocol_id: BLACKJACK_BET_V1,
+        protocol_id,
         scenario,
         frame_codec,
     })
@@ -311,6 +318,12 @@ mod tests {
         assert!(parse_v(&["--frame-transport", "relay"]).is_err());
         assert!(parse_v(&["--protocol-id", "poker.v1"]).is_err());
         assert!(parse_v(&["--protocol-id", "payments.v1"]).is_err());
+    }
+
+    #[test]
+    fn blackjack_v2_protocol_id_is_executable() {
+        let o = parse_v(&["--protocol-id", "blackjack.v2"]).unwrap();
+        assert_eq!(o.protocol_id, "blackjack.v2");
     }
 
     #[test]

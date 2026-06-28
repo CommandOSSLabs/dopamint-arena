@@ -7,11 +7,12 @@
 //! the time-bounded throughput mode.
 
 use crate::cli::{FrameCodecKind, ScenarioMode};
-use crate::party_driver::{play_match_seeded, SeatKit};
+use crate::party_driver::{play_blackjack_v2_seeded, play_match_seeded, SeatKit};
 use crate::stats::{summarize, Distribution};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
+use tunnel_core::protocol_id::{BLACKJACK_BET_V1, BLACKJACK_V2};
 use tunnel_harness::{BcsFrameCodec, JsonFrameCodec, PostcardFrameCodec};
 
 /// Golden seat A secret: bytes 0x01..0x20.
@@ -42,21 +43,50 @@ const MAX_MOVES: u64 = 1000;
 /// Run one match through the codec selected at the CLI. Static dispatch keeps
 /// codec cost on the measured path with one monomorphized driver per arm.
 fn play_match_for(
+    protocol_id: &'static str,
     codec: FrameCodecKind,
     card_seed: Option<u64>,
     kit: &SeatKit,
     tunnel_id: &str,
 ) -> crate::party_driver::MatchResult {
-    match codec {
-        FrameCodecKind::Json => play_match_seeded::<JsonFrameCodec>(
+    match (protocol_id, codec) {
+        (BLACKJACK_BET_V1, FrameCodecKind::Json) => play_match_seeded::<JsonFrameCodec>(
             card_seed, kit, tunnel_id, 200, 200, CREATED_AT, MAX_MOVES,
         ),
-        FrameCodecKind::Bcs => play_match_seeded::<BcsFrameCodec>(
+        (BLACKJACK_BET_V1, FrameCodecKind::Bcs) => play_match_seeded::<BcsFrameCodec>(
             card_seed, kit, tunnel_id, 200, 200, CREATED_AT, MAX_MOVES,
         ),
-        FrameCodecKind::Postcard => play_match_seeded::<PostcardFrameCodec>(
+        (BLACKJACK_BET_V1, FrameCodecKind::Postcard) => play_match_seeded::<PostcardFrameCodec>(
             card_seed, kit, tunnel_id, 200, 200, CREATED_AT, MAX_MOVES,
         ),
+        (BLACKJACK_V2, FrameCodecKind::Json) => play_blackjack_v2_seeded::<JsonFrameCodec>(
+            card_seed.unwrap_or(0),
+            kit,
+            tunnel_id,
+            200,
+            200,
+            CREATED_AT,
+            MAX_MOVES,
+        ),
+        (BLACKJACK_V2, FrameCodecKind::Bcs) => play_blackjack_v2_seeded::<BcsFrameCodec>(
+            card_seed.unwrap_or(0),
+            kit,
+            tunnel_id,
+            200,
+            200,
+            CREATED_AT,
+            MAX_MOVES,
+        ),
+        (BLACKJACK_V2, FrameCodecKind::Postcard) => play_blackjack_v2_seeded::<PostcardFrameCodec>(
+            card_seed.unwrap_or(0),
+            kit,
+            tunnel_id,
+            200,
+            200,
+            CREATED_AT,
+            MAX_MOVES,
+        ),
+        _ => panic!("unsupported fleet-bench protocol id: {protocol_id}"),
     }
 }
 
@@ -169,11 +199,18 @@ pub fn run_simple(
     matches: Option<u64>,
     scenario: ScenarioMode,
     codec: FrameCodecKind,
+    protocol_id: &'static str,
 ) -> SwarmOutcome {
     run_with(workers, duration_secs, matches, |idx| {
         let t = Instant::now();
         let kit = SeatKit::new(&SEAT_A, &SEAT_B);
-        let r = play_match_for(codec, scenario.card_seed(idx), &kit, &tunnel_id_for(idx));
+        let r = play_match_for(
+            protocol_id,
+            codec,
+            scenario.card_seed(idx),
+            &kit,
+            &tunnel_id_for(idx),
+        );
         MatchSample {
             moves: r.moves,
             bytes: r.bytes as u64,
@@ -196,6 +233,7 @@ pub fn run_fresh_keys(
     matches: Option<u64>,
     scenario: ScenarioMode,
     codec: FrameCodecKind,
+    protocol_id: &'static str,
 ) -> SwarmOutcome {
     run_with(workers, duration_secs, matches, |idx| {
         let mut secret_a = [0u8; 32];
@@ -204,7 +242,13 @@ pub fn run_fresh_keys(
         getrandom::getrandom(&mut secret_b).expect("os rng");
         let t = Instant::now();
         let kit = SeatKit::new(&secret_a, &secret_b);
-        let r = play_match_for(codec, scenario.card_seed(idx), &kit, &tunnel_id_for(idx));
+        let r = play_match_for(
+            protocol_id,
+            codec,
+            scenario.card_seed(idx),
+            &kit,
+            &tunnel_id_for(idx),
+        );
         MatchSample {
             moves: r.moves,
             bytes: r.bytes as u64,
@@ -230,12 +274,19 @@ pub fn run_preinitialized_signers(
     matches: u64,
     scenario: ScenarioMode,
     codec: FrameCodecKind,
+    protocol_id: &'static str,
 ) -> SwarmOutcome {
     let kits: Vec<SeatKit> = (0..matches).map(|_| random_seat_kit()).collect();
     run_with(workers, duration_secs, Some(matches), |idx| {
         let t = Instant::now();
         let kit = &kits[idx as usize];
-        let r = play_match_for(codec, scenario.card_seed(idx), kit, &tunnel_id_for(idx));
+        let r = play_match_for(
+            protocol_id,
+            codec,
+            scenario.card_seed(idx),
+            kit,
+            &tunnel_id_for(idx),
+        );
         MatchSample {
             moves: r.moves,
             bytes: r.bytes as u64,
@@ -253,7 +304,14 @@ mod tests {
     fn fresh_signers_conserve_totals() {
         // Fresh per-match keys don't change gameplay (cards derive from round),
         // so the golden gate holds: exactly 143*N moves, 75982*N bytes.
-        let out = run_fresh_keys(2, 3600, Some(6), ScenarioMode::Golden, FrameCodecKind::Json);
+        let out = run_fresh_keys(
+            2,
+            3600,
+            Some(6),
+            ScenarioMode::Golden,
+            FrameCodecKind::Json,
+            BLACKJACK_BET_V1,
+        );
         assert_eq!(out.matches_claimed, 6);
         assert_eq!(out.tunnels_settled, 6);
         assert_eq!(out.moves, 143 * 6);
@@ -262,9 +320,22 @@ mod tests {
 
     #[test]
     fn preinitialized_signers_match_baseline_totals() {
-        let simple = run_simple(2, 3600, Some(8), ScenarioMode::Golden, FrameCodecKind::Json);
-        let preinitialized =
-            run_preinitialized_signers(2, 3600, 8, ScenarioMode::Golden, FrameCodecKind::Json);
+        let simple = run_simple(
+            2,
+            3600,
+            Some(8),
+            ScenarioMode::Golden,
+            FrameCodecKind::Json,
+            BLACKJACK_BET_V1,
+        );
+        let preinitialized = run_preinitialized_signers(
+            2,
+            3600,
+            8,
+            ScenarioMode::Golden,
+            FrameCodecKind::Json,
+            BLACKJACK_BET_V1,
+        );
         assert_eq!(preinitialized.moves, simple.moves);
         assert_eq!(preinitialized.bytes, simple.bytes);
         assert_eq!(preinitialized.tunnels_settled, simple.tunnels_settled);
@@ -280,7 +351,14 @@ mod tests {
     #[test]
     fn single_worker_golden_matches_are_constant() {
         // matches-bounded: exactly N matches => 143*N moves, 75982*N bytes, N tunnels.
-        let out = run_simple(1, 3600, Some(5), ScenarioMode::Golden, FrameCodecKind::Json);
+        let out = run_simple(
+            1,
+            3600,
+            Some(5),
+            ScenarioMode::Golden,
+            FrameCodecKind::Json,
+            BLACKJACK_BET_V1,
+        );
         assert_eq!(out.matches_claimed, 5);
         assert_eq!(out.tunnels_settled, 5);
         assert_eq!(out.moves, 143 * 5);
@@ -296,6 +374,7 @@ mod tests {
             Some(20),
             ScenarioMode::Golden,
             FrameCodecKind::Json,
+            BLACKJACK_BET_V1,
         );
         assert_eq!(out.matches_claimed, 20);
         assert_eq!(out.tunnels_settled, 20);
@@ -305,7 +384,14 @@ mod tests {
 
     #[test]
     fn varied_mode_produces_a_nondegenerate_move_distribution() {
-        let out = run_simple(2, 3600, Some(24), ScenarioMode::Varied, FrameCodecKind::Bcs);
+        let out = run_simple(
+            2,
+            3600,
+            Some(24),
+            ScenarioMode::Varied,
+            FrameCodecKind::Bcs,
+            BLACKJACK_BET_V1,
+        );
         assert_eq!(out.tunnels_settled, 24);
         assert_eq!(out.matches_claimed, 24);
         // Varied cards => not every match is 143 moves.
@@ -329,6 +415,7 @@ mod tests {
             Some(50),
             ScenarioMode::Golden,
             FrameCodecKind::Json,
+            BLACKJACK_BET_V1,
         );
         assert_eq!(out.moves, 143 * 50);
         assert_eq!(out.moves_dist.min, 143.0);
@@ -337,14 +424,29 @@ mod tests {
 
     #[test]
     fn codec_choice_is_consensus_invisible() {
-        let json = run_simple(2, 3600, Some(8), ScenarioMode::Golden, FrameCodecKind::Json);
-        let bcs = run_simple(2, 3600, Some(8), ScenarioMode::Golden, FrameCodecKind::Bcs);
+        let json = run_simple(
+            2,
+            3600,
+            Some(8),
+            ScenarioMode::Golden,
+            FrameCodecKind::Json,
+            BLACKJACK_BET_V1,
+        );
+        let bcs = run_simple(
+            2,
+            3600,
+            Some(8),
+            ScenarioMode::Golden,
+            FrameCodecKind::Bcs,
+            BLACKJACK_BET_V1,
+        );
         let postcard = run_simple(
             2,
             3600,
             Some(8),
             ScenarioMode::Golden,
             FrameCodecKind::Postcard,
+            BLACKJACK_BET_V1,
         );
 
         assert_eq!(bcs.moves, json.moves);
@@ -352,5 +454,21 @@ mod tests {
         assert_eq!(bcs.tunnels_settled, json.tunnels_settled);
         assert_eq!(postcard.tunnels_settled, json.tunnels_settled);
         assert!(bcs.bytes < json.bytes && postcard.bytes < json.bytes);
+    }
+
+    #[test]
+    fn blackjack_v2_matches_execute() {
+        let out = run_simple(
+            1,
+            3600,
+            Some(3),
+            ScenarioMode::Golden,
+            FrameCodecKind::Json,
+            tunnel_core::protocol_id::BLACKJACK_V2,
+        );
+        assert_eq!(out.matches_claimed, 3);
+        assert_eq!(out.tunnels_settled, 3);
+        assert!(out.moves > 0);
+        assert!(out.bytes > 0);
     }
 }

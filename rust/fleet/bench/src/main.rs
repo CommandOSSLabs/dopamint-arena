@@ -29,6 +29,7 @@ fn main() {
                 opts.matches,
                 opts.scenario,
                 opts.frame_codec,
+                opts.protocol_id,
             );
             (simple, None, sampler.stop())
         }
@@ -40,6 +41,7 @@ fn main() {
                 opts.matches.expect("validated by cli"),
                 opts.scenario,
                 opts.frame_codec,
+                opts.protocol_id,
             );
             // Report the steady-state window as the headline; no parenthetical.
             (preinitialized, None, sampler.stop())
@@ -54,6 +56,7 @@ fn main() {
                 opts.matches,
                 opts.scenario,
                 opts.frame_codec,
+                opts.protocol_id,
             );
             let res = sampler.stop();
             let preinitialized = swarm::run_preinitialized_signers(
@@ -62,6 +65,7 @@ fn main() {
                 opts.matches.expect("validated by cli"),
                 opts.scenario,
                 opts.frame_codec,
+                opts.protocol_id,
             );
             (simple, Some(preinitialized), res)
         }

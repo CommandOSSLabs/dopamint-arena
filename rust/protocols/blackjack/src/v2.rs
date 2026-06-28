@@ -582,6 +582,7 @@ fn random_secret(rng: &mut dyn FnMut() -> f64) -> BlackjackV2Secret {
     BlackjackV2Secret { value, salt }
 }
 
+#[derive(Clone, Copy)]
 pub struct BlackjackV2;
 
 impl Protocol for BlackjackV2 {

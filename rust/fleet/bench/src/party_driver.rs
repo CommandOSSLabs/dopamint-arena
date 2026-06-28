@@ -4,14 +4,15 @@
 //! counts MOVE/ACK frame bytes only — the determinism gate (143*N / 75982*N).
 
 use std::time::Instant;
-use tunnel_blackjack::{plan, BjMove, Blackjack};
+use tunnel_blackjack::v2::{BlackjackV2, BlackjackV2Move};
+use tunnel_blackjack::{BjMove, Blackjack};
 use tunnel_core::crypto::blake2b256;
 use tunnel_core::wire::{serialize_settlement_with_root, Settlement};
 use tunnel_harness::{
-    Balances, FrameCodec, LocalSigner, PartyRuntime, Seat, Signer, TunnelContext,
+    Balances, FrameCodec, LocalSigner, PartyRuntime, Protocol, Seat, Signer, TunnelContext,
 };
 
-type Seats<C> = PartyRuntime<Blackjack, LocalSigner, C>;
+type Seats<P, C> = PartyRuntime<P, LocalSigner, C>;
 
 pub struct MatchResult {
     pub moves: u64,
@@ -44,11 +45,15 @@ impl SeatKit {
 }
 
 /// Pump one seat's MOVE to the other and the ACK back until quiescent; returns bytes sent.
-fn deliver<C: FrameCodec<BjMove>>(
-    proposer: &mut Seats<C>,
-    responder: &mut Seats<C>,
+fn deliver<P, C>(
+    proposer: &mut Seats<P, C>,
+    responder: &mut Seats<P, C>,
     first: Vec<u8>,
-) -> usize {
+) -> usize
+where
+    P: Protocol,
+    C: FrameCodec<P::Move>,
+{
     let mut bytes = first.len();
     let mut to_responder = vec![first];
     loop {
@@ -77,22 +82,47 @@ fn deliver<C: FrameCodec<BjMove>>(
 
 /// Inject the per-match card seed into a seat's blackjack state before play. `None`
 /// keeps the golden deterministic stream (byte-identical to the legacy gate).
-fn seed_cards<C: FrameCodec<BjMove>>(seat: &mut Seats<C>, card_seed: Option<u64>) {
+fn seed_cards<C: FrameCodec<BjMove>>(seat: &mut Seats<Blackjack, C>, card_seed: Option<u64>) {
     if card_seed.is_some() {
         seat.with_state_mut(|s| s.card_seed = card_seed);
     }
 }
 
+struct SplitMix64 {
+    state: u64,
+}
+
+impl SplitMix64 {
+    fn new(seed: u64) -> SplitMix64 {
+        SplitMix64 { state: seed }
+    }
+
+    fn next_f64(&mut self) -> f64 {
+        self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^= z >> 31;
+        (z >> 11) as f64 / (1u64 << 53) as f64
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
-pub fn play_match_seeded<C: FrameCodec<BjMove> + Default>(
-    card_seed: Option<u64>,
+fn play_protocol_match_seeded<P, C>(
+    protocol: P,
+    move_seed: u64,
     kit: &SeatKit,
     tunnel_id: &str,
     balance_a: u64,
     balance_b: u64,
     created_at: u64,
     max_moves: u64,
-) -> MatchResult {
+    configure: impl FnOnce(&mut Seats<P, C>, &mut Seats<P, C>),
+) -> MatchResult
+where
+    P: Protocol + Clone,
+    C: FrameCodec<P::Move> + Default,
+{
     let ctx = |seat| TunnelContext {
         tunnel_id: tunnel_id.to_string(),
         initial: Balances {
@@ -101,17 +131,26 @@ pub fn play_match_seeded<C: FrameCodec<BjMove> + Default>(
         },
         seat,
     };
-    let mut a: Seats<C> =
-        PartyRuntime::new(Blackjack, kit.signer_a.clone(), kit.pk_b, ctx(Seat::A));
-    let mut b: Seats<C> =
-        PartyRuntime::new(Blackjack, kit.signer_b.clone(), kit.pk_a, ctx(Seat::B));
-    seed_cards(&mut a, card_seed);
-    seed_cards(&mut b, card_seed);
+    let mut a: Seats<P, C> = PartyRuntime::new(
+        protocol.clone(),
+        kit.signer_a.clone(),
+        kit.pk_b,
+        ctx(Seat::A),
+    );
+    let mut b: Seats<P, C> = PartyRuntime::new(
+        protocol.clone(),
+        kit.signer_b.clone(),
+        kit.pk_a,
+        ctx(Seat::B),
+    );
+    configure(&mut a, &mut b);
 
     let started = Instant::now();
     let mut moves = 0u64;
     let mut bytes = 0usize;
     let mut ts = created_at;
+    let mut rng_a = SplitMix64::new(move_seed ^ 0xA5A5_5A5A_D0D0_1CE5);
+    let mut rng_b = SplitMix64::new(move_seed ^ 0x5A5A_A5A5_CAFE_BABE);
 
     'outer: while moves < max_moves && !a.is_terminal() {
         let mut progressed = false;
@@ -119,8 +158,17 @@ pub fn play_match_seeded<C: FrameCodec<BjMove> + Default>(
             if a.is_terminal() {
                 break;
             }
-            let st = if p == Seat::A { a.state() } else { b.state() };
-            let Some(mv) = plan(st, p) else { continue };
+            let mv = match p {
+                Seat::A => {
+                    let mut rng = || rng_a.next_f64();
+                    protocol.sample_move(a.state(), p, &mut rng)
+                }
+                Seat::B => {
+                    let mut rng = || rng_b.next_f64();
+                    protocol.sample_move(b.state(), p, &mut rng)
+                }
+            };
+            let Some(mv) = mv else { continue };
             ts += 1;
             let first = if p == Seat::A {
                 a.propose(mv, ts).expect("legal move")
@@ -164,6 +212,48 @@ pub fn play_match_seeded<C: FrameCodec<BjMove> + Default>(
         final_balance_b: bals.b,
         play_ns: started.elapsed().as_nanos(),
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn play_match_seeded<C: FrameCodec<BjMove> + Default>(
+    card_seed: Option<u64>,
+    kit: &SeatKit,
+    tunnel_id: &str,
+    balance_a: u64,
+    balance_b: u64,
+    created_at: u64,
+    max_moves: u64,
+) -> MatchResult {
+    play_protocol_match_seeded::<Blackjack, C>(
+        Blackjack,
+        card_seed.unwrap_or(0),
+        kit,
+        tunnel_id,
+        balance_a,
+        balance_b,
+        created_at,
+        max_moves,
+        |a, b| {
+            seed_cards(a, card_seed);
+            seed_cards(b, card_seed);
+        },
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn play_blackjack_v2_seeded<C: FrameCodec<BlackjackV2Move> + Default>(
+    move_seed: u64,
+    kit: &SeatKit,
+    tunnel_id: &str,
+    balance_a: u64,
+    balance_b: u64,
+    created_at: u64,
+    max_moves: u64,
+) -> MatchResult {
+    play_protocol_match_seeded::<BlackjackV2, C>(
+        BlackjackV2,
+        move_seed, kit, tunnel_id, balance_a, balance_b, created_at, max_moves, |_, _| {},
+    )
 }
 
 #[cfg(test)]
