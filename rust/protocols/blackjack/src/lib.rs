@@ -9,7 +9,9 @@ use tunnel_core::crypto::blake2b256;
 use tunnel_harness::Seat;
 
 pub mod duel;
+pub mod strategy;
 pub mod v2;
+pub use strategy::BlackjackStrategy;
 
 pub type Party = Seat;
 
@@ -426,27 +428,11 @@ pub fn plan(s: &BjState, seat: Party) -> Option<BjMove> {
     }
 }
 
-use tunnel_harness::{
-    Balances, MoveStrategy, MoveStrategyContext, Protocol, ProtocolError, TunnelContext,
-};
+use tunnel_harness::{Balances, Protocol, ProtocolError, TunnelContext};
 
 /// The blackjack protocol handle. Stateless; all state lives in `BjState`.
 #[derive(Clone, Copy)]
 pub struct Blackjack;
-
-#[derive(Clone, Copy, Debug, Default)]
-pub struct BlackjackStrategy;
-
-impl MoveStrategy<Blackjack> for BlackjackStrategy {
-    async fn plan_move(
-        &mut self,
-        state: &BjState,
-        seat: Seat,
-        _ctx: &MoveStrategyContext,
-    ) -> Option<BjMove> {
-        plan(state, seat)
-    }
-}
 
 impl Protocol for Blackjack {
     type State = BjState;
