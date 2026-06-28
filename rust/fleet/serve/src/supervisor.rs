@@ -54,6 +54,9 @@ impl FleetSupervisor {
 /// reporter is fire-and-forget, so a heartbeat failure never blocks the move loop.
 /// Attaching a reporter is the act of claiming ownership: only call this for a
 /// tunnel whose session this party registered (and whose `stats_token` it holds).
+///
+/// The returned `DriverUnit` must be polled within a tokio runtime: the reporter
+/// spawns its POSTs onto the ambient runtime (as `FleetSupervisor` does).
 pub fn into_serving_unit<P, Pol, Ch, S>(
     driver: PartyDriver<P, Pol, Ch, S>,
     reporter: HeartbeatReporter,

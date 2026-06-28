@@ -17,12 +17,10 @@ pub struct HeartbeatPayload {
     pub window_ms: u64,
 }
 
-/// Posts activity heartbeats for one served tunnel. Holding a `stats_token` is
-/// what makes a party the session's reporter (the server mints exactly one token
-/// per registration), so the at-most-once guarantee is structural: a reporter is
-/// only ever constructed and attached for a tunnel this party registered. There
-/// is deliberately no internal seat/ownership flag — possessing the token and
-/// attaching the reporter *is* the gate.
+/// Posts activity heartbeats for one served tunnel. The server mints exactly one
+/// `stats_token` per registration and a reporter can't be built without one, so
+/// attaching a reporter *is* the at-most-once gate: it exists only for a tunnel
+/// this party registered. No internal seat/ownership flag, by design.
 pub struct HeartbeatReporter {
     http: reqwest::Client,
     base_url: String,
@@ -58,9 +56,11 @@ impl HeartbeatReporter {
         }
     }
 
-    /// Override the flush window (default 1000ms).
+    /// Override the flush window (default 1000ms). Floored at 1ms: the server
+    /// derives TPS as actions/window, so a zero window would divide by zero. This
+    /// keeps `record`'s emitted window strictly positive, mirroring `drain`'s clamp.
     pub fn with_cadence(mut self, flush_interval_ms: u64) -> Self {
-        self.flush_interval_ms = flush_interval_ms;
+        self.flush_interval_ms = flush_interval_ms.max(1);
         self
     }
 
@@ -229,6 +229,24 @@ mod tests {
         assert_eq!(p.actions_delta, 1);
         assert_eq!(p.window_ms, 1);
         assert_eq!(r.drain(), None);
+    }
+
+    #[test]
+    fn with_cadence_floors_window_so_record_never_emits_zero() {
+        // A zero window would make the server's actions/window TPS divide by zero;
+        // with_cadence(0) is floored to 1ms, so a same-timestamp move does NOT
+        // flush a zero window and the first elapsed ms flushes window_ms == 1.
+        let mut r = HeartbeatReporter::new(
+            reqwest::Client::new(),
+            "http://x".into(),
+            "sess".into(),
+            "tok".into(),
+        )
+        .with_cadence(0);
+        r.start("0xabc");
+        assert_eq!(r.record(&ev(1, 1, 0)), None);
+        let p = r.record(&ev(2, 2, 1)).expect("flush at 1ms");
+        assert_eq!(p.window_ms, 1);
     }
 
     use wiremock::matchers::{header, method, path};
