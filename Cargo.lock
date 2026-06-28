@@ -7404,6 +7404,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "tokio",
  "tunnel-core",
  "tunnel-harness",
 ]
@@ -7425,6 +7426,7 @@ dependencies = [
  "hex",
  "serde",
  "serde_json",
+ "tokio",
  "tunnel-core",
  "tunnel-harness",
 ]
@@ -7435,6 +7437,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "tokio",
  "tunnel-core",
  "tunnel-harness",
 ]
@@ -7473,6 +7476,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "tokio",
  "tunnel-core",
  "tunnel-harness",
 ]
@@ -7532,6 +7536,7 @@ dependencies = [
  "hex",
  "serde",
  "serde_json",
+ "tokio",
  "tunnel-core",
  "tunnel-harness",
 ]
@@ -7541,6 +7546,7 @@ name = "tunnel-quantum-poker"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "tokio",
  "tunnel-core",
  "tunnel-harness",
 ]
@@ -7551,6 +7557,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "tokio",
  "tunnel-core",
  "tunnel-harness",
 ]

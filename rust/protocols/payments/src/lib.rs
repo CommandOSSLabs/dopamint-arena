@@ -5,6 +5,9 @@
 use tunnel_core::codec::u64_to_be_bytes;
 use tunnel_harness::{Balances, Protocol, ProtocolError, Seat, TunnelContext};
 
+pub mod strategy;
+pub use strategy::PaymentsStrategy;
+
 const DOMAIN: &[u8] = b"sui_tunnel::proto::payments.v1";
 const TRANSFER: u64 = 1;
 

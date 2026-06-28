@@ -7,7 +7,9 @@
 use tunnel_core::codec::u64_to_be_bytes;
 use tunnel_core::commitment::{combine_reveals, compute_commitment, verify_commitment};
 use tunnel_core::randomness::{next_u64_in_range, seed_from_bytes};
-use tunnel_harness::{Balances, Protocol, ProtocolError, Seat, TunnelContext};
+use tunnel_harness::{
+    Balances, MoveStrategy, MoveStrategyContext, Protocol, ProtocolError, Seat, TunnelContext,
+};
 
 pub const WAGER: u64 = 100;
 pub const ROUND_CAP: u64 = 1000;
@@ -582,6 +584,94 @@ fn random_secret(rng: &mut dyn FnMut() -> f64) -> BlackjackV2Secret {
     BlackjackV2Secret { value, salt }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct BlackjackV2Strategy {
+    rng_state: u64,
+}
+
+impl BlackjackV2Strategy {
+    pub fn new(seed: u64) -> Self {
+        Self { rng_state: seed }
+    }
+
+    fn next_f64(&mut self) -> f64 {
+        self.rng_state = self.rng_state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.rng_state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^= z >> 31;
+        (z >> 11) as f64 / (1u64 << 53) as f64
+    }
+}
+
+impl MoveStrategy<BlackjackV2> for BlackjackV2Strategy {
+    async fn plan_move(
+        &mut self,
+        state: &BlackjackV2State,
+        seat: Seat,
+        _ctx: &MoveStrategyContext,
+    ) -> Option<BlackjackV2Move> {
+        if is_terminal(state) {
+            return None;
+        }
+        match state.phase {
+            Phase::RoundOver => {
+                (seat == player_party(state.round + 1)).then_some(BlackjackV2Move::Deal)
+            }
+            Phase::DrawCommit => {
+                let owed = if state.pending_commit_a.is_none() {
+                    Some(Seat::A)
+                } else if state.pending_commit_b.is_none() {
+                    Some(Seat::B)
+                } else {
+                    None
+                };
+                if owed != Some(seat) {
+                    return None;
+                }
+                let mut rng = || self.next_f64();
+                let secret = random_secret(&mut rng);
+                Some(BlackjackV2Move::Commit {
+                    commitment: compute_slot_commitment(&secret).ok()?,
+                    local_secret: Some(secret),
+                })
+            }
+            Phase::DrawReveal => {
+                let owed = if state.pending_reveal_a.is_none() {
+                    Some(Seat::A)
+                } else if state.pending_reveal_b.is_none() {
+                    Some(Seat::B)
+                } else {
+                    None
+                };
+                if owed != Some(seat) {
+                    return None;
+                }
+                let secret = if seat == Seat::A {
+                    state.local_secret_a.clone()
+                } else {
+                    state.local_secret_b.clone()
+                }?;
+                Some(BlackjackV2Move::Reveal {
+                    reveal: secret.into(),
+                })
+            }
+            Phase::Player => {
+                if seat != player_party(state.round) {
+                    return None;
+                }
+                Some(
+                    if blackjack_hand_value(&state.player_hand) < DEALER_STANDS_AT {
+                        BlackjackV2Move::Hit
+                    } else {
+                        BlackjackV2Move::Stand
+                    },
+                )
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct BlackjackV2;
 
@@ -682,5 +772,145 @@ impl Protocol for BlackjackV2 {
                 })
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod strategy_tests {
+    use super::*;
+    use tunnel_harness::{MoveStrategy, MoveStrategyContext};
+
+    fn strategy_ctx(seat: Seat) -> MoveStrategyContext {
+        MoveStrategyContext {
+            tunnel_id: "0xb1".into(),
+            seat,
+        }
+    }
+
+    #[tokio::test]
+    async fn draw_commit_is_serialized_a_then_b() {
+        let protocol = BlackjackV2;
+        let state = initial_state(500, 500);
+        assert_eq!(state.phase, Phase::DrawCommit);
+        let mut a = BlackjackV2Strategy::new(1);
+        let mut b = BlackjackV2Strategy::new(2);
+
+        let commit_a = a
+            .plan_move(&state, Seat::A, &strategy_ctx(Seat::A))
+            .await
+            .expect("A owes first commit");
+        assert!(b
+            .plan_move(&state, Seat::B, &strategy_ctx(Seat::B))
+            .await
+            .is_none());
+
+        let state = protocol.apply_move(&state, &commit_a, Seat::A).unwrap();
+        assert!(b
+            .plan_move(&state, Seat::B, &strategy_ctx(Seat::B))
+            .await
+            .is_some());
+    }
+
+    #[tokio::test]
+    async fn draw_reveal_is_serialized_a_then_b() {
+        let protocol = BlackjackV2;
+        let mut state = initial_state(500, 500);
+        let mut a = BlackjackV2Strategy::new(1);
+        let mut b = BlackjackV2Strategy::new(2);
+
+        let commit_a = a
+            .plan_move(&state, Seat::A, &strategy_ctx(Seat::A))
+            .await
+            .unwrap();
+        state = protocol.apply_move(&state, &commit_a, Seat::A).unwrap();
+        let commit_b = b
+            .plan_move(&state, Seat::B, &strategy_ctx(Seat::B))
+            .await
+            .unwrap();
+        state = protocol.apply_move(&state, &commit_b, Seat::B).unwrap();
+        assert_eq!(state.phase, Phase::DrawReveal);
+
+        let reveal_a = a
+            .plan_move(&state, Seat::A, &strategy_ctx(Seat::A))
+            .await
+            .expect("A owes first reveal");
+        assert!(b
+            .plan_move(&state, Seat::B, &strategy_ctx(Seat::B))
+            .await
+            .is_none());
+
+        state = protocol.apply_move(&state, &reveal_a, Seat::A).unwrap();
+        assert!(b
+            .plan_move(&state, Seat::B, &strategy_ctx(Seat::B))
+            .await
+            .is_some());
+    }
+
+    #[tokio::test]
+    async fn player_phase_only_player_hits_below_seventeen_and_stands_at_seventeen() {
+        let mut low = initial_state(500, 500);
+        low.phase = Phase::Player;
+        low.round = 1;
+        low.player_hand = vec![10, 6];
+        let mut made = low.clone();
+        made.player_hand = vec![10, 7];
+        let mut a = BlackjackV2Strategy::new(1);
+        let mut b = BlackjackV2Strategy::new(2);
+
+        assert!(matches!(
+            a.plan_move(&low, Seat::A, &strategy_ctx(Seat::A)).await,
+            Some(BlackjackV2Move::Hit)
+        ));
+        assert!(b
+            .plan_move(&low, Seat::B, &strategy_ctx(Seat::B))
+            .await
+            .is_none());
+        assert!(matches!(
+            a.plan_move(&made, Seat::A, &strategy_ctx(Seat::A)).await,
+            Some(BlackjackV2Move::Stand)
+        ));
+    }
+
+    #[tokio::test]
+    async fn round_over_next_player_deals() {
+        let mut state = initial_state(500, 500);
+        state.phase = Phase::RoundOver;
+        let mut a = BlackjackV2Strategy::new(1);
+        let mut b = BlackjackV2Strategy::new(2);
+
+        assert!(matches!(
+            a.plan_move(&state, Seat::A, &strategy_ctx(Seat::A)).await,
+            Some(BlackjackV2Move::Deal)
+        ));
+        assert!(b
+            .plan_move(&state, Seat::B, &strategy_ctx(Seat::B))
+            .await
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn short_self_play_conserves_balances() {
+        let protocol = BlackjackV2;
+        let mut state = initial_state(500, 500);
+        let mut a = BlackjackV2Strategy::new(1);
+        let mut b = BlackjackV2Strategy::new(2);
+
+        for _ in 0..200 {
+            if protocol.is_terminal(&state) || state.round >= 3 {
+                break;
+            }
+            let planned_a = a.plan_move(&state, Seat::A, &strategy_ctx(Seat::A)).await;
+            let planned_b = b.plan_move(&state, Seat::B, &strategy_ctx(Seat::B)).await;
+            let (seat, mv) = match (planned_a, planned_b) {
+                (Some(mv), None) => (Seat::A, mv),
+                (None, Some(mv)) => (Seat::B, mv),
+                other => panic!("expected exactly one planned move, got {other:?}"),
+            };
+            state = protocol.apply_move(&state, &mv, seat).unwrap();
+            assert_eq!(protocol.balances(&state).sum(), 1000);
+        }
+
+        assert!(state.round >= 1);
+        assert_eq!(protocol.balances(&state).sum(), 1000);
     }
 }

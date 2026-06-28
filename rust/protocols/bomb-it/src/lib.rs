@@ -5,6 +5,9 @@ use std::collections::HashSet;
 use tunnel_core::codec::u64_to_be_bytes;
 use tunnel_harness::{Balances, Protocol, ProtocolError, Seat, TunnelContext};
 
+pub mod strategy;
+pub use strategy::{BombItSeriesStrategy, BombItStrategy};
+
 pub const GRID_W: i64 = 21;
 pub const GRID_H: i64 = 21;
 pub const CELL_COUNT: usize = (GRID_W * GRID_H) as usize;
