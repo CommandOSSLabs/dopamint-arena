@@ -15,10 +15,10 @@ import { useTelemetry } from "../../telemetry/TelemetryProvider";
 import type { TelemetryWriter } from "../../telemetry/TelemetryProvider";
 import {
   BattleshipProtocol,
-  battleshipMoveCodec,
   type BattleshipMove,
   type BattleshipState,
-} from "./protocol/battleship";
+} from "sui-tunnel-ts/protocol/battleship";
+import { battleshipMoveCodec } from "sui-tunnel-ts/protocol/battleshipCodec";
 import {
   MpClient,
   resolveMpWsUrl,
@@ -43,9 +43,8 @@ import {
 } from "../../onchain/stakeTunnel";
 import { MTPS_COIN_TYPE, isMtpsConfigured } from "../../onchain/mtps";
 import { coSignedToSettleBody } from "../../backend/settleRequest";
-import { type FleetSecret, makeFleetSecret } from "./engine/selfPlay";
+import { type FleetSecret, makeFleetSecret, secureSalt } from "./engine/selfPlay";
 import { type Placement, placementsToBoard } from "./engine/fleet";
-import { randomSalts } from "./engine/merkle";
 import { proposeDue } from "./engine/pvpDriver";
 import { pickShot, BOT_CONFIGS, DEFAULT_BOT_DIFFICULTY } from "./engine/bot";
 import { deriveBattleshipView, type BattleshipView } from "./view";
@@ -210,13 +209,7 @@ class PvpSession {
     const r = this.role;
     if (!dt || !r) return;
     const st = dt.state;
-    if (
-      st.phase !== "playing" ||
-      st.pendingShot ||
-      st.turn !== r ||
-      st.winner !== 0
-    )
-      return;
+    if (st.phase !== "playing" || st.pendingShot || st.turn !== r) return;
     const cell = pickShot(
       st,
       r,
@@ -522,7 +515,7 @@ class PvpSession {
     this.placements = placements;
     const secret = makeFleetSecret(
       placementsToBoard(placements),
-      randomSalts(),
+      secureSalt(),
     );
     this.secret = secret;
     const signExec = deps.signExec;
@@ -646,18 +639,13 @@ class PvpSession {
     const r = this.role;
     if (!dt || !r) return;
     const st = dt.state;
-    if (
-      st.phase !== "playing" ||
-      st.pendingShot ||
-      st.turn !== r ||
-      st.winner !== 0
-    ) {
+    if (st.phase !== "playing" || st.pendingShot || st.turn !== r) {
       return;
     }
     const atOpponent = r === "A" ? st.shotsAtB : st.shotsAtA;
     if (atOpponent.some((s) => s.cell === cell)) return;
     try {
-      dt.propose({ type: "shoot", cell }, 0n);
+      dt.propose({ kind: "shoot", cell }, 0n);
       this.lastYourShot = cell;
       this.sync();
     } catch (e) {
