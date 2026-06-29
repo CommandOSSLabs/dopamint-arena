@@ -228,9 +228,7 @@ impl TunnelAnchor for InMemoryAnchor {
             let (pk_a, pk_b) = match pks {
                 Some(p) => p,
                 None => {
-                    return Err(TunnelAnchorError::Rejected(
-                        "settle before open".into(),
-                    ));
+                    return Err(TunnelAnchorError::Rejected("settle before open".into()));
                 }
             };
             match guard.settles.remove(&request.tunnel_id) {

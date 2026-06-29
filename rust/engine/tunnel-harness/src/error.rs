@@ -57,9 +57,6 @@ mod tests {
     #[test]
     fn tunnel_anchor_error_maps_into_harness_anchor() {
         let e: HarnessError = TunnelAnchorError::AlreadySettled.into();
-        assert_eq!(
-            e,
-            HarnessError::Anchor(TunnelAnchorError::AlreadySettled)
-        );
+        assert_eq!(e, HarnessError::Anchor(TunnelAnchorError::AlreadySettled));
     }
 }

@@ -264,7 +264,9 @@ mod tests {
         let snapshot: Transcript<TranscriptEntry<u8>> = rec.snapshot();
         assert!(snapshot.entries().is_empty());
         let json = rec
-            .export(&JsonTranscriptCodec, |e: &TranscriptEntry<u8>| Some(e.nonce))
+            .export(&JsonTranscriptCodec, |e: &TranscriptEntry<u8>| {
+                Some(e.nonce)
+            })
             .unwrap();
         assert_eq!(json, "{\"entries\":[]}");
     }

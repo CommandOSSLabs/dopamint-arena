@@ -5,9 +5,9 @@
 use tunnel_core::crypto::keypair_from_secret;
 use tunnel_harness::{
     Balances, BcsTranscriptCodec, InMemoryAnchor, InMemoryFrameTransport,
-    InMemoryTranscriptRecorder, JsonTranscriptCodec, LocalSigner, MoveStrategy, MoveStrategyContext,
-    PartyDriver, Protocol, ProtocolError, Seat, SeatParts, Transcript, TranscriptCodec,
-    TranscriptEntry, TranscriptRecorder, TunnelContext,
+    InMemoryTranscriptRecorder, JsonTranscriptCodec, LocalSigner, MoveStrategy,
+    MoveStrategyContext, PartyDriver, Protocol, ProtocolError, Seat, SeatParts, Transcript,
+    TranscriptCodec, TranscriptEntry, TranscriptRecorder, TunnelContext,
 };
 
 struct Tiny;
@@ -44,11 +44,7 @@ impl Protocol for Tiny {
         _mv: &TinyMove,
         by: Seat,
     ) -> Result<TinyState, ProtocolError> {
-        let turn = if s.n % 2 == 0 {
-            Seat::A
-        } else {
-            Seat::B
-        };
+        let turn = if s.n % 2 == 0 { Seat::A } else { Seat::B };
         if by != turn {
             return Err(ProtocolError("wrong turn".into()));
         }
@@ -93,11 +89,7 @@ impl MoveStrategy<Tiny> for AlwaysMove {
         seat: Seat,
         _ctx: &MoveStrategyContext,
     ) -> Option<TinyMove> {
-        let turn = if s.n % 2 == 0 {
-            Seat::A
-        } else {
-            Seat::B
-        };
+        let turn = if s.n % 2 == 0 { Seat::A } else { Seat::B };
         (turn == seat && s.n < 4).then_some(TinyMove)
     }
 }
