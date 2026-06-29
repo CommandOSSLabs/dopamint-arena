@@ -181,24 +181,29 @@ export function useCaroBotGame(
   const actionsRef = useRef(0);
   const lastHeartbeatRef = useRef(Date.now());
 
-  const flushHeartbeat = useCallback((tunnelId: string, force: boolean) => {
-    const s = sessionRef.current;
-    if (!s || actionsRef.current === 0) return;
-    const now = Date.now();
-    const windowMs = now - lastHeartbeatRef.current;
-    if (!force && windowMs < 1000) return;
-    const actionsDelta = actionsRef.current;
-    actionsRef.current = 0;
-    lastHeartbeatRef.current = now;
-    getControlPlaneClient()
-      .sendHeartbeat(s.sessionId, s.statsToken, {
-        tunnelId,
-        nonce: String(moveCountRef.current),
-        actionsDelta,
-        windowMs: Math.max(1, windowMs),
-      })
-      .catch((e) => console.error("[caro bot] heartbeat failed:", e));
-  }, []);
+  const flushHeartbeat = useCallback(
+    (tunnelId: string, force: boolean) => {
+      const s = sessionRef.current;
+      if (!s || actionsRef.current === 0) return;
+      const now = Date.now();
+      const windowMs = now - lastHeartbeatRef.current;
+      if (!force && windowMs < 1000) return;
+      const actionsDelta = actionsRef.current;
+      actionsRef.current = 0;
+      lastHeartbeatRef.current = now;
+      // Same count, locally: feed the per-game TPS chip its real rate when no backend is connected.
+      report.recordActions(actionsDelta);
+      getControlPlaneClient()
+        .sendHeartbeat(s.sessionId, s.statsToken, {
+          tunnelId,
+          nonce: String(moveCountRef.current),
+          actionsDelta,
+          windowMs: Math.max(1, windowMs),
+        })
+        .catch((e) => console.error("[caro bot] heartbeat failed:", e));
+    },
+    [report],
+  );
 
   const setMaxGames = useCallback((n: number) => {
     const clamped = Math.max(

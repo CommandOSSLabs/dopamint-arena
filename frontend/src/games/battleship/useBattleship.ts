@@ -328,6 +328,8 @@ class BotSession {
     const actionsDelta = this.actions;
     this.actions = 0;
     this.lastHeartbeat = now;
+    // Same count, locally: feed the per-game TPS chip its real rate when no backend is connected.
+    this.deps?.report.recordActions(actionsDelta);
     getControlPlaneClient()
       .sendHeartbeat(s.sessionId, s.statsToken, {
         tunnelId: this.tunnelId,

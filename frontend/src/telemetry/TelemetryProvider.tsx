@@ -33,6 +33,10 @@ export interface TelemetryWriter {
   pushLocalTxn: (row: TxnRow) => void;
   /** Accumulate engine counters from one or more co-signed updates. */
   bumpCounters: (delta: Partial<Counters>) => void;
+  /** Tally `n` co-signed state updates — the exact `actionsDelta` this game ships to the
+   *  backend heartbeat. The scoped report a game window installs tags these by `gameId`;
+   *  it is what feeds the per-game local TPS fallback. No-op outside a game scope. */
+  recordActions: (n: number) => void;
   /** Set the number of bots currently running. */
   setActive: (n: number) => void;
 }
@@ -44,9 +48,11 @@ interface TelemetryContextValue {
    *  subscription drift). Null while connecting/offline. */
   backend: StatsSnapshot | null;
   status: BackendStatus;
-  /** Record `n` real co-signed updates produced by `gameId` (off-chain actions). Tagged by the
-   *  scoped report each game window installs; lets the per-game window chip derive a REAL local
-   *  rate when the backend's authoritative `perGame` feed is absent. Never feeds the aggregate. */
+  /** Record `n` co-signed state updates for `gameId` — the same `actionsDelta` the game ships to
+   *  the backend heartbeat (tagged by the scoped report each game window installs). Lets the
+   *  per-game chip derive a REAL local rate, in the backend's own unit, when its authoritative
+   *  `perGame` feed is absent. Self-play only: PvP is relay-counted server-side, so it records
+   *  nothing here and shows a local rate only when the backend is connected. */
   recordGameUpdate: (gameId: string, n: number) => void;
   /** Cumulative updates recorded for `gameId`, for the chip's own rate sampling. */
   getGameTotal: (gameId: string) => number;
@@ -112,9 +118,10 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
 
   const setActive = useCallback((n: number) => setBotsRunning(n), []);
 
-  // Per-game cumulative update counter (real off-chain actions), tagged by the scoped report a
-  // game window installs. Only used to derive a local per-game rate for the window TPS chip when
-  // the backend's authoritative `perGame` feed is absent — it never touches the global counters.
+  // Per-game cumulative state-update counter — the `actionsDelta` each game heartbeat ships,
+  // tagged by the scoped report a game window installs. Only used to derive a local per-game rate
+  // for the window TPS chip / aggregate when the authoritative `perGame` feed is absent — it
+  // never touches the global counters.
   const perGameTotal = useRef<Record<string, number>>({});
   const recordGameUpdate = useCallback((gameId: string, n: number) => {
     if (n)
@@ -182,7 +189,15 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
   // Keep `report` stable across snapshot updates so consumers' callbacks that
   // depend on it (e.g. a game's start/reset) don't churn on every counter bump.
   const report = useMemo<TelemetryWriter>(
-    () => ({ pushTxn, pushLocalTxn, bumpCounters, setActive }),
+    // recordActions is a no-op at the root — only the per-game scope (GameTelemetryScope)
+    // overrides it to tag the gameId. A game outside a scope simply records no per-game rate.
+    () => ({
+      pushTxn,
+      pushLocalTxn,
+      bumpCounters,
+      recordActions: () => {},
+      setActive,
+    }),
     [pushTxn, pushLocalTxn, bumpCounters, setActive],
   );
   const value = useMemo<TelemetryContextValue>(

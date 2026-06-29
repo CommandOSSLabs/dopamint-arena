@@ -311,6 +311,9 @@ class ChatSession {
             verifications: 2,
             bytes,
           });
+          // Chat has no actionsDelta heartbeat (unlike the bot games), so this per-update tag is
+          // its only per-game TPS signal — one co-signed update = one action.
+          this.deps?.report.recordActions(1);
         };
 
         if (this.gen !== myGen) return;

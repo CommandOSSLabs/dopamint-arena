@@ -10,12 +10,12 @@ import {
 } from "@/telemetry/TelemetryProvider";
 
 /**
- * Wraps a game in a telemetry context whose `bumpCounters` ALSO tallies the game's real
- * co-signed updates under its `gameId` (every game reads `report` from this context). That
- * per-game tally is what lets the window's TPS chip show a real local rate when the backend's
- * authoritative `perGame` feed is absent. Everything else (snapshot, backend, other writer
- * methods) passes straight through; `report` keeps a stable identity so game effects that
- * depend on it don't churn on each telemetry tick.
+ * Wraps a game in a telemetry context whose `recordActions` tags this game's `gameId`, so the
+ * state updates a game reports (the same `actionsDelta` it ships to the backend heartbeat) are
+ * tallied per-game. That per-game tally is what lets the window's TPS chip show a real local
+ * rate when the backend's authoritative `perGame` feed is absent. Everything else (snapshot,
+ * backend, other writer methods) passes straight through; `report` keeps a stable identity so
+ * game effects that depend on it don't churn on each telemetry tick.
  */
 function GameTelemetryScope({
   gameId,
@@ -29,10 +29,7 @@ function GameTelemetryScope({
   const report = useMemo<TelemetryWriter>(
     () => ({
       ...baseReport,
-      bumpCounters: (delta) => {
-        baseReport.bumpCounters(delta);
-        recordGameUpdate(gameId, delta.updates ?? 0);
-      },
+      recordActions: (n) => recordGameUpdate(gameId, n),
     }),
     [baseReport, recordGameUpdate, gameId],
   );
