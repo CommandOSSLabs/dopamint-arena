@@ -50,9 +50,9 @@ impl<E> Transcript<E> {
         }
     }
 
-    pub fn map<T>(&self, mut f: impl FnMut(&E) -> T) -> Transcript<T> {
+    pub fn map<T>(&self, f: impl FnMut(&E) -> T) -> Transcript<T> {
         Transcript {
-            entries: self.entries.iter().map(|e| f(e)).collect(),
+            entries: self.entries.iter().map(f).collect(),
         }
     }
 }
@@ -111,18 +111,14 @@ pub trait TranscriptRecorder<M> {
 
     /// Preprocess (filter + reshape) then serialize in one pure pass. `preprocess`
     /// returns `None` to drop an entry. The raw recording is never mutated.
-    fn export<C, T, F>(&self, codec: &C, mut preprocess: F) -> Result<C::Output, C::Error>
+    fn export<C, T, F>(&self, codec: &C, preprocess: F) -> Result<C::Output, C::Error>
     where
         C: TranscriptCodec,
         F: FnMut(&TranscriptEntry<M>) -> Option<T>,
         T: Serialize,
     {
         let snapshot = self.snapshot();
-        let reshaped: Vec<T> = snapshot
-            .entries()
-            .iter()
-            .filter_map(|e| preprocess(e))
-            .collect();
+        let reshaped: Vec<T> = snapshot.entries().iter().filter_map(preprocess).collect();
         codec.serialize(&Transcript::from_entries(reshaped))
     }
 }
