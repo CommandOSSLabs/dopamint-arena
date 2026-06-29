@@ -13,13 +13,13 @@ const fresh = (): BlackjackState =>
   });
 
 test("offers the standard chip denominations", () => {
-  expect(BET_OPTIONS).toEqual([25, 100, 500, 1000]);
+  expect(BET_OPTIONS).toEqual([1, 5, 25, 100]);
 });
 
 test("builds a bet move clamped to [MIN_BET, maxBet]", () => {
   const s = fresh();
   expect(bjBetMove(100, s)).toEqual({ kind: "bet", amount: 100n });
-  expect(bjBetMove(5, s)).toEqual({ kind: "bet", amount: 25n }); // below MIN_BET -> 25
+  expect(bjBetMove(0, s)).toEqual({ kind: "bet", amount: 1n }); // below MIN_BET -> 1
 });
 
 test("caps the bet at the smaller balance", () => {

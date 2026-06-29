@@ -33,7 +33,7 @@ import {
   type ChatSessionStatus,
 } from "./session-core";
 
-/** DOPAMINT bank locked per seat (1 DOPAMINT, 9 decimals). */
+/** DOPAMINT bank locked per seat (1 DOPAMINT; 0 decimals, ADR-0015). */
 const LOCKED_PER_SEAT = 1n; // 1 MTPS per seat (MTPS is 0-decimal; ADR-0015)
 /** SUI-fallback bank per seat (MIST), when the DOPAMINT env is unset. */
 const SUI_PER_SEAT = 500n;

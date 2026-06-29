@@ -60,7 +60,11 @@ import {
 import { settlePokerTunnel } from "./pokerSettle";
 
 const STAKE = QUANTUM_POKER_STAKE;
-const MTPS_PER_SEAT = 1_000_000n; // 0.001 MTPS/seat → a clean 1.0M-chip stack; still deep enough to run a full HAND_CAP without busting
+// Buy-in locked per seat (chips == raw MTPS 1:1; MTPS is 0-decimal, ADR-0015). Equals STAKE so the
+// bot lane funds the documented buy-in — deep enough for ~100 hands at ANTE 50, and a 2-seat open
+// (2 × STAKE = 10k) is covered by one faucet pull. (Was a stale 9-decimal 1_000_000 = 0.001 MTPS,
+// which at 0 decimals is 1M MTPS/seat → a 2M open the faucet can't fund → the open failed.)
+const MTPS_PER_SEAT = STAKE;
 const HAND_CAP = QUANTUM_POKER_HANDS_PER_TUNNEL;
 
 /** Pause between matches (ms). */

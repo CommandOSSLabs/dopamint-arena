@@ -47,8 +47,6 @@ import type { TunnelOpenRequest } from "../../onchain/tunnelOpenBatcher";
 const FRAME_BUDGET_MS = 10;
 const MAX_STEPS_PER_FRAME = 8;
 
-/** MTPS bank locked per seat (1 MTPS, 9 decimals) — funds MANY per-game stakes. */
-const LOCKED_PER_SEAT = 1n; // 1 MTPS per seat (MTPS is 0-decimal; ADR-0015)
 /** SUI-fallback bank per seat (MIST), when the MTPS env is unset. */
 const SUI_PER_SEAT = 500n;
 
@@ -492,22 +490,23 @@ class SoloBotSession<
     this.pendingIntent = undefined;
     this.paused = false;
 
-    // The bank funded on-chain per seat. Each duel wagers the per-game stake off it, so the stake
-    // must never exceed the bank — else the first duel underflows a seat's balance (u64 out of range:
-    // e.g. a 1-token MTPS bank with a 500 lobby stake → 1 - 500 = -499).
-    const fundedPerSeat = isMtpsConfigured ? LOCKED_PER_SEAT : SUI_PER_SEAT;
-    // Per-game stake from the lobby (the small swap): floored at the game's minimum, capped at the
-    // bank so a single duel can't wager more than a seat holds.
+    // Per-game stake is the SMALL swap — the game's minimum — so a funded bank survives MANY duels
+    // on one tunnel. The bank, not the stake, is what carries across duels: the session ends only
+    // when a seat can no longer fund the next stake. Keeping the stake at the minimum is what makes
+    // auto-rematch actually replay instead of bankrupting a seat after the first duel.
+    const stakePerGame = BigInt(this.spec.minStake);
+    // The bank funded on-chain per seat: the chunk brought to the table (lobby stake / AUTO_STAKE),
+    // never below one stake so a duel can't underflow a seat (u64 out of range). MTPS withdraws/
+    // faucets it from the address balance; the SUI fallback keeps its fixed MIST bank.
     const floored = Math.floor(nextStake);
-    const stakePerGame = BigInt(
-      Math.min(
-        Number(fundedPerSeat),
-        Math.max(
-          Number(this.spec.minStake),
-          Number.isFinite(floored) ? floored : 0,
-        ),
-      ),
-    );
+    const fundedPerSeat = isMtpsConfigured
+      ? BigInt(
+          Math.max(
+            Number(stakePerGame),
+            Number.isFinite(floored) ? floored : 0,
+          ),
+        )
+      : SUI_PER_SEAT;
     this.stake = Number(stakePerGame);
     this.emit();
 
