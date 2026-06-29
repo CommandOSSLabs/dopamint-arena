@@ -13,6 +13,7 @@ import {
   buildOpenAndFundSeatA as sdkOpenAndFundSeatA,
   buildOpenAndFundMany as sdkOpenAndFundMany,
   buildOpenAndFundOneReturnless as sdkOpenAndFundOneReturnless,
+  buildDepositMany as sdkDepositMany,
 } from "sui-tunnel-ts/onchain/createAndFund";
 import {
   buildDeposit as sdkDeposit,
@@ -45,6 +46,11 @@ const buildDepositFromGas = sdkDepositFromGas as unknown as (
 const buildDeposit = sdkDeposit as unknown as (
   tx: Transaction,
   p: Parameters<typeof sdkDeposit>[1],
+) => void;
+const buildDepositMany = sdkDepositMany as unknown as (
+  tx: Transaction,
+  specs: Parameters<typeof sdkDepositMany>[1],
+  opts: Parameters<typeof sdkDepositMany>[2],
 ) => void;
 const buildCloseFromSettlement = sdkCloseFromSettlement as unknown as (
   tx: Transaction,
@@ -478,31 +484,28 @@ export async function openAndFundMany(opts: {
   }
 }
 
-/** One PvP tunnel's seat-A open spec for {@link openAndFundSeatAMany}: both ephemeral seats plus
- *  seat A's stake only. The counterparty (a fleet bot) funds seat B itself, server-side. */
-export interface TunnelOpenSeatASpec {
+/** One arena tunnel's seat-A deposit spec for {@link depositSeatAMany}: the existing (fleet-opened,
+ *  ADR-0025) tunnel, its party-A wallet (the depositing sender, for result correlation), and seat
+ *  A's stake. */
+export interface TunnelDepositSeatASpec {
+  tunnelId: string;
   partyA: PartyOnchain;
-  partyB: PartyOnchain;
-  aAmount: bigint;
-  timeoutMs?: bigint;
-  penaltyAmount?: bigint;
+  amount: bigint;
 }
 
 /**
- * Arena one-signature open (ADR-0023): open + share + fund ONLY seat A for N tunnels in ONE PTB,
- * returning each tunnel id keyed by its normalized party-A address. The user is party A and funds
- * just its own seat; each tunnel's party B (a fleet bot) deposits separately. The summed stake is
- * one source coin (an address-balance withdrawal of `stakeFromBalance.amount`, or one `stakeCoinId`,
- * or the gas coin); each `buildOpenAndFundSeatA` splits its `aAmount` off that shared source.
- *
- * The genuine-two-party analog of {@link openAndFundMany} (which funds both seats for self-play).
- * `stakeFromBalance.amount` MUST equal the sum of every spec's `aAmount`. Results are correlated by
- * party-A because `objectChanges` order is unspecified.
+ * Arena one-signature JOIN (ADR-0025): deposit ONLY seat A into N tunnels the fleet already created
+ * + funded seat B for, in ONE PTB — the tunnel activates on this single signature. The deposit-only
+ * analog of the (superseded) seat-A open: there is no `create` here, so nothing is correlated from
+ * object changes — each spec already carries its `tunnelId`, returned keyed by normalized party-A so
+ * the batcher resolves each request. The summed stake is one source coin (an address-balance
+ * withdrawal, one `stakeCoinId`, or the gas coin); `buildDepositMany` splits each `amount` off it.
+ * `stakeFromBalance.amount` MUST equal the sum of every spec's `amount`.
  */
-export async function openAndFundSeatAMany(opts: {
+export async function depositSeatAMany(opts: {
   reads: SuiReads;
   signExec: SignExec;
-  specs: TunnelOpenSeatASpec[];
+  specs: TunnelDepositSeatASpec[];
   coinType?: string;
   stakeFromBalance?: StakeFromBalance;
   stakeCoinId?: string;
@@ -511,41 +514,25 @@ export async function openAndFundSeatAMany(opts: {
     () => {
       const tx = new Transaction();
       const source = stakeCoinArg(tx, opts);
-      for (const s of opts.specs) {
-        buildOpenAndFundSeatA(tx, {
-          partyA: { ...s.partyA, signatureType: SignatureScheme.ED25519 },
-          partyB: { ...s.partyB, signatureType: SignatureScheme.ED25519 },
-          aAmount: s.aAmount,
-          timeoutMs: s.timeoutMs ?? 86_400_000n,
-          penaltyAmount: s.penaltyAmount ?? 0n,
-          stakeCoin: source,
-          coinType: opts.coinType,
-        });
-      }
+      buildDepositMany(
+        tx,
+        opts.specs.map((s) => ({ tunnelId: s.tunnelId, amount: s.amount })),
+        { coinType: opts.coinType, sourceCoin: source },
+      );
       consumeStakeRemainder(tx, opts, source);
       return tx;
     },
     opts.signExec,
-    "openAndFundSeatAMany",
+    "depositSeatAMany",
   );
-  // POST-COMMIT: the PTB has landed; the N tunnels exist and seat-A stake is consumed. Any failure
-  // below must NOT retry the open (would double-open) — surface it as BatchCommittedError.
+  // POST-COMMIT: the PTB has landed; the N seat-A deposits are consumed. Any failure below must NOT
+  // retry (would double-deposit) — surface it as BatchCommittedError. The tunnel ids are known
+  // inputs, so resolution needs no object-change read.
   try {
     await opts.reads.waitForTransaction({ digest });
-    const txb = await opts.reads.getTransactionBlock({
-      digest,
-      options: { showObjectChanges: true },
-    });
-    const ids = findAllTunnelIds(txb.objectChanges);
-    if (ids.length !== opts.specs.length) {
-      throw new Error(
-        `openAndFundSeatAMany: expected ${opts.specs.length} tunnels, got ${ids.length} (digest ${digest})`,
-      );
-    }
     const byPartyA = new Map<string, string>();
-    for (const id of ids) {
-      const partyA = await readTunnelPartyA(opts.reads, id);
-      byPartyA.set(normalizeSuiAddress(partyA), id);
+    for (const s of opts.specs) {
+      byPartyA.set(normalizeSuiAddress(s.partyA.address), s.tunnelId);
     }
     return byPartyA;
   } catch (err) {
