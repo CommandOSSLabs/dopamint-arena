@@ -4,6 +4,7 @@ import {
   useDisconnectWallet,
   useSuiClientQuery,
 } from "@mysten/dapp-kit";
+import { MTPS_COIN_TYPE, isMtpsConfigured } from "@/onchain/mtps";
 
 const DEMO_KEY = "mtps.demoWallet";
 // Display-only fake address + balance so the platform is fully usable for a
@@ -11,6 +12,7 @@ const DEMO_KEY = "mtps.demoWallet";
 const DEMO_ADDRESS =
   "0xde0d0a7e00000000000000000000000000000000000000000000000000c0ffee";
 const DEMO_BALANCE_SUI = 1234.56;
+const DEMO_BALANCE_MTPS = 10_000;
 
 interface DemoContextValue {
   isDemo: boolean;
@@ -46,6 +48,8 @@ export interface WalletSession {
   /** Truncated display form, e.g. 0xde0d0a…c0ffee. */
   shortAddress: string | null;
   balanceSui: number | null;
+  /** MTPS balance in whole tokens (0-decimal; owned coins + SIP-58 address balance). */
+  balanceMtps: number | null;
   isDemo: boolean;
   connectDemo: () => void;
   disconnect: () => void;
@@ -72,6 +76,21 @@ export function useWalletSession(): WalletSession {
     { owner: realAddress ?? "" },
     { enabled: !!realAddress },
   );
+  // MTPS balance (0-decimal). Default stakes come from the SIP-58 address balance, so sum the owned
+  // coins (`totalBalance`) and the address balance (`fundsInAddressBalance`) for the true holdings.
+  const { data: mtpsBalance } = useSuiClientQuery(
+    "getBalance",
+    { owner: realAddress ?? "", coinType: MTPS_COIN_TYPE },
+    { enabled: !!realAddress && isMtpsConfigured },
+  );
+  const mtps = mtpsBalance as
+    | { totalBalance: string; fundsInAddressBalance?: string }
+    | undefined;
+  const balanceMtps = mtps
+    ? Number(
+        BigInt(mtps.totalBalance) + BigInt(mtps.fundsInAddressBalance ?? "0"),
+      )
+    : null;
 
   if (realAddress) {
     return {
@@ -79,6 +98,7 @@ export function useWalletSession(): WalletSession {
       address: realAddress,
       shortAddress: shorten(realAddress),
       balanceSui: balance ? Number(balance.totalBalance) / 1e9 : null,
+      balanceMtps,
       isDemo: false,
       connectDemo: demo.connectDemo,
       disconnect: () => disconnectWallet(),
@@ -91,6 +111,7 @@ export function useWalletSession(): WalletSession {
       address: DEMO_ADDRESS,
       shortAddress: shorten(DEMO_ADDRESS),
       balanceSui: DEMO_BALANCE_SUI,
+      balanceMtps: DEMO_BALANCE_MTPS,
       isDemo: true,
       connectDemo: demo.connectDemo,
       disconnect: demo.disconnectDemo,
@@ -102,6 +123,7 @@ export function useWalletSession(): WalletSession {
     address: null,
     shortAddress: null,
     balanceSui: null,
+    balanceMtps: null,
     isDemo: false,
     connectDemo: demo.connectDemo,
     disconnect: () => {},

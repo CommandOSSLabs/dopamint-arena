@@ -34,6 +34,7 @@ import {
   isMtpsConfigured,
 } from "@/onchain/mtps";
 import {
+  POKER_ANTE,
   QUANTUM_POKER_STAKE,
   QUANTUM_POKER_HANDS_PER_TUNNEL,
 } from "./constants";
@@ -248,8 +249,8 @@ class BotSession {
         // connected wallet funds the stake but pays no gas). SUI fallback (env unset): the wallet
         // funds the stake and pays its own gas.
         const mtpsOn = isMtpsConfigured;
-        // chips == raw stake (1:1), so a 2500 buy-in means a 2500-chip stack — same as PvP. (Was a
-        // full 1 MTPS = 1e9 raw, a stack so large a seat never busts.)
+        // chips == raw stake (1:1), and MTPS is 0-decimal, so a 1000 buy-in is a 1000-chip stack AND
+        // 1000 whole MTPS staked — same as PvP.
         const stakePerSeat = STAKE;
         const coinType = mtpsOn ? MTPS_COIN_TYPE : undefined;
         const signExec = mtpsOn ? deps.sponsoredSignExec : deps.signExec;
@@ -282,7 +283,7 @@ class BotSession {
         if (this.gen !== myGen) return;
 
         const tunnel: PokerTunnel = OffchainTunnel.selfPlay(
-          new QuantumPokerProtocol(HAND_CAP),
+          new QuantumPokerProtocol(HAND_CAP, POKER_ANTE),
           tunnelId,
           a.keyPair,
           b.keyPair,

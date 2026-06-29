@@ -45,7 +45,7 @@ export const CRATE_DENSITY = 0.35;
  *  decisive end (a kill, else a draw) so a solo match runs long and steady, not 5 seconds. */
 export const BOMB_IT_TICK_CAP = 5400n;
 /** Minimum fundable stake per seat (hook clamps to this). */
-export const BOMB_IT_MIN_STAKE = 100n;
+export const BOMB_IT_MIN_STAKE = 1n;
 
 export const SPAWN_A = { row: 1, col: 1 };
 /** 180°-mirror corner of SPAWN_A; odd,odd ⇒ floor (not a pillar). */

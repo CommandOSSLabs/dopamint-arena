@@ -134,7 +134,7 @@ const STEP_MS = 600;
 // and leaving a tunnel open. ~0.02 SUI (a game costs the busier bot ~0.01 SUI of gas).
 const MIN_PLAY_MIST = 20_000_000n;
 // MTPS mode: per-seat stake (1 MTPS, 9 decimals). Both seats are funded from one coin.
-const MTPS_PER_SEAT = 1_000_000_000n;
+const MTPS_PER_SEAT = 1n; // 1 MTPS per seat (MTPS is 0-decimal; ADR-0015)
 // SUI-fallback per-seat stake (MIST), when the MTPS env is unset.
 const SUI_PER_SEAT = 1n;
 // Pause between auto-played games.
@@ -390,7 +390,6 @@ export function useBotGame(difficulty: Difficulty = "fast"): BotGameView {
                 coinType,
                 stakeCoinId: await ensureMtpsStakeCoin({
                   client: client as never,
-                  signExec: xSignExec,
                   owner: bots.x.address,
                   need: 2n * stakePerSeat,
                 }),

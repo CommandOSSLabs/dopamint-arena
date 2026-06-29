@@ -47,7 +47,7 @@ export const TICK_CAP = 5400n;
 /** Ticks of collision immunity after a respawn (also blocks moving, per the reference). */
 export const RESPAWN_INVULN = 3;
 /** Minimum fundable stake per seat (hook clamps to this). */
-export const MIN_STAKE = 100n;
+export const MIN_STAKE = 1n;
 
 export type CrossDir = "north" | "south" | "east" | "west";
 export type CrossLaneKind = "grass" | "road" | "water" | "rails";

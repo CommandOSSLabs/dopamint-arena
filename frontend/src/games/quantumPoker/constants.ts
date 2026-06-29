@@ -11,12 +11,16 @@ export const QUANTUM_POKER_HAND_CAP = 180n;
  */
 export const QUANTUM_POKER_HANDS_PER_TUNNEL = 1500n;
 
-/** Locked per seat for the PvP/agent tunnel lane. */
-export const QUANTUM_POKER_STAKE = 2500n;
+/** Locked per seat for the PvP/agent tunnel lane (whole MTPS; see POKER_BUYIN). */
+export const QUANTUM_POKER_STAKE = 1000n;
 
 /**
- * Per-seat buy-in for the PvP lane, in chips. chips == raw MTPS (1:1), so this is also the raw
- * stake locked per seat per round. "1 MTPS = 2500 chips" is the UI label; the on-chain stake is
- * this many raw units. Sized so a seat busts (and auto-rebuys) within HAND_CAP at ante 50.
+ * Per-seat buy-in, in chips. chips == raw MTPS (1:1), and MTPS is 0-decimal (ADR-0015), so a
+ * 1,000-chip buy-in is also 1,000 whole MTPS staked per seat. With POKER_ANTE=1 that's a long
+ * session — hundreds of hands before a bust — so a tunnel plays many rounds before settling.
  */
-export const POKER_BUYIN = 2500n;
+export const POKER_BUYIN = 1000n;
+
+/** Fixed per-hand ante (whole MTPS), passed to the poker protocol. 1 is the smallest unit (the
+ *  protocol default is 50), so the 1,000-chip stack lasts many hands. */
+export const POKER_ANTE = 1n;

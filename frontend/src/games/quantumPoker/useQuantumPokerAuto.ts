@@ -29,6 +29,7 @@ import {
   isMtpsConfigured,
 } from "@/onchain/mtps";
 import {
+  POKER_ANTE,
   QUANTUM_POKER_STAKE,
   QUANTUM_POKER_HANDS_PER_TUNNEL,
 } from "./constants";
@@ -52,7 +53,6 @@ import {
 import { settlePokerTunnel } from "./pokerSettle";
 
 const STAKE = QUANTUM_POKER_STAKE;
-const MTPS_PER_SEAT = 1_000_000_000n; // 1 MTPS per seat (9 decimals)
 const HAND_CAP = QUANTUM_POKER_HANDS_PER_TUNNEL;
 
 /** Pause between matches (ms). */
@@ -487,7 +487,9 @@ class AutoSession {
     // MTPS mode: stake faucet-minted MTPS and sponsor the bot's open/close gas (no SUI).
     // SUI fallback (MTPS env unset): the bot funds the stake and pays its own gas.
     const mtpsOn = isMtpsConfigured;
-    const stakePerSeat = mtpsOn ? MTPS_PER_SEAT : STAKE;
+    // chips == raw MTPS 1:1 (0 decimals), so the on-chain stake is the chip buy-in — same value in
+    // both modes (matches the bot lane), so the off-chain chip economy and deposits reconcile.
+    const stakePerSeat = STAKE;
     const coinType = mtpsOn ? MTPS_COIN_TYPE : undefined;
 
     try {
@@ -529,7 +531,6 @@ class AutoSession {
             : {
                 stakeCoinId: await ensureMtpsStakeCoin({
                   client: this.deps.client as never,
-                  signExec: this.botSponsoredSignExec(this.bots.A),
                   owner: this.bots.A.address,
                   need: 2n * stakePerSeat,
                 }),
@@ -543,7 +544,7 @@ class AutoSession {
 
       const transcript = new Transcript(tunnelId);
       const tunnel: PokerTunnel = OffchainTunnel.selfPlay(
-        new QuantumPokerProtocol(HAND_CAP),
+        new QuantumPokerProtocol(HAND_CAP, POKER_ANTE),
         tunnelId,
         this.bots.A.coreKey,
         this.bots.B.coreKey,

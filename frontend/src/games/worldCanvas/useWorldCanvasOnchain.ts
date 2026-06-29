@@ -109,7 +109,7 @@ const NUM_COLORS = 16;
 const STAKE = 1n;
 /** MTPS per-seat stake (1 token, 9 decimals) — the default on-chain path (ADR-0010):
  *  faucet-minted, so painters need ZERO SUI; only gas is sponsored. Mirrors the other games. */
-const MTPS_STAKE_PER_SEAT = 1_000_000_000n;
+const MTPS_STAKE_PER_SEAT = 1n; // 1 MTPS per seat (MTPS is 0-decimal; ADR-0015)
 /** Dashboard game key (groups TPS/tunnels under "world-canvas"). */
 const GAME = "world-canvas";
 /** Soft cap on retained painted cells; oldest are evicted so an endless wall keeps
@@ -910,7 +910,6 @@ export function useWorldCanvasOnchain(): UseWorldCanvasOnchain {
           // Self-play funds BOTH seats from one coin → faucet/select for the 2-seat total.
           stakeCoinId = await ensureMtpsStakeCoin({
             client: client as never,
-            signExec: sponsoredSignExec,
             owner: identities.a.address,
             need: 2n * stakePerSeat,
           });

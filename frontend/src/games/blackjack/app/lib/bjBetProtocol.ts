@@ -31,12 +31,14 @@ export function getDealerParty(round: bigint): Party {
 /** Non-rotating assignment: seat A is always the player, seat B always the dealer. */
 export const FIXED_PLAYER_A: PlayerPartyFor = () => "A";
 
-export const MIN_BET = 25n;
+// Whole-token chips (MTPS is 0-decimal; ADR-0015): smallest bet is 1, with denominations scaled to
+// the 1,000-chip buy-in so a table plays many meaningful rounds.
+export const MIN_BET = 1n;
 /** Chip denominations offered as bet buttons (filtered to <= the table max each round). */
-export const BET_OPTIONS = [25, 100, 500, 1000] as const;
+export const BET_OPTIONS = [1, 5, 25, 100] as const;
 const DEALER_STANDS_AT = 17;
 const BUST_AT = 21;
-const ROUND_CAP = 1000n;
+const ROUND_CAP = 100n;
 
 export type BetPhase = "round_over" | "player" | "dealer"; // round_over doubles as the betting state
 export interface BetBlackjackState {

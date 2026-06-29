@@ -9,16 +9,16 @@ import {
   MTPS_COIN_TYPE,
   MTPS_MIN_BALANCE,
   faucetMtps,
+  isMtpsAddressBalance,
   isMtpsConfigured,
 } from "./mtps";
-import { useSponsoredSignExec } from "./useSponsoredSignExec";
 
 /** dapp-kit's v1-compat client exposes `getBalance`; typed narrowly to avoid an `any`. */
 interface BalanceReader {
   getBalance: (input: {
     owner: string;
     coinType?: string;
-  }) => Promise<{ totalBalance: string }>;
+  }) => Promise<{ totalBalance: string; fundsInAddressBalance?: string }>;
 }
 
 const TOP_UP_INTERVAL_MS = 30_000;
@@ -26,7 +26,6 @@ const TOP_UP_INTERVAL_MS = 30_000;
 export function useMtpsAutoFaucet(): void {
   const account = useCurrentAccount();
   const client = useSuiClient();
-  const { signExec } = useSponsoredSignExec();
   const owner = account?.address;
   // Guard against overlapping top-ups (a faucet tx is in flight, or the interval re-fires).
   const inFlight = useRef(false);
@@ -39,13 +38,18 @@ export function useMtpsAutoFaucet(): void {
     const topUp = async () => {
       if (inFlight.current) return;
       try {
-        const { totalBalance } = await reader.getBalance({
+        const bal = await reader.getBalance({
           owner,
           coinType: MTPS_COIN_TYPE,
         });
-        if (cancelled || BigInt(totalBalance) >= MTPS_MIN_BALANCE) return;
+        // The balance that matters is whatever the stake path consumes: the SIP-58 address balance
+        // in the default mode, or the owned-coin total in coin mode. Top up that one, in kind.
+        const have = isMtpsAddressBalance
+          ? BigInt(bal.fundsInAddressBalance ?? "0")
+          : BigInt(bal.totalBalance);
+        if (cancelled || have >= MTPS_MIN_BALANCE) return;
         inFlight.current = true;
-        await faucetMtps({ signExec, recipient: owner });
+        await faucetMtps({ recipient: owner, toBalance: isMtpsAddressBalance });
       } catch (e) {
         console.warn("[mtps] auto-faucet top-up failed", e);
       } finally {
@@ -59,7 +63,7 @@ export function useMtpsAutoFaucet(): void {
       cancelled = true;
       clearInterval(id);
     };
-  }, [owner, client, signExec]);
+  }, [owner, client]);
 }
 
 /**

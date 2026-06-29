@@ -48,7 +48,7 @@ const FRAME_BUDGET_MS = 10;
 const MAX_STEPS_PER_FRAME = 8;
 
 /** MTPS bank locked per seat (1 MTPS, 9 decimals) — funds MANY per-game stakes. */
-const LOCKED_PER_SEAT = 1_000_000_000n;
+const LOCKED_PER_SEAT = 1n; // 1 MTPS per seat (MTPS is 0-decimal; ADR-0015)
 /** SUI-fallback bank per seat (MIST), when the MTPS env is unset. */
 const SUI_PER_SEAT = 500n;
 

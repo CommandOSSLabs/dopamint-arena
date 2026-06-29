@@ -163,7 +163,7 @@ function cloneRevealSlots(slots: (SlotReveal | null)[]): (SlotReveal | null)[] {
 }
 
 function cloneSecretSlots(
-  slots: (SlotSecret | null)[] | null
+  slots: (SlotSecret | null)[] | null,
 ): (SlotSecret | null)[] | null {
   return slots ? slots.map((r) => (r ? copyReveal(r) : null)) : null;
 }
@@ -225,7 +225,7 @@ function revealArrayFor(s: PokerState, party: Party): (SlotReveal | null)[] {
 
 function localSecretArrayFor(
   s: PokerState,
-  party: Party
+  party: Party,
 ): (SlotSecret | null)[] | null {
   return party === "A" ? s.localSecretsA : s.localSecretsB;
 }
@@ -237,7 +237,7 @@ function commitArrayFor(s: PokerState, party: Party): Uint8Array[] | null {
 function hasRevealed(
   s: PokerState,
   party: Party,
-  slots: readonly number[]
+  slots: readonly number[],
 ): boolean {
   const reveals = revealArrayFor(s, party);
   return slots.every((slot) => reveals[slot] !== null);
@@ -245,7 +245,7 @@ function hasRevealed(
 
 export function expectedQuantumPokerRevealSlots(
   s: PokerState,
-  by: Party
+  by: Party,
 ): number[] {
   const revealIfMissing = (slots: readonly number[]) =>
     slots.filter((slot) => !revealArrayFor(s, by)[slot]);
@@ -317,7 +317,7 @@ function scoreToU64(score: number | null): Uint8Array {
 
 /** Compute the nine public commitments for a party's private slot secrets. */
 export function commitSlotSecrets(
-  secrets: readonly SlotSecret[]
+  secrets: readonly SlotSecret[],
 ): Uint8Array[] {
   if (secrets.length !== SLOT_COUNT) {
     throw new Error(`expected ${SLOT_COUNT} slot secrets`);
@@ -327,7 +327,7 @@ export function commitSlotSecrets(
 
 function validateLocalSecretsForCommit(
   commitments: readonly Uint8Array[],
-  secrets: readonly SlotSecret[]
+  secrets: readonly SlotSecret[],
 ): SlotSecret[] {
   if (secrets.length !== SLOT_COUNT) {
     throw new Error(`expected ${SLOT_COUNT} local slot secrets`);
@@ -348,7 +348,7 @@ function validateLocalSecretsForCommit(
 export function deriveQuantumCard(
   revealA: SlotReveal,
   revealB: SlotReveal,
-  counter = 0
+  counter = 0,
 ): number {
   if (!Number.isInteger(counter) || counter < 0) {
     throw new Error(`invalid card derivation counter ${counter}`);
@@ -357,7 +357,7 @@ export function deriveQuantumCard(
     revealA.value,
     revealA.salt,
     revealB.value,
-    revealB.salt
+    revealB.salt,
   );
   const seedBytes =
     counter === 0
@@ -372,13 +372,18 @@ export class QuantumPokerProtocol implements Protocol<PokerState, PokerMove> {
   readonly name = "quantum_poker.v2";
   private readonly randomDrivers = new Map<Party, QuantumPokerSeatDriver>();
 
-  constructor(private readonly handCap: bigint = DEFAULT_HAND_CAP) {}
+  // `ante` is the fixed per-hand wager unit; it defaults to ANTE so existing callers/tests are
+  // unchanged, and the app passes a smaller value to scale the chip economy to whole-token stakes.
+  constructor(
+    private readonly handCap: bigint = DEFAULT_HAND_CAP,
+    private readonly ante: bigint = ANTE,
+  ) {}
 
   initialState(ctx: ProtocolContext): PokerState {
     const total = ctx.initialBalances.a + ctx.initialBalances.b;
     return {
       phase:
-        ctx.initialBalances.a >= ANTE && ctx.initialBalances.b >= ANTE
+        ctx.initialBalances.a >= this.ante && ctx.initialBalances.b >= this.ante
           ? "commit"
           : "done",
       handNo: 0n,
@@ -460,15 +465,15 @@ export class QuantumPokerProtocol implements Protocol<PokerState, PokerMove> {
   private applyRevealSlots(
     s: PokerState,
     move: PokerMove,
-    by: Party
+    by: Party,
   ): PokerState {
     if (move.kind !== "reveal_slots") throw new Error("expected reveal_slots");
     const expected = this.expectedRevealSlots(s, by);
     if (!sameNumberSet(move.slots, expected)) {
       throw new Error(
         `expected ${by} to reveal slots ${expected.join(
-          ","
-        )}, got ${move.slots.join(",")}`
+          ",",
+        )}, got ${move.slots.join(",")}`,
       );
     }
     if (move.reveals.length !== move.slots.length) {
@@ -530,17 +535,17 @@ export class QuantumPokerProtocol implements Protocol<PokerState, PokerMove> {
   }
 
   private postAntesAndBeginStreet(s: PokerState, phase: "preflop_bet"): void {
-    if (s.balanceA < ANTE || s.balanceB < ANTE) {
+    if (s.balanceA < this.ante || s.balanceB < this.ante) {
       throw new Error("insufficient balance for ante");
     }
-    s.totalBetA = ANTE;
-    s.totalBetB = ANTE;
+    s.totalBetA = this.ante;
+    s.totalBetB = this.ante;
     this.beginStreet(s, phase);
   }
 
   private beginStreet(
     s: PokerState,
-    phase: "preflop_bet" | "flop_bet" | "turn_bet" | "river_bet"
+    phase: "preflop_bet" | "flop_bet" | "turn_bet" | "river_bet",
   ): void {
     s.phase = phase;
     s.streetBetA = 0n;
@@ -553,7 +558,7 @@ export class QuantumPokerProtocol implements Protocol<PokerState, PokerMove> {
   private tryRevealBoardThenBet(
     s: PokerState,
     slots: readonly number[],
-    nextPhase: "flop_bet" | "turn_bet" | "river_bet"
+    nextPhase: "flop_bet" | "turn_bet" | "river_bet",
   ): void {
     if (!hasRevealed(s, "A", slots) || !hasRevealed(s, "B", slots)) return;
     const used = new Set(s.board);
@@ -571,8 +576,8 @@ export class QuantumPokerProtocol implements Protocol<PokerState, PokerMove> {
         nextPhase === "flop_bet"
           ? "reveal_turn"
           : nextPhase === "turn_bet"
-          ? "reveal_river"
-          : "showdown";
+            ? "reveal_river"
+            : "showdown";
       return;
     }
     this.beginStreet(s, nextPhase);
@@ -582,18 +587,18 @@ export class QuantumPokerProtocol implements Protocol<PokerState, PokerMove> {
     s: PokerState,
     party: Party,
     slot: number,
-    allowLocal: boolean
+    allowLocal: boolean,
   ): SlotReveal | null {
     const publicReveal = revealArrayFor(s, party)[slot];
     if (publicReveal) return publicReveal;
-    return allowLocal ? localSecretArrayFor(s, party)?.[slot] ?? null : null;
+    return allowLocal ? (localSecretArrayFor(s, party)?.[slot] ?? null) : null;
   }
 
   private deriveSlotCard(
     s: PokerState,
     slot: number,
     counter: number,
-    allowLocal: boolean
+    allowLocal: boolean,
   ): number | null {
     const revealA = this.revealForDerivation(s, "A", slot, allowLocal);
     const revealB = this.revealForDerivation(s, "B", slot, allowLocal);
@@ -604,7 +609,7 @@ export class QuantumPokerProtocol implements Protocol<PokerState, PokerMove> {
   private deriveUniqueBoardCard(
     s: PokerState,
     slot: number,
-    used: Set<number>
+    used: Set<number>,
   ): { card: number; counter: number } {
     for (let counter = 0; counter < 10_000; counter++) {
       const card = this.deriveSlotCard(s, slot, counter, false);
@@ -835,7 +840,9 @@ export class QuantumPokerProtocol implements Protocol<PokerState, PokerMove> {
     if (move.kind !== "next_hand") throw new Error("expected next_hand");
     s.handNo += 1n;
     const canContinue =
-      s.handNo < s.handCap && s.balanceA >= ANTE && s.balanceB >= ANTE;
+      s.handNo < s.handCap &&
+      s.balanceA >= this.ante &&
+      s.balanceB >= this.ante;
     this.resetHandFields(s);
     s.phase = canContinue ? "commit" : "done";
     return s;
@@ -881,8 +888,8 @@ export class QuantumPokerProtocol implements Protocol<PokerState, PokerMove> {
       s.lastResult?.reason === "fold"
         ? 1
         : s.lastResult?.reason === "showdown"
-        ? 2
-        : 0
+          ? 2
+          : 0,
     );
 
     return concatBytes([
@@ -1023,7 +1030,7 @@ export class QuantumPokerSeatDriver {
       cards.push(
         this.party === "A"
           ? deriveQuantumCard(own, other)
-          : deriveQuantumCard(other, own)
+          : deriveQuantumCard(other, own),
       );
     }
     return cards;
