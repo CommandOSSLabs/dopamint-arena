@@ -478,6 +478,82 @@ export async function openAndFundMany(opts: {
   }
 }
 
+/** One PvP tunnel's seat-A open spec for {@link openAndFundSeatAMany}: both ephemeral seats plus
+ *  seat A's stake only. The counterparty (a fleet bot) funds seat B itself, server-side. */
+export interface TunnelOpenSeatASpec {
+  partyA: PartyOnchain;
+  partyB: PartyOnchain;
+  aAmount: bigint;
+  timeoutMs?: bigint;
+  penaltyAmount?: bigint;
+}
+
+/**
+ * Arena one-signature open (ADR-0023): open + share + fund ONLY seat A for N tunnels in ONE PTB,
+ * returning each tunnel id keyed by its normalized party-A address. The user is party A and funds
+ * just its own seat; each tunnel's party B (a fleet bot) deposits separately. The summed stake is
+ * one source coin (an address-balance withdrawal of `stakeFromBalance.amount`, or one `stakeCoinId`,
+ * or the gas coin); each `buildOpenAndFundSeatA` splits its `aAmount` off that shared source.
+ *
+ * The genuine-two-party analog of {@link openAndFundMany} (which funds both seats for self-play).
+ * `stakeFromBalance.amount` MUST equal the sum of every spec's `aAmount`. Results are correlated by
+ * party-A because `objectChanges` order is unspecified.
+ */
+export async function openAndFundSeatAMany(opts: {
+  reads: SuiReads;
+  signExec: SignExec;
+  specs: TunnelOpenSeatASpec[];
+  coinType?: string;
+  stakeFromBalance?: StakeFromBalance;
+  stakeCoinId?: string;
+}): Promise<Map<string, string>> {
+  const { digest } = await submitRebuildingOnStale(
+    () => {
+      const tx = new Transaction();
+      const source = stakeCoinArg(tx, opts);
+      for (const s of opts.specs) {
+        buildOpenAndFundSeatA(tx, {
+          partyA: { ...s.partyA, signatureType: SignatureScheme.ED25519 },
+          partyB: { ...s.partyB, signatureType: SignatureScheme.ED25519 },
+          aAmount: s.aAmount,
+          timeoutMs: s.timeoutMs ?? 86_400_000n,
+          penaltyAmount: s.penaltyAmount ?? 0n,
+          stakeCoin: source,
+          coinType: opts.coinType,
+        });
+      }
+      consumeStakeRemainder(tx, opts, source);
+      return tx;
+    },
+    opts.signExec,
+    "openAndFundSeatAMany",
+  );
+  // POST-COMMIT: the PTB has landed; the N tunnels exist and seat-A stake is consumed. Any failure
+  // below must NOT retry the open (would double-open) — surface it as BatchCommittedError.
+  try {
+    await opts.reads.waitForTransaction({ digest });
+    const txb = await opts.reads.getTransactionBlock({
+      digest,
+      options: { showObjectChanges: true },
+    });
+    const ids = findAllTunnelIds(txb.objectChanges);
+    if (ids.length !== opts.specs.length) {
+      throw new Error(
+        `openAndFundSeatAMany: expected ${opts.specs.length} tunnels, got ${ids.length} (digest ${digest})`,
+      );
+    }
+    const byPartyA = new Map<string, string>();
+    for (const id of ids) {
+      const partyA = await readTunnelPartyA(opts.reads, id);
+      byPartyA.set(normalizeSuiAddress(partyA), id);
+    }
+    return byPartyA;
+  } catch (err) {
+    if (err instanceof BatchCommittedError) throw err;
+    throw new BatchCommittedError(digest, err);
+  }
+}
+
 /**
  * Self-play open via the returnless `tunnel::create_and_fund` (no ID return; the tunnel id is
  * read from object changes). Same one-signature flow as {@link openAndFundSelfPlay}; used by

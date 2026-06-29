@@ -5,13 +5,16 @@
 // old per-window open. Created tunnels are correlated back to requesters by party-A address.
 import {
   openAndFundMany,
+  openAndFundSeatAMany,
   openAndFundSelfPlay,
+  openAndFundSharedTunnel,
   normalizeSuiAddress,
   BatchCommittedError,
   type PartyOnchain,
   type SignExec,
   type SuiReads,
   type TunnelOpenManySpec,
+  type TunnelOpenSeatASpec,
 } from "./tunnelTx";
 import { withSponsorFallback } from "./sponsor";
 import { MTPS_COIN_TYPE, isMtpsAddressBalance, isMtpsConfigured } from "./mtps";
@@ -21,6 +24,10 @@ export interface TunnelOpenRequest {
   partyB: PartyOnchain;
   aAmount: bigint;
   bAmount: bigint;
+  /** How many seats this opener funds. `"both"` (default) is self-play — one wallet funds both
+   *  seats (ADR-0019). `"seatA"` is the genuine-two-party arena (ADR-0023) — the user funds only
+   *  seat A and the counterparty fleet bot deposits seat B itself; `bAmount` is ignored. */
+  fundMode?: "both" | "seatA";
   /** Coin type `T` for the tunnel; defaults per env (MTPS when configured, else SUI). */
   coinType?: string;
   /** ADR-0013: fund the stake from the player's address balance when the env supports it. */
@@ -79,6 +86,18 @@ const specOf = (req: TunnelOpenRequest): TunnelOpenManySpec => ({
   penaltyAmount: req.penaltyAmount,
 });
 
+const seatASpecOf = (req: TunnelOpenRequest): TunnelOpenSeatASpec => ({
+  partyA: req.partyA,
+  partyB: req.partyB,
+  aAmount: req.aAmount,
+  timeoutMs: req.timeoutMs,
+  penaltyAmount: req.penaltyAmount,
+});
+
+/** The stake this opener funds: seat A only in arena (`seatA`) mode, both seats in self-play. */
+const stakeTotalOf = (req: TunnelOpenRequest): bigint =>
+  req.fundMode === "seatA" ? req.aAmount : req.aAmount + req.bAmount;
+
 export class TunnelOpenBatcher {
   private queue: Pending[] = [];
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -125,7 +144,9 @@ export class TunnelOpenBatcher {
     // PTB stream. In practice the arena runs one mode, so this is usually a single group.
     const groups = new Map<string, Pending[]>();
     for (const p of batch) {
-      const key = `${fundingModeOf(p.req)}:${coinTypeOf(p.req) ?? "SUI"}`;
+      // Fund mode joins the key: a seat-A (arena) open and a both-seats (self-play) open build
+      // different PTBs and sum stakes differently, so they must not share one chunk.
+      const key = `${p.req.fundMode ?? "both"}:${fundingModeOf(p.req)}:${coinTypeOf(p.req) ?? "SUI"}`;
       (groups.get(key) ?? groups.set(key, []).get(key)!).push(p);
     }
 
@@ -137,10 +158,7 @@ export class TunnelOpenBatcher {
   private async flushGroup(group: Pending[], deps: BatcherDeps): Promise<void> {
     const mode = fundingModeOf(group[0].req);
     const coinType = coinTypeOf(group[0].req);
-    const groupTotal = group.reduce(
-      (sum, p) => sum + p.req.aAmount + p.req.bAmount,
-      0n,
-    );
+    const groupTotal = group.reduce((sum, p) => sum + stakeTotalOf(p.req), 0n);
 
     // Address-balance mode: top up ONCE for the whole group; each chunk's PTB withdraws its share.
     if (mode === "balance") {
@@ -169,10 +187,27 @@ export class TunnelOpenBatcher {
     mode: FundingMode,
     coinType: string | undefined,
   ): Promise<void> {
-    const specs = chunkPending.map((p) => specOf(p.req));
-    const chunkTotal = specs.reduce((s, x) => s + x.aAmount + x.bAmount, 0n);
+    const seatA = chunkPending[0].req.fundMode === "seatA";
+    const chunkTotal = chunkPending.reduce(
+      (s, p) => s + stakeTotalOf(p.req),
+      0n,
+    );
     try {
-      const map = await this.openChunk(deps, mode, coinType, specs, chunkTotal);
+      const map = seatA
+        ? await this.openSeatAChunk(
+            deps,
+            mode,
+            coinType,
+            chunkPending.map((p) => seatASpecOf(p.req)),
+            chunkTotal,
+          )
+        : await this.openChunk(
+            deps,
+            mode,
+            coinType,
+            chunkPending.map((p) => specOf(p.req)),
+            chunkTotal,
+          );
       for (const p of chunkPending) {
         const id = map.get(normalizeSuiAddress(p.req.partyA.address));
         if (id) p.resolve(id);
@@ -198,7 +233,10 @@ export class TunnelOpenBatcher {
       await Promise.all(
         chunkPending.map(async (p) => {
           try {
-            p.resolve(await this.openSingle(deps, mode, coinType, p.req));
+            const id = seatA
+              ? await this.openSeatASingle(deps, mode, coinType, p.req)
+              : await this.openSingle(deps, mode, coinType, p.req);
+            p.resolve(id);
           } catch (singleErr) {
             p.reject(singleErr);
           }
@@ -271,6 +309,128 @@ export class TunnelOpenBatcher {
         `batched open/fund: sponsored path failed [${String((sponsorErr as Error)?.message ?? sponsorErr)}]; sender-pays fallback failed [${String((payErr as Error)?.message ?? payErr)}]`,
       );
     }
+  }
+
+  /** Seat-A (arena) analog of {@link openChunk}: one PTB opening N tunnels funding only seat A
+   *  (the fleet bot funds seat B), correlated by party-A. Same sponsor → sender-pays fallback. */
+  private async openSeatAChunk(
+    deps: BatcherDeps,
+    mode: FundingMode,
+    coinType: string | undefined,
+    specs: TunnelOpenSeatASpec[],
+    total: bigint,
+  ): Promise<Map<string, string>> {
+    if (mode === "balance") {
+      return openAndFundSeatAMany({
+        reads: deps.reads,
+        signExec: deps.sponsoredSignExec,
+        specs,
+        coinType,
+        stakeFromBalance: {
+          amount: total,
+          coinType: coinType ?? MTPS_COIN_TYPE,
+        },
+      });
+    }
+    if (mode === "mtps-coin") {
+      const stakeCoinId = await deps.prepareStake(total);
+      return openAndFundSeatAMany({
+        reads: deps.reads,
+        signExec: deps.sponsoredSignExec,
+        specs,
+        coinType,
+        stakeCoinId,
+      });
+    }
+    // SUI: sponsored open off a user coin, else wallet-signed gas-funded. BatchCommittedError
+    // propagates immediately — a committed PTB must never retry (double-open).
+    let sponsorErr: unknown;
+    try {
+      return await openAndFundSeatAMany({
+        reads: deps.reads,
+        signExec: deps.sponsoredSignExec,
+        specs,
+        coinType,
+        stakeCoinId: await deps.selectStakeCoin(total),
+      });
+    } catch (err) {
+      if (err instanceof BatchCommittedError) throw err;
+      sponsorErr = err;
+    }
+    console.warn(
+      `[sponsor] seat-A batched open: sponsor failed, falling back to sender-pays`,
+      sponsorErr,
+    );
+    try {
+      return await openAndFundSeatAMany({
+        reads: deps.reads,
+        signExec: deps.signExec,
+        specs,
+        coinType,
+      });
+    } catch (payErr) {
+      if (payErr instanceof BatchCommittedError) throw payErr;
+      throw new Error(
+        `seat-A batched open: sponsored path failed [${String((sponsorErr as Error)?.message ?? sponsorErr)}]; sender-pays fallback failed [${String((payErr as Error)?.message ?? payErr)}]`,
+      );
+    }
+  }
+
+  /** Pre-commit fallback for one seat-A request: a single `openAndFundSharedTunnel`. */
+  private async openSeatASingle(
+    deps: BatcherDeps,
+    mode: FundingMode,
+    coinType: string | undefined,
+    req: TunnelOpenRequest,
+  ): Promise<string> {
+    const total = req.aAmount;
+    if (mode === "balance") {
+      return openAndFundSharedTunnel({
+        reads: deps.reads,
+        signExec: deps.sponsoredSignExec,
+        partyA: req.partyA,
+        partyB: req.partyB,
+        amount: total,
+        coinType,
+        stakeFromBalance: {
+          amount: total,
+          coinType: coinType ?? MTPS_COIN_TYPE,
+        },
+      });
+    }
+    if (mode === "mtps-coin") {
+      return openAndFundSharedTunnel({
+        reads: deps.reads,
+        signExec: deps.sponsoredSignExec,
+        partyA: req.partyA,
+        partyB: req.partyB,
+        amount: total,
+        coinType,
+        stakeCoinId: await deps.prepareStake(total),
+      });
+    }
+    return withSponsorFallback(
+      async () =>
+        openAndFundSharedTunnel({
+          reads: deps.reads,
+          signExec: deps.sponsoredSignExec,
+          partyA: req.partyA,
+          partyB: req.partyB,
+          amount: total,
+          coinType,
+          stakeCoinId: await deps.selectStakeCoin(total),
+        }),
+      () =>
+        openAndFundSharedTunnel({
+          reads: deps.reads,
+          signExec: deps.signExec,
+          partyA: req.partyA,
+          partyB: req.partyB,
+          amount: total,
+          coinType,
+        }),
+      "single seat-A open/fund fallback",
+    );
   }
 
   private async openSingle(

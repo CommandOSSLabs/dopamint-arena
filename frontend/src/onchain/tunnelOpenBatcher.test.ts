@@ -244,6 +244,60 @@ test("rejects all pending when no wallet deps are available", async () => {
   await assert.rejects(() => batcher.request(req("0xA")), /no wallet/i);
 });
 
+test("seatA fund mode funds only seat A and coalesces into one PTB", async () => {
+  // The genuine-two-party arena open (ADR-0023): the user funds seat A only; the bot funds seat B
+  // server-side. Proves the seatA path coalesces like self-play AND splits only the seat-A stake —
+  // the stake source is asked for Σ aAmount, never Σ (aAmount + bAmount).
+  let signs = 0;
+  let stakeTotal: bigint | null = null;
+  const deps = fakeDeps({ onSign: () => (signs += 1) });
+  (deps as any).selectStakeCoin = async (need: bigint) => {
+    stakeTotal = need;
+    return "0xcoin";
+  };
+  (deps.reads as any).getTransactionBlock = async () => ({
+    objectChanges: ["0xA", "0xB"].map((a) => ({
+      type: "created",
+      objectType: "0xpkg::tunnel::Tunnel<0x2::sui::SUI>",
+      objectId: "tunnel-for-" + a,
+    })),
+  });
+  (deps.reads as any).getObject = async (i: { id: string }) => ({
+    data: {
+      content: {
+        fields: {
+          party_a: { fields: { address: i.id.replace("tunnel-for-", "") } },
+        },
+      },
+    },
+  });
+
+  const seatAReq = (a: string): TunnelOpenRequest => ({
+    partyA: party(a),
+    partyB: party(PARTY_B_ADDR),
+    aAmount: 300n,
+    bAmount: 700n, // must be IGNORED in seatA mode (the bot funds seat B)
+    fundMode: "seatA",
+  });
+  const batcher = new TunnelOpenBatcher(() => deps, {
+    flushDelayMs: 0,
+    maxBatch: 16,
+  });
+  const [a, b] = await Promise.all([
+    batcher.request(seatAReq("0xA")),
+    batcher.request(seatAReq("0xB")),
+  ]);
+
+  assert.equal(signs, 1, "two seat-A requests → one PTB");
+  assert.equal(
+    stakeTotal,
+    600n,
+    "seat-A mode funds only seat A (2×300), never 2×(300+700)",
+  );
+  assert.equal(a, "tunnel-for-0xA", "correlated by party-A");
+  assert.equal(b, "tunnel-for-0xB", "correlated by party-A");
+});
+
 test("requests arriving within the debounce window share one flush", async () => {
   let signs = 0;
   const deps = fakeDeps({ onSign: () => (signs += 1) });
