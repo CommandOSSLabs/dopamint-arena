@@ -1,5 +1,7 @@
 //! Per-seam error types surfaced through `HarnessError`.
 
+use crate::transcript::TranscriptError;
+
 /// An illegal move or a broken protocol invariant.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProtocolError(pub String);
@@ -47,6 +49,11 @@ impl From<FrameTransportError> for HarnessError {
 impl From<TunnelAnchorError> for HarnessError {
     fn from(e: TunnelAnchorError) -> Self {
         HarnessError::Anchor(e)
+    }
+}
+impl From<TranscriptError> for HarnessError {
+    fn from(e: TranscriptError) -> Self {
+        HarnessError::Verification(e.to_string())
     }
 }
 

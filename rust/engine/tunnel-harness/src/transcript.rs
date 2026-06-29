@@ -5,7 +5,15 @@
 use crate::Seat;
 use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
+use std::collections::HashSet;
+use std::fmt;
 use std::sync::{Arc, Mutex};
+use tunnel_core::crypto::blake2b256;
+use tunnel_core::wire::{serialize_state_update, StateUpdate};
+
+const TRANSCRIPT_LEAF_DOMAIN: &[u8] = b"sui_tunnel::transcript::leaf";
+const TRANSCRIPT_NODE_DOMAIN: &[u8] = b"sui_tunnel::transcript::node";
+const ZERO_ROOT: [u8; 32] = [0u8; 32];
 
 /// One committed transition: the MOVE frame fused with its matching ACK's
 /// `sig_responder`. Every field except `sig_responder` comes from the MOVE;
@@ -32,6 +40,30 @@ pub struct Transcript<E> {
     entries: Vec<E>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TranscriptError {
+    DuplicateNonce { nonce: u64 },
+    NonMonotonicNonce { previous: u64, nonce: u64 },
+}
+
+impl fmt::Display for TranscriptError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DuplicateNonce { nonce } => {
+                write!(f, "transcript has duplicate entries for nonce {nonce}")
+            }
+            Self::NonMonotonicNonce { previous, nonce } => {
+                write!(
+                    f,
+                    "transcript nonce {nonce} does not advance after nonce {previous}"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for TranscriptError {}
+
 impl<E> Transcript<E> {
     pub fn from_entries(entries: Vec<E>) -> Self {
         Self { entries }
@@ -55,6 +87,94 @@ impl<E> Transcript<E> {
             entries: self.entries.iter().map(f).collect(),
         }
     }
+}
+
+impl<M> Transcript<TranscriptEntry<M>> {
+    pub fn root_for_tunnel(&self, tunnel_id: &str) -> [u8; 32] {
+        let leaves = self
+            .entries
+            .iter()
+            .map(|entry| transcript_leaf(tunnel_id, entry))
+            .collect::<Vec<_>>();
+        transcript_root(&leaves)
+    }
+
+    pub fn canonical_root_for_tunnel(&self, tunnel_id: &str) -> Result<[u8; 32], TranscriptError> {
+        let mut seen = HashSet::new();
+        let mut canonical_leaves = Vec::new();
+        let mut previous_nonce = None;
+
+        for entry in &self.entries {
+            let leaf = transcript_leaf(tunnel_id, entry);
+            if seen.contains(&entry.nonce) {
+                return Err(TranscriptError::DuplicateNonce { nonce: entry.nonce });
+            }
+
+            if let Some(previous) = previous_nonce {
+                if entry.nonce <= previous {
+                    return Err(TranscriptError::NonMonotonicNonce {
+                        previous,
+                        nonce: entry.nonce,
+                    });
+                }
+            }
+
+            seen.insert(entry.nonce);
+            canonical_leaves.push(leaf);
+            previous_nonce = Some(entry.nonce);
+        }
+
+        Ok(transcript_root(&canonical_leaves))
+    }
+}
+
+pub fn transcript_root(leaves: &[[u8; 32]]) -> [u8; 32] {
+    if leaves.is_empty() {
+        return ZERO_ROOT;
+    }
+    let mut level = leaves.to_vec();
+    while level.len() > 1 {
+        if level.len() % 2 == 1 {
+            level.push(ZERO_ROOT);
+        }
+        level = level
+            .chunks_exact(2)
+            .map(|pair| {
+                let mut bytes = Vec::with_capacity(
+                    TRANSCRIPT_NODE_DOMAIN.len() + pair[0].len() + pair[1].len(),
+                );
+                bytes.extend_from_slice(TRANSCRIPT_NODE_DOMAIN);
+                bytes.extend_from_slice(&pair[0]);
+                bytes.extend_from_slice(&pair[1]);
+                blake2b256(&bytes)
+            })
+            .collect();
+    }
+    level[0]
+}
+
+pub fn transcript_leaf<M>(tunnel_id: &str, entry: &TranscriptEntry<M>) -> [u8; 32] {
+    let update = StateUpdate {
+        tunnel_id: tunnel_id.to_string(),
+        state_hash: entry.state_hash,
+        nonce: entry.nonce,
+        timestamp: entry.timestamp,
+        party_a_balance: entry.party_a_balance,
+        party_b_balance: entry.party_b_balance,
+    };
+    let message = serialize_state_update(&update);
+    let (sig_a, sig_b) = match entry.by {
+        Seat::A => (&entry.sig_proposer, &entry.sig_responder),
+        Seat::B => (&entry.sig_responder, &entry.sig_proposer),
+    };
+    let mut bytes = Vec::with_capacity(
+        TRANSCRIPT_LEAF_DOMAIN.len() + message.len() + sig_a.len() + sig_b.len(),
+    );
+    bytes.extend_from_slice(TRANSCRIPT_LEAF_DOMAIN);
+    bytes.extend_from_slice(&message);
+    bytes.extend_from_slice(sig_a);
+    bytes.extend_from_slice(sig_b);
+    blake2b256(&bytes)
 }
 
 /// Pluggable export format (mirrors the repo's `FrameCodec` family: a trait, not
@@ -106,7 +226,7 @@ impl TranscriptCodec for PostcardTranscriptCodec {
 /// never `dyn` (the typed entry makes the trait non-object-safe). `record` takes
 /// `&self` plus interior mutability so one instance can be shared.
 pub trait TranscriptRecorder<M> {
-    fn record(&self, entry: TranscriptEntry<M>);
+    fn record(&self, entry: TranscriptEntry<M>) -> Result<(), TranscriptError>;
     fn snapshot(&self) -> Transcript<TranscriptEntry<M>>;
 
     /// Preprocess (filter + reshape) then serialize in one pure pass. `preprocess`
@@ -152,8 +272,21 @@ impl<M> InMemoryTranscriptRecorder<M> {
 }
 
 impl<M: Clone> TranscriptRecorder<M> for InMemoryTranscriptRecorder<M> {
-    fn record(&self, entry: TranscriptEntry<M>) {
-        self.entries.lock().expect("recorder mutex").push(entry);
+    fn record(&self, entry: TranscriptEntry<M>) -> Result<(), TranscriptError> {
+        let mut entries = self.entries.lock().expect("recorder mutex");
+        if let Some(previous) = entries.last().map(|e| e.nonce) {
+            if entry.nonce == previous {
+                return Err(TranscriptError::DuplicateNonce { nonce: entry.nonce });
+            }
+            if entry.nonce < previous {
+                return Err(TranscriptError::NonMonotonicNonce {
+                    previous,
+                    nonce: entry.nonce,
+                });
+            }
+        }
+        entries.push(entry);
+        Ok(())
     }
 
     fn snapshot(&self) -> Transcript<TranscriptEntry<M>> {
@@ -166,7 +299,9 @@ impl<M: Clone> TranscriptRecorder<M> for InMemoryTranscriptRecorder<M> {
 pub struct NullTranscriptRecorder;
 
 impl<M> TranscriptRecorder<M> for NullTranscriptRecorder {
-    fn record(&self, _entry: TranscriptEntry<M>) {}
+    fn record(&self, _entry: TranscriptEntry<M>) -> Result<(), TranscriptError> {
+        Ok(())
+    }
 
     fn snapshot(&self) -> Transcript<TranscriptEntry<M>> {
         Transcript::from_entries(Vec::new())
@@ -177,6 +312,7 @@ impl<M> TranscriptRecorder<M> for NullTranscriptRecorder {
 mod tests {
     use super::*;
     use crate::Seat;
+    use tunnel_core::wire::{serialize_settlement_with_root, Settlement};
 
     fn entry(nonce: u64) -> TranscriptEntry<u8> {
         TranscriptEntry {
@@ -189,6 +325,26 @@ mod tests {
             party_b_balance: 100 + nonce,
             sig_proposer: [1u8; 64],
             sig_responder: [2u8; 64],
+        }
+    }
+
+    fn parity_entry(
+        nonce: u64,
+        party_a_balance: u64,
+        party_b_balance: u64,
+        proposer_sig_byte: u8,
+        responder_sig_byte: u8,
+    ) -> TranscriptEntry<()> {
+        TranscriptEntry {
+            nonce,
+            by: Seat::A,
+            mv: (),
+            state_hash: std::array::from_fn(|i| i as u8 + nonce as u8),
+            timestamp: 1000 + nonce,
+            party_a_balance,
+            party_b_balance,
+            sig_proposer: [proposer_sig_byte; 64],
+            sig_responder: [responder_sig_byte; 64],
         }
     }
 
@@ -226,8 +382,8 @@ mod tests {
     #[test]
     fn in_memory_recorder_records_and_snapshots_in_order() {
         let rec = InMemoryTranscriptRecorder::<u8>::new();
-        rec.record(entry(1));
-        rec.record(entry(2));
+        rec.record(entry(1)).unwrap();
+        rec.record(entry(2)).unwrap();
         let snap = rec.snapshot();
         assert_eq!(
             snap.entries().iter().map(|e| e.nonce).collect::<Vec<_>>(),
@@ -236,11 +392,112 @@ mod tests {
     }
 
     #[test]
+    fn in_memory_recorder_rejects_duplicate_nonce_at_record_time() {
+        let rec = InMemoryTranscriptRecorder::<u8>::new();
+        rec.record(entry(1)).unwrap();
+
+        assert_eq!(
+            rec.record(entry(1)),
+            Err(TranscriptError::DuplicateNonce { nonce: 1 })
+        );
+        assert_eq!(rec.snapshot().entries().len(), 1);
+    }
+
+    #[test]
+    fn in_memory_recorder_rejects_non_monotonic_nonce_at_record_time() {
+        let rec = InMemoryTranscriptRecorder::<u8>::new();
+        rec.record(entry(2)).unwrap();
+
+        assert_eq!(
+            rec.record(entry(1)),
+            Err(TranscriptError::NonMonotonicNonce {
+                previous: 2,
+                nonce: 1
+            })
+        );
+        assert_eq!(rec.snapshot().entries().len(), 1);
+    }
+
+    #[test]
+    fn transcript_root_matches_the_ts_merkle_fixture() {
+        let transcript = Transcript::from_entries(vec![
+            parity_entry(1, 90, 110, 0x11, 0x22),
+            parity_entry(2, 95, 105, 0x33, 0x44),
+            parity_entry(3, 80, 120, 0x55, 0x66),
+        ]);
+
+        let root = transcript
+            .root_for_tunnel("0x5555555555555555555555555555555555555555555555555555555555555555");
+
+        assert_eq!(
+            hex::encode(root),
+            "1d96600288a81c30db9384dca7be6d9904bfeb062efd28b9d74bd1fb2d61df30"
+        );
+
+        let settlement = Settlement {
+            tunnel_id: "0x5555555555555555555555555555555555555555555555555555555555555555".into(),
+            party_a_balance: 80,
+            party_b_balance: 120,
+            final_nonce: 1,
+            timestamp: 2000,
+        };
+        assert_eq!(
+            hex::encode(serialize_settlement_with_root(&settlement, &root)),
+            "7375695f74756e6e656c3a3a736574746c656d656e745f7632555555555555555555555555555555555555555555555555555555555555555500000000000000500000000000000078000000000000000100000000000007d01d96600288a81c30db9384dca7be6d9904bfeb062efd28b9d74bd1fb2d61df30"
+        );
+    }
+
+    #[test]
+    fn canonical_root_rejects_identical_duplicate_nonces() {
+        let tunnel_id = "0x5555555555555555555555555555555555555555555555555555555555555555";
+        let duplicated = Transcript::from_entries(vec![
+            parity_entry(1, 90, 110, 0x11, 0x22),
+            parity_entry(1, 90, 110, 0x11, 0x22),
+        ]);
+
+        assert_eq!(
+            duplicated.canonical_root_for_tunnel(tunnel_id),
+            Err(TranscriptError::DuplicateNonce { nonce: 1 })
+        );
+    }
+
+    #[test]
+    fn canonical_root_rejects_same_nonce_with_different_leaf() {
+        let tunnel_id = "0x5555555555555555555555555555555555555555555555555555555555555555";
+        let transcript = Transcript::from_entries(vec![
+            parity_entry(1, 90, 110, 0x11, 0x22),
+            parity_entry(1, 90, 110, 0x99, 0x22),
+        ]);
+
+        assert_eq!(
+            transcript.canonical_root_for_tunnel(tunnel_id),
+            Err(TranscriptError::DuplicateNonce { nonce: 1 })
+        );
+    }
+
+    #[test]
+    fn canonical_root_rejects_out_of_order_nonces() {
+        let tunnel_id = "0x5555555555555555555555555555555555555555555555555555555555555555";
+        let transcript = Transcript::from_entries(vec![
+            parity_entry(2, 95, 105, 0x33, 0x44),
+            parity_entry(1, 90, 110, 0x11, 0x22),
+        ]);
+
+        assert_eq!(
+            transcript.canonical_root_for_tunnel(tunnel_id),
+            Err(TranscriptError::NonMonotonicNonce {
+                previous: 2,
+                nonce: 1
+            })
+        );
+    }
+
+    #[test]
     fn export_preprocess_drops_and_reshapes_then_serializes() {
         let rec = InMemoryTranscriptRecorder::<u8>::new();
-        rec.record(entry(1));
-        rec.record(entry(2));
-        rec.record(entry(3));
+        rec.record(entry(1)).unwrap();
+        rec.record(entry(2)).unwrap();
+        rec.record(entry(3)).unwrap();
         // keep odd nonces, project to (nonce, balances)
         let json = rec
             .export(&JsonTranscriptCodec, |e| {
@@ -256,7 +513,7 @@ mod tests {
     #[test]
     fn null_recorder_is_a_no_op() {
         let rec = NullTranscriptRecorder;
-        rec.record(entry(1));
+        rec.record(entry(1)).unwrap();
         let snapshot: Transcript<TranscriptEntry<u8>> = rec.snapshot();
         assert!(snapshot.entries().is_empty());
         let json = rec

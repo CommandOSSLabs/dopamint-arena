@@ -37,7 +37,8 @@ pub use observer::{DriverObserver, DriverStart, MoveCommitted};
 pub mod transcript;
 pub use transcript::{
     BcsTranscriptCodec, InMemoryTranscriptRecorder, JsonTranscriptCodec, NullTranscriptRecorder,
-    PostcardTranscriptCodec, Transcript, TranscriptCodec, TranscriptEntry, TranscriptRecorder,
+    PostcardTranscriptCodec, Transcript, TranscriptCodec, TranscriptEntry, TranscriptError,
+    TranscriptRecorder,
 };
 
 pub mod anchor;

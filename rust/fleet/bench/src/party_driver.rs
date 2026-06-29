@@ -146,7 +146,7 @@ impl<M: Clone> BenchTranscriptRecorder<M> {
         if let Some(entry) = seat.take_last_committed() {
             match self {
                 Self::None => {}
-                Self::Memory(recorder) => recorder.record(entry),
+                Self::Memory(recorder) => recorder.record(entry).expect("strict transcript record"),
             }
         }
     }
@@ -317,8 +317,10 @@ where
             } else {
                 deliver(&mut b, &mut a, first)
             };
-            recorder.record_from(&mut a);
-            recorder.record_from(&mut b);
+            match p {
+                Seat::A => recorder.record_from(&mut a),
+                Seat::B => recorder.record_from(&mut b),
+            }
             match p {
                 Seat::A => strategy_a.confirm_move(a.state()),
                 Seat::B => strategy_b.confirm_move(b.state()),
@@ -592,7 +594,7 @@ mod tests {
     }
 
     #[test]
-    fn memory_transcript_recorder_counts_committed_entries() {
+    fn memory_transcript_recorder_counts_canonical_committed_entries() {
         let sa: [u8; 32] = std::array::from_fn(|i| (i + 1) as u8);
         let sb: [u8; 32] = std::array::from_fn(|i| (i + 33) as u8);
         let kit = SeatKit::new(&sa, &sb);
@@ -618,6 +620,6 @@ mod tests {
         );
 
         assert_eq!(result.moves, 1);
-        assert_eq!(result.transcript_entries, 2);
+        assert_eq!(result.transcript_entries, 1);
     }
 }
