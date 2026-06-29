@@ -10,6 +10,7 @@ publish = false
 # `tunnel_harness::PartyDriver`, and implements the `tunnel_harness::FrameTransport` seam over
 # the live relay WebSocket. See docs/superpowers/specs/2026-06-26-bot-pool-design.md.
 [dependencies]
+fleet-core = { path = "../../fleet/core" }
 tunnel-core = { path = "../../engine/tunnel-core" }
 tunnel-harness = { path = "../../engine/tunnel-harness" }
 tunnel-blackjack = { path = "../../protocols/blackjack" }

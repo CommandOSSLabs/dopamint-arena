@@ -22,8 +22,8 @@ use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, Web
 use tunnel_harness::{FrameTransportError, Signer};
 
 use crate::relay_wire::{BotToRelay, RelayToBot};
-use crate::relay_ws::RelayTransport;
-use crate::Role;
+use fleet_core::relay_ws::RelayTransport;
+use fleet_core::{MatchInfo, Role};
 
 type Ws = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
@@ -32,14 +32,6 @@ pub struct RelayConfig {
     pub ws_url: String,
     /// The bot's advertised wallet identity (unauthenticated label, by design).
     pub wallet: String,
-}
-
-/// The match the relay paired us into.
-#[derive(Debug, Clone)]
-pub struct MatchInfo {
-    pub match_id: String,
-    pub role: Role,
-    pub opponent_wallet: String,
 }
 
 pub struct RelayConnection {

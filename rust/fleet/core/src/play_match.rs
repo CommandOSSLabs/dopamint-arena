@@ -7,9 +7,7 @@
 //! The settle-half handshake + transcript root + on-chain submit live in the `MatchAnchor` impl
 //! (`SuiAnchor`), because the sans-IO engine exposes no settlement builder; here settlement is the
 //! seam call after a conserved terminal. With [`crate::anchor::NoopAnchor`] this drives a full
-//! off-chain match end to end.
-
-use std::sync::Arc;
+//! off-chain match end to end. The transport-specific live runners (WS, in-process bus) wrap this.
 
 use anyhow::{anyhow, bail, Context, Result};
 use tunnel_blackjack::{Blackjack, BlackjackStrategy};
@@ -20,10 +18,9 @@ use tunnel_harness::{
 use crate::anchor::MatchAnchor;
 use crate::match_channel::MatchChannel;
 use crate::peer::PeerMsg;
-use crate::relay_client::{MatchInfo, RelayConfig, RelayConnection, WsRelayTransport};
 use crate::relay_ws::RelayTransport;
 use crate::signer_durable::DurableSigner;
-use crate::Role;
+use crate::{MatchInfo, Role};
 
 /// Per-tunnel move budget (matches the canonical MAX_MOVES_PER_TUNNEL ceiling).
 const MAX_MOVES: u64 = 100_000;
@@ -160,58 +157,6 @@ pub async fn play_blackjack<T: RelayTransport, A: MatchAnchor>(
         channel,
         anchor,
         signer,
-    )
-    .await
-}
-
-/// Generic live runner for ANY game: connect, wait to be matched, play one match over the live WS
-/// driving the supplied `protocol` + `strategy`. Adding a game = call this with that game's
-/// `GameProfile` + protocol + `MoveStrategy` (e.g. `BlackjackStrategy`).
-pub async fn run_live_match<P, S, Strat, A>(
-    config: &RelayConfig,
-    connect_signer: &S,
-    match_signer: DurableSigner,
-    anchor: &A,
-    profile: &GameProfile,
-    protocol: P,
-    strategy: Strat,
-) -> Result<MatchOutcome>
-where
-    P: Protocol,
-    S: Signer,
-    Strat: MoveStrategy<P>,
-    A: MatchAnchor,
-{
-    let conn = RelayConnection::connect_and_join(config, connect_signer, profile.game_id).await?;
-    let info = conn.await_match().await?;
-    let channel = MatchChannel::new(WsRelayTransport::new(Arc::new(conn), info.match_id.clone()));
-    play_match(
-        protocol,
-        strategy,
-        profile,
-        &info,
-        channel,
-        anchor,
-        match_signer,
-    )
-    .await
-}
-
-/// Blackjack live runner — a thin wrapper over [`run_live_match`] driving [`BlackjackStrategy`].
-pub async fn run_live_blackjack<S: Signer, A: MatchAnchor>(
-    config: &RelayConfig,
-    connect_signer: &S,
-    match_signer: DurableSigner,
-    anchor: &A,
-) -> Result<MatchOutcome> {
-    run_live_match(
-        config,
-        connect_signer,
-        match_signer,
-        anchor,
-        &BLACKJACK,
-        Blackjack,
-        BlackjackStrategy,
     )
     .await
 }

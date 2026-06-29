@@ -17,7 +17,7 @@
 use std::time::Duration;
 
 use bot_fleet::anchor::NoopAnchor;
-use bot_fleet::play_match::run_live_blackjack;
+use bot_fleet::live_runner::run_live_blackjack;
 use bot_fleet::relay_client::RelayConfig;
 use bot_fleet::signer_durable::DurableSigner;
 use tunnel_harness::Signer;

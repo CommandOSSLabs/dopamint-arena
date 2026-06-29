@@ -1,0 +1,20 @@
+[package]
+name = "fleet-core"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Transport-agnostic serving-fleet orchestration shared by both deployments (ADR-0020/0024):
+# the WS-client `bot-fleet` and the co-located game-server in `tunnel-manager` drive the SAME
+# `play_match` over the `RelayTransport` seam. No WebSocket deps here on purpose, so the relay
+# can depend on this without pulling a WS client into its binary.
+[dependencies]
+tunnel-core = { path = "../../engine/tunnel-core" }
+tunnel-harness = { path = "../../engine/tunnel-harness" }
+tunnel-blackjack = { path = "../../protocols/blackjack" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+hex = { workspace = true }
+tracing = { workspace = true }
