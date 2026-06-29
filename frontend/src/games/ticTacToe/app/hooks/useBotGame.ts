@@ -129,6 +129,9 @@ const EMPTY_BOARD = Array(9).fill(0) as number[];
 // Cap the in-session settle history so a long auto-play run can't grow it without bound.
 const MAX_TUNNELS_LOGGED = 30;
 const STEP_MS = 600;
+// Flat-out (auto + "fast") co-signs back-to-back within one ~16ms frame — the poker/battleship
+// model — so TPS is CPU-bound instead of capped at one move per timer tick. 16ms ≈ one 60Hz frame.
+const FRAME_BUDGET_MS = 16;
 // A bot must hold at least this much (gas for its txs + the 1-MIST deposit) to safely play
 // another game; below it, auto-play stops rather than risk a mid-game tx running out of gas
 // and leaving a tunnel open. ~0.02 SUI (a game costs the busier bot ~0.01 SUI of gas).
@@ -501,7 +504,14 @@ export function useBotGame(difficulty: Difficulty = "fast"): BotGameView {
         pausedRef.current = false; // a fresh tunnel never inherits a stale hover-pause
         setPaused(false);
         await new Promise<void>((resolve, reject) => {
-          const delay = difficultyRef.current === "fast" ? 50 : STEP_MS;
+          // Flat = bot-vs-bot at "fast" (the demo default): burst the loop. Strategic difficulties
+          // and manual play keep one watchable move per `delay`.
+          const flat = autoRef.current && difficultyRef.current === "fast";
+          const delay = flat
+            ? 0
+            : difficultyRef.current === "fast"
+              ? 50
+              : STEP_MS;
           const finish = () => {
             stopTimer();
             resolve();
@@ -587,7 +597,27 @@ export function useBotGame(difficulty: Difficulty = "fast"): BotGameView {
               reject(err);
             }
           };
-          timerRef.current = setInterval(tick, delay);
+          // In flat mode, burst `tick` for up to one frame, then yield to the interval so the page
+          // still paints (React 19 batches the per-step setState into one render per frame, and
+          // pushLocalTxn's slice self-bounds the feed). `tick`→finish() nulls timerRef at terminal,
+          // which also breaks the burst. Otherwise it's a single paced tick.
+          const drive = () => {
+            if (!flat) {
+              tick();
+              return;
+            }
+            const frameEnd = Date.now() + FRAME_BUDGET_MS;
+            do {
+              tick();
+            } while (
+              timerRef.current !== null &&
+              !pausedRef.current &&
+              autoRef.current &&
+              difficultyRef.current === "fast" &&
+              Date.now() < frameEnd
+            );
+          };
+          timerRef.current = setInterval(drive, delay);
         });
 
         // Reflect the final game's board/winner.

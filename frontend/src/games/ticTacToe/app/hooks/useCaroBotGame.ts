@@ -53,6 +53,9 @@ const MAX_BOARD_SIZE = 29;
 
 const SCORE_KEY = "caro_bot_score.v1";
 const STEP_MS = 350;
+// Flat-out (auto + "fast") co-signs back-to-back within one ~16ms frame — the poker/battleship
+// model — so TPS is CPU-bound instead of capped at one move per timer tick. 16ms ≈ one 60Hz frame.
+const FRAME_BUDGET_MS = 16;
 const MIN_PLAY_MIST = 20_000_000n;
 // MTPS mode: per-seat stake (1 MTPS, 9 decimals); both seats funded from one coin.
 const MTPS_PER_SEAT = 1_000_000_000n;
@@ -464,7 +467,14 @@ export function useCaroBotGame(
         setPaused(false);
         await new Promise<void>((resolve, reject) => {
           let steps = 0;
-          const delay = difficultyRef.current === "fast" ? 30 : STEP_MS;
+          // Flat = bot-vs-bot at "fast" (the demo default): burst the loop. Strategic difficulties
+          // and manual play keep one watchable move per `delay`.
+          const flat = autoRef.current && difficultyRef.current === "fast";
+          const delay = flat
+            ? 0
+            : difficultyRef.current === "fast"
+              ? 30
+              : STEP_MS;
           const finish = () => {
             stopTimer();
             resolve();
@@ -562,7 +572,27 @@ export function useCaroBotGame(
               reject(err);
             }
           };
-          timerRef.current = setInterval(tick, delay);
+          // In flat mode, burst `tick` for up to one frame, then yield to the interval so the page
+          // still paints (React 19 batches the per-step setState into one render per frame, and
+          // pushLocalTxn's slice self-bounds the feed). `tick`→finish() nulls timerRef at terminal,
+          // which also breaks the burst. Otherwise it's a single paced tick.
+          const drive = () => {
+            if (!flat) {
+              tick();
+              return;
+            }
+            const frameEnd = Date.now() + FRAME_BUDGET_MS;
+            do {
+              tick();
+            } while (
+              timerRef.current !== null &&
+              !pausedRef.current &&
+              autoRef.current &&
+              difficultyRef.current === "fast" &&
+              Date.now() < frameEnd
+            );
+          };
+          timerRef.current = setInterval(drive, delay);
         });
 
         const finalInner = tunnel.state.inner;
