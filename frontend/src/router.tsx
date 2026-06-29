@@ -27,7 +27,11 @@ const homeRoute = createRoute({
     search: Record<string, unknown>,
   ): { section?: MobileSection } => {
     const s = search.section;
-    return s === "games" || s === "payment" || s === "chat" || s === "live"
+    return s === "games" ||
+      s === "payment" ||
+      s === "chat" ||
+      s === "live" ||
+      s === "all"
       ? { section: s }
       : {};
   },

@@ -1,9 +1,9 @@
-import { describe, it } from "node:test";
-import assert from "node:assert";
-import { protocols } from "sui-tunnel-ts";
 import { driveToTerminal } from "@/agent/testHarness";
-import { createBlackjackKit } from "./kit";
+import assert from "node:assert";
+import { describe, it } from "node:test";
+import { protocols } from "sui-tunnel-ts";
 import type { ProtocolContext } from "sui-tunnel-ts/protocol/Protocol";
+import { createBlackjackKit } from "./kit";
 
 function mulberry32(seed: number): () => number {
   return () => {
@@ -15,14 +15,16 @@ function mulberry32(seed: number): () => number {
 }
 
 describe("blackjack kit", () => {
+  // Small bankroll so the game terminates by bankruptcy in a few rounds: per-card commit-reveal
+  // is ~4 moves/card, so a full ROUND_CAP-length game would exceed the harness move cap.
   const ctx: ProtocolContext = {
     tunnelId: "bj-1",
-    initialBalances: { a: 1000n, b: 1000n },
+    initialBalances: { a: 250n, b: 250n },
   };
 
   it("uses the variable-bet frontend protocol domain", () => {
     const kit = createBlackjackKit(100n);
-    assert.strictEqual(kit.protocol.name, "blackjack.bet.v1");
+    assert.strictEqual(kit.protocol.name, "blackjack.bet.v2");
     assert.notStrictEqual(
       kit.protocol.name,
       new protocols.BlackjackProtocol(100n).name,

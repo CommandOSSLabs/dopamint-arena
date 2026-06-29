@@ -28,7 +28,16 @@ export interface StakeStrategy {
   ensureStakeBalance: (min: bigint) => Promise<void>;
 }
 
-/** Seat A: open + share the tunnel and fund this seat. Returns the new tunnel id. */
+/**
+ * Seat A: open + share the tunnel and fund this seat. Returns the new tunnel id.
+ *
+ * Opens with `penaltyAmount = amount` (the per-seat buy-in), the blackjack-PvP model: a seat that
+ * abandons a match it is losing — withholding the co-signature/reveal that would settle the win —
+ * forfeits its whole stake at `force_close_after_timeout`, so the honest seat is made whole on-chain.
+ * Without it (`penaltyAmount = 0`) the game-blind force-close pays the stale EVEN state and the
+ * abandoner keeps its stake (review finding F1). Covers all staked PvP games on this lane
+ * (poker, chicken-cross, bomb-it, battleship).
+ */
 export async function openSharedTunnelStaked(
   opts: StakeStrategy & {
     reads: SharedReads;
@@ -50,6 +59,7 @@ export async function openSharedTunnelStaked(
         partyA,
         partyB,
         amount,
+        penaltyAmount: amount,
         coinType: MTPS_COIN_TYPE,
         stakeFromBalance: { amount, coinType: MTPS_COIN_TYPE },
       });
@@ -60,6 +70,7 @@ export async function openSharedTunnelStaked(
       partyA,
       partyB,
       amount,
+      penaltyAmount: amount,
       coinType: MTPS_COIN_TYPE,
       stakeCoinId: await opts.prepareStake(amount),
     });
@@ -72,6 +83,7 @@ export async function openSharedTunnelStaked(
         partyA,
         partyB,
         amount,
+        penaltyAmount: amount,
         stakeCoinId: await opts.selectStakeCoin(amount),
       }),
     () =>
@@ -81,6 +93,7 @@ export async function openSharedTunnelStaked(
         partyA,
         partyB,
         amount,
+        penaltyAmount: amount,
       }),
     `${opts.label} open/fund`,
   );

@@ -8,6 +8,12 @@ use tunnel_core::crypto::blake2b256;
 use tunnel_core::randomness::{next_u64_in_range, seed_from_bytes, Seed};
 use tunnel_harness::{Balances, Protocol, ProtocolError, Seat, TunnelContext};
 
+pub mod strategy;
+pub use strategy::{
+    QuantumPokerBotProfile, QuantumPokerDifficulty, QuantumPokerPersona,
+    QuantumPokerPersonaStrategy, QuantumPokerStrategy,
+};
+
 const DOMAIN: &[u8] = b"sui_tunnel::proto::quantum_poker.v2";
 pub const ANTE: u64 = 50;
 pub const DEFAULT_HAND_CAP: u64 = 1000;

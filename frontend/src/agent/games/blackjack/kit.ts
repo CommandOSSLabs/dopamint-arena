@@ -1,17 +1,21 @@
-import type { Party } from "sui-tunnel-ts/protocol/Protocol";
+import { type BotContext, type GameBot, type GameKit } from "@/agent/gameKit";
+import { defaultStateHash } from "@/agent/stateHash";
 import {
+  BET_OPTIONS,
   BlackjackBetProtocol,
+  commitMoveFromSecret,
   fixedBetMove,
   getPlayerParty,
-  BET_OPTIONS,
   MIN_BET,
-  type PlayerPartyFor,
-  type BetBlackjackState,
+  revealMoveFromSecret,
+  secureCommitSecret,
   type BetBlackjackMove,
+  type BetBlackjackState,
+  type PlayerPartyFor,
 } from "@/games/blackjack/app/lib/bjBetProtocol";
 import { handValue } from "@/games/blackjack/app/lib/bjCards";
-import { defaultStateHash } from "@/agent/stateHash";
-import { type BotContext, type GameBot, type GameKit } from "@/agent/gameKit";
+import { bjMoveCodec } from "@/games/blackjack/app/lib/bjMoveCodec";
+import type { Party } from "sui-tunnel-ts/protocol/Protocol";
 
 class BlackjackBot implements GameBot<BetBlackjackState, BetBlackjackMove> {
   private readonly seat: Party;
@@ -30,12 +34,32 @@ class BlackjackBot implements GameBot<BetBlackjackState, BetBlackjackMove> {
     this.playerPartyFor = playerPartyFor;
   }
 
-  private dealerPartyFor(round: bigint): Party {
-    return this.playerPartyFor(round) === "A" ? "B" : "A";
-  }
-
   plan(state: BetBlackjackState): BetBlackjackMove | null {
     if (this.protocol.isTerminal(state)) return null;
+
+    // Per-card commit-reveal "plumbing": both seats contribute, strictly serialized A-then-B.
+    // Secrets are minted from the CSPRNG here; the relay codec drops the pre-image.
+    if (state.phase === "draw_commit") {
+      const owe = !state.pendingCommitA
+        ? "A"
+        : !state.pendingCommitB
+          ? "B"
+          : null;
+      if (owe !== this.seat) return null;
+      return commitMoveFromSecret(secureCommitSecret());
+    }
+    if (state.phase === "draw_reveal") {
+      const owe = !state.pendingRevealA
+        ? "A"
+        : !state.pendingRevealB
+          ? "B"
+          : null;
+      if (owe !== this.seat) return null;
+      const secret =
+        this.seat === "A" ? state.localSecretA : state.localSecretB;
+      return secret ? revealMoveFromSecret(secret) : null;
+    }
+
     if (this.protocol.actorFor(state) !== this.seat) return null;
 
     if (state.phase === "round_over") {
@@ -51,11 +75,6 @@ class BlackjackBot implements GameBot<BetBlackjackState, BetBlackjackMove> {
     if (state.phase === "player") {
       if (this.seat !== this.playerPartyFor(state.round)) return null;
       return { action: handValue(state.playerHand) < 17 ? "hit" : "stand" };
-    }
-
-    if (state.phase === "dealer") {
-      if (this.seat !== this.dealerPartyFor(state.round)) return null;
-      return { action: "stand" };
     }
 
     return null;
@@ -88,6 +107,8 @@ export function createBlackjackKit(
     stateHash: (state) => defaultStateHash(protocol, state),
     createBot: (seat: Party, _ctx: BotContext) =>
       new BlackjackBot(seat, protocol, playerPartyFor),
+    // Strip the commit pre-image from relayed moves (agent-vs-agent over a tunnel).
+    moveCodec: bjMoveCodec,
     defaultStake: stake,
   };
 }

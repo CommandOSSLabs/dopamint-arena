@@ -70,6 +70,9 @@ impl<P: Protocol, S: Signer, C: FrameCodec<P::Move>> PartyRuntime<P, S, C> {
     pub fn nonce(&self) -> u64 {
         self.nonce
     }
+    pub fn tunnel_id(&self) -> &str {
+        &self.tunnel_id
+    }
     pub fn state(&self) -> &P::State {
         &self.state
     }

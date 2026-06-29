@@ -5,6 +5,9 @@ use tunnel_core::codec::u64_to_be_bytes;
 use tunnel_core::crypto::blake2b256;
 use tunnel_harness::{Balances, Protocol, ProtocolError, Seat, TunnelContext};
 
+pub mod strategy;
+pub use strategy::ChatStrategy;
+
 const DOMAIN: &[u8] = b"sui_tunnel::proto::chat.v1";
 
 #[derive(Clone, Debug)]
@@ -69,6 +72,7 @@ impl<'de> serde::Deserialize<'de> for ChatMove {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
 pub struct Chat;
 
 fn party_byte(seat: Seat) -> u8 {

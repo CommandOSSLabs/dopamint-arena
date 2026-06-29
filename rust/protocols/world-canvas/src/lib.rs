@@ -6,6 +6,9 @@ use tunnel_core::codec::u64_to_be_bytes;
 use tunnel_core::crypto::blake2b256;
 use tunnel_harness::{Balances, Protocol, ProtocolError, Seat, TunnelContext};
 
+pub mod strategy;
+pub use strategy::{WorldCanvasCellStrategy, WorldCanvasStrokeStrategy};
+
 pub const CHUNK_SIZE: u64 = 256;
 pub const NUM_COLORS: u64 = 16;
 pub const DEFAULT_CAP: u64 = 1_000_000_000_000;
@@ -239,6 +242,7 @@ pub struct StrokeCanvasState {
     pub total: u64,
 }
 
+#[derive(Clone, Copy, Debug)]
 pub struct WorldCanvasStroke;
 
 fn cell_delta(cell: &StrokeCellMove, by: Seat) -> Vec<u8> {
