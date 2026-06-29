@@ -136,3 +136,22 @@ test("ttt cold-load: rebuilt tunnel co-signs the next move byte-identically", ()
   );
   clearResumeRecord(tid);
 });
+
+// Regression: a pending move's Uint8Array salt must survive JSON round-trip via the adapter.
+// Without serializeMove/deserializeMove the salt becomes {"0":...} and tttMoveCodec.encode
+// emits an empty hex string, causing applyMove to reject "salt must be >= 16 bytes".
+test("ttt adapter: pending move salt round-trips through JSON without data loss", () => {
+  const adapter = makeTttResumeAdapter(() => {});
+  const cell = 4;
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const original = { cell, salt };
+
+  const serialized = adapter.serializeMove!(original as never);
+  const jsonRoundTripped = JSON.parse(JSON.stringify(serialized));
+  const restored = adapter.deserializeMove!(jsonRoundTripped) as { cell: number; salt: Uint8Array };
+
+  assert.equal(restored.cell, cell, "cell survives round-trip");
+  assert.ok(restored.salt instanceof Uint8Array, "salt is reconstructed as Uint8Array");
+  assert.equal(restored.salt.length, 16, "salt length is 16");
+  assert.deepEqual(restored.salt, salt, "salt bytes are byte-equal to original");
+});

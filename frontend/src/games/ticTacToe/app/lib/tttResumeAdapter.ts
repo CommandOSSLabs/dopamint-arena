@@ -1,13 +1,13 @@
 /**
- * Tic-tac-toe / caro resume adapter. Full public state with no hidden secret; the move is
- * JSON-native (`{ cell, salt }`), so move (de)serialization defaults to identity. bigint
- * balances are tagged by `resume.ts` on persist, so `serializeState` is a plain pass-through.
+ * Tic-tac-toe / caro resume adapter. Full public state with no hidden secret.
  *
- * `deserializeState` reconstructs `inner.moveAccumulator` as a `Uint8Array` because the v2
- * protocol stores it as a typed array in the live state but JSON round-trips lose the type.
+ * Moves carry a `Uint8Array` salt that is not JSON-native, so `serializeMove` hex-encodes it
+ * and `deserializeMove` rebuilds the typed array. `deserializeState` also reconstructs
+ * `inner.moveAccumulator` as a `Uint8Array` because JSON round-trips lose the type.
  */
 import type { ResumeAdapter } from "@/pvp/resumeSession";
 import type { JsonValue } from "@/pvp/resume";
+import { bytesToHex, hexToBytes } from "sui-tunnel-ts";
 
 // AnyState/CellMove mirror the hook's tunnel generics (board/turn/winner/balances + gamesPlayed).
 export function makeTttResumeAdapter<AnyState, CellMove>(
@@ -15,6 +15,12 @@ export function makeTttResumeAdapter<AnyState, CellMove>(
 ): ResumeAdapter<AnyState, CellMove> {
   return {
     serializeState: (s) => s as unknown as JsonValue,
+    serializeMove: (m) =>
+      ({ cell: (m as { cell: number; salt: Uint8Array }).cell, salt: bytesToHex((m as { cell: number; salt: Uint8Array }).salt) }) as unknown as JsonValue,
+    deserializeMove: (j) => {
+      const o = j as { cell: number; salt: string };
+      return { cell: o.cell, salt: hexToBytes(o.salt) } as unknown as CellMove;
+    },
     deserializeState: (j) => {
       const raw = j as Record<string, unknown>;
       const inner = raw.inner as Record<string, unknown> | undefined;
