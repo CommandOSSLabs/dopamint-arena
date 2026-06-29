@@ -3,6 +3,10 @@
  * interface and is driven by the off-chain tunnel engine (core/tunnel.ts).
  */
 export * from "./apiCredits";
+export * from "./battleship";
+export * from "./battleshipCodec";
+export * from "./battleshipFleet";
+export * from "./battleshipSelfPlay";
 export * from "./blackjack";
 export * from "./blackjackCodec";
 export * from "./bombIt";
