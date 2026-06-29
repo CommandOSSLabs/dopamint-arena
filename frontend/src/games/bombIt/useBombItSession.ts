@@ -22,6 +22,10 @@ import {
   type BombItView,
   type BombItResult,
 } from "./session-core";
+import { engineEnabled } from "@/engine/flag";
+import { engineClient } from "@/engine/engineClient";
+import { useGameSolo } from "@/engine/react/useGameSolo";
+import type { MatchSnapshot } from "@/engine/engineApi";
 
 export type { SessionStatus };
 
@@ -78,7 +82,44 @@ export interface BombItSession extends Omit<
   queueAction: (a: BombItAction) => void;
 }
 
-export function useBombItSession(windowId: string): BombItSession {
+/** Main-thread path (default): the out-of-React self-play session on the main thread. */
+function useLegacyBombItSession(windowId: string): BombItSession {
   const { queueIntent, ...rest } = useSoloSession(windowId);
   return { ...rest, queueAction: queueIntent };
 }
+
+/** Worker path (`?engine=worker`): the funded tunnel + per-duel loop run in a dedicated Web Worker
+ *  (`SoloEngine`); this hook only renders snapshots and forwards commands via `engineClient`. */
+function useWorkerBombItSession(windowId: string): BombItSession {
+  const snap = useGameSolo(windowId) as MatchSnapshot<BombItView>;
+  // The solo lane never emits "matching" (a PvP-only state); fold it into "funding" so the status
+  // narrows to the legacy `SessionStatus` the window/board expect.
+  const status: SessionStatus =
+    snap.status === "matching" ? "funding" : snap.status;
+  return {
+    status,
+    view: snap.view,
+    result: (snap.result ?? null) as BombItResult | null,
+    stake: snap.stake,
+    error: snap.error,
+    auto: snap.auto,
+    score: snap.score ?? { you: 0, foe: 0 },
+    gamesPlayed: snap.gamesPlayed ?? 0,
+    start: (stake) => engineClient.findSolo(windowId, "bomb-it", stake),
+    reset: () => engineClient.reset(windowId),
+    queueAction: (a) => engineClient.submitInput(windowId, a),
+    toggleAuto: () => engineClient.setAuto(windowId, !snap.auto),
+    // On-demand cash-out: close the funded tunnel now at the current co-signed state (same settle
+    // path the engine runs at bank exhaustion), so the cash-out button works under the worker flag.
+    settleNow: () => engineClient.settleSolo(windowId),
+    // Cabinet hover-freeze pauses BOTH the self-play loop and its snapshot flush in the worker, so
+    // the bank stops draining while hovered (independent of the tab-visibility driver in useGameSolo).
+    pause: () => engineClient.setPaused(windowId, true),
+    resume: () => engineClient.setPaused(windowId, false),
+  };
+}
+
+/** `?engine=worker` selects the worker path; default keeps the main-thread path unchanged. Bound
+ *  once at module load so the hook identity is stable per session (rules-of-hooks). */
+export const useBombItSession: (windowId: string) => BombItSession =
+  engineEnabled() ? useWorkerBombItSession : useLegacyBombItSession;

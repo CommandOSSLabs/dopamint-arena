@@ -83,6 +83,11 @@ export class BulkOpenJob {
   private readonly windowMs: number;
   private readonly loneFlushMs: number;
   private readonly enabled: () => boolean;
+  /** Debug counters: PTBs actually signed+executed via Enoki (one per flush) and the total intents
+   *  opened across them — so `window.__bulkOpen()` shows that many matches collapsed into FEWER
+   *  Enoki sign+execute round-trips (the whole point of batching). */
+  private signedPtbs = 0;
+  private openedIntents = 0;
 
   constructor(
     private readonly batchOpen: BatchOpen,
@@ -98,13 +103,22 @@ export class BulkOpenJob {
     }
   }
 
-  /** Debug snapshot of the per-sender queue (call `window.__bulkOpen()` when ENGINE_DEBUG is on). */
-  inspect(): { sender: string; pending: number; intentIds: (string | undefined)[] }[] {
-    return [...this.shards].map(([sender, s]) => ({
-      sender,
-      pending: s.pending.length,
-      intentIds: s.pending.map((p) => p.intentId),
-    }));
+  /** Debug snapshot (call `window.__bulkOpen()` when ENGINE_DEBUG is on): how many PTBs have been
+   *  signed via Enoki, how many intents that covered, and the per-sender pending window. */
+  inspect(): {
+    signedPtbs: number;
+    openedIntents: number;
+    pending: { sender: string; pending: number; intentIds: (string | undefined)[] }[];
+  } {
+    return {
+      signedPtbs: this.signedPtbs,
+      openedIntents: this.openedIntents,
+      pending: [...this.shards].map(([sender, s]) => ({
+        sender,
+        pending: s.pending.length,
+        intentIds: s.pending.map((p) => p.intentId),
+      })),
+    };
   }
 
   /** Enqueue a seat-A open; resolves with the tunnel id once this sender's window flushes. Pass an
@@ -202,6 +216,13 @@ export class BulkOpenJob {
     try {
       results = await this.batchOpen(batch.map((p) => p.params));
       done();
+      this.signedPtbs += 1;
+      this.openedIntents += batch.length;
+      elog("bulkopen", "PTB signed via Enoki", {
+        ptb: this.signedPtbs,
+        intentsThisPtb: batch.length,
+        intentsTotal: this.openedIntents,
+      });
     } catch (err) {
       if (err instanceof BatchCommittedError) {
         console.error(

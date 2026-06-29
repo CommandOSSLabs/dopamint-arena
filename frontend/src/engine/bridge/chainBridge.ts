@@ -6,6 +6,7 @@
  */
 import {
   openSharedTunnelStakedMany,
+  openSelfPlayStaked,
   depositStakeStaked,
   type StakeStrategy,
 } from "@/onchain/stakeTunnel";
@@ -14,6 +15,7 @@ import { MTPS_COIN_TYPE, isMtpsConfigured } from "@/onchain/mtps";
 import { BulkOpenJob } from "../chain/bulkOpenJob";
 import type {
   OpenTunnelParams,
+  OpenSelfPlayParams,
   DepositStakeParams,
   CloseFallbackParams,
   MainBridge,
@@ -32,7 +34,12 @@ export interface ChainBridgeDeps {
 
 type ChainBridge = Pick<
   MainBridge,
-  "openTunnel" | "cancelOpen" | "depositStake" | "readCreatedAt" | "closeFallback"
+  | "openTunnel"
+  | "openSelfPlay"
+  | "cancelOpen"
+  | "depositStake"
+  | "readCreatedAt"
+  | "closeFallback"
 >;
 
 export function makeChainBridge(deps: ChainBridgeDeps): ChainBridge {
@@ -63,6 +70,21 @@ export function makeChainBridge(deps: ChainBridgeDeps): ChainBridge {
   return {
     openTunnel(p: OpenTunnelParams, intentId?: string) {
       return bulkOpenJob.enqueue(p, intentId);
+    },
+    // Self-play opens are NOT batched: each is a single `create_and_fund` of BOTH the player's own
+    // bot seats (one wallet, one signature) with no opponent to coalesce against, so it opens
+    // directly via the funding-strategy helper (no bulk-open window).
+    async openSelfPlay(p: OpenSelfPlayParams) {
+      const tunnelId = await openSelfPlayStaked({
+        reads: deps.reads,
+        partyA: { address: p.partyA.address, publicKey: p.partyA.publicKey },
+        partyB: { address: p.partyB.address, publicKey: p.partyB.publicKey },
+        aAmount: p.aAmount,
+        bAmount: p.bAmount,
+        label: p.label,
+        ...stake(),
+      });
+      return { tunnelId };
     },
     // Orphan-tunnel cancel (design §4.1): the worker calls this from its match teardown so a
     // still-queued open is dropped before the window flushes. async to give the worker an awaitable

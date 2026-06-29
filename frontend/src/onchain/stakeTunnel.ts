@@ -5,6 +5,7 @@
 import {
   openAndFundSharedTunnel,
   openManySharedSeatA,
+  openAndFundSelfPlay,
   depositStake,
   type SignExec,
 } from "./tunnelTx";
@@ -171,6 +172,76 @@ export async function openSharedTunnelStakedMany(
         specs: seatSpecs,
       }),
     `pvp many-open (${specs.length})`,
+  );
+}
+
+/**
+ * Self-play: open + fund BOTH ephemeral-bot seats from one wallet in ONE signature. The self-play
+ * analogue of {@link openSharedTunnelStaked} — same funding-strategy branch (MTPS address-balance →
+ * MTPS coin → SUI sponsored-with-wallet-fallback) so a fix lands once — but it funds both seats via
+ * `create_and_fund` (the existing {@link openAndFundSelfPlay} tx) instead of seat A only. No penalty
+ * is set: both seats are the same player's bots, so there is no opponent to make whole on abandon.
+ */
+export async function openSelfPlayStaked(
+  opts: StakeStrategy & {
+    reads: SharedReads;
+    partyA: SharedParty;
+    partyB: SharedParty;
+    aAmount: bigint;
+    bAmount: bigint;
+    label: string;
+  },
+): Promise<string> {
+  const { reads, partyA, partyB, aAmount, bAmount } = opts;
+  const total = aAmount + bAmount;
+  if (isMtpsConfigured) {
+    if (isMtpsAddressBalance) {
+      // ADR-0013: withdraw both seats' stake (summed) from the player's address balance — concurrent
+      // opens across games don't equivocate. Top up first (no-op once funded).
+      await opts.ensureStakeBalance(total);
+      return openAndFundSelfPlay({
+        reads,
+        signExec: opts.sponsoredSignExec,
+        partyA,
+        partyB,
+        aAmount,
+        bAmount,
+        coinType: MTPS_COIN_TYPE,
+        stakeFromBalance: { amount: total, coinType: MTPS_COIN_TYPE },
+      });
+    }
+    return openAndFundSelfPlay({
+      reads,
+      signExec: opts.sponsoredSignExec,
+      partyA,
+      partyB,
+      aAmount,
+      bAmount,
+      coinType: MTPS_COIN_TYPE,
+      stakeCoinId: await opts.prepareStake(total),
+    });
+  }
+  return withSponsorFallback(
+    async () =>
+      openAndFundSelfPlay({
+        reads,
+        signExec: opts.sponsoredSignExec,
+        partyA,
+        partyB,
+        aAmount,
+        bAmount,
+        stakeCoinId: await opts.selectStakeCoin(total),
+      }),
+    () =>
+      openAndFundSelfPlay({
+        reads,
+        signExec: opts.walletSignExec,
+        partyA,
+        partyB,
+        aAmount,
+        bAmount,
+      }),
+    `${opts.label} self-play open/fund`,
   );
 }
 

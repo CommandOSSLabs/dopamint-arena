@@ -21,6 +21,10 @@ import {
   type CrossView,
   type SessionResult,
 } from "./session-core";
+import { engineEnabled } from "@/engine/flag";
+import { engineClient } from "@/engine/engineClient";
+import { useGameSolo } from "@/engine/react/useGameSolo";
+import type { MatchSnapshot } from "@/engine/engineApi";
 
 export type { SessionStatus };
 
@@ -76,7 +80,44 @@ export interface ChickenCrossSession extends Omit<
   setDir: (dir: CrossDir) => void;
 }
 
-export function useChickenCrossSession(windowId: string): ChickenCrossSession {
+/** Main-thread path (default): the out-of-React self-play session on the main thread. */
+function useLegacyChickenCrossSession(windowId: string): ChickenCrossSession {
   const { queueIntent, ...rest } = useSoloSession(windowId);
   return { ...rest, setDir: queueIntent };
 }
+
+/** Worker path (`?engine=worker`): the funded tunnel + per-duel loop run in a dedicated Web Worker
+ *  (`SoloEngine`); this hook only renders snapshots and forwards commands via `engineClient`. */
+function useWorkerChickenCrossSession(windowId: string): ChickenCrossSession {
+  const snap = useGameSolo(windowId) as MatchSnapshot<CrossView>;
+  // The solo lane never emits "matching" (a PvP-only state); fold it into "funding" so the status
+  // narrows to the legacy `SessionStatus` the window/board expect.
+  const status: SessionStatus =
+    snap.status === "matching" ? "funding" : snap.status;
+  return {
+    status,
+    view: snap.view,
+    result: (snap.result ?? null) as SessionResult | null,
+    stake: snap.stake,
+    error: snap.error,
+    auto: snap.auto,
+    score: snap.score ?? { you: 0, foe: 0 },
+    gamesPlayed: snap.gamesPlayed ?? 0,
+    start: (stake) => engineClient.findSolo(windowId, "chicken-cross", stake),
+    reset: () => engineClient.reset(windowId),
+    setDir: (dir) => engineClient.submitInput(windowId, dir),
+    toggleAuto: () => engineClient.setAuto(windowId, !snap.auto),
+    // On-demand cash-out: close the funded tunnel now at the current co-signed state (same settle
+    // path the engine runs at bank exhaustion), so the cash-out button works under the worker flag.
+    settleNow: () => engineClient.settleSolo(windowId),
+    // Cabinet hover-freeze pauses BOTH the self-play loop and its snapshot flush in the worker, so
+    // the bank stops draining while hovered (independent of the tab-visibility driver in useGameSolo).
+    pause: () => engineClient.setPaused(windowId, true),
+    resume: () => engineClient.setPaused(windowId, false),
+  };
+}
+
+/** `?engine=worker` selects the worker path; default keeps the main-thread path unchanged. Bound
+ *  once at module load so the hook identity is stable per session (rules-of-hooks). */
+export const useChickenCrossSession: (windowId: string) => ChickenCrossSession =
+  engineEnabled() ? useWorkerChickenCrossSession : useLegacyChickenCrossSession;

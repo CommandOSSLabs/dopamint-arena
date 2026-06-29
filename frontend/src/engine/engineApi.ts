@@ -16,7 +16,10 @@ import type { Role } from "@/pvp/mpClient";
 import type { Protocol } from "sui-tunnel-ts/protocol/Protocol";
 import type { MoveCodec } from "sui-tunnel-ts/core/distributedFrame";
 import type { DistributedTunnel } from "sui-tunnel-ts/core/distributedTunnel";
-import type { CoSignedSettlementWithRoot } from "sui-tunnel-ts/core/tunnel";
+import type {
+  CoSignedSettlementWithRoot,
+  OffchainTunnel,
+} from "sui-tunnel-ts/core/tunnel";
 import type { ResumeAdapter } from "@/pvp/resumeSession";
 
 /** A registered game's matchmaking/spec key (e.g. "bomb-it"). */
@@ -57,6 +60,15 @@ export interface MatchSnapshot<View = unknown, Winner = unknown> {
    * an SSE-spectate tile instead of an interactive worker-hosted match.
    */
   capped?: boolean;
+  /**
+   * Self-play only (omitted on the PvP path): running per-seat win tally across the multi-duel
+   * session — `you` = seat A's wins, `foe` = seat B's. One funded tunnel hosts many duels.
+   */
+  score?: { you: number; foe: number };
+  /** Self-play only: completed duels behind the running one (the live duel is `gamesPlayed + 1`). */
+  gamesPlayed?: number;
+  /** Self-play only: the session payout result (game-specific), set once the tunnel settles. */
+  result?: unknown;
 }
 
 /** Worker bootstrap config (the wallet address is only a matchmaking label). */
@@ -89,10 +101,30 @@ export interface EngineApi {
   /** Register the coalesced-snapshot sink (a Comlink proxy, invoked ~per move / 16 ms). */
   subscribe(onSnapshot: (snap: MatchSnapshot) => void): void;
   findMatch(gameId: GameId, setup?: unknown): Promise<void>;
+  /**
+   * Self-play (bot-vs-bot) over ONE funded tunnel hosting many duels. A window is EITHER solo or
+   * pvp; the worker routes control commands (input/auto/visibility/reset) to whichever lane started.
+   * `setup` is the optional per-duel stake (a number, or `{ stake }`); defaults to the spec's stake.
+   */
+  findSoloMatch(gameId: GameId, setup?: unknown): Promise<void>;
   resume(gameId: GameId): Promise<void>;
   submitInput(input: unknown): void;
   setAuto(on: boolean): void;
   setVisibility(visible: boolean): void;
+  /**
+   * SOLO lane only: cabinet hover-freeze. Pause (true) / resume (false) the self-play advance loop
+   * AND its snapshot flush — independent of {@link setVisibility} (the tab-visibility driver). The
+   * loop runs only when BOTH say "active", so one resuming never overrides the other still paused.
+   * No-op unless the window's active lane is solo (the PvP lane has no self-play loop to freeze).
+   */
+  setPaused(paused: boolean): void;
+  /**
+   * SOLO lane only: on-demand cooperative cash-out. Close the funded tunnel NOW at the current
+   * co-signed state — the SAME settle path the engine runs when the per-seat bank is exhausted, but
+   * player-triggered so a session can be cashed out mid-play instead of only at exhaustion. No-op
+   * unless the active lane is solo and a match is playing; idempotent if already settling/settled.
+   */
+  settleSolo(): void;
   /** Tear the match down. Async because it first cancels any seat-A open still queued in the
    *  main-thread bulk-open window (orphan-tunnel cancel, design §4.1) via `bridge.cancelOpen`;
    *  `engineClient.disposeWindow` awaits this so the cancel lands before it terminates the worker. */
@@ -116,6 +148,15 @@ export interface DepositStakeParams {
   amount: bigint;
   label: string;
 }
+/** Self-play open: BOTH ephemeral-bot seats funded from one wallet in a single signature. The
+ *  amounts are the LARGE per-seat bank (vs the small per-duel stake) — one tunnel hosts many duels. */
+export interface OpenSelfPlayParams {
+  partyA: PartyRef;
+  partyB: PartyRef;
+  aAmount: bigint;
+  bAmount: bigint;
+  label: string;
+}
 export interface CloseFallbackParams {
   tunnelId: string;
   settlement: CoSignedSettlementWithRoot;
@@ -131,7 +172,13 @@ export interface CloseFallbackParams {
 export interface MainBridge {
   /** Role A: open + fund the shared tunnel on-chain; returns its id. `intentId` (minted by the
    *  worker per open) tags the queued bulk-open intent so a teardown can {@link cancelOpen} it. */
-  openTunnel(p: OpenTunnelParams, intentId?: string): Promise<{ tunnelId: string }>;
+  openTunnel(
+    p: OpenTunnelParams,
+    intentId?: string,
+  ): Promise<{ tunnelId: string }>;
+  /** Self-play: open + fund BOTH ephemeral seats in ONE signature; returns the shared tunnel id.
+   *  The single per-duel loop is pure crypto, so only this open and the close cross the bridge. */
+  openSelfPlay(p: OpenSelfPlayParams): Promise<{ tunnelId: string }>;
   /** Cancel a still-queued seat-A open (orphan-tunnel cancel, design §4.1): the match/window was
    *  torn down inside the bulk-open window, so its pending open must not flush a tunnel (and
    *  consume stake). No-op if the intent already flushed into an in-flight PTB. */
@@ -203,5 +250,89 @@ export interface GameSessionSpec<
   makeProtocol(): Protocol<State, Move>;
   /** REQUIRED iff `protocol.movesCarrySecrets` — the tunnel enforces this. */
   moveCodec?: MoveCodec<Move>;
-  createMatch(io: MatchIo<State, Move>): MatchController<State, Move, Setup, Input, View>;
+  createMatch(
+    io: MatchIo<State, Move>,
+  ): MatchController<State, Move, Setup, Input, View>;
+}
+
+// --- Self-play (solo) lane: one funded tunnel hosts many bot-vs-bot duels --------------------
+
+/**
+ * The multi-duel protocol state the `SoloEngine` reads directly (it tallies per-duel winners and
+ * surfaces `gamesPlayed`). A game's full state extends this; everything else is opaque to the engine.
+ */
+export interface SoloMultiGameState {
+  /** Completed duels behind the running one (the live duel is `gamesPlayed + 1`). */
+  gamesPlayed: number;
+  /** The running duel's protocol state; `winner` stays null until that duel decides. */
+  inner: { winner: "A" | "B" | "draw" | null };
+}
+
+/** One `stepWith` outcome: a tick was co-signed, the inner duel ended, or the bank is exhausted. */
+export type SoloStepOutcome = "stepped" | "game-over" | "session-over";
+
+/** Read (and clear) the take-over seat's queued intent; a null/undefined return ⇒ autopilot this
+ *  tick (the bot steers the seat). The engine consumes the queued intent exactly once. */
+export type SoloTakeIntent<Intent> = () => Intent | undefined;
+
+/**
+ * Everything game-specific the generic `SoloEngine` needs, registered by `gameId` (parallel to
+ * {@link GameSessionSpec} for the PvP lane). The engine owns the solo skeleton — the one-signature
+ * open+fund of BOTH ephemeral seats over the bridge, the `OffchainTunnel.selfPlay` per-duel loop,
+ * the autopilot/manual cadence, multi-duel rematch, transcript, and cooperative settle; the spec
+ * supplies the protocol, bots, view/result derivation, and the per-tick co-sign.
+ *
+ * `Bots` and `Proto` are trailing defaulted generics so the canonical `<State, Move, Intent, View,
+ * Result>` form stays the usage site while a game can still type its bots/protocol precisely.
+ *
+ * @typeParam State the multi-duel protocol state (`{ gamesPlayed, inner: { winner } }`).
+ * @typeParam Move  the inner protocol move (JSON-native).
+ * @typeParam Intent a single seat's per-tick input (an action/direction) before it becomes a Move.
+ * @typeParam View  the flattened, render-ready snapshot the board consumes.
+ * @typeParam Result who took the pot ("A" | "B" | "draw" | "push").
+ */
+export interface SoloGameSpec<
+  State extends SoloMultiGameState,
+  Move,
+  Intent,
+  View,
+  Result,
+  Bots = unknown,
+  Proto = Protocol<State, Move>,
+> {
+  game: GameId;
+  /** Per-DUEL stake (the small swap settled each duel), in the staked coin's base units. The LARGE
+   *  per-seat bank the engine funds on-chain (which survives many duels) is derived by the engine. */
+  stake: bigint;
+  /**
+   * The LARGE per-seat bank funded on-chain (the staked coin's base units), which survives MANY
+   * duels — distinct from the small per-duel {@link stake}. Defaults to the engine's 1-MTPS bank;
+   * a game whose on-chain balance IS its in-game stack (e.g. poker's chip buy-in) overrides it so
+   * the funded bank equals the protocol's starting balances. (SUI-fallback funding ignores this.)
+   */
+  lockedPerSeat?: bigint;
+  /** Idle pacing for an auto/bot seat (ms); a throughput showcase may omit it. */
+  stepMs?: number;
+  /** A beat between finished duels so the result + score register before the rematch (ms). */
+  rematchMs?: number;
+  /** When set, MANUAL play co-signs ONE tick per this many ms so a reaction game's fuse stays
+   *  legible; when undefined, manual play batches at the autopilot rate. */
+  manualStepMs?: number;
+  /** Build the multi-duel protocol once the tunnel id + per-duel stake are known. */
+  makeProtocol(tunnelId: string, stakePerGame: bigint): Proto;
+  /** Build the per-seat kit bots for this stake; opaque to the engine, threaded into `stepWith`. */
+  makeBots(stakePerGame: bigint): Bots;
+  deriveView(state: State): View;
+  /** Map the just-settled inner duel to the session's payout result. */
+  sessionResult(inner: State["inner"]): Result;
+  /** Co-sign one tick. `take` null ⇒ autopilot (bot drives both seats); non-null ⇒ the take-over
+   *  seat consumes the player's queued intent this tick (the other seat stays bot-driven). */
+  stepWith(
+    protocol: Proto,
+    tunnel: OffchainTunnel<State, Move>,
+    bots: Bots,
+    take: SoloTakeIntent<Intent> | null,
+  ): SoloStepOutcome;
+  /** Start the next duel on the SAME tunnel (seat A's reset first move). */
+  kickoffNextGame(tunnel: OffchainTunnel<State, Move>): void;
 }

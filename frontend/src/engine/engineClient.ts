@@ -59,16 +59,26 @@ interface WindowEntry {
   api: Comlink.Remote<EngineApi>;
   snap: MatchSnapshot;
   listeners: Set<() => void>;
+  /** Whether init/attachBridge/subscribe have been posted. A worker can spawn before the wallet
+   *  bridge is ready (React child effects run before the parent's `useConfigureEngine`), so it
+   *  stays unwired until {@link configureEngine} wires it. */
+  wired: boolean;
 }
 
 let bridge: MainBridge | null = null;
 let config: EngineConfig | null = null;
 const windows = new Map<string, WindowEntry>();
 
-/** Called once by EngineProvider after the wallet is known. */
-export function configureEngine(cfg: EngineConfig, mainBridge: MainBridge): void {
+/** Called by EngineProvider/useConfigureEngine once the wallet is known. Idempotent, and it
+ *  retroactively wires any workers that spawned BEFORE the bridge was ready (the effect-ordering
+ *  foot-gun) — without this, a window mounted before the wallet stays a dead worker forever. */
+export function configureEngine(
+  cfg: EngineConfig,
+  mainBridge: MainBridge,
+): void {
   config = cfg;
   bridge = mainBridge;
+  for (const [windowId, entry] of windows) wire(windowId, entry);
 }
 
 /** Fire a worker command without awaiting. The engine surfaces failures via the snapshot's
@@ -77,29 +87,50 @@ function fire(p: Promise<unknown>): void {
   void p.catch(() => {});
 }
 
+/** Post init → attachBridge → subscribe to a worker once the per-user bridge is configured.
+ *  Idempotent (skips if already wired or the bridge isn't set yet). Posts synchronously with no
+ *  await between the three so they queue ahead of any later findMatch (Comlink preserves order). */
+function wire(windowId: string, entry: WindowEntry): void {
+  if (entry.wired || !config || !bridge) return;
+  const onSnapshot = (snap: MatchSnapshot): void => {
+    entry.snap = snap;
+    for (const l of entry.listeners) l();
+  };
+  fire(entry.api.init(config));
+  fire(entry.api.attachBridge(Comlink.proxy(bridge)));
+  fire(entry.api.subscribe(Comlink.proxy(onSnapshot)));
+  entry.wired = true;
+  elog("client", "wired worker", windowId);
+}
+
 function spawn(windowId: string): WindowEntry {
   const worker = new Worker(new URL("./engine.worker.ts", import.meta.url), {
     type: "module",
     name: `tunnel-${windowId}`,
   });
   const api = Comlink.wrap<EngineApi>(worker);
-  const entry: WindowEntry = { worker, api, snap: IDLE_SNAPSHOT, listeners: new Set() };
-  elog("client", "spawn worker", { windowId, configured: !!(config && bridge) });
-  // Snapshot sink the worker calls back into (coalesced ~16ms upstream). Closes over `entry`.
-  const onSnapshot = (snap: MatchSnapshot): void => {
-    entry.snap = snap;
-    for (const l of entry.listeners) l();
+  const entry: WindowEntry = {
+    worker,
+    api,
+    snap: IDLE_SNAPSHOT,
+    listeners: new Set(),
+    wired: false,
   };
-  if (config && bridge) {
-    // init → attachBridge → subscribe, posted synchronously with no await between them so they
-    // queue ahead of any findMatch issued right after spawn (Comlink preserves channel order).
-    fire(api.init(config));
-    fire(api.attachBridge(Comlink.proxy(bridge)));
-    fire(api.subscribe(Comlink.proxy(onSnapshot)));
-  } else {
-    elog("client", "spawned BEFORE bridge configured (worker idle until wallet/EngineProvider)", windowId);
-  }
   windows.set(windowId, entry);
+  elog("client", "spawn worker", {
+    windowId,
+    configured: !!(config && bridge),
+  });
+  // Wires now if the bridge is already configured; otherwise configureEngine wires it once the
+  // wallet/EngineProvider is ready (so a worker that spawned first isn't left dead).
+  wire(windowId, entry);
+  if (!entry.wired) {
+    elog(
+      "client",
+      "worker idle until wallet/EngineProvider (bridge not configured yet)",
+      windowId,
+    );
+  }
   // Tear the worker down on explicit window close (mirrors the legacy session disposer); a
   // mere React remount/minimize keeps it alive so the match survives in the background.
   registerWindowDisposer(windowId, "engine", () => disposeWindow(windowId));
@@ -162,6 +193,14 @@ export const engineClient = {
     const entry = getOrSpawn(windowId);
     if (entry) fire(entry.api.findMatch(gameId, setup));
   },
+  /** Start a SELF-PLAY (bot-vs-bot) session in this window — the solo-lane sibling of
+   *  {@link findMatch}. Reuses the same lazy spawn / wire / device-cap / dispose path; a capped
+   *  new window simply isn't spawned (the snapshot surfaces `capped`). `setup` optionally overrides
+   *  the per-duel stake. */
+  findSolo(windowId: string, gameId: GameId, setup?: unknown): void {
+    const entry = getOrSpawn(windowId);
+    if (entry) fire(entry.api.findSoloMatch(gameId, setup));
+  },
   resume(windowId: string, gameId: GameId): void {
     const entry = getOrSpawn(windowId);
     if (entry) fire(entry.api.resume(gameId));
@@ -177,6 +216,17 @@ export const engineClient = {
   setVisibility(windowId: string, visible: boolean): void {
     const entry = windows.get(windowId);
     if (entry) fire(entry.api.setVisibility(visible));
+  },
+  /** SOLO lane: cabinet hover-freeze. Pauses/resumes the self-play loop AND its snapshot flush,
+   *  independent of {@link setVisibility} (tab visibility); see `EngineApi.setPaused`. */
+  setPaused(windowId: string, paused: boolean): void {
+    const entry = windows.get(windowId);
+    if (entry) fire(entry.api.setPaused(paused));
+  },
+  /** SOLO lane: on-demand cash-out — close the funded tunnel now at the current co-signed state. */
+  settleSolo(windowId: string): void {
+    const entry = windows.get(windowId);
+    if (entry) fire(entry.api.settleSolo());
   },
   reset(windowId: string): void {
     const entry = windows.get(windowId);

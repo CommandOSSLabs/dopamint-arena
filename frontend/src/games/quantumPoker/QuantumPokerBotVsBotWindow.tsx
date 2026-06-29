@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef } from "react";
 import { useCurrentAccount } from "@mysten/dapp-kit";
 import { useSoloCabinet } from "@/shell/cabinet/soloCabinet";
 import type { GameWindowProps } from "../types";
-import { useQuantumPokerAuto } from "./useQuantumPokerAuto";
+import { useQuantumPokerSolo } from "./useQuantumPokerSolo";
 import { PokerActionBar } from "./PokerActionBar";
 import { QuantumPokerTable } from "./QuantumPokerTable";
 import { SketchDefs } from "../sketch";
@@ -21,7 +21,7 @@ export function QuantumPokerBotVsBotWindow({
   onExit,
   autoTakeOver = false,
 }: GameWindowProps & { onExit?: () => void; autoTakeOver?: boolean }) {
-  const s = useQuantumPokerAuto(windowId);
+  const s = useQuantumPokerSolo(windowId);
   const account = useCurrentAccount();
   const running = s.status === "running";
   const funding = s.status === "funding";
