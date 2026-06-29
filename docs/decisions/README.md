@@ -93,6 +93,9 @@ _why_ survives after the people involved have moved on.
   `admin_mint` via an owned `AdminCap` (no public mint → no brick/griefing), a
   0-decimal whole-token currency via `coin_registry`; the faucet moves to the
   backend admin endpoint. Builds on 0010.
+- [0024](0024-control-plane-durable-s3-archive-retry-queue.md) — Control plane gains
+  narrow read/write access to one Postgres work-queue table (`pending_s3_archive`) for
+  durable S3-archive retry; a contained exception to ADR-0005/0015's Redis-only rule.
 
 > Numbers 0004 (multiplayer experience lane) and 0006 have no record file: 0004
 > predates this directory (still referenced from code/specs), and 0006 was
