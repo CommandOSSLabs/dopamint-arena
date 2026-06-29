@@ -1,7 +1,7 @@
 //! Sign and execute a programmable transaction block.
 
 use crate::error::{Error, Result};
-use crate::rpc::{ExecuteResponse, SuiRpc};
+use crate::rpc::{Coin, ExecuteResponse, SuiRpc};
 use sui_crypto::ed25519::Ed25519PrivateKey;
 use sui_crypto::SuiSigner;
 use sui_sdk_types::Address;
@@ -9,6 +9,7 @@ use wallet_pool_core::crypto::KeyPair;
 
 const DEFAULT_GAS_BUDGET: u64 = 50_000_000;
 const DEFAULT_GAS_PRICE: u64 = 1_000;
+const SUI_COIN_TYPE: &str = "0x2::sui::SUI";
 
 /// Options for signing and executing a transaction.
 #[derive(Clone, Debug)]
@@ -23,9 +24,9 @@ pub struct SignOptions {
 /// Wrap `opts.ptb` in a [`sui_sdk_types::Transaction`], sign it with `keypair`,
 /// and execute it via `rpc`.
 ///
-/// The transaction uses an empty gas payment, suitable for execution models
-/// where gas is paid from an address balance or by a sponsor rather than from
-/// explicit gas objects.
+/// Gas payment objects are selected from the sender's owned SUI coins. A single
+/// coin is used when it covers [`DEFAULT_GAS_BUDGET`]; otherwise coins are
+/// combined until the budget is met.
 pub async fn sign_and_execute(
     rpc: &dyn SuiRpc,
     keypair: &KeyPair,
@@ -35,11 +36,14 @@ pub async fn sign_and_execute(
     let sender = Address::from_hex(sender)
         .map_err(|e| Error::InvalidInput(format!("invalid sender address: {e}")))?;
 
+    let gas_coins = rpc.get_coins(&sender.to_hex(), SUI_COIN_TYPE).await?;
+    let gas_payment_objects = select_gas_coins(gas_coins, DEFAULT_GAS_BUDGET)?;
+
     let transaction = sui_sdk_types::Transaction {
         kind: sui_sdk_types::TransactionKind::ProgrammableTransaction(opts.ptb),
         sender,
         gas_payment: sui_sdk_types::GasPayment {
-            objects: Vec::new(),
+            objects: gas_payment_objects,
             owner: sender,
             price: DEFAULT_GAS_PRICE,
             budget: DEFAULT_GAS_BUDGET,
@@ -65,6 +69,55 @@ pub async fn sign_and_execute(
     Ok(digest)
 }
 
+/// Convert an RPC [`Coin`] into an [`ObjectReference`] for use as gas payment.
+fn coin_to_object_ref(coin: &Coin) -> Result<sui_sdk_types::ObjectReference> {
+    let object_id = Address::from_hex(&coin.object_id).map_err(|e| {
+        Error::Transaction(format!(
+            "invalid gas coin object id {}: {e}",
+            coin.object_id
+        ))
+    })?;
+    let digest = coin
+        .digest
+        .parse::<sui_sdk_types::Digest>()
+        .map_err(|e| Error::Transaction(format!("invalid gas coin digest {}: {e}", coin.digest)))?;
+
+    Ok(sui_sdk_types::ObjectReference::new(
+        object_id,
+        coin.version,
+        digest,
+    ))
+}
+
+/// Select one or more SUI coins whose combined balance covers `budget`.
+///
+/// Coins are sorted by descending balance so a single large coin is preferred
+/// over combining many small coins.
+fn select_gas_coins(coins: Vec<Coin>, budget: u64) -> Result<Vec<sui_sdk_types::ObjectReference>> {
+    if coins.is_empty() {
+        return Err(Error::InsufficientFunds(
+            "no SUI gas coins available".into(),
+        ));
+    }
+
+    let mut coins = coins;
+    coins.sort_by_key(|coin| std::cmp::Reverse(coin.balance));
+
+    let mut selected = Vec::new();
+    let mut total = 0u64;
+    for coin in &coins {
+        total += coin.balance;
+        selected.push(coin_to_object_ref(coin)?);
+        if total >= budget {
+            return Ok(selected);
+        }
+    }
+
+    Err(Error::InsufficientFunds(format!(
+        "SUI balance {total} is less than gas budget {budget}"
+    )))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -88,6 +141,7 @@ mod tests {
     #[derive(Clone, Debug, Default)]
     struct MockState {
         calls: Vec<RecordedCall>,
+        coins: Vec<Coin>,
         execute_response: Option<ExecuteResponse>,
         wait_ok: bool,
         recorded_execute: Option<(Vec<u8>, Vec<Vec<u8>>)>,
@@ -98,11 +152,17 @@ mod tests {
             Self {
                 state: Arc::new(Mutex::new(MockState {
                     calls: Vec::new(),
+                    coins: Vec::new(),
                     execute_response,
                     wait_ok,
                     recorded_execute: None,
                 })),
             }
+        }
+
+        pub fn with_coins(self, coins: Vec<Coin>) -> Self {
+            self.state.lock().unwrap().coins = coins;
+            self
         }
 
         pub fn calls(&self) -> Vec<RecordedCall> {
@@ -125,13 +185,13 @@ mod tests {
             Ok(Vec::new())
         }
 
-        async fn get_coins(&self, owner: &str, _coin_type: &str) -> Result<Vec<crate::rpc::Coin>> {
+        async fn get_coins(&self, owner: &str, _coin_type: &str) -> Result<Vec<Coin>> {
             let mut state = self.state.lock().unwrap();
             state.calls.push(RecordedCall {
                 method: "get_coins".into(),
                 address: owner.into(),
             });
-            Ok(Vec::new())
+            Ok(state.coins.clone())
         }
 
         async fn execute_transaction(
@@ -189,6 +249,22 @@ mod tests {
         }
     }
 
+    fn gas_coin(balance: u64) -> Coin {
+        // Object IDs and digests must be valid hex/base58 strings. Use fixed
+        // values that satisfy parsing for the happy-path tests.
+        gas_coin_with_index(balance, 1)
+    }
+
+    fn gas_coin_with_index(balance: u64, index: u8) -> Coin {
+        Coin {
+            coin_type: SUI_COIN_TYPE.into(),
+            object_id: format!("0x{:064x}", index),
+            version: 1,
+            digest: sui_sdk_types::Digest::ZERO.to_string(),
+            balance,
+        }
+    }
+
     #[tokio::test]
     async fn sign_and_execute_calls_execute_transaction_with_expected_shape() {
         let rpc = MockRpc::new(
@@ -197,7 +273,8 @@ mod tests {
                 effects: None,
             }),
             false,
-        );
+        )
+        .with_coins(vec![gas_coin(DEFAULT_GAS_BUDGET)]);
 
         let opts = SignOptions {
             ptb: empty_ptb(),
@@ -240,6 +317,12 @@ mod tests {
             transaction.sender.to_hex().trim_start_matches("0x"),
             sender().trim_start_matches("0x")
         );
+        assert!(
+            !transaction.gas_payment.objects.is_empty(),
+            "gas payment objects should be populated"
+        );
+        assert_eq!(transaction.gas_payment.owner, transaction.sender);
+        assert_eq!(transaction.gas_payment.budget, DEFAULT_GAS_BUDGET);
     }
 
     #[tokio::test]
@@ -250,7 +333,8 @@ mod tests {
                 effects: None,
             }),
             true,
-        );
+        )
+        .with_coins(vec![gas_coin(DEFAULT_GAS_BUDGET)]);
 
         let opts = SignOptions {
             ptb: empty_ptb(),
@@ -292,8 +376,72 @@ mod tests {
             "expected InvalidInput, got {err}"
         );
         assert!(
-            !rpc.calls().iter().any(|c| c.method == "execute_transaction"),
+            !rpc.calls()
+                .iter()
+                .any(|c| c.method == "execute_transaction"),
             "execute_transaction should not be called"
+        );
+    }
+
+    #[tokio::test]
+    async fn sign_and_execute_calls_get_coins_for_sui_gas() {
+        let rpc = MockRpc::new(
+            Some(ExecuteResponse {
+                digest: "txdigest".into(),
+                effects: None,
+            }),
+            false,
+        )
+        .with_coins(vec![gas_coin(DEFAULT_GAS_BUDGET)]);
+
+        let opts = SignOptions {
+            ptb: empty_ptb(),
+            await_effects: false,
+        };
+
+        let digest = sign_and_execute(&rpc, &keypair(), &sender(), opts)
+            .await
+            .unwrap();
+        assert_eq!(digest, "txdigest");
+
+        let calls = rpc.calls();
+        assert!(
+            calls
+                .iter()
+                .any(|c| c.method == "get_coins" && c.address == sender()),
+            "get_coins should be called for the sender"
+        );
+    }
+
+    #[test]
+    fn select_gas_coins_combines_multiple_small_coins_to_meet_budget() {
+        let coins = vec![
+            gas_coin_with_index(20_000_000, 1),
+            gas_coin_with_index(20_000_000, 2),
+            gas_coin_with_index(20_000_000, 3),
+        ];
+
+        let selected = select_gas_coins(coins, DEFAULT_GAS_BUDGET).unwrap();
+
+        assert_eq!(
+            selected.len(),
+            3,
+            "all three small coins should be combined"
+        );
+    }
+
+    #[test]
+    fn select_gas_coins_returns_insufficient_funds_when_no_coins_meet_budget() {
+        let coins = vec![
+            gas_coin_with_index(20_000_000, 1),
+            gas_coin_with_index(20_000_000, 2),
+        ];
+
+        let err = select_gas_coins(coins, DEFAULT_GAS_BUDGET).expect_err("should fail");
+
+        assert!(
+            matches!(err, Error::InsufficientFunds(_)),
+            "expected InsufficientFunds, got {err}"
         );
     }
 }
