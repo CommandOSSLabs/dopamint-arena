@@ -353,4 +353,36 @@ mod tests {
         let got = apply_filter(&entries, &f, &None, 0, None, None);
         assert_eq!(got.len(), 2);
     }
+
+    #[test]
+    fn filter_by_role() {
+        let mut entries = vec![
+            entry(1, true, "0x1", 0, 0, None),
+            entry(2, true, "0x2", 0, 0, None),
+        ];
+        entries[0].role = WalletRole::Master;
+
+        let f = Filter {
+            role: Some(WalletRole::Master),
+            ..Default::default()
+        };
+        let got = apply_filter(&entries, &f, &None, 0, None, None);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].ordinal, 1);
+    }
+
+    #[test]
+    fn filter_by_address_exact() {
+        let entries = vec![
+            entry(1, true, "0xabc", 0, 0, None),
+            entry(2, true, "0xdef", 0, 0, None),
+        ];
+        let f = Filter {
+            address_exact: Some("0xabc".into()),
+            ..Default::default()
+        };
+        let got = apply_filter(&entries, &f, &None, 0, None, None);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].ordinal, 1);
+    }
 }

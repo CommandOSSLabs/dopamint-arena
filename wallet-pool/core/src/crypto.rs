@@ -142,4 +142,11 @@ mod tests {
         let sig = kp.sign(msg);
         assert!(verify(&kp2.public_key(), msg, &sig));
     }
+
+    #[test]
+    fn verify_rejects_invalid_signature() {
+        let kp = generate_keypair();
+        let sig = [0u8; 64];
+        assert!(!verify(&kp.public_key(), b"msg", &sig));
+    }
 }

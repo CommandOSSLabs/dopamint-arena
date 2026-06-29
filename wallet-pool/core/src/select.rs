@@ -223,4 +223,14 @@ mod tests {
         let got = lru(&entries, &filter, &None, 0);
         assert_eq!(got.map(|e| e.ordinal), Some(3));
     }
+
+    #[test]
+    fn lru_returns_none_when_no_match() {
+        let entries = vec![entry(1, false, 10)];
+        let filter = Filter {
+            enabled: Some(true),
+            ..Default::default()
+        };
+        assert!(lru(&entries, &filter, &None, 0).is_none());
+    }
 }

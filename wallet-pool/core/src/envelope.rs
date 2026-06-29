@@ -314,4 +314,14 @@ mod tests {
             plaintext.as_slice()
         );
     }
+
+    #[test]
+    fn generated_access_value_is_base64url_32_bytes() {
+        let access = generate_access_value();
+        let decoded = URL_SAFE_NO_PAD.decode(&access).unwrap();
+        assert_eq!(decoded.len(), 32);
+        assert!(!access.contains('+'));
+        assert!(!access.contains('/'));
+        assert!(!access.contains('='));
+    }
 }
