@@ -1,12 +1,14 @@
 services:
   sui-localnet:
-    # Multi-arch image — runs natively on both arm64 (Apple Silicon) and x86_64.
-    # stack.ts still detects an unhealthy container and falls back to the host
-    # `sui` binary, so the bench stack also works on hosts without a usable Docker.
+    # sui-tools ships SEPARATE per-arch tags (no unified multi-arch manifest): the bare
+    # `testnet-v1.74.0` is linux/amd64 and SIGILLs ("Illegal instruction") under QEMU on
+    # arm64. stack.ts sets SUI_TOOLS_TAG from the host arch (…-arm64 on Apple Silicon, the
+    # amd64 default below on x86_64 / CI), so the container runs natively on both. If Docker
+    # is unusable, stack.ts still detects the unhealthy container and falls back to host `sui`.
     #
     # sui ≥ 1.74 requires `sui genesis -f --with-faucet` before `sui start`
     # when starting fresh — `--force-regenesis` alone does not seed a funded wallet.
-    image: mysten/sui-tools:testnet-v1.74.0
+    image: mysten/sui-tools:${SUI_TOOLS_TAG:-testnet-v1.74.0}
     command:
       - /bin/sh
       - -c
@@ -14,7 +16,10 @@ services:
     ports: ["${SUI_RPC_PORT:-9000}:9000", "${SUI_FAUCET_PORT:-9123}:9123"]
     environment:
       SUI_PROTOCOL_CONFIG_OVERRIDE_ENABLE: "1"
+      # sui_tunnel bytecode is ~139 KB (> the 102 KB localnet default).
       SUI_PROTOCOL_CONFIG_OVERRIDE_max_move_package_size: "512000"
+      # The SDK publish tx carries the whole package (~180 KB > the 128 KiB default).
+      SUI_PROTOCOL_CONFIG_OVERRIDE_max_tx_size_bytes: "2097152"
     healthcheck:
       # curl is not in the image; probe the RPC TCP port via bash.
       test: ["CMD", "bash", "-c", "echo > /dev/tcp/127.0.0.1/9000"]

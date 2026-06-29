@@ -5,11 +5,8 @@
  *      stack.ts detects the unhealthy state and falls back to the host `sui` binary.
  *   2. Waits for localnet RPC to become reachable (polls for up to 300s).
  *   3. Funds the active sui client wallet from the faucet (for gas).
- *   4. Publishes the sui_tunnel Move package.
- *      sui ≥ 1.73 requires:
- *        a) Move.toml [environments] with the active env and its chain-id.
- *        b) No stale [published.local] entry in Published.toml.
- *      stack.ts patches both files around the publish call and restores them.
+ *   4. Publishes the sui_tunnel Move package via the SDK (build to base64 +
+ *      `tx.publish`, signed by the in-process funded publisher) — see publishPackage.
  *   5. Funds a settler key + N bench keys via the local faucet.
  *   6. Writes `.env.local` and `keys.json` next to `package.json`.
  *
@@ -18,15 +15,22 @@
  */
 
 import { spawnSync, spawn } from "node:child_process";
-import { writeFileSync, readFileSync, existsSync, unlinkSync, mkdirSync } from "node:fs";
-import { SuiClient } from "@mysten/sui/client";
+import { writeFileSync, mkdirSync } from "node:fs";
+import { SuiClient } from "./suiClient";
+import { Transaction } from "@mysten/sui/transactions";
 import { requestSuiFromFaucetV2 } from "@mysten/sui/faucet";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import { decodeSuiPrivateKey } from "@mysten/sui/cryptography";
+import { execute } from "../../../sui-tunnel-ts/src/onchain/lifecycle";
 import { writeEnvLocal } from "./env";
 import { envName, project, ports, suiConfigDir } from "./benchEnv";
 
 const COMPOSE_FILE = new URL("../docker-compose.yml", import.meta.url).pathname;
+
+// sui-tools image version for the localnet container. sui-tools ships per-arch tags
+// (the bare tag is amd64; arm64 is a `-arm64` suffix), so the tag is arch-selected at
+// runtime — keep this in sync with the host `sui` version used to build the package.
+const SUI_TOOLS_VERSION = "testnet-v1.74.0";
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -97,106 +101,70 @@ function startHostSui(): ReturnType<typeof spawn> {
 }
 
 /**
- * Publish the sui_tunnel package to localnet and return its on-chain packageId.
+ * Build sui_tunnel to bytecode and publish it via the SDK, signed by `signer`
+ * (the in-process, faucet-funded publisher). Returns the on-chain packageId.
  *
- * sui ≥ 1.73 enforces that:
- *   1. Move.toml [environments] contains the active client environment.
- *   2. Published.toml has no stale publication record for that environment.
+ * Why SDK publish, not `sui client publish` / `test-publish`: on this host the CLI
+ * signs with the ~/.sui active address and ignores SUI_CONFIG_DIR, so the publish
+ * fails "Cannot find gas coin"; and the CLI publish path validates the active env
+ * against Move.toml [environments]. Building to base64 + `tx.publish` sidesteps
+ * both — the in-process keypair signs (exact isolation) and no env validation runs,
+ * so no Move.toml / Published.toml / Move.lock patching is needed. `sui move build`
+ * itself touches neither the keystore nor the active env.
  *
- * The upstream sui_tunnel Move.toml has no [environments] section and
- * Published.toml accumulates entries across runs. This function:
- *   - Patches Move.toml to add the `local` env entry with the current chain-id.
- *   - Deletes Move.lock (gitignored, regenerated on build) to avoid stale chain-id
- *     mismatches in [pinned.local.*] sections from prior runs.
- *   - Clears any stale [published.local] section from Published.toml.
- *   - Runs `sui client publish`.
- *   - Restores Move.toml and Published.toml; leaves Move.lock as regenerated.
- *
- * The gas budget of 2B MIST is required because the sui_tunnel bytecode is
- * larger than normal localnet defaults (139 KB vs 102 KB cap). The host sui
- * is started with SUI_PROTOCOL_CONFIG_OVERRIDE_max_move_package_size=512000
- * to raise this limit.
+ * The publish requires the localnet to raise two protocol limits (set in main on the
+ * host-sui fallback): max_move_package_size (sui_tunnel bytecode is ~139 KB > the
+ * 102 KB localnet default) and max_tx_size_bytes (the publish tx carries the whole
+ * ~180 KB package > the 128 KiB default).
  */
-function publishPackage(chainId: string): string {
+async function publishPackage(
+  client: SuiClient,
+  signer: Ed25519Keypair,
+): Promise<string> {
   // Resolve: src/stack.ts → src/ → loadbench/ → tools/ → repo root → sui_tunnel
   const pkgPath = new URL("../../../sui_tunnel", import.meta.url).pathname;
-  const moveToml = `${pkgPath}/Move.toml`;
-  const moveLock = `${pkgPath}/Move.lock`;
-  const publishedToml = `${pkgPath}/Published.toml`;
 
-  const origMoveToml = readFileSync(moveToml, "utf8");
-  const moveLockExists = existsSync(moveLock);
-  const origPublishedToml = existsSync(publishedToml)
-    ? readFileSync(publishedToml, "utf8")
-    : null;
-
-  let patched = false;
-  try {
-    // 1. Add/overwrite [environments] in Move.toml with the current chain-id.
-    let newMoveToml = origMoveToml.replace(/\n\[environments\][\s\S]*$/, "");
-    newMoveToml = newMoveToml.trimEnd() + `\n\n[environments]\nlocal = "${chainId}"\n`;
-    writeFileSync(moveToml, newMoveToml);
-    patched = true;
-
-    // 2. Remove Move.lock so the CLI regenerates it with the current chain-id.
-    //    Stripping individual [pinned.local.*] sections is error-prone because the
-    //    global regex skips the middle section when two adjacent sections share a
-    //    blank-line boundary. Deletion is safe: Move.lock is gitignored and always
-    //    regenerated on build.
-    if (moveLockExists) {
-      unlinkSync(moveLock);
-    }
-
-    // 3. Strip the stale [published.local] section from Published.toml so that
-    //    `sui client publish` doesn't think the package is already published here.
-    if (origPublishedToml !== null) {
-      const stripped = origPublishedToml
-        .replace(/\n\[published\.local\][\s\S]*?(?=\n\[|$)/, "")
-        .trimEnd() + "\n";
-      writeFileSync(publishedToml, stripped);
-    }
-
-    const out = spawnSync(
-      "sui",
-      ["client", "publish", "--gas-budget", "2000000000", "--json", pkgPath],
-      { encoding: "utf8" },
-    );
-
-    // Restore patched files before any throw.
-    // Move.lock is NOT restored — it is gitignored and the CLI regenerated it with
-    // the new chain-id during publish. Restoring the old content would corrupt it.
-    writeFileSync(moveToml, origMoveToml);
-    if (origPublishedToml !== null) writeFileSync(publishedToml, origPublishedToml);
-    patched = false;
-
-    if (out.status !== 0) {
-      throw new Error(`publish failed:\n${out.stderr || out.stdout}`);
-    }
-
-    // `sui client publish --json` emits build-progress lines before the JSON object.
-    const lines = out.stdout.split("\n");
-    const jsonStart = lines.findIndex((l) => l.trimStart().startsWith("{"));
-    if (jsonStart === -1) {
-      throw new Error(`no JSON in publish output:\n${out.stdout}`);
-    }
-    const jsonText = lines.slice(jsonStart).join("\n");
-
-    const changes = JSON.parse(jsonText).objectChanges as {
-      type: string;
-      packageId?: string;
-    }[];
-    const pkg = changes.find((c) => c.type === "published");
-    if (!pkg?.packageId) throw new Error("no published package in objectChanges");
-    return pkg.packageId;
-  } finally {
-    // Safety net: restore Move.toml and Published.toml if an unexpected exception
-    // interrupted the normal restore path. Move.lock is intentionally not restored
-    // (gitignored, regenerated by the CLI).
-    if (patched) {
-      writeFileSync(moveToml, origMoveToml);
-      if (origPublishedToml !== null) writeFileSync(publishedToml, origPublishedToml);
-    }
+  // --dump-bytecode-as-base64 writes {modules:[b64], dependencies:[objId], digest:[]}
+  // to stdout (build progress goes to stderr). sui_tunnel's only dependencies are the
+  // system packages 0x1/0x2, present on every network incl. a force-regenesis localnet,
+  // so --with-unpublished-dependencies is not needed.
+  const built = spawnSync(
+    "sui",
+    ["move", "build", "--dump-bytecode-as-base64", "--path", pkgPath],
+    { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
+  );
+  if (built.status !== 0) {
+    throw new Error(`sui move build failed:\n${built.stderr || built.stdout}`);
   }
+  let compiled: { modules: string[]; dependencies: string[] };
+  try {
+    compiled = JSON.parse(built.stdout);
+  } catch {
+    throw new Error(
+      `could not parse 'sui move build --dump' JSON:\n${built.stdout.slice(0, 1000)}`,
+    );
+  }
+
+  const tx = new Transaction();
+  // tx.publish returns the UpgradeCap; it must be consumed (transferred) or the tx aborts.
+  const upgradeCap = tx.publish({
+    modules: compiled.modules,
+    dependencies: compiled.dependencies,
+  });
+  tx.transferObjects([upgradeCap], signer.toSuiAddress());
+  tx.setGasBudget(2_000_000_000);
+
+  // execute() surfaces an on-chain Move abort as a throw (status "failure").
+  const res = await execute(client, signer, tx, { waitForFinality: true });
+  const published = (
+    res.objectChanges as Array<{ type: string; packageId?: string }> | undefined
+  )?.find((c) => c.type === "published");
+  if (!published?.packageId) {
+    throw new Error(
+      `no published package in objectChanges:\n${JSON.stringify(res.objectChanges)}`,
+    );
+  }
+  return published.packageId;
 }
 
 type FundedKey = { secretKey: string; address: string };
@@ -224,8 +192,10 @@ async function fundKeys(client: SuiClient, n: number, faucetUrl: string): Promis
   return keys;
 }
 
-/** Write a self-contained sui CLI config (client.yaml + keystore + aliases) whose
- *  active env points at this stack's localnet, so `sui client publish` never touches ~/.sui. */
+/** Write a self-contained sui CLI config (client.yaml + keystore + aliases) pointed at
+ *  this stack's localnet, so `sui move build` (the only sui CLI call left) never reads or
+ *  writes the global ~/.sui. Signing goes through the SDK in-process, not the CLI keystore;
+ *  this config exists only to keep the CLI isolated and non-interactive. */
 function seedSuiConfig(configDir: string, rpc: string, kp: Ed25519Keypair): string {
   mkdirSync(configDir, { recursive: true });
   // 0x00 prefix = ed25519 flag byte, matching the sui keystore wire format.
@@ -241,7 +211,10 @@ function seedSuiConfig(configDir: string, rpc: string, kp: Ed25519Keypair): stri
   );
   writeFileSync(
     `${configDir}/client.yaml`,
-    `keystore:\n  File: ${configDir}/sui.keystore\nenvs:\n  - alias: localnet\n    rpc: "${rpc}"\n    ws: ~\n    basic_auth: ~\nactive_env: localnet\nactive_address: "${addr}"\n`,
+    // A valid client.yaml stops `sui move build` from prompting to initialise a config
+    // under SUI_CONFIG_DIR. The env alias / active_address are no longer load-bearing
+    // now that publishing goes through the SDK (no `sui client publish` env validation).
+    `keystore:\n  File: ${configDir}/sui.keystore\nenvs:\n  - alias: local\n    rpc: "${rpc}"\n    ws: ~\n    basic_auth: ~\nactive_env: local\nactive_address: "${addr}"\n`,
   );
   return addr;
 }
@@ -266,11 +239,16 @@ async function main(): Promise<void> {
   // Change 2: compose up under the env project + per-env ports.
   // Start all services detached; valkey is healthy quickly.
   // sui-localnet may stay unhealthy (architecture mismatch, etc.) — detected below.
+  // Select the sui-tools tag for the host arch: the bare (amd64) tag SIGILLs under QEMU
+  // on Apple Silicon, so use the -arm64 tag there. Other arches fall back to the bare tag.
+  const suiToolsTag =
+    process.arch === "arm64" ? `${SUI_TOOLS_VERSION}-arm64` : SUI_TOOLS_VERSION;
   const composeEnv = {
     ...process.env,
     SUI_RPC_PORT: String(rpcPort),
     SUI_FAUCET_PORT: String(faucetPort),
     VALKEY_PORT: String(p.valkey),
+    SUI_TOOLS_TAG: suiToolsTag,
   } as NodeJS.ProcessEnv;
   const up = spawnSync(
     "docker",
@@ -317,6 +295,9 @@ async function main(): Promise<void> {
     // default limit on localnet is 102 KB).
     process.env.SUI_PROTOCOL_CONFIG_OVERRIDE_ENABLE = "1";
     process.env.SUI_PROTOCOL_CONFIG_OVERRIDE_max_move_package_size = "512000";
+    // The publish transaction carries the whole package (~180 KB serialized),
+    // exceeding the default max_tx_size_bytes (128 KiB); raise it for the deploy.
+    process.env.SUI_PROTOCOL_CONFIG_OVERRIDE_max_tx_size_bytes = "2097152";
     hostSuiProc = startHostSui();
     await sleep(3000);
   }
@@ -339,14 +320,6 @@ async function main(): Promise<void> {
   // Change 6: faucet polling uses faucetUrl().
   await waitFaucet(faucetUrl());
 
-  // Read chain ID from the CLI (not the TypeScript client) so it matches exactly
-  // what `sui client publish` will validate against Move.toml [environments].
-  const chainIdResult = spawnSync("sui", ["client", "chain-identifier"], {
-    encoding: "utf8",
-  });
-  const chainId = chainIdResult.stdout.trim();
-  if (!chainId) throw new Error("failed to get chain identifier from sui CLI");
-
   // Fund the active wallet so the publish transaction has enough gas.
   // The sui_tunnel package is large; a budget of 2B MIST is needed.
   // Each faucet response gives 5 × 200 SUI coins; one call is sufficient.
@@ -365,7 +338,7 @@ async function main(): Promise<void> {
   console.log("publishing sui_tunnel package…");
   let packageId: string;
   try {
-    packageId = publishPackage(chainId);
+    packageId = await publishPackage(client, publisherKp);
   } catch (err) {
     if (hostSuiProc) hostSuiProc.kill();
     throw err;
