@@ -276,7 +276,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/faucet/internal", post(routes::faucet_admin))
         .route("/v1/sessions/:session_id/chat", post(routes::chat))
         .route("/v1/sessions/:session_id/chat/topic", get(routes::chat_topic))
-        .route("/v1/chat/live/publish", post(routes::chat_publish))
+        .route(
+            "/v1/sessions/:session_id/chat/live/publish",
+            post(routes::chat_publish),
+        )
         .route("/v1/chat/live", get(routes::chat_live))
         .route("/v1/stats/live", get(routes::stats_live))
         .route("/v1/sponsor/execute", post(routes::sponsor_execute))
