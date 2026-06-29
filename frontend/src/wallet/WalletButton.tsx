@@ -43,9 +43,18 @@ export function WalletButton({
     setFauceting(true);
     try {
       await faucetMtps({ recipient: session.address });
-      toast.success("Faucet sent — your MTPS will arrive shortly");
+      toast.success("Faucet sent — MTPS incoming");
+      // Reflect the new balance: refetch now, then again after the SIP-58 deposit settles (next
+      // checkpoint, a beat later).
+      session.refetchBalance();
+      setTimeout(() => session.refetchBalance(), 2500);
     } catch (e) {
-      toast.error(`Faucet failed: ${String((e as Error)?.message ?? e)}`);
+      const err = e as Error & { status?: number };
+      toast.error(
+        err.status === 429
+          ? "Faucet limit reached — try again in a bit"
+          : err.message || "Faucet failed",
+      );
     } finally {
       setFauceting(false);
     }

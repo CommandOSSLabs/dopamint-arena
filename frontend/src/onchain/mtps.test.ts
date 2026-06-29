@@ -61,18 +61,27 @@ test("faucetMtps forwards toBalance to the backend", async () => {
   }
 });
 
-// A non-2xx (e.g. the 429 cooldown) surfaces loudly with the status + backend detail, so a caller
-// (ensureMtps*, the auto-faucet) can react instead of silently proceeding with no coin.
-test("faucetMtps throws on a non-2xx with the status and backend detail", async () => {
+// A non-2xx throws with the backend's CLEAN error.message (not the raw JSON) and the HTTP status
+// attached, so a caller (WalletButton, ensureMtps*) can special-case 429 and show a tidy toast.
+test("faucetMtps throws a clean message + status on a non-2xx", async () => {
   const orig = globalThis.fetch;
   globalThis.fetch = (async () => ({
     ok: false,
     status: 429,
     json: async () => ({}),
-    text: async () => "faucet cooldown active",
+    text: async () =>
+      JSON.stringify({
+        error: { code: "rate_limited", message: "faucet rate limit reached" },
+      }),
   })) as unknown as typeof fetch;
   try {
-    await assert.rejects(faucetMtps({ recipient: "0xabc" }), /429.*cooldown/s);
+    await faucetMtps({ recipient: "0xabc" });
+    assert.fail("expected faucetMtps to throw");
+  } catch (e) {
+    const err = e as Error & { status?: number };
+    assert.equal(err.status, 429);
+    assert.equal(err.message, "faucet rate limit reached");
+    assert.doesNotMatch(err.message, /[{}]/); // no raw JSON leaked into the message
   } finally {
     globalThis.fetch = orig;
   }

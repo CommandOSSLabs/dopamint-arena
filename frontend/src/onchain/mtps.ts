@@ -51,8 +51,22 @@ export async function faucetMtps(opts: {
     }),
   });
   if (!res.ok) {
-    const detail = await res.text().catch(() => "");
-    throw new Error(`faucet request failed (${res.status}): ${detail}`);
+    // Surface the backend's clean `error.message` (the ApiError envelope), not the raw JSON, and
+    // attach the HTTP status so callers can special-case the 429 rate limit.
+    const raw = await res.text().catch(() => "");
+    let message = raw;
+    try {
+      message =
+        (JSON.parse(raw) as { error?: { message?: string } })?.error?.message ??
+        raw;
+    } catch {
+      /* not JSON — fall back to the raw text */
+    }
+    const err = new Error(
+      message || `faucet request failed (${res.status})`,
+    ) as Error & { status?: number };
+    err.status = res.status;
+    throw err;
   }
   const { digest } = (await res.json()) as { digest: string };
   return { digest };

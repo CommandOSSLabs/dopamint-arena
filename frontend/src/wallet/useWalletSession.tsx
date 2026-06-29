@@ -53,6 +53,8 @@ export interface WalletSession {
   isDemo: boolean;
   connectDemo: () => void;
   disconnect: () => void;
+  /** Re-fetch the MTPS balance (e.g. after a faucet) so the UI reflects the new amount. */
+  refetchBalance: () => void;
 }
 
 const shorten = (addr: string) =>
@@ -78,7 +80,7 @@ export function useWalletSession(): WalletSession {
   );
   // MTPS balance (0-decimal). Default stakes come from the SIP-58 address balance, so sum the owned
   // coins (`totalBalance`) and the address balance (`fundsInAddressBalance`) for the true holdings.
-  const { data: mtpsBalance } = useSuiClientQuery(
+  const { data: mtpsBalance, refetch: refetchMtps } = useSuiClientQuery(
     "getBalance",
     { owner: realAddress ?? "", coinType: MTPS_COIN_TYPE },
     { enabled: !!realAddress && isMtpsConfigured },
@@ -102,6 +104,9 @@ export function useWalletSession(): WalletSession {
       isDemo: false,
       connectDemo: demo.connectDemo,
       disconnect: () => disconnectWallet(),
+      refetchBalance: () => {
+        void refetchMtps();
+      },
     };
   }
 
@@ -115,6 +120,7 @@ export function useWalletSession(): WalletSession {
       isDemo: true,
       connectDemo: demo.connectDemo,
       disconnect: demo.disconnectDemo,
+      refetchBalance: () => {},
     };
   }
 
@@ -127,5 +133,6 @@ export function useWalletSession(): WalletSession {
     isDemo: false,
     connectDemo: demo.connectDemo,
     disconnect: () => {},
+    refetchBalance: () => {},
   };
 }
