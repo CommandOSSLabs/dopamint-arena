@@ -129,6 +129,7 @@ export type PokerMove =
   | { kind: "check" }
   | { kind: "call" }
   | { kind: "fold" }
+  | { kind: "forfeit" }
   | { kind: "next_hand" };
 
 const PHASE_CODE: Record<PokerPhase, number> = {
@@ -420,6 +421,10 @@ export class QuantumPokerProtocol implements Protocol<PokerState, PokerMove> {
 
   applyMove(state: PokerState, move: PokerMove, by: Party): PokerState {
     const s = cloneState(state);
+    // A seat that has met every reveal it owes can claim the contested pot when the opponent
+    // withholds a reveal it owes (the F1 abandonment gap). Withholding is an implicit fold, so
+    // a non-zero create-time `penalty_amount` then backs the on-chain force-close.
+    if (move.kind === "forfeit") return this.claimForfeit(s, by);
     switch (s.phase) {
       case "commit":
         return this.applyCommit(s, move, by);
@@ -773,6 +778,30 @@ export class QuantumPokerProtocol implements Protocol<PokerState, PokerMove> {
     s.actedB = false;
     s.streetBetA = 0n;
     s.streetBetB = 0n;
+  }
+
+  /**
+   * `by` claims the contested pot because the opponent withholds a reveal it owes during a
+   * reveal phase. `by` must already owe nothing; the opponent must still owe a reveal. Treated
+   * as the opponent folding, so the pot, balance clamp, and state encoding match `resolveFold`.
+   */
+  private claimForfeit(s: PokerState, by: Party): PokerState {
+    const opp = otherParty(by);
+    let mineOwes: number[];
+    let oppOwes: number[];
+    try {
+      mineOwes = expectedQuantumPokerRevealSlots(s, by);
+      oppOwes = expectedQuantumPokerRevealSlots(s, opp);
+    } catch {
+      throw new Error("forfeit only valid during a pending reveal");
+    }
+    if (mineOwes.length !== 0)
+      throw new Error("forfeit not claimable: you still owe a reveal");
+    if (oppOwes.length === 0)
+      throw new Error("forfeit not claimable: opponent does not owe a reveal");
+    s.foldedBy = opp;
+    this.resolveFold(s);
+    return s;
   }
 
   private resolveFold(s: PokerState): void {
