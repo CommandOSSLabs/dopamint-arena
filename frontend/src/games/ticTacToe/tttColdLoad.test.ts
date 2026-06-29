@@ -13,7 +13,7 @@ import { makeEndpoint, OffchainTunnel } from "sui-tunnel-ts/core/tunnel";
 import { defaultBackend } from "sui-tunnel-ts/core/crypto-native";
 import { generateKeyPair } from "sui-tunnel-ts/core/crypto";
 import { toHex } from "sui-tunnel-ts/core/bytes";
-import { MultiGameTicTacToeProtocol } from "@ttt/shared";
+import { MultiGameTicTacToeProtocol, tttMoveCodec } from "@ttt/shared";
 import { makeTttResumeAdapter } from "./app/lib/tttResumeAdapter";
 
 // localStorage/window fakes. The resume modules touch storage lazily (only inside the calls
@@ -53,8 +53,10 @@ test("ttt cold-load: rebuilt tunnel co-signs the next move byte-identically", ()
     "0xB",
     { a: 1000n, b: 1000n },
   );
-  sp.step({ cell: 0 }, "A");
-  sp.step({ cell: 1 }, "B");
+  const s0 = new Uint8Array(16).fill(0xaa);
+  const s1 = new Uint8Array(16).fill(0xbb);
+  sp.step({ cell: 0, salt: s0 }, "A");
+  sp.step({ cell: 1, salt: s1 }, "B");
   const record = {
     matchId: "match-ttt",
     tunnelId: tid,
@@ -90,13 +92,17 @@ test("ttt cold-load: rebuilt tunnel co-signs the next move byte-identically", ()
         false,
       ),
       selfParty: "A",
+      moveCodec: tttMoveCodec as never,
     },
     { send: (b) => refSent.push(b), onFrame() {} },
     { a: 1000n, b: 1000n },
   );
   restoreInto(ref as never, readResumeRecord(tid)!, adapter as never);
+  // Both the reference tunnel and the rebuilt tunnel must propose the SAME move
+  // (including salt) to produce byte-identical signed frames.
+  const proposeMove = { cell: 2, salt: new Uint8Array(16).fill(0xcc) };
   (ref as never as { propose(m: unknown, ts: bigint): void }).propose(
-    { cell: 2 },
+    proposeMove,
     9n,
   );
 
@@ -115,12 +121,12 @@ test("ttt cold-load: rebuilt tunnel co-signs the next move byte-identically", ()
   const { tunnel } = rebuildTunnel(
     mp,
     readResumeRecord(tid)!,
-    { proto, adapter } as never,
+    { proto, adapter, moveCodec: tttMoveCodec } as never,
     { selfWallet: "0xA" },
   );
   assert.equal(tunnel.nonce, 2n);
   (tunnel as never as { propose(m: unknown, ts: bigint): void }).propose(
-    { cell: 2 },
+    proposeMove,
     9n,
   );
   assert.deepEqual(

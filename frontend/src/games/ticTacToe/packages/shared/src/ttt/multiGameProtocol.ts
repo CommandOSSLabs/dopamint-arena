@@ -45,7 +45,7 @@
  * the state hash.
  */
 
-import { core, protocols } from "sui-tunnel-ts";
+import { core, protocols, bytesToHex, hexToBytes } from "sui-tunnel-ts";
 
 type Protocol<State, Move> = protocols.Protocol<State, Move>;
 type Party = protocols.Party;
@@ -53,6 +53,21 @@ type Balances = protocols.Balances;
 type ProtocolContext = protocols.ProtocolContext;
 type TicTacToeState = protocols.TicTacToeState;
 type TicTacToeMove = protocols.TicTacToeMove;
+import type { MoveCodec } from "sui-tunnel-ts/core/distributedFrame";
+
+/**
+ * Codec for `TicTacToeMove` (and `MultiGameTicTacToeMove`). The `salt` field is a
+ * `Uint8Array` which does not survive JSON round-trip via the identity codec — it
+ * becomes a plain object `{"0":0,...}`. This codec encodes it as a hex string so
+ * the distributed-tunnel wire format preserves the type.
+ */
+export const tttMoveCodec: MoveCodec<TicTacToeMove> = {
+  encode: (m) => ({ cell: m.cell, salt: bytesToHex(m.salt) }),
+  decode: (j) => {
+    const o = j as { cell: number; salt: string };
+    return { cell: o.cell, salt: hexToBytes(o.salt) };
+  },
+};
 
 export interface MultiGameTicTacToeState {
   /** Current single-game state (board, turn, winner, carried balances, stake). */

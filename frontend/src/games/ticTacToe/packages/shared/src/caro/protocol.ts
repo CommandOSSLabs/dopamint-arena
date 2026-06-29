@@ -13,7 +13,8 @@
  * accumulator so the full move history is unforgeable without replaying every move.
  */
 
-import { core, protocols } from "sui-tunnel-ts";
+import { core, protocols, bytesToHex, hexToBytes } from "sui-tunnel-ts";
+import type { MoveCodec } from "sui-tunnel-ts/core/distributedFrame";
 import { winnerAround, applyMark } from "./board";
 
 type Protocol<State, Move> = protocols.Protocol<State, Move>;
@@ -43,6 +44,18 @@ export interface CaroState {
 }
 
 export type CaroMove = { cell: number; salt: Uint8Array };
+
+/**
+ * Codec for `CaroMove`. Encodes the `salt` `Uint8Array` as a hex string so the
+ * distributed-tunnel JSON frame preserves the type across the peer transport.
+ */
+export const caroMoveCodec: MoveCodec<CaroMove> = {
+  encode: (m) => ({ cell: m.cell, salt: bytesToHex(m.salt) }),
+  decode: (j) => {
+    const o = j as { cell: number; salt: string };
+    return { cell: o.cell, salt: hexToBytes(o.salt) };
+  },
+};
 
 const DOMAIN = protocols.protocolDomain("caro.v2");
 const MIN_SALT_LEN = 16;

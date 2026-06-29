@@ -444,7 +444,7 @@ export function useBotGame(difficulty: Difficulty = "fast"): BotGameView {
         //    multi-game protocol so ALL games share this single tunnel.
         const tunnel = core.OffchainTunnel.selfPlay<
           MultiGameTicTacToeState,
-          { cell: number }
+          { cell: number; salt: Uint8Array }
         >(
           proto,
           tunnelId,
@@ -522,23 +522,27 @@ export function useBotGame(difficulty: Difficulty = "fast"): BotGameView {
               const by = isAdvance ? "A" : (inner.turn as "A" | "B");
               // Manual play (auto off): pause on X's turn (party A) and apply only a user-queued
               // cell; the bot still plays O and finished games still auto-advance.
-              let cell: number;
+              let move: { cell: number; salt: Uint8Array };
               if (!isAdvance && !autoRef.current && by === "A") {
                 if (pendingCellRef.current === null) {
                   flushHeartbeat(tunnelId, false);
                   return; // wait for the user's move
                 }
-                cell = pendingCellRef.current;
+                const salt = new Uint8Array(16);
+                crypto.getRandomValues(salt);
+                move = { cell: pendingCellRef.current, salt };
                 pendingCellRef.current = null;
+              } else if (isAdvance) {
+                const salt = new Uint8Array(16);
+                crypto.getRandomValues(salt);
+                move = { cell: 0, salt };
               } else {
-                cell = isAdvance
-                  ? 0
-                  : (botBySeat[by].plan(tunnel.state)?.cell ?? 0);
+                move = botBySeat[by].plan(tunnel.state) ?? { cell: 0, salt: new Uint8Array(16) };
               }
               // Sign each update with the on-chain created_at (a validator timestamp,
               // always >= created_at and <= now) so the final co-signed state passes
               // update_state's timestamp check regardless of local clock skew.
-              const r = tunnel.step({ cell }, by, {
+              const r = tunnel.step(move, by, {
                 mode: "full",
                 timestamp: createdAt,
               });

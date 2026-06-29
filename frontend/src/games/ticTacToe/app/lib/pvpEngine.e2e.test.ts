@@ -1,8 +1,11 @@
-import { test, expect, describe } from "bun:test";
+import { test, describe } from "node:test";
+import assert from "node:assert/strict";
 import { core, bytesToHex, type protocols } from "sui-tunnel-ts";
 import {
   MultiGameTicTacToeProtocol,
   MultiGameCaroProtocol,
+  tttMoveCodec,
+  caroMoveCodec,
   optimalMoves,
   CELL_EMPTY,
   CELL_SERVER,
@@ -10,7 +13,7 @@ import {
   pickCaroMove,
 } from "@ttt/shared";
 
-type CellMove = { cell: number };
+type CellMove = { cell: number; salt: Uint8Array };
 type AnyState = {
   inner: { board: number[]; turn: "A" | "B"; winner: number; size?: number };
   gamesPlayed: number;
@@ -91,29 +94,35 @@ function playOut(variant: "ttt" | "caro", maxGames: number) {
   const e = endpoints(tunnelId);
   const balances = { a: 1000n, b: 1000n };
   let ts = 1n;
+  const moveCodec = (variant === "caro" ? caroMoveCodec : tttMoveCodec) as unknown as import("sui-tunnel-ts/core/distributedFrame").MoveCodec<CellMove>;
   const A = new core.DistributedTunnel<AnyState, CellMove>(
     proto,
-    { tunnelId, self: e.selfA, opponent: e.oppB, selfParty: "A" },
+    { tunnelId, self: e.selfA, opponent: e.oppB, selfParty: "A", moveCodec },
     t.a,
     balances,
   );
   const B = new core.DistributedTunnel<AnyState, CellMove>(
     proto,
-    { tunnelId, self: e.selfB, opponent: e.oppA, selfParty: "B" },
+    { tunnelId, self: e.selfB, opponent: e.oppA, selfParty: "B", moveCodec },
     t.b,
     balances,
   );
+  const mkSalt = (): Uint8Array => {
+    const s = new Uint8Array(16);
+    crypto.getRandomValues(s);
+    return s;
+  };
   const pick = (s: AnyState, by: "A" | "B"): CellMove =>
     variant === "caro"
-      ? { cell: pickCaroMove(s.inner as any, by, () => 0.5, "strong") }
-      : { cell: tttBestCell(s.inner, by) };
+      ? { cell: pickCaroMove(s.inner as any, by, () => 0.5, "strong"), salt: mkSalt() }
+      : { cell: tttBestCell(s.inner, by), salt: mkSalt() };
 
   // Loop until the *session* is terminal. The seat whose turn it is proposes; A drives advances.
   for (let guard = 0; guard < 100_000; guard++) {
     const s = A.state;
     if (proto.isTerminal(s)) break;
     if (s.inner.winner !== 0) {
-      A.propose({ cell: 0 }, ts++);
+      A.propose({ cell: 0, salt: mkSalt() }, ts++);
       continue;
     } // between games: A advances
     const mover = s.inner.turn === "A" ? A : B;
@@ -127,20 +136,22 @@ describe("ttt PvP engine (two DistributedTunnels over a link)", () => {
     test(`${variant}: both seats agree and balances are conserved after the session`, () => {
       const { A, B, proto } = playOut(variant, variant === "ttt" ? 3 : 2);
       // Both seats converged on the same state hash.
-      expect(bytesToHex(A.protocol.encodeState(A.state))).toBe(
+      assert.strictEqual(
+        bytesToHex(A.protocol.encodeState(A.state)),
         bytesToHex(B.protocol.encodeState(B.state)),
       );
       // Settlement: each builds its half, then combines with the other's, verifying signatures.
       const ha = A.buildSettlementHalf(0n);
       const hb = B.buildSettlementHalf(0n);
       const co = A.combineSettlement(ha.settlement, ha.sigSelf, hb.sigSelf);
-      expect(co.settlement.partyABalance + co.settlement.partyBBalance).toBe(
+      assert.strictEqual(
+        co.settlement.partyABalance + co.settlement.partyBBalance,
         2000n,
       );
       // Caro never moves money (stake 0); ttt may shift the 1-MIST stake on decisive games.
       if (variant === "caro") {
-        expect(co.settlement.partyABalance).toBe(1000n);
-        expect(co.settlement.partyBBalance).toBe(1000n);
+        assert.strictEqual(co.settlement.partyABalance, 1000n);
+        assert.strictEqual(co.settlement.partyBBalance, 1000n);
       }
     });
   }

@@ -5,6 +5,7 @@ import {
   proof,
   bytesToHex,
   hexToBytes,
+  generateSalt,
   type protocols,
 } from "sui-tunnel-ts";
 import { SuiJsonRpcClient } from "@mysten/sui/jsonRpc";
@@ -12,6 +13,8 @@ import { settleViaBackend } from "@/backend/settle";
 import {
   MultiGameTicTacToeProtocol,
   MultiGameCaroProtocol,
+  tttMoveCodec,
+  caroMoveCodec,
   optimalMoves,
   CELL_EMPTY,
   CELL_SERVER,
@@ -118,7 +121,7 @@ type InnerState = {
   lastMove?: number;
 };
 type AnyState = { inner: InnerState; gamesPlayed: number; maxGames: number };
-type CellMove = { cell: number };
+type CellMove = { cell: number; salt: Uint8Array };
 
 export interface PvpTttView {
   phase: PvpPhase;
@@ -442,7 +445,7 @@ export function usePvpTicTacToe(
           if (info.role === "A" && autoRef.current)
             setTimeout(() => {
               try {
-                t.propose({ cell: 0 }, BigInt(Date.now()));
+                t.propose({ cell: 0, salt: generateSalt(16) }, BigInt(Date.now()));
               } catch {
                 /* raced */
               }
@@ -456,7 +459,7 @@ export function usePvpTicTacToe(
           })();
           setTimeout(() => {
             try {
-              t.propose({ cell }, BigInt(Date.now()));
+              t.propose({ cell, salt: generateSalt(16) }, BigInt(Date.now()));
             } catch {
               /* not my turn / in flight */
             }
@@ -769,6 +772,8 @@ export function usePvpTicTacToe(
               false,
             ),
             selfParty: m.role,
+            // Encode salt (Uint8Array) as hex so it survives JSON frame round-trip.
+            moveCodec: variant === "caro" ? (caroMoveCodec as never) : (tttMoveCodec as never),
           },
           channel.transport,
           { a: bankroll, b: bankroll },
@@ -806,7 +811,7 @@ export function usePvpTicTacToe(
     const st = t.state;
     if (st.inner.winner !== 0 || st.inner.turn !== roleRef.current) return; // not my turn / between games
     try {
-      t.propose({ cell }, BigInt(Date.now()));
+      t.propose({ cell, salt: generateSalt(16) }, BigInt(Date.now()));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -822,7 +827,7 @@ export function usePvpTicTacToe(
     )
       return; // X advances between games
     try {
-      t.propose({ cell: 0 }, BigInt(Date.now()));
+      t.propose({ cell: 0, salt: generateSalt(16) }, BigInt(Date.now()));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -849,7 +854,7 @@ export function usePvpTicTacToe(
         if (roleRef.current === "A")
           setTimeout(() => {
             try {
-              t.propose({ cell: 0 }, BigInt(Date.now()));
+              t.propose({ cell: 0, salt: generateSalt(16) }, BigInt(Date.now()));
             } catch {
               /* ignore */
             }
@@ -863,7 +868,7 @@ export function usePvpTicTacToe(
         })();
         setTimeout(() => {
           try {
-            t.propose({ cell }, BigInt(Date.now()));
+            t.propose({ cell, salt: generateSalt(16) }, BigInt(Date.now()));
           } catch {
             /* ignore */
           }

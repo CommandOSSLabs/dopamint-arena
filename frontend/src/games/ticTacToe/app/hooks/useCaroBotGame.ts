@@ -414,7 +414,7 @@ export function useCaroBotGame(
         // 3) off-chain self-play tunnel (both keys local), driving MultiGameCaroProtocol.
         const tunnel = core.OffchainTunnel.selfPlay<
           MultiGameCaroState,
-          { cell: number }
+          { cell: number; salt: Uint8Array }
         >(
           proto,
           tunnelId,
@@ -514,9 +514,11 @@ export function useCaroBotGame(
                         strengthFor(difficultyRef.current, by),
                       );
               }
+              const stepSalt = new Uint8Array(16);
+              crypto.getRandomValues(stepSalt);
               // Sign each update with the on-chain created_at so update_state's timestamp
               // check passes regardless of local clock skew.
-              const r = tunnel.step({ cell }, by, {
+              const r = tunnel.step({ cell, salt: stepSalt }, by, {
                 mode: "full",
                 timestamp: createdAt,
               });
