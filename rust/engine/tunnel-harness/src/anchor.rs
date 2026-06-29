@@ -7,8 +7,10 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use tokio::sync::oneshot;
+use tokio::time::timeout;
 
 use crate::{Balances, Seat, TunnelAnchorError};
 use tunnel_core::crypto::{blake2b256, verify};
@@ -45,6 +47,8 @@ pub struct TunnelOpenRequest {
 
 pub struct OpenedTunnel {
     pub tunnel_id: String,
+    /// Current on-chain state nonce. Cooperative close signs `state.nonce + 1`.
+    pub onchain_nonce: u64,
     /// `true` if this call created the tunnel; `false` if it resolved an existing one.
     pub created: bool,
 }
@@ -81,6 +85,7 @@ pub struct InMemoryAnchor {
 struct AnchorInner {
     fixed_id: Option<String>,
     next_id: u64,
+    settle_timeout: Duration,
     opens: HashMap<(String, [u8; 32], [u8; 32]), OpenRecord>,
     settles: HashMap<String, SettleSlot>,
 }
@@ -100,21 +105,31 @@ enum SettleSlot {
 }
 
 impl InMemoryAnchor {
+    const DEFAULT_SETTLE_TIMEOUT: Duration = Duration::from_secs(30);
+
     pub fn new() -> Self {
-        Self::build(None)
+        Self::build(None, Self::DEFAULT_SETTLE_TIMEOUT)
     }
 
     /// Always hand back `id` for this anchor's single tunnel. This lets self-play
     /// tests pin the on-chain id their signed bytes are built against.
     pub fn with_fixed_id(id: impl Into<String>) -> Self {
-        Self::build(Some(id.into()))
+        Self::build(Some(id.into()), Self::DEFAULT_SETTLE_TIMEOUT)
     }
 
-    fn build(fixed_id: Option<String>) -> Self {
+    pub fn with_fixed_id_and_settle_timeout(
+        id: impl Into<String>,
+        settle_timeout: Duration,
+    ) -> Self {
+        Self::build(Some(id.into()), settle_timeout)
+    }
+
+    fn build(fixed_id: Option<String>, settle_timeout: Duration) -> Self {
         Self {
             inner: Arc::new(Mutex::new(AnchorInner {
                 fixed_id,
                 next_id: 0,
+                settle_timeout,
                 opens: HashMap::new(),
                 settles: HashMap::new(),
             })),
@@ -188,6 +203,7 @@ impl TunnelAnchor for InMemoryAnchor {
         if let Some(rec) = guard.opens.get(&key) {
             return Ok(OpenedTunnel {
                 tunnel_id: rec.tunnel_id.clone(),
+                onchain_nonce: 0,
                 created: false,
             });
         }
@@ -208,6 +224,7 @@ impl TunnelAnchor for InMemoryAnchor {
         );
         Ok(OpenedTunnel {
             tunnel_id,
+            onchain_nonce: 0,
             created: true,
         })
     }
@@ -218,7 +235,7 @@ impl TunnelAnchor for InMemoryAnchor {
     ) -> Result<SettledTunnel, TunnelAnchorError> {
         // All map mutation happens under the std mutex; the only await is reached
         // after the guard is dropped, so the future stays `Send`.
-        let parked = {
+        let (parked, settle_timeout, tunnel_id) = {
             let mut guard = self.inner.lock().expect("anchor mutex");
             let pks = guard
                 .opens
@@ -250,6 +267,8 @@ impl TunnelAnchor for InMemoryAnchor {
                 }
                 None => {
                     let (tx, rx) = oneshot::channel();
+                    let tunnel_id = request.tunnel_id.clone();
+                    let settle_timeout = guard.settle_timeout;
                     guard.settles.insert(
                         request.tunnel_id.clone(),
                         SettleSlot::Waiting {
@@ -257,13 +276,27 @@ impl TunnelAnchor for InMemoryAnchor {
                             waker: tx,
                         },
                     );
-                    rx
+                    (rx, settle_timeout, tunnel_id)
                 }
             }
         };
-        parked.await.unwrap_or(Err(TunnelAnchorError::Unavailable(
-            "peer dropped before settle".into(),
-        )))
+        match timeout(settle_timeout, parked).await {
+            Ok(result) => result.unwrap_or(Err(TunnelAnchorError::Unavailable(
+                "peer dropped before settle".into(),
+            ))),
+            Err(_) => {
+                let mut guard = self.inner.lock().expect("anchor mutex");
+                if matches!(
+                    guard.settles.get(&tunnel_id),
+                    Some(SettleSlot::Waiting { .. })
+                ) {
+                    guard.settles.remove(&tunnel_id);
+                }
+                Err(TunnelAnchorError::Unavailable(
+                    "peer did not settle before timeout".into(),
+                ))
+            }
+        }
     }
 }
 
@@ -271,6 +304,7 @@ impl TunnelAnchor for InMemoryAnchor {
 mod tests {
     use super::*;
     use crate::Signer;
+    use std::time::Duration;
     use tunnel_core::crypto::keypair_from_secret;
     use tunnel_core::wire::{serialize_settlement, Settlement};
 
@@ -404,5 +438,37 @@ mod tests {
         let (ra, rb) = tokio::join!(anchor.settle(half_a), anchor.settle(half_b));
         assert!(matches!(ra, Err(TunnelAnchorError::Mismatch(_))));
         assert!(matches!(rb, Err(TunnelAnchorError::Mismatch(_))));
+    }
+
+    #[tokio::test]
+    async fn first_settler_times_out_if_peer_never_settles() {
+        let (sa, pk_a) = keys(1);
+        let (_sb, pk_b) = keys(40);
+        let anchor =
+            InMemoryAnchor::with_fixed_id_and_settle_timeout("0xab", Duration::from_millis(10));
+        anchor
+            .open(TunnelOpenRequest {
+                protocol: ProtocolId::parse("payments.v1").unwrap(),
+                party_a: pk_a,
+                party_b: pk_b,
+                initial: Balances { a: 100, b: 100 },
+            })
+            .await
+            .unwrap();
+
+        let err = anchor
+            .settle(TunnelSettleRequest {
+                tunnel_id: "0xab".into(),
+                by: Seat::A,
+                party_a_balance: 120,
+                party_b_balance: 80,
+                final_nonce: 4,
+                timestamp: 9,
+                signature: sign_half(&sa, "0xab", 120, 80, 4, 9),
+            })
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, TunnelAnchorError::Unavailable(_)));
     }
 }

@@ -4,9 +4,10 @@
 //! committed transition in the loop's effects band, independent of the anchor.
 
 use crate::{
-    Balances, DriverObserver, DriverStart, FrameTransport, HarnessError, MoveCommitted,
-    MoveStrategy, MoveStrategyContext, PartyRuntime, Protocol, Seat, Signer, TranscriptRecorder,
-    TunnelAnchor, TunnelAnchorError, TunnelContext, TunnelOpenRequest, TunnelSettleRequest,
+    Balances, DriverObserver, DriverStart, FrameTransport, FrameTransportError, HarnessError,
+    MoveCommitted, MoveStrategy, MoveStrategyContext, PartyRuntime, Protocol, Seat, Signer,
+    TranscriptRecorder, TunnelAnchor, TunnelAnchorError, TunnelContext, TunnelOpenRequest,
+    TunnelSettleRequest,
 };
 use tunnel_core::protocol_id::ProtocolId;
 use tunnel_core::wire::{serialize_settlement, Settlement};
@@ -143,6 +144,12 @@ where
                 initial: parts.initial,
             })
             .await?;
+        let tunnel_id = opened.tunnel_id.clone();
+        let final_nonce = opened.onchain_nonce.checked_add(1).ok_or_else(|| {
+            HarnessError::Anchor(TunnelAnchorError::Rejected(
+                "opened tunnel nonce cannot be closed".into(),
+            ))
+        })?;
 
         let our_seat = parts.seat;
         let mut seat = PartyRuntime::<P, S>::new(
@@ -150,7 +157,7 @@ where
             parts.signer,
             parts.opponent_pk,
             TunnelContext {
-                tunnel_id: opened.tunnel_id,
+                tunnel_id,
                 initial: parts.initial,
                 seat: our_seat,
             },
@@ -172,8 +179,13 @@ where
         let mut last_timestamp = 0u64;
 
         loop {
-            if seat.is_terminal() || moves >= max_moves {
+            if seat.is_terminal() {
                 break;
+            }
+            if moves >= max_moves {
+                return Err(HarnessError::Verification(
+                    "max moves reached before terminal".into(),
+                ));
             }
 
             if let Some(mv) = move_strategy.plan_move(seat.state(), our_seat, &ctx).await {
@@ -201,7 +213,7 @@ where
                             recorder.record(entry);
                         }
                     }
-                    None => break,
+                    None => return Err(HarnessError::FrameTransport(FrameTransportError::Closed)),
                 }
                 continue;
             }
@@ -227,17 +239,12 @@ where
                         recorder.record(entry);
                     }
                 }
-                None => break,
+                None => return Err(HarnessError::FrameTransport(FrameTransportError::Closed)),
             }
         }
 
         let final_balances = seat.balances();
-        let final_nonce = seat.nonce();
         let timestamp = if moves == 0 { now() } else { last_timestamp };
-        // NOTE: Move recomputes `final_nonce = state.nonce + 1` at
-        // `close_cooperative` (ADR-0007). For the in-memory anchor both seats sign
-        // identical bytes regardless of the exact value; pin this against the real
-        // contract when a chain anchor lands.
         let settlement = Settlement {
             tunnel_id: seat.tunnel_id().to_string(),
             party_a_balance: final_balances.a,
@@ -274,11 +281,11 @@ mod tests {
     use super::*;
     use crate::{
         Balances, FrameTransportError, InMemoryAnchor, InMemoryFrameTransport, LocalSigner,
-        NullTranscriptRecorder, Seat,
+        NullTranscriptRecorder, OpenedTunnel, Seat, SettledTunnel, TunnelOpenRequest,
     };
     use std::sync::{
         atomic::{AtomicU64, Ordering},
-        Arc,
+        Arc, Mutex,
     };
     use tunnel_core::crypto::keypair_from_secret;
 
@@ -490,6 +497,163 @@ mod tests {
         assert_eq!(planned.load(Ordering::Relaxed), 1);
         assert_eq!(confirmed.load(Ordering::Relaxed), 0);
         assert_eq!(aborted.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn max_moves_before_terminal_aborts_without_settling() {
+        let secret_a: [u8; 32] = std::array::from_fn(|i| (i + 1) as u8);
+        let secret_b: [u8; 32] = std::array::from_fn(|i| (i + 33) as u8);
+        let pk_b = keypair_from_secret(&secret_b).public_key();
+        let settled = Arc::new(AtomicU64::new(0));
+        let driver = PartyDriver::new(
+            parts(Seat::A, &secret_a, pk_b),
+            TrackingStrategy::new(
+                Seat::A,
+                Arc::new(AtomicU64::new(0)),
+                Arc::new(AtomicU64::new(0)),
+                Arc::new(AtomicU64::new(0)),
+            ),
+            FailingSendTransport,
+            CapturingAnchor::new(
+                "0x1",
+                0,
+                Arc::clone(&settled),
+                Arc::new(Mutex::new(Vec::new())),
+            ),
+            NullTranscriptRecorder,
+        );
+
+        let err = driver.run(0, || 1).await.unwrap_err();
+
+        assert!(matches!(err, HarnessError::Verification(_)));
+        assert_eq!(settled.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn peer_eof_before_terminal_aborts_without_settling() {
+        let secret_a: [u8; 32] = std::array::from_fn(|i| (i + 1) as u8);
+        let secret_b: [u8; 32] = std::array::from_fn(|i| (i + 33) as u8);
+        let pk_b = keypair_from_secret(&secret_b).public_key();
+        let settled = Arc::new(AtomicU64::new(0));
+        let driver = PartyDriver::new(
+            parts(Seat::B, &secret_a, pk_b),
+            TrackingStrategy::new(
+                Seat::B,
+                Arc::new(AtomicU64::new(0)),
+                Arc::new(AtomicU64::new(0)),
+                Arc::new(AtomicU64::new(0)),
+            ),
+            FailingSendTransport,
+            CapturingAnchor::new(
+                "0x1",
+                0,
+                Arc::clone(&settled),
+                Arc::new(Mutex::new(Vec::new())),
+            ),
+            NullTranscriptRecorder,
+        );
+
+        let err = driver.run(10, || 1).await.unwrap_err();
+
+        assert_eq!(
+            err,
+            HarnessError::FrameTransport(FrameTransportError::Closed)
+        );
+        assert_eq!(settled.load(Ordering::Relaxed), 0);
+    }
+
+    #[derive(Clone)]
+    struct CapturingAnchor {
+        tunnel_id: String,
+        onchain_nonce: u64,
+        settled: Arc<AtomicU64>,
+        requests: Arc<Mutex<Vec<TunnelSettleRequest>>>,
+    }
+
+    impl CapturingAnchor {
+        fn new(
+            tunnel_id: &str,
+            onchain_nonce: u64,
+            settled: Arc<AtomicU64>,
+            requests: Arc<Mutex<Vec<TunnelSettleRequest>>>,
+        ) -> Self {
+            Self {
+                tunnel_id: tunnel_id.into(),
+                onchain_nonce,
+                settled,
+                requests,
+            }
+        }
+    }
+
+    impl TunnelAnchor for CapturingAnchor {
+        async fn open(
+            &self,
+            _request: TunnelOpenRequest,
+        ) -> Result<OpenedTunnel, TunnelAnchorError> {
+            Ok(OpenedTunnel {
+                tunnel_id: self.tunnel_id.clone(),
+                created: true,
+                onchain_nonce: self.onchain_nonce,
+            })
+        }
+
+        async fn settle(
+            &self,
+            request: TunnelSettleRequest,
+        ) -> Result<SettledTunnel, TunnelAnchorError> {
+            self.settled.fetch_add(1, Ordering::Relaxed);
+            self.requests.lock().unwrap().push(request);
+            Ok(SettledTunnel {
+                digest: "0xdigest".into(),
+                final_balances: Balances { a: 100, b: 100 },
+            })
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn settlement_uses_opened_tunnel_onchain_nonce() {
+        let secret_a: [u8; 32] = std::array::from_fn(|i| (i + 1) as u8);
+        let secret_b: [u8; 32] = std::array::from_fn(|i| (i + 33) as u8);
+        let pk_a = keypair_from_secret(&secret_a).public_key();
+        let pk_b = keypair_from_secret(&secret_b).public_key();
+        let (ch_a, ch_b) = InMemoryFrameTransport::pair();
+        let settled = Arc::new(AtomicU64::new(0));
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let anchor = CapturingAnchor::new("0x1", 41, Arc::clone(&settled), Arc::clone(&requests));
+
+        let driver_a = PartyDriver::new(
+            parts(Seat::A, &secret_a, pk_b),
+            TrackingStrategy::new(
+                Seat::A,
+                Arc::new(AtomicU64::new(0)),
+                Arc::new(AtomicU64::new(0)),
+                Arc::new(AtomicU64::new(0)),
+            ),
+            ch_a,
+            anchor.clone(),
+            NullTranscriptRecorder,
+        );
+        let driver_b = PartyDriver::new(
+            parts(Seat::B, &secret_b, pk_a),
+            TrackingStrategy::new(
+                Seat::B,
+                Arc::new(AtomicU64::new(0)),
+                Arc::new(AtomicU64::new(0)),
+                Arc::new(AtomicU64::new(0)),
+            ),
+            ch_b,
+            anchor,
+            NullTranscriptRecorder,
+        );
+
+        let (out_a, out_b) = tokio::join!(driver_a.run(10, || 1), driver_b.run(10, || 1));
+        out_a.unwrap();
+        out_b.unwrap();
+
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(requests.iter().all(|r| r.final_nonce == 42));
     }
 
     use crate::{DriverObserver, DriverStart, MoveCommitted};

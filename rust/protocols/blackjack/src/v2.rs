@@ -935,7 +935,7 @@ mod strategy_tests {
             NullTranscriptRecorder,
         );
 
-        let (out_a, out_b) = tokio::join!(driver_a.run(200, || 1), driver_b.run(200, || 1));
+        let (out_a, out_b) = tokio::join!(driver_a.run(1000, || 1), driver_b.run(1000, || 1));
         let out_a = out_a.unwrap().0;
         let out_b = out_b.unwrap().0;
 
