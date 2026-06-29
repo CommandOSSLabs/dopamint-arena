@@ -8,7 +8,7 @@ import { fileURLToPath, URL } from "node:url";
 // VITE_BACKEND_URL stays empty everywhere (prod is same-origin via CloudFront), which also
 // sidesteps the https-page→http-ALB mixed-content block on the deployed frontend.
 const BACKEND_ALB =
-  "http://dopamint-dev-alb-0fac7e0-1152788681.us-east-1.elb.amazonaws.com";
+  "https://relay-dev.millionstps.io";
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
@@ -28,6 +28,7 @@ export default defineConfig(({ mode }) => {
       "process.env.PACKAGE_ID": JSON.stringify(pkgId),
       "process.env.SUI_NETWORK": JSON.stringify("testnet"),
       "require.main": "undefined",
+      "module": "null",
     },
     resolve: {
       // The vendored SDK pins an older @mysten/sui in its own node_modules. Force the bundled
