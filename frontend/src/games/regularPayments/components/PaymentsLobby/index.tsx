@@ -1,4 +1,6 @@
-import { cn } from "@/lib/utils";
+import { Loader2 } from "lucide-react";
+
+import { Button } from "@/components/ui/button";
 import { formatMtps } from "../../utils";
 import { useRegularPaymentsSession } from "../../hooks/useRegularPaymentsSession";
 
@@ -8,43 +10,46 @@ interface PaymentsLobbyProps {
 
 export function PaymentsLobby({ session }: PaymentsLobbyProps) {
   const disabled = !session.walletConnected || session.phase === "opening";
+  const opening = session.phase === "opening";
 
   return (
-    <div className="sketch-welcome h-full min-h-0">
-      <div
-        className={cn(
-          "sketch-welcome__card sketch-panel sketch-stroke",
-          "w-full max-w-sm",
-        )}
-      >
-        <div className="sketch-welcome__head">
-          <span className="sketch-eyebrow">Off-chain checkout</span>
-          <h1 className="sketch-title">Tunnel Mart</h1>
+    <div className="flex h-full min-h-0 items-center justify-center p-6">
+      <div className="wal-glow flex w-full max-w-sm flex-col gap-5 rounded-[20px] border border-border bg-card/75 p-6 backdrop-blur-xl">
+        <div className="flex flex-col gap-2">
+          <p className="wal-eyebrow">Off-chain checkout</p>
+          <h1 className="wal-display text-[clamp(1.6rem,6cqmin,2.25rem)] text-foreground">
+            Tunnel <span className="wal-gradient-text">Mart</span>
+          </h1>
         </div>
 
-        <p className="sketch-note">
-          Shop with a budget of {formatMtps(session.depositBudget)} MTPS. Browse
-          the aisles, add items to your cart, and check out with instant
-          micro-payments.
+        <p className="text-sm leading-relaxed text-muted-foreground">
+          Shop with a budget of{" "}
+          <span className="wal-mono text-foreground">
+            {formatMtps(session.depositBudget)} MTPS
+          </span>
+          . Browse the aisles, add items to your cart, and check out with
+          instant micro-payments.
         </p>
 
         {!session.walletConnected && (
-          <p className="sketch-note text-red-500!">
+          <p className="text-sm text-destructive">
             Connect your wallet to go shopping.
           </p>
         )}
 
         {session.error && (
-          <p className="sketch-note text-(--sketch-felt)">{session.error}</p>
+          <p className="text-sm text-destructive">{session.error}</p>
         )}
 
-        <button
-          className={cn("sketch-btn sketch-btn--go min-w-26 py-3 font-bold")}
+        <Button
+          className="w-full"
+          size="lg"
           disabled={disabled}
           onClick={session.goShop}
         >
-          {session.phase === "opening" ? "Opening tunnel" : "Go shop"}
-        </button>
+          {opening && <Loader2 className="animate-spin" />}
+          {opening ? "Opening tunnel" : "Go shop"}
+        </Button>
       </div>
     </div>
   );

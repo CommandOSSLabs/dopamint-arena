@@ -347,9 +347,6 @@ class RegularPaymentsSession {
         const product = this.pickRandomProduct();
         if (total + product.priceMtps > DEPOSIT_BUDGET) break;
 
-        this.patch({
-          paidSoFar: total,
-        });
         this.addToCart(product, true);
         await sleep(AUTO_ADD_INTERVAL_MS);
       }
@@ -459,6 +456,7 @@ class RegularPaymentsSession {
       this.patch({
         autoMode: false,
         cart: nextCart,
+        paidSoFar: (this.paidSoFar += product.priceMtps),
         cartFlyCue,
         balanceA: this.balanceA,
         error: null,
@@ -468,6 +466,7 @@ class RegularPaymentsSession {
 
     this.patch({
       cart: nextCart,
+      paidSoFar: (this.paidSoFar += product.priceMtps),
       cartFlyCue,
       balanceA: this.balanceA,
       error: null,

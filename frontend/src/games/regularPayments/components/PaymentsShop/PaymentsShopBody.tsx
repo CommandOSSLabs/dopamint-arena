@@ -11,22 +11,17 @@ export function PaymentsShopBody({ session }: PaymentsShopBodyProps) {
   return (
     <div
       className={cn(
-        "min-h-0 flex-1 space-y-4 overflow-y-auto",
+        "min-h-0 flex-1 space-y-5 overflow-y-auto",
         "p-[clamp(8px,2.4cqmin,14px)]",
       )}
     >
       {CATEGORIES.map((cat) => (
         <section key={cat.id}>
-          <h2
-            className={cn(
-              "sketch-note mb-2 font-bold uppercase tracking-wide",
-              "text-[clamp(11px,2.6cqmin,13px)]",
-            )}
-          >
+          <h2 className="wal-mono mb-2.5 text-[11px] uppercase tracking-wider text-muted-foreground">
             {cat.label}
           </h2>
 
-          <div className="grid grid-cols-4 gap-3">
+          <div className="grid grid-cols-4 gap-2.5">
             {productsForCategory(cat.id).map((product) => (
               <button
                 key={product.id}
@@ -39,8 +34,8 @@ export function PaymentsShopBody({ session }: PaymentsShopBodyProps) {
                 }}
                 disabled={session.busy || product.priceMtps > session.balanceA}
                 className={cn(
-                  "sketch-panel sketch-stroke flex flex-col items-center p-3 text-center",
-                  "transition-transform hover:-translate-y-0.5 hover:rotate-[-0.3deg]",
+                  "flex flex-col items-center rounded-xl border border-border bg-card p-3 text-center",
+                  "transition-colors hover:bg-secondary/80",
                   "disabled:pointer-events-none disabled:opacity-45",
                 )}
               >
@@ -51,11 +46,11 @@ export function PaymentsShopBody({ session }: PaymentsShopBodyProps) {
                   {product.emoji}
                 </span>
 
-                <span className="text-[clamp(11px,2.8cqmin,14px)] font-bold leading-tight">
+                <span className="mt-1.5 text-[clamp(11px,2.8cqmin,14px)] font-medium leading-tight text-foreground">
                   {product.name}
                 </span>
 
-                <span className="sketch-note text-[clamp(10px,2.4cqmin,12px)]">
+                <span className="wal-mono mt-0.5 text-[clamp(10px,2.4cqmin,12px)] text-muted-foreground">
                   {formatMtps(product.priceMtps)} MTPS
                 </span>
               </button>

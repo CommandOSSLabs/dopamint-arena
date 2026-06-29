@@ -1,3 +1,6 @@
+import { ArrowLeft, Zap } from "lucide-react";
+
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { formatMtps } from "../../utils";
 import { useRegularPaymentsSession } from "../../hooks/useRegularPaymentsSession";
@@ -10,34 +13,35 @@ export function PaymentsShopHeader({ session }: PaymentsShopHeaderProps) {
   return (
     <header
       className={cn(
-        "shrink-0 border-b border-dashed border-(--sketch-ink)/15",
+        "shrink-0 space-y-4 border-b border-border",
         "px-[clamp(8px,2.4cqmin,14px)] py-[clamp(8px,2cqmin,12px)]",
-        "space-y-6",
       )}
     >
       <div className="flex justify-end">
-        <button
-          className={cn(
-            "sketch-btn py-2",
-            session.autoMode ? "sketch-btn--call" : "sketch-btn--ghost",
-          )}
+        <Button
+          variant={session.autoMode ? "default" : "outline"}
+          size="sm"
           onClick={session.toggleAutoMode}
         >
+          {session.autoMode && <Zap className="size-3" />}
+
           {session.autoMode ? "Auto mode ON" : "Auto mode OFF"}
-        </button>
+        </Button>
       </div>
 
       <div className="flex items-center justify-between gap-2">
-        <button
-          className={cn("sketch-btn sketch-btn--ghost")}
+        <Button
+          variant="ghost"
+          size="sm"
           disabled={session.busy}
           onClick={session.goLobby}
         >
-          ← Back
-        </button>
+          <ArrowLeft />
+          Back
+        </Button>
 
-        <span className="sketch-note text-[clamp(10px,2.4cqmin,12px)]">
-          {`My Budget ${formatMtps(session.depositBudget)} MTPS`}
+        <span className="wal-mono text-[clamp(10px,2.4cqmin,12px)] text-muted-foreground">
+          {`Budget ${formatMtps(session.depositBudget)} MTPS`}
         </span>
       </div>
     </header>

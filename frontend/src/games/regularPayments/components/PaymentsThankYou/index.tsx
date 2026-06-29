@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
-import { cn } from "@/lib/utils";
+import { Check } from "lucide-react";
+
+import { Button } from "@/components/ui/button";
 import { formatGrammarLength, formatMtps } from "../../utils";
 import type { useRegularPaymentsSession } from "../../hooks/useRegularPaymentsSession";
 
@@ -29,48 +31,44 @@ export function PaymentsThankYou({ session }: PaymentsThankYouProps) {
   }, [session.completeRound]);
 
   return (
-    <div className="sketch-welcome h-full min-h-0">
-      <div
-        className={cn(
-          "sketch-welcome__card sketch-panel sketch-stroke sketch-stroke--felt",
-          "w-full max-w-sm",
-          "gap-2!",
-        )}
-      >
-        <p className="text-[clamp(2.5rem,10cqmin,3.5rem)] leading-none text-(--sketch-felt)">
-          ✓
-        </p>
+    <div className="flex h-full min-h-0 items-center justify-center p-6">
+      <div className="wal-glow flex w-full max-w-sm flex-col items-center gap-5 rounded-[20px] border border-border bg-card/75 p-6 text-center backdrop-blur-xl">
+        <div
+          className="flex size-14 items-center justify-center rounded-full border border-border"
+          style={{
+            background: "color-mix(in oklab, var(--wal-mint) 18%, transparent)",
+          }}
+        >
+          <Check className="size-7" style={{ color: "var(--wal-mint)" }} />
+        </div>
 
-        <h2 className="sketch-title text-[clamp(1.1rem,4cqmin,1.4rem)]">
-          Thank you for shopping at Tunnel Mart
-        </h2>
+        <div className="flex flex-col gap-2">
+          <h2 className="wal-display text-[clamp(1.2rem,4.5cqmin,1.5rem)] text-foreground">
+            Thank you for shopping
+          </h2>
+          <p className="text-sm leading-relaxed text-muted-foreground">
+            Your off-chain payment completed.
+          </p>
+        </div>
 
-        <p className="sketch-note">
-          Your off-chain payment completed.
-          {`Total paid: ${formatMtps(session.cartTotal)} MTPS · ${session.cart.length} ${formatGrammarLength("line", session.cart.length)}`}
+        <p className="wal-mono text-sm tabular-nums text-foreground">
+          {`${formatMtps(session.cartTotal)} MTPS · ${session.cart.length} ${formatGrammarLength("line", session.cart.length)}`}
         </p>
 
         {session.settleUrl && (
-          <p className="sketch-note">
-            <a
-              href={session.settleUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="underline"
-            >
-              View settle tx
-            </a>
-          </p>
+          <a
+            href={session.settleUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="text-sm text-primary underline-offset-4 hover:underline"
+          >
+            View settle tx
+          </a>
         )}
 
-        <div className="sketch-welcome__actions w-full max-w-none">
-          <button
-            className={cn("sketch-btn sketch-btn--call w-full py-3 font-bold")}
-            onClick={session.completeRound}
-          >
-            {`Go lobby (${secondsLeft}s)`}
-          </button>
-        </div>
+        <Button className="w-full" size="lg" onClick={session.completeRound}>
+          {`Go lobby (${secondsLeft}s)`}
+        </Button>
       </div>
     </div>
   );
