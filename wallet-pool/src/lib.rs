@@ -13,6 +13,8 @@ pub use client::{
     OpenOptions, PoolSummary, SetEnabledOptions, SignAndExecuteOptions, WalletBalanceMap,
     WalletPool, WalletPoolHandle,
 };
+pub use wallet_pool_core::blob::{Network, WalletEntry, WalletRole};
+pub use wallet_pool_core::filter::{Filter, Pagination, Sort, SortField};
 
 #[cfg(test)]
 mod tests {
