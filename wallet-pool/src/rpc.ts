@@ -2,26 +2,34 @@ import { SuiClient, getFullnodeUrl } from "@mysten/sui/client";
 import type { CoinType, Network } from "./types";
 import { KeyCache } from "./keycache";
 
+const SUI_TYPE = "0x2::sui::SUI";
+
 /** Narrow balance-read interface. SuiClient satisfies this; fakes welcome in tests. */
 export interface BalanceClient {
-  getBalance(input: { owner: string; coinType?: string }): Promise<{ balance: string }>;
+  getBalance(input: {
+    owner: string;
+    coinType?: string;
+  }): Promise<{ balance: string }>;
 }
 
-const clients = new Map<Network, SuiClient>();
+const clients = new Map<string, SuiClient>();
 
-/** One reused keep-alive client per network. */
+/** One reused keep-alive client per network/URL pair. */
 export function getClient(network: Network, urlOverride?: string): SuiClient {
-  let c = clients.get(network);
+  const url = urlOverride ?? getFullnodeUrl(network);
+  const key = `${network}:${url}`;
+  let c = clients.get(key);
   if (!c) {
-    c = new SuiClient({ url: urlOverride ?? getFullnodeUrl(network) });
-    clients.set(network, c);
+    c = new SuiClient({ url });
+    clients.set(key, c);
   }
   return c;
 }
 
-/** Balance reads with TTL cache + bounded parallelism. */
+/** Balance reads with TTL cache + bounded parallelism + in-flight dedup. */
 export class BalanceService {
   private cache: KeyCache<bigint>;
+  private inflight = new Map<string, Promise<bigint>>();
 
   constructor(
     private client: BalanceClient,
@@ -32,21 +40,46 @@ export class BalanceService {
     this.cache = new KeyCache<bigint>(max, ttlMs);
   }
 
-  async getBalance(address: string, coinType?: CoinType): Promise<bigint> {
-    const key = `${address}:${coinType ?? "*"}`;
-    const hit = this.cache.get(key);
-    if (hit !== undefined) return hit;
-    const bal = BigInt((await this.client.getBalance({ owner: address, coinType })).balance);
-    this.cache.set(key, bal);
-    return bal;
+  private cacheKey(address: string, coinType?: CoinType): string {
+    return `${address}:${coinType ?? SUI_TYPE}`;
   }
 
-  async getBalances(addresses: string[], coinType?: CoinType): Promise<Map<string, bigint>> {
+  async getBalance(address: string, coinType?: CoinType): Promise<bigint> {
+    const key = this.cacheKey(address, coinType);
+    const hit = this.cache.get(key);
+    if (hit !== undefined) return hit;
+
+    const existing = this.inflight.get(key);
+    if (existing) return existing;
+
+    const promise = (async () => {
+      const bal = BigInt(
+        (await this.client.getBalance({ owner: address, coinType })).balance,
+      );
+      this.cache.set(key, bal);
+      return bal;
+    })();
+
+    this.inflight.set(key, promise);
+    try {
+      return await promise;
+    } finally {
+      this.inflight.delete(key);
+    }
+  }
+
+  async getBalances(
+    addresses: string[],
+    coinType?: CoinType,
+  ): Promise<Map<string, bigint>> {
     const out = new Map<string, bigint>();
-    for (let i = 0; i < addresses.length; i += this.concurrency) {
-      const slice = addresses.slice(i, i + this.concurrency);
+    const unique = [...new Set(addresses)];
+    for (let i = 0; i < unique.length; i += this.concurrency) {
+      const slice = unique.slice(i, i + this.concurrency);
       const entries = await Promise.all(
-        slice.map(async (a) => [a, await this.getBalance(a, coinType)] as const),
+        slice.map(
+          async (a) => [a, await this.getBalance(a, coinType)] as const,
+        ),
       );
       for (const [a, b] of entries) out.set(a, b);
     }
