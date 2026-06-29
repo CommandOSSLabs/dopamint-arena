@@ -4,9 +4,10 @@
 //! member keys live inside [`SealedEnvelope`] and are never exposed in this
 //! structure. The plaintext format of the encrypted payload is [`SealedMembers`].
 
-use crate::envelope::SealedEnvelope;
+use crate::crypto::{ed25519_address, generate_keypair, keypair_from_secret, random_bytes};
+use crate::envelope::{AccessMode, SealedEnvelope};
 use crate::error::{Error, Result};
-use base64::engine::general_purpose::STANDARD;
+use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -173,6 +174,106 @@ pub fn aad_for(blob: &PoolBlob) -> Vec<u8> {
         blob.version, blob.wallet_pool_id, blob.network
     )
     .into_bytes()
+}
+
+/// Generates a fresh wallet pool identifier.
+///
+/// Format: `wp_` followed by 16 random bytes encoded as URL-safe base64
+/// without padding.
+pub fn generate_wallet_pool_id() -> String {
+    format!("wp_{}", URL_SAFE_NO_PAD.encode(random_bytes(16)))
+}
+
+/// Result of creating a new pool blob, including the unsealed secrets.
+///
+/// The returned [`PoolBlob`] has a placeholder [`SealedEnvelope`] that the
+/// caller must seal with the desired access value. The secrets are returned as
+/// raw 32-byte ed25519 seeds so the caller can build the plaintext payload.
+#[derive(Debug, PartialEq)]
+pub struct CreateBlobResult {
+    pub blob: PoolBlob,
+    pub master_secret: [u8; 32],
+    pub member_secrets: Vec<[u8; 32]>,
+}
+
+/// Creates a new pool blob with the requested number of member wallets.
+///
+/// # Errors
+///
+/// Returns [`Error::InvalidInput`] if `member_count` is zero or greater than
+/// 10_000.
+pub fn create_blob(
+    network: Network,
+    member_count: u32,
+    master_seed: Option<[u8; 32]>,
+    label: Option<String>,
+) -> Result<CreateBlobResult> {
+    if member_count == 0 || member_count > 10_000 {
+        return Err(Error::InvalidInput(format!(
+            "member_count must be between 1 and 10000, got {member_count}"
+        )));
+    }
+
+    let master_kp = master_seed
+        .map(|seed| keypair_from_secret(&seed))
+        .unwrap_or_else(generate_keypair);
+    let member_kps: Vec<_> = (0..member_count).map(|_| generate_keypair()).collect();
+    let created_at = 0; // caller can replace with now_millis
+
+    let mut index = Vec::with_capacity(1 + member_count as usize);
+    index.push(WalletEntry {
+        role: WalletRole::Master,
+        address: ed25519_address(&master_kp.public_key()),
+        ordinal: 0,
+        label: None,
+        created_at,
+        enabled: true,
+        use_count: 0,
+        last_used_at: 0,
+        last_funded_at: None,
+        funded_amounts: None,
+    });
+
+    for (i, kp) in member_kps.iter().enumerate() {
+        index.push(WalletEntry {
+            role: WalletRole::Member,
+            address: ed25519_address(&kp.public_key()),
+            ordinal: (i + 1) as u32,
+            label: None,
+            created_at,
+            enabled: true,
+            use_count: 0,
+            last_used_at: 0,
+            last_funded_at: None,
+            funded_amounts: None,
+        });
+    }
+
+    let master_secret = master_kp.secret_key();
+    let member_secrets: Vec<_> = member_kps.iter().map(|kp| kp.secret_key()).collect();
+
+    let blob = PoolBlob {
+        version: BLOB_VERSION,
+        wallet_pool_id: generate_wallet_pool_id(),
+        network,
+        label,
+        created_at,
+        coin_types: vec!["0x2::sui::SUI".into()],
+        crypto: SealedEnvelope {
+            mode: AccessMode::Generated,
+            kdf: None,
+            nonce: String::new(),
+            tag: String::new(),
+            ciphertext: String::new(),
+        },
+        index,
+    };
+
+    Ok(CreateBlobResult {
+        blob,
+        master_secret,
+        member_secrets,
+    })
 }
 
 #[cfg(test)]
@@ -363,5 +464,48 @@ mod tests {
         assert_eq!(Network::from_str("mainnet").unwrap(), Network::Mainnet);
         assert_eq!(Network::from_str("testnet").unwrap(), Network::Testnet);
         assert!(Network::from_str("devnet").is_err());
+    }
+
+    #[test]
+    fn create_blob_smoke() {
+        let result = create_blob(Network::Testnet, 3, None, Some("smoke".into())).unwrap();
+
+        assert!(result.blob.wallet_pool_id.starts_with("wp_"));
+        assert_eq!(result.blob.network, Network::Testnet);
+        assert_eq!(result.blob.label, Some("smoke".into()));
+        assert_eq!(result.blob.coin_types, vec!["0x2::sui::SUI"]);
+        assert_eq!(result.blob.index.len(), 4);
+
+        let master = &result.blob.index[0];
+        assert_eq!(master.role, WalletRole::Master);
+        assert_eq!(master.ordinal, 0);
+        assert!(master.address.starts_with("0x"));
+        assert!(master.enabled);
+
+        for (i, entry) in result.blob.index.iter().skip(1).enumerate() {
+            assert_eq!(entry.role, WalletRole::Member);
+            assert_eq!(entry.ordinal, (i + 1) as u32);
+            assert!(entry.address.starts_with("0x"));
+            assert!(entry.enabled);
+        }
+
+        assert_eq!(result.member_secrets.len(), 3);
+        for member_secret in &result.member_secrets {
+            assert_ne!(*member_secret, result.master_secret);
+        }
+    }
+
+    #[test]
+    fn create_blob_member_bounds() {
+        assert!(matches!(
+            create_blob(Network::Testnet, 0, None, None),
+            Err(Error::InvalidInput(_))
+        ));
+        assert!(matches!(
+            create_blob(Network::Testnet, 10_001, None, None),
+            Err(Error::InvalidInput(_))
+        ));
+        assert!(create_blob(Network::Testnet, 1, None, None).is_ok());
+        assert!(create_blob(Network::Testnet, 10_000, None, None).is_ok());
     }
 }
