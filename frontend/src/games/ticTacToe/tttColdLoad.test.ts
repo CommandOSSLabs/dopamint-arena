@@ -165,3 +165,85 @@ test("ttt adapter: pending move salt round-trips through JSON without data loss"
     "salt bytes are byte-equal to original",
   );
 });
+
+// Regression (PR #122 review by George): the cold-load resume spec MUST carry the variant move
+// codec. usePvpTicTacToe's resumeActiveTunnels call previously passed only { proto, adapter }, so
+// the rebuilt tunnel fell back to identityMoveCodec — which cannot carry the Uint8Array salt — and
+// a reloaded staked match stalled on its first move. A spec WITH the codec reproduces the canonical
+// signed frame; a spec WITHOUT it must not. (The same call site serves ttt and caro identically.)
+test("ttt cold-load: the resume spec must carry the move codec to co-sign correctly", () => {
+  const proto = new MultiGameTicTacToeProtocol(1000, 1n) as never;
+  const adapter = makeTttResumeAdapter(() => {});
+  const ka = generateKeyPair(),
+    kb = generateKeyPair();
+  const tid = `0x${"72".repeat(32)}`;
+
+  const sp = OffchainTunnel.selfPlay(
+    proto,
+    tid,
+    ka as never,
+    kb as never,
+    "0xA",
+    "0xB",
+    { a: 1000n, b: 1000n },
+  );
+  sp.step({ cell: 0, salt: new Uint8Array(16).fill(0xaa) }, "A");
+  sp.step({ cell: 1, salt: new Uint8Array(16).fill(0xbb) }, "B");
+  const record = {
+    matchId: "match-ttt-codec",
+    tunnelId: tid,
+    role: "A" as const,
+    game: "ttt",
+    opponentWallet: "0xB",
+    opponentPubkeyHex: toHex(kb.publicKey),
+    selfEphemeralSecretHex: toHex(ka.secretKey),
+    latestCoSigned: toWireCoSigned(sp.latest!),
+    latestState: adapter.serializeState(sp.state as never),
+    updatedAt: Date.now(),
+  };
+  writeResumeRecord(record);
+  flushResumeWrites();
+
+  const proposeMove = { cell: 2, salt: new Uint8Array(16).fill(0xcc) };
+  const mkMp = (sink: Uint8Array[]) =>
+    ({
+      channel: () => ({
+        transport: { send: (b: Uint8Array) => sink.push(b), onFrame() {} },
+        sendPeer() {},
+        onPeer() {},
+        addPeerListener() {},
+        removePeerListener() {},
+      }),
+      markActive() {},
+    }) as never;
+  const proposeOn = (t: unknown) =>
+    (t as { propose(m: unknown, ts: bigint): void }).propose(proposeMove, 9n);
+
+  // WITH the variant codec (what onMatch and the fixed resume path supply): the canonical frame.
+  const goodSent: Uint8Array[] = [];
+  const { tunnel: good } = rebuildTunnel(
+    mkMp(goodSent),
+    readResumeRecord(tid)!,
+    { proto, adapter, moveCodec: tttMoveCodec } as never,
+    { selfWallet: "0xA" },
+  );
+  proposeOn(good);
+
+  // WITHOUT it (the old hook bug): DistributedTunnel falls back to identityMoveCodec, which
+  // serializes the Uint8Array salt to an empty hex string — a different, unusable signed frame.
+  const buggySent: Uint8Array[] = [];
+  const { tunnel: buggy } = rebuildTunnel(
+    mkMp(buggySent),
+    readResumeRecord(tid)!,
+    { proto, adapter } as never,
+    { selfWallet: "0xA" },
+  );
+  proposeOn(buggy);
+
+  assert.notDeepEqual(
+    Uint8Array.from(buggySent[0]),
+    Uint8Array.from(goodSent[0]),
+    "a resume spec without the move codec must not co-sign the same bytes as the codec'd one",
+  );
+  clearResumeRecord(tid);
+});

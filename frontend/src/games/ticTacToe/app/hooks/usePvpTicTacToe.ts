@@ -550,6 +550,13 @@ export function usePvpTicTacToe(
             {
               proto,
               adapter: makeTttResumeAdapter<AnyState, CellMove>(() => {}),
+              // Mirror onMatch: without the variant codec the resumed tunnel falls back to
+              // identityMoveCodec, which cannot encode the Uint8Array salt — a reloaded
+              // staked match would then stall on the first move.
+              moveCodec:
+                variant === "caro"
+                  ? (caroMoveCodec as never)
+                  : (tttMoveCodec as never),
             },
             { selfWallet: w.address },
           );
