@@ -47,11 +47,37 @@ test("export missing throws", async () => {
   );
 });
 
-test("import + listPools + delete", async () => {
+test("import stores the blob verbatim", async () => {
   const store = memStore();
   const { walletPoolId } = await importPool({ store, blob: blobBytes });
   assert.equal(walletPoolId, "wp_imp");
+  const stored = await store.read(walletPoolId);
+  assert.deepEqual(stored, blobBytes);
+});
+
+test("import overwrites an existing id", async () => {
+  const store = memStore({ wp_imp: new TextEncoder().encode("old") });
+  await importPool({ store, blob: blobBytes });
+  assert.deepEqual(await store.read("wp_imp"), blobBytes);
+});
+
+test("listPools returns pool ids", async () => {
+  const store = memStore({ wp_imp: blobBytes });
   assert.deepEqual(await listPools({ store }), ["wp_imp"]);
-  await deletePool({ store, walletPoolId });
+});
+
+test("listPools returns empty array for an empty store", async () => {
+  assert.deepEqual(await listPools({ store: memStore() }), []);
+});
+
+test("delete removes a pool", async () => {
+  const store = memStore({ wp_imp: blobBytes });
+  await deletePool({ store, walletPoolId: "wp_imp" });
   assert.deepEqual(await listPools({ store }), []);
+});
+
+test("delete is idempotent", async () => {
+  await assert.doesNotReject(() =>
+    deletePool({ store: memStore(), walletPoolId: "wp_missing" }),
+  );
 });

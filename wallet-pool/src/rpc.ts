@@ -1,15 +1,24 @@
-import { SuiClient, getFullnodeUrl } from "@mysten/sui/client";
+import {
+  SuiClient,
+  getFullnodeUrl,
+  type CoinBalance,
+} from "@mysten/sui/client";
 import type { CoinType, Network } from "./types";
 import { KeyCache } from "./keycache";
 
 const SUI_TYPE = "0x2::sui::SUI";
 
-/** Narrow balance-read interface. SuiClient satisfies this; fakes welcome in tests. */
+/**
+ * Narrow balance-read interface.
+ *
+ * SuiClient satisfies this because its `getBalance` returns `CoinBalance`,
+ * which is accepted alongside the `{ balance: string }` test shape.
+ */
 export interface BalanceClient {
   getBalance(input: {
     owner: string;
     coinType?: string;
-  }): Promise<{ balance: string }>;
+  }): Promise<{ balance: string } | CoinBalance>;
 }
 
 const clients = new Map<string, SuiClient>();
@@ -53,8 +62,12 @@ export class BalanceService {
     if (existing) return existing;
 
     const promise = (async () => {
+      const result = await this.client.getBalance({
+        owner: address,
+        coinType,
+      });
       const bal = BigInt(
-        (await this.client.getBalance({ owner: address, coinType })).balance,
+        "balance" in result ? result.balance : result.totalBalance,
       );
       this.cache.set(key, bal);
       return bal;
