@@ -5,7 +5,7 @@
  * main-thread path — only the call site (a worker over the bridge) changes.
  */
 import {
-  openSharedTunnelStaked,
+  openSharedTunnelStakedMany,
   depositStakeStaked,
   type StakeStrategy,
 } from "@/onchain/stakeTunnel";
@@ -19,7 +19,7 @@ import type {
   MainBridge,
 } from "../engineApi";
 
-type Reads = Parameters<typeof openSharedTunnelStaked>[0]["reads"];
+type Reads = Parameters<typeof openSharedTunnelStakedMany>[0]["reads"];
 
 export interface ChainBridgeDeps {
   reads: Reads;
@@ -32,7 +32,7 @@ export interface ChainBridgeDeps {
 
 type ChainBridge = Pick<
   MainBridge,
-  "openTunnel" | "depositStake" | "readCreatedAt" | "closeFallback"
+  "openTunnel" | "cancelOpen" | "depositStake" | "readCreatedAt" | "closeFallback"
 >;
 
 export function makeChainBridge(deps: ChainBridgeDeps): ChainBridge {
@@ -43,24 +43,33 @@ export function makeChainBridge(deps: ChainBridgeDeps): ChainBridge {
     selectStakeCoin: deps.selectStakeCoin,
     ensureStakeBalance: deps.ensureStakeBalance,
   });
-  // Route seat-A opens through the time-windowed bulk-open job (design §4.1) so many game-window
-  // opens can later coalesce into one sponsored PTB under the Enoki rate limit. Today the job
-  // still calls this per-match opener once per intent (the PvP many-opens builder is pending);
-  // it adds only the per-sender window + early-flush + demux scaffolding, behind the flag.
-  const bulkOpenJob = new BulkOpenJob(async (p: OpenTunnelParams) => {
-    const tunnelId = await openSharedTunnelStaked({
+  // Route seat-A opens through the time-windowed bulk-open job (design §4.1): a sender's window of
+  // game opens coalesces into ONE sponsored PTB via the PvP many-open builder, so a flush costs one
+  // Enoki sponsor+execute pair instead of N. The builder returns tunnel ids in INPUT ORDER, which
+  // the job demuxes back to each intent.
+  const bulkOpenJob = new BulkOpenJob(async (batch: OpenTunnelParams[]) => {
+    const ids = await openSharedTunnelStakedMany({
       reads: deps.reads,
-      partyA: { address: p.partyA.address, publicKey: p.partyA.publicKey },
-      partyB: { address: p.partyB.address, publicKey: p.partyB.publicKey },
-      amount: p.amount,
-      label: p.label,
+      specs: batch.map((p) => ({
+        partyA: { address: p.partyA.address, publicKey: p.partyA.publicKey },
+        partyB: { address: p.partyB.address, publicKey: p.partyB.publicKey },
+        amount: p.amount,
+        label: p.label,
+      })),
       ...stake(),
     });
-    return { tunnelId };
+    return ids.map((tunnelId) => ({ tunnelId }));
   });
   return {
-    openTunnel(p: OpenTunnelParams) {
-      return bulkOpenJob.enqueue(p);
+    openTunnel(p: OpenTunnelParams, intentId?: string) {
+      return bulkOpenJob.enqueue(p, intentId);
+    },
+    // Orphan-tunnel cancel (design §4.1): the worker calls this from its match teardown so a
+    // still-queued open is dropped before the window flushes. async to give the worker an awaitable
+    // ack (engineClient.disposeWindow relies on it landing before terminate); the job no-ops if the
+    // intent already flushed.
+    async cancelOpen(intentId: string) {
+      bulkOpenJob.cancel(intentId);
     },
     async depositStake(p: DepositStakeParams) {
       await depositStakeStaked({

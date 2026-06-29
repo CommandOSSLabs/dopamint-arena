@@ -3,6 +3,9 @@
  * at module load, so importing that module is the only step needed to register the game — no
  * central edit. `registry.ts` just imports the spec modules for their side-effects.
  *
+ * NOTE: this load-time mutation IS the side-effect `registry.ts`'s bare imports depend on — it must
+ * not be tree-shaken away (frontend/package.json must keep NO `"sideEffects": false`; see registry.ts).
+ *
  * The map + `defineGame` + `getSpec` live HERE, not in `registry.ts`, on purpose: spec modules
  * depend on `defineGame`, and `registry.ts` depends on the spec modules. Keeping the store in a
  * leaf module (depends on nothing game-specific) breaks what would otherwise be a registry↔spec

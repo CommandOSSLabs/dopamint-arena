@@ -31,14 +31,12 @@ import type {
   ConnStatus,
   EngineConfig,
   EngineStatus,
-  FromEngine,
   GameId,
   GameSessionSpec,
   MainBridge,
   MatchController,
   MatchIo,
   MatchSnapshot,
-  ToEngine,
 } from "./engineApi";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -83,6 +81,12 @@ function makeInbox(channel: PvpChannel) {
 }
 
 export class PvpEngine {
+  /** Set via `attachBridge` (a Comlink proxy whose methods RPC to main); required for
+   *  funding/settle. Nullable so the engine can be constructed before main wires it. */
+  private bridge: MainBridge | null = null;
+  /** Set via `subscribe` (a Comlink proxy); `flush` invokes it with each coalesced snapshot. */
+  private onSnapshot: ((snap: MatchSnapshot) => void) | null = null;
+
   private config: EngineConfig | null = null;
   private spec: AnySpec | null = null;
   private controller: AnyController | null = null;
@@ -97,42 +101,42 @@ export class PvpEngine {
   private connStatus: ConnStatus = "closed";
   private offConn: (() => void) | null = null;
   private error: string | null = null;
+  /** intentId of a seat-A open still queued in the main-thread bulk-open window (design §4.1),
+   *  else null. `reset()` cancels it via the bridge so a torn-down match never opens an orphan
+   *  tunnel; cleared once the open resolves/rejects. */
+  private pendingOpenIntentId: string | null = null;
 
   constructor(
-    private readonly bridge: MainBridge,
-    private readonly post: (m: FromEngine) => void,
     private readonly getSpec: (gameId: GameId) => AnySpec | undefined,
   ) {}
 
-  handle(m: ToEngine): void {
-    switch (m.t) {
-      case "init":
-        this.config = m.config;
-        break;
-      case "findMatch":
-        void this.findMatch(m.gameId, m.setup);
-        break;
-      case "resume":
-        void this.resume(m.gameId);
-        break;
-      case "submitInput":
-        this.controller?.onInput(m.input);
-        break;
-      case "setAuto":
-        this.auto = m.on;
-        this.controller?.setAuto(m.on);
-        this.emit();
-        break;
-      case "setVisibility":
-        this.setVisibility(m.visible);
-        break;
-      case "reset":
-        this.reset();
-        break;
-      case "bridgeResult":
-        // Resolved by the worker's RPC layer; never reaches the engine.
-        break;
-    }
+  // --- EngineApi surface (Comlink-exposed by engine.worker.ts) -----------------------------
+
+  /** Bootstrap config; set once before the first match. */
+  init(config: EngineConfig): void {
+    this.config = config;
+  }
+
+  /** Wire the main-thread chain bridge (a Comlink proxy); set once before the first match. */
+  attachBridge(bridge: MainBridge): void {
+    this.bridge = bridge;
+  }
+
+  /** Register the coalesced-snapshot sink (a Comlink proxy); set once at spawn. */
+  subscribe(onSnapshot: (snap: MatchSnapshot) => void): void {
+    this.onSnapshot = onSnapshot;
+  }
+
+  /** Queue a human input (fire/intent); the controller proposes if it's due. */
+  submitInput(input: unknown): void {
+    this.controller?.onInput(input);
+  }
+
+  /** Toggle autopilot for this seat and re-evaluate whether to propose. */
+  setAuto(on: boolean): void {
+    this.auto = on;
+    this.controller?.setAuto(on);
+    this.emit();
   }
 
   private io(): MatchIo<any, any> {
@@ -148,6 +152,13 @@ export class PvpEngine {
     this.error = String((e as Error)?.message ?? e);
     this.status = "error";
     this.emit();
+  }
+
+  /** The chain bridge must be attached (engineClient does so at spawn) before funding/settle;
+   *  throwing here surfaces as the snapshot's `error` via the caller's `fail`. */
+  private requireBridge(): MainBridge {
+    if (!this.bridge) throw new Error("engine bridge not attached");
+    return this.bridge;
   }
 
   /** Track the socket lifecycle so the snapshot's `connStatus` reflects reality (design §7).
@@ -197,10 +208,12 @@ export class PvpEngine {
       connStatus: this.connStatus,
       error: this.error,
     };
-    this.post({ t: "snapshot", snap });
+    // Comlink proxy: fire-and-forget (returns a Promise we ignore); coalesced upstream so the
+    // per-call RPC cost is negligible (design §7).
+    this.onSnapshot?.(snap);
   }
 
-  private setVisibility(visible: boolean): void {
+  setVisibility(visible: boolean): void {
     this.visible = visible;
     if (visible) {
       if (this.dirty) this.flush();
@@ -211,7 +224,26 @@ export class PvpEngine {
     }
   }
 
-  private reset(): void {
+  /**
+   * Orphan-tunnel cancel (design §4.1): if a seat-A open is still queued in the main-thread
+   * bulk-open window, cancel it so this torn-down match never opens a tunnel (and consumes stake).
+   * Awaited by `reset()` so `engineClient.disposeWindow` can let the cancel land before terminating
+   * the worker. If the intent already flushed into an in-flight PTB the bridge no-ops and `findMatch`
+   * bails on its own session-gone guard — so this never crashes.
+   */
+  private async cancelPendingOpen(): Promise<void> {
+    const intentId = this.pendingOpenIntentId;
+    if (!intentId || !this.bridge) return;
+    this.pendingOpenIntentId = null;
+    try {
+      await this.bridge.cancelOpen(intentId);
+    } catch {
+      /* bridge detached or open already resolved — nothing left to cancel */
+    }
+  }
+
+  async reset(): Promise<void> {
+    await this.cancelPendingOpen();
     if (this.flushTimer !== null) {
       clearTimeout(this.flushTimer);
       this.flushTimer = null;
@@ -235,7 +267,7 @@ export class PvpEngine {
     this.emit();
   }
 
-  private async findMatch(gameId: GameId, setup: unknown): Promise<void> {
+  async findMatch(gameId: GameId, setup?: unknown): Promise<void> {
     const config = this.config;
     const spec = this.getSpec(gameId);
     if (!config || !spec) {
@@ -274,23 +306,41 @@ export class PvpEngine {
       const oppPub = fromHex(hello.ephemeralPubkey);
 
       // 2) fund on-chain via the bridge (role-asymmetric, interleaved with the relay).
+      const bridge = this.requireBridge();
       this.status = "funding";
       this.emit();
       let tunnelId: string;
       if (match.role === "A") {
-        const opened = await this.bridge.openTunnel({
-          partyA: { address: wallet, publicKey: ephemeral.publicKey },
-          partyB: { address: match.opponentWallet, publicKey: oppPub },
-          amount: spec.stake,
-          label: gameId,
-        });
+        // Tag this open so a teardown during the bulk-open window can cancel it (orphan-tunnel
+        // cancel, design §4.1) before the job flushes a tunnel for a gone match. The id must be
+        // unique across the whole (per-user, cross-window) bulk-open job, hence a UUID.
+        const intentId = crypto.randomUUID();
+        this.pendingOpenIntentId = intentId;
+        const opened = await bridge
+          .openTunnel(
+            {
+              partyA: { address: wallet, publicKey: ephemeral.publicKey },
+              partyB: { address: match.opponentWallet, publicKey: oppPub },
+              amount: spec.stake,
+              label: gameId,
+            },
+            intentId,
+          )
+          .finally(() => {
+            this.pendingOpenIntentId = null;
+          });
+        // The open could not be cancelled because it had already flushed into an in-flight PTB
+        // (design §4.1). If the session was torn down meanwhile, the tunnel is orphaned (its stake
+        // already consumed — the accepted cost of a flushed PTB); just bail rather than resurrect a
+        // reset match on a closed socket. Detected via the captured `mp` (reset() nulls `this.mp`).
+        if (this.mp !== mp) return;
         tunnelId = opened.tunnelId;
         mp.announceTunnel(match.matchId, tunnelId);
         channel.sendPeer({ t: "open", tunnelId });
       } else {
         const open = await waitPeer<{ tunnelId: string }>("open");
         tunnelId = open.tunnelId;
-        await this.bridge.depositStake({ tunnelId, amount: spec.stake, label: gameId });
+        await bridge.depositStake({ tunnelId, amount: spec.stake, label: gameId });
       }
 
       // 3) build the distributed engine over the relay transport.
@@ -339,7 +389,7 @@ export class PvpEngine {
   }
 
   /** Cold-load: rebuild any persisted in-flight match for this game and re-attach. */
-  private async resume(gameId: GameId): Promise<void> {
+  async resume(gameId: GameId): Promise<void> {
     if (this.mp) return; // already in a live or resumed session
     const config = this.config;
     const spec = this.getSpec(gameId);
@@ -399,7 +449,7 @@ export class PvpEngine {
       } catch {
         /* best-effort cleanup */
       }
-      this.reset();
+      void this.reset();
     }
   }
 
@@ -473,7 +523,8 @@ export class PvpEngine {
     tunnelId: string,
   ): Promise<void> {
     const dt = this.dt as AnyTunnel;
-    const createdAt = await this.bridge.readCreatedAt(tunnelId);
+    const bridge = this.requireBridge();
+    const createdAt = await bridge.readCreatedAt(tunnelId);
     const root = transcript.root();
     const half = dt.buildSettlementHalfWithRoot(createdAt, root, 0n);
     channel.sendPeer({
@@ -497,7 +548,7 @@ export class PvpEngine {
         coSignedToSettleBody(co, transcript.rawEntries()),
       );
     } catch {
-      await this.bridge.closeFallback({ tunnelId, settlement: co });
+      await bridge.closeFallback({ tunnelId, settlement: co });
     }
   }
 }

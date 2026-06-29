@@ -5,17 +5,17 @@
  * into ONE sponsored PTB — the motivation is the Enoki rate limit (one sponsor+execute pair
  * per batch), not wallet popups (sponsored opens are already popup-free).
  *
- * STATUS — structure only, no PTB batching yet. The existing many-opens builder
- * (`openAndFundMany` / `buildOpenAndFundMany`) is the SELF-PLAY `create_and_fund` shape and
- * cannot be reused for the PvP seat-A open: (1) it funds BOTH seats from one sender, whereas a
- * PvP open funds only seat A via `create_and_share` (seat B deposits separately) — reusing it
- * double-consumes the wallet and pre-funds seat B; and (2) it demuxes created tunnels by
- * party-A address, but a PvP open's party-A address IS the wallet (pvpMatchHook), identical
- * across one sender's opens, so per-intent correlation by party-A collapses. The real PvP
- * many-opens builder is new on-chain code (see TODO in {@link BulkOpenJob.openBatch}). Until it
- * lands, this job keeps the queue / per-sender shard / early-flush / demux structure in place
- * behind the `?engine=worker` flag and opens each match with the existing per-match opener, so
- * behaviour is identical to the direct path (it does NOT yet reduce the Enoki sponsor count).
+ * Each flush composes its window into ONE Programmable Transaction Block via the PvP many-open
+ * builder (`openSharedTunnelStakedMany` → `openManySharedSeatA`): N seat-A opens (`create` +
+ * `deposit_party_a` + `public_share_object`) sharing ONE summed stake withdrawal, one
+ * sponsored+executed tx per flush — so a window of game opens costs one Enoki sponsor pair, not N.
+ * This deliberately does NOT reuse the self-play `openAndFundMany` (`create_and_fund`): that funds
+ * BOTH seats from one sender (a PvP open funds only seat A; seat B deposits separately) and demuxes
+ * created tunnels by party-A address, which here is the shared wallet — identical across the batch.
+ * Demux is therefore by created-`Tunnel` `objectChanges` ORDER (the builder owns it).
+ *
+ * Off the `?engine=worker` flag the job is a transparent pass-through (immediate 1-item flush), so
+ * non-worker behaviour is unchanged.
  */
 import type { OpenTunnelParams } from "../engineApi";
 import { engineEnabled } from "../flag";
@@ -31,9 +31,25 @@ export const BULK_OPEN_LONE_FLUSH_MS = 300;
 
 export type OpenResult = { tunnelId: string };
 
-/** The actual per-match seat-A open (e.g. `openSharedTunnelStaked` via the chain bridge). The job
- *  wraps this; today it calls it once per intent, later it composes them into one PTB. */
-export type PerMatchOpen = (params: OpenTunnelParams) => Promise<OpenResult>;
+/**
+ * Rejection for a seat-A open cancelled before its window flushed (orphan-tunnel cancel,
+ * design §4.1): the match/window was torn down inside the ~5 s bulk-open window, so no tunnel
+ * should be opened (and no stake consumed) for it. Benign — the awaiting caller is already
+ * tearing the session down, so this is an expected cancellation, not a real open failure.
+ */
+export class OpenCancelledError extends Error {
+  constructor(intentId: string) {
+    super(`bulk-open intent ${intentId} cancelled before flush (match torn down)`);
+    this.name = "OpenCancelledError";
+  }
+}
+
+/**
+ * Open a whole window of seat-A intents in ONE PTB (e.g. `openSharedTunnelStakedMany` via the chain
+ * bridge). MUST return one result per input intent in INPUT ORDER — `results[i]` is the tunnel for
+ * `batch[i]` (the builder demuxes created tunnels by `objectChanges` order). A post-commit demux
+ * failure rejects with `BatchCommittedError` so the job can surface it and never retry. */
+export type BatchOpen = (batch: OpenTunnelParams[]) => Promise<OpenResult[]>;
 
 export interface BulkOpenJobOptions {
   windowMs?: number;
@@ -47,6 +63,9 @@ interface PendingOpen {
   params: OpenTunnelParams;
   resolve: (result: OpenResult) => void;
   reject: (err: unknown) => void;
+  /** Correlates this intent to {@link BulkOpenJob.cancel}; minted by the worker per open so a
+   *  match teardown can cancel exactly its own queued open. Absent off the flag (no window). */
+  intentId?: string;
 }
 
 /** One sender's accumulating window. A Sui tx has a single `sender` and the sponsor guard forces
@@ -65,7 +84,7 @@ export class BulkOpenJob {
   private readonly enabled: () => boolean;
 
   constructor(
-    private readonly perMatchOpen: PerMatchOpen,
+    private readonly batchOpen: BatchOpen,
     opts?: BulkOpenJobOptions,
   ) {
     this.windowMs = opts?.windowMs ?? BULK_OPEN_WINDOW_MS;
@@ -73,14 +92,18 @@ export class BulkOpenJob {
     this.enabled = opts?.enabled ?? engineEnabled;
   }
 
-  /** Enqueue a seat-A open; resolves with the tunnel id once this sender's window flushes. Off the
-   *  worker flag, opens immediately (no window) so the non-worker path is unchanged. */
-  enqueue(params: OpenTunnelParams): Promise<OpenResult> {
-    if (!this.enabled()) return this.perMatchOpen(params);
+  /** Enqueue a seat-A open; resolves with the tunnel id once this sender's window flushes. Pass an
+   *  `intentId` (the worker mints one per open) to allow {@link cancel}ing it before the flush. Off
+   *  the worker flag, opens immediately (no window, not cancellable) so the non-worker path is
+   *  unchanged. */
+  enqueue(params: OpenTunnelParams, intentId?: string): Promise<OpenResult> {
+    // Off the flag: open immediately as a 1-item batch — one PTB, one tunnel, same on-chain shape
+    // as a direct open — so the non-worker path keeps its no-window behaviour.
+    if (!this.enabled()) return this.batchOpen([params]).then((rs) => rs[0]);
     return new Promise<OpenResult>((resolve, reject) => {
       const sender = senderOf(params);
       const shard = this.shardFor(sender);
-      shard.pending.push({ params, resolve, reject });
+      shard.pending.push({ params, resolve, reject, intentId });
       if (shard.pending.length === 1) {
         // First intent: arm the full window plus a short lone-flush timer.
         shard.windowTimer = setTimeout(() => this.flush(sender), this.windowMs);
@@ -94,6 +117,31 @@ export class BulkOpenJob {
         shard.loneTimer = null;
       }
     });
+  }
+
+  /**
+   * Orphan-tunnel cancel (design §4.1): drop a still-queued open so a match/window torn down
+   * inside the bulk-open window never flushes a tunnel (consuming stake) for a gone match. Removes
+   * the intent from its sender shard and rejects its pending promise with {@link OpenCancelledError};
+   * if that empties the shard, clears its timers and deletes it so no stray flush fires.
+   *
+   * No-op if the intent is unknown — it has already been flushed into an in-flight/committed PTB
+   * (it left `pending` on flush) and can no longer be cancelled. The awaiting `enqueue` caller still
+   * settles/closes that tunnel through its normal terminal path; this must not throw.
+   */
+  cancel(intentId: string): void {
+    for (const [sender, shard] of this.shards) {
+      const i = shard.pending.findIndex((p) => p.intentId === intentId);
+      if (i === -1) continue;
+      const [cancelled] = shard.pending.splice(i, 1);
+      cancelled.reject(new OpenCancelledError(intentId));
+      if (shard.pending.length === 0) {
+        if (shard.windowTimer) clearTimeout(shard.windowTimer);
+        if (shard.loneTimer) clearTimeout(shard.loneTimer);
+        this.shards.delete(sender);
+      }
+      return;
+    }
   }
 
   private shardFor(sender: string): SenderShard {
@@ -117,41 +165,46 @@ export class BulkOpenJob {
   }
 
   /**
-   * Open every intent in one sender's window and demux a tunnel id back to each.
+   * Compose one sender's window into a single PTB via {@link batchOpen} and demux a tunnel id back
+   * to each intent by INPUT ORDER (`results[i]` ↔ `batch[i]`).
    *
-   * TODO(bulk-open PTB, design §4.1): compose these into ONE Programmable Transaction Block —
-   * `create` + `deposit_party_a` + `public_share_object` ×N with ONE summed `redeem_funds`
-   * withdrawal (NOT N withdrawals), chunked to fit the settler gas cap (~0.1 SUI) and the PTB
-   * command/input/128 KB ceilings. That builder is new on-chain code: the existing
-   * `openAndFundMany` is the self-play `create_and_fund` shape (funds both seats; demuxes by
-   * party-A) and is unsafe here — see the module header. The batched path MUST (a) demux per
-   * intent WITHOUT relying on party-A (it's the shared wallet — use objectChanges order or the
-   * per-match party-B ephemeral), (b) on a pre-commit reject retry offenders individually, and
-   * (c) on a `BatchCommittedError` reject all affected intents and NEVER retry (a post-commit
-   * retry double-opens and double-consumes stake).
-   *
-   * Until then: no batching — open each match with the per-match opener. The per-match opener
-   * doesn't throw `BatchCommittedError` today, but the never-retry rule is enforced here at the
-   * flush boundary so it already holds when the batched path lands.
+   * Never-retry rule (design §4.1): `batchOpen` rejects the WHOLE flush on any failure. A
+   * `BatchCommittedError` means the PTB committed on-chain but post-commit demux failed — the
+   * tunnels exist and stake is consumed, so every intent is rejected and the open is NEVER retried
+   * (a retry double-opens and double-consumes stake). Pre-commit rejects (build/sign/sponsor) also
+   * surface here; the worker reports the error and the player re-initiates the match.
    */
   private async openBatch(batch: PendingOpen[]): Promise<void> {
-    await Promise.all(
-      batch.map(async (p) => {
-        try {
-          p.resolve(await this.perMatchOpen(p.params));
-        } catch (err) {
-          if (err instanceof BatchCommittedError) {
-            // Surface a committed-but-uncorrelated open distinctly; the tunnel exists and the
-            // stake is consumed, so we reject (never retry) — a retry would double-open.
-            console.error(
-              "[bulkOpenJob] open committed but correlation failed — not retrying",
-              err,
-            );
-          }
-          p.reject(err);
-        }
-      }),
-    );
+    let results: OpenResult[];
+    try {
+      results = await this.batchOpen(batch.map((p) => p.params));
+    } catch (err) {
+      if (err instanceof BatchCommittedError) {
+        console.error(
+          "[bulkOpenJob] batch committed but correlation failed — not retrying",
+          err,
+        );
+      }
+      for (const p of batch) p.reject(err);
+      return;
+    }
+    if (results.length !== batch.length) {
+      // A correct opener returns one ordered id per intent; a mismatch means the post-commit demux
+      // is inconsistent. The PTB committed, so reject all (never retry) rather than mis-route ids.
+      const err = new BatchCommittedError(
+        "unknown",
+        new Error(
+          `bulkOpenJob: opener returned ${results.length} results for ${batch.length} intents`,
+        ),
+      );
+      console.error(
+        "[bulkOpenJob] result/intent count mismatch — not retrying",
+        err,
+      );
+      for (const p of batch) p.reject(err);
+      return;
+    }
+    batch.forEach((p, i) => p.resolve(results[i]));
   }
 }
 

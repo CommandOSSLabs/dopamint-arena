@@ -238,20 +238,20 @@ Target authoring surface: a public-state game = one `<game>Spec.ts`
    `reset(windowId)`, `setVisibility(visible)`, `init(config)` (incl. the resolved WS URL),
    `attachBridge(bridge)`, `shutdown()`. (§13 adds a generic control channel for
    `requestSettle`/`leave`/`setStake`/`fund`/`requeue`.)
-2. **Snapshot stream — worker → main (raw `MessagePort`).** A coalesced `MatchSnapshot` per
-   dirty match — `{ status, role, auto, stake, view, outcome, opponentWallet, tunnelId,
-   connStatus, error }`. The `view` is `deriveView`'s output; **`tunnelId` and `connStatus`
-   must be carried** (today world-canvas fabricates a synthetic id). All fields plain.
-3. **Bridge — worker → main (Comlink.proxy callbacks).** Chain writes only; **all
-   `@mysten/sui` tx-building, signing, and the Sui client stay on main**. Workers do not sign
-   per match — they **enqueue tx intents** (`enqueueTx(intent) → Promise<result>`, for
-   open/deposit/close) plus the read `readCreatedAt(tunnelId)`; the main-thread **bulk-open
-   job** (§4.1) executes them. Backend HTTP (`cp.settle`, register/heartbeat) is `fetch` in
-   the worker, not the bridge. **No storage bridge** — each worker owns its persistence in
-   **IndexedDB** (§6).
+2. **Snapshot — worker → main (Comlink.proxy callback).** The worker calls a main-registered
+   callback with a coalesced `MatchSnapshot` — `{ status, role, auto, stake, view, winner,
+   opponentWallet, tunnelId, connStatus, error }`. Coalesced (~per move / 16 ms) so the
+   per-call proxy cost is negligible (raw `MessagePort` is the alternative if it ever isn't).
+   `view` is `deriveView`'s output; all fields plain.
+3. **Bridge — worker → main (Comlink.proxy object).** Chain writes only; **all `@mysten/sui`
+   tx-building, signing, and the Sui client stay on main**. The worker `await`s the proxied
+   `MainBridge` directly: `openTunnel` (role A; routed through the bulk-open job §4.1),
+   `depositStake` (role B), `readCreatedAt`, `closeFallback`, `cancelOpen` (orphan-cancel).
+   Backend HTTP (`cp.settle`, register/heartbeat) is `fetch` in the worker. **No storage
+   bridge** — each worker owns its resume persistence in **IndexedDB** (§6).
 
-Everything crossing is structured-cloneable (`bigint`, `Uint8Array`, plain objects);
-`Protocol`/codec/spec are closures and are imported in the worker, never sent.
+Both directions ride Comlink over one `postMessage` channel (no hand-rolled envelopes);
+`Protocol`/codec/spec are closures, imported in the worker, never sent.
 
 ### 4.1 On-chain writes: time-windowed bulk-open job (Enoki rate-limit batching)
 
@@ -271,8 +271,13 @@ nothing else arriving flushes early, so a single match doesn't pay the full 5 s 
   guard forces every stake withdrawal to `WithdrawFrom::Sender` (cross-player batching is
   rejected, and unit-tested). So the job **shards by sender** and batches that sender's many
   game-window opens — exactly the ADR-0013 reload scenario; for seat-A opens that's the
-  single local user. Use **one summed `redeem_funds` withdrawal** for the batch (SDK
-  precedent: `buildOpenAndFundMany` / `openAndFundMany`), not N withdrawals.
+  single local user. Use **one summed `redeem_funds` withdrawal** for the batch (the new
+  `openManySharedSeatA` — NOT the self-play `openAndFundMany`, which funds both seats), not N.
+- **Demux by party-B pubkey, not `objectChanges` order.** All N tunnels share party A (the
+  sender), and Sui leaves created-`objectChanges` order unspecified — so each created tunnel is
+  correlated to its intent by its on-chain `party_b.public_key` (the per-match opponent
+  ephemeral, unique within a flush). A spec with no match **throws (fail-loud; never
+  mis-routes stake)**. Returned in spec order.
 - **What is batchable.** (1) **Seat-A opens — YES** (the job's core). (2) **Seat-B deposits —
   YES, but a separate downstream window** gated on the opens having committed (B needs the
   shared tunnel id). (3) **Open→its-own-deposit — NO** (cross-tx dependency). (4)

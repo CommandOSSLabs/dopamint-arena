@@ -7,9 +7,10 @@
  * hidden-info secret; the main thread renders snapshots and serves wallet/Sui-client/
  * localStorage through the bridge.
  *
- * Everything that crosses the boundary here is plain / structured-cloneable. Closures
- * (a game's `Protocol`, `MoveCodec`, `GameSessionSpec`) are imported INSIDE the worker and
- * addressed by `gameId` — they are never `postMessage`'d.
+ * The boundary is Comlink (`EngineApi` below): commands + the snapshot/bridge callbacks cross
+ * as RPC; their *payloads* are plain / structured-cloneable (the callbacks themselves ride as
+ * `Comlink.proxy`'d references). Closures (a game's `Protocol`, `MoveCodec`, `GameSessionSpec`)
+ * are imported INSIDE the worker and addressed by `gameId` — they are never sent across.
  */
 import type { Role } from "@/pvp/mpClient";
 import type { Protocol } from "sui-tunnel-ts/protocol/Protocol";
@@ -64,27 +65,39 @@ export interface EngineConfig {
   wallet: string;
 }
 
-// --- Boundary envelopes (raw `postMessage`; one worker per window, so no windowId) -------
+// --- Worker RPC surface (Comlink; one worker per window, so no windowId) ------------------
 
-/** Commands main → worker. */
-export type ToEngine =
-  | { t: "init"; config: EngineConfig }
-  | { t: "findMatch"; gameId: GameId; setup?: unknown }
-  | { t: "resume"; gameId: GameId }
-  | { t: "submitInput"; input: unknown }
-  | { t: "setAuto"; on: boolean }
-  | { t: "setVisibility"; visible: boolean }
-  | { t: "reset" }
-  /** Reply to a prior `bridgeCall` (see `FromEngine`). */
-  | { t: "bridgeResult"; id: number; ok: true; value: unknown }
-  | { t: "bridgeResult"; id: number; ok: false; error: string };
-
-/** Messages worker → main. `connStatus` rides inside the coalesced snapshot (design §7), so
- *  there is no standalone conn message. */
-export type FromEngine =
-  | { t: "snapshot"; snap: MatchSnapshot }
-  /** The worker asks main to run a privileged op (wallet/storage) and await the result. */
-  | { t: "bridgeCall"; id: number; method: BridgeMethod; args: readonly unknown[] };
+/**
+ * The engine API the worker `Comlink.expose`s and `engineClient` `Comlink.wrap`s (design §4,
+ * channel 1). Replaces the old hand-rolled `postMessage` envelopes: each method is a Comlink
+ * RPC, so on main every method is awaitable (`Comlink.Remote<EngineApi>` promisifies them all).
+ *
+ * Setup order: `engineClient` posts `init` → `attachBridge` → `subscribe` once at spawn, in that
+ * order and without awaiting between them — Comlink preserves channel order, so they land before
+ * any later `findMatch`/`resume`.
+ *
+ * Proxy lifetimes: `attachBridge`'s `bridge` and `subscribe`'s `onSnapshot` are `Comlink.proxy`'d
+ * on main, so the worker invokes them by reference (each call RPCs back to main). Both live as
+ * long as the worker; `engineClient.dispose` releases the wrapped API and `terminate()`s the
+ * worker, which disentangles both proxy ports so no main-side `MessagePort` listener leaks.
+ */
+export interface EngineApi {
+  /** Bootstrap config (main-resolved WS URL + wallet label); set before the first match. */
+  init(config: EngineConfig): void;
+  /** Hand the worker the main-thread chain bridge (a Comlink proxy; its methods RPC to main). */
+  attachBridge(bridge: MainBridge): void;
+  /** Register the coalesced-snapshot sink (a Comlink proxy, invoked ~per move / 16 ms). */
+  subscribe(onSnapshot: (snap: MatchSnapshot) => void): void;
+  findMatch(gameId: GameId, setup?: unknown): Promise<void>;
+  resume(gameId: GameId): Promise<void>;
+  submitInput(input: unknown): void;
+  setAuto(on: boolean): void;
+  setVisibility(visible: boolean): void;
+  /** Tear the match down. Async because it first cancels any seat-A open still queued in the
+   *  main-thread bulk-open window (orphan-tunnel cancel, design §4.1) via `bridge.cancelOpen`;
+   *  `engineClient.disposeWindow` awaits this so the cancel lands before it terminates the worker. */
+  reset(): Promise<void>;
+}
 
 // --- Bridge: the few privileged ops the worker calls back into main for -------------------
 
@@ -116,8 +129,13 @@ export interface CloseFallbackParams {
  * on the bridge — the worker owns it in its own IndexedDB (`persist/idb.ts`, design §5/§6).
  */
 export interface MainBridge {
-  /** Role A: open + fund the shared tunnel on-chain; returns its id. */
-  openTunnel(p: OpenTunnelParams): Promise<{ tunnelId: string }>;
+  /** Role A: open + fund the shared tunnel on-chain; returns its id. `intentId` (minted by the
+   *  worker per open) tags the queued bulk-open intent so a teardown can {@link cancelOpen} it. */
+  openTunnel(p: OpenTunnelParams, intentId?: string): Promise<{ tunnelId: string }>;
+  /** Cancel a still-queued seat-A open (orphan-tunnel cancel, design §4.1): the match/window was
+   *  torn down inside the bulk-open window, so its pending open must not flush a tunnel (and
+   *  consume stake). No-op if the intent already flushed into an in-flight PTB. */
+  cancelOpen(intentId: string): Promise<void>;
   /** Role B: deposit this seat's stake into the opened tunnel. */
   depositStake(p: DepositStakeParams): Promise<void>;
   /** Settle: read the tunnel's on-chain `createdAt` for the settlement timestamp. */
@@ -125,7 +143,6 @@ export interface MainBridge {
   /** Settle fallback only (backend `/settle` down): wallet-submitted cooperative close. */
   closeFallback(p: CloseFallbackParams): Promise<void>;
 }
-export type BridgeMethod = keyof MainBridge;
 
 // --- Per-game spec (imported in the worker, addressed by gameId) --------------------------
 

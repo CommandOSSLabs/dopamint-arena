@@ -1,21 +1,26 @@
 /**
  * Main-thread manager for the per-game-window tunnel workers. Spawns ONE dedicated worker
  * per `windowId` (lazy, on first command), keeps that window's latest snapshot for
- * `useSyncExternalStore`, routes the worker's privileged `bridgeCall`s to the configured
- * `MainBridge`, and terminates the worker on dispose.
+ * `useSyncExternalStore`, and terminates the worker on dispose.
  *
- * Transport is raw `postMessage` with the typed `ToEngine`/`FromEngine` envelopes — no
- * Comlink dependency. The bridge is a single per-user instance (wallet is per-user), set
- * once by `EngineProvider`; every window's worker shares it.
+ * Transport is Comlink (design §4): each worker exposes an `EngineApi` we `Comlink.wrap`. The
+ * bridge and the snapshot sink are handed over as `Comlink.proxy`'d references, so the worker
+ * invokes them by reference (each call RPCs back here) — no hand-rolled `postMessage` envelopes.
+ * The bridge is a single per-user instance (wallet is per-user), set once by `EngineProvider`;
+ * every window's worker shares it.
+ *
+ * Proxy lifetimes: the wrapped `EngineApi` and the two proxied callbacks (bridge, snapshot) live
+ * for the worker's lifetime. `dispose` releases the wrapped API (`Comlink.releaseProxy`) and
+ * `terminate()`s the worker; terminating disentangles the bridge/snapshot ports so their
+ * main-side `MessagePort` listeners are reclaimed (no proxy leak).
  */
+import * as Comlink from "comlink";
 import type {
-  ToEngine,
-  FromEngine,
+  EngineApi,
   MainBridge,
   MatchSnapshot,
   EngineConfig,
   GameId,
-  BridgeMethod,
 } from "./engineApi";
 import { registerWindowDisposer } from "@/lib/windowSessions";
 import { maxLiveWindows } from "./deviceTier";
@@ -49,6 +54,8 @@ const CAPPED_SNAPSHOT: MatchSnapshot = {
 
 interface WindowEntry {
   worker: Worker;
+  /** The worker's `EngineApi`, wrapped by Comlink — every method returns a `Promise`. */
+  api: Comlink.Remote<EngineApi>;
   snap: MatchSnapshot;
   listeners: Set<() => void>;
 }
@@ -63,27 +70,10 @@ export function configureEngine(cfg: EngineConfig, mainBridge: MainBridge): void
   bridge = mainBridge;
 }
 
-function post(worker: Worker, msg: ToEngine): void {
-  worker.postMessage(msg);
-}
-
-async function handleBridgeCall(
-  worker: Worker,
-  id: number,
-  method: BridgeMethod,
-  args: readonly unknown[],
-): Promise<void> {
-  if (!bridge) {
-    post(worker, { t: "bridgeResult", id, ok: false, error: "engine bridge not configured" });
-    return;
-  }
-  try {
-    const fn = bridge[method] as (...a: readonly unknown[]) => Promise<unknown>;
-    const value = await fn(...args);
-    post(worker, { t: "bridgeResult", id, ok: true, value });
-  } catch (e) {
-    post(worker, { t: "bridgeResult", id, ok: false, error: String((e as Error)?.message ?? e) });
-  }
+/** Fire a worker command without awaiting. The engine surfaces failures via the snapshot's
+ *  `error` field (not the command's promise), so a rejection here is safe to swallow. */
+function fire(p: Promise<unknown>): void {
+  void p.catch(() => {});
 }
 
 function spawn(windowId: string): WindowEntry {
@@ -91,17 +81,20 @@ function spawn(windowId: string): WindowEntry {
     type: "module",
     name: `tunnel-${windowId}`,
   });
-  const entry: WindowEntry = { worker, snap: IDLE_SNAPSHOT, listeners: new Set() };
-  worker.onmessage = (ev: MessageEvent<FromEngine>) => {
-    const m = ev.data;
-    if (m.t === "snapshot") {
-      entry.snap = m.snap;
-      for (const l of entry.listeners) l();
-    } else if (m.t === "bridgeCall") {
-      void handleBridgeCall(worker, m.id, m.method, m.args);
-    }
+  const api = Comlink.wrap<EngineApi>(worker);
+  const entry: WindowEntry = { worker, api, snap: IDLE_SNAPSHOT, listeners: new Set() };
+  // Snapshot sink the worker calls back into (coalesced ~16ms upstream). Closes over `entry`.
+  const onSnapshot = (snap: MatchSnapshot): void => {
+    entry.snap = snap;
+    for (const l of entry.listeners) l();
   };
-  if (config) post(worker, { t: "init", config });
+  if (config && bridge) {
+    // init → attachBridge → subscribe, posted synchronously with no await between them so they
+    // queue ahead of any findMatch issued right after spawn (Comlink preserves channel order).
+    fire(api.init(config));
+    fire(api.attachBridge(Comlink.proxy(bridge)));
+    fire(api.subscribe(Comlink.proxy(onSnapshot)));
+  }
   windows.set(windowId, entry);
   // Tear the worker down on explicit window close (mirrors the legacy session disposer); a
   // mere React remount/minimize keeps it alive so the match survives in the background.
@@ -111,10 +104,24 @@ function spawn(windowId: string): WindowEntry {
 
 function disposeWindow(windowId: string): void {
   const entry = windows.get(windowId);
-  if (entry) {
+  if (!entry) return;
+  // Drop from the store first so subscribe/getSnapshot immediately treat the window as gone.
+  windows.delete(windowId);
+  // Orphan-tunnel cancel (design §4.1): terminate() is abrupt, so let the worker run reset() first
+  // — it cancels any seat-A open still queued in the main-thread bulk-open window, so a closed
+  // window never flushes a tunnel (consuming stake) for a gone match. reset() awaits that cancel,
+  // so once it resolves the intent is gone; only THEN release the API proxy + terminate (which
+  // disentangles the bridge + snapshot proxy ports so their main-side listeners are reclaimed). A
+  // wedged worker is still reclaimed by the timeout fallback.
+  let reclaimed = false;
+  const reclaim = (): void => {
+    if (reclaimed) return;
+    reclaimed = true;
+    entry.api[Comlink.releaseProxy]();
     entry.worker.terminate();
-    windows.delete(windowId);
-  }
+  };
+  entry.api.reset().then(reclaim, reclaim);
+  setTimeout(reclaim, 1000);
 }
 
 /**
@@ -149,27 +156,27 @@ export const engineClient = {
   },
   findMatch(windowId: string, gameId: GameId, setup?: unknown): void {
     const entry = getOrSpawn(windowId);
-    if (entry) post(entry.worker, { t: "findMatch", gameId, setup });
+    if (entry) fire(entry.api.findMatch(gameId, setup));
   },
   resume(windowId: string, gameId: GameId): void {
     const entry = getOrSpawn(windowId);
-    if (entry) post(entry.worker, { t: "resume", gameId });
+    if (entry) fire(entry.api.resume(gameId));
   },
   submitInput(windowId: string, input: unknown): void {
     const entry = windows.get(windowId);
-    if (entry) post(entry.worker, { t: "submitInput", input });
+    if (entry) fire(entry.api.submitInput(input));
   },
   setAuto(windowId: string, on: boolean): void {
     const entry = windows.get(windowId);
-    if (entry) post(entry.worker, { t: "setAuto", on });
+    if (entry) fire(entry.api.setAuto(on));
   },
   setVisibility(windowId: string, visible: boolean): void {
     const entry = windows.get(windowId);
-    if (entry) post(entry.worker, { t: "setVisibility", visible });
+    if (entry) fire(entry.api.setVisibility(visible));
   },
   reset(windowId: string): void {
     const entry = windows.get(windowId);
-    if (entry) post(entry.worker, { t: "reset" });
+    if (entry) fire(entry.api.reset());
   },
   /** Terminate a window's worker and reclaim its memory (also auto-run on window close). */
   dispose(windowId: string): void {
