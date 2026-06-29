@@ -93,7 +93,12 @@ impl MoveStrategy<Caro> for CaroStrategy {
         seat: Seat,
         _ctx: &MoveStrategyContext,
     ) -> Option<CaroMove> {
-        self.pick_cell(state, seat).map(|cell| CaroMove { cell })
+        self.pick_cell(state, seat).map(|cell| {
+            // Derive a deterministic 16-byte salt from the rng state and move index
+            // so plan_move is idempotent for replays of the same state.
+            let salt = derive_salt(self.rng_state, state.moves_count);
+            CaroMove { cell, salt }
+        })
     }
 }
 
@@ -132,7 +137,10 @@ impl MoveStrategy<CaroSeries> for CaroSeriesStrategy {
             return None;
         }
         if state.inner.winner != EMPTY {
-            return (seat == Seat::A).then_some(CaroMove { cell: 0 });
+            return (seat == Seat::A).then_some(CaroMove {
+                cell: 0,
+                salt: derive_salt(self.inner.rng_state, state.inner.moves_count),
+            });
         }
         self.inner.plan_move(&state.inner, seat, ctx).await
     }
@@ -218,6 +226,22 @@ fn candidates(board: &[u8], size: usize, radius: i32) -> Vec<usize> {
 
 fn in_bounds(size: usize, row: i32, col: i32) -> bool {
     row >= 0 && row < size as i32 && col >= 0 && col < size as i32
+}
+
+/// Derive a deterministic 16-byte salt from the rng state and move index.
+///
+/// Bots need idempotent salts so that `plan_move` on the same state always
+/// produces the same move (including salt), required for replays.
+fn derive_salt(rng_state: u64, moves_count: usize) -> Vec<u8> {
+    let mut salt = [0u8; 16];
+    salt[..8].copy_from_slice(&rng_state.to_be_bytes());
+    salt[8] = (moves_count & 0xFF) as u8;
+    salt[9] = ((moves_count >> 8) & 0xFF) as u8;
+    // Fill remaining bytes with an expansion of the rng state.
+    for i in 10..16 {
+        salt[i] = salt[i - 8] ^ (i as u8);
+    }
+    salt.to_vec()
 }
 
 fn splitmix_next(state: u64) -> u64 {

@@ -2,6 +2,8 @@
 //! `sui-tunnel-ts/src/protocol/ticTacToe.ts`.
 
 use tunnel_core::codec::u64_to_be_bytes;
+use tunnel_core::commitment::{compute_commitment, DOMAIN_COMMIT_REVEAL};
+use tunnel_core::crypto::blake2b256;
 use tunnel_harness::{Balances, Protocol, ProtocolError, Seat, TunnelContext};
 
 pub mod strategy;
@@ -10,8 +12,8 @@ pub use strategy::{TicTacToeDifficulty, TicTacToeSeriesStrategy, TicTacToeStrate
 pub const EMPTY: u8 = 0;
 pub const MARK_A: u8 = 1;
 pub const MARK_B: u8 = 2;
-const DOMAIN: &[u8] = b"sui_tunnel::proto::tic_tac_toe.v1";
-const SERIES_DOMAIN: &[u8] = b"sui_tunnel::proto::tic_tac_toe.series.v1";
+const DOMAIN: &[u8] = b"sui_tunnel::proto::tic_tac_toe.v2";
+const SERIES_DOMAIN: &[u8] = b"sui_tunnel::proto::tic_tac_toe.series.v2";
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Winner {
@@ -42,11 +44,17 @@ pub struct TicTacToeState {
     pub balance_b: u64,
     pub total: u64,
     pub stake: u64,
+    /// 32-byte running commitment accumulator. Initialized from the v2 protocol
+    /// domain; each move folds in `compute_commitment(mover||moveIndex||cell, salt)`
+    /// so the full move history is unforgeable without replaying every move.
+    pub move_accumulator: [u8; 32],
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TicTacToeMove {
     pub cell: u8,
+    /// Per-move salt, >= 16 bytes (enforced by compute_commitment).
+    pub salt: Vec<u8>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -129,12 +137,40 @@ fn check_winner(board: &[u8; 9], moves_count: u8) -> Winner {
     }
 }
 
+/// `lp(x) = u64be(len(x)) || x` — length-prefixed chunk for accumulator hashing.
+fn push_length_prefixed(out: &mut Vec<u8>, bytes: &[u8]) {
+    out.extend_from_slice(&u64_to_be_bytes(bytes.len() as u64));
+    out.extend_from_slice(bytes);
+}
+
+/// Compute the initial accumulator seeded from the v2 protocol domain.
+///
+/// acc_0 = blake2b256(DOMAIN_COMMIT_REVEAL || lp(b"sui_tunnel::proto::tic_tac_toe.v2"))
+fn initial_accumulator() -> [u8; 32] {
+    let mut buf = Vec::with_capacity(DOMAIN_COMMIT_REVEAL.len() + 8 + DOMAIN.len());
+    buf.extend_from_slice(DOMAIN_COMMIT_REVEAL);
+    push_length_prefixed(&mut buf, DOMAIN);
+    blake2b256(&buf)
+}
+
+/// Fold one commitment into the running accumulator.
+///
+/// acc' = blake2b256(DOMAIN_COMMIT_REVEAL || lp(prev_acc) || lp(commitment))
+fn advance_accumulator(prev_acc: &[u8; 32], commitment: &[u8; 32]) -> [u8; 32] {
+    let mut buf =
+        Vec::with_capacity(DOMAIN_COMMIT_REVEAL.len() + 2 * (8 + 32));
+    buf.extend_from_slice(DOMAIN_COMMIT_REVEAL);
+    push_length_prefixed(&mut buf, prev_acc);
+    push_length_prefixed(&mut buf, commitment);
+    blake2b256(&buf)
+}
+
 impl Protocol for TicTacToe {
     type State = TicTacToeState;
     type Move = TicTacToeMove;
 
     fn name(&self) -> &str {
-        "tic_tac_toe.v1"
+        "tic_tac_toe.v2"
     }
 
     fn initial_state(&self, ctx: &TunnelContext) -> TicTacToeState {
@@ -148,6 +184,7 @@ impl Protocol for TicTacToe {
             balance_b: ctx.initial.b,
             total: ctx.initial.sum(),
             stake,
+            move_accumulator: initial_accumulator(),
         }
     }
 
@@ -192,6 +229,21 @@ impl Protocol for TicTacToe {
             Winner::None | Winner::Draw => {}
         }
 
+        // Fold the salted commitment into the accumulator.
+        // value = u8(mover) || u64be(moveIndex) || u64be(cell)
+        // mover: 1 for A, 2 for B; moveIndex = moves_count (post-increment).
+        let mover_byte = match by {
+            Seat::A => 1u8,
+            Seat::B => 2u8,
+        };
+        let mut value = Vec::with_capacity(1 + 8 + 8);
+        value.push(mover_byte);
+        value.extend_from_slice(&u64_to_be_bytes(moves_count as u64));
+        value.extend_from_slice(&u64_to_be_bytes(mv.cell as u64));
+        let commitment = compute_commitment(&value, &mv.salt)
+            .map_err(|e| ProtocolError(e))?;
+        let move_accumulator = advance_accumulator(&state.move_accumulator, &commitment);
+
         Ok(TicTacToeState {
             board,
             turn: by.other(),
@@ -201,11 +253,12 @@ impl Protocol for TicTacToe {
             balance_b,
             total: state.total,
             stake: state.stake,
+            move_accumulator,
         })
     }
 
     fn encode_state(&self, state: &TicTacToeState) -> Vec<u8> {
-        let mut out = Vec::with_capacity(DOMAIN.len() + 9 + 3 + 24);
+        let mut out = Vec::with_capacity(DOMAIN.len() + 9 + 3 + 24 + 32);
         out.extend_from_slice(DOMAIN);
         out.extend_from_slice(&state.board);
         out.push(state.moves_count);
@@ -217,6 +270,7 @@ impl Protocol for TicTacToe {
         out.extend_from_slice(&u64_to_be_bytes(state.balance_a));
         out.extend_from_slice(&u64_to_be_bytes(state.balance_b));
         out.extend_from_slice(&u64_to_be_bytes(state.stake));
+        out.extend_from_slice(&state.move_accumulator);
         out
     }
 
@@ -251,13 +305,15 @@ impl Protocol for TicTacToe {
         }
         let raw = (rng() * empties.len() as f64).floor() as usize;
         let idx = raw.min(empties.len() - 1);
-        Some(TicTacToeMove { cell: empties[idx] })
+        // Derive a 16-byte deterministic salt from two rng() floats packed as f64be.
+        let mut salt = [0u8; 16];
+        salt[..8].copy_from_slice(&(rng() as f64).to_be_bytes());
+        salt[8..].copy_from_slice(&(rng() as f64).to_be_bytes());
+        Some(TicTacToeMove {
+            cell: empties[idx],
+            salt: salt.to_vec(),
+        })
     }
-}
-
-fn push_length_prefixed(out: &mut Vec<u8>, bytes: &[u8]) {
-    out.extend_from_slice(&u64_to_be_bytes(bytes.len() as u64));
-    out.extend_from_slice(bytes);
 }
 
 impl Protocol for TicTacToeSeries {
@@ -265,7 +321,7 @@ impl Protocol for TicTacToeSeries {
     type Move = TicTacToeMove;
 
     fn name(&self) -> &str {
-        "tic_tac_toe.series.v1"
+        "tic_tac_toe.series.v2"
     }
 
     fn initial_state(&self, ctx: &TunnelContext) -> Self::State {
@@ -342,6 +398,113 @@ impl Protocol for TicTacToeSeries {
         if self.is_terminal(state) || seat != Seat::A {
             return None;
         }
-        Some(TicTacToeMove { cell: 0 })
+        Some(TicTacToeMove {
+            cell: 0,
+            salt: vec![0u8; 16],
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ctx() -> TunnelContext {
+        TunnelContext {
+            tunnel_id: "0xtest".into(),
+            initial: Balances { a: 100, b: 100 },
+            seat: Seat::A,
+        }
+    }
+
+    /// Parity gate: Rust accumulator MUST match the TS golden vector.
+    ///
+    /// Golden values from Task A (TS ttt.v2, stake 0, balances 100/100):
+    ///   acc0 = c67f8d9b8448d4eb2ccfc316cd107d03398a958eef4eb75fb2afb47cc1890cf9
+    ///   acc1 after apply_move(cell=4, by=A, salt=[0x07;16])
+    ///       = 13dd5eb9d2cf5456c5b4c0293c8e586ac020d185411aa221f0386072c153e18f
+    #[test]
+    fn move_accumulator_matches_ts_golden_vector() {
+        let proto = TicTacToe::new(0).unwrap();
+        let state = proto.initial_state(&ctx());
+
+        let acc0_hex = hex::encode(state.move_accumulator);
+        assert_eq!(
+            acc0_hex,
+            "c67f8d9b8448d4eb2ccfc316cd107d03398a958eef4eb75fb2afb47cc1890cf9",
+            "acc0 mismatch: got {acc0_hex}"
+        );
+
+        let salt = vec![0x07u8; 16];
+        let mv = TicTacToeMove { cell: 4, salt };
+        let state1 = proto.apply_move(&state, &mv, Seat::A).unwrap();
+
+        let acc1_hex = hex::encode(state1.move_accumulator);
+        assert_eq!(
+            acc1_hex,
+            "13dd5eb9d2cf5456c5b4c0293c8e586ac020d185411aa221f0386072c153e18f",
+            "acc1 mismatch: got {acc1_hex}"
+        );
+    }
+
+    #[test]
+    fn accumulator_is_deterministic() {
+        let proto = TicTacToe::new(0).unwrap();
+        let state = proto.initial_state(&ctx());
+        let salt = vec![0xAAu8; 16];
+        let mv = TicTacToeMove { cell: 0, salt };
+        let s1 = proto.apply_move(&state, &mv, Seat::A).unwrap();
+        let s2 = proto.apply_move(&state, &mv, Seat::A).unwrap();
+        assert_eq!(s1.move_accumulator, s2.move_accumulator);
+    }
+
+    #[test]
+    fn accumulator_differs_for_different_cells() {
+        let proto = TicTacToe::new(0).unwrap();
+        let state = proto.initial_state(&ctx());
+        let salt = vec![0x01u8; 16];
+        let s1 = proto
+            .apply_move(&state, &TicTacToeMove { cell: 0, salt: salt.clone() }, Seat::A)
+            .unwrap();
+        let s2 = proto
+            .apply_move(&state, &TicTacToeMove { cell: 1, salt: salt.clone() }, Seat::A)
+            .unwrap();
+        assert_ne!(s1.move_accumulator, s2.move_accumulator);
+    }
+
+    #[test]
+    fn short_salt_is_rejected() {
+        let proto = TicTacToe::new(0).unwrap();
+        let state = proto.initial_state(&ctx());
+        let result = proto.apply_move(
+            &state,
+            &TicTacToeMove {
+                cell: 0,
+                salt: vec![0u8; 15],
+            },
+            Seat::A,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn encode_state_appends_accumulator() {
+        let proto = TicTacToe::new(0).unwrap();
+        let state = proto.initial_state(&ctx());
+        let encoded = proto.encode_state(&state);
+        // Last 32 bytes are the move_accumulator.
+        assert_eq!(&encoded[encoded.len() - 32..], &state.move_accumulator);
+        // Domain is v2.
+        assert!(encoded.starts_with(b"sui_tunnel::proto::tic_tac_toe.v2"));
+    }
+
+    #[test]
+    fn series_uses_v2_domain() {
+        let proto = TicTacToeSeries::new(2, 0).unwrap();
+        let state = proto.initial_state(&ctx());
+        assert_eq!(proto.name(), "tic_tac_toe.series.v2");
+        assert!(proto
+            .encode_state(&state)
+            .starts_with(b"sui_tunnel::proto::tic_tac_toe.series.v2"));
     }
 }
