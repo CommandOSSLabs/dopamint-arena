@@ -27,6 +27,7 @@ import { coSignedToSettleBody } from "@/backend/settleRequest";
 import { attachResume, rebuildTunnel } from "@/pvp/resumeSession";
 import type { ResumeRecord } from "@/pvp/resume";
 import { resumeIdb } from "./persist/idb";
+import { elog, emark } from "./debug";
 import type {
   ConnStatus,
   EngineConfig,
@@ -277,6 +278,7 @@ export class PvpEngine {
     this.spec = spec;
     try {
       this.error = null;
+      const tMatch = emark("match", `findMatch ${gameId}`);
       this.status = "matching";
       this.connStatus = "connecting";
       this.emit();
@@ -292,6 +294,7 @@ export class PvpEngine {
       this.role = match.role;
       this.opponentWallet = match.opponentWallet;
       this.emit();
+      elog("match", "matched", { role: match.role, matchId: match.matchId });
 
       const channel = mp.channel(match.matchId);
       const waitPeer = makeInbox(channel);
@@ -309,6 +312,7 @@ export class PvpEngine {
       const bridge = this.requireBridge();
       this.status = "funding";
       this.emit();
+      const tFund = emark("match", `fund ${match.role}`);
       let tunnelId: string;
       if (match.role === "A") {
         // Tag this open so a teardown during the bulk-open window can cancel it (orphan-tunnel
@@ -342,6 +346,7 @@ export class PvpEngine {
         tunnelId = open.tunnelId;
         await bridge.depositStake({ tunnelId, amount: spec.stake, label: gameId });
       }
+      tFund();
 
       // 3) build the distributed engine over the relay transport.
       const backend = defaultBackend();
@@ -469,14 +474,17 @@ export class PvpEngine {
       // Drive the controller BEFORE emitting: hidden-info games update view-local state
       // (e.g. battleship's lastEnemyShot) in onConfirmed, which the snapshot must reflect.
       transcript.append(u);
+      elog("move", "confirmed", { game: info.game, nonce: dt.nonce.toString() });
       controller.onConfirmed();
       this.emit();
       if (proto.isTerminal(dt.state) && !settling) {
         settling = true;
         this.status = "settling";
         this.emit();
+        const tSettle = emark("settle", info.game);
         void this.settle(channel, waitPeer, transcript, info.tunnelId).then(
           () => {
+            tSettle();
             controller.onSettled?.();
             this.status = "settled";
             this.emit();

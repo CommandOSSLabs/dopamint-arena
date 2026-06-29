@@ -12,13 +12,14 @@
  * This deliberately does NOT reuse the self-play `openAndFundMany` (`create_and_fund`): that funds
  * BOTH seats from one sender (a PvP open funds only seat A; seat B deposits separately) and demuxes
  * created tunnels by party-A address, which here is the shared wallet — identical across the batch.
- * Demux is therefore by created-`Tunnel` `objectChanges` ORDER (the builder owns it).
+ * Demux is therefore by each created tunnel's on-chain `party_b.public_key` (the builder owns it).
  *
  * Off the `?engine=worker` flag the job is a transparent pass-through (immediate 1-item flush), so
  * non-worker behaviour is unchanged.
  */
 import type { OpenTunnelParams } from "../engineApi";
 import { engineEnabled } from "../flag";
+import { elog, emark, ENGINE_DEBUG } from "../debug";
 import { BatchCommittedError, normalizeSuiAddress } from "@/onchain/tunnelTx";
 
 /** The batching window (design §4.1): a fixed ~5 s tick, not a sub-second debounce — independent
@@ -47,7 +48,7 @@ export class OpenCancelledError extends Error {
 /**
  * Open a whole window of seat-A intents in ONE PTB (e.g. `openSharedTunnelStakedMany` via the chain
  * bridge). MUST return one result per input intent in INPUT ORDER — `results[i]` is the tunnel for
- * `batch[i]` (the builder demuxes created tunnels by `objectChanges` order). A post-commit demux
+ * `batch[i]` (the builder demuxes created tunnels by their on-chain `party_b.public_key`). A post-commit demux
  * failure rejects with `BatchCommittedError` so the job can surface it and never retry. */
 export type BatchOpen = (batch: OpenTunnelParams[]) => Promise<OpenResult[]>;
 
@@ -90,6 +91,20 @@ export class BulkOpenJob {
     this.windowMs = opts?.windowMs ?? BULK_OPEN_WINDOW_MS;
     this.loneFlushMs = opts?.loneFlushMs ?? BULK_OPEN_LONE_FLUSH_MS;
     this.enabled = opts?.enabled ?? engineEnabled;
+    // Debug: expose the live per-sender queue at `window.__bulkOpen()` (see inspect()).
+    if (ENGINE_DEBUG && typeof window !== "undefined") {
+      (window as unknown as { __bulkOpen?: () => unknown }).__bulkOpen = () =>
+        this.inspect();
+    }
+  }
+
+  /** Debug snapshot of the per-sender queue (call `window.__bulkOpen()` when ENGINE_DEBUG is on). */
+  inspect(): { sender: string; pending: number; intentIds: (string | undefined)[] }[] {
+    return [...this.shards].map(([sender, s]) => ({
+      sender,
+      pending: s.pending.length,
+      intentIds: s.pending.map((p) => p.intentId),
+    }));
   }
 
   /** Enqueue a seat-A open; resolves with the tunnel id once this sender's window flushes. Pass an
@@ -104,6 +119,11 @@ export class BulkOpenJob {
       const sender = senderOf(params);
       const shard = this.shardFor(sender);
       shard.pending.push({ params, resolve, reject, intentId });
+      elog("bulkopen", "enqueue", {
+        sender: sender.slice(0, 10),
+        queued: shard.pending.length,
+        intentId,
+      });
       if (shard.pending.length === 1) {
         // First intent: arm the full window plus a short lone-flush timer.
         shard.windowTimer = setTimeout(() => this.flush(sender), this.windowMs);
@@ -134,6 +154,7 @@ export class BulkOpenJob {
       const i = shard.pending.findIndex((p) => p.intentId === intentId);
       if (i === -1) continue;
       const [cancelled] = shard.pending.splice(i, 1);
+      elog("bulkopen", "cancel", { intentId, remaining: shard.pending.length });
       cancelled.reject(new OpenCancelledError(intentId));
       if (shard.pending.length === 0) {
         if (shard.windowTimer) clearTimeout(shard.windowTimer);
@@ -161,6 +182,7 @@ export class BulkOpenJob {
     if (shard.loneTimer) clearTimeout(shard.loneTimer);
     const batch = shard.pending;
     this.shards.delete(sender);
+    elog("bulkopen", "flush", { sender: sender.slice(0, 10), batch: batch.length });
     void this.openBatch(batch);
   }
 
@@ -176,8 +198,10 @@ export class BulkOpenJob {
    */
   private async openBatch(batch: PendingOpen[]): Promise<void> {
     let results: OpenResult[];
+    const done = emark("bulkopen", `openBatch n=${batch.length}`);
     try {
       results = await this.batchOpen(batch.map((p) => p.params));
+      done();
     } catch (err) {
       if (err instanceof BatchCommittedError) {
         console.error(

@@ -1,8 +1,13 @@
-/** `?engine=worker` opts a game window into the worker-hosted tunnel client. Read once at
- *  module load (the flag is stable for the session). */
+/** Selects the worker-hosted tunnel client over the legacy main-thread path. Explicit overrides:
+ *  `?engine=worker` forces it ON, `?engine=legacy` forces it OFF. With no override it is the
+ *  DEFAULT IN DEV (`import.meta.env.DEV`, for testing) and OPT-IN in production builds — until the
+ *  perf gate + testnet verification land, prod stays legacy unless `?engine=worker`. Read once at
+ *  module load (stable for the session). */
 export function engineEnabled(): boolean {
-  return (
-    typeof location !== "undefined" &&
-    new URLSearchParams(location.search).get("engine") === "worker"
-  );
+  if (typeof location !== "undefined") {
+    const v = new URLSearchParams(location.search).get("engine");
+    if (v === "worker") return true;
+    if (v === "legacy") return false;
+  }
+  return !!import.meta.env?.DEV;
 }
