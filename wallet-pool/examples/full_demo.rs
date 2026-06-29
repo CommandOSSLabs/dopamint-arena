@@ -21,12 +21,12 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use sui_sdk_types::Address;
 use sui_transaction_builder::{ObjectInput, TransactionBuilder};
+use wallet_pool::rpc::{ReqwestRpc, SuiRpc};
+use wallet_pool::store::FileWalletPoolStore;
 use wallet_pool::{
     BalanceOptions, By, CacheMode, CreateOptions, CreateResult, Filter, FundOptions, ListOptions,
     Network, OpenOptions, SetEnabledOptions, SignAndExecuteOptions, WalletPool, WalletRole,
 };
-use wallet_pool::rpc::{ReqwestRpc, SuiRpc};
-use wallet_pool::store::FileWalletPoolStore;
 use wallet_pool_core::crypto::ed25519_address;
 
 const SUI_COIN_TYPE: &str = "0x2::sui::SUI";
@@ -118,10 +118,7 @@ fn fund_master_from_cli(master_address: &str, amount: u64) -> String {
     }
     let json: serde_json::Value = serde_json::from_slice(&output.stdout)
         .expect("failed to parse sui client transfer-sui output");
-    json["digest"]
-        .as_str()
-        .expect("digest missing")
-        .to_string()
+    json["digest"].as_str().expect("digest missing").to_string()
 }
 
 fn build_transfer_ptb(
@@ -260,9 +257,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let signer_address_obj = Address::from_hex(&signer_address)?;
     let master_address_obj = Address::from_hex(&master_address)?;
     let signer_coins = rpc.get_coins(&signer_address, SUI_COIN_TYPE).await?;
-    let gas_coin = signer_coins
-        .first()
-        .expect("signer should have a SUI coin");
+    let gas_coin = signer_coins.first().expect("signer should have a SUI coin");
     let ptb = build_transfer_ptb(signer_address_obj, master_address_obj, gas_coin);
     let sign_digest = handle
         .sign_and_execute(SignAndExecuteOptions {
@@ -380,7 +375,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ..Default::default()
         })
         .await?;
-    println!("   signer enabled after re-enable: {}", re_enabled[0].enabled);
+    println!(
+        "   signer enabled after re-enable: {}",
+        re_enabled[0].enabled
+    );
 
     // 13. Delete pool.
     println!("\n13. Deleting pool");
