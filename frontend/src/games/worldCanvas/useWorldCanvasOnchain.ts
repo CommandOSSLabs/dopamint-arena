@@ -905,24 +905,29 @@ export function useWorldCanvasOnchain(
 
   // Coarse throughput report — one call per ~1s window, never per paint. This is the
   // signal the dashboard turns into live TPS (it derives a rate from the action COUNT).
-  const flushHeartbeat = useCallback((run: CanvasRun, force: boolean) => {
-    const s = run.session;
-    if (!s || run.actions === 0) return;
-    const now = Date.now();
-    const windowMs = now - run.lastHeartbeat;
-    if (!force && windowMs < 1000) return;
-    const actionsDelta = run.actions;
-    run.actions = 0;
-    run.lastHeartbeat = now;
-    getControlPlaneClient()
-      .sendHeartbeat(s.sessionId, s.statsToken, {
-        tunnelId: run.tunnelId,
-        nonce: String(run.moveCount),
-        actionsDelta,
-        windowMs: Math.max(1, windowMs),
-      })
-      .catch((e) => console.error("[world-canvas] heartbeat failed:", e));
-  }, []);
+  const flushHeartbeat = useCallback(
+    (run: CanvasRun, force: boolean) => {
+      const s = run.session;
+      if (!s || run.actions === 0) return;
+      const now = Date.now();
+      const windowMs = now - run.lastHeartbeat;
+      if (!force && windowMs < 1000) return;
+      const actionsDelta = run.actions;
+      run.actions = 0;
+      run.lastHeartbeat = now;
+      // Same count, locally: feed the per-game TPS chip its real rate when no backend is connected.
+      report.recordActions(actionsDelta);
+      getControlPlaneClient()
+        .sendHeartbeat(s.sessionId, s.statsToken, {
+          tunnelId: run.tunnelId,
+          nonce: String(run.moveCount),
+          actionsDelta,
+          windowMs: Math.max(1, windowMs),
+        })
+        .catch((e) => console.error("[world-canvas] heartbeat failed:", e));
+    },
+    [report],
+  );
 
   // Co-sign one paint through the tunnel; count only honest, both-signature-VERIFIED
   // steps (the TPS gate). One verified step = one action + one increment of the
