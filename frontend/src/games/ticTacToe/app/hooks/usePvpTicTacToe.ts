@@ -184,8 +184,8 @@ export function usePvpTicTacToe(
             MAX_GAMES,
             scaledStake,
           )) as unknown as protocols.Protocol<AnyState, CellMove>,
-    // scaledStake is module-level-derived (isMtpsConfigured is a build-time constant), so it
-    // never changes at runtime — safe to omit from deps.
+    // isMtpsConfigured is a build-time constant (evaluated once at bundle load), so scaledStake
+    // is fixed for the lifetime of the app and never changes across renders — safe to omit from deps.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [variant, boardSize],
   );

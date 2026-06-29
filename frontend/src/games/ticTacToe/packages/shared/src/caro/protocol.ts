@@ -122,6 +122,8 @@ export class CaroProtocol implements Protocol<CaroState, CaroMove> {
       turn: by === "A" ? "B" : "A",
       balanceA,
       balanceB,
+      total: state.total,
+      stake: state.stake,
     };
   }
 

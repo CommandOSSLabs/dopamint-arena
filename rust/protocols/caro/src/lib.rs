@@ -571,7 +571,27 @@ mod tests {
         // Clamped stake = min(100, 50) = 50.
         assert_eq!(state.inner.stake, 50);
 
-        state.inner = play_a_five(&proto.inner, state.inner);
+        // Drive A to a five-in-a-row win through the real CaroSeries::apply_move path.
+        // A plays row 0 cols 0-4; B plays row 5 cols 0-3 (only 4 replies before A wins).
+        let size = state.inner.size as i64;
+        for col in 0..4i64 {
+            state = proto
+                .apply_move(&state, &CaroMove { cell: col }, Seat::A)
+                .unwrap();
+            state = proto
+                .apply_move(
+                    &state,
+                    &CaroMove {
+                        cell: 5 * size + col,
+                    },
+                    Seat::B,
+                )
+                .unwrap();
+        }
+        state = proto
+            .apply_move(&state, &CaroMove { cell: 4 }, Seat::A)
+            .unwrap();
+
         assert_eq!(state.inner.winner, MARK_A);
         assert_eq!(state.inner.balance_b, 0);
         // B cannot fund the next game (balance 0 < stake 50), so series is terminal.
