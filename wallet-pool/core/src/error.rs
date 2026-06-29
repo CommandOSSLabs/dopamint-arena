@@ -83,7 +83,9 @@ mod tests {
         for (err, expected) in cases {
             let message = err.to_string();
             assert!(
-                !message.contains("secret") && !message.contains("password") && !message.contains("key"),
+                !message.contains("secret")
+                    && !message.contains("password")
+                    && !message.contains("key"),
                 "error message '{message}' may leak secret material"
             );
             assert_eq!(message, expected);

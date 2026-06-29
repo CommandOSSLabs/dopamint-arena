@@ -88,7 +88,13 @@ pub fn seal(
 
     let cipher = Aes256Gcm::new_from_slice(key.as_slice()).map_err(|_| Error::WrongAccessValue)?;
     let encrypted = cipher
-        .encrypt(nonce, Payload { msg: plaintext, aad })
+        .encrypt(
+            nonce,
+            Payload {
+                msg: plaintext,
+                aad,
+            },
+        )
         .map_err(|_| Error::WrongAccessValue)?;
 
     let (ciphertext, tag) = encrypted
@@ -113,20 +119,27 @@ pub fn unseal(envelope: &SealedEnvelope, access_value: &str, aad: &[u8]) -> Resu
             if kdf.n != SCRYPT_N || kdf.r != SCRYPT_R || kdf.p != SCRYPT_P {
                 return Err(Error::WrongAccessValue);
             }
-            let salt = STANDARD.decode(&kdf.salt).map_err(|_| Error::WrongAccessValue)?;
+            let salt = STANDARD
+                .decode(&kdf.salt)
+                .map_err(|_| Error::WrongAccessValue)?;
             derive_passphrase_key(access_value, &salt)?
         }
     };
 
-    let nonce_bytes = STANDARD.decode(&envelope.nonce).map_err(|_| Error::WrongAccessValue)?;
+    let nonce_bytes = STANDARD
+        .decode(&envelope.nonce)
+        .map_err(|_| Error::WrongAccessValue)?;
     if nonce_bytes.len() != NONCE_LEN {
         return Err(Error::WrongAccessValue);
     }
     let nonce = Nonce::from_slice(&nonce_bytes);
 
-    let mut ct_with_tag =
-        STANDARD.decode(&envelope.ciphertext).map_err(|_| Error::WrongAccessValue)?;
-    let tag = STANDARD.decode(&envelope.tag).map_err(|_| Error::WrongAccessValue)?;
+    let mut ct_with_tag = STANDARD
+        .decode(&envelope.ciphertext)
+        .map_err(|_| Error::WrongAccessValue)?;
+    let tag = STANDARD
+        .decode(&envelope.tag)
+        .map_err(|_| Error::WrongAccessValue)?;
     if tag.len() != TAG_LEN {
         return Err(Error::WrongAccessValue);
     }
@@ -134,7 +147,13 @@ pub fn unseal(envelope: &SealedEnvelope, access_value: &str, aad: &[u8]) -> Resu
 
     let cipher = Aes256Gcm::new_from_slice(key.as_slice()).map_err(|_| Error::WrongAccessValue)?;
     cipher
-        .decrypt(nonce, Payload { msg: &ct_with_tag, aad })
+        .decrypt(
+            nonce,
+            Payload {
+                msg: &ct_with_tag,
+                aad,
+            },
+        )
         .map_err(|_| Error::WrongAccessValue)
 }
 
@@ -154,9 +173,8 @@ fn derive_generated_key(access_value: &str) -> Result<Zeroizing<[u8; KEY_LEN]>> 
 }
 
 fn derive_passphrase_key(access_value: &str, salt: &[u8]) -> Result<Zeroizing<[u8; KEY_LEN]>> {
-    let params =
-        scrypt::Params::new(SCRYPT_LOG_N, SCRYPT_R, SCRYPT_P, KEY_LEN)
-            .map_err(|_| Error::WrongAccessValue)?;
+    let params = scrypt::Params::new(SCRYPT_LOG_N, SCRYPT_R, SCRYPT_P, KEY_LEN)
+        .map_err(|_| Error::WrongAccessValue)?;
     let mut key = Zeroizing::new([0u8; KEY_LEN]);
     scrypt::scrypt(access_value.as_bytes(), salt, &params, key.as_mut_slice())
         .map_err(|_| Error::WrongAccessValue)?;
@@ -273,13 +291,22 @@ mod tests {
         let json = serde_json::to_string(&envelope).unwrap();
         let decoded: SealedEnvelope = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, envelope);
-        assert_eq!(unseal(&decoded, &access, aad).unwrap(), plaintext.as_slice());
+        assert_eq!(
+            unseal(&decoded, &access, aad).unwrap(),
+            plaintext.as_slice()
+        );
 
         let passphrase_envelope =
             seal(plaintext, "a passphrase", AccessMode::Passphrase, aad).unwrap();
         let json = serde_json::to_string(&passphrase_envelope).unwrap();
-        assert!(json.contains("\"N\":"), "scrypt N must serialize as uppercase N");
-        assert!(!json.contains("\"n\":"), "scrypt N must not serialize as lowercase n");
+        assert!(
+            json.contains("\"N\":"),
+            "scrypt N must serialize as uppercase N"
+        );
+        assert!(
+            !json.contains("\"n\":"),
+            "scrypt N must not serialize as lowercase n"
+        );
         let decoded: SealedEnvelope = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, passphrase_envelope);
         assert_eq!(
